@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "How a moved member keys into the destination call (`voice_server_updated.e2ee.key_join`).",
+  "oneOf": [
+    {
+      "const": "required",
+      "description": "Upload a ref scoped to the destination channel (K16), then key-join with K2.",
+      "type": "string"
+    }
+  ],
+  "title": "KeyJoinMode"
+}

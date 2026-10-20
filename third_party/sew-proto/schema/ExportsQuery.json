@@ -1,0 +1,105 @@
+{
+  "$defs": {
+    "ExportKind": {
+      "description": "What an archive is.",
+      "oneOf": [
+        {
+          "const": "full",
+          "description": "Everything, for a box move (mgmt only).",
+          "type": "string"
+        },
+        {
+          "const": "ediscovery",
+          "description": "A scoped compliance export.",
+          "type": "string"
+        }
+      ]
+    },
+    "ExportState": {
+      "description": "An export's lifecycle state.",
+      "oneOf": [
+        {
+          "const": "queued",
+          "description": "Waiting for the one export slot.",
+          "type": "string"
+        },
+        {
+          "const": "running",
+          "description": "Being written.",
+          "type": "string"
+        },
+        {
+          "const": "done",
+          "description": "The archive is ready for download.",
+          "type": "string"
+        },
+        {
+          "const": "failed",
+          "description": "It failed (`error` says why).",
+          "type": "string"
+        },
+        {
+          "const": "cancelled",
+          "description": "Cancelled (by a caller, or because the requester lost the flag).",
+          "type": "string"
+        },
+        {
+          "const": "expired",
+          "description": "The archive passed `export.keep_days` and was deleted.",
+          "type": "string"
+        },
+        {
+          "const": "deleted",
+          "description": "The archive was deleted by a caller.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Query of `GET /api/v1/compliance/exports` and `GET /mgmt/v1/exports` (newest first).",
+  "properties": {
+    "before": {
+      "description": "Exports older than this id.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "kind": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ExportKind"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Only this kind (mgmt; the client route lists eDiscovery exports only)."
+    },
+    "limit": {
+      "description": "Page size, 1–100 (default 50).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "state": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ExportState"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Only this state."
+    }
+  },
+  "title": "ExportsQuery",
+  "type": "object"
+}

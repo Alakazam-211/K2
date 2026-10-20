@@ -1,0 +1,79 @@
+{
+  "$defs": {
+    "OwnerApproval": {
+      "description": "The current owner's inline approval of an owner transfer (S9 G7). `Debug` redacts the\nsecret.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "K2 mode: a chat pass (C6) whose `sub` is the current owner.",
+          "properties": {
+            "kind": {
+              "const": "owner_pass",
+              "type": "string"
+            },
+            "pass": {
+              "description": "The pass.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "pass"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Standalone: the current owner's password.",
+          "properties": {
+            "kind": {
+              "const": "owner_password",
+              "type": "string"
+            },
+            "password": {
+              "description": "The password.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "password"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /mgmt/v1/owner/set`.",
+  "properties": {
+    "approval": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/OwnerApproval"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The current owner's approval; not needed while no owner exists (S9 G7, additive)."
+    },
+    "external_id": {
+      "description": "The new install owner.",
+      "maxLength": 128,
+      "pattern": "^(k2:(principal|workspace|connect):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|k2:owner|local:[a-z0-9_-]{2,64}|link:[1-9][0-9]{0,18}:[A-Z2-7]{16})$",
+      "type": "string"
+    },
+    "force": {
+      "default": false,
+      "description": "Break-glass transfer: standalone only, and only for peer uid 0 (S9 G7, additive).",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "external_id"
+  ],
+  "title": "OwnerSetRequest",
+  "type": "object"
+}

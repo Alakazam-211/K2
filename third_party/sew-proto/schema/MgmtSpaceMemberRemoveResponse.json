@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Response of `POST /mgmt/v1/spaces/members/remove`.",
+  "properties": {
+    "removed": {
+      "description": "Whether this call removed a member (`false`: not provisioned or not a member).",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "removed"
+  ],
+  "title": "MgmtSpaceMemberRemoveResponse",
+  "type": "object"
+}

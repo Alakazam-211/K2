@@ -1,0 +1,284 @@
+{
+  "$defs": {
+    "ChannelMeeting": {
+      "description": "`meeting` on a meeting channel's JSON (Meet MC2a, CC6): the meeting it belongs to.",
+      "properties": {
+        "id": {
+          "description": "The meeting id.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "ChannelType": {
+      "description": "Channel type (gap G8 adds `dm` and `group_dm`).",
+      "oneOf": [
+        {
+          "const": "text",
+          "description": "A text channel.",
+          "type": "string"
+        },
+        {
+          "const": "voice",
+          "description": "A voice channel.",
+          "type": "string"
+        },
+        {
+          "const": "announcement",
+          "description": "An announcement channel: `@everyone` posts only in threads by default.",
+          "type": "string"
+        },
+        {
+          "const": "dm",
+          "description": "A 1:1 DM (no space, slug or name; always private).",
+          "type": "string"
+        },
+        {
+          "const": "group_dm",
+          "description": "A group DM of up to 9 people.",
+          "type": "string"
+        }
+      ]
+    },
+    "Visibility": {
+      "description": "Channel visibility.",
+      "oneOf": [
+        {
+          "const": "public",
+          "description": "Every space member can see and join it.",
+          "type": "string"
+        },
+        {
+          "const": "private",
+          "description": "Members only.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A channel, DM or group DM.",
+  "properties": {
+    "archived_at": {
+      "description": "When the channel was archived.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "assistant_reader_ids": {
+      "description": "Assistants that read this DM or group DM through their pinned person (contracts rev 11\nG21, S19 §8). Empty (and absent) for space channels.",
+      "items": {
+        "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+        "pattern": "^[1-9][0-9]{0,18}$",
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "category_id": {
+      "description": "Its category.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "created_at": {
+      "description": "When the channel was created.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "created_by": {
+      "description": "Who created the channel (S10). Optional on the wire so older payloads still parse; the\nserver always sends it.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "dm_member_ids": {
+      "description": "The DM's members; empty for space channels.",
+      "items": {
+        "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+        "pattern": "^[1-9][0-9]{0,18}$",
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "file_retention_days": {
+      "description": "Effective file retention in days (S22 §14.3). Absent = forever.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "has_guests": {
+      "default": false,
+      "description": "At least one guest is a member (S19 §15): \"this channel has guests\" / \"this\nconversation has guests\". Old payloads read as `false`.",
+      "type": "boolean"
+    },
+    "head_seq": {
+      "description": "Head of the channel change log.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "id": {
+      "description": "The channel id.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "last_message_id": {
+      "description": "The newest message.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "meeting": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ChannelMeeting"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "A meeting channel's meeting (Meet MC2a, CC6); absent on every other channel."
+    },
+    "member_count": {
+      "default": 0,
+      "description": "Joined members (S10). Old payloads without it read as 0.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "my_perms": {
+      "description": "The viewer's effective permissions here.",
+      "pattern": "^(0|[1-9][0-9]{0,19})$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "name": {
+      "description": "The name; absent for DMs.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "position": {
+      "description": "Sort position in its category.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "purpose": {
+      "description": "The purpose.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "recording_audio_days": {
+      "description": "The channel's default audio keep days for recordings (S35 v2 §12.1); absent = the org\ndefault.",
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "recording_auto": {
+      "description": "Voice channels: a recording starts on the first join (S35 v2 §8.3). Absent = off.",
+      "type": "boolean"
+    },
+    "recording_require_consent": {
+      "description": "Voice channels: declining the recording notice means not joining (S35 v2 §9.11);\nabsent = the org policy `recording.require_consent_to_join`.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "retention_days": {
+      "description": "Effective message retention in days (S22 §14.3; holds ignored). Absent = forever.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "slow_mode_s": {
+      "default": 0,
+      "description": "Slow mode in seconds, 0 = off (S12 §7). Always sent; old payloads read as 0.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "slug": {
+      "description": "The slug; absent for DMs.",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,79}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "space_id": {
+      "description": "Its space; absent for DMs.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "synced": {
+      "description": "Whether overwrites follow the category.",
+      "type": "boolean"
+    },
+    "topic": {
+      "description": "The topic.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "type": {
+      "$ref": "#/$defs/ChannelType",
+      "description": "The channel type."
+    },
+    "user_limit": {
+      "description": "Voice channels: at most this many people in the call, 0 = no per-channel limit (S33 v1\n§10.4). Absent (0) for other types.",
+      "format": "uint8",
+      "maximum": 255,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "visibility": {
+      "$ref": "#/$defs/Visibility",
+      "description": "Public or private; DMs are private."
+    }
+  },
+  "required": [
+    "id",
+    "type",
+    "visibility",
+    "position",
+    "synced",
+    "head_seq",
+    "dm_member_ids",
+    "created_at"
+  ],
+  "title": "Channel",
+  "type": "object"
+}

@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /mgmt/v1/local/setup-link`.",
+  "properties": {
+    "display_name": {
+      "description": "The owner's display name (only with `owner: true`; default the username).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "owner": {
+      "default": false,
+      "description": "Create this user as the first install owner (`sew init`); refused once an owner exists.",
+      "type": "boolean"
+    },
+    "username": {
+      "description": "The local user.",
+      "pattern": "^[a-z0-9_-]{2,64}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "username"
+  ],
+  "title": "SetupLinkRequest",
+  "type": "object"
+}

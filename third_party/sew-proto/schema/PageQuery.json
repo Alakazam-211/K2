@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Query for id-keyed lists: at most one cursor (gap G6) and an optional `limit` (1–100,\ndefault 50). No cursor means the newest page, newest-first. `before` pages newest-first,\n`after` oldest-first, `around` centered.",
+  "properties": {
+    "after": {
+      "description": "Items newer than this id.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "around": {
+      "description": "Items around this id.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "before": {
+      "description": "Items older than this id.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "limit": {
+      "description": "Page size, 1–100 (default 50).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    }
+  },
+  "title": "PageQuery",
+  "type": "object"
+}

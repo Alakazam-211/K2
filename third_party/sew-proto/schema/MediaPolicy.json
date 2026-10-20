@@ -1,0 +1,201 @@
+{
+  "$defs": {
+    "LayerHint": {
+      "description": "One simulcast layer hint (S34 v2 §13).",
+      "properties": {
+        "height": {
+          "description": "Layer height in pixels.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_kbps": {
+          "description": "Layer bitrate cap.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rid": {
+          "description": "`q`, `h` or `f`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "rid",
+        "height",
+        "max_kbps"
+      ],
+      "type": "object"
+    },
+    "MediaTier": {
+      "description": "The media budget tier (S34 v2 §12.2).",
+      "oneOf": [
+        {
+          "const": "normal",
+          "description": "Everything allowed; full hints.",
+          "type": "string"
+        },
+        {
+          "const": "constrained",
+          "description": "New camera leases refused; lower hints.",
+          "type": "string"
+        },
+        {
+          "const": "critical",
+          "description": "New camera and screen leases refused; lowest hints.",
+          "type": "string"
+        }
+      ]
+    },
+    "TrackHint": {
+      "description": "Publishing hints for one source (S34 v2 §13).",
+      "properties": {
+        "layers": {
+          "description": "Simulcast layers, lowest first.",
+          "items": {
+            "$ref": "#/$defs/LayerHint"
+          },
+          "type": "array"
+        },
+        "max_fps": {
+          "description": "Frame rate cap.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_height": {
+          "description": "Capture height cap.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_width": {
+          "description": "Capture width cap.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "max_width",
+        "max_height",
+        "max_fps",
+        "layers"
+      ],
+      "type": "object"
+    },
+    "VideoCodec": {
+      "description": "A video codec a client may publish under E2EE (S34 v2 D8). There is no AV1 or H.265\nvalue: they are never offered.",
+      "oneOf": [
+        {
+          "const": "vp8",
+          "description": "VP8 (simulcast).",
+          "type": "string"
+        },
+        {
+          "const": "h264",
+          "description": "H.264 (simulcast).",
+          "type": "string"
+        },
+        {
+          "const": "vp9",
+          "description": "VP9, only with the Dependency Descriptor (opt-in).",
+          "type": "string"
+        }
+      ]
+    },
+    "Vp9Hint": {
+      "description": "VP9 publishing rules when VP9 is configured (S34 v2 §13).",
+      "properties": {
+        "requires_dd": {
+          "description": "Always `true`: the Dependency Descriptor is required.",
+          "type": "boolean"
+        },
+        "scalability_mode": {
+          "description": "`L3T3_KEY`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scalability_mode",
+        "requires_dd"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The client media policy (S34 v2 §13): in join answers, `voice_server_updated`, READY\n`install.media` and `media_policy_updated`.",
+  "properties": {
+    "adaptive_stream": {
+      "description": "Subscribe with adaptive stream.",
+      "type": "boolean"
+    },
+    "audio_codecs": {
+      "description": "Always `[\"opus\"]`.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "backup_codec": {
+      "description": "Always `false`: no backup codecs.",
+      "type": "boolean"
+    },
+    "camera": {
+      "$ref": "#/$defs/TrackHint",
+      "description": "Camera hints."
+    },
+    "codecs": {
+      "description": "Video codecs in preference order (never AV1 or H.265; empty with video off).",
+      "items": {
+        "$ref": "#/$defs/VideoCodec"
+      },
+      "type": "array"
+    },
+    "dynacast": {
+      "description": "Publish with dynacast.",
+      "type": "boolean"
+    },
+    "e2ee": {
+      "description": "Always `required`.",
+      "type": "string"
+    },
+    "screen": {
+      "$ref": "#/$defs/TrackHint",
+      "description": "Screen-share hints."
+    },
+    "tier": {
+      "$ref": "#/$defs/MediaTier",
+      "description": "The budget tier the hints are for."
+    },
+    "video_enabled": {
+      "description": "`[voice.video] enabled`.",
+      "type": "boolean"
+    },
+    "vp9": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Vp9Hint"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "VP9 rules, when VP9 is configured."
+    }
+  },
+  "required": [
+    "tier",
+    "video_enabled",
+    "e2ee",
+    "audio_codecs",
+    "codecs",
+    "backup_codec",
+    "camera",
+    "screen",
+    "dynacast",
+    "adaptive_stream"
+  ],
+  "title": "MediaPolicy",
+  "type": "object"
+}

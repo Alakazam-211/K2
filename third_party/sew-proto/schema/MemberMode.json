@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "How a member target selects messages in eDiscovery (prd-sew-23 §9.1).",
+  "oneOf": [
+    {
+      "const": "conversations",
+      "description": "Everything the member wrote or could read (the legal-hold member rule).",
+      "type": "string"
+    },
+    {
+      "const": "authored",
+      "description": "Only what the member wrote.",
+      "type": "string"
+    }
+  ],
+  "title": "MemberMode"
+}

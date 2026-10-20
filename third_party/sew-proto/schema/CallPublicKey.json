@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A public key and its id (`kid` = hex of the first 8 bytes of SHA-256 of the raw key).",
+  "properties": {
+    "kid": {
+      "description": "16 lowercase hex characters.",
+      "type": "string"
+    },
+    "public_key": {
+      "description": "The raw 32-byte Ed25519 public key.",
+      "pattern": "^[A-Za-z0-9_-]*$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "kid",
+    "public_key"
+  ],
+  "title": "CallPublicKey",
+  "type": "object"
+}

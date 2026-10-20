@@ -1,0 +1,958 @@
+{
+  "$defs": {
+    "CallKeysInit": {
+      "description": "What a key join answers (K1's `VoiceJoinResponse.e2ee`, K2, and the `init` dispatch;\nS50 §9.1).",
+      "properties": {
+        "activate_on_create": {
+          "description": "The creator activates epoch 0 at once (first joiner of a fresh call only).",
+          "type": "boolean"
+        },
+        "call_id": {
+          "description": "The call: its `r_…` room.",
+          "pattern": "^r_[a-z2-7]{26}$",
+          "type": "string"
+        },
+        "create": {
+          "description": "The caller creates the group now (S50 §12.1).",
+          "type": "boolean"
+        },
+        "epoch": {
+          "description": "The group's epoch.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "external_sender": {
+          "description": "TLS `ExternalSender` of the install's DS key.",
+          "pattern": "^[A-Za-z0-9_-]*$",
+          "type": "string"
+        },
+        "group_id": {
+          "description": "The current group (16 bytes).",
+          "pattern": "^[A-Za-z0-9_-]*$",
+          "type": "string"
+        },
+        "join_id": {
+          "description": "The caller's Sew-minted join id; every K3–K10 body carries it.",
+          "pattern": "^[0-9a-f]{32}$",
+          "type": "string"
+        },
+        "lk_identity": {
+          "description": "The caller's engine identity (`p_` + base32 of `join_id`; the token's `sub`).",
+          "pattern": "^p_[a-z2-7]{26}$",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/CallKeysParams",
+          "description": "Client timings."
+        },
+        "scope": {
+          "description": "The call's scope, `call:<channel_id>`; members refuse leaves with another.",
+          "pattern": "^call:[1-9][0-9]*$",
+          "type": "string"
+        },
+        "slot_base": {
+          "description": "`slot(e) = (slot_base + e) mod 64`.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "call_id",
+        "join_id",
+        "lk_identity",
+        "scope",
+        "group_id",
+        "epoch",
+        "create",
+        "activate_on_create",
+        "slot_base",
+        "external_sender",
+        "params"
+      ],
+      "type": "object"
+    },
+    "CallKeysParams": {
+      "description": "The client timings and constants the server relays (READY `call_keys.params` and every\n[`CallKeysInit`]; S50 §9.4, S51 §20.1). The single source for client timings.",
+      "properties": {
+        "ciphersuite": {
+          "description": "The ciphersuite every group uses (1).",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "ciphersuites": {
+          "description": "The ciphersuites the server accepts (`[1]` in v1).",
+          "items": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "client_activate_fallback_ms": {
+          "description": "A sender that acked but hears no `activate` switches after this long.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "exporter_label": {
+          "description": "The MLS exporter label of frame keys ([`tls::EXPORTER_LABEL`]).",
+          "type": "string"
+        },
+        "kdf": {
+          "description": "`\"hkdf\"`.",
+          "type": "string"
+        },
+        "key_package_max_lifetime_s": {
+          "description": "Longest KeyPackage lifetime the server accepts.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "key_ring_size": {
+          "description": "Always 64 (rev 75).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "release_info_label": {
+          "description": "The recorder release `info` label ([`tls::RELEASE_INFO_LABEL`]).",
+          "type": "string"
+        },
+        "retire_after_ms": {
+          "description": "Receivers retire an old slot this long after `activate`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "securing_indicator_after_ms": {
+          "description": "\"Securing…\" shows only after this long.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unknown_call_buffer_ms": {
+          "description": "Dispatches for a `call_id` the client does not know yet are buffered this long.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "ciphersuite",
+        "ciphersuites",
+        "key_ring_size",
+        "kdf",
+        "exporter_label",
+        "release_info_label",
+        "retire_after_ms",
+        "client_activate_fallback_ms",
+        "key_package_max_lifetime_s",
+        "unknown_call_buffer_ms",
+        "securing_indicator_after_ms"
+      ],
+      "type": "object"
+    },
+    "KeyResyncReason": {
+      "description": "Why a leaf is told to resync (`resync.reason`; S50 §9.3). `stale_slot` re-asserts the\nsender slot; every other reason is answered with K6.",
+      "oneOf": [
+        {
+          "const": "behind",
+          "description": "The leaf is behind the DS's epoch.",
+          "type": "string"
+        },
+        {
+          "const": "group_mismatch",
+          "description": "The leaf holds another group.",
+          "type": "string"
+        },
+        {
+          "const": "lagging",
+          "description": "The leaf stopped acking.",
+          "type": "string"
+        },
+        {
+          "const": "stale_slot",
+          "description": "The engine sees the leaf sending on the wrong slot.",
+          "type": "string"
+        }
+      ]
+    },
+    "LeafBindingEntryJson": {
+      "description": "One `LeafBinding` entry in JSON: exactly one of `leaf` (key type 1) or `key_package_ref`\n(key type 2), the join id and its engine identity (S50 §9.5).",
+      "properties": {
+        "join_id": {
+          "description": "The join id.",
+          "pattern": "^[0-9a-f]{32}$",
+          "type": "string"
+        },
+        "key_package_ref": {
+          "description": "The Add's `key_package_ref` (proposals).",
+          "pattern": "^[A-Za-z0-9_-]*$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "leaf": {
+          "description": "The leaf index (commit, welcome, K3 reply, recorder tables).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "lk_identity": {
+          "description": "`p_` + base32 of `join_id` (not signed; clients recompute and compare).",
+          "pattern": "^p_[a-z2-7]{26}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "join_id",
+        "lk_identity"
+      ],
+      "type": "object"
+    },
+    "LeafBindingTable": {
+      "description": "The DS-signed leaf ↔ join id table (S50 §9.5, S51 §7.6). `sig` = Ed25519(`sew-call-ds`,\n`\"sew call leaf binding v1\"` ‖ TLS([`LeafBindingTableTbs`])).",
+      "properties": {
+        "call_id": {
+          "description": "The call.",
+          "pattern": "^r_[a-z2-7]{26}$",
+          "type": "string"
+        },
+        "entries": {
+          "description": "Ascending by leaf or by ref; one key type per table.",
+          "items": {
+            "$ref": "#/$defs/LeafBindingEntryJson"
+          },
+          "type": "array"
+        },
+        "epoch": {
+          "description": "The proposal epoch (key type 2) or the new epoch (key type 1).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "group_id": {
+          "description": "The group (16 bytes).",
+          "pattern": "^[A-Za-z0-9_-]*$",
+          "type": "string"
+        },
+        "sig": {
+          "description": "64-byte Ed25519 signature.",
+          "pattern": "^[A-Za-z0-9_-]*$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "call_id",
+        "group_id",
+        "epoch",
+        "entries",
+        "sig"
+      ],
+      "type": "object"
+    },
+    "RemoveReason": {
+      "description": "Why a leaf left the key group (`removed.reason`; every S33 v2 §10.4 leave reason plus\nS50's and S34 v2's own). Codes are stable for metrics and logs.",
+      "oneOf": [
+        {
+          "const": "left",
+          "description": "The member left.",
+          "type": "string"
+        },
+        {
+          "const": "disconnected",
+          "description": "The media connection ended for good.",
+          "type": "string"
+        },
+        {
+          "const": "replaced",
+          "description": "Another device of the member took over (swap).",
+          "type": "string"
+        },
+        {
+          "const": "moved",
+          "description": "The member moved or switched channel.",
+          "type": "string"
+        },
+        {
+          "const": "removed_by_moderator",
+          "description": "A moderator disconnected the member.",
+          "type": "string"
+        },
+        {
+          "const": "perms_lost",
+          "description": "The member lost CONNECT or VIEW.",
+          "type": "string"
+        },
+        {
+          "const": "channel_archived",
+          "description": "The channel was archived.",
+          "type": "string"
+        },
+        {
+          "const": "removed_from_space",
+          "description": "The member left or was removed from the space.",
+          "type": "string"
+        },
+        {
+          "const": "timed_out",
+          "description": "The member was timed out.",
+          "type": "string"
+        },
+        {
+          "const": "account_removed",
+          "description": "The account was deprovisioned.",
+          "type": "string"
+        },
+        {
+          "const": "session_revoked",
+          "description": "The login session was revoked.",
+          "type": "string"
+        },
+        {
+          "const": "device_revoked",
+          "description": "The device was revoked.",
+          "type": "string"
+        },
+        {
+          "const": "orphaned",
+          "description": "The media outlived every socket.",
+          "type": "string"
+        },
+        {
+          "const": "alone_timeout",
+          "description": "Alone in the call too long.",
+          "type": "string"
+        },
+        {
+          "const": "connect_timeout",
+          "description": "Media never connected.",
+          "type": "string"
+        },
+        {
+          "const": "media_restarted",
+          "description": "The engine restarted and the media did not come back.",
+          "type": "string"
+        },
+        {
+          "const": "voice_disabled",
+          "description": "Voice was turned off.",
+          "type": "string"
+        },
+        {
+          "const": "e2ee_sender_index_stuck",
+          "description": "The sender stayed on a stale key slot (rev 78 D4).",
+          "type": "string"
+        },
+        {
+          "const": "unresponsive",
+          "description": "The device stopped answering key requests (S50 unresponsive removal, F16 #29).",
+          "type": "string"
+        },
+        {
+          "const": "rebuild_orphan",
+          "description": "A rebuild found no live entry for the leaf.",
+          "type": "string"
+        },
+        {
+          "const": "create_failed",
+          "description": "The creator's group was refused.",
+          "type": "string"
+        },
+        {
+          "const": "call_ended",
+          "description": "The DM call ended for everyone (S34 v2, rev 88 D9).",
+          "type": "string"
+        }
+      ]
+    },
+    "ResetReason": {
+      "description": "Why a call's group is reset (`reset.reason`; S50 §12.9, §19.1).",
+      "oneOf": [
+        {
+          "const": "committer_timeout",
+          "description": "Every committer candidate was silent.",
+          "type": "string"
+        },
+        {
+          "const": "remove_deadline",
+          "description": "A removal was not activated by `remove_deadline_ms`.",
+          "type": "string"
+        },
+        {
+          "const": "rebuild_conflict",
+          "description": "A rebuild found two equally covered groups.",
+          "type": "string"
+        },
+        {
+          "const": "invalid_commits",
+          "description": "Too many invalid commits in one generation.",
+          "type": "string"
+        },
+        {
+          "const": "invariant",
+          "description": "A state report broke a group invariant.",
+          "type": "string"
+        }
+      ]
+    },
+    "TransitionReason": {
+      "description": "Why a transition started (`proposals.reason`; S50 §9.3).",
+      "oneOf": [
+        {
+          "const": "join",
+          "description": "Leaves joined.",
+          "type": "string"
+        },
+        {
+          "const": "leave",
+          "description": "Leaves left or were removed.",
+          "type": "string"
+        },
+        {
+          "const": "swap",
+          "description": "A device swap (Remove + Add of one member).",
+          "type": "string"
+        },
+        {
+          "const": "readd",
+          "description": "A re-add after a missed epoch or a failed commit.",
+          "type": "string"
+        },
+        {
+          "const": "rekey",
+          "description": "A requested rekey.",
+          "type": "string"
+        },
+        {
+          "const": "consent",
+          "description": "Recording consent was withdrawn.",
+          "type": "string"
+        },
+        {
+          "const": "recorder_stop",
+          "description": "The recording stopped.",
+          "type": "string"
+        },
+        {
+          "const": "revoke",
+          "description": "A device was revoked.",
+          "type": "string"
+        },
+        {
+          "const": "periodic",
+          "description": "The periodic rekey.",
+          "type": "string"
+        },
+        {
+          "const": "refresh",
+          "description": "A leaf-lifetime refresh.",
+          "type": "string"
+        },
+        {
+          "const": "rebuild_orphan",
+          "description": "Leaves a rebuild could not match.",
+          "type": "string"
+        },
+        {
+          "const": "stuck_sender",
+          "description": "A sender stuck on a stale slot was removed.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The `call_keys_delivered` dispatch body, tagged by `kind` (S50 §9.3). Clients ignore kinds\nthey do not know ([`CallKeysMessage::Unknown`], C15).",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/CallKeysInit",
+      "description": "A creator failover or a reset creator: the [`CallKeysInit`] fields.",
+      "properties": {
+        "kind": {
+          "const": "init",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "A transition starts.",
+      "properties": {
+        "bindings": {
+          "$ref": "#/$defs/LeafBindingTable",
+          "description": "One entry per Add, keyed by its `key_package_ref`."
+        },
+        "call_id": {
+          "description": "The call.",
+          "pattern": "^r_[a-z2-7]{26}$",
+          "type": "string"
+        },
+        "committer": {
+          "description": "The designated committer's leaf.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "epoch": {
+          "description": "The epoch the proposals are for.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "group_id": {
+          "description": "The group.",
+          "pattern": "^[A-Za-z0-9_-]*$",
+          "type": "string"
+        },
+        "kind": {
+          "const": "proposals",
+          "type": "string"
+        },
+        "proposals": {
+          "description": "DS-signed external `MLSMessage`s (Add and Remove only); empty for a rekey.",
+          "items": {
+            "description": "Bytes as base64url without padding (RFC 4648 §5); canonical trailing bits.",
+            "pattern": "^[A-Za-z0-9_-]*$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "reason": {
+          "$ref": "#/$defs/TransitionReason",
+          "description": "Why."
+        }
+      },
+      "required": [
+        "kind",
+        "call_id",
+        "group_id",
+        "epoch",
+        "proposals",
+        "committer",
+        "reason",
+        "bindings"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Failover to the next committer candidate.",
+      "properties": {
+        "attempt": {
+          "description": "2 or 3.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "call_id": {
+          "description": "The call.",
+          "pattern": "^r_[a-z2-7]{26}$",
+          "type": "string"
+        },
+        "committer": {
+          "description": "The candidate's leaf.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "epoch": {
+          "description": "The epoch.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "group_id": {
+          "description": "The group.",
+          "pattern": "^[A-Za-z0-9_-]*$",
+          "type": "string"
+        },
+        "kind": {
+          "const": "commit_request",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "call_id",
+        "group_id",
+        "epoch",
+        "committer",
+        "attempt"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "The accepted commit.",
+      "properties": {
+        "bindings": {
+          "$ref": "#/$defs/LeafBindingTable",
+          "description": "The leaves this commit added, keyed by leaf, for `epoch_from + 1`."
+        },
+        "call_id": {
+          "description": "The call.",
+          "pattern": "^r_[a-z2-7]{26}$",
+          "type": "string"
+        },
+        "commit": {
+          "description": "TLS `MLSMessage(PublicMessage commit)`.",
+          "pattern": "^[A-Za-z0-9_-]*$",
+          "type": "string"
+        },
+        "epoch_from": {
+          "description": "The epoch the commit leaves.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "group_id": {
+          "description": "The group.",
+          "pattern": "^[A-Za-z0-9_-]*$",
+          "type": "string"
+        },
+        "kind": {
+          "const": "commit",
+          "type": "string"
+        },
+        "slot": {
+          "description": "The slot of `epoch_from + 1`.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "call_id",
+        "group_id",
+        "epoch_from",
+        "commit",
+        "slot",
+        "bindings"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "A joiner's Welcome.",
+      "properties": {
+        "bindings": {
+          "$ref": "#/$defs/LeafBindingTable",
+          "description": "The full table of `epoch`."
+        },
+        "call_id": {
+          "description": "The call.",
+          "pattern": "^r_[a-z2-7]{26}$",
+          "type": "string"
+        },
+        "epoch": {
+          "description": "The epoch the Welcome joins.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "group_id": {
+          "description": "The group.",
+          "pattern": "^[A-Za-z0-9_-]*$",
+          "type": "string"
+        },
+        "join_id": {
+          "description": "The joiner's join id.",
+          "pattern": "^[0-9a-f]{32}$",
+          "type": "string"
+        },
+        "kind": {
+          "const": "welcome",
+          "type": "string"
+        },
+        "ratchet_tree": {
+          "description": "TLS `RatchetTree` of `epoch`.",
+          "pattern": "^[A-Za-z0-9_-]*$",
+          "type": "string"
+        },
+        "slot": {
+          "description": "`slot(epoch)`.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "slot_base": {
+          "description": "The group's slot base.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "welcome": {
+          "description": "TLS `MLSMessage(Welcome)`.",
+          "pattern": "^[A-Za-z0-9_-]*$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "call_id",
+        "group_id",
+        "join_id",
+        "epoch",
+        "welcome",
+        "ratchet_tree",
+        "slot_base",
+        "slot",
+        "bindings"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Every sender switches to `slot`.",
+      "properties": {
+        "call_id": {
+          "description": "The call.",
+          "pattern": "^r_[a-z2-7]{26}$",
+          "type": "string"
+        },
+        "epoch": {
+          "description": "The epoch.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "group_id": {
+          "description": "The group.",
+          "pattern": "^[A-Za-z0-9_-]*$",
+          "type": "string"
+        },
+        "kind": {
+          "const": "activate",
+          "type": "string"
+        },
+        "slot": {
+          "description": "Its slot.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "call_id",
+        "group_id",
+        "epoch",
+        "slot"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "The group is replaced; send a fresh KeyPackage (K7).",
+      "properties": {
+        "call_id": {
+          "description": "The call.",
+          "pattern": "^r_[a-z2-7]{26}$",
+          "type": "string"
+        },
+        "collect_ms": {
+          "description": "The collection window.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "kind": {
+          "const": "reset",
+          "type": "string"
+        },
+        "new_group_id": {
+          "description": "The group being collected.",
+          "pattern": "^[A-Za-z0-9_-]*$",
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/ResetReason",
+          "description": "Why."
+        },
+        "slot_base": {
+          "description": "The new group's slot base.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "call_id",
+        "new_group_id",
+        "reason",
+        "slot_base",
+        "collect_ms"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "The recorder: a certified key recipient, or `removed: true` (no key fields).",
+      "properties": {
+        "call_id": {
+          "description": "The call.",
+          "pattern": "^r_[a-z2-7]{26}$",
+          "type": "string"
+        },
+        "hpke_pub": {
+          "description": "The recorder's X25519 public key (32 bytes).",
+          "pattern": "^[A-Za-z0-9_-]*$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "const": "recorder",
+          "type": "string"
+        },
+        "lk_identity": {
+          "description": "The recorder's engine identity (`p_…`, from S33's `admit_recorder`).",
+          "pattern": "^p_[a-z2-7]{26}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recorder_cert": {
+          "description": "TLS `RecorderCert`.",
+          "pattern": "^[A-Za-z0-9_-]*$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recording_id": {
+          "description": "The recording.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "removed": {
+          "description": "The recording stopped.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "call_id",
+        "recording_id"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Device certificates were revoked.",
+      "properties": {
+        "kind": {
+          "const": "revoked",
+          "type": "string"
+        },
+        "serials": {
+          "description": "The revoked serials.",
+          "items": {
+            "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "serials"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "The leaf was removed; its last key message.",
+      "properties": {
+        "call_id": {
+          "description": "The call.",
+          "pattern": "^r_[a-z2-7]{26}$",
+          "type": "string"
+        },
+        "group_id": {
+          "description": "The group.",
+          "pattern": "^[A-Za-z0-9_-]*$",
+          "type": "string"
+        },
+        "join_id": {
+          "description": "The removed join.",
+          "pattern": "^[0-9a-f]{32}$",
+          "type": "string"
+        },
+        "kind": {
+          "const": "removed",
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/RemoveReason",
+          "description": "Why."
+        }
+      },
+      "required": [
+        "kind",
+        "call_id",
+        "group_id",
+        "join_id",
+        "reason"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "The dispatch form of K3's `409` answers, and `stale_slot`.",
+      "properties": {
+        "call_id": {
+          "description": "The call.",
+          "pattern": "^r_[a-z2-7]{26}$",
+          "type": "string"
+        },
+        "expected_slot": {
+          "description": "With `stale_slot`: the slot the sender must use.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "join_id": {
+          "description": "The leaf's join id.",
+          "pattern": "^[0-9a-f]{32}$",
+          "type": "string"
+        },
+        "kind": {
+          "const": "resync",
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/KeyResyncReason",
+          "description": "Why."
+        }
+      },
+      "required": [
+        "kind",
+        "call_id",
+        "join_id",
+        "reason"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "CallKeysMessage"
+}

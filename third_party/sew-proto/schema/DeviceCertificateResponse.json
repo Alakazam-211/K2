@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "K11 and K12 answer: a fresh device certificate.",
+  "properties": {
+    "cert": {
+      "description": "TLS `SewDeviceCert`.",
+      "pattern": "^[A-Za-z0-9_-]*$",
+      "type": "string"
+    },
+    "device_id": {
+      "description": "The device.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "not_after": {
+      "description": "When the certificate expires (informational; the certificate is authoritative).",
+      "format": "date-time",
+      "type": "string"
+    },
+    "serial": {
+      "description": "The certificate's serial.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "device_id",
+    "serial",
+    "cert",
+    "not_after"
+  ],
+  "title": "DeviceCertificateResponse",
+  "type": "object"
+}

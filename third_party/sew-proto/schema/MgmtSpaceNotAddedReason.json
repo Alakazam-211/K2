@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Why a principal was not added (SW13; bans are not a reason here: a banned member is in\n`skipped`, HC2).",
+  "oneOf": [
+    {
+      "const": "not_provisioned",
+      "description": "No member has this external id (provision first).",
+      "type": "string"
+    },
+    {
+      "const": "deactivated",
+      "description": "The member is deactivated.",
+      "type": "string"
+    },
+    {
+      "const": "assistant",
+      "description": "An assistant never joins a Space (it reads through its person).",
+      "type": "string"
+    },
+    {
+      "const": "guest",
+      "description": "A guest enters a Space only through a channel add (S19).",
+      "type": "string"
+    }
+  ],
+  "title": "MgmtSpaceNotAddedReason"
+}

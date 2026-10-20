@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Op 12 ACTIVITY: the user became active or idle (contracts rev 19).",
+  "properties": {
+    "idle": {
+      "description": "`true` when the user went idle (screen lock, window hidden).",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "idle"
+  ],
+  "title": "ActivityRequest",
+  "type": "object"
+}

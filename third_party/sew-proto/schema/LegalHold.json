@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A legal hold. Its name is plaintext metadata: never describe the case in it.",
+  "properties": {
+    "channels": {
+      "description": "Channel targets.",
+      "items": {
+        "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+        "pattern": "^[1-9][0-9]{0,18}$",
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "coverage_channel_count": {
+      "description": "Channels it covers now.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "created_at": {
+      "description": "When it was created.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "created_by": {
+      "description": "Who created it (absent for the service).",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "from": {
+      "description": "Start of the range (inclusive; absent = open).",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "id": {
+      "description": "The hold id.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "members": {
+      "description": "Member targets.",
+      "items": {
+        "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+        "pattern": "^[1-9][0-9]{0,18}$",
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "name": {
+      "description": "Its name (unique, case-insensitive).",
+      "type": "string"
+    },
+    "released_at": {
+      "description": "When it was released.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "released_by": {
+      "description": "Who released it.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "spaces": {
+      "description": "Space targets (channels created later included).",
+      "items": {
+        "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+        "pattern": "^[1-9][0-9]{0,18}$",
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "to": {
+      "description": "End of the range (exclusive; absent = open).",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "updated_at": {
+      "description": "When it last changed.",
+      "format": "date-time",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "name",
+    "members",
+    "channels",
+    "spaces",
+    "created_at",
+    "updated_at",
+    "coverage_channel_count"
+  ],
+  "title": "LegalHold",
+  "type": "object"
+}

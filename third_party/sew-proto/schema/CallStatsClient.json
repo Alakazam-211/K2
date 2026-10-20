@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The browser family of a call-stats sample (F21): the family only, never a version or a\nuser agent.",
+  "oneOf": [
+    {
+      "const": "chromium",
+      "description": "Chrome, Edge and other Chromium browsers.",
+      "type": "string"
+    },
+    {
+      "const": "firefox",
+      "description": "Firefox.",
+      "type": "string"
+    },
+    {
+      "const": "safari",
+      "description": "Safari (WebKit).",
+      "type": "string"
+    },
+    {
+      "const": "other",
+      "description": "Anything else.",
+      "type": "string"
+    }
+  ],
+  "title": "CallStatsClient"
+}

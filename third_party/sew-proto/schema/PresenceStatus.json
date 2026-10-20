@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A member's visible presence.",
+  "oneOf": [
+    {
+      "const": "online",
+      "description": "Online.",
+      "type": "string"
+    },
+    {
+      "const": "idle",
+      "description": "Idle.",
+      "type": "string"
+    },
+    {
+      "const": "dnd",
+      "description": "Do not disturb.",
+      "type": "string"
+    },
+    {
+      "const": "offline",
+      "description": "Offline or invisible.",
+      "type": "string"
+    }
+  ],
+  "title": "PresenceStatus"
+}

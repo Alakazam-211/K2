@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Response of `POST /mgmt/v1/search/rebuild`.",
+  "properties": {
+    "job_id": {
+      "description": "The `search_rebuild` job (poll `GET /mgmt/v1/jobs/{id}`).",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "job_id"
+  ],
+  "title": "SearchRebuildResponse",
+  "type": "object"
+}

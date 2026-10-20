@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Query of `GET /mgmt/v1/agents/{member_id}/deliveries`: long-poll after a member seq.",
+  "properties": {
+    "after": {
+      "description": "Return entries with `seq > after`. K2 sends the previous page's `next_after`.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "limit": {
+      "description": "At most this many entries (1–500, default 100; S9 §12, additive).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "timeout_ms": {
+      "description": "Long-poll up to this long (≤ 25000, default 25000).",
+      "format": "uint64",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "after"
+  ],
+  "title": "DeliveriesQuery",
+  "type": "object"
+}

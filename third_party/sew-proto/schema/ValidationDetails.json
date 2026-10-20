@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Details for `validation_failed` (and `too_large` on a field): the field that failed.",
+  "properties": {
+    "field": {
+      "description": "The failing field, dotted for nested fields (for example `reference.kind`).",
+      "type": "string"
+    }
+  },
+  "required": [
+    "field"
+  ],
+  "title": "ValidationDetails",
+  "type": "object"
+}

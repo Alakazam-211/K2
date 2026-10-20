@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Body of `category_deleted` (S10 gap G6).",
+  "properties": {
+    "id": {
+      "description": "The category.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "space_id": {
+      "description": "Its space.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "space_id"
+  ],
+  "title": "CategoryDeleted",
+  "type": "object"
+}

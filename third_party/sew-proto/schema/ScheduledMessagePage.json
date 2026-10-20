@@ -1,0 +1,270 @@
+{
+  "$defs": {
+    "DraftUpload": {
+      "description": "A pending upload held by a draft or a scheduled message.",
+      "properties": {
+        "content_type": {
+          "description": "The stored (or declared) content type.",
+          "type": "string"
+        },
+        "expires_at": {
+          "description": "When the pending upload expires.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "filename": {
+          "description": "The file name.",
+          "type": "string"
+        },
+        "size": {
+          "description": "Bytes.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "upload_id": {
+          "description": "The upload id (the attachment id once sent).",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "upload_id",
+        "filename",
+        "size",
+        "content_type",
+        "expires_at"
+      ],
+      "type": "object"
+    },
+    "ScheduledFailReason": {
+      "description": "Why a scheduled message was not sent (`scheduled_messages.fail_reason`).",
+      "oneOf": [
+        {
+          "const": "no_access",
+          "description": "The author can no longer see the channel or thread.",
+          "type": "string"
+        },
+        {
+          "const": "missing_permission",
+          "description": "The author lacks a permission the post needs.",
+          "type": "string"
+        },
+        {
+          "const": "policy_denied",
+          "description": "An org policy refused the post.",
+          "type": "string"
+        },
+        {
+          "const": "channel_archived",
+          "description": "The channel is archived.",
+          "type": "string"
+        },
+        {
+          "const": "thread_root_deleted",
+          "description": "The thread root was deleted.",
+          "type": "string"
+        },
+        {
+          "const": "dm_partner_deactivated",
+          "description": "The 1:1 DM partner is deactivated.",
+          "type": "string"
+        },
+        {
+          "const": "slow_mode",
+          "description": "Slow mode would hold it past the grace window.",
+          "type": "string"
+        },
+        {
+          "const": "rate_limited",
+          "description": "The message rate would hold it past the grace window.",
+          "type": "string"
+        },
+        {
+          "const": "overdue",
+          "description": "More than 60 minutes late (after downtime).",
+          "type": "string"
+        },
+        {
+          "const": "attachment_expired",
+          "description": "An attached upload expired.",
+          "type": "string"
+        },
+        {
+          "const": "author_inactive",
+          "description": "The author is deactivated.",
+          "type": "string"
+        },
+        {
+          "const": "invalid_content",
+          "description": "The body breaks a content rule (mention limits, blank body).",
+          "type": "string"
+        },
+        {
+          "const": "internal",
+          "description": "The send kept failing.",
+          "type": "string"
+        }
+      ]
+    },
+    "ScheduledMessage": {
+      "description": "A message scheduled for later. Only its author sees it.",
+      "properties": {
+        "also_send_to_channel": {
+          "description": "A reply that also goes to the channel.",
+          "type": "boolean"
+        },
+        "body": {
+          "description": "The body (empty once sent).",
+          "type": "string"
+        },
+        "channel_id": {
+          "description": "The channel.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "created_at": {
+          "description": "Created.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "fail_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScheduledFailReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why it failed."
+        },
+        "failed_at": {
+          "description": "When it failed.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "The scheduled message id.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "message_id": {
+          "description": "The sent message.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "send_at": {
+          "description": "When it goes out (UTC).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "sent_at": {
+          "description": "When it was sent.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/ScheduledState",
+          "description": "The state."
+        },
+        "thread_root_id": {
+          "description": "The thread, for a reply.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timezone": {
+          "description": "The zone a local `when` was given in.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "updated_at": {
+          "description": "Last change.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "uploads": {
+          "description": "Pending uploads (empty once sent).",
+          "items": {
+            "$ref": "#/$defs/DraftUpload"
+          },
+          "type": "array"
+        },
+        "version": {
+          "description": "Bumped by every edit.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "channel_id",
+        "also_send_to_channel",
+        "body",
+        "uploads",
+        "send_at",
+        "state",
+        "version",
+        "created_at",
+        "updated_at"
+      ],
+      "type": "object"
+    },
+    "ScheduledState": {
+      "description": "A scheduled message's state (`scheduled_messages.state`).",
+      "oneOf": [
+        {
+          "const": "pending",
+          "description": "Waiting for its time.",
+          "type": "string"
+        },
+        {
+          "const": "sent",
+          "description": "Sent (`message_id` set).",
+          "type": "string"
+        },
+        {
+          "const": "failed",
+          "description": "Not sent; `fail_reason` says why. The author edits, sends now or deletes it.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A page of an id-keyed list: `{\"items\": [...], \"has_more\": bool}`.",
+  "properties": {
+    "has_more": {
+      "description": "Whether more items exist past this page.",
+      "type": "boolean"
+    },
+    "items": {
+      "description": "The items.",
+      "items": {
+        "$ref": "#/$defs/ScheduledMessage"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "items",
+    "has_more"
+  ],
+  "title": "Page",
+  "type": "object"
+}

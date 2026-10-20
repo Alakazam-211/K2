@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Whether file bytes are in the archive.",
+  "oneOf": [
+    {
+      "const": "include",
+      "description": "`files/<file_id>` entries hold the plaintext bytes.",
+      "type": "string"
+    },
+    {
+      "const": "manifest_only",
+      "description": "Attachment records keep metadata only; no `files/` entries.",
+      "type": "string"
+    }
+  ],
+  "title": "FileMode"
+}

@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`presence_settings.ndjson`.",
+  "properties": {
+    "dnd_schedule": {
+      "description": "The weekly DND schedule."
+    },
+    "dnd_skip_until": {
+      "description": "A skipped DND window ends.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "manual": {
+      "description": "`none`, `away`, `dnd`, `invisible`.",
+      "type": "string"
+    },
+    "manual_until": {
+      "description": "When a timed manual status ends.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "member_id": {
+      "description": "The member.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "updated_at": {
+      "description": "Last change.",
+      "format": "date-time",
+      "type": "string"
+    }
+  },
+  "required": [
+    "member_id",
+    "manual",
+    "updated_at"
+  ],
+  "title": "PresenceSettingsRecord",
+  "type": "object"
+}

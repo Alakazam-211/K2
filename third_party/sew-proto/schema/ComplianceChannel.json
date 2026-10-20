@@ -1,0 +1,110 @@
+{
+  "$defs": {
+    "ChannelType": {
+      "description": "Channel type (gap G8 adds `dm` and `group_dm`).",
+      "oneOf": [
+        {
+          "const": "text",
+          "description": "A text channel.",
+          "type": "string"
+        },
+        {
+          "const": "voice",
+          "description": "A voice channel.",
+          "type": "string"
+        },
+        {
+          "const": "announcement",
+          "description": "An announcement channel: `@everyone` posts only in threads by default.",
+          "type": "string"
+        },
+        {
+          "const": "dm",
+          "description": "A 1:1 DM (no space, slug or name; always private).",
+          "type": "string"
+        },
+        {
+          "const": "group_dm",
+          "description": "A group DM of up to 9 people.",
+          "type": "string"
+        }
+      ]
+    },
+    "Visibility": {
+      "description": "Channel visibility.",
+      "oneOf": [
+        {
+          "const": "public",
+          "description": "Every space member can see and join it.",
+          "type": "string"
+        },
+        {
+          "const": "private",
+          "description": "Members only.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "One channel as compliance sees it: metadata only, private channels and DMs included.",
+  "properties": {
+    "archived": {
+      "description": "Archived.",
+      "type": "boolean"
+    },
+    "dm_member_ids": {
+      "default": [],
+      "description": "DM members (empty for space channels).",
+      "items": {
+        "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+        "pattern": "^[1-9][0-9]{0,18}$",
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "id": {
+      "description": "The channel.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "name": {
+      "description": "The name (absent for DMs).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "slug": {
+      "description": "The slug (absent for DMs).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "space_id": {
+      "description": "Its space (absent for DMs).",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "type": {
+      "$ref": "#/$defs/ChannelType",
+      "description": "Its type."
+    },
+    "visibility": {
+      "$ref": "#/$defs/Visibility",
+      "description": "Public or private."
+    }
+  },
+  "required": [
+    "id",
+    "type",
+    "visibility",
+    "archived"
+  ],
+  "title": "ComplianceChannel",
+  "type": "object"
+}

@@ -1,0 +1,78 @@
+{
+  "$defs": {
+    "AckItem": {
+      "additionalProperties": false,
+      "description": "One channel of a bulk ack.",
+      "properties": {
+        "channel_id": {
+          "description": "The channel.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "message_id": {
+          "description": "The newest message read; absent = the newest now.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "channel_id"
+      ],
+      "type": "object"
+    },
+    "ThreadAckItem": {
+      "additionalProperties": false,
+      "description": "One thread of a bulk ack.",
+      "properties": {
+        "message_id": {
+          "description": "The newest reply read; absent = the newest now.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "root_id": {
+          "description": "The thread root.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "root_id"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /api/v1/me/read_states/ack` (\"mark all read\", prd-sew-14 §8.5).",
+  "properties": {
+    "channels": {
+      "default": [],
+      "description": "Channels, 0–500, unique.",
+      "items": {
+        "$ref": "#/$defs/AckItem"
+      },
+      "type": "array"
+    },
+    "include_threads": {
+      "default": false,
+      "description": "Also ack every thread of each listed channel the member follows or has an unread\nmention in.",
+      "type": "boolean"
+    },
+    "threads": {
+      "default": [],
+      "description": "Threads, 0–500, unique.",
+      "items": {
+        "$ref": "#/$defs/ThreadAckItem"
+      },
+      "type": "array"
+    }
+  },
+  "title": "BulkAckRequest",
+  "type": "object"
+}

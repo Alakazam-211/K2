@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A recording segment's state (`recording_segments.state`, prd-sew-35 v2 §10).",
+  "oneOf": [
+    {
+      "const": "stored",
+      "description": "Stored; awaiting transcription.",
+      "type": "string"
+    },
+    {
+      "const": "transcribed",
+      "description": "Transcribed.",
+      "type": "string"
+    },
+    {
+      "const": "empty",
+      "description": "No speech.",
+      "type": "string"
+    },
+    {
+      "const": "failed",
+      "description": "Transcription failed (or the audio went first).",
+      "type": "string"
+    },
+    {
+      "const": "posted",
+      "description": "Every piece posted.",
+      "type": "string"
+    }
+  ],
+  "title": "SegmentState"
+}

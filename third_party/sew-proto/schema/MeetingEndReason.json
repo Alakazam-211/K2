@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Why a meeting ended.",
+  "oneOf": [
+    {
+      "const": "host",
+      "description": "A host ended it for everyone (MC3).",
+      "type": "string"
+    },
+    {
+      "const": "empty_after_grace",
+      "description": "The room stayed empty for `meetings.grace_minutes` after `ends_at`.",
+      "type": "string"
+    },
+    {
+      "const": "hard_cap",
+      "description": "`hard_end_at` (`starts_at` + 12 h) passed.",
+      "type": "string"
+    },
+    {
+      "const": "organiser_gone",
+      "description": "The organiser was deactivated and no other host remains.",
+      "type": "string"
+    },
+    {
+      "const": "cancelled",
+      "description": "Cancelled before it started.",
+      "type": "string"
+    }
+  ],
+  "title": "MeetingEndReason"
+}

@@ -1,0 +1,148 @@
+{
+  "$defs": {
+    "LinkPreview": {
+      "description": "One link preview of a message. Text fields are plain text: never render them as HTML or\nmarkdown.",
+      "properties": {
+        "description": {
+          "description": "The page description (≤ 512 characters).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "host": {
+          "description": "Its host.",
+          "type": "string"
+        },
+        "image": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PreviewImage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The preview image."
+        },
+        "kind": {
+          "$ref": "#/$defs/LinkPreviewKind",
+          "description": "Page or image."
+        },
+        "redirected_host": {
+          "description": "The final host when a redirect changed it; clients should show it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "site_name": {
+          "description": "The site name (≤ 100 characters).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "description": "The page title (≤ 256 characters).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "url": {
+          "description": "The URL as the author typed it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url",
+        "host",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "LinkPreviewKind": {
+      "description": "What a link preview shows.",
+      "oneOf": [
+        {
+          "const": "page",
+          "description": "An HTML page (title, description, optional image).",
+          "type": "string"
+        },
+        {
+          "const": "image",
+          "description": "The link is an image.",
+          "type": "string"
+        }
+      ]
+    },
+    "PreviewImage": {
+      "description": "A preview's image, stored and served by Sew.",
+      "properties": {
+        "height": {
+          "description": "Height in pixels (≤ 800).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "url": {
+          "description": "Signed URL (1 h).",
+          "type": "string"
+        },
+        "width": {
+          "description": "Width in pixels (≤ 800).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "url",
+        "width",
+        "height"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Body of `message_previews_updated` (S16): the message's previews now, identical for every\nviewer.",
+  "properties": {
+    "channel_id": {
+      "description": "Its channel.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "message_id": {
+      "description": "The message.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "previews": {
+      "description": "Its previews, in body order.",
+      "items": {
+        "$ref": "#/$defs/LinkPreview"
+      },
+      "type": "array"
+    },
+    "previews_suppressed": {
+      "description": "Previews are turned off for the message.",
+      "type": "boolean"
+    },
+    "seq": {
+      "description": "The seq of the `preview_changed` change entry.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "message_id",
+    "channel_id",
+    "previews",
+    "previews_suppressed",
+    "seq"
+  ],
+  "title": "MessagePreviewsUpdated",
+  "type": "object"
+}

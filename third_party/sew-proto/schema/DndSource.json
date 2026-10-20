@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Why DND is on.",
+  "oneOf": [
+    {
+      "const": "none",
+      "description": "Off.",
+      "type": "string"
+    },
+    {
+      "const": "manual",
+      "description": "Set by hand.",
+      "type": "string"
+    },
+    {
+      "const": "schedule",
+      "description": "A schedule window.",
+      "type": "string"
+    }
+  ],
+  "title": "DndSource"
+}

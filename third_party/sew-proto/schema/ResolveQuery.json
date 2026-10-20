@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Query of `GET /api/v1/resolve`.",
+  "properties": {
+    "addr": {
+      "description": "The address to resolve.",
+      "maxLength": 256,
+      "type": "string"
+    }
+  },
+  "required": [
+    "addr"
+  ],
+  "title": "ResolveQuery",
+  "type": "object"
+}

@@ -1,0 +1,167 @@
+{
+  "$defs": {
+    "AudioState": {
+      "description": "The recording's audio (§12). Stored in `recordings.audio_state`.",
+      "oneOf": [
+        {
+          "const": "available",
+          "description": "Kept.",
+          "type": "string"
+        },
+        {
+          "const": "expired",
+          "description": "Hidden; links may still exist (held or not yet purged).",
+          "type": "string"
+        },
+        {
+          "const": "purged",
+          "description": "Every link deleted; the content key is gone.",
+          "type": "string"
+        }
+      ]
+    },
+    "AudioTrack": {
+      "description": "One speaker's track in an audio listing.",
+      "properties": {
+        "member_id": {
+          "description": "The speaker.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "segments": {
+          "description": "Stored segments.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "speech_ms": {
+          "description": "Their speech.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "member_id",
+        "segments",
+        "speech_ms"
+      ],
+      "type": "object"
+    },
+    "MixedPart": {
+      "description": "One mixed part in an audio listing or download (§19.2, §19.4).",
+      "properties": {
+        "bytes": {
+          "description": "Sealed size.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "duration_ms": {
+          "description": "Length (≤ 60 min).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "format": {
+          "description": "[`SEALED_AUDIO_FORMAT`] (P1 only).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "key": {
+          "description": "The part key, base64 (P1 or download only).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "offset_ms": {
+          "description": "Offset from the recording start.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "part": {
+          "description": "Part number, from 1.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "url": {
+          "description": "The ciphertext URL (P1 or download only).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "part",
+        "offset_ms",
+        "duration_ms",
+        "bytes"
+      ],
+      "type": "object"
+    },
+    "Playback": {
+      "description": "Whether the audio listing hands out keys (§19.2; P3 in v1, rev 91).",
+      "oneOf": [
+        {
+          "const": "off",
+          "description": "No in-app playback (P3, the default).",
+          "type": "string"
+        },
+        {
+          "const": "client_unseal",
+          "description": "P1: keys and ciphertext URLs for local unsealing.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "`GET /api/v1/recordings/{id}/audio` (§19.2).",
+  "properties": {
+    "expires_at": {
+      "description": "When it expires.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "mixed": {
+      "description": "The mixed parts.",
+      "items": {
+        "$ref": "#/$defs/MixedPart"
+      },
+      "type": "array"
+    },
+    "playback": {
+      "$ref": "#/$defs/Playback",
+      "description": "`off` (P3) or `client_unseal` (P1)."
+    },
+    "state": {
+      "$ref": "#/$defs/AudioState",
+      "description": "The audio's state."
+    },
+    "tracks": {
+      "description": "Per-speaker tracks.",
+      "items": {
+        "$ref": "#/$defs/AudioTrack"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "state",
+    "playback",
+    "mixed",
+    "tracks"
+  ],
+  "title": "RecordingAudio",
+  "type": "object"
+}

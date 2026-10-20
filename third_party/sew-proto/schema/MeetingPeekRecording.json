@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The recording part of a peek (MC4 adds `consent_prompt`).",
+  "properties": {
+    "active": {
+      "description": "A recording is running in the meeting now.",
+      "type": "boolean"
+    },
+    "auto_record": {
+      "description": "The meeting records from the start.",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "auto_record",
+    "active"
+  ],
+  "title": "MeetingPeekRecording",
+  "type": "object"
+}

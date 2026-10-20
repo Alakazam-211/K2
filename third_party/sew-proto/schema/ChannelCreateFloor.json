@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "`channels.create_*_floor`: the install-level gate on top of the create bit\n(gap G29 as amended by contracts revs 6 and 10).",
+  "oneOf": [
+    {
+      "const": "perm",
+      "description": "The permission bit alone suffices.",
+      "type": "string"
+    },
+    {
+      "const": "space_admins",
+      "description": "The bit plus being a space admin.",
+      "type": "string"
+    },
+    {
+      "const": "install_admins",
+      "description": "The bit plus being an install owner or admin.",
+      "type": "string"
+    }
+  ],
+  "title": "ChannelCreateFloor"
+}

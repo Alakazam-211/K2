@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "What a member sees about their own presence.",
+  "oneOf": [
+    {
+      "const": "online",
+      "description": "Online.",
+      "type": "string"
+    },
+    {
+      "const": "idle",
+      "description": "Idle or away.",
+      "type": "string"
+    },
+    {
+      "const": "dnd",
+      "description": "Do not disturb.",
+      "type": "string"
+    },
+    {
+      "const": "invisible",
+      "description": "Invisible (others see offline).",
+      "type": "string"
+    },
+    {
+      "const": "offline",
+      "description": "No live session.",
+      "type": "string"
+    }
+  ],
+  "title": "SelfStatus"
+}

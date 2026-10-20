@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A set of retention values. `null` = keep forever (install) or inherit (space, channel).",
+  "properties": {
+    "deleted_purge_days": {
+      "default": null,
+      "description": "Install only: days deleted and edited-away content is kept, 1–3,650 (`null` = off).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "files_days": {
+      "default": null,
+      "description": "Days files live, 1–36,500 (never longer than messages in effect).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "messages_days": {
+      "default": null,
+      "description": "Days messages live, 1–36,500.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    }
+  },
+  "title": "RetentionValues",
+  "type": "object"
+}

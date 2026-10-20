@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "One `LeafBinding` entry in JSON: exactly one of `leaf` (key type 1) or `key_package_ref`\n(key type 2), the join id and its engine identity (S50 §9.5).",
+  "properties": {
+    "join_id": {
+      "description": "The join id.",
+      "pattern": "^[0-9a-f]{32}$",
+      "type": "string"
+    },
+    "key_package_ref": {
+      "description": "The Add's `key_package_ref` (proposals).",
+      "pattern": "^[A-Za-z0-9_-]*$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "leaf": {
+      "description": "The leaf index (commit, welcome, K3 reply, recorder tables).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "lk_identity": {
+      "description": "`p_` + base32 of `join_id` (not signed; clients recompute and compare).",
+      "pattern": "^p_[a-z2-7]{26}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "join_id",
+    "lk_identity"
+  ],
+  "title": "LeafBindingEntryJson",
+  "type": "object"
+}

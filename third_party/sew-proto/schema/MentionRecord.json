@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`mentions.ndjson`: the mention inbox.",
+  "properties": {
+    "channel_id": {
+      "description": "The channel.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "created_at": {
+      "description": "Written.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "member_id": {
+      "description": "The member.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "message_id": {
+      "description": "The message.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "reason": {
+      "description": "The notification reason code (1 mention … 6 dm).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "root_id": {
+      "description": "The thread root.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "member_id",
+    "channel_id",
+    "message_id",
+    "reason",
+    "created_at"
+  ],
+  "title": "MentionRecord",
+  "type": "object"
+}

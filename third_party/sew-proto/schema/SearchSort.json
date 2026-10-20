@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Result order.",
+  "oneOf": [
+    {
+      "const": "relevance",
+      "description": "BM25 blended with a 30-day recency boost (the default).",
+      "type": "string"
+    },
+    {
+      "const": "recent",
+      "description": "Newest first. Filter-only queries always sort this way.",
+      "type": "string"
+    }
+  ],
+  "title": "SearchSort"
+}

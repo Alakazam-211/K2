@@ -1,0 +1,180 @@
+{
+  "$defs": {
+    "AudioState": {
+      "description": "The recording's audio (§12). Stored in `recordings.audio_state`.",
+      "oneOf": [
+        {
+          "const": "available",
+          "description": "Kept.",
+          "type": "string"
+        },
+        {
+          "const": "expired",
+          "description": "Hidden; links may still exist (held or not yet purged).",
+          "type": "string"
+        },
+        {
+          "const": "purged",
+          "description": "Every link deleted; the content key is gone.",
+          "type": "string"
+        }
+      ]
+    },
+    "DownloadSpeaker": {
+      "description": "A download's speaker.",
+      "properties": {
+        "display_name": {
+          "description": "Their display name.",
+          "type": "string"
+        },
+        "member_id": {
+          "description": "The member.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "member_id",
+        "display_name"
+      ],
+      "type": "object"
+    },
+    "MixedPart": {
+      "description": "One mixed part in an audio listing or download (§19.2, §19.4).",
+      "properties": {
+        "bytes": {
+          "description": "Sealed size.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "duration_ms": {
+          "description": "Length (≤ 60 min).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "format": {
+          "description": "[`SEALED_AUDIO_FORMAT`] (P1 only).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "key": {
+          "description": "The part key, base64 (P1 or download only).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "offset_ms": {
+          "description": "Offset from the recording start.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "part": {
+          "description": "Part number, from 1.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "url": {
+          "description": "The ciphertext URL (P1 or download only).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "part",
+        "offset_ms",
+        "duration_ms",
+        "bytes"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A compliance download grant (§19.4): sealed files and the keys to open them.",
+  "properties": {
+    "audio_state": {
+      "$ref": "#/$defs/AudioState",
+      "description": "The audio's state."
+    },
+    "channel_id": {
+      "description": "Its channel.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "download_id": {
+      "description": "The grant.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "expires_at": {
+      "description": "When the grant and its URLs expire.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "format": {
+      "description": "[`SEALED_AUDIO_FORMAT`].",
+      "type": "string"
+    },
+    "mixed": {
+      "description": "The mixed parts with URLs and keys (when asked for).",
+      "items": {
+        "$ref": "#/$defs/MixedPart"
+      },
+      "type": "array"
+    },
+    "recording_id": {
+      "description": "The recording.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "segments_url": {
+      "description": "The segment pages (when segments were asked for).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "speakers": {
+      "description": "The speakers.",
+      "items": {
+        "$ref": "#/$defs/DownloadSpeaker"
+      },
+      "type": "array"
+    },
+    "started_at": {
+      "description": "When it started.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "stopped_at": {
+      "description": "When it stopped.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "download_id",
+    "recording_id",
+    "channel_id",
+    "started_at",
+    "audio_state",
+    "format",
+    "expires_at",
+    "speakers",
+    "mixed"
+  ],
+  "title": "RecordingDownload",
+  "type": "object"
+}

@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /api/v1/groups`.",
+  "properties": {
+    "description": {
+      "description": "Description.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "handle": {
+      "description": "`@handle`.",
+      "pattern": "^[a-z0-9_-]{2,64}$",
+      "type": "string"
+    },
+    "member_ids": {
+      "description": "Initial members (at most 100).",
+      "items": {
+        "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+        "pattern": "^[1-9][0-9]{0,18}$",
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "mentionable": {
+      "description": "Default true.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "name": {
+      "description": "Name.",
+      "type": "string"
+    },
+    "space_id": {
+      "description": "A space group (absent = install-wide).",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "handle",
+    "name"
+  ],
+  "title": "CreateUserGroupRequest",
+  "type": "object"
+}

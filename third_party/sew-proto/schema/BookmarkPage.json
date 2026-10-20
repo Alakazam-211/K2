@@ -1,0 +1,96 @@
+{
+  "$defs": {
+    "Bookmark": {
+      "description": "A link in a channel's header.",
+      "properties": {
+        "channel_id": {
+          "description": "The channel.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "created_at": {
+          "description": "Created.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "created_by": {
+          "description": "Who created it.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "emoji": {
+          "description": "One Unicode emoji.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "The bookmark id.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "position": {
+          "description": "0-based position.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "seq": {
+          "description": "The `bookmark_changed` seq (events).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "title": {
+          "description": "The title, 1–100 characters.",
+          "type": "string"
+        },
+        "updated_at": {
+          "description": "Last change.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "url": {
+          "description": "An absolute http(s) URL.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "channel_id",
+        "title",
+        "url",
+        "position",
+        "created_by",
+        "created_at",
+        "updated_at"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A page of an id-keyed list: `{\"items\": [...], \"has_more\": bool}`.",
+  "properties": {
+    "has_more": {
+      "description": "Whether more items exist past this page.",
+      "type": "boolean"
+    },
+    "items": {
+      "description": "The items.",
+      "items": {
+        "$ref": "#/$defs/Bookmark"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "items",
+    "has_more"
+  ],
+  "title": "Page",
+  "type": "object"
+}

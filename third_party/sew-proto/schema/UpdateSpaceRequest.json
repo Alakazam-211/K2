@@ -1,0 +1,87 @@
+{
+  "$defs": {
+    "SpaceJoinPolicy": {
+      "description": "Who may join a space by themself (S10 gap G4).",
+      "oneOf": [
+        {
+          "const": "open",
+          "description": "Any active non-guest member may join.",
+          "type": "string"
+        },
+        {
+          "const": "invite",
+          "description": "Members join only when someone adds them (the default).",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of the update-space route.",
+  "properties": {
+    "default_channel_ids": {
+      "description": "New default channels (Hearth HC6): 0–10 distinct public, unarchived channels of the\nspace; `[]` clears them.",
+      "items": {
+        "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+        "pattern": "^[1-9][0-9]{0,18}$",
+        "type": "string"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "description": {
+      "description": "Set or clear the description (Hearth HC4; ≤ 300 characters; a blank one clears).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "join_policy": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SpaceJoinPolicy"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "A new join policy (S10)."
+    },
+    "name": {
+      "description": "A new name, 1–100 characters.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "rules_channel_id": {
+      "description": "Set or clear the rules channel (Hearth HC4): a public, unarchived text or announcement\nchannel of the space.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "slug": {
+      "description": "A new slug.",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,79}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "welcome_channel_id": {
+      "description": "Set or clear the welcome channel (Hearth HC4), with the rules channel's rules.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "title": "UpdateSpaceRequest",
+  "type": "object"
+}

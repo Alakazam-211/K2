@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Response of `POST /mgmt/v1/principals/provision`.",
+  "properties": {
+    "changed": {
+      "default": false,
+      "description": "Whether an existing member's profile, guest flag, agent kind or pin changed (S9 G6,\nadditive).",
+      "type": "boolean"
+    },
+    "created": {
+      "description": "Whether this call created the member.",
+      "type": "boolean"
+    },
+    "member_id": {
+      "description": "The member id.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "reactivated": {
+      "default": false,
+      "description": "Whether this call reactivated a deactivated member (S9 G6, additive).",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "member_id",
+    "created"
+  ],
+  "title": "ProvisionResponse",
+  "type": "object"
+}

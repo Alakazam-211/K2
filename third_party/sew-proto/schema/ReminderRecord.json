@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`reminders.ndjson` (full exports only).",
+  "properties": {
+    "at": {
+      "description": "When it is due.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "channel_id": {
+      "description": "The message's channel.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "created_at": {
+      "description": "Created.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "done_at": {
+      "description": "Done.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "fired_at": {
+      "description": "Fired.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "id": {
+      "description": "The reminder id.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "member_id": {
+      "description": "Its member.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "message_id": {
+      "description": "The message (message reminders).",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "note": {
+      "description": "The note (free-text reminders).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "snooze_count": {
+      "description": "Snoozes so far.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "state": {
+      "description": "`pending`, `fired`, `done`.",
+      "type": "string"
+    },
+    "timezone": {
+      "description": "IANA zone it was set in.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "updated_at": {
+      "description": "Last change.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "version": {
+      "description": "Row version.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "id",
+    "member_id",
+    "at",
+    "state",
+    "snooze_count",
+    "version",
+    "created_at",
+    "updated_at"
+  ],
+  "title": "ReminderRecord",
+  "type": "object"
+}

@@ -1,0 +1,337 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A dispatch event name (the frame's `t`).",
+  "oneOf": [
+    {
+      "const": "ready",
+      "description": "The boot snapshot after IDENTIFY.",
+      "type": "string"
+    },
+    {
+      "const": "resumed",
+      "description": "Replay after RESUME finished.",
+      "type": "string"
+    },
+    {
+      "const": "message_created",
+      "description": "A message was posted.",
+      "type": "string"
+    },
+    {
+      "const": "message_updated",
+      "description": "A message was edited.",
+      "type": "string"
+    },
+    {
+      "const": "message_deleted",
+      "description": "A message was deleted.",
+      "type": "string"
+    },
+    {
+      "const": "reaction_added",
+      "description": "A reaction was added.",
+      "type": "string"
+    },
+    {
+      "const": "reaction_removed",
+      "description": "A reaction was removed.",
+      "type": "string"
+    },
+    {
+      "const": "channel_created",
+      "description": "A channel was created or became visible.",
+      "type": "string"
+    },
+    {
+      "const": "channel_updated",
+      "description": "A channel changed.",
+      "type": "string"
+    },
+    {
+      "const": "channel_member_added",
+      "description": "A member joined a channel.",
+      "type": "string"
+    },
+    {
+      "const": "channel_member_removed",
+      "description": "A member left a channel.",
+      "type": "string"
+    },
+    {
+      "const": "read_state_updated",
+      "description": "A read state changed.",
+      "type": "string"
+    },
+    {
+      "const": "typing_started",
+      "description": "Someone started typing.",
+      "type": "string"
+    },
+    {
+      "const": "presence_updated",
+      "description": "Someone's presence changed.",
+      "type": "string"
+    },
+    {
+      "const": "member_updated",
+      "description": "A member's profile changed.",
+      "type": "string"
+    },
+    {
+      "const": "space_updated",
+      "description": "A space changed.",
+      "type": "string"
+    },
+    {
+      "const": "role_updated",
+      "description": "A role changed.",
+      "type": "string"
+    },
+    {
+      "const": "perms_changed",
+      "description": "The member's effective permissions changed.",
+      "type": "string"
+    },
+    {
+      "const": "thread_updated",
+      "description": "A thread's summary changed.",
+      "type": "string"
+    },
+    {
+      "const": "poll_updated",
+      "description": "A poll changed (S17; body `PollUpdated`).",
+      "type": "string"
+    },
+    {
+      "const": "reminder_fired",
+      "description": "A reminder fired (S17; body `ReminderFired`).",
+      "type": "string"
+    },
+    {
+      "const": "notification_created",
+      "description": "A notification was written (S21; body `Notification`).",
+      "type": "string"
+    },
+    {
+      "const": "voice_state_updated",
+      "description": "Voice state changed (S33; body `VoiceStateUpdated`).",
+      "type": "string"
+    },
+    {
+      "const": "space_member_added",
+      "description": "A member joined a space (S10 gap G6).",
+      "type": "string"
+    },
+    {
+      "const": "space_member_removed",
+      "description": "A member left or was removed from a space (S10 gap G6).",
+      "type": "string"
+    },
+    {
+      "const": "category_updated",
+      "description": "A category was created or changed (S10 gap G6; body `Category`).",
+      "type": "string"
+    },
+    {
+      "const": "category_deleted",
+      "description": "A category was deleted (S10 gap G6).",
+      "type": "string"
+    },
+    {
+      "const": "message_pinned",
+      "description": "A message was pinned (S13 gap G7).",
+      "type": "string"
+    },
+    {
+      "const": "message_unpinned",
+      "description": "A message was unpinned (S13 gap G7).",
+      "type": "string"
+    },
+    {
+      "const": "role_deleted",
+      "description": "A role was deleted (S12 gap G4; body `RoleDeleted`).",
+      "type": "string"
+    },
+    {
+      "const": "space_member_updated",
+      "description": "A member's roles or timeout changed (S12 gap G4; body `SpaceMember`).",
+      "type": "string"
+    },
+    {
+      "const": "install_updated",
+      "description": "The install's policy digest changed (S12 gap G4; body `InstallUpdated`).",
+      "type": "string"
+    },
+    {
+      "const": "presence_snapshot",
+      "description": "Presence of every id a SUBSCRIBE named (S18).",
+      "type": "string"
+    },
+    {
+      "const": "presence_settings_updated",
+      "description": "The member's own presence settings changed (S18).",
+      "type": "string"
+    },
+    {
+      "const": "member_list_updated",
+      "description": "Member-list range operations (S18).",
+      "type": "string"
+    },
+    {
+      "const": "user_group_updated",
+      "description": "A user group was created or changed (S18).",
+      "type": "string"
+    },
+    {
+      "const": "user_group_deleted",
+      "description": "A user group was deleted (S18).",
+      "type": "string"
+    },
+    {
+      "const": "profile_fields_updated",
+      "description": "Custom field definitions changed (S18).",
+      "type": "string"
+    },
+    {
+      "const": "attachments_updated",
+      "description": "A message's attachments changed: a thumbnail landed or a file was removed (S15 G8).",
+      "type": "string"
+    },
+    {
+      "const": "emoji_updated",
+      "description": "A custom emoji was created or edited (S16; body `EmojiUpdated`).",
+      "type": "string"
+    },
+    {
+      "const": "emoji_deleted",
+      "description": "A custom emoji was deleted (S16; body `EmojiDeleted`).",
+      "type": "string"
+    },
+    {
+      "const": "message_previews_updated",
+      "description": "A message's link previews changed (S16; body `MessagePreviewsUpdated`).",
+      "type": "string"
+    },
+    {
+      "const": "content_vanished",
+      "description": "Retention hid a batch of messages and files in a channel (S22 §14.2).",
+      "type": "string"
+    },
+    {
+      "const": "draft_updated",
+      "description": "The member's draft was saved (S17; body `Draft`).",
+      "type": "string"
+    },
+    {
+      "const": "draft_deleted",
+      "description": "The member's draft was deleted (S17; body `DraftDeleted`).",
+      "type": "string"
+    },
+    {
+      "const": "saved_item_updated",
+      "description": "A saved item was saved or changed (S17; body `SavedItem`).",
+      "type": "string"
+    },
+    {
+      "const": "saved_item_deleted",
+      "description": "A saved item was removed (S17; body `SavedItemDeleted`).",
+      "type": "string"
+    },
+    {
+      "const": "scheduled_message_updated",
+      "description": "A scheduled message was created, changed, sent or failed (S17; body\n`ScheduledMessage`).",
+      "type": "string"
+    },
+    {
+      "const": "scheduled_message_deleted",
+      "description": "A scheduled message was cancelled (S17; body `DeletedRef`).",
+      "type": "string"
+    },
+    {
+      "const": "reminder_updated",
+      "description": "A reminder was created or changed (S17; body `Reminder`).",
+      "type": "string"
+    },
+    {
+      "const": "reminder_deleted",
+      "description": "A reminder was deleted (S17; body `DeletedRef`).",
+      "type": "string"
+    },
+    {
+      "const": "bookmark_updated",
+      "description": "A channel bookmark was created or changed (S17; body `Bookmark`).",
+      "type": "string"
+    },
+    {
+      "const": "bookmark_deleted",
+      "description": "A channel bookmark was deleted (S17; body `BookmarkDeleted`).",
+      "type": "string"
+    },
+    {
+      "const": "thread_read_updated",
+      "description": "A thread read state changed, with inbox totals when present (S14 gap G9).",
+      "type": "string"
+    },
+    {
+      "const": "read_states_bulk_updated",
+      "description": "A bulk ack moved read states (S14 gap G9).",
+      "type": "string"
+    },
+    {
+      "const": "notifications_released",
+      "description": "DND ended: the held notifications still unread (S21; body `NotificationsReleased`).",
+      "type": "string"
+    },
+    {
+      "const": "notification_prefs_updated",
+      "description": "The member's notification settings or a channel's or space's prefs changed (S21;\nbody `NotificationPrefsUpdated`).",
+      "type": "string"
+    },
+    {
+      "const": "call_keys_delivered",
+      "description": "Call key delivery to one session: the MLS delivery service's messages, tagged by\n`kind` (S50 §9.3; body `CallKeysMessage`).",
+      "type": "string"
+    },
+    {
+      "const": "voice_server_updated",
+      "description": "A moved member's new media server, token and key join (S33 v2 §13.6; body\n`VoiceServerUpdated`).",
+      "type": "string"
+    },
+    {
+      "const": "call_updated",
+      "description": "A DM call started, changed or ended (S34 v2 §17; body `CallUpdated`).",
+      "type": "string"
+    },
+    {
+      "const": "call_ring",
+      "description": "A ring started or stopped for the callee's sessions (S34 v2 §17; body\n`CallRingEvent`).",
+      "type": "string"
+    },
+    {
+      "const": "media_policy_updated",
+      "description": "The client media policy changed with the budget tier (S34 v2 §13; body\n`MediaPolicy`).",
+      "type": "string"
+    },
+    {
+      "const": "recording_updated",
+      "description": "A recording's state, consent or capture changed (S35 v2 §18.2; body\n`RecordingUpdated`, with the receiver's own `my_consent`).",
+      "type": "string"
+    },
+    {
+      "const": "meeting_updated",
+      "description": "A meeting was created, changed, started, ended or cancelled (Meet MC1; body\n`MeetingUpdated`, to the meeting channel's members).",
+      "type": "string"
+    },
+    {
+      "const": "meeting_lobby_updated",
+      "description": "A lobby entry was made or decided (Meet MC2b; body `MeetingLobbyUpdated`, to the\nmeeting's hosts only).",
+      "type": "string"
+    },
+    {
+      "const": "meeting_admission",
+      "description": "A host decided on the receiver's knock, or it expired (Meet MC2b; body\n`MeetingAdmission`, to the knocking member).",
+      "type": "string"
+    }
+  ],
+  "title": "EventName"
+}

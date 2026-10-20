@@ -1,0 +1,115 @@
+{
+  "$defs": {
+    "UserGroup": {
+      "description": "A user group: a named mention list, install-wide (`space_id` absent) or per space.",
+      "properties": {
+        "created_at": {
+          "description": "Created.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "created_by": {
+          "description": "Creator.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "deleted_at": {
+          "description": "Soft-deleted.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "description": "Description, 1–250 characters.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "handle": {
+          "description": "`@handle`.",
+          "pattern": "^[a-z0-9_-]{2,64}$",
+          "type": "string"
+        },
+        "id": {
+          "description": "The group id.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "member_count": {
+          "description": "Current members.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mentionable": {
+          "description": "Anyone who can post may mention it.",
+          "type": "boolean"
+        },
+        "name": {
+          "description": "Name, 1–100 characters.",
+          "type": "string"
+        },
+        "space_id": {
+          "description": "The space (absent = install-wide).",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "updated_at": {
+          "description": "Last change.",
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "handle",
+        "name",
+        "mentionable",
+        "member_count",
+        "created_by",
+        "created_at",
+        "updated_at"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Response of `POST /api/v1/groups/{id}/members/add`.",
+  "properties": {
+    "added": {
+      "description": "Newly added.",
+      "items": {
+        "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+        "pattern": "^[1-9][0-9]{0,18}$",
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "already": {
+      "description": "Already members.",
+      "items": {
+        "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+        "pattern": "^[1-9][0-9]{0,18}$",
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "group": {
+      "$ref": "#/$defs/UserGroup",
+      "description": "The group after the change."
+    }
+  },
+  "required": [
+    "added",
+    "already",
+    "group"
+  ],
+  "title": "AddGroupMembersResponse",
+  "type": "object"
+}

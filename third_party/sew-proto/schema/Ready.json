@@ -1,0 +1,2768 @@
+{
+  "$defs": {
+    "AgentKind": {
+      "description": "What kind of agent a member is.",
+      "oneOf": [
+        {
+          "const": "coworker",
+          "description": "A team member in its own right.",
+          "type": "string"
+        },
+        {
+          "const": "assistant",
+          "description": "Pinned to one person; acts within that person's access (C9).",
+          "type": "string"
+        }
+      ]
+    },
+    "Call": {
+      "description": "A call (§14.1).",
+      "properties": {
+        "channel_id": {
+          "description": "The DM or group DM.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "end_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CallEndReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why it ended."
+        },
+        "ended_at": {
+          "description": "When it ended.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "The call (`calls.id`).",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "message_id": {
+          "description": "The call-record message in the DM.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "my_ring": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MyRing"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The viewer's own ring (READY, the member's copy only)."
+        },
+        "participant_ids": {
+          "description": "Members with a voice entry in the call now (connecting or connected), ascending.",
+          "items": {
+            "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "rings": {
+          "description": "Rings, by member id.",
+          "items": {
+            "$ref": "#/$defs/CallRing"
+          },
+          "type": "array"
+        },
+        "started_at": {
+          "description": "When.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "started_by": {
+          "description": "Who started it.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/CallState",
+          "description": "`active` or `ended`."
+        }
+      },
+      "required": [
+        "id",
+        "channel_id",
+        "message_id",
+        "started_by",
+        "started_at",
+        "state",
+        "participant_ids",
+        "rings"
+      ],
+      "type": "object"
+    },
+    "CallEndReason": {
+      "description": "Why a call ended (§14.5). Stored in `calls.end_reason`.",
+      "oneOf": [
+        {
+          "const": "empty",
+          "description": "Nobody left in the call.",
+          "type": "string"
+        },
+        {
+          "const": "declined",
+          "description": "A 1:1 callee declined.",
+          "type": "string"
+        },
+        {
+          "const": "no_answer",
+          "description": "Nobody answered.",
+          "type": "string"
+        },
+        {
+          "const": "alone_timeout",
+          "description": "One person alone too long.",
+          "type": "string"
+        },
+        {
+          "const": "media_restarted",
+          "description": "The media engine lost the call.",
+          "type": "string"
+        },
+        {
+          "const": "media_failed",
+          "description": "The media engine failed before anyone connected.",
+          "type": "string"
+        },
+        {
+          "const": "voice_disabled",
+          "description": "Voice was turned off.",
+          "type": "string"
+        },
+        {
+          "const": "perms_lost",
+          "description": "Nobody left who may connect.",
+          "type": "string"
+        }
+      ]
+    },
+    "CallKeysParams": {
+      "description": "The client timings and constants the server relays (READY `call_keys.params` and every\n[`CallKeysInit`]; S50 §9.4, S51 §20.1). The single source for client timings.",
+      "properties": {
+        "ciphersuite": {
+          "description": "The ciphersuite every group uses (1).",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "ciphersuites": {
+          "description": "The ciphersuites the server accepts (`[1]` in v1).",
+          "items": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "client_activate_fallback_ms": {
+          "description": "A sender that acked but hears no `activate` switches after this long.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "exporter_label": {
+          "description": "The MLS exporter label of frame keys ([`tls::EXPORTER_LABEL`]).",
+          "type": "string"
+        },
+        "kdf": {
+          "description": "`\"hkdf\"`.",
+          "type": "string"
+        },
+        "key_package_max_lifetime_s": {
+          "description": "Longest KeyPackage lifetime the server accepts.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "key_ring_size": {
+          "description": "Always 64 (rev 75).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "release_info_label": {
+          "description": "The recorder release `info` label ([`tls::RELEASE_INFO_LABEL`]).",
+          "type": "string"
+        },
+        "retire_after_ms": {
+          "description": "Receivers retire an old slot this long after `activate`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "securing_indicator_after_ms": {
+          "description": "\"Securing…\" shows only after this long.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unknown_call_buffer_ms": {
+          "description": "Dispatches for a `call_id` the client does not know yet are buffered this long.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "ciphersuite",
+        "ciphersuites",
+        "key_ring_size",
+        "kdf",
+        "exporter_label",
+        "release_info_label",
+        "retire_after_ms",
+        "client_activate_fallback_ms",
+        "key_package_max_lifetime_s",
+        "unknown_call_buffer_ms",
+        "securing_indicator_after_ms"
+      ],
+      "type": "object"
+    },
+    "CallPublicKey": {
+      "description": "A public key and its id (`kid` = hex of the first 8 bytes of SHA-256 of the raw key).",
+      "properties": {
+        "kid": {
+          "description": "16 lowercase hex characters.",
+          "type": "string"
+        },
+        "public_key": {
+          "description": "The raw 32-byte Ed25519 public key.",
+          "pattern": "^[A-Za-z0-9_-]*$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kid",
+        "public_key"
+      ],
+      "type": "object"
+    },
+    "CallRing": {
+      "description": "One ring of a call (§14.1). Only rung members appear; the starter never does.",
+      "properties": {
+        "expires_at": {
+          "description": "When an unanswered ring becomes `missed` (only while `ringing` or `busy`).",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "member_id": {
+          "description": "The callee.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/RingState",
+          "description": "Its state."
+        }
+      },
+      "required": [
+        "member_id",
+        "state"
+      ],
+      "type": "object"
+    },
+    "CallState": {
+      "description": "Whether a call is live (§14.1).",
+      "oneOf": [
+        {
+          "const": "active",
+          "description": "Live.",
+          "type": "string"
+        },
+        {
+          "const": "ended",
+          "description": "Over (`ended_at` and `end_reason` set).",
+          "type": "string"
+        }
+      ]
+    },
+    "Capture": {
+      "description": "Whether a granted participant's microphone is actually captured (§9.2).",
+      "oneOf": [
+        {
+          "const": "recorded",
+          "description": "The recorder captures this member.",
+          "type": "string"
+        },
+        {
+          "const": "not_recorded",
+          "description": "Not captured (see the reason).",
+          "type": "string"
+        }
+      ]
+    },
+    "ChannelNotifyPrefs": {
+      "description": "A member's prefs for one channel or DM.",
+      "properties": {
+        "channel_id": {
+          "description": "The channel.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "effective_level": {
+          "$ref": "#/$defs/NotifyLevel",
+          "description": "The level in effect for this member here."
+        },
+        "level": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NotifyLevel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The channel's own level; `null` = inherit."
+        },
+        "muted": {
+          "description": "Muted now.",
+          "type": "boolean"
+        },
+        "muted_until": {
+          "description": "When the mute ends; absent = until unmuted (or not muted).",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "channel_id",
+        "effective_level",
+        "muted"
+      ],
+      "type": "object"
+    },
+    "ChannelType": {
+      "description": "Channel type (gap G8 adds `dm` and `group_dm`).",
+      "oneOf": [
+        {
+          "const": "text",
+          "description": "A text channel.",
+          "type": "string"
+        },
+        {
+          "const": "voice",
+          "description": "A voice channel.",
+          "type": "string"
+        },
+        {
+          "const": "announcement",
+          "description": "An announcement channel: `@everyone` posts only in threads by default.",
+          "type": "string"
+        },
+        {
+          "const": "dm",
+          "description": "A 1:1 DM (no space, slug or name; always private).",
+          "type": "string"
+        },
+        {
+          "const": "group_dm",
+          "description": "A group DM of up to 9 people.",
+          "type": "string"
+        }
+      ]
+    },
+    "Consent": {
+      "description": "What a participant said to the recording notice (§9.2). Stored in\n`recording_participants.consent`.",
+      "oneOf": [
+        {
+          "const": "pending",
+          "description": "In the room, has not answered.",
+          "type": "string"
+        },
+        {
+          "const": "granted",
+          "description": "Agreed.",
+          "type": "string"
+        },
+        {
+          "const": "declined",
+          "description": "Refused; stays in the room unrecorded (unless declining means not joining).",
+          "type": "string"
+        },
+        {
+          "const": "withdrawn",
+          "description": "Agreed earlier, then withdrew.",
+          "type": "string"
+        }
+      ]
+    },
+    "ConsentPrompt": {
+      "description": "The consent modal's data (rev 91, §9.10). Every slot is data; templates supply the\nsentences. `notice_version` is a stable hash of every other slot; the answer must echo it.",
+      "properties": {
+        "admin_download": {
+          "description": "Authorised compliance admins can download the audio (always `true` in v1).",
+          "type": "boolean"
+        },
+        "audio_keep_days": {
+          "description": "How long audio is kept (0 = until the transcript is final).",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "decline_mode": {
+          "$ref": "#/$defs/DeclineMode",
+          "description": "What declining does."
+        },
+        "feature_label": {
+          "description": "[`RECORDING_FEATURE_LABEL`].",
+          "type": "string"
+        },
+        "notice_version": {
+          "description": "A stable hash of every other slot value.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "recorded_now": {
+          "description": "Who is currently recorded (granted and captured), ascending.",
+          "items": {
+            "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "recorder_name": {
+          "description": "[`RECORDER_DISPLAY_NAME`].",
+          "type": "string"
+        },
+        "recording_id": {
+          "description": "What the answer refers to.",
+          "pattern": "^(auto|[1-9][0-9]{0,18})$",
+          "type": "string"
+        },
+        "room": {
+          "$ref": "#/$defs/PromptRoom",
+          "description": "Where."
+        },
+        "started_by": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PromptMember"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Who started it (`None` for an auto channel with no recording yet)."
+        },
+        "transcript": {
+          "$ref": "#/$defs/PromptTranscript",
+          "description": "What happens to the words."
+        }
+      },
+      "required": [
+        "recording_id",
+        "notice_version",
+        "recorder_name",
+        "feature_label",
+        "room",
+        "audio_keep_days",
+        "transcript",
+        "admin_download",
+        "decline_mode",
+        "recorded_now"
+      ],
+      "type": "object"
+    },
+    "DeclineMode": {
+      "description": "What declining does (§9.11, from `recording.require_consent_to_join`).",
+      "oneOf": [
+        {
+          "const": "join_unrecorded",
+          "description": "The decliner joins, unrecorded (the default).",
+          "type": "string"
+        },
+        {
+          "const": "not_join",
+          "description": "Declining means not joining.",
+          "type": "string"
+        }
+      ]
+    },
+    "DigestAvailability": {
+      "description": "Whether the member gets an email digest, and why not.",
+      "properties": {
+        "available": {
+          "description": "A digest can be sent to this member now.",
+          "type": "boolean"
+        },
+        "interval": {
+          "$ref": "#/$defs/DigestInterval",
+          "description": "The member's interval."
+        },
+        "reason": {
+          "description": "Why not: `policy_off`, `mail_unconfigured`, `no_email`, `agent`, `interval_off`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "interval",
+        "available"
+      ],
+      "type": "object"
+    },
+    "DigestInterval": {
+      "description": "How often the email digest may be sent (`notify_settings.digest_interval` codes 0–3).",
+      "oneOf": [
+        {
+          "const": "off",
+          "description": "No digest.",
+          "type": "string"
+        },
+        {
+          "const": "15m",
+          "description": "At most every 15 minutes.",
+          "type": "string"
+        },
+        {
+          "const": "1h",
+          "description": "At most every hour (the default).",
+          "type": "string"
+        },
+        {
+          "const": "1d",
+          "description": "At most every day.",
+          "type": "string"
+        }
+      ]
+    },
+    "DndDay": {
+      "description": "A weekday of a DND rule.",
+      "oneOf": [
+        {
+          "const": "mon",
+          "description": "Monday.",
+          "type": "string"
+        },
+        {
+          "const": "tue",
+          "description": "Tuesday.",
+          "type": "string"
+        },
+        {
+          "const": "wed",
+          "description": "Wednesday.",
+          "type": "string"
+        },
+        {
+          "const": "thu",
+          "description": "Thursday.",
+          "type": "string"
+        },
+        {
+          "const": "fri",
+          "description": "Friday.",
+          "type": "string"
+        },
+        {
+          "const": "sat",
+          "description": "Saturday.",
+          "type": "string"
+        },
+        {
+          "const": "sun",
+          "description": "Sunday.",
+          "type": "string"
+        }
+      ]
+    },
+    "DndRule": {
+      "additionalProperties": false,
+      "description": "One weekly DND rule: from `start` on each listed day to `end` (the next day when `end <\nstart`).",
+      "properties": {
+        "days": {
+          "description": "1–7 unique days.",
+          "items": {
+            "$ref": "#/$defs/DndDay"
+          },
+          "type": "array"
+        },
+        "end": {
+          "description": "`HH:MM`, `00:01`–`24:00`.",
+          "type": "string"
+        },
+        "start": {
+          "description": "`HH:MM`, `00:00`–`23:59`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "days",
+        "start",
+        "end"
+      ],
+      "type": "object"
+    },
+    "DndSchedule": {
+      "additionalProperties": false,
+      "description": "A recurring weekly DND schedule.",
+      "properties": {
+        "rules": {
+          "description": "1–14 rules.",
+          "items": {
+            "$ref": "#/$defs/DndRule"
+          },
+          "type": "array"
+        },
+        "timezone": {
+          "description": "IANA override; absent = the member's profile timezone, else UTC.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "rules"
+      ],
+      "type": "object"
+    },
+    "DndSource": {
+      "description": "Why DND is on.",
+      "oneOf": [
+        {
+          "const": "none",
+          "description": "Off.",
+          "type": "string"
+        },
+        {
+          "const": "manual",
+          "description": "Set by hand.",
+          "type": "string"
+        },
+        {
+          "const": "schedule",
+          "description": "A schedule window.",
+          "type": "string"
+        }
+      ]
+    },
+    "DndState": {
+      "description": "Whether a member is on DND now, and until when (S21 holds notifications until `until`).",
+      "properties": {
+        "active": {
+          "description": "On now.",
+          "type": "boolean"
+        },
+        "source": {
+          "$ref": "#/$defs/DndSource",
+          "description": "Why."
+        },
+        "until": {
+          "description": "When it ends; absent = indefinite (or off).",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "active",
+        "source"
+      ],
+      "type": "object"
+    },
+    "GuestInvite": {
+      "description": "`guests.invite`: who can invite guests.",
+      "oneOf": [
+        {
+          "const": "admins",
+          "description": "Install owners and admins only.",
+          "type": "string"
+        },
+        {
+          "const": "perm",
+          "description": "Anyone holding INVITE_GUESTS (bit 44).",
+          "type": "string"
+        }
+      ]
+    },
+    "InstallRole": {
+      "description": "Install-wide role (C12). Separate from space roles.",
+      "oneOf": [
+        {
+          "const": "owner",
+          "description": "All install admin, plus transfer.",
+          "type": "string"
+        },
+        {
+          "const": "admin",
+          "description": "Spaces, policies, members, guests. No content access to private channels or DMs.",
+          "type": "string"
+        },
+        {
+          "const": "member",
+          "description": "A regular member.",
+          "type": "string"
+        },
+        {
+          "const": "guest",
+          "description": "A guest.",
+          "type": "string"
+        },
+        {
+          "const": "link_guest",
+          "description": "A meeting link guest (Meet MC2a, C6 amendment CC1, CC3): made by redeeming a meeting\nlink, bound to one meeting channel, capped by `LINK_GUEST_MASK`, never a K2\nprincipal. Every S19 guest rule applies, and only the link-guest allowlist passes.",
+          "type": "string"
+        }
+      ]
+    },
+    "LayerHint": {
+      "description": "One simulcast layer hint (S34 v2 §13).",
+      "properties": {
+        "height": {
+          "description": "Layer height in pixels.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_kbps": {
+          "description": "Layer bitrate cap.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rid": {
+          "description": "`q`, `h` or `f`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "rid",
+        "height",
+        "max_kbps"
+      ],
+      "type": "object"
+    },
+    "ManualPresence": {
+      "description": "A member's manual presence state (persisted).",
+      "oneOf": [
+        {
+          "const": "none",
+          "description": "Automatic.",
+          "type": "string"
+        },
+        {
+          "const": "away",
+          "description": "Shown as idle.",
+          "type": "string"
+        },
+        {
+          "const": "dnd",
+          "description": "Do not disturb.",
+          "type": "string"
+        },
+        {
+          "const": "invisible",
+          "description": "Shown offline to others.",
+          "type": "string"
+        }
+      ]
+    },
+    "MediaPolicy": {
+      "description": "The client media policy (S34 v2 §13): in join answers, `voice_server_updated`, READY\n`install.media` and `media_policy_updated`.",
+      "properties": {
+        "adaptive_stream": {
+          "description": "Subscribe with adaptive stream.",
+          "type": "boolean"
+        },
+        "audio_codecs": {
+          "description": "Always `[\"opus\"]`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "backup_codec": {
+          "description": "Always `false`: no backup codecs.",
+          "type": "boolean"
+        },
+        "camera": {
+          "$ref": "#/$defs/TrackHint",
+          "description": "Camera hints."
+        },
+        "codecs": {
+          "description": "Video codecs in preference order (never AV1 or H.265; empty with video off).",
+          "items": {
+            "$ref": "#/$defs/VideoCodec"
+          },
+          "type": "array"
+        },
+        "dynacast": {
+          "description": "Publish with dynacast.",
+          "type": "boolean"
+        },
+        "e2ee": {
+          "description": "Always `required`.",
+          "type": "string"
+        },
+        "screen": {
+          "$ref": "#/$defs/TrackHint",
+          "description": "Screen-share hints."
+        },
+        "tier": {
+          "$ref": "#/$defs/MediaTier",
+          "description": "The budget tier the hints are for."
+        },
+        "video_enabled": {
+          "description": "`[voice.video] enabled`.",
+          "type": "boolean"
+        },
+        "vp9": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Vp9Hint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "VP9 rules, when VP9 is configured."
+        }
+      },
+      "required": [
+        "tier",
+        "video_enabled",
+        "e2ee",
+        "audio_codecs",
+        "codecs",
+        "backup_codec",
+        "camera",
+        "screen",
+        "dynacast",
+        "adaptive_stream"
+      ],
+      "type": "object"
+    },
+    "MediaTier": {
+      "description": "The media budget tier (S34 v2 §12.2).",
+      "oneOf": [
+        {
+          "const": "normal",
+          "description": "Everything allowed; full hints.",
+          "type": "string"
+        },
+        {
+          "const": "constrained",
+          "description": "New camera leases refused; lower hints.",
+          "type": "string"
+        },
+        {
+          "const": "critical",
+          "description": "New camera and screen leases refused; lowest hints.",
+          "type": "string"
+        }
+      ]
+    },
+    "Member": {
+      "description": "A member of the install, person or agent.",
+      "properties": {
+        "agent_kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "For agents, coworker or assistant."
+        },
+        "assistant_of": {
+          "description": "For assistants, the member id of their person.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "avatar_thumb_url": {
+          "description": "64 px signed avatar URL (S18).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "avatar_url": {
+          "description": "Signed avatar URL.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "compliance": {
+          "description": "Whether the member holds the compliance flag; sent only to the member themself.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "created_at": {
+          "description": "When the member was created.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "custom_fields": {
+          "description": "Custom field values the viewer may see; only on `GET /members/{id}` and the self object\n(S18).",
+          "items": {
+            "$ref": "#/$defs/ProfileFieldValue"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "deactivated": {
+          "description": "Whether the member is deactivated.",
+          "type": "boolean"
+        },
+        "display_name": {
+          "description": "The display name.",
+          "type": "string"
+        },
+        "email": {
+          "description": "Email address; sent only to the member themself.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "The member id.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "install_role": {
+          "$ref": "#/$defs/InstallRole",
+          "description": "Install-wide role."
+        },
+        "kind": {
+          "$ref": "#/$defs/MemberKind",
+          "description": "Person or agent."
+        },
+        "managed_fields": {
+          "description": "Fields the client must show read-only; self only (S18).",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "profile_rev": {
+          "default": 0,
+          "description": "Bumped by every change of this object; clients drop older events (S18).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pronouns": {
+          "description": "Pronouns.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MemberStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Status; absent when none or expired (S18)."
+        },
+        "timezone": {
+          "description": "IANA timezone (S18).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "description": "Job title.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "username": {
+          "description": "The handle.",
+          "pattern": "^[a-z0-9_-]{2,64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "install_role",
+        "username",
+        "display_name",
+        "deactivated",
+        "created_at"
+      ],
+      "type": "object"
+    },
+    "MemberKind": {
+      "description": "Whether a member is a person or an agent.",
+      "oneOf": [
+        {
+          "const": "person",
+          "description": "A human.",
+          "type": "string"
+        },
+        {
+          "const": "agent",
+          "description": "A K2 agent.",
+          "type": "string"
+        }
+      ]
+    },
+    "MemberStatus": {
+      "description": "A member's status: text and/or one emoji, with an optional expiry.",
+      "properties": {
+        "emoji": {
+          "description": "One Unicode emoji sequence.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "expires_at": {
+          "description": "When it clears by itself.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "text": {
+          "description": "Status text, 1–100 characters.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "MyRing": {
+      "description": "The member's own ring in READY (`Call.my_ring`, the member's copy only).",
+      "properties": {
+        "reason": {
+          "description": "`busy`, `dnd` or `muted` for a silent ring.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "silent": {
+          "description": "A silent ring (busy, DND or a muted DM).",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "silent"
+      ],
+      "type": "object"
+    },
+    "NotRecordedReason": {
+      "description": "Why a granted participant is not captured (§9.2). Stored in\n`recording_participants.capture_reason`.",
+      "oneOf": [
+        {
+          "const": "track_cap",
+          "description": "A track cap is reached; not allowlisted.",
+          "type": "string"
+        },
+        {
+          "const": "no_microphone",
+          "description": "No microphone published.",
+          "type": "string"
+        },
+        {
+          "const": "no_key",
+          "description": "The recorder could not decrypt the member's frames.",
+          "type": "string"
+        },
+        {
+          "const": "unencrypted",
+          "description": "The track was published unencrypted.",
+          "type": "string"
+        },
+        {
+          "const": "codec",
+          "description": "The track is not Opus.",
+          "type": "string"
+        },
+        {
+          "const": "permission",
+          "description": "Not subscribable under the room's permissions.",
+          "type": "string"
+        }
+      ]
+    },
+    "NotifyLevel": {
+      "description": "A notification level (`*.level` codes 1–3).",
+      "oneOf": [
+        {
+          "const": "all",
+          "description": "Every message.",
+          "type": "string"
+        },
+        {
+          "const": "mentions",
+          "description": "Mentions, DMs, keywords and followed threads.",
+          "type": "string"
+        },
+        {
+          "const": "none",
+          "description": "Nothing (reminders still arrive).",
+          "type": "string"
+        }
+      ]
+    },
+    "NotifySettings": {
+      "description": "The member's account-level notification settings (`GET /api/v1/me/notify`).",
+      "properties": {
+        "broad_mentions": {
+          "description": "`@channel` and `@here` notify.",
+          "type": "boolean"
+        },
+        "default_level": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NotifyLevel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The account default; `null` = the install default."
+        },
+        "digest": {
+          "$ref": "#/$defs/DigestAvailability",
+          "description": "The email digest."
+        },
+        "effective_default_level": {
+          "$ref": "#/$defs/NotifyLevel",
+          "description": "What space channels fall back to for this member."
+        },
+        "keyword_count": {
+          "description": "How many keywords are set.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "keywords": {
+          "description": "The keywords (only in `GET /me/notify` and `POST /me/notify/set`; never in READY or\nevents).",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "mute_lets_mentions": {
+          "description": "Direct mentions still notify in muted channels.",
+          "type": "boolean"
+        },
+        "rev": {
+          "description": "Bumped by every change (`if_rev`).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "thread_replies": {
+          "description": "Replies in followed threads notify.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "effective_default_level",
+        "thread_replies",
+        "broad_mentions",
+        "mute_lets_mentions",
+        "digest",
+        "keyword_count",
+        "rev"
+      ],
+      "type": "object"
+    },
+    "PolicyDigest": {
+      "description": "The policy values clients need at boot, carried in READY (gap G10). Field names are the\npolicy keys with `.` replaced by `_`.",
+      "properties": {
+        "agents_allowed_in_dms": {
+          "description": "`agents.allowed_in_dms`.",
+          "type": "boolean"
+        },
+        "calls_dm_enabled": {
+          "default": true,
+          "description": "`calls.dm_enabled` (S34 v2): clients hide the DM call button when off. Old payloads\nread as `true`.",
+          "type": "boolean"
+        },
+        "calls_verification_code": {
+          "$ref": "#/$defs/VerificationCode",
+          "default": "shown",
+          "description": "`calls.verification_code` (S50 §16.4): a change reaches clients in `install_updated`.\nOld payloads read as `shown`."
+        },
+        "emoji_max_per_space": {
+          "description": "`emoji.max_per_space`.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "files_max_bytes": {
+          "description": "`files.max_bytes`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "gifs_enabled": {
+          "description": "`gifs.enabled`.",
+          "type": "boolean"
+        },
+        "guests_dm_non_channel_mates": {
+          "default": false,
+          "description": "`guests.dm_non_channel_mates` (S19): guests' clients explain read-only DMs.",
+          "type": "boolean"
+        },
+        "guests_enabled": {
+          "default": true,
+          "description": "`guests.enabled` (S19). Old payloads without it read as `true`.",
+          "type": "boolean"
+        },
+        "guests_invite": {
+          "$ref": "#/$defs/GuestInvite",
+          "default": "admins",
+          "description": "`guests.invite` (S19): members' clients show \"Add guest\" only when they may."
+        },
+        "link_previews_enabled": {
+          "description": "`link_previews.enabled`.",
+          "type": "boolean"
+        },
+        "messages_delete_own": {
+          "description": "`messages.delete_own`.",
+          "type": "boolean"
+        },
+        "messages_edit_window_s": {
+          "description": "`messages.edit_window_s`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "recording_audio_default_days": {
+          "default": 30,
+          "description": "`recording.audio_default_days` (S35 v2).",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "recording_audio_max_days": {
+          "default": 365,
+          "description": "`recording.audio_max_days` (S35 v2).",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "recording_dm_enabled": {
+          "default": false,
+          "description": "`recording.dm_enabled` (S35 v2). Old payloads read `false`.",
+          "type": "boolean"
+        },
+        "recording_enabled": {
+          "default": false,
+          "description": "`recording.enabled` (S35 v2): clients hide Record when off. Old payloads read `false`.",
+          "type": "boolean"
+        },
+        "recording_require_consent_to_join": {
+          "default": false,
+          "description": "`recording.require_consent_to_join` (S35 v2, rev 91).",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "gifs_enabled",
+        "link_previews_enabled",
+        "messages_edit_window_s",
+        "messages_delete_own",
+        "files_max_bytes",
+        "emoji_max_per_space",
+        "agents_allowed_in_dms"
+      ],
+      "type": "object"
+    },
+    "PresenceSettings": {
+      "description": "A member's presence settings and what they see about themselves.",
+      "properties": {
+        "dnd": {
+          "$ref": "#/$defs/DndState",
+          "description": "DND now."
+        },
+        "dnd_schedule": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DndSchedule"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The recurring schedule."
+        },
+        "dnd_skip_until": {
+          "description": "The current schedule window is skipped until then.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "effective_timezone": {
+          "description": "The timezone schedules use (`UTC` when none is set).",
+          "type": "string"
+        },
+        "manual": {
+          "$ref": "#/$defs/ManualPresence",
+          "description": "The manual state."
+        },
+        "manual_until": {
+          "description": "When the manual state ends.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "self_status": {
+          "$ref": "#/$defs/SelfStatus",
+          "description": "What the member sees about themself."
+        }
+      },
+      "required": [
+        "manual",
+        "self_status",
+        "dnd",
+        "effective_timezone"
+      ],
+      "type": "object"
+    },
+    "ProfileFieldValue": {
+      "description": "One custom field value on a `Member`.",
+      "properties": {
+        "field_id": {
+          "description": "The field.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "key": {
+          "description": "The field's key.",
+          "type": "string"
+        },
+        "value": {
+          "description": "The value.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "field_id",
+        "key",
+        "value"
+      ],
+      "type": "object"
+    },
+    "PromptMember": {
+      "description": "The starter as the consent modal shows them.",
+      "properties": {
+        "display_name": {
+          "description": "Their display name.",
+          "type": "string"
+        },
+        "member_id": {
+          "description": "The member.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "member_id",
+        "display_name"
+      ],
+      "type": "object"
+    },
+    "PromptRoom": {
+      "description": "Where the recording is.",
+      "properties": {
+        "channel_id": {
+          "description": "The voice channel or DM.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/PromptRoomKind",
+          "description": "Its kind."
+        },
+        "name": {
+          "description": "The channel's name (voice channels only).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "channel_id",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "PromptRoomKind": {
+      "description": "The room kind the modal names.",
+      "oneOf": [
+        {
+          "const": "voice",
+          "description": "A voice channel.",
+          "type": "string"
+        },
+        {
+          "const": "dm",
+          "description": "A DM call.",
+          "type": "string"
+        },
+        {
+          "const": "group_dm",
+          "description": "A group-DM call.",
+          "type": "string"
+        }
+      ]
+    },
+    "PromptTranscript": {
+      "description": "What happens to the words (§9.10).",
+      "properties": {
+        "e2ee": {
+          "description": "Transcripts are not end-to-end encrypted.",
+          "type": "boolean"
+        },
+        "posted_to_channel": {
+          "description": "Transcripts are posted into the channel as ordinary messages.",
+          "type": "boolean"
+        },
+        "readable_by": {
+          "description": "Who can read them: `channel_members`, `search`, `agents`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "posted_to_channel",
+        "readable_by",
+        "e2ee"
+      ],
+      "type": "object"
+    },
+    "ReadState": {
+      "description": "A member's read state in one channel (C8; prd-sew-14 §5).",
+      "properties": {
+        "channel_id": {
+          "description": "The channel.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "last_message_id": {
+          "description": "The channel's newest timeline message (omitted in READY, where the channel entry has\nit).",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_read_id": {
+          "description": "The read cursor: a comparator, possibly a synthetic id (mark unread writes\n`message_id − 1`). Absent = nothing read.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mention_count": {
+          "description": "Unread mentions (a muted channel counts direct mentions only).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "muted": {
+          "description": "The member muted the channel (S21); present only when true.",
+          "type": "boolean"
+        },
+        "seq": {
+          "default": 0,
+          "description": "The member change-log head this state is current as of (S14 gap G9).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unread": {
+          "description": "Whether a message by someone else is past the cursor.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "channel_id",
+        "mention_count",
+        "unread"
+      ],
+      "type": "object"
+    },
+    "ReadyCallKeys": {
+      "description": "READY `call_keys` (S50 §9.4): the trust anchors and client parameters. Absent when voice is\ndisabled.",
+      "properties": {
+        "ca": {
+          "$ref": "#/$defs/CallPublicKey",
+          "description": "The install CA."
+        },
+        "crl": {
+          "description": "Serials of revoked, unexpired device certificates (at most 5,000).",
+          "items": {
+            "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "crl_partial": {
+          "description": "More revoked serials exist: page them with `GET /api/v1/devices/crl`.",
+          "type": "boolean"
+        },
+        "ds_public_key": {
+          "description": "The raw 32-byte DS Ed25519 key, for pinning.",
+          "pattern": "^[A-Za-z0-9_-]*$",
+          "type": "string"
+        },
+        "external_sender": {
+          "description": "TLS `ExternalSender` of every group.",
+          "pattern": "^[A-Za-z0-9_-]*$",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/CallKeysParams",
+          "description": "Client timings."
+        },
+        "verification_code": {
+          "$ref": "#/$defs/VerificationCode",
+          "description": "Policy `calls.verification_code`."
+        }
+      },
+      "required": [
+        "external_sender",
+        "ds_public_key",
+        "ca",
+        "crl",
+        "verification_code",
+        "params"
+      ],
+      "type": "object"
+    },
+    "ReadyCategory": {
+      "description": "A category in READY.",
+      "properties": {
+        "id": {
+          "description": "The category id.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "name": {
+          "description": "The name.",
+          "type": "string"
+        },
+        "position": {
+          "description": "Sort position.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "space_id": {
+          "description": "Its space.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "space_id",
+        "name",
+        "position"
+      ],
+      "type": "object"
+    },
+    "ReadyChannel": {
+      "description": "A channel in READY: every channel the member belongs to, plus DMs.",
+      "properties": {
+        "assistant_reader_ids": {
+          "description": "Assistants that read this DM through their pinned person (contracts rev 11 G21);\nabsent for space channels.",
+          "items": {
+            "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "category_id": {
+          "description": "Its category.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dm_member_ids": {
+          "description": "The DM's members; empty for space channels.",
+          "items": {
+            "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "file_retention_days": {
+          "description": "Effective file retention in days (S22 §14.3); absent = forever.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "has_guests": {
+          "default": false,
+          "description": "At least one guest is a member (S19 §15). Old payloads read as `false`.",
+          "type": "boolean"
+        },
+        "head_seq": {
+          "description": "Head of the channel change log.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "id": {
+          "description": "The channel id.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "last_message_id": {
+          "description": "The newest message.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "my_perms": {
+          "description": "The member's effective permissions.",
+          "pattern": "^(0|[1-9][0-9]{0,19})$",
+          "type": "string"
+        },
+        "name": {
+          "description": "The name; absent for DMs.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "position": {
+          "description": "Sort position.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "recording_audio_days": {
+          "description": "The channel's default audio keep days for recordings (S35 v2 §12.1); absent = the org\ndefault.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "recording_auto": {
+          "description": "Voice channels: a recording starts on the first join (S35 v2 §8.3). Absent = off.",
+          "type": "boolean"
+        },
+        "recording_require_consent": {
+          "description": "Voice channels: declining the recording notice means not joining (S35 v2 §9.11);\nabsent = the org policy `recording.require_consent_to_join`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "retention_days": {
+          "description": "Effective message retention in days (S22 §14.3); absent = forever.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "slow_mode_s": {
+          "description": "Slow mode in seconds; present only when on (S12 §7).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "slug": {
+          "description": "The slug; absent for DMs.",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,79}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "space_id": {
+          "description": "Its space; absent for DMs.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "$ref": "#/$defs/ChannelType",
+          "description": "The channel type."
+        },
+        "visibility": {
+          "$ref": "#/$defs/Visibility",
+          "description": "Public or private."
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "visibility",
+        "position",
+        "head_seq",
+        "my_perms",
+        "dm_member_ids"
+      ],
+      "type": "object"
+    },
+    "ReadyInstall": {
+      "description": "The install section of READY.",
+      "properties": {
+        "id": {
+          "description": "The install id (gap G20).",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "media": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MediaPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The client media policy for the current tier (S34 v2 §13); absent when voice is off."
+        },
+        "name": {
+          "description": "The install name.",
+          "type": "string"
+        },
+        "policy_digest": {
+          "$ref": "#/$defs/PolicyDigest",
+          "description": "Policy values clients need."
+        },
+        "profile_fields_version": {
+          "description": "The custom field definitions etag (`fields_rev`, S18).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sync_epoch": {
+          "default": "",
+          "description": "The install's sync epoch: an opaque decimal string that changes only on a restore. A\nvalue different from the client's stored one means \"drop every cache and cursor\"\n(contracts rev 29). Empty from servers that predate it.",
+          "type": "string"
+        },
+        "video_enabled": {
+          "description": "`[voice.video] enabled` and voice enabled (S34 v2 §20.2). Absent means `false`.",
+          "type": "boolean"
+        },
+        "voice_enabled": {
+          "description": "`[voice] enabled` (S33 v1 §16.3). Absent means `false`.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "policy_digest"
+      ],
+      "type": "object"
+    },
+    "ReadyNotify": {
+      "description": "READY's notification section: the settings (without keywords) and the explicit rows for\nREADY's channels and spaces.",
+      "properties": {
+        "channel_prefs": {
+          "description": "Channels and DMs with a level or a mute.",
+          "items": {
+            "$ref": "#/$defs/ChannelNotifyPrefs"
+          },
+          "type": "array"
+        },
+        "settings": {
+          "$ref": "#/$defs/NotifySettings",
+          "description": "Account settings, without keywords."
+        },
+        "space_prefs": {
+          "description": "Spaces with a level.",
+          "items": {
+            "$ref": "#/$defs/SpaceNotifyPrefs"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "settings",
+        "channel_prefs",
+        "space_prefs"
+      ],
+      "type": "object"
+    },
+    "ReadySpace": {
+      "description": "A space in READY.",
+      "properties": {
+        "hidden": {
+          "description": "Meet MC1 (CC4): a hidden Space; present only for clients that declared `hidden_spaces`\n(others never get the Space). Absent when `false`.",
+          "type": "boolean"
+        },
+        "icon_thumb_url": {
+          "description": "Signed 64 px icon URL (S16).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "icon_url": {
+          "description": "Signed icon URL.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "The space id.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "member_count": {
+          "description": "Number of members.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "my_role_ids": {
+          "description": "The member's roles in this space.",
+          "items": {
+            "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "my_space_perms": {
+          "default": "0",
+          "description": "The member's base permissions in the space (`space_perms`, S12 §7). Old payloads read\nas 0.",
+          "pattern": "^(0|[1-9][0-9]{0,19})$",
+          "type": "string"
+        },
+        "name": {
+          "description": "The name.",
+          "type": "string"
+        },
+        "slug": {
+          "description": "The slug.",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,79}$",
+          "type": "string"
+        },
+        "versions": {
+          "$ref": "#/$defs/ReadyVersions",
+          "description": "Etags for lazy fetches."
+        }
+      },
+      "required": [
+        "id",
+        "slug",
+        "name",
+        "my_role_ids",
+        "member_count",
+        "versions"
+      ],
+      "type": "object"
+    },
+    "ReadyVersions": {
+      "description": "Etags for lazy per-space fetches with `If-None-Match` (gap G9).",
+      "properties": {
+        "emoji": {
+          "description": "Custom emoji version.",
+          "type": "string"
+        },
+        "groups": {
+          "description": "User groups version.",
+          "type": "string"
+        },
+        "roles": {
+          "description": "Role definitions version.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "emoji",
+        "roles",
+        "groups"
+      ],
+      "type": "object"
+    },
+    "ReadyVoiceChannel": {
+      "description": "A public voice channel in READY that the member can VIEW but has not joined (S33 v1 §16.3).",
+      "properties": {
+        "category_id": {
+          "description": "Its category.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "The channel.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "my_perms": {
+          "description": "The member's effective permissions there.",
+          "pattern": "^(0|[1-9][0-9]{0,19})$",
+          "type": "string"
+        },
+        "name": {
+          "description": "The name.",
+          "type": "string"
+        },
+        "position": {
+          "description": "Sort position.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "slug": {
+          "description": "The slug.",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,79}$",
+          "type": "string"
+        },
+        "space_id": {
+          "description": "Its space.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "user_limit": {
+          "description": "0 = no per-channel limit.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "space_id",
+        "slug",
+        "name",
+        "position",
+        "user_limit",
+        "my_perms"
+      ],
+      "type": "object"
+    },
+    "Recording": {
+      "description": "A recording (§18.1).",
+      "properties": {
+        "audio_keep_days": {
+          "description": "Audio keep days (0 = until the transcript is final).",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "auto": {
+          "description": "Started by an auto-record channel's first join.",
+          "type": "boolean"
+        },
+        "call_record_id": {
+          "description": "The DM call (`calls.id`) of a DM-call recording.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "channel_id": {
+          "description": "The voice channel or DM.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "consent_prompt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConsentPrompt"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The consent modal (self only, while the viewer is `pending`)."
+        },
+        "id": {
+          "description": "The recording.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "language": {
+          "description": "The language hint (`None` = auto).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max_duration_ms": {
+          "description": "`recording.max_duration_ms`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "message_id": {
+          "description": "The record message.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "mixed": {
+          "description": "A mixed file is made after stop.",
+          "type": "boolean"
+        },
+        "my_consent": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Consent"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The viewer's own consent (self only; absent for non-participants)."
+        },
+        "participants": {
+          "description": "Members in the room plus members who ever granted, ascending.",
+          "items": {
+            "$ref": "#/$defs/RecordingParticipant"
+          },
+          "type": "array"
+        },
+        "space_id": {
+          "description": "The channel's space (absent for DMs).",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "started_at": {
+          "description": "When.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "started_by": {
+          "description": "Who started it.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/RecordingState",
+          "description": "Its state."
+        },
+        "stop_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StopReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why."
+        },
+        "stopped_at": {
+          "description": "When it stopped.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "channel_id",
+        "state",
+        "started_by",
+        "started_at",
+        "auto",
+        "message_id",
+        "mixed",
+        "audio_keep_days",
+        "max_duration_ms",
+        "participants"
+      ],
+      "type": "object"
+    },
+    "RecordingParticipant": {
+      "description": "One participant of a recording, as everyone in the audience sees it (§18.1).",
+      "properties": {
+        "capture": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Capture"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Whether they are captured (only for `granted`)."
+        },
+        "consent": {
+          "$ref": "#/$defs/Consent",
+          "description": "What they said."
+        },
+        "member_id": {
+          "description": "The member.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NotRecordedReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why not (only for `not_recorded`)."
+        }
+      },
+      "required": [
+        "member_id",
+        "consent"
+      ],
+      "type": "object"
+    },
+    "RecordingState": {
+      "description": "A recording's lifecycle state (§8.5). Stored in `recordings.state`.",
+      "oneOf": [
+        {
+          "const": "starting",
+          "description": "Admitting and certifying the recorder.",
+          "type": "string"
+        },
+        {
+          "const": "recording",
+          "description": "The recorder joined.",
+          "type": "string"
+        },
+        {
+          "const": "stopping",
+          "description": "Draining the recorder.",
+          "type": "string"
+        },
+        {
+          "const": "stopped",
+          "description": "Over.",
+          "type": "string"
+        }
+      ]
+    },
+    "RingState": {
+      "description": "A ring's state as every DM member sees it (§14.1, §15).",
+      "oneOf": [
+        {
+          "const": "ringing",
+          "description": "Ringing.",
+          "type": "string"
+        },
+        {
+          "const": "busy",
+          "description": "Ringing, but the callee is already in voice (a silent ring).",
+          "type": "string"
+        },
+        {
+          "const": "accepted",
+          "description": "The callee joined.",
+          "type": "string"
+        },
+        {
+          "const": "declined",
+          "description": "The callee declined.",
+          "type": "string"
+        },
+        {
+          "const": "missed",
+          "description": "Not answered in time, or the call ended first.",
+          "type": "string"
+        }
+      ]
+    },
+    "SelfStatus": {
+      "description": "What a member sees about their own presence.",
+      "oneOf": [
+        {
+          "const": "online",
+          "description": "Online.",
+          "type": "string"
+        },
+        {
+          "const": "idle",
+          "description": "Idle or away.",
+          "type": "string"
+        },
+        {
+          "const": "dnd",
+          "description": "Do not disturb.",
+          "type": "string"
+        },
+        {
+          "const": "invisible",
+          "description": "Invisible (others see offline).",
+          "type": "string"
+        },
+        {
+          "const": "offline",
+          "description": "No live session.",
+          "type": "string"
+        }
+      ]
+    },
+    "SpaceNotifyPrefs": {
+      "description": "A member's level for one space.",
+      "properties": {
+        "effective_level": {
+          "$ref": "#/$defs/NotifyLevel",
+          "description": "What the space's channels fall back to for this member."
+        },
+        "level": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NotifyLevel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The space's level; `null` = inherit."
+        },
+        "space_id": {
+          "description": "The space.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "space_id",
+        "effective_level"
+      ],
+      "type": "object"
+    },
+    "StopReason": {
+      "description": "Why a recording stopped (§8.5). Stored in `recordings.stop_reason`.",
+      "oneOf": [
+        {
+          "const": "stopped",
+          "description": "The stop route.",
+          "type": "string"
+        },
+        {
+          "const": "room_empty",
+          "description": "No standard voice entries left in the room.",
+          "type": "string"
+        },
+        {
+          "const": "call_ended",
+          "description": "The DM call ended.",
+          "type": "string"
+        },
+        {
+          "const": "max_duration",
+          "description": "`recording.max_duration_ms` reached.",
+          "type": "string"
+        },
+        {
+          "const": "recorder_failed",
+          "description": "The recorder failed (join timeout, certificate, unreachable, too many rejoins).",
+          "type": "string"
+        },
+        {
+          "const": "media_restarted",
+          "description": "The engine room was lost beyond the re-admit grace.",
+          "type": "string"
+        },
+        {
+          "const": "storage_full",
+          "description": "Three consecutive `storage_full` segment writes.",
+          "type": "string"
+        },
+        {
+          "const": "disabled",
+          "description": "Recording was disabled (policy, config, archive, `sew recording disable`).",
+          "type": "string"
+        },
+        {
+          "const": "max_bytes",
+          "description": "`recording.max_bytes` reached.",
+          "type": "string"
+        }
+      ]
+    },
+    "ThreadsInbox": {
+      "description": "The threads inbox summary (READY, `GET /api/v1/me/threads/summary`, S14 events).",
+      "properties": {
+        "mention_count": {
+          "default": 0,
+          "description": "Unread thread mentions over every thread in the sync set, followed or not (S14).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "seq": {
+          "description": "The member change-log head these totals are current as of (S14).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "unread_count": {
+          "description": "Followed threads with unread replies.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "unread_count"
+      ],
+      "type": "object"
+    },
+    "TrackHint": {
+      "description": "Publishing hints for one source (S34 v2 §13).",
+      "properties": {
+        "layers": {
+          "description": "Simulcast layers, lowest first.",
+          "items": {
+            "$ref": "#/$defs/LayerHint"
+          },
+          "type": "array"
+        },
+        "max_fps": {
+          "description": "Frame rate cap.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_height": {
+          "description": "Capture height cap.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_width": {
+          "description": "Capture width cap.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "max_width",
+        "max_height",
+        "max_fps",
+        "layers"
+      ],
+      "type": "object"
+    },
+    "VerificationCode": {
+      "description": "Policy `calls.verification_code` (S50 §16.4): whether \"Call info → Security code\" is\nshown. `required` is reserved for a later mode and refused by the policy validator.",
+      "oneOf": [
+        {
+          "const": "shown",
+          "description": "Shown on request, never modal (the default).",
+          "type": "string"
+        },
+        {
+          "const": "hidden",
+          "description": "Not shown.",
+          "type": "string"
+        },
+        {
+          "const": "required",
+          "description": "Reserved: \"confirm before you speak\" (refused in v1).",
+          "type": "string"
+        }
+      ]
+    },
+    "VideoCodec": {
+      "description": "A video codec a client may publish under E2EE (S34 v2 D8). There is no AV1 or H.265\nvalue: they are never offered.",
+      "oneOf": [
+        {
+          "const": "vp8",
+          "description": "VP8 (simulcast).",
+          "type": "string"
+        },
+        {
+          "const": "h264",
+          "description": "H.264 (simulcast).",
+          "type": "string"
+        },
+        {
+          "const": "vp9",
+          "description": "VP9, only with the Dependency Descriptor (opt-in).",
+          "type": "string"
+        }
+      ]
+    },
+    "Visibility": {
+      "description": "Channel visibility.",
+      "oneOf": [
+        {
+          "const": "public",
+          "description": "Every space member can see and join it.",
+          "type": "string"
+        },
+        {
+          "const": "private",
+          "description": "Members only.",
+          "type": "string"
+        }
+      ]
+    },
+    "VoiceConnection": {
+      "description": "Whether the engine has confirmed the member's media (S33 v2 §10.1).",
+      "oneOf": [
+        {
+          "const": "connecting",
+          "description": "The admit is registered; media not confirmed yet.",
+          "type": "string"
+        },
+        {
+          "const": "connected",
+          "description": "The engine confirmed the participant (also during a reconnect window).",
+          "type": "string"
+        }
+      ]
+    },
+    "VoiceState": {
+      "description": "A member's voice state (S33 v2 §10.1).",
+      "properties": {
+        "call_id": {
+          "description": "The DM call (`calls.id`) of a call entry (S34 v2 §20.1); absent in voice channels.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "channel_id": {
+          "description": "The voice channel.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "connection": {
+          "$ref": "#/$defs/VoiceConnection",
+          "description": "`connecting` or `connected`."
+        },
+        "joined_at": {
+          "description": "When the join succeeded (a move resets it).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "member_id": {
+          "description": "The member.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "secure": {
+          "description": "The member's device is in the activated key epoch (S50 `secure_changed`).",
+          "type": "boolean"
+        },
+        "self_deaf": {
+          "description": "Deafened by the member (implies `self_mute`).",
+          "type": "boolean"
+        },
+        "self_mute": {
+          "description": "Muted by the member.",
+          "type": "boolean"
+        },
+        "self_stream": {
+          "default": false,
+          "description": "The member holds a screen-share lease (S34 v2 §10.2).",
+          "type": "boolean"
+        },
+        "self_video": {
+          "default": false,
+          "description": "The member holds a camera lease (S34 v2 §10.2).",
+          "type": "boolean"
+        },
+        "server_deaf": {
+          "description": "Deafened by a moderator (persistent per space).",
+          "type": "boolean"
+        },
+        "server_mute": {
+          "description": "Muted by a moderator (persistent per space).",
+          "type": "boolean"
+        },
+        "space_id": {
+          "description": "The channel's space; absent for DM calls.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "speak_denied": {
+          "description": "The member lacks SPEAK here; clients show it as muted.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "member_id",
+        "channel_id",
+        "connection",
+        "secure",
+        "self_mute",
+        "self_deaf",
+        "server_mute",
+        "server_deaf",
+        "speak_denied",
+        "joined_at"
+      ],
+      "type": "object"
+    },
+    "Vp9Hint": {
+      "description": "VP9 publishing rules when VP9 is configured (S34 v2 §13).",
+      "properties": {
+        "requires_dd": {
+          "description": "Always `true`: the Dependency Descriptor is required.",
+          "type": "boolean"
+        },
+        "scalability_mode": {
+          "description": "`L3T3_KEY`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scalability_mode",
+        "requires_dd"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The `ready` dispatch: a small boot snapshot (C7).",
+  "properties": {
+    "call_keys": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ReadyCallKeys"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Call key trust anchors and client parameters (S50 §9.4); absent when voice is disabled."
+    },
+    "calls": {
+      "description": "Active calls in the member's DMs, at most 100; the member's own copy of each carries\n`my_ring` (S34 v2 §20.2).",
+      "items": {
+        "$ref": "#/$defs/Call"
+      },
+      "type": "array"
+    },
+    "categories": {
+      "description": "Categories in those spaces.",
+      "items": {
+        "$ref": "#/$defs/ReadyCategory"
+      },
+      "type": "array"
+    },
+    "channels": {
+      "description": "Channels the member belongs to, plus DMs.",
+      "items": {
+        "$ref": "#/$defs/ReadyChannel"
+      },
+      "type": "array"
+    },
+    "dm_members": {
+      "default": [],
+      "description": "Partners of the most recent DMs, at most 50 (S18).",
+      "items": {
+        "$ref": "#/$defs/Member"
+      },
+      "type": "array"
+    },
+    "install": {
+      "$ref": "#/$defs/ReadyInstall",
+      "description": "The install."
+    },
+    "member": {
+      "$ref": "#/$defs/Member",
+      "description": "The member, with install role."
+    },
+    "member_seq": {
+      "description": "Head of the member's change log.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "notify": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ReadyNotify"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Notification settings and explicit prefs (S21 gap G17)."
+    },
+    "presence_settings": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PresenceSettings"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The member's presence settings (S18)."
+    },
+    "protocol": {
+      "description": "The protocol version (1).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "read_states": {
+      "description": "Read states for those channels.",
+      "items": {
+        "$ref": "#/$defs/ReadState"
+      },
+      "type": "array"
+    },
+    "recordings": {
+      "description": "Active recordings in rooms whose voice state the member may see, at most 100, each\nwith the member's own `my_consent` (S35 v2 §18.3).",
+      "items": {
+        "$ref": "#/$defs/Recording"
+      },
+      "type": "array"
+    },
+    "resume_url": {
+      "description": "Advisory resume URL (clients resume at their ticket's URL, contracts rev 22).",
+      "type": "string"
+    },
+    "session_id": {
+      "description": "The gateway session id, for RESUME.",
+      "type": "string"
+    },
+    "spaces": {
+      "description": "The member's spaces.",
+      "items": {
+        "$ref": "#/$defs/ReadySpace"
+      },
+      "type": "array"
+    },
+    "threads_inbox": {
+      "$ref": "#/$defs/ThreadsInbox",
+      "description": "Threads inbox summary."
+    },
+    "voice_channels": {
+      "description": "Public voice channels the member can view but has not joined (S33 v1 §16.3).",
+      "items": {
+        "$ref": "#/$defs/ReadyVoiceChannel"
+      },
+      "type": "array"
+    },
+    "voice_states": {
+      "description": "Voice states in voice channels the member can view, at most 5,000 (S33 v1 §16.3).",
+      "items": {
+        "$ref": "#/$defs/VoiceState"
+      },
+      "type": "array"
+    },
+    "voice_states_partial": {
+      "description": "`voice_states` was capped: load `GET /spaces/{id}/voice/states` per space.",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "session_id",
+    "resume_url",
+    "protocol",
+    "member",
+    "install",
+    "spaces",
+    "categories",
+    "channels",
+    "read_states",
+    "member_seq",
+    "threads_inbox"
+  ],
+  "title": "Ready",
+  "type": "object"
+}

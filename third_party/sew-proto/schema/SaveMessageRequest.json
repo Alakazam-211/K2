@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /api/v1/messages/{id}/save`.",
+  "properties": {
+    "note": {
+      "description": "A private note, 1–2,048 bytes (replaces an existing note).",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "title": "SaveMessageRequest",
+  "type": "object"
+}

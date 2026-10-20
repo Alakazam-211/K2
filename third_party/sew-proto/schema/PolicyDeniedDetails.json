@@ -1,0 +1,227 @@
+{
+  "$defs": {
+    "PolicyKey": {
+      "description": "A policy key (C13).",
+      "oneOf": [
+        {
+          "const": "spaces.create",
+          "description": "Who can create spaces.",
+          "type": "string"
+        },
+        {
+          "const": "channels.create_public_floor",
+          "description": "Extra install-level gate on top of bit 41.",
+          "type": "string"
+        },
+        {
+          "const": "channels.create_private_floor",
+          "description": "Extra install-level gate on top of bit 42.",
+          "type": "string"
+        },
+        {
+          "const": "channels.archive",
+          "description": "Who can archive channels.",
+          "type": "string"
+        },
+        {
+          "const": "mentions.channel_max_members",
+          "description": "`@channel`/`@here` in bigger channels needs MANAGE_CHANNELS.",
+          "type": "string"
+        },
+        {
+          "const": "guests.invite",
+          "description": "Who can invite guests.",
+          "type": "string"
+        },
+        {
+          "const": "guests.dm_non_channel_mates",
+          "description": "Whether guests may DM people they share no channel with.",
+          "type": "string"
+        },
+        {
+          "const": "messages.edit_window_s",
+          "description": "Edit window in seconds; 0 = forever.",
+          "type": "string"
+        },
+        {
+          "const": "messages.delete_own",
+          "description": "Whether members may delete their own messages.",
+          "type": "string"
+        },
+        {
+          "const": "gifs.enabled",
+          "description": "GIF search on/off.",
+          "type": "string"
+        },
+        {
+          "const": "gifs.provider",
+          "description": "GIF provider name.",
+          "type": "string"
+        },
+        {
+          "const": "gifs.api_key_ref",
+          "description": "Reference to the GIF provider's API key.",
+          "type": "string"
+        },
+        {
+          "const": "link_previews.enabled",
+          "description": "Link previews on/off.",
+          "type": "string"
+        },
+        {
+          "const": "files.max_bytes",
+          "description": "Largest upload in bytes.",
+          "type": "string"
+        },
+        {
+          "const": "files.space_quota_bytes",
+          "description": "Per-space file quota in bytes; 0 = none.",
+          "type": "string"
+        },
+        {
+          "const": "emoji.max_per_space",
+          "description": "Custom emoji per space.",
+          "type": "string"
+        },
+        {
+          "const": "retention.default_days",
+          "description": "Company retention default in days; 0 = forever.",
+          "type": "string"
+        },
+        {
+          "const": "private.space_admins_can_join",
+          "description": "Whether space admins may join private channels by themselves.",
+          "type": "string"
+        },
+        {
+          "const": "presence.show_to_guests",
+          "description": "Whether guests see presence.",
+          "type": "string"
+        },
+        {
+          "const": "digest.enabled",
+          "description": "Email digest on/off.",
+          "type": "string"
+        },
+        {
+          "const": "agents.allowed_in_dms",
+          "description": "Whether members may DM agent members.",
+          "type": "string"
+        },
+        {
+          "const": "files.strip_image_location",
+          "description": "Strip GPS and other location metadata from image originals at upload (S15 G14).",
+          "type": "string"
+        },
+        {
+          "const": "messages.deleted_purge_days",
+          "description": "Days deleted and edited-away content is kept before purge; 0 = off (S22, Q12).\nA read-only mirror of the install retention row.",
+          "type": "string"
+        },
+        {
+          "const": "guests.enabled",
+          "description": "Guest access on/off; off suspends every guest reversibly (S19 §7.7, contracts\nrev 23).",
+          "type": "string"
+        },
+        {
+          "const": "notifications.default_level",
+          "description": "The install's default notification level for people (S21 gap G1).",
+          "type": "string"
+        },
+        {
+          "const": "digest.detail",
+          "description": "What an email digest names: `names` or `counts` (S21 gap G13).",
+          "type": "string"
+        },
+        {
+          "const": "calls.verification_code",
+          "description": "Whether the call security code is shown: `shown` or `hidden`; `required` is\nreserved and refused (S50 §16.4, G17).",
+          "type": "string"
+        },
+        {
+          "const": "calls.dm_enabled",
+          "description": "Whether members may start calls in DMs and group DMs (S34 v2 §7.2, §24).",
+          "type": "string"
+        },
+        {
+          "const": "recording.enabled",
+          "description": "Whether members may record calls (S35 v2 §21.1).",
+          "type": "string"
+        },
+        {
+          "const": "recording.dm_enabled",
+          "description": "Whether persons may record DM and group-DM calls (S35 v2; feeds\n`PermPolicies.recording_dm_enabled`).",
+          "type": "string"
+        },
+        {
+          "const": "recording.audio_default_days",
+          "description": "The default audio keep days of a recording (S35 v2 §12.1).",
+          "type": "string"
+        },
+        {
+          "const": "recording.audio_max_days",
+          "description": "The most audio keep days a recording may ask for (S35 v2 §12.1).",
+          "type": "string"
+        },
+        {
+          "const": "recording.require_consent_to_join",
+          "description": "Declining the recording notice means not joining (S35 v2 §9.11, rev 91).",
+          "type": "string"
+        },
+        {
+          "const": "meetings.enabled",
+          "description": "Meetings on/off (Meet MC1, CC8).",
+          "type": "string"
+        },
+        {
+          "const": "meetings.create",
+          "description": "Who may host meetings (Meet MC1, CC8).",
+          "type": "string"
+        },
+        {
+          "const": "meetings.max_participants",
+          "description": "Most people in one meeting (Meet MC1, CC8).",
+          "type": "string"
+        },
+        {
+          "const": "meetings.max_duration_minutes",
+          "description": "Longest planned meeting, `ends_at` − `starts_at`, in minutes (Meet MC1, CC8).",
+          "type": "string"
+        },
+        {
+          "const": "meetings.grace_minutes",
+          "description": "How long an empty room waits after `ends_at` before the meeting ends (Meet MC1, CC8).",
+          "type": "string"
+        },
+        {
+          "const": "meetings.privacy_contact",
+          "description": "Free text naming who to ask about meeting privacy, shown to guests (Meet MC1, CC8).",
+          "type": "string"
+        },
+        {
+          "const": "meetings.link_guests",
+          "description": "Meeting links let outside guests in (Meet MC2a, CC8): off refuses `peek` and\n`redeem` and revokes every link-guest session.",
+          "type": "string"
+        },
+        {
+          "const": "calls.stats_beacon",
+          "description": "The call-stats beacon on/off (F21, prd-meet-01 CC14): on, voice joins carry\n`stats` and `POST /api/v1/me/voice/stats` takes aggregate samples; off (the\ndefault), the route answers `403 policy_denied`.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Details of a `403 policy_denied`: the org policy that refused.",
+  "properties": {
+    "policy": {
+      "$ref": "#/$defs/PolicyKey",
+      "description": "The policy key."
+    }
+  },
+  "required": [
+    "policy"
+  ],
+  "title": "PolicyDeniedDetails",
+  "type": "object"
+}

@@ -1,0 +1,104 @@
+{
+  "$defs": {
+    "SourceRef": {
+      "additionalProperties": false,
+      "description": "A converter's reference to the record it came from (ignored and not stored by Sew v1).",
+      "properties": {
+        "ref": {
+          "description": "Its reference.",
+          "type": "string"
+        },
+        "system": {
+          "description": "The source system, e.g. `slack`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "system",
+        "ref"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`profile_fields.ndjson`: a custom profile field definition.",
+  "properties": {
+    "created_at": {
+      "description": "Created.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "deleted_at": {
+      "description": "Soft-deleted.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "id": {
+      "description": "The field id.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "key": {
+      "description": "Its key.",
+      "type": "string"
+    },
+    "kind": {
+      "description": "`text`, `url`, `select`, `date`.",
+      "type": "string"
+    },
+    "label": {
+      "description": "Its label.",
+      "type": "string"
+    },
+    "managed_by": {
+      "description": "`member` or `provider`.",
+      "type": "string"
+    },
+    "options": {
+      "description": "Select options."
+    },
+    "position": {
+      "description": "Order.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "source": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SourceRef"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Converter reference."
+    },
+    "updated_at": {
+      "description": "Last change.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "visibility": {
+      "description": "`everyone`, `non_guests`, `admins`.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "key",
+    "label",
+    "kind",
+    "managed_by",
+    "visibility",
+    "position",
+    "created_at",
+    "updated_at"
+  ],
+  "title": "ProfileFieldRecord",
+  "type": "object"
+}

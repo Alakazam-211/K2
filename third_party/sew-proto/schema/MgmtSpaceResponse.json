@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A Space over mgmt: the answer of create and bind.",
+  "properties": {
+    "app_id": {
+      "description": "The App it belongs to; absent when not bound.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "created": {
+      "description": "Whether this call created it.",
+      "type": "boolean"
+    },
+    "hidden": {
+      "description": "Meet MC1: the Space is hidden. Absent when `false`.",
+      "type": "boolean"
+    },
+    "manager_member_ids": {
+      "description": "The listed managers' member ids, in request order (each a member holding the role).",
+      "items": {
+        "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+        "pattern": "^[1-9][0-9]{0,18}$",
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "manager_role_id": {
+      "description": "The manager role, once a manager was listed.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "name": {
+      "description": "Its name.",
+      "type": "string"
+    },
+    "owner_member_id": {
+      "description": "Its owner's member id.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "slug": {
+      "description": "Its slug.",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,79}$",
+      "type": "string"
+    },
+    "space_id": {
+      "description": "The Space.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "space_id",
+    "slug",
+    "name",
+    "owner_member_id",
+    "created"
+  ],
+  "title": "MgmtSpaceResponse",
+  "type": "object"
+}

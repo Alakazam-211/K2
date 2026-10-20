@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Body of `call_ring` (§17), to every session of the callee.",
+  "properties": {
+    "call_id": {
+      "description": "The call.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "channel_id": {
+      "description": "Its DM (S51 prepares a KeyPackage scoped `call:<channel_id>` on a ring).",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "expires_at": {
+      "description": "When the ring becomes missed (while ringing).",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "reason": {
+      "description": "Why: `busy`, `dnd`, `muted` (a silent ring); `accepted`, `declined`, `timeout`,\n`call_ended` (a stop).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "ringing": {
+      "description": "`true`: ring; `false`: stop ringing.",
+      "type": "boolean"
+    },
+    "silent": {
+      "description": "A silent ring (busy, DND, muted).",
+      "type": "boolean"
+    },
+    "started_by": {
+      "description": "Who started it.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "call_id",
+    "channel_id",
+    "started_by",
+    "ringing",
+    "silent"
+  ],
+  "title": "CallRingEvent",
+  "type": "object"
+}

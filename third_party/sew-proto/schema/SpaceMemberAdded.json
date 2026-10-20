@@ -1,0 +1,258 @@
+{
+  "$defs": {
+    "Category": {
+      "description": "A category grouping channels in a space.",
+      "properties": {
+        "id": {
+          "description": "The category id.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "name": {
+          "description": "The name.",
+          "type": "string"
+        },
+        "overwrites": {
+          "description": "Overwrites that synced channels inherit.",
+          "items": {
+            "$ref": "#/$defs/Overwrite"
+          },
+          "type": "array"
+        },
+        "position": {
+          "description": "Sort position.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "space_id": {
+          "description": "Its space.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "space_id",
+        "name",
+        "position",
+        "overwrites"
+      ],
+      "type": "object"
+    },
+    "Overwrite": {
+      "description": "A channel or category permission overwrite.",
+      "properties": {
+        "allow": {
+          "description": "Bits allowed.",
+          "pattern": "^(0|[1-9][0-9]{0,19})$",
+          "type": "string"
+        },
+        "deny": {
+          "description": "Bits denied.",
+          "pattern": "^(0|[1-9][0-9]{0,19})$",
+          "type": "string"
+        },
+        "target_id": {
+          "description": "The role or member id.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "target_kind": {
+          "$ref": "#/$defs/OverwriteTarget",
+          "description": "Role or member."
+        }
+      },
+      "required": [
+        "target_kind",
+        "target_id",
+        "allow",
+        "deny"
+      ],
+      "type": "object"
+    },
+    "OverwriteTarget": {
+      "description": "What an overwrite targets.",
+      "oneOf": [
+        {
+          "const": "role",
+          "description": "A role (`@everyone`'s role id is the space id).",
+          "type": "string"
+        },
+        {
+          "const": "member",
+          "description": "A single member.",
+          "type": "string"
+        }
+      ]
+    },
+    "Space": {
+      "description": "A space: a group of channels with its own roles.",
+      "properties": {
+        "app_id": {
+          "description": "SW13: the App the space belongs to (`[a-z0-9][a-z0-9._-]{0,63}`); absent when the space\nis not bound. A bound space gets its members only through mgmt calls for that App.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "created_at": {
+          "description": "When the space was created.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "default_channel_ids": {
+          "description": "Hearth HC6: the channels a joining member lands in (the open join and an add), in the\norder MANAGE_SPACE set them; at most 10, absent when none. Guests never see it.",
+          "items": {
+            "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "description": {
+          "description": "Hearth HC4: what the space is for, 1–300 characters; absent when unset.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "hidden": {
+          "description": "Meet MC1 (CC4): a hidden Space (the Meetings Space) is left out of `GET /spaces`,\nbrowse and the directory, and out of READY unless IDENTIFY declares `hidden_spaces`;\nclients read it by id. Absent when `false`.",
+          "type": "boolean"
+        },
+        "icon_thumb_url": {
+          "description": "Signed 64 px icon URL (S16).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "icon_url": {
+          "description": "Signed icon URL.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "The space id.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "join_policy": {
+          "$ref": "#/$defs/SpaceJoinPolicy",
+          "default": "invite",
+          "description": "Who may join by themself (S10 gap G4). Old payloads without it read as `invite`."
+        },
+        "member_count": {
+          "description": "Number of members.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "my_perms": {
+          "description": "The viewer's base permissions in the space; absent for non-members (S10 §8).",
+          "pattern": "^(0|[1-9][0-9]{0,19})$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "The name.",
+          "type": "string"
+        },
+        "owner_id": {
+          "description": "The space owner's member id.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "rules_channel_id": {
+          "description": "Hearth HC4: the channel holding the space's rules (a public text or announcement\nchannel of the space); absent when unset. Guests never see it.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "slug": {
+          "description": "The slug, unique in the install.",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,79}$",
+          "type": "string"
+        },
+        "welcome_channel_id": {
+          "description": "Hearth HC4: where a newcomer starts (a public text or announcement channel of the\nspace); absent when unset. Guests never see it.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "slug",
+        "name",
+        "owner_id",
+        "member_count",
+        "created_at"
+      ],
+      "type": "object"
+    },
+    "SpaceJoinPolicy": {
+      "description": "Who may join a space by themself (S10 gap G4).",
+      "oneOf": [
+        {
+          "const": "open",
+          "description": "Any active non-guest member may join.",
+          "type": "string"
+        },
+        {
+          "const": "invite",
+          "description": "Members join only when someone adds them (the default).",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Body of `space_member_added` (S10 gap G6). `space` and `categories` are filled only in the\ncopy sent to the added member.",
+  "properties": {
+    "categories": {
+      "default": [],
+      "description": "The space's categories (the added member's copy only).",
+      "items": {
+        "$ref": "#/$defs/Category"
+      },
+      "type": "array"
+    },
+    "member_id": {
+      "description": "The member who joined.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "space": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Space"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The space (the added member's copy only)."
+    },
+    "space_id": {
+      "description": "The space.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "space_id",
+    "member_id"
+  ],
+  "title": "SpaceMemberAdded",
+  "type": "object"
+}

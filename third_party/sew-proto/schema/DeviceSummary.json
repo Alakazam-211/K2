@@ -1,0 +1,84 @@
+{
+  "$defs": {
+    "DevicePlatform": {
+      "description": "The device's platform (`DeviceCertTbs.platform` 1–5).",
+      "oneOf": [
+        {
+          "const": "web",
+          "description": "A browser.",
+          "type": "string"
+        },
+        {
+          "const": "desktop",
+          "description": "A desktop app.",
+          "type": "string"
+        },
+        {
+          "const": "ios",
+          "description": "iOS.",
+          "type": "string"
+        },
+        {
+          "const": "android",
+          "description": "Android.",
+          "type": "string"
+        },
+        {
+          "const": "other",
+          "description": "Anything else.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "One of the caller's devices (K13).",
+  "properties": {
+    "created_at": {
+      "description": "When it was enrolled.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "device_id": {
+      "description": "The device.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "label": {
+      "description": "The label.",
+      "type": "string"
+    },
+    "not_after": {
+      "description": "When the newest certificate expires.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "platform": {
+      "$ref": "#/$defs/DevicePlatform",
+      "description": "The platform."
+    },
+    "revoked_at": {
+      "description": "When it was revoked.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "serial": {
+      "description": "The newest certificate's serial.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "device_id",
+    "platform",
+    "label",
+    "created_at",
+    "serial",
+    "not_after"
+  ],
+  "title": "DeviceSummary",
+  "type": "object"
+}

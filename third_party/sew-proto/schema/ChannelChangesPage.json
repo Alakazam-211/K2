@@ -1,0 +1,176 @@
+{
+  "$defs": {
+    "ChannelChange": {
+      "description": "One channel change-log entry.",
+      "properties": {
+        "actor_id": {
+          "description": "Who changed it; absent for system jobs (gap G33).",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "at": {
+          "description": "When.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "entity_id": {
+          "description": "The entity that changed (message, member, …).",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ChannelChangeKind",
+          "description": "What changed."
+        },
+        "seq": {
+          "description": "The channel seq.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "seq",
+        "kind",
+        "entity_id",
+        "at"
+      ],
+      "type": "object"
+    },
+    "ChannelChangeKind": {
+      "description": "What changed in a channel's change log (C8 `channel_changes.kind`).",
+      "oneOf": [
+        {
+          "const": "message_created",
+          "description": "A message was posted.",
+          "type": "string"
+        },
+        {
+          "const": "message_updated",
+          "description": "A message was edited.",
+          "type": "string"
+        },
+        {
+          "const": "message_deleted",
+          "description": "A message was deleted.",
+          "type": "string"
+        },
+        {
+          "const": "reaction_changed",
+          "description": "A reaction was added or removed.",
+          "type": "string"
+        },
+        {
+          "const": "pin_changed",
+          "description": "A message was pinned or unpinned.",
+          "type": "string"
+        },
+        {
+          "const": "thread_updated",
+          "description": "A thread's summary changed.",
+          "type": "string"
+        },
+        {
+          "const": "channel_updated",
+          "description": "Channel settings changed.",
+          "type": "string"
+        },
+        {
+          "const": "member_joined",
+          "description": "A member joined.",
+          "type": "string"
+        },
+        {
+          "const": "member_left",
+          "description": "A member left.",
+          "type": "string"
+        },
+        {
+          "const": "attachment_changed",
+          "description": "A message's attachments changed.",
+          "type": "string"
+        },
+        {
+          "const": "poll_updated",
+          "description": "A poll changed.",
+          "type": "string"
+        },
+        {
+          "const": "voice_state_changed",
+          "description": "Voice state changed (registered; unused in v1, contracts rev 24).",
+          "type": "string"
+        },
+        {
+          "const": "bookmark_changed",
+          "description": "A channel bookmark changed (contracts rev 26).",
+          "type": "string"
+        },
+        {
+          "const": "preview_changed",
+          "description": "A message's link previews changed (contracts rev 28).",
+          "type": "string"
+        },
+        {
+          "const": "meeting_updated",
+          "description": "A meeting row or its attendees changed (Meet MC1; `entity_id` = the meeting id).",
+          "type": "string"
+        },
+        {
+          "const": "meeting_link_changed",
+          "description": "A meeting's link was made, rotated or revoked (Meet MC2a; `entity_id` = the link\nrow id). Hosts read the link with `GET /meetings/{id}/link`; the secret is never in\nthe log.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Response of `GET /api/v1/channels/{id}/changes`. Continue with `since = next_since`, never\nwith the last entry's seq: filtered entries are not in the page (S14 gap G13).",
+  "properties": {
+    "entries": {
+      "description": "Entries with `seq > since` the caller may see, oldest first.",
+      "items": {
+        "$ref": "#/$defs/ChannelChange"
+      },
+      "type": "array"
+    },
+    "floor": {
+      "default": 0,
+      "description": "The channel's floor seq (S14).",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "has_more": {
+      "description": "Whether more entries follow.",
+      "type": "boolean"
+    },
+    "head": {
+      "description": "The channel's head seq.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "next_since": {
+      "default": 0,
+      "description": "The seq of the last entry scanned, kept or dropped (`since` if none) (S14).",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "sync_epoch": {
+      "default": "",
+      "description": "The install's sync epoch; compare before applying (S14, contracts rev 29).",
+      "type": "string"
+    }
+  },
+  "required": [
+    "entries",
+    "head",
+    "has_more"
+  ],
+  "title": "ChannelChangesPage",
+  "type": "object"
+}

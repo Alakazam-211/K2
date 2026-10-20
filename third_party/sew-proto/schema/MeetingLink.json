@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A meeting's active guest link, as hosts see it.",
+  "properties": {
+    "created_at": {
+      "description": "When this link was made.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "link_id": {
+      "description": "The public lookup id (16 base32 characters; safe in logs).",
+      "type": "string"
+    },
+    "max_guests_inside": {
+      "description": "Most link guests admitted at once.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "max_waiting": {
+      "description": "Most link guests waiting at once.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "path": {
+      "description": "The guest URL's path, `/j/<link_id>#<secret>` (the secret rides in the fragment, which\nno server sees in a GET).",
+      "type": "string"
+    },
+    "secret": {
+      "description": "The secret (base64url, 22 characters). Hosts only; never logged or stored in plain text.",
+      "type": "string"
+    },
+    "valid_until": {
+      "description": "Redeem works until here: `hard_end_at` while the meeting is open.",
+      "format": "date-time",
+      "type": "string"
+    }
+  },
+  "required": [
+    "link_id",
+    "secret",
+    "path",
+    "valid_until",
+    "max_guests_inside",
+    "max_waiting",
+    "created_at"
+  ],
+  "title": "MeetingLink",
+  "type": "object"
+}

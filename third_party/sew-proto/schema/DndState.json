@@ -1,0 +1,50 @@
+{
+  "$defs": {
+    "DndSource": {
+      "description": "Why DND is on.",
+      "oneOf": [
+        {
+          "const": "none",
+          "description": "Off.",
+          "type": "string"
+        },
+        {
+          "const": "manual",
+          "description": "Set by hand.",
+          "type": "string"
+        },
+        {
+          "const": "schedule",
+          "description": "A schedule window.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Whether a member is on DND now, and until when (S21 holds notifications until `until`).",
+  "properties": {
+    "active": {
+      "description": "On now.",
+      "type": "boolean"
+    },
+    "source": {
+      "$ref": "#/$defs/DndSource",
+      "description": "Why."
+    },
+    "until": {
+      "description": "When it ends; absent = indefinite (or off).",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "active",
+    "source"
+  ],
+  "title": "DndState",
+  "type": "object"
+}

@@ -1,0 +1,60 @@
+{
+  "$defs": {
+    "ChannelPerms": {
+      "description": "One channel's new effective permissions.",
+      "properties": {
+        "channel_id": {
+          "description": "The channel.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "my_perms": {
+          "description": "The member's effective permissions there.",
+          "pattern": "^(0|[1-9][0-9]{0,19})$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "channel_id",
+        "my_perms"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Body of `perms_changed`.",
+  "properties": {
+    "channels": {
+      "description": "New effective permissions per channel.",
+      "items": {
+        "$ref": "#/$defs/ChannelPerms"
+      },
+      "type": "array"
+    },
+    "full": {
+      "description": "`true`: `channels` lists every joined channel of `space_id` (zeros included); replace\nthem all. `false` (omitted on the wire): channels not listed are unchanged (S12 §11.4).",
+      "type": "boolean"
+    },
+    "my_space_perms": {
+      "description": "The member's new base permissions in `space_id` (S12 §7).",
+      "pattern": "^(0|[1-9][0-9]{0,19})$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "space_id": {
+      "description": "The space whose permissions changed; absent for DMs and when the gateway batched\nchannel changes only. Set whenever `my_space_perms` is (S12).",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "channels"
+  ],
+  "title": "PermsChanged",
+  "type": "object"
+}

@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Why a transition started (`proposals.reason`; S50 §9.3).",
+  "oneOf": [
+    {
+      "const": "join",
+      "description": "Leaves joined.",
+      "type": "string"
+    },
+    {
+      "const": "leave",
+      "description": "Leaves left or were removed.",
+      "type": "string"
+    },
+    {
+      "const": "swap",
+      "description": "A device swap (Remove + Add of one member).",
+      "type": "string"
+    },
+    {
+      "const": "readd",
+      "description": "A re-add after a missed epoch or a failed commit.",
+      "type": "string"
+    },
+    {
+      "const": "rekey",
+      "description": "A requested rekey.",
+      "type": "string"
+    },
+    {
+      "const": "consent",
+      "description": "Recording consent was withdrawn.",
+      "type": "string"
+    },
+    {
+      "const": "recorder_stop",
+      "description": "The recording stopped.",
+      "type": "string"
+    },
+    {
+      "const": "revoke",
+      "description": "A device was revoked.",
+      "type": "string"
+    },
+    {
+      "const": "periodic",
+      "description": "The periodic rekey.",
+      "type": "string"
+    },
+    {
+      "const": "refresh",
+      "description": "A leaf-lifetime refresh.",
+      "type": "string"
+    },
+    {
+      "const": "rebuild_orphan",
+      "description": "Leaves a rebuild could not match.",
+      "type": "string"
+    },
+    {
+      "const": "stuck_sender",
+      "description": "A sender stuck on a stale slot was removed.",
+      "type": "string"
+    }
+  ],
+  "title": "TransitionReason"
+}

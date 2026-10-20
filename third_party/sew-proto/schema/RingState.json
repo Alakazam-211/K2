@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A ring's state as every DM member sees it (§14.1, §15).",
+  "oneOf": [
+    {
+      "const": "ringing",
+      "description": "Ringing.",
+      "type": "string"
+    },
+    {
+      "const": "busy",
+      "description": "Ringing, but the callee is already in voice (a silent ring).",
+      "type": "string"
+    },
+    {
+      "const": "accepted",
+      "description": "The callee joined.",
+      "type": "string"
+    },
+    {
+      "const": "declined",
+      "description": "The callee declined.",
+      "type": "string"
+    },
+    {
+      "const": "missed",
+      "description": "Not answered in time, or the call ended first.",
+      "type": "string"
+    }
+  ],
+  "title": "RingState"
+}

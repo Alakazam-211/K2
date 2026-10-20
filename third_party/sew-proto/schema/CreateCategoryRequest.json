@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of the create-category route.",
+  "properties": {
+    "name": {
+      "description": "The name, 1–100 characters.",
+      "type": "string"
+    },
+    "position": {
+      "description": "Sort position; default last.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "name"
+  ],
+  "title": "CreateCategoryRequest",
+  "type": "object"
+}

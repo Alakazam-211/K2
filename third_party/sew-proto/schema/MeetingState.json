@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A meeting's state (§6.3).",
+  "oneOf": [
+    {
+      "const": "scheduled",
+      "description": "Not started; members may join from `starts_at` − 15 min.",
+      "type": "string"
+    },
+    {
+      "const": "live",
+      "description": "Someone joined (or it was instant).",
+      "type": "string"
+    },
+    {
+      "const": "ended",
+      "description": "Over; voice joins answer `410 meeting_ended`.",
+      "type": "string"
+    },
+    {
+      "const": "cancelled",
+      "description": "Cancelled before it started.",
+      "type": "string"
+    }
+  ],
+  "title": "MeetingState"
+}

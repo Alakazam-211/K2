@@ -1,0 +1,95 @@
+{
+  "$defs": {
+    "TurnPiece": {
+      "description": "One piece of a transcript turn (numbers only; text lives in the message body, §10).",
+      "properties": {
+        "end_ms": {
+          "description": "End, ms from the recording start.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "len": {
+          "description": "Byte length of the piece's text in the body.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "offset": {
+          "description": "Byte offset of the piece's text in the body.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "start_ms": {
+          "description": "Start, ms from the recording start.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "start_ms",
+        "end_ms",
+        "offset",
+        "len"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "`Message.transcript` on a transcript turn (§15.2).",
+  "properties": {
+    "end_ms": {
+      "description": "End, ms from the recording start.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "lang": {
+      "description": "The turn's language.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "pieces": {
+      "description": "The pieces.",
+      "items": {
+        "$ref": "#/$defs/TurnPiece"
+      },
+      "type": "array"
+    },
+    "recording_id": {
+      "description": "The recording.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "speaker_id": {
+      "description": "The speaker (also the message author).",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "spoken_at": {
+      "description": "When it was said (`created_at` is posting time).",
+      "format": "date-time",
+      "type": "string"
+    },
+    "start_ms": {
+      "description": "Start, ms from the recording start.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "recording_id",
+    "speaker_id",
+    "start_ms",
+    "end_ms",
+    "spoken_at",
+    "pieces"
+  ],
+  "title": "TranscriptTurn",
+  "type": "object"
+}

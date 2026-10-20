@@ -1,0 +1,1629 @@
+{
+  "$defs": {
+    "BudgetSource": {
+      "description": "Where the media budget's egress comes from (S34 v2 §12.1).",
+      "oneOf": [
+        {
+          "const": "engine",
+          "description": "The engine's `stats` events.",
+          "type": "string"
+        },
+        {
+          "const": "estimate",
+          "description": "Sew's forwarding estimate (stats missing or stale).",
+          "type": "string"
+        }
+      ]
+    },
+    "MailTls": {
+      "description": "How the SMTP connection is secured (`[mail.smtp] tls`).",
+      "oneOf": [
+        {
+          "const": "none",
+          "description": "Plain SMTP; loopback relays only (contracts rev 4).",
+          "type": "string"
+        },
+        {
+          "const": "starttls",
+          "description": "STARTTLS, required.",
+          "type": "string"
+        },
+        {
+          "const": "tls",
+          "description": "Implicit TLS.",
+          "type": "string"
+        }
+      ]
+    },
+    "MediaTier": {
+      "description": "The media budget tier (S34 v2 §12.2).",
+      "oneOf": [
+        {
+          "const": "normal",
+          "description": "Everything allowed; full hints.",
+          "type": "string"
+        },
+        {
+          "const": "constrained",
+          "description": "New camera leases refused; lower hints.",
+          "type": "string"
+        },
+        {
+          "const": "critical",
+          "description": "New camera and screen leases refused; lowest hints.",
+          "type": "string"
+        }
+      ]
+    },
+    "ProviderKind": {
+      "description": "The install's identity provider (C6).",
+      "oneOf": [
+        {
+          "const": "k2",
+          "description": "K2 grants create accounts; K2 signs the pass.",
+          "type": "string"
+        },
+        {
+          "const": "standalone",
+          "description": "Local users and passwords.",
+          "type": "string"
+        },
+        {
+          "const": "link",
+          "description": "A meeting-link session (Meet MC2a, CC1: session provider 3, made by redeeming a\nmeeting link). Never an install's provider.",
+          "type": "string"
+        }
+      ]
+    },
+    "RunState": {
+      "description": "A preview's or run's state.",
+      "oneOf": [
+        {
+          "const": "running",
+          "description": "Working.",
+          "type": "string"
+        },
+        {
+          "const": "done",
+          "description": "Finished.",
+          "type": "string"
+        },
+        {
+          "const": "failed",
+          "description": "Gave up (a later run starts over).",
+          "type": "string"
+        }
+      ]
+    },
+    "SearchState": {
+      "description": "Search index state (S20 §12.3).",
+      "oneOf": [
+        {
+          "const": "ready",
+          "description": "Queries use the live index.",
+          "type": "string"
+        },
+        {
+          "const": "missing",
+          "description": "No usable index; a rebuild runs and searches answer `503 search_rebuilding`.",
+          "type": "string"
+        }
+      ]
+    },
+    "StatusAlarm": {
+      "description": "A status alarm (S9 §6.2, contracts revs 11 and 21). K2 shows each one verbatim.",
+      "oneOf": [
+        {
+          "const": "db_down",
+          "description": "`db.ok = false`.",
+          "type": "string"
+        },
+        {
+          "const": "jobs_dead",
+          "description": "`jobs.dead > 0`.",
+          "type": "string"
+        },
+        {
+          "const": "keys_provider_down",
+          "description": "`keys.provider_ok = false`.",
+          "type": "string"
+        },
+        {
+          "const": "keys_current_month_missing",
+          "description": "`keys.current_month_ready = false`.",
+          "type": "string"
+        },
+        {
+          "const": "keys_mirror_stale",
+          "description": "The keyring mirror is stale (or kind `none`).",
+          "type": "string"
+        },
+        {
+          "const": "keys_shred_pending",
+          "description": "A crypto-shred started but did not finish.",
+          "type": "string"
+        },
+        {
+          "const": "keys_resurrected",
+          "description": "Old key files for shredded key ids were found and refused.",
+          "type": "string"
+        },
+        {
+          "const": "keys_rewrap_stalled",
+          "description": "Keys wait for a re-wrap but no retiring KEK is loaded.",
+          "type": "string"
+        },
+        {
+          "const": "search_lagging",
+          "description": "Search indexing trails writes by more than 60 s (S20 §15).",
+          "type": "string"
+        },
+        {
+          "const": "search_unavailable",
+          "description": "The search index is missing and being rebuilt; searches answer 503 (S20 §15).",
+          "type": "string"
+        },
+        {
+          "const": "search_commit_failing",
+          "description": "Three search index commits in a row failed (S20 §15).",
+          "type": "string"
+        },
+        {
+          "const": "search_disk_low",
+          "description": "Free disk under the search index is below its size plus 1 GiB (S20 §13).",
+          "type": "string"
+        },
+        {
+          "const": "backup_stale",
+          "description": "The last good backup is older than 36 h (contracts rev 21; S6 sets it).",
+          "type": "string"
+        },
+        {
+          "const": "backup_failed",
+          "description": "The last backup failed (contracts rev 21; S6 sets it).",
+          "type": "string"
+        },
+        {
+          "const": "drill_failed",
+          "description": "The last restore drill failed (contracts rev 21; S6 sets it).",
+          "type": "string"
+        },
+        {
+          "const": "drill_stale",
+          "description": "The last good restore drill is older than 8 days (contracts rev 21; S6 sets it).",
+          "type": "string"
+        },
+        {
+          "const": "gifs_unconfigured",
+          "description": "GIF search is on but its provider key does not resolve or was refused (S16 §9.1).",
+          "type": "string"
+        },
+        {
+          "const": "retention_overdue",
+          "description": "A finite retention policy is set and no run finished `done` for 48 h (S22 §18).",
+          "type": "string"
+        },
+        {
+          "const": "retention_search_backlog",
+          "description": "Purged messages' search documents are still waiting after 24 h (S22 §10.5).",
+          "type": "string"
+        },
+        {
+          "const": "mail_failing",
+          "description": "Three or more mail sends in a row failed over at least 10 minutes (S21 §12.6).",
+          "type": "string"
+        },
+        {
+          "const": "digest_mail_unconfigured",
+          "description": "`digest.enabled` is on but `[mail.smtp]` is not configured (S21 §11.1).",
+          "type": "string"
+        },
+        {
+          "const": "export_stuck",
+          "description": "A running export wrote no progress for 10 minutes (S23 §16).",
+          "type": "string"
+        },
+        {
+          "const": "voice_media_down",
+          "description": "Voice is enabled and the media engine has been unreachable for more than 60 s\n(S33 v2 §22).",
+          "type": "string"
+        },
+        {
+          "const": "voice_drift",
+          "description": "The snapshot audit found voice state Sew did not expect (S33 v2 §14.3).",
+          "type": "string"
+        },
+        {
+          "const": "media_panic",
+          "description": "The media engine reported a panic in the last hour (S33 v2 §22, S37 §13.2).",
+          "type": "string"
+        },
+        {
+          "const": "e2ee_group_resets",
+          "description": "More than 3 call key group resets install-wide in the last hour, or a call in reset\nback-off (S50 §19.3).",
+          "type": "string"
+        },
+        {
+          "const": "e2ee_removal_overdue",
+          "description": "A key removal was not activated by its hard bound in the last hour (S50 §19.3).",
+          "type": "string"
+        },
+        {
+          "const": "e2ee_rebuild_failed",
+          "description": "A key group rebuild ended in a new group or a reset in the last hour (S50 §19.3).",
+          "type": "string"
+        },
+        {
+          "const": "e2ee_roster_mismatch",
+          "description": "A client reported a roster mismatch in the last hour (S50 §19.3).",
+          "type": "string"
+        },
+        {
+          "const": "e2ee_sender_stale",
+          "description": "A stale-slot resync or a `peer_undecryptable` quorum in the last hour (S50 §19.3).",
+          "type": "string"
+        },
+        {
+          "const": "e2ee_engine_anomaly",
+          "description": "A client's bridge reported a misbehaving engine in the last hour (S50 §19.3).",
+          "type": "string"
+        },
+        {
+          "const": "e2ee_keys_unavailable",
+          "description": "Voice is enabled and the call DS or CA key failed to load (S50 §19.3).",
+          "type": "string"
+        },
+        {
+          "const": "media_budget_critical",
+          "description": "The media budget tier has been `critical` for more than 5 min (S34 v2 §25.3);\nclears when the tier drops.",
+          "type": "string"
+        },
+        {
+          "const": "recorder_down",
+          "description": "The recorder failed health for 60 s (S35 v2 §22.3).",
+          "type": "string"
+        },
+        {
+          "const": "transcriber_down",
+          "description": "The transcriber failed health for 60 s (S35 v2 §22.3).",
+          "type": "string"
+        },
+        {
+          "const": "transcribe_backlog",
+          "description": "The oldest untranscribed segment is older than 30 min (S35 v2 §13.4).",
+          "type": "string"
+        },
+        {
+          "const": "recording_storage_full",
+          "description": "A recording stopped on `storage_full` in the last 24 h (S35 v2 §22.3).",
+          "type": "string"
+        },
+        {
+          "const": "recording_auto_failed",
+          "description": "Three auto-starts failed in 10 min for one channel (S35 v2 §8.3).",
+          "type": "string"
+        },
+        {
+          "const": "recording_consent_violation",
+          "description": "A segment of an ungranted identity reached `sew` in the last 24 h (S35 v2 §9.3).",
+          "type": "string"
+        }
+      ]
+    },
+    "StatusBackup": {
+      "description": "Backup state in `status` (contracts rev 21, S6 G8). S6 fills it; absent until then.",
+      "properties": {
+        "age_ms": {
+          "description": "Age of the last good backup.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "last_error": {
+          "description": "Why the last run failed, if it did (cleared by the next good one).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_error_at": {
+          "description": "SW15: when the last failed run failed (additive).",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_id": {
+          "description": "The last good backup's bundle id.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_kind": {
+          "description": "SW15: the last good backup's kind (`scheduled`, `manual`, …; additive).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_ok_at": {
+          "description": "The last good backup.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "StatusDb": {
+      "description": "Database status.",
+      "properties": {
+        "lag_ms": {
+          "description": "Replica lag; absent in v1 (single node).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "ok": {
+          "description": "Whether the database answers (`SELECT 1` within 1 s).",
+          "type": "boolean"
+        },
+        "ping_ms": {
+          "description": "Round trip of the `SELECT 1` probe; absent when it failed (S9 G14, additive).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "ok"
+      ],
+      "type": "object"
+    },
+    "StatusDigest": {
+      "description": "The email digest in `status` (S21 §12.6).",
+      "properties": {
+        "enabled": {
+          "description": "Org policy `digest.enabled`.",
+          "type": "boolean"
+        },
+        "pending_jobs": {
+          "description": "Queued `email_digest` jobs.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "enabled",
+        "pending_jobs"
+      ],
+      "type": "object"
+    },
+    "StatusDrill": {
+      "description": "Restore-drill state in `status` (contracts rev 21, S6 G8). S6 fills it; absent until then.",
+      "properties": {
+        "age_ms": {
+          "description": "SW15: age of the last good drill (additive).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "last_error": {
+          "description": "Why the last drill failed, if it did.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_ok": {
+          "description": "Whether the last drill passed.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "last_ok_at": {
+          "description": "The last good drill.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "StatusExports": {
+      "description": "`status.exports` on `GET /mgmt/v1/status` (prd-sew-23 §16).",
+      "properties": {
+        "last_done_at": {
+          "description": "The last export that finished `done`.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_failed_at": {
+          "description": "The last export that failed.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "on_disk_bytes": {
+          "description": "Bytes of archives on disk.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "queued": {
+          "description": "Queued exports.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "running": {
+          "description": "The running export.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "queued",
+        "on_disk_bytes"
+      ],
+      "type": "object"
+    },
+    "StatusFiles": {
+      "description": "File state in `status` (S15 G21).",
+      "properties": {
+        "ffmpeg_available": {
+          "description": "Whether `ffmpeg` answered `-version` at boot (video posters need it).",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "ffmpeg_available"
+      ],
+      "type": "object"
+    },
+    "StatusIdentity": {
+      "description": "Identity provider state in `status` (contracts rev 21, S29 G5).",
+      "properties": {
+        "jwks_ok": {
+          "description": "Whether the JWKS cache holds keys (K2 only).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "jwks_url": {
+          "description": "`identity.k2.jwks_url` (K2 only).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider": {
+          "$ref": "#/$defs/ProviderKind",
+          "description": "The provider."
+        }
+      },
+      "required": [
+        "provider"
+      ],
+      "type": "object"
+    },
+    "StatusJobs": {
+      "description": "Job queue status.",
+      "properties": {
+        "dead": {
+          "description": "Jobs that exhausted their attempts.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "oldest_due_age_ms": {
+          "description": "`now − min(run_at)` over due, unleased jobs; absent if none (S9, additive).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "queued": {
+          "description": "Jobs waiting (not under a live lease).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "running": {
+          "default": 0,
+          "description": "Jobs under a live lease (S9, additive).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "queued",
+        "dead"
+      ],
+      "type": "object"
+    },
+    "StatusKeys": {
+      "description": "Key provider and keyring status.",
+      "properties": {
+        "current_month_ready": {
+          "description": "Whether this month's keys exist.",
+          "type": "boolean"
+        },
+        "kek_id": {
+          "description": "Current KEK id, 16 hex (rev 3 G8).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lazy_creates_this_month": {
+          "default": 0,
+          "description": "Keys created lazily at write time this month (rev 3 G8).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mirror": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StatusKeysMirror"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The keyring mirror block (rev 3 G8); absent from servers that predate it."
+        },
+        "mirror_age_ms": {
+          "description": "Age of the last good mirror write; absent if never ok.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "mirror_ok": {
+          "description": "Whether the off-box keyring mirror is current (gap G21).",
+          "type": "boolean"
+        },
+        "next_month_prepared": {
+          "default": false,
+          "description": "Whether next month's install key exists (rev 3 G8).",
+          "type": "boolean"
+        },
+        "provider": {
+          "description": "The key provider kind: `systemd-credential`, `file` (contracts rev 3 G8, additive).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider_ok": {
+          "description": "Whether the master key provider works.",
+          "type": "boolean"
+        },
+        "resurrected_keys": {
+          "default": 0,
+          "description": "Old key files for shredded kids, refused at open (rev 3 G8).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "retiring_kek_ids": {
+          "description": "Retiring KEK ids, 16 hex each (rev 3 G8).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "rewrap_pending": {
+          "default": 0,
+          "description": "Keyring entries still wrapped under a retiring KEK (rev 3 G8).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "shred_pending": {
+          "default": 0,
+          "description": "Shreds started but not finished (rev 3 G8).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "provider_ok",
+        "current_month_ready",
+        "mirror_ok"
+      ],
+      "type": "object"
+    },
+    "StatusKeysMirror": {
+      "description": "`status.keys.mirror` (contracts rev 3 G8, rev 42).",
+      "properties": {
+        "kind": {
+          "description": "Mirror kind: `dir`, `none` (`k2` reserved).",
+          "type": "string"
+        },
+        "last_ok_at": {
+          "description": "Last successful mirror operation.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "oldest_pending_age_s": {
+          "description": "Age of the oldest pending name, seconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pending": {
+          "description": "Names waiting to be pushed.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "stale": {
+          "description": "Alarm: a pending write is older than the stale threshold, or kind `none`.",
+          "type": "boolean"
+        },
+        "unknown_keys": {
+          "description": "Mirror entries that are neither local nor on the ledger.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "stale",
+        "pending",
+        "unknown_keys"
+      ],
+      "type": "object"
+    },
+    "StatusMail": {
+      "description": "Outgoing mail in `status` (S21 §12.6).",
+      "properties": {
+        "configured": {
+          "description": "`[mail.smtp]` is set.",
+          "type": "boolean"
+        },
+        "failed_24h": {
+          "description": "Sends that failed in the last 24 h.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "last_error": {
+          "description": "The last failure (at most 200 characters, never an address).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_error_at": {
+          "description": "When the last failure happened.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_ok_at": {
+          "description": "The last accepted send.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sent_24h": {
+          "description": "Sends accepted in the last 24 h.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tls": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MailTls"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The connection security (absent when not configured)."
+        }
+      },
+      "required": [
+        "configured",
+        "sent_24h",
+        "failed_24h"
+      ],
+      "type": "object"
+    },
+    "StatusRecording": {
+      "description": "`status.recording` (§22.3).",
+      "properties": {
+        "active": {
+          "description": "Active recordings.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "audio_bytes": {
+          "description": "Stored audio bytes.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "backend": {
+          "description": "Its backend.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "backlog_audio_s": {
+          "description": "Queued speech awaiting transcription.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "enabled": {
+          "description": "`[recording] enabled`.",
+          "type": "boolean"
+        },
+        "held_audio_bytes": {
+          "description": "Held audio bytes.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "model": {
+          "description": "The model the transcriber reports.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "oldest_pending_s": {
+          "description": "Age of the oldest stored, untranscribed segment.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "recorder_ok": {
+          "description": "The recorder answers health.",
+          "type": "boolean"
+        },
+        "rejoins_1h": {
+          "description": "Rejoins in the last hour.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rtf_1h": {
+          "description": "Realtime factor over the last hour.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "tracks": {
+          "description": "Allowlisted tracks install-wide.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "transcriber_ok": {
+          "description": "The transcriber answers health.",
+          "type": "boolean"
+        },
+        "workers": {
+          "description": "Its workers.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "enabled",
+        "recorder_ok",
+        "transcriber_ok",
+        "workers",
+        "active",
+        "tracks",
+        "rejoins_1h",
+        "backlog_audio_s",
+        "oldest_pending_s",
+        "audio_bytes",
+        "held_audio_bytes"
+      ],
+      "type": "object"
+    },
+    "StatusRetention": {
+      "description": "`status.retention` on `GET /mgmt/v1/status` (S22 §18).",
+      "properties": {
+        "active_holds": {
+          "description": "Unreleased holds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "last_ok_at": {
+          "description": "When the last run finished `done`.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_run_at": {
+          "description": "When the last run finished.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_run_state": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunState"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How the last run ended."
+        },
+        "overdue": {
+          "description": "A finite policy is set and no run finished `done` for 48 h.",
+          "type": "boolean"
+        },
+        "pending_policies": {
+          "description": "Pending policies.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "search_pending": {
+          "description": "Purged messages whose search documents are not deleted yet.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "shred_candidates": {
+          "description": "Scope-months waiting for a shred check.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "overdue",
+        "pending_policies",
+        "active_holds",
+        "search_pending",
+        "shred_candidates"
+      ],
+      "type": "object"
+    },
+    "StatusSearch": {
+      "description": "Search index status (S9; S20 §15 adds every field after `lag_ms`).",
+      "properties": {
+        "docs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StatusSearchDocs"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Live documents in the index."
+        },
+        "generation": {
+          "description": "The live index generation (`gen-<n>`).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "index_bytes": {
+          "description": "Bytes of the live index on disk.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "lag_ms": {
+          "description": "How far indexing trails writes: `now − min(created_at)` over pending or running\n`search_index` / `search_delete` jobs; 0 when none.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "last_commit_at": {
+          "description": "When the indexer last committed.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rebuild": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StatusSearchRebuild"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Present only while a rebuild runs."
+        },
+        "state": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SearchState"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`ready` or `missing` (rebuilding; searches answer 503)."
+        }
+      },
+      "type": "object"
+    },
+    "StatusSearchDocs": {
+      "description": "Live search documents by type.",
+      "properties": {
+        "files": {
+          "description": "File-name documents.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "messages": {
+          "description": "Message documents.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "messages",
+        "files"
+      ],
+      "type": "object"
+    },
+    "StatusSearchRebuild": {
+      "description": "A running search rebuild.",
+      "properties": {
+        "docs": {
+          "description": "Documents in the building index so far.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "generation": {
+          "description": "The generation being built.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "progress_pct": {
+          "description": "0–99 until the swap.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reason": {
+          "description": "Why: `marker`, `missing`, `corrupt`, `meta_mismatch` or `admin`.",
+          "type": "string"
+        },
+        "started_at": {
+          "description": "When it started.",
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason",
+        "generation",
+        "progress_pct",
+        "docs",
+        "started_at"
+      ],
+      "type": "object"
+    },
+    "StatusVoiceE2ee": {
+      "description": "`status.voice.e2ee` (S50 §19.2).",
+      "properties": {
+        "ca_kid": {
+          "description": "The CA key id; absent when the key failed to load.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "calls": {
+          "description": "Live key groups.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "crl_size": {
+          "description": "Serials in the in-memory CRL.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "devices": {
+          "description": "Unrevoked enrolled devices.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "ds_kid": {
+          "description": "The DS key id; absent when the key failed to load.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lagging": {
+          "description": "Lagging leaves.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "leaves": {
+          "description": "Leaves across them.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rebuilding": {
+          "description": "Calls rebuilding after a restart.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "removal_overdue_1h": {
+          "description": "Removals past their hard bound in the last hour.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "resets_1h": {
+          "description": "Group resets in the last hour.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "roster_reports_1h": {
+          "description": "Roster-kind K10 reports in the last hour.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "calls",
+        "leaves",
+        "lagging",
+        "rebuilding",
+        "resets_1h",
+        "removal_overdue_1h",
+        "roster_reports_1h",
+        "devices",
+        "crl_size"
+      ],
+      "type": "object"
+    },
+    "VoiceEngineState": {
+      "description": "The engine as `status.voice.engine` sees it (`details.engine` of a voice `503`).",
+      "oneOf": [
+        {
+          "const": "up",
+          "description": "Healthy.",
+          "type": "string"
+        },
+        {
+          "const": "down",
+          "description": "Unreachable for `health_failures_down` checks in a row.",
+          "type": "string"
+        },
+        {
+          "const": "draining",
+          "description": "Draining (S49).",
+          "type": "string"
+        },
+        {
+          "const": "syncing",
+          "description": "Sew is resyncing from a snapshot.",
+          "type": "string"
+        },
+        {
+          "const": "error",
+          "description": "The engine answered with an error, or the call keys failed to load.",
+          "type": "string"
+        }
+      ]
+    },
+    "VoiceEngineStatus": {
+      "description": "`status.voice.engine` (S33 v2 §22; S37 §13.2 health).",
+      "properties": {
+        "down_since": {
+          "description": "When the engine went down (state `down`).",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "drift_fixes_1h": {
+          "description": "Drift the snapshot audits fixed in the last hour.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "last_event_at": {
+          "description": "The last event Sew applied.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_snapshot_at": {
+          "description": "The last snapshot audit.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "panics_1h": {
+          "description": "Engine panics in the last hour.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "participants": {
+          "description": "Participants the engine reports.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rooms": {
+          "description": "Rooms the engine reports.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "state": {
+          "$ref": "#/$defs/VoiceEngineState",
+          "description": "The engine's state."
+        },
+        "version": {
+          "description": "The engine's version, from its last health answer.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "state",
+        "rooms",
+        "participants",
+        "panics_1h",
+        "drift_fixes_1h"
+      ],
+      "type": "object"
+    },
+    "VoiceMediaStatus": {
+      "description": "S34 v2's part of `status.voice` (§25.3).",
+      "properties": {
+        "budget_source": {
+          "$ref": "#/$defs/BudgetSource",
+          "description": "Where the budget's egress comes from."
+        },
+        "calls_active": {
+          "description": "Active DM calls.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "egress_budget_mbps": {
+          "description": "`[voice.video] egress_budget_mbps`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "egress_mbps": {
+          "description": "The egress the tiers use (the engine's measured egress, or the estimate), Mbit/s.",
+          "format": "double",
+          "type": "number"
+        },
+        "engine_cpu_pct": {
+          "description": "The engine cgroup's CPU against its allowance; `null` when unknown.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "forward_estimate_mbps": {
+          "description": "The forwarding estimate, Mbit/s.",
+          "format": "double",
+          "type": "number"
+        },
+        "media_tier": {
+          "$ref": "#/$defs/MediaTier",
+          "description": "The media budget tier."
+        },
+        "screen_publishers": {
+          "description": "Screen-share leases install-wide.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "video_enabled": {
+          "description": "`[voice.video] enabled` (and voice enabled).",
+          "type": "boolean"
+        },
+        "video_publishers": {
+          "description": "Camera leases install-wide.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "calls_active",
+        "video_publishers",
+        "screen_publishers",
+        "media_tier",
+        "budget_source",
+        "egress_mbps",
+        "egress_budget_mbps",
+        "forward_estimate_mbps",
+        "video_enabled"
+      ],
+      "type": "object"
+    },
+    "VoiceStatus": {
+      "description": "`status.voice` (S33 v2 §22, v1 §21.3 without the LiveKit fields). Absent when voice is off\nand was never configured.",
+      "properties": {
+        "calls": {
+          "description": "Live calls (voice channels with occupants).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "e2ee": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StatusVoiceE2ee"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The call key service (S50 §19.2)."
+        },
+        "enabled": {
+          "description": "`[voice] enabled`.",
+          "type": "boolean"
+        },
+        "engine": {
+          "$ref": "#/$defs/VoiceEngineStatus",
+          "description": "The engine."
+        },
+        "media": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VoiceMediaStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Video, DM calls and the media budget (S34 v2 §25.3), as `status.voice.media` (S1 C15\nforbids `flatten` on the wire types, so S34's fields nest like S50's `e2ee`). Absent\nwhile voice is off."
+        },
+        "participants": {
+          "description": "Voice entries.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "public_url": {
+          "description": "`[voice] public_url`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reconnecting": {
+          "description": "Entries inside a reconnect window.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "secure_participants": {
+          "description": "Entries whose device is in the activated key epoch.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "enabled",
+        "calls",
+        "participants",
+        "secure_participants",
+        "reconnecting",
+        "engine"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Response of `GET /mgmt/v1/status`.",
+  "properties": {
+    "alarms": {
+      "default": [],
+      "description": "Every active alarm, sorted (S9, additive). K2 shows them verbatim.",
+      "items": {
+        "$ref": "#/$defs/StatusAlarm"
+      },
+      "type": "array"
+    },
+    "backup": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StatusBackup"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Backups (contracts rev 21; S6 fills it)."
+    },
+    "client_listen": {
+      "description": "The client listener as `http://<bound address>` (contracts rev 21, additive).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "db": {
+      "$ref": "#/$defs/StatusDb",
+      "description": "Database status."
+    },
+    "digest": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StatusDigest"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The email digest (S21 §12.6, additive)."
+    },
+    "drill": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StatusDrill"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Restore drills (contracts rev 21; S6 fills it)."
+    },
+    "exports": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StatusExports"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Exports running, queued and on disk (S23 §16, additive)."
+    },
+    "files": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StatusFiles"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Files (S15 G21, additive)."
+    },
+    "identity": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StatusIdentity"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The identity provider's state (contracts rev 21, additive)."
+    },
+    "install_id": {
+      "description": "The install id (gap G20).",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "jobs": {
+      "$ref": "#/$defs/StatusJobs",
+      "description": "Job queue status."
+    },
+    "keys": {
+      "$ref": "#/$defs/StatusKeys",
+      "description": "Key status."
+    },
+    "mail": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StatusMail"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Outgoing mail (S21 §12.6, additive)."
+    },
+    "provider": {
+      "$ref": "#/$defs/ProviderKind",
+      "description": "The identity provider."
+    },
+    "recording": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StatusRecording"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Recording and transcription (S35 v2 §22.3, additive). Absent while recording is off."
+    },
+    "retention": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StatusRetention"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Retention runs, pending policies, holds and shred candidates (S22 §18, additive)."
+    },
+    "schema_version": {
+      "description": "The applied schema version.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "search": {
+      "$ref": "#/$defs/StatusSearch",
+      "description": "Search status."
+    },
+    "sessions": {
+      "description": "Live login sessions.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "sockets": {
+      "description": "Open gateway sockets.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "started_at": {
+      "description": "When this process started (S9, additive).",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "uptime_ms": {
+      "default": 0,
+      "description": "Time since this process started (S9, additive).",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "version": {
+      "description": "The Sew version.",
+      "type": "string"
+    },
+    "voice": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/VoiceStatus"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Voice, the media engine and call keys (S33 v2 §22, S50 §19.2, additive). Absent while\nvoice was never configured."
+    }
+  },
+  "required": [
+    "version",
+    "schema_version",
+    "install_id",
+    "provider",
+    "db",
+    "jobs",
+    "search",
+    "keys",
+    "sessions",
+    "sockets"
+  ],
+  "title": "Status",
+  "type": "object"
+}

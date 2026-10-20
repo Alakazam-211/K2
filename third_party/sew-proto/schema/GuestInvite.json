@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "`guests.invite`: who can invite guests.",
+  "oneOf": [
+    {
+      "const": "admins",
+      "description": "Install owners and admins only.",
+      "type": "string"
+    },
+    {
+      "const": "perm",
+      "description": "Anyone holding INVITE_GUESTS (bit 44).",
+      "type": "string"
+    }
+  ],
+  "title": "GuestInvite"
+}

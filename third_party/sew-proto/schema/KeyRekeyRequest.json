@@ -1,0 +1,34 @@
+{
+  "$defs": {
+    "RekeyReason": {
+      "description": "Why a client asks for an immediate rekey (K9).",
+      "oneOf": [
+        {
+          "const": "consent_withdrawn",
+          "description": "The member withdrew recording consent (S50 §14.4).",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "K9 body.",
+  "properties": {
+    "join_id": {
+      "description": "The caller's join id.",
+      "pattern": "^[0-9a-f]{32}$",
+      "type": "string"
+    },
+    "reason": {
+      "$ref": "#/$defs/RekeyReason",
+      "description": "Why."
+    }
+  },
+  "required": [
+    "join_id",
+    "reason"
+  ],
+  "title": "KeyRekeyRequest",
+  "type": "object"
+}

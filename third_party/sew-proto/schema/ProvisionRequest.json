@@ -1,0 +1,154 @@
+{
+  "$defs": {
+    "AgentKind": {
+      "description": "What kind of agent a member is.",
+      "oneOf": [
+        {
+          "const": "coworker",
+          "description": "A team member in its own right.",
+          "type": "string"
+        },
+        {
+          "const": "assistant",
+          "description": "Pinned to one person; acts within that person's access (C9).",
+          "type": "string"
+        }
+      ]
+    },
+    "MemberKind": {
+      "description": "Whether a member is a person or an agent.",
+      "oneOf": [
+        {
+          "const": "person",
+          "description": "A human.",
+          "type": "string"
+        },
+        {
+          "const": "agent",
+          "description": "A K2 agent.",
+          "type": "string"
+        }
+      ]
+    },
+    "MgmtCustomFieldInput": {
+      "additionalProperties": false,
+      "description": "A provider custom field value in provision/update (`value: null` clears).",
+      "properties": {
+        "key": {
+          "description": "The field key.",
+          "type": "string"
+        },
+        "value": {
+          "description": "The value; `null` clears.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "key"
+      ],
+      "type": "object"
+    },
+    "ProfileInput": {
+      "additionalProperties": false,
+      "description": "A profile at provisioning.",
+      "properties": {
+        "custom_fields": {
+          "description": "Provider custom fields (S18): declarative, unlisted provider fields are cleared.",
+          "items": {
+            "$ref": "#/$defs/MgmtCustomFieldInput"
+          },
+          "type": "array"
+        },
+        "display_name": {
+          "description": "Display name, 1–100 characters.",
+          "type": "string"
+        },
+        "email": {
+          "description": "Email address.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pronouns": {
+          "description": "Pronouns, at most 40 characters.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "description": "Title, at most 100 characters.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "username": {
+          "description": "Handle.",
+          "pattern": "^[a-z0-9_-]{2,64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "display_name",
+        "username"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /mgmt/v1/principals/provision`. Idempotent by `external_id`.",
+  "properties": {
+    "agent_kind": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AgentKind"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Required iff `kind = agent`."
+    },
+    "assistant_of": {
+      "description": "The assistant's person; required iff `agent_kind = assistant`.",
+      "maxLength": 128,
+      "pattern": "^(k2:(principal|workspace|connect):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|k2:owner|local:[a-z0-9_-]{2,64}|link:[1-9][0-9]{0,18}:[A-Z2-7]{16})$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "external_id": {
+      "description": "Who the member is outside Sew.",
+      "maxLength": 128,
+      "pattern": "^(k2:(principal|workspace|connect):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|k2:owner|local:[a-z0-9_-]{2,64}|link:[1-9][0-9]{0,18}:[A-Z2-7]{16})$",
+      "type": "string"
+    },
+    "guest": {
+      "default": false,
+      "description": "Provision as a guest; only for persons.",
+      "type": "boolean"
+    },
+    "kind": {
+      "$ref": "#/$defs/MemberKind",
+      "description": "Person or agent."
+    },
+    "profile": {
+      "$ref": "#/$defs/ProfileInput",
+      "description": "The profile."
+    }
+  },
+  "required": [
+    "external_id",
+    "kind",
+    "profile"
+  ],
+  "title": "ProvisionRequest",
+  "type": "object"
+}

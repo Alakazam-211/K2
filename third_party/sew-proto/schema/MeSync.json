@@ -1,0 +1,177 @@
+{
+  "$defs": {
+    "ReadState": {
+      "description": "A member's read state in one channel (C8; prd-sew-14 §5).",
+      "properties": {
+        "channel_id": {
+          "description": "The channel.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "last_message_id": {
+          "description": "The channel's newest timeline message (omitted in READY, where the channel entry has\nit).",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_read_id": {
+          "description": "The read cursor: a comparator, possibly a synthetic id (mark unread writes\n`message_id − 1`). Absent = nothing read.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mention_count": {
+          "description": "Unread mentions (a muted channel counts direct mentions only).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "muted": {
+          "description": "The member muted the channel (S21); present only when true.",
+          "type": "boolean"
+        },
+        "seq": {
+          "default": 0,
+          "description": "The member change-log head this state is current as of (S14 gap G9).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unread": {
+          "description": "Whether a message by someone else is past the cursor.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "channel_id",
+        "mention_count",
+        "unread"
+      ],
+      "type": "object"
+    },
+    "SyncChannel": {
+      "description": "One channel of `GET /api/v1/me/sync`.",
+      "properties": {
+        "floor_seq": {
+          "description": "Its change-log floor.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "head_seq": {
+          "description": "Its change-log head.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "id": {
+          "description": "The channel.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "last_message_id": {
+          "description": "Its newest timeline message.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "head_seq",
+        "floor_seq"
+      ],
+      "type": "object"
+    },
+    "ThreadsInbox": {
+      "description": "The threads inbox summary (READY, `GET /api/v1/me/threads/summary`, S14 events).",
+      "properties": {
+        "mention_count": {
+          "default": 0,
+          "description": "Unread thread mentions over every thread in the sync set, followed or not (S14).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "seq": {
+          "description": "The member change-log head these totals are current as of (S14).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "unread_count": {
+          "description": "Followed threads with unread replies.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "unread_count"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Response of `GET /api/v1/me/sync`: READY's sync section over HTTP, read in one snapshot\n(agents and clients without a socket; S14 gap G16).",
+  "properties": {
+    "channels": {
+      "description": "Every channel of the caller's sync set, ascending id.",
+      "items": {
+        "$ref": "#/$defs/SyncChannel"
+      },
+      "type": "array"
+    },
+    "install_id": {
+      "description": "The install.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "member_id": {
+      "description": "The caller.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "member_seq": {
+      "description": "The caller's member change-log head.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "read_states": {
+      "description": "Read states of those channels.",
+      "items": {
+        "$ref": "#/$defs/ReadState"
+      },
+      "type": "array"
+    },
+    "sync_epoch": {
+      "description": "The install's sync epoch (opaque; a change means \"drop everything\").",
+      "type": "string"
+    },
+    "threads_inbox": {
+      "$ref": "#/$defs/ThreadsInbox",
+      "description": "The threads inbox summary."
+    }
+  },
+  "required": [
+    "install_id",
+    "sync_epoch",
+    "member_id",
+    "member_seq",
+    "channels",
+    "read_states",
+    "threads_inbox"
+  ],
+  "title": "MeSync",
+  "type": "object"
+}

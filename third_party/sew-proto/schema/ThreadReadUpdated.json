@@ -1,0 +1,128 @@
+{
+  "$defs": {
+    "ThreadReadState": {
+      "description": "A member's read state in one thread (prd-sew-14 §5).",
+      "properties": {
+        "channel_id": {
+          "description": "The root's channel (always set by S14).",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "following": {
+          "default": false,
+          "description": "Whether the member follows the thread.",
+          "type": "boolean"
+        },
+        "last_read_id": {
+          "description": "The thread cursor; the root id when no reply was read (always set by S14).",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_reply_id": {
+          "description": "The newest live reply.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mention_count": {
+          "default": 0,
+          "description": "Unread mentions in the thread.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "root_id": {
+          "description": "The thread root.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "seq": {
+          "default": 0,
+          "description": "The member change-log head this state is current as of.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unread": {
+          "default": false,
+          "description": "Whether a reply is past the cursor.",
+          "type": "boolean"
+        },
+        "unread_replies": {
+          "default": 0,
+          "description": "Live replies past the cursor (exact, no cap).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "root_id"
+      ],
+      "type": "object"
+    },
+    "ThreadsInbox": {
+      "description": "The threads inbox summary (READY, `GET /api/v1/me/threads/summary`, S14 events).",
+      "properties": {
+        "mention_count": {
+          "default": 0,
+          "description": "Unread thread mentions over every thread in the sync set, followed or not (S14).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "seq": {
+          "description": "The member change-log head these totals are current as of (S14).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "unread_count": {
+          "description": "Followed threads with unread replies.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "unread_count"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Response of the thread ack and mark-unread routes, and the `thread_read_updated` event.",
+  "properties": {
+    "inbox": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ThreadsInbox"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Exact inbox totals; absent means \"per-thread change only\"."
+    },
+    "thread": {
+      "$ref": "#/$defs/ThreadReadState",
+      "description": "The thread's read state."
+    }
+  },
+  "required": [
+    "thread"
+  ],
+  "title": "ThreadReadUpdated",
+  "type": "object"
+}

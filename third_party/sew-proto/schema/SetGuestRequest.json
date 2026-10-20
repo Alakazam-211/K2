@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /api/v1/install/members/{id}/guest`.",
+  "properties": {
+    "guest": {
+      "description": "`true`: member → guest; `false`: guest → member.",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "guest"
+  ],
+  "title": "SetGuestRequest",
+  "type": "object"
+}

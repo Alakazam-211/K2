@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Response of the signed data route (`POST` and `GET <upload_url>`).",
+  "properties": {
+    "committed_bytes": {
+      "description": "Bytes stored so far; continue from here.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "complete": {
+      "description": "All bytes arrived and the upload is finalized.",
+      "type": "boolean"
+    },
+    "expires_at": {
+      "description": "When the unattached upload expires.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "size": {
+      "description": "The declared size.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "upload_id": {
+      "description": "The upload id.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "upload_id",
+    "committed_bytes",
+    "size",
+    "complete",
+    "expires_at"
+  ],
+  "title": "UploadStatus",
+  "type": "object"
+}

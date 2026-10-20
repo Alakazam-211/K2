@@ -1,0 +1,43 @@
+{
+  "$defs": {
+    "PresenceSetStatus": {
+      "description": "A presence status a client may set.",
+      "oneOf": [
+        {
+          "const": "online",
+          "description": "Online.",
+          "type": "string"
+        },
+        {
+          "const": "idle",
+          "description": "Idle.",
+          "type": "string"
+        },
+        {
+          "const": "dnd",
+          "description": "Do not disturb.",
+          "type": "string"
+        },
+        {
+          "const": "invisible",
+          "description": "Appear offline.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Op 3 PRESENCE_SET.",
+  "properties": {
+    "status": {
+      "$ref": "#/$defs/PresenceSetStatus",
+      "description": "The new status."
+    }
+  },
+  "required": [
+    "status"
+  ],
+  "title": "PresenceSetRequest",
+  "type": "object"
+}

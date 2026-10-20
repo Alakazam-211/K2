@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "K3 body: the create report, a re-bind after a re-identify, or a rebuild report.",
+  "properties": {
+    "active_epoch": {
+      "description": "The client's active epoch.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "bindings_hash": {
+      "description": "SHA-256 of the TLS binding table the client holds.",
+      "pattern": "^[A-Za-z0-9_-]*$",
+      "type": "string"
+    },
+    "epoch": {
+      "description": "The client's epoch.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "gateway_session": {
+      "description": "The caller's current gateway session.",
+      "type": "string"
+    },
+    "group_id": {
+      "description": "The group the client holds.",
+      "pattern": "^[A-Za-z0-9_-]*$",
+      "type": "string"
+    },
+    "group_info": {
+      "description": "TLS `MLSMessage(GroupInfo)`.",
+      "pattern": "^[A-Za-z0-9_-]*$",
+      "type": "string"
+    },
+    "join_id": {
+      "description": "The caller's join id.",
+      "pattern": "^[0-9a-f]{32}$",
+      "type": "string"
+    },
+    "leaf": {
+      "description": "The reporter's own leaf index.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "ratchet_tree": {
+      "description": "TLS `RatchetTree`, only when the DS asked (`send_tree`).",
+      "pattern": "^[A-Za-z0-9_-]*$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "slot_base": {
+      "description": "The client's slot base.",
+      "format": "uint8",
+      "maximum": 255,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "tree_hash": {
+      "description": "The client's tree hash.",
+      "pattern": "^[A-Za-z0-9_-]*$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "join_id",
+    "gateway_session",
+    "group_id",
+    "leaf",
+    "epoch",
+    "active_epoch",
+    "slot_base",
+    "tree_hash",
+    "bindings_hash",
+    "group_info"
+  ],
+  "title": "KeyStateRequest",
+  "type": "object"
+}

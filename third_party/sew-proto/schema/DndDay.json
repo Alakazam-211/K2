@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A weekday of a DND rule.",
+  "oneOf": [
+    {
+      "const": "mon",
+      "description": "Monday.",
+      "type": "string"
+    },
+    {
+      "const": "tue",
+      "description": "Tuesday.",
+      "type": "string"
+    },
+    {
+      "const": "wed",
+      "description": "Wednesday.",
+      "type": "string"
+    },
+    {
+      "const": "thu",
+      "description": "Thursday.",
+      "type": "string"
+    },
+    {
+      "const": "fri",
+      "description": "Friday.",
+      "type": "string"
+    },
+    {
+      "const": "sat",
+      "description": "Saturday.",
+      "type": "string"
+    },
+    {
+      "const": "sun",
+      "description": "Sunday.",
+      "type": "string"
+    }
+  ],
+  "title": "DndDay"
+}

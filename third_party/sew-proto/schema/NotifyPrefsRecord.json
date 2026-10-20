@@ -1,0 +1,166 @@
+{
+  "$defs": {
+    "NotifyChannelPrefRecord": {
+      "additionalProperties": false,
+      "description": "One explicit channel or DM pref (`notify_prefs.channel_prefs`).",
+      "properties": {
+        "channel_id": {
+          "description": "The channel.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "level": {
+          "description": "`all`, `mentions` or `none` (absent: inherit).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "muted": {
+          "description": "Muted.",
+          "type": "boolean"
+        },
+        "muted_until": {
+          "description": "When a timed mute ends.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "updated_at": {
+          "description": "Last change.",
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "channel_id",
+        "updated_at"
+      ],
+      "type": "object"
+    },
+    "NotifySettingsRecord": {
+      "additionalProperties": false,
+      "description": "A member's notification settings (`notify_prefs.settings`).",
+      "properties": {
+        "broad_mentions": {
+          "description": "`@here`/`@channel`/`@everyone` notify.",
+          "type": "boolean"
+        },
+        "default_level": {
+          "description": "`all`, `mentions` or `none` (absent: inherit the install default).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "digest_interval": {
+          "description": "`off`, `15m`, `1h` or `1d`.",
+          "type": "string"
+        },
+        "keywords": {
+          "description": "The normalized keyword list, decrypted (absent: none, or its key is shredded).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "mute_lets_mentions": {
+          "description": "Mentions still notify in a muted channel.",
+          "type": "boolean"
+        },
+        "rev": {
+          "description": "Settings revision (`if_rev`).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "thread_replies": {
+          "description": "Followed-thread replies notify.",
+          "type": "boolean"
+        },
+        "updated_at": {
+          "description": "Last change.",
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "thread_replies",
+        "broad_mentions",
+        "mute_lets_mentions",
+        "digest_interval",
+        "rev",
+        "updated_at"
+      ],
+      "type": "object"
+    },
+    "NotifySpacePrefRecord": {
+      "additionalProperties": false,
+      "description": "One explicit space level (`notify_prefs.space_prefs`).",
+      "properties": {
+        "level": {
+          "description": "`all`, `mentions` or `none`.",
+          "type": "string"
+        },
+        "space_id": {
+          "description": "The space.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "updated_at": {
+          "description": "Last change.",
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "space_id",
+        "level",
+        "updated_at"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`notify_prefs.ndjson` (S21): one record per member with notification settings or explicit\nchannel or space prefs. DND lives in `presence_settings.ndjson` (S18 owns it).",
+  "properties": {
+    "channel_prefs": {
+      "description": "Explicit channel and DM prefs, by channel id.",
+      "items": {
+        "$ref": "#/$defs/NotifyChannelPrefRecord"
+      },
+      "type": "array"
+    },
+    "member_id": {
+      "description": "The member.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "settings": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/NotifySettingsRecord"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The member's settings row (absent: every default)."
+    },
+    "space_prefs": {
+      "description": "Explicit space levels, by space id.",
+      "items": {
+        "$ref": "#/$defs/NotifySpacePrefRecord"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "member_id"
+  ],
+  "title": "NotifyPrefsRecord",
+  "type": "object"
+}

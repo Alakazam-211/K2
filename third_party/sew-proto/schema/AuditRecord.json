@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`audit.ndjson`: one audit row, or (`pending`) one outbox row not chained at the snapshot.",
+  "properties": {
+    "chain_seq": {
+      "description": "The chain position (absent for pending rows).",
+      "format": "uint64",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "event_json": {
+      "description": "The exact canonical event string that was hashed.",
+      "type": "string"
+    },
+    "hash": {
+      "description": "This row's hash, hex (absent for pending rows).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "pending": {
+      "description": "An outbox row.",
+      "type": "boolean"
+    },
+    "prev_hash": {
+      "description": "Previous hash, hex (absent for pending rows).",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "event_json"
+  ],
+  "title": "AuditRecord",
+  "type": "object"
+}

@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "What a host decided about a knock (or that nobody did).",
+  "oneOf": [
+    {
+      "const": "admitted",
+      "description": "Let in: join the meeting channel's voice.",
+      "type": "string"
+    },
+    {
+      "const": "denied",
+      "description": "Not let in.",
+      "type": "string"
+    },
+    {
+      "const": "expired",
+      "description": "Nobody decided in time, or the link changed: knock again.",
+      "type": "string"
+    }
+  ],
+  "title": "MeetingAdmissionOutcome"
+}

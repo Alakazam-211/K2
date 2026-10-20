@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Which meetings a list returns.",
+  "oneOf": [
+    {
+      "const": "upcoming",
+      "description": "`scheduled` and `live`, soonest first.",
+      "type": "string"
+    },
+    {
+      "const": "past",
+      "description": "`ended` and `cancelled`, latest first.",
+      "type": "string"
+    }
+  ],
+  "title": "MeetingListScope"
+}

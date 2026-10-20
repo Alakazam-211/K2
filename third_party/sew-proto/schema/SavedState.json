@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A saved item's state (`saved_items.state`).",
+  "oneOf": [
+    {
+      "const": "active",
+      "description": "In the \"save for later\" list.",
+      "type": "string"
+    },
+    {
+      "const": "done",
+      "description": "Completed.",
+      "type": "string"
+    },
+    {
+      "const": "archived",
+      "description": "Kept, out of the way.",
+      "type": "string"
+    }
+  ],
+  "title": "SavedState"
+}

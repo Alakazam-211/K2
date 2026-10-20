@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /api/v1/auth/renew`: a fresh pass for the same subject.",
+  "properties": {
+    "pass": {
+      "description": "The K2 chat pass.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "pass"
+  ],
+  "title": "RenewRequest",
+  "type": "object"
+}

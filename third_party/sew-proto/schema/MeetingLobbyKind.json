@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Who knocked.",
+  "oneOf": [
+    {
+      "const": "link_guest",
+      "description": "A link guest (redeemed the link without an account).",
+      "type": "string"
+    },
+    {
+      "const": "member",
+      "description": "A signed-in member of the install who knocked with the link.",
+      "type": "string"
+    }
+  ],
+  "title": "MeetingLobbyKind"
+}

@@ -1,0 +1,1080 @@
+{
+  "$defs": {
+    "CallKeysInit": {
+      "description": "What a key join answers (K1's `VoiceJoinResponse.e2ee`, K2, and the `init` dispatch;\nS50 §9.1).",
+      "properties": {
+        "activate_on_create": {
+          "description": "The creator activates epoch 0 at once (first joiner of a fresh call only).",
+          "type": "boolean"
+        },
+        "call_id": {
+          "description": "The call: its `r_…` room.",
+          "pattern": "^r_[a-z2-7]{26}$",
+          "type": "string"
+        },
+        "create": {
+          "description": "The caller creates the group now (S50 §12.1).",
+          "type": "boolean"
+        },
+        "epoch": {
+          "description": "The group's epoch.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "external_sender": {
+          "description": "TLS `ExternalSender` of the install's DS key.",
+          "pattern": "^[A-Za-z0-9_-]*$",
+          "type": "string"
+        },
+        "group_id": {
+          "description": "The current group (16 bytes).",
+          "pattern": "^[A-Za-z0-9_-]*$",
+          "type": "string"
+        },
+        "join_id": {
+          "description": "The caller's Sew-minted join id; every K3–K10 body carries it.",
+          "pattern": "^[0-9a-f]{32}$",
+          "type": "string"
+        },
+        "lk_identity": {
+          "description": "The caller's engine identity (`p_` + base32 of `join_id`; the token's `sub`).",
+          "pattern": "^p_[a-z2-7]{26}$",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/CallKeysParams",
+          "description": "Client timings."
+        },
+        "scope": {
+          "description": "The call's scope, `call:<channel_id>`; members refuse leaves with another.",
+          "pattern": "^call:[1-9][0-9]*$",
+          "type": "string"
+        },
+        "slot_base": {
+          "description": "`slot(e) = (slot_base + e) mod 64`.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "call_id",
+        "join_id",
+        "lk_identity",
+        "scope",
+        "group_id",
+        "epoch",
+        "create",
+        "activate_on_create",
+        "slot_base",
+        "external_sender",
+        "params"
+      ],
+      "type": "object"
+    },
+    "CallKeysParams": {
+      "description": "The client timings and constants the server relays (READY `call_keys.params` and every\n[`CallKeysInit`]; S50 §9.4, S51 §20.1). The single source for client timings.",
+      "properties": {
+        "ciphersuite": {
+          "description": "The ciphersuite every group uses (1).",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "ciphersuites": {
+          "description": "The ciphersuites the server accepts (`[1]` in v1).",
+          "items": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "client_activate_fallback_ms": {
+          "description": "A sender that acked but hears no `activate` switches after this long.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "exporter_label": {
+          "description": "The MLS exporter label of frame keys ([`tls::EXPORTER_LABEL`]).",
+          "type": "string"
+        },
+        "kdf": {
+          "description": "`\"hkdf\"`.",
+          "type": "string"
+        },
+        "key_package_max_lifetime_s": {
+          "description": "Longest KeyPackage lifetime the server accepts.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "key_ring_size": {
+          "description": "Always 64 (rev 75).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "release_info_label": {
+          "description": "The recorder release `info` label ([`tls::RELEASE_INFO_LABEL`]).",
+          "type": "string"
+        },
+        "retire_after_ms": {
+          "description": "Receivers retire an old slot this long after `activate`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "securing_indicator_after_ms": {
+          "description": "\"Securing…\" shows only after this long.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unknown_call_buffer_ms": {
+          "description": "Dispatches for a `call_id` the client does not know yet are buffered this long.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "ciphersuite",
+        "ciphersuites",
+        "key_ring_size",
+        "kdf",
+        "exporter_label",
+        "release_info_label",
+        "retire_after_ms",
+        "client_activate_fallback_ms",
+        "key_package_max_lifetime_s",
+        "unknown_call_buffer_ms",
+        "securing_indicator_after_ms"
+      ],
+      "type": "object"
+    },
+    "CallStatsBeacon": {
+      "description": "The call-stats beacon's terms for this join (F21, prd-meet-01 CC14).",
+      "properties": {
+        "interval_ms": {
+          "description": "Send one [`CallStatsSample`] per this many milliseconds while connected, and one when\nleaving (the server refuses more than [`CALL_STATS_PER_MINUTE`] a minute per session).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "interval_ms"
+      ],
+      "type": "object"
+    },
+    "Capture": {
+      "description": "Whether a granted participant's microphone is actually captured (§9.2).",
+      "oneOf": [
+        {
+          "const": "recorded",
+          "description": "The recorder captures this member.",
+          "type": "string"
+        },
+        {
+          "const": "not_recorded",
+          "description": "Not captured (see the reason).",
+          "type": "string"
+        }
+      ]
+    },
+    "Consent": {
+      "description": "What a participant said to the recording notice (§9.2). Stored in\n`recording_participants.consent`.",
+      "oneOf": [
+        {
+          "const": "pending",
+          "description": "In the room, has not answered.",
+          "type": "string"
+        },
+        {
+          "const": "granted",
+          "description": "Agreed.",
+          "type": "string"
+        },
+        {
+          "const": "declined",
+          "description": "Refused; stays in the room unrecorded (unless declining means not joining).",
+          "type": "string"
+        },
+        {
+          "const": "withdrawn",
+          "description": "Agreed earlier, then withdrew.",
+          "type": "string"
+        }
+      ]
+    },
+    "ConsentPrompt": {
+      "description": "The consent modal's data (rev 91, §9.10). Every slot is data; templates supply the\nsentences. `notice_version` is a stable hash of every other slot; the answer must echo it.",
+      "properties": {
+        "admin_download": {
+          "description": "Authorised compliance admins can download the audio (always `true` in v1).",
+          "type": "boolean"
+        },
+        "audio_keep_days": {
+          "description": "How long audio is kept (0 = until the transcript is final).",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "decline_mode": {
+          "$ref": "#/$defs/DeclineMode",
+          "description": "What declining does."
+        },
+        "feature_label": {
+          "description": "[`RECORDING_FEATURE_LABEL`].",
+          "type": "string"
+        },
+        "notice_version": {
+          "description": "A stable hash of every other slot value.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "recorded_now": {
+          "description": "Who is currently recorded (granted and captured), ascending.",
+          "items": {
+            "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "recorder_name": {
+          "description": "[`RECORDER_DISPLAY_NAME`].",
+          "type": "string"
+        },
+        "recording_id": {
+          "description": "What the answer refers to.",
+          "pattern": "^(auto|[1-9][0-9]{0,18})$",
+          "type": "string"
+        },
+        "room": {
+          "$ref": "#/$defs/PromptRoom",
+          "description": "Where."
+        },
+        "started_by": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PromptMember"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Who started it (`None` for an auto channel with no recording yet)."
+        },
+        "transcript": {
+          "$ref": "#/$defs/PromptTranscript",
+          "description": "What happens to the words."
+        }
+      },
+      "required": [
+        "recording_id",
+        "notice_version",
+        "recorder_name",
+        "feature_label",
+        "room",
+        "audio_keep_days",
+        "transcript",
+        "admin_download",
+        "decline_mode",
+        "recorded_now"
+      ],
+      "type": "object"
+    },
+    "DeclineMode": {
+      "description": "What declining does (§9.11, from `recording.require_consent_to_join`).",
+      "oneOf": [
+        {
+          "const": "join_unrecorded",
+          "description": "The decliner joins, unrecorded (the default).",
+          "type": "string"
+        },
+        {
+          "const": "not_join",
+          "description": "Declining means not joining.",
+          "type": "string"
+        }
+      ]
+    },
+    "LayerHint": {
+      "description": "One simulcast layer hint (S34 v2 §13).",
+      "properties": {
+        "height": {
+          "description": "Layer height in pixels.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_kbps": {
+          "description": "Layer bitrate cap.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rid": {
+          "description": "`q`, `h` or `f`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "rid",
+        "height",
+        "max_kbps"
+      ],
+      "type": "object"
+    },
+    "MediaPolicy": {
+      "description": "The client media policy (S34 v2 §13): in join answers, `voice_server_updated`, READY\n`install.media` and `media_policy_updated`.",
+      "properties": {
+        "adaptive_stream": {
+          "description": "Subscribe with adaptive stream.",
+          "type": "boolean"
+        },
+        "audio_codecs": {
+          "description": "Always `[\"opus\"]`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "backup_codec": {
+          "description": "Always `false`: no backup codecs.",
+          "type": "boolean"
+        },
+        "camera": {
+          "$ref": "#/$defs/TrackHint",
+          "description": "Camera hints."
+        },
+        "codecs": {
+          "description": "Video codecs in preference order (never AV1 or H.265; empty with video off).",
+          "items": {
+            "$ref": "#/$defs/VideoCodec"
+          },
+          "type": "array"
+        },
+        "dynacast": {
+          "description": "Publish with dynacast.",
+          "type": "boolean"
+        },
+        "e2ee": {
+          "description": "Always `required`.",
+          "type": "string"
+        },
+        "screen": {
+          "$ref": "#/$defs/TrackHint",
+          "description": "Screen-share hints."
+        },
+        "tier": {
+          "$ref": "#/$defs/MediaTier",
+          "description": "The budget tier the hints are for."
+        },
+        "video_enabled": {
+          "description": "`[voice.video] enabled`.",
+          "type": "boolean"
+        },
+        "vp9": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Vp9Hint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "VP9 rules, when VP9 is configured."
+        }
+      },
+      "required": [
+        "tier",
+        "video_enabled",
+        "e2ee",
+        "audio_codecs",
+        "codecs",
+        "backup_codec",
+        "camera",
+        "screen",
+        "dynacast",
+        "adaptive_stream"
+      ],
+      "type": "object"
+    },
+    "MediaTier": {
+      "description": "The media budget tier (S34 v2 §12.2).",
+      "oneOf": [
+        {
+          "const": "normal",
+          "description": "Everything allowed; full hints.",
+          "type": "string"
+        },
+        {
+          "const": "constrained",
+          "description": "New camera leases refused; lower hints.",
+          "type": "string"
+        },
+        {
+          "const": "critical",
+          "description": "New camera and screen leases refused; lowest hints.",
+          "type": "string"
+        }
+      ]
+    },
+    "NotRecordedReason": {
+      "description": "Why a granted participant is not captured (§9.2). Stored in\n`recording_participants.capture_reason`.",
+      "oneOf": [
+        {
+          "const": "track_cap",
+          "description": "A track cap is reached; not allowlisted.",
+          "type": "string"
+        },
+        {
+          "const": "no_microphone",
+          "description": "No microphone published.",
+          "type": "string"
+        },
+        {
+          "const": "no_key",
+          "description": "The recorder could not decrypt the member's frames.",
+          "type": "string"
+        },
+        {
+          "const": "unencrypted",
+          "description": "The track was published unencrypted.",
+          "type": "string"
+        },
+        {
+          "const": "codec",
+          "description": "The track is not Opus.",
+          "type": "string"
+        },
+        {
+          "const": "permission",
+          "description": "Not subscribable under the room's permissions.",
+          "type": "string"
+        }
+      ]
+    },
+    "PromptMember": {
+      "description": "The starter as the consent modal shows them.",
+      "properties": {
+        "display_name": {
+          "description": "Their display name.",
+          "type": "string"
+        },
+        "member_id": {
+          "description": "The member.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "member_id",
+        "display_name"
+      ],
+      "type": "object"
+    },
+    "PromptRoom": {
+      "description": "Where the recording is.",
+      "properties": {
+        "channel_id": {
+          "description": "The voice channel or DM.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/PromptRoomKind",
+          "description": "Its kind."
+        },
+        "name": {
+          "description": "The channel's name (voice channels only).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "channel_id",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "PromptRoomKind": {
+      "description": "The room kind the modal names.",
+      "oneOf": [
+        {
+          "const": "voice",
+          "description": "A voice channel.",
+          "type": "string"
+        },
+        {
+          "const": "dm",
+          "description": "A DM call.",
+          "type": "string"
+        },
+        {
+          "const": "group_dm",
+          "description": "A group-DM call.",
+          "type": "string"
+        }
+      ]
+    },
+    "PromptTranscript": {
+      "description": "What happens to the words (§9.10).",
+      "properties": {
+        "e2ee": {
+          "description": "Transcripts are not end-to-end encrypted.",
+          "type": "boolean"
+        },
+        "posted_to_channel": {
+          "description": "Transcripts are posted into the channel as ordinary messages.",
+          "type": "boolean"
+        },
+        "readable_by": {
+          "description": "Who can read them: `channel_members`, `search`, `agents`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "posted_to_channel",
+        "readable_by",
+        "e2ee"
+      ],
+      "type": "object"
+    },
+    "Recording": {
+      "description": "A recording (§18.1).",
+      "properties": {
+        "audio_keep_days": {
+          "description": "Audio keep days (0 = until the transcript is final).",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "auto": {
+          "description": "Started by an auto-record channel's first join.",
+          "type": "boolean"
+        },
+        "call_record_id": {
+          "description": "The DM call (`calls.id`) of a DM-call recording.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "channel_id": {
+          "description": "The voice channel or DM.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "consent_prompt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConsentPrompt"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The consent modal (self only, while the viewer is `pending`)."
+        },
+        "id": {
+          "description": "The recording.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "language": {
+          "description": "The language hint (`None` = auto).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max_duration_ms": {
+          "description": "`recording.max_duration_ms`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "message_id": {
+          "description": "The record message.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "mixed": {
+          "description": "A mixed file is made after stop.",
+          "type": "boolean"
+        },
+        "my_consent": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Consent"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The viewer's own consent (self only; absent for non-participants)."
+        },
+        "participants": {
+          "description": "Members in the room plus members who ever granted, ascending.",
+          "items": {
+            "$ref": "#/$defs/RecordingParticipant"
+          },
+          "type": "array"
+        },
+        "space_id": {
+          "description": "The channel's space (absent for DMs).",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "started_at": {
+          "description": "When.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "started_by": {
+          "description": "Who started it.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/RecordingState",
+          "description": "Its state."
+        },
+        "stop_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StopReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why."
+        },
+        "stopped_at": {
+          "description": "When it stopped.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "channel_id",
+        "state",
+        "started_by",
+        "started_at",
+        "auto",
+        "message_id",
+        "mixed",
+        "audio_keep_days",
+        "max_duration_ms",
+        "participants"
+      ],
+      "type": "object"
+    },
+    "RecordingParticipant": {
+      "description": "One participant of a recording, as everyone in the audience sees it (§18.1).",
+      "properties": {
+        "capture": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Capture"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Whether they are captured (only for `granted`)."
+        },
+        "consent": {
+          "$ref": "#/$defs/Consent",
+          "description": "What they said."
+        },
+        "member_id": {
+          "description": "The member.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NotRecordedReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why not (only for `not_recorded`)."
+        }
+      },
+      "required": [
+        "member_id",
+        "consent"
+      ],
+      "type": "object"
+    },
+    "RecordingState": {
+      "description": "A recording's lifecycle state (§8.5). Stored in `recordings.state`.",
+      "oneOf": [
+        {
+          "const": "starting",
+          "description": "Admitting and certifying the recorder.",
+          "type": "string"
+        },
+        {
+          "const": "recording",
+          "description": "The recorder joined.",
+          "type": "string"
+        },
+        {
+          "const": "stopping",
+          "description": "Draining the recorder.",
+          "type": "string"
+        },
+        {
+          "const": "stopped",
+          "description": "Over.",
+          "type": "string"
+        }
+      ]
+    },
+    "StopReason": {
+      "description": "Why a recording stopped (§8.5). Stored in `recordings.stop_reason`.",
+      "oneOf": [
+        {
+          "const": "stopped",
+          "description": "The stop route.",
+          "type": "string"
+        },
+        {
+          "const": "room_empty",
+          "description": "No standard voice entries left in the room.",
+          "type": "string"
+        },
+        {
+          "const": "call_ended",
+          "description": "The DM call ended.",
+          "type": "string"
+        },
+        {
+          "const": "max_duration",
+          "description": "`recording.max_duration_ms` reached.",
+          "type": "string"
+        },
+        {
+          "const": "recorder_failed",
+          "description": "The recorder failed (join timeout, certificate, unreachable, too many rejoins).",
+          "type": "string"
+        },
+        {
+          "const": "media_restarted",
+          "description": "The engine room was lost beyond the re-admit grace.",
+          "type": "string"
+        },
+        {
+          "const": "storage_full",
+          "description": "Three consecutive `storage_full` segment writes.",
+          "type": "string"
+        },
+        {
+          "const": "disabled",
+          "description": "Recording was disabled (policy, config, archive, `sew recording disable`).",
+          "type": "string"
+        },
+        {
+          "const": "max_bytes",
+          "description": "`recording.max_bytes` reached.",
+          "type": "string"
+        }
+      ]
+    },
+    "TrackHint": {
+      "description": "Publishing hints for one source (S34 v2 §13).",
+      "properties": {
+        "layers": {
+          "description": "Simulcast layers, lowest first.",
+          "items": {
+            "$ref": "#/$defs/LayerHint"
+          },
+          "type": "array"
+        },
+        "max_fps": {
+          "description": "Frame rate cap.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_height": {
+          "description": "Capture height cap.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_width": {
+          "description": "Capture width cap.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "max_width",
+        "max_height",
+        "max_fps",
+        "layers"
+      ],
+      "type": "object"
+    },
+    "VideoCodec": {
+      "description": "A video codec a client may publish under E2EE (S34 v2 D8). There is no AV1 or H.265\nvalue: they are never offered.",
+      "oneOf": [
+        {
+          "const": "vp8",
+          "description": "VP8 (simulcast).",
+          "type": "string"
+        },
+        {
+          "const": "h264",
+          "description": "H.264 (simulcast).",
+          "type": "string"
+        },
+        {
+          "const": "vp9",
+          "description": "VP9, only with the Dependency Descriptor (opt-in).",
+          "type": "string"
+        }
+      ]
+    },
+    "VoiceConnection": {
+      "description": "Whether the engine has confirmed the member's media (S33 v2 §10.1).",
+      "oneOf": [
+        {
+          "const": "connecting",
+          "description": "The admit is registered; media not confirmed yet.",
+          "type": "string"
+        },
+        {
+          "const": "connected",
+          "description": "The engine confirmed the participant (also during a reconnect window).",
+          "type": "string"
+        }
+      ]
+    },
+    "VoiceState": {
+      "description": "A member's voice state (S33 v2 §10.1).",
+      "properties": {
+        "call_id": {
+          "description": "The DM call (`calls.id`) of a call entry (S34 v2 §20.1); absent in voice channels.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "channel_id": {
+          "description": "The voice channel.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "connection": {
+          "$ref": "#/$defs/VoiceConnection",
+          "description": "`connecting` or `connected`."
+        },
+        "joined_at": {
+          "description": "When the join succeeded (a move resets it).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "member_id": {
+          "description": "The member.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "secure": {
+          "description": "The member's device is in the activated key epoch (S50 `secure_changed`).",
+          "type": "boolean"
+        },
+        "self_deaf": {
+          "description": "Deafened by the member (implies `self_mute`).",
+          "type": "boolean"
+        },
+        "self_mute": {
+          "description": "Muted by the member.",
+          "type": "boolean"
+        },
+        "self_stream": {
+          "default": false,
+          "description": "The member holds a screen-share lease (S34 v2 §10.2).",
+          "type": "boolean"
+        },
+        "self_video": {
+          "default": false,
+          "description": "The member holds a camera lease (S34 v2 §10.2).",
+          "type": "boolean"
+        },
+        "server_deaf": {
+          "description": "Deafened by a moderator (persistent per space).",
+          "type": "boolean"
+        },
+        "server_mute": {
+          "description": "Muted by a moderator (persistent per space).",
+          "type": "boolean"
+        },
+        "space_id": {
+          "description": "The channel's space; absent for DM calls.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "speak_denied": {
+          "description": "The member lacks SPEAK here; clients show it as muted.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "member_id",
+        "channel_id",
+        "connection",
+        "secure",
+        "self_mute",
+        "self_deaf",
+        "server_mute",
+        "server_deaf",
+        "speak_denied",
+        "joined_at"
+      ],
+      "type": "object"
+    },
+    "Vp9Hint": {
+      "description": "VP9 publishing rules when VP9 is configured (S34 v2 §13).",
+      "properties": {
+        "requires_dd": {
+          "description": "Always `true`: the Dependency Descriptor is required.",
+          "type": "boolean"
+        },
+        "scalability_mode": {
+          "description": "`L3T3_KEY`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scalability_mode",
+        "requires_dd"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The join answer.",
+  "properties": {
+    "call_id": {
+      "description": "The DM call (`calls.id`) of a call join (S34 v2 §14.3); not the engine room, which is\n`e2ee.call_id`.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "e2ee": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CallKeysInit"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The key join's answer (S50 `CallKeysInit`, with `join_id`)."
+    },
+    "expires_at": {
+      "description": "When the token stops admitting a connect.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "media": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MediaPolicy"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The client media policy for the current tier (S34 v2 §13)."
+    },
+    "recording": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Recording"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The room's active recording as the joiner sees it (S35 v2 §9.4 rule 4): its `id` and\n`my_consent` feed S51's `Input::Recording` before the Welcome."
+    },
+    "room": {
+      "description": "The call's room.",
+      "pattern": "^r_[a-z2-7]{26}$",
+      "type": "string"
+    },
+    "state": {
+      "$ref": "#/$defs/VoiceState",
+      "description": "The member's state."
+    },
+    "stats": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CallStatsBeacon"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "F21: the call-stats beacon is on (`calls.stats_beacon`); absent when it is off, and the\nclient then sends nothing."
+    },
+    "token": {
+      "description": "The ES256 media token (`sub` = identity, `jti` = join id).",
+      "type": "string"
+    },
+    "url": {
+      "description": "The signalling URL (`wss://voice.<host>`).",
+      "type": "string"
+    }
+  },
+  "required": [
+    "url",
+    "token",
+    "expires_at",
+    "room",
+    "state"
+  ],
+  "title": "VoiceJoinResponse",
+  "type": "object"
+}

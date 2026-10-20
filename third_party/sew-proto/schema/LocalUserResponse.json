@@ -1,0 +1,109 @@
+{
+  "$defs": {
+    "InstallRole": {
+      "description": "Install-wide role (C12). Separate from space roles.",
+      "oneOf": [
+        {
+          "const": "owner",
+          "description": "All install admin, plus transfer.",
+          "type": "string"
+        },
+        {
+          "const": "admin",
+          "description": "Spaces, policies, members, guests. No content access to private channels or DMs.",
+          "type": "string"
+        },
+        {
+          "const": "member",
+          "description": "A regular member.",
+          "type": "string"
+        },
+        {
+          "const": "guest",
+          "description": "A guest.",
+          "type": "string"
+        },
+        {
+          "const": "link_guest",
+          "description": "A meeting link guest (Meet MC2a, C6 amendment CC1, CC3): made by redeeming a meeting\nlink, bound to one meeting channel, capped by `LINK_GUEST_MASK`, never a K2\nprincipal. Every S19 guest rule applies, and only the link-guest allowlist passes.",
+          "type": "string"
+        }
+      ]
+    },
+    "SetupLink": {
+      "description": "A one-time password setup link. `Debug` redacts the URL (it holds the token).",
+      "properties": {
+        "expires_at": {
+          "description": "When the link stops working (24 h).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "url": {
+          "description": "`<setup_url>#token=sewpw_…`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url",
+        "expires_at"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Response of every `/mgmt/v1/local/*` route.",
+  "properties": {
+    "changed": {
+      "description": "Whether this call changed anything.",
+      "type": "boolean"
+    },
+    "created": {
+      "description": "Whether this call created the member.",
+      "type": "boolean"
+    },
+    "deactivated": {
+      "description": "Whether the member is deactivated.",
+      "type": "boolean"
+    },
+    "install_role": {
+      "$ref": "#/$defs/InstallRole",
+      "description": "The install role."
+    },
+    "member_id": {
+      "description": "The member.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "reactivated": {
+      "description": "Whether this call reactivated the member.",
+      "type": "boolean"
+    },
+    "setup_link": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SetupLink"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "A fresh setup link, when one was issued."
+    },
+    "username": {
+      "description": "The handle.",
+      "pattern": "^[a-z0-9_-]{2,64}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "member_id",
+    "username",
+    "install_role",
+    "deactivated",
+    "created",
+    "reactivated",
+    "changed"
+  ],
+  "title": "LocalUserResponse",
+  "type": "object"
+}

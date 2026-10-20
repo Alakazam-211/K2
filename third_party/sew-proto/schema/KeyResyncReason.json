@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Why a leaf is told to resync (`resync.reason`; S50 §9.3). `stale_slot` re-asserts the\nsender slot; every other reason is answered with K6.",
+  "oneOf": [
+    {
+      "const": "behind",
+      "description": "The leaf is behind the DS's epoch.",
+      "type": "string"
+    },
+    {
+      "const": "group_mismatch",
+      "description": "The leaf holds another group.",
+      "type": "string"
+    },
+    {
+      "const": "lagging",
+      "description": "The leaf stopped acking.",
+      "type": "string"
+    },
+    {
+      "const": "stale_slot",
+      "description": "The engine sees the leaf sending on the wrong slot.",
+      "type": "string"
+    }
+  ],
+  "title": "KeyResyncReason"
+}

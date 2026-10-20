@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Body of `saved_item_deleted`.",
+  "properties": {
+    "id": {
+      "description": "The saved item.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "message_id": {
+      "description": "Its message.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "message_id"
+  ],
+  "title": "SavedItemDeleted",
+  "type": "object"
+}

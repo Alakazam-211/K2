@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /api/v1/bookmarks/{id}/edit`.",
+  "properties": {
+    "emoji": {
+      "description": "Set or clear the emoji.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "title": {
+      "description": "A new title.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "url": {
+      "description": "A new URL.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "title": "EditBookmarkRequest",
+  "type": "object"
+}

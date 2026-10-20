@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "What started a retention run.",
+  "oneOf": [
+    {
+      "const": "schedule",
+      "description": "The daily schedule (02:00 UTC).",
+      "type": "string"
+    },
+    {
+      "const": "manual",
+      "description": "`POST …/retention/run`.",
+      "type": "string"
+    },
+    {
+      "const": "policy_effective",
+      "description": "A pending policy's `effective_at`.",
+      "type": "string"
+    },
+    {
+      "const": "hold_release",
+      "description": "A hold release (five minutes later).",
+      "type": "string"
+    }
+  ],
+  "title": "RunTrigger"
+}

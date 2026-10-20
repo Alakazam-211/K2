@@ -1,0 +1,139 @@
+{
+  "$defs": {
+    "ProfileField": {
+      "description": "A custom field definition.",
+      "properties": {
+        "id": {
+          "description": "The field id.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "key": {
+          "description": "`[a-z][a-z0-9_]{0,39}`, fixed after create.",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ProfileFieldKind",
+          "description": "Value kind, fixed after create."
+        },
+        "label": {
+          "description": "Label, 1–60 characters.",
+          "type": "string"
+        },
+        "managed_by": {
+          "$ref": "#/$defs/ProfileFieldManagedBy",
+          "description": "Who writes it."
+        },
+        "options": {
+          "default": [],
+          "description": "`select` options (empty for other kinds).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "position": {
+          "description": "Display order.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "visibility": {
+          "$ref": "#/$defs/ProfileFieldVisibility",
+          "description": "Who sees it."
+        }
+      },
+      "required": [
+        "id",
+        "key",
+        "label",
+        "kind",
+        "managed_by",
+        "visibility",
+        "position"
+      ],
+      "type": "object"
+    },
+    "ProfileFieldKind": {
+      "description": "A custom field's value kind.",
+      "oneOf": [
+        {
+          "const": "text",
+          "description": "Free text (1–500 characters).",
+          "type": "string"
+        },
+        {
+          "const": "url",
+          "description": "An `http(s)` URL.",
+          "type": "string"
+        },
+        {
+          "const": "select",
+          "description": "One of the field's options.",
+          "type": "string"
+        },
+        {
+          "const": "date",
+          "description": "`YYYY-MM-DD`.",
+          "type": "string"
+        }
+      ]
+    },
+    "ProfileFieldManagedBy": {
+      "description": "Who writes a custom field.",
+      "oneOf": [
+        {
+          "const": "member",
+          "description": "The member.",
+          "type": "string"
+        },
+        {
+          "const": "provider",
+          "description": "The identity provider (mgmt only).",
+          "type": "string"
+        }
+      ]
+    },
+    "ProfileFieldVisibility": {
+      "description": "Who sees a custom field.",
+      "oneOf": [
+        {
+          "const": "everyone",
+          "description": "Everyone who can see the member, guests included.",
+          "type": "string"
+        },
+        {
+          "const": "non_guests",
+          "description": "Everyone but guests.",
+          "type": "string"
+        },
+        {
+          "const": "admins",
+          "description": "Install owner and admins, and the member themself.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "`GET /api/v1/install/profile-fields` and the reorder response.",
+  "properties": {
+    "items": {
+      "description": "Live fields by position.",
+      "items": {
+        "$ref": "#/$defs/ProfileField"
+      },
+      "type": "array"
+    },
+    "version": {
+      "description": "The etag (`fields_rev`).",
+      "type": "string"
+    }
+  },
+  "required": [
+    "items",
+    "version"
+  ],
+  "title": "ProfileFieldsResponse",
+  "type": "object"
+}

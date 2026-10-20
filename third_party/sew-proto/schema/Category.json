@@ -1,0 +1,90 @@
+{
+  "$defs": {
+    "Overwrite": {
+      "description": "A channel or category permission overwrite.",
+      "properties": {
+        "allow": {
+          "description": "Bits allowed.",
+          "pattern": "^(0|[1-9][0-9]{0,19})$",
+          "type": "string"
+        },
+        "deny": {
+          "description": "Bits denied.",
+          "pattern": "^(0|[1-9][0-9]{0,19})$",
+          "type": "string"
+        },
+        "target_id": {
+          "description": "The role or member id.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "target_kind": {
+          "$ref": "#/$defs/OverwriteTarget",
+          "description": "Role or member."
+        }
+      },
+      "required": [
+        "target_kind",
+        "target_id",
+        "allow",
+        "deny"
+      ],
+      "type": "object"
+    },
+    "OverwriteTarget": {
+      "description": "What an overwrite targets.",
+      "oneOf": [
+        {
+          "const": "role",
+          "description": "A role (`@everyone`'s role id is the space id).",
+          "type": "string"
+        },
+        {
+          "const": "member",
+          "description": "A single member.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A category grouping channels in a space.",
+  "properties": {
+    "id": {
+      "description": "The category id.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "name": {
+      "description": "The name.",
+      "type": "string"
+    },
+    "overwrites": {
+      "description": "Overwrites that synced channels inherit.",
+      "items": {
+        "$ref": "#/$defs/Overwrite"
+      },
+      "type": "array"
+    },
+    "position": {
+      "description": "Sort position.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "space_id": {
+      "description": "Its space.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "space_id",
+    "name",
+    "position",
+    "overwrites"
+  ],
+  "title": "Category",
+  "type": "object"
+}

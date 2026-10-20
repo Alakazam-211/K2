@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Where the media budget's egress comes from (S34 v2 §12.1).",
+  "oneOf": [
+    {
+      "const": "engine",
+      "description": "The engine's `stats` events.",
+      "type": "string"
+    },
+    {
+      "const": "estimate",
+      "description": "Sew's forwarding estimate (stats missing or stale).",
+      "type": "string"
+    }
+  ],
+  "title": "BudgetSource"
+}

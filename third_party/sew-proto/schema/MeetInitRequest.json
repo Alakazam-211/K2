@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /mgmt/v1/meet/init`.",
+  "properties": {
+    "app_id": {
+      "description": "The Meet App the Space belongs to (SW13); absent on a standalone install.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "retention_days": {
+      "description": "Days chat and transcripts are kept (1–36,500; default 365). Used when the Space is\nmade; a later call never changes it (S22's routes do).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    }
+  },
+  "title": "MeetInitRequest",
+  "type": "object"
+}

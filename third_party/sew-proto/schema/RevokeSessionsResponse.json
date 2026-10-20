@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Response of `POST /mgmt/v1/sessions/revoke`.",
+  "properties": {
+    "revoked": {
+      "description": "Sessions revoked.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "revoked"
+  ],
+  "title": "RevokeSessionsResponse",
+  "type": "object"
+}

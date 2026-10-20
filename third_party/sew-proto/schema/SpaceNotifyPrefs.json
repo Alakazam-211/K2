@@ -1,0 +1,54 @@
+{
+  "$defs": {
+    "NotifyLevel": {
+      "description": "A notification level (`*.level` codes 1–3).",
+      "oneOf": [
+        {
+          "const": "all",
+          "description": "Every message.",
+          "type": "string"
+        },
+        {
+          "const": "mentions",
+          "description": "Mentions, DMs, keywords and followed threads.",
+          "type": "string"
+        },
+        {
+          "const": "none",
+          "description": "Nothing (reminders still arrive).",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A member's level for one space.",
+  "properties": {
+    "effective_level": {
+      "$ref": "#/$defs/NotifyLevel",
+      "description": "What the space's channels fall back to for this member."
+    },
+    "level": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/NotifyLevel"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The space's level; `null` = inherit."
+    },
+    "space_id": {
+      "description": "The space.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "space_id",
+    "effective_level"
+  ],
+  "title": "SpaceNotifyPrefs",
+  "type": "object"
+}

@@ -1,0 +1,74 @@
+{
+  "$defs": {
+    "MeetingAttendee": {
+      "description": "One attendee (organiser view).",
+      "properties": {
+        "email": {
+          "description": "The address (`email`; absent once its key is shredded).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "The row id (for `attendees/remove`).",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/MeetingAttendeeKind",
+          "description": "`member` or `email`."
+        },
+        "member_id": {
+          "description": "The member (`member`).",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "MeetingAttendeeKind": {
+      "description": "An attendee's kind.",
+      "oneOf": [
+        {
+          "const": "member",
+          "description": "A member of the install: added to the meeting channel (so they skip the lobby).",
+          "type": "string"
+        },
+        {
+          "const": "email",
+          "description": "An email address for the calendar file only; never an account.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Answer of `GET /api/v1/meetings/{id}/attendees`.",
+  "properties": {
+    "emails_purged": {
+      "description": "Emails were purged (30 days after the end, or at cancel).",
+      "type": "boolean"
+    },
+    "items": {
+      "description": "Every attendee, members first, then emails, in the order given.",
+      "items": {
+        "$ref": "#/$defs/MeetingAttendee"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "items",
+    "emails_purged"
+  ],
+  "title": "MeetingAttendees",
+  "type": "object"
+}

@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "`details.reason` of a search error (S20 §14.4). `400 validation_failed` carries\n`details.field` (`q` unless noted) and, for parser reasons, `details.position` (a byte\noffset in `q`); the last three are `503 unavailable` reasons.",
+  "oneOf": [
+    {
+      "const": "empty_query",
+      "description": "No positive clause (empty, punctuation only, or negative-only).",
+      "type": "string"
+    },
+    {
+      "const": "query_too_long",
+      "description": "`q` is longer than 1,000 bytes after trimming.",
+      "type": "string"
+    },
+    {
+      "const": "too_many_terms",
+      "description": "More than 32 text clauses.",
+      "type": "string"
+    },
+    {
+      "const": "too_many_filters",
+      "description": "More than 20 filters, or more than 10 values of one filter name.",
+      "type": "string"
+    },
+    {
+      "const": "empty_filter_value",
+      "description": "A known filter name with nothing after the `:`.",
+      "type": "string"
+    },
+    {
+      "const": "bad_date",
+      "description": "A date that is not a real `YYYY-MM-DD` day.",
+      "type": "string"
+    },
+    {
+      "const": "empty_date_range",
+      "description": "The date filters leave no day at all.",
+      "type": "string"
+    },
+    {
+      "const": "filter_not_negatable",
+      "description": "`on:`, `before:` and `after:` cannot be negated.",
+      "type": "string"
+    },
+    {
+      "const": "unknown_has_value",
+      "description": "`has:` takes `file` or `link`.",
+      "type": "string"
+    },
+    {
+      "const": "unknown_is_value",
+      "description": "`is:` takes `transcript` (S35 v2 §16).",
+      "type": "string"
+    },
+    {
+      "const": "bad_ext",
+      "description": "`ext:` takes `[a-z0-9]{1,16}` with an optional leading `.`.",
+      "type": "string"
+    },
+    {
+      "const": "filter_not_supported",
+      "description": "The filter is not supported on this route (`ext:` on messages).",
+      "type": "string"
+    },
+    {
+      "const": "prefix_too_short",
+      "description": "A `word*` prefix shorter than 2 characters, or not one plain word.",
+      "type": "string"
+    },
+    {
+      "const": "prefix_too_broad",
+      "description": "A `word*` prefix matches more than 1,000 distinct terms.",
+      "type": "string"
+    },
+    {
+      "const": "unknown_filter_value",
+      "description": "A filter value that does not exist or that the caller cannot see\n(`details.filter`, `details.value`; hidden and missing are byte-identical).",
+      "type": "string"
+    },
+    {
+      "const": "ambiguous_filter_value",
+      "description": "`in:#slug` names channels in more than one space (`details.candidates`).",
+      "type": "string"
+    },
+    {
+      "const": "unknown_timezone",
+      "description": "`tz` is not an IANA time zone (`field: tz`).",
+      "type": "string"
+    },
+    {
+      "const": "cursor_invalid",
+      "description": "The cursor is not one this server signed (`field: cursor`).",
+      "type": "string"
+    },
+    {
+      "const": "cursor_expired",
+      "description": "The cursor is older than 30 minutes (`field: cursor`).",
+      "type": "string"
+    },
+    {
+      "const": "cursor_mismatch",
+      "description": "The cursor belongs to another member, route or query (`field: cursor`).",
+      "type": "string"
+    },
+    {
+      "const": "search_rebuilding",
+      "description": "`503`: the index is being rebuilt (`details.progress_pct`, `Retry-After: 30`).",
+      "type": "string"
+    },
+    {
+      "const": "search_busy",
+      "description": "`503`: too many concurrent searches (`Retry-After: 1`).",
+      "type": "string"
+    },
+    {
+      "const": "search_timeout",
+      "description": "`503`: the query ran past its deadline.",
+      "type": "string"
+    }
+  ],
+  "title": "SearchErrorReason"
+}

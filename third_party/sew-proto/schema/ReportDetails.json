@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "K10 `details` (≤ 256 bytes of JSON; S51 §13.6). Every field is optional; strings ≤ 64 bytes.",
+  "properties": {
+    "attempts": {
+      "description": "Re-apply attempts.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "expected_slot": {
+      "description": "The slot the sender should be on.",
+      "format": "uint8",
+      "maximum": 255,
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "failures": {
+      "description": "Failed decrypts counted.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "missing_index": {
+      "description": "The key index a receiver missed.",
+      "format": "uint8",
+      "maximum": 255,
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "observed_slot": {
+      "description": "The slot the reporter saw.",
+      "format": "uint8",
+      "maximum": 255,
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "reason": {
+      "description": "A short reason (`missing_key`, `invalid_key`, …).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "sdk": {
+      "description": "The reporter's SDK family.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "sdk_version": {
+      "description": "The reporter's SDK version.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "since_ms": {
+      "description": "For how long the condition held.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    }
+  },
+  "title": "ReportDetails",
+  "type": "object"
+}

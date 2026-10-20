@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "What a K10 report is about (S50 §9.1, S51 §12.1).",
+  "oneOf": [
+    {
+      "const": "leaf_without_voice_state",
+      "description": "A leaf whose member has no voice state in the channel.",
+      "type": "string"
+    },
+    {
+      "const": "duplicate_member",
+      "description": "Two leaves of one member outside a swap.",
+      "type": "string"
+    },
+    {
+      "const": "engine_participant_without_leaf",
+      "description": "An engine participant with no leaf past 5 s.",
+      "type": "string"
+    },
+    {
+      "const": "external_sender_mismatch",
+      "description": "The group's external sender differs from READY's.",
+      "type": "string"
+    },
+    {
+      "const": "ca_changed",
+      "description": "The CA key differs from the pinned one.",
+      "type": "string"
+    },
+    {
+      "const": "leaf_binding_invalid",
+      "description": "A binding table failed the client's checks.",
+      "type": "string"
+    },
+    {
+      "const": "scope_invalid",
+      "description": "A leaf's credential scope is empty or differs from the call's (S51 G35).",
+      "type": "string"
+    },
+    {
+      "const": "sender_index_stuck",
+      "description": "The reporter's own sender stays on a stale slot after one re-apply.",
+      "type": "string"
+    },
+    {
+      "const": "peer_undecryptable",
+      "description": "Another leaf's frames do not decrypt (quorum only).",
+      "type": "string"
+    },
+    {
+      "const": "engine_unencrypted_track",
+      "description": "A bridge saw an unencrypted track from the engine.",
+      "type": "string"
+    },
+    {
+      "const": "engine_sif_trailer",
+      "description": "A bridge saw a non-empty `sif_trailer` from the engine.",
+      "type": "string"
+    },
+    {
+      "const": "engine_encryption_downgrade",
+      "description": "A bridge saw an encryption downgrade from the engine.",
+      "type": "string"
+    }
+  ],
+  "title": "ReportKind"
+}

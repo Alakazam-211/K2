@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /api/v1/spaces/{id}/members/{member_id}/timeout`.",
+  "properties": {
+    "duration_ms": {
+      "description": "60,000 – 2,419,200,000 ms (1 min – 28 days).",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "duration_ms"
+  ],
+  "title": "TimeoutRequest",
+  "type": "object"
+}

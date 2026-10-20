@@ -1,0 +1,147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A stable machine error code. `lower_snake`; the HTTP status comes from [`Code::status`].",
+  "oneOf": [
+    {
+      "const": "bad_request",
+      "description": "400: the request is malformed.",
+      "type": "string"
+    },
+    {
+      "const": "validation_failed",
+      "description": "400: a field failed validation; `details.field` names it.",
+      "type": "string"
+    },
+    {
+      "const": "unauthenticated",
+      "description": "401: no or unknown credentials.",
+      "type": "string"
+    },
+    {
+      "const": "session_expired",
+      "description": "401: the session expired.",
+      "type": "string"
+    },
+    {
+      "const": "missing_permission",
+      "description": "403: a permission bit is missing.",
+      "type": "string"
+    },
+    {
+      "const": "policy_denied",
+      "description": "403: an org policy forbids this.",
+      "type": "string"
+    },
+    {
+      "const": "not_provisioned",
+      "description": "403: a valid pass for a principal with no Sew account.",
+      "type": "string"
+    },
+    {
+      "const": "act_as_person_forbidden",
+      "description": "403: act-as targeted a person; only agents can be acted as (C9).",
+      "type": "string"
+    },
+    {
+      "const": "provider_is_k2",
+      "description": "403: the command is off on a K2-provided install (C6).",
+      "type": "string"
+    },
+    {
+      "const": "quota_exceeded",
+      "description": "403: a quota or count limit is reached.",
+      "type": "string"
+    },
+    {
+      "const": "not_found",
+      "description": "404: missing, or hidden from the caller (masked).",
+      "type": "string"
+    },
+    {
+      "const": "method_not_allowed",
+      "description": "405: only GET reads and POST mutations exist.",
+      "type": "string"
+    },
+    {
+      "const": "conflict",
+      "description": "409: conflicts with current state.",
+      "type": "string"
+    },
+    {
+      "const": "idempotency_conflict",
+      "description": "409: an `Idempotency-Key` was reused with a different body.",
+      "type": "string"
+    },
+    {
+      "const": "resync_required",
+      "description": "410: the cursor is behind the change-log floor; `details.floor` says where.",
+      "type": "string"
+    },
+    {
+      "const": "too_large",
+      "description": "413: the body or a field is too large.",
+      "type": "string"
+    },
+    {
+      "const": "invalid_state",
+      "description": "422: valid request, but the target's state forbids it.",
+      "type": "string"
+    },
+    {
+      "const": "rate_limited",
+      "description": "429: rate limited; `details.retry_after_ms` says when to retry.",
+      "type": "string"
+    },
+    {
+      "const": "internal",
+      "description": "500: a server bug.",
+      "type": "string"
+    },
+    {
+      "const": "unavailable",
+      "description": "503: temporarily unavailable.",
+      "type": "string"
+    },
+    {
+      "const": "range_not_satisfiable",
+      "description": "416: the byte range is outside the file; `Content-Range: bytes */<size>` (S15,\ncontracts rev 45).",
+      "type": "string"
+    },
+    {
+      "const": "storage_full",
+      "description": "507: the server's file storage is below its free-space floor (S15, contracts rev 45).",
+      "type": "string"
+    },
+    {
+      "const": "meeting_ended",
+      "description": "410: the meeting has ended or was cancelled (Meet MC1, CC9: a voice join in its\nchannel).",
+      "type": "string"
+    },
+    {
+      "const": "too_early",
+      "description": "425: too early: the meeting opens at `details.opens_at` (Meet MC1, CC9: a voice join\nbefore `starts_at` − 15 min).",
+      "type": "string"
+    },
+    {
+      "const": "link_invalid",
+      "description": "404: a meeting link that is unknown, has a wrong secret, was revoked or rotated, or\nwhose meeting ended or was cancelled (Meet MC2a, §6.4: one body for all four).",
+      "type": "string"
+    },
+    {
+      "const": "meeting_locked",
+      "description": "423: the meeting is locked (Meet MC2a; MC3 adds the lock itself).",
+      "type": "string"
+    },
+    {
+      "const": "lobby_full",
+      "description": "429: the meeting's lobby or room is full (`max_waiting`, `max_guests_inside`; Meet\nMC2a: nothing was written).",
+      "type": "string"
+    },
+    {
+      "const": "knock_blocked",
+      "description": "403: this join nonce (or member) was turned away twice within 10 minutes and may\nnot knock on this meeting for an hour (Meet MC2b, §6.5.3).",
+      "type": "string"
+    }
+  ],
+  "title": "Code"
+}

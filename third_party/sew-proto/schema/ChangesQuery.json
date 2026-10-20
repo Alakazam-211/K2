@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Query for change-log catch-up (C8): `since` a seq, `limit` 1–500 (default 500, gap G28).",
+  "properties": {
+    "limit": {
+      "description": "Page size, 1–500 (default 500).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "since": {
+      "description": "Return entries with `seq > since`.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "since"
+  ],
+  "title": "ChangesQuery",
+  "type": "object"
+}

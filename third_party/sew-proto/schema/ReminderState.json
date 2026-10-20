@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A reminder's state (`reminders.state`).",
+  "oneOf": [
+    {
+      "const": "pending",
+      "description": "Waiting for its time.",
+      "type": "string"
+    },
+    {
+      "const": "fired",
+      "description": "Came due; stays until completed, snoozed or deleted.",
+      "type": "string"
+    },
+    {
+      "const": "done",
+      "description": "Completed.",
+      "type": "string"
+    }
+  ],
+  "title": "ReminderState"
+}

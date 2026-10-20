@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Policy `calls.verification_code` (S50 §16.4): whether \"Call info → Security code\" is\nshown. `required` is reserved for a later mode and refused by the policy validator.",
+  "oneOf": [
+    {
+      "const": "shown",
+      "description": "Shown on request, never modal (the default).",
+      "type": "string"
+    },
+    {
+      "const": "hidden",
+      "description": "Not shown.",
+      "type": "string"
+    },
+    {
+      "const": "required",
+      "description": "Reserved: \"confirm before you speak\" (refused in v1).",
+      "type": "string"
+    }
+  ],
+  "title": "VerificationCode"
+}

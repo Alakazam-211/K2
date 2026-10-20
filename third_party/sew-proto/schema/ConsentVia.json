@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "How a consent answer arrived (§9; audit `via`). Stored in `recording_participants.via`.",
+  "oneOf": [
+    {
+      "const": "start",
+      "description": "The starter's start request.",
+      "type": "string"
+    },
+    {
+      "const": "join",
+      "description": "A join's `recording_notice`.",
+      "type": "string"
+    },
+    {
+      "const": "prompt",
+      "description": "The in-room prompt (`POST …/consent`).",
+      "type": "string"
+    },
+    {
+      "const": "withdraw",
+      "description": "A withdrawal.",
+      "type": "string"
+    },
+    {
+      "const": "auto",
+      "description": "The joiner of an auto-record channel.",
+      "type": "string"
+    }
+  ],
+  "title": "ConsentVia"
+}

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Install-wide role (C12). Separate from space roles.",
+  "oneOf": [
+    {
+      "const": "owner",
+      "description": "All install admin, plus transfer.",
+      "type": "string"
+    },
+    {
+      "const": "admin",
+      "description": "Spaces, policies, members, guests. No content access to private channels or DMs.",
+      "type": "string"
+    },
+    {
+      "const": "member",
+      "description": "A regular member.",
+      "type": "string"
+    },
+    {
+      "const": "guest",
+      "description": "A guest.",
+      "type": "string"
+    },
+    {
+      "const": "link_guest",
+      "description": "A meeting link guest (Meet MC2a, C6 amendment CC1, CC3): made by redeeming a meeting\nlink, bound to one meeting channel, capped by `LINK_GUEST_MASK`, never a K2\nprincipal. Every S19 guest rule applies, and only the link-guest allowlist passes.",
+      "type": "string"
+    }
+  ],
+  "title": "InstallRole"
+}

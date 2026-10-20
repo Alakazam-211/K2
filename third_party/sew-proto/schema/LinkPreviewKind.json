@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "What a link preview shows.",
+  "oneOf": [
+    {
+      "const": "page",
+      "description": "An HTML page (title, description, optional image).",
+      "type": "string"
+    },
+    {
+      "const": "image",
+      "description": "The link is an image.",
+      "type": "string"
+    }
+  ],
+  "title": "LinkPreviewKind"
+}

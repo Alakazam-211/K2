@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Why a scheduled message was not sent (`scheduled_messages.fail_reason`).",
+  "oneOf": [
+    {
+      "const": "no_access",
+      "description": "The author can no longer see the channel or thread.",
+      "type": "string"
+    },
+    {
+      "const": "missing_permission",
+      "description": "The author lacks a permission the post needs.",
+      "type": "string"
+    },
+    {
+      "const": "policy_denied",
+      "description": "An org policy refused the post.",
+      "type": "string"
+    },
+    {
+      "const": "channel_archived",
+      "description": "The channel is archived.",
+      "type": "string"
+    },
+    {
+      "const": "thread_root_deleted",
+      "description": "The thread root was deleted.",
+      "type": "string"
+    },
+    {
+      "const": "dm_partner_deactivated",
+      "description": "The 1:1 DM partner is deactivated.",
+      "type": "string"
+    },
+    {
+      "const": "slow_mode",
+      "description": "Slow mode would hold it past the grace window.",
+      "type": "string"
+    },
+    {
+      "const": "rate_limited",
+      "description": "The message rate would hold it past the grace window.",
+      "type": "string"
+    },
+    {
+      "const": "overdue",
+      "description": "More than 60 minutes late (after downtime).",
+      "type": "string"
+    },
+    {
+      "const": "attachment_expired",
+      "description": "An attached upload expired.",
+      "type": "string"
+    },
+    {
+      "const": "author_inactive",
+      "description": "The author is deactivated.",
+      "type": "string"
+    },
+    {
+      "const": "invalid_content",
+      "description": "The body breaks a content rule (mention limits, blank body).",
+      "type": "string"
+    },
+    {
+      "const": "internal",
+      "description": "The send kept failing.",
+      "type": "string"
+    }
+  ],
+  "title": "ScheduledFailReason"
+}

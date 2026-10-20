@@ -1,0 +1,1709 @@
+{
+  "$defs": {
+    "Attachment": {
+      "description": "A file attached to a message.\n\n`id` = the upload id = the attachment id (S15). URLs are signed, path-absolute and valid for\n55–60 minutes (`url_expires_at`); every render inside one 5-minute window gives the same\nstrings. `width`/`height` are the displayed size (after EXIF orientation) of an image or the\nposter frame of a video.",
+      "properties": {
+        "animated": {
+          "default": false,
+          "description": "An animated GIF or WebP.",
+          "type": "boolean"
+        },
+        "content_type": {
+          "description": "The stored (sniffed) MIME type, not the served one (S15 §10).",
+          "type": "string"
+        },
+        "filename": {
+          "description": "The file name.",
+          "type": "string"
+        },
+        "height": {
+          "description": "Image or video height in pixels.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "The attachment id.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "inline": {
+          "default": false,
+          "description": "Served `inline` (only sniffed image, video and audio types, S15 §10.4).",
+          "type": "boolean"
+        },
+        "kind": {
+          "$ref": "#/$defs/FileKind",
+          "default": "other",
+          "description": "The kind (S15; payloads from before S15 read as `other`)."
+        },
+        "media_pending": {
+          "default": false,
+          "description": "A thumbnail or poster is still being made; `attachments_updated` follows.",
+          "type": "boolean"
+        },
+        "poster_url": {
+          "description": "Signed poster-frame URL (videos, when the server has `ffmpeg`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "preview_url": {
+          "description": "Signed large-preview URL (images wider than 1,920 px, BMP, TIFF).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "size": {
+          "description": "Size in bytes.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "thumbnail_url": {
+          "description": "Signed thumbnail URL (images, and video posters).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "url": {
+          "description": "Signed download URL.",
+          "type": "string"
+        },
+        "url_expires_at": {
+          "description": "When the signed URLs stop working (S15; absent in payloads from before S15).",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "width": {
+          "description": "Image or video width in pixels.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "filename",
+        "content_type",
+        "size",
+        "url"
+      ],
+      "type": "object"
+    },
+    "AudioState": {
+      "description": "The recording's audio (§12). Stored in `recordings.audio_state`.",
+      "oneOf": [
+        {
+          "const": "available",
+          "description": "Kept.",
+          "type": "string"
+        },
+        {
+          "const": "expired",
+          "description": "Hidden; links may still exist (held or not yet purged).",
+          "type": "string"
+        },
+        {
+          "const": "purged",
+          "description": "Every link deleted; the content key is gone.",
+          "type": "string"
+        }
+      ]
+    },
+    "CallEndReason": {
+      "description": "Why a call ended (§14.5). Stored in `calls.end_reason`.",
+      "oneOf": [
+        {
+          "const": "empty",
+          "description": "Nobody left in the call.",
+          "type": "string"
+        },
+        {
+          "const": "declined",
+          "description": "A 1:1 callee declined.",
+          "type": "string"
+        },
+        {
+          "const": "no_answer",
+          "description": "Nobody answered.",
+          "type": "string"
+        },
+        {
+          "const": "alone_timeout",
+          "description": "One person alone too long.",
+          "type": "string"
+        },
+        {
+          "const": "media_restarted",
+          "description": "The media engine lost the call.",
+          "type": "string"
+        },
+        {
+          "const": "media_failed",
+          "description": "The media engine failed before anyone connected.",
+          "type": "string"
+        },
+        {
+          "const": "voice_disabled",
+          "description": "Voice was turned off.",
+          "type": "string"
+        },
+        {
+          "const": "perms_lost",
+          "description": "Nobody left who may connect.",
+          "type": "string"
+        }
+      ]
+    },
+    "CallSummary": {
+      "description": "The call summary on the call-record message (`Message.call`, §18.2).",
+      "properties": {
+        "call_id": {
+          "description": "The call.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "declined_ids": {
+          "description": "Rings resolved `declined`.",
+          "items": {
+            "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "duration_ms": {
+          "description": "`ended_at − started_at` once ended.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "end_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CallEndReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why it ended."
+        },
+        "ended_at": {
+          "description": "When it ended.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "joined_ids": {
+          "description": "Everyone who ever connected, the starter included, ascending.",
+          "items": {
+            "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "missed_ids": {
+          "description": "Rings resolved `missed`.",
+          "items": {
+            "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "rung_ids": {
+          "description": "Everyone ever rung, ascending.",
+          "items": {
+            "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "started_at": {
+          "description": "When.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "started_by": {
+          "description": "Who started it.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "call_id",
+        "started_by",
+        "started_at",
+        "joined_ids",
+        "rung_ids",
+        "declined_ids",
+        "missed_ids"
+      ],
+      "type": "object"
+    },
+    "ChannelType": {
+      "description": "Channel type (gap G8 adds `dm` and `group_dm`).",
+      "oneOf": [
+        {
+          "const": "text",
+          "description": "A text channel.",
+          "type": "string"
+        },
+        {
+          "const": "voice",
+          "description": "A voice channel.",
+          "type": "string"
+        },
+        {
+          "const": "announcement",
+          "description": "An announcement channel: `@everyone` posts only in threads by default.",
+          "type": "string"
+        },
+        {
+          "const": "dm",
+          "description": "A 1:1 DM (no space, slug or name; always private).",
+          "type": "string"
+        },
+        {
+          "const": "group_dm",
+          "description": "A group DM of up to 9 people.",
+          "type": "string"
+        }
+      ]
+    },
+    "CustomEmojiRef": {
+      "description": "A custom emoji a message body uses (`Message.emojis`), deleted ones included.",
+      "properties": {
+        "animated": {
+          "description": "An animated GIF.",
+          "type": "boolean"
+        },
+        "available": {
+          "description": "`false` once the emoji is deleted.",
+          "type": "boolean"
+        },
+        "id": {
+          "description": "The emoji id.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "name": {
+          "description": "Its current name (a deleted emoji keeps its last name).",
+          "type": "string"
+        },
+        "space_id": {
+          "description": "Its space.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "still_url": {
+          "description": "Signed first-frame URL of an animated emoji; absent when not available.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "url": {
+          "description": "Signed image URL; absent when not available.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "space_id",
+        "name",
+        "animated",
+        "available"
+      ],
+      "type": "object"
+    },
+    "Emoji": {
+      "description": "An emoji on a reaction: Unicode or a custom emoji.",
+      "oneOf": [
+        {
+          "description": "A Unicode emoji.",
+          "properties": {
+            "kind": {
+              "const": "unicode",
+              "type": "string"
+            },
+            "value": {
+              "description": "The emoji text, for example `👍`.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A custom emoji.",
+          "properties": {
+            "animated": {
+              "default": false,
+              "description": "An animated GIF (S16).",
+              "type": "boolean"
+            },
+            "available": {
+              "default": true,
+              "description": "`false` once the emoji is deleted (S16). Old payloads read as `true`.",
+              "type": "boolean"
+            },
+            "id": {
+              "description": "The emoji id.",
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "type": "string"
+            },
+            "kind": {
+              "const": "custom",
+              "type": "string"
+            },
+            "name": {
+              "description": "The emoji name, for example `party`.",
+              "type": "string"
+            },
+            "url": {
+              "description": "Signed image URL; absent when not available (S16).",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "name"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "FileKind": {
+      "description": "What a file is, from its sniffed content type (S15 §10).",
+      "oneOf": [
+        {
+          "const": "image",
+          "description": "A raster image (`image/*` from the magic table, or SVG).",
+          "type": "string"
+        },
+        {
+          "const": "video",
+          "description": "A video.",
+          "type": "string"
+        },
+        {
+          "const": "audio",
+          "description": "Audio.",
+          "type": "string"
+        },
+        {
+          "const": "document",
+          "description": "A document: PDF, text, office formats.",
+          "type": "string"
+        },
+        {
+          "const": "archive",
+          "description": "An archive: zip, gzip, 7z, rar.",
+          "type": "string"
+        },
+        {
+          "const": "other",
+          "description": "Anything else.",
+          "type": "string"
+        }
+      ]
+    },
+    "ForwardedMessage": {
+      "description": "The snapshot a forward copies (S13 §12.3): the origin's text at forward time, sealed under\nthe target channel's key. Source edits and deletes never change it.",
+      "properties": {
+        "author_id": {
+          "description": "Its author.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "body": {
+          "description": "Its body at forward time.",
+          "type": "string"
+        },
+        "channel_id": {
+          "description": "Its channel.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "created_at": {
+          "description": "When the origin was posted.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "message_id": {
+          "description": "The origin message.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message_id",
+        "channel_id",
+        "author_id",
+        "body",
+        "created_at"
+      ],
+      "type": "object"
+    },
+    "Highlights": {
+      "description": "Byte ranges `[start, end)` of matching tokens in the current text (at most 50 per field;\nfilter-only queries have none).",
+      "properties": {
+        "body": {
+          "description": "In `message.body`.",
+          "items": {
+            "items": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "forwarded_body": {
+          "description": "In `message.forwarded.body`.",
+          "items": {
+            "items": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "name": {
+          "description": "In `file.name` (file hits).",
+          "items": {
+            "items": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "LinkPreview": {
+      "description": "One link preview of a message. Text fields are plain text: never render them as HTML or\nmarkdown.",
+      "properties": {
+        "description": {
+          "description": "The page description (≤ 512 characters).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "host": {
+          "description": "Its host.",
+          "type": "string"
+        },
+        "image": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PreviewImage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The preview image."
+        },
+        "kind": {
+          "$ref": "#/$defs/LinkPreviewKind",
+          "description": "Page or image."
+        },
+        "redirected_host": {
+          "description": "The final host when a redirect changed it; clients should show it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "site_name": {
+          "description": "The site name (≤ 100 characters).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "description": "The page title (≤ 256 characters).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "url": {
+          "description": "The URL as the author typed it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url",
+        "host",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "LinkPreviewKind": {
+      "description": "What a link preview shows.",
+      "oneOf": [
+        {
+          "const": "page",
+          "description": "An HTML page (title, description, optional image).",
+          "type": "string"
+        },
+        {
+          "const": "image",
+          "description": "The link is an image.",
+          "type": "string"
+        }
+      ]
+    },
+    "MentionTargets": {
+      "description": "Who a message mentions, after expansion rules (S13).",
+      "properties": {
+        "channel": {
+          "description": "`@channel` (or an alias).",
+          "type": "boolean"
+        },
+        "groups": {
+          "description": "Mentioned user groups.",
+          "items": {
+            "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "here": {
+          "description": "`@here`.",
+          "type": "boolean"
+        },
+        "members": {
+          "description": "Mentioned members.",
+          "items": {
+            "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "roles": {
+          "description": "Mentioned roles.",
+          "items": {
+            "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "members",
+        "roles",
+        "groups",
+        "channel",
+        "here"
+      ],
+      "type": "object"
+    },
+    "Message": {
+      "description": "A message.",
+      "properties": {
+        "also_in_channel": {
+          "description": "Whether a thread reply was also sent to the channel.",
+          "type": "boolean"
+        },
+        "attachments": {
+          "description": "Attachments.",
+          "items": {
+            "$ref": "#/$defs/Attachment"
+          },
+          "type": "array"
+        },
+        "author_id": {
+          "description": "The author.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "body": {
+          "description": "The body; empty when deleted.",
+          "type": "string"
+        },
+        "call": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CallSummary"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The DM call this message records (S34 v2 §18.2); absent on tombstones and forwards."
+        },
+        "channel_id": {
+          "description": "Its channel.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "created_at": {
+          "description": "When it was posted.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "deleted_at": {
+          "description": "When it was deleted.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "edited_at": {
+          "description": "When it was last edited.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "emojis": {
+          "default": [],
+          "description": "The usable custom emoji of the body, ascending id (S16); `[]` on tombstones.",
+          "items": {
+            "$ref": "#/$defs/CustomEmojiRef"
+          },
+          "type": "array"
+        },
+        "forwarded": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ForwardedMessage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "For a forward: the snapshot of the origin (S13)."
+        },
+        "id": {
+          "description": "The message id.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "mentions": {
+          "$ref": "#/$defs/MentionTargets",
+          "description": "Who the message mentions."
+        },
+        "mentions_me": {
+          "description": "The message mentions the viewer directly (per viewer; v1 counts direct member\nmentions only, contracts rev 31). Present only when true.",
+          "type": "boolean"
+        },
+        "nonce": {
+          "description": "The sender's nonce, echoed back.",
+          "maxLength": 64,
+          "minLength": 1,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "on_behalf_of": {
+          "description": "For assistant posts, the person the assistant acts for.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pinned": {
+          "description": "Whether it is pinned.",
+          "type": "boolean"
+        },
+        "poll": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Poll"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The poll posted with the message (S17); absent on tombstones."
+        },
+        "previews": {
+          "default": [],
+          "description": "Link previews in body order (S16); `[]` on tombstones and until the preview job lands.",
+          "items": {
+            "$ref": "#/$defs/LinkPreview"
+          },
+          "type": "array"
+        },
+        "previews_suppressed": {
+          "default": false,
+          "description": "The author (or a moderator) turned previews off for this message (S16).",
+          "type": "boolean"
+        },
+        "reactions": {
+          "description": "Reaction counts.",
+          "items": {
+            "$ref": "#/$defs/ReactionSummary"
+          },
+          "type": "array"
+        },
+        "recording": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RecordingSummary"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The recording this message records (S35 v2 §15.1); absent on tombstones and forwards."
+        },
+        "reference": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MessageReference"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A reply, quote or forward reference."
+        },
+        "seq": {
+          "description": "The channel seq this message is current as of.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "thread": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ThreadSummary"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Thread summary, on thread roots."
+        },
+        "thread_root_id": {
+          "description": "The thread root, for replies.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "transcript": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TranscriptTurn"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The transcript turn this message is (S35 v2 §15.2): numbers only, the text is the body;\nabsent on tombstones."
+        }
+      },
+      "required": [
+        "id",
+        "channel_id",
+        "author_id",
+        "body",
+        "also_in_channel",
+        "mentions",
+        "reactions",
+        "attachments",
+        "pinned",
+        "seq",
+        "created_at"
+      ],
+      "type": "object"
+    },
+    "MessageReference": {
+      "description": "A message's reference to another message.",
+      "properties": {
+        "channel_id": {
+          "description": "Its channel.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ReferenceKind",
+          "description": "Reply, quote or forward."
+        },
+        "message_id": {
+          "description": "The referenced message.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "message_id",
+        "channel_id"
+      ],
+      "type": "object"
+    },
+    "Poll": {
+      "description": "A message's poll.",
+      "properties": {
+        "anonymous": {
+          "description": "Voters are never shown.",
+          "type": "boolean"
+        },
+        "closed_at": {
+          "description": "When it was closed (by hand, or its `closes_at` once the close ran).",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "closed_by": {
+          "description": "Who closed it by hand.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "closes_at": {
+          "description": "When it closes by itself.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max_choices": {
+          "description": "How many options a voter may pick.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "my_votes": {
+          "description": "The viewer's own votes (reads and the voter's own event only).",
+          "items": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "options": {
+          "description": "The options.",
+          "items": {
+            "$ref": "#/$defs/PollOption"
+          },
+          "type": "array"
+        },
+        "question": {
+          "description": "The question.",
+          "type": "string"
+        },
+        "results_visibility": {
+          "$ref": "#/$defs/PollResultsVisibility",
+          "description": "When counts are shown."
+        },
+        "state": {
+          "$ref": "#/$defs/PollState",
+          "description": "Open or closed (closed once `closes_at` passed, even before the close ran)."
+        },
+        "voter_count": {
+          "description": "Members who voted; `null` while results are hidden.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "question",
+        "options",
+        "max_choices",
+        "anonymous",
+        "results_visibility",
+        "state"
+      ],
+      "type": "object"
+    },
+    "PollOption": {
+      "description": "One poll option.",
+      "properties": {
+        "id": {
+          "description": "1-based option id.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "text": {
+          "description": "The text.",
+          "type": "string"
+        },
+        "votes": {
+          "description": "Votes; `null` while results are hidden.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "text"
+      ],
+      "type": "object"
+    },
+    "PollResultsVisibility": {
+      "description": "When a poll's counts are shown (`polls.results_visibility`).",
+      "oneOf": [
+        {
+          "const": "always",
+          "description": "Always.",
+          "type": "string"
+        },
+        {
+          "const": "after_close",
+          "description": "Only once the poll is closed.",
+          "type": "string"
+        }
+      ]
+    },
+    "PollState": {
+      "description": "Whether a poll takes votes.",
+      "oneOf": [
+        {
+          "const": "open",
+          "description": "Takes votes.",
+          "type": "string"
+        },
+        {
+          "const": "closed",
+          "description": "Closed by hand or by its time.",
+          "type": "string"
+        }
+      ]
+    },
+    "PreviewImage": {
+      "description": "A preview's image, stored and served by Sew.",
+      "properties": {
+        "height": {
+          "description": "Height in pixels (≤ 800).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "url": {
+          "description": "Signed URL (1 h).",
+          "type": "string"
+        },
+        "width": {
+          "description": "Width in pixels (≤ 800).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "url",
+        "width",
+        "height"
+      ],
+      "type": "object"
+    },
+    "ReactionSummary": {
+      "description": "One emoji's reaction count on a message.",
+      "properties": {
+        "count": {
+          "description": "How many members reacted with it.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "emoji": {
+          "$ref": "#/$defs/Emoji",
+          "description": "The emoji."
+        },
+        "me": {
+          "description": "Whether the viewer reacted with it.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "emoji",
+        "count",
+        "me"
+      ],
+      "type": "object"
+    },
+    "RecordingSummary": {
+      "description": "`Message.recording` on the record message (§15.1).",
+      "properties": {
+        "audio": {
+          "$ref": "#/$defs/SummaryAudio",
+          "description": "The audio."
+        },
+        "auto": {
+          "description": "Auto-started.",
+          "type": "boolean"
+        },
+        "duration_ms": {
+          "description": "`stopped_at − started_at` once stopped.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "e2ee": {
+          "description": "Always `true` in v2: every call is end-to-end encrypted.",
+          "type": "boolean"
+        },
+        "recording_id": {
+          "description": "The recording.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "speaker_ids": {
+          "description": "Members whose speech was stored, ascending.",
+          "items": {
+            "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "started_at": {
+          "description": "When.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "started_by": {
+          "description": "Who started it.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "stop_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StopReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why."
+        },
+        "stopped_at": {
+          "description": "When it stopped.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "transcript": {
+          "$ref": "#/$defs/SummaryTranscript",
+          "description": "The transcript."
+        }
+      },
+      "required": [
+        "recording_id",
+        "started_by",
+        "started_at",
+        "auto",
+        "speaker_ids",
+        "audio",
+        "transcript",
+        "e2ee"
+      ],
+      "type": "object"
+    },
+    "ReferenceKind": {
+      "description": "How a message refers to another.",
+      "oneOf": [
+        {
+          "const": "reply",
+          "description": "An inline reply.",
+          "type": "string"
+        },
+        {
+          "const": "quote",
+          "description": "A quote.",
+          "type": "string"
+        },
+        {
+          "const": "forward",
+          "description": "A forward.",
+          "type": "string"
+        }
+      ]
+    },
+    "SearchChannelRef": {
+      "description": "A channel that holds at least one hit on the page.",
+      "properties": {
+        "archived": {
+          "description": "Archived channels are included by default and marked.",
+          "type": "boolean"
+        },
+        "dm_member_ids": {
+          "description": "DM members, ascending (DMs only).",
+          "items": {
+            "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "description": "The channel id.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "joined": {
+          "description": "The caller (or the assistant's person) is a member.",
+          "type": "boolean"
+        },
+        "name": {
+          "description": "Name (space channels).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "slug": {
+          "description": "Slug (space channels).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "space_id": {
+          "description": "Its space; absent for DMs.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "$ref": "#/$defs/ChannelType",
+          "description": "The channel type (`dm`, `group_dm` for DMs)."
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "archived",
+        "joined"
+      ],
+      "type": "object"
+    },
+    "SearchFileHit": {
+      "description": "One file hit.",
+      "properties": {
+        "file": {
+          "$ref": "#/$defs/SearchFileRef",
+          "description": "The file."
+        },
+        "highlights": {
+          "$ref": "#/$defs/Highlights",
+          "description": "Where the query matched (`name`)."
+        },
+        "message": {
+          "$ref": "#/$defs/Message",
+          "description": "The message that carries it, current as of the read."
+        },
+        "score": {
+          "description": "The ranking score (`relevance` only).",
+          "format": "float",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "file",
+        "message",
+        "highlights"
+      ],
+      "type": "object"
+    },
+    "SearchFileRef": {
+      "description": "A file as search shows it (from the S15 attachment seam).",
+      "properties": {
+        "attachment_id": {
+          "description": "The attachment.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "channel_id": {
+          "description": "Its channel.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "ext": {
+          "description": "Lowercase extension without the dot.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message_id": {
+          "description": "Its message.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "mime": {
+          "description": "MIME type.",
+          "type": "string"
+        },
+        "name": {
+          "description": "The file name.",
+          "type": "string"
+        },
+        "size": {
+          "description": "Size in bytes.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "attachment_id",
+        "message_id",
+        "channel_id",
+        "name",
+        "mime",
+        "size"
+      ],
+      "type": "object"
+    },
+    "SearchSort": {
+      "description": "Result order.",
+      "oneOf": [
+        {
+          "const": "relevance",
+          "description": "BM25 blended with a 30-day recency boost (the default).",
+          "type": "string"
+        },
+        {
+          "const": "recent",
+          "description": "Newest first. Filter-only queries always sort this way.",
+          "type": "string"
+        }
+      ]
+    },
+    "StopReason": {
+      "description": "Why a recording stopped (§8.5). Stored in `recordings.stop_reason`.",
+      "oneOf": [
+        {
+          "const": "stopped",
+          "description": "The stop route.",
+          "type": "string"
+        },
+        {
+          "const": "room_empty",
+          "description": "No standard voice entries left in the room.",
+          "type": "string"
+        },
+        {
+          "const": "call_ended",
+          "description": "The DM call ended.",
+          "type": "string"
+        },
+        {
+          "const": "max_duration",
+          "description": "`recording.max_duration_ms` reached.",
+          "type": "string"
+        },
+        {
+          "const": "recorder_failed",
+          "description": "The recorder failed (join timeout, certificate, unreachable, too many rejoins).",
+          "type": "string"
+        },
+        {
+          "const": "media_restarted",
+          "description": "The engine room was lost beyond the re-admit grace.",
+          "type": "string"
+        },
+        {
+          "const": "storage_full",
+          "description": "Three consecutive `storage_full` segment writes.",
+          "type": "string"
+        },
+        {
+          "const": "disabled",
+          "description": "Recording was disabled (policy, config, archive, `sew recording disable`).",
+          "type": "string"
+        },
+        {
+          "const": "max_bytes",
+          "description": "`recording.max_bytes` reached.",
+          "type": "string"
+        }
+      ]
+    },
+    "SummaryAudio": {
+      "description": "The audio part of a [`RecordingSummary`].",
+      "properties": {
+        "expires_at": {
+          "description": "When it expires (set at transcript final).",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "keep_days": {
+          "description": "Keep days.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mixed": {
+          "description": "A mixed file is (or will be) made.",
+          "type": "boolean"
+        },
+        "state": {
+          "$ref": "#/$defs/AudioState",
+          "description": "Its state."
+        }
+      },
+      "required": [
+        "state",
+        "mixed",
+        "keep_days"
+      ],
+      "type": "object"
+    },
+    "SummaryTranscript": {
+      "description": "The transcript part of a [`RecordingSummary`].",
+      "properties": {
+        "gaps_ms": {
+          "description": "Total gap time.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "lang": {
+          "description": "The majority language of the turns.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/TranscriptState",
+          "description": "Its state."
+        },
+        "turns": {
+          "description": "Turns posted.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "state",
+        "turns",
+        "gaps_ms"
+      ],
+      "type": "object"
+    },
+    "ThreadSummary": {
+      "description": "A thread's summary, carried on its root message and in `thread_updated`.",
+      "properties": {
+        "channel_id": {
+          "description": "Its channel.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "following": {
+          "description": "Whether the viewer follows the thread.",
+          "type": "boolean"
+        },
+        "last_reply_at": {
+          "description": "When the newest reply was posted.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_reply_id": {
+          "description": "The newest reply.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reply_count": {
+          "description": "Number of replies.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "root_id": {
+          "description": "The root message.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "seq": {
+          "description": "The channel seq this summary is current as of; set in `thread_updated` events (S13).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "root_id",
+        "channel_id",
+        "reply_count",
+        "following"
+      ],
+      "type": "object"
+    },
+    "TranscriptState": {
+      "description": "The transcript (§14.5). Stored in `recordings.transcript_state`.",
+      "oneOf": [
+        {
+          "const": "pending",
+          "description": "No segment transcribed yet.",
+          "type": "string"
+        },
+        {
+          "const": "running",
+          "description": "Turns are being posted.",
+          "type": "string"
+        },
+        {
+          "const": "done",
+          "description": "Final, complete.",
+          "type": "string"
+        },
+        {
+          "const": "partial",
+          "description": "Final, with gaps or failed segments.",
+          "type": "string"
+        },
+        {
+          "const": "failed",
+          "description": "Final, no turn posted and at least one segment failed.",
+          "type": "string"
+        }
+      ]
+    },
+    "TranscriptTurn": {
+      "description": "`Message.transcript` on a transcript turn (§15.2).",
+      "properties": {
+        "end_ms": {
+          "description": "End, ms from the recording start.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "lang": {
+          "description": "The turn's language.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pieces": {
+          "description": "The pieces.",
+          "items": {
+            "$ref": "#/$defs/TurnPiece"
+          },
+          "type": "array"
+        },
+        "recording_id": {
+          "description": "The recording.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "speaker_id": {
+          "description": "The speaker (also the message author).",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "spoken_at": {
+          "description": "When it was said (`created_at` is posting time).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "start_ms": {
+          "description": "Start, ms from the recording start.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "recording_id",
+        "speaker_id",
+        "start_ms",
+        "end_ms",
+        "spoken_at",
+        "pieces"
+      ],
+      "type": "object"
+    },
+    "TurnPiece": {
+      "description": "One piece of a transcript turn (numbers only; text lives in the message body, §10).",
+      "properties": {
+        "end_ms": {
+          "description": "End, ms from the recording start.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "len": {
+          "description": "Byte length of the piece's text in the body.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "offset": {
+          "description": "Byte offset of the piece's text in the body.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "start_ms": {
+          "description": "Start, ms from the recording start.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "start_ms",
+        "end_ms",
+        "offset",
+        "len"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Response of `POST /api/v1/search/files`.",
+  "properties": {
+    "approx_total": {
+      "description": "Index matches inside the caller's scope before the re-check.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "as_of": {
+      "description": "The fixed time relevance is computed against (page 1's).",
+      "format": "date-time",
+      "type": "string"
+    },
+    "channels": {
+      "description": "One entry per distinct channel in `items`.",
+      "items": {
+        "$ref": "#/$defs/SearchChannelRef"
+      },
+      "type": "array"
+    },
+    "cursor": {
+      "description": "Pass back for the next page.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "has_more": {
+      "description": "More pages may follow.",
+      "type": "boolean"
+    },
+    "items": {
+      "description": "Hits in order.",
+      "items": {
+        "$ref": "#/$defs/SearchFileHit"
+      },
+      "type": "array"
+    },
+    "sort": {
+      "$ref": "#/$defs/SearchSort",
+      "description": "The sort actually used."
+    }
+  },
+  "required": [
+    "items",
+    "channels",
+    "sort",
+    "as_of",
+    "approx_total",
+    "has_more"
+  ],
+  "title": "SearchFilesResponse",
+  "type": "object"
+}

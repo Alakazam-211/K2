@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`scheduled.ndjson`: pending and failed scheduled messages (full exports only).",
+  "properties": {
+    "also_send_to_channel": {
+      "description": "Reply also to the channel.",
+      "type": "boolean"
+    },
+    "body": {
+      "description": "The text.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "channel_id": {
+      "description": "Its channel.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "created_at": {
+      "description": "Created.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "fail_reason": {
+      "description": "Failure code (1–13).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "failed_at": {
+      "description": "Failed.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "id": {
+      "description": "The scheduled message id.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "member_id": {
+      "description": "Its author.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "send_at": {
+      "description": "When it sends.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "state": {
+      "description": "`pending` or `failed`.",
+      "type": "string"
+    },
+    "thread_root_id": {
+      "description": "Its thread.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "timezone": {
+      "description": "IANA zone it was set in.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "updated_at": {
+      "description": "Last change (its seal month).",
+      "format": "date-time",
+      "type": "string"
+    },
+    "version": {
+      "description": "Row version.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "id",
+    "member_id",
+    "channel_id",
+    "send_at",
+    "state",
+    "version",
+    "created_at",
+    "updated_at"
+  ],
+  "title": "ScheduledRecord",
+  "type": "object"
+}

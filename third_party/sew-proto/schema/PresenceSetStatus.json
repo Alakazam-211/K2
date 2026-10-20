@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A presence status a client may set.",
+  "oneOf": [
+    {
+      "const": "online",
+      "description": "Online.",
+      "type": "string"
+    },
+    {
+      "const": "idle",
+      "description": "Idle.",
+      "type": "string"
+    },
+    {
+      "const": "dnd",
+      "description": "Do not disturb.",
+      "type": "string"
+    },
+    {
+      "const": "invisible",
+      "description": "Appear offline.",
+      "type": "string"
+    }
+  ],
+  "title": "PresenceSetStatus"
+}

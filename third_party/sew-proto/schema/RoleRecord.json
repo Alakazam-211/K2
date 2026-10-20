@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`roles.ndjson` (the `@everyone` role has the space's id).",
+  "properties": {
+    "color": {
+      "description": "RGB color.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "created_at": {
+      "description": "Created.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "hoist": {
+      "description": "Shown apart in member lists.",
+      "type": "boolean"
+    },
+    "id": {
+      "description": "The role id.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "mentionable": {
+      "description": "Mentionable.",
+      "type": "boolean"
+    },
+    "name": {
+      "description": "Name.",
+      "type": "string"
+    },
+    "perms": {
+      "description": "Permission bits, decimal string.",
+      "type": "string"
+    },
+    "position": {
+      "description": "Position (0 = `@everyone`).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "space_id": {
+      "description": "Its space.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "updated_at": {
+      "description": "Last change.",
+      "format": "date-time",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "space_id",
+    "name",
+    "position",
+    "perms",
+    "mentionable",
+    "hoist",
+    "created_at",
+    "updated_at"
+  ],
+  "title": "RoleRecord",
+  "type": "object"
+}

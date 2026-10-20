@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Body of `space_member_removed` (S10 gap G6).",
+  "properties": {
+    "member_id": {
+      "description": "The member who left.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "space_id": {
+      "description": "The space.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "space_id",
+    "member_id"
+  ],
+  "title": "SpaceMemberRemoved",
+  "type": "object"
+}

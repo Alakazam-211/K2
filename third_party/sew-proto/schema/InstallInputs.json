@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`sew install --config-json` (SW5).",
+  "properties": {
+    "cred_mode": {
+      "description": "`--cred-mode`: `encrypted` or `plain`.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "k2_jwks_url": {
+      "description": "`--k2-jwks-url`: K2's JWKS URL (with provider `k2`).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "master_key_from": {
+      "description": "`--master-key-from`: an absolute path to the master key file (never `-`).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "mgmt_allow_uids": {
+      "description": "`[mgmt] allow_uids` (SW7): integrator uids allowed on the mgmt socket besides the\n`sew-mgmt` group; `sew install` writes them to `sew.toml` (absent: the file keeps what\nit has; `[]` removes the key). 0–16 distinct uids, never 0. JSON only, no flag.",
+      "items": {
+        "format": "uint32",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "mgmt_users": {
+      "description": "`--mgmt-user` (repeatable): users to add to `sew-mgmt`, 0–16 login names.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "pg_major": {
+      "description": "`--pg-major`: the Postgres major, 16–99.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "profile": {
+      "description": "`--profile`: `dedicated` or `shared`.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "provider": {
+      "description": "`--provider`: `standalone` or `k2`.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "title": "InstallInputs",
+  "type": "object"
+}

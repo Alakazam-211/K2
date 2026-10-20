@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "One segment of a track page (§19.2; keys and URLs only with P1).",
+  "properties": {
+    "bytes": {
+      "description": "Sealed size.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "duration_ms": {
+      "description": "Length.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "format": {
+      "description": "[`SEALED_AUDIO_FORMAT`] (P1).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "key": {
+      "description": "The segment key, base64 (P1).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "segment_id": {
+      "description": "The segment.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "start_ms": {
+      "description": "Offset from the recording start.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "url": {
+      "description": "The ciphertext URL (P1).",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "segment_id",
+    "start_ms",
+    "duration_ms",
+    "bytes"
+  ],
+  "title": "AudioSegment",
+  "type": "object"
+}

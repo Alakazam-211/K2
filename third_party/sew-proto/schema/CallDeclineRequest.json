@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`POST /api/v1/channels/{id}/call/decline` body (§14.6).",
+  "properties": {
+    "call_id": {
+      "description": "The active call.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "call_id"
+  ],
+  "title": "CallDeclineRequest",
+  "type": "object"
+}

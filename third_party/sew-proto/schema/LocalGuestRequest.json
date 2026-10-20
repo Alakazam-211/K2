@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /mgmt/v1/local/users/guest` (S19 §19): make a local user a guest (`true`) or a\nmember (`false`). Answers [`LocalUserResponse`]; `changed: false` when nothing changed.",
+  "properties": {
+    "guest": {
+      "description": "Guest or member.",
+      "type": "boolean"
+    },
+    "username": {
+      "description": "The local user.",
+      "pattern": "^[a-z0-9_-]{2,64}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "username",
+    "guest"
+  ],
+  "title": "LocalGuestRequest",
+  "type": "object"
+}

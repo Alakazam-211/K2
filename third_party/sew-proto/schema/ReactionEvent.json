@@ -1,0 +1,113 @@
+{
+  "$defs": {
+    "Emoji": {
+      "description": "An emoji on a reaction: Unicode or a custom emoji.",
+      "oneOf": [
+        {
+          "description": "A Unicode emoji.",
+          "properties": {
+            "kind": {
+              "const": "unicode",
+              "type": "string"
+            },
+            "value": {
+              "description": "The emoji text, for example `👍`.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A custom emoji.",
+          "properties": {
+            "animated": {
+              "default": false,
+              "description": "An animated GIF (S16).",
+              "type": "boolean"
+            },
+            "available": {
+              "default": true,
+              "description": "`false` once the emoji is deleted (S16). Old payloads read as `true`.",
+              "type": "boolean"
+            },
+            "id": {
+              "description": "The emoji id.",
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "type": "string"
+            },
+            "kind": {
+              "const": "custom",
+              "type": "string"
+            },
+            "name": {
+              "description": "The emoji name, for example `party`.",
+              "type": "string"
+            },
+            "url": {
+              "description": "Signed image URL; absent when not available (S16).",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "name"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Body of `reaction_added` and `reaction_removed`.",
+  "properties": {
+    "channel_id": {
+      "description": "Its channel.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "count": {
+      "default": 0,
+      "description": "The emoji's count on the message after the change (S13).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "emoji": {
+      "$ref": "#/$defs/Emoji",
+      "description": "The emoji."
+    },
+    "member_id": {
+      "description": "Who reacted.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "message_id": {
+      "description": "The message.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "seq": {
+      "default": 0,
+      "description": "The seq of the `reaction_changed` change entry (S13).",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "message_id",
+    "channel_id",
+    "member_id",
+    "emoji"
+  ],
+  "title": "ReactionEvent",
+  "type": "object"
+}

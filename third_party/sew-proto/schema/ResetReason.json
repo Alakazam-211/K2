@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Why a call's group is reset (`reset.reason`; S50 §12.9, §19.1).",
+  "oneOf": [
+    {
+      "const": "committer_timeout",
+      "description": "Every committer candidate was silent.",
+      "type": "string"
+    },
+    {
+      "const": "remove_deadline",
+      "description": "A removal was not activated by `remove_deadline_ms`.",
+      "type": "string"
+    },
+    {
+      "const": "rebuild_conflict",
+      "description": "A rebuild found two equally covered groups.",
+      "type": "string"
+    },
+    {
+      "const": "invalid_commits",
+      "description": "Too many invalid commits in one generation.",
+      "type": "string"
+    },
+    {
+      "const": "invariant",
+      "description": "A state report broke a group invariant.",
+      "type": "string"
+    }
+  ],
+  "title": "ResetReason"
+}

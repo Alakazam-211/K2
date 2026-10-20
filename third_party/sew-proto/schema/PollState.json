@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Whether a poll takes votes.",
+  "oneOf": [
+    {
+      "const": "open",
+      "description": "Takes votes.",
+      "type": "string"
+    },
+    {
+      "const": "closed",
+      "description": "Closed by hand or by its time.",
+      "type": "string"
+    }
+  ],
+  "title": "PollState"
+}

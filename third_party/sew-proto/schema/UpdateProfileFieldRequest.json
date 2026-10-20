@@ -1,0 +1,68 @@
+{
+  "$defs": {
+    "ProfileFieldVisibility": {
+      "description": "Who sees a custom field.",
+      "oneOf": [
+        {
+          "const": "everyone",
+          "description": "Everyone who can see the member, guests included.",
+          "type": "string"
+        },
+        {
+          "const": "non_guests",
+          "description": "Everyone but guests.",
+          "type": "string"
+        },
+        {
+          "const": "admins",
+          "description": "Install owner and admins, and the member themself.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /api/v1/install/profile-fields/{id}/update`.",
+  "properties": {
+    "label": {
+      "description": "A new label.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "options": {
+      "description": "New `select` options.",
+      "items": {
+        "type": "string"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "position": {
+      "description": "New position.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "visibility": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProfileFieldVisibility"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "New visibility."
+    }
+  },
+  "title": "UpdateProfileFieldRequest",
+  "type": "object"
+}

@@ -1,0 +1,80 @@
+[package]
+name = "sew-client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+# SW1 (Rosson, 2026-10-17): Apache-2.0, with LICENSE and NOTICE in this directory.
+license = "Apache-2.0"
+publish.workspace = true
+repository.workspace = true
+description = "Typed async client for Sew: HTTP API, mgmt socket with act-as, gateway, sync cursors, and the sewc CLI."
+# SW10: K2 vendors the library: scripts/vendor-sew-proto.sh packs it without the `cli` feature,
+# sewc and the dev-dependencies, so its only path dependency is sew-proto, vendored beside it
+# (tests/vendorable.rs). SW1: the package carries the Apache-2.0 LICENSE and NOTICE.
+include = ["src/**", "LICENSE", "NOTICE"]
+
+# S25 §5, §16.3. K2 uses `default-features = false, features = ["mgmt", "sync"]`.
+[features]
+default = ["gateway", "mgmt", "sync", "cli"]
+# The websocket gateway client (tokio-tungstenite, zstd-stream, rustls for wss).
+gateway = [
+    "dep:tokio-tungstenite",
+    "dep:zstd",
+    "dep:rustls",
+    "dep:tokio-rustls",
+    "dep:webpki-roots",
+]
+# The mgmt client over the Unix socket (compiles to nothing on non-unix targets).
+mgmt = ["dep:hyper", "dep:hyper-util", "dep:http-body-util"]
+# The sync position model (SyncState, SyncPlan, cursor stores, DeliveryCursor).
+sync = []
+# The `sewc` binary.
+cli = ["gateway", "mgmt", "sync", "dep:clap", "dep:tracing-subscriber", "dep:sew-crypto", "dep:zeroize"]
+
+[[bin]]
+name = "sewc"
+path = "src/bin/sewc/main.rs"
+required-features = ["cli"]
+
+[dependencies]
+sew-proto = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+futures-util = { workspace = true }
+bytes = { workspace = true }
+url = { workspace = true }
+http = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_urlencoded = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+rand = { workspace = true }
+base64 = { workspace = true }
+hyper = { workspace = true, optional = true }
+hyper-util = { workspace = true, optional = true }
+http-body-util = { workspace = true, optional = true }
+tokio-tungstenite = { workspace = true, optional = true }
+zstd = { workspace = true, optional = true }
+rustls = { workspace = true, optional = true }
+tokio-rustls = { workspace = true, optional = true }
+webpki-roots = { workspace = true, optional = true }
+clap = { workspace = true, optional = true, features = ["env"] }
+tracing-subscriber = { workspace = true, optional = true }
+# S35 v2 §19.4: `sewc recordings download --decrypt` opens recorder-sealed files (the S4 stream
+# format only; no keyring, no media libraries).
+sew-crypto = { path = "../sew-crypto", version = "0.3.0", optional = true, default-features = false, features = ["stream"] }
+zeroize = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+# Real-server tests use the S2 kit, which runs on Linux only (C2).
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+sew-testkit = { workspace = true }
+uuid = { workspace = true }
+sqlx = { workspace = true }
+toml = { workspace = true }
+
+[lints]
+workspace = true

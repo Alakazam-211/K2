@@ -1,0 +1,138 @@
+{
+  "$defs": {
+    "MeetingAttendeeInput": {
+      "additionalProperties": false,
+      "description": "One attendee as given to create and update: `member_id` for `member`, `email` for `email`.",
+      "properties": {
+        "email": {
+          "description": "The address (`email` only; at most 254 bytes).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/MeetingAttendeeKind",
+          "description": "`member` or `email`."
+        },
+        "member_id": {
+          "description": "The member (`member` only).",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "type": "object"
+    },
+    "MeetingAttendeeKind": {
+      "description": "An attendee's kind.",
+      "oneOf": [
+        {
+          "const": "member",
+          "description": "A member of the install: added to the meeting channel (so they skip the lobby).",
+          "type": "string"
+        },
+        {
+          "const": "email",
+          "description": "An email address for the calendar file only; never an account.",
+          "type": "string"
+        }
+      ]
+    },
+    "MeetingKind": {
+      "description": "How a meeting started.",
+      "oneOf": [
+        {
+          "const": "instant",
+          "description": "Start now: `live` at create, planned for 60 minutes.",
+          "type": "string"
+        },
+        {
+          "const": "scheduled",
+          "description": "For later: `scheduled` until the first voice join.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /api/v1/meetings`.",
+  "properties": {
+    "attendees": {
+      "description": "Members (added to the meeting channel) and emails (for the calendar file), at most 100.",
+      "items": {
+        "$ref": "#/$defs/MeetingAttendeeInput"
+      },
+      "type": "array"
+    },
+    "auto_record": {
+      "description": "Record from the start (stored; MC4 maps it to the channel's `recording_auto`). Default\noff.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "client_nonce": {
+      "description": "The client's retry nonce (MC2a, F10): 16–64 characters of `[A-Za-z0-9_-]`. A create\nthat repeats an earlier one's nonce (same organiser, within 24 hours) answers that\nmeeting and its current link instead of making another. Stored only as SHA-256.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "ends_at": {
+      "description": "When it is planned to end (`scheduled` only; 1 minute to\n`meetings.max_duration_minutes` after `starts_at`).",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "guest_screen_share": {
+      "description": "Link guests may share their screen (MC2). Default off.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "kind": {
+      "$ref": "#/$defs/MeetingKind",
+      "description": "`instant` (starts now, 60 minutes) or `scheduled`."
+    },
+    "show_title_to_guests": {
+      "description": "Link guests see the title and the organiser's name before they join (MC2). Default on.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "starts_at": {
+      "description": "When it starts (`scheduled` only; at most a minute in the past).",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "title": {
+      "description": "The title, 1–200 characters (sealed at rest).",
+      "type": "string"
+    },
+    "tz": {
+      "description": "The IANA zone the times were chosen in (the calendar file's TZID).",
+      "type": "string"
+    }
+  },
+  "required": [
+    "kind",
+    "title",
+    "tz"
+  ],
+  "title": "CreateMeetingRequest",
+  "type": "object"
+}

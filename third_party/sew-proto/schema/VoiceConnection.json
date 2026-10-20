@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Whether the engine has confirmed the member's media (S33 v2 §10.1).",
+  "oneOf": [
+    {
+      "const": "connecting",
+      "description": "The admit is registered; media not confirmed yet.",
+      "type": "string"
+    },
+    {
+      "const": "connected",
+      "description": "The engine confirmed the participant (also during a reconnect window).",
+      "type": "string"
+    }
+  ],
+  "title": "VoiceConnection"
+}

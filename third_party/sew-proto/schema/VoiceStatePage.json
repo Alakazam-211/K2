@@ -1,0 +1,127 @@
+{
+  "$defs": {
+    "VoiceConnection": {
+      "description": "Whether the engine has confirmed the member's media (S33 v2 §10.1).",
+      "oneOf": [
+        {
+          "const": "connecting",
+          "description": "The admit is registered; media not confirmed yet.",
+          "type": "string"
+        },
+        {
+          "const": "connected",
+          "description": "The engine confirmed the participant (also during a reconnect window).",
+          "type": "string"
+        }
+      ]
+    },
+    "VoiceState": {
+      "description": "A member's voice state (S33 v2 §10.1).",
+      "properties": {
+        "call_id": {
+          "description": "The DM call (`calls.id`) of a call entry (S34 v2 §20.1); absent in voice channels.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "channel_id": {
+          "description": "The voice channel.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "connection": {
+          "$ref": "#/$defs/VoiceConnection",
+          "description": "`connecting` or `connected`."
+        },
+        "joined_at": {
+          "description": "When the join succeeded (a move resets it).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "member_id": {
+          "description": "The member.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "secure": {
+          "description": "The member's device is in the activated key epoch (S50 `secure_changed`).",
+          "type": "boolean"
+        },
+        "self_deaf": {
+          "description": "Deafened by the member (implies `self_mute`).",
+          "type": "boolean"
+        },
+        "self_mute": {
+          "description": "Muted by the member.",
+          "type": "boolean"
+        },
+        "self_stream": {
+          "default": false,
+          "description": "The member holds a screen-share lease (S34 v2 §10.2).",
+          "type": "boolean"
+        },
+        "self_video": {
+          "default": false,
+          "description": "The member holds a camera lease (S34 v2 §10.2).",
+          "type": "boolean"
+        },
+        "server_deaf": {
+          "description": "Deafened by a moderator (persistent per space).",
+          "type": "boolean"
+        },
+        "server_mute": {
+          "description": "Muted by a moderator (persistent per space).",
+          "type": "boolean"
+        },
+        "space_id": {
+          "description": "The channel's space; absent for DM calls.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "speak_denied": {
+          "description": "The member lacks SPEAK here; clients show it as muted.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "member_id",
+        "channel_id",
+        "connection",
+        "secure",
+        "self_mute",
+        "self_deaf",
+        "server_mute",
+        "server_deaf",
+        "speak_denied",
+        "joined_at"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A page of an id-keyed list: `{\"items\": [...], \"has_more\": bool}`.",
+  "properties": {
+    "has_more": {
+      "description": "Whether more items exist past this page.",
+      "type": "boolean"
+    },
+    "items": {
+      "description": "The items.",
+      "items": {
+        "$ref": "#/$defs/VoiceState"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "items",
+    "has_more"
+  ],
+  "title": "Page",
+  "type": "object"
+}

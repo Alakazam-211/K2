@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Query of `GET /api/v1/me/drafts`.",
+  "properties": {
+    "channel_id": {
+      "description": "Only this channel's drafts.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "ids": {
+      "description": "Only these drafts (catch-up refetch; missing = deleted).",
+      "pattern": "^[1-9][0-9]{0,18}(,[1-9][0-9]{0,18}){0,99}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "title": "DraftsQuery",
+  "type": "object"
+}

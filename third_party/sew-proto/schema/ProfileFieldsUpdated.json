@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "`profile_fields_updated`.",
+  "properties": {
+    "version": {
+      "description": "The new `fields_rev`.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "version"
+  ],
+  "title": "ProfileFieldsUpdated",
+  "type": "object"
+}

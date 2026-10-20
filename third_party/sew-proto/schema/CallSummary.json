@@ -1,0 +1,143 @@
+{
+  "$defs": {
+    "CallEndReason": {
+      "description": "Why a call ended (§14.5). Stored in `calls.end_reason`.",
+      "oneOf": [
+        {
+          "const": "empty",
+          "description": "Nobody left in the call.",
+          "type": "string"
+        },
+        {
+          "const": "declined",
+          "description": "A 1:1 callee declined.",
+          "type": "string"
+        },
+        {
+          "const": "no_answer",
+          "description": "Nobody answered.",
+          "type": "string"
+        },
+        {
+          "const": "alone_timeout",
+          "description": "One person alone too long.",
+          "type": "string"
+        },
+        {
+          "const": "media_restarted",
+          "description": "The media engine lost the call.",
+          "type": "string"
+        },
+        {
+          "const": "media_failed",
+          "description": "The media engine failed before anyone connected.",
+          "type": "string"
+        },
+        {
+          "const": "voice_disabled",
+          "description": "Voice was turned off.",
+          "type": "string"
+        },
+        {
+          "const": "perms_lost",
+          "description": "Nobody left who may connect.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The call summary on the call-record message (`Message.call`, §18.2).",
+  "properties": {
+    "call_id": {
+      "description": "The call.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "declined_ids": {
+      "description": "Rings resolved `declined`.",
+      "items": {
+        "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+        "pattern": "^[1-9][0-9]{0,18}$",
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "duration_ms": {
+      "description": "`ended_at − started_at` once ended.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "end_reason": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CallEndReason"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Why it ended."
+    },
+    "ended_at": {
+      "description": "When it ended.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "joined_ids": {
+      "description": "Everyone who ever connected, the starter included, ascending.",
+      "items": {
+        "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+        "pattern": "^[1-9][0-9]{0,18}$",
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "missed_ids": {
+      "description": "Rings resolved `missed`.",
+      "items": {
+        "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+        "pattern": "^[1-9][0-9]{0,18}$",
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "rung_ids": {
+      "description": "Everyone ever rung, ascending.",
+      "items": {
+        "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+        "pattern": "^[1-9][0-9]{0,18}$",
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "started_at": {
+      "description": "When.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "started_by": {
+      "description": "Who started it.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "call_id",
+    "started_by",
+    "started_at",
+    "joined_ids",
+    "rung_ids",
+    "declined_ids",
+    "missed_ids"
+  ],
+  "title": "CallSummary",
+  "type": "object"
+}

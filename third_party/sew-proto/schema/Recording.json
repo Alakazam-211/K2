@@ -1,0 +1,521 @@
+{
+  "$defs": {
+    "Capture": {
+      "description": "Whether a granted participant's microphone is actually captured (§9.2).",
+      "oneOf": [
+        {
+          "const": "recorded",
+          "description": "The recorder captures this member.",
+          "type": "string"
+        },
+        {
+          "const": "not_recorded",
+          "description": "Not captured (see the reason).",
+          "type": "string"
+        }
+      ]
+    },
+    "Consent": {
+      "description": "What a participant said to the recording notice (§9.2). Stored in\n`recording_participants.consent`.",
+      "oneOf": [
+        {
+          "const": "pending",
+          "description": "In the room, has not answered.",
+          "type": "string"
+        },
+        {
+          "const": "granted",
+          "description": "Agreed.",
+          "type": "string"
+        },
+        {
+          "const": "declined",
+          "description": "Refused; stays in the room unrecorded (unless declining means not joining).",
+          "type": "string"
+        },
+        {
+          "const": "withdrawn",
+          "description": "Agreed earlier, then withdrew.",
+          "type": "string"
+        }
+      ]
+    },
+    "ConsentPrompt": {
+      "description": "The consent modal's data (rev 91, §9.10). Every slot is data; templates supply the\nsentences. `notice_version` is a stable hash of every other slot; the answer must echo it.",
+      "properties": {
+        "admin_download": {
+          "description": "Authorised compliance admins can download the audio (always `true` in v1).",
+          "type": "boolean"
+        },
+        "audio_keep_days": {
+          "description": "How long audio is kept (0 = until the transcript is final).",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "decline_mode": {
+          "$ref": "#/$defs/DeclineMode",
+          "description": "What declining does."
+        },
+        "feature_label": {
+          "description": "[`RECORDING_FEATURE_LABEL`].",
+          "type": "string"
+        },
+        "notice_version": {
+          "description": "A stable hash of every other slot value.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "recorded_now": {
+          "description": "Who is currently recorded (granted and captured), ascending.",
+          "items": {
+            "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "recorder_name": {
+          "description": "[`RECORDER_DISPLAY_NAME`].",
+          "type": "string"
+        },
+        "recording_id": {
+          "description": "What the answer refers to.",
+          "pattern": "^(auto|[1-9][0-9]{0,18})$",
+          "type": "string"
+        },
+        "room": {
+          "$ref": "#/$defs/PromptRoom",
+          "description": "Where."
+        },
+        "started_by": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PromptMember"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Who started it (`None` for an auto channel with no recording yet)."
+        },
+        "transcript": {
+          "$ref": "#/$defs/PromptTranscript",
+          "description": "What happens to the words."
+        }
+      },
+      "required": [
+        "recording_id",
+        "notice_version",
+        "recorder_name",
+        "feature_label",
+        "room",
+        "audio_keep_days",
+        "transcript",
+        "admin_download",
+        "decline_mode",
+        "recorded_now"
+      ],
+      "type": "object"
+    },
+    "DeclineMode": {
+      "description": "What declining does (§9.11, from `recording.require_consent_to_join`).",
+      "oneOf": [
+        {
+          "const": "join_unrecorded",
+          "description": "The decliner joins, unrecorded (the default).",
+          "type": "string"
+        },
+        {
+          "const": "not_join",
+          "description": "Declining means not joining.",
+          "type": "string"
+        }
+      ]
+    },
+    "NotRecordedReason": {
+      "description": "Why a granted participant is not captured (§9.2). Stored in\n`recording_participants.capture_reason`.",
+      "oneOf": [
+        {
+          "const": "track_cap",
+          "description": "A track cap is reached; not allowlisted.",
+          "type": "string"
+        },
+        {
+          "const": "no_microphone",
+          "description": "No microphone published.",
+          "type": "string"
+        },
+        {
+          "const": "no_key",
+          "description": "The recorder could not decrypt the member's frames.",
+          "type": "string"
+        },
+        {
+          "const": "unencrypted",
+          "description": "The track was published unencrypted.",
+          "type": "string"
+        },
+        {
+          "const": "codec",
+          "description": "The track is not Opus.",
+          "type": "string"
+        },
+        {
+          "const": "permission",
+          "description": "Not subscribable under the room's permissions.",
+          "type": "string"
+        }
+      ]
+    },
+    "PromptMember": {
+      "description": "The starter as the consent modal shows them.",
+      "properties": {
+        "display_name": {
+          "description": "Their display name.",
+          "type": "string"
+        },
+        "member_id": {
+          "description": "The member.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "member_id",
+        "display_name"
+      ],
+      "type": "object"
+    },
+    "PromptRoom": {
+      "description": "Where the recording is.",
+      "properties": {
+        "channel_id": {
+          "description": "The voice channel or DM.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/PromptRoomKind",
+          "description": "Its kind."
+        },
+        "name": {
+          "description": "The channel's name (voice channels only).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "channel_id",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "PromptRoomKind": {
+      "description": "The room kind the modal names.",
+      "oneOf": [
+        {
+          "const": "voice",
+          "description": "A voice channel.",
+          "type": "string"
+        },
+        {
+          "const": "dm",
+          "description": "A DM call.",
+          "type": "string"
+        },
+        {
+          "const": "group_dm",
+          "description": "A group-DM call.",
+          "type": "string"
+        }
+      ]
+    },
+    "PromptTranscript": {
+      "description": "What happens to the words (§9.10).",
+      "properties": {
+        "e2ee": {
+          "description": "Transcripts are not end-to-end encrypted.",
+          "type": "boolean"
+        },
+        "posted_to_channel": {
+          "description": "Transcripts are posted into the channel as ordinary messages.",
+          "type": "boolean"
+        },
+        "readable_by": {
+          "description": "Who can read them: `channel_members`, `search`, `agents`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "posted_to_channel",
+        "readable_by",
+        "e2ee"
+      ],
+      "type": "object"
+    },
+    "RecordingParticipant": {
+      "description": "One participant of a recording, as everyone in the audience sees it (§18.1).",
+      "properties": {
+        "capture": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Capture"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Whether they are captured (only for `granted`)."
+        },
+        "consent": {
+          "$ref": "#/$defs/Consent",
+          "description": "What they said."
+        },
+        "member_id": {
+          "description": "The member.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NotRecordedReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why not (only for `not_recorded`)."
+        }
+      },
+      "required": [
+        "member_id",
+        "consent"
+      ],
+      "type": "object"
+    },
+    "RecordingState": {
+      "description": "A recording's lifecycle state (§8.5). Stored in `recordings.state`.",
+      "oneOf": [
+        {
+          "const": "starting",
+          "description": "Admitting and certifying the recorder.",
+          "type": "string"
+        },
+        {
+          "const": "recording",
+          "description": "The recorder joined.",
+          "type": "string"
+        },
+        {
+          "const": "stopping",
+          "description": "Draining the recorder.",
+          "type": "string"
+        },
+        {
+          "const": "stopped",
+          "description": "Over.",
+          "type": "string"
+        }
+      ]
+    },
+    "StopReason": {
+      "description": "Why a recording stopped (§8.5). Stored in `recordings.stop_reason`.",
+      "oneOf": [
+        {
+          "const": "stopped",
+          "description": "The stop route.",
+          "type": "string"
+        },
+        {
+          "const": "room_empty",
+          "description": "No standard voice entries left in the room.",
+          "type": "string"
+        },
+        {
+          "const": "call_ended",
+          "description": "The DM call ended.",
+          "type": "string"
+        },
+        {
+          "const": "max_duration",
+          "description": "`recording.max_duration_ms` reached.",
+          "type": "string"
+        },
+        {
+          "const": "recorder_failed",
+          "description": "The recorder failed (join timeout, certificate, unreachable, too many rejoins).",
+          "type": "string"
+        },
+        {
+          "const": "media_restarted",
+          "description": "The engine room was lost beyond the re-admit grace.",
+          "type": "string"
+        },
+        {
+          "const": "storage_full",
+          "description": "Three consecutive `storage_full` segment writes.",
+          "type": "string"
+        },
+        {
+          "const": "disabled",
+          "description": "Recording was disabled (policy, config, archive, `sew recording disable`).",
+          "type": "string"
+        },
+        {
+          "const": "max_bytes",
+          "description": "`recording.max_bytes` reached.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A recording (§18.1).",
+  "properties": {
+    "audio_keep_days": {
+      "description": "Audio keep days (0 = until the transcript is final).",
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "auto": {
+      "description": "Started by an auto-record channel's first join.",
+      "type": "boolean"
+    },
+    "call_record_id": {
+      "description": "The DM call (`calls.id`) of a DM-call recording.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "channel_id": {
+      "description": "The voice channel or DM.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "consent_prompt": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ConsentPrompt"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The consent modal (self only, while the viewer is `pending`)."
+    },
+    "id": {
+      "description": "The recording.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "language": {
+      "description": "The language hint (`None` = auto).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "max_duration_ms": {
+      "description": "`recording.max_duration_ms`.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "message_id": {
+      "description": "The record message.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "mixed": {
+      "description": "A mixed file is made after stop.",
+      "type": "boolean"
+    },
+    "my_consent": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Consent"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The viewer's own consent (self only; absent for non-participants)."
+    },
+    "participants": {
+      "description": "Members in the room plus members who ever granted, ascending.",
+      "items": {
+        "$ref": "#/$defs/RecordingParticipant"
+      },
+      "type": "array"
+    },
+    "space_id": {
+      "description": "The channel's space (absent for DMs).",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "started_at": {
+      "description": "When.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "started_by": {
+      "description": "Who started it.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "state": {
+      "$ref": "#/$defs/RecordingState",
+      "description": "Its state."
+    },
+    "stop_reason": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StopReason"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Why."
+    },
+    "stopped_at": {
+      "description": "When it stopped.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "id",
+    "channel_id",
+    "state",
+    "started_by",
+    "started_at",
+    "auto",
+    "message_id",
+    "mixed",
+    "audio_keep_days",
+    "max_duration_ms",
+    "participants"
+  ],
+  "title": "Recording",
+  "type": "object"
+}

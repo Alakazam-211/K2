@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`user_groups.ndjson`.",
+  "properties": {
+    "created_at": {
+      "description": "Created.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "created_by": {
+      "description": "Creator.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "deleted_at": {
+      "description": "Soft-deleted.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "description": {
+      "description": "Description.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "handle": {
+      "description": "Handle.",
+      "type": "string"
+    },
+    "id": {
+      "description": "The group id.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "member_ids": {
+      "description": "Members, ascending.",
+      "items": {
+        "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+        "pattern": "^[1-9][0-9]{0,18}$",
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "mentionable": {
+      "description": "Mentionable.",
+      "type": "boolean"
+    },
+    "name": {
+      "description": "Name.",
+      "type": "string"
+    },
+    "space_id": {
+      "description": "Its space; absent = install-wide.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "updated_at": {
+      "description": "Last change.",
+      "format": "date-time",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "handle",
+    "name",
+    "mentionable",
+    "created_at",
+    "updated_at"
+  ],
+  "title": "UserGroupRecord",
+  "type": "object"
+}

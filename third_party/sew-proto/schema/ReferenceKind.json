@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "How a message refers to another.",
+  "oneOf": [
+    {
+      "const": "reply",
+      "description": "An inline reply.",
+      "type": "string"
+    },
+    {
+      "const": "quote",
+      "description": "A quote.",
+      "type": "string"
+    },
+    {
+      "const": "forward",
+      "description": "A forward.",
+      "type": "string"
+    }
+  ],
+  "title": "ReferenceKind"
+}

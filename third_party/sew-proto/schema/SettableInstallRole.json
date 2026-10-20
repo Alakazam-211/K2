@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "An install role the install owner may give (S10 gap G10).",
+  "oneOf": [
+    {
+      "const": "admin",
+      "description": "Install admin.",
+      "type": "string"
+    },
+    {
+      "const": "member",
+      "description": "Regular member.",
+      "type": "string"
+    }
+  ],
+  "title": "SettableInstallRole"
+}

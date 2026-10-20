@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Which threads `GET /api/v1/me/threads` lists.",
+  "oneOf": [
+    {
+      "const": "all",
+      "description": "Followed threads and threads with an unread mention.",
+      "type": "string"
+    },
+    {
+      "const": "unread",
+      "description": "Only those that are unread or have an unread mention.",
+      "type": "string"
+    }
+  ],
+  "title": "ThreadsInboxFilter"
+}

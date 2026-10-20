@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The transcript (§14.5). Stored in `recordings.transcript_state`.",
+  "oneOf": [
+    {
+      "const": "pending",
+      "description": "No segment transcribed yet.",
+      "type": "string"
+    },
+    {
+      "const": "running",
+      "description": "Turns are being posted.",
+      "type": "string"
+    },
+    {
+      "const": "done",
+      "description": "Final, complete.",
+      "type": "string"
+    },
+    {
+      "const": "partial",
+      "description": "Final, with gaps or failed segments.",
+      "type": "string"
+    },
+    {
+      "const": "failed",
+      "description": "Final, no turn posted and at least one segment failed.",
+      "type": "string"
+    }
+  ],
+  "title": "TranscriptState"
+}

@@ -1,0 +1,174 @@
+{
+  "$defs": {
+    "E2eeCaps": {
+      "additionalProperties": false,
+      "description": "What the joining client can do (S50 §9.1 K1, S51 §16 item 4). The server refuses an\nincapable client with `422 e2ee_unsupported_client` (§11.3 J1), so the values themselves are\nnot checked here, only their sizes.",
+      "properties": {
+        "browser": {
+          "description": "`chrome`, `firefox`, `safari` or `other` (web only).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ciphersuites": {
+          "description": "MLS ciphersuites the client supports (S51 §6.1.1); must contain 1 when present.",
+          "items": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "kdf": {
+          "description": "`\"hkdf\"`.",
+          "type": "string"
+        },
+        "key_ring_size": {
+          "description": "64 (rev 75); anything else is refused at join.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "lib": {
+          "description": "`sew-e2ee/<version>`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sdk": {
+          "description": "The SDK family (`js`, `rust`, …).",
+          "type": "string"
+        },
+        "sdk_version": {
+          "description": "The SDK version as its `ClientInfo` reports it.",
+          "type": "string"
+        },
+        "sender_key_index": {
+          "description": "The SDK can move its sender to a new key slot.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "sender_key_index",
+        "kdf",
+        "key_ring_size",
+        "sdk",
+        "sdk_version"
+      ],
+      "type": "object"
+    },
+    "E2eeJoin": {
+      "additionalProperties": false,
+      "description": "The `e2ee` object of a voice or call join (K1; S33 v2 `VoiceJoinRequest.e2ee`, S34 v2's call\njoins).",
+      "properties": {
+        "caps": {
+          "$ref": "#/$defs/E2eeCaps",
+          "description": "What the client can do."
+        },
+        "gateway_session": {
+          "description": "The caller's gateway session: READY's `session_id`.",
+          "type": "string"
+        },
+        "key_package_ref": {
+          "description": "The single-use ref K16 returned (32 bytes).",
+          "pattern": "^[A-Za-z0-9_-]*$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key_package_ref",
+        "gateway_session",
+        "caps"
+      ],
+      "type": "object"
+    },
+    "RecordingNotice": {
+      "additionalProperties": false,
+      "description": "The answer to the consent modal, sent with a voice join or call join/accept (§9.4, §9.10).\nJoining never implies consent: `consent` is required and `notice_version` must echo the\ncurrent [`ConsentPrompt`].",
+      "properties": {
+        "consent": {
+          "default": null,
+          "description": "The person's answer. Missing → `400 validation_failed`, field `recording_notice.consent`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "notice_version": {
+          "default": null,
+          "description": "The prompt version the person saw.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "recording_id": {
+          "description": "The recording (or `\"auto\"`).",
+          "pattern": "^(auto|[1-9][0-9]{0,18})$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "recording_id"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`POST /api/v1/channels/{id}/call/join` body (§14.3).",
+  "properties": {
+    "e2ee": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/E2eeJoin"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The key join (S50 K1). `None` answers `422 e2ee_unsupported_client`."
+    },
+    "recording_notice": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RecordingNotice"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The answer to the recording consent modal (S35 v2 §9.4, §9.10)."
+    },
+    "ring": {
+      "default": true,
+      "description": "Ring the other members when this join starts a call (default `true`).",
+      "type": "boolean"
+    },
+    "self_deaf": {
+      "default": false,
+      "description": "Join deafened (implies muted).",
+      "type": "boolean"
+    },
+    "self_mute": {
+      "default": false,
+      "description": "Join muted.",
+      "type": "boolean"
+    },
+    "self_video": {
+      "default": false,
+      "description": "Join with a camera lease.",
+      "type": "boolean"
+    }
+  },
+  "title": "CallJoinRequest",
+  "type": "object"
+}

@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Why a recording stopped (§8.5). Stored in `recordings.stop_reason`.",
+  "oneOf": [
+    {
+      "const": "stopped",
+      "description": "The stop route.",
+      "type": "string"
+    },
+    {
+      "const": "room_empty",
+      "description": "No standard voice entries left in the room.",
+      "type": "string"
+    },
+    {
+      "const": "call_ended",
+      "description": "The DM call ended.",
+      "type": "string"
+    },
+    {
+      "const": "max_duration",
+      "description": "`recording.max_duration_ms` reached.",
+      "type": "string"
+    },
+    {
+      "const": "recorder_failed",
+      "description": "The recorder failed (join timeout, certificate, unreachable, too many rejoins).",
+      "type": "string"
+    },
+    {
+      "const": "media_restarted",
+      "description": "The engine room was lost beyond the re-admit grace.",
+      "type": "string"
+    },
+    {
+      "const": "storage_full",
+      "description": "Three consecutive `storage_full` segment writes.",
+      "type": "string"
+    },
+    {
+      "const": "disabled",
+      "description": "Recording was disabled (policy, config, archive, `sew recording disable`).",
+      "type": "string"
+    },
+    {
+      "const": "max_bytes",
+      "description": "`recording.max_bytes` reached.",
+      "type": "string"
+    }
+  ],
+  "title": "StopReason"
+}

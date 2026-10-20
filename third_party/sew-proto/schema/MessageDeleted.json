@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Body of `message_deleted`.",
+  "properties": {
+    "channel_id": {
+      "description": "Its channel.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "channel_last_message_id": {
+      "description": "The channel's newest live timeline message after the delete (contracts rev 29).",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "id": {
+      "description": "The deleted message.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "seq": {
+      "default": 0,
+      "description": "The seq of the `message_deleted` change entry (S13).",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "thread_root_id": {
+      "description": "Its thread root, for replies.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "tombstone": {
+      "default": false,
+      "description": "The server keeps a tombstone in the timeline (a root with live replies, S13 §13.2).",
+      "type": "boolean"
+    },
+    "whole_thread": {
+      "default": false,
+      "description": "A whole-thread delete: drop the root and every reply (S13 §12.6).",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "id",
+    "channel_id"
+  ],
+  "title": "MessageDeleted",
+  "type": "object"
+}

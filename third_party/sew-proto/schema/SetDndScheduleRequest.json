@@ -1,0 +1,113 @@
+{
+  "$defs": {
+    "DndDay": {
+      "description": "A weekday of a DND rule.",
+      "oneOf": [
+        {
+          "const": "mon",
+          "description": "Monday.",
+          "type": "string"
+        },
+        {
+          "const": "tue",
+          "description": "Tuesday.",
+          "type": "string"
+        },
+        {
+          "const": "wed",
+          "description": "Wednesday.",
+          "type": "string"
+        },
+        {
+          "const": "thu",
+          "description": "Thursday.",
+          "type": "string"
+        },
+        {
+          "const": "fri",
+          "description": "Friday.",
+          "type": "string"
+        },
+        {
+          "const": "sat",
+          "description": "Saturday.",
+          "type": "string"
+        },
+        {
+          "const": "sun",
+          "description": "Sunday.",
+          "type": "string"
+        }
+      ]
+    },
+    "DndRule": {
+      "additionalProperties": false,
+      "description": "One weekly DND rule: from `start` on each listed day to `end` (the next day when `end <\nstart`).",
+      "properties": {
+        "days": {
+          "description": "1–7 unique days.",
+          "items": {
+            "$ref": "#/$defs/DndDay"
+          },
+          "type": "array"
+        },
+        "end": {
+          "description": "`HH:MM`, `00:01`–`24:00`.",
+          "type": "string"
+        },
+        "start": {
+          "description": "`HH:MM`, `00:00`–`23:59`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "days",
+        "start",
+        "end"
+      ],
+      "type": "object"
+    },
+    "DndSchedule": {
+      "additionalProperties": false,
+      "description": "A recurring weekly DND schedule.",
+      "properties": {
+        "rules": {
+          "description": "1–14 rules.",
+          "items": {
+            "$ref": "#/$defs/DndRule"
+          },
+          "type": "array"
+        },
+        "timezone": {
+          "description": "IANA override; absent = the member's profile timezone, else UTC.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "rules"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /api/v1/me/dnd/schedule` (`schedule: null` removes it).",
+  "properties": {
+    "schedule": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DndSchedule"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The schedule, or `null`."
+    }
+  },
+  "title": "SetDndScheduleRequest",
+  "type": "object"
+}

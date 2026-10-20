@@ -1,0 +1,1064 @@
+{
+  "$defs": {
+    "AudioState": {
+      "description": "The recording's audio (§12). Stored in `recordings.audio_state`.",
+      "oneOf": [
+        {
+          "const": "available",
+          "description": "Kept.",
+          "type": "string"
+        },
+        {
+          "const": "expired",
+          "description": "Hidden; links may still exist (held or not yet purged).",
+          "type": "string"
+        },
+        {
+          "const": "purged",
+          "description": "Every link deleted; the content key is gone.",
+          "type": "string"
+        }
+      ]
+    },
+    "Capture": {
+      "description": "Whether a granted participant's microphone is actually captured (§9.2).",
+      "oneOf": [
+        {
+          "const": "recorded",
+          "description": "The recorder captures this member.",
+          "type": "string"
+        },
+        {
+          "const": "not_recorded",
+          "description": "Not captured (see the reason).",
+          "type": "string"
+        }
+      ]
+    },
+    "Consent": {
+      "description": "What a participant said to the recording notice (§9.2). Stored in\n`recording_participants.consent`.",
+      "oneOf": [
+        {
+          "const": "pending",
+          "description": "In the room, has not answered.",
+          "type": "string"
+        },
+        {
+          "const": "granted",
+          "description": "Agreed.",
+          "type": "string"
+        },
+        {
+          "const": "declined",
+          "description": "Refused; stays in the room unrecorded (unless declining means not joining).",
+          "type": "string"
+        },
+        {
+          "const": "withdrawn",
+          "description": "Agreed earlier, then withdrew.",
+          "type": "string"
+        }
+      ]
+    },
+    "ConsentSurface": {
+      "description": "Where the person answered (§9.10). Stored in `recording_participants.surface`.",
+      "oneOf": [
+        {
+          "const": "modal",
+          "description": "The blocking modal before joining.",
+          "type": "string"
+        },
+        {
+          "const": "prompt",
+          "description": "The in-room prompt.",
+          "type": "string"
+        },
+        {
+          "const": "start",
+          "description": "The starter's confirmation before `start`.",
+          "type": "string"
+        }
+      ]
+    },
+    "ConsentVia": {
+      "description": "How a consent answer arrived (§9; audit `via`). Stored in `recording_participants.via`.",
+      "oneOf": [
+        {
+          "const": "start",
+          "description": "The starter's start request.",
+          "type": "string"
+        },
+        {
+          "const": "join",
+          "description": "A join's `recording_notice`.",
+          "type": "string"
+        },
+        {
+          "const": "prompt",
+          "description": "The in-room prompt (`POST …/consent`).",
+          "type": "string"
+        },
+        {
+          "const": "withdraw",
+          "description": "A withdrawal.",
+          "type": "string"
+        },
+        {
+          "const": "auto",
+          "description": "The joiner of an auto-record channel.",
+          "type": "string"
+        }
+      ]
+    },
+    "GapReason": {
+      "description": "Why a span of a recording is missing (§24). Stored in `recording_gaps.reason`.",
+      "oneOf": [
+        {
+          "const": "recorder_restarted",
+          "description": "The recorder process restarted.",
+          "type": "string"
+        },
+        {
+          "const": "recorder_buffer_full",
+          "description": "The recorder's buffer was full.",
+          "type": "string"
+        },
+        {
+          "const": "storage_full",
+          "description": "The blob store was full.",
+          "type": "string"
+        },
+        {
+          "const": "too_large",
+          "description": "A segment exceeded `recording.segment_max_bytes`.",
+          "type": "string"
+        },
+        {
+          "const": "transcribe_failed",
+          "description": "Transcription failed for a segment.",
+          "type": "string"
+        },
+        {
+          "const": "audio_gone",
+          "description": "The audio was purged before it was transcribed.",
+          "type": "string"
+        },
+        {
+          "const": "track_cap",
+          "description": "A track cap.",
+          "type": "string"
+        },
+        {
+          "const": "no_key",
+          "description": "The recorder held no key for a consenting speaker.",
+          "type": "string"
+        },
+        {
+          "const": "recorder_reconnected",
+          "description": "The recorder rejoined with a new admit.",
+          "type": "string"
+        },
+        {
+          "const": "key_missing",
+          "description": "A key was missing mid-segment.",
+          "type": "string"
+        },
+        {
+          "const": "discontinuity",
+          "description": "A media discontinuity.",
+          "type": "string"
+        },
+        {
+          "const": "engine_restart",
+          "description": "The engine restarted (same admit, fresh token).",
+          "type": "string"
+        }
+      ]
+    },
+    "NotRecordedReason": {
+      "description": "Why a granted participant is not captured (§9.2). Stored in\n`recording_participants.capture_reason`.",
+      "oneOf": [
+        {
+          "const": "track_cap",
+          "description": "A track cap is reached; not allowlisted.",
+          "type": "string"
+        },
+        {
+          "const": "no_microphone",
+          "description": "No microphone published.",
+          "type": "string"
+        },
+        {
+          "const": "no_key",
+          "description": "The recorder could not decrypt the member's frames.",
+          "type": "string"
+        },
+        {
+          "const": "unencrypted",
+          "description": "The track was published unencrypted.",
+          "type": "string"
+        },
+        {
+          "const": "codec",
+          "description": "The track is not Opus.",
+          "type": "string"
+        },
+        {
+          "const": "permission",
+          "description": "Not subscribable under the room's permissions.",
+          "type": "string"
+        }
+      ]
+    },
+    "RecordingGapRecord": {
+      "additionalProperties": false,
+      "description": "One missing span (`recording_gaps`).",
+      "properties": {
+        "from_ms": {
+          "description": "From (ms from the start).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "member_id": {
+          "description": "The speaker (absent: everyone).",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "$ref": "#/$defs/GapReason",
+          "description": "Why."
+        },
+        "to_ms": {
+          "description": "To.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "from_ms",
+        "to_ms",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "RecordingMixRecord": {
+      "additionalProperties": false,
+      "description": "One mixed part (`recording_mixes`); its audio is `files/<file>`, recorder-sealed under the\npart key.",
+      "properties": {
+        "bytes": {
+          "description": "Sealed size.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "duration_ms": {
+          "description": "Length.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "file": {
+          "description": "The sealed audio.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "offset_ms": {
+          "description": "Offset from the recording start.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "part": {
+          "description": "From 1.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "part",
+        "offset_ms",
+        "duration_ms",
+        "bytes"
+      ],
+      "type": "object"
+    },
+    "RecordingParticipantRecord": {
+      "additionalProperties": false,
+      "description": "One participant's consent record (`recording_participants`).",
+      "properties": {
+        "answered_at": {
+          "description": "When they answered.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "capture": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Capture"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Whether their audio was captured."
+        },
+        "capture_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NotRecordedReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why not, when not recorded."
+        },
+        "consent": {
+          "$ref": "#/$defs/Consent",
+          "description": "What the person said."
+        },
+        "ever_granted": {
+          "description": "Ever granted.",
+          "type": "boolean"
+        },
+        "first_at": {
+          "description": "First seen.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "in_room": {
+          "description": "In the room at the snapshot.",
+          "type": "boolean"
+        },
+        "member_id": {
+          "description": "The member.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "notice_version": {
+          "description": "The prompt version the answer echoed.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "surface": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConsentSurface"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The surface of the answer."
+        },
+        "updated_at": {
+          "description": "Last change.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "via": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConsentVia"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Where they said it."
+        }
+      },
+      "required": [
+        "member_id",
+        "consent",
+        "first_at",
+        "updated_at"
+      ],
+      "type": "object"
+    },
+    "RecordingRunRecord": {
+      "additionalProperties": false,
+      "description": "One recorder run (`recording_runs`).",
+      "properties": {
+        "end_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunEnd"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why."
+        },
+        "ended_at": {
+          "description": "Ended.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "joined_at": {
+          "description": "Joined the room.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run": {
+          "description": "From 1.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "started_at": {
+          "description": "Started.",
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run",
+        "started_at"
+      ],
+      "type": "object"
+    },
+    "RecordingSegmentRecord": {
+      "additionalProperties": false,
+      "description": "One stored segment's metadata (`recording_segments`, without `result_ct`). Its audio is\n`files/<file>`: the **recorder-sealed** Ogg (S4 stream format under the segment key derived\nfrom the recording's `content_key`, run, `join_id` and `seq`).",
+      "properties": {
+        "attempts": {
+          "description": "Counted attempts.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "bytes": {
+          "description": "Sealed size.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "created_at": {
+          "description": "Ingest time.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "duration_ms": {
+          "description": "Length.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "error": {
+          "description": "The last error code.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "file": {
+          "description": "The sealed audio (absent once purged, or when the archive carries no files).",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "The segment.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "join_id": {
+          "description": "The identity's join (32 hex; an input of the segment key).",
+          "type": "string"
+        },
+        "lang": {
+          "description": "Detected language.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lang_prob": {
+          "description": "Its probability.",
+          "format": "float",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "level_dbov": {
+          "description": "Mean level of its speech frames (dBov).",
+          "format": "float",
+          "type": "number"
+        },
+        "member_id": {
+          "description": "The speaker.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "plain_bytes": {
+          "description": "Plaintext size.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "posted_through_ms": {
+          "description": "Pieces posted through.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "run": {
+          "description": "The recorder run.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "seq": {
+          "description": "Per run and identity, from 1.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "speech_ms": {
+          "description": "Speech in it.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "start_ms": {
+          "description": "Offset from the recording start.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "state": {
+          "$ref": "#/$defs/SegmentState",
+          "description": "Its state."
+        }
+      },
+      "required": [
+        "id",
+        "member_id",
+        "run",
+        "join_id",
+        "seq",
+        "start_ms",
+        "duration_ms",
+        "speech_ms",
+        "level_dbov",
+        "bytes",
+        "plain_bytes",
+        "state",
+        "created_at"
+      ],
+      "type": "object"
+    },
+    "RecordingState": {
+      "description": "A recording's lifecycle state (§8.5). Stored in `recordings.state`.",
+      "oneOf": [
+        {
+          "const": "starting",
+          "description": "Admitting and certifying the recorder.",
+          "type": "string"
+        },
+        {
+          "const": "recording",
+          "description": "The recorder joined.",
+          "type": "string"
+        },
+        {
+          "const": "stopping",
+          "description": "Draining the recorder.",
+          "type": "string"
+        },
+        {
+          "const": "stopped",
+          "description": "Over.",
+          "type": "string"
+        }
+      ]
+    },
+    "RecordingTrackRecord": {
+      "additionalProperties": false,
+      "description": "One speaker's track progress (`recording_tracks`).",
+      "properties": {
+        "last_progress_at": {
+          "description": "Last progress.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "member_id": {
+          "description": "The speaker.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "open": {
+          "description": "Open at the snapshot.",
+          "type": "boolean"
+        },
+        "through_ms": {
+          "description": "Captured through (ms from the start).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "member_id",
+        "through_ms"
+      ],
+      "type": "object"
+    },
+    "RunEnd": {
+      "description": "Why a recorder run ended (`recording_runs.end_reason`).",
+      "oneOf": [
+        {
+          "const": "stopped",
+          "description": "The recording stopped.",
+          "type": "string"
+        },
+        {
+          "const": "restarted",
+          "description": "The recorder restarted.",
+          "type": "string"
+        },
+        {
+          "const": "reconnected",
+          "description": "The recorder rejoined with a new admit.",
+          "type": "string"
+        },
+        {
+          "const": "failed",
+          "description": "The run failed.",
+          "type": "string"
+        }
+      ]
+    },
+    "SegmentState": {
+      "description": "A recording segment's state (`recording_segments.state`, prd-sew-35 v2 §10).",
+      "oneOf": [
+        {
+          "const": "stored",
+          "description": "Stored; awaiting transcription.",
+          "type": "string"
+        },
+        {
+          "const": "transcribed",
+          "description": "Transcribed.",
+          "type": "string"
+        },
+        {
+          "const": "empty",
+          "description": "No speech.",
+          "type": "string"
+        },
+        {
+          "const": "failed",
+          "description": "Transcription failed (or the audio went first).",
+          "type": "string"
+        },
+        {
+          "const": "posted",
+          "description": "Every piece posted.",
+          "type": "string"
+        }
+      ]
+    },
+    "StopReason": {
+      "description": "Why a recording stopped (§8.5). Stored in `recordings.stop_reason`.",
+      "oneOf": [
+        {
+          "const": "stopped",
+          "description": "The stop route.",
+          "type": "string"
+        },
+        {
+          "const": "room_empty",
+          "description": "No standard voice entries left in the room.",
+          "type": "string"
+        },
+        {
+          "const": "call_ended",
+          "description": "The DM call ended.",
+          "type": "string"
+        },
+        {
+          "const": "max_duration",
+          "description": "`recording.max_duration_ms` reached.",
+          "type": "string"
+        },
+        {
+          "const": "recorder_failed",
+          "description": "The recorder failed (join timeout, certificate, unreachable, too many rejoins).",
+          "type": "string"
+        },
+        {
+          "const": "media_restarted",
+          "description": "The engine room was lost beyond the re-admit grace.",
+          "type": "string"
+        },
+        {
+          "const": "storage_full",
+          "description": "Three consecutive `storage_full` segment writes.",
+          "type": "string"
+        },
+        {
+          "const": "disabled",
+          "description": "Recording was disabled (policy, config, archive, `sew recording disable`).",
+          "type": "string"
+        },
+        {
+          "const": "max_bytes",
+          "description": "`recording.max_bytes` reached.",
+          "type": "string"
+        }
+      ]
+    },
+    "TranscriptState": {
+      "description": "The transcript (§14.5). Stored in `recordings.transcript_state`.",
+      "oneOf": [
+        {
+          "const": "pending",
+          "description": "No segment transcribed yet.",
+          "type": "string"
+        },
+        {
+          "const": "running",
+          "description": "Turns are being posted.",
+          "type": "string"
+        },
+        {
+          "const": "done",
+          "description": "Final, complete.",
+          "type": "string"
+        },
+        {
+          "const": "partial",
+          "description": "Final, with gaps or failed segments.",
+          "type": "string"
+        },
+        {
+          "const": "failed",
+          "description": "Final, no turn posted and at least one segment failed.",
+          "type": "string"
+        }
+      ]
+    },
+    "TranscriptTurnRecord": {
+      "additionalProperties": false,
+      "description": "One transcript turn's timing (`transcript_turns`; the text is its message's body).",
+      "properties": {
+        "end_ms": {
+          "description": "End.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "lang": {
+          "description": "Its language.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message_id": {
+          "description": "The turn message.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "pieces": {
+          "description": "The pieces (numbers only)."
+        },
+        "speaker_id": {
+          "description": "The speaker.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "spoken_at": {
+          "description": "When it was said.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "start_ms": {
+          "description": "Start (ms from the recording start).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "message_id",
+        "speaker_id",
+        "start_ms",
+        "end_ms",
+        "spoken_at",
+        "pieces"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`recordings.ndjson` (prd-sew-35 v2 §10.1): one call recording with its consent record, runs,\ntracks, gaps, segment and mix metadata, and turn timings. The audio leaves only as\nrecorder-sealed `files/…` plus `content_key`, and only inside the age layer.",
+  "properties": {
+    "audio_bytes": {
+      "description": "Stored sealed bytes.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "audio_expires_at": {
+      "description": "When the audio expires.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "audio_keep_days": {
+      "description": "Audio keep days.",
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "audio_state": {
+      "$ref": "#/$defs/AudioState",
+      "description": "The audio's state."
+    },
+    "auto": {
+      "description": "Auto-started.",
+      "type": "boolean"
+    },
+    "backend": {
+      "description": "Its backend.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "call_record_id": {
+      "description": "The DM call.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "channel_id": {
+      "description": "The voice channel or DM.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "content_key": {
+      "description": "The 32-byte content key, base64url without padding: only when the archive carries the\naudio files and the audio is not purged (never outside the age layer).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "gaps": {
+      "description": "Gaps.",
+      "items": {
+        "$ref": "#/$defs/RecordingGapRecord"
+      },
+      "type": "array"
+    },
+    "hidden": {
+      "description": "The record message was deleted or expired.",
+      "type": "boolean"
+    },
+    "id": {
+      "description": "The recording.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "language": {
+      "description": "The language hint.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "message_id": {
+      "description": "The record message.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "mixed": {
+      "description": "A mixed file was asked for.",
+      "type": "boolean"
+    },
+    "mixes": {
+      "description": "Mixed parts.",
+      "items": {
+        "$ref": "#/$defs/RecordingMixRecord"
+      },
+      "type": "array"
+    },
+    "model": {
+      "description": "The transcriber's model.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "participants": {
+      "description": "The consent record.",
+      "items": {
+        "$ref": "#/$defs/RecordingParticipantRecord"
+      },
+      "type": "array"
+    },
+    "posted_through_ms": {
+      "description": "The merge frontier.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "purged_at": {
+      "description": "When the purge hook stubbed it.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "recorder_joined_at": {
+      "description": "When the recorder first joined.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "recorder_runs": {
+      "description": "Recorder runs.",
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "runs": {
+      "description": "Recorder runs.",
+      "items": {
+        "$ref": "#/$defs/RecordingRunRecord"
+      },
+      "type": "array"
+    },
+    "segments": {
+      "description": "Segments (metadata; audio in `files/`).",
+      "items": {
+        "$ref": "#/$defs/RecordingSegmentRecord"
+      },
+      "type": "array"
+    },
+    "started_at": {
+      "description": "When.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "started_by": {
+      "description": "The starter.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "state": {
+      "$ref": "#/$defs/RecordingState",
+      "description": "Its state (an import loads active ones `stopped`, `disabled`)."
+    },
+    "stop_reason": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StopReason"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Why."
+    },
+    "stopped_at": {
+      "description": "When it stopped.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "tracks": {
+      "description": "Track progress.",
+      "items": {
+        "$ref": "#/$defs/RecordingTrackRecord"
+      },
+      "type": "array"
+    },
+    "transcript_final_at": {
+      "description": "When it became final.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "transcript_state": {
+      "$ref": "#/$defs/TranscriptState",
+      "description": "The transcript's state."
+    },
+    "turn_count": {
+      "description": "Turns posted.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "turns": {
+      "description": "Transcript turn timings.",
+      "items": {
+        "$ref": "#/$defs/TranscriptTurnRecord"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "id",
+    "channel_id",
+    "message_id",
+    "started_by",
+    "started_at",
+    "state",
+    "audio_keep_days",
+    "audio_state",
+    "transcript_state"
+  ],
+  "title": "RecordingRecord",
+  "type": "object"
+}

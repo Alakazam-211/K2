@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Response of `POST /mgmt/v1/agents/pin` and `unpin` (S9 §6.10).",
+  "properties": {
+    "agent_id": {
+      "description": "The assistant.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "changed": {
+      "description": "Whether the pin changed.",
+      "type": "boolean"
+    },
+    "person_id": {
+      "description": "The person it is pinned to; absent after unpin.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "agent_id",
+    "changed"
+  ],
+  "title": "PinResponse",
+  "type": "object"
+}

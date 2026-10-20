@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A member's read state in one channel (C8; prd-sew-14 §5).",
+  "properties": {
+    "channel_id": {
+      "description": "The channel.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "last_message_id": {
+      "description": "The channel's newest timeline message (omitted in READY, where the channel entry has\nit).",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "last_read_id": {
+      "description": "The read cursor: a comparator, possibly a synthetic id (mark unread writes\n`message_id − 1`). Absent = nothing read.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "mention_count": {
+      "description": "Unread mentions (a muted channel counts direct mentions only).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "muted": {
+      "description": "The member muted the channel (S21); present only when true.",
+      "type": "boolean"
+    },
+    "seq": {
+      "default": 0,
+      "description": "The member change-log head this state is current as of (S14 gap G9).",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "unread": {
+      "description": "Whether a message by someone else is past the cursor.",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "channel_id",
+    "mention_count",
+    "unread"
+  ],
+  "title": "ReadState",
+  "type": "object"
+}

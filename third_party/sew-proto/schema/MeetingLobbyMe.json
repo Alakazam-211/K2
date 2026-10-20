@@ -1,0 +1,97 @@
+{
+  "$defs": {
+    "MeetingLobbyState": {
+      "description": "A lobby entry's state.",
+      "oneOf": [
+        {
+          "const": "waiting",
+          "description": "Knocked; a host has not decided. Expires after 10 minutes.",
+          "type": "string"
+        },
+        {
+          "const": "admitted",
+          "description": "A host let them in: they are a member of the meeting channel.",
+          "type": "string"
+        },
+        {
+          "const": "denied",
+          "description": "A host did not let them in (a link guest's session ended with it).",
+          "type": "string"
+        },
+        {
+          "const": "expired",
+          "description": "Nobody decided within 10 minutes, the link was rotated or revoked, or the meeting\nclosed.",
+          "type": "string"
+        },
+        {
+          "const": "left",
+          "description": "The knocker withdrew before a decision (MC3b: `POST\n/api/v1/meetings/{id}/lobby/me/withdraw`).",
+          "type": "string"
+        }
+      ]
+    },
+    "MeetingLobbyStatus": {
+      "description": "One of the caller's own lobby entries (`GET /api/v1/meetings/lobby/me`).",
+      "properties": {
+        "channel_id": {
+          "description": "The meeting channel, once admitted (join its voice).",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "decided_at": {
+          "description": "The decision.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "entry_id": {
+          "description": "The entry.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "knocked_at": {
+          "description": "The knock.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "meeting_id": {
+          "description": "The meeting.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/MeetingLobbyState",
+          "description": "Where it stands."
+        }
+      },
+      "required": [
+        "entry_id",
+        "meeting_id",
+        "state",
+        "knocked_at"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Answer of `GET /api/v1/meetings/lobby/me`: the caller's entries knocked in the last 12\nhours, newest first (at most 20). The guest page's polling fallback (every 5 s) when it has\nno gateway socket.",
+  "properties": {
+    "items": {
+      "description": "Newest knock first.",
+      "items": {
+        "$ref": "#/$defs/MeetingLobbyStatus"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "items"
+  ],
+  "title": "MeetingLobbyMe",
+  "type": "object"
+}

@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The install role a new local user gets (never `owner`; `sew init` makes the owner).",
+  "oneOf": [
+    {
+      "const": "member",
+      "description": "A regular member (the default).",
+      "type": "string"
+    },
+    {
+      "const": "admin",
+      "description": "An install admin.",
+      "type": "string"
+    },
+    {
+      "const": "guest",
+      "description": "A guest.",
+      "type": "string"
+    }
+  ],
+  "title": "LocalRole"
+}

@@ -1,0 +1,54 @@
+{
+  "$defs": {
+    "MyChannelsKind": {
+      "description": "`GET /api/v1/me/channels?kind=`: DMs and group DMs, or space channels.",
+      "oneOf": [
+        {
+          "const": "dm",
+          "description": "DMs and group DMs.",
+          "type": "string"
+        },
+        {
+          "const": "space",
+          "description": "Space channels.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Query of `GET /api/v1/me/channels`: every channel the caller belongs to and can view, by id\nascending with an `after` cursor.",
+  "properties": {
+    "after": {
+      "description": "Channels with a larger id.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "kind": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MyChannelsKind"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Only DMs or only space channels."
+    },
+    "limit": {
+      "description": "Page size, 1–100 (default 50).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    }
+  },
+  "title": "MyChannelsQuery",
+  "type": "object"
+}

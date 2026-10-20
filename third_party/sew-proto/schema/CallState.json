@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Whether a call is live (§14.1).",
+  "oneOf": [
+    {
+      "const": "active",
+      "description": "Live.",
+      "type": "string"
+    },
+    {
+      "const": "ended",
+      "description": "Over (`ended_at` and `end_reason` set).",
+      "type": "string"
+    }
+  ],
+  "title": "CallState"
+}

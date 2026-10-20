@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Counts a run or preview would destroy (or did). Ids and counts only.",
+  "properties": {
+    "drafts_deleted": {
+      "description": "Drafts deleted.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "file_bytes_purged": {
+      "description": "Plaintext bytes of the purged files.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "files_held": {
+      "description": "Files past a cutoff kept by a legal hold.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "files_purged": {
+      "description": "Files purged.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "files_removed": {
+      "description": "Files hidden by file retention.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "messages_expired": {
+      "description": "Live messages hidden (expired).",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "messages_held": {
+      "description": "Messages past a cutoff kept by a legal hold.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "messages_purged": {
+      "description": "Messages whose content was destroyed (purged).",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "revisions_purged": {
+      "description": "Edited-away revisions purged.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "scheduled_deleted": {
+      "description": "Unsent scheduled messages deleted.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "messages_expired",
+    "messages_purged",
+    "messages_held",
+    "revisions_purged",
+    "files_removed",
+    "files_purged",
+    "files_held",
+    "file_bytes_purged",
+    "drafts_deleted",
+    "scheduled_deleted"
+  ],
+  "title": "RetentionTotals",
+  "type": "object"
+}

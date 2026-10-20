@@ -1,0 +1,186 @@
+{
+  "$defs": {
+    "Poll": {
+      "description": "A message's poll.",
+      "properties": {
+        "anonymous": {
+          "description": "Voters are never shown.",
+          "type": "boolean"
+        },
+        "closed_at": {
+          "description": "When it was closed (by hand, or its `closes_at` once the close ran).",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "closed_by": {
+          "description": "Who closed it by hand.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "closes_at": {
+          "description": "When it closes by itself.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max_choices": {
+          "description": "How many options a voter may pick.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "my_votes": {
+          "description": "The viewer's own votes (reads and the voter's own event only).",
+          "items": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "options": {
+          "description": "The options.",
+          "items": {
+            "$ref": "#/$defs/PollOption"
+          },
+          "type": "array"
+        },
+        "question": {
+          "description": "The question.",
+          "type": "string"
+        },
+        "results_visibility": {
+          "$ref": "#/$defs/PollResultsVisibility",
+          "description": "When counts are shown."
+        },
+        "state": {
+          "$ref": "#/$defs/PollState",
+          "description": "Open or closed (closed once `closes_at` passed, even before the close ran)."
+        },
+        "voter_count": {
+          "description": "Members who voted; `null` while results are hidden.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "question",
+        "options",
+        "max_choices",
+        "anonymous",
+        "results_visibility",
+        "state"
+      ],
+      "type": "object"
+    },
+    "PollOption": {
+      "description": "One poll option.",
+      "properties": {
+        "id": {
+          "description": "1-based option id.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "text": {
+          "description": "The text.",
+          "type": "string"
+        },
+        "votes": {
+          "description": "Votes; `null` while results are hidden.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "text"
+      ],
+      "type": "object"
+    },
+    "PollResultsVisibility": {
+      "description": "When a poll's counts are shown (`polls.results_visibility`).",
+      "oneOf": [
+        {
+          "const": "always",
+          "description": "Always.",
+          "type": "string"
+        },
+        {
+          "const": "after_close",
+          "description": "Only once the poll is closed.",
+          "type": "string"
+        }
+      ]
+    },
+    "PollState": {
+      "description": "Whether a poll takes votes.",
+      "oneOf": [
+        {
+          "const": "open",
+          "description": "Takes votes.",
+          "type": "string"
+        },
+        {
+          "const": "closed",
+          "description": "Closed by hand or by its time.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Body of `poll_updated`. `poll.my_votes` rides only in the voter's own event.",
+  "properties": {
+    "channel_id": {
+      "description": "Its channel.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "message_id": {
+      "description": "The poll's message.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "poll": {
+      "$ref": "#/$defs/Poll",
+      "description": "The poll now."
+    },
+    "seq": {
+      "description": "The channel seq the counts are current as of.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "message_id",
+    "channel_id",
+    "poll",
+    "seq"
+  ],
+  "title": "PollUpdated",
+  "type": "object"
+}

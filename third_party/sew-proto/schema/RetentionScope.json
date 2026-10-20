@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Which level a retention policy sets (`kind` tag).",
+  "oneOf": [
+    {
+      "additionalProperties": false,
+      "description": "The whole install (DMs use it too). A struct variant so unknown fields are refused.",
+      "properties": {
+        "kind": {
+          "const": "install",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "description": "One space and every channel in it.",
+      "properties": {
+        "id": {
+          "description": "The space.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "kind": {
+          "const": "space",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "description": "One channel, DM or group DM.",
+      "properties": {
+        "id": {
+          "description": "The channel.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "kind": {
+          "const": "channel",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "RetentionScope"
+}

@@ -1,0 +1,48 @@
+{
+  "$defs": {
+    "PresenceStatus": {
+      "description": "A member's visible presence.",
+      "oneOf": [
+        {
+          "const": "online",
+          "description": "Online.",
+          "type": "string"
+        },
+        {
+          "const": "idle",
+          "description": "Idle.",
+          "type": "string"
+        },
+        {
+          "const": "dnd",
+          "description": "Do not disturb.",
+          "type": "string"
+        },
+        {
+          "const": "offline",
+          "description": "Offline or invisible.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Body of `presence_updated`.",
+  "properties": {
+    "member_id": {
+      "description": "The member.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/PresenceStatus",
+      "description": "Their presence."
+    }
+  },
+  "required": [
+    "member_id",
+    "status"
+  ],
+  "title": "PresenceUpdated",
+  "type": "object"
+}

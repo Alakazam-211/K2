@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "What changed in a channel's change log (C8 `channel_changes.kind`).",
+  "oneOf": [
+    {
+      "const": "message_created",
+      "description": "A message was posted.",
+      "type": "string"
+    },
+    {
+      "const": "message_updated",
+      "description": "A message was edited.",
+      "type": "string"
+    },
+    {
+      "const": "message_deleted",
+      "description": "A message was deleted.",
+      "type": "string"
+    },
+    {
+      "const": "reaction_changed",
+      "description": "A reaction was added or removed.",
+      "type": "string"
+    },
+    {
+      "const": "pin_changed",
+      "description": "A message was pinned or unpinned.",
+      "type": "string"
+    },
+    {
+      "const": "thread_updated",
+      "description": "A thread's summary changed.",
+      "type": "string"
+    },
+    {
+      "const": "channel_updated",
+      "description": "Channel settings changed.",
+      "type": "string"
+    },
+    {
+      "const": "member_joined",
+      "description": "A member joined.",
+      "type": "string"
+    },
+    {
+      "const": "member_left",
+      "description": "A member left.",
+      "type": "string"
+    },
+    {
+      "const": "attachment_changed",
+      "description": "A message's attachments changed.",
+      "type": "string"
+    },
+    {
+      "const": "poll_updated",
+      "description": "A poll changed.",
+      "type": "string"
+    },
+    {
+      "const": "voice_state_changed",
+      "description": "Voice state changed (registered; unused in v1, contracts rev 24).",
+      "type": "string"
+    },
+    {
+      "const": "bookmark_changed",
+      "description": "A channel bookmark changed (contracts rev 26).",
+      "type": "string"
+    },
+    {
+      "const": "preview_changed",
+      "description": "A message's link previews changed (contracts rev 28).",
+      "type": "string"
+    },
+    {
+      "const": "meeting_updated",
+      "description": "A meeting row or its attendees changed (Meet MC1; `entity_id` = the meeting id).",
+      "type": "string"
+    },
+    {
+      "const": "meeting_link_changed",
+      "description": "A meeting's link was made, rotated or revoked (Meet MC2a; `entity_id` = the link\nrow id). Hosts read the link with `GET /meetings/{id}/link`; the secret is never in\nthe log.",
+      "type": "string"
+    }
+  ],
+  "title": "ChannelChangeKind"
+}

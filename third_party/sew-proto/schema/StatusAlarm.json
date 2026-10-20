@@ -1,0 +1,202 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A status alarm (S9 §6.2, contracts revs 11 and 21). K2 shows each one verbatim.",
+  "oneOf": [
+    {
+      "const": "db_down",
+      "description": "`db.ok = false`.",
+      "type": "string"
+    },
+    {
+      "const": "jobs_dead",
+      "description": "`jobs.dead > 0`.",
+      "type": "string"
+    },
+    {
+      "const": "keys_provider_down",
+      "description": "`keys.provider_ok = false`.",
+      "type": "string"
+    },
+    {
+      "const": "keys_current_month_missing",
+      "description": "`keys.current_month_ready = false`.",
+      "type": "string"
+    },
+    {
+      "const": "keys_mirror_stale",
+      "description": "The keyring mirror is stale (or kind `none`).",
+      "type": "string"
+    },
+    {
+      "const": "keys_shred_pending",
+      "description": "A crypto-shred started but did not finish.",
+      "type": "string"
+    },
+    {
+      "const": "keys_resurrected",
+      "description": "Old key files for shredded key ids were found and refused.",
+      "type": "string"
+    },
+    {
+      "const": "keys_rewrap_stalled",
+      "description": "Keys wait for a re-wrap but no retiring KEK is loaded.",
+      "type": "string"
+    },
+    {
+      "const": "search_lagging",
+      "description": "Search indexing trails writes by more than 60 s (S20 §15).",
+      "type": "string"
+    },
+    {
+      "const": "search_unavailable",
+      "description": "The search index is missing and being rebuilt; searches answer 503 (S20 §15).",
+      "type": "string"
+    },
+    {
+      "const": "search_commit_failing",
+      "description": "Three search index commits in a row failed (S20 §15).",
+      "type": "string"
+    },
+    {
+      "const": "search_disk_low",
+      "description": "Free disk under the search index is below its size plus 1 GiB (S20 §13).",
+      "type": "string"
+    },
+    {
+      "const": "backup_stale",
+      "description": "The last good backup is older than 36 h (contracts rev 21; S6 sets it).",
+      "type": "string"
+    },
+    {
+      "const": "backup_failed",
+      "description": "The last backup failed (contracts rev 21; S6 sets it).",
+      "type": "string"
+    },
+    {
+      "const": "drill_failed",
+      "description": "The last restore drill failed (contracts rev 21; S6 sets it).",
+      "type": "string"
+    },
+    {
+      "const": "drill_stale",
+      "description": "The last good restore drill is older than 8 days (contracts rev 21; S6 sets it).",
+      "type": "string"
+    },
+    {
+      "const": "gifs_unconfigured",
+      "description": "GIF search is on but its provider key does not resolve or was refused (S16 §9.1).",
+      "type": "string"
+    },
+    {
+      "const": "retention_overdue",
+      "description": "A finite retention policy is set and no run finished `done` for 48 h (S22 §18).",
+      "type": "string"
+    },
+    {
+      "const": "retention_search_backlog",
+      "description": "Purged messages' search documents are still waiting after 24 h (S22 §10.5).",
+      "type": "string"
+    },
+    {
+      "const": "mail_failing",
+      "description": "Three or more mail sends in a row failed over at least 10 minutes (S21 §12.6).",
+      "type": "string"
+    },
+    {
+      "const": "digest_mail_unconfigured",
+      "description": "`digest.enabled` is on but `[mail.smtp]` is not configured (S21 §11.1).",
+      "type": "string"
+    },
+    {
+      "const": "export_stuck",
+      "description": "A running export wrote no progress for 10 minutes (S23 §16).",
+      "type": "string"
+    },
+    {
+      "const": "voice_media_down",
+      "description": "Voice is enabled and the media engine has been unreachable for more than 60 s\n(S33 v2 §22).",
+      "type": "string"
+    },
+    {
+      "const": "voice_drift",
+      "description": "The snapshot audit found voice state Sew did not expect (S33 v2 §14.3).",
+      "type": "string"
+    },
+    {
+      "const": "media_panic",
+      "description": "The media engine reported a panic in the last hour (S33 v2 §22, S37 §13.2).",
+      "type": "string"
+    },
+    {
+      "const": "e2ee_group_resets",
+      "description": "More than 3 call key group resets install-wide in the last hour, or a call in reset\nback-off (S50 §19.3).",
+      "type": "string"
+    },
+    {
+      "const": "e2ee_removal_overdue",
+      "description": "A key removal was not activated by its hard bound in the last hour (S50 §19.3).",
+      "type": "string"
+    },
+    {
+      "const": "e2ee_rebuild_failed",
+      "description": "A key group rebuild ended in a new group or a reset in the last hour (S50 §19.3).",
+      "type": "string"
+    },
+    {
+      "const": "e2ee_roster_mismatch",
+      "description": "A client reported a roster mismatch in the last hour (S50 §19.3).",
+      "type": "string"
+    },
+    {
+      "const": "e2ee_sender_stale",
+      "description": "A stale-slot resync or a `peer_undecryptable` quorum in the last hour (S50 §19.3).",
+      "type": "string"
+    },
+    {
+      "const": "e2ee_engine_anomaly",
+      "description": "A client's bridge reported a misbehaving engine in the last hour (S50 §19.3).",
+      "type": "string"
+    },
+    {
+      "const": "e2ee_keys_unavailable",
+      "description": "Voice is enabled and the call DS or CA key failed to load (S50 §19.3).",
+      "type": "string"
+    },
+    {
+      "const": "media_budget_critical",
+      "description": "The media budget tier has been `critical` for more than 5 min (S34 v2 §25.3);\nclears when the tier drops.",
+      "type": "string"
+    },
+    {
+      "const": "recorder_down",
+      "description": "The recorder failed health for 60 s (S35 v2 §22.3).",
+      "type": "string"
+    },
+    {
+      "const": "transcriber_down",
+      "description": "The transcriber failed health for 60 s (S35 v2 §22.3).",
+      "type": "string"
+    },
+    {
+      "const": "transcribe_backlog",
+      "description": "The oldest untranscribed segment is older than 30 min (S35 v2 §13.4).",
+      "type": "string"
+    },
+    {
+      "const": "recording_storage_full",
+      "description": "A recording stopped on `storage_full` in the last 24 h (S35 v2 §22.3).",
+      "type": "string"
+    },
+    {
+      "const": "recording_auto_failed",
+      "description": "Three auto-starts failed in 10 min for one channel (S35 v2 §8.3).",
+      "type": "string"
+    },
+    {
+      "const": "recording_consent_violation",
+      "description": "A segment of an ungranted identity reached `sew` in the last 24 h (S35 v2 §9.3).",
+      "type": "string"
+    }
+  ],
+  "title": "StatusAlarm"
+}

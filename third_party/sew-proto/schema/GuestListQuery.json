@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Query of `GET /api/v1/install/guests`, ordered by member id.",
+  "properties": {
+    "after": {
+      "description": "Guests after this member id.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "include_deactivated": {
+      "description": "Include deactivated guests (default `false`).",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "limit": {
+      "description": "Page size, 1–100 (default 50).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    }
+  },
+  "title": "GuestListQuery",
+  "type": "object"
+}

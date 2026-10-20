@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Who may join a space by themself (S10 gap G4).",
+  "oneOf": [
+    {
+      "const": "open",
+      "description": "Any active non-guest member may join.",
+      "type": "string"
+    },
+    {
+      "const": "invite",
+      "description": "Members join only when someone adds them (the default).",
+      "type": "string"
+    }
+  ],
+  "title": "SpaceJoinPolicy"
+}

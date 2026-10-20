@@ -1,0 +1,64 @@
+{
+  "$defs": {
+    "PresenceEntry": {
+      "description": "One member's shown presence.",
+      "properties": {
+        "member_id": {
+          "description": "The member.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/PresenceStatus",
+          "description": "Shown status."
+        }
+      },
+      "required": [
+        "member_id",
+        "status"
+      ],
+      "type": "object"
+    },
+    "PresenceStatus": {
+      "description": "A member's visible presence.",
+      "oneOf": [
+        {
+          "const": "online",
+          "description": "Online.",
+          "type": "string"
+        },
+        {
+          "const": "idle",
+          "description": "Idle.",
+          "type": "string"
+        },
+        {
+          "const": "dnd",
+          "description": "Do not disturb.",
+          "type": "string"
+        },
+        {
+          "const": "offline",
+          "description": "Offline or invisible.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Op 5's presence answer: one entry per subscribed id, in request order (always sent).",
+  "properties": {
+    "items": {
+      "description": "The entries.",
+      "items": {
+        "$ref": "#/$defs/PresenceEntry"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "items"
+  ],
+  "title": "PresenceSnapshot",
+  "type": "object"
+}

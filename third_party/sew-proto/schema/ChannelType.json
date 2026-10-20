@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Channel type (gap G8 adds `dm` and `group_dm`).",
+  "oneOf": [
+    {
+      "const": "text",
+      "description": "A text channel.",
+      "type": "string"
+    },
+    {
+      "const": "voice",
+      "description": "A voice channel.",
+      "type": "string"
+    },
+    {
+      "const": "announcement",
+      "description": "An announcement channel: `@everyone` posts only in threads by default.",
+      "type": "string"
+    },
+    {
+      "const": "dm",
+      "description": "A 1:1 DM (no space, slug or name; always private).",
+      "type": "string"
+    },
+    {
+      "const": "group_dm",
+      "description": "A group DM of up to 9 people.",
+      "type": "string"
+    }
+  ],
+  "title": "ChannelType"
+}

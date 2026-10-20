@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "`status.voice.e2ee` (S50 §19.2).",
+  "properties": {
+    "ca_kid": {
+      "description": "The CA key id; absent when the key failed to load.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "calls": {
+      "description": "Live key groups.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "crl_size": {
+      "description": "Serials in the in-memory CRL.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "devices": {
+      "description": "Unrevoked enrolled devices.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "ds_kid": {
+      "description": "The DS key id; absent when the key failed to load.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "lagging": {
+      "description": "Lagging leaves.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "leaves": {
+      "description": "Leaves across them.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "rebuilding": {
+      "description": "Calls rebuilding after a restart.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "removal_overdue_1h": {
+      "description": "Removals past their hard bound in the last hour.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "resets_1h": {
+      "description": "Group resets in the last hour.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "roster_reports_1h": {
+      "description": "Roster-kind K10 reports in the last hour.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "calls",
+    "leaves",
+    "lagging",
+    "rebuilding",
+    "resets_1h",
+    "removal_overdue_1h",
+    "roster_reports_1h",
+    "devices",
+    "crl_size"
+  ],
+  "title": "StatusVoiceE2ee",
+  "type": "object"
+}

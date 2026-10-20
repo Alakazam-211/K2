@@ -1,0 +1,118 @@
+{
+  "$defs": {
+    "DigestInterval": {
+      "description": "How often the email digest may be sent (`notify_settings.digest_interval` codes 0–3).",
+      "oneOf": [
+        {
+          "const": "off",
+          "description": "No digest.",
+          "type": "string"
+        },
+        {
+          "const": "15m",
+          "description": "At most every 15 minutes.",
+          "type": "string"
+        },
+        {
+          "const": "1h",
+          "description": "At most every hour (the default).",
+          "type": "string"
+        },
+        {
+          "const": "1d",
+          "description": "At most every day.",
+          "type": "string"
+        }
+      ]
+    },
+    "NotifyLevel": {
+      "description": "A notification level (`*.level` codes 1–3).",
+      "oneOf": [
+        {
+          "const": "all",
+          "description": "Every message.",
+          "type": "string"
+        },
+        {
+          "const": "mentions",
+          "description": "Mentions, DMs, keywords and followed threads.",
+          "type": "string"
+        },
+        {
+          "const": "none",
+          "description": "Nothing (reminders still arrive).",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /api/v1/me/notify/set`. Returns [`NotifySettings`].",
+  "properties": {
+    "broad_mentions": {
+      "description": "`@channel` and `@here` notify.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "default_level": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/NotifyLevel"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The account default; `null` = back to the install default."
+    },
+    "digest_interval": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DigestInterval"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The digest interval (accepted and ignored for agents)."
+    },
+    "if_rev": {
+      "description": "Refuse the write (`409 conflict`) unless the settings' `rev` is this.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "keywords": {
+      "description": "The keywords; replaces the list (`[]` clears it).",
+      "items": {
+        "type": "string"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "mute_lets_mentions": {
+      "description": "Direct mentions still notify in muted channels.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "thread_replies": {
+      "description": "Replies in followed threads notify.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    }
+  },
+  "title": "UpdateNotifySettingsRequest",
+  "type": "object"
+}

@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /mgmt/v1/sessions/revoke`: at least one of the two.",
+  "properties": {
+    "external_id": {
+      "description": "Revoke every session of this principal.",
+      "maxLength": 128,
+      "pattern": "^(k2:(principal|workspace|connect):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|k2:owner|local:[a-z0-9_-]{2,64}|link:[1-9][0-9]{0,18}:[A-Z2-7]{16})$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "k2_sid": {
+      "description": "Revoke sessions bound to this K2 login session.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "title": "RevokeSessionsRequest",
+  "type": "object"
+}

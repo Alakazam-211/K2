@@ -1,0 +1,325 @@
+{
+  "$defs": {
+    "AgentKind": {
+      "description": "What kind of agent a member is.",
+      "oneOf": [
+        {
+          "const": "coworker",
+          "description": "A team member in its own right.",
+          "type": "string"
+        },
+        {
+          "const": "assistant",
+          "description": "Pinned to one person; acts within that person's access (C9).",
+          "type": "string"
+        }
+      ]
+    },
+    "AvatarRecord": {
+      "additionalProperties": false,
+      "description": "A member's avatar in `members.ndjson`.",
+      "properties": {
+        "avatar_id": {
+          "description": "The public avatar version id (in avatar URLs).",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "file": {
+          "description": "The image (`files/<file>`; also the avatar link id).",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "source": {
+          "description": "`member` or `provider`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "file",
+        "avatar_id",
+        "source"
+      ],
+      "type": "object"
+    },
+    "InstallRole": {
+      "description": "Install-wide role (C12). Separate from space roles.",
+      "oneOf": [
+        {
+          "const": "owner",
+          "description": "All install admin, plus transfer.",
+          "type": "string"
+        },
+        {
+          "const": "admin",
+          "description": "Spaces, policies, members, guests. No content access to private channels or DMs.",
+          "type": "string"
+        },
+        {
+          "const": "member",
+          "description": "A regular member.",
+          "type": "string"
+        },
+        {
+          "const": "guest",
+          "description": "A guest.",
+          "type": "string"
+        },
+        {
+          "const": "link_guest",
+          "description": "A meeting link guest (Meet MC2a, C6 amendment CC1, CC3): made by redeeming a meeting\nlink, bound to one meeting channel, capped by `LINK_GUEST_MASK`, never a K2\nprincipal. Every S19 guest rule applies, and only the link-guest allowlist passes.",
+          "type": "string"
+        }
+      ]
+    },
+    "MemberKind": {
+      "description": "Whether a member is a person or an agent.",
+      "oneOf": [
+        {
+          "const": "person",
+          "description": "A human.",
+          "type": "string"
+        },
+        {
+          "const": "agent",
+          "description": "A K2 agent.",
+          "type": "string"
+        }
+      ]
+    },
+    "SourceRef": {
+      "additionalProperties": false,
+      "description": "A converter's reference to the record it came from (ignored and not stored by Sew v1).",
+      "properties": {
+        "ref": {
+          "description": "Its reference.",
+          "type": "string"
+        },
+        "system": {
+          "description": "The source system, e.g. `slack`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "system",
+        "ref"
+      ],
+      "type": "object"
+    },
+    "StatusRecord": {
+      "additionalProperties": false,
+      "description": "A member's status in `members.ndjson`.",
+      "properties": {
+        "emoji": {
+          "description": "The status emoji.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "expires_at": {
+          "description": "When it clears.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "set_at": {
+          "description": "When it was set.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "text": {
+          "description": "The status text.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "set_at"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`members.ndjson`.",
+  "properties": {
+    "agent_kind": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AgentKind"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "For agents."
+    },
+    "assistant_of": {
+      "description": "For pinned assistants: their person.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "avatar": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AvatarRecord"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Avatar."
+    },
+    "compliance": {
+      "description": "The compliance flag.",
+      "type": "boolean"
+    },
+    "compliance_set_at": {
+      "description": "When the flag last changed.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "compliance_set_by": {
+      "description": "Who changed it (absent for the mgmt service).",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "created_at": {
+      "description": "Created.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "deactivated_at": {
+      "description": "Deactivated.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "display_name": {
+      "description": "Display name.",
+      "type": "string"
+    },
+    "email": {
+      "description": "Email.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "external_id": {
+      "description": "The external id (`k2:principal:<uuid>`, `local:<name>`, `import:<system>:<id>`).",
+      "type": "string"
+    },
+    "fields": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Custom field values by field id.",
+      "type": "object"
+    },
+    "head_seq": {
+      "description": "The member change-log head (*always*; full exports).",
+      "format": "uint64",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "id": {
+      "description": "The member id.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "install_role": {
+      "$ref": "#/$defs/InstallRole",
+      "description": "Install role."
+    },
+    "kind": {
+      "$ref": "#/$defs/MemberKind",
+      "description": "Person or agent."
+    },
+    "pinned_at": {
+      "description": "When the assistant was pinned.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "pronouns": {
+      "description": "Pronouns.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "source": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SourceRef"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Converter reference."
+    },
+    "status": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StatusRecord"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Status."
+    },
+    "timezone": {
+      "description": "IANA time zone.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "title": {
+      "description": "Title.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "username": {
+      "description": "Handle.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "external_id",
+    "kind",
+    "install_role",
+    "compliance",
+    "username",
+    "display_name",
+    "created_at"
+  ],
+  "title": "MemberRecord",
+  "type": "object"
+}

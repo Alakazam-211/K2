@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /api/v1/compliance/holds/{id}/release`.",
+  "properties": {
+    "confirm_name": {
+      "description": "The hold's name, typed back exactly.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "confirm_name"
+  ],
+  "title": "ReleaseHoldRequest",
+  "type": "object"
+}

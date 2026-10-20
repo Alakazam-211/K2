@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A retention policy row's lifecycle state.",
+  "oneOf": [
+    {
+      "const": "pending",
+      "description": "Waiting for its `effective_at` (a shorter value after a preview).",
+      "type": "string"
+    },
+    {
+      "const": "active",
+      "description": "In effect.",
+      "type": "string"
+    },
+    {
+      "const": "superseded",
+      "description": "Replaced by a newer active row.",
+      "type": "string"
+    },
+    {
+      "const": "cancelled",
+      "description": "Cancelled before it took effect.",
+      "type": "string"
+    }
+  ],
+  "title": "PolicyState"
+}

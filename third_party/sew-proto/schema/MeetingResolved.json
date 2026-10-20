@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Answer of `POST /api/v1/meetings/resolve` (signed-in callers): which meeting a link names,\nso the Meet App sends members straight in. A bad link is `404 link_invalid`.",
+  "properties": {
+    "meeting_id": {
+      "description": "The meeting.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "member_of_channel": {
+      "description": "The caller is in the meeting's channel already.",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "meeting_id",
+    "member_of_channel"
+  ],
+  "title": "MeetingResolved",
+  "type": "object"
+}

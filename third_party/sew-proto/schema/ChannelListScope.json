@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Which channels `GET /api/v1/spaces/{id}/channels` lists.",
+  "oneOf": [
+    {
+      "const": "browse",
+      "description": "Public channels the caller can view plus private ones it belongs to (the default).",
+      "type": "string"
+    },
+    {
+      "const": "joined",
+      "description": "Channels the caller belongs to.",
+      "type": "string"
+    },
+    {
+      "const": "admin",
+      "description": "Every channel, private ones redacted (space admins and install admins).",
+      "type": "string"
+    }
+  ],
+  "title": "ChannelListScope"
+}

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "An attendee's kind.",
+  "oneOf": [
+    {
+      "const": "member",
+      "description": "A member of the install: added to the meeting channel (so they skip the lobby).",
+      "type": "string"
+    },
+    {
+      "const": "email",
+      "description": "An email address for the calendar file only; never an account.",
+      "type": "string"
+    }
+  ],
+  "title": "MeetingAttendeeKind"
+}

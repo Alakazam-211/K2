@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Query of `GET /api/v1/spaces/{id}/members`: a page forward by member id (`after`, `limit`),\nor a batch lookup (`ids`, Hearth HC5). With `ids` the answer holds, ascending, only the ids\nthat are space members the caller may list (the page's view rules), with `has_more: false`;\nother ids are left out silently. `ids` with any cursor or `limit` is the server's\n`400 validation_failed` (field `ids`), so a full fixture can set every field.",
+  "properties": {
+    "after": {
+      "description": "Members with a larger id.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "around": {
+      "description": "Refused (`400`): this list pages forward with `after` only.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "before": {
+      "description": "Refused (`400`): this list pages forward with `after` only.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "ids": {
+      "description": "1–100 distinct member ids (HC5).",
+      "pattern": "^[1-9][0-9]{0,18}(,[1-9][0-9]{0,18}){0,99}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "limit": {
+      "description": "Page size, 1–100 (default 50).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    }
+  },
+  "title": "SpaceMembersQuery",
+  "type": "object"
+}

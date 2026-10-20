@@ -1,0 +1,259 @@
+{
+  "$defs": {
+    "MemberChange": {
+      "description": "One member change-log entry. Kind `notification` carries `reason` and no `entity_id`;\nevery other kind carries `entity_id` and no `reason` (gap G16).",
+      "properties": {
+        "at": {
+          "description": "When.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "entity_id": {
+          "description": "The entity that changed; absent for `notification`.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/MemberChangeKind",
+          "description": "What changed."
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NotificationReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why the member was notified; only for `notification`."
+        },
+        "ref_id": {
+          "description": "A related id (for `notification`, the message).",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "seq": {
+          "description": "The member seq.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "seq",
+        "kind",
+        "at"
+      ],
+      "type": "object"
+    },
+    "MemberChangeKind": {
+      "description": "What changed in a member's own change log (C8 `member_changes.kind`).",
+      "oneOf": [
+        {
+          "const": "channel_joined",
+          "description": "The member joined a channel.",
+          "type": "string"
+        },
+        {
+          "const": "channel_left",
+          "description": "The member left a channel.",
+          "type": "string"
+        },
+        {
+          "const": "space_joined",
+          "description": "The member joined a space.",
+          "type": "string"
+        },
+        {
+          "const": "space_left",
+          "description": "The member left a space.",
+          "type": "string"
+        },
+        {
+          "const": "read_state_moved",
+          "description": "A read cursor moved.",
+          "type": "string"
+        },
+        {
+          "const": "prefs_changed",
+          "description": "Preferences changed.",
+          "type": "string"
+        },
+        {
+          "const": "perms_changed",
+          "description": "Effective permissions changed.",
+          "type": "string"
+        },
+        {
+          "const": "notification",
+          "description": "A notification was written; the entry carries a reason, not an entity.",
+          "type": "string"
+        },
+        {
+          "const": "draft_changed",
+          "description": "A draft changed.",
+          "type": "string"
+        },
+        {
+          "const": "saved_changed",
+          "description": "A saved item changed.",
+          "type": "string"
+        },
+        {
+          "const": "reminder_fired",
+          "description": "A reminder fired.",
+          "type": "string"
+        },
+        {
+          "const": "profile_changed",
+          "description": "The member's profile changed.",
+          "type": "string"
+        },
+        {
+          "const": "thread_follow_changed",
+          "description": "A thread was followed or unfollowed (contracts rev 20).",
+          "type": "string"
+        },
+        {
+          "const": "voice_flags_changed",
+          "description": "Voice mute/deafen flags changed (contracts rev 24).",
+          "type": "string"
+        },
+        {
+          "const": "reminder_changed",
+          "description": "A reminder was created, edited or removed (contracts rev 26).",
+          "type": "string"
+        },
+        {
+          "const": "scheduled_changed",
+          "description": "A scheduled message changed (contracts rev 26).",
+          "type": "string"
+        },
+        {
+          "const": "thread_read_moved",
+          "description": "A thread read cursor moved (contracts rev 29).",
+          "type": "string"
+        }
+      ]
+    },
+    "NotificationReason": {
+      "description": "Why a member was notified; stored in `member_changes.entity_id` for kind `notification`\n(gap G16).",
+      "oneOf": [
+        {
+          "const": "mention",
+          "description": "A direct `@member` mention.",
+          "type": "string"
+        },
+        {
+          "const": "role_mention",
+          "description": "A role mention.",
+          "type": "string"
+        },
+        {
+          "const": "group_mention",
+          "description": "A user-group mention.",
+          "type": "string"
+        },
+        {
+          "const": "channel_mention",
+          "description": "`@channel` (or an alias).",
+          "type": "string"
+        },
+        {
+          "const": "here_mention",
+          "description": "`@here`.",
+          "type": "string"
+        },
+        {
+          "const": "dm",
+          "description": "A DM or group DM message.",
+          "type": "string"
+        },
+        {
+          "const": "thread_reply",
+          "description": "A reply in a followed thread.",
+          "type": "string"
+        },
+        {
+          "const": "keyword",
+          "description": "A keyword match.",
+          "type": "string"
+        },
+        {
+          "const": "all_messages",
+          "description": "Notify-on-all-messages.",
+          "type": "string"
+        },
+        {
+          "const": "reminder",
+          "description": "A reminder came due (contracts rev 26).",
+          "type": "string"
+        },
+        {
+          "const": "call_missed",
+          "description": "A missed DM call (contracts rev 32).",
+          "type": "string"
+        },
+        {
+          "const": "transcript_ready",
+          "description": "A call transcript is ready (contracts rev 38).",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Response of `GET /api/v1/me/changes` (same paging rules as [`ChannelChangesPage`]).",
+  "properties": {
+    "entries": {
+      "description": "Entries with `seq > since` the caller may see, oldest first.",
+      "items": {
+        "$ref": "#/$defs/MemberChange"
+      },
+      "type": "array"
+    },
+    "floor": {
+      "default": 0,
+      "description": "The member log's floor seq (S14).",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "has_more": {
+      "description": "Whether more entries follow.",
+      "type": "boolean"
+    },
+    "head": {
+      "description": "The member's head seq.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "next_since": {
+      "default": 0,
+      "description": "The seq of the last entry scanned, kept or dropped (`since` if none) (S14).",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "sync_epoch": {
+      "default": "",
+      "description": "The install's sync epoch (S14).",
+      "type": "string"
+    }
+  },
+  "required": [
+    "entries",
+    "head",
+    "has_more"
+  ],
+  "title": "MemberChangesPage",
+  "type": "object"
+}

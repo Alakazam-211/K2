@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /api/v1/auth/k2`: exchange a K2 chat pass for a session.",
+  "properties": {
+    "pass": {
+      "description": "The K2 chat pass (a compact JWS).",
+      "type": "string"
+    }
+  },
+  "required": [
+    "pass"
+  ],
+  "title": "K2PassRequest",
+  "type": "object"
+}

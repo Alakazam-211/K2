@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Op 7 INVALID_SESSION.",
+  "properties": {
+    "resumable": {
+      "description": "Whether RESUME may still work (never `true` in v1).",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "resumable"
+  ],
+  "title": "InvalidSession",
+  "type": "object"
+}

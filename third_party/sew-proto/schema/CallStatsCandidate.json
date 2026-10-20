@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The type of the local candidate of the selected ICE pair (F21; RFC 8445 §5.1.1).",
+  "oneOf": [
+    {
+      "const": "host",
+      "description": "A host address.",
+      "type": "string"
+    },
+    {
+      "const": "srflx",
+      "description": "A server-reflexive address (STUN).",
+      "type": "string"
+    },
+    {
+      "const": "prflx",
+      "description": "A peer-reflexive address.",
+      "type": "string"
+    },
+    {
+      "const": "relay",
+      "description": "A TURN relay.",
+      "type": "string"
+    }
+  ],
+  "title": "CallStatsCandidate"
+}

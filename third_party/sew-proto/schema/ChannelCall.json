@@ -1,0 +1,249 @@
+{
+  "$defs": {
+    "Call": {
+      "description": "A call (§14.1).",
+      "properties": {
+        "channel_id": {
+          "description": "The DM or group DM.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "end_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CallEndReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why it ended."
+        },
+        "ended_at": {
+          "description": "When it ended.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "The call (`calls.id`).",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "message_id": {
+          "description": "The call-record message in the DM.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "my_ring": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MyRing"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The viewer's own ring (READY, the member's copy only)."
+        },
+        "participant_ids": {
+          "description": "Members with a voice entry in the call now (connecting or connected), ascending.",
+          "items": {
+            "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "rings": {
+          "description": "Rings, by member id.",
+          "items": {
+            "$ref": "#/$defs/CallRing"
+          },
+          "type": "array"
+        },
+        "started_at": {
+          "description": "When.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "started_by": {
+          "description": "Who started it.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/CallState",
+          "description": "`active` or `ended`."
+        }
+      },
+      "required": [
+        "id",
+        "channel_id",
+        "message_id",
+        "started_by",
+        "started_at",
+        "state",
+        "participant_ids",
+        "rings"
+      ],
+      "type": "object"
+    },
+    "CallEndReason": {
+      "description": "Why a call ended (§14.5). Stored in `calls.end_reason`.",
+      "oneOf": [
+        {
+          "const": "empty",
+          "description": "Nobody left in the call.",
+          "type": "string"
+        },
+        {
+          "const": "declined",
+          "description": "A 1:1 callee declined.",
+          "type": "string"
+        },
+        {
+          "const": "no_answer",
+          "description": "Nobody answered.",
+          "type": "string"
+        },
+        {
+          "const": "alone_timeout",
+          "description": "One person alone too long.",
+          "type": "string"
+        },
+        {
+          "const": "media_restarted",
+          "description": "The media engine lost the call.",
+          "type": "string"
+        },
+        {
+          "const": "media_failed",
+          "description": "The media engine failed before anyone connected.",
+          "type": "string"
+        },
+        {
+          "const": "voice_disabled",
+          "description": "Voice was turned off.",
+          "type": "string"
+        },
+        {
+          "const": "perms_lost",
+          "description": "Nobody left who may connect.",
+          "type": "string"
+        }
+      ]
+    },
+    "CallRing": {
+      "description": "One ring of a call (§14.1). Only rung members appear; the starter never does.",
+      "properties": {
+        "expires_at": {
+          "description": "When an unanswered ring becomes `missed` (only while `ringing` or `busy`).",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "member_id": {
+          "description": "The callee.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/RingState",
+          "description": "Its state."
+        }
+      },
+      "required": [
+        "member_id",
+        "state"
+      ],
+      "type": "object"
+    },
+    "CallState": {
+      "description": "Whether a call is live (§14.1).",
+      "oneOf": [
+        {
+          "const": "active",
+          "description": "Live.",
+          "type": "string"
+        },
+        {
+          "const": "ended",
+          "description": "Over (`ended_at` and `end_reason` set).",
+          "type": "string"
+        }
+      ]
+    },
+    "MyRing": {
+      "description": "The member's own ring in READY (`Call.my_ring`, the member's copy only).",
+      "properties": {
+        "reason": {
+          "description": "`busy`, `dnd` or `muted` for a silent ring.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "silent": {
+          "description": "A silent ring (busy, DND or a muted DM).",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "silent"
+      ],
+      "type": "object"
+    },
+    "RingState": {
+      "description": "A ring's state as every DM member sees it (§14.1, §15).",
+      "oneOf": [
+        {
+          "const": "ringing",
+          "description": "Ringing.",
+          "type": "string"
+        },
+        {
+          "const": "busy",
+          "description": "Ringing, but the callee is already in voice (a silent ring).",
+          "type": "string"
+        },
+        {
+          "const": "accepted",
+          "description": "The callee joined.",
+          "type": "string"
+        },
+        {
+          "const": "declined",
+          "description": "The callee declined.",
+          "type": "string"
+        },
+        {
+          "const": "missed",
+          "description": "Not answered in time, or the call ended first.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "`GET /api/v1/channels/{id}/call`.",
+  "properties": {
+    "call": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Call"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The DM's active call, if any."
+    }
+  },
+  "title": "ChannelCall",
+  "type": "object"
+}

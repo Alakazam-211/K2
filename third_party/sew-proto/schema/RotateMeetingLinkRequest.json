@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /api/v1/meetings/{id}/link/rotate` (hosts). F10 `KEY_IGNORED`: the answer holds\na fresh secret; a retry with the same `client_nonce` (within 24 hours) answers the link that\nrotate made instead of rotating again.",
+  "properties": {
+    "client_nonce": {
+      "description": "The client's retry nonce: 16–64 characters of `[A-Za-z0-9_-]`.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "title": "RotateMeetingLinkRequest",
+  "type": "object"
+}

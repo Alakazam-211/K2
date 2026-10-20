@@ -1,0 +1,254 @@
+{
+  "$defs": {
+    "ChannelNotifyPrefs": {
+      "description": "A member's prefs for one channel or DM.",
+      "properties": {
+        "channel_id": {
+          "description": "The channel.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "effective_level": {
+          "$ref": "#/$defs/NotifyLevel",
+          "description": "The level in effect for this member here."
+        },
+        "level": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NotifyLevel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The channel's own level; `null` = inherit."
+        },
+        "muted": {
+          "description": "Muted now.",
+          "type": "boolean"
+        },
+        "muted_until": {
+          "description": "When the mute ends; absent = until unmuted (or not muted).",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "channel_id",
+        "effective_level",
+        "muted"
+      ],
+      "type": "object"
+    },
+    "DigestAvailability": {
+      "description": "Whether the member gets an email digest, and why not.",
+      "properties": {
+        "available": {
+          "description": "A digest can be sent to this member now.",
+          "type": "boolean"
+        },
+        "interval": {
+          "$ref": "#/$defs/DigestInterval",
+          "description": "The member's interval."
+        },
+        "reason": {
+          "description": "Why not: `policy_off`, `mail_unconfigured`, `no_email`, `agent`, `interval_off`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "interval",
+        "available"
+      ],
+      "type": "object"
+    },
+    "DigestInterval": {
+      "description": "How often the email digest may be sent (`notify_settings.digest_interval` codes 0–3).",
+      "oneOf": [
+        {
+          "const": "off",
+          "description": "No digest.",
+          "type": "string"
+        },
+        {
+          "const": "15m",
+          "description": "At most every 15 minutes.",
+          "type": "string"
+        },
+        {
+          "const": "1h",
+          "description": "At most every hour (the default).",
+          "type": "string"
+        },
+        {
+          "const": "1d",
+          "description": "At most every day.",
+          "type": "string"
+        }
+      ]
+    },
+    "NotifyLevel": {
+      "description": "A notification level (`*.level` codes 1–3).",
+      "oneOf": [
+        {
+          "const": "all",
+          "description": "Every message.",
+          "type": "string"
+        },
+        {
+          "const": "mentions",
+          "description": "Mentions, DMs, keywords and followed threads.",
+          "type": "string"
+        },
+        {
+          "const": "none",
+          "description": "Nothing (reminders still arrive).",
+          "type": "string"
+        }
+      ]
+    },
+    "NotifySettings": {
+      "description": "The member's account-level notification settings (`GET /api/v1/me/notify`).",
+      "properties": {
+        "broad_mentions": {
+          "description": "`@channel` and `@here` notify.",
+          "type": "boolean"
+        },
+        "default_level": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NotifyLevel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The account default; `null` = the install default."
+        },
+        "digest": {
+          "$ref": "#/$defs/DigestAvailability",
+          "description": "The email digest."
+        },
+        "effective_default_level": {
+          "$ref": "#/$defs/NotifyLevel",
+          "description": "What space channels fall back to for this member."
+        },
+        "keyword_count": {
+          "description": "How many keywords are set.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "keywords": {
+          "description": "The keywords (only in `GET /me/notify` and `POST /me/notify/set`; never in READY or\nevents).",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "mute_lets_mentions": {
+          "description": "Direct mentions still notify in muted channels.",
+          "type": "boolean"
+        },
+        "rev": {
+          "description": "Bumped by every change (`if_rev`).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "thread_replies": {
+          "description": "Replies in followed threads notify.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "effective_default_level",
+        "thread_replies",
+        "broad_mentions",
+        "mute_lets_mentions",
+        "digest",
+        "keyword_count",
+        "rev"
+      ],
+      "type": "object"
+    },
+    "SpaceNotifyPrefs": {
+      "description": "A member's level for one space.",
+      "properties": {
+        "effective_level": {
+          "$ref": "#/$defs/NotifyLevel",
+          "description": "What the space's channels fall back to for this member."
+        },
+        "level": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NotifyLevel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The space's level; `null` = inherit."
+        },
+        "space_id": {
+          "description": "The space.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "space_id",
+        "effective_level"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Body of `notification_prefs_updated`: exactly one field is set. `settings` never carries\nkeywords.",
+  "properties": {
+    "channel": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ChannelNotifyPrefs"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "A channel's prefs changed."
+    },
+    "settings": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/NotifySettings"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The account settings changed."
+    },
+    "space": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SpaceNotifyPrefs"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "A space's prefs changed."
+    }
+  },
+  "title": "NotificationPrefsUpdated",
+  "type": "object"
+}

@@ -1,0 +1,190 @@
+{
+  "$defs": {
+    "DeclineMode": {
+      "description": "What declining does (§9.11, from `recording.require_consent_to_join`).",
+      "oneOf": [
+        {
+          "const": "join_unrecorded",
+          "description": "The decliner joins, unrecorded (the default).",
+          "type": "string"
+        },
+        {
+          "const": "not_join",
+          "description": "Declining means not joining.",
+          "type": "string"
+        }
+      ]
+    },
+    "PromptMember": {
+      "description": "The starter as the consent modal shows them.",
+      "properties": {
+        "display_name": {
+          "description": "Their display name.",
+          "type": "string"
+        },
+        "member_id": {
+          "description": "The member.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "member_id",
+        "display_name"
+      ],
+      "type": "object"
+    },
+    "PromptRoom": {
+      "description": "Where the recording is.",
+      "properties": {
+        "channel_id": {
+          "description": "The voice channel or DM.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/PromptRoomKind",
+          "description": "Its kind."
+        },
+        "name": {
+          "description": "The channel's name (voice channels only).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "channel_id",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "PromptRoomKind": {
+      "description": "The room kind the modal names.",
+      "oneOf": [
+        {
+          "const": "voice",
+          "description": "A voice channel.",
+          "type": "string"
+        },
+        {
+          "const": "dm",
+          "description": "A DM call.",
+          "type": "string"
+        },
+        {
+          "const": "group_dm",
+          "description": "A group-DM call.",
+          "type": "string"
+        }
+      ]
+    },
+    "PromptTranscript": {
+      "description": "What happens to the words (§9.10).",
+      "properties": {
+        "e2ee": {
+          "description": "Transcripts are not end-to-end encrypted.",
+          "type": "boolean"
+        },
+        "posted_to_channel": {
+          "description": "Transcripts are posted into the channel as ordinary messages.",
+          "type": "boolean"
+        },
+        "readable_by": {
+          "description": "Who can read them: `channel_members`, `search`, `agents`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "posted_to_channel",
+        "readable_by",
+        "e2ee"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The consent modal's data (rev 91, §9.10). Every slot is data; templates supply the\nsentences. `notice_version` is a stable hash of every other slot; the answer must echo it.",
+  "properties": {
+    "admin_download": {
+      "description": "Authorised compliance admins can download the audio (always `true` in v1).",
+      "type": "boolean"
+    },
+    "audio_keep_days": {
+      "description": "How long audio is kept (0 = until the transcript is final).",
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "decline_mode": {
+      "$ref": "#/$defs/DeclineMode",
+      "description": "What declining does."
+    },
+    "feature_label": {
+      "description": "[`RECORDING_FEATURE_LABEL`].",
+      "type": "string"
+    },
+    "notice_version": {
+      "description": "A stable hash of every other slot value.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "recorded_now": {
+      "description": "Who is currently recorded (granted and captured), ascending.",
+      "items": {
+        "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+        "pattern": "^[1-9][0-9]{0,18}$",
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "recorder_name": {
+      "description": "[`RECORDER_DISPLAY_NAME`].",
+      "type": "string"
+    },
+    "recording_id": {
+      "description": "What the answer refers to.",
+      "pattern": "^(auto|[1-9][0-9]{0,18})$",
+      "type": "string"
+    },
+    "room": {
+      "$ref": "#/$defs/PromptRoom",
+      "description": "Where."
+    },
+    "started_by": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PromptMember"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Who started it (`None` for an auto channel with no recording yet)."
+    },
+    "transcript": {
+      "$ref": "#/$defs/PromptTranscript",
+      "description": "What happens to the words."
+    }
+  },
+  "required": [
+    "recording_id",
+    "notice_version",
+    "recorder_name",
+    "feature_label",
+    "room",
+    "audio_keep_days",
+    "transcript",
+    "admin_download",
+    "decline_mode",
+    "recorded_now"
+  ],
+  "title": "ConsentPrompt",
+  "type": "object"
+}

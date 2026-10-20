@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /api/v1/spaces/{id}/roles`.",
+  "properties": {
+    "color": {
+      "description": "Color as `0xRRGGBB`.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "hoist": {
+      "description": "Whether holders are listed separately; default false.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "mentionable": {
+      "description": "Whether anyone may `@mention` it; default false.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "name": {
+      "description": "The name, 1–100 characters, no control characters.",
+      "type": "string"
+    },
+    "perms": {
+      "description": "Bits the role grants; default none.",
+      "pattern": "^(0|[1-9][0-9]{0,19})$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "position": {
+      "description": "Ladder position, 1 ≤ p ≤ the current role count (top + 1); default 1.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "name"
+  ],
+  "title": "CreateRoleRequest",
+  "type": "object"
+}

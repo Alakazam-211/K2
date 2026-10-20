@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`POST /api/v1/me/voice/state` body.",
+  "properties": {
+    "self_deaf": {
+      "description": "Set self-deafen.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "self_mute": {
+      "description": "Set self-mute.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "self_stream": {
+      "description": "Ask for (`true`) or release (`false`) a screen-share lease (S34 v2 §14.8).",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "self_video": {
+      "description": "Ask for (`true`) or release (`false`) a camera lease (S34 v2 §14.8).",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    }
+  },
+  "title": "VoiceSelfStateRequest",
+  "type": "object"
+}

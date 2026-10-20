@@ -1,0 +1,116 @@
+{
+  "$defs": {
+    "MeetingAttendeeInput": {
+      "additionalProperties": false,
+      "description": "One attendee as given to create and update: `member_id` for `member`, `email` for `email`.",
+      "properties": {
+        "email": {
+          "description": "The address (`email` only; at most 254 bytes).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/MeetingAttendeeKind",
+          "description": "`member` or `email`."
+        },
+        "member_id": {
+          "description": "The member (`member` only).",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "type": "object"
+    },
+    "MeetingAttendeeKind": {
+      "description": "An attendee's kind.",
+      "oneOf": [
+        {
+          "const": "member",
+          "description": "A member of the install: added to the meeting channel (so they skip the lobby).",
+          "type": "string"
+        },
+        {
+          "const": "email",
+          "description": "An email address for the calendar file only; never an account.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /api/v1/meetings/{id}/update` (hosts). Every field is optional; `attendees`\nreplaces the whole list (members not listed leave the meeting channel, the organiser\nnever does).",
+  "properties": {
+    "attendees": {
+      "description": "The new attendee list.",
+      "items": {
+        "$ref": "#/$defs/MeetingAttendeeInput"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "auto_record": {
+      "description": "Record from the start.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "ends_at": {
+      "description": "A new planned end.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "guest_screen_share": {
+      "description": "Link guests may share their screen.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "show_title_to_guests": {
+      "description": "Link guests see the title before they join.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "starts_at": {
+      "description": "A new start (scheduled meetings only).",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "title": {
+      "description": "A new title.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "tz": {
+      "description": "A new zone.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "title": "UpdateMeetingRequest",
+  "type": "object"
+}

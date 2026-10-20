@@ -1,0 +1,45 @@
+{
+  "$defs": {
+    "PollVoter": {
+      "description": "One voter of a non-anonymous poll.",
+      "properties": {
+        "member_id": {
+          "description": "The member.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "voted_at": {
+          "description": "When they picked this option.",
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "member_id",
+        "voted_at"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A page of an id-keyed list: `{\"items\": [...], \"has_more\": bool}`.",
+  "properties": {
+    "has_more": {
+      "description": "Whether more items exist past this page.",
+      "type": "boolean"
+    },
+    "items": {
+      "description": "The items.",
+      "items": {
+        "$ref": "#/$defs/PollVoter"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "items",
+    "has_more"
+  ],
+  "title": "Page",
+  "type": "object"
+}

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Where an audit chain check starts.",
+  "oneOf": [
+    {
+      "const": "incremental",
+      "description": "From the last saved checkpoint (the daily schedule's mode).",
+      "type": "string"
+    },
+    {
+      "const": "full",
+      "description": "The whole chain from `chain_seq` 1.",
+      "type": "string"
+    }
+  ],
+  "title": "AuditVerifyMode"
+}

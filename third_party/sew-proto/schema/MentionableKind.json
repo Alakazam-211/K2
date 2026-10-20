@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "What a mention target is backed by.",
+  "oneOf": [
+    {
+      "const": "role",
+      "description": "A space role with `mentionable` (or the caller may mention any role).",
+      "type": "string"
+    },
+    {
+      "const": "group",
+      "description": "A user group.",
+      "type": "string"
+    },
+    {
+      "const": "special",
+      "description": "`here` or `channel`.",
+      "type": "string"
+    }
+  ],
+  "title": "MentionableKind"
+}

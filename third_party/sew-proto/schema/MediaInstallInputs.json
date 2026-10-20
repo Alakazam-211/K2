@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`sew media install --config-json` (SW5).",
+  "properties": {
+    "allow_private_node_ip": {
+      "description": "`--allow-private-node-ip`: allow loopback and private node IPs.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "bind_v4": {
+      "description": "`--bind-v4`: the IPv4 bind address (`\"\"` turns IPv4 off).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "bind_v6": {
+      "description": "`--bind-v6`: the IPv6 bind address (`\"\"` turns IPv6 off).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "cred_mode": {
+      "description": "`--cred-mode`: `encrypted` or `plain`.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "node_ip": {
+      "description": "`--node-ip`: public IPv4[,IPv6] the engine advertises, or `stun`.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "profile": {
+      "description": "`--profile`: `dedicated` or `shared`.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "public_url": {
+      "description": "`--public-url`: the signalling URL clients use (`wss://voice.<host>`).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "stun_servers": {
+      "description": "`--stun-server` (repeatable): STUN `host:port` for node IP `stun`.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "sysctl": {
+      "description": "`--sysctl`: `apply` or `skip`.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "tarball": {
+      "description": "`--tarball`: an absolute path to the pinned sew-media tarball.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "tcp_port": {
+      "description": "`--tcp-port`: the ICE-TCP port, 1–65535.",
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "turn_advertise_port": {
+      "description": "`--turn-advertise-port`: the advertised TURN TLS port (0 = the listener's).",
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "turn_cert": {
+      "description": "`--turn-cert`: an absolute path to the TURN TLS certificate chain (PEM).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "turn_domain": {
+      "description": "`--turn-domain`: the TURN DNS name (`turn.<host>`).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "turn_key": {
+      "description": "`--turn-key`: an absolute path to the TURN TLS private key (PEM, root-only file).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "turn_plain": {
+      "description": "`--turn-plain`: plain TURN listeners, each `udp` or `tcp`.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "turn_proxy_protocol": {
+      "description": "`--turn-proxy-protocol`: `v1` or `v2` (with TURN TLS `external`).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "turn_tls": {
+      "description": "`--turn-tls`: `direct`, `external`, `passthrough`, `plain` or `off`.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "udp_port": {
+      "description": "`--udp-port`: the UDP media port, 1–65535.",
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    }
+  },
+  "title": "MediaInstallInputs",
+  "type": "object"
+}

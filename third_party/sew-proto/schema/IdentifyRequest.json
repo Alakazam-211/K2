@@ -1,0 +1,58 @@
+{
+  "$defs": {
+    "ClientInfo": {
+      "additionalProperties": false,
+      "description": "The client's name and version.",
+      "properties": {
+        "name": {
+          "description": "Client name, 1–64 characters.",
+          "type": "string"
+        },
+        "version": {
+          "description": "Client version, 1–64 characters.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Op 2 IDENTIFY: authenticate a new gateway session. Send exactly one of `ticket` or `token`.",
+  "properties": {
+    "capabilities": {
+      "description": "Capability bits: 1 = `hidden_spaces` (Meet MC1).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "client": {
+      "$ref": "#/$defs/ClientInfo",
+      "description": "The client's name and version."
+    },
+    "ticket": {
+      "description": "A single-use gateway ticket, `sewtk_…` (exclusive with `token`).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "token": {
+      "description": "A session token, `sews_…` (exclusive with `ticket`).",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "client",
+    "capabilities"
+  ],
+  "title": "IdentifyRequest",
+  "type": "object"
+}

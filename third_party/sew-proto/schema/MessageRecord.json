@@ -1,0 +1,779 @@
+{
+  "$defs": {
+    "AttachmentRecord": {
+      "additionalProperties": false,
+      "description": "An attachment (its id is also its file link id).",
+      "properties": {
+        "animated": {
+          "description": "Animated.",
+          "type": "boolean"
+        },
+        "content_type": {
+          "description": "Sniffed content type.",
+          "type": "string"
+        },
+        "created_at": {
+          "description": "Created.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "file": {
+          "description": "The bytes (`files/<file>`); absent when purged or with `files: manifest_only`.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "filename": {
+          "description": "File name (absent when purged or unreadable).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "height": {
+          "description": "Height (images, video).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "The attachment id.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "inline": {
+          "description": "Shown inline.",
+          "type": "boolean"
+        },
+        "kind": {
+          "$ref": "#/$defs/FileKind",
+          "description": "Kind."
+        },
+        "position": {
+          "description": "Order on the message, 0–9.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "purged_at": {
+          "description": "Purged.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "removed": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RemovedRecord"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Removed."
+        },
+        "size": {
+          "description": "Plaintext size.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "source_attachment_id": {
+          "description": "The attachment it was forwarded from.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "unreadable": {
+          "description": "The name's key is shredded.",
+          "type": "boolean"
+        },
+        "uploader_id": {
+          "description": "Uploader.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "width": {
+          "description": "Width (images, video).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "position",
+        "uploader_id",
+        "content_type",
+        "kind",
+        "inline",
+        "size",
+        "created_at"
+      ],
+      "type": "object"
+    },
+    "DeleteKind": {
+      "description": "Why a message was deleted.",
+      "oneOf": [
+        {
+          "const": "own",
+          "description": "Its author deleted it.",
+          "type": "string"
+        },
+        {
+          "const": "moderator",
+          "description": "A moderator deleted it.",
+          "type": "string"
+        },
+        {
+          "const": "thread",
+          "description": "A moderator deleted its whole thread.",
+          "type": "string"
+        },
+        {
+          "const": "retention",
+          "description": "Retention expired it.",
+          "type": "string"
+        }
+      ]
+    },
+    "DeletedRecord": {
+      "additionalProperties": false,
+      "description": "A message's deletion.",
+      "properties": {
+        "at": {
+          "description": "When.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "by": {
+          "description": "By whom (absent for retention).",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/DeleteKind",
+          "description": "Why."
+        }
+      },
+      "required": [
+        "at",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "FileKind": {
+      "description": "What a file is, from its sniffed content type (S15 §10).",
+      "oneOf": [
+        {
+          "const": "image",
+          "description": "A raster image (`image/*` from the magic table, or SVG).",
+          "type": "string"
+        },
+        {
+          "const": "video",
+          "description": "A video.",
+          "type": "string"
+        },
+        {
+          "const": "audio",
+          "description": "Audio.",
+          "type": "string"
+        },
+        {
+          "const": "document",
+          "description": "A document: PDF, text, office formats.",
+          "type": "string"
+        },
+        {
+          "const": "archive",
+          "description": "An archive: zip, gzip, 7z, rar.",
+          "type": "string"
+        },
+        {
+          "const": "other",
+          "description": "Anything else.",
+          "type": "string"
+        }
+      ]
+    },
+    "MentionsRecord": {
+      "additionalProperties": false,
+      "description": "Who a message (or revision) mentions.",
+      "properties": {
+        "channel": {
+          "description": "`@channel`.",
+          "type": "boolean"
+        },
+        "groups": {
+          "description": "User groups.",
+          "items": {
+            "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "here": {
+          "description": "`@here`.",
+          "type": "boolean"
+        },
+        "members": {
+          "description": "Members.",
+          "items": {
+            "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "roles": {
+          "description": "Roles.",
+          "items": {
+            "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "PinRecord": {
+      "additionalProperties": false,
+      "description": "A pin.",
+      "properties": {
+        "at": {
+          "description": "When.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "by": {
+          "description": "Who pinned.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "by",
+        "at"
+      ],
+      "type": "object"
+    },
+    "PollOptionRecord": {
+      "additionalProperties": false,
+      "description": "A poll option.",
+      "properties": {
+        "count": {
+          "description": "Votes (*always*).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "id": {
+          "description": "The option row id.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "index": {
+          "description": "0-based index.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "text": {
+          "description": "Text (absent when purged or unreadable).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "voted_at": {
+          "description": "When each voted (same order as `voter_ids`).",
+          "items": {
+            "description": "RFC 3339 UTC time with milliseconds, e.g. 2026-09-27T12:00:00.123Z.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "voter_ids": {
+          "description": "Voters (absent in eDiscovery for anonymous polls).",
+          "items": {
+            "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "index",
+        "count"
+      ],
+      "type": "object"
+    },
+    "PollRecord": {
+      "additionalProperties": false,
+      "description": "A poll on its message.",
+      "properties": {
+        "anonymous": {
+          "description": "Anonymous.",
+          "type": "boolean"
+        },
+        "closed_at": {
+          "description": "Closed.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "closed_by": {
+          "description": "Closed by.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "closes_at": {
+          "description": "Timed close.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "created_at": {
+          "description": "Created.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "max_choices": {
+          "description": "Choices per voter.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "options": {
+          "description": "Options in order.",
+          "items": {
+            "$ref": "#/$defs/PollOptionRecord"
+          },
+          "type": "array"
+        },
+        "question": {
+          "description": "The question (absent when purged or unreadable).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "results_visibility": {
+          "description": "`always` or `after_close`.",
+          "type": "string"
+        },
+        "unreadable": {
+          "description": "The poll text's key is shredded.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "options",
+        "max_choices",
+        "anonymous",
+        "results_visibility",
+        "created_at"
+      ],
+      "type": "object"
+    },
+    "ReactionRecord": {
+      "additionalProperties": false,
+      "description": "One emoji's reactions (current state).",
+      "properties": {
+        "at": {
+          "description": "When each reacted (same order as `member_ids`).",
+          "items": {
+            "description": "RFC 3339 UTC time with milliseconds, e.g. 2026-09-27T12:00:00.123Z.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "emoji": {
+          "description": "The emoji key: `u:<unicode>` or `c:<custom emoji id>`.",
+          "type": "string"
+        },
+        "member_ids": {
+          "description": "Who reacted, in reaction order.",
+          "items": {
+            "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "emoji",
+        "member_ids",
+        "at"
+      ],
+      "type": "object"
+    },
+    "ReferenceKind": {
+      "description": "How a message refers to another.",
+      "oneOf": [
+        {
+          "const": "reply",
+          "description": "An inline reply.",
+          "type": "string"
+        },
+        {
+          "const": "quote",
+          "description": "A quote.",
+          "type": "string"
+        },
+        {
+          "const": "forward",
+          "description": "A forward.",
+          "type": "string"
+        }
+      ]
+    },
+    "ReferenceRecord": {
+      "additionalProperties": false,
+      "description": "A message's reference.",
+      "properties": {
+        "channel_id": {
+          "description": "Its channel.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "forward_author_id": {
+          "description": "Forward: the original author.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "forward_body": {
+          "description": "Forward: the copied text.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "forward_created_at": {
+          "description": "Forward: when the original was posted.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "forward_unreadable": {
+          "description": "Forward: the copied text's key is shredded.",
+          "type": "boolean"
+        },
+        "kind": {
+          "$ref": "#/$defs/ReferenceKind",
+          "description": "Reply, quote or forward."
+        },
+        "message_id": {
+          "description": "The referenced message.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "message_id",
+        "channel_id"
+      ],
+      "type": "object"
+    },
+    "RemoveKind": {
+      "description": "Why an attachment was removed.",
+      "oneOf": [
+        {
+          "const": "own",
+          "description": "Its uploader removed it.",
+          "type": "string"
+        },
+        {
+          "const": "moderator",
+          "description": "A moderator removed it.",
+          "type": "string"
+        },
+        {
+          "const": "retention",
+          "description": "File retention removed it.",
+          "type": "string"
+        }
+      ]
+    },
+    "RemovedRecord": {
+      "additionalProperties": false,
+      "description": "An attachment's removal.",
+      "properties": {
+        "at": {
+          "description": "When.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "by": {
+          "description": "By whom.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/RemoveKind",
+          "description": "Why."
+        }
+      },
+      "required": [
+        "at",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "SourceRef": {
+      "additionalProperties": false,
+      "description": "A converter's reference to the record it came from (ignored and not stored by Sew v1).",
+      "properties": {
+        "ref": {
+          "description": "Its reference.",
+          "type": "string"
+        },
+        "system": {
+          "description": "The source system, e.g. `slack`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "system",
+        "ref"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`messages/<channel_id>/<part>.ndjson`.",
+  "properties": {
+    "also_in_channel": {
+      "description": "A reply also sent to the channel.",
+      "type": "boolean"
+    },
+    "attachments": {
+      "description": "Attachments (removed ones included).",
+      "items": {
+        "$ref": "#/$defs/AttachmentRecord"
+      },
+      "type": "array"
+    },
+    "author_id": {
+      "description": "Author.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "body": {
+      "description": "The body as stored (markdown); absent when purged or unreadable.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "channel_id": {
+      "description": "Its channel.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "context": {
+      "description": "eDiscovery: a thread root added so a reviewer can read an included reply.",
+      "type": "boolean"
+    },
+    "created_at": {
+      "description": "Created.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "custom_emoji_ids": {
+      "description": "Usable custom emoji ids of the body, ascending.",
+      "items": {
+        "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+        "pattern": "^[1-9][0-9]{0,18}$",
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "deleted": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DeletedRecord"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Deleted."
+    },
+    "edited_at": {
+      "description": "Last edited.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "id": {
+      "description": "The message id (`id_to_time(id) == created_at`).",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "matched": {
+      "description": "eDiscovery with keywords: a keyword matched.",
+      "type": "boolean"
+    },
+    "mentions": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MentionsRecord"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Mentions (absent when purged)."
+    },
+    "on_behalf_of": {
+      "description": "For assistant posts: the person.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "pin": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PinRecord"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Pinned."
+    },
+    "poll": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PollRecord"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "A poll."
+    },
+    "previews_suppressed": {
+      "description": "Link previews turned off.",
+      "type": "boolean"
+    },
+    "purged_at": {
+      "description": "Purged (content destroyed).",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "reactions": {
+      "description": "Reactions (current).",
+      "items": {
+        "$ref": "#/$defs/ReactionRecord"
+      },
+      "type": "array"
+    },
+    "reference": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ReferenceRecord"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Reply, quote or forward reference."
+    },
+    "seq": {
+      "description": "The channel seq of the message's latest change (full exports).",
+      "format": "uint64",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "source": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SourceRef"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Converter reference."
+    },
+    "thread_root_id": {
+      "description": "The thread root, for replies.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "unreadable": {
+      "description": "The body's key is shredded.",
+      "type": "boolean"
+    },
+    "version": {
+      "description": "Edit version (0 = never edited).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "id",
+    "channel_id",
+    "author_id",
+    "version",
+    "created_at"
+  ],
+  "title": "MessageRecord",
+  "type": "object"
+}

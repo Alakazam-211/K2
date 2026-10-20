@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A custom field's value kind.",
+  "oneOf": [
+    {
+      "const": "text",
+      "description": "Free text (1–500 characters).",
+      "type": "string"
+    },
+    {
+      "const": "url",
+      "description": "An `http(s)` URL.",
+      "type": "string"
+    },
+    {
+      "const": "select",
+      "description": "One of the field's options.",
+      "type": "string"
+    },
+    {
+      "const": "date",
+      "description": "`YYYY-MM-DD`.",
+      "type": "string"
+    }
+  ],
+  "title": "ProfileFieldKind"
+}

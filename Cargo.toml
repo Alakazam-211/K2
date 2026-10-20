@@ -22,6 +22,9 @@ members = [
     "tests/fakes/sh-shim",
     "crates/k2-ptyd",
 ]
+# Sew's vendored client crates (S30 K15, third_party/SEW-VENDOR.txt) keep
+# their own manifests and lints: never workspace members.
+exclude = ["third_party/sew-proto", "third_party/sew-client"]
 
 # Dev profile: lightly optimized so PTY reads + LLM inference don't crawl.
 # Hot-path crates below escalate to opt-level=3 in dev too.
@@ -62,3 +65,7 @@ objc2 = { path = "third_party/objc2" }
 tao = { path = "third_party/tao" }
 tauri-runtime-wry = { path = "third_party/tauri-runtime-wry" }
 vte = { path = "third_party/vte" }
+# Sew 0.3.0's wire types (S30 K15): sew-client names `sew-proto = "0.3.0"`
+# from crates.io; K2 points it at the vendored, sha-pinned copy
+# (third_party/SEW-VENDOR.txt). Never fetched from a registry or git.
+sew-proto = { path = "third_party/sew-proto" }

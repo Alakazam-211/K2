@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Why a granted participant is not captured (§9.2). Stored in\n`recording_participants.capture_reason`.",
+  "oneOf": [
+    {
+      "const": "track_cap",
+      "description": "A track cap is reached; not allowlisted.",
+      "type": "string"
+    },
+    {
+      "const": "no_microphone",
+      "description": "No microphone published.",
+      "type": "string"
+    },
+    {
+      "const": "no_key",
+      "description": "The recorder could not decrypt the member's frames.",
+      "type": "string"
+    },
+    {
+      "const": "unencrypted",
+      "description": "The track was published unencrypted.",
+      "type": "string"
+    },
+    {
+      "const": "codec",
+      "description": "The track is not Opus.",
+      "type": "string"
+    },
+    {
+      "const": "permission",
+      "description": "Not subscribable under the room's permissions.",
+      "type": "string"
+    }
+  ],
+  "title": "NotRecordedReason"
+}

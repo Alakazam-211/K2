@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /mgmt/v1/export` (gap G9): a full logical export encrypted to age recipients.\nReturns `StartJobResponse`.",
+  "properties": {
+    "recipients": {
+      "description": "age X25519 recipients (`age1…`), 1–16.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "recipients"
+  ],
+  "title": "ExportRequest",
+  "type": "object"
+}

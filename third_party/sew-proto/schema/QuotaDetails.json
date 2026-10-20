@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Details of a `403 quota_exceeded` count limit (S10 gap G20).",
+  "properties": {
+    "limit": {
+      "description": "The config key of the limit, for example `channels_per_space`.",
+      "type": "string"
+    },
+    "max": {
+      "description": "The limit.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "limit",
+    "max"
+  ],
+  "title": "QuotaDetails",
+  "type": "object"
+}

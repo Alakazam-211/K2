@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A search filter name (case-insensitive in queries).",
+  "oneOf": [
+    {
+      "const": "from",
+      "description": "The author (for files, the uploader).",
+      "type": "string"
+    },
+    {
+      "const": "in",
+      "description": "A channel, DM, group DM or thread.",
+      "type": "string"
+    },
+    {
+      "const": "space",
+      "description": "A space.",
+      "type": "string"
+    },
+    {
+      "const": "has",
+      "description": "`file` or `link`.",
+      "type": "string"
+    },
+    {
+      "const": "mentions",
+      "description": "A direct member mention in the current version.",
+      "type": "string"
+    },
+    {
+      "const": "on",
+      "description": "One local day.",
+      "type": "string"
+    },
+    {
+      "const": "before",
+      "description": "Strictly before a local day.",
+      "type": "string"
+    },
+    {
+      "const": "after",
+      "description": "Strictly after a local day.",
+      "type": "string"
+    },
+    {
+      "const": "ext",
+      "description": "A file extension (file search only).",
+      "type": "string"
+    },
+    {
+      "const": "is",
+      "description": "What a message is: `transcript` (S35 v2 §16).",
+      "type": "string"
+    }
+  ],
+  "title": "FilterName"
+}

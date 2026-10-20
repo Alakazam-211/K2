@@ -1,0 +1,75 @@
+{
+  "$defs": {
+    "EmojiInput": {
+      "description": "An emoji in a request: Unicode or a custom emoji.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A Unicode emoji.",
+          "properties": {
+            "kind": {
+              "const": "unicode",
+              "type": "string"
+            },
+            "value": {
+              "description": "The emoji text.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A custom emoji.",
+          "properties": {
+            "id": {
+              "description": "The emoji id.",
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "type": "string"
+            },
+            "kind": {
+              "const": "custom",
+              "type": "string"
+            },
+            "name": {
+              "description": "The emoji name.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "name"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /api/v1/messages/{id}/reactions/remove` (S13 gap G21). No `member_id`, or the\ncaller's own id, removes the caller's reaction; another id needs MANAGE_MESSAGES.",
+  "properties": {
+    "emoji": {
+      "$ref": "#/$defs/EmojiInput",
+      "description": "The emoji."
+    },
+    "member_id": {
+      "description": "Whose reaction; absent = the caller's.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "emoji"
+  ],
+  "title": "RemoveReactionRequest",
+  "type": "object"
+}

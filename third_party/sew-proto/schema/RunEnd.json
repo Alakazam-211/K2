@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Why a recorder run ended (`recording_runs.end_reason`).",
+  "oneOf": [
+    {
+      "const": "stopped",
+      "description": "The recording stopped.",
+      "type": "string"
+    },
+    {
+      "const": "restarted",
+      "description": "The recorder restarted.",
+      "type": "string"
+    },
+    {
+      "const": "reconnected",
+      "description": "The recorder rejoined with a new admit.",
+      "type": "string"
+    },
+    {
+      "const": "failed",
+      "description": "The run failed.",
+      "type": "string"
+    }
+  ],
+  "title": "RunEnd"
+}

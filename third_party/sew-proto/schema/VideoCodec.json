@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A video codec a client may publish under E2EE (S34 v2 D8). There is no AV1 or H.265\nvalue: they are never offered.",
+  "oneOf": [
+    {
+      "const": "vp8",
+      "description": "VP8 (simulcast).",
+      "type": "string"
+    },
+    {
+      "const": "h264",
+      "description": "H.264 (simulcast).",
+      "type": "string"
+    },
+    {
+      "const": "vp9",
+      "description": "VP9, only with the Dependency Descriptor (opt-in).",
+      "type": "string"
+    }
+  ],
+  "title": "VideoCodec"
+}

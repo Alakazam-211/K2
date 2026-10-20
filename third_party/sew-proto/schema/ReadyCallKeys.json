@@ -1,0 +1,176 @@
+{
+  "$defs": {
+    "CallKeysParams": {
+      "description": "The client timings and constants the server relays (READY `call_keys.params` and every\n[`CallKeysInit`]; S50 §9.4, S51 §20.1). The single source for client timings.",
+      "properties": {
+        "ciphersuite": {
+          "description": "The ciphersuite every group uses (1).",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "ciphersuites": {
+          "description": "The ciphersuites the server accepts (`[1]` in v1).",
+          "items": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "client_activate_fallback_ms": {
+          "description": "A sender that acked but hears no `activate` switches after this long.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "exporter_label": {
+          "description": "The MLS exporter label of frame keys ([`tls::EXPORTER_LABEL`]).",
+          "type": "string"
+        },
+        "kdf": {
+          "description": "`\"hkdf\"`.",
+          "type": "string"
+        },
+        "key_package_max_lifetime_s": {
+          "description": "Longest KeyPackage lifetime the server accepts.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "key_ring_size": {
+          "description": "Always 64 (rev 75).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "release_info_label": {
+          "description": "The recorder release `info` label ([`tls::RELEASE_INFO_LABEL`]).",
+          "type": "string"
+        },
+        "retire_after_ms": {
+          "description": "Receivers retire an old slot this long after `activate`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "securing_indicator_after_ms": {
+          "description": "\"Securing…\" shows only after this long.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unknown_call_buffer_ms": {
+          "description": "Dispatches for a `call_id` the client does not know yet are buffered this long.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "ciphersuite",
+        "ciphersuites",
+        "key_ring_size",
+        "kdf",
+        "exporter_label",
+        "release_info_label",
+        "retire_after_ms",
+        "client_activate_fallback_ms",
+        "key_package_max_lifetime_s",
+        "unknown_call_buffer_ms",
+        "securing_indicator_after_ms"
+      ],
+      "type": "object"
+    },
+    "CallPublicKey": {
+      "description": "A public key and its id (`kid` = hex of the first 8 bytes of SHA-256 of the raw key).",
+      "properties": {
+        "kid": {
+          "description": "16 lowercase hex characters.",
+          "type": "string"
+        },
+        "public_key": {
+          "description": "The raw 32-byte Ed25519 public key.",
+          "pattern": "^[A-Za-z0-9_-]*$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kid",
+        "public_key"
+      ],
+      "type": "object"
+    },
+    "VerificationCode": {
+      "description": "Policy `calls.verification_code` (S50 §16.4): whether \"Call info → Security code\" is\nshown. `required` is reserved for a later mode and refused by the policy validator.",
+      "oneOf": [
+        {
+          "const": "shown",
+          "description": "Shown on request, never modal (the default).",
+          "type": "string"
+        },
+        {
+          "const": "hidden",
+          "description": "Not shown.",
+          "type": "string"
+        },
+        {
+          "const": "required",
+          "description": "Reserved: \"confirm before you speak\" (refused in v1).",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "READY `call_keys` (S50 §9.4): the trust anchors and client parameters. Absent when voice is\ndisabled.",
+  "properties": {
+    "ca": {
+      "$ref": "#/$defs/CallPublicKey",
+      "description": "The install CA."
+    },
+    "crl": {
+      "description": "Serials of revoked, unexpired device certificates (at most 5,000).",
+      "items": {
+        "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+        "pattern": "^[1-9][0-9]{0,18}$",
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "crl_partial": {
+      "description": "More revoked serials exist: page them with `GET /api/v1/devices/crl`.",
+      "type": "boolean"
+    },
+    "ds_public_key": {
+      "description": "The raw 32-byte DS Ed25519 key, for pinning.",
+      "pattern": "^[A-Za-z0-9_-]*$",
+      "type": "string"
+    },
+    "external_sender": {
+      "description": "TLS `ExternalSender` of every group.",
+      "pattern": "^[A-Za-z0-9_-]*$",
+      "type": "string"
+    },
+    "params": {
+      "$ref": "#/$defs/CallKeysParams",
+      "description": "Client timings."
+    },
+    "verification_code": {
+      "$ref": "#/$defs/VerificationCode",
+      "description": "Policy `calls.verification_code`."
+    }
+  },
+  "required": [
+    "external_sender",
+    "ds_public_key",
+    "ca",
+    "crl",
+    "verification_code",
+    "params"
+  ],
+  "title": "ReadyCallKeys",
+  "type": "object"
+}

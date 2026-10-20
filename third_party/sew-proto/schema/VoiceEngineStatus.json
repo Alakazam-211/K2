@@ -1,0 +1,106 @@
+{
+  "$defs": {
+    "VoiceEngineState": {
+      "description": "The engine as `status.voice.engine` sees it (`details.engine` of a voice `503`).",
+      "oneOf": [
+        {
+          "const": "up",
+          "description": "Healthy.",
+          "type": "string"
+        },
+        {
+          "const": "down",
+          "description": "Unreachable for `health_failures_down` checks in a row.",
+          "type": "string"
+        },
+        {
+          "const": "draining",
+          "description": "Draining (S49).",
+          "type": "string"
+        },
+        {
+          "const": "syncing",
+          "description": "Sew is resyncing from a snapshot.",
+          "type": "string"
+        },
+        {
+          "const": "error",
+          "description": "The engine answered with an error, or the call keys failed to load.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "`status.voice.engine` (S33 v2 §22; S37 §13.2 health).",
+  "properties": {
+    "down_since": {
+      "description": "When the engine went down (state `down`).",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "drift_fixes_1h": {
+      "description": "Drift the snapshot audits fixed in the last hour.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "last_event_at": {
+      "description": "The last event Sew applied.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "last_snapshot_at": {
+      "description": "The last snapshot audit.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "panics_1h": {
+      "description": "Engine panics in the last hour.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "participants": {
+      "description": "Participants the engine reports.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "rooms": {
+      "description": "Rooms the engine reports.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "state": {
+      "$ref": "#/$defs/VoiceEngineState",
+      "description": "The engine's state."
+    },
+    "version": {
+      "description": "The engine's version, from its last health answer.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "state",
+    "rooms",
+    "participants",
+    "panics_1h",
+    "drift_fixes_1h"
+  ],
+  "title": "VoiceEngineStatus",
+  "type": "object"
+}

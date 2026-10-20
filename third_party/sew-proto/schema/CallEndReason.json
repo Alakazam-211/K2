@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Why a call ended (§14.5). Stored in `calls.end_reason`.",
+  "oneOf": [
+    {
+      "const": "empty",
+      "description": "Nobody left in the call.",
+      "type": "string"
+    },
+    {
+      "const": "declined",
+      "description": "A 1:1 callee declined.",
+      "type": "string"
+    },
+    {
+      "const": "no_answer",
+      "description": "Nobody answered.",
+      "type": "string"
+    },
+    {
+      "const": "alone_timeout",
+      "description": "One person alone too long.",
+      "type": "string"
+    },
+    {
+      "const": "media_restarted",
+      "description": "The media engine lost the call.",
+      "type": "string"
+    },
+    {
+      "const": "media_failed",
+      "description": "The media engine failed before anyone connected.",
+      "type": "string"
+    },
+    {
+      "const": "voice_disabled",
+      "description": "Voice was turned off.",
+      "type": "string"
+    },
+    {
+      "const": "perms_lost",
+      "description": "Nobody left who may connect.",
+      "type": "string"
+    }
+  ],
+  "title": "CallEndReason"
+}

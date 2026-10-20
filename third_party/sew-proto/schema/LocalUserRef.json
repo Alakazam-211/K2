@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /mgmt/v1/local/users/reactivate`.",
+  "properties": {
+    "username": {
+      "description": "The local user.",
+      "pattern": "^[a-z0-9_-]{2,64}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "username"
+  ],
+  "title": "LocalUserRef",
+  "type": "object"
+}

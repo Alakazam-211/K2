@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "How the browser reaches its TURN relay (F21; `relay` candidates only).",
+  "oneOf": [
+    {
+      "const": "udp",
+      "description": "TURN over UDP.",
+      "type": "string"
+    },
+    {
+      "const": "tcp",
+      "description": "TURN over TCP.",
+      "type": "string"
+    },
+    {
+      "const": "tls",
+      "description": "TURN over TLS.",
+      "type": "string"
+    }
+  ],
+  "title": "CallStatsRelayProtocol"
+}

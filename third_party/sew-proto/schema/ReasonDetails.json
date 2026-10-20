@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Details of an error that names a reason (S9 §12): mgmt and act-as refusals such as\n`409 conflict {reason: \"username_taken\", field: \"username\"}`. The reasons are listed in\n`sew_proto::mgmt::reasons`.",
+  "properties": {
+    "field": {
+      "description": "The field or header the reason is about.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "reason": {
+      "description": "Why, as a stable `lower_snake` string.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "reason"
+  ],
+  "title": "ReasonDetails",
+  "type": "object"
+}

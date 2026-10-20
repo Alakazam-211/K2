@@ -1,0 +1,91 @@
+{
+  "$defs": {
+    "Overwrite": {
+      "description": "A channel or category permission overwrite.",
+      "properties": {
+        "allow": {
+          "description": "Bits allowed.",
+          "pattern": "^(0|[1-9][0-9]{0,19})$",
+          "type": "string"
+        },
+        "deny": {
+          "description": "Bits denied.",
+          "pattern": "^(0|[1-9][0-9]{0,19})$",
+          "type": "string"
+        },
+        "target_id": {
+          "description": "The role or member id.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "target_kind": {
+          "$ref": "#/$defs/OverwriteTarget",
+          "description": "Role or member."
+        }
+      },
+      "required": [
+        "target_kind",
+        "target_id",
+        "allow",
+        "deny"
+      ],
+      "type": "object"
+    },
+    "OverwriteTarget": {
+      "description": "What an overwrite targets.",
+      "oneOf": [
+        {
+          "const": "role",
+          "description": "A role (`@everyone`'s role id is the space id).",
+          "type": "string"
+        },
+        {
+          "const": "member",
+          "description": "A single member.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A channel's overwrites as they apply (`GET /api/v1/channels/{id}/overwrites` and the edit\nroutes).",
+  "properties": {
+    "category_id": {
+      "description": "Its category.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "channel_id": {
+      "description": "The channel.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "overwrites": {
+      "description": "The effective list: the category's while synced, else the channel's own.",
+      "items": {
+        "$ref": "#/$defs/Overwrite"
+      },
+      "type": "array"
+    },
+    "space_id": {
+      "description": "Its space.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "synced": {
+      "description": "Whether the channel follows its category.",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "channel_id",
+    "space_id",
+    "synced",
+    "overwrites"
+  ],
+  "title": "ChannelOverwrites",
+  "type": "object"
+}

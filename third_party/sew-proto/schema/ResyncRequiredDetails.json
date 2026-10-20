@@ -1,0 +1,66 @@
+{
+  "$defs": {
+    "ResyncReason": {
+      "description": "Why a change-log reader must start over (`details.reason` of `410 resync_required`;\ncontracts revs 8, 29).",
+      "oneOf": [
+        {
+          "const": "behind_floor",
+          "description": "`since` is below the floor: entries were trimmed.",
+          "type": "string"
+        },
+        {
+          "const": "ahead_of_head",
+          "description": "`since` is above the head: a restore, or another install.",
+          "type": "string"
+        },
+        {
+          "const": "gap",
+          "description": "The entries were not contiguous (must never happen).",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Details for `resync_required`.",
+  "properties": {
+    "floor": {
+      "description": "The change-log floor; catch up from a fresh snapshot instead.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "head": {
+      "description": "The log head at the read (S9 §6.11: K2 resets its deliveries cursor here; additive).",
+      "format": "uint64",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "reason": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ResyncReason"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "`behind_floor`, `ahead_of_head` or `gap` (contracts rev 8; additive)."
+    },
+    "sync_epoch": {
+      "description": "The install's `sync_epoch` (contracts revs 8, 29; additive).",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "floor"
+  ],
+  "title": "ResyncRequiredDetails",
+  "type": "object"
+}

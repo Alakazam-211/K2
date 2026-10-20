@@ -1,0 +1,110 @@
+{
+  "$defs": {
+    "JobState": {
+      "description": "A job's state.",
+      "oneOf": [
+        {
+          "const": "queued",
+          "description": "Waiting to run.",
+          "type": "string"
+        },
+        {
+          "const": "running",
+          "description": "Running.",
+          "type": "string"
+        },
+        {
+          "const": "succeeded",
+          "description": "Finished.",
+          "type": "string"
+        },
+        {
+          "const": "failed",
+          "description": "Failed; may retry.",
+          "type": "string"
+        },
+        {
+          "const": "dead",
+          "description": "Exhausted its attempts.",
+          "type": "string"
+        }
+      ]
+    },
+    "JobStatus": {
+      "description": "Response of `GET /mgmt/v1/jobs/{id}`.",
+      "properties": {
+        "attempts": {
+          "description": "Attempts so far.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "created_at": {
+          "description": "When it was queued.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "finished_at": {
+          "description": "When it finished.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "The job.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "kind": {
+          "description": "The job kind (for example `backup`).",
+          "type": "string"
+        },
+        "last_error": {
+          "description": "The last error kind.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "result": {
+          "description": "What a `succeeded` job recorded (`jobs_done.result`; contracts rev 17, additive).\nAbsent otherwise. Ids and counts only, never content."
+        },
+        "state": {
+          "$ref": "#/$defs/JobState",
+          "description": "The state."
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "state",
+        "attempts",
+        "created_at"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A page of an id-keyed list: `{\"items\": [...], \"has_more\": bool}`.",
+  "properties": {
+    "has_more": {
+      "description": "Whether more items exist past this page.",
+      "type": "boolean"
+    },
+    "items": {
+      "description": "The items.",
+      "items": {
+        "$ref": "#/$defs/JobStatus"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "items",
+    "has_more"
+  ],
+  "title": "Page",
+  "type": "object"
+}

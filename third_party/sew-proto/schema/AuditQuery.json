@@ -1,0 +1,136 @@
+{
+  "$defs": {
+    "AuditResult": {
+      "description": "How an audited action ended.",
+      "oneOf": [
+        {
+          "const": "ok",
+          "description": "It succeeded.",
+          "type": "string"
+        },
+        {
+          "const": "denied",
+          "description": "A permission or policy check refused it.",
+          "type": "string"
+        },
+        {
+          "const": "error",
+          "description": "It failed.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Query of `GET /api/v1/audit` and `GET /mgmt/v1/audit`. Filters combine with AND; at most\none cursor. `from`/`to` map to id bounds (ids are time-sortable).",
+  "properties": {
+    "action": {
+      "description": "Exact action names (repeatable in the query string, at most 20).",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "action_prefix": {
+      "description": "An action prefix such as `channel.`.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "actor_id": {
+      "description": "Events by this member.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "after": {
+      "description": "Events newer than this id (oldest first).",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "before": {
+      "description": "Events older than this id (newest first).",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "channel_id": {
+      "description": "Events of this channel.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "from": {
+      "description": "Events at or after.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "limit": {
+      "description": "Page size, 1–100 (default 50).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "result": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AuditResult"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "`ok`, `denied` or `error`."
+    },
+    "space_id": {
+      "description": "Events of this space.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "target_id": {
+      "description": "The target id (with `target_kind`).",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "target_kind": {
+      "description": "The target kind (with `target_id`).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "to": {
+      "description": "Events before.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "title": "AuditQuery",
+  "type": "object"
+}

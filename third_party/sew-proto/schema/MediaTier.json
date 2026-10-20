@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The media budget tier (S34 v2 §12.2).",
+  "oneOf": [
+    {
+      "const": "normal",
+      "description": "Everything allowed; full hints.",
+      "type": "string"
+    },
+    {
+      "const": "constrained",
+      "description": "New camera leases refused; lower hints.",
+      "type": "string"
+    },
+    {
+      "const": "critical",
+      "description": "New camera and screen leases refused; lowest hints.",
+      "type": "string"
+    }
+  ],
+  "title": "MediaTier"
+}

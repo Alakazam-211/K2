@@ -1,0 +1,159 @@
+{
+  "$defs": {
+    "AuditVerifyMode": {
+      "description": "Where an audit chain check starts.",
+      "oneOf": [
+        {
+          "const": "incremental",
+          "description": "From the last saved checkpoint (the daily schedule's mode).",
+          "type": "string"
+        },
+        {
+          "const": "full",
+          "description": "The whole chain from `chain_seq` 1.",
+          "type": "string"
+        }
+      ]
+    },
+    "AuditVerifyReport": {
+      "description": "What an `audit_verify` job found: `JobStatus.result` of a succeeded `audit_verify` job. A\nbroken chain is a successful job whose report has `broken_at`.",
+      "properties": {
+        "broken_at": {
+          "description": "The first failing `chain_seq`; `null` when the chain is intact.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "checked": {
+          "description": "Events that passed.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "head_hash": {
+          "description": "Its hash, 64 lowercase hex chars.",
+          "type": "string"
+        },
+        "head_seq": {
+          "description": "The last good `chain_seq`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mode": {
+          "$ref": "#/$defs/AuditVerifyMode",
+          "description": "Incremental or full."
+        },
+        "reason": {
+          "description": "Why it failed; `null` when the chain is intact.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "mode",
+        "checked",
+        "head_seq",
+        "head_hash"
+      ],
+      "type": "object"
+    },
+    "LastVerify": {
+      "description": "The newest finished `audit_verify` job.",
+      "properties": {
+        "finished_at": {
+          "description": "When it finished.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "job_id": {
+          "description": "The job.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "mode": {
+          "$ref": "#/$defs/AuditVerifyMode",
+          "description": "Incremental or full."
+        },
+        "report": {
+          "$ref": "#/$defs/AuditVerifyReport",
+          "description": "What it found."
+        }
+      },
+      "required": [
+        "job_id",
+        "mode",
+        "finished_at",
+        "report"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Response of `GET /api/v1/audit/chain`.",
+  "properties": {
+    "broken_at_seq": {
+      "description": "The first broken seq ever found.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "head_hash": {
+      "description": "Its hash, 64 hex (empty for an empty chain).",
+      "type": "string"
+    },
+    "head_seq": {
+      "description": "The highest `chain_seq`.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "last_verify": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LastVerify"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The newest finished verify job."
+    },
+    "outbox_len": {
+      "description": "Events waiting for the chainer.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "verified_at": {
+      "description": "When the chain was last checked.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "verified_seq": {
+      "description": "The last incrementally verified seq.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "head_seq",
+    "head_hash",
+    "verified_seq",
+    "outbox_len"
+  ],
+  "title": "AuditChainStatus",
+  "type": "object"
+}

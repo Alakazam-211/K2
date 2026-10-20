@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Why a leaf left the key group (`removed.reason`; every S33 v2 §10.4 leave reason plus\nS50's and S34 v2's own). Codes are stable for metrics and logs.",
+  "oneOf": [
+    {
+      "const": "left",
+      "description": "The member left.",
+      "type": "string"
+    },
+    {
+      "const": "disconnected",
+      "description": "The media connection ended for good.",
+      "type": "string"
+    },
+    {
+      "const": "replaced",
+      "description": "Another device of the member took over (swap).",
+      "type": "string"
+    },
+    {
+      "const": "moved",
+      "description": "The member moved or switched channel.",
+      "type": "string"
+    },
+    {
+      "const": "removed_by_moderator",
+      "description": "A moderator disconnected the member.",
+      "type": "string"
+    },
+    {
+      "const": "perms_lost",
+      "description": "The member lost CONNECT or VIEW.",
+      "type": "string"
+    },
+    {
+      "const": "channel_archived",
+      "description": "The channel was archived.",
+      "type": "string"
+    },
+    {
+      "const": "removed_from_space",
+      "description": "The member left or was removed from the space.",
+      "type": "string"
+    },
+    {
+      "const": "timed_out",
+      "description": "The member was timed out.",
+      "type": "string"
+    },
+    {
+      "const": "account_removed",
+      "description": "The account was deprovisioned.",
+      "type": "string"
+    },
+    {
+      "const": "session_revoked",
+      "description": "The login session was revoked.",
+      "type": "string"
+    },
+    {
+      "const": "device_revoked",
+      "description": "The device was revoked.",
+      "type": "string"
+    },
+    {
+      "const": "orphaned",
+      "description": "The media outlived every socket.",
+      "type": "string"
+    },
+    {
+      "const": "alone_timeout",
+      "description": "Alone in the call too long.",
+      "type": "string"
+    },
+    {
+      "const": "connect_timeout",
+      "description": "Media never connected.",
+      "type": "string"
+    },
+    {
+      "const": "media_restarted",
+      "description": "The engine restarted and the media did not come back.",
+      "type": "string"
+    },
+    {
+      "const": "voice_disabled",
+      "description": "Voice was turned off.",
+      "type": "string"
+    },
+    {
+      "const": "e2ee_sender_index_stuck",
+      "description": "The sender stayed on a stale key slot (rev 78 D4).",
+      "type": "string"
+    },
+    {
+      "const": "unresponsive",
+      "description": "The device stopped answering key requests (S50 unresponsive removal, F16 #29).",
+      "type": "string"
+    },
+    {
+      "const": "rebuild_orphan",
+      "description": "A rebuild found no live entry for the leaf.",
+      "type": "string"
+    },
+    {
+      "const": "create_failed",
+      "description": "The creator's group was refused.",
+      "type": "string"
+    },
+    {
+      "const": "call_ended",
+      "description": "The DM call ended for everyone (S34 v2, rev 88 D9).",
+      "type": "string"
+    }
+  ],
+  "title": "RemoveReason"
+}

@@ -1,0 +1,53 @@
+{
+  "$defs": {
+    "MeetingListScope": {
+      "description": "Which meetings a list returns.",
+      "oneOf": [
+        {
+          "const": "upcoming",
+          "description": "`scheduled` and `live`, soonest first.",
+          "type": "string"
+        },
+        {
+          "const": "past",
+          "description": "`ended` and `cancelled`, latest first.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Query of `GET /api/v1/meetings`.",
+  "properties": {
+    "cursor": {
+      "description": "`next_cursor` of the previous page.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "limit": {
+      "description": "1–100, default 50.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "scope": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MeetingListScope"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "`upcoming` (default) or `past`."
+    }
+  },
+  "title": "MeetingListQuery",
+  "type": "object"
+}

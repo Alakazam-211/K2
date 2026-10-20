@@ -1,0 +1,50 @@
+{
+  "$defs": {
+    "ComplianceOfficer": {
+      "description": "One active compliance-flag holder.",
+      "properties": {
+        "member_id": {
+          "description": "The member.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "set_at": {
+          "description": "When the flag was set (absent for flags set before S23).",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "set_by": {
+          "description": "Who set it (absent for the mgmt service).",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "member_id"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Response of `GET /api/v1/compliance/officers`.",
+  "properties": {
+    "items": {
+      "description": "Active holders, by member id.",
+      "items": {
+        "$ref": "#/$defs/ComplianceOfficer"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "items"
+  ],
+  "title": "ComplianceOfficers",
+  "type": "object"
+}

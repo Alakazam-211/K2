@@ -1,0 +1,67 @@
+{
+  "$defs": {
+    "ReminderState": {
+      "description": "A reminder's state (`reminders.state`).",
+      "oneOf": [
+        {
+          "const": "pending",
+          "description": "Waiting for its time.",
+          "type": "string"
+        },
+        {
+          "const": "fired",
+          "description": "Came due; stays until completed, snoozed or deleted.",
+          "type": "string"
+        },
+        {
+          "const": "done",
+          "description": "Completed.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Query of `GET /api/v1/me/reminders`.",
+  "properties": {
+    "before": {
+      "description": "`done` reminders before this id.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "ids": {
+      "description": "Only these reminders.",
+      "pattern": "^[1-9][0-9]{0,18}(,[1-9][0-9]{0,18}){0,99}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "limit": {
+      "description": "Page size, 1–100 (default 50).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "state": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ReminderState"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The state to list (default `pending`; ignored with `ids`)."
+    }
+  },
+  "title": "RemindersQuery",
+  "type": "object"
+}

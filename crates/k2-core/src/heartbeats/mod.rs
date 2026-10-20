@@ -216,6 +216,12 @@ pub fn k2so_heartbeat_add_with_instructions(
     .map_err(|e| friendly_heartbeat_insert_error(&name, &e.to_string()))?;
 
     let instructions = instructions.filter(|t| !t.trim().is_empty());
+    // 0.46.3: a WAKEUP.md that already has a body (a clone brought it, or
+    // the folder was kept from an earlier heartbeat of this name) is never
+    // overwritten here; `--instructions` is then reported as not written.
+    let existing_body = wakeup_body_bytes(&wakeup_file);
+    let kept_existing = instructions.is_some() && existing_body > 0;
+    let instructions = if kept_existing { None } else { instructions };
     let has_instructions = instructions.is_some();
     if let Some(text) = instructions {
         if let Err(e) = fs::write(&wakeup_file, wakeup_file_with_body(&text)) {
@@ -262,11 +268,25 @@ pub fn k2so_heartbeat_add_with_instructions(
         // S5: lets the CLI say "needs instructions" without reading a
         // file that may live on another machine.
         "instructionsWritten": has_instructions,
+        // 0.46.3: what WAKEUP.md holds now (the body, frontmatter
+        // stripped like a fire sends it), so the CLI never calls
+        // a file with 102 KB of instructions empty.
+        "wakeupBodyBytes": wakeup_body_bytes(&wakeup_file),
+        // `--instructions` was given but the existing body was kept.
+        "instructionsKeptExisting": kept_existing,
         // S3: the stored values — the same single source the list reads.
         "waitReason": stored.wait_reason,
         "waitDetail": stored.wait_detail,
         "nextFireAt": stored.next_fire_at,
     }))
+}
+
+/// Bytes of WAKEUP.md's body as a fire would send it (frontmatter
+/// stripped, trimmed); 0 when missing, unreadable or blank.
+fn wakeup_body_bytes(path: &std::path::Path) -> usize {
+    std::fs::read_to_string(path)
+        .map(|raw| crate::workspace::wake_prompts::strip_frontmatter(&raw).trim().len())
+        .unwrap_or(0)
 }
 
 /// S5 HB32 — WAKEUP.md contents for a body supplied at add time. Keeps
@@ -2028,6 +2048,81 @@ mod tests {
 
     /// T-S5c (HB32): the daemon writes the instructions; without them
     /// the row is enabled and says it needs instructions.
+    /// 0.46.3 field bug (a cloned Sew workspace): `schedule add` on a
+    /// heartbeat whose WAKEUP.md came over in the clone (102 KB) printed
+    /// "WAKEUP.md is empty". Add reports the body it found, and never
+    /// overwrites an existing non-empty WAKEUP.md, with or without
+    /// `--instructions`.
+    #[test]
+    fn add_over_an_existing_wakeup_keeps_it_and_reports_its_body() {
+        let (dir, _id) = s5_workspace("existing");
+        let path = dir.to_string_lossy().to_string();
+        let body = format!("# Daily review\n{}", "work through the queue.\n".repeat(4300));
+        let existing = format!("---\ndescription: cloned review\n---\n\n{body}");
+        let hb_dir = crate::workspace::agent_identity::workspace_heartbeats_dir(&path);
+        for name in ["cloned", "cloned-with-text"] {
+            std::fs::create_dir_all(hb_dir.join(name)).unwrap();
+            std::fs::write(hb_dir.join(name).join("WAKEUP.md"), &existing).unwrap();
+        }
+        crate::heartbeats::install::with_temp_home("hb-existing", |_home| {
+            crate::heartbeats::install::test_recorder::take();
+            // No --instructions: the cloned body is kept and reported.
+            let out = k2so_heartbeat_add_with_instructions(
+                path.clone(),
+                "cloned".into(),
+                "daily".into(),
+                r#"{"time":"07:00"}"#.into(),
+                None,
+            )
+            .expect("add over a cloned WAKEUP.md");
+            let abs = out["wakeupAbs"].as_str().expect("wakeupAbs").to_string();
+            assert_eq!(std::fs::read_to_string(&abs).unwrap(), existing, "never overwritten");
+            assert_eq!(out["instructionsWritten"], serde_json::json!(false));
+            assert_eq!(out["instructionsKeptExisting"], serde_json::json!(false));
+            assert_eq!(out["wakeupBodyBytes"], serde_json::json!(body.trim().len()));
+            assert!(body.len() > 100_000, "a 100 KB body like the field case");
+            assert_ne!(out["waitReason"], serde_json::json!("wakeup_empty"), "{out}");
+
+            // --instructions over a non-empty WAKEUP.md: kept, and said so.
+            let out = k2so_heartbeat_add_with_instructions(
+                path.clone(),
+                "cloned-with-text".into(),
+                "daily".into(),
+                r#"{"time":"07:00"}"#.into(),
+                Some("replace me".into()),
+            )
+            .expect("add with instructions over a cloned WAKEUP.md");
+            let abs = out["wakeupAbs"].as_str().expect("wakeupAbs").to_string();
+            assert_eq!(std::fs::read_to_string(&abs).unwrap(), existing, "never overwritten");
+            assert_eq!(out["instructionsWritten"], serde_json::json!(false));
+            assert_eq!(out["instructionsKeptExisting"], serde_json::json!(true));
+            assert_eq!(out["wakeupBodyBytes"], serde_json::json!(body.trim().len()));
+
+            // A fresh heartbeat still gets the empty scaffold and says so.
+            let out = k2so_heartbeat_add_with_instructions(
+                path.clone(),
+                "fresh".into(),
+                "daily".into(),
+                r#"{"time":"07:00"}"#.into(),
+                None,
+            )
+            .expect("fresh add");
+            assert_eq!(out["wakeupBodyBytes"], serde_json::json!(0));
+            assert_eq!(out["waitReason"], serde_json::json!("wakeup_empty"));
+            // And a body written at add time is counted.
+            let out = k2so_heartbeat_add_with_instructions(
+                path.clone(),
+                "fresh-text".into(),
+                "daily".into(),
+                r#"{"time":"07:00"}"#.into(),
+                Some("check inbox".into()),
+            )
+            .expect("add with text");
+            assert_eq!(out["instructionsWritten"], serde_json::json!(true));
+            assert_eq!(out["wakeupBodyBytes"], serde_json::json!("check inbox".len()));
+        });
+    }
+
     #[test]
     fn s5_add_writes_instructions_and_names_the_empty_wait() {
         let (dir, _id) = s5_workspace("add");

@@ -77,6 +77,9 @@ pub struct ThreadAttachment {
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AttachmentRequest {
+    /// `relPath` is the same field under the catalog's name (the App SDK
+    /// and Garden widgets never send a field called `path`, UWA6).
+    #[serde(alias = "relPath")]
     pub path: String,
     #[serde(default)]
     pub line: Option<u32>,
@@ -431,6 +434,10 @@ mod tests {
         assert!(parse_requests(r#"[{"path":"a","grant":true}]"#).is_err(), "no unknown fields");
         assert!(parse_requests(&format!(r#"[{{"path":"{}"}}]"#, "a".repeat(1025))).is_err());
         assert!(parse_requests("{}").is_err());
+        // The catalog's name (App SDK, Garden widgets) is the same field.
+        let got = parse_requests(r#"[{"relPath":"docs/a.md","line":3}]"#).expect("relPath");
+        assert_eq!((got[0].path.as_str(), got[0].line), ("docs/a.md", Some(3)));
+        assert!(parse_requests(r#"[{"path":"a","relPath":"b"}]"#).is_err(), "one or the other");
     }
 
     #[test]

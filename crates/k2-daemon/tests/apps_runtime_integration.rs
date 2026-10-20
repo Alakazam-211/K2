@@ -328,6 +328,12 @@ async fn s7_watch_window_auto_rollback_then_crash_restart_and_stall_alert() {
     let r = get(d.port, "/cli/app/deployment", OWNER, &format!("app=s7b&id={}", d2["id"].as_str().unwrap())).await;
     assert_eq!(r.json()["state"], "rolled_back");
     wait_until("the agent is told", 5, || alerts.lock().unwrap().iter().any(|(w, t)| w == &ws.id && t.contains("rolled it back"))).await;
+    // 0.46.3: the failure history has it, marked rolled back.
+    let r = get(d.port, "/cli/app/errors", OWNER, "app=s7b").await;
+    let f = r.json()["failures"].clone();
+    assert_eq!(f.as_array().map(Vec::len), Some(1), "{f}");
+    assert_eq!((f[0]["kind"].as_str(), f[0]["rolledBack"].as_bool()), (Some("crash"), Some(true)), "{f}");
+    assert_eq!(f[0]["deployment"], d2["id"]);
 
     // After the watch window: a crash restarts the live Seed at once.
     let r = post(d.port, "/cli/app/stop", OWNER, json!({"app": "s7b"})).await;
@@ -343,7 +349,30 @@ async fn s7_watch_window_auto_rollback_then_crash_restart_and_stall_alert() {
             b.is_some_and(|p| p != live_port) && body_of(front, "/") == "200 v1"
         })
         .await;
+        // 0.46.3: a single crash wakes the App's agent (once) and is recorded.
+        let crashed: Vec<(String, String)> = alerts.lock().unwrap().iter().filter(|(_, t)| t.contains("App s7b crashed")).cloned().collect();
+        assert_eq!(crashed.len(), 1, "{crashed:?}");
+        assert_eq!(crashed[0].0, ws.id, "the App's own workspace");
+        assert!(crashed[0].1.contains("restart 1 of 6") && crashed[0].1.contains("k2 app logs s7b --deployment d-"), "{}", crashed[0].1);
+        let r = get(d.port, "/cli/app/errors", OWNER, "app=s7b&kind=crash").await;
+        let f = r.json()["failures"].clone();
+        assert_eq!((f[0]["rolledBack"].as_bool(), f[0]["restartCount"].as_u64(), f[0]["woke"].as_bool()), (Some(false), Some(1), Some(true)), "{f}");
     }
+
+    // 0.46.3: a deploy that fails its health gate wakes the App's agent;
+    // the live version keeps serving.
+    let sick = app_folder(&env.path().join("sick"), "s7b", "3.0.0", "sick-3");
+    let r = post(d.port, "/cli/app/deploy", OWNER, json!({"app": "s7b", "folder": sick, "wait": 60})).await;
+    assert_eq!(r.json()["deployment"]["result"], "failed", "{}", r.body);
+    let sick_id = r.json()["deployment"]["id"].as_str().unwrap().to_string();
+    wait_until("the gate failure is told", 5, || {
+        alerts.lock().unwrap().iter().any(|(w, t)| w == &ws.id && t.contains(&sick_id) && t.contains("failed its health gate") && t.contains("previous version keeps serving"))
+    })
+    .await;
+    let r = get(d.port, "/cli/app/errors", OWNER, "app=s7b&kind=health&since=10m").await;
+    let f = r.json()["failures"].clone();
+    assert_eq!(f[0]["deployment"], sick_id.as_str(), "{f}");
+    assert!(f[0]["reason"].as_str().unwrap().starts_with("health_failed"), "{f}");
 
     // A deploy that never comes up: stalled, and the agent hears (L3).
     {

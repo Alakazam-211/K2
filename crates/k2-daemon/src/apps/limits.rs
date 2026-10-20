@@ -17,10 +17,12 @@
 //! none` (held). Humans aren't bound; admission (`admission.rs`) binds
 //! everyone.
 //!
-//! Switch 2 ("…and manage them end to end", 0197
-//! `projects.agents_can_manage_apps_full`) lifts the envelope: the agent
-//! sets its own budgets inside admission. [`full_manage_with`] reads the
-//! column when it exists (it reads off until migration 0197 lands).
+//! Inside the envelope a switch-1 agent's budget applies at once
+//! (`access::config_rule`, `within_limits`); budgets the envelope doesn't
+//! size (tasks) stay switch 2's. Switch 2 ("…and manage them end to end",
+//! 0197 `projects.agents_can_manage_apps_full`, counted only while switch 1
+//! is on, as `access::level` reads it) lifts the envelope: the agent sets
+//! its own budgets inside admission.
 
 use rusqlite::Connection;
 use serde_json::{json, Value as J};
@@ -60,10 +62,16 @@ pub fn full_manage(ws: &str) -> bool {
 /// approved. Humans → `None`.
 pub(crate) fn bound(who: &Who) -> Option<String> {
     let ws = agent_ws(who)?;
-    if super::approvals::manage_approved_now() || full_manage(ws) {
+    if super::approvals::manage_approved_now() || super::access::level(ws) == super::access::Level::Full {
         return None;
     }
     Some(ws.to_string())
+}
+
+/// The budgets the envelope sizes: inside it a switch-1 agent sets them
+/// itself. Anything else that raises (tasks) stays switch 2's.
+pub(crate) fn covers(op: &Op) -> bool {
+    matches!(op, Op::Memory(_) | Op::CpuWeight(_) | Op::Disk(_))
 }
 
 fn mib(b: i64) -> String {

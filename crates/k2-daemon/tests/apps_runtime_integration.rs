@@ -419,7 +419,7 @@ async fn s7_passport_rules_and_memory_setting() {
     let r = post(d.port, "/cli/app/install", &pass, json!({"app": "s7mine-app"})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(r.json()["app"]["ownerWorkspace"], mine.id);
-    assert_eq!(r.json()["app"]["memoryLimitBytes"], serde_json::Value::Null, "no per-App memory limit by default");
+    assert_eq!(r.json()["app"]["memoryLimitBytes"], 512i64 << 20, "an install with no memory gets 512 MiB (F2)");
     let r = post(d.port, "/cli/app/install", &pass, json!({"app": "x2", "workspace": theirs.id})).await;
     assert_eq!(r.code(), "forbidden");
     for path in ["/cli/app/stop", "/cli/app/start", "/cli/app/rollback", "/cli/app/deploy", "/cli/app/config"] {
@@ -437,7 +437,15 @@ async fn s7_passport_rules_and_memory_setting() {
     assert_eq!(r.code(), "app_exists");
 
     // The memory setting: set and clear (the user decides; none = no limit).
+    // A "Build and run Apps" agent sets up to 2 GiB itself; past its
+    // default limits the change is held for the owner (Rosson 2026-10-20).
+    let r = post(d.port, "/cli/app/config", &pass, json!({"app": "s7mine-app", "memory": "2G"})).await;
+    assert_eq!((r.status, r.json()["status"].as_str()), (200, None), "{}", r.body);
+    assert_eq!(r.json()["app"]["memoryLimitBytes"], 2i64 << 30);
     let r = post(d.port, "/cli/app/config", &pass, json!({"app": "s7mine-app", "memory": "8G"})).await;
+    assert_eq!((r.status, r.json()["status"].as_str()), (202, Some("held")), "{}", r.body);
+    assert_eq!(r.json()["app"]["memoryLimitBytes"], 2i64 << 30, "held: unchanged");
+    let r = post(d.port, "/cli/app/config", OWNER, json!({"app": "s7mine-app", "memory": "8G"})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(r.json()["app"]["memoryLimitBytes"], 8i64 << 30);
     // Clearing the limit is a raise: an agent with only "Build and run

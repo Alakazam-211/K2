@@ -169,6 +169,17 @@ fn run_row(path: &str, post: bool, who: &Who, body: &J) -> (u16, J) {
 #[test]
 fn agent_switch_matrix_off_build_full() {
     let f = fx("matrix");
+    // Box admission never decides a row here (it has its own test).
+    let _pool = super::admission::pool_for_test(64 << 30);
+    // jobs sits behind the vm wall, so lowering it to container is the
+    // isolation row: since 0.46.3 a move onto the unwalled process engine
+    // is refused outright while the owner has that engine off (the
+    // default), before any hold.
+    {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        conn.execute("UPDATE apps SET isolation = 'vm' WHERE app_id = 'jobs'", []).unwrap();
+    }
     let ghost = json!({"app": "ghost-app"});
     // (route, POST?, body, off, switch 1, switches 1+2)
     let rows: Vec<(&str, bool, J, O, O, O)> = vec![
@@ -198,15 +209,21 @@ fn agent_switch_matrix_off_build_full() {
         ("/cli/app/exec", true, ghost.clone(), Held, Run, Run),
         // Lowering a quota is narrowing.
         ("/cli/app/quota/set", true, json!({"app": "jobs", "rps": 10}), Held, Run, Run),
-        // Raises: switch 2 makes them itself; switch 1 proposes.
+        // Budgets inside the default limits (limits.rs): switch 1 applies
+        // them (Rosson 2026-10-20: switch 1 = build and run within the
+        // default limits; switch 2 = manage caps and budgets).
+        ("/cli/app/config", true, json!({"app": "plain", "memory": "1G"}), Held, Run, Run),
+        // Raises: switch 2 makes them itself; switch 1 proposes (budgets
+        // past its default limits included).
         ("/cli/app/quota/set", true, json!({"app": "jobs", "rps": 900}), Held, Held, Run),
-        ("/cli/app/config", true, json!({"app": "plain", "memory": "1G"}), Held, Held, Run),
+        ("/cli/app/config", true, json!({"app": "jobs", "memory": "3G"}), Held, Held, Run),
+        ("/cli/app/config", true, json!({"app": "jobs", "cpuWeight": 400}), Held, Held, Run),
         ("/cli/app/config", true, json!({"app": "plain", "dbPrivate": "on"}), Held, Held, Run),
         ("/cli/app/config", true, json!({"app": "plain", "io": {"wbps": "500M"}}), Held, Held, Run),
         // Loosening the wall: the person, in every state (§2.2).
         ("/cli/app/config", true, json!({"app": "jobs", "path": "open"}), Held, Held, Held),
         ("/cli/app/config", true, json!({"app": "jobs", "portAdd": "5000/udp"}), Held, Held, Held),
-        ("/cli/app/config", true, json!({"app": "jobs", "isolation": "process"}), Held, Held, Held),
+        ("/cli/app/config", true, json!({"app": "jobs", "isolation": "container"}), Held, Held, Held),
         ("/cli/app/config", true, json!({"app": "jobs", "dbRaw": "on"}), Held, Held, Held),
         // Purge: never an agent (held as a manage request without switch 1;
         // the replay is refused).
@@ -234,11 +251,12 @@ fn agent_switch_matrix_off_build_full() {
     let h = k2_core::db::shared();
     let conn = h.lock();
     let plain = store::get_app(&conn, "plain").unwrap().unwrap();
-    assert_eq!(plain.memory_limit_bytes, Some(1 << 30), "switch 2 raised its own memory");
+    assert_eq!(plain.memory_limit_bytes, Some(1 << 30), "switch 1 raised its own memory inside the default limits");
+    assert_eq!(store::get_app(&conn, "jobs").unwrap().unwrap().memory_limit_bytes, Some(3 << 30), "switch 2 raised past them");
     let cfg = k2_core::app_grace::config::load(&conn, "plain").unwrap();
     assert!(cfg.db.private, "switch 2 turned its own private database on");
     let jobs = store::get_app(&conn, "jobs").unwrap().unwrap();
-    assert_eq!((jobs.path.as_str(), jobs.isolation.as_str()), ("guarded", "container"), "the wall never moved");
+    assert_eq!((jobs.path.as_str(), jobs.isolation.as_str()), ("guarded", "vm"), "the wall never moved");
     let jcfg = k2_core::app_grace::config::load(&conn, "jobs").unwrap();
     assert!(!jcfg.db.raw && jcfg.ports.is_empty(), "{jcfg:?}");
     assert_eq!(super::quotas::load_override(&conn, "jobs").unwrap().rps, Some(900));
@@ -592,4 +610,115 @@ fn the_review_note_goes_to_the_owner_once() {
     assert!(list["accessReview"][0]["notedAt"].is_i64(), "{list}");
     let mine = get("/cli/app/list", &agent(&f.ws_a), &[]).1;
     assert!(mine.get("accessReview").is_none() && mine["access"]["level"] == "off", "{mine}");
+}
+
+fn mem(app: &str) -> Option<i64> {
+    let h = k2_core::db::shared();
+    let conn = h.lock();
+    store::get_app(&conn, app).unwrap().unwrap().memory_limit_bytes
+}
+
+fn approve_as_owner(req: &str) -> Result<J, super::routes::Refusal> {
+    let tok = test_seams::vault_handle().confirm.mint(super::approvals::CONFIRM_ACTION, Some(req), "owner", "local-auth");
+    super::approvals::handle("/cli/app/approve", &Who::Owner, json!({ "request": req, "confirmToken": tok }).to_string().as_bytes(), &HashMap::new())
+}
+
+/// Rosson 2026-10-20, the integrated shape of slices A and F: switch 1
+/// builds and runs inside the default limits (a budget inside them
+/// applies; past them, or one they don't size, is held for the owner);
+/// switch 2 manages budgets itself, inside box admission; every memory
+/// budget that grows meets admission from every caller, now and when a
+/// held request is approved later; loosening the wall waits for the
+/// person on both switches.
+#[test]
+fn switch_1_inside_the_default_limits_switch_2_inside_admission() {
+    let f = fx("shape");
+    let a = agent(&f.ws_a);
+    // Apps hold 256 MiB each; plain is the one that grows. Pool 4 GiB.
+    let pool = super::admission::pool_for_test(4 << 30);
+
+    // Switch 1: inside the default limits, applied at once.
+    set_level(&f.ws_a, Level::Build);
+    let (st, v) = call("/cli/app/config", &a, json!({"app": "plain", "memory": "2G"}));
+    assert_eq!((st, v["status"].as_str()), (200, None), "2 GiB is inside the default: {v}");
+    assert_eq!(mem("plain"), Some(2 << 30));
+    let (st, v) = call("/cli/app/config", &a, json!({"app": "plain", "cpuWeight": 80}));
+    assert_eq!((st, v["status"].as_str()), (200, None), "{v}");
+    let (st, v) = call("/cli/app/config", &a, json!({"app": "plain", "disk": "1G"}));
+    assert_eq!((st, v["status"].as_str()), (200, None), "{v}");
+    let (st, v) = call("/cli/app/config", &a, json!({"app": "plain", "disk": "4G"}));
+    assert_eq!((st, v["status"].as_str()), (200, None), "a disk raise inside 10 GiB: {v}");
+    // Past the limits: held for the owner, saying which limit.
+    let (st, v) = call("/cli/app/config", &a, json!({"app": "plain", "memory": "3G"}));
+    assert_eq!((st, v["status"].as_str()), (202, Some("held")), "{v}");
+    assert!(v["limits"][0].as_str().unwrap().contains("up to 2 GiB"), "{v}");
+    let held_3g = v["held"]["request"]["id"].as_str().unwrap_or_else(|| panic!("no held request id: {v}")).to_string();
+    assert_eq!(mem("plain"), Some(2 << 30), "unchanged until the owner approves");
+    let (st, v) = call("/cli/app/config", &a, json!({"app": "plain", "cpuWeight": 400}));
+    assert_eq!((st, v["status"].as_str()), (202, Some("held")), "{v}");
+    let (st, v) = call("/cli/app/config", &a, json!({"app": "plain", "disk": "11G"}));
+    assert_eq!((st, v["status"].as_str()), (202, Some("held")), "{v}");
+    // A budget the default limits don't size (tasks) is switch 2's.
+    let (st, v) = call("/cli/app/config", &a, json!({"app": "plain", "tasks": 100}));
+    assert_eq!((st, v["status"].as_str()), (200, None), "setting a task limit narrows: {v}");
+    let (st, v) = call("/cli/app/config", &a, json!({"app": "plain", "tasks": 200}));
+    assert_eq!((st, v["status"].as_str()), (202, Some("held")), "{v}");
+    assert!(v["held"]["request"].to_string().contains("Build and run Apps"), "the reason names the switch: {v}");
+    // Loosening: the person, on switch 1.
+    let (st, v) = call("/cli/app/config", &a, json!({"app": "jobs", "dbRaw": "on"}));
+    assert_eq!((st, v["status"].as_str()), (202, Some("held")), "{v}");
+
+    // The owner approves the held 3 GiB: it fits the box, so it applies.
+    let r = approve_as_owner(&held_3g).unwrap_or_else(|e| panic!("approve: {} {}", e.code, e.hint));
+    assert_eq!(r["request"]["status"], "approved", "{r}");
+    assert_eq!(mem("plain"), Some(3 << 30));
+
+    // A held raise approved later meets today's box: shrink the pool,
+    // then approve. Refused, nothing changes.
+    // (Filed: it fits today's 4 GiB, 768 MiB + 3200 MiB.)
+    let (st, v) = call("/cli/app/config", &a, json!({"app": "plain", "memory": "3200M"}));
+    assert_eq!((st, v["status"].as_str()), (202, Some("held")), "{v}");
+    let later = v["held"]["request"]["id"].as_str().unwrap().to_string();
+    // (A guard clears the override when it drops: one at a time.)
+    drop(pool);
+    let small = super::admission::pool_for_test(3 << 30);
+    // The decision stands; applying it is refused (approvals' shape).
+    let r = approve_as_owner(&later).unwrap_or_else(|e| panic!("approve: {} {}", e.code, e.hint));
+    assert_eq!((r["ok"].as_bool(), r["error"]["code"].as_str()), (Some(false), Some("box_budget_full")), "{r}");
+    assert_eq!(mem("plain"), Some(3 << 30));
+    drop(small);
+    let _pool = super::admission::pool_for_test(4 << 30);
+
+    // Switch 2: its own budgets, past the default limits, inside the box.
+    set_level(&f.ws_a, Level::Full);
+    let (st, v) = call("/cli/app/config", &a, json!({"app": "plain", "tasks": 400}));
+    assert_eq!((st, v["status"].as_str()), (200, None), "{v}");
+    let (st, v) = call("/cli/app/config", &a, json!({"app": "plain", "cpuWeight": 400}));
+    assert_eq!((st, v["status"].as_str()), (200, None), "{v}");
+    let (st, v) = call("/cli/app/config", &a, json!({"app": "jobs", "memory": "512M"}));
+    assert_eq!((st, v["status"].as_str()), (200, None), "{v}");
+    // 256 + 256 + 512 MiB held by the others: 3 GiB fits 4 GiB, 3.5 doesn't.
+    let (st, v) = call("/cli/app/config", &a, json!({"app": "plain", "memory": "3G"}));
+    assert_eq!(st, 200, "{v}");
+    let (st, v) = call("/cli/app/config", &a, json!({"app": "plain", "memory": "3500M"}));
+    assert_eq!((st, code(&v)), (409, "box_budget_full"), "switch 2 still meets admission: {v}");
+    assert_eq!(mem("plain"), Some(3 << 30));
+    // Loosening stays the person's on switch 2.
+    let (st, v) = call("/cli/app/config", &a, json!({"app": "jobs", "path": "open"}));
+    assert_eq!((st, v["status"].as_str()), (202, Some("held")), "{v}");
+
+    // Humans aren't bound by an agent's limits, but meet the box too.
+    let (st, v) = call("/cli/app/config", &Who::Owner, json!({"app": "hum", "memory": "8G"}));
+    assert_eq!((st, code(&v)), (409, "box_budget_full"), "{v}");
+    assert_eq!(mem("hum"), Some(256 << 20));
+    // The box is full (3840 of 4096 MiB): even 300 MiB waits until
+    // someone lowers; lowering always applies.
+    let (st, v) = call("/cli/app/config", &Who::Owner, json!({"app": "hum", "memory": "300M"}));
+    assert_eq!((st, code(&v)), (409, "box_budget_full"), "{v}");
+    let (st, v) = call("/cli/app/config", &Who::Owner, json!({"app": "plain", "memory": "2G"}));
+    assert_eq!((st, v["status"].as_str()), (200, None), "{v}");
+    let (st, v) = call("/cli/app/config", &Who::Owner, json!({"app": "hum", "memory": "300M"}));
+    assert_eq!((st, v["status"].as_str()), (200, None), "{v}");
+    assert_eq!(mem("hum"), Some(300 << 20));
+    let _ = &f.ws_b;
 }

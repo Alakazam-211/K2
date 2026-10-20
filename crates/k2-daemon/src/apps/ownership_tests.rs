@@ -243,11 +243,14 @@ fn park_stops_and_holds_the_app_for_the_owner_then_the_workspace_can_go() {
 #[test]
 fn the_owner_hands_an_app_over_and_unparks_a_parked_one() {
     let f = fx("hand");
-    // Owner only: an admin, an agent and a member are refused.
-    for who in [admin(), agent(&f.a), Who::Login { username: "mo".into(), role: Role::Member }] {
+    // Owner only: an admin and an agent are refused; a Member is
+    // read-only on every App route first (Q7, slice C).
+    for who in [admin(), agent(&f.a)] {
         let (st, v) = call("/cli/app/handover", &who, json!({ "app": f.a1, "to": f.b }));
         assert_eq!((st, code(&v)), (403, "owner_only"), "{who:?}: {v}");
     }
+    let (st, v) = call("/cli/app/handover", &Who::Login { username: "mo".into(), role: Role::Member }, json!({ "app": f.a1, "to": f.b }));
+    assert_eq!((st, code(&v)), (403, "member_read_only"), "{v}");
     // The label it holds moves with it.
     {
         let h = k2_core::db::shared();

@@ -1316,8 +1316,12 @@ fn config(who: &Who, body: &[u8]) -> R<J> {
         ));
     }
     // prd-agent-app-permissions-v1 §2: narrowing applies; a raise applies
-    // for humans and agents with switch 2; loosening the wall is held for
-    // the person from every caller (`super::access::config_rule`).
+    // for humans and agents with switch 2, and for a switch-1 agent while
+    // it stays inside its default limits (past them it is held for the
+    // owner); loosening the wall is held for the person from every caller
+    // (`super::access::config_rule`). A memory budget that grows met box
+    // admission above (`check_box_fit`), and meets it again in
+    // `apply_config_ops` (now, or when a held request is approved).
     let mut now_ops: Vec<Op> = Vec::new();
     let mut held: Vec<(Op, String)> = Vec::new();
     // Switch-1 default limits (limits.rs): a budget past them is held.
@@ -1333,6 +1337,7 @@ fn config(who: &Who, body: &[u8]) -> R<J> {
         // none (the classifier's "narrow") still raises past the default.
         let raises = class == Class::Budget
             || matches!(op, Op::CpuWeight(Some(w)) if w > state.config.resources.cpu_weight.unwrap_or(super::limits::CPU_WEIGHT_MAX));
+        let mut within_limits = false;
         if let (true, Some(ws)) = (raises, bound.as_deref()) {
             if let Some(why) = super::limits::config_overage(ws, &app, &op, &state)? {
                 let line = format!("{}: past this agent's default App limits ({why})", appcfg::describe(&op, &state));
@@ -1340,8 +1345,9 @@ fn config(who: &Who, body: &[u8]) -> R<J> {
                 held.push((op, line));
                 continue;
             }
+            within_limits = super::limits::covers(&op);
         }
-        match super::access::config_rule(who, &op, class) {
+        match super::access::config_rule(who, &op, class, within_limits) {
             Ok(()) => now_ops.push(op),
             Err(why) => {
                 let line = format!("{}: {why}", appcfg::describe(&op, &state));

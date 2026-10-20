@@ -45,6 +45,10 @@ pub fn setup(extra: &[(&str, &str)]) -> Env {
         EnvVar::set("K2_APPS_DEPLOY_TIMEOUT_SECS", "20"),
         EnvVar::set("K2_APPS_DRAIN_SECS", "2"),
         EnvVar::set("K2_APPS_STOP_GRACE_SECS", "2"),
+        // Box admission (0.46.3) sizes the Apps' memory pool from this
+        // machine's RAM; these tests fix it so a raise never depends on
+        // the runner (admission has its own tests in apps::ownership_tests).
+        EnvVar::set("K2_APPS_MEMORY_POOL", "64G"),
     ];
     for (k, v) in extra {
         vars.push(EnvVar::set(k, v));

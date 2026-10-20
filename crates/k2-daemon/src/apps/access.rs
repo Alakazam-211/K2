@@ -8,9 +8,15 @@
 //! | Reads (own Apps) | yes | yes | yes |
 //! | build, install (own workspace), deploy, rollback, stop/start/restart, exec/shell, link rotate, uninstall without purge (N2) | a held `manage` request (S42) | at once | at once |
 //! | App users: guests, roles, tokens (skin hooks) | no | yes | yes |
-//! | Raises: budgets (memory, CPU, tasks, disk), `io`, `dbPrivate`, quota raises, egress hosts, box services, App keys, clean mode off | proposals held | proposals held | **applied by the agent itself**, no Approvals queue |
+//! | Budgets (memory, CPU weight, disk) inside the default limits (`limits.rs`: 2 GiB memory per App, CPU weight 100, 10 GiB disk across its Apps) | proposals held | **applied** | applied |
+//! | Raises: budgets past the default limits (or `none`), tasks, `io`, `dbPrivate`, quota raises, egress hosts, box services, App keys, clean mode off | proposals held | proposals held | **applied by the agent itself**, no Approvals queue |
 //! | Narrowing (suspend, `*/rm`, `*/revoke`, clean mode on, lowering) | yes | yes | yes |
 //! | Loosening the wall (§2.2 + N3) | held for the person | held for the person | **held for the person** |
+//!
+//! Rosson's shape (2026-10-20): switch 1 builds and runs Apps inside the
+//! default limits; switch 2 manages caps and budgets. Every memory budget
+//! that grows meets box admission (`admission::check_memory`) from every
+//! caller, now and when a held request is approved later.
 //!
 //! Switch 1 is the old "Allow this agent to manage Apps" column
 //! (`agents_can_manage_skin`); switch 2 is `agents_can_manage_apps_full`
@@ -178,11 +184,18 @@ pub(crate) fn is_loosening(op: &Op, class: Class) -> bool {
 
 const WHY_LOOSEN: &str = "it loosens the App's wall: the owner confirms it in person (Touch ID or a password), from every caller, \
                           the owner token included";
-const WHY_RAISE: &str = "a raise: an agent with \"…and manage them end to end\" makes it itself; otherwise the owner approves it";
+const WHY_RAISE: &str = "a raise past what \"Build and run Apps\" covers (its default limits size memory, CPU weight and disk): an \
+                         agent with \"…and manage them end to end\" makes it itself; otherwise the owner approves it";
 const WHY_OWNER: &str = "the owner's (or an agent with \"…and manage them end to end\")";
 
 /// May this caller make one config change now? `Err(reason)` = held.
-pub(crate) fn config_rule(who: &Who, op: &Op, class: Class) -> Result<(), &'static str> {
+///
+/// `within_limits`: the caller is a switch-1 agent bound by its default
+/// App limits (`limits::bound`), the op is a budget those limits size
+/// (`limits::covers`) and it fits them (`limits::config_overage` found
+/// nothing). Such a budget applies at once; a raise past the limits is
+/// held by the caller before it gets here.
+pub(crate) fn config_rule(who: &Who, op: &Op, class: Class, within_limits: bool) -> Result<(), &'static str> {
     if class == Class::Narrow {
         return Ok(());
     }
@@ -191,8 +204,9 @@ pub(crate) fn config_rule(who: &Who, op: &Op, class: Class) -> Result<(), &'stat
     }
     match class {
         // Humans (owner, Admin, shell tab) apply budgets as before; an
-        // agent needs switch 2 (slice F adds the switch-1 default limits).
-        Class::Budget if agent_ws(who).is_none() || self_widens(who) => Ok(()),
+        // agent with switch 2 applies its own; switch 1 applies a budget
+        // inside its default limits (Rosson 2026-10-20).
+        Class::Budget if agent_ws(who).is_none() || self_widens(who) || within_limits => Ok(()),
         Class::Budget => Err(WHY_RAISE),
         Class::Owner if owner_human(who) || self_widens(who) => Ok(()),
         _ => Err(WHY_OWNER),

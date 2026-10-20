@@ -120,6 +120,15 @@ pub struct Requires {
     pub k2: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub features: Vec<String>,
+    /// The Sew chat server this box must run (0.46.3), a version range in
+    /// `requires.k2`'s form (`>=0.3.0`, `>=0.3.0 <0.5.0`). Install and
+    /// deploy check it against `k2 hostchat status`; `k2 app validate`
+    /// checks only the form (it can run off the box).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sew: Option<String>,
+    /// Voice (Sew's media engine, `k2 hostchat media`) must be on (0.46.3).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub voice: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -278,6 +287,27 @@ mod tests {
         assert_eq!(m.box_services[1].host_port, Some(7880));
         let e = parse(&OK.replace("\"caps\"", "\"boxServices\": [{\"name\": \"x\", \"host\": \"10.0.0.1\"}], \"caps\"")).unwrap_err();
         assert!(e.message.contains("host"), "only a loopback port, never a host: {e:?}");
+    }
+
+    /// 0.46.3: `requires.sew` (a range) and `requires.voice` (a bool);
+    /// other keys under `requires` are still errors.
+    #[test]
+    fn requires_sew_and_voice_parse() {
+        assert_eq!(parse(OK).unwrap().requires, None);
+        let m = parse(&OK.replace("\"caps\"", "\"requires\": {\"sew\": \">=0.3.0\", \"voice\": true}, \"caps\"")).unwrap();
+        let r = m.requires.expect("requires");
+        assert_eq!(r.sew.as_deref(), Some(">=0.3.0"));
+        assert!(r.voice);
+        assert_eq!(r.k2, None);
+        let m = parse(&OK.replace("\"caps\"", "\"requires\": {\"sew\": \">=0.2.0\"}, \"caps\"")).unwrap();
+        assert!(!m.requires.as_ref().unwrap().voice, "voice defaults to off");
+        // Round trip: a false voice isn't written back.
+        let back = serde_json::to_value(m.requires.unwrap()).unwrap();
+        assert_eq!(back, serde_json::json!({"sew": ">=0.2.0"}));
+        let e = parse(&OK.replace("\"caps\"", "\"requires\": {\"voice\": \"yes\"}, \"caps\"")).unwrap_err();
+        assert!(e.message.contains("bool"), "voice is a bool: {e:?}");
+        let e = parse(&OK.replace("\"caps\"", "\"requires\": {\"sewVersion\": \">=0.3.0\"}, \"caps\"")).unwrap_err();
+        assert!(e.message.contains("sewVersion"), "{e:?}");
     }
 
     #[test]

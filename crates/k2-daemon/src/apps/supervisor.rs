@@ -409,6 +409,16 @@ pub fn begin(app: &AppRow, seed: &str, kind: &str, actor: &str, reason: Option<&
             return Err(e);
         }
     };
+    // 0.46.3: a deploy checks the Seed's requires.sew / requires.voice
+    // against this box's Sew (rollbacks and restarts don't: they keep or
+    // put back what ran).
+    if kind == store::KIND_DEPLOY {
+        let req = serde_json::from_value::<Manifest>(seed_row.manifest.clone()).ok().and_then(|m| m.requires);
+        if let Err((msg, _)) = super::requires::check_live(&app.app_id, req.as_ref()) {
+            release();
+            return Err(fail(codes::REQUIRES_UNMET, 409, msg));
+        }
+    }
     let commit = seed_row.source_ref.clone().unwrap_or_else(|| seed_row.hash.clone());
     let dep = match db(|c| {
         store::insert_deployment(
@@ -595,6 +605,9 @@ fn pipeline(app_id: &str, dep: &str, seed: &str, kind: &str) {
     if let Err(e) = k2_core::deploy::engine::require_isolation(eng, wanted) {
         return pipeline_fail(app_id, dep, e.code, &e.message);
     }
+    // K-M3: the App's seal key exists and is granted before the engine
+    // reads the vault grants (every start: deploy, restart, rollback).
+    super::seal::ensure_for_start(&app.app_id, &app.service_id);
     let spec = spec_for(&app, &m, dep);
     let seed_ref = SeedRef { hash: seed.to_string(), path: deploy::seed::seed_path(seed) };
     let prepared = match eng.prepare(&seed_ref, &spec) {

@@ -39,8 +39,12 @@ pub mod podman_install;
 pub mod process_engine;
 pub mod process_exception;
 pub mod quotas;
+/// `requires.sew` / `requires.voice` against this box's Sew (0.46.3).
+pub mod requires;
 pub mod router;
 pub mod routes;
+/// The per-App seal key in the vault (K-M3, 0.46.3).
+pub mod seal;
 pub mod supervisor;
 pub mod surfaces;
 pub mod suspend;

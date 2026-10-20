@@ -7279,6 +7279,11 @@ See and run it:
                                        file K2_PASS_FILE names). Port, pass
                                        caps/rooms, expiry, rotation, counters.
                                        --rotate hands the App a new pass now.
+  k2 app seal <app-id>                 Its seal key ($K2_SECRETS_DIR/K2_APP_SEAL_KEY):
+                                       made at its first start, the same across
+                                       deploys, restarts and rollbacks. Never shown.
+  k2 app seal rotate <app-id> --yes    Owner (or switch 2): a new key at the next
+                                       start. Signs EVERYONE out of the App.
   k2 app stop|start|restart <app-id>   restart is zero-downtime.
   k2 app suspend <app-id> [--reason T] Revoke every pass now, freeze deploys
                                        (anyone may); k2 app resume (owner).
@@ -7902,6 +7907,66 @@ print("  requests     %s (refused %s, wrong link %s), %s connected" % (l.get("re
 '
     fi
     printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; sys.exit(0 if (json.load(sys.stdin).get("link") or {}).get("open") else 1)'
+}
+
+# k2 app seal <app-id> [--json]             — does the App have its seal key (K-M3)?
+# k2 app seal rotate <app-id> [--yes] [--json] — a new key: signs EVERYONE out.
+# The value is never shown. Exit 0 ok, 1 no key yet, 2 usage, 3 refused/infra.
+cmd_app_seal() {
+    local app="" rotate=0 yes=0 json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            rotate) rotate=1; shift ;;
+            --yes|-y) yes=1; shift ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_rt_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    [ -z "$app" ] && { echo "usage: k2 app seal <app-id> | k2 app seal rotate <app-id> [--yes]" >&2; exit 2; }
+    if [ "$rotate" = 1 ]; then
+        if [ "$yes" != 1 ]; then
+            echo "Rotating $app's seal key signs EVERYONE out of it (members and guests); their passwords still work." >&2
+            if [ -t 0 ] && [ -t 2 ]; then
+                printf 'Type the App id to go ahead: ' >&2
+                local typed=""
+                read -r typed
+                [ "$typed" = "$app" ] || { echo "Not rotated." >&2; exit 2; }
+                yes=1
+            else
+                echo "Not rotated: run k2 app seal rotate $app --yes" >&2
+                exit 2
+            fi
+        fi
+        _app_rt_post /cli/app/seal/rotate "$(_compute_json K2_CJ_app="$app" K2_CJ_yes_b="$yes")"
+        [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+        if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+        printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+print("%s: seal key rotated (version %s)" % (v.get("app"), v.get("version")))
+print(v.get("warning", ""))
+print(v.get("next", ""))'
+        return 0
+    fi
+    _compute_call GET /cli/app/seal "app=$(urlencode "$app")"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; else
+        printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+s = v.get("seal") or {}
+if not s.get("vaultOpen"):
+    print("%s: the vault is not open (%s)" % (v.get("app"), s.get("error")))
+elif not s.get("present"):
+    print("%s: no seal key yet (K2 makes it at the next start)" % v.get("app"))
+else:
+    state = "granted" if s.get("granted") else "not granted yet (next start)"
+    if s.get("disabled"):
+        state = "disabled in the vault"
+    print("%s: seal key version %s, %s; the App reads %s" % (v.get("app"), s.get("version"), state, s.get("file")))'
+    fi
+    printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; sys.exit(0 if (json.load(sys.stdin).get("seal") or {}).get("present") else 1)'
 }
 
 # k2 app deployment <app-id> [<deployment-id>] [--json] — who, commit, state (L3).
@@ -8672,6 +8737,38 @@ PUBLIC ORIGINS (CSRF and WebSocket Origin checks)
   (a local-only App, no K2 Connect subdomain, no custom domain): neither
   is set. Treat unset as "loopback only", never as "allow any Origin".
   A manifest can't set them. --cmd services get them too.
+
+APP IDENTITY (every engine: guarded, process exception, process)
+  K2_APP_NAME       the App id: what k2 app <verb> <app-id> and
+                    k2 hostchat meet bind <app-id> take
+  K2_APP_ID         its published service id (a UUID): what
+                    POST /cli/skin/login {"app": …} and /v1/apps/<id>/… take
+  K2_APP_DEPLOYMENT this start's deployment id
+  K2_APP_DATA       lasting files (kept across deploys and rollbacks)
+  A Seed reads these instead of baking a box's origin or id, so one Seed
+  installs on any box.
+
+SEAL KEY (K-M3: sessions that survive restarts)
+  Every App gets one stable random key, made at its first start and kept
+  in the vault: read $K2_SECRETS_DIR/K2_APP_SEAL_KEY (32 bytes as 43
+  base64url characters, no newline). It is the same across deploys,
+  restarts and rollbacks, only this App gets it, and it is never an env
+  variable or in a log. Seal your session store with it (sqlite in
+  $K2_APP_DATA), and a deploy no longer signs everyone out.
+    k2 app seal <app-id>               has it? (never the value)
+    k2 app seal rotate <app-id> --yes  a new key at the next start: signs
+                                       EVERYONE out (owner, or switch 2)
+  A plain uninstall keeps it for a reinstall (like the data); --purge
+  destroys it.
+
+REQUIRES (Apps on Sew)
+  "requires": {"sew": ">=0.3.0", "voice": true}
+  sew: a version range like requires.k2 (>=0.3.0, >=0.3.0 <0.5.0);
+  voice: Sew's media engine must be on. k2 app validate checks the form.
+  Install and deploy check this box (k2 hostchat status) and refuse with
+  requires_unmet, naming what's missing and the owner's fix (k2 hostchat
+  enable --voice, k2 hostchat upgrade, k2 hostchat media install). K2
+  never turns Sew or voice on by itself. Rollbacks and restarts don't check.
 
 READING WHAT WENT WRONG
   k2 app errors <app-id> [--since 1h] [--kind crash|health|build|deploy]
@@ -10087,6 +10184,7 @@ cmd_app() {
         stop|start|restart) cmd_app_lifecycle "$@" ;;
         deployment) shift; cmd_app_deployment "$@" ;;
         link) shift; cmd_app_link "$@" ;;
+        seal) shift; cmd_app_seal "$@" ;;
         config) shift; cmd_app_config "$@" ;;
         list) shift; cmd_app_list "$@" ;;
         inspect) shift; cmd_app_inspect "$@" ;;

@@ -152,6 +152,9 @@ pub mod codes {
     pub const IS_AN_APP: &str = "is_an_app";
     /// S13: a change that widens the App goes through config, held.
     pub const WIDENING_HELD: &str = "widening_held";
+    /// 0.46.3: the Seed's `requires.sew` / `requires.voice` isn't met by
+    /// this box's Sew (install and deploy refuse; the hint names the fix).
+    pub const REQUIRES_UNMET: &str = "requires_unmet";
 }
 
 /// Deploy timings (§7.2, §6.3). Defaults per the PRD; `K2_APPS_*` env

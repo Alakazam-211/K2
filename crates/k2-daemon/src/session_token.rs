@@ -797,6 +797,10 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/app/box-service",
         "/cli/app/box-service/request",
         "/cli/app/box-service/revoke",
+        // K-M3 (0.46.3): the seal key's status; rotate needs switch 2
+        // (the handler refuses an agent without it).
+        "/cli/app/seal",
+        "/cli/app/seal/rotate",
         // Held requests: list own, withdraw own through deny.
         // `/cli/app/approve` is NOT here: the owner's, in person, with a
         // vault confirm.

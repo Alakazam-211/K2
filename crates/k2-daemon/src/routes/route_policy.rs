@@ -275,6 +275,11 @@ pub const ROUTES: &[Route] = &[
     post("/cli/app/rollback", Admin),
     // Room-scope R9: the owner hides guests' names in one room.
     post("/cli/app/room-names", Owner),
+    // K-M3 (0.46.3): whether an App has its seal key (never the value);
+    // rotating signs everyone out: the owner, or a passport with switch 2
+    // for its own App (handler).
+    get("/cli/app/seal", Member),
+    post("/cli/app/seal/rotate", Owner),
     // Room-scope R16: an App's self (id, live Seed, health, deploy time).
     get("/cli/app/self", Member),
     // S28 `k2 app shell` (WebSocket; same rules as exec).

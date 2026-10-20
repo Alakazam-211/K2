@@ -135,6 +135,10 @@ dep_out="$("$K2" study app-deploys)"
 for needle in "BOX SERVICES" "K2_BOX_SEW_API=127.0.0.1:8470" "k2 app box-service revoke" "5432 (Postgres)"; do
     assert_contains "app-deploys names $needle" "$dep_out" "$needle"
 done
+echo "== k2 study app-deploys: identity, seal key, requires (0.46.3) =="
+for needle in "K2_APP_NAME       the App id" "\$K2_SECRETS_DIR/K2_APP_SEAL_KEY" "k2 app seal rotate <app-id> --yes" '"requires": {"sew": ">=0.3.0", "voice": true}' "requires_unmet"; do
+    assert_contains "app-deploys names $needle" "$dep_out" "$needle"
+done
 
 echo "== k2 study app-tickets (prd-app-tickets-websocket-v1) =="
 tk_out="$("$K2" study app-tickets)"

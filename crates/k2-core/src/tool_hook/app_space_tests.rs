@@ -298,6 +298,23 @@ fn bind_rules_and_unbind_removes_what_k2_added() {
 }
 
 #[test]
+fn a_chat_grant_change_asks_for_a_sweep_once_a_space_is_bound() {
+    let _e = setup();
+    bind("hearth", SPACE);
+    let ann = person("ann");
+    app_user(&ann, "hearth");
+    let _ = hook::take_reconcile_request();
+    let c = chat(&ann, "member");
+    assert!(hook::take_reconcile_request(), "chat grant create → sweep (K31)");
+    skin::update_grant_scope(&c.id, "guest", "owner-token").unwrap();
+    assert!(hook::take_reconcile_request(), "chat grant update → sweep");
+    skin::set_grant_enabled(&c.id, false).unwrap();
+    assert!(hook::take_reconcile_request(), "chat grant disable → sweep");
+    skin::delete_grant_by_id(&c.id).unwrap();
+    assert!(hook::take_reconcile_request(), "chat grant delete → sweep");
+}
+
+#[test]
 fn the_reconcile_sweep_plans_app_spaces_too() {
     let _e = setup();
     let ann = person("ann");

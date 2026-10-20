@@ -1881,6 +1881,23 @@ pub struct LinkFailure {
     pub admin_consent_url: Option<String>,
 }
 
+/// A personal (Microsoft account / live.com) sign-in refused by an app
+/// registration that accepts only work or school accounts:
+///  - `AADSTS50059` no tenant-identifying information (a personal account
+///    against an org-only app on `common`);
+///  - `AADSTS500200` "User account is a personal Microsoft account…";
+///  - `AADSTS90072` / `AADSTS50020` when the identity provider is
+///    `live.com` (the personal-account IdP) — a guest from another org gets
+///    the same numbers without `live.com` and stays a tenant problem;
+///  - the consumer endpoint's "not enabled for consumers" (no AADSTS code).
+fn is_personal_account_refusal(text: &str) -> bool {
+    let live = text.contains("live.com") || text.contains("Microsoft Account");
+    text.contains("AADSTS50059")
+        || text.contains("AADSTS500200")
+        || text.contains("not enabled for consumers")
+        || (live && (text.contains("AADSTS90072") || text.contains("AADSTS50020")))
+}
+
 /// Map a token-endpoint / device-start error to a teaching failure. The
 /// AADSTS codes are Microsoft's stable error numbers; anything unknown
 /// keeps the provider's own text under `oauth_error`.
@@ -1922,7 +1939,19 @@ pub fn classify_link_error(provider: OauthProvider, err: &OauthError, client_id:
                 admin_consent_url: None,
             };
         }
-        if has("AADSTS700016") || has("AADSTS50020") || has("AADSTS90002") || has("AADSTS50059")
+        if is_personal_account_refusal(&text) {
+            return LinkFailure {
+                code: "personal_account_not_allowed",
+                hint: format!(
+                    "This server's Microsoft app only accepts work or school accounts. The \
+                     owner can allow personal accounts on the app registration, or use their \
+                     own app: k2 mail oauth-config set --provider microsoft --client-id <id> \
+                     --tenant consumers ({text})"
+                ),
+                admin_consent_url: None,
+            };
+        }
+        if has("AADSTS700016") || has("AADSTS50020") || has("AADSTS90002") || has("AADSTS50194")
         {
             return LinkFailure {
                 code: "client_misconfigured",

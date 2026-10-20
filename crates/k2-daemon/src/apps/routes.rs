@@ -89,6 +89,7 @@ pub fn is_route(p: &str) -> bool {
         || super::box_service_routes::ROUTES.contains(&p)
         || door_route(p)
         || super::ownership::ROUTES.contains(&p)
+        || super::seal::ROUTES.contains(&p)
 }
 
 pub fn is_post_route(p: &str) -> bool {
@@ -98,6 +99,7 @@ pub fn is_post_route(p: &str) -> bool {
         || door_post_route(p)
         // Hand over, park, unpark, release (slice D): all POST.
         || super::ownership::ROUTES.contains(&p)
+        || super::seal::POST_ROUTES.contains(&p)
 }
 
 /// The 0.46.1 door's routes (lane 2): audit, quotas, suspend/resume and
@@ -405,6 +407,8 @@ pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String
         p if super::box_service_routes::ROUTES.contains(&p) => super::box_service_routes::handle(p, &who, body, params),
         // Q8 / slice D: who maintains an App when its workspace goes.
         p if super::ownership::ROUTES.contains(&p) => super::ownership::handle(p, &who, body),
+        // K-M3 (0.46.3): the App's seal key (status; rotate: owner/switch 2).
+        p if super::seal::ROUTES.contains(&p) => super::seal::handle(p, &who, body, params),
         // S28 and the process exception.
         "/cli/app/exec" => super::exec::exec_route(&who, body),
         "/cli/app/exception" => super::exception::route(&who, body),
@@ -554,6 +558,8 @@ fn install(who: &Who, body: &[u8]) -> R<J> {
         Some(m) => deploy::parse_memory(m).map_err(|e| no(codes::BAD_REQUEST, 400, e))?,
     };
     let tunnel = b(&v, "tunnel");
+    // 0.46.3: the Seed's requires.sew / requires.voice, before anything exists.
+    super::requires::install_precheck(who, &app_id, &v)?;
     {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -1856,6 +1862,8 @@ pub(crate) fn uninstall(who: &Who, body: &[u8]) -> R<J> {
         }
         crate::session_events::emit_tunnel_subdomains_changed();
     }
+    // K-M3: the seal key's grant goes; --purge destroys the key too.
+    super::seal::forget(&app.app_id, &app.service_id, purge);
     audit_human(&app.app_id, "uninstall", who, json!({ "purge": purge }));
     if purge {
         let _ = std::fs::remove_dir_all(deploy::app_dir(&app.app_id));

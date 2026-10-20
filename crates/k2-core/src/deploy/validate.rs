@@ -321,7 +321,21 @@ fn check_contract(m: &Manifest, errors: &mut Vec<Issue>, _warnings: &mut Vec<Iss
                 Err(e) => errors.push(issue("manifest_invalid", format!("requires.k2: {e}"), Some("requires.k2".into()))),
             }
         }
+        // requires.sew / requires.voice (0.46.3): only the form here; the
+        // box's Sew is checked at install and deploy (the daemon's
+        // `apps::requires`), since validate can run off the box.
+        if let Some(range) = &req.sew {
+            if let Err(e) = range_form_ok(range) {
+                errors.push(issue("manifest_invalid", format!("requires.sew: {e}"), Some("requires.sew".into())));
+            }
+        }
     }
+}
+
+/// A range in `requires.k2`'s form (`>=0.3.0`, `>=0.3.0 <0.5.0`), checked
+/// for form only.
+pub fn range_form_ok(range: &str) -> Result<(), String> {
+    k2_range_ok(range, "0.0.0").map(|_| ())
 }
 
 fn parse_ver(s: &str) -> Option<(u64, u64, u64)> {
@@ -535,6 +549,38 @@ mod tests {
         assert!(r.ok, "{r:?}");
         assert_eq!(m.unwrap().id, "jim");
         assert_eq!(r.checks, vec!["manifest", "contract", "code"]);
+    }
+
+    /// 0.46.3: `requires.sew` must be a range in requires.k2's form and
+    /// `requires.voice` a bool; validate never asks the box (Sew may not
+    /// be installed where the App is written).
+    #[test]
+    fn requires_sew_form_is_checked_and_voice_is_a_bool() {
+        let h = TempHome::new();
+        let with = |req: &str| GOOD.replace(r#""requires":{"k2":">=0.1.0","features":["thread-latest"]}"#, req);
+        for ok in [r#""requires":{"sew":">=0.3.0","voice":true}"#, r#""requires":{"sew":">=0.2.0 <0.5.0"}"#, r#""requires":{"voice":false}"#] {
+            let (r, m) = validate_tree(&app(h.path(), &with(ok)), &Options::default());
+            assert!(r.ok, "{ok}: {r:?}");
+            assert!(m.unwrap().requires.is_some(), "{ok}");
+        }
+        for (bad, needle) in [
+            (r#""requires":{"sew":"newest"}"#, "requires.sew"),
+            (r#""requires":{"sew":""}"#, "requires.sew"),
+            (r#""requires":{"sew":">=x.y"}"#, "requires.sew"),
+        ] {
+            let (r, _) = validate_tree(&app(h.path(), &with(bad)), &Options::default());
+            assert!(!r.ok, "{bad}: {r:?}");
+            let e = r.errors.iter().find(|e| e.at.as_deref() == Some("requires.sew")).unwrap_or_else(|| panic!("{bad}: {r:?}"));
+            assert_eq!(e.code, "manifest_invalid", "{e:?}");
+            assert!(e.message.contains(needle), "{e:?}");
+        }
+        // Not a bool: a parse error with a place, never a silent default.
+        let (r, m) = validate_tree(&app(h.path(), &with(r#""requires":{"voice":"on"}"#)), &Options::default());
+        assert!(!r.ok && m.is_none(), "{r:?}");
+        assert_eq!(r.errors[0].code, "manifest_invalid", "{r:?}");
+        assert!(range_form_ok(">=0.3.0").is_ok());
+        assert!(range_form_ok("0.3").is_ok(), "a bare version means exactly it");
+        assert!(range_form_ok("^0.3.0").is_err(), "caret ranges aren't in K2's form");
     }
 
     /// vs-live 2: Seed validate runs stage 0's oxc pass too. A parse error

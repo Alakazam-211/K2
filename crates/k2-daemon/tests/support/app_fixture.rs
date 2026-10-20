@@ -164,7 +164,9 @@ pub fn passport(ws: &Ws) -> String {
 
 /// A python3 HTTP server App: `GET /` and `GET /healthz` answer 200 with
 /// `tag`; `GET /slow` holds the connection open for `secs` then answers
-/// (for drain tests); `GET /crash` exits the process. Needs python3 (the
+/// (for drain tests); `GET /crash` exits the process; `GET /env` lists
+/// the variable names, `GET /envval/<NAME>` one value (404 unset) and
+/// `GET /secret/<file>` a file in `$K2_SECRETS_DIR` (404 absent). Needs python3 (the
 /// published-service tests need it too); a missing python3 fails loudly.
 pub const SERVER_PY: &str = r#"import http.server, os, sys, time, socketserver
 TAG = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "tag.txt")).read().strip()
@@ -180,6 +182,19 @@ class H(http.server.BaseHTTPRequestHandler):
         code = 200
         if self.path == "/env":
             body = ("\n".join(sorted(os.environ.keys())) + "\n").encode()
+        elif self.path.startswith("/envval/"):
+            name = self.path[len("/envval/"):]
+            if name in os.environ:
+                body = os.environ[name].encode()
+            else:
+                code, body = 404, b"unset"
+        elif self.path.startswith("/secret/"):
+            d = os.environ.get("K2_SECRETS_DIR", "")
+            p = os.path.join(d, os.path.basename(self.path[len("/secret/"):]))
+            if d and os.path.isfile(p):
+                body = open(p, "rb").read()
+            else:
+                code, body = 404, b"absent"
         else:
             if TAG.startswith("sick") and self.path == "/healthz":
                 code = 500

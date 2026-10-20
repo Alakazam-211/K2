@@ -196,12 +196,13 @@ pub const ROUTES: &[Route] = &[
     get("/cli/app/box-service", Member),
     post("/cli/app/box-service/request", Admin),
     post("/cli/app/box-service/revoke", Admin),
+    // 0.46.3 F6: the owner's Retry of a blocked (or undone) automatic prep.
+    post("/cli/app/box/auto-prepare/retry", Owner),
     // Lane P: remove K2's Podman bundle (prepare --install-podman put it in).
     post("/cli/app/box/podman/uninstall", Owner),
     post("/cli/app/box/prepare", Owner),
-    // 0.46.3: undo box prep (F8) and Retry a blocked automatic prep (F6).
+    // 0.46.3 F8: undo box prep.
     post("/cli/app/box/unprep", Owner),
-    post("/cli/app/box/auto-prepare/retry", Owner),
     post("/cli/app/build", Admin),
     // 0.46.0 grace: clean mode on narrows (anyone, own Apps for passports);
     // off is held unless the owner turns it off.

@@ -286,12 +286,15 @@ describe('Agent tab: a local agent (the window’s room)', () => {
         body: { project: '/ws/cortana', enable: 1 },
       }),
     )
+    // "Build and run Apps" (switch 1, prd-agent-app-permissions-v1): the
+    // owner turns it on through the one writer.
+    await waitFor(() => expect(sw('projects.agents-can-manage-skin').disabled).toBe(false))
     fireEvent.click(sw('projects.agents-can-manage-skin'))
     await waitFor(() =>
       expect(cli.posts).toContainEqual({
         host: PRIMARY_HOST,
-        route: 'agents-manage-skin',
-        body: { project: '/ws/cortana', enable: 1 },
+        route: 'agent-access/set',
+        body: { workspace: '/ws/cortana', toggle: 'apps_build', value: true },
       }),
     )
   })

@@ -3,28 +3,22 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
-const src = readFileSync(
-  join(dirname(fileURLToPath(import.meta.url)), 'ProjectsSection.tsx'),
-  'utf8',
-)
+const here = dirname(fileURLToPath(import.meta.url))
+const src = readFileSync(join(here, 'ProjectsSection.tsx'), 'utf8')
+const card = readFileSync(join(here, 'AgentAppsAccess.tsx'), 'utf8')
 
-describe('Agent-tab Apps toggle', () => {
-  it('has manifest id, dedicated POST, optimistic patch, never GET /cli/users', () => {
+describe('Agent-tab Apps card (prd-agent-app-permissions-v1 slice H)', () => {
+  it('sits in the Apps group, keeps the search id, writes one route, never refetches projects', () => {
     expect(src).toContain("id: 'projects.agents-can-manage-skin'")
-    expect(src).toContain("data-settings-id=\"projects.agents-can-manage-skin\"")
     expect(src).toContain('<SettingsGroup title="Apps">')
-    expect(src).toContain('Allow this agent to manage Apps.')
+    expect(src).toContain('<AgentAppsAccess project={project} />')
+    expect(src).not.toContain('function AgentsManageSkinToggle')
     expect(src).not.toContain('<SettingsGroup title="Skin Access">')
-    const toggleStart = src.indexOf('function AgentsManageSkinToggle')
-    expect(toggleStart).toBeGreaterThan(0)
-    const toggle = src.slice(toggleStart, src.indexOf('function AgentsCreateConnectionsToggle', toggleStart))
-    expect(toggle).toContain("daemonCliPost(primaryScope(), 'agents-manage-skin'")
-    expect(toggle).toContain('enable: next ? 1 : 0')
-    expect(toggle).toContain('noteOptimisticProjectsMutationSuccess()')
-    expect(toggle).not.toContain('fetchProjects(')
-    expect(toggle).not.toContain("daemonCliGet(primaryScope(), 'users'")
-    expect(toggle).not.toContain("daemonCliGet(primaryScope(), 'skin/users'")
-    expect(toggle).not.toContain('/cli/users')
-    expect(toggle).not.toContain('workspace/set')
+    expect(card).toContain('settingsId="projects.agents-can-manage-skin"')
+    expect(card).toContain('noteOptimisticProjectsMutationSuccess()')
+    expect(card).not.toContain('fetchProjects(')
+    expect(card).not.toContain("'agents-manage-skin'")
+    expect(card).not.toContain('/cli/users')
+    expect(card).not.toContain('workspace/set')
   })
 })

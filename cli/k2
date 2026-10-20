@@ -36828,11 +36828,16 @@ cmd_schema() {
       "args": [{"name": "group", "required": true}],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
     },
-    {"name": "hostchat", "usage": "k2 hostchat <status|preflight|enable|disable|upgrade|rollback|backup|backups|restore|doctor|rotate-master|config|uninstall|purge|recovery-key|job|media|users|people|approvals|agents|act-as|log> ...", "description": "The Sew chat (and voice) server on this box, over /cli/sew/*. Owner/admin, or an agent whose workspace has Manage Sew (k2 agent access set <ws> chat_manage on, owner/admin only). purge, recovery-key and rotate-master --drop-prev are person-only (a vault confirm from a terminal outside K2; purge is the owner's, the other two the owner's or an admin's). Linux boxes only. Exit 2 = bad request, 3 = refused or infra.", "args": [], "flags": [{"name": "--json", "arg": null, "description": "Raw JSON output (any subcommand)."}]},
+    {"name": "hostchat", "usage": "k2 hostchat <status|preflight|enable|disable|upgrade|rollback|backup|backups|restore|doctor|rotate-master|config|app-url|ship|mirror|app-spaces|app-space|uninstall|purge|recovery-key|open|job|media|users|people|approvals|agents|act-as|log> ...", "description": "The Sew chat (and voice) server on this box, over /cli/sew/*. Owner/admin, or an agent whose workspace has Manage Sew (k2 agent access set <ws> chat_manage on, owner/admin only). purge, recovery-key and rotate-master --drop-prev are person-only (a vault confirm from a terminal outside K2; purge is the owner's, the other two the owner's or an admin's). Linux boxes only. Exit 2 = bad request, 3 = refused or infra.", "args": [], "flags": [{"name": "--json", "arg": null, "description": "Raw JSON output (any subcommand)."}]},
     {"name": "hostchat enable", "usage": "k2 hostchat enable [--tarball FILE] [--recovery-key-file FILE] [--identity k2|standalone] [--voice [--voice-url wss://HOST] [--media-tarball FILE] [--node-ip IP]] [--no-wait] [--json]", "description": "Install and start Sew (POST /cli/sew/server/enable), then wait on GET /cli/sew/status. --identity is fixed for the life of the install (default k2; standalone = Sew's own password logins); changing it means k2 hostchat purge then enable. --voice also installs voice once chat runs (TURN over TLS on 5349 with a turn-<label>.k2.dev certificate from K2 Connect).", "args": [], "flags": [{"name": "--identity", "arg": "k2|standalone", "description": "Identity provider (explicit; fixed per install)."}, {"name": "--voice-url", "arg": "wss://HOST", "description": "voice.public_url: an origin on this box's k2.dev label or a bound custom domain (e.g. an App that proxies /rtc). Default wss://voice.<label>.k2.dev."}, {"name": "--media-tarball", "arg": "FILE", "description": "The sew-media release tarball (sha256 must be this build's pin)."}, {"name": "--no-wait", "arg": null, "description": "Return once the install started."}]},
     {"name": "hostchat media", "usage": "k2 hostchat media <preflight|install|url|status|renew|probe|uninstall> ...", "description": "Voice: preflight (ports TCP 7881, UDP 7882, TCP 5349, loopback 7880), install [--url wss://HOST] [--node-ip IP] [--tarball FILE] (the URL goes to sew media install), url <wss://HOST> (change voice.public_url later: re-runs sew media install --reconfigure with the new URL, then restarts sew), status, renew (the TURN certificate), probe --udp ok|fail --tcp ok|fail --turn-tls ok|fail (record a call test from outside), uninstall [--yes] (live calls end: asks on a terminal, needs --yes without one; Sew's voice already gone still cleans up K2's TURN DNS, label and key). K2 opens no firewall.", "args": [], "flags": [{"name": "--yes", "arg": null, "description": "uninstall only: confirm without a prompt (required with no terminal). Also -y."}]},
     {"name": "hostchat users", "usage": "k2 hostchat users <list|owner|invite|reset|revoke|reactivate|role> [<name|email>] [--display-name NAME] [--role member|admin|guest] [--email EMAIL]", "description": "Sew's own users on a standalone install (refused with provider_is_k2 on a K2-identity install). owner = the first install owner; invite/reset print a one-time setup link to stdout only (24 h). Names and emails become Sew handles ([a-z0-9_-]{2,64}).", "args": [], "flags": []},
     {"name": "hostchat config", "usage": "k2 hostchat config [set approvals.by people|people+agents] [set default_space <space>|none] | config --public-url https://HOST [--json]", "description": "No arguments: every key, its value and allowed values. set approvals.by: who may approve queued chat posts (people, or people+agents with Manage Sew). set default_space: the Space whose chat access governs DMs outside every Space (a person sets it; none clears). --public-url: set Sew's server.public_url to a host on this box (its k2.dev label or a bound custom domain), then restart sew. Sew builds password setup links as <public-url>/setup. Until it is set, k2 hostchat status (and enable) warn public_url_unset with this fix. The voice URL is not set here: k2 hostchat media url.", "args": [], "flags": []},
+    {"name": "hostchat app-url", "usage": "k2 hostchat app-url set https://HOST[/path] | clear | show [--json]", "description": "Where the owner's Sew web app lives (POST /cli/sew/server/app-url; https, or http://127.0.0.1|localhost for development; no query or fragment). k2 hostchat open and Settings → Chat Hosting → Open Sew as owner go there. Manage Sew.", "args": [], "flags": []},
+    {"name": "hostchat ship", "usage": "k2 hostchat ship dir <path> | none [--json]", "description": "Off-box backup copies (POST /cli/sew/server/ship): dir = a folder on ANOTHER disk you mounted (NFS, SMB, sshfs, a replicated volume); every new Sew bundle is copied to <path>/<install id>/ and the newest 7 kept. Refused: system folders, /var/lib/sew, ~/.k2, the same disk as Sew's data. none = backups stay on this box (audited; alarm k2_backup_offbox_none). A failed copy raises k2_backup_not_shipped. Manage Sew.", "args": [], "flags": []},
+    {"name": "hostchat mirror", "usage": "k2 hostchat mirror dir <path> | none [--json]", "description": "Sew's keyring mirror (POST /cli/sew/server/mirror → engine sew config keys.mirror.*, then a restart). Never the K2 vault, ~/.k2 or a system path. Manage Sew.", "args": [], "flags": []},
+    {"name": "hostchat app-space", "usage": "k2 hostchat app-spaces [--json] | k2 hostchat app-space bind|unbind <app-id> <space-id> [--json]", "description": "Which Sew Space belongs to which App (K31; GET /cli/sew/app-spaces, POST /cli/sew/app-spaces/{bind,unbind}). Members come ONLY from that App's user grants (an App grant plus a Sew member grant); Connect owners and admins are never added by role. bind binds Sew's side first; unbind removes the members K2 added. Manage Sew.", "args": [], "flags": []},
+    {"name": "hostchat open", "usage": "k2 hostchat open [--print]", "description": "Open Sew's web app as its install owner: a person confirms (Touch ID or the vault password, from a terminal outside K2), K2 mints a one-time 60 s code (POST /cli/sew/owner-handoff) and opens <app-url>/k2/owner-handoff#code=… (the code rides in the fragment). --print prints the link instead. Needs k2 hostchat app-url set first. Agents never get install-owner.", "args": [], "flags": [{"name": "--print", "arg": null, "description": "Print the link instead of opening it."}]},
     {"name": "hostchat meet", "usage": "k2 hostchat meet bind <app-id> | unbind [--json]", "description": "The reserved meet.<box>.k2.dev label (K-M2): bind points it at an installed App's front port, box-level with the tunnel token (K2 Connect needed; one App at a time; POST /cli/sew/meet/bind). Restart the App once so K2_APP_ORIGINS includes it. unbind deletes the label. Manage Sew.", "args": [], "flags": []},
     {"name": "hostchat people", "usage": "k2 hostchat people list | add <user> [--guest] | set <user> --guest on|off | remove <user> [--json]", "description": "K2 users (App users or Connect logins) who can use Sew on this box: a chat grant (member, or guest = only invited channels). GET/POST /cli/sew/admin/people*. Spaces add people separately; App Spaces take members from k2 app grant. Manage Sew or owner/admin.", "args": [], "flags": []},
     {"name": "hostchat approvals", "usage": "k2 hostchat approvals [list] [--workspace W] | approve <out_…> [<out_…>…] [--note \"…\"] | deny <out_…> --note \"…\" [--json]", "description": "Every agent's queued chat posts. approve needs a person confirm (Touch ID or the vault password, from a terminal outside K2) unless approvals.by = people+agents and the caller is an agent with Manage Sew (labelled as an agent's approval). Nobody approves their own post, and a person never approves a post made as them. deny needs a note; the agent sees it.", "args": [], "flags": []},
@@ -56539,11 +56544,26 @@ Server:
          Until it is set, status (and enable) warn with this fix.
   k2 hostchat uninstall [--drop-grants] [--json]          (data, keys, backups kept)
   k2 hostchat job <id> [--json]
+  k2 hostchat app-url set https://HOST[/path] | clear | show [--json]
+         where the owner's Sew web app lives (k2 hostchat open goes there)
+Off-box copies (a folder on ANOTHER disk you mounted: NFS, SMB, sshfs, a replicated volume):
+  k2 hostchat ship dir <path> | none [--json]
+         backup bundles: each new one is copied there (the newest 7 kept).
+         none = backups stay on this box only (alarm k2_backup_offbox_none).
+  k2 hostchat mirror dir <path> | none [--json]
+         Sew's keyring mirror (restarts Sew). Never the K2 vault or ~/.k2.
+App Spaces (members come ONLY from each App's user grants: k2 app grant):
+  k2 hostchat app-spaces [--json]
+  k2 hostchat app-space bind <app-id> <space-id> [--json]
+  k2 hostchat app-space unbind <app-id> <space-id> [--json]   (the members K2 added there leave)
 Person only (outside K2, with Touch ID / your login / the vault password):
   k2 hostchat purge --confirm-hostname HOST [--keep-backups]    (the owner; HOST = purgeConfirmHostname
                                             in status: Sew's public host, else the box hostname)
   k2 hostchat recovery-key                  (the owner or an admin)
   k2 hostchat rotate-master --drop-prev     (the owner or an admin)
+  k2 hostchat open [--print]                (the owner)
+         a one-time 60 s link to Sew's web app as its install owner. You
+         confirm first; --print prints the link instead of opening it.
 
 Voice (sew-media, TURN over TLS on 5349, WebRTC DTLS-SRTP):
   k2 hostchat media preflight [--json]
@@ -56642,6 +56662,17 @@ if verb in ("status",):
     line("version", v.get("installedVersion") or ("pin " + str(v.get("pinnedVersion"))))
     line("install id", v.get("installId"))
     line("public URL", v.get("publicUrl"))
+    line("app URL", v.get("appUrl"))
+    if v.get("owner") not in (None, "none"):
+        line("owner in Sew", v.get("owner"))
+    sh = (v.get("backup") or {}).get("ship") or {}
+    if sh.get("kind"):
+        line("off-box copy", sh.get("path") if sh.get("kind") == "dir" else "none (backups stay on this box)")
+        line("last copied", sh.get("lastShippedId"))
+        line("copy error", sh.get("lastError"))
+    mi = v.get("mirror") or {}
+    if mi.get("kind"):
+        line("key mirror", mi.get("path") if mi.get("kind") == "dir" else "none")
     mt = v.get("meet") or {}
     if mt.get("app"):
         line("meet", "%s → App %s" % (mt.get("url"), mt.get("app")))
@@ -56685,6 +56716,15 @@ elif verb == "users-list":
     for u in rows:
         print("%-24s %-8s %-6s %s%s" % (u.get("username") or u.get("externalId"), u.get("installRole"), u.get("kind"),
               u.get("displayName") or "", "  (deactivated)" if u.get("deactivated") else ""))
+elif verb == "app-spaces":
+    rows = v.get("spaces") or []
+    if not rows:
+        print("(no App Spaces bound)")
+    for r in rows:
+        m = r.get("members") or {}
+        print("%-24s %-28s added %s, held %s, pending %s" % (r.get("appId"), r.get("spaceId"), m.get("added", 0), m.get("held", 0), m.get("pending", 0)))
+    if v.get("note"):
+        print(v["note"], file=sys.stderr)
 elif verb == "recovery-key":
     print(v.get("recoveryKey") or v.get("key") or "")
     if v.get("warning"):
@@ -56834,6 +56874,7 @@ cmd_hostchat() {
         approvals|approval) _hostchat_approvals "$@"; return ;;
         act-as) _hostchat_act_as "$@"; return ;;
         log) _hostchat_log "$@"; return ;;
+        app-space|app-spaces) _hostchat_app_space "$sub" "$@"; return ;;
         agents|agent)
             # Alias of `k2 chat access …` (no sub = the box-wide list).
             local _a="${1:-list}"; [ $# -gt 0 ] && shift
@@ -56841,7 +56882,7 @@ cmd_hostchat() {
             cmd_chat access "$_a" "$@"; return ;;
     esac
     local as_json=0 tarball="" recovery="" identity="" voice=0 voice_flag=0 voice_url="" media_tarball="" node_ip="" wait=1
-    local health=0 dry=0 confirm=0 drop_grants=0 drop_prev=0 keep_backups=0 host="" public_url="" accept_binary="" pos=()
+    local health=0 dry=0 confirm=0 drop_grants=0 drop_prev=0 keep_backups=0 host="" public_url="" accept_binary="" print_only=0 pos=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) as_json=1; shift ;;
@@ -56862,6 +56903,7 @@ cmd_hostchat() {
             --keep-backups) keep_backups=1; shift ;;
             --confirm-hostname) host="${2:?--confirm-hostname HOST}"; shift 2 ;;
             --public-url) public_url="${2:?--public-url https://HOST}"; shift 2 ;;
+            --print) print_only=1; shift ;;
             --setup-url)
                 echo '{"error":"usage","hint":"Sew builds setup links as <public-url>/setup: k2 hostchat config --public-url https://HOST"}' >&2
                 exit 2 ;;
@@ -57020,6 +57062,63 @@ print("%-20s %-14s %s" % ("server.public_url", "(see status)", "https://HOST on 
             local dg=0; [ "$drop_grants" = "1" ] && dg=1
             _hostchat_call POST /cli/sew/server/uninstall "$(_compute_json K2_CJ_dropGrants_b="$dg")"
             _hostchat_print uninstall "$as_json" ;;
+        app-url)
+            case "${pos[0]:-show}" in
+                show) _hostchat_call GET /cli/sew/status ""
+                    if [ "$as_json" = "1" ]; then
+                        printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print(json.dumps({"appUrl": json.load(sys.stdin).get("appUrl")}))'
+                    else
+                        local u; u="$(_hostchat_field appUrl)"; echo "${u:-(not set)}"
+                    fi ;;
+                set)
+                    [ -n "${pos[1]:-}" ] || { echo '{"error":"usage","hint":"k2 hostchat app-url set https://HOST[/path]"}' >&2; exit 2; }
+                    _hostchat_call POST /cli/sew/server/app-url "$(_compute_json K2_CJ_url="${pos[1]}")"
+                    _hostchat_print app-url "$as_json" ;;
+                clear)
+                    _hostchat_call POST /cli/sew/server/app-url '{"url":""}'
+                    _hostchat_print app-url "$as_json" ;;
+                *) echo '{"error":"usage","hint":"k2 hostchat app-url set <url> | clear | show"}' >&2; exit 2 ;;
+            esac ;;
+        ship|mirror)
+            local route="/cli/sew/server/$sub"
+            case "${pos[0]:-}" in
+                none) _hostchat_call POST "$route" '{"kind":"none"}' ;;
+                dir)
+                    [ -n "${pos[1]:-}" ] || { echo "{\"error\":\"usage\",\"hint\":\"k2 hostchat $sub dir <path> (a folder on another disk)\"}" >&2; exit 2; }
+                    _hostchat_call POST "$route" "$(_compute_json K2_CJ_kind=dir K2_CJ_path="$(abs "${pos[1]}")")" ;;
+                *) echo "{\"error\":\"usage\",\"hint\":\"k2 hostchat $sub dir <path> | none\"}" >&2; exit 2 ;;
+            esac
+            _hostchat_print "$sub" "$as_json" ;;
+        open)
+            _hostchat_person
+            _hostchat_call GET /cli/sew/status ""
+            local app_url; app_url="$(_hostchat_field appUrl)"
+            [ -n "$app_url" ] || { echo '{"error":"app_url_unset","hint":"set where the Sew web app lives first: k2 hostchat app-url set https://HOST"}' >&2; exit 3; }
+            local tok; tok="$(_vault_confirm_token chat-owner-handoff "" "Open Sew as its owner")" || exit 3
+            _hostchat_call POST /cli/sew/owner-handoff "$(_compute_json K2_CJ_confirmToken="$tok")" tcp
+            tok=""
+            local link
+            link="$(printf '%s' "$_CP_BODY" | K2_HC_APP="$app_url" python3 -c '
+import json, os, sys
+code = json.load(sys.stdin).get("code") or ""
+if not code.startswith("k2sho_"):
+    sys.exit(3)
+# The code rides in the fragment: never in a server log or a Referer.
+print(os.environ["K2_HC_APP"].rstrip("/") + "/k2/owner-handoff#code=" + code)
+')" || { echo '{"error":"no_code","hint":"K2 did not return a handoff code"}' >&2; exit 3; }
+            if [ "$print_only" = "1" ]; then
+                printf '%s\n' "$link"
+            elif [ "$(uname -s)" = "Darwin" ] && command -v open >/dev/null 2>&1; then
+                open "$link" || exit 3
+                echo "Opened Sew as its owner (the link works once, for 60 s)." >&2
+            elif command -v xdg-open >/dev/null 2>&1; then
+                xdg-open "$link" >/dev/null 2>&1 || exit 3
+                echo "Opened Sew as its owner (the link works once, for 60 s)." >&2
+            else
+                echo '{"error":"no_opener","hint":"no browser opener here: k2 hostchat open --print, then open the link within 60 s"}' >&2
+                exit 3
+            fi
+            link="" ;;
         purge)
             [ -n "$host" ] || { echo '{"error":"usage","hint":"k2 hostchat purge --confirm-hostname HOST (k2 hostchat status shows it)"}' >&2; exit 2; }
             _hostchat_person
@@ -57031,6 +57130,36 @@ print("%-20s %-14s %s" % ("server.public_url", "(see status)", "https://HOST on 
         *)
             echo "{\"error\":\"usage\",\"hint\":\"unknown hostchat command '$sub' (k2 hostchat --help)\"}" >&2
             exit 2 ;;
+    esac
+}
+
+# k2 hostchat app-spaces | app-space bind|unbind <app-id> <space-id> (K31):
+# which Sew Space belongs to which App. Members come only from that App's
+# user grants; Admin Access (Connect owners/admins) never adds anyone.
+_hostchat_app_space() {
+    local noun="$1"; shift
+    local sub="${1:-}"
+    case "$sub" in
+        bind|unbind|list) shift ;;
+        *) sub="list" ;;
+    esac
+    local as_json=0 pos=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=1; shift ;;
+            -h|--help) _hostchat_usage; return 0 ;;
+            -*) echo "{\"error\":\"usage\",\"hint\":\"unknown flag $1 (k2 hostchat app-space bind|unbind <app-id> <space-id>)\"}" >&2; exit 2 ;;
+            *) pos+=("$1"); shift ;;
+        esac
+    done
+    case "$sub" in
+        list)
+            _hostchat_call GET /cli/sew/app-spaces ""
+            _hostchat_print app-spaces "$as_json" ;;
+        bind|unbind)
+            [ -n "${pos[0]:-}" ] && [ -n "${pos[1]:-}" ] || { echo "{\"error\":\"usage\",\"hint\":\"k2 hostchat $noun $sub <app-id> <space-id>\"}" >&2; exit 2; }
+            _hostchat_call POST "/cli/sew/app-spaces/$sub" "$(_compute_json K2_CJ_app="${pos[0]}" K2_CJ_spaceId="${pos[1]}")"
+            _hostchat_print "app-space-$sub" "$as_json" ;;
     esac
 }
 

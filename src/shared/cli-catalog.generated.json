@@ -1065,7 +1065,7 @@
    },
    {
     "name": "hostchat",
-    "usage": "k2 hostchat <status|preflight|enable|disable|upgrade|rollback|backup|backups|restore|doctor|rotate-master|config|uninstall|purge|recovery-key|job|media|users|people|approvals|agents|act-as|log> ...",
+    "usage": "k2 hostchat <status|preflight|enable|disable|upgrade|rollback|backup|backups|restore|doctor|rotate-master|config|app-url|ship|mirror|app-spaces|app-space|uninstall|purge|recovery-key|open|job|media|users|people|approvals|agents|act-as|log> ...",
     "description": "The Sew chat (and voice) server on this box, over /cli/sew/*. Owner/admin, or an agent whose workspace has Manage Sew (k2 agent access set <ws> chat_manage on, owner/admin only). purge, recovery-key and rotate-master --drop-prev are person-only (a vault confirm from a terminal outside K2; purge is the owner's, the other two the owner's or an admin's). Linux boxes only. Exit 2 = bad request, 3 = refused or infra."
    },
    {
@@ -1087,6 +1087,31 @@
     "name": "hostchat config",
     "usage": "k2 hostchat config [set approvals.by people|people+agents] [set default_space <space>|none] | config --public-url https://HOST [--json]",
     "description": "No arguments: every key, its value and allowed values. set approvals.by: who may approve queued chat posts (people, or people+agents with Manage Sew). set default_space: the Space whose chat access governs DMs outside every Space (a person sets it; none clears). --public-url: set Sew's server.public_url to a host on this box (its k2.dev label or a bound custom domain), then restart sew. Sew builds password setup links as <public-url>/setup. Until it is set, k2 hostchat status (and enable) warn public_url_unset with this fix. The voice URL is not set here: k2 hostchat media url."
+   },
+   {
+    "name": "hostchat app-url",
+    "usage": "k2 hostchat app-url set https://HOST[/path] | clear | show [--json]",
+    "description": "Where the owner's Sew web app lives (POST /cli/sew/server/app-url; https, or http://127.0.0.1|localhost for development; no query or fragment). k2 hostchat open and Settings → Chat Hosting → Open Sew as owner go there. Manage Sew."
+   },
+   {
+    "name": "hostchat ship",
+    "usage": "k2 hostchat ship dir <path> | none [--json]",
+    "description": "Off-box backup copies (POST /cli/sew/server/ship): dir = a folder on ANOTHER disk you mounted (NFS, SMB, sshfs, a replicated volume); every new Sew bundle is copied to <path>/<install id>/ and the newest 7 kept. Refused: system folders, /var/lib/sew, ~/.k2, the same disk as Sew's data. none = backups stay on this box (audited; alarm k2_backup_offbox_none). A failed copy raises k2_backup_not_shipped. Manage Sew."
+   },
+   {
+    "name": "hostchat mirror",
+    "usage": "k2 hostchat mirror dir <path> | none [--json]",
+    "description": "Sew's keyring mirror (POST /cli/sew/server/mirror → engine sew config keys.mirror.*, then a restart). Never the K2 vault, ~/.k2 or a system path. Manage Sew."
+   },
+   {
+    "name": "hostchat app-space",
+    "usage": "k2 hostchat app-spaces [--json] | k2 hostchat app-space bind|unbind <app-id> <space-id> [--json]",
+    "description": "Which Sew Space belongs to which App (K31; GET /cli/sew/app-spaces, POST /cli/sew/app-spaces/{bind,unbind}). Members come ONLY from that App's user grants (an App grant plus a Sew member grant); Connect owners and admins are never added by role. bind binds Sew's side first; unbind removes the members K2 added. Manage Sew."
+   },
+   {
+    "name": "hostchat open",
+    "usage": "k2 hostchat open [--print]",
+    "description": "Open Sew's web app as its install owner: a person confirms (Touch ID or the vault password, from a terminal outside K2), K2 mints a one-time 60 s code (POST /cli/sew/owner-handoff) and opens <app-url>/k2/owner-handoff#code=… (the code rides in the fragment). --print prints the link instead. Needs k2 hostchat app-url set first. Agents never get install-owner."
    },
    {
     "name": "hostchat meet",

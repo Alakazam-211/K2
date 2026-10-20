@@ -157,7 +157,13 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// v28 = k2:kanban@4 (0.46.3 Thread parity): the Kanban's Thread panel shows
 /// a message's files and pictures, links workspace paths and takes files
 /// with + ; a synced Kanban Garden moves to @4, an own copy keeps its board.
-pub const SKILL_VERSION_ZEN: u32 = 28;
+/// v29 = Garden gaps (0.46.3): a folder put without the switch is ONE
+/// proposal for the whole folder; a `k2.sources.subscribe(address, cb,
+/// onError?)` K2 refused for a retryable reason subscribes again by itself;
+/// frames follow the Garden's light/dark (manifest `colorScheme: "own"`
+/// opts out); an agent's change to the person's widget sends a "Keep as
+/// mine" card on the person's Thread with that agent (inbox note without one).
+pub const SKILL_VERSION_ZEN: u32 = 29;
 /// Bumped to 5 in 0.39.0: same Phase 2.1 A25 verb refresh applied to
 /// the workspace-root template body (Cli tools section, workflow
 /// docs). Was 4 since 0.32.7 (SOURCE sub-regions adoption).

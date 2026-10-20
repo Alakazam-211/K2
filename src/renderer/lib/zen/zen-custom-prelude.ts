@@ -63,7 +63,14 @@ export function zenFrameThemeCss(theme: ZenFrameTheme): string {
     const val = safeCssValue(String(v))
     if (val !== null) lines.push(`${k}:${val};`)
   }
-  return `<style data-k2-theme="">:root{${lines.join('')}color-scheme:${theme.scheme};background:transparent;}html,body{background:transparent;}</style>`
+  // The Garden's scheme wins over the widget's own (0.46.3): a widget
+  // stylesheet's `color-scheme: light dark` (K2's card kits, @1 and @2) let
+  // the OS pick, so a dark Garden on a Mac in Light mode painted its cards
+  // white. `!important` beats any widget rule without changing a widget
+  // file (hashes, versions and own copies stay as they are); the runtime
+  // keeps it in step on a theme switch.
+  const scheme = theme.scheme === 'dark' ? 'dark' : 'light'
+  return `<style data-k2-theme="">:root{${lines.join('')}color-scheme:${scheme}!important;background:transparent;}html,body{background:transparent;}</style>`
 }
 
 /** Everything K2 puts after the CSP meta (see the file comment). */

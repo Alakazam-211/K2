@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { FileLinkProvider, scopeFileLinkTransport, type FileLinkOpen } from '@/components/common/file-links'
 import { findThreadAttachment, openThreadAttachment, openThreadFileLink } from '@/lib/thread-file-link-open'
 import { ThreadFileActionsProvider, type ThreadFileActions } from '@/components/Thread/ThreadFileObjects'
+import { ThreadAttachmentSourceProvider, type ThreadAttachmentSource } from '@/components/Thread/ThreadImageObjects'
 import { useIsTabVisible } from '@/contexts/TabVisibilityContext'
 import { formatRelativeTime } from '@/lib/format-relative-time'
 import { isEffectivelyHidden } from '@/lib/workspace-switch-focus'
@@ -120,6 +121,9 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
     }),
     [room, fileLinkTransport, addr],
   )
+  // Image attachments (thread-images-v1) read their pictures from the
+  // room's own server, by this Thread's address.
+  const attachmentSource = useMemo<ThreadAttachmentSource>(() => ({ scope: roomScope, addr }), [roomScope, addr])
   // A Thread is shared: "You" only on this viewer's own posts.
   // One object per viewer (the guess before the server answers is a new
   // object each read; the memoized rows compare it by identity).
@@ -341,6 +345,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
             <div className="max-w-[40ch]">{zenEmptyThreadText(agentName?.trim() || 'the agent')}</div>
           </div>
         )}
+        <ThreadAttachmentSourceProvider value={attachmentSource}>
         <ThreadFileActionsProvider value={fileActions}>
         <FileLinkProvider workspace={addr} transport={fileLinkTransport} open={openFileLink}>
           {/* Narrow (< 480px): bubbles use the column (ThreadColumn). */}
@@ -373,6 +378,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
           </ThreadMessageColumn>
         </FileLinkProvider>
         </ThreadFileActionsProvider>
+        </ThreadAttachmentSourceProvider>
       </div>
       {/* TW12: live only, never stored (TW13). With a message box the
           column draws it on the box's top edge (`onTurn`). */}

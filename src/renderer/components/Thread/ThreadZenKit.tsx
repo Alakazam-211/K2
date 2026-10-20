@@ -478,7 +478,7 @@ export const ThreadBubble = memo(function ThreadBubble({
           </div>
         )}
       </div>}
-      <ThreadFileObjects files={files} mine={mine} />
+      <ThreadFileObjects files={files} mine={mine} docId={item.id} />
       <span
         data-zen-message-meta=""
         style={{

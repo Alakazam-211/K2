@@ -19,8 +19,32 @@
 // Thread opens a file tab at the line; Option/Alt-click opens it in the
 // background, and the tooltip says so). Without one (Zen, Home) the chips
 // show but don't open.
+//
+// Images (S3, 0.46.3, daemon feature `thread-images-v1`): an image
+// attachment that is `ok` or `changed` draws as the picture itself, a card
+// up to 240 px wide (aspect kept, the chip's rounding) with the name and
+// size muted under it; several wrap in a grid. The picture is the daemon's
+// thumbnail (`lib/thread-image-thumbs`, read through the Thread's own
+// server, cached), fetched when the card nears the viewport, and drawn
+// only through `<img src>`. While it loads: a skeleton with the name. No
+// thumbnail (415, any error): today's chip. `hidden` and `gone` stay chips
+// and never fetch. A click opens the file tab where the provider exists,
+// else the full-size viewer (`ThreadImageLightbox`). Without the feature
+// or without a `ThreadAttachmentSourceProvider` (a ticket, the project
+// chat): chips only.
 
-import { createContext, useContext, useState, type CSSProperties, type JSX, type MouseEvent, type ReactNode } from 'react'
+import {
+  createContext,
+  useContext,
+  useMemo,
+  useRef,
+  useState,
+  useEffect,
+  type CSSProperties,
+  type JSX,
+  type MouseEvent,
+  type ReactNode,
+} from 'react'
 import type { ThreadFileObject } from '@/components/SessionView/overlayThread'
 import { isMacPlatform } from '@/lib/desktop-chrome'
 import {
@@ -32,8 +56,22 @@ import {
 } from '@/lib/file-open-modifier'
 import { SetiFileIcon } from '@/lib/seti-file-icons/SetiFileIcon'
 import { ZEN_SOLID_PROPS } from '@/lib/zen/zen-materials'
+import {
+  isThreadImageFile,
+  loadThreadThumb,
+  peekThreadThumb,
+  threadThumbKey,
+  type ThreadImage,
+  type ThreadImageRef,
+} from '@/lib/thread-image-thumbs'
 import { chamferCutFor, chamferVars } from './chamfer'
 import { useThreadColumnNarrow } from './ThreadColumn'
+import {
+  ThreadImageLightbox,
+  useNearViewport,
+  useThreadAttachmentSource,
+  type ThreadAttachmentSource,
+} from './ThreadImageObjects'
 
 /** Three or more files draw as a list card. */
 export const FILE_LIST_CARD_AT = 3
@@ -309,20 +347,212 @@ export function ThreadFileListCard({ files }: { files: ThreadFileObject[] }): JS
   )
 }
 
-/** A message's file objects, on the message's side. */
-export function ThreadFileObjects({ files, mine }: { files: ThreadFileObject[] | null | undefined; mine: boolean }): JSX.Element | null {
-  const list = (files ?? []).filter((f) => f && typeof f === 'object')
-  if (list.length === 0) return null
+/** Image card widths: one picture, or each of several in the grid. */
+export const THREAD_IMAGE_CARD_PX = 240
+export const THREAD_IMAGE_GRID_PX = 160
+
+/** An image attachment that draws as a picture: a name and path to show,
+ *  and a live file (`ok` or `changed`). `hidden` / `gone` stay chips. */
+export function threadImageDrawable(f: ThreadFileObject): boolean {
+  if (isHidden(f)) return false
+  const state = f.state ?? 'ok'
+  return (state === 'ok' || state === 'changed') && isThreadImageFile(f)
+}
+
+/** One image attachment as its picture (S3). Falls back to the chip when
+ *  the server has no thumbnail for it. */
+export function ThreadImageCard({
+  file,
+  source,
+  docId,
+  n,
+  width,
+}: {
+  file: ThreadFileObject
+  source: ThreadAttachmentSource
+  docId: string
+  /** The attachment's index on the message (the daemon's `n`). */
+  n: number
+  width: number
+}): JSX.Element {
+  const actions = useContext(ThreadFileActionsContext)
+  const imageRef = useMemo<ThreadImageRef>(
+    () => ({ scope: source.scope, addr: source.addr, docId, n, modifiedAt: file.modifiedAt }),
+    [source.scope, source.addr, docId, n, file.modifiedAt],
+  )
+  const [img, setImg] = useState<ThreadImage | null>(() => peekThreadThumb(imageRef))
+  const [failed, setFailed] = useState(false)
+  const [viewing, setViewing] = useState(false)
+  const boxRef = useRef<HTMLDivElement>(null)
+  const near = useNearViewport(boxRef)
+  useEffect(() => {
+    if (img || failed || !near) return
+    let live = true
+    loadThreadThumb(imageRef).then(
+      (got) => {
+        if (live) setImg(got)
+      },
+      (err: unknown) => {
+        if (!live) return
+        // 415 (no thumbnail for this type, or no converter on this box) is
+        // expected; anything else earns a console line. Either way: the chip.
+        if ((err as { status?: unknown })?.status !== 415) console.warn('[thread] image thumbnail failed:', err)
+        setFailed(true)
+      },
+    )
+    return () => {
+      live = false
+    }
+  }, [img, failed, near, imageRef])
+
+  if (failed) return <ThreadFileChip file={file} />
+
+  const changed = file.state === 'changed'
+  const name = file.name ?? ''
+  const aspect = img?.width && img?.height ? `${img.width} / ${img.height}` : undefined
+  const canOpenTab = !!actions
+  const isMac = isMacPlatform()
+  const where = `${file.path}${fileLineLabel(file)}`
+  const open = canOpenTab
+    ? openHandlers((opts) => actions!.open(file, opts))
+    : { onClick: () => setViewing(true) }
+  return (
+    <div
+      ref={boxRef}
+      data-thread-image={file.path}
+      data-state={file.state ?? 'ok'}
+      data-thread-image-loading={img ? undefined : ''}
+      data-chamfer=""
+      {...ZEN_SOLID_PROPS}
+      style={{
+        width,
+        maxWidth: '100%',
+        minWidth: 0,
+        borderRadius: 'calc(var(--zen-radius, 12px) * 0.75)',
+        border: '1px solid var(--zen-border)',
+        background: 'var(--zen-surface-raised)',
+        color: 'var(--zen-text)',
+        overflow: 'hidden',
+        ...chamferVars({ cut: chamferCutFor(30), fill: 'var(--zen-surface-raised)', edge: 'var(--zen-border)', border: 1 }),
+      }}
+    >
+      <button
+        type="button"
+        data-thread-image-open=""
+        title={canOpenTab ? fileOpenTooltip(where, isMac) : name}
+        aria-label={`${canOpenTab ? 'Open' : 'View'} ${name}${changed ? ' (changed since sent)' : ''}${canOpenTab ? `. ${fileOpenAriaHint(isMac)}` : ''}`}
+        {...open}
+        style={{
+          display: 'block',
+          width: '100%',
+          padding: 0,
+          border: 'none',
+          background: 'transparent',
+          cursor: canOpenTab ? 'pointer' : 'zoom-in',
+          font: 'inherit',
+          color: 'inherit',
+        }}
+      >
+        {img ? (
+          <img
+            src={img.url}
+            alt={name}
+            draggable={false}
+            style={{ display: 'block', width: '100%', height: 'auto', aspectRatio: aspect, objectFit: 'contain', background: 'var(--zen-surface)' }}
+          />
+        ) : (
+          <span
+            data-thread-image-skeleton=""
+            className="flex items-center justify-center"
+            style={{
+              height: width >= THREAD_IMAGE_CARD_PX ? 140 : 100,
+              padding: '0 10px',
+              background: 'var(--zen-surface)',
+              color: 'var(--zen-text-muted)',
+              fontSize: '0.72em',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {name}
+          </span>
+        )}
+      </button>
+      <span
+        data-thread-image-caption=""
+        className="flex items-center"
+        style={{ gap: 8, padding: '4px 10px', fontSize: '0.72em', color: 'var(--zen-text-muted)', minWidth: 0 }}
+      >
+        <span data-thread-file-name="" className="min-w-0 flex-1 truncate">
+          {name}
+        </span>
+        {changed ? (
+          <span data-thread-file-meta="" className="flex flex-shrink-0 items-center" style={{ gap: 5, color: 'var(--thread-file-changed)' }}>
+            <span
+              data-thread-file-changed=""
+              aria-hidden
+              style={{ width: 7, height: 7, borderRadius: 999, flex: 'none', background: 'var(--thread-file-changed)' }}
+            />
+            changed since sent
+          </span>
+        ) : (
+          <span data-thread-file-meta="" className="flex-shrink-0">
+            {formatFileSize(file.size)}
+          </span>
+        )}
+      </span>
+      {viewing && (
+        <ThreadImageLightbox imageRef={imageRef} name={name} thumbUrl={img?.url ?? null} onClose={() => setViewing(false)} />
+      )}
+    </div>
+  )
+}
+
+/** A message's file objects, on the message's side. `docId` (the message's
+ *  id) lets image attachments draw as pictures (S3). */
+export function ThreadFileObjects({
+  files,
+  mine,
+  docId,
+}: {
+  files: ThreadFileObject[] | null | undefined
+  mine: boolean
+  docId?: string
+}): JSX.Element | null {
+  const source = useThreadAttachmentSource()
+  // The index is the attachment's place on the message (the daemon's `n`).
+  const all = (files ?? []).map((f, n) => ({ f, n })).filter(({ f }) => f && typeof f === 'object')
+  if (all.length === 0) return null
+  const imagesOn = !!source && !!docId && source.scope.serverSupports('thread-images-v1')
+  const images = imagesOn ? all.filter(({ f }) => threadImageDrawable(f)) : []
+  const rest = all.filter((x) => !images.includes(x)).map(({ f }) => f)
+  const side = mine ? 'flex-end' : 'flex-start'
+  const width = images.length > 1 ? THREAD_IMAGE_GRID_PX : THREAD_IMAGE_CARD_PX
   return (
     <div
       data-thread-files=""
       className="flex flex-wrap"
-      style={{ ...FILE_TOKENS, gap: 6, maxWidth: '100%', justifyContent: mine ? 'flex-end' : 'flex-start', alignSelf: mine ? 'flex-end' : 'flex-start' }}
+      style={{ ...FILE_TOKENS, gap: 6, maxWidth: '100%', justifyContent: side, alignSelf: side }}
     >
-      {list.length >= FILE_LIST_CARD_AT ? (
-        <ThreadFileListCard files={list} />
+      {source && docId && images.length > 0 && (
+        <div data-thread-images="" className="flex flex-wrap" style={{ gap: 6, flexBasis: '100%', maxWidth: '100%', justifyContent: side }}>
+          {images.map(({ f, n }) => (
+            <ThreadImageCard
+              key={threadThumbKey({ scope: source.scope, addr: source.addr, docId, n, modifiedAt: f.modifiedAt })}
+              file={f}
+              source={source}
+              docId={docId}
+              n={n}
+              width={width}
+            />
+          ))}
+        </div>
+      )}
+      {rest.length >= FILE_LIST_CARD_AT ? (
+        <ThreadFileListCard files={rest} />
       ) : (
-        list.map((f, i) => <ThreadFileChip key={`${i}:${f.path ?? 'hidden'}`} file={f} />)
+        rest.map((f, i) => <ThreadFileChip key={`${i}:${f.path ?? 'hidden'}`} file={f} />)
       )}
     </div>
   )

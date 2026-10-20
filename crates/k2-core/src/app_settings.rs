@@ -403,12 +403,24 @@ pub struct AppSettings {
     /// set. Owner-only to change. Default MUST stay OFF.
     #[serde(default)]
     pub compute_preview: bool,
-    /// App runtime preview switch (Settings `appsPreview`,
-    /// prd-k2-app-runtime-v1 AR28). Persisted mirror of `K2_APPS`;
-    /// `deploy::enabled()` is true when EITHER is set. Owner-only to
-    /// change. Default MUST stay OFF (our own boxes only in stage 1).
+    /// The App runtime switch, Settings → Apps → This server → "Apps
+    /// (beta)" (wire `apps`; 0.46.2 and older wrote `appsPreview`, which
+    /// [`normalize_legacy_apps`] maps). Persisted mirror of `K2_APPS`
+    /// (force-on); `deploy::enabled()` is true when EITHER is set.
+    /// Owner-only to change. **Default ON** since 0.46.3 (Rosson
+    /// 2026-10-20): it opens the guarded container path, the owner-approved
+    /// process exception and the read/setup routes. It never opens the
+    /// unwalled process engine: that is [`Self::apps_process_engine`].
+    #[serde(default = "default_true")]
+    pub apps: bool,
+    /// The unwalled stage-1 **process engine** (App code as the daemon's
+    /// user, no wall): a separate owner-only opt-in (wire
+    /// `appsProcessEngine`; `K2_APPS_PROCESS=1` is the env force-on).
+    /// **Default OFF.** For dev machines and K2's own preview boxes; the
+    /// one-time migration from `appsPreview: true` (or `K2_APPS=1` at the
+    /// time) carries an owner's earlier preview opt-in over.
     #[serde(default)]
-    pub apps_preview: bool,
+    pub apps_process_engine: bool,
     /// 0.40.43 (1c) — public `/v1` API master switch (K2 Connect → Enable
     /// public API). Persisted app-level mirror of the `K2_API` env flag so
     /// the owner can flip the external `/v1` surface per-server from Settings
@@ -1058,7 +1070,8 @@ impl Default for AppSettings {
             agents_can_create_connections: false,
             federation_enabled: false,
             compute_preview: false,
-            apps_preview: false,
+            apps: true,
+            apps_process_engine: false,
             api_enabled: false,
             airgap: false,
             listen_lan: false,
@@ -1210,6 +1223,64 @@ fn settings_lock() -> &'static Mutex<()> {
     SETTINGS_LOCK.get_or_init(|| Mutex::new(()))
 }
 
+fn env_truthy(key: &str) -> bool {
+    std::env::var(key)
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
+}
+
+/// The 0.46.3 one-time migration of the App runtime switch, on a stored
+/// settings object (Rosson 2026-10-20: Apps on for real).
+///
+/// A file without the `apps` key was written by 0.46.2 or older. Those
+/// always wrote `appsPreview` (false by default serialization), so a stored
+/// false can't be told from "never touched": it reads as unset, and Apps
+/// (beta) turn **on**. An owner who had opted into the preview (stored
+/// `appsPreview: true`, or `K2_APPS=1` in the daemon's environment at the
+/// time) had opted into the unwalled process engine, so that carries over
+/// as `appsProcessEngine: true`. The legacy key is always dropped. Once a
+/// file has `apps`, this does nothing (the key is the marker), so an
+/// owner's later "off" sticks.
+pub fn normalize_legacy_apps(obj: &mut serde_json::Map<String, serde_json::Value>, k2_apps_env: bool) -> bool {
+    let legacy = obj.remove("appsPreview");
+    if obj.contains_key("apps") {
+        return legacy.is_some();
+    }
+    let opted_in = legacy.as_ref().and_then(serde_json::Value::as_bool).unwrap_or(false) || k2_apps_env;
+    obj.insert("apps".to_string(), serde_json::Value::Bool(true));
+    if opted_in && !obj.contains_key("appsProcessEngine") {
+        obj.insert("appsProcessEngine".to_string(), serde_json::Value::Bool(true));
+    }
+    true
+}
+
+/// An incoming partial from an older client may still say `appsPreview`:
+/// it means the Apps switch (never the process engine). Mapped to `apps`
+/// BEFORE the merge, so the merged object never holds both names; `apps`
+/// wins when a caller sends both.
+fn normalize_legacy_apps_partial(partial: &mut serde_json::Value) {
+    if let Some(obj) = partial.as_object_mut() {
+        if let Some(v) = obj.remove("appsPreview") {
+            obj.entry("apps".to_string()).or_insert(v);
+        }
+    }
+}
+
+/// Make the [`normalize_legacy_apps`] migration durable: a settings file
+/// from 0.46.2 or older is rewritten once with `apps` (and the carried
+/// `appsProcessEngine`). Called at daemon boot. `Ok(true)` when it wrote.
+pub fn migrate_legacy_apps_switch() -> Result<bool, String> {
+    let _guard = settings_lock().lock();
+    let file = settings_file();
+    let Ok(raw) = fs::read_to_string(&file) else { return Ok(false) };
+    let Ok(serde_json::Value::Object(obj)) = serde_json::from_str::<serde_json::Value>(&raw) else { return Ok(false) };
+    if obj.contains_key("apps") && !obj.contains_key("appsPreview") {
+        return Ok(false);
+    }
+    save(&load())?;
+    Ok(true)
+}
+
 /// Read `~/.k2so/settings.json` and parse into `AppSettings`. Missing
 /// or malformed files yield `AppSettings::default()`. Always
 /// deep-merges with defaults so freshly-added keys are present in
@@ -1238,6 +1309,7 @@ pub fn load() -> AppSettings {
                 obj.insert("projectSettings".to_string(), v);
             }
         }
+        normalize_legacy_apps(obj, env_truthy("K2_APPS"));
     }
     let mut defaults = serde_json::to_value(AppSettings::default()).unwrap_or_default();
     deep_merge(&mut defaults, &parsed);
@@ -1275,8 +1347,9 @@ pub fn save(settings: &AppSettings) -> Result<(), String> {
 /// emit is best-effort: a missing companion runtime (e.g. during
 /// daemon boot before the autostart hook has fired) is a no-op inside
 /// `invalidate_all_sessions`, which is exactly the correct behavior.
-pub fn update(partial: serde_json::Value) -> Result<AppSettings, String> {
+pub fn update(mut partial: serde_json::Value) -> Result<AppSettings, String> {
     let _guard = settings_lock().lock();
+    normalize_legacy_apps_partial(&mut partial);
     // 0.46.1: the read path forgives a bad completion-sound value (it
     // falls back to the default); a WRITE of one is refused loudly so a
     // caller never gets a silent "ok" for a value that was not kept.
@@ -1983,6 +2056,124 @@ mod tests {
         fs::write(settings_file(), raw).expect("write legacy");
         let s = load();
         assert!(s.project_settings.contains_key("abc"));
+    }
+
+    // ── 0.46.3: appsPreview → apps (Apps on for real) ──────────────
+
+    fn stored_json() -> serde_json::Value {
+        serde_json::from_str(&fs::read_to_string(settings_file()).expect("read settings")).expect("settings JSON")
+    }
+
+    #[test]
+    fn apps_default_on_and_process_engine_default_off() {
+        let _g = TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+        let _env = crate::test_env::EnvVar::remove("K2_APPS");
+        let d = AppSettings::default();
+        assert!(d.apps, "Apps (beta) default ON");
+        assert!(!d.apps_process_engine, "the unwalled process engine default OFF");
+        let s = load();
+        assert!(s.apps);
+        assert!(!s.apps_process_engine);
+        let v = serde_json::to_value(&d).unwrap();
+        assert_eq!(v["apps"], true);
+        assert_eq!(v["appsProcessEngine"], false);
+        assert!(v.get("appsPreview").is_none(), "the old name is never written");
+    }
+
+    #[test]
+    fn a_stored_apps_preview_false_reads_as_unset_and_turns_apps_on() {
+        let _g = TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+        let _env = crate::test_env::EnvVar::remove("K2_APPS");
+        ensure_dir();
+        fs::write(settings_file(), r#"{"appsPreview": false, "computePreview": true}"#).unwrap();
+        let s = load();
+        assert!(s.apps, "0.46.2 always wrote appsPreview:false; it means never touched");
+        assert!(!s.apps_process_engine, "no preview opt-in: no unwalled engine");
+        assert!(s.compute_preview, "other keys are kept");
+    }
+
+    #[test]
+    fn a_stored_apps_preview_true_carries_the_process_engine_opt_in() {
+        let _g = TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+        let _env = crate::test_env::EnvVar::remove("K2_APPS");
+        ensure_dir();
+        fs::write(settings_file(), r#"{"appsPreview": true}"#).unwrap();
+        let s = load();
+        assert!(s.apps);
+        assert!(s.apps_process_engine, "the preview WAS the process engine: the owner's opt-in carries over");
+    }
+
+    #[test]
+    fn k2_apps_env_at_migration_time_carries_the_process_engine_opt_in() {
+        let _g = TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+        let _env = crate::test_env::EnvVar::set("K2_APPS", "1");
+        ensure_dir();
+        fs::write(settings_file(), r#"{"appsPreview": false}"#).unwrap();
+        let s = load();
+        assert!(s.apps);
+        assert!(s.apps_process_engine, "K2_APPS=1 was the preview opt-in on headless boxes");
+    }
+
+    #[test]
+    fn a_stored_apps_key_wins_and_is_never_migrated_again() {
+        let _g = TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+        let _env = crate::test_env::EnvVar::set("K2_APPS", "1");
+        ensure_dir();
+        fs::write(settings_file(), r#"{"apps": false, "appsProcessEngine": false}"#).unwrap();
+        let s = load();
+        assert!(!s.apps, "an owner's later off sticks");
+        assert!(!s.apps_process_engine, "env at load time doesn't re-open the process engine once migrated");
+        fs::write(settings_file(), r#"{"apps": false, "appsPreview": true}"#).unwrap();
+        let s = load();
+        assert!(!s.apps, "apps wins over a stray appsPreview");
+        assert!(!s.apps_process_engine);
+    }
+
+    #[test]
+    fn migrate_legacy_apps_switch_rewrites_once() {
+        let _g = TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+        let _env = crate::test_env::EnvVar::remove("K2_APPS");
+        assert!(!migrate_legacy_apps_switch().unwrap(), "no file: nothing to do");
+        ensure_dir();
+        fs::write(settings_file(), r#"{"appsPreview": true, "defaultAgent": "codex"}"#).unwrap();
+        assert!(migrate_legacy_apps_switch().unwrap(), "a 0.46.2 file is rewritten");
+        let v = stored_json();
+        assert_eq!(v["apps"], true);
+        assert_eq!(v["appsProcessEngine"], true);
+        assert!(v.get("appsPreview").is_none(), "{v}");
+        assert_eq!(v["defaultAgent"], "codex");
+        assert!(!migrate_legacy_apps_switch().unwrap(), "the second boot does nothing");
+        update(serde_json::json!({"apps": false})).unwrap();
+        assert!(!migrate_legacy_apps_switch().unwrap());
+        assert!(!load().apps, "off sticks across boots");
+    }
+
+    #[test]
+    fn an_old_client_sending_apps_preview_maps_to_apps_before_the_merge() {
+        let _g = TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+        let _env = crate::test_env::EnvVar::remove("K2_APPS");
+        ensure_dir();
+        fs::write(settings_file(), r#"{"apps": true}"#).unwrap();
+        // The stored file has `apps`; an old client sends `appsPreview`.
+        // Merging both names would be a serde duplicate-field error.
+        let s = update(serde_json::json!({"appsPreview": false})).expect("no duplicate-field error");
+        assert!(!s.apps);
+        assert!(!s.apps_process_engine, "appsPreview never means the process engine");
+        let v = stored_json();
+        assert_eq!(v["apps"], false);
+        assert!(v.get("appsPreview").is_none(), "{v}");
+        let s = update(serde_json::json!({"appsPreview": true})).unwrap();
+        assert!(s.apps);
+        assert!(!s.apps_process_engine, "an old client's on opens Apps, never the unwalled engine");
+        let s = update(serde_json::json!({"apps": false, "appsPreview": true})).unwrap();
+        assert!(!s.apps, "apps wins when a caller sends both");
     }
 
     /// F3 closure smoke: when `update()` sees `companion.username`

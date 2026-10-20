@@ -169,15 +169,14 @@ pub fn too_large() -> CliResponse {
     refusal_response(&no(codes::BAD_REQUEST, 413, format!("request bodies here are at most {} KiB", MAX_BODY / 1024)))
 }
 
-/// 404 for every runtime route while the preview flag is off.
+/// 404 for every runtime route while Apps (beta) are off on this server.
 pub fn dark() -> CliResponse {
-    refusal_response(&no(
-        codes::APPS_OFF,
-        404,
-        "the App runtime is a preview: the owner turns it on with K2_APPS=1 or the Settings switch appsPreview \
-         (our own boxes only in this release)",
-    ))
+    refusal_response(&no(codes::APPS_OFF, 404, APPS_OFF_HINT))
 }
+
+/// Where the owner turns Apps (beta) back on.
+pub const APPS_OFF_HINT: &str = "Apps (beta) are off on this server: the owner turns them on in Settings → Apps → \
+     This server (or K2_APPS=1)";
 
 pub(crate) fn db_err(e: impl std::fmt::Display) -> Refusal {
     no("db_error", 500, e.to_string())
@@ -238,7 +237,7 @@ pub(crate) fn need_manage(who: &Who) -> R<()> {
             codes::APPS_MANAGE_OFF,
             403,
             "Apps are off for this agent: ask your owner to turn on \"Allow this agent to manage Apps\" \
-             in Workspace settings → Agent (k2 app access arrives with the admin switches)",
+             (Settings → Workspaces → <agent> → Agent, or k2 app access <workspace> --manage on)",
         ));
     }
     Ok(())
@@ -573,6 +572,16 @@ fn install(who: &Who, body: &[u8]) -> R<J> {
     } else {
         None
     };
+    // 0.46.3: a new App starts out guarded unless the owner opted this box
+    // into the unwalled process engine (then stage 1's default stays).
+    let isolation = default_isolation();
+    if isolation == "container" && k2_root_proto::apps::AppId::parse(&app_id).is_none() {
+        return Err(no(
+            codes::APP_ID_INVALID,
+            400,
+            format!("App id '{app_id}' doesn't fit the guarded engine (at most 32 characters, no '--'): pick a shorter id"),
+        ));
+    }
     let dir = deploy::app_dir(&app_id);
     std::fs::create_dir_all(dir.join("logs")).map_err(|e| no("io_error", 500, e.to_string()))?;
     let actor_s = actor(who);
@@ -599,7 +608,7 @@ fn install(who: &Who, body: &[u8]) -> R<J> {
                 service_id: &svc.id,
                 seed_id: None,
                 owner_workspace: &ws.id,
-                isolation: "process",
+                isolation,
                 memory_limit_bytes: memory,
                 front_port: 0,
                 created_by: &actor_s,
@@ -644,6 +653,16 @@ fn install(who: &Who, body: &[u8]) -> R<J> {
         out["deploy"] = d;
     }
     Ok(out)
+}
+
+/// A new App's isolation: `process` only where the owner turned the
+/// unwalled process engine on; `container` (the guarded engine) otherwise.
+pub(crate) fn default_isolation() -> &'static str {
+    if deploy::process_engine_enabled() {
+        "process"
+    } else {
+        "container"
+    }
 }
 
 /// The Seed a deploy names: a stored one, or a folder built now (in the
@@ -705,6 +724,9 @@ fn apply_engine(who: &Who, app: AppRow, v: &J) -> R<AppRow> {
     };
     if iso == app.isolation {
         return Ok(app);
+    }
+    if iso == "process" && !deploy::process_engine_enabled() {
+        return Err(no(codes::ENGINE_UNAVAILABLE, 409, format!("{}: {}", app.app_id, deploy::PROCESS_ENGINE_OFF_HINT)));
     }
     // S13: lowering the wall (guarded → process) is on the always-per-event
     // list (§5.6): it goes through `k2 app config --isolation process`,
@@ -1136,6 +1158,12 @@ fn exception_guard(app: &AppRow, after: &appcfg::State) -> R<()> {
             ),
         ));
     }
+    // 0.46.3: moving an App onto the unwalled process engine while the
+    // owner has it off would only file a request no deploy can honour.
+    let unwalled_after = after.path != "open" && after.isolation == "process";
+    if unwalled_after && !super::supervisor::runs_unwalled(app) && !deploy::process_engine_enabled() {
+        return Err(no(codes::ENGINE_UNAVAILABLE, 409, format!("{}: {}", app.app_id, deploy::PROCESS_ENGINE_OFF_HINT)));
+    }
     Ok(())
 }
 
@@ -1279,8 +1307,8 @@ fn config(who: &Who, body: &[u8]) -> R<J> {
         egress_out.push(r);
     }
     let mut note = String::from(
-        "Stored now. Egress is enforced for guarded Apps (their own proxy); the walls for extra ports and the private database \
-         arrive in 0.46.1. The process engine in this preview doesn't enforce memory limits; the walled engines do.",
+        "Stored now. Egress is enforced for guarded Apps (their own proxy). The unwalled process engine (owner opt-in, dev \
+         machines) doesn't enforce memory limits; the walled engines do.",
     );
     if io_changed {
         note.push_str(" Walled engines apply disk ceilings at the App's next deploy or restart (k2 app restart).");
@@ -1645,7 +1673,7 @@ fn uninstall(who: &Who, body: &[u8]) -> R<J> {
         return Err(no(
             codes::OWNER_ONLY,
             403,
-            "--purge deletes the App's data: only the server's owner can, from Settings or a terminal outside K2",
+            "--purge deletes the App's data: only the server's owner can (k2 app uninstall <app> --purge from a terminal outside K2)",
         ));
     }
     super::supervisor::stop_app(&app, &actor(who))?;

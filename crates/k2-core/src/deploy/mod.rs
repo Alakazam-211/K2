@@ -22,8 +22,10 @@
 //! The live parts (routes, the process engine, the supervisor, the local
 //! route override and drain) are `k2-daemon`'s `apps` module.
 //!
-//! Dark until `K2_APPS=1` or the Settings switch "Apps (preview)"
-//! (`appsPreview`) is on (AR28): every `/cli/app/*` runtime route 404s.
+//! Dark while the Settings switch "Apps (beta)" (`apps`, default ON since
+//! 0.46.3) is off and `K2_APPS` isn't set (AR28): every `/cli/app/*`
+//! runtime route 404s. The unwalled process engine is a second, separate
+//! owner opt-in ([`process_engine_enabled`]).
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -43,12 +45,21 @@ pub mod validate;
 pub mod widget_events;
 
 static SETTING_ENABLED: AtomicBool = AtomicBool::new(false);
+static SETTING_PROCESS_ENGINE: AtomicBool = AtomicBool::new(false);
 
-/// Sync the persisted `appsPreview` setting into this process (boot and
-/// every settings update/reset).
+/// Sync the persisted `apps` setting into this process (boot and every
+/// settings update/reset).
 pub fn set_enabled(on: bool) {
     SETTING_ENABLED.store(on, Ordering::Relaxed);
 }
+
+/// Sync the persisted `appsProcessEngine` setting into this process.
+pub fn set_process_engine(on: bool) {
+    SETTING_PROCESS_ENGINE.store(on, Ordering::Relaxed);
+}
+
+/// The env force-on for the unwalled process engine.
+pub const PROCESS_ENGINE_ENV: &str = "K2_APPS_PROCESS";
 
 fn env_on(key: &str) -> bool {
     std::env::var(key)
@@ -56,15 +67,32 @@ fn env_on(key: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// True when the App runtime preview is on: `K2_APPS` or the persisted
-/// `appsPreview` switch. Default OFF. Our own boxes only (§13 S7).
+/// True when Apps (beta) are on: `K2_APPS` or the persisted `apps`
+/// switch (default ON). This opens the guarded container path, the
+/// owner-approved process exception and the read/setup routes; it never
+/// runs App code unwalled on its own (see [`process_engine_enabled`]).
 pub fn enabled() -> bool {
     env_on("K2_APPS") || SETTING_ENABLED.load(Ordering::Relaxed)
 }
 
+/// True when the owner opted into the stage-1 **process engine**: App code
+/// as the daemon's user with no wall (§16 C9). `K2_APPS_PROCESS=1` or the
+/// owner-only setting `appsProcessEngine`. Default OFF: with it off no App
+/// runs on the process engine on any OS (the deploy refuses, the
+/// supervisor stops what was running) and new Apps start out guarded.
+pub fn process_engine_enabled() -> bool {
+    env_on(PROCESS_ENGINE_ENV) || SETTING_PROCESS_ENGINE.load(Ordering::Relaxed)
+}
+
+/// What a refusal says when an App needs the process engine and it is off.
+pub const PROCESS_ENGINE_OFF_HINT: &str = "the unwalled process engine is off on this box (it would run App code as \
+     the daemon's user): deploy guarded (k2 app deploy <app> <folder|seed> --engine guarded, on Linux with the App \
+     engine installed), or the owner turns it on for a dev machine with K2_APPS_PROCESS=1 or the owner-only setting \
+     appsProcessEngine";
+
 /// `isolation = none` (a plain process as the developer's user) is only
 /// for dev loops: off Linux, or with `K2_APPS_DEV=1` (AR28). Stage 1's
-/// preview process engine is the one recorded exception (§16 C9).
+/// process engine (owner opt-in) is the one recorded exception (§16 C9).
 pub fn dev_mode() -> bool {
     !cfg!(target_os = "linux") || env_on("K2_APPS_DEV")
 }
@@ -274,9 +302,34 @@ mod tests {
             assert!(enabled(), "K2_APPS=1 turns it on");
         }
         set_enabled(true);
-        assert!(enabled(), "appsPreview setting turns it on");
+        assert!(enabled(), "the apps setting turns it on");
         set_enabled(false);
         assert!(!enabled());
+    }
+
+    /// 0.46.3 safety rule: the Apps switch (and K2_APPS) never turns on the
+    /// unwalled process engine; only its own opt-in does.
+    #[test]
+    fn the_apps_switch_never_opens_the_process_engine() {
+        let _g = EnvVar::remove("K2_APPS");
+        let _p = EnvVar::remove(PROCESS_ENGINE_ENV);
+        set_process_engine(false);
+        set_enabled(true);
+        assert!(enabled());
+        assert!(!process_engine_enabled(), "apps on alone: no process engine");
+        {
+            let _on = EnvVar::set("K2_APPS", "1");
+            assert!(!process_engine_enabled(), "K2_APPS=1 alone: no process engine");
+        }
+        {
+            let _on = EnvVar::set(PROCESS_ENGINE_ENV, "1");
+            assert!(process_engine_enabled(), "K2_APPS_PROCESS=1 opts in");
+        }
+        set_process_engine(true);
+        assert!(process_engine_enabled(), "appsProcessEngine opts in");
+        set_process_engine(false);
+        assert!(!process_engine_enabled());
+        set_enabled(false);
     }
 
     #[test]

@@ -83,10 +83,12 @@ pub fn engine() -> &'static dyn RuntimeEngine {
 }
 
 /// The engine for an isolation (`None`: no engine on this box gives it;
-/// the deploy refuses instead of falling back, AR24).
+/// the deploy refuses instead of falling back, AR24). The unwalled process
+/// engine only when the owner opted into it (`deploy::process_engine_enabled`,
+/// 0.46.3): the default-on Apps switch never runs App code unwalled.
 pub fn engine_for(iso: Isolation) -> Option<&'static dyn RuntimeEngine> {
     match iso {
-        Isolation::Process => Some(engine()),
+        Isolation::Process if deploy::process_engine_enabled() => Some(engine()),
         Isolation::Container if cfg!(target_os = "linux") => Some(super::guarded::engine()),
         _ => None,
     }
@@ -94,7 +96,7 @@ pub fn engine_for(iso: Isolation) -> Option<&'static dyn RuntimeEngine> {
 
 /// The engine for an App: its isolation, and for `process` its path —
 /// the open path's `process` exception (owner-approved, a sandboxed
-/// system unit as `k2appx`) is not stage 1's preview process engine.
+/// system unit as `k2appx`) is not stage 1's unwalled process engine.
 pub fn engine_for_app(app: &AppRow) -> Option<&'static dyn RuntimeEngine> {
     if app.is_process_exception() {
         return cfg!(target_os = "linux").then(|| super::process_exception::engine() as &'static dyn RuntimeEngine);
@@ -109,6 +111,61 @@ pub fn engine_for_app(app: &AppRow) -> Option<&'static dyn RuntimeEngine> {
         };
     }
     engine_for(Isolation::parse(&app.isolation).unwrap_or(Isolation::Process))
+}
+
+/// Would this App run on the unwalled stage-1 process engine (guarded path,
+/// isolation `process`, not the owner's process exception)?
+pub fn runs_unwalled(app: &AppRow) -> bool {
+    !app.is_process_exception()
+        && app.path != "open"
+        && Isolation::parse(&app.isolation).unwrap_or(Isolation::Process) == Isolation::Process
+}
+
+/// The state line an unwalled App gets when the process engine is off.
+const UNWALLED_STOPPED: &str = "stopped: the unwalled process engine is off on this box (deploy it guarded: --engine guarded)";
+
+/// The process engine is off: stop every App instance it runs (live and
+/// warm) and mark those Apps stopped with the reason. No-op while it's on
+/// or before the supervisor started. Returns the Apps it stopped.
+pub fn stop_unwalled_if_off(actor: &str) -> Vec<String> {
+    if deploy::process_engine_enabled() {
+        return Vec::new();
+    }
+    let unwalled = |i: &Option<Instance>| i.as_ref().is_some_and(|i| is_process_engine(&i.handle));
+    let ids: Vec<String> = state()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .filter(|(_, rt)| unwalled(&rt.live) || unwalled(&rt.warm))
+        .map(|(id, _)| id.clone())
+        .collect();
+    let mut stopped = Vec::new();
+    for id in ids {
+        let Ok(Some(app)) = db(|c| store::get_app(c, &id)) else { continue };
+        match stop_app(&app, actor) {
+            Ok(()) => {
+                let _ = db(|c| store::set_state(c, &id, store::STATE_STOPPED, Some(UNWALLED_STOPPED)));
+                audit(&id, "process_engine_off", actor, json!({ "stopped": true }));
+                stopped.push(id);
+            }
+            Err(f) => k2_core::log_debug!("[apps] {id}: stopping it (process engine off): {}", f.message),
+        }
+    }
+    stopped
+}
+
+/// [`stop_unwalled_if_off`] on its own thread (a settings write).
+pub fn spawn_stop_unwalled_if_off(actor: &'static str) {
+    if deploy::process_engine_enabled() {
+        return;
+    }
+    let _ = std::thread::Builder::new().name("apps-unwalled-stop".into()).spawn(move || {
+        let _ = stop_unwalled_if_off(actor);
+    });
+}
+
+fn is_process_engine(h: &RunHandle) -> bool {
+    !super::open::owns(h) && !super::guarded::owns(h) && !super::process_exception::owns(h)
 }
 
 /// The engine that runs an instance (by its handle).
@@ -221,7 +278,12 @@ fn boot() {
         }
     }
     let apps = db(|c| store::list_apps(c, None)).unwrap_or_default();
-    let mut adopted = engine().adopt().unwrap_or_default();
+    // Process-engine instances are adopted only while the owner has the
+    // unwalled engine on; otherwise they are orphans (stopped below) and
+    // their Apps are marked stopped, never restarted unwalled.
+    let unwalled_ok = deploy::process_engine_enabled();
+    let mut adopted = if unwalled_ok { engine().adopt().unwrap_or_default() } else { Vec::new() };
+    let unwalled_orphans = if unwalled_ok { Vec::new() } else { engine().adopt().unwrap_or_default() };
     if let Some(g) = engine_for(Isolation::Container) {
         match g.adopt() {
             Ok(mut v) => adopted.append(&mut v),
@@ -245,12 +307,17 @@ fn boot() {
             claimed.insert(h.deployment_id.clone());
             with_rt(&app.app_id, |rt| rt.live = Some(inst));
             audit(&app.app_id, "adopted", "system", json!({ "deployment": h.deployment_id, "port": h.port }));
+        } else if !unwalled_ok && runs_unwalled(app) && app.state != store::STATE_STOPPED {
+            let _ = db(|c| store::set_state(c, &app.app_id, store::STATE_STOPPED, Some(UNWALLED_STOPPED)));
+            audit(&app.app_id, "process_engine_off", "system", json!({ "stopped": true }));
         } else if app.state == store::STATE_RUNNING && app.live_seed.is_some() {
             with_rt(&app.app_id, |rt| rt.next_restart_at = Some(now()));
         }
     }
-    // Orphans (warm instances from before the restart, uninstalled Apps).
-    for h in adopted.into_iter().filter(|h| !claimed.contains(&h.deployment_id)) {
+    // Orphans (warm instances from before the restart, uninstalled Apps,
+    // and everything on the process engine while it is off).
+    let orphans: Vec<RunHandle> = adopted.into_iter().filter(|h| !claimed.contains(&h.deployment_id)).chain(unwalled_orphans).collect();
+    for h in orphans {
         let grace = Duration::from_secs(t.stop_grace_secs);
         let _ = std::thread::Builder::new().name("app-orphan-stop".into()).spawn(move || {
             let _ = engine_of(&h).stop(&h, grace);
@@ -468,6 +535,9 @@ fn pipeline(app_id: &str, dep: &str, seed: &str, kind: &str) {
     };
     let wanted = Isolation::parse(&app.isolation).unwrap_or(Isolation::Process);
     let Some(eng) = engine_for_app(&app) else {
+        if runs_unwalled(&app) {
+            return pipeline_fail(app_id, dep, codes::ENGINE_UNAVAILABLE, &format!("{app_id}: {}", deploy::PROCESS_ENGINE_OFF_HINT));
+        }
         return pipeline_fail(
             app_id,
             dep,

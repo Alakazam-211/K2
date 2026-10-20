@@ -37,6 +37,9 @@ pub fn setup(extra: &[(&str, &str)]) -> Env {
     let home = TempHome::short();
     let mut vars = vec![
         EnvVar::set("K2_APPS", "1"),
+        // These tests run Apps on the stage-1 process engine: since 0.46.3
+        // that is its own owner opt-in (default off).
+        EnvVar::set("K2_APPS_PROCESS", "1"),
         EnvVar::set("K2_APPS_PROBE_EVERY_MS", "100"),
         EnvVar::set("K2_APPS_PROBE_TIMEOUT_MS", "1000"),
         EnvVar::set("K2_APPS_DEPLOY_TIMEOUT_SECS", "20"),

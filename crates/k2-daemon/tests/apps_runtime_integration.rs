@@ -98,6 +98,80 @@ async fn s6_build_validate_flag_scope_and_tamper() {
     assert_eq!(r.code(), "seed_corrupt");
 }
 
+// ── 0.46.3: Apps on by default never means unwalled ───────────────────
+
+/// The safety rule behind "Apps on for real": with the Apps switch on and
+/// the process engine NOT opted into, an agent with "Allow this agent to
+/// manage Apps" can install and deploy, but nothing runs as the daemon's
+/// user: new Apps start guarded, asking for the process engine is refused,
+/// and an App already on it is stopped (and stays stopped) once the owner
+/// turns the engine off.
+#[tokio::test]
+async fn apps_on_without_the_process_engine_never_runs_unwalled() {
+    require_python3();
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let ws = seed_ws(&env, "safews");
+    allow_manage(&ws, true);
+    let pass = passport(&ws);
+
+    // With the engine on (the fixture's K2_APPS_PROCESS=1), the owner runs
+    // one App on it.
+    let front = install(d.port, OWNER, "pe1", &ws).await;
+    let v1 = app_folder(&ws.path.join("pe1"), "pe1", "1.0.0", "v1");
+    let d1 = deploy_folder(d.port, OWNER, "pe1", &v1).await;
+    assert_eq!(d1["result"], "live", "{d1}");
+    assert_eq!(body_of(front, "/"), "200 v1");
+
+    // The owner turns the process engine off (no env, setting off).
+    let _off = k2_core::test_env::EnvVar::remove("K2_APPS_PROCESS");
+    k2_core::deploy::set_process_engine(false);
+    assert!(k2_core::deploy::enabled(), "Apps (beta) stay on");
+    assert!(!k2_core::deploy::process_engine_enabled());
+    let stopped = k2_daemon::apps::supervisor::stop_unwalled_if_off("owner");
+    assert_eq!(stopped, vec!["pe1".to_string()]);
+    assert!(body_of(front, "/").starts_with("503"), "the unwalled App stopped: {}", body_of(front, "/"));
+    let r = get(d.port, "/cli/app/inspect", OWNER, "app=pe1").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.json()["app"]["state"], "stopped", "{}", r.body);
+
+    // A redeploy of that App is refused by the pipeline, with the hint.
+    let r = post(d.port, "/cli/app/deploy", OWNER, json!({"app": "pe1", "folder": v1, "wait": 30})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let dep = &r.json()["deployment"];
+    assert_eq!(dep["result"], "failed", "{dep}");
+    assert!(dep["error"].as_str().unwrap_or("").contains("unwalled process engine is off"), "{dep}");
+    assert!(body_of(front, "/").starts_with("503"), "still nothing serving: {}", body_of(front, "/"));
+
+    // An agent's new App starts out guarded.
+    let r = post(d.port, "/cli/app/install", &pass, json!({"app": "agentapp"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.json()["app"]["isolation"], "container", "{}", r.body);
+    let agent_front = r.json()["frontPort"].as_u64().unwrap() as u16;
+
+    // Asking for the process engine on a deploy or through config is refused.
+    let v2 = app_folder(&ws.path.join("agentapp"), "agentapp", "1.0.0", "a1");
+    let r = post(d.port, "/cli/app/deploy", &pass, json!({"app": "agentapp", "folder": v2, "engine": "process"})).await;
+    assert_eq!(r.status, 409, "{}", r.body);
+    assert_eq!(r.code(), "engine_unavailable");
+    assert!(r.body.contains("K2_APPS_PROCESS"), "{}", r.body);
+    let r = post(d.port, "/cli/app/config", &pass, json!({"app": "agentapp", "isolation": "process"})).await;
+    assert_eq!(r.status, 409, "{}", r.body);
+    assert_eq!(r.code(), "engine_unavailable");
+    let r = post(d.port, "/cli/app/config", OWNER, json!({"app": "agentapp", "isolation": "process"})).await;
+    assert_eq!(r.status, 409, "the owner token too: {}", r.body);
+
+    // A plain deploy goes to the guarded engine (or fails for want of it);
+    // either way nothing serves from a process as the daemon's user.
+    let r = post(d.port, "/cli/app/deploy", &pass, json!({"app": "agentapp", "folder": v2, "wait": 30})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    if !cfg!(target_os = "linux") {
+        assert_eq!(r.json()["deployment"]["result"], "failed", "{}", r.body);
+    }
+    assert!(!body_of(agent_front, "/").starts_with("200 a1"), "the agent's App never ran unwalled");
+    k2_core::deploy::set_process_engine(false);
+}
+
 // ── S7: the deploy pipeline ──────────────────────────────────────────
 
 async fn install(port: u16, token: &str, app: &str, ws: &Ws) -> u16 {

@@ -468,6 +468,7 @@ fn uninstall_removes_the_engine_record_label_and_key_and_purge_forgets_voice() {
     assert_eq!(t.ops.nested.lock().unwrap().last().unwrap(), &("voice".to_string(), None));
     assert_eq!(t.secrets.resolve(&key_ref).unwrap(), None);
     assert!(t.ops.voice_load().is_none());
+    assert_eq!(*t.ops.front_rebuilds.lock().unwrap(), 1, "voice uninstall rebuilds the front table too");
     assert_eq!(uninstall(&t.env()).unwrap()["alreadyRemoved"], true);
 }
 
@@ -724,6 +725,30 @@ fn behind_the_front_voice_installs_on_the_passthrough_tier() {
     let (s, _, _) = status(&t.env(), true);
     assert_eq!(s["turnTier"], "passthrough");
     assert_eq!(s["turnTls"]["port"], 443);
+}
+
+/// 0.46.3: a purge drops the voice record AND rebuilds the front's table
+/// right away, so the TURN route does not linger until the next voice
+/// install. Same for both purge paths (Sew's own, and K2's teardown of an
+/// unrecognised Sew).
+#[test]
+fn purge_rebuilds_the_front_table_without_the_turn_route() {
+    for disk in [None, Some("unknown")] {
+        let t = t();
+        *t.ops.front.lock().unwrap() = true;
+        t.voice();
+        assert_eq!(front_route_host(&t.env()).as_deref(), Some("turn-lztek.k2.dev"));
+        let before = *t.ops.front_rebuilds.lock().unwrap();
+        if let Some(d) = disk {
+            *t.ops.on_disk.lock().unwrap() = Some(d.into());
+        }
+        let r = crate::sew::supervisor::purge(&t.env(), "lztek", false).expect("purge");
+        assert_eq!(r["teardown"], if disk.is_some() { "k2" } else { "sew" });
+        assert_eq!(front_route_host(&t.env()), None, "the TURN route is gone from the voice record");
+        assert_eq!(*t.ops.front_rebuilds.lock().unwrap(), before + 1, "the front table was rebuilt once, after the record went");
+        assert!(t.ops.voice_load().is_none());
+        assert_eq!(t.ops.cp_log(), vec!["DELETE /turn/dns/lztek"]);
+    }
 }
 
 /// `set_tier` moves an installed engine: one `media reconfigure

@@ -555,6 +555,8 @@ fn purge_checks_the_hostname_first_and_deletes_vault_keys_last() {
     t.ops.clear();
     let r = purge(&t.env(), "lztek", true).unwrap();
     assert_eq!(r["purged"], true);
+    assert_eq!(r["teardown"], "sew", "a known binary: Sew's own purge, unchanged");
+    assert!(r.get("note").is_none());
     // sew-db stays up so Sew can read the install id it checks the
     // typed-back id against (S29 VM cycle: stopping it first made every
     // purge a mismatch).
@@ -578,6 +580,89 @@ fn purge_after_uninstall_types_back_none() {
     assert_eq!(t.ops.effects(), vec!["engine sew purge none".to_string()]);
     assert!(r["backupsAt"].is_null());
     assert!(store::load().is_none());
+}
+
+// ── a Sew this K2 does not recognise (sewlab, 0.46.3) ────────────────────
+
+/// The box holds a Sew no pin vouches for (an old dev K2's 0.1.2 test
+/// build). Purge goes through: the helper tears it down itself, and the
+/// daemon finishes exactly as after Sew's own purge.
+#[test]
+fn purge_of_an_unrecognised_sew_is_k2s_teardown_and_finishes_the_cleanup() {
+    let t = t();
+    t.enabled();
+    let key_ref = t.row().master_key_ref.unwrap();
+    *t.ops.on_disk.lock().unwrap() = Some("unknown".into());
+    let r = purge(&t.env(), "lztek", false).unwrap();
+    assert_eq!(r["purged"], true);
+    assert_eq!(r["teardown"], "k2");
+    assert_eq!(r["binary"]["executed"], false);
+    assert!(r["note"].as_str().unwrap().contains("never ran that binary"), "{r}");
+    assert!(r["left"].to_string().contains("sew-master-key.recovery"), "{r}");
+    assert_eq!(r["accounts"][0]["loginLike"], true);
+    assert_eq!(t.ops.effects(), vec![format!("engine sew purge {INSTALL_ID}")], "one helper call, the purge verb");
+    assert!(t.secrets.resolve(&key_ref).unwrap().is_none(), "vault key gone");
+    assert!(store::load().is_none(), "no row left, never `error`");
+    // A fresh enable starts clean from here.
+    t.ops.clear();
+    t.enable().unwrap();
+    assert!(t.ops.effects().iter().any(|e| e == "engine sew install-bin"), "{:?}", t.ops.effects());
+    assert_eq!(t.row().status, "running");
+}
+
+/// With `--keep-backups`, K2's teardown says where the backups went, as
+/// Sew's does.
+#[test]
+fn k2_teardown_reports_where_kept_backups_went() {
+    let t = t();
+    t.enabled();
+    *t.ops.on_disk.lock().unwrap() = Some("unknown".into());
+    let r = purge(&t.env(), "lztek", true).unwrap();
+    assert_eq!(r["teardown"], "k2");
+    assert_eq!(r["backupsAt"], "/var/lib/sew-backups-20260103T000000Z");
+}
+
+/// A root helper from before 0.46.3 still refuses: the vault and the row
+/// stay (resumable), and the answer says to update the helper.
+#[test]
+fn an_older_helper_refusing_an_unknown_binary_points_at_a_helper_update() {
+    let t = t();
+    t.enabled();
+    let key_ref = t.row().master_key_ref.unwrap();
+    t.ops.queue(
+        &format!("engine sew purge {INSTALL_ID}"),
+        Err("root helper engine sew purge: exit 3: sew helper: unknown sew binary".into()),
+    );
+    let f = purge(&t.env(), "lztek", false).unwrap_err();
+    assert_eq!(f.code, "purge_failed");
+    assert!(f.hint.contains("k2 root-helper update"), "{}", f.hint);
+    assert!(t.secrets.resolve(&key_ref).unwrap().is_some(), "vault key kept");
+    assert_eq!(t.row().status, "error");
+}
+
+/// Keep-data uninstall of an unrecognised Sew stays refused (only that Sew
+/// knows what of its layout is data), but the row says what is true: Sew
+/// is stopped, not `error`, and the way out is named.
+#[test]
+fn uninstall_of_an_unrecognised_sew_refuses_and_records_it_stopped() {
+    let t = t();
+    t.enabled();
+    let key = t.master_key();
+    *t.ops.on_disk.lock().unwrap() = Some("unknown".into());
+    let f = uninstall(&t.env(), false).unwrap_err();
+    assert_eq!(f.code, "unknown_sew_binary");
+    assert!(f.hint.contains("k2 hostchat purge"), "{}", f.hint);
+    assert_eq!(t.ops.effects(), vec!["engine sew systemctl disable-now", "engine sew uninstall"]);
+    let row = t.row();
+    assert_eq!(row.status, "disabled");
+    assert!(row.last_error.as_deref().unwrap().contains("not a Sew release this K2 knows"));
+    assert_eq!(row.install_id.as_deref(), Some(INSTALL_ID), "nothing forgotten");
+    assert_eq!(t.master_key(), key, "vault key kept");
+    // A failed stop is not dressed up as `disabled`.
+    store::update(1, |r| r.status = "running".into()).unwrap();
+    t.ops.queue("engine sew systemctl disable-now", Err("root helper engine sew systemctl disable-now: exit 5: boom".into()));
+    assert_eq!(uninstall(&t.env(), false).unwrap_err().code, "unknown_sew_binary");
+    assert_eq!(t.row().status, "error");
 }
 
 // ── S27's grant hook follows the install ─────────────────────────────────
@@ -713,6 +798,47 @@ fn upgrade_preconditions_refuse_without_effects() {
     assert_eq!(dry["dryRun"], true);
     assert!(t.ops.effects().is_empty());
     assert_eq!(t.row().status, "running");
+}
+
+/// A hand-upgraded box: the binary already IS the pin while the row still
+/// records the old version. `upgrade` answers alreadyCurrent AND brings the
+/// row in line (status stops offering an upgrade); previous_version is not
+/// invented.
+#[test]
+fn upgrade_already_current_resyncs_the_row_to_the_binary() {
+    let t = t();
+    t.enabled();
+    store::update(1, |r| {
+        r.installed_version = Some("0.0.1".into());
+        r.pinned_version = "0.0.1".into();
+    })
+    .unwrap();
+    assert_eq!(status(&t.env(), false)["upgradeAvailable"], true, "the stale row offers an upgrade");
+    let req = UpgradeRequest { tarball_path: Some(TARBALL.into()), ..Default::default() };
+    let v = match upgrade_begin(&t.env(), &req).unwrap() {
+        Err(v) => v,
+        Ok(_) => panic!("the pin on disk must answer without a machine"),
+    };
+    assert_eq!(v["alreadyCurrent"], true);
+    assert_eq!(v["resynced"]["installedVersion"]["from"], "0.0.1");
+    assert_eq!(v["resynced"]["installedVersion"]["to"], pinned().version);
+    let row = t.row();
+    assert_eq!(row.installed_version.as_deref(), Some(pinned().version));
+    assert_eq!(row.pinned_version, pinned().version);
+    assert_eq!(row.previous_version, None, "K2 did not see the move: no previous version invented");
+    assert_eq!(row.status, "running");
+    let s = status(&t.env(), false);
+    assert_eq!(s["installedVersion"], pinned().version);
+    assert_eq!(s["upgradeAvailable"], false);
+    assert!(t.ops.effects().is_empty(), "{:?}", t.ops.effects());
+    assert!(!t.latch.load(std::sync::atomic::Ordering::SeqCst), "the latch was released");
+    // Already in sync: nothing to re-sync, nothing written.
+    let at = t.row().updated_at;
+    *t.ops.clock.lock().unwrap() += 60;
+    let v = upgrade_begin(&t.env(), &req).unwrap().err().unwrap();
+    assert_eq!(v["alreadyCurrent"], true);
+    assert!(v["resynced"].is_null(), "{v}");
+    assert_eq!(t.row().updated_at, at);
 }
 
 #[test]

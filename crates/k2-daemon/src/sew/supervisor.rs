@@ -1307,9 +1307,34 @@ pub fn uninstall(env: &Env, drop_grants: bool) -> R<Value> {
     }
     helper_check(env)?;
     let _l = begin(env)?;
-    let _ = helper(env, &["systemctl", "disable-now"], None);
+    let stopped = helper(env, &["systemctl", "disable-now"], None).is_ok();
     match sew_ok(env, &["uninstall"], None) {
         Ok(_) => {}
+        // Keep-data uninstall of a Sew this K2 does not recognise stays
+        // refused: only that Sew knows what of its layout is data to keep,
+        // and the data would wait for a Sew K2 cannot run. It is stopped
+        // (disable-now never runs Sew), so say so instead of `error`, and
+        // point at the two ways out.
+        Err(e) if e.contains("unknown sew binary") => {
+            let m = "uninstall refused: /usr/local/bin/sew is not a Sew release this K2 knows, so K2 will not run it to \
+                     remove Sew while keeping its data. Sew is stopped. Either wipe it (k2 hostchat purge \
+                     --confirm-hostname <host>: K2 removes it without running it) or put a pinned Sew binary back and \
+                     uninstall again";
+            let msg = m.to_string();
+            save_enable(env, |r| {
+                if stopped {
+                    r.status = "disabled".into();
+                } else {
+                    r.status = "error".into();
+                }
+                r.last_error = Some(msg);
+            });
+            if stopped {
+                *env.token.lock().unwrap_or_else(|p| p.into_inner()) = None;
+                grant_hook_off(env, false);
+            }
+            return Err(no("unknown_sew_binary", 409, m));
+        }
         Err(e) => {
             fail_row(env, &format!("uninstall: {e}"));
             return Err(no("uninstall_failed", 500, e));
@@ -1365,15 +1390,31 @@ pub fn purge(env: &Env, confirm_hostname: &str, keep_backups: bool) -> R<Value> 
     if keep_backups {
         tail.push("keep-backups");
     }
+    // A known binary: Sew's own `uninstall --purge` (`teardown: "sew"`). A
+    // missing or unrecognised one (0.46.3 helper): the helper never runs
+    // it and tears Sew's layout down itself (`teardown: "k2"`).
     let out = match sew_ok(env, &tail, None) {
         Ok(v) => v,
         Err(e) => {
             fail_row(env, &format!("purge: {e}"));
-            return Err(no("purge_failed", 500, format!("{e} (nothing in the K2 vault was deleted; retry when fixed)")));
+            let hint = if e.contains("unknown sew binary") || e.contains("sew is not installed") {
+                format!(
+                    "{e}: this root helper predates K2's own teardown of a Sew it does not recognise; update it \
+                     (k2 root-helper update) and purge again (nothing in the K2 vault was deleted)"
+                )
+            } else {
+                format!("{e} (nothing in the K2 vault was deleted; retry when fixed)")
+            };
+            return Err(no("purge_failed", 500, hint));
         }
     };
+    let teardown = out.get("teardown").and_then(Value::as_str).unwrap_or("sew").to_string();
     // `--keep-backups` moves them to /var/lib/sew-backups-<stamp>: say where.
-    let backups_at = out.pointer("/sew/kept_backups").and_then(Value::as_str).map(str::to_string);
+    let backups_at = out
+        .pointer("/sew/kept_backups")
+        .or_else(|| out.get("keptBackups"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
     for r in [&row.master_key_ref, &row.master_next_ref, &row.master_prev_ref].into_iter().flatten() {
         if let Err(e) = env.secrets.delete(r) {
             return Err(no("vault_error", 500, format!("Sew was purged but the vault key could not be deleted: {e}")));
@@ -1388,17 +1429,34 @@ pub fn purge(env: &Env, confirm_hostname: &str, keep_backups: bool) -> R<Value> 
     // row that would still try to reach it.
     let hook = grant_hook_off(env, true);
     changed("purged");
-    Ok(json!({
+    // What the teardown left on the box (K2's path: the kept recovery
+    // file, a sysctl it could not restore, a login-like `sew` account).
+    let left: Vec<Value> = out.get("left").and_then(Value::as_array).cloned().unwrap_or_default();
+    let mut body = json!({
         "ok": true,
         "state": "not-installed",
         "purged": true,
+        "teardown": teardown,
         "grantHook": hook,
         "keptBackups": keep_backups,
         "backupsAt": backups_at,
         "voiceLeftovers": voice_left,
+        "left": left,
         "warning": "Off-box backups and the keyring mirror can no longer be read unless you kept the recovery key. \
                     K2 did not delete off-box copies.",
-    }))
+    });
+    if teardown == "k2" {
+        body["note"] = json!(
+            "/usr/local/bin/sew was missing or not a Sew release this K2 knows, so K2 removed Sew's units, config, data, \
+             credentials and binaries itself (it never ran that binary). Accounts are kept."
+        );
+        for k in ["removed", "units", "sysctl", "accounts", "binary"] {
+            if let Some(v) = out.get(k) {
+                body[k] = v.clone();
+            }
+        }
+    }
+    Ok(body)
 }
 
 // ── config ───────────────────────────────────────────────────────────────
@@ -1505,7 +1563,25 @@ pub fn upgrade_begin<'a>(env: &Env<'a>, req: &UpgradeRequest) -> R<Result<(Latch
     let from = version.unwrap_or_default();
     let to = pinned().version;
     match version_cmp(&from, to) {
-        Some(std::cmp::Ordering::Equal) => return Ok(Err(json!({"ok": true, "alreadyCurrent": true, "version": to}))),
+        Some(std::cmp::Ordering::Equal) => {
+            // The binary on disk already IS the pin (a hand-upgraded box):
+            // bring the row's record of it in line, so status, enable's
+            // already-enabled check and the next upgrade agree with the
+            // box. previous_version is left alone: K2 did not see the move.
+            let mut resynced = Value::Null;
+            if row.installed_version.as_deref() != Some(to) || row.pinned_version != to {
+                let _l = begin(env)?;
+                let was = row.installed_version.clone();
+                store::update(env.ops.now(), |r| {
+                    r.installed_version = Some(to.into());
+                    r.pinned_version = to.into();
+                })
+                .map_err(|e| no("db_error", 500, e))?;
+                resynced = json!({"installedVersion": {"from": was, "to": to}});
+                changed("upgraded");
+            }
+            return Ok(Err(json!({"ok": true, "alreadyCurrent": true, "version": to, "resynced": resynced})));
+        }
         Some(std::cmp::Ordering::Greater) => {
             return Err(no("downgrade_refused", 409, format!("Sew {from} is newer than this daemon's pin {to}: a downgrade is a restore")))
         }

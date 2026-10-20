@@ -689,6 +689,8 @@ pub mod fake {
         pub passthrough: Mutex<bool>,
         /// Every port the served-leaf check probed.
         pub served_ports: Mutex<Vec<u16>>,
+        /// [`SewOps::front_routes_changed`] calls (front443 table rebuilds).
+        pub front_rebuilds: Mutex<u32>,
     }
 
     pub const GIB: u64 = 1024 * 1024 * 1024;
@@ -774,6 +776,7 @@ pub mod fake {
                 front: Mutex::new(false),
                 passthrough: Mutex::new(true),
                 served_ports: Mutex::new(vec![]),
+                front_rebuilds: Mutex::new(0),
             }
         }
 
@@ -979,14 +982,48 @@ pub mod fake {
                 }
                 "engine sew rollback" => Self::sew_exit(0, json!({"state": "rolled_back", "from": pin, "to": "0.0.1"})),
                 "engine sew uninstall" => {
+                    // The real helper never runs an unrecognised binary.
+                    if self.on_disk.lock().unwrap().as_deref() == Some("unknown") {
+                        return Err("root helper engine sew uninstall: exit 3: sew helper: unknown sew binary".into());
+                    }
                     inactive(UNIT_SEW);
                     inactive(UNIT_DB);
                     Self::sew_exit(0, json!({"removed": ["units"]}))
                 }
                 a if a.starts_with("engine sew purge ") => {
-                    // Sew moves kept backups aside (sew-ops install.rs).
-                    let kept = a.ends_with(" keep-backups").then_some("/var/lib/sew-backups-20260103T000000Z");
-                    Self::sew_exit(0, json!({"purged": true, "kept_backups": kept}))
+                    let kept_at = "/var/lib/sew-backups-20260103T000000Z";
+                    let keep = a.ends_with(" keep-backups");
+                    let disk = self.on_disk.lock().unwrap().clone();
+                    match disk.as_deref() {
+                        // Missing or unrecognised: the 0.46.3 helper's own
+                        // teardown (no sewExit: nothing of Sew's ran).
+                        None | Some("unknown") => {
+                            inactive(UNIT_SEW);
+                            inactive(UNIT_DB);
+                            inactive(UNIT_MEDIA);
+                            *self.on_disk.lock().unwrap() = None;
+                            json!({
+                                "teardown": "k2",
+                                "binary": if disk.is_some() { json!({"present": true, "known": false, "executed": false}) } else { json!({"present": false}) },
+                                "installIdChecked": false,
+                                "removed": [SEW_CONFIG_DIR, SEW_DATA_DIR, SEW_BIN],
+                                "units": {"found": [UNIT_SEW, UNIT_DB]},
+                                "sysctl": {"state": "restored"},
+                                "accounts": [{"name": "sew", "loginLike": true, "reasons": ["uid 1001"]}],
+                                "keptBackups": if keep { json!(kept_at) } else { Value::Null },
+                                "left": [format!("{SEW_RECOVERY_FILE} (kept)")],
+                            })
+                        }
+                        Some("not-root") => {
+                            return Err("root helper engine sew purge: exit 3: sew helper: /usr/local/bin/sew is not root-owned or is writable by others".into())
+                        }
+                        _ => {
+                            // Sew moves kept backups aside (sew-ops install.rs).
+                            let mut v = Self::sew_exit(0, json!({"purged": true, "kept_backups": keep.then_some(kept_at)}));
+                            v["teardown"] = json!("sew");
+                            v
+                        }
+                    }
                 }
                 "engine sew doctor" => {
                     // Sew's media checks: the engine matches the installed core.
@@ -1225,6 +1262,9 @@ pub mod fake {
         }
         fn front_serving(&self) -> bool {
             *self.front.lock().unwrap()
+        }
+        fn front_routes_changed(&self) {
+            *self.front_rebuilds.lock().unwrap() += 1;
         }
         fn passthrough_supported(&self) -> bool {
             *self.passthrough.lock().unwrap()

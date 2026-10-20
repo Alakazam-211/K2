@@ -544,6 +544,46 @@ expect_fail_with "aarch64 asset" "k2-root-helper-linux-aarch64"
 nothing_installed "$D6" "guards"
 ok "argument, version, root, OS and arch guards"
 
+echo "== no minisign: refused up front with the distro's install hint =="
+# A PATH with every tool this test uses EXCEPT minisign (shims first, so the
+# id/uname/install/... stand-ins still win).
+NOMS="$WORK/no-minisign-bin"
+mkdir -p "$NOMS"
+IFS=: read -r -a _dirs <<<"$PATH"
+for _d in "${_dirs[@]}"; do
+	[ -d "$_d" ] || continue
+	for _f in "$_d"/*; do
+		_b="$(basename "$_f")"
+		[ "$_b" != minisign ] && [ -x "$_f" ] && [ ! -e "$NOMS/$_b" ] && ln -s "$_f" "$NOMS/$_b"
+	done
+done
+[ ! -e "$NOMS/minisign" ] || fail "test PATH still has minisign"
+os_release() { printf 'NAME="%s"\nID=%s\n%s' "$2" "$3" "${4:+ID_LIKE=$4
+}" >"$1"; }
+os_release "$WORK/os-debian" "Debian GNU/Linux" debian
+os_release "$WORK/os-ubuntu" "Ubuntu" ubuntu debian
+os_release "$WORK/os-rocky" "Rocky Linux" '"rocky"' '"rhel centos fedora"'
+os_release "$WORK/os-arch" "Arch Linux" arch
+os_release "$WORK/os-unknown" "Plan 9" plan9
+DNM="$WORK/box-nominisign"
+mkdir -p "$DNM"
+for _case in "debian:apt-get install -y minisign" "ubuntu:apt-get install -y minisign" \
+	"rocky:dnf install -y epel-release && dnf install -y minisign" \
+	"arch:pacman -S --needed minisign" "unknown:github.com/jedisct1/minisign/releases"; do
+	# A release that would 404 proves the refusal comes BEFORE any download.
+	PATH="$NOMS" K2_TEST_OS_RELEASE="$WORK/os-${_case%%:*}" run "$DNM" --version 0.45.9
+	expect_fail_with "no minisign (${_case%%:*})" "minisign is not installed"
+	printf '%s' "$out" | grep -qF -- "${_case#*:}" || fail "no minisign (${_case%%:*}): hint '${_case#*:}' missing: $out"
+	printf '%s' "$out" | grep -q "Nothing was downloaded or changed" || fail "no minisign: $out"
+	if printf '%s' "$out" | grep -q "download failed\|downloading"; then fail "no minisign: a download was attempted: $out"; fi
+done
+nothing_installed "$DNM" "no minisign"
+# --file with no .sig never needs minisign (operator-supplied build).
+fake_elf "$WORK/local-helper" 0.45.5 4 x86_64
+PATH="$NOMS" run "$DNM" --file "$WORK/local-helper"
+[ "$rc" -eq 0 ] || fail "--file without .sig must not need minisign: $out"
+ok "minisign checked before the download, with apt/dnf/pacman/fallback hints"
+
 echo "== install-mail-helper.sh is a wrapper for the root installer =="
 D7="$WORK/box7"
 SCRIPT="$WRAPPER" run "$D7" --version 0.45.5

@@ -261,6 +261,7 @@ pub fn plan(req: &HireRequest, members: Vec<MemberRecipe>, ctx: &PlanContext) ->
         for (i, m) in members.iter().enumerate() {
             super::converge::check_db_access(&ctx.caller, m.db_access.as_deref(), Some(ceiling))
                 .map_err(|e| HireError { hint: format!("members[{i}].{}", e.hint), ..e })?;
+            super::converge::check_chat_manage(&ctx.caller, m.chat_manage)?;
         }
         let db = crate::db::shared();
         let conn = db.lock();
@@ -287,6 +288,7 @@ pub fn plan(req: &HireRequest, members: Vec<MemberRecipe>, ctx: &PlanContext) ->
     } else {
         for m in &members {
             super::converge::check_db_access(&ctx.caller, m.db_access.as_deref(), None)?;
+            super::converge::check_chat_manage(&ctx.caller, m.chat_manage)?;
         }
     }
 

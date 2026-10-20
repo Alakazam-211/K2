@@ -211,6 +211,20 @@ pub fn check_db_access(
     Ok(())
 }
 
+/// "Manage Sew" at hire time (S30 K19): the owner, an Owner/Admin login or
+/// a hire key may set it; an agent caller never turns it on (it would hand
+/// an agent it hires, or itself, the Sew admin plane). Off is always fine.
+pub fn check_chat_manage(caller: &HireCaller, requested: Option<bool>) -> Result<(), HireError> {
+    if requested == Some(true) && caller.is_agent() {
+        return Err(HireError::new(
+            403,
+            "owner_only",
+            "An agent can't turn on 'Manage Sew' (chat_manage). Ask a human (owner or admin): Settings → Workspaces → (workspace) → Agent, or `k2 agent access set <workspace> chat_manage on` from a terminal outside a K2 agent session.",
+        ));
+    }
+    Ok(())
+}
+
 /// Create-or-converge one workspace.
 pub fn converge(
     req: &ConvergeRequest,
@@ -399,6 +413,10 @@ mod tests {
         assert_eq!(check_db_access(&agent, Some("read"), None).unwrap_err().code, "owner_only");
         assert!(check_db_access(&agent, Some("off"), None).is_ok());
         assert!(check_db_access(&HireCaller::Owner, Some("write"), None).is_ok());
+        assert_eq!(check_chat_manage(&agent, Some(true)).unwrap_err().code, "owner_only");
+        assert!(check_chat_manage(&agent, Some(false)).is_ok() && check_chat_manage(&agent, None).is_ok());
+        assert!(check_chat_manage(&HireCaller::Owner, Some(true)).is_ok());
+        assert!(check_chat_manage(&HireCaller::ApiKey { id: "k".into(), label: None }, Some(true)).is_ok());
     }
 
     #[test]

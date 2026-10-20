@@ -134,6 +134,11 @@ pub struct MemberRecipe {
     /// `off` | `read` | `write` (capped by the key's DB door).
     #[serde(default)]
     pub db_access: Option<String>,
+    /// "Manage Sew" (`chat_manage`, Sew S30 K19; Rosson 2026-10-15 Q2):
+    /// set at creation by an external app setting agents up for a person.
+    /// Off when absent. An agent caller never turns it on.
+    #[serde(default)]
+    pub chat_manage: Option<bool>,
     /// App login for the agent (S5).
     #[serde(default)]
     pub app_login: Option<AppLoginIn>,

@@ -46,6 +46,10 @@ pub struct InboxItem {
     pub source: String,
     pub from: String,      // sender identity ("user", "cli", workspace name)
     pub body_preview: String,
+    /// The sender's one-line summary (`k2 msg --summary`, frontmatter
+    /// `summary:`), 0.46.3. None on items without one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
 }
 
 /// Path to `<workspace>/.k2so/inbox/`. Doesn't create.
@@ -114,7 +118,33 @@ pub fn read_item(path: &Path, folder: &str) -> Option<InboxItem> {
             .cloned()
             .unwrap_or_else(|| "unknown".to_string()),
         body_preview,
+        summary: fm.get("summary").map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
     })
+}
+
+/// Put the sender's one-line summary in an item's frontmatter (`summary:`
+/// after `title:`, replacing an older one). Cleaned like a Chatter
+/// summary (one line, capped, redacted). Returns the stored line, `None`
+/// when `raw` is blank (nothing written).
+pub fn set_summary(item_path: &Path, raw: &str) -> Result<Option<String>, String> {
+    let Some(summary) = crate::overlay::summary::clean_sender_summary(raw) else {
+        return Ok(None);
+    };
+    let content = safe_read_to_string(item_path)?;
+    let line = format!("summary: {summary}");
+    let updated = match content.strip_prefix("---\n").and_then(|rest| rest.find("\n---").map(|end| (rest, end))) {
+        Some((rest, end)) => {
+            let (fm, tail) = rest.split_at(end);
+            let mut lines: Vec<String> =
+                fm.lines().filter(|l| !l.starts_with("summary:")).map(str::to_string).collect();
+            let at = lines.iter().position(|l| l.starts_with("title:")).map(|i| i + 1).unwrap_or(lines.len());
+            lines.insert(at, line);
+            format!("---\n{}{tail}", lines.join("\n"))
+        }
+        None => format!("---\n{line}\n---\n\n{content}"),
+    };
+    atomic_write(item_path, &updated)?;
+    Ok(Some(summary))
 }
 
 fn body_preview_for(content: &str) -> String {
@@ -267,6 +297,7 @@ pub fn compose(
         source,
         from,
         body_preview: body_preview_for(&content),
+        summary: None,
     })
 }
 
@@ -1251,6 +1282,34 @@ mod tests {
         assert!(content.starts_with("---\n"));
         assert!(content.contains("title: Audit auth"));
         assert!(content.contains("Body text."));
+    }
+
+    /// 0.46.3 `k2 msg --summary` on a tray item: one cleaned line in the
+    /// frontmatter after `title:`, listed back, replaced (never doubled),
+    /// and nothing written for a blank one.
+    #[test]
+    fn set_summary_lands_in_frontmatter_and_lists_back() {
+        let ws = make_ws();
+        let item = compose(ws.path(), "Review hold/x", "Body.\n", None, None, Some("peer")).unwrap();
+        assert_eq!(item.summary, None);
+        let path = inbox_root(ws.path()).join(&item.filename);
+        let stored = set_summary(&path, "  Need a review\n by 5pm ").unwrap();
+        assert_eq!(stored.as_deref(), Some("Need a review by 5pm"));
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.starts_with("---\ntitle: Review hold/x\nsummary: Need a review by 5pm\npriority:"), "{content}");
+        assert!(content.ends_with("Body.\n\n"), "body untouched: {content:?}");
+        let listed = list_root(ws.path());
+        assert_eq!(listed[0].summary.as_deref(), Some("Need a review by 5pm"));
+
+        set_summary(&path, "Second take").unwrap();
+        let content = fs::read_to_string(&path).unwrap();
+        assert_eq!(content.matches("summary:").count(), 1, "{content}");
+        assert_eq!(list_root(ws.path())[0].summary.as_deref(), Some("Second take"));
+
+        assert_eq!(set_summary(&path, "  \n ").unwrap(), None);
+        assert_eq!(list_root(ws.path())[0].summary.as_deref(), Some("Second take"), "a blank summary writes nothing");
+        let v = serde_json::to_value(&list_root(ws.path())[0]).unwrap();
+        assert_eq!(v["summary"], "Second take");
     }
 
     #[test]

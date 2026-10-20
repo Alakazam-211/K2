@@ -308,6 +308,15 @@ pub struct OverlayDoc {
     /// copy, never a grant. Empty on every other doc and on older docs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<super::attachments::ThreadAttachment>,
+    /// Chatter only (0.46.3): one line for people — the sender's
+    /// (`k2 msg --summary`) or derived from the body's first line
+    /// (`super::summary`). Redacted like the body. None elsewhere and on
+    /// older docs (filled at read time).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    /// `sender` | `derived`.
+    #[serde(default, rename = "summarySource", skip_serializing_if = "Option::is_none")]
+    pub summary_source: Option<String>,
 }
 
 /// The body of a `handoff` card. `body` on the doc carries a plain line
@@ -459,6 +468,8 @@ impl OverlayDoc {
             delivery_id: None,
             handoff: None,
             attachments: Vec::new(),
+            summary: None,
+            summary_source: None,
         }
     }
 
@@ -501,6 +512,8 @@ impl OverlayDoc {
             delivery_id: None,
             handoff: None,
             attachments: Vec::new(),
+            summary: None,
+            summary_source: None,
         }
     }
 
@@ -543,6 +556,8 @@ impl OverlayDoc {
             delivery_id: None,
             handoff: None,
             attachments: Vec::new(),
+            summary: None,
+            summary_source: None,
         }
     }
 
@@ -573,6 +588,8 @@ impl OverlayDoc {
             delivery_id: None,
             handoff: None,
             attachments: Vec::new(),
+            summary: None,
+            summary_source: None,
         }
     }
 
@@ -597,6 +614,8 @@ impl OverlayDoc {
             delivery_id: None,
             handoff: Some(card),
             attachments: Vec::new(),
+            summary: None,
+            summary_source: None,
         }
     }
 

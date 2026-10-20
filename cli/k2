@@ -12495,6 +12495,18 @@ print(field('session', 'session'))
 "
 }
 
+# _msg_summary_hint <text> <summary>: on stderr, when a message is over
+# ~600 characters and has no --summary (plan-projects-threads-chatter-v1).
+_msg_summary_hint() {
+    local text="$1" summary="$2" n
+    [[ -n "$summary" ]] && return 0
+    n=$(printf '%s' "$text" | python3 -c 'import sys; print(len(sys.stdin.read()))' 2>/dev/null || printf '%s' "${#text}")
+    if [[ "$n" -gt 600 ]]; then
+        echo "hint: this message is $n characters with no --summary. Add --summary \"one line: what you need or what you did\" so people can scan it (K2 uses its first line otherwise)." >&2
+    fi
+    return 0
+}
+
 cmd_msg() {
     # `k2 msg <workspace> "text" [--from <name>]`
     #
@@ -12537,8 +12549,14 @@ cmd_msg() {
     local wake="true"
     local wake_timeout=""
     local secret_name=""
+    local summary=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --summary)
+                # 0.46.3: one line for people (Chatter, the Projects view,
+                # phone clients). Never injected into the recipient's PTY.
+                [[ $# -ge 2 ]] || { echo "usage: --summary \"one line: what you need or what you did\"" >&2; exit 2; }
+                summary="$2"; shift 2 ;;
             --secret)
                 # `k2 msg <agent> "text" --secret NAME` (prd-agent-secret-
                 # handoff-v1 §4.2): a vault handoff whose note is the text.
@@ -12582,6 +12600,9 @@ cmd_msg() {
         echo "Usage: k2 msg <workspace> \"text\" [--from <name>] [--command \"<text>\"]" >&2
         exit 1
     }
+    # 0.46.3: long messages should say in one line what they want; a hint,
+    # never an error (the daemon derives a first-line summary otherwise).
+    _msg_summary_hint "$text" "$summary"
 
     # --secret: one handoff; the text rides as its note. If the send fails
     # no message goes either, so the text never arrives without its secret.
@@ -12690,6 +12711,7 @@ except Exception:
     params="${params}&wake=${wake}"
     [[ -n "$wake_timeout" ]] && params="${params}&wake_timeout=$(urlencode "$wake_timeout")"
     [[ -n "$explicit_via" ]] && params="${params}&via=$(urlencode "$explicit_via")"
+    [[ -n "$summary" ]] && params="${params}&summary=$(urlencode "$summary")"
 
     local response
     # #58 Phase-1 close: prefer the scoped per-cell UDS for msg (the daemon
@@ -26665,6 +26687,14 @@ THREE TOOLS (do not mix)
 LIVE CHAT (short, one line)
   k2 msg <handle> "ready when you are"
 
+LONGER MESSAGES: SAY IT IN ONE LINE TOO
+  k2 msg <handle> --summary "Need a review of hold/x by 5pm" "…the details…"
+      For anything longer than ~3 lines, pass --summary saying what you need
+      or what you did. People see it in Chatter, the Projects view and on the
+      phone; the agent still gets the whole message. Over ~600 characters
+      without one, k2 prints a hint (K2 uses the first line otherwise).
+      Works on --inbox-wake/--inbox-silent too (shown in `k2 inbox list`).
+
 SEND A FILE
   k2 msg <handle> --inbox-wake ./brief.md [--title "..."] [--body "..."]
       Copy into their .k2/inbox/ and ping them: Open: k2 inbox read <id>
@@ -26690,8 +26720,8 @@ WHO REALLY SENT IT
 workspace tray.
 
 USAGE
-  k2 msg <handle|handle/sidecar|sessionId|agent::host> "text" [--from <name>] [--command "<text>"] [--no-wake]
-  k2 msg <handle|agent::host> --inbox-wake|--inbox-silent <path> [path...] [--title "..."] [--body "..."] ["brief"]
+  k2 msg <handle|handle/sidecar|sessionId|agent::host> "text" [--summary "<one line>"] [--from <name>] [--command "<text>"] [--no-wake]
+  k2 msg <handle|agent::host> --inbox-wake|--inbox-silent <path> [path...] [--title "..."] [--body "..."] [--summary "<one line>"] ["brief"]
 
 Live `msg` AUTO-WAKES a dormant session by default: if the agent's
 session is asleep, msg resumes/spawns it, waits until READY, then
@@ -27081,6 +27111,7 @@ cmd_schema() {
       "args": [{"name": "workspace", "required": true, "description": "Local workspace name/path/uuid, or agent::host (live and tray both use federation)"}, {"name": "text_or_path", "required": false, "description": "Live message text, or one+ file paths with --inbox-silent|--inbox-wake (multi-file → one tray package)"}],
       "flags": [
         {"name": "--from", "arg": "name", "description": "Sender identity rendered as a [from <name>] prefix."},
+        {"name": "--summary", "arg": "text", "description": "One line saying what you need or what you did, for people (Chatter, the Projects view, phones, k2 inbox list). Pass it for anything longer than ~3 lines; over ~600 characters without one prints a hint. Never injected: the agent gets the whole message."},
         {"name": "--command", "arg": "text", "description": "Prepend text (e.g. a slash-command) at the very front of the delivered line."},
         {"name": "--inbox-silent", "arg": null, "description": "Land a durable tray package under peer .k2/inbox/ (one or more file paths, or --title/--body). Multi-file → one package. Does NOT notify."},
         {"name": "--inbox-wake", "arg": null, "description": "Land tray package + short live knock ([inbox:id] title + open line). Accepts multiple paths as one package. Preferred tray mode."},
@@ -33558,6 +33589,8 @@ for item in data:
     prio_mark = {'high': '!', 'critical': '!!', 'normal': ' ', 'low': '.'}
     mark = prio_mark.get(priority, ' ')
     print(f'  {iid:<24} [{folder:<10}] {mark} {title}')
+    if item.get('summary'):
+        print(f'  {\"\":<24}   summary: {item[\"summary\"]}')
 " 2>/dev/null || cat
 }
 
@@ -33605,9 +33638,10 @@ print(d.get('content', ''))
 }
 
 cmd_inbox_compose() {
-    local title="" body="" priority="" source="" from=""
+    local title="" body="" priority="" source="" from="" summary=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --summary) summary="$2"; shift 2 ;;
             --title) title="$2"; shift 2 ;;
             --body) body="$2"; shift 2 ;;
             --priority) priority="$2"; shift 2 ;;
@@ -33625,6 +33659,7 @@ cmd_inbox_compose() {
     [[ -n "$priority" ]] && params="${params}&priority=$(urlencode "$priority")"
     [[ -n "$source" ]] && params="${params}&source=$(urlencode "$source")"
     [[ -n "$from" ]] && params="${params}&from=$(urlencode "$from")"
+    [[ -n "$summary" ]] && params="${params}&summary=$(urlencode "$summary")"
     # 0.39.45 (#35/#37): real POST body. The old `curl -sG -X POST` put
     # everything on the URL, where the daemon's request-head cap silently
     # clipped bodies at ~2.7KB — corrupting the durable inbox record.
@@ -38816,10 +38851,11 @@ _cmd_msg_inbox_form_inner() {
     # box while staging on the peer (Bug A) and blocked federation-only
     # peers (Bug B).
 
-    local title="" body="" priority="" from="" path=""
+    local title="" body="" priority="" from="" path="" summary=""
     local positional=()
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --summary)  summary="$2"; shift 2 ;;
             --title)    title="$2"; shift 2 ;;
             --body)     body="$2"; shift 2 ;;
             --priority) priority="$2"; shift 2 ;;
@@ -38888,6 +38924,7 @@ _cmd_msg_inbox_form_inner() {
             local params="workspace=$(urlencode "$target")&path=$(urlencode "$pth")&wake=$(urlencode "$wake_flag")&mode=$(urlencode "$mode")&source=msg-inbox"
             [[ -n "$title" ]] && params="${params}&title=$(urlencode "$title")"
             [[ -n "$body" ]] && params="${params}&body=$(urlencode "$body")"
+            [[ -n "$summary" ]] && params="${params}&summary=$(urlencode "$summary")"
             [[ -n "$from" ]] && params="${params}&from=$(urlencode "$from")"
             cli_send cli_post_form "/cli/inbox/deliver" "$params"
         }
@@ -38902,6 +38939,7 @@ _cmd_msg_inbox_form_inner() {
             local params="workspace=$(urlencode "$target")&paths=$(urlencode "$paths_json")&wake=$(urlencode "$wake_flag")&mode=$(urlencode "$mode")&source=msg-inbox"
             [[ -n "$title" ]] && params="${params}&title=$(urlencode "$title")"
             [[ -n "$body" ]] && params="${params}&body=$(urlencode "$body")"
+            [[ -n "$summary" ]] && params="${params}&summary=$(urlencode "$summary")"
             [[ -n "$from" ]] && params="${params}&from=$(urlencode "$from")"
             cli_send cli_post_form "/cli/inbox/deliver" "$params"
         }
@@ -38911,6 +38949,7 @@ _cmd_msg_inbox_form_inner() {
             local params="workspace=$(urlencode "$target")&path=$(urlencode "$pth")&wake=$(urlencode "$wake_flag")&mode=$(urlencode "$mode")&source=msg-inbox"
             [[ -n "$title" ]] && params="${params}&title=$(urlencode "$title")"
             [[ -n "$body" ]] && params="${params}&body=$(urlencode "$body")"
+            [[ -n "$summary" ]] && params="${params}&summary=$(urlencode "$summary")"
             [[ -n "$from" ]] && params="${params}&from=$(urlencode "$from")"
             cli_send cli_post_form "/cli/inbox/deliver-bundle" "$params"
         }
@@ -38993,6 +39032,7 @@ _cmd_msg_inbox_form_inner() {
 
     local params="workspace=$(urlencode "$target")&title=$(urlencode "$title")&source=msg-inbox"
     [[ -n "$body" ]] && params="${params}&body=$(urlencode "$body")"
+    [[ -n "$summary" ]] && params="${params}&summary=$(urlencode "$summary")"
     [[ -n "$priority" ]] && params="${params}&priority=$(urlencode "$priority")"
     [[ -n "$from" ]] && params="${params}&from=$(urlencode "$from")"
     local response

@@ -311,6 +311,23 @@ pub fn deliver_recorded(
     via: &str,
     sender: &Sender,
 ) -> (crate::workspace_msg::MsgResponse, Option<String>) {
+    deliver_recorded_with_summary(target, text, from, command, wake, wake_timeout, via, sender, None)
+}
+
+/// [`deliver_recorded`] with the sender's one-line summary (`k2 msg
+/// --summary`), kept on the Chatter line, never injected.
+#[allow(clippy::too_many_arguments)]
+pub fn deliver_recorded_with_summary(
+    target: &str,
+    text: &str,
+    from: &str,
+    command: &str,
+    wake: bool,
+    wake_timeout: std::time::Duration,
+    via: &str,
+    sender: &Sender,
+    summary: Option<&str>,
+) -> (crate::workspace_msg::MsgResponse, Option<String>) {
     let target_ws = crate::workspace_msg::resolve_workspace(target).and_then(|path| {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -340,7 +357,7 @@ pub fn deliver_recorded(
     };
     let resp = if recorded {
         let from_with_id = format!("{label} · {id}");
-        crate::workspace_msg::deliver_live_with_receipt(target, text, &from_with_id, from, &id, command, wake, wake_timeout, via)
+        crate::workspace_msg::deliver_live_with_receipt(target, text, &from_with_id, from, &id, command, wake, wake_timeout, via, summary)
     } else {
         crate::workspace_msg::deliver_live_with_via(target, text, &label, command, wake, wake_timeout, via)
     };

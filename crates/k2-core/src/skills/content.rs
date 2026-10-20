@@ -376,6 +376,7 @@ k2so done                                      # shortcut for `checkin --done`
 ```
 k2so talk <workspace> "text"                             # BETA: read their screen FIRST, then send (THE collab verb)
 k2so msg <workspace> "text"                              # live delivery (call/IM — SHORT messages only)
+k2so msg <workspace> --summary "one line" "text"         # longer than ~3 lines: say what you need / did in one line
 k2so msg <workspace> --inbox-wake <path> [path…]         # package + knock (preferred; no length limit)
 k2so msg <workspace> --inbox-silent <path> [path…]       # package only, no notify
 k2so msg <workspace> --signal <kind> --payload '{...}'   # typed signal (advanced)
@@ -529,6 +530,7 @@ k2so done                           # shortcut for `checkin --done`
 ```
 k2so talk <workspace> "text"                             # BETA: read their screen FIRST, then send (THE collab verb)
 k2so msg <workspace> "text"                              # live (call/IM — SHORT messages only)
+k2so msg <workspace> --summary "one line" "text"         # longer than ~3 lines: say what you need / did in one line
 k2so msg <workspace> --inbox-wake <path> [path…]         # package + knock (preferred; no length limit)
 k2so msg <workspace> --inbox-silent <path> [path…]       # package only, no notify
 k2so read <workspace> [--lines N] [--agent <name>]       # read its live terminal (peek before you inject)
@@ -745,6 +747,7 @@ k2so heartbeat log [-n N]
 k2so connections list                                    # who's wired up to me / workspaces with live agents
 k2so talk <workspace> "text"                             # BETA: read their screen FIRST, then send (THE collab verb)
 k2so msg <workspace> "text"                              # live delivery (call/IM — SHORT messages only)
+k2so msg <workspace> --summary "one line" "text"         # longer than ~3 lines: say what you need / did in one line
 k2so msg <workspace> --inbox-wake <path> [path…]         # package + knock (preferred; no length limit)
 k2so msg <workspace> --inbox-silent <path> [path…]       # package only, no notify
 k2so msg <workspace> --signal <kind> --payload '{...}'   # typed signal (advanced)

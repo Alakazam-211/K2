@@ -75,8 +75,11 @@ pub const ALL_KINDS: &[&str] = &[
 
 /// Kinds held for a fresh owner confirm from every caller, the owner token
 /// included (§5.6 "always per event", AR14): no admin switch and no
-/// credential turns them into an immediate change.
-pub const ALWAYS_PER_EVENT: &[&str] = &[KIND_DEPLOY, KIND_INSTALL, KIND_DB_RAW, KIND_EGRESS];
+/// credential turns them into an immediate change. Egress hosts left the
+/// list in 0.46.3: an agent with "…and manage them end to end" adds them
+/// to its own Apps itself (prd-agent-app-permissions-v1 §2.1); broad
+/// egress (`egress_mode`) loosens the wall and stays the person's.
+pub const ALWAYS_PER_EVENT: &[&str] = &[KIND_DEPLOY, KIND_INSTALL, KIND_DB_RAW, KIND_EGRESS_MODE, KIND_OVERCOMMIT];
 
 pub const STATUS_PENDING: &str = "pending";
 pub const STATUS_APPROVED: &str = "approved";

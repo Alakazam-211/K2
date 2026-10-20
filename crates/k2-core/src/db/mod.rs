@@ -1451,6 +1451,15 @@ fn run_migrations_through(conn: &Connection, last: Option<&str>) -> Result<()> {
         // `cu_…` session id, never the token) + its index. Additive only;
         // renumber freely on a slip (and edit the migration-order tests).
         ("0195_push_device_session", include_str!("../../drizzle_sql/0195_push_device_session.sql")),
+        // 0197 — per-agent App permissions (prd-agent-app-permissions-v1
+        // rev 2, slice A; 0.46.3): switch 2
+        // (`projects.agents_can_manage_apps_full`, DEFAULT 0), the cores
+        // list (`projects.app_cores`, DEFAULT '[]'; upgraded rows that had
+        // the old switch on get the cores their Apps use) and the one-time
+        // review list (`app_access_review`, Q4). 0196 belongs to another
+        // 0.46.3 lane; renumber freely on a slip (and edit the
+        // migration-order tests below).
+        ("0197_agent_app_permissions", include_str!("../../drizzle_sql/0197_agent_app_permissions.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2114,7 +2123,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0195_push_device_session",
+            last_name, "0197_agent_app_permissions",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2165,6 +2174,7 @@ mod tests {
                 "0193_homes_sync",
                 "0194_compute_manage",
                 "0195_push_device_session",
+                "0197_agent_app_permissions",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2219,6 +2229,7 @@ mod tests {
                 "0193_homes_sync",
                 "0194_compute_manage",
                 "0195_push_device_session",
+                "0197_agent_app_permissions",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -2326,6 +2337,76 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM _migrations WHERE name = '0195_push_device_session'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 1, "recorded once");
+    }
+
+    /// A 0.46.2 database (0195 applied, before 0197) upgrades through 0197
+    /// (Q4): a workspace with "Allow this agent to manage Apps" on keeps it
+    /// (switch 1), gets switch 2 off, the cores its Apps' approved caps
+    /// and allowed Sew presets use, and a review row; a workspace with the
+    /// switch off gets nothing; a second run is a no-op.
+    #[test]
+    fn a_046_2_database_upgrades_through_0197_agent_app_permissions() {
+        let conn = fresh_memory();
+        run_migrations_through(&conn, Some("0195_push_device_session")).unwrap();
+        let cols = |conn: &Connection| -> Vec<String> {
+            let mut stmt = conn.prepare("PRAGMA table_info(projects)").unwrap();
+            stmt.query_map([], |r| r.get::<_, String>(1)).unwrap().map(|r| r.unwrap()).collect()
+        };
+        assert!(!cols(&conn).iter().any(|c| c == "agents_can_manage_apps_full"), "0.46.2 has no switch 2");
+        for (id, manage) in [("w-on", 1), ("w-off", 0), ("w-bare", 1)] {
+            conn.execute(
+                "INSERT INTO projects (id, name, path, handle, agents_can_manage_skin) VALUES (?1, ?1, '/tmp/' || ?1, ?1, ?2)",
+                params![id, manage],
+            )
+            .unwrap();
+        }
+        for (app, ws, caps) in [
+            ("shop", "w-on", Some(r#"["thread:read","files:write","store:read"]"#)),
+            ("blog", "w-on", Some(r#"["wiki:read","heartbeats:read"]"#)),
+            ("chat", "w-on", None),
+            ("side", "w-off", Some(r#"["store:write"]"#)),
+            ("junk", "w-bare", Some("not json")),
+        ] {
+            conn.execute(
+                "INSERT INTO apps (app_id, service_id, owner_workspace, state, created_by, created_at, updated_at, approved_caps_json) \
+                 VALUES (?1, 'svc-' || ?1, ?2, 'stopped', 'owner', 1, 1, ?3)",
+                params![app, ws, caps],
+            )
+            .unwrap();
+        }
+        conn.execute(
+            "INSERT INTO app_box_services (app_id, name, host_port, app_port, preset, source, status, added_by, added_at) \
+             VALUES ('chat', 'sew-api', 8448, 8448, 'sew-api', 'request', 'allowed', 'owner', 1)",
+            [],
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+        let row = |id: &str| -> (i64, i64, String) {
+            conn.query_row(
+                "SELECT agents_can_manage_skin, agents_can_manage_apps_full, app_cores FROM projects WHERE id = ?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap()
+        };
+        assert_eq!(row("w-on"), (1, 0, r#"["db","files","sew","thread"]"#.to_string()), "switch 1 kept, switch 2 off, cores from live caps");
+        assert_eq!(row("w-off"), (0, 0, "[]".to_string()), "switch off: no cores derived");
+        assert_eq!(row("w-bare"), (1, 0, "[]".to_string()), "unreadable caps derive nothing");
+        let review: Vec<(String, Option<i64>)> = {
+            let mut st = conn.prepare("SELECT project_id, noted_at FROM app_access_review ORDER BY project_id").unwrap();
+            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(|r| r.unwrap()).collect()
+        };
+        assert_eq!(review, vec![("w-bare".to_string(), None), ("w-on".to_string(), None)], "only the agents that had the switch on");
+
+        run_migrations(&conn).unwrap();
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM _migrations WHERE name = '0197_agent_app_permissions'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1, "recorded once");
+        // A workspace created after the upgrade starts with both off (Q3 = A).
+        conn.execute("INSERT INTO projects (id, name, path, handle) VALUES ('w-new', 'w-new', '/tmp/w-new', 'w-new')", []).unwrap();
+        assert_eq!(row("w-new"), (0, 0, "[]".to_string()));
     }
 
     /// A 0.46.0-era database (last migration 0189) with project chat lines
@@ -2755,7 +2836,12 @@ mod tests {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
             conn.execute("DELETE FROM _migrations WHERE name = '0164_garden_data'", []).unwrap();
-            // 0195 (push device session, 0.46.3) is the newest: its record
+            // 0197 (agent App permissions, 0.46.3) is the newest: its
+            // record goes (its projects columns stay and re-adding them is
+            // skipped as duplicate columns; its review table is IF NOT
+            // EXISTS and its inserts/updates are idempotent).
+            conn.execute("DELETE FROM _migrations WHERE name = '0197_agent_app_permissions'", []).unwrap();
+            // 0195 (push device session, 0.46.3) came before it: its record
             // goes (its column and index stay; re-adding the column is
             // skipped as a duplicate column, the index is IF NOT EXISTS).
             conn.execute("DELETE FROM _migrations WHERE name = '0195_push_device_session'", []).unwrap();

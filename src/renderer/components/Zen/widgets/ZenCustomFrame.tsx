@@ -27,7 +27,7 @@ import {
 } from '@/lib/zen/zen-widget-routes'
 import { zenLib, ZenLibError } from '@/lib/zen/zen-lib-loader'
 import { zenFramePrelude, type ZenFrameTheme } from '@/lib/zen/zen-custom-prelude'
-import { createZenCustomLayer, type ZenCustomLayer } from '@/lib/zen/zen-custom-bridge'
+import { ZEN_PICK_GESTURE_MS, createZenCustomLayer, type ZenCustomLayer } from '@/lib/zen/zen-custom-bridge'
 import { zenCustomSourcesFor } from '@/lib/zen/zen-custom-sources'
 import { createZenCustomStore, zenDataSpace } from '@/lib/zen/zen-custom-store'
 import { createZenCustomGuests, type ZenGuestRoomsAsk } from '@/lib/zen/zen-custom-guests'
@@ -50,7 +50,7 @@ import { currentZenGardenId, switchZenGardenByIndex } from '@/lib/zen/zen-garden
 import { cycleZenTheme } from '@/lib/zen/zen-theme-switch'
 import { useZenConfigStore, zenLocalScope } from '@/lib/zen/zen-api'
 import { exitZen } from '@/lib/zen/zen-view'
-import { registerZenCanvasFrame, setZenCanvasRegions, startZenCanvasDrag, zenCanvasPointer } from '@/lib/zen/zen-canvas'
+import { registerZenCanvasFrame, setZenCanvasRegions, startZenCanvasDrag, zenCanvasPointer, zenCanvasPressedWithin } from '@/lib/zen/zen-canvas'
 
 /** UW33: one gate for every widget frame in this window (they share the
  *  500 ms budget), acting as K2's own keys would. */
@@ -87,6 +87,12 @@ export const ZEN_FRAME_FEATURES: readonly string[] = [
   'garden-data-v1',
   // RS-A15 `guests.rooms` / `guests.setRooms` (0.46.1).
   'guests-rooms-v1',
+  // 0.46.3 Thread parity: `thread.markRead`, `thread.attachment`,
+  // `thread.open`, `thread.links`, `thread.pickFiles` (each still checks the
+  // agent's server and answers verb_unavailable on an older one).
+  'thread-read-v1',
+  'thread-attachments-v1',
+  'thread-images-v1',
 ]
 
 /** The Garden's theme as the frame gets it: the Zen root's `--zen-*`
@@ -275,6 +281,9 @@ export function ZenCustomFrame({
             confirm: (ask) => new Promise((resolve) => setGuestAsk({ ask, resolve })),
           }),
           stop: (reason) => stopZenWidget(key, reason),
+          // `thread.pickFiles` opens K2's picker only after the person
+          // pressed in this widget a moment ago, or while it has the focus.
+          gesture: () => zenCanvasPressedWithin(key, ZEN_PICK_GESTURE_MS) || zenFrameHasFocus(frameRef.current),
           paused: () => widgetRef.current.paused !== null || isZenWidgetPostingPaused(key),
           pauseForRunaway: () => {
             pauseZenWidgetPosting(key)

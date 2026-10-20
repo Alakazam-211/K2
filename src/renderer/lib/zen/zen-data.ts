@@ -44,7 +44,8 @@
 //     every 15 s while a Zen window shows rows, on start and on window focus;
 //     a server without `thread-latest` gets one `thread?addr=&limit=1` per
 //     row (never `limit=0`). The open conversation updates its row at once.
-//   - No unread tracking (answer 9): `thread.markRead` is not provided.
+//   - Unread (thread-read-v1, supersedes answer 9): `thread.markRead` posts
+//     the person's read cursor on the agent's server (`zen-thread-files`).
 //
 // Conversations (`conversation.open`): Zen NEVER switches the window's server
 // (Z35, vs-live Z54). A row on the window's server selects the primary room;
@@ -61,6 +62,13 @@
 // (`postThreadCompose`, vs-live Z67) after the existing attach path
 // (`composeAttachPayload`: local paths, or an upload to the agent's own
 // server).
+//
+// 0.46.3 Thread parity (Rosson 2026-10-20): a server with
+// `thread-attachments-v1` gets picked files as attachments that ride the
+// message (workspace-relative, uploaded into `.k2/downloads` when needed),
+// never as paths in the text; `thread.read` takes `afterSeq` (a delta), and
+// `thread.markRead`, `thread.attachment`, `thread.open`, `thread.links` and
+// `thread.pickFiles` are provided (`zen-thread-files.ts`).
 
 import { createStore } from 'zustand/vanilla'
 import { useHomesStore, selectedHome, resolveHomeId, type Home, type HomeRow } from '@/stores/homes'
@@ -119,7 +127,7 @@ import {
 } from '@/components/SessionView/overlayThread'
 import { registerZenVerb, type ZenVerbCtx } from './zen-bridge'
 import { checkZenWidgetCap } from './zen-widget-routes'
-import { exitZen } from './zen-view'
+import { exitZen, zenShownNow } from './zen-view'
 import type { ZenResolvedPage, ZenWidgetDecl } from './zen-page'
 import { useZenGardenHomesStore, zenGardenHomeKey } from './zen-garden-homes'
 import { ZEN_CUSTOM_KIND } from './zen-page'
@@ -130,6 +138,30 @@ import { draftZenCompose } from './zen-compose-drafts'
 import { zenAgentsSource } from './zen-rail-views'
 import { initUnreadEvents, unreadKey, useUnreadStore } from '@/stores/unread'
 import type { ZenAgentCounts } from './zen-counts'
+import {
+  ZEN_THREAD_ATTACH_MAX,
+  ZenThreadVerbError,
+  zenAttachRelPaths,
+  zenAttachmentObject,
+  zenLinkTransport,
+  zenPreviewAttachment,
+  zenPreviewRel,
+  zenResolveForOpen,
+  zenThreadAttachment,
+  zenThreadAttachments,
+  zenThreadDelta,
+  zenThreadLinks,
+  zenThreadMarkRead,
+  zenThreadOpenTarget,
+  zenThreadPickFiles,
+  zenThreadPostAttachments,
+  type ZenThreadAttach,
+  type ZenThreadFileMode,
+  type ZenThreadTarget,
+} from './zen-thread-files'
+import { showZenFilePreview } from './zen-file-preview'
+import { openThreadAttachment, openThreadFileLink } from '@/lib/thread-file-link-open'
+import type { Room } from '@/stores/room'
 import {
   isOwnThreadPost,
   loadThreadViewer,
@@ -309,6 +341,9 @@ export interface ZenPostOptions {
   paths?: string[]
   files?: File[]
   origin?: ThreadWidgetOrigin
+  /** Files in the agent's workspace that ride the message
+   *  (thread-attachments-v1; a widget's picks from `thread.pickFiles`). */
+  attachments?: ZenThreadAttach[]
 }
 
 /** Read a bridge-passed origin (`{widget, garden, placement?, hash?}`). */
@@ -1629,6 +1664,22 @@ export async function postZenThread(
   const c = readyConversation(address)
   let body = text.trim()
   const hasFiles = (opts.paths?.length ?? 0) > 0 || (opts.files?.length ?? 0) > 0
+  const given = opts.attachments ?? []
+  // 0.46.3: files ride the message as attachments on a server that has
+  // them (the desktop Thread's rule); an older one gets paths in the text.
+  if (given.length > 0 || (hasFiles && c.scope.serverSupports('thread-attachments-v1'))) {
+    const t = zenThreadTarget(address)
+    const picked = hasFiles ? await zenAttachRelPaths(t, { paths: opts.paths, files: opts.files }) : []
+    if (picked === null) throw new Error('The attachment was not uploaded.')
+    const all: ZenThreadAttach[] = [...given, ...picked.map((p) => ({ relPath: p.relPath }))]
+    if (all.length > ZEN_THREAD_ATTACH_MAX) throw new ZenThreadVerbError('bad_args', 'Attach up to 10 files to a message.')
+    if (!body && all.length === 0) throw new Error('Nothing to send.')
+    if (!isConnectedHost(c.hostKey)) homeRooms.input(address)
+    const origin = opts.origin ? await zenWidgetPostOrigin(c.scope, opts.origin) : undefined
+    const item = await zenThreadPostAttachments(t, body, all, origin)
+    if (item && setPreview(address, previewFromItem(item, viewerOf(address)))) emitRows()
+    return { id: item?.id ?? null, seq: item?.seq ?? null }
+  }
   if (hasFiles) {
     const payload = await composeAttachPayload(c.scope, {
       paths: opts.paths,
@@ -1654,6 +1705,60 @@ export async function postZenThread(
     if (setPreview(address, previewFromItem(result.item, viewerOf(address)))) emitRows()
   }
   return { id: result.item?.id ?? null, seq: result.item?.seq ?? null }
+}
+
+/** The open conversation as `zen-thread-files` takes it. */
+function zenThreadTarget(address: string): ZenThreadTarget {
+  const c = readyConversation(address)
+  const conversationId = feedViews.get(address)?.conversationId || null
+  return { address, scope: c.scope, threadAddr: c.threadAddr, workspacePath: c.workspacePath, conversationId }
+}
+
+/** The room the agent's files open in outside Zen: the window's own room
+ *  for a row on the window's server, else its Home room when one is open. */
+function zenFileRoom(address: string): Room | null {
+  const c = readyConversation(address)
+  if (isConnectedHost(c.hostKey)) return primaryRoom()
+  return homeRooms.store.getState().entries[address]?.room ?? null
+}
+
+/** `thread.open(address, {docId, n} | {rel, line?})`: full size. In Zen
+ *  (no tab strip) on K2's preview sheet, whose "Open in K2" leaves Zen for
+ *  the file tab; outside Zen as a file tab in the agent's room. */
+async function openZenThreadFile(address: string, raw: unknown): Promise<{ opened: boolean }> {
+  const target = zenThreadOpenTarget(raw)
+  const t = zenThreadTarget(address)
+  const file =
+    target.kind === 'attachment' ? await zenAttachmentObject(t, target.docId, target.n, feedViews.get(address)?.items ?? []) : null
+  if (target.kind === 'attachment' && (!file || file.state === 'hidden')) return { opened: false }
+  const room = zenFileRoom(address)
+  const asTab = async (): Promise<boolean> => {
+    if (!room) return false
+    if (target.kind === 'attachment') return openThreadAttachment(room, zenLinkTransport(t.scope), t.threadAddr, file!)
+    const link = await zenResolveForOpen(t, target.rel)
+    if (!link) return false
+    openThreadFileLink(room, link, target.line)
+    return true
+  }
+  if (!zenShownNow()) return { opened: await asTab() }
+  const name = target.kind === 'attachment' ? file?.name || 'File' : target.rel.split('/').filter(Boolean).pop() || target.rel
+  const line = target.kind === 'attachment' ? file?.line : target.line
+  showZenFilePreview({
+    name,
+    ...(line !== undefined ? { line } : {}),
+    load: () => (target.kind === 'attachment' ? zenPreviewAttachment(t, target.docId, target.n, file) : zenPreviewRel(t, target.rel)),
+    // The window's own room only: a file tab needs the agent's room on screen.
+    ...(room && isConnectedHost(readyConversation(address).hostKey) && file?.state !== 'gone'
+      ? {
+          openInK2: () => {
+            exitZen()
+            usePageViewStore.getState().setPage('agents')
+            void asTab().catch((err: unknown) => console.warn('[zen] open file failed:', err))
+          },
+        }
+      : {}),
+  })
+  return { opened: true }
 }
 
 function handlersFor(address: string): ZenFeedHandlers {
@@ -1784,6 +1889,12 @@ export function installZenDataVerbs(): () => void {
       const a = str(address, 'address')
       const o = isObj(opts) ? opts : {}
       const c = readyConversation(a)
+      if (o.afterSeq !== undefined) {
+        // thread-delta-v1: items after a seq plus changed and removed.
+        if (o.beforeSeq !== undefined) throw new ZenThreadVerbError('bad_args', 'thread.read: afterSeq or beforeSeq, not both')
+        const limit = typeof o.limit === 'number' ? Math.min(100, Math.max(1, Math.floor(o.limit))) : undefined
+        return zenThreadDelta(zenThreadTarget(a), o.afterSeq as number, limit)
+      }
       if (typeof o.beforeSeq === 'number') {
         // Older items join the live feed (the overlay hook's own paging).
         await handlersFor(a).loadOlder()
@@ -1805,8 +1916,32 @@ export function installZenDataVerbs(): () => void {
           ? o.files.filter((f): f is File => f instanceof File)
           : undefined
       const origin = originArg(o.origin)
-      return postZenThread(str(address, 'address'), typeof text === 'string' ? text : '', { paths, files, origin })
+      const attachments = o.attachments !== undefined ? zenThreadAttachments(o.attachments) : undefined
+      return postZenThread(str(address, 'address'), typeof text === 'string' ? text : '', {
+        paths,
+        files,
+        origin,
+        ...(attachments ? { attachments } : {}),
+      })
     }),
+    // 0.46.3 Thread parity (zen-thread-files): read state, files, links.
+    registerZenVerb('thread.markRead', (_ctx, address, opts) => {
+      const o = isObj(opts) ? opts : {}
+      if (o.seq !== undefined && typeof o.seq !== 'number') throw new ZenThreadVerbError('bad_args', 'seq is a number')
+      return zenThreadMarkRead(zenThreadTarget(str(address, 'address')), o.seq as number | undefined)
+    }),
+    registerZenVerb('thread.attachment', (_ctx, address, docId, n, opts) => {
+      const o = isObj(opts) ? opts : {}
+      return zenThreadAttachment(zenThreadTarget(str(address, 'address')), docId as string, n as number, {
+        ...(o.mode !== undefined ? { mode: o.mode as ZenThreadFileMode } : {}),
+        ...(o.px !== undefined ? { px: o.px as number } : {}),
+      })
+    }),
+    registerZenVerb('thread.open', (_ctx, address, target) => openZenThreadFile(str(address, 'address'), target)),
+    registerZenVerb('thread.links', (_ctx, address, candidates) =>
+      zenThreadLinks(zenThreadTarget(str(address, 'address')), candidates as string[]),
+    ),
+    registerZenVerb('thread.pickFiles', (_ctx, address) => zenThreadPickFiles(zenThreadTarget(str(address, 'address')))),
     registerZenVerb('thread.answer', async (_ctx, address, cardId, answer) => {
       const payload: ThreadAnswerPayload | null =
         typeof answer === 'string'

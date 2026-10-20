@@ -88,7 +88,10 @@ describe('day-0: verb tables', () => {
       expect(ZEN_VERBS[verb as keyof typeof ZEN_VERBS], verb).toBe(row.cap)
       if (row.cap) expect(USER_WIDGET_CAPS as readonly string[]).toContain(row.cap)
     }
-    for (const never of ['zen.exit', 'controls.bind', 'homes.list', 'agents.local', 'agents.add', 'thread.void', 'thread.markRead']) {
+    // thread.markRead left this list with Thread parity (catalog v16, 0.46.3,
+    // Rosson 2026-10-20): a widget marks the person's own read cursor.
+    expect('thread.markRead' in ZEN_CUSTOM_VERBS).toBe(true)
+    for (const never of ['zen.exit', 'controls.bind', 'homes.list', 'agents.local', 'agents.add', 'thread.void']) {
       expect(never in ZEN_CUSTOM_VERBS, never).toBe(false)
     }
   })

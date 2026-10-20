@@ -260,7 +260,8 @@ describe('TUW3.3: caps, binding and refusals', () => {
   it('K2-only verbs are not_exposed; a made-up verb is unknown_verb (UWA10)', async () => {
     const h = harness()
     const layer = createZenCustomLayer(h.deps)
-    for (const verb of ['zen.exit', 'controls.bind', 'agents.local', 'homes.list', 'thread.void', 'thread.markRead', 'gardens.create', 'app.open']) {
+    // thread.markRead is a widget verb since Thread parity (catalog v16, 0.46.3).
+    for (const verb of ['zen.exit', 'controls.bind', 'agents.local', 'homes.list', 'thread.void', 'gardens.create', 'app.open']) {
       expect(code(await call(layer, verb)), verb).toBe('not_exposed')
     }
     expect(code(await call(layer, 'foo.bar'))).toBe('unknown_verb')

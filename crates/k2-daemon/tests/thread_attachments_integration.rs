@@ -360,10 +360,10 @@ async fn thread_attachments_send_view_open_and_scope() {
     assert_eq!(r.json()["error"]["code"], "cap_not_granted", "{}", r.body);
     assert_eq!(r.json()["error"]["cap"], "thread:read", "{}", r.body);
     // A guest attaches only what its own file rights cover (App parity,
-    // 0.46.3; was "can't attach" in 0.46.1): docs/ yes, private/ no, and
-    // a guest with no files:read nothing (the coded missing-cap 403).
-    let r = thread_post(port, &scoped, &addr, "here", json!([{ "path": "docs/plan.md" }])).await;
-    assert_eq!(r.status, 200, "{}", r.body);
+    // 0.46.3; was "can't attach" in 0.46.1): private/ no, and a guest with
+    // no files:read nothing (the coded missing-cap 403). The allowed case
+    // is in thread_parity_integration.rs (a guest post wakes the pinned
+    // Chat, which in this harness moves the conversation the WS below uses).
     let r = thread_post(port, &scoped, &addr, "here", json!([{ "path": "private/notes.txt" }])).await;
     assert_eq!((r.status, r.json()), (403, cap_body.clone()), "{}", r.body);
     let r = thread_post(port, &no_files, &addr, "here", json!([{ "path": "docs/plan.md" }])).await;

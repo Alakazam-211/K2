@@ -266,9 +266,9 @@ pub fn guest_person_key(pass: &k2_core::skin::SkinPass) -> String {
     if let Some(p) = pass.principal_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         return format!("guest:{p}");
     }
-    if let Some(link) = crate::apps::gateway::current() {
-        return format!("app:{}", link.app_id);
-    }
+    // A link pass carries its App's service id; it rotates hourly, the App
+    // doesn't. (Never the link's task-local: handlers run on blocking
+    // threads that don't see it, and the key must be one everywhere.)
     if !pass.app.trim().is_empty() {
         return format!("app:{}", pass.app.trim());
     }

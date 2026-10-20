@@ -130,9 +130,11 @@ async fn resolve_links_answers_only_paths_inside_the_threads_workspace() {
     let r = post(port, "/cli/fs/resolve-links", "wrong-token", json!({ "workspace": ws.handle, "paths": ["src/a.ts"] })).await;
     assert_ne!(r.status, 200, "{}", r.body);
 
-    // An App guest pass never reaches it (not an App verb), even one that
-    // holds files:read in the room.
-    assert!(!k2_daemon::skin_gateway::allowlisted_http("POST", "/cli/fs/resolve-links"));
+    // 0.46.3 (Thread parity, Rosson 2026-10-20): an App verb now
+    // (`files.resolveLinks`), on both doors, but a guest's answer is cut to
+    // its OWN file rights and never carries a host path (root, prefixes,
+    // path). Nothing outside the workspace ever resolves, for anyone.
+    assert!(k2_daemon::skin_gateway::allowlisted_http("POST", "/cli/fs/resolve-links"));
     let post_ok = |path: &'static str, body: Value| async move {
         let r = post(port, path, OWNER, body).await;
         assert_eq!(r.status, 200, "{path}: {}", r.body);
@@ -150,7 +152,30 @@ async fn resolve_links_answers_only_paths_inside_the_threads_workspace() {
         .unwrap();
     assert_eq!(r.status, 200, "login: {}", r.body);
     let pass = r.json()["token"].as_str().expect("token").to_string();
-    let r = post(port, "/cli/fs/resolve-links", &pass, json!({ "workspace": ws.handle, "paths": ["src/a.ts"] })).await;
-    assert_ne!(r.status, 200, "a guest pass is refused: {}", r.body);
+    let r = post(port, "/cli/fs/resolve-links", &pass, json!({ "workspace": ws.handle, "paths": paths })).await;
+    assert_eq!(r.status, 200, "a guest with files:read on the whole room: {}", r.body);
+    let g = r.json();
+    assert!(g.get("root").is_none() && g.get("prefixes").is_none(), "no host path for a guest: {g}");
+    let gl = g["links"].as_array().expect("links");
+    assert!(gl.iter().all(|l| l.get("path").is_none()), "no absolute path field: {}", r.body);
+    assert_eq!(gl.len(), paths.len());
+    for (i, l) in gl.iter().enumerate() {
+        // The guest never expands `~` (no home); the rest match the owner's
+        // answer, as rel only.
+        let want = links[i]["linkable"].as_bool().unwrap() && i != 5;
+        assert_eq!(l["linkable"].as_bool(), Some(want), "{}: {l}", paths[i]);
+        if want {
+            assert_eq!(l["rel"], links[i]["rel"], "{}", paths[i]);
+        } else {
+            assert_eq!(l.as_object().unwrap().len(), 2, "a refusal is bare: {l}");
+        }
+    }
+    for i in 6..paths.len() {
+        assert_eq!(gl[i]["linkable"], false, "outside the workspace never resolves: {}", paths[i]);
+    }
+    // A room it doesn't hold: the uniform skin_room, nothing resolved.
+    let other = seed_ws(&env, &format!("lo{tag}"));
+    let r = post(port, "/cli/fs/resolve-links", &pass, json!({ "workspace": other.handle, "paths": ["src/a.ts"] })).await;
+    assert_ne!(r.status, 200, "another room is refused: {}", r.body);
     assert!(!r.body.contains("src/a.ts"), "{}", r.body);
 }

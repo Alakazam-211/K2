@@ -46,6 +46,8 @@ pub struct Instance {
     /// path).
     pub probe_tcp: bool,
     pub drain_secs: u64,
+    /// `host.clientIp` (0.46.3; default on): the router's client-IP rewrite.
+    pub client_ip: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -303,7 +305,7 @@ fn boot() {
             .and_then(|d| adopted.iter().find(|h| h.app_id == app.app_id && h.deployment_id == d));
         if let (Some(h), Some(seed)) = (live, app.live_seed.as_deref()) {
             let inst = instance_for(h.clone(), seed);
-            router::switch(&app.app_id, h.port);
+            router::switch_with(&app.app_id, h.port, inst.client_ip);
             claimed.insert(h.deployment_id.clone());
             with_rt(&app.app_id, |rt| rt.live = Some(inst));
             audit(&app.app_id, "adopted", "system", json!({ "deployment": h.deployment_id, "port": h.port }));
@@ -334,6 +336,7 @@ fn instance_for(h: RunHandle, seed: &str) -> Instance {
         probe_as: if m.as_ref().is_some_and(|m| m.wants_test_guest_probe()) { ProbeAs::TestGuest } else { ProbeAs::Anonymous },
         probe_tcp: m.as_ref().is_some_and(|m| m.tcp_health()),
         drain_secs: m.as_ref().and_then(|m| m.host.drain_secs).unwrap_or(timings().drain_secs),
+        client_ip: m.as_ref().map(|m| m.wants_client_ip()).unwrap_or(true),
     }
 }
 
@@ -665,6 +668,7 @@ fn pipeline(app_id: &str, dep: &str, seed: &str, kind: &str) {
         probe_as,
         probe_tcp: tcp,
         drain_secs: m.host.drain_secs.unwrap_or(t.drain_secs),
+        client_ip: m.wants_client_ip(),
     };
     go_live(&app, dep, inst, kind, &t);
 }
@@ -672,7 +676,7 @@ fn pipeline(app_id: &str, dep: &str, seed: &str, kind: &str) {
 /// The switch: route new connections to `inst`, drain the old one, keep it
 /// warm for the watch window.
 fn go_live(app: &AppRow, dep: &str, inst: Instance, kind: &str, t: &Timings) {
-    let (_, prev_be) = router::switch(&app.app_id, inst.handle.port);
+    let (_, prev_be) = router::switch_with(&app.app_id, inst.handle.port, inst.client_ip);
     let watch_secs = t.watch_secs;
     let (older_warm, prev_live) = with_rt(&app.app_id, |rt| {
         let older = rt.warm.take();
@@ -805,7 +809,7 @@ fn tick_app(app_id: &str, t: &Timings) {
 }
 
 fn auto_rollback(app_id: &str, w: &Watch, bad: Instance, prev: Instance, why: &str, exit: Exit, t: &Timings) {
-    let (_, bad_be) = router::switch(app_id, prev.handle.port);
+    let (_, bad_be) = router::switch_with(app_id, prev.handle.port, prev.client_ip);
     with_rt(app_id, |rt| {
         rt.live = Some(prev.clone());
         rt.warm = None;
@@ -1035,7 +1039,7 @@ pub fn rollback_to_warm(app: &AppRow, target: &str, actor: &str) -> Result<Optio
     if matches!(engine_of(&warm.handle).liveness(&warm.handle), Liveness::Exited(_)) || !probe(&warm, &t) {
         return Ok(None);
     }
-    let (_, bad_be) = router::switch(&app.app_id, warm.handle.port);
+    let (_, bad_be) = router::switch_with(&app.app_id, warm.handle.port, warm.client_ip);
     let bad = with_rt(&app.app_id, |rt| {
         let bad = rt.live.take();
         rt.live = Some(warm.clone());

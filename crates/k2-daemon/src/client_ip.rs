@@ -21,8 +21,11 @@
 //!    where frps only saw HAProxy) is no client IP either. The relay only
 //!    passes streams that start with a TLS ClientHello, so the first bytes
 //!    can't be a client-written header.
-//! 3. **Box, Apps.** Where the E2E listener splices to an App (or a nested
-//!    service), [`forward`] runs every HTTP/1.1 request on the connection
+//! 3. **Box, Apps.** Where the E2E listener splices to an App (unless its
+//!    manifest says `host.clientIp: false`; a `--cmd` App starts raw), or to
+//!    a nested service that opted in (`k2 publish client-ip <label> on`;
+//!    nested services stay a raw splice by default, any protocol),
+//!    [`forward`] runs every HTTP/1.1 request on the connection
 //!    through a rewrite: every client copy of the headers K2 owns
 //!    ([`OWNED`]: `X-K2-Client-IP`, `X-Forwarded-For`, `X-Real-IP`,
 //!    `Forwarded`, …; `_` spellings too) is dropped, and when K2 knows the

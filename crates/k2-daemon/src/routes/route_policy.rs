@@ -948,6 +948,9 @@ pub const ROUTES: &[Route] = &[
     // FA3: Owner on purpose (the other publish mutations are Member): this
     // widens which other sites may frame an App.
     post("/cli/publish/frame", Owner),
+    // 0.46.3: which nested services get K2's client-IP rewrite.
+    get("/cli/publish/client-ip", Member),
+    post("/cli/publish/client-ip", Member),
     get("/cli/publish/leftovers", Member),
     get("/cli/publish/list", Member),
     get("/cli/publish/logs", Member),

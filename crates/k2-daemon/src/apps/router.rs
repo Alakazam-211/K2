@@ -30,6 +30,10 @@ use tokio::sync::watch;
 pub struct Backend {
     pub app_id: String,
     pub port: u16,
+    /// 0.46.3: rewrite each HTTP/1.1 request for the client IP
+    /// (`crate::client_ip`). `false` = the manifest's `host.clientIp:
+    /// false` escape hatch: a raw splice, as before.
+    pub client_ip: bool,
     active: AtomicUsize,
     total: AtomicUsize,
     draining: AtomicBool,
@@ -37,11 +41,12 @@ pub struct Backend {
 }
 
 impl Backend {
-    fn new(app_id: &str, port: u16) -> Arc<Self> {
+    fn new(app_id: &str, port: u16, client_ip: bool) -> Arc<Self> {
         let (cut_tx, _) = watch::channel(false);
         Arc::new(Self {
             app_id: app_id.to_string(),
             port,
+            client_ip,
             active: AtomicUsize::new(0),
             total: AtomicUsize::new(0),
             draining: AtomicBool::new(false),
@@ -82,17 +87,23 @@ pub fn live(app_id: &str) -> Option<Arc<Backend>> {
 }
 
 /// Point `app_id` at `port`. Returns the backend that was live before
-/// (the caller drains it). Never a control-plane call.
+/// (the caller drains it). Never a control-plane call. The client-IP
+/// rewrite is on ([`switch_with`] sets it from the manifest).
 pub fn switch(app_id: &str, port: u16) -> (Arc<Backend>, Option<Arc<Backend>>) {
+    switch_with(app_id, port, true)
+}
+
+/// [`switch`] with the App's `host.clientIp` (`false` = raw splice).
+pub fn switch_with(app_id: &str, port: u16, client_ip: bool) -> (Arc<Backend>, Option<Arc<Backend>>) {
     let _g = write_lock().lock().unwrap_or_else(|e| e.into_inner());
     let cur = table().load_full();
     let prev = cur.get(app_id).cloned();
     if let Some(p) = &prev {
-        if p.port == port {
+        if p.port == port && p.client_ip == client_ip {
             return (p.clone(), None);
         }
     }
-    let be = Backend::new(app_id, port);
+    let be = Backend::new(app_id, port, client_ip);
     let mut next: Table = (*cur).clone();
     next.insert(app_id.to_string(), be.clone());
     table().store(Arc::new(next));
@@ -139,11 +150,12 @@ impl Drop for Guard {
 }
 
 /// Splice `client` to `be`, counted for drain and cut at its deadline.
-/// Every request is rewritten for `mode` (`crate::client_ip`: client
-/// copies of the forwarding headers dropped, `X-K2-Client-IP` added when
-/// K2 knows the client). `Err` only when the backend can't be dialed (the
-/// caller answers 502).
-pub async fn splice<S>(client: &mut S, be: Arc<Backend>, mode: crate::client_ip::Mode) -> Result<(), String>
+/// `Some(mode)`: every request is rewritten for it (`crate::client_ip`:
+/// client copies of the forwarding headers dropped, `X-K2-Client-IP` added
+/// when K2 knows the client). `None`: the raw splice (before 0.46.3, and
+/// `host.clientIp: false`). Pick with [`rewrite_mode`]. `Err` only when the
+/// backend can't be dialed (the caller answers 502).
+pub async fn splice<S>(client: &mut S, be: Arc<Backend>, mode: Option<crate::client_ip::Mode>) -> Result<(), String>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -163,12 +175,27 @@ where
     if *cut.borrow() {
         return Ok(());
     }
-    tokio::select! {
-        _ = crate::client_ip::forward(&mut *client, &mut upstream, mode) => {}
-        _ = cut.changed() => {}
+    if let Some(mode) = mode {
+        tokio::select! {
+            _ = crate::client_ip::forward(&mut *client, &mut upstream, mode) => {}
+            _ = cut.changed() => {}
+        }
+    } else {
+        // `host.clientIp: false`: the pre-0.46.3 raw splice, unchanged.
+        tokio::select! {
+            _ = tokio::io::copy_bidirectional(client, &mut upstream) => {}
+            _ = cut.changed() => {}
+        }
     }
     let _ = upstream.shutdown().await;
     Ok(())
+}
+
+/// The rewrite for `be` reached as `label`: on when the App's manifest
+/// allows it (`host.clientIp`, default on), or when the label opted in with
+/// `k2 publish client-ip <label> on` (a `--cmd` App starts raw).
+pub fn rewrite_mode(be: &Backend, label: &str, mode: crate::client_ip::Mode) -> Option<crate::client_ip::Mode> {
+    (be.client_ip || k2_core::tunnel::client_ip_labels::enabled(label)).then_some(mode)
 }
 
 const UNAVAILABLE_BODY: &str = "This App is not running now.\r\n";
@@ -193,13 +220,13 @@ pub async fn serve_app_conn<S>(client: &mut S, app_id: &str, peer: Option<std::n
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    let mode = crate::client_ip::Mode::Local { peer };
     match live(app_id) {
         None => {
             consume_request_head(client).await;
             let _ = client.write_all(own_answer("503 Service Unavailable", UNAVAILABLE_BODY).as_bytes()).await;
         }
         Some(be) => {
+            let mode = rewrite_mode(&be, app_id, crate::client_ip::Mode::Local { peer });
             if splice(client, be, mode).await.is_err() {
                 consume_request_head(client).await;
                 let _ = client.write_all(own_answer("502 Bad Gateway", BAD_GATEWAY_BODY).as_bytes()).await;
@@ -319,6 +346,61 @@ mod tests {
             }
         }
         String::from_utf8_lossy(&out).to_string()
+    }
+
+    /// 0.46.3: `host.clientIp: false` keeps the raw splice (no rewrite, no
+    /// 400 for non-HTTP bytes); the default rewrites. Changing only the
+    /// flag makes a new backend.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn client_ip_flag_picks_rewrite_or_raw() {
+        // The opt-in list lives under $HOME: sandbox it.
+        let _home = crate::test_support::TempHome::new();
+        // A backend that echoes whatever it first reads.
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            loop {
+                let (mut s, _) = l.accept().await.unwrap();
+                tokio::spawn(async move {
+                    let mut b = [0u8; 2048];
+                    let n = s.read(&mut b).await.unwrap_or(0);
+                    let r = format!("HTTP/1.1 200 OK\r\nContent-Length: {n}\r\n\r\n");
+                    let _ = s.write_all(r.as_bytes()).await;
+                    let _ = s.write_all(&b[..n]).await;
+                    let _ = s.shutdown().await;
+                });
+            }
+        });
+        let app = "router-client-ip-app";
+        let front = ensure_front(&tokio::runtime::Handle::current(), app, 0).unwrap();
+        let ask = |bytes: &'static [u8]| async move {
+            let mut s = TcpStream::connect(("127.0.0.1", front)).await.unwrap();
+            s.write_all(bytes).await.unwrap();
+            let mut out = Vec::new();
+            let _ = tokio::time::timeout(Duration::from_secs(5), s.read_to_end(&mut out)).await.expect("answer");
+            String::from_utf8_lossy(&out).to_string()
+        };
+        let spoof: &[u8] = b"GET / HTTP/1.1\r\nHost: x\r\nX-K2-Client-IP: 6.6.6.6\r\n\r\n";
+
+        let (be, _) = switch(app, port);
+        assert!(be.client_ip, "switch = the default: rewrite on");
+        let got = ask(spoof).await;
+        assert!(got.contains("200 OK") && !got.contains("6.6.6.6"), "rewrite drops the client copy: {got}");
+        assert!(ask(b"\x00\x01binary\r\n\r\n").await.starts_with("HTTP/1.1 400"), "rewrite refuses non-HTTP");
+
+        let (raw, prev) = switch_with(app, port, false);
+        assert!(!raw.client_ip && prev.is_some(), "a flag change is a new backend");
+        assert!(ask(spoof).await.contains("X-K2-Client-IP: 6.6.6.6"), "raw splice: bytes unchanged");
+        let got = ask(b"\x00\x01binary\r\n\r\n").await;
+        assert!(got.starts_with("HTTP/1.1 200") && got.contains("binary"), "raw: any protocol passes: {got}");
+
+        // A raw App (a `--cmd` one) can still opt in by label.
+        k2_core::tunnel::client_ip_labels::set(app, true).unwrap();
+        let got = ask(spoof).await;
+        assert!(got.contains("200 OK") && !got.contains("6.6.6.6"), "opted in by label: rewritten: {got}");
+
+        clear(app);
+        close_front(app);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

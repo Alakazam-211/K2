@@ -35,11 +35,14 @@
 //! file); disable pauses it; uninstall pauses or drops it; purge drops it
 //! ([`supervisor::grant_hook_off`]).
 //!
-//! Not here yet: host / mirror / ship / app-url routes (S32).
+//! - [`s32`]: the S32 daemon side (K26 status fields + emit points, the
+//!   app-url / ship / mirror routes, the off-box shipper, K31's App Space
+//!   routes).
 
 pub mod meet;
 pub mod ops;
 pub mod routes;
+pub mod s32;
 pub mod secrets;
 pub mod service_user;
 pub mod sew_wire;

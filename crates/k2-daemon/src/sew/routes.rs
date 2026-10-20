@@ -113,11 +113,11 @@ pub fn accept_binary_secret_id(sha: &str) -> String {
 }
 
 pub fn is_route(p: &str) -> bool {
-    ROUTES.contains(&p)
+    ROUTES.contains(&p) || super::s32::is_route(p)
 }
 
 pub fn is_post_route(p: &str) -> bool {
-    POST_ROUTES.contains(&p)
+    POST_ROUTES.contains(&p) || super::s32::is_post_route(p)
 }
 
 // ── responses ────────────────────────────────────────────────────────────
@@ -357,7 +357,10 @@ fn route(env: Env<'static>, path: &str, who: &Who, body: &[u8], params: &HashMap
     match path {
         "/cli/sew/status" => {
             need_credential(who)?;
-            Ok(sup::status(&env, params.get("health").is_some_and(|h| h == "1" || h == "true")))
+            let mut v = sup::status(&env, params.get("health").is_some_and(|h| h == "1" || h == "true"));
+            // S32 (K26): `you`, owner, target, mirror, backup.ship.
+            super::s32::decorate_status(&env, &mut v, who);
+            Ok(v)
         }
         "/cli/sew/preflight" => {
             need_credential(who)?;
@@ -666,7 +669,8 @@ fn route(env: Env<'static>, path: &str, who: &Who, body: &[u8], params: &HashMap
             crate::vault::auth_audit("sew-recovery-key", &who.label(), &format!("shown via {method}"), "cli");
             Ok(r)
         }
-        _ => Err(no("not_found", 404, "no such Sew route")),
+        // S32 (K27 routes, K31): app URL, off-box copies, App Spaces.
+        _ => super::s32::route(&env, path, who, body, params).unwrap_or_else(|| Err(no("not_found", 404, "no such Sew route"))),
     }
 }
 

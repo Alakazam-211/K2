@@ -173,3 +173,103 @@ async fn enable_points_s27_at_sew_and_uninstall_drops_it_with_the_helper_token()
     sew.assert_clean();
     crate::sew_mgmt::set_token_provider(None);
 }
+
+fn app_grant(principal_id: &str, app: &str) -> skin::SkinGrant {
+    skin::create_grant(&SkinGrantWrite {
+        subject_kind: "principal".into(),
+        subject_id: principal_id.into(),
+        kind: "app".into(),
+        target_id: app.into(),
+        role: None,
+        scope: Some("[]".into()),
+        created_by: Some("owner-token".into()),
+    })
+    .expect("app grant")
+}
+
+/// K31 through the REAL worker against the fake Sew's SW13 routes: App
+/// users (App grant + chat member) join the App's Space after their own
+/// provision; a banned one is held (HC2); Connect Owners/Admins with their
+/// own Sew accounts and `k2:owner` are never added; losing the App grant
+/// removes the person.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn k31_app_users_join_the_apps_space_and_connect_admins_never_do() {
+    const SPACE: &str = "spc_hearth01";
+    let home = k2_core::test_env::TempHome::short();
+    let _db = k2_core::db::scoped_for_test();
+    hook::allow_target_off_linux_for_tests(true);
+    let sew = fake_sew::FakeSew::start(&home.path().join("s")).await;
+    hook::set_target(
+        CHAT_KIND,
+        true,
+        Some(&sew.socket.display().to_string()),
+        Some(&sew.token_file.display().to_string()),
+        "owner-token",
+    )
+    .expect("target");
+    sew.add_app_space(SPACE, "hearth");
+
+    // Connect Owner + Admin, each with their own Sew account (a `connect`
+    // chat grant): server control, never App Space members by role.
+    let mut connect_exts = Vec::new();
+    for (login, role) in [("boss", k2_core::connect_users::Role::Owner), ("adm", k2_core::connect_users::Role::Admin)] {
+        k2_core::connect_users::add_user(login, "pw-long-enough").unwrap();
+        k2_core::connect_users::set_role(login, role).unwrap();
+        let id = k2_core::connect_users::user_uuid(login).unwrap().unwrap();
+        skin::create_grant(&SkinGrantWrite {
+            subject_kind: "connect".into(),
+            subject_id: id.clone(),
+            kind: "chat".into(),
+            target_id: String::new(),
+            role: None,
+            scope: Some("member".into()),
+            created_by: Some("owner-token".into()),
+        })
+        .expect("connect chat grant");
+        connect_exts.push(format!("k2:connect:{id}"));
+    }
+    let ann = skin::add_principal("ann").unwrap();
+    let bea = skin::add_principal("bea").unwrap();
+    let ann_app = app_grant(&ann.id, "hearth");
+    app_grant(&bea.id, "hearth");
+    chat("ann");
+    chat("bea");
+    sew.ban_in_space(SPACE, &pext(&bea.id));
+
+    let (created, plan) = hook::app_space_bind("hearth", SPACE, "owner-token").expect("bind");
+    assert!(created);
+    assert_eq!(plan.adds, 2, "{plan:?}");
+    drain(&sew).await;
+    let sp = sew.space(SPACE).expect("space");
+    assert_eq!(sp.members.iter().cloned().collect::<Vec<_>>(), vec![pext(&ann.id)], "{}", sew.log());
+    for ext in &connect_exts {
+        assert!(sew.member(ext).is_some(), "{ext} has its own Sew account");
+        assert!(!sp.members.contains(ext), "{ext} is never an App Space member by role");
+    }
+    assert!(!sp.members.contains("k2:owner"));
+    let bea_rows = rows_for(&format!("space:{SPACE}:{}", pext(&bea.id)));
+    assert_eq!(bea_rows.len(), 1);
+    assert_eq!(bea_rows[0].state, "held", "{:?}", bea_rows[0]);
+    let views = hook::app_spaces().unwrap();
+    assert_eq!((views[0].members.added, views[0].members.held), (1, 1));
+    // No App Space call ever named a Connect login or the owner.
+    for c in sew.posts().iter().filter(|c| c.path.starts_with("/mgmt/v1/spaces/")) {
+        let names = c.body["external_ids"].as_array().cloned().unwrap_or_else(|| vec![c.body["external_id"].clone()]);
+        for n in names {
+            assert!(n.as_str().unwrap().starts_with("k2:principal:"), "{c:?}");
+        }
+    }
+
+    // A second sweep re-adds nobody (bea stays held).
+    worker::reconcile_once().await.expect("sweep");
+    drain(&sew).await;
+    assert_eq!(rows_for(&format!("space:{SPACE}:{}", pext(&bea.id))).len(), 1, "held is not retried");
+
+    // Ann loses the App grant → she leaves the Space.
+    skin::delete_grant_by_id(&ann_app.id).unwrap();
+    worker::reconcile_once().await.expect("sweep");
+    drain(&sew).await;
+    assert!(sew.space(SPACE).unwrap().members.is_empty(), "{}", sew.log());
+    assert!(sew.member(&pext(&ann.id)).is_some_and(|m| !m.deactivated), "her Sew account stays (her chat grant does)");
+    sew.assert_clean();
+}

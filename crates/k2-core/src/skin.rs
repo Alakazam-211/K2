@@ -1540,6 +1540,8 @@ fn open_db(path: &Path) -> Result<Connection, String> {
     // Sew S27 grant hook: `tool_outbox` + `tool_targets`. Idempotent and
     // additive like `grants`; NOT a ladder step (user_version stays put).
     crate::tool_hook::outbox::ensure_schema(&conn)?;
+    // K31: App ↔ Space bindings and the membership ledger (same rules).
+    crate::tool_hook::app_space::ensure_schema(&conn)?;
     // S24-1: numbered, additive steps on top of the idempotent block above.
     run_schema_steps(&mut conn)?;
     // skin.db AND its -wal/-shm: the WAL holds recent pages (guest

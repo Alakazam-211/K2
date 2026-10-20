@@ -29,6 +29,12 @@
 //! - `GET /mgmt/v1/principals` filters by `external_id` and carries
 //!   `email`/`title`/`pronouns` (SW14) unless `set_list_profile_fields(false)`
 //!   (a pre-SW14 Sew). Provision has no `skipped` field (HC2 is on member-add).
+//! - SW13 (K31): `spaces/bind` (once; the same App again is a no-op,
+//!   another → 409 `conflict`), `spaces/members/add` (`app_id` must name
+//!   the Space's App, else 409 `app_mismatch`; unprovisioned →
+//!   `not_added: not_provisioned`, guests → `guest`, deactivated →
+//!   `deactivated`, banned → `skipped` member ids), `spaces/members/remove`.
+//!   Spaces exist only after [`FakeSew::add_space`]; unknown → 404.
 //! - Unknown paths → 404 and recorded in `bad_paths`.
 //!
 //! S30 K15 (`k2 chat`'s real backend, Sew 0.3.0 act-as): a small `/api/v1`
@@ -55,8 +61,17 @@ use tokio::task::JoinHandle;
 
 use k2_core::tool_hook::sew_wire::{
     self, AgentKind, DeprovisionRequest, ExternalId, MemberKind, OwnerSetRequest, Patch,
-    ProvisionRequest, RevokeSessionsRequest, UpdatePrincipalRequest,
+    ProvisionRequest, RevokeSessionsRequest, SpaceBindRequest, SpaceMemberRemoveRequest,
+    SpaceMembersAddRequest, UpdatePrincipalRequest,
 };
+
+/// A Space (SW13 view).
+#[derive(Debug, Clone, Default)]
+pub struct Space {
+    pub app_id: Option<String>,
+    pub members: std::collections::BTreeSet<String>,
+    pub banned: std::collections::BTreeSet<String>,
+}
 
 #[derive(Debug, Clone)]
 pub struct Member {
@@ -122,6 +137,8 @@ struct State {
     bad_headers: Vec<String>,
     /// S30 K15: messages posted through `/api/v1` (id, author, body).
     chat_posts: Vec<(u64, u64, String)>,
+    /// SW13 Spaces by id.
+    spaces: BTreeMap<String, Space>,
 }
 
 pub struct FakeSew {
@@ -275,6 +292,35 @@ impl FakeSew {
     /// Edit members directly (drift fixtures).
     pub fn with_members(&self, f: impl FnOnce(&mut BTreeMap<String, Member>)) {
         self.with(|s| f(&mut s.members))
+    }
+
+    /// SW13: a Space (unbound) exists.
+    pub fn add_space(&self, space_id: &str) {
+        self.with(|s| {
+            s.spaces.insert(space_id.to_string(), Space::default());
+        });
+    }
+
+    /// SW13: a Space already bound to an App (as `spaces/create` with
+    /// `app_id` leaves it).
+    pub fn add_app_space(&self, space_id: &str, app_id: &str) {
+        self.with(|s| {
+            s.spaces.insert(space_id.to_string(), Space { app_id: Some(app_id.to_string()), ..Default::default() });
+        });
+    }
+
+    /// SW13: ban `ext` in a Space (HC2: adds come back `skipped`).
+    pub fn ban_in_space(&self, space_id: &str, ext: &str) {
+        self.with(|s| {
+            if let Some(sp) = s.spaces.get_mut(space_id) {
+                sp.banned.insert(ext.to_string());
+                sp.members.remove(ext);
+            }
+        });
+    }
+
+    pub fn space(&self, space_id: &str) -> Option<Space> {
+        self.with(|s| s.spaces.get(space_id).cloned())
     }
 
     pub fn member(&self, ext: &str) -> Option<Member> {
@@ -585,6 +631,9 @@ fn handle(
         sew_wire::MGMT_DEPROVISION => deprovision(s, body),
         sew_wire::MGMT_OWNER_SET => owner_set(s, body),
         sew_wire::MGMT_SESSIONS_REVOKE => sessions_revoke(s, body),
+        sew_wire::MGMT_SPACES_BIND => space_bind(s, body),
+        sew_wire::MGMT_SPACE_MEMBERS_ADD => space_members_add(s, body),
+        sew_wire::MGMT_SPACE_MEMBERS_REMOVE => space_member_remove(s, body),
         p if acting.is_some() => chat_post(s, acting.expect("acting"), p, body),
         sew_client::proto::routes::MGMT_SPACES_CREATE => space_create(s, body),
         _ => {
@@ -899,6 +948,79 @@ fn update(s: &mut State, body: &str) -> (u16, String) {
         200,
         json!({"member_id": m.member_id.to_string()}).to_string(),
     )
+}
+
+fn space_bind(s: &mut State, body: &str) -> (u16, String) {
+    let req: SpaceBindRequest = match serde_json::from_str(body) {
+        Ok(r) => r,
+        Err(e) => return bad_body(s, "spaces/bind", e, body),
+    };
+    if !sew_wire::is_app_id(&req.app_id) {
+        return bad_body(s, "spaces/bind", "app_id grammar", body);
+    }
+    let Some(sp) = s.spaces.get_mut(&req.space_id) else {
+        return err(404, "not_found", "no such space", json!({}));
+    };
+    match &sp.app_id {
+        Some(a) if *a != req.app_id => {
+            return err(409, "conflict", "bound to another App", json!({"reason": "space_bound"}));
+        }
+        _ => sp.app_id = Some(req.app_id.clone()),
+    }
+    (200, json!({"space_id": req.space_id, "slug": "s", "name": "S", "owner_member_id": "1", "app_id": req.app_id, "created": false}).to_string())
+}
+
+fn space_members_add(s: &mut State, body: &str) -> (u16, String) {
+    let req: SpaceMembersAddRequest = match serde_json::from_str(body) {
+        Ok(r) => r,
+        Err(e) => return bad_body(s, "spaces/members/add", e, body),
+    };
+    if req.external_ids.is_empty() || req.external_ids.len() > 100 {
+        return bad_body(s, "spaces/members/add", "1–100 principals", body);
+    }
+    let members = s.members.clone();
+    let Some(sp) = s.spaces.get_mut(&req.space_id) else {
+        return err(404, "not_found", "no such space", json!({}));
+    };
+    if sp.app_id != req.app_id {
+        return err(409, "conflict", "app_id does not name the Space's App", json!({"reason": "app_mismatch"}));
+    }
+    let (mut added, mut already, mut skipped, mut not_added) = (vec![], vec![], vec![], vec![]);
+    for ext in &req.external_ids {
+        let e = ext.to_string();
+        let Some(m) = members.get(&e) else {
+            not_added.push(json!({"external_id": e, "reason": "not_provisioned"}));
+            continue;
+        };
+        let r = json!({"external_id": e, "member_id": m.member_id.to_string()});
+        if m.deactivated {
+            not_added.push(json!({"external_id": e, "reason": "deactivated"}));
+        } else if m.guest {
+            not_added.push(json!({"external_id": e, "reason": "guest"}));
+        } else if sp.banned.contains(&e) {
+            skipped.push(m.member_id.to_string());
+        } else if sp.members.insert(e) {
+            added.push(r);
+        } else {
+            already.push(r);
+        }
+    }
+    (200, json!({"added": added, "already": already, "skipped": skipped, "not_added": not_added}).to_string())
+}
+
+fn space_member_remove(s: &mut State, body: &str) -> (u16, String) {
+    let req: SpaceMemberRemoveRequest = match serde_json::from_str(body) {
+        Ok(r) => r,
+        Err(e) => return bad_body(s, "spaces/members/remove", e, body),
+    };
+    let Some(sp) = s.spaces.get_mut(&req.space_id) else {
+        return err(404, "not_found", "no such space", json!({}));
+    };
+    if sp.app_id != req.app_id {
+        return err(409, "conflict", "app_id does not name the Space's App", json!({"reason": "app_mismatch"}));
+    }
+    let removed = sp.members.remove(&req.external_id.to_string());
+    (200, json!({"removed": removed}).to_string())
 }
 
 fn deprovision(s: &mut State, body: &str) -> (u16, String) {

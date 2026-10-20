@@ -36,6 +36,21 @@
 //! S28's `sew_session_revoke` rows (`POST /mgmt/v1/sessions/revoke`) are
 //! delivered like the rest, each on its own `revoke:…` subject. Rows of an
 //! op this build doesn't know are never selected, sent or blocked.
+//!
+//! K31 App Space rows (`space_member_add` / `space_member_remove`, subject
+//! `space:<space>:<ext>`) ride the same rules, plus ([`refine_space`]):
+//!
+//! | Answer to `space_member_add` | Row |
+//! |---|---|
+//! | 2xx, the person in `added`/`already` | `done` (ledger `added`) |
+//! | 2xx, `not_added: not_provisioned` | `pending` + backoff (provision still queued) |
+//! | 2xx, `skipped` (banned) or another `not_added` reason | `held` (HC2) |
+//! | 2xx naming neither | `blocked` |
+//! | 404 on `space_member_remove` | `done` |
+//!
+//! K26: a pass that finished, blocked or held a row, or saw a row fail for
+//! the first time, emits ONE `sew:changed {reason: grant-hook}` (the
+//! app-level `sew_changed` event) so the People and Sew pages refetch.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -128,6 +143,47 @@ pub enum Outcome {
         status: Option<u16>,
         error: String,
     },
+    /// HC2 (K31): a Space add answered 2xx without adding the person, for
+    /// a reason that holds until the grant changes.
+    Held {
+        status: u16,
+        body: String,
+        why: String,
+    },
+}
+
+/// K31: read a 2xx `space_member_add` answer for the one person the row
+/// sent; every other outcome passes through.
+pub fn refine_space(cfg: &WorkerConfig, row: &OutboxRow, outcome: Outcome) -> Outcome {
+    use k2_core::tool_hook::app_space::{add_verdict, AddVerdict};
+    if Op::parse(&row.op) != Some(Op::SpaceMemberAdd) {
+        return outcome;
+    }
+    let Outcome::Done { status, body, .. } = &outcome else {
+        return outcome;
+    };
+    match add_verdict(&row.payload_raw, body) {
+        AddVerdict::Added => outcome,
+        AddVerdict::Held(why) => Outcome::Held { status: *status, body: body.clone(), why },
+        AddVerdict::NotProvisioned => Outcome::Retry {
+            status: Some(*status),
+            error: "not added yet: the person has no chat account (their provision is still queued)".into(),
+            delay: backoff(cfg, row.attempts + 1),
+            target_error: None,
+            stop_target: false,
+        },
+        AddVerdict::Unknown(why) => Outcome::Blocked { status: Some(*status), error: why },
+    }
+}
+
+/// K26: does this outcome change what the People / Sew pages show?
+fn visible_change(row: &OutboxRow, outcome: &Outcome) -> bool {
+    match outcome {
+        Outcome::Done { .. } | Outcome::Blocked { .. } | Outcome::Held { .. } => true,
+        // Pending after its FIRST failure (later retries change nothing new).
+        Outcome::Retry { .. } => row.attempts == 0,
+        Outcome::UsernameRetry { .. } => false,
+    }
 }
 
 // HC2 note: `principals/provision` has no `skipped` field (Sew,
@@ -192,6 +248,12 @@ pub fn classify(
         // 404 for an unknown `external_id` means done; a `k2_sid`-only
         // revoke always answers 200 `{revoked: N}`, N ≥ 0.
         404 if op == Op::SewSessionRevoke => Outcome::Done {
+            status,
+            body: resp.body_text(),
+            reconcile: false,
+        },
+        // K31: no such member or Space: nothing left to remove.
+        404 if op == Op::SpaceMemberRemove => Outcome::Done {
             status,
             body: resp.body_text(),
             reconcile: false,
@@ -278,6 +340,9 @@ fn path_for(op: Op) -> &'static str {
         Op::OwnerSet => sew_wire::MGMT_OWNER_SET,
         // S28 §12: `{k2_sid}` or `{external_id}`, as queued.
         Op::SewSessionRevoke => sew_wire::MGMT_SESSIONS_REVOKE,
+        // K31 (SW13): App Space membership.
+        Op::SpaceMemberAdd => sew_wire::MGMT_SPACE_MEMBERS_ADD,
+        Op::SpaceMemberRemove => sew_wire::MGMT_SPACE_MEMBERS_REMOVE,
     }
 }
 
@@ -364,6 +429,10 @@ pub struct PassReport {
     /// A8: provision bodies filled from the member list before a first send.
     pub filled: usize,
     pub blocked: usize,
+    /// K31: Space adds held (HC2).
+    pub held: usize,
+    /// K26: rows whose state changed in a way a page shows.
+    pub changed: usize,
 }
 
 /// One delivery pass over every enabled target. Sequential per target,
@@ -417,7 +486,10 @@ pub async fn pass_once(cfg: &WorkerConfig) -> Result<PassReport, String> {
                 )
                 .await;
             let now = k2_core::tool_hook::outbox::now_secs();
-            let outcome = classify(cfg, &row, res.as_ref(), now);
+            let outcome = refine_space(cfg, &row, classify(cfg, &row, res.as_ref(), now));
+            if visible_change(&row, &outcome) {
+                report.changed += 1;
+            }
             let (stop, reconcile) = apply(&kind, &row, outcome, &mut report).await?;
             if reconcile {
                 hook::kick_reconcile();
@@ -426,6 +498,10 @@ pub async fn pass_once(cfg: &WorkerConfig) -> Result<PassReport, String> {
                 break;
             }
         }
+    }
+    // K26: one refetch signal per pass, never per row.
+    if report.changed > 0 {
+        crate::sew::s32::emit("grant-hook");
     }
     Ok(report)
 }
@@ -449,6 +525,7 @@ async fn apply(
             Outcome::UsernameRetry { status } => format!("username retry {status}"),
             Outcome::Retry { status, error, .. } => format!("retry {status:?} {error}"),
             Outcome::Blocked { status, error } => format!("blocked {status:?} {error}"),
+            Outcome::Held { status, why, .. } => format!("held {status} {why}"),
         }
     );
     match outcome {
@@ -505,6 +582,11 @@ async fn apply(
         Outcome::Blocked { status, error } => {
             report.blocked += 1;
             blocking(move || hook::record_blocked(&id, status, &error)).await?;
+            Ok((false, false))
+        }
+        Outcome::Held { status, body, why } => {
+            report.held += 1;
+            blocking(move || hook::record_held(&id, status, &body, &why)).await?;
             Ok((false, false))
         }
     }
@@ -912,5 +994,69 @@ mod tests {
         assert!(u.starts_with("ann-") && u.len() == 8, "{u}");
         assert_eq!(v["external_id"], serde_json::json!(r.subject_key));
         assert_eq!(v.pointer("/profile/display_name").unwrap(), "Ann");
+    }
+
+    fn space_row(op: &str, attempts: i64) -> OutboxRow {
+        let ext = "k2:principal:0f8fad5b-d9cb-469f-a165-70867728950e";
+        let mut r = row(op, attempts, "k2ob_s");
+        r.subject_key = format!("space:spc_1:{ext}");
+        r.payload_raw = if op == "space_member_add" {
+            format!(r#"{{"space_id":"spc_1","app_id":"hearth","external_ids":["{ext}"]}}"#)
+        } else {
+            format!(r#"{{"space_id":"spc_1","app_id":"hearth","external_id":"{ext}"}}"#)
+        };
+        r
+    }
+
+    /// K31: how a 2xx `spaces/members/add` answer maps to the row.
+    #[test]
+    fn space_add_answers_map_to_done_retry_held_or_blocked() {
+        let c = cfg();
+        let ext = "k2:principal:0f8fad5b-d9cb-469f-a165-70867728950e";
+        let r = space_row("space_member_add", 0);
+        let run = |body: &str| refine_space(&c, &r, classify(&c, &r, Ok(&resp(200, body, "")), 0));
+        let added = format!(r#"{{"added":[{{"external_id":"{ext}","member_id":"7"}}],"already":[],"skipped":[],"not_added":[]}}"#);
+        assert!(matches!(run(&added), Outcome::Done { status: 200, .. }));
+        let already = format!(r#"{{"added":[],"already":[{{"external_id":"{ext}","member_id":"7"}}],"skipped":[],"not_added":[]}}"#);
+        assert!(matches!(run(&already), Outcome::Done { .. }));
+        let np = format!(r#"{{"added":[],"already":[],"skipped":[],"not_added":[{{"external_id":"{ext}","reason":"not_provisioned"}}]}}"#);
+        match run(&np) {
+            Outcome::Retry { status: Some(200), stop_target: false, target_error: None, delay, .. } => {
+                assert!(delay >= Duration::from_millis(1_600), "backoff, not a hot loop: {delay:?}")
+            }
+            o => panic!("not_provisioned → {o:?}"),
+        }
+        let guest = format!(r#"{{"added":[],"already":[],"skipped":[],"not_added":[{{"external_id":"{ext}","reason":"guest"}}]}}"#);
+        assert!(matches!(run(&guest), Outcome::Held { status: 200, ref why, .. } if why == "not added: guest"));
+        let banned = r#"{"added":[],"already":[],"skipped":["7"],"not_added":[]}"#;
+        assert!(matches!(run(banned), Outcome::Held { ref why, .. } if why.contains("banned")));
+        assert!(matches!(run(r#"{"added":[],"already":[],"skipped":[],"not_added":[]}"#), Outcome::Blocked { status: Some(200), .. }));
+        // Non-2xx and other ops pass through untouched.
+        let app_mismatch = resp(409, &err("conflict", "app_mismatch", ""), "");
+        assert!(matches!(refine_space(&c, &r, classify(&c, &r, Ok(&app_mismatch), 0)), Outcome::Blocked { status: Some(409), .. }));
+        let p = row("provision", 0, "k2ob_p");
+        assert!(matches!(refine_space(&c, &p, classify(&c, &p, Ok(&resp(200, "{}", "")), 0)), Outcome::Done { .. }));
+        // Remove: 404 (no such Space or member) is done.
+        let rm = space_row("space_member_remove", 0);
+        assert!(matches!(
+            classify(&c, &rm, Ok(&resp(404, &err("not_found", "", ""), "")), 0),
+            Outcome::Done { status: 404, reconcile: false, .. }
+        ));
+        assert_eq!(path_for(Op::SpaceMemberAdd), "/mgmt/v1/spaces/members/add");
+        assert_eq!(path_for(Op::SpaceMemberRemove), "/mgmt/v1/spaces/members/remove");
+    }
+
+    /// K26: which outcomes are worth one `sew_changed` per pass.
+    #[test]
+    fn visible_changes_are_finished_blocked_held_or_a_first_failure() {
+        let r0 = row("provision", 0, "k2ob_x");
+        let r3 = row("provision", 3, "k2ob_x");
+        let retry = Outcome::Retry { status: None, error: "x".into(), delay: Duration::from_secs(1), target_error: None, stop_target: true };
+        assert!(visible_change(&r0, &Outcome::Done { status: 200, body: String::new(), reconcile: false }));
+        assert!(visible_change(&r3, &Outcome::Blocked { status: Some(400), error: "x".into() }));
+        assert!(visible_change(&r3, &Outcome::Held { status: 200, body: String::new(), why: "x".into() }));
+        assert!(visible_change(&r0, &retry), "pending after its first failure");
+        assert!(!visible_change(&r3, &retry), "later retries change nothing a page shows");
+        assert!(!visible_change(&r0, &Outcome::UsernameRetry { status: 409 }));
     }
 }

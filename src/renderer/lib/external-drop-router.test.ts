@@ -584,10 +584,14 @@ describe('routeExternalDrop — thread surface images', () => {
     surfaceNode({ composeDropSurface: 'thread' }, [row, bar])
     await routeExternalDrop(primaryScope(), ['/tmp/Screen Shot.png'], { x: 3, y: 3 }, surfaceDoc(row))
     expect(bar._events).toHaveLength(1)
-    const ev = bar._events[0] as CustomEvent<{ data: string }>
+    const ev = bar._events[0] as CustomEvent<{ data: string; paths?: string[]; uploaded?: boolean }>
     expect(ev.type).toBe('k2so:compose-insert')
     expect(ev.detail.data).toBe("'/tmp/Screen Shot.png' ")
     expect(ev.detail.data.startsWith('\u001b')).toBe(false)
+    // S4: the paths themselves ride along (this computer's, not uploaded),
+    // so a Thread box on a thread-attachments-v1 server can attach them.
+    expect(ev.detail.paths).toEqual(['/tmp/Screen Shot.png'])
+    expect(ev.detail.uploaded).toBe(false)
   })
 
   it('does not insert a non-image dropped on the thread list', async () => {

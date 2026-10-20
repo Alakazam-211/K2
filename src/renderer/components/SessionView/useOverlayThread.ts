@@ -74,6 +74,7 @@ import {
   type OverlayThreadItem,
   type OverlayWsFrame,
   type ThreadAnswerPayload,
+  type ThreadPostAttachment,
   type ThreadTurn,
 } from './overlayThread'
 import type { ServerScope } from '@/kessel/server-scope'
@@ -151,7 +152,9 @@ export function useOverlayThread(opts: {
   conversationId: string
   error: string | null
   posting: boolean
-  post: (text: string) => Promise<void>
+  /** A compose post; `attachments` (thread-attachments-v1) ride it as file
+   *  objects, and then `text` may be empty. */
+  post: (text: string, attachments?: ThreadPostAttachment[]) => Promise<void>
   answer: (id: string, payload: ThreadAnswerPayload) => Promise<void>
   voidCard: (id: string) => Promise<void>
   hasMore: boolean
@@ -575,9 +578,10 @@ export function useOverlayThread(opts: {
   }, [scope, addr])
 
   const post = useCallback(
-    async (text: string) => {
+    async (text: string, attachments?: ThreadPostAttachment[]) => {
       const trimmed = text.trim()
-      if (!trimmed || !addr.trim()) return
+      const files = attachments && attachments.length > 0 ? attachments.map((a) => ({ ...a })) : null
+      if ((!trimmed && !files) || !addr.trim()) return
       setPosting(true)
       const sentAtSec = Math.floor(Date.now() / 1000)
       try {
@@ -589,7 +593,7 @@ export function useOverlayThread(opts: {
           body?: string
           kind?: string
           conversation_id?: string
-        }>(scope, 'thread/post', { addr, text: trimmed, via: 'compose' }).catch((e: unknown) => {
+        }>(scope, 'thread/post', { addr, text: trimmed, via: 'compose', ...(files ? { attachments: files } : {}) }).catch((e: unknown) => {
           if (isThreadAddressMiss(e)) requestThreadAddressRelookup(addr)
           throw e
         })

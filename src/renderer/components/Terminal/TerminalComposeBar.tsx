@@ -71,6 +71,20 @@ import {
 } from './terminalCompose'
 import { useSessionViewChrome } from '@/components/SessionView/sessionViewChrome'
 import { postThreadCompose } from '@/components/SessionView/overlayThread'
+import {
+  isInsideWorkspace,
+  mergeThreadComposeFiles,
+  readThreadComposeFiles,
+  resolveThreadComposeFiles,
+  threadComposeAttachOn,
+  threadComposeFile,
+  writeThreadComposeFiles,
+  THREAD_POST_TOO_MANY_FILES,
+  type ThreadComposeAttachInput,
+  type ThreadComposeFile,
+} from '@/lib/thread-compose-attachments'
+import { isThreadImageFile } from '@/lib/thread-image-thumbs'
+import type { ComposeInsertDetail } from '@/lib/external-drop-router'
 import { loadHostImageObjectUrl, revokeObjectUrl } from '@/lib/load-host-binary'
 import { scopedKey } from '@/kessel/server-scope'
 import { useBrowserOverlay } from '@/lib/browser-overlay'
@@ -198,6 +212,26 @@ export function TerminalComposeBar({
   const slashBtnRef = useRef<HTMLButtonElement>(null)
   const slashMenuRef = useRef<HTMLDivElement>(null)
   const imagePaths = extractImagePathsFromDraft(draft)
+
+  // S4 (thread-attachments-v1): on a Thread send to a server that takes
+  // them, picked/dropped files wait here as chips and ride the post as
+  // `attachments` (not path text). Kept beside the draft (localStorage), so
+  // they survive a tab switch and a refused send. Without the feature the
+  // old path text goes into the draft.
+  const threadFilesOn = sendOnThread && threadComposeAttachOn(scope)
+  const threadFilesKey = `${scopedKey(scope, `k2:composer:draft:${sessionId}:thread`)}:files`
+  const [threadFiles, setThreadFiles] = useState<ThreadComposeFile[]>(() => readThreadComposeFiles(threadFilesKey))
+  const threadFilesLoadedKey = useRef(threadFilesKey)
+  useEffect(() => {
+    if (threadFilesLoadedKey.current === threadFilesKey) return
+    threadFilesLoadedKey.current = threadFilesKey
+    setThreadFiles(readThreadComposeFiles(threadFilesKey))
+  }, [threadFilesKey])
+  useEffect(() => {
+    if (threadFilesLoadedKey.current !== threadFilesKey) return
+    writeThreadComposeFiles(threadFilesKey, threadFiles)
+  }, [threadFiles, threadFilesKey])
+  const pendingFiles = threadFilesOn ? threadFiles : []
 
   // Reload the saved draft when the pane's session changes — this component can
   // be reused with a new sessionId on a workspace/tab switch without remounting.
@@ -345,17 +379,60 @@ export function TerminalComposeBar({
     })
   }, [])
 
+  // S4: files become chips waiting to ride the Thread post. `onServer`:
+  // the paths are already on the Thread's server (a server-side pick, an
+  // upload the drop router did): one inside the workspace is attached, one
+  // outside goes in as text as before (it can't be copied from here).
+  // Anything else resolves through `resolveThreadComposeFiles` (a local
+  // file in the workspace as it is, the rest uploaded to `.k2/downloads`).
+  const addThreadFiles = useCallback(
+    async (input: ThreadComposeAttachInput & { onServer?: boolean }) => {
+      let got: ThreadComposeFile[] | null
+      try {
+        if (input.onServer) {
+          const paths = input.paths ?? []
+          const inside = paths.filter((p) => isInsideWorkspace(p, workspacePath))
+          const outside = paths.filter((p) => !inside.includes(p))
+          if (outside.length > 0) insertPathsText(buildComposeDropPayload(outside))
+          got = inside.map(threadComposeFile)
+        } else {
+          got = await resolveThreadComposeFiles(scope, { ...input, workspacePath })
+        }
+      } catch (err) {
+        useToastStore.getState().addToast(`Couldn't attach: ${err instanceof Error ? err.message : String(err)}`, 'error')
+        return
+      }
+      if (!got || got.length === 0) return
+      const add = got
+      setThreadFiles((cur) => {
+        const merged = mergeThreadComposeFiles(cur, add)
+        if (merged.dropped > 0) setThreadAddrError(THREAD_POST_TOO_MANY_FILES)
+        return merged.files
+      })
+      requestAnimationFrame(() => textareaRef.current?.focus())
+    },
+    [insertPathsText, scope, workspacePath],
+  )
+  const removeThreadFile = useCallback((path: string) => {
+    setThreadFiles((cur) => cur.filter((f) => f.path !== path))
+  }, [])
+
   // Window-level external-drop-router / internal file-drag → insert event.
   useEffect(() => {
     const el = barRef.current
     if (!el) return
     const onInsert = (e: Event) => {
-      const data = (e as CustomEvent<{ data: string }>).detail?.data
+      const detail = (e as CustomEvent<ComposeInsertDetail>).detail
+      if (threadFilesOn && detail?.paths && detail.paths.length > 0) {
+        void addThreadFiles({ paths: detail.paths, onServer: detail.uploaded === true })
+        return
+      }
+      const data = detail?.data
       if (data) insertPathsText(data)
     }
     el.addEventListener('k2so:compose-insert', onInsert)
     return () => el.removeEventListener('k2so:compose-insert', onInsert)
-  }, [insertPathsText])
+  }, [insertPathsText, addThreadFiles, threadFilesOn])
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -375,7 +452,9 @@ export function TerminalComposeBar({
           if (p) paths.push(p)
         }
         if (paths.length > 0) {
-          if (scope.isRemote) {
+          if (threadFilesOn) {
+            void addThreadFiles({ paths })
+          } else if (scope.isRemote) {
             void composeAttachPayload(scope, { paths, workspacePath }).then((payload) => {
               if (payload) insertPathsText(payload)
             })
@@ -387,6 +466,10 @@ export function TerminalComposeBar({
         // Hosted web / no File.path — upload File bytes then insert host path.
         const browserFiles = filesFromDataTransfer(e.dataTransfer)
         if (browserFiles.length > 0) {
+          if (threadFilesOn) {
+            void addThreadFiles({ files: browserFiles })
+            return
+          }
           void composeAttachPayload(scope, { files: browserFiles, workspacePath }).then((payload) => {
             if (payload) insertPathsText(payload)
           })
@@ -397,7 +480,7 @@ export function TerminalComposeBar({
       const text = e.dataTransfer.getData('text/plain')
       if (text?.trim()) insertPathsText(text.trim() + ' ')
     },
-    [insertPathsText, workspacePath],
+    [addThreadFiles, insertPathsText, scope, threadFilesOn, workspacePath],
   )
 
   const handleAttachClick = useCallback(() => {
@@ -409,6 +492,7 @@ export function TerminalComposeBar({
       void pickLocalComposeFiles()
         .then(async (paths) => {
           if (!paths || paths.length === 0) return
+          if (threadFilesOn) return addThreadFiles({ paths })
           const payload = await composeAttachPayload(scope, { paths, workspacePath })
           if (payload) insertPathsText(payload)
         })
@@ -424,7 +508,9 @@ export function TerminalComposeBar({
     if (plan.kind === 'native') {
       void pickLocalComposeFiles()
         .then((paths) => {
-          if (paths && paths.length > 0) insertPathsText(buildComposeDropPayload(paths))
+          if (!paths || paths.length === 0) return
+          if (threadFilesOn) return addThreadFiles({ paths })
+          insertPathsText(buildComposeDropPayload(paths))
         })
         .catch((err) => {
           useToastStore.getState().addToast(
@@ -439,9 +525,12 @@ export function TerminalComposeBar({
       return
     }
     void pickRemoteComposeFile().then((path) => {
-      if (path) insertPathsText(buildComposeDropPayload([path]))
+      if (!path) return
+      // A file picked on the server: already there.
+      if (threadFilesOn) return addThreadFiles({ paths: [path], onServer: true })
+      insertPathsText(buildComposeDropPayload([path]))
     })
-  }, [insertPathsText, room, scope, workspacePath])
+  }, [addThreadFiles, insertPathsText, room, scope, threadFilesOn, workspacePath])
 
   const handleLocalFiles = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -454,23 +543,34 @@ export function TerminalComposeBar({
         if (p) paths.push(p)
       }
       if (paths.length > 0) {
+        if (threadFilesOn) {
+          void addThreadFiles({ paths })
+          return
+        }
         insertPathsText(buildComposeDropPayload(paths))
         return
       }
       const browserFiles = Array.from(list)
       if (browserFiles.length > 0) {
+        if (threadFilesOn) {
+          void addThreadFiles({ files: browserFiles })
+          return
+        }
         void composeAttachPayload(scope, { files: browserFiles, workspacePath }).then((payload) => {
           if (payload) insertPathsText(payload)
         })
       }
     },
-    [insertPathsText, workspacePath],
+    [addThreadFiles, insertPathsText, scope, threadFilesOn, workspacePath],
   )
 
   const send = useCallback(async () => {
     const text = draft.trim()
     const command = slashCommand
-    if (!composeCanSend({ draft, sending, command }) || sending) return
+    const files = sendOnThread ? pendingFiles : []
+    if (sending) return
+    // S4: files alone are a message.
+    if (!composeCanSend({ draft, sending, command }) && files.length === 0) return
     if (sessionChrome?.viewTab === 'chatter') return
     if (sendOnThread) {
       if (!threadAddr.trim()) {
@@ -488,13 +588,25 @@ export function TerminalComposeBar({
 
     try {
       if (sendOnThread) {
-        const result = await postThreadCompose(scope, threadAddr, text, command)
+        const result = await postThreadCompose(
+          scope,
+          threadAddr,
+          text,
+          command,
+          files.length > 0 ? { attachments: files.map((f) => ({ path: f.path })) } : undefined,
+        )
         if (!result.ok) {
+          // The draft and its file chips stay (a refused file: the whole
+          // post was refused), with the daemon's reason.
           setDraft((cur) => (cur.length === 0 ? text : cur))
           // Side finding C: say why, instead of a silent bounce.
           setThreadAddrError(result.error)
         } else {
           setThreadAddrError(null)
+          if (files.length > 0) {
+            const sent = new Set(files.map((f) => f.path))
+            setThreadFiles((cur) => cur.filter((f) => !sent.has(f.path)))
+          }
           if (text) setHistory((prev) => [text, ...prev].slice(0, 50))
           setHistoryIndex(-1)
           historyDraftRef.current = ''
@@ -524,7 +636,7 @@ export function TerminalComposeBar({
     } finally {
       setSending(false)
     }
-  }, [draft, sending, sessionId, sendOnThread, threadAddr, slashCommand, sessionChrome?.viewTab])
+  }, [draft, sending, sessionId, sendOnThread, threadAddr, slashCommand, sessionChrome?.viewTab, pendingFiles, scope])
 
   const slashTypeaheadQuery = composeSlashTypeaheadQuery(draft)
   const slashMatches =
@@ -632,7 +744,8 @@ export function TerminalComposeBar({
       }
       if (shouldSendOnKey({ key: e.key, shiftKey: e.shiftKey, isComposing: e.nativeEvent.isComposing })) {
         e.preventDefault()
-        const canSend = composeCanSend({ draft, sending, command: slashCommand })
+        const canSend =
+          composeCanSend({ draft, sending, command: slashCommand }) || (pendingFiles.length > 0 && !sending)
         const cr = composeEmptyEnterSequence({
           key: e.key,
           shiftKey: e.shiftKey,
@@ -685,6 +798,7 @@ export function TerminalComposeBar({
       history,
       historyIndex,
       onInjectInput,
+      pendingFiles,
       selectSlashCommand,
       send,
       sending,
@@ -738,11 +852,22 @@ export function TerminalComposeBar({
   // One condensed row — just the textarea.
   // min-w-0 on the flex row + field so app zoom (Cmd+=) reflows width
   // instead of pinning content-min-width and growing a horizontal scrollbar.
-  const canSend = composeCanSend({
-    draft,
-    sending,
-    command: slashCommand,
-  })
+  const canSend =
+    composeCanSend({
+      draft,
+      sending,
+      command: slashCommand,
+    }) ||
+    (pendingFiles.length > 0 && !sending)
+  // S4: the files waiting to ride the Thread post (a picture for images).
+  const fileChips = pendingFiles.map((f) =>
+    isThreadImageFile({ path: f.path }) ? (
+      <ComposeImageThumb key={f.path} path={f.path} variant="chip" onRemove={() => removeThreadFile(f.path)} />
+    ) : (
+      <ThreadAttachmentChip key={f.path} name={f.name} title={f.path} onRemove={() => removeThreadFile(f.path)} />
+    ),
+  )
+  const hasChips = imagePaths.length > 0 || fileChips.length > 0
   // Must match composeTextareaHeight: 4px pad × 2 + line-height 1.4.
   const firstLineH = Math.round(editorFontSize * 1.4 + 8)
   const btnSize = Math.min(firstLineH, Math.max(16, Math.round(editorFontSize * 1.4)))
@@ -967,8 +1092,9 @@ export function TerminalComposeBar({
         <ThreadComposeBox
           stacked={stacked}
           chips={
-            imagePaths.length > 0 ? (
+            hasChips ? (
               <ThreadAttachmentChips testId="compose-image-previews">
+                {fileChips}
                 {imagePaths.map((path) => (
                   <ComposeImageThumb
                     key={path}
@@ -1057,8 +1183,9 @@ export function TerminalComposeBar({
         className="flex min-w-0 w-full flex-col bg-[var(--color-bg)]"
         style={{ border: '1px solid var(--color-border)', borderRadius: 0 }}
       >
-      {imagePaths.length > 0 && (
+      {hasChips && (
         <div className="flex flex-wrap gap-1 px-1 pt-1" data-testid="compose-image-previews">
+          {fileChips}
           {imagePaths.map((path) => (
             <ComposeImageThumb
               key={path}

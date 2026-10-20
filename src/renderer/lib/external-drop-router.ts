@@ -348,14 +348,43 @@ function injectIntoTerminal(
   )
 }
 
+/** What `k2so:compose-insert` carries: the path text for the draft, and
+ *  (when known) the dropped paths themselves, so a Thread's message box on
+ *  a `thread-attachments-v1` server can attach them instead (S4).
+ *  `uploaded`: the paths are already on the agent's server (uploaded into
+ *  its `.k2/downloads`); otherwise they are this computer's own. */
+export interface ComposeInsertDetail {
+  data: string
+  paths?: string[]
+  uploaded?: boolean
+}
+
 /** Insert path text into the compose draft (TerminalComposeBar listens). */
 function injectIntoCompose(
   target: Extract<ExternalDropTarget, { kind: 'compose' }>,
   payload: string,
+  paths?: string[] | null,
+  uploaded?: boolean,
 ): void {
-  target.element.dispatchEvent(
-    new CustomEvent('k2so:compose-insert', { detail: { data: payload } }),
-  )
+  const detail: ComposeInsertDetail = { data: payload }
+  if (paths && paths.length > 0) {
+    detail.paths = [...paths]
+    detail.uploaded = uploaded === true
+  }
+  target.element.dispatchEvent(new CustomEvent('k2so:compose-insert', { detail }))
+}
+
+/** A compose payload builder that also keeps the server paths it built
+ *  from (an upload's answer). */
+function composePayloadCapture(): { build: (remote: string[]) => string; paths: () => string[] | null } {
+  let got: string[] | null = null
+  return {
+    build: (remote) => {
+      got = [...remote]
+      return buildComposeDropPayload(remote)
+    },
+    paths: () => got,
+  }
 }
 
 /**
@@ -455,16 +484,17 @@ export async function routeExternalDrop(
       // Same remote upload destination as terminal (workspace `.k2/downloads`),
       // but insert the host path into the message draft, not the PTY.
       if (isRemote) {
+        const cap = composePayloadCapture()
         const payload = await executeRemoteDrop(
           scope,
           paths,
           { kind: 'terminal' },
           { workspacePath: target.workspacePath || undefined },
-          buildComposeDropPayload,
+          cap.build,
         )
-        if (payload) injectIntoCompose(target, payload)
+        if (payload) injectIntoCompose(target, payload, cap.paths(), true)
       } else {
-        injectIntoCompose(target, buildComposeDropPayload(paths))
+        injectIntoCompose(target, buildComposeDropPayload(paths), paths, false)
       }
       return
     }
@@ -549,14 +579,15 @@ export async function routeBrowserFileDrop(
       return
     }
     case 'compose': {
+      const cap = composePayloadCapture()
       const payload = await executeBrowserFileDrop(
         scope,
         files,
         { kind: 'terminal' },
         { workspacePath: target.workspacePath || undefined },
-        buildComposeDropPayload,
+        cap.build,
       )
-      if (payload) injectIntoCompose(target, payload)
+      if (payload) injectIntoCompose(target, payload, cap.paths(), true)
       return
     }
     case 'folder': {

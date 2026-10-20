@@ -310,6 +310,14 @@ interface Project {
   // revokes any workspace (audited). Written via POST
   // /cli/agent-access/set `toggle: 'compute_manage'` (the owner only).
   agentsCanManageCompute?: number
+  // Per-agent App permissions (0197, prd-agent-app-permissions-v1): switch 1
+  // "Build and run Apps" is `agentsCanManageSkin`; switch 2 "…and manage
+  // them end to end" is this (0/1, default 0; counts only under switch 1).
+  // `appCores` is the ticked cores, a JSON array of db|files|thread|mail|sew
+  // (default "[]"). Written only via POST /cli/agent-access/set (the owner
+  // raises, an Admin lowers). Absent on older daemons → off / none.
+  agentsCanManageAppsFull?: number
+  appCores?: string
 }
 
 export interface ProjectWithWorkspaces extends Project {

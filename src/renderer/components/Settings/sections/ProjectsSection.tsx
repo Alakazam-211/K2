@@ -68,6 +68,7 @@ import { computeErrorMessage, setWorkspaceComputeManage, setWorkspaceComputeOper
 import { metaChordLabel } from '@/lib/shortcut-label'
 import { reorderedZoneIds } from '@/components/Sidebar/row-drag-reorder'
 import { AgentHandoffAcceptFrom } from './HandoffAcceptFrom'
+import { AgentAppsAccess } from './AgentAppsAccess'
 
 /**
  * Plan B cross-window sync: the old Tauri `projects_update` /
@@ -97,7 +98,7 @@ export const PROJECTS_MANIFEST: SettingEntry[] = [
   { id: 'projects.llm-logins', section: 'projects', label: 'LLM tokens', description: 'Use a specific Claude / Codex / Grok / Gemini subscription or API token for this workspace\'s agents instead of the server default', keywords: ['token', 'tokens', 'subscription', 'api token', 'api key', 'server default', 'login', 'account', 'pin'] },
   { id: 'projects.force-model-on-resume', section: 'projects', label: 'Force model on resume', description: 'Pass workspace default model when resuming a session', keywords: ['resume', 'model', 'force'] },
   { id: 'projects.db-agent-create', section: 'projects', label: 'Allow this agent to create databases', description: 'Per-workspace passport for k2 db create (create-only; existing DBs stay usable)', keywords: ['db_agent_access', 'create', 'passport', 'agent', 'write', 'database', 'sql'] },
-  { id: 'projects.agents-can-manage-skin', section: 'projects', label: 'Allow this agent to manage Apps', description: 'Per-workspace passport for k2 app / leftover k2 skin / k2 skin-token mutations (guests, roles, platform tokens for this box)', keywords: ['agents_can_manage_skin', 'skin', 'app', 'passport', 'agent', 'guests', 'roles', 'skin-token'] },
+  { id: 'projects.agents-can-manage-skin', section: 'projects', label: 'Build and run Apps', description: 'Apps (beta) for this agent: Build and run Apps, Manage its Apps end to end (caps, budgets, hosts, keys), and what its Apps may use (Database, Files and rooms, Thread, Mail, Sew). The owner turns them on; an admin only off. Loosening the wall always asks you', keywords: ['agents_can_manage_skin', 'agents_can_manage_apps_full', 'app_cores', 'cores', 'apps', 'app', 'build', 'run', 'manage', 'end to end', 'database', 'files', 'rooms', 'thread', 'mail', 'sew', 'passport', 'agent', 'guests', 'roles', 'k2 app access'] },
   { id: 'projects.agents-can-manage-agents', section: 'projects', label: 'Allow hiring and managing agents', description: 'Lets this workspace\'s main agent open and stop sidecars (k2 sidecar); later also hire and retire agents', keywords: ['agents_can_manage_agents', 'sidecar', 'hire', 'agent', 'passport', 'manage agents'] },
   { id: 'projects.handoff-accept-from', section: 'projects', label: 'Secrets from other agents', description: 'Agents whose secrets go straight into this agent\'s vault; everything else waits for you', keywords: ['handoff', 'accept from', 'vault', 'secret', 'send secret', 'agent to agent'] },
   { id: 'projects.agents-can-manage-vault', section: 'projects', label: 'Allow managing server-wide secrets', description: 'Lets this workspace\'s main agent share server secrets with other workspaces and look after them (k2 vault); never with itself, and never loosen a secret it uses', keywords: ['vault_manage', 'vault', 'secret', 'secrets', 'passport', 'agent', 'it agent'] },
@@ -1398,7 +1399,7 @@ function ProjectDetail({
               <DbAgentCreateToggle project={project} />
             </SettingsGroup>
             <SettingsGroup title="Apps">
-              <AgentsManageSkinToggle project={project} />
+              <AgentAppsAccess project={project} />
             </SettingsGroup>
             <SettingsGroup title="Agents">
               <AgentsManageAgentsToggle project={project} />
@@ -2712,91 +2713,6 @@ export function DbAgentCreateToggle({
           <div className={permissionDescClass(compact)}>
             Existing databases this workspace owns or is granted are usable without this toggle;
             it only gates <span className="font-mono">k2 db create</span>.
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// Chunk 2.2 — per-workspace agents-may-manage-Skin-Access. DEFAULTS OFF.
-// No global master. Writes POST /cli/agents-manage-skin `{project, enable: 0|1}`.
-// Optimistic store patch; do not fetchProjects() on this path. Never GET /cli/users.
-export function AgentsManageSkinToggle({
-  project,
-  compact = false,
-  readOnly = false,
-}: {
-  project: ProjectWithWorkspaces
-  /** Drawer Agent tab: the label and switch only (no description box). */
-  compact?: boolean
-  /** Shown but not flippable: a room on another server, or a role below the route floor. */
-  readOnly?: boolean
-}): React.JSX.Element {
-  const [busy, setBusy] = useState(false)
-  const enabled = (project.agentsCanManageSkin ?? 0) === 1
-
-  const toggle = async (): Promise<void> => {
-    if (busy || readOnly) return
-    const next = !enabled
-    const before = project.agentsCanManageSkin
-    setBusy(true)
-    useProjectsStore.setState((s) => ({
-      projects: s.projects.map((p) =>
-        p.id === project.id ? { ...p, agentsCanManageSkin: next ? 1 : 0 } : p,
-      ),
-    }))
-    try {
-      await daemonCliPost(primaryScope(), 'agents-manage-skin', {
-        project: project.path,
-        enable: next ? 1 : 0,
-      })
-      noteOptimisticProjectsMutationSuccess()
-      emitProjectsChanged()
-    } catch (err) {
-      useProjectsStore.setState((s) => ({
-        projects: s.projects.map((p) =>
-          p.id === project.id ? { ...p, agentsCanManageSkin: before } : p,
-        ),
-      }))
-      console.error('[agents-manage-skin] write failed', err)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <div className={permissionRowClass(compact)}>
-      <div className="flex items-start gap-3">
-        <button
-          onClick={toggle}
-          role="switch"
-          aria-checked={enabled}
-          disabled={busy || readOnly}
-          data-settings-id="projects.agents-can-manage-skin"
-          className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
-            enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-          }`}
-          title={
-            enabled
-              ? 'This agent may manage Apps for this box'
-              : 'This agent cannot manage Apps'
-          }
-        >
-          <span
-            className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
-              enabled ? 'translate-x-3.5' : 'translate-x-0.5'
-            }`}
-          />
-        </button>
-        <div className="flex-1 min-w-0">
-          <div className="text-xs font-medium text-[var(--color-text-primary)]">
-            Allow this agent to manage Apps.
-          </div>
-          <div className={permissionDescClass(compact)}>
-            {enabled
-              ? 'This agent may add guests, roles, and platform tokens for this box. You (the owner) can always manage Apps.'
-              : 'Off (recommended): guests, roles, and platform tokens for this box stay owner-managed. Turn on to let this workspace\'s agent drive existing k2 app / leftover k2 skin / k2 skin-token mutations. You (the owner) can always manage Apps.'}
           </div>
         </div>
       </div>

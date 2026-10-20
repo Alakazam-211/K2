@@ -43,7 +43,6 @@ import {
   AgentsCreateConnectionsToggle,
   AgentsManageAgentsToggle,
   AgentsManageProjectsToggle,
-  AgentsManageSkinToggle,
   AgentsManageVaultToggle,
   AgentsOperateComputeToggle,
   AgentsUseComputeToggle,
@@ -51,6 +50,7 @@ import {
   DnsManageToggle,
   MailManageToggle,
 } from '@/components/Settings/sections/ProjectsSection'
+import { AgentAppsAccess } from '@/components/Settings/sections/AgentAppsAccess'
 import { RemoteInstructToggle } from '@/components/Settings/shared/RemoteInstructToggle'
 
 type ViewerRole = 'owner' | 'admin' | 'member'
@@ -205,7 +205,7 @@ export default function AgentPanel(): React.JSX.Element {
           <DnsManageToggle project={project} fetchProjects={refetchProjects} compact readOnly={ro('admin')} />
           <MailManageToggle project={project} compact readOnly={ro('admin')} />
           <DbAgentCreateToggle project={project} compact readOnly={ro('member')} />
-          <AgentsManageSkinToggle project={project} compact readOnly={ro('owner')} />
+          <AgentAppsAccess project={project} compact readOnly={!editable} />
           <AgentsManageAgentsToggle project={project} compact readOnly={ro('admin')} />
           <AgentsManageVaultToggle project={project} compact readOnly={ro('admin')} />
           <AgentsUseComputeToggle project={project} compact readOnly={ro('admin')} />

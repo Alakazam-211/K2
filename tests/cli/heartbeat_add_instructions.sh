@@ -99,9 +99,21 @@ class H(BaseHTTPRequestHandler):
         has = bool(q.get("instructions", "").strip())
         body = {"id": "x", "name": q.get("name"), "wakeupPath": ".k2/heartbeats/x/WAKEUP.md",
                 "wakeupAbs": REMOTE_ABS}
-        if mode != "old":
+        if mode == "new":
             body["instructionsWritten"] = has
             body["waitReason"] = None if has else "wakeup_empty"
+            body["wakeupBodyBytes"] = len(q.get("instructions", "").strip())
+            body["instructionsKeptExisting"] = False
+        elif mode == "cloned":
+            # 0.46.3: WAKEUP.md came over in a clone (102 KB); add kept it.
+            body["instructionsWritten"] = False
+            body["waitReason"] = "no_agent"
+            body["wakeupBodyBytes"] = 102400
+            body["instructionsKeptExisting"] = has
+        elif mode == "s5":
+            # A daemon between S5 and 0.46.3: no body bytes, a wait reason.
+            body["instructionsWritten"] = has
+            body["waitReason"] = q.get("reason", "wakeup_empty") if not has else None
         self._send(200, body)
 
     # 0.44.4: heartbeat/add is POST-only (params stay in the query).
@@ -201,6 +213,30 @@ fi
 assert_contains "400 names allowed values" "$out" "hourly|daily|weekly|monthly|yearly|scheduled"
 assert_not_contains "no created line on 400" "$out" "Created heartbeat"
 
+echo "== 0.46.3: a WAKEUP.md that came over in a clone is not called empty =="
+echo "cloned" >"$MODE_FILE"
+set +e
+out="$(run_k2 --name cloned-review --daily 2>&1)"
+rc=$?
+set -e
+assert_eq "cloned add exit" "$rc" "0"
+assert_not_contains "cloned: never says empty" "$out" "WAKEUP.md is empty"
+assert_contains "cloned: names the body it found" "$out" "Using the existing WAKEUP.md (102400 bytes)."
+set +e
+out="$(run_k2 --name cloned-review-2 --daily --instructions 'replace me' 2>&1)"
+rc=$?
+set -e
+assert_eq "cloned + instructions exit" "$rc" "0"
+assert_contains "cloned + instructions: kept, and says so" "$out" "Kept the existing WAKEUP.md (102400 bytes); --instructions were NOT written over it."
+assert_not_contains "cloned + instructions: no written claim" "$out" "Wake instructions written"
+assert_not_contains "cloned + instructions: never says empty" "$out" "WAKEUP.md is empty"
+
+echo "== a daemon between S5 and 0.46.3: its wait reason decides =="
+echo "s5" >"$MODE_FILE"
+set +e
+out="$(run_k2 --name s5-empty --daily 2>&1)"
+set -e
+assert_contains "s5 daemon, wakeup_empty: needs instructions" "$out" "Needs instructions: WAKEUP.md is empty"
 echo "== a daemon older than S5 fails loudly with instructions =="
 echo "old" >"$MODE_FILE"
 set +e

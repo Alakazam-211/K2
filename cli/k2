@@ -2284,6 +2284,23 @@ d = json.loads(sys.stdin.read())
 v = d.get('instructionsWritten')
 print('missing' if v is None else ('true' if v else 'false'))
 ")
+    # What WAKEUP.md holds now, from the daemon (0.46.3): body bytes, or
+    # -1 when it did not say (an older daemon: fall back to its wait
+    # reason). A WAKEUP.md that came over in a clone is NOT empty.
+    local body_bytes kept_existing
+    body_bytes=$(printf '%s' "$resp" | python3 -c "
+import json, sys
+d = json.loads(sys.stdin.read())
+b = d.get('wakeupBodyBytes')
+if isinstance(b, int):
+    print(b)
+else:
+    print(0 if d.get('waitReason') == 'wakeup_empty' else -1)
+")
+    kept_existing=$(printf '%s' "$resp" | python3 -c "
+import json, sys
+print('true' if json.loads(sys.stdin.read()).get('instructionsKeptExisting') else 'false')
+")
     echo "Created heartbeat: $name"
     [ -n "$wakeup_abs" ] && echo "Wakeup file (on the daemon's machine): $wakeup_abs"
     echo
@@ -2299,7 +2316,12 @@ print('missing' if v is None else ('true' if v else 'false'))
     fi
     if [ "$written" = "true" ]; then
         echo "Wake instructions written ($(printf '%s' "$instructions" | wc -c | tr -d ' ') bytes)."
-    else
+    elif [ "$kept_existing" = "true" ]; then
+        echo "Kept the existing WAKEUP.md ($body_bytes bytes); --instructions were NOT written over it."
+        echo "Edit it with: k2 heartbeat signal wakeup $name --edit (or change the file on the daemon's machine)."
+    elif [ "$body_bytes" -gt 0 ] 2>/dev/null; then
+        echo "Using the existing WAKEUP.md ($body_bytes bytes)."
+    elif [ "$body_bytes" = "0" ]; then
         echo "Needs instructions: WAKEUP.md is empty. The heartbeat stays enabled and waits;"
         echo "it fires at the next scheduled slot after you add them (or re-run with --instructions)."
     fi

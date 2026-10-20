@@ -7,6 +7,8 @@ import {
   threadErrorText,
 } from '@/lib/thread-address-bus'
 import type { ServerScope } from '@/kessel/server-scope'
+import { httpCodeOf } from '@/lib/daemon-http-error'
+import { threadAttachmentRefusalText } from '@/lib/thread-compose-attachments'
 import { parseThreadAuthor, type ThreadAuthor } from '@/lib/thread-viewer'
 
 export const OVERLAY_PAGE_SIZE = 25
@@ -408,7 +410,15 @@ export function overlayItemFromThreadPost(
  *  already pushed to every live Thread list), or it answered `ok: false`. */
 export type ThreadComposeResult =
   | { ok: true; item: OverlayThreadItem | null }
-  | { ok: false; error: string }
+  /** `code`: the daemon's refusal code when it sent one (`attachment_*`). */
+  | { ok: false; error: string; code?: string }
+
+/** One file on a compose post (`thread-attachments-v1`). */
+export interface ThreadPostAttachment {
+  path: string
+  line?: number
+  lineEnd?: number
+}
 
 /**
  * The one "message the agent on its Thread" send (prd-zen-mode-v1 Z42,
@@ -432,15 +442,35 @@ export async function postThreadCompose(
    *  its widget (shown "You · via <widget>", kept out of compose history).
    *  Only sent to a server that reports `thread-widget-origin`; its
    *  `placement` + `hash` only to this computer's daemon (0.46.1). */
-  extra?: { origin?: ThreadWidgetOrigin },
+  extra?: {
+    origin?: ThreadWidgetOrigin
+    /** S4 (`thread-attachments-v1`): files riding the post, paths on the
+     *  Thread's server inside its workspace. `text` may then be empty. The
+     *  daemon refuses the whole post on a bad one (`attachment_*`). */
+    attachments?: ThreadPostAttachment[]
+  },
 ): Promise<ThreadComposeResult> {
-  const body: { addr: string; text: string; via: string; command?: string; origin?: ThreadWidgetOrigin } = {
+  const body: {
+    addr: string
+    text: string
+    via: string
+    command?: string
+    origin?: ThreadWidgetOrigin
+    attachments?: ThreadPostAttachment[]
+  } = {
     addr,
     text,
     via: 'compose',
   }
   if (command) body.command = command
   if (extra?.origin) body.origin = threadWidgetOriginBody(extra.origin)
+  if (extra?.attachments && extra.attachments.length > 0) {
+    body.attachments = extra.attachments.map((a) => ({
+      path: a.path,
+      ...(typeof a.line === 'number' ? { line: a.line } : {}),
+      ...(typeof a.lineEnd === 'number' ? { lineEnd: a.lineEnd } : {}),
+    }))
+  }
   let resp: Record<string, unknown>
   try {
     resp = await daemonCliPost<Record<string, unknown>>(scope, 'thread/post', body)
@@ -452,7 +482,11 @@ export async function postThreadCompose(
       requestThreadAddressRelookup(addr)
       return { ok: false, error: THREAD_ADDRESS_MOVED }
     }
-    return { ok: false, error: threadErrorText(e) }
+    const text = threadErrorText(e)
+    const code = httpCodeOf(e)
+    // S4: a refused file says which rule, in words (the daemon's hint).
+    const refusal = threadAttachmentRefusalText(e, text)
+    return { ok: false, error: refusal ?? text, ...(code ? { code } : {}) }
   }
   if (resp?.ok === false) {
     return { ok: false, error: typeof resp.error === 'string' ? resp.error : 'The server refused the message.' }

@@ -1737,7 +1737,7 @@ mod tests {
 
     #[test]
     fn a_2000_char_url_is_found_whole() {
-        let url = format!("https://claude.ai/oauth/authorize?code=true&state={}", "a1B2c3D4e5".repeat(195));
+        let url = format!("https://claude.ai/oauth/authorize?code=true&state={}", "a1B2c3D4e5".repeat(200));
         assert!(url.len() > 2000);
         let s = scan(LOGIN_COLS as usize, format!("visit: {url}\r\n").as_bytes(), "");
         assert_eq!(picked(Tool::Claude, LoginMode::OtherDevice, &s).url, url);

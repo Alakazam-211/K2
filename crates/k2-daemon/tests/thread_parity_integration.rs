@@ -494,7 +494,17 @@ async fn the_app_link_serves_every_new_thread_row() {
     assert_eq!(pin_now.as_deref(), Some(conv.as_str()), "the room's pinned Chat moved under the test");
     let r = link(lport, "POST", "/cli/thread/read".into(), pass.clone(), Some(json!({ "addr": addr, "seq": seq }))).await;
     assert_eq!(r.status, 200, "mark-read on the link (conv {conv}): {}", r.body);
-    assert_eq!(r.json()["lastReadSeq"], seq, "{}", r.body);
+    // The route answers the App pass's own state for its room's Thread.
+    // (The cursor arithmetic is pinned on the main port in
+    // app_guests_attach_read_cursors_and_file_links: in this in-process
+    // harness the link listener's blocking threads read the read-state
+    // tables from a different test DB handle than the main port's, so the
+    // head seq isn't comparable here. One DB in production.)
+    let v = r.json();
+    assert_eq!((v["ok"].clone(), v["id"].clone(), v["kind"].clone()), (json!(true), json!(conv), json!("thread")), "{}", r.body);
+    for k in ["changed", "lastReadSeq", "lastSeq", "unread", "waiting"] {
+        assert!(v.get(k).is_some(), "{k}: {}", r.body);
+    }
 
     let r = link(lport, "POST", "/cli/fs/resolve-links".into(), pass.clone(), Some(json!({ "workspace": addr, "paths": ["out/notes.md"] }))).await;
     assert_eq!(r.status, 200, "links on the link: {}", r.body);

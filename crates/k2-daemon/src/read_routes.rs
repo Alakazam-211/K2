@@ -291,6 +291,14 @@ pub fn note_guest_thread_read(conn: &rusqlite::Connection, pass: &k2_core::skin:
     }
 }
 
+/// The state of a room Thread with no messages yet.
+fn empty_thread_state(conv: &str) -> serde_json::Value {
+    serde_json::json!({
+        "kind": KIND_THREAD, "id": conv, "seq": 0, "lastReadSeq": 0, "lastSeq": 0,
+        "unread": 0, "waiting": 0, "muted": false,
+    })
+}
+
 /// thread-read for an App guest / App pass (`pass` is bound on this thread
 /// by the dispatcher). `POST /cli/thread/read {addr|conversationId, seq?}`
 /// → `{ok, changed, …State}`; `GET /cli/thread/unread` → `{ok, total,
@@ -330,8 +338,12 @@ pub fn handle_guest(is_post: bool, path: &str, params: &HashMap<String, String>,
                     v["addr"] = serde_json::json!(addr);
                     rows.push(v);
                 }
-                // A pinned Chat with no Thread yet has nothing unread.
-                Err(ReadError::NotFound(_)) => {}
+                // A pinned Chat with no Thread yet: nothing unread.
+                Err(ReadError::NotFound(_)) => {
+                    let mut v = empty_thread_state(&conv);
+                    v["addr"] = serde_json::json!(addr);
+                    rows.push(v);
+                }
                 Err(e) => return read_error(e),
             }
         }
@@ -354,6 +366,14 @@ pub fn handle_guest(is_post: bool, path: &str, params: &HashMap<String, String>,
     let conn = db.lock();
     let changed = match read_state::ack(&conn, &person.key, KIND_THREAD, &conv, seq) {
         Ok(c) => c,
+        // Its room's pinned Chat has no Thread yet: nothing to read.
+        Err(ReadError::NotFound(_)) => {
+            let mut v = empty_thread_state(&conv);
+            v["ok"] = serde_json::json!(true);
+            v["changed"] = serde_json::json!(false);
+            v["addr"] = serde_json::json!(addr);
+            return CliResponse::ok_json(v.to_string());
+        }
         Err(e) => return read_error(e),
     };
     match read_state::item(&conn, &person, KIND_THREAD, &conv, now) {

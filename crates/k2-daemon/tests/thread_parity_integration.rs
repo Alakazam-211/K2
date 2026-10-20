@@ -475,6 +475,12 @@ async fn the_app_link_serves_every_new_thread_row() {
     let r = link(lport, "GET", "/cli/thread/unread".into(), pass.clone(), None).await;
     assert_eq!(r.status, 200, "unread on the link: {}", r.body);
     assert_eq!(r.json()["byConversation"][0]["id"], conv.as_str());
+    let pin_now = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        WorkspaceSession::get(&conn, &ws.id).expect("row").and_then(|s| s.session_id)
+    };
+    assert_eq!(pin_now.as_deref(), Some(conv.as_str()), "the room's pinned Chat moved under the test");
     let r = link(lport, "POST", "/cli/thread/read".into(), pass.clone(), Some(json!({ "addr": addr, "seq": seq }))).await;
     assert_eq!(r.status, 200, "mark-read on the link (conv {conv}): {}", r.body);
     assert_eq!(r.json()["lastReadSeq"], seq);

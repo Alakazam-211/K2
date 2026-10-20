@@ -551,7 +551,9 @@ pub enum Verb {
     /// password (SCRAM verifier) and attributes. Any role already in the
     /// target with another verifier or other attributes refuses the whole
     /// call before any change. Verifiers never leave the helper.
-    PgCopyRoles { from: PgMajor, to: PgMajor },
+    /// `--dry-run`: the same comparison, nothing created (a move's
+    /// `--check`): names only.
+    PgCopyRoles { from: PgMajor, to: PgMajor, dry_run: bool },
     /// `pg move-dump <from> <to> <db> <tag>`: `<to>`'s `pg_dump -Fc
     /// --no-subscriptions --no-publications` of `<db>` on `<from>`'s
     /// cluster, as postgres, into `MOVES_DIR/<db>-<tag>.dump`.
@@ -897,12 +899,17 @@ impl Verb {
                 },
             },
             ["pg", "install-slice"] => Verb::PgInstallSlice,
-            ["pg", "copy-roles", f, t] => {
+            ["pg", "copy-roles", f, t, rest @ ..] => {
                 let (from, to) = (major(f)?, major(t)?);
                 if from == to {
                     return Err(REFUSED);
                 }
-                Verb::PgCopyRoles { from, to }
+                let dry_run = match rest {
+                    [] => false,
+                    ["--dry-run"] => true,
+                    _ => return Err(REFUSED),
+                };
+                Verb::PgCopyRoles { from, to, dry_run }
             }
             ["pg", "move-dump", f, t, db, tag] => {
                 let (from, to) = (major(f)?, major(t)?);
@@ -1141,7 +1148,13 @@ impl Verb {
                 s(&["pg", "start-conf", &major.token(), if *auto { "auto" } else { "manual" }])
             }
             Verb::PgInstallSlice => s(&["pg", "install-slice"]),
-            Verb::PgCopyRoles { from, to } => s(&["pg", "copy-roles", &from.token(), &to.token()]),
+            Verb::PgCopyRoles { from, to, dry_run } => {
+                let mut v = s(&["pg", "copy-roles", &from.token(), &to.token()]);
+                if *dry_run {
+                    v.push("--dry-run".into());
+                }
+                v
+            }
             Verb::PgMoveDump { from, to, db, tag } => {
                 s(&["pg", "move-dump", &from.token(), &to.token(), db.as_str(), tag])
             }
@@ -1498,7 +1511,8 @@ pub fn catalog() -> Vec<Verb> {
         Verb::PgStartConf { major: m16, auto: true },
         Verb::PgStartConf { major: m16, auto: false },
         Verb::PgInstallSlice,
-        Verb::PgCopyRoles { from: m16, to: m17 },
+        Verb::PgCopyRoles { from: m16, to: m17, dry_run: false },
+        Verb::PgCopyRoles { from: m16, to: m17, dry_run: true },
         Verb::PgMoveDump { from: m16, to: m17, db: jobs.clone(), tag: "20261020T101500Z".into() },
         Verb::PgMoveRestore { to: m17, db: jobs.clone(), tag: "20261020T101500Z".into() },
         Verb::PgMoveFileRemove { db: jobs.clone(), tag: "20261020T101500Z".into() },
@@ -2137,6 +2151,8 @@ mod tests {
             &["pg", "ensure-cluster", "16", "5432"],
             &["pg", "start-conf", "16", "manual"],
             &["pg", "copy-roles", "16", "17"],
+            // Reads verifiers server-side to compare: the daemon's call too.
+            &["pg", "copy-roles", "16", "17", "--dry-run"],
             &["pg", "move-dump", "16", "17", "ws_jobs", "20261020T101500Z"],
             &["pg", "move-dump", "17", "17", "ws_jobs", "20261020T101500Z"],
             &["pg", "move-restore", "17", "ws_jobs", "20261020T101500Z"],
@@ -2220,6 +2236,8 @@ mod tests {
             &["pg", "copy-roles", "16"],
             &["pg", "copy-roles", "16", "16"],
             &["pg", "copy-roles", "16", "17", "ws_x_agent"],
+            &["pg", "copy-roles", "16", "17", "--dry-run", "x"],
+            &["pg", "copy-roles", "16", "17", "dry-run"],
             &["pg", "copy-roles", "16", "15"],
             &["pg", "move-dump", "16", "17", "ws_jobs"],
             &["pg", "move-dump", "17", "16", "ws_jobs", "20261020T101500Z"],

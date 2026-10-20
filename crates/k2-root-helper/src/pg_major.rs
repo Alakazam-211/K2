@@ -517,8 +517,10 @@ fn db_exists(ctx: &Ctx, m: PgMajor, port: u16, db: &DbName) -> HResult<bool> {
     Ok(n == "1")
 }
 
-/// `pg copy-roles <from> <to>`.
-pub fn copy_roles(ctx: &Ctx, from: PgMajor, to: PgMajor, stdin: &[u8]) -> HResult<J> {
+/// `pg copy-roles <from> <to> [--dry-run]`. A dry run answers the same
+/// comparison (`missing`, `refused`, `mismatch` by name) and changes
+/// nothing; a real run refuses on any of them before any change.
+pub fn copy_roles(ctx: &Ctx, from: PgMajor, to: PgMajor, dry_run: bool, stdin: &[u8]) -> HResult<J> {
     let req: CopyRolesRequest =
         serde_json::from_slice(stdin).map_err(|_| Fail::argv("copy-roles: stdin is not the request JSON"))?;
     req.validate().map_err(Fail::argv)?;
@@ -531,28 +533,43 @@ pub fn copy_roles(ctx: &Ctx, from: PgMajor, to: PgMajor, stdin: &[u8]) -> HResul
     };
     let have = read(from, src.port)?;
     let there = read(to, dst.port)?;
-    if have.len() != req.roles.len() {
-        return Err(Fail::state("copy-roles: a role is missing in the source cluster; nothing changed"));
-    }
+    let missing: Vec<&String> = req.roles.iter().filter(|r| !have.iter().any(|h| &h.rolname == *r)).collect();
     let mut sql = String::from("BEGIN;\n");
-    let (mut created, mut same) = (Vec::new(), Vec::new());
+    let (mut created, mut same, mut refused, mut mismatch) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for row in &have {
-        let create = row.create_sql().ok_or_else(|| {
-            Fail::state("copy-roles: a role is superuser, replication or BYPASSRLS, or has an unsafe stored password; nothing changed")
-        })?;
+        let Some(create) = row.create_sql() else {
+            refused.push(row.rolname.clone());
+            continue;
+        };
         match there.iter().find(|t| t.rolname == row.rolname) {
             Some(t) if t.same_as(row) => same.push(row.rolname.clone()),
-            // One login can't hold two passwords (V32): refuse before any change.
-            Some(_) => {
-                return Err(Fail::state(
-                    "verifier_mismatch: a role already exists in the target cluster with another password or other attributes; nothing changed",
-                ))
-            }
+            // One login can't hold two passwords (V32).
+            Some(_) => mismatch.push(row.rolname.clone()),
             None => {
                 sql.push_str(&create);
                 created.push(row.rolname.clone());
             }
         }
+    }
+    if dry_run {
+        return Ok(json!({
+            "from": from.get(), "to": to.get(), "dryRun": true,
+            "wouldCreate": created, "same": same, "missing": missing, "refused": refused, "mismatch": mismatch,
+        }));
+    }
+    if !missing.is_empty() {
+        return Err(Fail::state("copy-roles: a role is missing in the source cluster; nothing changed"));
+    }
+    if !refused.is_empty() {
+        return Err(Fail::state(
+            "copy-roles: a role is superuser, replication or BYPASSRLS, or has an unsafe stored password; nothing changed",
+        ));
+    }
+    // Refuse before any change.
+    if !mismatch.is_empty() {
+        return Err(Fail::state(
+            "verifier_mismatch: a role already exists in the target cluster with another password or other attributes; nothing changed",
+        ));
     }
     sql.push_str("COMMIT;\n");
     if !created.is_empty() {

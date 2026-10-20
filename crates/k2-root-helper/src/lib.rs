@@ -194,7 +194,7 @@ fn dispatch(
         Verb::PgEnsureCluster { major, port } => Some(pg_major::ensure_cluster(ctx, *major, *port)?),
         Verb::PgStartConf { major, auto } => Some(pg_major::start_conf(ctx, *major, *auto)?),
         Verb::PgInstallSlice => Some(pg_major::install_slice(ctx)?),
-        Verb::PgCopyRoles { from, to } => Some(pg_major::copy_roles(ctx, *from, *to, stdin)?),
+        Verb::PgCopyRoles { from, to, dry_run } => Some(pg_major::copy_roles(ctx, *from, *to, *dry_run, stdin)?),
         Verb::PgMoveDump { from, to, db, tag } => Some(pg_major::move_dump(ctx, *from, *to, db, tag)?),
         Verb::PgMoveRestore { to, db, tag } => Some(pg_major::move_restore(ctx, *to, db, tag)?),
         Verb::PgMoveFileRemove { db, tag } => Some(pg_major::move_file_remove(ctx, db, tag)?),

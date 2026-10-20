@@ -580,6 +580,25 @@ fn copy_roles_keeps_the_verifier_and_is_idempotent() {
 }
 
 #[test]
+fn copy_roles_dry_run_reports_names_and_changes_nothing() {
+    let (t, w) = two_clusters();
+    w.borrow_mut().roles.insert(5433, vec![role("ws_crm_agent", Some(SCRAM_B)), role("ws_jobs_bind", None)]);
+    w.borrow_mut().roles.get_mut(&5432).unwrap()[1].rolsuper = true;
+    let v = json(&t.call_in(
+        &["pg", "copy-roles", "16", "17", "--dry-run"],
+        &roles_req(&["ws_jobs_agent", "ws_jobs_migrator", "ws_jobs_bind", "ws_crm_agent", "ws_ghost_agent"]),
+    ));
+    assert_eq!(v["dryRun"], true);
+    assert_eq!(v["wouldCreate"], json!(["ws_jobs_agent"]));
+    assert_eq!(v["same"], json!(["ws_jobs_bind"]));
+    assert_eq!(v["mismatch"], json!(["ws_crm_agent"]));
+    assert_eq!(v["refused"], json!(["ws_jobs_migrator"]));
+    assert_eq!(v["missing"], json!(["ws_ghost_agent"]));
+    assert!(!v.to_string().contains("SCRAM"), "names only: {v}");
+    assert!(!w.borrow().sql.iter().any(|(_, s)| s.contains("CREATE ROLE")));
+}
+
+#[test]
 fn copy_roles_refusals_change_nothing() {
     // A shared grantee login with another password in the target (V32).
     let (t, w) = two_clusters();

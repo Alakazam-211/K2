@@ -1212,7 +1212,7 @@ export function SewSection(): React.JSX.Element {
               <span className={`text-[9px] ${muted}`}>{view.installedVersion ? `v${view.installedVersion}` : ''}</span>
             </div>
             <p className={`text-[10px] mt-0.5 truncate ${muted}`}>
-              {chip.label}
+              <span data-testid="sew-card-state">{chip.label}</span>
               {alarmCount > 0 ? ` · ${alarmCount} alarm${alarmCount === 1 ? '' : 's'}` : ''}
             </p>
           </button>

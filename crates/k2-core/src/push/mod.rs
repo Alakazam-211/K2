@@ -47,6 +47,7 @@ use std::fmt;
 
 pub mod budget;
 pub mod preview;
+mod legacy_golden;
 
 /// Events the daemon emits to the user's configured push target.
 #[derive(Debug, Clone)]

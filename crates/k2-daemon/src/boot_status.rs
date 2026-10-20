@@ -681,6 +681,21 @@ pub const FEATURE_THREAD_READ: &str = "thread-read-v1";
 /// Stored in the overlay redb docs: no SQL migration.
 pub const FEATURE_THREAD_ATTACHMENTS: &str = crate::thread_attachments::FEATURE;
 
+/// Thread images (0.46.3, S3): `mode=thumb&px=256|512` on
+/// `GET /cli/thread/attachment` for PNG, JPEG, GIF, WebP, BMP, TIFF,
+/// HEIC/HEIF (where the box has a converter; else 415 `no_thumbnail`) and
+/// SVG (always the sanitized rewrite, also on `mode=preview`). Clients
+/// show image attachments as images only with this key.
+pub const FEATURE_THREAD_IMAGES: &str = crate::thread_attachments::FEATURE_IMAGES;
+
+/// App gateway Thread parity (0.46.3, Rosson 2026-10-20): App guests and
+/// App passes get `GET /cli/thread/attachment`, `POST /cli/thread/catchup`,
+/// their own read cursors (`POST /cli/thread/read`, `GET
+/// /cli/thread/unread`), `POST /cli/fs/resolve-links` under their file
+/// rights, and attachments on `POST /cli/thread/post` for files their own
+/// file rights cover. Catalog v16 rows.
+pub const FEATURE_APP_THREAD_PARITY: &str = "app-thread-parity-v1";
+
 /// True when the read-state tables exist in the daemon DB.
 fn thread_read_ready() -> bool {
     k2_core::db::try_shared()
@@ -746,6 +761,7 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_APP_SELF);
     out.push(FEATURE_FILES_PATH_SCOPE);
     out.push(FEATURE_THREAD_ATTACHMENTS);
+    out.push(FEATURE_THREAD_IMAGES);
     out.push(FEATURE_THREAD_DELTA);
     out.push(FEATURE_PROJECT_CHAT_PAGING);
     if thread_push_ready() {
@@ -763,6 +779,9 @@ pub fn features() -> Vec<&'static str> {
         out.push(FEATURE_INBOX_CATCHUP);
     }
     out.push(FEATURE_BOOT_STATUS_VIEWS);
+    if thread_read_ready() {
+        out.push(FEATURE_APP_THREAD_PARITY);
+    }
     out
 }
 
@@ -820,6 +839,7 @@ mod tests {
                 "app-self-v1",
                 "files-path-scope-v1",
                 "thread-attachments-v1",
+                "thread-images-v1",
                 "thread-delta-v1",
                 "project-chat-paging-v1",
                 "thread-push-v1",
@@ -827,7 +847,8 @@ mod tests {
                 "thread-read-v1",
                 "homes-sync-v1",
                 "inbox-catchup-v1",
-                "boot-status-views-v1"
+                "boot-status-views-v1",
+                "app-thread-parity-v1"
             ]
         );
     }

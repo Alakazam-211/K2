@@ -61,6 +61,7 @@ pub const KNOWN_FEATURES: &[&str] = &[
     "thread-push-v1",
     "thread-read-v1",
     "thread-attachments-v1",
+    "thread-images-v1",
     "thread-delta-v1",
 ];
 

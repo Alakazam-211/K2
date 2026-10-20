@@ -7202,6 +7202,24 @@ async fn handle_one_request(
             )
             .await;
         }
+        // App parity (0.46.3): an App guest / App pass asks which paths in
+        // a room's messages it may open (its own file rights only).
+        p if is_post
+            && post_allowed
+            && p == "/cli/fs/resolve-links"
+            && super::http::extract_token(&query).is_some_and(k2_core::skin::is_skin_token) =>
+        {
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let r = match super::http::extract_token(&query).and_then(crate::apps::gateway::resolve_pass) {
+                None => crate::skin_routes::revoked_skin_response(),
+                Some(pass) => tokio::task::spawn_blocking(move || {
+                    crate::fs_routes::handle_resolve_links_guest(&body_bytes, &pass)
+                })
+                .await
+                .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}"))),
+            };
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         p if is_post && post_allowed && (
             p.starts_with("/cli/fs/")
                 || p.starts_with("/cli/chat/")
@@ -7250,6 +7268,33 @@ async fn handle_one_request(
                 let _ = stream.read(&mut buf).await;
                 Vec::new()
             };
+            // App parity (0.46.3): an App guest or App pass reads and marks
+            // its OWN cursors in its rooms' Threads (`handle_guest`).
+            let skin_token = super::http::extract_token(&query)
+                .filter(|t| k2_core::skin::is_skin_token(t))
+                .map(str::to_string);
+            if login.is_none() {
+                if let Some(tok) = skin_token {
+                    let r = match crate::apps::gateway::resolve_pass(&tok) {
+                        None => crate::skin_routes::revoked_skin_response(),
+                        Some(pass) => {
+                            let params = super::http::parse_params(&path, &query);
+                            let p_owned = p.to_string();
+                            tokio::task::spawn_blocking(move || {
+                                crate::overlay_routes::with_request_skin(Some(pass.clone()), || {
+                                    crate::read_routes::handle_guest(is_post, &p_owned, &params, &body_bytes, &pass)
+                                })
+                            })
+                            .await
+                            .unwrap_or_else(|e| {
+                                crate::cli_response::CliResponse::internal_error(format!("worker join: {e}"))
+                            })
+                        }
+                    };
+                    super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                    return DispatchOutcome::Done;
+                }
+            }
             let Some(login) = login else {
                 let r = crate::read_routes::not_a_person();
                 super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;

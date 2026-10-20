@@ -9,9 +9,9 @@
 //! drop-ins, the configured OCI runtime). [`doctor`] is a pure function of
 //! those [`Facts`], so the checks are tested off Linux.
 //!
-//! Dark until the runtime preview is on (the route table is the App
-//! runtime's). Agents may read the doctor (like `k2 root-helper status`);
-//! only the owner prepares a box.
+//! Dark while Apps (beta) are off (the route table is the App runtime's).
+//! Agents may read the doctor (like `k2 root-helper status`) and ask for a
+//! dry run of prepare; only the owner prepares a box.
 
 use serde_json::{json, Value as J};
 
@@ -27,7 +27,10 @@ use k2_core::connect_users::Role;
 #[derive(Debug, Clone, Default)]
 pub struct Facts {
     pub linux: bool,
-    pub preview: bool,
+    /// Apps (beta) on (`deploy::enabled()`).
+    pub apps_on: bool,
+    /// The unwalled process engine on (`deploy::process_engine_enabled()`).
+    pub process_engine: bool,
     pub helper_kind: Option<Kind>,
     pub helper_protocol: u32,
     pub helper_version: Option<String>,
@@ -102,6 +105,8 @@ fn c(
 }
 
 const PREPARE: &str = "k2 app box prepare (owner)";
+/// The engine rows' fix (Settings → Apps → This server → Install App engine).
+const ENGINE_FIX: &str = "k2 app engine install (owner)";
 /// Lane P: the fix on a box K2's Podman bundle is for.
 const PREPARE_PODMAN: &str = "k2 app box prepare --install-podman (owner; --dry-run first to see every change)";
 
@@ -543,12 +548,12 @@ pub fn doctor(f: &Facts) -> J {
                 &format!("k2-app-engine {} answers; this daemon is {} (k2 app engine install)", v["version"].as_str().unwrap_or("?"), env!("CARGO_PKG_VERSION")),
                 None,
             ),
-            (true, _) => c("engine", "warn", "k2-app-engine installed but not answering (k2 app engine install)", None),
+            (true, _) => c("engine", "warn", "k2-app-engine installed but not answering (k2 app engine install)", Some(ENGINE_FIX)),
             (false, _) => c(
                 "engine",
                 "warn",
-                "k2-app-engine not installed yet (Apps run on the process engine until it is: k2 app engine install)",
-                None,
+                "k2-app-engine not installed yet: guarded Apps can't run until it is (k2 app engine install)",
+                Some(ENGINE_FIX),
             ),
         });
         out.push(if f.skopeo {
@@ -581,6 +586,18 @@ pub fn doctor(f: &Facts) -> J {
             None,
         ));
     }
+    // 0.46.3: the unwalled process engine is its own owner opt-in (never
+    // part of readiness; a warning while it is on).
+    out.push(if f.process_engine {
+        c(
+            "processEngine",
+            "warn",
+            "the unwalled process engine is on (K2_APPS_PROCESS=1 or appsProcessEngine): Apps without a wall run as the daemon's user. Dev machines only",
+            Some("turn appsProcessEngine off (owner) and unset K2_APPS_PROCESS"),
+        )
+    } else {
+        c("processEngine", "ok", "the unwalled process engine is off: Apps run in their guarded container (or as the owner's process exception)", None)
+    });
     if let Some(ok) = f.headless_confirm {
         out.push(if ok {
             c("ownerConfirm", "ok", "a vault password or an Owner Connect login can approve widenings", None)
@@ -625,7 +642,9 @@ pub fn doctor(f: &Facts) -> J {
         .collect();
     json!({
         "ready": ready,
-        "preview": f.preview,
+        "apps": f.apps_on,
+        "processEngine": f.process_engine,
+        "linux": f.linux,
         "helperProtocol": f.helper_protocol,
         "appsMinProtocol": APPS_MIN_PROTOCOL,
         "runtime": active,
@@ -709,7 +728,8 @@ pub fn gather() -> Facts {
     let st = root_helper::state();
     let mut f = Facts {
         linux: cfg!(target_os = "linux"),
-        preview: k2_core::deploy::enabled(),
+        apps_on: k2_core::deploy::enabled(),
+        process_engine: k2_core::deploy::process_engine_enabled(),
         helper_kind: Some(st.kind),
         helper_protocol: st.protocol,
         helper_version: st.version.clone(),
@@ -866,7 +886,8 @@ pub(crate) fn may_prepare(who: &Who) -> R<()> {
         Who::Agent { .. } | Who::Shell { .. } => Err(no(
             "owner_only",
             403,
-            "box prep is the owner's: run it from Settings or a terminal outside K2",
+            "box prep is the owner's: ask your owner to run it (Settings → Apps → This server → Prepare this box, or \
+             k2 app box prepare from a terminal outside K2); you may run k2 app box prepare --dry-run to see what it would change",
         )),
         _ => Err(no("owner_only", 403, "box prep is the owner's")),
     }
@@ -1015,7 +1036,7 @@ pub(crate) fn prepare_route(who: &Who, body: &J) -> R<J> {
 
 /// After every boot: the nft table and io.cost don't survive a reboot, and
 /// another sysctl file can drop the reserved range. Re-apply the open
-/// (tightening) verbs on a prepared box. Linux, preview on, helper ≥ 6.
+/// (tightening) verbs on a prepared box. Linux, Apps on, helper ≥ 6.
 pub fn spawn_boot_reapply() {
     if !cfg!(target_os = "linux") || !k2_core::deploy::enabled() {
         return;
@@ -1104,7 +1125,7 @@ mod tests {
     fn good() -> Facts {
         Facts {
             linux: true,
-            preview: true,
+            apps_on: true,
             helper_kind: Some(Kind::Root),
             helper_protocol: 6,
             helper_version: Some("0.46.0".into()),
@@ -1430,6 +1451,43 @@ mod tests {
             let e = may_prepare(&w).unwrap_err();
             assert_eq!(e.status, 403, "{w:?}");
         }
+    }
+
+    /// 0.46.3: an agent's passport reaches `/cli/app/box/prepare` (the
+    /// allowlist), and the handler lets it through for `--dry-run` only;
+    /// the apply stays the owner's. Engine install and Podman removal stay
+    /// off the allowlist.
+    #[test]
+    fn an_agent_may_dry_run_prepare_but_never_apply_it() {
+        assert!(crate::session_token::is_agent_verb("/cli/app/box/prepare"), "a passport reaches the dry run");
+        assert!(crate::session_token::is_agent_verb("/cli/app/box"));
+        assert!(!crate::session_token::is_agent_verb("/cli/app/engine/install"));
+        assert!(!crate::session_token::is_agent_verb("/cli/app/box/podman/uninstall"));
+        let agent = Who::Agent { project_id: "p".into(), session_id: "s".into() };
+        let v = prepare_route(&agent, &json!({"dryRun": true})).ok().expect("an agent's dry run answers");
+        assert_eq!(v["dryRun"], true);
+        assert_eq!(v["changed"], false);
+        assert!(v["steps"].as_array().is_some_and(|s| !s.is_empty()), "{v}");
+        for body in [json!({}), json!({"dryRun": false}), json!({"installPodman": true})] {
+            let e = prepare_route(&agent, &body).unwrap_err();
+            assert_eq!((e.code, e.status), ("owner_only", 403), "{body}");
+            assert!(e.hint.contains("--dry-run"), "the refusal teaches the dry run: {}", e.hint);
+        }
+    }
+
+    #[test]
+    fn the_doctor_reports_the_switches_and_the_process_engine_row() {
+        let mut f = good();
+        let d = doctor(&f);
+        assert_eq!(d["apps"], true);
+        assert_eq!(d["processEngine"], false);
+        assert_eq!(status_of(&d, "processEngine"), "ok");
+        assert_eq!(d["ready"], true, "the process engine row is never a readiness gate");
+        f.process_engine = true;
+        let d = doctor(&f);
+        assert_eq!(d["processEngine"], true);
+        assert_eq!(status_of(&d, "processEngine"), "warn");
+        assert_eq!(d["ready"], true);
     }
 
     #[test]

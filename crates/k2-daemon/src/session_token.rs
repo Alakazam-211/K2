@@ -715,8 +715,11 @@ pub fn is_agent_verb(path: &str) -> bool {
         // App runtime stage 1 (prd-k2-app-runtime-v1 §5.11.1): the handler
         // scopes a passport to its own workspace's Apps and folders and
         // needs "Allow this agent to manage Apps" for every change.
-        // `/cli/app/box` is the read-only doctor; `/cli/app/box/prepare`
-        // is NOT here (the owner's).
+        // `/cli/app/box` is the read-only doctor. `/cli/app/box/prepare`
+        // is here ONLY for `--dry-run` (a read: what prepare would change);
+        // the handler refuses every passport without `dryRun` (owner_only,
+        // `box_prep::prepare_route`). `/cli/app/engine/install` and
+        // `/cli/app/box/podman/uninstall` are NOT here (the owner's).
         // Sew on K2 (S29 K12, K19): the server on this box. Reads for any
         // passport; every mutation needs "Manage Sew" (`chat_manage`) on
         // the passport's workspace (the handler checks). Exact paths.
@@ -751,6 +754,7 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/sew/users/reactivate",
         "/cli/sew/users/role",
         "/cli/app/box",
+        "/cli/app/box/prepare",
         "/cli/app/build",
         "/cli/app/config",
         "/cli/app/deploy",

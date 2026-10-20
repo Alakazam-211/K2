@@ -2063,3 +2063,59 @@ fn older_destination_manifest_ignores_new_fields() {
     let old: ManifestV0457 = serde_json::from_str(&json).expect("a 0.45.7 destination parses a 0.46.0 manifest");
     assert_eq!(old.version, 1);
 }
+
+/// 0.46.3 field bug (a Sew workspace cloned to a Linux server): 49 tracked
+/// scripts lost +x. The tar carried the modes; the unpack wrote every file
+/// with `fs::write` (0666 & umask). An executable round-trips executable,
+/// every regular file keeps its permission bits, and setuid/setgid/sticky
+/// never come through.
+#[cfg(unix)]
+#[test]
+fn unpack_keeps_file_modes_but_never_setuid_setgid_or_sticky() {
+    use std::os::unix::fs::PermissionsExt;
+    let fx = build_fixture();
+    let set = |rel: &str, body: &str, mode: u32| {
+        let p = fx.project.join(rel);
+        write(&p, body);
+        fs::set_permissions(&p, fs::Permissions::from_mode(mode)).unwrap();
+        assert_eq!(fs::metadata(&p).unwrap().permissions().mode() & 0o7777, mode, "fixture mode for {rel}");
+    };
+    set("scripts/deploy.sh", "#!/bin/sh\necho deploy\n", 0o755);
+    set("scripts/owner-only.sh", "#!/bin/sh\necho mine\n", 0o700);
+    set("notes/private.txt", "private\n", 0o640);
+    set("tools/setuid-tool", "#!/bin/sh\n", 0o4755);
+    set("tools/sticky", "x\n", 0o1755);
+
+    let project = fx.project.to_string_lossy().to_string();
+    let inv = inventory(&project, opts(&fx.home)).unwrap();
+    let bundle = fx._root.path().join("modes-bundle.tar.gz");
+    build_bundle(&inv, &opts(&fx.home), "2026-10-20T00:00:00Z".to_string(), None, None, vec![], &bundle).unwrap();
+
+    let dest_parent = fx._root.path().join("dest-parent");
+    let dest_home = fx._root.path().join("dest-home");
+    fs::create_dir_all(&dest_parent).unwrap();
+    fs::create_dir_all(&dest_home).unwrap();
+    let (res, _m) = unpack_bundle(&bundle, &dest_parent, &dest_home).unwrap();
+    let mode = |rel: &str| fs::metadata(res.dest_path.join(rel)).unwrap().permissions().mode() & 0o7777;
+
+    assert_eq!(mode("scripts/deploy.sh"), 0o755, "an executable script stays executable");
+    assert_eq!(mode("scripts/owner-only.sh"), 0o700);
+    assert_eq!(mode("notes/private.txt"), 0o640);
+    assert_eq!(mode("tools/setuid-tool"), 0o755, "setuid never comes through a clone");
+    assert_eq!(mode("tools/sticky"), 0o755, "sticky never comes through a clone");
+    assert_eq!(mode("README.md") & 0o111, 0, "a plain file does not become executable");
+    assert_eq!(
+        fs::read_to_string(res.dest_path.join("scripts/deploy.sh")).unwrap(),
+        "#!/bin/sh\necho deploy\n",
+        "contents unchanged"
+    );
+    // Session files keep theirs too (Claude writes them 0600 / 0644).
+    let sessions: Vec<_> = walk_files(&dest_home.join(".claude/projects"))
+        .into_iter()
+        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("jsonl"))
+        .collect();
+    assert!(!sessions.is_empty(), "the fixture's sessions landed");
+    for s in sessions {
+        assert_eq!(fs::metadata(&s).unwrap().permissions().mode() & 0o7000, 0, "{}", s.display());
+    }
+}

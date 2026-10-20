@@ -179,6 +179,34 @@ command -v sha256sum >/dev/null 2>&1 || die "sha256sum is required (coreutils)"
 command -v sudo >/dev/null 2>&1 || die "sudo is not installed — the daemon reaches the helper only through sudo -n. Install it (apt-get install sudo) and re-run."
 command -v visudo >/dev/null 2>&1 || die "visudo is not installed — it validates the sudoers file before it goes live. Install sudo and re-run."
 
+# minisign_install_hint: how to install minisign on this distro, from
+# /etc/os-release (parsed, never sourced). Debian 13 ships without it.
+minisign_install_hint() {
+	local osr="/etc/os-release" id="" like=""
+	# Hermetic tests only (ignored unless K2_INSTALL_ROOT is set).
+	[ -z "$DEST_ROOT" ] || osr="${K2_TEST_OS_RELEASE:-$osr}"
+	if [ -f "$osr" ] && [ ! -L "$osr" ]; then
+		id="$(sed -n 's/^ID=//p' "$osr" | head -n1 | tr -d "\"'" | tr 'A-Z' 'a-z')"
+		like="$(sed -n 's/^ID_LIKE=//p' "$osr" | head -n1 | tr -d "\"'" | tr 'A-Z' 'a-z')"
+	fi
+	case " $id $like " in
+		*" debian "* | *" ubuntu "* | *" raspbian "*) echo "Install it: apt-get install -y minisign" ;;
+		*" rhel "* | *" centos "*) echo "Install it: dnf install -y epel-release && dnf install -y minisign" ;;
+		*" fedora "*) echo "Install it: dnf install -y minisign" ;;
+		*" arch "*) echo "Install it: pacman -S --needed minisign" ;;
+		*" alpine "*) echo "Install it: apk add minisign" ;;
+		*" suse "* | *" opensuse "*) echo "Install it: zypper install -y minisign" ;;
+		*) echo "Install it with your package manager, or get a release from https://github.com/jedisct1/minisign/releases" ;;
+	esac
+}
+# Checked BEFORE anything is downloaded: every download and every --file
+# with a .sig is minisign-verified, and a missing minisign used to stop the
+# install only after the download.
+if [ -z "$FILE" ] || [ -f "$FILE.sig" ]; then
+	command -v minisign >/dev/null 2>&1 \
+		|| die "minisign is not installed, and it verifies the root helper's signature. $(minisign_install_hint), then re-run. Nothing was downloaded or changed."
+fi
+
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/k2-root-helper.XXXXXX")" || die "mktemp failed"
 STAGED=()
 cleanup() {
@@ -213,7 +241,7 @@ ver_lt() {
 # comment); fails otherwise.
 verify_sig() {
 	local f="$1" sig="$2" pub="$TMP/k.pub" key out
-	command -v minisign >/dev/null 2>&1 || die "minisign is required to verify the helper (apt-get install minisign) — refusing to install an unverified root binary"
+	command -v minisign >/dev/null 2>&1 || die "minisign is required to verify the helper ($(minisign_install_hint)) — refusing to install an unverified root binary"
 	[ "${#K2_ROOT_HELPER_PUBKEYS[@]}" -gt 0 ] || die "this installer carries no root-helper signing keys yet (key ceremony pending) — use --file with a build you trust"
 	for key in "${K2_ROOT_HELPER_PUBKEYS[@]}"; do
 		printf 'untrusted comment: k2 root helper key\n%s\n' "$key" >"$pub"

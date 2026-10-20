@@ -10,8 +10,16 @@ Requires K2 daemon **0.40.52 or newer**.
 
 ## What you need
 
-- **A Linux box** — Ubuntu 22.04/24.04, Debian 12, or Raspberry Pi OS 64-bit — with
+- **A Linux box** — Ubuntu 22.04/24.04, Debian 12/13, or Raspberry Pi OS 64-bit — with
   root (or `sudo`).
+- **`minisign`** — every K2 download (daemon, root helper) is signature-checked with it.
+  `provision-k2-server.sh` installs it for you; if you run `install-daemon.sh` or
+  `install-root-helper.sh` by hand on Debian/Ubuntu, install it first (Debian 13 does
+  not ship it by default):
+
+  ```sh
+  sudo apt-get install -y minisign
+  ```
 - **A subdomain** purchased on k2.dev (get one at <https://k2.dev/dashboard>).
 - **Outbound internet.** The daemon binds `127.0.0.1` only — all remote access runs
   through the encrypted K2 Connect tunnel, so you never open a port or expose the box.

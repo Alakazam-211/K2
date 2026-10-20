@@ -8229,7 +8229,14 @@ cmd_app_uninstall() {
         esac
     done
     [ -z "$app" ] && { echo "usage: k2 app uninstall <app-id> [--purge]" >&2; exit 2; }
-    _app_rt_post /cli/app/uninstall "$(_compute_json K2_CJ_app="$app" K2_CJ_purge_b="$purge")"
+    local tok=""
+    if [ "$purge" = 1 ]; then
+        # Purge deletes the App's data: the owner in person, every time
+        # (vault action app-purge bound to the App; 0.46.3).
+        echo "This deletes App $app and its data folder (~/.k2/apps/$app). It can't be undone." >&2
+        tok="$(_vault_confirm_token app-purge "$app" "Delete App $app and its data")" || exit 3
+    fi
+    _app_rt_post /cli/app/uninstall "$(_compute_json K2_CJ_app="$app" K2_CJ_purge_b="$purge" K2_CJ_confirmToken="$tok")"
     [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
     if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
     if [ "$purge" = 1 ]; then echo "App $app uninstalled; its data folder is gone."; else
@@ -8646,8 +8653,14 @@ THE BOX (Linux)
   your owner's call.
 
 WHO MAY
-  An agent needs "Allow this agent to manage Apps" on its workspace and
-  sees only its workspace's Apps. uninstall --purge is the owner's.
+  An agent sees only its workspace's Apps. To change them it needs "Build
+  and run Apps" (switch 1); with "…and manage them end to end" (switch 2)
+  it also raises their budgets, quotas, egress, box services and keys
+  itself. Anything that loosens an App's wall (path open, extra ports,
+  lower isolation, db-raw, a new --cmd service) waits for the owner in
+  person from every caller. Members only read. uninstall --purge is the
+  owner's, with a fresh confirm every time (k2 app access <ws> sets the
+  switches; the owner turns them on, an Admin only off).
 
 EXIT CODES
   0 live/ok · 1 failed check or health gate · 2 usage or still pending
@@ -8989,13 +9002,21 @@ k2 app — getting existing Apps ready for K2 0.46.2 (0.46.0 and 0.46.1 remove n
                                        from a terminal outside K2.
   k2 app deny <request-id> [--reason R]
                                        Owner/Admin; an agent withdraws its own.
-  k2 app access <workspace> [--manage on|off] [--open on|off]
-                                       Owner/Admin: "Allow this agent to manage
-                                       Apps" and the nested "…and publish open
-                                       Apps".
+  k2 app access <workspace> [--build on|off] [--manage on|off] [--json]
+                                       The agent's two App switches: --build =
+                                       "Build and run Apps" (switch 1), --manage
+                                       = the nested "…and manage them end to
+                                       end" (switch 2: it raises its own budgets,
+                                       quotas, egress, box services and keys).
+                                       The owner turns them on, from a terminal
+                                       outside K2; an Admin may only turn them
+                                       off. Anything that loosens an App's
+                                       wall still waits for the owner in
+                                       person. (--open is retired.)
 
-In 0.46.0 a new --cmd service from an agent without those switches still
-runs, with a warning (warn-only); from 0.46.1 it is held for the owner.
+A new --cmd service from an agent is an open-path App: from 0.46.3 each one
+is held for the owner's in-person approval (re-runs of an existing service
+need only "Build and run Apps").
 Owner-token calls are traced on Linux only for now: on macOS, warnings and
 clean-mode say "not available on macOS" (the code scan still works).
 
@@ -9300,35 +9321,54 @@ r = json.load(sys.stdin)["request"]
 print("%s %s: %s" % (r["id"], r["status"], r["summary"]))'
 }
 cmd_app_access() {
-    local ws="" manage="" open=""
+    local ws="" build="" manage="" open="" json_out=0
     while [ $# -gt 0 ]; do
         case "$1" in
+            --build) build="${2:-}"; shift 2 ;;
             --manage) manage="${2:-}"; shift 2 ;;
             --open) open="${2:-}"; shift 2 ;;
+            --json) json_out=1; shift ;;
             -h|--help) _app_grace_usage; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
             *) ws="$1"; shift ;;
         esac
     done
-    { [ -z "$ws" ] || { [ -z "$manage" ] && [ -z "$open" ]; }; } && { echo "usage: k2 app access <workspace> [--manage on|off] [--open on|off]" >&2; exit 2; }
+    [ -z "$ws" ] && { echo "usage: k2 app access <workspace> [--build on|off] [--manage on|off] [--json]" >&2; exit 2; }
+    if [ -n "$open" ]; then
+        # N1 (0.46.3): the standing approval for the open path is retired.
+        echo "k2: --open is retired: each open-path move (a new --cmd service, --path open, extra ports, broad egress) is held" >&2
+        echo "    for the owner, who approves it in person: k2 app approvals, then k2 app approve <id> (outside K2)." >&2
+        exit 2
+    fi
     local t v
-    # The parent first when turning on; the child first when turning off.
-    for t in manage open; do
-        [ "$t" = manage ] && v="$manage" || v="$open"
+    for t in build manage; do
+        [ "$t" = build ] && v="$build" || v="$manage"
         [ -z "$v" ] && continue
         case "$v" in on|off) ;; *) echo "usage: --$t on|off" >&2; exit 2 ;; esac
     done
-    local order="manage open"
-    [ "$manage" = off ] && order="open manage"
+    if [ -n "$manage" ] && [ -z "$build" ]; then
+        # Deprecation line: before 0.46.3 --manage was switch 1.
+        echo "k2: note: --manage is now switch 2 (\"…and manage them end to end\"); \"Build and run Apps\" is --build." >&2
+    fi
+    if [ -z "$build" ] && [ -z "$manage" ]; then
+        echo "usage: k2 app access <workspace> [--build on|off] [--manage on|off] [--json]" >&2
+        exit 2
+    fi
+    # Switch 1 first when turning on; switch 2 first when turning off.
+    local order="build manage"
+    [ "$build" = off ] && order="manage build"
     for t in $order; do
-        [ "$t" = manage ] && v="$manage" || v="$open"
+        [ "$t" = build ] && v="$build" || v="$manage"
         [ -z "$v" ] && continue
-        _compute_call POST /cli/agent-access/set "$(_compute_json K2_CJ_workspace="$ws" K2_CJ_toggle="apps_$t" K2_CJ_value_b="$([ "$v" = on ] && echo 1 || echo 0)")"
+        local toggle="apps_build"
+        [ "$t" = manage ] && toggle="apps_manage_full"
+        _compute_call POST /cli/agent-access/set "$(_compute_json K2_CJ_workspace="$ws" K2_CJ_toggle="$toggle" K2_CJ_value_b="$([ "$v" = on ] && echo 1 || echo 0)")"
     done
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
     printf '%s' "$_CP_BODY" | python3 -c '
 import json, sys
 v = json.load(sys.stdin)
-print("%s: manage Apps %s, publish open Apps %s" % (v.get("workspace"), "on" if v.get("agentsCanManageApps") else "off", "on" if v.get("agentsCanPublishOpenApps") else "off"))'
+print("%s: Build and run Apps %s, manage them end to end %s" % (v.get("workspace"), "on" if v.get("agentsCanBuildApps") else "off", "on" if v.get("agentsCanManageAppsFull") else "off"))'
 }
 
 # ── The 0.46.1 door (lane 2: S19, AR10) ──────────────────────────────

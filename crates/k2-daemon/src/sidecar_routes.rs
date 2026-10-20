@@ -200,6 +200,7 @@ fn status_line(code: u16) -> &'static str {
         404 => "404 Not Found",
         405 => "405 Method Not Allowed",
         409 => "409 Conflict",
+        410 => "410 Gone",
         413 => "413 Payload Too Large",
         _ => "500 Internal Server Error",
     }
@@ -1287,6 +1288,8 @@ fn handle_access(
         && toggle != "projects_manage"
         && toggle != "apps_manage"
         && toggle != "apps_open"
+        && toggle != "apps_build"
+        && toggle != "apps_manage_full"
         && toggle != "chat_manage"
         && toggle != "gardens_manage"
         && toggle != "compute_manage"
@@ -1294,7 +1297,7 @@ fn handle_access(
         return Err(err(
             "bad_request",
             400,
-            "toggle must be 'agents_manage', 'apps_manage', 'apps_open', 'chat_manage', 'compute', 'compute_manage', 'compute_operate', 'gardens_manage', 'projects_manage' or 'vault_manage'",
+            "toggle must be 'agents_manage', 'apps_build', 'apps_manage_full', 'chat_manage', 'compute', 'compute_manage', 'compute_operate', 'gardens_manage', 'projects_manage' or 'vault_manage'",
         ));
     }
     if toggle == "compute_manage" && !caller_is_owner(caller) {
@@ -1373,26 +1376,50 @@ fn handle_access(
             format!("ok {} projects_manage={value}", ws.handle),
         ));
     }
-    if toggle == "apps_manage" || toggle == "apps_open" {
-        // App runtime admin switches (prd-k2-app-runtime-v1 §5.11.1, AR13):
-        // "Allow this agent to manage Apps" (`agents_can_manage_skin`) and
-        // the nested "…and publish open Apps" (0168). Off on the parent
-        // turns the child off; on for the child needs the parent. Flipping
-        // one is the owner's standing approval for what it covers.
-        if toggle == "apps_manage" {
-            k2_core::workspace::settings::set_agents_can_manage_skin(&ws.path, value)
-                .map_err(|e| err("workspace_not_found", 404, e))?;
-        } else {
-            k2_core::workspace::settings::set_agents_can_publish_open_apps(&ws.id, value)
-                .map_err(|e| err("parent_switch_off", 409, e))?;
+    if toggle == "apps_open" {
+        // N1 (prd-agent-app-permissions-v1, Rosson 2026-10-20): the
+        // "…and publish open Apps" standing approval is retired. Every
+        // open-path move (a new agent `k2 publish run --cmd` service,
+        // `path=open`, extra ports, broad egress) is a held request the
+        // owner confirms in person. Turning it off still clears the old
+        // column (Apps already open keep running).
+        if value {
+            return Err(err(
+                crate::apps::access::OPEN_RETIRED,
+                410,
+                "\"…and publish open Apps\" is retired: each open-path move is held for the owner, who approves it in \
+                 person (k2 app approvals, then k2 app approve <id> from a terminal outside K2)",
+            ));
         }
+        k2_core::workspace::settings::set_agents_can_publish_open_apps(&ws.id, false)
+            .map_err(|e| err("workspace_not_found", 404, e))?;
         k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SyncProjects, serde_json::Value::Null);
-        let manage = k2_core::workspace::settings::agents_can_manage_skin_for_path(&ws.path);
-        let open = k2_core::workspace::settings::agents_can_publish_open_apps(&ws.id);
         return Ok((
-            serde_json::json!({ "ok": true, "workspace": ws.handle, "toggle": toggle, "agentsCanManageApps": manage, "agentsCanPublishOpenApps": open }),
-            format!("ok {} {toggle}={value}", ws.handle),
+            serde_json::json!({ "ok": true, "workspace": ws.handle, "toggle": toggle, "agentsCanPublishOpenApps": false, "retired": true }),
+            format!("ok {} apps_open=false (retired)", ws.handle),
         ));
+    }
+    if toggle == "apps_manage" || toggle == "apps_build" || toggle == "apps_manage_full" {
+        // Per-agent App permissions (prd-agent-app-permissions-v1 §2, 0197):
+        // switch 1 "Build and run Apps" (`apps_build`; `apps_manage` is its
+        // pre-0.46.3 name) and the nested switch 2 "…and manage them end to
+        // end" (`apps_manage_full`). The owner raises; an Admin may only
+        // lower (Q2, F5); `access::set_switches` is the one writer (audit
+        // rows, the agent's inbox note).
+        let change = if toggle == "apps_manage_full" {
+            crate::apps::access::SwitchChange { build: None, full: Some(value) }
+        } else {
+            crate::apps::access::SwitchChange { build: Some(value), full: None }
+        };
+        let before = crate::apps::access::level(&ws.id);
+        let mut out = crate::apps::access::set_switches(&ws.id, change, caller_is_owner(caller), &caller.audit_user())
+            .map_err(|r| err(r.code, r.status, r.hint))?;
+        out["toggle"] = serde_json::json!(toggle);
+        if toggle == "apps_manage" {
+            out["deprecated"] = serde_json::json!("apps_manage is now apps_build (\"Build and run Apps\")");
+        }
+        let after = out["level"].as_str().unwrap_or("?").to_string();
+        return Ok((out, format!("ok {} {toggle}={value} apps {}→{after}", ws.handle, before.as_str())));
     }
     if toggle == "chat_manage" {
         // Sew on K2 (0166, Rosson 2026-10-15): "Manage Sew" — this

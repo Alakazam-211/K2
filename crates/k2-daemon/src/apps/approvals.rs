@@ -141,7 +141,7 @@ fn app_audit(r: &reqs::AppRequest, event: &str, by: &str, payload: J) {
     }
 }
 
-fn vault() -> R<std::sync::Arc<k2_vault::LocalVault>> {
+pub(crate) fn vault() -> R<std::sync::Arc<k2_vault::LocalVault>> {
     #[cfg(test)]
     if let Some(v) = super::egress_routes::test_seams::vault() {
         return Ok(v);
@@ -236,8 +236,16 @@ fn approve(who: &Who, body: &[u8]) -> R<J> {
         k2_vault::HumanProof::Confirmed { method } => method,
         k2_vault::HumanProof::None => return Err(no(codes::VAULT_CONFIRM_REQUIRED, 403, "no owner confirm")),
     };
-    let by = actor(who);
-    let decided = db(|c| Ok(reqs::decide(c, &r.id, reqs::STATUS_APPROVED, &by, Some(&via), None, deploy::now())))?.map_err(decide_err)?;
+    apply_as(&r, &actor(who), &via)
+}
+
+/// Decide `r` approved by `by` (`via`: the confirm method, or `switch-2`
+/// for an agent's own non-loosening widening, `access::self_apply`) and
+/// carry it out: one path for every approval.
+pub(crate) fn apply_as(r: &reqs::AppRequest, by: &str, via: &str) -> R<J> {
+    let by = by.to_string();
+    let own = via == super::access::SELF_VIA;
+    let decided = db(|c| Ok(reqs::decide(c, &r.id, reqs::STATUS_APPROVED, &by, Some(via), None, deploy::now())))?.map_err(decide_err)?;
     // Egress kinds applied with the decision (the host list); the door
     // kinds (0.46.1) and the grace kinds are carried out now; a kind
     // another lane owns runs its registered applier.
@@ -260,30 +268,37 @@ fn approve(who: &Who, body: &[u8]) -> R<J> {
     };
     db(|c| reqs::set_result(c, &decided.id, status, &result))?;
     let done = db(|c| reqs::get(c, &decided.id))?.unwrap_or(decided);
-    app_audit(&done, "widening_approved", &by, json!({ "request": done.id, "kind": done.kind, "diff": done.diff, "via": via, "status": status }));
+    app_audit(
+        &done,
+        if own { "widening_self_applied" } else { "widening_approved" },
+        &by,
+        json!({ "request": done.id, "kind": done.kind, "diff": done.diff, "via": via, "status": status }),
+    );
     k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
-        "app-approve",
+        if own { "app-self-apply" } else { "app-approve" },
         &by,
         format!("{} {} {} ({}) via {via}", status, done.id, done.kind, done.summary),
         "cli",
         "-",
         "apps",
     ));
-    notify_requester(
-        &done,
-        &format!(
-            "[k2 apps] the owner approved {}: {}{}",
-            done.id,
-            done.summary,
-            if status == reqs::STATUS_FAILED { ", but it failed to apply" } else { ". It applies now." }
-        ),
-    );
+    if !own {
+        notify_requester(
+            &done,
+            &format!(
+                "[k2 apps] the owner approved {}: {}{}",
+                done.id,
+                done.summary,
+                if status == reqs::STATUS_FAILED { ", but it failed to apply" } else { ". It applies now." }
+            ),
+        );
+    }
     let mut out = json!({
         "ok": status == reqs::STATUS_APPROVED,
         "request": request_json(&done),
         "status": status,
         "result": result,
-        "note": "approved; it applies now",
+        "note": if own { "applied under \"…and manage them end to end\"" } else { "approved; it applies now" },
     });
     if let Err(e) = applied {
         out["error"] = json!({ "code": e.code, "hint": e.hint });
@@ -466,7 +481,7 @@ fn apply_door(r: &reqs::AppRequest, by: &str) -> R<J> {
     }
 }
 
-// ── S42: agents without "Allow this agent to manage Apps" ────────────
+// ── S42: agents without "Build and run Apps" (switch 1) ──────────────
 
 /// Changes an agent without the switch asks for become a held `manage`
 /// request (§5.11.1: "every change is a held request"), instead of the
@@ -514,8 +529,8 @@ pub(crate) fn hold_without_switch(path: &str, who: &Who, body: &[u8]) -> Option<
         return None;
     }
     let ws = super::routes::agent_ws(who)?;
-    let wpath = super::routes::ws_by_id(ws)?.path;
-    if k2_core::workspace::settings::agents_can_manage_skin_for_path(&wpath) {
+    super::routes::ws_by_id(ws)?;
+    if super::access::level(ws) >= super::access::Level::Build {
         return None;
     }
     Some((|| {
@@ -535,12 +550,12 @@ pub(crate) fn hold_without_switch(path: &str, who: &Who, body: &[u8]) -> Option<
             body: json!({ "route": path, "body": v }),
             diff: json!({ "lines": [format!("k2 app {verb} {label}")], "route": path }),
             summary: format!("k2 app {verb} {label}"),
-            reasons: vec!["this agent's workspace doesn't have \"Allow this agent to manage Apps\" on".into()],
+            reasons: vec!["this agent's workspace doesn't have \"Build and run Apps\" on".into()],
             reason: s(&v, "reason"),
         })?;
         let mut out = held_answer(&r);
         out["hint"] = json!(format!(
-            "held for the owner: \"Allow this agent to manage Apps\" is off for this workspace, so every App change waits for \
+            "held for the owner: \"Build and run Apps\" is off for this workspace, so every App change waits for \
              the owner (k2 app approve {} outside K2, or Settings → App Approvals). To stop a misbehaving App now: k2 app suspend <app>.",
             r.id
         ));

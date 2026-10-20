@@ -22,8 +22,12 @@
 //!   plain K2 shell tab, NT5) applies it; an agent or a non-owner login
 //!   proposes it and the request is held (`202`, exit 2).
 //! - Minting an App key is a credential mint: a fresh owner confirm from
-//!   every caller (vault action `app-key-mint`, bound to the App), owner
-//!   token included. Anyone else's mint is a held request.
+//!   every human owner (vault action `app-key-mint`, bound to the App),
+//!   owner token included. An agent with "…and manage them end to end"
+//!   (switch 2, prd-agent-app-permissions-v1 §2.1) mints its own App's key
+//!   into the vault itself (it never sees it), and turns clean mode off
+//!   itself. Anyone else's mint is a held request.
+//! - Members are read-only (Q7).
 //! - Approving is human-presence: the owner token or an Owner login, with
 //!   a fresh confirm (`app-approve`, bound to the request id). Never a
 //!   passport, never a shell tab (it can't pass the confirm).
@@ -75,6 +79,12 @@ pub fn too_large() -> CliResponse {
 }
 
 pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String>) -> CliResponse {
+    // Q7: a Member login sees Apps and changes nothing.
+    if is_post_route(path) {
+        if let Err(e) = super::access::member_read_only(&who) {
+            return super::routes::respond(Err(e));
+        }
+    }
     let r = match path {
         "/cli/app/warnings" => warnings(&who, params),
         "/cli/app/clean-mode" => clean_mode(&who, body),
@@ -556,7 +566,9 @@ fn clean_mode(who: &Who, body: &[u8]) -> R<J> {
     }
     let on = bool_field(&v, "on").ok_or_else(|| no(codes::BAD_REQUEST, 400, "on: true or false"))?;
     let restart = bool_field(&v, "restart").unwrap_or(false);
-    if on || widens(who) {
+    // Off widens: the owner, or an agent with "…and manage them end to
+    // end" (prd-agent-app-permissions-v1 §2.1); anyone else proposes.
+    if on || widens(who) || super::access::self_widens(who) {
         return set_clean_mode(&t, on, &actor(who), restart);
     }
     let label = t.name.clone();
@@ -696,6 +708,14 @@ fn key_mint(who: &Who, body: &[u8]) -> R<J> {
     }
     if deliver == "show" {
         return Err(no(codes::OWNER_ONLY, 403, "only the owner, in person, can see a key; an agent's key goes to the vault"));
+    }
+    // Switch 2 (prd-agent-app-permissions-v1 §2.1): the agent mints its
+    // own App's key itself; it goes to the vault and the agent never sees
+    // it. Audited like any mint.
+    if super::access::self_widens(who) {
+        let mut out = mint_and_deliver(&t, &grant, &label, "vault", &actor(who))?;
+        out["via"] = json!(super::access::SELF_VIA);
+        return Ok(out);
     }
     let diff = json!({ "scopes": grant.scopes, "rooms": k2_core::skin::handles_for_project_ids(&grant.rooms), "roleIds": grant.roles });
     let label_for = t.name.clone();

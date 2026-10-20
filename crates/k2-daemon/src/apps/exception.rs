@@ -17,7 +17,7 @@ use k2_core::deploy::{self, codes, store};
 use k2_root_proto::apps::{device, AppId, MAX_DEVICES};
 use serde_json::{json, Value as J};
 
-use super::routes::{actor, app_for, json_body, mirror, need_credential, need_manage, no, s, R};
+use super::routes::{actor, app_for, json_body, mirror, need_credential, need_build, no, s, R};
 use crate::compute_routes::Who;
 
 /// The vault confirm action (`vault_routes::CONFIRM_ACTIONS`); the token
@@ -90,7 +90,7 @@ pub(crate) fn route(who: &Who, body: &[u8]) -> R<J> {
     let v = json_body(body)?;
     let on = v.get("on").and_then(|x| x.as_bool()).ok_or_else(|| no(codes::BAD_REQUEST, 400, "on is true or false"))?;
     if !on {
-        need_manage(who)?;
+        need_build(who)?;
         let app = app_for(who, s(&v, "app"))?;
         if !app.is_process_exception() {
             return Ok(json!({ "ok": true, "app": app.app_id, "changed": false, "label": super::routes::label(&app) }));

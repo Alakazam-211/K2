@@ -196,13 +196,24 @@ fn gate_mode_by(v: Option<&str>) -> GateMode {
     }
 }
 
-/// Does the gate hold this run (given where it would go)?
-fn gate_holds(mode: GateMode, route: &CmdRoute) -> bool {
+/// Does the gate hold this run (given where it would go)? A re-run of an
+/// existing legacy service by an agent without "Build and run Apps"
+/// (`switch_off`) is held wherever it goes.
+fn gate_holds(mode: GateMode, route: &CmdRoute, switch_off: bool) -> bool {
     match mode {
         GateMode::Warn => false,
         GateMode::Always => true,
-        GateMode::OpenPath => matches!(route, CmdRoute::Open),
+        GateMode::OpenPath => switch_off || matches!(route, CmdRoute::Open),
     }
+}
+
+/// Why an agent's run is gated (`publish_run_gate`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Gate {
+    why: String,
+    /// A re-run of an existing legacy service by an agent whose switch 1
+    /// is off (held on every route, not only the open path).
+    switch_off: bool,
 }
 
 /// The warn-only answer a gated run carries where the gate doesn't hold
@@ -222,12 +233,15 @@ fn crossover_notice(name: &str, why: &str) -> serde_json::Value {
     })
 }
 
-/// §8.2 / §5.11.5: a **new** `--cmd` service from an agent is an open-path
-/// App, so it needs "Allow this agent to manage Apps" and "…and publish
-/// open Apps"; so does a re-run of one (it deploys the open path again).
-/// `None` = no gate applies (a human, `--skin`, a re-run of an existing
-/// legacy service, or both switches on).
-fn publish_run_gate(project_id: &str, name: &str, skin: bool) -> Option<String> {
+/// §8.2 / §5.11.5, prd-agent-app-permissions-v1 N1 (Rosson 2026-10-20): a
+/// **new** `--cmd` service from an agent is an open-path App, and the open
+/// path loosens the wall: every new service waits for the owner's
+/// in-person confirm (one held request per service; the "…and publish
+/// open Apps" standing approval is retired). A re-run or restart of an
+/// existing legacy service stays free under switch 1 "Build and run Apps";
+/// without it the re-run is held too. `None` = no gate applies (a human,
+/// `--skin`, another workspace's call, or a legacy re-run with switch 1).
+fn publish_run_gate(project_id: &str, name: &str, skin: bool) -> Option<Gate> {
     let ws = caller_agent_ws()?;
     if skin || ws != project_id {
         return None;
@@ -240,21 +254,30 @@ fn publish_run_gate(project_id: &str, name: &str, skin: bool) -> Option<String> 
             .flatten()
             .is_some_and(|r| r.cmd != k2_core::published_services::CMD_APP_SENTINEL)
     };
+    gate_for(legacy, crate::apps::access::level(project_id))
+}
+
+/// The gate for an agent's run: `legacy` = an existing `--cmd` service.
+fn gate_for(legacy: bool, level: crate::apps::access::Level) -> Option<Gate> {
     if legacy {
-        // An existing --cmd service keeps running as before in 0.46.1
-        // (Rosson: its environment ends in 0.46.2, with `k2 app adopt`).
-        return None;
+        if level >= crate::apps::access::Level::Build {
+            return None;
+        }
+        return Some(Gate {
+            why: "re-running this service needs \"Build and run Apps\" on this workspace (the owner turns it on: \
+                  k2 app access <workspace> --build on), or the owner approves this run"
+                .into(),
+            switch_off: true,
+        });
     }
-    let manage = resolve_project_path(project_id).is_some_and(|p| k2_core::workspace::settings::agents_can_manage_skin_for_path(&p));
-    let open = k2_core::workspace::settings::agents_can_publish_open_apps(project_id);
-    if manage && open {
-        return None;
-    }
-    Some(format!(
-        "from K2 {PUBLISH_RUN_GATE_FROM} a new --cmd service from an agent is an open-path App: it needs \"Allow this agent to manage Apps\" \
-         and \"…and publish open Apps\" on this workspace (k2 app access <workspace> --manage on --open on, owner/admin), \
-         or the run is held for the owner"
-    ))
+    Some(Gate {
+        why: format!(
+            "from K2 {PUBLISH_RUN_GATE_FROM} a new --cmd service from an agent is an open-path App, which loosens its wall: \
+             each new service waits for the owner's in-person approval (k2 app approve <id> from a terminal outside K2, or \
+             Settings → Apps → Approvals)"
+        ),
+        switch_off: false,
+    })
 }
 
 /// Run a publish request the owner approved (a held `publish_run`): on
@@ -690,8 +713,9 @@ fn handle_run(params: &HashMap<String, String>) -> CliResponse {
     // unprepared box) the run stays as in 0.46.0, with the notice.
     let gate = publish_run_gate(&project_id, &name, skin);
     let who = CALLER.with(|c| c.borrow().clone()).unwrap_or(crate::compute_routes::Who::Invalid);
-    if let Some(why) = gate.as_deref() {
-        if gate_holds(gate_mode(), &route) {
+    if let Some(g) = gate.as_ref() {
+        let why = g.why.as_str();
+        if gate_holds(gate_mode(), &route, g.switch_off) {
             let body = serde_json::json!({
                 "projectId": project_id, "name": name, "cmd": cmd, "cwd": cwd.display().to_string(),
                 "port": port, "noTunnel": no_tunnel, "cwdExplicit": cwd_explicit,
@@ -735,12 +759,12 @@ fn handle_run(params: &HashMap<String, String>) -> CliResponse {
         Ok(svc) => {
             let mut v = serde_json::to_value(&svc).unwrap_or(serde_json::Value::Null);
             if let Some(o) = v.as_object_mut() {
-                if let Some(why) = gate {
+                if let Some(g) = gate {
                     // Where the open path isn't ready (or the owner set
                     // K2_OPEN_APPS_GATE=warn) the run goes through, with
                     // the notice of what the gate would do.
                     let name = o.get("name").and_then(|n| n.as_str()).unwrap_or("this service").to_string();
-                    o.insert("crossover".into(), crossover_notice(&name, &why));
+                    o.insert("crossover".into(), crossover_notice(&name, &g.why));
                 }
                 if let Some(why) = not_ready {
                     o.insert(
@@ -976,15 +1000,36 @@ mod tests {
         assert_eq!(gate_mode_by(Some("")), GateMode::OpenPath);
         assert_eq!(gate_mode_by(Some(" warn ")), GateMode::Warn);
         assert_eq!(gate_mode_by(Some("enforce")), GateMode::Always);
-        assert!(gate_holds(GateMode::OpenPath, &open), "held where the run would be an open-path App");
-        assert!(!gate_holds(GateMode::OpenPath, &not), "not held where the box has no open path (macOS, unprepared)");
-        assert!(!gate_holds(GateMode::OpenPath, &CmdRoute::Legacy));
-        assert!(!gate_holds(GateMode::Warn, &open));
-        assert!(gate_holds(GateMode::Always, &not));
+        assert!(gate_holds(GateMode::OpenPath, &open, false), "held where the run would be an open-path App");
+        assert!(!gate_holds(GateMode::OpenPath, &not, false), "not held where the box has no open path (macOS, unprepared)");
+        assert!(!gate_holds(GateMode::OpenPath, &CmdRoute::Legacy, false));
+        assert!(gate_holds(GateMode::OpenPath, &CmdRoute::Legacy, true), "a legacy re-run without switch 1 is held anywhere");
+        assert!(!gate_holds(GateMode::Warn, &open, false));
+        assert!(!gate_holds(GateMode::Warn, &CmdRoute::Legacy, true), "the owner's warn mode never holds");
+        assert!(gate_holds(GateMode::Always, &not, false));
         assert_eq!(PUBLISH_RUN_GATE_FROM, "0.46.1");
         let n = crossover_notice("shop", "from K2 0.46.1 a new --cmd service from an agent is an open-path App: …");
         assert_eq!((n["mode"].as_str(), n["held"].as_bool(), n["wouldHold"].as_bool()), (Some("warn"), Some(false), Some(true)));
         assert!(n["message"].as_str().unwrap().starts_with("shop ran unwalled, without the open-path gate"), "{n}");
+    }
+
+    /// N1 (prd-agent-app-permissions-v1, Rosson 2026-10-20): an agent's
+    /// new `--cmd` service waits for the person at every switch level (no
+    /// standing approval); a re-run of an existing legacy service is free
+    /// under switch 1 and gated without it.
+    #[test]
+    fn a_new_agent_cmd_service_always_waits_and_legacy_reruns_need_switch_1() {
+        use crate::apps::access::Level;
+        for level in [Level::Off, Level::Build, Level::Full] {
+            let g = gate_for(false, level).unwrap_or_else(|| panic!("{level:?}: a new service must be gated"));
+            assert!(!g.switch_off, "{level:?}");
+            assert!(g.why.contains("in-person approval"), "{}", g.why);
+            assert!(!g.why.contains("publish open Apps"), "the retired switch is never offered: {}", g.why);
+        }
+        assert_eq!(gate_for(true, Level::Build), None, "a legacy re-run is free under switch 1");
+        assert_eq!(gate_for(true, Level::Full), None);
+        let g = gate_for(true, Level::Off).expect("gated without switch 1");
+        assert!(g.switch_off && g.why.contains("Build and run Apps"), "{g:?}");
     }
 
     /// K5: where a `--cmd` run goes. An existing `--cmd` service stays as

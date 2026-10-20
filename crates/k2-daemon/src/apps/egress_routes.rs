@@ -6,10 +6,12 @@
 //! Who may do what:
 //! - **Read** (`egress`, `egress/log`): anyone who sees the App. A
 //!   passport sees only its own workspace's Apps.
-//! - **Propose** (`egress/add`, `egress/mode broad`): the same. Always a
-//!   held request, whoever asks, the owner token included (§5.6 "always
-//!   per event", K25, AR14): a new egress host is never live until the
-//!   owner approves it with a fresh owner confirm.
+//! - **Propose** (`egress/add`, `egress/mode broad`): the same. A held
+//!   request, the owner token included: a new egress host is never live
+//!   until the owner approves it with a fresh owner confirm — except that
+//!   an agent with "…and manage them end to end" (switch 2,
+//!   prd-agent-app-permissions-v1 §2.1) adds hosts to its own Apps itself.
+//!   Broad mode is the open path: held for the person from every caller.
 //! - **Narrow** (`egress/rm`, `egress/mode allowlist`): the same, at once,
 //!   no switch needed (narrowing never waits). Open tunnels to a removed
 //!   host are cut.
@@ -229,8 +231,27 @@ fn ask_specs(who: &Who, app: &deploy::store::AppRow, specs: &[HostSpec], reason:
         }));
     };
     audit(&app.app_id, "egress_requested", &by, json!({ "request": w.id, "hosts": w.hosts().iter().map(HostSpec::display).collect::<Vec<_>>(), "reason": w.reason }));
+    if super::access::self_widens(who) {
+        return self_applied(&w, who, &already);
+    }
     changed(&app.app_id);
     Ok(held_answer(&w, &already))
+}
+
+/// An agent with "…and manage them end to end" adds the hosts itself
+/// (prd-agent-app-permissions-v1 §2.1): the request it just filed is
+/// applied at once, audited, never queued.
+fn self_applied(w: &pol::Widening, who: &Who, already: &[HostSpec]) -> R<J> {
+    let out = super::access::self_apply(w, who)?;
+    Ok(json!({
+        "ok": out["ok"],
+        "status": if out["status"] == "approved" { "allowed" } else { "failed" },
+        "request": out["request"],
+        "added": w.hosts().iter().map(HostSpec::display).collect::<Vec<_>>(),
+        "alreadyAllowed": already.iter().map(HostSpec::display).collect::<Vec<_>>(),
+        "result": out["result"],
+        "hint": "added under \"…and manage them end to end\": it applies to the App's next connection",
+    }))
 }
 
 /// File the new hosts a Seed's manifest asks for, at deploy (the deploy
@@ -261,6 +282,9 @@ pub fn request_manifest_hosts(who: &Who, app: &str, seed_hash: &str, deployment:
     match r {
         Ok((Some(w), already)) => {
             audit(app, "egress_requested", &by, json!({ "request": w.id, "hosts": w.hosts().iter().map(HostSpec::display).collect::<Vec<_>>(), "deployment": deployment }));
+            if super::access::self_widens(who) {
+                return Some(self_applied(&w, who, &already).unwrap_or_else(|e| json!({ "status": "error", "code": e.code, "hint": e.hint })));
+            }
             changed(app);
             Some(held_answer(&w, &already))
         }

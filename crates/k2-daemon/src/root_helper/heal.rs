@@ -388,6 +388,14 @@ pub fn spawn_auto_heal() {
             let mut backoff = 3600u64;
             loop {
                 let out = run_once(&LiveOps, &live_plan(None), "daemon");
+                // The helper is at the daemon's version now (or says why
+                // not): keep a root-owned /usr/local/bin/k2 at it too.
+                let cli = super::cli_refresh::run_once(
+                    &super::cli_refresh::LiveCliOps,
+                    &super::cli_refresh::daemon_cli_version(),
+                    "daemon",
+                );
+                k2_core::log_debug!("[root-helper] cli refresh: {:?}", cli);
                 let wait = match out {
                     Outcome::Deferred => 300,
                     Outcome::Retry { .. } => {

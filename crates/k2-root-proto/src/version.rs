@@ -35,6 +35,9 @@
 //!   daemon, gated on `namespaces.front`, [`FRONT_MIN_PROTOCOL`]) and
 //!   `turn_tls: "passthrough"` in the Sew media requests. Anything after
 //!   an 8 build ships needs 9.
+//! - 9 = `helper cli-refresh` (0.46.3): the daemon's auto-heal refreshes a
+//!   stale root-owned `/usr/local/bin/k2` to the CLI compiled into the
+//!   helper. Gated on this AND `namespaces.cli` ([`CLI_REFRESH_MIN_PROTOCOL`]).
 //!
 //! The first `k2-root-helper` build ships 3 and 4 together and answers 4.
 //! Protocols are additive: a newer helper serves an older daemon.
@@ -43,7 +46,7 @@ use std::cmp::Ordering;
 use std::fmt;
 
 /// What this build of the helper speaks.
-pub const PROTOCOL: u32 = 8;
+pub const PROTOCOL: u32 = 9;
 
 /// `k2 hostmail upgrade` through the root helper. 4, not 2: the daemon's
 /// table moves from 0.16.20 OR 0.16.10 (pin 0.16.25), so `install-bin`
@@ -76,6 +79,9 @@ pub const PODMAN_INSTALL_MIN_PROTOCOL: u32 = 8;
 /// front443's `front install|remove|status` (0.46.1). Gated on this AND
 /// `namespaces.front == true` in `helper version`, the way Sew is.
 pub const FRONT_MIN_PROTOCOL: u32 = 8;
+/// `helper cli-refresh` (0.46.3). Gated on this AND `namespaces.cli == true`
+/// in `helper version`, the way Sew and front are.
+pub const CLI_REFRESH_MIN_PROTOCOL: u32 = 9;
 
 pub const HELPER_NAME: &str = "k2-root-helper";
 
@@ -230,7 +236,8 @@ mod tests {
         assert_eq!(HANDOFF_MIN_PROTOCOL, 5);
         assert_eq!(APPS_MIN_PROTOCOL, 6);
         assert_eq!(SEW_MIN_PROTOCOL, 7);
-        assert_eq!(PROTOCOL, 8, "protocol 8 = 0.46.1's helper changes; 7 is Sew's engine sew");
+        assert_eq!(PROTOCOL, 9, "protocol 9 = 0.46.3's helper cli-refresh; 8 = 0.46.1's helper changes");
+        assert_eq!(CLI_REFRESH_MIN_PROTOCOL, 9);
         let sew: Vec<_> = crate::verbs::catalog()
             .into_iter()
             .filter(|v| v.namespace() == "sew")

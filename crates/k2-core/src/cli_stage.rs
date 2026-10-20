@@ -51,6 +51,21 @@ fn cli_version(content: &str) -> Option<String> {
     None
 }
 
+/// The embedded CLI's version (= the daemon's in a release build).
+pub fn embedded_version() -> Option<String> {
+    cli_version(CLI_CONTENT)
+}
+
+/// The version of a file that IS the K2 CLI: a `#!/bin/bash` first line
+/// plus the version marker. `None` for anything else (another program
+/// named `k2` is never treated as a stale K2 CLI).
+pub fn k2_cli_version_of(content: &str) -> Option<String> {
+    if content.lines().next() != Some("#!/bin/bash") {
+        return None;
+    }
+    cli_version(content)
+}
+
 /// Write `content` at `path` with mode 0755 (world-executable script; it
 /// carries no secrets — tokens come from `~/.k2` at runtime).
 fn write_exec(path: &Path, content: &str) -> Result<(), String> {

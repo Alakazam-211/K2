@@ -1536,6 +1536,101 @@ fn lock_serializes_mutating_verbs() {
     ok(&t.call(&["mail", "systemctl", "restart"]));
 }
 
+// ── helper cli-refresh (protocol 9) ──────────────────────────────────────
+
+fn cli_json(o: &crate::Outcome) -> serde_json::Value {
+    ok(o);
+    serde_json::from_slice(&o.stdout).unwrap()
+}
+
+#[test]
+fn cli_refresh_replaces_only_an_older_k2_cli_and_is_idempotent() {
+    use crate::core::{cli_version_of, CLI_CONTENT};
+    let t = box_root();
+    let to = cli_version_of(CLI_CONTENT.as_bytes()).expect("embedded CLI has a version");
+    std::fs::create_dir_all(t.p(CLI_DIR)).unwrap();
+    let cli = t.p(CLI_PATH);
+
+    // Absent: nothing created (a box may get its CLI from a package).
+    let v = cli_json(&t.call(&["helper", "cli-refresh"]));
+    assert_eq!((v["result"].as_str(), v["reason"].as_str()), (Some("skipped"), Some("absent")));
+    assert!(!cli.exists());
+
+    // A stale K2 CLI (lztek: 0.40.148) is replaced with the helper's copy, 0755.
+    std::fs::write(&cli, "#!/bin/bash\nK2_CLI_VERSION=\"0.40.148\"\necho old\n").unwrap();
+    std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let v = cli_json(&t.call(&["helper", "cli-refresh"]));
+    assert_eq!(v["result"], "updated", "{v}");
+    assert_eq!(v["from"], "0.40.148");
+    assert_eq!(v["to"].as_str(), Some(to.as_str()));
+    assert_eq!(std::fs::read_to_string(&cli).unwrap(), CLI_CONTENT);
+    assert_eq!(std::fs::metadata(&cli).unwrap().permissions().mode() & 0o7777, 0o755);
+    let line: serde_json::Value =
+        serde_json::from_str(&t.audit.0.borrow().last().unwrap().clone()).unwrap();
+    assert_eq!((line["verb"].as_str(), line["cli"].as_str()), (Some("helper cli-refresh"), Some("updated")));
+    assert_eq!(line["from"], "0.40.148");
+
+    // Second pass: unchanged, the file untouched.
+    let before = std::fs::metadata(&cli).unwrap().modified().unwrap();
+    let v = cli_json(&t.call(&["helper", "cli-refresh"]));
+    assert_eq!(v["result"], "unchanged", "{v}");
+    assert_eq!(std::fs::metadata(&cli).unwrap().modified().unwrap(), before);
+
+    // Never a downgrade: a newer CLI stays.
+    let newer = "#!/bin/bash\nK2_CLI_VERSION=\"99.0.0\"\n";
+    std::fs::write(&cli, newer).unwrap();
+    assert_eq!(cli_json(&t.call(&["helper", "cli-refresh"]))["result"], "unchanged");
+    assert_eq!(std::fs::read_to_string(&cli).unwrap(), newer);
+
+    // Not the K2 CLI (no marker, or not bash): never replaced.
+    for other in ["#!/bin/sh\nK2_CLI_VERSION=\"0.1.0\"\n", "#!/bin/bash\necho some other k2\n", "\x7fELF"] {
+        std::fs::write(&cli, other).unwrap();
+        let v = cli_json(&t.call(&["helper", "cli-refresh"]));
+        assert_eq!((v["result"].as_str(), v["reason"].as_str()), (Some("skipped"), Some("not the K2 CLI")), "{other:?}");
+        assert_eq!(std::fs::read_to_string(&cli).unwrap(), other);
+    }
+
+    // A symlink (the macOS app's, a dev's repo link) is never followed.
+    std::fs::remove_file(&cli).unwrap();
+    let victim = t.p("/etc/victim-cli");
+    std::fs::write(&victim, "#!/bin/bash\nK2_CLI_VERSION=\"0.1.0\"\n").unwrap();
+    symlink(&victim, &cli).unwrap();
+    let v = cli_json(&t.call(&["helper", "cli-refresh"]));
+    assert_eq!((v["result"].as_str(), v["reason"].as_str()), (Some("skipped"), Some("symlink")));
+    assert_eq!(std::fs::read_to_string(&victim).unwrap(), "#!/bin/bash\nK2_CLI_VERSION=\"0.1.0\"\n");
+    assert!(std::fs::symlink_metadata(&cli).unwrap().file_type().is_symlink());
+
+    // A directory at the path is not a file to replace.
+    std::fs::remove_file(&cli).unwrap();
+    std::fs::create_dir(&cli).unwrap();
+    let v = cli_json(&t.call(&["helper", "cli-refresh"]));
+    assert_eq!(v["reason"], "not a regular file");
+}
+
+#[test]
+fn cli_refresh_is_the_daemons_call_and_takes_no_argv_or_stdin() {
+    let t = box_root();
+    std::fs::create_dir_all(t.p(CLI_DIR)).unwrap();
+    let stale = "#!/bin/bash\nK2_CLI_VERSION=\"0.40.148\"\n";
+    std::fs::write(t.p(CLI_PATH), stale).unwrap();
+    // An agent (a child of the daemon) may not ask root to write PATH.
+    t.as_agent();
+    assert_eq!(t.call(&["helper", "cli-refresh"]).code, exit::NOT_DAEMON);
+    assert_eq!(std::fs::read_to_string(t.p(CLI_PATH)).unwrap(), stale);
+    t.as_daemon();
+    // No path, version or content from argv; stdin is never read.
+    assert_eq!(t.call(&["helper", "cli-refresh", "/etc/passwd"]).code, exit::ARGV);
+    let o = crate::run(&t.ctx, &["helper", "cli-refresh"], NoRead);
+    assert_eq!(cli_json(&o)["result"], "updated");
+    // `helper version` says the helper serves it, and which CLI it carries.
+    let v = cli_json(&t.call(&["helper", "version"]));
+    assert_eq!(v["namespaces"]["cli"], true);
+    assert_eq!(
+        v["cliVersion"].as_str(),
+        crate::core::cli_version_of(crate::core::CLI_CONTENT.as_bytes()).as_deref()
+    );
+}
+
 #[test]
 fn audit_lines_are_json_with_class_and_caller() {
     let t = box_root();

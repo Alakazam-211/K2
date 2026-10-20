@@ -21,6 +21,7 @@
 //! absolute `/usr/bin/sudo` (RH12).
 
 pub mod busy;
+pub mod cli_refresh;
 pub mod heal;
 
 use std::sync::Mutex;
@@ -521,6 +522,8 @@ pub fn status_json(
             "sew": k2_root_proto::version::SEW_MIN_PROTOCOL,
         },
         "autoHeal": heal::status_value(),
+        // The doctor line for `/usr/local/bin/k2` (0.46.3).
+        "cli": cli_refresh::status_value(),
         "plainSudoRestartUsed": plain_sudo_restart_used().load(std::sync::atomic::Ordering::SeqCst),
         "lastEvents": events,
     })

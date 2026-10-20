@@ -14545,6 +14545,21 @@ if "state" in d:
     ah = d.get("autoHeal") or {}
     if ah.get("lastResult"):
         print("auto-heal  :", ah["lastResult"].get("result"), ah["lastResult"].get("reason", ""))
+    c = d.get("cli") or {}
+    if c:
+        st = c.get("state")
+        line = "%s %s" % (c.get("path"), ("v" + str(c["version"])) if c.get("version") else "")
+        if st == "stale":
+            line += " (%s) — older than the daemon (v%s); auto-heal refreshes it through the root helper" % (
+                "root-owned" if c.get("rootOwned") else "not root-owned", c.get("daemonCliVersion"))
+        elif st == "current":
+            line += " — current"
+        else:
+            line += " — " + {"absent": "not installed there", "symlink": "a symlink (the app or a package owns it)", "not_k2": "not the K2 CLI"}.get(st, str(st))
+        print("cli        :", line.replace("  ", " "))
+        lr = c.get("lastResult") or {}
+        if lr and lr.get("result") not in ("current", "not_managed"):
+            print("cli refresh:", lr.get("result"), lr.get("reason") or ("%s -> %s" % (lr.get("from"), lr.get("to")) if lr.get("to") else ""))
     if d.get("plainSudoRestartUsed"):
         print("note       : a Stalwart restart used plain sudo systemctl (no helper)")
     if d.get("rootSetup") == "copy-command":

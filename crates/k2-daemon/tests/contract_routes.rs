@@ -114,13 +114,16 @@ fn exposure_counts_are_pinned() {
     assert_eq!((widget, app, garden_local), (29, 71, 21), "per-exposure verb counts (widget, app, garden-local)");
     assert_eq!(
         c.verbs.len(),
-        128,
-        "today's 37 bridge verbs plus the frame rows theme.changed, canvas.setHitRegions, window.startDrag, sources.*, the 15 Garden data rows, the 66 app rows (5 on both transports) and widget.self"
+        137,
+        "today's 37 bridge verbs plus the frame rows theme.changed, canvas.setHitRegions, window.startDrag, sources.*, the 15 Garden data rows, the 66 app rows (5 on both transports) and widget.self, plus Thread parity 0.46.3's 4 widget and 5 app rows"
     );
 }
 
 #[test]
 fn every_feature_is_a_boot_status_key() {
+    // The DB-gated keys (thread-read-v1, inbox-catchup-v1,
+    // app-thread-parity-v1) are on once the DB is up.
+    let _ = k2_core::db::shared();
     let mut known: BTreeSet<&str> = k2_daemon::boot_status::features().into_iter().collect();
     // Added by this build (UW36); B2 puts it in /boot-status.
     known.insert("zen-widgets-v1");
@@ -222,7 +225,9 @@ fn generated_zen_verbs_holds_exactly_the_bridge_rows() {
             None => {}
         }
     }
-    assert_eq!(generated.len(), 37);
+    // Today's 37 plus Thread parity 0.46.3's thread.attachment, thread.open,
+    // thread.links and thread.pickFiles.
+    assert_eq!(generated.len(), 41);
 }
 
 // ── TUWA3: no GET side effects, headless ────────────────────────────────

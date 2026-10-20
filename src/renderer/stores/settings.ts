@@ -140,6 +140,8 @@ export type SettingsSection =
   /** Settings → Cores → App Approvals (0.46.1 door, prd-k2-app-runtime-v1 §5.6):
    *  held App requests the owner approves in person or denies. */
   | 'app-approvals'
+  /** Settings → Cores → Chat Hosting (Sew S32 K27): the Sew server on this box. */
+  | 'sew'
   /** Settings → Compute (K2 compute nodes preview: this server's nodes + this computer as a node). */
   | 'compute'
 

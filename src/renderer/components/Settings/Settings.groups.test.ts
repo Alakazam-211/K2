@@ -151,10 +151,11 @@ describe('Settings: K2 Server becomes Access and Network (0.45.7)', () => {
   it('Sidecars is now Cores (label only; the Apps, Database and Email Hosting ids stay)', () => {
     const nav = settingsNav({ zenGardens: true })
     expect(titles(nav)).not.toContain('Sidecars')
-    expect(group(nav, 'Cores').items.map((i) => i.id)).toEqual(['email-hosting', undefined, 'compute', 'data', 'skin-access', 'app-approvals'])
+    expect(group(nav, 'Cores').items.map((i) => i.id)).toEqual(['email-hosting', 'sew', 'compute', 'data', 'skin-access', 'app-approvals'])
+    // Chat Hosting is a real page since S32 K27 (was a SOON placeholder).
     const chat = group(nav, 'Cores').items[1]
-    expect(chat.label).toBe('Chat Hosting')
-    expect(chat.soon).toBe(true)
+    expect(chat).toEqual({ id: 'sew', label: 'Chat Hosting' })
+    expect(SECTION_LABELS.sew).toBe('Chat Hosting')
     // Its tag matches the 3rd Party Bots SOON tag: same classes, right-justified.
     const settingsSrc = readFileSync(join(__dirname, 'Settings.tsx'), 'utf8')
     const tag =

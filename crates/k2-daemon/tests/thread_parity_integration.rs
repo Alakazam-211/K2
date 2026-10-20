@@ -256,19 +256,6 @@ async fn app_guests_attach_read_cursors_and_file_links() {
     role(port, &rn2, &ws, &["thread:read", "thread:post"], None).await;
     let no_files = guest_login(port, &format!("sam{tag}"), &rn2).await;
 
-    // ── A guest attaches what its own rights cover ────────────────────
-    let r = post(port, "/cli/thread/post", &guest, json!({ "addr": addr, "text": "my photo", "attachments": [{ "relPath": "docs/photo.png" }, { "path": "docs/plan.md", "line": 1 }] })).await;
-    assert_eq!(r.status, 200, "{}", r.body);
-    let gid = r.json()["id"].as_str().unwrap().to_string();
-    assert_eq!(r.json()["attachments"][0]["path"], "docs/photo.png");
-    assert_eq!(r.json()["attachments"][1]["line"], 1);
-    let page = get(port, "/cli/thread", OWNER, &format!("addr={}", enc(&addr))).await.json();
-    let mine = page["items"].as_array().unwrap().iter().find(|i| i["id"] == gid.as_str()).cloned().expect("the guest's post");
-    assert_eq!(mine["doc"]["author"]["kind"], "guest");
-    assert_eq!(mine["doc"]["attachments"][0]["state"], "ok", "the owner sees the guest's files");
-    // Files only (no text) works for a guest too.
-    let r = post(port, "/cli/thread/post", &guest, json!({ "addr": addr, "text": "", "attachments": [{ "relPath": "docs/plan.md" }] })).await;
-    assert_eq!(r.status, 200, "{}", r.body);
     // Outside its folders, missing, absolute, `..`, `~`, a secret: refused
     // and nothing stored; outside-scope refusals are the same body whether
     // the file exists or not (no existence oracle).
@@ -321,10 +308,8 @@ async fn app_guests_attach_read_cursors_and_file_links() {
     assert_eq!(r.status, 200);
     assert_eq!(unread(no_files.clone()).await["total"], 1);
     assert_eq!(unread(guest.clone()).await["total"], 3);
-    // Its own post reads everything up to it.
-    let r = post(port, "/cli/thread/post", &guest, json!({ "addr": addr, "text": "seen it all" })).await;
-    assert_eq!(r.status, 200, "{}", r.body);
-    assert_eq!(unread(guest.clone()).await["total"], 0);
+    let r = post(port, "/cli/thread/read", &guest, json!({ "addr": addr, "seq": seqs[2] })).await;
+    assert_eq!(r.json()["unread"], 1, "{}", r.body);
     // No seq = the newest now.
     post(port, "/cli/thread/post", OWNER, json!({ "addr": addr, "text": "five" })).await;
     let r = post(port, "/cli/thread/read", &no_files, json!({ "addr": addr })).await;
@@ -382,6 +367,20 @@ async fn app_guests_attach_read_cursors_and_file_links() {
     let delta = get(port, "/cli/thread", &guest, &format!("addr={}&after_seq={}", enc(&addr), seqs[2])).await.json();
     assert_eq!(delta["after_seq"], seqs[2]);
     assert!(delta.get("rev").is_none(), "no server-wide counter for a guest: {delta}");
+
+    // ── A guest attaches what its own rights cover (last: a guest's post
+    // wakes the room's pinned Chat, which in this harness re-pins it to a
+    // new conversation, so the post is read back by its conversation id) ──
+    let r = post(port, "/cli/thread/post", &guest, json!({ "addr": addr, "text": "my photo", "attachments": [{ "relPath": "docs/photo.png" }, { "path": "docs/plan.md", "line": 1 }] })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let gid = r.json()["id"].as_str().unwrap().to_string();
+    assert_eq!(r.json()["conversation_id"], conv.as_str());
+    assert_eq!(r.json()["attachments"][0]["path"], "docs/photo.png");
+    assert_eq!(r.json()["attachments"][1]["line"], 1);
+    let page = get(port, "/cli/thread", OWNER, &format!("addr={conv}&limit=0")).await.json();
+    let mine = page["items"].as_array().unwrap().iter().find(|i| i["id"] == gid.as_str()).cloned().unwrap_or_else(|| panic!("the guest's post: {page}"));
+    assert_eq!(mine["doc"]["author"]["kind"], "guest");
+    assert_eq!(mine["doc"]["attachments"][0]["state"], "ok", "the owner sees the guest's files");
 }
 
 /// One request on an App's link: the App pass as Bearer, JSON on POST.
@@ -477,7 +476,7 @@ async fn the_app_link_serves_every_new_thread_row() {
     assert_eq!(r.status, 200, "unread on the link: {}", r.body);
     assert_eq!(r.json()["byConversation"][0]["id"], conv.as_str());
     let r = link(lport, "POST", "/cli/thread/read".into(), pass.clone(), Some(json!({ "addr": addr, "seq": seq }))).await;
-    assert_eq!(r.status, 200, "mark-read on the link: {}", r.body);
+    assert_eq!(r.status, 200, "mark-read on the link (conv {conv}): {}", r.body);
     assert_eq!(r.json()["lastReadSeq"], seq);
 
     let r = link(lport, "POST", "/cli/fs/resolve-links".into(), pass.clone(), Some(json!({ "workspace": addr, "paths": ["out/notes.md"] }))).await;

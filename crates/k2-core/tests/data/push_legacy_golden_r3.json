@@ -1,0 +1,186 @@
+{
+  "agent-needs-attention/mixed": [
+    "{\"devices\":[{\"platform\":\"apns\",\"token\":\"tok-golden-on\"},{\"platform\":\"fcm\",\"token\":\"tok-golden-off\"}],\"payload\":{\"body\":\"Weekly report drafted\",\"data\":{},\"title\":\"cortana needs your attention\"}}"
+  ],
+  "agent-needs-attention/off": [
+    "{\"devices\":[{\"platform\":\"fcm\",\"token\":\"tok-golden-off\"}],\"payload\":{\"body\":\"Weekly report drafted\",\"data\":{},\"title\":\"cortana needs your attention\"}}"
+  ],
+  "agent-needs-attention/on": [
+    "{\"devices\":[{\"platform\":\"apns\",\"token\":\"tok-golden-on\"}],\"payload\":{\"body\":\"Weekly report drafted\",\"data\":{},\"title\":\"cortana needs your attention\"}}"
+  ],
+  "badge/mixed": [
+    "{\"devices\":[{\"platform\":\"apns\",\"token\":\"tok-golden-on\"},{\"platform\":\"fcm\",\"token\":\"tok-golden-off\"}],\"payload\":{\"data\":{\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"badge\",\"subdomain\":\"rosson\",\"unreadTotal\":\"3\",\"waitingTotal\":\"1\"}}}"
+  ],
+  "badge/off": [
+    "{\"devices\":[{\"platform\":\"fcm\",\"token\":\"tok-golden-off\"}],\"payload\":{\"data\":{\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"badge\",\"subdomain\":\"rosson\",\"unreadTotal\":\"3\",\"waitingTotal\":\"1\"}}}"
+  ],
+  "badge/on": [
+    "{\"devices\":[{\"platform\":\"apns\",\"token\":\"tok-golden-on\"}],\"payload\":{\"data\":{\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"badge\",\"subdomain\":\"rosson\",\"unreadTotal\":\"3\",\"waitingTotal\":\"1\"}}}"
+  ],
+  "heartbeat-failed/mixed": [
+    "{\"devices\":[{\"platform\":\"apns\",\"token\":\"tok-golden-on\"},{\"platform\":\"fcm\",\"token\":\"tok-golden-off\"}],\"payload\":{\"body\":\"timeout\",\"data\":{},\"title\":\"Heartbeat failed: nightly\"}}"
+  ],
+  "heartbeat-failed/off": [
+    "{\"devices\":[{\"platform\":\"fcm\",\"token\":\"tok-golden-off\"}],\"payload\":{\"body\":\"timeout\",\"data\":{},\"title\":\"Heartbeat failed: nightly\"}}"
+  ],
+  "heartbeat-failed/on": [
+    "{\"devices\":[{\"platform\":\"apns\",\"token\":\"tok-golden-on\"}],\"payload\":{\"body\":\"timeout\",\"data\":{},\"title\":\"Heartbeat failed: nightly\"}}"
+  ],
+  "project-message-created/mixed": [
+    "{\"devices\":[{\"platform\":\"apns\",\"token\":\"tok-golden-on\"},{\"platform\":\"fcm\",\"token\":\"tok-golden-off\"}],\"payload\":{\"body\":\"New message in Apollo\",\"data\":{\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"groupId\":\"pg-9\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"project\",\"subdomain\":\"rosson\"},\"sound\":\"default\",\"title\":\"K2\"}}"
+  ],
+  "project-message-created/off": [
+    "{\"devices\":[{\"platform\":\"fcm\",\"token\":\"tok-golden-off\"}],\"payload\":{\"body\":\"New message in Apollo\",\"data\":{\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"groupId\":\"pg-9\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"project\",\"subdomain\":\"rosson\"},\"sound\":\"default\",\"title\":\"K2\"}}"
+  ],
+  "project-message-created/on": [
+    "{\"devices\":[{\"platform\":\"apns\",\"token\":\"tok-golden-on\"}],\"payload\":{\"body\":\"New message in Apollo\",\"data\":{\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"groupId\":\"pg-9\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"project\",\"subdomain\":\"rosson\"},\"sound\":\"default\",\"title\":\"K2\"}}"
+  ],
+  "project-post/mixed": [
+    "{\"devices\":[{\"platform\":\"apns\",\"token\":\"tok-golden-on\"},{\"platform\":\"fcm\",\"token\":\"tok-golden-off\"}],\"payload\":{\"body\":\"New message in Apollo\",\"data\":{\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"groupId\":\"pg-9\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"project\",\"subdomain\":\"rosson\",\"unreadTotal\":\"7\",\"waitingTotal\":\"2\"},\"sound\":\"default\",\"title\":\"K2\"}}"
+  ],
+  "project-post/off": [
+    "{\"devices\":[{\"platform\":\"fcm\",\"token\":\"tok-golden-off\"}],\"payload\":{\"body\":\"New message in Apollo\",\"data\":{\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"groupId\":\"pg-9\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"project\",\"subdomain\":\"rosson\",\"unreadTotal\":\"7\",\"waitingTotal\":\"2\"},\"sound\":\"default\",\"title\":\"K2\"}}"
+  ],
+  "project-post/on": [
+    "{\"devices\":[{\"platform\":\"apns\",\"token\":\"tok-golden-on\"}],\"payload\":{\"body\":\"New message in Apollo\",\"data\":{\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"groupId\":\"pg-9\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"project\",\"subdomain\":\"rosson\",\"unreadTotal\":\"7\",\"waitingTotal\":\"2\"},\"sound\":\"default\",\"title\":\"K2\"}}"
+  ],
+  "thread-choice-x1-nopreview/mixed": [
+    "{\"devices\":[{\"platform\":\"apns\",\"token\":\"tok-golden-on\"},{\"platform\":\"fcm\",\"token\":\"tok-golden-off\"}],\"payload\":{\"body\":\"Asks you to choose\",\"collapseId\":\"thread:c-77\",\"data\":{\"addr\":\"k2/reviewer\",\"agentColor\":\"#3b82f6\",\"agentName\":\"Cortana\",\"avatarRev\":\"ba7816bf8f01cfea\",\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"conversationId\":\"c-77\",\"count\":\"1\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"thread\",\"msgKind\":\"choice\",\"projectId\":\"proj-1\",\"seq\":\"418\",\"subdomain\":\"rosson\",\"unreadTotal\":\"4\",\"waitingTotal\":\"1\"},\"sound\":\"default\",\"threadId\":\"thread:c-77\",\"title\":\"Cortana\"}}"
+  ],
+  "thread-choice-x1-nopreview/off": [
+    "{\"devices\":[{\"platform\":\"fcm\",\"token\":\"tok-golden-off\"}],\"payload\":{\"body\":\"Asks you to choose\",\"collapseId\":\"thread:c-77\",\"data\":{\"addr\":\"k2/reviewer\",\"agentColor\":\"#3b82f6\",\"agentName\":\"Cortana\",\"avatarRev\":\"ba7816bf8f01cfea\",\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"conversationId\":\"c-77\",\"count\":\"1\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"thread\",\"msgKind\":\"choice\",\"projectId\":\"proj-1\",\"seq\":\"418\",\"subdomain\":\"rosson\",\"unreadTotal\":\"4\",\"waitingTotal\":\"1\"},\"sound\":\"default\",\"threadId\":\"thread:c-77\",\"title\":\"Cortana\"}}"
+  ],
+  "thread-choice-x1-nopreview/on": [
+    "{\"devices\":[{\"platform\":\"apns\",\"token\":\"tok-golden-on\"}],\"payload\":{\"body\":\"Asks you to choose\",\"collapseId\":\"thread:c-77\",\"data\":{\"addr\":\"k2/reviewer\",\"agentColor\":\"#3b82f6\",\"agentName\":\"Cortana\",\"avatarRev\":\"ba7816bf8f01cfea\",\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"conversationId\":\"c-77\",\"count\":\"1\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"thread\",\"msgKind\":\"choice\",\"projectId\":\"proj-1\",\"seq\":\"418\",\"subdomain\":\"rosson\",\"unreadTotal\":\"4\",\"waitingTotal\":\"1\"},\"sound\":\"default\",\"threadId\":\"thread:c-77\",\"title\":\"Cortana\"}}"
+  ],
+  "thread-choice-x1-preview/mixed": [
+    "{\"devices\":[{\"platform\":\"apns\",\"token\":\"tok-golden-on\"}],\"payload\":{\"body\":\"Deploy finished, 3 checks green 🚀\",\"collapseId\":\"thread:c-77\",\"data\":{\"addr\":\"k2/reviewer\",\"agentColor\":\"#3b82f6\",\"agentName\":\"Cortana\",\"avatarRev\":\"ba7816bf8f01cfea\",\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"conversationId\":\"c-77\",\"count\":\"1\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"thread\",\"msgKind\":\"choice\",\"projectId\":\"proj-1\",\"seq\":\"418\",\"subdomain\":\"rosson\",\"unreadTotal\":\"4\",\"waitingTotal\":\"1\"},\"sound\":\"default\",\"threadId\":\"thread:c-77\",\"title\":\"Cortana\"}}",
+    "{\"devices\":[{\"platform\":\"fcm\",\"token\":\"tok-golden-off\"}],\"payload\":{\"body\":\"Asks you to choose\",\"collapseId\":\"thread:c-77\",\"data\":{\"addr\":\"k2/reviewer\",\"agentColor\":\"#3b82f6\",\"agentName\":\"Cortana\",\"avatarRev\":\"ba7816bf8f01cfea\",\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"conversationId\":\"c-77\",\"count\":\"1\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"thread\",\"msgKind\":\"choice\",\"projectId\":\"proj-1\",\"seq\":\"418\",\"subdomain\":\"rosson\",\"unreadTotal\":\"4\",\"waitingTotal\":\"1\"},\"sound\":\"default\",\"threadId\":\"thread:c-77\",\"title\":\"Cortana\"}}"
+  ],
+  "thread-choice-x1-preview/off": [
+    "{\"devices\":[{\"platform\":\"fcm\",\"token\":\"tok-golden-off\"}],\"payload\":{\"body\":\"Asks you to choose\",\"collapseId\":\"thread:c-77\",\"data\":{\"addr\":\"k2/reviewer\",\"agentColor\":\"#3b82f6\",\"agentName\":\"Cortana\",\"avatarRev\":\"ba7816bf8f01cfea\",\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"conversationId\":\"c-77\",\"count\":\"1\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"thread\",\"msgKind\":\"choice\",\"projectId\":\"proj-1\",\"seq\":\"418\",\"subdomain\":\"rosson\",\"unreadTotal\":\"4\",\"waitingTotal\":\"1\"},\"sound\":\"default\",\"threadId\":\"thread:c-77\",\"title\":\"Cortana\"}}"
+  ],
+  "thread-choice-x1-preview/on": [
+    "{\"devices\":[{\"platform\":\"apns\",\"token\":\"tok-golden-on\"}],\"payload\":{\"body\":\"Deploy finished, 3 checks green 🚀\",\"collapseId\":\"thread:c-77\",\"data\":{\"addr\":\"k2/reviewer\",\"agentColor\":\"#3b82f6\",\"agentName\":\"Cortana\",\"avatarRev\":\"ba7816bf8f01cfea\",\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"conversationId\":\"c-77\",\"count\":\"1\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"thread\",\"msgKind\":\"choice\",\"projectId\":\"proj-1\",\"seq\":\"418\",\"subdomain\":\"rosson\",\"unreadTotal\":\"4\",\"waitingTotal\":\"1\"},\"sound\":\"default\",\"threadId\":\"thread:c-77\",\"title\":\"Cortana\"}}"
+  ],
+  "thread-choice-x3-nopreview/mixed": [
+    "{\"devices\":[{\"platform\":\"apns\",\"token\":\"tok-golden-on\"},{\"platform\":\"fcm\",\"token\":\"tok-golden-off\"}],\"payload\":{\"body\":\"3 new messages\",\"collapseId\":\"thread:c-77\",\"data\":{\"addr\":\"k2/reviewer\",\"agentColor\":\"#3b82f6\",\"agentName\":\"Cortana\",\"avatarRev\":\"ba7816bf8f01cfea\",\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"conversationId\":\"c-77\",\"count\":\"3\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"thread\",\"msgKind\":\"choice\",\"projectId\":\"proj-1\",\"seq\":\"418\",\"subdomain\":\"rosson\",\"unreadTotal\":\"4\",\"waitingTotal\":\"1\"},\"sound\":\"default\",\"threadId\":\"thread:c-77\",\"title\":\"Cortana\"}}"
+  ],
+  "thread-choice-x3-nopreview/off": [
+    "{\"devices\":[{\"platform\":\"fcm\",\"token\":\"tok-golden-off\"}],\"payload\":{\"body\":\"3 new messages\",\"collapseId\":\"thread:c-77\",\"data\":{\"addr\":\"k2/reviewer\",\"agentColor\":\"#3b82f6\",\"agentName\":\"Cortana\",\"avatarRev\":\"ba7816bf8f01cfea\",\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"conversationId\":\"c-77\",\"count\":\"3\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"thread\",\"msgKind\":\"choice\",\"projectId\":\"proj-1\",\"seq\":\"418\",\"subdomain\":\"rosson\",\"unreadTotal\":\"4\",\"waitingTotal\":\"1\"},\"sound\":\"default\",\"threadId\":\"thread:c-77\",\"title\":\"Cortana\"}}"
+  ],
+  "thread-choice-x3-nopreview/on": [
+    "{\"devices\":[{\"platform\":\"apns\",\"token\":\"tok-golden-on\"}],\"payload\":{\"body\":\"3 new messages\",\"collapseId\":\"thread:c-77\",\"data\":{\"addr\":\"k2/reviewer\",\"agentColor\":\"#3b82f6\",\"agentName\":\"Cortana\",\"avatarRev\":\"ba7816bf8f01cfea\",\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"conversationId\":\"c-77\",\"count\":\"3\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"thread\",\"msgKind\":\"choice\",\"projectId\":\"proj-1\",\"seq\":\"418\",\"subdomain\":\"rosson\",\"unreadTotal\":\"4\",\"waitingTotal\":\"1\"},\"sound\":\"default\",\"threadId\":\"thread:c-77\",\"title\":\"Cortana\"}}"
+  ],
+  "thread-choice-x3-preview/mixed": [
+    "{\"devices\":[{\"platform\":\"apns\",\"token\":\"tok-golden-on\"}],\"payload\":{\"body\":\"3 new messages · Deploy finished, 3 checks green 🚀\",\"collapseId\":\"thread:c-77\",\"data\":{\"addr\":\"k2/reviewer\",\"agentColor\":\"#3b82f6\",\"agentName\":\"Cortana\",\"avatarRev\":\"ba7816bf8f01cfea\",\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"conversationId\":\"c-77\",\"count\":\"3\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"thread\",\"msgKind\":\"choice\",\"projectId\":\"proj-1\",\"seq\":\"418\",\"subdomain\":\"rosson\",\"unreadTotal\":\"4\",\"waitingTotal\":\"1\"},\"sound\":\"default\",\"threadId\":\"thread:c-77\",\"title\":\"Cortana\"}}",
+    "{\"devices\":[{\"platform\":\"fcm\",\"token\":\"tok-golden-off\"}],\"payload\":{\"body\":\"3 new messages\",\"collapseId\":\"thread:c-77\",\"data\":{\"addr\":\"k2/reviewer\",\"agentColor\":\"#3b82f6\",\"agentName\":\"Cortana\",\"avatarRev\":\"ba7816bf8f01cfea\",\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"conversationId\":\"c-77\",\"count\":\"3\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"thread\",\"msgKind\":\"choice\",\"projectId\":\"proj-1\",\"seq\":\"418\",\"subdomain\":\"rosson\",\"unreadTotal\":\"4\",\"waitingTotal\":\"1\"},\"sound\":\"default\",\"threadId\":\"thread:c-77\",\"title\":\"Cortana\"}}"
+  ],
+  "thread-choice-x3-preview/off": [
+    "{\"devices\":[{\"platform\":\"fcm\",\"token\":\"tok-golden-off\"}],\"payload\":{\"body\":\"3 new messages\",\"collapseId\":\"thread:c-77\",\"data\":{\"addr\":\"k2/reviewer\",\"agentColor\":\"#3b82f6\",\"agentName\":\"Cortana\",\"avatarRev\":\"ba7816bf8f01cfea\",\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"conversationId\":\"c-77\",\"count\":\"3\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"thread\",\"msgKind\":\"choice\",\"projectId\":\"proj-1\",\"seq\":\"418\",\"subdomain\":\"rosson\",\"unreadTotal\":\"4\",\"waitingTotal\":\"1\"},\"sound\":\"default\",\"threadId\":\"thread:c-77\",\"title\":\"Cortana\"}}"
+  ],
+  "thread-choice-x3-preview/on": [
+    "{\"devices\":[{\"platform\":\"apns\",\"token\":\"tok-golden-on\"}],\"payload\":{\"body\":\"3 new messages · Deploy finished, 3 checks green 🚀\",\"collapseId\":\"thread:c-77\",\"data\":{\"addr\":\"k2/reviewer\",\"agentColor\":\"#3b82f6\",\"agentName\":\"Cortana\",\"avatarRev\":\"ba7816bf8f01cfea\",\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"conversationId\":\"c-77\",\"count\":\"3\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"thread\",\"msgKind\":\"choice\",\"projectId\":\"proj-1\",\"seq\":\"418\",\"subdomain\":\"rosson\",\"unreadTotal\":\"4\",\"waitingTotal\":\"1\"},\"sound\":\"default\",\"threadId\":\"thread:c-77\",\"title\":\"Cortana\"}}"
+  ],
+  "thread-secret-x1-nopreview/mixed": [
+    "{\"devices\":[{\"platform\":\"apns\",\"token\":\"tok-golden-on\"},{\"platform\":\"fcm\",\"token\":\"tok-golden-off\"}],\"payload\":{\"body\":\"Asks for a secret\",\"collapseId\":\"thread:c-77\",\"data\":{\"addr\":\"k2/reviewer\",\"agentColor\":\"#3b82f6\",\"agentName\":\"Cortana\",\"avatarRev\":\"ba7816bf8f01cfea\",\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"conversationId\":\"c-77\",\"count\":\"1\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"thread\",\"msgKind\":\"secret\",\"projectId\":\"proj-1\",\"seq\":\"418\",\"subdomain\":\"rosson\",\"unreadTotal\":\"4\",\"waitingTotal\":\"1\"},\"sound\":\"default\",\"threadId\":\"thread:c-77\",\"title\":\"Cortana\"}}"
+  ],
+  "thread-secret-x1-nopreview/off": [
+    "{\"devices\":[{\"platform\":\"fcm\",\"token\":\"tok-golden-off\"}],\"payload\":{\"body\":\"Asks for a secret\",\"collapseId\":\"thread:c-77\",\"data\":{\"addr\":\"k2/reviewer\",\"agentColor\":\"#3b82f6\",\"agentName\":\"Cortana\",\"avatarRev\":\"ba7816bf8f01cfea\",\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"conversationId\":\"c-77\",\"count\":\"1\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"thread\",\"msgKind\":\"secret\",\"projectId\":\"proj-1\",\"seq\":\"418\",\"subdomain\":\"rosson\",\"unreadTotal\":\"4\",\"waitingTotal\":\"1\"},\"sound\":\"default\",\"threadId\":\"thread:c-77\",\"title\":\"Cortana\"}}"
+  ],
+  "thread-secret-x1-nopreview/on": [
+    "{\"devices\":[{\"platform\":\"apns\",\"token\":\"tok-golden-on\"}],\"payload\":{\"body\":\"Asks for a secret\",\"collapseId\":\"thread:c-77\",\"data\":{\"addr\":\"k2/reviewer\",\"agentColor\":\"#3b82f6\",\"agentName\":\"Cortana\",\"avatarRev\":\"ba7816bf8f01cfea\",\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"conversationId\":\"c-77\",\"count\":\"1\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"thread\",\"msgKind\":\"secret\",\"projectId\":\"proj-1\",\"seq\":\"418\",\"subdomain\":\"rosson\",\"unreadTotal\":\"4\",\"waitingTotal\":\"1\"},\"sound\":\"default\",\"threadId\":\"thread:c-77\",\"title\":\"Cortana\"}}"
+  ],
+  "thread-secret-x1-preview/mixed": [
+    "{\"devices\":[{\"platform\":\"apns\",\"token\":\"tok-golden-on\"},{\"platform\":\"fcm\",\"token\":\"tok-golden-off\"}],\"payload\":{\"body\":\"Asks for a secret\",\"collapseId\":\"thread:c-77\",\"data\":{\"addr\":\"k2/reviewer\",\"agentColor\":\"#3b82f6\",\"agentName\":\"Cortana\",\"avatarRev\":\"ba7816bf8f01cfea\",\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"conversationId\":\"c-77\",\"count\":\"1\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"thread\",\"msgKind\":\"secret\",\"projectId\":\"proj-1\",\"seq\":\"418\",\"subdomain\":\"rosson\",\"unreadTotal\":\"4\",\"waitingTotal\":\"1\"},\"sound\":\"default\",\"threadId\":\"thread:c-77\",\"title\":\"Cortana\"}}"
+  ],
+  "thread-secret-x1-preview/off": [
+    "{\"devices\":[{\"platform\":\"fcm\",\"token\":\"tok-golden-off\"}],\"payload\":{\"body\":\"Asks for a secret\",\"collapseId\":\"thread:c-77\",\"data\":{\"addr\":\"k2/reviewer\",\"agentColor\":\"#3b82f6\",\"agentName\":\"Cortana\",\"avatarRev\":\"ba7816bf8f01cfea\",\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"conversationId\":\"c-77\",\"count\":\"1\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"thread\",\"msgKind\":\"secret\",\"projectId\":\"proj-1\",\"seq\":\"418\",\"subdomain\":\"rosson\",\"unreadTotal\":\"4\",\"waitingTotal\":\"1\"},\"sound\":\"default\",\"threadId\":\"thread:c-77\",\"title\":\"Cortana\"}}"
+  ],
+  "thread-secret-x1-preview/on": [
+    "{\"devices\":[{\"platform\":\"apns\",\"token\":\"tok-golden-on\"}],\"payload\":{\"body\":\"Asks for a secret\",\"collapseId\":\"thread:c-77\",\"data\":{\"addr\":\"k2/reviewer\",\"agentColor\":\"#3b82f6\",\"agentName\":\"Cortana\",\"avatarRev\":\"ba7816bf8f01cfea\",\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"conversationId\":\"c-77\",\"count\":\"1\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"thread\",\"msgKind\":\"secret\",\"projectId\":\"proj-1\",\"seq\":\"418\",\"subdomain\":\"rosson\",\"unreadTotal\":\"4\",\"waitingTotal\":\"1\"},\"sound\":\"default\",\"threadId\":\"thread:c-77\",\"title\":\"Cortana\"}}"
+  ],
+  "thread-secret-x3-nopreview/mixed": [
+    "{\"devices\":[{\"platform\":\"apns\",\"token\":\"tok-golden-on\"},{\"platform\":\"fcm\",\"token\":\"tok-golden-off\"}],\"payload\":{\"body\":\"3 new messages\",\"collapseId\":\"thread:c-77\",\"data\":{\"addr\":\"k2/reviewer\",\"agentColor\":\"#3b82f6\",\"agentName\":\"Cortana\",\"avatarRev\":\"ba7816bf8f01cfea\",\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"conversationId\":\"c-77\",\"count\":\"3\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"thread\",\"msgKind\":\"secret\",\"projectId\":\"proj-1\",\"seq\":\"418\",\"subdomain\":\"rosson\",\"unreadTotal\":\"4\",\"waitingTotal\":\"1\"},\"sound\":\"default\",\"threadId\":\"thread:c-77\",\"title\":\"Cortana\"}}"
+  ],
+  "thread-secret-x3-nopreview/off": [
+    "{\"devices\":[{\"platform\":\"fcm\",\"token\":\"tok-golden-off\"}],\"payload\":{\"body\":\"3 new messages\",\"collapseId\":\"thread:c-77\",\"data\":{\"addr\":\"k2/reviewer\",\"agentColor\":\"#3b82f6\",\"agentName\":\"Cortana\",\"avatarRev\":\"ba7816bf8f01cfea\",\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"conversationId\":\"c-77\",\"count\":\"3\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"thread\",\"msgKind\":\"secret\",\"projectId\":\"proj-1\",\"seq\":\"418\",\"subdomain\":\"rosson\",\"unreadTotal\":\"4\",\"waitingTotal\":\"1\"},\"sound\":\"default\",\"threadId\":\"thread:c-77\",\"title\":\"Cortana\"}}"
+  ],
+  "thread-secret-x3-nopreview/on": [
+    "{\"devices\":[{\"platform\":\"apns\",\"token\":\"tok-golden-on\"}],\"payload\":{\"body\":\"3 new messages\",\"collapseId\":\"thread:c-77\",\"data\":{\"addr\":\"k2/reviewer\",\"agentColor\":\"#3b82f6\",\"agentName\":\"Cortana\",\"avatarRev\":\"ba7816bf8f01cfea\",\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"conversationId\":\"c-77\",\"count\":\"3\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"thread\",\"msgKind\":\"secret\",\"projectId\":\"proj-1\",\"seq\":\"418\",\"subdomain\":\"rosson\",\"unreadTotal\":\"4\",\"waitingTotal\":\"1\"},\"sound\":\"default\",\"threadId\":\"thread:c-77\",\"title\":\"Cortana\"}}"
+  ],
+  "thread-secret-x3-preview/mixed": [
+    "{\"devices\":[{\"platform\":\"apns\",\"token\":\"tok-golden-on\"},{\"platform\":\"fcm\",\"token\":\"tok-golden-off\"}],\"payload\":{\"body\":\"3 new messages\",\"collapseId\":\"thread:c-77\",\"data\":{\"addr\":\"k2/reviewer\",\"agentColor\":\"#3b82f6\",\"agentName\":\"Cortana\",\"avatarRev\":\"ba7816bf8f01cfea\",\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"conversationId\":\"c-77\",\"count\":\"3\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"thread\",\"msgKind\":\"secret\",\"projectId\":\"proj-1\",\"seq\":\"418\",\"subdomain\":\"rosson\",\"unreadTotal\":\"4\",\"waitingTotal\":\"1\"},\"sound\":\"default\",\"threadId\":\"thread:c-77\",\"title\":\"Cortana\"}}"
+  ],
+  "thread-secret-x3-preview/off": [
+    "{\"devices\":[{\"platform\":\"fcm\",\"token\":\"tok-golden-off\"}],\"payload\":{\"body\":\"3 new messages\",\"collapseId\":\"thread:c-77\",\"data\":{\"addr\":\"k2/reviewer\",\"agentColor\":\"#3b82f6\",\"agentName\":\"Cortana\",\"avatarRev\":\"ba7816bf8f01cfea\",\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"conversationId\":\"c-77\",\"count\":\"3\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"thread\",\"msgKind\":\"secret\",\"projectId\":\"proj-1\",\"seq\":\"418\",\"subdomain\":\"rosson\",\"unreadTotal\":\"4\",\"waitingTotal\":\"1\"},\"sound\":\"default\",\"threadId\":\"thread:c-77\",\"title\":\"Cortana\"}}"
+  ],
+  "thread-secret-x3-preview/on": [
+    "{\"devices\":[{\"platform\":\"apns\",\"token\":\"tok-golden-on\"}],\"payload\":{\"body\":\"3 new messages\",\"collapseId\":\"thread:c-77\",\"data\":{\"addr\":\"k2/reviewer\",\"agentColor\":\"#3b82f6\",\"agentName\":\"Cortana\",\"avatarRev\":\"ba7816bf8f01cfea\",\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"conversationId\":\"c-77\",\"count\":\"3\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"thread\",\"msgKind\":\"secret\",\"projectId\":\"proj-1\",\"seq\":\"418\",\"subdomain\":\"rosson\",\"unreadTotal\":\"4\",\"waitingTotal\":\"1\"},\"sound\":\"default\",\"threadId\":\"thread:c-77\",\"title\":\"Cortana\"}}"
+  ],
+  "thread-text-x1-nopreview/mixed": [
+    "{\"devices\":[{\"platform\":\"apns\",\"token\":\"tok-golden-on\"},{\"platform\":\"fcm\",\"token\":\"tok-golden-off\"}],\"payload\":{\"body\":\"New message in Thread\",\"collapseId\":\"thread:c-77\",\"data\":{\"addr\":\"k2/reviewer\",\"agentColor\":\"#3b82f6\",\"agentName\":\"Cortana\",\"avatarRev\":\"ba7816bf8f01cfea\",\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"conversationId\":\"c-77\",\"count\":\"1\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"thread\",\"msgKind\":\"text\",\"projectId\":\"proj-1\",\"seq\":\"418\",\"subdomain\":\"rosson\",\"unreadTotal\":\"4\",\"waitingTotal\":\"1\"},\"sound\":\"default\",\"threadId\":\"thread:c-77\",\"title\":\"Cortana\"}}"
+  ],
+  "thread-text-x1-nopreview/off": [
+    "{\"devices\":[{\"platform\":\"fcm\",\"token\":\"tok-golden-off\"}],\"payload\":{\"body\":\"New message in Thread\",\"collapseId\":\"thread:c-77\",\"data\":{\"addr\":\"k2/reviewer\",\"agentColor\":\"#3b82f6\",\"agentName\":\"Cortana\",\"avatarRev\":\"ba7816bf8f01cfea\",\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"conversationId\":\"c-77\",\"count\":\"1\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"thread\",\"msgKind\":\"text\",\"projectId\":\"proj-1\",\"seq\":\"418\",\"subdomain\":\"rosson\",\"unreadTotal\":\"4\",\"waitingTotal\":\"1\"},\"sound\":\"default\",\"threadId\":\"thread:c-77\",\"title\":\"Cortana\"}}"
+  ],
+  "thread-text-x1-nopreview/on": [
+    "{\"devices\":[{\"platform\":\"apns\",\"token\":\"tok-golden-on\"}],\"payload\":{\"body\":\"New message in Thread\",\"collapseId\":\"thread:c-77\",\"data\":{\"addr\":\"k2/reviewer\",\"agentColor\":\"#3b82f6\",\"agentName\":\"Cortana\",\"avatarRev\":\"ba7816bf8f01cfea\",\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"conversationId\":\"c-77\",\"count\":\"1\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"thread\",\"msgKind\":\"text\",\"projectId\":\"proj-1\",\"seq\":\"418\",\"subdomain\":\"rosson\",\"unreadTotal\":\"4\",\"waitingTotal\":\"1\"},\"sound\":\"default\",\"threadId\":\"thread:c-77\",\"title\":\"Cortana\"}}"
+  ],
+  "thread-text-x1-preview/mixed": [
+    "{\"devices\":[{\"platform\":\"apns\",\"token\":\"tok-golden-on\"}],\"payload\":{\"body\":\"Deploy finished, 3 checks green 🚀\",\"collapseId\":\"thread:c-77\",\"data\":{\"addr\":\"k2/reviewer\",\"agentColor\":\"#3b82f6\",\"agentName\":\"Cortana\",\"avatarRev\":\"ba7816bf8f01cfea\",\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"conversationId\":\"c-77\",\"count\":\"1\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"thread\",\"msgKind\":\"text\",\"projectId\":\"proj-1\",\"seq\":\"418\",\"subdomain\":\"rosson\",\"unreadTotal\":\"4\",\"waitingTotal\":\"1\"},\"sound\":\"default\",\"threadId\":\"thread:c-77\",\"title\":\"Cortana\"}}",
+    "{\"devices\":[{\"platform\":\"fcm\",\"token\":\"tok-golden-off\"}],\"payload\":{\"body\":\"New message in Thread\",\"collapseId\":\"thread:c-77\",\"data\":{\"addr\":\"k2/reviewer\",\"agentColor\":\"#3b82f6\",\"agentName\":\"Cortana\",\"avatarRev\":\"ba7816bf8f01cfea\",\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"conversationId\":\"c-77\",\"count\":\"1\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"thread\",\"msgKind\":\"text\",\"projectId\":\"proj-1\",\"seq\":\"418\",\"subdomain\":\"rosson\",\"unreadTotal\":\"4\",\"waitingTotal\":\"1\"},\"sound\":\"default\",\"threadId\":\"thread:c-77\",\"title\":\"Cortana\"}}"
+  ],
+  "thread-text-x1-preview/off": [
+    "{\"devices\":[{\"platform\":\"fcm\",\"token\":\"tok-golden-off\"}],\"payload\":{\"body\":\"New message in Thread\",\"collapseId\":\"thread:c-77\",\"data\":{\"addr\":\"k2/reviewer\",\"agentColor\":\"#3b82f6\",\"agentName\":\"Cortana\",\"avatarRev\":\"ba7816bf8f01cfea\",\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"conversationId\":\"c-77\",\"count\":\"1\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"thread\",\"msgKind\":\"text\",\"projectId\":\"proj-1\",\"seq\":\"418\",\"subdomain\":\"rosson\",\"unreadTotal\":\"4\",\"waitingTotal\":\"1\"},\"sound\":\"default\",\"threadId\":\"thread:c-77\",\"title\":\"Cortana\"}}"
+  ],
+  "thread-text-x1-preview/on": [
+    "{\"devices\":[{\"platform\":\"apns\",\"token\":\"tok-golden-on\"}],\"payload\":{\"body\":\"Deploy finished, 3 checks green 🚀\",\"collapseId\":\"thread:c-77\",\"data\":{\"addr\":\"k2/reviewer\",\"agentColor\":\"#3b82f6\",\"agentName\":\"Cortana\",\"avatarRev\":\"ba7816bf8f01cfea\",\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"conversationId\":\"c-77\",\"count\":\"1\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"thread\",\"msgKind\":\"text\",\"projectId\":\"proj-1\",\"seq\":\"418\",\"subdomain\":\"rosson\",\"unreadTotal\":\"4\",\"waitingTotal\":\"1\"},\"sound\":\"default\",\"threadId\":\"thread:c-77\",\"title\":\"Cortana\"}}"
+  ],
+  "thread-text-x3-nopreview/mixed": [
+    "{\"devices\":[{\"platform\":\"apns\",\"token\":\"tok-golden-on\"},{\"platform\":\"fcm\",\"token\":\"tok-golden-off\"}],\"payload\":{\"body\":\"3 new messages\",\"collapseId\":\"thread:c-77\",\"data\":{\"addr\":\"k2/reviewer\",\"agentColor\":\"#3b82f6\",\"agentName\":\"Cortana\",\"avatarRev\":\"ba7816bf8f01cfea\",\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"conversationId\":\"c-77\",\"count\":\"3\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"thread\",\"msgKind\":\"text\",\"projectId\":\"proj-1\",\"seq\":\"418\",\"subdomain\":\"rosson\",\"unreadTotal\":\"4\",\"waitingTotal\":\"1\"},\"sound\":\"default\",\"threadId\":\"thread:c-77\",\"title\":\"Cortana\"}}"
+  ],
+  "thread-text-x3-nopreview/off": [
+    "{\"devices\":[{\"platform\":\"fcm\",\"token\":\"tok-golden-off\"}],\"payload\":{\"body\":\"3 new messages\",\"collapseId\":\"thread:c-77\",\"data\":{\"addr\":\"k2/reviewer\",\"agentColor\":\"#3b82f6\",\"agentName\":\"Cortana\",\"avatarRev\":\"ba7816bf8f01cfea\",\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"conversationId\":\"c-77\",\"count\":\"3\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"thread\",\"msgKind\":\"text\",\"projectId\":\"proj-1\",\"seq\":\"418\",\"subdomain\":\"rosson\",\"unreadTotal\":\"4\",\"waitingTotal\":\"1\"},\"sound\":\"default\",\"threadId\":\"thread:c-77\",\"title\":\"Cortana\"}}"
+  ],
+  "thread-text-x3-nopreview/on": [
+    "{\"devices\":[{\"platform\":\"apns\",\"token\":\"tok-golden-on\"}],\"payload\":{\"body\":\"3 new messages\",\"collapseId\":\"thread:c-77\",\"data\":{\"addr\":\"k2/reviewer\",\"agentColor\":\"#3b82f6\",\"agentName\":\"Cortana\",\"avatarRev\":\"ba7816bf8f01cfea\",\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"conversationId\":\"c-77\",\"count\":\"3\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"thread\",\"msgKind\":\"text\",\"projectId\":\"proj-1\",\"seq\":\"418\",\"subdomain\":\"rosson\",\"unreadTotal\":\"4\",\"waitingTotal\":\"1\"},\"sound\":\"default\",\"threadId\":\"thread:c-77\",\"title\":\"Cortana\"}}"
+  ],
+  "thread-text-x3-preview/mixed": [
+    "{\"devices\":[{\"platform\":\"apns\",\"token\":\"tok-golden-on\"}],\"payload\":{\"body\":\"3 new messages · Deploy finished, 3 checks green 🚀\",\"collapseId\":\"thread:c-77\",\"data\":{\"addr\":\"k2/reviewer\",\"agentColor\":\"#3b82f6\",\"agentName\":\"Cortana\",\"avatarRev\":\"ba7816bf8f01cfea\",\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"conversationId\":\"c-77\",\"count\":\"3\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"thread\",\"msgKind\":\"text\",\"projectId\":\"proj-1\",\"seq\":\"418\",\"subdomain\":\"rosson\",\"unreadTotal\":\"4\",\"waitingTotal\":\"1\"},\"sound\":\"default\",\"threadId\":\"thread:c-77\",\"title\":\"Cortana\"}}",
+    "{\"devices\":[{\"platform\":\"fcm\",\"token\":\"tok-golden-off\"}],\"payload\":{\"body\":\"3 new messages\",\"collapseId\":\"thread:c-77\",\"data\":{\"addr\":\"k2/reviewer\",\"agentColor\":\"#3b82f6\",\"agentName\":\"Cortana\",\"avatarRev\":\"ba7816bf8f01cfea\",\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"conversationId\":\"c-77\",\"count\":\"3\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"thread\",\"msgKind\":\"text\",\"projectId\":\"proj-1\",\"seq\":\"418\",\"subdomain\":\"rosson\",\"unreadTotal\":\"4\",\"waitingTotal\":\"1\"},\"sound\":\"default\",\"threadId\":\"thread:c-77\",\"title\":\"Cortana\"}}"
+  ],
+  "thread-text-x3-preview/off": [
+    "{\"devices\":[{\"platform\":\"fcm\",\"token\":\"tok-golden-off\"}],\"payload\":{\"body\":\"3 new messages\",\"collapseId\":\"thread:c-77\",\"data\":{\"addr\":\"k2/reviewer\",\"agentColor\":\"#3b82f6\",\"agentName\":\"Cortana\",\"avatarRev\":\"ba7816bf8f01cfea\",\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"conversationId\":\"c-77\",\"count\":\"3\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"thread\",\"msgKind\":\"text\",\"projectId\":\"proj-1\",\"seq\":\"418\",\"subdomain\":\"rosson\",\"unreadTotal\":\"4\",\"waitingTotal\":\"1\"},\"sound\":\"default\",\"threadId\":\"thread:c-77\",\"title\":\"Cortana\"}}"
+  ],
+  "thread-text-x3-preview/on": [
+    "{\"devices\":[{\"platform\":\"apns\",\"token\":\"tok-golden-on\"}],\"payload\":{\"body\":\"3 new messages · Deploy finished, 3 checks green 🚀\",\"collapseId\":\"thread:c-77\",\"data\":{\"addr\":\"k2/reviewer\",\"agentColor\":\"#3b82f6\",\"agentName\":\"Cortana\",\"avatarRev\":\"ba7816bf8f01cfea\",\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"conversationId\":\"c-77\",\"count\":\"3\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"thread\",\"msgKind\":\"text\",\"projectId\":\"proj-1\",\"seq\":\"418\",\"subdomain\":\"rosson\",\"unreadTotal\":\"4\",\"waitingTotal\":\"1\"},\"sound\":\"default\",\"threadId\":\"thread:c-77\",\"title\":\"Cortana\"}}"
+  ],
+  "ticket-commented/mixed": [
+    "{\"devices\":[{\"platform\":\"apns\",\"token\":\"tok-golden-on\"},{\"platform\":\"fcm\",\"token\":\"tok-golden-off\"}],\"payload\":{\"body\":\"New reply on a ticket\",\"data\":{\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"feedbackId\":\"fb-42\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"ticket\",\"subdomain\":\"rosson\"},\"sound\":\"default\",\"title\":\"K2\"}}"
+  ],
+  "ticket-commented/off": [
+    "{\"devices\":[{\"platform\":\"fcm\",\"token\":\"tok-golden-off\"}],\"payload\":{\"body\":\"New reply on a ticket\",\"data\":{\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"feedbackId\":\"fb-42\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"ticket\",\"subdomain\":\"rosson\"},\"sound\":\"default\",\"title\":\"K2\"}}"
+  ],
+  "ticket-commented/on": [
+    "{\"devices\":[{\"platform\":\"apns\",\"token\":\"tok-golden-on\"}],\"payload\":{\"body\":\"New reply on a ticket\",\"data\":{\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"feedbackId\":\"fb-42\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"ticket\",\"subdomain\":\"rosson\"},\"sound\":\"default\",\"title\":\"K2\"}}"
+  ],
+  "ticket-created-assigned/mixed": [
+    "{\"devices\":[{\"platform\":\"apns\",\"token\":\"tok-golden-on\"},{\"platform\":\"fcm\",\"token\":\"tok-golden-off\"}],\"payload\":{\"body\":\"Cortana needs you on a ticket\",\"data\":{\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"feedbackId\":\"fb-43\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"ticket\",\"subdomain\":\"rosson\"},\"sound\":\"default\",\"title\":\"K2\"}}"
+  ],
+  "ticket-created-assigned/off": [
+    "{\"devices\":[{\"platform\":\"fcm\",\"token\":\"tok-golden-off\"}],\"payload\":{\"body\":\"Cortana needs you on a ticket\",\"data\":{\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"feedbackId\":\"fb-43\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"ticket\",\"subdomain\":\"rosson\"},\"sound\":\"default\",\"title\":\"K2\"}}"
+  ],
+  "ticket-created-assigned/on": [
+    "{\"devices\":[{\"platform\":\"apns\",\"token\":\"tok-golden-on\"}],\"payload\":{\"body\":\"Cortana needs you on a ticket\",\"data\":{\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"feedbackId\":\"fb-43\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"ticket\",\"subdomain\":\"rosson\"},\"sound\":\"default\",\"title\":\"K2\"}}"
+  ],
+  "ticket-created/mixed": [
+    "{\"devices\":[{\"platform\":\"apns\",\"token\":\"tok-golden-on\"},{\"platform\":\"fcm\",\"token\":\"tok-golden-off\"}],\"payload\":{\"body\":\"Cortana needs you on a ticket\",\"data\":{\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"feedbackId\":\"fb-42\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"ticket\",\"subdomain\":\"rosson\"},\"sound\":\"default\",\"title\":\"K2\"}}"
+  ],
+  "ticket-created/off": [
+    "{\"devices\":[{\"platform\":\"fcm\",\"token\":\"tok-golden-off\"}],\"payload\":{\"body\":\"Cortana needs you on a ticket\",\"data\":{\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"feedbackId\":\"fb-42\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"ticket\",\"subdomain\":\"rosson\"},\"sound\":\"default\",\"title\":\"K2\"}}"
+  ],
+  "ticket-created/on": [
+    "{\"devices\":[{\"platform\":\"apns\",\"token\":\"tok-golden-on\"}],\"payload\":{\"body\":\"Cortana needs you on a ticket\",\"data\":{\"badgeKey\":\"0123456789abcdef0123456789abcdef\",\"feedbackId\":\"fb-42\",\"instanceId\":\"feedfacefeedface\",\"kind\":\"ticket\",\"subdomain\":\"rosson\"},\"sound\":\"default\",\"title\":\"K2\"}}"
+  ]
+}

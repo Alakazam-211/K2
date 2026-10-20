@@ -99,3 +99,28 @@ describe('SettingDropdown menu layer', () => {
     expect(menu.getAttribute('style') ?? '').not.toContain('z-index: 9999')
   })
 })
+
+describe('SettingDropdown Esc (0.46.3)', () => {
+  it('Esc closes only the open menu: the Settings panel listener never sees it', () => {
+    // Stands in for Settings.tsx: a bubble-phase window listener that
+    // closes the panel unless the Esc was claimed (defaultPrevented).
+    let panelClosed = 0
+    const settingsEsc = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape' && !e.defaultPrevented) panelClosed += 1
+    }
+    window.addEventListener('keydown', settingsEsc)
+    try {
+      render(<WorkspaceDropdown zIndex={200} />)
+      fireEvent.click(screen.getByRole('button', { name: 'Workspace' }))
+      expect(screen.getByTestId('setting-dropdown-menu')).toBeTruthy()
+      fireEvent.keyDown(screen.getByTestId('setting-dropdown-menu'), { key: 'Escape' })
+      expect(screen.queryByTestId('setting-dropdown-menu')).toBeNull()
+      expect(panelClosed).toBe(0)
+      // With the menu closed, Esc is the panel's again.
+      fireEvent.keyDown(document.body, { key: 'Escape' })
+      expect(panelClosed).toBe(1)
+    } finally {
+      window.removeEventListener('keydown', settingsEsc)
+    }
+  })
+})

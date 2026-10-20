@@ -177,13 +177,58 @@ describe('a ticket’s discussion in the Thread look', () => {
     })
   }
 
+  it('0.46.3: a path that is a file in the ticket workspace is a link; an unlinked ticket asks nothing', async () => {
+    cli.post.mockImplementation(async (path: string, body?: unknown) => {
+      if (path !== 'fs/resolve-links') return {}
+      const { workspace, paths } = body as { workspace: string; paths: string[] }
+      expect(workspace).toBe('/ws')
+      return {
+        root: '/ws',
+        prefixes: ['/ws'],
+        links: paths.map((p) =>
+          p === 'src/db.rs' ? { input: p, linkable: true, kind: 'file', rel: p, path: `/ws/${p}` } : { input: p, linkable: false },
+        ),
+      }
+    })
+    const withPath: FeedbackShow = {
+      ...ITEM,
+      comments: [{ author: 'scout', body: 'The schema lives in src/db.rs today.', at: NOW - 30 }],
+    }
+    const { container } = render(
+      <TicketAgentRail
+        feedbackId={TICKET}
+        item={withPath}
+        error={null}
+        nowSec={NOW}
+        options={[]}
+        optionsLive={false}
+        onChanged={() => {}}
+        projectId="p1"
+        projectPath="/ws"
+        sessionId={null}
+        sessionKind={null}
+        canonicalSessionId={null}
+      />,
+    )
+    await waitFor(() => expect(container.querySelector('[role="link"]')?.textContent).toBe('src/db.rs'))
+    cleanup()
+    cli.post.mockClear()
+    const unlinked = rail({ projectPath: null })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(unlinked.querySelector('[role="link"]')).toBeNull()
+    expect(cli.post.mock.calls.filter((c: unknown[]) => c[0] === 'fs/resolve-links')).toEqual([])
+  })
+
   it('Enter sends a free-text comment; Shift+Enter does not; a pill sends the answer', async () => {
     rail()
     const input = screen.getByTestId('ticket-compose-input') as HTMLTextAreaElement
     expect(input.placeholder).toBe('Pick an option above, or message scout')
     fireEvent.change(input, { target: { value: 'what about **both**?' } })
     fireEvent.keyDown(input, { key: 'Enter', shiftKey: true })
-    expect(cli.post).not.toHaveBeenCalled()
+    // 0.46.3: the ticket's file links ask `fs/resolve-links`; only the
+    // comment posts count here.
+    const comments = (): unknown[][] => cli.post.mock.calls.filter((c: unknown[]) => c[0] === 'feedback/comment')
+    expect(comments()).toEqual([])
     fireEvent.keyDown(input, { key: 'Enter' })
     await waitFor(() => expect(cli.post).toHaveBeenCalledWith('feedback/comment', { id: TICKET, body: 'what about **both**?' }))
     await waitFor(() => expect(input.value).toBe(''))
@@ -191,7 +236,7 @@ describe('a ticket’s discussion in the Thread look', () => {
     await waitFor(() =>
       expect(cli.post).toHaveBeenLastCalledWith('feedback/comment', { id: TICKET, body: 'Postgres', optionPick: true }),
     )
-    expect(cli.post).toHaveBeenCalledTimes(2)
+    expect(comments()).toHaveLength(2)
   })
 
   it('the working strip of the workspace agent a reply lands in rides on the box', () => {

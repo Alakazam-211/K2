@@ -18,8 +18,9 @@
 //     Option/Alt-click opens it there in the background (no switch, no
 //     focus move), and the tooltip says so (`lib/file-open-modifier.ts`).
 //
-// Only a message rendered under a `FileLinkProvider` gets links; every
-// other `ChatMessageBody` (tickets, project chat, Grok Bots, Zen) is
+// Only a message rendered under a `FileLinkProvider` gets links: the main
+// Thread, and since 0.46.3 ticket chat, project chat and the Garden Thread
+// (`WorkspaceFileLinks`). Other `ChatMessageBody`s (Grok Bots) are
 // unchanged.
 
 import {

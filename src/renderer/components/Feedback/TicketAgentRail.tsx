@@ -56,6 +56,7 @@ import { useIsYouAuthor } from '@/components/Settings/sections/useNotifyPrefs'
 import { hasSelectionWithin } from '@/components/FileViewerPane/FileViewerPane'
 import { clearTicketDraft, getTicketDraft, setTicketDraft } from '@/lib/composer-drafts'
 import { primaryScope } from '@/kessel/server-scope'
+import { WorkspaceFileLinks } from '@/components/common/WorkspaceFileLinks'
 import {
   askingSessionWakeAction,
   commentFeedback,
@@ -271,17 +272,21 @@ export function TicketAgentRail({
       )}
 
       {tab === 'thread' ? (
-        <ThreadTab
-          key={`thread-${feedbackId}`}
-          item={item}
-          error={error}
-          nowSec={nowSec}
-          ticketId={feedbackId}
-          options={options}
-          optionsLive={optionsLive}
-          onChanged={onChanged}
-          sessionTarget={ticketChatTarget(projectId, projectPath)}
-        />
+        // 0.46.3: paths in the ticket's messages that are files in its
+        // workspace are links, like the main Thread (none when unlinked).
+        <WorkspaceFileLinks workspace={projectPath} scope={primaryScope()}>
+          <ThreadTab
+            key={`thread-${feedbackId}`}
+            item={item}
+            error={error}
+            nowSec={nowSec}
+            ticketId={feedbackId}
+            options={options}
+            optionsLive={optionsLive}
+            onChanged={onChanged}
+            sessionTarget={ticketChatTarget(projectId, projectPath)}
+          />
+        </WorkspaceFileLinks>
       ) : (
         <AgentTab
           feedbackId={feedbackId}

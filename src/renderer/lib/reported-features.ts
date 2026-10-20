@@ -76,6 +76,17 @@ export const REPORTED_FEATURES = {
    *  `homes_device_removed` frames and `serverId` on `/boot-status`. The
    *  desktop syncs its Homes with its own daemon only when it lists this. */
   'homes-sync-v1': 'homes-sync-v1',
+  /** thread-attachments-v1 (0.46.1): file objects on Thread messages.
+   *  `attachments` on `POST /cli/thread/post` (`[{path, line?, lineEnd?}]`,
+   *  text optional when files ride) and `GET /cli/thread/attachment`. With
+   *  it, files a person picks in the Thread's message box ride the post as
+   *  attachments (S4); without it they go in as path text, as before. */
+  'thread-attachments-v1': 'thread-attachments-v1',
+  /** thread-images-v1 (0.46.3): `GET /cli/thread/attachment?mode=thumb&px=`
+   *  answers a picture for an image attachment (SVG sanitized, HEIC
+   *  converted where the box can). With it, an image attachment draws as
+   *  the picture under the bubble (S3); without it, today's chip. */
+  'thread-images-v1': 'thread-images-v1',
 } as const
 
 export type ReportedFeatureKey = keyof typeof REPORTED_FEATURES

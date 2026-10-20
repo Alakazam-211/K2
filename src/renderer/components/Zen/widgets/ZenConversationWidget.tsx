@@ -26,7 +26,10 @@
 // waiting", a click scrolls to the first) and, with `mute` (on in Garden
 // 1), has a bell to mute the Thread (`ZenThreadReadControls`).
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useStore } from 'zustand'
+import { zenThreadFeeds } from '@/lib/zen/zen-data'
+import { ThreadAttachmentSourceProvider, type ThreadAttachmentSource } from '@/components/Thread/ThreadImageObjects'
 import { useStickToBottom } from '@/hooks/useStickToBottom'
 import { formatRelativeTime } from '@/lib/format-relative-time'
 import { isOwnThreadPost, type ThreadViewer } from '@/lib/thread-viewer'
@@ -247,6 +250,17 @@ export function ZenConversation({
     scrollToBottom()
   }, [row.address, scrollToBottom])
 
+  // S3 (thread-images-v1): image attachments read their pictures from the
+  // agent's own server, by its Thread address (the feed Zen mounted for
+  // this conversation). No feed yet: images stay chips.
+  const feed = useStore(zenThreadFeeds, (s) => s.feeds.find((f) => f.address === row.address) ?? null)
+  const feedScope = feed?.scope ?? null
+  const feedAddr = feed?.threadAddr ?? ''
+  const attachmentSource = useMemo<ThreadAttachmentSource | null>(
+    () => (feedScope && feedAddr ? { scope: feedScope, addr: feedAddr } : null),
+    [feedScope, feedAddr],
+  )
+
   const note = view?.note ?? null
   const showEmpty = ready && view.loaded && !view.error && items.length === 0
   // thread-read-v1: read while looked at; the cards waiting on you.
@@ -403,6 +417,7 @@ export function ZenConversation({
         )}
         {/* Narrow (< 480px, a phone): bubbles use the column (ThreadColumn). */}
         {ready && (items.length > 0 || typing) && (
+          <ThreadAttachmentSourceProvider value={attachmentSource}>
           <ThreadMessageColumn gap={10} className="flex flex-shrink-0 flex-col" testId="zen-conversation-column">
           {items.map((it) => (
             // `display: contents`: the list's gap and layout see the bubble;
@@ -421,6 +436,7 @@ export function ZenConversation({
           ))}
           {typing && <TypingIndicator />}
           </ThreadMessageColumn>
+          </ThreadAttachmentSourceProvider>
         )}
       </div>
 

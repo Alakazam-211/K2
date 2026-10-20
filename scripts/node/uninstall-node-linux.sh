@@ -44,6 +44,18 @@ if command -v systemctl >/dev/null; then
     systemctl daemon-reload || true
 fi
 pkill -KILL -u "$NODE_USER" 2>/dev/null || true
+# Job units (0.46.3 wall) and the job user.
+if command -v systemctl >/dev/null; then
+    for u in $(systemctl list-units --all --plain --no-legend 'k2job-*.service' 2>/dev/null | awk '{print $1}'); do
+        systemctl stop "$u" 2>/dev/null || true
+        systemctl reset-failed "$u" 2>/dev/null || true
+    done
+fi
+pkill -KILL -u k2job 2>/dev/null || true
+if id -u k2job >/dev/null 2>&1; then
+    userdel k2job || die "userdel k2job failed"
+fi
+getent group k2job >/dev/null && groupdel k2job 2>/dev/null || true
 if id -u "$NODE_USER" >/dev/null 2>&1; then
     userdel "$NODE_USER" || die "userdel $NODE_USER failed"
 fi

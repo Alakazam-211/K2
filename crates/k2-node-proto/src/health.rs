@@ -40,10 +40,41 @@ pub struct Health {
     /// alert, never a kill.
     #[serde(default)]
     pub stuck_jobs: Vec<StuckJob>,
+    /// How jobs are walled from the node and the people on the machine
+    /// (0.46.3). `None` from older nodes: no wall.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub security: Option<SecurityFact>,
     /// Facts that failed to read and why (short codes).
     #[serde(default)]
     pub errors: BTreeMap<String, String>,
 }
+
+/// The job wall and the machine's open home folders (`k2 compute node
+/// health` shows the warnings).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SecurityFact {
+    /// [`WALL_JOB_USER`] | [`WALL_SEATBELT`] | [`WALL_NONE`].
+    pub wall: String,
+    /// The user jobs run as (`k2job` on Linux; the node user otherwise).
+    pub job_user: Option<String>,
+    /// The node enforces `network = "none"`.
+    pub network_none: bool,
+    /// Home folders other users can read. Without a wall a job can read
+    /// what's readable by everyone there; fix: `sudo k2-node admin homes
+    /// --fix` at the machine, or the owner-approved `homes.private` verb.
+    #[serde(default)]
+    pub open_homes: Vec<String>,
+    /// Why the wall is down or partial, in a sentence each.
+    #[serde(default)]
+    pub notes: Vec<String>,
+}
+
+/// Linux: jobs run as `k2job` in a sandboxed transient systemd unit.
+pub const WALL_JOB_USER: &str = "job_user";
+/// macOS: jobs run under a Seatbelt (sandbox-exec) deny profile.
+pub const WALL_SEATBELT: &str = "seatbelt";
+/// No wall: jobs run as the node user (older nodes, or the wall isn't set up).
+pub const WALL_NONE: &str = "none";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DiskFact {
@@ -140,5 +171,26 @@ mod tests {
         assert_eq!(back, h);
         // Canonical JSON works (no floats anywhere).
         assert!(crate::canonical::to_string(&h).is_ok());
+    }
+
+    /// Mixed fleet: an older node's health (no `security`) still parses,
+    /// and a newer node's extra field doesn't break a reader that only
+    /// knows the old fields (no `deny_unknown_fields` on `Health`).
+    #[test]
+    fn security_fact_is_optional_both_ways() {
+        let old = r#"{"at":1,"boot_id":"b","uptime_secs":null,"load_milli":null,"cores":4,"mem_total_bytes":1,
+            "mem_available_bytes":null,"swap_used_bytes":null,"memory_pressure":null,"disks":[],"updates":null,
+            "sleep":null,"power":{"has_battery":false,"on_battery":false},"thermal":null,"disk_encryption":null,
+            "os":{"name":"","version":"","kernel":"","arch":""},"executor":{"reachable":false,"version":null,
+            "remote_admin":null,"auto_update":null,"last_update":null}}"#;
+        let h: Health = serde_json::from_str(old).unwrap();
+        assert_eq!(h.security, None);
+        assert!(!serde_json::to_string(&h).unwrap().contains("security"), "absent stays absent on the wire");
+        let mut v: serde_json::Value = serde_json::from_str(old).unwrap();
+        v["security"] = serde_json::json!({"wall": WALL_JOB_USER, "job_user": "k2job", "network_none": true, "open_homes": ["/home/a"], "notes": []});
+        v["something_newer"] = serde_json::json!(1);
+        let h: Health = serde_json::from_value(v).unwrap();
+        let s = h.security.unwrap();
+        assert_eq!((s.wall.as_str(), s.network_none, s.open_homes.len()), (WALL_JOB_USER, true, 1));
     }
 }

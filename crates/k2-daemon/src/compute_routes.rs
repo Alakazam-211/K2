@@ -2824,7 +2824,9 @@ fn local_policy(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         .iter()
         .map(|(k, x)| (k.clone(), x.as_str().map(str::to_string).unwrap_or_else(|| x.to_string())))
         .collect();
-    if updates.iter().any(|(k, v)| k == "network" && v.trim() == "none") {
+    // A walled local node (0.46.3+, `network_none` in its status) enforces
+    // it; an older one would take no jobs, so it stays refused there.
+    if updates.iter().any(|(k, v)| k == "network" && v.trim() == "none") && !compute::local::local_node_enforces_network_none() {
         use k2_core::compute::proto::refusal::{NETWORK_NONE_MESSAGE, NETWORK_NONE_NOT_ENFORCED};
         return Err(no(NETWORK_NONE_NOT_ENFORCED, 400, NETWORK_NONE_MESSAGE));
     }

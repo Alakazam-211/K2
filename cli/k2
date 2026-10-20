@@ -15767,7 +15767,9 @@ Node admin (agents need "Allow this agent to operate compute nodes"):
   k2 compute node rollback <node>              back to the node's own previous build
   k2 compute node admin propose <node> <verb> [key=value…] --reason "…"
                    verbs today: unit.restart unit=k2-node, policy.set key=value,
-                   control.pause|drain|resume, gc, jobs.kill job_id=…
+                   control.pause|drain|resume, gc, jobs.kill job_id=…,
+                   wall.enable (Linux: jobs run as k2job; then unit.restart unit=k2-node),
+                   homes.private (chmod 700 the homes others can read)
   k2 compute node admin propose <node> --plan plan.json --reason "…"
                    held for the owner: exit 2 with the request id
   k2 compute node admin list [--node N] [--state open|pending|all] [--json]
@@ -17144,6 +17146,14 @@ else:
     ex = f.get("executor") or {}
     if ex and not ex.get("reachable"): print("  executor      not answering")
     for s in f.get("stuck_jobs") or []: print("  stuck job     %s (quiet %dm)" % (s["job_id"][:8], s.get("quiet_secs", 0) // 60))
+    sec = f.get("security")
+    if sec:
+        print("  job wall      %s%s" % (sec.get("wall"), (" (jobs run as %s)" % sec["job_user"]) if sec.get("wall") == "job_user" and sec.get("job_user") else ""))
+        print("  network none  %s" % ("enforced" if sec.get("network_none") else "not enforced: network = none takes no jobs here"))
+        for h in sec.get("open_homes") or []: print("  open home     %s" % h)
+        for n in sec.get("notes") or []: print("  WARNING       %s" % n)
+    else:
+        print("  job wall      none reported (k2-node before 0.46.3: jobs run as the node user and can read its key)")
 u = v.get("update")
 if u: print("  update        %s %s%s" % (u.get("state"), u.get("version") or "", (" (" + u["reason"] + ")") if u.get("reason") else ""))
 a = v.get("alertAfterSecs")

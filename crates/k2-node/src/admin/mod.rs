@@ -20,8 +20,10 @@ pub mod cli;
 pub mod config;
 pub mod courier;
 pub mod exec;
+pub mod fdpass;
 pub mod health;
 pub mod housekeeping;
+pub mod jobs;
 #[cfg(target_os = "macos")]
 pub mod launchd;
 pub mod policy;

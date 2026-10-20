@@ -13,10 +13,12 @@
 # dev.k2.node. The enrollment runs AS _k2node and prints a 6-digit code
 # to confirm on the controller.
 #
-# macOS homes are world-readable by default, so jobs (as _k2node) could
-# read the human's files. Making the human's home private (chmod 700) is
+# macOS homes are world-readable by default. Jobs run under a Seatbelt
+# profile that closes /Users (0.46.3), but other local users (and older
+# nodes) still read them. Making the human's home private (chmod 700) is
 # shown and asked in a terminal; without a terminal (SSH with the
-# password on stdin) pass --private-home or --no-private-home.
+# password on stdin) pass --private-home or --no-private-home. Other
+# people's open homes are listed, and fixed only when asked.
 #
 # Remote installs (SSH): one sudo call, the password on stdin, never in
 # argv:  ssh mini 'sudo -S -p "" /path/k2-node setup --no-private-home …' < pwfile
@@ -219,6 +221,31 @@ if [ -d "$human_home" ]; then
     fi
 fi
 
+# Everyone else's home (V16): shown, and made private only when asked. Jobs
+# run under the Seatbelt profile (no /Users), but other local users and
+# older nodes still get in.
+open_homes="$("$BIN" admin homes --json 2>/dev/null || echo '[]')"
+if [ "$open_homes" != "[]" ]; then
+    echo "== home folders other users can read"
+    "$BIN" admin homes || true
+    if [ "$PRIVATE_HOME" != "0" ] && [ -t 0 ]; then
+        printf "   Make these private too (chmod 700)? [y/N] "
+        read -r answer
+        case "$answer" in y|Y|yes) "$BIN" admin homes --fix --yes ;; esac
+    fi
+fi
+open_homes="$("$BIN" admin homes --json 2>/dev/null || echo '[]')"
+if [ "$open_homes" = "[]" ]; then
+    HOMES_STATUS="every home under /Users is private"
+else
+    HOMES_STATUS="some homes are readable by others: $BIN admin homes (fix: sudo \"$BIN\" admin homes --fix)"
+fi
+if [ -x /usr/bin/sandbox-exec ]; then
+    WALL_STATUS="on: jobs run under a Seatbelt profile (no node key or state, no /Users or keychains; network = none works)"
+else
+    WALL_STATUS="OFF: /usr/bin/sandbox-exec is missing; jobs run as $NODE_USER and can read its key"
+fi
+
 run_as_node() { (cd / && sudo -u "$NODE_USER" -H env -i HOME="$HOME_DIR" PATH=/usr/bin:/bin "$@"); }
 if [ -n "$ENROLL" ]; then
     echo "== enroll"
@@ -285,6 +312,8 @@ Done.
   service:      dev.k2.node (running as $NODE_USER)
   enrollment:   $ENROLL_STATUS
   home folder:  $HOME_STATUS
+  other homes:  $HOMES_STATUS
+  job wall:     $WALL_STATUS
   your access:  $ACCESS_STATUS
   Xcode CLT:    $CLT_STATUS
   packages:     jobs can't install system packages on macOS; a job that needs one fails with the brew command to run

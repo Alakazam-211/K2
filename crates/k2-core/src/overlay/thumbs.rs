@@ -564,25 +564,21 @@ fn mime_of_ext(ext: &str) -> Option<&'static str> {
     }
 }
 
-/// A cached thumbnail (`dir` = [`cache_dir`] in production). Dimensions
-/// ride the file name: `<key>.<w>x<h>.<ext>`.
+/// A cached thumbnail (`dir` = [`cache_dir`] in production): one file
+/// `<key>.<ext>`, looked up directly (no folder scan); its size comes from
+/// its own header.
 pub fn cache_get(dir: &Path, key: &str) -> Option<Thumb> {
-    let rd = std::fs::read_dir(dir).ok()?;
-    for ent in rd.flatten() {
-        let name = ent.file_name().to_string_lossy().into_owned();
-        let Some(rest) = name.strip_prefix(key).and_then(|r| r.strip_prefix('.')) else { continue };
-        let mut parts = rest.split('.');
-        let (Some(dims), Some(ext)) = (parts.next(), parts.next()) else { continue };
-        let (w, h) = dims.split_once('x')?;
+    for ext in ["jpg", "png", "svg"] {
+        let path = dir.join(format!("{key}.{ext}"));
+        let Ok(bytes) = std::fs::read(&path) else { continue };
         let mime = mime_of_ext(ext)?;
-        let bytes = std::fs::read(ent.path()).ok()?;
-        return Some(Thumb {
-            mime,
-            bytes,
-            width: w.parse().ok()?,
-            height: h.parse().ok()?,
-            sanitized: mime == "image/svg+xml",
-        });
+        let (width, height) = if mime == "image/svg+xml" {
+            svg_size(std::str::from_utf8(&bytes).ok()?)
+        } else {
+            let f = if mime == "image/png" { ImageFormat::Png } else { ImageFormat::Jpeg };
+            ImageReader::with_format(Cursor::new(&bytes), f).into_dimensions().ok()?
+        };
+        return Some(Thumb { mime, bytes, width, height, sanitized: mime == "image/svg+xml" });
     }
     None
 }
@@ -596,7 +592,7 @@ pub fn cache_put(dir: &Path, key: &str, t: &Thumb, max_bytes: u64) {
         return;
     }
     let tmp = dir.join(format!(".{key}.{}.tmp", uuid::Uuid::new_v4()));
-    let path = dir.join(format!("{key}.{}x{}.{ext}", t.width, t.height));
+    let path = dir.join(format!("{key}.{ext}"));
     if std::fs::write(&tmp, &t.bytes).is_err() || std::fs::rename(&tmp, &path).is_err() {
         let _ = std::fs::remove_file(&tmp);
         return;

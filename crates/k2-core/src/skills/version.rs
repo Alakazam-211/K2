@@ -151,7 +151,10 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// v26 = the Kanban's Thread panel (k2:kanban@2, 0.46.1): K2's Thread look
 /// in K2 Companion's colours, `look = "garden"` to follow the Garden theme,
 /// a synced Kanban Garden moves to @2 and an own copy keeps @1.
-pub const SKILL_VERSION_ZEN: u32 = 26;
+/// v27 = k2:kanban@3 (0.46.3): the Kanban's Thread panel never moves a
+/// reader who scrolled up ("new messages" pill); a synced Kanban Garden
+/// moves to @3, an own copy keeps its board.
+pub const SKILL_VERSION_ZEN: u32 = 27;
 /// Bumped to 5 in 0.39.0: same Phase 2.1 A25 verb refresh applied to
 /// the workspace-root template body (Cli tools section, workflow
 /// docs). Was 4 since 0.32.7 (SOURCE sub-regions adoption).

@@ -18,12 +18,12 @@
 //     re-applies only this gesture's fields;
 //   - export is markdown that import reads back;
 //   - errors say what to do; the Thread panel is optional and picks nobody.
-// Both versions pass all of that. @2 also pins its Thread panel's message
+// Every version passes all of that. @2 and @3 also pin the Thread panel's message
 // flow: bubbles (yours right, the agent's left) with "author · time" and
 // markdown, Enter sends and Shift+Enter doesn't, the round Send, posts reach
 // the agent and its replies render, the working ear's state, counters and
 // clock, and K2 Companion's look by default (look = "garden" opts out).
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
 import { beforeAll, describe, expect, it } from 'vitest'
@@ -38,10 +38,13 @@ const WIDGETS = resolve(__dirname, '../../../../crates/k2-core/src/zen/builtin_w
 const LIB = resolve(__dirname, '../../zen-lib')
 // The version under test (each describe block sets it before its tests run).
 let DIR = resolve(WIDGETS, 'kanban-1')
-const read = (p: string): string => readFileSync(resolve(DIR, p), 'utf8')
+// @3 ships only the files it changed (dock.js, kanban.css); the rest are
+// @2's, as BUILTIN_WIDGETS lists them.
+const read = (p: string): string =>
+  readFileSync(existsSync(resolve(DIR, p)) ? resolve(DIR, p) : resolve(WIDGETS, 'kanban-2', p), 'utf8')
 let HTML = read('index.html')
 let SCRIPTS = ['md.js', 'kanban.js', 'picker.js', 'dock.js'].map(read)
-function useVersion(dir: 'kanban-1' | 'kanban-2'): void {
+function useVersion(dir: 'kanban-1' | 'kanban-2' | 'kanban-3'): void {
   DIR = resolve(WIDGETS, dir)
   HTML = read('index.html')
   SCRIPTS = ['md.js', 'kanban.js', 'picker.js', 'dock.js'].map(read)
@@ -337,7 +340,7 @@ async function started(f: Fake) {
   return m
 }
 
-describe.each(['kanban-1', 'kanban-2'] as const)('k2:kanban (%s)', (dir) => {
+describe.each(['kanban-1', 'kanban-2', 'kanban-3'] as const)('k2:kanban (%s)', (dir) => {
   beforeAll(() => useVersion(dir))
 
   it('is sealed-frame clean: no innerHTML, inline handlers, network or browser storage', () => {
@@ -790,8 +793,8 @@ async function openOnScout(o: { row?: Record<string, unknown>; postError?: strin
   return { f, m }
 }
 
-describe('k2:kanban@2 Thread panel (the K2 Thread look in K2 Companion colours)', () => {
-  beforeAll(() => useVersion('kanban-2'))
+describe.each(['kanban-2', 'kanban-3'] as const)('k2:kanban Thread panel (%s; the K2 Thread look in K2 Companion colours)', (dir) => {
+  beforeAll(() => useVersion(dir))
 
   it('draws bubbles: yours right and the agent’s left, "author · time" under each, markdown inside, safely', async () => {
     const { f, m } = await openOnScout()
@@ -975,3 +978,151 @@ describe('k2:kanban@2 Thread panel (the K2 Thread look in K2 Companion colours)'
     expect(b.m.win.KanbanDock.address()).toBe(SCOUT)
   })
 })
+
+// ── k2:kanban@3: the Thread panel never moves a reader who scrolled up ──
+// Rosson 2026-10-20: "When new messages come in it should just offer to see
+// those new messages down below, not jump me all over the chat." @2 rebuilt
+// the whole list on every Thread event, and WebKit (the macOS window) puts a
+// scroll box whose content was replaced back at the top. jsdom has no
+// layout, so the dock's list gets one: 300 px tall, 60 px per message (120
+// more for one marked GROWN), and replacing its content resets scrollTop to
+// 0, as WebKit does.
+
+const VIEW_PX = 300
+const ROW_PX = 60
+
+function layoutDock(m: Awaited<ReturnType<typeof started>>) {
+  const { win } = m
+  const body = m.$('#dockBody')
+  const msgs = (): HTMLElement[] => [...body.querySelectorAll<HTMLElement>('.msg')]
+  const height = (n: HTMLElement): number => ROW_PX + ((n.textContent ?? '').includes('GROWN') ? 120 : 0)
+  const total = (): number => msgs().reduce((a, n) => a + height(n), 0)
+  let top = 0
+  const max = (): number => Math.max(0, total() - VIEW_PX)
+  Object.defineProperty(body, 'clientHeight', { configurable: true, get: () => VIEW_PX })
+  Object.defineProperty(body, 'scrollHeight', { configurable: true, get: () => Math.max(VIEW_PX, total()) })
+  Object.defineProperty(body, 'scrollTop', {
+    configurable: true,
+    get: () => top,
+    set: (v: number) => {
+      top = Math.min(Math.max(0, v), max())
+    },
+  })
+  const glides: number[] = []
+  ;(body as unknown as { scrollTo: (o: { top: number }) => void }).scrollTo = (o) => {
+    glides.push(o.top)
+    body.scrollTop = o.top
+  }
+  const replace = body.replaceChildren.bind(body)
+  body.replaceChildren = (...nodes: Array<Node | string>) => {
+    replace(...nodes)
+    top = 0 // WebKit: new content starts at the top
+  }
+  const rect = (t: number, h: number): DOMRect => ({ top: t, bottom: t + h, left: 0, right: 300, width: 300, height: h, x: 0, y: t, toJSON: () => ({}) }) as DOMRect
+  const original = win.HTMLElement.prototype.getBoundingClientRect
+  win.HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+    if (this === body) return rect(0, VIEW_PX)
+    if (this.classList.contains('msg') && this.parentElement?.parentElement === body) {
+      let y = -top
+      for (const n of msgs()) {
+        if (n === this) return rect(y, height(n))
+        y += height(n)
+      }
+    }
+    return original.call(this)
+  }
+  /** The person scrolls (a wheel, then the scroll it makes). */
+  const scrollTo = (to: number): void => {
+    body.dispatchEvent(new win.Event('wheel'))
+    body.scrollTop = to
+    body.dispatchEvent(new win.Event('scroll'))
+  }
+  const firstVisible = (): { id: string | null; at: number } => {
+    const n = msgs().find((x) => x.getBoundingClientRect().bottom > 0)!
+    return { id: n.getAttribute('data-msg-id'), at: n.getBoundingClientRect().top }
+  }
+  return { body, msgs, max, glides, scrollTo, firstVisible, gap: () => max() - top }
+}
+
+const lines = (n: number, o: { grown?: number } = {}): ViewItem[] =>
+  Array.from({ length: n }, (_, i) => textItem(i + 1, i + 1 === o.grown ? `GROWN line ${i + 1}` : `line ${i + 1}`, { ago: 900 - i }))
+
+describe('k2:kanban@3 Thread panel scrolling (K2’s stick-to-bottom)', () => {
+  beforeAll(() => useVersion('kanban-3'))
+
+  it('a reader at the bottom stays there; one who scrolled up never moves, and a pill counts what came in', async () => {
+    const { f, m } = await openOnScout()
+    const d = layoutDock(m)
+    const push = (items: ViewItem[], turn: { state: string; since: number } | null = null): void => f.threadSubs[0].cb(view(items, turn))
+    const pill = m.$<HTMLButtonElement>('.dock-newer')
+
+    // Opens at the newest; a new message at the bottom glides into view.
+    push(lines(20))
+    expect(d.gap()).toBe(0)
+    push(lines(21))
+    expect(d.gap()).toBe(0)
+    expect(d.glides.at(-1)).toBe(d.max())
+    expect(pill.hidden).toBe(true)
+
+    // Scrolled up: a new message leaves the reader exactly where they are,
+    // keeps every message they were reading (no rebuild), and says so below.
+    d.scrollTo(240)
+    const reading = d.msgs()
+    const before = d.firstVisible()
+    push(lines(22))
+    expect(m.$('#dockBody').scrollTop).toBe(240)
+    expect(d.msgs().slice(0, reading.length)).toEqual(reading)
+    expect(d.firstVisible()).toEqual(before)
+    expect(pill.hidden).toBe(false)
+    expect(pill.textContent).toBe('1 new message ↓')
+    push(lines(23))
+    expect(m.$('#dockBody').scrollTop).toBe(240)
+    expect(pill.textContent).toBe('2 new messages ↓')
+
+    // An earlier message re-renders taller (an edit, a card answered): the
+    // message being read stays put on screen.
+    push(lines(23, { grown: 1 }))
+    expect(d.firstVisible()).toEqual(before)
+    // The working tab comes and goes: nothing moves.
+    push(lines(23, { grown: 1 }), { state: 'working', since: Date.now() })
+    push(lines(23, { grown: 1 }), null)
+    expect(d.firstVisible()).toEqual(before)
+    expect(pill.textContent).toBe('2 new messages ↓')
+
+    // Scrolling to the bottom by hand clears the pill; from there, new
+    // messages keep them at the bottom again.
+    d.scrollTo(d.max())
+    expect(pill.hidden).toBe(true)
+    push(lines(24, { grown: 1 }))
+    expect(d.gap()).toBe(0)
+    expect(pill.hidden).toBe(true)
+  })
+
+  it('the pill goes to the newest and clears; your own message always goes to the bottom', async () => {
+    const { f, m } = await openOnScout()
+    const d = layoutDock(m)
+    const push = (items: ViewItem[]): void => f.threadSubs[0].cb(view(items))
+    const pill = m.$<HTMLButtonElement>('.dock-newer')
+    push(lines(20))
+    d.scrollTo(0)
+    push(lines(22))
+    expect(m.$('#dockBody').scrollTop).toBe(0)
+    expect(pill.textContent).toBe('2 new messages ↓')
+    pill.click()
+    expect(d.gap()).toBe(0)
+    expect(pill.hidden).toBe(true)
+
+    // Scrolled up, you send: the list goes to the bottom, and your own
+    // message coming back is no "new message".
+    d.scrollTo(60)
+    const text = m.$<HTMLTextAreaElement>('#dockText')
+    m.type(text, 'Take the Doing column')
+    text.dispatchEvent(new m.win.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    expect(d.gap()).toBe(0)
+    await until('posted', () => f.posts.length === 1)
+    push([...lines(22), textItem(101, 'Take the Doing column', { mine: true })])
+    expect(d.gap()).toBe(0)
+    expect(pill.hidden).toBe(true)
+  })
+})
+

@@ -453,7 +453,7 @@ saves). `k2 zen guide services` has every rule; `k2 study garden-data` is your s
   nothing). History: `k2 store export --widget <w> --at <YYYY-MM-DD>`.\n\
 - The example: `k2 zen guide example board-lite` (a sticky-note board in its data, and\n\
   the agent's `bin/board-lite` beside it).\n\
-- **The Kanban Garden** (`k2:kanban@2`, New Garden → Kanban) keeps its board in\n\
+- **The Kanban Garden** (`k2:kanban@3`, New Garden → Kanban) keeps its board in\n\
   `data:k2:kanban`, one board per Garden under `board/<garden id>/` (its **For agents**\n\
   button shows the exact prefix `<p>`): `<p>col/<id>` = `{name, order}`, `<p>card/<id>` =\n\
   `{title, note, col, order}` (`col` is a column's `<id>`, `note` is markdown, lower\n\
@@ -465,7 +465,9 @@ saves). `k2 zen guide services` has every rule; `k2 study garden-data` is your s
   markdown, a round Send: Enter sends, Shift+Enter is a new line; the working tab with\n\
   counters and a clock). It wears K2 Companion's colours in light and dark; to follow\n\
   the Garden's theme instead, set `look = \"garden\"` under `[widget.props.config]`.\n\
-  A Kanban Garden that syncs with K2's default moves to `@2`; an own copy keeps `@1`.\n\n",
+  A message never moves a person who scrolled up; a \"new messages\" pill counts it.\n\
+  A Kanban Garden that syncs with K2's default moves to `@3`; an own copy keeps its board\n\
+  (`@1` or `@2`).\n\n",
     )
 }
 
@@ -1031,7 +1033,7 @@ mod tests {
         let s = generate_k2_zen_skill();
         for needle in [
             "cards (the Diary, the Kanban, start with the default, or start empty and ask you)",
-            "**The Kanban Garden** (`k2:kanban@2`, New Garden → Kanban)",
+            "**The Kanban Garden** (`k2:kanban@3`, New Garden → Kanban)",
             "`data:k2:kanban`, one board per Garden under `board/<garden id>/`",
             "`<p>card/<id>` =\n`{title, note, col, order}`",
             "k2 store put --widget k2:kanban <p>card/<new-id>",
@@ -1049,15 +1051,26 @@ mod tests {
     fn skill_documents_the_kanban_thread_panel() {
         assert!(crate::skills::version::SKILL_VERSION_ZEN >= 26, "k2:kanban@2 needs a new skill version");
         let s = generate_k2_zen_skill();
-        assert!(!s.contains("k2:kanban@1`, New Garden"), "New Garden makes @2");
+        assert!(!s.contains("k2:kanban@1`, New Garden") && !s.contains("k2:kanban@2`, New Garden"), "New Garden makes @3");
         for needle in [
             "Its **Thread** button opens a panel to talk to one agent beside the board",
             "your bubbles right, the agent's left",
             "Enter sends, Shift+Enter is a new line",
             "K2 Companion's colours in light and dark",
             "set `look = \"garden\"` under `[widget.props.config]`",
-            "an own copy keeps `@1`",
+            "an own copy keeps its board\n(`@1` or `@2`)",
         ] {
+            assert!(s.contains(needle), "the k2-zen skill must say {needle:?}");
+        }
+    }
+
+    /// v27: k2:kanban@3 (0.46.3, Rosson 2026-10-20): New Garden makes @3,
+    /// whose Thread panel never moves a reader who scrolled up.
+    #[test]
+    fn skill_documents_the_kanban_3_scrolling() {
+        assert!(crate::skills::version::SKILL_VERSION_ZEN >= 27, "k2:kanban@3 needs a new skill version");
+        let s = generate_k2_zen_skill();
+        for needle in ["A message never moves a person who scrolled up; a \"new messages\" pill counts it.", "moves to `@3`"] {
             assert!(s.contains(needle), "the k2-zen skill must say {needle:?}");
         }
     }

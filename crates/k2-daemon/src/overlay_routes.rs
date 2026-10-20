@@ -3464,8 +3464,8 @@ mod tests {
         assert_eq!(refused_code(&g.post("board", Some(g.origin("b1", "board")))), "widget_cap_missing");
     }
 
-    /// 0.46.1 (Rosson 2026-10-18): the Kanban's message flow on
-    /// `k2:kanban@2`. A Kanban Garden from New Garden places the new board;
+    /// 0.46.1 (Rosson 2026-10-18): the Kanban's message flow on its newest
+    /// board (`k2:kanban@2` then, `k2:kanban@3` since 0.46.3). A Kanban Garden from New Garden places the new board;
     /// its Thread panel's post (placement `board`, the frame's hash) reaches
     /// the agent as the person's (`via=compose`, the widget's label kept),
     /// and the agent's reply comes back in the same Thread the panel reads,
@@ -3478,7 +3478,7 @@ mod tests {
         assert_eq!(kanban.template, k2_core::zen::garden_catalog::KANBAN_TEMPLATE_ID);
         let latest = k2_core::zen::builtin_widgets::KANBAN_WIDGET_LATEST;
         let hash = g.f.garden_widget_status(&kanban.id, latest).hash().to_string();
-        assert_eq!(hash.len(), 64, "k2:kanban@2 bundles clean");
+        assert_eq!(hash.len(), 64, "the newest Kanban bundles clean");
         let origin = serde_json::json!({"widget": latest, "garden": kanban.id, "placement": "board", "hash": hash});
         let post = g.post("Can you take the Doing column?", Some(origin));
         assert_eq!(post.status, "200 OK", "{}", post.body);
@@ -3524,7 +3524,7 @@ mod tests {
         let old_hash = g.f.garden_widget_status(&old.id, one).hash().to_string();
         let post = g.post("from the old board", Some(serde_json::json!({"widget": one, "garden": old.id, "placement": "board", "hash": old_hash})));
         assert_eq!(post.status, "200 OK", "{}", post.body);
-        // A @2 frame can't claim the @1 copy's placement.
+        // The newest frame can't claim the @1 copy's placement.
         let wrong = serde_json::json!({"widget": latest, "garden": old.id, "placement": "board", "hash": hash});
         assert_eq!(refused_code(&g.post("wrong frame", Some(wrong))), "widget_not_approved");
     }

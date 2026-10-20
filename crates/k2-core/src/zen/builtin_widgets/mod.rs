@@ -39,8 +39,13 @@ pub const KANBAN_WIDGET: &str = "k2:kanban@1";
 /// The Kanban every new Kanban Garden uses (Rosson 2026-10-18, for 0.46.1):
 /// @1's board with the Thread panel in K2's Thread look (bubbles, "author ·
 /// time", round Send, the working ear) and K2 Companion's colours as its
-/// default. `kanban-2.toml` moves the template to it; an own copy keeps @1.
-pub const KANBAN_WIDGET_LATEST: &str = "k2:kanban@2";
+/// default. `kanban-2.toml` moved the template to it; an own copy keeps @1.
+/// @3 (Rosson 2026-10-20, for 0.46.3): @2 with K2's stick-to-bottom in the
+/// Thread panel. A message arriving never moves a reader who scrolled up
+/// (WebKit reset @2's rebuilt list to the top); a "new messages" pill
+/// counts what came in below. `kanban-3.toml` moves the template; an own
+/// copy keeps the board it has.
+pub const KANBAN_WIDGET_LATEST: &str = "k2:kanban@3";
 
 /// The prefix every built-in widget name starts with.
 pub const BUILTIN_PREFIX: &str = "k2:";
@@ -177,6 +182,24 @@ pub const BUILTIN_WIDGETS: &[BuiltinWidget] = &[
             ("dock.js", include_str!("kanban-2/dock.js")),
         ],
     },
+    // The Kanban's third version (0.46.3, Rosson 2026-10-20): @2 with the
+    // Thread panel patched in place instead of rebuilt, K2's stick-to-bottom
+    // (hooks/useStickToBottom.ts) and a "new messages" pill. Only dock.js and
+    // kanban.css are new; the rest is @2's file, byte for byte. `kanban-2/`
+    // stays as shipped.
+    BuiltinWidget {
+        name: "kanban",
+        version: 3,
+        files: &[
+            ("manifest.json", include_str!("kanban-2/manifest.json")),
+            ("index.html", include_str!("kanban-2/index.html")),
+            ("kanban.css", include_str!("kanban-3/kanban.css")),
+            ("md.js", include_str!("kanban-2/md.js")),
+            ("kanban.js", include_str!("kanban-2/kanban.js")),
+            ("picker.js", include_str!("kanban-2/picker.js")),
+            ("dock.js", include_str!("kanban-3/dock.js")),
+        ],
+    },
     // The data-source cards' second version (0.46.1): several sources per
     // card (config.source + config.sources, merged by item key), "soft crit
     // 2/3", named lists, K2 Web's ops shapes, and a refused subscription
@@ -268,6 +291,7 @@ pub const BUILTIN_WIDGET_HASHES: &[(&str, &str)] = &[
     ("k2:deploys@2", "77bdf1a576a2a3b10acd7337d179200ffdf0bab81fe8f7a8666bbf5147c2a640"),
     ("k2:money-alerts@2", "aff2ee34006f71436793145e1989623349a82b6d538beb34d51e94074b69a5c7"),
     ("k2:kanban@2", "8ac36405d18351d0bb52a8f71426dffb32ad99831bcfd9b7c87e4b017d0c7884"),
+    ("k2:kanban@3", "e9aae003a07e3d4e17e39738b376aab6ab7556250cd3a6e662211521e8425682"),
 ];
 
 /// The hash [`BUILTIN_WIDGET_HASHES`] pins.
@@ -615,12 +639,11 @@ mod tests {
     /// markdown, a round Send, Enter sends and Shift+Enter is a new line, the
     /// working ear with its counters and clock) and K2 Companion's colours by
     /// default, light and dark from the Garden's scheme; `look = "garden"`
-    /// still follows the Garden theme's --zen-* tokens. The bare
-    /// `k2:kanban` is @2 now; @1 still resolves for own copies.
+    /// still follows the Garden theme's --zen-* tokens. @2 still resolves
+    /// for own copies (the bare `k2:kanban` is @3 since 0.46.3).
     #[test]
     fn the_kanban_2_wears_the_thread_look_in_k2_companion_colours() {
-        assert_eq!(builtin_widget(&parse_widget_ref("k2:kanban").expect("parses")).map(|w| w.id()).as_deref(), Some(KANBAN_WIDGET_LATEST));
-        let w = builtin_widget(&parse_widget_ref(KANBAN_WIDGET_LATEST).expect("parses")).expect("k2:kanban@2 ships");
+        let w = builtin_widget(&parse_widget_ref("k2:kanban@2").expect("parses")).expect("k2:kanban@2 ships");
         clean_kanban(w);
         let one = builtin_widget(&parse_widget_ref(KANBAN_WIDGET).expect("parses")).expect("k2:kanban@1 ships");
         // The board itself is @1's, byte for byte; the panel is new.
@@ -687,6 +710,48 @@ mod tests {
         }
         // No chamfers or square Style: K2 Companion is round.
         assert!(!css.contains("clip-path") && !css.contains("chamfer"), "no chamfered corners");
+    }
+
+    /// k2:kanban@3 (Rosson 2026-10-20, for 0.46.3): @2's widget with only
+    /// the Thread panel's scrolling changed. A message arriving while the
+    /// reader is scrolled up leaves them where they are (the list is patched,
+    /// never rebuilt: WebKit put @2's rebuilt list back at the top) and a
+    /// "new messages" pill counts it; at the bottom they stay pinned (K2's
+    /// stick-to-bottom). The bare `k2:kanban` is @3.
+    #[test]
+    fn the_kanban_3_keeps_a_scrolled_up_reader_in_place() {
+        assert_eq!(KANBAN_WIDGET_LATEST, "k2:kanban@3");
+        assert_eq!(builtin_widget(&parse_widget_ref("k2:kanban").expect("parses")).map(|w| w.id()).as_deref(), Some(KANBAN_WIDGET_LATEST));
+        let w = builtin_widget(&parse_widget_ref(KANBAN_WIDGET_LATEST).expect("parses")).expect("k2:kanban@3 ships");
+        clean_kanban(w);
+        let two = builtin_widget(&parse_widget_ref("k2:kanban@2").expect("parses")).expect("k2:kanban@2 ships");
+        // Everything but the panel's scrolling is @2's, byte for byte.
+        for f in ["manifest.json", "index.html", "md.js", "kanban.js", "picker.js"] {
+            assert_eq!(file(w, f), file(two, f), "{f} is @2's");
+        }
+        let js = file(w, "dock.js");
+        assert!(!js.contains("bodyEl.replaceChildren(list)"), "dock.js rebuilds the whole list on every message");
+        for needle in [
+            "var STICK_PX = 32",
+            "function pin(smooth)",
+            "function anchorNow()",
+            "keepAnchor(anchor)",
+            "listEl.replaceChild(node, had.node)",
+            "new ResizeObserver(sync)",
+            "'dock-newer'",
+            "stickNext = true",
+            "known = seenNow",
+        ] {
+            assert!(js.contains(needle), "dock.js lost {needle}");
+        }
+        let css = file(w, "kanban.css");
+        assert!(css.contains(".dock-newer {"), "kanban.css has no new-messages pill");
+        assert!(css.contains(".dock-foot { position: relative;"), "the pill sits on the foot");
+        // The rest of the look is @2's: @3's CSS is @2's plus the pill.
+        let base = file(two, "kanban.css");
+        for line in base.lines().filter(|l| !l.starts_with(".dock-foot") && !l.starts_with("/* Kanban (k2:kanban@2)")) {
+            assert!(css.contains(line), "kanban.css lost @2's {line}");
+        }
     }
 
     /// What every Kanban version keeps: a clean custom widget that keeps its

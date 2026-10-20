@@ -17,6 +17,8 @@
 #   7. upgrade sends tarballPath + mediaTarballPath, waits on /cli/sew/status
 #      until the result, exits 0 only on "done"; a refusal exits 3 with
 #      upgradeProgress.lastError (the reason) on stderr.
+#   9. S30: config lists approvals.by and `config set approvals.by` goes to
+#      the approvals policy (chat_cli.sh covers people/approvals/act-as).
 #   8. Voice flags (--voice, --voice-url, --node-ip) outside enable, and
 #      --media-tarball outside enable/upgrade/rollback, exit 2 before any
 #      request (they used to be dropped silently).
@@ -64,6 +66,11 @@ assert_contains "help: identity is fixed" "$out" "changing it later means a fres
 assert_contains "help: voice url" "$out" "k2 hostchat media url <wss://HOST>"
 assert_contains "help: users invite" "$out" "k2 hostchat users invite <name|email>"
 assert_contains "help: manage sew" "$out" "chat_manage on"
+assert_contains "help: people" "$out" "k2 hostchat people list"
+assert_contains "help: approvals" "$out" "k2 hostchat approvals approve <out_…>"
+assert_contains "help: approvals.by" "$out" "config set approvals.by people|people+agents"
+assert_contains "help: act-as" "$out" "act-as allow <workspace>"
+assert_contains "help: agents alias" "$out" "alias of k2 chat access"
 eval "$(sed -n '/^# BEGIN_CLI_TOOL_POLICY/,/^# END_CLI_TOOL_POLICY/p' "$K2_CLI")"
 assert_eq "catalog: hostchat tool id" "$(_cli_tool_id_for_verb hostchat)" "hostchat"
 assert_eq "catalog: hostchat is an id tool" "$(_cli_tool_default_mode hostchat)" "id"
@@ -72,7 +79,8 @@ schema="$(env HOME="$HOME1" "$K2_CLI" --schema)"
 python3 -c '
 import json, sys
 names = {c["name"] for c in json.loads(sys.argv[1])["commands"]}
-for n in ("hostchat", "hostchat enable", "hostchat media", "hostchat users", "hostchat config"):
+for n in ("hostchat", "hostchat enable", "hostchat media", "hostchat users", "hostchat config",
+          "hostchat people", "hostchat approvals", "hostchat agents", "hostchat act-as", "hostchat log"):
     assert n in names, n
 ' "$schema" && ok "schema lists the hostchat verbs" || bad "schema lists the hostchat verbs"
 
@@ -179,6 +187,10 @@ class H(BaseHTTPRequestHandler):
                 status, out = 409, {"ok": False, "error": {"code": "username_taken", "hint": "that username is taken"}}
             else:
                 out = user(b.get("user"), b.get("role") or ("owner" if verb == "owner" else "member"))
+        elif p == "/cli/sew/approvals/policy":
+            out = {"ok": True, "approvalsBy": "people", "canChange": True, "allowed": ["people", "people+agents"]}
+        elif p == "/cli/sew/approvals/policy/set":
+            out = {"ok": True, "approvalsBy": b.get("approvalsBy")}
         elif p == "/cli/sew/users":
             out = {"ok": True, "users": [{"username": "rosson", "installRole": "owner", "kind": "person", "displayName": "Rosson"},
                                          {"username": "bob", "installRole": "member", "kind": "person", "deactivated": True}]}
@@ -363,8 +375,23 @@ run owner hostchat config --setup-url https://hearth.box.example.test/setup
 assert_eq "--setup-url → exit 2" "$rc" "2"
 assert_contains "--setup-url says links follow the public URL" "$err" "<public-url>/setup"
 assert_eq "--setup-url sends nothing" "$(nreq)" "$before"
+run owner hostchat config bogus
+assert_eq "config with a stray word → exit 2" "$rc" "2"
 run owner hostchat config
-assert_eq "config without a key → exit 2" "$rc" "2"
+assert_eq "config (no args) lists the keys" "$rc/$(req_where /cli/sew/approvals/policy method)" "0/GET"
+assert_contains "config shows approvals.by" "$out" "approvals.by         people"
+run owner hostchat config set approvals.by people+agents
+assert_eq "config set approvals.by → the approvals policy" "$(req_where /cli/sew/approvals/policy/set body)" '{"approvalsBy": "people+agents"}'
+run owner hostchat config set default_space hearth
+assert_eq "config set default_space → the approvals policy" "$rc/$(req_where /cli/sew/approvals/policy/set body)" '0/{"defaultSpace": "hearth"}'
+run owner hostchat config set default_space
+assert_eq "config set default_space without a value → exit 2" "$rc" "2"
+run owner hostchat config
+assert_contains "config shows default_space" "$out" "default_space"
+run owner hostchat config set server.public_url https://hearth.box.example.test
+assert_eq "config set server.public_url = --public-url" "$(req_where /cli/sew/server/config body)" '{"publicUrl": "https://hearth.box.example.test"}'
+run owner hostchat config set link_previews off
+assert_eq "config set: unknown key → exit 2" "$rc" "2"
 
 echo "== users =="
 run owner hostchat users owner rosson --display-name "Rosson Long"

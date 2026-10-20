@@ -14,6 +14,7 @@ import { fakeSources, fixtureView, settle } from './zen-sources-fixtures'
 import { projectZenRow, projectZenThreadItem, ZEN_WIDGET_ROW_KEYS } from './zen-custom-projection'
 import { ZenCanvasError } from './zen-canvas'
 import { ZenWidgetError } from './zen-widget-routes'
+import { ZenThreadVerbError } from './zen-thread-files'
 import type { OverlayThreadItem } from '@/components/SessionView/overlayThread'
 
 function row(address: string, over: Partial<ZenAgentRow> = {}): ZenAgentRow {
@@ -870,5 +871,219 @@ describe('Garden v3: sources.* verbs', () => {
       expect(t.layer.held).toBe(0)
       expect(t.timers.size).toBe(0)
     })
+  })
+})
+
+// ── 0.46.3 Thread parity (Rosson 2026-10-20): the Garden bridge gets what
+// the desktop Thread has: attachments, thumbs, links, the picker, read
+// state and delta reads. Nothing a widget gets carries a host path.
+describe('Thread parity (catalog v16): the new verbs through the layer', () => {
+  const ORIGIN = { widget: 'agent-arcade', garden: 'g-test0001', placement: 'arcade', hash: 'h1' }
+
+  it('thread.post takes only {attachments}: up to 10 {relPath, line?, lineEnd?}; files alone are a message', async () => {
+    const h = harness()
+    const layer = createZenCustomLayer(h.deps)
+    const files = [{ relPath: 'shots/a.png' }, { relPath: 'src/x.ts', line: 3, lineEnd: 9 }]
+    expect(await call(layer, 'thread.post', 'alice::local', '', { attachments: files })).toMatchObject({ ok: true })
+    expect(h.calls).toEqual([{ verb: 'thread.post', args: ['alice::local', '', { origin: ORIGIN, attachments: files }] }])
+    // Still never paths, uploads or anything else beside attachments.
+    for (const opts of [{ paths: ['/etc/hosts'] }, { files: [] }, { attachments: files, paths: ['/x'] }, { origin: { hash: 'x' } }, 'a.png']) {
+      expect(code(await call(layer, 'thread.post', 'alice::local', 'see', opts)), JSON.stringify(opts)).toBe('failed')
+    }
+    for (const attachments of [
+      'a.png',
+      [{ path: '/etc/hosts' }],
+      [{ relPath: '' }],
+      [{ relPath: 'a', line: 0 }],
+      [{ relPath: 'a', lineEnd: 1.5 }],
+      Array.from({ length: 11 }, () => ({ relPath: 'a' })),
+    ]) {
+      expect(code(await call(layer, 'thread.post', 'alice::local', 'see', { attachments })), JSON.stringify(attachments)).toBe('bad_args')
+    }
+    expect(code(await call(layer, 'thread.post', 'alice::local', '  ', { attachments: [] }))).toBe('failed')
+    expect(h.calls).toHaveLength(1)
+  })
+
+  it('Thread items keep their attachments as ThreadFile: no path or hash; hidden is {kind, state}', () => {
+    const it0: OverlayThreadItem = {
+      collection: 'thread',
+      seq: 4,
+      id: 'm4',
+      doc: {
+        id: 'm4',
+        kind: 'text',
+        from: 'alice',
+        body: 'see the shot',
+        via: 'agent',
+        attachments: [
+          { kind: 'file', state: 'ok', path: 'shots/a.png', name: 'a.png', size: 120, mime: 'image/png', modifiedAt: 5, sha256: 'ab' },
+          { kind: 'file', state: 'changed', path: 'src/x.ts', name: 'x.ts', line: 3, lineEnd: 9 },
+          { kind: 'file', state: 'gone', path: 'old.txt', name: 'old.txt' },
+          { kind: 'file', state: 'hidden', name: 'leak.txt', size: 1, path: 'secret/leak.txt' },
+        ],
+      },
+    }
+    const p = projectZenThreadItem(it0)
+    expect(p?.doc).toMatchObject({
+      attachments: [
+        { kind: 'file', state: 'ok', name: 'a.png', size: 120, mime: 'image/png', modifiedAt: 5 },
+        { kind: 'file', state: 'changed', name: 'x.ts', line: 3, lineEnd: 9 },
+        { kind: 'file', state: 'gone', name: 'old.txt' },
+        { kind: 'file', state: 'hidden' },
+      ],
+    })
+    const json = JSON.stringify(p)
+    expect(json).not.toMatch(/"path"|sha256|secret\/leak|leak\.txt/)
+    // A message without files has no attachments key (the shape older widgets read).
+    expect('attachments' in (projectZenThreadItem({ ...it0, doc: { ...it0.doc, attachments: null } })?.doc ?? {})).toBe(false)
+  })
+
+  it('thread.read afterSeq answers a projected delta; with beforeSeq or below 0 it is bad_args', async () => {
+    const seen: unknown[] = []
+    const h = harness({}, {
+      'thread.read': (_a, opts) => {
+        seen.push(opts)
+        return Promise.resolve({
+          items: [
+            {
+              collection: 'thread',
+              seq: 8,
+              id: 'm8',
+              conversation_id: 'session-1',
+              doc: { id: 'm8', kind: 'text', from: 'alice', body: 'new', via: 'agent', attachments: [{ kind: 'file', state: 'ok', path: 'a.png', name: 'a.png' }] },
+            },
+          ],
+          hasMore: false,
+          changed: [{ collection: 'thread', seq: 3, id: 'c3', doc: { id: 'c3', kind: 'tool', from: 'alice' } }],
+          removed: [{ id: 'm2', seq: 2 }],
+        })
+      },
+    })
+    const layer = createZenCustomLayer(h.deps)
+    const r = await call(layer, 'thread.read', 'alice::local', { afterSeq: 7, limit: 500 })
+    expect(r).toEqual({
+      id: 1,
+      ok: true,
+      value: {
+        items: [
+          {
+            seq: 8,
+            id: 'm8',
+            doc: { id: 'm8', kind: 'text', from: 'alice', to: null, body: 'new', via: 'agent', choice: null, attachments: [{ kind: 'file', state: 'ok', name: 'a.png' }] },
+          },
+        ],
+        hasMore: false,
+        changed: [],
+        removed: [{ id: 'm2', seq: 2 }],
+      },
+    })
+    expect(seen).toEqual([{ afterSeq: 7, limit: 100 }])
+    expect(code(await call(layer, 'thread.read', 'alice::local', { afterSeq: 7, beforeSeq: 3 }))).toBe('bad_args')
+    expect(code(await call(layer, 'thread.read', 'alice::local', { afterSeq: -1 }))).toBe('bad_args')
+    expect(code(await call(layer, 'thread.read', 'alice::local', { afterSeq: '7' }))).toBe('bad_args')
+    expect(seen).toHaveLength(1)
+  })
+
+  it('thread.markRead answers {changed, lastReadSeq, lastSeq, unread}; a bad seq is bad_args', async () => {
+    const h = harness({}, {
+      'thread.markRead': () => Promise.resolve({ changed: true, lastReadSeq: 9, lastSeq: 9, unread: 0, conversation_id: 'session-1', waiting: 2 }),
+    })
+    const layer = createZenCustomLayer(h.deps)
+    expect(await call(layer, 'thread.markRead', 'alice::local', { seq: 9 })).toEqual({
+      id: 1,
+      ok: true,
+      value: { changed: true, lastReadSeq: 9, lastSeq: 9, unread: 0 },
+    })
+    expect(code(await call(layer, 'thread.markRead', 'alice::local', { seq: -1 }))).toBe('bad_args')
+    expect(code(await call(layer, 'thread.markRead', 'alice::local', 5))).toBe('bad_args')
+    expect(code(await call(layer, 'thread.markRead', 'nobody::local'))).toBe('not_bound')
+    expect(h.calls).toEqual([{ verb: 'thread.markRead', args: ['alice::local', { seq: 9 }] }])
+  })
+
+  it('thread.attachment: checked args, a projected answer, and a too_large refusal kept', async () => {
+    let n = 0
+    const h = harness({}, {
+      'thread.attachment': () => {
+        n += 1
+        if (n === 2) return Promise.reject(new ZenThreadVerbError('too_large', 'preview_too_large'))
+        return Promise.resolve({ kind: 'image', mime: 'image/png', base64: 'AAAA', width: 10, height: 10, path: 'a.png', sha256: 'x' })
+      },
+    })
+    const layer = createZenCustomLayer(h.deps)
+    expect(await call(layer, 'thread.attachment', 'alice::local', 'm4', 0, { mode: 'thumb', px: 512 })).toEqual({
+      id: 1,
+      ok: true,
+      value: { kind: 'image', mime: 'image/png', base64: 'AAAA', width: 10, height: 10 },
+    })
+    expect(code(await call(layer, 'thread.attachment', 'alice::local', 'm4', 0, { mode: 'preview' }))).toBe('too_large')
+    const bad: unknown[][] = [['', 0], ['m4', -1], ['m4', 0, { mode: 'raw' }], ['m4', 0, { px: 9000 }], ['m4', 0, { path: '/etc' }]]
+    for (const args of bad) {
+      expect(code(await call(layer, 'thread.attachment', 'alice::local', ...args)), JSON.stringify(args)).toBe('bad_args')
+    }
+    expect(n).toBe(2)
+  })
+
+  it('thread.links: the host path and root never cross; over 200 is bad_args', async () => {
+    const h = harness({}, {
+      'thread.links': () =>
+        Promise.resolve({
+          root: '/Users/me/ws',
+          links: [
+            { input: 'src/a.ts:3', linkable: true, kind: 'file', rel: 'src/a.ts', path: '/Users/me/ws/src/a.ts', root: '/Users/me/ws' },
+            { input: '/etc/hosts', linkable: false },
+          ],
+        }),
+    })
+    const layer = createZenCustomLayer(h.deps)
+    const r = await call(layer, 'thread.links', 'alice::local', ['src/a.ts:3', '/etc/hosts'])
+    expect(r).toEqual({
+      id: 1,
+      ok: true,
+      value: { links: [{ input: 'src/a.ts:3', linkable: true, rel: 'src/a.ts', kind: 'file' }, { input: '/etc/hosts', linkable: false }] },
+    })
+    expect(JSON.stringify(r)).not.toContain('/Users/me')
+    expect(code(await call(layer, 'thread.links', 'alice::local', Array.from({ length: 201 }, () => 'a/b.ts')))).toBe('bad_args')
+    expect(code(await call(layer, 'thread.links', 'alice::local', 'src/a.ts'))).toBe('bad_args')
+  })
+
+  it('thread.open passes only {docId, n} or {rel, line}', async () => {
+    const h = harness({}, { 'thread.open': () => Promise.resolve({ opened: true, path: '/Users/me/x' }) })
+    const layer = createZenCustomLayer(h.deps)
+    expect(await call(layer, 'thread.open', 'alice::local', { docId: 'm4', n: 1 })).toEqual({ id: 1, ok: true, value: { opened: true } })
+    expect(await call(layer, 'thread.open', 'alice::local', { rel: 'src/a.ts', line: 3, extra: 'x' })).toMatchObject({ ok: true })
+    for (const t of [null, {}, { docId: 'm4' }, { rel: '' }, { rel: 'a', line: 0 }]) {
+      expect(code(await call(layer, 'thread.open', 'alice::local', t)), JSON.stringify(t)).toBe('bad_args')
+    }
+    expect(h.calls.map((c) => c.args[1])).toEqual([{ docId: 'm4', n: 1 }, { rel: 'src/a.ts', line: 3 }])
+  })
+
+  it('thread.pickFiles needs the person’s press, opens one picker at a time, and answers relPaths only', async () => {
+    let pressed = false
+    let release: (v: unknown) => void = () => undefined
+    const h = harness({ gesture: () => pressed }, {
+      'thread.pickFiles': () =>
+        new Promise((resolve) => {
+          release = resolve
+        }),
+    })
+    const layer = createZenCustomLayer(h.deps)
+    expect(code(await call(layer, 'thread.pickFiles', 'alice::local'))).toBe('failed')
+    expect(h.calls).toEqual([])
+    pressed = true
+    const first = layer.handle({ id: 5, verb: 'thread.pickFiles', args: ['alice::local'] })
+    for (let i = 0; i < 5; i++) await Promise.resolve()
+    expect(code(await call(layer, 'thread.pickFiles', 'alice::local'))).toBe('rate_limited')
+    release({ files: [{ relPath: 'notes/plan.md', name: 'plan.md', path: '/Users/me/notes/plan.md' }, { name: 'no-rel' }] })
+    expect(await first).toEqual({ id: 5, ok: true, value: { files: [{ relPath: 'notes/plan.md', name: 'plan.md' }] } })
+    // Cancel: no files.
+    const h2 = harness({}, { 'thread.pickFiles': () => Promise.resolve({ files: [] }) })
+    expect(await call(createZenCustomLayer(h2.deps), 'thread.pickFiles', 'alice::local')).toEqual({ id: 1, ok: true, value: { files: [] } })
+  })
+
+  it('an older server’s refusal keeps its code (verb_unavailable)', async () => {
+    const h = harness({}, {
+      'thread.links': () => Promise.reject(new ZenThreadVerbError('verb_unavailable', 'box is older')),
+    })
+    expect(code(await call(createZenCustomLayer(h.deps), 'thread.links', 'alice::local', ['a/b.ts']))).toBe('verb_unavailable')
   })
 })

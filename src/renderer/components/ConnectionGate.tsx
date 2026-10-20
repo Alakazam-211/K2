@@ -42,10 +42,22 @@
  * [[project_daemon_handshake_contract]].
  */
 import React, { useEffect, useRef, useState } from 'react'
-import { getDaemonWs, invalidateDaemonWs, daemonHttpBase } from '@/kessel/daemon-ws'
+import { getDaemonWs, invalidateDaemonWs, daemonHttpBase, LOCAL_DAEMON_HOST } from '@/kessel/daemon-ws'
+import {
+  bootStatusUrl,
+  bootViewOf,
+  isPartialBootView,
+  nextAirgap,
+  nextKnownVersion,
+  protocolInRange,
+  shouldRetryWithoutToken,
+  tokenNotAccepted,
+  webBundleReloadUrl,
+} from '@/lib/boot-status-view'
 import { useConnectHostStore, activeHostKey, type ConnectHost } from '@/stores/connect-host'
 import { installHostSessionSync } from '@/lib/host-pool-instance'
 import { reviveRemoteSession } from '@/lib/remote-session'
+import { isWebClient } from '@/lib/is-web'
 import { withCliTokenQuery, withDaemonFetch } from '@/web/session-token'
 import {
   deriveRecovery,
@@ -85,10 +97,18 @@ import {
  *  accepted polls proves the daemon restarted even when the drop window
  *  fell between health ticks. */
 interface DaemonBootStatus {
-  version: string
+  /** 0.46.3+: `public` | `compat` | `full` (absent on older daemons, which
+   *  always answer their full body). A partial view lacks `version`,
+   *  `detail` and (public) `features` — see lib/boot-status-view. */
+  view?: string
+  /** Absent in the `public` (ghost) view. */
+  version?: string
   protocol: number
+  /** 0.46.3+: the oldest contract the daemon still serves. */
+  protocolMin?: number
   phase: string // 'starting' | 'migrating' | 'ready' | 'error' | future
-  detail: string
+  /** Absent in the `public` / `compat` views. */
+  detail?: string
   instanceId?: string
   airgap?: { enabled: boolean }
   listen?: { lan: boolean }
@@ -267,7 +287,7 @@ export function localPairedPolicy(expectedVersion: string | null): AcceptancePol
       if (status.phase !== 'ready') {
         // Correct daemon, still finishing first-boot migrations. Show the
         // user what's happening instead of a blank screen.
-        return { kind: 'migrating', detail: status.detail }
+        return { kind: 'migrating', detail: status.detail ?? '' }
       }
       return { kind: 'accept' }
     },
@@ -299,8 +319,16 @@ export function remoteHostPolicy(): AcceptancePolicy {
           reason: `remote protocol ${status.protocol} < min ${MIN_COMPATIBLE_PROTOCOL}`,
         }
       }
+      // 0.46.3+: the daemon names the oldest contract it still serves
+      // (`protocolMin`). A daemon that dropped ours needs a newer K2 here.
+      if (!protocolInRange(status)) {
+        return {
+          kind: 'wait',
+          reason: `remote serves protocol ${status.protocolMin ?? '?'}–${status.protocol}; this K2 speaks 1`,
+        }
+      }
       if (status.phase !== 'ready') {
-        return { kind: 'migrating', detail: status.detail }
+        return { kind: 'migrating', detail: status.detail ?? '' }
       }
       return { kind: 'accept' }
     },
@@ -336,7 +364,7 @@ async function getAppVersion(): Promise<string | null> {
  * behavior is unchanged outside the wedge detector.
  */
 export type BootProbeResult =
-  | { kind: 'ok'; status: DaemonBootStatus }
+  | { kind: 'ok'; status: DaemonBootStatus; tokenSent: boolean }
   | { kind: 'http'; httpStatus: number }
   | { kind: 'network' }
 
@@ -354,9 +382,22 @@ export async function fetchBootStatus(timeoutMs = 2000): Promise<BootProbeResult
     // /boot-status. For 'local' this is byte-identical to before
     // (host === '127.0.0.1').
     const creds = await getDaemonWs(primaryScope())
-    const resp = await fetch(`${daemonHttpBase(creds)}/boot-status`, {
+    // PRD boot-status-ghost (0.46.3): a REMOTE host gets its own token
+    // (`?token=`, like every remote `/cli` call) so the daemon answers the
+    // full body; a stranger's view lacks version/features. Local is
+    // loopback (always full) and stays byte-identical.
+    const tokenSent = creds.host !== LOCAL_DAEMON_HOST && !!creds.token
+    const base = daemonHttpBase(creds)
+    let resp = await fetch(bootStatusUrl(base, tokenSent ? creds.token : null), {
       signal: AbortSignal.timeout(timeoutMs),
     })
+    let sentToken = tokenSent
+    if (shouldRetryWithoutToken(tokenSent, resp.status)) {
+      // A ≤0.46.2 daemon 403s a must-change-password session on every
+      // path: retry once without the token (that daemon's body is full).
+      sentToken = false
+      resp = await fetch(bootStatusUrl(base, null), { signal: AbortSignal.timeout(timeoutMs) })
+    }
     if (!resp.ok) {
       // 404 ⇒ pre-0.39.5 daemon (no /boot-status route) — OR the wedged
       // pool's tunnel-edge 404. Re-read the port file next poll in case a
@@ -372,8 +413,10 @@ export async function fetchBootStatus(timeoutMs = 2000): Promise<BootProbeResult
     }
     const status = (await resp.json()) as DaemonBootStatus
     noteRemoteBootOk()
-    setConnectedAirgap(status.airgap?.enabled === true)
-    return { kind: 'ok', status }
+    // No clobber (B3): a stranger's view without `airgap` keeps the flag.
+    const airgap = nextAirgap(status)
+    if (airgap !== undefined) setConnectedAirgap(airgap)
+    return { kind: 'ok', status, tokenSent: sentToken }
   } catch (err) {
     // Network error, timeout, port file missing, unparseable body — daemon
     // isn't reachable yet. Invalidate cached port so the next poll re-reads
@@ -387,6 +430,79 @@ export async function fetchBootStatus(timeoutMs = 2000): Promise<BootProbeResult
     })
     return { kind: 'network' }
   }
+}
+
+/**
+ * Apply an ACCEPTED `/boot-status` body to the window's server info (R1):
+ * version + protocol for `serverSupports`, the reported `features`, and the
+ * box `serverId`. Exported for the no-clobber tests.
+ *
+ * PRD boot-status-ghost B3: a stranger's body (`view` public/compat — a
+ * stale session, or a host in ghost mode) never clears a known version,
+ * features or serverId; it refreshes only what it carries. Returns true when
+ * a token was sent and the daemon still answered a stranger's view (B4: the
+ * caller starts the session-revive check).
+ */
+export function noteAcceptedBootStatus(
+  status: DaemonBootStatus | null,
+  opts: { isRemote: boolean; appVersion: string | null; tokenSent: boolean },
+): boolean {
+  const store = useConnectHostStore.getState()
+  const partialView = isPartialBootView(status)
+  store.setServerInfo({
+    version: opts.isRemote
+      ? nextKnownVersion(status, store.serverVersion)
+      : status?.version ?? opts.appVersion,
+    protocol: status?.protocol ?? null,
+  })
+  // The window's own server's REPORTED features (`/boot-status`
+  // `features`). The Home pool notes them only for servers it checks, so
+  // `primaryScope().serverSupports('tickets-list-all')` would read false on
+  // a remote window host without this. Local is noted too: a dev build runs
+  // against whatever daemon is installed, and an older one lacks keys this
+  // app expects (`daemon-activity`, prd-daemon-activity-and-thread-working-v1
+  // RL13).
+  const hostKey = homeHostKey(store.activeHost)
+  if (!partialView || typeof status?.version === 'string') {
+    noteServerVersion(
+      hostKey,
+      status?.version ?? null,
+      partialView && !Array.isArray(status?.features) ? undefined : reportedFeatureList(status?.features),
+    )
+  }
+  // homes-sync-v1: which box this host is (`local` for this computer).
+  // `noteServerId` ignores an absent id (never clears).
+  noteServerId(hostKey, status?.serverId)
+  return opts.isRemote && tokenNotAccepted(opts.tokenSent, status)
+}
+
+const WEB_BUNDLE_RELOAD_KEY = 'k2.webBundleReloadTried'
+
+/** See {@link webBundleReloadUrl}. One try per tab session: a missing
+ *  bundle for that version keeps the current one (logged). */
+function reloadOntoServerBundleOnce(status: DaemonBootStatus | null): void {
+  if (typeof window === 'undefined' || !isWebClient()) return
+  let tried = false
+  try {
+    tried = sessionStorage.getItem(WEB_BUNDLE_RELOAD_KEY) !== null
+  } catch {
+    tried = true // no storage → never risk a reload loop
+  }
+  const url = webBundleReloadUrl({
+    isWeb: true,
+    body: status,
+    bundleVersion: import.meta.env.VITE_APP_VERSION as string | undefined,
+    pathname: window.location.pathname,
+    alreadyTried: tried,
+  })
+  if (!url) return
+  try {
+    sessionStorage.setItem(WEB_BUNDLE_RELOAD_KEY, url)
+  } catch {
+    return
+  }
+  console.warn(`[connection-gate] web bundle ${import.meta.env.VITE_APP_VERSION} ≠ server ${status?.version}; reloading via ${url}`)
+  window.location.replace(url)
 }
 
 /** Authenticated /cli/settings/get — 200 means real routes are open.
@@ -817,6 +933,10 @@ export function ConnectionGate(): React.ReactElement {
     // first accept of THIS effect run. A different id on a later accepted
     // poll proves the server restarted between health ticks.
     let acceptedInstanceId: string | null = null
+    // PRD boot-status-ghost B4: one revive check per stale-token episode
+    // (a token-sent poll answered with a stranger's view). Re-armed by the
+    // next full view.
+    let staleViewReviveStarted = false
 
     // A host switch must re-poll from scratch: drop any prior accept so
     // the overlay shows while the new host is contacted. (The recovery
@@ -1123,24 +1243,32 @@ export function ConnectionGate(): React.ReactElement {
         // REMOTE host we use the host's own /boot-status `version`; for
         // LOCAL we use this app's bundled version (the daemon is paired with
         // the app, but caching the real version keeps gating uniform).
-        useConnectHostStore.getState().setServerInfo({
-          version: status?.version ?? (isRemote ? null : appVersionRef.current ?? null),
-          protocol: status?.protocol ?? null,
+        //
+        // PRD boot-status-ghost B3 (no clobber): a stranger's body
+        // (`view` public/compat — a stale session, or a host in ghost mode)
+        // never clears a known version or features; it only moves phase +
+        // instanceId (and refreshes what it does carry).
+        const staleToken = noteAcceptedBootStatus(status, {
+          isRemote,
+          appVersion: appVersionRef.current ?? null,
+          tokenSent: probe.kind === 'ok' && probe.tokenSent,
         })
-        // The window's own server's REPORTED features (`/boot-status`
-        // `features`). The Home pool notes them only for servers it checks,
-        // so `primaryScope().serverSupports('tickets-list-all')` would read
-        // false on a remote window host without this. Local is noted too:
-        // a dev build runs against whatever daemon is installed, and an
-        // older one lacks keys this app expects (`daemon-activity`,
-        // prd-daemon-activity-and-thread-working-v1 RL13).
-        noteServerVersion(
-          homeHostKey(useConnectHostStore.getState().activeHost),
-          status?.version ?? null,
-          reportedFeatureList(status?.features),
-        )
-        // homes-sync-v1: which box this host is (`local` for this computer).
-        noteServerId(homeHostKey(useConnectHostStore.getState().activeHost), status?.serverId)
+        // B4: we sent this host's token and still got a stranger's view —
+        // the session is stale (the daemon restarted / it expired). Start
+        // the existing revive check once per episode; never a drop.
+        if (staleToken) {
+          if (!staleViewReviveStarted) {
+            staleViewReviveStarted = true
+            const active = useConnectHostStore.getState().activeHost
+            if (active !== 'local') void reviveRemoteSession(active.id)
+          }
+        } else if (bootViewOf(status) === 'full') {
+          staleViewReviveStarted = false
+        }
+        // Hosted web on a ghost server: the loader started the newest
+        // published bundle as the sign-in shell; now that the daemon tells
+        // us its own version, reload onto it once (loader `?v=`).
+        reloadOntoServerBundleOnce(status)
         // Remember this host reached 'accept' at least once → a later
         // drop becomes a SOFT reconnect (overlay) instead of a blank.
         acceptedOnce = true

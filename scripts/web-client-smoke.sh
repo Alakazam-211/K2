@@ -481,6 +481,34 @@ else
   BOOT_VERSION=""
 fi
 
+# PRD boot-status-ghost (0.46.3): through Caddy (BASE_URL) a signed-out
+# browser is a stranger — the daemon answers the compat (or ghost) view,
+# which never carries webClient / installKind. The full body (webClient
+# included) is the loopback read below.
+BOOT_VIEW="$(printf '%s' "$BOOT_BODY" | sed -n 's/.*"view"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+if [[ -n "$BOOT_VIEW" ]]; then
+  if [[ -n "$BASE_URL" ]]; then
+    if [[ "$BOOT_VIEW" = "compat" || "$BOOT_VIEW" = "public" ]]; then
+      pass "boot-status via the front door is the stranger view (${BOOT_VIEW})"
+    else
+      fail "boot-status via the front door answered view=${BOOT_VIEW} without a sign-in (want compat|public)"
+    fi
+    if printf '%s' "$BOOT_BODY" | grep -Eq '"(webClient|installKind|connectLogin)"'; then
+      fail "boot-status stranger view leaks webClient/installKind/connectLogin"
+    else
+      pass "boot-status stranger view hides webClient/installKind/connectLogin"
+    fi
+    http_fetch "${DAEMON_BASE}/boot-status"
+    BOOT_BODY="$(cat "$HTTP_BODY_FILE" 2>/dev/null || true)"
+    rm -f "$HTTP_BODY_FILE"
+  fi
+  if printf '%s' "$BOOT_BODY" | grep -Eq '"view"[[:space:]]*:[[:space:]]*"full"'; then
+    pass "boot-status on loopback is the full view"
+  else
+    fail "boot-status on loopback is not the full view"
+  fi
+fi
+
 # webClient.enabled if present
 if printf '%s' "$BOOT_BODY" | grep -Eq '"webClient"'; then
   if printf '%s' "$BOOT_BODY" | grep -Eq '"enabled"[[:space:]]*:[[:space:]]*(true|false)'; then

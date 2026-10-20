@@ -52,6 +52,7 @@ import { AllowRemoteInstructRow } from '../shared/AllowRemoteInstructRow'
 import { DnsManageEnabledRow } from '../shared/DnsManageEnabledRow'
 import { AgentsCanCreateConnectionsRow } from '../shared/AgentsCanCreateConnectionsRow'
 import { ConnectLoginIngressRow } from '../shared/ConnectLoginIngressRow'
+import { BootStatusPublicRow } from '../shared/BootStatusPublicRow'
 import { TunnelUrlsPanel } from './TunnelUrlsPanel'
 import { canManagePublishedSubdomains } from '@/lib/published-subdomains'
 import {
@@ -140,6 +141,7 @@ export const K2_CONNECT_MANIFEST: SettingEntry[] = [
   { id: 'k2-connect.allow-remote-instruct', section: 'k2-connect', label: 'Let agents on other servers message every agent', description: 'List every agent to connected servers and let their agents message it. People who log in here can always message agents.', keywords: ['remote', 'instruct', 'message', 'agents', 'other servers', 'consent', 'federation', 'inbound', 'roster', 'allow'] },
   { id: 'k2-connect.public-api', section: 'k2-connect', label: 'Enable public API (/v1)', description: 'Serve the external /v1 API from this daemon — takes effect immediately, no restart', keywords: ['api', 'v1', 'public api', 'rest', 'http', 'external', 'surface', 'K2_API', 'api keys', 'host sessions'] },
   { id: 'k2-connect.login-ingress', section: 'k2-connect', label: 'Password sign-in over the tunnel', description: 'Only via K2 edge (recommended), any client, or off — where the daemon answers password login on tunnel ingress', keywords: ['login', 'sign in', 'password', 'tunnel', 'edge', 'ingress', 'scanner', 'brute force', 'connect users', 'app.k2.dev'] },
+  { id: 'k2-connect.boot-status-public', section: 'k2-connect', label: "Hide this server's details from the internet", description: 'Visitors without a sign-in see only that the server is up — not its version or features (boot-status ghost)', keywords: ['boot-status', 'ghost', 'hide', 'version', 'fingerprint', 'scanner', 'privacy', 'stealth', 'ping'] },
 ]
 
 interface TunnelStatus {
@@ -1410,6 +1412,7 @@ export function K2ConnectSection({
                 <DnsManageEnabledRow />
                 <AgentsCanCreateConnectionsRow />
                 <ConnectLoginIngressRow />
+                <BootStatusPublicRow />
               </div>
             ) : (
               <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">

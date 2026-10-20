@@ -60,6 +60,32 @@ beforeEach(() => {
 
 afterEach(() => cleanup())
 
+// PRD boot-status-ghost B6: a fleet monitor's status key reads this server's
+// /boot-status only. It must not look like a full owner key with doors.
+describe('ApiTokensSection status keys', () => {
+  const STATUS_KEY = {
+    ...HIRE_KEY,
+    id: 'key-status',
+    label: 'k2-watch',
+    scope: 'status',
+    capabilities: { hostSessions: false, canonicalMessage: false, sandboxes: false, db: false, hire: false },
+    hireLimits: null,
+  }
+
+  it('labels a status key read-only, hides caps/workspaces, and offers Revoke only', async () => {
+    daemonCliGet.mockResolvedValue({ keys: [STATUS_KEY, HIRE_KEY] })
+    render(<ApiTokensSection />)
+    const row = await screen.findByTestId('status-key-key-status')
+    expect(row.textContent).toContain('k2-watch')
+    expect(row.textContent).toContain('Status (read-only)')
+    expect(row.textContent).not.toMatch(/Caps:|Workspaces:/)
+    const buttons = Array.from(row.querySelectorAll('button')).map((b) => b.textContent)
+    expect(buttons).toEqual(['Revoke'])
+    // The owner key next to it keeps its usual row.
+    expect(screen.getByTestId('hire-limits-key-1')).toBeTruthy()
+  })
+})
+
 describe('ApiTokensSection hire scope', () => {
   it('shows a hire key with its limits and the hire cap', async () => {
     render(<ApiTokensSection />)

@@ -34,6 +34,10 @@ export type HomeRoomVerdict = 'unknown' | 'switch' | 'view-only' | 'use'
 /** What a row on a server with this `/boot-status` does. */
 export function homeRoomVerdict(boot: PoolBoot | null | undefined): HomeRoomVerdict {
   if (!boot) return 'unknown'
+  // PRD boot-status-ghost: a server that hides its details from strangers
+  // (`view: public`) and that we hold no login for is "sign in to see",
+  // not "an older K2".
+  if (boot.version === null && boot.view === 'public') return 'unknown'
   if (boot.version === null) return 'switch'
   if (!gte(boot.version, HOME_ROOM_FLOOR)) return 'switch'
   if (!gte(boot.version, HOME_ROOM_USABLE_FROM)) return 'view-only'

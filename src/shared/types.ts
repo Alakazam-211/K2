@@ -132,6 +132,10 @@ export interface AppSettingsResponse {
   // Owner/Admin-only to write (REMOTE_ACCESS_KEYS). Optional: older
   // snapshots omit it → readers treat absent as 'edge'.
   connectLoginIngress?: ConnectLoginIngress
+  // PRD boot-status-ghost (0.46.3): what strangers see on `/boot-status`,
+  // 'compat' | 'ghost'. Absent = the release default (compat in 0.46.3).
+  // Owner/Admin-only to write (REMOTE_ACCESS_KEYS).
+  bootStatusPublic?: 'compat' | 'ghost' | null
   // Federation (0.40.14+) — whether cross-server messaging is enabled on
   // this host. Optional: older snapshots omit it → readers treat absent
   // as false (the store reads it with `?? false`).

@@ -44,11 +44,49 @@ describe('fetchBootStatus — discriminated boot probe', () => {
   it("2xx with a parseable body → {kind:'ok'} carrying the status (instanceId included when present)", async () => {
     const body = { ...READY, instanceId: 'abcd1234abcd1234' }
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
-      expect(url).toBe('https://rosson.k2.dev/boot-status')
+      // PRD boot-status-ghost: a remote host gets its own token.
+      expect(url).toBe('https://rosson.k2.dev/boot-status?token=tok')
       return { ok: true, status: 200, json: async () => body } as unknown as Response
     }))
 
-    await expect(fetchBootStatus()).resolves.toEqual({ kind: 'ok', status: body })
+    await expect(fetchBootStatus()).resolves.toEqual({ kind: 'ok', status: body, tokenSent: true })
+    expect(invalidateDaemonWsMock).not.toHaveBeenCalled()
+  })
+
+  it('the LOCAL daemon is polled without a token (loopback is always full; URL byte-identical)', async () => {
+    getDaemonWsMock.mockResolvedValue({ port: 51234, token: 'local-tok', host: '127.0.0.1', secure: false })
+    const fetchMock = vi.fn(async (_url: string) =>
+      ({ ok: true, status: 200, json: async () => READY }) as unknown as Response,
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(fetchBootStatus()).resolves.toEqual({ kind: 'ok', status: READY, tokenSent: false })
+    expect(fetchMock.mock.calls.map((c) => c[0])).toEqual(['http://127.0.0.1:51234/boot-status'])
+  })
+
+  it('a signed-out remote (no token) is polled exactly as before', async () => {
+    getDaemonWsMock.mockResolvedValue({ ...CREDS, token: '' })
+    const fetchMock = vi.fn(async (_url: string) =>
+      ({ ok: true, status: 200, json: async () => READY }) as unknown as Response,
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(fetchBootStatus()).resolves.toEqual({ kind: 'ok', status: READY, tokenSent: false })
+    expect(fetchMock.mock.calls.map((c) => c[0])).toEqual(['https://rosson.k2.dev/boot-status'])
+  })
+
+  it('a ≤0.46.2 daemon 403s a must-change-password session: retry once without the token', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, status: 403, json: async () => ({ error: 'password_change_required' }) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => READY })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(fetchBootStatus()).resolves.toEqual({ kind: 'ok', status: READY, tokenSent: false })
+    expect(fetchMock.mock.calls.map((c) => c[0])).toEqual([
+      'https://rosson.k2.dev/boot-status?token=tok',
+      'https://rosson.k2.dev/boot-status',
+    ])
     expect(invalidateDaemonWsMock).not.toHaveBeenCalled()
   })
 

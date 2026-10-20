@@ -202,30 +202,63 @@ describe('hostOpPost / hostOpGet — survive a remote restart (retry-on-network-
 })
 
 // The state-aware reconnect: after a restart/update the tile polls the host's
-// PUBLIC `/boot-status` (a TOP-LEVEL route, NO token) until phase === 'ready'.
-// A still-restarting host throws at the network layer → hostBootStatus must
+// `/boot-status` (a TOP-LEVEL route) until phase === 'ready'. A
+// still-restarting host throws at the network layer → hostBootStatus must
 // resolve to null ("keep waiting"), never a hard failure; once it answers the
 // parsed JSON (incl. version) flows back so the tile can refresh.
-describe('hostBootStatus — public readiness handshake (top-level, unauthenticated)', () => {
+// PRD boot-status-ghost (0.46.3): the host's own token rides `?token=` so a
+// host that hides its details from strangers still tells US its version.
+describe('hostBootStatus — readiness handshake (top-level, host token when signed in)', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
   })
 
-  it('hits <base>/boot-status (NOT /cli, NO token) and returns the parsed phase + version', async () => {
+  it("hits <base>/boot-status (NOT /cli) with the host's own token and returns the parsed phase + version", async () => {
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
-      fakeRes({ body: JSON.stringify({ phase: 'ready', version: '0.40.12', protocol: 3 }) }),
+      fakeRes({ body: JSON.stringify({ view: 'full', phase: 'ready', version: '0.40.12', protocol: 3 }) }),
     )
     vi.stubGlobal('fetch', fetchMock)
 
     await expect(hostBootStatus(CREDS)).resolves.toEqual({
+      view: 'full',
       phase: 'ready',
       version: '0.40.12',
       protocol: 3,
     })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
     const url = fetchMock.mock.calls[0][0] as string
-    expect(url).toBe('https://rosson.k2.dev/boot-status')
+    expect(url).toBe(`https://rosson.k2.dev/boot-status?token=${CREDS.token}`)
     expect(url).not.toContain('/cli/')
-    expect(url).not.toContain('token')
+  })
+
+  it('a signed-out host (empty token) is polled exactly as before: no token', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
+      fakeRes({ body: JSON.stringify({ view: 'public', phase: 'ready', protocol: 1, protocolMin: 1, instanceId: 'a' }) }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(hostBootStatus({ ...CREDS, token: '' })).resolves.toEqual({
+      view: 'public',
+      phase: 'ready',
+      protocol: 1,
+      protocolMin: 1,
+      instanceId: 'a',
+    })
+    expect(fetchMock.mock.calls[0][0]).toBe('https://rosson.k2.dev/boot-status')
+  })
+
+  it('a ≤0.46.2 daemon 403s a must-change-password session: retry once without the token', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(fakeRes({ status: 403, body: JSON.stringify({ error: 'password_change_required' }) }))
+      .mockResolvedValueOnce(fakeRes({ body: JSON.stringify({ phase: 'ready', version: '0.46.2', protocol: 1 }) }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(hostBootStatus(CREDS)).resolves.toEqual({ phase: 'ready', version: '0.46.2', protocol: 1 })
+    expect(fetchMock.mock.calls.map((c) => c[0])).toEqual([
+      `https://rosson.k2.dev/boot-status?token=${CREDS.token}`,
+      'https://rosson.k2.dev/boot-status',
+    ])
   })
 
   it('a still-restarting connection error resolves to null (keep waiting, not a failure)', async () => {

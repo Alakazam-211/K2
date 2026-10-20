@@ -175,6 +175,56 @@
     });
   }
 
+  /** The client↔daemon contract this web client speaks (boot_status PROTOCOL). */
+  var CLIENT_PROTOCOL = 1;
+
+  /** A 0.46.3+ daemon answering a stranger in ghost mode (no version). */
+  function isPublicView(status) {
+    return !!status && typeof status === 'object' && status.view === 'public';
+  }
+
+  /**
+   * PRD boot-status-ghost §3.1: pick the sign-in shell's bundle from
+   * `/app/current.json` ({version, protocol}) for a public-view server.
+   * The bundle's protocol must be inside the server's
+   * [protocolMin, protocol] range. Returns {ok, version} or
+   * {ok:false, reason, message}.
+   */
+  function pickPointerVersion(status, pointer) {
+    if (!pointer || typeof pointer !== 'object' || typeof pointer.version !== 'string') {
+      return { ok: false, reason: 'boot_parse', message: 'No published web client to sign in with.' };
+    }
+    var max = typeof status.protocol === 'number' ? status.protocol : CLIENT_PROTOCOL;
+    var min = typeof status.protocolMin === 'number' ? status.protocolMin : 1;
+    var p = typeof pointer.protocol === 'number' ? pointer.protocol : CLIENT_PROTOCOL;
+    if (p < min || p > max) {
+      return {
+        ok: false,
+        reason: 'below_floor',
+        message:
+          'This server needs a ' + (p < min ? 'newer' : 'older') + ' K2 web client (server speaks ' +
+          min + '–' + max + ', the published client speaks ' + p + ').',
+      };
+    }
+    return { ok: true, version: pointer.version.trim() };
+  }
+
+  function fetchCurrentPointer(timeoutMs) {
+    var ms = timeoutMs == null ? BOOT_TIMEOUT_MS : timeoutMs;
+    return fetch('/app/current.json', {
+      method: 'GET',
+      cache: 'no-store',
+      signal: AbortSignal.timeout(ms),
+    }).then(function (res) {
+      if (!res.ok) {
+        var err = new Error('No published web client found (/app/current.json HTTP ' + res.status + ').');
+        err.code = 'boot_parse';
+        throw err;
+      }
+      return res.json();
+    });
+  }
+
   function headBundle(version, timeoutMs) {
     var ms = timeoutMs == null ? HEAD_TIMEOUT_MS : timeoutMs;
     var url = '/app/' + encodeURIComponent(version) + '/index.html';
@@ -280,6 +330,28 @@
       })
       .then(function (status) {
         var picked = pickVersionField(status);
+        if (picked == null && isPublicView(status)) {
+          // PRD boot-status-ghost §3.1: the server hides its version from
+          // a signed-out browser. Load the newest published bundle as the
+          // sign-in shell; once signed in the SPA reloads onto the
+          // server's own version (?v=).
+          var fetchPointer = opts.fetchCurrentPointer || fetchCurrentPointer;
+          return fetchPointer(timeout).then(function (pointer) {
+            var fromPointer = pickPointerVersion(status, pointer);
+            if (!fromPointer.ok) {
+              var qerr = new Error(fromPointer.message);
+              qerr.code = fromPointer.reason;
+              throw qerr;
+            }
+            var pacc = acceptVersion(fromPointer.version);
+            if (!pacc.ok) {
+              var paerr = new Error(pacc.message);
+              paerr.code = pacc.reason === 'below_floor' ? 'below_floor' : 'malformed';
+              throw paerr;
+            }
+            return pacc.version;
+          });
+        }
         if (picked == null) {
           var perr = new Error(
             'boot-status had no usable version or webClientVersion field.',
@@ -382,6 +454,8 @@
     isAtLeast: isAtLeast,
     pickVersionField: pickVersionField,
     acceptVersion: acceptVersion,
+    isPublicView: isPublicView,
+    pickPointerVersion: pickPointerVersion,
     resolveVersion: resolveVersion,
     navigateToApp: navigateToApp,
     boot: boot,

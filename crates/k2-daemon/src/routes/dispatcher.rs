@@ -6687,7 +6687,7 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
         // App runtime stage 1 (prd-k2-app-runtime-v1 §8.5). Dark (404) until
-        // K2_APPS / appsPreview is on. Passport rules live in the handler.
+        // Apps (beta) (`apps`, default on) or K2_APPS is on. Passport rules live in the handler.
         p if crate::apps::routes::is_route(p) => {
             if !k2_core::deploy::enabled() {
                 let _ = stream.read(&mut buf).await;

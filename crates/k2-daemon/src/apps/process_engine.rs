@@ -3,9 +3,10 @@
 //!
 //! - Spawn the Seed's `host.start` argv (no shell) in the Seed folder, in
 //!   its own process group (`setsid`), as the daemon user. That is the
-//!   recorded preview exception to SR1 (§16 C9): our own boxes only, behind
-//!   `K2_APPS` / `appsPreview`. The container engine (stage 3) replaces it
-//!   on production boxes.
+//!   recorded exception to SR1 (§16 C9). Since 0.46.3 it is a separate
+//!   owner opt-in (`K2_APPS_PROCESS=1` / the `appsProcessEngine` setting,
+//!   default off; `deploy::process_engine_enabled`): the default-on Apps
+//!   switch never selects it. The guarded container engine is the default.
 //! - **Clean environment** (S1 applied): `env_clear()`, then `PATH`
 //!   (login-shell enriched), `LANG`, `LC_*`, `TZ`, `TMPDIR`, `HOME` (the App
 //!   folder's `home/`), `PORT`, `NODE_ENV`, the App identity (S24's

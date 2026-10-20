@@ -363,7 +363,7 @@ fn show(who: &Who, params: &HashMap<String, String>) -> R<J> {
     let note = match wall {
         "container" => "Walled: the App dials 127.0.0.1:<in-wall port> (K2_BOX_<NAME>); pasta forwards it to the host port, and the App's own nft rule admits it only while approved.",
         "process-exception" => "The process exception has the host's loopback, narrowed by its nft rule: it dials the host port directly, admitted only while approved.",
-        _ => "This App runs on the preview process engine (unwalled): it already reaches this box's loopback and nothing here is enforced. Deploy with --engine guarded to wall it.",
+        _ => "This App runs on the unwalled process engine (the owner's dev opt-in): it already reaches this box's loopback and nothing here is enforced. Deploy with --engine guarded to wall it.",
     };
     Ok(json!({
         "ok": true,

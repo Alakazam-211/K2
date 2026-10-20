@@ -51,6 +51,9 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "$SANDBOX/.k2" "$SANDBOX/shim"
+# Apps (beta) are on by default since 0.46.3; these checks pin the
+# "Apps off" fallback, so this server has them switched off.
+printf '{"apps": false}\n' >"$SANDBOX/.k2/settings.json"
 # A stand-in type checker (the real tsc-rs is optional and not needed here):
 # it answers like `tsc --pretty false` for the project it is handed.
 cat >"$SANDBOX/fake-tsc-rs" <<'SH'
@@ -182,7 +185,7 @@ printf '{"schema":1,"kind":"app","id":"mapp","name":"M","version":"1.0.0","host"
 printf 'const a = ;\n' >"$WS/mapp/s.js"
 capture app validate "$WS/mapp"
 assert_eq "a manifest folder with a parse error fails (1) with the preview off" "$rc" "1"
-assert_contains "it says the manifest was not checked" "$out" "the App runtime preview is off"
+assert_contains "it says the manifest was not checked" "$out" "Apps (beta) are off on this server"
 assert_contains "the code pass still placed the error" "$out" "s.js:1:"
 capture app validate --dir mapp --types
 assert_eq "--types on a manifest folder with the preview off is a usage error (2)" "$rc" "2"

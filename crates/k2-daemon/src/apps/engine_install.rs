@@ -93,7 +93,7 @@ fn obtain(from: Option<&str>, arch: &str) -> Result<(Vec<u8>, String), String> {
 pub(crate) fn install_route(who: &Who, body: &J) -> R<J> {
     need_credential(who)?;
     if !matches!(who, Who::Owner | Who::Login { role: Role::Owner, .. }) {
-        return Err(no("owner_only", 403, "installing the App engine is the owner's: run it from Settings or a terminal outside K2"));
+        return Err(no("owner_only", 403, "installing the App engine is the owner's: ask your owner to run it (Settings → Apps → This server → Install App engine, or k2 app engine install from a terminal outside K2)"));
     }
     if !cfg!(target_os = "linux") {
         return Err(no("linux_only", 409, "the App engine runs on Linux boxes only"));

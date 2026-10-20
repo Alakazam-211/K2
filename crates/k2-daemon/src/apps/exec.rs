@@ -75,7 +75,7 @@ pub(crate) fn live_guarded(app: &AppRow) -> R<String> {
             EXEC_UNAVAILABLE,
             409,
             format!(
-                "{} runs on the preview process engine (as the daemon's user), so an exec would be a shell on the daemon's account. \
+                "{} runs on the unwalled process engine (as the daemon's user), so an exec would be a shell on the daemon's account. \
                  Deploy it guarded first: k2 app deploy {} <folder|seed> --engine guarded",
                 app.app_id, app.app_id
             ),
@@ -214,7 +214,7 @@ pub async fn serve_shell(stream: &mut tokio::net::TcpStream, who: Who, params: H
     let who_c = who.clone();
     let gate = tokio::task::spawn_blocking(move || {
         if !deploy::enabled() {
-            return Err(no(codes::APPS_OFF, 404, "the App runtime preview is off"));
+            return Err(no(codes::APPS_OFF, 404, super::routes::APPS_OFF_HINT));
         }
         shell_gate(&who_c, &params)
     })

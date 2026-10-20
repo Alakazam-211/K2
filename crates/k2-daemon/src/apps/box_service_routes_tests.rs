@@ -153,7 +153,7 @@ fn an_agent_asks_the_owner_approves_in_person_and_revoke_is_immediate() {
 fn the_deny_list_and_the_daemons_own_ports_are_refused() {
     let f = fx("deny");
     let a = agent(&f.ws_a);
-    for (port, why) in [(22, "ssh"), (5432, "Postgres"), (38_601, "gateway"), (38_950, "gateway"), (2019, "Caddy"), (38_472, "box router"), (80, "system")] {
+    for (port, why) in [(22, "ssh"), (5432, "Postgres"), (5433, "Postgres"), (5449, "Postgres"), (38_601, "gateway"), (38_950, "gateway"), (2019, "Caddy"), (38_472, "box router"), (80, "system")] {
         let e = call("/cli/app/box-service/request", &a, json!({"app": "hearth", "name": "x", "hostPort": port})).unwrap_err();
         assert_eq!((e.0, e.1), (403, codes::BOX_SERVICE_REFUSED), "{port}");
         assert!(e.2.contains(why), "{port}: {}", e.2);

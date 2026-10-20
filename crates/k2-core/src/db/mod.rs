@@ -1460,6 +1460,15 @@ fn run_migrations_through(conn: &Connection, last: Option<&str>) -> Result<()> {
         // 0.46.3 lane; renumber freely on a slip (and edit the
         // migration-order tests below).
         ("0197_agent_app_permissions", include_str!("../../drizzle_sql/0197_agent_app_permissions.sql")),
+        // 0201 — several Postgres majors per server (prd-pg17-and-db-
+        // upgrade-v1 rev 2; 0.46.3): `sql_clusters` (one row per cluster,
+        // backfilled with the 5432 cluster `enable` read), `sql_moves`
+        // (one row per database move), `sql_databases.cluster_major` +
+        // move/rollback columns (backfilled from `installed_major`),
+        // `sql_server.default_major` (NULL = 17) and the per-agent switch
+        // `projects.agents_can_upgrade_postgres`. 0198–0200 are free on
+        // every 0.46.3 lane (vs-live V23); renumber freely on a slip.
+        ("0201_pg_majors", include_str!("../../drizzle_sql/0201_pg_majors.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2123,7 +2132,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0197_agent_app_permissions",
+            last_name, "0201_pg_majors",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2175,6 +2184,7 @@ mod tests {
                 "0194_compute_manage",
                 "0195_push_device_session",
                 "0197_agent_app_permissions",
+                "0201_pg_majors",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2230,6 +2240,7 @@ mod tests {
                 "0194_compute_manage",
                 "0195_push_device_session",
                 "0197_agent_app_permissions",
+                "0201_pg_majors",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -2407,6 +2418,122 @@ mod tests {
         // A workspace created after the upgrade starts with both off (Q3 = A).
         conn.execute("INSERT INTO projects (id, name, path, handle) VALUES ('w-new', 'w-new', '/tmp/w-new', 'w-new')", []).unwrap();
         assert_eq!(row("w-new"), (0, 0, "[]".to_string()));
+    }
+
+    /// A 0.46.2 box running Postgres 16 (0197 applied, before 0201)
+    /// upgrades through 0201: the 5432 cluster `enable` read is recorded
+    /// (16/main, 'k2', 'baked'), every database (dropped ones too) gets
+    /// `cluster_major = 16` and `source_state = 'none'`, the default major
+    /// stays NULL (= 17, K2's pick), the switch starts off, and `sql_moves`
+    /// refuses states the machine doesn't have. A second run is a no-op.
+    #[test]
+    fn a_046_2_database_upgrades_through_0201_pg_majors() {
+        let conn = fresh_memory();
+        run_migrations_through(&conn, Some("0197_agent_app_permissions")).unwrap();
+        conn.execute(
+            "INSERT INTO sql_server (id, status, installed_major, listen, updated_at) VALUES (1, 'running', 16, 'localhost', 1)",
+            [],
+        )
+        .unwrap();
+        for (id, name, status) in [("d1", "ws_a", "active"), ("d2", "ws_b", "active"), ("d3", "ws_old", "dropped"), ("d4", "ws_a_test", "test")] {
+            conn.execute(
+                "INSERT INTO sql_databases (id, project_id, name, status, created_at) VALUES (?1, 'p', ?2, ?3, 1)",
+                params![id, name, status],
+            )
+            .unwrap();
+        }
+        conn.execute("INSERT INTO projects (id, name, path, handle) VALUES ('w1', 'w1', '/tmp/w1', 'w1')", []).unwrap();
+
+        run_migrations(&conn).unwrap();
+        let cluster: (i64, String, i64, String, String, String, String, String, String) = conn
+            .query_row(
+                "SELECT major, name, port, data_dir, unit, start_conf, state, role, origin FROM sql_clusters",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            cluster,
+            (
+                16,
+                "main".into(),
+                5432,
+                "/var/lib/postgresql/16/main".into(),
+                "postgresql@16-main.service".into(),
+                "auto".into(),
+                "unknown".into(),
+                "k2".into(),
+                "baked".into()
+            )
+        );
+        let rows: Vec<(String, Option<i64>, String, Option<i64>)> = {
+            let mut st = conn
+                .prepare("SELECT name, cluster_major, source_state, rollback_until FROM sql_databases ORDER BY name")
+                .unwrap();
+            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).unwrap().map(|r| r.unwrap()).collect()
+        };
+        assert_eq!(
+            rows,
+            vec![
+                ("ws_a".to_string(), Some(16), "none".to_string(), None),
+                ("ws_a_test".to_string(), Some(16), "none".to_string(), None),
+                ("ws_b".to_string(), Some(16), "none".to_string(), None),
+                ("ws_old".to_string(), Some(16), "none".to_string(), None),
+            ]
+        );
+        let default_major: Option<i64> =
+            conn.query_row("SELECT default_major FROM sql_server WHERE id = 1", [], |r| r.get(0)).unwrap();
+        assert_eq!(default_major, None, "NULL = the policy default (17)");
+        let toggle: i64 = conn
+            .query_row("SELECT agents_can_upgrade_postgres FROM projects WHERE id = 'w1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(toggle, 0, "the switch starts off");
+        // The records refuse shapes K2 never writes.
+        assert!(conn
+            .execute("UPDATE sql_databases SET source_state = 'gone' WHERE id = 'd1'", [])
+            .is_err());
+        assert!(conn
+            .execute(
+                "INSERT INTO sql_moves (id, database_id, db, from_major, to_major, state, started_at) VALUES ('m', 'd1', 'ws_a', 16, 17, 'paused', 1)",
+                [],
+            )
+            .is_err());
+        conn.execute(
+            "INSERT INTO sql_moves (id, database_id, db, from_major, to_major, started_at) VALUES ('m', 'd1', 'ws_a', 16, 17, 1)",
+            [],
+        )
+        .unwrap();
+        let (method, kind, state): (String, String, String) = conn
+            .query_row("SELECT method, kind, state FROM sql_moves WHERE id = 'm'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap();
+        assert_eq!((method.as_str(), kind.as_str(), state.as_str()), ("copy", "move", "queued"));
+        assert!(
+            conn.execute(
+                "INSERT INTO sql_clusters (major, name, port, data_dir, unit, created_at, updated_at) VALUES (17, 'main', 5432, 'd', 'u', 1, 1)",
+                [],
+            )
+            .is_err(),
+            "two clusters never share a port"
+        );
+
+        run_migrations(&conn).unwrap();
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM _migrations WHERE name = '0201_pg_majors'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1, "recorded once");
+        let clusters: i64 = conn.query_row("SELECT COUNT(*) FROM sql_clusters", [], |r| r.get(0)).unwrap();
+        assert_eq!(clusters, 1);
+    }
+
+    /// A box that never enabled the SQL sidecar has nothing to record.
+    #[test]
+    fn a_box_without_the_sql_sidecar_records_no_cluster_through_0201() {
+        let conn = fresh_memory();
+        run_migrations(&conn).unwrap();
+        let clusters: i64 = conn.query_row("SELECT COUNT(*) FROM sql_clusters", [], |r| r.get(0)).unwrap();
+        assert_eq!(clusters, 0);
+        let moves: i64 = conn.query_row("SELECT COUNT(*) FROM sql_moves", [], |r| r.get(0)).unwrap();
+        assert_eq!(moves, 0);
     }
 
     /// A 0.46.0-era database (last migration 0189) with project chat lines
@@ -2836,7 +2963,11 @@ mod tests {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
             conn.execute("DELETE FROM _migrations WHERE name = '0164_garden_data'", []).unwrap();
-            // 0197 (agent App permissions, 0.46.3) is the newest: its
+            // 0201 (Postgres majors, 0.46.3) is the newest: its record goes
+            // (its tables are IF NOT EXISTS, its columns are skipped as
+            // duplicates, its backfills are idempotent).
+            conn.execute("DELETE FROM _migrations WHERE name = '0201_pg_majors'", []).unwrap();
+            // 0197 (agent App permissions, 0.46.3) came before it: its
             // record goes (its projects columns stay and re-adding them is
             // skipped as duplicate columns; its review table is IF NOT
             // EXISTS and its inserts/updates are idempotent).

@@ -202,15 +202,15 @@ set -e
 info "podman info as k2app (rc $prc): $(echo "$pinfo" | tail -n 2 | tr '\n' ' ')"
 
 echo "== nft: App sockets reach only the proxy/db ports (gateway ports: per-App rules only) =="
-req agent apps nft apply 38600-38899 38900-38999 5432
+req agent apps nft apply 38600-38899 38900-38999 5432-5449
 expect_rc 0 "nft apply (open)"
 # Capture first: with pipefail, `nft … | grep -q` fails when grep exits
 # early and nft takes SIGPIPE.
 TABLE="$(inns nft list table inet k2app)"
-grep -q "chain k2app_v4" <<<"$TABLE" || fail "chain"
-grep -q "meta skuid $U jump k2app_v4" <<<"$TABLE" || fail "skuid rule: $TABLE"
+grep -q "chain k2app_v5" <<<"$TABLE" || fail "chain"
+grep -q "meta skuid $U jump k2app_v5" <<<"$TABLE" || fail "skuid rule: $TABLE"
 grep -q "chain k2app_apps" <<<"$TABLE" || fail "per-App chain"
-req daemon apps nft apply 38600-38899 38900-38999 5432
+req daemon apps nft apply 38600-38899 38900-38999 5432-5449
 expect_rc 0 "nft apply again (atomic replace)"
 [ "$(inns nft list tables | grep -c 'inet k2app$')" = 1 ] || fail "one table"
 inns python3 -m http.server 38650 --bind 127.0.0.1 >/dev/null 2>&1 &
@@ -243,7 +243,7 @@ el=$((($(date +%s%N) - t0) / 1000000))
 inns nft delete table inet k2app
 [ "$(as_app http://127.0.0.1:9999/)" = 200 ] || fail "control: k2app → loopback without the table"
 [ "$(as_app "http://$MYIP:9998/")" = 200 ] || fail "control: k2app → own address without the table"
-req daemon apps nft apply 38600-38899 38900-38999 5432
+req daemon apps nft apply 38600-38899 38900-38999 5432-5449
 expect_rc 0 "nft re-apply"
 [ "$(as_app http://127.0.0.1:9999/)" = 000 ] || fail "re-applied table does not drop"
 kill "$L1" "$L2" "$L3" "$L4"
@@ -255,10 +255,10 @@ req daemon apps ensure-process-user
 expect_rc 0 "ensure-process-user"
 id k2appx >/dev/null || fail "k2appx user"
 # The table covers k2appx once it exists (box prep's order).
-req daemon apps nft apply 38600-38899 38900-38999 5432
+req daemon apps nft apply 38600-38899 38900-38999 5432-5449
 expect_rc 0 "nft apply with the process user"
 T2="$(inns nft list table inet k2app)"
-grep -q "meta skuid $(id -u k2appx) jump k2app_v4" <<<"$T2" || fail "k2appx is not in the table: $T2"
+grep -q "meta skuid $(id -u k2appx) jump k2app_v5" <<<"$T2" || fail "k2appx is not in the table: $T2"
 req daemon apps process-unit on
 expect_rc 0 "process-unit on"
 systemctl cat k2app-process@.service >/dev/null || fail "unit not loaded"
@@ -392,7 +392,7 @@ ok "unprep reversed every setting, kept k2app, its ids and /var/lib/k2app"
 
 echo "== prepare again from scratch: every verb converges =="
 for a in "apps ensure-user" "apps subid" "apps delegate on" "apps linger on" "apps reserve-ports on" \
-	"apps io-cost on" "apps nft apply 38600-38899 38900-38999 5432" "apps process-unit on" "apps runtime crun"; do
+	"apps io-cost on" "apps nft apply 38600-38899 38900-38999 5432-5449" "apps process-unit on" "apps runtime crun"; do
 	req daemon $a
 	expect_rc 0 "$a"
 done

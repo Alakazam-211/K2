@@ -9025,7 +9025,7 @@ BOX SERVICES (a service on this box's loopback, like Sew)
   and long uploads pass unchanged. Declared in the manifest, approving
   opens it without a restart; asked for later, restart once.
   k2 app box-service revoke <app-id> <name> shuts it at once. Never: ports
-  below 1024 (ssh…), 38600-38999 (other Apps), 5432 (Postgres), K2's own.
+  below 1024 (ssh…), 38600-38999 (other Apps), 5432-5449 (Postgres), K2's own.
 
 THE BOX (Linux)
   k2 app doctor says whether the box is ready. k2 app box prepare (the
@@ -9267,7 +9267,7 @@ it; one asked for later needs one k2 app restart for its forward.
 
 TCP only (HTTP, websockets, long uploads ride it). Never forwarded: ports
 below 1024 (ssh, mail, DNS), 38600-38999 (every App's gateway and proxy),
-5432 (Postgres: use the App's database door), 2019 (Caddy admin), 38472
+5432-5449 (Postgres, every major: use the App's database door), 2019 (Caddy admin), 38472
 (the box router), this daemon's own ports. The process exception dials the
 host port directly (same approval, same nft door).
 

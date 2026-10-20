@@ -153,7 +153,7 @@ fn nft_lists_both(t: &T) {
         NFT,
         "list",
         0,
-        "table inet k2app {\n\tchain output {\n\t\tmeta skuid 996 jump k2app_v4\n\t\tmeta skuid 995 jump k2app_v4\n\t}\n\tchain k2app_v4 {\n\t}\n}\n",
+        "table inet k2app {\n\tchain output {\n\t\tmeta skuid 996 jump k2app_v5\n\t\tmeta skuid 995 jump k2app_v5\n\t}\n\tchain k2app_v5 {\n\t}\n}\n",
     );
 }
 
@@ -219,7 +219,7 @@ fn ensure_process_user_is_its_own_system_user_never_k2app() {
 fn nft_covers_process_apps_once_their_user_exists() {
     let t = box_root();
     with_process_user(&t);
-    ok(&t.call(&["apps", "nft", "apply", "38600-38899", "38900-38999", "5432"]));
+    ok(&t.call(&["apps", "nft", "apply", "38600-38899", "38900-38999", "5432-5449"]));
     let fed: Vec<_> = t
         .calls()
         .into_iter()
@@ -227,7 +227,7 @@ fn nft_covers_process_apps_once_their_user_exists() {
         .collect();
     let want = nft_ruleset(APP_UID, Some(PROC_UID), GATEWAY_PORTS, PROXY_PORTS, DB_PORTS, &[]);
     assert_eq!(fed[0].2.as_deref(), Some(want.as_bytes()));
-    assert!(want.contains("meta skuid 995 jump k2app_v4"));
+    assert!(want.contains("meta skuid 995 jump k2app_v5"));
 }
 
 #[test]
@@ -434,7 +434,7 @@ fn box_verbs_need_the_user_first() {
         &["apps", "subid"][..],
         &["apps", "linger", "on"],
         &["apps", "delegate", "on"],
-        &["apps", "nft", "apply", "38600-38899", "38900-38999", "5432"],
+        &["apps", "nft", "apply", "38600-38899", "38900-38999", "5432-5449"],
         &["apps", "process-unit", "on"],
     ] {
         let o = t.call(args);
@@ -697,7 +697,7 @@ fn nft_apply_feeds_the_canned_ruleset_for_the_looked_up_uid() {
     let t = box_root();
     with_app_user(&t);
     t.as_agent(); // tightening: open
-    let o = t.call(&["apps", "nft", "apply", "38600-38899", "38900-38999", "5432"]);
+    let o = t.call(&["apps", "nft", "apply", "38600-38899", "38900-38999", "5432-5449"]);
     ok(&o);
     let fed: Vec<_> = t
         .calls()
@@ -707,7 +707,7 @@ fn nft_apply_feeds_the_canned_ruleset_for_the_looked_up_uid() {
     assert_eq!(fed.len(), 1);
     let want = nft_ruleset(APP_UID, None, GATEWAY_PORTS, PROXY_PORTS, DB_PORTS, &[]);
     assert_eq!(fed[0].2.as_deref(), Some(want.as_bytes()));
-    assert!(want.contains("meta skuid 996 jump k2app_v4"));
+    assert!(want.contains("meta skuid 996 jump k2app_v5"));
 
     // Removing it is the daemon's, and so is any other set of ranges (an
     // agent can't open more loopback ports to Apps).
@@ -1568,7 +1568,7 @@ fn hba_app_is_daemon_only_and_refuses_links_and_damage_before_writing() {
 // ── per-App gateway rules (slice 3) ─────────────────────────────────────
 
 fn current_table(t: &T) {
-    rule(t, NFT, "list", 0, "table inet k2app {\n\tchain output {\n\t\tmeta skuid 996 jump k2app_v4\n\t}\n\tchain k2app_v4 {\n\t}\n}\n");
+    rule(t, NFT, "list", 0, "table inet k2app {\n\tchain output {\n\t\tmeta skuid 996 jump k2app_v5\n\t}\n\tchain k2app_v5 {\n\t}\n}\n");
 }
 
 fn container_cgroup(t: &T, id: &str) -> String {
@@ -1614,7 +1614,7 @@ fn nft_app_admits_only_the_apps_own_port_by_cgroup_and_is_daemon_only() {
     assert!(o.stderr.contains("belongs to App nsi"), "{}", o.stderr);
     // A full re-apply keeps the per-App rules (boot, drift).
     t.as_agent();
-    ok(&t.call(&["apps", "nft", "apply", "38600-38899", "38900-38999", "5432"]));
+    ok(&t.call(&["apps", "nft", "apply", "38600-38899", "38900-38999", "5432-5449"]));
     let full = nft_scripts(&t).pop().unwrap();
     assert!(full.contains("k2apps-nsi_skin.slice\" oifname \"lo\" tcp dport { 38601, 38901 } accept"));
     assert!(!full.contains("38600-38899"), "never the whole gateway range");
@@ -1791,7 +1791,7 @@ fn nft_app_box_ports_join_the_apps_rule_and_a_new_list_replaces_the_old() {
     assert!(!sc.contains("7880"), "{sc}");
     // A full re-apply keeps them (boot, drift).
     t.as_agent();
-    ok(&t.call(&["apps", "nft", "apply", "38600-38899", "38900-38999", "5432"]));
+    ok(&t.call(&["apps", "nft", "apply", "38600-38899", "38900-38999", "5432-5449"]));
     assert!(nft_scripts(&t).pop().unwrap().contains("tcp dport { 38602, 38902, 8470 } accept"));
     t.as_daemon();
     // None: back to the gateway and proxy only; app-remove forgets them.

@@ -146,7 +146,7 @@ pub fn decide(who: &Who, door: Door, personal_on: bool, can_clone: impl Fn(&str)
             hint: "agents can't clone; propose it and a person approves: k2 clone propose --to <host|here> --why \"…\""
                 .to_string(),
         }),
-        Who::Wrong | Who::Invalid => Err(Denied {
+        Who::Wrong | Who::Invalid | Who::Tenant(_) => Err(Denied {
             code: codes::WRONG_CREDENTIAL,
             hint: "cloning needs the owner or a Connect login with \"Can clone\" (App passes and API keys can't clone)"
                 .to_string(),

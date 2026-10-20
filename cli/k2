@@ -14819,6 +14819,14 @@ Owner / admin (refused for agents and inside K2 terminals, except where
                    <agent> → Agent): on = a grant on every machine switched on,
                    default limits (and ones added later); off removes them all
   k2 compute usage [--days N]    k2 compute events [--limit N]
+Compute hub (this server's nodes for your other servers; owner only, federation on):
+  k2 compute tenants [--json]                  servers that submit here, weights, grants
+  k2 compute tenants add <paired server> [--label L] [--weight N] [--top-class gate|interactive|batch]
+                   a paired server (pairing v2) gets compute; your own servers only for now
+  k2 compute tenants set <tenant> [--weight N] [--top-class C] [--max-queued N|none]
+  k2 compute tenants grant <tenant> <node> [--max-parallel 1] [--max-time 2h] [--max-disk 60G]
+  k2 compute tenants ungrant <tenant> <node>
+  k2 compute tenants suspend|resume|revoke <tenant>
 Node admin (agents need "Allow this agent to operate compute nodes"):
   k2 compute node health <node> [--json]       uptime, disk, RAM, FileVault, update state
   k2 compute node policy <node> show
@@ -16754,10 +16762,94 @@ print("Allow managing compute nodes: %s for %s%s" % ("on" if on else "off", v["w
             _compute_render events
             ;;
         local) cmd_compute_local "$@" ;;
+        tenants|tenant) cmd_compute_tenants "$@" ;;
         *)
             echo "usage: unknown compute verb '$sub' (k2 compute --help)" >&2
             exit 2
             ;;
+    esac
+}
+
+# k2 compute tenants — the compute hub's tenants (prd-compute-shared-queue-v1
+# S1): other K2 servers that submit to this server's nodes. Owner only for
+# every change (a terminal outside K2); the list is owner/admin.
+cmd_compute_tenants() {
+    local sub="${1:-list}"
+    [ $# -gt 0 ] && shift
+    local as_json=0 a
+    for a in "$@"; do [ "$a" = "--json" ] && as_json=1; done
+    local usage="usage: k2 compute tenants [list] [--json]
+       k2 compute tenants add <paired server> [--label L] [--weight N] [--top-class gate|interactive|batch] [--max-queued N]
+       k2 compute tenants set <tenant> [--label L] [--weight N] [--top-class C] [--max-queued N|none] [--max-running N|none]
+       k2 compute tenants suspend|resume|revoke <tenant>
+       k2 compute tenants grant <tenant> <node> [--max-parallel 1] [--max-time 2h] [--max-disk 60G] [--max-queued 10]
+       k2 compute tenants ungrant <tenant> <node>"
+    local target="" node="" label="" weight="" top="" maxq="" maxr="" maxt="" maxd="" maxp=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) shift ;;
+            --label) label="${2:-}"; shift 2 ;;
+            --weight) weight="${2:-}"; shift 2 ;;
+            --top-class) top="${2:-}"; shift 2 ;;
+            --max-queued) maxq="${2:-}"; shift 2 ;;
+            --max-running) maxr="${2:-}"; shift 2 ;;
+            --max-parallel) maxp="${2:-}"; shift 2 ;;
+            --max-time) maxt="$(_compute_secs "${2:-}")"; shift 2 ;;
+            --max-disk) maxd="${2:-}"; maxd="${maxd%[Gg]}"; shift 2 ;;
+            -*) echo "$usage" >&2; exit 2 ;;
+            *)
+                if [ -z "$target" ]; then target="$1"; elif [ -z "$node" ]; then node="$1"; else echo "$usage" >&2; exit 2; fi
+                shift ;;
+        esac
+    done
+    # "none" clears a cap (JSON null).
+    local q_j="" r_j=""
+    [ "$maxq" = "none" ] && q_j="null" && maxq=""
+    [ "$maxr" = "none" ] && r_j="null" && maxr=""
+    case "$sub" in
+        list|ls)
+            _compute_call GET /cli/compute/tenants "" tcp
+            [ "$as_json" = "1" ] && { printf '%s\n' "$_CP_BODY"; exit 0; }
+            printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+for t in v["tenants"]:
+    grants = ", ".join("%s(%sx)" % (g.get("node") or g["nodeId"], g["maxParallel"]) for g in t.get("grants", []))
+    print("%-20s %-8s %-6s weight %-3s top %-11s %-9s queued %-3s running %-3s %s" % (
+        t["label"], t["kind"], t["trust"], t["weight"], t["topClass"], t["state"], t["queued"], t["running"], grants or "-"))
+if not v.get("federation"):
+    print("(federation is off: no other server can reach this hub)")'
+            ;;
+        add)
+            [ -n "$target" ] || { echo "$usage" >&2; exit 2; }
+            _compute_call POST /cli/compute/tenants/add "$(_compute_json K2_CJ_peer="$target" K2_CJ_label="$label" K2_CJ_weight_n="$weight" \
+                K2_CJ_topClass="$top" K2_CJ_maxQueued_n="$maxq")" tcp
+            [ "$as_json" = "1" ] && { printf '%s\n' "$_CP_BODY"; exit 0; }
+            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; t=json.load(sys.stdin)["tenant"]; print("added tenant %s (%s, weight %s, top class %s). Grant it nodes: k2 compute tenants grant %s <node>" % (t["label"], t["id"], t["weight"], t["topClass"], t["label"]))'
+            ;;
+        set)
+            [ -n "$target" ] || { echo "$usage" >&2; exit 2; }
+            _compute_call POST /cli/compute/tenants/set "$(_compute_json K2_CJ_tenant="$target" K2_CJ_label="$label" K2_CJ_weight_n="$weight" \
+                K2_CJ_topClass="$top" K2_CJ_maxQueued_n="$maxq" K2_CJ_maxQueued_j="$q_j" K2_CJ_maxRunning_n="$maxr" K2_CJ_maxRunning_j="$r_j")" tcp
+            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; t=json.load(sys.stdin)["tenant"]; print("%s: weight %s, top class %s, max queued %s, max running %s" % (t["label"], t["weight"], t["topClass"], t["maxQueued"], t["maxRunning"]))'
+            ;;
+        suspend|resume|revoke)
+            [ -n "$target" ] || { echo "$usage" >&2; exit 2; }
+            _compute_call POST "/cli/compute/tenants/$sub" "$(_compute_json K2_CJ_tenant="$target")" tcp
+            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); t=v["tenant"]; print("%s is %s (epoch %s)%s" % (t["label"], t["state"], t["epoch"], "; stopped %s job(s)" % v["stopped"] if v.get("stopped") else ""))'
+            ;;
+        grant)
+            [ -n "$target" ] && [ -n "$node" ] || { echo "$usage" >&2; exit 2; }
+            _compute_call POST /cli/compute/tenants/grant "$(_compute_json K2_CJ_tenant="$target" K2_CJ_node="$node" K2_CJ_maxParallel_n="$maxp" \
+                K2_CJ_maxJobSecs_n="$maxt" K2_CJ_maxDiskGb_n="$maxd" K2_CJ_maxQueued_n="$maxq")" tcp
+            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); g=v["grant"]; print("granted %s to tenant %s (%s parallel, max %ss/job, %s GB disk, %s queued)" % (v["node"], v["tenant"], g["maxParallel"], g["maxJobSecs"], g["maxDiskGb"], g["maxQueued"]))'
+            ;;
+        ungrant)
+            [ -n "$target" ] && [ -n "$node" ] || { echo "$usage" >&2; exit 2; }
+            _compute_call POST /cli/compute/tenants/ungrant "$(_compute_json K2_CJ_tenant="$target" K2_CJ_node="$node")" tcp
+            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print("removed" if json.load(sys.stdin)["removed"] else "no grant to remove")'
+            ;;
+        *) echo "$usage" >&2; exit 2 ;;
     esac
 }
 

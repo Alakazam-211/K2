@@ -1460,6 +1460,18 @@ fn run_migrations_through(conn: &Connection, last: Option<&str>) -> Result<()> {
         // 0.46.3 lane; renumber freely on a slip (and edit the
         // migration-order tests below).
         ("0197_agent_app_permissions", include_str!("../../drizzle_sql/0197_agent_app_permissions.sql")),
+        // 0204 — the compute hub's tenants (prd-compute-shared-queue-v1
+        // S1, 0.46.3): `compute_tenants` (+ the `local` row),
+        // `compute_tenant_grants`, `compute_blobs`. New tables only.
+        // 0201–0203 are held by other 0.46.3 lanes (Postgres cluster
+        // records etc.); renumber freely on a slip (and edit the
+        // migration-order tests below).
+        ("0204_compute_hub_tenants", include_str!("../../drizzle_sql/0204_compute_hub_tenants.sql")),
+        // 0205 — compute jobs carry their tenant (S1, V30): tenant_id
+        // (DEFAULT 'local'), class, preemptible, est_secs, remote_ws_*,
+        // remote_session + UNIQUE (tenant_id, workspace_id, client_job_id).
+        // ALTER only.
+        ("0205_compute_jobs_tenant", include_str!("../../drizzle_sql/0205_compute_jobs_tenant.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2123,7 +2135,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0197_agent_app_permissions",
+            last_name, "0205_compute_jobs_tenant",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2175,6 +2187,8 @@ mod tests {
                 "0194_compute_manage",
                 "0195_push_device_session",
                 "0197_agent_app_permissions",
+                "0204_compute_hub_tenants",
+                "0205_compute_jobs_tenant",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2230,6 +2244,8 @@ mod tests {
                 "0194_compute_manage",
                 "0195_push_device_session",
                 "0197_agent_app_permissions",
+                "0204_compute_hub_tenants",
+                "0205_compute_jobs_tenant",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -2407,6 +2423,56 @@ mod tests {
         // A workspace created after the upgrade starts with both off (Q3 = A).
         conn.execute("INSERT INTO projects (id, name, path, handle) VALUES ('w-new', 'w-new', '/tmp/w-new', 'w-new')", []).unwrap();
         assert_eq!(row("w-new"), (0, 0, "[]".to_string()));
+    }
+
+    /// A 0.46.2-shaped database (through 0197) with a compute job upgrades
+    /// through 0204/0205 (the compute hub, S1): the old job is tenant
+    /// `local`, class `interactive`; the `local` tenant row exists; the
+    /// tenant-scoped unique refuses a duplicate (tenant, workspace, client
+    /// id) and lets another tenant's key reuse the client id; a second run
+    /// is a no-op.
+    #[test]
+    fn a_046_2_database_upgrades_through_0205_compute_hub() {
+        let conn = fresh_memory();
+        run_migrations_through(&conn, Some("0197_agent_app_permissions")).unwrap();
+        assert!(!table_names(&conn).iter().any(|n| n == "compute_tenants"), "0.46.2 has no tenants");
+        let insert = |id: &str, ws: &str, client: &str| {
+            conn.execute(
+                "INSERT INTO compute_jobs (id, client_job_id, node_id, workspace_id, requested_by, argv_json, env_names_json, \
+                 request_sha256, plan_json, state, plan_digest, created_at) VALUES (?1, ?2, 'n1', ?3, 'owner', '[]', '[]', 'h', '{}', \
+                 'done', 'd', 1)",
+                params![id, client, ws],
+            )
+        };
+        insert("job-old", "w-1", "client-0000000001").unwrap();
+
+        run_migrations(&conn).unwrap();
+        let (tenant, class, pre): (String, String, i64) = conn
+            .query_row("SELECT tenant_id, class, preemptible FROM compute_jobs WHERE id = 'job-old'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap();
+        assert_eq!((tenant.as_str(), class.as_str(), pre), ("local", "interactive", 0), "the old job is the local tenant's");
+        let local: (String, i64, String) = conn
+            .query_row("SELECT kind, weight, state FROM compute_tenants WHERE id = 'local'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap();
+        assert_eq!(local, ("local".to_string(), 1, "active".to_string()));
+        // Same workspace + client id again: refused.
+        assert!(insert("job-dup", "w-1", "client-0000000001").is_err(), "duplicate (tenant, workspace, client id)");
+        // A tenant's namespaced key may reuse the client id.
+        conn.execute(
+            "INSERT INTO compute_jobs (id, client_job_id, node_id, workspace_id, requested_by, argv_json, env_names_json, \
+             request_sha256, plan_json, state, plan_digest, created_at, tenant_id, remote_ws_id) VALUES ('job-t', \
+             'client-0000000001', 'n1', 't/tn-a/w-1', 'tenant:a', '[]', '[]', 'h', '{}', 'queued', 'd', 2, 'tn-a', 'w-1')",
+            [],
+        )
+        .unwrap();
+        for t in ["compute_tenants", "compute_tenant_grants", "compute_blobs"] {
+            assert!(table_names(&conn).iter().any(|n| n == t), "{t} missing after the upgrade");
+        }
+        run_migrations(&conn).unwrap();
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM _migrations WHERE name IN ('0204_compute_hub_tenants', '0205_compute_jobs_tenant')", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 2, "recorded once each");
     }
 
     /// A 0.46.0-era database (last migration 0189) with project chat lines
@@ -2836,7 +2902,13 @@ mod tests {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
             conn.execute("DELETE FROM _migrations WHERE name = '0164_garden_data'", []).unwrap();
-            // 0197 (agent App permissions, 0.46.3) is the newest: its
+            // 0205/0204 (the compute hub, 0.46.3) are the newest: their
+            // records go (tables are IF NOT EXISTS, the local tenant row is
+            // INSERT OR IGNORE, re-added columns are skipped as duplicates,
+            // the indexes are IF NOT EXISTS).
+            conn.execute("DELETE FROM _migrations WHERE name = '0205_compute_jobs_tenant'", []).unwrap();
+            conn.execute("DELETE FROM _migrations WHERE name = '0204_compute_hub_tenants'", []).unwrap();
+            // 0197 (agent App permissions, 0.46.3) came before them: its
             // record goes (its projects columns stay and re-adding them is
             // skipped as duplicate columns; its review table is IF NOT
             // EXISTS and its inserts/updates are idempotent).

@@ -51,7 +51,7 @@ pub(crate) fn may_exec(who: &Who) -> R<()> {
         Who::Login { role: k2_core::connect_users::Role::Member, .. } => super::access::member_read_only(who),
         Who::Owner | Who::Login { .. } | Who::Shell { .. } => Ok(()),
         Who::Agent { .. } => need_build(who),
-        Who::Wrong => Err(no(
+        Who::Wrong | Who::Tenant(_) => Err(no(
             codes::WRONG_CREDENTIAL,
             403,
             "App passes, API keys and API sessions never exec into an App (and neither does anyone acting on someone else's behalf)",

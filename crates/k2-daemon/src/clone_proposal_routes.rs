@@ -145,7 +145,7 @@ fn need_person_admin(who: &Who, what: &str) -> R<()> {
             format!("only a person (the owner or an admin) can {what} a clone proposal, from a terminal outside K2 or the K2 app"),
         )),
         Who::Login { .. } => Err(no(codes::FORBIDDEN, 403, format!("only the owner or an admin can {what} a clone proposal"))),
-        Who::Wrong | Who::Invalid => Err(no(codes::FORBIDDEN, 403, "invalid or missing token")),
+        Who::Wrong | Who::Invalid | Who::Tenant(_) => Err(no(codes::FORBIDDEN, 403, "invalid or missing token")),
     }
 }
 

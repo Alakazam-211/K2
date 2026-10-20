@@ -361,7 +361,29 @@ pub fn revoke_grant(conn: &Connection, node_id: &str, workspace_id: &str) -> Res
     .map_err(|e| e.to_string())
 }
 
+/// The grant a job key has on a node. A tenant job's key (`t/<tenant>/…`,
+/// [`super::hub::tenant_ws_key`]) reads its tenant's grant for the node
+/// (`compute_tenant_grants`, only while the tenant is active); a local
+/// project id reads `compute_node_grants`. Placement, limits and queue caps
+/// all come here, so a tenant job is held to its tenant's grant everywhere.
 pub fn grant(conn: &Connection, node_id: &str, workspace_id: &str) -> Option<GrantRow> {
+    if let Some((tenant, _)) = super::hub::parse_tenant_ws_key(workspace_id) {
+        let g = super::hub::tenant_grant(conn, tenant, node_id)?;
+        let live = super::hub::tenant_by_id(conn, tenant).is_some_and(|t| t.state == "active");
+        return live.then(|| GrantRow {
+            node_id: g.node_id,
+            workspace_id: workspace_id.to_string(),
+            scopes: "run,sync,artifacts".into(),
+            max_job_secs: g.max_job_secs,
+            max_disk_gb: g.max_disk_gb,
+            max_parallel: g.max_parallel,
+            max_queued: g.max_queued,
+            warm_at: None,
+            expires_at: None,
+            granted_by: g.granted_by,
+            granted_at: g.granted_at,
+        });
+    }
     conn.query_row(
         &format!("SELECT {GRANT_COLS} FROM compute_node_grants WHERE node_id = ?1 AND workspace_id = ?2"),
         params![node_id, workspace_id],
@@ -530,6 +552,16 @@ pub struct JobRow {
     pub notified_at: Option<i64>,
     /// Controller-only options (from `plan_json`).
     pub ctl: JobCtl,
+    /// `local`, or the compute hub tenant that submitted it (0205).
+    pub tenant_id: String,
+    /// gate | interactive | batch (0205; S3 orders by it).
+    pub class: String,
+    pub preemptible: bool,
+    pub est_secs: Option<i64>,
+    /// A tenant job: the submitter's own workspace id, label and session.
+    pub remote_ws_id: Option<String>,
+    pub remote_ws_label: Option<String>,
+    pub remote_session: Option<String>,
 }
 
 impl JobRow {
@@ -547,7 +579,8 @@ impl JobRow {
 const JOB_COLS: &str = "id, client_job_id, node_id, workspace_id, session_id, requested_by, argv_json, env_names_json, \
     request_sha256, plan_json, src_commit, src_tree, dirty_sha256, state, reason, detail, attempt, generation, \
     plan_digest, exclusive, detach, retry_interrupted, exit_code, signal, created_at, assigned_at, started_at, \
-    ended_at, log_seq, log_bytes, summary_json, receipt_json, receipt_ok, notified_at";
+    ended_at, log_seq, log_bytes, summary_json, receipt_json, receipt_ok, notified_at, tenant_id, class, preemptible, \
+    est_secs, remote_ws_id, remote_ws_label, remote_session";
 
 fn job_from_row(r: &Row<'_>) -> rusqlite::Result<JobRow> {
     let argv: String = r.get(6)?;
@@ -588,6 +621,13 @@ fn job_from_row(r: &Row<'_>) -> rusqlite::Result<JobRow> {
         receipt_ok: r.get::<_, Option<i64>>(32)?.map(|v| v != 0),
         notified_at: r.get(33)?,
         ctl: ctl_of(&r.get::<_, String>(9)?),
+        tenant_id: r.get(34)?,
+        class: r.get(35)?,
+        preemptible: r.get::<_, i64>(36)? != 0,
+        est_secs: r.get(37)?,
+        remote_ws_id: r.get(38)?,
+        remote_ws_label: r.get(39)?,
+        remote_session: r.get(40)?,
     })
 }
 
@@ -601,6 +641,39 @@ pub struct NewJob<'a> {
     pub detach: bool,
     pub retry_interrupted: bool,
     pub ctl: JobCtl,
+    /// Tenant facts (0205); `JobTenant::default()` for this server's own jobs.
+    pub tenant: JobTenant,
+}
+
+/// Who a job is for on the hub (0205).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JobTenant {
+    pub tenant_id: String,
+    pub class: String,
+    pub preemptible: bool,
+    pub remote_ws_id: Option<String>,
+    pub remote_ws_label: Option<String>,
+    pub remote_session: Option<String>,
+}
+
+impl JobTenant {
+    /// This server's own workspace (today's path), with a class.
+    pub fn local(class: &str) -> Self {
+        JobTenant {
+            tenant_id: super::hub::LOCAL.into(),
+            class: class.into(),
+            preemptible: false,
+            remote_ws_id: None,
+            remote_ws_label: None,
+            remote_session: None,
+        }
+    }
+}
+
+impl Default for JobTenant {
+    fn default() -> Self {
+        JobTenant::local("interactive")
+    }
 }
 
 pub fn insert_job(conn: &Connection, j: &NewJob<'_>) -> Result<JobRow, String> {
@@ -612,8 +685,9 @@ pub fn insert_job(conn: &Connection, j: &NewJob<'_>) -> Result<JobRow, String> {
     conn.execute(
         "INSERT INTO compute_jobs (id, client_job_id, node_id, workspace_id, session_id, requested_by, argv_json, \
          env_names_json, request_sha256, plan_json, src_commit, dirty_sha256, state, plan_digest, exclusive, detach, \
-         retry_interrupted, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 'queued', ?13, ?14, \
-         ?15, ?16, ?17)",
+         retry_interrupted, created_at, tenant_id, class, preemptible, remote_ws_id, remote_ws_label, remote_session) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 'queued', ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, \
+         ?22, ?23)",
         params![
             p.job_id,
             j.client_job_id,
@@ -631,7 +705,13 @@ pub fn insert_job(conn: &Connection, j: &NewJob<'_>) -> Result<JobRow, String> {
             p.exclusive as i64,
             j.detach as i64,
             j.retry_interrupted as i64,
-            p.created_at
+            p.created_at,
+            j.tenant.tenant_id,
+            j.tenant.class,
+            j.tenant.preemptible as i64,
+            j.tenant.remote_ws_id,
+            j.tenant.remote_ws_label,
+            j.tenant.remote_session
         ],
     )
     .map_err(|e| e.to_string())?;
@@ -680,6 +760,8 @@ pub fn job_by_client_id(conn: &Connection, workspace_id: &str, client_job_id: &s
 /// Filter for [`list_jobs`].
 #[derive(Debug, Clone, Default)]
 pub struct JobFilter<'a> {
+    /// Only this tenant's jobs (a tenant's own view); None = every tenant.
+    pub tenant_id: Option<&'a str>,
     pub node_id: Option<&'a str>,
     pub workspace_id: Option<&'a str>,
     pub state: Option<&'a str>,
@@ -691,11 +773,12 @@ pub fn list_jobs(conn: &Connection, f: &JobFilter<'_>) -> Vec<JobRow> {
     let limit = if f.limit <= 0 { 50 } else { f.limit.min(500) };
     let Ok(mut stmt) = conn.prepare(&format!(
         "SELECT {JOB_COLS} FROM compute_jobs WHERE (?1 IS NULL OR node_id = ?1) AND (?2 IS NULL OR workspace_id = ?2) \
-         AND (?3 IS NULL OR state = ?3) AND (?4 IS NULL OR session_id = ?4) ORDER BY created_at DESC, id DESC LIMIT ?5"
+         AND (?3 IS NULL OR state = ?3) AND (?4 IS NULL OR session_id = ?4) AND (?6 IS NULL OR tenant_id = ?6) \
+         ORDER BY created_at DESC, id DESC LIMIT ?5"
     )) else {
         return Vec::new();
     };
-    stmt.query_map(params![f.node_id, f.workspace_id, f.state, f.session_id, limit], job_from_row)
+    stmt.query_map(params![f.node_id, f.workspace_id, f.state, f.session_id, limit, f.tenant_id], job_from_row)
         .map(|rows| rows.filter_map(Result::ok).collect())
         .unwrap_or_default()
 }
@@ -1142,7 +1225,7 @@ mod tests {
         let p = plan("abcdef0123456789abcdef0123456789", "n1", "ws");
         let j = insert_job(
             &c,
-            &NewJob { plan: &p, client_job_id: "client-0000000001", session_id: Some("s1"), request_sha256: "h", detach: true, retry_interrupted: true, ctl: JobCtl::default() },
+            &NewJob { plan: &p, client_job_id: "client-0000000001", session_id: Some("s1"), request_sha256: "h", detach: true, retry_interrupted: true, ctl: JobCtl::default(), tenant: Default::default() },
         )
         .unwrap();
         assert_eq!(j.state, "queued");
@@ -1153,7 +1236,7 @@ mod tests {
         assert_eq!(job_by_client_id(&c, "ws", "client-0000000001").unwrap().id, j.id);
         assert!(insert_job(
             &c,
-            &NewJob { plan: &plan("other", "n1", "ws"), client_job_id: "client-0000000001", session_id: None, request_sha256: "x", detach: false, retry_interrupted: false, ctl: JobCtl::default() }
+            &NewJob { plan: &plan("other", "n1", "ws"), client_job_id: "client-0000000001", session_id: None, request_sha256: "x", detach: false, retry_interrupted: false, ctl: JobCtl::default(), tenant: Default::default() }
         )
         .is_err(), "client job id is unique per workspace");
         assert_eq!(queued_count(&c, "n1", "ws"), 1);
@@ -1181,7 +1264,7 @@ mod tests {
         };
         let j = insert_job(
             &c,
-            &NewJob { plan: &p, client_job_id: "client-ctl-000000001", session_id: None, request_sha256: "h", detach: false, retry_interrupted: false, ctl: ctl.clone() },
+            &NewJob { plan: &p, client_job_id: "client-ctl-000000001", session_id: None, request_sha256: "h", detach: false, retry_interrupted: false, ctl: ctl.clone(), tenant: Default::default() },
         )
         .unwrap();
         assert_eq!(j.ctl, ctl);
@@ -1213,7 +1296,7 @@ mod tests {
             let p = plan(&format!("dur-{i:0>28}"), if i == 4 { "n2" } else { "n1" }, "ws");
             insert_job(
                 &c,
-                &NewJob { plan: &p, client_job_id: &format!("client-dur-{i:0>8}"), session_id: None, request_sha256: "h", detach: false, retry_interrupted: false, ctl: JobCtl::default() },
+                &NewJob { plan: &p, client_job_id: &format!("client-dur-{i:0>8}"), session_id: None, request_sha256: "h", detach: false, retry_interrupted: false, ctl: JobCtl::default(), tenant: Default::default() },
             )
             .unwrap();
             set_job_state(&c, &p.job_id, JobState::Running, None, None, 1000).unwrap();
@@ -1263,7 +1346,7 @@ mod tests {
     fn queued_job(c: &Connection, id: &str, client: &str) -> JobRow {
         insert_job(
             c,
-            &NewJob { plan: &plan(id, "n1", "ws"), client_job_id: client, session_id: None, request_sha256: "h", detach: false, retry_interrupted: false, ctl: Default::default() },
+            &NewJob { plan: &plan(id, "n1", "ws"), client_job_id: client, session_id: None, request_sha256: "h", detach: false, retry_interrupted: false, ctl: Default::default(), tenant: Default::default() },
         )
         .expect("insert job")
     }

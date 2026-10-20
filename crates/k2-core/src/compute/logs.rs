@@ -4,6 +4,12 @@
 //! from the node and are continuous; a replayed chunk (seq ≤ last) is
 //! dropped, so a reconnect never duplicates output. Readers page by byte
 //! cursor; `since_seq` re-attach scans once.
+//!
+//! A compute hub tenant's job (V32) logs under
+//! `~/.k2/compute/tenants/<tenant>/jobs/` instead: [`bind_tenant`] writes a
+//! one-line marker `jobs/<job>.tenant` when the job is stored, and every
+//! path lookup reads it (cached). No database here: callers hold the DB
+//! lock around [`last_seq`].
 
 use std::collections::HashMap;
 use std::fs::OpenOptions;
@@ -44,7 +50,55 @@ pub fn dir() -> PathBuf {
 }
 
 pub fn path(job_id: &str, generation: i64) -> PathBuf {
-    dir().join(format!("{job_id}-g{generation}.log"))
+    let base = match tenant_of(job_id) {
+        Some(t) => super::hub::tenant_dir(&t).join("jobs"),
+        None => dir(),
+    };
+    base.join(format!("{job_id}-g{generation}.log"))
+}
+
+/// job id → tenant (None = local), as read from the marker files.
+static TENANTS: Mutex<Option<HashMap<String, Option<String>>>> = Mutex::new(None);
+
+fn safe_id(s: &str) -> bool {
+    !s.is_empty() && s.len() <= 80 && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+fn marker(job_id: &str) -> PathBuf {
+    dir().join(format!("{job_id}.tenant"))
+}
+
+/// Record that `job_id` belongs to `tenant_id` (a hub tenant): its logs go
+/// under that tenant's folder. `local` writes nothing.
+pub fn bind_tenant(job_id: &str, tenant_id: &str) -> Result<(), String> {
+    if tenant_id == super::hub::LOCAL {
+        return Ok(());
+    }
+    if !safe_id(job_id) || !safe_id(tenant_id) {
+        return Err("bad job or tenant id".into());
+    }
+    std::fs::create_dir_all(dir()).map_err(|e| format!("log dir: {e}"))?;
+    std::fs::write(marker(job_id), tenant_id).map_err(|e| format!("tenant marker: {e}"))?;
+    TENANTS.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(HashMap::new).insert(job_id.to_string(), Some(tenant_id.to_string()));
+    Ok(())
+}
+
+/// The tenant a job's logs belong to (None = local).
+pub fn tenant_of(job_id: &str) -> Option<String> {
+    if !safe_id(job_id) {
+        return None;
+    }
+    let mut g = TENANTS.lock().unwrap_or_else(|e| e.into_inner());
+    let map = g.get_or_insert_with(HashMap::new);
+    if let Some(t) = map.get(job_id) {
+        return t.clone();
+    }
+    let t = std::fs::read_to_string(marker(job_id)).ok().map(|s| s.trim().to_string()).filter(|s| safe_id(s));
+    // Only cache a hit: a marker may be written right after a miss.
+    if t.is_some() {
+        map.insert(job_id.to_string(), t.clone());
+    }
+    t
 }
 
 /// (last seq, file size) per open log.
@@ -81,7 +135,9 @@ pub fn append(job_id: &str, generation: i64, seq: u64, stream: LogStream, data: 
     if seq <= last || seq != last + 1 {
         return Ok(false);
     }
-    std::fs::create_dir_all(dir()).map_err(|e| format!("log dir: {e}"))?;
+    if let Some(d) = p.parent() {
+        std::fs::create_dir_all(d).map_err(|e| format!("log dir: {e}"))?;
+    }
     let mut f = OpenOptions::new().create(true).append(true).open(&p).map_err(|e| format!("open log: {e}"))?;
     let mut rec = Vec::with_capacity(HEADER + data.len());
     rec.extend_from_slice(&seq.to_be_bytes());
@@ -155,16 +211,23 @@ pub fn cursor_after_seq(job_id: &str, generation: i64, since_seq: u64) -> u64 {
     }
 }
 
-/// Delete logs older than `days`. Best effort.
+/// Delete logs older than `days` (this server's own, every tenant's, and
+/// the tenant markers). Best effort.
 pub fn sweep(days: u64) {
-    let Ok(rd) = std::fs::read_dir(dir()) else { return };
     let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(days * 86_400);
-    for e in rd.flatten() {
-        if e.metadata().and_then(|m| m.modified()).is_ok_and(|t| t < cutoff) {
-            let p = e.path();
-            let _ = std::fs::remove_file(&p);
-            if let Some(m) = TAILS.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
-                m.remove(&p);
+    let mut dirs = vec![dir()];
+    if let Ok(rd) = std::fs::read_dir(super::compute_dir().join("tenants")) {
+        dirs.extend(rd.flatten().map(|e| e.path().join("jobs")));
+    }
+    for d in dirs {
+        let Ok(rd) = std::fs::read_dir(&d) else { continue };
+        for e in rd.flatten() {
+            if e.metadata().and_then(|m| m.modified()).is_ok_and(|t| t < cutoff) {
+                let p = e.path();
+                let _ = std::fs::remove_file(&p);
+                if let Some(m) = TAILS.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+                    m.remove(&p);
+                }
             }
         }
     }
@@ -199,6 +262,27 @@ mod tests {
             assert_eq!(one.len(), 1);
             // Another generation is its own log.
             assert_eq!(last_seq("j", 2), 0);
+        });
+    }
+
+    #[test]
+    fn a_tenant_jobs_log_lives_in_its_tenant_folder() {
+        crate::tunnel::test_support::with_temp_home(|| {
+            assert!(path("jt1", 1).starts_with(dir()), "unbound = local");
+            bind_tenant("jt1", "tn-abc").unwrap();
+            let p = path("jt1", 1);
+            assert!(p.starts_with(super::super::hub::tenant_dir("tn-abc").join("jobs")), "{}", p.display());
+            assert!(append("jt1", 1, 1, LogStream::Out, b"hi").unwrap());
+            assert!(p.exists(), "written under the tenant");
+            assert_eq!(read_from("jt1", 1, 0, 1 << 20).0[0].data, b"hi");
+            // A fresh cache still finds it (the marker file).
+            TENANTS.lock().unwrap().as_mut().unwrap().clear();
+            assert_eq!(tenant_of("jt1").as_deref(), Some("tn-abc"));
+            // local writes no marker; junk ids are refused.
+            bind_tenant("jt2", "local").unwrap();
+            assert!(path("jt2", 1).starts_with(dir()));
+            assert!(bind_tenant("../x", "tn-abc").is_err());
+            assert!(bind_tenant("jt3", "../../etc").is_err());
         });
     }
 }

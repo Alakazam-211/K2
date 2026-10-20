@@ -253,7 +253,7 @@ pub(crate) fn maker(who: &Who) -> (String, Option<String>) {
         Who::Agent { project_id, .. } | Who::Shell { project_id, .. } => {
             (format!("agent:{project_id}"), Some(project_id.clone()))
         }
-        Who::Wrong | Who::Invalid => ("-".into(), None),
+        Who::Wrong | Who::Invalid | Who::Tenant(_) => ("-".into(), None),
     }
 }
 
@@ -264,7 +264,7 @@ pub(crate) fn actor(who: &Who) -> (String, &'static str) {
         Who::Login { username, .. } => (format!("login:{username}"), "login"),
         Who::Agent { project_id, .. } => (format!("agent:{project_id}"), "agent"),
         Who::Shell { project_id, .. } => (format!("shell:{project_id}"), "shell"),
-        Who::Wrong | Who::Invalid => ("-".into(), "daemon"),
+        Who::Wrong | Who::Invalid | Who::Tenant(_) => ("-".into(), "daemon"),
     }
 }
 

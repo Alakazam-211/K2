@@ -87,7 +87,7 @@ pub fn access(who: &Who, path: &str) -> Result<Scope, CliResponse> {
                 None => Err(forbidden("own_workspace_only", "this session's workspace is not known")),
             }
         }
-        Who::Wrong => Err(forbidden("wrong_credential", "an app pass or API key can't read usage")),
+        Who::Wrong | Who::Tenant(_) => Err(forbidden("wrong_credential", "an app pass or API key can't read usage")),
         Who::Invalid => Err(forbidden("auth_required", "invalid or missing token")),
     }
 }

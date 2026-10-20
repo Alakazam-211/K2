@@ -82,6 +82,14 @@ pub const ROUTES: &[&str] = &[
     "/cli/compute/nodes/routes",
     "/cli/compute/nodes/update",
     "/cli/compute/run",
+    "/cli/compute/tenants",
+    "/cli/compute/tenants/add",
+    "/cli/compute/tenants/grant",
+    "/cli/compute/tenants/resume",
+    "/cli/compute/tenants/revoke",
+    "/cli/compute/tenants/set",
+    "/cli/compute/tenants/suspend",
+    "/cli/compute/tenants/ungrant",
     "/cli/compute/usage",
 ];
 
@@ -114,6 +122,13 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/compute/nodes/routes",
     "/cli/compute/nodes/update",
     "/cli/compute/run",
+    "/cli/compute/tenants/add",
+    "/cli/compute/tenants/grant",
+    "/cli/compute/tenants/resume",
+    "/cli/compute/tenants/revoke",
+    "/cli/compute/tenants/set",
+    "/cli/compute/tenants/suspend",
+    "/cli/compute/tenants/ungrant",
 ];
 
 pub fn is_route(p: &str) -> bool {
@@ -143,6 +158,33 @@ pub enum Who {
     /// App pass, API key, API session.
     Wrong,
     Invalid,
+    /// A compute hub tenant: another K2 server whose signed request
+    /// (`X-K2-Hub`, [`crate::compute_hub`]) verified. Only the hub routes
+    /// (`/cli/compute/hub/*`) ever build one; [`who_from_tcp`] never does.
+    Tenant(Box<TenantCaller>),
+}
+
+/// A verified tenant request (prd-compute-shared-queue-v1 S1, V23): which
+/// tenant, and the submitter's own workspace and session it acts for (the
+/// submitting server vouches for those inside its tenant; the hub never
+/// lets them reach another tenant's jobs).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TenantCaller {
+    pub tenant_id: String,
+    pub label: String,
+    pub peer_fp: String,
+    /// The submitter's workspace id (None = the submitting server's owner,
+    /// who sees every job of this tenant).
+    pub remote_ws: Option<String>,
+    pub remote_ws_label: Option<String>,
+    pub remote_session: Option<String>,
+}
+
+impl TenantCaller {
+    /// The hub-side workspace key this caller acts for, if it named one.
+    pub fn ws_key(&self) -> Option<String> {
+        self.remote_ws.as_deref().map(|w| compute::hub::tenant_ws_key(&self.tenant_id, w))
+    }
 }
 
 impl Who {
@@ -154,7 +196,20 @@ impl Who {
             Who::Shell { project_id, .. } => format!("shell:{}", ws_handle(project_id)),
             Who::Wrong => "wrong-credential".into(),
             Who::Invalid => "-".into(),
+            Who::Tenant(t) => format!("tenant:{}", t.label),
         }
+    }
+    /// The verified tenant behind a hub request.
+    pub(crate) fn tenant(&self) -> Option<&TenantCaller> {
+        match self {
+            Who::Tenant(t) => Some(t),
+            _ => None,
+        }
+    }
+    /// The compute tenant id this caller submits as (`local` for everyone
+    /// on this server).
+    pub(crate) fn tenant_id(&self) -> &str {
+        self.tenant().map(|t| t.tenant_id.as_str()).unwrap_or(compute::hub::LOCAL)
     }
     pub(crate) fn passport(&self) -> Option<(&str, &str)> {
         match self {
@@ -218,6 +273,7 @@ fn status_line(code: u16) -> &'static str {
     match code {
         200 => "200 OK",
         400 => "400 Bad Request",
+        401 => "401 Unauthorized",
         403 => "403 Forbidden",
         404 => "404 Not Found",
         409 => "409 Conflict",
@@ -403,8 +459,16 @@ fn no_workspace(req: &str) -> Refusal {
 
 /// The workspace a request acts for. A passport's comes from the passport
 /// (naming another is `forbidden`); others must name one.
-fn target_ws(who: &Who, requested: Option<&str>) -> R<Ws> {
+pub(crate) fn target_ws(who: &Who, requested: Option<&str>) -> R<Ws> {
     let requested = requested.map(str::trim).filter(|s| !s.is_empty());
+    if let Some(t) = who.tenant() {
+        // A tenant acts for the submitter's own workspace: its key is
+        // namespaced by the tenant, so it can never name a local project
+        // or another tenant's workspace.
+        let rws = t.remote_ws.as_deref().ok_or_else(|| no("workspace_not_found", 404, "a tenant request names its workspace (remoteWs)"))?;
+        let label = t.remote_ws_label.clone().unwrap_or_else(|| rws.to_string());
+        return Ok(Ws { id: compute::hub::tenant_ws_key(&t.tenant_id, rws), path: String::new(), handle: format!("{}/{label}", t.label) });
+    }
     if let Some((own, _)) = who.passport() {
         let ws = ws_by_id(own).ok_or_else(|| no("workspace_not_found", 404, "your workspace is not registered"))?;
         if let Some(req) = requested {
@@ -541,6 +605,8 @@ pub fn handle_from(path: &str, who: Who, body: &[u8], params: &HashMap<String, S
         // Node admin (prd-k2-node-admin-v1): approvals, policy, update,
         // health, alerts.
         p if crate::compute_admin::is_route(p) => crate::compute_admin::handle(p, &who, body, params),
+        // The compute hub's tenants (prd-compute-shared-queue-v1 S1).
+        p if crate::compute_hub::is_admin_route(p) => crate::compute_hub::admin(p, &who, body, params),
         _ => Err(no("not_found", 404, "no such compute route")),
     };
     match r {
@@ -688,11 +754,10 @@ fn node_status(who: &Who, n: &store::NodeRow) -> serde_json::Value {
             compute::admin::admin_cols(&conn, &n.id),
         )
     };
-    let viewer = who.passport();
-    let running: Vec<serde_json::Value> = active.iter().map(|r| job_entry(viewer, r, &decision, now)).collect();
+    let running: Vec<serde_json::Value> = active.iter().map(|r| job_entry(who, r, &decision, now)).collect();
     let mut waiting_jobs: Vec<(usize, serde_json::Value)> = queued
         .iter()
-        .map(|r| (decision.waiting.get(&r.id).map(|(p, _)| *p).unwrap_or(usize::MAX), job_entry(viewer, r, &decision, now)))
+        .map(|r| (decision.waiting.get(&r.id).map(|(p, _)| *p).unwrap_or(usize::MAX), job_entry(who, r, &decision, now)))
         .collect();
     waiting_jobs.sort_by_key(|(p, _)| *p);
     let state = if n.state == "pending" {
@@ -1370,12 +1435,16 @@ fn node_features(n: &store::NodeRow) -> Vec<String> {
     live.or_else(|| n.last_offer.clone()).map(|o| o.features).unwrap_or_default()
 }
 
-fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
+pub(crate) fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     need_credential(who)?;
     // The workspace switch (`compute_off`) for passports.
     passport_gate(who)?;
     let v = json_body(body)?;
     let ws = target_ws(who, s(&v, "workspace"))?;
+    // The job's class (gate > interactive > batch) must be within the
+    // tenant's top class (Rosson 2026-10-20: gate only where the hub owner
+    // allows it). `local` is this server's own tenant row.
+    job_class(who, &v)?;
     // `--plan` (dry run): every check `run` makes, nothing stored or sent.
     if b(&v, "plan") == Some(true) {
         if v.get("shards").is_some_and(|x| !x.is_null()) {
@@ -1401,12 +1470,82 @@ fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
             return Ok(serde_json::json!({ "job": job_summary(&j), "existing": true }));
         }
     }
+    tenant_queue_room(who)?;
     if v.get("shards").is_some_and(|x| !x.is_null()) {
         return run_sharded(who, &v, &ws, client_id, &request_sha);
     }
     let session = who.passport().map(|(_, sid)| sid.to_string());
     let sub = submit_one(who, &v, &ws, client_id, &request_sha, &SubmitOpts { session, ..Default::default() })?;
     Ok(submitted_json(who, &sub))
+}
+
+/// `class` from a run body (default: `batch` for --detach, else
+/// `interactive`), checked against the caller's tenant top class.
+pub(crate) fn job_class(who: &Who, v: &serde_json::Value) -> R<String> {
+    let class = match s(v, "class") {
+        Some(c) => c.to_string(),
+        None if b(v, "detach") == Some(true) => "batch".to_string(),
+        None => "interactive".to_string(),
+    };
+    if compute::hub::class_rank(&class).is_none() {
+        return Err(no(codes::BAD_REQUEST, 400, "--class is gate, interactive or batch"));
+    }
+    if s(v, "class").is_none() {
+        // The default never needs a check (and never refuses a local job
+        // that names no class: today's behaviour).
+        return Ok(class);
+    }
+    let tenant = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        compute::hub::tenant_by_id(&conn, who.tenant_id())
+    };
+    let allowed = tenant.as_ref().is_some_and(|t| t.allows_class(&class));
+    if !allowed {
+        let top = tenant.map(|t| t.top_class).unwrap_or_else(|| "interactive".into());
+        return Err(no(
+            compute::hub::codes::CLASS_NOT_ALLOWED,
+            403,
+            format!("--class {class} is above what this server may use (up to {top}); the hub owner sets it (k2 compute tenants set <tenant> --top-class …)"),
+        ));
+    }
+    Ok(class)
+}
+
+/// A tenant over its max queued (the tenant row's `max_queued`, across
+/// nodes) is refused `queue_full` before anything is stored.
+fn tenant_queue_room(who: &Who) -> R<()> {
+    let Some(t) = who.tenant() else { return Ok(()) };
+    let (max, queued) = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let max = compute::hub::tenant_by_id(&conn, &t.tenant_id).and_then(|r| r.max_queued);
+        let queued: i64 = conn
+            .query_row("SELECT COUNT(*) FROM compute_jobs WHERE tenant_id = ?1 AND state = 'queued'", [&t.tenant_id], |r| r.get(0))
+            .unwrap_or(0);
+        (max, queued)
+    };
+    if let Some(m) = max.filter(|m| queued >= *m) {
+        return Err(no(codes::QUEUE_FULL, 409, format!("{queued} jobs from your server already wait on this hub (its cap is {m}); wait for one to start")));
+    }
+    Ok(())
+}
+
+/// The tenant facts a new job row carries (0205).
+fn job_tenant(who: &Who, v: &serde_json::Value) -> R<store::JobTenant> {
+    let class = job_class(who, v)?;
+    let preemptible = b(v, "preemptible") == Some(true);
+    Ok(match who.tenant() {
+        Some(t) => store::JobTenant {
+            tenant_id: t.tenant_id.clone(),
+            class,
+            preemptible,
+            remote_ws_id: t.remote_ws.clone(),
+            remote_ws_label: t.remote_ws_label.clone(),
+            remote_session: t.remote_session.clone(),
+        },
+        None => store::JobTenant { preemptible, ..store::JobTenant::local(&class) },
+    })
 }
 
 /// How one job is submitted (a plain run, or one shard of a split run).
@@ -1555,6 +1694,13 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         store::grant(&conn, &node.id, &ws.id)
     };
     if grant.is_none() && !who.is_admin() {
+        if let Some(t) = who.tenant() {
+            return Err(no(
+                codes::NOT_GRANTED,
+                403,
+                format!("'{}' isn't granted to your server on this hub: ask the hub owner (k2 compute tenants grant {} {})", node.name, t.label, node.name),
+            ));
+        }
         return Err(no(
             codes::NOT_GRANTED,
             403,
@@ -1638,8 +1784,15 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     // Source: the workspace's own repo only (never a path the client names
     // outside it, so a passport can't ship another repo off this machine).
     let job_id = crypto::random_id().map_err(|e| no("internal", 500, e))?;
+    let tenant = job_tenant(who, v)?;
     let (src, source) = if b(&v, "noSource") == Some(true) {
         (None, None)
+    } else if let Some(t) = who.tenant() {
+        // A tenant's code is already on this hub: its commit in the
+        // tenant's mirror, its --dirty blob in the tenant's blob store
+        // (S2: prepare + blob). Nothing is read from a local path.
+        let (src, info) = crate::compute_hub::tenant_source(t, &v)?;
+        (Some(src), Some(info))
     } else {
         let (src, info) = source_for(&ws, &v, &compute_ws::dirty_blob_path(&job_id), &mut warnings)?;
         (Some(src), Some(info))
@@ -1693,9 +1846,12 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
                 detach,
                 retry_interrupted: retries > 0,
                 ctl,
+                tenant,
             },
         )
         .map_err(|e| no("internal", 500, e))?;
+        // A tenant's logs live under its own folder (V32).
+        compute::logs::bind_tenant(&j.id, &j.tenant_id).map_err(|e| no("internal", 500, e))?;
         store::record_event(
             &conn,
             &who.label(),
@@ -1869,9 +2025,16 @@ fn pick_node(
             "no node granted to this workspace matches --any (os/arch/labels, --needs/--artifact support, queue room); k2 compute nodes",
         ));
     }
-    let pk = compute::sync::repo_root(Path::new(&ws.path))
-        .ok()
-        .map(|root| compute::sync::project_key(&ws.id, compute::sync::origin_url(&root).as_deref()));
+    let pk = match compute::hub::parse_tenant_ws_key(&ws.id) {
+        // A tenant job's slots are named by the hub's key (V28).
+        Some((tenant, rws)) => {
+            let remote = v.get("source").and_then(|x| s(x, "remote")).and_then(compute::sync::fetchable_remote);
+            Some(compute::hub::hub_project_key(tenant, rws, remote.as_deref()))
+        }
+        None => compute::sync::repo_root(Path::new(&ws.path))
+            .ok()
+            .map(|root| compute::sync::project_key(&ws.id, compute::sync::origin_url(&root).as_deref())),
+    };
     let Some((c, tier)) = choose(&cands, want, prefer_not, pk.as_deref(), None) else {
         return Err(no(
             codes::NO_NODE_FITS,
@@ -2015,7 +2178,7 @@ fn source_for(ws: &Ws, v: &serde_json::Value, blob_out: &Path, warnings: &mut Ve
 
 // ── jobs ─────────────────────────────────────────────────────────────
 
-fn job_summary(j: &store::JobRow) -> serde_json::Value {
+pub(crate) fn job_summary(j: &store::JobRow) -> serde_json::Value {
     let node = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -2024,27 +2187,57 @@ fn job_summary(j: &store::JobRow) -> serde_json::Value {
     let mut v = serde_json::to_value(j).unwrap_or_default();
     v["short"] = compute::message::short(&j.id).into();
     v["node"] = node.into();
-    v["workspace"] = ws_handle(&j.workspace_id).into();
+    v["workspace"] = job_ws_display(j).into();
+    if j.tenant_id != compute::hub::LOCAL {
+        v["tenant"] = tenant_label(&j.tenant_id).into();
+    }
     v
 }
 
-/// One job as another job's queue view (or `status`) shows it. `viewer` =
-/// the caller's passport: it sees ids and commands only for its own
-/// workspace; other workspaces' jobs carry state and age only.
-fn job_entry(viewer: Option<(&str, &str)>, r: &store::JobRow, decision: &scheduler::Decision, now: i64) -> serde_json::Value {
-    let mut e = serde_json::json!({"state": r.state, "ageSecs": (now - r.created_at).max(0)});
-    if viewer.is_none_or(|(ws, _)| ws == r.workspace_id) {
+/// A tenant's label (its id when the row is gone).
+pub(crate) fn tenant_label(tenant_id: &str) -> String {
+    if tenant_id == compute::hub::LOCAL {
+        return compute::hub::LOCAL.into();
+    }
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    compute::hub::tenant_by_id(&conn, tenant_id).map(|t| t.label).unwrap_or_else(|| tenant_id.to_string())
+}
+
+/// How a job's workspace reads: the local handle, or `<tenant>/<remote ws>`.
+pub(crate) fn job_ws_display(j: &store::JobRow) -> String {
+    if j.tenant_id == compute::hub::LOCAL {
+        return ws_handle(&j.workspace_id);
+    }
+    let ws = j.remote_ws_label.clone().or_else(|| j.remote_ws_id.clone()).unwrap_or_default();
+    format!("{}/{ws}", tenant_label(&j.tenant_id))
+}
+
+/// One job as another job's queue view (or `status`) shows it. A passport
+/// sees ids and commands only for its own workspace; a tenant only for its
+/// own jobs (V12). Everyone else's entries carry state, age, class and the
+/// tenant's label, never argv, ids or workspaces.
+pub(crate) fn job_entry(who: &Who, r: &store::JobRow, decision: &scheduler::Decision, now: i64) -> serde_json::Value {
+    let mut e = serde_json::json!({"state": r.state, "ageSecs": (now - r.created_at).max(0), "class": r.class});
+    if visible_to(who, r) {
         let mut argv = r.argv.join(" ");
         if argv.chars().count() > 80 {
             argv = argv.chars().take(79).collect::<String>() + "…";
         }
         e["short"] = compute::message::short(&r.id).into();
-        e["workspace"] = ws_handle(&r.workspace_id).into();
-        e["mine"] = viewer.is_some_and(|(_, sid)| r.session_id.as_deref() == Some(sid)).into();
+        e["workspace"] = job_ws_display(r).into();
+        e["mine"] = match who {
+            Who::Tenant(t) => t.remote_session.is_some() && r.remote_session == t.remote_session,
+            _ => who.passport().is_some_and(|(_, sid)| r.session_id.as_deref() == Some(sid)),
+        }
+        .into();
         e["argv"] = argv.into();
     } else {
         e["workspace"] = serde_json::Value::Null;
         e["mine"] = false.into();
+    }
+    if r.tenant_id != compute::hub::LOCAL || who.tenant().is_some() {
+        e["tenant"] = tenant_label(&r.tenant_id).into();
     }
     if let Some(t) = r.assigned_at.or(r.started_at) {
         e["elapsedSecs"] = (now - t).max(0).into();
@@ -2064,7 +2257,6 @@ fn job_entry(viewer: Option<(&str, &str)>, r: &store::JobRow, decision: &schedul
 fn queue_view(who: &Who, j: &store::JobRow, decision: &scheduler::Decision) -> Option<serde_json::Value> {
     let (pos, why) = decision.waiting.get(&j.id)?;
     let now = compute::now();
-    let viewer = who.passport();
     let (active, queued, grant, node_offer) = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -2076,7 +2268,7 @@ fn queue_view(who: &Who, j: &store::JobRow, decision: &scheduler::Decision) -> O
         )
     };
     let offer = compute_ws::live_view(&j.node_id).2.or(node_offer);
-    let entry = |r: &store::JobRow| job_entry(viewer, r, decision, now);
+    let entry = |r: &store::JobRow| job_entry(who, r, decision, now);
     let mut ahead: Vec<serde_json::Value> = active.iter().map(&entry).collect();
     let mut before: Vec<(usize, &store::JobRow)> = queued
         .iter()
@@ -2110,31 +2302,61 @@ fn job_for(who: &Who, token: Option<&str>) -> R<store::JobRow> {
     if gate.as_deref().is_some_and(|ws| ws != j.workspace_id) {
         return Err(no(codes::JOB_NOT_FOUND, 404, format!("no job '{t}'")));
     }
+    // A tenant sees only its own jobs (and, when it names a workspace, only
+    // that workspace's); anything else is the same 404 as a missing job.
+    if !visible_to(who, &j) {
+        return Err(no(codes::JOB_NOT_FOUND, 404, format!("no job '{t}'")));
+    }
     Ok(j)
 }
 
-fn jobs_list(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
+/// May `who` see `j` in full? Passports: their own workspace (checked by
+/// `passport_gate` callers). Tenants: their own tenant, and their named
+/// workspace when they name one (V30). Everyone else on this server: yes.
+pub(crate) fn visible_to(who: &Who, j: &store::JobRow) -> bool {
+    match who {
+        Who::Tenant(t) => j.tenant_id == t.tenant_id && t.ws_key().is_none_or(|k| k == j.workspace_id),
+        _ => match who.passport() {
+            Some((ws, _)) => ws == j.workspace_id,
+            None => true,
+        },
+    }
+}
+
+pub(crate) fn jobs_list(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
     need_credential(who)?;
     let gate = passport_gate(who)?;
     let node = match params.get("node").map(String::as_str).filter(|s| !s.is_empty()) {
         Some(t) => Some(node_or_404(Some(t))?.id),
         None => None,
     };
-    let ws = match gate {
-        Some(own) => Some(own),
-        None => match params.get("workspace").map(String::as_str).filter(|s| !s.is_empty()) {
+    let ws = match (gate, who.tenant()) {
+        (Some(own), _) => Some(own),
+        (None, Some(t)) => t.ws_key(),
+        (None, None) => match params.get("workspace").map(String::as_str).filter(|s| !s.is_empty()) {
             Some(t) => Some(ws_by_token_or_worktree(t).ok_or_else(|| no_workspace(t))?.id),
             None => None,
         },
     };
     let mine = params.get("mine").is_some_and(|v| v == "1" || v == "true");
     let session = if mine { who.passport().map(|(_, s)| s.to_string()) } else { None };
+    // A tenant lists only its own jobs; `mine` = its caller's session
+    // (stored as the job's remote session).
+    let tenant_scope = who.tenant().map(|t| t.tenant_id.clone());
+    let remote_session = if mine { who.tenant().and_then(|t| t.remote_session.clone()) } else { None };
     let limit = params.get("limit").and_then(|l| l.parse().ok()).unwrap_or(30);
     let state = params.get("state").map(String::as_str).filter(|s| JobState::parse(s).is_some());
     let rows = {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        store::list_jobs(&conn, &store::JobFilter { node_id: node.as_deref(), workspace_id: ws.as_deref(), state, session_id: session.as_deref(), limit })
+        let mut rows = store::list_jobs(
+            &conn,
+            &store::JobFilter { tenant_id: tenant_scope.as_deref(), node_id: node.as_deref(), workspace_id: ws.as_deref(), state, session_id: session.as_deref(), limit },
+        );
+        if let Some(rs) = &remote_session {
+            rows.retain(|r| r.remote_session.as_deref() == Some(rs.as_str()));
+        }
+        rows
     };
     // Queued rows carry the queue view (one scheduler pass per node).
     let mut decisions: HashMap<String, scheduler::Decision> = HashMap::new();
@@ -2228,7 +2450,7 @@ fn wait_for_change(j: store::JobRow, wait: u64) -> R<store::JobRow> {
     Ok(row)
 }
 
-fn job_get(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
+pub(crate) fn job_get(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
     let j = job_for(who, params.get("job").map(String::as_str))?;
     let wait = params.get("wait").and_then(|w| w.parse::<u64>().ok()).unwrap_or(0).min(25);
     let j = wait_for_change(j, wait)?;
@@ -2307,6 +2529,7 @@ fn run_sharded(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reque
         stall_secs: None,
     };
     let session = who.passport().map(|(_, sid)| sid.to_string());
+    let tenant = job_tenant(who, v)?;
     let parent = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -2320,9 +2543,11 @@ fn run_sharded(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reque
                 detach,
                 retry_interrupted: false,
                 ctl: store::JobCtl { admin: who.is_admin(), queued_at: now, ..Default::default() },
+                tenant,
             },
         )
         .map_err(|e| no("internal", 500, e))?;
+        compute::logs::bind_tenant(&p.id, &p.tenant_id).map_err(|e| no("internal", 500, e))?;
         store::set_parent_running(&conn, &p.id).map_err(|e| no("internal", 500, e))?;
         p
     };
@@ -2424,7 +2649,7 @@ fn fetch_code(code: &str) -> &'static str {
 /// Without `name`: the kept artifacts. With it: pull the file from the
 /// node into this server's cache once (blocking), then a base64 slice
 /// at `offset`. The CLI loops until `eof`.
-fn job_artifact(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
+pub(crate) fn job_artifact(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
     let j = job_for(who, params.get("job").map(String::as_str))?;
     if !j.ctl.shards.is_empty() {
         // A split run: every shard's files as `shard-<i>/<name>`.
@@ -2497,7 +2722,7 @@ fn job_artifact(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Va
     }))
 }
 
-fn job_logs(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
+pub(crate) fn job_logs(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
     let j = job_for(who, params.get("job").map(String::as_str))?;
     compute_ws::touch_follower(&j.id);
     if !j.ctl.shards.is_empty() {
@@ -2557,7 +2782,7 @@ fn job_logs(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value>
     }
 }
 
-fn job_receipt(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
+pub(crate) fn job_receipt(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
     let j = job_for(who, params.get("job").map(String::as_str))?;
     let Some(raw) = j.receipt_json.as_deref() else {
         return Err(no("no_receipt", 404, "no receipt yet (the node sends it when the job ends)"));
@@ -2578,7 +2803,7 @@ fn job_receipt(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Val
 /// what the CLI sends without `--force`) refuses it.
 pub(crate) const JOB_STARTED: &str = "job_started";
 
-fn job_cancel(who: &Who, body: &[u8]) -> R<serde_json::Value> {
+pub(crate) fn job_cancel(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     let v = json_body(body)?;
     let queued_only = match s(&v, "ifState") {
         None => false,
@@ -2617,7 +2842,7 @@ fn job_cancel(who: &Who, body: &[u8]) -> R<serde_json::Value> {
 
 /// Cancel one job: queued, at once (compare-and-set); on a node, the node
 /// is told, unless `queued_only` (no --force), which refuses it.
-fn cancel_one(who: &Who, seen: &store::JobRow, queued_only: bool) -> R<serde_json::Value> {
+pub(crate) fn cancel_one(who: &Who, seen: &store::JobRow, queued_only: bool) -> R<serde_json::Value> {
     let by = who.label();
     let short = compute::message::short(&seen.id).to_string();
     let node_name = {
@@ -2692,7 +2917,7 @@ fn cancel_one(who: &Who, seen: &store::JobRow, queued_only: bool) -> R<serde_jso
     }
 }
 
-fn job_retry(who: &Who, body: &[u8]) -> R<serde_json::Value> {
+pub(crate) fn job_retry(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     let v = json_body(body)?;
     let j = job_for(who, s(&v, "job"))?;
     if !j.is_terminal() {

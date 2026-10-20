@@ -165,6 +165,13 @@ mod tests {
             receipt_ok: None,
             notified_at: None,
             ctl: Default::default(),
+            tenant_id: "local".into(),
+            class: "interactive".into(),
+            preemptible: false,
+            est_secs: None,
+            remote_ws_id: None,
+            remote_ws_label: None,
+            remote_session: None,
         }
     }
 

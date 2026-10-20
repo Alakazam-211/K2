@@ -1430,13 +1430,42 @@ pub fn grant_hook_on(env: &Env, row: &Row) -> Value {
         return json!({"target": "none", "why": "a standalone install takes no K2 grants"});
     }
     let socket = env.ops.mgmt_socket();
+    let chat = chat_backend_on(&socket);
     match env.ops.hook_set(true, Some(&socket), Some(pin::SEW_MGMT_TOKEN), HOOK_ACTOR) {
-        Ok(()) => json!({"target": "on"}),
+        Ok(()) => json!({"target": "on", "chat": chat}),
         Err(e) => {
             k2_core::log_debug!("[sew] grant hook target not set: {e}");
-            json!({"target": "error", "error": e})
+            json!({"target": "error", "error": e, "chat": chat})
         }
     }
+}
+
+/// S30 K15: `k2 chat`'s real backend follows the grant hook's target (K2
+/// identity installs only; a standalone install has no K2 agents in it).
+/// Never in unit tests: the backend registry is process-wide, and the chat
+/// route tests install their fake per thread.
+fn chat_backend_on(socket: &str) -> &'static str {
+    #[cfg(all(unix, not(test)))]
+    {
+        match crate::sew_chat::client::install_live(socket) {
+            Ok(()) => "on",
+            Err(e) => {
+                k2_core::log_debug!("[sew] chat backend not installed: {e}");
+                "off"
+            }
+        }
+    }
+    #[cfg(not(all(unix, not(test))))]
+    {
+        let _ = socket;
+        "off"
+    }
+}
+
+/// S30 K15: chat routes answer 503 `chat_unavailable` again.
+fn chat_backend_off() {
+    #[cfg(not(test))]
+    crate::sew_chat::sew::uninstall();
 }
 
 /// Pause S27's grant hook (`drop` false: disable, an uninstall that keeps
@@ -1445,6 +1474,8 @@ pub fn grant_hook_on(env: &Env, row: &Row) -> Value {
 /// open outbox row skipped, so nothing retries against a Sew that is gone.
 /// A box whose hook was never set is left alone (no `skin.db` is created).
 pub fn grant_hook_off(env: &Env, drop: bool) -> Value {
+    // `k2 chat` stops with the hook, whatever the hook's own state.
+    chat_backend_off();
     match env.ops.hook_targets() {
         Ok(t) if t.iter().any(|k| k == k2_core::tool_hook::CHAT_KIND) => {}
         Ok(_) => return json!({"target": "none"}),

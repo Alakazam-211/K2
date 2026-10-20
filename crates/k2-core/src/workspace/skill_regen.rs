@@ -301,6 +301,12 @@ fn compose_agents_md(project_path: &str) -> String {
 
     if inc_tooling {
         out.push_str(AGENTS_MD_TOOLING_SECTION);
+        // Sew chat (S30 K21): one more sentence only when this workspace
+        // can use `k2 chat` / `k2 hostchat`; hidden verbs are never named.
+        if let Some(line) = crate::sew_chat::teach::tooling_line(crate::sew_chat::teach::gates_for_path(project_path)) {
+            out.push('\n');
+            out.push_str(&line);
+        }
     }
     // Permission cards (Beta, PRD rev 3.1 §11.4): only while both switches
     // are on for this workspace. Off = no pointer, today's bytes.
@@ -763,6 +769,17 @@ for leftover harness names — it is not how you get `AGENTS.md`.
     .to_string()
 }
 
+/// The loadable skills for one workspace: the shared ones plus the gated
+/// `k2-chat` skill (S30 K21).
+fn ensure_project_skills(project_path: &str) {
+    let dot = crate::workspace_dot_dir(project_path);
+    ensure_compose_sidecar_skills(&dot);
+    let gates = crate::sew_chat::teach::gates_for_path(project_path);
+    if let Err(e) = crate::sew_chat::teach::ensure_chat_skill(&dot, gates) {
+        crate::log_debug!("[skill_regen] k2-chat skill at {}: {e}", dot.display());
+    }
+}
+
 fn ensure_compose_sidecar_skills(dot: &Path) {
     use crate::skills::version::{ensure_skill_up_to_date, SKILL_VERSION_CANONICAL_AGENT};
     let cli = dot.join("skills/k2-cli/SKILL.md");
@@ -881,7 +898,7 @@ fn publish_canonical_agents_md(project_path: &str) -> bool {
         &canonical,
         atomic_write_str(&canonical, &new_body),
     );
-    ensure_compose_sidecar_skills(&dot);
+    ensure_project_skills(project_path);
     true
 }
 
@@ -1219,7 +1236,7 @@ pub fn write_workspace_skill_file_with_body(project_path: &str, _base_body: Opti
     // matched (watcher skip does not apply here).
     let wrote = publish_canonical_agents_md(project_path);
     if !wrote {
-        ensure_compose_sidecar_skills(&crate::workspace_dot_dir(project_path));
+        ensure_project_skills(project_path);
     }
     apply_agents_md_after_publish(project_path);
 

@@ -1602,6 +1602,16 @@ fn run_migrations_through(conn: &Connection, last: Option<&str>) -> Result<()> {
         // (Sew S30) and 0236 (App custom domains) follow. The store is
         // `crate::feedback`.
         ("0232_ticket_attachments", include_str!("../../drizzle_sql/0232_ticket_attachments.sql")),
+        // 0234 — Sew chat for agents, S30 core (plan-sew-s30-s32-on-k2-v1
+        // K16/K18; 0.46.6): per-Space agent access, the write-attempt audit,
+        // the approval queue, the per-box chat policy and the people who let
+        // agents post as them. Built as 0167 (2026-10-15), held as 0209 for 0.46.4;
+        // renumbered 0234 because boxes are already at 0.46.5's 0231; it
+        // lands after 0233 (mobile) and 0232 (ticket attachments) and runs
+        // after them, in landing order. The "Manage Sew" switch is S29's 0166.
+        // New tables only: renumber freely on a slip (and edit the
+        // migration-order tests below).
+        ("0234_sew_chat", include_str!("../../drizzle_sql/0234_sew_chat.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2265,7 +2275,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0232_ticket_attachments",
+            last_name, "0234_sew_chat",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2347,6 +2357,8 @@ mod tests {
                 "0233_sim_switch",
                 // 0.46.6: files on ticket messages.
                 "0232_ticket_attachments",
+                // 0.46.6: Sew chat for agents (S30).
+                "0234_sew_chat",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2436,6 +2448,8 @@ mod tests {
                 "0233_sim_switch",
                 // 0.46.6: files on ticket messages.
                 "0232_ticket_attachments",
+                // 0.46.6: Sew chat for agents (S30).
+                "0234_sew_chat",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -2663,7 +2677,7 @@ mod tests {
 
         run_migrations(&conn).unwrap();
         let top: String = conn.query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).unwrap();
-        assert_eq!(top, "0232_ticket_attachments", "0232 (0.46.6, landed after 0233) runs last");
+        assert_eq!(top, "0234_sew_chat", "0234 (0.46.6, Sew chat) runs last");
         let last: String = conn
             .query_row("SELECT name FROM _migrations WHERE name < '0224' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
             .unwrap();
@@ -2690,9 +2704,10 @@ mod tests {
                 "0230_compute_job_tiers",
                 "0231_zen_version_carry",
                 "0233_sim_switch",
-                "0232_ticket_attachments"
+                "0232_ticket_attachments",
+                "0234_sew_chat"
             ],
-            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, and 0.46.6's 0233 then 0232)"
+            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, and 0.46.6's 0233, 0232 then 0234)"
         );
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM app_resource_samples", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0, "the trends table starts empty");
@@ -3317,6 +3332,100 @@ mod tests {
     /// The tables 0164 creates (contract-garden-data-v1 §2.1).
     const GARDEN_DATA_TABLES: &[&str] = &["zen_data_grants", "zen_widget_authors"];
 
+    /// The tables 0234 creates (Sew chat for agents, S30 K16).
+    const SEW_CHAT_TABLES: &[&str] =
+        &["sew_chat_access", "sew_chat_actions", "sew_chat_outbox", "sew_chat_settings", "sew_chat_on_behalf", "sew_chat_audit"];
+
+    /// 0234 on a fresh database: the tables exist; the CHECKs refuse
+    /// unknown levels, modes, statuses, queue reasons and actor kinds; a
+    /// live idempotency key is unique per workspace while a refused one
+    /// may repeat; KM1 actions have room. The Manage Sew switch is S29's
+    /// 0166 column, not 0234's.
+    #[test]
+    fn sew_chat_migration_creates_tables_and_checks() {
+        let conn = fresh_memory();
+        run_migrations(&conn).unwrap();
+        let tables = table_names(&conn);
+        for t in SEW_CHAT_TABLES {
+            assert!(tables.iter().any(|n| n == t), "0234 table {t} missing: {tables:?}");
+        }
+        let sql = include_str!("../../drizzle_sql/0234_sew_chat.sql");
+        assert!(!sql.contains("ALTER TABLE projects"), "the Manage Sew column is 0166's; 0234 must not add it again");
+        conn.execute("INSERT INTO projects (id, name, path, handle) VALUES ('w-sew', 'Sew', '/t/sew', 'sewws')", []).unwrap();
+        let on: i64 = conn.query_row("SELECT agents_can_manage_chat FROM projects WHERE id = 'w-sew'", [], |r| r.get(0)).unwrap();
+        assert_eq!(on, 0, "Manage Sew (0166) is OFF by default");
+        let access = |level: &str, approval: &str| {
+            conn.execute(
+                "INSERT OR REPLACE INTO sew_chat_access (project_id, space_id, space_slug, level, approval, updated_by, updated_at)
+                 VALUES ('w-sew', 's1', 'hearth', ?1, ?2, 'owner', 1)",
+                params![level, approval],
+            )
+        };
+        for level in ["read", "reply", "send", "manage"] {
+            access(level, "required").unwrap_or_else(|e| panic!("level {level}: {e}"));
+        }
+        assert!(access("post", "none").is_err(), "the stored level word is 'send'");
+        assert!(access("admin", "none").is_err());
+        assert!(access("send", "on").is_err(), "approval is none|required");
+        let act = |id: &str, status: &str, key: &str| {
+            conn.execute(
+                "INSERT INTO sew_chat_actions (id, project_id, k2_session, action, addr, status, client_key, created_at, updated_at)
+                 VALUES (?1, 'w-sew', 'sess', 'send', 'hearth/general', ?2, ?3, 1, 1)",
+                params![id, status, key],
+            )
+        };
+        act("a1", "refused", "k1").unwrap();
+        act("a2", "refused", "k1").expect("a refused attempt may be retried under its key");
+        act("a3", "posted", "k1").unwrap();
+        assert!(act("a4", "queued", "k1").is_err(), "a live key is unique per workspace");
+        assert!(act("a5", "exploded", "k2").is_err(), "unknown status");
+        for kind in ["answer", "decline", "void", "ask"] {
+            conn.execute(
+                "INSERT INTO sew_chat_actions (id, project_id, k2_session, action, addr, status, client_key, created_at, updated_at)
+                 VALUES (?1, 'w-sew', 's', ?2, 'x', 'refused', 'k4', 1, 1)",
+                params![format!("km1-{kind}"), kind],
+            )
+            .unwrap_or_else(|e| panic!("KM1 action {kind} has room: {e}"));
+        }
+        let outbox = |id: &str, status: &str, kind: Option<&str>, reason: &str| {
+            conn.execute(
+                "INSERT INTO sew_chat_outbox (id, action_id, project_id, k2_session, agent_name, action, channel_id, addr,
+                  client_key, body, body_sha256, body_bytes, status, decided_kind, queue_reason, created_at, expires_at)
+                 VALUES (?1, 'a3', 'w-sew', 's', 'sewws', 'send', 'c1', 'hearth/general', 'k1', 'hi', 'h', 2, ?2, ?3, ?4, 1, 2)",
+                params![id, status, kind, reason],
+            )
+        };
+        for (i, st) in ["queued", "approved", "denied", "cancelled"].iter().enumerate() {
+            outbox(&format!("o{i}"), st, None, "approval_required").unwrap_or_else(|e| panic!("outbox {st}: {e}"));
+        }
+        outbox("o-ob", "queued", None, "on_behalf").unwrap();
+        assert!(outbox("o-x1", "expired", None, "approval_required").is_err(), "expiry is a denial, not a fifth state");
+        assert!(outbox("o-x2", "approved", Some("robot"), "approval_required").is_err());
+        assert!(outbox("o-x3", "queued", None, "because").is_err(), "unknown queue reason");
+        let audit = |id: &str, kind: &str, outcome: &str| {
+            conn.execute(
+                "INSERT INTO sew_chat_audit (id, actor, actor_kind, op, outcome, created_at) VALUES (?1, 'owner', ?2, 'agents.grant', ?3, 1)",
+                params![id, kind, outcome],
+            )
+        };
+        for (i, k) in ["login", "owner_token", "agent", "system"].iter().enumerate() {
+            audit(&format!("au{i}"), k, "ok").unwrap_or_else(|e| panic!("actor kind {k}: {e}"));
+        }
+        assert!(audit("au-x", "person", "ok").is_err(), "the owner token is never labelled a person");
+        assert!(audit("au-y", "agent", "maybe").is_err());
+        conn.execute(
+            "INSERT INTO sew_chat_on_behalf (person, project_id, set_by, confirm_method, created_at) VALUES ('k2:owner', 'w-sew', 'owner', 'vault-password', 1)",
+            [],
+        )
+        .unwrap();
+        assert!(conn
+            .execute(
+                "INSERT INTO sew_chat_on_behalf (person, project_id, set_by, confirm_method, created_at) VALUES ('k2:owner', 'w-sew', 'owner', 'x', 2)",
+                [],
+            )
+            .is_err(), "one opt-in per (person, workspace)");
+    }
+
     /// 0164 on a fresh database: both tables exist; a delegation is a
     /// person-made workspace row; a delegate-made row names its
     /// delegation; `save:` spaces are never granted; an agent stamp names
@@ -3429,7 +3538,10 @@ mod tests {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
             conn.execute("DELETE FROM _migrations WHERE name = '0164_garden_data'", []).unwrap();
-            // 0232 (ticket attachments, 0.46.6) is the newest: its record
+            // 0234 (Sew chat, 0.46.6) is the newest: its record goes (its
+            // tables are IF NOT EXISTS, so the re-run is a no-op).
+            conn.execute("DELETE FROM _migrations WHERE name = '0234_sew_chat'", []).unwrap();
+            // 0232 (ticket attachments, 0.46.6) came before it: its record
             // goes (its column stays; re-adding is skipped as a duplicate).
             conn.execute("DELETE FROM _migrations WHERE name = '0232_ticket_attachments'", []).unwrap();
             // 0233 (the sim switch, 0.46.6) came before it: its record goes

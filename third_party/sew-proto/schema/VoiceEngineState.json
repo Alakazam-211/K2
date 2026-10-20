@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The engine as `status.voice.engine` sees it (`details.engine` of a voice `503`).",
+  "oneOf": [
+    {
+      "const": "up",
+      "description": "Healthy.",
+      "type": "string"
+    },
+    {
+      "const": "down",
+      "description": "Unreachable for `health_failures_down` checks in a row.",
+      "type": "string"
+    },
+    {
+      "const": "draining",
+      "description": "Draining (S49).",
+      "type": "string"
+    },
+    {
+      "const": "syncing",
+      "description": "Sew is resyncing from a snapshot.",
+      "type": "string"
+    },
+    {
+      "const": "error",
+      "description": "The engine answered with an error, or the call keys failed to load.",
+      "type": "string"
+    }
+  ],
+  "title": "VoiceEngineState"
+}

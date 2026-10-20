@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /api/v1/emoji/{id}/edit`.",
+  "properties": {
+    "aliases": {
+      "description": "The whole alias list (replaces it); `null` clears it.",
+      "items": {
+        "type": "string"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "name": {
+      "description": "A new primary name.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "title": "UpdateEmojiRequest",
+  "type": "object"
+}

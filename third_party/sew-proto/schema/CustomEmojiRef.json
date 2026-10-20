@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A custom emoji a message body uses (`Message.emojis`), deleted ones included.",
+  "properties": {
+    "animated": {
+      "description": "An animated GIF.",
+      "type": "boolean"
+    },
+    "available": {
+      "description": "`false` once the emoji is deleted.",
+      "type": "boolean"
+    },
+    "id": {
+      "description": "The emoji id.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "name": {
+      "description": "Its current name (a deleted emoji keeps its last name).",
+      "type": "string"
+    },
+    "space_id": {
+      "description": "Its space.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "still_url": {
+      "description": "Signed first-frame URL of an animated emoji; absent when not available.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "url": {
+      "description": "Signed image URL; absent when not available.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "id",
+    "space_id",
+    "name",
+    "animated",
+    "available"
+  ],
+  "title": "CustomEmojiRef",
+  "type": "object"
+}

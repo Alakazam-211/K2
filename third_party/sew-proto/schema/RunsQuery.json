@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Query of `GET …/retention/runs` (newest first).",
+  "properties": {
+    "before": {
+      "description": "Runs older than this id.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "limit": {
+      "description": "Page size, 1–100 (default 50).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    }
+  },
+  "title": "RunsQuery",
+  "type": "object"
+}

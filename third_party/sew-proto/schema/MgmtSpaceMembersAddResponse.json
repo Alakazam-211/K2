@@ -1,0 +1,112 @@
+{
+  "$defs": {
+    "MgmtSpaceMemberRef": {
+      "description": "A principal and its member id.",
+      "properties": {
+        "external_id": {
+          "description": "The principal.",
+          "maxLength": 128,
+          "pattern": "^(k2:(principal|workspace|connect):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|k2:owner|local:[a-z0-9_-]{2,64}|link:[1-9][0-9]{0,18}:[A-Z2-7]{16})$",
+          "type": "string"
+        },
+        "member_id": {
+          "description": "Its member id.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "external_id",
+        "member_id"
+      ],
+      "type": "object"
+    },
+    "MgmtSpaceNotAdded": {
+      "description": "A principal an add did not add, and why.",
+      "properties": {
+        "external_id": {
+          "description": "The principal.",
+          "maxLength": 128,
+          "pattern": "^(k2:(principal|workspace|connect):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|k2:owner|local:[a-z0-9_-]{2,64}|link:[1-9][0-9]{0,18}:[A-Z2-7]{16})$",
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/MgmtSpaceNotAddedReason",
+          "description": "Why."
+        }
+      },
+      "required": [
+        "external_id",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "MgmtSpaceNotAddedReason": {
+      "description": "Why a principal was not added (SW13; bans are not a reason here: a banned member is in\n`skipped`, HC2).",
+      "oneOf": [
+        {
+          "const": "not_provisioned",
+          "description": "No member has this external id (provision first).",
+          "type": "string"
+        },
+        {
+          "const": "deactivated",
+          "description": "The member is deactivated.",
+          "type": "string"
+        },
+        {
+          "const": "assistant",
+          "description": "An assistant never joins a Space (it reads through its person).",
+          "type": "string"
+        },
+        {
+          "const": "guest",
+          "description": "A guest enters a Space only through a channel add (S19).",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Response of `POST /mgmt/v1/spaces/members/add`, each list in request order.",
+  "properties": {
+    "added": {
+      "description": "Added by this call.",
+      "items": {
+        "$ref": "#/$defs/MgmtSpaceMemberRef"
+      },
+      "type": "array"
+    },
+    "already": {
+      "description": "Members already.",
+      "items": {
+        "$ref": "#/$defs/MgmtSpaceMemberRef"
+      },
+      "type": "array"
+    },
+    "not_added": {
+      "description": "Principals that cannot join, with the reason.",
+      "items": {
+        "$ref": "#/$defs/MgmtSpaceNotAdded"
+      },
+      "type": "array"
+    },
+    "skipped": {
+      "default": [],
+      "description": "Members the Space bans, not added (HC2's `members/add` shape: member ids, no reason;\nK2 stops re-adding them). Always present; empty until space bans land.",
+      "items": {
+        "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+        "pattern": "^[1-9][0-9]{0,18}$",
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "added",
+    "already",
+    "not_added"
+  ],
+  "title": "MgmtSpaceMembersAddResponse",
+  "type": "object"
+}

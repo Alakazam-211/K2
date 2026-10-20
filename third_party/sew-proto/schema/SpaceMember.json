@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A space membership (S10 §8). `role_ids` never includes `@everyone`.",
+  "properties": {
+    "joined_at": {
+      "description": "When they joined.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "member_id": {
+      "description": "The member.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "role_ids": {
+      "description": "Their roles, ascending; never `@everyone`.",
+      "items": {
+        "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+        "pattern": "^[1-9][0-9]{0,18}$",
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "space_id": {
+      "description": "The space.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "timeout_until": {
+      "description": "End of an active timeout; present only while it is in the future (S12 §7).",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "space_id",
+    "member_id",
+    "joined_at",
+    "role_ids"
+  ],
+  "title": "SpaceMember",
+  "type": "object"
+}

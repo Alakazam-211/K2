@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "How often the email digest may be sent (`notify_settings.digest_interval` codes 0–3).",
+  "oneOf": [
+    {
+      "const": "off",
+      "description": "No digest.",
+      "type": "string"
+    },
+    {
+      "const": "15m",
+      "description": "At most every 15 minutes.",
+      "type": "string"
+    },
+    {
+      "const": "1h",
+      "description": "At most every hour (the default).",
+      "type": "string"
+    },
+    {
+      "const": "1d",
+      "description": "At most every day.",
+      "type": "string"
+    }
+  ],
+  "title": "DigestInterval"
+}

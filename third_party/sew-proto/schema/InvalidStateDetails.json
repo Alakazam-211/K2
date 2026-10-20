@@ -1,0 +1,252 @@
+{
+  "$defs": {
+    "InvalidStateReason": {
+      "description": "`details.reason` of a `422 invalid_state` from the permission engine (S5 §11, gap G18).",
+      "oneOf": [
+        {
+          "const": "everyone_role",
+          "description": "`@everyone` cannot be moved, deleted, assigned or removed.",
+          "type": "string"
+        },
+        {
+          "const": "bad_position",
+          "description": "Role position 0 belongs to `@everyone`.",
+          "type": "string"
+        },
+        {
+          "const": "unknown_bits",
+          "description": "Bits outside the registry, or outside what an overwrite may hold.",
+          "type": "string"
+        },
+        {
+          "const": "self_target",
+          "description": "The actor is the target.",
+          "type": "string"
+        },
+        {
+          "const": "owner_must_transfer",
+          "description": "The space owner must transfer ownership before leaving.",
+          "type": "string"
+        },
+        {
+          "const": "target_is_administrator",
+          "description": "Holders of ADMINISTRATOR cannot be timed out.",
+          "type": "string"
+        },
+        {
+          "const": "timeout_in_past",
+          "description": "The timeout end is not in the future.",
+          "type": "string"
+        },
+        {
+          "const": "timeout_too_long",
+          "description": "Timeouts last at most 28 days.",
+          "type": "string"
+        },
+        {
+          "const": "channel_archived",
+          "description": "The channel is archived.",
+          "type": "string"
+        },
+        {
+          "const": "no_category",
+          "description": "The channel has no category to sync with.",
+          "type": "string"
+        },
+        {
+          "const": "not_space_member",
+          "description": "The target is not a member of the space.",
+          "type": "string"
+        },
+        {
+          "const": "inactive_target",
+          "description": "The target is deactivated.",
+          "type": "string"
+        },
+        {
+          "const": "inactive_participant",
+          "description": "A DM participant is deactivated.",
+          "type": "string"
+        },
+        {
+          "const": "dm_size",
+          "description": "A DM holds 2–9 people.",
+          "type": "string"
+        },
+        {
+          "const": "owner_role_fixed",
+          "description": "The install owner's role changes only by an owner transfer (S10 §9.1).",
+          "type": "string"
+        },
+        {
+          "const": "guest_role_fixed",
+          "description": "A guest's install role cannot be set here (S10 §9.1).",
+          "type": "string"
+        },
+        {
+          "const": "agent_role_fixed",
+          "description": "Agents are never install admins (S10 §9.1).",
+          "type": "string"
+        },
+        {
+          "const": "space_owner",
+          "description": "The space owner cannot be removed; transfer first (S10 §9.2).",
+          "type": "string"
+        },
+        {
+          "const": "use_leave",
+          "description": "Removing oneself is `leave` (S10 §9.2, §9.5).",
+          "type": "string"
+        },
+        {
+          "const": "invalid_transfer_target",
+          "description": "A new space owner must be an active non-guest person and a space member (S10 §9.2).",
+          "type": "string"
+        },
+        {
+          "const": "target_cannot_view",
+          "description": "The target would not see the channel after the add (S10 §9.5).",
+          "type": "string"
+        },
+        {
+          "const": "assistant_not_joinable",
+          "description": "Assistants are never space or channel members (S10 §11.5; S9 gap G11's name).",
+          "type": "string"
+        },
+        {
+          "const": "dm_immutable",
+          "description": "DMs cannot be renamed or changed (S10 §9.4).",
+          "type": "string"
+        },
+        {
+          "const": "dm_archive_not_allowed",
+          "description": "DMs cannot be archived (S10 §9.4).",
+          "type": "string"
+        },
+        {
+          "const": "dm_leave_not_allowed",
+          "description": "DMs cannot be left (S10 §9.5).",
+          "type": "string"
+        },
+        {
+          "const": "dm_membership_fixed",
+          "description": "A DM's member set is fixed (S10 gap G11).",
+          "type": "string"
+        },
+        {
+          "const": "self_dm",
+          "description": "A DM needs someone besides the caller (S10 §11.6).",
+          "type": "string"
+        },
+        {
+          "const": "agent_only_dm",
+          "description": "A DM needs at least one person (S10 §11.6).",
+          "type": "string"
+        },
+        {
+          "const": "guest_needs_channel",
+          "description": "Guests enter a space only through a channel add (contracts rev 23).",
+          "type": "string"
+        },
+        {
+          "const": "message_deleted",
+          "description": "The message is deleted.",
+          "type": "string"
+        },
+        {
+          "const": "thread_root_deleted",
+          "description": "The thread root is deleted; the thread is closed.",
+          "type": "string"
+        },
+        {
+          "const": "not_a_thread_root",
+          "description": "Replies point at a top-level message, never at a reply.",
+          "type": "string"
+        },
+        {
+          "const": "reference_not_found",
+          "description": "A reply or quote target is missing, deleted or in another channel.",
+          "type": "string"
+        },
+        {
+          "const": "dm_partner_deactivated",
+          "description": "The other person in a 1:1 DM is deactivated; the DM is read-only.",
+          "type": "string"
+        },
+        {
+          "const": "edit_limit_reached",
+          "description": "A message holds at most 1,000 versions.",
+          "type": "string"
+        },
+        {
+          "const": "custom_emoji_unavailable",
+          "description": "Custom emoji are not available yet (S16).",
+          "type": "string"
+        },
+        {
+          "const": "broad_mention_on_edit",
+          "description": "An edit cannot add `@here` or `@channel`.",
+          "type": "string"
+        },
+        {
+          "const": "not_space_channel",
+          "description": "Overwrites and slow mode exist only on space channels, not DMs (S12 gap G17).",
+          "type": "string"
+        },
+        {
+          "const": "role_limit",
+          "description": "A space holds at most 250 roles, `@everyone` included (S12 gap G17).",
+          "type": "string"
+        },
+        {
+          "const": "overwrite_limit",
+          "description": "A channel or category holds at most 100 overwrites (S12 gap G17).",
+          "type": "string"
+        },
+        {
+          "const": "message_not_in_channel",
+          "description": "The message is missing or in another channel.",
+          "type": "string"
+        },
+        {
+          "const": "not_a_timeline_message",
+          "description": "A thread reply not also sent to the channel (use the thread's mark unread).",
+          "type": "string"
+        },
+        {
+          "const": "message_not_in_thread",
+          "description": "The message is neither the root nor a reply of this thread.",
+          "type": "string"
+        },
+        {
+          "const": "mark_unread_too_old",
+          "description": "Mark unread works on messages up to `[sync] mark_unread_window_days` old.",
+          "type": "string"
+        },
+        {
+          "const": "app_bound_space",
+          "description": "SW13: the space belongs to an App; its members come only through mgmt calls for that\nApp (contracts rev 147), never a client add, an open join or a guest channel add.",
+          "type": "string"
+        },
+        {
+          "const": "meeting_channel",
+          "description": "A generic channel route on a meeting channel, or a generic channel create in a\nhidden Space; meeting channels change only through the meeting routes (Meet MC1,\nprd-meet-01 §6.7.1).",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Details of a `422 invalid_state` from the permission engine (gap G18).",
+  "properties": {
+    "reason": {
+      "$ref": "#/$defs/InvalidStateReason",
+      "description": "Why."
+    }
+  },
+  "required": [
+    "reason"
+  ],
+  "title": "InvalidStateDetails",
+  "type": "object"
+}

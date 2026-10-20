@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A gateway frame. The server always emits all four keys; client frames may omit `s` and `t`.\n`op` stays a raw number so an unknown op can close the socket with 4001.",
+  "properties": {
+    "d": {
+      "default": null,
+      "description": "The payload."
+    },
+    "op": {
+      "description": "The opcode.",
+      "format": "uint8",
+      "maximum": 255,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "s": {
+      "default": null,
+      "description": "The session seq; set only on dispatch (op 0).",
+      "format": "uint64",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "t": {
+      "default": null,
+      "description": "The event name; set only on dispatch (op 0).",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "op"
+  ],
+  "title": "Frame",
+  "type": "object"
+}

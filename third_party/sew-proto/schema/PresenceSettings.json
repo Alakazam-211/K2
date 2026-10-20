@@ -1,0 +1,251 @@
+{
+  "$defs": {
+    "DndDay": {
+      "description": "A weekday of a DND rule.",
+      "oneOf": [
+        {
+          "const": "mon",
+          "description": "Monday.",
+          "type": "string"
+        },
+        {
+          "const": "tue",
+          "description": "Tuesday.",
+          "type": "string"
+        },
+        {
+          "const": "wed",
+          "description": "Wednesday.",
+          "type": "string"
+        },
+        {
+          "const": "thu",
+          "description": "Thursday.",
+          "type": "string"
+        },
+        {
+          "const": "fri",
+          "description": "Friday.",
+          "type": "string"
+        },
+        {
+          "const": "sat",
+          "description": "Saturday.",
+          "type": "string"
+        },
+        {
+          "const": "sun",
+          "description": "Sunday.",
+          "type": "string"
+        }
+      ]
+    },
+    "DndRule": {
+      "additionalProperties": false,
+      "description": "One weekly DND rule: from `start` on each listed day to `end` (the next day when `end <\nstart`).",
+      "properties": {
+        "days": {
+          "description": "1–7 unique days.",
+          "items": {
+            "$ref": "#/$defs/DndDay"
+          },
+          "type": "array"
+        },
+        "end": {
+          "description": "`HH:MM`, `00:01`–`24:00`.",
+          "type": "string"
+        },
+        "start": {
+          "description": "`HH:MM`, `00:00`–`23:59`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "days",
+        "start",
+        "end"
+      ],
+      "type": "object"
+    },
+    "DndSchedule": {
+      "additionalProperties": false,
+      "description": "A recurring weekly DND schedule.",
+      "properties": {
+        "rules": {
+          "description": "1–14 rules.",
+          "items": {
+            "$ref": "#/$defs/DndRule"
+          },
+          "type": "array"
+        },
+        "timezone": {
+          "description": "IANA override; absent = the member's profile timezone, else UTC.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "rules"
+      ],
+      "type": "object"
+    },
+    "DndSource": {
+      "description": "Why DND is on.",
+      "oneOf": [
+        {
+          "const": "none",
+          "description": "Off.",
+          "type": "string"
+        },
+        {
+          "const": "manual",
+          "description": "Set by hand.",
+          "type": "string"
+        },
+        {
+          "const": "schedule",
+          "description": "A schedule window.",
+          "type": "string"
+        }
+      ]
+    },
+    "DndState": {
+      "description": "Whether a member is on DND now, and until when (S21 holds notifications until `until`).",
+      "properties": {
+        "active": {
+          "description": "On now.",
+          "type": "boolean"
+        },
+        "source": {
+          "$ref": "#/$defs/DndSource",
+          "description": "Why."
+        },
+        "until": {
+          "description": "When it ends; absent = indefinite (or off).",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "active",
+        "source"
+      ],
+      "type": "object"
+    },
+    "ManualPresence": {
+      "description": "A member's manual presence state (persisted).",
+      "oneOf": [
+        {
+          "const": "none",
+          "description": "Automatic.",
+          "type": "string"
+        },
+        {
+          "const": "away",
+          "description": "Shown as idle.",
+          "type": "string"
+        },
+        {
+          "const": "dnd",
+          "description": "Do not disturb.",
+          "type": "string"
+        },
+        {
+          "const": "invisible",
+          "description": "Shown offline to others.",
+          "type": "string"
+        }
+      ]
+    },
+    "SelfStatus": {
+      "description": "What a member sees about their own presence.",
+      "oneOf": [
+        {
+          "const": "online",
+          "description": "Online.",
+          "type": "string"
+        },
+        {
+          "const": "idle",
+          "description": "Idle or away.",
+          "type": "string"
+        },
+        {
+          "const": "dnd",
+          "description": "Do not disturb.",
+          "type": "string"
+        },
+        {
+          "const": "invisible",
+          "description": "Invisible (others see offline).",
+          "type": "string"
+        },
+        {
+          "const": "offline",
+          "description": "No live session.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A member's presence settings and what they see about themselves.",
+  "properties": {
+    "dnd": {
+      "$ref": "#/$defs/DndState",
+      "description": "DND now."
+    },
+    "dnd_schedule": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DndSchedule"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The recurring schedule."
+    },
+    "dnd_skip_until": {
+      "description": "The current schedule window is skipped until then.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "effective_timezone": {
+      "description": "The timezone schedules use (`UTC` when none is set).",
+      "type": "string"
+    },
+    "manual": {
+      "$ref": "#/$defs/ManualPresence",
+      "description": "The manual state."
+    },
+    "manual_until": {
+      "description": "When the manual state ends.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "self_status": {
+      "$ref": "#/$defs/SelfStatus",
+      "description": "What the member sees about themself."
+    }
+  },
+  "required": [
+    "manual",
+    "self_status",
+    "dnd",
+    "effective_timezone"
+  ],
+  "title": "PresenceSettings",
+  "type": "object"
+}

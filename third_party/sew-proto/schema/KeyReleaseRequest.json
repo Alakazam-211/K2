@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "K8 body: the caller's own sender key for one epoch, sealed to the recorder (S50 §14.3).\n`enc` and `ct` sizes and `sender_identity` are the DS's routing checks (`422`), not shape\nchecks.",
+  "properties": {
+    "ct": {
+      "description": "HPKE ciphertext (48 bytes).",
+      "pattern": "^[A-Za-z0-9_-]*$",
+      "type": "string"
+    },
+    "enc": {
+      "description": "HPKE `enc` (32 bytes).",
+      "pattern": "^[A-Za-z0-9_-]*$",
+      "type": "string"
+    },
+    "epoch": {
+      "description": "The released epoch.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "group_id": {
+      "description": "The group.",
+      "pattern": "^[A-Za-z0-9_-]*$",
+      "type": "string"
+    },
+    "join_id": {
+      "description": "The caller's join id.",
+      "pattern": "^[0-9a-f]{32}$",
+      "type": "string"
+    },
+    "leaf": {
+      "description": "The caller's leaf index in `epoch`.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "recording_id": {
+      "description": "The live recording.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "sender_identity": {
+      "description": "The caller's engine identity.",
+      "type": "string"
+    },
+    "slot": {
+      "description": "`slot(epoch)`.",
+      "format": "uint8",
+      "maximum": 255,
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "join_id",
+    "group_id",
+    "epoch",
+    "slot",
+    "recording_id",
+    "leaf",
+    "sender_identity",
+    "enc",
+    "ct"
+  ],
+  "title": "KeyReleaseRequest",
+  "type": "object"
+}

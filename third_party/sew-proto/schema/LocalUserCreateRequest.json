@@ -1,0 +1,59 @@
+{
+  "$defs": {
+    "LocalRole": {
+      "description": "The install role a new local user gets (never `owner`; `sew init` makes the owner).",
+      "oneOf": [
+        {
+          "const": "member",
+          "description": "A regular member (the default).",
+          "type": "string"
+        },
+        {
+          "const": "admin",
+          "description": "An install admin.",
+          "type": "string"
+        },
+        {
+          "const": "guest",
+          "description": "A guest.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /mgmt/v1/local/users`.",
+  "properties": {
+    "display_name": {
+      "description": "Display name, 1–100 characters.",
+      "type": "string"
+    },
+    "email": {
+      "description": "Email address.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "install_role": {
+      "$ref": "#/$defs/LocalRole",
+      "description": "Install role (default `member`)."
+    },
+    "setup_link": {
+      "description": "Also issue a one-time password setup link (default `true`).",
+      "type": "boolean"
+    },
+    "username": {
+      "description": "The handle; the external id becomes `local:<username>`.",
+      "pattern": "^[a-z0-9_-]{2,64}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "username",
+    "display_name"
+  ],
+  "title": "LocalUserCreateRequest",
+  "type": "object"
+}

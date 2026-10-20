@@ -1,0 +1,190 @@
+{
+  "$defs": {
+    "PollInput": {
+      "additionalProperties": false,
+      "description": "A poll on a new message (`CreateMessageRequest.poll`).",
+      "properties": {
+        "anonymous": {
+          "description": "Hide who voted, from everyone.",
+          "type": "boolean"
+        },
+        "duration_s": {
+          "description": "Close after this many seconds, 60–2,764,800 (absent = closed by hand).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_choices": {
+          "description": "How many options a voter may pick, 1..=options (default 1).",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "options": {
+          "description": "2–10 options, 1–100 characters each, distinct.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "question": {
+          "description": "The question, 1–300 characters.",
+          "type": "string"
+        },
+        "results_visibility": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PollResultsVisibility"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "When counts are shown (default `always`)."
+        }
+      },
+      "required": [
+        "question",
+        "options"
+      ],
+      "type": "object"
+    },
+    "PollResultsVisibility": {
+      "description": "When a poll's counts are shown (`polls.results_visibility`).",
+      "oneOf": [
+        {
+          "const": "always",
+          "description": "Always.",
+          "type": "string"
+        },
+        {
+          "const": "after_close",
+          "description": "Only once the poll is closed.",
+          "type": "string"
+        }
+      ]
+    },
+    "ReferenceInput": {
+      "additionalProperties": false,
+      "description": "A reply or quote reference in a create request.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ReferenceKind",
+          "description": "`reply` or `quote`."
+        },
+        "message_id": {
+          "description": "The referenced message.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message_id",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "ReferenceKind": {
+      "description": "How a message refers to another.",
+      "oneOf": [
+        {
+          "const": "reply",
+          "description": "An inline reply.",
+          "type": "string"
+        },
+        {
+          "const": "quote",
+          "description": "A quote.",
+          "type": "string"
+        },
+        {
+          "const": "forward",
+          "description": "A forward.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /api/v1/channels/{id}/messages`.",
+  "properties": {
+    "also_send_to_channel": {
+      "default": false,
+      "description": "For thread replies, also show it in the channel.",
+      "type": "boolean"
+    },
+    "body": {
+      "description": "The body: 1 byte to 16 KiB of UTF-8. Larger is `413 too_large`.",
+      "type": "string"
+    },
+    "clear_draft": {
+      "description": "Delete the author's draft for this channel and thread in the same write (S17).",
+      "type": "boolean"
+    },
+    "nonce": {
+      "description": "A client nonce, 1–64 characters, echoed back.",
+      "maxLength": 64,
+      "minLength": 1,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "poll": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PollInput"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Post a poll with the message (S17; needs CREATE_POLLS). The body may then be empty."
+    },
+    "reference": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ReferenceInput"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Reply to or quote a message."
+    },
+    "suppress_previews": {
+      "description": "Build no link previews for this message (S16).",
+      "type": "boolean"
+    },
+    "thread_root_id": {
+      "description": "Post as a reply in this thread.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "upload_ids": {
+      "description": "Finished uploads of the caller in this channel to attach, 0–10, in display order\n(S15). With at least one, the body may be empty.",
+      "items": {
+        "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+        "pattern": "^[1-9][0-9]{0,18}$",
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "body"
+  ],
+  "title": "CreateMessageRequest",
+  "type": "object"
+}

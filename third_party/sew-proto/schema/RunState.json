@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A preview's or run's state.",
+  "oneOf": [
+    {
+      "const": "running",
+      "description": "Working.",
+      "type": "string"
+    },
+    {
+      "const": "done",
+      "description": "Finished.",
+      "type": "string"
+    },
+    {
+      "const": "failed",
+      "description": "Gave up (a later run starts over).",
+      "type": "string"
+    }
+  ],
+  "title": "RunState"
+}

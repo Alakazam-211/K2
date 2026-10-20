@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "`GET …/holds?state=`.",
+  "oneOf": [
+    {
+      "const": "active",
+      "description": "Unreleased holds.",
+      "type": "string"
+    },
+    {
+      "const": "released",
+      "description": "Released holds.",
+      "type": "string"
+    },
+    {
+      "const": "all",
+      "description": "Every hold.",
+      "type": "string"
+    }
+  ],
+  "title": "HoldStateFilter"
+}

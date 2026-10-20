@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Why a device was revoked (`call_devices.revoke_reason`). A caller may send `lost`,\n`retired`, `compromised` or `other`; the server uses the last two values itself.",
+  "oneOf": [
+    {
+      "const": "lost",
+      "description": "The device was lost or stolen.",
+      "type": "string"
+    },
+    {
+      "const": "retired",
+      "description": "The device is no longer used.",
+      "type": "string"
+    },
+    {
+      "const": "compromised",
+      "description": "The key may be compromised.",
+      "type": "string"
+    },
+    {
+      "const": "other",
+      "description": "Anything else.",
+      "type": "string"
+    },
+    {
+      "const": "login_revoked",
+      "description": "The login it was enrolled under was revoked (automatic).",
+      "type": "string"
+    },
+    {
+      "const": "deprovisioned",
+      "description": "The member was deprovisioned (automatic).",
+      "type": "string"
+    }
+  ],
+  "title": "DeviceRevokeReason"
+}

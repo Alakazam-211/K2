@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Response of `POST /api/v1/compliance/exports/estimate`: counts under the snapshot rules, no\ndecryption (so keywords are not applied).",
+  "properties": {
+    "attachments": {
+      "description": "Attachments of those messages.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "channels": {
+      "description": "Channels in scope.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "file_bytes": {
+      "description": "Their plaintext bytes.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "keywords_applied": {
+      "description": "Always `false`: keywords need decryption.",
+      "type": "boolean"
+    },
+    "messages": {
+      "description": "Messages in scope (before keywords and context roots).",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "channels",
+    "messages",
+    "attachments",
+    "file_bytes",
+    "keywords_applied"
+  ],
+  "title": "ExportEstimate",
+  "type": "object"
+}

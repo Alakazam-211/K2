@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Where a delivered message lives, from the agent's side (contracts rev 36 G5).",
+  "oneOf": [
+    {
+      "const": "space_channel",
+      "description": "A space channel.",
+      "type": "string"
+    },
+    {
+      "const": "dm",
+      "description": "A 1:1 DM the agent is in.",
+      "type": "string"
+    },
+    {
+      "const": "group_dm",
+      "description": "A group DM the agent is in.",
+      "type": "string"
+    },
+    {
+      "const": "person_dm",
+      "description": "A DM or group DM of an assistant's person, read (never posted to) by the assistant.",
+      "type": "string"
+    }
+  ],
+  "title": "DeliveryPlace"
+}

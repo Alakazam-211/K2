@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The device's platform (`DeviceCertTbs.platform` 1–5).",
+  "oneOf": [
+    {
+      "const": "web",
+      "description": "A browser.",
+      "type": "string"
+    },
+    {
+      "const": "desktop",
+      "description": "A desktop app.",
+      "type": "string"
+    },
+    {
+      "const": "ios",
+      "description": "iOS.",
+      "type": "string"
+    },
+    {
+      "const": "android",
+      "description": "Android.",
+      "type": "string"
+    },
+    {
+      "const": "other",
+      "description": "Anything else.",
+      "type": "string"
+    }
+  ],
+  "title": "DevicePlatform"
+}

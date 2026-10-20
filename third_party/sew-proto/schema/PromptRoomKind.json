@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The room kind the modal names.",
+  "oneOf": [
+    {
+      "const": "voice",
+      "description": "A voice channel.",
+      "type": "string"
+    },
+    {
+      "const": "dm",
+      "description": "A DM call.",
+      "type": "string"
+    },
+    {
+      "const": "group_dm",
+      "description": "A group-DM call.",
+      "type": "string"
+    }
+  ],
+  "title": "PromptRoomKind"
+}

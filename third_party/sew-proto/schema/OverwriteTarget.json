@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "What an overwrite targets.",
+  "oneOf": [
+    {
+      "const": "role",
+      "description": "A role (`@everyone`'s role id is the space id).",
+      "type": "string"
+    },
+    {
+      "const": "member",
+      "description": "A single member.",
+      "type": "string"
+    }
+  ],
+  "title": "OverwriteTarget"
+}

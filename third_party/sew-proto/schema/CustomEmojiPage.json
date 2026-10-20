@@ -1,0 +1,109 @@
+{
+  "$defs": {
+    "CustomEmoji": {
+      "description": "A custom emoji of a space.",
+      "properties": {
+        "aliases": {
+          "default": [],
+          "description": "Up to 5 more names, in the order they were set.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "animated": {
+          "description": "An animated GIF.",
+          "type": "boolean"
+        },
+        "created_at": {
+          "description": "When it was uploaded.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "created_by": {
+          "description": "Who uploaded it.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "height": {
+          "description": "Height in pixels (≤ 128).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "id": {
+          "description": "The emoji id (the `ID` of `<:name:ID>`).",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "name": {
+          "description": "The primary name, `[a-z0-9_-]{2,32}`.",
+          "type": "string"
+        },
+        "space_id": {
+          "description": "Its space.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "still_url": {
+          "description": "Signed first-frame PNG URL (animated emoji only).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "updated_at": {
+          "description": "The last rename.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "url": {
+          "description": "Signed image URL, stable for a day and valid ≥ 7 days.",
+          "type": "string"
+        },
+        "width": {
+          "description": "Width in pixels (≤ 128).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "space_id",
+        "name",
+        "animated",
+        "width",
+        "height",
+        "url",
+        "created_at",
+        "updated_at"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A page of an id-keyed list: `{\"items\": [...], \"has_more\": bool}`.",
+  "properties": {
+    "has_more": {
+      "description": "Whether more items exist past this page.",
+      "type": "boolean"
+    },
+    "items": {
+      "description": "The items.",
+      "items": {
+        "$ref": "#/$defs/CustomEmoji"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "items",
+    "has_more"
+  ],
+  "title": "Page",
+  "type": "object"
+}

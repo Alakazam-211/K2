@@ -1,0 +1,51 @@
+{
+  "$defs": {
+    "OverwriteTarget": {
+      "description": "What an overwrite targets.",
+      "oneOf": [
+        {
+          "const": "role",
+          "description": "A role (`@everyone`'s role id is the space id).",
+          "type": "string"
+        },
+        {
+          "const": "member",
+          "description": "A single member.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /api/v1/channels/{id}/overwrites/set` and the category route. `allow = deny =\n0` deletes the entry.",
+  "properties": {
+    "allow": {
+      "description": "Bits allowed (within OVERWRITABLE).",
+      "pattern": "^(0|[1-9][0-9]{0,19})$",
+      "type": "string"
+    },
+    "deny": {
+      "description": "Bits denied (within OVERWRITABLE, none shared with `allow`).",
+      "pattern": "^(0|[1-9][0-9]{0,19})$",
+      "type": "string"
+    },
+    "target_id": {
+      "description": "The role (the space id = `@everyone`) or member.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "target_kind": {
+      "$ref": "#/$defs/OverwriteTarget",
+      "description": "Role or member."
+    }
+  },
+  "required": [
+    "target_kind",
+    "target_id",
+    "allow",
+    "deny"
+  ],
+  "title": "SetOverwriteRequest",
+  "type": "object"
+}

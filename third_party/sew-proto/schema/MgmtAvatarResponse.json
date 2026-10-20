@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Response of the mgmt avatar routes.",
+  "properties": {
+    "applied": {
+      "description": "Whether the avatar changed.",
+      "type": "boolean"
+    },
+    "member_id": {
+      "description": "The member.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "reason": {
+      "description": "Why not (`member_avatar_kept`).",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "member_id",
+    "applied"
+  ],
+  "title": "MgmtAvatarResponse",
+  "type": "object"
+}

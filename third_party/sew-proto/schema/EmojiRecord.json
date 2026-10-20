@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`emoji.ndjson`: custom emoji (deleted ones keep their row so old tokens render).",
+  "properties": {
+    "aliases": {
+      "description": "Other live names.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "animated": {
+      "description": "Animated.",
+      "type": "boolean"
+    },
+    "created_at": {
+      "description": "Created.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "created_by": {
+      "description": "Creator.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "deleted_at": {
+      "description": "Deleted.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "deleted_by": {
+      "description": "Deleted by.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "file": {
+      "description": "The image (`files/<file>`; absent once deleted).",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "height": {
+      "description": "Height (px).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "id": {
+      "description": "The emoji id.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "link_id": {
+      "description": "The image's own link id.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "name": {
+      "description": "Primary name.",
+      "type": "string"
+    },
+    "space_id": {
+      "description": "Its space.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "updated_at": {
+      "description": "Last change.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "width": {
+      "description": "Width (px).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "id",
+    "space_id",
+    "name",
+    "animated",
+    "width",
+    "height",
+    "created_at",
+    "updated_at"
+  ],
+  "title": "EmojiRecord",
+  "type": "object"
+}

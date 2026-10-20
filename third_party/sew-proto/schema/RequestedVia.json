@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Who requested an export.",
+  "oneOf": [
+    {
+      "const": "member",
+      "description": "A compliance-flag holder through the client API.",
+      "type": "string"
+    },
+    {
+      "const": "service",
+      "description": "The mgmt service (K2's daemon, the `sew` CLI).",
+      "type": "string"
+    }
+  ],
+  "title": "RequestedVia"
+}

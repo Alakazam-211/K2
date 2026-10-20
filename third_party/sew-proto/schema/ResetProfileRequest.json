@@ -1,0 +1,36 @@
+{
+  "$defs": {
+    "ResettableField": {
+      "description": "What an admin can reset on another member's profile.",
+      "oneOf": [
+        {
+          "const": "avatar",
+          "description": "The avatar.",
+          "type": "string"
+        },
+        {
+          "const": "status",
+          "description": "The status.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /api/v1/members/{id}/profile/reset`.",
+  "properties": {
+    "fields": {
+      "description": "1–2 unique fields.",
+      "items": {
+        "$ref": "#/$defs/ResettableField"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "fields"
+  ],
+  "title": "ResetProfileRequest",
+  "type": "object"
+}

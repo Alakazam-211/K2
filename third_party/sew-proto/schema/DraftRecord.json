@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`drafts.ndjson` (full exports only; drafts holding only pending uploads are not carried).",
+  "properties": {
+    "also_send_to_channel": {
+      "description": "Reply also to the channel.",
+      "type": "boolean"
+    },
+    "body": {
+      "description": "The text.",
+      "type": "string"
+    },
+    "channel_id": {
+      "description": "Its channel.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "created_at": {
+      "description": "Created.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "id": {
+      "description": "The draft id.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "member_id": {
+      "description": "Its member.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "rev": {
+      "description": "Draft revision.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "thread_root_id": {
+      "description": "Its thread.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "updated_at": {
+      "description": "Last change (its seal month).",
+      "format": "date-time",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "member_id",
+    "channel_id",
+    "body",
+    "rev",
+    "created_at",
+    "updated_at"
+  ],
+  "title": "DraftRecord",
+  "type": "object"
+}

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Response of `POST …/retention/run`.",
+  "properties": {
+    "job_id": {
+      "description": "The queued `retention_purge` job.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "job_id"
+  ],
+  "title": "RunRetentionResponse",
+  "type": "object"
+}

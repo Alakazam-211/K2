@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "When a poll's counts are shown (`polls.results_visibility`).",
+  "oneOf": [
+    {
+      "const": "always",
+      "description": "Always.",
+      "type": "string"
+    },
+    {
+      "const": "after_close",
+      "description": "Only once the poll is closed.",
+      "type": "string"
+    }
+  ],
+  "title": "PollResultsVisibility"
+}

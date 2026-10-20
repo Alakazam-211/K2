@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "K4 `200` answer.",
+  "properties": {
+    "accepted": {
+      "description": "Always `true`.",
+      "type": "boolean"
+    },
+    "epoch": {
+      "description": "The new epoch.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "slot": {
+      "description": "Its slot.",
+      "format": "uint8",
+      "maximum": 255,
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "accepted",
+    "epoch",
+    "slot"
+  ],
+  "title": "KeyCommitAccepted",
+  "type": "object"
+}

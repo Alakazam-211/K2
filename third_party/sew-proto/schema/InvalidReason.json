@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Why a client asks to be re-added (K6; S50 §9.1, S51 §12.1).",
+  "oneOf": [
+    {
+      "const": "commit_failed",
+      "description": "A commit failed to process.",
+      "type": "string"
+    },
+    {
+      "const": "bad_commit",
+      "description": "A commit failed the member-side checks.",
+      "type": "string"
+    },
+    {
+      "const": "bad_proposal",
+      "description": "A proposal failed the member-side checks.",
+      "type": "string"
+    },
+    {
+      "const": "bad_welcome",
+      "description": "A Welcome failed to process or check.",
+      "type": "string"
+    },
+    {
+      "const": "missed_epoch",
+      "description": "An epoch was missed.",
+      "type": "string"
+    },
+    {
+      "const": "recovery_timeout",
+      "description": "The recovery watchdog ran out.",
+      "type": "string"
+    },
+    {
+      "const": "behind",
+      "description": "K3 answered `e2ee_epoch_behind`, or a `resync{behind}`.",
+      "type": "string"
+    },
+    {
+      "const": "state_lost",
+      "description": "The client lost its MLS state.",
+      "type": "string"
+    }
+  ],
+  "title": "InvalidReason"
+}

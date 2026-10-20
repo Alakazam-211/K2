@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Details for `rate_limited`.",
+  "properties": {
+    "reason": {
+      "description": "Which limit refused, for limits other than the plain rate buckets (S12: `slow_mode`).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "retry_after_ms": {
+      "description": "Milliseconds to wait before retrying.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "retry_after_ms"
+  ],
+  "title": "RetryAfterDetails",
+  "type": "object"
+}

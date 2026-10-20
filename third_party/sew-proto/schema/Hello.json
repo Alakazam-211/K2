@@ -1,0 +1,74 @@
+{
+  "$defs": {
+    "SessionLimits": {
+      "description": "Per-session limits sent in HELLO (gap G11).",
+      "properties": {
+        "identify_timeout_ms": {
+          "description": "IDENTIFY or RESUME must arrive within this long.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_member_list_range_len": {
+          "description": "Rows per member-list range.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_member_list_ranges": {
+          "description": "Member-list ranges per subscription.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_presence_ids": {
+          "description": "Presence ids per subscription.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_typing_channels": {
+          "description": "Typing channels per subscription.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "typing_interval_ms": {
+          "description": "At most one TYPING per channel per this interval.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "max_typing_channels",
+        "max_presence_ids",
+        "max_member_list_ranges",
+        "max_member_list_range_len",
+        "typing_interval_ms",
+        "identify_timeout_ms"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Op 8 HELLO: the first frame on a socket.",
+  "properties": {
+    "heartbeat_interval_ms": {
+      "description": "Heartbeat interval.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "session_limits": {
+      "$ref": "#/$defs/SessionLimits",
+      "description": "Per-session limits."
+    }
+  },
+  "required": [
+    "heartbeat_interval_ms",
+    "session_limits"
+  ],
+  "title": "Hello",
+  "type": "object"
+}

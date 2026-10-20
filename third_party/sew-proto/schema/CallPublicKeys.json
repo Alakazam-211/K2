@@ -1,0 +1,41 @@
+{
+  "$defs": {
+    "CallPublicKey": {
+      "description": "A public key and its id (`kid` = hex of the first 8 bytes of SHA-256 of the raw key).",
+      "properties": {
+        "kid": {
+          "description": "16 lowercase hex characters.",
+          "type": "string"
+        },
+        "public_key": {
+          "description": "The raw 32-byte Ed25519 public key.",
+          "pattern": "^[A-Za-z0-9_-]*$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kid",
+        "public_key"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The install CA and DS public keys (`CallKeyService::public_keys`, for S35's recorder PUT).",
+  "properties": {
+    "ca": {
+      "$ref": "#/$defs/CallPublicKey",
+      "description": "`sew-call-ca`."
+    },
+    "ds": {
+      "$ref": "#/$defs/CallPublicKey",
+      "description": "`sew-call-ds`."
+    }
+  },
+  "required": [
+    "ca",
+    "ds"
+  ],
+  "title": "CallPublicKeys",
+  "type": "object"
+}

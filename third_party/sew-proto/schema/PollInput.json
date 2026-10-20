@@ -1,0 +1,75 @@
+{
+  "$defs": {
+    "PollResultsVisibility": {
+      "description": "When a poll's counts are shown (`polls.results_visibility`).",
+      "oneOf": [
+        {
+          "const": "always",
+          "description": "Always.",
+          "type": "string"
+        },
+        {
+          "const": "after_close",
+          "description": "Only once the poll is closed.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A poll on a new message (`CreateMessageRequest.poll`).",
+  "properties": {
+    "anonymous": {
+      "description": "Hide who voted, from everyone.",
+      "type": "boolean"
+    },
+    "duration_s": {
+      "description": "Close after this many seconds, 60–2,764,800 (absent = closed by hand).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "max_choices": {
+      "description": "How many options a voter may pick, 1..=options (default 1).",
+      "format": "uint8",
+      "maximum": 255,
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "options": {
+      "description": "2–10 options, 1–100 characters each, distinct.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "question": {
+      "description": "The question, 1–300 characters.",
+      "type": "string"
+    },
+    "results_visibility": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PollResultsVisibility"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "When counts are shown (default `always`)."
+    }
+  },
+  "required": [
+    "question",
+    "options"
+  ],
+  "title": "PollInput",
+  "type": "object"
+}

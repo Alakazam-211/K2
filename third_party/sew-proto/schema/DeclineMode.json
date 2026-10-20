@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "What declining does (§9.11, from `recording.require_consent_to_join`).",
+  "oneOf": [
+    {
+      "const": "join_unrecorded",
+      "description": "The decliner joins, unrecorded (the default).",
+      "type": "string"
+    },
+    {
+      "const": "not_join",
+      "description": "Declining means not joining.",
+      "type": "string"
+    }
+  ],
+  "title": "DeclineMode"
+}

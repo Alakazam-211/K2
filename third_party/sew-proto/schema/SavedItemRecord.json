@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`saved_items.ndjson` (full exports only).",
+  "properties": {
+    "channel_id": {
+      "description": "Its channel.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "created_at": {
+      "description": "Created.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "id": {
+      "description": "The saved item id.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "member_id": {
+      "description": "Its member.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "message_id": {
+      "description": "The message.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "note": {
+      "description": "The member's note.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "state": {
+      "description": "`active`, `done`, `archived`.",
+      "type": "string"
+    },
+    "state_changed_at": {
+      "description": "Last state change.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "updated_at": {
+      "description": "Last change.",
+      "format": "date-time",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "member_id",
+    "message_id",
+    "channel_id",
+    "state",
+    "created_at",
+    "updated_at",
+    "state_changed_at"
+  ],
+  "title": "SavedItemRecord",
+  "type": "object"
+}

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Gateway payload encoding; only `json` in v1.",
+  "oneOf": [
+    {
+      "const": "json",
+      "description": "JSON text frames.",
+      "type": "string"
+    }
+  ],
+  "title": "Encoding"
+}

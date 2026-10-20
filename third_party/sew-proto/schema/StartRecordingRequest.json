@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`POST /api/v1/channels/{id}/recording/start` body (§8.2).",
+  "properties": {
+    "audio_keep_days": {
+      "description": "Audio keep days (clamped).",
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "language": {
+      "description": "A Whisper language code or `auto`.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "mixed": {
+      "description": "Make a mixed file after stop (default `true`).",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    }
+  },
+  "title": "StartRecordingRequest",
+  "type": "object"
+}

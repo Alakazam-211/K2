@@ -1,0 +1,155 @@
+{
+  "$defs": {
+    "FileKind": {
+      "description": "What a file is, from its sniffed content type (S15 §10).",
+      "oneOf": [
+        {
+          "const": "image",
+          "description": "A raster image (`image/*` from the magic table, or SVG).",
+          "type": "string"
+        },
+        {
+          "const": "video",
+          "description": "A video.",
+          "type": "string"
+        },
+        {
+          "const": "audio",
+          "description": "Audio.",
+          "type": "string"
+        },
+        {
+          "const": "document",
+          "description": "A document: PDF, text, office formats.",
+          "type": "string"
+        },
+        {
+          "const": "archive",
+          "description": "An archive: zip, gzip, 7z, rar.",
+          "type": "string"
+        },
+        {
+          "const": "other",
+          "description": "Anything else.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Response of `GET /api/v1/uploads/{id}` (the uploader only): the status plus a fresh\n`upload_url`.",
+  "properties": {
+    "channel_id": {
+      "description": "The channel it may be attached in.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "chunk_size": {
+      "description": "The chunk size.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "committed_bytes": {
+      "description": "Bytes stored so far.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "complete": {
+      "description": "All bytes arrived and the upload is finalized.",
+      "type": "boolean"
+    },
+    "content_type": {
+      "description": "The stored (sniffed) type, once complete.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "expires_at": {
+      "description": "When the unattached upload expires.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "filename": {
+      "description": "The file name.",
+      "type": "string"
+    },
+    "height": {
+      "description": "Image or poster height, once known.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "kind": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FileKind"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The kind, once complete."
+    },
+    "media_pending": {
+      "default": false,
+      "description": "A thumbnail is still being made.",
+      "type": "boolean"
+    },
+    "size": {
+      "description": "The declared size.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "thumbnail_url": {
+      "description": "Signed thumbnail URL (the uploader's preview), once made.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "upload_id": {
+      "description": "The upload id.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "upload_url": {
+      "description": "A fresh signed data URL.",
+      "type": "string"
+    },
+    "url_expires_at": {
+      "description": "When `upload_url` stops working.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "width": {
+      "description": "Image or poster width, once known.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "upload_id",
+    "committed_bytes",
+    "size",
+    "complete",
+    "expires_at",
+    "channel_id",
+    "filename",
+    "chunk_size",
+    "upload_url",
+    "url_expires_at"
+  ],
+  "title": "Upload",
+  "type": "object"
+}

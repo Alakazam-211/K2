@@ -1,0 +1,167 @@
+{
+  "$defs": {
+    "IconRecord": {
+      "additionalProperties": false,
+      "description": "A space icon in `spaces.ndjson`.",
+      "properties": {
+        "file": {
+          "description": "The image (`files/<file>`).",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "icon_id": {
+          "description": "The public icon version id.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "link_id": {
+          "description": "The icon's own link id.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "file",
+        "link_id",
+        "icon_id"
+      ],
+      "type": "object"
+    },
+    "SourceRef": {
+      "additionalProperties": false,
+      "description": "A converter's reference to the record it came from (ignored and not stored by Sew v1).",
+      "properties": {
+        "ref": {
+          "description": "Its reference.",
+          "type": "string"
+        },
+        "system": {
+          "description": "The source system, e.g. `slack`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "system",
+        "ref"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`spaces.ndjson`.",
+  "properties": {
+    "app_id": {
+      "description": "The App the space belongs to (minor 2, SW13).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "created_at": {
+      "description": "Created.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "created_by": {
+      "description": "Creator.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "default_channel_ids": {
+      "description": "Default channels in their set order (minor 1, Hearth HC6).",
+      "items": {
+        "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+        "pattern": "^[1-9][0-9]{0,18}$",
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "description": {
+      "description": "Description (minor 1, Hearth HC4).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "hidden": {
+      "description": "A hidden Space, such as the Meetings Space (minor 3, Meet MC1); omitted when `false`.",
+      "type": "boolean"
+    },
+    "icon": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/IconRecord"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The icon."
+    },
+    "id": {
+      "description": "The space id.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "join_policy": {
+      "description": "`open` or `invite`.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "name": {
+      "description": "Name.",
+      "type": "string"
+    },
+    "owner_id": {
+      "description": "Owner.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "rules_channel_id": {
+      "description": "Rules channel (minor 1, Hearth HC4).",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "slug": {
+      "description": "Slug.",
+      "type": "string"
+    },
+    "source": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SourceRef"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Converter reference."
+    },
+    "welcome_channel_id": {
+      "description": "Welcome channel (minor 1, Hearth HC4).",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "id",
+    "slug",
+    "name",
+    "owner_id",
+    "created_at"
+  ],
+  "title": "SpaceRecord",
+  "type": "object"
+}

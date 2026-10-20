@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Why a span of a recording is missing (§24). Stored in `recording_gaps.reason`.",
+  "oneOf": [
+    {
+      "const": "recorder_restarted",
+      "description": "The recorder process restarted.",
+      "type": "string"
+    },
+    {
+      "const": "recorder_buffer_full",
+      "description": "The recorder's buffer was full.",
+      "type": "string"
+    },
+    {
+      "const": "storage_full",
+      "description": "The blob store was full.",
+      "type": "string"
+    },
+    {
+      "const": "too_large",
+      "description": "A segment exceeded `recording.segment_max_bytes`.",
+      "type": "string"
+    },
+    {
+      "const": "transcribe_failed",
+      "description": "Transcription failed for a segment.",
+      "type": "string"
+    },
+    {
+      "const": "audio_gone",
+      "description": "The audio was purged before it was transcribed.",
+      "type": "string"
+    },
+    {
+      "const": "track_cap",
+      "description": "A track cap.",
+      "type": "string"
+    },
+    {
+      "const": "no_key",
+      "description": "The recorder held no key for a consenting speaker.",
+      "type": "string"
+    },
+    {
+      "const": "recorder_reconnected",
+      "description": "The recorder rejoined with a new admit.",
+      "type": "string"
+    },
+    {
+      "const": "key_missing",
+      "description": "A key was missing mid-segment.",
+      "type": "string"
+    },
+    {
+      "const": "discontinuity",
+      "description": "A media discontinuity.",
+      "type": "string"
+    },
+    {
+      "const": "engine_restart",
+      "description": "The engine restarted (same admit, fresh token).",
+      "type": "string"
+    }
+  ],
+  "title": "GapReason"
+}

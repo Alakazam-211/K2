@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Query of `GET /api/v1/me/thread_reads`.",
+  "properties": {
+    "root_ids": {
+      "description": "1–100 thread root ids.",
+      "pattern": "^[1-9][0-9]{0,18}(,[1-9][0-9]{0,18}){0,99}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "root_ids"
+  ],
+  "title": "ThreadReadsQuery",
+  "type": "object"
+}

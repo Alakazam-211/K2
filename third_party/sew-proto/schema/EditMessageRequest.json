@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /api/v1/messages/{id}/edit`.",
+  "properties": {
+    "body": {
+      "description": "The new body (same rules as create).",
+      "type": "string"
+    }
+  },
+  "required": [
+    "body"
+  ],
+  "title": "EditMessageRequest",
+  "type": "object"
+}

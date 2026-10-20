@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Channel visibility.",
+  "oneOf": [
+    {
+      "const": "public",
+      "description": "Every space member can see and join it.",
+      "type": "string"
+    },
+    {
+      "const": "private",
+      "description": "Members only.",
+      "type": "string"
+    }
+  ],
+  "title": "Visibility"
+}

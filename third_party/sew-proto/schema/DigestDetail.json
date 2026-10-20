@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Org policy `digest.detail`: what a digest mail names (gap G13).",
+  "oneOf": [
+    {
+      "const": "names",
+      "description": "Conversations, counts, author names and times.",
+      "type": "string"
+    },
+    {
+      "const": "counts",
+      "description": "Only the total and an \"Open Sew\" link.",
+      "type": "string"
+    }
+  ],
+  "title": "DigestDetail"
+}

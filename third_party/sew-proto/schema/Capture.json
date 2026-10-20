@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Whether a granted participant's microphone is actually captured (§9.2).",
+  "oneOf": [
+    {
+      "const": "recorded",
+      "description": "The recorder captures this member.",
+      "type": "string"
+    },
+    {
+      "const": "not_recorded",
+      "description": "Not captured (see the reason).",
+      "type": "string"
+    }
+  ],
+  "title": "Capture"
+}

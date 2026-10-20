@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Details of a `409 conflict` on a unique field (S10 §7): the field that is taken.",
+  "properties": {
+    "field": {
+      "description": "The taken field, for example `slug`.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "field"
+  ],
+  "title": "ConflictDetails",
+  "type": "object"
+}

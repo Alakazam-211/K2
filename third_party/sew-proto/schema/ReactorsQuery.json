@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Query of `GET /api/v1/messages/{id}/reactors` (S13 §9.2).",
+  "properties": {
+    "after": {
+      "description": "Members after this id (ascending).",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "emoji": {
+      "description": "The emoji in key form: `u:<emoji>` or `c:<custom emoji id>`.",
+      "type": "string"
+    },
+    "limit": {
+      "description": "Page size, 1–100 (default 50).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "emoji"
+  ],
+  "title": "ReactorsQuery",
+  "type": "object"
+}

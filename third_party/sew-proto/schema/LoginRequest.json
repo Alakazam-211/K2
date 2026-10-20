@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /api/v1/auth/login` (standalone installs only).",
+  "properties": {
+    "password": {
+      "description": "The password, 1–1024 bytes.",
+      "type": "string"
+    },
+    "username": {
+      "description": "The handle.",
+      "pattern": "^[a-z0-9_-]{2,64}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "username",
+    "password"
+  ],
+  "title": "LoginRequest",
+  "type": "object"
+}

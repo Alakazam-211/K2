@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A member's manual presence state (persisted).",
+  "oneOf": [
+    {
+      "const": "none",
+      "description": "Automatic.",
+      "type": "string"
+    },
+    {
+      "const": "away",
+      "description": "Shown as idle.",
+      "type": "string"
+    },
+    {
+      "const": "dnd",
+      "description": "Do not disturb.",
+      "type": "string"
+    },
+    {
+      "const": "invisible",
+      "description": "Shown offline to others.",
+      "type": "string"
+    }
+  ],
+  "title": "ManualPresence"
+}

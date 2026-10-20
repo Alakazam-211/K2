@@ -1,0 +1,49 @@
+{
+  "$defs": {
+    "SavedState": {
+      "description": "A saved item's state (`saved_items.state`).",
+      "oneOf": [
+        {
+          "const": "active",
+          "description": "In the \"save for later\" list.",
+          "type": "string"
+        },
+        {
+          "const": "done",
+          "description": "Completed.",
+          "type": "string"
+        },
+        {
+          "const": "archived",
+          "description": "Kept, out of the way.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /api/v1/saved/{id}/edit`.",
+  "properties": {
+    "note": {
+      "description": "Set or clear the note.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "state": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SavedState"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "A new state."
+    }
+  },
+  "title": "EditSavedRequest",
+  "type": "object"
+}

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /mgmt/v1/search/rebuild` (S20 §14.5).",
+  "properties": {
+    "reason": {
+      "description": "Free text for the operator, at most 200 bytes (never audited as content).",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "title": "SearchRebuildRequest",
+  "type": "object"
+}

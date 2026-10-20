@@ -1,0 +1,94 @@
+{
+  "$defs": {
+    "ThreadReadState": {
+      "description": "A member's read state in one thread (prd-sew-14 §5).",
+      "properties": {
+        "channel_id": {
+          "description": "The root's channel (always set by S14).",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "following": {
+          "default": false,
+          "description": "Whether the member follows the thread.",
+          "type": "boolean"
+        },
+        "last_read_id": {
+          "description": "The thread cursor; the root id when no reply was read (always set by S14).",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_reply_id": {
+          "description": "The newest live reply.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mention_count": {
+          "default": 0,
+          "description": "Unread mentions in the thread.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "root_id": {
+          "description": "The thread root.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "seq": {
+          "default": 0,
+          "description": "The member change-log head this state is current as of.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unread": {
+          "default": false,
+          "description": "Whether a reply is past the cursor.",
+          "type": "boolean"
+        },
+        "unread_replies": {
+          "default": 0,
+          "description": "Live replies past the cursor (exact, no cap).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "root_id"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A page of an id-keyed list: `{\"items\": [...], \"has_more\": bool}`.",
+  "properties": {
+    "has_more": {
+      "description": "Whether more items exist past this page.",
+      "type": "boolean"
+    },
+    "items": {
+      "description": "The items.",
+      "items": {
+        "$ref": "#/$defs/ThreadReadState"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "items",
+    "has_more"
+  ],
+  "title": "Page",
+  "type": "object"
+}

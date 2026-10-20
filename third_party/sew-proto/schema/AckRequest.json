@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /api/v1/channels/{id}/ack` and `POST /api/v1/threads/{root_id}/ack`: move\nthe cursor forward (never backward).",
+  "properties": {
+    "message_id": {
+      "description": "The newest message read; absent = the newest message now (S14 gap G18).",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "title": "AckRequest",
+  "type": "object"
+}

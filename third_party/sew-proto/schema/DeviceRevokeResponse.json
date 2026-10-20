@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "K14 answer.",
+  "properties": {
+    "ok": {
+      "description": "Always `true`.",
+      "type": "boolean"
+    },
+    "serials": {
+      "description": "Every serial of the device, now in the CRL.",
+      "items": {
+        "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+        "pattern": "^[1-9][0-9]{0,18}$",
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "ok",
+    "serials"
+  ],
+  "title": "DeviceRevokeResponse",
+  "type": "object"
+}

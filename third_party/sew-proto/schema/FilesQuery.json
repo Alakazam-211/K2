@@ -1,0 +1,98 @@
+{
+  "$defs": {
+    "FileKind": {
+      "description": "What a file is, from its sniffed content type (S15 §10).",
+      "oneOf": [
+        {
+          "const": "image",
+          "description": "A raster image (`image/*` from the magic table, or SVG).",
+          "type": "string"
+        },
+        {
+          "const": "video",
+          "description": "A video.",
+          "type": "string"
+        },
+        {
+          "const": "audio",
+          "description": "Audio.",
+          "type": "string"
+        },
+        {
+          "const": "document",
+          "description": "A document: PDF, text, office formats.",
+          "type": "string"
+        },
+        {
+          "const": "archive",
+          "description": "An archive: zip, gzip, 7z, rar.",
+          "type": "string"
+        },
+        {
+          "const": "other",
+          "description": "Anything else.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Query of `GET /api/v1/channels/{id}/files`: at most one cursor (attachment ids), a page\nsize, and filters.",
+  "properties": {
+    "after": {
+      "description": "Files newer than this attachment id.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "around": {
+      "description": "Files around this attachment id.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "before": {
+      "description": "Files older than this attachment id.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "from": {
+      "description": "Only files on messages by this author.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "kind": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FileKind"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Only this kind."
+    },
+    "limit": {
+      "description": "Page size, 1–100 (default 50).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    }
+  },
+  "title": "FilesQuery",
+  "type": "object"
+}

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "`GET /mgmt/v1/principals?include=`.",
+  "oneOf": [
+    {
+      "const": "link_guests",
+      "description": "Meeting link guests (`link:*`, install role `link_guest`) too.",
+      "type": "string"
+    }
+  ],
+  "title": "PrincipalsInclude"
+}

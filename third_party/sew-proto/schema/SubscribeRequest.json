@@ -1,0 +1,80 @@
+{
+  "$defs": {
+    "MemberListSub": {
+      "additionalProperties": false,
+      "description": "A member-list subscription: row ranges of one channel's member list.",
+      "properties": {
+        "channel_id": {
+          "description": "The channel.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "ranges": {
+          "description": "1–5 inclusive `[lo, hi]` row ranges, each `lo ≤ hi` and `hi - lo < 100`.",
+          "items": {
+            "items": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "channel_id",
+        "ranges"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Op 5 SUBSCRIBE: replaces the prior subscription for its scope.",
+  "properties": {
+    "member_list": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MemberListSub"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "A member-list subscription."
+    },
+    "presence": {
+      "default": [],
+      "description": "Members to receive presence for (≤ 500).",
+      "items": {
+        "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+        "pattern": "^[1-9][0-9]{0,18}$",
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "space_id": {
+      "description": "A space id or `\"dms\"`.",
+      "pattern": "^(dms|[1-9][0-9]{0,18})$",
+      "type": "string"
+    },
+    "typing": {
+      "default": [],
+      "description": "Channels to receive typing for (≤ 100).",
+      "items": {
+        "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+        "pattern": "^[1-9][0-9]{0,18}$",
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "space_id"
+  ],
+  "title": "SubscribeRequest",
+  "type": "object"
+}

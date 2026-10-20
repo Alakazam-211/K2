@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "What kind of message a delivery carries (contracts rev 36 G3). v1 sends `text` only;\n`Unknown` renders as text.",
+  "oneOf": [
+    {
+      "const": "text",
+      "description": "A chat message.",
+      "type": "string"
+    },
+    {
+      "const": "call_record",
+      "description": "A DM call record (S34).",
+      "type": "string"
+    },
+    {
+      "const": "poll",
+      "description": "A poll (S17).",
+      "type": "string"
+    },
+    {
+      "const": "transcript",
+      "description": "A call transcript (S35).",
+      "type": "string"
+    }
+  ],
+  "title": "DeliveryKind"
+}

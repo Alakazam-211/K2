@@ -1,0 +1,90 @@
+{
+  "$defs": {
+    "Mentionable": {
+      "description": "One mention target for autocomplete.",
+      "properties": {
+        "handle": {
+          "description": "Group handle or special name.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "Role or group id.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/MentionableKind",
+          "description": "Role, group or special."
+        },
+        "member_count": {
+          "description": "Group members.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "Display name.",
+          "type": "string"
+        },
+        "space_id": {
+          "description": "The space of a role or space group.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "name"
+      ],
+      "type": "object"
+    },
+    "MentionableKind": {
+      "description": "What a mention target is backed by.",
+      "oneOf": [
+        {
+          "const": "role",
+          "description": "A space role with `mentionable` (or the caller may mention any role).",
+          "type": "string"
+        },
+        {
+          "const": "group",
+          "description": "A user group.",
+          "type": "string"
+        },
+        {
+          "const": "special",
+          "description": "`here` or `channel`.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "`GET /api/v1/channels/{id}/mentionables`.",
+  "properties": {
+    "items": {
+      "description": "Specials, then groups, then roles.",
+      "items": {
+        "$ref": "#/$defs/Mentionable"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "items"
+  ],
+  "title": "MentionablesResponse",
+  "type": "object"
+}

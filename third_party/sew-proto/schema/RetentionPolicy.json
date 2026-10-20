@@ -1,0 +1,200 @@
+{
+  "$defs": {
+    "CreatedVia": {
+      "description": "Who wrote a retention policy row.",
+      "oneOf": [
+        {
+          "const": "member",
+          "description": "A compliance-flag holder through the client API.",
+          "type": "string"
+        },
+        {
+          "const": "service",
+          "description": "The mgmt service (K2's daemon, the `sew` CLI).",
+          "type": "string"
+        },
+        {
+          "const": "system",
+          "description": "Sew itself (the install seed).",
+          "type": "string"
+        }
+      ]
+    },
+    "PolicyState": {
+      "description": "A retention policy row's lifecycle state.",
+      "oneOf": [
+        {
+          "const": "pending",
+          "description": "Waiting for its `effective_at` (a shorter value after a preview).",
+          "type": "string"
+        },
+        {
+          "const": "active",
+          "description": "In effect.",
+          "type": "string"
+        },
+        {
+          "const": "superseded",
+          "description": "Replaced by a newer active row.",
+          "type": "string"
+        },
+        {
+          "const": "cancelled",
+          "description": "Cancelled before it took effect.",
+          "type": "string"
+        }
+      ]
+    },
+    "RetentionScope": {
+      "description": "Which level a retention policy sets (`kind` tag).",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The whole install (DMs use it too). A struct variant so unknown fields are refused.",
+          "properties": {
+            "kind": {
+              "const": "install",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "One space and every channel in it.",
+          "properties": {
+            "id": {
+              "description": "The space.",
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "type": "string"
+            },
+            "kind": {
+              "const": "space",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "One channel, DM or group DM.",
+          "properties": {
+            "id": {
+              "description": "The channel.",
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "type": "string"
+            },
+            "kind": {
+              "const": "channel",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "One retention policy row.",
+  "properties": {
+    "created_at": {
+      "description": "When it was set.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "created_by": {
+      "description": "The member who set it (absent for the service and the seed).",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "created_via": {
+      "$ref": "#/$defs/CreatedVia",
+      "description": "Who set it."
+    },
+    "deleted_purge_days": {
+      "description": "Install only: days deleted content is kept.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "effective_at": {
+      "description": "When it takes (or took) effect.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "ended_at": {
+      "description": "When it was superseded or cancelled.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "files_days": {
+      "description": "Days files live.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "id": {
+      "description": "The row id.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "messages_days": {
+      "description": "Days messages live.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "preview_id": {
+      "description": "The preview a shorter value was set from.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "scope": {
+      "$ref": "#/$defs/RetentionScope",
+      "description": "Its level."
+    },
+    "state": {
+      "$ref": "#/$defs/PolicyState",
+      "description": "Lifecycle state."
+    }
+  },
+  "required": [
+    "id",
+    "scope",
+    "state",
+    "effective_at",
+    "created_via",
+    "created_at"
+  ],
+  "title": "RetentionPolicy",
+  "type": "object"
+}

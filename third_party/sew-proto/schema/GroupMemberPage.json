@@ -1,0 +1,51 @@
+{
+  "$defs": {
+    "GroupMember": {
+      "description": "One group membership.",
+      "properties": {
+        "added_at": {
+          "description": "When added.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "group_id": {
+          "description": "The group.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "member_id": {
+          "description": "The member.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "group_id",
+        "member_id",
+        "added_at"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A page of an id-keyed list: `{\"items\": [...], \"has_more\": bool}`.",
+  "properties": {
+    "has_more": {
+      "description": "Whether more items exist past this page.",
+      "type": "boolean"
+    },
+    "items": {
+      "description": "The items.",
+      "items": {
+        "$ref": "#/$defs/GroupMember"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "items",
+    "has_more"
+  ],
+  "title": "Page",
+  "type": "object"
+}

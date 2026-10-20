@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "`GET /api/v1/me/channels?kind=`: DMs and group DMs, or space channels.",
+  "oneOf": [
+    {
+      "const": "dm",
+      "description": "DMs and group DMs.",
+      "type": "string"
+    },
+    {
+      "const": "space",
+      "description": "Space channels.",
+      "type": "string"
+    }
+  ],
+  "title": "MyChannelsKind"
+}

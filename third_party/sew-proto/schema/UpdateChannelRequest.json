@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of the update-channel route.",
+  "properties": {
+    "category_id": {
+      "description": "Move to a category or out of one.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "name": {
+      "description": "A new name, 1–100 characters.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "position": {
+      "description": "A new position.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "purpose": {
+      "description": "Set or clear the purpose (≤ 250).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "recording_audio_days": {
+      "description": "Voice channels only: set (0–36,500) or clear (the org default) the channel's default\naudio keep days (S35 v2 §12.1). Needs MANAGE_CHANNELS and RECORD_CALLS.",
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "recording_auto": {
+      "description": "Voice channels only: auto-record (S35 v2 §8.3). Needs MANAGE_CHANNELS and\nRECORD_CALLS; on another channel type `400 validation_failed`, field `recording_auto`.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "recording_require_consent": {
+      "description": "Voice channels only: set or clear (inherit) \"declining means not joining\" (S35 v2\n§9.11). Needs MANAGE_CHANNELS and RECORD_CALLS.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "slug": {
+      "description": "A new slug.",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,79}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "topic": {
+      "description": "Set or clear the topic (≤ 250).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "user_limit": {
+      "description": "Voice channels only: a new per-channel limit, 0–99 (0 = none; S33 v1 §8). The server\nrefuses it on another channel type (`400 validation_failed`, field `user_limit`).",
+      "format": "uint8",
+      "maximum": 255,
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    }
+  },
+  "title": "UpdateChannelRequest",
+  "type": "object"
+}

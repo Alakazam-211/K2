@@ -1,0 +1,495 @@
+{
+  "$defs": {
+    "ArchiveWho": {
+      "description": "`channels.archive`: who can archive a channel.",
+      "oneOf": [
+        {
+          "const": "creator_and_managers",
+          "description": "The channel's creator and channel managers.",
+          "type": "string"
+        },
+        {
+          "const": "managers",
+          "description": "Channel managers only.",
+          "type": "string"
+        }
+      ]
+    },
+    "ChannelCreateFloor": {
+      "description": "`channels.create_*_floor`: the install-level gate on top of the create bit\n(gap G29 as amended by contracts revs 6 and 10).",
+      "oneOf": [
+        {
+          "const": "perm",
+          "description": "The permission bit alone suffices.",
+          "type": "string"
+        },
+        {
+          "const": "space_admins",
+          "description": "The bit plus being a space admin.",
+          "type": "string"
+        },
+        {
+          "const": "install_admins",
+          "description": "The bit plus being an install owner or admin.",
+          "type": "string"
+        }
+      ]
+    },
+    "DigestDetail": {
+      "description": "Org policy `digest.detail`: what a digest mail names (gap G13).",
+      "oneOf": [
+        {
+          "const": "names",
+          "description": "Conversations, counts, author names and times.",
+          "type": "string"
+        },
+        {
+          "const": "counts",
+          "description": "Only the total and an \"Open Sew\" link.",
+          "type": "string"
+        }
+      ]
+    },
+    "GuestInvite": {
+      "description": "`guests.invite`: who can invite guests.",
+      "oneOf": [
+        {
+          "const": "admins",
+          "description": "Install owners and admins only.",
+          "type": "string"
+        },
+        {
+          "const": "perm",
+          "description": "Anyone holding INVITE_GUESTS (bit 44).",
+          "type": "string"
+        }
+      ]
+    },
+    "MeetingsCreate": {
+      "description": "`meetings.create`: who may host a meeting (Meet MC1).",
+      "oneOf": [
+        {
+          "const": "members",
+          "description": "Any active non-guest member of the Meetings Space (on a standalone install, any\nactive non-guest member: the first create adds them to the Space).",
+          "type": "string"
+        },
+        {
+          "const": "admins",
+          "description": "Install owners and admins only.",
+          "type": "string"
+        }
+      ]
+    },
+    "NotifyLevel": {
+      "description": "A notification level (`*.level` codes 1–3).",
+      "oneOf": [
+        {
+          "const": "all",
+          "description": "Every message.",
+          "type": "string"
+        },
+        {
+          "const": "mentions",
+          "description": "Mentions, DMs, keywords and followed threads.",
+          "type": "string"
+        },
+        {
+          "const": "none",
+          "description": "Nothing (reminders still arrive).",
+          "type": "string"
+        }
+      ]
+    },
+    "SpacesCreate": {
+      "description": "`spaces.create`: who can create spaces.",
+      "oneOf": [
+        {
+          "const": "admins",
+          "description": "Install owners and admins only.",
+          "type": "string"
+        },
+        {
+          "const": "members",
+          "description": "Any member.",
+          "type": "string"
+        }
+      ]
+    },
+    "VerificationCode": {
+      "description": "Policy `calls.verification_code` (S50 §16.4): whether \"Call info → Security code\" is\nshown. `required` is reserved for a later mode and refused by the policy validator.",
+      "oneOf": [
+        {
+          "const": "shown",
+          "description": "Shown on request, never modal (the default).",
+          "type": "string"
+        },
+        {
+          "const": "hidden",
+          "description": "Not shown.",
+          "type": "string"
+        },
+        {
+          "const": "required",
+          "description": "Reserved: \"confirm before you speak\" (refused in v1).",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A partial policy change. Every key is optional; unknown keys are rejected.",
+  "properties": {
+    "agents.allowed_in_dms": {
+      "description": "`agents.allowed_in_dms`.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "calls.dm_enabled": {
+      "description": "`calls.dm_enabled` (S34 v2).",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "calls.stats_beacon": {
+      "description": "`calls.stats_beacon` (F21).",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "calls.verification_code": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/VerificationCode"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "`calls.verification_code` (S50): `shown` or `hidden`; `required` is reserved."
+    },
+    "channels.archive": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ArchiveWho"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "`channels.archive`."
+    },
+    "channels.create_private_floor": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ChannelCreateFloor"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "`channels.create_private_floor`."
+    },
+    "channels.create_public_floor": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ChannelCreateFloor"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "`channels.create_public_floor`."
+    },
+    "digest.detail": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DigestDetail"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "`digest.detail` (S21)."
+    },
+    "digest.enabled": {
+      "description": "`digest.enabled`.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "emoji.max_per_space": {
+      "description": "`emoji.max_per_space`.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "files.max_bytes": {
+      "description": "`files.max_bytes` (≥ 1).",
+      "format": "uint64",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "files.space_quota_bytes": {
+      "description": "`files.space_quota_bytes`.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "files.strip_image_location": {
+      "description": "`files.strip_image_location` (S15).",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "gifs.api_key_ref": {
+      "description": "`gifs.api_key_ref` (≤ 256); `null` clears it.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "gifs.enabled": {
+      "description": "`gifs.enabled`.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "gifs.provider": {
+      "description": "`gifs.provider` (≤ 64); `null` clears it.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "guests.dm_non_channel_mates": {
+      "description": "`guests.dm_non_channel_mates`.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "guests.enabled": {
+      "description": "`guests.enabled` (S19).",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "guests.invite": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/GuestInvite"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "`guests.invite`."
+    },
+    "link_previews.enabled": {
+      "description": "`link_previews.enabled`.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "meetings.create": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MeetingsCreate"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "`meetings.create` (Meet MC1)."
+    },
+    "meetings.enabled": {
+      "description": "`meetings.enabled` (Meet MC1).",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "meetings.grace_minutes": {
+      "description": "`meetings.grace_minutes` (0–720).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "meetings.link_guests": {
+      "description": "`meetings.link_guests` (Meet MC2a).",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "meetings.max_duration_minutes": {
+      "description": "`meetings.max_duration_minutes` (1–720).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "meetings.max_participants": {
+      "description": "`meetings.max_participants` (2–200).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "meetings.privacy_contact": {
+      "description": "`meetings.privacy_contact` (≤ 300 characters); `null` clears it.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "mentions.channel_max_members": {
+      "description": "`mentions.channel_max_members` (≥ 2).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "messages.delete_own": {
+      "description": "`messages.delete_own`.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "messages.deleted_purge_days": {
+      "description": "`messages.deleted_purge_days` (S22): a read-only mirror; a write is refused with\n`managed_by_retention`.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "messages.edit_window_s": {
+      "description": "`messages.edit_window_s`.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "notifications.default_level": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/NotifyLevel"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "`notifications.default_level` (S21)."
+    },
+    "presence.show_to_guests": {
+      "description": "`presence.show_to_guests`.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "private.space_admins_can_join": {
+      "description": "`private.space_admins_can_join`.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "recording.audio_default_days": {
+      "description": "`recording.audio_default_days` (S35 v2).",
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "recording.audio_max_days": {
+      "description": "`recording.audio_max_days` (S35 v2).",
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "recording.dm_enabled": {
+      "description": "`recording.dm_enabled` (S35 v2).",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "recording.enabled": {
+      "description": "`recording.enabled` (S35 v2).",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "recording.require_consent_to_join": {
+      "description": "`recording.require_consent_to_join` (S35 v2, rev 91).",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "retention.default_days": {
+      "description": "`retention.default_days`.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "spaces.create": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SpacesCreate"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "`spaces.create`."
+    }
+  },
+  "title": "PolicyPatch",
+  "type": "object"
+}

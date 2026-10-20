@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Which spaces `GET /api/v1/spaces` lists.",
+  "oneOf": [
+    {
+      "const": "mine",
+      "description": "Spaces the caller belongs to (the default).",
+      "type": "string"
+    },
+    {
+      "const": "joinable",
+      "description": "Open spaces the caller is not in (empty for guests).",
+      "type": "string"
+    },
+    {
+      "const": "all",
+      "description": "Every space (install owners and admins only).",
+      "type": "string"
+    }
+  ],
+  "title": "SpaceListScope"
+}

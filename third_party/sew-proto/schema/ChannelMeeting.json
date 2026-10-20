@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "`meeting` on a meeting channel's JSON (Meet MC2a, CC6): the meeting it belongs to.",
+  "properties": {
+    "id": {
+      "description": "The meeting id.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "title": "ChannelMeeting",
+  "type": "object"
+}

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "K5 body: every remote sender's key for `epoch` is installed.",
+  "properties": {
+    "epoch": {
+      "description": "The installed epoch.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "group_id": {
+      "description": "The group.",
+      "pattern": "^[A-Za-z0-9_-]*$",
+      "type": "string"
+    },
+    "join_id": {
+      "description": "The caller's join id.",
+      "pattern": "^[0-9a-f]{32}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "join_id",
+    "group_id",
+    "epoch"
+  ],
+  "title": "KeyReadyRequest",
+  "type": "object"
+}

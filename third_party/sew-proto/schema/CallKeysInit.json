@@ -1,0 +1,162 @@
+{
+  "$defs": {
+    "CallKeysParams": {
+      "description": "The client timings and constants the server relays (READY `call_keys.params` and every\n[`CallKeysInit`]; S50 §9.4, S51 §20.1). The single source for client timings.",
+      "properties": {
+        "ciphersuite": {
+          "description": "The ciphersuite every group uses (1).",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "ciphersuites": {
+          "description": "The ciphersuites the server accepts (`[1]` in v1).",
+          "items": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "client_activate_fallback_ms": {
+          "description": "A sender that acked but hears no `activate` switches after this long.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "exporter_label": {
+          "description": "The MLS exporter label of frame keys ([`tls::EXPORTER_LABEL`]).",
+          "type": "string"
+        },
+        "kdf": {
+          "description": "`\"hkdf\"`.",
+          "type": "string"
+        },
+        "key_package_max_lifetime_s": {
+          "description": "Longest KeyPackage lifetime the server accepts.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "key_ring_size": {
+          "description": "Always 64 (rev 75).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "release_info_label": {
+          "description": "The recorder release `info` label ([`tls::RELEASE_INFO_LABEL`]).",
+          "type": "string"
+        },
+        "retire_after_ms": {
+          "description": "Receivers retire an old slot this long after `activate`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "securing_indicator_after_ms": {
+          "description": "\"Securing…\" shows only after this long.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unknown_call_buffer_ms": {
+          "description": "Dispatches for a `call_id` the client does not know yet are buffered this long.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "ciphersuite",
+        "ciphersuites",
+        "key_ring_size",
+        "kdf",
+        "exporter_label",
+        "release_info_label",
+        "retire_after_ms",
+        "client_activate_fallback_ms",
+        "key_package_max_lifetime_s",
+        "unknown_call_buffer_ms",
+        "securing_indicator_after_ms"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "What a key join answers (K1's `VoiceJoinResponse.e2ee`, K2, and the `init` dispatch;\nS50 §9.1).",
+  "properties": {
+    "activate_on_create": {
+      "description": "The creator activates epoch 0 at once (first joiner of a fresh call only).",
+      "type": "boolean"
+    },
+    "call_id": {
+      "description": "The call: its `r_…` room.",
+      "pattern": "^r_[a-z2-7]{26}$",
+      "type": "string"
+    },
+    "create": {
+      "description": "The caller creates the group now (S50 §12.1).",
+      "type": "boolean"
+    },
+    "epoch": {
+      "description": "The group's epoch.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "external_sender": {
+      "description": "TLS `ExternalSender` of the install's DS key.",
+      "pattern": "^[A-Za-z0-9_-]*$",
+      "type": "string"
+    },
+    "group_id": {
+      "description": "The current group (16 bytes).",
+      "pattern": "^[A-Za-z0-9_-]*$",
+      "type": "string"
+    },
+    "join_id": {
+      "description": "The caller's Sew-minted join id; every K3–K10 body carries it.",
+      "pattern": "^[0-9a-f]{32}$",
+      "type": "string"
+    },
+    "lk_identity": {
+      "description": "The caller's engine identity (`p_` + base32 of `join_id`; the token's `sub`).",
+      "pattern": "^p_[a-z2-7]{26}$",
+      "type": "string"
+    },
+    "params": {
+      "$ref": "#/$defs/CallKeysParams",
+      "description": "Client timings."
+    },
+    "scope": {
+      "description": "The call's scope, `call:<channel_id>`; members refuse leaves with another.",
+      "pattern": "^call:[1-9][0-9]*$",
+      "type": "string"
+    },
+    "slot_base": {
+      "description": "`slot(e) = (slot_base + e) mod 64`.",
+      "format": "uint8",
+      "maximum": 255,
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "call_id",
+    "join_id",
+    "lk_identity",
+    "scope",
+    "group_id",
+    "epoch",
+    "create",
+    "activate_on_create",
+    "slot_base",
+    "external_sender",
+    "params"
+  ],
+  "title": "CallKeysInit",
+  "type": "object"
+}

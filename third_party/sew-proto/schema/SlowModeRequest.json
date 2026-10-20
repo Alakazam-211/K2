@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /api/v1/channels/{id}/slow_mode/set`.",
+  "properties": {
+    "slow_mode_s": {
+      "description": "Seconds between posts per member, 0 – 21,600; 0 turns it off.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "slow_mode_s"
+  ],
+  "title": "SlowModeRequest",
+  "type": "object"
+}

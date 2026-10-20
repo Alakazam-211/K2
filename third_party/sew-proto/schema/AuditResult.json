@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "How an audited action ended.",
+  "oneOf": [
+    {
+      "const": "ok",
+      "description": "It succeeded.",
+      "type": "string"
+    },
+    {
+      "const": "denied",
+      "description": "A permission or policy check refused it.",
+      "type": "string"
+    },
+    {
+      "const": "error",
+      "description": "It failed.",
+      "type": "string"
+    }
+  ],
+  "title": "AuditResult"
+}

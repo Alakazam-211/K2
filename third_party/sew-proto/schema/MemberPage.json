@@ -1,0 +1,289 @@
+{
+  "$defs": {
+    "AgentKind": {
+      "description": "What kind of agent a member is.",
+      "oneOf": [
+        {
+          "const": "coworker",
+          "description": "A team member in its own right.",
+          "type": "string"
+        },
+        {
+          "const": "assistant",
+          "description": "Pinned to one person; acts within that person's access (C9).",
+          "type": "string"
+        }
+      ]
+    },
+    "InstallRole": {
+      "description": "Install-wide role (C12). Separate from space roles.",
+      "oneOf": [
+        {
+          "const": "owner",
+          "description": "All install admin, plus transfer.",
+          "type": "string"
+        },
+        {
+          "const": "admin",
+          "description": "Spaces, policies, members, guests. No content access to private channels or DMs.",
+          "type": "string"
+        },
+        {
+          "const": "member",
+          "description": "A regular member.",
+          "type": "string"
+        },
+        {
+          "const": "guest",
+          "description": "A guest.",
+          "type": "string"
+        },
+        {
+          "const": "link_guest",
+          "description": "A meeting link guest (Meet MC2a, C6 amendment CC1, CC3): made by redeeming a meeting\nlink, bound to one meeting channel, capped by `LINK_GUEST_MASK`, never a K2\nprincipal. Every S19 guest rule applies, and only the link-guest allowlist passes.",
+          "type": "string"
+        }
+      ]
+    },
+    "Member": {
+      "description": "A member of the install, person or agent.",
+      "properties": {
+        "agent_kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "For agents, coworker or assistant."
+        },
+        "assistant_of": {
+          "description": "For assistants, the member id of their person.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "avatar_thumb_url": {
+          "description": "64 px signed avatar URL (S18).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "avatar_url": {
+          "description": "Signed avatar URL.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "compliance": {
+          "description": "Whether the member holds the compliance flag; sent only to the member themself.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "created_at": {
+          "description": "When the member was created.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "custom_fields": {
+          "description": "Custom field values the viewer may see; only on `GET /members/{id}` and the self object\n(S18).",
+          "items": {
+            "$ref": "#/$defs/ProfileFieldValue"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "deactivated": {
+          "description": "Whether the member is deactivated.",
+          "type": "boolean"
+        },
+        "display_name": {
+          "description": "The display name.",
+          "type": "string"
+        },
+        "email": {
+          "description": "Email address; sent only to the member themself.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "The member id.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "install_role": {
+          "$ref": "#/$defs/InstallRole",
+          "description": "Install-wide role."
+        },
+        "kind": {
+          "$ref": "#/$defs/MemberKind",
+          "description": "Person or agent."
+        },
+        "managed_fields": {
+          "description": "Fields the client must show read-only; self only (S18).",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "profile_rev": {
+          "default": 0,
+          "description": "Bumped by every change of this object; clients drop older events (S18).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pronouns": {
+          "description": "Pronouns.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MemberStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Status; absent when none or expired (S18)."
+        },
+        "timezone": {
+          "description": "IANA timezone (S18).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "description": "Job title.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "username": {
+          "description": "The handle.",
+          "pattern": "^[a-z0-9_-]{2,64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "install_role",
+        "username",
+        "display_name",
+        "deactivated",
+        "created_at"
+      ],
+      "type": "object"
+    },
+    "MemberKind": {
+      "description": "Whether a member is a person or an agent.",
+      "oneOf": [
+        {
+          "const": "person",
+          "description": "A human.",
+          "type": "string"
+        },
+        {
+          "const": "agent",
+          "description": "A K2 agent.",
+          "type": "string"
+        }
+      ]
+    },
+    "MemberStatus": {
+      "description": "A member's status: text and/or one emoji, with an optional expiry.",
+      "properties": {
+        "emoji": {
+          "description": "One Unicode emoji sequence.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "expires_at": {
+          "description": "When it clears by itself.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "text": {
+          "description": "Status text, 1–100 characters.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ProfileFieldValue": {
+      "description": "One custom field value on a `Member`.",
+      "properties": {
+        "field_id": {
+          "description": "The field.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "key": {
+          "description": "The field's key.",
+          "type": "string"
+        },
+        "value": {
+          "description": "The value.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "field_id",
+        "key",
+        "value"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A page of an id-keyed list: `{\"items\": [...], \"has_more\": bool}`.",
+  "properties": {
+    "has_more": {
+      "description": "Whether more items exist past this page.",
+      "type": "boolean"
+    },
+    "items": {
+      "description": "The items.",
+      "items": {
+        "$ref": "#/$defs/Member"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "items",
+    "has_more"
+  ],
+  "title": "Page",
+  "type": "object"
+}

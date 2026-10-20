@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "What an archive is.",
+  "oneOf": [
+    {
+      "const": "full",
+      "description": "Everything, for a box move (mgmt only).",
+      "type": "string"
+    },
+    {
+      "const": "ediscovery",
+      "description": "A scoped compliance export.",
+      "type": "string"
+    }
+  ],
+  "title": "ExportKind"
+}

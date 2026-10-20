@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Response of the GIF attach route: a pending upload to post with `upload_ids`.",
+  "properties": {
+    "content_type": {
+      "description": "`image/gif` or `image/webp`.",
+      "type": "string"
+    },
+    "expires_at": {
+      "description": "When the pending upload expires unless posted.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "filename": {
+      "description": "`giphy-<id>.gif` (or `.webp`).",
+      "type": "string"
+    },
+    "height": {
+      "description": "Height in pixels.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "size": {
+      "description": "Bytes.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "upload_id": {
+      "description": "The upload id.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "width": {
+      "description": "Width in pixels.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "upload_id",
+    "filename",
+    "content_type",
+    "size",
+    "width",
+    "height",
+    "expires_at"
+  ],
+  "title": "GifAttachResponse",
+  "type": "object"
+}

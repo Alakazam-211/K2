@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Query of `POST /api/v1/spaces/{id}/emoji` (the body is the raw image).",
+  "properties": {
+    "aliases": {
+      "description": "Up to 5 aliases, comma-separated.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "name": {
+      "description": "The primary name, `[a-z0-9_-]{2,32}`.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "name"
+  ],
+  "title": "CreateEmojiQuery",
+  "type": "object"
+}

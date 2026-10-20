@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The client timings and constants the server relays (READY `call_keys.params` and every\n[`CallKeysInit`]; S50 §9.4, S51 §20.1). The single source for client timings.",
+  "properties": {
+    "ciphersuite": {
+      "description": "The ciphersuite every group uses (1).",
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "ciphersuites": {
+      "description": "The ciphersuites the server accepts (`[1]` in v1).",
+      "items": {
+        "format": "uint16",
+        "maximum": 65535,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "type": "array"
+    },
+    "client_activate_fallback_ms": {
+      "description": "A sender that acked but hears no `activate` switches after this long.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "exporter_label": {
+      "description": "The MLS exporter label of frame keys ([`tls::EXPORTER_LABEL`]).",
+      "type": "string"
+    },
+    "kdf": {
+      "description": "`\"hkdf\"`.",
+      "type": "string"
+    },
+    "key_package_max_lifetime_s": {
+      "description": "Longest KeyPackage lifetime the server accepts.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "key_ring_size": {
+      "description": "Always 64 (rev 75).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "release_info_label": {
+      "description": "The recorder release `info` label ([`tls::RELEASE_INFO_LABEL`]).",
+      "type": "string"
+    },
+    "retire_after_ms": {
+      "description": "Receivers retire an old slot this long after `activate`.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "securing_indicator_after_ms": {
+      "description": "\"Securing…\" shows only after this long.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "unknown_call_buffer_ms": {
+      "description": "Dispatches for a `call_id` the client does not know yet are buffered this long.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "ciphersuite",
+    "ciphersuites",
+    "key_ring_size",
+    "kdf",
+    "exporter_label",
+    "release_info_label",
+    "retire_after_ms",
+    "client_activate_fallback_ms",
+    "key_package_max_lifetime_s",
+    "unknown_call_buffer_ms",
+    "securing_indicator_after_ms"
+  ],
+  "title": "CallKeysParams",
+  "type": "object"
+}

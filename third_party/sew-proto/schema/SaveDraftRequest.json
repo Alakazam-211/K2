@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /api/v1/channels/{id}/draft`.",
+  "properties": {
+    "also_send_to_channel": {
+      "description": "For a reply draft: also send to the channel.",
+      "type": "boolean"
+    },
+    "body": {
+      "default": "",
+      "description": "The body, 0–16,384 bytes.",
+      "type": "string"
+    },
+    "if_rev": {
+      "description": "Expected current `rev` (`0` = no draft yet); a mismatch is `409`.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "thread_root_id": {
+      "description": "The thread, for a reply draft.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "upload_ids": {
+      "description": "Pending uploads of the caller in this channel, 0–10.",
+      "items": {
+        "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+        "pattern": "^[1-9][0-9]{0,18}$",
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "title": "SaveDraftRequest",
+  "type": "object"
+}

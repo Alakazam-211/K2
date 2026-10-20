@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The answer to the consent modal, sent with a voice join or call join/accept (§9.4, §9.10).\nJoining never implies consent: `consent` is required and `notice_version` must echo the\ncurrent [`ConsentPrompt`].",
+  "properties": {
+    "consent": {
+      "default": null,
+      "description": "The person's answer. Missing → `400 validation_failed`, field `recording_notice.consent`.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "notice_version": {
+      "default": null,
+      "description": "The prompt version the person saw.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "recording_id": {
+      "description": "The recording (or `\"auto\"`).",
+      "pattern": "^(auto|[1-9][0-9]{0,18})$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "recording_id"
+  ],
+  "title": "RecordingNotice",
+  "type": "object"
+}

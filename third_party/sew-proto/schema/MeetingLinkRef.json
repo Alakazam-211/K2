@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /api/v1/meetings/peek` and `POST /api/v1/meetings/resolve`: a link's id and\nsecret (from the URL fragment). A malformed id or secret is answered like a wrong one\n(`404 link_invalid`), never `400`.",
+  "properties": {
+    "link_id": {
+      "description": "The link's id.",
+      "type": "string"
+    },
+    "secret": {
+      "description": "The link's secret.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "link_id",
+    "secret"
+  ],
+  "title": "MeetingLinkRef",
+  "type": "object"
+}

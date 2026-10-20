@@ -1,0 +1,98 @@
+{
+  "$defs": {
+    "E2eeCaps": {
+      "additionalProperties": false,
+      "description": "What the joining client can do (S50 §9.1 K1, S51 §16 item 4). The server refuses an\nincapable client with `422 e2ee_unsupported_client` (§11.3 J1), so the values themselves are\nnot checked here, only their sizes.",
+      "properties": {
+        "browser": {
+          "description": "`chrome`, `firefox`, `safari` or `other` (web only).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ciphersuites": {
+          "description": "MLS ciphersuites the client supports (S51 §6.1.1); must contain 1 when present.",
+          "items": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "kdf": {
+          "description": "`\"hkdf\"`.",
+          "type": "string"
+        },
+        "key_ring_size": {
+          "description": "64 (rev 75); anything else is refused at join.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "lib": {
+          "description": "`sew-e2ee/<version>`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sdk": {
+          "description": "The SDK family (`js`, `rust`, …).",
+          "type": "string"
+        },
+        "sdk_version": {
+          "description": "The SDK version as its `ClientInfo` reports it.",
+          "type": "string"
+        },
+        "sender_key_index": {
+          "description": "The SDK can move its sender to a new key slot.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "sender_key_index",
+        "kdf",
+        "key_ring_size",
+        "sdk",
+        "sdk_version"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "K2 body: the key join after a move, with the Sew-minted `join_id` from\n`voice_server_updated` (S50 §9.1).",
+  "properties": {
+    "caps": {
+      "$ref": "#/$defs/E2eeCaps",
+      "description": "What the client can do."
+    },
+    "gateway_session": {
+      "description": "The caller's gateway session.",
+      "type": "string"
+    },
+    "join_id": {
+      "description": "The join id Sew minted for the move.",
+      "pattern": "^[0-9a-f]{32}$",
+      "type": "string"
+    },
+    "key_package_ref": {
+      "description": "A ref uploaded for the target channel's scope.",
+      "pattern": "^[A-Za-z0-9_-]*$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "join_id",
+    "gateway_session",
+    "key_package_ref",
+    "caps"
+  ],
+  "title": "KeyJoinRequest",
+  "type": "object"
+}

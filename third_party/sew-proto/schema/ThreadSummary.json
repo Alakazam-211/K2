@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A thread's summary, carried on its root message and in `thread_updated`.",
+  "properties": {
+    "channel_id": {
+      "description": "Its channel.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "following": {
+      "description": "Whether the viewer follows the thread.",
+      "type": "boolean"
+    },
+    "last_reply_at": {
+      "description": "When the newest reply was posted.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "last_reply_id": {
+      "description": "The newest reply.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "reply_count": {
+      "description": "Number of replies.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "root_id": {
+      "description": "The root message.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "seq": {
+      "description": "The channel seq this summary is current as of; set in `thread_updated` events (S13).",
+      "format": "uint64",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "root_id",
+    "channel_id",
+    "reply_count",
+    "following"
+  ],
+  "title": "ThreadSummary",
+  "type": "object"
+}

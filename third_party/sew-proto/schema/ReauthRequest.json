@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Op 11 REAUTH: swap the session token on a live socket. No ack; failure closes 4004.",
+  "properties": {
+    "token": {
+      "description": "The new credential: a session token (`sews_…`) or a ticket (`sewtk_…`).",
+      "type": "string"
+    }
+  },
+  "required": [
+    "token"
+  ],
+  "title": "ReauthRequest",
+  "type": "object"
+}

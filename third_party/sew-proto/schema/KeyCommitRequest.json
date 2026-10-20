@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "K4 body: the designated committer's commit.",
+  "properties": {
+    "commit": {
+      "description": "TLS `MLSMessage(PublicMessage commit)`.",
+      "pattern": "^[A-Za-z0-9_-]*$",
+      "type": "string"
+    },
+    "epoch": {
+      "description": "The epoch the commit is for (the proposals' epoch).",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "group_id": {
+      "description": "The group.",
+      "pattern": "^[A-Za-z0-9_-]*$",
+      "type": "string"
+    },
+    "group_info": {
+      "description": "TLS `MLSMessage(GroupInfo)` for `epoch + 1`.",
+      "pattern": "^[A-Za-z0-9_-]*$",
+      "type": "string"
+    },
+    "join_id": {
+      "description": "The committer's join id.",
+      "pattern": "^[0-9a-f]{32}$",
+      "type": "string"
+    },
+    "welcome": {
+      "description": "TLS `MLSMessage(Welcome)`; present iff the commit adds leaves.",
+      "pattern": "^[A-Za-z0-9_-]*$",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "join_id",
+    "group_id",
+    "epoch",
+    "commit",
+    "group_info"
+  ],
+  "title": "KeyCommitRequest",
+  "type": "object"
+}

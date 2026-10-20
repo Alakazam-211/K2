@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Why content vanished.",
+  "oneOf": [
+    {
+      "const": "retention",
+      "description": "A retention policy's cutoff.",
+      "type": "string"
+    }
+  ],
+  "title": "VanishReason"
+}

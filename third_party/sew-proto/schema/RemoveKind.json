@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Why an attachment was removed.",
+  "oneOf": [
+    {
+      "const": "own",
+      "description": "Its uploader removed it.",
+      "type": "string"
+    },
+    {
+      "const": "moderator",
+      "description": "A moderator removed it.",
+      "type": "string"
+    },
+    {
+      "const": "retention",
+      "description": "File retention removed it.",
+      "type": "string"
+    }
+  ],
+  "title": "RemoveKind"
+}

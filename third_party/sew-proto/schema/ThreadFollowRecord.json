@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`thread_follows.ndjson`.",
+  "properties": {
+    "channel_id": {
+      "description": "Its channel.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "followed_at": {
+      "description": "Last change.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "member_id": {
+      "description": "The member.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "reason": {
+      "description": "`root_author`, `replied`, `mentioned`, `manual`.",
+      "type": "string"
+    },
+    "root_id": {
+      "description": "The thread root.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "state": {
+      "description": "`following` or `unfollowed`.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "member_id",
+    "root_id",
+    "channel_id",
+    "state",
+    "reason",
+    "followed_at"
+  ],
+  "title": "ThreadFollowRecord",
+  "type": "object"
+}

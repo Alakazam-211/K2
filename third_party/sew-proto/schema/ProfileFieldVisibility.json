@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Who sees a custom field.",
+  "oneOf": [
+    {
+      "const": "everyone",
+      "description": "Everyone who can see the member, guests included.",
+      "type": "string"
+    },
+    {
+      "const": "non_guests",
+      "description": "Everyone but guests.",
+      "type": "string"
+    },
+    {
+      "const": "admins",
+      "description": "Install owner and admins, and the member themself.",
+      "type": "string"
+    }
+  ],
+  "title": "ProfileFieldVisibility"
+}

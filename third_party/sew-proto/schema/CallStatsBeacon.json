@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The call-stats beacon's terms for this join (F21, prd-meet-01 CC14).",
+  "properties": {
+    "interval_ms": {
+      "description": "Send one [`CallStatsSample`] per this many milliseconds while connected, and one when\nleaving (the server refuses more than [`CALL_STATS_PER_MINUTE`] a minute per session).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "interval_ms"
+  ],
+  "title": "CallStatsBeacon",
+  "type": "object"
+}

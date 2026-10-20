@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A member's consent for one recording (S35 v2's `ConsentSource`).",
+  "oneOf": [
+    {
+      "const": "granted",
+      "description": "Granted: releases are forwarded.",
+      "type": "string"
+    },
+    {
+      "const": "denied",
+      "description": "Declined.",
+      "type": "string"
+    },
+    {
+      "const": "pending",
+      "description": "Not answered yet.",
+      "type": "string"
+    }
+  ],
+  "title": "ConsentState"
+}

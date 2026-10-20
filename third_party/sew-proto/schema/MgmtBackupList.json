@@ -1,0 +1,62 @@
+{
+  "$defs": {
+    "MgmtBackup": {
+      "description": "One bundle in `GET /mgmt/v1/backups` (S6 §17.2's `sew backup list`).",
+      "properties": {
+        "bytes": {
+          "description": "Dump and blob bytes.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "created_at": {
+          "description": "When it was made.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "id": {
+          "description": "The bundle id, `YYYYMMDDTHHMMSSZ`.",
+          "type": "string"
+        },
+        "kind": {
+          "description": "Why it was made: `scheduled`, `manual`, `pre-upgrade` or `pre-restore`.",
+          "type": "string"
+        },
+        "schema_version": {
+          "description": "The schema version in the dump.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "sew_version": {
+          "description": "The Sew version that made it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "created_at",
+        "bytes",
+        "schema_version",
+        "sew_version"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Response of `GET /mgmt/v1/backups`: newest first.",
+  "properties": {
+    "items": {
+      "description": "The bundles.",
+      "items": {
+        "$ref": "#/$defs/MgmtBackup"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "items"
+  ],
+  "title": "MgmtBackupList",
+  "type": "object"
+}

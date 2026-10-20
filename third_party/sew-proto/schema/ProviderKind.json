@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The install's identity provider (C6).",
+  "oneOf": [
+    {
+      "const": "k2",
+      "description": "K2 grants create accounts; K2 signs the pass.",
+      "type": "string"
+    },
+    {
+      "const": "standalone",
+      "description": "Local users and passwords.",
+      "type": "string"
+    },
+    {
+      "const": "link",
+      "description": "A meeting-link session (Meet MC2a, CC1: session provider 3, made by redeeming a\nmeeting link). Never an install's provider.",
+      "type": "string"
+    }
+  ],
+  "title": "ProviderKind"
+}

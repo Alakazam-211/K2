@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Why a message was deleted.",
+  "oneOf": [
+    {
+      "const": "own",
+      "description": "Its author deleted it.",
+      "type": "string"
+    },
+    {
+      "const": "moderator",
+      "description": "A moderator deleted it.",
+      "type": "string"
+    },
+    {
+      "const": "thread",
+      "description": "A moderator deleted its whole thread.",
+      "type": "string"
+    },
+    {
+      "const": "retention",
+      "description": "Retention expired it.",
+      "type": "string"
+    }
+  ],
+  "title": "DeleteKind"
+}

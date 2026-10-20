@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Search index state (S20 §12.3).",
+  "oneOf": [
+    {
+      "const": "ready",
+      "description": "Queries use the live index.",
+      "type": "string"
+    },
+    {
+      "const": "missing",
+      "description": "No usable index; a rebuild runs and searches answer `503 search_rebuilding`.",
+      "type": "string"
+    }
+  ],
+  "title": "SearchState"
+}

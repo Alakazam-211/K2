@@ -1,0 +1,275 @@
+{
+  "$defs": {
+    "ChannelType": {
+      "description": "Channel type (gap G8 adds `dm` and `group_dm`).",
+      "oneOf": [
+        {
+          "const": "text",
+          "description": "A text channel.",
+          "type": "string"
+        },
+        {
+          "const": "voice",
+          "description": "A voice channel.",
+          "type": "string"
+        },
+        {
+          "const": "announcement",
+          "description": "An announcement channel: `@everyone` posts only in threads by default.",
+          "type": "string"
+        },
+        {
+          "const": "dm",
+          "description": "A 1:1 DM (no space, slug or name; always private).",
+          "type": "string"
+        },
+        {
+          "const": "group_dm",
+          "description": "A group DM of up to 9 people.",
+          "type": "string"
+        }
+      ]
+    },
+    "OverwriteRecord": {
+      "additionalProperties": false,
+      "description": "A permission overwrite on a category or channel.",
+      "properties": {
+        "allow": {
+          "description": "Allowed bits, decimal string.",
+          "type": "string"
+        },
+        "deny": {
+          "description": "Denied bits, decimal string.",
+          "type": "string"
+        },
+        "target_id": {
+          "description": "The role or member.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "target_kind": {
+          "description": "`role` or `member`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "target_kind",
+        "target_id",
+        "allow",
+        "deny"
+      ],
+      "type": "object"
+    },
+    "SourceRef": {
+      "additionalProperties": false,
+      "description": "A converter's reference to the record it came from (ignored and not stored by Sew v1).",
+      "properties": {
+        "ref": {
+          "description": "Its reference.",
+          "type": "string"
+        },
+        "system": {
+          "description": "The source system, e.g. `slack`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "system",
+        "ref"
+      ],
+      "type": "object"
+    },
+    "Visibility": {
+      "description": "Channel visibility.",
+      "oneOf": [
+        {
+          "const": "public",
+          "description": "Every space member can see and join it.",
+          "type": "string"
+        },
+        {
+          "const": "private",
+          "description": "Members only.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`channels.ndjson`.",
+  "properties": {
+    "archived_at": {
+      "description": "Archived.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "archived_by": {
+      "description": "Archived by.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "category_id": {
+      "description": "Its category.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "created_at": {
+      "description": "Created.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "created_by": {
+      "description": "Creator.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "dm_member_ids": {
+      "description": "DM and group DM members, in DM-key order.",
+      "items": {
+        "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+        "pattern": "^[1-9][0-9]{0,18}$",
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "head_seq": {
+      "description": "The channel change-log head (*always* in full exports).",
+      "format": "uint64",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "id": {
+      "description": "The channel id.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "name": {
+      "description": "Name.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "overwrites": {
+      "description": "The channel's own overwrites (full exports).",
+      "items": {
+        "$ref": "#/$defs/OverwriteRecord"
+      },
+      "type": "array"
+    },
+    "position": {
+      "description": "Position.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "purpose": {
+      "description": "Purpose.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "recording_audio_days": {
+      "description": "S35 v2: the channel's default audio keep days.",
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "recording_auto": {
+      "description": "S35 v2: auto-record (voice channels).",
+      "type": "boolean"
+    },
+    "recording_require_consent": {
+      "description": "S35 v2: declining means not joining (absent: the org policy).",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "slow_mode_s": {
+      "description": "Slow mode seconds.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "slug": {
+      "description": "Slug.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "source": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SourceRef"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Converter reference."
+    },
+    "space_id": {
+      "description": "Its space (absent for DMs).",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "synced": {
+      "description": "Overwrites follow the category.",
+      "type": "boolean"
+    },
+    "topic": {
+      "description": "Topic.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "type": {
+      "$ref": "#/$defs/ChannelType",
+      "description": "Type."
+    },
+    "visibility": {
+      "$ref": "#/$defs/Visibility",
+      "description": "Public or private."
+    }
+  },
+  "required": [
+    "id",
+    "type",
+    "visibility",
+    "position",
+    "synced",
+    "created_at"
+  ],
+  "title": "ChannelRecord",
+  "type": "object"
+}

@@ -1,0 +1,80 @@
+{
+  "$defs": {
+    "OverwriteRecord": {
+      "additionalProperties": false,
+      "description": "A permission overwrite on a category or channel.",
+      "properties": {
+        "allow": {
+          "description": "Allowed bits, decimal string.",
+          "type": "string"
+        },
+        "deny": {
+          "description": "Denied bits, decimal string.",
+          "type": "string"
+        },
+        "target_id": {
+          "description": "The role or member.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "target_kind": {
+          "description": "`role` or `member`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "target_kind",
+        "target_id",
+        "allow",
+        "deny"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`categories.ndjson`.",
+  "properties": {
+    "created_at": {
+      "description": "Created.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "id": {
+      "description": "The category id.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "name": {
+      "description": "Name.",
+      "type": "string"
+    },
+    "overwrites": {
+      "description": "Overwrites, by target.",
+      "items": {
+        "$ref": "#/$defs/OverwriteRecord"
+      },
+      "type": "array"
+    },
+    "position": {
+      "description": "Position.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "space_id": {
+      "description": "Its space.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "space_id",
+    "name",
+    "position",
+    "created_at"
+  ],
+  "title": "CategoryRecord",
+  "type": "object"
+}

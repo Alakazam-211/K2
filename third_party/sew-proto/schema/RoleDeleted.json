@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Body of `role_deleted` (S12 gap G4).",
+  "properties": {
+    "role_id": {
+      "description": "The deleted role.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "space_id": {
+      "description": "The space.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "space_id",
+    "role_id"
+  ],
+  "title": "RoleDeleted",
+  "type": "object"
+}

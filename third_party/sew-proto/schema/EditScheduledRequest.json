@@ -1,0 +1,120 @@
+{
+  "$defs": {
+    "When": {
+      "description": "\"At what time\": an absolute instant, a local wall-clock time in a named zone, or a delay.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "An absolute instant.",
+          "properties": {
+            "at": {
+              "description": "RFC 3339 with `Z` or an offset.",
+              "format": "date-time",
+              "type": "string"
+            },
+            "kind": {
+              "const": "at",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "at"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A local wall-clock time.",
+          "properties": {
+            "date_time": {
+              "description": "`YYYY-MM-DDTHH:MM`, no seconds, no offset.",
+              "type": "string"
+            },
+            "kind": {
+              "const": "local",
+              "type": "string"
+            },
+            "timezone": {
+              "description": "An IANA zone name; absent means the member's profile zone, then UTC.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "date_time"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A delay from the request's clock time.",
+          "properties": {
+            "kind": {
+              "const": "in",
+              "type": "string"
+            },
+            "ms": {
+              "description": "Milliseconds from now.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "ms"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /api/v1/scheduled/{id}/edit`. Channel and thread cannot change.",
+  "properties": {
+    "also_send_to_channel": {
+      "description": "Change the also-send flag.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "body": {
+      "description": "A new body.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "upload_ids": {
+      "description": "New uploads (replaces the list).",
+      "items": {
+        "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+        "pattern": "^[1-9][0-9]{0,18}$",
+        "type": "string"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "when": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/When"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "A new time."
+    }
+  },
+  "title": "EditScheduledRequest",
+  "type": "object"
+}

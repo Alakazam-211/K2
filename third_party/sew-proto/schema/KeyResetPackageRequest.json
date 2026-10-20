@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "K7 body: a fresh inline KeyPackage for a resetting call's new group.",
+  "properties": {
+    "join_id": {
+      "description": "The caller's join id.",
+      "pattern": "^[0-9a-f]{32}$",
+      "type": "string"
+    },
+    "key_package": {
+      "description": "TLS `MLSMessage(KeyPackage)`.",
+      "pattern": "^[A-Za-z0-9_-]*$",
+      "type": "string"
+    },
+    "new_group_id": {
+      "description": "The group being collected (from `reset`).",
+      "pattern": "^[A-Za-z0-9_-]*$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "join_id",
+    "new_group_id",
+    "key_package"
+  ],
+  "title": "KeyResetPackageRequest",
+  "type": "object"
+}

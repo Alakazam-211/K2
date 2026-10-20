@@ -1,0 +1,75 @@
+{
+  "$defs": {
+    "SearchSort": {
+      "description": "Result order.",
+      "oneOf": [
+        {
+          "const": "relevance",
+          "description": "BM25 blended with a 30-day recency boost (the default).",
+          "type": "string"
+        },
+        {
+          "const": "recent",
+          "description": "Newest first. Filter-only queries always sort this way.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /api/v1/search/messages` and `POST /api/v1/search/files`.",
+  "properties": {
+    "cursor": {
+      "description": "From a previous response.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "include_archived": {
+      "description": "Include archived channels (default true; hits are marked).",
+      "type": "boolean"
+    },
+    "include_unjoined_public": {
+      "description": "Also search public channels the caller has not joined (ignored for guests).",
+      "type": "boolean"
+    },
+    "limit": {
+      "description": "Page size 1–100, default 20. Pages may be shorter; follow `has_more`.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "q": {
+      "description": "The query (1–1,000 bytes after trimming; syntax in `docs/search.md`).",
+      "type": "string"
+    },
+    "sort": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SearchSort"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "`relevance` (default) or `recent`."
+    },
+    "tz": {
+      "description": "IANA time zone for date filters; default the caller's profile zone, else `UTC`.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "q"
+  ],
+  "title": "SearchRequest",
+  "type": "object"
+}

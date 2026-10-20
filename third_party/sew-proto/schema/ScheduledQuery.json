@@ -1,0 +1,58 @@
+{
+  "$defs": {
+    "ScheduledState": {
+      "description": "A scheduled message's state (`scheduled_messages.state`).",
+      "oneOf": [
+        {
+          "const": "pending",
+          "description": "Waiting for its time.",
+          "type": "string"
+        },
+        {
+          "const": "sent",
+          "description": "Sent (`message_id` set).",
+          "type": "string"
+        },
+        {
+          "const": "failed",
+          "description": "Not sent; `fail_reason` says why. The author edits, sends now or deletes it.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Query of `GET /api/v1/me/scheduled`.",
+  "properties": {
+    "channel_id": {
+      "description": "Only this channel.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "ids": {
+      "description": "Only these ids.",
+      "pattern": "^[1-9][0-9]{0,18}(,[1-9][0-9]{0,18}){0,99}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "state": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ScheduledState"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Only this state."
+    }
+  },
+  "title": "ScheduledQuery",
+  "type": "object"
+}

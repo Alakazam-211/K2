@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /mgmt/v1/audit/verify`. Returns `StartJobResponse`; the job's `result` is an\n[`AuditVerifyReport`].",
+  "properties": {
+    "full": {
+      "description": "Check the whole chain instead of the part after the last checkpoint.",
+      "type": "boolean"
+    }
+  },
+  "title": "AuditVerifyRequest",
+  "type": "object"
+}

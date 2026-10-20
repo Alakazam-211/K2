@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "How the SMTP connection is secured (`[mail.smtp] tls`).",
+  "oneOf": [
+    {
+      "const": "none",
+      "description": "Plain SMTP; loopback relays only (contracts rev 4).",
+      "type": "string"
+    },
+    {
+      "const": "starttls",
+      "description": "STARTTLS, required.",
+      "type": "string"
+    },
+    {
+      "const": "tls",
+      "description": "Implicit TLS.",
+      "type": "string"
+    }
+  ],
+  "title": "MailTls"
+}

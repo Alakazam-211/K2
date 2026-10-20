@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`thread_reads.ndjson` (full exports only): S14's thread read cursors.",
+  "properties": {
+    "channel_id": {
+      "description": "Its channel.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "last_read_id": {
+      "description": "The cursor (≥ the root id).",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "member_id": {
+      "description": "The member.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "root_id": {
+      "description": "The thread root.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "updated_at": {
+      "description": "Last move.",
+      "format": "date-time",
+      "type": "string"
+    }
+  },
+  "required": [
+    "member_id",
+    "root_id",
+    "channel_id",
+    "last_read_id",
+    "updated_at"
+  ],
+  "title": "ThreadReadRecord",
+  "type": "object"
+}

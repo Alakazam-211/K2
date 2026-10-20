@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "An export's lifecycle state.",
+  "oneOf": [
+    {
+      "const": "queued",
+      "description": "Waiting for the one export slot.",
+      "type": "string"
+    },
+    {
+      "const": "running",
+      "description": "Being written.",
+      "type": "string"
+    },
+    {
+      "const": "done",
+      "description": "The archive is ready for download.",
+      "type": "string"
+    },
+    {
+      "const": "failed",
+      "description": "It failed (`error` says why).",
+      "type": "string"
+    },
+    {
+      "const": "cancelled",
+      "description": "Cancelled (by a caller, or because the requester lost the flag).",
+      "type": "string"
+    },
+    {
+      "const": "expired",
+      "description": "The archive passed `export.keep_days` and was deleted.",
+      "type": "string"
+    },
+    {
+      "const": "deleted",
+      "description": "The archive was deleted by a caller.",
+      "type": "string"
+    }
+  ],
+  "title": "ExportState"
+}

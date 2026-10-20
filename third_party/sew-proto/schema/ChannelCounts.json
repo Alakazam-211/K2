@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Per-channel counts of a preview.",
+  "properties": {
+    "channel_id": {
+      "description": "The channel.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "files_held": {
+      "description": "Files a hold keeps.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "files_purged": {
+      "description": "Files that would be purged.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "files_removed": {
+      "description": "Files that would be hidden.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "messages_expired": {
+      "description": "Live messages that would be hidden.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "messages_held": {
+      "description": "Messages a hold keeps.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "messages_purged": {
+      "description": "Messages that would be purged.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "channel_id",
+    "messages_expired",
+    "messages_purged",
+    "messages_held",
+    "files_removed",
+    "files_purged",
+    "files_held"
+  ],
+  "title": "ChannelCounts",
+  "type": "object"
+}

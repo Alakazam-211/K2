@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /api/v1/channels/{id}/draft/delete`.",
+  "properties": {
+    "if_rev": {
+      "description": "Expected current `rev` (`0` = no draft); a mismatch is `409`.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "thread_root_id": {
+      "description": "The thread, for a reply draft.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "title": "DeleteDraftRequest",
+  "type": "object"
+}

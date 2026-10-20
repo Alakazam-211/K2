@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /api/v1/messages/{id}/poll/vote`: the whole selection (empty = no vote).",
+  "properties": {
+    "option_ids": {
+      "description": "Option ids.",
+      "items": {
+        "format": "uint8",
+        "maximum": 255,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "option_ids"
+  ],
+  "title": "PollVoteRequest",
+  "type": "object"
+}

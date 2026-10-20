@@ -1,0 +1,98 @@
+{
+  "$defs": {
+    "GifItem": {
+      "description": "One GIF search result.",
+      "properties": {
+        "height": {
+          "description": "Height of the full rendition.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "id": {
+          "description": "The provider's id (pass it to the attach route).",
+          "type": "string"
+        },
+        "preview": {
+          "$ref": "#/$defs/GifMedia",
+          "description": "The thumbnail."
+        },
+        "title": {
+          "description": "The provider's title.",
+          "type": "string"
+        },
+        "width": {
+          "description": "Width of the full rendition.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "width",
+        "height",
+        "preview"
+      ],
+      "type": "object"
+    },
+    "GifMedia": {
+      "description": "A GIF rendition served through Sew's signed media proxy.",
+      "properties": {
+        "height": {
+          "description": "Height in pixels.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "url": {
+          "description": "Signed Sew URL (1 h); never a provider URL.",
+          "type": "string"
+        },
+        "width": {
+          "description": "Width in pixels.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "url",
+        "width",
+        "height"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A page of GIF results.",
+  "properties": {
+    "items": {
+      "description": "The results.",
+      "items": {
+        "$ref": "#/$defs/GifItem"
+      },
+      "type": "array"
+    },
+    "next_offset": {
+      "description": "The next page's offset, while more results exist.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "provider": {
+      "description": "The provider (`giphy`).",
+      "type": "string"
+    }
+  },
+  "required": [
+    "provider",
+    "items"
+  ],
+  "title": "GifPage",
+  "type": "object"
+}

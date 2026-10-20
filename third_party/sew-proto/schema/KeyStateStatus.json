@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "K3's answer (S50 §9.1).",
+  "oneOf": [
+    {
+      "const": "in_sync",
+      "description": "The leaf is bound and current.",
+      "type": "string"
+    },
+    {
+      "const": "send_tree",
+      "description": "Repeat the call with `ratchet_tree`.",
+      "type": "string"
+    },
+    {
+      "const": "rebuilding",
+      "description": "A rebuild is collecting reports; retry after `retry_after_ms`.",
+      "type": "string"
+    }
+  ],
+  "title": "KeyStateStatus"
+}

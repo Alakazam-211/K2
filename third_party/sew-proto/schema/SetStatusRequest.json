@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /api/v1/me/status`. At least one of `text`, `emoji`.",
+  "properties": {
+    "emoji": {
+      "description": "One Unicode emoji sequence (≤ 64 bytes).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "expires_at": {
+      "description": "Absent = never. After now and at most 366 days ahead.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "text": {
+      "description": "Status text, 1–100 characters after trimming.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "title": "SetStatusRequest",
+  "type": "object"
+}

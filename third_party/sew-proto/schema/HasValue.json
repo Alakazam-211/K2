@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A `has:` value.",
+  "oneOf": [
+    {
+      "const": "file",
+      "description": "The message has at least one attachment.",
+      "type": "string"
+    },
+    {
+      "const": "link",
+      "description": "The body or forwarded body holds `http://` or `https://`.",
+      "type": "string"
+    }
+  ],
+  "title": "HasValue"
+}

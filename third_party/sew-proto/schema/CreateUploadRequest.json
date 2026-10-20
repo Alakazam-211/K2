@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /api/v1/channels/{id}/uploads`: step 1 of an upload.",
+  "properties": {
+    "content_type": {
+      "description": "The declared content type (`type/subtype`, advice only; the server sniffs).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "filename": {
+      "description": "The file name. The server keeps the part after the last `/` or `\\`, trims it, and\nneeds 1–255 bytes with no control characters (not `.` or `..`).",
+      "type": "string"
+    },
+    "size": {
+      "description": "The size in bytes. Over `files.max_bytes` is `413 too_large`.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "filename",
+    "size"
+  ],
+  "title": "CreateUploadRequest",
+  "type": "object"
+}

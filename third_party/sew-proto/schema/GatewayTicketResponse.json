@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Response of `POST /api/v1/gateway/ticket`: a single-use ticket bound to the session.",
+  "properties": {
+    "expires_in_ms": {
+      "description": "Milliseconds until the ticket expires (gap G21).",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "ticket": {
+      "description": "The ticket, `sewtk_<secret>`.",
+      "type": "string"
+    },
+    "url": {
+      "description": "The gateway URL to open.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "ticket",
+    "url",
+    "expires_in_ms"
+  ],
+  "title": "GatewayTicketResponse",
+  "type": "object"
+}

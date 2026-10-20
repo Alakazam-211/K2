@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`read_states.ndjson` (full exports only): S14's channel read cursors.",
+  "properties": {
+    "channel_id": {
+      "description": "The channel.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "last_read_id": {
+      "description": "The cursor (a comparator; mark-unread writes `message_id - 1`). Absent = nothing read.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "member_id": {
+      "description": "The member.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "updated_at": {
+      "description": "Last move.",
+      "format": "date-time",
+      "type": "string"
+    }
+  },
+  "required": [
+    "member_id",
+    "channel_id",
+    "updated_at"
+  ],
+  "title": "ReadStateRecord",
+  "type": "object"
+}

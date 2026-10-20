@@ -1,0 +1,51 @@
+{
+  "$defs": {
+    "ReorderChannelItem": {
+      "additionalProperties": false,
+      "description": "One channel's new place.",
+      "properties": {
+        "category_id": {
+          "description": "Absent keeps the category, `null` moves to uncategorized, an id moves there.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "channel_id": {
+          "description": "The channel.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "position": {
+          "description": "The new position in the (new) group.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "channel_id",
+        "position"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /api/v1/spaces/{id}/channels/reorder`.",
+  "properties": {
+    "items": {
+      "description": "1–500 items with distinct channel ids.",
+      "items": {
+        "$ref": "#/$defs/ReorderChannelItem"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "items"
+  ],
+  "title": "ReorderChannelsRequest",
+  "type": "object"
+}

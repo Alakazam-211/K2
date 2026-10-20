@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "What kind of agent a member is.",
+  "oneOf": [
+    {
+      "const": "coworker",
+      "description": "A team member in its own right.",
+      "type": "string"
+    },
+    {
+      "const": "assistant",
+      "description": "Pinned to one person; acts within that person's access (C9).",
+      "type": "string"
+    }
+  ],
+  "title": "AgentKind"
+}

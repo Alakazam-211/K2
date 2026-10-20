@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /api/v1/roles/{id}/edit`. At least one field.",
+  "properties": {
+    "color": {
+      "description": "A new color; `null` clears it.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "hoist": {
+      "description": "Whether holders are listed separately.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "mentionable": {
+      "description": "Whether anyone may `@mention` it.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "name": {
+      "description": "A new name.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "perms": {
+      "description": "New bits.",
+      "pattern": "^(0|[1-9][0-9]{0,19})$",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "title": "UpdateRoleRequest",
+  "type": "object"
+}

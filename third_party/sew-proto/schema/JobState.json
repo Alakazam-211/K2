@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A job's state.",
+  "oneOf": [
+    {
+      "const": "queued",
+      "description": "Waiting to run.",
+      "type": "string"
+    },
+    {
+      "const": "running",
+      "description": "Running.",
+      "type": "string"
+    },
+    {
+      "const": "succeeded",
+      "description": "Finished.",
+      "type": "string"
+    },
+    {
+      "const": "failed",
+      "description": "Failed; may retry.",
+      "type": "string"
+    },
+    {
+      "const": "dead",
+      "description": "Exhausted its attempts.",
+      "type": "string"
+    }
+  ],
+  "title": "JobState"
+}

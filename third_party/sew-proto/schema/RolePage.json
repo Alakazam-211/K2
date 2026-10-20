@@ -1,0 +1,87 @@
+{
+  "$defs": {
+    "Role": {
+      "description": "A space role.",
+      "properties": {
+        "color": {
+          "description": "Color as `0xRRGGBB`.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "hoist": {
+          "default": false,
+          "description": "Whether members with this role are listed separately (S12). Old payloads read as false.",
+          "type": "boolean"
+        },
+        "id": {
+          "description": "The role id; `@everyone`'s equals the space id (gap G24).",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "is_everyone": {
+          "description": "Whether this is the `@everyone` role.",
+          "type": "boolean"
+        },
+        "mentionable": {
+          "description": "Whether anyone may `@mention` it.",
+          "type": "boolean"
+        },
+        "name": {
+          "description": "The name.",
+          "type": "string"
+        },
+        "perms": {
+          "description": "Bits the role grants.",
+          "pattern": "^(0|[1-9][0-9]{0,19})$",
+          "type": "string"
+        },
+        "position": {
+          "description": "Ladder position; `@everyone` is 0.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "space_id": {
+          "description": "Its space.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "space_id",
+        "name",
+        "position",
+        "perms",
+        "mentionable",
+        "is_everyone"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A page of an id-keyed list: `{\"items\": [...], \"has_more\": bool}`.",
+  "properties": {
+    "has_more": {
+      "description": "Whether more items exist past this page.",
+      "type": "boolean"
+    },
+    "items": {
+      "description": "The items.",
+      "items": {
+        "$ref": "#/$defs/Role"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "items",
+    "has_more"
+  ],
+  "title": "Page",
+  "type": "object"
+}

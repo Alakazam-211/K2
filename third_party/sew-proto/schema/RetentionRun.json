@@ -1,0 +1,209 @@
+{
+  "$defs": {
+    "RetentionTotals": {
+      "description": "Counts a run or preview would destroy (or did). Ids and counts only.",
+      "properties": {
+        "drafts_deleted": {
+          "description": "Drafts deleted.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "file_bytes_purged": {
+          "description": "Plaintext bytes of the purged files.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "files_held": {
+          "description": "Files past a cutoff kept by a legal hold.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "files_purged": {
+          "description": "Files purged.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "files_removed": {
+          "description": "Files hidden by file retention.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "messages_expired": {
+          "description": "Live messages hidden (expired).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "messages_held": {
+          "description": "Messages past a cutoff kept by a legal hold.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "messages_purged": {
+          "description": "Messages whose content was destroyed (purged).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "revisions_purged": {
+          "description": "Edited-away revisions purged.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "scheduled_deleted": {
+          "description": "Unsent scheduled messages deleted.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "messages_expired",
+        "messages_purged",
+        "messages_held",
+        "revisions_purged",
+        "files_removed",
+        "files_purged",
+        "files_held",
+        "file_bytes_purged",
+        "drafts_deleted",
+        "scheduled_deleted"
+      ],
+      "type": "object"
+    },
+    "RunState": {
+      "description": "A preview's or run's state.",
+      "oneOf": [
+        {
+          "const": "running",
+          "description": "Working.",
+          "type": "string"
+        },
+        {
+          "const": "done",
+          "description": "Finished.",
+          "type": "string"
+        },
+        {
+          "const": "failed",
+          "description": "Gave up (a later run starts over).",
+          "type": "string"
+        }
+      ]
+    },
+    "RunTrigger": {
+      "description": "What started a retention run.",
+      "oneOf": [
+        {
+          "const": "schedule",
+          "description": "The daily schedule (02:00 UTC).",
+          "type": "string"
+        },
+        {
+          "const": "manual",
+          "description": "`POST …/retention/run`.",
+          "type": "string"
+        },
+        {
+          "const": "policy_effective",
+          "description": "A pending policy's `effective_at`.",
+          "type": "string"
+        },
+        {
+          "const": "hold_release",
+          "description": "A hold release (five minutes later).",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "One retention run.",
+  "properties": {
+    "as_of": {
+      "description": "The fixed time the run's cutoffs use.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "finished_at": {
+      "description": "When it finished.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "id": {
+      "description": "The run id.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "links_rewrapped": {
+      "description": "Durable blob links re-wrapped.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "phase": {
+      "description": "The phase it is in (or ended in).",
+      "type": "string"
+    },
+    "rows_resealed": {
+      "description": "Durable rows re-sealed under the current month.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "search_docs_deleted": {
+      "description": "Search documents deleted.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "shreds_enqueued": {
+      "description": "`key_shred` jobs enqueued.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "started_at": {
+      "description": "When it started.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "state": {
+      "$ref": "#/$defs/RunState",
+      "description": "Running, done or failed."
+    },
+    "totals": {
+      "$ref": "#/$defs/RetentionTotals",
+      "description": "What it destroyed."
+    },
+    "trigger": {
+      "$ref": "#/$defs/RunTrigger",
+      "description": "What started it."
+    }
+  },
+  "required": [
+    "id",
+    "trigger",
+    "as_of",
+    "state",
+    "phase",
+    "totals",
+    "search_docs_deleted",
+    "rows_resealed",
+    "links_rewrapped",
+    "shreds_enqueued",
+    "started_at"
+  ],
+  "title": "RetentionRun",
+  "type": "object"
+}

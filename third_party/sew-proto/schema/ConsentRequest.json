@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`POST /api/v1/recordings/{id}/consent` body (§9.5).",
+  "properties": {
+    "consent": {
+      "description": "Grant or decline/withdraw.",
+      "type": "boolean"
+    },
+    "notice_version": {
+      "description": "The prompt version the person saw (rev 91).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "consent"
+  ],
+  "title": "ConsentRequest",
+  "type": "object"
+}

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "An install role that `local/users/role` may set (S10's settable roles).",
+  "oneOf": [
+    {
+      "const": "admin",
+      "description": "An install admin.",
+      "type": "string"
+    },
+    {
+      "const": "member",
+      "description": "A regular member.",
+      "type": "string"
+    }
+  ],
+  "title": "LocalSettableRole"
+}

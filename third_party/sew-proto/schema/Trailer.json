@@ -1,0 +1,62 @@
+{
+  "$defs": {
+    "TrailerEntry": {
+      "additionalProperties": false,
+      "description": "One entry in the trailer.",
+      "properties": {
+        "bytes": {
+          "description": "Its size.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "description": "The tar path.",
+          "type": "string"
+        },
+        "sha256": {
+          "description": "SHA-256 of its bytes, 64 lowercase hex.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "bytes",
+        "sha256"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`trailer.json`, always the last entry.",
+  "properties": {
+    "counts": {
+      "additionalProperties": {
+        "format": "uint64",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "description": "Records per entity (and `files`).",
+      "type": "object"
+    },
+    "entries": {
+      "description": "Every entry before this one, in tar order.",
+      "items": {
+        "$ref": "#/$defs/TrailerEntry"
+      },
+      "type": "array"
+    },
+    "root_hash": {
+      "description": "SHA-256 over `\"<path>\\t<bytes>\\t<sha256>\\n\"` of every entry, in order, 64 hex.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "entries",
+    "counts",
+    "root_hash"
+  ],
+  "title": "Trailer",
+  "type": "object"
+}

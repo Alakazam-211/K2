@@ -1,0 +1,88 @@
+{
+  "$defs": {
+    "VanishReason": {
+      "description": "Why content vanished.",
+      "oneOf": [
+        {
+          "const": "retention",
+          "description": "A retention policy's cutoff.",
+          "type": "string"
+        }
+      ]
+    },
+    "VanishedAttachment": {
+      "description": "An attachment that vanished from a live message.",
+      "properties": {
+        "attachment_id": {
+          "description": "The attachment.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "message_id": {
+          "description": "The message.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message_id",
+        "attachment_id"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Body of `content_vanished`: one batch of retention expiry in one channel. Clients drop every\nlisted message (with its reactions and pin), keep a placeholder for `tombstone_ids` (roots\nwith live replies), and drop listed attachments. Not lossy.",
+  "properties": {
+    "attachments": {
+      "default": [],
+      "description": "Attachments that vanished from live messages.",
+      "items": {
+        "$ref": "#/$defs/VanishedAttachment"
+      },
+      "type": "array"
+    },
+    "channel_id": {
+      "description": "The channel.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "message_ids": {
+      "default": [],
+      "description": "Messages that vanished.",
+      "items": {
+        "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+        "pattern": "^[1-9][0-9]{0,18}$",
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "reason": {
+      "$ref": "#/$defs/VanishReason",
+      "description": "Why."
+    },
+    "seq": {
+      "description": "The highest channel seq the batch appended.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "tombstone_ids": {
+      "default": [],
+      "description": "Those of them that stay as a placeholder (roots with live replies).",
+      "items": {
+        "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+        "pattern": "^[1-9][0-9]{0,18}$",
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "channel_id",
+    "reason",
+    "seq"
+  ],
+  "title": "ContentVanished",
+  "type": "object"
+}

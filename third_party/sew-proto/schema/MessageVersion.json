@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "One row of a message's edit history.",
+  "properties": {
+    "body": {
+      "description": "The body of this version.",
+      "type": "string"
+    },
+    "created_at": {
+      "description": "When this version was written.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "id": {
+      "description": "The revision id (S13; optional on the wire so frozen v1 payloads still parse).",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "message_id": {
+      "description": "The message.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "replaced_at": {
+      "description": "When the next version replaced it (S13).",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "version": {
+      "default": 0,
+      "description": "The version this body was: 0 at create, +1 per edit (S13).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "message_id",
+    "body",
+    "created_at"
+  ],
+  "title": "MessageVersion",
+  "type": "object"
+}

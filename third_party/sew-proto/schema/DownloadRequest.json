@@ -1,0 +1,43 @@
+{
+  "$defs": {
+    "DownloadWhat": {
+      "description": "What a compliance download covers (§19.4). Stored in `recording_downloads.what`.",
+      "oneOf": [
+        {
+          "const": "mixed",
+          "description": "The mixed parts.",
+          "type": "string"
+        },
+        {
+          "const": "segments",
+          "description": "The per-speaker segments.",
+          "type": "string"
+        },
+        {
+          "const": "both",
+          "description": "Both.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`POST /api/v1/compliance/recordings/{id}/downloads` body (§19.4).",
+  "properties": {
+    "reason": {
+      "description": "Why (≤ 500 bytes; audited only as `reason_given`).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "what": {
+      "$ref": "#/$defs/DownloadWhat",
+      "default": "both",
+      "description": "What to download (default `both`)."
+    }
+  },
+  "title": "DownloadRequest",
+  "type": "object"
+}

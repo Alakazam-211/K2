@@ -1,0 +1,122 @@
+{
+  "$defs": {
+    "MeetingPeekRecording": {
+      "description": "The recording part of a peek (MC4 adds `consent_prompt`).",
+      "properties": {
+        "active": {
+          "description": "A recording is running in the meeting now.",
+          "type": "boolean"
+        },
+        "auto_record": {
+          "description": "The meeting records from the start.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "auto_record",
+        "active"
+      ],
+      "type": "object"
+    },
+    "MeetingState": {
+      "description": "A meeting's state (§6.3).",
+      "oneOf": [
+        {
+          "const": "scheduled",
+          "description": "Not started; members may join from `starts_at` − 15 min.",
+          "type": "string"
+        },
+        {
+          "const": "live",
+          "description": "Someone joined (or it was instant).",
+          "type": "string"
+        },
+        {
+          "const": "ended",
+          "description": "Over; voice joins answer `410 meeting_ended`.",
+          "type": "string"
+        },
+        {
+          "const": "cancelled",
+          "description": "Cancelled before it started.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Answer of `POST /api/v1/meetings/peek` (public): what the join page may show before the\nguest types a name. Writes nothing.",
+  "properties": {
+    "ends_at": {
+      "description": "The planned end.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "locked": {
+      "description": "Locked (MC3).",
+      "type": "boolean"
+    },
+    "opens_at": {
+      "description": "Redeem opens here (`starts_at` − 15 min).",
+      "format": "date-time",
+      "type": "string"
+    },
+    "organiser_name": {
+      "description": "The organiser's display name (only with `show_title_to_guests`).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "privacy_contact": {
+      "description": "`meetings.privacy_contact`, when set.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "recording": {
+      "$ref": "#/$defs/MeetingPeekRecording",
+      "description": "Recording facts for the notice."
+    },
+    "refused_browsers": {
+      "description": "Browsers refused for encrypted calls (the install's `voice.e2ee.refused_browsers`).",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "starts_at": {
+      "description": "The start.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "state": {
+      "$ref": "#/$defs/MeetingState",
+      "description": "`scheduled` or `live` (a closed meeting's link is `404 link_invalid`)."
+    },
+    "title": {
+      "description": "The title (only with `show_title_to_guests`; absent once its key is shredded).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "tz": {
+      "description": "The IANA zone.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "starts_at",
+    "ends_at",
+    "tz",
+    "state",
+    "locked",
+    "opens_at",
+    "recording",
+    "refused_browsers"
+  ],
+  "title": "MeetingPeek",
+  "type": "object"
+}

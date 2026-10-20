@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Response of `POST /api/v1/compliance/exports/{id}/link`: a 1 h signed download link bound to\nthe caller (it stops working when the caller loses the flag).",
+  "properties": {
+    "expires_at": {
+      "description": "When it stops working.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "url": {
+      "description": "The link (relative to the client API).",
+      "type": "string"
+    }
+  },
+  "required": [
+    "url",
+    "expires_at"
+  ],
+  "title": "SignedLink",
+  "type": "object"
+}

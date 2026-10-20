@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A member's persistent server flags in a space (the flags answer).",
+  "properties": {
+    "member_id": {
+      "description": "The member.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "server_deaf": {
+      "description": "Server-deafened.",
+      "type": "boolean"
+    },
+    "server_mute": {
+      "description": "Server-muted.",
+      "type": "boolean"
+    },
+    "space_id": {
+      "description": "The space.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "space_id",
+    "member_id",
+    "server_mute",
+    "server_deaf"
+  ],
+  "title": "VoiceFlags",
+  "type": "object"
+}

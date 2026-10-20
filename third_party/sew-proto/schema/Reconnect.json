@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Op 6 RECONNECT: reconnect and resume after a jittered delay.",
+  "properties": {
+    "after_ms": {
+      "description": "Wait this long before reconnecting.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "after_ms"
+  ],
+  "title": "Reconnect",
+  "type": "object"
+}

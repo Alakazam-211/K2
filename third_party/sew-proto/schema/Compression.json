@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Gateway transport compression.",
+  "oneOf": [
+    {
+      "const": "zstd-stream",
+      "description": "One zstd context per connection; server frames are binary flushed zstd blocks.",
+      "type": "string"
+    }
+  ],
+  "title": "Compression"
+}

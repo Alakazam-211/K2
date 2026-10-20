@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "One member who reacted with an emoji.",
+  "properties": {
+    "created_at": {
+      "description": "When they reacted.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "member_id": {
+      "description": "The member.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "member_id",
+    "created_at"
+  ],
+  "title": "Reactor",
+  "type": "object"
+}

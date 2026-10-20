@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Who wrote a retention policy row.",
+  "oneOf": [
+    {
+      "const": "member",
+      "description": "A compliance-flag holder through the client API.",
+      "type": "string"
+    },
+    {
+      "const": "service",
+      "description": "The mgmt service (K2's daemon, the `sew` CLI).",
+      "type": "string"
+    },
+    {
+      "const": "system",
+      "description": "Sew itself (the install seed).",
+      "type": "string"
+    }
+  ],
+  "title": "CreatedVia"
+}

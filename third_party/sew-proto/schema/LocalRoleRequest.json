@@ -1,0 +1,39 @@
+{
+  "$defs": {
+    "LocalSettableRole": {
+      "description": "An install role that `local/users/role` may set (S10's settable roles).",
+      "oneOf": [
+        {
+          "const": "admin",
+          "description": "An install admin.",
+          "type": "string"
+        },
+        {
+          "const": "member",
+          "description": "A regular member.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /mgmt/v1/local/users/role`.",
+  "properties": {
+    "install_role": {
+      "$ref": "#/$defs/LocalSettableRole",
+      "description": "The new install role."
+    },
+    "username": {
+      "description": "The local user.",
+      "pattern": "^[a-z0-9_-]{2,64}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "username",
+    "install_role"
+  ],
+  "title": "LocalRoleRequest",
+  "type": "object"
+}

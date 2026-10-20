@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of the open-DM route: 1 other member opens a `dm`, 2–8 open a `group_dm`. The others\nare named by id, by handle (SW12, S30 G5), or both: 1–8 distinct members in all. A handle\nnames an active member; one that names nobody the caller may see is the same masked `404`\nas an unknown id (`details.username`).",
+  "properties": {
+    "member_ids": {
+      "description": "Other members by id (with `usernames`, 1–8 distinct members in all).",
+      "items": {
+        "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+        "pattern": "^[1-9][0-9]{0,18}$",
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "usernames": {
+      "description": "Other members by handle (SW12; additive).",
+      "items": {
+        "description": "A member handle (username).",
+        "pattern": "^[a-z0-9_-]{2,64}$",
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "title": "OpenDmRequest",
+  "type": "object"
+}

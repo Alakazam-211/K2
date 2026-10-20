@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Query of `GET /api/v1/groups`.",
+  "properties": {
+    "space_id": {
+      "description": "Also this space's groups.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "title": "GroupsQuery",
+  "type": "object"
+}

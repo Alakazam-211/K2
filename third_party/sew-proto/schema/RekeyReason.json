@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Why a client asks for an immediate rekey (K9).",
+  "oneOf": [
+    {
+      "const": "consent_withdrawn",
+      "description": "The member withdrew recording consent (S50 §14.4).",
+      "type": "string"
+    }
+  ],
+  "title": "RekeyReason"
+}

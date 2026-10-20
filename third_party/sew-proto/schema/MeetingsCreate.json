@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "`meetings.create`: who may host a meeting (Meet MC1).",
+  "oneOf": [
+    {
+      "const": "members",
+      "description": "Any active non-guest member of the Meetings Space (on a standalone install, any\nactive non-guest member: the first create adds them to the Space).",
+      "type": "string"
+    },
+    {
+      "const": "admins",
+      "description": "Install owners and admins only.",
+      "type": "string"
+    }
+  ],
+  "title": "MeetingsCreate"
+}

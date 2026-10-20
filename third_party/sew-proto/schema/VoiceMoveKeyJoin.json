@@ -1,0 +1,39 @@
+{
+  "$defs": {
+    "KeyJoinMode": {
+      "description": "How a moved member keys into the destination call (`voice_server_updated.e2ee.key_join`).",
+      "oneOf": [
+        {
+          "const": "required",
+          "description": "Upload a ref scoped to the destination channel (K16), then key-join with K2.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The key half of `voice_server_updated` (S33 v2 §13.6; S50 §12.7).",
+  "properties": {
+    "call_id": {
+      "description": "The destination call.",
+      "pattern": "^r_[a-z2-7]{26}$",
+      "type": "string"
+    },
+    "join_id": {
+      "description": "The join id Sew minted for the destination (use it in K2).",
+      "pattern": "^[0-9a-f]{32}$",
+      "type": "string"
+    },
+    "key_join": {
+      "$ref": "#/$defs/KeyJoinMode",
+      "description": "`required`."
+    }
+  },
+  "required": [
+    "call_id",
+    "join_id",
+    "key_join"
+  ],
+  "title": "VoiceMoveKeyJoin",
+  "type": "object"
+}

@@ -1,0 +1,68 @@
+{
+  "$defs": {
+    "CustomFieldInput": {
+      "additionalProperties": false,
+      "description": "One custom field value in a profile write (`value: null` clears it).",
+      "properties": {
+        "field_id": {
+          "description": "The field definition.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "value": {
+          "description": "The value; `null` clears.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "field_id"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /api/v1/me/profile`. At least one field.",
+  "properties": {
+    "custom_fields": {
+      "description": "Custom field values (at most 50).",
+      "items": {
+        "$ref": "#/$defs/CustomFieldInput"
+      },
+      "type": "array"
+    },
+    "display_name": {
+      "description": "A new display name (standalone only).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "pronouns": {
+      "description": "Set or clear the pronouns (standalone only).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "timezone": {
+      "description": "Set or clear the IANA timezone.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "title": {
+      "description": "Set or clear the title (standalone only).",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "title": "UpdateMyProfileRequest",
+  "type": "object"
+}

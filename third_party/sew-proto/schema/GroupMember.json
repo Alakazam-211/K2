@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "One group membership.",
+  "properties": {
+    "added_at": {
+      "description": "When added.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "group_id": {
+      "description": "The group.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "member_id": {
+      "description": "The member.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "group_id",
+    "member_id",
+    "added_at"
+  ],
+  "title": "GroupMember",
+  "type": "object"
+}

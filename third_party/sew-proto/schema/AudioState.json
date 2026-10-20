@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The recording's audio (§12). Stored in `recordings.audio_state`.",
+  "oneOf": [
+    {
+      "const": "available",
+      "description": "Kept.",
+      "type": "string"
+    },
+    {
+      "const": "expired",
+      "description": "Hidden; links may still exist (held or not yet purged).",
+      "type": "string"
+    },
+    {
+      "const": "purged",
+      "description": "Every link deleted; the content key is gone.",
+      "type": "string"
+    }
+  ],
+  "title": "AudioState"
+}

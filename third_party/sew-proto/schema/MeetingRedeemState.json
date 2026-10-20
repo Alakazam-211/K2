@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Where a redeemed link guest stands.",
+  "oneOf": [
+    {
+      "const": "waiting",
+      "description": "In the lobby (`lobby_entry_id` names the waiting entry): no channel yet.",
+      "type": "string"
+    },
+    {
+      "const": "admitted",
+      "description": "Admitted before and still in the meeting channel (re-admitted without knocking).",
+      "type": "string"
+    }
+  ],
+  "title": "MeetingRedeemState"
+}

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Who writes a custom field.",
+  "oneOf": [
+    {
+      "const": "member",
+      "description": "The member.",
+      "type": "string"
+    },
+    {
+      "const": "provider",
+      "description": "The identity provider (mgmt only).",
+      "type": "string"
+    }
+  ],
+  "title": "ProfileFieldManagedBy"
+}

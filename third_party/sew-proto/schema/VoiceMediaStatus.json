@@ -1,0 +1,110 @@
+{
+  "$defs": {
+    "BudgetSource": {
+      "description": "Where the media budget's egress comes from (S34 v2 §12.1).",
+      "oneOf": [
+        {
+          "const": "engine",
+          "description": "The engine's `stats` events.",
+          "type": "string"
+        },
+        {
+          "const": "estimate",
+          "description": "Sew's forwarding estimate (stats missing or stale).",
+          "type": "string"
+        }
+      ]
+    },
+    "MediaTier": {
+      "description": "The media budget tier (S34 v2 §12.2).",
+      "oneOf": [
+        {
+          "const": "normal",
+          "description": "Everything allowed; full hints.",
+          "type": "string"
+        },
+        {
+          "const": "constrained",
+          "description": "New camera leases refused; lower hints.",
+          "type": "string"
+        },
+        {
+          "const": "critical",
+          "description": "New camera and screen leases refused; lowest hints.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "S34 v2's part of `status.voice` (§25.3).",
+  "properties": {
+    "budget_source": {
+      "$ref": "#/$defs/BudgetSource",
+      "description": "Where the budget's egress comes from."
+    },
+    "calls_active": {
+      "description": "Active DM calls.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "egress_budget_mbps": {
+      "description": "`[voice.video] egress_budget_mbps`.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "egress_mbps": {
+      "description": "The egress the tiers use (the engine's measured egress, or the estimate), Mbit/s.",
+      "format": "double",
+      "type": "number"
+    },
+    "engine_cpu_pct": {
+      "description": "The engine cgroup's CPU against its allowance; `null` when unknown.",
+      "format": "double",
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "forward_estimate_mbps": {
+      "description": "The forwarding estimate, Mbit/s.",
+      "format": "double",
+      "type": "number"
+    },
+    "media_tier": {
+      "$ref": "#/$defs/MediaTier",
+      "description": "The media budget tier."
+    },
+    "screen_publishers": {
+      "description": "Screen-share leases install-wide.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "video_enabled": {
+      "description": "`[voice.video] enabled` (and voice enabled).",
+      "type": "boolean"
+    },
+    "video_publishers": {
+      "description": "Camera leases install-wide.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "calls_active",
+    "video_publishers",
+    "screen_publishers",
+    "media_tier",
+    "budget_source",
+    "egress_mbps",
+    "egress_budget_mbps",
+    "forward_estimate_mbps",
+    "video_enabled"
+  ],
+  "title": "VoiceMediaStatus",
+  "type": "object"
+}

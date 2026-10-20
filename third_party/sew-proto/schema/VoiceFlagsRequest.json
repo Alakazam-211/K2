@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`POST /api/v1/spaces/{id}/members/{member_id}/voice` body: server mute and deafen.",
+  "properties": {
+    "server_deaf": {
+      "description": "Set server deafen.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "server_mute": {
+      "description": "Set server mute.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    }
+  },
+  "title": "VoiceFlagsRequest",
+  "type": "object"
+}

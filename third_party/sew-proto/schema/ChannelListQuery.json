@@ -1,0 +1,71 @@
+{
+  "$defs": {
+    "ChannelListScope": {
+      "description": "Which channels `GET /api/v1/spaces/{id}/channels` lists.",
+      "oneOf": [
+        {
+          "const": "browse",
+          "description": "Public channels the caller can view plus private ones it belongs to (the default).",
+          "type": "string"
+        },
+        {
+          "const": "joined",
+          "description": "Channels the caller belongs to.",
+          "type": "string"
+        },
+        {
+          "const": "admin",
+          "description": "Every channel, private ones redacted (space admins and install admins).",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Query of `GET /api/v1/spaces/{id}/channels`: ordered by id ascending, `after` cursor.",
+  "properties": {
+    "after": {
+      "description": "Channels with a larger id.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "include_archived": {
+      "default": false,
+      "description": "Include archived channels (default false).",
+      "type": "boolean"
+    },
+    "limit": {
+      "description": "Page size, 1–100 (default 50).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "q": {
+      "description": "Case-insensitive substring of the slug or name, 1–80 characters.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "scope": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ChannelListScope"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Which channels; default `browse`."
+    }
+  },
+  "title": "ChannelListQuery",
+  "type": "object"
+}

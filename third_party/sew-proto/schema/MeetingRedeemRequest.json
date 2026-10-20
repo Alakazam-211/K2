@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /api/v1/meetings/redeem` (public; the Meet App's BFF calls it).",
+  "properties": {
+    "display_name": {
+      "description": "The guest's name: 1–64 characters after trimming, NFC and removing control and\nbidi-override characters.",
+      "type": "string"
+    },
+    "join_nonce": {
+      "description": "The browser tab's attempt id: 16–64 random bytes, base64url without padding. Stored\nonly as SHA-256. Not a pass: it never works without the link's secret.",
+      "type": "string"
+    },
+    "link_id": {
+      "description": "The link's id.",
+      "type": "string"
+    },
+    "secret": {
+      "description": "The link's secret.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "link_id",
+    "secret",
+    "display_name",
+    "join_nonce"
+  ],
+  "title": "MeetingRedeemRequest",
+  "type": "object"
+}

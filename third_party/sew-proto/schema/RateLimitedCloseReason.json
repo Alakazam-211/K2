@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The JSON text of a 4008 close reason.",
+  "properties": {
+    "retry_after_ms": {
+      "description": "Wait this long before identifying again.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "retry_after_ms"
+  ],
+  "title": "RateLimitedCloseReason",
+  "type": "object"
+}

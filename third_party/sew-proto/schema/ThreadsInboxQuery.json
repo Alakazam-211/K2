@@ -1,0 +1,54 @@
+{
+  "$defs": {
+    "ThreadsInboxFilter": {
+      "description": "Which threads `GET /api/v1/me/threads` lists.",
+      "oneOf": [
+        {
+          "const": "all",
+          "description": "Followed threads and threads with an unread mention.",
+          "type": "string"
+        },
+        {
+          "const": "unread",
+          "description": "Only those that are unread or have an unread mention.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Query of `GET /api/v1/me/threads`: pages by `activity_id`, newest first (a C5 exception,\nS14 gap G27).",
+  "properties": {
+    "before": {
+      "description": "Threads whose `activity_id` is below this.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "filter": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ThreadsInboxFilter"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "`all` (default) or `unread`."
+    },
+    "limit": {
+      "description": "Page size, 1–100 (default 50).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    }
+  },
+  "title": "ThreadsInboxQuery",
+  "type": "object"
+}

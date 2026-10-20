@@ -1,0 +1,228 @@
+{
+  "$defs": {
+    "MeetingEndReason": {
+      "description": "Why a meeting ended.",
+      "oneOf": [
+        {
+          "const": "host",
+          "description": "A host ended it for everyone (MC3).",
+          "type": "string"
+        },
+        {
+          "const": "empty_after_grace",
+          "description": "The room stayed empty for `meetings.grace_minutes` after `ends_at`.",
+          "type": "string"
+        },
+        {
+          "const": "hard_cap",
+          "description": "`hard_end_at` (`starts_at` + 12 h) passed.",
+          "type": "string"
+        },
+        {
+          "const": "organiser_gone",
+          "description": "The organiser was deactivated and no other host remains.",
+          "type": "string"
+        },
+        {
+          "const": "cancelled",
+          "description": "Cancelled before it started.",
+          "type": "string"
+        }
+      ]
+    },
+    "MeetingKind": {
+      "description": "How a meeting started.",
+      "oneOf": [
+        {
+          "const": "instant",
+          "description": "Start now: `live` at create, planned for 60 minutes.",
+          "type": "string"
+        },
+        {
+          "const": "scheduled",
+          "description": "For later: `scheduled` until the first voice join.",
+          "type": "string"
+        }
+      ]
+    },
+    "MeetingState": {
+      "description": "A meeting's state (§6.3).",
+      "oneOf": [
+        {
+          "const": "scheduled",
+          "description": "Not started; members may join from `starts_at` − 15 min.",
+          "type": "string"
+        },
+        {
+          "const": "live",
+          "description": "Someone joined (or it was instant).",
+          "type": "string"
+        },
+        {
+          "const": "ended",
+          "description": "Over; voice joins answer `410 meeting_ended`.",
+          "type": "string"
+        },
+        {
+          "const": "cancelled",
+          "description": "Cancelled before it started.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A meeting, as its channel members see it.",
+  "properties": {
+    "auto_record": {
+      "description": "Record from the start (MC4 maps it).",
+      "type": "boolean"
+    },
+    "channel_id": {
+      "description": "Its private voice channel.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "created_at": {
+      "description": "Created.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "end_reason": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MeetingEndReason"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Why it ended."
+    },
+    "ended_at": {
+      "description": "When it ended or was cancelled.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "ended_by": {
+      "description": "Who ended it (absent for the jobs).",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "ends_at": {
+      "description": "The planned end.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "guest_screen_share": {
+      "description": "Link guests may share their screen.",
+      "type": "boolean"
+    },
+    "hard_end_at": {
+      "description": "Nothing lives past it (`starts_at` + 12 h).",
+      "format": "date-time",
+      "type": "string"
+    },
+    "ics_sequence": {
+      "description": "The calendar SEQUENCE: rises on time, title and cancel changes.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "ics_uid": {
+      "description": "The calendar UID's local part, `meet-<channel_id>`; the App appends `@<its origin\nhost>`.",
+      "type": "string"
+    },
+    "id": {
+      "description": "The meeting id (not the channel id; never in a guest URL).",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "is_host": {
+      "description": "The caller holds the host overwrite (MANAGE_CHANNELS on the channel).",
+      "type": "boolean"
+    },
+    "kind": {
+      "$ref": "#/$defs/MeetingKind",
+      "description": "`instant` or `scheduled`."
+    },
+    "locked": {
+      "description": "Locked (MC3; always `false` in MC1).",
+      "type": "boolean"
+    },
+    "opens_at": {
+      "description": "Members may join voice from here (`starts_at` − 15 min).",
+      "format": "date-time",
+      "type": "string"
+    },
+    "organiser_member_id": {
+      "description": "Who made it (always a host).",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "show_title_to_guests": {
+      "description": "Link guests see the title before they join.",
+      "type": "boolean"
+    },
+    "space_id": {
+      "description": "The Meetings Space.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "starts_at": {
+      "description": "The start.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "state": {
+      "$ref": "#/$defs/MeetingState",
+      "description": "The state."
+    },
+    "title": {
+      "description": "The title; absent when its key was shredded (retention, crypto-shred).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "tz": {
+      "description": "The IANA zone.",
+      "type": "string"
+    },
+    "updated_at": {
+      "description": "Last change.",
+      "format": "date-time",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "channel_id",
+    "space_id",
+    "organiser_member_id",
+    "kind",
+    "state",
+    "starts_at",
+    "ends_at",
+    "tz",
+    "opens_at",
+    "hard_end_at",
+    "locked",
+    "auto_record",
+    "guest_screen_share",
+    "show_title_to_guests",
+    "ics_uid",
+    "ics_sequence",
+    "is_host",
+    "created_at",
+    "updated_at"
+  ],
+  "title": "Meeting",
+  "type": "object"
+}

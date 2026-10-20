@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A channel membership row.",
+  "properties": {
+    "channel_id": {
+      "description": "The channel.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "joined_at": {
+      "description": "When they joined.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "member_id": {
+      "description": "The member.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "channel_id",
+    "member_id",
+    "joined_at"
+  ],
+  "title": "ChannelMember",
+  "type": "object"
+}

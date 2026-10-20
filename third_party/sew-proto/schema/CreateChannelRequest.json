@@ -1,0 +1,129 @@
+{
+  "$defs": {
+    "ChannelType": {
+      "description": "Channel type (gap G8 adds `dm` and `group_dm`).",
+      "oneOf": [
+        {
+          "const": "text",
+          "description": "A text channel.",
+          "type": "string"
+        },
+        {
+          "const": "voice",
+          "description": "A voice channel.",
+          "type": "string"
+        },
+        {
+          "const": "announcement",
+          "description": "An announcement channel: `@everyone` posts only in threads by default.",
+          "type": "string"
+        },
+        {
+          "const": "dm",
+          "description": "A 1:1 DM (no space, slug or name; always private).",
+          "type": "string"
+        },
+        {
+          "const": "group_dm",
+          "description": "A group DM of up to 9 people.",
+          "type": "string"
+        }
+      ]
+    },
+    "Visibility": {
+      "description": "Channel visibility.",
+      "oneOf": [
+        {
+          "const": "public",
+          "description": "Every space member can see and join it.",
+          "type": "string"
+        },
+        {
+          "const": "private",
+          "description": "Members only.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of the create-channel route.",
+  "properties": {
+    "category_id": {
+      "description": "The category.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "member_ids": {
+      "description": "Members to add at creation, besides the creator: at most 100, distinct, never the caller\n(S10).",
+      "items": {
+        "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+        "pattern": "^[1-9][0-9]{0,18}$",
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "name": {
+      "description": "The name, 1–100 characters.",
+      "type": "string"
+    },
+    "position": {
+      "description": "Position in its group; default last (S10).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "purpose": {
+      "description": "The purpose, at most 250 characters.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "slug": {
+      "description": "The slug, unique in the space.",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,79}$",
+      "type": "string"
+    },
+    "topic": {
+      "description": "The topic, at most 250 characters.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "type": {
+      "$ref": "#/$defs/ChannelType",
+      "description": "`text`, `voice` or `announcement`."
+    },
+    "user_limit": {
+      "description": "Voice channels only: the per-channel limit, 0–99 (S33 v1 §8). Any value on another type\nis refused (`400 validation_failed`, field `user_limit`).",
+      "format": "uint8",
+      "maximum": 255,
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "visibility": {
+      "$ref": "#/$defs/Visibility",
+      "description": "Public or private."
+    }
+  },
+  "required": [
+    "slug",
+    "name",
+    "type",
+    "visibility"
+  ],
+  "title": "CreateChannelRequest",
+  "type": "object"
+}

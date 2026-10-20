@@ -1,0 +1,65 @@
+{
+  "$defs": {
+    "DevicePlatform": {
+      "description": "The device's platform (`DeviceCertTbs.platform` 1–5).",
+      "oneOf": [
+        {
+          "const": "web",
+          "description": "A browser.",
+          "type": "string"
+        },
+        {
+          "const": "desktop",
+          "description": "A desktop app.",
+          "type": "string"
+        },
+        {
+          "const": "ios",
+          "description": "iOS.",
+          "type": "string"
+        },
+        {
+          "const": "android",
+          "description": "Android.",
+          "type": "string"
+        },
+        {
+          "const": "other",
+          "description": "Anything else.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "K11 body: enrol a device key for the caller (S50 §10.2).",
+  "properties": {
+    "label": {
+      "description": "A human label (≤ 64 bytes UTF-8), for example \"Chrome on macOS\".",
+      "type": "string"
+    },
+    "platform": {
+      "$ref": "#/$defs/DevicePlatform",
+      "description": "The platform."
+    },
+    "proof": {
+      "description": "Raw r‖s ECDSA-P256-SHA256 over [`super::tls::enroll_proof_input`].",
+      "pattern": "^[A-Za-z0-9_-]*$",
+      "type": "string"
+    },
+    "pubkey": {
+      "description": "65-byte SEC1 uncompressed P-256 public key.",
+      "pattern": "^[A-Za-z0-9_-]*$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "pubkey",
+    "platform",
+    "label",
+    "proof"
+  ],
+  "title": "DeviceEnrollRequest",
+  "type": "object"
+}

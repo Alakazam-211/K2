@@ -1,0 +1,111 @@
+{
+  "$defs": {
+    "MeetingLobbyKind": {
+      "description": "Who knocked.",
+      "oneOf": [
+        {
+          "const": "link_guest",
+          "description": "A link guest (redeemed the link without an account).",
+          "type": "string"
+        },
+        {
+          "const": "member",
+          "description": "A signed-in member of the install who knocked with the link.",
+          "type": "string"
+        }
+      ]
+    },
+    "MeetingLobbyState": {
+      "description": "A lobby entry's state.",
+      "oneOf": [
+        {
+          "const": "waiting",
+          "description": "Knocked; a host has not decided. Expires after 10 minutes.",
+          "type": "string"
+        },
+        {
+          "const": "admitted",
+          "description": "A host let them in: they are a member of the meeting channel.",
+          "type": "string"
+        },
+        {
+          "const": "denied",
+          "description": "A host did not let them in (a link guest's session ended with it).",
+          "type": "string"
+        },
+        {
+          "const": "expired",
+          "description": "Nobody decided within 10 minutes, the link was rotated or revoked, or the meeting\nclosed.",
+          "type": "string"
+        },
+        {
+          "const": "left",
+          "description": "The knocker withdrew before a decision (MC3b: `POST\n/api/v1/meetings/{id}/lobby/me/withdraw`).",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "One lobby entry as the meeting's hosts see it.",
+  "properties": {
+    "decided_at": {
+      "description": "The decision (admit, deny, expiry).",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "display_name": {
+      "description": "The name they gave (a link guest's is attacker-chosen text: show it as plain text).",
+      "type": "string"
+    },
+    "entry_id": {
+      "description": "The entry.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "kind": {
+      "$ref": "#/$defs/MeetingLobbyKind",
+      "description": "A link guest or a signed-in member."
+    },
+    "knocked_at": {
+      "description": "The knock.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "meeting_id": {
+      "description": "The meeting.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "member_id": {
+      "description": "Who knocked.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "state": {
+      "$ref": "#/$defs/MeetingLobbyState",
+      "description": "Where the entry stands."
+    },
+    "waited_minutes": {
+      "description": "Whole minutes waited (to the decision, or to now while waiting).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "entry_id",
+    "meeting_id",
+    "member_id",
+    "display_name",
+    "kind",
+    "state",
+    "knocked_at",
+    "waited_minutes"
+  ],
+  "title": "MeetingLobbyEntry",
+  "type": "object"
+}

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "`channels.archive`: who can archive a channel.",
+  "oneOf": [
+    {
+      "const": "creator_and_managers",
+      "description": "The channel's creator and channel managers.",
+      "type": "string"
+    },
+    {
+      "const": "managers",
+      "description": "Channel managers only.",
+      "type": "string"
+    }
+  ],
+  "title": "ArchiveWho"
+}

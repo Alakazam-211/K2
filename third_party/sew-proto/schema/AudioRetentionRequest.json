@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`POST /api/v1/recordings/{id}/audio/retention` body (§12.1).",
+  "properties": {
+    "audio_keep_days": {
+      "description": "New keep days (clamped).",
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "audio_keep_days"
+  ],
+  "title": "AudioRetentionRequest",
+  "type": "object"
+}

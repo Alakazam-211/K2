@@ -1,0 +1,293 @@
+{
+  "$defs": {
+    "ArchiveOptions": {
+      "additionalProperties": false,
+      "description": "What an archive holds beyond records.",
+      "properties": {
+        "audit": {
+          "description": "Whether `audit.ndjson` is present.",
+          "type": "boolean"
+        },
+        "files": {
+          "$ref": "#/$defs/FileMode",
+          "description": "File bytes or metadata only."
+        },
+        "views": {
+          "description": "Whether `view/` (HTML and CSV) is present.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "files",
+        "views",
+        "audit"
+      ],
+      "type": "object"
+    },
+    "ArchiveScope": {
+      "additionalProperties": false,
+      "description": "An eDiscovery scope as recorded: ids, dates and a keyword count, never the keywords.",
+      "properties": {
+        "channels": {
+          "description": "Channel targets.",
+          "items": {
+            "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "from": {
+          "description": "Window start (inclusive) of the request's own selector.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "holds": {
+          "description": "Legal holds whose selectors joined the scope.",
+          "items": {
+            "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "keyword_count": {
+          "description": "How many keywords filtered the scope (the words never leave the request).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "label": {
+          "description": "The requester's label.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "member_mode": {
+          "$ref": "#/$defs/MemberMode",
+          "description": "How member targets select."
+        },
+        "members": {
+          "description": "Member targets.",
+          "items": {
+            "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "spaces": {
+          "description": "Space targets.",
+          "items": {
+            "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "to": {
+          "description": "Window end (exclusive).",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "member_mode",
+        "keyword_count"
+      ],
+      "type": "object"
+    },
+    "ExportKind": {
+      "description": "What an archive is.",
+      "oneOf": [
+        {
+          "const": "full",
+          "description": "Everything, for a box move (mgmt only).",
+          "type": "string"
+        },
+        {
+          "const": "ediscovery",
+          "description": "A scoped compliance export.",
+          "type": "string"
+        }
+      ]
+    },
+    "FileMode": {
+      "description": "Whether file bytes are in the archive.",
+      "oneOf": [
+        {
+          "const": "include",
+          "description": "`files/<file_id>` entries hold the plaintext bytes.",
+          "type": "string"
+        },
+        {
+          "const": "manifest_only",
+          "description": "Attachment records keep metadata only; no `files/` entries.",
+          "type": "string"
+        }
+      ]
+    },
+    "MemberMode": {
+      "description": "How a member target selects messages in eDiscovery (prd-sew-23 §9.1).",
+      "oneOf": [
+        {
+          "const": "conversations",
+          "description": "Everything the member wrote or could read (the legal-hold member rule).",
+          "type": "string"
+        },
+        {
+          "const": "authored",
+          "description": "Only what the member wrote.",
+          "type": "string"
+        }
+      ]
+    },
+    "Producer": {
+      "additionalProperties": false,
+      "description": "Who wrote the archive.",
+      "properties": {
+        "name": {
+          "description": "`sew`, or a converter's name.",
+          "type": "string"
+        },
+        "schema_version": {
+          "description": "The source schema version (highest applied migration).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "version": {
+          "description": "The producer's version.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "schema_version"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`manifest.json`, always the first entry.",
+  "properties": {
+    "created_at": {
+      "description": "When the export was requested.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "entries": {
+      "description": "Entity paths in tar order (message and revision parts as globs), not files or views.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "excluded": {
+      "description": "What is never exported.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "export_format": {
+      "description": "Always 1 for this format.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "export_id": {
+      "description": "The export id (= the job id).",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "format_minor": {
+      "description": "Additive revisions of format 1; readers refuse a higher one.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "identity_provider": {
+      "description": "`k2` or `standalone`.",
+      "type": "string"
+    },
+    "install_id": {
+      "description": "The source install; `null` only from a converter (import keeps the target's id).",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "install_name": {
+      "description": "The install's name (empty when the install has none).",
+      "type": "string"
+    },
+    "kind": {
+      "$ref": "#/$defs/ExportKind",
+      "description": "Full or eDiscovery."
+    },
+    "options": {
+      "$ref": "#/$defs/ArchiveOptions",
+      "description": "Files, views, audit."
+    },
+    "producer": {
+      "$ref": "#/$defs/Producer",
+      "description": "Who wrote it."
+    },
+    "recipients": {
+      "description": "The age recipients the archive is encrypted to.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "scope": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ArchiveScope"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The eDiscovery scope; `null` for a full export (*always*)."
+    },
+    "snapshot_at": {
+      "description": "The snapshot every record was read from; also every tar entry's mtime.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "source_sync_epoch": {
+      "description": "The source `sync_epoch` (opaque decimal string).",
+      "type": "string"
+    }
+  },
+  "required": [
+    "export_format",
+    "format_minor",
+    "kind",
+    "producer",
+    "export_id",
+    "install_name",
+    "identity_provider",
+    "source_sync_epoch",
+    "created_at",
+    "snapshot_at",
+    "options",
+    "entries",
+    "excluded",
+    "recipients"
+  ],
+  "title": "Manifest",
+  "type": "object"
+}

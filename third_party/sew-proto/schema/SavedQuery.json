@@ -1,0 +1,75 @@
+{
+  "$defs": {
+    "SavedState": {
+      "description": "A saved item's state (`saved_items.state`).",
+      "oneOf": [
+        {
+          "const": "active",
+          "description": "In the \"save for later\" list.",
+          "type": "string"
+        },
+        {
+          "const": "done",
+          "description": "Completed.",
+          "type": "string"
+        },
+        {
+          "const": "archived",
+          "description": "Kept, out of the way.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Query of `GET /api/v1/me/saved`.",
+  "properties": {
+    "after": {
+      "description": "Items saved after this id (oldest first).",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "before": {
+      "description": "Items saved before this id (newest first).",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "ids": {
+      "description": "Only these items.",
+      "pattern": "^[1-9][0-9]{0,18}(,[1-9][0-9]{0,18}){0,99}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "limit": {
+      "description": "Page size, 1–100 (default 50).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "state": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SavedState"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The state to list (default `active`; ignored with `ids`)."
+    }
+  },
+  "title": "SavedQuery",
+  "type": "object"
+}

@@ -1,0 +1,334 @@
+{
+  "$defs": {
+    "ChannelCounts": {
+      "description": "Per-channel counts of a preview.",
+      "properties": {
+        "channel_id": {
+          "description": "The channel.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "files_held": {
+          "description": "Files a hold keeps.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "files_purged": {
+          "description": "Files that would be purged.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "files_removed": {
+          "description": "Files that would be hidden.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "messages_expired": {
+          "description": "Live messages that would be hidden.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "messages_held": {
+          "description": "Messages a hold keeps.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "messages_purged": {
+          "description": "Messages that would be purged.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "channel_id",
+        "messages_expired",
+        "messages_purged",
+        "messages_held",
+        "files_removed",
+        "files_purged",
+        "files_held"
+      ],
+      "type": "object"
+    },
+    "RetentionScope": {
+      "description": "Which level a retention policy sets (`kind` tag).",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The whole install (DMs use it too). A struct variant so unknown fields are refused.",
+          "properties": {
+            "kind": {
+              "const": "install",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "One space and every channel in it.",
+          "properties": {
+            "id": {
+              "description": "The space.",
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "type": "string"
+            },
+            "kind": {
+              "const": "space",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "One channel, DM or group DM.",
+          "properties": {
+            "id": {
+              "description": "The channel.",
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "type": "string"
+            },
+            "kind": {
+              "const": "channel",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "RetentionTotals": {
+      "description": "Counts a run or preview would destroy (or did). Ids and counts only.",
+      "properties": {
+        "drafts_deleted": {
+          "description": "Drafts deleted.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "file_bytes_purged": {
+          "description": "Plaintext bytes of the purged files.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "files_held": {
+          "description": "Files past a cutoff kept by a legal hold.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "files_purged": {
+          "description": "Files purged.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "files_removed": {
+          "description": "Files hidden by file retention.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "messages_expired": {
+          "description": "Live messages hidden (expired).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "messages_held": {
+          "description": "Messages past a cutoff kept by a legal hold.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "messages_purged": {
+          "description": "Messages whose content was destroyed (purged).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "revisions_purged": {
+          "description": "Edited-away revisions purged.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "scheduled_deleted": {
+          "description": "Unsent scheduled messages deleted.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "messages_expired",
+        "messages_purged",
+        "messages_held",
+        "revisions_purged",
+        "files_removed",
+        "files_purged",
+        "files_held",
+        "file_bytes_purged",
+        "drafts_deleted",
+        "scheduled_deleted"
+      ],
+      "type": "object"
+    },
+    "RetentionValues": {
+      "additionalProperties": false,
+      "description": "A set of retention values. `null` = keep forever (install) or inherit (space, channel).",
+      "properties": {
+        "deleted_purge_days": {
+          "default": null,
+          "description": "Install only: days deleted and edited-away content is kept, 1–3,650 (`null` = off).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "files_days": {
+          "default": null,
+          "description": "Days files live, 1–36,500 (never longer than messages in effect).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "messages_days": {
+          "default": null,
+          "description": "Days messages live, 1–36,500.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "RunState": {
+      "description": "A preview's or run's state.",
+      "oneOf": [
+        {
+          "const": "running",
+          "description": "Working.",
+          "type": "string"
+        },
+        {
+          "const": "done",
+          "description": "Finished.",
+          "type": "string"
+        },
+        {
+          "const": "failed",
+          "description": "Gave up (a later run starts over).",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A retention preview (dry run): the real planner in counting mode at `as_of`.",
+  "properties": {
+    "as_of": {
+      "description": "When the proposal would take effect (the counts are for this time).",
+      "format": "date-time",
+      "type": "string"
+    },
+    "clamped_scopes": {
+      "default": [],
+      "description": "Children whose set value the proposal clamps.",
+      "items": {
+        "$ref": "#/$defs/RetentionScope"
+      },
+      "type": "array"
+    },
+    "created_at": {
+      "description": "When it was requested.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "expires_at": {
+      "description": "When it can no longer be used (24 h).",
+      "format": "date-time",
+      "type": "string"
+    },
+    "id": {
+      "description": "The preview id (`set {preview_id}` uses it).",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "job_id": {
+      "description": "Its `retention_preview` job.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "per_channel": {
+      "default": [],
+      "description": "The top 100 channels by messages, then files.",
+      "items": {
+        "$ref": "#/$defs/ChannelCounts"
+      },
+      "type": "array"
+    },
+    "proposal": {
+      "$ref": "#/$defs/RetentionValues",
+      "description": "The values proposed."
+    },
+    "scope": {
+      "$ref": "#/$defs/RetentionScope",
+      "description": "The level proposed."
+    },
+    "state": {
+      "$ref": "#/$defs/RunState",
+      "description": "Running, done or failed."
+    },
+    "totals": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RetentionTotals"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Whole-install totals, once done."
+    }
+  },
+  "required": [
+    "id",
+    "job_id",
+    "state",
+    "scope",
+    "proposal",
+    "as_of",
+    "created_at",
+    "expires_at"
+  ],
+  "title": "RetentionPreview",
+  "type": "object"
+}

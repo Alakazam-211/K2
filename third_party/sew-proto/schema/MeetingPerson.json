@@ -1,0 +1,43 @@
+{
+  "$defs": {
+    "MeetingLobbyKind": {
+      "description": "Who knocked.",
+      "oneOf": [
+        {
+          "const": "link_guest",
+          "description": "A link guest (redeemed the link without an account).",
+          "type": "string"
+        },
+        {
+          "const": "member",
+          "description": "A signed-in member of the install who knocked with the link.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "One person in a meeting channel, as everyone in that channel sees them (Meet MC3b): the\ndisplay name and whether they are a link guest, nothing else (no handle, email, role,\nstatus, profile field or Space membership). Answered by `GET /api/v1/channels/{id}/people`\nand carried as `person` by a meeting channel's `channel_member_added`. A link guest's name is\nattacker-chosen text: show it as plain text, after a fixed \"Guest\" badge.",
+  "properties": {
+    "display_name": {
+      "description": "Their display name.",
+      "type": "string"
+    },
+    "kind": {
+      "$ref": "#/$defs/MeetingLobbyKind",
+      "description": "A link guest or a member of the install (the lobby's `kind`)."
+    },
+    "member_id": {
+      "description": "The member.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "member_id",
+    "display_name",
+    "kind"
+  ],
+  "title": "MeetingPerson",
+  "type": "object"
+}

@@ -1,0 +1,256 @@
+{
+  "$defs": {
+    "AudioState": {
+      "description": "The recording's audio (§12). Stored in `recordings.audio_state`.",
+      "oneOf": [
+        {
+          "const": "available",
+          "description": "Kept.",
+          "type": "string"
+        },
+        {
+          "const": "expired",
+          "description": "Hidden; links may still exist (held or not yet purged).",
+          "type": "string"
+        },
+        {
+          "const": "purged",
+          "description": "Every link deleted; the content key is gone.",
+          "type": "string"
+        }
+      ]
+    },
+    "StopReason": {
+      "description": "Why a recording stopped (§8.5). Stored in `recordings.stop_reason`.",
+      "oneOf": [
+        {
+          "const": "stopped",
+          "description": "The stop route.",
+          "type": "string"
+        },
+        {
+          "const": "room_empty",
+          "description": "No standard voice entries left in the room.",
+          "type": "string"
+        },
+        {
+          "const": "call_ended",
+          "description": "The DM call ended.",
+          "type": "string"
+        },
+        {
+          "const": "max_duration",
+          "description": "`recording.max_duration_ms` reached.",
+          "type": "string"
+        },
+        {
+          "const": "recorder_failed",
+          "description": "The recorder failed (join timeout, certificate, unreachable, too many rejoins).",
+          "type": "string"
+        },
+        {
+          "const": "media_restarted",
+          "description": "The engine room was lost beyond the re-admit grace.",
+          "type": "string"
+        },
+        {
+          "const": "storage_full",
+          "description": "Three consecutive `storage_full` segment writes.",
+          "type": "string"
+        },
+        {
+          "const": "disabled",
+          "description": "Recording was disabled (policy, config, archive, `sew recording disable`).",
+          "type": "string"
+        },
+        {
+          "const": "max_bytes",
+          "description": "`recording.max_bytes` reached.",
+          "type": "string"
+        }
+      ]
+    },
+    "SummaryAudio": {
+      "description": "The audio part of a [`RecordingSummary`].",
+      "properties": {
+        "expires_at": {
+          "description": "When it expires (set at transcript final).",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "keep_days": {
+          "description": "Keep days.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mixed": {
+          "description": "A mixed file is (or will be) made.",
+          "type": "boolean"
+        },
+        "state": {
+          "$ref": "#/$defs/AudioState",
+          "description": "Its state."
+        }
+      },
+      "required": [
+        "state",
+        "mixed",
+        "keep_days"
+      ],
+      "type": "object"
+    },
+    "SummaryTranscript": {
+      "description": "The transcript part of a [`RecordingSummary`].",
+      "properties": {
+        "gaps_ms": {
+          "description": "Total gap time.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "lang": {
+          "description": "The majority language of the turns.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/TranscriptState",
+          "description": "Its state."
+        },
+        "turns": {
+          "description": "Turns posted.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "state",
+        "turns",
+        "gaps_ms"
+      ],
+      "type": "object"
+    },
+    "TranscriptState": {
+      "description": "The transcript (§14.5). Stored in `recordings.transcript_state`.",
+      "oneOf": [
+        {
+          "const": "pending",
+          "description": "No segment transcribed yet.",
+          "type": "string"
+        },
+        {
+          "const": "running",
+          "description": "Turns are being posted.",
+          "type": "string"
+        },
+        {
+          "const": "done",
+          "description": "Final, complete.",
+          "type": "string"
+        },
+        {
+          "const": "partial",
+          "description": "Final, with gaps or failed segments.",
+          "type": "string"
+        },
+        {
+          "const": "failed",
+          "description": "Final, no turn posted and at least one segment failed.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "`Message.recording` on the record message (§15.1).",
+  "properties": {
+    "audio": {
+      "$ref": "#/$defs/SummaryAudio",
+      "description": "The audio."
+    },
+    "auto": {
+      "description": "Auto-started.",
+      "type": "boolean"
+    },
+    "duration_ms": {
+      "description": "`stopped_at − started_at` once stopped.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "e2ee": {
+      "description": "Always `true` in v2: every call is end-to-end encrypted.",
+      "type": "boolean"
+    },
+    "recording_id": {
+      "description": "The recording.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "speaker_ids": {
+      "description": "Members whose speech was stored, ascending.",
+      "items": {
+        "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+        "pattern": "^[1-9][0-9]{0,18}$",
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "started_at": {
+      "description": "When.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "started_by": {
+      "description": "Who started it.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "stop_reason": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StopReason"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Why."
+    },
+    "stopped_at": {
+      "description": "When it stopped.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "transcript": {
+      "$ref": "#/$defs/SummaryTranscript",
+      "description": "The transcript."
+    }
+  },
+  "required": [
+    "recording_id",
+    "started_by",
+    "started_at",
+    "auto",
+    "speaker_ids",
+    "audio",
+    "transcript",
+    "e2ee"
+  ],
+  "title": "RecordingSummary",
+  "type": "object"
+}

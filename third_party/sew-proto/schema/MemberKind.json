@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Whether a member is a person or an agent.",
+  "oneOf": [
+    {
+      "const": "person",
+      "description": "A human.",
+      "type": "string"
+    },
+    {
+      "const": "agent",
+      "description": "A K2 agent.",
+      "type": "string"
+    }
+  ],
+  "title": "MemberKind"
+}

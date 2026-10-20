@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Response for mutations with no canonical object: `{\"ok\": true}`.",
+  "properties": {
+    "ok": {
+      "description": "Always `true`.",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "ok"
+  ],
+  "title": "OkResponse",
+  "type": "object"
+}

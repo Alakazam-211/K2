@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /api/v1/groups/{id}/members/add|remove`.",
+  "properties": {
+    "member_ids": {
+      "description": "1–100 unique member ids.",
+      "items": {
+        "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+        "pattern": "^[1-9][0-9]{0,18}$",
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "member_ids"
+  ],
+  "title": "GroupMembersRequest",
+  "type": "object"
+}

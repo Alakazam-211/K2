@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "An `is:` value (S35 v2 §16).",
+  "oneOf": [
+    {
+      "const": "transcript",
+      "description": "A call transcript turn.",
+      "type": "string"
+    }
+  ],
+  "title": "IsValue"
+}

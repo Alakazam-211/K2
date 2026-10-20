@@ -1,0 +1,1206 @@
+{
+  "$defs": {
+    "Action": {
+      "description": "An audited action, `<entity>.<verb>` in `lower_snake` (C14). Owning slices add more.",
+      "oneOf": [
+        {
+          "const": "session.create",
+          "description": "A session was created.",
+          "type": "string"
+        },
+        {
+          "const": "session.renew",
+          "description": "A session was renewed.",
+          "type": "string"
+        },
+        {
+          "const": "session.revoke",
+          "description": "A session was revoked.",
+          "type": "string"
+        },
+        {
+          "const": "pass.reject",
+          "description": "A pass with a valid signature was rejected.",
+          "type": "string"
+        },
+        {
+          "const": "login.fail",
+          "description": "A standalone login failed.",
+          "type": "string"
+        },
+        {
+          "const": "member.provision",
+          "description": "A principal was provisioned.",
+          "type": "string"
+        },
+        {
+          "const": "member.update",
+          "description": "A principal's profile was updated.",
+          "type": "string"
+        },
+        {
+          "const": "member.deprovision",
+          "description": "A principal was deprovisioned.",
+          "type": "string"
+        },
+        {
+          "const": "owner.set",
+          "description": "The install owner was set.",
+          "type": "string"
+        },
+        {
+          "const": "agent.pin",
+          "description": "An assistant was pinned.",
+          "type": "string"
+        },
+        {
+          "const": "agent.unpin",
+          "description": "An assistant was unpinned.",
+          "type": "string"
+        },
+        {
+          "const": "api.call",
+          "description": "An act-as call with no domain action of its own.",
+          "type": "string"
+        },
+        {
+          "const": "space.create",
+          "description": "A space was created.",
+          "type": "string"
+        },
+        {
+          "const": "space.update",
+          "description": "A space was updated.",
+          "type": "string"
+        },
+        {
+          "const": "category.create",
+          "description": "A category was created.",
+          "type": "string"
+        },
+        {
+          "const": "category.update",
+          "description": "A category was updated.",
+          "type": "string"
+        },
+        {
+          "const": "category.delete",
+          "description": "A category was deleted.",
+          "type": "string"
+        },
+        {
+          "const": "channel.create",
+          "description": "A channel was created.",
+          "type": "string"
+        },
+        {
+          "const": "channel.update",
+          "description": "A channel was updated.",
+          "type": "string"
+        },
+        {
+          "const": "channel.archive",
+          "description": "A channel was archived.",
+          "type": "string"
+        },
+        {
+          "const": "channel.unarchive",
+          "description": "A channel was unarchived.",
+          "type": "string"
+        },
+        {
+          "const": "channel.sync",
+          "description": "A channel's overwrites were re-synced with its category.",
+          "type": "string"
+        },
+        {
+          "const": "role.create",
+          "description": "A role was created.",
+          "type": "string"
+        },
+        {
+          "const": "role.update",
+          "description": "A role was updated.",
+          "type": "string"
+        },
+        {
+          "const": "role.delete",
+          "description": "A role was deleted.",
+          "type": "string"
+        },
+        {
+          "const": "role.assign",
+          "description": "A role was assigned.",
+          "type": "string"
+        },
+        {
+          "const": "role.unassign",
+          "description": "A role was unassigned.",
+          "type": "string"
+        },
+        {
+          "const": "overwrite.set",
+          "description": "An overwrite was set.",
+          "type": "string"
+        },
+        {
+          "const": "overwrite.delete",
+          "description": "An overwrite was deleted.",
+          "type": "string"
+        },
+        {
+          "const": "policy.set",
+          "description": "Org policies were changed.",
+          "type": "string"
+        },
+        {
+          "const": "member.timeout",
+          "description": "A member was timed out.",
+          "type": "string"
+        },
+        {
+          "const": "member.untimeout",
+          "description": "A timeout was lifted.",
+          "type": "string"
+        },
+        {
+          "const": "space_member.remove",
+          "description": "A member was removed from a space.",
+          "type": "string"
+        },
+        {
+          "const": "channel.slow_mode_set",
+          "description": "Slow mode was set on a channel.",
+          "type": "string"
+        },
+        {
+          "const": "message.moderator_delete",
+          "description": "A moderator deleted a message.",
+          "type": "string"
+        },
+        {
+          "const": "thread.delete",
+          "description": "A moderator deleted a whole thread (S13 gap G17).",
+          "type": "string"
+        },
+        {
+          "const": "reaction.moderator_remove",
+          "description": "A moderator removed another member's reaction (S13 gap G17).",
+          "type": "string"
+        },
+        {
+          "const": "retention.set",
+          "description": "A retention policy was set.",
+          "type": "string"
+        },
+        {
+          "const": "retention.preview",
+          "description": "A retention preview was requested (S22).",
+          "type": "string"
+        },
+        {
+          "const": "retention.cancel",
+          "description": "A pending retention policy was cancelled or replaced (S22).",
+          "type": "string"
+        },
+        {
+          "const": "retention.activate",
+          "description": "A pending retention policy took effect (S22).",
+          "type": "string"
+        },
+        {
+          "const": "retention.run_requested",
+          "description": "A retention run was requested by hand (S22).",
+          "type": "string"
+        },
+        {
+          "const": "retention.run",
+          "description": "A retention run finished (S22).",
+          "type": "string"
+        },
+        {
+          "const": "legal_hold.create",
+          "description": "A legal hold was created.",
+          "type": "string"
+        },
+        {
+          "const": "legal_hold.update",
+          "description": "A legal hold was updated.",
+          "type": "string"
+        },
+        {
+          "const": "legal_hold.release",
+          "description": "A legal hold was released.",
+          "type": "string"
+        },
+        {
+          "const": "export.start",
+          "description": "An export was started.",
+          "type": "string"
+        },
+        {
+          "const": "ediscovery.export",
+          "description": "An eDiscovery export was run.",
+          "type": "string"
+        },
+        {
+          "const": "backup.start",
+          "description": "A backup was started.",
+          "type": "string"
+        },
+        {
+          "const": "import.start",
+          "description": "Retired by S23 (an import that fails leaves no install to audit into); never written.",
+          "type": "string"
+        },
+        {
+          "const": "key.rotate_master",
+          "description": "The master key was rotated.",
+          "type": "string"
+        },
+        {
+          "const": "key.shred",
+          "description": "A month key was shredded.",
+          "type": "string"
+        },
+        {
+          "const": "audit.read",
+          "description": "The audit log was read.",
+          "type": "string"
+        },
+        {
+          "const": "compliance.read",
+          "description": "A compliance read happened.",
+          "type": "string"
+        },
+        {
+          "const": "job.dead",
+          "description": "A job exhausted its attempts or failed permanently (S3 gap S3-G8).",
+          "type": "string"
+        },
+        {
+          "const": "job.retry",
+          "description": "An admin requeued a dead job (S3 gap S3-G8).",
+          "type": "string"
+        },
+        {
+          "const": "job.cancel",
+          "description": "An admin cancelled a pending job (S3 gap S3-G8).",
+          "type": "string"
+        },
+        {
+          "const": "audit.verify_failed",
+          "description": "The audit hash chain failed verification (S3 gap S3-G8).",
+          "type": "string"
+        },
+        {
+          "const": "password.set",
+          "description": "A standalone password was set through a one-time setup link (S8 gap S8-G14).",
+          "type": "string"
+        },
+        {
+          "const": "mgmt.auth_fail",
+          "description": "Failed service-token checks on the mgmt socket, coalesced per peer uid per 10 s\n(S9 G16).",
+          "type": "string"
+        },
+        {
+          "const": "agent.deliveries_read",
+          "description": "A non-empty agent deliveries read (S9 G16).",
+          "type": "string"
+        },
+        {
+          "const": "password.setup_link",
+          "description": "A one-time password setup link was issued; never the token or URL (S24 G16).",
+          "type": "string"
+        },
+        {
+          "const": "member.install_role_set",
+          "description": "A member's install role was set (S10 route, S24 local role route; one\nimplementation, S9's `provisioning::set_install_role`).",
+          "type": "string"
+        },
+        {
+          "const": "install.backup",
+          "description": "A backup bundle was made (S6 G17).",
+          "type": "string"
+        },
+        {
+          "const": "install.restore",
+          "description": "A backup bundle was restored (S6 G17).",
+          "type": "string"
+        },
+        {
+          "const": "install.drill",
+          "description": "A restore drill ran (S6 G17).",
+          "type": "string"
+        },
+        {
+          "const": "install.upgrade",
+          "description": "The binary was upgraded or rolled back (S6 G17).",
+          "type": "string"
+        },
+        {
+          "const": "media.install",
+          "description": "The media engine was installed or reconfigured (S49).",
+          "type": "string"
+        },
+        {
+          "const": "media.enable",
+          "description": "Voice was enabled (S49).",
+          "type": "string"
+        },
+        {
+          "const": "media.disable",
+          "description": "Voice was disabled (S49).",
+          "type": "string"
+        },
+        {
+          "const": "media.uninstall",
+          "description": "The media engine was uninstalled (S49).",
+          "type": "string"
+        },
+        {
+          "const": "media.keys_rotate",
+          "description": "Media keys were rotated; kids only, never key bytes (S49).",
+          "type": "string"
+        },
+        {
+          "const": "media.turn_cert",
+          "description": "The TURN certificate was replaced (S49).",
+          "type": "string"
+        },
+        {
+          "const": "media.upgrade",
+          "description": "The media engine was upgraded or rolled back (S49).",
+          "type": "string"
+        },
+        {
+          "const": "recording.install",
+          "description": "The recorder and transcriber were installed (S49).",
+          "type": "string"
+        },
+        {
+          "const": "recording.upgrade",
+          "description": "The recorder or transcriber was upgraded (S49).",
+          "type": "string"
+        },
+        {
+          "const": "recording.set_model",
+          "description": "The transcriber's model was changed (S49).",
+          "type": "string"
+        },
+        {
+          "const": "keys.master_exported",
+          "description": "The master key was exported for a box move (S6 G17).",
+          "type": "string"
+        },
+        {
+          "const": "keys.keyring_exported",
+          "description": "The keyring was exported for a box move (S6 G17).",
+          "type": "string"
+        },
+        {
+          "const": "keys.keyring_imported",
+          "description": "A keyring export was imported (S6 G17).",
+          "type": "string"
+        },
+        {
+          "const": "key.rollover",
+          "description": "A month key was rolled over early (S4 G14, contracts rev 42).",
+          "type": "string"
+        },
+        {
+          "const": "key.rewrap",
+          "description": "Keyring entries were re-wrapped under a new master key (S4 G14, rev 42).",
+          "type": "string"
+        },
+        {
+          "const": "key.restore_from_mirror",
+          "description": "The local keyring was rebuilt from its mirror (S4 G14, rev 42).",
+          "type": "string"
+        },
+        {
+          "const": "key.mirror_stale",
+          "description": "The keyring mirror went stale (S4 G14, rev 42).",
+          "type": "string"
+        },
+        {
+          "const": "key.resurrected_refused",
+          "description": "A key file for a shredded kid was found and refused (S4 G14, rev 42).",
+          "type": "string"
+        },
+        {
+          "const": "space.transfer",
+          "description": "Space ownership moved (S10 gap G25).",
+          "type": "string"
+        },
+        {
+          "const": "space_member.add",
+          "description": "Members were added to a space (S10 gap G25).",
+          "type": "string"
+        },
+        {
+          "const": "channel_member.add",
+          "description": "A member was added to a channel (S10 gap G25).",
+          "type": "string"
+        },
+        {
+          "const": "channel_member.remove",
+          "description": "A member was removed from a channel (S10 gap G25).",
+          "type": "string"
+        },
+        {
+          "const": "channel.admin_join",
+          "description": "A space admin joined a private channel through the policy join (S10 gap G25).",
+          "type": "string"
+        },
+        {
+          "const": "role.reorder",
+          "description": "A space's roles were reordered (S12 gap G9).",
+          "type": "string"
+        },
+        {
+          "const": "user_group.create",
+          "description": "A user group was created (S18).",
+          "type": "string"
+        },
+        {
+          "const": "user_group.update",
+          "description": "A user group was changed (S18).",
+          "type": "string"
+        },
+        {
+          "const": "user_group.delete",
+          "description": "A user group was deleted (S18).",
+          "type": "string"
+        },
+        {
+          "const": "user_group.members_add",
+          "description": "Members were added to a user group (S18).",
+          "type": "string"
+        },
+        {
+          "const": "user_group.members_remove",
+          "description": "Members were removed from a user group (S18).",
+          "type": "string"
+        },
+        {
+          "const": "profile_field.create",
+          "description": "A custom profile field was created (S18).",
+          "type": "string"
+        },
+        {
+          "const": "profile_field.update",
+          "description": "A custom profile field was changed (S18).",
+          "type": "string"
+        },
+        {
+          "const": "profile_field.delete",
+          "description": "A custom profile field was deleted (S18).",
+          "type": "string"
+        },
+        {
+          "const": "profile_field.reorder",
+          "description": "Custom profile fields were reordered (S18).",
+          "type": "string"
+        },
+        {
+          "const": "member.profile_reset",
+          "description": "An admin reset another member's avatar or status (S18).",
+          "type": "string"
+        },
+        {
+          "const": "member.avatar_push",
+          "description": "K2 pushed an avatar through mgmt (S18).",
+          "type": "string"
+        },
+        {
+          "const": "attachment.moderator_remove",
+          "description": "A moderator removed another member's attachments (S15 G16).",
+          "type": "string"
+        },
+        {
+          "const": "emoji.create",
+          "description": "A custom emoji was created (S16 gap G26).",
+          "type": "string"
+        },
+        {
+          "const": "emoji.update",
+          "description": "A custom emoji was renamed or its aliases changed (S16 gap G26).",
+          "type": "string"
+        },
+        {
+          "const": "emoji.delete",
+          "description": "A custom emoji was deleted (S16 gap G26).",
+          "type": "string"
+        },
+        {
+          "const": "space.icon_set",
+          "description": "A space icon was set (S16 gap G26).",
+          "type": "string"
+        },
+        {
+          "const": "space.icon_clear",
+          "description": "A space icon was cleared (S16 gap G26).",
+          "type": "string"
+        },
+        {
+          "const": "message.previews_suppress",
+          "description": "A moderator turned off another member's link previews (S16 gap G17).",
+          "type": "string"
+        },
+        {
+          "const": "secret.set",
+          "description": "An install secret was set; details carry the name and fingerprint only (S16 G11).",
+          "type": "string"
+        },
+        {
+          "const": "secret.clear",
+          "description": "An install secret was cleared (S16 G11).",
+          "type": "string"
+        },
+        {
+          "const": "bookmark.create",
+          "description": "A channel bookmark was created (S17 §12).",
+          "type": "string"
+        },
+        {
+          "const": "bookmark.update",
+          "description": "A channel bookmark was edited (S17 §12).",
+          "type": "string"
+        },
+        {
+          "const": "bookmark.delete",
+          "description": "A channel bookmark was deleted (S17 §12).",
+          "type": "string"
+        },
+        {
+          "const": "bookmark.reorder",
+          "description": "A channel's bookmarks were reordered (S17 §12).",
+          "type": "string"
+        },
+        {
+          "const": "poll.moderator_close",
+          "description": "A moderator closed another member's poll (S17 §11.3).",
+          "type": "string"
+        },
+        {
+          "const": "scheduled_message.send",
+          "description": "An agent's scheduled message was sent (S17 §9.3).",
+          "type": "string"
+        },
+        {
+          "const": "search.rebuild_requested",
+          "description": "An admin asked for a search index rebuild over mgmt (S20 §18).",
+          "type": "string"
+        },
+        {
+          "const": "search.rebuild",
+          "description": "A search index rebuild finished and swapped in (S20 §18; system actor).",
+          "type": "string"
+        },
+        {
+          "const": "search.compact",
+          "description": "S22 compacted the search index (S20 §18).",
+          "type": "string"
+        },
+        {
+          "const": "guest.convert",
+          "description": "A member became a guest or a guest became a member (S19 §7.4, §7.5).",
+          "type": "string"
+        },
+        {
+          "const": "guest.space_remove",
+          "description": "A guest left a space because its last channel there was gone (S19 §7.3).",
+          "type": "string"
+        },
+        {
+          "const": "guest.suspend_all",
+          "description": "`guests.enabled` turned off: every guest session revoked (S19 §7.7).",
+          "type": "string"
+        },
+        {
+          "const": "guest.restore_all",
+          "description": "`guests.enabled` turned back on (S19 §7.7).",
+          "type": "string"
+        },
+        {
+          "const": "mail.test",
+          "description": "A test mail was sent over mgmt; details `{ok, smtp_code}`, never the address (S21).",
+          "type": "string"
+        },
+        {
+          "const": "notify.digest_unsubscribe",
+          "description": "A digest unsubscribe link turned a member's digest off (S21; system actor).",
+          "type": "string"
+        },
+        {
+          "const": "member.compliance_set",
+          "description": "The compliance flag was granted or revoked (S23 §6.2).",
+          "type": "string"
+        },
+        {
+          "const": "ediscovery.complete",
+          "description": "An eDiscovery archive was written (S23 §15).",
+          "type": "string"
+        },
+        {
+          "const": "ediscovery.fail",
+          "description": "An eDiscovery export failed (S23 §15).",
+          "type": "string"
+        },
+        {
+          "const": "ediscovery.cancel",
+          "description": "An eDiscovery export was cancelled (S23 §15).",
+          "type": "string"
+        },
+        {
+          "const": "ediscovery.download",
+          "description": "An eDiscovery archive was downloaded, or a range of it (S23 §15).",
+          "type": "string"
+        },
+        {
+          "const": "ediscovery.delete",
+          "description": "An eDiscovery archive was deleted by a caller (S23 §15).",
+          "type": "string"
+        },
+        {
+          "const": "ediscovery.expire",
+          "description": "An eDiscovery archive expired (S23 §15).",
+          "type": "string"
+        },
+        {
+          "const": "export.complete",
+          "description": "A full export archive was written (S23 §15).",
+          "type": "string"
+        },
+        {
+          "const": "export.fail",
+          "description": "A full export failed (S23 §15).",
+          "type": "string"
+        },
+        {
+          "const": "export.cancel",
+          "description": "A full export was cancelled (S23 §15).",
+          "type": "string"
+        },
+        {
+          "const": "export.download",
+          "description": "A full export archive was downloaded (S23 §15).",
+          "type": "string"
+        },
+        {
+          "const": "export.delete",
+          "description": "A full export archive was deleted by a caller (S23 §15).",
+          "type": "string"
+        },
+        {
+          "const": "export.expire",
+          "description": "A full export archive expired (S23 §15).",
+          "type": "string"
+        },
+        {
+          "const": "import.complete",
+          "description": "An import finished (the first row of a moved install's new tail, S23 §15).",
+          "type": "string"
+        },
+        {
+          "const": "audit.verify_requested",
+          "description": "A client asked for an audit chain check (S23 §7.2).",
+          "type": "string"
+        },
+        {
+          "const": "voice.join",
+          "description": "A member joined voice (S33 v1 §21.1; `details {channel_id, via}`).",
+          "type": "string"
+        },
+        {
+          "const": "voice.leave",
+          "description": "A member left voice (S33 v1 §21.1; `details {channel_id, reason, duration_ms}`).",
+          "type": "string"
+        },
+        {
+          "const": "voice.server_mute",
+          "description": "A moderator server-muted or unmuted a member (S33 v1 §21.1).",
+          "type": "string"
+        },
+        {
+          "const": "voice.server_deafen",
+          "description": "A moderator server-deafened or undeafened a member (S33 v1 §21.1).",
+          "type": "string"
+        },
+        {
+          "const": "voice.move",
+          "description": "A moderator moved a member to another voice channel (S33 v1 §21.1).",
+          "type": "string"
+        },
+        {
+          "const": "voice.disconnect",
+          "description": "A moderator disconnected a member from voice (S33 v1 §21.1).",
+          "type": "string"
+        },
+        {
+          "const": "voice.config",
+          "description": "Voice was installed, reconfigured, enabled or disabled from the CLI (S33 v1 §21.1).",
+          "type": "string"
+        },
+        {
+          "const": "voice.keys_rotate",
+          "description": "The media token key was rotated from the CLI (S33 v1 §21.1).",
+          "type": "string"
+        },
+        {
+          "const": "call.e2ee_keys_created",
+          "description": "The call DS and CA keys were generated (S50 §19.4; `details {ds_kid, ca_kid}`).",
+          "type": "string"
+        },
+        {
+          "const": "call.e2ee_member_removed",
+          "description": "A forced removal from a call's key group completed (S50 §19.4).",
+          "type": "string"
+        },
+        {
+          "const": "call.e2ee_group_reset",
+          "description": "A call's key group was reset (S50 §19.4).",
+          "type": "string"
+        },
+        {
+          "const": "call.e2ee_rebuilt",
+          "description": "A call's key group was rebuilt after a restart (S50 §19.4).",
+          "type": "string"
+        },
+        {
+          "const": "call.e2ee_recorder_certified",
+          "description": "A recorder certificate was issued (S50 §19.4).",
+          "type": "string"
+        },
+        {
+          "const": "call.e2ee_roster_report",
+          "description": "A client reported a roster mismatch (S50 §19.4).",
+          "type": "string"
+        },
+        {
+          "const": "call.e2ee_sender_stuck",
+          "description": "A device was removed and refused for a stuck key slot (S50 §19.4).",
+          "type": "string"
+        },
+        {
+          "const": "call.e2ee_engine_anomaly",
+          "description": "A client's bridge reported a misbehaving engine (S50 §19.4).",
+          "type": "string"
+        },
+        {
+          "const": "device.enroll",
+          "description": "A device key was enrolled (S50 §10.2; `details {device_id, serial, platform}`).",
+          "type": "string"
+        },
+        {
+          "const": "device.renew",
+          "description": "A device certificate was renewed (S50 §10.3).",
+          "type": "string"
+        },
+        {
+          "const": "device.revoke",
+          "description": "A device was revoked (S50 §10.4; `details {device_id, serials, reason}`).",
+          "type": "string"
+        },
+        {
+          "const": "call.start",
+          "description": "A DM call started (S34 v2 §25.1; actor = the starter; `details {call_id,\nchannel_id, rung_count}`).",
+          "type": "string"
+        },
+        {
+          "const": "call.end",
+          "description": "A DM call ended (S34 v2 §25.1; actor `system`; `details {call_id, channel_id,\nduration_ms, joined_count, end_reason}`).",
+          "type": "string"
+        },
+        {
+          "const": "recording.start",
+          "description": "A recording started (S35 v2 §22.1; `details {recording_id, channel_id,\ncall_record_id?, auto, audio_keep_days, mixed}`).",
+          "type": "string"
+        },
+        {
+          "const": "recording.stop",
+          "description": "A recording stopped (`details {recording_id, duration_ms, stop_reason,\nrecorded_members}`).",
+          "type": "string"
+        },
+        {
+          "const": "recording.consent",
+          "description": "A consent answer (`details {recording_id, consent, via, surface, notice_version}`).",
+          "type": "string"
+        },
+        {
+          "const": "recording.audio_retention",
+          "description": "Audio keep days changed (`details {recording_id, old_days, new_days}`).",
+          "type": "string"
+        },
+        {
+          "const": "recording.audio_purge",
+          "description": "Audio purged (`details {recording_id, segments, bytes, held_segments}`).",
+          "type": "string"
+        },
+        {
+          "const": "recording.recorder_rejoin",
+          "description": "The recorder rejoined (`details {recording_id, run, reason}`).",
+          "type": "string"
+        },
+        {
+          "const": "recording.engine_anomaly",
+          "description": "The recorder refused engine misbehaviour (`details {recording_id, kind}`).",
+          "type": "string"
+        },
+        {
+          "const": "recording.binding_anomaly",
+          "description": "The recorder refused a binding table (`details {recording_id, kind}`).",
+          "type": "string"
+        },
+        {
+          "const": "recording.consent_violation",
+          "description": "A segment of an ungranted identity was discarded (`details {recording_id, run,\nseq}`; never the identity).",
+          "type": "string"
+        },
+        {
+          "const": "transcript.final",
+          "description": "A transcript became final (`details {recording_id, turns, gaps_ms,\nfailed_segments, model, backend}`).",
+          "type": "string"
+        },
+        {
+          "const": "recording.download",
+          "description": "A compliance download grant (`details {recording_id, channel_id, download_id, what,\nparts, segments, reason_given}`; rev 91).",
+          "type": "string"
+        },
+        {
+          "const": "meeting.create",
+          "description": "A meeting was made (Meet MC1, CC10; `details {meeting_id, channel_id, kind,\nstarts_at, ends_at, member_attendees, email_attendees}`: counts and ids only, never a\ntitle, name or email).",
+          "type": "string"
+        },
+        {
+          "const": "meeting.update",
+          "description": "A meeting changed (`details {meeting_id, fields, ics_sequence}`).",
+          "type": "string"
+        },
+        {
+          "const": "meeting.cancel",
+          "description": "A scheduled meeting was cancelled (`details {meeting_id, ics_sequence}`).",
+          "type": "string"
+        },
+        {
+          "const": "meeting.end",
+          "description": "A meeting ended (actor `system` for the end job, the host for End for all (MC3);\n`details {meeting_id, end_reason, duration_ms}`).",
+          "type": "string"
+        },
+        {
+          "const": "meeting.lock",
+          "description": "A host locked or unlocked a meeting (Meet MC3; `details {meeting_id, locked}`).",
+          "type": "string"
+        },
+        {
+          "const": "meeting.remove",
+          "description": "A host removed someone from a meeting (Meet MC3; `details {meeting_id, member_id,\nkind, in_call, sessions_revoked, devices_revoked}`): ids and counts only, never a\nname, an email or an IP.",
+          "type": "string"
+        },
+        {
+          "const": "meeting_link.create",
+          "description": "A meeting link was made (Meet MC2a; at create and in a rotate). No secret.",
+          "type": "string"
+        },
+        {
+          "const": "meeting_link.read",
+          "description": "A host read a meeting's link (Meet MC2a). No secret.",
+          "type": "string"
+        },
+        {
+          "const": "meeting_link.rotate",
+          "description": "A host rotated a meeting's link (Meet MC2a). No secret.",
+          "type": "string"
+        },
+        {
+          "const": "meeting_link.revoke",
+          "description": "A host revoked a meeting's link, or the meeting closed (Meet MC2a). No secret.",
+          "type": "string"
+        },
+        {
+          "const": "meeting.redeem",
+          "description": "A meeting link was redeemed with its valid secret (Meet MC2a): ids and the outcome,\nnever a name, a nonce, a secret or an IP.",
+          "type": "string"
+        },
+        {
+          "const": "lobby.knock",
+          "description": "Someone knocked on a meeting's lobby (Meet MC2b; a redeem's new entry, or a\nsigned-in member with the link): ids only, never a name, a nonce, a secret or an IP.",
+          "type": "string"
+        },
+        {
+          "const": "lobby.admit",
+          "description": "A host let a lobby entry in (Meet MC2b; `details {meeting_id, entry_id, member_id,\nall}`).",
+          "type": "string"
+        },
+        {
+          "const": "lobby.deny",
+          "description": "A host turned a lobby entry away (Meet MC2b; `details {meeting_id, entry_id,\nmember_id, blocked}`).",
+          "type": "string"
+        }
+      ]
+    },
+    "Actor": {
+      "description": "Who performed an audited action.",
+      "properties": {
+        "ip": {
+          "description": "The client IP.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/ActorKind",
+          "description": "What kind of principal acted."
+        },
+        "member_id": {
+          "description": "The acting member, when a member acted.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "on_behalf_of": {
+          "description": "For an assistant, the member id of its person.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "peer_uid": {
+          "description": "The mgmt caller's `SO_PEERCRED` uid.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "via": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActorVia"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Set on act-as calls."
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "type": "object"
+    },
+    "ActorKind": {
+      "description": "What kind of principal acted.",
+      "oneOf": [
+        {
+          "const": "person",
+          "description": "A person member.",
+          "type": "string"
+        },
+        {
+          "const": "agent",
+          "description": "An agent member.",
+          "type": "string"
+        },
+        {
+          "const": "service",
+          "description": "The mgmt service (K2's daemon or the `sew` CLI).",
+          "type": "string"
+        },
+        {
+          "const": "system",
+          "description": "Sew itself (jobs).",
+          "type": "string"
+        }
+      ]
+    },
+    "ActorVia": {
+      "description": "How an act-as call reached Sew (C9): through K2, for an agent, in a K2 session.",
+      "properties": {
+        "agent": {
+          "description": "The K2 workspace uuid of the agent.",
+          "type": "string"
+        },
+        "k2_session": {
+          "description": "The K2 session id.",
+          "type": "string"
+        },
+        "system": {
+          "description": "The delegating system; `\"k2\"` in v1.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "system",
+        "agent",
+        "k2_session"
+      ],
+      "type": "object"
+    },
+    "AuditEntry": {
+      "description": "One chained audit row.",
+      "properties": {
+        "chain_seq": {
+          "description": "Its chain position.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "event": {
+          "$ref": "#/$defs/AuditEvent",
+          "description": "The stored event."
+        },
+        "hash": {
+          "description": "Its hash, 64 hex.",
+          "type": "string"
+        },
+        "prev_hash": {
+          "description": "The previous row's hash, 64 hex.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "chain_seq",
+        "hash",
+        "prev_hash",
+        "event"
+      ],
+      "type": "object"
+    },
+    "AuditEvent": {
+      "description": "One row of the append-only audit log (C14).",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/Action",
+          "description": "What was done."
+        },
+        "actor": {
+          "$ref": "#/$defs/Actor",
+          "description": "Who acted."
+        },
+        "at": {
+          "description": "When it happened.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "channel_id": {
+          "description": "The channel involved.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "details": {
+          "additionalProperties": true,
+          "default": {},
+          "description": "Ids, names, old and new values, permission bits. Never content.",
+          "type": "object"
+        },
+        "id": {
+          "description": "The event id.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "result": {
+          "$ref": "#/$defs/AuditResult",
+          "description": "How it ended."
+        },
+        "space_id": {
+          "description": "The space involved.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuditTarget"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What it touched; absent when there is no target (for example a failed login)."
+        }
+      },
+      "required": [
+        "id",
+        "at",
+        "actor",
+        "action",
+        "result"
+      ],
+      "type": "object"
+    },
+    "AuditResult": {
+      "description": "How an audited action ended.",
+      "oneOf": [
+        {
+          "const": "ok",
+          "description": "It succeeded.",
+          "type": "string"
+        },
+        {
+          "const": "denied",
+          "description": "A permission or policy check refused it.",
+          "type": "string"
+        },
+        {
+          "const": "error",
+          "description": "It failed.",
+          "type": "string"
+        }
+      ]
+    },
+    "AuditTarget": {
+      "description": "What an audited action touched.",
+      "properties": {
+        "id": {
+          "description": "The entity id.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "kind": {
+          "description": "The entity kind, `lower_snake` (for example `channel`).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A page of an id-keyed list: `{\"items\": [...], \"has_more\": bool}`.",
+  "properties": {
+    "has_more": {
+      "description": "Whether more items exist past this page.",
+      "type": "boolean"
+    },
+    "items": {
+      "description": "The items.",
+      "items": {
+        "$ref": "#/$defs/AuditEntry"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "items",
+    "has_more"
+  ],
+  "title": "Page",
+  "type": "object"
+}

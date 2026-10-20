@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`install.ndjson`: one record.",
+  "properties": {
+    "created_at": {
+      "description": "When the install was created.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "id_hwm_ms": {
+      "description": "The id clock high-water mark (Unix ms).",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "install_id": {
+      "description": "The install id.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "name": {
+      "description": "The install name (empty when unnamed).",
+      "type": "string"
+    },
+    "policies": {
+      "additionalProperties": true,
+      "description": "Org policy values by key (retention mirrors excluded).",
+      "type": "object"
+    }
+  },
+  "required": [
+    "install_id",
+    "name",
+    "created_at",
+    "id_hwm_ms"
+  ],
+  "title": "InstallRecord",
+  "type": "object"
+}

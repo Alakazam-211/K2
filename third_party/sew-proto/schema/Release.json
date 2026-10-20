@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A release as the DS relays it to the recorder (`RecorderSink::release`; S53 opens it with\nS51's `ReleaseOpener`, which rebuilds the `info` with `leaf`; rev 88 D4).",
+  "properties": {
+    "call_id": {
+      "description": "The call.",
+      "pattern": "^r_[a-z2-7]{26}$",
+      "type": "string"
+    },
+    "ct": {
+      "description": "HPKE ciphertext (48 bytes).",
+      "pattern": "^[A-Za-z0-9_-]*$",
+      "type": "string"
+    },
+    "enc": {
+      "description": "HPKE `enc` (32 bytes).",
+      "pattern": "^[A-Za-z0-9_-]*$",
+      "type": "string"
+    },
+    "epoch": {
+      "description": "The epoch.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "group_id": {
+      "description": "The group.",
+      "pattern": "^[A-Za-z0-9_-]*$",
+      "type": "string"
+    },
+    "leaf": {
+      "description": "The sender's leaf index in `epoch`.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "recording_id": {
+      "description": "The recording.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "sender_identity": {
+      "description": "The sender's engine identity.",
+      "pattern": "^p_[a-z2-7]{26}$",
+      "type": "string"
+    },
+    "slot": {
+      "description": "`slot(epoch)`.",
+      "format": "uint8",
+      "maximum": 255,
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "call_id",
+    "recording_id",
+    "group_id",
+    "epoch",
+    "leaf",
+    "slot",
+    "sender_identity",
+    "enc",
+    "ct"
+  ],
+  "title": "Release",
+  "type": "object"
+}

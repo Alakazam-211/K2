@@ -1,0 +1,41 @@
+{
+  "$defs": {
+    "KeyPackageRefItem": {
+      "description": "One uploaded KeyPackage's single-use ref.",
+      "properties": {
+        "expires_at_ms": {
+          "description": "When the ref expires (unix ms).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "key_package_ref": {
+          "description": "RFC 9420 `KeyPackageRef` (`KeyPackage::hash_ref`, 32 bytes).",
+          "pattern": "^[A-Za-z0-9_-]*$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key_package_ref",
+        "expires_at_ms"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "K16 answer: one item per package, in request order.",
+  "properties": {
+    "items": {
+      "description": "The refs.",
+      "items": {
+        "$ref": "#/$defs/KeyPackageRefItem"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "items"
+  ],
+  "title": "KeyPackageUploadResponse",
+  "type": "object"
+}

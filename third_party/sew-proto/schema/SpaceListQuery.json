@@ -1,0 +1,59 @@
+{
+  "$defs": {
+    "SpaceListScope": {
+      "description": "Which spaces `GET /api/v1/spaces` lists.",
+      "oneOf": [
+        {
+          "const": "mine",
+          "description": "Spaces the caller belongs to (the default).",
+          "type": "string"
+        },
+        {
+          "const": "joinable",
+          "description": "Open spaces the caller is not in (empty for guests).",
+          "type": "string"
+        },
+        {
+          "const": "all",
+          "description": "Every space (install owners and admins only).",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Query of `GET /api/v1/spaces`: ordered by id ascending with an `after` cursor.",
+  "properties": {
+    "after": {
+      "description": "Spaces with a larger id.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "limit": {
+      "description": "Page size, 1–100 (default 50).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "scope": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SpaceListScope"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Which spaces; default `mine`."
+    }
+  },
+  "title": "SpaceListQuery",
+  "type": "object"
+}

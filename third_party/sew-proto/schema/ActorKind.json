@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "What kind of principal acted.",
+  "oneOf": [
+    {
+      "const": "person",
+      "description": "A person member.",
+      "type": "string"
+    },
+    {
+      "const": "agent",
+      "description": "An agent member.",
+      "type": "string"
+    },
+    {
+      "const": "service",
+      "description": "The mgmt service (K2's daemon or the `sew` CLI).",
+      "type": "string"
+    },
+    {
+      "const": "system",
+      "description": "Sew itself (jobs).",
+      "type": "string"
+    }
+  ],
+  "title": "ActorKind"
+}

@@ -1,0 +1,161 @@
+{
+  "$defs": {
+    "CallStatsCandidate": {
+      "description": "The type of the local candidate of the selected ICE pair (F21; RFC 8445 §5.1.1).",
+      "oneOf": [
+        {
+          "const": "host",
+          "description": "A host address.",
+          "type": "string"
+        },
+        {
+          "const": "srflx",
+          "description": "A server-reflexive address (STUN).",
+          "type": "string"
+        },
+        {
+          "const": "prflx",
+          "description": "A peer-reflexive address.",
+          "type": "string"
+        },
+        {
+          "const": "relay",
+          "description": "A TURN relay.",
+          "type": "string"
+        }
+      ]
+    },
+    "CallStatsClient": {
+      "description": "The browser family of a call-stats sample (F21): the family only, never a version or a\nuser agent.",
+      "oneOf": [
+        {
+          "const": "chromium",
+          "description": "Chrome, Edge and other Chromium browsers.",
+          "type": "string"
+        },
+        {
+          "const": "firefox",
+          "description": "Firefox.",
+          "type": "string"
+        },
+        {
+          "const": "safari",
+          "description": "Safari (WebKit).",
+          "type": "string"
+        },
+        {
+          "const": "other",
+          "description": "Anything else.",
+          "type": "string"
+        }
+      ]
+    },
+    "CallStatsRelayProtocol": {
+      "description": "How the browser reaches its TURN relay (F21; `relay` candidates only).",
+      "oneOf": [
+        {
+          "const": "udp",
+          "description": "TURN over UDP.",
+          "type": "string"
+        },
+        {
+          "const": "tcp",
+          "description": "TURN over TCP.",
+          "type": "string"
+        },
+        {
+          "const": "tls",
+          "description": "TURN over TLS.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`POST /api/v1/me/voice/stats` body (F21, prd-meet-01 CC14): one aggregate, anonymous\nsample of this browser's call over the last `interval_ms`. It names no member, room,\nchannel, call, track, address, URL, key or SDP (unknown fields are refused); Sew adds it to\n`/metrics` families and keeps nothing per person or per call.",
+  "properties": {
+    "candidate": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CallStatsCandidate"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The local candidate type of the selected pair (absent before ICE selected one)."
+    },
+    "client": {
+      "$ref": "#/$defs/CallStatsClient",
+      "description": "The browser family."
+    },
+    "decrypt_failures": {
+      "description": "Frames that failed to decrypt in the window (E2EE).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "frames_decoded": {
+      "description": "Video frames decoded in the window, summed over received tracks.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "frames_dropped": {
+      "description": "Video frames dropped in the window (`framesDropped`).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "freeze_ms": {
+      "description": "Time frozen in the window, ms (`totalFreezesDuration`).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "freezes": {
+      "description": "Video freezes in the window (`freezeCount`).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "interval_ms": {
+      "description": "The window the counts cover, ms (1..=120,000).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "relay_protocol": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CallStatsRelayProtocol"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The relay protocol (`relay` only)."
+    },
+    "rtt_ms": {
+      "description": "The selected pair's current round-trip time, ms (absent when unknown).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "interval_ms",
+    "client",
+    "frames_decoded",
+    "frames_dropped",
+    "freezes",
+    "freeze_ms",
+    "decrypt_failures"
+  ],
+  "title": "CallStatsSample",
+  "type": "object"
+}

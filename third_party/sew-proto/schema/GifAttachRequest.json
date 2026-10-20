@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /api/v1/channels/{id}/gifs/attach`. The server fetches the GIF itself; a\nclient never sends a media URL.",
+  "properties": {
+    "id": {
+      "description": "A result's `id`.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "title": "GifAttachRequest",
+  "type": "object"
+}

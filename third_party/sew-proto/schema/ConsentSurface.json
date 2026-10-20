@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Where the person answered (§9.10). Stored in `recording_participants.surface`.",
+  "oneOf": [
+    {
+      "const": "modal",
+      "description": "The blocking modal before joining.",
+      "type": "string"
+    },
+    {
+      "const": "prompt",
+      "description": "The in-room prompt.",
+      "type": "string"
+    },
+    {
+      "const": "start",
+      "description": "The starter's confirmation before `start`.",
+      "type": "string"
+    }
+  ],
+  "title": "ConsentSurface"
+}

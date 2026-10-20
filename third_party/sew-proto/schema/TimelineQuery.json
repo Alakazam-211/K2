@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Query of `GET /api/v1/channels/{id}/messages` and `GET /api/v1/messages/{root_id}/replies`:\na [`PageQuery`](crate::http::PageQuery) plus an optional long-poll (contracts rev 31, S30\nG3). With `after` and `wait_ms`, an empty page waits up to `wait_ms` (0–25,000) for a new\nmessage and reads again.",
+  "properties": {
+    "after": {
+      "description": "Items newer than this id.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "around": {
+      "description": "Items around this id.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "before": {
+      "description": "Items older than this id.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "limit": {
+      "description": "Page size, 1–100 (default 50).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "wait_ms": {
+      "description": "Long-poll: wait up to this long for a message when the `after` page is empty.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    }
+  },
+  "title": "TimelineQuery",
+  "type": "object"
+}

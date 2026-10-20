@@ -1,0 +1,207 @@
+{
+  "$defs": {
+    "ReportDetails": {
+      "additionalProperties": false,
+      "description": "K10 `details` (≤ 256 bytes of JSON; S51 §13.6). Every field is optional; strings ≤ 64 bytes.",
+      "properties": {
+        "attempts": {
+          "description": "Re-apply attempts.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "expected_slot": {
+          "description": "The slot the sender should be on.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "failures": {
+          "description": "Failed decrypts counted.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "missing_index": {
+          "description": "The key index a receiver missed.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "observed_slot": {
+          "description": "The slot the reporter saw.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "reason": {
+          "description": "A short reason (`missing_key`, `invalid_key`, …).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sdk": {
+          "description": "The reporter's SDK family.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sdk_version": {
+          "description": "The reporter's SDK version.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "since_ms": {
+          "description": "For how long the condition held.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ReportKind": {
+      "description": "What a K10 report is about (S50 §9.1, S51 §12.1).",
+      "oneOf": [
+        {
+          "const": "leaf_without_voice_state",
+          "description": "A leaf whose member has no voice state in the channel.",
+          "type": "string"
+        },
+        {
+          "const": "duplicate_member",
+          "description": "Two leaves of one member outside a swap.",
+          "type": "string"
+        },
+        {
+          "const": "engine_participant_without_leaf",
+          "description": "An engine participant with no leaf past 5 s.",
+          "type": "string"
+        },
+        {
+          "const": "external_sender_mismatch",
+          "description": "The group's external sender differs from READY's.",
+          "type": "string"
+        },
+        {
+          "const": "ca_changed",
+          "description": "The CA key differs from the pinned one.",
+          "type": "string"
+        },
+        {
+          "const": "leaf_binding_invalid",
+          "description": "A binding table failed the client's checks.",
+          "type": "string"
+        },
+        {
+          "const": "scope_invalid",
+          "description": "A leaf's credential scope is empty or differs from the call's (S51 G35).",
+          "type": "string"
+        },
+        {
+          "const": "sender_index_stuck",
+          "description": "The reporter's own sender stays on a stale slot after one re-apply.",
+          "type": "string"
+        },
+        {
+          "const": "peer_undecryptable",
+          "description": "Another leaf's frames do not decrypt (quorum only).",
+          "type": "string"
+        },
+        {
+          "const": "engine_unencrypted_track",
+          "description": "A bridge saw an unencrypted track from the engine.",
+          "type": "string"
+        },
+        {
+          "const": "engine_sif_trailer",
+          "description": "A bridge saw a non-empty `sif_trailer` from the engine.",
+          "type": "string"
+        },
+        {
+          "const": "engine_encryption_downgrade",
+          "description": "A bridge saw an encryption downgrade from the engine.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "K10 body: a ghost-member, slot or engine report (S50 §16.4, §12.10).",
+  "properties": {
+    "details": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ReportDetails"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Optional details."
+    },
+    "epoch": {
+      "description": "The reporter's epoch.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "group_id": {
+      "description": "The group the reporter holds.",
+      "pattern": "^[A-Za-z0-9_-]*$",
+      "type": "string"
+    },
+    "join_id": {
+      "description": "The reporter's join id.",
+      "pattern": "^[0-9a-f]{32}$",
+      "type": "string"
+    },
+    "kind": {
+      "$ref": "#/$defs/ReportKind",
+      "description": "What is reported."
+    },
+    "leaf": {
+      "description": "The leaf it is about (the reporter's own for `sender_index_stuck`).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "join_id",
+    "group_id",
+    "epoch",
+    "kind"
+  ],
+  "title": "KeyReportRequest",
+  "type": "object"
+}

@@ -1,0 +1,132 @@
+{
+  "$defs": {
+    "FileMode": {
+      "description": "Whether file bytes are in the archive.",
+      "oneOf": [
+        {
+          "const": "include",
+          "description": "`files/<file_id>` entries hold the plaintext bytes.",
+          "type": "string"
+        },
+        {
+          "const": "manifest_only",
+          "description": "Attachment records keep metadata only; no `files/` entries.",
+          "type": "string"
+        }
+      ]
+    },
+    "MemberMode": {
+      "description": "How a member target selects messages in eDiscovery (prd-sew-23 §9.1).",
+      "oneOf": [
+        {
+          "const": "conversations",
+          "description": "Everything the member wrote or could read (the legal-hold member rule).",
+          "type": "string"
+        },
+        {
+          "const": "authored",
+          "description": "Only what the member wrote.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /api/v1/compliance/exports` and `…/exports/estimate` (where `recipients` may\nbe empty).",
+  "properties": {
+    "audit": {
+      "description": "The audit subset (default `true`).",
+      "type": "boolean"
+    },
+    "channels": {
+      "description": "Channel targets.",
+      "items": {
+        "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+        "pattern": "^[1-9][0-9]{0,18}$",
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "files": {
+      "$ref": "#/$defs/FileMode",
+      "default": "include",
+      "description": "File bytes or metadata only (default `include`)."
+    },
+    "from": {
+      "description": "Window start (inclusive) of the request's own selector.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "holds": {
+      "description": "Legal holds whose targets and ranges join the scope (released holds allowed).",
+      "items": {
+        "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+        "pattern": "^[1-9][0-9]{0,18}$",
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "keywords": {
+      "description": "0–50 keywords, 1–200 characters each (NFKC, case-insensitive substrings).",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "label": {
+      "description": "1–100 characters of plaintext metadata. Never describe the case in it.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "member_mode": {
+      "$ref": "#/$defs/MemberMode",
+      "default": "conversations",
+      "description": "How member targets select (default `conversations`)."
+    },
+    "members": {
+      "description": "Member targets.",
+      "items": {
+        "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+        "pattern": "^[1-9][0-9]{0,18}$",
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "recipients": {
+      "description": "1–16 age X25519 recipients (`age1…`). The estimate route needs none.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "spaces": {
+      "description": "Space targets.",
+      "items": {
+        "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+        "pattern": "^[1-9][0-9]{0,18}$",
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "to": {
+      "description": "Window end (exclusive).",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "views": {
+      "description": "HTML and CSV views (default `true`).",
+      "type": "boolean"
+    }
+  },
+  "title": "CreateEdiscoveryRequest",
+  "type": "object"
+}

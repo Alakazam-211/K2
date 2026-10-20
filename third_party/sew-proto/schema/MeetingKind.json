@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "How a meeting started.",
+  "oneOf": [
+    {
+      "const": "instant",
+      "description": "Start now: `live` at create, planned for 60 minutes.",
+      "type": "string"
+    },
+    {
+      "const": "scheduled",
+      "description": "For later: `scheduled` until the first voice join.",
+      "type": "string"
+    }
+  ],
+  "title": "MeetingKind"
+}

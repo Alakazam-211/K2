@@ -1,0 +1,423 @@
+{
+  "$defs": {
+    "ArchiveOptions": {
+      "additionalProperties": false,
+      "description": "What an archive holds beyond records.",
+      "properties": {
+        "audit": {
+          "description": "Whether `audit.ndjson` is present.",
+          "type": "boolean"
+        },
+        "files": {
+          "$ref": "#/$defs/FileMode",
+          "description": "File bytes or metadata only."
+        },
+        "views": {
+          "description": "Whether `view/` (HTML and CSV) is present.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "files",
+        "views",
+        "audit"
+      ],
+      "type": "object"
+    },
+    "ArchiveScope": {
+      "additionalProperties": false,
+      "description": "An eDiscovery scope as recorded: ids, dates and a keyword count, never the keywords.",
+      "properties": {
+        "channels": {
+          "description": "Channel targets.",
+          "items": {
+            "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "from": {
+          "description": "Window start (inclusive) of the request's own selector.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "holds": {
+          "description": "Legal holds whose selectors joined the scope.",
+          "items": {
+            "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "keyword_count": {
+          "description": "How many keywords filtered the scope (the words never leave the request).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "label": {
+          "description": "The requester's label.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "member_mode": {
+          "$ref": "#/$defs/MemberMode",
+          "description": "How member targets select."
+        },
+        "members": {
+          "description": "Member targets.",
+          "items": {
+            "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "spaces": {
+          "description": "Space targets.",
+          "items": {
+            "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "to": {
+          "description": "Window end (exclusive).",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "member_mode",
+        "keyword_count"
+      ],
+      "type": "object"
+    },
+    "ExportError": {
+      "description": "Why an export failed or was cancelled (codes and reasons only, never content).",
+      "properties": {
+        "code": {
+          "description": "An error code (`storage_full`, `internal`, `invalid_state`, …).",
+          "type": "string"
+        },
+        "reason": {
+          "description": "The reason (`requester_revoked`, `storage_full`, `decrypt_failed`, …).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "ExportKind": {
+      "description": "What an archive is.",
+      "oneOf": [
+        {
+          "const": "full",
+          "description": "Everything, for a box move (mgmt only).",
+          "type": "string"
+        },
+        {
+          "const": "ediscovery",
+          "description": "A scoped compliance export.",
+          "type": "string"
+        }
+      ]
+    },
+    "ExportProgress": {
+      "description": "An export's progress, written at most every 2 s while it runs.",
+      "properties": {
+        "bytes_written": {
+          "default": 0,
+          "description": "Ciphertext bytes written.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "channels_done": {
+          "default": 0,
+          "description": "Channels written.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "channels_total": {
+          "default": 0,
+          "description": "Channels to write.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "files": {
+          "default": 0,
+          "description": "Files written.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "messages": {
+          "default": 0,
+          "description": "Messages written.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "phase": {
+          "description": "The phase (`snapshot`, `entities`, `messages`, `files`, `views`, `audit`, `finish`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ExportState": {
+      "description": "An export's lifecycle state.",
+      "oneOf": [
+        {
+          "const": "queued",
+          "description": "Waiting for the one export slot.",
+          "type": "string"
+        },
+        {
+          "const": "running",
+          "description": "Being written.",
+          "type": "string"
+        },
+        {
+          "const": "done",
+          "description": "The archive is ready for download.",
+          "type": "string"
+        },
+        {
+          "const": "failed",
+          "description": "It failed (`error` says why).",
+          "type": "string"
+        },
+        {
+          "const": "cancelled",
+          "description": "Cancelled (by a caller, or because the requester lost the flag).",
+          "type": "string"
+        },
+        {
+          "const": "expired",
+          "description": "The archive passed `export.keep_days` and was deleted.",
+          "type": "string"
+        },
+        {
+          "const": "deleted",
+          "description": "The archive was deleted by a caller.",
+          "type": "string"
+        }
+      ]
+    },
+    "FileMode": {
+      "description": "Whether file bytes are in the archive.",
+      "oneOf": [
+        {
+          "const": "include",
+          "description": "`files/<file_id>` entries hold the plaintext bytes.",
+          "type": "string"
+        },
+        {
+          "const": "manifest_only",
+          "description": "Attachment records keep metadata only; no `files/` entries.",
+          "type": "string"
+        }
+      ]
+    },
+    "MemberMode": {
+      "description": "How a member target selects messages in eDiscovery (prd-sew-23 §9.1).",
+      "oneOf": [
+        {
+          "const": "conversations",
+          "description": "Everything the member wrote or could read (the legal-hold member rule).",
+          "type": "string"
+        },
+        {
+          "const": "authored",
+          "description": "Only what the member wrote.",
+          "type": "string"
+        }
+      ]
+    },
+    "RequestedVia": {
+      "description": "Who requested an export.",
+      "oneOf": [
+        {
+          "const": "member",
+          "description": "A compliance-flag holder through the client API.",
+          "type": "string"
+        },
+        {
+          "const": "service",
+          "description": "The mgmt service (K2's daemon, the `sew` CLI).",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "An export (full or eDiscovery). `id` is also its job id.",
+  "properties": {
+    "archive_bytes": {
+      "description": "The archive's size, once done.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "archive_sha256": {
+      "description": "SHA-256 of the archive file (ciphertext), 64 hex.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "counts": {
+      "additionalProperties": {
+        "format": "uint64",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "description": "Records per entity.",
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "created_at": {
+      "description": "Requested.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "error": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ExportError"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Why it failed or was cancelled."
+    },
+    "expires_at": {
+      "description": "When the archive is deleted.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "finished_at": {
+      "description": "Finished.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "id": {
+      "description": "The export id (= the `export` job id).",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "kind": {
+      "$ref": "#/$defs/ExportKind",
+      "description": "Full or eDiscovery."
+    },
+    "label": {
+      "description": "The requester's label.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "options": {
+      "$ref": "#/$defs/ArchiveOptions",
+      "description": "Files, views, audit."
+    },
+    "progress": {
+      "$ref": "#/$defs/ExportProgress",
+      "description": "Progress."
+    },
+    "recipients": {
+      "description": "The age recipients (request plus operator escrow recipients).",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "requested_by": {
+      "description": "The requesting member (absent for the mgmt service).",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "requested_via": {
+      "$ref": "#/$defs/RequestedVia",
+      "description": "Member or service."
+    },
+    "root_hash": {
+      "description": "The trailer's root hash, 64 hex.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "scope": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ArchiveScope"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The eDiscovery scope (ids, dates, keyword count)."
+    },
+    "started_at": {
+      "description": "Started.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "state": {
+      "$ref": "#/$defs/ExportState",
+      "description": "State."
+    }
+  },
+  "required": [
+    "id",
+    "kind",
+    "state",
+    "requested_via",
+    "options",
+    "recipients",
+    "progress",
+    "created_at"
+  ],
+  "title": "Export",
+  "type": "object"
+}

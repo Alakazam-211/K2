@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Response to `POST /api/v1/channels/{id}/uploads`.",
+  "properties": {
+    "chunk_size": {
+      "description": "Data requests end on a multiple of this (except the last).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "committed_bytes": {
+      "description": "Bytes stored so far.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "complete": {
+      "description": "All bytes arrived and the upload is finalized.",
+      "type": "boolean"
+    },
+    "expires_at": {
+      "description": "When the unattached upload expires (24 h).",
+      "format": "date-time",
+      "type": "string"
+    },
+    "size": {
+      "description": "The declared size.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "upload_id": {
+      "description": "The upload id (= the future attachment id).",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "upload_url": {
+      "description": "The signed data URL: `POST` chunks, `GET` the committed offset. No Bearer.",
+      "type": "string"
+    },
+    "url_expires_at": {
+      "description": "When `upload_url` stops working (55–60 min); `GET /uploads/{id}` issues a fresh one.",
+      "format": "date-time",
+      "type": "string"
+    }
+  },
+  "required": [
+    "upload_id",
+    "upload_url",
+    "url_expires_at",
+    "chunk_size",
+    "committed_bytes",
+    "size",
+    "complete",
+    "expires_at"
+  ],
+  "title": "CreateUploadResponse",
+  "type": "object"
+}

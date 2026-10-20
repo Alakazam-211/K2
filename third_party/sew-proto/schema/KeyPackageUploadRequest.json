@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "K16 body: 1–2 KeyPackages uploaded before any join (rev 78 D2).",
+  "properties": {
+    "key_packages": {
+      "description": "TLS `MLSMessage(KeyPackage)` each.",
+      "items": {
+        "description": "Bytes as base64url without padding (RFC 4648 §5); canonical trailing bits.",
+        "pattern": "^[A-Za-z0-9_-]*$",
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "key_packages"
+  ],
+  "title": "KeyPackageUploadRequest",
+  "type": "object"
+}

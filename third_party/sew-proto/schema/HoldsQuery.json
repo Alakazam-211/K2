@@ -1,0 +1,59 @@
+{
+  "$defs": {
+    "HoldStateFilter": {
+      "description": "`GET …/holds?state=`.",
+      "oneOf": [
+        {
+          "const": "active",
+          "description": "Unreleased holds.",
+          "type": "string"
+        },
+        {
+          "const": "released",
+          "description": "Released holds.",
+          "type": "string"
+        },
+        {
+          "const": "all",
+          "description": "Every hold.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Query of `GET /api/v1/compliance/holds` (newest first).",
+  "properties": {
+    "before": {
+      "description": "Holds older than this id.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "limit": {
+      "description": "Page size, 1–100 (default 50).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "state": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/HoldStateFilter"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Which holds (default `all`)."
+    }
+  },
+  "title": "HoldsQuery",
+  "type": "object"
+}

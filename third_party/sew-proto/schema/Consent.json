@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "What a participant said to the recording notice (§9.2). Stored in\n`recording_participants.consent`.",
+  "oneOf": [
+    {
+      "const": "pending",
+      "description": "In the room, has not answered.",
+      "type": "string"
+    },
+    {
+      "const": "granted",
+      "description": "Agreed.",
+      "type": "string"
+    },
+    {
+      "const": "declined",
+      "description": "Refused; stays in the room unrecorded (unless declining means not joining).",
+      "type": "string"
+    },
+    {
+      "const": "withdrawn",
+      "description": "Agreed earlier, then withdrew.",
+      "type": "string"
+    }
+  ],
+  "title": "Consent"
+}

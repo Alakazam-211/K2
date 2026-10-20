@@ -1,0 +1,56 @@
+{
+  "$defs": {
+    "ChannelMember": {
+      "description": "A channel membership row.",
+      "properties": {
+        "channel_id": {
+          "description": "The channel.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "joined_at": {
+          "description": "When they joined.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "member_id": {
+          "description": "The member.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "channel_id",
+        "member_id",
+        "joined_at"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Response of `POST /api/v1/channels/{id}/members/add`.",
+  "properties": {
+    "added": {
+      "description": "The memberships created.",
+      "items": {
+        "$ref": "#/$defs/ChannelMember"
+      },
+      "type": "array"
+    },
+    "already": {
+      "description": "Ids that already were members.",
+      "items": {
+        "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+        "pattern": "^[1-9][0-9]{0,18}$",
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "added",
+    "already"
+  ],
+  "title": "AddChannelMembersResponse",
+  "type": "object"
+}

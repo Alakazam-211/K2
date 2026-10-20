@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A recording's lifecycle state (§8.5). Stored in `recordings.state`.",
+  "oneOf": [
+    {
+      "const": "starting",
+      "description": "Admitting and certifying the recorder.",
+      "type": "string"
+    },
+    {
+      "const": "recording",
+      "description": "The recorder joined.",
+      "type": "string"
+    },
+    {
+      "const": "stopping",
+      "description": "Draining the recorder.",
+      "type": "string"
+    },
+    {
+      "const": "stopped",
+      "description": "Over.",
+      "type": "string"
+    }
+  ],
+  "title": "RecordingState"
+}

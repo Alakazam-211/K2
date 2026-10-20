@@ -1,0 +1,631 @@
+{
+  "$defs": {
+    "AudioState": {
+      "description": "The recording's audio (§12). Stored in `recordings.audio_state`.",
+      "oneOf": [
+        {
+          "const": "available",
+          "description": "Kept.",
+          "type": "string"
+        },
+        {
+          "const": "expired",
+          "description": "Hidden; links may still exist (held or not yet purged).",
+          "type": "string"
+        },
+        {
+          "const": "purged",
+          "description": "Every link deleted; the content key is gone.",
+          "type": "string"
+        }
+      ]
+    },
+    "Delivery": {
+      "description": "One agent delivery: a `notification` entry of the agent's member log.",
+      "properties": {
+        "at": {
+          "description": "When it was written.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "message": {
+          "$ref": "#/$defs/DeliveryMessage",
+          "description": "The message."
+        },
+        "reason": {
+          "$ref": "#/$defs/NotificationReason",
+          "description": "Why the agent was notified."
+        },
+        "seq": {
+          "description": "The member seq.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "seq",
+        "at",
+        "reason",
+        "message"
+      ],
+      "type": "object"
+    },
+    "DeliveryCall": {
+      "description": "A call record's summary in a delivery (`kind = call_record`; contracts rev 36 G3).",
+      "properties": {
+        "duration_ms": {
+          "description": "How long it lasted.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "missed": {
+          "description": "The call was missed.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "missed"
+      ],
+      "type": "object"
+    },
+    "DeliveryKind": {
+      "description": "What kind of message a delivery carries (contracts rev 36 G3). v1 sends `text` only;\n`Unknown` renders as text.",
+      "oneOf": [
+        {
+          "const": "text",
+          "description": "A chat message.",
+          "type": "string"
+        },
+        {
+          "const": "call_record",
+          "description": "A DM call record (S34).",
+          "type": "string"
+        },
+        {
+          "const": "poll",
+          "description": "A poll (S17).",
+          "type": "string"
+        },
+        {
+          "const": "transcript",
+          "description": "A call transcript (S35).",
+          "type": "string"
+        }
+      ]
+    },
+    "DeliveryMessage": {
+      "description": "A message summary in an agent delivery.",
+      "properties": {
+        "addr": {
+          "description": "The message's conversation address (the thread address for replies).",
+          "maxLength": 256,
+          "type": "string"
+        },
+        "attachment_count": {
+          "default": 0,
+          "description": "How many attachments the message has.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "author_display_name": {
+          "description": "The author's current display name (also for deactivated authors).",
+          "type": "string"
+        },
+        "author_id": {
+          "description": "The author.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "author_kind": {
+          "$ref": "#/$defs/MemberKind",
+          "description": "Person or agent."
+        },
+        "author_username": {
+          "description": "The author's current username (contracts rev 36 G4).",
+          "pattern": "^[a-z0-9_-]{2,64}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "body": {
+          "description": "The current body (after edits), cut to 4,000 bytes at a char boundary.",
+          "type": "string"
+        },
+        "body_truncated": {
+          "default": false,
+          "description": "Whether `body` was cut.",
+          "type": "boolean"
+        },
+        "call": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DeliveryCall"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A call record's summary (`kind = call_record` only)."
+        },
+        "channel_id": {
+          "description": "Its channel.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "created_at": {
+          "description": "When it was posted.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "id": {
+          "description": "The message.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/DeliveryKind",
+          "default": "text",
+          "description": "What kind of message it is (contracts rev 36 G3)."
+        },
+        "on_behalf_of": {
+          "description": "For assistant-authored messages: the person the assistant posted for.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "on_behalf_of_display_name": {
+          "description": "That person's current display name (contracts rev 36 G4).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "place": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DeliveryPlace"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Where the message lives from the agent's side (contracts rev 36 G5)."
+        },
+        "recording": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RecordingSummary"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A recording record's summary (`kind = transcript` only, S35 v2 §17.2). Never audio."
+        },
+        "reply_addr": {
+          "description": "Where a reply goes (contracts rev 31): `<channel addr>/<message id>` for a top-level\nspace message, the thread address for replies, the DM address for DMs. Absent for\n`place = person_dm` (the assistant may not post there).",
+          "maxLength": 256,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "space_id": {
+          "description": "Its space; absent for DMs.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "thread_root_id": {
+          "description": "Its thread root, for replies.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "channel_id",
+        "author_id",
+        "author_display_name",
+        "author_kind",
+        "addr",
+        "body",
+        "created_at"
+      ],
+      "type": "object"
+    },
+    "DeliveryPlace": {
+      "description": "Where a delivered message lives, from the agent's side (contracts rev 36 G5).",
+      "oneOf": [
+        {
+          "const": "space_channel",
+          "description": "A space channel.",
+          "type": "string"
+        },
+        {
+          "const": "dm",
+          "description": "A 1:1 DM the agent is in.",
+          "type": "string"
+        },
+        {
+          "const": "group_dm",
+          "description": "A group DM the agent is in.",
+          "type": "string"
+        },
+        {
+          "const": "person_dm",
+          "description": "A DM or group DM of an assistant's person, read (never posted to) by the assistant.",
+          "type": "string"
+        }
+      ]
+    },
+    "MemberKind": {
+      "description": "Whether a member is a person or an agent.",
+      "oneOf": [
+        {
+          "const": "person",
+          "description": "A human.",
+          "type": "string"
+        },
+        {
+          "const": "agent",
+          "description": "A K2 agent.",
+          "type": "string"
+        }
+      ]
+    },
+    "NotificationReason": {
+      "description": "Why a member was notified; stored in `member_changes.entity_id` for kind `notification`\n(gap G16).",
+      "oneOf": [
+        {
+          "const": "mention",
+          "description": "A direct `@member` mention.",
+          "type": "string"
+        },
+        {
+          "const": "role_mention",
+          "description": "A role mention.",
+          "type": "string"
+        },
+        {
+          "const": "group_mention",
+          "description": "A user-group mention.",
+          "type": "string"
+        },
+        {
+          "const": "channel_mention",
+          "description": "`@channel` (or an alias).",
+          "type": "string"
+        },
+        {
+          "const": "here_mention",
+          "description": "`@here`.",
+          "type": "string"
+        },
+        {
+          "const": "dm",
+          "description": "A DM or group DM message.",
+          "type": "string"
+        },
+        {
+          "const": "thread_reply",
+          "description": "A reply in a followed thread.",
+          "type": "string"
+        },
+        {
+          "const": "keyword",
+          "description": "A keyword match.",
+          "type": "string"
+        },
+        {
+          "const": "all_messages",
+          "description": "Notify-on-all-messages.",
+          "type": "string"
+        },
+        {
+          "const": "reminder",
+          "description": "A reminder came due (contracts rev 26).",
+          "type": "string"
+        },
+        {
+          "const": "call_missed",
+          "description": "A missed DM call (contracts rev 32).",
+          "type": "string"
+        },
+        {
+          "const": "transcript_ready",
+          "description": "A call transcript is ready (contracts rev 38).",
+          "type": "string"
+        }
+      ]
+    },
+    "RecordingSummary": {
+      "description": "`Message.recording` on the record message (§15.1).",
+      "properties": {
+        "audio": {
+          "$ref": "#/$defs/SummaryAudio",
+          "description": "The audio."
+        },
+        "auto": {
+          "description": "Auto-started.",
+          "type": "boolean"
+        },
+        "duration_ms": {
+          "description": "`stopped_at − started_at` once stopped.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "e2ee": {
+          "description": "Always `true` in v2: every call is end-to-end encrypted.",
+          "type": "boolean"
+        },
+        "recording_id": {
+          "description": "The recording.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "speaker_ids": {
+          "description": "Members whose speech was stored, ascending.",
+          "items": {
+            "description": "A Sew id: a decimal string of a 64-bit time-sortable id (1 to 9223372036854775807).",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "started_at": {
+          "description": "When.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "started_by": {
+          "description": "Who started it.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "stop_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StopReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why."
+        },
+        "stopped_at": {
+          "description": "When it stopped.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "transcript": {
+          "$ref": "#/$defs/SummaryTranscript",
+          "description": "The transcript."
+        }
+      },
+      "required": [
+        "recording_id",
+        "started_by",
+        "started_at",
+        "auto",
+        "speaker_ids",
+        "audio",
+        "transcript",
+        "e2ee"
+      ],
+      "type": "object"
+    },
+    "StopReason": {
+      "description": "Why a recording stopped (§8.5). Stored in `recordings.stop_reason`.",
+      "oneOf": [
+        {
+          "const": "stopped",
+          "description": "The stop route.",
+          "type": "string"
+        },
+        {
+          "const": "room_empty",
+          "description": "No standard voice entries left in the room.",
+          "type": "string"
+        },
+        {
+          "const": "call_ended",
+          "description": "The DM call ended.",
+          "type": "string"
+        },
+        {
+          "const": "max_duration",
+          "description": "`recording.max_duration_ms` reached.",
+          "type": "string"
+        },
+        {
+          "const": "recorder_failed",
+          "description": "The recorder failed (join timeout, certificate, unreachable, too many rejoins).",
+          "type": "string"
+        },
+        {
+          "const": "media_restarted",
+          "description": "The engine room was lost beyond the re-admit grace.",
+          "type": "string"
+        },
+        {
+          "const": "storage_full",
+          "description": "Three consecutive `storage_full` segment writes.",
+          "type": "string"
+        },
+        {
+          "const": "disabled",
+          "description": "Recording was disabled (policy, config, archive, `sew recording disable`).",
+          "type": "string"
+        },
+        {
+          "const": "max_bytes",
+          "description": "`recording.max_bytes` reached.",
+          "type": "string"
+        }
+      ]
+    },
+    "SummaryAudio": {
+      "description": "The audio part of a [`RecordingSummary`].",
+      "properties": {
+        "expires_at": {
+          "description": "When it expires (set at transcript final).",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "keep_days": {
+          "description": "Keep days.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mixed": {
+          "description": "A mixed file is (or will be) made.",
+          "type": "boolean"
+        },
+        "state": {
+          "$ref": "#/$defs/AudioState",
+          "description": "Its state."
+        }
+      },
+      "required": [
+        "state",
+        "mixed",
+        "keep_days"
+      ],
+      "type": "object"
+    },
+    "SummaryTranscript": {
+      "description": "The transcript part of a [`RecordingSummary`].",
+      "properties": {
+        "gaps_ms": {
+          "description": "Total gap time.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "lang": {
+          "description": "The majority language of the turns.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/TranscriptState",
+          "description": "Its state."
+        },
+        "turns": {
+          "description": "Turns posted.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "state",
+        "turns",
+        "gaps_ms"
+      ],
+      "type": "object"
+    },
+    "TranscriptState": {
+      "description": "The transcript (§14.5). Stored in `recordings.transcript_state`.",
+      "oneOf": [
+        {
+          "const": "pending",
+          "description": "No segment transcribed yet.",
+          "type": "string"
+        },
+        {
+          "const": "running",
+          "description": "Turns are being posted.",
+          "type": "string"
+        },
+        {
+          "const": "done",
+          "description": "Final, complete.",
+          "type": "string"
+        },
+        {
+          "const": "partial",
+          "description": "Final, with gaps or failed segments.",
+          "type": "string"
+        },
+        {
+          "const": "failed",
+          "description": "Final, no turn posted and at least one segment failed.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Response of `GET /mgmt/v1/agents/{member_id}/deliveries`.",
+  "properties": {
+    "entries": {
+      "description": "Deliveries with `seq > after`, oldest first. Entries the agent cannot read now are\nskipped without a trace.",
+      "items": {
+        "$ref": "#/$defs/Delivery"
+      },
+      "type": "array"
+    },
+    "has_more": {
+      "description": "Whether more entries follow `next_after`.",
+      "type": "boolean"
+    },
+    "head": {
+      "description": "The member log head.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "next_after": {
+      "default": 0,
+      "description": "The next `after`: the seq of the last row scanned (delivered or skipped), `after` when\nnothing was scanned, `head` after an empty long-poll (S9 §6.11, additive).",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "sync_epoch": {
+      "description": "The install's `sync_epoch` (opaque; changes on restore; contracts revs 7, 36).",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "entries",
+    "head",
+    "has_more"
+  ],
+  "title": "DeliveriesPage",
+  "type": "object"
+}

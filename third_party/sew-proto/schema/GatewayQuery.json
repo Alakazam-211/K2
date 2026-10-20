@@ -1,0 +1,56 @@
+{
+  "$defs": {
+    "Compression": {
+      "description": "Gateway transport compression.",
+      "oneOf": [
+        {
+          "const": "zstd-stream",
+          "description": "One zstd context per connection; server frames are binary flushed zstd blocks.",
+          "type": "string"
+        }
+      ]
+    },
+    "Encoding": {
+      "description": "Gateway payload encoding; only `json` in v1.",
+      "oneOf": [
+        {
+          "const": "json",
+          "description": "JSON text frames.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Query of `GET /api/v1/gateway`. Any other `v` closes with 4012.",
+  "properties": {
+    "compress": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Compression"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Optional transport compression."
+    },
+    "encoding": {
+      "$ref": "#/$defs/Encoding",
+      "description": "Payload encoding; must be `json`."
+    },
+    "v": {
+      "description": "Protocol version; must be 1.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "v",
+    "encoding"
+  ],
+  "title": "GatewayQuery",
+  "type": "object"
+}

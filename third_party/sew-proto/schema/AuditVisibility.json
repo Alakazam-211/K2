@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Who may read an audit row (prd-sew-23 §7.1). Every [`Action`] has one\n([`Action::visibility`]); a test fails if one is missing.",
+  "oneOf": [
+    {
+      "const": "space",
+      "description": "Rows of one space: `VIEW_AUDIT_LOG` there, the install owner, compliance, service.",
+      "type": "string"
+    },
+    {
+      "const": "install",
+      "description": "Install-level rows: the install owner, compliance, service.",
+      "type": "string"
+    },
+    {
+      "const": "sealed",
+      "description": "Legal holds, retention, eDiscovery, compliance reads, flag changes, audit reads:\ncompliance-flag holders and the mgmt service only. An owner without the flag cannot\nlearn that a hold or an investigation exists.",
+      "type": "string"
+    }
+  ],
+  "title": "AuditVisibility"
+}

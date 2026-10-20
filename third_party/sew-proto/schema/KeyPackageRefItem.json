@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "One uploaded KeyPackage's single-use ref.",
+  "properties": {
+    "expires_at_ms": {
+      "description": "When the ref expires (unix ms).",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "key_package_ref": {
+      "description": "RFC 9420 `KeyPackageRef` (`KeyPackage::hash_ref`, 32 bytes).",
+      "pattern": "^[A-Za-z0-9_-]*$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "key_package_ref",
+    "expires_at_ms"
+  ],
+  "title": "KeyPackageRefItem",
+  "type": "object"
+}

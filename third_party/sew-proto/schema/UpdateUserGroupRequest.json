@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /api/v1/groups/{id}/update`. At least one field.",
+  "properties": {
+    "description": {
+      "description": "Set or clear the description.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "handle": {
+      "description": "A new handle.",
+      "pattern": "^[a-z0-9_-]{2,64}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "mentionable": {
+      "description": "Mentionable.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "name": {
+      "description": "A new name.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "title": "UpdateUserGroupRequest",
+  "type": "object"
+}

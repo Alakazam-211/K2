@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Why a member was notified; stored in `member_changes.entity_id` for kind `notification`\n(gap G16).",
+  "oneOf": [
+    {
+      "const": "mention",
+      "description": "A direct `@member` mention.",
+      "type": "string"
+    },
+    {
+      "const": "role_mention",
+      "description": "A role mention.",
+      "type": "string"
+    },
+    {
+      "const": "group_mention",
+      "description": "A user-group mention.",
+      "type": "string"
+    },
+    {
+      "const": "channel_mention",
+      "description": "`@channel` (or an alias).",
+      "type": "string"
+    },
+    {
+      "const": "here_mention",
+      "description": "`@here`.",
+      "type": "string"
+    },
+    {
+      "const": "dm",
+      "description": "A DM or group DM message.",
+      "type": "string"
+    },
+    {
+      "const": "thread_reply",
+      "description": "A reply in a followed thread.",
+      "type": "string"
+    },
+    {
+      "const": "keyword",
+      "description": "A keyword match.",
+      "type": "string"
+    },
+    {
+      "const": "all_messages",
+      "description": "Notify-on-all-messages.",
+      "type": "string"
+    },
+    {
+      "const": "reminder",
+      "description": "A reminder came due (contracts rev 26).",
+      "type": "string"
+    },
+    {
+      "const": "call_missed",
+      "description": "A missed DM call (contracts rev 32).",
+      "type": "string"
+    },
+    {
+      "const": "transcript_ready",
+      "description": "A call transcript is ready (contracts rev 38).",
+      "type": "string"
+    }
+  ],
+  "title": "NotificationReason"
+}

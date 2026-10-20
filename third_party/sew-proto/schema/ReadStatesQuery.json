@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Query of `GET /api/v1/me/read_states`.",
+  "properties": {
+    "channel_ids": {
+      "description": "1–100 channel ids; absent = every channel of the caller's sync set.",
+      "pattern": "^[1-9][0-9]{0,18}(,[1-9][0-9]{0,18}){0,99}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "title": "ReadStatesQuery",
+  "type": "object"
+}

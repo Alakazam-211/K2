@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "What a compliance download covers (§19.4). Stored in `recording_downloads.what`.",
+  "oneOf": [
+    {
+      "const": "mixed",
+      "description": "The mixed parts.",
+      "type": "string"
+    },
+    {
+      "const": "segments",
+      "description": "The per-speaker segments.",
+      "type": "string"
+    },
+    {
+      "const": "both",
+      "description": "Both.",
+      "type": "string"
+    }
+  ],
+  "title": "DownloadWhat"
+}

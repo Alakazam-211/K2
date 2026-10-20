@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /mgmt/v1/spaces/create` (SW11).",
+  "properties": {
+    "app_id": {
+      "description": "The App the Space belongs to (SW13); absent for a Space of K2's own.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "hidden": {
+      "description": "Meet MC1 (CC4): a hidden Space, left out of `GET /spaces`, browse, the directory and\n(without the `hidden_spaces` capability) READY. Set at create only. Default `false`.",
+      "type": "boolean"
+    },
+    "managers": {
+      "description": "0–10 distinct members who join and hold the manager role (persons or coworker agents,\nnot the owner).",
+      "items": {
+        "description": "An external identity: k2:principal:<uuid>, k2:workspace:<uuid>, k2:connect:<uuid>, k2:owner, local:<handle> or link:<channel_id>:<base32> (a meeting link guest).",
+        "maxLength": 128,
+        "pattern": "^(k2:(principal|workspace|connect):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|k2:owner|local:[a-z0-9_-]{2,64}|link:[1-9][0-9]{0,18}:[A-Z2-7]{16})$",
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "name": {
+      "description": "The name, 1–100 characters.",
+      "type": "string"
+    },
+    "owner": {
+      "description": "The owner: `k2:owner` or a person (never an agent).",
+      "maxLength": 128,
+      "pattern": "^(k2:(principal|workspace|connect):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|k2:owner|local:[a-z0-9_-]{2,64}|link:[1-9][0-9]{0,18}:[A-Z2-7]{16})$",
+      "type": "string"
+    },
+    "slug": {
+      "description": "The slug; `dm` is reserved. The idempotency key of the create.",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,79}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "slug",
+    "name",
+    "owner"
+  ],
+  "title": "MgmtSpaceCreateRequest",
+  "type": "object"
+}

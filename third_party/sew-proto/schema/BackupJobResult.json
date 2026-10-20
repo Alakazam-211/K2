@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "`JobStatus.result` of a succeeded `backup` job.",
+  "properties": {
+    "bytes": {
+      "description": "Dump and blob bytes.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "copied": {
+      "description": "Blob files copied.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "duration_ms": {
+      "description": "Wall time.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "id": {
+      "description": "The new bundle's id.",
+      "type": "string"
+    },
+    "linked": {
+      "description": "Blob files hard-linked.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "pruned": {
+      "description": "Bundle ids retention pruned afterwards.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "id",
+    "bytes",
+    "duration_ms",
+    "linked",
+    "copied"
+  ],
+  "title": "BackupJobResult",
+  "type": "object"
+}

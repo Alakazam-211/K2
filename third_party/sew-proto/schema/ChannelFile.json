@@ -1,0 +1,187 @@
+{
+  "$defs": {
+    "Attachment": {
+      "description": "A file attached to a message.\n\n`id` = the upload id = the attachment id (S15). URLs are signed, path-absolute and valid for\n55–60 minutes (`url_expires_at`); every render inside one 5-minute window gives the same\nstrings. `width`/`height` are the displayed size (after EXIF orientation) of an image or the\nposter frame of a video.",
+      "properties": {
+        "animated": {
+          "default": false,
+          "description": "An animated GIF or WebP.",
+          "type": "boolean"
+        },
+        "content_type": {
+          "description": "The stored (sniffed) MIME type, not the served one (S15 §10).",
+          "type": "string"
+        },
+        "filename": {
+          "description": "The file name.",
+          "type": "string"
+        },
+        "height": {
+          "description": "Image or video height in pixels.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "The attachment id.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "inline": {
+          "default": false,
+          "description": "Served `inline` (only sniffed image, video and audio types, S15 §10.4).",
+          "type": "boolean"
+        },
+        "kind": {
+          "$ref": "#/$defs/FileKind",
+          "default": "other",
+          "description": "The kind (S15; payloads from before S15 read as `other`)."
+        },
+        "media_pending": {
+          "default": false,
+          "description": "A thumbnail or poster is still being made; `attachments_updated` follows.",
+          "type": "boolean"
+        },
+        "poster_url": {
+          "description": "Signed poster-frame URL (videos, when the server has `ffmpeg`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "preview_url": {
+          "description": "Signed large-preview URL (images wider than 1,920 px, BMP, TIFF).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "size": {
+          "description": "Size in bytes.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "thumbnail_url": {
+          "description": "Signed thumbnail URL (images, and video posters).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "url": {
+          "description": "Signed download URL.",
+          "type": "string"
+        },
+        "url_expires_at": {
+          "description": "When the signed URLs stop working (S15; absent in payloads from before S15).",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "width": {
+          "description": "Image or video width in pixels.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "filename",
+        "content_type",
+        "size",
+        "url"
+      ],
+      "type": "object"
+    },
+    "FileKind": {
+      "description": "What a file is, from its sniffed content type (S15 §10).",
+      "oneOf": [
+        {
+          "const": "image",
+          "description": "A raster image (`image/*` from the magic table, or SVG).",
+          "type": "string"
+        },
+        {
+          "const": "video",
+          "description": "A video.",
+          "type": "string"
+        },
+        {
+          "const": "audio",
+          "description": "Audio.",
+          "type": "string"
+        },
+        {
+          "const": "document",
+          "description": "A document: PDF, text, office formats.",
+          "type": "string"
+        },
+        {
+          "const": "archive",
+          "description": "An archive: zip, gzip, 7z, rar.",
+          "type": "string"
+        },
+        {
+          "const": "other",
+          "description": "Anything else.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "One file in a channel: the attachment and where it lives.",
+  "properties": {
+    "attachment": {
+      "$ref": "#/$defs/Attachment",
+      "description": "The attachment, with fresh signed URLs."
+    },
+    "author_id": {
+      "description": "The message's author.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "channel_id": {
+      "description": "The channel.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "created_at": {
+      "description": "When the file was attached.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "message_id": {
+      "description": "The message it is attached to.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "thread_root_id": {
+      "description": "The thread root, for files on replies.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "attachment",
+    "message_id",
+    "channel_id",
+    "author_id",
+    "created_at"
+  ],
+  "title": "ChannelFile",
+  "type": "object"
+}

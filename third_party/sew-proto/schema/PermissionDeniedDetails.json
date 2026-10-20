@@ -1,0 +1,80 @@
+{
+  "$defs": {
+    "PermissionReason": {
+      "description": "`details.reason` of a `403 missing_permission` from the permission engine (S5 §11,\ngap G18).",
+      "oneOf": [
+        {
+          "const": "missing_permission",
+          "description": "A permission bit is missing; `details.missing` lists it.",
+          "type": "string"
+        },
+        {
+          "const": "unheld_bits",
+          "description": "The change touches bits the actor does not hold; `details.missing` lists them.",
+          "type": "string"
+        },
+        {
+          "const": "hierarchy",
+          "description": "The target is at or above the actor on the role ladder.",
+          "type": "string"
+        },
+        {
+          "const": "owner_immune",
+          "description": "The space owner cannot be the target.",
+          "type": "string"
+        },
+        {
+          "const": "owner_only",
+          "description": "Only the space owner may do this.",
+          "type": "string"
+        },
+        {
+          "const": "guest_limit",
+          "description": "Guests cannot do or receive this.",
+          "type": "string"
+        },
+        {
+          "const": "link_guest_limit",
+          "description": "A meeting link guest cannot do this (Meet MC2a: every route off the link-guest\nallowlist, before the handler).",
+          "type": "string"
+        },
+        {
+          "const": "agent_limit",
+          "description": "Agents cannot do or receive this.",
+          "type": "string"
+        },
+        {
+          "const": "install_role",
+          "description": "Needs an install role (owner, admin) or the compliance flag.",
+          "type": "string"
+        },
+        {
+          "const": "not_author",
+          "description": "Only the author may do this (S13: edits, edit history).",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Details of a `403 missing_permission` from the permission engine (gap G18).",
+  "properties": {
+    "missing": {
+      "description": "The missing bits, for `missing_permission` and `unheld_bits`.",
+      "pattern": "^(0|[1-9][0-9]{0,19})$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "reason": {
+      "$ref": "#/$defs/PermissionReason",
+      "description": "Why."
+    }
+  },
+  "required": [
+    "reason"
+  ],
+  "title": "PermissionDeniedDetails",
+  "type": "object"
+}

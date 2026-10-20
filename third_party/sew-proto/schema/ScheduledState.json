@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A scheduled message's state (`scheduled_messages.state`).",
+  "oneOf": [
+    {
+      "const": "pending",
+      "description": "Waiting for its time.",
+      "type": "string"
+    },
+    {
+      "const": "sent",
+      "description": "Sent (`message_id` set).",
+      "type": "string"
+    },
+    {
+      "const": "failed",
+      "description": "Not sent; `fail_reason` says why. The author edits, sends now or deletes it.",
+      "type": "string"
+    }
+  ],
+  "title": "ScheduledState"
+}

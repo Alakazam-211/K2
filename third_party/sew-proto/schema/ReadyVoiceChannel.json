@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A public voice channel in READY that the member can VIEW but has not joined (S33 v1 §16.3).",
+  "properties": {
+    "category_id": {
+      "description": "Its category.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "id": {
+      "description": "The channel.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "my_perms": {
+      "description": "The member's effective permissions there.",
+      "pattern": "^(0|[1-9][0-9]{0,19})$",
+      "type": "string"
+    },
+    "name": {
+      "description": "The name.",
+      "type": "string"
+    },
+    "position": {
+      "description": "Sort position.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "slug": {
+      "description": "The slug.",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,79}$",
+      "type": "string"
+    },
+    "space_id": {
+      "description": "Its space.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "user_limit": {
+      "description": "0 = no per-channel limit.",
+      "format": "uint8",
+      "maximum": 255,
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "id",
+    "space_id",
+    "slug",
+    "name",
+    "position",
+    "user_limit",
+    "my_perms"
+  ],
+  "title": "ReadyVoiceChannel",
+  "type": "object"
+}

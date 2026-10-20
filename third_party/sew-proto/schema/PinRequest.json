@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `POST /mgmt/v1/agents/pin` and `unpin` (gap G19: external ids).",
+  "properties": {
+    "agent": {
+      "description": "The assistant, `k2:workspace:<uuid>`.",
+      "maxLength": 128,
+      "pattern": "^(k2:(principal|workspace|connect):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|k2:owner|local:[a-z0-9_-]{2,64}|link:[1-9][0-9]{0,18}:[A-Z2-7]{16})$",
+      "type": "string"
+    },
+    "person": {
+      "description": "The person.",
+      "maxLength": 128,
+      "pattern": "^(k2:(principal|workspace|connect):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|k2:owner|local:[a-z0-9_-]{2,64}|link:[1-9][0-9]{0,18}:[A-Z2-7]{16})$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "agent",
+    "person"
+  ],
+  "title": "PinRequest",
+  "type": "object"
+}

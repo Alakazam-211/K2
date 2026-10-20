@@ -683,8 +683,18 @@ fn threads_source(root: &TempDir, name: &str) -> (PathBuf, PathBuf, String, Stri
 /// Same daemon (the clone re-pins the source's session id): the Threads
 /// land as pending history under `import:<id>` and the source Thread is
 /// untouched (CL11). The manifest carries the clone id + summary.
+///
+/// The export's `source_host` (part of every import key) comes from
+/// `$HOME/.k2/tunnel.json` (`default_source_host`), read once for the
+/// bundle and again for the re-export below. Without the HOME lock a
+/// parallel test's `TempHome` could swap `$HOME` between the two reads (a
+/// box whose real home has a paired tunnel.json, like the Linux gate, then
+/// answers `<sub>.k2.dev` once and the hostname the other time): new keys,
+/// so the "adds nothing" re-import imported 2. The test holds a temp HOME
+/// for its whole run, so both reads see the same file.
 #[test]
 fn bundle_carries_threads_and_unpack_imports_them_without_touching_the_source() {
+    let _home = crate::test_support::TempHome::new();
     let root = TempDir::new("ct-daemon-threads");
     let (project, src_home, src_id, sid) = threads_source(&root, "Threads Agent");
     let opts = clone::CloneOptions { home_override: Some(src_home.clone()), ..Default::default() };
@@ -733,6 +743,7 @@ fn bundle_carries_threads_and_unpack_imports_them_without_touching_the_source() 
             .0,
     )
     .unwrap();
+    assert_eq!(json.source_host, rep.source_host, "the re-export names the same source host as the bundle");
     let again = super::import_threads_for_clone(&res.project.id, &m, &json.to_json().unwrap(), &Default::default()).unwrap();
     assert_eq!((again.docs_imported, again.docs_skipped), (0, 2));
     // An export from another clone id is refused for this bundle.
@@ -750,6 +761,7 @@ fn bundle_carries_threads_and_unpack_imports_them_without_touching_the_source() 
 /// imported, and the clone still lands.
 #[test]
 fn threads_none_leaves_them_behind() {
+    let _home = crate::test_support::TempHome::new();
     let root = TempDir::new("ct-daemon-nothreads");
     let (project, src_home, src_id, _sid) = threads_source(&root, "Quiet Agent");
     let opts = clone::CloneOptions { home_override: Some(src_home.clone()), ..Default::default() };

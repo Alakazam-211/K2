@@ -42,6 +42,9 @@ import {
   zenEmptyThreadText,
 } from '@/components/Thread/ThreadZenKit'
 import { ThreadMessageColumn } from '@/components/Thread/ThreadColumn'
+import { WorkspaceFileLinks } from '@/components/common/WorkspaceFileLinks'
+import { useStore } from 'zustand'
+import { zenThreadFeeds } from '@/lib/zen/zen-data'
 import { useZenMaterials } from '@/lib/zen/zen-materials'
 import type { ZenAgentRow } from '@/lib/zen/zen-data'
 import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'
@@ -169,6 +172,20 @@ function useZenFloatInsets(
     return () => ro.disconnect()
   }, [on, header, slot])
   return insets
+}
+
+/** 0.46.3: paths in a Garden Thread that are files in the agent's
+ *  workspace are links (and its file chips open), like the main Thread.
+ *  The live feed for this row names the server and the Thread address;
+ *  before it exists the messages render unlinked. */
+export function ZenFileLinks({ address, children }: { address: string; children: React.ReactNode }): React.JSX.Element {
+  const feed = useStore(zenThreadFeeds, (s) => s.feeds.find((f) => f.address === address))
+  if (!feed) return <>{children}</>
+  return (
+    <WorkspaceFileLinks workspace={feed.threadAddr} scope={feed.scope}>
+      {children}
+    </WorkspaceFileLinks>
+  )
 }
 
 export function ZenConversation({
@@ -484,7 +501,9 @@ export function ZenConversationWidget({ bridge, decl }: ZenWidgetProps): React.J
     <div className="flex h-full min-h-0 w-full flex-col" data-zen-widget="conversation">
       <ZenWidgetStyles />
       {row ? (
-        <ZenConversation key={row.address} bridge={bridge} row={row} options={options} />
+        <ZenFileLinks address={row.address}>
+          <ZenConversation key={row.address} bridge={bridge} row={row} options={options} />
+        </ZenFileLinks>
       ) : (
         <div
           className="flex flex-1 items-center justify-center text-center"

@@ -85,6 +85,7 @@ import {
   setProjectChatDraft,
 } from '@/lib/composer-drafts'
 import { primaryScope } from '@/kessel/server-scope'
+import { WorkspaceFileLinks } from '@/components/common/WorkspaceFileLinks'
 import { DrawerToggleButton } from '@/components/Layout/DrawerTabBarToggle'
 
 // Resize-handle hit-area thickness (px), centered on the panel's left
@@ -382,6 +383,9 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
 
       {/* The stream and the message box wear the Thread's look in every
           Style (Rosson 2026-10-18; components/Thread/ThreadChat). */}
+      {/* 0.46.3: paths that are files in the project's Point of Contact
+          workspace are links, like the main Thread. */}
+      <WorkspaceFileLinks workspace={show.pocWorkspaceId} scope={primaryScope()}>
       <ThreadChatScope className="flex-1 flex flex-col min-h-0" style={{ background: 'var(--zen-canvas)' }} testId="project-chat-thread">
         {/* The stream, oldest-first — SelectableRegion re-enables text
             selection (form textareas work without this; div text does not
@@ -496,6 +500,7 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
           />
         )}
       </ThreadChatScope>
+      </WorkspaceFileLinks>
     </div>
   )
 }

@@ -10,6 +10,8 @@ import { useSettingsStore, getEffectiveKeybinding } from '@/stores/settings'
 import { useRoom, useRoomProjects } from '@/components/Room/RoomContext'
 import { isRemoteScope, mayRunLocalActions, roomMayRun } from '@/lib/local-only-actions'
 import { useToastStore } from '@/stores/toast'
+import { isBackgroundOpenEvent } from '@/lib/file-open-modifier'
+import { BACKGROUND_OPEN_TOAST_MS, backgroundOpenMessage } from '@/lib/thread-file-link-open'
 import { useFileSelectionStore } from '@/stores/file-selection'
 import { useFileClipboardStore } from '@/stores/file-clipboard'
 import { fileUndoFor } from '@/stores/file-undo'
@@ -1377,6 +1379,13 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
         // Shift+click: range select
         const allPaths = collectVisiblePaths(rootPath, cache, expandedDirs)
         selection.rangeSelect(entry.path, allPaths)
+      } else if (isBackgroundOpenEvent(e) && !entry.isDirectory) {
+        // Option/Alt-click (0.46.3), like a Thread file link: open the
+        // file as a tab without showing it; the current tab keeps focus.
+        selection.select(entry.path)
+        const result = room.tabs.getState().openFileAsTab(entry.path, { activate: false }) ?? 'opened'
+        const name = entry.path.split('/').filter(Boolean).pop() || entry.path
+        useToastStore.getState().addToast(backgroundOpenMessage(name, null, result), 'info', BACKGROUND_OPEN_TOAST_MS)
       } else {
         // Plain click: single select
         selection.select(entry.path)

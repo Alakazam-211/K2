@@ -245,6 +245,21 @@ export function SettingDropdown({
     return () => document.removeEventListener('mousedown', handler)
   }, [isOpen])
 
+  // Esc closes the open menu only (0.46.3), never the Settings panel too:
+  // the capture-phase listener runs before Settings' window listener, and
+  // `preventDefault` makes that one stand down (`escOwnedByDialog`).
+  useEffect(() => {
+    if (!isOpen) return
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return
+      e.preventDefault()
+      e.stopPropagation()
+      setIsOpen(false)
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [isOpen])
+
   const toggleOpen = (): void => {
     if (disabled) return
     setIsOpen(!isOpen)

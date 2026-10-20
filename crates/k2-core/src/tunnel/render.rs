@@ -87,6 +87,15 @@ pub fn render_frpc_toml(cfg: &TunnelConfig, local_port: u16, e2e: bool) -> Strin
     if !sub.is_empty() {
         out.push_str(&format!("subdomain = {}\n", toml_str(sub)));
     }
+    if e2e {
+        // 0.46.3 client IP: frpc writes one PROXY v2 header (the address
+        // frps saw) before each connection's TLS bytes. Only the daemon's
+        // E2E listener (this `localPort`) reads it; see k2-daemon
+        // `client_ip.rs`. An old relay reports its own loopback, which the
+        // daemon treats as no client IP. The cleartext `http` path has no
+        // TLS to put it in front of, so it stays off there.
+        out.push_str("transport.proxyProtocolVersion = \"v2\"\n");
+    }
 
     out
 }
@@ -293,6 +302,15 @@ mod tests {
             "e2e=true must NOT render the plain http type\n{on}"
         );
         // Everything else is unchanged on the flip: same subdomain, same
+        // 0.46.3: only the E2E proxy carries frpc's PROXY v2 header.
+        assert!(
+            on.contains("transport.proxyProtocolVersion = \"v2\"\n"),
+            "e2e=true must ask frpc for a PROXY v2 header\n{on}"
+        );
+        assert!(
+            !off.contains("proxyProtocolVersion"),
+            "the cleartext http proxy must not get a PROXY header\n{off}"
+        );
         // localPort, same proxy name — only the type differs.
         assert!(on.contains("subdomain = \"rosson\""), "{on}");
         assert!(on.contains("localPort = 57839"), "{on}");

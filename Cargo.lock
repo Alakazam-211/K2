@@ -4105,6 +4105,7 @@ dependencies = [
  "futures-util",
  "getrandom 0.2.17",
  "hickory-resolver",
+ "httparse",
  "imap",
  "imap-proto",
  "instant-acme",

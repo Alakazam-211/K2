@@ -319,6 +319,25 @@ fn peer_ip(stream: &tokio::net::TcpStream) -> Option<std::net::IpAddr> {
     stream.peer_addr().ok().map(|a| a.ip().to_canonical())
 }
 
+/// 0.46.3 — the client address the K2 Connect relay saw, for a request on
+/// the tunnel-ingress listener: the E2E listener read it from frpc's PROXY
+/// v2 header and recorded it against its loopback hop to this listener
+/// (`crate::client_ip`). Only this process writes that table, so no
+/// header or byte a client sends can name an address here. `None` on any
+/// other ingress, a cleartext frpc hop, or an old relay.
+fn relay_client_ip(ingress: Ingress, stream: &tokio::net::TcpStream) -> Option<std::net::IpAddr> {
+    if ingress != Ingress::Tunnel {
+        return None;
+    }
+    stream.peer_addr().ok().and_then(crate::client_ip::hop_client_ip)
+}
+
+/// The best client address for logs and per-client limits: the relay's
+/// observation on the tunnel, else the socket peer.
+fn client_ip_for(ingress: Ingress, stream: &tokio::net::TcpStream) -> Option<std::net::IpAddr> {
+    relay_client_ip(ingress, stream).or_else(|| peer_ip(stream))
+}
+
 /// The client a trusted proxy reported, if the peer is one we trust to
 /// report it: a loopback peer on the `Loopback` listener, or a LAN peer
 /// listed in `trusted`. A forwarded hop that is itself loopback means the
@@ -345,9 +364,11 @@ fn proxied_client(
 /// T2/LM1/LM2 — Connect `/cli/auth/login` bucket.
 ///
 /// - `Loopback` → uncapped (T3: desktop app, CLI, local agents).
-/// - `Tunnel` → the edge-attested client IP; an attestation without a
-///   usable IP, or an unattested `any`-mode login, → the shared tunnel
-///   bucket (never the splice peer `127.0.0.1`, never a forwarded header).
+/// - `Tunnel` → the edge-attested client IP, else the address the relay
+///   saw (`relay`, 0.46.3); with neither (an attestation without a usable
+///   IP, an unattested `any`-mode login through an old relay) → the shared
+///   tunnel bucket (never the splice peer `127.0.0.1`, never a forwarded
+///   header).
 /// - `Lan` → the socket peer, or a trusted LAN proxy's right-most hop.
 fn login_throttle_key(
     ingress: Ingress,
@@ -355,10 +376,11 @@ fn login_throttle_key(
     peer: Option<std::net::IpAddr>,
     headers_blob: &str,
     trusted: &[std::net::IpAddr],
+    relay: Option<std::net::IpAddr>,
 ) -> ThrottleKey {
     match ingress {
         Ingress::Loopback => ThrottleKey::Uncapped,
-        Ingress::Tunnel => match attested_ip.and_then(parse_hop_ip) {
+        Ingress::Tunnel => match attested_ip.and_then(parse_hop_ip).or(relay) {
             Some(ip) => ThrottleKey::Client(ip.to_string()),
             None => ThrottleKey::TunnelShared,
         },
@@ -377,17 +399,22 @@ fn login_throttle_key(
 ///   none, uncapped (typical skin gateway helper / frpc: do not lock every
 ///   guest on 127.0.0.1, do not pretend we capped them).
 /// - `Lan` → the socket peer, or a trusted LAN proxy's right-most hop.
-/// - `Tunnel` → uncapped: the edge does not attest skin logins, and any
-///   forwarded header here is client-written. A shared bucket would let
-///   anyone 429 every app guest; the per-username lockout still applies.
+/// - `Tunnel` → the address the relay saw (`relay`, 0.46.3); without one
+///   uncapped: the edge does not attest skin logins, and any forwarded
+///   header here is client-written. A shared bucket would let anyone 429
+///   every app guest; the per-username lockout still applies.
 fn skin_login_throttle_key(
     ingress: Ingress,
     peer: Option<std::net::IpAddr>,
     headers_blob: &str,
     trusted: &[std::net::IpAddr],
+    relay: Option<std::net::IpAddr>,
 ) -> ThrottleKey {
     match ingress {
-        Ingress::Tunnel => ThrottleKey::Uncapped,
+        Ingress::Tunnel => match relay {
+            Some(ip) => ThrottleKey::Client(ip.to_string()),
+            None => ThrottleKey::Uncapped,
+        },
         // A login through an App's link has its own buckets (per App, per
         // (App, username) failures, link-wide): `apps::gateway::link_login`.
         Ingress::App => ThrottleKey::Uncapped,
@@ -463,10 +490,11 @@ fn login_client_trust(
     peer: Option<std::net::IpAddr>,
     headers_blob: &str,
     trusted: &[std::net::IpAddr],
+    relay: Option<std::net::IpAddr>,
 ) -> ClientTrust {
     match ingress {
         Ingress::Loopback => ClientTrust::Local,
-        Ingress::Tunnel => match attested_ip.and_then(parse_hop_ip) {
+        Ingress::Tunnel => match attested_ip.and_then(parse_hop_ip).or(relay) {
             Some(_) => ClientTrust::Vouched,
             None => ClientTrust::Anonymous,
         },
@@ -476,15 +504,18 @@ fn login_client_trust(
 }
 
 /// LM4 — [`ClientTrust`] for an app `/cli/skin/login`. The edge does not
-/// attest app logins, so every tunnel app login is anonymous.
+/// attest app logins: a tunnel app login is vouched for only by the
+/// address the relay saw (0.46.3), else anonymous.
 fn skin_login_client_trust(
     ingress: Ingress,
     peer: Option<std::net::IpAddr>,
     headers_blob: &str,
     trusted: &[std::net::IpAddr],
+    relay: Option<std::net::IpAddr>,
 ) -> ClientTrust {
     match ingress {
         Ingress::Loopback => ClientTrust::Local,
+        Ingress::Tunnel if relay.is_some() => ClientTrust::Vouched,
         Ingress::Tunnel | Ingress::App => ClientTrust::Anonymous,
         Ingress::Lan => lan_client_trust(peer, headers_blob, trusted),
     }
@@ -510,7 +541,7 @@ mod login_throttle_key_tests {
             "",
         ] {
             assert_eq!(
-                skin_login_throttle_key(Ingress::Tunnel, Some(ip(LO)), headers, &[]),
+                skin_login_throttle_key(Ingress::Tunnel, Some(ip(LO)), headers, &[], None),
                 ThrottleKey::Uncapped,
                 "tunnel skin login must not key on {headers:?}"
             );
@@ -521,19 +552,53 @@ mod login_throttle_key_tests {
     fn tunnel_connect_uses_attested_ip_not_headers() {
         let h = "X-Forwarded-For: 203.0.113.9\r\nCF-Connecting-IP: 203.0.113.8\r\n";
         assert_eq!(
-            login_throttle_key(Ingress::Tunnel, Some("198.51.100.20"), Some(ip(LO)), h, &[]),
+            login_throttle_key(Ingress::Tunnel, Some("198.51.100.20"), Some(ip(LO)), h, &[], None),
             ThrottleKey::Client("198.51.100.20".into())
         );
         assert_eq!(
-            login_throttle_key(Ingress::Tunnel, Some("-"), Some(ip(LO)), h, &[]),
+            login_throttle_key(Ingress::Tunnel, Some("-"), Some(ip(LO)), h, &[], None),
             ThrottleKey::TunnelShared,
             "attestation without an IP falls to the shared tunnel bucket"
         );
         assert_eq!(
-            login_throttle_key(Ingress::Tunnel, None, Some(ip(LO)), h, &[]),
+            login_throttle_key(Ingress::Tunnel, None, Some(ip(LO)), h, &[], None),
             ThrottleKey::TunnelShared,
             "unattested (any-mode) tunnel login never keys on 127.0.0.1 or a header"
         );
+    }
+
+    /// 0.46.3 — the address the relay saw (frpc's PROXY v2 header, via
+    /// the E2E listener's hop) keys tunnel logins and vouches for them; an
+    /// edge attestation still wins; headers never do.
+    #[test]
+    fn tunnel_relay_ip_keys_and_vouches() {
+        let h = "X-Forwarded-For: 203.0.113.9\r\n";
+        let relay = Some(ip("198.51.100.77"));
+        let lo = Some(ip(LO));
+        assert_eq!(
+            login_throttle_key(Ingress::Tunnel, None, lo, h, &[], relay),
+            ThrottleKey::Client("198.51.100.77".into())
+        );
+        assert_eq!(
+            login_throttle_key(Ingress::Tunnel, Some("198.51.100.20"), lo, h, &[], relay),
+            ThrottleKey::Client("198.51.100.20".into()),
+            "an edge attestation wins over the relay's address"
+        );
+        assert_eq!(
+            skin_login_throttle_key(Ingress::Tunnel, lo, h, &[], relay),
+            ThrottleKey::Client("198.51.100.77".into())
+        );
+        assert_eq!(login_client_trust(Ingress::Tunnel, None, lo, h, &[], relay), ClientTrust::Vouched);
+        assert_eq!(skin_login_client_trust(Ingress::Tunnel, lo, h, &[], relay), ClientTrust::Vouched);
+        // Never outside the tunnel (the dispatcher only looks it up there,
+        // and these keep their own rules even if handed one).
+        assert_eq!(login_throttle_key(Ingress::Loopback, None, lo, h, &[], relay), ThrottleKey::Uncapped);
+        assert_eq!(
+            skin_login_throttle_key(Ingress::App, lo, h, &[], relay),
+            ThrottleKey::Uncapped,
+            "an App link login keeps its own buckets"
+        );
+        assert_eq!(skin_login_client_trust(Ingress::App, lo, h, &[], relay), ClientTrust::Anonymous);
     }
 
     #[test]
@@ -543,7 +608,7 @@ mod login_throttle_key_tests {
                 Ingress::Loopback,
                 Some(ip(LO)),
                 "X-Forwarded-For: 203.0.113.50, 198.51.100.7\r\n",
-                &[]
+                &[], None
             ),
             ThrottleKey::Client("198.51.100.7".into())
         );
@@ -552,7 +617,7 @@ mod login_throttle_key_tests {
                 Ingress::Loopback,
                 Some(ip(LO)),
                 "X-Forwarded-For: 203.0.113.50\r\nX-Forwarded-For: 198.51.100.8\r\n",
-                &[]
+                &[], None
             ),
             ThrottleKey::Client("198.51.100.8".into()),
             "last header line wins"
@@ -562,22 +627,22 @@ mod login_throttle_key_tests {
                 Ingress::Loopback,
                 Some(ip(LO)),
                 "CF-Connecting-IP: 203.0.113.51\r\n",
-                &[]
+                &[], None
             ),
             ThrottleKey::Uncapped,
             "CF-Connecting-IP is never trusted"
         );
         assert_eq!(
-            skin_login_throttle_key(Ingress::Loopback, Some(ip(LO)), "X-Forwarded-For: junk\r\n", &[]),
+            skin_login_throttle_key(Ingress::Loopback, Some(ip(LO)), "X-Forwarded-For: junk\r\n", &[], None),
             ThrottleKey::Uncapped
         );
         assert_eq!(
-            skin_login_throttle_key(Ingress::Loopback, Some(ip(LO)), "X-Forwarded-For: 127.0.0.1\r\n", &[]),
+            skin_login_throttle_key(Ingress::Loopback, Some(ip(LO)), "X-Forwarded-For: 127.0.0.1\r\n", &[], None),
             ThrottleKey::Uncapped,
             "a proxy that only saw the splice does not know the client"
         );
         assert_eq!(
-            skin_login_throttle_key(Ingress::Loopback, Some(ip(LO)), "", &[]),
+            skin_login_throttle_key(Ingress::Loopback, Some(ip(LO)), "", &[], None),
             ThrottleKey::Uncapped
         );
     }
@@ -587,24 +652,24 @@ mod login_throttle_key_tests {
         let h = "X-Forwarded-For: 203.0.113.60\r\nCF-Connecting-IP: 203.0.113.61\r\n";
         let peer = Some(ip("192.168.1.40"));
         assert_eq!(
-            skin_login_throttle_key(Ingress::Lan, peer, h, &[]),
+            skin_login_throttle_key(Ingress::Lan, peer, h, &[], None),
             ThrottleKey::Client("192.168.1.40".into())
         );
         assert_eq!(
-            login_throttle_key(Ingress::Lan, None, peer, h, &[]),
+            login_throttle_key(Ingress::Lan, None, peer, h, &[], None),
             ThrottleKey::Client("192.168.1.40".into())
         );
         let trusted = [ip("192.168.1.40")];
         assert_eq!(
-            skin_login_throttle_key(Ingress::Lan, peer, h, &trusted),
+            skin_login_throttle_key(Ingress::Lan, peer, h, &trusted, None),
             ThrottleKey::Client("203.0.113.60".into())
         );
         assert_eq!(
-            login_throttle_key(Ingress::Lan, None, peer, h, &trusted),
+            login_throttle_key(Ingress::Lan, None, peer, h, &trusted, None),
             ThrottleKey::Client("203.0.113.60".into())
         );
         assert_eq!(
-            login_throttle_key(Ingress::Lan, None, peer, "", &trusted),
+            login_throttle_key(Ingress::Lan, None, peer, "", &trusted, None),
             ThrottleKey::Client("192.168.1.40".into()),
             "trusted proxy with no header keys on the proxy itself"
         );
@@ -650,15 +715,15 @@ mod login_throttle_key_tests {
     fn reclassified_local_proxy_keys_on_rightmost_hop() {
         let h = "X-Forwarded-For: 203.0.113.80, 198.51.100.81\r\nCF-Connecting-IP: 203.0.113.82\r\n";
         assert_eq!(
-            login_throttle_key(Ingress::Lan, None, Some(ip(LO)), h, &[]),
+            login_throttle_key(Ingress::Lan, None, Some(ip(LO)), h, &[], None),
             ThrottleKey::Client("198.51.100.81".into())
         );
         assert_eq!(
-            skin_login_throttle_key(Ingress::Lan, Some(ip(LO)), h, &[]),
+            skin_login_throttle_key(Ingress::Lan, Some(ip(LO)), h, &[], None),
             ThrottleKey::Client("198.51.100.81".into())
         );
         assert_eq!(
-            login_throttle_key(Ingress::Lan, None, Some(ip(LO)), "X-Real-IP: 203.0.113.83\r\n", &[]),
+            login_throttle_key(Ingress::Lan, None, Some(ip(LO)), "X-Real-IP: 203.0.113.83\r\n", &[], None),
             ThrottleKey::Client(LO.into()),
             "no X-Forwarded-For: the proxy's own bucket"
         );
@@ -672,7 +737,7 @@ mod login_throttle_key_tests {
                 None,
                 Some(ip(LO)),
                 "X-Forwarded-For: 203.0.113.70\r\n",
-                &[]
+                &[], None
             ),
             ThrottleKey::Uncapped
         );
@@ -698,54 +763,54 @@ mod login_throttle_key_tests {
         let lo = Some(ip(LO));
 
         // Connect.
-        assert_eq!(login_client_trust(Ingress::Loopback, None, lo, "", &[]), ClientTrust::Local);
+        assert_eq!(login_client_trust(Ingress::Loopback, None, lo, "", &[], None), ClientTrust::Local);
         assert_eq!(
-            login_client_trust(Ingress::Tunnel, Some("198.51.100.20"), lo, xff, &[]),
+            login_client_trust(Ingress::Tunnel, Some("198.51.100.20"), lo, xff, &[], None),
             ClientTrust::Vouched,
             "an edge-attested login is vouched for by the signed ip="
         );
         assert_eq!(
-            login_client_trust(Ingress::Tunnel, Some("-"), lo, xff, &[]),
+            login_client_trust(Ingress::Tunnel, Some("-"), lo, xff, &[], None),
             ClientTrust::Anonymous,
             "an attestation with no usable ip names no client"
         );
         assert_eq!(
-            login_client_trust(Ingress::Tunnel, None, lo, xff, &[]),
+            login_client_trust(Ingress::Tunnel, None, lo, xff, &[], None),
             ClientTrust::Anonymous,
             "an unattested tunnel login is anonymous whatever its headers say"
         );
-        assert_eq!(login_client_trust(Ingress::Lan, None, lan_peer, xff, &[]), ClientTrust::Vouched);
-        assert_eq!(login_client_trust(Ingress::Lan, None, None, "", &[]), ClientTrust::Anonymous);
+        assert_eq!(login_client_trust(Ingress::Lan, None, lan_peer, xff, &[], None), ClientTrust::Vouched);
+        assert_eq!(login_client_trust(Ingress::Lan, None, None, "", &[], None), ClientTrust::Anonymous);
         assert_eq!(
-            login_client_trust(Ingress::Lan, None, lo, xff, &[]),
+            login_client_trust(Ingress::Lan, None, lo, xff, &[], None),
             ClientTrust::Anonymous,
             "a local proxy that is not a configured trusted proxy"
         );
         assert_eq!(
-            login_client_trust(Ingress::Lan, None, lo, xff, &[ip(LO)]),
+            login_client_trust(Ingress::Lan, None, lo, xff, &[ip(LO)], None),
             ClientTrust::Vouched,
             "a configured trusted local proxy that names the client"
         );
         assert_eq!(
-            login_client_trust(Ingress::Lan, None, lo, "X-Forwarded-For: 127.0.0.1\r\n", &[ip(LO)]),
+            login_client_trust(Ingress::Lan, None, lo, "X-Forwarded-For: 127.0.0.1\r\n", &[ip(LO)], None),
             ClientTrust::Anonymous,
             "a trusted proxy that only saw loopback does not know the client"
         );
         assert_eq!(
-            login_client_trust(Ingress::Lan, None, lo, "X-Real-IP: 203.0.113.9\r\n", &[ip(LO)]),
+            login_client_trust(Ingress::Lan, None, lo, "X-Real-IP: 203.0.113.9\r\n", &[ip(LO)], None),
             ClientTrust::Anonymous,
             "no X-Forwarded-For: the proxy names no client"
         );
 
         // App (skin).
-        assert_eq!(skin_login_client_trust(Ingress::Loopback, lo, "", &[]), ClientTrust::Local);
+        assert_eq!(skin_login_client_trust(Ingress::Loopback, lo, "", &[], None), ClientTrust::Local);
         assert_eq!(
-            skin_login_client_trust(Ingress::Tunnel, lo, xff, &[]),
+            skin_login_client_trust(Ingress::Tunnel, lo, xff, &[], None),
             ClientTrust::Anonymous,
             "the edge never attests app logins"
         );
-        assert_eq!(skin_login_client_trust(Ingress::Lan, lan_peer, xff, &[]), ClientTrust::Vouched);
-        assert_eq!(skin_login_client_trust(Ingress::Lan, lo, xff, &[]), ClientTrust::Anonymous);
+        assert_eq!(skin_login_client_trust(Ingress::Lan, lan_peer, xff, &[], None), ClientTrust::Vouched);
+        assert_eq!(skin_login_client_trust(Ingress::Lan, lo, xff, &[], None), ClientTrust::Anonymous);
 
         assert!(ClientTrust::Anonymous.under_global_ceiling());
         assert!(!ClientTrust::Vouched.under_global_ceiling());
@@ -1322,7 +1387,7 @@ async fn handle_one_request(
                         &user,
                         "blocked_ingress",
                         ingress.as_str(),
-                        "-",
+                        relay_client_ip(ingress, stream).map(|ip| ip.to_string()).unwrap_or_else(|| "-".to_string()),
                         if web_client_header { "web" } else { "api" },
                     ));
                     super::http::send_response(
@@ -1378,7 +1443,7 @@ async fn handle_one_request(
                                 &user,
                                 outcome,
                                 ingress.as_str(),
-                                "-",
+                                relay_client_ip(ingress, stream).map(|ip| ip.to_string()).unwrap_or_else(|| "-".to_string()),
                                 if web_client_header { "web" } else { "api" },
                             ));
                             super::http::send_response(
@@ -3871,12 +3936,14 @@ async fn handle_one_request(
             // never pick the bucket on the tunnel (LM1).
             let limiter = &state.login_limiter;
             let trusted_proxies = trusted_proxies_from_env();
+            let relay_ip = relay_client_ip(ingress, stream);
             let throttle_key = login_throttle_key(
                 ingress,
                 attested.as_ref().map(|a| a.ip.as_str()),
                 peer_ip(stream),
                 &headers_blob,
                 &trusted_proxies,
+                relay_ip,
             );
             // LM4 — only logins with no trustworthy client address count
             // toward (and are refused by) the global failed-login ceiling.
@@ -3887,6 +3954,7 @@ async fn handle_one_request(
                 peer_ip(stream),
                 &headers_blob,
                 &trusted_proxies,
+                relay_ip,
             )
             .under_global_ceiling();
             if let Some((bucket, limit, throttle_ip)) = throttle_key.connect_bucket() {
@@ -3945,7 +4013,12 @@ async fn handle_one_request(
             // the signing kid; everything else is tagged by listener.
             let (audit_ingress, audit_ip) = match &attested {
                 Some(att) => (format!("edge:{}", att.kid), att.ip.clone()),
-                None => (ingress.as_str().to_string(), "-".to_string()),
+                // 0.46.3: an unattested tunnel login carries the address
+                // the relay saw, when there is one.
+                None => (
+                    ingress.as_str().to_string(),
+                    relay_ip.map(|ip| ip.to_string()).unwrap_or_else(|| "-".to_string()),
+                ),
             };
             k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
                 "login",
@@ -4040,11 +4113,13 @@ async fn handle_one_request(
             // The bucket never comes from a header on the tunnel (LM1).
             let limiter = &state.login_limiter;
             let trusted_proxies = trusted_proxies_from_env();
+            let relay_ip = relay_client_ip(ingress, stream);
             let throttle_key = skin_login_throttle_key(
                 ingress,
                 peer_ip(stream),
                 &headers_blob,
                 &trusted_proxies,
+                relay_ip,
             );
             if let Some(bucket) = throttle_key.skin_bucket() {
                 if limiter.check_and_record(&bucket, limiter.now())
@@ -4058,7 +4133,7 @@ async fn handle_one_request(
             // only (no trustworthy client address), its own budget so an
             // app-login spray cannot close Connect.
             let anonymous =
-                skin_login_client_trust(ingress, peer_ip(stream), &headers_blob, &trusted_proxies)
+                skin_login_client_trust(ingress, peer_ip(stream), &headers_blob, &trusted_proxies, relay_ip)
                     .under_global_ceiling();
             if anonymous
                 && limiter.global_ceiling_reached(crate::login_throttle::Door::Skin, limiter.now())
@@ -4391,7 +4466,7 @@ async fn handle_one_request(
                 &audit_user,
                 outcome,
                 ingress.as_str(),
-                "-",
+                relay_client_ip(ingress, stream).map(|ip| ip.to_string()).unwrap_or_else(|| "-".to_string()),
                 if web_client_header { "web" } else { "api" },
             ));
             // Fixed delay on the 401 path mirrors /cli/auth/login so the
@@ -6454,7 +6529,7 @@ async fn handle_one_request(
                     }
                 };
             let ingress_label = ingress.as_str().to_string();
-            let ip = peer_ip(stream).map(|i| i.to_string()).unwrap_or_else(|| "-".to_string());
+            let ip = client_ip_for(ingress, stream).map(|i| i.to_string()).unwrap_or_else(|| "-".to_string());
             let reply = if p == crate::chat_pass::mint::PASS {
                 let browser = crate::chat_pass::mint::has_browser_headers(&headers_blob);
                 let bearer = bearer_token.clone();

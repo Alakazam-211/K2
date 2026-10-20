@@ -254,6 +254,8 @@ pub mod terminal_routes;
 pub mod themes_routes;
 pub mod triage;
 pub mod tunnel_tls_listener;
+// 0.46.3: the real client IP for tunnelled Apps (PROXY v2 from frpc).
+pub mod client_ip;
 pub mod tunnel_autostart;
 pub mod tunnel_ingress_listener;
 // Runtime stage H: front-door hand-off (no-downtime upgrades).

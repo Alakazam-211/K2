@@ -140,6 +140,13 @@ export interface AppSettingsResponse {
   // While off every /cli/compute/* route 404s `compute_disabled`. Optional:
   // older snapshots omit it → readers treat absent as false.
   computePreview?: boolean
+  // Apps (beta) — the App runtime switch (Settings → Apps → This server),
+  // Owner-only, default ON since 0.46.3. 0.46.2 and older daemons answered
+  // `appsPreview` instead (default off). See `appsSwitchFrom`.
+  apps?: boolean
+  appsPreview?: boolean
+  // The unwalled process engine (Owner-only opt-in, default off).
+  appsProcessEngine?: boolean
   // 0.40.43 (1c) — public /v1 API master switch (K2 Connect → Enable
   // public API). ORed with the K2_API env flag server-side and checked
   // per request, so flipping it needs NO daemon restart. Owner/Admin-only

@@ -1,4 +1,5 @@
-// Settings → Cores → Apps. Master-detail: Host plus each published
+// Settings → Cores → Apps. Master-detail: This server (0.46.3: the Apps
+// switch, box doctor, prepare and engine; AppsServerSection), Host, and each published
 // service. Roles and app grants live on the selected detail. Platform
 // tokens and Hydra are box-level and render on Host only.
 
@@ -10,6 +11,7 @@ import type { SettingEntry } from '../searchManifest'
 import { primaryScope } from '@/kessel/server-scope'
 import { useServerSupports } from '@/lib/server-capabilities'
 import { K2_CAPS } from '@/lib/k2-caps.generated'
+import { AppsServerSection } from './AppsServerSection'
 
 export const SKIN_ACCESS_MANIFEST: SettingEntry[] = [
   {
@@ -631,6 +633,9 @@ export function SkinAccessSection(): React.JSX.Element {
   const [publishedApps, setPublishedApps] = useState<PublishedApp[]>([])
   const [grants, setGrants] = useState<SkinGrantRow[]>([])
   const [selectedApp, setSelectedApp] = useState<string | null>(null)
+  // 0.46.3: "This server" (Apps switch, box doctor, prepare, engine) is the
+  // first entry and opens by default; Host / an app hide it.
+  const [showServer, setShowServer] = useState(true)
   const [addPersonId, setAddPersonId] = useState('')
   const [addRoleId, setAddRoleId] = useState('')
   const [publishBusy, setPublishBusy] = useState<string | null>(null)
@@ -1003,11 +1008,24 @@ export function SkinAccessSection(): React.JSX.Element {
           {loading ? <p className="px-3 py-2 text-[10px] text-[var(--color-text-muted)]">Loading…</p> : null}
           <button
             type="button"
+            aria-label="This server"
+            className={`w-full text-left px-3 py-2 text-xs no-drag cursor-pointer ${
+              showServer ? 'bg-[var(--color-accent)]/15' : 'hover:bg-white/[0.03]'
+            }`}
+            onClick={() => setShowServer(true)}
+          >
+            This server
+          </button>
+          <button
+            type="button"
             aria-label="Host"
             className={`w-full text-left px-3 py-2 text-xs no-drag cursor-pointer ${
-              selectedApp === 'host' ? 'bg-[var(--color-accent)]/15' : 'hover:bg-white/[0.03]'
+              !showServer && selectedApp === 'host' ? 'bg-[var(--color-accent)]/15' : 'hover:bg-white/[0.03]'
             }`}
-            onClick={() => setSelectedApp('host')}
+            onClick={() => {
+              setShowServer(false)
+              setSelectedApp('host')
+            }}
           >
             Host
           </button>
@@ -1017,9 +1035,12 @@ export function SkinAccessSection(): React.JSX.Element {
               type="button"
               aria-label={`Open ${app.name}`}
               className={`w-full text-left px-3 py-2 no-drag cursor-pointer ${
-                selectedApp === app.id ? 'bg-[var(--color-accent)]/15' : 'hover:bg-white/[0.03]'
+                !showServer && selectedApp === app.id ? 'bg-[var(--color-accent)]/15' : 'hover:bg-white/[0.03]'
               }`}
-              onClick={() => setSelectedApp(app.id)}
+              onClick={() => {
+                setShowServer(false)
+                setSelectedApp(app.id)
+              }}
             >
               <span className="block text-xs font-mono text-[var(--color-text-primary)] truncate">
                 {app.name}
@@ -1039,8 +1060,10 @@ export function SkinAccessSection(): React.JSX.Element {
             {error}
           </p>
         )}
-        {selectedApp == null ? (
-          <p className="text-[10px] text-[var(--color-text-muted)]">Select Host or an app.</p>
+        {showServer ? (
+          <AppsServerSection />
+        ) : selectedApp == null ? (
+          <p className="text-[10px] text-[var(--color-text-muted)]">Select This server, Host or an app.</p>
         ) : (
           <div className="max-w-2xl space-y-6">
             {selectedPublished ? (

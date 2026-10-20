@@ -1181,6 +1181,13 @@ impl DaemonPtySession {
                 return Err(e);
             }
         };
+        // S17 / AR18 parity with the in-process path: the agent joins the
+        // agents' memory budget (a no-op unless the daemon's unit is
+        // delegated). ptyd is the child's parent; the child is still in the
+        // daemon unit's cgroup tree and owned by the same user.
+        if let Ok(p) = u32::try_from(pid) {
+            crate::agents_leaf::join(p);
+        }
         let stream = match owner.attach(&sid, 0) {
             Ok(s) => s,
             Err(e) => {

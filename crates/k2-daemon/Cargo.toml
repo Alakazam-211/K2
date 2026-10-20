@@ -323,6 +323,9 @@ k2-node = { path = "../k2-node" }
 k2-node-proto = { path = "../k2-node-proto" }
 # Root-helper heal tests sign fixture builds with the TEST key.
 k2-root-proto = { path = "../k2-root-proto", features = ["test-signer"] }
+# k2-ptyd P76 test lists ptyd's sessions over its protocol (already linked
+# through k2-core; no new crate).
+k2-ptyd = { path = "../k2-ptyd" }
 # `k2 mail send --from-name` contract test: the HOSTED From header is
 # composed by Stalwart from the JMAP `from[].name` we hand it, with
 # Stalwart's own builder (stalwartlabs/mail-builder 1.0 — the version

@@ -4113,6 +4113,7 @@ dependencies = [
  "k2-core",
  "k2-node",
  "k2-node-proto",
+ "k2-ptyd",
  "k2-root-proto",
  "k2-vault",
  "lettre",

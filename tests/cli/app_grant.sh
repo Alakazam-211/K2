@@ -163,10 +163,17 @@ class H(BaseHTTPRequestHandler):
                 "hookError": "validation_failed: bad",
             }]}))
             return
+        ZERO = {"provisioned": 0, "updated": 0, "deprovisioned": 0, "skippedBusy": 0, "skippedHeld": 0,
+                "ignoredLocal": 0, "ignoredOther": 0, "orphansRemoved": 0}
         if path == "/cli/skin/grant-hooks":
             self._send(200, json.dumps({
                 "targets": [{"kind": "chat", "enabled": True, "healthy": False,
-                             "lastError": "mgmt token rejected", "socket": "/run/sew/mgmt.sock"}],
+                             "lastError": "mgmt token rejected", "socket": "/run/sew/mgmt.sock",
+                             "lastReconcileAt": 1760000600, "lastReconcile": dict(ZERO),
+                             "lastChangeAt": 1760000000, "lastChange": dict(ZERO, provisioned=2, orphansRemoved=1),
+                             "reconcileHistory": [dict(ZERO, provisioned=2, orphansRemoved=1, at=1760000000),
+                                                  dict(ZERO, skippedBusy=3, at=1760000300),
+                                                  dict(ZERO, at=1760000600)]}],
                 "outbox": {"pending": 2, "blocked": 1, "held": 1, "oldestPendingAgeSecs": 40},
                 "blocked": [{"id": "ob-1", "op": "provision", "subjectKey": "k2:principal:x", "lastError": "validation_failed: bad"}],
                 "held": [{"id": "ob-2", "op": "provision", "subjectKey": "k2:principal:y", "lastError": "skipped by Sew"}],
@@ -346,6 +353,11 @@ assert_contains "hooks status counts" "$hooks_out" "outbox: 2 pending, 1 blocked
 assert_contains "hooks status blocked row" "$hooks_out" "BLOCKED ob-1"
 assert_contains "hooks status held row" "$hooks_out" "HELD    ob-2"
 assert_contains "hooks status attribution note" "$hooks_out" "not proof a person acted"
+assert_contains "hooks status latest pass, plain" "$hooks_out" "last reconcile: 2025-10-09 09:03:20Z  no changes"
+assert_contains "hooks status last non-empty pass" "$hooks_out" "last change   : 2025-10-09 08:53:20Z  2 provisioned, 1 orphans removed"
+assert_contains "hooks status per-pass history" "$hooks_out" "    2025-10-09 08:58:20Z  3 skipped busy"
+assert_not_contains "hooks status no raw JSON summary" "$hooks_out" '"provisioned": 0'
+assert_contains "hooks --json keeps the history" "$hooks_json_out" '"reconcileHistory"'
 assert_eq "bare hooks --json exit 0 (defaults to status)" "$hooks_json_rc" "0"
 assert_eq "bare hooks --json = hooks status --json" "$hooks_json_out" "$hooks_status_json_out"
 assert_eq "hooks status --json exit 0" "$hooks_status_json_rc" "0"

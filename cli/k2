@@ -6776,8 +6776,27 @@ if not ts:
 for t in ts:
     print("%s  %s  %s  socket %s" % (t.get("kind",""), "on" if t.get("enabled") else "off",
         "healthy" if t.get("healthy") else ("unhealthy: " + (t.get("lastError") or "?")), t.get("socket","")))
-    if t.get("lastReconcile"):
-        print("  last reconcile: %s" % json.dumps(t["lastReconcile"]))
+    def _when(ts):
+        import datetime
+        return datetime.datetime.fromtimestamp(ts, datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ") if ts else "?"
+    def _pass(s):
+        keys = [("provisioned","provisioned"),("updated","updated"),("deprovisioned","deprovisioned"),
+                ("orphansRemoved","orphans removed"),("skippedBusy","skipped busy"),("skippedHeld","held"),
+                ("ignoredLocal","ignored local"),("ignoredOther","ignored other")]
+        parts = ["%s %s" % (s.get(k), label) for k, label in keys if s.get(k)]
+        return ", ".join(parts) if parts else "no changes"
+    if t.get("lastReconcile") is not None:
+        print("  last reconcile: %s  %s" % (_when(t.get("lastReconcileAt")), _pass(t["lastReconcile"])))
+    if t.get("lastChange"):
+        if t.get("lastChangeAt") != t.get("lastReconcileAt"):
+            print("  last change   : %s  %s" % (_when(t.get("lastChangeAt")), _pass(t["lastChange"])))
+    elif t.get("lastReconcile") is not None:
+        print("  last change   : none yet (every pass so far found nothing to fix)")
+    hist = t.get("reconcileHistory") or []
+    if len(hist) > 1:
+        print("  recent passes (newest first):")
+        for h in list(reversed(hist))[:5]:
+            print("    %s  %s" % (_when(h.get("at")), _pass(h)))
 o=d.get("outbox") or {}
 age=o.get("oldestPendingAgeSecs")
 print("outbox: %s pending, %s blocked, %s held%s" % (o.get("pending",0), o.get("blocked",0), o.get("held",0),

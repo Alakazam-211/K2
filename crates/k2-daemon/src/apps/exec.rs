@@ -31,7 +31,7 @@ use k2_core::deploy::{self, codes, store::AppRow};
 use k2_root_proto::engine::{self as wire, EXEC_TIMEOUT_BOUNDS, EXEC_TIMEOUT_DEFAULT};
 use serde_json::{json, Value as J};
 
-use super::routes::{actor, app_for, json_body, need_manage, no, s, Refusal, R};
+use super::routes::{actor, app_for, json_body, need_build, no, s, Refusal, R};
 use crate::compute_routes::Who;
 
 pub const SHELL_PATH: &str = "/cli/app/shell";
@@ -47,8 +47,10 @@ pub const EXEC_UNAVAILABLE: &str = "exec_unavailable";
 /// catch-all, so a new kind (S43's delegated caller) can't slip through.
 pub(crate) fn may_exec(who: &Who) -> R<()> {
     match who {
+        // Q7: a Member login sees Apps and never execs into one.
+        Who::Login { role: k2_core::connect_users::Role::Member, .. } => super::access::member_read_only(who),
         Who::Owner | Who::Login { .. } | Who::Shell { .. } => Ok(()),
-        Who::Agent { .. } => need_manage(who),
+        Who::Agent { .. } => need_build(who),
         Who::Wrong => Err(no(
             codes::WRONG_CREDENTIAL,
             403,
@@ -418,10 +420,11 @@ pub fn shell_on_cell() -> crate::cli_response::CliResponse {
     }
 }
 
-/// `Role` isn't checked here: Connect logins already cleared the route's
-/// Member floor in `role_gate`. Kept for the docs' sake.
+/// The route floor (`role_gate`) is Admin since 0.46.3 (Members are
+/// read-only, prd-agent-app-permissions-v1 Q7); `may_exec` refuses a
+/// Member login too. Kept for the docs' sake.
 #[allow(dead_code)]
-const _FLOOR: Role = Role::Member;
+const _FLOOR: Role = Role::Admin;
 
 #[cfg(test)]
 mod tests {
@@ -430,7 +433,10 @@ mod tests {
     #[test]
     fn exec_is_never_for_app_credentials_and_agents_need_the_switch() {
         assert!(may_exec(&Who::Owner).is_ok());
-        assert!(may_exec(&Who::Login { username: "ann".into(), role: Role::Member }).is_ok());
+        assert!(may_exec(&Who::Login { username: "ada".into(), role: Role::Admin }).is_ok());
+        // Q7: Members are read-only for Apps.
+        let e = may_exec(&Who::Login { username: "ann".into(), role: Role::Member }).unwrap_err();
+        assert_eq!((e.code, e.status), (super::super::access::MEMBER_READ_ONLY, 403));
         assert!(may_exec(&Who::Shell { project_id: "w".into(), session_id: "s".into() }).is_ok());
         let e = may_exec(&Who::Wrong).unwrap_err();
         assert_eq!((e.code, e.status), (codes::WRONG_CREDENTIAL, 403));

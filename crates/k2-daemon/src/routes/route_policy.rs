@@ -173,7 +173,11 @@ pub const ROUTES: &[Route] = &[
     get("/cli/api-keys/list", Owner),
     post("/cli/api-keys/revoke", Owner),
     // App runtime stage 1 (prd-k2-app-runtime-v1 §8.5). Passport rules
-    // (own workspace + "Allow this agent to manage Apps") in the handler.
+    // (own workspace + the two App switches, prd-agent-app-permissions-v1)
+    // in the handler. Q7 (Rosson 2026-10-20): Members are read-only, so
+    // every mutating `/cli/app/*` floor is Admin (suspend, deny, validate
+    // and the shell included; a test below keeps it so). The handlers also
+    // refuse a Member login with `member_read_only`.
     // Box prep (S10): the doctor is Admin (agents read it through their
     // passport); prepare runs root-helper verbs and is the owner's.
     // Held App requests (0.46.0 grace + S15 egress, one `app_widenings`
@@ -190,59 +194,59 @@ pub const ROUTES: &[Route] = &[
     // passport sees its own workspace's Apps); a new one is always a held
     // request (approve is the owner's above); revoking is immediate.
     get("/cli/app/box-service", Member),
-    post("/cli/app/box-service/request", Member),
-    post("/cli/app/box-service/revoke", Member),
+    post("/cli/app/box-service/request", Admin),
+    post("/cli/app/box-service/revoke", Admin),
     // Lane P: remove K2's Podman bundle (prepare --install-podman put it in).
     post("/cli/app/box/podman/uninstall", Owner),
     post("/cli/app/box/prepare", Owner),
-    post("/cli/app/build", Member),
+    post("/cli/app/build", Admin),
     // 0.46.0 grace: clean mode on narrows (anyone, own Apps for passports);
     // off is held unless the owner turns it off.
-    post("/cli/app/clean-mode", Member),
+    post("/cli/app/clean-mode", Admin),
     // S13: narrowing applies now, widening fields are held.
-    post("/cli/app/config", Member),
+    post("/cli/app/config", Admin),
     // deny is an Owner/Admin human's, or the requester's withdraw (handler).
-    post("/cli/app/deny", Member),
-    post("/cli/app/deploy", Member),
+    post("/cli/app/deny", Admin),
+    post("/cli/app/deploy", Admin),
     // Litmus L3: who, commit, live/failed/stalled of one deployment.
     get("/cli/app/deployment", Member),
     // Egress (S15): read and propose are Member (a passport sees its own
     // workspace's Apps); every new host is a held request; narrowing is
     // immediate.
     get("/cli/app/egress", Member),
-    post("/cli/app/egress/add", Member),
+    post("/cli/app/egress/add", Admin),
     get("/cli/app/egress/log", Member),
-    post("/cli/app/egress/mode", Member),
-    post("/cli/app/egress/rm", Member),
+    post("/cli/app/egress/mode", Admin),
+    post("/cli/app/egress/rm", Admin),
     // The guarded engine's install/update through the root helper (S11).
     post("/cli/app/engine/install", Owner),
     get("/cli/app/errors", Member),
     // The process exception (§4.3): on = the owner in person with an owner
     // confirm (handler); off (back to the guarded container) = manage.
-    post("/cli/app/exception", Member),
+    post("/cli/app/exception", Admin),
     // S28: own workspace + "Allow this agent to manage Apps" for passports
     // (handler); never App credentials or delegation; audited.
-    post("/cli/app/exec", Member),
+    post("/cli/app/exec", Admin),
     // RS-A15 (0.46.1): the owner grants an App guests:rooms; revoking
     // narrows (a passport: its own App). Guest rooms over the CLI: the
     // owner, or a passport within its own App's grant (handler refuses
     // Admin/Member logins).
     post("/cli/app/grant", Owner),
-    post("/cli/app/grant/revoke", Member),
+    post("/cli/app/grant/revoke", Admin),
     get("/cli/app/grants", Member),
-    both("/cli/app/guest/rooms", Member),
+    split("/cli/app/guest/rooms", Member, Admin),
     get("/cli/app/history", Member),
     get("/cli/app/inspect", Member),
-    post("/cli/app/install", Member),
+    post("/cli/app/install", Admin),
     // 0.46.0 grace: App-scoped keys. Minting needs the owner's confirm
     // (anyone else's mint is held); revoking narrows (Admin; a passport for
     // its own Apps).
-    post("/cli/app/key/mint", Member),
+    post("/cli/app/key/mint", Admin),
     post("/cli/app/key/revoke", Admin),
     get("/cli/app/keys", Member),
     // S14: the App's gateway link (status; rotate the App pass now).
     get("/cli/app/link", Member),
-    post("/cli/app/link/rotate", Member),
+    post("/cli/app/link/rotate", Admin),
     get("/cli/app/list", Member),
     get("/cli/app/logs", Member),
     // Room-scope R9 (0.46.1): who holds a grant on a room (owner/admin any
@@ -251,31 +255,31 @@ pub const ROUTES: &[Route] = &[
     // S19: per-App quotas. Lowering applies now (manage); a raise is the
     // owner's, anyone else's is a held `quota` request (handler).
     get("/cli/app/quota", Member),
-    post("/cli/app/quota/set", Member),
+    post("/cli/app/quota/set", Admin),
     // AR10: remote App passes. Listing and revoking (narrows) are Member;
     // minting is a credential mint, the owner's (handler refuses passports).
     get("/cli/app/remote-pass", Member),
-    post("/cli/app/remote-pass/revoke", Member),
+    post("/cli/app/remote-pass/revoke", Admin),
     post("/cli/app/remote-pass/rotate", Owner),
-    post("/cli/app/restart", Member),
+    post("/cli/app/restart", Admin),
     // S19: only the owner resumes a suspended App.
     post("/cli/app/resume", Owner),
-    post("/cli/app/rollback", Member),
+    post("/cli/app/rollback", Admin),
     // Room-scope R9: the owner hides guests' names in one room.
     post("/cli/app/room-names", Owner),
     // Room-scope R16: an App's self (id, live Seed, health, deploy time).
     get("/cli/app/self", Member),
     // S28 `k2 app shell` (WebSocket; same rules as exec).
-    get("/cli/app/shell", Member),
-    post("/cli/app/start", Member),
-    post("/cli/app/stop", Member),
+    get("/cli/app/shell", Admin),
+    post("/cli/app/start", Admin),
+    post("/cli/app/stop", Admin),
     // S19: suspend narrows: any Member (a passport: its own workspace's Apps).
-    post("/cli/app/suspend", Member),
+    post("/cli/app/suspend", Admin),
     // purge (deletes the App's data) is owner-only in the handler.
-    post("/cli/app/uninstall", Member),
+    post("/cli/app/uninstall", Admin),
     // Room-scope R16: an App's quotas and per-call counts from its audit.
     get("/cli/app/usage", Member),
-    post("/cli/app/validate", Member),
+    post("/cli/app/validate", Admin),
     // 0.46.0 grace: what breaks at the 0.46.2 cut-over, per service.
     get("/cli/app/warnings", Member),
     post("/cli/auth/change-password", Member),
@@ -2275,6 +2279,33 @@ mod tests {
             writes += usize::from(post_only);
         }
         assert_eq!(writes, 7, "terminal write/spawn×2, agents.wake, review ×3");
+    }
+
+    /// Q7 (prd-agent-app-permissions-v1 slice C): Members are read-only for
+    /// Apps. No `/cli/app/*` POST admits a Member login, and the shell
+    /// (a WebSocket GET into a running App) is Admin; the reads stay Member.
+    #[test]
+    fn no_app_route_lets_a_member_change_anything() {
+        let mut member_posts = Vec::new();
+        let mut posts = 0;
+        for r in ROUTES.iter().filter(|r| r.path.starts_with("/cli/app/")) {
+            if let Some(f) = r.post {
+                posts += 1;
+                if f.admits(Role::Member) {
+                    member_posts.push(r.path);
+                }
+            }
+        }
+        assert!(member_posts.is_empty(), "Member-floor App POSTs: {member_posts:?}");
+        assert!(posts >= 30, "the App routes are classified ({posts} POSTs)");
+        assert!(!lookup("/cli/app/shell").and_then(|r| r.get).expect("shell GET").admits(Role::Member));
+        for read in ["/cli/app/list", "/cli/app/inspect", "/cli/app/logs", "/cli/app/approvals", "/cli/app/quota", "/cli/app/egress"] {
+            let f = lookup(read).and_then(|r| r.get).unwrap_or_else(|| panic!("{read} is a GET"));
+            assert!(f.admits(Role::Member), "{read} stays a Member read");
+        }
+        for p in ["/cli/app/suspend", "/cli/app/install", "/cli/app/uninstall", "/cli/app/deny", "/cli/app/guest/rooms"] {
+            assert_eq!(lookup(p).and_then(|r| r.post).expect("POST").as_wire(), "admin", "{p}");
+        }
     }
 
     #[test]

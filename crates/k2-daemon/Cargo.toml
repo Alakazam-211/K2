@@ -264,8 +264,13 @@ lettre = { version = "0.11", default-features = false, features = [
 # acme.rs is not test-only). aws-lc-rs matches the rustls provider at boot.
 instant-acme = { version = "0.8", default-features = false, features = ["hyper-rustls", "aws-lc-rs"] }
 rcgen = { version = "0.13", default-features = false, features = ["aws_lc_rs", "pem"] }
-# Postgres 16 grammar for POST /cli/db/query. pg_query 6.x is PostgreSQL 17.
-pg_query = "=5.1.1"
+# PostgreSQL 17 grammar (libpg_query 17-6.x) for the guest doors only
+# (POST /cli/db/query, guest rows). One grammar per binary: 5.x (16) and
+# 6.x can't link together (same C symbols). 16's guest SQL parses under 17
+# (corpus test in sql/query.rs); 18-only syntax is refused until a crate
+# with the 18 grammar exists (prd-pg17-and-db-upgrade-v1 §8, V14/V49).
+# 6.1.0+ carries the macOS strchrnul fix, so no vendored patch.
+pg_query = "=6.2.1"
 
 # Constant-time zeroing of key buffers read from key stores.
 zeroize = "1"

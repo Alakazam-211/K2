@@ -722,3 +722,41 @@ fn switch_1_inside_the_default_limits_switch_2_inside_admission() {
     assert_eq!(mem("hum"), Some(300 << 20));
     let _ = &f.ws_b;
 }
+
+/// 0.46.3 apps-on × slice A: on a default box (Apps on, the unwalled
+/// process engine off) a new App lands walled (container), an agent with
+/// both switches off changes nothing on it (each change is a held
+/// request for the owner) and still reads it.
+#[test]
+fn a_default_on_app_is_walled_and_a_switch_off_agent_is_held() {
+    let f = fx("dflton");
+    let _pool = super::admission::pool_for_test(64 << 30);
+    assert!(!k2_core::deploy::process_engine_enabled(), "a default box has the process engine off");
+    let (st, v) = call("/cli/app/install", &Who::Owner, json!({"app": "fresh", "workspace": f.ws_a}));
+    assert_eq!(st, 200, "{v}");
+    {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        let row = store::get_app(&conn, "fresh").unwrap().unwrap();
+        assert_eq!((row.isolation.as_str(), row.path.as_str()), ("container", "guarded"), "walled by default");
+    }
+    set_level(&f.ws_a, Level::Off);
+    let a = agent(&f.ws_a);
+    for (path, body) in [
+        ("/cli/app/install", json!({"app": "fresh2"})),
+        ("/cli/app/config", json!({"app": "fresh", "memory": "1G"})),
+        ("/cli/app/config", json!({"app": "fresh", "path": "open"})),
+        ("/cli/app/stop", json!({"app": "fresh"})),
+        ("/cli/app/uninstall", json!({"app": "fresh"})),
+    ] {
+        let (st, v) = call(path, &a, body.clone());
+        assert_eq!(outcome(st, &v), Held, "{path} {body} → {st} {v}");
+    }
+    let (st, v) = get("/cli/app/inspect", &a, &[("app", "fresh")]);
+    assert_eq!(st, 200, "reads stay open: {v}");
+    let h = k2_core::db::shared();
+    let conn = h.lock();
+    assert!(store::get_app(&conn, "fresh2").unwrap().is_none(), "nothing installed");
+    let row = store::get_app(&conn, "fresh").unwrap().unwrap();
+    assert_eq!((row.isolation.as_str(), row.path.as_str(), row.memory_limit_bytes), ("container", "guarded", Some(512 << 20)));
+}

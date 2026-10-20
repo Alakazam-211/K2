@@ -1605,12 +1605,12 @@ mod tests {
             let mut tls = frpc_session(&cert_pem, https_port, sni, relay_saw("203.0.113.7:51515"))
                 .await
                 .expect("TLS");
-            // h2c-style bytes are not answered 400 by K2 (the echo App just
-            // waits for a head it never gets; K2 sends nothing).
-            tls.write_all(b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n").await.unwrap();
-            let mut b = [0u8; 64];
-            let r = tokio::time::timeout(Duration::from_millis(500), tls.read(&mut b)).await;
-            assert!(r.is_err(), "{sni}: raw path must not answer for the App, got {r:?}");
+            // The h2 preface reaches the App as is (the rewrite would answer
+            // K2's own 400); the echo App echoes what it got.
+            tls.write_all(b"PRI * HTTP/2.0\r\n\r\n").await.unwrap();
+            let (head, seen) = next_response(&mut tls, &mut Vec::new()).await;
+            assert!(head.starts_with("HTTP/1.1 200 OK"), "{sni}: the App answered, not K2: {head}");
+            assert_eq!(seen, "PRI * HTTP/2.0\r\n\r\n", "{sni}: raw bytes reached the App");
         }
 
         // Opt the nested service in: now it is rewritten too.

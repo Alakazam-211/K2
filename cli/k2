@@ -21362,7 +21362,7 @@ cmd_publish_client_ip() {
     done
     local RESP
     if [ -z "$label" ]; then
-        RESP=$(cli_send cli_request "/cli/publish/client-ip") || RESP=""
+        RESP=$(cli_send cli_request "/cli/publish/client-ip/list") || RESP=""
     else
         case "$state" in
             on|true) state=true ;;

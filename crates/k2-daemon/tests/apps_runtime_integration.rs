@@ -161,12 +161,19 @@ async fn apps_on_without_the_process_engine_never_runs_unwalled() {
     let r = post(d.port, "/cli/app/config", OWNER, json!({"app": "agentapp", "isolation": "process"})).await;
     assert_eq!(r.status, 409, "the owner token too: {}", r.body);
 
-    // A plain deploy goes to the guarded engine (or fails for want of it);
-    // either way nothing serves from a process as the daemon's user.
+    // A plain deploy: the agent's first install is held for the owner's
+    // caps approval (S20); once the owner approves, it goes to the guarded
+    // engine (or fails for want of it, off Linux). Either way nothing
+    // serves from a process as the daemon's user.
     let r = post(d.port, "/cli/app/deploy", &pass, json!({"app": "agentapp", "folder": v2, "wait": 30})).await;
-    assert_eq!(r.status, 200, "{}", r.body);
-    if !cfg!(target_os = "linux") {
+    assert_eq!(r.status, 202, "{}", r.body);
+    assert_eq!(r.json()["status"], "held", "{}", r.body);
+    let r = post(d.port, "/cli/app/deploy", OWNER, json!({"app": "agentapp", "seed": r.json()["seed"], "wait": 30})).await;
+    assert!(r.status == 200 || r.status == 202, "{}", r.body);
+    if r.status == 200 && !cfg!(target_os = "linux") {
         assert_eq!(r.json()["deployment"]["result"], "failed", "{}", r.body);
+        let err = r.json()["deployment"]["error"].as_str().unwrap_or("").to_string();
+        assert!(err.contains("isolation=container"), "the guarded path, never the process engine: {err}");
     }
     assert!(!body_of(agent_front, "/").starts_with("200 a1"), "the agent's App never ran unwalled");
     k2_core::deploy::set_process_engine(false);

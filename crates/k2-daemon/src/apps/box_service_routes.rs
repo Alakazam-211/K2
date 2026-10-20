@@ -35,7 +35,9 @@
 //! the root helper) are out of reach by construction (TCP only).
 //!
 //! Who may: read and propose, anyone who sees the App (a passport, its own
-//! workspace's); revoke (narrowing) the same, at once.
+//! workspace's); revoke (narrowing) the same, at once. An agent with
+//! "…and manage them end to end" (switch 2) opens its own App's doors
+//! itself (prd-agent-app-permissions-v1 §2.1).
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Mutex, OnceLock};
@@ -420,6 +422,20 @@ fn ask(who: &Who, app: &deploy::store::AppRow, wants: &[Want], reason: Option<&s
         return Ok(json!({ "ok": true, "status": "allowed", "alreadyAllowed": already, "hint": "already approved for this App" }));
     };
     audit(&app.app_id, "box_service_requested", &by, json!({ "request": w.id, "services": w.box_services(), "reason": w.reason, "source": source }));
+    if super::access::self_widens(who) {
+        // Switch 2 (prd-agent-app-permissions-v1 §2.1): the agent opens the
+        // door for its own App itself; the request is applied and audited.
+        let out = super::access::self_apply(&w, who)?;
+        return Ok(json!({
+            "ok": out["ok"],
+            "status": if out["status"] == "approved" { "allowed" } else { "failed" },
+            "request": out["request"],
+            "services": w.box_services(),
+            "alreadyAllowed": already,
+            "result": out["result"],
+            "hint": "opened under \"…and manage them end to end\"",
+        }));
+    }
     Ok(held_answer(&w, &already, wall_of(app)))
 }
 

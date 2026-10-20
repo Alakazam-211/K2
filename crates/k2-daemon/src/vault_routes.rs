@@ -1066,6 +1066,10 @@ const CONFIRM_ACTIONS: &[&str] = &[
     // App runtime (prd-k2-app-runtime-v1 §4.3): moving one App out of its
     // guarded container into the process exception (`secretId` = App id).
     "app-process-exception",
+    // Per-agent App permissions (prd-agent-app-permissions-v1 slice E):
+    // `k2 app uninstall --purge` deletes the App's data, so it needs the
+    // person every time, owner token included (`secretId` = App id).
+    crate::apps::access::PURGE_CONFIRM,
     // Sew on K2 (S29 K12, person-only steps): purging all Sew data,
     // revealing the master recovery key, dropping the retiring master key
     // after a rotation. `secretId` = the Sew install id (or `none`).

@@ -1440,6 +1440,11 @@ async fn async_main() {
     // App ids are box-wide (§8.4): name published labels that can't become
     // App ids (reserved words, a label several workspaces use).
     crate::apps::routes::log_upgrade_notices();
+    // prd-agent-app-permissions-v1 Q4: tell the owner once which agents
+    // kept "Build and run Apps" from the old switch (0197's review list).
+    if let Some(id) = crate::apps::access::review_note_once() {
+        k2_core::log_debug!("[apps] access review note filed: {id}");
+    }
 
     // K2 Connect #4 — daemon-canonical connect-session reaper. A single
     // long-lived task that evicts EXPIRED persisted login sessions from

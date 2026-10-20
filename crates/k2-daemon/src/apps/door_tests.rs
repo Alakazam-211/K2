@@ -416,7 +416,9 @@ fn agent_permissions_matrix() {
             _ => O::Run,
         }
     };
-    // (route, POST?, body, no switch, manage, manage+open)
+    // (route, POST?, body, both off, switch 1, switches 1+2). The full
+    // matrix with raises and the person-present list is
+    // `access_tests::agent_switch_matrix_off_build_full`.
     let ghost = json!({"app": "ghost-app"});
     let rows: Vec<(&str, bool, J, O, O, O)> = vec![
         // Reads stay open.
@@ -450,12 +452,12 @@ fn agent_permissions_matrix() {
         ("/cli/app/remote-pass/rotate", true, json!({"app": "jobs"}), O::Refused, O::Refused, O::Refused),
     ];
     let a = agent(&f.ws_a);
-    for (state, (manage, open)) in [(0, (false, false)), (1, (true, false)), (2, (true, true))] {
-        switch(&f.ws_a, manage);
+    for (state, (build, full)) in [(0, (false, false)), (1, (true, false)), (2, (true, true))] {
+        switch(&f.ws_a, build);
         {
             let h = k2_core::db::shared();
             let conn = h.lock();
-            conn.execute("UPDATE projects SET agents_can_publish_open_apps = ?2 WHERE id = ?1", params![f.ws_a, open as i64]).unwrap();
+            conn.execute("UPDATE projects SET agents_can_manage_apps_full = ?2 WHERE id = ?1", params![f.ws_a, full as i64]).unwrap();
         }
         for (path, post, body, o0, o1, o2) in &rows {
             let (st, v) = if *post {

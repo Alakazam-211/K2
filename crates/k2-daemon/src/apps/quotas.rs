@@ -310,7 +310,7 @@ fn u32f(v: &J, k: &str) -> R<Option<u32>> {
 /// POST `/cli/app/quota/set`: narrowing applies now (anyone who manages the
 /// App); a raise is the owner's, anyone else's is held (`quota`).
 fn set(who: &Who, body: &[u8]) -> R<J> {
-    super::routes::need_manage(who)?;
+    super::routes::need_build(who)?;
     let v = json_body(body)?;
     let app = app_for(who, s(&v, "app"))?;
     let cur_o = {
@@ -345,7 +345,9 @@ fn set(who: &Who, body: &[u8]) -> R<J> {
     next_o.validate().map_err(|e| no(codes::BAD_REQUEST, 400, e))?;
     let (cur, next) = (cur_o.apply(DEFAULTS), next_o.apply(DEFAULTS));
     let up = raises(&cur, &next);
-    let owner = matches!(who, Who::Owner | Who::Login { role: k2_core::connect_users::Role::Owner, .. } | Who::Shell { .. });
+    // A raise: the owner, or an agent with "…and manage them end to end"
+    // (prd-agent-app-permissions-v1 §2.1; box admission is slice F's).
+    let owner = super::access::owner_human(who) || super::access::self_widens(who);
     if !up.is_empty() && !owner {
         let summary = format!("raise {}'s quotas: {}", app.app_id, up.join(", "));
         let r = super::approvals::file(&super::approvals::Filing {

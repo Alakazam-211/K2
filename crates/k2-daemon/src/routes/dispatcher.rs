@@ -9067,16 +9067,18 @@ async fn handle_one_request(
             if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                 return DispatchOutcome::Done;
             }
-            if super::http::owner_role_identity(&query, state.token.as_str()).is_none() {
+            // 0.46.3: a wrapper for switch 1 "Build and run Apps"
+            // (prd-agent-app-permissions-v1 §10 A); the owner only.
+            let Some(by) = super::http::owner_role_identity(&query, state.token.as_str()) else {
                 let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
                 let f = skin_dual_auth_failure(&query, bearer_token.as_deref());
                 super::http::send_response(&mut *stream, f.status, f.content_type, &f.body)
                     .await;
                 return DispatchOutcome::Done;
-            }
+            };
             let body = super::http::read_post_body(&mut *stream, &mut buf).await;
             let r = tokio::task::spawn_blocking(move || {
-                crate::skin_routes::handle_agents_manage_skin(&body)
+                crate::skin_routes::handle_agents_manage_skin(&body, &by)
             })
             .await
             .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e));

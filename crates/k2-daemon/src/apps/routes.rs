@@ -3,15 +3,18 @@
 //! Who may do what:
 //! - Route floors (`route_policy.rs`) stop Connect logins below the role.
 //! - Passports (agents) act only on their own workspace's Apps and
-//!   folders. Changing anything (build, deploy, …) also needs the
-//!   workspace switch "Allow this agent to manage Apps"
-//!   (`agents_can_manage_skin`, §5.11.1): without it the change becomes a
-//!   held `manage` request for the owner (S42, `approvals::
-//!   hold_without_switch`); `apps_manage_off` is left only for changes
-//!   outside that list. Deploys adding caps past the App's approved set,
-//!   and first installs, are held for every caller (S20, `grants`). New
-//!   egress hosts are held for every caller too (`egress_routes`, S15).
-//! - A plain K2 shell tab is a human: treated as the owner (NT5).
+//!   folders. Changing anything (build, deploy, …) also needs switch 1
+//!   "Build and run Apps" (`agents_can_manage_skin`); raises need switch 2
+//!   "…and manage them end to end"; loosening the wall waits for the
+//!   person from every caller (`super::access`, prd-agent-app-permissions
+//!   -v1). Without switch 1 the change becomes a held `manage` request for
+//!   the owner (S42, `approvals::hold_without_switch`); `apps_manage_off`
+//!   is left only for changes outside that list. Deploys adding caps past
+//!   the App's approved set, and first installs, are held for every caller
+//!   (S20, `grants`).
+//! - Members are read-only (`member_read_only`, Q7).
+//! - A plain K2 shell tab is a human: treated as the owner (NT5), but it
+//!   can't pass a person-present confirm.
 //! - App passes, API keys and API sessions are refused (`wrong_credential`).
 //!
 //! The TCP dispatcher and the per-cell socket both classify the caller as
@@ -219,29 +222,16 @@ pub(crate) fn agent_ws(who: &Who) -> Option<&str> {
     }
 }
 
-/// Agents need "Allow this agent to manage Apps" on their workspace to
-/// change anything (§5.11.1). Humans pass.
+/// Agents need switch 1 "Build and run Apps" to change anything; humans
+/// pass; Members are read-only (`super::access::need_build`).
+pub(crate) fn need_build(who: &Who) -> R<()> {
+    super::access::need_build(who)
+}
+
+/// The pre-0.46.3 name of [`need_build`] (kept for lanes built on it).
+#[allow(dead_code)]
 pub(crate) fn need_manage(who: &Who) -> R<()> {
-    need_credential(who)?;
-    let Some(ws) = agent_ws(who) else { return Ok(()) };
-    // S42: the replay of a held `manage` request the owner approved.
-    if super::approvals::manage_approved_now() {
-        return Ok(());
-    }
-    let path = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        k2_core::db::schema::Project::get(&conn, ws).map(|p| p.path).map_err(|_| no(codes::FORBIDDEN, 403, "your workspace is not registered"))?
-    };
-    if !k2_core::workspace::settings::agents_can_manage_skin_for_path(&path) {
-        return Err(no(
-            codes::APPS_MANAGE_OFF,
-            403,
-            "Apps are off for this agent: ask your owner to turn on \"Allow this agent to manage Apps\" \
-             in Workspace settings → Agent (k2 app access arrives with the admin switches)",
-        ));
-    }
-    Ok(())
+    super::access::need_build(who)
 }
 
 #[derive(Debug, Clone)]
@@ -364,8 +354,15 @@ pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String
         return dark();
     }
     super::supervisor::ensure_started();
-    // S42: an agent without "Allow this agent to manage Apps" gets a held
-    // request for the owner instead of a refusal.
+    // Q7: a Member login sees Apps and changes nothing (the route floors
+    // say so for the TCP door; this holds on every door).
+    if is_post_route(path) {
+        if let Err(e) = super::access::member_read_only(&who) {
+            return respond(Err(e));
+        }
+    }
+    // S42: an agent without "Build and run Apps" gets a held request for
+    // the owner instead of a refusal.
     if let Some(held) = super::approvals::hold_without_switch(path, &who, body) {
         return respond(held);
     }
@@ -419,7 +416,7 @@ pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String
 /// A manifest `build` runs inside the wall where the box has one (S16,
 /// guarded: install scripts off), in the reserved `build` slot.
 fn build(who: &Who, body: &[u8]) -> R<J> {
-    need_manage(who)?;
+    need_build(who)?;
     let v = json_body(body)?;
     let folder = resolve_folder(who, s(&v, "folder").ok_or_else(|| no(codes::BAD_REQUEST, 400, "folder is required"))?)?;
     let (built, wall) = build_seed(who, &folder, &v, super::wall_build::BUILD_SLOT, false)?;
@@ -536,7 +533,7 @@ fn audit_human(app_id: &str, event: &str, who: &Who, payload: J) {
 /// URL `<app>.<sub>.k2.dev` points at the front port (one control-plane
 /// write, here, never per deploy). With a Seed or folder it deploys too.
 fn install(who: &Who, body: &[u8]) -> R<J> {
-    need_manage(who)?;
+    need_build(who)?;
     let v = json_body(body)?;
     let app_id = s(&v, "app").ok_or_else(|| no(codes::BAD_REQUEST, 400, "app is required (the App id)"))?.to_ascii_lowercase();
     if let Some((code, msg)) = deploy::app_id_problem(&app_id) {
@@ -820,7 +817,7 @@ fn hold_new_caps(who: &Who, app: &AppRow, seed: &str, v: &J) -> R<Option<J>> {
 
 /// POST `/cli/app/deploy {app, seed|folder, reason?, wait?, types?}`.
 fn deploy_route(who: &Who, body: &[u8]) -> R<J> {
-    need_manage(who)?;
+    need_build(who)?;
     let v = json_body(body)?;
     deploy_inner(who, &v)
 }
@@ -828,7 +825,7 @@ fn deploy_route(who: &Who, body: &[u8]) -> R<J> {
 /// POST `/cli/app/rollback {app, to?, wait?}` (§7.3): instant when the
 /// previous instance is still warm; otherwise through the health gate.
 fn rollback(who: &Who, body: &[u8]) -> R<J> {
-    need_manage(who)?;
+    need_build(who)?;
     let v = json_body(body)?;
     let app = app_for(who, s(&v, "app"))?;
     super::suspend::refuse_if_suspended(&app.app_id)?;
@@ -845,7 +842,7 @@ fn rollback(who: &Who, body: &[u8]) -> R<J> {
 
 /// POST `/cli/app/stop {app}`: drain, stop, no restarts.
 fn stop(who: &Who, body: &[u8]) -> R<J> {
-    need_manage(who)?;
+    need_build(who)?;
     let v = json_body(body)?;
     let app = app_for(who, s(&v, "app"))?;
     super::supervisor::stop_app(&app, &actor(who))?;
@@ -856,7 +853,7 @@ fn stop(who: &Who, body: &[u8]) -> R<J> {
 /// POST `/cli/app/start|restart {app, wait?}`: start the live Seed again
 /// (restart is zero-downtime: the new instance passes the gate first).
 fn start(who: &Who, body: &[u8], kind: &'static str) -> R<J> {
-    need_manage(who)?;
+    need_build(who)?;
     let v = json_body(body)?;
     let app = app_for(who, s(&v, "app"))?;
     super::suspend::refuse_if_suspended(&app.app_id)?;
@@ -902,12 +899,13 @@ fn deployment(who: &Who, params: &HashMap<String, String>) -> R<J> {
 // the caller may make at once applies now and the rest is one held
 // request for the owner. Two families have their own truth and rules:
 // - egress (`egressAdd`, `egressRm`, `egressMode`) is the guarded App's
-//   enforced host list (S15, `super::egress_routes`): a new host or broad
-//   mode is always its own held `egress` request (every caller, the owner
-//   token included); removing a host or going back to allowlist applies
-//   at once;
+//   enforced host list (S15, `super::egress_routes`): a new host is its
+//   own held `egress` request (the owner token included), except that an
+//   agent with switch 2 adds it itself; broad mode is the open path, held
+//   for the person from every caller; removing a host or going back to
+//   allowlist applies at once;
 // - disk ceilings (`io`, runtime lane D): tightening applies at once; a
-//   raise is the owner's (an agent's raise is held).
+//   raise is the owner's or switch 2's (anyone else's is held).
 // The process exception (path open + isolation process) has its own
 // owner-only switch (`k2 app exception`); config never enters or leaves it.
 
@@ -1166,25 +1164,6 @@ pub(crate) fn apply_config_ops(app_id: &str, ops: &[Op], by: &str) -> R<J> {
     Ok(json!({ "applied": lines, "config": state }))
 }
 
-/// May this caller make a change of this class at once?
-fn may_apply(who: &Who, class: Class, open_on: bool) -> bool {
-    match class {
-        Class::Narrow | Class::Budget => true,
-        Class::PerEvent => false,
-        Class::Open => matches!(who, Who::Owner | Who::Shell { .. } | Who::Login { role: Role::Owner, .. }) || (agent_ws(who).is_some() && open_on),
-        Class::Owner => matches!(who, Who::Owner | Who::Shell { .. } | Who::Login { role: Role::Owner, .. }),
-    }
-}
-
-fn hold_reason(class: Class) -> &'static str {
-    match class {
-        Class::Open => "an open-path feature: the owner, or an agent whose workspace has \"…and publish open Apps\"",
-        Class::Owner => "a widening only the owner makes",
-        Class::PerEvent => "on the always-per-event list: a fresh owner confirm, even from the owner token",
-        _ => "",
-    }
-}
-
 /// POST `/cli/app/config {app, memory?, cpuWeight?, tasks?, disk?,
 /// egressAdd?, egressRm?, egressMode?, portAdd?, portRm?, recycleEvery?,
 /// recycleAt?, isolation?, path?, risk?, dbPrivate?, dbRaw?, io?}` (S13,
@@ -1193,7 +1172,7 @@ fn hold_reason(class: Class) -> &'static str {
 /// applies now; the rest becomes one held request for the owner (egress
 /// widenings are their own `egress` request).
 fn config(who: &Who, body: &[u8]) -> R<J> {
-    need_manage(who)?;
+    need_build(who)?;
     let v = json_body(body)?;
     let app = app_for(who, s(&v, "app"))?;
     let mut ops = config_ops(&v)?;
@@ -1233,19 +1212,20 @@ fn config(who: &Who, body: &[u8]) -> R<J> {
             format!("broad egress is the open path's; App {} is guarded. Ask for the hosts it needs (egressAdd)", app.app_id),
         ));
     }
-    let open_on = agent_ws(who).is_some_and(k2_core::workspace::settings::agents_can_publish_open_apps);
+    // prd-agent-app-permissions-v1 §2: narrowing applies; a raise applies
+    // for humans and agents with switch 2; loosening the wall is held for
+    // the person from every caller (`super::access::config_rule`).
     let mut now_ops: Vec<Op> = Vec::new();
-    let mut held: Vec<(Op, Class)> = Vec::new();
+    let mut held: Vec<(Op, &'static str)> = Vec::new();
     for op in ops {
         let class = match op {
             Op::Io(_) if io_raise => Class::Owner,
             Op::Io(_) => Class::Narrow,
             _ => appcfg::classify(&op, &state),
         };
-        if may_apply(who, class, open_on) {
-            now_ops.push(op);
-        } else {
-            held.push((op, class));
+        match super::access::config_rule(who, &op, class) {
+            Ok(()) => now_ops.push(op),
+            Err(why) => held.push((op, why)),
         }
     }
     let io_changed = now_ops.iter().any(|o| matches!(o, Op::Io(_)));
@@ -1298,7 +1278,7 @@ fn config(who: &Who, body: &[u8]) -> R<J> {
     if !held.is_empty() {
         let t = super::grace::target(&Who::Owner, Some(&app.service_id))?;
         let diff: Vec<String> = held.iter().map(|(op, _)| appcfg::describe(op, &state)).collect();
-        let mut reasons: Vec<String> = held.iter().map(|(op, c)| format!("{}: {}", appcfg::describe(op, &state), hold_reason(*c))).collect();
+        let mut reasons: Vec<String> = held.iter().map(|(op, why)| format!("{}: {why}", appcfg::describe(op, &state))).collect();
         reasons.dedup();
         let ops: Vec<&Op> = held.iter().map(|(op, _)| op).collect();
         let h = super::grace::hold(
@@ -1381,7 +1361,7 @@ fn link(who: &Who, params: &HashMap<String, String>) -> R<J> {
 /// (the old one keeps working until its own expiry). It only refreshes,
 /// so the manage-Apps switch is enough for an agent's own App.
 fn link_rotate(who: &Who, body: &[u8]) -> R<J> {
-    need_manage(who)?;
+    need_build(who)?;
     let v = json_body(body)?;
     let app = app_for(who, s(&v, "app"))?;
     let expires = super::gateway::rotate(&app.app_id).map_err(|e| no("link_unavailable", 409, e))?;
@@ -1451,11 +1431,18 @@ fn list(who: &Who, params: &HashMap<String, String>) -> R<J> {
         let conn = db.lock();
         store::list_apps(&conn, filter.as_deref()).map_err(db_err)?
     };
-    Ok(json!({
+    let mut out = json!({
         "ok": true,
         "apps": apps.iter().map(app_summary).collect::<Vec<_>>(),
         "notices": if agent_ws(who).is_some() { vec![] } else { upgrade_notices() },
-    }))
+    });
+    match agent_ws(who) {
+        // The agent's own switches (prd-agent-app-permissions-v1 §2).
+        Some(ws) => out["access"] = json!({ "level": super::access::level(ws).as_str() }),
+        // Q4: the agents 0197 kept on "Build and run Apps" (Settings → Apps).
+        None => out["accessReview"] = super::access::review_json(),
+    }
+    Ok(out)
 }
 
 /// GET `/cli/app/inspect?app=`: the row, the runtime, the live Seed
@@ -1634,19 +1621,17 @@ fn errors(who: &Who, params: &HashMap<String, String>) -> R<J> {
 
 /// POST `/cli/app/uninstall {app, purge?}`: stop, release the URL label,
 /// drop the App and its service row. Seeds stay (the sweep removes them);
-/// the deploy audit stays. `purge` also removes the App folder (its data):
-/// owner only, passports refused.
+/// the deploy audit stays. Uninstalling its own App is switch 1's (N2).
+/// `purge` also removes the App folder (its data): the owner in person,
+/// with a fresh vault confirm bound to the App, every time, the owner
+/// token included (slice E, F3); passports and shell tabs refused.
 fn uninstall(who: &Who, body: &[u8]) -> R<J> {
-    need_manage(who)?;
+    need_build(who)?;
     let v = json_body(body)?;
     let app = app_for(who, s(&v, "app"))?;
     let purge = b(&v, "purge");
-    if purge && !matches!(who, Who::Owner | Who::Login { role: Role::Owner, .. }) {
-        return Err(no(
-            codes::OWNER_ONLY,
-            403,
-            "--purge deletes the App's data: only the server's owner can, from Settings or a terminal outside K2",
-        ));
+    if purge {
+        super::access::purge_confirm(who, &app.app_id, s(&v, "confirmToken"))?;
     }
     super::supervisor::stop_app(&app, &actor(who))?;
     super::supervisor::forget(&app.app_id);

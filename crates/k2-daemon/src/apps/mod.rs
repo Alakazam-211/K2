@@ -4,6 +4,7 @@
 //! route override with drain, and agent alerts. The pure and SQLite parts
 //! are `k2_core::deploy`.
 
+pub mod access;
 pub mod alerts;
 pub mod app_key_routes;
 pub mod approvals;
@@ -37,6 +38,10 @@ pub mod wall_build;
 /// The 0.46.1 door's route tests (lane 2: S19, S20, S42, AR10).
 #[cfg(test)]
 mod door_tests;
+
+/// Per-agent App permissions (prd-agent-app-permissions-v1, 0.46.3).
+#[cfg(test)]
+mod access_tests;
 
 /// Room-scope R9/R16 surface tests (0.46.1).
 #[cfg(test)]

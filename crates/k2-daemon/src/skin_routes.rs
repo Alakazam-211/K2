@@ -1911,8 +1911,11 @@ fn enable_field(v: &serde_json::Value) -> Option<bool> {
 }
 
 /// `POST /cli/agents-manage-skin` `{project, enable: 0|1}` — owner-only
-/// writer for `projects.agents_can_manage_skin`. Not `workspace/set`.
-pub fn handle_agents_manage_skin(body: &[u8]) -> CliResponse {
+/// writer for `projects.agents_can_manage_skin`, which is switch 1 "Build
+/// and run Apps" since 0.46.3: a wrapper over the one switch writer
+/// (`apps::access::set_switches`: audit rows, the agent's note; off also
+/// turns switch 2 off). Not `workspace/set`. `by` is the owner identity.
+pub fn handle_agents_manage_skin(body: &[u8], by: &str) -> CliResponse {
     let v = match json_body(body) {
         Ok(v) => v,
         Err(r) => return r,
@@ -1926,21 +1929,35 @@ pub fn handle_agents_manage_skin(body: &[u8]) -> CliResponse {
     let Some(path) = crate::workspace_msg::resolve_workspace(project) else {
         return crate::workspace_routes::workspace_not_found_response(project);
     };
-    match k2_core::workspace::settings::set_agents_can_manage_skin(&path, enable) {
-        Ok(()) => {
-            k2_core::agent_hooks::emit(
-                k2_core::agent_hooks::HookEvent::SyncProjects,
-                serde_json::Value::Null,
-            );
+    let id = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::workspace::agent_identity::resolve_project_id(&conn, &path)
+    };
+    let Some(id) = id else {
+        return crate::workspace_routes::workspace_not_found_response(project);
+    };
+    let change = crate::apps::access::SwitchChange { build: Some(enable), full: None };
+    match crate::apps::access::set_switches(&id, change, true, by) {
+        Ok(v) => {
+            k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+                "agent-access-set",
+                by,
+                format!("ok {} apps_build={enable} (agents-manage-skin)", v["workspace"].as_str().unwrap_or("?")),
+                "cli",
+                "-",
+                "cli",
+            ));
             CliResponse::ok_json(
                 serde_json::json!({
                     "success": true,
                     "agentsCanManageSkin": enable,
+                    "agentsCanManageAppsFull": v["agentsCanManageAppsFull"],
                 })
                 .to_string(),
             )
         }
-        Err(e) => CliResponse::bad_request(e),
+        Err(e) => CliResponse::bad_request(e.hint),
     }
 }
 

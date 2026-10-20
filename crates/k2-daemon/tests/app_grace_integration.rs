@@ -420,15 +420,18 @@ async fn publish_run_mapping_notice_now_held_when_enforced_and_the_admin_switche
     let free = || std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
     let run = |name: &str, port: u16| json!({"name": name, "cmd": "exec python3 -m http.server $PORT --bind 127.0.0.1", "port": port, "noTunnel": true});
 
-    // Switches: only Owner/Admin humans; the child needs the parent.
-    let r = post(d.port, "/cli/agent-access/set", &agent, json!({"workspace": ws.id, "toggle": "apps_manage", "value": true})).await;
+    // Switches: only the owner raises; switch 2 needs switch 1; the old
+    // "…and publish open Apps" is retired (N1).
+    let r = post(d.port, "/cli/agent-access/set", &agent, json!({"workspace": ws.id, "toggle": "apps_build", "value": true})).await;
     assert_eq!(r.status, 403, "{}", r.body);
-    let r = post(d.port, "/cli/agent-access/set", OWNER, json!({"workspace": ws.id, "toggle": "apps_open", "value": true})).await;
+    let r = post(d.port, "/cli/agent-access/set", OWNER, json!({"workspace": ws.id, "toggle": "apps_manage_full", "value": true})).await;
     assert_eq!((r.status, r.code()), (409, "parent_switch_off".to_string()), "{}", r.body);
+    let r = post(d.port, "/cli/agent-access/set", OWNER, json!({"workspace": ws.id, "toggle": "apps_open", "value": true})).await;
+    assert_eq!((r.status, r.code()), (410, "open_switch_retired".to_string()), "{}", r.body);
 
     // No open path in this harness (no engine, no root helper): an agent's
     // new --cmd runs as in 0.46.0, with the notice of what the gate asks
-    // for (0.46.1 holds only where the run would be an open-path App).
+    // for (it holds only where the run would be an open-path App).
     let r = post(d.port, "/cli/publish/run", &agent, run("svc-a", free())).await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(r.json()["crossover"]["wouldHold"], true, "{}", r.body);
@@ -440,6 +443,15 @@ async fn publish_run_mapping_notice_now_held_when_enforced_and_the_admin_switche
         r.body
     );
     assert_eq!(r.json()["wall"]["path"], "legacy", "it says why it isn't walled: {}", r.body);
+    // A re-run of the now existing service without "Build and run Apps"
+    // waits for the owner; with it, it runs at once.
+    let r = post(d.port, "/cli/publish/run", &agent, run("svc-a", free())).await;
+    assert_eq!((r.status, r.json()["kind"].clone()), (202, json!("publish_run")), "{}", r.body);
+    let r = post(d.port, "/cli/agent-access/set", OWNER, json!({"workspace": ws.id, "toggle": "apps_build", "value": true})).await;
+    assert_eq!((r.status, r.json()["level"].clone()), (200, json!("build")), "{}", r.body);
+    let r = post(d.port, "/cli/publish/run", &agent, run("svc-a", free())).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(r.json().get("crossover").is_none(), "a legacy re-run under switch 1 is free: {}", r.body);
     let r = post(d.port, "/cli/publish/rm", &agent, json!({"name": "svc-a"})).await;
     assert_eq!(r.status, 200, "{}", r.body);
 
@@ -463,19 +475,16 @@ async fn publish_run_mapping_notice_now_held_when_enforced_and_the_admin_switche
         assert_eq!(r.status, 200, "{}", r.body);
         assert!(r.json().get("crossover").is_none());
         let _ = post(d.port, "/cli/publish/rm", OWNER, json!({"name": "svc-c", "project": ws.id})).await;
-        // Both switches on: the agent runs at once, no notice.
-        let r = post(d.port, "/cli/agent-access/set", OWNER, json!({"workspace": ws.id, "toggle": "apps_manage", "value": true})).await;
-        assert_eq!(r.status, 200, "{}", r.body);
-        let r = post(d.port, "/cli/agent-access/set", OWNER, json!({"workspace": ws.id, "toggle": "apps_open", "value": true})).await;
-        assert_eq!(r.json()["agentsCanPublishOpenApps"], true, "{}", r.body);
+        // Both switches on: a new service from the agent still waits for
+        // the person (no standing approval for the open path any more).
+        let r = post(d.port, "/cli/agent-access/set", OWNER, json!({"workspace": ws.id, "toggle": "apps_manage_full", "value": true})).await;
+        assert_eq!((r.status, r.json()["level"].clone()), (200, json!("full")), "{}", r.body);
         let r = post(d.port, "/cli/publish/run", &agent, run("svc-d", free())).await;
-        assert_eq!(r.status, 200, "{}", r.body);
-        assert!(r.json().get("crossover").is_none(), "{}", r.body);
-        let _ = post(d.port, "/cli/publish/rm", &agent, json!({"name": "svc-d"})).await;
+        assert_eq!((r.status, r.json()["kind"].clone()), (202, json!("publish_run")), "{}", r.body);
     }
-    // The parent off turns the child off.
-    let r = post(d.port, "/cli/agent-access/set", OWNER, json!({"workspace": ws.id, "toggle": "apps_manage", "value": false})).await;
-    assert_eq!((r.json()["agentsCanManageApps"].clone(), r.json()["agentsCanPublishOpenApps"].clone()), (json!(false), json!(false)), "{}", r.body);
+    // Switch 1 off turns switch 2 off.
+    let r = post(d.port, "/cli/agent-access/set", OWNER, json!({"workspace": ws.id, "toggle": "apps_build", "value": false})).await;
+    assert_eq!((r.json()["agentsCanBuildApps"].clone(), r.json()["agentsCanManageAppsFull"].clone()), (json!(false), json!(false)), "{}", r.body);
     k2_daemon::apps::alerts::set_sink(None);
 }
 
@@ -535,16 +544,28 @@ async fn s13_config_applies_narrowing_now_and_holds_widening() {
     assert_eq!(r.json()["egressHeld"]["request"]["kind"], "egress", "{}", r.body);
     assert_eq!(r.json()["egressHeld"]["request"]["hosts"], json!(["api.stripe.com:443"]), "{}", r.body);
     assert!(r.json().get("held").is_none(), "nothing else was held: {}", r.body);
-    // Open-path features: held without "…and publish open Apps", applied with it.
+    // Open-path features loosen the wall: held for the person from every
+    // caller, with any switch (the open switch is retired, N1); the
+    // owner's approval applies it.
     let r = post(d.port, "/cli/app/config", OWNER, json!({"app": "cfg-app", "isolation": "container"})).await;
     assert_eq!(r.status, 200, "raising the wall narrows: {}", r.body);
     let r = post(d.port, "/cli/app/config", &agent, json!({"app": "cfg-app", "path": "open", "portAdd": "5000/udp"})).await;
     assert_eq!(r.status, 202, "{}", r.body);
     let r = post(d.port, "/cli/agent-access/set", OWNER, json!({"workspace": ws.id, "toggle": "apps_open", "value": true})).await;
+    assert_eq!(r.status, 410, "{}", r.body);
+    let r = post(d.port, "/cli/agent-access/set", OWNER, json!({"workspace": ws.id, "toggle": "apps_manage_full", "value": true})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let r = post(d.port, "/cli/app/config", &agent, json!({"app": "cfg-app", "path": "open"})).await;
+    assert_eq!(r.status, 202, "switch 2 never covers the open path: {}", r.body);
+    let r = post(d.port, "/cli/app/config", OWNER, json!({"app": "cfg-app", "path": "open"})).await;
+    assert_eq!(r.status, 202, "nor does the owner token alone: {}", r.body);
+    let open_req = r.json()["held"]["request"]["id"].as_str().unwrap().to_string();
+    let r = post(d.port, "/cli/app/approve", OWNER, json!({"request": open_req, "confirmToken": confirm("app-approve", &open_req)})).await;
+    assert_eq!(r.json()["status"], "approved", "{}", r.body);
+    let r = get(d.port, "/cli/app/inspect", OWNER, "app=cfg-app").await;
+    assert_eq!(r.json()["app"]["path"], "open", "{}", r.body);
+    let r = post(d.port, "/cli/agent-access/set", OWNER, json!({"workspace": ws.id, "toggle": "apps_manage_full", "value": false})).await;
     assert_eq!(r.status, 200, "{}", r.body);
-    assert_eq!(r.json()["app"]["path"], "open");
     // Path open + isolation process is the process exception: never a
     // config change, even for the owner (k2 app exception, in person).
     let r = post(d.port, "/cli/app/config", OWNER, json!({"app": "cfg-app", "isolation": "process"})).await;

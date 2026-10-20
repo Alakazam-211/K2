@@ -1370,8 +1370,9 @@ mod tests {
         assert_eq!(steal.status, "409 Conflict", "body={}", steal.body);
         let sv: serde_json::Value = serde_json::from_str(&steal.body).unwrap();
         assert_eq!(sv["code"], "label_owned_by_other_workspace");
-        assert!(sv.get("owner").is_none(), "non-owner gets the neutral message");
-        assert!(!steal.body.contains("Documents"), "no owner name leak: {}", steal.body);
+        // N6: the holder's agent by name and address; never its id or path.
+        assert_eq!(sv["owner"]["agent"], "Documents", "{}", steal.body);
+        assert!(!steal.body.contains("/tmp/docs-claim") && !steal.body.contains(&format!("\"{docs}\"")), "no path or id leak: {}", steal.body);
 
         // check=1 (CLI preflight) refuses the same way and writes nothing.
         let mut check = claim_params(&sales, &label, None);

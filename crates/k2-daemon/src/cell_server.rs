@@ -1676,8 +1676,11 @@ mod unix_impl {
             assert_eq!(sstatus, "409 Conflict", "must not steal Sales; body={sout}");
             let sv: serde_json::Value = serde_json::from_str(&sout).expect("json refusal");
             assert_eq!(sv["code"], "label_owned_by_other_workspace", "body={sout}");
-            assert!(sv.get("owner").is_none(), "agent must get the neutral message; body={sout}");
-            assert!(!sout.contains("Sales") && !sout.contains(sales), "no owner leak; body={sout}");
+            // N6: the agent hears which agent holds it (to k2 msg it),
+            // never the workspace's id or folder path.
+            assert_eq!(sv["owner"]["agent"], "Sales", "body={sout}");
+            assert!(sv["owner"]["address"].is_string(), "body={sout}");
+            assert!(!sout.contains(sales) && !sout.contains(sales_path), "no id or path leak; body={sout}");
 
             // An agent cannot transfer, even when it asks to.
             let xfer = serde_json::json!({

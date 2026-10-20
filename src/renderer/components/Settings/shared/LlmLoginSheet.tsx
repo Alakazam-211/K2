@@ -2,10 +2,14 @@
 // subscription" / "Sign in again"; a wallet login internally).
 //
 // The daemon runs the tool's OWN login command in a daemon-owned terminal
-// on the server. This sheet turns that into three buttons a phone can use:
-// Open sign-in page (in the viewer's own browser), Copy code (device code),
-// Paste code (sent to the login terminal). The raw terminal text stays
-// under "Show terminal" as the fallback.
+// on the server. This sheet turns that into buttons a phone can use:
+// Open sign-in page (in the viewer's own browser), Copy link, Copy code
+// (device code), Paste code (sent to the login terminal). The raw terminal
+// text stays under "Show terminal" as the fallback.
+//
+// The sign-in link is never cut (0.46.3 S1): Open and Copy link always use
+// the whole stored `login.url`, never text read back from the page, and the
+// full link can be shown wrapped (no ellipsis, no max length).
 
 import React from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -32,6 +36,17 @@ export type LoginSheetStart =
 
 const FINAL = new Set(['signed_in', 'failed', 'cancelled', 'timed_out'])
 
+/** The host to show for a sign-in URL: the daemon's `urlHost`, else parsed here. */
+export function signInHost(login: Pick<LlmLogin, 'url' | 'urlHost'>): string | null {
+  if (login.urlHost) return login.urlHost
+  if (!login.url) return null
+  try {
+    return new URL(login.url).host || null
+  } catch {
+    return null
+  }
+}
+
 export function LlmLoginSheet({
   scope,
   start,
@@ -49,6 +64,8 @@ export function LlmLoginSheet({
   const [paste, setPaste] = useState('')
   const [showTerminal, setShowTerminal] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [showLink, setShowLink] = useState(false)
+  const [linkCopied, setLinkCopied] = useState(false)
   const [madeActive, setMadeActive] = useState<null | 'active' | 'kept'>(null)
   // Only Admin and above may make it the server default (the daemon says
   // so in the list doc); a Member never sees the offer.
@@ -111,6 +128,25 @@ export function LlmLoginSheet({
   const openSignIn = useCallback(() => {
     if (!login?.url) return
     void openUrl(login.url).catch((e: unknown) => setError(errorText(e)))
+  }, [login?.url])
+
+  // Copies the whole stored URL, never what the page shows.
+  const copyLink = useCallback(() => {
+    if (!login?.url) return
+    const clip = navigator.clipboard
+    if (!clip) {
+      setError('Copy isn’t available here. Use Show full link and select it.')
+      return
+    }
+    void clip
+      .writeText(login.url)
+      .then(() => setLinkCopied(true))
+      .catch((e: unknown) => setError(errorText(e)))
+  }, [login?.url])
+
+  // A new link (the tool issued another one) has not been copied yet.
+  useEffect(() => {
+    setLinkCopied(false)
   }, [login?.url])
 
   const copyCode = useCallback(() => {
@@ -245,6 +281,40 @@ export function LlmLoginSheet({
                 >
                   {login.url ? 'Open sign-in page' : 'Waiting for the sign-in page…'}
                 </button>
+                {login.url && (
+                  <div className="space-y-1" data-testid="llm-login-link">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-[11px] text-[var(--color-text-secondary)] min-w-0">
+                        Sign in at{' '}
+                        <span className="font-mono text-[var(--color-text-primary)]" data-testid="llm-login-host">
+                          {signInHost(login) ?? 'the sign-in page'}
+                        </span>
+                      </span>
+                      <span className="flex shrink-0 gap-3">
+                        <button
+                          type="button"
+                          onClick={() => setShowLink((v) => !v)}
+                          aria-expanded={showLink}
+                          className="text-[11px] text-[var(--color-text-muted)]"
+                        >
+                          {showLink ? 'Hide full link' : 'Show full link'}
+                        </button>
+                        <button type="button" onClick={copyLink} className="text-[11px] text-[var(--color-accent)]">
+                          {linkCopied ? 'Link copied' : 'Copy link'}
+                        </button>
+                      </span>
+                    </div>
+                    {showLink && (
+                      <div
+                        className="font-mono text-[10px] leading-snug text-[var(--color-text-secondary)] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] px-2 py-1.5 select-all"
+                        style={{ overflowWrap: 'anywhere', wordBreak: 'break-all', userSelect: 'all', whiteSpace: 'normal' }}
+                        data-testid="llm-login-url"
+                      >
+                        {login.url}
+                      </div>
+                    )}
+                  </div>
+                )}
                 {login.code && (
                   <div className="flex items-center justify-between gap-3 border border-[var(--color-border)] px-3 py-2">
                     <span className="font-mono text-lg tracking-widest text-[var(--color-text-primary)]" data-testid="llm-login-code">

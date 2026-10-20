@@ -8,7 +8,7 @@
 import type { K2Error } from '../errors.ts'
 
 /** The catalog version this table was generated from. */
-export const CATALOG_VERSION = 15
+export const CATALOG_VERSION = 16
 
 /** A JSON Schema from the catalog's subset, reduced for projection. */
 export type Schema = { readonly [key: string]: unknown }
@@ -110,10 +110,10 @@ export const APP_VERBS = {
     kind: 'call',
     feature: 'app-api-v1',
     door: 'both',
-    http: { method: 'GET', route: '/cli/thread', params: { 'beforeSeq': 'before_seq', 'sinceSeq': 'since_seq' }, query: [] },
+    http: { method: 'GET', route: '/cli/thread', params: { 'afterSeq': 'after_seq', 'beforeSeq': 'before_seq', 'sinceSeq': 'since_seq' }, query: [] },
     socket: null,
     responseNames: { 'conversation': 'conversation_id' },
-    response: {"additionalProperties":false,"properties":{"addr":{"type":"string"},"collection":{"type":"string"},"conversation":{"type":"string"},"has_more":{"type":"boolean"},"items":{"items":{"additionalProperties":false,"properties":{"collection":{"type":"string"},"doc":{"additionalProperties":false,"properties":{"author":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"body":{"type":"string"},"choice":{"additionalProperties":false,"properties":{"allow_custom":{"type":"boolean"},"answer":{"type":"string"},"answeredAt":{"type":"integer"},"answeredBy":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"expiresAt":{"type":"integer"},"options":{"items":{"additionalProperties":false,"properties":{"label":{"type":"string"}},"type":"object"},"type":"array"},"prompt":{"type":"string"},"status":{"type":"string"}},"type":"object"},"created_at":{"type":"number"},"from":{"type":"string"},"id":{"type":"string"},"kind":{"type":"string"},"secret":{"additionalProperties":false,"properties":{"answeredAt":{"type":"integer"},"answeredBy":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"delivery":{"type":"string"},"expiresAt":{"type":"integer"},"hosts":{"items":{"type":"string"},"type":"array"},"name":{"type":"string"},"prompt":{"type":"string"},"ref":{"type":"string"},"scope":{"type":"string"},"secretKind":{"type":"string"},"status":{"type":"string"}},"type":"object"},"to":{"type":"string"},"via":{"type":"string"},"widget":{"additionalProperties":false,"properties":{"garden":{"type":"string"},"widget":{"type":"string"}},"type":"object"}},"type":"object"},"id":{"type":"string"},"seq":{"type":"integer"}},"type":"object"},"type":"array"},"ok":{"type":"boolean"},"pastAddresses":{"items":{"type":"string"},"type":"array"}},"type":"object"},
+    response: {"additionalProperties":false,"properties":{"addr":{"type":"string"},"after_seq":{"type":"integer"},"changed":{"items":{"additionalProperties":false,"properties":{"collection":{"type":"string"},"doc":{"additionalProperties":false,"properties":{"attachments":{"items":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"line":{"type":"integer"},"lineEnd":{"type":"integer"},"mime":{"type":"string"},"modifiedAt":{"type":"integer"},"name":{"type":"string"},"size":{"type":"integer"},"state":{"type":"string"}},"type":"object"},"type":"array"},"author":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"body":{"type":"string"},"choice":{"additionalProperties":false,"properties":{"allow_custom":{"type":"boolean"},"answer":{"type":"string"},"answeredAt":{"type":"integer"},"answeredBy":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"expiresAt":{"type":"integer"},"options":{"items":{"additionalProperties":false,"properties":{"label":{"type":"string"}},"type":"object"},"type":"array"},"prompt":{"type":"string"},"status":{"type":"string"}},"type":"object"},"created_at":{"type":"number"},"from":{"type":"string"},"id":{"type":"string"},"kind":{"type":"string"},"secret":{"additionalProperties":false,"properties":{"answeredAt":{"type":"integer"},"answeredBy":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"delivery":{"type":"string"},"expiresAt":{"type":"integer"},"hosts":{"items":{"type":"string"},"type":"array"},"name":{"type":"string"},"prompt":{"type":"string"},"ref":{"type":"string"},"scope":{"type":"string"},"secretKind":{"type":"string"},"status":{"type":"string"}},"type":"object"},"to":{"type":"string"},"via":{"type":"string"},"widget":{"additionalProperties":false,"properties":{"garden":{"type":"string"},"widget":{"type":"string"}},"type":"object"}},"type":"object"},"id":{"type":"string"},"seq":{"type":"integer"}},"type":"object"},"type":"array"},"collection":{"type":"string"},"conversation":{"type":"string"},"has_more":{"type":"boolean"},"items":{"items":{"additionalProperties":false,"properties":{"collection":{"type":"string"},"doc":{"additionalProperties":false,"properties":{"attachments":{"items":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"line":{"type":"integer"},"lineEnd":{"type":"integer"},"mime":{"type":"string"},"modifiedAt":{"type":"integer"},"name":{"type":"string"},"size":{"type":"integer"},"state":{"type":"string"}},"type":"object"},"type":"array"},"author":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"body":{"type":"string"},"choice":{"additionalProperties":false,"properties":{"allow_custom":{"type":"boolean"},"answer":{"type":"string"},"answeredAt":{"type":"integer"},"answeredBy":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"expiresAt":{"type":"integer"},"options":{"items":{"additionalProperties":false,"properties":{"label":{"type":"string"}},"type":"object"},"type":"array"},"prompt":{"type":"string"},"status":{"type":"string"}},"type":"object"},"created_at":{"type":"number"},"from":{"type":"string"},"id":{"type":"string"},"kind":{"type":"string"},"secret":{"additionalProperties":false,"properties":{"answeredAt":{"type":"integer"},"answeredBy":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"delivery":{"type":"string"},"expiresAt":{"type":"integer"},"hosts":{"items":{"type":"string"},"type":"array"},"name":{"type":"string"},"prompt":{"type":"string"},"ref":{"type":"string"},"scope":{"type":"string"},"secretKind":{"type":"string"},"status":{"type":"string"}},"type":"object"},"to":{"type":"string"},"via":{"type":"string"},"widget":{"additionalProperties":false,"properties":{"garden":{"type":"string"},"widget":{"type":"string"}},"type":"object"}},"type":"object"},"id":{"type":"string"},"seq":{"type":"integer"}},"type":"object"},"type":"array"},"ok":{"type":"boolean"},"pastAddresses":{"items":{"type":"string"},"type":"array"},"removed":{"items":{"additionalProperties":false,"properties":{"id":{"type":"string"},"seq":{"type":"integer"}},"type":"object"},"type":"array"}},"type":"object"},
   },
   'thread.latest': {
     cap: 'thread:read',
@@ -168,7 +168,62 @@ export const APP_VERBS = {
     http: null,
     socket: { path: '/cli/overlay/events', param: 'conversation', frame: 'thread', refetch: 'thread.page' },
     responseNames: {},
-    response: {"additionalProperties":false,"properties":{"collection":{"type":"string"},"doc":{"additionalProperties":false,"properties":{"author":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"body":{"type":"string"},"choice":{"additionalProperties":false,"properties":{"allow_custom":{"type":"boolean"},"answer":{"type":"string"},"answeredAt":{"type":"integer"},"answeredBy":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"expiresAt":{"type":"integer"},"options":{"items":{"additionalProperties":false,"properties":{"label":{"type":"string"}},"type":"object"},"type":"array"},"prompt":{"type":"string"},"status":{"type":"string"}},"type":"object"},"created_at":{"type":"number"},"from":{"type":"string"},"id":{"type":"string"},"kind":{"type":"string"},"secret":{"additionalProperties":false,"properties":{"answeredAt":{"type":"integer"},"answeredBy":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"delivery":{"type":"string"},"expiresAt":{"type":"integer"},"hosts":{"items":{"type":"string"},"type":"array"},"name":{"type":"string"},"prompt":{"type":"string"},"ref":{"type":"string"},"scope":{"type":"string"},"secretKind":{"type":"string"},"status":{"type":"string"}},"type":"object"},"to":{"type":"string"},"via":{"type":"string"},"widget":{"additionalProperties":false,"properties":{"garden":{"type":"string"},"widget":{"type":"string"}},"type":"object"}},"type":"object"},"id":{"type":"string"},"seq":{"type":"integer"}},"type":"object"},
+    response: {"additionalProperties":false,"properties":{"collection":{"type":"string"},"doc":{"additionalProperties":false,"properties":{"attachments":{"items":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"line":{"type":"integer"},"lineEnd":{"type":"integer"},"mime":{"type":"string"},"modifiedAt":{"type":"integer"},"name":{"type":"string"},"size":{"type":"integer"},"state":{"type":"string"}},"type":"object"},"type":"array"},"author":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"body":{"type":"string"},"choice":{"additionalProperties":false,"properties":{"allow_custom":{"type":"boolean"},"answer":{"type":"string"},"answeredAt":{"type":"integer"},"answeredBy":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"expiresAt":{"type":"integer"},"options":{"items":{"additionalProperties":false,"properties":{"label":{"type":"string"}},"type":"object"},"type":"array"},"prompt":{"type":"string"},"status":{"type":"string"}},"type":"object"},"created_at":{"type":"number"},"from":{"type":"string"},"id":{"type":"string"},"kind":{"type":"string"},"secret":{"additionalProperties":false,"properties":{"answeredAt":{"type":"integer"},"answeredBy":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"delivery":{"type":"string"},"expiresAt":{"type":"integer"},"hosts":{"items":{"type":"string"},"type":"array"},"name":{"type":"string"},"prompt":{"type":"string"},"ref":{"type":"string"},"scope":{"type":"string"},"secretKind":{"type":"string"},"status":{"type":"string"}},"type":"object"},"to":{"type":"string"},"via":{"type":"string"},"widget":{"additionalProperties":false,"properties":{"garden":{"type":"string"},"widget":{"type":"string"}},"type":"object"}},"type":"object"},"id":{"type":"string"},"seq":{"type":"integer"}},"type":"object"},
+  },
+  'thread.attachmentGet': {
+    cap: 'thread:read',
+    effect: 'read',
+    kind: 'call',
+    feature: 'thread-attachments-v1',
+    door: 'both',
+    http: { method: 'GET', route: '/cli/thread/attachment', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"base64":{"type":"string"},"eof":{"type":"boolean"},"height":{"type":"integer"},"kind":{"type":"string"},"len":{"type":"integer"},"line":{"type":"integer"},"lineEnd":{"type":"integer"},"mime":{"type":"string"},"modifiedAt":{"type":"integer"},"name":{"type":"string"},"offset":{"type":"integer"},"ok":{"type":"boolean"},"sanitized":{"type":"boolean"},"size":{"type":"integer"},"state":{"type":"string"},"text":{"type":"string"},"truncated":{"type":"boolean"},"width":{"type":"integer"}},"type":"object"},
+  },
+  'thread.catchup': {
+    cap: 'thread:read',
+    effect: 'read',
+    kind: 'call',
+    feature: 'inbox-catchup-v1',
+    door: 'both',
+    http: { method: 'POST', route: '/cli/thread/catchup', params: {}, query: [] },
+    socket: null,
+    responseNames: { 'conversation': 'conversation_id' },
+    response: {"additionalProperties":false,"properties":{"has_more":{"type":"boolean"},"ok":{"type":"boolean"},"threads":{"items":{"additionalProperties":false,"properties":{"addr":{"type":"string"},"after_seq":{"type":"integer"},"changed":{"items":{"additionalProperties":false,"properties":{"collection":{"type":"string"},"doc":{"additionalProperties":false,"properties":{"attachments":{"items":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"line":{"type":"integer"},"lineEnd":{"type":"integer"},"mime":{"type":"string"},"modifiedAt":{"type":"integer"},"name":{"type":"string"},"size":{"type":"integer"},"state":{"type":"string"}},"type":"object"},"type":"array"},"author":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"body":{"type":"string"},"choice":{"additionalProperties":false,"properties":{"allow_custom":{"type":"boolean"},"answer":{"type":"string"},"answeredAt":{"type":"integer"},"answeredBy":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"expiresAt":{"type":"integer"},"options":{"items":{"additionalProperties":false,"properties":{"label":{"type":"string"}},"type":"object"},"type":"array"},"prompt":{"type":"string"},"status":{"type":"string"}},"type":"object"},"created_at":{"type":"number"},"from":{"type":"string"},"id":{"type":"string"},"kind":{"type":"string"},"secret":{"additionalProperties":false,"properties":{"answeredAt":{"type":"integer"},"answeredBy":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"delivery":{"type":"string"},"expiresAt":{"type":"integer"},"hosts":{"items":{"type":"string"},"type":"array"},"name":{"type":"string"},"prompt":{"type":"string"},"ref":{"type":"string"},"scope":{"type":"string"},"secretKind":{"type":"string"},"status":{"type":"string"}},"type":"object"},"to":{"type":"string"},"via":{"type":"string"},"widget":{"additionalProperties":false,"properties":{"garden":{"type":"string"},"widget":{"type":"string"}},"type":"object"}},"type":"object"},"id":{"type":"string"},"seq":{"type":"integer"}},"type":"object"},"type":"array"},"conversation":{"type":"string"},"deferred":{"type":"boolean"},"error":{"additionalProperties":false,"properties":{"code":{"type":"string"},"hint":{"type":"string"}},"type":"object"},"has_more":{"type":"boolean"},"items":{"items":{"additionalProperties":false,"properties":{"collection":{"type":"string"},"doc":{"additionalProperties":false,"properties":{"attachments":{"items":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"line":{"type":"integer"},"lineEnd":{"type":"integer"},"mime":{"type":"string"},"modifiedAt":{"type":"integer"},"name":{"type":"string"},"size":{"type":"integer"},"state":{"type":"string"}},"type":"object"},"type":"array"},"author":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"body":{"type":"string"},"choice":{"additionalProperties":false,"properties":{"allow_custom":{"type":"boolean"},"answer":{"type":"string"},"answeredAt":{"type":"integer"},"answeredBy":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"expiresAt":{"type":"integer"},"options":{"items":{"additionalProperties":false,"properties":{"label":{"type":"string"}},"type":"object"},"type":"array"},"prompt":{"type":"string"},"status":{"type":"string"}},"type":"object"},"created_at":{"type":"number"},"from":{"type":"string"},"id":{"type":"string"},"kind":{"type":"string"},"secret":{"additionalProperties":false,"properties":{"answeredAt":{"type":"integer"},"answeredBy":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"delivery":{"type":"string"},"expiresAt":{"type":"integer"},"hosts":{"items":{"type":"string"},"type":"array"},"name":{"type":"string"},"prompt":{"type":"string"},"ref":{"type":"string"},"scope":{"type":"string"},"secretKind":{"type":"string"},"status":{"type":"string"}},"type":"object"},"to":{"type":"string"},"via":{"type":"string"},"widget":{"additionalProperties":false,"properties":{"garden":{"type":"string"},"widget":{"type":"string"}},"type":"object"}},"type":"object"},"id":{"type":"string"},"seq":{"type":"integer"}},"type":"object"},"type":"array"},"removed":{"items":{"additionalProperties":false,"properties":{"id":{"type":"string"},"seq":{"type":"integer"}},"type":"object"},"type":"array"}},"type":"object"},"type":"array"}},"type":"object"},
+  },
+  'thread.setRead': {
+    cap: 'thread:read',
+    effect: 'write',
+    kind: 'call',
+    feature: 'app-thread-parity-v1',
+    door: 'both',
+    http: { method: 'POST', route: '/cli/thread/read', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"changed":{"type":"boolean"},"id":{"type":"string"},"lastReadSeq":{"type":"integer"},"lastSeq":{"type":"integer"},"ok":{"type":"boolean"},"unread":{"type":"integer"},"waiting":{"type":"integer"}},"type":"object"},
+  },
+  'thread.unread': {
+    cap: 'thread:read',
+    effect: 'read',
+    kind: 'call',
+    feature: 'app-thread-parity-v1',
+    door: 'both',
+    http: { method: 'GET', route: '/cli/thread/unread', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"byConversation":{"items":{"additionalProperties":false,"properties":{"addr":{"type":"string"},"id":{"type":"string"},"lastReadSeq":{"type":"integer"},"lastSeq":{"type":"integer"},"unread":{"type":"integer"},"waiting":{"type":"integer"}},"type":"object"},"type":"array"},"ok":{"type":"boolean"},"total":{"type":"integer"}},"type":"object"},
+  },
+  'files.resolveLinks': {
+    cap: 'files:read',
+    effect: 'read',
+    kind: 'call',
+    feature: 'app-thread-parity-v1',
+    door: 'both',
+    http: { method: 'POST', route: '/cli/fs/resolve-links', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"links":{"items":{"additionalProperties":false,"properties":{"input":{"type":"string"},"kind":{"type":"string"},"linkable":{"type":"boolean"},"rel":{"type":"string"}},"type":"object"},"type":"array"}},"type":"object"},
   },
   'thread.ensurePinned': {
     cap: 'thread:read',
@@ -856,6 +911,22 @@ export interface AppOk {
   readonly ok: boolean
 }
 
+export interface AppThreadFile {
+  /** file. */
+  readonly kind: string
+  readonly line?: number
+  readonly lineEnd?: number
+  /** Content type from the name (image/png, application/pdf, text/markdown, ...). */
+  readonly mime?: string
+  /** Milliseconds since the epoch: the file's modified time when it was sent. */
+  readonly modifiedAt?: number
+  readonly name?: string
+  /** Bytes, when it was sent. */
+  readonly size?: number
+  /** ok, changed (since it was sent), gone (moved or deleted) or hidden (not shared with you: no name, type or size). */
+  readonly state: string
+}
+
 export interface AppPostAuthor {
   /** owner, user (a Connect login) or guest (an App pass or guest login). */
   readonly kind: string
@@ -908,6 +979,8 @@ export interface AppPostWidget {
 }
 
 export interface AppThreadDoc {
+  /** Files that ride the message; one your file rights don't cover is {kind, state: hidden}. Read one with thread.attachmentGet by its index. */
+  readonly attachments?: AppThreadFile[]
   readonly author?: AppPostAuthor
   /** The text (redacted); a card's prompt. */
   readonly body?: string
@@ -933,16 +1006,27 @@ export interface AppThreadItem {
   readonly seq: number
 }
 
+export interface AppThreadRemoved {
+  readonly id: string
+  readonly seq: number
+}
+
 export interface AppThreadPage {
   readonly addr: string
+  /** A delta's cursor, echoed. */
+  readonly after_seq?: number
+  /** A delta only: items at or below after_seq changed since (cards answered, voided, expired). Upsert by id. */
+  readonly changed?: AppThreadItem[]
   readonly collection?: string
   /** The pinned Chat's conversation id: thread.events subscribes with it. */
   readonly conversation: string
-  /** Older items exist below this page. */
+  /** A page: older items exist below it. A delta: newer items remain. */
   readonly has_more: boolean
   readonly items: AppThreadItem[]
   readonly ok: boolean
   readonly pastAddresses?: string[]
+  /** A delta only: items that left this Thread. */
+  readonly removed?: AppThreadRemoved[]
 }
 
 export interface AppItemError {
@@ -968,6 +1052,13 @@ export interface AppThreadLatestItem {
 export interface AppThreadLatest {
   readonly items: AppThreadLatestItem[]
   readonly ok: boolean
+}
+
+export interface AppThreadAttach {
+  readonly line?: number
+  readonly lineEnd?: number
+  /** Room-relative path (never a host path). */
+  readonly relPath: string
 }
 
 export interface AppThreadPosted {
@@ -1007,6 +1098,113 @@ export interface AppCardVoided {
   readonly ok: boolean
   readonly seq?: number
   readonly status: string
+}
+
+export interface AppThreadFileData {
+  /** preview or thumb: the bytes. Show them as an image (an <img>, never inline markup). */
+  readonly base64?: string
+  readonly eof?: boolean
+  /** thumb: pixels. */
+  readonly height?: number
+  /** file (meta), text, image or pdf (preview, thumb). */
+  readonly kind: string
+  /** range: bytes in this chunk. */
+  readonly len?: number
+  readonly line?: number
+  readonly lineEnd?: number
+  /** The content type; a thumb is image/jpeg, image/png or a sanitized image/svg+xml. */
+  readonly mime?: string
+  /** Milliseconds since the epoch (meta). */
+  readonly modifiedAt?: number
+  readonly name?: string
+  /** range: the first byte. */
+  readonly offset?: number
+  readonly ok?: boolean
+  /** An SVG with scripts, event handlers and outside links removed. */
+  readonly sanitized?: boolean
+  /** Bytes now. */
+  readonly size?: number
+  /** ok, changed (since it was sent), gone (moved or deleted) or hidden (not shared with you: no name, type or size). */
+  readonly state?: string
+  /** preview of a text file: the first 512 KB, vault values redacted. */
+  readonly text?: string
+  readonly truncated?: boolean
+  /** thumb: pixels. */
+  readonly width?: number
+}
+
+export interface AppCatchupAsk {
+  readonly addr: string
+  readonly afterSeq?: number
+  readonly newest?: boolean
+}
+
+export interface AppCatchupError {
+  readonly code: string
+  readonly hint?: string
+}
+
+export interface AppCatchupEntry {
+  readonly addr: string
+  readonly after_seq?: number
+  readonly changed?: AppThreadItem[]
+  readonly conversation?: string
+  readonly deferred?: boolean
+  readonly error?: AppCatchupError
+  readonly has_more?: boolean
+  readonly items?: AppThreadItem[]
+  readonly removed?: AppThreadRemoved[]
+}
+
+export interface AppCatchup {
+  /** Some entries are deferred (the 4 MiB budget): call again with those. */
+  readonly has_more?: boolean
+  readonly ok: boolean
+  readonly threads: AppCatchupEntry[]
+}
+
+export interface AppReadState {
+  /** The cursor moved. */
+  readonly changed?: boolean
+  /** The conversation id. */
+  readonly id?: string
+  readonly lastReadSeq: number
+  readonly lastSeq: number
+  readonly ok: boolean
+  readonly unread: number
+  /** Cards waiting for an answer. */
+  readonly waiting?: number
+}
+
+export interface AppUnreadRow {
+  /** The room's handle. */
+  readonly addr?: string
+  /** The conversation id. */
+  readonly id: string
+  readonly lastReadSeq: number
+  readonly lastSeq: number
+  readonly unread: number
+  /** Cards waiting for an answer. */
+  readonly waiting?: number
+}
+
+export interface AppUnread {
+  readonly byConversation: AppUnreadRow[]
+  readonly ok: boolean
+  readonly total: number
+}
+
+export interface AppLink {
+  readonly input: string
+  /** file or directory (linkable only). */
+  readonly kind?: string
+  readonly linkable: boolean
+  /** Room-relative (linkable only); read it with files.read. */
+  readonly rel?: string
+}
+
+export interface AppLinks {
+  readonly links: AppLink[]
 }
 
 export interface AppPinnedChat {
@@ -1644,12 +1842,17 @@ export interface AppVerbs {
   'guests.rooms': { args: { app?: string; username: string }; value: AppGuestRooms }
   'guests.setRooms': { args: { app?: string; rooms: string[]; username: string }; value: AppGuestRooms }
   'password.change': { args: { oldPassword: string; password: string }; value: AppOk }
-  'thread.page': { args: { addr: string; beforeSeq?: number; limit?: number; sinceSeq?: number }; value: AppThreadPage }
+  'thread.page': { args: { addr: string; afterSeq?: number; beforeSeq?: number; limit?: number; sinceSeq?: number }; value: AppThreadPage }
   'thread.latest': { args: { addrs: string[] }; value: AppThreadLatest }
-  'thread.send': { args: { addr: string; text: string; via?: string }; value: AppThreadPosted }
+  'thread.send': { args: { addr: string; attachments?: AppThreadAttach[]; text?: string; via?: string }; value: AppThreadPosted }
   'thread.answerCard': { args: { addr: string; answer?: string; cardId: string; confirm?: boolean; delivery?: string; hosts?: string[]; scope?: string; secret?: string }; value: AppCardAnswered }
   'thread.voidCard': { args: { addr: string; cardId: string }; value: AppCardVoided }
   'thread.events': { args: { conversation: string }; value: AppThreadItem }
+  'thread.attachmentGet': { args: { addr: string; id: string; len?: number; mode?: 'meta' | 'preview' | 'thumb' | 'range'; n?: number; offset?: number; px?: number }; value: AppThreadFileData }
+  'thread.catchup': { args: { limit?: number; threads: AppCatchupAsk[] }; value: AppCatchup }
+  'thread.setRead': { args: { addr: string; seq?: number }; value: AppReadState }
+  'thread.unread': { args: Record<string, never>; value: AppUnread }
+  'files.resolveLinks': { args: { paths: string[]; workspace: string }; value: AppLinks }
   'thread.ensurePinned': { args: { workspace: string }; value: AppPinnedChat }
   'files.list': { args: { relPath: string; showHidden?: boolean; workspace: string }; value: AppFileEntry[] }
   'files.read': { args: { relPath: string; workspace: string }; value: AppFileText }
@@ -1706,7 +1909,7 @@ export interface AppVerbs {
   'chat.pass': { args: Record<string, never>; value: AppChatPass }
 }
 
-export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'guests.rooms' | 'guests.setRooms' | 'thread.page' | 'thread.latest' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage' | 'chat.pass'
+export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'guests.rooms' | 'guests.setRooms' | 'thread.page' | 'thread.latest' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.attachmentGet' | 'thread.catchup' | 'thread.setRead' | 'thread.unread' | 'files.resolveLinks' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage' | 'chat.pass'
 export type AppSubscribeVerb = 'thread.events' | 'files.events' | 'activity.events'
 
 /** The named helpers: one per App verb a server calls (browser-only rows have none), grouped by surface. */
@@ -1728,22 +1931,32 @@ export interface AppSurfaces {
     setRooms(args: { app?: string; rooms: string[]; username: string }): Promise<AppGuestRooms>
   }
   readonly thread: {
-    /** A page of a room's Thread, oldest first; sinceSeq catches up, beforeSeq pages back. cap thread:read · GET /cli/thread. e.g. `const page = await k2.thread.page({addr: 'sales', limit: 50})` */
-    page(args: { addr: string; beforeSeq?: number; limit?: number; sinceSeq?: number }): Promise<AppThreadPage>
+    /** A page of a room's Thread, oldest first; sinceSeq catches up, beforeSeq pages back, afterSeq reads a delta (new, changed, removed). cap thread:read · GET /cli/thread. e.g. `const page = await k2.thread.page({addr: 'sales', limit: 50})` */
+    page(args: { addr: string; afterSeq?: number; beforeSeq?: number; limit?: number; sinceSeq?: number }): Promise<AppThreadPage>
     /** The newest Thread item per room, for list previews; a room the pass can't read is an item with error. cap thread:read · GET /cli/thread/latest. e.g. `const {items} = await k2.thread.latest({addrs: ['sales', 'ops']})` */
     latest(args: { addrs: string[] }): Promise<AppThreadLatest>
-    /** Post text to a room's Thread as the guest (or the App); the agent gets it at once. cap thread:post · POST /cli/thread/post. e.g. `await k2.thread.send({addr: 'sales', text: 'Hi'})` */
-    send(args: { addr: string; text: string; via?: string }): Promise<AppThreadPosted>
+    /** Post text (and room files) to a room's Thread as the guest (or the App); the agent gets it at once. cap thread:post · POST /cli/thread/post. e.g. `await k2.thread.send({addr: 'sales', text: 'Hi'})` */
+    send(args: { addr: string; attachments?: AppThreadAttach[]; text?: string; via?: string }): Promise<AppThreadPosted>
     /** Answer a choice card (or set a secret card) in a room's Thread. cap thread:post · POST /cli/thread/answer. e.g. `await k2.thread.answerCard({addr, cardId, answer: 'Yes'})` */
     answerCard(args: { addr: string; answer?: string; cardId: string; confirm?: boolean; delivery?: string; hosts?: string[]; scope?: string; secret?: string }): Promise<AppCardAnswered>
     /** Dismiss a pending card in a room's Thread. cap thread:post · POST /cli/thread/void. e.g. `await k2.thread.voidCard({addr, cardId})` */
     voidCard(args: { addr: string; cardId: string }): Promise<AppCardVoided>
     /** Live Thread items of one room (new posts and card changes; merge by id); after a gap, thread.page with sinceSeq. cap thread:read · WS /cli/overlay/events?conversation=. e.g. `const off = k2.thread.events({conversation}, (item) => draw(item))` */
     events(args: { conversation: string }, onFrame: (frame: AppThreadItem) => void, onError?: (error: K2Error) => void): () => void
+    /** One attachment of a room's message: meta, preview, thumbnail or a byte range, only when your own file rights cover it. cap thread:read · GET /cli/thread/attachment. e.g. `const t = await k2.thread.attachmentGet({addr: 'sales', id: item.id, n: 0, mode: 'thumb'})` */
+    attachmentGet(args: { addr: string; id: string; len?: number; mode?: 'meta' | 'preview' | 'thumb' | 'range'; n?: number; offset?: number; px?: number }): Promise<AppThreadFileData>
+    /** Deltas (or newest pages) for many rooms in one round trip, each exactly what thread.page answers for it. cap thread:read · POST /cli/thread/catchup. e.g. `const {threads} = await k2.thread.catchup({threads: [{addr: 'sales', afterSeq: 41}]})` */
+    catchup(args: { limit?: number; threads: AppCatchupAsk[] }): Promise<AppCatchup>
+    /** Mark this guest's (or the App's) own read cursor in a room's Thread; forward only. cap thread:read · POST /cli/thread/read. e.g. `await k2.thread.setRead({addr: 'sales', seq: last.seq})` */
+    setRead(args: { addr: string; seq?: number }): Promise<AppReadState>
+    /** This guest's (or the App's) unread counts, one row per room Thread it may read. cap thread:read · GET /cli/thread/unread. e.g. `const {total, byConversation} = await k2.thread.unread()` */
+    unread(args?: Record<string, never>): Promise<AppUnread>
     /** Check the room's pinned Chat is live (find-only for Apps: it never starts one). cap thread:read · POST /cli/workspace/ensure-pinned-chat. e.g. `await k2.thread.ensurePinned({workspace: 'sales'})` */
     ensurePinned(args: { workspace: string }): Promise<AppPinnedChat>
   }
   readonly files: {
+    /** Which paths printed in a room's messages lead to a file or folder your file rights cover (the rest stay plain text). cap files:read · POST /cli/fs/resolve-links. e.g. `const {links} = await k2.files.resolveLinks({workspace, paths: ['jobs/J1/plans.pdf']})` */
+    resolveLinks(args: { paths: string[]; workspace: string }): Promise<AppLinks>
     /** A folder's entries, folders first. cap files:read · GET /cli/fs/read-dir. e.g. `const entries = await k2.files.list({workspace, relPath: '.'})` */
     list(args: { relPath: string; showHidden?: boolean; workspace: string }): Promise<AppFileEntry[]>
     /** A UTF-8 text file (at most 10 MiB). cap files:read · GET /cli/fs/read-file. e.g. `const {content} = await k2.files.read({workspace, relPath: 'notes.md'})` */

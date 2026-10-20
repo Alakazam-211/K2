@@ -1,5 +1,5 @@
 {
-  "catalogVersion": 15,
+  "catalogVersion": 16,
   "caps": [
     {
       "name": "agents:read",
@@ -23,7 +23,7 @@
       "name": "thread:post",
       "exposure": ["widget", "app"],
       "label": "Post to the Thread",
-      "sentence": "Send messages to the agents in {where} as you (text only)."
+      "sentence": "Send messages to the agents in {where} as you, with files you pick."
     },
     {
       "name": "sources:read",
@@ -548,7 +548,11 @@
       "feature": "zen-v1",
       "bindings": {
         "renderer": {"impl": "registered"},
-        "http": {"method": "GET", "route": "/cli/thread", "params": {"address": "addr", "limit": "limit"}}
+        "http": {
+          "method": "GET",
+          "route": "/cli/thread",
+          "params": {"address": "addr", "limit": "limit", "afterSeq": "after_seq", "beforeSeq": "before_seq"}
+        }
       },
       "request": [
         {"title": "address", "type": "string", "description": "A row's address, handle::host."},
@@ -557,7 +561,12 @@
           "type": "object",
           "properties": {
             "beforeSeq": {"type": "integer"},
-            "limit": {"type": "integer", "minimum": 1, "maximum": 100}
+            "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+            "afterSeq": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "A delta (thread-delta-v1): items after this seq, oldest first, plus changed and removed at or below it. Not with beforeSeq."
+            }
           },
           "required": [],
           "additionalProperties": false,
@@ -584,7 +593,10 @@
                     "kind": {"type": "string"},
                     "from": {"type": "string"},
                     "to": {"type": ["string", "null"]},
-                    "created_at": {"type": "number", "description": "Seconds since the epoch (not milliseconds: multiply by 1000 for new Date)."},
+                    "created_at": {
+                      "type": "number",
+                      "description": "Seconds since the epoch (not milliseconds: multiply by 1000 for new Date)."
+                    },
                     "body": {"type": ["string", "null"]},
                     "via": {"type": ["string", "null"]},
                     "choice": {
@@ -609,9 +621,15 @@
                           "title": "CardAnswerer",
                           "type": ["object", "null"],
                           "properties": {
-                            "kind": {"type": "string", "description": "owner, user (a Connect login) or guest (an app pass)."},
+                            "kind": {
+                              "type": "string",
+                              "description": "owner, user (a Connect login) or guest (an app pass)."
+                            },
                             "login": {"type": "string"},
-                            "name": {"type": ["string", "null"], "description": "The owner's display name when the owner answered and one is set, else null."}
+                            "name": {
+                              "type": ["string", "null"],
+                              "description": "The owner's display name when the owner answered and one is set, else null."
+                            }
                           },
                           "required": ["kind", "login", "name"],
                           "additionalProperties": false,
@@ -624,6 +642,35 @@
                       },
                       "required": ["prompt", "options", "allow_custom", "status"],
                       "additionalProperties": false
+                    },
+                    "attachments": {
+                      "type": ["array", "null"],
+                      "description": "Files that ride the message (thread-attachments-v1). Open one with thread.attachment / thread.open by its index.",
+                      "items": {
+                        "title": "ThreadFile",
+                        "type": "object",
+                        "properties": {
+                          "kind": {"type": "string", "description": "file."},
+                          "state": {
+                            "type": "string",
+                            "description": "ok, changed (since it was sent), gone (moved or deleted) or hidden (not shared with you: no name, type or size)."
+                          },
+                          "name": {"type": "string"},
+                          "size": {"type": "integer", "description": "Bytes, when it was sent."},
+                          "mime": {
+                            "type": "string",
+                            "description": "Content type from the name (image/png, application/pdf, text/markdown, ...)."
+                          },
+                          "modifiedAt": {
+                            "type": "integer",
+                            "description": "Milliseconds since the epoch: the file's modified time when it was sent."
+                          },
+                          "line": {"type": "integer"},
+                          "lineEnd": {"type": "integer"}
+                        },
+                        "required": ["kind", "state"],
+                        "additionalProperties": false
+                      }
                     }
                   },
                   "required": ["id", "kind"],
@@ -634,13 +681,132 @@
               "additionalProperties": false
             }
           },
-          "hasMore": {"type": "boolean"}
+          "hasMore": {
+            "type": "boolean",
+            "description": "A page: older items exist. A delta (afterSeq): newer items remain."
+          },
+          "changed": {
+            "type": "array",
+            "description": "A delta only: items at or below afterSeq that changed since (a card answered, voided or expired). Upsert by id.",
+            "items": {
+              "title": "ThreadItem",
+              "type": "object",
+              "properties": {
+                "seq": {"type": "integer"},
+                "id": {"type": "string"},
+                "doc": {
+                  "title": "ThreadDoc",
+                  "type": "object",
+                  "properties": {
+                    "id": {"type": "string"},
+                    "kind": {"type": "string"},
+                    "from": {"type": "string"},
+                    "to": {"type": ["string", "null"]},
+                    "created_at": {
+                      "type": "number",
+                      "description": "Seconds since the epoch (not milliseconds: multiply by 1000 for new Date)."
+                    },
+                    "body": {"type": ["string", "null"]},
+                    "via": {"type": ["string", "null"]},
+                    "choice": {
+                      "title": "ChoiceCard",
+                      "type": ["object", "null"],
+                      "properties": {
+                        "prompt": {"type": "string"},
+                        "options": {
+                          "type": "array",
+                          "items": {
+                            "title": "ChoiceOption",
+                            "type": "object",
+                            "properties": {"label": {"type": "string"}},
+                            "required": ["label"],
+                            "additionalProperties": false
+                          }
+                        },
+                        "allow_custom": {"type": "boolean"},
+                        "status": {"type": "string"},
+                        "answer": {"type": ["string", "null"]},
+                        "answeredBy": {
+                          "title": "CardAnswerer",
+                          "type": ["object", "null"],
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "description": "owner, user (a Connect login) or guest (an app pass)."
+                            },
+                            "login": {"type": "string"},
+                            "name": {
+                              "type": ["string", "null"],
+                              "description": "The owner's display name when the owner answered and one is set, else null."
+                            }
+                          },
+                          "required": ["kind", "login", "name"],
+                          "additionalProperties": false,
+                          "description": "Who answered or dismissed the card; null while pending, for an agent's own answer and on older cards."
+                        },
+                        "expiresAt": {
+                          "type": ["integer", "null"],
+                          "description": "Unix seconds when a still-pending card expires (K2 closes it as expired); null when it never does."
+                        }
+                      },
+                      "required": ["prompt", "options", "allow_custom", "status"],
+                      "additionalProperties": false
+                    },
+                    "attachments": {
+                      "type": ["array", "null"],
+                      "description": "Files that ride the message (thread-attachments-v1). Open one with thread.attachment / thread.open by its index.",
+                      "items": {
+                        "title": "ThreadFile",
+                        "type": "object",
+                        "properties": {
+                          "kind": {"type": "string", "description": "file."},
+                          "state": {
+                            "type": "string",
+                            "description": "ok, changed (since it was sent), gone (moved or deleted) or hidden (not shared with you: no name, type or size)."
+                          },
+                          "name": {"type": "string"},
+                          "size": {"type": "integer", "description": "Bytes, when it was sent."},
+                          "mime": {
+                            "type": "string",
+                            "description": "Content type from the name (image/png, application/pdf, text/markdown, ...)."
+                          },
+                          "modifiedAt": {
+                            "type": "integer",
+                            "description": "Milliseconds since the epoch: the file's modified time when it was sent."
+                          },
+                          "line": {"type": "integer"},
+                          "lineEnd": {"type": "integer"}
+                        },
+                        "required": ["kind", "state"],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": ["id", "kind"],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["seq", "id", "doc"],
+              "additionalProperties": false
+            }
+          },
+          "removed": {
+            "type": "array",
+            "description": "A delta only: items that left this Thread.",
+            "items": {
+              "title": "ThreadRemoved",
+              "type": "object",
+              "properties": {"id": {"type": "string"}, "seq": {"type": "integer"}},
+              "required": ["id", "seq"],
+              "additionalProperties": false
+            }
+          }
         },
         "required": ["items", "hasMore"],
         "additionalProperties": false
       },
       "errors": ["cap_not_granted", "not_bound", "verb_unavailable", "failed"],
-      "doc": "A page of the Thread, oldest first; beforeSeq pages back through history.",
+      "doc": "A page of a conversation (oldest first); beforeSeq pages back, afterSeq reads a delta (new items plus changed and removed).",
       "example": "const page = await k2.thread.read(row.address, {limit: 50})"
     },
     {
@@ -679,7 +845,10 @@
                     "kind": {"type": "string"},
                     "from": {"type": "string"},
                     "to": {"type": ["string", "null"]},
-                    "created_at": {"type": "number", "description": "Seconds since the epoch (not milliseconds: multiply by 1000 for new Date)."},
+                    "created_at": {
+                      "type": "number",
+                      "description": "Seconds since the epoch (not milliseconds: multiply by 1000 for new Date)."
+                    },
                     "body": {"type": ["string", "null"]},
                     "via": {"type": ["string", "null"]},
                     "choice": {
@@ -704,9 +873,15 @@
                           "title": "CardAnswerer",
                           "type": ["object", "null"],
                           "properties": {
-                            "kind": {"type": "string", "description": "owner, user (a Connect login) or guest (an app pass)."},
+                            "kind": {
+                              "type": "string",
+                              "description": "owner, user (a Connect login) or guest (an app pass)."
+                            },
                             "login": {"type": "string"},
-                            "name": {"type": ["string", "null"], "description": "The owner's display name when the owner answered and one is set, else null."}
+                            "name": {
+                              "type": ["string", "null"],
+                              "description": "The owner's display name when the owner answered and one is set, else null."
+                            }
                           },
                           "required": ["kind", "login", "name"],
                           "additionalProperties": false,
@@ -719,6 +894,35 @@
                       },
                       "required": ["prompt", "options", "allow_custom", "status"],
                       "additionalProperties": false
+                    },
+                    "attachments": {
+                      "type": ["array", "null"],
+                      "description": "Files that ride the message (thread-attachments-v1). Open one with thread.attachment / thread.open by its index.",
+                      "items": {
+                        "title": "ThreadFile",
+                        "type": "object",
+                        "properties": {
+                          "kind": {"type": "string", "description": "file."},
+                          "state": {
+                            "type": "string",
+                            "description": "ok, changed (since it was sent), gone (moved or deleted) or hidden (not shared with you: no name, type or size)."
+                          },
+                          "name": {"type": "string"},
+                          "size": {"type": "integer", "description": "Bytes, when it was sent."},
+                          "mime": {
+                            "type": "string",
+                            "description": "Content type from the name (image/png, application/pdf, text/markdown, ...)."
+                          },
+                          "modifiedAt": {
+                            "type": "integer",
+                            "description": "Milliseconds since the epoch: the file's modified time when it was sent."
+                          },
+                          "line": {"type": "integer"},
+                          "lineEnd": {"type": "integer"}
+                        },
+                        "required": ["kind", "state"],
+                        "additionalProperties": false
+                      }
                     }
                   },
                   "required": ["id", "kind"],
@@ -735,10 +939,7 @@
             "type": ["object", "null"],
             "properties": {
               "state": {"enum": ["working", "monitoring", "needs-you", "unverifiable"]},
-              "since": {
-                "type": "number",
-                "description": "Milliseconds since the epoch, on this computer's clock."
-              }
+              "since": {"type": "number", "description": "Milliseconds since the epoch, on this computer's clock."}
             },
             "required": ["state", "since"],
             "additionalProperties": false,
@@ -758,13 +959,236 @@
       "reach": "local",
       "effect": "write",
       "kind": "call",
-      "feature": "zen-v1",
+      "feature": "thread-read-v1",
+      "bindings": {
+        "renderer": {"impl": "registered"},
+        "http": {"method": "POST", "route": "/cli/thread/read", "params": {"address": "addr"}}
+      },
+      "request": [
+        {"title": "address", "type": "string", "description": "A row's address, handle::host."},
+        {
+          "title": "opts",
+          "type": "object",
+          "properties": {
+            "seq": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Read through this seq (forward only); absent = the newest item now."
+            }
+          },
+          "required": [],
+          "additionalProperties": false,
+          "default": {}
+        }
+      ],
+      "response": {
+        "title": "ThreadReadState",
+        "type": "object",
+        "properties": {
+          "changed": {"type": "boolean", "description": "The cursor moved."},
+          "lastReadSeq": {"type": "integer"},
+          "lastSeq": {"type": "integer"},
+          "unread": {"type": "integer"}
+        },
+        "required": ["changed", "lastReadSeq", "lastSeq", "unread"],
+        "additionalProperties": false
+      },
+      "errors": ["cap_not_granted", "not_bound", "verb_unavailable", "failed"],
+      "doc": "Mark the person's own read cursor in a conversation (forward only), as reading it in K2 does (Rosson 2026-10-20, replaces UW51).",
+      "example": "await k2.thread.markRead(row.address, {seq: last.seq})",
+      "exposure": ["widget"]
+    },
+    {
+      "verb": "thread.attachment",
+      "cap": "thread:read",
+      "exposure": ["widget"],
+      "reach": "local",
+      "effect": "read",
+      "kind": "call",
+      "feature": "thread-images-v1",
+      "bindings": {
+        "renderer": {"impl": "registered"},
+        "http": {"method": "GET", "route": "/cli/thread/attachment", "params": {"address": "addr", "docId": "id"}}
+      },
+      "request": [
+        {"title": "address", "type": "string", "description": "A row's address, handle::host."},
+        {"title": "docId", "type": "string", "description": "The message's doc id."},
+        {"title": "n", "type": "integer", "minimum": 0, "description": "The attachment's index in doc.attachments."},
+        {
+          "title": "opts",
+          "type": "object",
+          "properties": {
+            "mode": {
+              "enum": ["meta", "preview", "thumb"],
+              "description": "meta (a fresh stat), preview (text up to 512 KB; images and PDFs up to 20 MB) or thumb (an image's thumbnail: PNG, JPEG, GIF, WebP, HEIC, BMP, TIFF; SVG comes back sanitized)."
+            },
+            "px": {"type": "integer", "minimum": 64, "maximum": 512, "description": "thumb: the longest side in pixels, 256 (default) or 512."}
+          },
+          "required": [],
+          "additionalProperties": false,
+          "default": {}
+        }
+      ],
+      "response": {
+        "title": "ThreadFileData",
+        "type": "object",
+        "properties": {
+          "kind": {"type": "string", "description": "file (meta), text, image or pdf (preview, thumb)."},
+          "state": {
+            "type": "string",
+            "description": "ok, changed (since it was sent), gone (moved or deleted) or hidden (not shared with you: no name, type or size)."
+          },
+          "name": {"type": "string"},
+          "mime": {
+            "type": "string",
+            "description": "The content type; a thumb is image/jpeg, image/png or a sanitized image/svg+xml."
+          },
+          "size": {"type": "integer", "description": "Bytes now."},
+          "modifiedAt": {"type": "integer", "description": "Milliseconds since the epoch (meta)."},
+          "line": {"type": "integer"},
+          "lineEnd": {"type": "integer"},
+          "text": {"type": "string", "description": "preview of a text file: the first 512 KB, vault values redacted."},
+          "truncated": {"type": "boolean"},
+          "base64": {
+            "type": "string",
+            "description": "preview or thumb: the bytes. Show them as an image (an <img>, never inline markup)."
+          },
+          "width": {"type": "integer", "description": "thumb: pixels."},
+          "height": {"type": "integer", "description": "thumb: pixels."},
+          "sanitized": {
+            "type": "boolean",
+            "description": "An SVG with scripts, event handlers and outside links removed."
+          }
+        },
+        "required": ["kind"],
+        "additionalProperties": false
+      },
+      "errors": ["cap_not_granted", "not_bound", "verb_unavailable", "too_large", "failed"],
+      "doc": "One attachment of a message: its live meta, a preview, or an image thumbnail (thread-images-v1).",
+      "example": "const t = await k2.thread.attachment(row.address, item.id, 0, {mode: 'thumb'})"
+    },
+    {
+      "verb": "thread.open",
+      "cap": "thread:read",
+      "exposure": ["widget"],
+      "reach": "local",
+      "effect": "read",
+      "kind": "call",
+      "feature": "thread-attachments-v1",
+      "bindings": {"renderer": {"impl": "registered"}},
+      "request": [
+        {"title": "address", "type": "string", "description": "A row's address, handle::host."},
+        {
+          "title": "target",
+          "type": "object",
+          "properties": {
+            "docId": {"type": "string", "description": "With n: an attachment of this message."},
+            "n": {"type": "integer", "minimum": 0},
+            "rel": {"type": "string", "description": "Or a workspace-relative path from thread.links."},
+            "line": {"type": "integer", "minimum": 1}
+          },
+          "required": [],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "ThreadOpened",
+        "type": "object",
+        "properties": {"opened": {"type": "boolean"}},
+        "required": ["opened"],
+        "additionalProperties": false
+      },
+      "errors": ["cap_not_granted", "not_bound", "verb_unavailable", "failed"],
+      "doc": "Open a message's attachment or a linked workspace file full size in K2 (a file tab, or a preview sheet in Zen).",
+      "example": "await k2.thread.open(row.address, {docId: item.id, n: 0})"
+    },
+    {
+      "verb": "thread.links",
+      "cap": "thread:read",
+      "exposure": ["widget"],
+      "reach": "local",
+      "effect": "read",
+      "kind": "call",
+      "feature": "thread-attachments-v1",
+      "bindings": {"renderer": {"impl": "registered"}},
+      "request": [
+        {"title": "address", "type": "string", "description": "A row's address, handle::host."},
+        {
+          "title": "candidates",
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Path-shaped text from messages (at most 200)."
+        }
+      ],
+      "response": {
+        "title": "ThreadLinks",
+        "type": "object",
+        "properties": {
+          "links": {
+            "type": "array",
+            "items": {
+              "title": "ThreadLink",
+              "type": "object",
+              "properties": {
+                "input": {"type": "string"},
+                "linkable": {"type": "boolean"},
+                "kind": {"type": "string", "description": "file or directory (linkable only)."},
+                "rel": {
+                  "type": "string",
+                  "description": "Workspace-relative (linkable only); open it with thread.open."
+                }
+              },
+              "required": ["input", "linkable"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["links"],
+        "additionalProperties": false
+      },
+      "errors": ["cap_not_granted", "not_bound", "verb_unavailable", "failed"],
+      "doc": "Which paths printed in messages lead to a file or folder inside the agent's workspace (the rest stay plain text).",
+      "example": "const {links} = await k2.thread.links(row.address, ['src/app.ts:12'])"
+    },
+    {
+      "verb": "thread.pickFiles",
+      "cap": "thread:post",
+      "exposure": ["widget"],
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "thread-attachments-v1",
       "bindings": {"renderer": {"impl": "registered"}},
       "request": [{"title": "address", "type": "string", "description": "A row's address, handle::host."}],
-      "response": {},
-      "errors": ["cap_not_granted", "verb_unavailable", "failed"],
-      "doc": "Reserved: no implementation (UW51).",
-      "example": "bridge.call('thread.markRead', address)"
+      "response": {
+        "title": "ThreadPicked",
+        "type": "object",
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "title": "ThreadPickedFile",
+              "type": "object",
+              "properties": {
+                "relPath": {
+                  "type": "string",
+                  "description": "Workspace-relative; pass it to thread.post's attachments."
+                },
+                "name": {"type": "string"},
+                "size": {"type": "integer", "description": "Bytes."},
+                "mime": {"type": "string"}
+              },
+              "required": ["relPath", "name"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["files"],
+        "additionalProperties": false
+      },
+      "errors": ["cap_not_granted", "not_bound", "verb_unavailable", "failed"],
+      "doc": "K2's own file picker for the person (files outside the workspace are copied into its .k2/downloads); empty when they cancel.",
+      "example": "const {files} = await k2.thread.pickFiles(row.address)"
     },
     {
       "verb": "thread.post",
@@ -780,7 +1204,31 @@
       },
       "request": [
         {"title": "address", "type": "string", "description": "A row's address, handle::host."},
-        {"title": "text", "type": "string", "maxLength": 4000}
+        {"title": "text", "type": "string", "maxLength": 4000},
+        {
+          "title": "opts",
+          "type": "object",
+          "properties": {
+            "attachments": {
+              "type": "array",
+              "description": "Up to 10 files in the agent's workspace to ride the message (relPath from thread.pickFiles). The daemon refuses secrets and anything outside the workspace.",
+              "items": {
+                "title": "ThreadAttach",
+                "type": "object",
+                "properties": {
+                  "relPath": {"type": "string", "description": "Workspace-relative path (never a host path)."},
+                  "line": {"type": "integer", "minimum": 1},
+                  "lineEnd": {"type": "integer", "minimum": 1}
+                },
+                "required": ["relPath"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [],
+          "additionalProperties": false,
+          "default": {}
+        }
       ],
       "response": {
         "title": "Posted",
@@ -796,9 +1244,10 @@
         "failed",
         "sending_off",
         "rate_limited",
-        "too_large"
+        "too_large",
+        "usage"
       ],
-      "doc": "Send text to the agent as you (text only, no files).",
+      "doc": "Send text to the agent as you, with files picked by the person riding it (thread.pickFiles).",
       "example": "await k2.thread.post(row.address, 'How is it going?')"
     },
     {
@@ -4278,7 +4727,8 @@
           "route": "/cli/thread",
           "params": {
             "sinceSeq": "since_seq",
-            "beforeSeq": "before_seq"
+            "beforeSeq": "before_seq",
+            "afterSeq": "after_seq"
           },
           "responseNames": {
             "conversation": "conversation_id"
@@ -4307,6 +4757,11 @@
               "description": "Default 25, at most 500; 0 = all.",
               "minimum": 0,
               "maximum": 500
+            },
+            "afterSeq": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "A delta (thread-delta-v1): items after this seq, oldest first, has_more = newer remain; plus changed and removed at or below it."
             }
           },
           "required": [
@@ -4559,6 +5014,50 @@
                         "login"
                       ],
                       "additionalProperties": false
+                    },
+                    "attachments": {
+                      "type": "array",
+                      "description": "Files that ride the message; one your file rights don't cover is {kind, state: hidden}. Read one with thread.attachmentGet by its index.",
+                      "items": {
+                        "title": "AppThreadFile",
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "description": "file."
+                          },
+                          "state": {
+                            "type": "string",
+                            "description": "ok, changed (since it was sent), gone (moved or deleted) or hidden (not shared with you: no name, type or size)."
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "size": {
+                            "type": "integer",
+                            "description": "Bytes, when it was sent."
+                          },
+                          "mime": {
+                            "type": "string",
+                            "description": "Content type from the name (image/png, application/pdf, text/markdown, ...)."
+                          },
+                          "modifiedAt": {
+                            "type": "integer",
+                            "description": "Milliseconds since the epoch: the file's modified time when it was sent."
+                          },
+                          "line": {
+                            "type": "integer"
+                          },
+                          "lineEnd": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "state"
+                        ],
+                        "additionalProperties": false
+                      }
                     }
                   },
                   "required": [
@@ -4580,12 +5079,328 @@
           },
           "has_more": {
             "type": "boolean",
-            "description": "Older items exist below this page."
+            "description": "A page: older items exist below it. A delta: newer items remain."
           },
           "pastAddresses": {
             "type": "array",
             "items": {
               "type": "string"
+            }
+          },
+          "after_seq": {
+            "type": "integer",
+            "description": "A delta's cursor, echoed."
+          },
+          "changed": {
+            "type": "array",
+            "description": "A delta only: items at or below after_seq changed since (cards answered, voided, expired). Upsert by id.",
+            "items": {
+              "title": "AppThreadItem",
+              "type": "object",
+              "properties": {
+                "collection": {
+                  "type": "string",
+                  "description": "Always thread."
+                },
+                "seq": {
+                  "type": "integer"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "doc": {
+                  "title": "AppThreadDoc",
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "type": "string",
+                      "description": "text, choice or secret."
+                    },
+                    "from": {
+                      "type": "string"
+                    },
+                    "to": {
+                      "type": "string"
+                    },
+                    "created_at": {
+                      "type": "number",
+                      "description": "Seconds since the epoch (not milliseconds)."
+                    },
+                    "body": {
+                      "type": "string",
+                      "description": "The text (redacted); a card's prompt."
+                    },
+                    "via": {
+                      "type": "string",
+                      "description": "Where it came from: thread, compose, card, msg, inbox, v1, …"
+                    },
+                    "choice": {
+                      "title": "AppChoiceCard",
+                      "type": "object",
+                      "properties": {
+                        "prompt": {
+                          "type": "string"
+                        },
+                        "options": {
+                          "type": "array",
+                          "items": {
+                            "title": "ChoiceOption",
+                            "type": "object",
+                            "properties": {
+                              "label": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "label"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "allow_custom": {
+                          "type": "boolean"
+                        },
+                        "status": {
+                          "type": "string",
+                          "description": "pending, answered, voided or expired."
+                        },
+                        "answer": {
+                          "type": "string"
+                        },
+                        "answeredBy": {
+                          "title": "AppPostAuthor",
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "description": "owner, user (a Connect login) or guest (an App pass or guest login)."
+                            },
+                            "login": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string",
+                              "description": "The owner's display name, on an owner's answer only."
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "login"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "answeredAt": {
+                          "type": "integer",
+                          "description": "Seconds since the epoch, when answered."
+                        },
+                        "expiresAt": {
+                          "type": "integer",
+                          "description": "Seconds since the epoch, when a pending card expires."
+                        }
+                      },
+                      "required": [
+                        "prompt",
+                        "options",
+                        "allow_custom",
+                        "status"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "secret": {
+                      "title": "AppSecretCard",
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "string",
+                          "description": "pending, set, voided or expired."
+                        },
+                        "prompt": {
+                          "type": "string"
+                        },
+                        "scope": {
+                          "type": "string",
+                          "description": "workspace, server or session."
+                        },
+                        "hosts": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "delivery": {
+                          "type": "string",
+                          "description": "fetch, file or env."
+                        },
+                        "secretKind": {
+                          "type": "string"
+                        },
+                        "ref": {
+                          "type": "string",
+                          "description": "A k2v:// reference to the stored secret (never its value)."
+                        },
+                        "answeredBy": {
+                          "title": "AppPostAuthor",
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "description": "owner, user (a Connect login) or guest (an App pass or guest login)."
+                            },
+                            "login": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string",
+                              "description": "The owner's display name, on an owner's answer only."
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "login"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "answeredAt": {
+                          "type": "integer",
+                          "description": "Seconds since the epoch, when answered."
+                        },
+                        "expiresAt": {
+                          "type": "integer",
+                          "description": "Seconds since the epoch, when a pending card expires."
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "status"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "widget": {
+                      "title": "AppPostWidget",
+                      "type": "object",
+                      "properties": {
+                        "widget": {
+                          "type": "string"
+                        },
+                        "garden": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "widget",
+                        "garden"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "author": {
+                      "title": "AppPostAuthor",
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "description": "owner, user (a Connect login) or guest (an App pass or guest login)."
+                        },
+                        "login": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string",
+                          "description": "The owner's display name, on an owner's answer only."
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "login"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "attachments": {
+                      "type": "array",
+                      "description": "Files that ride the message; one your file rights don't cover is {kind, state: hidden}. Read one with thread.attachmentGet by its index.",
+                      "items": {
+                        "title": "AppThreadFile",
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "description": "file."
+                          },
+                          "state": {
+                            "type": "string",
+                            "description": "ok, changed (since it was sent), gone (moved or deleted) or hidden (not shared with you: no name, type or size)."
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "size": {
+                            "type": "integer",
+                            "description": "Bytes, when it was sent."
+                          },
+                          "mime": {
+                            "type": "string",
+                            "description": "Content type from the name (image/png, application/pdf, text/markdown, ...)."
+                          },
+                          "modifiedAt": {
+                            "type": "integer",
+                            "description": "Milliseconds since the epoch: the file's modified time when it was sent."
+                          },
+                          "line": {
+                            "type": "integer"
+                          },
+                          "lineEnd": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "state"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "kind",
+                    "from",
+                    "created_at"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "seq",
+                "id",
+                "doc"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "removed": {
+            "type": "array",
+            "description": "A delta only: items that left this Thread.",
+            "items": {
+              "title": "AppThreadRemoved",
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "seq": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "seq"
+              ],
+              "additionalProperties": false
             }
           }
         },
@@ -4608,7 +5423,7 @@
         "not_found",
         "failed"
       ],
-      "doc": "A page of a room's Thread, oldest first; sinceSeq catches up, beforeSeq pages back.",
+      "doc": "A page of a room's Thread, oldest first; sinceSeq catches up, beforeSeq pages back, afterSeq reads a delta (new, changed, removed).",
       "example": "const page = await k2.thread.page({addr: 'sales', limit: 50})"
     },
     {
@@ -4802,17 +5617,43 @@
               "description": "The room's handle."
             },
             "text": {
-              "type": "string"
+              "type": "string",
+              "description": "The message (may be empty when files ride it)."
             },
             "via": {
               "type": "string",
               "description": "Where the guest wrote it (default thread; never compose).",
               "default": "thread"
+            },
+            "attachments": {
+              "type": "array",
+              "description": "Up to 10 room files to ride the message; each must be one your own file rights (files:read and the folder scope) cover. Secrets are refused.",
+              "items": {
+                "title": "AppThreadAttach",
+                "type": "object",
+                "properties": {
+                  "relPath": {
+                    "type": "string",
+                    "description": "Room-relative path (never a host path)."
+                  },
+                  "line": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "lineEnd": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                },
+                "required": [
+                  "relPath"
+                ],
+                "additionalProperties": false
+              }
             }
           },
           "required": [
-            "addr",
-            "text"
+            "addr"
           ],
           "additionalProperties": false
         }
@@ -4904,7 +5745,7 @@
         "not_found",
         "failed"
       ],
-      "doc": "Post text to a room's Thread as the guest (or the App); the agent gets it at once.",
+      "doc": "Post text (and room files) to a room's Thread as the guest (or the App); the agent gets it at once.",
       "example": "await k2.thread.send({addr: 'sales', text: 'Hi'})"
     },
     {
@@ -5382,6 +6223,50 @@
                   "login"
                 ],
                 "additionalProperties": false
+              },
+              "attachments": {
+                "type": "array",
+                "description": "Files that ride the message; one your file rights don't cover is {kind, state: hidden}. Read one with thread.attachmentGet by its index.",
+                "items": {
+                  "title": "AppThreadFile",
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "description": "file."
+                    },
+                    "state": {
+                      "type": "string",
+                      "description": "ok, changed (since it was sent), gone (moved or deleted) or hidden (not shared with you: no name, type or size)."
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "size": {
+                      "type": "integer",
+                      "description": "Bytes, when it was sent."
+                    },
+                    "mime": {
+                      "type": "string",
+                      "description": "Content type from the name (image/png, application/pdf, text/markdown, ...)."
+                    },
+                    "modifiedAt": {
+                      "type": "integer",
+                      "description": "Milliseconds since the epoch: the file's modified time when it was sent."
+                    },
+                    "line": {
+                      "type": "integer"
+                    },
+                    "lineEnd": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "state"
+                  ],
+                  "additionalProperties": false
+                }
               }
             },
             "required": [
@@ -5411,6 +6296,1160 @@
       ],
       "doc": "Live Thread items of one room (new posts and card changes; merge by id); after a gap, thread.page with sinceSeq.",
       "example": "const off = k2.thread.events({conversation}, (item) => draw(item))"
+    },
+    {
+      "verb": "thread.attachmentGet",
+      "cap": "thread:read",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "thread-attachments-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/thread/attachment"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "addr": {
+              "type": "string",
+              "description": "The room's handle (or its pinned Chat's conversation id)."
+            },
+            "id": {
+              "type": "string",
+              "description": "The message's doc id."
+            },
+            "n": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "The attachment's index in doc.attachments."
+            },
+            "mode": {
+              "enum": [
+                "meta",
+                "preview",
+                "thumb",
+                "range"
+              ],
+              "description": "meta (a fresh stat), preview (text up to 512 KB; images and PDFs up to 20 MB) or thumb (an image's thumbnail: PNG, JPEG, GIF, WebP, HEIC, BMP, TIFF; SVG comes back sanitized). range: offset/len chunks up to 16 MB."
+            },
+            "px": {
+              "type": "integer",
+              "minimum": 64,
+              "maximum": 512,
+              "description": "thumb: the longest side in pixels, 256 (default) or 512."
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "len": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "required": [
+            "addr",
+            "id"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppThreadFileData",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "file (meta), text, image or pdf (preview, thumb)."
+          },
+          "state": {
+            "type": "string",
+            "description": "ok, changed (since it was sent), gone (moved or deleted) or hidden (not shared with you: no name, type or size)."
+          },
+          "name": {
+            "type": "string"
+          },
+          "mime": {
+            "type": "string",
+            "description": "The content type; a thumb is image/jpeg, image/png or a sanitized image/svg+xml."
+          },
+          "size": {
+            "type": "integer",
+            "description": "Bytes now."
+          },
+          "modifiedAt": {
+            "type": "integer",
+            "description": "Milliseconds since the epoch (meta)."
+          },
+          "line": {
+            "type": "integer"
+          },
+          "lineEnd": {
+            "type": "integer"
+          },
+          "text": {
+            "type": "string",
+            "description": "preview of a text file: the first 512 KB, vault values redacted."
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "base64": {
+            "type": "string",
+            "description": "preview or thumb: the bytes. Show them as an image (an <img>, never inline markup)."
+          },
+          "width": {
+            "type": "integer",
+            "description": "thumb: pixels."
+          },
+          "height": {
+            "type": "integer",
+            "description": "thumb: pixels."
+          },
+          "sanitized": {
+            "type": "boolean",
+            "description": "An SVG with scripts, event handlers and outside links removed."
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "offset": {
+            "type": "integer",
+            "description": "range: the first byte."
+          },
+          "len": {
+            "type": "integer",
+            "description": "range: bytes in this chunk."
+          },
+          "eof": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "not_found",
+        "failed"
+      ],
+      "doc": "One attachment of a room's message: meta, preview, thumbnail or a byte range, only when your own file rights cover it.",
+      "example": "const t = await k2.thread.attachmentGet({addr: 'sales', id: item.id, n: 0, mode: 'thumb'})"
+    },
+    {
+      "verb": "thread.catchup",
+      "cap": "thread:read",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "inbox-catchup-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/thread/catchup",
+          "responseNames": {
+            "conversation": "conversation_id"
+          }
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "threads": {
+              "type": "array",
+              "description": "Up to 200 rooms: each {addr, afterSeq} (a delta) or {addr, newest: true} (the newest page).",
+              "items": {
+                "title": "AppCatchupAsk",
+                "type": "object",
+                "properties": {
+                  "addr": {
+                    "type": "string"
+                  },
+                  "afterSeq": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "newest": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "addr"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "description": "Items per room (default 50)."
+            }
+          },
+          "required": [
+            "threads"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppCatchup",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "has_more": {
+            "type": "boolean",
+            "description": "Some entries are deferred (the 4 MiB budget): call again with those."
+          },
+          "threads": {
+            "type": "array",
+            "items": {
+              "title": "AppCatchupEntry",
+              "type": "object",
+              "properties": {
+                "addr": {
+                  "type": "string"
+                },
+                "conversation": {
+                  "type": "string"
+                },
+                "after_seq": {
+                  "type": "integer"
+                },
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "title": "AppThreadItem",
+                    "type": "object",
+                    "properties": {
+                      "collection": {
+                        "type": "string",
+                        "description": "Always thread."
+                      },
+                      "seq": {
+                        "type": "integer"
+                      },
+                      "id": {
+                        "type": "string"
+                      },
+                      "doc": {
+                        "title": "AppThreadDoc",
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "type": "string",
+                            "description": "text, choice or secret."
+                          },
+                          "from": {
+                            "type": "string"
+                          },
+                          "to": {
+                            "type": "string"
+                          },
+                          "created_at": {
+                            "type": "number",
+                            "description": "Seconds since the epoch (not milliseconds)."
+                          },
+                          "body": {
+                            "type": "string",
+                            "description": "The text (redacted); a card's prompt."
+                          },
+                          "via": {
+                            "type": "string",
+                            "description": "Where it came from: thread, compose, card, msg, inbox, v1, …"
+                          },
+                          "choice": {
+                            "title": "AppChoiceCard",
+                            "type": "object",
+                            "properties": {
+                              "prompt": {
+                                "type": "string"
+                              },
+                              "options": {
+                                "type": "array",
+                                "items": {
+                                  "title": "ChoiceOption",
+                                  "type": "object",
+                                  "properties": {
+                                    "label": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "label"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "allow_custom": {
+                                "type": "boolean"
+                              },
+                              "status": {
+                                "type": "string",
+                                "description": "pending, answered, voided or expired."
+                              },
+                              "answer": {
+                                "type": "string"
+                              },
+                              "answeredBy": {
+                                "title": "AppPostAuthor",
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "description": "owner, user (a Connect login) or guest (an App pass or guest login)."
+                                  },
+                                  "login": {
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "type": "string",
+                                    "description": "The owner's display name, on an owner's answer only."
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "login"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "answeredAt": {
+                                "type": "integer",
+                                "description": "Seconds since the epoch, when answered."
+                              },
+                              "expiresAt": {
+                                "type": "integer",
+                                "description": "Seconds since the epoch, when a pending card expires."
+                              }
+                            },
+                            "required": [
+                              "prompt",
+                              "options",
+                              "allow_custom",
+                              "status"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "secret": {
+                            "title": "AppSecretCard",
+                            "type": "object",
+                            "properties": {
+                              "name": {
+                                "type": "string"
+                              },
+                              "status": {
+                                "type": "string",
+                                "description": "pending, set, voided or expired."
+                              },
+                              "prompt": {
+                                "type": "string"
+                              },
+                              "scope": {
+                                "type": "string",
+                                "description": "workspace, server or session."
+                              },
+                              "hosts": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "delivery": {
+                                "type": "string",
+                                "description": "fetch, file or env."
+                              },
+                              "secretKind": {
+                                "type": "string"
+                              },
+                              "ref": {
+                                "type": "string",
+                                "description": "A k2v:// reference to the stored secret (never its value)."
+                              },
+                              "answeredBy": {
+                                "title": "AppPostAuthor",
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "description": "owner, user (a Connect login) or guest (an App pass or guest login)."
+                                  },
+                                  "login": {
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "type": "string",
+                                    "description": "The owner's display name, on an owner's answer only."
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "login"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "answeredAt": {
+                                "type": "integer",
+                                "description": "Seconds since the epoch, when answered."
+                              },
+                              "expiresAt": {
+                                "type": "integer",
+                                "description": "Seconds since the epoch, when a pending card expires."
+                              }
+                            },
+                            "required": [
+                              "name",
+                              "status"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "widget": {
+                            "title": "AppPostWidget",
+                            "type": "object",
+                            "properties": {
+                              "widget": {
+                                "type": "string"
+                              },
+                              "garden": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "widget",
+                              "garden"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "author": {
+                            "title": "AppPostAuthor",
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "description": "owner, user (a Connect login) or guest (an App pass or guest login)."
+                              },
+                              "login": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string",
+                                "description": "The owner's display name, on an owner's answer only."
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "login"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "attachments": {
+                            "type": "array",
+                            "description": "Files that ride the message; one your file rights don't cover is {kind, state: hidden}. Read one with thread.attachmentGet by its index.",
+                            "items": {
+                              "title": "AppThreadFile",
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "description": "file."
+                                },
+                                "state": {
+                                  "type": "string",
+                                  "description": "ok, changed (since it was sent), gone (moved or deleted) or hidden (not shared with you: no name, type or size)."
+                                },
+                                "name": {
+                                  "type": "string"
+                                },
+                                "size": {
+                                  "type": "integer",
+                                  "description": "Bytes, when it was sent."
+                                },
+                                "mime": {
+                                  "type": "string",
+                                  "description": "Content type from the name (image/png, application/pdf, text/markdown, ...)."
+                                },
+                                "modifiedAt": {
+                                  "type": "integer",
+                                  "description": "Milliseconds since the epoch: the file's modified time when it was sent."
+                                },
+                                "line": {
+                                  "type": "integer"
+                                },
+                                "lineEnd": {
+                                  "type": "integer"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "state"
+                              ],
+                              "additionalProperties": false
+                            }
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "kind",
+                          "from",
+                          "created_at"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "seq",
+                      "id",
+                      "doc"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "has_more": {
+                  "type": "boolean"
+                },
+                "changed": {
+                  "type": "array",
+                  "items": {
+                    "title": "AppThreadItem",
+                    "type": "object",
+                    "properties": {
+                      "collection": {
+                        "type": "string",
+                        "description": "Always thread."
+                      },
+                      "seq": {
+                        "type": "integer"
+                      },
+                      "id": {
+                        "type": "string"
+                      },
+                      "doc": {
+                        "title": "AppThreadDoc",
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "type": "string",
+                            "description": "text, choice or secret."
+                          },
+                          "from": {
+                            "type": "string"
+                          },
+                          "to": {
+                            "type": "string"
+                          },
+                          "created_at": {
+                            "type": "number",
+                            "description": "Seconds since the epoch (not milliseconds)."
+                          },
+                          "body": {
+                            "type": "string",
+                            "description": "The text (redacted); a card's prompt."
+                          },
+                          "via": {
+                            "type": "string",
+                            "description": "Where it came from: thread, compose, card, msg, inbox, v1, …"
+                          },
+                          "choice": {
+                            "title": "AppChoiceCard",
+                            "type": "object",
+                            "properties": {
+                              "prompt": {
+                                "type": "string"
+                              },
+                              "options": {
+                                "type": "array",
+                                "items": {
+                                  "title": "ChoiceOption",
+                                  "type": "object",
+                                  "properties": {
+                                    "label": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "label"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "allow_custom": {
+                                "type": "boolean"
+                              },
+                              "status": {
+                                "type": "string",
+                                "description": "pending, answered, voided or expired."
+                              },
+                              "answer": {
+                                "type": "string"
+                              },
+                              "answeredBy": {
+                                "title": "AppPostAuthor",
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "description": "owner, user (a Connect login) or guest (an App pass or guest login)."
+                                  },
+                                  "login": {
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "type": "string",
+                                    "description": "The owner's display name, on an owner's answer only."
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "login"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "answeredAt": {
+                                "type": "integer",
+                                "description": "Seconds since the epoch, when answered."
+                              },
+                              "expiresAt": {
+                                "type": "integer",
+                                "description": "Seconds since the epoch, when a pending card expires."
+                              }
+                            },
+                            "required": [
+                              "prompt",
+                              "options",
+                              "allow_custom",
+                              "status"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "secret": {
+                            "title": "AppSecretCard",
+                            "type": "object",
+                            "properties": {
+                              "name": {
+                                "type": "string"
+                              },
+                              "status": {
+                                "type": "string",
+                                "description": "pending, set, voided or expired."
+                              },
+                              "prompt": {
+                                "type": "string"
+                              },
+                              "scope": {
+                                "type": "string",
+                                "description": "workspace, server or session."
+                              },
+                              "hosts": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "delivery": {
+                                "type": "string",
+                                "description": "fetch, file or env."
+                              },
+                              "secretKind": {
+                                "type": "string"
+                              },
+                              "ref": {
+                                "type": "string",
+                                "description": "A k2v:// reference to the stored secret (never its value)."
+                              },
+                              "answeredBy": {
+                                "title": "AppPostAuthor",
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "description": "owner, user (a Connect login) or guest (an App pass or guest login)."
+                                  },
+                                  "login": {
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "type": "string",
+                                    "description": "The owner's display name, on an owner's answer only."
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "login"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "answeredAt": {
+                                "type": "integer",
+                                "description": "Seconds since the epoch, when answered."
+                              },
+                              "expiresAt": {
+                                "type": "integer",
+                                "description": "Seconds since the epoch, when a pending card expires."
+                              }
+                            },
+                            "required": [
+                              "name",
+                              "status"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "widget": {
+                            "title": "AppPostWidget",
+                            "type": "object",
+                            "properties": {
+                              "widget": {
+                                "type": "string"
+                              },
+                              "garden": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "widget",
+                              "garden"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "author": {
+                            "title": "AppPostAuthor",
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "description": "owner, user (a Connect login) or guest (an App pass or guest login)."
+                              },
+                              "login": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string",
+                                "description": "The owner's display name, on an owner's answer only."
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "login"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "attachments": {
+                            "type": "array",
+                            "description": "Files that ride the message; one your file rights don't cover is {kind, state: hidden}. Read one with thread.attachmentGet by its index.",
+                            "items": {
+                              "title": "AppThreadFile",
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "description": "file."
+                                },
+                                "state": {
+                                  "type": "string",
+                                  "description": "ok, changed (since it was sent), gone (moved or deleted) or hidden (not shared with you: no name, type or size)."
+                                },
+                                "name": {
+                                  "type": "string"
+                                },
+                                "size": {
+                                  "type": "integer",
+                                  "description": "Bytes, when it was sent."
+                                },
+                                "mime": {
+                                  "type": "string",
+                                  "description": "Content type from the name (image/png, application/pdf, text/markdown, ...)."
+                                },
+                                "modifiedAt": {
+                                  "type": "integer",
+                                  "description": "Milliseconds since the epoch: the file's modified time when it was sent."
+                                },
+                                "line": {
+                                  "type": "integer"
+                                },
+                                "lineEnd": {
+                                  "type": "integer"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "state"
+                              ],
+                              "additionalProperties": false
+                            }
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "kind",
+                          "from",
+                          "created_at"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "seq",
+                      "id",
+                      "doc"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "removed": {
+                  "type": "array",
+                  "items": {
+                    "title": "AppThreadRemoved",
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "seq": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "seq"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "deferred": {
+                  "type": "boolean"
+                },
+                "error": {
+                  "title": "AppCatchupError",
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "hint": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "addr"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "threads"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "not_found",
+        "failed",
+        "rate_limited"
+      ],
+      "doc": "Deltas (or newest pages) for many rooms in one round trip, each exactly what thread.page answers for it.",
+      "example": "const {threads} = await k2.thread.catchup({threads: [{addr: 'sales', afterSeq: 41}]})"
+    },
+    {
+      "verb": "thread.setRead",
+      "cap": "thread:read",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-thread-parity-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/thread/read"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "addr": {
+              "type": "string",
+              "description": "The room's handle (or its pinned Chat's conversation id)."
+            },
+            "seq": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Read through this seq (forward only); absent = the newest item now."
+            }
+          },
+          "required": [
+            "addr"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppReadState",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "changed": {
+            "type": "boolean",
+            "description": "The cursor moved."
+          },
+          "id": {
+            "type": "string",
+            "description": "The conversation id."
+          },
+          "lastReadSeq": {
+            "type": "integer"
+          },
+          "lastSeq": {
+            "type": "integer"
+          },
+          "unread": {
+            "type": "integer"
+          },
+          "waiting": {
+            "type": "integer",
+            "description": "Cards waiting for an answer."
+          }
+        },
+        "required": [
+          "ok",
+          "lastReadSeq",
+          "lastSeq",
+          "unread"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "not_found",
+        "failed"
+      ],
+      "doc": "Mark this guest's (or the App's) own read cursor in a room's Thread; forward only.",
+      "example": "await k2.thread.setRead({addr: 'sales', seq: last.seq})"
+    },
+    {
+      "verb": "thread.unread",
+      "cap": "thread:read",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-thread-parity-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/thread/unread"
+        }
+      },
+      "request": [],
+      "response": {
+        "title": "AppUnread",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "total": {
+            "type": "integer"
+          },
+          "byConversation": {
+            "type": "array",
+            "items": {
+              "title": "AppUnreadRow",
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "The conversation id."
+                },
+                "addr": {
+                  "type": "string",
+                  "description": "The room's handle."
+                },
+                "lastReadSeq": {
+                  "type": "integer"
+                },
+                "lastSeq": {
+                  "type": "integer"
+                },
+                "unread": {
+                  "type": "integer"
+                },
+                "waiting": {
+                  "type": "integer",
+                  "description": "Cards waiting for an answer."
+                }
+              },
+              "required": [
+                "id",
+                "lastReadSeq",
+                "lastSeq",
+                "unread"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "total",
+          "byConversation"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "not_found",
+        "failed"
+      ],
+      "doc": "This guest's (or the App's) unread counts, one row per room Thread it may read.",
+      "example": "const {total, byConversation} = await k2.thread.unread()"
+    },
+    {
+      "verb": "files.resolveLinks",
+      "cap": "files:read",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-thread-parity-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/fs/resolve-links"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            },
+            "paths": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Path-shaped text from messages (at most 200)."
+            }
+          },
+          "required": [
+            "workspace",
+            "paths"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppLinks",
+        "type": "object",
+        "properties": {
+          "links": {
+            "type": "array",
+            "items": {
+              "title": "AppLink",
+              "type": "object",
+              "properties": {
+                "input": {
+                  "type": "string"
+                },
+                "linkable": {
+                  "type": "boolean"
+                },
+                "kind": {
+                  "type": "string",
+                  "description": "file or directory (linkable only)."
+                },
+                "rel": {
+                  "type": "string",
+                  "description": "Room-relative (linkable only); read it with files.read."
+                }
+              },
+              "required": [
+                "input",
+                "linkable"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "links"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "not_found",
+        "failed"
+      ],
+      "doc": "Which paths printed in a room's messages lead to a file or folder your file rights cover (the rest stay plain text).",
+      "example": "const {links} = await k2.files.resolveLinks({workspace, paths: ['jobs/J1/plans.pdf']})"
     },
     {
       "verb": "thread.ensurePinned",

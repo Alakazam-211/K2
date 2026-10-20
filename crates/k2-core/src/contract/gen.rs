@@ -55,8 +55,9 @@ pub const REGEN: &str = "run `cargo run -p k2-core --bin contract-gen`";
 pub const FRAME_MAX_BYTES: usize = 32 * 1024;
 
 /// The guide page's line cap (FC33; 80 until Garden data's 15 rows and
-/// their two cap groups, contract-garden-data-v1 §7.2).
-pub const GUIDE_MAX_LINES: usize = 104;
+/// their two cap groups, contract-garden-data-v1 §7.2; 112 since Thread
+/// parity 0.46.3 added thread.attachment/open/links/pickFiles/markRead).
+pub const GUIDE_MAX_LINES: usize = 112;
 
 /// Error codes every call may answer; the guide states them once.
 pub const ALWAYS_ERRORS: &[&str] = &["cap_not_granted", "verb_unavailable", "failed"];
@@ -787,17 +788,17 @@ mod tests {
     #[test]
     fn zen_verbs_is_todays_37_plus_nothing_else() {
         let rows = bridge_rows(catalog());
-        assert_eq!(rows.len(), 37, "today's ZEN_VERBS has 37 entries");
+        assert_eq!(rows.len(), 41, "ZEN_VERBS: today's 37 plus Thread parity 0.46.3's thread.attachment, thread.open, thread.links, thread.pickFiles");
         assert!(!rows.iter().any(|v| v.verb == "theme.changed"), "a frame row is never in ZEN_VERBS");
         let widget: Vec<&str> = catalog().widget_callable_verbs().iter().map(|v| v.verb.as_str()).collect();
         assert_eq!(
             widget.len(),
-            45,
-            "UW16 + UWB10: 16 widget verbs, plus the whole canvas (canvas.setHitRegions, window.startDrag), plus Garden v3's six sources.* verbs, plus Garden data's 15 garden-local rows, plus RS-A15's guests.rooms / guests.setRooms (app + garden-local), plus room-scope 0.46.1's room.members, app.self, app.usage and widget.self"
+            50,
+            "UW16 + UWB10: 16 widget verbs, plus the whole canvas (canvas.setHitRegions, window.startDrag), plus Garden v3's six sources.* verbs, plus Garden data's 15 garden-local rows, plus RS-A15's guests.rooms / guests.setRooms (app + garden-local), plus room-scope 0.46.1's room.members, app.self, app.usage and widget.self, plus Thread parity 0.46.3's thread.attachment, thread.open, thread.links, thread.pickFiles and thread.markRead"
         );
-        assert_eq!(catalog().verbs_exposed_to(Exposure::Widget).len(), 24, "the bridge's own rows");
+        assert_eq!(catalog().verbs_exposed_to(Exposure::Widget).len(), 29, "the bridge's own rows");
         for never in ["zen.exit", "controls.bind", "homes.list", "agents.local", "agents.add", "agents.home", "agents.setHome",
-            "thread.void", "thread.markRead", "gardens.create", "gardens.rename", "gardens.delete", "app.open"]
+            "thread.void", "gardens.create", "gardens.rename", "gardens.delete", "app.open"]
         {
             assert!(!widget.contains(&never), "{never} is never a widget verb");
         }
@@ -858,7 +859,7 @@ mod tests {
     fn signatures_read_like_the_skill() {
         let c = catalog();
         let sig = |v: &str| signature(c.verb(v).unwrap_or_else(|| panic!("{v}")));
-        assert_eq!(sig("thread.read"), "thread.read(address, {beforeSeq, limit})");
+        assert_eq!(sig("thread.read"), "thread.read(address, {afterSeq, beforeSeq, limit})");
         assert_eq!(sig("agents.subscribe"), "agents.subscribe(cb)");
         assert_eq!(sig("thread.subscribe"), "thread.subscribe(address, cb)");
         assert_eq!(sig("controls.bind"), "controls.bind(kind, element, gardenId?)");

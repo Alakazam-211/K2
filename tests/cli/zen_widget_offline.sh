@@ -6,7 +6,7 @@
 #     need no permissions, Rosson 2026-10-08) and never reach a daemon;
 #   - usage errors exit 2 before any request;
 #   - help and the --schema manifest list the widget family and --widget;
-#   - `k2 zen guide api` is generated, at most 104 lines, and --json parses.
+#   - `k2 zen guide api` is generated, at most 112 lines, and --json parses.
 # The daemon half (new/list/revoke/validate --widget, exit 3 before setup)
 # is tests/cli/zen_widget_cli.sh.
 
@@ -89,7 +89,7 @@ echo "== k2 zen guide api =="
 run zen guide api
 assert_eq "guide api exits 0 with no daemon" "$rc" "0"
 lines="$(printf '%s\n' "$out" | wc -l | tr -d ' ')"
-[ "$lines" -le 104 ] && ok "guide api is $lines lines (max 104)" || bad "guide api is $lines lines (max 104)"
+[ "$lines" -le 112 ] && ok "guide api is $lines lines (max 112)" || bad "guide api is $lines lines (max 112)"
 for v in agents.list agents.subscribe conversation.open thread.read thread.subscribe thread.post thread.answer compose.draft gardens.switch theme.changed presence.get store.get store.put store.txCommit save.set viewer.get; do
     assert_contains "guide api names k2.$v" "$out" "k2.$v("
 done

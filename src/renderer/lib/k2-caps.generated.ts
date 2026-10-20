@@ -30,7 +30,7 @@ export const K2_CAPS = {
   },
   'thread:post': {
     label: 'Post to the Thread',
-    sentence: 'Send messages to the agents in {where} as you (text only).',
+    sentence: 'Send messages to the agents in {where} as you, with files you pick.',
     exposure: ['widget', 'app'],
   },
   'sources:read': {

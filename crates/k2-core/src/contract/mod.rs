@@ -418,7 +418,12 @@ mod tests {
             assert!(room_scope || v.feature == crate::garden_data::FEATURE, "{}", v.verb);
         }
         assert!(c.verb("theme.changed").is_some_and(|v| v.kind == VerbKind::Event));
-        assert!(c.verb("thread.markRead").is_some_and(|v| v.exposure.is_empty()), "UW51: markRead stays none");
+        // Rosson 2026-10-20 (Thread parity, 0.46.3) replaces UW51: a widget
+        // marks the person's own read cursor, as reading in K2 does.
+        assert!(
+            c.verb("thread.markRead").is_some_and(|v| v.exposure == [Exposure::Widget] && v.feature == "thread-read-v1"),
+            "thread.markRead is a widget row since 0.46.3"
+        );
     }
 
     #[test]

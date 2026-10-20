@@ -272,7 +272,7 @@ fn human_caller_matrix() {
         ("/cli/app/config", true, json!({"app": "hum", "dbPrivate": "on"}), [Refused, Held, Run, Run, Run]),
         ("/cli/app/quota/set", true, json!({"app": "hum", "rps": 700}), [Refused, Held, Run, Run, Run]),
         // Loosening: held for the person from every caller.
-        ("/cli/app/config", true, json!({"app": "hum", "path": "open"}), [Refused, Held, Held, Held, Held]),
+        ("/cli/app/config", true, json!({"app": "other", "path": "open"}), [Refused, Held, Held, Held, Held]),
         ("/cli/app/config", true, json!({"app": "hum", "dbRaw": "on"}), [Refused, Held, Held, Held, Held]),
         ("/cli/app/config", true, json!({"app": "hum", "portAdd": "7000"}), [Refused, Held, Held, Held, Held]),
         // Purge: the owner in person only (no confirm here → refused).

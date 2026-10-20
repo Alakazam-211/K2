@@ -112,6 +112,9 @@ async fn apps_on_without_the_process_engine_never_runs_unwalled() {
     let env = setup(&[]);
     let d = k2_daemon::test_harness::start(OWNER).await;
     let ws = seed_ws(&env, "safews");
+    // Setup: no other test's unwalled App still runs in this process (the
+    // sweep below would stop it too and the stopped list would mismatch).
+    assert_eq!(live_unwalled(), Vec::<String>::new(), "setup: an unwalled App from another test is still running");
     allow_manage(&ws, true);
     let pass = passport(&ws);
 
@@ -199,24 +202,112 @@ fn body_of(front: u16, path: &str) -> String {
     http_get(front, path).map(|(s, b)| format!("{s} {}", b.trim())).unwrap_or_else(|| "no answer".into())
 }
 
-/// Requests through the front port in a loop until stopped; returns the
-/// failures (anything that isn't a 200 from some version of the App).
-fn hammer(front: u16) -> (std::sync::Arc<std::sync::atomic::AtomicBool>, std::thread::JoinHandle<(usize, Vec<String>)>) {
-    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let s2 = stop.clone();
-    let h = std::thread::spawn(move || {
-        let mut ok = 0usize;
-        let mut bad = Vec::new();
-        while !s2.load(std::sync::atomic::Ordering::SeqCst) {
-            match http_get(front, "/") {
-                Some((200, _)) => ok += 1,
-                other => bad.push(format!("{other:?}")),
+/// One request the load loop made: when it started and finished, and what
+/// it got (`None` = no answer).
+struct Req {
+    start: std::time::Instant,
+    end: std::time::Instant,
+    got: Option<(u16, String)>,
+}
+
+/// Continuous load on the front port, recorded per request, plus the
+/// phase windows the test marks. Machine speed never matters: each phase
+/// waits until a request that started inside it has finished, so load is
+/// provably in flight in every phase, however slow the box.
+struct Load {
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    log: std::sync::Arc<std::sync::Mutex<Vec<Req>>>,
+    h: Option<std::thread::JoinHandle<()>>,
+    phases: Vec<(&'static str, std::time::Instant, std::time::Instant)>,
+}
+
+impl Load {
+    fn start(front: u16) -> Self {
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let log: std::sync::Arc<std::sync::Mutex<Vec<Req>>> = Default::default();
+        let (s2, l2) = (stop.clone(), log.clone());
+        let h = std::thread::spawn(move || {
+            while !s2.load(std::sync::atomic::Ordering::SeqCst) {
+                let start = std::time::Instant::now();
+                let got = http_get(front, "/");
+                l2.lock().unwrap().push(Req { start, end: std::time::Instant::now(), got });
+                std::thread::sleep(std::time::Duration::from_millis(5));
             }
-            std::thread::sleep(std::time::Duration::from_millis(30));
+        });
+        Load { stop, log, h: Some(h), phases: Vec::new() }
+    }
+
+    /// Run one phase under load. Its window opens before `f` starts and
+    /// closes once `f` is done AND a request that started inside the
+    /// window has finished (≤ 30 s, else the phase had no load: a failure).
+    async fn phase<T>(&mut self, name: &'static str, f: impl std::future::Future<Output = T>) -> T {
+        let t0 = std::time::Instant::now();
+        let out = f.await;
+        let log = self.log.clone();
+        wait_until(&format!("a request started and finished inside phase '{name}'"), 30, || {
+            log.lock().unwrap().iter().any(|r| r.start >= t0)
+        })
+        .await;
+        self.phases.push((name, t0, std::time::Instant::now()));
+        out
+    }
+
+    /// Stop the load and check it: every request got a 200 from some
+    /// version of the App, and every phase had a request start and finish
+    /// inside its window.
+    fn finish(mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        self.h.take().unwrap().join().unwrap();
+        let log = self.log.lock().unwrap();
+        let bad: Vec<String> =
+            log.iter().filter(|r| !matches!(r.got, Some((200, _)))).map(|r| format!("{:?}", r.got)).collect();
+        assert!(bad.is_empty(), "requests dropped under load ({} of {}): {bad:?}", bad.len(), log.len());
+        for (name, t0, t1) in &self.phases {
+            let n = log.iter().filter(|r| r.start >= *t0 && r.end <= *t1).count();
+            assert!(n >= 1, "phase '{name}' had no request start and finish inside it ({} requests in all)", log.len());
         }
-        (ok, bad)
-    });
-    (stop, h)
+    }
+}
+
+impl Drop for Load {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// Stops an App when the test ends, passing or panicking, so a failure
+/// never leaves it running in this process's supervisor for the next
+/// test (the process-engine-off sweep would find it).
+struct StopOnDrop(&'static str);
+
+impl Drop for StopOnDrop {
+    fn drop(&mut self) {
+        let app = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::deploy::store::get_app(&conn, self.0).ok().flatten()
+        };
+        if let Some(app) = app {
+            if let Err(f) = k2_daemon::apps::supervisor::stop_app(&app, "test-cleanup") {
+                eprintln!("cleanup: stopping {}: {}", self.0, f.message);
+            }
+        }
+        k2_daemon::apps::supervisor::forget(self.0);
+    }
+}
+
+/// Every App this process's supervisor runs live on the unwalled process
+/// engine (the sweep's view).
+fn live_unwalled() -> Vec<String> {
+    let apps = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::deploy::store::list_apps(&conn, None).unwrap()
+    };
+    apps.into_iter()
+        .filter(|a| k2_daemon::apps::supervisor::runs_unwalled(a) && k2_daemon::apps::supervisor::live_instance(&a.app_id).is_some())
+        .map(|a| a.app_id)
+        .collect()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -226,6 +317,8 @@ async fn s7_deploy_switch_rollback_stop_start_with_no_dropped_requests() {
     let d = k2_daemon::test_harness::start(OWNER).await;
     let ws = seed_ws(&env, "s7ws");
     let front = install(d.port, OWNER, "s7app", &ws).await;
+    // Declared after `env` and `d`: dropped first, panic or not.
+    let _cleanup = StopOnDrop("s7app");
     assert!(body_of(front, "/").starts_with("503"), "installed, nothing deployed: {}", body_of(front, "/"));
 
     // First deploy: health gate, switch, live.
@@ -242,24 +335,24 @@ async fn s7_deploy_switch_rollback_stop_start_with_no_dropped_requests() {
     }
     assert!(!envs.contains("K2_HOOK_TOKEN"), "daemon env leaked into the App: {envs}");
 
-    // Second deploy under load: no dropped requests across the switch.
-    let (stop, h) = hammer(front);
+    // Under continuous load from here until the stop (whose contract is a
+    // 503): the second deploy and its switch, the instant rollback, a
+    // deploy whose health gate fails, a deploy with a data revision and a
+    // refused rollback across it. Not one request may go unanswered or
+    // answer anything but a 200 from some version, and every phase must
+    // have had load in flight (phase windows, not a request count).
+    let mut load = Load::start(front);
     let v2 = app_folder(&env.path().join("v2"), "s7app", "2.0.0", "v2");
-    let d2 = deploy_folder(d.port, OWNER, "s7app", &v2).await;
+    let d2 = load.phase("deploy v2 + switch", deploy_folder(d.port, OWNER, "s7app", &v2)).await;
     assert_eq!(d2["result"], "live");
     assert_eq!(body_of(front, "/"), "200 v2");
 
     // Rollback: the previous instance is still warm → instant.
-    let r = post(d.port, "/cli/app/rollback", OWNER, json!({"app": "s7app"})).await;
+    let r = load.phase("rollback to v1 (warm)", post(d.port, "/cli/app/rollback", OWNER, json!({"app": "s7app"}))).await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(r.json()["instant"], true);
     assert_eq!(r.json()["deployment"]["kind"], "rollback");
     assert_eq!(body_of(front, "/"), "200 v1");
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-    stop.store(true, std::sync::atomic::Ordering::SeqCst);
-    let (ok, bad) = h.join().unwrap();
-    assert!(ok > 5, "the load loop ran ({ok})");
-    assert!(bad.is_empty(), "requests dropped across deploy + rollback: {bad:?}");
 
     // L3 status: who, commit, state.
     let r = get(d.port, "/cli/app/deployment", OWNER, &format!("app=s7app&id={}", d2["id"].as_str().unwrap())).await;
@@ -271,7 +364,7 @@ async fn s7_deploy_switch_rollback_stop_start_with_no_dropped_requests() {
 
     // A failing health gate keeps the old version live.
     let sick = app_folder(&env.path().join("sick"), "s7app", "3.0.0", "sick-v3");
-    let d3 = deploy_folder(d.port, OWNER, "s7app", &sick).await;
+    let d3 = load.phase("failed deploy (health gate)", deploy_folder(d.port, OWNER, "s7app", &sick)).await;
     assert_eq!(d3["result"], "failed", "{d3}");
     assert!(d3["error"].as_str().unwrap().starts_with("health_failed"), "{d3}");
     assert_eq!(body_of(front, "/"), "200 v1");
@@ -283,10 +376,15 @@ async fn s7_deploy_switch_rollback_stop_start_with_no_dropped_requests() {
         manifest("s7app", "4.0.0").replacen("\"caps\"", "\"dataRevision\":2,\"caps\"", 1),
     )
     .unwrap();
-    assert_eq!(deploy_folder(d.port, OWNER, "s7app", &v4).await["result"], "live");
-    let r = post(d.port, "/cli/app/rollback", OWNER, json!({"app": "s7app", "to": d1["toSeed"]})).await;
+    let d4 = load.phase("deploy v4 (data revision) + switch", deploy_folder(d.port, OWNER, "s7app", &v4)).await;
+    assert_eq!(d4["result"], "live");
+    let r = load
+        .phase("refused rollback across the migration", post(d.port, "/cli/app/rollback", OWNER, json!({"app": "s7app", "to": d1["toSeed"]})))
+        .await;
     assert_eq!(r.status, 409, "{}", r.body);
     assert_eq!(r.code(), "rollback_crosses_migration");
+    assert_eq!(body_of(front, "/"), "200 v4");
+    load.finish();
 
     // Stop: 503 at the front; start: live again.
     let r = post(d.port, "/cli/app/stop", OWNER, json!({"app": "s7app"})).await;

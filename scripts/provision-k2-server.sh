@@ -49,6 +49,9 @@
 #                      root:root 0755, its sudoers file 0440, daemon.toml
 #                      0644, and `visudo -c` must pass. The step never
 #                      enables mail, touches DNS, or edits other sudoers.
+#   K2_SKIP_APPS       1 = skip step 8b (Apps (beta) box prep + App engine).
+#                      Default: a full provision prepares the box for walled
+#                      Apps and installs the App engine (0.46.3+ daemons).
 #   FRP_VERSION        frpc version (default 0.61.1 — MUST match the relay)
 #
 # Idempotent: re-running converges; existing users/units are updated,
@@ -522,6 +525,63 @@ for _ in $(seq 1 90); do
 done
 [ -n "$PORT" ] || die "daemon not ready with a live token in 90s (journalctl -u ${K2_UNIT_NAME})"
 
+# ── 8b. Apps (beta): prepare the box + install the App engine ───────
+# 0.46.3+: Apps are on by default; walled Apps need box prep (k2app user,
+# subuids, delegation, nft table, Podman 5) and the guarded App engine,
+# both through the root helper from step 7a. Run as the daemon user with
+# the owner token the CLI reads from its own ~/.k2/daemon.token (never on
+# an argv). Idempotent: prepare converges on a re-run; the engine is
+# installed only when the doctor says it isn't answering at this version.
+# K2_SKIP_APPS=1 skips it. A daemon that predates the Apps switch (pinned
+# K2_VERSION, legacy root helper) is skipped with a line; any other
+# failure stops provisioning.
+APPS_LINE="skipped"
+k2_as_daemon_user() {
+	runuser -u "$K2_RUN_USER" -- env -i HOME="$K2_HOME" USER="$K2_RUN_USER" LANG=C.UTF-8 \
+		PATH="$K2_HOME/.local/bin:/usr/local/bin:/usr/bin:/bin" /usr/local/bin/k2 "$@"
+}
+if [ "${K2_SKIP_APPS:-}" = "1" ]; then
+	log "Apps: skipped (K2_SKIP_APPS=1)"
+elif [ "${ROOT_HELPER_MODE:-root}" = "legacy" ]; then
+	log "Apps: skipped (daemon v${DAEMON_VERSION:-?} predates the root helper's Apps verbs)"
+	APPS_LINE="skipped (legacy daemon)"
+else
+	APPS_DOC=$(k2_curl "$BASE/cli/app/box?token=$TOKEN" "" "" -sS -w '\n%{http_code}') \
+		|| die "Apps: GET /cli/app/box failed (journalctl -u ${K2_UNIT_NAME})"
+	APPS_HTTP="${APPS_DOC##*$'\n'}"
+	if [ "$APPS_HTTP" = "404" ]; then
+		log "Apps: the daemon answers apps_disabled (a daemon older than 0.46.3, or Apps switched off): skipped"
+		APPS_LINE="skipped (Apps off on this daemon)"
+	elif [ "$APPS_HTTP" != "200" ]; then
+		die "Apps: GET /cli/app/box answered HTTP ${APPS_HTTP}: ${APPS_DOC%$'\n'*}"
+	else
+		log "Apps: preparing the box (k2 app box prepare --install-podman)"
+		APPS_PREP_OUT=$(mktemp)
+		if ! k2_as_daemon_user app box prepare --install-podman --json >"$APPS_PREP_OUT" 2>&1; then
+			cat "$APPS_PREP_OUT" >&2
+			die "Apps: box prep failed (output above). Fix it, then re-run, or run as ${K2_RUN_USER}: k2 app doctor ; k2 app box prepare --dry-run"
+		fi
+		rm -f "$APPS_PREP_OUT"
+		APPS_ENGINE_OK=$(k2_curl "$BASE/cli/app/box?token=$TOKEN" "" "" -fsS \
+			| python3 -c 'import json,sys; d=json.load(sys.stdin); print("yes" if any(c.get("id")=="engine" and c.get("status")=="ok" for c in d.get("checks",[])) else "no")') \
+			|| die "Apps: re-reading the doctor after box prep failed"
+		if [ "$APPS_ENGINE_OK" = "yes" ]; then
+			log "Apps: the App engine already answers at this version"
+		else
+			log "Apps: installing the App engine (k2 app engine install)"
+			APPS_ENG_OUT=$(mktemp)
+			if ! k2_as_daemon_user app engine install --json >"$APPS_ENG_OUT" 2>&1; then
+				cat "$APPS_ENG_OUT" >&2
+				die "Apps: App engine install failed (output above). Re-run, or run as ${K2_RUN_USER}: k2 app engine install"
+			fi
+			rm -f "$APPS_ENG_OUT"
+		fi
+		k2_as_daemon_user app doctor >/dev/null 2>&1 \
+			|| log "WARN: Apps: k2 app doctor still reports items to fix (run it as ${K2_RUN_USER}); provisioning continues"
+		APPS_LINE="prepared, App engine installed"
+	fi
+fi
+
 # ── 9. first owner user ──────────────────────────────────────────────
 GENERATED_PW=0
 if [ -n "${K2_OWNER_USER:-}" ]; then
@@ -600,6 +660,7 @@ if [ -n "${K2_OWNER_USER:-}" ]; then
 	fi
 fi
 echo "  mail:      helper ${MAIL_HELPER_LINE}"
+echo "  apps:      ${APPS_LINE}"
 echo "  sandboxes: OFF (Standard-tier host — the Dedicated bootstrap adds them)"
 if [ -z "${K2_TUNNEL_TOKEN:-}" ] || [ -z "${K2_OWNER_USER:-}" ]; then
 echo ""

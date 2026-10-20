@@ -20,6 +20,7 @@
 //! Every privileged call is `sudo -n <absolute helper path> …` with the
 //! absolute `/usr/bin/sudo` (RH12).
 
+pub mod busy;
 pub mod heal;
 
 use std::sync::Mutex;

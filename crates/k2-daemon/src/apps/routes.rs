@@ -40,8 +40,10 @@ pub const ROUTES: &[&str] = &[
     "/cli/app/label/return",
     "/cli/app/label/take",
     "/cli/app/box",
+    "/cli/app/box/auto-prepare/retry",
     "/cli/app/box/podman/uninstall",
     "/cli/app/box/prepare",
+    "/cli/app/box/unprep",
     "/cli/app/build",
     "/cli/app/config",
     "/cli/app/deploy",
@@ -71,8 +73,10 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/app/data/put",
     "/cli/app/label/return",
     "/cli/app/label/take",
+    "/cli/app/box/auto-prepare/retry",
     "/cli/app/box/podman/uninstall",
     "/cli/app/box/prepare",
+    "/cli/app/box/unprep",
     "/cli/app/build",
     "/cli/app/config",
     "/cli/app/deploy",
@@ -381,6 +385,10 @@ pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String
         "/cli/app/box/prepare" => json_body(body).and_then(|v| super::box_prep::prepare_route(&who, &v)),
         // Lane P: the owner removes K2's Podman bundle.
         "/cli/app/box/podman/uninstall" => json_body(body).and_then(|v| super::podman_install::uninstall_route(&who, &v)),
+        // 0.46.3 F8: the owner undoes box prep; F6: the owner's Retry of a
+        // blocked (or undone) automatic prep.
+        "/cli/app/box/unprep" => json_body(body).and_then(|v| super::box_unprep::route(&who, &v)),
+        "/cli/app/box/auto-prepare/retry" => json_body(body).and_then(|_| super::auto_prepare::retry_route(&who)),
         // The guarded engine (S11): the owner installs or updates it.
         "/cli/app/engine/install" => json_body(body).and_then(|v| super::engine_install::install_route(&who, &v)),
         "/cli/app/build" => build(&who, body),

@@ -749,11 +749,14 @@ fn packages_install_uses_the_distro_and_gates_on_podman_5_with_pasta() {
     let o = t.call(&["apps", "packages", "install"]);
     assert_eq!(o.code, exit::STATE);
     assert!(o.stderr.starts_with("podman_too_old"), "{}", o.stderr);
+    assert!(o.stderr.contains("doesn't upgrade a Podman it didn't install"), "{}", o.stderr);
+    // The box's own Podman (4.9.3 here) is never on the list (F4).
     assert_eq!(
         calls_of(&t, ENV),
         vec![
             "DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get update -q".to_string(),
-            "DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get install -y -q --no-install-recommends -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold podman crun passt uidmap dbus-user-session skopeo catatonit nftables".to_string(),
+            format!("{APT_SIM} {APT_DISTRO_KEEP}"),
+            format!("{APT_Y} {APT_DISTRO_KEEP}"),
         ]
     );
 
@@ -816,7 +819,17 @@ fn apparmor_install_effect(t: &T, prog: &str) {
     ));
 }
 
-const APT_INSTALL: &str = "DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get install -y -q --no-install-recommends -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold podman crun passt uidmap dbus-user-session skopeo catatonit nftables";
+/// apt's real install and its simulation (same options, `--no-upgrade`).
+pub(super) const APT_Y: &str = "DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get install -y -q --no-install-recommends --no-upgrade -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold";
+pub(super) const APT_SIM: &str = "DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get install -s -q --no-install-recommends --no-upgrade -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold";
+/// The distro path on a box with no Podman.
+pub(super) const APT_DISTRO: &str = "podman crun passt uidmap dbus-user-session skopeo catatonit nftables";
+/// The distro path on a box whose Podman is kept.
+pub(super) const APT_DISTRO_KEEP: &str = "crun passt uidmap dbus-user-session skopeo catatonit nftables";
+/// K2's Podman bundle runs k2app: only what the bundle can't carry.
+pub(super) const APT_BUNDLE: &str = "uidmap dbus-user-session skopeo nftables";
+/// `engine_bins` puts a Podman on the box, so these tests are the keep path.
+const APT_INSTALL: &str = "DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get install -y -q --no-install-recommends --no-upgrade -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold crun passt uidmap dbus-user-session skopeo catatonit nftables";
 
 #[test]
 fn packages_install_adds_apparmor_when_the_kernel_has_it_and_the_parser_is_missing() {
@@ -834,6 +847,7 @@ fn packages_install_adds_apparmor_when_the_kernel_has_it_and_the_parser_is_missi
         calls_of(&t, ENV),
         vec![
             "DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get update -q".to_string(),
+            format!("{APT_SIM} {APT_DISTRO_KEEP} apparmor"),
             format!("{APT_INSTALL} apparmor"),
         ]
     );
@@ -866,7 +880,7 @@ fn packages_install_adds_apparmor_when_the_kernel_has_it_and_the_parser_is_missi
     let v = ok_json(&t.call(&["apps", "packages", "install"]));
     assert_eq!(
         calls_of(&t, PACMAN),
-        vec!["-S --needed --noconfirm podman crun passt skopeo catatonit apparmor"]
+        vec!["-S --needed --noconfirm crun passt skopeo catatonit apparmor"]
     );
     assert_eq!(v["apparmor"]["parser"], PARSER);
 
@@ -885,7 +899,7 @@ fn packages_install_adds_apparmor_when_the_kernel_has_it_and_the_parser_is_missi
     engine_bins(&t);
     write(&t, APPARMOR_ENABLED, "Y\n");
     let v = ok_json(&t.call(&["apps", "packages", "install"]));
-    assert_eq!(calls_of(&t, DNF), vec!["install -y -q podman crun passt shadow-utils skopeo catatonit"]);
+    assert_eq!(calls_of(&t, DNF), vec!["install -y -q crun passt shadow-utils skopeo catatonit"]);
     assert_eq!(v["apparmor"]["needed"], true);
     assert_eq!(v["apparmor"]["installed"], serde_json::json!([]));
     assert!(v["apparmor"]["note"].as_str().unwrap().contains("no fixed AppArmor package for dnf"), "{v}");

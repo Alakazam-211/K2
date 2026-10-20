@@ -7379,6 +7379,20 @@ The box (Linux):
                                        folder holding the pinned tarball.
   k2 app box podman uninstall [--json] Owner: remove K2's Podman (refused while
                                        Apps run).
+  k2 app box unprep [--dry-run] [--yes] [--json]
+                                       Owner: undo box prep (the nft table,
+                                       AppArmor profile, limits, linger, the
+                                       engine unit). Keeps the k2app user, its
+                                       ids and data, the distro packages and
+                                       K2's Podman. Refused while any App runs.
+                                       Asks first (shows the plan); --yes for
+                                       scripts. Automatic prep pauses until
+                                       k2 app box auto-prepare retry.
+  k2 app box auto-prepare retry [--json]
+                                       Owner: run automatic box prep again now
+                                       after it stopped for good (old kernel,
+                                       cgroup v1, unsupported distro, overlapping
+                                       sub-ids) or after an unprep.
   k2 app engine install [--from DIR] [--json]
                                        Owner: install/update k2-app-engine (the
                                        guarded engine, signed with the root-helper
@@ -7416,6 +7430,10 @@ if isinstance(ap, dict):
     st = o.get("state") or "not run yet"
     extra = o.get("why") or o.get("error") or ", ".join(o.get("changed") or [])
     print("Automatic prep: %s; last: %s%s" % ("on" if ap.get("enabled") else "off (appsAutoPrepare)", st, (" — " + extra) if extra else ""))
+    if ap.get("undoneAt"):
+        print("  paused: the owner undid the box setup (k2 app box auto-prepare retry resumes it)")
+    elif ap.get("blocked") or st == "blocked":
+        print("  stopped for good: no retry until K2 updates (k2 app box auto-prepare retry)")
 # 0.46.3: --cmd services no wall runs (not part of "ready").
 legacy = v.get("legacyServices") or []
 if legacy:
@@ -7521,6 +7539,93 @@ print("K2 Podman removed: " + (", ".join(gone) if gone else "nothing was install
 for k in r.get("kept") or []:
     print("  kept " + k)
 print("The distro Podman is as it was.")'
+            fi
+            ;;
+        unprep)
+            # F8: k2 app box unprep [--dry-run] [--yes] [--json] (owner).
+            shift
+            local json_out=0 dry_run="" yes="" raw
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --dry-run) dry_run=1; shift ;;
+                    --yes|-y) yes=1; shift ;;
+                    --json) json_out=1; shift ;;
+                    -h|--help) _app_rt_usage; return 0 ;;
+                    *) echo "Unknown argument: $1" >&2; exit 2 ;;
+                esac
+            done
+            if [ -n "$dry_run" ] || [ -z "$yes" ]; then
+                raw="$(K2_CP_MAX_TIME=120 _compute_send POST /cli/app/box/unprep '{"dryRun":true}')"
+                _compute_split "$raw"
+                [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+                if [ "$json_out" = 1 ] && [ -n "$dry_run" ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+                printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+print("Undo box setup would remove:")
+for u in v.get("undoes") or []:
+    print("  " + u)
+for k in v.get("kept") or []:
+    print("  keeps " + k)
+run = v.get("runningApps") or []
+if run:
+    print("Refused while Apps run; stop these first: " + ", ".join(run))
+'
+                if [ -n "$dry_run" ]; then echo "Dry run: nothing changed."; return 0; fi
+                if ! { [ -t 0 ] && [ -t 1 ]; }; then
+                    echo "k2 app box unprep: pass --yes to undo the box setup without a prompt (--dry-run shows the plan)" >&2
+                    exit 2
+                fi
+                local yn=""
+                printf 'Undo the box setup? [y/N] '
+                read -r yn || yn=""
+                case "$yn" in
+                    y|Y|yes|YES) ;;
+                    *) echo "Nothing changed." >&2; exit 2 ;;
+                esac
+            fi
+            raw="$(K2_CP_MAX_TIME=300 _compute_send POST /cli/app/box/unprep '{"confirm":true}')"
+            _compute_split "$raw"
+            [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+            if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; else
+                printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+r = v.get("result") or {}
+print("Box setup undone:")
+for s in r.get("steps") or []:
+    print("  ok   %s%s" % (s.get("step", ""), "  (changed)" if s.get("changed") else "  (already)"))
+for k in v.get("kept") or r.get("kept") or []:
+    print("  kept " + k)
+if v.get("note"):
+    print(v["note"])
+'
+                printf '%s' "$_CP_BODY" | _app_box_print
+            fi
+            ;;
+        auto-prepare)
+            # F6: k2 app box auto-prepare retry [--json] (owner).
+            shift
+            [ "${1:-}" = "retry" ] || { echo "usage: k2 app box auto-prepare retry [--json]" >&2; exit 2; }
+            shift
+            local json_out=0 raw
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --json) json_out=1; shift ;;
+                    -h|--help) _app_rt_usage; return 0 ;;
+                    *) echo "Unknown argument: $1" >&2; exit 2 ;;
+                esac
+            done
+            raw="$(_compute_send POST /cli/app/box/auto-prepare/retry '{}')"
+            _compute_split "$raw"
+            [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+            if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; else
+                echo "Automatic box prep will run again now."
+                printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+ap = json.load(sys.stdin).get("autoPrepare") or {}
+print("Automatic prep: %s" % ("on" if ap.get("enabled") else "off (appsAutoPrepare): turn it on for the retry to do anything"))
+'
             fi
             ;;
         prepare)
@@ -7631,7 +7736,7 @@ for s in json.load(sys.stdin).get("steps", []):
             fi
             ;;
         -h|--help) _app_rt_usage ;;
-        *) echo "Unknown: k2 app box $1 (doctor|prepare|podman uninstall)" >&2; exit 2 ;;
+        *) echo "Unknown: k2 app box $1 (doctor|prepare|unprep|auto-prepare retry|podman uninstall)" >&2; exit 2 ;;
     esac
 }
 

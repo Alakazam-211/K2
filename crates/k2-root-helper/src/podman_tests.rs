@@ -316,3 +316,172 @@ fn uninstall_waits_for_apps_then_removes_only_what_install_wrote() {
     assert_eq!(read(&t, USER_GENERATOR), "#!/bin/sh\nexit 0\n");
     assert!(json(&o)["kept"][0].as_str().unwrap().contains("K2 didn't write it"));
 }
+
+// ── 0.46.3: box prep's packages around the bundle (F3, F4, F5) ─────────
+
+use super::apps_tests::{APT_BUNDLE, APT_DISTRO, APT_DISTRO_KEEP, APT_SIM, APT_Y};
+use crate::apps::{apt_sim_refusal, select_packages, Pm, PodmanHave};
+use k2_root_proto::apps as pa;
+
+/// A noble box with K2's bundle installed and apt present.
+fn noble_with_bundle() -> T {
+    let t = noble_box();
+    let tb = tarball(&[], None);
+    hp::install_with(&t.ctx, &tb, &pin_for(&tb), "ubuntu 24.04".into()).unwrap();
+    bin(&t, pa::APT_GET);
+    t
+}
+
+fn env_calls(t: &T) -> Vec<String> {
+    calls_of(t, pa::ENV)
+}
+
+/// F3: where the bundle runs k2app, apt installs only what the bundle
+/// can't carry (no distro podman, crun, passt or catatonit); the distro
+/// path keeps the full list; dnf/pacman never meet the bundle but follow
+/// the same rule.
+#[test]
+fn f3_the_bundle_path_installs_only_what_the_bundle_cant_carry() {
+    let t = noble_with_bundle();
+    // skopeo's containers-common didn't land the policy: a clear stop.
+    let o = t.call(&["apps", "packages", "install"]);
+    assert_eq!(o.code, exit::STATE, "{}", o.stderr);
+    assert!(o.stderr.starts_with("policy_missing"), "{}", o.stderr);
+    write(&t, pa::CONTAINERS_POLICY, "{}\n");
+    let o = t.call(&["apps", "packages", "install"]);
+    ok(&o);
+    let v = json(&o);
+    assert_eq!(v["packages"]["path"], "bundle", "{v}");
+    assert_eq!(v["podmanSource"], "k2");
+    assert_eq!(v["podmanOk"], true);
+    assert!(v["packages"]["boxPodman"].is_null());
+    let calls = env_calls(&t);
+    assert_eq!(calls.last().unwrap(), &format!("{APT_Y} {APT_BUNDLE}"));
+    assert!(calls.contains(&format!("{APT_SIM} {APT_BUNDLE}")), "{calls:?}");
+    for c in &calls {
+        for distro_only in ["podman", "crun", "passt", "catatonit"] {
+            assert!(!c.split(' ').any(|w| w == distro_only), "{distro_only} asked for on the bundle path: {c}");
+        }
+    }
+
+    // The pure selection, every path.
+    let b = |pm| select_packages(pm, true, &PodmanHave::None).unwrap().join(" ");
+    assert_eq!(b(Pm::Apt), APT_BUNDLE);
+    assert_eq!(b(Pm::Dnf), "shadow-utils skopeo");
+    assert_eq!(b(Pm::Pacman), "skopeo");
+    assert_eq!(select_packages(Pm::Apt, false, &PodmanHave::None).unwrap().join(" "), APT_DISTRO);
+    assert_eq!(select_packages(Pm::Apt, false, &PodmanHave::Distro).unwrap().join(" "), APT_DISTRO_KEEP);
+    assert_eq!(
+        select_packages(Pm::Dnf, false, &PodmanHave::None).unwrap().join(" "),
+        "podman crun passt shadow-utils skopeo catatonit"
+    );
+    // A box Podman never changes the bundle path's list.
+    for have in [PodmanHave::Distro, PodmanHave::Local("/usr/local/bin/podman")] {
+        assert_eq!(select_packages(Pm::Apt, true, &have).unwrap().join(" "), APT_BUNDLE, "{have:?}");
+    }
+
+    // The distro path (Debian 13: no bundle) on a box with no Podman: the full list.
+    let t = box_root();
+    write(&t, OS_RELEASE, TRIXIE);
+    bin(&t, pa::APT_GET);
+    let _ = t.call(&["apps", "packages", "install"]);
+    assert_eq!(env_calls(&t).last().unwrap(), &format!("{APT_Y} {APT_DISTRO}"));
+}
+
+/// F4: the box's own Podman is never upgraded and never gets a second one
+/// next to it: a distro Podman is left off the list (and apt runs
+/// --no-upgrade), a source-built one in /usr/local stops the distro path
+/// before apt runs, and an apt plan that would upgrade, add or remove
+/// anyway is refused before the real install.
+#[test]
+fn f4_the_boxs_own_podman_is_never_upgraded_or_duplicated() {
+    // Source-built Podman, no bundle for this OS: nothing runs.
+    let t = box_root();
+    write(&t, OS_RELEASE, TRIXIE);
+    bin(&t, pa::APT_GET);
+    bin(&t, "/usr/local/bin/podman");
+    let o = t.call(&["apps", "packages", "install"]);
+    assert_eq!(o.code, exit::STATE);
+    assert!(o.stderr.starts_with("customer_podman") && o.stderr.contains("/usr/local/bin/podman"), "{}", o.stderr);
+    assert!(env_calls(&t).is_empty(), "apt never ran: {:?}", env_calls(&t));
+    assert!(!t.p(pa::PODMAN).exists());
+
+    // Source-built Podman on a bundle box: the bundle for k2app, theirs untouched.
+    let t = noble_with_bundle();
+    bin(&t, "/usr/local/sbin/podman");
+    write(&t, pa::CONTAINERS_POLICY, "{}\n");
+    let o = t.call(&["apps", "packages", "install"]);
+    ok(&o);
+    assert_eq!(env_calls(&t).last().unwrap(), &format!("{APT_Y} {APT_BUNDLE}"));
+    assert_eq!(json(&o)["packages"]["boxPodman"], "/usr/local/sbin/podman");
+
+    // A distro Podman 5 (kept): not on the list, apt --no-upgrade.
+    let t = box_root();
+    write(&t, OS_RELEASE, TRIXIE);
+    bin(&t, pa::APT_GET);
+    bin(&t, pa::PODMAN);
+    bin(&t, pa::PASTA);
+    rule(&t, pa::PODMAN, "--version", 0, "podman version 5.4.2\n");
+    let o = t.call(&["apps", "packages", "install"]);
+    ok(&o);
+    let calls = env_calls(&t);
+    assert_eq!(calls[1], format!("{APT_SIM} {APT_DISTRO_KEEP}"));
+    assert_eq!(calls[2], format!("{APT_Y} {APT_DISTRO_KEEP}"));
+    assert!(calls[1..].iter().all(|c| c.contains("--no-upgrade")), "{calls:?}");
+    assert_eq!(json(&o)["packages"]["boxPodman"], pa::PODMAN);
+
+    // apt's plan would upgrade that Podman anyway (a dependency): refused,
+    // and the real install never runs.
+    let t = box_root();
+    write(&t, OS_RELEASE, TRIXIE);
+    bin(&t, pa::APT_GET);
+    bin(&t, pa::PODMAN);
+    rule(&t, pa::ENV, "-s", 0, "Inst libgpgme11 (1.18.0-4) []\nInst podman [5.4.2+ds1-1] (5.4.2+ds1-2 Debian:13/stable [amd64])\n");
+    let o = t.call(&["apps", "packages", "install"]);
+    assert_eq!(o.code, exit::STATE);
+    assert!(o.stderr.starts_with("customer_podman: apt would upgrade podman"), "{}", o.stderr);
+    assert!(!env_calls(&t).iter().any(|c| c.contains(" -y ")), "no real install: {:?}", env_calls(&t));
+
+    // ...or remove something: refused the same way.
+    let t = box_root();
+    write(&t, OS_RELEASE, TRIXIE);
+    bin(&t, pa::APT_GET);
+    rule(&t, pa::ENV, "-s", 0, "Remv docker-ce [27.1.1]\nInst podman (5.4.2 Debian:13/stable [amd64])\n");
+    let o = t.call(&["apps", "packages", "install"]);
+    assert_eq!(o.code, exit::STATE);
+    assert!(o.stderr.starts_with("apt_would_remove") && o.stderr.contains("docker-ce"), "{}", o.stderr);
+    assert!(!env_calls(&t).iter().any(|c| c.contains(" -y ")));
+
+    // The pure check.
+    let listed = ["uidmap", "skopeo"];
+    assert!(apt_sim_refusal("Inst podman:amd64 (4.9.3 Ubuntu:24.04/noble [amd64])\n", &listed).unwrap().contains("install podman"));
+    assert!(apt_sim_refusal("Inst podman (4.9.3)\n", &["podman", "skopeo"]).is_none(), "asked for on an empty box");
+    assert!(apt_sim_refusal("Inst skopeo (1.13)\nConf skopeo (1.13)\n", &listed).is_none());
+    assert!(apt_sim_refusal("", &listed).is_none());
+}
+
+/// F5: below 5 GiB free on / or /var, neither packages nor the bundle
+/// start: nothing installed, nothing staged, a `low_disk` line that says
+/// where and how much.
+#[test]
+fn f5_low_disk_refuses_before_any_package_or_bundle_step() {
+    let mut t = noble_box();
+    bin(&t, pa::APT_GET);
+    t.ctx.free_bytes = |p| Ok(if p.ends_with("var") { 3 * 1024 * 1024 * 1024 } else { u64::MAX });
+    let o = t.call(&["apps", "packages", "install"]);
+    assert_eq!(o.code, exit::STATE);
+    assert!(o.stderr.starts_with("low_disk: 3.0 GiB free on /var;"), "{}", o.stderr);
+    assert!(o.stderr.contains("5.0 GiB free on / and /var"), "{}", o.stderr);
+    assert!(env_calls(&t).is_empty(), "apt never ran");
+    let tb = tarball(&[], None);
+    let e = hp::install_with(&t.ctx, &tb, &pin_for(&tb), "ubuntu 24.04".into()).unwrap_err();
+    assert!(e.msg.starts_with("low_disk"), "{}", e.msg);
+    nothing_installed(&t);
+    // Exactly at the floor is enough; one byte under isn't.
+    assert!(pa::low_disk(&[("/".into(), pa::MIN_FREE_BYTES)]).is_none());
+    assert!(pa::low_disk(&[("/".into(), pa::MIN_FREE_BYTES - 1)]).is_some());
+    t.ctx.free_bytes = |_| Ok(pa::MIN_FREE_BYTES);
+    let o = t.call(&["apps", "packages", "install"]);
+    assert!(!o.stderr.starts_with("low_disk"), "{}", o.stderr);
+    assert_eq!(env_calls(&t)[0], "DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get update -q", "apt ran this time");
+}

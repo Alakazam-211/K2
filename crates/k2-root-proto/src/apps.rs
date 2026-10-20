@@ -245,6 +245,57 @@ pub const APT_PACKAGES: &[&str] = &["podman", "crun", "passt", "uidmap", "dbus-u
 pub const DNF_PACKAGES: &[&str] = &["podman", "crun", "passt", "shadow-utils", "skopeo", "catatonit"];
 pub const PACMAN_PACKAGES: &[&str] = &["podman", "crun", "passt", "skopeo", "catatonit"];
 pub const YOUKI_PACKAGE: &str = "youki";
+/// The distro's Podman package (never listed when any Podman is already
+/// on the box: K2 doesn't upgrade a Podman it didn't install, 0.46.3 F4).
+pub const PODMAN_PACKAGE: &str = "podman";
+/// What K2's Podman bundle ships in `/opt/k2/podman` (podman + Quadlet,
+/// crun, pasta, catatonit, conmon, netavark, aardvark-dns): the distro
+/// packages for these are left out where the bundle runs k2app (0.46.3
+/// F3). What stays is what the bundle can't carry: `uidmap`
+/// (newuidmap/newgidmap, setuid root), `dbus-user-session` (k2app's user
+/// manager), `skopeo` (the daemon's base-image fetch; it also brings
+/// `/etc/containers/policy.json`), `nftables` (`apps nft apply`), and
+/// AppArmor's parser where the kernel has AppArmor.
+pub const BUNDLE_SHIPS: &[&str] = &["podman", "crun", "passt", "catatonit"];
+/// A Podman the box's owner built and installed under /usr/local (0.46.3
+/// F4): K2 never installs the distro's next to it.
+pub const LOCAL_PODMAN: &[&str] = &["/usr/local/bin/podman", "/usr/local/sbin/podman"];
+/// The containers signature policy Podman and skopeo read (from the
+/// distro's containers-common, which skopeo depends on).
+pub const CONTAINERS_POLICY: &str = "/etc/containers/policy.json";
+/// Free space box prep needs before any apt, bundle or engine step, on
+/// each of [`FREE_CHECK_PATHS`] (0.46.3 F5). One prep writes up to ~1 GiB
+/// (apt lists ~0.2 GiB, packages ~0.4 GiB unpacked, K2's Podman ~0.3 GiB
+/// staged next to the old tree, the engine); the rest is headroom so prep
+/// never pushes a nearly full box (journald, SQLite WALs, Postgres, mail)
+/// into ENOSPC.
+pub const MIN_FREE_BYTES: u64 = 5 * 1024 * 1024 * 1024;
+/// `/` holds /usr and /opt (packages, K2's Podman); `/var` holds apt's
+/// cache, dpkg and k2app's image store, and is often its own disk.
+pub const FREE_CHECK_PATHS: &[&str] = &["/", "/var"];
+
+/// `Some(refusal)` when a checked path has less than [`MIN_FREE_BYTES`]
+/// free (`free` = (path, bytes free)). The text starts `low_disk:`.
+pub fn low_disk(free: &[(String, u64)]) -> Option<String> {
+    let low: Vec<String> = free
+        .iter()
+        .filter(|(_, b)| *b < MIN_FREE_BYTES)
+        .map(|(p, b)| format!("{} free on {p}", gib(*b)))
+        .collect();
+    (!low.is_empty()).then(|| {
+        format!(
+            "low_disk: {}; box prep needs {} free on {} before it installs anything (nothing changed: free some space, then prepare again)",
+            low.join(", "),
+            gib(MIN_FREE_BYTES),
+            FREE_CHECK_PATHS.join(" and ")
+        )
+    })
+}
+
+/// `1.2 GiB`.
+pub fn gib(bytes: u64) -> String {
+    format!("{:.1} GiB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+}
 /// AppArmor's userspace (`apparmor_parser`), added to box prep's install
 /// when the kernel has AppArmor on and the parser is missing (Rosson
 /// 2026-10-16). Debian/Ubuntu and Arch name it `apparmor` (the parser is in

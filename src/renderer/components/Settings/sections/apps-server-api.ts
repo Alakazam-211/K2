@@ -9,6 +9,9 @@
 //   POST /cli/app/box/prepare {dryRun}     what prepare would change
 //   POST /cli/app/box/prepare {installPodman?}  the owner's apply
 //   POST /cli/app/engine/install {}        the guarded App engine
+//   POST /cli/app/box/auto-prepare/retry {}   lift a stopped automatic prep
+//   POST /cli/app/box/unprep {dryRun}      what "Undo box setup" would undo
+//   POST /cli/app/box/unprep {confirm}     the owner's undo (second step)
 
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { daemonErrorOf } from '@/lib/daemon-error'
@@ -41,10 +44,32 @@ export interface BoxDoctor {
 
 export interface AutoPrepareStatus {
   enabled: boolean
-  /** `ready` | `prepared` | `skipped` | `failed`; null before the first run. */
+  /** `ready` | `prepared` | `skipped` | `failed` | `blocked`; null before the first run. */
   state: string | null
-  /** Why it skipped or failed, or what it changed. */
+  /** Why it skipped, failed or stopped, or what it changed. */
   detail: string | null
+  /** A permanent stop (kernel, cgroup v1, unsupported distro…): no retry
+   *  until the owner presses Retry or K2 updates. */
+  blocked: boolean
+  /** The outcome's code (`kernel_too_old`, `subid_overlap`, …). */
+  code: string | null
+  /** The owner ran "Undo box setup": automatic prep pauses until Retry. */
+  undoneAt: number | null
+}
+
+/** What "Undo box setup" would undo (the dry run). */
+export interface UnprepPlan {
+  undoes: string[]
+  kept: string[]
+  /** Apps still running: the undo is refused until they stop. */
+  runningApps: string[]
+}
+
+export interface UnprepResult {
+  steps: { step: string; changed: boolean }[]
+  kept: string[]
+  note: string | null
+  box: BoxDoctor | null
 }
 
 export interface PodmanBundle {
@@ -113,7 +138,50 @@ export function parseAutoPrepare(raw: unknown): AutoPrepareStatus | null {
     enabled: raw.enabled === true,
     state: o ? str(o.state) : null,
     detail: o ? (str(o.why) ?? str(o.error) ?? (changed.length ? changed.join('; ') : null)) : null,
+    blocked: raw.blocked === true || (o !== null && o.state === 'blocked'),
+    code: o ? str(o.code) : null,
+    undoneAt: typeof raw.undoneAt === 'number' ? raw.undoneAt : null,
   }
+}
+
+function strings(v: unknown): string[] {
+  return Array.isArray(v) ? v.filter((s): s is string => typeof s === 'string') : []
+}
+
+export function parseUnprepPlan(raw: unknown): UnprepPlan {
+  const v = isObj(raw) ? raw : {}
+  return { undoes: strings(v.undoes), kept: strings(v.kept), runningApps: strings(v.runningApps) }
+}
+
+export function parseUnprepResult(raw: unknown): UnprepResult {
+  const v = isObj(raw) ? raw : {}
+  const r = isObj(v.result) ? v.result : {}
+  const steps = Array.isArray(r.steps)
+    ? r.steps.filter(isObj).map((s) => ({ step: typeof s.step === 'string' ? s.step : '?', changed: s.changed === true }))
+    : []
+  const kept = strings(v.kept)
+  return {
+    steps,
+    kept: kept.length ? kept : strings(r.kept),
+    note: str(v.note),
+    box: isObj(v.box) ? parseDoctor(v.box) : null,
+  }
+}
+
+/** Lift a stopped (blocked or undone) automatic prep; it runs again now. */
+export async function retryAutoPrepare(): Promise<AutoPrepareStatus | null> {
+  const v = await daemonCliPost<unknown>(primaryScope(), 'app/box/auto-prepare/retry', {})
+  return isObj(v) ? parseAutoPrepare(v.autoPrepare) : null
+}
+
+/** "Undo box setup", step one: what it would undo (changes nothing). */
+export async function unprepDryRun(): Promise<UnprepPlan> {
+  return parseUnprepPlan(await daemonCliPost<unknown>(primaryScope(), 'app/box/unprep', { dryRun: true }))
+}
+
+/** "Undo box setup", step two: the owner's explicit confirm. */
+export async function unprepApply(): Promise<UnprepResult> {
+  return parseUnprepResult(await daemonCliPost<unknown>(primaryScope(), 'app/box/unprep', { confirm: true }))
 }
 
 /** The owner's "Prepare this box automatically" (`appsAutoPrepare`). */
@@ -193,6 +261,7 @@ const CHECK_LABELS: Record<string, string> = {
   ptraceScope: 'ptrace scope',
   usernsRestricted: 'User namespaces',
   ownerConfirm: 'Owner confirm',
+  disk: 'Free disk',
 }
 
 export function checkLabel(id: string): string {

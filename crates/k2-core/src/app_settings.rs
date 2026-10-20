@@ -250,6 +250,10 @@ fn default_true() -> bool {
     true
 }
 
+fn default_auto_prepare() -> bool {
+    crate::deploy::AUTO_PREPARE_DEFAULT
+}
+
 fn default_countdown_theme() -> String {
     "rocket".to_string()
 }
@@ -421,6 +425,13 @@ pub struct AppSettings {
     /// time) carries an owner's earlier preview opt-in over.
     #[serde(default)]
     pub apps_process_engine: bool,
+    /// 0.46.3: K2 prepares this Linux box for walled Apps by itself after
+    /// an update (Podman bundle where the distro's is < 5, the k2app user,
+    /// the nft table, AppArmor, the App engine), through the root helper
+    /// the owner installed (wire `appsAutoPrepare`; `K2_APPS_AUTO_PREPARE`
+    /// overrides). Owner-only. Default [`crate::deploy::AUTO_PREPARE_DEFAULT`].
+    #[serde(default = "default_auto_prepare")]
+    pub apps_auto_prepare: bool,
     /// 0.40.43 (1c) — public `/v1` API master switch (K2 Connect → Enable
     /// public API). Persisted app-level mirror of the `K2_API` env flag so
     /// the owner can flip the external `/v1` surface per-server from Settings
@@ -1072,6 +1083,7 @@ impl Default for AppSettings {
             compute_preview: false,
             apps: true,
             apps_process_engine: false,
+            apps_auto_prepare: crate::deploy::AUTO_PREPARE_DEFAULT,
             api_enabled: false,
             airgap: false,
             listen_lan: false,
@@ -2079,6 +2091,13 @@ mod tests {
         assert_eq!(v["apps"], true);
         assert_eq!(v["appsProcessEngine"], false);
         assert!(v.get("appsPreview").is_none(), "the old name is never written");
+        // 0.46.3: the automatic box prep follows its reviewed default (OFF
+        // until design-apps-auto-prepare-0463 is signed off); a settings
+        // file written before it existed gets the same default.
+        assert!(!crate::deploy::AUTO_PREPARE_DEFAULT, "auto-prepare stays off until its design is signed off");
+        assert_eq!(d.apps_auto_prepare, crate::deploy::AUTO_PREPARE_DEFAULT);
+        assert_eq!(v["appsAutoPrepare"], crate::deploy::AUTO_PREPARE_DEFAULT);
+        assert_eq!(s.apps_auto_prepare, crate::deploy::AUTO_PREPARE_DEFAULT);
     }
 
     #[test]

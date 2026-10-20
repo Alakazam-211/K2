@@ -235,7 +235,7 @@ pub struct ServiceJson {
     /// sent when true.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub helper_needs_restart: bool,
-    /// 0.46.0: the service runs in clean mode (the 0.46.2 behaviour, opted
+    /// 0.46.0: the service runs in clean mode (the 0.46.4 behaviour, opted
     /// into early: system PATH, its own HOME, owner-token calls refused).
     /// Only sent when true.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -260,6 +260,21 @@ pub struct ServiceJson {
     /// nested hostname is not published yet. Always present.
     #[serde(default)]
     pub hostname_pending: bool,
+    /// 0.46.3: a `--cmd` service the App runtime doesn't run (no wall) says
+    /// so everywhere it shows: `legacy (--cmd) — move it to an App before
+    /// 0.46.4` ([`crate::app_grace::legacy_label`]). Null for Apps and
+    /// `--skin`.
+    #[serde(default)]
+    pub legacy_label: Option<String>,
+    /// With `legacy_label`: where to read how (`k2 study app-move`). Null
+    /// otherwise.
+    #[serde(default)]
+    pub legacy_hint: Option<String>,
+    /// A legacy service whose public label an App of the same workspace
+    /// serves now (`k2 app label take`): that App's id. The service keeps
+    /// running, unrouted (`k2 app label return` moves the label back).
+    #[serde(default)]
+    pub label_moved_to: Option<String>,
 }
 
 impl ServiceJson {
@@ -318,6 +333,9 @@ impl ServiceJson {
                 .unwrap_or(PROBE_TIMEOUT_DEFAULT_MS as i64),
             starting_left_ms: None,
             hostname_pending: row.hostname_pending,
+            legacy_label: None,
+            legacy_hint: None,
+            label_moved_to: None,
         }
     }
 }
@@ -392,6 +410,18 @@ pub fn insert(
         ],
     )?;
     get_by_id(conn, &id)?.ok_or(rusqlite::Error::QueryReturnedNoRows)
+}
+
+/// Set a row's exposure (`local` | `tunnel`). `k2 app label take` makes a
+/// legacy service `local` while its App serves the label (so a restart of
+/// the legacy service never points the label back at it); `label return`
+/// makes it `tunnel` again.
+pub fn set_expose(conn: &Connection, id: &str, expose: &str) -> Result<bool> {
+    let n = conn.execute(
+        "UPDATE published_services SET expose = ?2, hostname_pending = 0, updated_at = ?3 WHERE id = ?1",
+        params![id, expose, now_unix()],
+    )?;
+    Ok(n > 0)
 }
 
 pub fn get_by_id(conn: &Connection, id: &str) -> Result<Option<PublishedService>> {

@@ -103,9 +103,13 @@ export interface LlmLogin {
   mode: LoginMode
   method: 'temp_home' | 'live_swap'
   state: LoginState | string
+  /** The whole sign-in URL. Open and Copy always use this, never DOM text. */
   url: string | null
+  /** The URL's host ("claude.ai"), for "Sign in at …". Older daemons omit it. */
+  urlHost?: string | null
   code: string | null
   error: string | null
+  /** The visible terminal as logical lines (a long URL stays on one line). */
   screen: string[]
   startedAt: number
   done: boolean

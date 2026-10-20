@@ -135,6 +135,74 @@ pub fn visible_rows_from_bytes(cols: usize, rows: usize, bytes: &[u8]) -> Vec<Vi
     visible_rows_of(&term)
 }
 
+/// One grid row for screen scraping: the text, the soft-wrap flag, the
+/// OSC 8 hyperlink targets on the row, and whether it is still on the
+/// visible screen (false = scrollback history).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScanRow {
+    /// Same rules as [`VisibleRow::text`].
+    pub text: String,
+    /// Same rules as [`VisibleRow::wrapped`].
+    pub wrapped: bool,
+    /// Distinct OSC 8 link targets (`ESC ] 8 ; ; <uri> BEL`) on the
+    /// row's cells, in column order. The terminal keeps the whole URI
+    /// per cell, so a target is never cut by layout or wrapping.
+    pub links: Vec<String>,
+    /// On the visible screen (not scrollback).
+    pub visible: bool,
+}
+
+/// Like [`visible_rows_of`], plus up to `history` rows of scrollback
+/// above the screen and each row's OSC 8 link targets. Oldest row
+/// first. Used by the LLM sign-in watcher so a sign-in URL that scrolled
+/// off the screen, or that the tool sent as a hyperlink, is never lost.
+pub fn scan_rows_of<T>(term: &Term<T>, history: usize) -> Vec<ScanRow> {
+    use alacritty_terminal::index::{Column, Line, Point};
+    use alacritty_terminal::term::cell::Flags;
+    let cols = term.columns();
+    let rows = term.screen_lines() as i32;
+    let grid = term.grid();
+    let back = history.min(grid.history_size()) as i32;
+    let mut out = Vec::with_capacity((rows + back) as usize);
+    for r in -back..rows {
+        let mut line = String::with_capacity(cols);
+        let mut links: Vec<String> = Vec::new();
+        for c in 0..cols {
+            let cell = &grid[Point::new(Line(r), Column(c))];
+            line.push(if cell.c == '\0' { ' ' } else { cell.c });
+            if let Some(h) = cell.hyperlink() {
+                let uri = h.uri();
+                if !links.iter().any(|l| l == uri) {
+                    links.push(uri.to_string());
+                }
+            }
+        }
+        let wrapped = cols > 0
+            && grid[Point::new(Line(r), Column(cols - 1))]
+                .flags
+                .contains(Flags::WRAPLINE);
+        if !wrapped {
+            let trimmed = line.trim_end();
+            line.truncate(trimmed.len());
+        }
+        out.push(ScanRow { text: line, wrapped, links, visible: r >= 0 });
+    }
+    out
+}
+
+/// Test helper: [`scan_rows_of`] over a Term of the given size fed
+/// `bytes` (no PTY).
+#[cfg(any(test, feature = "test-util"))]
+pub fn scan_rows_from_bytes(cols: usize, rows: usize, history: usize, bytes: &[u8]) -> Vec<ScanRow> {
+    use alacritty_terminal::event::VoidListener;
+    use alacritty_terminal::vte::ansi::Processor;
+    let size = TermSize { cols, rows };
+    let mut term = Term::new(TermConfig::default(), &size, VoidListener);
+    let mut parser: Processor = Processor::new();
+    parser.advance(&mut term, bytes);
+    scan_rows_of(&term, history)
+}
+
 /// Minimal `EventListener` that broadcasts alacritty lifecycle events
 /// to any number of subscribers via `tokio::sync::broadcast`. The one
 /// exception is `PtyWrite` — terminal-query answers — which routes back
@@ -1987,6 +2055,13 @@ impl DaemonPtySession {
         visible_rows_of(&term)
     }
 
+    /// Visible rows plus up to `history` scrollback rows, with OSC 8
+    /// link targets. See [`scan_rows_of`].
+    pub fn scan_rows(&self, history: usize) -> Vec<ScanRow> {
+        let term = self.term.lock();
+        scan_rows_of(&term, history)
+    }
+
     /// True when the child application has bracketed-paste mode
     /// enabled (`ESC[?2004h` — claude/cursor TUIs switch it on at
     /// startup). 0.39.45 (GH #38): when active, injected message
@@ -2398,6 +2473,29 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Scan rows carry each row's OSC 8 target whole (even when the
+    /// visible text wraps), and include scrollback above the screen.
+    #[test]
+    fn scan_rows_keep_osc8_targets_and_scrollback() {
+        let target = format!("https://example.test/oauth?state={}", "s".repeat(120));
+        let mut bytes = format!("see: \x1b]8;;{target}\x07{target}\x1b]8;;\x07\r\n").into_bytes();
+        for i in 0..20 {
+            bytes.extend_from_slice(format!("line {i}\r\n").as_bytes());
+        }
+        let rows = scan_rows_from_bytes(40, 6, 100, &bytes);
+        assert!(rows.len() > 6, "history rows must be included: {rows:?}");
+        assert!(!rows[0].visible, "first row is scrollback: {rows:?}");
+        assert!(rows.last().expect("rows").visible);
+        assert!(rows[0].text.starts_with("see: https://example.test/oauth"), "{rows:?}");
+        assert_eq!(rows[0].links, vec![target.clone()]);
+        // Every wrapped row of the link holds the same, whole target.
+        assert!(rows[0].wrapped && rows[1].links == vec![target.clone()], "{rows:?}");
+        // No history asked: only the screen.
+        let screen_only = scan_rows_from_bytes(40, 6, 0, &bytes);
+        assert_eq!(screen_only.len(), 6);
+        assert!(screen_only.iter().all(|r| r.visible));
     }
 
     /// A line longer than the terminal soft-wraps: every full row but

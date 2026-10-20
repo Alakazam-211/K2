@@ -17201,7 +17201,14 @@ print("\x1f".join([one(l.get("state")), one(l.get("url")), one(l.get("code")), o
             shown_banner="$banner"
         fi
         if [ -n "$url" ] && [ "$url" != "$shown_url" ]; then
-            echo "Open this page to sign in: $url"
+            if [ -t 1 ]; then
+                # The URL alone on its own line, as an OSC 8 link: a
+                # terminal that wraps it still opens/copies it whole.
+                echo "Open this page to sign in:"
+                printf '\033]8;;%s\033\\%s\033]8;;\033\\\n' "$url" "$url"
+            else
+                echo "Open this page to sign in: $url"
+            fi
             shown_url="$url"
         fi
         if [ -n "$code" ] && [ "$code" != "$shown_code" ]; then

@@ -75,7 +75,7 @@ pub use event_sink::TerminalEventSink;
 
 pub use daemon_pty::{
     AlacEvent, DaemonEventListener, DaemonPtyConfig, DaemonPtySession,
-    LabelSource, SubscriberViewport, ViewerRegistration, VisibleRow, RESIZE_DEBOUNCE_MS,
+    LabelSource, ScanRow, SubscriberViewport, ViewerRegistration, VisibleRow, RESIZE_DEBOUNCE_MS,
     SCROLLBACK_CAP,
 };
 

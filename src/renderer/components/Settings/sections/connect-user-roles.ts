@@ -27,6 +27,9 @@ export function parseK2Role(raw: unknown): K2Role | null {
 /** One row of GET /cli/users. `role` stays a string: an older server may
  *  still report `viewer`, which the UI shows as-is rather than guessing. */
 export interface K2User {
+  /** The login's stable, never-reused id (Sew `k2:connect:<id>`; a chat
+   *  grant's subjectId). Absent from a daemon that doesn't send it yet. */
+  id?: string
   username: string
   createdAt?: string | null
   disabled: boolean

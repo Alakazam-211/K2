@@ -155,8 +155,13 @@ pub fn handle(
                 }
                 None => heal::run_once(&heal::LiveOps, &heal::live_plan(None), &who),
             };
+            let cli = root_helper::cli_refresh::run_once(
+                &root_helper::cli_refresh::LiveCliOps,
+                &root_helper::cli_refresh::daemon_cli_version(),
+                &who,
+            );
             ok(
-                json!({"heal": out, "status": root_helper::status_json(&root_helper::state(), crate::mail::supervisor::mail_helper_legacy_state().as_str(), root_helper::legacy_pg_present(), None)}),
+                json!({"heal": out, "cli": cli, "status": root_helper::status_json(&root_helper::state(), crate::mail::supervisor::mail_helper_legacy_state().as_str(), root_helper::legacy_pg_present(), None)}),
             )
         }
         _ => refuse("404 Not Found", "not_found", "unknown root-helper route"),

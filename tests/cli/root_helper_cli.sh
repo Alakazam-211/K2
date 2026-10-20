@@ -75,6 +75,16 @@ class H(BaseHTTPRequestHandler):
             return self._send(502, "<html>bad gateway</html>", "text/html")
         if mode == "list_200":
             return self._send(200, "[1, 2]")
+        if mode == "stale_cli":
+            d = dict(STATUS); d["cli"] = {"path": "/usr/local/bin/k2", "state": "stale", "version": "0.40.148",
+                "rootOwned": True, "daemonCliVersion": "0.46.3", "lastAttempt": 1,
+                "lastResult": {"result": "needs_helper", "reason": "the root helper must speak protocol 9"}}
+            return self._send(200, json.dumps(d))
+        if mode == "current_cli":
+            d = dict(STATUS); d["cli"] = {"path": "/usr/local/bin/k2", "state": "current", "version": "0.46.3",
+                "rootOwned": True, "daemonCliVersion": "0.46.3", "lastAttempt": 1,
+                "lastResult": {"result": "refreshed", "from": "0.40.148", "to": "0.46.3"}}
+            return self._send(200, json.dumps(d))
         if mode == "no_command":
             d = dict(STATUS); d["installCommand"] = None
             return self._send(200, json.dumps(d))
@@ -123,6 +133,18 @@ assert_eq "ok: exit 0" "$rc" "0"
 assert_contains "ok: state line" "$out" "state      : missing"
 assert_contains "ok: install command shown" "$out" "curl -fsSL https://example.test/install | sudo sh"
 assert_absent "ok: no traceback" "$err" "Traceback"
+
+echo "== status: the /usr/local/bin/k2 doctor line =="
+echo stale_cli >"$MODE_FILE"
+run root-helper status
+assert_eq "stale cli: exit 0" "$rc" "0"
+assert_contains "stale cli: names the file, version and owner" "$out" "cli        : /usr/local/bin/k2 v0.40.148 (root-owned) — older than the daemon (v0.46.3)"
+assert_contains "stale cli: why it is not refreshed yet" "$out" "cli refresh: needs_helper the root helper must speak protocol 9"
+echo current_cli >"$MODE_FILE"
+run root-helper status
+assert_contains "current cli: says current" "$out" "cli        : /usr/local/bin/k2 v0.46.3 — current"
+assert_contains "current cli: the last refresh" "$out" "cli refresh: refreshed 0.40.148 -> 0.46.3"
+assert_absent "cli: no traceback" "$err" "Traceback"
 
 for sub in status update rollback; do
     echo "== $sub: string error body =="

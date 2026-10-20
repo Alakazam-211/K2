@@ -47,14 +47,14 @@ use ctx::{Ctx, Fail, HResult};
 pub static BUILD_MARKER: &str = concat!(
     "K2_ROOT_HELPER_BUILD v=",
     env!("K2_PRODUCT_VERSION"),
-    " proto=8 arch=x86_64;"
+    " proto=9 arch=x86_64;"
 );
 #[cfg(target_arch = "aarch64")]
 #[used]
 pub static BUILD_MARKER: &str = concat!(
     "K2_ROOT_HELPER_BUILD v=",
     env!("K2_PRODUCT_VERSION"),
-    " proto=8 arch=aarch64;"
+    " proto=9 arch=aarch64;"
 );
 
 /// Present only in a `test-keys` build; release signing refuses it.
@@ -170,6 +170,7 @@ fn dispatch(
         Verb::HelperSelfRollback => Some(core::self_rollback(ctx)?),
         Verb::HelperLegacyRetire(which) => Some(core::legacy_retire(ctx, *which)?),
         Verb::HelperAuditTail => Some(core::audit_tail(ctx)?),
+        Verb::HelperCliRefresh => Some(core::cli_refresh(ctx)?),
 
         Verb::MailEnsureUser => mail::ensure_user(ctx).map(|_| None)?,
         Verb::MailMkdir(t) => mail::mkdir(ctx, *t).map(|_| None)?,
@@ -267,6 +268,14 @@ fn audit(
         for k in ["from", "to", "sha256", "keyId", "result"] {
             if let Some(v) = x.get(k) {
                 line[if k == "result" { "update" } else { k }] = v.clone();
+            }
+        }
+    }
+    // The CLI refresh: what it did, from → to.
+    if let (Some(Verb::HelperCliRefresh), Some(x)) = (verb, extra) {
+        for k in ["result", "from", "to", "reason"] {
+            if let Some(v) = x.get(k) {
+                line[if k == "result" { "cli" } else { k }] = v.clone();
             }
         }
     }

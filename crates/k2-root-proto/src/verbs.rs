@@ -471,6 +471,12 @@ pub enum Verb {
     HelperSelfRollback,
     HelperLegacyRetire(Legacy),
     HelperAuditTail,
+    /// `helper cli-refresh` (daemon, protocol 9, 0.46.3): replace a stale
+    /// root-owned `/usr/local/bin/k2` with the K2 CLI compiled into this
+    /// signed helper. No argv beyond the verb, no stdin: the bytes never
+    /// come from the caller. Never a downgrade, never through a link, and
+    /// only over a file that already is the K2 CLI.
+    HelperCliRefresh,
     // mail
     MailEnsureUser,
     MailMkdir(MkdirTarget),
@@ -722,6 +728,7 @@ impl Verb {
             ["helper", "legacy-retire", "mail"] => Verb::HelperLegacyRetire(Legacy::Mail),
             ["helper", "legacy-retire", "pg"] => Verb::HelperLegacyRetire(Legacy::Pg),
             ["helper", "audit-tail"] => Verb::HelperAuditTail,
+            ["helper", "cli-refresh"] => Verb::HelperCliRefresh,
 
             ["mail", "ensure-user"] => Verb::MailEnsureUser,
             ["mail", "mkdir", t] => Verb::MailMkdir(mkdir_target(t).ok_or(REFUSED)?),
@@ -888,6 +895,7 @@ impl Verb {
             Verb::HelperLegacyRetire(Legacy::Mail) => s(&["helper", "legacy-retire", "mail"]),
             Verb::HelperLegacyRetire(Legacy::Pg) => s(&["helper", "legacy-retire", "pg"]),
             Verb::HelperAuditTail => s(&["helper", "audit-tail"]),
+            Verb::HelperCliRefresh => s(&["helper", "cli-refresh"]),
             Verb::MailEnsureUser => s(&["mail", "ensure-user"]),
             Verb::MailMkdir(t) => s(&[
                 "mail",
@@ -1040,6 +1048,8 @@ impl Verb {
         match self {
             Verb::HelperVersion | Verb::HelperSelfUpdate | Verb::HelperAuditTail => Open,
             Verb::HelperSelfRollback | Verb::HelperLegacyRetire(_) => Daemon,
+            // Root writes a file on every admin's PATH: only the daemon asks.
+            Verb::HelperCliRefresh => Daemon,
 
             Verb::MailEnsureUser
             | Verb::MailMkdir(_)
@@ -1241,6 +1251,7 @@ pub fn catalog() -> Vec<Verb> {
         Verb::HelperLegacyRetire(Legacy::Mail),
         Verb::HelperLegacyRetire(Legacy::Pg),
         Verb::HelperAuditTail,
+        Verb::HelperCliRefresh,
         Verb::MailEnsureUser,
         Verb::MailRenderUnit,
         Verb::MailRenderDropin,

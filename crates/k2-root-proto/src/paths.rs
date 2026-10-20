@@ -49,6 +49,13 @@ pub const SUDO_EXES: &[&str] = &[
     "/usr/lib/cargo/bin/sudo",
 ];
 
+/// The `k2` CLI on PATH (`provision-k2-server.sh`'s install). `helper
+/// cli-refresh` replaces it when it is a root-owned K2 CLI older than the
+/// helper's own copy; the daemon refreshes a copy it owns itself.
+pub const CLI_PATH: &str = "/usr/local/bin/k2";
+pub const CLI_DIR: &str = "/usr/local/bin";
+pub const CLI_FILE: &str = "k2";
+
 // ── Programs the helper spawns (absolute, env cleared) ──────────────────
 
 pub const SYSTEMCTL: &str = "/usr/bin/systemctl";

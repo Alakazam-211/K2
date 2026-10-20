@@ -111,7 +111,9 @@ pub fn version_json(ctx: &Ctx) -> serde_json::Value {
         "packageOwned": !ctx.is_canonical_path(),
         "keyIds": keys,
         "testKeys": ctx.test_keys,
-        "namespaces": {"helper": true, "mail": true, "pg": true, "backup": false, "keep": true, "daemon": true, "apps": true, "sew": true, "front": true},
+        "namespaces": {"helper": true, "mail": true, "pg": true, "backup": false, "keep": true, "daemon": true, "apps": true, "sew": true, "front": true, "cli": true},
+        // `helper cli-refresh` (protocol 9): the K2 CLI this helper carries.
+        "cliVersion": cli_version_of(CLI_CONTENT.as_bytes()),
         "stalwartPin": STALWART_PINNED_VERSION,
         "stalwartPinSha256": artifact_for_arch(ctx.arch).map(|a| a.sha256).ok(),
         "stalwartPrevious": STALWART_PREVIOUS_VERSION,
@@ -320,6 +322,77 @@ pub fn legacy_retire(ctx: &Ctx, which: Legacy) -> HResult<serde_json::Value> {
         .map(|o| if o.status == 0 { "ok" } else { "failed" })
         .unwrap_or("not run");
     Ok(serde_json::json!({"removed": removed, "visudo": visudo}))
+}
+
+// ── helper cli-refresh (protocol 9) ────────────────────────────────────
+
+/// The K2 CLI (`cli/k2`), compiled into the signed helper: `cli-refresh`
+/// writes only these bytes, never anything from the caller.
+pub const CLI_CONTENT: &str = include_str!("../../../cli/k2");
+/// Largest `/usr/local/bin/k2` read to find its version (the CLI is ~3 MB).
+const CLI_READ_CAP: usize = 16 * 1024 * 1024;
+
+/// The version of a K2 CLI script: a `#!/bin/bash` first line and a
+/// `K2_CLI_VERSION=` (or k2so-era `K2SO_CLI_VERSION=`) line in the first
+/// 30. `None` for anything else — a file that is not the K2 CLI is never
+/// replaced.
+pub fn cli_version_of(bytes: &[u8]) -> Option<String> {
+    let head = String::from_utf8_lossy(&bytes[..bytes.len().min(16 * 1024)]);
+    let mut lines = head.lines();
+    if lines.next()? != "#!/bin/bash" {
+        return None;
+    }
+    head.lines().take(30).find_map(|l| {
+        l.strip_prefix("K2_CLI_VERSION=")
+            .or_else(|| l.strip_prefix("K2SO_CLI_VERSION="))
+            .map(|v| v.trim().trim_matches('"').to_string())
+    })
+}
+
+fn cli_skipped(reason: &str, to: &Semver) -> serde_json::Value {
+    serde_json::json!({"result": "skipped", "reason": reason, "to": to.to_string()})
+}
+
+/// `helper cli-refresh`: a root-owned K2 CLI at `/usr/local/bin/k2` older
+/// than this helper's copy is replaced (stage + fsync + rename, root:root
+/// 0755). Idempotent: the same or a newer version is left alone (never a
+/// downgrade). Missing, a symlink (an app or package owns it), not a
+/// regular file, not root-owned (the daemon refreshes its own copy) or
+/// not the K2 CLI → `skipped` with the reason, nothing written.
+pub fn cli_refresh(ctx: &Ctx) -> HResult<serde_json::Value> {
+    let to = cli_version_of(CLI_CONTENT.as_bytes())
+        .and_then(|v| Semver::parse(&v))
+        .ok_or_else(|| Fail::state("this helper carries no versioned K2 CLI"))?;
+    let base = match ctx.dir(CLI_DIR) {
+        Ok(d) => d,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(cli_skipped("absent", &to)),
+        Err(e) => return Err(Fail::io_err("open /usr/local/bin", e)),
+    };
+    let name = OsStr::new(CLI_FILE);
+    let Some(st) = base.lstat(name).map_err(|e| Fail::io_err("stat", e))? else {
+        return Ok(cli_skipped("absent", &to));
+    };
+    match crate::fsx::kind_of(st.st_mode as u32) {
+        Kind::File => {}
+        Kind::Symlink => return Ok(cli_skipped("symlink", &to)),
+        _ => return Ok(cli_skipped("not a regular file", &to)),
+    }
+    if ctx.real_owners && st.st_uid != 0 {
+        return Ok(cli_skipped("not root-owned", &to));
+    }
+    let bytes = base
+        .read_file(name, CLI_READ_CAP)
+        .map_err(|e| Fail::io_err("read /usr/local/bin/k2", e))?
+        .unwrap_or_default();
+    let Some(from) = cli_version_of(&bytes).and_then(|v| Semver::parse(&v)) else {
+        return Ok(cli_skipped("not the K2 CLI", &to));
+    };
+    if from >= to {
+        return Ok(serde_json::json!({"result": "unchanged", "version": from.to_string(), "to": to.to_string()}));
+    }
+    base.write_atomic(name, CLI_CONTENT.as_bytes(), 0o755, ctx.root_owner())
+        .map_err(|e| Fail::io_err("write /usr/local/bin/k2", e))?;
+    Ok(serde_json::json!({"result": "updated", "from": from.to_string(), "to": to.to_string()}))
 }
 
 /// Last 100 of our own journal lines, as JSON (the daemon user may not be

@@ -1318,3 +1318,51 @@ fn link_errors_teach_admin_consent_ca_blocks_and_app_setup() {
         "oauth_error"
     );
 }
+
+#[test]
+fn personal_account_refusals_teach_the_owner_how_to_allow_them() {
+    test_byo::clear();
+    let e = |error: &str, d: &str| OauthError::Provider {
+        error: error.into(),
+        description: Some(d.into()),
+    };
+    let personal = [
+        e("invalid_request", "AADSTS50059: No tenant-identifying information found in either the request or implied by any provided credentials."),
+        e("invalid_grant", "AADSTS500200: User account 'x@outlook.com' is a personal Microsoft account. Personal Microsoft accounts are not supported for this application"),
+        e("invalid_grant", "AADSTS50020: User account 'x@outlook.com' from identity provider 'live.com' does not exist in tenant 'Contoso'"),
+        e("invalid_grant", "AADSTS90072: User account 'x@hotmail.com' from identity provider 'live.com' does not exist in tenant"),
+        e("unauthorized_client", "The client does not exist or is not enabled for consumers."),
+    ];
+    for err in &personal {
+        let f = classify_link_error(OauthProvider::Microsoft, err, "cid");
+        assert_eq!(f.code, "personal_account_not_allowed", "{err}");
+        assert!(
+            f.hint.starts_with("This server's Microsoft app only accepts work or school accounts.")
+                && f.hint.contains("allow personal accounts on the app registration")
+                && f.hint.contains(
+                    "k2 mail oauth-config set --provider microsoft --client-id <id> --tenant consumers"
+                ),
+            "{}",
+            f.hint
+        );
+        assert_eq!(f.admin_consent_url, None);
+    }
+    // A guest from ANOTHER ORG (no live.com) is a tenant problem, not personal.
+    let guest = classify_link_error(
+        OauthProvider::Microsoft,
+        &e("invalid_grant", "AADSTS50020: User account 'a@fabrikam.com' from identity provider 'https://sts.windows.net/x/' does not exist in tenant"),
+        "cid",
+    );
+    assert_eq!(guest.code, "client_misconfigured");
+    assert!(guest.hint.contains("--tenant <its tenant id>"), "{}", guest.hint);
+    // A single-tenant app used from `common` stays the tenant hint.
+    let st = classify_link_error(
+        OauthProvider::Microsoft,
+        &e("invalid_request", "AADSTS50194: Application 'cid' is not configured as a multi-tenant application."),
+        "cid",
+    );
+    assert_eq!(st.code, "client_misconfigured");
+    // Gmail never gets the Microsoft copy.
+    let g = classify_link_error(OauthProvider::Gmail, &personal[0], "cid");
+    assert_eq!(g.code, "oauth_error");
+}

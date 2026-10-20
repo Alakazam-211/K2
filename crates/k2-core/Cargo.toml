@@ -171,7 +171,11 @@ qoi = "0.4"
 # Phase 2 Unit 4 — image decode + resize for `projects_ops::detect_project_icon`.
 # Loads PNG/JPG/ICO icons from user projects and resamples to 48×48 for
 # the data URL the renderer caches on Project.icon_url.
-image = { version = "0.25", default-features = false, features = ["ico", "png", "jpeg", "webp"] }
+# 0.46.3: gif/bmp/tiff too, for Thread image thumbnails (`overlay::thumbs`).
+image = { version = "0.25", default-features = false, features = ["ico", "png", "jpeg", "webp", "gif", "bmp", "tiff"] }
+# SVG attachments are sanitized (an allowlist rewrite) before any client
+# renders them (`overlay::thumbs::sanitize_svg`).
+quick-xml = "0.38"
 
 # Low-level primitives used by the alacritty PTY event loop.
 libc = "0.2"

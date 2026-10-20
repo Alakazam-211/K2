@@ -5,7 +5,7 @@
 import type { CatalogReach, CatalogVerbKind } from '../contract/catalog-types'
 
 /** The catalog version this table was generated from. */
-export const ZEN_CATALOG_VERSION = 15
+export const ZEN_CATALOG_VERSION = 16
 
 /**
  * Every catalog row with a `builtin` or `registered` renderer binding,
@@ -25,6 +25,10 @@ export const ZEN_VERBS = {
   'thread.read': 'thread:read',
   'thread.subscribe': 'thread:read',
   'thread.markRead': 'thread:read',
+  'thread.attachment': 'thread:read',
+  'thread.open': 'thread:read',
+  'thread.links': 'thread:read',
+  'thread.pickFiles': 'thread:post',
   'thread.post': 'thread:post',
   'thread.answer': 'thread:post',
   'thread.void': 'thread:post',
@@ -87,6 +91,11 @@ export const ZEN_CUSTOM_VERBS = {
   'presence.subscribe': { cap: 'presence:read', reach: 'local', kind: 'subscribe' },
   'thread.read': { cap: 'thread:read', reach: 'portable', kind: 'call' },
   'thread.subscribe': { cap: 'thread:read', reach: 'portable', kind: 'subscribe' },
+  'thread.markRead': { cap: 'thread:read', reach: 'local', kind: 'call' },
+  'thread.attachment': { cap: 'thread:read', reach: 'local', kind: 'call' },
+  'thread.open': { cap: 'thread:read', reach: 'local', kind: 'call' },
+  'thread.links': { cap: 'thread:read', reach: 'local', kind: 'call' },
+  'thread.pickFiles': { cap: 'thread:post', reach: 'local', kind: 'call' },
   'thread.post': { cap: 'thread:post', reach: 'portable', kind: 'call' },
   'thread.answer': { cap: 'thread:post', reach: 'portable', kind: 'call' },
   'compose.draft': { cap: 'thread:post', reach: 'local', kind: 'call' },

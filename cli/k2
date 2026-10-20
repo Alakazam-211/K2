@@ -30389,7 +30389,7 @@ the daemon's loopback port). Every call carries a pass: this App's own
 every hour, so read the file again on pass_invalid) or a guest's
 session pass from POST /cli/skin/login. Users and rooms use the App
 key ($K2_SECRETS_DIR/K2_APP_KEY) on /v1/apps/$K2_APP_ID/... instead.
-From K2's verb catalog, version 15.
+From K2's verb catalog, version 16.
 
 THE SERVER SDK (sdk/server, TypeScript, Node 22+, no dependencies)
   import { fromEnv } from '@k2/server'
@@ -30415,15 +30415,20 @@ no cap (your own rooms)
   app.usage                GET  /cli/skin/usage (server only)             This App's quotas, live use and per-call counts from its own audit (its own App only; the App pass, never a guest).
   chat.pass                POST /cli/sew/pass (server only)               Mint a Sew chat pass for the guest of this request (a login with a chat grant; server only, never a handoff code).
 thread:read (Read the Thread)
-  thread.page              GET  /cli/thread                               A page of a room's Thread, oldest first; sinceSeq catches up, beforeSeq pages back.
+  thread.page              GET  /cli/thread                               A page of a room's Thread, oldest first; sinceSeq catches up, beforeSeq pages back, afterSeq reads a delta (new, changed, removed).
   thread.latest            GET  /cli/thread/latest                        The newest Thread item per room, for list previews; a room the pass can't read is an item with error.
   thread.events            WS   /cli/overlay/events?conversation=         Live Thread items of one room (new posts and card changes; merge by id); after a gap, thread.page with sinceSeq.
+  thread.attachmentGet     GET  /cli/thread/attachment                    One attachment of a room's message: meta, preview, thumbnail or a byte range, only when your own file rights cover it.
+  thread.catchup           POST /cli/thread/catchup                       Deltas (or newest pages) for many rooms in one round trip, each exactly what thread.page answers for it.
+  thread.setRead           POST /cli/thread/read                          Mark this guest's (or the App's) own read cursor in a room's Thread; forward only.
+  thread.unread            GET  /cli/thread/unread                        This guest's (or the App's) unread counts, one row per room Thread it may read.
   thread.ensurePinned      POST /cli/workspace/ensure-pinned-chat         Check the room's pinned Chat is live (find-only for Apps: it never starts one).
 thread:post (Post to the Thread)
-  thread.send              POST /cli/thread/post                          Post text to a room's Thread as the guest (or the App); the agent gets it at once.
+  thread.send              POST /cli/thread/post                          Post text (and room files) to a room's Thread as the guest (or the App); the agent gets it at once.
   thread.answerCard        POST /cli/thread/answer                        Answer a choice card (or set a secret card) in a room's Thread.
   thread.voidCard          POST /cli/thread/void                          Dismiss a pending card in a room's Thread.
 files:read (Read files (also shows heartbeat instructions))
+  files.resolveLinks       POST /cli/fs/resolve-links                     Which paths printed in a room's messages lead to a file or folder your file rights cover (the rest stay plain text).
   files.list               GET  /cli/fs/read-dir                          A folder's entries, folders first.
   files.read               GET  /cli/fs/read-file                         A UTF-8 text file (at most 10 MiB).
   files.readBinary         GET  /cli/fs/read-binary                       A file as base64 (at most 50 MiB; read-range for more).
@@ -56323,7 +56328,7 @@ k2 zen guide api — the k2 object in a custom widget
 A custom widget is a sealed page in a Garden: no network, no storage, no
 files. It reaches K2 only through window.k2. Each call needs a cap its
 manifest.json asks for; a widget in your own Garden gets every one it asks
-for at once (no review). From K2's verb catalog, version 15.
+for at once (no review). From K2's verb catalog, version 16.
 
 TEN EXAMPLES
   const off = k2.agents.subscribe((rows) => draw(rows))   // live, in scope
@@ -56340,60 +56345,65 @@ TEN EXAMPLES
 EVERY HELPER, BY CAP (portable: the same call works in an App later;
 local: Garden only). Each line: helper, reach, feature, example, [errors]
 no cap
-  k2.gardens.list()                                  local    zen-gardens-v1   const gardens = await k2.gardens.list()
-  k2.gardens.current()                               local    zen-gardens-v1   const here = await k2.gardens.current()
-  k2.gardens.switch(id)                              local    zen-gardens-v1   await k2.gardens.switch(gardens[1].id)  [rate_limited]
-  k2.theme.get()                                     local    zen-v1           const {theme, motion} = await k2.theme.get()
-  k2.theme.changed(cb)                               local    zen-widgets-v1   k2.theme.changed(({theme}) => paint(theme))
-  k2.canvas.setHitRegions(rects)                     local    zen-widgets-v1   await k2.canvas.setHitRegions([bar.getBoundingClientRect()])  [too_large]
-  k2.window.startDrag()                              local    zen-widgets-v1   grip.addEventListener('mousedown', () => k2.window.startDrag())
-  k2.save.get(key)                                   local    garden-data-v1   const best = await k2.save.get('high-score')  [bad_key rate_limited]
-  k2.save.set(key, value)                            local    garden-data-v1   await k2.save.set('high-score', 42)  [bad_key value_too_large space_full store_full rate_limited]
-  k2.save.remove(key)                                local    garden-data-v1   await k2.save.remove('high-score')  [bad_key rate_limited]
-  k2.save.keys({prefix})                             local    garden-data-v1   const keys = await k2.save.keys()  [rate_limited]
-  k2.viewer.get()                                    local    garden-data-v1   const {name} = await k2.viewer()
-  k2.app.self({app})                                 portable app-self-v1      const me = await k2.asApp().app.self()  [pass_required pass_invalid pass_wrong_link not_exposed not_found usage]
-  k2.app.usage({app, hours})                         portable app-self-v1      const {verbs, quotas} = await k2.asApp().app.usage({hours: 24})  [pass_required pass_invalid pass_wrong_link not_exposed not_found usage]
-  k2.widget.self()                                   local    app-self-v1      const me = await k2.widget.self()  [stale_widget rate_limited]
+  k2.gardens.list()                                     local    zen-gardens-v1         const gardens = await k2.gardens.list()
+  k2.gardens.current()                                  local    zen-gardens-v1         const here = await k2.gardens.current()
+  k2.gardens.switch(id)                                 local    zen-gardens-v1         await k2.gardens.switch(gardens[1].id)  [rate_limited]
+  k2.theme.get()                                        local    zen-v1                 const {theme, motion} = await k2.theme.get()
+  k2.theme.changed(cb)                                  local    zen-widgets-v1         k2.theme.changed(({theme}) => paint(theme))
+  k2.canvas.setHitRegions(rects)                        local    zen-widgets-v1         await k2.canvas.setHitRegions([bar.getBoundingClientRect()])  [too_large]
+  k2.window.startDrag()                                 local    zen-widgets-v1         grip.addEventListener('mousedown', () => k2.window.startDrag())
+  k2.save.get(key)                                      local    garden-data-v1         const best = await k2.save.get('high-score')  [bad_key rate_limited]
+  k2.save.set(key, value)                               local    garden-data-v1         await k2.save.set('high-score', 42)  [bad_key value_too_large space_full store_full rate_limited]
+  k2.save.remove(key)                                   local    garden-data-v1         await k2.save.remove('high-score')  [bad_key rate_limited]
+  k2.save.keys({prefix})                                local    garden-data-v1         const keys = await k2.save.keys()  [rate_limited]
+  k2.viewer.get()                                       local    garden-data-v1         const {name} = await k2.viewer()
+  k2.app.self({app})                                    portable app-self-v1            const me = await k2.asApp().app.self()  [pass_required pass_invalid pass_wrong_link not_exposed not_found usage]
+  k2.app.usage({app, hours})                            portable app-self-v1            const {verbs, quotas} = await k2.asApp().app.usage({hours: 24})  [pass_required pass_invalid pass_wrong_link not_exposed not_found usage]
+  k2.widget.self()                                      local    app-self-v1            const me = await k2.widget.self()  [stale_widget rate_limited]
 agents:read (See agents)
-  k2.agents.list()                                   portable zen-v1           const rows = await k2.agents.list()
-  k2.agents.subscribe(cb)                            portable zen-v1           const off = k2.agents.subscribe((rows) => draw(rows))
-  k2.conversation.open(address)                      local    zen-v1           await k2.conversation.open(row.address)  [not_bound]
-  k2.conversation.close()                            local    zen-v1           await k2.conversation.close()
+  k2.agents.list()                                      portable zen-v1                 const rows = await k2.agents.list()
+  k2.agents.subscribe(cb)                               portable zen-v1                 const off = k2.agents.subscribe((rows) => draw(rows))
+  k2.conversation.open(address)                         local    zen-v1                 await k2.conversation.open(row.address)  [not_bound]
+  k2.conversation.close()                               local    zen-v1                 await k2.conversation.close()
 presence:read (See who is looking)
-  k2.presence.get(address)                           local    zen-v1           const people = await k2.presence.get(row.address)  [not_bound]
-  k2.presence.subscribe(address, cb)                 local    zen-v1           const off = k2.presence.subscribe(row.address, (people) => draw(people))  [not_bound]
+  k2.presence.get(address)                              local    zen-v1                 const people = await k2.presence.get(row.address)  [not_bound]
+  k2.presence.subscribe(address, cb)                    local    zen-v1                 const off = k2.presence.subscribe(row.address, (people) => draw(people))  [not_bound]
 thread:read (Read the Thread)
-  k2.thread.read(address, {beforeSeq, limit})        portable zen-v1           const page = await k2.thread.read(row.address, {limit: 50})  [not_bound]
-  k2.thread.subscribe(address, cb)                   portable zen-v1           const off = k2.thread.subscribe(row.address, (view) => draw(view))  [not_bound rate_limited]
+  k2.thread.read(address, {afterSeq, beforeSeq, limit}) portable zen-v1                 const page = await k2.thread.read(row.address, {limit: 50})  [not_bound]
+  k2.thread.subscribe(address, cb)                      portable zen-v1                 const off = k2.thread.subscribe(row.address, (view) => draw(view))  [not_bound rate_limited]
+  k2.thread.markRead(address, {seq})                    local    thread-read-v1         await k2.thread.markRead(row.address, {seq: last.seq})  [not_bound]
+  k2.thread.attachment(address, docId, n, {mode, px})   local    thread-images-v1       const t = await k2.thread.attachment(row.address, item.id, 0, {mode: 'thumb'})  [not_bound too_large]
+  k2.thread.open(address, {docId, line, n, rel})        local    thread-attachments-v1  await k2.thread.open(row.address, {docId: item.id, n: 0})  [not_bound]
+  k2.thread.links(address, candidates)                  local    thread-attachments-v1  const {links} = await k2.thread.links(row.address, ['src/app.ts:12'])  [not_bound]
 thread:post (Post to the Thread)
-  k2.thread.post(address, text)                      portable zen-v1           await k2.thread.post(row.address, 'How is it going?')  [not_bound sending_off rate_limited too_large]
-  k2.thread.answer(address, cardId, choice)          portable zen-v1           await k2.thread.answer(row.address, card.id, 'Yes')  [not_bound sending_off rate_limited]
-  k2.compose.draft(address, text)                    local    zen-v1           await k2.compose.draft(row.address, 'Ask for a status')  [not_bound]
+  k2.thread.pickFiles(address)                          local    thread-attachments-v1  const {files} = await k2.thread.pickFiles(row.address)  [not_bound]
+  k2.thread.post(address, text, {attachments})          portable zen-v1                 await k2.thread.post(row.address, 'How is it going?')  [not_bound sending_off rate_limited too_large usage]
+  k2.thread.answer(address, cardId, choice)             portable zen-v1                 await k2.thread.answer(row.address, card.id, 'Yes')  [not_bound sending_off rate_limited]
+  k2.compose.draft(address, text)                       local    zen-v1                 await k2.compose.draft(row.address, 'Ask for a status')  [not_bound]
 sources:read (Read data sources)
-  k2.sources.list()                                  portable sources-v1       const rows = await k2.sources.list()
-  k2.sources.read(address)                           portable sources-v1       const v = await k2.sources.read(k2.config.source)  [not_bound server_not_saved unreachable removed]
-  k2.sources.history(address, field, {fromAt, toAt}) portable sources-v1       const h = await k2.sources.history(k2.config.source, 'count')  [not_bound server_not_saved unreachable removed no_history]
-  k2.sources.subscribe(address, cb)                  portable sources-v1       const off = k2.sources.subscribe(k2.config.source, (v) => draw(v))  [not_bound server_not_saved unreachable removed rate_limited]
-  k2.sources.refresh(address)                        portable sources-v1       await k2.sources.refresh(k2.config.source)  [not_bound server_not_saved unreachable removed rate_limited]
-  k2.sources.ask(address, itemKey?)                  local    sources-v1       await k2.sources.ask(k2.config.source, tile.key)  [not_bound]
+  k2.sources.list()                                     portable sources-v1             const rows = await k2.sources.list()
+  k2.sources.read(address)                              portable sources-v1             const v = await k2.sources.read(k2.config.source)  [not_bound server_not_saved unreachable removed]
+  k2.sources.history(address, field, {fromAt, toAt})    portable sources-v1             const h = await k2.sources.history(k2.config.source, 'count')  [not_bound server_not_saved unreachable removed no_history]
+  k2.sources.subscribe(address, cb)                     portable sources-v1             const off = k2.sources.subscribe(k2.config.source, (v) => draw(v))  [not_bound server_not_saved unreachable removed rate_limited]
+  k2.sources.refresh(address)                           portable sources-v1             await k2.sources.refresh(k2.config.source)  [not_bound server_not_saved unreachable removed rate_limited]
+  k2.sources.ask(address, itemKey?)                     local    sources-v1             await k2.sources.ask(k2.config.source, tile.key)  [not_bound]
 store:read (Read the workspace store)
-  k2.store.get(key, {from})                          local    garden-data-v1   const e = await k2.store.get('obj/7')  [not_bound not_granted author_unknown stale_widget rate_limited bad_key]
-  k2.store.list({after, from, limit, prefix})        local    garden-data-v1   const {items, next} = await k2.store.list({prefix: 'obj/'})  [not_bound not_granted author_unknown stale_widget rate_limited bad_key]
-  k2.store.changes({after, from, prefix, since})     local    garden-data-v1   const page = await k2.store.changes({since: 41})  [not_bound not_granted author_unknown stale_widget rate_limited resync bad_key]
+  k2.store.get(key, {from})                             local    garden-data-v1         const e = await k2.store.get('obj/7')  [not_bound not_granted author_unknown stale_widget rate_limited bad_key]
+  k2.store.list({after, from, limit, prefix})           local    garden-data-v1         const {items, next} = await k2.store.list({prefix: 'obj/'})  [not_bound not_granted author_unknown stale_widget rate_limited bad_key]
+  k2.store.changes({after, from, prefix, since})        local    garden-data-v1         const page = await k2.store.changes({since: 41})  [not_bound not_granted author_unknown stale_widget rate_limited resync bad_key]
 store:write (Change dump-table rows)
-  k2.store.put(key, value, {ifRev})                  local    garden-data-v1   const {rev} = await k2.store.put('obj/7', note, {ifRev: e.rev})  [not_granted author_unknown stale_widget rate_limited bad_key conflict value_too_large space_full store_full paused]
-  k2.store.delete(key, {ifRev})                      local    garden-data-v1   await k2.store.delete('obj/7')  [not_granted author_unknown stale_widget rate_limited bad_key conflict paused]
-  k2.store.batch(ops)                                local    garden-data-v1   await k2.store.batch([{op: 'put', key: 'obj/1', value: a}, {op: 'delete', key: 'obj/2'}])  [not_granted author_unknown stale_widget rate_limited bad_key conflict value_too_large too_large space_full store_full paused]
-  k2.store.txBegin()                                 local    garden-data-v1   const tx = k2.store.tx()  [not_granted author_unknown stale_widget rate_limited busy]
-  k2.store.txAdd(txId, ops)                          local    garden-data-v1   await tx.add(ops)  [not_granted author_unknown stale_widget rate_limited bad_tx tx_expired bad_key value_too_large too_large]
-  k2.store.txCommit(txId)                            local    garden-data-v1   const {rev} = await tx.commit()  [not_granted author_unknown stale_widget rate_limited bad_tx tx_expired conflict space_full store_full paused]
-  k2.store.txAbort(txId)                             local    garden-data-v1   await tx.abort()
+  k2.store.put(key, value, {ifRev})                     local    garden-data-v1         const {rev} = await k2.store.put('obj/7', note, {ifRev: e.rev})  [not_granted author_unknown stale_widget rate_limited bad_key conflict value_too_large space_full store_full paused]
+  k2.store.delete(key, {ifRev})                         local    garden-data-v1         await k2.store.delete('obj/7')  [not_granted author_unknown stale_widget rate_limited bad_key conflict paused]
+  k2.store.batch(ops)                                   local    garden-data-v1         await k2.store.batch([{op: 'put', key: 'obj/1', value: a}, {op: 'delete', key: 'obj/2'}])  [not_granted author_unknown stale_widget rate_limited bad_key conflict value_too_large too_large space_full store_full paused]
+  k2.store.txBegin()                                    local    garden-data-v1         const tx = k2.store.tx()  [not_granted author_unknown stale_widget rate_limited busy]
+  k2.store.txAdd(txId, ops)                             local    garden-data-v1         await tx.add(ops)  [not_granted author_unknown stale_widget rate_limited bad_tx tx_expired bad_key value_too_large too_large]
+  k2.store.txCommit(txId)                               local    garden-data-v1         const {rev} = await tx.commit()  [not_granted author_unknown stale_widget rate_limited bad_tx tx_expired conflict space_full store_full paused]
+  k2.store.txAbort(txId)                                local    garden-data-v1         await tx.abort()
 guests:rooms (Set its own guests' rooms (an owner grant per App, never a guest's))
-  k2.guests.rooms({app, username})                   portable guests-rooms-v1  const g = await k2.asApp().guests.rooms({username: 'dana'})  [app_pass_required pass_required pass_invalid pass_wrong_link grant_required usage not_found rate_limited stale_widget author_unknown]
-  k2.guests.setRooms({app, rooms, username})         portable guests-rooms-v1  await k2.asApp().guests.setRooms({username: 'dana', rooms: ['acme']})  [app_pass_required pass_required pass_invalid pass_wrong_link grant_required usage not_found outside_app_rooms above_role has_role rate_limited stale_widget author_unknown confirm_required declined paused]
+  k2.guests.rooms({app, username})                      portable guests-rooms-v1        const g = await k2.asApp().guests.rooms({username: 'dana'})  [app_pass_required pass_required pass_invalid pass_wrong_link grant_required usage not_found rate_limited stale_widget author_unknown]
+  k2.guests.setRooms({app, rooms, username})            portable guests-rooms-v1        await k2.asApp().guests.setRooms({username: 'dana', rooms: ['acme']})  [app_pass_required pass_required pass_invalid pass_wrong_link grant_required usage not_found outside_app_rooms above_role has_role rate_limited stale_widget author_unknown confirm_required declined paused]
 room:members (See who has access to the room)
-  k2.room.members({app, workspace})                  portable room-members-v1  const {members} = await k2.room.members({workspace})  [pass_required pass_invalid pass_wrong_link skin_room not_bound not_found usage]
+  k2.room.members({app, workspace})                     portable room-members-v1        const {members} = await k2.room.members({workspace})  [pass_required pass_invalid pass_wrong_link skin_room not_bound not_found usage]
 
 Every call may also fail with cap_not_granted, verb_unavailable, failed.
 

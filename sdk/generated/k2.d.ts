@@ -183,6 +183,22 @@ export interface AgentRow {
   readonly working: boolean
 }
 
+export interface ThreadFile {
+  /** file. */
+  readonly kind: string
+  readonly line?: number
+  readonly lineEnd?: number
+  /** Content type from the name (image/png, application/pdf, text/markdown, ...). */
+  readonly mime?: string
+  /** Milliseconds since the epoch: the file's modified time when it was sent. */
+  readonly modifiedAt?: number
+  readonly name?: string
+  /** Bytes, when it was sent. */
+  readonly size?: number
+  /** ok, changed (since it was sent), gone (moved or deleted) or hidden (not shared with you: no name, type or size). */
+  readonly state: string
+}
+
 export interface CardAnswerer {
   /** owner, user (a Connect login) or guest (an app pass). */
   readonly kind: string
@@ -208,6 +224,8 @@ export interface ChoiceCard {
 }
 
 export interface ThreadDoc {
+  /** Files that ride the message (thread-attachments-v1). Open one with thread.attachment / thread.open by its index. */
+  readonly attachments?: ThreadFile[] | null
   readonly body?: string | null
   readonly choice?: ChoiceCard | null
   /** Seconds since the epoch (not milliseconds: multiply by 1000 for new Date). */
@@ -225,9 +243,19 @@ export interface ThreadItem {
   readonly seq: number
 }
 
+export interface ThreadRemoved {
+  readonly id: string
+  readonly seq: number
+}
+
 export interface ThreadPage {
+  /** A delta only: items at or below afterSeq that changed since (a card answered, voided or expired). Upsert by id. */
+  readonly changed?: ThreadItem[]
+  /** A page: older items exist. A delta (afterSeq): newer items remain. */
   readonly hasMore: boolean
   readonly items: ThreadItem[]
+  /** A delta only: items that left this Thread. */
+  readonly removed?: ThreadRemoved[]
 }
 
 export interface ThreadTurn {
@@ -244,6 +272,78 @@ export interface ThreadView {
   readonly phase: 'opening' | 'ready' | 'unavailable' | 'failed' | 'closed'
   /** Absent on a server without daemon-activity. */
   readonly turn?: ThreadTurn | null
+}
+
+export interface ThreadReadState {
+  /** The cursor moved. */
+  readonly changed: boolean
+  readonly lastReadSeq: number
+  readonly lastSeq: number
+  readonly unread: number
+}
+
+export interface ThreadFileData {
+  /** preview or thumb: the bytes. Show them as an image (an <img>, never inline markup). */
+  readonly base64?: string
+  /** thumb: pixels. */
+  readonly height?: number
+  /** file (meta), text, image or pdf (preview, thumb). */
+  readonly kind: string
+  readonly line?: number
+  readonly lineEnd?: number
+  /** The content type; a thumb is image/jpeg, image/png or a sanitized image/svg+xml. */
+  readonly mime?: string
+  /** Milliseconds since the epoch (meta). */
+  readonly modifiedAt?: number
+  readonly name?: string
+  /** An SVG with scripts, event handlers and outside links removed. */
+  readonly sanitized?: boolean
+  /** Bytes now. */
+  readonly size?: number
+  /** ok, changed (since it was sent), gone (moved or deleted) or hidden (not shared with you: no name, type or size). */
+  readonly state?: string
+  /** preview of a text file: the first 512 KB, vault values redacted. */
+  readonly text?: string
+  readonly truncated?: boolean
+  /** thumb: pixels. */
+  readonly width?: number
+}
+
+export interface ThreadOpened {
+  readonly opened: boolean
+}
+
+export interface ThreadLink {
+  readonly input: string
+  /** file or directory (linkable only). */
+  readonly kind?: string
+  readonly linkable: boolean
+  /** Workspace-relative (linkable only); open it with thread.open. */
+  readonly rel?: string
+}
+
+export interface ThreadLinks {
+  readonly links: ThreadLink[]
+}
+
+export interface ThreadPickedFile {
+  readonly mime?: string
+  readonly name: string
+  /** Workspace-relative; pass it to thread.post's attachments. */
+  readonly relPath: string
+  /** Bytes. */
+  readonly size?: number
+}
+
+export interface ThreadPicked {
+  readonly files: ThreadPickedFile[]
+}
+
+export interface ThreadAttach {
+  readonly line?: number
+  readonly lineEnd?: number
+  /** Workspace-relative path (never a host path). */
+  readonly relPath: string
 }
 
 export interface Posted {
@@ -609,9 +709,14 @@ export interface K2Verbs {
   'conversation.close': { args: []; value: null }
   'presence.get': { args: [address: string]; value: Person[] }
   'presence.subscribe': { args: [address: string]; value: Person[] }
-  'thread.read': { args: [address: string, opts?: { beforeSeq?: number; limit?: number }]; value: ThreadPage }
+  'thread.read': { args: [address: string, opts?: { afterSeq?: number; beforeSeq?: number; limit?: number }]; value: ThreadPage }
   'thread.subscribe': { args: [address: string]; value: ThreadView }
-  'thread.post': { args: [address: string, text: string]; value: Posted }
+  'thread.markRead': { args: [address: string, opts?: { seq?: number }]; value: ThreadReadState }
+  'thread.attachment': { args: [address: string, docId: string, n: number, opts?: { mode?: 'meta' | 'preview' | 'thumb'; px?: number }]; value: ThreadFileData }
+  'thread.open': { args: [address: string, target: { docId?: string; line?: number; n?: number; rel?: string }]; value: ThreadOpened }
+  'thread.links': { args: [address: string, candidates: string[]]; value: ThreadLinks }
+  'thread.pickFiles': { args: [address: string]; value: ThreadPicked }
+  'thread.post': { args: [address: string, text: string, opts?: { attachments?: ThreadAttach[] }]; value: Posted }
   'thread.answer': { args: [address: string, cardId: string, choice: string]; value: null }
   'compose.draft': { args: [address: string, text: string]; value: null }
   'sources.list': { args: []; value: SourceListRow[] }
@@ -636,7 +741,7 @@ export interface K2Verbs {
 }
 
 export type K2Verb = keyof K2Verbs
-export type K2CallVerb = 'gardens.list' | 'gardens.current' | 'gardens.switch' | 'theme.get' | 'canvas.setHitRegions' | 'window.startDrag' | 'save.get' | 'save.set' | 'save.remove' | 'save.keys' | 'viewer.get' | 'app.self' | 'app.usage' | 'widget.self' | 'agents.list' | 'conversation.open' | 'conversation.close' | 'presence.get' | 'thread.read' | 'thread.post' | 'thread.answer' | 'compose.draft' | 'sources.list' | 'sources.read' | 'sources.history' | 'sources.refresh' | 'sources.ask' | 'store.get' | 'store.list' | 'store.changes' | 'store.put' | 'store.delete' | 'store.batch' | 'store.txBegin' | 'store.txAdd' | 'store.txCommit' | 'store.txAbort' | 'guests.rooms' | 'guests.setRooms' | 'room.members'
+export type K2CallVerb = 'gardens.list' | 'gardens.current' | 'gardens.switch' | 'theme.get' | 'canvas.setHitRegions' | 'window.startDrag' | 'save.get' | 'save.set' | 'save.remove' | 'save.keys' | 'viewer.get' | 'app.self' | 'app.usage' | 'widget.self' | 'agents.list' | 'conversation.open' | 'conversation.close' | 'presence.get' | 'thread.read' | 'thread.markRead' | 'thread.attachment' | 'thread.open' | 'thread.links' | 'thread.pickFiles' | 'thread.post' | 'thread.answer' | 'compose.draft' | 'sources.list' | 'sources.read' | 'sources.history' | 'sources.refresh' | 'sources.ask' | 'store.get' | 'store.list' | 'store.changes' | 'store.put' | 'store.delete' | 'store.batch' | 'store.txBegin' | 'store.txAdd' | 'store.txCommit' | 'store.txAbort' | 'guests.rooms' | 'guests.setRooms' | 'room.members'
 export type K2SubscribeVerb = 'theme.changed' | 'agents.subscribe' | 'presence.subscribe' | 'thread.subscribe' | 'sources.subscribe'
 
 export interface K2 {
@@ -717,14 +822,24 @@ export interface K2 {
     subscribe(address: string, handlers: K2Handlers<Person[]>): () => void
   }
   readonly thread: {
-    /** A page of the Thread, oldest first; beforeSeq pages back through history. cap thread:read · portable · zen-v1. e.g. `const page = await k2.thread.read(row.address, {limit: 50})` */
-    read(address: string, opts?: { beforeSeq?: number; limit?: number }): Promise<ThreadPage>
+    /** A page of a conversation (oldest first); beforeSeq pages back, afterSeq reads a delta (new items plus changed and removed). cap thread:read · portable · zen-v1. e.g. `const page = await k2.thread.read(row.address, {limit: 50})` */
+    read(address: string, opts?: { afterSeq?: number; beforeSeq?: number; limit?: number }): Promise<ThreadPage>
     /** The live Thread with one agent and its working turn, pushed on every change. cap thread:read · portable · zen-v1. e.g. `const off = k2.thread.subscribe(row.address, (view) => draw(view))` */
     subscribe(address: string, cb: (value: ThreadView) => void, onError?: (error: K2Error) => void): () => void
     /** Handler object: re-subscribes on its own after a retryable refusal (capped backoff). */
     subscribe(address: string, handlers: K2Handlers<ThreadView>): () => void
-    /** Send text to the agent as you (text only, no files). cap thread:post · portable · zen-v1. e.g. `await k2.thread.post(row.address, 'How is it going?')` */
-    post(address: string, text: string): Promise<Posted>
+    /** Mark the person's own read cursor in a conversation (forward only), as reading it in K2 does (Rosson 2026-10-20, replaces UW51). cap thread:read · local · thread-read-v1. e.g. `await k2.thread.markRead(row.address, {seq: last.seq})` */
+    markRead(address: string, opts?: { seq?: number }): Promise<ThreadReadState>
+    /** One attachment of a message: its live meta, a preview, or an image thumbnail (thread-images-v1). cap thread:read · local · thread-images-v1. e.g. `const t = await k2.thread.attachment(row.address, item.id, 0, {mode: 'thumb'})` */
+    attachment(address: string, docId: string, n: number, opts?: { mode?: 'meta' | 'preview' | 'thumb'; px?: number }): Promise<ThreadFileData>
+    /** Open a message's attachment or a linked workspace file full size in K2 (a file tab, or a preview sheet in Zen). cap thread:read · local · thread-attachments-v1. e.g. `await k2.thread.open(row.address, {docId: item.id, n: 0})` */
+    open(address: string, target: { docId?: string; line?: number; n?: number; rel?: string }): Promise<ThreadOpened>
+    /** Which paths printed in messages lead to a file or folder inside the agent's workspace (the rest stay plain text). cap thread:read · local · thread-attachments-v1. e.g. `const {links} = await k2.thread.links(row.address, ['src/app.ts:12'])` */
+    links(address: string, candidates: string[]): Promise<ThreadLinks>
+    /** K2's own file picker for the person (files outside the workspace are copied into its .k2/downloads); empty when they cancel. cap thread:post · local · thread-attachments-v1. e.g. `const {files} = await k2.thread.pickFiles(row.address)` */
+    pickFiles(address: string): Promise<ThreadPicked>
+    /** Send text to the agent as you, with files picked by the person riding it (thread.pickFiles). cap thread:post · portable · zen-v1. e.g. `await k2.thread.post(row.address, 'How is it going?')` */
+    post(address: string, text: string, opts?: { attachments?: ThreadAttach[] }): Promise<Posted>
     /** Answer a choice card in the Thread (never a secret card). cap thread:post · portable · zen-v1. e.g. `await k2.thread.answer(row.address, card.id, 'Yes')` */
     answer(address: string, cardId: string, choice: string): Promise<null>
   }

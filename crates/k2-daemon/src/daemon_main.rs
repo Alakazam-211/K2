@@ -373,6 +373,9 @@ async fn async_main() {
     crate::compute_advertise::spawn();
     // Node admin: offline alerts and request expiry, headless (60 s).
     crate::compute_admin::spawn_watch();
+    // Compute hub (S2): jobs this server sent to a hub report back here
+    // (one poller; idle while there's nothing to watch).
+    crate::compute_hub_client::spawn_poller();
     // 0.46.3 (Apps on for real): a settings file from 0.46.2 or older gets
     // `apps` once (a stored appsPreview false read as unset → on; an earlier
     // preview opt-in carries over as the process engine).

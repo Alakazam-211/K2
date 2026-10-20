@@ -14827,6 +14827,10 @@ Compute hub (this server's nodes for your other servers; owner only, federation 
   k2 compute tenants grant <tenant> <node> [--max-parallel 1] [--max-time 2h] [--max-disk 60G]
   k2 compute tenants ungrant <tenant> <node>
   k2 compute tenants suspend|resume|revoke <tenant>
+  k2 compute hub status|use <paired server>|off
+                   use another server's hub: run/jobs go there (code goes up as a
+                   git bundle, completions come back here); hub down = exit 3
+                   hub_unreachable, never a silent fallback to this server's nodes
 Node admin (agents need "Allow this agent to operate compute nodes"):
   k2 compute node health <node> [--json]       uptime, disk, RAM, FileVault, update state
   k2 compute node policy <node> show
@@ -16763,6 +16767,44 @@ print("Allow managing compute nodes: %s for %s%s" % ("on" if on else "off", v["w
             ;;
         local) cmd_compute_local "$@" ;;
         tenants|tenant) cmd_compute_tenants "$@" ;;
+        hub)
+            # "Use compute hub" (prd-compute-shared-queue-v1 S2): this
+            # server's runs go to another server's nodes and queue.
+            local hsub="${1:-status}"
+            [ $# -gt 0 ] && shift
+            case "$hsub" in
+                status)
+                    _compute_call GET /cli/compute/hubs "" tcp
+                    [ "$as_json" = "1" ] && { printf '%s\n' "$_CP_BODY"; exit 0; }
+                    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+h = v.get("hub")
+if not h:
+    print("no compute hub: this server runs its own compute (k2 compute hub use <paired server>)")
+else:
+    state = "reachable" if v.get("reachable") else "UNREACHABLE (%s)" % (v.get("error") or {}).get("code", "?")
+    t = v.get("tenant") or {}
+    print("compute hub %s (%s): %s" % (h["label"], h.get("baseUrl") or "-", state))
+    if t:
+        print("  this server is tenant %s: weight %s, top class %s" % (t.get("label"), t.get("weight"), t.get("topClass")))
+    for n in v.get("nodes") or []:
+        print("  node %-14s %s-%s  %s  run %s  queue %s" % (n["name"], n.get("os") or "?", n.get("arch") or "?", "online" if n.get("online") else "offline", n.get("running", 0), n.get("queued", 0)))
+if v.get("openRemoteJobs"):
+    print("  %s job(s) still running on a hub" % v["openRemoteJobs"])'
+                    ;;
+                use)
+                    [ -n "${1:-}" ] || { echo "usage: k2 compute hub use <paired server>" >&2; exit 2; }
+                    _compute_call POST /cli/compute/hubs/use "$(_compute_json K2_CJ_peer="$1")" tcp
+                    printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("using compute hub %s (tenant %s). %s" % (v["hub"]["label"], v["tenant"].get("label"), v["note"]))'
+                    ;;
+                off)
+                    _compute_call POST /cli/compute/hubs/off '{}' tcp
+                    printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("compute hub off%s. %s" % ((" (was %s)" % v["was"]) if v.get("was") else "", v["note"]))'
+                    ;;
+                *) echo "usage: k2 compute hub status|use <paired server>|off" >&2; exit 2 ;;
+            esac
+            ;;
         *)
             echo "usage: unknown compute verb '$sub' (k2 compute --help)" >&2
             exit 2

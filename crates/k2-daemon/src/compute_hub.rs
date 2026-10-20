@@ -53,6 +53,7 @@ pub const BLOB_PATH: &str = "/cli/compute/hub/blob";
 
 /// Every tenant-facing hub route (all POST).
 pub const ROUTES: &[&str] = &[
+    "/cli/compute/hub/blob",
     "/cli/compute/hub/changes",
     "/cli/compute/hub/hello",
     "/cli/compute/hub/jobs",
@@ -165,7 +166,14 @@ fn params_of(v: &serde_json::Value) -> HashMap<String, String> {
 }
 
 /// Serve one tenant request (not the blob upload). Blocking.
-pub fn handle_request(path: &str, method: &str, raw_query: &str, header: Option<&str>, body: &[u8]) -> CliResponse {
+pub fn handle_request(
+    path: &str,
+    method: &str,
+    raw_query: &str,
+    header: Option<&str>,
+    body: &[u8],
+    ingress: crate::routes::dispatcher::Ingress,
+) -> CliResponse {
     if !compute::enabled() {
         return cr::dark();
     }
@@ -186,7 +194,7 @@ pub fn handle_request(path: &str, method: &str, raw_query: &str, header: Option<
             "/cli/compute/hub/jobs/cancel" => cr::job_cancel(&who, body),
             "/cli/compute/hub/jobs/retry" => cr::job_retry(&who, body),
             "/cli/compute/hub/changes" => changes(&who, &v),
-            "/cli/compute/hub/prepare" => prepare(&who, &v),
+            "/cli/compute/hub/prepare" => prepare(&who, &v, &t, ingress),
             _ => Err(no("not_found", 404, "no such hub route")),
         }
     })();
@@ -224,7 +232,7 @@ fn tenant_nodes(t: &TenantRow) -> R<serde_json::Value> {
     let nodes: Vec<serde_json::Value> = rows
         .into_iter()
         .map(|(n, g)| {
-            let (online, _, live) = compute_ws::live_view(&n.id);
+            let (online, route, live) = compute_ws::live_view(&n.id);
             let offer = live.or_else(|| n.last_offer.clone());
             let (queued, running) = {
                 let db = k2_core::db::shared();
@@ -238,6 +246,7 @@ fn tenant_nodes(t: &TenantRow) -> R<serde_json::Value> {
                 "arch": n.arch,
                 "labels": n.labels,
                 "online": online,
+                "liveRoute": route,
                 "paused": n.controller_pause,
                 "queued": queued,
                 "running": running,
@@ -386,7 +395,7 @@ pub(crate) fn tenant_source(t: &TenantCaller, v: &serde_json::Value) -> R<(Src, 
 /// `prepare {remoteWs, remote, commits: [...]}`: which of these commits the
 /// tenant's mirror for this workspace already has (the submitter bundles
 /// only `have..commit`, V20).
-fn prepare(who: &Who, v: &serde_json::Value) -> R<serde_json::Value> {
+fn prepare(who: &Who, v: &serde_json::Value, row: &TenantRow, ingress: crate::routes::dispatcher::Ingress) -> R<serde_json::Value> {
     let t = who.tenant().ok_or_else(cr::owner_only)?;
     let rws = t.remote_ws.as_deref().ok_or_else(|| no("workspace_not_found", 404, "name the workspace (remoteWs)"))?;
     let remote = s(v, "remote").and_then(compute::sync::fetchable_remote);
@@ -397,7 +406,20 @@ fn prepare(who: &Who, v: &serde_json::Value) -> R<serde_json::Value> {
         .map(|a| a.iter().filter_map(|c| c.as_str()).filter(|c| is_hex40(c)).take(512).map(str::to_string).collect())
         .unwrap_or_default();
     let have: Vec<&String> = commits.iter().filter(|c| mirror_has(&t.tenant_id, &pk, c)).collect();
-    Ok(serde_json::json!({ "have": have, "mirror": hub::tenant_mirror(&t.tenant_id, &pk).join("objects").is_dir() }))
+    // The caps an upload through this same door meets, so the submitter
+    // refuses an oversized blob before it sends a byte (the blob route
+    // closes on a refused body; a client mid-send sees a broken pipe).
+    let used = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        hub::blob_bytes(&conn, &t.tenant_id)
+    };
+    Ok(serde_json::json!({
+        "have": have,
+        "mirror": hub::tenant_mirror(&t.tenant_id, &pk).join("objects").is_dir(),
+        "maxBlobBytes": blob_cap_for(ingress),
+        "blobFreeBytes": row.blob_cap_bytes().saturating_sub(used),
+    }))
 }
 
 // ── owner: tenants ───────────────────────────────────────────────────
@@ -659,6 +681,270 @@ fn tenants_ungrant(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     let removed = hub::revoke_tenant_grant(&conn, &t.id, &node.id).map_err(|e| no("internal", 500, e))?;
     store::record_event(&conn, &who.label(), "tenant_ungrant", Some(&node.id), None, None, serde_json::json!({"tenant": t.id, "removed": removed}));
     Ok(serde_json::json!({ "ok": true, "removed": removed }))
+}
+
+// ── blob upload (S2, V20/V21) ────────────────────────────────────────
+
+/// The largest blob one upload may carry on this door: the relay cap over
+/// the Connect tunnel, the LAN cap on a direct (LAN / loopback) door.
+pub fn blob_cap_for(ingress: crate::routes::dispatcher::Ingress) -> u64 {
+    match ingress {
+        crate::routes::dispatcher::Ingress::Tunnel => hub::RELAY_MAX_BLOB_BYTES,
+        _ => hub::LAN_MAX_BLOB_BYTES,
+    }
+}
+
+fn blob_refusal(code: &'static str, status: u16, hint: impl Into<String>) -> CliResponse {
+    refusal_response(&no(code, status, hint))
+}
+
+/// What a blob upload names in its (signed) query.
+#[derive(Debug, Clone)]
+struct BlobAsk {
+    sha256: String,
+    kind: String,
+    remote_ws: Option<String>,
+    remote: Option<String>,
+    commit: Option<String>,
+}
+
+fn blob_ask(raw_query: &str) -> R<BlobAsk> {
+    let p = k2_core::agent_hooks::parse_query_params(&format!("{BLOB_PATH}?{raw_query}"));
+    let sha256 = p.get("sha256").filter(|x| hub::is_sha256_hex(x)).cloned().ok_or_else(|| no(codes::BAD_REQUEST, 400, "sha256 (lowercase hex) is required"))?;
+    let kind = p.get("kind").cloned().unwrap_or_default();
+    if kind != "bundle" && kind != "dirty" {
+        return Err(no(codes::BAD_REQUEST, 400, "kind is bundle or dirty"));
+    }
+    let remote_ws = p.get("remoteWs").cloned().filter(|w| !w.is_empty());
+    if remote_ws.as_deref().is_some_and(|w| !hub::valid_remote_id(w)) {
+        return Err(no(codes::BAD_REQUEST, 400, "remoteWs is 1–128 of A-Z a-z 0-9 - _ ."));
+    }
+    let commit = p.get("commit").cloned().filter(|c| !c.is_empty());
+    if kind == "bundle" && (remote_ws.is_none() || !commit.as_deref().is_some_and(is_hex40)) {
+        return Err(no(codes::BAD_REQUEST, 400, "a bundle names its workspace (remoteWs) and its full commit"));
+    }
+    Ok(BlobAsk { sha256, kind, remote_ws, remote: p.get("remote").cloned().filter(|r| !r.is_empty()), commit })
+}
+
+/// `Content-Length` of a request head, if any.
+fn content_length(head: &[u8]) -> Option<u64> {
+    std::str::from_utf8(head).ok()?.lines().find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").and_then(|v| v.trim().parse().ok()))
+}
+
+/// `POST /cli/compute/hub/blob?sha256=&kind=bundle|dirty[&remoteWs=&remote=&commit=]`:
+/// a tenant uploads a bundle or a `--dirty` blob. Signed over the declared
+/// sha256 (checked BEFORE a byte of the body is read), capped per door
+/// (relay 50 MiB, LAN 1 GiB) and per tenant (its blob store quota), then
+/// streamed to disk in pieces, hashed as it goes and refused on any
+/// mismatch. A bundle is fetched into the tenant's mirror for that
+/// workspace and remote (the hub's key, V28) and its file dropped. The
+/// connection is closed after the answer (a refused body is never read).
+pub async fn serve_blob(
+    stream: &mut tokio::net::TcpStream,
+    buf: &mut [u8],
+    raw_query: &str,
+    header: Option<String>,
+    ingress: crate::routes::dispatcher::Ingress,
+) -> CliResponse {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    // Read the head off the socket (it was only peeked).
+    let mut head: Vec<u8> = Vec::new();
+    let body_start = loop {
+        let n = match stream.read(buf).await {
+            Ok(0) | Err(_) => return blob_refusal(codes::BAD_REQUEST, 400, "the request ended early"),
+            Ok(n) => n,
+        };
+        head.extend_from_slice(&buf[..n]);
+        if let Some(pos) = head.windows(4).position(|w| w == b"\r\n\r\n") {
+            break pos + 4;
+        }
+        if head.len() > 64 * 1024 {
+            return blob_refusal(codes::BAD_REQUEST, 400, "request head too large");
+        }
+    };
+    let Some(declared) = content_length(&head[..body_start]) else {
+        return blob_refusal(codes::BAD_REQUEST, 400, "a blob upload carries Content-Length");
+    };
+    let ask = match blob_ask(raw_query) {
+        Ok(a) => a,
+        Err(e) => return refusal_response(&e),
+    };
+    // Who is it? The signature covers the declared hash (the body hash).
+    let (q, h, sha) = (raw_query.to_string(), header.clone(), ask.sha256.clone());
+    let tenant = match tokio::task::spawn_blocking(move || {
+        if !compute::enabled() {
+            return Err(no("compute_disabled", 404, "compute is off"));
+        }
+        authenticate(BLOB_PATH, "POST", &q, h.as_deref(), &sha)
+    })
+    .await
+    {
+        Ok(Ok(t)) => t,
+        Ok(Err(e)) => return refusal_response(&e),
+        Err(e) => return CliResponse::internal_error(format!("worker join: {e}")),
+    };
+    let cap = blob_cap_for(ingress);
+    if declared > cap {
+        return blob_refusal(
+            hcodes::BLOB_TOO_LARGE,
+            413,
+            format!("{} MB is over this door's {} MB per blob (the relay caps uploads; use a LAN route to the hub)", declared >> 20, cap >> 20),
+        );
+    }
+    let (used, quota) = {
+        let tid = tenant.id.clone();
+        let quota = tenant.blob_cap_bytes();
+        let used = tokio::task::spawn_blocking(move || {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            hub::blob_bytes(&conn, &tid)
+        })
+        .await
+        .unwrap_or(u64::MAX);
+        (used, quota)
+    };
+    if used.saturating_add(declared) > quota {
+        return blob_refusal(
+            hcodes::BLOB_QUOTA,
+            409,
+            format!("your server's blob store on this hub holds {} MB of {} MB; old blobs expire after {} days", used >> 20, quota >> 20, hub::ARTIFACT_KEEP_DAYS),
+        );
+    }
+    // Stream the body to a part file, hashing as it goes.
+    let dir = hub::tenant_dir(&tenant.id).join("blobs");
+    if let Err(e) = tokio::fs::create_dir_all(&dir).await {
+        return CliResponse::internal_error(format!("blob dir: {e}"));
+    }
+    let part = dir.join(format!(".{}.part", crypto::hex(&crypto::random_bytes(8).unwrap_or_default())));
+    let mut file = match tokio::fs::File::create(&part).await {
+        Ok(f) => f,
+        Err(e) => return CliResponse::internal_error(format!("blob file: {e}")),
+    };
+    let mut hasher = crypto::Sha256Stream::default();
+    let mut got: u64 = 0;
+    let first = &head[body_start..];
+    let take = (first.len() as u64).min(declared) as usize;
+    let mut failed: Option<CliResponse> = None;
+    if take > 0 {
+        hasher.update(&first[..take]);
+        got += take as u64;
+        if file.write_all(&first[..take]).await.is_err() {
+            failed = Some(CliResponse::internal_error("blob write"));
+        }
+    }
+    while failed.is_none() && got < declared {
+        let want = ((declared - got) as usize).min(buf.len());
+        match stream.read(&mut buf[..want]).await {
+            Ok(0) | Err(_) => {
+                failed = Some(blob_refusal(codes::BAD_REQUEST, 400, format!("the upload ended after {got} of {declared} bytes")));
+            }
+            Ok(n) => {
+                hasher.update(&buf[..n]);
+                got += n as u64;
+                if file.write_all(&buf[..n]).await.is_err() {
+                    failed = Some(CliResponse::internal_error("blob write"));
+                }
+            }
+        }
+    }
+    if failed.is_none() && file.flush().await.is_err() {
+        failed = Some(CliResponse::internal_error("blob flush"));
+    }
+    drop(file);
+    if let Some(r) = failed {
+        let _ = tokio::fs::remove_file(&part).await;
+        return r;
+    }
+    let actual = hasher.finish_hex();
+    if !crypto::ct_eq(actual.as_bytes(), ask.sha256.as_bytes()) {
+        let _ = tokio::fs::remove_file(&part).await;
+        return blob_refusal(hcodes::BLOB_MISMATCH, 400, "the bytes don't match the sha256 the upload named");
+    }
+    let r = tokio::task::spawn_blocking(move || store_blob(&tenant, &ask, &part, got)).await;
+    match r {
+        Ok(Ok(v)) => CliResponse::ok_json(v.to_string()),
+        Ok(Err(e)) => refusal_response(&e),
+        Err(e) => CliResponse::internal_error(format!("worker join: {e}")),
+    }
+}
+
+/// Keep a verified upload: a `--dirty` blob in the tenant's store, a
+/// bundle fetched into the tenant's mirror (then dropped).
+fn store_blob(t: &TenantRow, ask: &BlobAsk, part: &Path, bytes: u64) -> R<serde_json::Value> {
+    let now = compute::now();
+    if ask.kind == "dirty" {
+        let dst = hub::blob_path(&t.id, &ask.sha256);
+        std::fs::rename(part, &dst).map_err(|e| no("internal", 500, format!("blob store: {e}")))?;
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        hub::record_blob(&conn, &t.id, &ask.sha256, "dirty", bytes, now).map_err(|e| no("internal", 500, e))?;
+        return Ok(serde_json::json!({"ok": true, "kind": "dirty", "sha256": ask.sha256, "bytes": bytes}));
+    }
+    let rws = ask.remote_ws.as_deref().unwrap_or_default();
+    let commit = ask.commit.as_deref().unwrap_or_default();
+    let remote = ask.remote.as_deref().and_then(compute::sync::fetchable_remote);
+    let pk = hub::hub_project_key(&t.id, rws, remote.as_deref());
+    let r = import_bundle(&t.id, &pk, part, commit);
+    let _ = std::fs::remove_file(part);
+    r?;
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::record_event(&conn, &format!("tenant:{}", t.label), "tenant_code", None, None, None, serde_json::json!({"tenant": t.id, "commit": commit, "bytes": bytes}));
+    }
+    Ok(serde_json::json!({"ok": true, "kind": "bundle", "sha256": ask.sha256, "bytes": bytes, "commit": commit, "imported": true}))
+}
+
+/// Fetch a bundle into the tenant's bare mirror (made on first use) and
+/// keep `commit` reachable. Objects are fsck'd on the way in; a bundle
+/// whose prerequisites the mirror lacks is refused (`bundle_prereq_missing`,
+/// the submitter sends a full one).
+pub(crate) fn import_bundle(tenant_id: &str, project_key: &str, bundle: &Path, commit: &str) -> R<()> {
+    let m = hub::tenant_mirror(tenant_id, project_key);
+    if !m.join("objects").is_dir() {
+        std::fs::create_dir_all(&m).map_err(|e| no("internal", 500, format!("mirror dir: {e}")))?;
+        let out = std::process::Command::new("git")
+            .args(["init", "--bare", "-q"])
+            .arg(&m)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .map_err(|e| no("internal", 500, format!("git init: {e}")))?;
+        if !out.status.success() {
+            return Err(no("internal", 500, format!("git init: {}", String::from_utf8_lossy(&out.stderr).trim())));
+        }
+    }
+    let mut c = git_in(&m);
+    c.args(["-c", "transfer.fsckObjects=true", "fetch", "-q", "--no-tags", "--no-write-fetch-head"])
+        .arg(bundle)
+        .arg("+refs/k2-compute/*:refs/k2-in/*");
+    let out = c.output().map_err(|e| no("internal", 500, format!("git fetch: {e}")))?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr).trim().chars().take(300).collect::<String>();
+        if err.contains("prerequisite") || err.contains("lacks") {
+            return Err(no("bundle_prereq_missing", 409, format!("the hub's mirror lacks this bundle's base commits; send a full bundle ({err})")));
+        }
+        return Err(no("bundle_invalid", 400, format!("the bundle didn't import: {err}")));
+    }
+    let keep = |args: &[&str]| -> bool {
+        let mut c = git_in(&m);
+        c.args(args).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+        c.status().is_ok_and(|s| s.success())
+    };
+    let ok = mirror_has(tenant_id, project_key, commit) && keep(&["update-ref", &format!("refs/k2-keep/{commit}"), commit]);
+    // The transient refs go either way.
+    let mut list = git_in(&m);
+    list.args(["for-each-ref", "--format=%(refname)", "refs/k2-in/"]);
+    if let Ok(o) = list.output() {
+        for r in String::from_utf8_lossy(&o.stdout).lines().filter(|l| l.starts_with("refs/k2-in/")) {
+            keep(&["update-ref", "-d", r]);
+        }
+    }
+    if !ok {
+        return Err(no("bundle_invalid", 400, format!("the bundle doesn't carry commit {}", &commit[..commit.len().min(8)])));
+    }
+    Ok(())
 }
 
 // ── retention ────────────────────────────────────────────────────────

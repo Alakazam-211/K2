@@ -1472,6 +1472,11 @@ fn run_migrations_through(conn: &Connection, last: Option<&str>) -> Result<()> {
         // remote_session + UNIQUE (tenant_id, workspace_id, client_job_id).
         // ALTER only.
         ("0205_compute_jobs_tenant", include_str!("../../drizzle_sql/0205_compute_jobs_tenant.sql")),
+        // 0206 — this server submits to a compute hub (S2): `compute_hubs`
+        // ("Use compute hub", one active row) and `compute_remote_jobs`
+        // (the hub's job ids, the local workspace/session that asked,
+        // notified_at). New tables only.
+        ("0206_compute_hub_client", include_str!("../../drizzle_sql/0206_compute_hub_client.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2135,7 +2140,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0205_compute_jobs_tenant",
+            last_name, "0206_compute_hub_client",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2189,6 +2194,7 @@ mod tests {
                 "0197_agent_app_permissions",
                 "0204_compute_hub_tenants",
                 "0205_compute_jobs_tenant",
+                "0206_compute_hub_client",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2246,6 +2252,7 @@ mod tests {
                 "0197_agent_app_permissions",
                 "0204_compute_hub_tenants",
                 "0205_compute_jobs_tenant",
+                "0206_compute_hub_client",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -2465,14 +2472,14 @@ mod tests {
             [],
         )
         .unwrap();
-        for t in ["compute_tenants", "compute_tenant_grants", "compute_blobs"] {
+        for t in ["compute_tenants", "compute_tenant_grants", "compute_blobs", "compute_hubs", "compute_remote_jobs"] {
             assert!(table_names(&conn).iter().any(|n| n == t), "{t} missing after the upgrade");
         }
         run_migrations(&conn).unwrap();
         let n: i64 = conn
-            .query_row("SELECT COUNT(*) FROM _migrations WHERE name IN ('0204_compute_hub_tenants', '0205_compute_jobs_tenant')", [], |r| r.get(0))
+            .query_row("SELECT COUNT(*) FROM _migrations WHERE name IN ('0204_compute_hub_tenants', '0205_compute_jobs_tenant', '0206_compute_hub_client')", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(n, 2, "recorded once each");
+        assert_eq!(n, 3, "recorded once each");
     }
 
     /// A 0.46.0-era database (last migration 0189) with project chat lines
@@ -2906,6 +2913,7 @@ mod tests {
             // records go (tables are IF NOT EXISTS, the local tenant row is
             // INSERT OR IGNORE, re-added columns are skipped as duplicates,
             // the indexes are IF NOT EXISTS).
+            conn.execute("DELETE FROM _migrations WHERE name = '0206_compute_hub_client'", []).unwrap();
             conn.execute("DELETE FROM _migrations WHERE name = '0205_compute_jobs_tenant'", []).unwrap();
             conn.execute("DELETE FROM _migrations WHERE name = '0204_compute_hub_tenants'", []).unwrap();
             // 0197 (agent App permissions, 0.46.3) came before them: its

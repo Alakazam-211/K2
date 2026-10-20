@@ -217,6 +217,9 @@ pub mod compute_advertise;
 // The compute hub (prd-compute-shared-queue-v1 S1/S2): tenants, signed
 // tenant routes, the tenant's code store.
 pub mod compute_hub;
+// "Use compute hub": this server as a tenant (S2): proxy, code upload,
+// the completion poller.
+pub mod compute_hub_client;
 pub mod compute_local;
 // "Allow managing compute nodes" (`compute_manage`, 0194).
 pub mod compute_manage;

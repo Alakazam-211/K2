@@ -105,7 +105,7 @@ pub fn touch_follower(job_id: &str) {
 }
 
 /// Someone followed this job's log in the last 45 s.
-fn follower_recent(job_id: &str) -> bool {
+pub(crate) fn follower_recent(job_id: &str) -> bool {
     FOLLOWERS
         .lock()
         .unwrap_or_else(|p| p.into_inner())
@@ -838,7 +838,7 @@ pub fn finalize(job_id: &str) {
 }
 
 /// Live message to the requesting session, else the workspace inbox.
-fn deliver_completion(job_id: &str, session: Option<&str>, ws_path: Option<&str>, text: &str) {
+pub(crate) fn deliver_completion(job_id: &str, session: Option<&str>, ws_path: Option<&str>, text: &str) {
     if let Some(sid) = session.filter(|s| !s.is_empty()) {
         if test_sink(sid, text) {
             return;

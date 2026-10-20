@@ -550,6 +550,7 @@ impl HubAuth {
 }
 
 /// The signed parts, in order.
+#[allow(clippy::too_many_arguments)]
 fn parts<'a>(method: &'a str, path: &'a str, query: &'a str, body_sha: &'a str, fp: &'a str, ts: &'a str, nonce: &'a str, epoch: &'a str) -> [&'a [u8]; 8] {
     [method.as_bytes(), path.as_bytes(), query.as_bytes(), body_sha.as_bytes(), fp.as_bytes(), ts.as_bytes(), nonce.as_bytes(), epoch.as_bytes()]
 }

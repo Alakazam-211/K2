@@ -6871,6 +6871,13 @@ async fn handle_one_request(
                 .and_then(|pq| pq.split_once('?').map(|(_, q)| q.to_string()))
                 .unwrap_or_default();
             let header = super::http::extract_header(&headers_blob, k2_core::compute::hub::HEADER).map(str::to_string);
+            // The blob upload streams its body to disk (V21): never read
+            // whole, capped per door and per tenant before a byte lands.
+            if p == crate::compute_hub::BLOB_PATH {
+                let r = crate::compute_hub::serve_blob(&mut *stream, &mut buf, &raw_query, header, ingress).await;
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            }
             let body_bytes = match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::compute_routes::MAX_BODY).await {
                 Ok(b) => b,
                 Err(_) => {
@@ -6882,7 +6889,7 @@ async fn handle_one_request(
             let p_owned = p.to_string();
             let method_owned = method.clone();
             let r = tokio::task::spawn_blocking(move || {
-                crate::compute_hub::handle_request(&p_owned, &method_owned, &raw_query, header.as_deref(), &body_bytes)
+                crate::compute_hub::handle_request(&p_owned, &method_owned, &raw_query, header.as_deref(), &body_bytes, ingress)
             })
             .await
             .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));

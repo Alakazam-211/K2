@@ -52,6 +52,9 @@ pub const ROUTES: &[&str] = &[
     "/cli/compute/grants",
     "/cli/compute/grants/revoke",
     "/cli/compute/grants/set",
+    "/cli/compute/hubs",
+    "/cli/compute/hubs/off",
+    "/cli/compute/hubs/use",
     "/cli/compute/jobs",
     "/cli/compute/jobs/artifact",
     "/cli/compute/jobs/cancel",
@@ -102,6 +105,8 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/compute/agents/set",
     "/cli/compute/grants/revoke",
     "/cli/compute/grants/set",
+    "/cli/compute/hubs/off",
+    "/cli/compute/hubs/use",
     "/cli/compute/jobs/cancel",
     "/cli/compute/jobs/retry",
     "/cli/compute/local/disable",
@@ -493,7 +498,7 @@ fn grant_target_ws(who: &Who, requested: Option<&str>, mgr: Option<&Manager>) ->
 }
 
 /// For passports: the workspace switch must be on.
-fn passport_gate(who: &Who) -> R<Option<String>> {
+pub(crate) fn passport_gate(who: &Who) -> R<Option<String>> {
     let Some((own, _)) = who.passport() else { return Ok(None) };
     let on = {
         let db = k2_core::db::shared();
@@ -569,6 +574,15 @@ pub fn handle_from(path: &str, who: Who, body: &[u8], params: &HashMap<String, S
     let mgr = mgr.as_ref();
     // Queue timeouts and moves need the ticker even before any node attached.
     compute_ws::ensure_ticker_started();
+    // "Use compute hub" (S2): run/jobs go to the hub while one is active,
+    // and a job this server sent to a hub is always read there. With no hub
+    // and no remote job, `None`: everything below runs exactly as before.
+    if let Some(r) = crate::compute_hub_client::intercept(path, &who, body, params) {
+        return match r {
+            Ok(v) => CliResponse::ok_json(v.to_string()),
+            Err(e) => refusal_response(&e),
+        };
+    }
     let r = match path {
         "/cli/compute/nodes" => nodes_list(&who, params, mgr),
         "/cli/compute/nodes/info" => node_info(&who, params, mgr),
@@ -607,6 +621,8 @@ pub fn handle_from(path: &str, who: Who, body: &[u8], params: &HashMap<String, S
         p if crate::compute_admin::is_route(p) => crate::compute_admin::handle(p, &who, body, params),
         // The compute hub's tenants (prd-compute-shared-queue-v1 S1).
         p if crate::compute_hub::is_admin_route(p) => crate::compute_hub::admin(p, &who, body, params),
+        // This server as a tenant of another server's hub (S2).
+        p if crate::compute_hub_client::is_route(p) => crate::compute_hub_client::handle(p, &who, body),
         _ => Err(no("not_found", 404, "no such compute route")),
     };
     match r {
@@ -666,7 +682,7 @@ fn granted_node_ids(ws: &str) -> Vec<String> {
     store::grants(&conn, None, Some(ws)).into_iter().map(|g| g.node_id).collect()
 }
 
-fn nodes_list(who: &Who, params: &HashMap<String, String>, mgr: Option<&Manager>) -> R<serde_json::Value> {
+pub(crate) fn nodes_list(who: &Who, params: &HashMap<String, String>, mgr: Option<&Manager>) -> R<serde_json::Value> {
     need_credential(who)?;
     // A manager sees every node (it adds, confirms and retires them).
     let gate = if mgr.is_some() { None } else { passport_gate(who)? };
@@ -2109,7 +2125,7 @@ impl SourceInfo {
     }
 }
 
-fn source_for(ws: &Ws, v: &serde_json::Value, blob_out: &Path, warnings: &mut Vec<String>) -> R<(Src, SourceInfo)> {
+pub(crate) fn source_for(ws: &Ws, v: &serde_json::Value, blob_out: &Path, warnings: &mut Vec<String>) -> R<(Src, SourceInfo)> {
     let ws_root = compute::sync::repo_root(Path::new(&ws.path))
         .map_err(|_| no(codes::NOT_A_REPO, 400, format!("workspace {} isn't a git repo; pass --no-source to run without code", ws.handle)))?;
     // Run from a git worktree inside the workspace (e.g.

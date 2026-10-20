@@ -405,6 +405,7 @@ pub const ROUTES: &[Route] = &[
     // The compute hub's tenant routes (prd-compute-shared-queue-v1 S1/S2):
     // other K2 servers, no login and no token; the signed X-K2-Hub header
     // is checked in `compute_hub::authenticate` (fail-closed).
+    post("/cli/compute/hub/blob", Public),
     post("/cli/compute/hub/changes", Public),
     post("/cli/compute/hub/hello", Public),
     post("/cli/compute/hub/jobs", Public),
@@ -417,6 +418,11 @@ pub const ROUTES: &[Route] = &[
     post("/cli/compute/hub/nodes", Public),
     post("/cli/compute/hub/prepare", Public),
     post("/cli/compute/hub/run", Public),
+    // "Use compute hub" on this server (S2): status for admins, the switch
+    // is the owner's.
+    get("/cli/compute/hubs", Admin),
+    post("/cli/compute/hubs/off", Owner),
+    post("/cli/compute/hubs/use", Owner),
     get("/cli/compute/jobs", Member),
     get("/cli/compute/jobs/artifact", Member),
     post("/cli/compute/jobs/cancel", Member),

@@ -73,6 +73,14 @@ fn setup() -> Env {
     env
 }
 
+/// The test binary shares one database across its tests: start each with
+/// no hub configured on this server.
+fn no_hub() {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.execute("UPDATE compute_hubs SET state = 'off'", []).unwrap();
+}
+
 // ── HTTP ─────────────────────────────────────────────────────────────
 
 struct Resp {
@@ -83,7 +91,13 @@ struct Resp {
 fn raw_blocking(port: u16, raw: Vec<u8>) -> Resp {
     let mut s = StdTcpStream::connect(("127.0.0.1", port)).expect("connect");
     s.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
-    s.write_all(&raw).unwrap();
+    // The blob route answers a refused upload without reading its body and
+    // closes: a writer still sending sees a broken pipe, then reads the answer.
+    match s.write_all(&raw) {
+        Ok(()) => {}
+        Err(e) if matches!(e.kind(), std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset) => {}
+        Err(e) => panic!("write: {e}"),
+    }
     let mut out = Vec::new();
     let mut chunk = [0u8; 8192];
     loop {
@@ -332,6 +346,7 @@ async fn follow_tenant(port: u16, t: &Tenant, ws: &str, job: &str) -> (String, V
 async fn tenants_signed_requests_and_scoping_on_the_hub() {
     let env = setup();
     let d = test_harness::start(OWNER).await;
+    no_hub();
     let port = d.port;
     let running = online_node(&env, port, "hn1").await;
 
@@ -370,7 +385,9 @@ async fn tenants_signed_requests_and_scoping_on_the_hub() {
     assert_eq!(r.status, 409, "one tenant per server: {}", r.body);
     let r = get(port, "/cli/compute/tenants", OWNER, "").await;
     let labels: Vec<String> = j(&r)["tenants"].as_array().unwrap().iter().map(|t| t["label"].as_str().unwrap().to_string()).collect();
-    assert_eq!(labels, vec!["local", "alpha-srv", "beta-srv"], "{}", r.body);
+    // The test binary shares one database across its tests: look for ours.
+    assert_eq!(labels.first().map(String::as_str), Some("local"), "local first: {}", r.body);
+    assert!(labels.contains(&"alpha-srv".to_string()) && labels.contains(&"beta-srv".to_string()), "{}", r.body);
 
     // ── signed requests ──────────────────────────────────────────────
     // No header: 401 with its own code.
@@ -540,6 +557,284 @@ async fn tenants_signed_requests_and_scoping_on_the_hub() {
         Box::pin(async move { j(&get(port, "/cli/compute/jobs/get", OWNER, &format!("job={bl}")).await)["state"] == "cancelled" })
     })
     .await;
+
+    running.runner.abort();
+    running.node.stop_all(k2_node_proto::frames::JobState::Cancelled, "test_over");
+    drop(env);
+}
+
+// ── S2: this server as a tenant of a hub ─────────────────────────────
+
+/// Pin this daemon's own federation identity as a peer at `base` (Trusted,
+/// pairing v2): the in-process daemon is both the submitter and the hub,
+/// over real HTTP on loopback.
+fn pin_self(label: &str, base: &str) -> String {
+    let kp = k2_core::federation::identity::load_or_create().unwrap();
+    let mut p = k2_core::federation::FederationPeer::pin(label, label, kp.public_key_pem()).unwrap().with_base_url(base);
+    p.trust = k2_core::federation::PeerTrust::Trusted;
+    let fp = p.fingerprint.clone();
+    k2_core::federation::PeerStore::transact(|st| -> Result<((), bool), String> {
+        st.upsert(p);
+        Ok(((), true))
+    })
+    .unwrap()
+    .unwrap();
+    fp
+}
+
+fn self_tenant() -> Tenant {
+    let kp = k2_core::federation::identity::load_or_create().unwrap();
+    Tenant { key: SigningKey::from_pkcs8_der(&kp.serialize_der()).unwrap(), epoch: 0 }
+}
+
+/// Follow a job's logs through THIS server's routes until it ends.
+async fn follow_local(port: u16, token: &str, job: &str) -> (String, Value) {
+    let mut cursor = 0u64;
+    let mut out = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(90);
+    loop {
+        assert!(Instant::now() < deadline, "job {job} never ended");
+        let r = get(port, "/cli/compute/jobs/logs", token, &format!("job={job}&cursor={cursor}&wait=5")).await;
+        assert_eq!(r.status, 200, "{}", r.body);
+        let v = j(&r);
+        for c in v["chunks"].as_array().unwrap() {
+            if c["stream"] == "out" {
+                out.extend(k2_node_proto::crypto::unb64(c["data"].as_str().unwrap()).unwrap());
+            }
+        }
+        cursor = v["cursor"].as_u64().unwrap();
+        if v["end"] == true {
+            return (String::from_utf8_lossy(&out).into(), v["job"].clone());
+        }
+    }
+}
+
+fn blob_request(t: &Tenant, query: &str, declared_sha: &str, body: &[u8], content_length: usize) -> Vec<u8> {
+    let now = chrono::Utc::now().timestamp();
+    let a = k2_core::compute::hub::sign_request(&t.key, "POST", "/cli/compute/hub/blob", query, declared_sha, t.epoch, now).unwrap();
+    let mut h = format!(
+        "POST /cli/compute/hub/blob?{query} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Length: {content_length}\r\n{}: {}\r\n\r\n",
+        k2_core::compute::hub::HEADER,
+        a.to_header()
+    )
+    .into_bytes();
+    h.extend_from_slice(body);
+    h
+}
+
+fn db_one(sql: &str, p: &[&dyn rusqlite::ToSql]) -> String {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.query_row(sql, p, |r| r.get::<_, String>(0)).unwrap_or_else(|e| panic!("{sql}: {e}"))
+}
+
+fn count(sql: &str) -> i64 {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.query_row(sql, [], |r| r.get(0)).unwrap_or_else(|e| panic!("{sql}: {e}"))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn a_server_uses_a_hub_code_goes_up_and_completions_come_home() {
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    no_hub();
+    let port = d.port;
+    let running = online_node(&env, port, "sn1").await;
+    let base = format!("http://127.0.0.1:{port}");
+    pin_self("selfhub", &base);
+
+    // The hub side: this server is its own tenant "me" on sn1.
+    let r = post(port, "/cli/compute/tenants/add", OWNER, json!({"peer": "selfhub", "label": "me"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let tid = j(&r)["tenant"]["id"].as_str().unwrap().to_string();
+    let r = post(port, "/cli/compute/tenants/grant", OWNER, json!({"tenant": "me", "node": "sn1", "maxParallel": 3})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+
+    // The submitter side: an agent with compute on, before any hub.
+    let ws = seed_ws(&env, "subws");
+    let ws_path = env.home.join("ws-subws");
+    let other = seed_ws(&env, "otherws");
+    let (agent, agent_sid) = passport(&ws);
+    let (other_agent, _) = passport(&other);
+    for w in [&ws, &other] {
+        let r = post(port, "/cli/agent-access/set", OWNER, json!({"workspace": w.id, "toggle": "compute", "value": true})).await;
+        assert_eq!(r.status, 200, "{}", r.body);
+    }
+    let r = get(port, "/cli/compute/hubs", OWNER, "").await;
+    assert_eq!(j(&r)["hub"], Value::Null, "no hub: {}", r.body);
+
+    // "Use compute hub": the owner's, never an agent's.
+    let r = post(port, "/cli/compute/hubs/use", &agent, json!({"peer": "selfhub"})).await;
+    assert_eq!(code(&r), "owner_only");
+    let r = post(port, "/cli/compute/hubs/use", OWNER, json!({"peer": "selfhub"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(j(&r)["tenant"]["label"], "me");
+    let r = get(port, "/cli/compute/hubs", OWNER, "").await;
+    assert_eq!((j(&r)["reachable"].as_bool(), j(&r)["hub"]["label"].as_str()), (Some(true), Some("selfhub")), "{}", r.body);
+
+    // An agent's nodes are the hub's.
+    let r = get(port, "/cli/compute/nodes", &agent, "").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(j(&r)["hub"], "selfhub");
+    assert_eq!(j(&r)["nodes"][0]["name"], "sn1");
+
+    // ── a run goes up: prepare, bundle, run ──────────────────────────
+    let r = post(port, "/cli/compute/run", &agent, json!({"node": "sn1", "argv": ["sh", "-c", "cat a.txt"], "clientJobId": "sub-client-00000001"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let v = j(&r);
+    let job1 = v["job"]["id"].as_str().unwrap().to_string();
+    assert_eq!(v["hub"], "selfhub");
+    assert_eq!(v["source"]["checkout"], "workspace", "the local source info: {v}");
+    assert_eq!(v["job"]["workspace"], "subws", "this server's own handle");
+    let (out, fin) = follow_local(port, &agent, &job1).await;
+    assert_eq!(out, "hello from subws\n", "the job ran the workspace's commit: {fin}");
+    assert_eq!(fin["state"], "done");
+    // On the hub: the tenant's job, its workspace key, and the hub-named
+    // project key (V28), never the submitter's.
+    assert_eq!(db_one("SELECT tenant_id FROM compute_jobs WHERE id = ?1", &[&job1]), tid);
+    assert_eq!(db_one("SELECT workspace_id FROM compute_jobs WHERE id = ?1", &[&job1]), format!("t/{tid}/{}", ws.id));
+    let plan: Value = serde_json::from_str(&db_one("SELECT plan_json FROM compute_jobs WHERE id = ?1", &[&job1])).unwrap();
+    let pk = plan["src"]["project_key"].as_str().or(plan["src"]["projectKey"].as_str()).unwrap_or_else(|| panic!("no project key: {plan}")).to_string();
+    assert_eq!(pk, k2_core::compute::hub::hub_project_key(&tid, &ws.id, None));
+    assert_ne!(pk, k2_core::compute::sync::project_key(&ws.id, None), "not the submitter's own key");
+    let mirror = env.home.join(".k2/compute/tenants").join(&tid).join("repos").join(format!("{pk}.git"));
+    assert!(mirror.join("objects").is_dir(), "the tenant's mirror on the hub: {}", mirror.display());
+    // The submitter remembers it as a remote job.
+    assert_eq!(db_one("SELECT workspace_id FROM compute_remote_jobs WHERE hub_job_id = ?1", &[&job1]), ws.id);
+
+    // ── a second commit + --dirty: only have..commit goes up ─────────
+    std::fs::write(ws_path.join("a.txt"), "edited\n").unwrap();
+    git(&ws_path, &["commit", "-q", "-am", "two"]);
+    std::fs::write(ws_path.join("new.txt"), "untracked\n").unwrap();
+    let r = post(port, "/cli/compute/run", &agent, json!({"node": "sn1", "argv": ["sh", "-c", "cat a.txt new.txt"], "clientJobId": "sub-client-00000002", "dirty": true})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let job2 = j(&r)["job"]["id"].as_str().unwrap().to_string();
+    let (out, _) = follow_local(port, &agent, &job2).await;
+    assert_eq!(out, "edited\nuntracked\n");
+    let ups = format!("SELECT COUNT(*) FROM compute_events WHERE kind = 'tenant_code' AND detail_json LIKE '%{tid}%'");
+    assert_eq!(count(&ups), 2, "one bundle per new commit");
+    let r = post(port, "/cli/compute/run", &agent, json!({"node": "sn1", "argv": ["true"], "clientJobId": "sub-client-00000003"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(count(&ups), 2, "a commit the hub has goes up as nothing");
+
+    // ── --plan and a split run go through the hub too ────────────────
+    let r = post(port, "/cli/compute/run", &agent, json!({"node": "sn1", "argv": ["true"], "plan": true})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!((j(&r)["plan"].as_bool(), j(&r)["node"].as_str(), j(&r)["hub"].as_str()), (Some(true), Some("sn1"), Some("selfhub")), "{}", r.body);
+    let r = post(port, "/cli/compute/run", &agent, json!({"any": true, "shards": 2, "argv": ["sh", "-c", "echo shard {shard}/{shards}"], "clientJobId": "sub-client-shards01"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let parent = j(&r)["job"]["id"].as_str().unwrap().to_string();
+    let kids: Vec<String> = j(&r)["shards"].as_array().unwrap().iter().map(|k| k["job"].as_str().unwrap().to_string()).collect();
+    assert_eq!(kids.len(), 2, "{}", r.body);
+    for (i, k) in kids.iter().enumerate() {
+        let (out, fin) = follow_local(port, &agent, k).await;
+        assert_eq!(out, format!("shard {}/2\n", i + 1), "a shard's log reads through this server: {fin}");
+    }
+    let p = parent.clone();
+    let a = agent.clone();
+    wait_for("split run done", 30, move || {
+        let (a, p) = (a.clone(), p.clone());
+        Box::pin(async move { j(&get(port, "/cli/compute/jobs/get", &a, &format!("job={p}")).await)["state"] == "done" })
+    })
+    .await;
+
+    // ── scoping on the submitter ─────────────────────────────────────
+    let r = get(port, "/cli/compute/jobs/get", &other_agent, &format!("job={job1}")).await;
+    assert_eq!(r.status, 404, "another workspace's agent can't see it: {}", r.body);
+    let r = get(port, "/cli/compute/jobs", &agent, "").await;
+    let listed: Vec<String> = j(&r)["jobs"].as_array().unwrap().iter().map(|x| x["id"].as_str().unwrap().to_string()).collect();
+    assert!(listed.contains(&job1) && listed.contains(&job2), "{}", r.body);
+    let r = get(port, "/cli/compute/jobs", &other_agent, "").await;
+    assert_eq!(j(&r)["jobs"].as_array().unwrap().len(), 0, "{}", r.body);
+
+    // ── a detached job's completion comes home, once ─────────────────
+    k2_daemon::compute_ws::test_sink_register(&agent_sid);
+    let r = post(port, "/cli/compute/run", &agent, json!({"node": "sn1", "argv": ["sh", "-c", "exit 1"], "clientJobId": "sub-client-00000004", "detach": true})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let det = j(&r)["job"]["id"].as_str().unwrap().to_string();
+    let sid = agent_sid.clone();
+    wait_for("completion message", 60, move || {
+        let s = sid.clone();
+        Box::pin(async move { !k2_daemon::compute_ws::test_sink_peek(&s).is_empty() })
+    })
+    .await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let msgs = k2_daemon::compute_ws::test_sink_take(&agent_sid);
+    // The attached `true` run nobody followed gets its one message too
+    // (the same rule as this server's own jobs); the detached one: once.
+    let mine: Vec<&String> = msgs.iter().filter(|m| m.contains(&det[..8])).collect();
+    assert_eq!(mine.len(), 1, "delivered once, locally: {msgs:?}");
+    assert!(mine[0].starts_with(&format!("[compute] job {} on sn1: exit 1", &det[..8])), "{msgs:?}");
+    let mut ids: Vec<&str> = msgs.iter().map(|m| m.split_whitespace().nth(2).unwrap_or("")).collect();
+    ids.sort_unstable();
+    let n = ids.len();
+    ids.dedup();
+    assert_eq!(ids.len(), n, "no job's message twice: {msgs:?}");
+    assert_eq!(count(&format!("SELECT COUNT(*) FROM compute_remote_jobs WHERE hub_job_id = '{det}' AND notified_at IS NOT NULL")), 1);
+
+    // ── cancel goes to the hub ───────────────────────────────────────
+    let r = post(port, "/cli/compute/run", &agent, json!({"node": "sn1", "argv": ["sh", "-c", "echo started; sleep 30"], "clientJobId": "sub-client-00000005"})).await;
+    let long = j(&r)["job"]["id"].as_str().unwrap().to_string();
+    let (a, l) = (agent.clone(), long.clone());
+    wait_for("long job running", 30, move || {
+        let (a, l) = (a.clone(), l.clone());
+        Box::pin(async move { j(&get(port, "/cli/compute/jobs/get", &a, &format!("job={l}")).await)["state"] == "running" })
+    })
+    .await;
+    let r = post(port, "/cli/compute/jobs/cancel", &other_agent, json!({"job": long})).await;
+    assert_eq!(r.status, 404, "not another workspace's to cancel: {}", r.body);
+    let r = post(port, "/cli/compute/jobs/cancel", &agent, json!({"job": &long[..8]})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let (a, l) = (agent.clone(), long.clone());
+    wait_for("long job cancelled", 30, move || {
+        let (a, l) = (a.clone(), l.clone());
+        Box::pin(async move { j(&get(port, "/cli/compute/jobs/get", &a, &format!("job={l}")).await)["state"] == "cancelled" })
+    })
+    .await;
+
+    // ── the blob route's limits (signed directly, as a tenant) ───────
+    let mut me = self_tenant();
+    me.epoch = j(&me.call(port, "/cli/compute/hub/hello", json!({})).await)["epoch"].as_i64().unwrap();
+    let sha_of = |b: &[u8]| k2_node_proto::crypto::sha256_hex(b);
+    // Unsigned.
+    let r = raw(port, request_bytes("POST", &format!("/cli/compute/hub/blob?sha256={}&kind=dirty", sha_of(b"x")), &[], b"x")).await;
+    assert_eq!((r.status, code(&r)), (401, "hub_auth_missing".to_string()));
+    // Over the relay cap on the tunnel door: refused before the body.
+    let q = format!("sha256={}&kind=dirty", sha_of(b"big"));
+    let r = raw(d.tunnel_port, blob_request(&me, &q, &sha_of(b"big"), b"", 60 << 20)).await;
+    assert_eq!((r.status, code(&r)), (413, "blob_too_large".to_string()), "{}", r.body);
+    // Over the LAN cap on the direct door.
+    let q = format!("sha256={}&kind=dirty", sha_of(b"huge"));
+    let r = raw(port, blob_request(&me, &q, &sha_of(b"huge"), b"", (1usize << 30) + 1)).await;
+    assert_eq!((r.status, code(&r)), (413, "blob_too_large".to_string()), "{}", r.body);
+    // The bytes must be what was named.
+    let q = format!("sha256={}&kind=dirty", sha_of(b"named"));
+    let r = raw(port, blob_request(&me, &q, &sha_of(b"named"), b"other", 5)).await;
+    assert_eq!((r.status, code(&r)), (400, "blob_mismatch".to_string()), "{}", r.body);
+    // The tenant's blob quota.
+    let r = post(port, "/cli/compute/tenants/set", OWNER, json!({"tenant": "me", "blobMb": 1})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let two_mb = vec![7u8; 2 << 20];
+    let q = format!("sha256={}&kind=dirty", sha_of(&two_mb));
+    let r = raw(port, blob_request(&me, &q, &sha_of(&two_mb), &two_mb, two_mb.len())).await;
+    assert_eq!((r.status, code(&r)), (409, "blob_quota".to_string()), "{}", r.body);
+    let r = post(port, "/cli/compute/tenants/set", OWNER, json!({"tenant": "me", "blobMb": null})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    // Within the caps it lands in the tenant's store, file-backed.
+    let r = raw(port, blob_request(&me, &q, &sha_of(&two_mb), &two_mb, two_mb.len())).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(env.home.join(".k2/compute/tenants").join(&tid).join("blobs").join(sha_of(&two_mb)).is_file());
+
+    // ── hub off: new runs are local again; remote ids still resolve ──
+    let r = post(port, "/cli/compute/hubs/off", OWNER, json!({})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(port, "/cli/compute/run", &agent, json!({"node": "sn1", "argv": ["true"], "clientJobId": "sub-client-00000006", "noSource": true})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(j(&r)["job"]["tenantId"], "local", "no hub: this server's own controller");
+    assert!(j(&r).get("hub").is_none());
+    let r = get(port, "/cli/compute/jobs/get", &agent, &format!("job={job1}")).await;
+    assert_eq!((r.status, j(&r)["hub"].as_str()), (200, Some("selfhub")), "{}", r.body);
 
     running.runner.abort();
     running.node.stop_all(k2_node_proto::frames::JobState::Cancelled, "test_over");

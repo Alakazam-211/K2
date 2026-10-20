@@ -45,6 +45,7 @@ import { DataSection, DATA_MANIFEST } from './sections/DataSection'
 import { ComputeSection, COMPUTE_MANIFEST } from './sections/ComputeSection'
 import { SkinAccessSection, SKIN_ACCESS_MANIFEST } from './sections/SkinAccessSection'
 import { AppApprovalsSection, APP_APPROVALS_MANIFEST } from './sections/AppApprovalsSection'
+import { APPS_SERVER_MANIFEST } from './sections/AppsServerSection'
 import { PeopleSection, PEOPLE_MANIFEST } from './sections/PeopleSection'
 import { UserTemplatesSection, USER_TEMPLATES_MANIFEST } from './sections/UserTemplatesSection'
 // The Projects (project GROUPS) section — §6.5 relocation. NOT to be
@@ -322,6 +323,7 @@ export default function Settings(): React.JSX.Element {
       ...EMAIL_LINK_MANIFEST,
       ...DATA_MANIFEST,
       ...COMPUTE_MANIFEST,
+      ...APPS_SERVER_MANIFEST,
       ...SKIN_ACCESS_MANIFEST,
       ...APP_APPROVALS_MANIFEST,
       ...COMING_SOON_BOTS_MANIFEST,

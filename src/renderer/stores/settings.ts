@@ -216,6 +216,11 @@ interface SettingsState {
   // `compute_disabled` until it is on (or K2_COMPUTE=1).
   computePreview: boolean
 
+  // Apps (beta) on the focused server (Settings → Apps → This server).
+  // Owner-only server-side, default ON since 0.46.3. While off every
+  // /cli/app/* runtime route 404s `apps_disabled` (unless K2_APPS=1).
+  apps: boolean
+
   // 0.40.43 (1c) — public /v1 API master switch (K2 Connect → Enable
   // public API). Persisted per-server; the daemon's misc_routes::
   // api_enabled() gate ORs it with the K2_API env flag and checks it PER
@@ -311,6 +316,7 @@ interface SettingsState {
   setConnectLoginIngress: (mode: ConnectLoginIngress) => void
   setFederationEnabled: (enabled: boolean) => void
   setComputePreview: (enabled: boolean) => void
+  setApps: (enabled: boolean) => void
   setApiEnabled: (enabled: boolean) => void
   setUseLlmHitlDetection: (enabled: boolean) => void
   setCompletionSoundEnabled: (enabled: boolean) => void
@@ -464,6 +470,13 @@ function completionSoundChoice(result: {
   }
 }
 
+/** The Apps (beta) switch from a daemon settings body: `apps` (0.46.3+,
+ *  default on), else an older daemon's `appsPreview` (default off). */
+export function appsSwitchFrom(result: { apps?: boolean; appsPreview?: boolean }): boolean {
+  if (typeof result.apps === 'boolean') return result.apps
+  return result.appsPreview === true
+}
+
 async function persistAndApply(
   set: (state: Partial<SettingsState>) => void,
   updates: Record<string, any>
@@ -487,6 +500,7 @@ async function persistAndApply(
       connectLoginIngress: normalizeConnectLoginIngress(result.connectLoginIngress),
       federationEnabled: result.federationEnabled ?? false,
       computePreview: result.computePreview ?? false,
+      apps: appsSwitchFrom(result),
       apiEnabled: result.apiEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
       completionSoundEnabled: result.completionSoundEnabled ?? true,
@@ -534,6 +548,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   connectLoginIngress: 'edge',
   federationEnabled: false,
   computePreview: false,
+  apps: true,
   apiEnabled: false,
   useLlmHitlDetection: false,
   completionSoundEnabled: true,
@@ -785,6 +800,23 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     }
   },
 
+  setApps: async (enabled: boolean) => {
+    const prev = get().apps
+    set({ apps: enabled }) // optimistic
+    try {
+      // Partial update — the daemon deep-merges `apps` and syncs it into
+      // deploy::set_enabled() so /cli/app/* lights up (or goes dark) at once
+      // on THIS host (settingsUpdate is host-aware). Owner-only server-side:
+      // unlike persistAndApply this does not swallow a 403, it rolls back
+      // and throws so the caller can show why.
+      const result = await settingsUpdate({ apps: enabled })
+      set({ apps: appsSwitchFrom(result) })
+    } catch (err) {
+      set({ apps: prev })
+      throw err
+    }
+  },
+
   setApiEnabled: async (enabled: boolean) => {
     const prev = get().apiEnabled
     set({ apiEnabled: enabled }) // optimistic
@@ -921,6 +953,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       connectLoginIngress: normalizeConnectLoginIngress(result.connectLoginIngress),
       federationEnabled: result.federationEnabled ?? false,
       computePreview: result.computePreview ?? false,
+      apps: appsSwitchFrom(result),
       apiEnabled: result.apiEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
       completionSoundEnabled: result.completionSoundEnabled ?? true,
@@ -987,6 +1020,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       connectLoginIngress: normalizeConnectLoginIngress(result.connectLoginIngress),
       federationEnabled: result.federationEnabled ?? false,
       computePreview: result.computePreview ?? false,
+      apps: appsSwitchFrom(result),
       apiEnabled: result.apiEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
       completionSoundEnabled: result.completionSoundEnabled ?? true,

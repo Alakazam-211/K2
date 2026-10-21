@@ -41,7 +41,12 @@ pub fn completion_text(
         },
         "failed" => format!("failed ({}){after}", reason.unwrap_or("infrastructure")),
         "timeout" => format!("timed out{after}"),
-        "cancelled" => format!("cancelled ({}){after}", reason.unwrap_or("cancelled")),
+        "cancelled" => match reason {
+            // A shared node ended it (0.46.3): say why, plainly.
+            Some("share_expired") => format!("cancelled (share_expired: this server's share on the node ended){after}"),
+            Some("share_revoked") => format!("cancelled (share_revoked: the node's owner removed this server){after}"),
+            r => format!("cancelled ({}){after}", r.unwrap_or("cancelled")),
+        },
         "interrupted" => format!("interrupted ({}){after}", reason.unwrap_or("interrupted")),
         "unknown" => "lost (the node has no record of it; safe to retry)".to_string(),
         other => other.to_string(),
@@ -96,6 +101,10 @@ mod tests {
         );
         assert!(completion_text("j", "n", "failed", None, None, Some("sync_failed"), None, None).contains("failed (sync_failed)"));
         assert!(completion_text("j", "n; rm -rf", "unknown", None, None, None, None, None).contains("on nrm-rf:"));
+        // A shared node ended it (0.46.3).
+        assert!(completion_text("j", "n", "cancelled", None, None, Some("share_expired"), None, None).contains("share on the node ended"));
+        assert!(completion_text("j", "n", "cancelled", None, None, Some("share_revoked"), None, None).contains("removed this server"));
+        assert!(completion_text("j", "n", "cancelled", None, None, None, None, None).contains("cancelled (cancelled)"));
         assert_eq!(
             shards_completion_text("7f3a0000aaaa", 4, "done", Some(0), None, None, Some(61), None),
             "[compute] job 7f3a0000 (4 shards): exit 0 after 1m01s. k2 compute logs 7f3a0000 --tail 50 · k2 compute get 7f3a0000 --json"

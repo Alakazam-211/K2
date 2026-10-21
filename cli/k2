@@ -14854,10 +14854,12 @@ Node admin (agents need "Allow this agent to operate compute nodes"):
   k2 compute node policy <node> show
   k2 compute node policy <node> set key=value... [--reason "…"]
                    narrowing applies at once; widening waits for the owner (exit 2)
-  k2 compute node update <node> [--canary]     offer the signed k2-node build
-  k2 compute node rollback <node>              back to the node's own previous build
+  k2 compute node update <node> [--canary] [--now]   offer the signed k2-node build
+  k2 compute node rollback <node> [--now]      back to the node's own previous build
+                   a shared node first waits for running jobs (up to 30 min);
+                   --now skips the wait. Solo nodes never wait.
   k2 compute node admin propose <node> <verb> [key=value…] --reason "…"
-                   verbs today: unit.restart unit=k2-node, policy.set key=value,
+                   verbs today: unit.restart unit=k2-node [now=true], policy.set key=value,
                    control.pause|drain|resume, gc, jobs.kill job_id=…,
                    wall.enable (Linux: jobs run as k2job; then unit.restart unit=k2-node),
                    homes.private (chmod 700 the homes others can read)
@@ -15110,6 +15112,8 @@ def share_lines(n):
         head = "shared with %d other server(s)" % max((s.get("servers") or 1) - 1, 0)
     if s.get("state") and s["state"] != "active":
         head += "   your share: " + s["state"]
+    if s.get("skewSecs"):
+        head += "   clock skew %+ds (node vs this server)" % s["skewSecs"]
     out = ["%-14s %s" % ("", head)]
     if s.get("line"):
         out.append("%-14s your share: %s" % ("", s["line"]))
@@ -16235,15 +16239,16 @@ else:
             _compute_render_health
             ;;
         update|rollback)
-            local node="" canary=0
+            local node="" canary=0 now=""
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --canary) canary=1; shift ;;
+                    --now) now=1; shift ;;
                     *) node="$1"; shift ;;
                 esac
             done
-            [ -n "$node" ] || { echo "usage: k2 compute node $sub <node>" >&2; exit 2; }
-            _compute_call POST "/cli/compute/nodes/$sub" "$(_compute_json K2_CJ_node="$node" K2_CJ_canary_b="$canary")"
+            [ -n "$node" ] || { echo "usage: k2 compute node $sub <node> [--now]" >&2; exit 2; }
+            _compute_call POST "/cli/compute/nodes/$sub" "$(_compute_json K2_CJ_node="$node" K2_CJ_canary_b="$canary" K2_CJ_now_b="$now")"
             printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
 v=json.load(sys.stdin); u=v.get("update") or {}
 print("%s: %s%s. %s" % (v["node"], u.get("state"), (" " + u["version"]) if u.get("version") else "", v.get("note","")))'

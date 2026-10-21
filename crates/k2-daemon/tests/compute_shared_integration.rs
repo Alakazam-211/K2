@@ -218,6 +218,7 @@ fn view(role: Role, running: u32, queued: u32) -> ShareView {
         queued,
         cpu_secs_today: 3600,
         expires_in_secs: Some(7 * 86_400),
+        skew_secs: None,
         quotes: vec![],
     }
 }
@@ -415,6 +416,29 @@ async fn a_named_run_goes_into_a_shared_nodes_queue() {
     compute_ws::test_frame("shr-1", state(&job2, 1, JobState::Cancelled, Some("cancelled"), None));
     let rj = row(&job2);
     assert_eq!((rj.state.as_str(), rj.generation), ("cancelled", 1), "a cancel the user asked for ends it");
+
+    // The node ends a queued job itself when the share is revoked: a
+    // result, said plainly, never retried.
+    let r = run(d.port, OWNER, json!({"node": "k2n2-m1", "workspace": ws.id})).await;
+    let job3 = j(&r)["job"]["id"].as_str().unwrap().to_string();
+    assert_eq!(assigns(&node.frames()).len(), 1);
+    compute_ws::test_frame("shr-1", state(&job3, 1, JobState::Queued, Some("node_queued"), None));
+    compute_ws::test_frame("shr-1", state(&job3, 1, JobState::Cancelled, Some("share_revoked"), None));
+    let rj = row(&job3);
+    assert_eq!((rj.state.as_str(), rj.reason.as_deref(), rj.generation), ("cancelled", Some("share_revoked"), 1));
+    assert!(rj.detail.as_deref().is_some_and(|d| d.contains("removed this server")), "{rj:?}");
+
+    // Clock skew over 120 s shows in `nodes`; under it, nothing.
+    let mut skewed = view(Role::Tenant, 0, 0);
+    skewed.skew_secs = Some(300);
+    compute_ws::test_frame("shr-1", Frame::Offer(offer(&["artifacts", "stall", FEATURE_QUEUE, FEATURE_SERVERS], 0, Some(skewed.clone()))));
+    let skew = |v: &Value| v["nodes"].as_array().unwrap().iter().find(|n| n["name"] == "k2n2-m1").unwrap()["share"]["skewSecs"].clone();
+    let r = get(d.port, "/cli/compute/nodes", OWNER, "").await;
+    assert_eq!(skew(&j(&r)), json!(300));
+    skewed.skew_secs = Some(-60);
+    compute_ws::test_frame("shr-1", Frame::Offer(offer(&["artifacts", "stall", FEATURE_QUEUE, FEATURE_SERVERS], 0, Some(skewed))));
+    let r = get(d.port, "/cli/compute/nodes", OWNER, "").await;
+    assert!(skew(&j(&r)).is_null(), "under 120 s isn't shown");
     compute_ws::test_detach("shr-1");
 }
 
@@ -668,16 +692,37 @@ async fn servers_add_is_held_one_at_a_time_and_hides_the_binding() {
             }
             std::thread::sleep(Duration::from_millis(20));
         };
-        let owner = serde_json::to_value(ShareLimits::owner(2, 8, 16, 100, k2_core::compute::proto::share::Network::On)).unwrap();
-        let mut tenant = serde_json::to_value(ShareLimits::new_server(Trust::Team, false)).unwrap();
-        tenant["slot"] = json!(1);
-        tenant["label"] = json!("baden.k2.dev");
-        tenant["state"] = json!("pending");
-        tenant["trust"] = json!("team");
-        tenant["fp_prefix"] = json!("0123456789abcdef");
-        tenant["sas"] = json!("482913");
-        let old = json!({"slot": 2, "label": "old.k2.dev", "state": "refused", "trust": "own", "fp_prefix": "fedcba9876543210", "refusal": "server_too_old", "limits": ShareLimits::new_server(Trust::Own, false)});
-        let result = json!({"servers": [{"slot": 0, "label": "rosson.k2.dev", "state": "active", "trust": "own", "limits": owner}, tenant, old]});
+        // The pinned `servers.list` answer (share::ServersList).
+        use k2_core::compute::proto::share::{ServerListing, ServersList};
+        let entry = |slot: u8, label: &str, state: ServerStatus, trust: Trust, limits: ShareLimits| ServerListing {
+            slot,
+            label: label.into(),
+            state,
+            trust,
+            fp: None,
+            fp_prefix: format!("{slot:0>16}"),
+            limits,
+            expires_at: None,
+            expires_in_secs: None,
+            added_at: 1,
+            added_by: "local:rosson".into(),
+            running: 0,
+            queued: 0,
+            cpu_secs_today: 0,
+            sas: (state == ServerStatus::Pending).then(|| "482913".to_string()),
+            refusal: (state == ServerStatus::Refused).then(|| "server_too_old".to_string()),
+            online: slot == 0,
+        };
+        let result = serde_json::to_value(ServersList {
+            max_servers: 3,
+            solo: false,
+            servers: vec![
+                entry(0, "rosson.k2.dev", ServerStatus::Active, Trust::Own, ShareLimits::owner(2, 8, 16, 100, k2_core::compute::proto::share::Network::On)),
+                entry(1, "baden.k2.dev", ServerStatus::Pending, Trust::Team, ShareLimits::new_server(Trust::Team, false)),
+                entry(2, "old.k2.dev", ServerStatus::Refused, Trust::Own, ShareLimits::new_server(Trust::Own, false)),
+            ],
+        })
+        .unwrap();
         compute_ws::test_frame(
             "own-1",
             Frame::AdminResult(k2_core::compute::proto::admin::AdminResult {
@@ -706,6 +751,7 @@ async fn servers_add_is_held_one_at_a_time_and_hides_the_binding() {
     assert_eq!((list[1]["state"].as_str(), list[1]["sas"].as_str()), (Some("pending"), Some("482 913")));
     assert_eq!((list[0]["weight"].as_u64(), list[1]["weight"].as_u64(), list[0]["sas"].is_null(), list[1]["refusal"].is_null()), (Some(1), Some(1), true, true), "--json carries weight, SAS and refusal");
     assert_eq!(s["requests"].as_array().unwrap().len(), 1, "the held add shows with the list");
+    assert_eq!((s["maxServers"].as_u64(), s["solo"].as_bool()), (Some(3), Some(false)));
     {
         let db = k2_core::db::shared();
         assert_eq!(store::node_servers(&db.lock(), "own-1").len(), 3);

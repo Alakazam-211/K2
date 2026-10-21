@@ -666,7 +666,10 @@ pub fn validate_step(verb: &str, args: &Value) -> Result<Class, (&'static str, S
         }
         "control.pause" | "control.drain" | "control.resume" => only_keys(a, &[]).map_err(bad)?,
         "node.update" => return Err(bad("updates go through k2 compute node update (a signed build offer)".into())),
-        "node.rollback" => only_keys(a, &["reason"]).map_err(bad)?,
+        "node.rollback" => {
+            only_keys(a, &["reason", wire::ARG_NOW]).map_err(bad)?;
+            wire::now_arg(args).map_err(|r| bad(r.message))?;
+        }
         "gc" => {
             only_keys(a, &["older_days", "toolchains"]).map_err(bad)?;
             int_in(a, "older_days", 1, 365).map_err(bad)?;
@@ -681,7 +684,9 @@ pub fn validate_step(verb: &str, args: &Value) -> Result<Class, (&'static str, S
             }
         }
         "unit.restart" => {
-            only_keys(a, &["unit"]).map_err(bad)?;
+            // `now`: on a shared node, skip the drain (V55).
+            only_keys(a, &["unit", wire::ARG_NOW]).map_err(bad)?;
+            wire::now_arg(args).map_err(|r| bad(r.message))?;
             let u = a.get("unit").and_then(Value::as_str).unwrap_or("");
             if !matches!(u, "k2-node" | "k2-node-packages") {
                 return Err(bad("unit is k2-node or k2-node-packages".into()));
@@ -1222,6 +1227,11 @@ mod tests {
         assert!(summarize("k2n2-m1", "wall.enable", &json!({})).contains("k2job"));
         assert!(summarize("k2n2-m1", "homes.private", &json!({})).contains("private"));
         assert_eq!(validate_step("control.pause", &json!({})).unwrap(), Class::Operate);
+        // V55: `now` skips a shared node's drain (bool only).
+        assert!(validate_step("node.rollback", &json!({"now": true, "reason": "bad build"})).is_ok());
+        assert!(validate_step("unit.restart", &json!({"unit": "k2-node", "now": false})).is_ok());
+        assert_eq!(validate_step("unit.restart", &json!({"unit": "k2-node", "now": "yes"})).unwrap_err().0, codes::BAD_ARGS);
+        assert_eq!(validate_step("node.rollback", &json!({"now": 1})).unwrap_err().0, codes::BAD_ARGS);
         for v in ["sudo", "script", "power.set", "pkg.install"] {
             assert_eq!(validate_step(v, &json!({})).unwrap_err().0, codes::VERB_NOT_ALLOWED, "{v} isn't in the node's v1 catalog");
         }

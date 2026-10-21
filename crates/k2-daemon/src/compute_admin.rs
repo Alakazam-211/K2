@@ -1291,7 +1291,12 @@ fn update(who: &Who, body: &[u8]) -> R<Value> {
         let _ = admin::set_update_ring(&conn, &node.id, "canary");
     }
     let transfer_id = crypto::random_id().map_err(|e| no("random", 500, e))?;
-    let args = json!({"version": build.version, "sha256": build.sha256, "trigger": "explicit"});
+    let mut args = json!({"version": build.version, "sha256": build.sha256, "trigger": "explicit"});
+    // V55 `--now`: skip a shared node's drain. Sent only to a shared node
+    // (solo nodes never drain, and an older k2-node doesn't know it).
+    if b_true(&v, "now") && node.shared {
+        args[wire::ARG_NOW] = true.into();
+    }
     let key = controller_key()?;
     let cmd = build_command(&node, &key.fingerprint(), Class::Operate, "node.update", &args, None, &who.label(), None, compute::now())?;
     let sealed = wire::sign_controller(&key, &cmd).map_err(|e| no("seal_failed", 500, e))?;
@@ -1346,10 +1351,13 @@ fn rollback(who: &Who, body: &[u8]) -> R<Value> {
     let v = json_body(body)?;
     let node = node_or_404(s(&v, "node"))?;
     node_admin_ready(&node, wire::FEATURE_SELF_UPDATE)?;
-    let args = match s(&v, "reason") {
+    let mut args = match s(&v, "reason") {
         Some(r) => json!({"reason": r.chars().take(200).collect::<String>()}),
         None => json!({}),
     };
+    if b_true(&v, "now") && node.shared {
+        args[wire::ARG_NOW] = true.into();
+    }
     let cmd_id = send_operate(who, &node, "node.rollback", &args)?;
     let state = json!({"state": "rollback_requested", "at": compute::now(), "by": who.label(), "cmdId": cmd_id});
     {
@@ -1553,7 +1561,7 @@ static SERVERS_REFRESHING: Mutex<Option<std::collections::HashSet<String>>> = Mu
 
 /// Mirror the node's server list now (blocking, up to [`ANSWER_WAIT`]).
 /// Owner side only. Audits and notes the changes it sees.
-fn refresh_servers(node: &store::NodeRow) -> R<Vec<share::ServerRow>> {
+fn refresh_servers(node: &store::NodeRow) -> R<pshare::ServersList> {
     servers_ready(node)?;
     let (_, r) = send_direct(&Who::Owner, node, Class::Read, pshare::VERB_LIST, &json!({}), Some(ANSWER_WAIT))?;
     let Some(r) = r else {
@@ -1562,7 +1570,7 @@ fn refresh_servers(node: &store::NodeRow) -> R<Vec<share::ServerRow>> {
     if r.state != "done" {
         return Err(no("node_refused", 409, format!("{} refused servers.list: {}", node.name, r.message.as_deref().or(r.code.as_deref()).unwrap_or("?"))));
     }
-    let rows = share::parse_servers_list(&r.result).map_err(|e| no("node_answer", 502, e))?;
+    let (meta, rows) = share::parse_servers_list(&r.result).map_err(|e| no("node_answer", 502, e))?;
     let now = compute::now();
     let notes = {
         let db = k2_core::db::shared();
@@ -1574,7 +1582,7 @@ fn refresh_servers(node: &store::NodeRow) -> R<Vec<share::ServerRow>> {
     for (key, text) in notes {
         share_note(&node.id, &key, &text);
     }
-    Ok(rows)
+    Ok(meta)
 }
 
 /// Audit lines and notes for what changed between two server lists.
@@ -1746,6 +1754,7 @@ fn servers_list(who: &Who, params: &HashMap<String, String>, mgr: Option<&Manage
     }
     let want_refresh = params.get("refresh").is_some_and(|x| x == "1" || x == "true");
     let mut note = None;
+    let mut meta: Option<pshare::ServersList> = None;
     let stale = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -1753,7 +1762,7 @@ fn servers_list(who: &Who, params: &HashMap<String, String>, mgr: Option<&Manage
     };
     if want_refresh || stale {
         match refresh_servers(&node) {
-            Ok(_) => {}
+            Ok(m) => meta = Some(m),
             // A node without servers (solo, older): just the owner.
             Err(e) if e.code == pshare::codes::NODE_TOO_OLD => note = Some(e.hint),
             Err(e) => note = Some(format!("{} (showing the last list)", e.hint)),
@@ -1778,7 +1787,13 @@ fn servers_list(who: &Who, params: &HashMap<String, String>, mgr: Option<&Manage
     .filter(|r| r.steps().is_ok_and(|s| s.iter().any(|st| st.verb.starts_with("servers."))))
     .map(|r| request_json(&r, Some(&node.name)))
     .collect::<Vec<_>>();
-    Ok(json!({"node": node.name, "role": "owner", "shared": node.shared, "servers": list, "requests": pending, "note": note}))
+    // From the node when it was just asked (else the last mirror's rows).
+    let (max_servers, solo) = match &meta {
+        Some(m) => (Some(m.max_servers), Some(m.solo)),
+        None => (None, None),
+    };
+    Ok(json!({"node": node.name, "role": "owner", "shared": node.shared, "maxServers": max_servers, "solo": solo,
+        "servers": list, "requests": pending, "note": note}))
 }
 
 fn limits_from(v: &Value) -> R<pshare::ShareOverrides> {

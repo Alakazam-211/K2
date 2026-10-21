@@ -222,6 +222,7 @@ pub mod compute_routes;
 /// App runtime stage 1 (prd-k2-app-runtime-v1): `/cli/app/*` routes.
 pub mod apps;
 pub mod compute_shards;
+pub mod compute_tenant_guard;
 pub mod compute_ws;
 // K2 vault (prd-k2-vault-v1): daemon glue + `/cli/vault/*`.
 pub mod vault;

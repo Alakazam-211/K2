@@ -33,6 +33,11 @@ pub struct Tuning {
     pub stall_secs: i64,
     /// The controller's compute ticker period.
     pub tick_millis: u64,
+    /// `--any` (0.46.3, V71): when no node can start the job now, it waits
+    /// on the server this long before it goes into a shared node's queue.
+    pub any_hold_secs: i64,
+    /// Owner side: how often a node's server list is mirrored (§11.2).
+    pub servers_refresh_secs: i64,
 }
 
 impl Default for Tuning {
@@ -48,6 +53,8 @@ impl Default for Tuning {
             queue_timeout_detached_secs: 86_400,
             stall_secs: 1800,
             tick_millis: 5000,
+            any_hold_secs: 60,
+            servers_refresh_secs: 300,
         }
     }
 }
@@ -104,9 +111,13 @@ pub fn retry_elsewhere_only(reason: Option<&str>) -> bool {
     reason.is_some_and(|r| NEEDS_FAILED_REASONS.contains(&r))
 }
 
+/// Ends that are infrastructure (retried) but never the node's fault:
+/// `interrupted/node_update`, a shared node's drained update (V55).
+const NO_STRIKE_REASONS: &[&str] = &[super::proto::share::codes::NODE_UPDATE];
+
 /// Does this end count against the node (quarantine)?
 pub fn counts_against_node(state: JobState, reason: Option<&str>) -> bool {
-    is_infra(state, reason) && !reason.is_some_and(|r| NEEDS_FAILED_REASONS.contains(&r))
+    is_infra(state, reason) && !reason.is_some_and(|r| NEEDS_FAILED_REASONS.contains(&r) || NO_STRIKE_REASONS.contains(&r))
 }
 
 /// Delay before retry number `n` (1-based): base · 2^(n-1), capped, with
@@ -177,6 +188,20 @@ mod tests {
         assert!(!counts_against_node(JobState::Failed, Some("package_not_approved")), "not the node's fault");
         assert!(retry_elsewhere_only(Some("package_missing")) && !retry_elsewhere_only(Some("node_lost")));
         assert!(counts_against_node(JobState::Interrupted, Some("node_lost")));
+        // V55: a shared node's drained update retries, with no strike.
+        assert!(is_infra(JobState::Interrupted, Some("node_update")));
+        assert!(!counts_against_node(JobState::Interrupted, Some("node_update")));
+    }
+
+    #[test]
+    fn node_updates_never_set_a_node_aside() {
+        let t = Tuning { quarantine_after: 2, quarantine_secs: 100, ..Tuning::default() };
+        let mut h = NodeHealth::default();
+        for at in 1..10 {
+            assert!(!h.record(JobState::Interrupted, Some("node_update"), at, &t), "update {at} set the node aside");
+        }
+        assert_eq!(h.consecutive, 0);
+        assert!(!h.is_set_aside(10));
     }
 
     #[test]

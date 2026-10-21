@@ -25,7 +25,9 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use k2_core::compute::proto::frames::{Blob, Control, JobLimits, JobState, Plan, Src};
+use k2_core::compute::proto::share as pshare;
 use k2_core::compute::proto::{crypto, env as penv, needs, pairing, results};
+use k2_core::compute::share::{self, pending};
 use k2_core::compute::{self as compute, codes, logs, scheduler, store};
 use k2_core::connect_users::Role;
 
@@ -80,7 +82,13 @@ pub const ROUTES: &[&str] = &[
     "/cli/compute/nodes/retire",
     "/cli/compute/nodes/rollback",
     "/cli/compute/nodes/routes",
+    "/cli/compute/nodes/servers",
+    "/cli/compute/nodes/servers/add",
+    "/cli/compute/nodes/servers/limits",
+    "/cli/compute/nodes/servers/pause",
+    "/cli/compute/nodes/servers/revoke",
     "/cli/compute/nodes/update",
+    "/cli/compute/queue",
     "/cli/compute/run",
     "/cli/compute/usage",
 ];
@@ -112,6 +120,10 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/compute/nodes/retire",
     "/cli/compute/nodes/rollback",
     "/cli/compute/nodes/routes",
+    "/cli/compute/nodes/servers/add",
+    "/cli/compute/nodes/servers/limits",
+    "/cli/compute/nodes/servers/pause",
+    "/cli/compute/nodes/servers/revoke",
     "/cli/compute/nodes/update",
     "/cli/compute/run",
 ];
@@ -538,9 +550,11 @@ pub fn handle_from(path: &str, who: Who, body: &[u8], params: &HashMap<String, S
         "/cli/compute/local/policy" => local_policy(&who, body),
         "/cli/compute/local/enable" => local_enable(&who, body),
         "/cli/compute/local/disable" => local_disable(&who, body),
+        // Node sharing (prd-compute-shared-queue-v1 §9).
+        "/cli/compute/queue" => queue(&who, params),
         // Node admin (prd-k2-node-admin-v1): approvals, policy, update,
-        // health, alerts.
-        p if crate::compute_admin::is_route(p) => crate::compute_admin::handle(p, &who, body, params),
+        // health, alerts; and a shared node's servers.
+        p if crate::compute_admin::is_route(p) => crate::compute_admin::handle(p, &who, body, params, mgr),
         _ => Err(no("not_found", 404, "no such compute route")),
     };
     match r {
@@ -591,7 +605,39 @@ fn node_json(n: &store::NodeRow, show_sas: bool) -> serde_json::Value {
         // Infra failures in a row: `--any` skips it until then.
         v["setAsideUntil"] = u.into();
     }
+    // Node sharing (protocol 3): only for shared nodes and tenants, so a
+    // solo node's JSON is unchanged.
+    if let Some(s) = share_json(n) {
+        v["share"] = s;
+        v["role"] = n.role.clone().into();
+    }
     v
+}
+
+/// What `nodes`/`info` show about a shared node (§4.2, §9): who shares it,
+/// how many servers, the end date and this server's share.
+fn share_json(n: &store::NodeRow) -> Option<serde_json::Value> {
+    if !n.shared && !n.is_tenant() {
+        return None;
+    }
+    let v = n.share.as_ref();
+    let now = compute::now();
+    let expires_at = v.and_then(|v| v.expires_in_secs).zip(n.share_at).map(|(left, at)| at + left);
+    Some(serde_json::json!({
+        "shared": n.shared,
+        "role": n.role,
+        "ownerLabel": n.owner_label,
+        "servers": v.map(|v| v.servers),
+        "state": v.map(|v| v.state.as_str()),
+        "expiresAt": expires_at,
+        "expiresInSecs": expires_at.map(|e| (e - now).max(0)),
+        "limits": v.map(|v| &v.limits),
+        "running": v.map(|v| v.running),
+        "queued": v.map(|v| v.queued),
+        "cpuSecsToday": v.map(|v| v.cpu_secs_today),
+        "line": v.map(share::share_line),
+        "at": n.share_at,
+    }))
 }
 
 fn granted_node_ids(ws: &str) -> Vec<String> {
@@ -1614,6 +1660,31 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
             ));
         }
     }
+    // Node sharing (protocol 3): the class from facts (§7 rule 3), and on a
+    // shared node this server's share is checked here first (exit 3; the
+    // node checks again at assign). A solo node takes today's path.
+    let live_offer = compute_ws::live_view(&node.id).2.or_else(|| node.last_offer.clone());
+    let queue_node = live_offer.as_ref().is_some_and(share::queue_on);
+    let shard_of = opts.shard.as_ref().map(|s| s.of);
+    let shared_view = live_offer.as_ref().filter(|o| share::is_shared(o)).and_then(|o| o.share.clone());
+    let class = match &shared_view {
+        Some(view) => {
+            let class = share::clamp_class(&view.limits, share::class_for(b(&v, "gate") == Some(true), detach, shard_of, false));
+            let ask = share::ShareAsk { cpu_millis, mem_bytes, max_secs: timeout as u64, exclusive: want.exclusive, class };
+            if let Some((code, msg)) = share::share_refusal(&view.limits, &ask) {
+                return Err(no(code, 409, format!("'{}': {msg} (k2 compute nodes shows your share)", node.name)));
+            }
+            class
+        }
+        // `--gate` means something only on a shared node.
+        None => share::class_for(false, detach, shard_of, false),
+    };
+    let est = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::median_p90(&store::recent_durations(&conn, &ws.id, &argv, Some(&node.id), 20))
+            .or_else(|| store::median_p90(&store::recent_durations(&conn, &ws.id, &argv, None, 20)))
+    };
     let disk_gb = grant.as_ref().map(|g| g.max_disk_gb).unwrap_or(compute::DEFAULT_MAX_DISK_GB);
     if opts.dry {
         let probe_ctl = store::JobCtl { stall_secs: stall, ..Default::default() };
@@ -1632,6 +1703,8 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
             needs: &needs,
             artifacts: &artifacts,
             warnings: &warnings,
+            class,
+            shared: shared_view.as_ref(),
         });
         return Ok(Submitted { job: None, warnings, source: None, preview: Some(preview) });
     }
@@ -1657,11 +1730,12 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     };
     let stall_secs = crate::compute_place::stall_for(&ctl, &node_features(&node), timeout as u64);
     let plan = Plan {
-        class: None,
-        session_id: None,
-        est_secs: None,
-        est_p90_secs: None,
-        ws_max_running: None,
+        // Protocol 3 fields only to nodes offering `queue` (§10.2).
+        class: queue_node.then_some(class),
+        session_id: opts.session.clone().filter(|_| queue_node),
+        est_secs: est.filter(|_| queue_node).map(|(m, _)| m.max(0) as u64),
+        est_p90_secs: est.filter(|_| queue_node).map(|(_, p)| p.max(0) as u64),
+        ws_max_running: queue_node.then(|| grant.as_ref().map(|g| g.max_parallel.max(1) as u32).unwrap_or(1)),
         job_id: job_id.clone(),
         node_id: node.id.clone(),
         workspace_id: ws.id.clone(),
@@ -1701,6 +1775,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
             },
         )
         .map_err(|e| no("internal", 500, e))?;
+        store::set_job_queue_facts(&conn, &j.id, class.as_str(), est.map(|(m, _)| m)).map_err(|e| no("internal", 500, e))?;
         store::record_event(
             &conn,
             &who.label(),
@@ -1740,6 +1815,9 @@ struct PlanFacts<'a> {
     needs: &'a [String],
     artifacts: &'a [String],
     warnings: &'a [String],
+    class: pshare::JobClass,
+    /// This server's share, when the node is shared.
+    shared: Option<&'a pshare::ShareView>,
 }
 
 /// `--plan`: the node it would pick and whether it starts now, the queue
@@ -1790,7 +1868,7 @@ fn plan_preview(f: &PlanFacts<'_>) -> serde_json::Value {
     } else {
         store::median_p90(&anywhere).map(|(m, p)| serde_json::json!({"medianSecs": m, "p90Secs": p, "samples": anywhere.len(), "basis": "this command on any node"}))
     };
-    serde_json::json!({
+    let mut out = serde_json::json!({
         "plan": true,
         "node": n.name,
         "nodeId": n.id,
@@ -1809,7 +1887,34 @@ fn plan_preview(f: &PlanFacts<'_>) -> serde_json::Value {
         "needs": f.needs,
         "artifacts": f.artifacts,
         "warnings": f.warnings,
-    })
+    });
+    // A shared node (§6 `--plan`): who owns it, this server's share and
+    // the node's quote for this ask. Absent on solo nodes.
+    if let Some(view) = f.shared {
+        let q = share::quote_for(view, f.want.cpu_millis, f.want.mem_bytes);
+        out["shared"] = true.into();
+        out["owner"] = view.owner_label.clone().unwrap_or_else(compute_ws::controller_label).into();
+        out["class"] = f.class.as_str().into();
+        out["yourShare"] = serde_json::json!({
+            "role": view.role.as_str(),
+            "state": view.state.as_str(),
+            "servers": view.servers,
+            "limits": view.limits,
+            "running": view.running,
+            "queued": view.queued,
+            "cpuSecsToday": view.cpu_secs_today,
+            "expiresInSecs": view.expires_in_secs,
+            "line": share::share_line(view),
+        });
+        out["quote"] = serde_json::json!({
+            "startsNow": share::starts_now(view, f.want.cpu_millis, f.want.mem_bytes),
+            "etaSecs": q.and_then(|q| q.eta_secs),
+            "etaP90Secs": q.and_then(|q| q.eta_p90_secs),
+            "blockedBy": q.and_then(|q| q.blocked_by.clone()),
+            "quoted": q.is_some(),
+        });
+    }
+    out
 }
 
 /// `--timeout` over the grant's (or the default) time per job.
@@ -2028,16 +2133,46 @@ fn job_summary(j: &store::JobRow) -> serde_json::Value {
     };
     let mut v = serde_json::to_value(j).unwrap_or_default();
     v["short"] = compute::message::short(&j.id).into();
-    v["node"] = node.into();
     v["workspace"] = ws_handle(&j.workspace_id).into();
+    if j.node_queued {
+        // In a shared node's queue: shown as queued, at the node's place.
+        v["state"] = "queued".into();
+        v["nodeQueued"] = true.into();
+        v["class"] = j.class.clone().into();
+        v["queue"] = node_queue_json(j, node.as_deref());
+    }
+    v["node"] = node.into();
     v
+}
+
+/// The queue line of a job waiting in a shared node's queue (§4.2):
+/// `queued on k2n2-m1, position 2, ETA ~6m (fair share: …)`.
+fn node_queue_json(j: &store::JobRow, node: Option<&str>) -> serde_json::Value {
+    let node = node.unwrap_or("the node");
+    let pos = j.node_pos.map(|p| format!(", position {p}")).unwrap_or_default();
+    let eta = j.node_eta_secs.map(|e| format!(", ETA {}", share::human_eta(e.max(0) as u64))).unwrap_or_default();
+    let why = j.node_blocked_by.as_deref().map(|b| format!(" ({})", share::blocked_words(b))).unwrap_or_default();
+    let reason = match j.reason.as_deref() {
+        Some(r) if pending::any(Some(r)) || r == "cancel_requested" => r.to_string(),
+        _ => pshare::codes::NODE_QUEUED.to_string(),
+    };
+    serde_json::json!({
+        "onNode": true,
+        "position": j.node_pos,
+        "etaSecs": j.node_eta_secs,
+        "etaP90Secs": j.node_eta_p90_secs,
+        "blockedBy": j.node_blocked_by,
+        "reason": reason,
+        "message": format!("queued on {node}{pos}{eta}{why}"),
+        "seenAt": j.node_seen_at,
+    })
 }
 
 /// One job as another job's queue view (or `status`) shows it. `viewer` =
 /// the caller's passport: it sees ids and commands only for its own
 /// workspace; other workspaces' jobs carry state and age only.
 fn job_entry(viewer: Option<(&str, &str)>, r: &store::JobRow, decision: &scheduler::Decision, now: i64) -> serde_json::Value {
-    let mut e = serde_json::json!({"state": r.state, "ageSecs": (now - r.created_at).max(0)});
+    let mut e = serde_json::json!({"state": if r.node_queued { "queued" } else { r.state.as_str() }, "ageSecs": (now - r.created_at).max(0)});
     if viewer.is_none_or(|(ws, _)| ws == r.workspace_id) {
         let mut argv = r.argv.join(" ");
         if argv.chars().count() > 80 {
@@ -2118,6 +2253,109 @@ fn job_for(who: &Who, token: Option<&str>) -> R<store::JobRow> {
     Ok(j)
 }
 
+/// How long `queue` waits for a node's `queue_view`.
+const QUEUE_WAIT: Duration = Duration::from_secs(10);
+
+/// `GET /cli/compute/queue?node=N` (`k2 compute queue <node>`, §7, §9):
+/// a shared node's whole queue as this server may see it. Other servers'
+/// entries carry only class, state, size and ETA (the node redacts them;
+/// the owner server also sees their labels and totals). This server's own
+/// entries get their short id and command, and a passport sees those only
+/// for its own workspace. A solo node (unshared, or without a queue): this
+/// server's own running and queued jobs there, as today.
+fn queue(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
+    need_credential(who)?;
+    let n = node_or_404(params.get("node").map(String::as_str))?;
+    node_visible(who, &n)?;
+    let viewer = who.passport();
+    let now = compute::now();
+    let (online, _, live) = compute_ws::live_view(&n.id);
+    let own_entry = |r: &store::JobRow, e: &mut serde_json::Value| {
+        if viewer.is_none_or(|(ws, _)| ws == r.workspace_id) {
+            let mut argv = r.argv.join(" ");
+            if argv.chars().count() > 80 {
+                argv = argv.chars().take(79).collect::<String>() + "…";
+            }
+            e["short"] = compute::message::short(&r.id).into();
+            e["workspace"] = ws_handle(&r.workspace_id).into();
+            e["argv"] = argv.into();
+            e["mySession"] = viewer.is_some_and(|(_, sid)| r.session_id.as_deref() == Some(sid)).into();
+        } else {
+            // Another workspace on this server: state and size only.
+            e["otherWorkspace"] = true.into();
+        }
+    };
+    if online && live.as_ref().is_some_and(share::is_shared) {
+        let view = compute_ws::queue_get(&n.id, QUEUE_WAIT).map_err(|(code, hint)| match code {
+            c if c == codes::NODE_OFFLINE => no(codes::NODE_OFFLINE, 409, format!("{} is offline: {hint}", n.name)),
+            _ => no("queue_timeout", 504, format!("{}: {hint}", n.name)),
+        })?;
+        let entries: Vec<serde_json::Value> = view
+            .entries
+            .iter()
+            .map(|q| {
+                let mut e = serde_json::json!({
+                    "pos": q.pos,
+                    "mine": q.mine,
+                    "class": q.class.as_str(),
+                    "state": q.state.as_str(),
+                    "cpuMillis": q.cpu_millis,
+                    "memBytes": q.mem_bytes,
+                    "etaSecs": q.eta_secs,
+                    "etaP90Secs": q.eta_p90_secs,
+                    "blockedBy": q.blocked_by,
+                    "server": if q.mine { None } else { q.server_label.clone() },
+                });
+                if let Some(id) = q.job_id.as_deref().filter(|_| q.mine) {
+                    let row = {
+                        let db = k2_core::db::shared();
+                        let conn = db.lock();
+                        store::job_by_id(&conn, id)
+                    };
+                    match row.filter(|r| r.node_id == n.id) {
+                        Some(r) => own_entry(&r, &mut e),
+                        None => e["otherWorkspace"] = true.into(),
+                    }
+                }
+                e
+            })
+            .collect();
+        let totals: Vec<serde_json::Value> = view
+            .totals
+            .iter()
+            .map(|t| serde_json::json!({"slot": t.slot, "label": t.label, "running": t.running, "queued": t.queued, "cpuSecsToday": t.cpu_secs_today}))
+            .collect();
+        return Ok(serde_json::json!({"node": n.name, "shared": n.shared, "from": "node", "at": view.at, "entries": entries, "totals": totals}));
+    }
+    // This server's own view of the node.
+    let decision = compute_ws::decision_for(&n.id);
+    let (active, queued) = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        (store::jobs_in_states(&conn, &n.id, store::ACTIVE_STATES), store::jobs_in_states(&conn, &n.id, &["queued"]))
+    };
+    let mut entries = Vec::new();
+    for r in &active {
+        let mut e = serde_json::json!({"mine": true, "class": r.class, "state": r.state, "elapsedSecs": r.started_at.or(r.assigned_at).map(|t| (now - t).max(0))});
+        own_entry(r, &mut e);
+        entries.push(e);
+    }
+    let mut waiting: Vec<(usize, &store::JobRow)> = queued.iter().map(|r| (decision.waiting.get(&r.id).map(|(p, _)| *p).unwrap_or(usize::MAX), r)).collect();
+    waiting.sort_by_key(|(p, _)| *p);
+    for (_, r) in waiting {
+        let mut e = serde_json::json!({"mine": true, "class": r.class, "state": "queued", "ageSecs": (now - r.created_at).max(0)});
+        if let Some((_, w)) = decision.waiting.get(&r.id) {
+            e["blockedBy"] = w.code.clone().into();
+        }
+        own_entry(r, &mut e);
+        entries.push(e);
+    }
+    for (i, e) in entries.iter_mut().enumerate() {
+        e["pos"] = (i + 1).into();
+    }
+    Ok(serde_json::json!({"node": n.name, "shared": false, "from": "server", "online": online, "entries": entries}))
+}
+
 fn jobs_list(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
     need_credential(who)?;
     let gate = passport_gate(who)?;
@@ -2182,7 +2420,11 @@ type WaitPrint = (String, Option<String>, i64, Option<usize>);
 /// any of its shards' does, so its CLI can print one line per shard change.
 fn wait_fingerprint(j: &store::JobRow) -> (WaitPrint, Vec<WaitPrint>) {
     let one = |j: &store::JobRow| -> WaitPrint {
-        let position = (j.state == "queued").then(|| compute_ws::decision_for(&j.node_id).waiting.get(&j.id).map(|(p, _)| *p)).flatten();
+        let position = if j.node_queued {
+            j.node_pos.map(|p| p.max(0) as usize)
+        } else {
+            (j.state == "queued").then(|| compute_ws::decision_for(&j.node_id).waiting.get(&j.id).map(|(p, _)| *p)).flatten()
+        };
         (j.state.clone(), j.reason.clone(), j.generation, position)
     };
     let kids = if j.ctl.shards.is_empty() {
@@ -2641,6 +2883,9 @@ fn cancel_one(who: &Who, seen: &store::JobRow, queued_only: bool) -> R<serde_jso
     enum Done {
         Queued,
         Sent(store::JobRow, bool),
+        /// A shared node holds it in its queue: asked to cancel it only if
+        /// it hasn't started (V57); it ends `cancelled` or `job_started`.
+        Asked(bool),
     }
     let done = compute_ws::with_kick_lock(|| -> R<Done> {
         let db = k2_core::db::shared();
@@ -2662,6 +2907,23 @@ fn cancel_one(who: &Who, seen: &store::JobRow, queued_only: bool) -> R<serde_jso
             return Ok(Done::Queued);
         }
         let j = store::job_by_id(&conn, &seen.id).ok_or_else(|| no(codes::JOB_NOT_FOUND, 404, format!("no job '{short}'")))?;
+        if queued_only && j.node_queued && j.reason.as_deref() != Some("cancel_requested") {
+            // V57: the node answers its real state; a started job is never
+            // touched without --force.
+            let sent = j.reason.as_deref() == Some(pending::CANCEL)
+                || compute_ws::send_cancel_if_not_started(&j.node_id, &j.id, j.generation, k2_core::compute::proto::frames::CANCEL_IF_QUEUED);
+            store::set_job_reason(&conn, &j.id, Some(pending::CANCEL), None);
+            store::record_event(
+                &conn,
+                &by,
+                "job_cancel",
+                Some(&j.node_id),
+                Some(&j.workspace_id),
+                Some(&j.id),
+                serde_json::json!({"state": "queued", "onNode": true, "sent": sent, "by": by, "force": false}),
+            );
+            return Ok(Done::Asked(sent));
+        }
         if queued_only {
             let since = j.started_at.or(j.assigned_at).map(|t| compute::message::duration(compute::now() - t));
             return Err(no(
@@ -2698,6 +2960,12 @@ fn cancel_one(who: &Who, seen: &store::JobRow, queued_only: bool) -> R<serde_jso
             let ran = j.started_at.or(j.assigned_at).map(|t| compute::now() - t);
             Ok(serde_json::json!({"ok": true, "state": j.state, "was": j.state, "node": node_name, "by": by,
                 "ranSecs": ran, "cancel": if sent { "sent" } else { "delivered when the node reconnects" }}))
+        }
+        Done::Asked(sent) => {
+            compute_ws::notify_change();
+            Ok(serde_json::json!({"ok": true, "state": "cancel_requested", "was": "queued", "onNode": true, "node": node_name, "by": by,
+                "cancel": if sent { "asked the node (only if it hasn't started)" } else { "asked when the node reconnects" },
+                "note": format!("it ends cancelled, or keeps running if it just started (job_started); k2 compute get {short}")}))
         }
     }
 }

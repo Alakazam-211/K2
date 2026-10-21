@@ -82,12 +82,12 @@ fn agent_of(ws: &str) -> Who {
 }
 
 fn call(path: &str, who: &Who, body: Value) -> Result<Value, (u16, String)> {
-    handle(path, who, body.to_string().as_bytes(), &HashMap::new()).map_err(|e| (e.status, e.code.to_string()))
+    handle(path, who, body.to_string().as_bytes(), &HashMap::new(), None).map_err(|e| (e.status, e.code.to_string()))
 }
 
 fn get(path: &str, who: &Who, params: &[(&str, &str)]) -> Result<Value, (u16, String)> {
     let p: HashMap<String, String> = params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
-    handle(path, who, b"", &p).map_err(|e| (e.status, e.code.to_string()))
+    handle(path, who, b"", &p, None).map_err(|e| (e.status, e.code.to_string()))
 }
 
 fn token_for(req: &str) -> String {
@@ -609,4 +609,111 @@ fn route_tables_guard_every_admin_route() {
     }
     assert!(!crate::session_token::is_agent_verb(APPROVE));
     assert!(!crate::session_token::is_agent_verb(DENY));
+}
+
+// ── node sharing: the servers verbs (prd-compute-shared-queue-v1 §9) ──
+
+/// A fake node answering every admin command until it sees `until`:
+/// `servers.list` with `list`, everything else `done`. Returns the verbs.
+fn answer_servers(node: String, list: Value, until: &'static str) -> std::thread::JoinHandle<Vec<String>> {
+    std::thread::spawn(move || {
+        let mut seen = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline {
+            for c in admin_cmds(test_seams::take_sent(&node)) {
+                let body = crypto::unb64(&c.body_b64).unwrap();
+                let cmd: wire::Command = serde_json::from_slice(&body).unwrap();
+                seen.push(cmd.verb.clone());
+                let out = if cmd.verb == "servers.list" { json!({"servers": list}) } else { json!({}) };
+                assert!(super::wait_deliver(&result(&cmd.cmd_id, "done", None, None, out)), "a route waits for {}", cmd.verb);
+                if cmd.verb == until {
+                    return seen;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        seen
+    })
+}
+
+fn servers_listed() -> Value {
+    let owner = serde_json::to_value(pshare::ShareLimits::owner(2, 8, 16, 100, pshare::Network::On)).unwrap();
+    let tenant = serde_json::to_value(pshare::ShareLimits::new_server(pshare::Trust::Own, true)).unwrap();
+    json!([
+        {"slot": 0, "label": "rosson.k2.dev", "state": "active", "trust": "own", "limits": owner},
+        {"slot": 1, "label": "z3thon.k2.dev", "state": "active", "trust": "own", "fp_prefix": "0123456789abcdef", "limits": tenant, "running": 0, "queued": 0},
+    ])
+}
+
+/// §4.1, §4.3, §9: an add is always held and goes out owner-signed once
+/// approved; narrowing goes at once, widening is held; pause at once;
+/// revoke is the owner's. Every act audited; the mirror notes the add.
+#[test]
+fn servers_add_limits_pause_and_revoke() {
+    let f = fx("servers", true);
+    test_seams::register(&f.node, true, &[wire::FEATURE_ADMIN, wire::FEATURE_HEALTH, frames::FEATURE_JOB_WALL, pshare::FEATURE_SERVERS]);
+    {
+        let h = k2_core::db::shared();
+        cadmin::set_setting(&h.lock(), cadmin::ALERTS_TO, Some(&f.ws), "owner", 1).unwrap();
+    }
+    // A Mac takes only your own servers in 0.46.3.
+    let e = call(SERVERS_ADD, &agent(&f), json!({"node": f.node_name, "url": "https://z3thon.k2.dev", "code": "ABCDE-FGHJK.0123456789abcdef", "trust": "team"})).unwrap_err();
+    assert_eq!(e, (409, pshare::codes::TEAM_NEEDS_TENANT_WALL.to_string()));
+    let r = call(SERVERS_ADD, &agent(&f), json!({"node": f.node_name, "url": "https://z3thon.k2.dev", "code": "ABCDE-FGHJK.0123456789abcdef", "trust": "own"})).unwrap();
+    assert_eq!((r["held"].as_bool(), r["request"]["class"].as_str()), (Some(true), Some("privileged")), "{r}");
+    assert!(r.get("warning").is_none(), "the team warning is for other people's servers");
+    let binding = k2_core::compute::proto::pairing::code_binding("ABCDEFGHJK");
+    assert!(!r.to_string().contains(&binding), "the binding is never shown");
+    assert!(test_seams::take_sent(&f.node).is_empty(), "nothing goes out while held");
+    let id = r["request"]["id"].as_str().unwrap().to_string();
+    let e = call(SERVERS_ADD, &agent(&f), json!({"node": f.node_name, "url": "https://b.k2.dev", "code": "ABCDE-FGHJK.0123456789abcdef"})).unwrap_err();
+    assert_eq!(e, (409, pshare::codes::SERVER_ADD_PENDING.to_string()), "one add at a time");
+    let r = call(APPROVE, &Who::Owner, json!({"request": id, "confirmToken": token_for(&id)})).unwrap();
+    assert_eq!(r["sent"], true, "{r}");
+    let cmds = admin_cmds(test_seams::take_sent(&f.node));
+    assert_eq!(cmds.len(), 1);
+    let o = node_open(&f, &cmds[0]).expect("the node accepts the owner-signed add");
+    assert_eq!((o.cmd.verb.as_str(), o.cmd.class), ("servers.add", wire::Class::Privileged));
+    let args: pshare::AddArgs = serde_json::from_value(o.cmd.args.clone()).unwrap();
+    assert_eq!((args.code_binding.as_str(), args.fp_prefix.as_str(), args.trust, args.for_secs), (binding.as_str(), "0123456789abcdef", pshare::Trust::Own, None));
+    on_admin_result(&f.node, result(&o.cmd.cmd_id, "done", None, Some(0), json!({})));
+
+    // Narrowing: the list is mirrored first, then sent at once.
+    let responder = answer_servers(f.node.clone(), servers_listed(), "servers.limits");
+    let r = call(SERVERS_LIMITS, &agent(&f), json!({"node": f.node_name, "server": "z3thon.k2.dev", "set": {"max_queued": 5}})).unwrap();
+    assert_eq!(responder.join().unwrap(), vec!["servers.list", "servers.limits"]);
+    assert_eq!(r["class"], "operate", "{r}");
+    let msgs = test_seams::take_messages(&f.ws);
+    assert!(msgs.iter().any(|m| m.contains("is now shared with z3thon.k2.dev")), "{msgs:?}");
+    // Widening: held, nothing sent.
+    let r = call(SERVERS_LIMITS, &agent(&f), json!({"node": f.node_name, "server": "z3thon.k2.dev", "set": {"max_running": 3}})).unwrap();
+    assert_eq!(r["held"], true, "{r}");
+    assert!(test_seams::take_sent(&f.node).is_empty());
+    let e = call(SERVERS_LIMITS, &agent(&f), json!({"node": f.node_name, "server": "nobody.k2.dev", "set": {"max_queued": 1}})).unwrap_err();
+    assert_eq!(e.0, 404);
+    // Pause: at once.
+    let responder = answer_servers(f.node.clone(), servers_listed(), "servers.pause");
+    let r = call(SERVERS_PAUSE, &agent(&f), json!({"node": f.node_name, "server": "z3thon.k2.dev", "action": "pause"})).unwrap();
+    assert_eq!(responder.join().unwrap(), vec!["servers.pause"]);
+    assert_eq!(r["action"], "servers.pause");
+    // Revoke: never an agent; the owner, at once.
+    let e = call(SERVERS_REVOKE, &agent(&f), json!({"node": f.node_name, "server": "z3thon.k2.dev"})).unwrap_err();
+    assert_eq!(e, (403, "owner_only".to_string()));
+    let responder = answer_servers(f.node.clone(), servers_listed(), "servers.revoke");
+    call(SERVERS_REVOKE, &Who::Owner, json!({"node": f.node_name, "server": "z3thon.k2.dev", "now": true})).unwrap();
+    assert_eq!(responder.join().unwrap(), vec!["servers.revoke"]);
+    let e = call(SERVERS_PAUSE, &agent(&f), json!({"node": f.node_name, "server": "slot:0"})).unwrap_err();
+    assert_eq!(e.1, cadmin::codes::BAD_ARGS, "slot 0 is this server");
+    let kinds: Vec<String> = {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        store::events(&conn, 200).into_iter().filter(|e| e.node_id.as_deref() == Some(&f.node)).map(|e| e.kind).collect()
+    };
+    for k in ["server_add", "server_limits", "server_pause", "server_revoke", "share_note"] {
+        assert!(kinds.iter().any(|x| x == k), "missing audit {k}: {kinds:?}");
+    }
+    // A node without `servers`: node_too_old.
+    test_seams::register(&f.node, true, &[wire::FEATURE_ADMIN, frames::FEATURE_JOB_WALL]);
+    let e = call(SERVERS_PAUSE, &agent(&f), json!({"node": f.node_name, "server": "z3thon.k2.dev"})).unwrap_err();
+    assert_eq!(e, (409, pshare::codes::NODE_TOO_OLD.to_string()));
 }

@@ -1460,6 +1460,17 @@ fn run_migrations_through(conn: &Connection, last: Option<&str>) -> Result<()> {
         // 0.46.3 lane; renumber freely on a slip (and edit the
         // migration-order tests below).
         ("0197_agent_app_permissions", include_str!("../../drizzle_sql/0197_agent_app_permissions.sql")),
+        // 0214–0216 — one node, many servers (prd-compute-shared-queue-v1
+        // §11.2; 0.46.3): the server's mirror of its share on each node
+        // (`compute_nodes.role/shared/owner_label/share_json/share_at`), jobs
+        // waiting in a shared node's queue (`compute_jobs.class/est_secs/
+        // node_queued/node_pos/…/withdraws/withdrawn_at`) and, owner side,
+        // the node's server list (`compute_node_servers`). Additive only:
+        // 0201–0213 are held by other 0.46.3 lanes; renumber freely on a
+        // slip (and edit the migration-order tests below).
+        ("0214_compute_node_share", include_str!("../../drizzle_sql/0214_compute_node_share.sql")),
+        ("0215_compute_jobs_node_queue", include_str!("../../drizzle_sql/0215_compute_jobs_node_queue.sql")),
+        ("0216_compute_node_servers", include_str!("../../drizzle_sql/0216_compute_node_servers.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2123,7 +2134,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0197_agent_app_permissions",
+            last_name, "0216_compute_node_servers",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2175,6 +2186,9 @@ mod tests {
                 "0194_compute_manage",
                 "0195_push_device_session",
                 "0197_agent_app_permissions",
+                "0214_compute_node_share",
+                "0215_compute_jobs_node_queue",
+                "0216_compute_node_servers",
             ],
             "tail migrations out of order: {names:?}"
         );

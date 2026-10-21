@@ -45,7 +45,10 @@ use k2_core::compute::{self as compute, codes, store};
 use k2_core::log_debug;
 use serde_json::{json, Value};
 
+use crate::compute_manage::Manager;
 use crate::compute_routes::{json_body, no, node_or_404, owner_only, s, ws_by_token, Who, R};
+use k2_core::compute::proto::share as pshare;
+use k2_core::compute::share;
 
 pub const APPROVAL_KEY: &str = "/cli/compute/admin/approval-key";
 pub const APPROVE: &str = "/cli/compute/admin/approve";
@@ -59,6 +62,13 @@ pub const NODE_POLICY: &str = "/cli/compute/nodes/policy";
 pub const NODE_POLICY_SET: &str = "/cli/compute/nodes/policy/set";
 pub const NODE_ROLLBACK: &str = "/cli/compute/nodes/rollback";
 pub const NODE_UPDATE: &str = "/cli/compute/nodes/update";
+/// Node sharing (prd-compute-shared-queue-v1 §9): the servers on a node
+/// this server owns (`k2 compute node servers <node> …`).
+pub const SERVERS: &str = "/cli/compute/nodes/servers";
+pub const SERVERS_ADD: &str = "/cli/compute/nodes/servers/add";
+pub const SERVERS_LIMITS: &str = "/cli/compute/nodes/servers/limits";
+pub const SERVERS_PAUSE: &str = "/cli/compute/nodes/servers/pause";
+pub const SERVERS_REVOKE: &str = "/cli/compute/nodes/servers/revoke";
 
 /// Every node admin route (also listed in `compute_routes::ROUTES`).
 pub const ROUTES: &[&str] = &[
@@ -74,10 +84,16 @@ pub const ROUTES: &[&str] = &[
     NODE_POLICY_SET,
     NODE_ROLLBACK,
     NODE_UPDATE,
+    SERVERS,
+    SERVERS_ADD,
+    SERVERS_LIMITS,
+    SERVERS_PAUSE,
+    SERVERS_REVOKE,
 ];
 
 /// POST-only (also in `compute_routes::POST_ROUTES`).
-pub const POST_ROUTES: &[&str] = &[APPROVE, DENY, PROPOSE, WITHDRAW, NODE_ALERTS, NODE_POLICY_SET, NODE_ROLLBACK, NODE_UPDATE];
+pub const POST_ROUTES: &[&str] =
+    &[APPROVE, DENY, PROPOSE, WITHDRAW, NODE_ALERTS, NODE_POLICY_SET, NODE_ROLLBACK, NODE_UPDATE, SERVERS_ADD, SERVERS_LIMITS, SERVERS_PAUSE, SERVERS_REVOKE];
 
 /// Passport-reachable (also in `session_token::is_agent_verb`). approve,
 /// deny, alerts and approval-key are NOT here.
@@ -87,8 +103,9 @@ pub fn is_route(p: &str) -> bool {
     ROUTES.contains(&p)
 }
 
-/// Route a node admin request (already past the preview flag).
-pub(crate) fn handle(path: &str, who: &Who, body: &[u8], params: &HashMap<String, String>) -> R<Value> {
+/// Route a node admin request (already past the preview flag). `mgr`: a
+/// local agent under "Allow managing compute nodes" (servers verbs).
+pub(crate) fn handle(path: &str, who: &Who, body: &[u8], params: &HashMap<String, String>, mgr: Option<&Manager>) -> R<Value> {
     match path {
         PROPOSE => propose(who, body),
         REQUESTS => requests(who, params),
@@ -102,6 +119,11 @@ pub(crate) fn handle(path: &str, who: &Who, body: &[u8], params: &HashMap<String
         NODE_ALERTS => alerts(who, body),
         NODE_UPDATE => update(who, body),
         NODE_ROLLBACK => rollback(who, body),
+        SERVERS => servers_list(who, params, mgr),
+        SERVERS_ADD => servers_add(who, body, mgr),
+        SERVERS_LIMITS => servers_limits(who, body, mgr),
+        SERVERS_PAUSE => servers_pause(who, body, mgr),
+        SERVERS_REVOKE => servers_revoke(who, body),
         _ => Err(no("not_found", 404, "no such compute admin route")),
     }
 }
@@ -248,6 +270,7 @@ fn node_admin_ready(node: &store::NodeRow, feature: &str) -> R<()> {
     if node.state != "active" {
         return Err(no(codes::NODE_NOT_FOUND, 404, format!("{} isn't an active node", node.name)));
     }
+    not_tenant(node)?;
     if !online(&node.id) {
         return Err(no(codes::NODE_OFFLINE, 409, format!("{} is offline; try again when it's back (k2 compute node health {})", node.name, node.name)));
     }
@@ -510,6 +533,8 @@ fn classify_body(node_name: &str, kind: &str, body: &Value) -> R<(Class, String)
 }
 
 fn file_request(op: &Operator, node: &store::NodeRow, kind: &str, class: Class, body: &Value, summary: &str, reason: Option<&str>) -> R<Value> {
+    // V52: never queue node admin for a node another server owns.
+    not_tenant(node)?;
     let r = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -553,6 +578,8 @@ fn file_request(op: &Operator, node: &store::NodeRow, kind: &str, class: Class, 
 
 fn request_json(r: &RequestRow, node_name: Option<&str>) -> Value {
     let mut v = serde_json::to_value(r).unwrap_or_default();
+    // V79: an add's enrol-code binding is a credential; never shown.
+    v["body"] = admin::redact_body(&r.body);
     v["node"] = node_name.map(str::to_string).or_else(|| {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -809,6 +836,7 @@ fn policy_set(who: &Who, body: &[u8]) -> R<Value> {
     let op = operator(who)?;
     let v = json_body(body)?;
     let node = node_or_404(s(&v, "node"))?;
+    not_tenant(&node)?;
     let changes = v.get("set").and_then(Value::as_object).cloned().ok_or_else(|| no(acodes::BAD_ARGS, 400, "set must be an object of key=value"))?;
     let args = Value::Object(changes.clone());
     admin::validate_step("policy.set", &args).map_err(|(code, hint)| no(code, 400, hint))?;
@@ -1126,6 +1154,10 @@ pub fn on_admin_result(node_id: &str, r: wire::AdminResult) {
         result["stdoutTail"] = r.stdout_tail.clone().into();
         result["stderrTail"] = r.stderr_tail.clone().into();
         result["result"] = r.result.clone();
+        if req.steps().is_ok_and(|s| s.iter().any(|st| st.verb.starts_with("servers."))) {
+            // A servers.* change landed (or failed): mirror the list again.
+            refresh_servers_soon(node_id);
+        }
         if r.state == "done" && step + 1 < req.cmd_ids.len() {
             admin::set_step_result(&conn, &req.id, &result);
             admin::reopen_for_next(&conn, &req.id);
@@ -1292,7 +1324,17 @@ fn update(who: &Who, body: &[u8]) -> R<Value> {
         admin::set_update(&conn, &node.id, &state);
     }
     crate::compute_routes::audit(who, "update_offered", Some(&node.id), None, None, json!({"version": build.version, "cmdId": cmd.cmd_id, "sha256": build.sha256}));
-    Ok(json!({"ok": true, "node": node.name, "update": state, "note": "the node verifies, swaps, and rolls back by itself if the new build doesn't come back healthy in 120 s"}))
+    // V55: a shared node finishes every server's running jobs first.
+    let shared = node.shared;
+    if shared {
+        crate::compute_routes::audit(who, "node_update_drain", Some(&node.id), None, None, json!({"version": build.version}));
+    }
+    let note = if shared {
+        "the node is shared: it takes no new jobs and waits for running ones to finish (up to 30 min) before it swaps; it rolls back by itself if the new build doesn't come back healthy in 120 s"
+    } else {
+        "the node verifies, swaps, and rolls back by itself if the new build doesn't come back healthy in 120 s"
+    };
+    Ok(json!({"ok": true, "node": node.name, "update": state, "shared": shared, "note": note}))
 }
 
 fn b_true(v: &Value, k: &str) -> bool {
@@ -1451,15 +1493,512 @@ fn watch_pass() {
     }
 }
 
-/// Start the 60 s watch (boot). Runs with no client attached.
+/// Start the 60 s watch (boot). Runs with no client attached. It also
+/// starts the compute ticker at boot (V77).
 pub fn spawn_watch() {
     tokio::spawn(async {
         let mut tick = tokio::time::interval(Duration::from_secs(60));
         loop {
             tick.tick().await;
+            crate::compute_ws::ensure_ticker_at_boot();
             let _ = tokio::task::spawn_blocking(watch_once).await;
         }
     });
+}
+
+// ── shared nodes: the servers on a node (prd-compute-shared-queue-v1) ─
+
+/// `not_node_owner`: another server owns this node (V52). Its admin,
+/// updates, health and server list are that server's.
+fn not_tenant(node: &store::NodeRow) -> R<()> {
+    if node.is_tenant() {
+        return Err(no(
+            pshare::codes::NOT_NODE_OWNER,
+            403,
+            format!(
+                "{} is shared with this server by {}: its admin, updates and servers are that server's (k2 compute node servers {} shows this server's share)",
+                node.name,
+                node.owner_label.as_deref().unwrap_or("its owner"),
+                node.name
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// An operator ([`operator`]) or a local agent under "Allow managing
+/// compute nodes": may propose an add or a widening, pause, resume and
+/// narrow (§3).
+fn servers_operator(who: &Who, mgr: Option<&Manager>) -> R<Operator> {
+    if let Some(m) = mgr {
+        return Ok(Operator { label: m.label.clone(), workspace: Some(m.project_id.clone()), session: Some(m.session_id.clone()) });
+    }
+    operator(who)
+}
+
+/// The node takes servers (`servers` feature, 0.46.3+), and is ours.
+fn servers_ready(node: &store::NodeRow) -> R<()> {
+    node_admin_ready(node, wire::FEATURE_ADMIN)?;
+    if !features(&node.id).iter().any(|f| f == pshare::FEATURE_SERVERS) {
+        return Err(no(
+            pshare::codes::NODE_TOO_OLD,
+            409,
+            format!("{} runs a k2-node older than 0.46.3 and can't take a second server: update {} first (k2 compute node update {})", node.name, node.name, node.name),
+        ));
+    }
+    Ok(())
+}
+
+static SERVERS_REFRESHING: Mutex<Option<std::collections::HashSet<String>>> = Mutex::new(None);
+
+/// Mirror the node's server list now (blocking, up to [`ANSWER_WAIT`]).
+/// Owner side only. Audits and notes the changes it sees.
+fn refresh_servers(node: &store::NodeRow) -> R<Vec<share::ServerRow>> {
+    servers_ready(node)?;
+    let (_, r) = send_direct(&Who::Owner, node, Class::Read, pshare::VERB_LIST, &json!({}), Some(ANSWER_WAIT))?;
+    let Some(r) = r else {
+        return Err(no("node_timeout", 504, format!("{} didn't answer servers.list in time; try again", node.name)));
+    };
+    if r.state != "done" {
+        return Err(no("node_refused", 409, format!("{} refused servers.list: {}", node.name, r.message.as_deref().or(r.code.as_deref()).unwrap_or("?"))));
+    }
+    let rows = share::parse_servers_list(&r.result).map_err(|e| no("node_answer", 502, e))?;
+    let now = compute::now();
+    let notes = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let before = store::node_servers(&conn, &node.id);
+        store::replace_node_servers(&conn, &node.id, &rows, now).map_err(|e| no("store", 500, e))?;
+        server_changes(&conn, node, &before, &rows)
+    };
+    for (key, text) in notes {
+        share_note(&node.id, &key, &text);
+    }
+    Ok(rows)
+}
+
+/// Audit lines and notes for what changed between two server lists.
+fn server_changes(conn: &rusqlite::Connection, node: &store::NodeRow, before: &[share::ServerRow], after: &[share::ServerRow]) -> Vec<(String, String)> {
+    let mut notes = Vec::new();
+    for a in after.iter().filter(|a| a.slot != pshare::OWNER_SLOT) {
+        let was = before.iter().find(|b| b.slot == a.slot && b.label == a.label).map(|b| b.state.as_str());
+        if was == Some(a.state.as_str()) {
+            continue;
+        }
+        let kind = match a.state.as_str() {
+            "active" if was == Some("pending") => "server_confirm",
+            "active" | "pending" if was.is_none() => "server_add",
+            "expired" => "share_expired",
+            "revoked" => "server_revoke",
+            "paused" | "active" => "server_pause",
+            _ => "server_state",
+        };
+        store::record_event(conn, "node", kind, Some(&node.id), None, None, json!({"server": a.label, "slot": a.slot, "from": was, "to": a.state}));
+        if a.state == "active" && matches!(was, None | Some("pending")) {
+            let until = a.expires_at.map(|e| format!(" until {}", clock_day(e))).unwrap_or_default();
+            notes.push((format!("shared:{}:{}", a.slot, a.label), format!("{} is now shared with {}{until}.", node.name, a.label)));
+        }
+        if a.state == "expired" {
+            notes.push((format!("expired:{}:{}", a.slot, a.label), format!("{}: {}'s share has ended.", node.name, a.label)));
+        }
+        if a.state == "refused" {
+            let why = a.usage.as_ref().and_then(|u| u.get("refusal")).and_then(Value::as_str).unwrap_or("refused");
+            notes.push((format!("refused:{}:{}", a.slot, a.label), format!("{}: {} was approved but its attach is refused ({why}); it must update to 0.46.3.", node.name, a.label)));
+        }
+    }
+    notes
+}
+
+fn clock_day(at: i64) -> String {
+    chrono::DateTime::from_timestamp(at, 0).map(|d| d.format("%b %-d").to_string()).unwrap_or_default()
+}
+
+/// Refresh a node's server list on a worker thread (at most one at a time
+/// per node). Used after a `servers.*` change and by the ticker.
+pub fn refresh_servers_soon(node_id: &str) {
+    {
+        let mut g = SERVERS_REFRESHING.lock().unwrap_or_else(|p| p.into_inner());
+        if !g.get_or_insert_with(Default::default).insert(node_id.to_string()) {
+            return;
+        }
+    }
+    let id = node_id.to_string();
+    std::thread::spawn(move || {
+        let node = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            store::node_by_id(&conn, &id)
+        };
+        if let Some(n) = node {
+            if let Err(e) = refresh_servers(&n) {
+                log_debug!("[compute] servers.list on {}: {} {}", n.name, e.code, e.hint);
+            }
+        }
+        if let Some(s) = SERVERS_REFRESHING.lock().unwrap_or_else(|p| p.into_inner()).as_mut() {
+            s.remove(&id);
+        }
+    });
+}
+
+/// The compute ticker (headless, §12): mirror each owned node's server
+/// list every `servers_refresh_secs`, and note shares ending in 24 h or
+/// ended (owner side).
+pub fn servers_tick(now: i64) {
+    let t = compute::retry::tuning();
+    let (nodes, mirrors) = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let nodes: Vec<store::NodeRow> = store::list_nodes(&conn, false).into_iter().filter(|n| n.state == "active" && !n.is_tenant()).collect();
+        let mirrors: Vec<(String, Option<i64>, Vec<share::ServerRow>)> =
+            nodes.iter().map(|n| (n.id.clone(), store::node_servers_seen_at(&conn, &n.id), store::node_servers(&conn, &n.id))).collect();
+        (nodes, mirrors)
+    };
+    for (n, (_, seen, rows)) in nodes.iter().zip(mirrors) {
+        let able = online(&n.id) && features(&n.id).iter().any(|f| f == pshare::FEATURE_SERVERS) && features(&n.id).iter().any(|f| f == wire::FEATURE_ADMIN);
+        // Solo nodes stay as they were: nothing to mirror until a second
+        // server is on the list, the node says it's shared, or an add is open.
+        let adding = || {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            admin::list_requests(&conn, &admin::ReqFilter { node_id: Some(&n.id), state: Some("open"), limit: 50, ..Default::default() })
+                .iter()
+                .any(|r| r.steps().is_ok_and(|s| s.iter().any(|st| st.verb.starts_with("servers."))))
+        };
+        let shared = n.shared || rows.iter().any(|r| r.slot != pshare::OWNER_SLOT);
+        if able && seen.is_none_or(|s| now - s >= t.servers_refresh_secs) && (shared || adding()) {
+            refresh_servers_soon(&n.id);
+        }
+        for r in rows.iter().filter(|r| r.slot != pshare::OWNER_SLOT && r.state == "active") {
+            let Some(ends) = r.expires_at else { continue };
+            if ends > now && ends - now <= share::EXPIRY_NOTE_SECS {
+                share_note(&n.id, &format!("expiring:{}:{}:{ends}", r.slot, r.label), &format!("{}: {}'s share ends {} (in under 24 h).", n.name, r.label, clock_day(ends)));
+            }
+        }
+    }
+}
+
+/// A sharing note to the "alerts go to" workspace, once per `key` per
+/// node (audited as `share_note`). Both servers get one for an add, an
+/// end date coming up, an end, a pause or a revoke (§4.1, §4.3).
+pub fn share_note(node_id: &str, key: &str, text: &str) {
+    let to = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let seen: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM compute_events WHERE kind = 'share_note' AND node_id = ?1 AND json_extract(detail_json, '$.key') = ?2",
+                rusqlite::params![node_id, key],
+                |r| r.get(0),
+            )
+            .unwrap_or(false);
+        if seen {
+            return;
+        }
+        let to = admin::setting(&conn, admin::ALERTS_TO);
+        store::record_event(&conn, "controller", "share_note", Some(node_id), to.as_deref(), None, json!({"key": key, "text": text}));
+        to
+    };
+    k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SyncSettings, json!({"compute": "share", "text": text}));
+    if let Some(ws) = to {
+        deliver(Some(&ws), None, "compute node sharing", &format!("[k2 compute] {text}"));
+    }
+}
+
+/// The share as JSON for the CLI (`servers` list rows, `nodes`).
+fn server_json(r: &share::ServerRow, now: i64) -> Value {
+    let mut v = serde_json::to_value(r).unwrap_or_default();
+    v["role"] = if r.slot == pshare::OWNER_SLOT { "owner" } else { "tenant" }.into();
+    if let Some(e) = r.expires_at {
+        v["expiresInSecs"] = (e - now).into();
+    }
+    if let Some(sas) = r.usage.as_ref().and_then(|u| u.get("sas")).and_then(Value::as_str).filter(|_| r.state == "pending") {
+        v["sas"] = k2_core::compute::proto::pairing::display_sas(sas).into();
+    }
+    v
+}
+
+/// `GET /cli/compute/nodes/servers?node=N[&refresh=1]`: on a node this
+/// server owns, every server (mirrored from `servers.list`, refreshed when
+/// stale); on a node another server owns, this server's own share.
+fn servers_list(who: &Who, params: &HashMap<String, String>, mgr: Option<&Manager>) -> R<Value> {
+    let node = node_or_404(params.get("node").map(String::as_str))?;
+    if mgr.is_none() {
+        reader(who, &node, false)?;
+    }
+    let now = compute::now();
+    if node.is_tenant() {
+        return Ok(json!({
+            "node": node.name,
+            "role": "tenant",
+            "owner": node.owner_label,
+            "shared": node.shared,
+            "share": node.share,
+            "line": node.share.as_ref().map(share::share_line),
+        }));
+    }
+    let want_refresh = params.get("refresh").is_some_and(|x| x == "1" || x == "true");
+    let mut note = None;
+    let stale = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::node_servers_seen_at(&conn, &node.id).is_none_or(|s| now - s >= compute::retry::tuning().servers_refresh_secs)
+    };
+    if want_refresh || stale {
+        match refresh_servers(&node) {
+            Ok(_) => {}
+            // A node without servers (solo, older): just the owner.
+            Err(e) if e.code == pshare::codes::NODE_TOO_OLD => note = Some(e.hint),
+            Err(e) => note = Some(format!("{} (showing the last list)", e.hint)),
+        }
+    }
+    let rows = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::node_servers(&conn, &node.id)
+    };
+    let list: Vec<Value> = if rows.is_empty() {
+        // Solo: the owner server alone (§4.4).
+        vec![json!({"slot": 0, "label": crate::compute_ws::controller_label(), "state": "active", "trust": "own", "role": "owner", "solo": true})]
+    } else {
+        rows.iter().map(|r| server_json(r, now)).collect()
+    };
+    let pending = admin::list_requests(
+        &k2_core::db::shared().lock(),
+        &admin::ReqFilter { node_id: Some(&node.id), state: Some("open"), limit: 50, ..Default::default() },
+    )
+    .into_iter()
+    .filter(|r| r.steps().is_ok_and(|s| s.iter().any(|st| st.verb.starts_with("servers."))))
+    .map(|r| request_json(&r, Some(&node.name)))
+    .collect::<Vec<_>>();
+    Ok(json!({"node": node.name, "role": "owner", "shared": node.shared, "servers": list, "requests": pending, "note": note}))
+}
+
+fn limits_from(v: &Value) -> R<pshare::ShareOverrides> {
+    let set = v.get("set").or_else(|| v.get("limits")).cloned().unwrap_or_else(|| json!({}));
+    if !set.is_object() {
+        return Err(no(acodes::BAD_ARGS, 400, "limits are key=value (weight, max_running, max_queued, cpu_hours_day, max_job_secs, max_cpus, max_mem_gb, disk_gb, network, top_class, gate, exclusive)"));
+    }
+    serde_json::from_value(set).map_err(|e| no(acodes::BAD_ARGS, 400, format!("limits: {e}")))
+}
+
+/// `POST /cli/compute/nodes/servers/add {node, url, code: "CODE.FP",
+/// trust, forSecs, set{…}, reason}`: always held for the owner's approval
+/// (Touch ID or the vault password), then sent as `servers.add`.
+fn servers_add(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<Value> {
+    let op = servers_operator(who, mgr)?;
+    let v = json_body(body)?;
+    let node = node_or_404(s(&v, "node"))?;
+    servers_ready(&node)?;
+    // V59: any second server needs a walled node.
+    if !features(&node.id).iter().any(|f| f == frames::FEATURE_JOB_WALL) {
+        return Err(no(
+            pshare::codes::TENANT_NEEDS_JOB_WALL,
+            409,
+            format!("{} has no job wall: turn it on first (k2 compute node admin propose {} wall.enable), then add the server", node.name, node.name),
+        ));
+    }
+    let trust = match s(&v, "trust").unwrap_or("own") {
+        "own" => pshare::Trust::Own,
+        "team" => pshare::Trust::Team,
+        _ => return Err(no(acodes::BAD_ARGS, 400, "--trust is own (your own servers) or team (other people's)")),
+    };
+    let macos = matches!(node.os.as_deref(), Some("macos") | Some("darwin"));
+    if trust == pshare::Trust::Team && (macos || !features(&node.id).iter().any(|f| f == pshare::FEATURE_TENANT_WALL)) {
+        return Err(no(
+            pshare::codes::TEAM_NEEDS_TENANT_WALL,
+            409,
+            format!(
+                "{} can't take other people's servers yet: {}. Add your own servers with --trust own",
+                node.name,
+                if macos { "Macs take them in 0.46.4 (a user per server)" } else { "its tenant wall isn't on" }
+            ),
+        ));
+    }
+    let cols = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        admin::admin_cols(&conn, &node.id)
+    };
+    if cols.remote_admin.as_deref().is_some_and(|l| l != "full") {
+        return Err(no(
+            acodes::REMOTE_ADMIN_OFF,
+            409,
+            format!(
+                "adding a server needs remote admin `full` on {} (it's {}): at the machine run sudo k2-node servers add …, or raise the level there",
+                node.name,
+                cols.remote_admin.as_deref().unwrap_or("?")
+            ),
+        ));
+    }
+    let url = s(&v, "url").ok_or_else(|| no(acodes::BAD_ARGS, 400, "--url is the new server's address (https://baden.k2.dev)"))?;
+    let code = s(&v, "code").ok_or_else(|| no(acodes::BAD_ARGS, 400, "--code is the CODE.FP the new server's `k2 compute node add` printed"))?;
+    let (binding, fp_prefix) = share::split_add_code(code).map_err(|e| no(acodes::BAD_ARGS, 400, e))?;
+    let for_secs = match crate::compute_routes::n(&v, "forSecs") {
+        Some(0) => None,
+        Some(x) => Some(x),
+        // §7 defaults: 7 days for other people's servers, none for your own.
+        None if trust == pshare::Trust::Team => Some(7 * 86_400),
+        None => None,
+    };
+    let args = serde_json::to_value(pshare::AddArgs { url: url.to_string(), code_binding: binding, fp_prefix, trust, for_secs, limits: limits_from(&v)? })
+        .map_err(|e| no("internal", 500, e.to_string()))?;
+    pshare::check_verb_args(pshare::VERB_ADD, &args).map_err(|e| no(acodes::BAD_ARGS, 400, e))?;
+    // One pending server at a time (§4.1).
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let open = admin::list_requests(&conn, &admin::ReqFilter { node_id: Some(&node.id), state: Some("open"), limit: 100, ..Default::default() })
+            .into_iter()
+            .any(|r| r.steps().is_ok_and(|s| s.iter().any(|st| st.verb == pshare::VERB_ADD)));
+        let pending = store::node_servers(&conn, &node.id).iter().any(|r| r.state == "pending");
+        if open || pending {
+            return Err(no(
+                pshare::codes::SERVER_ADD_PENDING,
+                409,
+                format!("{} already has a server being added: confirm its code, or wait for its 10 minutes to pass (k2 compute node servers {})", node.name, node.name),
+            ));
+        }
+    }
+    let summary = admin::summarize(&node.name, pshare::VERB_ADD, &args);
+    let body_v = json!({"verb": pshare::VERB_ADD, "args": args});
+    let out = file_request(&op, &node, "command", Class::Privileged, &body_v, &summary, s(&v, "reason"))?;
+    crate::compute_routes::audit(who, "server_add", Some(&node.id), op.workspace.as_deref(), None, json!({"url": url, "trust": trust.as_str(), "request": out["request"]["id"]}));
+    let mut out = out;
+    if trust == pshare::Trust::Team {
+        out["warning"] = format!(
+            "Jobs from {url} get their own user and folders on {}. They can't read your files or other servers' jobs. They do share the machine's kernel, CPU and disk, and they can reach the internet and any service running on this machine's loopback. Only add people you trust.",
+            node.name
+        )
+        .into();
+    }
+    Ok(out)
+}
+
+/// The mirrored share of `server` on `node` (a label or `slot:<n>`),
+/// refreshed when stale.
+fn server_row(node: &store::NodeRow, server: &str) -> R<share::ServerRow> {
+    let stale = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::node_servers_seen_at(&conn, &node.id).is_none_or(|t| compute::now() - t >= compute::retry::tuning().servers_refresh_secs)
+    };
+    if stale {
+        refresh_servers(node)?;
+    }
+    let rows = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::node_servers(&conn, &node.id)
+    };
+    let slot = server.strip_prefix("slot:").and_then(|n| n.parse::<u8>().ok());
+    rows.into_iter()
+        .find(|r| slot.map_or(r.label == server && r.state != "revoked", |n| r.slot == n))
+        .ok_or_else(|| no(codes::NODE_NOT_FOUND, 404, format!("no server '{server}' on {} (k2 compute node servers {})", node.name, node.name)))
+}
+
+fn server_arg(v: &Value) -> R<String> {
+    let server = s(v, "server").ok_or_else(|| no(acodes::BAD_ARGS, 400, "name the server (its label, or slot:<n>)"))?;
+    if server == "slot:0" {
+        return Err(no(acodes::BAD_ARGS, 400, "slot 0 is this server, the node's owner"));
+    }
+    Ok(server.to_string())
+}
+
+/// Send an operate `servers.*` verb now and read the node's answer.
+fn servers_operate(who: &Who, node: &store::NodeRow, verb: &str, args: &Value) -> R<(String, Option<wire::AdminResult>)> {
+    pshare::check_verb_args(verb, args).map_err(|e| no(acodes::BAD_ARGS, 400, e))?;
+    let r = send_direct(who, node, Class::Operate, verb, args, Some(ANSWER_WAIT))?;
+    if let Some(res) = r.1.as_ref().filter(|x| x.state != "done" && x.code.as_deref() != Some(wire::code::APPROVAL_REQUIRED)) {
+        return Err(no(
+            "node_refused",
+            409,
+            format!("{} refused {verb}: {}", node.name, res.message.as_deref().or(res.code.as_deref()).unwrap_or("?")),
+        ));
+    }
+    refresh_servers_soon(&node.id);
+    Ok(r)
+}
+
+/// `POST /cli/compute/nodes/servers/limits {node, server, set{…},
+/// forSecs}`: a narrowing applies at once; a widening is held for the
+/// owner's approval (§4.3).
+fn servers_limits(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<Value> {
+    let op = servers_operator(who, mgr)?;
+    let v = json_body(body)?;
+    let node = node_or_404(s(&v, "node"))?;
+    servers_ready(&node)?;
+    let server = server_arg(&v)?;
+    let largs = pshare::LimitsArgs { server: server.clone(), set: limits_from(&v)?, for_secs: crate::compute_routes::n(&v, "forSecs") };
+    let args = serde_json::to_value(&largs).map_err(|e| no("internal", 500, e.to_string()))?;
+    pshare::check_verb_args(pshare::VERB_LIMITS, &args).map_err(|e| no(acodes::BAD_ARGS, 400, e))?;
+    let row = server_row(&node, &server)?;
+    let summary = admin::summarize(&node.name, pshare::VERB_LIMITS, &args);
+    let hold = |why: &str| {
+        let body_v = json!({"verb": pshare::VERB_LIMITS, "args": args});
+        let reason = s(&v, "reason").map(str::to_string).or_else(|| (!why.is_empty()).then(|| why.to_string()));
+        file_request(&op, &node, "command", Class::Privileged, &body_v, &summary, reason.as_deref())
+    };
+    match admin::classify_servers_limits(&row.limits, row.expires_at, &largs, compute::now()) {
+        Class::Read => Ok(json!({"ok": true, "node": node.name, "server": row.label, "changed": false, "note": "nothing to change"})),
+        Class::Operate => {
+            let (cmd_id, result) = servers_operate(who, &node, pshare::VERB_LIMITS, &args)?;
+            crate::compute_routes::audit(who, "server_limits", Some(&node.id), op.workspace.as_deref(), None, json!({"server": row.label, "args": args, "class": "operate", "cmdId": cmd_id}));
+            if result.as_ref().is_some_and(|r| r.code.as_deref() == Some(wire::code::APPROVAL_REQUIRED)) {
+                return hold("the node counts this as a widening");
+            }
+            Ok(json!({"ok": true, "node": node.name, "server": row.label, "changed": true, "class": "operate", "cmdId": cmd_id, "note": "narrowed at once"}))
+        }
+        _ => {
+            crate::compute_routes::audit(who, "server_limits", Some(&node.id), op.workspace.as_deref(), None, json!({"server": row.label, "args": args, "class": "privileged"}));
+            hold("")
+        }
+    }
+}
+
+/// `POST /cli/compute/nodes/servers/pause {node, server, action:
+/// pause|resume}`: at once (operate).
+fn servers_pause(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<Value> {
+    let op = servers_operator(who, mgr)?;
+    let v = json_body(body)?;
+    let node = node_or_404(s(&v, "node"))?;
+    servers_ready(&node)?;
+    let server = server_arg(&v)?;
+    let verb = match s(&v, "action").unwrap_or("pause") {
+        "pause" => pshare::VERB_PAUSE,
+        "resume" => pshare::VERB_RESUME,
+        _ => return Err(no(acodes::BAD_ARGS, 400, "action is pause or resume")),
+    };
+    let args = json!({"server": server});
+    let (cmd_id, _) = servers_operate(who, &node, verb, &args)?;
+    crate::compute_routes::audit(who, "server_pause", Some(&node.id), op.workspace.as_deref(), None, json!({"server": server, "verb": verb, "cmdId": cmd_id}));
+    let note = if verb == pshare::VERB_PAUSE { "its queued jobs wait; running ones finish; it can still queue" } else { "its queued jobs may start again" };
+    Ok(json!({"ok": true, "node": node.name, "server": server, "action": verb, "cmdId": cmd_id, "note": note}))
+}
+
+/// `POST /cli/compute/nodes/servers/revoke {node, server, now, wipe}`:
+/// the owner only (never an agent, §3); at once.
+fn servers_revoke(who: &Who, body: &[u8]) -> R<Value> {
+    if who.passport().is_some() || !who.is_owner() {
+        crate::compute_routes::need_credential(who)?;
+        return Err(owner_only());
+    }
+    let v = json_body(body)?;
+    let node = node_or_404(s(&v, "node"))?;
+    servers_ready(&node)?;
+    let server = server_arg(&v)?;
+    let now = crate::compute_routes::b(&v, "now") == Some(true);
+    let wipe = crate::compute_routes::b(&v, "wipe") == Some(true);
+    let args = serde_json::to_value(pshare::RevokeArgs { server: server.clone(), now, wipe }).map_err(|e| no("internal", 500, e.to_string()))?;
+    let (cmd_id, _) = servers_operate(who, &node, pshare::VERB_REVOKE, &args)?;
+    crate::compute_routes::audit(who, "server_revoke", Some(&node.id), None, None, json!({"server": server, "now": now, "wipe": wipe, "cmdId": cmd_id}));
+    share_note(&node.id, &format!("revoked:{server}:{}", compute::now()), &format!("{}: {server} was revoked; its queued jobs are cancelled{}.", node.name, if now { " and its running jobs stopped" } else { ", running ones finish" }));
+    Ok(json!({
+        "ok": true,
+        "node": node.name,
+        "server": server,
+        "cmdId": cmd_id,
+        "note": format!("queued jobs cancelled; running jobs {}; its files are wiped {}", if now { "stopped" } else { "finish" }, if wipe { "now" } else { "in 24 h" }),
+    }))
 }
 
 // ── test seams ───────────────────────────────────────────────────────

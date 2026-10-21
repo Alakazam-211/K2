@@ -34,6 +34,8 @@ use k2_core::compute::proto::frames::{
 };
 use k2_core::compute::proto::results::{self, ArtifactInfo, Outputs};
 use k2_core::compute::proto::pairing;
+use k2_core::compute::proto::share::{self as pshare, QueueView};
+use k2_core::compute::share::{self, pending};
 use k2_core::compute::{self as compute, logs, scheduler, store};
 use k2_core::log_debug;
 use tokio::net::TcpStream;
@@ -350,6 +352,12 @@ pub async fn serve_enroll(stream: &mut TcpStream, ingress: Ingress) {
             via,
         );
         if r.is_ok() {
+            // Another server's `servers.add` enrolled this node with us
+            // (protocol 3): this server is a tenant there, "shared by …".
+            let shared_by = req.shared_by.as_deref().map(str::trim).filter(|l| pshare::valid_label(l));
+            if let Some(owner) = shared_by {
+                let _ = store::set_tenant_of(&conn, &node_id, owner);
+            }
             store::record_event(
                 &conn,
                 &entry.minted_by,
@@ -357,7 +365,8 @@ pub async fn serve_enroll(stream: &mut TcpStream, ingress: Ingress) {
                 Some(&node_id),
                 None,
                 None,
-                serde_json::json!({"name": entry.name, "fp": node_fp, "route": route_label(ingress), "version": req.node_version, "via": via}),
+                serde_json::json!({"name": entry.name, "fp": node_fp, "route": route_label(ingress), "version": req.node_version, "via": via,
+                    "sharedBy": shared_by}),
             );
         }
         r
@@ -489,10 +498,19 @@ async fn run_session(
             .iter()
             .map(|j| ResumeHint { job_id: j.id.clone(), generation: j.generation as u32, since_seq: logs::last_seq(&j.id, j.generation) })
             .collect();
+        // Cancels still owed: a forced cancel, and (shared nodes) the "only
+        // if not started" ones (V57) the node never answered.
         let cancels: Vec<Frame> = active
             .iter()
-            .filter(|j| j.reason.as_deref() == Some("cancel_requested"))
-            .map(|j| Frame::Cancel(Cancel { job_id: j.id.clone(), generation: j.generation as u32, reason: "cancelled".into() }))
+            .filter_map(|j| {
+                let reason = match j.reason.as_deref() {
+                    Some("cancel_requested") => "cancelled",
+                    Some(pending::CANCEL) if j.node_queued => frames::CANCEL_IF_QUEUED,
+                    Some(pending::WITHDRAW) | Some(pending::TIMEOUT) if j.node_queued => frames::CANCEL_WITHDRAW,
+                    _ => return None,
+                };
+                Some(Frame::Cancel(Cancel { job_id: j.id.clone(), generation: j.generation as u32, reason: reason.into() }))
+            })
             .collect();
         (
             Frame::Welcome(Welcome {
@@ -615,31 +633,100 @@ fn frame_worker(node_id: String, route: &'static str, rx: std::sync::mpsc::Recei
     let mut tallies: HashMap<(String, u32), LogTally> = HashMap::new();
     let mut snapshot_seen: HashSet<String> = HashSet::new();
     while let Ok(f) = rx.recv() {
-        match f {
-            Frame::Offer(o) => on_offer(&node_id, o),
-            Frame::JobsSnapshot(s) => on_snapshot(&node_id, s, &mut snapshot_seen),
-            Frame::Need(n) => on_need(&node_id, route, n),
-            Frame::State(s) => {
-                if let Some(t) = tallies.remove(&(s.job_id.clone(), s.generation)) {
-                    flush_tally(&s.job_id, &t);
-                }
-                on_state(&node_id, s);
-            }
-            Frame::Log(l) => on_log(&mut tallies, l),
-            Frame::Receipt(r) => on_receipt(&node_id, r),
-            Frame::Goodbye(g) => audit("node", "goodbye", Some(&node_id), serde_json::json!({"reason": g.reason})),
-            // Node admin (prd-k2-node-admin-v1).
-            Frame::AdminResult(r) => crate::compute_admin::on_admin_result(&node_id, r),
-            Frame::UpdateState(u) => crate::compute_admin::on_update_state(&node_id, u),
-            Frame::Health(h) => crate::compute_admin::on_health(&node_id, h),
-            Frame::ArtifactChunk(c) => on_artifact_chunk(&node_id, c),
-            Frame::ArtifactFailed(f) => on_artifact_failed(&node_id, f),
-            other => log_debug!("[compute] node {node_id} sent {}", other.kind()),
-        }
+        handle_frame(&node_id, route, f, &mut tallies, &mut snapshot_seen);
     }
     for ((job, _), t) in tallies {
         flush_tally(&job, &t);
     }
+}
+
+fn handle_frame(node_id: &str, route: &'static str, f: Frame, tallies: &mut HashMap<(String, u32), LogTally>, snapshot_seen: &mut HashSet<String>) {
+    let node_id = node_id.to_string();
+    match f {
+        Frame::Offer(o) => on_offer(&node_id, o),
+        Frame::JobsSnapshot(s) => on_snapshot(&node_id, s, snapshot_seen),
+        Frame::Need(n) => on_need(&node_id, route, n),
+        Frame::State(s) => {
+            if let Some(t) = tallies.remove(&(s.job_id.clone(), s.generation)) {
+                flush_tally(&s.job_id, &t);
+            }
+            on_state(&node_id, s);
+        }
+        Frame::Log(l) => on_log(tallies, l),
+        Frame::Receipt(r) => on_receipt(&node_id, r),
+        Frame::Goodbye(g) => audit("node", "goodbye", Some(&node_id), serde_json::json!({"reason": g.reason})),
+        // Node admin (prd-k2-node-admin-v1). A node another server owns
+        // gets no node admin from here (V52): an admin frame from it is
+        // only recorded, never stored as this server's health or update.
+        Frame::AdminResult(_) | Frame::UpdateState(_) | Frame::Health(_) if node_is_tenant(&node_id) => {
+            audit("node", "tenant_admin_frame_dropped", Some(&node_id), serde_json::json!({"kind": f.kind()}))
+        }
+        Frame::AdminResult(r) => crate::compute_admin::on_admin_result(&node_id, r),
+        Frame::UpdateState(u) => crate::compute_admin::on_update_state(&node_id, u),
+        Frame::Health(h) => crate::compute_admin::on_health(&node_id, h),
+        Frame::ArtifactChunk(c) => on_artifact_chunk(&node_id, c),
+        Frame::ArtifactFailed(f) => on_artifact_failed(&node_id, f),
+        Frame::QueueView(v) => on_queue_view(&node_id, v),
+        other => log_debug!("[compute] node {node_id} sent {}", other.kind()),
+    }
+}
+
+fn node_is_tenant(node_id: &str) -> bool {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    store::node_by_id(&conn, node_id).is_some_and(|n| n.is_tenant())
+}
+
+// ── test seams (headless contract tests: a fake node session) ────────
+
+/// The frames this server sends a fake node session ([`test_attach`]).
+#[doc(hidden)]
+pub struct TestConn {
+    rx: mpsc::UnboundedReceiver<Out>,
+}
+
+impl TestConn {
+    /// Every frame sent so far (drained).
+    pub fn frames(&mut self) -> Vec<Frame> {
+        let mut out = Vec::new();
+        while let Ok(o) = self.rx.try_recv() {
+            if let Out::Frame(f) = o {
+                out.push(*f);
+            }
+        }
+        out
+    }
+}
+
+/// Test seam: a live session for `node_id` with `offer`, without a
+/// socket. What this server sends it comes out of [`TestConn::frames`];
+/// what the node "sends" goes in through [`test_frame`].
+#[doc(hidden)]
+pub fn test_attach(node_id: &str, offer: Offer) -> TestConn {
+    let (tx, rx) = mpsc::unbounded_channel::<Out>();
+    with_engine(|e| {
+        e.next_conn += 1;
+        let id = e.next_conn;
+        e.conns.insert(
+            node_id.to_string(),
+            Conn { conn_id: id, tx, route: "loopback", offer: None, bytes_in: Arc::new(AtomicU64::new(0)), bytes_out: Arc::new(AtomicU64::new(0)) },
+        );
+    });
+    handle_frame(node_id, "loopback", Frame::Offer(offer), &mut HashMap::new(), &mut HashSet::new());
+    TestConn { rx }
+}
+
+/// Test seam: the fake node session is gone (offline).
+#[doc(hidden)]
+pub fn test_detach(node_id: &str) {
+    with_engine(|e| e.conns.remove(node_id));
+}
+
+/// Test seam: one frame from the fake node, through the same handlers as
+/// a live session (blocking).
+#[doc(hidden)]
+pub fn test_frame(node_id: &str, f: Frame) {
+    handle_frame(node_id, "loopback", f, &mut HashMap::new(), &mut HashSet::new());
 }
 
 fn flush_tally(job: &str, t: &LogTally) {
@@ -649,13 +736,21 @@ fn flush_tally(job: &str, t: &LogTally) {
 }
 
 fn on_offer(node_id: &str, o: Offer) {
-    {
+    let (before, tenant) = {
         let db = k2_core::db::shared();
         let conn = db.lock();
+        let before = store::node_by_id(&conn, node_id);
         store::store_offer(&conn, node_id, &o, compute::now());
-    }
-    let admin = o.features.iter().any(|f| f == k2_core::compute::proto::admin::FEATURE_ADMIN);
+        // The node is the truth: mirror this server's share (0214).
+        store::store_share(&conn, node_id, o.share.as_ref(), compute::now());
+        let tenant = share::is_tenant(&o) || before.as_ref().is_some_and(store::NodeRow::is_tenant);
+        (before, tenant)
+    };
+    // V52: a node another server owns never gets node admin from here
+    // (no approval-key pin, no queued admin commands).
+    let admin = !tenant && o.features.iter().any(|f| f == k2_core::compute::proto::admin::FEATURE_ADMIN);
     let offer_copy = admin.then(|| o.clone());
+    let share_now = o.share.clone();
     with_engine(|e| {
         if let Some(c) = e.conns.get_mut(node_id) {
             c.offer = Some(o);
@@ -665,8 +760,56 @@ fn on_offer(node_id: &str, o: Offer) {
     if let Some(o) = offer_copy {
         crate::compute_admin::on_offer(node_id, &o);
     }
+    if let Some(b) = before {
+        crate::compute_place::share_changed(&b, share_now.as_ref());
+    }
     kick(node_id);
     notify_change();
+}
+
+// ── the node's queue view (`k2 compute queue`) ───────────────────────
+
+/// `queue_get` answers being waited for, by request id.
+static QUEUE_WAITERS: (Mutex<Option<HashMap<String, Option<QueueView>>>>, Condvar) = (Mutex::new(None), Condvar::new());
+
+fn on_queue_view(node_id: &str, v: QueueView) {
+    let (m, cv) = &QUEUE_WAITERS;
+    let mut g = m.lock().unwrap_or_else(|p| p.into_inner());
+    match g.as_mut().and_then(|w| w.get_mut(&v.request_id)) {
+        Some(slot) => {
+            *slot = Some(v);
+            cv.notify_all();
+        }
+        None => log_debug!("[compute] node {node_id}: queue_view nobody asked for"),
+    }
+}
+
+/// Ask a node that offers `queue` for its queue as this server may see
+/// it, and wait up to `timeout` for the answer.
+pub fn queue_get(node_id: &str, timeout: Duration) -> Result<QueueView, (&'static str, String)> {
+    let request_id = crypto::random_id().map_err(|e| ("internal", e))?;
+    let (m, cv) = &QUEUE_WAITERS;
+    m.lock().unwrap_or_else(|p| p.into_inner()).get_or_insert_with(HashMap::new).insert(request_id.clone(), None);
+    let sent = send_to(node_id, Frame::QueueGet(pshare::QueueGet { request_id: request_id.clone() }));
+    let deadline = Instant::now() + timeout;
+    let mut g = m.lock().unwrap_or_else(|p| p.into_inner());
+    loop {
+        if let Some(Some(v)) = g.as_ref().and_then(|w| w.get(&request_id)) {
+            let v = v.clone();
+            g.as_mut().map(|w| w.remove(&request_id));
+            return Ok(v);
+        }
+        let now = Instant::now();
+        if !sent || now >= deadline {
+            g.as_mut().map(|w| w.remove(&request_id));
+            return Err(if sent {
+                ("queue_timeout", "the node didn't answer with its queue in time; try again".to_string())
+            } else {
+                (compute::codes::NODE_OFFLINE, "the node is offline".to_string())
+            });
+        }
+        g = cv.wait_timeout(g, deadline - now).map(|(g, _)| g).unwrap_or_else(|p| p.into_inner().0);
+    }
 }
 
 fn on_log(tallies: &mut HashMap<(String, u32), LogTally>, l: LogChunk) {
@@ -693,6 +836,8 @@ fn on_log(tallies: &mut HashMap<(String, u32), LogTally>, l: LogChunk) {
 }
 
 /// Apply one node observation of a job (live `state` or a snapshot row).
+/// `queue`: the node's position for a job in its queue (protocol 3).
+#[allow(clippy::too_many_arguments)]
 fn apply_observation(
     node_id: &str,
     job_id: &str,
@@ -702,6 +847,7 @@ fn apply_observation(
     detail: Option<&str>,
     exit: Option<&frames::ExitInfo>,
     src: Option<&frames::SrcRan>,
+    queue: Option<&pshare::QueuePos>,
 ) {
     let db = k2_core::db::shared();
     let conn = db.lock();
@@ -713,11 +859,34 @@ fn apply_observation(
         return;
     }
     let now = compute::now();
+    let asked = job.reason.as_deref();
+    // ── a shared node's queue (protocol 3) ──
+    if state == JobState::Queued && reason == Some(pshare::codes::NODE_QUEUED) {
+        // The node took the job into its queue: it stays `assigned` here
+        // and every view shows it as queued, at the node's position. A
+        // cancel or withdraw still owed keeps its marker until the node
+        // answers it.
+        let keep = asked == Some("cancel_requested") || pending::any(asked);
+        let _ = store::mark_node_queued(&conn, job_id, job.generation, queue, (!keep).then_some(pshare::codes::NODE_QUEUED), now);
+        return;
+    }
+    if state == JobState::Cancelled {
+        // V46: the node gave a queued job back (`withdrawn`, or
+        // `superseded` by the resume rule). That is never the job's end
+        // here unless someone asked to cancel it: it goes to the move path.
+        let user_cancel = asked == Some("cancel_requested") || asked == Some(pending::CANCEL);
+        let given_back = matches!(reason, Some(pshare::codes::WITHDRAWN) | Some(pshare::codes::SUPERSEDED))
+            || matches!(asked, Some(pending::WITHDRAW) | Some(pending::TIMEOUT));
+        if given_back && !user_cancel {
+            drop(conn);
+            return given_back_job(node_id, &job);
+        }
+    }
     if state == JobState::Queued {
         // The node refused the assign. A cancel already asked for ends it
         // here (the node never started it, so it would answer that Cancel
         // with `unknown`, and re-queueing would run it later).
-        if job.reason.as_deref() == Some("cancel_requested") {
+        if asked == Some("cancel_requested") || asked == Some(pending::CANCEL) {
             let _ = store::set_job_state(&conn, job_id, JobState::Cancelled, Some("cancelled"), None, now);
             store::record_event(
                 &conn,
@@ -732,13 +901,31 @@ fn apply_observation(
             finalize(job_id);
             return;
         }
-        // Otherwise it waits for a fresh offer.
+        // Otherwise it waits for a fresh offer (a refusal is never in the
+        // node's ledger, so the same attempt may be sent again).
         let _ = store::set_job_state(&conn, job_id, JobState::Queued, reason, detail, now);
+        store::clear_node_queued(&conn, job_id);
         return;
     }
+    if job.node_queued {
+        // Started (or ended): it left the node's queue.
+        store::clear_node_queued(&conn, job_id);
+    }
     // Keep a pending cancel visible until the node reports the end.
-    let keep_cancel = job.reason.as_deref() == Some("cancel_requested") && !state.is_terminal();
-    let reason = if keep_cancel { Some("cancel_requested") } else { reason };
+    let keep_cancel = asked == Some("cancel_requested") && !state.is_terminal();
+    // V57: a cancel without --force (or a withdraw) lost the race with the
+    // start: the node left the job running and said so.
+    let lost_race = asked == Some(pending::CANCEL) && !state.is_terminal();
+    if lost_race {
+        store::record_event(&conn, "node", "job_cancel_lost", Some(node_id), Some(&job.workspace_id), Some(job_id), serde_json::json!({"state": state.as_str()}));
+    }
+    let reason = if keep_cancel {
+        Some("cancel_requested")
+    } else if lost_race {
+        Some(pshare::codes::JOB_STARTED)
+    } else {
+        reason
+    };
     let _ = store::set_job_state(&conn, job_id, state, reason, detail, now);
     if let Some(s) = src {
         store::set_job_src(&conn, job_id, &s.commit, &s.tree);
@@ -763,10 +950,61 @@ fn apply_observation(
     // Infrastructure failures retry (with backoff, on another node for
     // `--any`); results never do. A retried job gets no message yet. A job
     // whose cancel was asked for (slice A) is never retried.
-    if job.reason.as_deref() != Some("cancel_requested") && crate::compute_place::after_attempt(job_id) {
+    if asked != Some("cancel_requested") && crate::compute_place::after_attempt(job_id) {
         return;
     }
     finalize(job_id);
+}
+
+/// A shared node gave a queued job back (`cancelled/withdrawn`, or
+/// `superseded`): it never started there. V46: requeue it under a NEW
+/// generation, with no retry used, no failed attempt and no health
+/// strike, then move it (`--any`) or send it again. A withdraw for
+/// `--queue-timeout` fails it instead.
+fn given_back_job(node_id: &str, job: &store::JobRow) {
+    let now = compute::now();
+    if job.reason.as_deref() == Some(pending::TIMEOUT) {
+        let limit = job.ctl.queue_timeout_secs.unwrap_or(0);
+        let detail = format!(
+            "not started within {} (it waited in the node's queue{})",
+            compute::message::duration(limit),
+            job.node_blocked_by.as_deref().map(|b| format!(": {}", share::blocked_words(b))).unwrap_or_default()
+        );
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let _ = store::set_job_state(&conn, &job.id, JobState::Failed, Some("queue_timeout"), Some(&detail), now);
+            store::clear_node_queued(&conn, &job.id);
+            store::record_event(&conn, "controller", "job_queue_timeout", Some(node_id), Some(&job.workspace_id), Some(&job.id), serde_json::json!({"nodeQueued": true}));
+        }
+        finalize(&job.id);
+        notify_change();
+        return;
+    }
+    let row = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        if store::requeue_new_generation(&conn, &job.id, job.generation, "withdrawn") != Ok(true) {
+            return;
+        }
+        store::record_event(
+            &conn,
+            "controller",
+            "withdraw",
+            Some(node_id),
+            Some(&job.workspace_id),
+            Some(&job.id),
+            serde_json::json!({"generation": job.generation, "newGeneration": job.generation + 1, "asked": job.reason}),
+        );
+        store::job_by_id(&conn, &job.id)
+    };
+    if let Some(r) = row.filter(|r| r.ctl.any.is_some()) {
+        if crate::compute_place::try_move(&r, &[], false, "withdrawn").is_some() {
+            return;
+        }
+    }
+    kick(node_id);
+    notify_change();
 }
 
 /// A job reached its end: message the requesting session once (detached).
@@ -905,7 +1143,7 @@ fn on_state(node_id: &str, s: StateUpdate) {
     if let Some(o) = s.outputs.clone().filter(|_| s.state.is_terminal()) {
         store_outputs(node_id, &s.job_id, s.generation, o);
     }
-    apply_observation(node_id, &s.job_id, s.generation, s.state, s.reason.as_deref(), s.detail.as_deref(), s.exit.as_ref(), s.src.as_ref());
+    apply_observation(node_id, &s.job_id, s.generation, s.state, s.reason.as_deref(), s.detail.as_deref(), s.exit.as_ref(), s.src.as_ref(), s.queue.as_ref());
     if s.state.is_terminal() {
         kick(node_id);
     }
@@ -916,7 +1154,7 @@ fn on_snapshot(node_id: &str, s: JobsSnapshot, seen: &mut HashSet<String>) {
     for j in &s.jobs {
         seen.insert(format!("{}#{}", j.job_id, j.generation));
         stop_stale(node_id, j);
-        apply_observation(node_id, &j.job_id, j.generation, j.state, j.reason.as_deref(), None, j.exit.as_ref(), None);
+        apply_observation(node_id, &j.job_id, j.generation, j.state, j.reason.as_deref(), None, j.exit.as_ref(), None, None);
     }
     if !s.last {
         return;
@@ -928,6 +1166,14 @@ fn on_snapshot(node_id: &str, s: JobsSnapshot, seen: &mut HashSet<String>) {
         let db = k2_core::db::shared();
         let conn = db.lock();
         for j in store::jobs_in_states(&conn, node_id, store::ACTIVE_STATES) {
+            if !seen.contains(&format!("{}#{}", j.id, j.generation)) && j.node_queued {
+                // A queued row the node no longer has never started: a new
+                // generation, no retry (V46, V56).
+                if store::requeue_new_generation(&conn, &j.id, j.generation, "not_on_node") == Ok(true) {
+                    store::record_event(&conn, "controller", "job_requeue", Some(node_id), Some(&j.workspace_id), Some(&j.id), serde_json::json!({"why": "not_on_node", "nodeQueued": true}));
+                }
+                continue;
+            }
             if !seen.contains(&format!("{}#{}", j.id, j.generation)) {
                 let _ = store::set_job_state(&conn, &j.id, JobState::Unknown, Some("not_on_node"), None, compute::now());
                 store::record_event(&conn, "controller", "job_unknown", Some(node_id), Some(&j.workspace_id), Some(&j.id), serde_json::json!({}));
@@ -943,6 +1189,13 @@ fn on_snapshot(node_id: &str, s: JobsSnapshot, seen: &mut HashSet<String>) {
     }
     kick(node_id);
     notify_change();
+}
+
+/// Ask a shared node to give a queued job back, or (no `--force`) to
+/// cancel it only if it hasn't started (V57). The answer comes as a state.
+pub fn send_cancel_if_not_started(node_id: &str, job_id: &str, generation: i64, reason: &'static str) -> bool {
+    debug_assert!(frames::cancel_only_if_not_started(reason));
+    send_to(node_id, Frame::Cancel(Cancel { job_id: job_id.into(), generation: generation as u32, reason: reason.into() }))
 }
 
 /// A node reconnected still running an attempt this controller already
@@ -1299,6 +1552,123 @@ pub fn queued_view(conn: &rusqlite::Connection, node_id: &str) -> (Vec<scheduler
     (queue, load)
 }
 
+/// One placement pass on a SHARED node (protocol 3, §6): every job this
+/// server has queued for it goes into the node's queue at once, in this
+/// server's own order (workspace rotation, FIFO), as long as its share has
+/// room. Nothing here waits for free capacity: the node decides who runs.
+struct SharedPass {
+    /// Send now, in this order.
+    send: Vec<String>,
+    /// Never startable under this share or node: fail (a request error).
+    fail: Vec<(String, frames::Refusal)>,
+    /// Waiting on this server, with a position and why.
+    waiting: BTreeMap<String, (usize, frames::Refusal)>,
+}
+
+/// Workspace rotation (after the last-served workspace), FIFO within one.
+fn rotation_order(mut jobs: Vec<store::JobRow>, last_ws: Option<&str>) -> Vec<store::JobRow> {
+    jobs.sort_by(|a, b| a.created_at.cmp(&b.created_at).then_with(|| a.id.cmp(&b.id)));
+    let mut order: Vec<String> = jobs.iter().map(|j| j.workspace_id.clone()).collect();
+    order.sort_unstable();
+    order.dedup();
+    if let Some(last) = last_ws {
+        let start = order.iter().position(|w| w.as_str() > last).unwrap_or(0);
+        order.rotate_left(start);
+    }
+    let mut by_ws: HashMap<String, std::collections::VecDeque<store::JobRow>> = HashMap::new();
+    for j in jobs {
+        by_ws.entry(j.workspace_id.clone()).or_default().push_back(j);
+    }
+    let mut out = Vec::new();
+    loop {
+        let mut any = false;
+        for w in &order {
+            if let Some(j) = by_ws.get_mut(w).and_then(|q| q.pop_front()) {
+                out.push(j);
+                any = true;
+            }
+        }
+        if !any {
+            return out;
+        }
+    }
+}
+
+fn shared_pass(conn: &rusqlite::Connection, node_id: &str, offer: &Offer, view: &pshare::ShareView, last_ws: Option<&str>, pause: Option<&str>) -> SharedPass {
+    let now = compute::now();
+    let t = compute::retry::tuning();
+    let queued: Vec<store::JobRow> = store::jobs_in_states(conn, node_id, &["queued"])
+        .into_iter()
+        .filter(|j| j.ctl.not_before.is_none_or(|nb| nb <= now))
+        .collect();
+    let mut pass = SharedPass { send: Vec::new(), fail: Vec::new(), waiting: BTreeMap::new() };
+    let ordered = rotation_order(queued, last_ws);
+    let blocked = if let Some(p) = pause {
+        Some(frames::Refusal::new(scheduler::CONTROLLER_PAUSED, format!("the server's owner {p} this node")))
+    } else {
+        match view.state {
+            pshare::ServerStatus::Active => None,
+            pshare::ServerStatus::Paused => Some(frames::Refusal::new(pshare::codes::SHARE_PAUSED, "the node's owner paused this server's share")),
+            pshare::ServerStatus::Expired => Some(frames::Refusal::new(pshare::codes::SHARE_EXPIRED, "this server's share on the node has ended")),
+            pshare::ServerStatus::Revoked => Some(frames::Refusal::new(pshare::codes::SHARE_REVOKED, "the node's owner revoked this server")),
+            s => Some(frames::Refusal::new(pshare::codes::SERVER_NOT_APPROVED, format!("this server is {} on the node", s.as_str()))),
+        }
+    };
+    let on_node = store::jobs_in_states(conn, node_id, store::ACTIVE_STATES).len() as u32;
+    let mut room = share::room(view, on_node);
+    for (i, j) in ordered.iter().enumerate() {
+        let pos = i + 1;
+        let wait = |why: frames::Refusal, pass: &mut SharedPass| {
+            pass.waiting.insert(j.id.clone(), (pos, why));
+        };
+        let Some(plan) = j.plan() else { continue };
+        let probe = scheduler::QueuedJob {
+            id: j.id.clone(),
+            workspace_id: j.workspace_id.clone(),
+            created_at: j.created_at,
+            exclusive: j.exclusive,
+            cpu_millis: plan.limits.cpu_millis,
+            mem_bytes: plan.limits.mem_bytes,
+            disk_bytes: 0,
+            needs_git: plan.src.is_some(),
+        };
+        if let Some(r) = scheduler::never_fits(offer, &probe) {
+            pass.fail.push((j.id.clone(), r));
+            continue;
+        }
+        let class = pshare::JobClass::parse(&j.class).unwrap_or_default();
+        let ask = share::ShareAsk { cpu_millis: plan.limits.cpu_millis, mem_bytes: plan.limits.mem_bytes, max_secs: plan.limits.max_secs, exclusive: j.exclusive, class };
+        if let Some((code, msg)) = share::share_refusal(&view.limits, &ask) {
+            pass.fail.push((j.id.clone(), frames::Refusal::new(code, msg)));
+            continue;
+        }
+        if let Some(b) = &blocked {
+            wait(b.clone(), &mut pass);
+            continue;
+        }
+        // V71: `--any` waits on this server a while for a node that can
+        // start it now, before it joins a node's queue.
+        let since = if j.ctl.queued_at > 0 { j.ctl.queued_at } else { j.created_at };
+        if j.ctl.any.is_some() && now - since < t.any_hold_secs && !share::starts_now(view, plan.limits.cpu_millis, plan.limits.mem_bytes) {
+            wait(
+                frames::Refusal::new("any_hold", format!("waiting up to {}s on this server for a node that can start it now", t.any_hold_secs)),
+                &mut pass,
+            );
+            continue;
+        }
+        if room == 0 {
+            wait(
+                frames::Refusal::new(pshare::codes::TENANT_QUEUE_FULL, "this server's queue on the node is full; it goes in when a place opens"),
+                &mut pass,
+            );
+            continue;
+        }
+        room -= 1;
+        pass.send.push(j.id.clone());
+    }
+    pass
+}
+
 /// The scheduler's current view of a node (for display): position and
 /// reason per queued job.
 pub fn decision_for(node_id: &str) -> scheduler::Decision {
@@ -1307,6 +1677,21 @@ pub fn decision_for(node_id: &str) -> scheduler::Decision {
     let db = k2_core::db::shared();
     let conn = db.lock();
     let pause = store::node_by_id(&conn, node_id).and_then(|n| n.controller_pause);
+    if let Some((o, v)) = offer.as_ref().filter(|o| share::is_shared(o)).and_then(|o| o.share.as_ref().map(|v| (o, v))) {
+        let pass = shared_pass(&conn, node_id, o, v, last.as_deref(), pause.as_deref());
+        let mut waiting = pass.waiting;
+        for (id, r) in pass.fail {
+            waiting.insert(id, (0, r));
+        }
+        let now = compute::now();
+        for j in store::jobs_in_states(&conn, node_id, &["queued"]) {
+            if let Some(nb) = j.ctl.not_before.filter(|nb| *nb > now) {
+                let pos = waiting.len() + 1;
+                waiting.insert(j.id.clone(), (pos, frames::Refusal::new("retry_backoff", format!("retrying after an infrastructure failure in {}s", nb - now))));
+            }
+        }
+        return scheduler::Decision { place: None, waiting };
+    }
     let (queue, load) = queued_view(&conn, node_id);
     let caps: HashMap<String, u32> = store::grants(&conn, Some(node_id), None)
         .into_iter()
@@ -1333,10 +1718,79 @@ pub fn with_kick_lock<T>(f: impl FnOnce() -> T) -> T {
     f()
 }
 
-/// Try to place one queued job on `node_id`.
+/// Send this server's queued jobs into a shared node's queue (§6).
+fn kick_shared(node_id: &str, tx: &mpsc::UnboundedSender<Out>, offer: &Offer) {
+    let Some(view) = offer.share.as_ref() else { return };
+    let last = with_engine(|e| e.last_ws.get(node_id).cloned());
+    let now = compute::now();
+    let pass = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let pause = store::node_by_id(&conn, node_id).and_then(|n| n.controller_pause);
+        let pass = shared_pass(&conn, node_id, offer, view, last.as_deref(), pause.as_deref());
+        for (id, (_, why)) in &pass.waiting {
+            if let Some(j) = store::job_by_id(&conn, id).filter(|j| j.state == "queued" && j.reason.as_deref() != Some(why.code.as_str())) {
+                store::set_job_reason(&conn, &j.id, Some(&why.code), Some(&why.message));
+            }
+        }
+        pass
+    };
+    let mut failed = Vec::new();
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        for (id, why) in &pass.fail {
+            // Compare-and-set: a cancel that won keeps its `cancelled`.
+            if store::set_job_state_if(&conn, id, "queued", JobState::Failed, Some(&why.code), Some(&why.message), now) == Ok(true) {
+                let ws = store::job_by_id(&conn, id).map(|j| j.workspace_id);
+                store::record_event(&conn, "controller", "fail", Some(node_id), ws.as_deref(), Some(id), serde_json::json!({"reason": why.code, "detail": why.message}));
+                failed.push(id.clone());
+            }
+        }
+    }
+    for id in &failed {
+        finalize(id);
+    }
+    let mut sent_any = false;
+    for id in pass.send {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let Some(job) = store::job_by_id(&conn, &id) else { continue };
+        let Some(plan) = job.plan() else { continue };
+        let fence = Fence { job_id: job.id.clone(), attempt: job.attempt as u32, generation: job.generation as u32, plan_digest: job.plan_digest.clone() };
+        if store::assign_if_queued(&conn, &job.id, now) != Ok(true) {
+            continue;
+        }
+        if tx.send(Out::Frame(Box::new(Frame::Assign(Assign { fence, plan })))).is_err() {
+            let _ = store::set_job_state(&conn, &job.id, JobState::Queued, Some("node_offline"), None, now);
+            return;
+        }
+        store::record_event(
+            &conn,
+            "controller",
+            "assign",
+            Some(node_id),
+            Some(&job.workspace_id),
+            Some(&job.id),
+            serde_json::json!({"generation": job.generation, "shared": true, "class": job.class}),
+        );
+        drop(conn);
+        with_engine(|e| e.last_ws.insert(node_id.to_string(), job.workspace_id.clone()));
+        sent_any = true;
+    }
+    if sent_any || !failed.is_empty() {
+        notify_change();
+    }
+}
+
+/// Try to place one queued job on `node_id` (a shared node: every job its
+/// share has room for goes into the node's queue).
 pub fn kick(node_id: &str) {
     let _k = KICK.lock().unwrap_or_else(|p| p.into_inner());
-    let Some(tx) = with_engine(|e| e.conns.get(node_id).map(|c| c.tx.clone())) else { return };
+    let Some((tx, offer)) = with_engine(|e| e.conns.get(node_id).map(|c| (c.tx.clone(), c.offer.clone()))) else { return };
+    if let Some(o) = offer.filter(share::is_shared) {
+        return kick_shared(node_id, &tx, &o);
+    }
     let decision = decision_for(node_id);
     let failed = {
         let db = k2_core::db::shared();
@@ -1433,6 +1887,29 @@ pub fn ensure_ticker_started() {
     }
 }
 
+/// V77: the ticker runs from daemon boot (the node-admin watch calls this
+/// every minute, the first time at boot) when compute is on and any node
+/// row exists, so queue timeouts, lost nodes, share expiry and the
+/// servers mirror never wait for a route call or an attach.
+pub fn ensure_ticker_at_boot() {
+    if !compute::enabled() || tokio::runtime::Handle::try_current().is_err() {
+        return;
+    }
+    let any = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        !store::list_nodes(&conn, true).is_empty()
+    };
+    if any {
+        ensure_ticker();
+    }
+}
+
+/// Is the compute ticker running (tests, `status`)?
+pub fn ticker_running() -> bool {
+    TICKER.lock().unwrap_or_else(|p| p.into_inner()).as_ref().is_some_and(|h| !h.is_finished())
+}
+
 /// Periodic upkeep: placements, the never-stuck sweep (queue timeouts,
 /// moves, lost nodes), metering, log retention.
 fn ensure_ticker() {
@@ -1474,6 +1951,8 @@ fn ensure_ticker() {
                     let now = compute::now();
                     crate::compute_place::note_tick(now);
                     crate::compute_place::sweep(now);
+                    // Shared nodes: expiry notes, the owner's server lists.
+                    crate::compute_place::sweep_shares(now);
                 })
                 .await;
             }
@@ -1515,6 +1994,17 @@ mod tests {
         .expect("insert job")
     }
 
+    /// §6: a shared node gets this server's jobs in its own order:
+    /// workspaces take turns (after the last served), FIFO inside each.
+    #[test]
+    fn shared_nodes_get_jobs_in_workspace_rotation() {
+        let mk = |id: &str, ws: &str, at: i64| store::JobRow { id: id.into(), workspace_id: ws.into(), created_at: at, ..Default::default() };
+        let jobs = vec![mk("a1", "a", 1), mk("a2", "a", 2), mk("b1", "b", 3), mk("c1", "c", 4)];
+        let ids = |v: Vec<store::JobRow>| v.into_iter().map(|j| j.id).collect::<Vec<_>>();
+        assert_eq!(ids(rotation_order(jobs.clone(), None)), ["a1", "b1", "c1", "a2"]);
+        assert_eq!(ids(rotation_order(jobs, Some("a"))), ["b1", "c1", "a1", "a2"]);
+    }
+
     /// C11: a job whose cancel was asked for while assigned, and that the
     /// node then refused, ends `cancelled` instead of going back to the
     /// queue (where it would run later).
@@ -1530,7 +2020,7 @@ mod tests {
             store::set_job_reason(&conn, &j.id, Some("cancel_requested"), None);
             j
         };
-        apply_observation("n1", &job.id, job.generation as u32, JobState::Queued, Some("parallel_full"), None, None, None);
+        apply_observation("n1", &job.id, job.generation as u32, JobState::Queued, Some("parallel_full"), None, None, None, None);
         let row = store::job_by_id(&db.lock(), &job.id).expect("row");
         assert_eq!((row.state.as_str(), row.reason.as_deref()), ("cancelled", Some("cancelled")));
         assert!(row.ended_at.is_some());
@@ -1541,7 +2031,7 @@ mod tests {
             assert!(store::assign_if_queued(&conn, &j.id, 20).expect("assign"));
             j
         };
-        apply_observation("n1", &other.id, other.generation as u32, JobState::Queued, Some("parallel_full"), None, None, None);
+        apply_observation("n1", &other.id, other.generation as u32, JobState::Queued, Some("parallel_full"), None, None, None, None);
         let row = store::job_by_id(&db.lock(), &other.id).expect("row");
         assert_eq!((row.state.as_str(), row.reason.as_deref()), ("queued", Some("parallel_full")));
     }

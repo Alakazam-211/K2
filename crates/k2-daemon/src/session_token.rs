@@ -700,6 +700,8 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/compute/jobs/retry",
         "/cli/compute/grants",
         "/cli/compute/local/status",
+        // Node sharing (0.46.3): a node's queue, redacted per §7.
+        "/cli/compute/queue",
         // Node admin (prd-k2-node-admin-v1 §13.1): propose / list own /
         // withdraw own, policy show/set (widening becomes a held request),
         // health, update/rollback. The handler needs the Agent switch

@@ -48,6 +48,21 @@ export const ZEN_STORE_VERBS: ReadonlySet<string> = new Set([
   'app.self',
   'app.usage',
   'widget.self',
+  // garden-person-rows-v1 (0.46.3): the App rows a Garden shares, answered
+  // by the same daemon door as the person on this computer (no project
+  // chat on the bridge, Rosson 2026-10-20).
+  'thread.catchup',
+  'thread.unread',
+  'thread.mute',
+  'files.list',
+  'files.read',
+  'files.readBinary',
+  'tickets.list',
+  'tickets.show',
+  'tickets.create',
+  'tickets.comment',
+  'tickets.resolve',
+  'activity.snapshot',
 ])
 
 /** How long the person's name is reused before `viewer.get` again. */

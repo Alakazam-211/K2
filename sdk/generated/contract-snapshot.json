@@ -1,17 +1,17 @@
 {
   "generatedBy": "contract-gen",
   "regen": "cargo run -p k2-core --bin contract-gen",
-  "catalogVersion": 16,
-  "catalogSha256": "1c763b603630c34182c34c6e9938057b48b4d021cfa308349bdbb1af4d092787",
+  "catalogVersion": 17,
+  "catalogSha256": "7ceee52232de8724c4a53b47007577ed87774c950dae83bf6c3a94d156a2418d",
   "runtimeSha256": "73dcbf36e59e8bf441b28750dc0a3e6b8a97ba8634a8b8e8523184acf55fbc99",
   "files": {
-    "cli/k2": "e897b032d66450ed26d067a84a73a3b8a67a41cedd323a80eee0e78d07127cfd",
-    "cli/k2#study app-api": "5a4b38fc5eecdc8d9c89f287de70df31b3d0118c3cba657f230f1b83c4231d64",
-    "crates/k2-core/src/app_surface.rs": "84cf3df181eb3d28954a0bf4e90b08da4080bbf5cbc03cd28a9a85ab6a2b4d76",
-    "sdk/generated/k2-frame.js": "7a4b32069888910ad3a5e167ad1f91f083be8f3c25d601ef078ea35ce071db60",
-    "sdk/generated/k2.d.ts": "46be72fd4f8a9b43d906bc9143f71eb25b543ccdb7e3dcc7e8024e02bf88763c",
-    "sdk/server/src/generated/verbs.ts": "80a7c2da61ce1294e7de39307d4c2d63abc128312a2a7a1f72c08b91720f2461",
-    "src/renderer/lib/k2-caps.generated.ts": "d397d74d3daee84780a5d8bed8a612205ed9e19262ec1ed6abde5d9b1dca0a13",
-    "src/renderer/lib/zen/zen-verbs.generated.ts": "4c7d22575631902d48268376deb16c8824996a08d4d5feb1abd875657c73294e"
+    "cli/k2": "c28ba6f37edf9a26fa0901a23fc51cd46fd4f08e0ebf88de255ea7595ded6dd5",
+    "cli/k2#study app-api": "3cd4ae1114df2f244b16b5fd6b817f9efbff0cee6fb24f243cffba0aa5fb7f8f",
+    "crates/k2-core/src/app_surface.rs": "bbc960f75fb1396e576d43572ebe0b470f9960f15f2d40e0688ef11c6367a311",
+    "sdk/generated/k2-frame.js": "2485116d32cd1121dbe2b7632dc3309539974afd8989800b2a4a8f7c1ae75a7d",
+    "sdk/generated/k2.d.ts": "f94fbfadfcd29aaefac94a6d0015f351430c113227c4cb2b6dcc891482d58027",
+    "sdk/server/src/generated/verbs.ts": "cca1c0bc6bffb00da39d1e23a79fd1cedb20e0ed116d6d0ec05bf0d6587104c2",
+    "src/renderer/lib/k2-caps.generated.ts": "cfaf91aa60bdfc6d36ae0bde71f4b65efa3844f5d515816c29c8b060f07ef467",
+    "src/renderer/lib/zen/zen-verbs.generated.ts": "b492e22009241e4c3e8120a29c3e4e4534a8ddf34c0c3d18d003911e83e089bc"
   }
 }

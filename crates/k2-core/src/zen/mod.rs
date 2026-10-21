@@ -266,15 +266,26 @@ pub const BRIDGE_CAPS: &[&str] = &[
 /// `room:members` (room-scope R9, 0.46.1) is `garden-local` too: one reveal
 /// with the App gateway's `room.members` row. A Garden acts as the owner,
 /// so it sees every name (the owner's hide-names switch is for guests).
+///
+/// `files:read`, `tickets:read`, `tickets:post` and `activity:read`
+/// (garden-person-rows-v1, 0.46.3) are `garden-local` and `app`: the
+/// Garden bridge's person rows (files, tickets, activity) answer through
+/// `/cli/zen/call` as the person on this computer (an agent-made widget:
+/// its maker's own room), in the App's shape.
 pub const USER_WIDGET_CAPS: &[&str] = &[
     "agents:read",
     "presence:read",
     "thread:read",
     "thread:post",
     "sources:read",
+    // 0.46.3 (garden-person-rows-v1): the Garden bridge's person rows.
+    "files:read",
+    "tickets:read",
+    "tickets:post",
     "store:read",
     "store:write",
     "guests:rooms",
+    "activity:read",
     "room:members",
 ];
 

@@ -198,12 +198,41 @@ describe('TUWA5: the generated tables', () => {
       // RS-A15: one row on both the App route and the Garden door.
       'guests.rooms': { cap: 'guests:rooms', reach: 'portable', kind: 'call' },
       'guests.setRooms': { cap: 'guests:rooms', reach: 'portable', kind: 'call' },
+      // garden-person-rows-v1 (catalog v17, 0.46.3): App rows the Garden
+      // shares, as the person on this computer (no project chat).
+      'thread.catchup': { cap: 'thread:read', reach: 'portable', kind: 'call' },
+      'thread.unread': { cap: 'thread:read', reach: 'portable', kind: 'call' },
+      'thread.mute': { cap: 'thread:read', reach: 'portable', kind: 'call' },
+      'files.list': { cap: 'files:read', reach: 'portable', kind: 'call' },
+      'files.read': { cap: 'files:read', reach: 'portable', kind: 'call' },
+      'files.readBinary': { cap: 'files:read', reach: 'portable', kind: 'call' },
+      'tickets.list': { cap: 'tickets:read', reach: 'portable', kind: 'call' },
+      'tickets.show': { cap: 'tickets:read', reach: 'portable', kind: 'call' },
+      'tickets.create': { cap: 'tickets:post', reach: 'portable', kind: 'call' },
+      'tickets.comment': { cap: 'tickets:post', reach: 'portable', kind: 'call' },
+      'tickets.resolve': { cap: 'tickets:post', reach: 'portable', kind: 'call' },
+      'activity.snapshot': { cap: 'activity:read', reach: 'portable', kind: 'call' },
     })
+    for (const v of ['projects.list', 'projects.messages', 'projects.post']) {
+      expect(v in ZEN_CUSTOM_VERBS, `${v}: no project chat on the Garden bridge`).toBe(false)
+    }
   })
 
   it('widget caps are bridge caps (or frame-host caps: sources:read; or Garden data: store:*), and K2’s own caps never are widget caps (UW69)', () => {
     const bridgeCaps = new Set<string>(Object.values(ZEN_VERBS).filter((c): c is NonNullable<typeof c> => c !== null))
-    const extra = ['sources:read', 'store:read', 'store:write', 'guests:rooms', 'room:members']
+    // garden-person-rows-v1 (0.46.3): files/tickets/activity caps are
+    // Garden-door caps (the daemon answers them through /cli/zen/call).
+    const extra = [
+      'sources:read',
+      'store:read',
+      'store:write',
+      'guests:rooms',
+      'room:members',
+      'files:read',
+      'tickets:read',
+      'tickets:post',
+      'activity:read',
+    ]
     for (const c of USER_WIDGET_CAPS) expect(bridgeCaps.has(c) || extra.includes(c), c).toBe(true)
     expect([...USER_WIDGET_CAPS]).toEqual([
       'agents:read',
@@ -211,9 +240,13 @@ describe('TUWA5: the generated tables', () => {
       'thread:read',
       'thread:post',
       'sources:read',
+      'files:read',
+      'tickets:read',
+      'tickets:post',
       'store:read',
       'store:write',
       'guests:rooms',
+      'activity:read',
       'room:members',
     ])
     expect(bridgeCaps.has('sources:read'), 'sources.* are answered by the custom layer, never ZEN_VERBS').toBe(false)

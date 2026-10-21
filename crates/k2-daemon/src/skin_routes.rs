@@ -570,8 +570,13 @@ pub fn handle_users_remove(body: &[u8], actor: &str) -> CliResponse {
     let Some(username) = str_field(&v, &["username", "name"]) else {
         return CliResponse::bad_request("missing username");
     };
+    // app-read-state-v1: the guest's read state goes with them.
+    let principal_id = skin::host_login_detail(username).ok().map(|d| d.principal_id);
     match skin::remove_principal_as(username, actor) {
         Ok(true) => {
+            if let Some(id) = principal_id {
+                crate::read_routes::forget_guest(&id);
+            }
             k2_core::log_debug!("[skin] actor={actor} removed principal {username}");
             CliResponse::ok_json(r#"{"success":true}"#.to_string())
         }

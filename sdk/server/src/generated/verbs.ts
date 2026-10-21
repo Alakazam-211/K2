@@ -8,7 +8,7 @@
 import type { K2Error } from '../errors.ts'
 
 /** The catalog version this table was generated from. */
-export const CATALOG_VERSION = 16
+export const CATALOG_VERSION = 17
 
 /** A JSON Schema from the catalog's subset, reduced for projection. */
 export type Schema = { readonly [key: string]: unknown }
@@ -201,7 +201,7 @@ export const APP_VERBS = {
     http: { method: 'POST', route: '/cli/thread/read', params: {}, query: [] },
     socket: null,
     responseNames: {},
-    response: {"additionalProperties":false,"properties":{"changed":{"type":"boolean"},"id":{"type":"string"},"lastReadSeq":{"type":"integer"},"lastSeq":{"type":"integer"},"ok":{"type":"boolean"},"unread":{"type":"integer"},"waiting":{"type":"integer"}},"type":"object"},
+    response: {"additionalProperties":false,"properties":{"addr":{"type":"string"},"changed":{"type":"boolean"},"id":{"type":"string"},"lastReadSeq":{"type":"integer"},"lastSeq":{"type":"integer"},"muted":{"type":"boolean"},"mutedUntil":{"type":"integer"},"ok":{"type":"boolean"},"total":{"type":"integer"},"unread":{"type":"integer"},"waiting":{"type":"integer"},"waitingTotal":{"type":"integer"}},"type":"object"},
   },
   'thread.unread': {
     cap: 'thread:read',
@@ -212,7 +212,18 @@ export const APP_VERBS = {
     http: { method: 'GET', route: '/cli/thread/unread', params: {}, query: [] },
     socket: null,
     responseNames: {},
-    response: {"additionalProperties":false,"properties":{"byConversation":{"items":{"additionalProperties":false,"properties":{"addr":{"type":"string"},"id":{"type":"string"},"lastReadSeq":{"type":"integer"},"lastSeq":{"type":"integer"},"unread":{"type":"integer"},"waiting":{"type":"integer"}},"type":"object"},"type":"array"},"ok":{"type":"boolean"},"total":{"type":"integer"}},"type":"object"},
+    response: {"additionalProperties":false,"properties":{"badgeKey":{"type":"string"},"byConversation":{"items":{"additionalProperties":false,"properties":{"addr":{"type":"string"},"id":{"type":"string"},"lastReadSeq":{"type":"integer"},"lastSeq":{"type":"integer"},"muted":{"type":"boolean"},"mutedUntil":{"type":"integer"},"unread":{"type":"integer"},"waiting":{"type":"integer"}},"type":"object"},"type":"array"},"muted":{"items":{"additionalProperties":false,"properties":{"addr":{"type":"string"},"id":{"type":"string"},"mutedUntil":{"type":"integer"}},"type":"object"},"type":"array"},"ok":{"type":"boolean"},"total":{"type":"integer"},"waitingTotal":{"type":"integer"}},"type":"object"},
+  },
+  'thread.mute': {
+    cap: 'thread:read',
+    effect: 'write',
+    kind: 'call',
+    feature: 'app-read-state-v1',
+    door: 'both',
+    http: { method: 'POST', route: '/cli/thread/mute', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"addr":{"type":"string"},"changed":{"type":"boolean"},"id":{"type":"string"},"lastReadSeq":{"type":"integer"},"lastSeq":{"type":"integer"},"muted":{"type":"boolean"},"mutedUntil":{"type":"integer"},"ok":{"type":"boolean"},"total":{"type":"integer"},"unread":{"type":"integer"},"waiting":{"type":"integer"},"waitingTotal":{"type":"integer"}},"type":"object"},
   },
   'files.resolveLinks': {
     cap: 'files:read',
@@ -1164,34 +1175,62 @@ export interface AppCatchup {
 }
 
 export interface AppReadState {
-  /** The cursor moved. */
+  /** The address as asked. */
+  readonly addr?: string
+  /** The cursor (or the mute) moved. */
   readonly changed?: boolean
   /** The conversation id. */
   readonly id?: string
   readonly lastReadSeq: number
   readonly lastSeq: number
+  readonly muted?: boolean
+  /** Seconds since the epoch, when a timed mute ends. */
+  readonly mutedUntil?: number
   readonly ok: boolean
+  /** The badge after the change: a guest's over its own rooms only. */
+  readonly total?: number
   readonly unread: number
   /** Cards waiting for an answer. */
   readonly waiting?: number
+  /** Cards waiting for an answer, muted or not. */
+  readonly waitingTotal?: number
 }
 
 export interface AppUnreadRow {
-  /** The room's handle. */
+  /** The room's handle (absent for a Garden row that isn't a room's Chat). */
   readonly addr?: string
   /** The conversation id. */
   readonly id: string
   readonly lastReadSeq: number
   readonly lastSeq: number
+  /** Muted: its unread leaves the total. */
+  readonly muted?: boolean
+  /** Seconds since the epoch, when a timed mute ends. */
+  readonly mutedUntil?: number
   readonly unread: number
   /** Cards waiting for an answer. */
   readonly waiting?: number
 }
 
+export interface AppMutedThread {
+  /** The room's handle. */
+  readonly addr?: string
+  /** The conversation id. */
+  readonly id: string
+  /** Seconds since the epoch, when a timed mute ends. */
+  readonly mutedUntil?: number
+}
+
 export interface AppUnread {
+  /** The person's opaque badge key on this server (the same on every surface they sign in on); absent for an App's own pass, which is not a person. */
+  readonly badgeKey?: string
   readonly byConversation: AppUnreadRow[]
+  readonly muted?: AppMutedThread[]
   readonly ok: boolean
+  /** The badge: unread across unmuted Threads plus every waiting card. */
   readonly total: number
+  /** Cards waiting for an answer, muted or not. */
+  readonly waitingTotal?: number
 }
 
 export interface AppLink {
@@ -1852,6 +1891,7 @@ export interface AppVerbs {
   'thread.catchup': { args: { limit?: number; threads: AppCatchupAsk[] }; value: AppCatchup }
   'thread.setRead': { args: { addr: string; seq?: number }; value: AppReadState }
   'thread.unread': { args: Record<string, never>; value: AppUnread }
+  'thread.mute': { args: { addr: string; muted: boolean; until?: number }; value: AppReadState }
   'files.resolveLinks': { args: { paths: string[]; workspace: string }; value: AppLinks }
   'thread.ensurePinned': { args: { workspace: string }; value: AppPinnedChat }
   'files.list': { args: { relPath: string; showHidden?: boolean; workspace: string }; value: AppFileEntry[] }
@@ -1909,7 +1949,7 @@ export interface AppVerbs {
   'chat.pass': { args: Record<string, never>; value: AppChatPass }
 }
 
-export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'guests.rooms' | 'guests.setRooms' | 'thread.page' | 'thread.latest' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.attachmentGet' | 'thread.catchup' | 'thread.setRead' | 'thread.unread' | 'files.resolveLinks' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage' | 'chat.pass'
+export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'guests.rooms' | 'guests.setRooms' | 'thread.page' | 'thread.latest' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.attachmentGet' | 'thread.catchup' | 'thread.setRead' | 'thread.unread' | 'thread.mute' | 'files.resolveLinks' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage' | 'chat.pass'
 export type AppSubscribeVerb = 'thread.events' | 'files.events' | 'activity.events'
 
 /** The named helpers: one per App verb a server calls (browser-only rows have none), grouped by surface. */
@@ -1947,10 +1987,12 @@ export interface AppSurfaces {
     attachmentGet(args: { addr: string; id: string; len?: number; mode?: 'meta' | 'preview' | 'thumb' | 'range'; n?: number; offset?: number; px?: number }): Promise<AppThreadFileData>
     /** Deltas (or newest pages) for many rooms in one round trip, each exactly what thread.page answers for it. cap thread:read · POST /cli/thread/catchup. e.g. `const {threads} = await k2.thread.catchup({threads: [{addr: 'sales', afterSeq: 41}]})` */
     catchup(args: { limit?: number; threads: AppCatchupAsk[] }): Promise<AppCatchup>
-    /** Mark this guest's (or the App's) own read cursor in a room's Thread; forward only. cap thread:read · POST /cli/thread/read. e.g. `await k2.thread.setRead({addr: 'sales', seq: last.seq})` */
+    /** Mark the signed-in person's own read cursor in a room's Thread (an App's own pass: its bookmark); forward only, on every surface they use. cap thread:read · POST /cli/thread/read. e.g. `await k2.thread.setRead({addr: 'sales', seq: last.seq})` */
     setRead(args: { addr: string; seq?: number }): Promise<AppReadState>
-    /** This guest's (or the App's) unread counts, one row per room Thread it may read. cap thread:read · GET /cli/thread/unread. e.g. `const {total, byConversation} = await k2.thread.unread()` */
+    /** The signed-in person's own unread counts: a guest's over the room Threads it may read, a Garden's over the person's Threads. cap thread:read · GET /cli/thread/unread. e.g. `const {total, byConversation} = await k2.thread.unread()` */
     unread(args?: Record<string, never>): Promise<AppUnread>
+    /** Mute or unmute a room's Thread for the signed-in person (their own state, on every surface); an App's own pass has no mutes. cap thread:read · POST /cli/thread/mute. e.g. `await k2.thread.mute({addr: 'sales', muted: true})` */
+    mute(args: { addr: string; muted: boolean; until?: number }): Promise<AppReadState>
     /** Check the room's pinned Chat is live (find-only for Apps: it never starts one). cap thread:read · POST /cli/workspace/ensure-pinned-chat. e.g. `await k2.thread.ensurePinned({workspace: 'sales'})` */
     ensurePinned(args: { workspace: string }): Promise<AppPinnedChat>
   }

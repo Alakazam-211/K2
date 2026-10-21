@@ -299,7 +299,10 @@ async fn app_guests_attach_read_cursors_and_file_links() {
     let rows = u["byConversation"].as_array().expect("rows").clone();
     assert_eq!(rows.len(), 1, "only its room's Thread: {u}");
     assert_eq!((rows[0]["id"].clone(), rows[0]["addr"].clone(), rows[0]["unread"].clone()), (json!(conv), json!(addr), json!(0)), "{u}");
-    assert!(u.get("person").is_none() && u.get("badgeKey").is_none(), "no person or push key for a guest: {u}");
+    // app-read-state-v1: a guest is a person with its own opaque badge key
+    // (never its key or name on the wire).
+    assert!(u.get("person").is_none(), "no person key on the wire: {u}");
+    assert!(u["badgeKey"].as_str().is_some_and(|k| !k.is_empty() && !k.contains("guest:")), "a guest's own badge key: {u}");
     let mut seqs = Vec::new();
     for t in ["one", "two", "three"] {
         let r = post(port, "/cli/thread/post", OWNER, json!({ "addr": addr, "text": t })).await;
@@ -328,8 +331,12 @@ async fn app_guests_attach_read_cursors_and_file_links() {
     // Rooms it doesn't hold; people-only routes; GET on the POST route.
     let r = post(port, "/cli/thread/read", &guest, json!({ "addr": other.handle })).await;
     assert_eq!((r.status, code_of(&r).as_str()), (403, "skin_room"), "{}", r.body);
-    let r = post(port, "/cli/thread/mute", &guest, json!({ "addr": addr, "muted": true })).await;
-    assert_eq!(r.status, 403, "mute is people-only: {}", r.body);
+    // app-read-state-v1 (0.46.3): a guest mutes its own room Threads;
+    // project chat stays people-only.
+    let r = post(port, "/cli/thread/mute", &guest, json!({ "addr": other.handle, "muted": true })).await;
+    assert_eq!((r.status, code_of(&r).as_str()), (403, "skin_room"), "{}", r.body);
+    let r = post(port, "/cli/thread/mute", &guest, json!({ "kind": "project", "group": "x", "muted": true })).await;
+    assert_eq!(r.status, 403, "project chat mutes are people-only: {}", r.body);
     let r = post(port, "/cli/project-group/read", &guest, json!({ "group": "x" })).await;
     assert_eq!(r.status, 403, "{}", r.body);
     let r = get(port, "/cli/thread/read", &guest, &format!("addr={}", enc(&addr))).await;
@@ -443,12 +450,14 @@ async fn the_app_link_serves_every_new_thread_row() {
         ("POST", "/cli/thread/read"),
         ("GET", "/cli/thread/unread"),
         ("POST", "/cli/fs/resolve-links"),
+        // app-read-state-v1 (catalog v17): thread.mute.
+        ("POST", "/cli/thread/mute"),
     ] {
         assert!(gateway::route_allowed(m, p, "", false), "{m} {p} on the link");
         assert!(k2_daemon::skin_gateway::allowlisted_http(m, p), "{m} {p} on the helper");
         assert!(k2_core::app_surface::verb_for(m, p).is_some(), "{m} {p} names its verb");
     }
-    for (m, p) in [("POST", "/cli/thread/mute"), ("POST", "/cli/project-group/read"), ("POST", "/cli/fs/search-tree")] {
+    for (m, p) in [("POST", "/cli/project-group/read"), ("POST", "/cli/fs/search-tree")] {
         assert!(!gateway::route_allowed(m, p, "", false), "{m} {p} stays off the link");
     }
 

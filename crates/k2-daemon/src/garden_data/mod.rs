@@ -29,6 +29,7 @@ pub mod call;
 pub mod export_routes;
 pub mod grant_routes;
 pub mod guest_rooms;
+pub mod person_rows;
 pub mod tx_routes;
 
 /// `~/.k2/stores/` (0700): `gardens.sqlite` and `.snapshots/`.

@@ -56,8 +56,10 @@ pub const FRAME_MAX_BYTES: usize = 32 * 1024;
 
 /// The guide page's line cap (FC33; 80 until Garden data's 15 rows and
 /// their two cap groups, contract-garden-data-v1 §7.2; 112 since Thread
-/// parity 0.46.3 added thread.attachment/open/links/pickFiles/markRead).
-pub const GUIDE_MAX_LINES: usize = 112;
+/// parity 0.46.3 added thread.attachment/open/links/pickFiles/markRead;
+/// 128 since the Garden person rows, catalog v17: 12 rows and the files,
+/// tickets and activity cap groups).
+pub const GUIDE_MAX_LINES: usize = 128;
 
 /// Error codes every call may answer; the guide states them once.
 pub const ALWAYS_ERRORS: &[&str] = &["cap_not_granted", "verb_unavailable", "failed"];

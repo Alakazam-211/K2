@@ -399,18 +399,67 @@ mod tests {
         // One reveal = both surfaces: RS-A15's guests.rooms / guests.setRooms
         // and room-scope 0.46.1's room.members, app.self and app.usage are on
         // both transports (portable, their App route); widget.self is the Garden's.
+        // 0.46.3 (garden-person-rows-v1, research I + B): the Garden bridge's
+        // person rows join both transports with the App rows they share:
+        // thread.catchup / unread / mute, tickets.list/show/create/comment/
+        // resolve, activity.snapshot and files.list/read/readBinary (12).
+        // No project chat row (Rosson 2026-10-20).
         let local = c.verbs_exposed_to(Exposure::GardenLocal);
         assert_eq!(
             local.len(),
-            21,
-            "store.* ×10, save.* ×4, viewer.get, guests.rooms, guests.setRooms, room.members, app.self, app.usage, widget.self"
+            33,
+            "store.* ×10, save.* ×4, viewer.get, guests.rooms, guests.setRooms, room.members, app.self, app.usage, widget.self, and the 12 person rows"
         );
         let both: Vec<&str> = local.iter().filter(|v| v.exposed_to(Exposure::App)).map(|v| v.verb.as_str()).collect();
-        assert_eq!(both, ["guests.rooms", "guests.setRooms", "room.members", "app.self", "app.usage"]);
+        assert_eq!(
+            both,
+            [
+                "guests.rooms",
+                "guests.setRooms",
+                "thread.catchup",
+                "thread.unread",
+                "thread.mute",
+                "files.list",
+                "files.read",
+                "files.readBinary",
+                "tickets.list",
+                "tickets.show",
+                "tickets.create",
+                "tickets.comment",
+                "tickets.resolve",
+                "activity.snapshot",
+                "room.members",
+                "app.self",
+                "app.usage"
+            ]
+        );
+        assert!(!both.iter().any(|v| v.starts_with("projects.")), "no project chat on the Garden bridge");
+        // The rows each joined both transports under their own feature;
+        // the Garden transport's key is garden-person-rows-v1 (boot-status).
+        let person_rows: [(&str, &str); 12] = [
+            ("thread.catchup", "inbox-catchup-v1"),
+            ("thread.unread", "app-thread-parity-v1"),
+            ("thread.mute", "app-read-state-v1"),
+            ("files.list", "app-api-v1"),
+            ("files.read", "app-api-v1"),
+            ("files.readBinary", "app-api-v1"),
+            ("tickets.list", "app-api-v1"),
+            ("tickets.show", "app-api-v1"),
+            ("tickets.create", "app-api-v1"),
+            ("tickets.comment", "app-api-v1"),
+            ("tickets.resolve", "app-api-v1"),
+            ("activity.snapshot", "app-api-v1"),
+        ];
+        for (verb, feature) in person_rows {
+            let v = c.verb(verb).unwrap_or_else(|| panic!("{verb} row"));
+            assert_eq!(v.feature, feature, "{verb}");
+            assert!(v.errors.iter().any(|e| e == "not_bound") && v.errors.iter().any(|e| e == "author_unknown"), "{verb}: Garden errors");
+        }
         for v in local {
             if v.exposed_to(Exposure::App) {
                 assert_eq!(v.reach, Reach::Portable, "{}", v.verb);
-                assert!(["guests-rooms-v1", "room-members-v1", "app-self-v1"].contains(&v.feature.as_str()), "{}", v.verb);
+                let person_row = person_rows.iter().any(|(n, _)| *n == v.verb);
+                assert!(person_row || ["guests-rooms-v1", "room-members-v1", "app-self-v1"].contains(&v.feature.as_str()), "{}", v.verb);
                 continue;
             }
             assert_eq!(v.reach, Reach::Local, "{}", v.verb);
@@ -506,17 +555,47 @@ mod tests {
             c.caps_exposed_to(Exposure::Widget),
             ["agents:read", "presence:read", "thread:read", "thread:post", "sources:read"]
         );
+        // 0.46.3 (garden-person-rows-v1): files:read, tickets:read,
+        // tickets:post and activity:read join through the Garden door.
         assert_eq!(
             c.widget_caps(),
-            ["agents:read", "presence:read", "thread:read", "thread:post", "sources:read", "store:read", "store:write", "guests:rooms", "room:members"]
+            [
+                "agents:read",
+                "presence:read",
+                "thread:read",
+                "thread:post",
+                "sources:read",
+                "files:read",
+                "tickets:read",
+                "tickets:post",
+                "store:read",
+                "store:write",
+                "guests:rooms",
+                "activity:read",
+                "room:members"
+            ]
         );
+        for name in ["files:read", "tickets:read", "tickets:post", "activity:read"] {
+            let row = c.cap(name).unwrap_or_else(|| panic!("{name}"));
+            assert_eq!(row.exposure, [Exposure::App, Exposure::GardenLocal], "{name}: App and Garden, never the widget bridge");
+            assert!(row.sentence.as_deref().is_some_and(|s| s.contains("on this computer")), "{name}: its sentence says where");
+        }
+        let local_scope = [
+            "presence:read",
+            "sources:read",
+            "files:read",
+            "tickets:read",
+            "tickets:post",
+            "store:read",
+            "store:write",
+            "guests:rooms",
+            "activity:read",
+            "room:members",
+        ];
         for name in c.widget_caps() {
             let s = c.cap(name).and_then(|r| r.sentence.as_deref());
             let s = s.unwrap_or_else(|| panic!("widget cap {name} has no sentence"));
-            assert!(
-                s.contains("{where}") || ["presence:read", "sources:read", "store:read", "store:write", "guests:rooms", "room:members"].contains(&name),
-                "{name}: sentence names its scope: {s}"
-            );
+            assert!(s.contains("{where}") || local_scope.contains(&name), "{name}: sentence names its scope: {s}");
         }
     }
 

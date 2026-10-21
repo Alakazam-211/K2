@@ -349,6 +349,10 @@ fn remove_user(c: &Ctx, v: &J) -> R {
     let (pid, g) = app_grant(c, &user)?;
     if only_this_app(c, &pid)? {
         let removed = skin::remove_principal(&user).map_err(|e| err(500, "store", e))?;
+        if removed {
+            // app-read-state-v1: the guest's read state goes with them.
+            crate::read_routes::forget_guest(&pid);
+        }
         return Ok(json!({ "ok": true, "username": user, "removed": "person", "done": removed }));
     }
     let done = skin::delete_grant_by_id(&g.id).map_err(|e| err(500, "store", e))?;

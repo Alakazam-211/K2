@@ -21,6 +21,12 @@
 //! skipped, not closed: `GET /cli/thread/activity` is the catch-up, and
 //! strip traffic must never force a Thread resync. App guests never see
 //! them ([`skin_may_see_frame`] passes only `thread`).
+//!
+//! Guest read frames (app-read-state-v1, 0.46.3): an App guest's socket
+//! also gets `{"collection":"read",…}` ([`guest_read_wire`]) when its own
+//! reader's cursor or mute moves in this Thread on any surface
+//! (`read_live::guest_moved`); owner/Connect sockets never do (they read
+//! `thread_read` on `/cli/sessions/events`).
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -345,6 +351,16 @@ fn skin_overlay_gate(
     }
 }
 
+/// app-read-state-v1 (0.46.3): a guest's `read` frame on its overlay
+/// socket, `{"collection":"read", id, addr, lastReadSeq, lastSeq, unread,
+/// waiting, muted, mutedUntil?, total, waitingTotal}` (totals over its own
+/// rooms only). Sent when the guest's own cursor or mute moved in this
+/// Thread on any surface; never for another reader, never a `rev`.
+pub(crate) fn guest_read_wire(mut body: serde_json::Map<String, serde_json::Value>) -> String {
+    body.insert("collection".into(), serde_json::json!("read"));
+    serde_json::Value::Object(body).to_string()
+}
+
 /// WS handler. Dispatcher already token-authed. Requires `conversation=`.
 /// Skin: pass `Some(SkinPass)` so rooms + pinned-Chat are checked **before**
 /// `accept_async`. Owner/Connect: `None`.
@@ -411,6 +427,10 @@ pub async fn serve_overlay_events_connection(
     let viewer_login = if skin { None } else { viewer_login };
     let mut rx = subscribe();
     let mut activity_rx = subscribe_activity();
+    // app-read-state-v1 (0.46.3): a guest socket hears its own reader's
+    // cursor or mute moving in this Thread, on any surface.
+    let guest_key = skin_pass.as_ref().map(crate::read_routes::guest_person_key);
+    let mut guest_rx = crate::read_live::subscribe_guest();
     let mut keepalive = tokio::time::interval(ping_interval());
     keepalive.tick().await; // burn the immediate first tick
 
@@ -422,6 +442,21 @@ pub async fn serve_overlay_events_connection(
             _ = keepalive.tick() => {
                 if write.send(Message::Ping(Vec::new())).await.is_err() {
                     break;
+                }
+            }
+            moved = crate::read_live::next_guest_move(&mut guest_rx, guest_key.as_deref()) => {
+                let (Some(pass), true) = (skin_pass.clone(), moved.conversation_id == conversation) else {
+                    continue;
+                };
+                let conv = conversation.clone();
+                let frame = tokio::task::spawn_blocking(move || crate::read_routes::guest_read_frame(&pass, &conv))
+                    .await
+                    .ok()
+                    .flatten();
+                if let Some(text) = frame.map(guest_read_wire) {
+                    if write.send(Message::Text(text)).await.is_err() {
+                        break;
+                    }
                 }
             }
             incoming = read.next() => {

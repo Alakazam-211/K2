@@ -17,7 +17,7 @@
 //! test fails a hand edit).
 
 /// The catalog version this table was generated from.
-pub const CATALOG_VERSION: u32 = 16;
+pub const CATALOG_VERSION: u32 = 17;
 
 /// Every `(method, path)` the browser helper forwards with a guest's
 /// pass (rows for both doors and helper-only rows; a GET row also opens
@@ -41,6 +41,7 @@ pub const HTTP_ALLOWLIST: &[(&str, &str)] = &[
     ("POST", "/cli/thread/read"),
     ("GET", "/cli/thread/unread"),
     ("HEAD", "/cli/thread/unread"),
+    ("POST", "/cli/thread/mute"),
     ("POST", "/cli/fs/resolve-links"),
     ("POST", "/cli/workspace/ensure-pinned-chat"),
     ("GET", "/cli/fs/read-dir"),
@@ -136,6 +137,7 @@ pub const LINK_HTTP: &[(&str, &str)] = &[
     ("POST", "/cli/thread/read"),
     ("GET", "/cli/thread/unread"),
     ("HEAD", "/cli/thread/unread"),
+    ("POST", "/cli/thread/mute"),
     ("POST", "/cli/fs/resolve-links"),
     ("POST", "/cli/workspace/ensure-pinned-chat"),
     ("GET", "/cli/fs/read-dir"),
@@ -247,6 +249,7 @@ pub const VERBS: &[(&str, &str, &str, &str)] = &[
     ("POST", "/cli/thread/catchup", "thread.catchup", "both"),
     ("POST", "/cli/thread/read", "thread.setRead", "both"),
     ("GET", "/cli/thread/unread", "thread.unread", "both"),
+    ("POST", "/cli/thread/mute", "thread.mute", "both"),
     ("POST", "/cli/fs/resolve-links", "files.resolveLinks", "both"),
     ("POST", "/cli/workspace/ensure-pinned-chat", "thread.ensurePinned", "both"),
     ("GET", "/cli/fs/read-dir", "files.list", "both"),

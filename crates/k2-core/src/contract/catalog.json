@@ -1,5 +1,5 @@
 {
-  "catalogVersion": 16,
+  "catalogVersion": 17,
   "caps": [
     {
       "name": "agents:read",
@@ -15,7 +15,7 @@
     },
     {
       "name": "thread:read",
-      "exposure": ["widget", "app"],
+      "exposure": ["widget", "app", "garden-local"],
       "label": "Read the Thread",
       "sentence": "Read your conversations with the agents in {where}, including each one's last message."
     },
@@ -35,10 +35,25 @@
     {"name": "gardens:manage", "label": "Create, rename and delete Gardens"},
     {"name": "gardens:template", "label": "Turn this Garden into a built-in page"},
     {"name": "app:navigate", "label": "Switch the rail view"},
-    {"name": "files:read", "exposure": ["app"], "label": "Read files (also shows heartbeat instructions)"},
+    {
+      "name": "files:read",
+      "exposure": ["app", "garden-local"],
+      "label": "Read files (also shows heartbeat instructions)",
+      "sentence": "Read files in the agents' rooms on this computer (the room's files, never a path outside it)."
+    },
     {"name": "files:write", "exposure": ["app"], "label": "Write files (not the agent's .k2 folder)"},
-    {"name": "tickets:read", "exposure": ["app"], "label": "Read tickets and get live ticket updates"},
-    {"name": "tickets:post", "exposure": ["app"], "label": "Open, answer, assign and set status on tickets"},
+    {
+      "name": "tickets:read",
+      "exposure": ["app", "garden-local"],
+      "label": "Read tickets and get live ticket updates",
+      "sentence": "Read the tickets in the agents' rooms on this computer, with their comments."
+    },
+    {
+      "name": "tickets:post",
+      "exposure": ["app", "garden-local"],
+      "label": "Open, answer, assign and set status on tickets",
+      "sentence": "Open tickets for the agents on this computer, comment on them and set their status, as you."
+    },
     {"name": "wiki:read", "exposure": ["app"], "label": "Read the wiki"},
     {
       "name": "store:read",
@@ -58,7 +73,12 @@
       "label": "Set its own guests' rooms (an owner grant per App, never a guest's)",
       "sentence": "See and change which rooms an App's guests can reach on this computer. Every change asks you first, outside the widget."
     },
-    {"name": "activity:read", "exposure": ["app"], "label": "See when the agent is working"},
+    {
+      "name": "activity:read",
+      "exposure": ["app", "garden-local"],
+      "label": "See when the agent is working",
+      "sentence": "See when the agents on this computer are working (no tool names, text or paths)."
+    },
     {"name": "heartbeats:read", "exposure": ["app"], "label": "See heartbeats: schedule, next fire, history"},
     {
       "name": "heartbeats:write",
@@ -6455,7 +6475,8 @@
       "verb": "thread.catchup",
       "cap": "thread:read",
       "exposure": [
-        "app"
+        "app",
+        "garden-local"
       ],
       "reach": "portable",
       "effect": "read",
@@ -7182,6 +7203,8 @@
         "cap_not_granted",
         "usage",
         "not_found",
+        "not_bound",
+        "author_unknown",
         "failed",
         "rate_limited"
       ],
@@ -7234,11 +7257,15 @@
           },
           "changed": {
             "type": "boolean",
-            "description": "The cursor moved."
+            "description": "The cursor (or the mute) moved."
           },
           "id": {
             "type": "string",
             "description": "The conversation id."
+          },
+          "addr": {
+            "type": "string",
+            "description": "The address as asked."
           },
           "lastReadSeq": {
             "type": "integer"
@@ -7252,6 +7279,21 @@
           "waiting": {
             "type": "integer",
             "description": "Cards waiting for an answer."
+          },
+          "muted": {
+            "type": "boolean"
+          },
+          "mutedUntil": {
+            "type": "integer",
+            "description": "Seconds since the epoch, when a timed mute ends."
+          },
+          "total": {
+            "type": "integer",
+            "description": "The badge after the change: a guest's over its own rooms only."
+          },
+          "waitingTotal": {
+            "type": "integer",
+            "description": "Cards waiting for an answer, muted or not."
           }
         },
         "required": [
@@ -7272,14 +7314,15 @@
         "not_found",
         "failed"
       ],
-      "doc": "Mark this guest's (or the App's) own read cursor in a room's Thread; forward only.",
+      "doc": "Mark the signed-in person's own read cursor in a room's Thread (an App's own pass: its bookmark); forward only, on every surface they use.",
       "example": "await k2.thread.setRead({addr: 'sales', seq: last.seq})"
     },
     {
       "verb": "thread.unread",
       "cap": "thread:read",
       "exposure": [
-        "app"
+        "app",
+        "garden-local"
       ],
       "reach": "portable",
       "effect": "read",
@@ -7300,7 +7343,12 @@
             "type": "boolean"
           },
           "total": {
-            "type": "integer"
+            "type": "integer",
+            "description": "The badge: unread across unmuted Threads plus every waiting card."
+          },
+          "waitingTotal": {
+            "type": "integer",
+            "description": "Cards waiting for an answer, muted or not."
           },
           "byConversation": {
             "type": "array",
@@ -7314,7 +7362,7 @@
                 },
                 "addr": {
                   "type": "string",
-                  "description": "The room's handle."
+                  "description": "The room's handle (absent for a Garden row that isn't a room's Chat)."
                 },
                 "lastReadSeq": {
                   "type": "integer"
@@ -7328,6 +7376,14 @@
                 "waiting": {
                   "type": "integer",
                   "description": "Cards waiting for an answer."
+                },
+                "muted": {
+                  "type": "boolean",
+                  "description": "Muted: its unread leaves the total."
+                },
+                "mutedUntil": {
+                  "type": "integer",
+                  "description": "Seconds since the epoch, when a timed mute ends."
                 }
               },
               "required": [
@@ -7338,6 +7394,35 @@
               ],
               "additionalProperties": false
             }
+          },
+          "muted": {
+            "type": "array",
+            "items": {
+              "title": "AppMutedThread",
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "The conversation id."
+                },
+                "addr": {
+                  "type": "string",
+                  "description": "The room's handle."
+                },
+                "mutedUntil": {
+                  "type": "integer",
+                  "description": "Seconds since the epoch, when a timed mute ends."
+                }
+              },
+              "required": [
+                "id"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "badgeKey": {
+            "type": "string",
+            "description": "The person's opaque badge key on this server (the same on every surface they sign in on); absent for an App's own pass, which is not a person."
           }
         },
         "required": [
@@ -7355,10 +7440,125 @@
         "cap_not_granted",
         "usage",
         "not_found",
+        "not_bound",
+        "author_unknown",
         "failed"
       ],
-      "doc": "This guest's (or the App's) unread counts, one row per room Thread it may read.",
+      "doc": "The signed-in person's own unread counts: a guest's over the room Threads it may read, a Garden's over the person's Threads.",
       "example": "const {total, byConversation} = await k2.thread.unread()"
+    },
+    {
+      "verb": "thread.mute",
+      "cap": "thread:read",
+      "exposure": [
+        "app",
+        "garden-local"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-read-state-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/thread/mute"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "addr": {
+              "type": "string",
+              "description": "The room's handle (or its pinned Chat's conversation id)."
+            },
+            "muted": {
+              "type": "boolean",
+              "description": "true mutes, false unmutes."
+            },
+            "until": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Seconds since the epoch: the mute ends then (absent: until unmuted)."
+            }
+          },
+          "required": [
+            "addr",
+            "muted"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppReadState",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "changed": {
+            "type": "boolean",
+            "description": "The cursor (or the mute) moved."
+          },
+          "id": {
+            "type": "string",
+            "description": "The conversation id."
+          },
+          "addr": {
+            "type": "string",
+            "description": "The address as asked."
+          },
+          "lastReadSeq": {
+            "type": "integer"
+          },
+          "lastSeq": {
+            "type": "integer"
+          },
+          "unread": {
+            "type": "integer"
+          },
+          "waiting": {
+            "type": "integer",
+            "description": "Cards waiting for an answer."
+          },
+          "muted": {
+            "type": "boolean"
+          },
+          "mutedUntil": {
+            "type": "integer",
+            "description": "Seconds since the epoch, when a timed mute ends."
+          },
+          "total": {
+            "type": "integer",
+            "description": "The badge after the change: a guest's over its own rooms only."
+          },
+          "waitingTotal": {
+            "type": "integer",
+            "description": "Cards waiting for an answer, muted or not."
+          }
+        },
+        "required": [
+          "ok",
+          "lastReadSeq",
+          "lastSeq",
+          "unread"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "not_bound",
+        "usage",
+        "not_found",
+        "failed"
+      ],
+      "doc": "Mute or unmute a room's Thread for the signed-in person (their own state, on every surface); an App's own pass has no mutes.",
+      "example": "await k2.thread.mute({addr: 'sales', muted: true})"
     },
     {
       "verb": "files.resolveLinks",
@@ -7530,7 +7730,8 @@
       "verb": "files.list",
       "cap": "files:read",
       "exposure": [
-        "app"
+        "app",
+        "garden-local"
       ],
       "reach": "portable",
       "effect": "read",
@@ -7616,6 +7817,8 @@
         "skin_room",
         "cap_not_granted",
         "usage",
+        "not_bound",
+        "author_unknown",
         "failed"
       ],
       "doc": "A folder's entries, folders first.",
@@ -7625,7 +7828,8 @@
       "verb": "files.read",
       "cap": "files:read",
       "exposure": [
-        "app"
+        "app",
+        "garden-local"
       ],
       "reach": "portable",
       "effect": "read",
@@ -7692,6 +7896,8 @@
         "skin_room",
         "cap_not_granted",
         "usage",
+        "not_bound",
+        "author_unknown",
         "failed"
       ],
       "doc": "A UTF-8 text file (at most 10 MiB).",
@@ -7701,7 +7907,8 @@
       "verb": "files.readBinary",
       "cap": "files:read",
       "exposure": [
-        "app"
+        "app",
+        "garden-local"
       ],
       "reach": "portable",
       "effect": "read",
@@ -7757,6 +7964,8 @@
         "skin_room",
         "cap_not_granted",
         "usage",
+        "not_bound",
+        "author_unknown",
         "failed"
       ],
       "doc": "A file as base64 (at most 50 MiB; read-range for more).",
@@ -8816,7 +9025,8 @@
       "verb": "tickets.list",
       "cap": "tickets:read",
       "exposure": [
-        "app"
+        "app",
+        "garden-local"
       ],
       "reach": "portable",
       "effect": "read",
@@ -8980,6 +9190,8 @@
         "skin_room",
         "cap_not_granted",
         "usage",
+        "not_bound",
+        "author_unknown",
         "failed"
       ],
       "doc": "A room's tickets, newest first.",
@@ -8989,7 +9201,8 @@
       "verb": "tickets.show",
       "cap": "tickets:read",
       "exposure": [
-        "app"
+        "app",
+        "garden-local"
       ],
       "reach": "portable",
       "effect": "read",
@@ -9206,6 +9419,8 @@
         "skin_room",
         "cap_not_granted",
         "usage",
+        "not_bound",
+        "author_unknown",
         "failed"
       ],
       "doc": "One ticket with its comments (and brief).",
@@ -9215,7 +9430,8 @@
       "verb": "tickets.create",
       "cap": "tickets:post",
       "exposure": [
-        "app"
+        "app",
+        "garden-local"
       ],
       "reach": "portable",
       "effect": "write",
@@ -9422,6 +9638,8 @@
         "cap_not_granted",
         "usage",
         "too_large",
+        "not_bound",
+        "author_unknown",
         "failed"
       ],
       "doc": "Open a ticket in a room for its agent.",
@@ -9431,7 +9649,8 @@
       "verb": "tickets.comment",
       "cap": "tickets:post",
       "exposure": [
-        "app"
+        "app",
+        "garden-local"
       ],
       "reach": "portable",
       "effect": "write",
@@ -9517,6 +9736,8 @@
         "skin_room",
         "cap_not_granted",
         "usage",
+        "not_bound",
+        "author_unknown",
         "failed"
       ],
       "doc": "Comment on a ticket as the guest (free text moves it to needs_discussion).",
@@ -9620,7 +9841,8 @@
       "verb": "tickets.resolve",
       "cap": "tickets:post",
       "exposure": [
-        "app"
+        "app",
+        "garden-local"
       ],
       "reach": "portable",
       "effect": "write",
@@ -9679,6 +9901,8 @@
         "skin_room",
         "cap_not_granted",
         "usage",
+        "not_bound",
+        "author_unknown",
         "failed"
       ],
       "doc": "Set a ticket's status (Apps can't set answered).",
@@ -12046,7 +12270,8 @@
       "verb": "activity.snapshot",
       "cap": "activity:read",
       "exposure": [
-        "app"
+        "app",
+        "garden-local"
       ],
       "reach": "portable",
       "effect": "read",
@@ -12171,6 +12396,8 @@
         "skin_room",
         "cap_not_granted",
         "usage",
+        "not_bound",
+        "author_unknown",
         "failed"
       ],
       "doc": "Whether the room's agent is working now, per session.",

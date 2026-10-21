@@ -8,6 +8,7 @@ import { K2_CAPS, USER_WIDGET_CAPS } from '../k2-caps.generated'
 import { ZEN_VERBS as BRIDGE_ZEN_VERBS } from './zen-bridge'
 import { ZEN_CUSTOM_VERBS, ZEN_VERBS } from './zen-verbs.generated'
 import { ZEN_TEMPLATES_FALLBACK, zenWidgetMayRun } from './zen-custom-types'
+import { ZEN_STORE_VERBS } from './zen-custom-store'
 import { ZEN_LIB_MANIFEST, ZenLibError, zenLib, zenLibFind, zenLibVersionMatches, type ZenLibEntry } from './zen-lib-loader'
 
 const ROOT = resolve(__dirname, '../../../..')
@@ -82,6 +83,14 @@ describe('day-0: verb tables', () => {
         expect(row.reach).toBe('portable')
         expect(row.cap).toBe('guests:rooms')
         expect(verb in ZEN_VERBS, verb).toBe(false)
+        continue
+      }
+      // garden-person-rows-v1 (0.46.3): App rows the Garden shares, answered
+      // by this computer's daemon as the person (portable, Garden-door caps).
+      if (ZEN_STORE_VERBS.has(verb)) {
+        expect(row.reach).toBe('portable')
+        expect(['thread:read', 'files:read', 'tickets:read', 'tickets:post', 'activity:read']).toContain(row.cap)
+        expect(USER_WIDGET_CAPS as readonly string[]).toContain(row.cap)
         continue
       }
       expect(verb in ZEN_VERBS, verb).toBe(true)

@@ -326,6 +326,191 @@ export interface ThreadLinks {
   readonly links: ThreadLink[]
 }
 
+export interface AppCatchupAsk {
+  readonly addr: string
+  readonly afterSeq?: number
+  readonly newest?: boolean
+}
+
+export interface AppThreadFile {
+  /** file. */
+  readonly kind: string
+  readonly line?: number
+  readonly lineEnd?: number
+  /** Content type from the name (image/png, application/pdf, text/markdown, ...). */
+  readonly mime?: string
+  /** Milliseconds since the epoch: the file's modified time when it was sent. */
+  readonly modifiedAt?: number
+  readonly name?: string
+  /** Bytes, when it was sent. */
+  readonly size?: number
+  /** ok, changed (since it was sent), gone (moved or deleted) or hidden (not shared with you: no name, type or size). */
+  readonly state: string
+}
+
+export interface AppPostAuthor {
+  /** owner, user (a Connect login) or guest (an App pass or guest login). */
+  readonly kind: string
+  readonly login: string
+  /** The owner's display name, on an owner's answer only. */
+  readonly name?: string
+}
+
+export interface AppChoiceCard {
+  readonly allow_custom: boolean
+  readonly answer?: string
+  /** Seconds since the epoch, when answered. */
+  readonly answeredAt?: number
+  readonly answeredBy?: AppPostAuthor
+  /** Seconds since the epoch, when a pending card expires. */
+  readonly expiresAt?: number
+  readonly options: ChoiceOption[]
+  readonly prompt: string
+  /** pending, answered, voided or expired. */
+  readonly status: string
+}
+
+export interface AppSecretCard {
+  /** Seconds since the epoch, when answered. */
+  readonly answeredAt?: number
+  readonly answeredBy?: AppPostAuthor
+  /** fetch, file or env. */
+  readonly delivery?: string
+  /** Seconds since the epoch, when a pending card expires. */
+  readonly expiresAt?: number
+  readonly hosts?: string[]
+  readonly name: string
+  readonly prompt?: string
+  /** A k2v:// reference to the stored secret (never its value). */
+  readonly ref?: string
+  /** workspace, server or session. */
+  readonly scope?: string
+  readonly secretKind?: string
+  /** pending, set, voided or expired. */
+  readonly status: string
+}
+
+export interface AppPostWidget {
+  readonly garden: string
+  readonly widget: string
+}
+
+export interface AppThreadDoc {
+  /** Files that ride the message; one your file rights don't cover is {kind, state: hidden}. Read one with thread.attachmentGet by its index. */
+  readonly attachments?: AppThreadFile[]
+  readonly author?: AppPostAuthor
+  /** The text (redacted); a card's prompt. */
+  readonly body?: string
+  readonly choice?: AppChoiceCard
+  /** Seconds since the epoch (not milliseconds). */
+  readonly created_at: number
+  readonly from: string
+  readonly id: string
+  /** text, choice or secret. */
+  readonly kind: string
+  readonly secret?: AppSecretCard
+  readonly to?: string
+  /** Where it came from: thread, compose, card, msg, inbox, v1, … */
+  readonly via?: string
+  readonly widget?: AppPostWidget
+}
+
+export interface AppThreadItem {
+  /** Always thread. */
+  readonly collection?: string
+  readonly doc: AppThreadDoc
+  readonly id: string
+  readonly seq: number
+}
+
+export interface AppCatchupError {
+  readonly code: string
+  readonly hint?: string
+}
+
+export interface AppThreadRemoved {
+  readonly id: string
+  readonly seq: number
+}
+
+export interface AppCatchupEntry {
+  readonly addr: string
+  readonly after_seq?: number
+  readonly changed?: AppThreadItem[]
+  readonly conversation?: string
+  readonly deferred?: boolean
+  readonly error?: AppCatchupError
+  readonly has_more?: boolean
+  readonly items?: AppThreadItem[]
+  readonly removed?: AppThreadRemoved[]
+}
+
+export interface AppCatchup {
+  /** Some entries are deferred (the 4 MiB budget): call again with those. */
+  readonly has_more?: boolean
+  readonly ok: boolean
+  readonly threads: AppCatchupEntry[]
+}
+
+export interface AppUnreadRow {
+  /** The room's handle (absent for a Garden row that isn't a room's Chat). */
+  readonly addr?: string
+  /** The conversation id. */
+  readonly id: string
+  readonly lastReadSeq: number
+  readonly lastSeq: number
+  /** Muted: its unread leaves the total. */
+  readonly muted?: boolean
+  /** Seconds since the epoch, when a timed mute ends. */
+  readonly mutedUntil?: number
+  readonly unread: number
+  /** Cards waiting for an answer. */
+  readonly waiting?: number
+}
+
+export interface AppMutedThread {
+  /** The room's handle. */
+  readonly addr?: string
+  /** The conversation id. */
+  readonly id: string
+  /** Seconds since the epoch, when a timed mute ends. */
+  readonly mutedUntil?: number
+}
+
+export interface AppUnread {
+  /** The person's opaque badge key on this server (the same on every surface they sign in on); absent for an App's own pass, which is not a person. */
+  readonly badgeKey?: string
+  readonly byConversation: AppUnreadRow[]
+  readonly muted?: AppMutedThread[]
+  readonly ok: boolean
+  /** The badge: unread across unmuted Threads plus every waiting card. */
+  readonly total: number
+  /** Cards waiting for an answer, muted or not. */
+  readonly waitingTotal?: number
+}
+
+export interface AppReadState {
+  /** The address as asked. */
+  readonly addr?: string
+  /** The cursor (or the mute) moved. */
+  readonly changed?: boolean
+  /** The conversation id. */
+  readonly id?: string
+  readonly lastReadSeq: number
+  readonly lastSeq: number
+  readonly muted?: boolean
+  /** Seconds since the epoch, when a timed mute ends. */
+  readonly mutedUntil?: number
+  readonly ok: boolean
+  /** The badge after the change: a guest's over its own rooms only. */
+  readonly total?: number
+  readonly unread: number
+  /** Cards waiting for an answer. */
+  readonly waiting?: number
+  /** Cards waiting for an answer, muted or not. */
+  readonly waitingTotal?: number
+}
+
 export interface ThreadPickedFile {
   readonly mime?: string
   readonly name: string
@@ -480,6 +665,157 @@ export interface SourceAsk {
   readonly opened: boolean
 }
 
+export interface AppFileEntry {
+  /** A symlinked folder reads false. */
+  readonly isDirectory: boolean
+  /** Milliseconds since the epoch. */
+  readonly modifiedAt: number
+  readonly name: string
+  readonly relPath: string
+  /** Bytes. */
+  readonly size: number
+}
+
+export interface AppFileText {
+  readonly content: string
+  readonly name: string
+  readonly relPath: string
+}
+
+export interface AppFileBase64 {
+  readonly base64: string
+}
+
+export interface AppTicket {
+  readonly agentName: string
+  readonly answer: string | null
+  /** Seconds since the epoch. */
+  readonly answeredAt: number | null
+  readonly assignees: string[]
+  readonly body: string | null
+  readonly briefBytes: number | null
+  readonly commentCount: number
+  /** Seconds since the epoch. */
+  readonly createdAt: number
+  readonly hasBrief: boolean
+  readonly id: string
+  /** question, approval or fyi. */
+  readonly kind: string
+  readonly options: string[] | null
+  /** 1 (low) to 5. */
+  readonly priority: number
+  readonly projectId: string
+  /** waiting, answered, resolved, dismissed, planned or needs_discussion. */
+  readonly status: string
+  readonly title: string
+  /** Seconds since the epoch. */
+  readonly updatedAt: number
+}
+
+export interface AppTickets {
+  readonly items: AppTicket[]
+  readonly ok: boolean
+}
+
+export interface AppTicketBrief {
+  readonly bytes: number
+  /** Seconds since the epoch. */
+  readonly createdAt: number
+  readonly html: string
+  readonly sanitizer: string
+  readonly sha256: string
+  readonly text: string
+}
+
+export interface AppTicketComment {
+  /** Seconds since the epoch. */
+  readonly at: number
+  readonly author: string
+  readonly body: string
+}
+
+export interface AppTicketDetail {
+  readonly agentName: string
+  readonly answer: string | null
+  /** Seconds since the epoch. */
+  readonly answeredAt: number | null
+  readonly assignees: string[]
+  readonly body: string | null
+  readonly brief?: AppTicketBrief | null
+  readonly briefBytes: number | null
+  readonly commentCount: number
+  readonly comments: AppTicketComment[]
+  /** Seconds since the epoch. */
+  readonly createdAt: number
+  readonly hasBrief: boolean
+  readonly id: string
+  /** question, approval or fyi. */
+  readonly kind: string
+  readonly ok: boolean
+  readonly options: string[] | null
+  /** 1 (low) to 5. */
+  readonly priority: number
+  readonly projectId: string
+  /** waiting, answered, resolved, dismissed, planned or needs_discussion. */
+  readonly status: string
+  readonly title: string
+  /** Seconds since the epoch. */
+  readonly updatedAt: number
+  /** The agent's display name. */
+  readonly workspace?: string | null
+}
+
+export interface AppTicketWarning {
+  readonly code: string
+  readonly hint: string
+}
+
+export interface AppTicketCreated {
+  readonly agentName: string
+  readonly answer: string | null
+  /** Seconds since the epoch. */
+  readonly answeredAt: number | null
+  readonly assignees: string[]
+  readonly body: string | null
+  readonly briefBytes: number | null
+  readonly commentCount: number
+  /** Seconds since the epoch. */
+  readonly createdAt: number
+  readonly hasBrief: boolean
+  readonly id: string
+  /** question, approval or fyi. */
+  readonly kind: string
+  readonly ok: boolean
+  readonly options: string[] | null
+  /** 1 (low) to 5. */
+  readonly priority: number
+  readonly projectId: string
+  /** waiting, answered, resolved, dismissed, planned or needs_discussion. */
+  readonly status: string
+  readonly title: string
+  /** Seconds since the epoch. */
+  readonly updatedAt: number
+  readonly warnings: AppTicketWarning[]
+  readonly workspace?: string | null
+}
+
+export interface AppTicketCommented {
+  readonly answered: boolean
+  readonly author: string
+  readonly commentId: string
+  readonly delivered: boolean
+  readonly deliveryReason: string | null
+  readonly id: string
+  readonly ok: boolean
+  readonly status: string
+}
+
+export interface AppTicketStatus {
+  readonly id: string
+  readonly ok: boolean
+  readonly status: string
+}
+
 export interface StoreEntry {
   /** you, you via <widget>, or agent:<handle>. */
   readonly by: string
@@ -573,6 +909,32 @@ export interface AppGuestRooms {
   readonly username: string
 }
 
+export interface AppActivityCounts {
+  readonly commands: number
+  readonly subagents: number
+  readonly tools: number
+}
+
+export interface AppActivitySession {
+  readonly agentName: string
+  readonly counts: AppActivityCounts
+  readonly paneGroupId: string | null
+  /** Milliseconds since the epoch. */
+  readonly since: number | null
+  readonly status: string
+}
+
+export interface AppActivity {
+  /** Milliseconds since the epoch. */
+  readonly serverNow: number
+  readonly sessions: AppActivitySession[]
+  /** Milliseconds since the epoch. */
+  readonly since: number | null
+  /** working, permission, idle or unknown. */
+  readonly status: string
+  readonly workspace: string
+}
+
 export interface RoomMember {
   /** host (the box login) or the App id the grant is for. */
   readonly app: string
@@ -602,7 +964,7 @@ export interface RoomMembers {
 }
 
 /** A cap a widget may ask for. */
-export type K2Cap = 'agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | 'store:read' | 'store:write' | 'guests:rooms' | 'room:members'
+export type K2Cap = 'agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | 'files:read' | 'tickets:read' | 'tickets:post' | 'store:read' | 'store:write' | 'guests:rooms' | 'activity:read' | 'room:members'
 
 /** What k2.store.subscribe delivers: the changed keys (value null = deleted), or after a gap the whole list again. `by` names the writer: you (by your name), `<you> via <widget>`, or `agent:<handle>`. */
 export type StoreDelivery = Array<{ key: string; rev: number; value: unknown; by: string }> | { resync: true; items: StoreEntry[] }
@@ -715,6 +1077,9 @@ export interface K2Verbs {
   'thread.attachment': { args: [address: string, docId: string, n: number, opts?: { mode?: 'meta' | 'preview' | 'thumb'; px?: number }]; value: ThreadFileData }
   'thread.open': { args: [address: string, target: { docId?: string; line?: number; n?: number; rel?: string }]; value: ThreadOpened }
   'thread.links': { args: [address: string, candidates: string[]]; value: ThreadLinks }
+  'thread.catchup': { args: [args: { limit?: number; threads: AppCatchupAsk[] }]; value: AppCatchup }
+  'thread.unread': { args: []; value: AppUnread }
+  'thread.mute': { args: [args: { addr: string; muted: boolean; until?: number }]; value: AppReadState }
   'thread.pickFiles': { args: [address: string]; value: ThreadPicked }
   'thread.post': { args: [address: string, text: string, opts?: { attachments?: ThreadAttach[] }]; value: Posted }
   'thread.answer': { args: [address: string, cardId: string, choice: string]; value: null }
@@ -725,6 +1090,14 @@ export interface K2Verbs {
   'sources.subscribe': { args: [address: string]; value: SourceView }
   'sources.refresh': { args: [address: string]; value: SourceRefresh }
   'sources.ask': { args: [address: string, itemKey?: string | null]; value: SourceAsk }
+  'files.list': { args: [args: { relPath: string; showHidden?: boolean; workspace: string }]; value: AppFileEntry[] }
+  'files.read': { args: [args: { relPath: string; workspace: string }]; value: AppFileText }
+  'files.readBinary': { args: [args: { relPath: string; workspace: string }]; value: AppFileBase64 }
+  'tickets.list': { args: [args: { all?: boolean; project: string; status?: string }]; value: AppTickets }
+  'tickets.show': { args: [args: { brief?: boolean; id: string }]; value: AppTicketDetail }
+  'tickets.create': { args: [args: { agentName?: string; assignees?: string[]; body?: string; briefHtml?: string; kind?: string; options?: string[]; priority?: number; project: string; title: string }]; value: AppTicketCreated }
+  'tickets.comment': { args: [args: { body: string; id: string; optionPick?: boolean }]; value: AppTicketCommented }
+  'tickets.resolve': { args: [args: { id: string; status?: string }]; value: AppTicketStatus }
   'store.get': { args: [key: string, opts?: { from?: string }]; value: StoreEntry | null }
   'store.list': { args: [opts?: { after?: string; from?: string; limit?: number; prefix?: string }]; value: StorePage }
   'store.changes': { args: [opts: { after?: string; from?: string; prefix?: string; since: number }]; value: StoreChanges }
@@ -737,11 +1110,12 @@ export interface K2Verbs {
   'store.txAbort': { args: [txId: string]; value: StoreTxAborted }
   'guests.rooms': { args: [args: { app?: string; username: string }]; value: AppGuestRooms }
   'guests.setRooms': { args: [args: { app?: string; rooms: string[]; username: string }]; value: AppGuestRooms }
+  'activity.snapshot': { args: [args: { workspace: string }]; value: AppActivity }
   'room.members': { args: [args: { app?: string; workspace: string }]; value: RoomMembers }
 }
 
 export type K2Verb = keyof K2Verbs
-export type K2CallVerb = 'gardens.list' | 'gardens.current' | 'gardens.switch' | 'theme.get' | 'canvas.setHitRegions' | 'window.startDrag' | 'save.get' | 'save.set' | 'save.remove' | 'save.keys' | 'viewer.get' | 'app.self' | 'app.usage' | 'widget.self' | 'agents.list' | 'conversation.open' | 'conversation.close' | 'presence.get' | 'thread.read' | 'thread.markRead' | 'thread.attachment' | 'thread.open' | 'thread.links' | 'thread.pickFiles' | 'thread.post' | 'thread.answer' | 'compose.draft' | 'sources.list' | 'sources.read' | 'sources.history' | 'sources.refresh' | 'sources.ask' | 'store.get' | 'store.list' | 'store.changes' | 'store.put' | 'store.delete' | 'store.batch' | 'store.txBegin' | 'store.txAdd' | 'store.txCommit' | 'store.txAbort' | 'guests.rooms' | 'guests.setRooms' | 'room.members'
+export type K2CallVerb = 'gardens.list' | 'gardens.current' | 'gardens.switch' | 'theme.get' | 'canvas.setHitRegions' | 'window.startDrag' | 'save.get' | 'save.set' | 'save.remove' | 'save.keys' | 'viewer.get' | 'app.self' | 'app.usage' | 'widget.self' | 'agents.list' | 'conversation.open' | 'conversation.close' | 'presence.get' | 'thread.read' | 'thread.markRead' | 'thread.attachment' | 'thread.open' | 'thread.links' | 'thread.catchup' | 'thread.unread' | 'thread.mute' | 'thread.pickFiles' | 'thread.post' | 'thread.answer' | 'compose.draft' | 'sources.list' | 'sources.read' | 'sources.history' | 'sources.refresh' | 'sources.ask' | 'files.list' | 'files.read' | 'files.readBinary' | 'tickets.list' | 'tickets.show' | 'tickets.create' | 'tickets.comment' | 'tickets.resolve' | 'store.get' | 'store.list' | 'store.changes' | 'store.put' | 'store.delete' | 'store.batch' | 'store.txBegin' | 'store.txAdd' | 'store.txCommit' | 'store.txAbort' | 'guests.rooms' | 'guests.setRooms' | 'activity.snapshot' | 'room.members'
 export type K2SubscribeVerb = 'theme.changed' | 'agents.subscribe' | 'presence.subscribe' | 'thread.subscribe' | 'sources.subscribe'
 
 export interface K2 {
@@ -836,6 +1210,12 @@ export interface K2 {
     open(address: string, target: { docId?: string; line?: number; n?: number; rel?: string }): Promise<ThreadOpened>
     /** Which paths printed in messages lead to a file or folder inside the agent's workspace (the rest stay plain text). cap thread:read · local · thread-attachments-v1. e.g. `const {links} = await k2.thread.links(row.address, ['src/app.ts:12'])` */
     links(address: string, candidates: string[]): Promise<ThreadLinks>
+    /** Deltas (or newest pages) for many rooms in one round trip, each exactly what thread.page answers for it. This computer only. cap thread:read · portable · inbox-catchup-v1. e.g. `const {threads} = await k2.thread.catchup({threads: [{addr: 'sales', afterSeq: 41}]})` */
+    catchup(args: { limit?: number; threads: AppCatchupAsk[] }): Promise<AppCatchup>
+    /** The signed-in person's own unread counts: a guest's over the room Threads it may read, a Garden's over the person's Threads. This computer only. cap thread:read · portable · app-thread-parity-v1. e.g. `const {total, byConversation} = await k2.thread.unread()` */
+    unread(): Promise<AppUnread>
+    /** Mute or unmute a room's Thread for the signed-in person (their own state, on every surface); an App's own pass has no mutes. This computer only. cap thread:read · portable · app-read-state-v1. e.g. `await k2.thread.mute({addr: 'sales', muted: true})` */
+    mute(args: { addr: string; muted: boolean; until?: number }): Promise<AppReadState>
     /** K2's own file picker for the person (files outside the workspace are copied into its .k2/downloads); empty when they cancel. cap thread:post · local · thread-attachments-v1. e.g. `const {files} = await k2.thread.pickFiles(row.address)` */
     pickFiles(address: string): Promise<ThreadPicked>
     /** Send text to the agent as you, with files picked by the person riding it (thread.pickFiles). cap thread:post · portable · zen-v1. e.g. `await k2.thread.post(row.address, 'How is it going?')` */
@@ -862,6 +1242,26 @@ export interface K2 {
     refresh(address: string): Promise<SourceRefresh>
     /** Open K2's Ask an agent box about this source (K2 writes the draft; nothing is sent). cap sources:read · local · sources-v1. e.g. `await k2.sources.ask(k2.config.source, tile.key)` */
     ask(address: string, itemKey?: string | null): Promise<SourceAsk>
+  }
+  readonly files: {
+    /** A folder's entries, folders first. This computer only. cap files:read · portable · app-api-v1. e.g. `const entries = await k2.files.list({workspace, relPath: '.'})` */
+    list(args: { relPath: string; showHidden?: boolean; workspace: string }): Promise<AppFileEntry[]>
+    /** A UTF-8 text file (at most 10 MiB). This computer only. cap files:read · portable · app-api-v1. e.g. `const {content} = await k2.files.read({workspace, relPath: 'notes.md'})` */
+    read(args: { relPath: string; workspace: string }): Promise<AppFileText>
+    /** A file as base64 (at most 50 MiB; read-range for more). This computer only. cap files:read · portable · app-api-v1. e.g. `const {base64} = await k2.files.readBinary({workspace, relPath})` */
+    readBinary(args: { relPath: string; workspace: string }): Promise<AppFileBase64>
+  }
+  readonly tickets: {
+    /** A room's tickets, newest first. This computer only. cap tickets:read · portable · app-api-v1. e.g. `const {items} = await k2.tickets.list({project: 'sales'})` */
+    list(args: { all?: boolean; project: string; status?: string }): Promise<AppTickets>
+    /** One ticket with its comments (and brief). This computer only. cap tickets:read · portable · app-api-v1. e.g. `const t = await k2.tickets.show({id})` */
+    show(args: { brief?: boolean; id: string }): Promise<AppTicketDetail>
+    /** Open a ticket in a room for its agent. This computer only. cap tickets:post · portable · app-api-v1. e.g. `await k2.tickets.create({project: 'sales', title: 'Quote for J1042?'})` */
+    create(args: { agentName?: string; assignees?: string[]; body?: string; briefHtml?: string; kind?: string; options?: string[]; priority?: number; project: string; title: string }): Promise<AppTicketCreated>
+    /** Comment on a ticket as the guest (free text moves it to needs_discussion). This computer only. cap tickets:post · portable · app-api-v1. e.g. `await k2.tickets.comment({id, body: 'Looks right'})` */
+    comment(args: { body: string; id: string; optionPick?: boolean }): Promise<AppTicketCommented>
+    /** Set a ticket's status (Apps can't set answered). This computer only. cap tickets:post · portable · app-api-v1. e.g. `await k2.tickets.resolve({id})` */
+    resolve(args: { id: string; status?: string }): Promise<AppTicketStatus>
   }
   readonly store: {
     /** One key of this widget's data (or, with {from}, of a widget it reads), or null. This computer only. cap store:read · local · garden-data-v1. e.g. `const e = await k2.store.get('obj/7')` */
@@ -900,6 +1300,10 @@ export interface K2 {
     rooms(args: { app?: string; username: string }): Promise<AppGuestRooms>
     /** Set one guest's rooms on this App, within the rooms the App may hand out and never above the guest's role; idempotent, audited. This computer only. cap guests:rooms · portable · guests-rooms-v1. e.g. `await k2.asApp().guests.setRooms({username: 'dana', rooms: ['acme']})` */
     setRooms(args: { app?: string; rooms: string[]; username: string }): Promise<AppGuestRooms>
+  }
+  readonly activity: {
+    /** Whether the room's agent is working now, per session. This computer only. cap activity:read · portable · app-api-v1. e.g. `const {status} = await k2.activity.snapshot({workspace})` */
+    snapshot(args: { workspace: string }): Promise<AppActivity>
   }
   readonly room: {
     /** Who holds a grant on the room: guests and agent logins with their roles (from grants, not presence); admins of this box are one line. This computer only. cap room:members · portable · room-members-v1. e.g. `const {members} = await k2.room.members({workspace})` */

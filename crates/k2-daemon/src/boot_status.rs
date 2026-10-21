@@ -443,6 +443,27 @@ pub const FEATURE_THREAD_IMAGES: &str = crate::thread_attachments::FEATURE_IMAGE
 /// file rights cover. Catalog v16 rows.
 pub const FEATURE_APP_THREAD_PARITY: &str = "app-thread-parity-v1";
 
+/// App read state per person (0.46.3; Rosson 2026-10-20: read state
+/// belongs to the signed-in person): an App guest's read state is keyed by
+/// the person, `guest:<principalId>`, on every App, door, device and
+/// session (`read_routes::PassReader`); `GET /cli/thread/unread` for a
+/// guest carries its `badgeKey` and `muted`, totals count waiting cards
+/// and only its own rooms (R3); `POST /cli/thread/mute` takes a guest's
+/// pass (catalog `thread.mute`); and a guest's overlay and activity
+/// sockets get a `read` frame when its own cursor or mute moves on any
+/// surface. An App's own pass is a service account, not a person: no
+/// badgeKey, no mute.
+pub const FEATURE_APP_READ_STATE: &str = "app-read-state-v1";
+
+/// The Garden bridge's person rows (0.46.3, research I): a Garden widget
+/// on this computer calls `thread.catchup`, `thread.unread`,
+/// `thread.mute`, `tickets.list/show/create/comment/resolve`,
+/// `activity.snapshot` and `files.list/read/readBinary` through `POST
+/// /cli/zen/call`, as the person (an agent-made widget: its maker's own
+/// room for tickets, activity and files). The same catalog rows and
+/// answers as the App's; no project chat on the bridge.
+pub const FEATURE_GARDEN_PERSON_ROWS: &str = "garden-person-rows-v1";
+
 /// True when the read-state tables exist in the daemon DB.
 fn thread_read_ready() -> bool {
     k2_core::db::try_shared()
@@ -527,6 +548,8 @@ pub fn features() -> Vec<&'static str> {
     }
     if thread_read_ready() {
         out.push(FEATURE_APP_THREAD_PARITY);
+        out.push(FEATURE_APP_READ_STATE);
+        out.push(FEATURE_GARDEN_PERSON_ROWS);
     }
     out
 }
@@ -586,7 +609,9 @@ mod tests {
                 "thread-read-v1",
                 "homes-sync-v1",
                 "inbox-catchup-v1",
-                "app-thread-parity-v1"
+                "app-thread-parity-v1",
+                "app-read-state-v1",
+                "garden-person-rows-v1"
             ]
         );
     }

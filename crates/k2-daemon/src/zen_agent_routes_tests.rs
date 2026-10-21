@@ -429,3 +429,69 @@ fn folder_routes_take_a_whole_folder_body_and_the_rest_keep_320_kb() {
         assert!(crate::zen_routes::POST_ROUTES.contains(p), "{p} is a POST row");
     }
 }
+
+// ── "Keep as mine" (0.46.3) ─────────────────────────────────────────────
+
+fn live_hash(f: &ZenFiles, w: &str) -> String {
+    f.widget_status(w).bundle.map(|b| b.hash).unwrap_or_else(|| panic!("{w} has no good version"))
+}
+
+fn claim_live(f: &ZenFiles, w: &str, now: i64) {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::garden_data::authors::claim(&conn, w, &live_hash(f, w), now).expect("claim");
+}
+
+fn keep_notes(project: &str, widget: &str) -> usize {
+    k2_core::feedback::list_for_project(project, &k2_core::feedback::ListFilter::Open)
+        .expect("tickets")
+        .iter()
+        .filter(|i| i.title == crate::zen_agent_routes::keep_title(widget) && i.kind == "fyi")
+        .count()
+}
+
+#[test]
+fn an_agent_changing_the_persons_widget_sends_one_keep_as_mine_note() {
+    let e = env();
+    let mgr = workspace("w-keep-mgr", true);
+    let (s, v) = call("/cli/zen/widget/folder/put", true, &Caller::Owner, json!({"widget": "board", "files": folder("board", "v1")}));
+    assert_eq!(s, "200 OK", "{v}");
+    claim_live(&e.f, "board", 1);
+    // The person's own write never asks.
+    let (_, v) = call("/cli/zen/widget/folder/put", true, &Caller::Owner, json!({"widget": "board", "files": folder("board", "v1b")}));
+    assert!(v.get("keepAsMine").is_none(), "{v}");
+    claim_live(&e.f, "board", 2);
+    let (s, v) = call("/cli/zen/widget/put", false, &mgr, json!({"widget": "board", "file": "app.js", "text": "console.log('agent')\n"}));
+    assert_eq!(s, "200 OK", "{v}");
+    assert_eq!(v["keepAsMine"], true, "{v}");
+    assert_eq!(keep_notes("w-keep-mgr", "board"), 1);
+    // The next agent write: the version before it was already not the person's.
+    let (_, v) = call("/cli/zen/widget/folder/put", false, &mgr, json!({"widget": "board", "files": folder_two_changes("board", "v3")}));
+    assert_eq!(v["keepAsMine"], false, "{v}");
+    assert_eq!(keep_notes("w-keep-mgr", "board"), 1);
+    // Kept again, then changed again while the first note is open: still one note.
+    claim_live(&e.f, "board", 3);
+    let (_, v) = call("/cli/zen/widget/put", false, &mgr, json!({"widget": "board", "file": "app.js", "text": "console.log('agent 2')\n"}));
+    assert_eq!(v["keepAsMine"], true, "{v}");
+    assert_eq!(keep_notes("w-keep-mgr", "board"), 1, "one open note per widget");
+}
+
+#[test]
+fn approving_a_proposal_on_the_persons_widget_says_keep_as_mine_without_a_note() {
+    let e = env();
+    let plain = workspace("w-keep-plain", false);
+    call("/cli/zen/widget/folder/put", true, &Caller::Owner, json!({"widget": "board", "files": folder("board", "v1")}));
+    claim_live(&e.f, "board", 1);
+    let (_, v) = call("/cli/zen/widget/folder/put", false, &plain, json!({"widget": "board", "files": folder("board", "v2")}));
+    let id = v["proposal"]["id"].as_str().expect("id").to_string();
+    let (s, v) = call("/cli/zen/proposals/approve", true, &Caller::Owner, json!({"id": id}));
+    assert_eq!(s, "200 OK", "{v}");
+    assert_eq!((v["keepAsMine"].as_bool(), v["target"].as_str()), (Some(true), Some("board")), "{v}");
+    assert_eq!(keep_notes("w-keep-plain", "board"), 0, "the person approved it: no note to themselves");
+    // A widget that was never the person's: nothing to keep.
+    let mgr = workspace("w-keep-mgr2", true);
+    let (_, v) = call("/cli/zen/widget/folder/put", false, &mgr, json!({"widget": "other", "files": folder("other", "o1")}));
+    let (_, v2) = call("/cli/zen/widget/folder/put", false, &mgr, json!({"widget": "other", "files": folder("other", "o2")}));
+    assert_eq!((v["keepAsMine"].as_bool(), v2["keepAsMine"].as_bool()), (Some(false), Some(false)), "{v} {v2}");
+    assert_eq!(keep_notes("w-keep-mgr2", "other"), 0);
+}

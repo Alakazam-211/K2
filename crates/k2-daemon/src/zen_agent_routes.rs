@@ -195,6 +195,70 @@ fn after_write() {
     }
 }
 
+// ── "Keep as mine" (0.46.3, Garden gaps) ──────────────────────────────────
+//
+// A widget version reads its data with its maker's rights
+// (contract-garden-data-v1 §4): when an agent changes a widget whose live
+// version was the person's, the new version is nobody's (or the agent's)
+// until the person keeps it, and the widget quietly loses its data. The
+// rule stays (only the person claims); K2 now TELLS them: one inbox note
+// per widget, pointing at the one-click It's mine in Settings → Gardens →
+// Local Data. Nothing here claims anything.
+
+/// The live version (bundle hash) of a user widget and its maker, before a
+/// write. `None`: no good version, a built-in, or no such widget.
+fn live_maker(widget: &str) -> Option<(String, k2_core::garden_data::MadeBy)> {
+    let name = widget.trim();
+    let hash = files().widget_status(name).bundle.map(|b| b.hash)?;
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let maker = k2_core::garden_data::authors::maker_of(&conn, name, &hash).ok()?;
+    Some((hash, maker))
+}
+
+/// The inbox note's title for `widget` (also its dedupe key).
+pub(crate) fn keep_title(widget: &str) -> String {
+    format!("Keep your widget {widget} as yours?")
+}
+
+/// After a write: the person's widget has a new live version that isn't
+/// theirs → `true`, and, when an agent wrote it (`note`), one fyi note to
+/// the owner (none while one is open). The person's own approval gets no
+/// note, only the answer's `keepAsMine` (the CLI prints where to keep it).
+fn keep_as_mine_notice(widget: &str, before: Option<(String, k2_core::garden_data::MadeBy)>, caller: &Caller, note: bool) -> bool {
+    use k2_core::garden_data::MadeBy;
+    let Some((old_hash, MadeBy::Owner)) = before else { return false };
+    let Some((new_hash, maker)) = live_maker(widget) else { return false };
+    if new_hash == old_hash || maker == MadeBy::Owner {
+        return false;
+    }
+    if !note {
+        return true;
+    }
+    let Some(project) = project_of(caller) else { return true };
+    let title = keep_title(widget);
+    let open = k2_core::feedback::list_for_project(project, &k2_core::feedback::ListFilter::Open).unwrap_or_default();
+    if open.iter().any(|i| i.title == title) {
+        return true;
+    }
+    let who = caller.audit_user();
+    let body = format!(
+        "{who} changed your widget {widget} (version {} → {}). The new version isn't signed as yours, so it can't read or write the widget's data until you keep it.\n\n\
+         One click: Settings → Gardens → Local Data → {widget} → It's mine. Or leave it, and the widget runs without its data.\n\
+         Every change is in Settings → Logs → Access Audit.",
+        short(&old_hash),
+        short(&new_hash)
+    );
+    if let Err(e) = crate::feedback_routes::file_owner_notice(project, &who, &title, &body) {
+        k2_core::log_debug!("[zen/agent] keep-as-mine note for {widget}: {e}");
+    }
+    true
+}
+
+fn short(hash: &str) -> &str {
+    &hash[..hash.len().min(12)]
+}
+
 /// Save one proposal. `base_hash`: [`agent_edit::text_hash`] of the file
 /// it is made against, or a folder proposal's own fingerprint.
 fn propose(caller: &Caller, kind: ProposalKind, target: &str, file: Option<&str>, text: &str, base_hash: &str, note: Option<&str>) -> CliResponse {
@@ -298,16 +362,20 @@ fn widget_put(r: Role, caller: &Caller, body: &[u8]) -> CliResponse {
     };
     let f = files();
     match r {
-        Role::Person | Role::Manager => match f.put_widget_file(&b.widget, &b.file, &b.text) {
-            Ok(v) => {
-                after_write();
-                if r == Role::Manager {
-                    audit("zen-widget-put", caller, v["file"].as_str().unwrap_or(&b.widget));
+        Role::Person | Role::Manager => {
+            let before = live_maker(&b.widget);
+            match f.put_widget_file(&b.widget, &b.file, &b.text) {
+                Ok(mut v) => {
+                    after_write();
+                    if r == Role::Manager {
+                        audit("zen-widget-put", caller, v["file"].as_str().unwrap_or(&b.widget));
+                        v["keepAsMine"] = json!(keep_as_mine_notice(&b.widget, before, caller, true));
+                    }
+                    resp("200 OK", v)
                 }
-                resp("200 OK", v)
+                Err(e) => zen_err(e),
             }
-            Err(e) => zen_err(e),
-        },
+        }
         Role::Agent => {
             let name = match f.check_widget_put(&b.widget, &b.file, &b.text) {
                 Ok(n) => n,
@@ -430,16 +498,20 @@ fn folder_put(r: Role, caller: &Caller, body: &[u8]) -> CliResponse {
     };
     let f = files();
     match r {
-        Role::Person | Role::Manager => match f.put_widget_folder(&b.widget, &staged, b.prune) {
-            Ok(v) => {
-                after_write();
-                if r == Role::Manager {
-                    audit("zen-widget-folder-put", caller, v["file"].as_str().unwrap_or(&b.widget));
+        Role::Person | Role::Manager => {
+            let before = live_maker(&b.widget);
+            match f.put_widget_folder(&b.widget, &staged, b.prune) {
+                Ok(mut v) => {
+                    after_write();
+                    if r == Role::Manager {
+                        audit("zen-widget-folder-put", caller, v["file"].as_str().unwrap_or(&b.widget));
+                        v["keepAsMine"] = json!(keep_as_mine_notice(&b.widget, before, caller, true));
+                    }
+                    resp("200 OK", v)
                 }
-                resp("200 OK", v)
+                Err(e) => zen_err(e),
             }
-            Err(e) => zen_err(e),
-        },
+        }
         Role::Agent => {
             if b.prune {
                 return refuse(
@@ -638,6 +710,7 @@ fn approve(r: Role, caller: &Caller, body: &[u8]) -> CliResponse {
         return refuse("409 Conflict", "not_pending", format!("{} is {}, not waiting", p.id, p.status));
     }
     let f = files();
+    let before = if p.kind == ProposalKind::Garden { None } else { live_maker(&p.target) };
     let applied = if p.kind == ProposalKind::Folder {
         // The whole folder at once (0.46.3), or nothing.
         let fp = match p.folder() {
@@ -689,7 +762,8 @@ fn approve(r: Role, caller: &Caller, body: &[u8]) -> CliResponse {
     }
     after_write();
     audit("zen-proposal-approve", caller, &format!("{} {}", p.id, describe(&p)));
-    resp("200 OK", json!({ "ok": true, "id": p.id, "status": "approved", "applied": v }))
+    let keep = p.kind != ProposalKind::Garden && keep_as_mine_notice(&p.target, before, caller, r == Role::Manager);
+    resp("200 OK", json!({ "ok": true, "id": p.id, "status": "approved", "applied": v, "keepAsMine": keep, "target": p.target }))
 }
 
 fn reject(r: Role, caller: &Caller, body: &[u8]) -> CliResponse {

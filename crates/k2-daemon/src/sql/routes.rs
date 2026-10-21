@@ -510,6 +510,12 @@ fn dsn_ref(project_id: &str, v: &serde_json::Value, test: bool) -> CliResponse {
     }
 }
 
+/// `k2 db upgrade`'s re-point (V35): the same `k2 db dsn --ref` upsert,
+/// from the record (already on the new cluster), under the same ref.
+pub(crate) fn dsn_ref_for_move(project_id: &str, v: &serde_json::Value, test: bool) -> CliResponse {
+    dsn_ref(project_id, v, test)
+}
+
 #[derive(Debug, serde::Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
 struct ProjectBody {
@@ -906,6 +912,10 @@ fn skin_dump_room(
     if !pass.has_cap_in_room(&resolved.project_id, cap) {
         return Err(crate::skin_routes::missing_cap_response(cap));
     }
+    // A move of this workspace's database is pausing its guest doors.
+    if let Some(r) = super::pgmove::k2::maintenance_response(&resolved.project_id) {
+        return Err(r);
+    }
     Ok(resolved.project_id)
 }
 
@@ -921,6 +931,10 @@ fn skin_dump_workspace_body(
     let resolved = crate::fs_routes::resolve_skin_workspace(pass, ws)?;
     if !pass.has_cap_in_room(&resolved.project_id, cap) {
         return Err(crate::skin_routes::missing_cap_response(cap));
+    }
+    // A move of this workspace's database is pausing its guest doors.
+    if let Some(r) = super::pgmove::k2::maintenance_response(&resolved.project_id) {
+        return Err(r);
     }
     Ok(resolved.project_id)
 }

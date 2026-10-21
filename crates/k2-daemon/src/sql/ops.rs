@@ -4404,3 +4404,57 @@ mod tests {
             .expect("comment mentioning CREATE ROLE applies");
     }
 }
+
+// ── `k2 db upgrade` (S5): what the move needs from K2's records ─────────
+
+fn active_row_by_name(db_name: &str) -> Result<DbRow, OpsError> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        &format!(
+            "SELECT {DB_ROW_COLS} FROM sql_databases WHERE name = ?1 AND status = 'active' ORDER BY created_at DESC LIMIT 1"
+        ),
+        rusqlite::params![db_name],
+        db_row_from,
+    )
+    .map_err(|_| OpsError::NotFound(format!("no K2 database named {db_name}")))
+}
+
+/// K2's roles for a database (§6.1 Roles, V32): `{db}_migrator`,
+/// `{db}_agent`, its bind role, and every grantee login from `sql_grants`
+/// (the shared `ws_*_agent` logins). Answers (database id, project, roles).
+pub(crate) fn move_roles(db_name: &str) -> Result<(String, String, Vec<String>), OpsError> {
+    let row = active_row_by_name(db_name)?;
+    let mut roles = vec![format!("{}_migrator", row.name), agent_login_for(&row)];
+    if let Some(b) = row.bind_role.as_ref().filter(|b| !b.is_empty()) {
+        roles.push(b.clone());
+    }
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    for g in grants_for(&conn, &row.id) {
+        roles.push(default_agent_role(&g.project_id));
+    }
+    roles.sort();
+    roles.dedup();
+    Ok((row.id, row.project_id, roles))
+}
+
+/// The two logins a move proves on the target (`{db}_agent`,
+/// `{db}_migrator`) with their vaulted passwords.
+pub(crate) fn move_logins(db_name: &str) -> Result<Vec<(String, String)>, OpsError> {
+    let row = active_row_by_name(db_name)?;
+    let secrets = super::secrets::FileSecretStore::default();
+    let agent = owner_agent_password(&secrets, &row)?;
+    let (mig, mig_pw) = migrator_creds(&secrets, &row)?;
+    Ok(vec![(agent_login_for(&row), agent), (mig, mig_pw)])
+}
+
+/// Re-run K2's idempotent per-database setup (helpers, the `_k2_*` seal,
+/// privilege sync) on the database's recorded cluster (V34). The move
+/// runs it after the switch.
+pub(crate) fn move_rerun_k2_setup(ops: &dyn SystemOps, db_name: &str) -> Result<(), OpsError> {
+    let row = active_row_by_name(db_name)?;
+    ensure_k2_helpers_db(ops, &row.name)?;
+    let secrets = super::secrets::FileSecretStore::default();
+    privilege_sync_for_row(ops, &secrets, &row)
+}

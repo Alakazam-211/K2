@@ -1,5 +1,6 @@
-//! `POST /cli/db/upgrade`: the strict body (hostmail-style, V8) and the
-//! permission gate (§12). Pure: the route hands in who is calling.
+//! `POST /cli/db/upgrade`: the strict body (hostmail-style, V8). The
+//! permission gate is PG-A's `versions_access::decide` (§12); `k2::acts_for`
+//! maps a request onto it.
 //!
 //! Body: exactly one scope (`db`, `app` or `all`), then flags. Unknown
 //! keys and wrong types are a 400, so a typo never starts a real move.
@@ -132,60 +133,6 @@ pub fn parse(body: &[u8]) -> Result<UpgradeRequest, String> {
     Ok(r)
 }
 
-/// Who calls (§12).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Who {
-    Owner,
-    /// An Admin login (people).
-    Admin,
-    /// A local, non-sandboxed agent passport or K2 shell tab.
-    Agent {
-        /// `projects.agents_can_upgrade_postgres`.
-        toggle: bool,
-        /// Every database in scope is its own workspace's or its own Apps'.
-        own_scope: bool,
-    },
-    /// A sandboxed agent, a remote caller, a guest, a Member login.
-    Other,
-}
-
-/// `Ok` or the refusal (`forbidden: …`).
-pub fn gate(who: &Who, r: &UpgradeRequest) -> Result<(), String> {
-    let owner_only = |what: &str| Err(format!("owner_only: {what} is the owner's call"));
-    match who {
-        Who::Owner => Ok(()),
-        Who::Admin => match r.act {
-            Act::Check => Ok(()),
-            _ => Err("forbidden: an Admin may run --check only".into()),
-        },
-        Who::Other => Err("forbidden: moving a database needs the owner, or an agent with \"Allow this agent to upgrade Postgres\"".into()),
-        Who::Agent { toggle, own_scope } => {
-            if !toggle {
-                return Err("forbidden: turn on \"Allow this agent to upgrade Postgres\" for this agent (owner, Agent tab)".into());
-            }
-            if r.act == Act::ForgetOld {
-                return owner_only("deleting the old copy");
-            }
-            if r.act == Act::AcknowledgeFailed {
-                return owner_only("--acknowledge-failed");
-            }
-            if r.now {
-                return owner_only("--now (skipping the 60 s notice)");
-            }
-            if r.allow_adopted {
-                return owner_only("--allow-adopted");
-            }
-            if r.scope == Some(Scope::All) {
-                return owner_only("--all");
-            }
-            if !own_scope {
-                return Err("forbidden: an agent moves only its own workspace's and its own Apps' databases".into());
-            }
-            Ok(())
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,36 +172,5 @@ mod tests {
         ] {
             assert!(p(bad).is_err(), "{bad}");
         }
-    }
-
-    #[test]
-    fn the_permission_table() {
-        let mv = p(r#"{"db":"ws_jobs"}"#).unwrap();
-        let check = p(r#"{"db":"ws_jobs","check":true}"#).unwrap();
-        let rb = p(r#"{"db":"ws_jobs","rollback":true,"yes":true}"#).unwrap();
-        let forget = p(r#"{"db":"ws_jobs","forgetOld":true}"#).unwrap();
-        let now = p(r#"{"db":"ws_jobs","now":true}"#).unwrap();
-        let adopted = p(r#"{"db":"ws_jobs","allowAdopted":true}"#).unwrap();
-        let all = p(r#"{"all":true}"#).unwrap();
-        let ack = p(r#"{"acknowledgeFailed":true}"#).unwrap();
-        let agent = Who::Agent { toggle: true, own_scope: true };
-        for r in [&mv, &check, &rb, &forget, &now, &adopted, &all, &ack] {
-            assert!(gate(&Who::Owner, r).is_ok());
-        }
-        assert!(gate(&Who::Admin, &check).is_ok());
-        for r in [&mv, &rb, &forget] {
-            assert!(gate(&Who::Admin, r).is_err());
-        }
-        for r in [&mv, &check, &rb] {
-            assert!(gate(&agent, r).is_ok(), "{r:?}");
-        }
-        for r in [&forget, &now, &adopted, &all, &ack] {
-            assert!(gate(&agent, r).unwrap_err().starts_with("owner_only"), "{r:?}");
-        }
-        let off = Who::Agent { toggle: false, own_scope: true };
-        assert!(gate(&off, &check).unwrap_err().contains("Allow this agent to upgrade Postgres"));
-        let other_ws = Who::Agent { toggle: true, own_scope: false };
-        assert!(gate(&other_ws, &mv).unwrap_err().contains("its own workspace"));
-        assert!(gate(&Who::Other, &check).is_err());
     }
 }

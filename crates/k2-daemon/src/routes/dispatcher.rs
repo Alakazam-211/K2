@@ -815,14 +815,19 @@ pub async fn dispatch(mut stream: TcpStream, state: crate::DaemonState, ingress:
             // A compute tenant's job (another K2 server's, walled as its
             // own user on this machine) is never this machine: refused
             // before any trust is decided (review A M2 interim; Linux).
-            if let (Ok(local), Ok(peer)) = (stream.local_addr(), stream.peer_addr()) {
-                if let Some(uid) = crate::compute_tenant_guard::tenant_peer(local, peer) {
-                    k2_core::log_debug!("[daemon/compute-guard] refused a loopback client of compute tenant uid {uid} ({peer})");
-                    use tokio::io::AsyncWriteExt;
-                    let _ = stream.write_all(&crate::compute_tenant_guard::refusal_response()).await;
-                    let _ = stream.shutdown().await;
-                    return;
-                }
+            // It fails closed: on Linux a peer whose socket can't be found
+            // live is refused too (review A follow-up).
+            let refused = match (stream.local_addr(), stream.peer_addr()) {
+                (Ok(local), Ok(peer)) => crate::compute_tenant_guard::refuse_peer(local, peer).map(|why| format!("{why} ({peer})")),
+                _ if cfg!(target_os = "linux") => Some("peer address unknown".to_string()),
+                _ => None,
+            };
+            if let Some(why) = refused {
+                k2_core::log_debug!("[daemon/compute-guard] refused a main-listener client: {why}");
+                use tokio::io::AsyncWriteExt;
+                let _ = stream.write_all(&crate::compute_tenant_guard::refusal_response()).await;
+                let _ = stream.shutdown().await;
+                return;
             }
             crate::splice_guard::settle_ingress(ingress, stream.peer_addr().ok())
         }

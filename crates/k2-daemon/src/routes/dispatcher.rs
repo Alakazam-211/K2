@@ -7455,6 +7455,11 @@ async fn handle_one_request(
             if login.is_none() {
                 if let Some(tok) = skin_token {
                     let r = match crate::apps::gateway::resolve_pass(&tok) {
+                        // A′ fence (app-mobile-access-v1): a live pass on a
+                        // read route with no catalog `app` row (e.g.
+                        // project-group/read) gets exactly what it got
+                        // unfenced: `handle_guest` answers it not_a_person.
+                        None if crate::routes::pass_gate::fenced() => crate::read_routes::not_a_person(),
                         None => crate::skin_routes::revoked_skin_response(),
                         Some(pass) => {
                             let params = super::http::parse_params(&path, &query);

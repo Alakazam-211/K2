@@ -636,6 +636,9 @@ fn share_json(n: &store::NodeRow) -> Option<serde_json::Value> {
         "queued": v.map(|v| v.queued),
         "cpuSecsToday": v.map(|v| v.cpu_secs_today),
         "line": v.map(share::share_line),
+        // §14: the node's clock against this server's, only when worth
+        // showing (order and ETAs never use it).
+        "skewSecs": v.and_then(|v| v.skew_secs).filter(|s| s.abs() > pshare::SKEW_SHOW_SECS),
         "at": n.share_at,
     }))
 }

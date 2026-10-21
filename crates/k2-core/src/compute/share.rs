@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::proto::frames::Offer;
-use super::proto::share::{self, JobClass, Quote, Role, ServerStatus, ShareLimits, ShareView, Trust};
+use super::proto::share::{self, JobClass, Quote, Role, ServerStatus, ShareLimits, ShareView};
 
 /// A job withdrawn once can't be withdrawn again for this long (V71).
 pub const WITHDRAW_AGAIN_SECS: i64 = 300;
@@ -257,57 +257,43 @@ pub struct ServerRow {
     pub added_by: Option<String>,
 }
 
-fn state_ok(s: &str) -> bool {
-    matches!(s, "pending" | "active" | "paused" | "expired" | "revoked" | "refused")
-}
-
-/// Parse a `servers.list` answer (`{servers: [...]}`). Each entry is a
-/// `servers.toml` line as the node lists it: `slot`, `label`, `state` (a
-/// [`ServerStatus`]), `trust`, `fp` or `fp_prefix`, the share's limits
-/// (a `limits` object, or flattened like `servers.toml`), `expires_at`,
-/// `added_at`, `added_by`, and the runtime facts (`running`, `queued`,
-/// `cpu_secs_today`, `sas`, `refusal`) kept as `usage`. Entries that
-/// don't parse are an error, never skipped (a broken list isn't mirrored).
-pub fn parse_servers_list(result: &Value) -> Result<Vec<ServerRow>, String> {
-    let list = result.get("servers").and_then(Value::as_array).ok_or("servers.list: no servers list")?;
+/// Parse a `servers.list` answer: exactly the pinned
+/// [`share::ServersList`] (nested `limits`, the runtime facts kept as
+/// `usage`: `running`, `queued`, `cpu_secs_today`, `online`, and `sas` /
+/// `refusal` when set). A list that doesn't parse, or a server with a slot
+/// out of range or an odd label, is an error, never skipped: a broken list
+/// isn't mirrored.
+pub fn parse_servers_list(result: &Value) -> Result<(share::ServersList, Vec<ServerRow>), String> {
+    let list: share::ServersList = serde_json::from_value(result.clone()).map_err(|e| format!("servers.list: {e}"))?;
     let mut out = Vec::new();
-    for e in list {
-        let slot = e.get("slot").and_then(Value::as_u64).filter(|s| *s < u64::from(share::MAX_SLOTS)).ok_or("servers.list: a server without a slot 0–7")?
-            as u8;
-        let label = e.get("label").and_then(Value::as_str).filter(|l| share::valid_label(l)).ok_or("servers.list: a server without a plain label")?;
-        let state = e.get("state").and_then(Value::as_str).filter(|s| state_ok(s)).ok_or_else(|| format!("servers.list: {label} has no known state"))?;
-        let trust = e.get("trust").and_then(Value::as_str).and_then(Trust::parse).ok_or_else(|| format!("servers.list: {label} has no trust"))?;
-        let limits: ShareLimits = match e.get("limits") {
-            Some(l) => serde_json::from_value(l.clone()),
-            None => serde_json::from_value(e.clone()),
+    for e in &list.servers {
+        if !share::valid_slot(e.slot) {
+            return Err(format!("servers.list: {} has slot {} (0–7)", e.label, e.slot));
         }
-        .map_err(|err| format!("servers.list: {label}'s limits: {err}"))?;
-        let fp = e.get("fp").or_else(|| e.get("fp_prefix")).and_then(Value::as_str).map(str::to_string);
-        let mut usage = serde_json::Map::new();
-        for k in ["running", "queued", "cpu_secs_today", "wall_secs_today", "jobs_today", "sas", "refusal", "last_seen", "pending_until", "uid"] {
-            if let Some(v) = e.get(k).filter(|v| !v.is_null()) {
-                usage.insert(k.to_string(), v.clone());
-            }
+        if !share::valid_label(&e.label) {
+            return Err(format!("servers.list: {:?} isn't a plain label", e.label));
         }
-        if let Some(Value::Object(u)) = e.get("usage") {
-            for (k, v) in u {
-                usage.insert(k.clone(), v.clone());
-            }
+        let mut usage = serde_json::json!({"running": e.running, "queued": e.queued, "cpu_secs_today": e.cpu_secs_today, "online": e.online});
+        if let Some(s) = &e.sas {
+            usage["sas"] = s.clone().into();
+        }
+        if let Some(r) = &e.refusal {
+            usage["refusal"] = r.clone().into();
         }
         out.push(ServerRow {
-            slot,
-            label: label.to_string(),
-            fp,
-            state: state.to_string(),
-            trust: trust.as_str().to_string(),
-            limits,
-            usage: (!usage.is_empty()).then_some(Value::Object(usage)),
-            expires_at: e.get("expires_at").and_then(Value::as_i64),
-            added_at: e.get("added_at").and_then(Value::as_i64),
-            added_by: e.get("added_by").and_then(Value::as_str).map(str::to_string),
+            slot: e.slot,
+            label: e.label.clone(),
+            fp: e.fp.clone().or_else(|| Some(e.fp_prefix.clone())),
+            state: e.state.as_str().to_string(),
+            trust: e.trust.as_str().to_string(),
+            limits: e.limits.clone(),
+            usage: Some(usage),
+            expires_at: e.expires_at,
+            added_at: Some(e.added_at),
+            added_by: Some(e.added_by.clone()),
         });
     }
-    Ok(out)
+    Ok((list, out))
 }
 
 /// `CODE.FP` (`ABCDE-FGHJK.0123456789abcdef`, §4.1) → `(code_binding,
@@ -326,6 +312,7 @@ pub fn split_add_code(code_fp: &str) -> Result<(String, String), String> {
 mod tests {
     use super::*;
     use serde_json::json;
+    use crate::compute::proto::share::Trust;
 
     fn limits() -> ShareLimits {
         ShareLimits::new_server(Trust::Team, false)
@@ -344,6 +331,7 @@ mod tests {
             queued,
             cpu_secs_today: 3 * 3600 + 360,
             expires_in_secs: Some(86_400),
+            skew_secs: None,
             quotes,
         }
     }
@@ -414,28 +402,57 @@ mod tests {
         assert_eq!(human_eta(3900), "~1h05m");
     }
 
+    fn listing(slot: u8, label: &str, state: ServerStatus) -> share::ServerListing {
+        share::ServerListing {
+            slot,
+            label: label.into(),
+            state,
+            trust: if slot == 0 { Trust::Own } else { Trust::Team },
+            fp: (slot == 0).then(|| "ab".repeat(32)),
+            fp_prefix: if slot == 0 { "ab".repeat(32) } else { "0123456789abcdef".into() },
+            limits: if slot == 0 { ShareLimits::owner(2, 8, 16, 100, share::Network::On) } else { limits() },
+            expires_at: (slot != 0).then_some(1_761_600_000),
+            expires_in_secs: None,
+            added_at: 1,
+            added_by: "local:rosson".into(),
+            running: 1,
+            queued: 2,
+            cpu_secs_today: 30,
+            sas: (state == ServerStatus::Pending).then(|| "482913".to_string()),
+            refusal: (state == ServerStatus::Refused).then(|| "server_too_old".to_string()),
+            online: slot == 0,
+        }
+    }
+
+    /// The pinned `servers.list` shape (share::ServersList), parsed
+    /// exactly; anything else fails loudly.
     #[test]
-    fn servers_list_parses_flat_and_nested_limits_and_fails_loudly() {
-        let l = serde_json::to_value(limits()).unwrap();
-        let mut flat = l.as_object().unwrap().clone();
-        flat.insert("slot".into(), json!(1));
-        flat.insert("label".into(), json!("baden.k2.dev"));
-        flat.insert("state".into(), json!("pending"));
-        flat.insert("trust".into(), json!("team"));
-        flat.insert("fp_prefix".into(), json!("0123456789abcdef"));
-        flat.insert("sas".into(), json!("482913"));
-        flat.insert("expires_at".into(), json!(1_761_600_000));
-        let nested = json!({"slot": 0, "label": "rosson.k2.dev", "state": "active", "trust": "own", "fp": "ab".repeat(32),
-            "limits": ShareLimits::owner(2, 8, 16, 100, share::Network::On), "running": 1, "queued": 0});
-        let rows = parse_servers_list(&json!({"servers": [nested, Value::Object(flat)]})).expect("parses");
-        assert_eq!(rows.len(), 2);
+    fn servers_list_parses_the_pinned_shape_and_fails_loudly() {
+        let list = share::ServersList {
+            max_servers: share::DEFAULT_MAX_SERVERS,
+            solo: false,
+            servers: vec![listing(0, "rosson.k2.dev", ServerStatus::Active), listing(1, "baden.k2.dev", ServerStatus::Pending), listing(2, "old.k2.dev", ServerStatus::Refused)],
+        };
+        let (meta, rows) = parse_servers_list(&serde_json::to_value(&list).unwrap()).expect("parses");
+        assert_eq!((meta.max_servers, meta.solo), (3, false));
+        assert_eq!(rows.len(), 3);
         assert_eq!((rows[0].slot, rows[0].trust.as_str(), rows[0].limits.weight), (0, "own", 1));
-        assert_eq!(rows[1].fp.as_deref(), Some("0123456789abcdef"));
-        assert_eq!(rows[1].usage.as_ref().unwrap()["sas"], "482913");
+        assert_eq!(rows[0].fp.as_deref(), Some("ab".repeat(32).as_str()));
+        assert_eq!(rows[1].fp.as_deref(), Some("0123456789abcdef"), "the code's prefix until it enrols");
+        let u = rows[1].usage.as_ref().unwrap();
+        assert_eq!((u["sas"].as_str(), u["queued"].as_u64(), u["online"].as_bool()), (Some("482913"), Some(2), Some(false)));
         assert_eq!(rows[1].expires_at, Some(1_761_600_000));
-        assert!(parse_servers_list(&json!({"servers": [{"slot": 9, "label": "x", "state": "active", "trust": "own"}]})).is_err());
-        assert!(parse_servers_list(&json!({"servers": [{"slot": 1, "label": "x", "state": "weird", "trust": "own"}]})).is_err());
-        assert!(parse_servers_list(&json!({})).is_err());
+        assert_eq!((rows[2].state.as_str(), rows[2].usage.as_ref().unwrap()["refusal"].as_str()), ("refused", Some("server_too_old")));
+        let mut bad = serde_json::to_value(&list).unwrap();
+        bad["servers"][1]["slot"] = json!(9);
+        assert!(parse_servers_list(&bad).is_err(), "slot out of range");
+        let mut bad = serde_json::to_value(&list).unwrap();
+        bad["servers"][1]["state"] = json!("weird");
+        assert!(parse_servers_list(&bad).is_err());
+        let mut bad = serde_json::to_value(&list).unwrap();
+        bad["servers"][1]["label"] = json!("no spaces allowed");
+        assert!(parse_servers_list(&bad).is_err());
+        assert!(parse_servers_list(&json!({"servers": []})).is_err(), "max_servers and solo are required");
     }
 
     #[test]

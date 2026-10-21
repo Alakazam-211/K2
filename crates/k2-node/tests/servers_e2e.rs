@@ -604,6 +604,26 @@ async fn an_enrol_refused_already_enrolled_says_why_and_retries() {
     assert_ne!(fresh.link, "enrol_failed (retrying)", "{fresh:?}");
 }
 
+/// z3mbpZ e2e fix 4: an owner enrolled over loopback (its line labelled
+/// `127.0.0.1-60710`) is shown to other servers by its own name, as its
+/// `Welcome` gives it.
+#[tokio::test(flavor = "multi_thread")]
+async fn other_servers_see_a_loopback_owner_by_its_name() {
+    let mut a = Fake::start().await;
+    let mut b = Fake::start().await;
+    let n = start_node(&a, "srv-owner-name", "", walled(Wall::Seatbelt)).await;
+    let mut ca = a.next_conn().await;
+    ready(&mut ca).await;
+    pin_second(&n, &b, 1, "node-b");
+    write_shared(&n, 1, &prefix(&b.key), "b.k2.dev", ShareState::Active, None);
+    let mut f = servers::read_file(&n.layout.config).unwrap().unwrap();
+    f.servers[0].label = "127.0.0.1-60710".into();
+    servers::write_file(&n.layout.config, &f).unwrap();
+    let mut cb = b.next_conn().await;
+    let seen = cb.until(|fr| matches!(fr, Frame::Offer(o) if o.share.as_ref().is_some_and(|s| s.owner_label.as_deref() == Some("fake.k2.dev")))).await;
+    assert!(!seen.is_empty());
+}
+
 /// Review B7: another server's `Welcome` teaches only https routes to
 /// public hosts, at most 8; a LAN `ws://` route is dropped. The owner's
 /// routes are taken as today.

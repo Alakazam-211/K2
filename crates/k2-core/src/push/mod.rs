@@ -236,8 +236,11 @@ pub struct ThreadPush {
     /// The latest post itself, for the phone to show the message before it
     /// fetches (prd-e2e-push-v1 follow-up, Rosson 2026-10-21). It rides
     /// ONLY inside a sealed alert (`msg`), never a legacy, generic or nudge
-    /// push, and it is independent of the previews switches (they decide
-    /// only the visible banner text). `None` = not known.
+    /// push, and it is independent of the previews switches, the phone's
+    /// own AND the owner's `pushMessagePreviews` (decision 2026-10-21): it
+    /// is sealed end to end to the person's own device, and previews only
+    /// govern the lock-screen text (the visible title/body). `None` = not
+    /// known.
     pub msg: Option<ThreadMsg>,
 }
 
@@ -2464,7 +2467,7 @@ mod tests {
         assert_eq!(PushStatus::of(Some(&both), false, now), PushStatus::Ready);
         cloud.dispatch(&ev, "owner", &[dev("t2")]).expect("second send");
         assert_eq!(s.calls()[2].1, shared_auth, "within the retry window the shared token goes first");
-        assert_eq!(RelayPath::of(&both, now + TUNNEL_RETRY_SECS), RelayPath::PerDaemon, "retried after an hour");
+        assert_eq!(RelayPath::of(&both, unix_now() + TUNNEL_RETRY_SECS), RelayPath::PerDaemon, "retried after an hour");
 
         // 3. A marked 403 (subdomain_not_owned / suspended): NO fallback,
         //    nothing more sent, status dormant with the reason.
@@ -2479,7 +2482,7 @@ mod tests {
         assert!(status.reason().expect("reason").contains("subdomain_not_owned"), "{status:?}");
         cloud.dispatch(&ev, "owner", &[dev("t3")]).expect_err("still rejected");
         assert_eq!(s.calls().len(), 1, "while rejected, nothing is sent at all");
-        assert_eq!(PushStatus::of(Some(&both), false, now + TUNNEL_RETRY_SECS), PushStatus::Ready);
+        assert_eq!(PushStatus::of(Some(&both), false, unix_now() + TUNNEL_RETRY_SECS), PushStatus::Ready);
 
         // 4. A 400 never falls back, marked or not.
         for s0 in [false, true] {

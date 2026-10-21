@@ -760,6 +760,11 @@ fn homes_sync_ready() -> bool {
 /// `instanceId` on every `GET /cli/thread` answer (and `rev` on overlay
 /// WS frames). No SQL migration.
 pub const FEATURE_INBOX_CATCHUP: &str = "inbox-catchup-v1";
+/// `POST /cli/thread/catchup` takes optional `sinceRev` + `instanceId` and
+/// answers `{ok, rev, instanceId, unchanged: true}` with no reads when no
+/// Thread changed since (0.46.3). Threads only: project chats still need a
+/// normal call.
+pub const FEATURE_CATCHUP_UNCHANGED: &str = "catchup-unchanged-v1";
 
 /// App mobile access (app-mobile-access-v1, 0.46.3): the agent access
 /// list on `GET /cli/skin/me` (`agents`, `serverId`, `publicHost`,
@@ -852,6 +857,7 @@ pub fn features() -> Vec<&'static str> {
     }
     if k2_core::db::try_shared().is_some() {
         out.push(FEATURE_INBOX_CATCHUP);
+        out.push(FEATURE_CATCHUP_UNCHANGED);
     }
     if thread_read_ready() {
         out.push(FEATURE_APP_THREAD_PARITY);
@@ -930,6 +936,7 @@ mod tests {
                 "thread-read-v1",
                 "homes-sync-v1",
                 "inbox-catchup-v1",
+                "catchup-unchanged-v1",
                 "app-thread-parity-v1",
                 "app-read-state-v1",
                 "garden-person-rows-v1",

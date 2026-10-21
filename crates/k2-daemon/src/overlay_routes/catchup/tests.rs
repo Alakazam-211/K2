@@ -151,3 +151,88 @@ fn one_catch_up_in_flight_per_token() {
     assert_eq!(r.status, "400 Bad Request", "{}", r.body);
     drop(held);
 }
+
+// ── catchup-unchanged-v1 ───────────────────────────────────────────────
+
+#[test]
+fn since_rev_and_instance_id_go_together_and_are_validated() {
+    let r = parse_ok(br#"{"threads": [], "sinceRev": 7, "instanceId": "abc"}"#);
+    assert_eq!(r.since, Some((7, "abc".to_string())));
+    assert_eq!(parse_ok(br#"{"threads": []}"#).since, None, "an old client sends neither");
+    assert!(parse_err(json!({ "sinceRev": 7 })).contains("together"));
+    assert!(parse_err(json!({ "instanceId": "abc" })).contains("together"));
+    for bad in [json!(-1), json!(2.5), json!("7")] {
+        assert!(parse_err(json!({ "sinceRev": bad, "instanceId": "abc" })).contains("sinceRev"));
+    }
+    for bad in [json!(7), json!(""), json!("  ")] {
+        assert!(parse_err(json!({ "sinceRev": 7, "instanceId": bad })).contains("instanceId"));
+    }
+}
+
+/// Call `handle` with a body built from the rev at call time, retrying
+/// while other tests move the process-wide `rev` in between.
+fn call_at_stable_rev(make: &dyn Fn(u64) -> Value) -> (u64, CliResponse) {
+    for _ in 0..50 {
+        let rev = crate::overlay_ws::current_rev();
+        let r = handle(&HashMap::new(), make(rev).to_string().as_bytes(), None, None, None);
+        if crate::overlay_ws::current_rev() == rev {
+            return (rev, r);
+        }
+    }
+    panic!("the overlay rev never held still for one call");
+}
+
+#[test]
+fn unchanged_since_rev_answers_without_reads() {
+    let instance = crate::boot_status::instance_id().to_string();
+    // A thread that doesn't exist: a normal call would read it and answer
+    // an error entry; the short-cut never reads.
+    let (rev, r) = call_at_stable_rev(&|rev| {
+        json!({
+            "threads": [ {"addr": "no-such-ws-unchanged", "afterSeq": 0} ],
+            "groups": [ {"group": "no-such-group", "afterSeq": 0} ],
+            "sinceRev": rev,
+            "instanceId": instance,
+        })
+    });
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    let v: Value = serde_json::from_str(&r.body).expect("json");
+    assert_eq!(v, json!({ "ok": true, "rev": rev, "instanceId": instance, "unchanged": true }));
+
+    // A stale rev, or another daemon's instance id: the full answer.
+    for (since, inst) in [(rev + 1_000_000, instance.clone()), (rev, "another-daemon".to_string())] {
+        let body = json!({ "threads": [ {"addr": "no-such-ws-unchanged", "afterSeq": 0} ], "sinceRev": since, "instanceId": inst });
+        let r = handle(&HashMap::new(), body.to_string().as_bytes(), None, None, None);
+        let v: Value = serde_json::from_str(&r.body).expect("json");
+        assert!(v.get("unchanged").is_none(), "{v}");
+        assert_eq!(v["threads"][0]["addr"], "no-such-ws-unchanged", "read and answered: {v}");
+        assert!(v["threads"][0].get("error").is_some(), "the read happened: {v}");
+    }
+}
+
+/// An old client (no `sinceRev`) gets exactly the same bytes as before:
+/// the same answer as a call whose `sinceRev` doesn't match, with no
+/// `unchanged` key and the 0.46.3 envelope.
+#[test]
+fn a_request_without_since_rev_is_answered_as_before() {
+    let instance = crate::boot_status::instance_id().to_string();
+    for _ in 0..50 {
+        let rev = crate::overlay_ws::current_rev();
+        let old = handle(&HashMap::new(), br#"{"threads": [], "groups": []}"#, None, None, None);
+        let stale = json!({ "threads": [], "groups": [], "sinceRev": rev + 1_000_000, "instanceId": instance });
+        let mismatched = handle(&HashMap::new(), stale.to_string().as_bytes(), None, None, None);
+        if crate::overlay_ws::current_rev() != rev {
+            continue;
+        }
+        assert_eq!(old.status, "200 OK");
+        assert_eq!(old.body, mismatched.body, "byte-identical to a full answer");
+        let v: Value = serde_json::from_str(&old.body).expect("json");
+        assert_eq!(
+            v,
+            json!({ "ok": true, "has_more": false, "threads": [], "groups": [], "rev": rev, "instanceId": instance }),
+            "the 0.46.3 envelope, no `unchanged`"
+        );
+        return;
+    }
+    panic!("the overlay rev never held still");
+}

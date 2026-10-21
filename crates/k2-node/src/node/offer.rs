@@ -19,7 +19,7 @@ use std::sync::atomic::Ordering;
 
 use k2_node_proto::frames::{Availability, Caps, Free, Offer, PROTOCOL};
 use k2_node_proto::refusal::{self, NodeView};
-use k2_node_proto::share::{ShareView, FEATURE_SERVERS, FEATURE_TENANT_WALL};
+use k2_node_proto::share::{ShareView, FEATURE_QUEUE, FEATURE_SERVERS, FEATURE_TENANT_WALL};
 
 use super::{Node, Tenant, NODE_VERSION};
 
@@ -122,8 +122,14 @@ impl Node {
         if !t.is_owner() {
             f.retain(|x| !OWNER_ONLY_FEATURES.contains(&x.as_str()));
         }
-        if t.speaks_shared() && !f.iter().any(|x| x == FEATURE_SERVERS) {
-            f.push(FEATURE_SERVERS.to_string());
+        // Protocol 3: this node takes more than one server and keeps the
+        // node queue (`queue_get`, the withdraw/if_queued cancels, `Plan`'s
+        // queue fields). Without `queue` a server never sends into the
+        // node's queue and falls back to today's placement.
+        for feat in [FEATURE_SERVERS, FEATURE_QUEUE] {
+            if t.speaks_shared() && !f.iter().any(|x| x == feat) {
+                f.push(feat.to_string());
+            }
         }
         // `tenant-wall` only when the per-tenant wall is really on (lane
         // S3's probe), and only to protocol 3.

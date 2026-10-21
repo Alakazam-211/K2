@@ -228,7 +228,10 @@ fn track(t: &Tenant, job: &str, gen: u32, since: u64, hinted: bool) -> Track {
 
 /// One pass of the shipper: logs first, then state, then the receipt.
 /// `Err` when the session's queue is gone.
-async fn ship_pass(node: &Node, tenant: &Tenant, tracks: &Tracks, tx: &mpsc::Sender<Frame>) -> Result<(), ()> {
+/// `closing`: the session's last pass (its server was ended): a final
+/// state goes out even when its log can't be read to the end (a wiped
+/// slot), since nothing ships after this.
+async fn ship_pass(node: &Node, tenant: &Tenant, tracks: &Tracks, tx: &mpsc::Sender<Frame>, closing: bool) -> Result<(), ()> {
     let keys: Vec<(String, u32)> = tracks.lock().unwrap().keys().cloned().collect();
     for key in keys {
         let Some(mut t) = tracks.lock().unwrap().remove(&key) else { continue };
@@ -271,7 +274,7 @@ async fn ship_pass(node: &Node, tenant: &Tenant, tracks: &Tracks, tx: &mpsc::Sen
         }
         let state_key = (row.state, row.reason.clone());
         if row.state.is_terminal() {
-            if t.reader.last_seq < row.log_seq {
+            if t.reader.last_seq < row.log_seq && !closing {
                 tracks.lock().unwrap().insert(key, t);
                 continue;
             }
@@ -468,9 +471,17 @@ where
     let ship_tenant = tenant.clone();
     let ship_tracks = tracks.clone();
     let ship_tx = tx.clone();
+    // One pass at a time: the session's last pass must see every track
+    // (a pass takes a track out while it ships it).
+    let ship_lock = Arc::new(tokio::sync::Mutex::new(()));
+    let ship_lock_task = ship_lock.clone();
     let shipper = tokio::spawn(async move {
         loop {
-            if ship_pass(&ship_node, &ship_tenant, &ship_tracks, &ship_tx).await.is_err() {
+            let pass = {
+                let _one = ship_lock_task.lock().await;
+                ship_pass(&ship_node, &ship_tenant, &ship_tracks, &ship_tx, false).await
+            };
+            if pass.is_err() {
                 return;
             }
             tokio::select! {
@@ -516,8 +527,16 @@ where
                 break SessionEnd::Closed(format!("writer ended: {why}"));
             }
             _ = async { let _ = serve.wait_for(|on| !*on).await; } => {
-                // The node owner revoked, ended or reset this server: a
-                // last offer says why (its share state), then close.
+                // The node owner revoked, ended or reset this server: the
+                // final states and receipts still unsent go out first (a
+                // stopped job must read `cancelled/share_revoked` there, not
+                // lost), then a last offer says why (its share state), then
+                // close.
+                let _ = tokio::time::timeout(Duration::from_secs(2), async {
+                    let _one = ship_lock.lock().await;
+                    ship_pass(&node, &tenant, &tracks, &tx, true).await
+                })
+                .await;
                 let _ = tx.send(Frame::Offer(node.offer(&tenant))).await;
                 break SessionEnd::Closed("ended by the node owner".into());
             }
@@ -960,12 +979,23 @@ async fn servers_pass(node: &Arc<Node>, st: &mut ServersLoop) {
         if same {
             continue;
         }
-        t.serve.send_replace(false);
-        set_share(&t, None);
         // The slot was wiped (and maybe re-added): the old server's jobs end.
+        // Its share reads revoked from here on (no new work; its last offer
+        // says so), and its session stays open only until its stopped jobs
+        // ended, so it hears `cancelled/share_revoked` and never counts them
+        // lost and retries them.
+        let ended = t.share().map(|mut s| {
+            s.entry.state = ShareState::Revoked;
+            s
+        });
+        set_share(&t, ended);
         node.stop_tenant(t.slot, JobState::Cancelled, codes::SHARE_REVOKED);
         node.queue_cancel_tenant(&t, codes::SHARE_REVOKED);
-        let idle = !node.running_by_tenant().contains_key(&t.slot) && t.hub.connected.borrow().eq(&0);
+        let running = node.running_by_tenant().contains_key(&t.slot);
+        if *t.serve.borrow() != running {
+            t.serve.send_replace(running);
+        }
+        let idle = !running && t.hub.connected.borrow().eq(&0);
         if idle && node.drop_tenant(t.slot) {
             st.keys.remove(&t.slot);
             if let Some(h) = st.tasks.remove(&t.slot) {
@@ -1008,20 +1038,31 @@ async fn servers_pass(node: &Arc<Node>, st: &mut ServersLoop) {
         };
         t.reload_pin();
         set_share(&t, Some(info(e)));
-        let open_jobs = t.ledger.lock().unwrap().non_terminal().map(|v| !v.is_empty()).unwrap_or(false);
-        let want = e.state != ShareState::Revoked
-            && match t.status_at(now) {
+        if e.state == ShareState::Revoked && stop.slots.contains(&slot) {
+            node.stop_tenant(slot, JobState::Cancelled, codes::SHARE_REVOKED);
+        }
+        // Jobs this server still has here: running, stopping, or queued and
+        // not yet cancelled. Their final states and receipts go out on its
+        // session, so a revoke or an end date closes it only once they end
+        // (the server would otherwise count them lost and retry them).
+        let open_jobs = node.running_by_tenant().contains_key(&slot) || t.ledger.lock().unwrap().non_terminal().map(|v| !v.is_empty()).unwrap_or(false);
+        let want = if e.state == ShareState::Revoked {
+            // Revoked: no new work; stay only to report the jobs still
+            // running (they finish, or stop with `--now`) (§4.3).
+            open_jobs
+        } else {
+            match t.status_at(now) {
                 Some(ServerStatus::Active | ServerStatus::Paused | ServerStatus::Pending | ServerStatus::Refused) => true,
                 // Past its end date: no new work; stay only to report the
                 // jobs still running (§4.3).
                 Some(ServerStatus::Expired) => open_jobs && e.state != ShareState::Pending,
+                // Revoked by the server itself (its pin): its session
+                // already ended with `Revoked`.
                 _ => false,
-            };
+            }
+        };
         if *t.serve.borrow() != want {
             t.serve.send_replace(want);
-        }
-        if e.state == ShareState::Revoked && stop.slots.contains(&slot) {
-            node.stop_tenant(slot, JobState::Cancelled, codes::SHARE_REVOKED);
         }
     }
 

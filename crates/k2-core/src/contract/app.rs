@@ -773,7 +773,29 @@ mod tests {
         let mut dual: Vec<&str> =
             rows(c).iter().filter(|v| v.exposed_to(Exposure::GardenLocal)).map(|v| v.verb.as_str()).collect();
         dual.sort_unstable();
-        assert_eq!(dual, ["app.self", "app.usage", "guests.rooms", "guests.setRooms", "room.members"]);
+        // + the Garden person rows (garden-person-rows-v1, catalog v17).
+        assert_eq!(
+            dual,
+            [
+                "activity.snapshot",
+                "app.self",
+                "app.usage",
+                "files.list",
+                "files.read",
+                "files.readBinary",
+                "guests.rooms",
+                "guests.setRooms",
+                "room.members",
+                "thread.catchup",
+                "thread.mute",
+                "thread.unread",
+                "tickets.comment",
+                "tickets.create",
+                "tickets.list",
+                "tickets.resolve",
+                "tickets.show"
+            ]
+        );
     }
 
     #[test]

@@ -453,7 +453,13 @@ mod tests {
         for (verb, feature) in person_rows {
             let v = c.verb(verb).unwrap_or_else(|| panic!("{verb} row"));
             assert_eq!(v.feature, feature, "{verb}");
-            assert!(v.errors.iter().any(|e| e == "not_bound") && v.errors.iter().any(|e| e == "author_unknown"), "{verb}: Garden errors");
+            // Tickets, activity and files check the widget's maker (an
+            // agent-made widget: its own room); the person's own Thread state
+            // doesn't.
+            let maker_rule = !verb.starts_with("thread.");
+            assert_eq!(v.errors.iter().any(|e| e == "author_unknown"), maker_rule, "{verb}: author_unknown");
+            assert!(maker_rule || v.errors.iter().any(|e| e == "not_found"), "{verb}: an unknown address");
+            assert!(!maker_rule || v.errors.iter().any(|e| e == "not_bound"), "{verb}: a room out of reach");
         }
         for v in local {
             if v.exposed_to(Exposure::App) {

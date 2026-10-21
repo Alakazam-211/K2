@@ -562,8 +562,9 @@ mod tests {
         assert_one(&with_rows(&format!("[{bad}]")), "no renderer or socket binding");
         let bad = LOCAL.replace(r#""reach":"local""#, r#""reach":"portable""#);
         assert_one(&with_rows(&format!("[{bad}]")), "reach local");
-        let bad = LOCAL.replace(r#""cap":"store:read""#, r#""cap":"files:read""#);
-        assert_one(&with_rows(&format!("[{bad}]")), "its cap 'files:read' isn't");
+        // files:read joined the Garden door in 0.46.3; wiki:read stays App-only.
+        let bad = LOCAL.replace(r#""cap":"store:read""#, r#""cap":"wiki:read""#);
+        assert_one(&with_rows(&format!("[{bad}]")), "its cap 'wiki:read' isn't");
     }
 
     #[test]

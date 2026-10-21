@@ -7212,7 +7212,6 @@
         "usage",
         "not_found",
         "not_bound",
-        "author_unknown",
         "failed",
         "rate_limited"
       ],
@@ -7449,7 +7448,6 @@
         "usage",
         "not_found",
         "not_bound",
-        "author_unknown",
         "failed"
       ],
       "doc": "The signed-in person's own unread counts: a guest's over the room Threads it may read, a Garden's over the person's Threads.",
@@ -7563,6 +7561,7 @@
         "not_bound",
         "usage",
         "not_found",
+        "paused",
         "failed"
       ],
       "doc": "Mute or unmute a room's Thread for the signed-in person (their own state, on every surface); an App's own pass has no mutes.",
@@ -9429,6 +9428,7 @@
         "usage",
         "not_bound",
         "author_unknown",
+        "not_found",
         "failed"
       ],
       "doc": "One ticket with its comments (and brief).",
@@ -9648,6 +9648,7 @@
         "too_large",
         "not_bound",
         "author_unknown",
+        "paused",
         "failed"
       ],
       "doc": "Open a ticket in a room for its agent.",
@@ -9746,6 +9747,8 @@
         "usage",
         "not_bound",
         "author_unknown",
+        "not_found",
+        "paused",
         "failed"
       ],
       "doc": "Comment on a ticket as the guest (free text moves it to needs_discussion).",
@@ -9911,6 +9914,8 @@
         "usage",
         "not_bound",
         "author_unknown",
+        "not_found",
+        "paused",
         "failed"
       ],
       "doc": "Set a ticket's status (Apps can't set answered).",

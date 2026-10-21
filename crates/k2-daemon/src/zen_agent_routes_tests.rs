@@ -594,9 +594,12 @@ fn only_the_person_dismisses_a_keep_card_and_the_daemon_replace_still_works() {
         assert_eq!(v["error"]["code"], "action_card_person_only", "{who}: {v}");
     }
     assert_eq!(card(&conv, &id).status, "pending", "a refused dismiss leaves the card waiting");
-    // The daemon's replace: a newer change voids the waiting card.
+    // The daemon's replace: the person keeps the live version in Settings,
+    // the agent changes it again while the card still waits, and the newer
+    // card voids the old one.
+    claim_live(&e.f, "board", 2);
     let (_, v) = call("/cli/zen/widget/put", false, &mgr, json!({"widget": "board", "file": "app.js", "text": "console.log('agent 2')\n"}));
-    let newer = v["keepCard"]["card"].as_str().expect("a newer card").to_string();
+    let newer = v["keepCard"]["card"].as_str().unwrap_or_else(|| panic!("a newer card: {v}")).to_string();
     assert_ne!(newer, id);
     assert_eq!(card(&conv, &id).status, "voided", "the daemon's replace still voids it");
     assert_eq!(card(&conv, &newer).status, "pending");

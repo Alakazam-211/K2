@@ -130,6 +130,7 @@ export const SECTION_LABELS: Record<SettingsSection, string> = {
   'user-templates': 'User Templates',
   'api-tokens': 'API Keys',
   vault: 'Vault',
+  'permission-cards': 'Permission Cards',
   'data-sources': 'External Data',
   'local-grokbots': 'Grok Bot',
   'bots-hermes': 'Hermes',

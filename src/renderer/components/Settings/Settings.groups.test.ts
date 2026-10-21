@@ -96,7 +96,8 @@ describe('Settings: K2 Server becomes Access and Network (0.45.7)', () => {
   it('Access and Network hold the old K2 Server pages; every old id is still a leaf exactly once', () => {
     for (const zenGardens of [true, false]) {
       const nav = settingsNav({ zenGardens })
-      expect(group(nav, 'Access').items.map((i) => i.id)).toEqual(['k2-access', 'people', 'user-templates', 'api-tokens', 'vault'])
+      // Permission Cards (Beta, 0.46.3, prd-agent-settings-cards-v1 §2.1) closes Access.
+      expect(group(nav, 'Access').items.map((i) => i.id)).toEqual(['k2-access', 'people', 'user-templates', 'api-tokens', 'vault', 'permission-cards'])
       expect(group(nav, 'Network').items.map((i) => i.id)).toEqual(
         zenGardens
           ? ['k2-connect', 'domains', 'connections', 'companion', 'homes-sync']

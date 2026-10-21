@@ -32,6 +32,7 @@ import { COMING_SOON_BOTS, COMING_SOON_BOTS_MANIFEST, ComingSoonBotSection } fro
 import { DomainsSection, DOMAINS_MANIFEST } from './sections/DomainsSection'
 import { ApiTokensSection, API_TOKENS_MANIFEST } from './sections/ApiTokensSection'
 import { VaultSection, VAULT_MANIFEST } from './sections/VaultSection'
+import { PermissionCardsSection, PERMISSION_CARDS_MANIFEST } from './sections/PermissionCardsSection'
 import { DataSourcesSection, DATA_SOURCES_MANIFEST } from './sections/DataSourcesSection'
 import { LocalGrokBotsSection, LOCAL_GROKBOTS_MANIFEST } from './sections/LocalGrokBotsSection'
 import { primaryScope as settingsPrimaryScope } from '@/kessel/server-scope'
@@ -189,6 +190,9 @@ export function settingsNav({
         { id: 'user-templates', label: 'User Templates', beta: true },
         { id: 'api-tokens', label: 'API Keys' },
         { id: 'vault', label: 'Vault' },
+        // Permission cards (Beta, prd-agent-settings-cards-v1 §2.1): the
+        // owner's global switch, each agent's switch, Waiting on you.
+        { id: 'permission-cards', label: 'Permission Cards', beta: true },
       ],
     },
     ...(zenGardens
@@ -317,6 +321,7 @@ export default function Settings(): React.JSX.Element {
       ...DOMAINS_MANIFEST,
       ...API_TOKENS_MANIFEST,
       ...VAULT_MANIFEST,
+      ...PERMISSION_CARDS_MANIFEST,
       ...DATA_SOURCES_MANIFEST,
       ...LOCAL_GROKBOTS_MANIFEST,
       ...EMAIL_HOSTING_MANIFEST,
@@ -641,6 +646,11 @@ export default function Settings(): React.JSX.Element {
         {activeSection === 'vault' && (
           <SectionErrorBoundary>
             <VaultSection />
+          </SectionErrorBoundary>
+        )}
+        {activeSection === 'permission-cards' && (
+          <SectionErrorBoundary>
+            <PermissionCardsSection />
           </SectionErrorBoundary>
         )}
         {activeSection === 'data-sources' && (

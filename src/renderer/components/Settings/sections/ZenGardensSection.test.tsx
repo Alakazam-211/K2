@@ -517,7 +517,8 @@ describe('Settings → Gardens: where it shows', () => {
     await settle()
     const ids = navIds()
     const at = ids.indexOf('zen-gardens')
-    expect(ids[at - 1]).toBe('vault')
+    // Access ends with Permission Cards (Beta, 0.46.3), then Gardens.
+    expect(ids[at - 1]).toBe('permission-cards')
     expect(ids[at + 1]).toBe('zen-widget-data')
     expect(ids[at + 2]).toBe('data-sources')
     expect(ids[at + 3]).toBe('k2-connect')

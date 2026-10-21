@@ -44,8 +44,15 @@ pub type Slot = u8;
 pub const OWNER_SLOT: Slot = 0;
 /// Slots are `0..MAX_SLOTS`.
 pub const MAX_SLOTS: u8 = 8;
-/// `servers.toml` `max_servers` when absent.
-pub const DEFAULT_MAX_SERVERS: u8 = 8;
+/// `servers.toml` `max_servers` when absent: 3 servers per node (the owner
+/// plus two; Rosson 2026-10-21, proposed for the Mac minis, pending his
+/// final answer). The node owner may set 1 (no sharing) up to [`MAX_SLOTS`].
+pub const DEFAULT_MAX_SERVERS: u8 = 3;
+/// A new server's disk budget on a Mac (the minis' 20 GB per extra server
+/// until the disk floor counts the Sew VMs, Q13); elsewhere
+/// [`DEFAULT_DISK_GB`].
+pub const MAC_DISK_GB: u32 = 20;
+pub const DEFAULT_DISK_GB: u32 = 40;
 /// A pending add waits this long for its SAS (§4.1).
 pub const PENDING_SECS: i64 = 600;
 /// Quotes per tenant: its last four distinct `(cpu, mem)` asks (V53).
@@ -300,7 +307,10 @@ impl ServerStatus {
 /// One tenant's settings on one node (§2 "Share", §7 defaults).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ShareLimits {
-    /// Fair-share weight (1–100). The owner defaults to 2 (Q6).
+    /// Fair-share weight (1–100). Every server starts at 1, the owner too
+    /// (Rosson 2026-10-21); the node owner changes it per server
+    /// (`servers.limits`, a raise is a widening). `gate` jobs jump the line
+    /// whatever the weights.
     pub weight: u32,
     /// Highest class this tenant may use (`gate` also needs [`Self::gate`]).
     pub top_class: JobClass,
@@ -320,9 +330,9 @@ pub struct ShareLimits {
 }
 
 impl ShareLimits {
-    /// A new server's share (§7 "Defaults", Q5, Q7). `macos` picks `team`'s
-    /// network: `no-lan` on Linux, `none` on macOS (Seatbelt can't filter
-    /// by subnet).
+    /// A new server's share (§7 "Defaults", Q5, Q7, Q13). `macos` picks
+    /// `team`'s network (`no-lan` on Linux, `none` on macOS: Seatbelt can't
+    /// filter by subnet) and the disk budget (20 GB on a Mac, 40 GB else).
     pub fn new_server(trust: Trust, macos: bool) -> Self {
         Self {
             weight: 1,
@@ -335,7 +345,7 @@ impl ShareLimits {
             max_job_secs: 7200,
             max_cpus: 4,
             max_mem_gb: 8,
-            disk_gb: 40,
+            disk_gb: if macos { MAC_DISK_GB } else { DEFAULT_DISK_GB },
             network: match (trust, macos) {
                 (Trust::Own, _) => Network::On,
                 (Trust::Team, false) => Network::NoLan,
@@ -345,12 +355,12 @@ impl ShareLimits {
     }
 
     /// The owner entry the first `servers.add` writes (§11.1): `gate`,
-    /// weight 2 (Q6). Its per-job and running limits come from the node's
+    /// weight 1 like every server (Rosson 2026-10-21). Its per-job and running limits come from the node's
     /// `policy.toml` (the caller passes them); the share adds no cap the
     /// owner didn't have before.
     pub fn owner(max_running: u32, max_cpus: u32, max_mem_gb: u32, disk_gb: u32, network: Network) -> Self {
         Self {
-            weight: 2,
+            weight: 1,
             top_class: JobClass::Gate,
             gate: true,
             exclusive: true,
@@ -457,6 +467,24 @@ pub struct ShareOverrides {
 impl ShareOverrides {
     pub fn is_empty(&self) -> bool {
         *self == ShareOverrides::default()
+    }
+
+    /// Each given field within its range (the same ranges as
+    /// [`ShareLimits::validate`]); the cross-field rules need the whole
+    /// share, so the executor checks those after applying.
+    pub fn check_ranges(&self) -> Result<(), String> {
+        let range = |name: &str, v: Option<u64>, lo: u64, hi: u64| match v {
+            Some(v) if !(lo..=hi).contains(&v) => Err(format!("{name} is {lo}–{hi}, got {v}")),
+            _ => Ok(()),
+        };
+        range("weight", self.weight.map(u64::from), 1, 100)?;
+        range("max_running", self.max_running.map(u64::from), 1, 64)?;
+        range("max_queued", self.max_queued.map(u64::from), 1, 1000)?;
+        range("cpu_hours_day", self.cpu_hours_day.map(u64::from), 1, 24 * 1024)?;
+        range("max_job_secs", self.max_job_secs, 60, 7 * 24 * 3600)?;
+        range("max_cpus", self.max_cpus.map(u64::from), 1, 1024)?;
+        range("max_mem_gb", self.max_mem_gb.map(u64::from), 1, 4096)?;
+        range("disk_gb", self.disk_gb.map(u64::from), 1, 65536)
     }
 
     /// `base` with these changes applied.
@@ -994,6 +1022,7 @@ pub fn check_verb_args(verb: &str, args: &Value) -> Result<(), String> {
             if a.set.is_empty() && a.for_secs.is_none() {
                 return Err(format!("{verb}: change at least one limit"));
             }
+            a.set.check_ranges().map_err(|e| format!("{verb}: {e}"))?;
             if a.for_secs.is_some_and(|s| s != 0 && !(3600..=366 * 24 * 3600).contains(&s)) {
                 return Err(format!("{verb}: for is 1 h to 366 days, or 0 for none"));
             }
@@ -1078,7 +1107,11 @@ mod tests {
         assert_eq!(ShareLimits::new_server(Trust::Team, false).network, Network::NoLan);
         assert_eq!(ShareLimits::new_server(Trust::Team, true).network, Network::None);
         let o = ShareLimits::owner(2, 8, 16, 100, Network::On);
-        assert!(o.allows_class(JobClass::Gate) && o.weight == 2);
+        assert!(o.allows_class(JobClass::Gate) && o.weight == 1, "every server starts at weight 1, the owner too");
+        assert_eq!((own.disk_gb, ShareLimits::new_server(Trust::Own, false).disk_gb), (MAC_DISK_GB, DEFAULT_DISK_GB));
+        assert_eq!(DEFAULT_MAX_SERVERS, 3);
+        let f: ServersFile = serde_json::from_value(serde_json::json!({"version": 1, "owner": "a".repeat(64)})).unwrap();
+        assert_eq!(f.max_servers, 3, "a file without max_servers allows three servers");
         assert!(!own.allows_class(JobClass::Gate) && own.allows_class(JobClass::Interactive) && own.allows_class(JobClass::Batch));
         own.validate().unwrap();
         o.validate().unwrap();
@@ -1165,6 +1198,16 @@ mod tests {
         extra["limits"]["surprise"] = 1.into();
         assert!(check_verb_args(VERB_ADD, &extra).is_err());
         check_verb_args(VERB_LIMITS, &serde_json::json!({"server": "baden.k2.dev", "set": {"max_running": 2}})).unwrap();
+        // The weight path (`k2 compute node servers limits <node> <server>
+        // --weight N`): a raise widens (owner approval), a cut narrows.
+        let w2 = serde_json::json!({"server": "slot:0", "set": {"weight": 2}});
+        check_verb_args(VERB_LIMITS, &w2).unwrap();
+        let a: LimitsArgs = serde_json::from_value(w2).unwrap();
+        let base = ShareLimits::new_server(Trust::Own, false);
+        assert_eq!(a.set.apply(&base).widens(&base), vec!["weight"]);
+        assert!(ShareOverrides { weight: Some(1), ..Default::default() }.apply(&a.set.apply(&base)).widens(&a.set.apply(&base)).is_empty());
+        assert!(check_verb_args(VERB_LIMITS, &serde_json::json!({"server": "b", "set": {"weight": 0}})).is_err(), "weight is 1–100");
+        assert!(check_verb_args(VERB_LIMITS, &serde_json::json!({"server": "b", "set": {"weight": 101}})).is_err());
         assert!(check_verb_args(VERB_LIMITS, &serde_json::json!({"server": "baden.k2.dev", "set": {}})).is_err());
         check_verb_args(VERB_REVOKE, &serde_json::json!({"server": "slot:3", "now": true})).unwrap();
         assert!(check_verb_args(VERB_REVOKE, &serde_json::json!({"server": "slot:9"})).is_err());

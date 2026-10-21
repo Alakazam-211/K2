@@ -279,6 +279,11 @@ async fn resolve_and_post_go_out_as_the_agent_with_its_key() {
     assert_eq!(post.key.as_deref(), Some("k2c-key1"), "the client key is the Idempotency-Key");
     assert_eq!(post.actor, None, "no approval, no Sew-Actor");
     assert!(calls.iter().any(|c| c.path == "/api/v1/resolve"), "{}", sew.log());
+    assert!(
+        !calls.iter().any(|c| c.path == "/api/v1/spaces/201/channels"),
+        "Sew's resolve answered, so the display-name fallback never ran: {}",
+        sew.log()
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

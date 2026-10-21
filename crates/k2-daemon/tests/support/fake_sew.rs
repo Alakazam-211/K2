@@ -681,7 +681,11 @@ fn chat_get(s: &mut State, me: u64, path: &str, query: &str) -> (u16, String) {
             .to_string(),
         ),
         "/api/v1/resolve" => match q("addr").as_deref() {
-            Some("hearth/general") => (200, json!({"space_id": SPACE_ID, "channel_id": CHANNEL_ID}).to_string()),
+            // Sew's own address form: `<space>/#<channel>`, `#` as %23 on
+            // the wire. A bare `hearth/general` isn't an address Sew parses.
+            Some("hearth/%23general") | Some("hearth/#general") => {
+                (200, json!({"space_id": SPACE_ID, "channel_id": CHANNEL_ID}).to_string())
+            }
             _ => err(404, "not_found", "channel not found", json!({})),
         },
         "/api/v1/channels/301" => (200, channel_json().to_string()),

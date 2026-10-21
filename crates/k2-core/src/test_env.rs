@@ -478,8 +478,10 @@ pub fn env_mutation_violations(
 /// Temp paths named from a `ThreadId` (or pid + nanos) repeat across the
 /// test binaries of one run and across runs (the 0.45.0 gate leaked
 /// `k2-update-test-boot-<pid>-ThreadId(N)` homes); use
-/// [`unique_temp_path`]. Nothing in `src/` needs a `ThreadId` today, so the
-/// rule is zero-tolerance.
+/// [`unique_temp_path`]. Zero-tolerance for any use that can feed a name;
+/// the one exception is a plain identity comparison
+/// (`h.thread().id() == std::thread::current().id()`, k2-ptyd's "never join
+/// ourselves"), which names nothing ([`thread_id_line_names_something`]).
 pub fn thread_id_name_violations(src_root: &Path) -> Vec<String> {
     let mut out = Vec::new();
     let mut stack = vec![src_root.to_path_buf()];
@@ -499,9 +501,7 @@ pub fn thread_id_name_violations(src_root: &Path) -> Vec<String> {
                 .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
             for (n, line) in src.lines().enumerate() {
                 // concat! so this line never matches itself.
-                if !line.trim_start().starts_with("//")
-                    && line.contains(concat!("current()", ".id()"))
-                {
+                if !line.trim_start().starts_with("//") && thread_id_line_names_something(line) {
                     out.push(format!("{}:{}: {}", path.display(), n + 1, line.trim()));
                 }
             }
@@ -509,6 +509,31 @@ pub fn thread_id_name_violations(src_root: &Path) -> Vec<String> {
     }
     out.sort();
     out
+}
+
+/// Does this line use the current `ThreadId` for anything but an `==` /
+/// `!=` comparison with another `ThreadId`? Every such use counts (a
+/// `format!`, a path, a `{:?}`, a binding that may become one later); only
+/// a line whose every `current().id()` is one side of an identity
+/// comparison with another `.id()` is allowed.
+pub fn thread_id_line_names_something(line: &str) -> bool {
+    // concat! so this function never matches its own source line.
+    let needle = concat!("current()", ".id()");
+    let compact: String = line.chars().filter(|c| !c.is_whitespace()).collect();
+    let mut rest = compact.as_str();
+    while let Some(i) = rest.find(needle) {
+        let before = &rest[..i];
+        let after = &rest[i + needle.len()..];
+        let lhs_is_id = |s: &str| s.ends_with(".id()==") || s.ends_with(".id()!=");
+        // `X.id() == std::thread::current().id()`: strip the path prefix.
+        let before_cmp = before.trim_end_matches("std::thread::").trim_end_matches("thread::");
+        let rhs_is_id = (after.starts_with("==") || after.starts_with("!=")) && after[2..].contains(".id()");
+        if !(lhs_is_id(before_cmp) || rhs_is_id) {
+            return true;
+        }
+        rest = after;
+    }
+    false
 }
 
 /// A loopback TCP port that is RESERVED but not listening: connects to it
@@ -928,6 +953,17 @@ mod tests {
     /// only through this module; other vars only in the files (and counts)
     /// listed in `K2_CORE_ENV_BASELINE`. Lower a count when you convert
     /// sites; never raise one.
+    #[test]
+    fn thread_id_lint_allows_only_identity_comparisons() {
+        let cur = concat!("std::thread::current()", ".id()");
+        assert!(!thread_id_line_names_something(&format!("if h.thread().id() == {cur} {{")));
+        assert!(!thread_id_line_names_something(&format!("if {cur} != other.id() {{")));
+        assert!(thread_id_line_names_something(&format!("let p = dir.join(format!(\"t-{{:?}}\", {cur}));")));
+        assert!(thread_id_line_names_something(&format!("let id = {cur};")));
+        assert!(thread_id_line_names_something(&format!("let n = format!(\"{{:?}}\", {cur}) == x;")));
+        assert!(!thread_id_line_names_something("let p = unique_temp_path(\"x\");"));
+    }
+
     #[test]
     fn no_thread_id_temp_names_in_k2_core() {
         let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");

@@ -182,7 +182,8 @@ fn argument_counts_are_checked() {
     let arity = only(&f, "catalog-arity");
     assert_eq!(arity.len(), 4, "{f:#?}");
     assert!(arity[0].message.contains("needs address, text"), "{arity:#?}");
-    assert!(arity[0].suggestion.contains("thread.post(address, text)"), "{arity:#?}");
+    // Thread parity (0.46.3): thread.post takes {attachments} after the text.
+    assert!(arity[0].suggestion.contains("thread.post(address, text, {attachments})"), "{arity:#?}");
 }
 
 #[test]

@@ -639,6 +639,11 @@ fn the_node_build_cache_follows_the_server_version() {
         Err(e) => assert_eq!(e.code, cadmin::codes::NO_UPDATE, "a tampered cache fails the check"),
         Ok(b) => panic!("a tampered cache was offered: {}", b.version),
     }
+    // A pair that fails the check is refilled once the source is back (a
+    // crash between the two writes never sticks).
+    let again = stage_build(&release, "macos", "0.46.1");
+    let b = load_build("macos", "aarch64").unwrap();
+    assert_eq!(b.sha256, crypto::sha256_hex(&again), "the broken pair was refilled from the release");
 
     // Bundled: an empty cache and a release holding only the .sig: the
     // k2-node beside the daemon fills it.

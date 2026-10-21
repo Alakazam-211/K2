@@ -359,8 +359,14 @@ impl RawStat {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Fs {
-    /// `major:minor` of the device.
+    /// `major:minor` of the device: groups paths within one daemon run.
+    /// Not stable: macOS numbers devices again at every boot.
     pub id: String,
+    /// The volume across reboots ([`volume_key`]): what the disk watch
+    /// keys its lines and notices by (smoke r6: keyed by `id`, a reboot
+    /// filed a second ticket for the same disk).
+    #[serde(default)]
+    pub volume: String,
     pub mount: Option<String>,
     pub fs_type: Option<String>,
     pub total_bytes: u64,
@@ -372,6 +378,30 @@ pub struct Fs {
     pub inodes_free_pct: Option<f64>,
 }
 
+/// A volume's name across reboots: `uuid:<fs UUID>@<mount>` when the
+/// filesystem's UUID is known (macOS: the volume UUID; Linux: the
+/// `/dev/disk/by-uuid` entry of the mount's source), else
+/// `mount:<mount>`, else (no mount known) `dev:<major:minor>`.
+pub fn volume_key(mount: Option<&str>, uuid: Option<&str>, dev_id: &str) -> String {
+    let mount = mount.map(str::trim).filter(|m| !m.is_empty());
+    let uuid = uuid.map(str::trim).filter(|u| !u.is_empty());
+    match (uuid, mount) {
+        (Some(u), Some(m)) => format!("uuid:{}@{m}", u.to_ascii_lowercase()),
+        (Some(u), None) => format!("uuid:{}", u.to_ascii_lowercase()),
+        (None, Some(m)) => format!("mount:{m}"),
+        (None, None) => format!("dev:{dev_id}"),
+    }
+}
+
+/// Was this disk-watch key written by a daemon that keyed volumes by
+/// device number (`major:minor`, before 0.46.3's fix)?
+pub fn is_legacy_dev_key(key: &str) -> bool {
+    match key.split_once(':') {
+        Some((a, b)) => !a.is_empty() && !b.is_empty() && a.bytes().all(|c| c.is_ascii_digit()) && b.bytes().all(|c| c.is_ascii_digit()),
+        None => false,
+    }
+}
+
 impl Fs {
     pub fn from_raw(id: String, mount: Option<String>, fs_type: Option<String>, r: RawStat) -> Fs {
         let total = r.blocks.saturating_mul(r.frsize);
@@ -380,7 +410,24 @@ impl Fs {
         let denom = used.saturating_add(free);
         let used_pct = if denom == 0 { 0.0 } else { round1(used as f64 * 100.0 / denom as f64) };
         let inodes_free_pct = (r.files > 0).then(|| round1(r.ffree as f64 * 100.0 / r.files as f64));
-        Fs { id, mount, fs_type, total_bytes: total, used_bytes: used, free_bytes: free, used_pct, inodes_free_pct }
+        let volume = volume_key(mount.as_deref(), None, &id);
+        Fs { id, volume, mount, fs_type, total_bytes: total, used_bytes: used, free_bytes: free, used_pct, inodes_free_pct }
+    }
+
+    /// The same fs with its filesystem UUID folded into [`Fs::volume`].
+    pub fn with_uuid(mut self, uuid: Option<&str>) -> Fs {
+        self.volume = volume_key(self.mount.as_deref(), uuid, &self.id);
+        self
+    }
+
+    /// The stable key ([`Fs::volume`]; a value built before the field
+    /// existed falls back to the mount, then the device).
+    pub fn volume_key(&self) -> String {
+        if self.volume.is_empty() {
+            volume_key(self.mount.as_deref(), None, &self.id)
+        } else {
+            self.volume.clone()
+        }
     }
 
     /// The fs's own level under `lines` (no action's need counted).
@@ -486,7 +533,88 @@ fn real_probe(path: &Path) -> Option<Fs> {
     let (maj, min) = dev_parts(dev as u64);
     let id = format!("{maj}:{min}");
     let (mount, fs_type) = mount_of(path, maj, min);
-    Some(Fs::from_raw(id, mount, fs_type, raw))
+    let uuid = fs_uuid(mount.as_deref());
+    Some(Fs::from_raw(id, mount, fs_type, raw).with_uuid(uuid.as_deref()))
+}
+
+/// The filesystem UUID of the volume mounted at `mount` (macOS: the
+/// volume UUID from `getattrlist`). `None` when unknown.
+#[cfg(target_os = "macos")]
+fn fs_uuid(mount: Option<&str>) -> Option<String> {
+    #[repr(C)]
+    struct VolUuid {
+        len: u32,
+        uuid: [u8; 16],
+    }
+    let c = std::ffi::CString::new(mount?.as_bytes()).ok()?;
+    let mut al: libc::attrlist = unsafe { std::mem::zeroed() };
+    al.bitmapcount = libc::ATTR_BIT_MAP_COUNT;
+    al.volattr = libc::ATTR_VOL_INFO | libc::ATTR_VOL_UUID;
+    let mut buf = VolUuid { len: 0, uuid: [0; 16] };
+    // SAFETY: `al` and `buf` are live, correctly sized locals; the kernel
+    // writes at most `size_of::<VolUuid>()` bytes into `buf`.
+    let rc = unsafe {
+        libc::getattrlist(
+            c.as_ptr(),
+            &mut al as *mut libc::attrlist as *mut libc::c_void,
+            &mut buf as *mut VolUuid as *mut libc::c_void,
+            std::mem::size_of::<VolUuid>(),
+            0,
+        )
+    };
+    if rc != 0 || (buf.len as usize) < std::mem::size_of::<VolUuid>() || buf.uuid == [0; 16] {
+        return None;
+    }
+    Some(format_uuid(&buf.uuid))
+}
+
+/// Linux: the `/dev/disk/by-uuid` entry of the mount's source device.
+#[cfg(target_os = "linux")]
+fn fs_uuid(mount: Option<&str>) -> Option<String> {
+    let info = std::fs::read_to_string("/proc/self/mountinfo").ok()?;
+    let source = mount_source(&info, mount?)?;
+    uuid_for_source(Path::new("/dev/disk/by-uuid"), &source)
+}
+
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "linux"))))]
+fn fs_uuid(_mount: Option<&str>) -> Option<String> {
+    None
+}
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn format_uuid(u: &[u8; 16]) -> String {
+    let h: Vec<String> = u.iter().map(|b| format!("{b:02x}")).collect();
+    format!("{}-{}-{}-{}-{}", h[0..4].concat(), h[4..6].concat(), h[6..8].concat(), h[8..10].concat(), h[10..16].concat())
+}
+
+/// The source (`/dev/…`) of the mount in effect at `mount`: the last
+/// mountinfo line for that mount point.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn mount_source(info: &str, mount: &str) -> Option<String> {
+    let mut found = None;
+    for line in info.lines() {
+        let Some((left, right)) = line.split_once(" - ") else { continue };
+        let at = left.split(' ').nth(4).map(unescape_mount);
+        if at.as_deref() == Some(mount) {
+            found = right.split(' ').nth(1).map(unescape_mount);
+        }
+    }
+    found
+}
+
+/// The UUID whose `by-uuid` link (in `dir`) resolves to `source`.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn uuid_for_source(dir: &Path, source: &str) -> Option<String> {
+    if !source.starts_with('/') {
+        return None;
+    }
+    let want = std::fs::canonicalize(source).ok()?;
+    let mut entries: Vec<_> = std::fs::read_dir(dir).ok()?.flatten().collect();
+    entries.sort_by_key(|e| e.file_name());
+    entries
+        .into_iter()
+        .find(|e| std::fs::canonicalize(e.path()).ok().as_deref() == Some(want.as_path()))
+        .map(|e| e.file_name().to_string_lossy().into_owned())
 }
 
 #[cfg(not(unix))]
@@ -1762,5 +1890,82 @@ mod tests {
         assert_eq!(pick_mount(ext4, Path::new("/data/x"), "8:17"), (Some("/data".into()), Some("ext4".into())));
         assert_eq!(pick_mount(ext4, Path::new("/srv"), "8:1"), (Some("/".into()), Some("ext4".into())));
         assert_eq!(pick_mount("", Path::new("/"), "8:1"), (None, None));
+    }
+
+    /// Smoke r6: the volume key survives a reboot that renumbers the
+    /// device (macOS); only the mount and the fs UUID go into it.
+    #[test]
+    fn the_volume_key_ignores_the_device_number() {
+        let raw = RawStat::sized(100 * GIB, 50 * GIB);
+        let before = Fs::from_raw("1:16".into(), Some("/System/Volumes/Data".into()), Some("apfs".into()), raw)
+            .with_uuid(Some("8E3A51C4-1B2D-4C1F-9E77-0D6B5A1F2C3D"));
+        let after = Fs::from_raw("1:17".into(), Some("/System/Volumes/Data".into()), Some("apfs".into()), raw)
+            .with_uuid(Some("8e3a51c4-1b2d-4c1f-9e77-0d6b5a1f2c3d"));
+        assert_ne!(before.id, after.id);
+        assert_eq!(before.volume, after.volume);
+        assert_eq!(before.volume, "uuid:8e3a51c4-1b2d-4c1f-9e77-0d6b5a1f2c3d@/System/Volumes/Data");
+        // No UUID: the mount; no mount either: the device.
+        let m = Fs::from_raw("8:1".into(), Some("/".into()), None, raw);
+        assert_eq!(m.volume, "mount:/");
+        assert_eq!(m.clone().with_uuid(None).volume, "mount:/");
+        assert_eq!(Fs::from_raw("8:1".into(), None, None, raw).volume, "dev:8:1");
+        assert_eq!(volume_key(None, Some("ABC"), "8:1"), "uuid:abc");
+        // A value from before the field (deserialized without it).
+        let mut old = m.clone();
+        old.volume = String::new();
+        assert_eq!(old.volume_key(), "mount:/");
+        let json = serde_json::json!({"id": "8:1", "mount": "/", "fsType": null, "totalBytes": 1, "usedBytes": 0,
+            "freeBytes": 1, "usedPct": 0.0, "inodesFreePct": null});
+        let parsed: Fs = serde_json::from_value(json).unwrap();
+        assert_eq!(parsed.volume_key(), "mount:/");
+        // The old keys are the bare device numbers.
+        assert!(is_legacy_dev_key("1:16") && is_legacy_dev_key("259:1"));
+        for k in ["mount:/", "uuid:x@/", "dev:8:1", "1:", ":1", "a:1", "16"] {
+            assert!(!is_legacy_dev_key(k), "{k}");
+        }
+        assert_eq!(format_uuid(&[0x8e, 0x3a, 0x51, 0xc4, 0x1b, 0x2d, 0x4c, 0x1f, 0x9e, 0x77, 0x0d, 0x6b, 0x5a, 0x1f, 0x2c, 0x3d]), "8e3a51c4-1b2d-4c1f-9e77-0d6b5a1f2c3d");
+    }
+
+    /// Linux: the mount's source from mountinfo (the mount in effect), and
+    /// the `by-uuid` link that resolves to it.
+    #[test]
+    fn linux_uuid_comes_from_the_mount_source_and_by_uuid() {
+        let info = "\
+36 1 8:1 / / rw - ext4 /dev/sda1 rw
+37 36 8:17 / /data rw - ext4 /dev/sdb1 rw
+38 36 8:33 / /data rw - xfs /dev/sdc1 rw
+39 36 0:22 / /dev/shm rw - tmpfs tmpfs rw
+";
+        assert_eq!(mount_source(info, "/").as_deref(), Some("/dev/sda1"));
+        assert_eq!(mount_source(info, "/data").as_deref(), Some("/dev/sdc1"), "the later mount is in effect");
+        assert_eq!(mount_source(info, "/dev/shm").as_deref(), Some("tmpfs"));
+        assert_eq!(mount_source(info, "/nope"), None);
+        // A fake /dev and /dev/disk/by-uuid.
+        let root = std::env::temp_dir().join(format!("k2-dg-uuid-{}-{}", std::process::id(), line!()));
+        let _ = std::fs::remove_dir_all(&root);
+        let dev = root.join("dev");
+        let by = root.join("by-uuid");
+        std::fs::create_dir_all(&dev).unwrap();
+        std::fs::create_dir_all(&by).unwrap();
+        std::fs::write(dev.join("sda1"), b"").unwrap();
+        std::fs::write(dev.join("sdb1"), b"").unwrap();
+        std::os::unix::fs::symlink(dev.join("sda1"), by.join("1111-aaaa")).unwrap();
+        std::os::unix::fs::symlink("../dev/sdb1", by.join("2222-bbbb")).unwrap();
+        let sda = dev.join("sda1").to_string_lossy().into_owned();
+        let sdb = dev.join("sdb1").to_string_lossy().into_owned();
+        assert_eq!(uuid_for_source(&by, &sda).as_deref(), Some("1111-aaaa"));
+        assert_eq!(uuid_for_source(&by, &sdb).as_deref(), Some("2222-bbbb"), "a relative link resolves too");
+        assert_eq!(uuid_for_source(&by, "tmpfs"), None, "not a device path");
+        assert_eq!(uuid_for_source(&by, &dev.join("nope").to_string_lossy()), None);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// macOS: the root data volume has a volume UUID, so its key is the
+    /// UUID form (what makes it stable across reboots there).
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_volumes_are_keyed_by_their_uuid() {
+        let fs = real_probe(Path::new("/")).expect("probe /");
+        assert!(fs.volume.starts_with("uuid:") && fs.volume.ends_with(&format!("@{}", fs.mount.clone().unwrap())), "{fs:?}");
     }
 }

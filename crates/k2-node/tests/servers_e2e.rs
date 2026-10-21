@@ -48,6 +48,7 @@ fn ctx(n: &TestNode) -> servers::Ctx {
         pinned_owner: None,
         node_user: "nobody".into(),
         by: "local:test".into(),
+        root: false,
     }
 }
 

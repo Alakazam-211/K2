@@ -423,6 +423,7 @@ fn cmd_servers(a: &Args) -> Result<(), String> {
         pinned_owner: cfg.as_ref().and_then(|c| c.controller.as_ref().map(|x| x.fp.clone())),
         node_user: cfg.map(|c| c.node_user).unwrap_or_else(|| acfg::default_node_user().to_string()),
         by: format!("local:{}", who(a)),
+        root: is_root(),
     };
     // A `--dev` test node (the person running it owns everything; tests
     // and the S5 harness pass their own --state-dir) needs no sudo.

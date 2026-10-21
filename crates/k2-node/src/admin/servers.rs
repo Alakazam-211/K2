@@ -114,6 +114,10 @@ pub struct Ctx {
     pub node_user: String,
     /// `owner-approval:<cmd id>` or `local:<user>`.
     pub by: String,
+    /// Root's own tenant ops run here (`tenant.prepare` / `tenant.wipe`):
+    /// root's executor and `sudo k2-node servers`. Off for a `--dev` test
+    /// node's files-only path and for tests.
+    pub root: bool,
 }
 
 impl Ctx {
@@ -139,6 +143,7 @@ impl Ctx {
             pinned_owner: cfg.as_ref().and_then(|c| c.controller.as_ref().map(|x| x.fp.clone())),
             node_user: cfg.map(|c| c.node_user).unwrap_or_else(|| super::config::default_node_user().to_string()),
             by: by.to_string(),
+            root: true,
         }
     }
 }
@@ -185,7 +190,7 @@ impl Ctx {
         if self.tenant_wall {
             return Ok(());
         }
-        if self.macos || !is_root() {
+        if self.macos || !self.root {
             return Err(refuse(codes::TEAM_NEEDS_TENANT_WALL, "other people's servers need the per-tenant wall on this node, which isn't set up"));
         }
         self.executor().tenant_wall_ready()
@@ -842,7 +847,7 @@ pub fn prepare_tenant(ctx: &Ctx, e: &ServerEntry) -> Result<Option<u32>, AdminRe
     if std::fs::symlink_metadata(&dir).is_ok_and(|m| m.file_type().is_symlink()) {
         return Err(failed(format!("{} is a symlink", dir.display())));
     }
-    if is_root() {
+    if ctx.root {
         let ask = share::TenantPrepare { slot: e.slot, trust: e.trust, weight: e.weight, network: e.network };
         let r = ctx.executor().tenant_prepare(&ask)?;
         return Ok(r.get("uid").and_then(|v| v.as_u64()).and_then(|v| u32::try_from(v).ok()));
@@ -859,7 +864,7 @@ pub fn wipe_slot(ctx: &Ctx, e: &ServerEntry) -> Result<(), AdminRefusal> {
     if e.slot == OWNER_SLOT {
         return Err(failed("never wipe the owner"));
     }
-    if is_root() {
+    if ctx.root {
         return ctx.executor().tenant_wipe(&share::TenantWipe { slot: e.slot }).map(|_| ());
     }
     let t = ctx.layout().tenant(e.slot);
@@ -922,6 +927,7 @@ mod tests {
             pinned_owner: Some(owner.fingerprint()),
             node_user: "nobody".into(),
             by: "local:test".into(),
+            root: false,
         };
         T { ctx, owner }
     }

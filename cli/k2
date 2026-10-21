@@ -55476,7 +55476,7 @@ print("Allow this agent to manage Postgres versions: %s for %s%s" % ("on" if on 
                 K2_CJ_yes_b="$($u_yes && echo 1)" K2_CJ_forgetOld_b="$($u_forget && echo 1)" K2_CJ_forceNow_b="$($u_force && echo 1)" \
                 K2_CJ_now_b="$($u_now && echo 1)" K2_CJ_allowAdopted_b="$($u_adopted && echo 1)" \
                 K2_CJ_acknowledgeFailed_b="$($u_ack && echo 1)")"
-            _compute_split "$(K2_CP_MAX_TIME=900 _compute_send POST /cli/db/upgrade "$u_body" tcp)"
+            _compute_split "$(K2_CP_MAX_TIME=900 _compute_send POST /cli/db/upgrade "$u_body")"
             if [ "$_CP_STATUS" != "200" ]; then
                 printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
 raw=sys.stdin.read()
@@ -55511,7 +55511,7 @@ sys.exit(3 if refused else 0)'
             local u_seen="" u_out u_rc
             while true; do
                 sleep 3
-                _compute_split "$(_compute_send GET "/cli/db/upgrade?db=$(urlencode "$u_name")" "" tcp)"
+                _compute_split "$(_compute_send GET "/cli/db/upgrade?db=$(urlencode "$u_name")" "")"
                 [ "$_CP_STATUS" = "200" ] || continue
                 u_out="$(printf '%s' "$_CP_BODY" | U_SEEN="$u_seen" U_JSON="$as_json" python3 -c 'import json,os,sys
 v=json.load(sys.stdin)

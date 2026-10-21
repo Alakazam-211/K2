@@ -150,11 +150,12 @@ impl Node {
             state,
             limits: info.entry.limits(),
             running,
-            // The node queue (lane S2) fills these.
-            queued: 0,
+            queued: t.ledger.lock().unwrap().queued().map(|q| q.len() as u32).unwrap_or(0),
+            // Today's CPU isn't exposed by the queue store yet (S2 follow-up).
             cpu_secs_today: 0,
             expires_in_secs: info.entry.expires_at.map(|e| (e - now).max(0)),
-            quotes: Vec::new(),
+            // Start-now / ETA for this server's last four sizes (V53).
+            quotes: self.fairq.quotes(self, t),
         })
     }
 }

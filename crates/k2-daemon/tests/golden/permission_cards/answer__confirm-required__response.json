@@ -1,0 +1,10 @@
+{
+  "body": {
+    "error": {
+      "code": "vault_confirm_required",
+      "hint": "this action takes the same confirm as Settings: confirm, then answer with confirmToken"
+    },
+    "ok": false
+  },
+  "status": 403
+}

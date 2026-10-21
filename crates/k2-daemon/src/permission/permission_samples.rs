@@ -670,7 +670,9 @@ fn batch_samples(out: &mut Out) {
         assert_eq!(ask(&w, &r3), card, "the third ask joins the batch");
         if state != "pending" {
             let v = answer_ok(ROSSON, &w, &card, json!({ "answer": "Allow all", "client": "phone" }));
-            response(out, "batch-allow-all", 200, v, &card, BATCH_CARD_ID);
+            if state == "partial" {
+                response(out, "batch-allow-all", 200, v, &card, BATCH_CARD_ID);
+            }
         }
         if state == "done" {
             let v = answer_ok(

@@ -1,0 +1,97 @@
+{
+  "body": "billing asks: Let billing run jobs on this server's compute nodes (Allow compute nodes).",
+  "choice": {
+    "action": {
+      "dedupe": "compute.use:44136fa3",
+      "id": "permission",
+      "params": {
+        "request": "pr_7f3a2c"
+      },
+      "result": {
+        "message": "Expired unanswered.",
+        "outcome": "expired"
+      },
+      "view": {
+        "action": "compute.use",
+        "answer": null,
+        "approvers": {
+          "floor": "admin",
+          "label": "owner or admin",
+          "names": [
+            "maya",
+            "rosson"
+          ]
+        },
+        "askedFor": "dana",
+        "askers": null,
+        "consequences": "Every active machine; default limits; jobs see only the code billing sends.",
+        "direction": "loosen",
+        "duration": "until someone turns it off",
+        "expiresAt": 1761319200,
+        "grant": "standing",
+        "kind": "permission",
+        "noteBox": {
+          "allowed": false,
+          "max": 500,
+          "mine": null
+        },
+        "notes": [
+          {
+            "at": 1761060300,
+            "by": "dana",
+            "role": "member",
+            "text": "I need this for the payroll run"
+          }
+        ],
+        "proof": {
+          "kind": "click"
+        },
+        "requestId": "pr_7f3a2c",
+        "scope": "billing",
+        "setting": "Allow compute nodes",
+        "settingsPage": "workspaces/billing/agent",
+        "state": "expired",
+        "undo": null,
+        "v": 1,
+        "values": [
+          {
+            "key": "workspace",
+            "value": "billing"
+          }
+        ],
+        "viewer": {
+          "canAnswer": true,
+          "isAsker": false,
+          "login": "rosson",
+          "mode": "approve",
+          "role": "owner",
+          "via": "login"
+        },
+        "whatChanges": "Let billing run jobs on this server's compute nodes.",
+        "why": {
+          "by": "billing",
+          "text": "Run the test suite on k2n2-m1; it takes 40 min here"
+        }
+      }
+    },
+    "allow_custom": false,
+    "answeredAt": 1761319200,
+    "expiresAt": 1761319200,
+    "options": [
+      {
+        "label": "Allow"
+      },
+      {
+        "label": "Deny"
+      }
+    ],
+    "prompt": "billing asks: Let billing run jobs on this server's compute nodes (Allow compute nodes).",
+    "status": "expired"
+  },
+  "created_at": 1761060000,
+  "from": "billing",
+  "id": "7f3a2c90-4f1e-4c2a-9b0d-3e5f6a7b8c90",
+  "kind": "choice",
+  "to": "billing",
+  "via": "permission"
+}

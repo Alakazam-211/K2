@@ -25,9 +25,11 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Mutex;
 
-use k2_core::compute::proto::frames::{JobState, Offer, Plan, FEATURE_STALL};
+use k2_core::compute::proto::frames::{self, JobState, Offer, Plan, FEATURE_STALL};
+use k2_core::compute::proto::share::{self as pshare, ShareView};
 use k2_core::compute::proto::{needs, refusal, results};
 use k2_core::compute::retry::{self, NodeHealth};
+use k2_core::compute::share::{self, pending};
 use k2_core::compute::store::{self, AnyFilter, AttemptNote, GrantRow, JobCtl, JobRow, NodeRow};
 use k2_core::compute::{self as compute, scheduler};
 
@@ -139,8 +141,26 @@ pub struct Cand {
 }
 
 impl Cand {
-    /// Starts the job now (as far as the last offer and our registry say).
+    /// This server's share, when the node is shared (protocol 3).
+    pub fn shared_view(&self) -> Option<&ShareView> {
+        share::is_shared(&self.offer).then(|| self.offer.share.as_ref()).flatten()
+    }
+
+    /// The node's ETA for this ask (shared nodes with a quote; `None` =
+    /// unknown, as every solo node).
+    pub fn eta(&self, w: &Want) -> Option<u64> {
+        self.shared_view().and_then(|v| share::eta_for(v, w.cpu_millis, w.mem_bytes))
+    }
+
+    /// Starts the job now (as far as the last offer and our registry say;
+    /// on a shared node, as far as its quote says).
     pub fn starts_now(&self, w: &Want) -> bool {
+        if let Some(v) = self.shared_view() {
+            let cap = self.grant.as_ref().map(|g| g.max_parallel.max(1) as u32).unwrap_or(1);
+            return self.online
+                && share::starts_now(v, w.cpu_millis, w.mem_bytes)
+                && self.load.running_by_workspace.get(&w.ws_id).copied().unwrap_or(0) < cap;
+        }
         let probe = w.probe();
         let ask = refusal::JobAsk {
             workspace_id: &w.ws_id,
@@ -161,6 +181,11 @@ impl Cand {
     fn usable(&self) -> bool {
         if !self.online {
             return false;
+        }
+        if let Some(v) = self.shared_view() {
+            // A shared node queues: busy is never a refusal there; only a
+            // paused node or share is.
+            return v.state == pshare::ServerStatus::Active && self.offer.control == frames::Control::Active;
         }
         let probe = refusal::JobAsk { workspace_id: "", cpu_millis: None, mem_bytes: None, disk_bytes: 0, exclusive: false, needs_git: false };
         // With nothing running, only a node-wide refusal is left.
@@ -257,7 +282,7 @@ pub enum Tier {
 /// Pick one candidate. `prefer_not` (sibling shards, failed nodes) loses
 /// ties. `project_key`/`commit` prefer a warm slot.
 pub fn choose<'a>(cands: &'a [Cand], w: &Want, prefer_not: &[String], project_key: Option<&str>, commit: Option<&str>) -> Option<(&'a Cand, Tier)> {
-    let mut best: Option<(&Cand, (Tier, bool, u8, i64, u64))> = None;
+    let mut best: Option<(&Cand, (Tier, bool, i64, u8, i64, u64))> = None;
     for c in cands {
         let tier = if c.starts_now(w) {
             Tier::Now
@@ -284,7 +309,15 @@ pub fn choose<'a>(cands: &'a [Cand], w: &Want, prefer_not: &[String], project_ke
             Tier::Offline => fresh,
             _ => c.offer.free.cpu_millis,
         };
-        let score = (tier, !prefer_not.contains(&c.node.id), warmth, busy, tie);
+        // Busy everywhere: the shared node quoting the lowest ETA first
+        // (§6 step 3). Solo nodes have no ETA, so among them nothing
+        // changes; a quoted ETA beats an unknown one.
+        let eta = match (tier, c.eta(w)) {
+            (Tier::Busy, Some(e)) => -(e.min(i64::MAX as u64 / 4) as i64),
+            (Tier::Busy, None) => -(i64::MAX / 2),
+            _ => 0,
+        };
+        let score = (tier, !prefer_not.contains(&c.node.id), eta, warmth, busy, tie);
         if best.as_ref().is_none_or(|(_, b)| score > *b) {
             best = Some((c, score));
         }
@@ -303,7 +336,31 @@ pub fn plan_for_node(base: &Plan, ctl: &JobCtl, node: &NodeRow, grant: Option<&G
     p.limits.max_secs = ctl.timeout_secs.unwrap_or(max_secs).clamp(1, max_secs.max(1)) as u64;
     p.limits.disk_bytes = (disk_gb.max(1) as u64) << 30;
     p.stall_secs = stall_for(ctl, features, p.limits.max_secs);
+    if features.iter().any(|f| f == pshare::FEATURE_QUEUE) {
+        p.ws_max_running = Some(grant.map(|g| g.max_parallel.max(1) as u32).unwrap_or(1));
+    } else {
+        // Only to nodes offering `queue`: an older node would drop them and
+        // the plan's digest wouldn't match (§10.2).
+        strip_queue_fields(&mut p);
+    }
     p
+}
+
+/// The protocol 3 plan fields a node keeps its queue by (§10.2), for a
+/// node offering `queue`: from the job row (class, estimate) and its
+/// session.
+pub fn set_queue_fields(p: &mut Plan, j: &JobRow) {
+    p.class = Some(pshare::JobClass::parse(&j.class).unwrap_or_default());
+    p.session_id = j.session_id.clone();
+    p.est_secs = j.est_secs.filter(|e| *e > 0).map(|e| e as u64);
+}
+
+pub fn strip_queue_fields(p: &mut Plan) {
+    p.class = None;
+    p.session_id = None;
+    p.est_secs = None;
+    p.est_p90_secs = None;
+    p.ws_max_running = None;
 }
 
 /// Why a queued job may leave its node, and whether that's a hard reason
@@ -335,6 +392,10 @@ fn leave_reason(j: &JobRow, node: Option<&NodeRow>, decisions: &mut HashMap<Stri
         "next_in_turn",
         "behind_older_job",
         "retry_backoff",
+        // A shared node (protocol 3): still only busy.
+        "any_hold",
+        pshare::codes::TENANT_QUEUE_FULL,
+        pshare::codes::FAIR_SHARE_WAIT,
     ];
     if busy.contains(&why.code.as_str()) {
         Some(("node_busy", false))
@@ -361,7 +422,10 @@ pub fn try_move(j: &JobRow, avoid: &[String], hard: bool, why: &str) -> Option<S
     if !ok {
         return None;
     }
-    let new_plan = plan_for_node(&plan, &j.ctl, &c.node, c.grant.as_ref(), &c.offer.features);
+    let mut new_plan = plan_for_node(&plan, &j.ctl, &c.node, c.grant.as_ref(), &c.offer.features);
+    if share::queue_on(&c.offer) {
+        set_queue_fields(&mut new_plan, j);
+    }
     let moved = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -506,6 +570,15 @@ pub fn sweep(now: i64) {
             continue;
         }
         let mins = (now - offline_since(n, now)) / 60;
+        if j.node_queued && j.reason.as_deref() != Some("cancel_requested") {
+            // V56: it never started there. A new generation (the node, if
+            // it comes back, drops the stale row: V47), no retry used, no
+            // health strike; `--any` moves now, a named job waits for the
+            // node. A no-force cancel or a queue timeout that was waiting
+            // for the node's answer ends here instead.
+            requeue_lost(&j, n, mins, now);
+            continue;
+        }
         {
             let db = k2_core::db::shared();
             let conn = db.lock();
@@ -518,6 +591,10 @@ pub fn sweep(now: i64) {
             compute_ws::finalize(&j.id);
         }
     }
+
+    // Jobs a shared node holds in its queue: deadlines, then moves (V46,
+    // V71: only after the node confirms a withdraw).
+    sweep_node_queued(now, awake, &nodes);
 
     // Queued work: deadlines, then moves.
     let queued = {
@@ -563,6 +640,186 @@ pub fn sweep(now: i64) {
     if changed {
         compute_ws::notify_change();
     }
+}
+
+/// A lost node held this job in its queue (never started): requeue it
+/// under a new generation with no retry and no strike (V56).
+fn requeue_lost(j: &JobRow, n: &NodeRow, mins: i64, now: i64) {
+    match j.reason.as_deref() {
+        Some(pending::CANCEL) => {
+            // The user's cancel: the node can't start it any more (V47).
+            {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                let _ = store::set_job_state(&conn, &j.id, JobState::Cancelled, Some("cancelled"), None, now);
+                store::clear_node_queued(&conn, &j.id);
+            }
+            compute_ws::finalize(&j.id);
+            return;
+        }
+        Some(pending::TIMEOUT) => {
+            fail_queue_timeout(j, &n.name, now);
+            return;
+        }
+        _ => {}
+    }
+    let row = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        if store::requeue_new_generation(&conn, &j.id, j.generation, "node_lost") != Ok(true) {
+            return;
+        }
+        store::record_event(
+            &conn,
+            "controller",
+            "job_requeue",
+            Some(&n.id),
+            Some(&j.workspace_id),
+            Some(&j.id),
+            serde_json::json!({"why": "node_lost", "nodeQueued": true, "offlineMins": mins, "newGeneration": j.generation + 1}),
+        );
+        store::job_by_id(&conn, &j.id)
+    };
+    if let Some(r) = row.filter(|r| r.ctl.any.is_some()) {
+        try_move(&r, &[], true, "node_lost");
+    }
+    compute_ws::notify_change();
+}
+
+/// `--queue-timeout` on a job that waited in a node's queue.
+fn fail_queue_timeout(j: &JobRow, node_name: &str, now: i64) {
+    let limit = j.ctl.queue_timeout_secs.unwrap_or(0);
+    let detail = format!(
+        "not started within {} (it waited in {node_name}'s queue{})",
+        compute::message::duration(limit),
+        j.node_blocked_by.as_deref().map(|b| format!(": {}", share::blocked_words(b))).unwrap_or_default()
+    );
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let _ = store::set_job_state(&conn, &j.id, JobState::Failed, Some("queue_timeout"), Some(&detail), now);
+        store::clear_node_queued(&conn, &j.id);
+        store::record_event(&conn, "controller", "job_queue_timeout", Some(&j.node_id), Some(&j.workspace_id), Some(&j.id), serde_json::json!({"nodeQueued": true}));
+    }
+    compute_ws::finalize(&j.id);
+}
+
+/// Node-queued jobs (shared nodes): the queue timeout withdraws, then
+/// fails (§6 "Never-stuck"); an `--any` job moves to a node that can start
+/// it now only after the node confirms the withdraw (V46), at most twice
+/// and not again within 5 min (V71). A job the node already started stays
+/// (the node answers its real state, V57).
+fn sweep_node_queued(now: i64, awake: i64, nodes: &HashMap<String, NodeRow>) {
+    let t = retry::tuning();
+    let held = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::node_queued_jobs(&conn)
+    };
+    for j in held {
+        let Some(n) = nodes.get(&j.node_id) else { continue };
+        let online = compute_ws::is_online(&n.id);
+        if pending::any(j.reason.as_deref()) || j.reason.as_deref() == Some("cancel_requested") {
+            continue; // waiting for the node's answer
+        }
+        let since = if j.ctl.queued_at > 0 { j.ctl.queued_at } else { j.created_at };
+        if let Some(limit) = j.ctl.queue_timeout_secs.filter(|l| *l > 0) {
+            if now - since >= limit && now - awake >= 2 * t.replace_after_secs {
+                if !online {
+                    // The node can't start it while we're not attached, and
+                    // drops it on the next attach (V47): fail it now.
+                    fail_queue_timeout(&j, &n.name, now);
+                } else {
+                    let db = k2_core::db::shared();
+                    let conn = db.lock();
+                    store::set_job_reason(&conn, &j.id, Some(pending::TIMEOUT), j.detail.as_deref());
+                    drop(conn);
+                    compute_ws::send_cancel_if_not_started(&n.id, &j.id, j.generation, frames::CANCEL_WITHDRAW);
+                }
+                continue;
+            }
+        }
+        if j.ctl.any.is_none() || !online || !share::may_withdraw(j.withdraws, j.withdrawn_at, now) {
+            continue;
+        }
+        let Some(plan) = j.plan() else { continue };
+        let w = Want::of_job(&j, &plan);
+        let cands = candidates(&w, std::slice::from_ref(&j.node_id), now);
+        let pk = plan.src.as_ref().map(|s| s.project_key.clone());
+        let commit = plan.src.as_ref().map(|s| s.commit.clone());
+        if !matches!(choose(&cands, &w, &[], pk.as_deref(), commit.as_deref()), Some((_, Tier::Now))) {
+            continue;
+        }
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            store::set_job_reason(&conn, &j.id, Some(pending::WITHDRAW), None);
+            store::note_withdraw(&conn, &j.id, now);
+            store::record_event(&conn, "controller", "withdraw_asked", Some(&n.id), Some(&j.workspace_id), Some(&j.id), serde_json::json!({"generation": j.generation, "withdraws": j.withdraws + 1}));
+        }
+        if !compute_ws::send_cancel_if_not_started(&n.id, &j.id, j.generation, frames::CANCEL_WITHDRAW) {
+            // Not sent (the node just dropped): no withdraw in flight.
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            store::set_job_reason(&conn, &j.id, Some(pshare::codes::NODE_QUEUED), None);
+        }
+    }
+}
+
+/// A node's offer changed this server's share (tenant side notes, §4.1,
+/// §4.3): it became shared, or its share was paused, revoked or ended.
+pub fn share_changed(before: &NodeRow, after: Option<&ShareView>) {
+    let Some(v) = after else { return };
+    let was = before.share.as_ref();
+    let until = v.expires_in_secs.map(|s| format!(" until {}", clock_day(compute::now() + s))).unwrap_or_default();
+    if v.shared && !was.is_some_and(|w| w.shared) {
+        let text = match (v.role, v.owner_label.as_deref()) {
+            (pshare::Role::Tenant, Some(owner)) => format!("{} is now shared with this server by {owner}{until}.", before.name),
+            _ => format!("{} is now shared with {} server(s){until}.", before.name, v.servers.saturating_sub(1)),
+        };
+        crate::compute_admin::share_note(&before.id, &format!("shared:{}", v.servers), &text);
+    }
+    if was.is_some_and(|w| w.state != v.state) {
+        let text = match v.state {
+            pshare::ServerStatus::Paused => format!("{}: the node's owner paused this server's share; queued jobs wait, running ones finish.", before.name),
+            pshare::ServerStatus::Revoked => format!("{}: the node's owner revoked this server; its queued jobs are cancelled.", before.name),
+            pshare::ServerStatus::Expired => format!("{}: this server's share has ended; its queued jobs are cancelled.", before.name),
+            pshare::ServerStatus::Active => format!("{}: this server's share is active again.", before.name),
+            _ => return,
+        };
+        crate::compute_admin::share_note(&before.id, &format!("state:{}:{}", v.state.as_str(), compute::now() / 60), &text);
+    }
+}
+
+fn clock_day(at: i64) -> String {
+    chrono::DateTime::from_timestamp(at, 0).map(|d| d.format("%b %-d").to_string()).unwrap_or_default()
+}
+
+/// Tenant side: a note 24 h before this server's share on a node ends,
+/// and one when it ends (§4.3). The node judges by its own clock; this
+/// server only counts down from the duration the node sent.
+fn sweep_share_expiry(now: i64) {
+    let rows = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::list_nodes(&conn, false)
+    };
+    for n in rows {
+        let (Some(v), Some(at)) = (n.share.as_ref(), n.share_at) else { continue };
+        let Some(left) = v.expires_in_secs else { continue };
+        let ends = at + left;
+        if now >= ends {
+            crate::compute_admin::share_note(&n.id, &format!("expired:{ends}"), &format!("{}: this server's share has ended; jobs there are cancelled.", n.name));
+        } else if ends - now <= share::EXPIRY_NOTE_SECS {
+            crate::compute_admin::share_note(&n.id, &format!("expiring:{ends}"), &format!("{}: this server's share ends {} (in under 24 h).", n.name, clock_day(ends)));
+        }
+    }
+}
+
+/// The share housekeeping the compute ticker runs (headless, §12).
+pub fn sweep_shares(now: i64) {
+    sweep_share_expiry(now);
+    crate::compute_admin::servers_tick(now);
 }
 
 #[cfg(test)]

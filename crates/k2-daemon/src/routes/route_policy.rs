@@ -445,7 +445,17 @@ pub const ROUTES: &[Route] = &[
     post("/cli/compute/nodes/retire", Owner),
     post("/cli/compute/nodes/rollback", Admin),
     post("/cli/compute/nodes/routes", Admin),
+    // Node sharing (prd-compute-shared-queue-v1 §3, §9): the servers on a
+    // node this server owns. Agents need "Allow managing compute nodes" or
+    // the operate switch (checked in the handler); revoke is the owner's.
+    get("/cli/compute/nodes/servers", Admin),
+    post("/cli/compute/nodes/servers/add", Admin),
+    post("/cli/compute/nodes/servers/limits", Admin),
+    post("/cli/compute/nodes/servers/pause", Admin),
+    post("/cli/compute/nodes/servers/revoke", Owner),
     post("/cli/compute/nodes/update", Admin),
+    // A node's queue, redacted per §7 (an agent verb: its own workspace).
+    get("/cli/compute/queue", Member),
     post("/cli/compute/run", Member),
     get("/cli/compute/usage", Admin),
     // 0.45.7: the CLI's K2 Connect control-plane calls, made with the

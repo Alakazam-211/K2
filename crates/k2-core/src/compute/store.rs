@@ -7,6 +7,7 @@ use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 
 use super::proto::frames::{JobState, Offer, Plan};
+use super::proto::share::{QueuePos, ShareView};
 
 // ── nodes ────────────────────────────────────────────────────────────
 
@@ -41,11 +42,36 @@ pub struct NodeRow {
     pub routes: Vec<String>,
     #[serde(skip)]
     pub last_offer: Option<Offer>,
+    /// 0214 (node sharing, 0.46.3): `owner` (this server enrolled the
+    /// node first) or `tenant` (another server owns it). Never serialized
+    /// here: the routes add the share fields only for shared nodes, so a
+    /// solo node's JSON is unchanged.
+    #[serde(skip)]
+    pub role: String,
+    /// Two or more servers active on the node (its last `Offer.share`).
+    #[serde(skip)]
+    pub shared: bool,
+    /// The owner server's label ("shared by …"), for tenants.
+    #[serde(skip)]
+    pub owner_label: Option<String>,
+    /// The last `ShareView` and when it arrived.
+    #[serde(skip)]
+    pub share: Option<ShareView>,
+    #[serde(skip)]
+    pub share_at: Option<i64>,
+}
+
+impl NodeRow {
+    /// Another server owns this node (V52: no admin, updates or health).
+    pub fn is_tenant(&self) -> bool {
+        self.role == "tenant"
+    }
 }
 
 const NODE_COLS: &str = "id, name, fingerprint, public_key_pem, os, arch, labels_json, state, enrolled_via, \
     enrolled_by, enrolled_at, sas, confirmed_by, confirmed_at, revoked_by, revoked_at, controller_pause, \
-    controller_pause_by, controller_pause_at, last_seen, last_route, protocol, node_version, routes_json, last_offer_json";
+    controller_pause_by, controller_pause_at, last_seen, last_route, protocol, node_version, routes_json, last_offer_json, \
+    role, shared, owner_label, share_json, share_at";
 
 fn node_from_row(r: &Row<'_>) -> rusqlite::Result<NodeRow> {
     let labels: String = r.get(6)?;
@@ -77,6 +103,11 @@ fn node_from_row(r: &Row<'_>) -> rusqlite::Result<NodeRow> {
         node_version: r.get(22)?,
         routes: serde_json::from_str(&routes).unwrap_or_default(),
         last_offer: offer.and_then(|o| serde_json::from_str(&o).ok()),
+        role: r.get(25)?,
+        shared: r.get::<_, i64>(26)? != 0,
+        owner_label: r.get(27)?,
+        share: r.get::<_, Option<String>>(28)?.and_then(|s| serde_json::from_str(&s).ok()),
+        share_at: r.get(29)?,
     })
 }
 
@@ -275,6 +306,108 @@ pub fn store_offer(conn: &Connection, id: &str, offer: &Offer, at: i64) {
             offer.labels.get("arch")
         ],
     );
+}
+
+/// Mirror what the node's offer says about this server's share (0214).
+/// `share = None` (a solo node, or one older than 0.46.3) clears
+/// `shared` and the view but keeps the role: a tenant stays a tenant.
+pub fn store_share(conn: &Connection, id: &str, share: Option<&ShareView>, at: i64) {
+    let _ = match share {
+        Some(v) => conn.execute(
+            "UPDATE compute_nodes SET role = ?2, shared = ?3, owner_label = COALESCE(?4, owner_label), share_json = ?5, share_at = ?6 \
+             WHERE id = ?1",
+            params![id, v.role.as_str(), v.shared as i64, v.owner_label, serde_json::to_string(v).unwrap_or_default(), at],
+        ),
+        None => conn.execute(
+            "UPDATE compute_nodes SET shared = 0, share_json = NULL, share_at = ?2 WHERE id = ?1 AND share_json IS NOT NULL",
+            params![id, at],
+        ),
+    };
+}
+
+/// A node another server's `servers.add` enrolled with this server
+/// (`EnrollRequest.shared_by`): this server is a tenant there.
+pub fn set_tenant_of(conn: &Connection, id: &str, owner_label: &str) -> Result<(), String> {
+    conn.execute("UPDATE compute_nodes SET role = 'tenant', owner_label = ?2 WHERE id = ?1", params![id, owner_label])
+        .map_err(|e| e.to_string())
+        .map(|_| ())
+}
+
+// ── a node's servers (owner side, 0216) ──────────────────────────────
+
+/// The mirrored server list of a node this server owns, by slot.
+pub fn node_servers(conn: &Connection, node_id: &str) -> Vec<super::share::ServerRow> {
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT slot, label, fp, state, trust, share_json, usage_json, expires_at, added_at, added_by FROM compute_node_servers \
+         WHERE node_id = ?1 ORDER BY slot",
+    ) else {
+        return Vec::new();
+    };
+    stmt.query_map(params![node_id], |r| {
+        let limits: String = r.get(5)?;
+        let usage: Option<String> = r.get(6)?;
+        Ok((
+            super::share::ServerRow {
+                slot: r.get::<_, i64>(0)? as u8,
+                label: r.get(1)?,
+                fp: r.get(2)?,
+                state: r.get(3)?,
+                trust: r.get(4)?,
+                limits: super::proto::share::ShareLimits::new_server(super::proto::share::Trust::Team, false),
+                usage: usage.and_then(|u| serde_json::from_str(&u).ok()),
+                expires_at: r.get(7)?,
+                added_at: r.get(8)?,
+                added_by: r.get(9)?,
+            },
+            limits,
+        ))
+    })
+    .map(|rows| {
+        rows.filter_map(Result::ok)
+            // A row whose limits don't parse is dropped, never shown with
+            // made-up limits (the next refresh rewrites it).
+            .filter_map(|(mut row, limits)| serde_json::from_str(&limits).ok().map(|l| {
+                row.limits = l;
+                row
+            }))
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
+/// When the node's server list was last mirrored.
+pub fn node_servers_seen_at(conn: &Connection, node_id: &str) -> Option<i64> {
+    conn.query_row("SELECT MAX(seen_at) FROM compute_node_servers WHERE node_id = ?1", params![node_id], |r| r.get(0))
+        .ok()
+        .flatten()
+}
+
+/// Replace a node's mirrored server list with what `servers.list` said.
+pub fn replace_node_servers(conn: &Connection, node_id: &str, rows: &[super::share::ServerRow], at: i64) -> Result<(), String> {
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    tx.execute("DELETE FROM compute_node_servers WHERE node_id = ?1", params![node_id]).map_err(|e| e.to_string())?;
+    for r in rows {
+        tx.execute(
+            "INSERT INTO compute_node_servers (node_id, slot, label, fp, state, trust, share_json, usage_json, expires_at, added_at, \
+             added_by, seen_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![
+                node_id,
+                r.slot as i64,
+                r.label,
+                r.fp,
+                r.state,
+                r.trust,
+                serde_json::to_string(&r.limits).map_err(|e| e.to_string())?,
+                r.usage.as_ref().map(|u| u.to_string()),
+                r.expires_at,
+                r.added_at,
+                r.added_by,
+                at
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    tx.commit().map_err(|e| e.to_string())
 }
 
 // ── grants ───────────────────────────────────────────────────────────
@@ -488,7 +621,7 @@ fn ctl_of(plan_json: &str) -> JobCtl {
         .unwrap_or_default()
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JobRow {
     pub id: String,
@@ -530,6 +663,32 @@ pub struct JobRow {
     pub notified_at: Option<i64>,
     /// Controller-only options (from `plan_json`).
     pub ctl: JobCtl,
+    /// 0215 (node sharing, 0.46.3). Never serialized here: the routes show
+    /// a node-queued job as queued with the node's position, and a solo
+    /// node's job JSON stays as it was.
+    #[serde(skip)]
+    pub class: String,
+    #[serde(skip)]
+    pub est_secs: Option<i64>,
+    /// The node holds the job in its queue: the row stays `assigned`
+    /// (reason `node_queued`), every view shows it as queued.
+    #[serde(skip)]
+    pub node_queued: bool,
+    #[serde(skip)]
+    pub node_pos: Option<i64>,
+    #[serde(skip)]
+    pub node_eta_secs: Option<i64>,
+    #[serde(skip)]
+    pub node_eta_p90_secs: Option<i64>,
+    #[serde(skip)]
+    pub node_blocked_by: Option<String>,
+    #[serde(skip)]
+    pub node_seen_at: Option<i64>,
+    /// The `--any` mover's withdraws (V71).
+    #[serde(skip)]
+    pub withdraws: i64,
+    #[serde(skip)]
+    pub withdrawn_at: Option<i64>,
 }
 
 impl JobRow {
@@ -547,7 +706,8 @@ impl JobRow {
 const JOB_COLS: &str = "id, client_job_id, node_id, workspace_id, session_id, requested_by, argv_json, env_names_json, \
     request_sha256, plan_json, src_commit, src_tree, dirty_sha256, state, reason, detail, attempt, generation, \
     plan_digest, exclusive, detach, retry_interrupted, exit_code, signal, created_at, assigned_at, started_at, \
-    ended_at, log_seq, log_bytes, summary_json, receipt_json, receipt_ok, notified_at";
+    ended_at, log_seq, log_bytes, summary_json, receipt_json, receipt_ok, notified_at, class, est_secs, node_queued, \
+    node_pos, node_eta_secs, node_eta_p90_secs, node_blocked_by, node_seen_at, withdraws, withdrawn_at";
 
 fn job_from_row(r: &Row<'_>) -> rusqlite::Result<JobRow> {
     let argv: String = r.get(6)?;
@@ -588,6 +748,16 @@ fn job_from_row(r: &Row<'_>) -> rusqlite::Result<JobRow> {
         receipt_ok: r.get::<_, Option<i64>>(32)?.map(|v| v != 0),
         notified_at: r.get(33)?,
         ctl: ctl_of(&r.get::<_, String>(9)?),
+        class: r.get(34)?,
+        est_secs: r.get(35)?,
+        node_queued: r.get::<_, i64>(36)? != 0,
+        node_pos: r.get(37)?,
+        node_eta_secs: r.get(38)?,
+        node_eta_p90_secs: r.get(39)?,
+        node_blocked_by: r.get(40)?,
+        node_seen_at: r.get(41)?,
+        withdraws: r.get(42)?,
+        withdrawn_at: r.get(43)?,
     })
 }
 
@@ -691,7 +861,7 @@ pub fn list_jobs(conn: &Connection, f: &JobFilter<'_>) -> Vec<JobRow> {
     let limit = if f.limit <= 0 { 50 } else { f.limit.min(500) };
     let Ok(mut stmt) = conn.prepare(&format!(
         "SELECT {JOB_COLS} FROM compute_jobs WHERE (?1 IS NULL OR node_id = ?1) AND (?2 IS NULL OR workspace_id = ?2) \
-         AND (?3 IS NULL OR state = ?3) AND (?4 IS NULL OR session_id = ?4) ORDER BY created_at DESC, id DESC LIMIT ?5"
+         AND (?3 IS NULL OR state = ?3 OR (?3 = 'queued' AND state = 'assigned' AND node_queued = 1)) AND (?4 IS NULL OR session_id = ?4) ORDER BY created_at DESC, id DESC LIMIT ?5"
     )) else {
         return Vec::new();
     };
@@ -716,7 +886,7 @@ pub fn jobs_in_states(conn: &Connection, node_id: &str, states: &[&str]) -> Vec<
 /// Queued jobs for `workspace_id` on `node_id` (for the grant's max_queued).
 pub fn queued_count(conn: &Connection, node_id: &str, workspace_id: &str) -> i64 {
     conn.query_row(
-        "SELECT COUNT(*) FROM compute_jobs WHERE node_id = ?1 AND workspace_id = ?2 AND state = 'queued'",
+        "SELECT COUNT(*) FROM compute_jobs WHERE node_id = ?1 AND workspace_id = ?2 AND (state = 'queued' OR (state = 'assigned' AND node_queued = 1))",
         params![node_id, workspace_id],
         |r| r.get(0),
     )
@@ -924,13 +1094,86 @@ pub fn mark_notified(conn: &Connection, id: &str, at: i64) {
     let _ = conn.execute("UPDATE compute_jobs SET notified_at = ?2 WHERE id = ?1", params![id, at]);
 }
 
+/// The class and estimate a job carries into a shared node's queue (0215).
+pub fn set_job_queue_facts(conn: &Connection, id: &str, class: &str, est_secs: Option<i64>) -> Result<(), String> {
+    conn.execute("UPDATE compute_jobs SET class = ?2, est_secs = ?3 WHERE id = ?1", params![id, class, est_secs])
+        .map_err(|e| e.to_string())
+        .map(|_| ())
+}
+
+/// The node holds attempt `generation` in its queue: keep the row
+/// `assigned`, mark it node-queued and mirror the position (and, when
+/// given, set the reason). Only while that attempt is still `assigned`
+/// here (a cancel or a newer attempt wins). `Ok(true)` when marked.
+pub fn mark_node_queued(conn: &Connection, id: &str, generation: i64, pos: Option<&QueuePos>, reason: Option<&str>, at: i64) -> Result<bool, String> {
+    conn.execute(
+        "UPDATE compute_jobs SET node_queued = 1, reason = COALESCE(?8, reason), node_pos = ?3, node_eta_secs = ?4, \
+         node_eta_p90_secs = ?5, node_blocked_by = ?6, node_seen_at = ?7 WHERE id = ?1 AND generation = ?2 AND state = 'assigned'",
+        params![
+            id,
+            generation,
+            pos.map(|p| p.pos as i64),
+            pos.and_then(|p| p.eta_secs).map(|e| e as i64),
+            pos.and_then(|p| p.eta_p90_secs).map(|e| e as i64),
+            pos.and_then(|p| p.blocked_by.clone()),
+            at,
+            reason
+        ],
+    )
+    .map_err(|e| e.to_string())
+    .map(|n| n == 1)
+}
+
+/// The node started (or ended) a node-queued job: it's no longer queued.
+pub fn clear_node_queued(conn: &Connection, id: &str) {
+    let _ = conn.execute(
+        "UPDATE compute_jobs SET node_queued = 0, node_pos = NULL, node_eta_secs = NULL, node_eta_p90_secs = NULL, \
+         node_blocked_by = NULL WHERE id = ?1 AND node_queued = 1",
+        params![id],
+    );
+}
+
+/// A node-queued job comes back to this server under a NEW generation
+/// (a confirmed withdraw, V46; a lost node, V56): back to `queued`, same
+/// attempt, no retry used. The old `(job, generation)` can never run or
+/// report again, so a later assign to the same node runs it. Only from an
+/// active state of that generation (a cancel that ended it, or a newer
+/// attempt, wins). `Ok(true)` when requeued.
+pub fn requeue_new_generation(conn: &Connection, id: &str, generation: i64, reason: &str) -> Result<bool, String> {
+    conn.execute(
+        "UPDATE compute_jobs SET state = 'queued', reason = ?3, detail = NULL, generation = generation + 1, \
+         assigned_at = NULL, started_at = NULL, log_seq = 0, log_bytes = 0, node_queued = 0, node_pos = NULL, \
+         node_eta_secs = NULL, node_eta_p90_secs = NULL, node_blocked_by = NULL \
+         WHERE id = ?1 AND generation = ?2 AND state IN ('assigned','preparing','running','finishing')",
+        params![id, generation, reason],
+    )
+    .map_err(|e| e.to_string())
+    .map(|n| n == 1)
+}
+
+/// The mover asked the node to give this job back (V71's limit).
+pub fn note_withdraw(conn: &Connection, id: &str, at: i64) {
+    let _ = conn.execute("UPDATE compute_jobs SET withdraws = withdraws + 1, withdrawn_at = ?2 WHERE id = ?1", params![id, at]);
+}
+
+/// Every job a node holds in its queue for this server (all nodes).
+pub fn node_queued_jobs(conn: &Connection) -> Vec<JobRow> {
+    let Ok(mut stmt) = conn.prepare(&format!(
+        "SELECT {JOB_COLS} FROM compute_jobs WHERE node_queued = 1 AND state = 'assigned' ORDER BY created_at, id"
+    )) else {
+        return Vec::new();
+    };
+    stmt.query_map([], job_from_row).map(|rows| rows.filter_map(Result::ok).collect()).unwrap_or_default()
+}
+
 /// A new attempt: generation + 1, back to queued, results cleared.
 pub fn requeue_new_attempt(conn: &Connection, id: &str, reason: &str) -> Result<JobRow, String> {
     conn.execute(
         "UPDATE compute_jobs SET state = 'queued', reason = ?2, detail = NULL, attempt = attempt + 1, \
          generation = generation + 1, exit_code = NULL, signal = NULL, assigned_at = NULL, started_at = NULL, \
          ended_at = NULL, log_seq = 0, log_bytes = 0, summary_json = NULL, receipt_json = NULL, receipt_ok = NULL, \
-         notified_at = NULL WHERE id = ?1",
+         notified_at = NULL, node_queued = 0, node_pos = NULL, node_eta_secs = NULL, node_eta_p90_secs = NULL, \
+         node_blocked_by = NULL WHERE id = ?1",
         params![id, reason],
     )
     .map_err(|e| e.to_string())?;
@@ -1171,6 +1414,118 @@ mod tests {
         let r = requeue_new_attempt(&c, &j.id, "retry").unwrap();
         assert_eq!((r.state.as_str(), r.attempt, r.generation, r.exit_code, r.ended_at), ("queued", 2, 2, None, None));
         assert_eq!(jobs_in_states(&c, "n1", &["queued"]).len(), 1);
+    }
+
+    /// V46/V56: a node-queued job comes back under a NEW generation with
+    /// the same attempt (no retry used), only from its own active attempt.
+    #[test]
+    fn node_queued_jobs_requeue_under_a_new_generation() {
+        let c = conn();
+        let p = plan("nq00000000000000000000000000000001", "n1", "ws");
+        let j = insert_job(
+            &c,
+            &NewJob { plan: &p, client_job_id: "client-nq-000000001", session_id: None, request_sha256: "h", detach: false, retry_interrupted: true, ctl: JobCtl::default() },
+        )
+        .unwrap();
+        assert_eq!((j.class.as_str(), j.node_queued, j.withdraws), ("interactive", false, 0), "0215 defaults");
+        set_job_queue_facts(&c, &j.id, "batch", Some(90)).unwrap();
+        assert!(!mark_node_queued(&c, &j.id, 1, None, Some("node_queued"), 5).unwrap(), "only an assigned row");
+        assert!(assign_if_queued(&c, &j.id, 5).unwrap());
+        let pos = QueuePos { pos: 2, eta_secs: Some(360), eta_p90_secs: Some(600), blocked_by: Some("over_quota".into()) };
+        assert!(!mark_node_queued(&c, &j.id, 9, Some(&pos), None, 6).unwrap(), "another generation");
+        assert!(mark_node_queued(&c, &j.id, 1, Some(&pos), Some("node_queued"), 6).unwrap());
+        let r = job_by_id(&c, &j.id).unwrap();
+        assert_eq!((r.state.as_str(), r.reason.as_deref(), r.node_queued, r.node_pos, r.node_eta_secs), ("assigned", Some("node_queued"), true, Some(2), Some(360)));
+        assert_eq!((r.class.as_str(), r.est_secs, r.node_blocked_by.as_deref()), ("batch", Some(90), Some("over_quota")));
+        assert_eq!(node_queued_jobs(&c).len(), 1);
+        assert_eq!(queued_count(&c, "n1", "ws"), 1, "a node-queued job counts against the grant's max_queued");
+        assert_eq!(list_jobs(&c, &JobFilter { state: Some("queued"), ..Default::default() }).len(), 1, "and lists as queued");
+        note_withdraw(&c, &j.id, 7);
+        assert!(!requeue_new_generation(&c, &j.id, 2, "withdrawn").unwrap(), "a stale generation never requeues");
+        assert!(requeue_new_generation(&c, &j.id, 1, "withdrawn").unwrap());
+        let r = job_by_id(&c, &j.id).unwrap();
+        assert_eq!((r.state.as_str(), r.attempt, r.generation, r.node_queued, r.node_pos), ("queued", 1, 2, false, None));
+        assert_eq!((r.withdraws, r.withdrawn_at), (1, Some(7)));
+        assert!(node_queued_jobs(&c).is_empty());
+        // A cancelled job never comes back.
+        set_job_state(&c, &j.id, JobState::Cancelled, Some("cancelled"), None, 8).unwrap();
+        assert!(!requeue_new_generation(&c, &j.id, 2, "withdrawn").unwrap());
+        // Started: no longer node-queued.
+        let k = insert_job(
+            &c,
+            &NewJob { plan: &plan("nq00000000000000000000000000000002", "n1", "ws"), client_job_id: "client-nq-000000002", session_id: None, request_sha256: "h", detach: false, retry_interrupted: true, ctl: JobCtl::default() },
+        )
+        .unwrap();
+        assert!(assign_if_queued(&c, &k.id, 5).unwrap());
+        assert!(mark_node_queued(&c, &k.id, 1, None, Some("node_queued"), 6).unwrap());
+        clear_node_queued(&c, &k.id);
+        assert!(!job_by_id(&c, &k.id).unwrap().node_queued);
+    }
+
+    #[test]
+    fn share_mirror_and_node_servers_round_trip() {
+        use crate::compute::proto::share::{Role, ServerStatus, ShareLimits, Trust};
+        let c = conn();
+        let n = insert_pending_node(&c, "n1", "mini-1", "fp1", "pem", &labels(), "owner", "1", 1).unwrap();
+        assert_eq!((n.role.as_str(), n.shared, n.share.is_none()), ("owner", false, true), "every node starts as owner");
+        let v = ShareView {
+            role: Role::Tenant,
+            slot: 1,
+            shared: true,
+            servers: 2,
+            owner_label: Some("rosson.k2.dev".into()),
+            state: ServerStatus::Active,
+            limits: ShareLimits::new_server(Trust::Team, false),
+            running: 0,
+            queued: 1,
+            cpu_secs_today: 7,
+            expires_in_secs: Some(100),
+            quotes: vec![],
+        };
+        store_share(&c, "n1", Some(&v), 50);
+        let n = node_by_id(&c, "n1").unwrap();
+        assert!(n.is_tenant() && n.shared);
+        assert_eq!((n.owner_label.as_deref(), n.share.as_ref(), n.share_at), (Some("rosson.k2.dev"), Some(&v), Some(50)));
+        store_share(&c, "n1", None, 60);
+        let n = node_by_id(&c, "n1").unwrap();
+        assert!(n.is_tenant(), "a tenant stays a tenant");
+        assert!(!n.shared && n.share.is_none());
+        assert!(serde_json::to_value(&n).unwrap().get("role").is_none(), "solo JSON is unchanged");
+        // Owner side: the node's server list.
+        let rows = vec![
+            crate::compute::share::ServerRow {
+                slot: 0,
+                label: "rosson.k2.dev".into(),
+                fp: Some("ab".repeat(32)),
+                state: "active".into(),
+                trust: "own".into(),
+                limits: ShareLimits::owner(2, 8, 16, 100, crate::compute::proto::share::Network::On),
+                usage: None,
+                expires_at: None,
+                added_at: Some(1),
+                added_by: Some("local:rosson".into()),
+            },
+            crate::compute::share::ServerRow {
+                slot: 1,
+                label: "baden.k2.dev".into(),
+                fp: Some("0123456789abcdef".into()),
+                state: "pending".into(),
+                trust: "team".into(),
+                limits: ShareLimits::new_server(Trust::Team, false),
+                usage: Some(serde_json::json!({"sas": "482913"})),
+                expires_at: Some(99),
+                added_at: Some(2),
+                added_by: Some("owner-approval:car_x".into()),
+            },
+        ];
+        replace_node_servers(&c, "n1", &rows, 70).unwrap();
+        assert_eq!(node_servers(&c, "n1"), rows);
+        assert_eq!(node_servers_seen_at(&c, "n1"), Some(70));
+        replace_node_servers(&c, "n1", &rows[..1], 80).unwrap();
+        assert_eq!(node_servers(&c, "n1").len(), 1, "a server gone from the list is gone from the mirror");
+        let bad = crate::compute::share::ServerRow { slot: 9, ..rows[1].clone() };
+        assert!(replace_node_servers(&c, "n1", &[bad], 90).is_err(), "slot 0–7 is checked by the table");
+        assert_eq!(node_servers(&c, "n1").len(), 1, "a failed refresh keeps the last good list");
     }
 
     #[test]

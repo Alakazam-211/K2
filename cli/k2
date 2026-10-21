@@ -15707,6 +15707,8 @@ Agents:
                  [--artifact GLOB]... [--json]
                  [--queue-timeout 30m|off] [--retries N] [--stall-timeout 30m|off]
                  [--shards N]   (with --any: N jobs, {shard}/{shards} in the command)
+                 [--gate]       a release gate on a shared node: runs first, one at
+                                a time (only where your share allows it)
                  [--plan]       dry run: the node it would pick, queue, warm slot,
                                 estimate from earlier runs, grant left (JSON)
                  [--needs node@22,python@3.12,rust@stable,cargo-nextest,cmake@3,sys:pkg-config]
@@ -15737,7 +15739,12 @@ Agents:
                                              --failures: failing tests first, then log lines
   k2 compute cancel <job> [--force]
                  a queued job is cancelled at once; one that already started
-                 (or was just assigned) needs --force (else job_started, exit 3)
+                 (or was just assigned) needs --force (else job_started, exit 3).
+                 On a shared node, a job in the node's queue is asked to cancel
+                 only if it hasn't started: it ends cancelled, or job_started
+  k2 compute queue <node> [--json]
+                 the node's whole queue: on a shared node, other servers' jobs
+                 show only as "another server" with class, size and ETA
   k2 compute retry <job>
   k2 compute receipt <job>
 Owner / admin (refused for agents and inside K2 terminals, except where
@@ -15749,6 +15756,26 @@ Owner / admin (refused for agents and inside K2 terminals, except where
   k2 compute node retire <name>                drain, then remove once its jobs end
   k2 compute node pause|drain|resume <name>    this server stops/starts assigning
   k2 compute node route add|rm <name> <url>    LAN or tailnet URL the node may dial
+Sharing a node with other K2 servers (the node's owner server; 0.46.3):
+  k2 compute node servers <node> [--json]      every server on it: slot, state,
+                   trust, share, today's use, end date, pending SAS
+  k2 compute node servers <node> add --url URL --code CODE.FP [--trust own|team]
+                   [--for 7d|none] [--weight N] [--max-running N] [--max-queued N]
+                   [--cpu-hours N] [--max-time 2h] [--cpus N] [--mem 8G]
+                   [--disk 40G] [--network on|no-lan|none] [--gate] [--exclusive]
+                   CODE.FP is what `k2 compute node add <node>` printed on the
+                   NEW server. Held for your approval (Touch ID / vault
+                   password); the new server's owner then confirms the SAS.
+                   Needs the node's remote-admin level `full`; on a node set
+                   to `policy`, add servers at the machine instead:
+                   sudo k2-node servers add --url URL --code CODE.FP
+  k2 compute node servers <node> approve|deny <request>   (= node admin approve/deny)
+  k2 compute node servers <node> limits <server> key=value…   narrowing at
+                   once, widening waits for approval (max_running, max_queued,
+                   cpu_hours_day, max_job_secs, max_cpus, max_mem_gb, disk_gb,
+                   weight, network, top_class, gate, exclusive; for=7d|none)
+  k2 compute node servers <node> pause|resume <server>
+  k2 compute node servers <node> revoke <server> [--now] [--wipe]   (owner)
   k2 compute grant <node> --workspace WS [--max-time 2h] [--max-disk 60G]
                    [--max-parallel 1] [--max-queued 10]
   k2 compute revoke <node> --workspace WS
@@ -16005,16 +16032,38 @@ def dur(s):
     if s >= 3600 and s % 3600 == 0: return "%dh" % (s // 3600)
     if s >= 60 and s % 60 == 0: return "%dm" % (s // 60)
     return "%ds" % s
+def share_lines(n):
+    # Shared nodes only (0.46.3); a solo node prints exactly as before.
+    s = n.get("share")
+    if not isinstance(s, dict):
+        return []
+    until = ""
+    if s.get("expiresAt"):
+        until = "   until " + time.strftime("%b %d", time.localtime(s["expiresAt"]))
+    if s.get("role") == "tenant":
+        head = "shared by %s (%s servers)%s" % (s.get("ownerLabel") or "?", s.get("servers") or "?", until)
+    else:
+        head = "shared with %d other server(s)" % max((s.get("servers") or 1) - 1, 0)
+    if s.get("state") and s["state"] != "active":
+        head += "   your share: " + s["state"]
+    out = ["%-14s %s" % ("", head)]
+    if s.get("line"):
+        out.append("%-14s your share: %s" % ("", s["line"]))
+    return out
 if verb == "nodes":
     rows = v.get("nodes", [])
     if not rows:
         print("(no compute nodes%s)" % ("" if v.get("waitingCodes") is None else "; add one with: k2 compute node add <name>"))
     for n in rows:
         print(node_line(n))
+        for l in share_lines(n):
+            print(l)
     for c in v.get("waitingCodes") or []:
         print("code waiting for %s (expires %s)" % (c["name"], time.strftime("%H:%M", time.localtime(c["expiresAt"]))))
 elif verb == "info":
     print(node_line(v))
+    for l in share_lines(v):
+        print(l)
     o = v.get("offer") or {}
     if o.get("tools"):
         print("tools: " + "  ".join("%s %s" % kv for kv in sorted(o["tools"].items())))
@@ -16037,7 +16086,13 @@ elif verb == "get":
     print("  argv: %s" % " ".join(j.get("argv") or []))
     print("  commit: %s  tree: %s" % (j.get("srcCommit") or "-", j.get("srcTree") or "-"))
     print("  exit: %s  signal: %s  attempt %s (generation %s)" % (j.get("exitCode"), j.get("signal"), j.get("attempt"), j.get("generation")))
-    if j.get("queue"):
+    if j.get("queue") and j["queue"].get("onNode"):
+        # In the queue of a shared node: its place and ETA (0.46.3).
+        q = j["queue"]
+        print("  %s%s" % (q["message"], ("  [class %s]" % j["class"]) if j.get("class") else ""))
+        if q.get("reason") and q["reason"] != "node_queued":
+            print("  waiting for the node to answer: %s" % q["reason"])
+    elif j.get("queue"):
         q = j["queue"]
         print("  queued: position %s%s — %s (%s)" % (q["position"], (" of %s" % q["of"]) if q.get("of") else "", q["reason"], q["message"]))
         if q.get("parallel"):
@@ -16085,6 +16140,69 @@ elif verb == "usage":
 elif verb == "events":
     for e in v.get("events", []):
         print("%s  %-16s %-18s %s %s" % (time.strftime("%m-%d %H:%M:%S", time.localtime(e["at"])), e["kind"], e["actor"][:18], (e.get("jobId") or e.get("nodeId") or "")[:8], json.dumps(e.get("detail"))[:80]))
+elif verb == "queue":
+    rows = v.get("entries") or []
+    print("%s%s" % (v.get("node"), "" if v.get("from") == "node" else "  (jobs from this server only: the node keeps no shared queue)"))
+    if not rows:
+        print("(nothing running or queued)")
+    else:
+        print("%-3s %-34s %-12s %-8s %-5s %s" % ("#", "who", "class", "state", "cpus", "eta"))
+    for e in rows:
+        if e.get("mine") and e.get("short"):
+            who = "you: %s %s" % (e["short"], e.get("argv") or "")
+            if e.get("workspace"):
+                who += " (ws %s)" % e["workspace"]
+        elif e.get("mine"):
+            who = "this server (other workspace)"
+        else:
+            who = e.get("server") or "another server"
+        eta = e.get("etaSecs")
+        if eta is None:
+            etas = "-"
+        elif e.get("state") == "running":
+            etas = "~%dm left" % max(1, (eta + 59) // 60)
+        else:
+            etas = "~%dm" % max(1, (eta + 59) // 60)
+        if e.get("blockedBy"):
+            etas += " (%s)" % e["blockedBy"]
+        cpus = ("%g" % (e["cpuMillis"] / 1000)) if e.get("cpuMillis") else "-"
+        print("%-3s %-34s %-12s %-8s %-5s %s" % (e.get("pos"), who[:34], e.get("class") or "-", e.get("state"), cpus, etas))
+    for t in v.get("totals") or []:
+        print("server %-20s running %s  queued %s  today %.1f CPU-h" % (t["label"], t["running"], t["queued"], (t.get("cpuSecsToday") or 0) / 3600))
+elif verb == "servers":
+    if v.get("role") == "tenant":
+        print("%s is shared with this server by %s" % (v["node"], v.get("owner") or "its owner"))
+        if v.get("line"):
+            print("  your share: %s" % v["line"])
+        s = v.get("share") or {}
+        if s.get("expires_in_secs"):
+            print("  ends in %dh" % (s["expires_in_secs"] // 3600))
+    else:
+        print("%-4s %-24s %-9s %-5s %-6s %s" % ("slot", "server", "state", "trust", "weight", "share"))
+        for s in v.get("servers") or []:
+            l = s.get("limits") or {}
+            share = ("run %s · queue %s · %s CPU-h/day · %s/job · %s CPUs · %s GB · net %s" % (
+                l.get("max_running"), l.get("max_queued"), l.get("cpu_hours_day"), dur(l.get("max_job_secs")), l.get("max_cpus"), l.get("max_mem_gb"), l.get("network"))) if l else ("(this server; no other servers yet)" if s.get("solo") else "-")
+            st = s.get("state")
+            if s.get("sas"):
+                st += " · SAS " + s["sas"]
+            u = s.get("usage") or {}
+            if u.get("refusal"):
+                st = "refused: %s" % u["refusal"]
+            print("%-4s %-24s %-9s %-5s %-6s %s" % (s.get("slot"), (s.get("label") or "?")[:24], st, s.get("trust"), l.get("weight", "-"), share))
+            extra = []
+            if u.get("running") is not None:
+                extra.append("running %s, queued %s" % (u.get("running"), u.get("queued")))
+            if u.get("cpu_secs_today") is not None:
+                extra.append("today %.1f CPU-h" % (u["cpu_secs_today"] / 3600))
+            if s.get("expiresAt"):
+                extra.append("until " + time.strftime("%b %d %H:%M", time.localtime(s["expiresAt"])))
+            if extra:
+                print("%-4s %s" % ("", " · ".join(extra)))
+        for r in v.get("requests") or []:
+            print("waiting: %s  %s  %s" % (r["id"], r["state"], r["summary"]))
+        if v.get("note"):
+            print("note: %s" % v["note"])
 elif verb == "enroll":
     print("Enroll code for %s (expires in 10 minutes):" % v["name"])
     print("  %s" % v["enroll"])
@@ -16229,10 +16347,12 @@ open(os.environ["K2_CP_STATE"] + ".err", "w").write(json.dumps(err) + "\n")
 cmd_compute_run() {
     local node="" any=0 os="" arch="" detach=0 dirty=0 sha="" nosrc=0 cpus="" mem="" timeout="" exclusive=0
     local retry="" raw=0 workspace="" wait=0 wait_failures=0 max_wait="" as_json=0 qtimeout="" retries="" stall="" nshards="" plan=0
+    local gate=""
     local -a labels=() envs=() needs=() artifacts=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --) shift; break ;;
+            --gate) gate=1; shift ;;
             --wait) wait=1; shift ;;
             --failures) wait_failures=1; shift ;;
             --max-wait) max_wait="${2:-}"; shift 2 ;;
@@ -16348,7 +16468,7 @@ print(json.dumps(out))' "${needs[@]}")"
         K2_CJ_detach_b="$detach" K2_CJ_dirty_b="$dirty" K2_CJ_sha="$sha" K2_CJ_noSource_b="$nosrc" \
         K2_CJ_cpus_n="$cpus" K2_CJ_memBytes_n="$mem" K2_CJ_timeoutSecs_n="$timeout" \
         K2_CJ_exclusive_b="$exclusive" K2_CJ_retryInterrupted_b="$retry" K2_CJ_cwd="$cwd" \
-        K2_CJ_repoDir="$repo_dir" K2_CJ_workspace="$ws_name" K2_CJ_clientJobId="$client")"
+        K2_CJ_repoDir="$repo_dir" K2_CJ_workspace="$ws_name" K2_CJ_clientJobId="$client" K2_CJ_gate_b="$gate")"
     [ "$any" = "0" ] && body="$(printf '%s' "$body" | python3 -c 'import json,sys; v=json.load(sys.stdin); v.pop("any", None); print(json.dumps(v))')"
     # The same clientJobId makes a retried POST idempotent.
     local raw_resp attempt=0
@@ -17006,6 +17126,7 @@ cmd_compute_node() {
             printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("routes for %s: %s" % (v["node"], " ".join(v["routes"]) or "(none)"))'
             ;;
         admin) cmd_compute_node_admin "$@" ;;
+        servers) cmd_compute_node_servers "$@" ;;
         policy)
             local node="${1:-}" act="${2:-show}"
             [ -n "$node" ] || { echo "usage: k2 compute node policy <node> show|set key=value..." >&2; exit 2; }
@@ -17092,7 +17213,133 @@ if "node" in v:
     print("%s: %s" % (v["node"], ("offline alert after %dm" % (a // 60)) if a else "no offline alert"))'
             ;;
         *)
-            echo "usage: k2 compute node add|confirm|remove|rename|pause|drain|resume|route|health|policy|update|rollback|alerts|admin …" >&2
+            echo "usage: k2 compute node add|confirm|remove|rename|pause|drain|resume|route|health|policy|update|rollback|alerts|admin|servers …" >&2
+            exit 2
+            ;;
+    esac
+}
+
+# `k2 compute node servers <node> [add|approve|deny|limits|pause|resume|revoke …]`
+# (node sharing, 0.46.3: prd-compute-shared-queue-v1 §9).
+cmd_compute_node_servers() {
+    local node="${1:-}"
+    [ -n "$node" ] && [ "${node#-}" = "$node" ] || { echo "usage: k2 compute node servers <node> [add|approve|deny|limits|pause|resume|revoke …] (k2 compute --help)" >&2; exit 2; }
+    shift
+    local act="${1:-list}"
+    [ "$act" = "--json" ] && act=list
+    [ $# -gt 0 ] && [ "$act" != "list" ] && shift
+    [ "$act" = "list" ] && [ "${1:-}" = "list" ] && shift
+    local as_json=0 a
+    for a in "$@"; do [ "$a" = "--json" ] && as_json=1; done
+    case "$act" in
+        list|ls)
+            local q="node=$(urlencode "$node")"
+            for a in "$@"; do [ "$a" = "--refresh" ] && q="$q&refresh=1"; done
+            _compute_call GET /cli/compute/nodes/servers "$q" tcp
+            [ "$as_json" = "1" ] && { printf '%s\n' "$_CP_BODY"; exit 0; }
+            _compute_render servers
+            ;;
+        add)
+            local url="" code="" trust="own" forv="" reason="" pairs=()
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --url) url="${2:-}"; shift 2 ;;
+                    --code) code="${2:-}"; shift 2 ;;
+                    --trust) trust="${2:-}"; shift 2 ;;
+                    --for) forv="${2:-}"; shift 2 ;;
+                    --reason) reason="${2:-}"; shift 2 ;;
+                    --weight) pairs+=("weight=${2:-}"); shift 2 ;;
+                    --max-running) pairs+=("max_running=${2:-}"); shift 2 ;;
+                    --max-queued) pairs+=("max_queued=${2:-}"); shift 2 ;;
+                    --cpu-hours) pairs+=("cpu_hours_day=${2:-}"); shift 2 ;;
+                    --max-time) pairs+=("max_job_secs=$(_compute_secs "${2:-}")"); shift 2 ;;
+                    --cpus) pairs+=("max_cpus=${2:-}"); shift 2 ;;
+                    --mem) local m="${2:-}"; pairs+=("max_mem_gb=${m%[Gg]}"); shift 2 ;;
+                    --disk) local d="${2:-}"; pairs+=("disk_gb=${d%[Gg]}"); shift 2 ;;
+                    --network) pairs+=("network=\"${2:-}\""); shift 2 ;;
+                    --gate) pairs+=("gate=true" "top_class=\"gate\""); shift ;;
+                    --exclusive) pairs+=("exclusive=true"); shift ;;
+                    --json) shift ;;
+                    *) echo "usage: k2 compute node servers <node> add --url URL --code CODE.FP [--trust own|team] [--for 7d|none] [limits…] (unknown '$1')" >&2; exit 2 ;;
+                esac
+            done
+            [ -n "$url" ] && [ -n "$code" ] || { echo "usage: k2 compute node servers <node> add --url URL --code CODE.FP [--trust own|team] [--for 7d|none]" >&2; exit 2; }
+            local for_n=""
+            case "$forv" in
+                "") for_n="" ;;
+                none|never|0) for_n=0 ;;
+                *d) for_n=$(( ${forv%d} * 86400 )) ;;
+                *) for_n="$(_compute_secs "$forv")" ;;
+            esac
+            local set_json
+            set_json="$(_compute_kv_json ${pairs[@]+"${pairs[@]}"})" || exit 2
+            _compute_call POST /cli/compute/nodes/servers/add "$(_compute_json K2_CJ_node="$node" K2_CJ_url="$url" K2_CJ_code="$code" \
+                K2_CJ_trust="$trust" K2_CJ_forSecs_n="$for_n" K2_CJ_set_j="$set_json" K2_CJ_reason="$reason")" tcp
+            code=""
+            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
+v=json.load(sys.stdin)
+if v.get("warning"): print("note: " + v["warning"], file=sys.stderr)'
+            _compute_admin_held_or_approve
+            ;;
+        approve) [ -n "${1:-}" ] || { echo "usage: k2 compute node servers <node> approve <request>" >&2; exit 2; }; _compute_admin_approve "$1" ;;
+        deny) cmd_compute_node_admin deny "$@" ;;
+        limits)
+            local server="${1:-}" reason="" forv="" pairs=()
+            [ -n "$server" ] || { echo "usage: k2 compute node servers <node> limits <server> key=value…" >&2; exit 2; }
+            shift
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --reason) reason="${2:-}"; shift 2 ;;
+                    for=*) forv="${1#for=}"; shift ;;
+                    --for) forv="${2:-}"; shift 2 ;;
+                    max_job_secs=*h|max_job_secs=*m|max_job_secs=*s) pairs+=("max_job_secs=$(_compute_secs "${1#max_job_secs=}")"); shift ;;
+                    network=*|top_class=*) pairs+=("${1%%=*}=\"${1#*=}\""); shift ;;
+                    *=*) pairs+=("$1"); shift ;;
+                    --json) shift ;;
+                    *) echo "usage: k2 compute node servers <node> limits <server> key=value… (unknown '$1')" >&2; exit 2 ;;
+                esac
+            done
+            local for_n=""
+            case "$forv" in
+                "") for_n="" ;;
+                none|never|0) for_n=0 ;;
+                *d) for_n=$(( ${forv%d} * 86400 )) ;;
+                *) for_n="$(_compute_secs "$forv")" ;;
+            esac
+            [ ${#pairs[@]} -gt 0 ] || [ -n "$for_n" ] || { echo "usage: k2 compute node servers <node> limits <server> key=value… (at least one)" >&2; exit 2; }
+            local set_json
+            set_json="$(_compute_kv_json ${pairs[@]+"${pairs[@]}"})" || exit 2
+            _compute_call POST /cli/compute/nodes/servers/limits "$(_compute_json K2_CJ_node="$node" K2_CJ_server="$server" K2_CJ_set_j="$set_json" K2_CJ_forSecs_n="$for_n" K2_CJ_reason="$reason")" tcp
+            if printf '%s' "$_CP_BODY" | grep -q '"held": *true'; then
+                _compute_admin_held_or_approve
+            fi
+            [ "$as_json" = "1" ] && { printf '%s\n' "$_CP_BODY"; exit 0; }
+            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("%s on %s: %s" % (v.get("server"), v["node"], v.get("note","ok")))'
+            ;;
+        pause|resume)
+            [ -n "${1:-}" ] || { echo "usage: k2 compute node servers <node> $act <server>" >&2; exit 2; }
+            _compute_call POST /cli/compute/nodes/servers/pause "$(_compute_json K2_CJ_node="$node" K2_CJ_server="$1" K2_CJ_action="$act")" tcp
+            [ "$as_json" = "1" ] && { printf '%s\n' "$_CP_BODY"; exit 0; }
+            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("%s on %s: %s. %s" % (v["server"], v["node"], v["action"].split(".")[-1] + "d", v["note"]))'
+            ;;
+        revoke)
+            local server="" now=0 wipe=0
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --now) now=1; shift ;;
+                    --wipe) wipe=1; shift ;;
+                    --json) shift ;;
+                    -*) echo "usage: k2 compute node servers <node> revoke <server> [--now] [--wipe]" >&2; exit 2 ;;
+                    *) server="$1"; shift ;;
+                esac
+            done
+            [ -n "$server" ] || { echo "usage: k2 compute node servers <node> revoke <server> [--now] [--wipe]" >&2; exit 2; }
+            _compute_call POST /cli/compute/nodes/servers/revoke "$(_compute_json K2_CJ_node="$node" K2_CJ_server="$server" K2_CJ_now_b="$now" K2_CJ_wipe_b="$wipe")" tcp
+            [ "$as_json" = "1" ] && { printf '%s\n' "$_CP_BODY"; exit 0; }
+            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("revoked %s on %s: %s" % (v["server"], v["node"], v["note"]))'
+            ;;
+        *)
+            echo "usage: k2 compute node servers <node> [add|approve|deny|limits|pause|resume|revoke …]" >&2
             exit 2
             ;;
     esac
@@ -17476,6 +17723,12 @@ cmd_compute() {
             _compute_render info
             ;;
         run) cmd_compute_run "$@" ;;
+        queue)
+            [ -n "${1:-}" ] && [ "${1#-}" = "$1" ] || { echo "usage: k2 compute queue <node> [--json]" >&2; exit 2; }
+            _compute_call GET /cli/compute/queue "node=$(urlencode "$1")"
+            [ "$as_json" = "1" ] && { printf '%s\n' "$_CP_BODY"; exit 0; }
+            _compute_render queue
+            ;;
         jobs)
             local q="" n=""
             while [ $# -gt 0 ]; do
@@ -17554,6 +17807,8 @@ def took(s):
     return " for %dm%02ds" % (s // 60, s % 60)
 if v.get("state") == "cancelled" and v.get("was") == "queued":
     print("cancelled %s (was queued on %s)" % (job, node))
+elif v.get("state") == "cancel_requested" and v.get("onNode"):
+    print("cancel asked for %s (queued on %s; %s): %s" % (job, node, v.get("cancel"), v.get("note") or ""))
 elif "cancel" in v:
     print("stopping %s (was %s on %s%s; cancel %s)" % (job, v.get("was") or v.get("state"), node, took(v.get("ranSecs")), v["cancel"]))
 else:
@@ -31334,7 +31589,7 @@ EOF
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-heartbeats app-tickets app-identity app-surfaces skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute vault notifications data-sources projects hooks agent-hire garden-data changes design db-upgrade"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-heartbeats app-tickets app-identity app-surfaces skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute compute-shared vault notifications data-sources projects hooks agent-hire garden-data changes design db-upgrade"
 
 _study_usage() {
     cat <<'EOF'
@@ -31352,8 +31607,8 @@ Topics:
   what  source  map  identity  send  human  people  auth  errors
   context  db  mail  connect-boundary  apps  app-deploys  app-move  app-api  app-heartbeats  app-tickets
   app-identity  app-surfaces  skins  feedback-loop  ticket-brief  zen  sidecars  llm-tokens
-  llm-accounts  publish-framing  compute  vault  notifications  data-sources  projects  hooks
-  agent-hire  garden-data  changes  db-upgrade
+  llm-accounts  publish-framing  compute  compute-shared  vault  notifications  data-sources
+  projects  hooks  agent-hire  garden-data  changes  db-upgrade
 EOF
 }
 
@@ -31390,6 +31645,7 @@ _study_title() {
         llm-accounts) echo "LLM tokens" ;;
         publish-framing) echo "Who may frame your App" ;;
         compute) echo "Compute nodes" ;;
+        compute-shared) echo "Shared compute nodes" ;;
         vault) echo "Secrets (the vault)" ;;
         notifications) echo "Thread posts and phone pushes" ;;
         data-sources) echo "Data sources and triggers" ;;
@@ -31448,6 +31704,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   llm-accounts        leftover alias of llm-tokens
   publish-framing     Who may frame your App; the header for --cmd Apps
   compute             Run builds/tests on your owner's other machines; logs are data
+  compute-shared      A node many K2 servers share: its queue, what's hidden, the wall
   vault               Secrets: fetch not paste; references; who sets what
   notifications       Your Thread posts may push a phone; who gets it; post less
   data-sources        Checks this server runs: try, propose, approve; triggers; keys
@@ -31503,6 +31760,7 @@ _study_page() {
             ;;
         publish-framing) _study_page_publish_framing ;;
         compute) _study_page_compute ;;
+        compute-shared) _study_page_compute_shared ;;
         data-sources) _study_page_data_sources ;;
         garden-data) _study_page_garden_data ;;
         changes) _study_page_changes ;;
@@ -34304,6 +34562,96 @@ COMMON ERRORS
   private_home_choice    enable: say --private-home or --no-private-home
   owner_only             owner verb from an agent or a K2 terminal: use Settings
                          (or ask for "Allow managing compute nodes")
+
+SHARED NODES
+  A node may serve several K2 servers at once (k2 compute nodes says
+  "shared by …"). Its queue, what other servers see and the new codes:
+  k2 study compute-shared. Adding a server from K2 (k2 compute node
+  servers <node> add) needs the node's remote-admin level `full`; on a
+  node set to `policy`, servers are added at the machine
+  (sudo k2-node servers add).
+
+K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+EOF
+}
+
+_study_page_compute_shared() {
+    cat <<'EOF'
+k2 study compute-shared — a node many K2 servers share (0.46.3)
+
+WORDS
+  server   a K2 that sends jobs to nodes (yours, or someone else's)
+  owner    the server the node enrolled with first; only it sends admin
+           and updates, and adds or removes servers
+  tenant   any other server connected to the node; each has a share
+  share    one server's limits there: running, queued, CPU-hours a day
+           (soft), time/CPUs/memory per job, disk, network, end date
+  solo     a node with one server: everything works exactly as before
+
+WHAT YOU SEE
+  k2 compute nodes    "shared by rosson.k2.dev (3 servers) until Oct 27"
+                      and your share: running 1/1 · queued 2/10 · …
+  k2 compute queue <node>   the whole node queue. Other servers' jobs show
+                      as "another server", class, size and ETA only. No
+                      command, workspace, session, job id or logs. Ever.
+  k2 compute get <job>      "queued on k2n2-m1, position 2, ETA ~6m (fair
+                      share: another server's jobs run first)"
+  ETAs are durations, never clock times, and rounded for other servers.
+
+THE QUEUE (the node decides, one queue for every server)
+  1 gate first (only where the share allows it; one at a time; never kills)
+  2 servers within today's CPU-hours before servers over them
+  3 interactive before batch (you get interactive for an attached run or
+    --wait; --detach, more than 4 shards and soaks are batch). A batch job
+    waiting over 60 min counts as interactive.
+  4 fair share by recent use and weight (the owner weighs 2)
+  Inside one server: workspaces take turns, then sessions, then first come.
+  Over your limits you WAIT, never fail. A job bigger than your share's
+  per-job limits is refused at submit (exit 3).
+
+YOUR JOBS
+  Same verbs as ever: run, --any, --shards, test, wait, logs, cancel.
+  Named runs go into the node's queue at once. --any waits up to 60 s on
+  this server for a node that can start it now, then goes to the node with
+  the lowest ETA. It may move later, but only after the node confirms the
+  job hadn't started (never more than twice). Your server's queued jobs
+  start only while it's connected; running ones carry on regardless.
+  cancel without --force on a queued job: it ends cancelled, or keeps
+  running (job_started) if it had just started. --force always stops it.
+
+CODES (exit 3 with a JSON code)
+  exceeds_share_caps     over your share's time/CPUs/memory per job
+  gate_not_allowed       --gate, but your share doesn't allow it
+  exclusive_not_allowed  --exclusive, but your share doesn't allow it
+  tenant_queue_full      your queue on the node is full: it waits here
+  share_paused           the node's owner paused your server's share
+  share_expired          your share's end date passed
+  share_revoked          the node's owner removed your server
+  not_node_owner         admin/update/servers verbs on a node you share
+  node_too_old           servers add on a pre-0.46.3 node: update it first
+  server_add_pending     one server is added at a time
+  server_too_old         a 0.46.2 server can't join: update it
+  tenant_needs_job_wall  the node needs its job wall before a second server
+  team_needs_tenant_wall other people's servers need the tenant wall
+                         (Linux nodes; Macs in 0.46.4)
+
+WHAT THE WALL DOES NOT STOP (say so before you share)
+  Each server's jobs get their own folders (and on Linux their own user).
+  They can't read each other's code, caches, results or logs. They still
+  share the kernel, CPU and disk, can reach the internet and any service
+  on the machine's loopback, and the node's owner (root) can read
+  everything. Don't send secrets to a node you don't own. On a Mac in
+  0.46.3 every server's jobs run as one user: share Macs only with your
+  own servers.
+
+FOR THE NODE'S OWNER
+  k2 compute node servers <node>                 list (slot, state, share)
+  k2 compute node servers <node> add --url … --code CODE.FP [--trust team]
+  k2 compute node servers <node> limits|pause|resume|revoke <server> …
+  Adds and widenings wait for your approval; narrowing, pause and revoke
+  apply at once. Updates on a shared node wait for running jobs (≤ 30 min).
+  An add from K2 needs the node's remote-admin level `full`; on a node set
+  to `policy`, add servers at the machine: sudo k2-node servers add …
 
 K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF

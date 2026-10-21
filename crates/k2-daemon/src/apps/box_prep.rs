@@ -261,7 +261,7 @@ pub fn doctor(f: &Facts) -> J {
     let bundle = f.podman_bundle || hs("/engine/podmanSource").as_str() == Some("k2");
     out.push(match podman.as_deref() {
         Some(v) if major(v).is_some_and(|m| m >= PODMAN_MIN_MAJOR) && bundle => {
-            c("podman", "ok", format!("{v} (K2's bundle, {}; the distro's Podman is untouched)", k2_root_proto::podman::PREFIX), None)
+            c("podman", "ok", format!("{v} (K2's bundle, {}; a distro Podman, if any, is left as it is)", k2_root_proto::podman::PREFIX), None)
         }
         Some(v) if major(v).is_some_and(|m| m >= PODMAN_MIN_MAJOR) => {
             c("podman", "ok", v.to_string(), None)
@@ -1022,7 +1022,16 @@ pub(crate) fn prepare_route(who: &Who, body: &J) -> R<J> {
             pi::Decision::Offer { .. } => pi::plan_with_install(plan(&opts)),
             _ => plan(&opts),
         };
-        return Ok(pi::dry_run(&d, &pod, &p, app_uid(), doctor(&f)));
+        // The packages `apps packages install` would add (only the missing
+        // ones): K2's Podman runs k2app when it is there or this prep
+        // installs it (an Offer's plan carries the install).
+        let bundle = f.podman_bundle || matches!(d, pi::Decision::Offer { .. });
+        let mac = f.helper_status.as_ref().and_then(|h| h.get("mac"));
+        let apparmor = mac.is_some_and(|m| m["lsm"].as_str() == Some("apparmor") && m.get("parser").is_some_and(J::is_null));
+        let exists = |p: &str| std::path::Path::new(p).exists();
+        let probe = pi::PackageProbe { exists: &exists, installed: &pi::package_installed };
+        let packages = pi::packages_json(bundle, apparmor, &probe);
+        return Ok(pi::dry_run(&d, &pod, &p, app_uid(), doctor(&f), packages));
     }
     if !cfg!(target_os = "linux") {
         return Err(no("linux_only", 409, "Apps run on Linux boxes only"));

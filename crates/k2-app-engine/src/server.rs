@@ -66,6 +66,9 @@ pub struct Engine {
     lock: Mutex<()>,
     /// `/etc/subuid` and `/etc/subgid` (tests point these elsewhere).
     subid_files: (PathBuf, PathBuf),
+    /// `disk-usage`'s per-App measuring command (tests: plain `du`, no
+    /// `podman unshare`); `None` = the real one (`usage::app_du_argv`).
+    du_override: Option<Vec<String>>,
 }
 
 /// One instance's state file (`<state>/run/<app>/<deployment>.json`).
@@ -111,7 +114,19 @@ impl Engine {
             pass_root: PathBuf::from(PASS_ROOT),
             lock: Mutex::new(()),
             subid_files: (PathBuf::from(SUBUID_FILE), PathBuf::from(SUBGID_FILE)),
+            du_override: None,
         }
+    }
+
+    /// Tests: measure App folders with this command (the folder appended)
+    /// instead of `podman unshare du`.
+    pub fn with_du_command(mut self, argv: Vec<String>) -> Self {
+        self.du_override = Some(argv);
+        self
+    }
+
+    pub(crate) fn du_override(&self) -> Option<&[String]> {
+        self.du_override.as_deref()
     }
 
     /// The unit-file lock (writes + `daemon-reload`).
@@ -171,7 +186,7 @@ impl Engine {
         self.home.join("seeds")
     }
     /// User units K2 writes besides Quadlet's (the Apps' slice files).
-    fn user_units(&self) -> PathBuf {
+    pub(crate) fn user_units(&self) -> PathBuf {
         self.home.join(".config/systemd/user")
     }
     pub(crate) fn builds_dir(&self) -> PathBuf {
@@ -316,6 +331,8 @@ impl Engine {
             Request::Logs { app, deployment, lines } => self.logs(&app, &deployment, lines),
             Request::Adopt => self.adopt(),
             Request::RemoveApp { app, data } => self.remove_app(&app, data),
+            Request::DiskUsage => self.disk_usage(),
+            Request::SeedsGc { remove } => self.seeds_gc(&remove),
             Request::PassWrite { app, pass_hex } => {
                 let a = AppId::parse(&app).ok_or_else(|| bad("app id"))?;
                 self.write_pass(&a, &pass_hex)?;
@@ -331,6 +348,9 @@ impl Engine {
             "version": env!("K2_PRODUCT_VERSION"),
             "protocol": wire::ENGINE_PROTOCOL,
             "features": wire::ENGINE_FEATURES,
+            // 0.46.3: verbs past the protocol number (the daemon calls one
+            // only when it is listed here; no protocol bump).
+            "verbs": wire::ENGINE_VERBS,
             "runtime": self.runtime(),
             "podman": podman,
             "seccomp": crate::seccomp::file_name(),
@@ -949,6 +969,8 @@ fn verb_name(r: &Request) -> &'static str {
         Request::ProcessState { .. } => "process-state",
         Request::Build(_) => "build",
         Request::Logs { .. } => "logs",
+        Request::DiskUsage => wire::VERB_DISK_USAGE,
+        Request::SeedsGc { .. } => wire::VERB_SEEDS_GC,
     }
 }
 

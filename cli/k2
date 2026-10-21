@@ -1136,6 +1136,50 @@ cli_send_json() {
 }
 # END_CLI_SEND_JSON
 
+# BEGIN_CLI_PASSPORT_PROJECT
+# 0.46.3 (agent CLI audit A2): `k2 tickets list`, `k2 feedback list` and
+# `k2 activity` name a workspace with `project=`, which comes from the
+# folder the caller stands in ($PWD walk). An agent that ran them outside
+# its folder got "workspace not registered". In a K2 terminal (session
+# passport), ask the daemon which workspace the passport belongs to
+# (`/cli/whoami` → `path`) and use that. An explicit K2_PROJECT_PATH wins;
+# people (no passport), or a daemon that answers no path, keep the $PWD
+# result.
+_cli_use_passport_project() {
+    [ -z "${K2_PROJECT_PATH:-${K2SO_PROJECT_PATH:-}}" ] || return 0
+    [ -n "${SCOPED_TOKEN:-}" ] || return 0
+    _cli_skip_uds && return 0
+    local sock out="" path="" _K2_CFG=""
+    sock="$(_hook_sock)"
+    if [ -n "$sock" ] && [ -S "$sock" ]; then
+        _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
+        out="$(_k2_curl "$_K2_CFG" -s -G --unix-socket "$sock" "http://localhost/cli/whoami" \
+            --connect-timeout 5 --max-time 15 2>/dev/null)" || out=""
+    fi
+    if [ -z "$out" ] || [[ "$out" == *"not served on cell socket"* ]]; then
+        _K2_CFG=""
+        _k2_cfg_add data-urlencode "token=${SCOPED_TOKEN}"
+        out="$(_k2_curl "$_K2_CFG" -s -G "${BASE_URL}/cli/whoami" \
+            --connect-timeout 5 --max-time 15 2>/dev/null)" || out=""
+    fi
+    [ -n "$out" ] || return 0
+    path="$(printf '%s' "$out" | python3 -c '
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+except Exception:
+    sys.exit(0)
+p = d.get("path") if isinstance(d, dict) else None
+if isinstance(p, str) and p.strip():
+    print(p.strip())
+' 2>/dev/null)" || path=""
+    if [ -n "$path" ]; then
+        PROJECT="$path"
+    fi
+    return 0
+}
+# END_CLI_PASSPORT_PROJECT
+
 # ── F2 (sandbox cell + HOST session) — k2 respond ────────────────────
 # `k2 respond [--final] <message>` — the in-session agent's RESPONSE
 # egress. Posts a curated line to THIS session's response log; the
@@ -21256,8 +21300,15 @@ if isinstance(rl, dict):
     if rl.get("checked_at"):
         ts = datetime.datetime.fromtimestamp(rl["checked_at"]).strftime("%Y-%m-%d %H:%M")
         print(f"  Relay list: checked with k2.dev {ts}")
-    if rl.get("last_error"):
+    if rl.get("last_error") and str(rl["last_error"]).startswith("401"):
+        # A pre-0.46.3 daemon reports the k2.dev 401 as an error.
+        print("  Relay list: k2.dev does not hand out a relay list for this tunnel token; the saved list stays in use")
+    elif rl.get("last_error"):
         print("  Relay list: last refresh failed: " + rl["last_error"])
+    elif rl.get("notice"):
+        # 0.46.3: k2.dev does not list this tunnel token (normal for seeded
+        # and freshly provisioned tokens); the saved list stays in use.
+        print("  Relay list: " + rl["notice"])
 # 0.45.2: re-launch on boot, and which name the encrypted listener serves.
 if "autoStart" in d:
     print("  Auto-start: " + ("on" if d.get("autoStart") else "off (k2 tunnel enable turns it on)"))
@@ -26167,6 +26218,8 @@ cmd_feed() {
     case "$limit" in ''|*[!0-9]*) echo "Error: the limit is a number, got '$limit' (k2 activity --help)" >&2; exit 2 ;; esac
     local params="limit=$limit"
     [[ -n "$agent" ]] && params="$params&agent=$(urlencode "$agent")"
+    # 0.46.3 A2: an agent's own workspace, from any folder.
+    _cli_use_passport_project
     cli_request "/cli/feed" "$params" | FEED_JSON="$as_json" python3 -c "
 import json, os, sys, time
 raw = sys.stdin.read()
@@ -39958,6 +40011,8 @@ cmd_feedback_list() {
         esac
     fi
     local resp
+    # 0.46.3 A2: an agent's own workspace, from any folder.
+    _cli_use_passport_project
     # bash 3.2 (macOS /bin/bash) + `set -u` rejects empty-array
     # expansion, so branch instead of building an args array.
     if [ -n "$status" ]; then

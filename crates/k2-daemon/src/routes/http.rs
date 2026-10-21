@@ -1023,11 +1023,40 @@ pub(crate) async fn require_manage(
                 stream,
                 "403 Forbidden",
                 "application/json",
-                r#"{"error":"invalid or missing token"}"#,
+                manage_refusal_body(query, owner_token),
             )
             .await;
             None
         }
+    }
+}
+
+/// The refusal body [`require_manage`] sends for a token that is missing,
+/// empty or unknown. Byte-identical to every other auth gate: clients and
+/// tests pin it.
+pub(crate) const INVALID_OR_MISSING_TOKEN_BODY: &str = r#"{"error":"invalid or missing token"}"#;
+
+/// 0.46.3: the refusal body for a caller who IS signed in (a Member login
+/// or an agent passport) but may not manage. It used to get
+/// [`INVALID_OR_MISSING_TOKEN_BODY`], which sent people chasing a token
+/// problem they did not have.
+pub(crate) const OWNER_ADMIN_ONLY_BODY: &str = r#"{"error":"owner/admin only","code":"owner_admin_only","message":"Only the owner or an admin can do this. You are signed in, but not as the owner or an admin."}"#;
+
+/// Which 403 body [`require_manage`] answers with when the caller can't
+/// manage: [`OWNER_ADMIN_ONLY_BODY`] for an authenticated caller (a live
+/// login session below Admin, or a valid agent passport),
+/// [`INVALID_OR_MISSING_TOKEN_BODY`] for everything else. Never consulted
+/// for a caller who can manage.
+pub(crate) fn manage_refusal_body(query: &str, owner_token: &str) -> &'static str {
+    let Some(tok) = extract_token(query).filter(|t| !t.is_empty()) else {
+        return INVALID_OR_MISSING_TOKEN_BODY;
+    };
+    let authenticated = actor_role(query, owner_token).is_some()
+        || crate::session_token::validate_hook(tok).is_some();
+    if authenticated {
+        OWNER_ADMIN_ONLY_BODY
+    } else {
+        INVALID_OR_MISSING_TOKEN_BODY
     }
 }
 
@@ -2797,6 +2826,59 @@ mod tests {
                 !token_is_owner_or_admin(&format!("token={session}"), owner),
                 "a Member-role connect-user session must NOT pass the owner-or-admin gate",
             );
+        });
+    }
+
+    // ── manage_refusal_body: 0.46.3 A3 ───────────────────────────────────
+    //
+    // An authenticated caller that can't manage hears "owner/admin only";
+    // the unauthenticated body stays byte-identical (clients pin it).
+
+    #[test]
+    fn manage_refusal_unauthenticated_body_is_byte_identical() {
+        with_temp_home(|| {
+            let owner = "owner-token-xyz";
+            for q in ["", "token=", "token=not-a-session", "project=/tmp/x"] {
+                assert_eq!(
+                    manage_refusal_body(q, owner),
+                    r#"{"error":"invalid or missing token"}"#,
+                    "query {q:?} must keep the pinned body",
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn manage_refusal_says_owner_admin_only_to_a_member_and_an_agent() {
+        with_temp_home(|| {
+            let owner = "owner-token-xyz";
+            k2_core::connect_users::add_user("member_user", "password123").expect("add_user");
+            let session = k2_core::connect_users::create_session("member_user");
+            assert_eq!(
+                manage_refusal_body(&format!("token={session}"), owner),
+                OWNER_ADMIN_ONLY_BODY,
+                "a Member login is signed in: owner/admin only",
+            );
+            let sid = k2_core::session::SessionId::new();
+            let passport = crate::session_token::mint_session_token(
+                &sid,
+                &sid.to_string(),
+                crate::session_token::HookPrincipal {
+                    workspace_uuid: "ws-manage-refusal".to_string(),
+                    agent_address: "agent".to_string(),
+                },
+                crate::session_token::CredMode::ApiKey,
+                crate::session_token::Provider::Anthropic,
+            );
+            assert_eq!(
+                manage_refusal_body(&format!("token={passport}"), owner),
+                OWNER_ADMIN_ONLY_BODY,
+                "an agent passport is signed in: owner/admin only",
+            );
+            let v: serde_json::Value =
+                serde_json::from_str(OWNER_ADMIN_ONLY_BODY).expect("owner/admin body is JSON");
+            assert_eq!(v["error"], "owner/admin only");
+            assert_eq!(v["code"], "owner_admin_only");
         });
     }
 

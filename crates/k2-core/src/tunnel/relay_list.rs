@@ -320,8 +320,16 @@ struct RefreshState {
     checked_list: Option<Vec<RelayEndpoint>>,
     /// The server's (clamped) refresh interval from that fetch.
     refresh: Option<Duration>,
-    /// The last error, cleared by a success.
+    /// The last error, cleared by a success. A 401 is not an error here
+    /// (see `refused_at`).
     last_error: Option<String>,
+    /// Unix seconds of the last 401 from k2.dev, cleared by a success.
+    /// 0.46.3: k2.dev serves the list only for a token it holds as an
+    /// active subdomain row, while the relays also take seeded and
+    /// freshly provisioned tokens. So a tunnel can run fine on a token
+    /// k2.dev does not list: that is a normal state (the saved list stays
+    /// in use), reported as a notice, never as "refresh failed".
+    refused_at: Option<u64>,
     /// Last error text that was logged (log-once).
     logged_error: Option<String>,
     /// Attempts made (tests / diagnostics).
@@ -397,6 +405,7 @@ pub fn refresh_once() -> RefreshOutcome {
             st.refresh = Some(list.refresh);
             st.checked_list = Some(list.relays.clone());
             st.last_error = None;
+            st.refused_at = None;
             st.logged_error = None;
             if wrote {
                 crate::log_debug!(
@@ -418,13 +427,22 @@ pub fn refresh_once() -> RefreshOutcome {
                 crate::log_debug!("[tunnel/relays] relay list refresh failed, keeping the old list: {msg}");
                 st.logged_error = Some(msg.clone());
             }
-            st.last_error = Some(msg);
+            if e == FetchError::Unauthorized {
+                st.refused_at = Some(now_unix());
+                st.last_error = None;
+            } else {
+                st.last_error = Some(msg);
+            }
             RefreshOutcome::Failed(e)
         }
     }
 }
 
 // ── Status ────────────────────────────────────────────────────────────
+
+/// [`RelayListStatus::notice`] text after a 401 from k2.dev.
+pub const NOTICE_NOT_SERVED: &str =
+    "k2.dev does not hand out a relay list for this tunnel token; the saved list stays in use";
 
 /// Where the list on disk came from.
 pub const SOURCE_FETCHED: &str = "fetched";
@@ -445,9 +463,16 @@ pub struct RelayListStatus {
     /// Unix seconds when a fetched list was last WRITTEN (it changed).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub changed_at: Option<u64>,
-    /// The last refresh error (cleared by the next success).
+    /// The last refresh error (cleared by the next success). Never a 401:
+    /// that is [`RelayListStatus::notice`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
+    /// 0.46.3: set when k2.dev answered the last refresh with 401 — it
+    /// does not serve a relay list for this tunnel token (a seeded or
+    /// freshly provisioned token the relays accept). Not a failure: the
+    /// saved list stays in use. Cleared by the next success.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notice: Option<String>,
     /// The refresh interval in use, seconds.
     pub refresh_s: u64,
 }
@@ -471,6 +496,7 @@ pub fn status_for(cfg: &TunnelConfig) -> RelayListStatus {
         checked_at: st.checked_at,
         changed_at: cfg.relays_fetched_at,
         last_error: st.last_error,
+        notice: st.refused_at.map(|_| NOTICE_NOT_SERVED.to_string()),
         refresh_s: st.refresh.unwrap_or(DEFAULT_REFRESH).as_secs(),
     }
 }
@@ -981,13 +1007,50 @@ mod tests {
             );
             let st = status_for(&config::load().expect("load"));
             assert_eq!(st.source, SOURCE_PROVISIONED);
-            assert!(st.last_error.is_some(), "status must carry the error");
+            if status == 401 {
+                // 0.46.3: a 401 is a notice (k2.dev does not list this
+                // token), never "refresh failed".
+                assert_eq!(st.last_error, None, "a 401 must not read as a failure");
+                assert_eq!(st.notice.as_deref(), Some(NOTICE_NOT_SERVED));
+            } else {
+                assert!(st.last_error.is_some(), "status must carry the error");
+                assert_eq!(st.notice, None, "only a 401 sets the notice");
+            }
         });
     }
 
     #[test]
     fn unauthorized_keeps_the_old_list() {
         assert_kept_old(401, r#"{"code":"tunnel_only"}"#, |e| *e == FetchError::Unauthorized);
+    }
+
+    /// 0.46.3: a later success clears the 401 notice, and the status JSON
+    /// never says "failed" for it.
+    #[test]
+    fn unauthorized_notice_is_cleared_by_the_next_success() {
+        with_temp_home(|| {
+            reset_state_for_test();
+            seed("k2c_good");
+            {
+                let srv = FakeServer::start(401, r#"{"code":"tunnel_only"}"#);
+                let _u = crate::test_env::EnvVar::set(RELAY_LIST_URL_ENV, &srv.url);
+                assert_eq!(refresh_once(), RefreshOutcome::Failed(FetchError::Unauthorized));
+                srv.next_request();
+            }
+            let st = status_for(&config::load().expect("load"));
+            let wire = serde_json::to_string(&st).expect("serialize");
+            assert!(wire.contains(r#""notice":"#), "{wire}");
+            assert!(!wire.contains("last_error"), "a 401 must not be a last_error: {wire}");
+            assert!(!wire.to_ascii_lowercase().contains("fail"), "{wire}");
+
+            let srv = FakeServer::start(200, GOOD);
+            let _u = crate::test_env::EnvVar::set(RELAY_LIST_URL_ENV, &srv.url);
+            assert_eq!(refresh_once(), RefreshOutcome::Updated(both()));
+            srv.next_request();
+            let st = status_for(&config::load().expect("load"));
+            assert_eq!(st.notice, None, "a success clears the notice");
+            assert_eq!(st.last_error, None);
+        });
     }
 
     #[test]

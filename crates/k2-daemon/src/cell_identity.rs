@@ -227,6 +227,11 @@ pub struct WhoamiInfo {
     pub address: String,
     pub primary: String,
     pub session: String,
+    /// 0.46.3: the workspace folder, when it resolves. The CLI uses it so
+    /// an agent's `k2 tickets list` / `k2 activity` act on its own
+    /// workspace from any folder. Additive; older clients ignore it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
 }
 
 fn param<'a>(params: &'a HashMap<String, String>, key: &str) -> Option<&'a str> {
@@ -280,6 +285,7 @@ fn resolve_whoami(params: &HashMap<String, String>) -> Result<WhoamiInfo, String
                 address,
                 primary: primary.to_string(),
                 session: session.to_string(),
+                path: None,
             });
         }
         return Err(
@@ -408,6 +414,7 @@ fn resolve_whoami(params: &HashMap<String, String>) -> Result<WhoamiInfo, String
         address: format_address(&primary, sidecar_handle.as_deref()),
         primary,
         session,
+        path: crate::workspace_msg::resolve_workspace(&project_id),
     })
 }
 

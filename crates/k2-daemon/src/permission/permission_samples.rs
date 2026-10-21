@@ -530,11 +530,9 @@ fn click_card(out: &mut Out, state: &str) -> (World, String, i64) {
         }
         "already_done" => {
             set_behaviour(Behaviour::AlreadyOn);
-            view::test_checks::set(id, Check::AlreadyDone);
         }
         "already_done-closed" => {
             set_behaviour(Behaviour::AlreadyOn);
-            view::test_checks::set(id, Check::AlreadyDone);
             let v = answer_ok(ROSSON, &w, &card, json!({ "answer": "Close", "client": "phone" }));
             response(out, "close", 200, v, &card, CARD_ID);
         }

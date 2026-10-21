@@ -26,12 +26,17 @@ use crate::sidecar_routes::Caller;
 /// written) and this thread's own DB (the server-wide pending cap and the
 /// logins list see only this test's rows).
 struct Env {
-    _home: crate::test_support::TempHome,
     _db: k2_core::db::TestDbGuard,
+    _home: crate::test_support::TempHome,
+    /// mail.send-mode reads the singleton `mail_server` row. Taken first
+    /// (the order every mail test uses: the mail lock, then the HOME lock).
+    _mail: crate::mail::MailServerTestGuard,
 }
 
 fn env() -> Env {
-    Env { _home: crate::test_support::TempHome::new(), _db: k2_core::db::scoped_for_test() }
+    let mail = crate::mail::mail_server_test_lock();
+    let home = crate::test_support::TempHome::new();
+    Env { _db: k2_core::db::scoped_for_test(), _home: home, _mail: mail }
 }
 
 struct Ws {
@@ -77,14 +82,20 @@ fn ask(ws: &Ws, action: &str, params: Value) -> (String, Value) {
     (r.status.to_string(), serde_json::from_str(&r.body).unwrap_or_else(|e| panic!("{e}: {}", r.body)))
 }
 
+/// The card and the request id, as `<card>#<request>`: asks close
+/// together share a batch card, whose answers name the item.
 fn ask_card(ws: &Ws, action: &str, params: Value) -> String {
     let (s, v) = ask(ws, action, params);
     assert_eq!((s.as_str(), v["status"].as_str()), ("200 OK", Some("pending")), "{action}: {v}");
-    v["card"].as_str().unwrap_or_else(|| panic!("no card: {v}")).to_string()
+    let card = v["card"].as_str().unwrap_or_else(|| panic!("no card: {v}"));
+    let id = v["id"].as_str().unwrap_or_else(|| panic!("no id: {v}"));
+    format!("{card}#{id}")
 }
 
 fn answer(author: &str, ws: &Ws, card: &str, label: &str) -> (String, Value) {
-    let b = json!({ "addr": ws.handle, "id": card, "answer": label });
+    let (card, item) = card.split_once('#').unwrap_or_else(|| panic!("a card from ask_card: {card}"));
+    // `item` is read on a batch card only; a single card ignores it.
+    let b = json!({ "addr": ws.handle, "id": card, "answer": label, "item": item });
     let r = crate::overlay_routes::dispatch_post_as("/cli/thread/answer", &HashMap::new(), b.to_string().as_bytes(), author);
     (r.status.to_string(), serde_json::from_str(&r.body).unwrap_or_else(|e| panic!("{e}: {}", r.body)))
 }
@@ -658,7 +669,12 @@ fn keep_mine_through_the_card_takes_the_gardens_owner() {
     let ws = Ws { id: "w-e1-keep".into(), handle: "w-e1-keep".into(), path: "/tmp/zen-e1/w-e1-keep".into() };
     let (s, v) = zen("/cli/zen/widget/folder/put", false, &mgr, json!({"widget": "board", "files": widget_folder("board", "agent")}));
     assert_eq!(s, "200 OK", "{v}");
-    let live = e.f.widget_status("board").bundle.expect("a good version").hash;
+    let full = e.f.widget_status("board").bundle.expect("a good version").hash;
+    // The card names the version by its first 12 characters (a 64-hex hash
+    // is refused as secret-shaped, and the short form is what K2 shows).
+    let live = full[..12].to_string();
+    let (s, v) = ask(&ws, "garden.keep-mine", json!({ "widget": "board", "version": full }));
+    assert_eq!((s.as_str(), v["error"]["code"].as_str()), ("400 Bad Request", Some("bad_params")), "{v}");
     assert_ne!(crate::zen_routes::widget_live_version("board").expect("live").1, k2_core::garden_data::MadeBy::Owner);
     // A version that isn't live: refused at the ask.
     let (s, v) = ask(&ws, "garden.keep-mine", json!({ "widget": "board", "version": "0".repeat(64) }));
@@ -677,7 +693,7 @@ fn keep_mine_through_the_card_takes_the_gardens_owner() {
     // The widget changes after the ask: stale at the click.
     let (s, v) = zen("/cli/zen/widget/folder/put", false, &mgr, json!({"widget": "board", "files": widget_folder("board", "agent2")}));
     assert_eq!(s, "200 OK", "{v}");
-    let live2 = e.f.widget_status("board").bundle.expect("a good version").hash;
+    let live2 = e.f.widget_status("board").bundle.expect("a good version").hash[..12].to_string();
     let card = ask_card(&ws, "garden.keep-mine", json!({ "widget": "board", "version": live2 }));
     let (s, v) = zen("/cli/zen/widget/folder/put", false, &mgr, json!({"widget": "board", "files": widget_folder("board", "agent3")}));
     assert_eq!(s, "200 OK", "{v}");

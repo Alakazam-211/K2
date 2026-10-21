@@ -10,6 +10,9 @@
 //! runs `zen_routes::garden_owner_may`, the one resolver Settings' "It's
 //! mine" uses too, so card and Settings stay one door (§6.4, C15).
 //!
+//! `version=` is the hash's first 12+ hex characters (the short form K2
+//! shows; a full hash is refused as secret-shaped).
+//!
 //! The current state (§6.2): the live version must still be `version`
 //! (else `stale`: the widget changed since the ask); a version that is
 //! already the person's is `already_done`.
@@ -55,13 +58,25 @@ pub(crate) static KEEP_MINE: ActionSpec = ActionSpec {
     machine_hints: &[],
 };
 
+/// A widget version on a card is its hash's first characters (at least
+/// this many hex digits): a full 64-hex hash is refused as secret-shaped by
+/// the request checks, and the short form is what K2 shows people.
+pub(crate) const MIN_VERSION: usize = 12;
+
+fn version_ok(v: &str) -> bool {
+    v.len() >= MIN_VERSION && v.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
 fn check_keep(ctx: &Ctx) -> Check {
     let (Some(widget), Some(version)) = (param(ctx, "widget"), param(ctx, "version")) else {
         return Check::Moved("name the widget and its version: widget=<name> version=<hash>".into());
     };
+    if !version_ok(version) {
+        return Check::Moved(format!("version= is the first {MIN_VERSION}+ characters of {widget}'s version (k2 zen widgets shows it)"));
+    }
     match crate::zen_routes::widget_live_version(widget) {
         Err(m) => Check::Moved(m),
-        Ok((live, _)) if live != version => {
+        Ok((live, _)) if !live.starts_with(version) => {
             Check::Moved(format!("{widget} changed since this was asked (its live version is now {}); ask again", &live[..live.len().min(12)]))
         }
         Ok((_, MadeBy::Owner)) => Check::AlreadyDone,

@@ -602,6 +602,54 @@ pub(crate) fn file_owners_only_notice(
     file_notice_for(project_id, agent_name, title, body, false)
 }
 
+/// A permission card's Tickets item (prd-agent-settings-cards-v1 rev 3.1
+/// §6.7, C26): an `fyi` ticket on the asking agent's workspace, assigned to
+/// `eligible` only — the logins at the card's floor, never wider. With
+/// nobody eligible it stays unassigned and **no push** goes out (an
+/// unassigned ticket push would reach every device). Filed by the card's
+/// routing when nobody who may answer looked at that Thread lately; a
+/// sibling of [`file_owner_notice`], whose callers are untouched.
+pub(crate) fn file_permission_notice(
+    project_id: &str,
+    agent_name: &str,
+    title: &str,
+    body: &str,
+    eligible: &[String],
+) -> Result<feedback::FeedbackItem, String> {
+    let mut item = feedback::create(feedback::NewFeedback {
+        project_id: project_id.to_string(),
+        agent_name: agent_name.to_string(),
+        kind: "fyi".to_string(),
+        title: title.to_string(),
+        body: Some(body.to_string()),
+        priority: 2,
+        ..Default::default()
+    })?;
+    let mut people: Vec<String> = eligible.iter().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect();
+    people.sort();
+    people.dedup();
+    if !people.is_empty() {
+        item = feedback::set_assignees(&item.id, &people)?;
+    }
+    let (_, path) = project_name_path(&item.project_id);
+    k2_core::agent_hooks::emit(
+        k2_core::agent_hooks::HookEvent::FeedbackCreated,
+        serde_json::json!({
+            "id": item.id,
+            "projectPath": path,
+            "title": item.title,
+            "kind": item.kind,
+            "priority": item.priority,
+            "agentName": item.agent_name,
+        }),
+    );
+    if !item.assignees.is_empty() {
+        crate::push_routes::notify_feedback_created(&item.agent_name, &item.id, &item.assignees);
+    }
+    emit_ticket_changed(&item, CHANGE_CREATED, None);
+    Ok(item)
+}
+
 fn file_notice_for(
     project_id: &str,
     agent_name: &str,

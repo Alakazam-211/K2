@@ -218,6 +218,8 @@ pub struct Node {
     pub stuck_track: crate::admin::housekeeping::StuckTrack,
     /// Offered self-update builds being received (in memory only).
     pub admin_updates: crate::admin::courier::IncomingUpdates,
+    /// The node queue (shared nodes; prd-compute-shared-queue-v1 §7).
+    pub fairq: crate::fairq::FairQ,
 }
 
 /// What this node understands beyond protocol 1 (the offer says it).
@@ -282,6 +284,7 @@ impl Node {
             admin_updates: Default::default(),
             stuck_track: Default::default(),
             updates_refreshing: Default::default(),
+            fairq: crate::fairq::FairQ::open(&layout)?,
             opts,
         });
         node.refresh_local(true);
@@ -556,6 +559,7 @@ impl Node {
     }
 
     fn jobs_changed(&self) {
+        self.fairq.kick.notify_one();
         self.notify_offers();
         self.notify_ship();
         let running = !self.jobs.lock().unwrap().is_empty();
@@ -665,8 +669,9 @@ impl Node {
         }
     }
 
-    /// Background loops: config poll, power, tools, janitor.
+    /// Background loops: config poll, power, tools, janitor, the queue.
     pub fn spawn_background(self: &Arc<Self>) {
+        crate::fairq::spawn(self);
         let node = self.clone();
         tokio::spawn(async move {
             let mut n = 0u64;
@@ -840,9 +845,24 @@ mod wall_tests {
         assert_eq!(n.on_assign(&t1, assign_for("x", "node-a", &["/bin/echo", "x"])), None);
         assert!(t1.ledger.lock().unwrap().get("x", 1).unwrap().is_none());
 
+        // Both servers are approved, speak protocol 3 and have a session
+        // (a stand-in channel), as S1 sets up; the queue starts both.
+        let share = |label: &str| {
+            let limits = k2_node_proto::share::ShareLimits { max_running: 2, ..k2_node_proto::share::ShareLimits::new_server(k2_node_proto::share::Trust::Own, false) };
+            Some(crate::fairq::ShareInfo { label: label.into(), limits, status: k2_node_proto::share::ServerStatus::Active })
+        };
+        n.fairq.set_share(0, share("a"));
+        n.fairq.set_share(1, share("b"));
+        n.fairq.set_protocol(0, Some(3));
+        n.fairq.set_protocol(1, Some(3));
+        let (tx0, _rx0) = tokio::sync::mpsc::channel(256);
+        let (tx1, _rx1) = tokio::sync::mpsc::channel(256);
+        owner.hub.attach(tx0);
+        t1.hub.attach(tx1);
         let long = ["/bin/sh", "-c", "echo owner; sleep 30"];
         assert_eq!(n.on_assign(&owner, assign_for("j", "node-a", &long)), Some(("j".into(), 1)));
         assert_eq!(n.on_assign(&t1, assign_for("j", "node-b", &["/bin/sh", "-c", "echo tenant; sleep 30"])), Some(("j".into(), 1)));
+        n.fairq.tick(&n);
         let running = n.running_by_tenant();
         assert_eq!((running.get(&0), running.get(&1)), (Some(&vec!["j".to_string()]), Some(&vec!["j".to_string()])), "{running:?}");
 

@@ -61,6 +61,50 @@ pub mod codes {
 
 pub type Fail = (&'static str, String);
 
+/// Toolchain resolves in progress, by toolchains root, since when.
+static INSTALLING: std::sync::Mutex<BTreeMap<PathBuf, Vec<std::time::Instant>>> = std::sync::Mutex::new(BTreeMap::new());
+
+/// A resolve this long is installing something (an already-installed
+/// toolchain resolves in well under it).
+pub const INSTALLING_AFTER: Duration = Duration::from_secs(2);
+
+/// Held for one `resolve` (prd-compute-shared-queue-v1 §7, V76: the node
+/// queue starts nothing new while a toolchain install runs, `installing_tools`).
+pub struct Installing {
+    root: PathBuf,
+    at: std::time::Instant,
+}
+
+impl Installing {
+    pub fn start(root: &Path) -> Self {
+        let at = std::time::Instant::now();
+        INSTALLING.lock().unwrap().entry(root.to_path_buf()).or_default().push(at);
+        Self { root: root.to_path_buf(), at }
+    }
+}
+
+impl Drop for Installing {
+    fn drop(&mut self) {
+        let mut m = INSTALLING.lock().unwrap();
+        if let Some(v) = m.get_mut(&self.root) {
+            v.retain(|t| *t != self.at);
+            if v.is_empty() {
+                m.remove(&self.root);
+            }
+        }
+    }
+}
+
+/// Is a toolchain install running under `root` (a resolve held at least
+/// [`INSTALLING_AFTER`])?
+pub fn installing(root: &Path) -> bool {
+    installing_after(root, INSTALLING_AFTER)
+}
+
+fn installing_after(root: &Path, after: Duration) -> bool {
+    INSTALLING.lock().unwrap().get(root).is_some_and(|v| v.iter().any(|t| t.elapsed() >= after))
+}
+
 /// Where everything lives, and the env the installers run with.
 #[derive(Debug, Clone)]
 pub struct Toolchains {
@@ -357,6 +401,7 @@ impl Toolchains {
     /// Everything the job needs, installed. `explicit` failures fail the
     /// job; repo-declared ones become notes.
     pub async fn resolve(&self, explicit: &[Need], repo: &[(Need, String)], rust_file: Option<&RustToolchain>, log: &mut (dyn FnMut(&str) + Send)) -> Result<Resolved, Fail> {
+        let _installing = Installing::start(&self.root);
         let mut out = Resolved::default();
         let explicit_keys: Vec<String> = explicit.iter().map(Need::key).collect();
         let mut work: Vec<(Need, Option<String>)> = explicit.iter().cloned().map(|n| (n, None)).collect();
@@ -655,6 +700,23 @@ pub fn declared_in_repo(root: &Path) -> (Vec<(Need, String)>, Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// V76: a resolve in progress (long enough to be an install) holds the
+    /// node queue; per toolchains root; gone when the resolve ends.
+    #[test]
+    fn a_long_resolve_counts_as_installing() {
+        let d = crate::util::temp_dir("installing");
+        let (a, b) = (d.join("a/toolchains"), d.join("b/toolchains"));
+        assert!(!installing_after(&a, Duration::ZERO));
+        let g1 = Installing::start(&a);
+        let g2 = Installing::start(&a);
+        assert!(installing_after(&a, Duration::ZERO) && !installing_after(&b, Duration::ZERO));
+        assert!(!installing(&a), "a quick resolve isn't an install yet");
+        drop(g1);
+        assert!(installing_after(&a, Duration::ZERO), "the other resolve still runs");
+        drop(g2);
+        assert!(!installing_after(&a, Duration::ZERO));
+    }
 
     fn write(root: &Path, rel: &str, body: &str) {
         let p = root.join(rel);

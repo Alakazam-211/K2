@@ -1,0 +1,371 @@
+//! The node queue on a shared node (prd-compute-shared-queue-v1 §7, §16
+//! tier 1): one real node, two fake servers (the owner at slot 0, another
+//! at slot 1), real jobs.
+//!
+//! Until lane S1 wires them into the session, these tests do what S1's
+//! session will: set each server's share and protocol, and call
+//! `queue_attach` with the `Welcome.resume` after each attach.
+
+mod common;
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use common::*;
+use k2_node::fairq::ShareInfo;
+use k2_node::node::Tenant;
+use k2_node_proto::frames::{Cancel, Frame, JobState, ResumeHint, CANCEL_IF_QUEUED, CANCEL_WITHDRAW};
+use k2_node_proto::share::{codes, JobClass, ServerStatus, ShareLimits, Trust};
+
+fn limits() -> ShareLimits {
+    ShareLimits { max_running: 4, max_queued: 10, weight: 1, ..ShareLimits::new_server(Trust::Own, false) }
+}
+
+fn share(label: &str, limits: ShareLimits, status: ServerStatus) -> Option<ShareInfo> {
+    Some(ShareInfo { label: label.into(), limits, status })
+}
+
+/// One node shared by servers A (owner) and B.
+struct Two {
+    a: Fake,
+    b: Fake,
+    n: TestNode,
+    ca: Conn,
+    cb: Conn,
+    owner: Arc<Tenant>,
+    tb: Arc<Tenant>,
+    b_runner: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for Two {
+    fn drop(&mut self) {
+        self.b_runner.abort();
+    }
+}
+
+async fn two(tag: &str, policy_extra: &str) -> Two {
+    let a = Fake::start().await;
+    let mut b = Fake::start().await;
+    let n = start_node(&a, tag, policy_extra, |_| {}).await;
+    let key = k2_node::identity::load_or_create_key(&n.layout.key()).unwrap();
+    b.register_active(&key, "node-b", "mini-1");
+    let tl = n.layout.tenant(1);
+    tl.ensure_state().unwrap();
+    k2_node::identity::write_pin(&tl.pin(), &b.pin_for("node-b", "mini-1")).unwrap();
+    let tb = n.node.add_tenant(1).await.unwrap();
+    let owner = n.node.owner();
+    n.node.fairq.set_share(0, share("a.k2.dev", limits(), ServerStatus::Active));
+    n.node.fairq.set_share(1, share("b.k2.dev", limits(), ServerStatus::Active));
+    n.node.fairq.set_protocol(0, Some(3));
+    n.node.fairq.set_protocol(1, Some(3));
+    let b_runner = tokio::spawn(k2_node::session::run_tenant_forever(n.node.clone(), tb.clone()));
+    let mut a2 = a;
+    let mut ca = a2.next_conn().await;
+    ready(&mut ca).await;
+    n.node.queue_attach(&owner, &[]);
+    let mut cb = b.next_conn().await;
+    ready(&mut cb).await;
+    n.node.queue_attach(&tb, &[]);
+    assert!(n.node.fairq.shared(0));
+    Two { a: a2, b, n, ca, cb, owner, tb, b_runner }
+}
+
+/// A plan from server A (`node-1`) or B (`node-b`).
+fn job(node_id: &str, id: &str, argv: &[&str]) -> k2_node_proto::frames::Plan {
+    let mut p = plan(id, argv);
+    p.node_id = node_id.into();
+    p
+}
+
+/// Poll `t`'s ledger until `job`/`gen` matches `pred` (20 s).
+async fn wait_row(t: &Tenant, id: &str, gen: u32, what: &str, pred: impl Fn(&k2_node::ledger::Row) -> bool) -> k2_node::ledger::Row {
+    for _ in 0..400 {
+        if let Some(r) = t.ledger.lock().unwrap().get(id, gen).unwrap() {
+            if pred(&r) {
+                return r;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("{id} g{gen} on slot {} never became {what}: {:?}", t.slot, t.ledger.lock().unwrap().get(id, gen).unwrap());
+}
+
+fn started(r: &k2_node::ledger::Row) -> bool {
+    r.started_at.is_some()
+}
+
+fn queued(r: &k2_node::ledger::Row) -> bool {
+    r.state == JobState::Queued
+}
+
+fn ended(r: &k2_node::ledger::Row) -> bool {
+    r.state.is_terminal() && r.receipt.is_some()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn jobs_wait_in_the_queue_and_start_in_fair_order() {
+    let mut w = two("q-fair", "max_parallel = 1\n").await;
+    w.ca.send(Frame::Assign(assign(job("node-1", "a1", &["/bin/sh", "-c", "sleep 1.5"]), 1)));
+    wait_row(&w.owner, "a1", 1, "started", started).await;
+    w.ca.send(Frame::Assign(assign(job("node-1", "a2", &["/bin/sh", "-c", "echo a2"]), 1)));
+    w.cb.send(Frame::Assign(assign(job("node-b", "b1", &["/bin/sh", "-c", "echo b1"]), 1)));
+    let a2 = wait_row(&w.owner, "a2", 1, "queued", queued).await;
+    let b1 = wait_row(&w.tb, "b1", 1, "queued", queued).await;
+    assert_eq!((a2.reason.as_deref(), b1.reason.as_deref()), (Some(codes::NODE_QUEUED), Some(codes::NODE_QUEUED)));
+    assert!(a2.enqueued_at.unwrap() <= b1.enqueued_at.unwrap(), "a2 came first");
+    // B is told where it stands.
+    let fr = w.cb.until(|f| matches!(f, Frame::State(s) if s.job_id == "b1" && s.queue.is_some())).await;
+    let Some(Frame::State(s)) = fr.last() else { unreachable!() };
+    assert_eq!((s.state, s.reason.as_deref()), (JobState::Queued, Some(codes::NODE_QUEUED)));
+    // First or second, depending on whether a1's CPU was counted yet; never
+    // blocked, and an ETA (a1 has no estimate yet, so maybe unknown).
+    let qp = s.queue.as_ref().unwrap();
+    assert!(matches!(qp.pos, 1 | 2) && qp.blocked_by.is_none(), "{qp:?}");
+    // a1 ends: A has used the node, B hasn't, so b1 goes before the older a2.
+    let b1 = wait_row(&w.tb, "b1", 1, "ended", ended).await;
+    let a2 = wait_row(&w.owner, "a2", 1, "ended", ended).await;
+    assert_eq!((b1.state, a2.state), (JobState::Done, JobState::Done));
+    assert!(b1.started_at.unwrap() <= a2.started_at.unwrap(), "fair share: b1 {b1:?} a2 {a2:?}");
+    assert!(w.n.node.fairq.usage(w.n.node.now()).get(&0).is_some_and(|u| *u > 0), "a1's CPU counted");
+    let _ = &w.a;
+    let _ = &w.b;
+}
+
+/// A queued job doesn't start while its server is away; after a
+/// reconnect only the rows `Welcome.resume` lists may start, the rest end
+/// `superseded` and never run (V47).
+#[tokio::test(flavor = "multi_thread")]
+async fn queued_jobs_wait_for_their_server_and_the_resume_list_decides() {
+    let mut w = two("q-away", "max_parallel = 1\n").await;
+    w.ca.send(Frame::Assign(assign(job("node-1", "hold", &["/bin/sh", "-c", "sleep 30"]), 1)));
+    wait_row(&w.owner, "hold", 1, "started", started).await;
+    w.cb.send(Frame::Assign(assign(job("node-b", "gone", &["/bin/sh", "-c", "echo gone"]), 1)));
+    w.cb.send(Frame::Assign(assign(job("node-b", "kept", &["/bin/sh", "-c", "echo kept"]), 1)));
+    wait_row(&w.tb, "gone", 1, "queued", queued).await;
+    wait_row(&w.tb, "kept", 1, "queued", queued).await;
+    // B goes away; the node redials it (a new session, not yet gated).
+    *w.b.resume.lock().unwrap() = vec![ResumeHint { job_id: "kept".into(), generation: 1, since_seq: 0 }];
+    w.cb.tx.send(Out::Close).unwrap();
+    let mut cb2 = w.b.next_conn().await;
+    ready(&mut cb2).await;
+    // Capacity frees, and A has queued work too: only A's job may start.
+    w.ca.send(Frame::Assign(assign(job("node-1", "a-next", &["/bin/sh", "-c", "echo next"]), 1)));
+    wait_row(&w.owner, "a-next", 1, "queued", queued).await;
+    w.ca.send(Frame::Cancel(Cancel { job_id: "hold".into(), generation: 1, reason: "cancelled".into() }));
+    wait_row(&w.owner, "a-next", 1, "ended", ended).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(wait_row(&w.tb, "gone", 1, "still queued", queued).await.started_at.is_none());
+    assert!(wait_row(&w.tb, "kept", 1, "still queued", queued).await.started_at.is_none(), "B's session isn't gated yet");
+    // The attach lists only "kept".
+    w.n.node.queue_attach(&w.tb, &w.b.resume.lock().unwrap().clone());
+    let g = wait_row(&w.tb, "gone", 1, "superseded", ended).await;
+    assert_eq!((g.state, g.reason.as_deref(), g.started_at), (JobState::Cancelled, Some(codes::SUPERSEDED), None));
+    let k = wait_row(&w.tb, "kept", 1, "ended", ended).await;
+    assert_eq!(k.state, JobState::Done);
+    let fr = cb2.until(|f| matches!(f, Frame::State(s) if s.job_id == "gone" && s.state == JobState::Cancelled)).await;
+    let Some(Frame::State(s)) = fr.last() else { unreachable!() };
+    assert_eq!(s.reason.as_deref(), Some(codes::SUPERSEDED));
+}
+
+/// Queued rows survive a k2-node restart; the started one doesn't (V47).
+#[tokio::test(flavor = "multi_thread")]
+async fn queued_rows_survive_a_restart() {
+    let w = two("q-restart", "max_parallel = 1\n").await;
+    w.ca.send(Frame::Assign(assign(job("node-1", "hold", &["/bin/sh", "-c", "sleep 30"]), 1)));
+    wait_row(&w.owner, "hold", 1, "started", started).await;
+    w.ca.send(Frame::Assign(assign(job("node-1", "a-q", &["/bin/echo", "x"]), 1)));
+    w.cb.send(Frame::Assign(assign(job("node-b", "b-q", &["/bin/echo", "x"]), 1)));
+    wait_row(&w.owner, "a-q", 1, "queued", queued).await;
+    wait_row(&w.tb, "b-q", 1, "queued", queued).await;
+    // Freeze this process's queue, then open a second node on the same
+    // dirs, as a restarted k2-node would.
+    w.n.node.fairq.set_blocked(0, Some("test_restart".into()));
+    w.n.node.fairq.set_blocked(1, Some("test_restart".into()));
+    let layout = w.n.layout.clone();
+    let again = k2_node::node::Node::open(options(layout)).await.unwrap();
+    let t1 = again.add_tenant(1).await.unwrap();
+    let hold = again.owner().ledger.lock().unwrap().get("hold", 1).unwrap().unwrap();
+    assert_eq!((hold.state, hold.reason.as_deref()), (JobState::Interrupted, Some("node_restart")), "the started job can't be re-adopted");
+    for (t, id) in [(again.owner(), "a-q"), (t1, "b-q")] {
+        let r = t.ledger.lock().unwrap().get(id, 1).unwrap().unwrap();
+        assert_eq!((r.state, r.reason.as_deref()), (JobState::Queued, Some(codes::NODE_QUEUED)), "{id} survives");
+    }
+    w.n.node.stop_all(JobState::Cancelled, "test_over");
+}
+
+/// `withdraw` and `if_queued` end only queued jobs; a started job answers
+/// its real state and keeps running (V57). A withdrawn job comes back
+/// under a new generation and runs (V46).
+#[tokio::test(flavor = "multi_thread")]
+async fn withdraw_never_touches_a_started_job_and_a_new_generation_runs() {
+    let mut w = two("q-withdraw", "max_parallel = 1\n").await;
+    w.ca.send(Frame::Assign(assign(job("node-1", "hold", &["/bin/sh", "-c", "sleep 30"]), 1)));
+    wait_row(&w.owner, "hold", 1, "started", started).await;
+    // Past the shipper's earlier frames (queued, then running).
+    w.ca.until(|f| matches!(f, Frame::State(s) if s.job_id == "hold" && s.state == JobState::Running)).await;
+    for reason in [CANCEL_IF_QUEUED, CANCEL_WITHDRAW] {
+        w.ca.send(Frame::Cancel(Cancel { job_id: "hold".into(), generation: 1, reason: reason.into() }));
+        let fr = w.ca.until(|f| matches!(f, Frame::State(s) if s.job_id == "hold")).await;
+        let Some(Frame::State(s)) = fr.last() else { unreachable!() };
+        assert_eq!(s.state, JobState::Running, "{reason} answers the real state");
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(w.owner.ledger.lock().unwrap().get("hold", 1).unwrap().unwrap().state, JobState::Running, "still running");
+
+    w.cb.send(Frame::Assign(assign(job("node-b", "mv", &["/bin/sh", "-c", "echo moved"]), 1)));
+    wait_row(&w.tb, "mv", 1, "queued", queued).await;
+    w.cb.send(Frame::Cancel(Cancel { job_id: "mv".into(), generation: 1, reason: CANCEL_WITHDRAW.into() }));
+    let r = wait_row(&w.tb, "mv", 1, "withdrawn", ended).await;
+    assert_eq!((r.state, r.reason.as_deref(), r.started_at), (JobState::Cancelled, Some(codes::WITHDRAWN), None));
+    let fr = w.cb.until(|f| matches!(f, Frame::Receipt(x) if x.job_id == "mv")).await;
+    assert!(fr.iter().any(|f| matches!(f, Frame::State(s) if s.job_id == "mv" && s.reason.as_deref() == Some(codes::WITHDRAWN))));
+    // The server moves it back here under a new generation: it runs.
+    w.cb.send(Frame::Assign(assign(job("node-b", "mv", &["/bin/sh", "-c", "echo moved"]), 2)));
+    wait_row(&w.tb, "mv", 2, "queued", queued).await;
+    w.ca.send(Frame::Cancel(Cancel { job_id: "hold".into(), generation: 1, reason: "cancelled".into() }));
+    let r = wait_row(&w.tb, "mv", 2, "ended", ended).await;
+    assert_eq!(r.state, JobState::Done);
+    // A no-force cancel of a queued job ends it at once.
+    w.ca.send(Frame::Assign(assign(job("node-1", "h2", &["/bin/sh", "-c", "sleep 30"]), 1)));
+    wait_row(&w.owner, "h2", 1, "started", started).await;
+    w.cb.send(Frame::Assign(assign(job("node-b", "nf", &["/bin/echo", "x"]), 1)));
+    wait_row(&w.tb, "nf", 1, "queued", queued).await;
+    w.cb.send(Frame::Cancel(Cancel { job_id: "nf".into(), generation: 1, reason: CANCEL_IF_QUEUED.into() }));
+    let r = wait_row(&w.tb, "nf", 1, "cancelled", ended).await;
+    assert_eq!((r.state, r.reason.as_deref()), (JobState::Cancelled, Some("cancelled")));
+    w.n.node.stop_all(JobState::Cancelled, "test_over");
+}
+
+/// An old (protocol 2) owner never queues: it runs only when no other
+/// server has queued work, else `fair_share_wait` (V70 b).
+#[tokio::test(flavor = "multi_thread")]
+async fn an_old_owner_runs_only_when_nobody_else_waits() {
+    let mut w = two("q-old", "max_parallel = 3\n").await;
+    w.n.node.fairq.set_protocol(0, Some(2));
+    w.n.node.fairq.set_share(1, share("b.k2.dev", ShareLimits { max_running: 1, ..limits() }, ServerStatus::Active));
+    w.cb.send(Frame::Assign(assign(job("node-b", "b0", &["/bin/sh", "-c", "sleep 30"]), 1)));
+    wait_row(&w.tb, "b0", 1, "started", started).await;
+    w.cb.send(Frame::Assign(assign(job("node-b", "b1", &["/bin/echo", "x"]), 1)));
+    wait_row(&w.tb, "b1", 1, "queued", queued).await;
+    let a = assign(job("node-1", "old", &["/bin/echo", "old"]), 1);
+    w.ca.send(Frame::Assign(a.clone()));
+    let fr = w.ca.until(|f| matches!(f, Frame::State(s) if s.job_id == "old")).await;
+    let Some(Frame::State(s)) = fr.last() else { unreachable!() };
+    assert_eq!((s.state, s.reason.as_deref()), (JobState::Queued, Some(codes::FAIR_SHARE_WAIT)));
+    assert!(w.owner.ledger.lock().unwrap().get("old", 1).unwrap().is_none(), "a refusal is never written");
+    // Nobody else waits any more: the old owner's retry runs at once.
+    w.cb.send(Frame::Cancel(Cancel { job_id: "b1".into(), generation: 1, reason: CANCEL_WITHDRAW.into() }));
+    wait_row(&w.tb, "b1", 1, "withdrawn", ended).await;
+    w.ca.send(Frame::Assign(a));
+    let r = wait_row(&w.owner, "old", 1, "ended", ended).await;
+    assert_eq!((r.state, r.enqueued_at), (JobState::Done, None), "it ran without queueing");
+    w.n.node.stop_all(JobState::Cancelled, "test_over");
+}
+
+/// `gate` goes first but never stops a running job; one at a time.
+#[tokio::test(flavor = "multi_thread")]
+async fn gate_jumps_the_queue_and_never_kills() {
+    let mut w = two("q-gate", "max_parallel = 1\n").await;
+    w.n.node.fairq.set_share(0, share("a.k2.dev", ShareLimits { gate: true, top_class: JobClass::Gate, ..limits() }, ServerStatus::Active));
+    w.cb.send(Frame::Assign(assign(job("node-b", "b0", &["/bin/sh", "-c", "sleep 1"]), 1)));
+    wait_row(&w.tb, "b0", 1, "started", started).await;
+    w.cb.send(Frame::Assign(assign(job("node-b", "b1", &["/bin/echo", "b1"]), 1)));
+    wait_row(&w.tb, "b1", 1, "queued", queued).await;
+    let mut g = job("node-1", "g1", &["/bin/echo", "g1"]);
+    g.class = Some(JobClass::Gate);
+    w.ca.send(Frame::Assign(assign(g, 1)));
+    wait_row(&w.owner, "g1", 1, "queued", queued).await;
+    let b0 = wait_row(&w.tb, "b0", 1, "ended", ended).await;
+    assert_eq!((b0.state, b0.exit.as_ref().and_then(|e| e.code)), (JobState::Done, Some(0)), "gate never kills");
+    let g1 = wait_row(&w.owner, "g1", 1, "ended", ended).await;
+    let b1 = wait_row(&w.tb, "b1", 1, "ended", ended).await;
+    assert!(g1.started_at.unwrap() <= b1.started_at.unwrap(), "the gate job went first");
+    // A server whose share doesn't allow gate is refused at assign.
+    let mut bg = job("node-b", "bg", &["/bin/echo", "x"]);
+    bg.class = Some(JobClass::Gate);
+    w.cb.send(Frame::Assign(assign(bg, 1)));
+    let fr = w.cb.until(|f| matches!(f, Frame::State(s) if s.job_id == "bg")).await;
+    let Some(Frame::State(s)) = fr.last() else { unreachable!() };
+    assert_eq!(s.reason.as_deref(), Some(codes::GATE_NOT_ALLOWED));
+}
+
+/// Share caps refuse at once; a full queue refuses; nothing is written.
+#[tokio::test(flavor = "multi_thread")]
+async fn share_caps_and_a_full_queue_refuse_without_a_row() {
+    let mut w = two("q-caps", "max_parallel = 1\n").await;
+    w.n.node.fairq.set_share(1, share("b.k2.dev", ShareLimits { max_queued: 1, max_cpus: 1, ..limits() }, ServerStatus::Active));
+    let mut big = job("node-b", "big", &["/bin/echo", "x"]);
+    big.limits.cpu_millis = Some(2000);
+    w.cb.send(Frame::Assign(assign(big, 1)));
+    let fr = w.cb.until(|f| matches!(f, Frame::State(s) if s.job_id == "big")).await;
+    let Some(Frame::State(s)) = fr.last() else { unreachable!() };
+    assert_eq!(s.reason.as_deref(), Some(codes::EXCEEDS_SHARE_CAPS));
+    w.ca.send(Frame::Assign(assign(job("node-1", "hold", &["/bin/sh", "-c", "sleep 30"]), 1)));
+    wait_row(&w.owner, "hold", 1, "started", started).await;
+    w.cb.send(Frame::Assign(assign(job("node-b", "q1", &["/bin/echo", "x"]), 1)));
+    wait_row(&w.tb, "q1", 1, "queued", queued).await;
+    w.cb.send(Frame::Assign(assign(job("node-b", "q2", &["/bin/echo", "x"]), 1)));
+    let fr = w.cb.until(|f| matches!(f, Frame::State(s) if s.job_id == "q2")).await;
+    let Some(Frame::State(s)) = fr.last() else { unreachable!() };
+    assert_eq!(s.reason.as_deref(), Some(codes::TENANT_QUEUE_FULL));
+    // A second server on an old protocol never runs here.
+    w.n.node.fairq.set_protocol(1, Some(2));
+    w.cb.send(Frame::Assign(assign(job("node-b", "old-b", &["/bin/echo", "x"]), 1)));
+    let fr = w.cb.until(|f| matches!(f, Frame::State(s) if s.job_id == "old-b")).await;
+    let Some(Frame::State(s)) = fr.last() else { unreachable!() };
+    assert_eq!(s.reason.as_deref(), Some(codes::SERVER_TOO_OLD));
+    for id in ["big", "q2", "old-b"] {
+        assert!(w.tb.ledger.lock().unwrap().get(id, 1).unwrap().is_none(), "{id}: refusals are never written");
+    }
+    w.n.node.stop_all(JobState::Cancelled, "test_over");
+}
+
+/// A share past its end date: queued jobs end `share_expired`, running
+/// ones finish.
+#[tokio::test(flavor = "multi_thread")]
+async fn expiry_cancels_queued_jobs_and_lets_running_ones_finish() {
+    let mut w = two("q-expire", "max_parallel = 1\n").await;
+    w.cb.send(Frame::Assign(assign(job("node-b", "run", &["/bin/sh", "-c", "sleep 1"]), 1)));
+    wait_row(&w.tb, "run", 1, "started", started).await;
+    w.cb.send(Frame::Assign(assign(job("node-b", "wait", &["/bin/echo", "x"]), 1)));
+    wait_row(&w.tb, "wait", 1, "queued", queued).await;
+    w.n.node.fairq.set_share(1, share("b.k2.dev", limits(), ServerStatus::Expired));
+    let r = wait_row(&w.tb, "wait", 1, "expired", ended).await;
+    assert_eq!((r.state, r.reason.as_deref(), r.started_at), (JobState::Cancelled, Some(codes::SHARE_EXPIRED), None));
+    let r = wait_row(&w.tb, "run", 1, "ended", ended).await;
+    assert_eq!(r.state, JobState::Done, "the running job finished");
+    // New work from the expired server is refused.
+    w.cb.send(Frame::Assign(assign(job("node-b", "late", &["/bin/echo", "x"]), 1)));
+    let fr = w.cb.until(|f| matches!(f, Frame::State(s) if s.job_id == "late")).await;
+    let Some(Frame::State(s)) = fr.last() else { unreachable!() };
+    assert_eq!(s.reason.as_deref(), Some(codes::SHARE_EXPIRED));
+}
+
+/// What each server sees: its own jobs in full, others redacted; quotes
+/// for its recent job sizes.
+#[tokio::test(flavor = "multi_thread")]
+async fn views_redact_other_servers_and_quotes_follow_asks() {
+    let w = two("q-view", "max_parallel = 1\n").await;
+    w.ca.send(Frame::Assign(assign(job("node-1", "owner-secret", &["/bin/sh", "-c", "sleep 30"]), 1)));
+    wait_row(&w.owner, "owner-secret", 1, "started", started).await;
+    let mut p = job("node-b", "b-mine", &["/bin/echo", "x"]);
+    p.limits.cpu_millis = Some(1000);
+    p.limits.mem_bytes = Some(1 << 30);
+    w.cb.send(Frame::Assign(assign(p, 1)));
+    wait_row(&w.tb, "b-mine", 1, "queued", queued).await;
+    let v = w.n.node.fairq.view(&w.n.node, &w.tb, "r1");
+    assert_eq!(v.request_id, "r1");
+    assert_eq!(v.entries.len(), 2);
+    assert!(!v.entries[0].mine && v.entries[0].job_id.is_none() && v.entries[0].server_label.is_none());
+    assert!(v.entries[1].mine && v.entries[1].job_id.as_deref() == Some("b-mine"));
+    let text = serde_json::to_string(&v).unwrap();
+    assert!(!text.contains("owner-secret") && !text.contains("a.k2.dev"), "{text}");
+    let ov = w.n.node.fairq.view(&w.n.node, &w.owner, "r2");
+    assert_eq!(ov.entries[1].server_label.as_deref(), Some("b.k2.dev"));
+    assert!(ov.entries[1].job_id.is_none() && ov.totals.len() == 2);
+    let q = w.n.node.fairq.quotes(&w.n.node, &w.tb);
+    assert_eq!(q.len(), 1, "one distinct size asked");
+    assert!(!q[0].starts_now, "the node is busy");
+    assert_eq!((q[0].cpu_millis, q[0].mem_bytes), (1000, 1 << 30));
+    w.n.node.stop_all(JobState::Cancelled, "test_over");
+}

@@ -1,0 +1,26 @@
+{
+  "body": {
+    "action": {
+      "id": "permission",
+      "result": {
+        "message": "Already on. Nothing was applied.",
+        "outcome": "already_done"
+      }
+    },
+    "addr": "billing",
+    "answer": "Close",
+    "conversation_id": "6f1c0b52-2b1e-4d0e-9c1a-1b2f3e4d5a60",
+    "decided": [
+      {
+        "id": "pr_3d0e5a",
+        "state": "already_done"
+      }
+    ],
+    "id": "7f3a2c90-4f1e-4c2a-9b0d-3e5f6a7b8c90",
+    "kind": "choice",
+    "ok": true,
+    "seq": 1,
+    "status": "answered"
+  },
+  "status": 200
+}

@@ -1,0 +1,83 @@
+{
+  "body": "shopdev asks: Run shopdev's held App request ar_22 on this server (App Approvals).",
+  "choice": {
+    "action": {
+      "dedupe": "apps.approve:4f721c2f",
+      "id": "permission",
+      "params": {
+        "request": "ar_22"
+      },
+      "view": {
+        "action": "apps.approve",
+        "answer": null,
+        "approvers": {
+          "floor": "owner",
+          "label": "owner",
+          "names": [
+            "rosson"
+          ]
+        },
+        "askedFor": null,
+        "askers": null,
+        "consequences": "The App's process runs as asked in ar_22 until someone stops it.",
+        "direction": "loosen",
+        "duration": "once",
+        "expiresAt": 1761319200,
+        "grant": "one-time",
+        "kind": "permission",
+        "noteBox": {
+          "allowed": true,
+          "max": 500,
+          "mine": null
+        },
+        "notes": [],
+        "proof": {
+          "action": "app-approve",
+          "kind": "confirm",
+          "secretId": "ar_22"
+        },
+        "requestId": "ar_22",
+        "scope": "request ar_22",
+        "setting": "App Approvals",
+        "settingsPage": "app-approvals",
+        "state": "pending",
+        "undo": null,
+        "v": 1,
+        "values": [
+          {
+            "key": "workspace",
+            "value": "shopdev"
+          },
+          {
+            "key": "request",
+            "value": "ar_22"
+          }
+        ],
+        "viewer": {
+          "canAnswer": false,
+          "isAsker": false,
+          "login": "maya",
+          "mode": "wait",
+          "role": "admin",
+          "via": "login"
+        },
+        "whatChanges": "Run shopdev's held App request ar_22 on this server.",
+        "why": {
+          "by": "shopdev",
+          "text": "Run the test suite on k2n2-m1; it takes 40 min here"
+        }
+      }
+    },
+    "allow_custom": false,
+    "expiresAt": 1761319200,
+    "options": [],
+    "prompt": "shopdev asks: Run shopdev's held App request ar_22 on this server (App Approvals).",
+    "status": "pending"
+  },
+  "created_at": 1761060000,
+  "from": "shopdev",
+  "id": "9b10ee41-2d3c-4b5a-8e6f-7a8b9c0d1e2f",
+  "kind": "choice",
+  "to": "shopdev",
+  "via": "permission"
+}

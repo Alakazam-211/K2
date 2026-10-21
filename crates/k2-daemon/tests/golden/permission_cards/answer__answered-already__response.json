@@ -1,0 +1,10 @@
+{
+  "body": {
+    "error": {
+      "code": "card_not_pending",
+      "hint": "this card was already answered or dismissed"
+    },
+    "ok": false
+  },
+  "status": 409
+}

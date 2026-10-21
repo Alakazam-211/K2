@@ -1,0 +1,9 @@
+{
+  "body": "billing asks for 3 permissions. Approve on your desktop, or update K2 Companion.\n- Build and run Apps: waiting\n- App cores: waiting\n- App Approvals: waiting",
+  "created_at": 1761060000,
+  "from": "billing",
+  "id": "b4a1c0de-5e6f-4a7b-9c8d-0e1f2a3b4c5d",
+  "kind": "text",
+  "to": "billing",
+  "via": "permission"
+}

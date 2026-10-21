@@ -1,0 +1,27 @@
+{
+  "body": {
+    "action": {
+      "id": "permission.batch",
+      "result": null
+    },
+    "addr": "billing",
+    "answer": "Allow all",
+    "conversation_id": "6f1c0b52-2b1e-4d0e-9c1a-1b2f3e4d5a60",
+    "decided": [
+      {
+        "id": "pr_a1a1a1",
+        "state": "approved"
+      },
+      {
+        "id": "pr_a2a2a2",
+        "state": "approved"
+      }
+    ],
+    "id": "b4a1c0de-5e6f-4a7b-9c8d-0e1f2a3b4c5d",
+    "kind": "choice",
+    "ok": true,
+    "seq": 1,
+    "status": "pending"
+  },
+  "status": 200
+}

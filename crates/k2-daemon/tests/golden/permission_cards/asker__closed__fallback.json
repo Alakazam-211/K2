@@ -1,0 +1,9 @@
+{
+  "body": "Closed: permission cards were turned off. Allow compute nodes for billing was not applied.",
+  "created_at": 1761060000,
+  "from": "billing",
+  "id": "7f3a2c90-4f1e-4c2a-9b0d-3e5f6a7b8c90",
+  "kind": "text",
+  "to": "billing",
+  "via": "permission"
+}

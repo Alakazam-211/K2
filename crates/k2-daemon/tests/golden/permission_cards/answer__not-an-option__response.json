@@ -1,0 +1,10 @@
+{
+  "body": {
+    "error": {
+      "code": "usage",
+      "hint": "'Maybe' is not an option on this card"
+    },
+    "ok": false
+  },
+  "status": 400
+}

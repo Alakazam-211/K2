@@ -3709,10 +3709,14 @@ mod tests {
             "unset K2_PTYD before running k2-core tests (CLAUDE.md test rule)"
         );
         assert!(!DaemonPtyConfig::default().survive, "survive defaults to false");
-        // Both children inherit the process env: hold the crate-wide env
-        // lock so no parallel test's HOME/env guard changes it between the
-        // two spawns (a mini saw HOME swapped by an ensure_cli test).
+        // Both children get the SAME explicit env: one snapshot of this
+        // process's env, passed in full as `cfg.env` (it overrides what the
+        // child inherits, and an explicit PATH skips the login-shell
+        // enrichment), taken under the crate-wide env lock. A parallel
+        // test's HOME/env guard can't change what either child sees (a
+        // mini and a Linux node saw HOME swapped between the two spawns).
         let _env = crate::test_env::lock();
+        let explicit: HashMap<String, String> = std::env::vars().collect();
         let dir = std::env::temp_dir().join(format!("k2-survive-off-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let mut dumps = Vec::new();
@@ -3722,6 +3726,7 @@ mod tests {
                 program: Some("/bin/sh".into()),
                 args: vec!["-c".into(), format!("env | sort > '{}'; sleep 30", out.display())],
                 cwd: Some(dir.clone()),
+                env: explicit.clone(),
                 survive,
                 ..DaemonPtyConfig::default()
             };

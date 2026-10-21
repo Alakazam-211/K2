@@ -179,6 +179,13 @@ if [ ! -f "$INSTALLER" ]; then
 	curl -fsSL "$RAW_BASE/scripts/install-daemon.sh" -o "$INSTALLER"
 	chmod +x "$INSTALLER"
 fi
+# install-daemon.sh runs as ${K2_RUN_USER}, who may not be able to read the
+# script's own folder (e.g. scripts copied to /root/…). Stage a readable copy
+# in a fresh 0755 temp dir first; the bytes are unchanged.
+INSTALLER_STAGE="$(mktemp -d)"
+chmod 0755 "$INSTALLER_STAGE"
+install -m 0644 "$INSTALLER" "$INSTALLER_STAGE/install-daemon.sh"
+INSTALLER="$INSTALLER_STAGE/install-daemon.sh"
 log "installing k2-daemon (verified) as ${K2_RUN_USER}"
 sudo -u "$K2_RUN_USER" env \
 	K2_NO_SERVICE=1 \
@@ -272,10 +279,10 @@ RestartSec=2
 # KillMode=control-group ensures orphan frpc dies with the unit so a
 # restarted daemon cannot leave stale localPort dialers registered at frps.
 # Runtime stage H overrides this at boot: the daemon installs the drop-in
-# <unit>.d/k2-handoff.conf (root helper `daemon handoff-dropin`, or itself
+# <unit>.d/k2-handoff.conf (root helper \`daemon handoff-dropin\`, or itself
 # for a user unit) = KillMode=process + NotifyAccess=main + ExecReload=
 # SIGUSR2. frpc keeps a stable localPort and is re-adopted, Apps survive a
-# restart, and `systemctl reload` is a no-downtime hand-off.
+# restart, and \`systemctl reload\` is a no-downtime hand-off.
 KillMode=control-group
 # Agents run in this unit's cgroup. The default OOMPolicy=stop turns one
 # OOM-killed agent into a stop + restart of the whole daemon; continue lets

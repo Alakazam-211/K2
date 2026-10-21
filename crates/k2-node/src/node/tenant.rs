@@ -123,6 +123,10 @@ pub struct Link {
     pub since: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
+    /// The server's clock minus this node's at the last attach
+    /// (`Welcome.server_time`), seconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skew_secs: Option<i64>,
 }
 
 /// One server on this node.

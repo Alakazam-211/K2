@@ -2,16 +2,16 @@
   "generatedBy": "contract-gen",
   "regen": "cargo run -p k2-core --bin contract-gen",
   "catalogVersion": 19,
-  "catalogSha256": "e3f426a874e6a1d5396c3cd880435cd07e287987011f61ae4067b146eba133d6",
+  "catalogSha256": "67d28b5b976f3fe8ea84daeb55c04c363b1d90a6a9790a271e5a9953f52dd2a6",
   "runtimeSha256": "6fa6da429f20400d163a736c88cf76d86799dba2d346889381aeec954098a230",
   "files": {
-    "cli/k2": "2f5a955634ffb13f40c7b889181e1ce1e803cc2e171225c9feddcca8757938d6",
-    "cli/k2#study app-api": "fd91bad9145d051e4ee89d6d61d46b350359aed0908aaef512d33a9efeee8e84",
-    "crates/k2-core/src/app_surface.rs": "db95fdf28c4cfb46b248ccc15a12be76f3560dff4e54a77e1213409ba1c86423",
-    "sdk/generated/k2-frame.js": "84deb90abc1ab5be411ea4c7b8d67edfbeba63164d41e5ab434e855c6466b273",
-    "sdk/generated/k2.d.ts": "eadf2a55a0c3063bfb7f42204a2b027217db724a412c02e259b22b9fa239c34f",
-    "sdk/server/src/generated/verbs.ts": "5b1be00d2a8a214b1f74af35ed1a0e4e13b85fc26fb57ff6fe7d765e9353cfad",
+    "cli/k2": "6a49575b9392ba9c6517ce597e70f6587e98701ed06af17c9e601bab1b4150da",
+    "cli/k2#study app-api": "dea41793d675879c030231eb1bf7a31fce51f5b24572570ce3b601929db323cc",
+    "crates/k2-core/src/app_surface.rs": "6b7bb453a7bc0a53fd9e4a0b90877dd51eb890c7e24e7a6d65f224729d51cea6",
+    "sdk/generated/k2-frame.js": "b79d83b33ae3a6fcb058f8c81ba07a79fd07b8412c4965aeb3370bc1ea9ddade",
+    "sdk/generated/k2.d.ts": "7a6d66b4e995e31633b57d370a59189daee90551a3f19708c6194637c46d10bb",
+    "sdk/server/src/generated/verbs.ts": "4df442d804185989ff473616bed7c1755b8311da102274232ffffb6eddcbcb7d",
     "src/renderer/lib/k2-caps.generated.ts": "263f952fb09d17e92c0240697b97fb1b09daff8685f3b151d18e36f9551bb13f",
-    "src/renderer/lib/zen/zen-verbs.generated.ts": "1e2713da1cdfb85293509dc62dd184bdfa7535e6c81e03e8e00ffe234127878d"
+    "src/renderer/lib/zen/zen-verbs.generated.ts": "4625e4e6a888b99b8d78e2e275624c55226057e815d7120e75321730556a87a2"
   }
 }

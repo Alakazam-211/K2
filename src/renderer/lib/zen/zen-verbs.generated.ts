@@ -92,6 +92,7 @@ export const ZEN_CUSTOM_VERBS = {
   'presence.subscribe': { cap: 'presence:read', reach: 'local', kind: 'subscribe' },
   'thread.read': { cap: 'thread:read', reach: 'portable', kind: 'call' },
   'thread.subscribe': { cap: 'thread:read', reach: 'portable', kind: 'subscribe' },
+  'thread.inbox': { cap: 'thread:read', reach: 'portable', kind: 'subscribe' },
   'thread.markRead': { cap: 'thread:read', reach: 'local', kind: 'call' },
   'thread.attachment': { cap: 'thread:read', reach: 'local', kind: 'call' },
   'thread.open': { cap: 'thread:read', reach: 'local', kind: 'call' },

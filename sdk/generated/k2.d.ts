@@ -276,6 +276,14 @@ export interface ThreadView {
   readonly turn?: ThreadTurn | null
 }
 
+export interface ThreadInboxItem {
+  /** The agent's row address, handle::host. */
+  readonly address: string
+  readonly doc: ThreadDoc
+  readonly id: string
+  readonly seq: number
+}
+
 export interface ThreadReadState {
   /** The cursor moved. */
   readonly changed: boolean
@@ -1075,6 +1083,7 @@ export interface K2Verbs {
   'presence.subscribe': { args: [address: string]; value: Person[] }
   'thread.read': { args: [address: string, opts?: { afterSeq?: number; beforeSeq?: number; limit?: number }]; value: ThreadPage }
   'thread.subscribe': { args: [address: string]; value: ThreadView }
+  'thread.inbox': { args: []; value: ThreadInboxItem }
   'thread.markRead': { args: [address: string, opts?: { seq?: number }]; value: ThreadReadState }
   'thread.attachment': { args: [address: string, docId: string, n: number, opts?: { mode?: 'meta' | 'preview' | 'thumb'; px?: number }]; value: ThreadFileData }
   'thread.open': { args: [address: string, target: { docId?: string; line?: number; n?: number; rel?: string }]; value: ThreadOpened }
@@ -1118,7 +1127,7 @@ export interface K2Verbs {
 
 export type K2Verb = keyof K2Verbs
 export type K2CallVerb = 'gardens.list' | 'gardens.current' | 'gardens.switch' | 'theme.get' | 'canvas.setHitRegions' | 'window.startDrag' | 'save.get' | 'save.set' | 'save.remove' | 'save.keys' | 'viewer.get' | 'app.self' | 'app.usage' | 'widget.self' | 'agents.list' | 'conversation.open' | 'conversation.close' | 'presence.get' | 'thread.read' | 'thread.markRead' | 'thread.attachment' | 'thread.open' | 'thread.links' | 'thread.catchup' | 'thread.unread' | 'thread.mute' | 'thread.pickFiles' | 'thread.post' | 'thread.answer' | 'compose.draft' | 'sources.list' | 'sources.read' | 'sources.history' | 'sources.refresh' | 'sources.ask' | 'files.list' | 'files.read' | 'files.readBinary' | 'tickets.list' | 'tickets.show' | 'tickets.create' | 'tickets.comment' | 'tickets.resolve' | 'store.get' | 'store.list' | 'store.changes' | 'store.put' | 'store.delete' | 'store.batch' | 'store.txBegin' | 'store.txAdd' | 'store.txCommit' | 'store.txAbort' | 'guests.rooms' | 'guests.setRooms' | 'activity.snapshot' | 'room.members'
-export type K2SubscribeVerb = 'theme.changed' | 'agents.subscribe' | 'presence.subscribe' | 'thread.subscribe' | 'sources.subscribe'
+export type K2SubscribeVerb = 'theme.changed' | 'agents.subscribe' | 'presence.subscribe' | 'thread.subscribe' | 'thread.inbox' | 'sources.subscribe'
 
 export interface K2 {
   readonly gardens: {
@@ -1204,6 +1213,10 @@ export interface K2 {
     subscribe(address: string, cb: (value: ThreadView) => void, onError?: (error: K2Error) => void): () => void
     /** Handler object: re-subscribes on its own after a retryable refusal (capped backoff). */
     subscribe(address: string, handlers: K2Handlers<ThreadView>): () => void
+    /** Every new Thread message (and card change) on your agents on this server, on one socket with your own rights; merge by id. cap thread:read · portable · thread-stream-v1. e.g. `const off = k2.thread.inbox((m) => bump(m.address, m))` */
+    inbox(cb: (value: ThreadInboxItem) => void, onError?: (error: K2Error) => void): () => void
+    /** Handler object: re-subscribes on its own after a retryable refusal (capped backoff). */
+    inbox(handlers: K2Handlers<ThreadInboxItem>): () => void
     /** Mark the person's own read cursor in a conversation (forward only), as reading it in K2 does (Rosson 2026-10-20, replaces UW51). cap thread:read · local · thread-read-v1. e.g. `await k2.thread.markRead(row.address, {seq: last.seq})` */
     markRead(address: string, opts?: { seq?: number }): Promise<ThreadReadState>
     /** One attachment of a message: its live meta, a preview, or an image thumbnail (thread-images-v1). cap thread:read · local · thread-images-v1. e.g. `const t = await k2.thread.attachment(row.address, item.id, 0, {mode: 'thumb'})` */

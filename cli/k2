@@ -30890,6 +30890,7 @@ thread:read (Read the Thread)
   thread.page              GET  /cli/thread                               A page of a room's Thread, oldest first; sinceSeq catches up, beforeSeq pages back, afterSeq reads a delta (new, changed, removed).
   thread.latest            GET  /cli/thread/latest                        The newest Thread item per room, for list previews; a room the pass can't read is an item with error.
   thread.events            WS   /cli/overlay/events?conversation=         Live Thread items of one room (new posts and card changes; merge by id); after a gap, thread.page with sinceSeq.
+  thread.stream            WS   /cli/thread/stream?rooms=                 Live Thread items of every room the pass may read on one socket (inbox_subscribed names the set; grants and revokes apply live); after a gap, thread.page with sinceSeq.
   thread.attachmentGet     GET  /cli/thread/attachment                    One attachment of a room's message: meta, preview, thumbnail or a byte range, only when your own file rights cover it.
   thread.catchup           POST /cli/thread/catchup                       Deltas (or newest pages) for many rooms in one round trip, each exactly what thread.page answers for it.
   thread.setRead           POST /cli/thread/read                          Mark the signed-in person's own read cursor in a room's Thread (an App's own pass: its bookmark); forward only, on every surface they use.
@@ -56866,6 +56867,7 @@ presence:read (See who is looking)
 thread:read (Read the Thread)
   k2.thread.read(address, {afterSeq, beforeSeq, limit})                                               portable zen-v1                 const page = await k2.thread.read(row.address, {limit: 50})  [not_bound]
   k2.thread.subscribe(address, cb)                                                                    portable zen-v1                 const off = k2.thread.subscribe(row.address, (view) => draw(view))  [not_bound rate_limited]
+  k2.thread.inbox(cb)                                                                                 portable thread-stream-v1       const off = k2.thread.inbox((m) => bump(m.address, m))  [rate_limited]
   k2.thread.markRead(address, {seq})                                                                  local    thread-read-v1         await k2.thread.markRead(row.address, {seq: last.seq})  [not_bound]
   k2.thread.attachment(address, docId, n, {mode, px})                                                 local    thread-images-v1       const t = await k2.thread.attachment(row.address, item.id, 0, {mode: 'thumb'})  [not_bound too_large]
   k2.thread.open(address, {docId, line, n, rel})                                                      local    thread-attachments-v1  await k2.thread.open(row.address, {docId: item.id, n: 0})  [not_bound]

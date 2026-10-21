@@ -1031,126 +1031,95 @@
             "title": "ThreadDoc",
             "type": "object",
             "properties": {
-              "id": {
-                "type": "string"
-              },
-              "kind": {
-                "type": "string"
-              },
-              "from": {
-                "type": "string"
-              },
-              "to": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
+              "id": {"type": "string"},
+              "kind": {"type": "string"},
+              "from": {"type": "string"},
+              "to": {"type": ["string", "null"]},
               "created_at": {
                 "type": "number",
                 "description": "Seconds since the epoch (not milliseconds: multiply by 1000 for new Date)."
               },
-              "body": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "via": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
+              "body": {"type": ["string", "null"]},
+              "via": {"type": ["string", "null"]},
               "choice": {
                 "title": "ChoiceCard",
-                "type": [
-                  "object",
-                  "null"
-                ],
+                "type": ["object", "null"],
                 "properties": {
-                  "prompt": {
-                    "type": "string"
-                  },
+                  "prompt": {"type": "string"},
                   "options": {
                     "type": "array",
                     "items": {
                       "title": "ChoiceOption",
                       "type": "object",
-                      "properties": {
-                        "label": {
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "label"
-                      ],
+                      "properties": {"label": {"type": "string"}},
+                      "required": ["label"],
                       "additionalProperties": false
                     }
                   },
-                  "allow_custom": {
-                    "type": "boolean"
-                  },
-                  "status": {
-                    "type": "string"
-                  },
-                  "answer": {
-                    "type": [
-                      "string",
-                      "null"
-                    ]
-                  },
+                  "allow_custom": {"type": "boolean"},
+                  "status": {"type": "string"},
+                  "answer": {"type": ["string", "null"]},
                   "answeredBy": {
                     "title": "CardAnswerer",
-                    "type": [
-                      "object",
-                      "null"
-                    ],
+                    "type": ["object", "null"],
                     "properties": {
                       "kind": {
                         "type": "string",
                         "description": "owner, user (a Connect login) or guest (an app pass)."
                       },
-                      "login": {
-                        "type": "string"
-                      },
+                      "login": {"type": "string"},
                       "name": {
-                        "type": [
-                          "string",
-                          "null"
-                        ],
+                        "type": ["string", "null"],
                         "description": "The owner's display name when the owner answered and one is set, else null."
                       }
                     },
-                    "required": [
-                      "kind",
-                      "login",
-                      "name"
-                    ],
+                    "required": ["kind", "login", "name"],
                     "additionalProperties": false,
                     "description": "Who answered or dismissed the card; null while pending, for an agent's own answer and on older cards."
                   },
                   "expiresAt": {
-                    "type": [
-                      "integer",
-                      "null"
-                    ],
+                    "type": ["integer", "null"],
                     "description": "Unix seconds when a still-pending card expires (K2 closes it as expired); null when it never does."
+                  },
+                  "resultMessage": {
+                    "type": "string",
+                    "description": "A settings card the person answered: what K2 did (Kept as yours. Undo in Settings → Gardens → Local Data.), shown under the chosen option. Absent on every other card."
                   }
                 },
-                "required": [
-                  "prompt",
-                  "options",
-                  "allow_custom",
-                  "status"
-                ],
+                "required": ["prompt", "options", "allow_custom", "status"],
                 "additionalProperties": false
+              },
+              "attachments": {
+                "type": ["array", "null"],
+                "description": "Files that ride the message (thread-attachments-v1). Open one with thread.attachment / thread.open by its index.",
+                "items": {
+                  "title": "ThreadFile",
+                  "type": "object",
+                  "properties": {
+                    "kind": {"type": "string", "description": "file."},
+                    "state": {
+                      "type": "string",
+                      "description": "ok, changed (since it was sent), gone (moved or deleted) or hidden (not shared with you: no name, type or size)."
+                    },
+                    "name": {"type": "string"},
+                    "size": {"type": "integer", "description": "Bytes, when it was sent."},
+                    "mime": {
+                      "type": "string",
+                      "description": "Content type from the name (image/png, application/pdf, text/markdown, ...)."
+                    },
+                    "modifiedAt": {
+                      "type": "integer",
+                      "description": "Milliseconds since the epoch: the file's modified time when it was sent."
+                    },
+                    "line": {"type": "integer"},
+                    "lineEnd": {"type": "integer"}
+                  },
+                  "required": ["kind", "state"],
+                  "additionalProperties": false
+                }
               }
             },
-            "required": [
-              "id",
-              "kind"
-            ],
+            "required": ["id", "kind"],
             "additionalProperties": false
           }
         },
@@ -7520,6 +7489,50 @@
                   "login"
                 ],
                 "additionalProperties": false
+              },
+              "attachments": {
+                "type": "array",
+                "description": "Files that ride the message; one your file rights don't cover is {kind, state: hidden}. Read one with thread.attachmentGet by its index.",
+                "items": {
+                  "title": "AppThreadFile",
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "description": "file."
+                    },
+                    "state": {
+                      "type": "string",
+                      "description": "ok, changed (since it was sent), gone (moved or deleted) or hidden (not shared with you: no name, type or size)."
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "size": {
+                      "type": "integer",
+                      "description": "Bytes, when it was sent."
+                    },
+                    "mime": {
+                      "type": "string",
+                      "description": "Content type from the name (image/png, application/pdf, text/markdown, ...)."
+                    },
+                    "modifiedAt": {
+                      "type": "integer",
+                      "description": "Milliseconds since the epoch: the file's modified time when it was sent."
+                    },
+                    "line": {
+                      "type": "integer"
+                    },
+                    "lineEnd": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "state"
+                  ],
+                  "additionalProperties": false
+                }
               }
             },
             "required": [

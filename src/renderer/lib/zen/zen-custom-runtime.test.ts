@@ -40,6 +40,7 @@ function realm(platform = 'MacIntel'): Realm {
       documentElement: {
         style: { setProperty: (k: string, v: string) => void (rootStyle[k] = v) },
         setAttribute: (k: string, v: string) => void (rootAttrs[k] = v),
+        getAttribute: (k: string) => rootAttrs[k] ?? null,
       },
     },
     console,
@@ -436,5 +437,13 @@ describe('the frame prelude', () => {
     expect(html.indexOf('__K2_VERBS__')).toBeLessThan(html.indexOf('var LIB'))
     expect(html).toContain('var LIB = "<\\/script>";')
     expect(html.match(/<\/script>/g)).toHaveLength(4)
+    expect(html).not.toContain("setAttribute('data-k2-scheme'")
+  })
+
+  it('0.46.3: colorScheme "own" drops !important and marks the root so the runtime leaves it alone', () => {
+    const html = zenFramePrelude({ nonce: 'AAAAAAAAAAAAAAAAAAAAAA', theme: { vars: {}, scheme: 'dark' }, libs: [], ownScheme: true })
+    expect(html).toContain('<style data-k2-theme="">:root{color-scheme:dark;background:transparent;}')
+    expect(html).not.toContain('!important')
+    expect(html).toContain(`document.documentElement.setAttribute('data-k2-scheme', 'own');`)
   })
 })

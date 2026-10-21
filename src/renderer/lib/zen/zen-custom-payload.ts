@@ -146,5 +146,6 @@ export function parseZenCustomWidget(
     // `sources.*` call refuses `not_bound`, whatever the placement names.
     sources: parseManifestSources(raw.sources),
     sourceAddresses: parseSourceAddresses(raw.sourceAddresses),
+    colorScheme: raw.colorScheme === 'own' ? 'own' : 'garden',
   }
 }

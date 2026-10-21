@@ -73,6 +73,10 @@ export interface ZenCustomWidgetPayload {
   /** Garden v3: the source addresses this placement binds (`not_bound`
    *  for anything else). Absent from an older daemon. */
   sourceAddresses?: string[]
+  /** 0.46.3: `garden` (the frame follows the Garden's light/dark, never
+   *  the computer's) unless the manifest says `"colorScheme": "own"`.
+   *  Absent from an older daemon: `garden`. */
+  colorScheme?: 'garden' | 'own'
 }
 
 /** The v4 seam: only a widget from your own Garden runs today. One that

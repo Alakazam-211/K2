@@ -27,6 +27,8 @@ interface Case {
   kit: string
   garden: Scheme
   os: Scheme
+  /** The manifest's `"colorScheme": "own"` (the widget's CSS decides). */
+  own?: boolean
 }
 
 const GARDEN = {
@@ -62,7 +64,7 @@ function frameDoc(c: Case, prelude: (p: string) => string): string {
   const kit = resolve(widgets, c.kit)
   const css = readFileSync(resolve(kit, 'kit.css'), 'utf8')
   const js = [readFileSync(resolve(kit, 'kit.js'), 'utf8'), readFileSync(resolve(widgets, c.card, 'card.js'), 'utf8')]
-  const head = prelude(zenFramePrelude({ nonce: 'n0', theme: { vars: { ...GARDEN[c.garden].vars }, scheme: c.garden }, libs: [] }))
+  const head = prelude(zenFramePrelude({ nonce: 'n0', theme: { vars: { ...GARDEN[c.garden].vars }, scheme: c.garden }, libs: [], ownScheme: c.own === true }))
   return `<!doctype html><html><head><meta charset="utf-8">${head}<style>${css}</style></head><body><div id="card"></div>${js
     .map((t) => `<script>${t.replace(/<\/(script)/gi, '<\\/$1')}</script>`)
     .join('')}</body></html>`
@@ -151,6 +153,11 @@ describe('built-in cards follow the Garden’s light/dark, not the computer’s 
       expect(r.title).toBe('rgb(31, 35, 40)')
     })
   }
+
+  it('a widget that opts out ("colorScheme": "own") keeps its CSS: the kit\u2019s "light dark" follows the computer', async () => {
+    const r = await render({ card: 'fleet-grid-2', kit: 'sources-kit-2', garden: 'dark', os: 'light', own: true }, (p) => p, '-own')
+    expect(r.scheme).toBe('light dark')
+  })
 
   it('the check catches the bug: without !important a dark Garden on a Light-mode computer is not the Garden', async () => {
     const r = await render({ card: 'fleet-grid-2', kit: 'sources-kit-2', garden: 'dark', os: 'light' }, (p) => p.replace('!important', ''), '-before')

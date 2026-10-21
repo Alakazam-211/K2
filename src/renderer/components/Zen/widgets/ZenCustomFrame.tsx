@@ -162,7 +162,7 @@ export function ZenCustomFrame({
     void Promise.all([fetchZenWidgetBundle(widget.widget, gardenId), zenLib.texts(widget.libs)])
       .then(([bundle, libs]) => {
         if (!live) return
-        const prelude = zenFramePrelude({ nonce: bundle.nonce, theme: readZenFrameTheme(root), libs })
+        const prelude = zenFramePrelude({ nonce: bundle.nonce, theme: readZenFrameTheme(root), libs, ownScheme: widget.colorScheme === 'own' })
         setLoaded({ html: bundle.html, nonce: bundle.nonce, prelude, hash: bundle.hash })
       })
       .catch((err: unknown) => {

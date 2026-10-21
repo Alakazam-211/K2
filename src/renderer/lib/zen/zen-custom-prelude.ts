@@ -56,7 +56,7 @@ export interface ZenFrameTheme {
   scheme: 'light' | 'dark'
 }
 
-export function zenFrameThemeCss(theme: ZenFrameTheme): string {
+export function zenFrameThemeCss(theme: ZenFrameTheme, ownScheme = false): string {
   const lines: string[] = []
   for (const [k, v] of Object.entries(theme.vars)) {
     if (!/^--zen-[a-zA-Z0-9-]+$/.test(k)) continue
@@ -68,17 +68,19 @@ export function zenFrameThemeCss(theme: ZenFrameTheme): string {
   // the OS pick, so a dark Garden on a Mac in Light mode painted its cards
   // white. `!important` beats any widget rule without changing a widget
   // file (hashes, versions and own copies stay as they are); the runtime
-  // keeps it in step on a theme switch.
+  // keeps it in step on a theme switch. A manifest's `"colorScheme":
+  // "own"` opts out: the Garden's scheme is only the starting value.
   const scheme = theme.scheme === 'dark' ? 'dark' : 'light'
-  return `<style data-k2-theme="">:root{${lines.join('')}color-scheme:${scheme}!important;background:transparent;}html,body{background:transparent;}</style>`
+  return `<style data-k2-theme="">:root{${lines.join('')}color-scheme:${scheme}${ownScheme ? '' : '!important'};background:transparent;}html,body{background:transparent;}</style>`
 }
 
 /** Everything K2 puts after the CSP meta (see the file comment). */
-export function zenFramePrelude(opts: { nonce: string; theme: ZenFrameTheme; libs: readonly string[] }): string {
-  const scheme = `document.documentElement.setAttribute('data-zen-scheme', ${JSON.stringify(opts.theme.scheme)});`
+export function zenFramePrelude(opts: { nonce: string; theme: ZenFrameTheme; libs: readonly string[]; ownScheme?: boolean }): string {
+  const own = opts.ownScheme ? `document.documentElement.setAttribute('data-k2-scheme', 'own');` : ''
+  const scheme = `document.documentElement.setAttribute('data-zen-scheme', ${JSON.stringify(opts.theme.scheme)});${own}`
   return [
     nonced(opts.nonce, SEALED_FRAME_GUARD),
-    zenFrameThemeCss(opts.theme),
+    zenFrameThemeCss(opts.theme, opts.ownScheme === true),
     nonced(opts.nonce, scheme),
     nonced(opts.nonce, k2FrameScript()),
     ...opts.libs.map((text) => nonced(opts.nonce, text)),

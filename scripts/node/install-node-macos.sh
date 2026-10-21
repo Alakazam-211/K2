@@ -51,6 +51,17 @@ TOOLS=""
 LABELS=()
 
 die() { echo "install-node-macos: $*" >&2; exit 1; }
+# Put the k2-node at $1 in place at $2 (root:wheel 0755). Re-running the
+# installer with --binary pointing at the installed copy is an upgrade
+# in place with nothing to copy: `install` would stop with "are the same
+# file" (and set -e with it), so that's a no-op.
+install_binary() {
+    if [ -e "$2" ] && [ "$1" -ef "$2" ]; then
+        echo "   $2 is already that binary (kept)"
+        return 0
+    fi
+    install -m 0755 -o root -g wheel "$1" "$2"
+}
 # bootout returns before launchd lets go of the label; a bootstrap right
 # after fails with "5: Input/output error" and leaves the service unloaded.
 reload_daemon() {
@@ -164,7 +175,7 @@ echo "== files"
 install -d -m 0750 -o "$NODE_USER" -g k2nodectl "$HOME_DIR"
 install -d -m 0755 -o "$NODE_USER" -g "$NODE_USER" "$HOME_DIR/log"
 install -d -m 0755 -o root -g wheel "$BIN_DIR"
-install -m 0755 -o root -g wheel "$BINARY" "$BIN_DIR/k2-node"
+install_binary "$BINARY" "$BIN_DIR/k2-node"
 xattr -d com.apple.quarantine "$BIN_DIR/k2-node" 2>/dev/null || true
 BIN="$BIN_DIR/k2-node"
 install -d -m 2775 -o root -g k2nodectl "$CONFIG_DIR"

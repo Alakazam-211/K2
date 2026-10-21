@@ -954,6 +954,7 @@ async fn servers_add_prepares_the_user_and_records_its_uid() {
         pinned_owner: None,
         node_user,
         by: "local:test".into(),
+        root: true,
     };
     let add = |url: &str, prefix: &str| share::AddArgs {
         url: url.into(),

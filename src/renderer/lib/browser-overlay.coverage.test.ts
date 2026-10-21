@@ -72,6 +72,7 @@ const NO_CLAIM_NEEDED: Record<string, string> = {
   'components/Zen/widgets/ZenOverlay.tsx': 'Zen is shown: Browser tabs are hidden',
   'components/Zen/widgets/ZenGardenEmptyWidget.tsx': 'Zen is shown: Browser tabs are hidden',
   'components/Zen/widgets/ZenGuestRoomsSheet.tsx': 'Zen is shown: Browser tabs are hidden (a Garden widget\'s guests.setRooms confirm)',
+  'components/Zen/widgets/ZenPermissionSheet.tsx': 'Zen is shown: Browser tabs are hidden (K2\'s sheet for a permission card a Garden widget shows)',
 }
 
 function walk(dir: string, out: string[]): void {

@@ -206,7 +206,7 @@ export const SERVER_CHIP_HOVER_CLASS =
   'hover:bg-[var(--color-bg-elevated)] hover:border-[var(--color-border-strong)] hover:text-[var(--color-text-primary)]'
 
 /** Right margin against the cluster's 14px gap. It was -14 (flush) while
- *  the trigger had no visible edge; a chip needs air before the cog tab,
+ *  the trigger had no visible edge; a chip needs air before the first page tab,
  *  so -8 leaves 6px. */
 export const SERVER_CHIP_MARGIN_RIGHT_PX = -8
 

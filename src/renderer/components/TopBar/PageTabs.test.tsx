@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 //
-// Home P1 (H1/H12) — the top switcher order is gear, Home, Agents,
-// Projects, Tickets, Wiki (0.46.0). Selecting Home sets the page and does not open
+// Home P1 (H1/H12) — the top switcher order is Home, Agents, Projects,
+// Tickets, Wiki, gear (0.46.3, Rosson 2026-10-21: cog last, right of the
+// Wiki/library tab; it was first through 0.46.2). Selecting Home sets the page and does not open
 // Settings; from Settings it closes Settings first (same as every tab).
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -59,6 +60,7 @@ vi.mock('@/stores/projects', () => ({
 }))
 
 import PageTabs, { PAGE_TAB_ICON_PX, PAGE_TAB_ITEMS } from './PageTabs'
+import { withChord } from '@/lib/shortcut-label'
 import { usePageViewStore, isRoomPage, type AppPage } from '@/stores/page-view'
 
 afterEach(() => {
@@ -74,30 +76,48 @@ function tabs(container: HTMLElement): HTMLButtonElement[] {
 }
 
 describe('PageTabs — Home tab', () => {
-  it('order is gear, My Home, Agents, Projects, Tickets, Wiki', () => {
+  it('order is My Home, Agents, Projects, Tickets, Wiki, gear (0.46.3: cog last, right of the library)', () => {
     const { container } = render(<PageTabs />)
     const list = tabs(container)
     expect(list.map((b) => b.getAttribute('title')?.split(/ [—(]/)[0])).toEqual([
-      'Settings',
       'My Home',
       'Agents',
       'Projects',
       'Tickets',
       'Wiki',
+      'Settings',
     ])
     expect(list.map((b) => b.getAttribute('aria-label'))).toEqual([
-      'Settings',
       'My Home',
       'Agents',
       'Projects',
       'Tickets',
       'Wiki',
+      'Settings',
     ])
+  })
+
+  it('the cog is the rightmost tab, immediately after the Wiki (library) tab, in DOM and focus order', () => {
+    const { container } = render(<PageTabs />)
+    const list = tabs(container)
+    const wiki = screen.getByRole('button', { name: 'Wiki' })
+    const cog = screen.getByRole('button', { name: 'Settings' })
+    expect(list).toHaveLength(6)
+    expect(list.at(-1)).toBe(cog)
+    expect(list.at(-2)).toBe(wiki)
+    expect(cog.previousElementSibling).toBe(wiki)
+    expect(cog.nextElementSibling).toBeNull()
+    expect(wiki.querySelector('svg')?.getAttribute('data-k2-icon')).toBe('wiki')
+    expect(cog.querySelector('svg')?.getAttribute('data-k2-icon')).toBe('settings')
+    // Focus order follows the DOM: no tab reorders itself with tabindex.
+    for (const b of list) expect(b.hasAttribute('tabindex')).toBe(false)
+    // Tooltip and shortcut unchanged by the move.
+    expect(cog.getAttribute('title')).toBe(withChord('Settings', 'Meta+,'))
   })
 
   it('the page tabs are icons only: one 16px svg each, no words, word in title + aria-label', () => {
     const { container } = render(<PageTabs />)
-    const pages = tabs(container).slice(1)
+    const pages = tabs(container).slice(0, -1)
     expect(pages).toHaveLength(5)
     for (const b of pages) {
       expect(b.textContent).toBe('')
@@ -115,7 +135,7 @@ describe('PageTabs — Home tab', () => {
 
   it('each page draws its A3 icon (home, agents, projects, tickets, wiki)', () => {
     const { container } = render(<PageTabs />)
-    const pages = tabs(container).slice(1)
+    const pages = tabs(container).slice(0, -1)
     PAGE_TAB_ITEMS.forEach(({ Icon }, i) => {
       const { container: one } = render(<Icon size={PAGE_TAB_ICON_PX} />)
       expect(pages[i].innerHTML).toBe(one.innerHTML)
@@ -142,7 +162,8 @@ describe('PageTabs — Home tab', () => {
 
   it('the Settings tab draws Lucide\'s settings gear at 16px, round caps, same stroke', () => {
     const { container } = render(<PageTabs />)
-    const gear = tabs(container)[0]
+    const gear = tabs(container).at(-1)
+    if (!gear) throw new Error('no tabs rendered')
     expect(gear.getAttribute('aria-label')).toBe('Settings')
     const svgs = gear.querySelectorAll('svg')
     expect(svgs).toHaveLength(1)
@@ -163,9 +184,9 @@ describe('PageTabs — Home tab', () => {
     usePageViewStore.getState().setPage('projects')
     const { container } = render(<PageTabs />)
     const list = tabs(container)
-    expect(list.map((b) => b.getAttribute('aria-pressed'))).toEqual(['false', 'false', 'false', 'true', 'false', 'false'])
-    expect(list[3].className).toContain('shadow-[inset_0_-2px_0_var(--color-accent)]')
-    expect(list[2].className).not.toContain('shadow-[inset_0_-2px_0_var(--color-accent)]')
+    expect(list.map((b) => b.getAttribute('aria-pressed'))).toEqual(['false', 'false', 'true', 'false', 'false', 'false'])
+    expect(list[2].className).toContain('shadow-[inset_0_-2px_0_var(--color-accent)]')
+    expect(list[1].className).not.toContain('shadow-[inset_0_-2px_0_var(--color-accent)]')
   })
 
   it('badges stay on the icon tabs: Projects unread, Tickets waiting on you (needs-you colour)', () => {
@@ -180,25 +201,26 @@ describe('PageTabs — Home tab', () => {
     }
     const { container } = render(<PageTabs />)
     const list = tabs(container)
-    const projectsBadge = list[3].querySelector('[data-testid="page-tab-badge"]')
-    const ticketsBadge = list[4].querySelector('[data-testid="page-tab-badge"]')
+    const projectsBadge = list[2].querySelector('[data-testid="page-tab-badge"]')
+    const ticketsBadge = list[3].querySelector('[data-testid="page-tab-badge"]')
     expect(projectsBadge?.textContent).toBe('2')
     expect(ticketsBadge?.textContent).toBe('3')
     expect(ticketsBadge?.className).toContain('bg-[var(--color-status-needs-you)]')
     expect(ticketsBadge?.className).not.toContain('status-working')
+    expect(list[0].querySelector('[data-testid="page-tab-badge"]')).toBeNull()
     expect(list[1].querySelector('[data-testid="page-tab-badge"]')).toBeNull()
-    expect(list[2].querySelector('[data-testid="page-tab-badge"]')).toBeNull()
+    expect(list[5].querySelector('[data-testid="page-tab-badge"]')).toBeNull()
   })
 
   it('with Settings open only the cog is active', () => {
     h.settings.settingsOpen = true
     const { container } = render(<PageTabs />)
-    expect(tabs(container).map((b) => b.getAttribute('aria-pressed'))).toEqual(['true', 'false', 'false', 'false', 'false', 'false'])
+    expect(tabs(container).map((b) => b.getAttribute('aria-pressed'))).toEqual(['false', 'false', 'false', 'false', 'false', 'true'])
   })
 
   it('selecting Home sets the page and does not open Settings', () => {
     const { container } = render(<PageTabs />)
-    fireEvent.click(tabs(container)[1])
+    fireEvent.click(tabs(container)[0])
     expect(usePageViewStore.getState().page).toBe('home')
     expect(h.settings.openSettings).not.toHaveBeenCalled()
   })
@@ -206,7 +228,7 @@ describe('PageTabs — Home tab', () => {
   it('from Settings, Home closes Settings and lands on Home', () => {
     h.settings.settingsOpen = true
     const { container } = render(<PageTabs />)
-    fireEvent.click(tabs(container)[1])
+    fireEvent.click(tabs(container)[0])
     expect(h.settings.closeSettings).toHaveBeenCalledTimes(1)
     expect(usePageViewStore.getState().page).toBe('home')
   })
@@ -219,15 +241,15 @@ describe('PageTabs — Home tab', () => {
   it('Agents → Home → Agents keeps the room shell on screen the whole way', () => {
     const { container } = render(<PageTabs />)
     const seen: boolean[] = []
-    fireEvent.click(tabs(container)[2])
-    seen.push(isRoomPage(usePageViewStore.getState().page))
     fireEvent.click(tabs(container)[1])
+    seen.push(isRoomPage(usePageViewStore.getState().page))
+    fireEvent.click(tabs(container)[0])
     expect(usePageViewStore.getState().page).toBe('home')
     seen.push(isRoomPage(usePageViewStore.getState().page))
-    fireEvent.click(tabs(container)[2])
+    fireEvent.click(tabs(container)[1])
     expect(usePageViewStore.getState().page).toBe('agents')
     seen.push(isRoomPage(usePageViewStore.getState().page))
-    fireEvent.click(tabs(container)[3])
+    fireEvent.click(tabs(container)[2])
     expect(usePageViewStore.getState().page).toBe('projects')
     seen.push(isRoomPage(usePageViewStore.getState().page))
     expect(seen).toEqual([true, true, true, false])
@@ -235,10 +257,10 @@ describe('PageTabs — Home tab', () => {
 })
 
 describe('PageTabs — Wiki tab (0.46.0)', () => {
-  it('the Wiki tab: library icon, tooltip and name "Wiki", last in the row', () => {
+  it('the Wiki tab: library icon, tooltip and name "Wiki", last page tab (only the cog after it)', () => {
     const { container } = render(<PageTabs />)
     const wiki = screen.getByRole('button', { name: 'Wiki' })
-    expect(tabs(container).at(-1)).toBe(wiki)
+    expect(tabs(container).at(-2)).toBe(wiki)
     expect(wiki.getAttribute('title')).toBe('Wiki')
     expect(wiki.querySelector('svg')?.getAttribute('data-k2-icon')).toBe('wiki')
     expect(wiki.getAttribute('aria-pressed')).toBe('false')
@@ -248,8 +270,8 @@ describe('PageTabs — Wiki tab (0.46.0)', () => {
     usePageViewStore.getState().openWiki('/w/cortana')
     const { container } = render(<PageTabs />)
     const list = tabs(container)
-    expect(list.map((b) => b.getAttribute('aria-pressed'))).toEqual(['false', 'false', 'false', 'false', 'false', 'true'])
-    expect(list[5].className).toContain('shadow-[inset_0_-2px_0_var(--color-accent)]')
+    expect(list.map((b) => b.getAttribute('aria-pressed'))).toEqual(['false', 'false', 'false', 'false', 'true', 'false'])
+    expect(list[4].className).toContain('shadow-[inset_0_-2px_0_var(--color-accent)]')
   })
 
   it('clicking it opens the wiki and remembers the page to return to; close goes back', () => {

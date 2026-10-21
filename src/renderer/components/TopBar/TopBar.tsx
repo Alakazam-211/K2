@@ -88,7 +88,7 @@ export default function TopBar({
         <K2MarkButton />
         {/* K2 Connect server switcher (This Mac / saved servers / add) */}
         <ServerSwitcher followRoom />
-        {/* §6.0 — ⚙ | Agents | Projects | Tickets (settings is first). */}
+        {/* §6.0 — Home | Agents | Projects | Tickets | Wiki | ⚙ (cog last, 0.46.3). */}
         <PageTabs />
       </div>
 

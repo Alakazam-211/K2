@@ -3,22 +3,19 @@
 Source:    Alakazam-211/sew, branch release-0.3.0 @ 8252db23
            (= Sew core v0.3.0, the release K2 0.46.3 pins; main a9e7734e + version bump)
 Crates:    sew-proto 0.3.0, sew-client 0.3.0 (Apache-2.0; LICENSE and NOTICE inside each crate)
-Packed by: Sew's own scripts/vendor-sew-proto.sh at that commit (cargo package, then its
-           byte-stable python packer: sorted entries, owner 0:0, modes 0644/0755, mtime 0,
-           gzip without name or time). Run on macOS 2026-10-20 with the script's GNU `touch -d @0`
-           line neutralised (BSD touch refuses it; the python packer sets every mtime itself).
-Tarballs (sha256, verified before unpacking):
-  ce5b97259b7120608066366041aa15b9721643d208baecabaac9d952641042f3  sew-proto-0.3.0.tar.gz
-  f29103ac6afc4236748fb935fcb7a3960a9d1b3d7fd26ee2e98bc9832bf0bae2  sew-client-0.3.0.tar.gz
+Tags:      sew-proto-v0.3.0, sew-client-v0.3.0 (private vendoring tags, both @ 8252db23)
+Packed by: Sew, on lztek with GNU tar 1.35, using its own scripts/vendor-sew-proto.sh at that
+           commit (cargo package, then sorted entries, owner 0:0, modes 0644/0755, mtime 0,
+           gzip without name or time). These are Sew's canonical tarballs (2026-10-20).
+Tarballs (sha256, verified before unpacking; the pin):
+  ea9e33ac06d1b0d892eeb47154ce1d087d4befaa35653b083214683ed67386d0  sew-proto-0.3.0.tar.gz
+  247d36c8c5eb6e718a8cbcd40a9274b0d5d06ddba37e1c9c2bd752e638c2e7c5  sew-client-0.3.0.tar.gz
 Unpacked byte-for-byte into third_party/sew-proto and third_party/sew-client. No K2 edits.
 
-There is no vendoring tag for 0.3.0 yet (the newest are sew-proto-v0.1.0-sw2 /
-sew-client-v0.1.0-sw2, which are Sew 0.1.0). Mac and Linux runs of the script can differ: the
-same script on the -sw2 tag gave sew-proto 373082cf... on this Mac against Sew's published
-e6b28157... (most likely the Cargo.lock `cargo package` writes for sew-proto, resolved against
-each machine's registry cache). ASK SEW to confirm these two hashes from its Linux run, or to
-cut sew-proto-v0.3.0 / sew-client-v0.3.0 vendoring tags; if theirs differ, re-vendor from their
-tarballs and regenerate this file.
+History: the first vendoring (2026-10-20) was packed on macOS with the script's python tar
+fallback (sew-proto ce5b9725..., sew-client f29103ac...). Those archive bytes differ from
+Sew's, but `diff -r` of the unpacked trees against Sew's canonical tarballs is empty, so every
+file below is unchanged; only the pinned tarball hashes moved to Sew's.
 
 Wiring: the workspace root patches `sew-proto = { path = "third_party/sew-proto" }`
 ([patch.crates-io]); k2-daemon depends on sew-client by path with

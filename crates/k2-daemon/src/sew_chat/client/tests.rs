@@ -27,6 +27,17 @@ const WS: &str = "aaaaaaaa-0000-4000-8000-0000000000a1";
 fn vendored_sew_crates_match_the_manifest() {
     let third = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../third_party");
     let manifest = std::fs::read_to_string(third.join("SEW-VENDOR.txt")).expect("third_party/SEW-VENDOR.txt");
+    // The pin: Sew's canonical tarballs (packed on lztek, GNU tar 1.35) at the
+    // private tags sew-proto-v0.3.0 / sew-client-v0.3.0, both @ 8252db23.
+    let head = manifest.split("# manifest\n").next().expect("a header");
+    for pin in [
+        "ea9e33ac06d1b0d892eeb47154ce1d087d4befaa35653b083214683ed67386d0  sew-proto-0.3.0.tar.gz",
+        "247d36c8c5eb6e718a8cbcd40a9274b0d5d06ddba37e1c9c2bd752e638c2e7c5  sew-client-0.3.0.tar.gz",
+        "sew-proto-v0.3.0, sew-client-v0.3.0",
+        "release-0.3.0 @ 8252db23",
+    ] {
+        assert!(head.contains(pin), "SEW-VENDOR.txt must pin {pin:?}");
+    }
     let body = manifest.split("# manifest\n").nth(1).expect("a '# manifest' section");
     let mut want: HashMap<String, String> = HashMap::new();
     for line in body.lines().filter(|l| !l.trim().is_empty()) {

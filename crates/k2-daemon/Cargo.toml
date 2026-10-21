@@ -70,7 +70,8 @@ sew-test-pins-upgrade = ["sew-test-pins", "k2-root-proto/sew-test-pins-upgrade"]
 [dependencies]
 # Sew chat (S30 K15): the real `SewChat` backend talks to Sew's mgmt
 # socket through Sew's own client, vendored at Sew 0.3.0 (release-0.3.0 @
-# 8252db23) with a per-file sha256 manifest (third_party/SEW-VENDOR.txt).
+# 8252db23, private tags sew-proto-v0.3.0 / sew-client-v0.3.0; Sew's canonical
+# tarballs) with a per-file sha256 manifest (third_party/SEW-VENDOR.txt).
 # mgmt + sync only: no gateway (no tungstenite/zstd/webpki pulled in).
 sew-client = { path = "../../third_party/sew-client", default-features = false, features = ["mgmt", "sync"] }
 sew-proto = { path = "../../third_party/sew-proto" }

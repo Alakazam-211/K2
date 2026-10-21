@@ -135,6 +135,9 @@ pub struct PermissionRequest {
     pub session_id: Option<String>,
     /// The Thread conversation the card lives on.
     pub conversation_id: Option<String>,
+    /// The Thread address the card was posted at (the agent's own
+    /// conversation); the `[permission:]` outcome turn goes there.
+    pub addr: Option<String>,
     /// The card's doc id on that Thread.
     pub card_id: Option<String>,
     pub action: String,
@@ -171,6 +174,20 @@ pub struct PermissionRequest {
     pub updated_at: Option<i64>,
 }
 
+impl PermissionRequest {
+    /// The id people and the agent see: the held request's own id
+    /// (`ar_22`) for a held-request action, else `pr_…` (§3.2, §17.2.1).
+    pub fn display_id(&self) -> &str {
+        self.held_ref.as_deref().unwrap_or(self.id.as_str())
+    }
+
+    /// Still answerable: open state and never answered (a `Close` on an
+    /// already-done card keeps `already_done` but sets `answered_at`).
+    pub fn is_answerable(&self) -> bool {
+        self.state.is_open() && self.answered_at.is_none()
+    }
+}
+
 /// The `permission` object a refusal carries while the gate is on for the
 /// calling agent (§3.1). Absent entirely while off.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -189,12 +206,21 @@ pub enum PermissionRefusal {
         requestable: bool,
         #[serde(rename = "where")]
         where_: String,
+        /// A machine-only refusal's plain-text hint (§5.5): what to run,
+        /// where, and how to switch it back. Absent otherwise.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hint: Option<String>,
     },
 }
 
 impl PermissionRefusal {
     pub fn not_requestable(where_: impl Into<String>) -> Self {
-        PermissionRefusal::NotRequestable { requestable: false, where_: where_.into() }
+        PermissionRefusal::NotRequestable { requestable: false, where_: where_.into(), hint: None }
+    }
+
+    /// A machine-only refusal (§5.5): `where:"at the machine"` plus the hint.
+    pub fn at_the_machine(hint: impl Into<String>) -> Self {
+        PermissionRefusal::NotRequestable { requestable: false, where_: WHERE_AT_MACHINE.to_string(), hint: Some(hint.into()) }
     }
 }
 
@@ -340,5 +366,10 @@ mod tests {
         );
         let n = PermissionRefusal::not_requestable(WHERE_AT_MACHINE);
         assert_eq!(serde_json::to_value(&n).unwrap(), json!({"requestable": false, "where": "at the machine"}));
+        let m = PermissionRefusal::at_the_machine("At z3mbpz, run: sudo k2-node admin level policy");
+        assert_eq!(
+            serde_json::to_value(&m).unwrap(),
+            json!({"requestable": false, "where": "at the machine", "hint": "At z3mbpz, run: sudo k2-node admin level policy"})
+        );
     }
 }

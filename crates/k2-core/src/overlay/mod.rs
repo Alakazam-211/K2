@@ -425,6 +425,14 @@ pub fn post_choice_with_action(
         options,
         allow_custom,
     );
+    // Permission cards are `via: "permission"` (phone contract §17.2);
+    // every other card (keep-as-mine included) keeps `via: "card"`.
+    if action
+        .as_ref()
+        .is_some_and(|a| a.id == crate::permission::CARD_ACTION_PERMISSION || a.id == crate::permission::CARD_ACTION_BATCH)
+    {
+        doc.via = Some(crate::permission::DOC_VIA.to_string());
+    }
     if let Some(c) = doc.choice.as_mut() {
         c.expires_at = expires_at;
         c.action = action;
@@ -606,6 +614,99 @@ pub fn update_action_view(conversation_id: &str, card_id: &str, view: serde_json
         return Err(CARD_NOT_PENDING.to_string());
     }
     let action = choice.action.as_mut().ok_or("the card has no action")?;
+    action.view = Some(view);
+    store::put_card_doc(conversation_id, item.seq, &doc)?;
+    Ok(CardCallback { conversation_id: conversation_id.to_string(), doc_id: doc.id.clone(), seq: item.seq, doc, inject_line: String::new() })
+}
+
+/// Permission cards (rev 3.1 §4.5, §17.9; lane A1): rewrite a **pending**
+/// action card in place — prompt, options and action (id, params, dedupe,
+/// view) — keeping its id, seq, expiry and status. A single permission card
+/// becomes a batch this way when a second request joins it, so clients
+/// upsert the same doc. Refused (`CARD_NOT_PENDING`) once the card closed.
+pub fn rewrite_pending_action_card(
+    conversation_id: &str,
+    card_id: &str,
+    prompt: &str,
+    options: Vec<String>,
+    action: CardAction,
+) -> Result<CardCallback, String> {
+    let prompt = prompt.trim();
+    if prompt.is_empty() || options.is_empty() {
+        return Err("a card needs a prompt and at least one option".to_string());
+    }
+    let _guard = WRITE.lock();
+    let item = thread_item(conversation_id, card_id)?;
+    let mut doc = item.doc;
+    if doc.is_due(doc::now_secs()) {
+        return Err(CARD_NOT_PENDING.to_string());
+    }
+    let choice = doc.choice.as_mut().ok_or("not a choice card")?;
+    if choice.status != "pending" {
+        return Err(CARD_NOT_PENDING.to_string());
+    }
+    if choice.action.is_none() {
+        return Err("the card has no action".to_string());
+    }
+    choice.prompt = prompt.to_string();
+    choice.options = options.into_iter().map(|label| ChoiceOption { label }).collect();
+    choice.action = Some(action);
+    doc.body = Some(prompt.to_string());
+    store::put_card_doc(conversation_id, item.seq, &doc)?;
+    Ok(CardCallback { conversation_id: conversation_id.to_string(), doc_id: doc.id.clone(), seq: item.seq, doc, inject_line: String::new() })
+}
+
+/// Permission cards (rev 3.1 §6.2, §17.3; lane A1): answer a **pending**
+/// action card with a label the daemon already validated (`Allow`, `Deny`,
+/// `Close` on an already-done card, `Allow all`…). Unlike [`answer_card`]
+/// the label need not be one of the stored options: the options a person
+/// sees are projected per viewer (`Close` exists only in the projection).
+/// No inject line: the daemon sends the `[permission:]` turn itself.
+pub fn close_action_card(conversation_id: &str, card_id: &str, answer: &str, by: Option<PostAuthor>) -> Result<CardCallback, String> {
+    let answer = answer.trim();
+    if answer.is_empty() {
+        return Err("answer required".to_string());
+    }
+    let _guard = WRITE.lock();
+    let item = thread_item(conversation_id, card_id)?;
+    let mut doc = item.doc;
+    if doc.imported.is_some() {
+        return Err(IMPORTED_READ_ONLY.to_string());
+    }
+    if doc.is_due(doc::now_secs()) || !doc.is_pending_choice() {
+        return Err(CARD_NOT_PENDING.to_string());
+    }
+    let choice = doc.choice.as_mut().expect("pending choice");
+    if choice.action.is_none() {
+        return Err("the card has no action".to_string());
+    }
+    choice.status = "answered".to_string();
+    choice.answer = Some(answer.to_string());
+    choice.answered_by = by;
+    choice.answered_at = Some(doc::now_secs());
+    store::put_card_doc(conversation_id, item.seq, &doc)?;
+    Ok(CardCallback { conversation_id: conversation_id.to_string(), doc_id: doc.id.clone(), seq: item.seq, doc, inject_line: String::new() })
+}
+
+/// Permission cards (rev 3.1 §6.2, §17.2.4; lane A1): store the outcome on
+/// an action card in **any** status — `result` (when given) and the
+/// daemon-written `view` — so a closed card (answered, expired, voided)
+/// still shows who decided, the state line and "Turn off again". Same id,
+/// same seq; the daemon publishes the frame.
+pub fn record_action_outcome(
+    conversation_id: &str,
+    card_id: &str,
+    result: Option<serde_json::Value>,
+    view: serde_json::Value,
+) -> Result<CardCallback, String> {
+    let _guard = WRITE.lock();
+    let item = thread_item(conversation_id, card_id)?;
+    let mut doc = item.doc;
+    let choice = doc.choice.as_mut().ok_or("not a choice card")?;
+    let action = choice.action.as_mut().ok_or("the card has no action")?;
+    if result.is_some() {
+        action.result = result;
+    }
     action.view = Some(view);
     store::put_card_doc(conversation_id, item.seq, &doc)?;
     Ok(CardCallback { conversation_id: conversation_id.to_string(), doc_id: doc.id.clone(), seq: item.seq, doc, inject_line: String::new() })

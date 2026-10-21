@@ -19,6 +19,8 @@
 --   are SQL over this table, so they survive a restart.
 -- * `permission_notes` — one note per person (or App guest) per request
 --   (§4.3, §7.1); "N people asked" counts distinct guest authors.
+-- * `addr` — the Thread address the card was posted at (the agent's own
+--   conversation): the `[permission:]` outcome turn is delivered there.
 ALTER TABLE projects ADD COLUMN agents_can_request_permissions INTEGER NOT NULL DEFAULT 0;
 --> statement-breakpoint
 CREATE TABLE IF NOT EXISTS permission_requests (
@@ -26,6 +28,7 @@ CREATE TABLE IF NOT EXISTS permission_requests (
   workspace_id TEXT NOT NULL,
   session_id TEXT,
   conversation_id TEXT,
+  addr TEXT,
   card_id TEXT,
   action TEXT NOT NULL,
   params_json TEXT NOT NULL DEFAULT '{}',

@@ -372,6 +372,10 @@ fn guest_doc(raw: &str, link: Option<&LinkCtx>, frame: &OverlayFrame, room: &str
     if !pass.has_room(room) || !pass.has_cap_in_room(room, crate::skin_routes::THREAD_READ) {
         return Ok(None);
     }
+    // An action (settings) card is an owner/admin ask: never a guest's.
+    if frame.doc.as_ref().is_some_and(|d| d.is_action_card()) {
+        return Ok(None);
+    }
     let conv = frame.conversation_id.as_deref().unwrap_or_default();
     let still_pinned = {
         let db = k2_core::db::shared();

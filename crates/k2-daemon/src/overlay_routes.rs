@@ -529,8 +529,17 @@ fn authorize_write(
 /// no name, path or size). Every Thread read that returns items goes
 /// through here: the page (`snapshot_json`) and the thread-delta-v1
 /// `items` and `changed` (`thread_delta_json`), so the two can't drift.
+///
+/// An App guest never sees an action (settings) card, as a card or as any
+/// fallback: owner/admin asks are none of a guest's business. Those items
+/// are dropped (a guest already gets seq gaps for hidden items).
 fn thread_items_view(items: &[overlay::OverlayItem], resolved: &ResolvedOverlay, pass: Option<&SkinPass>) -> serde_json::Value {
-    let mut v = serde_json::to_value(items).unwrap_or_else(|_| serde_json::json!([]));
+    let mut v = if pass.is_some() {
+        serde_json::to_value(items.iter().filter(|i| !i.doc.is_action_card()).collect::<Vec<_>>())
+    } else {
+        serde_json::to_value(items)
+    }
+    .unwrap_or_else(|_| serde_json::json!([]));
     crate::thread_attachments::rewrite_items(&mut v, &resolved.project_id, pass);
     v
 }
@@ -731,6 +740,10 @@ fn handle_get_thread(params: &HashMap<String, String>) -> CliResponse {
 
 /// Most addrs one `thread/latest` call may name (Zen Z41).
 pub const THREAD_LATEST_MAX_ADDRS: usize = 50;
+
+/// How far back an App guest's `thread/latest` row looks for an item it may
+/// see (past action cards). None in that window: the empty row.
+const THREAD_LATEST_GUEST_WINDOW: usize = 50;
 /// Server-side preview cut (chars, ellipsis included).
 pub const THREAD_PREVIEW_CHARS: usize = 140;
 
@@ -852,8 +865,12 @@ fn handle_get_thread_latest(params: &HashMap<String, String>) -> CliResponse {
                     "error": { "code": "cap_not_granted", "hint": format!("missing capability {}", k2_core::skin::CAP_THREAD_READ) },
                 });
             }
-            match overlay::read_thread_page(&resolved.conversation_id, None, None, 1) {
-                Ok(page) => match page.items.last() {
+            // An App guest's preview is the newest item it may see: never an
+            // action (settings) card. Looks back over the last page.
+            let guest = request_skin().is_some();
+            let window = if guest { THREAD_LATEST_GUEST_WINDOW } else { 1 };
+            match overlay::read_thread_page(&resolved.conversation_id, None, None, window) {
+                Ok(page) => match page.items.iter().rev().find(|i| !guest || !i.doc.is_action_card()) {
                     Some(item) => with_read(
                         serde_json::json!({
                             "addr": addr,

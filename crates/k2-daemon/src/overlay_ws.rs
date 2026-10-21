@@ -358,6 +358,11 @@ fn wire_json(frame: &OverlayFrame) -> String {
 /// the pinned Chat) are dropped. HTTP `/cli/chatter` is already 403 for
 /// skins. Owner/Connect subscribers keep the unfiltered bus.
 pub fn skin_may_see_frame(frame: &OverlayFrame, conversation: &str, skin: bool) -> bool {
+    // An action (settings) card is an owner/admin ask: a skin never gets
+    // its frame, posted, rewritten or closed.
+    if skin && frame.doc.as_ref().is_some_and(|d| d.is_action_card()) {
+        return false;
+    }
     match &frame.conversation_id {
         Some(cid) => cid == conversation && (!skin || frame.collection == "thread"),
         None => !skin, // chatterlog is host-wide — never a skin room

@@ -8406,6 +8406,17 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
                 .await;
         }
+        // 0.46.3: `GET /cli/push/log[?device=]` — the push attempt ring.
+        // Owner only, like the phone list (the owner token or an Owner
+        // login; an agent passport is never the owner). Memory only.
+        p if !is_post && p == crate::push_routes::LOG_PATH => {
+            let owner = super::http::owner_role_identity(&query, state.token.as_str()).is_some();
+            let _ = stream.read(&mut buf).await;
+            let params = super::http::parse_params(p, &query);
+            let result = crate::push_routes::handle_log_get(&params, owner);
+            super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
+                .await;
+        }
         p if !is_post && p == crate::push_routes::DEVICE_PATH => {
             let username = if !super::http::token_ok(&query, state.token.as_str()) {
                 None

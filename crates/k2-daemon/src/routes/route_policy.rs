@@ -1000,6 +1000,8 @@ pub const ROUTES: &[Route] = &[
     post("/cli/push/device/e2e", Owner),
     get("/cli/push/devices", Owner),
     both("/cli/push/e2e", Owner),
+    // 0.46.3: the push attempt ring (read-only; no content or tokens).
+    get("/cli/push/log", Owner),
     post("/cli/push/register-device", Member),
     post("/cli/push/unregister-device", Member),
     post("/cli/relations/create", Member),

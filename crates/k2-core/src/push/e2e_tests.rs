@@ -5,6 +5,7 @@
 
 #![cfg(test)]
 
+use super::attempts;
 use super::e2e::{self, PushE2eMode};
 use super::legacy_golden;
 use super::seal::{self, SealKind};
@@ -894,4 +895,237 @@ fn msg_text_is_cut_at_the_bucket_edge() {
     let secret = ThreadMsg::new("i", 1, "c", "f", 1, ThreadMsgKind::Secret, "hunter2");
     assert_eq!(secret.text, "");
     assert!(!secret.truncated);
+}
+
+// ── Attempt log (0.46.3, the phone team's e2e push tests) ─────────────
+
+/// A device id unique to this run whose first 8 characters are too, so
+/// the process-wide ring can be filtered to one test's records.
+fn ring_device(label: &str) -> String {
+    format!("{}-{label}", &uuid::Uuid::new_v4().simple().to_string()[..8])
+}
+
+fn golden(name: &str) -> PushEvent {
+    legacy_golden::golden_events().into_iter().find(|(n, _)| n == name).expect("golden case").1
+}
+
+/// A sealed push logs device (8 chars), kind, lane, the blob's bytes, the
+/// key fingerprint, the relay status, the `s1` path, the relay's markers,
+/// the per-device outcome and a latency.
+#[test]
+fn attempt_line_for_a_sealed_push() {
+    let _db = crate::db::scoped_for_test();
+    let _relay = super::relay_state_test_lock();
+    let (_, k) = phone_key(41);
+    let id = ring_device("sealed");
+    let dev = register(&id, "apns", "tok-attempt-sealed", true, Some(&k));
+    let url = unique_url("attempt-sealed");
+    let relay = Relay::new(true);
+    relay.script.lock().expect("relay").push_back(GatewayResponse {
+        status: 200,
+        body: r#"{"ok":true,"results":[{"token":"tok-attempt-sealed","sent":true,"dead":false}]}"#.into(),
+        s0: true,
+        s1: true,
+    });
+    e2e::note_relay_caps(&url, true);
+    let event = golden("thread-text-x1-preview");
+    tunnel_cloud(&url, relay.clone())
+        .dispatch_in_mode(&event, "bk", std::slice::from_ref(&dev), PushE2eMode::SealedWhenSupported)
+        .expect("dispatch");
+    let blob_len = relay.calls()[0].1["devices"][0]["e2e"].as_str().expect("e2e").len();
+    let recs = attempts::recent(Some(&id));
+    assert_eq!(recs.len(), 1, "one attempt for one device: {recs:?}");
+    let a = &recs[0];
+    assert_eq!(a.device, id[..8]);
+    assert_eq!(a.kind, "thread_message");
+    assert_eq!(a.lane, "sealed");
+    assert_eq!(a.bytes, blob_len);
+    assert_eq!(a.bytes, 2159, "the padded alert blob");
+    assert_eq!(a.key.as_deref(), Some(&k.key_id[..8]));
+    assert_eq!(a.status, Some(200));
+    assert_eq!(a.error, None);
+    assert_eq!(a.path, "s1");
+    assert_eq!(a.relay, "s0+s1");
+    assert_eq!(a.vendor, Some("sent"));
+    let want = format!(
+        "[push] attempt device={} kind=thread_message lane=sealed bytes=2159 key={} status=200 path=s1 relay=s0+s1 vendor=sent ms={}",
+        &id[..8],
+        &k.key_id[..8],
+        a.ms
+    );
+    assert_eq!(a.line(), want);
+
+    // The badge on the sealed lane is a nudge.
+    tunnel_cloud(&url, relay.clone())
+        .dispatch_in_mode(&golden("badge"), "bk", &[dev], PushE2eMode::SealedWhenSupported)
+        .expect("nudge");
+    let recs = attempts::recent(Some(&id));
+    assert_eq!(recs.len(), 2);
+    assert_eq!((recs[1].kind, recs[1].lane, recs[1].bytes), ("nudge", "sealed", 452));
+}
+
+/// A legacy push logs the payload's bytes and no key; a relay refusal
+/// logs its status and error code; a dead token says so; a push held back
+/// by a fresh refusal says nothing went out.
+#[test]
+fn attempt_line_for_a_legacy_push_and_a_refusal() {
+    let _db = crate::db::scoped_for_test();
+    let _relay = super::relay_state_test_lock();
+    super::reset_relay_state_for_test();
+    let (_, k) = phone_key(42);
+    let id = ring_device("legacy");
+    // Keyed, but the switch is off: today's path.
+    let dev = register(&id, "fcm", "tok-attempt-legacy", false, Some(&k));
+    let url = unique_url("attempt-legacy");
+    let relay = Relay::new(true);
+    relay.script.lock().expect("relay").push_back(GatewayResponse {
+        status: 200,
+        body: r#"{"ok":true,"results":[{"token":"tok-attempt-legacy","sent":false,"dead":true,"error":"fcm 404: https://fcm.example/x"}]}"#.into(),
+        s0: true,
+        s1: false,
+    });
+    e2e::note_relay_caps(&url, true);
+    let event = golden("thread-text-x1-preview");
+    tunnel_cloud(&url, relay.clone()).dispatch_in_mode(&event, "bk", &[dev], PushE2eMode::Off).expect("dispatch");
+    let payload_len = relay.calls()[0].1["payload"].to_string().len();
+    let recs = attempts::recent(Some(&id));
+    assert_eq!(recs.len(), 1, "{recs:?}");
+    let a = &recs[0];
+    assert_eq!((a.kind, a.lane, a.path, a.relay), ("thread_message", "legacy", "s0", "s0"));
+    assert_eq!(a.bytes, payload_len);
+    assert_eq!(a.key, None, "no fingerprint off the sealed lane");
+    assert_eq!(a.status, Some(200));
+    assert_eq!(a.vendor, Some("dead"));
+    let want = format!(
+        "[push] attempt device={} kind=thread_message lane=legacy bytes={payload_len} status=200 path=s0 relay=s0 vendor=dead ms={}",
+        &id[..8],
+        a.ms
+    );
+    assert_eq!(a.line(), want);
+
+    // A refusal (S0-marked 403): status + the relay's error code.
+    let id2 = ring_device("refused");
+    let dev2 = register(&id2, "apns", "tok-attempt-refused", true, None);
+    let relay = Relay::new(false);
+    relay.script.lock().expect("relay").push_back(GatewayResponse {
+        status: 403,
+        body: r#"{"error":{"code":"subdomain_not_owned"}}"#.into(),
+        s0: true,
+        s1: false,
+    });
+    let sent = tunnel_cloud(&unique_url("attempt-refused"), relay)
+        .dispatch_in_mode(&event, "bk", std::slice::from_ref(&dev2), PushE2eMode::Off);
+    assert!(sent.is_err());
+    let a = attempts::recent(Some(&id2)).pop().expect("record");
+    assert_eq!((a.status, a.error.as_deref(), a.path, a.vendor), (Some(403), Some("subdomain_not_owned"), "s0", None));
+    assert!(a.line().contains(" status=403 error=subdomain_not_owned path=s0 relay=s0 ms="), "{}", a.line());
+
+    // While that rejection is fresh nothing goes out, and the line says so.
+    let relay = Relay::new(false);
+    let held = tunnel_cloud(&unique_url("attempt-refused-2"), relay.clone()).dispatch_in_mode(&event, "bk", &[dev2], PushE2eMode::Off);
+    assert!(held.is_err());
+    assert!(relay.calls().is_empty());
+    let a = attempts::recent(Some(&id2)).pop().expect("record");
+    assert_eq!((a.status, a.error.as_deref(), a.path), (None, Some("not_sent:rejected_recently"), "none"));
+    assert!(a.line().contains(" status=- error=not_sent:rejected_recently path=none relay=- ms="), "{}", a.line());
+    super::reset_relay_state_for_test();
+}
+
+/// Never content: for every canary event, on every lane, with previews on,
+/// neither a line nor a ring record carries the preview, the title, names,
+/// ids, the badge key, a device token, a relay credential or the vendor's
+/// error text.
+#[test]
+fn attempt_lines_and_ring_carry_no_content_or_tokens() {
+    let _db = crate::db::scoped_for_test();
+    let _relay = super::relay_state_test_lock();
+    super::reset_relay_state_for_test();
+    let (_, k) = phone_key(43);
+    let keyed_id = ring_device("noleak-k");
+    let old_id = ring_device("noleak-o");
+    let keyed = register(&keyed_id, "apns", "tok-ATTEMPT-CANARY-keyed-0123456789", true, Some(&k));
+    let old = register(&old_id, "fcm", "tok-ATTEMPT-CANARY-old-0123456789", true, None);
+    let mut events = canary_events();
+    events.push(PushEvent::ThreadPost(ThreadPush {
+        agent_name: "TitleCanaryAgent".into(),
+        conversation_id: "conv-canary-88".into(),
+        addr: "addr-canary/x".into(),
+        seq: 1,
+        project_id: "proj-canary-2".into(),
+        msg_kind: ThreadMsgKind::Text,
+        count: 1,
+        principal: "owner".into(),
+        device_usernames: vec!["owner".into()],
+        unread_total: "1".into(),
+        waiting_total: "0".into(),
+        avatar_rev: String::new(),
+        agent_color: String::new(),
+        preview: "ZEBRA-PREVIEW-distinctive-text".into(),
+        msg: Some(ThreadMsg::new(
+            "item-canary-9",
+            1,
+            "conv-canary-88",
+            "addr-canary/x",
+            1,
+            ThreadMsgKind::Text,
+            "ZEBRA-PREVIEW-distinctive-text",
+        )),
+    }));
+    let mut recs = Vec::new();
+    for event in &events {
+        for mode in [PushE2eMode::Off, PushE2eMode::SealedWhenSupported, PushE2eMode::SealedOnly] {
+            let url = unique_url("attempt-noleak");
+            let relay = Relay::new(true);
+            relay.script.lock().expect("relay").push_back(GatewayResponse {
+                status: 200,
+                body: r#"{"ok":true,"results":[{"token":"tok-ATTEMPT-CANARY-keyed-0123456789","sent":true,"dead":false},{"token":"tok-ATTEMPT-CANARY-old-0123456789","sent":false,"dead":false,"error":"apns 400: ZEBRA-PREVIEW-distinctive-text"}]}"#.into(),
+                s0: true,
+                s1: true,
+            });
+            e2e::note_relay_caps(&url, true);
+            tunnel_cloud(&url, relay)
+                .dispatch_in_mode(event, "0123456789abcdef0123456789abcdef", &[keyed.clone(), old.clone()], mode)
+                .expect("dispatch");
+            // The ring is process-wide (other tests write to it too), so
+            // each push's records are read right after it.
+            for id in [&keyed_id, &old_id] {
+                let mine = attempts::recent(Some(id));
+                let last = mine.last().unwrap_or_else(|| panic!("no attempt for {id}: {event:?} {mode:?}"));
+                recs.push(last.clone());
+            }
+        }
+    }
+    assert_eq!(recs.len(), events.len() * 3 * 2);
+    let lanes: std::collections::BTreeSet<&str> = recs.iter().map(|r| r.lane).collect();
+    assert_eq!(lanes.into_iter().collect::<Vec<_>>(), vec!["generic", "legacy", "sealed"], "every lane exercised");
+    let mut forbidden: Vec<&str> = CANARIES.to_vec();
+    forbidden.extend([
+        "ZEBRA",
+        "distinctive",
+        "TitleCanaryAgent",
+        "conv-canary-88",
+        "item-canary-9",
+        "tok-",
+        "ATTEMPT-CANARY",
+        "0123456789abcdef0123456789abcdef",
+        "tunnel-tok",
+        "shared-tok",
+        "New message",
+        "noleak",
+    ]);
+    for r in &recs {
+        let line = r.line();
+        let json = serde_json::to_string(r).expect("json");
+        for f in &forbidden {
+            assert!(!line.contains(f), "line carries {f:?}: {line}");
+            assert!(!json.contains(f), "ring record carries {f:?}: {json}");
+        }
+        assert_eq!(r.device.chars().count(), 8);
+        // The ring's JSON is exactly the documented fields.
+        let v: serde_json::Value = serde_json::from_str(&json).expect("json");
+        let mut keys: Vec<&String> = v.as_object().expect("obj").keys().collect();
+        keys.sort();
+        assert_eq!(keys, vec!["atMs", "bytes", "device", "error", "key", "kind", "lane", "ms", "path", "relay", "status", "vendor"]);
+    }
+    super::reset_relay_state_for_test();
 }

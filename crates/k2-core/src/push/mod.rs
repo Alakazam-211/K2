@@ -47,6 +47,8 @@ use std::fmt;
 
 pub mod budget;
 pub mod preview;
+// One log line + ring record per push attempt (0.46.3, `k2 push log`).
+pub mod attempts;
 // End-to-end encrypted pushes (prd-e2e-push-v1 rev 2, 0.46.3): additive,
 // beside today's path. `seal` = HPKE PSK + padding; `e2e` = who gets what.
 pub mod e2e;
@@ -1374,18 +1376,21 @@ impl K2Cloud {
         &self,
         url: &str,
         body: &serde_json::Value,
+        out: &mut attempts::RelayOutcome,
     ) -> Result<serde_json::Value, PushError> {
         let now = unix_now();
         let shared = self.config.shared_token.as_ref().map(|t| GatewayAuth::Shared { token: t.clone() });
         if let Some((token, subdomain)) = self.config.tunnel.as_ref() {
             if let Some(reason) = tunnel_rejected_recently(now) {
+                out.not_sent("rejected_recently");
                 return Err(PushError::BadConfig(format!(
                     "push gateway rejected this server ({reason}); not sending"
                 )));
             }
             if !old_gateway_recently(now) || shared.is_none() {
                 let auth = GatewayAuth::Tunnel { token: token.clone(), subdomain: subdomain.clone() };
-                let resp = self.sender.post(url, &auth, body)?;
+                let resp = self.sender.post(url, &auth, body).inspect_err(|e| out.observe_err("s0", e))?;
+                out.observe("s0", &resp);
                 // prd-e2e-push-v1: learn the relay's `s1` capability from
                 // every per-daemon response (a rollback clears it).
                 e2e::note_relay_caps(&self.config.url, resp.s1);
@@ -1414,9 +1419,11 @@ impl K2Cloud {
             }
         }
         let Some(auth) = shared else {
+            out.not_sent("no_credential");
             return Err(PushError::BadConfig("no push gateway credential".into()));
         };
-        let resp = self.sender.post(url, &auth, body)?;
+        let resp = self.sender.post(url, &auth, body).inspect_err(|e| out.observe_err("shared", e))?;
+        out.observe("shared", &resp);
         if resp.is_success() {
             Ok(serde_json::from_str(&resp.body).unwrap_or(serde_json::Value::Null))
         } else {
@@ -1583,7 +1590,7 @@ impl K2Cloud {
         let devices: Vec<_> = devices.iter().map(|d| (*d).clone()).collect();
         for chunk in devices.chunks(MAX_DEVICES_PER_CALL) {
             let body = Self::dispatch_body(chunk, &payload);
-            let response = self.post_with_fallback(&url, &body)?;
+            let response = self.post_observed(event, attempts::Lane::Generic, chunk, &payload, &url, &body)?;
             Self::prune_dead(&response);
         }
         Ok(())
@@ -1611,6 +1618,7 @@ impl K2Cloud {
                 // A nudge that can't fit (a very long server name): skipped,
                 // logged once per device so it shows.
                 Err(SealFailure::Seal(seal::SealError::TooLarge { len, max })) if kind == seal::SealKind::Nudge => {
+                    attempts::record_skip(event, &d.device_id, &sd.key.key_id, "too_large");
                     if note_skip_once(&d.device_id) {
                         crate::log_debug!(
                             "[push] sealed nudge skipped for device {}: plaintext {len} > {max} bytes (server name too long)",
@@ -1619,7 +1627,10 @@ impl K2Cloud {
                     }
                 }
                 // Never a plaintext fallback for a keyed phone; the class only.
-                Err(e) => crate::log_debug!("[push] sealed push skipped for one device: {}", e.class()),
+                Err(e) => {
+                    attempts::record_skip(event, &d.device_id, &sd.key.key_id, e.class());
+                    crate::log_debug!("[push] sealed push skipped for one device: {}", e.class())
+                }
             }
         }
         let url = format!("{}/push/dispatch", self.config.url);
@@ -1627,7 +1638,20 @@ impl K2Cloud {
         for chunk in sealed.chunks(MAX_DEVICES_PER_CALL) {
             let entries: Vec<e2e::SealedEntry> = chunk.iter().map(|(e, _)| e.clone()).collect();
             let body = e2e::sealed_dispatch_body(kind, &entries);
-            match self.post_sealed(&url, &body, now) {
+            let started = std::time::Instant::now();
+            let mut out = attempts::RelayOutcome::default();
+            let sent = self.post_sealed(&url, &body, now, &mut out);
+            let who: Vec<attempts::DeviceAttempt<'_>> = chunk
+                .iter()
+                .map(|(e, sd)| attempts::DeviceAttempt {
+                    device_id: &sd.device.device_id,
+                    token: &e.token,
+                    bytes: e.e2e.len(),
+                    key_id: Some(&sd.key.key_id),
+                })
+                .collect();
+            attempts::record_call(event, attempts::Lane::Sealed, &who, &out, sent.as_ref().ok(), started.elapsed());
+            match sent {
                 Ok(response) => Self::prune_dead(&response),
                 // The relay refused the sealed send (e.g. a stale stored
                 // `s1` after a relay rollback; the refusal already cleared
@@ -1695,12 +1719,20 @@ impl K2Cloud {
     /// never the shared token. The relay capability is learned from the
     /// response. An error carries the status and the relay's error code
     /// only (V37: `results[].error` can hold a device URL).
-    fn post_sealed(&self, url: &str, body: &serde_json::Value, now: i64) -> Result<serde_json::Value, PushError> {
+    fn post_sealed(
+        &self,
+        url: &str,
+        body: &serde_json::Value,
+        now: i64,
+        out: &mut attempts::RelayOutcome,
+    ) -> Result<serde_json::Value, PushError> {
         let Some((token, subdomain)) = self.config.tunnel.as_ref() else {
+            out.not_sent("no_tunnel");
             return Err(PushError::BadConfig("sealed pushes need the per-daemon relay path".into()));
         };
         let auth = GatewayAuth::Tunnel { token: token.clone(), subdomain: subdomain.clone() };
-        let resp = self.sender.post_sealed(url, &auth, body)?;
+        let resp = self.sender.post_sealed(url, &auth, body).inspect_err(|e| out.observe_err("s1", e))?;
+        out.observe("s1", &resp);
         e2e::note_relay_caps(&self.config.url, resp.s1);
         if resp.is_success() {
             note_tunnel_accepted();
@@ -1711,6 +1743,29 @@ impl K2Cloud {
             note_tunnel_rejected(now, &reason);
         }
         Err(PushError::Remote { status: resp.status, body: reason })
+    }
+
+    /// [`Self::post_with_fallback`] for one chunk of a legacy or generic
+    /// payload, with one [`attempts`] record per device.
+    fn post_observed(
+        &self,
+        event: &PushEvent,
+        lane: attempts::Lane,
+        chunk: &[crate::push_devices::PushDevice],
+        payload: &serde_json::Value,
+        url: &str,
+        body: &serde_json::Value,
+    ) -> Result<serde_json::Value, PushError> {
+        let started = std::time::Instant::now();
+        let mut out = attempts::RelayOutcome::default();
+        let sent = self.post_with_fallback(url, body, &mut out);
+        let bytes = payload.to_string().len();
+        let who: Vec<attempts::DeviceAttempt<'_>> = chunk
+            .iter()
+            .map(|d| attempts::DeviceAttempt { device_id: &d.device_id, token: &d.token, bytes, key_id: None })
+            .collect();
+        attempts::record_call(event, lane, &who, &out, sent.as_ref().ok(), started.elapsed());
+        sent
     }
 
     /// Prune tokens the gateway marks `dead:true`.
@@ -1746,7 +1801,7 @@ impl K2Cloud {
         let url = format!("{}/push/dispatch", self.config.url);
         for chunk in devices.chunks(MAX_DEVICES_PER_CALL) {
             let body = Self::dispatch_body(chunk, &payload);
-            let response = self.post_with_fallback(&url, &body)?;
+            let response = self.post_observed(event, attempts::Lane::Legacy, chunk, &payload, &url, &body)?;
             // Dead-token feedback: the gateway reports per-token outcomes;
             // `dead:true` (APNs 410 Unregistered / FCM NotRegistered)
             // tokens are pruned so they never ride another dispatch. A

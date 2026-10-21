@@ -1448,6 +1448,52 @@ pub fn agents_can_upgrade_postgres(project_id: &str) -> bool {
     .unwrap_or(false)
 }
 
+/// "Can ask for permission cards" (Beta, `permission_cards`, migration
+/// 0218; prd-agent-settings-cards-v1 §2.2). DEFAULT OFF. Only counts while
+/// the server's own "Permission cards" switch is on too
+/// (`permission::gate::enabled_for`). Deliberately NOT a field of
+/// `Project` (vs-live C8: `Project` serializes every switch column into
+/// every Project JSON); this getter and the Permission Cards routes are the
+/// only readers. Unknown workspace or a read error → `false` (fail closed).
+pub fn agents_can_request_permissions(project_id: &str) -> bool {
+    crate::permission::gate::agent_switch_on(project_id)
+}
+
+/// Persist `projects.agents_can_request_permissions` (0/1). Dedicated
+/// writer for `POST /cli/agent-access/set {toggle: "permission_cards"}`
+/// (an Owner or Admin login, or the owner token); not on `workspace/set`,
+/// so an agent can never turn it on.
+pub fn set_agents_can_request_permissions(project_id: &str, enable: bool) -> Result<(), String> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let n = conn
+        .execute(
+            "UPDATE projects SET agents_can_request_permissions = ?1 WHERE id = ?2",
+            rusqlite::params![if enable { 1i64 } else { 0i64 }, project_id],
+        )
+        .map_err(|e| e.to_string())?;
+    if n == 0 {
+        return Err(format!("Project not found: {project_id}"));
+    }
+    Ok(())
+}
+
+/// Every workspace's "Can ask for permission cards" switch, `(id, on)`
+/// ordered by name: the Permission Cards page's agent list (§2.2) and its
+/// "Turn on for all agents". Read error → empty (fail closed).
+pub fn agents_permission_switches() -> Vec<(String, bool)> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let Ok(mut stmt) =
+        conn.prepare("SELECT id, agents_can_request_permissions FROM projects ORDER BY name COLLATE NOCASE, id")
+    else {
+        return Vec::new();
+    };
+    stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? == 1)))
+        .map(|rows| rows.filter_map(Result::ok).collect())
+        .unwrap_or_default()
+}
+
 /// Persist `projects.agents_can_upgrade_postgres` (0/1). Dedicated writer
 /// for `POST /cli/agent-access/set {toggle: "db_upgrade"}` (the owner
 /// raises, the owner or an Admin lowers); not on `workspace/set`, so an
@@ -1704,6 +1750,31 @@ mod tests {
             std::process::id(),
             Uuid::new_v4(),
         )
+    }
+
+    /// Permission cards (0218, PRD §2.2, C8): the per-agent switch defaults
+    /// off, round-trips through its own writer, fails closed for an unknown
+    /// workspace, and never shows up in the workspace settings JSON.
+    #[test]
+    fn permission_cards_agent_switch_roundtrips_and_stays_out_of_settings_json() {
+        let path = unique_path("permission-cards");
+        let id = insert_project(&path);
+        assert!(!agents_can_request_permissions(&id), "0218 default is off");
+        let before = get_project_settings(&path).expect("read settings").to_string();
+        set_agents_can_request_permissions(&id, true).expect("turn on");
+        assert!(agents_can_request_permissions(&id));
+        assert!(
+            agents_permission_switches().iter().any(|(w, on)| w == &id && *on),
+            "the page's list shows it on"
+        );
+        let after = get_project_settings(&path).expect("read settings").to_string();
+        assert_eq!(before, after, "the switch is never serialized with the workspace settings");
+        assert!(!after.contains("RequestPermissions") && !after.contains("request_permissions"), "{after}");
+        set_agents_can_request_permissions(&id, false).expect("turn off");
+        assert!(!agents_can_request_permissions(&id));
+        let err = set_agents_can_request_permissions("no-such-workspace", true).expect_err("unknown workspace");
+        assert!(err.contains("Project not found"), "{err}");
+        assert!(!agents_can_request_permissions("no-such-workspace"));
     }
 
     #[test]

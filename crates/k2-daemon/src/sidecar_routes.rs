@@ -1358,11 +1358,12 @@ fn handle_access(
         && toggle != "app_core"
         && toggle != "app_review"
         && toggle != "db_upgrade"
+        && toggle != "permission_cards"
     {
         return Err(err(
             "bad_request",
             400,
-            "toggle must be 'agents_manage', 'app_core', 'app_review', 'apps_build', 'apps_manage_full', 'chat_manage', 'compute', 'compute_manage', 'compute_operate', 'db_upgrade', 'gardens_manage', 'projects_manage' or 'vault_manage'",
+            "toggle must be 'agents_manage', 'app_core', 'app_review', 'apps_build', 'apps_manage_full', 'chat_manage', 'compute', 'compute_manage', 'compute_operate', 'db_upgrade', 'gardens_manage', 'permission_cards', 'projects_manage' or 'vault_manage'",
         ));
     }
     if toggle == "app_core" || toggle == "app_review" {
@@ -1413,6 +1414,34 @@ fn handle_access(
         let out = crate::sql::versions_access::set_switch(&ws.id, value, caller_is_owner(caller), &access_by(caller))
             .map_err(|r| err(r.code, r.status, r.hint))?;
         return Ok((out, format!("ok {} db_upgrade={value}", ws.handle)));
+    }
+    if toggle == "permission_cards" {
+        // "Can ask for permission cards" (Beta, 0218, prd-agent-settings-
+        // cards-v1 §2.2). Default OFF. The owner token or an Owner/Admin
+        // login (the route's Admin floor; a passport never reaches here:
+        // `/cli/agent-access/set` is not an agent verb, so no agent turns it
+        // on for itself). It counts only while the server's own switch is
+        // on too, and may be set either way while that is off. Same single
+        // writer; the caller writes the `agent-access-set` line, this the
+        // `permission-switch` one.
+        k2_core::workspace::settings::set_agents_can_request_permissions(&ws.id, value)
+            .map_err(|e| err("workspace_not_found", 404, e))?;
+        k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+            k2_core::permission::audit_event::SWITCH,
+            &caller.audit_user(),
+            format!("agent {} {}", ws.handle, if value { "on" } else { "off" }),
+            "-",
+            "-",
+            "cli",
+        ));
+        k2_core::agent_hooks::emit(
+            k2_core::agent_hooks::HookEvent::SyncSettings,
+            serde_json::json!({ "permissionCards": "agent", "workspace": ws.id }),
+        );
+        return Ok((
+            serde_json::json!({ "ok": true, "workspace": ws.handle, "toggle": "permission_cards", "agentsCanRequestPermissions": value }),
+            format!("ok {} permission_cards={value}", ws.handle),
+        ));
     }
     if toggle == "compute_operate" {
         // Node admin (prd-k2-node-admin-v1 Q14, 0156): "Allow this agent

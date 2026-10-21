@@ -145,6 +145,57 @@ impl SettingsActor {
     fn can_manage(self) -> bool {
         !matches!(self, SettingsActor::Member)
     }
+
+    /// The Access Audit `user` for a settings write (the resolvers carry no
+    /// username).
+    fn audit_user(self) -> &'static str {
+        match self {
+            SettingsActor::Owner => "owner",
+            SettingsActor::Admin => "admin",
+            SettingsActor::Member => "member",
+        }
+    }
+}
+
+/// Sync the persisted `permissionCards` setting into the gate
+/// (prd-agent-settings-cards-v1 §2.1, §2.3). When the effective global
+/// switch changes (the env force-on wins either way), the flip is
+/// published: see [`permission_cards_flipped`]. Returns whether it flipped.
+/// The one sync point for every writer: settings update and reset (and the
+/// `k2 permission beta` verb, which writes the same setting).
+pub(crate) fn sync_permission_cards(on: bool, by: &str) -> bool {
+    let before = k2_core::permission::gate::server_on();
+    k2_core::permission::gate::set_server_switch(on);
+    let after = k2_core::permission::gate::server_on();
+    if before == after {
+        return false;
+    }
+    permission_cards_flipped(after, by);
+    true
+}
+
+/// The global switch flipped (PRD §2.1, vs-live C8): one `permission-switch`
+/// Access Audit line, and a settings frame (`sync:settings` with
+/// `permissionCards`) so every connected client re-reads `/boot-status`,
+/// where `permission-cards-v1` appears or goes. Headless: the daemon does
+/// it, whichever client (or none) is attached.
+pub(crate) fn permission_cards_flipped(on: bool, by: &str) {
+    k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+        k2_core::permission::audit_event::SWITCH,
+        by,
+        format!("server {}", if on { "on" } else { "off" }),
+        "-",
+        "-",
+        "cli",
+    ));
+    k2_core::agent_hooks::emit(
+        k2_core::agent_hooks::HookEvent::SyncSettings,
+        serde_json::json!({
+            "permissionCards": on,
+            "feature": k2_core::permission::FEATURE_KEY,
+            "rehandshake": true,
+        }),
+    );
 }
 
 fn forbidden(msg: String) -> CliResponse {
@@ -307,6 +358,7 @@ pub fn handle_settings_update(body: &[u8], actor: SettingsActor) -> CliResponse 
             // Connect toggle changes it. Env-var force-on still wins in enabled().
             k2_core::federation::set_enabled(merged.federation_enabled);
             k2_core::compute::set_enabled(merged.compute_preview);
+            sync_permission_cards(merged.permission_cards, actor.audit_user());
             k2_core::deploy::set_enabled(merged.apps);
             k2_core::deploy::set_process_engine(merged.apps_process_engine);
             let auto_was = k2_core::deploy::auto_prepare_enabled();
@@ -365,6 +417,7 @@ pub fn handle_settings_reset(actor: SettingsActor) -> CliResponse {
             // Reset returns federation to its default (OFF) — sync it.
             k2_core::federation::set_enabled(defaults.federation_enabled);
             k2_core::compute::set_enabled(defaults.compute_preview);
+            sync_permission_cards(defaults.permission_cards, actor.audit_user());
             k2_core::deploy::set_enabled(defaults.apps);
             k2_core::deploy::set_process_engine(defaults.apps_process_engine);
             k2_core::deploy::set_auto_prepare(defaults.apps_auto_prepare);
@@ -687,8 +740,11 @@ mod tests {
     }
 
     /// Permission cards (Beta, prd-agent-settings-cards-v1 §2.1): the
-    /// global switch defaults OFF, an Admin or a Member can't turn it on
-    /// (atomic 403), and only the Owner can.
+    /// global switch defaults OFF, and an Admin or a Member can't turn it on
+    /// (atomic 403). The Owner's write, which flips the process-wide gate,
+    /// is tested in its own process (tests/permission_gate_integration.rs):
+    /// flipping it here would race the tests in this binary that walk the
+    /// route tables and `/boot-status`.
     #[test]
     fn permission_cards_switch_is_owner_only_and_defaults_off() {
         with_temp_home(|| {
@@ -703,9 +759,7 @@ mod tests {
             let s = k2_core::app_settings::load();
             assert!(!s.permission_cards, "403 leaves it off");
             assert_eq!(s.default_agent, "claude", "nothing half-applied");
-            let r = handle_settings_update(br#"{"permissionCards":true}"#, SettingsActor::Owner);
-            assert_eq!(r.status, "200 OK", "{}", r.body);
-            assert!(k2_core::app_settings::load().permission_cards);
+            assert!(!k2_core::permission::gate::server_on(), "a refused write never opens the gate");
         });
     }
 

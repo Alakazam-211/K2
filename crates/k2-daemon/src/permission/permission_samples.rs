@@ -113,6 +113,8 @@ thread_local! {
     static ACTIVE: Cell<bool> = const { Cell::new(false) };
     /// What the sample's `check` / `apply` do right now.
     static BEHAVIOUR: Cell<Behaviour> = const { Cell::new(Behaviour::Needed) };
+    /// Each world's real conversation id → the fixed one the samples show.
+    static CONVS: std::cell::RefCell<Vec<(String, &'static str)>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -266,11 +268,16 @@ struct World {
     _db: k2_core::db::TestDbGuard,
     ws: &'static str,
     handle: &'static str,
+    /// This world's own conversation (the overlay store outlives the
+    /// scoped DB, so each card gets a fresh one); shown as `conv_fixed`.
     conv: &'static str,
+    conv_fixed: &'static str,
 }
 
-fn world(ws: &'static str, handle: &'static str, conv: &'static str) -> World {
+fn world(ws: &'static str, handle: &'static str, conv_fixed: &'static str) -> World {
     let db = k2_core::db::scoped_for_test();
+    let conv: &'static str = Box::leak(uuid::Uuid::new_v4().to_string().into_boxed_str());
+    CONVS.with(|c| c.borrow_mut().push((conv.to_string(), conv_fixed)));
     {
         let shared = k2_core::db::shared();
         let conn = shared.lock();
@@ -282,7 +289,7 @@ fn world(ws: &'static str, handle: &'static str, conv: &'static str) -> World {
         WorkspaceSession::upsert(&conn, &format!("ws-{conv}"), ws, None, Some(conv), "claude", "system", "running").expect("pin its Chat");
     }
     set_behaviour(Behaviour::Needed);
-    World { _db: db, ws, handle, conv }
+    World { _db: db, ws, handle, conv, conv_fixed }
 }
 
 fn billing() -> World {
@@ -449,7 +456,12 @@ fn doc_json(d: &OverlayDoc, card_real: &str, card_fixed: &str, answered: i64) ->
 
 /// Replace the real card id anywhere in a response body.
 fn fix_ids(v: Value, card_real: &str, card_fixed: &str) -> Value {
-    let s = v.to_string().replace(card_real, card_fixed);
+    let mut s = v.to_string().replace(card_real, card_fixed);
+    CONVS.with(|c| {
+        for (real, fixed) in c.borrow().iter() {
+            s = s.replace(real.as_str(), fixed);
+        }
+    });
     serde_json::from_str(&s).expect("still JSON")
 }
 
@@ -607,6 +619,7 @@ fn frames(out: &mut Out, w: &World, card: &str, state: &str) {
     let seen = view::Seen::new(rosson(), k2_core::permission::CARDS_CONTRACT);
     let mut it = serde_json::to_value(seen.item(&item).as_ref()).expect("an item serializes");
     it["id"] = json!(CARD_ID);
+    it["conversation_id"] = json!(w.conv_fixed);
     fix_doc(&mut it["doc"], card, CARD_ID, ANSWERED);
     out.put("approver-click", state, "item", "get", it);
 

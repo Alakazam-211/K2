@@ -205,7 +205,8 @@ const boxB: ConnectHost = {
 const boxC: ConnectHost = { ...boxB, id: 'c', label: 'Box C', hostname: 'c.k2.dev', token: '' }
 
 const fetchMock = vi.fn(async (url: string) => {
-  if (url === 'https://b.k2.dev/boot-status') {
+  // boot-status-views-v1: a held login sends its token on /boot-status.
+  if (url === 'https://b.k2.dev/boot-status?token=tok-b') {
     return new Response(JSON.stringify({ version: '0.41.6', protocol: 1, phase: 'ready' }), { status: 200 })
   }
   if (url === 'https://b.k2.dev/cli/auth/whoami?token=tok-b') {
@@ -515,7 +516,7 @@ describe('Home — the Agents page shell', () => {
     expect(within(rowOf('Bee')).queryByTitle(/rosson/)).toBeNull()
 
     const urls = fetchMock.mock.calls.map((c) => c[0])
-    expect(urls).toContain('https://b.k2.dev/boot-status')
+    expect(urls).toContain('https://b.k2.dev/boot-status?token=tok-b')
     expect(urls).toContain('https://b.k2.dev/cli/presence/summary?token=tok-b')
     // No login held for C: only its PUBLIC readiness is read (Home M2
     // pool) — never an authed route, and never a login POST.

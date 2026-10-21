@@ -89,7 +89,8 @@ export const ZEN_FRAME_FEATURES: readonly string[] = [
   'guests-rooms-v1',
   // 0.46.3 Thread parity: `thread.markRead`, `thread.attachment`,
   // `thread.open`, `thread.links`, `thread.pickFiles` (each still checks the
-  // agent's server and answers verb_unavailable on an older one).
+  // agent’s server and answers verb_unavailable on an older one; no ASCII
+  // apostrophe here: zen-frame-shape.test.ts reads this list by its quotes).
   'thread-read-v1',
   'thread-attachments-v1',
   'thread-images-v1',

@@ -126,6 +126,9 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'components/Settings/sections/AgentsSection.tsx',
   'components/Settings/sections/ApiTokensSection.tsx',
   'components/Settings/sections/api-keys-api.ts',
+  // 0.46.3 App mobile access: the App's access list, role templates and
+  // device sign-in settings are about the window's own server (Settings).
+  'components/Settings/sections/app-people-api.ts',
   'components/Settings/sections/CanonicalAgentButtons.tsx',
   'components/Settings/sections/CanonicalAgentModal.tsx',
   'components/Settings/sections/CompanionSection.tsx',

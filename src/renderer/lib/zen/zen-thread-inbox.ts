@@ -17,6 +17,7 @@
 
 import { getDaemonWs, daemonWsBase } from '@/kessel/daemon-ws'
 import { jittered } from '@/lib/backoff'
+import { openQueuedWebSocket } from '@/lib/grid-dial-queue'
 import { primaryRoom } from '@/stores/room'
 import { useProjectsStore } from '@/stores/projects'
 import { useConnectHostStore } from '@/stores/connect-host'
@@ -86,7 +87,15 @@ function start(): () => void {
     try {
       const creds = await getDaemonWs(scope)
       if (cancelled) return
-      const sock = new WebSocket(`${daemonWsBase(creds)}${THREAD_STREAM_PATH}?rooms=all&token=${encodeURIComponent(creds.token)}`)
+      // MS70: every daemon socket dials through the per-server queue.
+      const sock = await openQueuedWebSocket(
+        scope,
+        `${daemonWsBase(creds)}${THREAD_STREAM_PATH}?rooms=all&token=${encodeURIComponent(creds.token)}`,
+      )
+      if (cancelled) {
+        sock.close(1000, 'unsubscribed')
+        return
+      }
       ws = sock
       sock.onopen = () => {
         attempt = 0

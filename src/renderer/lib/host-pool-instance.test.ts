@@ -199,7 +199,8 @@ describe('request cap and retry (MS25, MS23)', () => {
       'fetch',
       vi.fn(async (url: string) => {
         await new Promise<void>((r) => releases.push(r))
-        if (url.endsWith('/boot-status')) return json(200, { phase: 'ready', version: '0.41.6', protocol: 1, instanceId: 'i-b' })
+        // boot-status-views-v1: the pool sends the host's token (`?token=`).
+        if (new URL(url).pathname === '/boot-status') return json(200, { phase: 'ready', version: '0.41.6', protocol: 1, instanceId: 'i-b' })
         return json(200, { username: 'rosson', role: 'member', workspaces: [] })
       }),
     )

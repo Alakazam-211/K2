@@ -51,7 +51,18 @@ const HOST_TEMPLATE: &str = include_str!("widget_shot_host.html");
 
 /// `ZEN_FRAME_FEATURES` (`ZenCustomFrame.tsx`): the features a Zen window's
 /// hello names. The golden file pins this list too.
-pub const FRAME_FEATURES: &[&str] = &["zen-v1", "zen-gardens-v1", "zen-widgets-v1", "sources-v1", "garden-data-v1", "guests-rooms-v1"];
+pub const FRAME_FEATURES: &[&str] = &[
+    "zen-v1",
+    "zen-gardens-v1",
+    "zen-widgets-v1",
+    "sources-v1",
+    "garden-data-v1",
+    "guests-rooms-v1",
+    // 0.46.3 Thread parity (thread.markRead / attachment / open / links / pickFiles).
+    "thread-read-v1",
+    "thread-attachments-v1",
+    "thread-images-v1",
+];
 
 /// The shot's size limits (CSS pixels).
 pub const MIN_SIDE: u32 = 120;

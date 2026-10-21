@@ -172,10 +172,11 @@ pub struct SeatbeltTenant {
 /// - **A tenant's jobs** can't read or write the node home (only
 ///   `toolchains/`, read-only), any other tenant's root, `/private/tmp`
 ///   or `/private/var/tmp` (their `TMPDIR` is their own), can't connect
-///   to a socket outside their own root and loopback, and can't read
-///   other processes' info (`ps` shows only their own sandbox).
+///   to a socket in another server's root or the node home.
 ///
-/// One uid means signals between servers' jobs are **not** stopped (a
+/// One uid means other servers' processes stay visible (`ps`; a Seatbelt
+/// `process-info*` deny also hid a job's own children) and signals
+/// between servers' jobs are **not** stopped (a
 /// Seatbelt `signal` deny would also stop a job signalling its own
 /// children; V60): that's why Macs take only your own servers in 0.46.3.
 pub fn seatbelt_tenant_profile(deny_dirs: &[PathBuf], deny_sockets: &[PathBuf], network_none: bool, t: &SeatbeltTenant) -> String {
@@ -201,9 +202,11 @@ pub fn seatbelt_tenant_profile(deny_dirs: &[PathBuf], deny_sockets: &[PathBuf], 
         p.push_str(&format!("(deny network-outbound (subpath {}))\n", sb_str(&troot)));
         p.push_str(&format!("(deny network-outbound (subpath {}))\n", sb_str(&real_path(&t.home))));
         p.push_str(&format!("(allow network-outbound (subpath {}))\n", sb_str(&own)));
-        // Other processes (other servers' jobs) are invisible.
-        p.push_str("(deny process-info* (target others))\n");
-        p.push_str("(allow process-info* (target same-sandbox))\n");
+        // No `process-info*` deny: on macOS 27 `(deny process-info*
+        // (target others))` with `(allow … (target same-sandbox))` also
+        // hid a job's own children from `ps` (found on a mini), which
+        // breaks build and test tools. Other jobs' processes stay visible
+        // on a Mac in 0.46.3 (one uid; own servers only).
     }
     // The node's own sockets (the executor) stay closed whatever the
     // allows above say: after them, so they win.

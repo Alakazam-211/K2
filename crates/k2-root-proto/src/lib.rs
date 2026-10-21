@@ -31,11 +31,14 @@
 //!   signed builds (root-helper key, like `k2-node`; S11).
 //! - [`node_build`]: the same key and check for signed `k2-node` builds
 //!   (prd-k2-node-admin-v1 §8.1: node updates are root-class code).
+//! - [`cli`]: which `/usr/local/bin/k2` is the K2 CLI and its version
+//!   (`helper cli-refresh`, protocol 9).
 //! - [`sew`]: Sew on K2 (protocol 7): the Sew pin table, Sew's fixed paths
 //!   and the stdin-JSON validators of the `engine sew` verbs.
 
 pub mod apps;
 pub mod caller;
+pub mod cli;
 pub mod engine;
 pub mod keys;
 pub mod node_build;

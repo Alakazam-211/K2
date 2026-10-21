@@ -1631,6 +1631,328 @@ fn cli_refresh_is_the_daemons_call_and_takes_no_argv_or_stdin() {
     );
 }
 
+const STALE_CLI: &str = "#!/bin/bash\nK2_CLI_VERSION=\"0.40.148\"\necho old\n";
+
+/// A box with a stale root-installed CLI at /usr/local/bin/k2.
+fn stale_box() -> T {
+    let t = box_root();
+    std::fs::write(t.p(CLI_PATH), STALE_CLI).unwrap();
+    std::fs::set_permissions(t.p(CLI_PATH), std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::set_permissions(t.p(CLI_DIR), std::fs::Permissions::from_mode(0o755)).unwrap();
+    t
+}
+
+fn skipped_for(t: &T) -> String {
+    let v = cli_json(&t.call(&["helper", "cli-refresh"]));
+    assert_eq!(v["result"], "skipped", "{v}");
+    v["reason"].as_str().unwrap().to_string()
+}
+
+#[test]
+fn cli_build_carries_the_product_version_and_its_hash() {
+    use crate::core::{cli_version_of, CLI_CONTENT, CLI_SHA256, VERSION};
+    use sha2::Digest;
+    // build.rs refuses a mismatch; this says so once more at test time.
+    assert_eq!(cli_version_of(CLI_CONTENT.as_bytes()).as_deref(), Some(VERSION));
+    let sha: String = sha2::Sha256::digest(CLI_CONTENT.as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
+    assert_eq!(CLI_SHA256, sha);
+    let v = cli_json(&box_root().call(&["helper", "version"]));
+    assert_eq!(v["cliSha256"], sha);
+    assert_eq!(v["cliVersion"], VERSION);
+}
+
+#[test]
+fn cli_refresh_refuses_a_linked_directory_and_writes_nothing() {
+    // ostree-style: /usr/local/bin is a link to another directory.
+    let t = stale_box();
+    std::fs::rename(t.p(CLI_DIR), t.p("/usr/local/bin-real")).unwrap();
+    symlink(t.p("/usr/local/bin-real"), t.p(CLI_DIR)).unwrap();
+    assert_eq!(skipped_for(&t), "directory is a link");
+    assert_eq!(std::fs::read_to_string(t.p("/usr/local/bin-real/k2")).unwrap(), STALE_CLI);
+    assert_eq!(std::fs::read_dir(t.p("/usr/local/bin-real")).unwrap().count(), 1, "no temp file left");
+
+    // ...or /usr/local itself is the link.
+    let t = stale_box();
+    std::fs::rename(t.p("/usr/local"), t.p("/var/usrlocal")).unwrap();
+    symlink(t.p("/var/usrlocal"), t.p("/usr/local")).unwrap();
+    assert_eq!(skipped_for(&t), "directory is a link");
+    assert_eq!(std::fs::read_to_string(t.p("/var/usrlocal/bin/k2")).unwrap(), STALE_CLI);
+    // A regular file where the directory should be is not walked either.
+    let t = box_root();
+    std::fs::remove_dir(t.p(CLI_DIR)).unwrap();
+    std::fs::write(t.p(CLI_DIR), "x").unwrap();
+    assert_eq!(skipped_for(&t), "directory is a link");
+}
+
+#[test]
+fn cli_refresh_refuses_a_writable_or_foreign_directory() {
+    for mode in [0o775, 0o757, 0o777, 0o1777] {
+        let t = stale_box();
+        std::fs::set_permissions(t.p(CLI_DIR), std::fs::Permissions::from_mode(mode)).unwrap();
+        assert_eq!(skipped_for(&t), "directory not root-owned", "{mode:o}");
+        assert_eq!(std::fs::read_to_string(t.p(CLI_PATH)).unwrap(), STALE_CLI, "{mode:o}");
+    }
+    // Real owner checks on: a directory owned by anyone but root (this
+    // test's uid) is refused before the file is even looked at. (Called
+    // past the caller check, which with real owners on would refuse this
+    // test's non-root daemon.toml first.)
+    let mut t = stale_box();
+    t.ctx.real_owners = true;
+    // SAFETY: no preconditions.
+    if unsafe { libc::geteuid() } == 0 {
+        // Run as root (the build box), the temp dir is root's: hand it to
+        // nobody so the case still holds.
+        let c = std::ffi::CString::new(t.p(CLI_DIR).as_os_str().as_encoded_bytes()).unwrap();
+        // SAFETY: NUL-terminated path.
+        assert_eq!(unsafe { libc::lchown(c.as_ptr(), 65534, 65534) }, 0);
+    }
+    let daemon = crate::caller::Caller {
+        pid: DAEMON_PID,
+        uid: Some(K2_UID),
+        user: Some("k2".into()),
+        is_daemon: true,
+        why_not: None,
+    };
+    let v = crate::core::cli_refresh(&t.ctx, &daemon).unwrap();
+    assert_eq!(
+        (v["result"].as_str(), v["reason"].as_str()),
+        (Some("skipped"), Some("directory not root-owned"))
+    );
+    assert_eq!(std::fs::read_to_string(t.p(CLI_PATH)).unwrap(), STALE_CLI);
+}
+
+#[test]
+fn cli_refresh_refuses_a_writable_file() {
+    for mode in [0o775, 0o757, 0o666] {
+        let t = stale_box();
+        std::fs::set_permissions(t.p(CLI_PATH), std::fs::Permissions::from_mode(mode)).unwrap();
+        assert_eq!(skipped_for(&t), "file is group/other-writable", "{mode:o}");
+        assert_eq!(std::fs::read_to_string(t.p(CLI_PATH)).unwrap(), STALE_CLI);
+    }
+}
+
+/// Aborts the test process (a loud failure, never a hang) unless the
+/// returned sender is dropped within `secs`.
+fn watchdog(secs: u64, what: &'static str) -> std::sync::mpsc::Sender<()> {
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        if let Err(std::sync::mpsc::RecvTimeoutError::Timeout) =
+            rx.recv_timeout(std::time::Duration::from_secs(secs))
+        {
+            eprintln!("watchdog: {what}");
+            std::process::abort();
+        }
+    });
+    tx
+}
+
+#[test]
+fn cli_refresh_never_hangs_on_a_fifo_or_device() {
+    use std::ffi::CString;
+    let t = stale_box();
+    std::fs::remove_file(t.p(CLI_PATH)).unwrap();
+    let c = CString::new(t.p(CLI_PATH).as_os_str().as_encoded_bytes()).unwrap();
+    // SAFETY: NUL-terminated path.
+    assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o644) }, 0);
+    // The verb runs here (Ctx is not Send); a watchdog fails the run
+    // loudly if it hangs.
+    let done = watchdog(10, "cli-refresh hung on a FIFO");
+    assert_eq!(skipped_for(&t), "not a regular file");
+    drop(done);
+
+    // The race the lstat can't see: the open itself is non-blocking and
+    // checks the fd. A FIFO and a real device both refuse at once.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let fifo_dir = t.p(CLI_DIR);
+    std::thread::spawn(move || {
+        let d = crate::fsx::Dir::open_root(&fifo_dir).unwrap();
+        let a = d.open_regular(std::ffi::OsStr::new("k2")).map(|_| ()).unwrap_err().kind();
+        let b = d.read_file(std::ffi::OsStr::new("k2"), 1024).map(|_| ()).unwrap_err().kind();
+        let dev = crate::fsx::Dir::open_root(std::path::Path::new("/dev")).unwrap();
+        let c = dev.open_regular(std::ffi::OsStr::new("null")).map(|_| ()).unwrap_err().kind();
+        let _ = tx.send((a, b, c));
+    });
+    let kinds = rx.recv_timeout(std::time::Duration::from_secs(10)).expect("open_regular hung");
+    assert_eq!(kinds, (io::ErrorKind::InvalidData, io::ErrorKind::InvalidData, io::ErrorKind::InvalidData));
+}
+
+#[test]
+fn cli_refresh_never_writes_through_a_hard_link() {
+    let t = stale_box();
+    std::fs::hard_link(t.p(CLI_PATH), t.p("/etc/other-k2")).unwrap();
+    assert_eq!(cli_json(&t.call(&["helper", "cli-refresh"]))["result"], "updated");
+    assert_eq!(std::fs::read_to_string(t.p(CLI_PATH)).unwrap(), crate::core::CLI_CONTENT);
+    assert_eq!(std::fs::read_to_string(t.p("/etc/other-k2")).unwrap(), STALE_CLI, "the other link keeps its bytes");
+}
+
+#[test]
+fn cli_refresh_with_a_planted_temp_name() {
+    let tmp = format!("/usr/local/bin/.k2.k2tmp.{}", std::process::id());
+    // A planted symlink at the temp name: removed (the link, not its
+    // target), the CLI written, the target untouched.
+    let t = stale_box();
+    std::fs::write(t.p("/etc/victim"), "keep").unwrap();
+    symlink(t.p("/etc/victim"), t.p(&tmp)).unwrap();
+    assert_eq!(cli_json(&t.call(&["helper", "cli-refresh"]))["result"], "updated");
+    assert_eq!(std::fs::read_to_string(t.p("/etc/victim")).unwrap(), "keep");
+    assert_eq!(std::fs::read_to_string(t.p(CLI_PATH)).unwrap(), crate::core::CLI_CONTENT);
+    assert!(std::fs::symlink_metadata(t.p(&tmp)).is_err(), "temp name gone");
+    // A planted directory: the call fails, nothing written, the
+    // directory and what is in it stay.
+    let t = stale_box();
+    std::fs::create_dir(t.p(&tmp)).unwrap();
+    std::fs::write(t.p(&format!("{tmp}/inner")), "keep").unwrap();
+    let o = t.call(&["helper", "cli-refresh"]);
+    assert_ne!(o.code, exit::OK, "{o:?}");
+    assert_eq!(std::fs::read_to_string(t.p(CLI_PATH)).unwrap(), STALE_CLI);
+    assert_eq!(std::fs::read_to_string(t.p(&format!("{tmp}/inner"))).unwrap(), "keep");
+}
+
+#[test]
+fn cli_refresh_refuses_a_file_over_16_mb() {
+    let t = stale_box();
+    let f = std::fs::OpenOptions::new().write(true).open(t.p(CLI_PATH)).unwrap();
+    f.set_len(k2_root_proto::cli::CLI_MAX_BYTES + 1).unwrap();
+    drop(f);
+    assert_eq!(skipped_for(&t), "not the K2 CLI (over 16 MB)");
+    assert_eq!(std::fs::metadata(t.p(CLI_PATH)).unwrap().len(), k2_root_proto::cli::CLI_MAX_BYTES + 1);
+}
+
+#[test]
+fn cli_refresh_version_edge_cases() {
+    let refused = [
+        "#!/bin/bash\nK2_CLI_VERSION=\"0.40.148-rc1\"\n".to_string(),
+        "#!/bin/bash\nK2_CLI_VERSION=\"0.040.148\"\n".to_string(),
+        "#!/bin/bash\nK2_CLI_VERSION=\"0.40\"\n".to_string(),
+        k2_root_proto::cli::marker_after_line(30),
+    ];
+    for text in &refused {
+        let t = stale_box();
+        std::fs::write(t.p(CLI_PATH), text).unwrap();
+        assert_eq!(skipped_for(&t), "not the K2 CLI", "{:?}", &text[..text.len().min(60)]);
+        assert_eq!(&std::fs::read_to_string(t.p(CLI_PATH)).unwrap(), text);
+    }
+    for (text, from) in [
+        ("#!/bin/bash\r\nK2_CLI_VERSION=\"0.40.148\"\r\n".to_string(), "0.40.148"),
+        ("#!/bin/bash\nK2SO_CLI_VERSION=\"0.39.30\"\n".to_string(), "0.39.30"),
+        (k2_root_proto::cli::marker_after_line(29), "0.40.148"),
+    ] {
+        let t = stale_box();
+        std::fs::write(t.p(CLI_PATH), &text).unwrap();
+        let v = cli_json(&t.call(&["helper", "cli-refresh"]));
+        assert_eq!((v["result"].as_str(), v["from"].as_str()), (Some("updated"), Some(from)), "{v}");
+    }
+}
+
+#[test]
+fn cli_refresh_waits_for_the_helper_lock_self_update_holds() {
+    use std::os::fd::AsRawFd;
+    let mut t = stale_box();
+    t.ctx.lock_timeout_ms = 5_000;
+    let lock_path = t.p("/run/k2-root-helper.helper.lock");
+    let hold = |ms: u64| {
+        let f = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(&lock_path).unwrap();
+        // SAFETY: fd owned by f.
+        assert_eq!(unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX) }, 0);
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let h = std::thread::spawn(move || {
+            let _ = rx.recv_timeout(std::time::Duration::from_millis(ms));
+            drop(f);
+        });
+        (tx, h)
+    };
+    // self-update and cli-refresh share the `helper` namespace lock: a
+    // refresh waits for the update, then runs.
+    let (_tx, h) = hold(600);
+    let start = std::time::Instant::now();
+    assert_eq!(cli_json(&t.call(&["helper", "cli-refresh"]))["result"], "updated");
+    assert!(start.elapsed() >= std::time::Duration::from_millis(500), "{:?}", start.elapsed());
+    h.join().unwrap();
+    // Held past the deadline: busy, nothing written.
+    std::fs::write(t.p(CLI_PATH), STALE_CLI).unwrap();
+    t.ctx.lock_timeout_ms = 300;
+    let (tx, h) = hold(10_000);
+    let o = t.call(&["helper", "cli-refresh"]);
+    assert_eq!(o.code, exit::STATE, "{o:?}");
+    assert!(o.stderr.contains("busy"), "{}", o.stderr);
+    assert_eq!(std::fs::read_to_string(t.p(CLI_PATH)).unwrap(), STALE_CLI);
+    tx.send(()).unwrap();
+    h.join().unwrap();
+}
+
+#[test]
+fn cli_refresh_belongs_to_the_first_system_daemon_only() {
+    let set_toml = |t: &T, toml: &str| std::fs::write(t.p(DAEMON_TOML), toml).unwrap();
+    // A second system daemon (this caller) behind another one: skipped.
+    let t = stale_box();
+    t.procs.0.borrow_mut().users.insert("k2a".into(), 1002);
+    set_toml(
+        &t,
+        "[[daemon]]\nuser = \"k2a\"\nunit = \"k2a-daemon.service\"\nscope = \"system\"\n\
+         [[daemon]]\nuser = \"k2\"\nunit = \"k2-daemon.service\"\nscope = \"system\"\n",
+    );
+    assert_eq!(skipped_for(&t), "another K2 daemon owns /usr/local/bin/k2 (the first system entry in daemon.toml)");
+    assert_eq!(std::fs::read_to_string(t.p(CLI_PATH)).unwrap(), STALE_CLI);
+    // A user-scope daemon: skipped.
+    set_toml(&t, "[[daemon]]\nuser = \"k2\"\nunit = \"k2-daemon.service\"\nscope = \"user\"\n");
+    assert_eq!(skipped_for(&t), "a user-scope daemon does not own /usr/local/bin/k2");
+    assert_eq!(std::fs::read_to_string(t.p(CLI_PATH)).unwrap(), STALE_CLI);
+    // The first system entry (a user-scope one listed before it is not a
+    // system owner): refreshed.
+    set_toml(
+        &t,
+        "[[daemon]]\nuser = \"k2a\"\nunit = \"k2a-daemon.service\"\nscope = \"user\"\n\
+         [[daemon]]\nuser = \"k2\"\nunit = \"k2-daemon.service\"\nscope = \"system\"\n",
+    );
+    assert_eq!(cli_json(&t.call(&["helper", "cli-refresh"]))["result"], "updated");
+}
+
+/// Root-only, Linux: real `fchown` to root:root, a file owned by another
+/// user (the not-root-owned branch with real owner checks on), and a
+/// device node at the path. Run on the build box as root:
+/// `cargo test -p k2-root-helper -- --ignored cli_refresh_as_root`.
+#[test]
+#[ignore = "needs root (build box e2e)"]
+fn cli_refresh_as_root() {
+    // SAFETY: no preconditions.
+    assert_eq!(unsafe { libc::geteuid() }, 0, "this test runs as root only");
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    let chown = |p: &Path, uid: u32| {
+        let c = std::ffi::CString::new(p.as_os_str().as_encoded_bytes()).unwrap();
+        // SAFETY: NUL-terminated path.
+        assert_eq!(unsafe { libc::lchown(c.as_ptr(), uid, uid) }, 0, "{p:?}");
+    };
+    let mut t = stale_box();
+    t.ctx.real_owners = true;
+    for d in ["/", "/usr", "/usr/local", "/usr/local/bin"] {
+        chown(&t.p(d), 0);
+    }
+    // Stale, owned by a user: not root's file, never replaced.
+    chown(&t.p(CLI_PATH), 65534);
+    assert_eq!(skipped_for(&t), "not root-owned");
+    assert_eq!(std::fs::read_to_string(t.p(CLI_PATH)).unwrap(), STALE_CLI);
+    // Stale and root's (0700, a hand copy): refreshed to root:root 0755.
+    chown(&t.p(CLI_PATH), 0);
+    std::fs::set_permissions(t.p(CLI_PATH), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let v = cli_json(&t.call(&["helper", "cli-refresh"]));
+    assert_eq!((v["result"].as_str(), v["from"].as_str()), (Some("updated"), Some("0.40.148")), "{v}");
+    let m = std::fs::metadata(t.p(CLI_PATH)).unwrap();
+    assert_eq!((m.uid(), m.gid(), m.mode() & 0o7777), (0, 0, 0o755));
+    assert_eq!(std::fs::read_to_string(t.p(CLI_PATH)).unwrap(), crate::core::CLI_CONTENT);
+    // A directory owned by a user: refused.
+    chown(&t.p(CLI_DIR), 65534);
+    assert_eq!(skipped_for(&t), "directory not root-owned");
+    chown(&t.p(CLI_DIR), 0);
+    // A character device at the path (same numbers as /dev/null): refused,
+    // no hang, the node left alone.
+    std::fs::remove_file(t.p(CLI_PATH)).unwrap();
+    let c = std::ffi::CString::new(t.p(CLI_PATH).as_os_str().as_encoded_bytes()).unwrap();
+    // SAFETY: NUL-terminated path; makedev(1, 3) is /dev/null.
+    assert_eq!(unsafe { libc::mknod(c.as_ptr(), libc::S_IFCHR | 0o644, libc::makedev(1, 3)) }, 0);
+    assert_eq!(skipped_for(&t), "not a regular file");
+    assert!(std::fs::symlink_metadata(t.p(CLI_PATH)).unwrap().file_type().is_char_device());
+}
+
 #[test]
 fn audit_lines_are_json_with_class_and_caller() {
     let t = box_root();

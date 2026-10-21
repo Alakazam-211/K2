@@ -30,7 +30,27 @@ struct Mac {
     n: TestNode,
     _fake: Fake,
     _conn: Conn,
+    _sessions: Vec<tokio::sync::mpsc::Receiver<k2_node_proto::frames::Frame>>,
 }
+
+/// Register every server with the node queue as S1 does (S2): an active
+/// share (room for a few jobs), protocol 3, and for each tenant a session
+/// stand-in (the owner has the fake's real one). The receivers are kept.
+fn shares_up(n: &TestNode, slots: &[Slot]) -> Vec<tokio::sync::mpsc::Receiver<k2_node_proto::frames::Frame>> {
+    let limits = ShareLimits { max_running: 4, max_queued: 100, ..ShareLimits::new_server(Trust::Own, cfg!(target_os = "macos")) };
+    let mut keep = Vec::new();
+    for s in std::iter::once(0u8).chain(slots.iter().copied()) {
+        n.node.fairq.set_share(s, Some(k2_node::fairq::ShareInfo { label: format!("server-{s}"), limits: limits.clone(), status: k2_node_proto::share::ServerStatus::Active }));
+        n.node.fairq.set_protocol(s, Some(3));
+        if s != 0 {
+            let (tx, rx) = tokio::sync::mpsc::channel(4096);
+            n.node.tenant(s).unwrap().hub.attach(tx);
+            keep.push(rx);
+        }
+    }
+    keep
+}
+
 
 fn write_servers(config: &Path, slots: &[(Slot, Trust, Network)]) {
     let mut f = ServersFile::new(&"a".repeat(64), "owner.test", ShareLimits::owner(2, 8, 16, 100, Network::On), 8, 1000, "local:test");
@@ -66,7 +86,9 @@ async fn mac(tag: &str, slots: &[(Slot, Trust, Network)], prepare: bool) -> Mac 
         k2_node::identity::write_pin(&n.layout.tenant(*slot).pin(), &fake.pin_for("node-1", "mini-1")).unwrap();
         n.node.add_tenant(*slot).await.unwrap();
     }
-    Mac { n, _fake: fake, _conn: conn }
+    let slots: Vec<Slot> = slots.iter().map(|s| s.0).collect();
+    let sessions = shares_up(&n, &slots);
+    Mac { n, _fake: fake, _conn: conn, _sessions: sessions }
 }
 
 fn tenant(n: &TestNode, slot: Slot) -> Arc<Tenant> {
@@ -305,6 +327,13 @@ async fn w6_no_lan_is_none_and_team_is_refused_on_a_mac() {
     std::fs::remove_dir_all(t3.root()).unwrap();
     let got = run_plan(n, 3, plan("unprepared", &["/bin/echo", "never"])).await;
     assert_eq!((got.state, got.reason.as_deref()), (JobState::Failed, Some(codes::TENANT_WALL_MISSING)), "{}", got.err);
+    // The wall watch holds both servers' queues (S2 `set_blocked`).
+    let held = n.node.tenant_wall_pass().await;
+    assert_eq!(
+        held.into_iter().collect::<Vec<_>>(),
+        vec![(2u8, codes::TEAM_NEEDS_TENANT_WALL.to_string()), (3, codes::TENANT_WALL_MISSING.to_string())],
+        "slot 1 (own, prepared) runs on"
+    );
 }
 
 /// T4 on one uid (best effort; W4 is Linux's): a tenant's job can't read

@@ -421,7 +421,7 @@ fn cmd_servers(a: &Args) -> Result<(), String> {
     };
     // A `--dev` test node (the person running it owns everything; tests
     // and the S5 harness pass their own --state-dir) needs no sudo.
-    let dev_node = k2_node::status::read(&layout.status()).is_ok_and(|s| s.dev);
+    let dev_node = k2_node::node::dev_test_exemption(k2_node::status::read(&layout.status()).is_ok_and(|s| s.dev));
     let need_root = |what: &str| -> Result<(), String> {
         if is_root() || dev_node {
             Ok(())

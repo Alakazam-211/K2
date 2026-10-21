@@ -807,10 +807,16 @@ cli_request() {
     for param in "$@"; do
         params="${params}&${param}"
     done
-    local _K2_CFG=""
+    local _K2_CFG="" out rc=0
     _k2_cfg_add data "$params"
-    _cli_curl --k2-cfg "$_K2_CFG" -sS -v -G "${BASE_URL}${endpoint}" \
-        --connect-timeout 5 --max-time 30
+    # Captured (with a sentinel, so trailing newlines survive) only so the
+    # permission-cards closing line can be noted; the bytes are unchanged.
+    out="$(r=0; _cli_curl --k2-cfg "$_K2_CFG" -sS -v -G "${BASE_URL}${endpoint}" \
+        --connect-timeout 5 --max-time 30 || r=$?; printf x; exit "$r")" || rc=$?
+    out="${out%x}"
+    _permission_note "$out"
+    printf '%s' "$out"
+    return "$rc"
 }
 
 # 0.44.4 — POST twin of cli_request for routes that change state (the
@@ -838,6 +844,7 @@ cli_request_post() {
         cli_request "$endpoint" "$@"
         return $?
     fi
+    _permission_note "$out"
     printf '%s' "$out"
     return "$rc"
 }
@@ -847,11 +854,15 @@ cli_request_post_uds() {
     local endpoint="$1"; shift
     local params=""
     for param in "$@"; do params="${params}${params:+&}${param}"; done
-    local _K2_CFG=""
+    local _K2_CFG="" out rc=0
     _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
-    _cli_curl --k2-cfg "$_K2_CFG" -sS -v -X POST --unix-socket "$(_hook_sock)" "http://localhost${endpoint}${params:+?${params}}" \
+    out="$(r=0; _cli_curl --k2-cfg "$_K2_CFG" -sS -v -X POST --unix-socket "$(_hook_sock)" "http://localhost${endpoint}${params:+?${params}}" \
         --connect-timeout 5 --max-time 30 \
-        --data-raw ""
+        --data-raw "" || r=$?; printf x; exit "$r")" || rc=$?
+    out="${out%x}"
+    _permission_note "$out"
+    printf '%s' "$out"
+    return "$rc"
 }
 
 # POST a JSON body. Used by /cli/awareness/publish (Phase 3).
@@ -982,13 +993,17 @@ cli_request_uds() {
     local endpoint="$1"; shift
     local params=""
     for param in "$@"; do params="${params}${params:+&}${param}"; done
-    local _K2_CFG=""
+    local _K2_CFG="" out rc=0
     _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
     if [ -n "$params" ]; then
         _k2_cfg_add data "$params"
     fi
-    _cli_curl --k2-cfg "$_K2_CFG" -sS -v -G --unix-socket "$(_hook_sock)" "http://localhost${endpoint}" \
-        --connect-timeout 5 --max-time 30
+    out="$(r=0; _cli_curl --k2-cfg "$_K2_CFG" -sS -v -G --unix-socket "$(_hook_sock)" "http://localhost${endpoint}" \
+        --connect-timeout 5 --max-time 30 || r=$?; printf x; exit "$r")" || rc=$?
+    out="${out%x}"
+    _permission_note "$out"
+    printf '%s' "$out"
+    return "$rc"
 }
 
 cli_post_form_uds() {
@@ -1117,6 +1132,7 @@ cli_send_json() {
                 -w $'\n%{http_code}' 2>/dev/null)" || out=""
         fi
         if [ -n "$out" ] && [[ "$out" != *"not served on cell socket"* ]] && [[ "$out" != *$'\n000' ]]; then
+            _permission_note "$out"
             printf '%s' "$out"
             return 0
         fi
@@ -1125,16 +1141,93 @@ cli_send_json() {
     if [ "$method" = "GET" ]; then
         _k2_cfg_add data-urlencode "token=${TOKEN}"
         [ -n "$payload" ] && _k2_cfg_add data "$payload"
-        _k2_curl "$_K2_CFG" -s -G "${BASE_URL}${path}" \
-            --connect-timeout 5 --max-time 60 -w $'\n%{http_code}' 2>/dev/null || printf '\n000'
+        out="$(_k2_curl "$_K2_CFG" -s -G "${BASE_URL}${path}" \
+            --connect-timeout 5 --max-time 60 -w $'\n%{http_code}' 2>/dev/null || printf '\n000'; printf x)"
     else
         _k2_cfg_add url "${BASE_URL}${path}?token=$(urlencode "$TOKEN")"
         _k2_cfg_add data-raw "$payload"
-        _k2_curl "$_K2_CFG" -s -X POST --connect-timeout 5 --max-time 60 \
-            -H "Content-Type: application/json" -w $'\n%{http_code}' 2>/dev/null || printf '\n000'
+        out="$(_k2_curl "$_K2_CFG" -s -X POST --connect-timeout 5 --max-time 60 \
+            -H "Content-Type: application/json" -w $'\n%{http_code}' 2>/dev/null || printf '\n000'; printf x)"
     fi
+    out="${out%x}"
+    _permission_note "$out"
+    printf '%s' "$out"
 }
 # END_CLI_SEND_JSON
+
+# BEGIN_CLI_PERMISSION_NOTE
+# Permission cards (Beta; PRD rev 3.1 §3.1, §11.3, vs-live C4). While both
+# switches are on for the calling agent, the daemon adds a top-level
+# `permission` object to every refusal it sends that agent. The shared
+# transports above hand every body to `_permission_note`, which keeps the
+# one closing line — "Ask with: k2 permission request …" or (after a
+# machine-only hint) "It can't be requested." — and `_permission_note_flush`
+# prints it once, on stderr, when the command exits: after the family's own
+# "Error […]" line, so a refusal ends with it. Bodies without a
+# `permission` object (every body while the switches are off) cost one
+# string match and print nothing; exit codes are untouched (except
+# `cli_print_or_fail`, below).
+#
+# The transports run inside $(…) subshells, so the note is a small file
+# keyed by the CLI's own pid ($$ is the parent's pid in a subshell).
+_K2_PERMISSION_NOTE="${TMPDIR:-/tmp}/k2-permission-note.$$"
+
+# The closing line(s) for a body (cli_send_json's "\n<status>" tail is
+# ignored), or nothing.
+_permission_closing_lines() {
+    printf '%s' "$1" | python3 -c '
+import json, re, sys
+raw = sys.stdin.read()
+m = re.match(r"(?s)(.*)\n[0-9]{3}$", raw)
+if m:
+    raw = m.group(1)
+try:
+    v = json.loads(raw)
+except Exception:
+    sys.exit(0)
+p = v.get("permission") if isinstance(v, dict) else None
+if not isinstance(p, dict):
+    sys.exit(0)
+cmd = p.get("command")
+if isinstance(cmd, str) and cmd:
+    print("Ask with: " + cmd)
+elif p.get("requestable") is False:
+    hint = p.get("hint")
+    if isinstance(hint, str) and hint:
+        print(hint)
+    print("It can'"'"'t be requested.")
+' 2>/dev/null
+}
+
+_permission_note() {
+    case "${1:-}" in *'"permission"'*) ;; *) return 0 ;; esac
+    local lines
+    lines="$(_permission_closing_lines "$1")" || return 0
+    [ -n "$lines" ] || return 0
+    if ! printf '%s\n' "$lines" > "$_K2_PERMISSION_NOTE" 2>/dev/null; then
+        printf '%s\n' "$lines" >&2
+    fi
+    return 0
+}
+
+# True when a body carries the refusal's `permission` object.
+_permission_in_body() {
+    case "${1:-}" in *'"permission"'*) ;; *) return 1 ;; esac
+    [ -n "$(_permission_closing_lines "$1")" ]
+}
+
+# The EXIT trap (installed by the router): print the noted line, once.
+# Never fails, so the command's own exit code stands.
+_permission_note_flush() {
+    local f
+    f="$_K2_PERMISSION_NOTE"
+    if [ -f "$f" ]; then
+        cat "$f" >&2 2>/dev/null || true
+        rm -f "$f" 2>/dev/null || true
+    fi
+    return 0
+}
+# END_CLI_PERMISSION_NOTE
 
 # BEGIN_CLI_PASSPORT_PROJECT
 # 0.46.3 (agent CLI audit A2): `k2 tickets list`, `k2 feedback list` and
@@ -27680,6 +27773,11 @@ else:
     print(e)' 2>/dev/null)
     if [ -n "$err" ]; then
         echo "Error: $err" >&2
+        # Permission cards (vs-live C4): a refusal that teaches is a
+        # teaching refusal, exit 3. Every other body keeps exit 1.
+        if _permission_in_body "$resp"; then
+            exit 3
+        fi
         exit 1
     fi
     printf '%s\n' "$resp"
@@ -31743,6 +31841,7 @@ _study_title() {
         garden-data) echo "Garden data: a widget's keyspace and grants" ;;
         changes) echo "Git changes: review, stage, discard, commit" ;;
         design) echo "Design notes: what a Design tab sends you" ;;
+        permissions) echo "Permission cards (Beta)" ;;
         *) echo "" ;;
     esac
 }
@@ -31753,6 +31852,34 @@ _study_is_topic() {
         [ "$t" = "$id" ] && return 0
     done
     return 1
+}
+
+# Permission cards (Beta): `permissions` is a topic only while both
+# switches are on for this agent (inside a K2 cell; PRD rev 3.1 §11.4).
+# Off, these print exactly `_STUDY_TOPIC_IDS` / `_study_usage` /
+# `_study_catalog`.
+_study_topic_ids_all() {
+    if _permission_cli_enabled; then
+        printf '%s permissions\n' "$_STUDY_TOPIC_IDS"
+    else
+        printf '%s\n' "$_STUDY_TOPIC_IDS"
+    fi
+}
+
+_study_usage_all() {
+    if _permission_cli_enabled; then
+        _study_usage | awk '{ print } /^  agent-hire  garden-data/ { print "  permissions" }'
+    else
+        _study_usage
+    fi
+}
+
+_study_catalog_all() {
+    if _permission_cli_enabled; then
+        _study_catalog | awk '{ print } /^  design   / { print "  permissions         Permission cards (Beta): ask a person to allow what K2 refused you" }'
+    else
+        _study_catalog
+    fi
 }
 
 _study_catalog() {
@@ -31858,6 +31985,7 @@ _study_page() {
         hooks) _study_page_hooks ;;
         agent-hire) _study_page_agent_hire ;;
         design) _study_page_design ;;
+        permissions) _study_page_permissions ;;
         *) return 1 ;;
     esac
 }
@@ -34918,7 +35046,7 @@ cmd_study() {
     while [ $# -gt 0 ]; do
         case "$1" in
             --help|-h)
-                _study_usage
+                _study_usage_all
                 exit 0
                 ;;
             --json)
@@ -34927,13 +35055,13 @@ cmd_study() {
                 ;;
             --*)
                 echo "Error: unknown flag '$1'" >&2
-                _study_usage >&2
+                _study_usage_all >&2
                 exit 2
                 ;;
             *)
                 if [ -n "$topic" ]; then
                     echo "Error: unexpected extra argument '$1'" >&2
-                    _study_usage >&2
+                    _study_usage_all >&2
                     exit 2
                 fi
                 topic="$1"
@@ -34944,7 +35072,7 @@ cmd_study() {
 
     if [ -z "$topic" ] || [ "$topic" = "list" ]; then
         if [ "$as_json" = 1 ]; then
-            for id in $_STUDY_TOPIC_IDS; do
+            for id in $(_study_topic_ids_all); do
                 printf '%s\t%s\n' "$id" "$(_study_title "$id")"
             done | python3 -c '
 import json, sys
@@ -34956,14 +35084,14 @@ for line in sys.stdin:
 print(json.dumps({"topics": topics}, separators=(",", ":")))
 '
         else
-            _study_catalog
+            _study_catalog_all
         fi
         exit 0
     fi
 
-    if ! _study_is_topic "$topic"; then
+    if ! _study_is_topic "$topic" && ! { [ "$topic" = permissions ] && _permission_cli_enabled; }; then
         echo "Error: unknown study topic '$topic'" >&2
-        _study_usage >&2
+        _study_usage_all >&2
         exit 2
     fi
 
@@ -39608,6 +39736,13 @@ ASK A HUMAN
   feedback list                         This workspace's asks + their status
   feedback show <id>                    One ask: status, answer, discussion thread
                                         (ask/list/show/comment/resolve — see `k2 feedback --help`)
+EOF
+    # Permission cards (Beta): one line, only while both switches are on
+    # for this agent (PRD rev 3.1 §11.4). Off = today's text.
+    if _permission_cli_enabled; then
+        echo '  permission request <action> --why "…"   Ask a person to allow what K2 refused you (k2 study permissions)'
+    fi
+    cat <<'EOF'
 
 EMAIL (K2 Mail — real addresses for agents; server runs on Linux daemons)
   mail create <local>[@<domain>]        Mint yourself an email address (--id = idempotent)
@@ -57124,6 +57259,120 @@ YOU CAN FILE ONE TOO
 EOF
 }
 
+# Permission cards (Beta). Reached only while both switches are on (see
+# _study_topic_ids_all). The same text is the k2-permissions skill
+# (k2-core skills/content.rs K2_PERMISSIONS_SKILL_BODY); a test keeps the
+# two byte-identical, so edit both.
+_study_page_permissions() {
+    cat <<'EOF'
+# Permission cards (Beta)
+
+Permission cards are on for you: this server's owner turned on "Permission cards (Beta)", and your own "Can ask for permission cards" switch is on. When K2 refuses you something a person can allow, ask that person with one command. K2 shows them a card; they press Allow or Deny.
+
+## The closing line
+
+Every refusal (exit 3) or hold (exit 2) ends with exactly one line:
+
+- `Ask with: k2 permission request <action> ... --why "<what you need it for>"`: run it as printed, filling in only `--why`.
+- `It can't be requested.`: a person does it themselves (the line before it says where). Tell your human.
+
+For example:
+
+    Error [compute_off]: compute nodes are off for this workspace.
+    Ask with: k2 permission request compute.use --why "<what you need it for>"
+
+If neither line appears, see "No line" below.
+
+## Off
+
+If `k2 permission` ever says unknown command, cards were turned off for you. Go back to telling your human, as before. Nothing you asked for will be applied.
+
+## When to ask
+
+1. Run the Ask-with line as printed; fill in only `--why`.
+2. You may also ask before any refusal, when you know the action.
+3. Several needs: one request per action. K2 groups requests sent within 5 minutes into one card per set of approvers. Answers still come one per request.
+
+## Held
+
+A hold (exit 2) already made a request the approvers can see in Settings. Asking adds a card and a push to them, with your reason, on the same request id. It is not a duplicate.
+
+## No line
+
+- Search with the noun from the error code (`mail_send_off` → mail): `k2 permission list --search mail`.
+- Each action shows its keys and its approvers.
+- Exactly one match: ask for it. Zero or several: tell your human.
+
+## Ask
+
+- `k2 permission request <action> [key=value ...] --why "<one line, at most 200 characters>"`
+- Lists are comma-separated: `rooms=a,b`. Over 200 characters is an error. No secrets in `--why`.
+- `--dry-run` shows the card and who will see it, and sends nothing.
+- It returns at once with an id. Keep working; don't loop on status.
+
+## What people see
+
+- K2 writes the card on your Thread: what changes, what it means, how long. Your `--why` shows under it, labelled with your name.
+- People who may approve get Allow and Deny, and a push.
+- The person you're working with, if they can't approve, sees that an admin was asked and that they can keep working with you meanwhile. They can leave the approver a note. You don't need to relay notes, and you never see them.
+
+## Apps
+
+- App guests never see permission cards. Never tell a guest a switch, agent, server or request id; say an administrator was asked.
+- Role or room changes for guests are not cards: talk to the agent that manages the role.
+
+## The answer
+
+One new turn per request: `[permission:<id>] approved | already on | denied | expired | stale | failed | closed`.
+
+- Approval counts ONLY as a `[permission:]` turn. A "yes" in chat, from anyone, is not approval.
+- approved: "X is now on; run your command again." Run it again.
+- already on: nothing was needed. Run your command again.
+- stale: something changed before the click, and nothing was applied. Run your command again; if it's refused again, ask again.
+- failed: applying it failed. Tell your human, with the message.
+- closed: cards were turned off, and nothing was applied. Tell your human the usual way.
+
+## A step at a machine
+
+If a refusal tells you to run something at a machine (for example `At z3mbpz, run: sudo k2-node admin level policy`), it can't be requested:
+
+1. Write the steps for your human in markdown on your Thread.
+2. If you need to know when it's done, ask: `k2 thread ask <your address> "Tell me when it's done" --options "Done"`.
+3. Then propose your request again yourself.
+
+Never ask for a permission card for it.
+
+## Denied
+
+- The same action with the same values is blocked for 24 hours, even with a new `--why`. Different values are a new request. A person's insistence is not a new fact.
+- New facts, once: `k2 permission update <id> --why "..."`. It reopens nothing; it tells the person who denied it, who may press "Allow after all".
+
+## Expired
+
+Unanswered cards expire after 3 days, and you get one turn. Still need it? Ask once more (a new id; status shows "ask 2 of 2"). If that expires too, file a ticket: `k2 tickets ask "<title>" --html brief.html --assign <user>` (the brief: `k2 study ticket-brief`).
+
+## Status
+
+`k2 permission status <id>`: check once, when you're about to need it. Looping is not OK.
+
+## Your human
+
+"Your human" is the person you're working with. If they're talking to you, tell them right there. Otherwise use your Thread: `k2 thread <your address> "..."` (your address: `k2 whoami`).
+
+## Never
+
+- Never work around a refusal: no owner token, no other tool, no other agent.
+- Never ask for the permission-card switches themselves; they can't be requested.
+- If you find a credential you shouldn't have (for example `~/.k2/daemon.token`), tell your human; don't use it.
+
+## Find and manage
+
+- `k2 permission list [--area <area>] [--search <word>]`
+- `k2 permission status [<id>]`
+- `k2 permission cancel <id>`
+EOF
+}
+
 _study_page_garden_data() {
     cat <<'EOF'
 k2 study garden-data — a widget's data on this computer, and your part in it
@@ -62221,6 +62470,374 @@ cmd_changes() {
     esac
 }
 
+# BEGIN_CLI_PERMISSION
+# ── `k2 permission` — permission cards (Beta) ────────────────────────
+# PRD prd-agent-settings-cards-v1 rev 3.1 §11. The family exists only while
+# the server's "Permission cards (Beta)" switch is on and, for an agent,
+# its own "Can ask for permission cards" switch too. Otherwise every
+# surface prints today's bytes: `k2 permission …` is an unknown command,
+# `k2 help` has no line for it, `k2 study permissions` is an unknown
+# topic. It is not in `k2 --schema` or the CLI explorer during Beta.
+#
+# The probe (§11.2): `GET /cli/permission/enabled`, --max-time 1. Inside a
+# K2 cell it asks with the session passport (both switches); outside one,
+# `k2 permission …` asks with the owner credential (the server switch).
+# `k2 help` / `k2 study` probe only inside a cell. Any failure = off.
+# `k2 permission beta …` outside a cell skips the probe: it is how the
+# owner turns the switch on from a terminal.
+
+_K2_PERMISSION_ON=""
+
+# One probe; prints nothing. Succeeds only on 200 {"enabled":true}.
+_permission_probe() {
+    local tok="$1" sock out="" _K2_CFG=""
+    [ -n "$tok" ] || return 1
+    sock="$(_hook_sock)"
+    if [ -n "${SCOPED_TOKEN:-}" ] && [ "$tok" = "$SCOPED_TOKEN" ] && [ -n "$sock" ] && [ -S "$sock" ] && ! _cli_skip_uds; then
+        _k2_cfg_add header "Authorization: Bearer ${tok}"
+        out="$(_k2_curl "$_K2_CFG" -s -G --unix-socket "$sock" "http://localhost/cli/permission/enabled" \
+            --connect-timeout 1 --max-time 1 -w $'\n%{http_code}' 2>/dev/null)" || out=""
+    elif [ -n "${PORT:-}" ]; then
+        _k2_cfg_add data-urlencode "token=${tok}"
+        out="$(_k2_curl "$_K2_CFG" -s -G "http://${HOST}:${PORT}/cli/permission/enabled" \
+            --connect-timeout 1 --max-time 1 -w $'\n%{http_code}' 2>/dev/null)" || out=""
+    fi
+    [[ "$out" == *$'\n200' ]] || return 1
+    out="${out%$'\n200'}"
+    printf '%s' "$out" | python3 -c '
+import json, sys
+try:
+    v = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+sys.exit(0 if isinstance(v, dict) and v.get("enabled") is True else 1)
+' 2>/dev/null
+}
+
+# For `k2 help` / `k2 study`: inside a K2 cell only, cached per process.
+_permission_cli_enabled() {
+    if [ -z "$_K2_PERMISSION_ON" ]; then
+        _K2_PERMISSION_ON=0
+        if [ -n "${SCOPED_TOKEN:-}" ] && _permission_probe "$SCOPED_TOKEN"; then
+            _K2_PERMISSION_ON=1
+        fi
+    fi
+    [ "$_K2_PERMISSION_ON" = 1 ]
+}
+
+# For `k2 permission <sub>`: does the family exist for this caller?
+_permission_family_available() {
+    local sub="${1:-}"
+    if [ -n "${SCOPED_TOKEN:-}" ]; then
+        _permission_cli_enabled
+        return
+    fi
+    [ "$sub" = "beta" ] && return 0
+    _permission_probe "${TOKEN:-}"
+}
+
+_permission_usage() {
+    cat <<'EOF'
+Usage: k2 permission <command> (Beta)
+
+Ask a person to allow what K2 refused you. Every refusal ends with the
+exact command to run ("Ask with: …"), or "It can't be requested."
+
+Agents (in a K2 terminal):
+  k2 permission request <action> [key=value …] --why "<one line>" [--dry-run]
+  k2 permission update <id> --why "<new facts>"   once, on a denied request
+  k2 permission status [<id>]                      check once; never loop
+  k2 permission cancel <id>
+  k2 permission list [--area <area>] [--search <word>]
+
+People (a terminal outside K2):
+  k2 permission pending                            what waits on you
+  k2 permission approve <id>
+  k2 permission deny <id> [--reason "…"]
+  k2 permission beta on|off|status                 the server switch (owner)
+  k2 permission agent <workspace> on|off           one agent's switch (owner or admin)
+
+Rules: k2 study permissions
+EOF
+}
+
+# Print a family answer ("<body>\n<status>" from cli_send_json) and exit
+# with the documented code: 2xx 0, 400 2, 404 4, 403/409/429 3, else 1.
+_permission_print() {
+    local verb="$1" raw="$2" json="${3:-0}"
+    local status="${raw##*$'\n'}" body="${raw%$'\n'*}"
+    if [ "$status" = "000" ] || [ -z "$status" ]; then
+        echo "Error: no answer from the K2 daemon" >&2
+        exit 1
+    fi
+    if [ "$json" = 1 ] && [ "${status:0:1}" = 2 ]; then
+        printf '%s\n' "$body"
+        exit 0
+    fi
+    printf '%s' "$body" | K2_PV="$verb" K2_PS="$status" python3 -c '
+import json, os, sys, time
+verb, status = os.environ["K2_PV"], int(os.environ["K2_PS"])
+raw = sys.stdin.read()
+try:
+    v = json.loads(raw)
+except Exception:
+    v = None
+def when(ts):
+    try:
+        return time.strftime("%Y-%m-%d %H:%M", time.localtime(int(ts)))
+    except Exception:
+        return str(ts)
+def expires_in(ts):
+    try:
+        s = int(ts) - int(time.time())
+    except Exception:
+        return ""
+    if s <= 0:
+        return "expired"
+    d, h = s // 86400, (s % 86400) // 3600
+    if d >= 1:
+        return "expires in %d day%s" % (d, "" if d == 1 else "s")
+    return "expires in %d hour%s" % (max(h, 1), "" if h == 1 else "s")
+def people(r):
+    out = []
+    for p in r or []:
+        if isinstance(p, dict):
+            n = p.get("login") or p.get("name") or "?"
+            role = p.get("role")
+            out.append("%s (%s)" % (n, role) if role else n)
+        else:
+            out.append(str(p))
+    return ", ".join(out) or "nobody yet"
+if status >= 300 or not isinstance(v, dict):
+    e = v.get("error") if isinstance(v, dict) else None
+    code = e.get("code") if isinstance(e, dict) else (e if isinstance(e, str) else "error")
+    hint = (e.get("hint") or e.get("message")) if isinstance(e, dict) else (v.get("hint") or v.get("message") if isinstance(v, dict) else None)
+    if code == "recently_denied" and isinstance(v, dict):
+        d = v.get("denied") or (e if isinstance(e, dict) else {})
+        msg = "Denied by %s at %s" % (d.get("by", "?"), when(d.get("at"))) if d.get("by") else "Denied"
+        if d.get("reason"):
+            msg += ": \"%s\"" % d["reason"]
+        print(msg + ".", file=sys.stderr)
+        until = d.get("askAgainAt") or d.get("until")
+        rid = d.get("id") or v.get("id") or "<id>"
+        print("Ask again after %s, or add facts: k2 permission update %s --why \"…\"" % (when(until) if until else "24 hours", rid), file=sys.stderr)
+    else:
+        print("Error [%s]: %s" % (code, hint or raw.strip()[:300] or "status %d" % status), file=sys.stderr)
+    sys.exit(0)
+st = v.get("status")
+if verb == "request":
+    if v.get("dryRun") or ("text" in v and "id" not in v):
+        print("Dry run: nothing was sent.")
+        print("Card: %s" % (v.get("text") or ""))
+        if v.get("consequences"):
+            print("What it means: %s" % v["consequences"])
+        print("Shown to: %s" % people(v.get("routedTo") or v.get("approvers")))
+        if v.get("expiresIn"):
+            print("Expires: %s" % v["expiresIn"])
+    elif st == "already_pending" or v.get("code") == "already_pending":
+        print("Already asked: %s (pending). Nothing new sent." % v.get("id", "?"))
+    elif st == "already_done" or v.get("code") == "already_done":
+        print("Already on: nothing to ask. Run your command again.")
+    else:
+        exp = expires_in(v.get("expiresAt"))
+        print("Asked: %s (%s%s). Shown to: %s." % (v.get("id", "?"), st or "pending", "; " + exp if exp else "", people(v.get("routedTo"))))
+        if v.get("text"):
+            print("Card: %s" % v["text"] + ("" if not v.get("duration") else " Lasts: %s." % v["duration"]))
+elif verb in ("update", "cancel", "approve", "deny", "beta", "agent"):
+    print(v.get("message") or v.get("hint") or "OK.")
+else:
+    print(json.dumps(v, indent=2))
+' || true
+    case "$status" in
+        2??) exit 0 ;;
+        400|413) exit 2 ;;
+        404) exit 4 ;;
+        403|409|429) exit 3 ;;
+        *) exit 1 ;;
+    esac
+}
+
+# People verbs are refused inside a K2 terminal (§11.1): a person answers
+# from a terminal outside K2, the app or the phone.
+_permission_people_only() {
+    if [ -n "${SCOPED_TOKEN:-}" ]; then
+        echo "Error [person_only]: k2 permission $1 is for people, from a terminal outside K2 (or the K2 app). An agent asks with k2 permission request." >&2
+        exit 3
+    fi
+}
+
+_permission_request() {
+    local action="" why="" dry=0 json=0 kv=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --why) [ $# -ge 2 ] || { echo "Error: --why needs a value" >&2; exit 2; }; why="$2"; shift 2 ;;
+            --why=*) why="${1#--why=}"; shift ;;
+            --dry-run) dry=1; shift ;;
+            --json) json=1; shift ;;
+            -h|--help) _permission_usage; exit 0 ;;
+            --*) echo "Error: unknown flag '$1'" >&2; _permission_usage >&2; exit 2 ;;
+            *=*) kv+=("$1"); shift ;;
+            *)
+                if [ -z "$action" ]; then action="$1"; shift
+                else echo "Error: unexpected argument '$1' (values are key=value)" >&2; exit 2; fi ;;
+        esac
+    done
+    [ -n "$action" ] || { echo "Usage: k2 permission request <action> [key=value …] --why \"<one line>\"" >&2; exit 2; }
+    [ -n "$why" ] || { echo "Error [bad_why]: --why is required: one line, at most 200 characters, saying what you need it for" >&2; exit 2; }
+    local body
+    body="$(K2_PA="$action" K2_PW="$why" K2_PD="$dry" python3 -c '
+import json, os, sys
+params = {}
+for a in sys.argv[1:]:
+    k, _, v = a.partition("=")
+    params[k] = v
+out = {"action": os.environ["K2_PA"], "params": params, "why": os.environ["K2_PW"]}
+if os.environ["K2_PD"] == "1":
+    out["dryRun"] = True
+print(json.dumps(out))
+' "${kv[@]+"${kv[@]}"}")"
+    _permission_print request "$(cli_send_json POST /cli/permission/request "$body")" "$json"
+}
+
+_permission_cmd() {
+    local sub="${1:-}"
+    [ $# -gt 0 ] && shift
+    case "$sub" in
+        ""|help|-h|--help) _permission_usage ;;
+        request|ask) _permission_request "$@" ;;
+        update)
+            local id="${1:-}" why=""
+            [ -n "$id" ] && shift
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --why) why="${2:-}"; shift 2 ;;
+                    *) echo "Error: unexpected argument '$1'" >&2; exit 2 ;;
+                esac
+            done
+            [ -n "$id" ] && [ -n "$why" ] || { echo "Usage: k2 permission update <id> --why \"<new facts>\"" >&2; exit 2; }
+            _permission_print update "$(cli_send_json POST /cli/permission/update "$(K2_PI="$id" K2_PW="$why" python3 -c 'import json,os; print(json.dumps({"id": os.environ["K2_PI"], "why": os.environ["K2_PW"]}))')")"
+            ;;
+        status)
+            local q=""
+            [ -n "${1:-}" ] && q="id=$(urlencode "$1")"
+            _permission_print status "$(cli_send_json GET /cli/permission/status "$q")"
+            ;;
+        cancel)
+            [ -n "${1:-}" ] || { echo "Usage: k2 permission cancel <id>" >&2; exit 2; }
+            _permission_print cancel "$(cli_send_json POST /cli/permission/cancel "$(K2_PI="$1" python3 -c 'import json,os; print(json.dumps({"id": os.environ["K2_PI"]}))')")"
+            ;;
+        list)
+            local q="" area="" search=""
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --area) area="${2:-}"; shift 2 ;;
+                    --search) search="${2:-}"; shift 2 ;;
+                    *) echo "Error: unexpected argument '$1'" >&2; exit 2 ;;
+                esac
+            done
+            [ -n "$area" ] && q="area=$(urlencode "$area")"
+            [ -n "$search" ] && q="${q}${q:+&}search=$(urlencode "$search")"
+            _permission_print list "$(cli_send_json GET /cli/permission/list "$q")"
+            ;;
+        pending)
+            _permission_people_only pending
+            _permission_print pending "$(cli_send_json GET /cli/permission/pending)"
+            ;;
+        approve|deny)
+            _permission_people_only "$sub"
+            local id="${1:-}" reason=""
+            [ -n "$id" ] && shift
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --reason) reason="${2:-}"; shift 2 ;;
+                    *) echo "Error: unexpected argument '$1'" >&2; exit 2 ;;
+                esac
+            done
+            [ -n "$id" ] || { echo "Usage: k2 permission $sub <id>" >&2; exit 2; }
+            local pending answer body
+            pending="$(cli_send_json GET /cli/permission/pending)"
+            [ "$sub" = approve ] && answer="Allow" || answer="Deny"
+            body="$(printf '%s' "${pending%$'\n'*}" | K2_PI="$id" K2_PA="$answer" K2_PR="$reason" python3 -c '
+import json, os, sys
+try:
+    v = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+rid = os.environ["K2_PI"]
+for r in v.get("requests") or []:
+    if r.get("requestId") == rid:
+        if os.environ["K2_PA"] == "Allow" and (r.get("proof") or {}).get("kind") == "confirm":
+            print("CONFIRM")
+            sys.exit(0)
+        out = {"addr": r.get("addr"), "id": r.get("cardId"), "answer": os.environ["K2_PA"]}
+        if os.environ["K2_PR"]:
+            out["reason"] = os.environ["K2_PR"]
+        print(json.dumps(out))
+        sys.exit(0)
+sys.exit(4)
+' 2>/dev/null)" || {
+                echo "Error [not_found]: no request $id waits on you (k2 permission pending)" >&2
+                exit 4
+            }
+            if [ "$body" = "CONFIRM" ]; then
+                echo "Error [vault_confirm_required]: $id needs the same confirm Settings takes. Approve it in the K2 app, on your phone, or in Settings." >&2
+                exit 3
+            fi
+            _permission_print "$sub" "$(cli_send_json POST /cli/thread/answer "$body")"
+            ;;
+        beta)
+            _permission_people_only beta
+            case "${1:-status}" in
+                on|off)
+                    _permission_print beta "$(cli_send_json POST /cli/settings/update "{\"permissionCards\":$([ "$1" = on ] && echo true || echo false)}")"
+                    ;;
+                status)
+                    local raw
+                    raw="$(cli_send_json GET /cli/settings/get)"
+                    printf '%s' "${raw%$'\n'*}" | python3 -c '
+import json, sys
+try:
+    v = json.load(sys.stdin)
+except Exception:
+    print("Error: no answer from the K2 daemon", file=sys.stderr); sys.exit(1)
+s = v.get("settings", v) if isinstance(v, dict) else {}
+print("Permission cards (Beta): %s" % ("on" if s.get("permissionCards") is True else "off"))
+'
+                    ;;
+                *) echo "Usage: k2 permission beta on|off|status" >&2; exit 2 ;;
+            esac
+            ;;
+        agent)
+            _permission_people_only agent
+            local ws="${1:-}" onoff="${2:-}"
+            case "$onoff" in on|off) ;; *) echo "Usage: k2 permission agent <workspace> on|off" >&2; exit 2 ;; esac
+            _permission_print agent "$(cli_send_json POST /cli/agent-access/set "$(K2_PW="$ws" K2_PV="$onoff" python3 -c 'import json,os; print(json.dumps({"workspace": os.environ["K2_PW"], "toggle": "permission_cards", "value": os.environ["K2_PV"] == "on"}))')")"
+            ;;
+        *)
+            echo "Error: unknown k2 permission command: $sub" >&2
+            _permission_usage >&2
+            exit 2
+            ;;
+    esac
+}
+
+# `k2 permission …` from the router: today's unknown command unless the
+# family exists for this caller.
+cmd_permission() {
+    if ! _permission_family_available "${1:-}"; then
+        echo "Unknown command: permission" >&2
+        cmd_help
+        exit 1
+    fi
+    # An `id` tool: inside a K2 cell the daemon sees the session passport,
+    # never the owner token (outside one, the owner credential as usual).
+    if [ -n "${SCOPED_TOKEN:-}" ] && [ -n "$(_hook_sock)" ]; then
+        TOKEN="$SCOPED_TOKEN"
+    fi
+    _permission_cmd "$@"
+}
+# END_CLI_PERMISSION
+
 # ── Router ───────────────────────────────────────────────────────────
 # Select TCP credential by catalog mode BEFORE any verb handler runs.
 # ID/locked tools in a scoped cell keep SCOPED_TOKEN; Open tools may
@@ -62229,6 +62846,12 @@ cmd_changes() {
 # with a clear error first (never an owner fallback).
 _cli_check_session_passport "${1:-help}"
 _cli_apply_auth_for_verb "${1:-help}" "${2:-}"
+
+# Permission cards (Beta): print the refusal's closing line, if a transport
+# noted one, once the command's own output is done. Prints nothing and
+# keeps the exit code otherwise (see BEGIN_CLI_PERMISSION_NOTE).
+if [ -e "$_K2_PERMISSION_NOTE" ]; then rm -f "$_K2_PERMISSION_NOTE" 2>/dev/null || true; fi
+trap _permission_note_flush EXIT
 
 case "${1:-help}" in
     fed)
@@ -63092,6 +63715,11 @@ EOF
         ;;
     study)
         shift; cmd_study "$@"
+        ;;
+    permission)
+        # Permission cards (Beta): unknown, exactly as today, unless the
+        # switches are on (cmd_permission decides; BEGIN_CLI_PERMISSION).
+        shift; cmd_permission "$@"
         ;;
     help|--help|-h)
         # Guard against `set -u` when no trailing args.

@@ -88,20 +88,171 @@ fn a_line_crosses_once_and_rearms_only_well_below() {
     let up = crossings(&mut st, &[disk(86)], &l);
     assert_eq!(up.iter().map(|(_, lv)| *lv).collect::<Vec<_>>(), vec![Level::Warn]);
     assert!(crossings(&mut st, &[disk(84)], &l).is_empty());
-    assert_eq!(st.levels["8:1"], Level::Warn, "84% is not 5 points below 85%");
+    assert_eq!(st.levels["mount:/"], Level::Warn, "84% is not 5 points below 85%");
     assert!(crossings(&mut st, &[disk(86)], &l).is_empty(), "no flapping");
     assert!(crossings(&mut st, &[disk(80)], &l).is_empty());
-    assert_eq!(st.levels["8:1"], Level::Ok, "80% and 200 GiB free: re-armed");
+    assert_eq!(st.levels["mount:/"], Level::Ok, "80% and 200 GiB free: re-armed");
     assert_eq!(crossings(&mut st, &[disk(86)], &l).len(), 1, "a new crossing after re-arm");
     let up = crossings(&mut st, &[disk(99)], &l);
     assert_eq!(up.iter().map(|(_, lv)| *lv).collect::<Vec<_>>(), vec![Level::Critical], "one crossing, at the new level");
     // Down to 94%: critical re-armed (≤ 93%? no: 94 > 93), stays critical.
     assert!(crossings(&mut st, &[disk(94)], &l).is_empty());
-    assert_eq!(st.levels["8:1"], Level::Critical);
+    assert_eq!(st.levels["mount:/"], Level::Critical);
     // 89%: critical and refuse re-arm, warn holds.
     assert!(crossings(&mut st, &[disk(89)], &l).is_empty());
-    assert_eq!(st.levels["8:1"], Level::Warn);
+    assert_eq!(st.levels["mount:/"], Level::Warn);
     assert_eq!(crossings(&mut st, &[disk(96)], &l).iter().map(|(_, lv)| *lv).collect::<Vec<_>>(), vec![Level::Refuse]);
+}
+
+/// The macOS data volume at `pct` used, on device `dev` (macOS numbers
+/// devices again at every boot; the volume UUID stays).
+fn mac_disk(dev: &str, pct: u64) -> Fs {
+    let total = 1000 * GIB;
+    Fs::from_raw(dev.into(), Some("/System/Volumes/Data".into()), Some("apfs".into()), RawStat::sized(total, total / 100 * (100 - pct)))
+        .with_uuid(Some("8E3A51C4-1B2D-4C1F-9E77-0D6B5A1F2C3D"))
+}
+
+/// Records notices and merges, and serves a fixed list of open tickets.
+#[derive(Default)]
+struct TicketRec {
+    rec: Rec,
+    open: Vec<OpenTicket>,
+    merged: Mutex<Vec<Merge>>,
+}
+
+impl NoticeSink for TicketRec {
+    fn owner_ticket(&self, title: &str, body: &str, priority: i64) {
+        self.rec.owner_ticket(title, body, priority)
+    }
+    fn agent_note(&self, workspace: &str, title: &str, text: &str) {
+        self.rec.agent_note(workspace, title, text)
+    }
+    fn agent_wake(&self, workspace: &str, text: &str) {
+        self.rec.agent_wake(workspace, text)
+    }
+    fn open_disk_tickets(&self) -> Vec<OpenTicket> {
+        self.open.clone()
+    }
+    fn merge_ticket(&self, m: &Merge) {
+        self.merged.lock().unwrap().push(m.clone());
+    }
+}
+
+/// Smoke r6: a reboot that renumbers the device (1:16 → 1:17) keeps the
+/// same volume, so no second ticket and no second agent notice.
+#[test]
+fn a_new_device_number_after_a_reboot_keeps_the_same_ticket() {
+    let home = crate::test_support::TempHome::new();
+    let path = home.path().join(".k2").join(STATE_FILE);
+    let sink = Rec::default();
+    let mut st = load_state(&path);
+    let now = 1_800_000_000;
+    let out = tick_with(&mut st, &[mac_disk("1:16", 89)], &guard(Mode::On), Some(snap(now - 60)), "z3mbp", now, &sink, &no_fresh);
+    assert_eq!(out.iter().filter(|n| matches!(n, Notice::Owner { .. })).count(), 1);
+    assert_eq!(st.levels.keys().collect::<Vec<_>>(), vec!["uuid:8e3a51c4-1b2d-4c1f-9e77-0d6b5a1f2c3d@/System/Volumes/Data"]);
+    sink.take();
+    // Reboot: state from the file, the device renumbered.
+    save_state(&path, &st).unwrap();
+    let mut st = load_state(&path);
+    let out = tick_with(&mut st, &[mac_disk("1:17", 89)], &guard(Mode::On), Some(snap(now)), "z3mbp", now + 600, &sink, &no_fresh);
+    assert!(out.is_empty(), "same volume, no new ticket or agent notice: {out:#?}");
+    // It still moves up a line on the new number, once.
+    let out = tick_with(&mut st, &[mac_disk("1:17", 96)], &guard(Mode::On), Some(snap(now)), "z3mbp", now + 660, &sink, &no_fresh);
+    assert_eq!(out.iter().filter(|n| matches!(n, Notice::Owner { priority: 1, .. })).count(), 1, "{out:#?}");
+    assert_eq!(st.levels.len(), 1, "{:?}", st.levels);
+}
+
+/// The live rails: LiveSink lists the watch's own open tickets and closes
+/// a merged duplicate (a note, then resolved); other tickets are left.
+#[test]
+fn the_live_sink_lists_and_closes_its_own_disk_tickets() {
+    let _home = crate::test_support::TempHome::new();
+    let _g = k2_core::test_env::lock();
+    k2_core::db::init_for_tests();
+    let file = |agent: &str, title: &str| {
+        k2_core::feedback::create(k2_core::feedback::NewFeedback {
+            project_id: k2_core::db::AUDIT_SENTINEL_IDS[0].into(),
+            agent_name: agent.into(),
+            kind: "fyi".into(),
+            title: title.into(),
+            priority: 2,
+            ..Default::default()
+        })
+        .unwrap()
+        .id
+    };
+    let old = file(NOTICE_FROM, "Disk / 90% full on box (9 GB free)");
+    let new = file(NOTICE_FROM, "Disk / 91% full on box (8 GB free)");
+    let other = file("k2-apps", "Disk / is not ours");
+    let open = LiveSink.open_disk_tickets();
+    let ids: Vec<&str> = open.iter().map(|t| t.id.as_str()).collect();
+    assert!(ids.contains(&old.as_str()) && ids.contains(&new.as_str()) && !ids.contains(&other.as_str()), "{open:?}");
+    LiveSink.merge_ticket(&Merge { close: old.clone(), into: new.clone(), mount: "/".into() });
+    let (item, comments) = k2_core::feedback::get_with_comments(&old).unwrap();
+    assert_eq!(item.status, "resolved");
+    assert!(comments.iter().any(|c| c.author == NOTICE_FROM && c.body.contains("Same disk as ticket")), "{comments:?}");
+    assert_eq!(k2_core::feedback::get_item(&new).unwrap().status, "waiting");
+    assert_eq!(k2_core::feedback::get_item(&other).unwrap().status, "waiting");
+    assert!(!LiveSink.open_disk_tickets().iter().any(|t| t.id == old));
+}
+
+#[test]
+fn ticket_titles_give_the_mount_and_level() {
+    assert_eq!(ticket_mount_level("Disk / 89% full on nsi.k2.dev (118 GB free)", 2), Some(("/".into(), Level::Warn)));
+    assert_eq!(ticket_mount_level("Disk /System/Volumes/Data 43.9% full on z3mbp (52 GB free)", 2), Some(("/System/Volumes/Data".into(), Level::Warn)));
+    assert_eq!(ticket_mount_level("Disk /mnt/my disk 96% full on box (9 GB free)", 1), Some(("/mnt/my disk".into(), Level::Refuse)));
+    assert_eq!(ticket_mount_level("CRITICAL: disk / 99% full on box (1 GB free)", 1), Some(("/".into(), Level::Critical)));
+    assert_eq!(ticket_mount_level("Disk device 1:16 90% full on box (5 GB free)", 2), Some(("device 1:16".into(), Level::Warn)));
+    assert_eq!(ticket_mount_level("App jobs is over its budget", 2), None);
+    assert_eq!(ticket_mount_level("Disk / almost full", 2), None);
+}
+
+/// Smoke r6, the existing mess: state keyed by an old device number and
+/// two open tickets for the same disk (one per boot). The first tick of
+/// the fixed daemon merges the older ticket into the newest, keeps the
+/// level under the volume key and sends nothing new.
+#[test]
+fn old_device_keys_and_duplicate_tickets_are_merged_once() {
+    let _home = crate::test_support::TempHome::new();
+    let mut st = WatchState::default();
+    st.levels.insert("1:16".into(), Level::Warn);
+    st.levels.insert("1:15".into(), Level::Warn);
+    st.sent.insert("id-nsi|disk:1:17:warn".into(), 1_799_999_000);
+    st.sent.insert("id-nsi|growth:app:jobs".into(), 1_799_999_000);
+    let sink = TicketRec {
+        open: vec![
+            OpenTicket { id: "aaaaaaaa-old".into(), title: "Disk /System/Volumes/Data 43.9% full on z3mbp (52 GB free)".into(), priority: 2, created_at: 100 },
+            OpenTicket { id: "bbbbbbbb-new".into(), title: "Disk /System/Volumes/Data 44.1% full on z3mbp (51 GB free)".into(), priority: 2, created_at: 200 },
+            OpenTicket { id: "cccccccc-other".into(), title: "Disk /Volumes/Ext 90% full on z3mbp (9 GB free)".into(), priority: 2, created_at: 150 },
+        ],
+        ..TicketRec::default()
+    };
+    let now = 1_800_000_000;
+    let out = tick_with(&mut st, &[mac_disk("1:17", 89)], &guard(Mode::On), Some(snap(now - 60)), "z3mbp", now, &sink, &no_fresh);
+    assert!(out.is_empty(), "the open ticket already covers this disk: {out:#?}");
+    let merged = sink.merged.lock().unwrap().clone();
+    assert_eq!(merged, vec![Merge { close: "aaaaaaaa-old".into(), into: "bbbbbbbb-new".into(), mount: "/System/Volumes/Data".into() }]);
+    assert!(merge_note(&merged[0]).contains("bbbbbbbb") && merge_note(&merged[0]).contains("device number"));
+    let key = "uuid:8e3a51c4-1b2d-4c1f-9e77-0d6b5a1f2c3d@/System/Volumes/Data";
+    assert_eq!(st.levels.iter().map(|(k, v)| (k.as_str(), *v)).collect::<Vec<_>>(), vec![(key, Level::Warn)]);
+    assert!(st.volume_keys);
+    // The agent's mark for the device it is on now moved to the volume.
+    assert!(st.sent.contains_key(&format!("id-nsi|disk:{key}:warn")), "{:?}", st.sent);
+    assert!(st.sent.contains_key("id-nsi|growth:app:jobs"));
+    assert!(!st.sent.keys().any(|k| k.contains("disk:1:17")));
+    // Only once: a second tick merges nothing again.
+    tick_with(&mut st, &[mac_disk("1:17", 89)], &guard(Mode::On), Some(snap(now)), "z3mbp", now + 60, &sink, &no_fresh);
+    assert_eq!(sink.merged.lock().unwrap().len(), 1);
+    // A daemon from before the field: the flag is off in its file.
+    let old: WatchState = serde_json::from_str(r#"{"levels":{"1:16":"warn"},"sent":{}}"#).unwrap();
+    assert!(!old.volume_keys);
+    // Same boot (the device still matches): the legacy level carries over
+    // with no ticket at all.
+    let mut st = old;
+    let merges = migrate_keys(&mut st, &[mac_disk("1:16", 89)], &[]);
+    assert!(merges.is_empty());
+    assert_eq!(st.levels.get(key), Some(&Level::Warn));
+    assert!(!st.levels.contains_key("1:16"));
 }
 
 /// Test 17: one owner ticket and three agent notes per warn crossing (the

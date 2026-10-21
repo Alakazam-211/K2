@@ -588,6 +588,26 @@ fn file_notice_for(
     Ok(item)
 }
 
+/// Close a notice the daemon filed itself (a duplicate merged into
+/// another): a note in its thread from `author`, then `resolved`, with the
+/// same events as the resolve route so every board drops it live.
+pub(crate) fn close_notice(id: &str, author: &str, note: &str) -> Result<feedback::FeedbackItem, String> {
+    feedback::add_comment(id, author, note)?;
+    emit_commented(id, author);
+    let item = feedback::set_status(id, "resolved")?;
+    let (_, path) = project_name_path(&item.project_id);
+    k2_core::agent_hooks::emit(
+        k2_core::agent_hooks::HookEvent::FeedbackStatusChanged,
+        serde_json::json!({
+            "id": item.id,
+            "projectPath": path,
+            "status": item.status,
+        }),
+    );
+    emit_ticket_changed(&item, resolve_change(&item.status), None);
+    Ok(item)
+}
+
 fn project_name_path(project_id: &str) -> (Option<String>, Option<String>) {
     let db = k2_core::db::shared();
     let conn = db.lock();

@@ -81,12 +81,18 @@ pub struct GrowthBase {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct WatchState {
-    /// Per fs id: the highest line crossed and not yet re-armed.
+    /// Per volume ([`Fs::volume_key`]: mount + fs UUID, stable across
+    /// reboots): the highest line crossed and not yet re-armed. Before
+    /// 0.46.3's fix the key was the device number (`1:16`), which macOS
+    /// changes at boot: [`migrate_keys`] moves those once.
     pub levels: BTreeMap<String, Level>,
     /// `<workspace>|<cause>` → when the last message went.
     pub sent: BTreeMap<String, i64>,
     pub growth: Option<GrowthBase>,
     pub last_sweep_at: Option<i64>,
+    /// [`migrate_keys`] has run (levels keyed by volume, duplicate disk
+    /// tickets merged).
+    pub volume_keys: bool,
 }
 
 pub fn state_path() -> PathBuf {
@@ -130,6 +136,44 @@ pub trait NoticeSink: Send + Sync {
     fn owner_ticket(&self, title: &str, body: &str, priority: i64);
     fn agent_note(&self, workspace: &str, title: &str, text: &str);
     fn agent_wake(&self, workspace: &str, text: &str);
+    /// The disk watch's own open owner tickets (for [`migrate_keys`]).
+    fn open_disk_tickets(&self) -> Vec<OpenTicket> {
+        Vec::new()
+    }
+    /// Close a duplicate disk ticket into the one kept.
+    fn merge_ticket(&self, _merge: &Merge) {}
+}
+
+/// An open disk ticket the watch filed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenTicket {
+    pub id: String,
+    pub title: String,
+    pub priority: i64,
+    pub created_at: i64,
+}
+
+/// A duplicate disk ticket to close (`close`) into the one kept (`into`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Merge {
+    pub close: String,
+    pub into: String,
+    pub mount: String,
+}
+
+/// The note a merged duplicate gets before it is resolved.
+pub fn merge_note(m: &Merge) -> String {
+    format!(
+        "Same disk as ticket {} ({}): K2 used to name a disk by its device number, which macOS changes at every restart, \
+         so it filed this one again. It now names a disk by its mount and volume ID; this duplicate is closed and {} stays open.",
+        short_id(&m.into),
+        m.mount,
+        short_id(&m.into)
+    )
+}
+
+fn short_id(id: &str) -> &str {
+    id.get(..8).unwrap_or(id)
 }
 
 /// The real rails: `file_owner_notice` (ticket + push) and the App
@@ -156,6 +200,25 @@ impl NoticeSink for LiveSink {
     }
     fn agent_wake(&self, workspace: &str, text: &str) {
         super::alerts::notify(workspace, text);
+    }
+    fn open_disk_tickets(&self) -> Vec<OpenTicket> {
+        let items = match k2_core::feedback::list_for_project(k2_core::db::AUDIT_SENTINEL_IDS[0], &k2_core::feedback::ListFilter::Open) {
+            Ok(v) => v,
+            Err(e) => {
+                k2_core::log_debug!("[disk-watch] open tickets: {e}");
+                return Vec::new();
+            }
+        };
+        items
+            .into_iter()
+            .filter(|i| i.agent_name == NOTICE_FROM)
+            .map(|i| OpenTicket { id: i.id, title: i.title, priority: i.priority, created_at: i.created_at })
+            .collect()
+    }
+    fn merge_ticket(&self, m: &Merge) {
+        if let Err(e) = crate::feedback_routes::close_notice(&m.close, NOTICE_FROM, &merge_note(m)) {
+            k2_core::log_debug!("[disk-watch] merge ticket {}: {e}", m.close);
+        }
     }
 }
 
@@ -221,8 +284,9 @@ fn lower(l: Level) -> Level {
 pub fn crossings(state: &mut WatchState, disks: &[Fs], lines: &Lines) -> Vec<(Fs, Level)> {
     let mut up = Vec::new();
     for fs in disks {
+        let key = fs.volume_key();
         let cur = fs.level(lines);
-        let mut rec = state.levels.get(&fs.id).copied().unwrap_or(Level::Ok);
+        let mut rec = state.levels.get(&key).copied().unwrap_or(Level::Ok);
         while rec > cur {
             let (pct, free) = dg::line_of(lines, rec).expect("a level above ok has a line");
             if dg::rearmed(fs, pct, free) {
@@ -235,9 +299,87 @@ pub fn crossings(state: &mut WatchState, disks: &[Fs], lines: &Lines) -> Vec<(Fs
             up.push((fs.clone(), cur));
             rec = cur;
         }
-        state.levels.insert(fs.id.clone(), rec);
+        state.levels.insert(key, rec);
     }
     up
+}
+
+/// The mount and level an owner ticket's title names ("Disk <mount>
+/// <pct>% full on <host> (…)", "CRITICAL: disk <mount> …"); the level
+/// from the title and priority (critical, 1 = refuse, else warn).
+pub fn ticket_mount_level(title: &str, priority: i64) -> Option<(String, Level)> {
+    let (rest, critical) = match title.strip_prefix("CRITICAL: disk ") {
+        Some(r) => (r, true),
+        None => (title.strip_prefix("Disk ")?, false),
+    };
+    let head = &rest[..rest.rfind("% full on ")?];
+    let (mount, pct) = head.rsplit_once(' ')?;
+    pct.parse::<f64>().ok()?;
+    if mount.is_empty() {
+        return None;
+    }
+    let level = if critical {
+        Level::Critical
+    } else if priority <= 1 {
+        Level::Refuse
+    } else {
+        Level::Warn
+    };
+    Some((mount.to_string(), level))
+}
+
+/// Once (smoke r6): levels and agent dedupe marks keyed by device number
+/// (`1:16`) move to the volume key, and open disk tickets that name the
+/// same disk are merged into the newest. A volume with an open ticket
+/// keeps that ticket's level, so the restart that renumbered the device
+/// doesn't file it again. Returns the tickets to close.
+pub fn migrate_keys(state: &mut WatchState, disks: &[Fs], open: &[OpenTicket]) -> Vec<Merge> {
+    let mut by_mount: BTreeMap<String, Vec<(&OpenTicket, Level)>> = BTreeMap::new();
+    for t in open {
+        if let Some((mount, level)) = ticket_mount_level(&t.title, t.priority) {
+            by_mount.entry(mount).or_default().push((t, level));
+        }
+    }
+    let mut merges = Vec::new();
+    for (mount, ts) in by_mount.iter_mut() {
+        ts.sort_by(|a, b| b.0.created_at.cmp(&a.0.created_at).then_with(|| b.0.id.cmp(&a.0.id)));
+        let keep = ts[0].0.id.clone();
+        for (t, _) in ts.iter().skip(1) {
+            merges.push(Merge { close: t.id.clone(), into: keep.clone(), mount: mount.clone() });
+        }
+    }
+    for fs in disks {
+        let key = fs.volume_key();
+        if state.levels.contains_key(&key) {
+            continue;
+        }
+        let same_boot = state.levels.get(&fs.id).copied().filter(|_| dg::is_legacy_dev_key(&fs.id)).unwrap_or(Level::Ok);
+        let ticketed = by_mount.get(&fs.label()).and_then(|ts| ts.iter().map(|(_, l)| *l).max()).unwrap_or(Level::Ok);
+        let level = same_boot.max(ticketed);
+        if level > Level::Ok {
+            state.levels.insert(key, level);
+        }
+    }
+    state.levels.retain(|k, _| !dg::is_legacy_dev_key(k));
+    // `<ws>|disk:<major:minor>:<level>` → `<ws>|disk:<volume>:<level>`.
+    let moved: Vec<(String, String)> = state
+        .sent
+        .keys()
+        .filter_map(|k| {
+            let (ws, cause) = k.split_once('|')?;
+            let (dev, level) = cause.strip_prefix("disk:")?.rsplit_once(':')?;
+            let fs = disks.iter().find(|f| f.id == dev && dg::is_legacy_dev_key(dev))?;
+            Some((k.clone(), format!("{ws}|disk:{}:{level}", fs.volume_key())))
+        })
+        .collect();
+    for (old, new) in moved {
+        if let Some(at) = state.sent.remove(&old) {
+            let e = state.sent.entry(new).or_insert(at);
+            *e = (*e).max(at);
+        }
+    }
+    state.volume_keys = true;
+    merges
 }
 
 /// An agent's share of the rows on one disk (or every row when no row
@@ -374,7 +516,7 @@ pub fn crossing_notices(
     out.push(Notice::Owner { title, body, priority: if level >= Level::Refuse { 1 } else { 2 } });
     // The agents behind the biggest owners.
     for s in &top {
-        if !may_send(state, &s.workspace, &format!("disk:{}:{}", fs.id, level.as_str()), now) {
+        if !may_send(state, &s.workspace, &format!("disk:{}:{}", fs.volume_key(), level.as_str()), now) {
             continue;
         }
         let head = format!("Disk {mount} on this box is {pct}% full ({free} free).");
@@ -516,6 +658,12 @@ pub fn tick_with(
         return Vec::new();
     }
     prune(state, now);
+    if !state.volume_keys {
+        for m in migrate_keys(state, disks, &sink.open_disk_tickets()) {
+            sink.merge_ticket(&m);
+            dg::log_event("merged", json!({ "ticket": m.close, "into": m.into, "mount": m.mount }));
+        }
+    }
     let up = crossings(state, disks, &guard.lines);
     let mut snap = snap;
     let mut out = Vec::new();
@@ -527,7 +675,7 @@ pub fn tick_with(
             }
         }
         for (fs, level) in &up {
-            dg::log_event("crossing", json!({ "disk": fs.id, "mount": fs.label(), "level": level, "usedPct": fs.used_pct, "freeBytes": fs.free_bytes }));
+            dg::log_event("crossing", json!({ "disk": fs.id, "volume": fs.volume_key(), "mount": fs.label(), "level": level, "usedPct": fs.used_pct, "freeBytes": fs.free_bytes }));
             out.extend(crossing_notices(fs, *level, guard, snap.as_deref(), host, state, now));
         }
     }

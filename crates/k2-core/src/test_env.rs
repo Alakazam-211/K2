@@ -148,6 +148,9 @@ pub struct TempHome {
     /// frpc.toml) stays inside this temp home, never the real
     /// `$TMPDIR/k2-runtime` / `/run/user/<uid>/k2` (2026-10-14 incident).
     _runtime: EnvVar,
+    /// `K2_TEST_TRASH_DIR` → `<home>/.Trash`: `safe_delete` moves "trashed"
+    /// paths there in test builds, never into the real Trash (0.46.3).
+    _trash: EnvVar,
     _lock: EnvLock,
 }
 
@@ -174,7 +177,8 @@ impl TempHome {
         std::env::set_var("HOME", &home);
         crate::test_isolation::assert_isolated_from_prod();
         let runtime = EnvVar::set(crate::runtime_dir::RUNTIME_DIR_ENV, home.join("run"));
-        Self { prev, home, _runtime: runtime, _lock: lock }
+        let trash = EnvVar::set(crate::safe_delete::TEST_TRASH_DIR_ENV, home.join(".Trash"));
+        Self { prev, home, _runtime: runtime, _trash: trash, _lock: lock }
     }
 
     /// The temp `$HOME`.

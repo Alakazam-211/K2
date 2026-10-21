@@ -882,7 +882,7 @@ pub fn delete(paths: &[String], permanent: bool) -> Result<(), String> {
                 fs::remove_file(p).map_err(|e| format!("Failed to delete file: {e}"))?;
             }
         } else {
-            trash::delete(p).map_err(|e| format!("Failed to trash {path_str}: {e}"))?;
+            crate::safe_delete::os_trash(p).map_err(|e| format!("Failed to trash {path_str}: {e}"))?;
         }
     }
     Ok(())

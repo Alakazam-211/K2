@@ -346,6 +346,28 @@ fn handle_client_ip_list() -> CliResponse {
     CliResponse::ok_json(serde_json::json!({ "labels": labels }).to_string())
 }
 
+/// Does this box know a nested service called `label` (lowercase)? The
+/// control plane's routing map (tunnel cache), the 0074 label stamps, the
+/// published services and the Apps (their id is their label). The cache
+/// alone isn't enough: it is empty until the first refresh and on an
+/// air-gapped box.
+fn nested_label_known(label: &str) -> bool {
+    if k2_core::tunnel::subdomains::current().targets.contains_key(label) {
+        return true;
+    }
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    if SubdomainWorkspace::map(&conn).is_ok_and(|m| m.contains_key(label)) {
+        return true;
+    }
+    if k2_core::published_services::list_all(&conn)
+        .is_ok_and(|rows| rows.iter().any(|r| r.name.eq_ignore_ascii_case(label)))
+    {
+        return true;
+    }
+    k2_core::deploy::store::get_app(&conn, label).is_ok_and(|a| a.is_some())
+}
+
 /// `POST /cli/publish/client-ip` `{label, on}`: opt a nested service in or
 /// out of the client-IP rewrite. `on` = its HTTP/1.1 requests get
 /// `X-K2-Client-IP` (client copies of the forwarding headers dropped;
@@ -359,6 +381,26 @@ fn handle_client_ip_set(params: &HashMap<String, String>) -> CliResponse {
         Some("false" | "0" | "off") => false,
         _ => return CliResponse::bad_request("pass on=true|false (k2 publish client-ip <label> on|off)"),
     };
+    let norm = match k2_core::tunnel::client_ip_labels::normalize_label(&label) {
+        Ok(l) => l,
+        Err(e) => return CliResponse::bad_request(e),
+    };
+    // Smoke r6: an unknown label used to be stored and reported "on".
+    // `off` still clears a listed label whose service is gone.
+    let listed = k2_core::tunnel::client_ip_labels::load().contains(&norm);
+    if !(nested_label_known(&norm) || (!on && listed)) {
+        return CliResponse {
+            status: "404 Not Found",
+            content_type: "application/json",
+            body: serde_json::json!({
+                "error": format!(
+                    "no nested service {norm:?} on this box (k2 publish subdomain list, k2 app list): nothing changed"
+                ),
+                "code": "label_not_found",
+            })
+            .to_string(),
+        };
+    }
     match k2_core::tunnel::client_ip_labels::set(&label, on) {
         Ok(labels) => CliResponse::ok_json(
             serde_json::json!({
@@ -1720,5 +1762,59 @@ mod tests {
         assert_eq!(v["probeTimeoutEffectiveMs"], 3000, "{v}");
 
         let _ = publish_runtime::rm(&ws, &name, true);
+    }
+
+    /// Smoke r6: `k2 publish client-ip <label> on` stored any label and
+    /// said "on". An unknown label is refused (404, nothing written); a
+    /// published service, a stamped nested label and an App are known;
+    /// `off` still clears a listed label whose service is gone.
+    #[test]
+    fn client_ip_refuses_an_unknown_label_and_writes_nothing() {
+        let _home = crate::test_support::TempHome::new();
+        let _db = k2_core::db::scoped_for_test();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute("INSERT INTO projects (id, path, name) VALUES ('cipws', '/tmp/cipws', 'cipws')", []).unwrap();
+            k2_core::published_services::insert(&conn, "cipws", "cipsvc", "node s.js", "/tmp", 4311, "tunnel", "running", "cmd", "").unwrap();
+            SubdomainWorkspace::claim(&conn, "cipstage", "cipws").unwrap();
+            conn.execute(
+                "INSERT INTO apps (app_id, service_id, owner_workspace, state, created_by, created_at, updated_at) \
+                 VALUES ('cipapp', 'svc-cipapp', 'cipws', 'running', 'test', 1, 1)",
+                [],
+            )
+            .unwrap();
+        }
+        let set = |label: &str, on: &str| {
+            let p: HashMap<String, String> = [("label".to_string(), label.to_string()), ("on".to_string(), on.to_string())].into();
+            let r = dispatch_post("/cli/publish/client-ip", &p);
+            let v: serde_json::Value = serde_json::from_str(&r.body).unwrap_or_else(|e| panic!("not JSON ({e}): {}", r.body));
+            (r.status, v)
+        };
+        let (st, v) = set("nosuch-zz", "true");
+        assert_eq!(st, "404 Not Found", "{v}");
+        assert_eq!(v["code"], "label_not_found", "{v}");
+        assert!(v["error"].as_str().unwrap().contains("nosuch-zz"), "{v}");
+        assert!(k2_core::tunnel::client_ip_labels::load().is_empty(), "nothing stored for an unknown label");
+        let (st, v) = set("nosuch-zz", "false");
+        assert_eq!(st, "404 Not Found", "off for an unknown, unlisted label: {v}");
+        for known in ["cipsvc", "CIPStage", "cipapp"] {
+            let (st, v) = set(known, "true");
+            assert_eq!(st, "200 OK", "{known}: {v}");
+            assert_eq!(v["clientIp"], true, "{v}");
+        }
+        assert_eq!(
+            k2_core::tunnel::client_ip_labels::load().into_iter().collect::<Vec<_>>(),
+            vec!["cipapp".to_string(), "cipstage".to_string(), "cipsvc".to_string()]
+        );
+        // A listed label whose service is gone can still be turned off.
+        k2_core::tunnel::client_ip_labels::set("gone-svc", true).unwrap();
+        let (st, v) = set("gone-svc", "true");
+        assert_eq!(st, "404 Not Found", "not re-confirmed on: {v}");
+        let (st, v) = set("gone-svc", "false");
+        assert_eq!(st, "200 OK", "{v}");
+        assert!(!k2_core::tunnel::client_ip_labels::enabled("gone-svc"));
+        let (st, _) = set("bad label", "true");
+        assert_eq!(st, "400 Bad Request");
     }
 }

@@ -498,7 +498,19 @@ impl FairQ {
         let snap = self.snapshot(node, now);
         let input = snap.input(&self.cfg);
         let d = queue::decide(&input);
-        queue::view(&input, &d, &Viewer { slot: t.slot, owner: t.is_owner(), labels: &snap.labels }, request_id)
+        let mut v = queue::view(&input, &d, &Viewer { slot: t.slot, owner: t.is_owner(), labels: &snap.labels }, request_id);
+        // A server whose share ended (revoked, expired, refused, or no
+        // line) keeps its session only to hear its own jobs end: it sees
+        // its own rows and nothing of anyone else's (review B8).
+        let live = t.is_owner() || matches!(t.status_at(now), Some(ServerStatus::Active | ServerStatus::Paused | ServerStatus::Pending));
+        if !live {
+            v.entries.retain(|e| e.mine);
+            for (i, e) in v.entries.iter_mut().enumerate() {
+                e.pos = i as u32 + 1;
+            }
+            v.totals.clear();
+        }
+        v
     }
 }
 

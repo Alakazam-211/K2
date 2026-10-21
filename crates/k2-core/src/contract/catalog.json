@@ -1,5 +1,5 @@
 {
-  "catalogVersion": 18,
+  "catalogVersion": 19,
   "caps": [
     {
       "name": "agents:read",
@@ -176,7 +176,9 @@
     {"code": "above_role", "doc": "Guest rooms: a room the guest's role doesn't cover; rooms never add caps beyond the role."},
     {"code": "has_role", "doc": "Guest rooms: the guest's grant on this App carries a role, so its rooms are the role's; give a narrower role."},
     {"code": "confirm_required", "doc": "A Garden write that needs the person's confirm on K2's sheet, outside the frame."},
-    {"code": "declined", "doc": "The person said no on K2's confirm sheet."}
+    {"code": "declined", "doc": "The person said no on K2's confirm sheet."},
+    {"code": "refresh_invalid", "doc": "Device sign-in: the refresh token is unknown, ended, expired or for another App; sign in again."},
+    {"code": "refresh_reused", "doc": "Device sign-in: a refresh token came back after it was used; that device is signed out (sign in again)."}
   ],
   "bannedFields": [
     "projectPath",
@@ -4205,6 +4207,157 @@
           },
           "catalogVersion": {
             "type": "integer"
+          },
+          "agents": {
+            "type": "array",
+            "description": "The agents this person may reach here, one per room on the pass (the only list of 'my agents'; a room not on it doesn't exist for this pass).",
+            "items": {
+              "title": "AppMeAgent",
+              "type": "object",
+              "properties": {
+                "room": {
+                  "type": "string",
+                  "description": "The room's project id."
+                },
+                "handle": {
+                  "type": "string"
+                },
+                "displayName": {
+                  "type": "string"
+                },
+                "color": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "image": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The agent's picture as a data URL, or null."
+                },
+                "caps": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "can": {
+                  "title": "AppMeCan",
+                  "type": "object",
+                  "description": "What the caps allow, for drawing buttons: files, tickets, heartbeats and store are none, read or write.",
+                  "properties": {
+                    "chat": {
+                      "type": "boolean"
+                    },
+                    "send": {
+                      "type": "boolean"
+                    },
+                    "files": {
+                      "type": "string"
+                    },
+                    "tickets": {
+                      "type": "string"
+                    },
+                    "activity": {
+                      "type": "boolean"
+                    },
+                    "members": {
+                      "type": "boolean"
+                    },
+                    "heartbeats": {
+                      "type": "string"
+                    },
+                    "wiki": {
+                      "type": "boolean"
+                    },
+                    "store": {
+                      "type": "string"
+                    },
+                    "identity": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "chat",
+                    "send",
+                    "files",
+                    "tickets",
+                    "activity",
+                    "members",
+                    "heartbeats",
+                    "wiki",
+                    "store",
+                    "identity"
+                  ],
+                  "additionalProperties": false
+                },
+                "folders": {
+                  "title": "AppMeAgentFolders",
+                  "type": "object",
+                  "description": "This login's folders in the room (room-scope R3). Absent: the whole room.",
+                  "properties": {
+                    "read": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Room-relative folders it may list and read."
+                    },
+                    "write": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Room-relative folders it may also write."
+                    },
+                    "uploadDir": {
+                      "type": "string",
+                      "description": "Where an upload lands when it names no folder."
+                    }
+                  },
+                  "required": [],
+                  "additionalProperties": false
+                },
+                "unread": {
+                  "type": "integer",
+                  "description": "Unread Thread items for this person (when the server reads them)."
+                },
+                "muted": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "room",
+                "handle",
+                "displayName",
+                "color",
+                "image",
+                "caps",
+                "can"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "serverId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "This server's stable id (key rows across servers by serverId + room)."
+          },
+          "publicHost": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "<label>.k2.dev when the server has a tunnel."
+          },
+          "instanceId": {
+            "type": "string",
+            "description": "Changes when the server restarts."
           }
         },
         "required": [
@@ -4215,7 +4368,11 @@
           "principalId",
           "rooms",
           "features",
-          "catalogVersion"
+          "catalogVersion",
+          "agents",
+          "serverId",
+          "publicHost",
+          "instanceId"
         ],
         "additionalProperties": false
       },
@@ -4225,7 +4382,7 @@
         "pass_wrong_link",
         "failed"
       ],
-      "doc": "Who this pass is: guest or App, its rooms with their caps, and this server's features.",
+      "doc": "Who this pass is: guest or App, its agents (identity, caps, what they allow, folders), this server's ids and features.",
       "example": "const me = await k2.asGuest(pass).me.get()"
     },
     {
@@ -4340,6 +4497,23 @@
               "type": "string",
               "description": "This App's service id (the SDK sends K2_APP_ID); absent = the box login.",
               "default": ""
+            },
+            "device": {
+              "title": "AppDevice",
+              "type": "object",
+              "description": "Name a device to stay signed in: the answer adds a refresh token (when the owner left Stay signed in on).",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id"
+              ],
+              "additionalProperties": false
             }
           },
           "required": [
@@ -4418,6 +4592,35 @@
           "app": {
             "type": "string",
             "description": "host or the App's service id."
+          },
+          "refresh": {
+            "type": "string",
+            "description": "With device: the refresh token (k2skr_...). Store it; guests.refresh trades it."
+          },
+          "passExpiresAt": {
+            "type": "integer",
+            "description": "With device: when the pass ends, seconds since the epoch."
+          },
+          "refreshExpiresAt": {
+            "type": "integer",
+            "description": "With device: when the refresh token ends unless used, seconds since the epoch."
+          },
+          "device": {
+            "title": "AppDeviceRef",
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [
@@ -4743,6 +4946,531 @@
       ],
       "doc": "A guest changes their own password (browser only: it ends every session of theirs).",
       "example": "await fetch('/cli/skin/password/change', {method: 'POST', body})"
+    },
+    {
+      "verb": "guests.logout",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-mobile-access-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/skin/logout",
+          "door": "link"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false,
+          "default": {}
+        }
+      ],
+      "response": {
+        "title": "AppOk",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "failed"
+      ],
+      "doc": "Sign this guest's pass out; a device sign-in ends with it (its refresh token stops working).",
+      "example": "await k2.asGuest(pass).guests.logout()"
+    },
+    {
+      "verb": "guests.refresh",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-mobile-access-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/skin/refresh",
+          "responseNames": {
+            "pass": "token"
+          },
+          "door": "link"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "refresh": {
+              "type": "string",
+              "description": "The refresh token (k2skr_...) from the device's last login or refresh. Each one works once."
+            },
+            "app": {
+              "type": "string",
+              "description": "This App's service id; must be the App the token was minted for.",
+              "default": ""
+            }
+          },
+          "required": [
+            "refresh"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppDeviceSession",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "pass": {
+            "type": "string",
+            "description": "A new session pass (k2skn_...); the old one has ended."
+          },
+          "refresh": {
+            "type": "string",
+            "description": "The next refresh token: store it in place of the old one."
+          },
+          "passExpiresAt": {
+            "type": "integer",
+            "description": "Seconds since the epoch."
+          },
+          "refreshExpiresAt": {
+            "type": "integer",
+            "description": "Seconds since the epoch: unused this long, the device signs in again."
+          },
+          "username": {
+            "type": "string"
+          },
+          "principalId": {
+            "type": "string"
+          },
+          "app": {
+            "type": "string"
+          },
+          "device": {
+            "title": "AppDeviceRef",
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "ok",
+          "pass",
+          "refresh",
+          "passExpiresAt",
+          "refreshExpiresAt",
+          "username",
+          "principalId",
+          "app",
+          "device"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "refresh_invalid",
+        "refresh_reused",
+        "usage",
+        "failed"
+      ],
+      "doc": "Trade a device's refresh token for a new pass and a new refresh token (one-time, rotating; a reused token ends the device's sign-in).",
+      "example": "const s = await k2.guests.refresh({refresh})"
+    },
+    {
+      "verb": "guests.devices",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-mobile-access-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/skin/devices"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false,
+          "default": {}
+        }
+      ],
+      "response": {
+        "title": "AppDevices",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "devices": {
+            "type": "array",
+            "items": {
+              "title": "AppDeviceLogin",
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "What guests.revokeDevice takes."
+                },
+                "deviceId": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "createdAt": {
+                  "type": "integer",
+                  "description": "Signed in, seconds since the epoch."
+                },
+                "lastUsedAt": {
+                  "type": "integer",
+                  "description": "Last refresh, seconds since the epoch."
+                },
+                "expiresAt": {
+                  "type": "integer",
+                  "description": "Signs out unless used before then, seconds since the epoch."
+                },
+                "current": {
+                  "type": "boolean",
+                  "description": "The device this pass belongs to."
+                }
+              },
+              "required": [
+                "id",
+                "deviceId",
+                "name",
+                "createdAt",
+                "lastUsedAt",
+                "expiresAt",
+                "current"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "devices"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "guest_required",
+        "failed"
+      ],
+      "doc": "This guest's devices that stay signed in to this App.",
+      "example": "const {devices} = await k2.asGuest(pass).guests.devices()"
+    },
+    {
+      "verb": "guests.revokeDevice",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-mobile-access-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/skin/devices/revoke"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "A device sign-in id from guests.devices."
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppOk",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "guest_required",
+        "not_found",
+        "usage",
+        "failed"
+      ],
+      "doc": "Sign one of this guest's own devices out (its pass and refresh token end).",
+      "example": "await k2.asGuest(pass).guests.revokeDevice({id})"
+    },
+    {
+      "verb": "app.info",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-mobile-access-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/skin/app-info",
+          "door": "link"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "app": {
+              "type": "string",
+              "description": "The App's service id."
+            }
+          },
+          "required": [
+            "app"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppInfo",
+        "type": "object",
+        "properties": {
+          "app": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "description": "The App's display name."
+          },
+          "kind": {
+            "type": "string",
+            "description": "cmd or skin."
+          },
+          "signIn": {
+            "title": "AppSignIn",
+            "type": "object",
+            "properties": {
+              "methods": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "password (a username or an email)."
+              },
+              "staysSignedIn": {
+                "type": "boolean",
+                "description": "A login that names a device gets a refresh token."
+              },
+              "url": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Where the App signs people in, when it is published."
+              }
+            },
+            "required": [
+              "methods",
+              "staysSignedIn",
+              "url"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "app",
+          "name",
+          "kind",
+          "signIn"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "not_found"
+      ],
+      "doc": "Public: this one App's name and how to sign in, only when the owner listed it; anything else answers like a route that doesn't exist.",
+      "example": "const info = await fetch(server + '/cli/skin/app-info?app=' + id)"
+    },
+    {
+      "verb": "password.forgot",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-mobile-access-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/skin/password/forgot",
+          "door": "link"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "username": {
+              "type": "string",
+              "description": "A username, or an email (with @)."
+            }
+          },
+          "required": [
+            "username"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppOk",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "rate_limited",
+        "usage",
+        "failed"
+      ],
+      "doc": "Start a guest's password reset (a platform pass; the guest gets the reset link by email).",
+      "example": "await k2.asApp().password.forgot({username})"
+    },
+    {
+      "verb": "password.reset",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-mobile-access-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/skin/password/reset",
+          "door": "link",
+          "params": {
+            "resetToken": "token"
+          }
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "resetToken": {
+              "type": "string",
+              "description": "The reset code from the email."
+            },
+            "password": {
+              "type": "string",
+              "description": "At least 8 characters."
+            }
+          },
+          "required": [
+            "resetToken",
+            "password"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppOk",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "bad_login",
+        "usage",
+        "failed"
+      ],
+      "doc": "Public: finish a password reset with the emailed token (ends every session of that guest).",
+      "example": "await fetch('/cli/skin/password/reset', {method: 'POST', body})"
     },
     {
       "verb": "thread.page",

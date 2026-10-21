@@ -36,7 +36,7 @@ fn route_of(m: HttpMethod) -> &'static str {
 fn both_doors_serve_exactly_the_catalogs_app_rows() {
     let c = catalog();
     let rows = c.verbs_exposed_to(Exposure::App);
-    assert_eq!(rows.len(), 77, "app rows (73 routes + 4 sockets; RS-A15 added guests.rooms / guests.setRooms, room-scope 0.46.1 room.members, app.self and app.usage, R3 files.stat, Thread parity 0.46.3 thread.attachmentGet, thread.catchup, thread.setRead, thread.unread, files.resolveLinks, guest read state thread.mute, App project chat 0.46.3 project.list/read/post/markRead and the project.events socket)");
+    assert_eq!(rows.len(), 84, "app rows (80 routes + 4 sockets; RS-A15 added guests.rooms / guests.setRooms, room-scope 0.46.1 room.members, app.self and app.usage, R3 files.stat, Thread parity 0.46.3 thread.attachmentGet, thread.catchup, thread.setRead, thread.unread, files.resolveLinks, guest read state thread.mute, App project chat 0.46.3 project.list/read/post/markRead and the project.events socket, app-mobile-access-v1 guests.logout/refresh/devices/revokeDevice, app.info, password.forgot/reset)");
     for v in &rows {
         if let Some(h) = &v.bindings.http {
             let m = route_of(h.method);

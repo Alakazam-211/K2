@@ -17,6 +17,11 @@
 //!   pass holds there (a session's per-room policy; a platform or link
 //!   pass's flat caps in each of its rooms). It never lists a room the
 //!   pass doesn't hold, so it is not an oracle.
+//! - `agents` (app-mobile-access-v1, 0.46.3): the agent access list, one
+//!   row per room `rooms` lists, with the agent's identity (displayName,
+//!   color, image), caps, `can` (what the caps allow) and folders. A room
+//!   not on it is invisible to this pass (every door answers `skin_room`).
+//!   `serverId`, `publicHost` and `instanceId` key rows across servers.
 //! - `features`: this server's `/boot-status` keys
 //!   (`boot_status::features()`), so an App can tell what the server has
 //!   without the owner-only `/boot-status`.
@@ -47,24 +52,36 @@ pub fn kind_of(pass: &SkinPass, on_link: bool) -> &'static str {
 pub fn view(pass: &SkinPass, on_link: bool) -> serde_json::Value {
     let room_ids: Vec<String> = if pass.session { pass.room_policy.keys().cloned().collect() } else { pass.rooms.clone() };
     let live = k2_core::skin::live_agents(&room_ids);
-    let rooms: Vec<serde_json::Value> = live
-        .iter()
-        .map(|a| {
-            let caps: Vec<String> = if pass.session {
-                pass.room_policy.get(&a.project_id).cloned().unwrap_or_default()
-            } else {
-                pass.caps.clone()
-            };
-            let mut row = json!({ "room": a.project_id, "handle": a.handle, "caps": caps });
-            // R3: a login's room line folders (absent = the whole room).
-            if let Ok(scope) = pass.path_scope(&a.project_id) {
-                if !scope.is_empty() {
-                    row["folders"] = serde_json::to_value(&scope).unwrap_or_default();
-                }
+    let mut rooms: Vec<serde_json::Value> = Vec::with_capacity(live.len());
+    let mut agents: Vec<serde_json::Value> = Vec::with_capacity(live.len());
+    for a in &live {
+        let caps: Vec<String> = if pass.session {
+            pass.room_policy.get(&a.project_id).cloned().unwrap_or_default()
+        } else {
+            pass.caps.clone()
+        };
+        let mut row = json!({ "room": a.project_id, "handle": a.handle, "caps": caps });
+        // The agent access list (app-mobile-access-v1): identity, caps,
+        // what they allow and folders in one row per reachable agent.
+        let mut agent = json!({
+            "room": a.project_id,
+            "handle": a.handle,
+            "displayName": a.display_name,
+            "color": a.color,
+            "image": a.image,
+            "caps": caps,
+            "can": k2_core::skin::access::can_of(&caps),
+        });
+        // R3: a login's room line folders (absent = the whole room).
+        if let Ok(scope) = pass.path_scope(&a.project_id) {
+            if !scope.is_empty() {
+                row["folders"] = serde_json::to_value(&scope).unwrap_or_default();
+                agent["folders"] = row["folders"].clone();
             }
-            row
-        })
-        .collect();
+        }
+        rooms.push(row);
+        agents.push(agent);
+    }
     json!({
         "ok": true,
         "kind": kind_of(pass, on_link),
@@ -72,6 +89,10 @@ pub fn view(pass: &SkinPass, on_link: bool) -> serde_json::Value {
         "app": pass.app,
         "principalId": pass.principal_id,
         "rooms": rooms,
+        "agents": agents,
+        "serverId": crate::boot_status::server_id(),
+        "publicHost": crate::boot_status::public_host(),
+        "instanceId": crate::boot_status::instance_id(),
         "features": crate::boot_status::features(),
         "catalogVersion": k2_core::contract::catalog().catalog_version,
     })

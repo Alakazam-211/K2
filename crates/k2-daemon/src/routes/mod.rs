@@ -18,5 +18,6 @@
 pub mod dispatcher;
 pub mod http;
 pub mod route_policy;
+pub mod pass_gate;
 #[cfg(test)]
 mod frame_walk;

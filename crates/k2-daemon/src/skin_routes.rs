@@ -2100,7 +2100,7 @@ pub fn handle_login(body: &[u8], content_type: &str) -> SkinLoginReply {
         let password = form_field(&pairs, "password").unwrap_or("").to_string();
         let next = form_field(&pairs, "next").map(str::to_string);
         let app = form_field(&pairs, "app").map(str::to_string);
-        Some((username, password, next, app))
+        Some((username, password, next, app, None))
     } else {
         match serde_json::from_slice::<serde_json::Value>(body) {
             Ok(v) => {
@@ -2114,12 +2114,26 @@ pub fn handle_login(body: &[u8], content_type: &str) -> SkinLoginReply {
                     .to_string();
                 let next = str_field(&v, &["next"]).map(str::to_string);
                 let app = str_field(&v, &["app", "appId"]).map(str::to_string);
-                Some((username, password, next, app))
+                // app-mobile-access-v1: `device` asks for a device sign-in
+                // (a refresh token beside the pass). A bad shape is 400
+                // before any password work.
+                let device = match skin::app_login::parse_device(v.get("device")) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        return SkinLoginReply {
+                            response: CliResponse::bad_request(e),
+                            token: None,
+                            location: None,
+                            retry_after: None,
+                        }
+                    }
+                };
+                Some((username, password, next, app, device))
             }
             Err(_) => None,
         }
     };
-    let Some((username, password, next, app)) = parsed else {
+    let Some((username, password, next, app, device)) = parsed else {
         return SkinLoginReply {
             response: if form {
                 login_failed_html()
@@ -2166,6 +2180,38 @@ pub fn handle_login(body: &[u8], content_type: &str) -> SkinLoginReply {
     // that App and needs this person's enabled grant for it. An unknown or
     // removed App is the same generic 401 as a bad password.
     let app = skin::normalize_app_target(app.as_deref());
+    // Device sign-in (app-mobile-access-v1): the pass plus a rotating
+    // refresh token, when the App has "Stay signed in" on. Off (0 days) or
+    // no device = exactly today's login.
+    if let (Some(device), false) = (device.as_ref(), form) {
+        if !login_app_is_live(&app) {
+            return SkinLoginReply { response: login_failed_json(), token: None, location: None, retry_after: None };
+        }
+        match skin::app_login::login_device(&principal.username, &app, device) {
+            Ok(Some(d)) => {
+                let mut body = crate::app_mobile_routes::device_session_json(&d, &principal.id);
+                body["rooms"] = serde_json::json!(d.session.meta.rooms);
+                body["roomHandles"] = serde_json::json!(d.session.meta.room_handles);
+                body["caps"] = serde_json::json!(d.session.meta.caps);
+                body["role"] = serde_json::json!(d.session.role_name);
+                body["roomAccess"] = serde_json::json!(d.session.meta.room_access);
+                let raw = d.session.raw.clone();
+                return SkinLoginReply {
+                    response: CliResponse::ok_json(body.to_string()),
+                    token: Some(raw),
+                    location: None,
+                    retry_after: None,
+                };
+            }
+            Ok(None) => {}
+            Err(e) if e == skin::HOST_LOGIN_DENIED => {
+                return SkinLoginReply { response: login_failed_json(), token: None, location: None, retry_after: None };
+            }
+            Err(e) => {
+                return SkinLoginReply { response: CliResponse::internal_error(e), token: None, location: None, retry_after: None };
+            }
+        }
+    }
     let minted = if login_app_is_live(&app) {
         skin::create_app_session_token(&principal.username, &app)
     } else {

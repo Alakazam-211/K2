@@ -869,6 +869,13 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/skin/roles/unassign",
         "/cli/skin/roles/room",
         "/cli/skin/roles/paths",
+        // app-mobile-access-v1 (0.46.3): the suggested role templates (read,
+        // and make a role from one: gated like the role writes above), and
+        // listing an App for discovery (the handler admits only the App's
+        // own agent with switch 2).
+        "/cli/skin/roles/suggest",
+        "/cli/skin/roles/from-template",
+        "/cli/skin/access/listed",
         // `/cli/skin/grants`, `/cli/skin/grants/delete`, `/cli/skin/grants/enabled`,
         // `/cli/skin/grants/host`, and `/cli/skin/templates*` stay off this list
         // (owner-only). Do not add `/cli/people`.

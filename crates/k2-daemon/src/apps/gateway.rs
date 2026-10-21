@@ -116,6 +116,11 @@ pub fn current() -> Option<Arc<LinkCtx>> {
 /// else a link pass never does (k2-core keeps it out of
 /// `resolve_skin_token`).
 pub fn resolve_pass(raw: &str) -> Option<SkinPass> {
+    // A′ (app-mobile-access-v1): a request the main-port fence closed
+    // (a route with no catalog `app` row) never has a pass.
+    if crate::routes::pass_gate::fenced() {
+        return None;
+    }
     match current() {
         Some(l) => passes::resolve_link_pass(raw, &l.link_id, &l.service_id).or_else(|| app_session(raw, &l.service_id)),
         None => k2_core::skin::resolve_skin_token(raw),

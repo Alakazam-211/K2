@@ -87,6 +87,9 @@ function mockOk(): void {
     if (route === 'projects/list') return [WS_SALES, WS_SUPPORT]
     if (route === 'skin/grants') return { grants: [] }
     if (route === 'publish/list') return { services: [] }
+    // app-mobile-access-v1: the App's People section (its own tests in AppPeopleAccess.test.tsx).
+    if (route === 'skin/access') return { app: 'host', agents: [], people: [], devices: [], settings: { listed: false, staySignedInDays: 30 } }
+    if (route === 'skin/roles/suggest') return { templates: [] }
     throw new Error(`unexpected GET ${route}`)
   })
   h.daemonCliPost.mockResolvedValue({ ok: true })
@@ -317,6 +320,9 @@ describe('SkinAccessSection', () => {
       if (route === 'projects/list') return [WS_SALES, WS_SUPPORT]
       if (route === 'skin/grants') return { grants: [] }
       if (route === 'publish/list') return { services: [] }
+      // app-mobile-access-v1: the App's People section (its own tests in AppPeopleAccess.test.tsx).
+      if (route === 'skin/access') return { app: 'host', agents: [], people: [], devices: [], settings: { listed: false, staySignedInDays: 30 } }
+      if (route === 'skin/roles/suggest') return { templates: [] }
       throw new Error(`unexpected GET ${route}`)
     })
     render(<SkinAccessSection />)
@@ -504,6 +510,9 @@ describe('SkinAccessSection', () => {
       if (route === 'projects/list') return [WS_SALES, WS_SUPPORT]
       if (route === 'skin/grants') return { grants: [] }
       if (route === 'publish/list') return { services: [] }
+      // app-mobile-access-v1: the App's People section (its own tests in AppPeopleAccess.test.tsx).
+      if (route === 'skin/access') return { app: 'host', agents: [], people: [], devices: [], settings: { listed: false, staySignedInDays: 30 } }
+      if (route === 'skin/roles/suggest') return { templates: [] }
       throw new Error(`unexpected GET ${route}`)
     })
     h.daemonCliPost.mockImplementation(async (route: string, body?: unknown) => {
@@ -537,6 +546,9 @@ describe('SkinAccessSection', () => {
       if (route === 'projects/list') return [WS_SALES, WS_SUPPORT]
       if (route === 'skin/grants') return { grants: [] }
       if (route === 'publish/list') return { services: [] }
+      // app-mobile-access-v1: the App's People section (its own tests in AppPeopleAccess.test.tsx).
+      if (route === 'skin/access') return { app: 'host', agents: [], people: [], devices: [], settings: { listed: false, staySignedInDays: 30 } }
+      if (route === 'skin/roles/suggest') return { templates: [] }
       throw new Error(`unexpected GET ${route}`)
     })
     render(<SkinAccessSection />)
@@ -602,6 +614,9 @@ describe('SkinAccessSection', () => {
         }
       }
       if (route === 'publish/list') return { services: [] }
+      // app-mobile-access-v1: the App's People section (its own tests in AppPeopleAccess.test.tsx).
+      if (route === 'skin/access') return { app: 'host', agents: [], people: [], devices: [], settings: { listed: false, staySignedInDays: 30 } }
+      if (route === 'skin/roles/suggest') return { templates: [] }
       throw new Error(`unexpected GET ${route}`)
     })
     const view = render(<SkinAccessSection />)
@@ -792,6 +807,9 @@ describe('SkinAccessSection', () => {
         }
         throw new Error(`unexpected project ${params.project}`)
       }
+      // app-mobile-access-v1: the App's People section (its own tests in AppPeopleAccess.test.tsx).
+      if (route === 'skin/access') return { app: 'host', agents: [], people: [], devices: [], settings: { listed: false, staySignedInDays: 30 } }
+      if (route === 'skin/roles/suggest') return { templates: [] }
       throw new Error(`unexpected GET ${route}`)
     })
     h.daemonCliPost.mockRejectedValueOnce(new Error("role 'wiki-editor' already exists"))
@@ -858,6 +876,9 @@ describe('SkinAccessSection', () => {
           ],
         }
       }
+      // app-mobile-access-v1: the App's People section (its own tests in AppPeopleAccess.test.tsx).
+      if (route === 'skin/access') return { app: 'host', agents: [], people: [], devices: [], settings: { listed: false, staySignedInDays: 30 } }
+      if (route === 'skin/roles/suggest') return { templates: [] }
       throw new Error(`unexpected GET ${route}`)
     })
     render(<SkinAccessSection />)
@@ -931,6 +952,9 @@ describe('SkinAccessSection', () => {
         }
         return { services: [] }
       }
+      // app-mobile-access-v1: the App's People section (its own tests in AppPeopleAccess.test.tsx).
+      if (route === 'skin/access') return { app: 'host', agents: [], people: [], devices: [], settings: { listed: false, staySignedInDays: 30 } }
+      if (route === 'skin/roles/suggest') return { templates: [] }
       throw new Error(`unexpected GET ${route}`)
     })
     h.daemonCliPost.mockResolvedValue({ ok: true, app: 'svc-wiki', added: [] })

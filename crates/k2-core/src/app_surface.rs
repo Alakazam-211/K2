@@ -28,6 +28,9 @@ pub const HTTP_ALLOWLIST: &[(&str, &str)] = &[
     ("GET", "/cli/skin/agents"),
     ("HEAD", "/cli/skin/agents"),
     ("POST", "/cli/skin/password/change"),
+    ("GET", "/cli/skin/devices"),
+    ("HEAD", "/cli/skin/devices"),
+    ("POST", "/cli/skin/devices/revoke"),
     ("GET", "/cli/thread"),
     ("HEAD", "/cli/thread"),
     ("GET", "/cli/thread/latest"),
@@ -130,6 +133,15 @@ pub const LINK_HTTP: &[(&str, &str)] = &[
     ("POST", "/cli/skin/login"),
     ("GET", "/cli/skin/guests/rooms"),
     ("POST", "/cli/skin/guests/rooms"),
+    ("POST", "/cli/skin/logout"),
+    ("POST", "/cli/skin/refresh"),
+    ("GET", "/cli/skin/devices"),
+    ("HEAD", "/cli/skin/devices"),
+    ("POST", "/cli/skin/devices/revoke"),
+    ("GET", "/cli/skin/app-info"),
+    ("HEAD", "/cli/skin/app-info"),
+    ("POST", "/cli/skin/password/forgot"),
+    ("POST", "/cli/skin/password/reset"),
     ("GET", "/cli/thread"),
     ("HEAD", "/cli/thread"),
     ("GET", "/cli/thread/latest"),
@@ -241,7 +253,7 @@ pub const WS_ALLOWLIST: &[(&str, &str)] = &[
 pub const HELPER_ONLY_HTTP: &[&str] = &["/cli/skin/password/change"];
 
 /// Routes only an App's gateway link serves: a BFF's server-side calls.
-pub const LINK_ONLY_HTTP: &[&str] = &["/cli/skin/login", "/cli/skin/guests/rooms", "/cli/skin/self", "/cli/skin/usage", "/cli/sew/pass"];
+pub const LINK_ONLY_HTTP: &[&str] = &["/cli/skin/login", "/cli/skin/guests/rooms", "/cli/skin/logout", "/cli/skin/refresh", "/cli/skin/app-info", "/cli/skin/password/forgot", "/cli/skin/password/reset", "/cli/skin/self", "/cli/skin/usage", "/cli/sew/pass"];
 
 /// The catalog verb behind each App-facing pair and socket
 /// (`(method, path, verb, door)`; sockets are `WS`), for refusals, the
@@ -253,6 +265,13 @@ pub const VERBS: &[(&str, &str, &str, &str)] = &[
     ("GET", "/cli/skin/guests/rooms", "guests.rooms", "link"),
     ("POST", "/cli/skin/guests/rooms", "guests.setRooms", "link"),
     ("POST", "/cli/skin/password/change", "password.change", "helper"),
+    ("POST", "/cli/skin/logout", "guests.logout", "link"),
+    ("POST", "/cli/skin/refresh", "guests.refresh", "link"),
+    ("GET", "/cli/skin/devices", "guests.devices", "both"),
+    ("POST", "/cli/skin/devices/revoke", "guests.revokeDevice", "both"),
+    ("GET", "/cli/skin/app-info", "app.info", "link"),
+    ("POST", "/cli/skin/password/forgot", "password.forgot", "link"),
+    ("POST", "/cli/skin/password/reset", "password.reset", "link"),
     ("GET", "/cli/thread", "thread.page", "both"),
     ("GET", "/cli/thread/latest", "thread.latest", "both"),
     ("POST", "/cli/thread/post", "thread.send", "both"),

@@ -119,8 +119,12 @@ fn exposure_counts_are_pinned() {
     // App project chat (0.46.3, catalog v18): app + project.list,
     // project.read, project.post, project.markRead and project.events
     // (App only, never garden-local).
+    // App mobile access (0.46.3, folded into catalog v19): app + 7 rows,
+    // guests.logout, guests.refresh, guests.devices, guests.revokeDevice,
+    // app.info, password.forgot and password.reset (its thread.catchup and
+    // thread.attachmentGet are Thread parity's rows above).
     let garden_local = c.verbs_exposed_to(Exposure::GardenLocal).len();
-    assert_eq!((widget, app, garden_local), (29, 77, 33), "per-exposure verb counts (widget, app, garden-local)");
+    assert_eq!((widget, app, garden_local), (29, 84, 33), "per-exposure verb counts (widget, app, garden-local)");
     let both: Vec<&str> = c
         .verbs
         .iter()
@@ -149,11 +153,11 @@ fn exposure_counts_are_pinned() {
         let row = c.verb(verb).unwrap_or_else(|| panic!("{verb} row"));
         assert!(row.exposed_to(Exposure::App) && !row.exposed_to(Exposure::GardenLocal), "{verb}: App only");
     }
-    assert_eq!(c.catalog_version, 18);
+    assert_eq!(c.catalog_version, 19);
     assert_eq!(
         c.verbs.len(),
-        143,
-        "today's 37 bridge verbs plus the frame rows theme.changed, canvas.setHitRegions, window.startDrag, sources.*, the 15 Garden data rows, the 66 app rows (5 on both transports) and widget.self, plus Thread parity 0.46.3's 4 widget and 5 app rows, plus thread.mute, plus App project chat's 5 app rows (0.46.3)"
+        150,
+        "today's 37 bridge verbs plus the frame rows theme.changed, canvas.setHitRegions, window.startDrag, sources.*, the 15 Garden data rows, the 66 app rows (5 on both transports) and widget.self, plus Thread parity 0.46.3's 4 widget and 5 app rows, plus thread.mute, plus App project chat's 5 app rows, plus App mobile access's 7 app rows (0.46.3)"
     );
 }
 
@@ -171,6 +175,8 @@ fn every_feature_is_a_boot_status_key() {
     assert_eq!(catalog().verb("thread.mute").map(|v| v.feature.as_str()), Some("app-read-state-v1"));
     // Added by this build (UW36); B2 puts it in /boot-status.
     known.insert("zen-widgets-v1");
+    // DB-gated keys (reported once the daemon DB is up): this test opens no DB.
+    known.insert(k2_daemon::boot_status::FEATURE_INBOX_CATCHUP);
     for v in &catalog().verbs {
         assert!(known.contains(v.feature.as_str()), "{}: feature {} isn't a /boot-status key", v.verb, v.feature);
     }

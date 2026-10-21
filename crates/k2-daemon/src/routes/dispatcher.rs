@@ -881,21 +881,26 @@ pub async fn dispatch(mut stream: TcpStream, state: crate::DaemonState, ingress:
         }
         other => other,
     };
-    let mut requests_served: u32 = 0;
-    loop {
-        let outcome = handle_one_request(&mut stream, &state, ingress).await;
-        match outcome {
-            DispatchOutcome::KeepAlive => {
-                requests_served = requests_served.saturating_add(1);
-                if requests_served >= KEEP_ALIVE_MAX_REQUESTS {
-                    return;
+    // A′: each request's pass fence lives in this connection's scope.
+    super::pass_gate::scope(async move {
+        let mut requests_served: u32 = 0;
+        loop {
+            super::pass_gate::set_fenced(false);
+            let outcome = handle_one_request(&mut stream, &state, ingress).await;
+            match outcome {
+                DispatchOutcome::KeepAlive => {
+                    requests_served = requests_served.saturating_add(1);
+                    if requests_served >= KEEP_ALIVE_MAX_REQUESTS {
+                        return;
+                    }
+                    // Continue: loop body re-enters `handle_one_request`
+                    // which awaits the next request (with idle timeout).
                 }
-                // Continue: loop body re-enters `handle_one_request`
-                // which awaits the next request (with idle timeout).
+                DispatchOutcome::Done => return,
             }
-            DispatchOutcome::Done => return,
         }
-    }
+    })
+    .await
 }
 
 /// Serve exactly one HTTP request on `stream`, returning whether the
@@ -1200,6 +1205,7 @@ async fn handle_one_request(
         && (path.starts_with("/cli/") || path == "/events")
         && path != "/cli/skin/login"
         && path != "/cli/skin/logout"
+        && path != crate::app_mobile_routes::REFRESH
         && path != "/cli/skin/password/reset"
         && super::http::is_web_client_request(&headers_blob)
     {
@@ -1288,6 +1294,14 @@ async fn handle_one_request(
         super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         return DispatchOutcome::Done;
     }
+
+    // A′ (app-mobile-access-v1, 0.46.3): the catalog is the wall for App
+    // passes on the main port too. A live `k2skn_` pass on a route that is
+    // not a catalog `app` row (or an App socket) is fenced: the one pass
+    // resolver answers "no pass" for the rest of this request, so no arm
+    // can act on it, while every answer keeps today's bytes. The link has
+    // its own gate above. `K2_APP_PASS_GATE=off` = no fence.
+    super::pass_gate::set_fenced(super::pass_gate::fences(ingress == Ingress::App, &method, &path, &query));
 
     // Skin Host belt (slice 3): nested `skin.*` forwarded by Caddy is
     // Thread-only. Dual filter with the Caddy path-allow list — even a
@@ -7446,6 +7460,19 @@ async fn handle_one_request(
             );
             let (auth_ok, scoped_principal, skin_author) = if skin_presented {
                 match skin_pass {
+                    // A′: a live pass fenced off a route with no catalog row
+                    // gets the answer it always got here.
+                    None if super::pass_gate::fenced() => {
+                        let _ = stream.read(&mut buf).await;
+                        super::http::send_response(
+                            &mut *stream,
+                            "403 Forbidden",
+                            "application/json",
+                            r#"{"error":"skin tokens cannot use this room"}"#,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    }
                     None => {
                         let _ = stream.read(&mut buf).await;
                         let r = crate::skin_routes::revoked_skin_response();
@@ -9190,6 +9217,136 @@ async fn handle_one_request(
         // and `/cli/skin/grants*` stay owner_role_identity even when the
         // toggle is ON. Skin tokens themselves never manage the roster.
         // Mutations POST-only; GET twins 405. Grants do not change login.
+        // app-mobile-access-v1 (0.46.3): discovery, device sign-in, the
+        // owner's People grid and the suggested role templates
+        // (`app_mobile_routes`). Exact arms before the `/cli/skin` prefix.
+        crate::app_mobile_routes::APP_INFO => {
+            let _ = stream.read(&mut buf).await;
+            let params = super::http::parse_params(&path, &query);
+            let r = tokio::task::spawn_blocking(move || crate::app_mobile_routes::app_info(&params))
+                .await
+                .unwrap_or(None);
+            match r {
+                Some(r) => super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await,
+                // Nothing listed for that id: exactly a route that doesn't exist.
+                None => {
+                    let r = crate::cli_response::CliResponse::not_found();
+                    super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await
+                }
+            }
+        }
+        crate::app_mobile_routes::REFRESH => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let r = tokio::task::spawn_blocking(move || crate::app_mobile_routes::handle_refresh(&body))
+                .await
+                .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e));
+            if r.status.starts_with("401") {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        p if crate::app_mobile_routes::PASS_ROUTES.contains(&p) => {
+            let body = if is_post {
+                super::http::read_post_body(&mut *stream, &mut buf).await
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let presented = super::http::extract_token(&query);
+            let r = if presented.is_some_and(k2_core::skin::is_skin_token) {
+                // Task-local link context: resolve here, not on the worker.
+                match presented.and_then(crate::apps::gateway::resolve_pass) {
+                    Some(pass) => {
+                        let route = p.to_string();
+                        tokio::task::spawn_blocking(move || crate::app_mobile_routes::handle_pass(&route, &pass, is_post, &body))
+                            .await
+                            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                    }
+                    None => crate::skin_routes::revoked_skin_response(),
+                }
+            } else {
+                crate::app_mobile_routes::pass_required()
+            };
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        crate::app_mobile_routes::ACCESS => {
+            let _ = stream.read(&mut buf).await;
+            let r = if super::http::owner_role_identity(&query, state.token.as_str()).is_some() {
+                let params = super::http::parse_params(&path, &query);
+                tokio::task::spawn_blocking(move || crate::app_mobile_routes::handle_access_get(&params))
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+            } else {
+                skin_dual_auth_failure(&query, bearer_token.as_deref())
+            };
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        p if p == crate::app_mobile_routes::ACCESS_SETTINGS || p == crate::app_mobile_routes::ACCESS_DEVICE_REVOKE => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let r = match super::http::owner_role_identity(&query, state.token.as_str()) {
+                Some(actor) => {
+                    let route = p.to_string();
+                    tokio::task::spawn_blocking(move || {
+                        if route == crate::app_mobile_routes::ACCESS_SETTINGS {
+                            crate::app_mobile_routes::handle_access_settings(&body, &actor)
+                        } else {
+                            crate::app_mobile_routes::handle_access_device_revoke(&body, &actor)
+                        }
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
+                None => skin_dual_auth_failure(&query, bearer_token.as_deref()),
+            };
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        crate::app_mobile_routes::ACCESS_LISTED => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let who = crate::compute_routes::who_from_tcp(&query, bearer_token.as_deref(), state.token.as_str());
+            let r = tokio::task::spawn_blocking(move || crate::app_mobile_routes::handle_access_listed(&body, &who))
+                .await
+                .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e));
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        crate::app_mobile_routes::ROLES_SUGGEST => {
+            let _ = stream.read(&mut buf).await;
+            let (ok, _) = owner_or_scoped_hook_auth(&path, &query, bearer_token.as_deref(), state.token.as_str());
+            let r = if ok {
+                crate::app_mobile_routes::handle_roles_suggest()
+            } else {
+                skin_dual_auth_failure(&query, bearer_token.as_deref())
+            };
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        crate::app_mobile_routes::ROLES_FROM_TEMPLATE => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let actor = match owner_or_skin_manage_hook(&path, &query, bearer_token.as_deref(), state.token.as_str()) {
+                Ok(a) => a,
+                Err(f) => {
+                    let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    super::http::send_response(&mut *stream, f.status, f.content_type, &f.body).await;
+                    return DispatchOutcome::Done;
+                }
+            };
+            let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let r = tokio::task::spawn_blocking(move || {
+                crate::skin_routes::stamp_actor(crate::app_mobile_routes::handle_roles_from_template(&body, &actor), &actor)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e));
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         p if p.starts_with("/cli/skin") => {
             let r = match p {
                 // Room-scope R6 (0.46.1): any live pass reads its own view.

@@ -139,6 +139,8 @@ export const CATALOG_ERROR_CODES = [
   'has_role',
   'confirm_required',
   'declined',
+  'refresh_invalid',
+  'refresh_reused',
 ] as const
 
 export type CatalogErrorCode = (typeof CATALOG_ERROR_CODES)[number]

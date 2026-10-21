@@ -902,6 +902,19 @@ pub const ROUTES: &[Route] = &[
     // Person names (0.46.0): same floors as colours (any login reads them
     // and sets its own; Admin+ others; Owner for the owner person).
     both("/cli/people/name", Member),
+    // Permission cards (Beta, prd-agent-settings-cards-v1 §3.2, §6.7,
+    // §11): absent from every wire decision while the global switch is off
+    // ([`live_row`], vs-live C1). The agent verbs take a passport only (no
+    // login asks for a card); "Waiting on you" is for the people who can
+    // answer one (Admin is the lowest catalog floor). People answer and
+    // deny through `/cli/thread/answer`, so there is no approve route.
+    post("/cli/permission/cancel", NoLogin),
+    get("/cli/permission/enabled", NoLogin),
+    get("/cli/permission/list", NoLogin),
+    get("/cli/permission/pending", Admin),
+    post("/cli/permission/request", NoLogin),
+    get("/cli/permission/status", NoLogin),
+    post("/cli/permission/update", NoLogin),
     // Power-helper S1: Set up shows the admin dialog on the host, so
     // Admin (and the handler refuses anything but loopback).
     post("/cli/power/helper", Admin),
@@ -1984,6 +1997,41 @@ mod tests {
     fn permission_rows() -> Vec<&'static Route> {
         ROUTES.iter().filter(|r| k2_core::permission::gate::route_gated(r.path)).collect()
     }
+
+    #[test]
+    fn permission_rows_exist_and_are_every_gated_row() {
+        let paths: Vec<&str> = permission_rows().iter().map(|r| r.path).collect();
+        for p in ["/cli/permission/request", "/cli/permission/enabled", "/cli/permission/pending"] {
+            assert!(paths.contains(&p), "{p} has a row: {paths:?}");
+        }
+        for r in permission_rows() {
+            assert!(
+                r.path.starts_with(k2_core::permission::ROUTE_PREFIX)
+                    || r.path == k2_core::permission::NOTE_ROUTE
+                    || r.path == k2_core::permission::UNDO_ROUTE,
+                "{} is gated but not a permission route",
+                r.path
+            );
+        }
+    }
+
+    #[test]
+    fn permission_rows_are_absent_on_the_wire_while_off_and_live_while_on() {
+        let rows = permission_rows();
+        assert!(!rows.is_empty());
+        for r in rows {
+            // The classifier always sees the row (source walk, contracts).
+            assert_eq!(lookup(r.path).map(|x| x.path), Some(r.path));
+            // Off: exactly a path with no row.
+            assert!(live_row_when(r.path, false).is_none(), "{} is live while off", r.path);
+            assert!(!post_allowed_when(r.path, false), "{}: POST must hit today's 405 guard while off", r.path);
+            assert_eq!(post_allowed_when(r.path, false), post_allowed_when("/cli/not-a-route", false));
+            // On: the row as written.
+            assert_eq!(live_row_when(r.path, true).map(|x| x.path), Some(r.path));
+            assert_eq!(post_allowed_when(r.path, true), r.post.is_some(), "{}", r.path);
+        }
+    }
+
     #[test]
     fn permission_family_is_never_get_refused_before_auth() {
         let none = std::collections::HashMap::new();

@@ -73,8 +73,12 @@ pub struct Post {
     pub agent_color: String,
     /// The post's message preview (`k2_core::push::preview::message_preview`
     /// of the text, or a choice card's question); `""` for a secret card or
-    /// nothing readable. The raw text is never held.
+    /// nothing readable.
     pub preview: String,
+    /// The post itself for sealed alerts (prd-e2e-push-v1 follow-up): its
+    /// text is held only up to [`k2_core::push::ThreadMsg::HOLD_MAX_CHARS`],
+    /// and only while the window is open.
+    pub msg: Option<k2_core::push::ThreadMsg>,
 }
 
 /// How one person's phones split on previews right now.
@@ -295,6 +299,9 @@ impl Coalescer {
             agent_color: w.post.agent_color.clone(),
             // The latest post's preview ("N new messages · …" when count > 1).
             preview,
+            // The latest post itself: sealed alerts only (never a legacy
+            // push), whatever the previews switches say.
+            msg: w.post.msg.clone(),
         });
         w.pending = 0;
         w.last_push = Some(now);
@@ -510,6 +517,7 @@ fn is_human_from(from: &str) -> bool {
 /// The trigger (§6.1). `from` is the stored `item.doc.from`; `text` is
 /// the post's text (a choice card's question; ignored for a secret card),
 /// kept only as its preview.
+#[allow(clippy::too_many_arguments)]
 pub fn on_agent_post(
     conversation_id: &str,
     project_id: &str,
@@ -519,10 +527,13 @@ pub fn on_agent_post(
     kind: ThreadMsgKind,
     text: &str,
     files: usize,
+    item_id: &str,
+    created_at: i64,
 ) {
     if crate::push_routes::airgap_blocks() || is_human_from(from) {
         return;
     }
+    let msg = k2_core::push::ThreadMsg::new(item_id, seq, conversation_id, from, created_at, kind, text);
     let preview = post_preview(kind, text, files);
     note_last_preview(conversation_id, &preview);
     // The same rev `GET /cli/projects/list` shows as this row's `iconRev`.
@@ -537,6 +548,7 @@ pub fn on_agent_post(
         avatar_rev,
         agent_color,
         preview,
+        msg: Some(msg),
     };
     ensure_ticker();
     lock().post(&DaemonEnv, post, Instant::now());
@@ -647,6 +659,7 @@ mod tests {
             avatar_rev: "0123456789abcdef".into(),
             agent_color: "#22c55e".into(),
             preview: String::new(),
+            msg: None,
         }
     }
 

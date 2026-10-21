@@ -1429,7 +1429,7 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
                 crate::thread_activity::note_reply(&resolved.conversation_id);
                 // Thread push (§6.1): an agent reply may push; a human
                 // `from` (an owner-token shell post) never does (TP14).
-                push_agent_post(&resolved, &item.doc.from, item.seq, k2_core::push::ThreadMsgKind::Text, &text, n_files);
+                push_agent_post(&resolved, &item, k2_core::push::ThreadMsgKind::Text, &text, n_files);
             }
             // thread-attachments-v1: the stored snapshots, so the sender
             // sees what landed (state `ok` at post time).
@@ -1471,8 +1471,7 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
 /// preview, 0.46.1); a secret card passes `""` and never previews.
 fn push_agent_post(
     resolved: &ResolvedOverlay,
-    from: &str,
-    seq: i64,
+    item: &overlay::OverlayItem,
     kind: k2_core::push::ThreadMsgKind,
     text: &str,
     files: usize,
@@ -1484,11 +1483,13 @@ fn push_agent_post(
         &resolved.conversation_id,
         &resolved.project_id,
         &resolved.addr,
-        from,
-        seq,
+        &item.doc.from,
+        item.seq,
         kind,
         text,
         files,
+        &item.id,
+        item.doc.created_at,
     );
 }
 
@@ -1571,7 +1572,7 @@ fn handle_ask(params: &HashMap<String, String>) -> CliResponse {
             drop(conn);
             // TW4 (a): an agent's card is its Thread reply.
             crate::thread_activity::note_reply(&resolved.conversation_id);
-            push_agent_post(&resolved, &item.doc.from, item.seq, k2_core::push::ThreadMsgKind::Choice, prompt.trim(), 0);
+            push_agent_post(&resolved, &item, k2_core::push::ThreadMsgKind::Choice, prompt.trim(), 0);
             let choice = item.doc.choice.as_ref();
             let labels: Vec<String> = choice
                 .map(|c| c.options.iter().map(|o| o.label.clone()).collect())
@@ -1745,7 +1746,7 @@ fn create_secret_card(
     if !quiet {
         crate::thread_activity::note_reply(&resolved.conversation_id);
         // A secret card pushes name-only, never its name or prompt (§7).
-        push_agent_post(resolved, &item.doc.from, item.seq, k2_core::push::ThreadMsgKind::Secret, "", 0);
+        push_agent_post(resolved, &item, k2_core::push::ThreadMsgKind::Secret, "", 0);
     }
     Ok(item)
 }
@@ -1769,7 +1770,7 @@ pub(crate) fn post_handoff_card(
     crate::overlay_ws::emit_links(&links, &item.doc);
     drop(conn);
     // Name-only push, like a secret card (§7): never a preview.
-    push_agent_post(&resolved, &item.doc.from, item.seq, k2_core::push::ThreadMsgKind::Secret, "", 0);
+    push_agent_post(&resolved, &item, k2_core::push::ThreadMsgKind::Secret, "", 0);
     Ok(format!("{}/{}", resolved.conversation_id, item.id))
 }
 
@@ -6601,6 +6602,18 @@ mod tests {
         assert!(wire.contains("\"body\":\"Plan — The launch plan is ready.\""), "preview in the body: {wire}");
         assert!(!wire.contains("Then sleep") && !wire.contains("**"), "two sentences, stripped: {wire}");
         assert!(s[0].preview.is_empty(), "a secret card carries no preview");
+        // prd-e2e-push-v1 follow-up: the post itself rides along for sealed
+        // alerts (full text, its id/seq/from/at), never on today's wire.
+        let m = t[0].msg.as_ref().expect("msg");
+        assert_eq!(m.text, "## Plan\n\nThe **launch** plan is ready. Read it tonight. Then sleep.");
+        assert_eq!((m.seq, m.truncated), (seq, false));
+        assert!(!m.from.is_empty(), "the stored post's from (the caller stamp)");
+        assert_eq!(m.conversation_id, text_conv);
+        assert!(!m.id.is_empty() && m.at > 0);
+        assert!(!wire.contains(&m.id) && !wire.contains("\"msg\""), "msg never on the legacy wire: {wire}");
+        assert_eq!(c[0].msg.as_ref().expect("msg").text, "Ship *it*?", "a choice card's question");
+        let sm = s[0].msg.as_ref().expect("msg");
+        assert_eq!(sm.text, "", "a secret card never carries text");
     }
 
     /// Push titles name the agent by its DISPLAY name (`projects.name`, as

@@ -734,6 +734,23 @@ mod unix_impl {
                 let who = crate::compute_routes::who_from_cell(this_session_id, principal);
                 from_cli(crate::clone_proposal_routes::handle(p, who, body, params, "cell"))
             }
+            // Permission cards (prd-agent-settings-cards-v1 rev 3.1 §2.4,
+            // lane A1): this cell's passport asks for one named change.
+            // The handler applies both switches (off → today's 403 body).
+            p if crate::permission::routes::is_route(p) => {
+                if body.len() > crate::permission::routes::MAX_BODY {
+                    return from_cli(crate::permission::routes::too_large());
+                }
+                let who = crate::compute_routes::who_from_cell(this_session_id, principal);
+                from_cli(crate::permission::routes::handle(
+                    p,
+                    who,
+                    is_post,
+                    body,
+                    params,
+                    crate::permission::routes::Transport::Cell,
+                ))
+            }
             p if crate::hire_routes::is_route(p) => {
                 if body.len() > crate::hire_routes::MAX_BODY {
                     return from_cli(crate::hire_routes::too_large());

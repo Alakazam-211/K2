@@ -2211,8 +2211,6 @@ pub(crate) enum CardAudience {
     /// A permission card: a targeted Thread push to these eligible logins
     /// only (`permission::routing::push_card`, lane A2). Permission cards
     /// never call `push_agent_post`; an empty list sends no push.
-    // P0 contract: lane A1 constructs it when it posts permission cards.
-    #[allow(dead_code)]
     Logins(Vec<String>),
 }
 
@@ -2296,8 +2294,6 @@ pub(crate) fn present_action_card(
 /// Rewrite a **pending** action card's `view` (notes, guest counts,
 /// `applying`, the switch-off close) and publish the same id at the same
 /// seq, projected again for each subscriber (rev 3.1 §4.1, C11).
-// P0 contract: lanes A1/A2/F call it (notes, counts, applying, close).
-#[allow(dead_code)]
 pub(crate) fn update_action_view(conversation_id: &str, card_id: &str, view: serde_json::Value) -> Result<(), String> {
     let cb = overlay::update_action_view(conversation_id, card_id, view)?;
     publish_card_frame(&cb);
@@ -2318,6 +2314,21 @@ fn action_card_person_only(hint: &str) -> CliResponse {
 /// "answers" or "dismisses". The daemon's own replace (a newer change voids
 /// the waiting card) never comes through a route, so it isn't checked here.
 fn require_action_card_person(params: &HashMap<String, String>, session_author: &str, verb: &str) -> Result<(), CliResponse> {
+    refuse_action_card_non_person(params, verb)?;
+    let owner = session_author == "owner"
+        || matches!(k2_core::connect_users::role_for_user(session_author), Some(k2_core::connect_users::Role::Owner));
+    if !owner {
+        return Err(action_card_person_only(&format!(
+            "only this server's owner {verb} a settings card (the same people as Settings → Gardens → Local Data)"
+        )));
+    }
+    Ok(())
+}
+
+/// Settings (action) cards are answered by people only (§6.1): an agent
+/// passport (its own or another workspace's), a K2 terminal cell, a Garden
+/// widget and an App guest are refused, whatever the floor.
+fn refuse_action_card_non_person(params: &HashMap<String, String>, verb: &str) -> Result<(), CliResponse> {
     let passport = principal_is_bound(params)
         || crate::caller_workspace::principal_from_params(params).is_some()
         || params.contains_key("cell_session_id");
@@ -2332,14 +2343,65 @@ fn require_action_card_person(params: &HashMap<String, String>, session_author: 
     if request_skin().is_some() {
         return Err(action_card_person_only(&format!("an App guest never {verb} a settings card")));
     }
-    let owner = session_author == "owner"
-        || matches!(k2_core::connect_users::role_for_user(session_author), Some(k2_core::connect_users::Role::Owner));
-    if !owner {
-        return Err(action_card_person_only(&format!(
-            "only this server's owner {verb} a settings card (the same people as Settings → Gardens → Local Data)"
-        )));
-    }
     Ok(())
+}
+
+/// A person's answer to a permission card (prd-agent-settings-cards-v1
+/// rev 3.1 §6.1, §6.2): people only, the catalog floor, then the locked
+/// apply in `permission::answer` (compare-and-set, current-state check,
+/// the route entry as the person). The agent hears a `[permission:]` turn,
+/// never `[thread:] chose …`.
+fn answer_permission_card(
+    params: &HashMap<String, String>,
+    resolved: &ResolvedOverlay,
+    card_id: &str,
+    action: overlay::CardAction,
+    session_author: &str,
+) -> CliResponse {
+    if let Err(r) = refuse_action_card_non_person(params, "answers") {
+        return r;
+    }
+    // Check-on-touch: a card past its time expires now, with its request
+    // and the agent's one turn.
+    if let Ok(Some(cb)) = overlay::expire_if_due(&resolved.conversation_id, card_id, overlay::now_secs()) {
+        publish_card_frame(&cb);
+        crate::permission::expiry::on_cards_expired(&[cb]);
+        return error_json("409 Conflict", "card_not_pending", "this card expired");
+    }
+    match overlay::get_thread_doc(&resolved.conversation_id, card_id) {
+        Ok(Some(d)) if d.is_pending_choice() => {}
+        Ok(Some(_)) => return card_error(overlay::CARD_NOT_PENDING.to_string()),
+        Ok(None) => return not_found(format!("card not found: {card_id}")),
+        Err(e) => return card_error(e),
+    }
+    let who = crate::permission::present::answerer_for(session_author);
+    let by = card_actor_author(params, session_author);
+    let card = crate::permission::answer::CardRef { conversation_id: &resolved.conversation_id, card_id };
+    let r = crate::permission::answer::answer(params, card, &action, &who, by);
+    if r.status == "200 OK" {
+        if let Ok(Some(item)) = overlay::find_thread_item(&resolved.conversation_id, card_id) {
+            let cb = CardCallback {
+                conversation_id: resolved.conversation_id.clone(),
+                doc_id: item.id.clone(),
+                seq: item.seq,
+                doc: item.doc,
+                inject_line: String::new(),
+            };
+            note_card_reader(params, session_author, &cb);
+        }
+        if let Ok(mut body) = serde_json::from_str::<serde_json::Value>(&r.body) {
+            body["conversation_id"] = serde_json::json!(resolved.conversation_id);
+            body["addr"] = serde_json::json!(resolved.addr);
+            return CliResponse::ok_json(with_moved_from(body, resolved));
+        }
+    }
+    r
+}
+
+/// A permission card's new state, to every open view of its Thread (the
+/// same id at the same seq; lane A1's `present::refresh_card`).
+pub(crate) fn publish_action_frame(cb: &CardCallback) {
+    publish_card_frame(cb);
 }
 
 /// A person's tap on an action card: check it's a person who may change
@@ -2352,6 +2414,9 @@ fn answer_action_card(
     action: overlay::CardAction,
     session_author: &str,
 ) -> CliResponse {
+    if action.id == k2_core::permission::CARD_ACTION_PERMISSION || action.id == k2_core::permission::CARD_ACTION_BATCH {
+        return answer_permission_card(params, resolved, card_id, action, session_author);
+    }
     if let Err(r) = require_action_card_person(params, session_author, "answers") {
         return r;
     }
@@ -2686,6 +2751,11 @@ pub fn sweep_expired_cards(now: i64) -> usize {
             for cb in &cbs {
                 publish_card_frame(cb);
             }
+            // Permission cards (rev 3.1 §3.3, C20): their requests turn
+            // `expired` and each agent is woken once; then any open
+            // request past its time whose card is gone or closed.
+            crate::permission::expiry::on_cards_expired(&cbs);
+            crate::permission::expiry::sweep_requests(now);
             cbs.len()
         }
         Err(e) => {

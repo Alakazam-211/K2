@@ -6988,6 +6988,42 @@ async fn handle_one_request(
                 .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
+        // Permission cards (prd-agent-settings-cards-v1 rev 3.1 §2.4, lane
+        // A1). Skipped while the server switch is off, so the family
+        // answers exactly as an unknown route does today. With it on, the
+        // handler gives an agent whose own switch is off today's body for
+        // its method, and checks the method itself (POST verbs → 405).
+        p if crate::permission::routes::is_route(p) && k2_core::permission::gate::server_on() => {
+            let body_bytes = if is_post {
+                match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::permission::routes::MAX_BODY).await {
+                    Ok(b) => b,
+                    Err(_) => {
+                        let r = crate::permission::routes::too_large();
+                        super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let who = crate::compute_routes::who_from_tcp(&query, bearer_token.as_deref(), state.token.as_str());
+            let params = super::http::parse_params(&path, &query);
+            let p_owned = p.to_string();
+            let r = tokio::task::spawn_blocking(move || {
+                crate::permission::routes::handle(
+                    &p_owned,
+                    who,
+                    is_post,
+                    &body_bytes,
+                    &params,
+                    crate::permission::routes::Transport::Tcp,
+                )
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         p if crate::compute_routes::is_route(p) => {
             if !k2_core::compute::enabled() {
                 let _ = stream.read(&mut buf).await;

@@ -18,7 +18,7 @@ pub mod vault;
 use parking_lot::Mutex;
 use rusqlite::Connection;
 
-pub use doc::{ChoiceBody, ChoiceOption, CollectedMeta, DesignOrigin, HandoffCardBody, ImportedMeta, OverlayDoc, OverlayItem, OverlayLink, PostAuthor, SecretBody, SecretProposal, WidgetOrigin, WidgetPlacementClaim};
+pub use doc::{CardAction, ChoiceBody, ChoiceOption, CollectedMeta, DesignOrigin, HandoffCardBody, ImportedMeta, OverlayDoc, OverlayItem, OverlayLink, PostAuthor, SecretBody, SecretProposal, WidgetOrigin, WidgetPlacementClaim};
 pub use attachments::ThreadAttachment;
 pub use options::{parse_options_value, split_options_csv};
 pub use store::{ExtTxn, OverlayPage, SeqRemap, ThreadDelta};
@@ -388,6 +388,25 @@ pub fn post_choice(
     allow_custom: bool,
     expires_at: Option<i64>,
 ) -> Result<(OverlayItem, Vec<OverlayLink>), String> {
+    post_choice_with_action(conn, conversation_id, project_id, from, to, prompt, options, allow_custom, expires_at, None)
+}
+
+/// [`post_choice`] with an action (0.46.3, agents present settings cards):
+/// K2 runs `action` when a person taps an option (the daemon's answer route
+/// refuses agents, K2 terminals, widgets and guests for it).
+#[allow(clippy::too_many_arguments)]
+pub fn post_choice_with_action(
+    conn: &Connection,
+    conversation_id: &str,
+    project_id: &str,
+    from: &str,
+    to: &str,
+    prompt: &str,
+    options: Vec<String>,
+    allow_custom: bool,
+    expires_at: Option<i64>,
+    action: Option<CardAction>,
+) -> Result<(OverlayItem, Vec<OverlayLink>), String> {
     let prompt = prompt.trim();
     if prompt.is_empty() {
         return Err("ask prompt must not be empty".to_string());
@@ -408,6 +427,7 @@ pub fn post_choice(
     );
     if let Some(c) = doc.choice.as_mut() {
         c.expires_at = expires_at;
+        c.action = action;
     }
     store::commit_write(&doc, Some((conversation_id, seq)), &[], None)?;
     if let Some(at) = expires_at {
@@ -548,6 +568,26 @@ pub struct CardCallback {
 /// (answered, set, voided or expired). Routes map it to 409
 /// `card_not_pending`; a stored answer is never overwritten.
 pub const CARD_NOT_PENDING: &str = "card is not pending";
+
+/// The action on `card_id` in this conversation (any status), or None for a
+/// card without one.
+pub fn card_action(conversation_id: &str, card_id: &str) -> Result<Option<CardAction>, String> {
+    Ok(thread_item(conversation_id, card_id)?.doc.choice.and_then(|c| c.action))
+}
+
+/// The pending action cards in this conversation for `action_id` with this
+/// `dedupe` key (not yet due), newest last.
+pub fn pending_action_cards(conversation_id: &str, action_id: &str, dedupe: &str, now: i64) -> Result<Vec<String>, String> {
+    let mut out = Vec::new();
+    for (_, card) in waiting_cards(Some(conversation_id), now)? {
+        let Some(doc) = store::get_doc(&card)? else { continue };
+        let hit = doc.choice.as_ref().and_then(|c| c.action.as_ref()).is_some_and(|a| a.id == action_id && a.dedupe == dedupe);
+        if hit {
+            out.push(card);
+        }
+    }
+    Ok(out)
+}
 
 /// Whether `card_id` in this conversation is a secret card (any status).
 pub fn card_is_secret(conversation_id: &str, card_id: &str) -> Result<bool, String> {

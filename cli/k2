@@ -32991,7 +32991,7 @@ WRITE THROUGH K2, OR PROPOSE
   Without "Manage Gardens and data sources" a put is a PROPOSAL (k2 zen
   proposals; a person approves). With it a put writes now, audited. Never
   K2's built-ins (k2:<name>): copy one with k2 zen widget new --from.
-  Changing the person's widget: they get a "Keep as mine" note.
+  Changing the person's widget: they get a "Keep as mine" card on your Thread.
 
 THE WIDGET DEV LOOP (keep your widget outside ~/.k2)
   k2 zen validate --dir ./board              check; writes nothing
@@ -58561,7 +58561,8 @@ if view == "put":
     else:
         print("Wrote %s%s" % (d.get("file"), "" if d.get("changed", True) else " (no change)"))
         if d.get("keepAsMine"):
-            print("This widget was your person’s; its new version is not theirs yet, so it runs without its data until they keep it (K2 sent them an inbox note: Settings → Gardens → Local Data → It’s mine).")
+            kc = d.get("keepCard") or {}
+            print("This widget was your person’s; its new version is not theirs yet, so it runs without its data until they keep it. " + ("K2 put a Keep as mine card on their Thread with you." if kc.get("card") else "K2 sent them an inbox note (Settings → Gardens → Local Data → It’s mine)."))
         if d.get("snapshot"):
             print("Previous version kept: %s (k2 zen reset --to %s)" % (d["snapshot"], d["snapshot"]))
         v = d.get("validate") or {}
@@ -58581,7 +58582,8 @@ elif view == "folder":
         w = d.get("written") or []
         print("Wrote %s: %s" % (d.get("file"), ", ".join(w) if w else "no change"))
         if d.get("keepAsMine"):
-            print("This widget was your person’s; its new version is not theirs yet, so it runs without its data until they keep it (K2 sent them an inbox note: Settings → Gardens → Local Data → It’s mine).")
+            kc = d.get("keepCard") or {}
+            print("This widget was your person’s; its new version is not theirs yet, so it runs without its data until they keep it. " + ("K2 put a Keep as mine card on their Thread with you." if kc.get("card") else "K2 sent them an inbox note (Settings → Gardens → Local Data → It’s mine)."))
         if d.get("removed"):
             print("Removed: %s" % ", ".join(d["removed"]))
         if d.get("kept"):
@@ -58636,7 +58638,11 @@ elif view == "show":
 elif view == "decide":
     print("%s: %s" % (d.get("id"), d.get("status")))
     if d.get("keepAsMine"):
-        print("The widget’s new version is not signed as yours, so it runs without its data. Keep it: Settings → Gardens → Local Data → %s → It’s mine (or k2 zen widget claim %s outside K2)." % (d.get("target"), d.get("target")))
+        kc = d.get("keepCard") or {}
+        if kc.get("card"):
+            print("The widget’s new version is not signed as yours yet: tap Keep as mine on the card in your Thread with %s." % (kc.get("addr") or "the agent"))
+        else:
+            print("The widget’s new version is not signed as yours, so it runs without its data. Keep it: Settings → Gardens → Local Data → %s → It’s mine (or k2 zen widget claim %s outside K2)." % (d.get("target"), d.get("target")))
 '
 }
 

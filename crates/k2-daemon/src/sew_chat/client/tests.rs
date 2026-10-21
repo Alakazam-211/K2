@@ -164,8 +164,9 @@ fn actor_slugs_and_addresses() {
     assert_eq!(slugify("Release Notes!").unwrap().as_str(), "release-notes");
     assert_eq!(slugify("  ops  ").unwrap().as_str(), "ops");
     assert!(slugify("!!!").is_err());
-    assert_eq!(build_addr("hearth", "general").unwrap().to_query_value(), "hearth/general");
-    assert!(build_addr("hearth", "#301").unwrap().to_query_value().contains("%23301"));
+    // sew-proto always writes `<space>/#<channel>` (ids as `id:N`), `#` sent as %23.
+    assert_eq!(build_addr("hearth", "general").unwrap().to_query_value(), "hearth/%23general");
+    assert_eq!(build_addr("hearth", "#301").unwrap().to_query_value(), "hearth/%23id:301");
     assert_eq!(build_addr("Hearth", "general").unwrap_err().status, 400, "a Space slug is lowercase");
     assert_eq!(parse_id("mem-x").unwrap_err().status, 404, "a non-Sew id is a masked 404");
 }

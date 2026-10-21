@@ -18,6 +18,14 @@
 //! everything as the roles themselves over TCP, rolls back, moves again,
 //! forgets the old copy, then proves two refusals (an extension with no
 //! 17 build, low disk) change nothing. Every check panics on failure.
+//!
+//! Security review cases: H1 (a CHECK, a domain and a generated column
+//! call an owner-planted function that tries `ALTER ROLE … SUPERUSER`;
+//! the restore must run it as the owner, never the superuser) and F1 (a
+//! database whose owner planted `public.=` operators, function overloads
+//! and `ALTER DATABASE … SET search_path`; check, verify, the move, the
+//! K2 helper install, the boot seal and privilege sync must not run them
+//! as the superuser).
 
 use std::cell::RefCell;
 
@@ -124,8 +132,15 @@ impl MoveEnv for E2eEnv {
     fn record_cluster(&self, m: Major, port: u16) {
         self.note(format!("cluster {m} on {port}"));
     }
-    fn progress(&self, p: &MoveProgress) {
-        println!("  progress: {:?} {:?}{}", p.step, p.state, p.last_error.as_deref().map(|e| format!(" — {e}")).unwrap_or_default());
+    fn progress(&self, p: &MoveProgress) -> Result<(), String> {
+        println!(
+            "  progress: {} {:?} {:?}{}",
+            p.kind,
+            p.step,
+            p.state,
+            p.last_error.as_deref().map(|e| format!(" — {e}")).unwrap_or_default()
+        );
+        Ok(())
     }
     fn audit(&self, act: &str, line: Value) {
         self.note(format!("audit {act} {line}"));
@@ -155,11 +170,12 @@ impl ClusterOps for LowDisk<'_> {
         copy_roles(from: Major, to: Major, roles: &[String], dry_run: bool) -> Result<Value, String>;
         allow_conn(m: Major, db: &str, mode: ConnMode) -> Result<(), String>;
         dump(from: Major, to: Major, db: &str, tag: &str) -> Result<u64, String>;
-        restore(to: Major, db: &str, tag: &str) -> Result<(), String>;
+        restore(to: Major, db: &str, tag: &str, role: &str, password: &str) -> Result<(), String>;
         drop_db(m: Major, db: &str) -> Result<bool, String>;
         remove_dump(db: &str, tag: &str) -> Result<(), String>;
         extension_available(m: Major, ext: &str) -> Option<bool>;
         login(m: Major, port: u16, db: &str, role: &str, password: &str) -> Result<(), String>;
+        moves_bytes() -> u64;
     }
     fn free_bytes(&self) -> Result<u64, String> {
         Ok(1 << 20)
@@ -261,6 +277,128 @@ fn fixture(ops: &dyn ClusterOps, db: &str, extra_ext: Option<&str>) {
     println!("fixture {db} on 16: ready");
 }
 
+/// H1: objects whose restore runs an owner-written function (a CHECK, a
+/// domain CHECK and a generated column). If the function runs as a
+/// superuser it records that and makes the owner a superuser.
+fn plant_h1(ops: &dyn ClusterOps, db: &str) {
+    let mig = format!("{db}_migrator");
+    let body = format!(
+        "SET ROLE {mig};\n\
+         CREATE TABLE h1_hits (cu text, su text);\n\
+         CREATE FUNCTION public.h1_probe(v int) RETURNS boolean LANGUAGE plpgsql AS $f$\n\
+         BEGIN\n\
+           IF (SELECT rolsuper FROM pg_catalog.pg_roles WHERE rolname = current_user) THEN\n\
+             INSERT INTO public.h1_hits VALUES (current_user, session_user);\n\
+             EXECUTE 'ALTER ROLE {mig} SUPERUSER';\n\
+           END IF;\n\
+           RETURN v IS NOT NULL;\n\
+         END $f$;\n\
+         CREATE FUNCTION public.h1_who(v int) RETURNS text LANGUAGE plpgsql IMMUTABLE AS $f$\n\
+         BEGIN\n\
+           PERFORM public.h1_probe(v);\n\
+           RETURN current_user::text || '/' || session_user::text;\n\
+         END $f$;\n\
+         CREATE DOMAIN h1_dom AS int CHECK (public.h1_probe(VALUE));\n\
+         CREATE TABLE h1 (id h1_dom PRIMARY KEY CHECK (public.h1_probe(id)), who text GENERATED ALWAYS AS (public.h1_who(id)) STORED);\n\
+         INSERT INTO h1 (id) SELECT g FROM generate_series(1, 5) g;\n\
+         RESET ROLE;\n"
+    );
+    ops.sql(16, db, &body).expect("H1 plant");
+    println!("H1 plant in {db}: ready");
+}
+
+/// H1 after a restore onto `m`: the planted function ran (the generated
+/// column was recomputed) and only ever as the owner.
+fn h1_checks(ops: &dyn ClusterOps, m: Major, db: &str) {
+    let mig = format!("{db}_migrator");
+    want(
+        ops.sql(m, db, "SELECT string_agg(DISTINCT who, ',') FROM public.h1;\n"),
+        &format!("{mig}/{mig}"),
+        &format!("H1 {m}: the planted function ran during the restore, as the owner (current and session user)"),
+    );
+    want(ops.sql(m, db, "SELECT count(*) FROM public.h1_hits;\n"), "0", &format!("H1 {m}: it never ran as a superuser"));
+    want(
+        ops.sql(m, "postgres", &format!("SELECT rolsuper::text FROM pg_roles WHERE rolname = '{mig}';\n")),
+        "false",
+        &format!("H1 {m}: the owner is not a superuser"),
+    );
+}
+
+/// F1: the owner plants `public.=` operators and overloads of functions
+/// K2's SQL calls, each logging (tag, current_user, session_user) to
+/// `evil.hits`, then points the database's search_path at them.
+fn plant_f1(ops: &dyn ClusterOps, db: &str) {
+    let mig = format!("{db}_migrator");
+    let mut body = format!(
+        "SET ROLE {mig};\n\
+         CREATE SCHEMA evil;\n\
+         CREATE TABLE evil.hits (tag text, cu text, su text);\n\
+         GRANT USAGE ON SCHEMA evil TO PUBLIC;\n\
+         GRANT INSERT, SELECT ON evil.hits TO PUBLIC;\n\
+         CREATE FUNCTION evil.hit(t text) RETURNS void LANGUAGE sql AS $f$ INSERT INTO evil.hits VALUES (t, current_user, session_user) $f$;\n\
+         GRANT EXECUTE ON FUNCTION evil.hit(text) TO PUBLIC;\n"
+    );
+    for (name, ty) in [("text", "text"), ("name", "name"), ("oid", "oid")] {
+        body.push_str(&format!(
+            "CREATE FUNCTION public.k2evil_eq_{name}(a {ty}, b {ty}) RETURNS boolean LANGUAGE plpgsql AS $f$\n\
+             BEGIN PERFORM evil.hit('={name}'); RETURN a OPERATOR(pg_catalog.=) b; END $f$;\n\
+             CREATE OPERATOR public.= (LEFTARG = {ty}, RIGHTARG = {ty}, FUNCTION = public.k2evil_eq_{name});\n"
+        ));
+    }
+    body.push_str(
+        "CREATE FUNCTION public.k2evil_eq_name_text(a name, b text) RETURNS boolean LANGUAGE plpgsql AS $f$\n\
+         BEGIN PERFORM evil.hit('=name_text'); RETURN a OPERATOR(pg_catalog.=) b; END $f$;\n\
+         CREATE OPERATOR public.= (LEFTARG = name, RIGHTARG = text, FUNCTION = public.k2evil_eq_name_text);\n\
+         CREATE FUNCTION public.json_build_object(a text, b bigint) RETURNS json LANGUAGE plpgsql AS $f$\n\
+         BEGIN PERFORM evil.hit('json_build_object(text,bigint)'); RETURN pg_catalog.json_build_object(a, b); END $f$;\n\
+         CREATE FUNCTION public.json_build_object(a text, b text) RETURNS json LANGUAGE plpgsql AS $f$\n\
+         BEGIN PERFORM evil.hit('json_build_object(text,text)'); RETURN pg_catalog.json_build_object(a, b); END $f$;\n\
+         CREATE FUNCTION public.format(a text, b text) RETURNS text LANGUAGE plpgsql AS $f$\n\
+         BEGIN PERFORM evil.hit('format(text,text)'); RETURN pg_catalog.format(a, b); END $f$;\n\
+         CREATE FUNCTION public.quote_ident(a text) RETURNS text LANGUAGE plpgsql AS $f$\n\
+         BEGIN PERFORM evil.hit('quote_ident'); RETURN pg_catalog.quote_ident(a); END $f$;\n\
+         CREATE FUNCTION public.to_regclass(a text) RETURNS regclass LANGUAGE plpgsql AS $f$\n\
+         BEGIN PERFORM evil.hit('to_regclass'); RETURN pg_catalog.to_regclass(a); END $f$;\n\
+         CREATE FUNCTION public.lower(a text) RETURNS text LANGUAGE plpgsql AS $f$\n\
+         BEGIN PERFORM evil.hit('lower'); RETURN pg_catalog.lower(a); END $f$;\n",
+    );
+    body.push_str(&format!("ALTER DATABASE {db} SET search_path = evil, public, pg_catalog;\nRESET ROLE;\n"));
+    ops.sql(16, db, &body).expect("F1 plant");
+    println!("F1 plant in {db}: ready");
+}
+
+/// Every row in `evil.hits` (read with pg_catalog first, so the read
+/// itself never fires a plant).
+fn f1_hits(ops: &dyn ClusterOps, m: Major, db: &str) -> String {
+    ops.sql(m, db, "SELECT coalesce(string_agg(tag || ' by ' || cu || '/' || su, '; ' ORDER BY tag), '') FROM evil.hits;\n").expect("read evil.hits")
+}
+
+fn f1_clear(ops: &dyn ClusterOps, m: Major, db: &str) {
+    ops.sql(m, db, "TRUNCATE evil.hits;\n").expect("clear evil.hits");
+}
+
+/// K2's superuser SQL on a tenant database, as the daemon sends it: the
+/// helper pins search_path (PGOPTIONS) and the daemon prefixes
+/// `SET search_path = pg_catalog, pg_temp` (both F1).
+fn k2_superuser_paths(ops: &dyn ClusterOps, m: Major, db: &str) {
+    use crate::sql::ops as k2ops;
+    let mut sql = k2ops::ensure_k2_helpers_sql();
+    sql.push('\n');
+    sql.push_str(&k2ops::k2_helper_owner_sql(db));
+    sql.push('\n');
+    sql.push_str(&k2ops::seal_k2_internal_tables_sql(db));
+    sql.push('\n');
+    let pinned = String::from_utf8(k2ops::pin_search_path(sql.as_bytes())).unwrap();
+    ops.sql(m, db, &pinned).expect("K2 helpers + boot seal (daemon pin + helper pin)");
+    // The helper's PGOPTIONS pin alone (an older daemon's SQL).
+    ops.sql(m, db, &sql).expect("K2 helpers + boot seal (helper pin)");
+    // The daemon's prefix alone beats a session that already chose the
+    // planted path.
+    let mut hostile = String::from("SET search_path = evil, public, pg_catalog;\n");
+    hostile.push_str(&String::from_utf8(k2ops::pin_search_path(sql.as_bytes())).unwrap());
+    ops.sql(m, db, &hostile).expect("K2 helpers + boot seal (daemon pin over a hostile path)");
+}
+
 fn agent_checks(m: Major, port: u16, db: &str, jobs_seen: &str, next_id: &str) {
     let agent = format!("{db}_agent");
     let mig = format!("{db}_migrator");
@@ -290,6 +428,7 @@ fn real_move_16_to_17_rollback_forget_and_refusals() {
     let ops = HelperOps { door: &door };
     let db = "ws_fx";
     fixture(&ops, db, None);
+    plant_h1(&ops, db);
     let env = E2eEnv::new(db);
     let opts = MoveOpts { to: Some(17), actor: "owner".into(), now: true, allow_adopted: false, helper_ok: true };
 
@@ -308,6 +447,7 @@ fn real_move_16_to_17_rollback_forget_and_refusals() {
     println!("PASS moved 16 → 17 on port {port17}, dump {} bytes", p.dump_bytes.unwrap_or(0));
     assert!(env.dsn.borrow().contains(&format!(":{port17}/")), "DSN re-pointed: {}", env.dsn.borrow());
     agent_checks(17, port17, db, "250", "501");
+    h1_checks(&ops, 17, db);
     want(as_role(17, port17, db, &format!("{db}_migrator"), PW_MIG, "SELECT count(*) FROM jobs"), "501", "17: FORCE RLS on the owner, its own policy");
     want(ops.sql(17, db, "SELECT count(*) FROM pg_largeobject_metadata;\n"), "1", "17: the large object came along");
     want(
@@ -329,19 +469,40 @@ fn real_move_16_to_17_rollback_forget_and_refusals() {
     );
 
     // Roll back: 16 serves again; what was written on 17 stays behind.
-    let v = rollback(&ops, &env, db, &RollbackOpts { actor: "owner".into(), yes: true, now: true }).expect("rollback");
-    println!("PASS rollback → {v}");
+    let move_tag = env.rec.borrow().move_tag.clone().unwrap();
+    let v = rollback(&ops, &env, db, &RollbackOpts { actor: "owner".into(), yes: true, now: true, owner: true }).expect("rollback");
+    assert_eq!(v.state, MoveState::Succeeded, "rollback: {:?} warnings {:?}", v.last_error, v.warnings);
+    assert_eq!(v.kind, "rollback");
+    println!("PASS rollback → {:?}", v.kept_as);
     assert!(env.dsn.borrow().contains(":5432/"), "DSN back: {}", env.dsn.borrow());
     want(as_role(16, 5432, db, &format!("{db}_agent"), PW_AGENT, "SELECT count(*) FROM jobs"), "250", "16 after rollback: the 17 write is not carried back");
-    let kept = v["keptAs"].as_str().unwrap().to_string();
+    let kept = v.kept_as.clone().expect("the 17 copy renamed");
     want(ops.sql(17, "postgres", &format!("SELECT datallowconn::text FROM pg_database WHERE datname = '{kept}';\n")), "false", "17: the rolled-back copy is kept, closed");
+    want(
+        ops.sql(16, "postgres", &format!("SELECT count(*) FROM pg_ls_dir('{}') f WHERE f = '{db}-{move_tag}.dump';\n", k2_root_proto::pg_major::MOVES_DIR)),
+        "0",
+        "the rolled-back move's dump is removed (F7)",
+    );
+    assert!(rollback(&ops, &env, db, &RollbackOpts { actor: "owner".into(), yes: true, now: true, owner: true }).unwrap_err().starts_with("not_moved"));
+    println!("PASS a second rollback has nothing to do");
+
+    // One kept rollback copy per database (F7): a new move waits for
+    // forget-old to delete it.
+    let r = check_only(&ops, &env, db, &opts).expect("check with a rollback copy");
+    assert!(r.lines.iter().any(|l| l.id == "kept" && l.level == super::check::Level::Refuse && l.text.contains(&kept)), "{:#?}", r.lines);
+    println!("PASS check refuses while a rollback copy is kept");
+    let v = forget_old(&ops, &env, db, &ForgetOpts { actor: "owner".into(), owner: true, force_now: true }).expect("forget the rollback copy");
+    assert_eq!(v["rollbackCopies"], serde_json::json!([format!("17/{kept}")]), "{v}");
+    want(ops.sql(17, "postgres", &format!("SELECT count(*) FROM pg_database WHERE datname = '{kept}';\n")), "0", "forget-old dropped the rollback copy");
+    want(as_role(16, 5432, db, &format!("{db}_agent"), PW_AGENT, "SELECT count(*) FROM jobs"), "250", "16 still serves");
 
     // Move again, then forget the old copy (owner).
     let p = run_move(&ops, &env, db, &opts).expect("move again");
     assert_eq!(p.state, MoveState::Succeeded, "move again: {:?} diff {:?}", p.last_error, p.diff);
     agent_checks(17, port17, db, "250", "501");
+    h1_checks(&ops, 17, db);
     let tag = env.rec.borrow().move_tag.clone().unwrap();
-    let v = forget_old(&ops, &env, db, &ForgetOpts { actor: "owner".into(), owner: true, force_now: true, move_busy: false }).expect("forget-old");
+    let v = forget_old(&ops, &env, db, &ForgetOpts { actor: "owner".into(), owner: true, force_now: true }).expect("forget-old");
     println!("PASS forget-old → {v}");
     want(ops.sql(16, "postgres", &format!("SELECT count(*) FROM pg_database WHERE datname = '{db}';\n")), "0", "16: the old copy is gone");
     want(
@@ -371,5 +532,63 @@ fn real_move_16_to_17_rollback_forget_and_refusals() {
     assert!(p.last_error.as_deref().unwrap().contains("needed (2 × the database + 1 GiB)"), "{:?}", p.last_error);
     want(ops.sql(17, "postgres", &format!("SELECT count(*) FROM pg_database WHERE datname = '{db3}';\n")), "0", "refused (disk): nothing on 17");
     want(as_role(16, 5432, db3, &format!("{db3}_agent"), PW_AGENT, "SELECT count(*) FROM jobs"), "250", "refused (disk): 16 still serves");
+
+    // F1: a hostile owner's search_path plants.
+    let db4 = "ws_fx_f1";
+    fixture(&ops, db4, None);
+    plant_f1(&ops, db4);
+    let mig4 = format!("{db4}_migrator");
+    // Positive controls: the plants are live for a default session (the
+    // owner) and for a superuser session that takes the planted path.
+    let hits = as_role(16, 5432, db4, &mig4, PW_MIG, "SELECT 'a'::text = 'a'::text").and_then(|_| {
+        as_role(16, 5432, db4, &mig4, PW_MIG, "SELECT count(*) FROM evil.hits")
+    });
+    want(hits, "1", "F1 control: the planted public.= runs in a default session");
+    f1_clear(&ops, 16, db4);
+    ops.sql(16, db4, "SET search_path = evil, public, pg_catalog;\nSELECT 'a'::text = 'a'::text;\n").expect("superuser control");
+    let h = f1_hits(&ops, 16, db4);
+    assert!(h.contains("=text by postgres/postgres"), "F1 control: a superuser on the planted path runs it: {h:?}");
+    println!("PASS F1 control: a superuser on the planted path runs it ({h})");
+    let probe = as_role(
+        16,
+        5432,
+        db4,
+        &mig4,
+        PW_MIG,
+        "SELECT json_build_object('a', 1::bigint)::text, format('%s', 'x'::text), quote_ident('x'), lower('X'::text)",
+    );
+    println!("  F1 control (owner, default path): {probe:?}; hits now: {}", f1_hits(&ops, 16, db4));
+    f1_clear(&ops, 16, db4);
+
+    // check, counts, fingerprint, K2 helpers + boot seal as the superuser.
+    let env4 = E2eEnv::new(db4);
+    let r = check_only(&ops, &env4, db4, &opts).expect("F1 check");
+    assert!(!r.refused(), "F1 check refused: {:#?}", r.lines);
+    row_counts(&ops, 16, db4).expect("F1 counts");
+    fingerprint(&ops, 16, db4).expect("F1 fingerprint");
+    k2_superuser_paths(&ops, 16, db4);
+    want(Ok(f1_hits(&ops, 16, db4)), "", "F1 16: check, counts, fingerprint, helpers and the boot seal ran no plant");
+    // Privilege sync runs as the migrator (never a superuser): a plant
+    // there runs with the owner's own rights only.
+    let sync = crate::sql::ops::privilege_sync_sql(db4, &[]);
+    as_role(16, 5432, db4, &mig4, PW_MIG, &sync).expect("privilege sync as the migrator");
+    let h = f1_hits(&ops, 16, db4);
+    assert!(!h.contains("postgres"), "F1 16: privilege sync ran a plant as a superuser: {h:?}");
+    println!("PASS F1 16: privilege sync runs as the migrator only ({h:?})");
+    f1_clear(&ops, 16, db4);
+
+    // The move (pre-data restore as the superuser, data as the owner,
+    // verify): any plant firing on 17 changes evil.hits' row count and
+    // fails verify; a plant firing on 16 rides the dump.
+    let p = run_move(&ops, &env4, db4, &opts).expect("F1 move");
+    assert_eq!(p.state, MoveState::Succeeded, "F1 move: {:?} diff {:?}", p.last_error, p.diff);
+    want(Ok(f1_hits(&ops, 17, db4)), "", "F1 17: the move ran no plant");
+    want(
+        ops.sql(17, "postgres", &format!("SELECT array_to_string(setconfig, ',') FROM pg_db_role_setting s JOIN pg_database d ON d.oid = s.setdatabase WHERE d.datname = '{db4}' AND s.setrole = 0;\n")),
+        "search_path=evil, public, pg_catalog",
+        "F1 17: the owner's database setting is carried as it was",
+    );
+    k2_superuser_paths(&ops, 17, db4);
+    want(Ok(f1_hits(&ops, 17, db4)), "", "F1 17: K2 helpers and the boot seal ran no plant");
     println!("ALL PASS");
 }

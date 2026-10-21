@@ -30,6 +30,8 @@ struct OpsState {
     prints: HashMap<Major, Value>,
     roles_dry: Value,
     event_triggers: u64,
+    /// forget-old's look at the old copy: "<closed>,<sessions>"
+    src_state: String,
 }
 
 struct FakeOps(RefCell<OpsState>);
@@ -57,6 +59,7 @@ impl FakeOps {
             size: 8 << 20,
             extensions: vec!["pgcrypto", "pg_trgm"],
             roles_dry: json!({"wouldCreate": ["ws_jobs_agent"], "same": [], "mismatch": [], "refused": [], "missing": []}),
+            src_state: "true,0".into(),
             ..Default::default()
         };
         s.dbs.insert((16, "ws_jobs".into()));
@@ -119,6 +122,18 @@ impl ClusterOps for FakeOps {
         let s = &self.0;
         let first = sql.lines().next().unwrap_or("").chars().take(60).collect::<String>();
         self.push(format!("sql {m} {db} {first}"));
+        if sql.contains("k2rb") && sql.contains("string_agg(datname") {
+            let st = s.borrow();
+            let mut names: Vec<String> = st.dbs.iter().filter(|(dm, n)| *dm == m && n.contains("__k2rb_")).map(|(_, n)| n.clone()).collect();
+            names.sort();
+            return Ok(names.join(","));
+        }
+        if sql.contains("pg_terminate_backend") {
+            return Ok("0\n0".into());
+        }
+        if sql.contains("(NOT datallowconn)") {
+            return Ok(s.borrow().src_state.clone());
+        }
         if sql.contains("'eventTriggers'") {
             let st = s.borrow();
             return Ok(json!({"size": st.size, "extensions": st.extensions, "eventTriggers": st.event_triggers, "publications": 0,
@@ -194,8 +209,8 @@ impl ClusterOps for FakeOps {
         self.gate("dump")?;
         Ok(4096)
     }
-    fn restore(&self, to: Major, db: &str, tag: &str) -> Result<(), String> {
-        self.push(format!("restore {to} {db} {tag}"));
+    fn restore(&self, to: Major, db: &str, tag: &str, role: &str, password: &str) -> Result<(), String> {
+        self.push(format!("restore {to} {db} {tag} as {role}:{password}"));
         self.gate("restore")
     }
     fn drop_db(&self, m: Major, db: &str) -> Result<bool, String> {
@@ -250,6 +265,12 @@ struct EnvState {
     inbox: Vec<(String, String)>,
     clusters_recorded: Vec<(Major, u16)>,
     role: HashMap<Major, ClusterRole>,
+    /// Every progress row written, in order.
+    rows: Vec<MoveProgress>,
+    /// The first progress write at this step fails (F13).
+    progress_fail_at: Option<Step>,
+    set_moved_fails: bool,
+    shared: Vec<String>,
 }
 
 struct FakeEnv(RefCell<EnvState>);
@@ -363,6 +384,9 @@ impl MoveEnv for FakeEnv {
     }
     fn set_moved(&self, _db: &str, info: Option<&MovedInfo>) -> Result<(), String> {
         let mut s = self.0.borrow_mut();
+        if s.set_moved_fails {
+            return Err("sql_databases write failed (injected)".into());
+        }
         s.moved.push(info.cloned());
         if let Some(r) = s.rec.as_mut() {
             r.moved_from = info.map(|i| i.from);
@@ -376,8 +400,18 @@ impl MoveEnv for FakeEnv {
     fn record_cluster(&self, m: Major, port: u16) {
         self.0.borrow_mut().clusters_recorded.push((m, port));
     }
-    fn progress(&self, p: &MoveProgress) {
-        self.0.borrow_mut().progress.push((p.step, p.state));
+    fn progress(&self, p: &MoveProgress) -> Result<(), String> {
+        let mut s = self.0.borrow_mut();
+        if s.progress_fail_at == Some(p.step) {
+            s.progress_fail_at = None;
+            return Err("sql_moves write failed (injected)".into());
+        }
+        s.progress.push((p.step, p.state));
+        s.rows.push(p.clone());
+        Ok(())
+    }
+    fn shared_with(&self, _db: &str) -> Vec<String> {
+        self.0.borrow().shared.clone()
     }
     fn audit(&self, act: &str, line: Value) {
         self.0.borrow_mut().audits.push((act.into(), line));
@@ -435,7 +469,8 @@ fn a_move_runs_every_step_in_order() {
         "allow_conn 16 ws_jobs quiesce",
         "dump 16 17 ws_jobs 20261020T101500Z",
         "sql 17 postgres CREATE DATABASE \"ws_jobs\" OWNER \"ws_jobs_migrator\"",
-        "restore 17 ws_jobs 20261020T101500Z",
+        // As the database's owner with its K2 password, never the superuser (H1/F2).
+        "restore 17 ws_jobs 20261020T101500Z as ws_jobs_migrator:pw-m",
         "sql 17 postgres REVOKE ALL ON DATABASE \"ws_jobs\" FROM PUBLIC;",
         "login 17 5433 ws_jobs_agent",
         "login 17 5433 ws_jobs_migrator",
@@ -449,7 +484,12 @@ fn a_move_runs_every_step_in_order() {
         last = i;
     }
     assert!(!ops.did("drop_db"), "nothing dropped on success");
+    assert!(!ops.did("remove_dump"), "the move's dump is kept for the rollback window");
     let e = env.0.borrow();
+    assert!(e.rows.iter().all(|r| r.kind == "move"));
+    let sw = e.rows.iter().position(|r| r.step == Step::Switch).unwrap();
+    assert!(!e.rows[sw].switched, "the Switch step is on record before the record moves (F4)");
+    assert!(e.rows[sw..].iter().skip(1).all(|r| r.switched), "every row after the record moved says so");
     assert_eq!(e.sleeps, vec![60], "the 60 s notice");
     assert!(e.notices[0].contains("moves to Postgres 17"));
     assert_eq!(e.doors, vec![true, false]);
@@ -555,6 +595,14 @@ fn check_refusals() {
             s.installed.push(17);
             s.roles_dry = json!({"wouldCreate": [], "same": [], "mismatch": ["ws_crm_agent"], "refused": [], "missing": []});
         })),
+        // A record that says it moved from where it lives (F5).
+        ("record", Box::new(|_, e, _| {
+            e.0.borrow_mut().rec.as_mut().unwrap().moved_from = Some(16);
+        })),
+        // One kept rollback copy per database at most (F7).
+        ("kept", Box::new(|ops, _, _| {
+            ops.0.borrow_mut().dbs.insert((16, format!("ws_jobs__k2rb_{}", NOW - 60)));
+        })),
     ];
     for (id, setup) in cases {
         let (ops, env) = (FakeOps::new(), FakeEnv::new());
@@ -593,7 +641,7 @@ fn verify_mismatch_aborts_and_undoes_everything() {
     let e = env.0.borrow();
     assert!(e.majors.is_empty() && e.repoints.is_empty(), "never switched");
     assert!(e.moved.is_empty());
-    assert!(e.audits.iter().any(|(a, _)| a == "db-upgrade-aborted"));
+    assert!(e.audits.iter().any(|(a, _)| a == "db-upgrade-move-aborted"));
 }
 
 #[test]
@@ -615,6 +663,12 @@ fn dump_or_restore_failure_aborts_and_undoes() {
         assert_eq!(p.state, MoveState::Aborted, "{op}");
         assert!(p.last_error.as_deref().unwrap().starts_with(op), "{op}: {:?}", p.last_error);
         assert_eq!(ops.did("drop_db 17 ws_jobs"), created, "{op}: drop only what was created");
+        if created {
+            // The helper drops only a quiesced database.
+            assert!(ops.pos("allow_conn 17 ws_jobs quiesce") < ops.pos("drop_db 17 ws_jobs"), "{:?}", ops.log());
+        }
+        // An aborted move keeps no dump (F7).
+        assert!(ops.did("remove_dump ws_jobs 20261020T101500Z"), "{op}: {:?}", ops.log());
         assert!(ops.did("allow_conn 16 ws_jobs on"), "{op}");
         assert_eq!(env.0.borrow().started, vec!["jobs".to_string()], "{op}");
         assert!(env.0.borrow().majors.is_empty(), "{op}");
@@ -669,7 +723,7 @@ fn a_failed_reversal_latches_failed_and_tells_the_owner() {
     assert_eq!(p.repointed, vec!["vault DATABASE_URL".to_string()]);
     let e = env.0.borrow();
     assert!(e.inbox.iter().any(|(t, b)| t.contains("failed") && b.contains("--acknowledge-failed") && b.contains("vault DATABASE_URL")));
-    assert!(e.audits.iter().any(|(a, _)| a == "db-upgrade-failed"));
+    assert!(e.audits.iter().any(|(a, _)| a == "db-upgrade-move-failed"));
 }
 
 #[test]
@@ -687,8 +741,9 @@ fn an_incomplete_undo_latches_failed() {
 
 #[test]
 fn recovery_undoes_before_the_switch_and_finishes_after_it() {
-    let base = |step: Step| MoveProgress {
+    let base = |step: Step, switched: bool| MoveProgress {
         id: "mv".into(),
+        kind: "move".into(),
         db: "ws_jobs".into(),
         from: 16,
         to: 17,
@@ -701,7 +756,8 @@ fn recovery_undoes_before_the_switch_and_finishes_after_it() {
         last_error: None,
         from_port: Some(5432),
         to_port: Some(5433),
-        target_created: step >= Step::Copy,
+        switched,
+        target_created: step >= Step::Copy && !switched,
         quiesced: step >= Step::Quiesce,
         stopped_apps: vec!["jobs".into()],
         doors_paused: true,
@@ -711,29 +767,99 @@ fn recovery_undoes_before_the_switch_and_finishes_after_it() {
         diff: vec![],
         warnings: vec![],
         check: vec![],
+        kept_as: None,
+        move_tag: None,
     };
     let (ops, env) = (FakeOps::new(), FakeEnv::new());
     ops.0.borrow_mut().clusters.push(row(17, 5433, true));
     ops.0.borrow_mut().dbs.insert((17, "ws_jobs".into()));
-    let p = recover(&ops, &env, base(Step::Copy));
+    let p = recover(&ops, &env, base(Step::Copy, false));
     assert_eq!(p.state, MoveState::Aborted);
     assert!(env.states().contains(&MoveState::Interrupted));
     assert_undone(&ops, &env);
 
+    // At the Switch step but the record never moved: undone (F4/F13).
     let (ops, env) = (FakeOps::new(), FakeEnv::new());
-    let p = recover(&ops, &env, base(Step::Switch));
+    ops.0.borrow_mut().clusters.push(row(17, 5433, true));
+    ops.0.borrow_mut().dbs.insert((17, "ws_jobs".into()));
+    let p = recover(&ops, &env, base(Step::Switch, false));
+    assert_eq!(p.state, MoveState::Aborted, "{:?}", p.last_error);
+    assert_undone(&ops, &env);
+
+    // The record points at 17: finish forward, never undo.
+    let (ops, env) = (FakeOps::new(), FakeEnv::new());
+    env.0.borrow_mut().rec.as_mut().unwrap().major = 17;
+    let p = recover(&ops, &env, base(Step::Switch, false));
     assert_eq!(p.state, MoveState::Succeeded, "{:?}", p.last_error);
+    assert!(!ops.did("drop_db"), "the live copy is never dropped: {:?}", ops.log());
     let e = env.0.borrow();
-    assert_eq!(e.majors, vec![17]);
+    assert_eq!(e.rec.as_ref().unwrap().major, 17);
     assert_eq!(e.repoints, vec![(5432, 5433)]);
     assert_eq!(e.started, vec!["jobs".to_string()]);
     assert_eq!(e.moved.last().unwrap().as_ref().unwrap().source_state, SourceState::Kept);
     assert!(ops.did("allow_conn 16 ws_jobs off"));
+    drop(e);
 
     let (ops, env) = (FakeOps::new(), FakeEnv::new());
-    let p = recover(&ops, &env, base(Step::Resume));
+    env.0.borrow_mut().rec.as_mut().unwrap().major = 17;
+    let p = recover(&ops, &env, base(Step::Resume, true));
     assert_eq!(p.state, MoveState::Succeeded);
     assert!(env.0.borrow().repoints.is_empty(), "already re-pointed before the restart");
+
+    // A record K2 can't read: held as failed for the owner, nothing undone.
+    let (ops, env) = (FakeOps::new(), FakeEnv::new());
+    env.0.borrow_mut().rec = None;
+    let p = recover(&ops, &env, base(Step::Verify, false));
+    assert_eq!(p.state, MoveState::Failed);
+    assert!(!ops.did("drop_db"));
+}
+
+/// Review #2 F4: once the record points at the target, a later failure
+/// never undoes; the move finishes `failed` and latches.
+#[test]
+fn a_failure_after_the_switch_never_undoes() {
+    let (ops, env) = (FakeOps::new(), FakeEnv::new());
+    env.0.borrow_mut().set_moved_fails = true;
+    let p = run_move(&ops, &env, "ws_jobs", &opts()).unwrap();
+    assert_eq!(p.state, MoveState::Failed, "{:?}", p.last_error);
+    assert!(p.last_error.as_deref().unwrap().starts_with("after the switch: record the move"), "{:?}", p.last_error);
+    assert!(p.switched);
+    assert!(!ops.did("drop_db"), "the live target copy is never dropped: {:?}", ops.log());
+    assert!(!ops.did("allow_conn 16 ws_jobs on"), "the source is never re-opened");
+    assert!(!ops.did("remove_dump"));
+    let e = env.0.borrow();
+    assert_eq!(e.rec.as_ref().unwrap().major, 17, "the record stays on the target");
+    assert_eq!(e.majors, vec![17]);
+    assert!(e.unpoints.is_empty());
+    assert_eq!(e.started, vec!["jobs".to_string()], "Apps back on the target");
+    assert_eq!(e.doors.last(), Some(&false));
+    assert!(e.inbox.iter().any(|(t, b)| t.contains("failed") && b.contains("--acknowledge-failed")));
+}
+
+/// Review #2 F13: a progress row K2 can't write stops the move before the
+/// switch (recovery trusts those rows).
+#[test]
+fn a_progress_write_failure_aborts_before_the_switch() {
+    for step in [Step::Target, Step::Quiesce, Step::Copy, Step::Verify, Step::Switch] {
+        let (ops, env) = (FakeOps::new(), FakeEnv::new());
+        env.0.borrow_mut().progress_fail_at = Some(step);
+        let p = run_move(&ops, &env, "ws_jobs", &opts()).unwrap();
+        assert_eq!(p.state, MoveState::Aborted, "{step:?}: {:?}", p.last_error);
+        assert!(p.last_error.as_deref().unwrap().starts_with("progress row"), "{step:?}: {:?}", p.last_error);
+        assert!(!p.switched, "{step:?}");
+        let e = env.0.borrow();
+        assert!(e.majors.is_empty(), "{step:?}: the record never moved");
+        assert!(e.repoints.is_empty(), "{step:?}");
+        assert!(!ops.0.borrow().dbs.contains(&(17, "ws_jobs".into())), "{step:?}: no target copy left");
+        if step >= Step::Quiesce {
+            assert_eq!(e.started, vec!["jobs".to_string()], "{step:?}");
+        }
+    }
+    // The very first row: nothing starts.
+    let (ops, env) = (FakeOps::new(), FakeEnv::new());
+    env.0.borrow_mut().progress_fail_at = Some(Step::Check);
+    assert!(run_move(&ops, &env, "ws_jobs", &opts()).unwrap_err().starts_with("the move can't be recorded"));
+    assert!(mutated(&ops).is_empty());
 }
 
 fn moved_env() -> (FakeOps, FakeEnv) {
@@ -759,15 +885,22 @@ fn moved_env() -> (FakeOps, FakeEnv) {
 #[test]
 fn rollback_goes_back_to_the_kept_source() {
     let (ops, env) = moved_env();
-    let o = RollbackOpts { actor: "agent:jobs".into(), yes: false, now: false };
+    let o = RollbackOpts { actor: "agent:jobs".into(), yes: false, now: false, owner: false };
     assert!(rollback(&ops, &env, "ws_jobs", &o).unwrap_err().starts_with("rollback_needs_yes"));
     let o = RollbackOpts { yes: true, ..o };
     env.0.borrow_mut().now = NOW + 3600;
     let v = rollback(&ops, &env, "ws_jobs", &o).unwrap();
     let kept = format!("ws_jobs__k2rb_{}", NOW + 3600);
-    assert_eq!(v["major"], 16);
-    assert_eq!(v["keptAs"], kept);
-    let order = ["allow_conn 17 ws_jobs quiesce", "allow_conn 16 ws_jobs on", "sql 17 postgres SELECT count(pg_terminate_backend", &format!("allow_conn 17 {kept} off")];
+    assert_eq!(v.state, MoveState::Succeeded, "{:?}", v.last_error);
+    assert_eq!((v.kind.as_str(), v.from, v.to), ("rollback", 17, 16));
+    assert_eq!(v.kept_as.as_deref(), Some(kept.as_str()));
+    let order = [
+        "allow_conn 17 ws_jobs quiesce",
+        "allow_conn 16 ws_jobs on",
+        "sql 17 postgres SELECT count(pg_terminate_backend",
+        &format!("allow_conn 17 {kept} off"),
+        "remove_dump ws_jobs 20261020T101500Z",
+    ];
     let mut last = 0;
     for o in order {
         let i = ops.pos(o);
@@ -776,17 +909,62 @@ fn rollback_goes_back_to_the_kept_source() {
     }
     assert!(ops.0.borrow().dbs.contains(&(17, kept)), "the 17 copy is kept, renamed");
     let e = env.0.borrow();
+    // A rollback writes its own progress rows, in order (F5).
+    assert!(e.rows.iter().all(|r| r.kind == "rollback" && r.id.starts_with("rb_")));
+    let steps: Vec<Step> = e.rows.iter().map(|r| r.step).collect();
+    for w in steps.windows(2) {
+        assert!(w[0] <= w[1], "{steps:?}");
+    }
+    assert_eq!(e.rows.last().map(|r| (r.step, r.state)), Some((Step::Done, MoveState::Succeeded)));
     assert_eq!(e.majors, vec![16]);
     assert_eq!(e.repoints, vec![(5433, 5432)]);
     assert_eq!(e.moved.last(), Some(&None));
     assert_eq!(e.sleeps, vec![60]);
     assert!(e.inbox.iter().any(|(t, b)| t.contains("rolled back 17 → 16") && b.contains("not carried back")));
     assert!(!ops.did("drop_db"), "a rollback never drops");
+    drop(e);
+    // Idempotent: a second rollback has nothing to do.
+    assert!(rollback(&ops, &env, "ws_jobs", &o).unwrap_err().starts_with("not_moved"));
+}
+
+/// Review #2 F5: a rollback interrupted by a restart is undone before its
+/// switch and finished after it.
+#[test]
+fn rollback_recovery() {
+    let rb = |step: Step, switched: bool| {
+        let mut p = new_progress("rollback", "ws_jobs", 17, 16, "owner", NOW);
+        p.step = step;
+        p.from_port = Some(5433);
+        p.to_port = Some(5432);
+        p.switched = switched;
+        p.quiesced = step >= Step::Quiesce;
+        p.stopped_apps = vec!["jobs".into()];
+        p.doors_paused = true;
+        p.move_tag = Some("20261020T101500Z".into());
+        p
+    };
+    // Before the switch (the record still on 17): the 17 copy serves again.
+    let (ops, env) = moved_env();
+    let p = recover(&ops, &env, rb(Step::Quiesce, false));
+    assert_eq!(p.state, MoveState::Aborted, "{:?}", p.last_error);
+    assert!(ops.did("allow_conn 17 ws_jobs on"));
+    assert!(!ops.did("allow_conn 16"), "{:?}", ops.log());
+    assert_eq!(env.0.borrow().rec.as_ref().unwrap().major, 17);
+    assert_eq!(env.0.borrow().started, vec!["jobs".to_string()]);
+    // After it (the record on 16): finished forward.
+    let (ops, env) = moved_env();
+    env.0.borrow_mut().rec.as_mut().unwrap().major = 16;
+    let p = recover(&ops, &env, rb(Step::Switch, false));
+    assert_eq!(p.state, MoveState::Succeeded, "{:?}", p.last_error);
+    assert!(ops.did("allow_conn 16 ws_jobs on"));
+    assert!(p.kept_as.is_some());
+    assert_eq!(env.0.borrow().moved.last(), Some(&None), "the move is cleared");
+    assert!(!ops.did("drop_db"));
 }
 
 #[test]
 fn rollback_refusals() {
-    let o = RollbackOpts { actor: "o".into(), yes: true, now: true };
+    let o = RollbackOpts { actor: "o".into(), yes: true, now: true, owner: false };
     let (ops, env) = moved_env();
     env.0.borrow_mut().now = NOW + ROLLBACK_WINDOW_SECS + 1;
     assert!(rollback(&ops, &env, "ws_jobs", &o).unwrap_err().starts_with("window_closed"));
@@ -796,37 +974,65 @@ fn rollback_refusals() {
     let (ops, env) = (FakeOps::new(), FakeEnv::new());
     assert!(rollback(&ops, &env, "ws_jobs", &o).unwrap_err().starts_with("not_moved"));
     assert!(ops.log().is_empty());
+    // An inconsistent record refuses (F5): nothing touched.
+    let (ops, env) = moved_env();
+    env.0.borrow_mut().rec.as_mut().unwrap().moved_from = Some(17);
+    assert!(rollback(&ops, &env, "ws_jobs", &o).unwrap_err().starts_with("inconsistent_record"));
+    assert!(ops.log().is_empty());
+    // A shared database is the owner's to roll back (F11).
+    let (ops, env) = moved_env();
+    env.0.borrow_mut().shared = vec!["crm".into()];
+    assert!(rollback(&ops, &env, "ws_jobs", &o).unwrap_err().starts_with("shared_database"));
+    assert!(ops.log().is_empty());
+    let owner = RollbackOpts { owner: true, ..o.clone() };
+    assert_eq!(rollback(&ops, &env, "ws_jobs", &owner).unwrap().state, MoveState::Succeeded);
     // A re-point failure on the way back is reversed: still on 17.
     let (ops, env) = moved_env();
     env.0.borrow_mut().repoint_fail_at = Some(0);
-    let err = rollback(&ops, &env, "ws_jobs", &o).unwrap_err();
+    let p = rollback(&ops, &env, "ws_jobs", &o).unwrap();
+    assert_eq!(p.state, MoveState::Aborted);
+    let err = p.last_error.unwrap();
     assert!(err.contains("reversed; still on 17"), "{err}");
     assert_eq!(env.0.borrow().majors, vec![16, 17]);
     assert!(ops.did("allow_conn 17 ws_jobs on"));
     assert!(!ops.did("allow_conn 16 ws_jobs on"));
+    // A failure after the rollback's switch never goes back (F4).
+    let (ops, env) = moved_env();
+    ops.0.borrow_mut().fail.insert("allow_on");
+    let p = rollback(&ops, &env, "ws_jobs", &o).unwrap();
+    assert_eq!(p.state, MoveState::Failed, "{:?}", p.last_error);
+    assert_eq!(env.0.borrow().rec.as_ref().unwrap().major, 16);
+    assert!(!ops.did("drop_db"));
 }
 
 #[test]
 fn forget_old_is_owner_only_and_never_touches_packages() {
     let (ops, env) = moved_env();
-    let mut o = ForgetOpts { actor: "agent:jobs".into(), owner: false, force_now: false, move_busy: false };
+    let mut o = ForgetOpts { actor: "agent:jobs".into(), owner: false, force_now: false };
     assert!(forget_old(&ops, &env, "ws_jobs", &o).unwrap_err().starts_with("owner_only"));
     o.owner = true;
     assert!(forget_old(&ops, &env, "ws_jobs", &o).unwrap_err().starts_with("too_soon"));
-    o.move_busy = true;
-    assert!(forget_old(&ops, &env, "ws_jobs", &o).unwrap_err().starts_with("busy"));
-    o.move_busy = false;
     ops.0.borrow_mut().fail.insert("healthy");
     o.force_now = true;
     assert!(forget_old(&ops, &env, "ws_jobs", &o).unwrap_err().starts_with("not_healthy"));
     assert!(!ops.did("drop_db"));
     ops.0.borrow_mut().fail.clear();
+    // The copy it would drop must be the closed, idle old one (F5).
+    for state in ["false,0", "true,2", ""] {
+        ops.0.borrow_mut().src_state = state.into();
+        assert!(forget_old(&ops, &env, "ws_jobs", &o).unwrap_err().starts_with("source_live"), "{state}");
+    }
+    assert!(!ops.did("drop_db"));
+    ops.0.borrow_mut().src_state = "true,0".into();
+    // A rollback copy from an earlier rollback goes too.
+    ops.0.borrow_mut().dbs.insert((17, format!("ws_jobs__k2rb_{}", NOW - 86_400)));
     let v = forget_old(&ops, &env, "ws_jobs", &o).unwrap();
     assert_eq!(v["dropped"], true);
+    assert_eq!(v["rollbackCopies"], json!([format!("17/ws_jobs__k2rb_{}", NOW - 86_400)]));
     assert_eq!(v["packagesKept"], true);
     assert!(ops.did("drop_db 16 ws_jobs"));
     assert!(ops.did("remove_dump ws_jobs 20261020T101500Z"));
-    assert!(!ops.did("drop_db 17"), "never the live copy");
+    assert!(!ops.log().iter().any(|l| l == "drop_db 17 ws_jobs"), "never the live copy");
     assert!(!ops.log().iter().any(|l| l.contains("remove") && l.contains("postgresql")), "no package ever");
     assert_eq!(env.0.borrow().moved.last().unwrap().as_ref().unwrap().source_state, SourceState::Forgotten);
     assert!(forget_old(&ops, &env, "ws_jobs", &o).unwrap_err().starts_with("nothing_kept"));
@@ -835,6 +1041,36 @@ fn forget_old_is_owner_only_and_never_touches_packages() {
     env.0.borrow_mut().now = NOW + FORGET_MIN_AGE_SECS;
     o.force_now = false;
     assert!(forget_old(&ops, &env, "ws_jobs", &o).is_ok());
+    // An inconsistent record deletes nothing (F5).
+    let (ops, env) = moved_env();
+    env.0.borrow_mut().rec.as_mut().unwrap().moved_from = Some(17);
+    o.force_now = true;
+    assert!(forget_old(&ops, &env, "ws_jobs", &o).unwrap_err().starts_with("inconsistent_record"));
+    assert!(!ops.did("drop_db"));
+    // After a rollback only the rollback copy is left: forget-old drops it.
+    let (ops, env) = (FakeOps::new(), FakeEnv::new());
+    ops.0.borrow_mut().clusters.push(row(17, 5433, true));
+    ops.0.borrow_mut().dbs.insert((17, format!("ws_jobs__k2rb_{NOW}")));
+    let v = forget_old(&ops, &env, "ws_jobs", &o).unwrap();
+    assert_eq!(v["dropped"], false);
+    assert!(ops.did(&format!("drop_db 17 ws_jobs__k2rb_{NOW}")));
+    assert!(!ops.did("drop_db 16"));
+}
+
+/// F7: rollback copies older than the window are dropped; younger ones stay.
+#[test]
+fn the_sweep_drops_only_expired_rollback_copies() {
+    let ops = FakeOps::new();
+    {
+        let mut s = ops.0.borrow_mut();
+        s.clusters.push(row(17, 5433, true));
+        s.dbs.insert((17, format!("ws_jobs__k2rb_{}", NOW - ROLLBACK_WINDOW_SECS - 1)));
+        s.dbs.insert((17, format!("ws_crm__k2rb_{}", NOW - 60)));
+    }
+    let dropped = sweep_rollback_copies(&ops, NOW);
+    assert_eq!(dropped, vec![format!("17/ws_jobs__k2rb_{}", NOW - ROLLBACK_WINDOW_SECS - 1)]);
+    assert!(ops.0.borrow().dbs.contains(&(17, format!("ws_crm__k2rb_{}", NOW - 60))));
+    assert!(ops.0.borrow().dbs.contains(&(16, "ws_jobs".into())), "never a live database");
 }
 
 /// Sew 2026-10-20: tidy stops empty K2 clusters only; packages stay (Sew's

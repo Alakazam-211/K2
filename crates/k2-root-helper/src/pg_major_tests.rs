@@ -756,7 +756,7 @@ fn copy_roles_keeps_the_verifier_and_is_idempotent() {
     assert_eq!(v["created"], json!(["ws_jobs_agent", "ws_jobs_bind", "ws_jobs_migrator"]));
     let sql: Vec<String> = w.borrow().sql.iter().filter(|(p, s)| *p == 5433 && s.contains("CREATE ROLE")).map(|(_, s)| s.clone()).collect();
     assert_eq!(sql.len(), 1);
-    assert!(sql[0].starts_with("BEGIN;\n") && sql[0].ends_with("COMMIT;\n"));
+    assert!(sql[0].contains("\nBEGIN;\n") && sql[0].ends_with("COMMIT;\n"));
     assert!(sql[0].contains(&format!("CREATE ROLE \"ws_jobs_agent\" LOGIN NOINHERIT NOCREATEROLE NOCREATEDB NOSUPERUSER NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1 PASSWORD '{SCRAM_A}';")));
     assert!(sql[0].contains("CREATE ROLE \"ws_jobs_bind\" NOLOGIN") && sql[0].contains("PASSWORD NULL;"));
     // The verifier never reaches stdout or the audit line.

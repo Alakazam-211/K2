@@ -82,12 +82,13 @@ impl Who {
 }
 
 /// Is the passport's live session a sandboxed (microVM) agent? A session
-/// that's gone is not (the passport still names its workspace).
+/// K2 can't find counts as sandboxed: fail closed (PG-B security review #2
+/// F10), since an ended session's passport may still be valid.
 fn sandboxed(session_id: &str) -> bool {
     crate::v2_session_map::snapshot()
         .into_iter()
         .find(|(_, s)| s.session_id.to_string() == session_id)
-        .is_some_and(|(_, s)| matches!(s.sandbox, k2_core::terminal::SandboxSpec::Microvm))
+        .is_none_or(|(_, s)| matches!(s.sandbox, k2_core::terminal::SandboxSpec::Microvm))
 }
 
 /// What the caller wants to do.
@@ -434,7 +435,8 @@ mod tests {
             Who::Member { username: "m".into() }
         );
         let got = Who::from_compute(&C::Shell { project_id: "w".into(), session_id: "gone".into() }, true);
-        assert_eq!(got, Who::Agent { project_id: "w".into(), session_id: "gone".into(), local: true, sandboxed: false });
+        // A session K2 can't find is sandboxed (fail closed, PG-B review #2 F10).
+        assert_eq!(got, Who::Agent { project_id: "w".into(), session_id: "gone".into(), local: true, sandboxed: true });
         assert_eq!(Who::from_compute(&C::Wrong, true), Who::Other);
         assert_eq!(Who::from_compute(&C::Invalid, true), Who::Other);
     }

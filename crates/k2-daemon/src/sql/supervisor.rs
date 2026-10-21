@@ -391,6 +391,9 @@ pub fn spawn_health_loop() {
     if !sql_supported() {
         return;
     }
+    // `k2 db upgrade`: a move the last daemon died in is finished or
+    // undone before any new one starts (§13; security review #2 F6).
+    super::pgmove::k2::spawn_boot_recovery();
     let _ = std::thread::Builder::new()
         .name("sql-health".into())
         .spawn(|| loop {
@@ -425,8 +428,6 @@ pub fn spawn_health_loop() {
                         eprintln!("[db] boot seal: {line}");
                     }
                 });
-                // `k2 db upgrade`: a move the last daemon died in (§13).
-                let _ = std::panic::catch_unwind(super::pgmove::k2::recover_at_boot);
             }
         });
 }

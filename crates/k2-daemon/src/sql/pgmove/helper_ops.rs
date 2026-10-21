@@ -113,8 +113,9 @@ impl ClusterOps for HelperOps<'_> {
         let v = self.json(vec!["pg".into(), "move-dump".into(), tok(from)?, tok(to)?, db.into(), tag.into()], None)?;
         v["bytes"].as_u64().ok_or_else(|| "move-dump answered no size".into())
     }
-    fn restore(&self, to: Major, db: &str, tag: &str) -> Result<(), String> {
-        self.json(vec!["pg".into(), "move-restore".into(), tok(to)?, db.into(), tag.into()], None).map(|_| ())
+    fn restore(&self, to: Major, db: &str, tag: &str, role: &str, password: &str) -> Result<(), String> {
+        let body = serde_json::to_vec(&json!({ "role": role, "password": password })).map_err(|e| e.to_string())?;
+        self.json(vec!["pg".into(), "move-restore".into(), tok(to)?, db.into(), tag.into()], Some(&body)).map(|_| ())
     }
     fn drop_db(&self, m: Major, db: &str) -> Result<bool, String> {
         let v = self.json(vec!["pg".into(), "drop-db".into(), tok(m)?, db.into()], None)?;
@@ -131,6 +132,9 @@ impl ClusterOps for HelperOps<'_> {
     }
     fn login(&self, m: Major, port: u16, db: &str, role: &str, password: &str) -> Result<(), String> {
         role_login(m, port, db, role, password)
+    }
+    fn moves_bytes(&self) -> u64 {
+        self.clusters_json().ok().and_then(|v| v["movesBytes"].as_u64()).unwrap_or(0)
     }
 }
 
@@ -166,14 +170,57 @@ pub fn free_bytes(path: &Path) -> Result<u64, String> {
     }
 }
 
+/// A 0600 `.pgpass` in a fresh 0700 directory: the password never sits in
+/// a process environment other processes of the daemon's user can read
+/// (security review #1 info). Removed when dropped.
+pub struct PassFile {
+    dir: std::path::PathBuf,
+    pub path: std::path::PathBuf,
+}
+
+impl PassFile {
+    pub fn new(port: u16, db: &str, role: &str, password: &str) -> Result<Self, String> {
+        use std::io::Write;
+        #[cfg(unix)]
+        use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+        let mut rnd = [0u8; 8];
+        getrandom::getrandom(&mut rnd).map_err(|e| format!("random: {e}"))?;
+        let name: String = rnd.iter().map(|b| format!("{b:02x}")).collect();
+        let dir = std::env::temp_dir().join(format!("k2-pgpass-{name}"));
+        let mut b = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        b.mode(0o700);
+        b.create(&dir).map_err(|e| format!("pgpass dir: {e}"))?;
+        let path = dir.join("pgpass");
+        let mut o = std::fs::OpenOptions::new();
+        o.write(true).create_new(true);
+        #[cfg(unix)]
+        o.mode(0o600);
+        let esc = |s: &str| s.replace('\\', "\\\\").replace(':', "\\:");
+        let line = format!("127.0.0.1:{port}:{}:{}:{}\n", esc(db), esc(role), esc(password));
+        let res = o.open(&path).and_then(|mut f| f.write_all(line.as_bytes()));
+        let pf = PassFile { dir, path };
+        res.map_err(|e| format!("pgpass: {e}"))?;
+        Ok(pf)
+    }
+}
+
+impl Drop for PassFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+        let _ = std::fs::remove_dir(&self.dir);
+    }
+}
+
 /// The role's own login over TCP (scram), with that major's psql.
 pub fn role_login(m: Major, port: u16, db: &str, role: &str, password: &str) -> Result<(), String> {
     let psql = PgMajor::new(m).ok_or("unknown major")?.bin("psql");
+    let pass = PassFile::new(port, db, role, password)?;
     let out = std::process::Command::new(&psql)
-        .args(["-X", "-h", "127.0.0.1", "-p", &port.to_string(), "-U", role, "-d", db, "-tA", "-c", "SELECT 1"])
+        .args(["-X", "-h", "127.0.0.1", "-p", &port.to_string(), "-U", role, "-d", db, "-tA", "-w", "-c", "SELECT 1"])
         .env_clear()
         .env("PATH", "/usr/bin:/bin")
-        .env("PGPASSWORD", password)
+        .env("PGPASSFILE", &pass.path)
         .env("PGCONNECT_TIMEOUT", "10")
         .output()
         .map_err(|e| format!("{psql}: {e}"))?;

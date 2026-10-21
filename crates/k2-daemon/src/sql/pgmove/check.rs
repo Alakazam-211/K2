@@ -78,6 +78,9 @@ fn n(v: &Value, k: &str) -> u64 {
 /// doesn't start either).
 pub fn run(ops: &dyn ClusterOps, env: &dyn MoveEnv, rec: &DbRecord, opts: &MoveOpts) -> Result<Report, String> {
     let mut l = Lines(Vec::new());
+    // The box's clusters into K2's records first: an unrecorded cluster
+    // is someone else's (adopted) until the owner says otherwise (F9).
+    env.refresh_clusters();
     let from = rec.major;
     let to = opts.to.unwrap_or(NEW_INSTALL);
     let db = rec.name.as_str();
@@ -94,12 +97,18 @@ pub fn run(ops: &dyn ClusterOps, env: &dyn MoveEnv, rec: &DbRecord, opts: &MoveO
         None => l.ok("majors", format!("{from} → {to}")),
         Some(why) => l.refuse("majors", format!("{from} → {to}: {why}"), "moves go up to a supported major (16, 17)"),
     }
-    if rec.source_state == SourceState::Kept {
-        l.refuse(
+    match rec.moved_from {
+        Some(mf) if mf >= rec.major => l.refuse(
+            "record",
+            format!("the record says {db} moved from {mf} but lives on {}", rec.major),
+            "inconsistent_record: nothing is deleted or moved until the owner reviews it (inbox, k2 db upgrade --check)",
+        ),
+        Some(mf) if rec.source_state == SourceState::Kept => l.refuse(
             "kept",
-            format!("an earlier move's {} copy is still kept", rec.moved_from.unwrap_or(from)),
-            "forget it first (owner): k2 db upgrade <db> --forget-old",
-        );
+            format!("an earlier move's {mf} copy is still kept for its 14-day rollback"),
+            "once the database is healthy on its new major, the owner may delete the old copy: k2 db upgrade <db> --forget-old",
+        ),
+        _ => {}
     }
 
     // Source cluster: K2's, the Debian layout, running.
@@ -149,6 +158,17 @@ pub fn run(ops: &dyn ClusterOps, env: &dyn MoveEnv, rec: &DbRecord, opts: &MoveO
     }
     if !installed.contains(&to) {
         l.ok("install", format!("postgresql-{to} will be installed (PGDG, pinned key)"));
+    }
+
+    // One kept rollback copy per database at most (F7).
+    if let Ok(copies) = super::rollback_copies(ops, db) {
+        if !copies.is_empty() {
+            l.refuse(
+                "kept",
+                format!("a rolled-back copy is kept: {}", copies.iter().map(|(m, n)| format!("{m}/{n}")).collect::<Vec<_>>().join(", ")),
+                "the owner deletes it first: k2 db upgrade <db> --forget-old",
+            );
+        }
     }
 
     // Facts from the database itself.
@@ -230,6 +250,10 @@ pub fn run(ops: &dyn ClusterOps, env: &dyn MoveEnv, rec: &DbRecord, opts: &MoveO
     // Disk (V28): 2 × size + 1 GiB free.
     let need = catalog::disk_needed(size);
     let free = ops.free_bytes()?;
+    let kept = ops.moves_bytes();
+    if kept > 0 {
+        l.ok("disk", format!("{} MiB in kept move dumps (removed by --forget-old or a rollback)", kept >> 20));
+    }
     if free >= need {
         l.ok("disk", format!("{} MiB free, {} MiB needed", free >> 20, need >> 20));
     } else {
@@ -243,6 +267,14 @@ pub fn run(ops: &dyn ClusterOps, env: &dyn MoveEnv, rec: &DbRecord, opts: &MoveO
     }
     for d in &users.literal_dsns {
         l.warn("users", format!("a literal DSN K2 can't rewrite: {d}"), "point it at `k2 db dsn --ref` before the move, or fix it after");
+    }
+    let shared = env.shared_with(db);
+    if !shared.is_empty() {
+        l.warn(
+            "users",
+            format!("shared with {} other workspace(s): their Apps restart and their DATABASE_URL is re-pointed too", shared.len()),
+            "a rollback of a shared database is the owner's",
+        );
     }
     if users.guest_doors > 0 {
         l.ok("users", format!("{} guest door(s) answer 503 db_maintenance during the pause", users.guest_doors));

@@ -284,7 +284,7 @@ pub fn fingerprint_sql() -> String {
                  ARRAY(SELECT x::text FROM unnest(p.proacl) x ORDER BY 1))), '{{}}'::json) \
                  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE {USER_NS} \
                  AND NOT EXISTS (SELECT 1 FROM pg_depend dp WHERE dp.classid = 'pg_proc'::regclass AND dp.objid = p.oid AND dp.deptype = 'e')), \
-         'defaultAcls', (SELECT coalesce(json_object_agg(pg_get_userbyid(defaclrole) || ':' || coalesce(defaclnamespace::regnamespace::text, '') || ':' || defaclobjtype, \
+         'defaultAcls', (SELECT coalesce(json_object_agg(pg_get_userbyid(defaclrole) || ':' || coalesce(defaclnamespace::regnamespace::text, '') || ':' || defaclobjtype::text, \
                  ARRAY(SELECT x::text FROM unnest(defaclacl) x ORDER BY 1)), '{{}}'::json) FROM pg_default_acl), \
          'sequences', (SELECT coalesce(json_object_agg(schemaname || '.' || sequencename, last_value), '{{}}'::json) FROM pg_sequences), \
          'database', (SELECT json_build_array(pg_get_userbyid(datdba), ARRAY(SELECT x::text FROM unnest(datacl) x ORDER BY 1)) \
@@ -320,6 +320,72 @@ pub fn diff(src: &Value, dst: &Value) -> Vec<String> {
         }
     }
     out
+}
+
+/// Privilege letters a major added (aclitem `grantee=privs/grantor`): a
+/// relation owner on 17 holds MAINTAIN (`m`), which 16 has no letter for.
+/// Stripped from both fingerprints before comparing a move from an older
+/// major, so only real differences remain.
+pub fn new_privileges_since(from: u32) -> &'static [char] {
+    if from < 17 {
+        &['m']
+    } else {
+        &[]
+    }
+}
+
+fn strip_acl(item: &str, letters: &[char]) -> String {
+    let Some((who, rest)) = item.split_once('=') else { return item.to_string() };
+    let (privs, grantor) = rest.split_once('/').unwrap_or((rest, ""));
+    let mut out = String::new();
+    let mut chars = privs.chars().peekable();
+    while let Some(ch) = chars.next() {
+        let star = chars.peek() == Some(&'*');
+        if star {
+            chars.next();
+        }
+        if !letters.contains(&ch) {
+            out.push(ch);
+            if star {
+                out.push('*');
+            }
+        }
+    }
+    if grantor.is_empty() {
+        format!("{who}={out}")
+    } else {
+        format!("{who}={out}/{grantor}")
+    }
+}
+
+fn strip_list(v: &mut Value, letters: &[char]) {
+    if let Some(a) = v.as_array_mut() {
+        for x in a.iter_mut() {
+            if let Some(s) = x.as_str() {
+                *x = Value::String(strip_acl(s, letters));
+            }
+        }
+    }
+}
+
+/// [`fingerprint_sql`]'s answer with the privileges `from` doesn't know removed.
+pub fn normalize_privileges(print: &mut Value, from: u32) {
+    let letters = new_privileges_since(from);
+    if letters.is_empty() {
+        return;
+    }
+    if let Some(o) = print.get_mut("relations").and_then(Value::as_object_mut) {
+        for v in o.values_mut() {
+            if let Some(acl) = v.get_mut(2) {
+                strip_list(acl, letters);
+            }
+        }
+    }
+    if let Some(o) = print.get_mut("defaultAcls").and_then(Value::as_object_mut) {
+        for v in o.values_mut() {
+            strip_list(v, letters);
+        }
+    }
 }
 
 /// Pause estimate (§6.1): 10–30 s fixed + size ÷ ~40 MB/s, as a range.
@@ -423,6 +489,25 @@ mod tests {
         assert!(d.contains(&"sequences public.s: 41 → missing".to_string()));
         assert!(diff(&a, &a).is_empty());
         assert_eq!(diff(&json!({"extensions": ["a"]}), &json!({"extensions": ["b"]})), vec!["extensions: [\"a\"] → [\"b\"]"]);
+    }
+
+    #[test]
+    fn privileges_new_in_17_are_not_a_difference() {
+        let mut src = json!({"relations": {"public.jobs": ["r", "o", ["a=arw/o", "o=arwdDxt/o"]]}, "defaultAcls": {"o::r": ["a=r/o"]}});
+        let mut dst = json!({"relations": {"public.jobs": ["r", "o", ["a=arw/o", "o=arwdDxtm/o"]]}, "defaultAcls": {"o::r": ["a=rm*/o"]}});
+        assert_eq!(diff(&src, &dst).len(), 2);
+        normalize_privileges(&mut src, 16);
+        normalize_privileges(&mut dst, 16);
+        assert!(diff(&src, &dst).is_empty(), "{:?}", diff(&src, &dst));
+        // A real difference stays one.
+        let mut lost = json!({"relations": {"public.jobs": ["r", "o", ["o=arwdDxtm/o"]]}});
+        normalize_privileges(&mut lost, 16);
+        assert_eq!(diff(&src, &lost).len(), 1);
+        // 17 → 18 strips nothing.
+        let mut same = dst.clone();
+        normalize_privileges(&mut same, 17);
+        assert_eq!(same, dst);
+        assert_eq!(strip_acl("=Tc/o", &['m']), "=Tc/o");
     }
 
     #[test]

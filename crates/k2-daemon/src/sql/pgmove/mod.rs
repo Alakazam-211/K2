@@ -540,7 +540,10 @@ fn steps(run: &mut Run, rec: &DbRecord, report: &check::Report, opts: &MoveOpts)
     // 7. verify
     run.at(Step::Verify, MoveState::Verifying);
     let counts_dst = row_counts(run.ops, to, &db)?;
-    let print_dst = fingerprint(run.ops, to, &db)?;
+    let mut print_dst = fingerprint(run.ops, to, &db)?;
+    let mut print_src = print_src;
+    catalog::normalize_privileges(&mut print_src, from);
+    catalog::normalize_privileges(&mut print_dst, from);
     let mut diff = catalog::diff(&json!({"rows": counts_src}), &json!({"rows": counts_dst}));
     diff.extend(catalog::diff(&print_src, &print_dst));
     for (role, pw) in run.env.logins(&db)? {

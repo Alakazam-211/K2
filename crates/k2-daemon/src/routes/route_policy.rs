@@ -1318,6 +1318,13 @@ pub const ROUTES: &[Route] = &[
     // thread-read-v1 (0.46.1): a person's own read state. Every login
     // reads and changes only its own person's cursors and mutes.
     post("/cli/thread/mute", Member),
+    // Permission cards (Beta, prd-agent-settings-cards-v1 §4.3, §4.4;
+    // lane A2): absent while the global switch is off ([`live_row`]). A
+    // note is for a person below the card's floor (any login); "Turn off
+    // again" is at the action's floor (Admin is the lowest; the handler
+    // checks the card's own). People only: the handler refuses passports.
+    post("/cli/thread/permission-note", Member),
+    post("/cli/thread/permission-undo", Admin),
     both("/cli/thread/post", Member),
     post("/cli/thread/read", Member),
     post("/cli/thread/secret", Member),

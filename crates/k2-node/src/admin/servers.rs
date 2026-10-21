@@ -144,10 +144,11 @@ impl Ctx {
 /// user. macOS: Seatbelt is there and the running node says it uses it.
 pub fn node_walled(layout: &Layout, macos: bool) -> bool {
     let status_wall = crate::status::read(&layout.status()).map(|s| s.wall).unwrap_or_default();
+    use k2_node_proto::health::{WALL_JOB_USER, WALL_SEATBELT};
     if macos {
-        crate::wall::seatbelt_available() && status_wall == "seatbelt"
+        crate::wall::seatbelt_available() && status_wall == WALL_SEATBELT
     } else {
-        matches!(super::jobs::read_jobs_file(&layout.config), Ok(Some(_))) && status_wall == "job_user"
+        matches!(super::jobs::read_jobs_file(&layout.config), Ok(Some(_))) && status_wall == WALL_JOB_USER
     }
 }
 

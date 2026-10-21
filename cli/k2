@@ -7566,8 +7566,12 @@ _app_box_print() {
 import json, sys
 v = json.load(sys.stdin)
 b = v.get("box", v)
-print("App box: %s (runtime %s%s)" % ("ready" if b.get("ready") else "NOT READY", b.get("runtime", "?"),
-      "" if b.get("runtimeRecorded") else ", default"))
+linux = b.get("linux", True) is not False
+if linux:
+    print("App box: %s (runtime %s%s)" % ("ready" if b.get("ready") else "NOT READY", b.get("runtime", "?"),
+          "" if b.get("runtimeRecorded") else ", default"))
+else:
+    print("App box: not a Linux box. Apps run on Linux only; there is no box prep to do here.")
 for c in b.get("checks", []):
     line = "  %-5s %-17s %s" % (c.get("status", "?"), c.get("id", ""), c.get("detail", ""))
     if c.get("fix") and c.get("status") in ("fail", "warn", "unknown"):
@@ -7575,7 +7579,7 @@ for c in b.get("checks", []):
     print(line)
 # 0.46.3: the automatic box prep (the owner'"'"'s appsAutoPrepare).
 ap = v.get("autoPrepare")
-if isinstance(ap, dict):
+if isinstance(ap, dict) and linux:
     o = ap.get("outcome") or {}
     st = o.get("state") or "not run yet"
     extra = o.get("why") or o.get("error") or ", ".join(o.get("changed") or [])
@@ -8987,8 +8991,11 @@ move it yourself: you need "Build and run Apps" on your workspace (your
 owner turns it on). No terminal on the box, no sudo: the box is prepared
 by K2 (k2 app doctor says whether it is ready).
 
-THE OLD SERVICE KEEPS RUNNING until you stop it, and its URL keeps serving
-it until you move the label. Nothing below is one-way.
+THE OLD SERVICE KEEPS RUNNING until YOU stop it (step 7): installing,
+deploying and taking its label never stop it. Its URL serves it until step
+6 moves the label; after that it runs on with no public URL. Nothing below
+is one-way. Done = the URL serves the App AND the old service is stopped
+(steps 6 and 7).
 
   1. Write a manifest from your start command: manifest.json at the root
      of the folder you deploy (your code, not your data):
@@ -9021,8 +9028,10 @@ it until you move the label. Nothing below is one-way.
        k2 app inspect <app-id>                 the front port: curl it
   6. Take your hostname (the same URL; the App must be healthy):
        k2 app label take <app-id> <old-name>
-     The old service keeps running, without a public label.
-  7. Stop the old service once you're sure:
+     The URL serves the App now. label take does NOT stop the old service:
+     it keeps running on its own port with no public label (k2 publish
+     list shows it local), so moving back is instant.
+  7. Stop the old service once you're sure (the move is done after this):
        k2 publish stop <old-name>
   MOVE BACK (any time): start the old service (k2 publish start <old-name>)
      and k2 app label return <app-id> <old-name>.
@@ -9695,7 +9704,12 @@ print("           Lines: warn %s%% or %s free · refuse %s%% or %s left · criti
     l.get("warnPct"), gib(l.get("warnFreeBytes")), l.get("refusePct"), gib(l.get("reserveBytes")),
     l.get("criticalPct"), gib(l.get("criticalFreeBytes"))))
 m = v.get("mem") or {}
-print("RAM        %s total · %s available · agents %s" % (gib(m.get("totalBytes")), gib(m.get("availableBytes")), gib(m.get("agentsBytes"))))
+# Only what this OS measures (smoke r6: macOS printed "— available").
+ram = ["%s total" % gib(m.get("totalBytes"))]
+ram.append(("%s available" % gib(m["availableBytes"])) if m.get("availableBytes") is not None else "available not measured on this OS")
+if m.get("agentsBytes") is not None:
+    ram.append("agents %s" % gib(m["agentsBytes"]))
+print("RAM        " + " · ".join(ram))
 print("CPU        load %s (5 min) on %s cores" % ((v.get("cpu") or {}).get("load5") or "—", b.get("cores") or "?"))
 def who(r):
     o = r.get("owner") or {}

@@ -165,6 +165,9 @@ fn view(who: &Who, params: &HashMap<String, String>) -> R<J> {
     let snap = dg::latest_snapshot();
     let mut consumers: Vec<Consumer> = snap.as_ref().map(|s| s.consumers.clone()).unwrap_or_default();
     consumers.extend(app_rows(snap.as_deref())?);
+    // A snapshot cached before 0.46.3 may still hold K2's audit sentinels
+    // as agent folders (`disk_scan::workspace_rows` skips them now).
+    consumers.retain(|c| !(c.kind == "workspace" && k2_core::db::AUDIT_SENTINEL_IDS.contains(&c.id.as_str())));
     let full = Snapshot {
         consumers: consumers.clone(),
         k2_will_clear: snap.as_ref().and_then(|s| s.k2_will_clear.clone()),

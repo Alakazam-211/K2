@@ -165,10 +165,16 @@ pub fn doctor(f: &Facts) -> J {
         c(
             "platform",
             "fail",
-            "Apps run on Linux boxes only; this machine can build and validate Seeds",
+            "Apps run on Linux boxes only; this machine can build and validate Seeds (and, as a dev machine, run Apps with the unwalled process engine)",
             None,
         )
     });
+    // Smoke r6: off Linux the box-prep rows (helper, kernel, Podman, k2app,
+    // nft, …) have nothing to fix here; only what applies is shown.
+    if !f.linux {
+        out.push(process_engine_check(f));
+        return finish(out, f, "crun".to_string(), None);
+    }
 
     let helper_detail = match f.helper_kind {
         Some(Kind::Root) => format!(
@@ -603,18 +609,7 @@ pub fn doctor(f: &Facts) -> J {
             None,
         ));
     }
-    // 0.46.3: the unwalled process engine is its own owner opt-in (never
-    // part of readiness; a warning while it is on).
-    out.push(if f.process_engine {
-        c(
-            "processEngine",
-            "warn",
-            "the unwalled process engine is on (K2_APPS_PROCESS=1 or appsProcessEngine): Apps without a wall run as the daemon's user. Dev machines only",
-            Some("turn appsProcessEngine off (owner) and unset K2_APPS_PROCESS"),
-        )
-    } else {
-        c("processEngine", "ok", "the unwalled process engine is off: Apps run in their guarded container (or as the owner's process exception)", None)
-    });
+    out.push(process_engine_check(f));
     if let Some(ok) = f.headless_confirm {
         out.push(if ok {
             c("ownerConfirm", "ok", "a vault password or an Owner Connect login can approve widenings", None)
@@ -628,6 +623,27 @@ pub fn doctor(f: &Facts) -> J {
         });
     }
 
+    finish(out, f, active, configured)
+}
+
+/// 0.46.3: the unwalled process engine is its own owner opt-in (never
+/// part of readiness; a warning while it is on).
+fn process_engine_check(f: &Facts) -> Check {
+    if f.process_engine {
+        c(
+            "processEngine",
+            "warn",
+            "the unwalled process engine is on (K2_APPS_PROCESS=1 or appsProcessEngine): Apps without a wall run as the daemon's user. Dev machines only",
+            Some("turn appsProcessEngine off (owner) and unset K2_APPS_PROCESS"),
+        )
+    } else if !f.linux {
+        c("processEngine", "ok", "the unwalled process engine is off: no App runs on this machine", None)
+    } else {
+        c("processEngine", "ok", "the unwalled process engine is off: Apps run in their guarded container (or as the owner's process exception)", None)
+    }
+}
+
+fn finish(out: Vec<Check>, f: &Facts, active: String, configured: Option<String>) -> J {
     const GATE: &[&str] = &[
         "platform",
         "helper",
@@ -1345,6 +1361,26 @@ mod tests {
         }
     }
 
+    /// Smoke r6: `k2 app doctor` on macOS listed the Linux box-prep fixes
+    /// (helper, kernel, Podman, k2app, nft…). Off Linux only the platform
+    /// row and the process engine show, and no row offers `k2 app box
+    /// prepare`.
+    #[test]
+    fn off_linux_only_what_applies_is_shown() {
+        let mut f = Facts { linux: false, apps_on: true, ..Facts::default() };
+        let d = doctor(&f);
+        let ids: Vec<&str> = d["checks"].as_array().unwrap().iter().map(|c| c["id"].as_str().unwrap()).collect();
+        assert_eq!(ids, vec!["platform", "processEngine"], "{d:#}");
+        assert_eq!(d["ready"], false);
+        assert_eq!(status_of(&d, "platform"), "fail");
+        assert!(d["checks"][0]["detail"].as_str().unwrap().contains("Linux boxes only"), "{d:#}");
+        assert!(!d.to_string().contains("box prepare"), "no Linux fix off Linux: {d:#}");
+        assert!(!d.to_string().contains("root-helper"), "{d:#}");
+        f.process_engine = true;
+        let d = doctor(&f);
+        assert_eq!(status_of(&d, "processEngine"), "warn", "{d:#}");
+    }
+
     #[test]
     fn soft_findings_warn_without_blocking() {
         let mut f = good();
@@ -1392,7 +1428,7 @@ mod tests {
         let mut st = RootHelperState::missing();
         st.kind = Kind::Root;
         st.protocol = 5;
-        let mut f = Facts::default();
+        let mut f = Facts { linux: true, ..Facts::default() };
         apply_helper_status(&mut f, &st, |_| {
             *asked.borrow_mut() += 1;
             Ok("{}".into())

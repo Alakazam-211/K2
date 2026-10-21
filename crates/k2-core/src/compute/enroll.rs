@@ -109,6 +109,18 @@ impl CodeBook {
         }
     }
 
+    /// Put a taken code back, until its own expiry: the node proved the
+    /// code and its key, but the enrol couldn't finish for a reason the
+    /// owner can fix (this server still has the node's old row). The node
+    /// retries with the same code once the row is removed.
+    pub fn restore(&mut self, entry: CodeEntry, now: i64) {
+        self.sweep(now);
+        if entry.expires_at <= now || self.live.len() >= MAX_LIVE_CODES || self.live.iter().any(|c| c.name == entry.name || c.binding == entry.binding) {
+            return;
+        }
+        self.live.push(entry);
+    }
+
     /// Live codes (no secrets: names and expiry only).
     pub fn pending(&mut self, now: i64) -> Vec<(String, i64)> {
         self.sweep(now);
@@ -135,6 +147,10 @@ pub fn pending() -> Vec<(String, i64)> {
     with_book(|b| b.pending(super::now()))
 }
 
+pub fn restore(entry: CodeEntry) {
+    with_book(|b| b.restore(entry, super::now()))
+}
+
 /// A node name: 1–32 of `a-z 0-9 -`, starting with a letter or digit.
 pub fn valid_name(name: &str) -> bool {
     !name.is_empty()
@@ -149,6 +165,22 @@ mod tests {
 
     fn binding_of(display: &str) -> String {
         pairing::code_binding(&pairing::normalize_code(display).unwrap())
+    }
+
+    /// A code taken by an enrol that couldn't finish (the old row) goes
+    /// back until its own expiry; never past it, never twice.
+    #[test]
+    fn a_restored_code_is_good_again_until_it_expires() {
+        let mut b = CodeBook::default();
+        let (code, _) = b.mint("mini-1", "owner", 1000).unwrap();
+        let e = b.take(&binding_of(&code), 1001).unwrap();
+        assert_eq!(b.take(&binding_of(&code), 1002), Err(CodeRefusal::Invalid), "single use");
+        b.restore(e.clone(), 1003);
+        b.restore(e.clone(), 1003);
+        assert_eq!(b.pending(1003).len(), 1, "restored once");
+        assert_eq!(b.take(&binding_of(&code), 1004).unwrap().name, "mini-1", "good again");
+        b.restore(e.clone(), e.expires_at);
+        assert_eq!(b.take(&binding_of(&code), e.expires_at), Err(CodeRefusal::Invalid), "never past its expiry");
     }
 
     #[test]

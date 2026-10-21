@@ -573,6 +573,37 @@ async fn a_wiped_slot_is_reused_fresh() {
     assert!(n.node.tenant(1).unwrap().ledger.lock().unwrap().get("w1", 1).unwrap().is_none());
 }
 
+/// z3mbpZ e2e fix 1: a server that still has this node's old row (after a
+/// revoke) refuses the enrol `already_enrolled`. `k2-node servers` says so
+/// with the fix (remove the old entry on that server), and the node keeps
+/// retrying with backoff: once the row is gone it enrols on its own.
+#[cfg(target_os = "macos")]
+#[tokio::test(flavor = "multi_thread")]
+async fn an_enrol_refused_already_enrolled_says_why_and_retries() {
+    let mut a = Fake::start().await;
+    let b = Fake::start().await;
+    let n = start_node(&a, "srv-reenrol", "", walled(Wall::Seatbelt)).await;
+    let mut ca = a.next_conn().await;
+    ready(&mut ca).await;
+    // B still has the node from before.
+    let key = k2_node::identity::load_or_create_key(&n.layout.key()).unwrap();
+    b.register_active(&key, "node-old", "mini-1");
+    let code = pairing::new_code().unwrap();
+    let norm = pairing::normalize_code(&code).unwrap();
+    b.codes.lock().unwrap().push(norm.clone());
+    let es = EnrollString::new(&code, &b.key.fingerprint()).unwrap();
+    let args = serde_json::json!({"url": b.base, "code_binding": pairing::code_binding(&norm), "fp_prefix": es.controller_fp_prefix, "trust": "own"});
+    servers::run(&ctx(&n), "servers.add", &args).unwrap();
+    let line = eventually("the refusal in the status", || status(&n).servers.into_iter().find(|l| l.slot == 1 && l.last_error.is_some())).await;
+    assert_eq!(line.link, "enrol_failed (retrying)", "{line:?}");
+    let why = line.last_error.unwrap();
+    assert!(why.contains("already_enrolled") && why.contains("k2 compute node remove"), "{why}");
+    // The old row goes; the node retries by itself and enrols.
+    b.nodes.lock().unwrap().clear();
+    let fresh = eventually("the retried enrol's SAS", || status(&n).servers.into_iter().find(|l| l.slot == 1 && l.sas.is_some())).await;
+    assert_ne!(fresh.link, "enrol_failed (retrying)", "{fresh:?}");
+}
+
 /// Review B7: another server's `Welcome` teaches only https routes to
 /// public hosts, at most 8; a LAN `ws://` route is dropped. The owner's
 /// routes are taken as today.

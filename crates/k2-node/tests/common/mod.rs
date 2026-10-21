@@ -216,6 +216,12 @@ where
         return;
     };
     let node_fp = crypto::fingerprint_of_spki_pem(&req.node_public_key_pem).unwrap();
+    // As the daemon: a key it still has a row for is refused, and the code
+    // stays good for a retry once the row is removed.
+    if nodes.lock().unwrap().contains_key(&node_fp) {
+        send_hs(&mut ws, &HandshakeFrame::Refused(Refused { code: "already_enrolled".into(), message: "a live node already has this name or key; remove it first".into() })).await;
+        return;
+    }
     let nonce = crypto::b64(&crypto::random_bytes(16).unwrap());
     let binding = pairing::code_binding(&code);
     let cfp = key.fingerprint();

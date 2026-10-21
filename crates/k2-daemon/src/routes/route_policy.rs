@@ -2066,6 +2066,7 @@ mod tests {
         ("/cli/daemon/update/status", "reads the updater state"),
         ("/cli/project-config/has-run-command", "reads project config"),
         ("/cli/project-config/run-command", "returns the configured command string; never runs it"),
+        ("/cli/publish/client-ip/list", "reads the client-IP opt-in list; writes nothing"),
         ("/cli/publish/leftovers", "lists published-service leftovers"),
         ("/cli/publish/list", "lists published services"),
         ("/cli/publish/logs", "reads service logs"),

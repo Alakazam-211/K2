@@ -85,7 +85,10 @@ pub struct EngineScan {
     pub seeds_gc: bool,
 }
 
-/// Postgres sizes (one helper call).
+/// Postgres sizes: one helper call per K2 cluster (PG B: one cluster per
+/// major, 5432-5449). The top-level fields are every cluster together
+/// (`databases` merged, `wal_bytes` summed); `data_directory` is the 5432
+/// cluster's (or the first one's); `clusters` keeps each one apart.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct DbScan {
@@ -93,7 +96,44 @@ pub struct DbScan {
     pub wal_bytes: u64,
     pub data_directory: Option<String>,
     pub at: i64,
+    /// Set when no cluster answered (each cluster's own error is in `clusters`).
     pub error: Option<String>,
+    pub clusters: Vec<ClusterSizes>,
+}
+
+/// One cluster's sizes.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ClusterSizes {
+    pub major: u32,
+    pub port: u16,
+    pub databases: BTreeMap<String, u64>,
+    pub wal_bytes: u64,
+    pub data_directory: Option<String>,
+    pub error: Option<String>,
+}
+
+impl DbScan {
+    /// The data directory of the cluster that holds `db` (else the 5432
+    /// cluster's).
+    pub fn data_directory_of(&self, db: &str) -> Option<&str> {
+        self.clusters
+            .iter()
+            .find(|c| c.databases.contains_key(db))
+            .and_then(|c| c.data_directory.as_deref())
+            .or(self.data_directory.as_deref())
+    }
+
+    /// Every cluster's data directory (the 5432 one first), deduplicated.
+    pub fn data_directories(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for d in self.data_directory.iter().chain(self.clusters.iter().filter_map(|c| c.data_directory.as_ref())) {
+            if !out.contains(d) {
+                out.push(d.clone());
+            }
+        }
+        out
+    }
 }
 
 /// Everything the scanner knows (`~/.k2/resources-cache.json`).
@@ -335,16 +375,58 @@ pub fn parse_pg_sizes(out: &str, now: i64) -> DbScan {
     s
 }
 
-/// Postgres sizes through the helper (`ops` is the real one in the
-/// daemon). `None` when the SQL sidecar isn't running here.
+/// Postgres sizes of the 5432 cluster through the helper (`ops` is the
+/// real one in the daemon). `None` when the SQL sidecar isn't running here.
 pub fn db_scan_with(ops: &dyn crate::sql::sysops::SystemOps, running: bool, now: i64) -> Option<DbScan> {
-    if !running {
+    db_scan_clusters_with(ops, &[crate::sql::cluster::Cluster::legacy_primary(0)], running, now)
+}
+
+/// Postgres sizes of every cluster in `clusters` (K2's, from
+/// `sql::cluster::k2_clusters`): the 5432 cluster with today's argv, any
+/// other with `psql --cluster <M>` (helper protocol 9, `pgmajor`). A
+/// cluster that fails keeps its error and the others still count.
+pub fn db_scan_clusters_with(
+    ops: &dyn crate::sql::sysops::SystemOps,
+    clusters: &[crate::sql::cluster::Cluster],
+    running: bool,
+    now: i64,
+) -> Option<DbScan> {
+    if !running || clusters.is_empty() {
         return None;
     }
-    Some(match ops.run_helper(&["psql", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-tA"], Some(PG_SIZES_SQL.as_bytes())) {
-        Ok(out) => parse_pg_sizes(&out, now),
-        Err(e) => DbScan { at: now, error: Some(e), ..DbScan::default() },
-    })
+    let mut all = DbScan { at: now, ..DbScan::default() };
+    let mut errors = Vec::new();
+    for c in clusters {
+        let one = match c.helper_psql(ops, "postgres", &["-v", "ON_ERROR_STOP=1", "-tA"], Some(PG_SIZES_SQL.as_bytes())) {
+            Ok(out) => {
+                let s = parse_pg_sizes(&out, now);
+                ClusterSizes {
+                    major: c.major,
+                    port: c.port,
+                    databases: s.databases,
+                    wal_bytes: s.wal_bytes,
+                    data_directory: s.data_directory,
+                    error: None,
+                }
+            }
+            Err(e) => {
+                errors.push(e.clone());
+                ClusterSizes { major: c.major, port: c.port, error: Some(e), ..ClusterSizes::default() }
+            }
+        };
+        for (db, bytes) in &one.databases {
+            *all.databases.entry(db.clone()).or_insert(0) += bytes;
+        }
+        all.wal_bytes = all.wal_bytes.saturating_add(one.wal_bytes);
+        if (c.is_primary() || all.data_directory.is_none()) && one.data_directory.is_some() {
+            all.data_directory = one.data_directory.clone();
+        }
+        all.clusters.push(one);
+    }
+    if errors.len() == clusters.len() {
+        all.error = Some(errors.join("; "));
+    }
+    Some(all)
 }
 
 fn sql_running() -> bool {
@@ -411,11 +493,13 @@ pub fn tracked_paths() -> Vec<(String, PathBuf)> {
     if Path::new(K2APP_HOME).exists() {
         v.push(("k2app".into(), PathBuf::from(K2APP_HOME)));
     }
-    let pg = cache_now().databases.and_then(|d| d.data_directory).map(PathBuf::from);
-    match pg {
-        Some(p) => v.push(("postgres".into(), p)),
-        None if Path::new(PG_DEFAULT_DIR).exists() => v.push(("postgres".into(), PathBuf::from(PG_DEFAULT_DIR))),
-        None => {}
+    // Every K2 cluster's real data directory once the hourly scan has it
+    // (PG B: one cluster per major), else the default root.
+    let pg = cache_now().databases.map(|d| d.data_directories()).unwrap_or_default();
+    if !pg.is_empty() {
+        v.extend(pg.into_iter().map(|p| ("postgres".to_string(), PathBuf::from(p))));
+    } else if Path::new(PG_DEFAULT_DIR).exists() {
+        v.push(("postgres".into(), PathBuf::from(PG_DEFAULT_DIR)));
     }
     if Path::new(k2_root_proto::paths::STALWART_DATA_DIR).exists() {
         v.push(("mail".into(), PathBuf::from(k2_root_proto::paths::STALWART_DATA_DIR)));
@@ -655,7 +739,11 @@ fn compose(c: &Cache, rows: &Rows, live: &Live, now: i64, sweeping: bool) -> Sna
             kind: "database".into(),
             id: name.clone(),
             owner: rows.owners.get(ws).cloned().unwrap_or_else(Owner::server),
-            disk: pg_disk.clone(),
+            disk: pg
+                .and_then(|d| d.data_directory_of(name))
+                .map(PathBuf::from)
+                .and_then(|p| disk_of(&p, &mut disks))
+                .or_else(|| pg_disk.clone()),
             disk_bytes: pg.and_then(|d| d.databases.get(name).copied()),
             scanned_at: pg.map(|d| d.at),
             ..Consumer::default()
@@ -840,7 +928,9 @@ pub fn scan_apps(now: i64) {
 
 /// Postgres sizes (hourly; the sudo log is why it isn't every 30 min).
 pub fn scan_databases(now: i64) {
-    let scan = db_scan_with(&crate::sql::sysops::RealSystemOps, cfg!(target_os = "linux") && sql_running(), now);
+    let running = cfg!(target_os = "linux") && sql_running();
+    let clusters = if running { crate::sql::cluster::k2_clusters() } else { Vec::new() };
+    let scan = db_scan_clusters_with(&crate::sql::sysops::RealSystemOps, &clusters, running, now);
     update_cache(|c| c.databases = scan);
 }
 

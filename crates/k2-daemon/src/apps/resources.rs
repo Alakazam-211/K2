@@ -78,29 +78,10 @@ fn now() -> i64 {
 // ── the view ─────────────────────────────────────────────────────────
 
 /// Paths whose filesystems the view and the watch track, labelled with
-/// what they hold (`holds`).
+/// what they hold (`holds`): the scanner's one list (every K2 Postgres
+/// cluster's real data directory once it is known).
 pub fn tracked_paths() -> Vec<(String, PathBuf)> {
-    let mut out = vec![("k2Home".to_string(), k2_core::paths::k2_home())];
-    let projects = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        k2_core::db::schema::Project::list(&conn).unwrap_or_default()
-    };
-    for p in projects {
-        if !p.path.trim().is_empty() {
-            out.push(("workspaces".into(), PathBuf::from(p.path)));
-        }
-    }
-    for (label, p) in [
-        ("k2app", k2_root_proto::apps::APP_HOME),
-        ("postgres", "/var/lib/postgresql"),
-        ("mail", "/var/lib/stalwart"),
-    ] {
-        if Path::new(p).exists() {
-            out.push((label.into(), PathBuf::from(p)));
-        }
-    }
-    out
+    super::disk_scan::tracked_paths()
 }
 
 /// An App's maintainer as a view row owner (`Owner::server()` for a parked

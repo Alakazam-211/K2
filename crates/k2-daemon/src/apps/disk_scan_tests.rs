@@ -143,6 +143,88 @@ fn postgres_sizes_come_from_one_allowed_helper_call() {
     assert!(e.databases.is_empty());
 }
 
+/// PG B (several clusters, one per major): every K2 cluster is measured,
+/// the 5432 one with today's argv and the others with `--cluster <M>`;
+/// databases and WAL add up, each database keeps its own cluster's data
+/// directory, and one cluster failing never hides the others.
+#[test]
+fn postgres_sizes_cover_every_k2_cluster() {
+    struct Ops {
+        fail_17: bool,
+        seen: std::sync::Mutex<Vec<Vec<String>>>,
+    }
+    impl crate::sql::sysops::SystemOps for Ops {
+        fn write_file(&self, _: &str, _: &[u8], _: u32) -> Result<(), String> {
+            panic!("no writes")
+        }
+        fn read_file(&self, _: &str) -> Result<Vec<u8>, String> {
+            panic!("no reads")
+        }
+        fn create_dir_all(&self, _: &str) -> Result<(), String> {
+            panic!("no mkdir")
+        }
+        fn remove_path(&self, _: &str) -> Result<(), String> {
+            panic!("no rm")
+        }
+        fn path_exists(&self, _: &str) -> bool {
+            false
+        }
+        fn systemctl(&self, _: &[&str]) -> Result<String, String> {
+            panic!("no systemctl")
+        }
+        fn systemctl_query(&self, _: &[&str]) -> String {
+            panic!("no systemctl")
+        }
+        fn run_helper(&self, args: &[&str], stdin: Option<&[u8]>) -> Result<String, String> {
+            assert_eq!(args[0], "psql");
+            assert!(crate::sql::sysops::helper_psql_argv_ok(&args[1..]), "{args:?}");
+            assert!(String::from_utf8(stdin.expect("sql on stdin").to_vec()).unwrap().contains("pg_database_size"));
+            self.seen.lock().unwrap().push(args.iter().map(|s| s.to_string()).collect());
+            if args[1] == "--cluster" {
+                assert_eq!(args[2], "17", "{args:?}");
+                if self.fail_17 {
+                    return Err("helper psql: exit 2: no cluster 17".into());
+                }
+                return Ok("db|jobs_db|300\nwal||20\ndir|/var/lib/postgresql/17/main|0\n".into());
+            }
+            Ok("db|old_db|100\ndb|postgres|7\nwal||10\ndir|/var/lib/postgresql/16/main|0\n".into())
+        }
+        fn run_cmd(&self, _: &str, _: &[&str], _: &[(&str, &str)], _: Option<&[u8]>) -> Result<Vec<u8>, String> {
+            panic!("no client tools")
+        }
+        fn sleep_ms(&self, _: u64) {}
+    }
+    let clusters = [
+        crate::sql::cluster::Cluster::layout(16, 5432, "baked"),
+        crate::sql::cluster::Cluster::layout(17, 5433, "created"),
+    ];
+    let ops = Ops { fail_17: false, seen: Default::default() };
+    assert_eq!(db_scan_clusters_with(&ops, &clusters, false, 9), None, "no sidecar running: no call");
+    let s = db_scan_clusters_with(&ops, &clusters, true, 9).unwrap();
+    assert_eq!(s.databases["old_db"], 100);
+    assert_eq!(s.databases["jobs_db"], 300);
+    assert_eq!(s.databases["postgres"], 7);
+    assert_eq!(s.wal_bytes, 30, "WAL of both clusters");
+    assert_eq!(s.data_directory.as_deref(), Some("/var/lib/postgresql/16/main"), "the 5432 cluster's");
+    assert_eq!(s.data_directory_of("jobs_db"), Some("/var/lib/postgresql/17/main"));
+    assert_eq!(s.data_directory_of("old_db"), Some("/var/lib/postgresql/16/main"));
+    assert_eq!(s.data_directories(), vec!["/var/lib/postgresql/16/main".to_string(), "/var/lib/postgresql/17/main".to_string()]);
+    assert_eq!(s.clusters.len(), 2);
+    assert!(s.error.is_none());
+    let seen = ops.seen.lock().unwrap();
+    assert_eq!(seen.len(), 2, "one call per cluster");
+    assert_eq!(seen[0][1], "-d", "the 5432 cluster keeps today's argv: {:?}", seen[0]);
+    assert_eq!(&seen[1][1..3], ["--cluster", "17"]);
+    drop(seen);
+
+    let ops = Ops { fail_17: true, seen: Default::default() };
+    let s = db_scan_clusters_with(&ops, &clusters, true, 9).unwrap();
+    assert!(s.error.is_none(), "one cluster answered");
+    assert_eq!(s.clusters[1].error.as_deref(), Some("helper psql: exit 2: no cluster 17"));
+    assert_eq!(s.databases.get("jobs_db"), None);
+    assert_eq!(s.databases["old_db"], 100);
+}
+
 /// Linux (the A0 contract's untested paths: the mountinfo parse and
 /// `libc::major`/`minor`): the probe agrees with `df` and `stat` on the
 /// root and on a tmpfs.
@@ -341,6 +423,7 @@ fn the_snapshot_names_every_rows_owner() {
         data_directory: None,
         at: 13,
         error: None,
+        clusters: vec![],
     });
     c.engine = Some(EngineScan { status: "old".into(), at: 14, ..EngineScan::default() });
     let s = build_snapshot(&c, 20);

@@ -41,7 +41,11 @@
 //!     an old server, no relay or two relays marked active) and the primary
 //!     has been down without a break for [`DEFAULT_DNS_MIN_OUTAGE`] (150 s,
 //!     longer than the 2-min DNS flip).
-//! Otherwise it holds and keeps redialing the primary. On a fallback it
+//! Either way the standby must also answer a TCP probe: when neither relay
+//! is reachable (the box's own network is down) it stays on the primary
+//! and the backoff grows, instead of alternating like 0.46.2 did (z3mbpZ,
+//! 2026-10-21: 13 switches in 75 s). A move back onto the primary is never
+//! gated. Otherwise it holds and keeps redialing the primary. On a fallback it
 //! returns after [`FailbackPolicy::DNS_AWARE`] (2 healthy probes ~30 s
 //! apart, then 0–30 s fleet jitter), unless k2.dev says the name points at
 //! the fallback. A failed probe still resets the streak (no bouncing onto a
@@ -114,6 +118,10 @@ enum Hold {
     NameHere,
     /// k2.dev did not say; the outage is shorter than the minimum.
     WaitingForOutage,
+    /// A move was allowed, but the standby it would go to does not answer
+    /// either (2026-10-21 z3mbpZ: on a dead network 0.46.2 flip-flopped
+    /// between two unreachable relays every ~6 s). Nothing to switch to.
+    TargetUnreachable,
 }
 
 /// The selector's verdict on one failure ([`RelaySelector::on_failure_at`]).
@@ -410,7 +418,19 @@ impl RelaySelector {
     ///   is the relay in use); when it does not, a move onto the primary is
     ///   always allowed, a move onto another relay only once the failure
     ///   streak has lasted the minimum outage.
-    pub fn on_failure_at(&mut self, now: Instant, hint: &DnsHint) -> FailureDecision {
+    /// * In DNS mode a move onto a NON-primary relay also needs that relay
+    ///   to answer `reachable` (a TCP probe in the connector; called only
+    ///   then). When it doesn't, the selector holds where it is: with
+    ///   neither relay reachable (the box's own network is down) it stays
+    ///   on the primary and the supervisor's backoff grows — no
+    ///   alternating. A move back onto the primary is never probed (that
+    ///   is where the name lives by default, and where it waits).
+    pub fn on_failure_at(
+        &mut self,
+        now: Instant,
+        hint: &DnsHint,
+        reachable: &mut dyn FnMut(&RelayEndpoint) -> bool,
+    ) -> FailureDecision {
         if self.mode == FailoverMode::Legacy {
             return match self.on_failure() {
                 Some(sw) => {
@@ -469,6 +489,18 @@ impl RelaySelector {
                 }
             }
         };
+        if target != 0 && !reachable(&self.relays[target]) {
+            self.hold = Some(Hold::TargetUnreachable);
+            return FailureDecision::Hold(format!(
+                "staying on {}, {} is not reachable either ({why}); retrying with backoff",
+                if self.current == 0 {
+                    "primary".to_string()
+                } else {
+                    self.relays[self.current].to_string()
+                },
+                self.relays[target]
+            ));
+        }
         let from = self.relays[self.current].clone();
         let after_failures = self.failures;
         self.current = target;
@@ -554,6 +586,11 @@ impl RelaySelector {
                          retrying the primary, moving after {} s down",
                         self.dns_min_outage.as_secs()
                     ),
+                ),
+                Some(Hold::TargetUnreachable) => mk(
+                    "no_relay_reachable",
+                    "no relay reachable (is this box offline?); retrying the primary with backoff"
+                        .to_string(),
                 ),
                 None => mk(
                     "ready",
@@ -1042,7 +1079,7 @@ mod tests {
     ) -> Option<(Duration, RelaySwitch, String)> {
         let mut at = Duration::ZERO;
         while at <= span {
-            if let FailureDecision::Switch(sw, why) = sel.on_failure_at(t0 + at, hint) {
+            if let FailureDecision::Switch(sw, why) = sel.on_failure_at(t0 + at, hint, &mut |_| true) {
                 return Some((at, sw, why));
             }
             at += gap;
@@ -1105,12 +1142,12 @@ mod tests {
     fn dns_standby_active_switches_right_at_the_threshold() {
         let mut sel = dns_selector();
         let t0 = Instant::now();
-        assert_eq!(sel.on_failure_at(t0, &active("secondary")), FailureDecision::Count);
+        assert_eq!(sel.on_failure_at(t0, &active("secondary"), &mut |_| true), FailureDecision::Count);
         assert_eq!(
-            sel.on_failure_at(t0 + Duration::from_secs(1), &active("secondary")),
+            sel.on_failure_at(t0 + Duration::from_secs(1), &active("secondary"), &mut |_| true),
             FailureDecision::Count
         );
-        match sel.on_failure_at(t0 + Duration::from_secs(2), &active("secondary")) {
+        match sel.on_failure_at(t0 + Duration::from_secs(2), &active("secondary"), &mut |_| true) {
             FailureDecision::Switch(sw, why) => {
                 assert_eq!(
                     sw,
@@ -1137,7 +1174,7 @@ mod tests {
         );
         assert_eq!(got, None);
         // The DNS watcher flipped the name at ~2 min.
-        match sel.on_failure_at(t0 + Duration::from_secs(125), &active("secondary")) {
+        match sel.on_failure_at(t0 + Duration::from_secs(125), &active("secondary"), &mut |_| true) {
             FailureDecision::Switch(sw, _) => assert_eq!(sw.to, ep("secondary")),
             other => panic!("must follow the name to the standby, got {other:?}"),
         }
@@ -1382,7 +1419,7 @@ mod tests {
         let t0 = Instant::now();
         for i in 0..400u64 {
             assert_eq!(
-                sel.on_failure_at(t0 + Duration::from_secs(i), &DnsHint::Unknown),
+                sel.on_failure_at(t0 + Duration::from_secs(i), &DnsHint::Unknown, &mut |_| true),
                 FailureDecision::Count
             );
         }
@@ -1407,7 +1444,7 @@ mod tests {
                 // A failure every 7 s for the first 30 s, then the primary
                 // answers probes, with a few dead probes mixed in.
                 if s < 30 && s % 7 == 0 {
-                    let a = new.on_failure_at(t, hint);
+                    let a = new.on_failure_at(t, hint, &mut |_| panic!("legacy never probes"));
                     let b = old.on_failure();
                     match (&a, &b) {
                         (FailureDecision::Count, None) => {}
@@ -1459,6 +1496,150 @@ mod tests {
         assert_eq!(FailoverMode::parse("DNS-aware"), Some(FailoverMode::Dns));
         assert_eq!(FailoverMode::parse("bogus"), None);
         assert_eq!(FailoverMode::default(), FailoverMode::Dns, "new behaviour is the default");
+    }
+
+    // ── Neither relay reachable (z3mbpZ, 2026-10-21 19:20–19:21 UTC) ──
+    //
+    // On a dead travel network 0.46.2 flip-flopped standby ↔ primary
+    // every ~6 s (13 switches in 75 s): each switch reset the backoff, so
+    // it never slowed down. Nothing to switch to is an outcome, not a
+    // reason to switch.
+
+    /// The supervisor's reconnect loop, modelled: a dial that fails takes
+    /// `dial`, then the loop sleeps `backoff` (0.5 s doubling to 30 s) —
+    /// reset to 0.5 s by a switch, exactly like `spawn_supervised`. Runs
+    /// for `span` and returns (switches, dials, the relays dialed).
+    fn drive_dead_network(
+        sel: &mut RelaySelector,
+        t0: Instant,
+        span: Duration,
+        hint: &DnsHint,
+        probes: &mut Vec<RelayEndpoint>,
+    ) -> (u32, u32, Vec<RelayEndpoint>) {
+        let initial = Duration::from_millis(500);
+        let max = Duration::from_secs(30);
+        let dial = Duration::from_secs(1);
+        let mut backoff = initial;
+        let mut t = Duration::ZERO;
+        let (mut switches, mut dials) = (0u32, 0u32);
+        let mut dialed = Vec::new();
+        while t <= span {
+            dialed.push(sel.current().clone());
+            dials += 1;
+            t += dial;
+            let mut reachable = |r: &RelayEndpoint| {
+                probes.push(r.clone());
+                false // the box's own network is down: nothing answers
+            };
+            if let FailureDecision::Switch(..) = sel.on_failure_at(t0 + t, hint, &mut reachable) {
+                switches += 1;
+                backoff = initial;
+            }
+            t += backoff;
+            backoff = (backoff * 2).min(max);
+        }
+        (switches, dials, dialed)
+    }
+
+    #[test]
+    fn dns_neither_relay_reachable_for_5_min_means_zero_switches_and_backoff_on_the_primary() {
+        for hint in [DnsHint::Unknown, active("primary"), active("secondary")] {
+            let mut sel = dns_selector();
+            let mut probes = Vec::new();
+            let (switches, dials, dialed) = drive_dead_network(
+                &mut sel,
+                Instant::now(),
+                Duration::from_secs(300),
+                &hint,
+                &mut probes,
+            );
+            assert_eq!(switches, 0, "hint {hint:?}: no relay answers, so no switch");
+            assert!(dialed.iter().all(|r| *r == ep("primary")), "hint {hint:?}: primary only");
+            assert_eq!(sel.current(), &ep("primary"));
+            // Backoff grew to its 30 s cap: ~15 dials in 5 min, not ~50.
+            assert!(dials <= 16, "hint {hint:?}: {dials} dials in 5 min — backoff must grow");
+            // The primary itself is never probed as a switch target.
+            assert!(probes.iter().all(|r| *r == ep("secondary")), "{probes:?}");
+            if hint != active("primary") {
+                let st = sel.failover_status().expect("status");
+                assert_eq!(st.state, "no_relay_reachable", "hint {hint:?}: {st:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn dns_on_a_standby_when_the_network_dies_moves_home_once_then_stays() {
+        // z3mbpZ's case: it was on the standby when its network went.
+        let mut sel = dns_selector();
+        let t0 = Instant::now();
+        fail_for(&mut sel, t0, Duration::from_secs(10), Duration::from_secs(1), &active("secondary"))
+            .expect("setup: on the standby");
+        let mut probes = Vec::new();
+        let (switches, _, dialed) = drive_dead_network(
+            &mut sel,
+            t0 + Duration::from_secs(20),
+            Duration::from_secs(300),
+            &DnsHint::Unknown,
+            &mut probes,
+        );
+        assert_eq!(switches, 1, "one move back to the primary, then no alternating");
+        assert_eq!(sel.current(), &ep("primary"));
+        let first_primary = dialed.iter().position(|r| *r == ep("primary")).expect("moved home");
+        assert!(
+            dialed[first_primary..].iter().all(|r| *r == ep("primary")),
+            "never left the primary again: {dialed:?}"
+        );
+    }
+
+    #[test]
+    fn legacy_rules_still_flip_flop_on_a_dead_network() {
+        // The 0.46.2 behaviour the switch restores (and the bug this
+        // release fixes): with nothing reachable it alternates.
+        let mut sel = RelaySelector::with_policy_seeded(pair(), 3, FailbackPolicy::DEFAULT, 3);
+        let mut probes = Vec::new();
+        let (switches, _, _) = drive_dead_network(
+            &mut sel,
+            Instant::now(),
+            Duration::from_secs(75),
+            &DnsHint::Unknown,
+            &mut probes,
+        );
+        assert!(switches >= 10, "0.46.2 alternates every few seconds: {switches} in 75 s");
+        assert!(probes.is_empty(), "legacy never probes");
+    }
+
+    #[test]
+    fn dns_standby_active_but_unreachable_holds_then_moves_once_it_answers() {
+        let mut sel = dns_selector();
+        let t0 = Instant::now();
+        for s in 0..10u64 {
+            let d = sel.on_failure_at(t0 + Duration::from_secs(s), &active("secondary"), &mut |_| false);
+            assert!(
+                !matches!(d, FailureDecision::Switch(..)),
+                "standby active but unreachable: hold ({s}s) {d:?}"
+            );
+        }
+        match sel.on_failure_at(t0 + Duration::from_secs(11), &active("secondary"), &mut |_| true) {
+            FailureDecision::Switch(sw, _) => assert_eq!(sw.to, ep("secondary")),
+            other => panic!("standby active and reachable must switch: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dns_150s_rule_also_needs_the_standby_reachable() {
+        let mut sel = dns_selector();
+        let t0 = Instant::now();
+        for s in (0..=300u64).step_by(5) {
+            let d = sel.on_failure_at(t0 + Duration::from_secs(s), &DnsHint::Unknown, &mut |_| false);
+            assert!(!matches!(d, FailureDecision::Switch(..)), "{s}s: {d:?}");
+        }
+        match sel.on_failure_at(t0 + Duration::from_secs(305), &DnsHint::Unknown, &mut |_| true) {
+            FailureDecision::Switch(sw, why) => {
+                assert_eq!(sw.to, ep("secondary"));
+                assert!(why.contains("primary down for 305 s"), "{why}");
+            }
+            other => panic!("past 150 s with a reachable standby must switch: {other:?}"),
+        }
     }
 
     #[test]

@@ -310,8 +310,10 @@ mod tests {
 
     #[test]
     fn effective_caps_never_include_a_non_widget_cap() {
-        let caps = effective_caps(WidgetOrigin::Local, &s(&["agents:read", "files:write", "zen:exit", "tickets:read"]));
-        assert_eq!(caps, s(&["agents:read"]));
+        // tickets:read is a Garden-door cap since 0.46.3 (garden-person-rows-v1);
+        // wiki:read and files:write stay App-only.
+        let caps = effective_caps(WidgetOrigin::Local, &s(&["agents:read", "files:write", "zen:exit", "wiki:read", "tickets:read"]));
+        assert_eq!(caps, s(&["agents:read", "tickets:read"]));
     }
 
     #[test]

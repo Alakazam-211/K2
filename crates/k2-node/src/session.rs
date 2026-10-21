@@ -558,7 +558,7 @@ where
                 // harness can share one. The share itself (paused, ended,
                 // revoked, not approved) is the node queue's to judge
                 // (`on_assign`). A fence the ledger knows still reports.
-                if !owner && !node.wall.is_walled() && !node.opts.dev {
+                if !owner && !node.wall.is_walled() && !crate::node::dev_test_exemption(node.opts.dev) {
                     let code = codes::TENANT_WALL_MISSING;
                     let known = {
                         let l = tenant.ledger.lock().unwrap();

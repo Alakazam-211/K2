@@ -185,3 +185,33 @@ fn install_files_writes_the_service_and_default_config() {
     let unit = std::fs::read_to_string(out.join("k2-node.service")).unwrap();
     assert!(unit.contains("User=k2node") && unit.contains("Delegate=yes"), "{unit}");
 }
+
+/// A real install never runs `--dev` (the `--dev` sharing and no-sudo
+/// exemptions exist for tests only): not in any installer script, nor in
+/// the service files the binary writes for either OS.
+#[test]
+fn no_install_path_ever_runs_dev() {
+    for s in scripts() {
+        let body = std::fs::read_to_string(&s).unwrap();
+        assert!(!body.contains("--dev"), "{} passes --dev", s.display());
+    }
+    for os in ["linux", "macos"] {
+        let d = k2_node::util::temp_dir("cli-nodev");
+        let out = d.join("out");
+        let (ok, _, err) = run(&[
+            "install-files", "--os", os, "--binary", "/usr/local/libexec/k2-node", "--home", "/var/lib/k2node",
+            "--config-dir", "/etc/k2-node", "--user", "k2node", "--group", "k2node", "--out", out.to_str().unwrap(),
+        ]);
+        assert!(ok, "{os}: {err}");
+        let mut seen = 0;
+        for f in std::fs::read_dir(&out).unwrap().flatten() {
+            let body = std::fs::read_to_string(f.path()).unwrap();
+            assert!(!body.contains("--dev"), "{os}: {} passes --dev", f.path().display());
+            seen += 1;
+        }
+        assert!(seen >= 2, "{os}: install-files wrote {seen} files");
+    }
+    // And the exemption itself exists only in debug builds.
+    assert_eq!(k2_node::node::dev_test_exemption(true), cfg!(debug_assertions));
+    assert!(!k2_node::node::dev_test_exemption(false));
+}

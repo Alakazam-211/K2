@@ -259,31 +259,26 @@ fn passport(workspace_uuid: &str) -> String {
     )
 }
 
-/// A compose post wakes the agent: its first wake spawns the Chat (the
-/// shim) and pins that new session, so the address answers at a NEW
-/// conversation from then on (the pin swap a client follows). Warm up
-/// first so every write below lands on one conversation; returns it
-/// (empty: seqs start at 1 there).
+/// Wake the agent (`k2 msg`, which posts nothing to the Thread) so the
+/// card answers below land on a live Chat. A wake used to mint a new pin
+/// when the seeded id had no transcript on disk (the shim writes none),
+/// moving the Thread; it keeps the pin now (0.46.3 smoke). Returns the
+/// conversation (the seeded one, still empty: seqs start at 1 there).
 fn warm_up(port: u16, handle: &str, seeded: &str) -> String {
-    assert_eq!(person_post(port, OWNER_TOKEN, handle, "warm-up"), 1);
-    let deadline = Instant::now() + Duration::from_secs(15);
-    let mut last = String::new();
-    let mut stable = 0;
-    loop {
+    let v = ok(
+        port,
+        "POST",
+        &format!("/cli/workspace/msg?token={OWNER_TOKEN}&workspace={handle}&text=warm-up&from=tester&wake=true&wake_timeout=2"),
+        None,
+    );
+    assert_eq!(v["success"].as_bool(), Some(true), "the warm-up wake: {v}");
+    for _ in 0..3 {
         let v = ok(port, "GET", &format!("/cli/thread?token={OWNER_TOKEN}&addr={handle}&limit=1"), None);
-        let conv = v["conversation_id"].as_str().expect("conversation_id").to_string();
-        if conv != seeded && conv == last {
-            stable += 1;
-        } else {
-            stable = 0;
-        }
-        last = conv;
-        if stable >= 2 {
-            return last;
-        }
-        assert!(Instant::now() < deadline, "the pin never swapped after the warm-up: {v}");
+        assert_eq!(v["conversation_id"], seeded, "a wake must keep the pinned Chat: {v}");
+        assert_eq!(v["items"], serde_json::json!([]), "a k2 msg wake posts nothing to the Thread: {v}");
         std::thread::sleep(Duration::from_millis(200));
     }
+    seeded.to_string()
 }
 
 /// An agent-shaped Thread post (owner token, not the compose bar: the

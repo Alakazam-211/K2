@@ -54,24 +54,22 @@ async fn agent_post(port: u16, addr: &str, text: &str) -> i64 {
     ok_post(port, "/cli/thread/post", OWNER, json!({ "addr": addr, "text": text })).await["seq"].as_i64().expect("seq")
 }
 
-/// Wake the agent with a person's compose post and wait until the address
-/// answers at one stable conversation other than the seeded one.
+/// Wake the agent (`k2 msg`, which posts nothing to the Thread) and check
+/// the address still answers at the seeded conversation. A wake used to
+/// mint a new pin when the seeded id had no transcript on disk (the shim
+/// writes none), moving the Thread; it keeps the pin now (0.46.3 smoke).
 async fn warm_up(port: u16, handle: &str, seeded: &str) -> String {
-    let v = ok_post(port, "/cli/thread/post", OWNER, json!({ "addr": handle, "text": "warm-up", "via": "compose" })).await;
-    assert_eq!(v["seq"].as_i64(), Some(1), "{v}");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
-    let (mut last, mut stable) = (String::new(), 0);
-    loop {
+    let pq = format!("/cli/workspace/msg?token={}&workspace={}&text=warm-up&from=tester&wake=true&wake_timeout=2", enc(OWNER), enc(handle));
+    let r = tokio::task::spawn_blocking(move || req_blocking(port, "POST", &pq, None)).await.unwrap();
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.json()["success"].as_bool(), Some(true), "the warm-up wake: {}", r.body);
+    for _ in 0..3 {
         let v = ok_get(port, "/cli/thread", OWNER, &format!("addr={handle}&limit=1")).await;
-        let conv = v["conversation_id"].as_str().expect("conversation_id").to_string();
-        stable = if conv != seeded && conv == last { stable + 1 } else { 0 };
-        last = conv;
-        if stable >= 2 {
-            return last;
-        }
-        assert!(std::time::Instant::now() < deadline, "the pin never swapped after the warm-up: {v}");
+        assert_eq!(v["conversation_id"], seeded, "a wake must keep the pinned Chat: {v}");
+        assert_eq!(v["items"], json!([]), "a k2 msg wake posts nothing to the Thread: {v}");
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
+    seeded.to_string()
 }
 
 fn seqs(items: &Value) -> Vec<i64> {
@@ -120,10 +118,9 @@ async fn thread_after_seq_pages_forward_and_carries_card_changes() {
     let (sales, seeded) = pinned_ws(&env, &format!("tdsales{tag}"));
     let h = sales.handle.clone();
     let agent = passport(&sales);
-    // A card answer or void wakes the agent; its first wake spawns the
-    // Chat (the shim) and pins that new session, so the address answers
-    // at a NEW conversation from then on. Wake it first so everything
-    // below lands on one conversation (empty: seqs start at 1 there).
+    // A card answer or void wakes the agent; wake it first (the shim) so
+    // those land on a live Chat. The wake keeps the seeded pin, so
+    // everything below is on that one, empty conversation (seqs from 1).
     let conv = warm_up(port, &h, &seeded).await;
 
     // 4. The feature key.

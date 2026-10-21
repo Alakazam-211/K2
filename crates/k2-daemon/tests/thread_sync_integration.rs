@@ -272,12 +272,11 @@ async fn every_thread_write_reaches_every_live_view() {
         let tag = &uuid::Uuid::new_v4().to_string()[..8];
         let sales = format!("tsync{tag}");
         let other = format!("tsyncother{tag}");
-        let _seeded = seed_thread_addr(&sales);
-        let _seeded_other = seed_thread_addr(&other);
+        let seeded = seed_thread_addr(&sales);
+        let seeded_other = seed_thread_addr(&other);
         // A compose post wakes the agent; the first wake spawns its Chat
-        // (the shim) and pins that new session, which moves the Thread to
-        // a new conversation — the pin swap the client follows. Warm both
-        // agents up first so every write below lands on one conversation.
+        // (the shim). The wake keeps the seeded pin (0.46.3 smoke: a spawn
+        // never moves the pinned Chat), so every write below lands on it.
         let pinned_after_warmup = |handle: &str| -> String {
             post_as(port, OWNER_TOKEN, "/cli/thread/post", serde_json::json!({
                 "addr": handle, "text": "warm-up", "via": "compose"
@@ -288,6 +287,8 @@ async fn every_thread_write_reaches_every_live_view() {
         };
         let conv = pinned_after_warmup(&sales);
         let other_conv = pinned_after_warmup(&other);
+        assert_eq!(conv, seeded, "the wake kept the pinned Chat");
+        assert_eq!(other_conv, seeded_other, "the wake kept the pinned Chat");
         let member_tok = login_member(port, &format!("pat{tag}"));
         let guest_tok = mint_guest(port, &format!("guest{tag}"), &sales);
 

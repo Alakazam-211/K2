@@ -905,6 +905,10 @@ pub fn wipe_slot(ctx: &Ctx, e: &ServerEntry) -> Result<(), AdminRefusal> {
     if e.slot == OWNER_SLOT {
         return Err(failed("never wipe the owner"));
     }
+    #[cfg(test)]
+    if tests::WIPE_FAILS.lock().unwrap().iter().any(|(h, s)| *h == ctx.home && *s == e.slot) {
+        return Err(failed(format!("slot {}: a wipe that fails (test)", e.slot)));
+    }
     if ctx.root {
         return ctx.executor().tenant_wipe(&share::TenantWipe { slot: e.slot }).map(|_| ());
     }
@@ -930,6 +934,10 @@ fn remove_tree(p: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
     use k2_node_proto::crypto::SigningKey;
+
+    /// (node home, slot) pairs whose wipe fails, for the B10 test (by home,
+    /// so tests running side by side never see each other's).
+    pub(super) static WIPE_FAILS: std::sync::Mutex<Vec<(PathBuf, Slot)>> = std::sync::Mutex::new(Vec::new());
 
     struct T {
         ctx: Ctx,
@@ -1020,15 +1028,11 @@ mod tests {
     /// (as revoked, holding its slot) until a later prune finishes the wipe.
     #[test]
     fn an_expired_add_whose_wipe_failed_keeps_its_slot() {
-        use std::os::unix::fs::PermissionsExt;
         let mut t = setup(false);
         add(&t.ctx, &add_args("https://a.k2.dev", "0123456789abcdef", Trust::Own)).unwrap();
-        // Something of slot 1 can't be removed (as a userdel that failed
-        // would leave its user behind).
-        let stuck = t.ctx.layout().tenant(1).root().join("stuck");
-        std::fs::create_dir_all(&stuck).unwrap();
-        std::fs::write(stuck.join("f"), "x").unwrap();
-        std::fs::set_permissions(&stuck, std::fs::Permissions::from_mode(0o500)).unwrap();
+        // Slot 1's wipe fails (as a userdel that failed would leave its user
+        // behind, and root's tenant.wipe would report it).
+        WIPE_FAILS.lock().unwrap().push((t.ctx.home.clone(), 1));
         t.ctx.now += PENDING_SECS;
         let r = prune(&t.ctx).unwrap();
         assert_eq!(r["changed"], json!(["wipe_failed:1"]), "{r}");
@@ -1039,7 +1043,7 @@ mod tests {
         let b = add(&t.ctx, &add_args("https://b.k2.dev", "1123456789abcdef", Trust::Own)).unwrap();
         assert_eq!(b["slot"].as_u64(), Some(2), "{b}");
         // Once the wipe can finish, the line goes and the slot is free.
-        std::fs::set_permissions(&stuck, std::fs::Permissions::from_mode(0o700)).unwrap();
+        WIPE_FAILS.lock().unwrap().retain(|(h, _)| *h != t.ctx.home);
         let r = prune(&t.ctx).unwrap();
         assert_eq!(r["wiped"], json!([1]), "the next prune finishes the wipe (not 24 h later): {r}");
         assert!(read_file(&t.ctx.config_dir).unwrap().unwrap().entry(1).is_none());

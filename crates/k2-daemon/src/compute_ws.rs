@@ -1903,8 +1903,10 @@ pub fn ensure_ticker_at_boot() {
     if !compute::enabled() || tokio::runtime::Handle::try_current().is_err() {
         return;
     }
+    // Before boot opened the database there is nothing to check yet (the
+    // watch calls again); never panic here.
+    let Some(db) = k2_core::db::try_shared() else { return };
     let any = {
-        let db = k2_core::db::shared();
         let conn = db.lock();
         !store::list_nodes(&conn, true).is_empty()
     };

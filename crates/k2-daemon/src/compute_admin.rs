@@ -1505,6 +1505,12 @@ fn watch_pass() {
 /// starts the compute ticker at boot (V77).
 pub fn spawn_watch() {
     tokio::spawn(async {
+        // This task starts before boot opens the database: wait for it, or
+        // the first tick's ticker check panics and takes the whole watch
+        // (offline alerts, request expiry, V77) down for the process's life.
+        while k2_core::db::try_shared().is_none() {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
         let mut tick = tokio::time::interval(Duration::from_secs(60));
         loop {
             tick.tick().await;

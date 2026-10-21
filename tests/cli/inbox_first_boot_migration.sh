@@ -96,30 +96,11 @@ if [ -f "$MARKER" ]; then
     exit 1
 fi
 
-# Kill the first daemon so we can boot a fresh one against the
-# now-populated DB.
-kill "$SANDBOX_DAEMON_PID" 2>/dev/null || true
-wait "$SANDBOX_DAEMON_PID" 2>/dev/null || true
-unset SANDBOX_DAEMON_PID
-
-# Boot a second daemon under the SAME sandbox HOME. The sweep on
-# this boot is the one that should migrate.
-TMPDIR="$SANDBOX_HOME/tmp" XDG_RUNTIME_DIR="$SANDBOX_HOME/run" K2_RUNTIME_DIR= HOME="$SANDBOX_HOME" "$SANDBOX_DAEMON_BIN" >"$SANDBOX_HOME/daemon-2.log" 2>&1 &
-SANDBOX_DAEMON_PID=$!
-export SANDBOX_DAEMON_PID
-# Wait for the new port file to be (re)written.
-for i in $(seq 1 50); do
-    if [ -f "$SANDBOX_HOME/.k2so/daemon.port" ]; then
-        # The sweep runs synchronously at startup before the listener
-        # comes up, so by the time /health returns 200 the marker
-        # should be present. Double-check with /health.
-        NEW_PORT="$(cat "$SANDBOX_HOME/.k2so/daemon.port")"
-        if curl -sf --connect-timeout 1 "http://127.0.0.1:${NEW_PORT}/health" >/dev/null 2>&1; then
-            break
-        fi
-    fi
-    sleep 0.2
-done
+# Stop the first daemon and boot a fresh one under the SAME sandbox HOME.
+# The sweep on this boot is the one that should migrate. The daemon binds
+# its port BEFORE the first-boot migrations (0.39.5 handshake), so /health
+# is 200 while the sweep is still running; wait for /boot-status ready.
+sandbox_daemon_restart daemon-2.log
 
 # Verify the migration ran.
 if [ ! -f "$MARKER" ]; then

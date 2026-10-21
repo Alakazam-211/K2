@@ -7,6 +7,10 @@
 //! `zen_local_only`. The policy rows are Member so the source-walk test
 //! passes and `role_gate` lets the request reach this check; the check
 //! itself lives here (Z59), after the dispatcher consumed the request.
+//! One widening (permission cards §5.2.1, Rosson Q2): the Garden's owner
+//! from any signed-in surface, an **Owner** login too, may use Keep as mine
+//! (`widget/claim`), widget resume and proposal approve
+//! ([`GARDEN_OWNER_ROUTES`], [`garden_owner_may`]).
 //!
 //! Gardens (G13): `setup` is the only route that creates the folder; the
 //! `garden/*` routes are the only writers of `gardens.json`. Every change
@@ -886,6 +890,94 @@ fn person_only(path: &str) -> bool {
 
 const OWNER_ONLY: &str = "Only you can resume a paused widget, in the K2 app: click Resume on it. Agents, K2 terminals, Connect logins and app passes can't.";
 
+// ── GardenOwner (prd-agent-settings-cards-v1 rev 3.1 §5.2.1, Rosson Q2) ──
+
+/// The routes the Garden's owner may use from any signed-in surface (an
+/// Owner login too, not only this computer's owner token): Keep as mine
+/// (`widget/claim`), widget resume and proposal approve. Settings and the
+/// permission card both pass [`garden_owner_may`], so they stay one door.
+/// Every other Zen route stays this computer's owner token (or a local
+/// passport where §5.3 allows), and the Garden lock stays owner-token only.
+pub const GARDEN_OWNER_ROUTES: &[&str] =
+    &["/cli/zen/widget/claim", "/cli/zen/widget/resume", "/cli/zen/proposals/approve"];
+
+/// **The one GardenOwner resolver.** May `caller` act as the owner of
+/// `garden` (or of a widget, which belongs to the Gardens of this
+/// computer's owner)? A Garden is a personal page of this computer's owner,
+/// so today the answer is the same for every Garden:
+/// - the owner token (the desktop app, a terminal outside K2): yes;
+/// - a Connect **Owner** login on this server (the phone, the web, another
+///   server's K2 signed in with that login): yes;
+/// - an Admin or Member login, an agent or K2 terminal passport, an App
+///   pass, an API key: no.
+///
+/// `garden` is the Garden the request names, when it names one. It is
+/// unused until Gardens belong to different people; then only this
+/// function changes. The owner token is trusted as `Caller::Owner` here:
+/// [`handle`] also requires `token_is_owner` for it.
+pub(crate) fn garden_owner_may(caller: &Caller, garden: Option<&str>) -> bool {
+    let _ = garden;
+    match caller {
+        Caller::Owner => true,
+        Caller::Login { username } => {
+            k2_core::connect_users::role_for_user(username) == Some(k2_core::connect_users::Role::Owner)
+        }
+        _ => false,
+    }
+}
+
+/// The live version (bundle hash) of a user widget and its maker now, for
+/// the `garden.keep-mine` card's current-state check. Errors name what is
+/// wrong in plain words (no such widget, no good version, a built-in).
+pub(crate) fn widget_live_version(widget: &str) -> Result<(String, k2_core::garden_data::MadeBy), String> {
+    let widget = widget.trim();
+    if authors::is_builtin(widget) {
+        return Err(format!("{widget} is a built-in widget; it is K2's, there is nothing to keep"));
+    }
+    let f = files();
+    set_up(&f).map_err(|e| e.to_string())?;
+    let hash = live_hash(&f, widget, false).map_err(|e| e.to_string())?;
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let maker = authors::maker_of(&conn, widget, &hash).map_err(|e| e.to_string())?;
+    Ok((hash, maker))
+}
+
+/// The route entry for Keep as mine (`POST /cli/zen/widget/claim`): the
+/// same GardenOwner check [`handle`] makes, then the route's own handler,
+/// as `caller`. `version`, when given, must still be the live version
+/// (409 `widget_changed` otherwise: the person kept something else than
+/// the card showed). The permission card's `garden.keep-mine` applies
+/// through this (§6.4, C15).
+pub(crate) fn claim_entry(caller: &Caller, widget: &str, version: Option<&str>, ingress: &str) -> CliResponse {
+    let path = "/cli/zen/widget/claim";
+    if !garden_owner_may(caller, None) {
+        audit("zen.widget.refused", caller, format!("{path}: owner token only"), ingress);
+        return err(ZenError::OwnerOnly(CLAIM_OWNER_ONLY.into()));
+    }
+    if let Some(want) = version.map(str::trim).filter(|v| !v.is_empty()) {
+        match widget_live_version(widget) {
+            Ok((live, _)) if live == want => {}
+            Ok((live, _)) => {
+                return resp(
+                    "409 Conflict",
+                    json!({
+                        "ok": false,
+                        "error": "widget_changed",
+                        "message": format!("{} changed since (live version {}); nothing was kept", widget.trim(), short(&live)),
+                    }),
+                );
+            }
+            Err(m) => return resp("409 Conflict", json!({ "ok": false, "error": "widget_changed", "message": m })),
+        }
+    }
+    let body = json!({ "widget": widget.trim() }).to_string();
+    match handle_widget_claim(body.as_bytes(), caller, ingress) {
+        Ok(v) => ok(v),
+        Err(e) => err(e),
+    }
+}
+
 // ── Garden Lock (prd-garden-lock-and-sync-v1 §5.2, §5.3, §6) ───────────
 
 /// `POST /cli/zen/garden/lock {garden, locked}`: the person only.
@@ -1214,19 +1306,30 @@ pub fn handle(
     }
     let owner_token = owner && *caller == Caller::Owner;
     if path == LOCK_ROUTE && !owner_token {
-        // §5.2: agents can neither lock nor unlock (Rosson ruling 6).
+        // §5.2: agents can neither lock nor unlock (Rosson ruling 6). The
+        // lock stays owner-token only (it isn't a GardenOwner row).
         audit("zen.garden.lock_refused", caller, format!("{path}: the person only"), ingress);
         return err(ZenError::OwnerOnly(LOCK_OWNER_ONLY.into()));
     }
-    if person_only(path) && !owner_token {
+    // The Garden's owner from any signed-in surface (permission cards
+    // §5.2.1, Rosson Q2): the owner token, or an Owner login (the phone, the
+    // web, another server's K2). Keep as mine, widget resume and proposal
+    // approve take it; the card's apply goes through the same check.
+    let garden_owner = match caller {
+        Caller::Owner => owner,
+        Caller::Login { .. } => garden_owner_may(caller, garden_named(body).as_deref()),
+        _ => false,
+    };
+    if person_only(path) && !garden_owner {
         audit("zen.widget.refused", caller, format!("{path}: owner token only"), ingress);
         return err(ZenError::OwnerOnly(OWNER_ONLY.into()));
     }
-    if path == "/cli/zen/widget/claim" && !owner_token {
+    if path == "/cli/zen/widget/claim" && !garden_owner {
         audit("zen.widget.refused", caller, format!("{path}: owner token only"), ingress);
         return err(ZenError::OwnerOnly(CLAIM_OWNER_ONLY.into()));
     }
-    if !owner {
+    let garden_owner_login = garden_owner && !owner && GARDEN_OWNER_ROUTES.contains(&path);
+    if !owner && !garden_owner_login {
         // §5.3: a passport (an agent or a K2 terminal) may make the Garden
         // writes it always could, unless the Garden is locked; and it may
         // make and sign widget folders (Garden data authorship, no Lock).

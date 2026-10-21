@@ -8067,8 +8067,12 @@ async fn handle_one_request(
                 Vec::new()
             };
             let who = crate::compute_routes::who_from_tcp(&query, bearer_token.as_deref(), state.token.as_str());
-            let local = ingress == Ingress::Loopback;
-            let who = crate::sql::versions_access::Who::from_compute(&who, local);
+            // A passport over TCP is never "local" here (review #2 F10): a
+            // proxy on the box can forward to the loopback listener. Agents
+            // move their databases over their cell socket; the owner token
+            // and logins don't depend on it.
+            let _ = ingress;
+            let who = crate::sql::pgmove::k2::classify(&who, false);
             let params = super::http::parse_params(&path, &query);
             let r = tokio::task::spawn_blocking(move || crate::sql::pgmove::k2::handle(who, is_post, &body_bytes, &params))
                 .await

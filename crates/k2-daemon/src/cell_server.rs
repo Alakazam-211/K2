@@ -819,7 +819,7 @@ mod unix_impl {
             // session and everything the switch doesn't grant.
             p if p == "/cli/db/upgrade" => {
                 let who = crate::compute_routes::who_from_cell(this_session_id, principal);
-                let who = crate::sql::versions_access::Who::from_compute(&who, true);
+                let who = crate::sql::pgmove::k2::classify(&who, true);
                 from_cli(crate::sql::pgmove::k2::handle(who, is_post, body, params))
             }
             p if crate::compute_routes::is_route(p) && !crate::compute_routes::is_socket(p) => {

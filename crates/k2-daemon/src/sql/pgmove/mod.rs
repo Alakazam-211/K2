@@ -66,7 +66,9 @@ pub trait ClusterOps {
     fn allow_conn(&self, m: Major, db: &str, mode: ConnMode) -> Result<(), String>;
     /// Bytes of the dump.
     fn dump(&self, from: Major, to: Major, db: &str, tag: &str) -> Result<u64, String>;
-    fn restore(&self, to: Major, db: &str, tag: &str) -> Result<(), String>;
+    /// Restore as the database owner (`role`/`password`): only DDL runs as
+    /// the superuser (security review #1 H1, #2 F2).
+    fn restore(&self, to: Major, db: &str, tag: &str, role: &str, password: &str) -> Result<(), String>;
     fn drop_db(&self, m: Major, db: &str) -> Result<bool, String>;
     fn remove_dump(&self, db: &str, tag: &str) -> Result<(), String>;
     /// Free bytes on the clusters' data filesystem.
@@ -75,6 +77,10 @@ pub trait ClusterOps {
     fn extension_available(&self, m: Major, ext: &str) -> Option<bool>;
     /// A role logs in over TCP on `port` with its vaulted password.
     fn login(&self, m: Major, port: u16, db: &str, role: &str, password: &str) -> Result<(), String>;
+    /// Bytes of move dumps kept on disk (the check's disk line, F7).
+    fn moves_bytes(&self) -> u64 {
+        0
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -165,8 +171,15 @@ pub trait MoveEnv {
     fn set_major(&self, db: &str, m: Major) -> Result<(), String>;
     fn set_moved(&self, db: &str, info: Option<&MovedInfo>) -> Result<(), String>;
     fn record_cluster(&self, m: Major, port: u16);
-    /// Persist the move's row (`sql_moves`); called at every step.
-    fn progress(&self, p: &MoveProgress);
+    /// Persist the move's row (`sql_moves`); called at every step. An error
+    /// fails the step (review #2 F13).
+    fn progress(&self, p: &MoveProgress) -> Result<(), String>;
+    /// Fold the box's clusters into K2's records before a check (F9).
+    fn refresh_clusters(&self) {}
+    /// Other workspaces the database is shared with (`sql_grants`).
+    fn shared_with(&self, _db: &str) -> Vec<String> {
+        Vec::new()
+    }
     fn audit(&self, act: &str, line: Value);
     fn inbox(&self, title: &str, body: &str);
 }
@@ -207,6 +220,9 @@ pub enum MoveState {
 #[serde(rename_all = "camelCase")]
 pub struct MoveProgress {
     pub id: String,
+    /// `move` or `rollback`.
+    #[serde(default = "kind_move")]
+    pub kind: String,
     pub db: String,
     pub from: Major,
     pub to: Major,
@@ -219,6 +235,9 @@ pub struct MoveProgress {
     pub last_error: Option<String>,
     pub from_port: Option<u16>,
     pub to_port: Option<u16>,
+    /// The record points at `to`: no undo from here on (F4).
+    #[serde(default)]
+    pub switched: bool,
     /// The target database was created (undo drops it).
     pub target_created: bool,
     /// The source was quiesced (undo re-opens it).
@@ -232,6 +251,16 @@ pub struct MoveProgress {
     pub diff: Vec<String>,
     pub warnings: Vec<String>,
     pub check: Vec<check::CheckLine>,
+    /// A rollback: the newer copy's name once renamed and closed.
+    #[serde(default)]
+    pub kept_as: Option<String>,
+    /// A rollback: the rolled-back move's dump (removed at the end).
+    #[serde(default)]
+    pub move_tag: Option<String>,
+}
+
+fn kind_move() -> String {
+    "move".into()
 }
 
 /// What the caller may skip or widen (§12: owner-only flags).
@@ -308,12 +337,23 @@ pub fn fingerprint(ops: &dyn ClusterOps, m: Major, db: &str) -> Result<Value, St
 
 // ── the move ────────────────────────────────────────────────────────────
 
-/// Why a step failed, and how far the undo must go.
+/// Why a step failed. Before the switch the machine undoes; after it, it
+/// never does (security review #2 F4): it finishes as `failed`.
 struct StepFail(String);
 
 impl<T: Into<String>> From<T> for StepFail {
     fn from(s: T) -> Self {
         StepFail(s.into())
+    }
+}
+
+impl StepFail {
+    /// The machine already wrote the final state.
+    fn done() -> Self {
+        StepFail(String::from("\u{0}done"))
+    }
+    fn is_done(&self) -> bool {
+        self.0 == "\u{0}done"
     }
 }
 
@@ -324,33 +364,49 @@ struct Run<'a> {
 }
 
 impl Run<'_> {
-    fn at(&mut self, step: Step, state: MoveState) {
+    /// Persist the step. A row K2 can't write is a failed step (review #2
+    /// F13): recovery trusts these rows.
+    fn at(&mut self, step: Step, state: MoveState) -> Result<(), StepFail> {
         self.p.step = step;
         self.p.state = state;
-        self.env.progress(&self.p);
+        self.save()
+    }
+
+    fn save(&self) -> Result<(), StepFail> {
+        self.env.progress(&self.p).map_err(|e| StepFail(format!("progress row: {e}")))
     }
 
     fn finish(&mut self, state: MoveState, err: Option<String>) -> MoveProgress {
         self.p.state = state;
         self.p.last_error = err;
         self.p.finished_at = Some(self.env.now());
-        self.env.progress(&self.p);
+        if let Err(e) = self.env.progress(&self.p) {
+            self.p.warnings.push(format!("progress row: {e}"));
+        }
         self.p.clone()
     }
 
     /// Undo everything before the switch (§13 rows 1–7): drop the target
     /// copy, re-open the source, start the Apps, open the doors, clear the
-    /// notice. The dump stays with the record.
+    /// notice, remove the dump. Never once the record points at the target
+    /// (review #2 F4): then the target is live and only the owner acts.
     fn undo_before_switch(&mut self) -> Vec<String> {
         let mut errs = Vec::new();
         let (db, from, to) = (self.p.db.clone(), self.p.from, self.p.to);
+        let live_on_target = self.p.switched || self.env.record(&db).map(|r| r.major == to).unwrap_or(true);
         if self.p.target_created {
-            match self.ops.drop_db(to, &db) {
-                Ok(_) => self.p.target_created = false,
-                Err(e) => errs.push(format!("drop the target copy: {e}")),
+            if live_on_target {
+                errs.push(format!("the record points at {to} (or can't be read): the {to} copy is live and was not dropped"));
+            } else {
+                // The helper drops only a closed or quiesced database.
+                let dropped = self.ops.allow_conn(to, &db, ConnMode::Quiesce).and_then(|_| self.ops.drop_db(to, &db));
+                match dropped {
+                    Ok(_) => self.p.target_created = false,
+                    Err(e) => errs.push(format!("drop the target copy: {e}")),
+                }
             }
         }
-        if self.p.quiesced {
+        if self.p.quiesced && !live_on_target {
             match self.ops.allow_conn(from, &db, ConnMode::On) {
                 Ok(()) => self.p.quiesced = false,
                 Err(e) => errs.push(format!("re-open the source: {e}")),
@@ -368,24 +424,107 @@ impl Run<'_> {
             self.p.doors_paused = false;
         }
         self.env.clear_notice(&db);
+        // An aborted move keeps no dump (review #2 F7).
+        if self.p.dump_bytes.is_some() && !live_on_target {
+            if let Err(e) = self.ops.remove_dump(&db, &self.p.tag) {
+                self.p.warnings.push(format!("remove the dump: {e}"));
+            }
+        }
         errs
     }
 
     fn abort(&mut self, why: String) -> MoveProgress {
         let errs = self.undo_before_switch();
         if errs.is_empty() {
-            self.env.audit("db-upgrade-aborted", json!({"db": self.p.db, "from": self.p.from, "to": self.p.to, "why": why}));
+            self.env.audit(
+                &format!("db-upgrade-{}-aborted", self.p.kind),
+                json!({"db": self.p.db, "from": self.p.from, "to": self.p.to, "why": why}),
+            );
             self.finish(MoveState::Aborted, Some(why))
         } else {
-            // The undo itself failed: new moves wait for the owner.
             let msg = format!("{why}; undo incomplete: {}", errs.join("; "));
-            self.env.audit("db-upgrade-failed", json!({"db": self.p.db, "why": msg}));
-            self.env.inbox(
-                &format!("Database {} move failed", self.p.db),
-                &format!("The move {} → {} stopped and could not be fully undone: {msg}. New moves are blocked until the owner runs `k2 db upgrade --acknowledge-failed`.", self.p.from, self.p.to),
-            );
-            self.finish(MoveState::Failed, Some(msg))
+            self.fail(msg)
         }
+    }
+
+    /// The latch: new moves wait for the owner (review #2 F6).
+    fn fail(&mut self, msg: String) -> MoveProgress {
+        self.env.audit(&format!("db-upgrade-{}-failed", self.p.kind), json!({"db": self.p.db, "why": msg}));
+        self.env.inbox(
+            &format!("Database {} {} failed", self.p.db, self.p.kind),
+            &format!(
+                "The {} {} → {} of {} stopped: {msg}. The record points at Postgres {}. Re-pointed: [{}]. \
+                 New moves are blocked until the owner fixes this and runs `k2 db upgrade --acknowledge-failed`.",
+                self.p.kind,
+                self.p.from,
+                self.p.to,
+                self.p.db,
+                self.env.record(&self.p.db).map(|r| r.major.to_string()).unwrap_or_else(|_| "?".into()),
+                self.p.repointed.join(", ")
+            ),
+        );
+        self.finish(MoveState::Failed, Some(msg))
+    }
+
+    /// After the switch: no undo, ever (review #2 F4). Best effort to bring
+    /// the Apps and doors back on the target, then the latch.
+    fn fail_after_switch(&mut self, why: String) -> MoveProgress {
+        let db = self.p.db.clone();
+        if !self.p.stopped_apps.is_empty() {
+            let failed = self.env.start_apps(&self.p.stopped_apps);
+            if !failed.is_empty() {
+                self.p.warnings.push(format!("Apps that didn't start: {}", failed.join(", ")));
+            }
+            self.p.stopped_apps.clear();
+        }
+        if self.p.doors_paused {
+            self.env.pause_doors(&db, false);
+            self.p.doors_paused = false;
+        }
+        self.env.clear_notice(&db);
+        self.fail(format!("after the switch: {why}"))
+    }
+
+    fn settle(mut self, res: Result<(), StepFail>) -> MoveProgress {
+        match res {
+            Ok(()) => self.p,
+            Err(f) if f.is_done() => self.p,
+            Err(StepFail(why)) if self.p.switched => self.fail_after_switch(why),
+            Err(StepFail(why)) => self.abort(why),
+        }
+    }
+}
+
+fn new_progress(kind: &str, db: &str, from: Major, to: Major, actor: &str, now: i64) -> MoveProgress {
+    let tag = tag_for(now);
+    MoveProgress {
+        id: format!("{}_{}_{}", if kind == "rollback" { "rb" } else { "mv" }, db, tag.to_ascii_lowercase()),
+        kind: kind.into(),
+        db: db.into(),
+        from,
+        to,
+        tag,
+        actor: actor.into(),
+        state: MoveState::Checking,
+        step: Step::Check,
+        started_at: now,
+        finished_at: None,
+        last_error: None,
+        from_port: None,
+        to_port: None,
+        switched: false,
+        target_created: false,
+        quiesced: false,
+        stopped_apps: Vec::new(),
+        doors_paused: false,
+        repointed: Vec::new(),
+        roles_created: Vec::new(),
+        dump_bytes: None,
+        diff: Vec::new(),
+        warnings: Vec::new(),
+        check: Vec::new(),
+        kept_as: None,
+        move_tag: None,
     }
 }
 
@@ -400,38 +539,15 @@ pub fn check_only(ops: &dyn ClusterOps, env: &dyn MoveEnv, db: &str, opts: &Move
 pub fn run_move(ops: &dyn ClusterOps, env: &dyn MoveEnv, db: &str, opts: &MoveOpts) -> Result<MoveProgress, String> {
     let rec = env.record(db)?;
     let report = check::run(ops, env, &rec, opts)?;
-    let now = env.now();
-    let tag = tag_for(now);
-    let mut run = Run {
-        ops,
-        env,
-        p: MoveProgress {
-            id: format!("mv_{}_{}", rec.name, tag.to_ascii_lowercase()),
-            db: rec.name.clone(),
-            from: rec.major,
-            to: report.to,
-            tag,
-            actor: opts.actor.clone(),
-            state: MoveState::Checking,
-            step: Step::Check,
-            started_at: now,
-            finished_at: None,
-            last_error: None,
-            from_port: report.from_port,
-            to_port: report.to_port,
-            target_created: false,
-            quiesced: false,
-            stopped_apps: Vec::new(),
-            doors_paused: false,
-            repointed: Vec::new(),
-            roles_created: Vec::new(),
-            dump_bytes: None,
-            diff: Vec::new(),
-            warnings: report.lines.iter().filter(|l| l.level == check::Level::Warn).map(|l| l.text.clone()).collect(),
-            check: report.lines.clone(),
-        },
-    };
-    run.env.progress(&run.p);
+    let mut p = new_progress("move", &rec.name, rec.major, report.to, &opts.actor, env.now());
+    p.from_port = report.from_port;
+    p.to_port = report.to_port;
+    p.warnings = report.lines.iter().filter(|l| l.level == check::Level::Warn).map(|l| l.text.clone()).collect();
+    p.check = report.lines.clone();
+    let mut run = Run { ops, env, p };
+    if let Err(StepFail(e)) = run.save() {
+        return Err(format!("the move can't be recorded: {e}"));
+    }
     // 1. check
     if report.refused() {
         let why = report
@@ -443,11 +559,8 @@ pub fn run_move(ops: &dyn ClusterOps, env: &dyn MoveEnv, db: &str, opts: &MoveOp
             .join("; ");
         return Ok(run.finish(MoveState::Aborted, Some(format!("refused: {why}"))));
     }
-    match steps(&mut run, &rec, &report, opts) {
-        Ok(()) => Ok(run.p),
-        Err(f) if f.is_done() => Ok(run.p),
-        Err(StepFail(why)) => Ok(run.abort(why)),
-    }
+    let res = steps(&mut run, &rec, &report, opts);
+    Ok(run.settle(res))
 }
 
 fn steps(run: &mut Run, rec: &DbRecord, report: &check::Report, opts: &MoveOpts) -> Result<(), StepFail> {
@@ -455,7 +568,7 @@ fn steps(run: &mut Run, rec: &DbRecord, report: &check::Report, opts: &MoveOpts)
     let from_port = report.from_port.ok_or("the source cluster has no port on record")?;
 
     // 2. target: the source keeps serving.
-    run.at(Step::Target, MoveState::Checking);
+    run.at(Step::Target, MoveState::Checking)?;
     let to_port = match report.to_port {
         Some(p) => p,
         None => {
@@ -482,20 +595,20 @@ fn steps(run: &mut Run, rec: &DbRecord, report: &check::Report, opts: &MoveOpts)
     }
 
     // 3. notice
-    run.at(Step::Notice, MoveState::Checking);
+    run.p.doors_paused = true;
+    run.at(Step::Notice, MoveState::Checking)?;
     let pause = catalog::pause_estimate_secs(report.size_bytes);
     run.env.notice(
         &db,
         &format!("Database {db} moves to Postgres {to}: a pause of about {}–{} s starts in {} s.", pause.0, pause.1, if opts.now { 0 } else { NOTICE_SECS }),
     );
     run.env.pause_doors(&db, true);
-    run.p.doors_paused = true;
     if !opts.now {
         run.env.sleep_secs(NOTICE_SECS);
     }
 
     // 4. roles, with their verifiers (refused before any change on a mismatch).
-    run.at(Step::Roles, MoveState::Copying);
+    run.at(Step::Roles, MoveState::Copying)?;
     let out = run.ops.copy_roles(from, to, &report.roles, false).map_err(|e| format!("copy roles: {e}"))?;
     run.p.roles_created = out["created"]
         .as_array()
@@ -507,30 +620,44 @@ fn steps(run: &mut Run, rec: &DbRecord, report: &check::Report, opts: &MoveOpts)
         run.ops.sql(to, "postgres", &grants).map_err(|e| format!("memberships: {e}"))?;
     }
 
-    // 5. quiesce
-    run.at(Step::Quiesce, MoveState::Copying);
+    // 5. quiesce. The Apps about to stop are written down first (F13).
     let users = run.env.users(&db);
-    run.p.stopped_apps = run.env.stop_apps(&users.apps).map_err(|e| format!("stop Apps: {e}"))?;
-    run.ops.allow_conn(from, &db, ConnMode::Quiesce).map_err(|e| format!("quiesce: {e}"))?;
+    run.p.stopped_apps = users.apps.clone();
+    run.at(Step::Quiesce, MoveState::Copying)?;
+    let stopped = run.env.stop_apps(&users.apps);
+    match stopped {
+        Ok(s) => run.p.stopped_apps = s,
+        Err(e) => return Err(format!("stop Apps: {e}").into()),
+    }
     run.p.quiesced = true;
-    run.env.progress(&run.p);
+    run.save()?;
+    run.ops.allow_conn(from, &db, ConnMode::Quiesce).map_err(|e| format!("quiesce: {e}"))?;
     let counts_src = row_counts(run.ops, from, &db)?;
     let print_src = fingerprint(run.ops, from, &db)?;
 
     // 6. copy
-    run.at(Step::Copy, MoveState::Copying);
+    run.at(Step::Copy, MoveState::Copying)?;
     let props = run.ops.sql(from, &db, catalog::db_props_sql())?;
     let props: Value = serde_json::from_str(&props).map_err(|_| "database properties are not JSON")?;
     let acl = run.ops.sql(from, &db, catalog::datacl_sql())?;
     let settings = run.ops.sql(from, &db, catalog::db_settings_sql())?;
+    // The data loads as the database owner, never the superuser (F2).
+    let owner = props["owner"].as_str().ok_or("the database has no owner")?.to_string();
+    let logins = run.env.logins(&db)?;
+    let owner_pw = logins
+        .iter()
+        .find(|(r, _)| *r == owner)
+        .map(|(_, p)| p.clone())
+        .ok_or("the database's owner is not K2's migrator: K2 restores only as the owner")?;
     let tag = run.p.tag.clone();
+    run.p.dump_bytes = Some(0);
+    run.save()?;
     run.p.dump_bytes = Some(run.ops.dump(from, to, &db, &tag).map_err(|e| format!("dump: {e}"))?);
-    run.env.progress(&run.p);
     let create = catalog::create_db_sql(&db, &props, ok_name).ok_or("the database's owner or locale can't be carried")?;
-    run.ops.sql(to, "postgres", &create).map_err(|e| format!("create the target database: {e}"))?;
     run.p.target_created = true;
-    run.env.progress(&run.p);
-    run.ops.restore(to, &db, &tag).map_err(|e| format!("restore: {e}"))?;
+    run.save()?;
+    run.ops.sql(to, "postgres", &create).map_err(|e| format!("create the target database: {e}"))?;
+    run.ops.restore(to, &db, &tag, &owner, &owner_pw).map_err(|e| format!("restore: {e}"))?;
     let replay = catalog::datacl_replay(&db, &acl, ok_name).ok_or("database ACL: unexpected answer")?
         + &catalog::db_settings_replay(&db, &settings, ok_name).ok_or("database settings: unexpected answer")?;
     if !replay.is_empty() {
@@ -538,7 +665,7 @@ fn steps(run: &mut Run, rec: &DbRecord, report: &check::Report, opts: &MoveOpts)
     }
 
     // 7. verify
-    run.at(Step::Verify, MoveState::Verifying);
+    run.at(Step::Verify, MoveState::Verifying)?;
     let counts_dst = row_counts(run.ops, to, &db)?;
     let mut print_dst = fingerprint(run.ops, to, &db)?;
     let mut print_src = print_src;
@@ -546,8 +673,8 @@ fn steps(run: &mut Run, rec: &DbRecord, report: &check::Report, opts: &MoveOpts)
     catalog::normalize_privileges(&mut print_dst, from);
     let mut diff = catalog::diff(&json!({"rows": counts_src}), &json!({"rows": counts_dst}));
     diff.extend(catalog::diff(&print_src, &print_dst));
-    for (role, pw) in run.env.logins(&db)? {
-        if let Err(e) = run.ops.login(to, to_port, &db, &role, &pw) {
+    for (role, pw) in &logins {
+        if let Err(e) = run.ops.login(to, to_port, &db, role, pw) {
             diff.push(format!("login {role}: {e}"));
         }
     }
@@ -556,42 +683,45 @@ fn steps(run: &mut Run, rec: &DbRecord, report: &check::Report, opts: &MoveOpts)
         return Err(format!("verify: {} difference(s), first: {}", diff.len(), diff[0]).into());
     }
 
-    // 8. switch
-    run.at(Step::Switch, MoveState::Switching);
+    // 8. switch. The step is on record before the record moves (F4).
+    run.at(Step::Switch, MoveState::Switching)?;
     if let Err(e) = run.env.set_major(&db, to) {
         return Err(format!("switch the record: {e}").into());
     }
+    run.p.switched = true;
+    run.p.target_created = false;
+    run.save()?;
     match run.env.repoint(&db, from_port, to_port) {
-        Ok(done) => run.p.repointed = done,
+        Ok(done) => {
+            for d in &done {
+                if let Some(w) = d.strip_prefix("skipped: ") {
+                    run.p.warnings.push(format!("not re-pointed: {w}"));
+                }
+            }
+            run.p.repointed = done;
+        }
         Err((done, why)) => {
-            // §13 row 8: reverse what was re-pointed, the record back.
-            // The record back first: the reversal re-points from it.
+            // §13 row 8: the record back first, then reverse what was
+            // re-pointed from it.
             let back = run.env.set_major(&db, from).and_then(|_| run.env.unpoint(&db, &done, from_port, to_port));
             return match back {
                 Ok(()) => {
+                    run.p.switched = false;
+                    run.p.target_created = true;
                     let errs = run.undo_before_switch();
                     let msg = format!("re-point: {why}");
                     if errs.is_empty() {
-                        run.env.audit("db-upgrade-rolled-back", json!({"db": db, "why": msg}));
+                        run.env.audit("db-upgrade-move-rolled-back", json!({"db": db, "why": msg}));
                         run.finish(MoveState::RolledBack, Some(msg));
                         Err(StepFail::done())
                     } else {
-                        Err(format!("{msg}; then: {}", errs.join("; ")).into())
+                        run.fail(format!("{msg}; then: {}", errs.join("; ")));
+                        Err(StepFail::done())
                     }
                 }
                 Err(e) => {
                     run.p.repointed = done;
-                    let msg = format!("re-point: {why}; reversing it failed: {e}");
-                    run.env.audit("db-upgrade-failed", json!({"db": db, "why": msg}));
-                    run.env.inbox(
-                        &format!("Database {db} move failed"),
-                        &format!(
-                            "The move {from} → {to} stopped while re-pointing and the reversal failed: {e}. Steps re-pointed: {}. \
-                             New moves are blocked until the owner fixes these and runs `k2 db upgrade --acknowledge-failed`.",
-                            run.p.repointed.join(", ")
-                        ),
-                    );
-                    run.finish(MoveState::Failed, Some(msg));
+                    run.fail(format!("re-point: {why}; reversing it failed: {e}"));
                     Err(StepFail::done())
                 }
             };
@@ -600,21 +730,12 @@ fn steps(run: &mut Run, rec: &DbRecord, report: &check::Report, opts: &MoveOpts)
     finish_forward(run, from, to, to_port)
 }
 
-impl StepFail {
-    /// The machine already wrote the final state.
-    fn done() -> Self {
-        StepFail(String::from("\u{0}done"))
-    }
-    fn is_done(&self) -> bool {
-        self.0 == "\u{0}done"
-    }
-}
-
-/// Steps 9–10, also the recovery path after a restart at or after 8.
+/// Steps 9–10, also the recovery path after a restart at or after 8. Any
+/// error here finishes `failed`, never an undo (F4).
 fn finish_forward(run: &mut Run, from: Major, to: Major, to_port: u16) -> Result<(), StepFail> {
     let db = run.p.db.clone();
     // 9. resume
-    run.at(Step::Resume, MoveState::Switching);
+    run.at(Step::Resume, MoveState::Switching)?;
     let failed = run.env.start_apps(&run.p.stopped_apps);
     if !failed.is_empty() {
         run.p.warnings.push(format!("Apps that didn't start: {}", failed.join(", ")));
@@ -635,7 +756,7 @@ fn finish_forward(run: &mut Run, from: Major, to: Major, to_port: u16) -> Result
         run.p.warnings.push(format!("K2 check through the guest door: {e}"));
     }
     // 10. record: the source stays, closed to everyone.
-    run.at(Step::Record, MoveState::Switching);
+    run.at(Step::Record, MoveState::Switching)?;
     if let Err(e) = run.ops.allow_conn(from, &db, ConnMode::Off) {
         run.p.warnings.push(format!("close the kept source: {e}"));
     }
@@ -660,34 +781,49 @@ fn finish_forward(run: &mut Run, from: Major, to: Major, to_port: u16) -> Result
     Ok(())
 }
 
-/// After a daemon restart (§13 last row): a move found mid-way is undone
-/// before the switch, finished at or after it.
+/// After a daemon restart (§13 last row): a move or rollback found
+/// mid-way is undone when the record still points at its source, finished
+/// forward when it points at its target (review #2 F4/F13). A record K2
+/// can't read is held as `failed` for the owner.
 pub fn recover(ops: &dyn ClusterOps, env: &dyn MoveEnv, p: MoveProgress) -> MoveProgress {
     let mut run = Run { ops, env, p };
     run.p.state = MoveState::Interrupted;
-    env.progress(&run.p);
-    if run.p.step < Step::Switch {
-        return run.abort(format!("interrupted at {:?} by a daemon restart", run.p.step));
+    if let Err(e) = env.progress(&run.p) {
+        run.p.warnings.push(format!("progress row: {e}"));
     }
+    let rec = match env.record(&run.p.db) {
+        Ok(r) => r,
+        Err(e) => return run.fail(format!("interrupted; the record can't be read: {e}")),
+    };
+    let switched = run.p.switched || rec.major == run.p.to;
+    if run.p.kind == "rollback" {
+        if !switched {
+            let why = format!("interrupted at {:?} by a daemon restart", run.p.step);
+            return rollback_undo(&mut run, why);
+        }
+        run.p.switched = true;
+        let res = rollback_forward(&mut run);
+        return run.settle(res);
+    }
+    if !switched {
+        let why = format!("interrupted at {:?} by a daemon restart", run.p.step);
+        return run.abort(why);
+    }
+    run.p.switched = true;
+    run.p.target_created = false;
     let (from, to) = (run.p.from, run.p.to);
     let (Some(from_port), Some(to_port)) = (run.p.from_port, run.p.to_port) else {
-        return run.finish(MoveState::Failed, Some("interrupted after the switch with no ports on record".into()));
+        return run.fail("interrupted after the switch with no ports on record".into());
     };
-    if run.p.step == Step::Switch {
-        // Finish the re-point from the recorded list (idempotent steps).
-        if let Err(e) = env.set_major(&run.p.db, to) {
-            return run.finish(MoveState::Failed, Some(format!("recover: switch the record: {e}")));
-        }
+    if run.p.step <= Step::Switch {
+        // Finish the re-point (idempotent: it re-mints from the record).
         match env.repoint(&run.p.db, from_port, to_port) {
             Ok(done) => run.p.repointed = done,
-            Err((_, why)) => return run.finish(MoveState::Failed, Some(format!("recover: re-point: {why}"))),
+            Err((_, why)) => return run.fail(format!("recover: re-point: {why}")),
         }
     }
-    match finish_forward(&mut run, from, to, to_port) {
-        Ok(()) => run.p,
-        Err(f) if f.is_done() => run.p,
-        Err(StepFail(why)) => run.finish(MoveState::Failed, Some(why)),
-    }
+    let res = finish_forward(&mut run, from, to, to_port);
+    run.settle(res)
 }
 
 // ── rollback and forget-old ─────────────────────────────────────────────
@@ -697,16 +833,32 @@ pub struct RollbackOpts {
     pub actor: String,
     pub yes: bool,
     pub now: bool,
+    /// The owner (a shared database rolls back only by the owner: F11).
+    pub owner: bool,
+}
+
+/// The record's move is consistent: it came from an older major and now
+/// lives on a newer one (review #2 F5).
+fn moved_cleanly(rec: &DbRecord) -> Result<Major, String> {
+    let from = rec.moved_from.ok_or("not_moved: this database has no move")?;
+    if from >= rec.major {
+        return Err(format!(
+            "inconsistent_record: {} says it moved from {from} but lives on {}; nothing done — the owner checks `k2 db upgrade {} --check` and the inbox",
+            rec.name, rec.major, rec.name
+        ));
+    }
+    Ok(from)
 }
 
 /// `--rollback <db> --yes` (§6.3): back to the kept source. Writes made on
-/// the target since the move are not carried back.
-pub fn rollback(ops: &dyn ClusterOps, env: &dyn MoveEnv, db: &str, o: &RollbackOpts) -> Result<Value, String> {
+/// the newer copy since the move are not carried back. A `sql_moves` row
+/// of kind `rollback` with steps, boot recovery and the latch (F5).
+pub fn rollback(ops: &dyn ClusterOps, env: &dyn MoveEnv, db: &str, o: &RollbackOpts) -> Result<MoveProgress, String> {
     if !o.yes {
         return Err("rollback_needs_yes: writes made since the move are lost on a rollback; re-run with --yes".into());
     }
     let rec = env.record(db)?;
-    let from = rec.moved_from.ok_or("not_moved: this database has no move to roll back")?;
+    let back_to = moved_cleanly(&rec)?;
     if rec.source_state != SourceState::Kept {
         return Err("source_gone: the old copy was forgotten; nothing to roll back to".into());
     }
@@ -714,73 +866,222 @@ pub fn rollback(ops: &dyn ClusterOps, env: &dyn MoveEnv, db: &str, o: &RollbackO
     if rec.rollback_until.is_some_and(|u| now > u) {
         return Err("window_closed: the 14-day rollback window has ended".into());
     }
-    let to = rec.major;
+    let shared = env.shared_with(db);
+    if !shared.is_empty() && !o.owner {
+        return Err(format!(
+            "shared_database: {db} is shared with {} other workspace(s), whose writes since the move would be lost; the owner rolls it back",
+            shared.len()
+        ));
+    }
+    let cur = rec.major;
     let rows = ops.clusters()?;
-    let from_port = port_of(&rows, from).ok_or("the old cluster is gone")?;
-    let to_port = port_of(&rows, to).ok_or("the current cluster is gone")?;
-    if !rows.iter().any(|r| r.major == from && r.online()) {
-        ops.ensure_cluster(from, from_port).map_err(|e| format!("start the old cluster: {e}"))?;
-    }
-    env.notice(db, &format!("Database {db} rolls back to Postgres {from}; writes since the move are not carried back."));
-    env.pause_doors(db, true);
-    if !o.now {
-        env.sleep_secs(NOTICE_SECS);
-    }
-    let users = env.users(db);
-    let stopped = env.stop_apps(&users.apps).map_err(|e| {
-        env.pause_doors(db, false);
-        env.clear_notice(db);
-        format!("stop Apps: {e}")
-    })?;
-    let undo = |why: String| -> String {
-        let _ = ops.allow_conn(to, db, ConnMode::On);
-        env.start_apps(&stopped);
-        env.pause_doors(db, false);
-        env.clear_notice(db);
-        why
+    let back_port = port_of(&rows, back_to).ok_or("the old cluster is gone")?;
+    let cur_port = port_of(&rows, cur).ok_or("the current cluster is gone")?;
+    let mut p = new_progress("rollback", db, cur, back_to, &o.actor, now);
+    p.from_port = Some(cur_port);
+    p.to_port = Some(back_port);
+    p.move_tag = rec.move_tag.clone();
+    let mut run = Run { ops, env, p };
+    run.save().map_err(|StepFail(e)| format!("the rollback can't be recorded: {e}"))?;
+    let res = rollback_steps(&mut run, o.now);
+    let p = match res {
+        Ok(()) => run.p,
+        Err(f) if f.is_done() => run.p,
+        Err(StepFail(why)) if run.p.switched => run.fail_after_switch(why),
+        Err(StepFail(why)) => rollback_undo(&mut run, why),
     };
-    ops.allow_conn(to, db, ConnMode::Quiesce).map_err(|e| undo(format!("quiesce: {e}")))?;
-    env.set_major(db, from).map_err(|e| undo(format!("record: {e}")))?;
-    if let Err((done, why)) = env.repoint(db, to_port, from_port) {
-        let back = env.set_major(db, to).and_then(|_| env.unpoint(db, &done, to_port, from_port));
-        return Err(undo(match back {
-            Ok(()) => format!("re-point: {why} (reversed; still on {to})"),
-            Err(e) => format!("re-point: {why}; reversing it failed: {e}"),
-        }));
+    Ok(p)
+}
+
+fn rollback_steps(run: &mut Run, now: bool) -> Result<(), StepFail> {
+    let (db, cur, back_to) = (run.p.db.clone(), run.p.from, run.p.to);
+    let (cur_port, back_port) = (run.p.from_port.unwrap_or_default(), run.p.to_port.unwrap_or_default());
+    run.at(Step::Target, MoveState::Checking)?;
+    let rows = run.ops.clusters()?;
+    if !rows.iter().any(|r| r.major == back_to && r.online()) {
+        run.ops.ensure_cluster(back_to, back_port).map_err(|e| format!("start the old cluster: {e}"))?;
     }
-    ops.allow_conn(from, db, ConnMode::On).map_err(|e| format!("re-open the old copy: {e}"))?;
-    // The target copy, renamed and closed, kept for inspection.
-    let base: String = db.chars().take(63 - 17).collect();
-    let kept = format!("{base}__k2rb_{now}");
-    ops.sql(
-        to,
-        "postgres",
-        &format!(
-            "SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity WHERE datname = {} AND pid <> pg_backend_pid();\n\
-             ALTER DATABASE {} RENAME TO {};\n",
-            catalog::quote_lit(db),
-            catalog::quote_ident(db),
-            catalog::quote_ident(&kept)
-        ),
-    )
-    .map_err(|e| format!("rename the {to} copy: {e}"))?;
-    let mut warnings = Vec::new();
-    if let Err(e) = ops.allow_conn(to, &kept, ConnMode::Off) {
-        warnings.push(format!("close the renamed copy: {e}"));
+    run.p.doors_paused = true;
+    run.at(Step::Notice, MoveState::Checking)?;
+    run.env.notice(&db, &format!("Database {db} rolls back to Postgres {back_to}; writes since the move are not carried back."));
+    run.env.pause_doors(&db, true);
+    if !now {
+        run.env.sleep_secs(NOTICE_SECS);
     }
-    env.set_moved(db, None)?;
-    let failed = env.start_apps(&stopped);
+    let users = run.env.users(&db);
+    run.p.stopped_apps = users.apps.clone();
+    run.at(Step::Quiesce, MoveState::Copying)?;
+    run.p.stopped_apps = run.env.stop_apps(&users.apps).map_err(|e| format!("stop Apps: {e}"))?;
+    run.p.quiesced = true;
+    run.save()?;
+    run.ops.allow_conn(cur, &db, ConnMode::Quiesce).map_err(|e| format!("quiesce: {e}"))?;
+    // Switch: on record first.
+    run.at(Step::Switch, MoveState::Switching)?;
+    run.env.set_major(&db, back_to).map_err(|e| format!("record: {e}"))?;
+    run.p.switched = true;
+    run.save()?;
+    match run.env.repoint(&db, cur_port, back_port) {
+        Ok(done) => run.p.repointed = done,
+        Err((done, why)) => {
+            let back = run.env.set_major(&db, cur).and_then(|_| run.env.unpoint(&db, &done, cur_port, back_port));
+            return match back {
+                Ok(()) => {
+                    run.p.switched = false;
+                    Err(format!("re-point: {why} (reversed; still on {cur})").into())
+                }
+                Err(e) => {
+                    run.p.repointed = done;
+                    run.fail(format!("re-point: {why}; reversing it failed: {e}"));
+                    Err(StepFail::done())
+                }
+            };
+        }
+    }
+    rollback_forward(run)
+}
+
+/// After the rollback's switch (and its recovery): re-open the old copy,
+/// clear the moved state BEFORE the cosmetic rename (F5), resume, then
+/// rename and close the newer copy (warnings only), remove the dump.
+fn rollback_forward(run: &mut Run) -> Result<(), StepFail> {
+    let (db, cur, back_to) = (run.p.db.clone(), run.p.from, run.p.to);
+    run.at(Step::Resume, MoveState::Switching)?;
+    run.ops.allow_conn(back_to, &db, ConnMode::On).map_err(|e| format!("re-open the old copy: {e}"))?;
+    run.env.set_moved(&db, None).map_err(|e| format!("clear the move: {e}"))?;
+    let failed = run.env.start_apps(&run.p.stopped_apps);
     if !failed.is_empty() {
-        warnings.push(format!("Apps that didn't start: {}", failed.join(", ")));
+        run.p.warnings.push(format!("Apps that didn't start: {}", failed.join(", ")));
     }
-    env.pause_doors(db, false);
-    env.clear_notice(db);
-    env.audit("db-upgrade-rollback", json!({"db": db, "from": to, "to": from, "actor": o.actor, "keptAs": kept}));
-    env.inbox(
-        &format!("Database {db} rolled back {to} → {from}"),
-        &format!("Database {db} is on Postgres {from} again (by {}). Writes made on {to} since the move were not carried back; the {to} copy is kept closed as {kept}.", o.actor),
+    run.p.stopped_apps.clear();
+    run.env.pause_doors(&db, false);
+    run.p.doors_paused = false;
+    run.env.clear_notice(&db);
+    run.at(Step::Record, MoveState::Switching)?;
+    let move_tag = run.p.move_tag.clone();
+    let base: String = db.chars().take(63 - 17).collect();
+    let kept = format!("{base}__k2rb_{}", run.env.now());
+    match rename_closed(run.ops, run.env, cur, &db, &kept) {
+        Ok(()) => run.p.kept_as = Some(kept.clone()),
+        Err(e) => run.p.warnings.push(format!("rename the {cur} copy: {e} (it stays as {db}, quiesced, on {cur})")),
+    }
+    if let Some(tag) = move_tag {
+        if let Err(e) = run.ops.remove_dump(&db, &tag) {
+            run.p.warnings.push(format!("remove the move's dump: {e}"));
+        }
+    }
+    run.env.audit(
+        "db-upgrade-rollback",
+        json!({"db": db, "from": cur, "to": back_to, "actor": run.p.actor, "keptAs": run.p.kept_as, "warnings": run.p.warnings}),
     );
-    Ok(json!({"db": db, "major": from, "port": from_port, "keptAs": kept, "warnings": warnings}))
+    run.env.inbox(
+        &format!("Database {db} rolled back {cur} → {back_to}"),
+        &format!(
+            "Database {db} is on Postgres {back_to} again (by {}). Writes made on {cur} since the move were not carried back; \
+             the {cur} copy is kept closed as {}.",
+            run.p.actor,
+            run.p.kept_as.as_deref().unwrap_or("(not renamed; see the warnings)")
+        ),
+    );
+    run.p.step = Step::Done;
+    run.finish(MoveState::Succeeded, None);
+    Ok(())
+}
+
+/// Undo a rollback before its switch: the newer copy serves again.
+fn rollback_undo(run: &mut Run, why: String) -> MoveProgress {
+    let db = run.p.db.clone();
+    let mut errs = Vec::new();
+    if run.p.quiesced {
+        if let Err(e) = run.ops.allow_conn(run.p.from, &db, ConnMode::On) {
+            errs.push(format!("re-open {}: {e}", run.p.from));
+        }
+        run.p.quiesced = false;
+    }
+    if !run.p.stopped_apps.is_empty() {
+        let failed = run.env.start_apps(&run.p.stopped_apps);
+        if !failed.is_empty() {
+            errs.push(format!("Apps that didn't start again: {}", failed.join(", ")));
+        }
+        run.p.stopped_apps.clear();
+    }
+    if run.p.doors_paused {
+        run.env.pause_doors(&db, false);
+        run.p.doors_paused = false;
+    }
+    run.env.clear_notice(&db);
+    if errs.is_empty() {
+        run.env.audit("db-upgrade-rollback-aborted", json!({"db": db, "why": why}));
+        run.finish(MoveState::Aborted, Some(why))
+    } else {
+        run.fail(format!("{why}; undo incomplete: {}", errs.join("; ")))
+    }
+}
+
+/// Rename a database once its backends are gone (they leave
+/// asynchronously after `pg_terminate_backend`; F5), then close it.
+fn rename_closed(ops: &dyn ClusterOps, env: &dyn MoveEnv, m: Major, db: &str, to: &str) -> Result<(), String> {
+    let lit = catalog::quote_lit(db);
+    let mut last = String::new();
+    for _ in 0..10 {
+        let left = ops.sql(
+            m,
+            "postgres",
+            &format!(
+                "SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity WHERE datname = {lit} AND pid <> pg_backend_pid();\n\
+                 SELECT count(*) FROM pg_stat_activity WHERE datname = {lit} AND pid <> pg_backend_pid();\n"
+            ),
+        )?;
+        if left.lines().last().map(str::trim) == Some("0") {
+            match ops.sql(m, "postgres", &format!("ALTER DATABASE {} RENAME TO {};\n", catalog::quote_ident(db), catalog::quote_ident(to))) {
+                Ok(_) => {
+                    return ops.allow_conn(m, to, ConnMode::Off);
+                }
+                Err(e) => last = e,
+            }
+        }
+        env.sleep_secs(1);
+    }
+    Err(if last.is_empty() { "sessions still open after 10 s".into() } else { last })
+}
+
+/// Every kept rollback copy of `db` (`<db>__k2rb_<ts>`) on the online
+/// clusters.
+pub fn rollback_copies(ops: &dyn ClusterOps, db: &str) -> Result<Vec<(Major, String)>, String> {
+    let base: String = db.chars().take(63 - 17).collect();
+    let mut out = Vec::new();
+    for r in ops.clusters()?.iter().filter(|r| r.name == "main" && r.online()) {
+        let t = ops.sql(
+            r.major,
+            "postgres",
+            &format!(
+                "SELECT coalesce(string_agg(datname, ','), '') FROM pg_database WHERE left(datname, {n}) = {b} AND substr(datname, {n1}, 7) = '__k2rb_';\n",
+                n = base.len(),
+                b = catalog::quote_lit(&base),
+                n1 = base.len() + 1
+            ),
+        )?;
+        out.extend(t.split(',').map(str::trim).filter(|s| !s.is_empty()).map(|s| (r.major, s.to_string())));
+    }
+    Ok(out)
+}
+
+/// Drop rollback copies older than the window (F7): run at boot and after
+/// moves. Answers what was dropped.
+pub fn sweep_rollback_copies(ops: &dyn ClusterOps, now: i64) -> Vec<String> {
+    let mut dropped = Vec::new();
+    let Ok(rows) = ops.clusters() else { return dropped };
+    for r in rows.iter().filter(|r| r.name == "main" && r.online()) {
+        let Ok(t) = ops.sql(r.major, "postgres", "SELECT coalesce(string_agg(datname, ','), '') FROM pg_database WHERE datname LIKE '%\\_\\_k2rb\\_%';\n") else {
+            continue;
+        };
+        for name in t.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            let ts = name.rsplit("__k2rb_").next().and_then(|t| t.parse::<i64>().ok());
+            if ts.is_some_and(|t| now - t > ROLLBACK_WINDOW_SECS) && ops.drop_db(r.major, name).is_ok() {
+                dropped.push(format!("{}/{name}", r.major));
+            }
+        }
+    }
+    dropped
 }
 
 #[derive(Debug, Clone, Default)]
@@ -789,34 +1090,63 @@ pub struct ForgetOpts {
     /// Owner only (the route checks).
     pub owner: bool,
     pub force_now: bool,
-    pub move_busy: bool,
 }
 
-/// `--forget-old <db>` (§6.4, owner only): drop the kept source and its
-/// dump. Never a package, never a cluster (Sew's own Postgres runs the
-/// installed binaries; Sew 2026-10-20).
+/// `--forget-old <db>` (§6.4, owner only): drop the kept source, its dump
+/// and any rollback copies. Refused unless the record is cleanly rolled
+/// forward and the copy it would drop is the closed, idle old one (F5).
+/// Never a package, never a cluster (Sew's own Postgres runs the
+/// installed binaries; Sew 2026-10-20). The route holds the move lock
+/// (F12).
 pub fn forget_old(ops: &dyn ClusterOps, env: &dyn MoveEnv, db: &str, o: &ForgetOpts) -> Result<Value, String> {
     if !o.owner {
         return Err("owner_only: deleting the old copy is the owner's call".into());
     }
-    if o.move_busy {
-        return Err("busy: a move is running".into());
-    }
     let rec = env.record(db)?;
-    let from = rec.moved_from.ok_or("not_moved: this database has no kept old copy")?;
-    if rec.source_state != SourceState::Kept {
-        return Err("nothing_kept: the old copy is already gone".into());
+    let copies = rollback_copies(ops, db)?;
+    let mut dropped_copies = Vec::new();
+    let drop_copies = |out: &mut Vec<String>| -> Result<(), String> {
+        for (m, name) in &copies {
+            ops.drop_db(*m, name)?;
+            out.push(format!("{m}/{name}"));
+        }
+        Ok(())
+    };
+    if rec.moved_from.is_none() || rec.source_state != SourceState::Kept {
+        if copies.is_empty() {
+            return Err("nothing_kept: no old copy and no rollback copy to delete".into());
+        }
+        drop_copies(&mut dropped_copies)?;
+        env.audit("db-upgrade-forget-old", json!({"db": db, "rollbackCopies": dropped_copies, "actor": o.actor}));
+        return Ok(json!({"db": db, "dropped": false, "rollbackCopies": dropped_copies, "packagesKept": true}));
     }
+    let from = moved_cleanly(&rec)?;
     let now = env.now();
     if !o.force_now && rec.moved_at.is_some_and(|at| now - at < FORGET_MIN_AGE_SECS) {
         return Err("too_soon: wait 24 h after the move (or --force-now)".into());
     }
-    // Healthy on the target first.
+    // Healthy on the newer major first.
     ops.sql(rec.major, &rec.name, "SELECT 1;\n").map_err(|e| format!("not_healthy: the database doesn't answer on {}: {e}", rec.major))?;
+    // The copy to drop must be the closed, idle old one.
+    let state = ops.sql(
+        from,
+        "postgres",
+        &format!(
+            "SELECT (NOT datallowconn)::text || ',' || (SELECT count(*) FROM pg_stat_activity WHERE datname = {l}) FROM pg_database WHERE datname = {l};\n",
+            l = catalog::quote_lit(db)
+        ),
+    )?;
+    if state.trim() != "true,0" {
+        return Err(format!(
+            "source_live: the {from} copy of {db} accepts connections or has sessions ({}); nothing dropped",
+            if state.trim().is_empty() { "missing" } else { state.trim() }
+        ));
+    }
     let dropped = ops.drop_db(from, db)?;
     if let Some(tag) = &rec.move_tag {
         ops.remove_dump(db, tag)?;
     }
+    drop_copies(&mut dropped_copies)?;
     let info = MovedInfo {
         from,
         at: rec.moved_at.unwrap_or(now),
@@ -825,8 +1155,8 @@ pub fn forget_old(ops: &dyn ClusterOps, env: &dyn MoveEnv, db: &str, o: &ForgetO
         source_state: SourceState::Forgotten,
     };
     env.set_moved(db, Some(&info))?;
-    env.audit("db-upgrade-forget-old", json!({"db": db, "major": from, "actor": o.actor}));
-    Ok(json!({"db": db, "dropped": dropped, "major": from, "packagesKept": true}))
+    env.audit("db-upgrade-forget-old", json!({"db": db, "major": from, "rollbackCopies": dropped_copies, "actor": o.actor}));
+    Ok(json!({"db": db, "dropped": dropped, "major": from, "rollbackCopies": dropped_copies, "packagesKept": true}))
 }
 
 /// `k2 db clusters tidy` (§4): K2 clusters with no K2 database and no kept

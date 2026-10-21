@@ -1,7 +1,8 @@
 //! K2's side of a move (S5 on PG-A's S1): [`K2Env`] over migration 0201's
 //! records and the resolver (`sql::cluster`), the vault re-point, Apps,
-//! the guest-door pause, audit and inbox; the `/cli/db/upgrade` route
-//! (gated by PG-A's `versions_access::decide`); boot recovery.
+//! the guest-door pause and the per-database move lock, audit and inbox;
+//! the `/cli/db/upgrade` route (gated by PG-A's `versions_access::decide`,
+//! GET included); boot recovery before any new move.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
@@ -10,25 +11,34 @@ use serde_json::{json, Value};
 
 use super::request::{self, Act, Scope, UpgradeRequest};
 use super::{
-    check_only, forget_old, recover, rollback, run_move, worker, ClusterRole, DbRecord, ForgetOpts, Major, MoveEnv,
-    MoveOpts, MoveProgress, MovedInfo, MoveState, RollbackOpts, SourceState, Users,
+    check_only, forget_old, recover, rollback, run_move, sweep_rollback_copies, worker, ClusterRole, DbRecord,
+    ForgetOpts, Major, MoveEnv, MoveOpts, MoveProgress, MovedInfo, MoveState, RollbackOpts, SourceState, Users,
 };
 use crate::cli_response::CliResponse;
 use crate::sql::cluster;
 use crate::sql::versions_access::{self, VersionsAct, Who};
 
-// ── the guest-door pause (§6.2 step 3) ──────────────────────────────────
+// ── the guest-door pause and the per-database move lock ─────────────────
 
-static MAINTENANCE: Mutex<Option<HashSet<String>>> = Mutex::new(None);
+#[derive(Default)]
+struct Maint {
+    /// Workspaces whose guest doors answer 503 (§6.2 step 3).
+    doors: HashSet<String>,
+    /// Databases moving: K2's own superuser paths (rotate, grant, revoke,
+    /// drop, bind, migrate, the boot seal) refuse them (review #2 F8).
+    dbs: HashSet<String>,
+}
 
-fn maint() -> std::sync::MutexGuard<'static, Option<HashSet<String>>> {
+static MAINTENANCE: Mutex<Option<Maint>> = Mutex::new(None);
+
+fn maint() -> std::sync::MutexGuard<'static, Option<Maint>> {
     MAINTENANCE.lock().unwrap_or_else(|p| p.into_inner())
 }
 
 /// The guest doors (query, rows) of a workspace whose database is moving
 /// answer `503 db_maintenance` (retry after the pause).
 pub fn maintenance_response(project_id: &str) -> Option<CliResponse> {
-    let on = maint().as_ref().is_some_and(|s| s.contains(project_id));
+    let on = maint().as_ref().is_some_and(|m| m.doors.contains(project_id));
     on.then(|| CliResponse {
         status: "503 Service Unavailable",
         content_type: "application/json",
@@ -41,13 +51,20 @@ pub fn maintenance_response(project_id: &str) -> Option<CliResponse> {
     })
 }
 
-fn set_maintenance(project_id: &str, on: bool) {
+/// Is this database in a move or rollback right now (F8)?
+pub fn moving(db: &str) -> bool {
+    maint().as_ref().is_some_and(|m| m.dbs.contains(db))
+}
+
+fn set_maintenance(project_id: &str, db: &str, on: bool) {
     let mut g = maint();
-    let s = g.get_or_insert_with(HashSet::new);
+    let m = g.get_or_insert_with(Maint::default);
     if on {
-        s.insert(project_id.to_string());
+        m.doors.insert(project_id.to_string());
+        m.dbs.insert(db.to_string());
     } else {
-        s.remove(project_id);
+        m.doors.remove(project_id);
+        m.dbs.remove(db);
     }
 }
 
@@ -95,6 +112,18 @@ fn last_move_tag(conn: &rusqlite::Connection, database_id: &str) -> Option<Strin
     pj.and_then(|s| serde_json::from_str::<Value>(&s).ok()).and_then(|v| v["tag"].as_str().map(str::to_string))
 }
 
+fn grantee_projects(database_id: &str) -> Vec<String> {
+    let k2db = k2_core::db::shared();
+    let conn = k2db.lock();
+    let mut out = Vec::new();
+    if let Ok(mut st) = conn.prepare("SELECT project_id FROM sql_grants WHERE database_id = ?1 ORDER BY project_id") {
+        if let Ok(rows) = st.query_map(rusqlite::params![database_id], |r| r.get::<_, String>(0)) {
+            out.extend(rows.flatten());
+        }
+    }
+    out
+}
+
 fn vault_has(project_id: &str, name: &str) -> bool {
     use k2_vault::SecretStore as _;
     let Ok(v) = crate::vault::get() else { return false };
@@ -107,22 +136,13 @@ fn vault_has(project_id: &str, name: &str) -> bool {
 
 /// Re-mint each vaulted `DATABASE_URL`/`_TEST` that names `db` from the
 /// record (which already points at the cluster to use), under the same
-/// `k2v://` reference (V35). Owner workspace and every grantee.
+/// `k2v://` reference (V35). Owner workspace and every grantee. A vaulted
+/// URL K2 can't re-mint is reported as `skipped: …` (a warning on the
+/// move), never silently left behind (F11).
 fn remint(db: &str) -> Result<Vec<String>, (Vec<String>, String)> {
     let (database_id, owner, _) = crate::sql::ops::move_roles(db).map_err(|e| (vec![], e.hint().to_string()))?;
     let mut projects = vec![owner];
-    let grantees: Vec<String> = {
-        let k2db = k2_core::db::shared();
-        let conn = k2db.lock();
-        let mut out = Vec::new();
-        if let Ok(mut st) = conn.prepare("SELECT project_id FROM sql_grants WHERE database_id = ?1") {
-            if let Ok(rows) = st.query_map(rusqlite::params![database_id], |r| r.get::<_, String>(0)) {
-                out.extend(rows.flatten());
-            }
-        }
-        out
-    };
-    projects.extend(grantees);
+    projects.extend(grantee_projects(&database_id));
     let secrets = crate::sql::secrets::FileSecretStore::default();
     let mut done = Vec::new();
     for pid in projects {
@@ -132,8 +152,10 @@ fn remint(db: &str) -> Result<Vec<String>, (Vec<String>, String)> {
             }
             let v = match crate::sql::ops::dsn_for_project_opts(ops(), &secrets, &pid, 1, test, false) {
                 Ok(v) => v,
-                // Not this workspace's test database, etc.: nothing to do.
-                Err(_) => continue,
+                Err(e) => {
+                    done.push(format!("skipped: vault {name} ({pid}): {}", e.hint()));
+                    continue;
+                }
             };
             let names_db = v["dsn"].as_str().is_some_and(|d| d.ends_with(&format!("/{db}")) || d.contains(&format!("/{db}?")));
             if !names_db {
@@ -187,25 +209,43 @@ impl MoveEnv for K2Env {
             move_tag: last_move_tag(&conn, &database_id),
         })
     }
+    /// No record = not K2's (fail closed, F9): the owner's --allow-adopted.
     fn cluster_role(&self, m: Major) -> ClusterRole {
         match cluster::for_major(m).map(|c| c.role) {
-            Some(r) if r == "adopted" => ClusterRole::Adopted,
+            Some(r) if r == "k2" => ClusterRole::K2,
             Some(r) if r == "foreign" => ClusterRole::Foreign,
-            _ => ClusterRole::K2,
+            _ => ClusterRole::Adopted,
         }
+    }
+    fn refresh_clusters(&self) {
+        if let Err(e) = cluster::reconcile(ops()) {
+            eprintln!("[db] upgrade: clusters: {e}");
+        }
+    }
+    fn shared_with(&self, db: &str) -> Vec<String> {
+        row(db).map(|r| grantee_projects(&r.id)).unwrap_or_default()
     }
     fn logins(&self, db: &str) -> Result<Vec<(String, String)>, String> {
         crate::sql::ops::move_logins(db).map_err(|e| e.hint().to_string())
     }
+    /// The owner workspace's and every grantee workspace's running Apps (F11).
     fn users(&self, db: &str) -> Users {
         let Ok(r) = row(db) else { return Users::default() };
+        let mut projects = vec![r.project_id.clone()];
+        projects.extend(grantee_projects(&r.id));
         let k2db = k2_core::db::shared();
         let conn = k2db.lock();
-        let apps: Vec<String> = k2_core::deploy::store::owned_app_ids(&conn, &r.project_id)
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|a| crate::apps::supervisor::live_instance(a).is_some())
-            .collect();
+        let mut apps: Vec<String> = Vec::new();
+        for p in &projects {
+            apps.extend(
+                k2_core::deploy::store::owned_app_ids(&conn, p)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|a| crate::apps::supervisor::live_instance(a).is_some()),
+            );
+        }
+        apps.sort();
+        apps.dedup();
         Users { guest_doors: apps.len() as u32, apps, literal_dsns: vec![] }
     }
     fn notice(&self, db: &str, text: &str) {
@@ -224,7 +264,7 @@ impl MoveEnv for K2Env {
     }
     fn pause_doors(&self, db: &str, paused: bool) {
         if let Ok(r) = row(db) {
-            set_maintenance(&r.project_id, paused);
+            set_maintenance(&r.project_id, db, paused);
         }
     }
     fn stop_apps(&self, apps: &[String]) -> Result<Vec<String>, String> {
@@ -306,23 +346,29 @@ impl MoveEnv for K2Env {
         .map(|_| ())
         .map_err(|e| format!("record the move: {e}"))
     }
-    fn record_cluster(&self, _m: Major, _port: u16) {
-        if let Err(e) = cluster::reconcile(ops()) {
-            eprintln!("[db] upgrade: clusters: {e}");
-        }
-    }
-    fn progress(&self, p: &MoveProgress) {
-        let Ok(r) = row(&p.db) else { return };
-        let state = serde_json::to_value(p.state).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
-        let pj = serde_json::to_string(p).unwrap_or_default();
+    /// The cluster K2 just created is K2's (`created`), never "adopted".
+    fn record_cluster(&self, m: Major, port: u16) {
         let k2db = k2_core::db::shared();
         let conn = k2db.lock();
-        let _ = conn.execute(
+        if let Err(e) = cluster::record_in(&conn, &cluster::Cluster::layout(m, port, "created"), false) {
+            eprintln!("[db] upgrade: record cluster {m}: {e}");
+        }
+    }
+    fn progress(&self, p: &MoveProgress) -> Result<(), String> {
+        let r = row(&p.db)?;
+        let state = serde_json::to_value(p.state).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
+        let pj = serde_json::to_string(p).map_err(|e| e.to_string())?;
+        let kind = if p.kind == "rollback" { "rollback" } else { "move" };
+        let k2db = k2_core::db::shared();
+        let conn = k2db.lock();
+        conn.execute(
             "INSERT INTO sql_moves (id, database_id, db, from_major, to_major, method, kind, state, progress_json, actor, started_at, finished_at, last_error) \
-             VALUES (?1, ?2, ?3, ?4, ?5, 'copy', 'move', ?6, ?7, ?8, ?9, ?10, ?11) \
+             VALUES (?1, ?2, ?3, ?4, ?5, 'copy', ?12, ?6, ?7, ?8, ?9, ?10, ?11) \
              ON CONFLICT(id) DO UPDATE SET state = ?6, progress_json = ?7, finished_at = ?10, last_error = ?11",
-            rusqlite::params![p.id, r.id, p.db, p.from as i64, p.to as i64, state, pj, p.actor, p.started_at, p.finished_at, p.last_error],
-        );
+            rusqlite::params![p.id, r.id, p.db, p.from as i64, p.to as i64, state, pj, p.actor, p.started_at, p.finished_at, p.last_error, kind],
+        )
+        .map(|_| ())
+        .map_err(|e| format!("sql_moves: {e}"))
     }
     fn audit(&self, act: &str, line: Value) {
         k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(act, &self.actor, line.to_string(), "-", "-", "api"));
@@ -340,9 +386,11 @@ impl MoveEnv for K2Env {
 fn err(status: u16, code: &str, hint: impl Into<String>) -> CliResponse {
     let s = match status {
         400 => "400 Bad Request",
+        401 => "401 Unauthorized",
         403 => "403 Forbidden",
         404 => "404 Not Found",
         409 => "409 Conflict",
+        429 => "429 Too Many Requests",
         503 => "503 Service Unavailable",
         _ => "500 Internal Server Error",
     };
@@ -409,18 +457,55 @@ fn helper_ok() -> bool {
     crate::sql::sysops::pgmajor_gate().is_ok()
 }
 
+/// One move or rollback per database per hour for an agent (F7).
+pub const AGENT_COOLDOWN_SECS: i64 = 3600;
+
+fn recent_attempt(db: &str, now: i64) -> Option<i64> {
+    let k2db = k2_core::db::shared();
+    let conn = k2db.lock();
+    conn.query_row(
+        "SELECT max(started_at) FROM sql_moves WHERE db = ?1 AND started_at > ?2 AND state <> 'aborted'",
+        rusqlite::params![db, now - AGENT_COOLDOWN_SECS],
+        |r| r.get::<_, Option<i64>>(0),
+    )
+    .ok()
+    .flatten()
+}
+
+/// Shell tabs aren't the agent: a Member at a K2 shell would otherwise get
+/// the agent's switch (review #2 F11). An unknown session is sandboxed
+/// (fail closed, F10).
+pub fn classify(who: &crate::compute_routes::Who, local: bool) -> Who {
+    use crate::compute_routes::Who as C;
+    match who {
+        C::Shell { .. } => Who::Other,
+        C::Agent { session_id, .. } if !session_known(session_id) => Who::Other,
+        _ => Who::from_compute(who, local),
+    }
+}
+
+fn session_known(session_id: &str) -> bool {
+    if cfg!(test) {
+        return true;
+    }
+    crate::v2_session_map::snapshot().into_iter().any(|(_, s)| s.session_id.to_string() == session_id)
+}
+
 /// `GET|POST /cli/db/upgrade`.
 pub fn handle(who: Who, is_post: bool, body: &[u8], params: &HashMap<String, String>) -> CliResponse {
-    if !crate::sql::sql_supported() {
-        return err(503, "unsupported", "Postgres runs on Linux deployments only");
-    }
     if !is_post {
-        return status(params.get("db").map(String::as_str));
+        return handle_get(&who, params.get("db").map(String::as_str));
     }
     let req = match request::parse(body) {
         Ok(r) => r,
         Err(e) => return err(400, "usage", e),
     };
+    if matches!(who, Who::Other | Who::Member { .. }) {
+        return err(403, versions_access::OWNER_ONLY, "moving a database needs the owner, or an agent with \"Allow this agent to manage Postgres versions\"");
+    }
+    if !crate::sql::sql_supported() {
+        return err(503, "unsupported", "Postgres runs on Linux deployments only");
+    }
     let label = who.label();
     if req.act == Act::AcknowledgeFailed {
         if let Err(r) = versions_access::decide(&who, VersionsAct::AcknowledgeFailed, None, false, false) {
@@ -444,6 +529,22 @@ pub fn handle(who: Who, is_post: bool, body: &[u8], params: &HashMap<String, Str
             }
         }
     }
+    // Boot recovery first (F6).
+    if worker::recovering() {
+        return err(409, "recovering", "K2 is finishing or undoing a move the last daemon was in; try again in a minute");
+    }
+    let is_agent = matches!(who, Who::Agent { .. });
+    if is_agent && matches!(req.act, Act::Move | Act::Rollback) {
+        for (db, _) in &dbs {
+            if let Some(at) = recent_attempt(db, now_secs()) {
+                return err(
+                    429,
+                    "cooldown",
+                    format!("{db} moved or rolled back less than an hour ago (at {at}); an agent waits an hour between them"),
+                );
+            }
+        }
+    }
     let opts = MoveOpts { to: Some(to), actor: label.clone(), now: req.now, allow_adopted: req.allow_adopted, helper_ok: helper_ok() };
     let helper = crate::root_helper::RealDoor;
     match req.act {
@@ -463,7 +564,7 @@ pub fn handle(who: Who, is_post: bool, body: &[u8], params: &HashMap<String, Str
             let first = dbs[0].0.clone();
             let busy = match worker::begin(&first) {
                 Ok(b) => b,
-                Err(e) => return err(409, if e.starts_with("busy") { "upgrade_in_progress" } else { "failed_latched" }, e),
+                Err(e) => return err(409, worker::refusal_code(&e), e),
             };
             let names: Vec<String> = dbs.iter().map(|d| d.0.clone()).collect();
             let started = names.clone();
@@ -497,22 +598,34 @@ pub fn handle(who: Who, is_post: bool, body: &[u8], params: &HashMap<String, Str
             let db = dbs[0].0.clone();
             let _busy = match worker::begin(&db) {
                 Ok(b) => b,
-                Err(e) => return err(409, "upgrade_in_progress", e),
+                Err(e) => return err(409, worker::refusal_code(&e), e),
             };
             let ops = super::helper_ops::HelperOps { door: &helper };
             let env = K2Env { actor: label.clone() };
-            match rollback(&ops, &env, &db, &RollbackOpts { actor: label, yes: req.yes, now: req.now }) {
-                Ok(v) => ok(v),
+            let owner = matches!(who, Who::Owner);
+            match rollback(&ops, &env, &db, &RollbackOpts { actor: label, yes: req.yes, now: req.now, owner }) {
+                Ok(p) => {
+                    worker::settle(&p);
+                    if p.state == MoveState::Succeeded {
+                        ok(serde_json::to_value(&p).unwrap_or(Value::Null))
+                    } else {
+                        err(409, "rollback_stopped", p.last_error.unwrap_or_default())
+                    }
+                }
                 Err(e) => err(409, e.split(':').next().unwrap_or("refused"), e.clone()),
             }
         }
         Act::ForgetOld => {
             let db = dbs[0].0.clone();
-            let busy = worker::busy().is_some();
+            // The move lock, held (F12).
+            let _busy = match worker::begin(&db) {
+                Ok(b) => b,
+                Err(e) => return err(409, worker::refusal_code(&e), e),
+            };
             let ops = super::helper_ops::HelperOps { door: &helper };
             let env = K2Env { actor: label.clone() };
             let owner = matches!(who, Who::Owner);
-            match forget_old(&ops, &env, &db, &ForgetOpts { actor: label, owner, force_now: req.force_now, move_busy: busy }) {
+            match forget_old(&ops, &env, &db, &ForgetOpts { actor: label, owner, force_now: req.force_now }) {
                 Ok(v) => ok(v),
                 Err(e) => err(409, e.split(':').next().unwrap_or("refused"), e.clone()),
             }
@@ -521,34 +634,73 @@ pub fn handle(who: Who, is_post: bool, body: &[u8], params: &HashMap<String, Str
     }
 }
 
-/// `GET /cli/db/upgrade[?db=]`: the worker, the latch, recent moves.
-pub fn status(db: Option<&str>) -> CliResponse {
+/// `GET /cli/db/upgrade[?db=]` (review #2 F3): the owner and Admin logins
+/// see every move; an agent with the switch sees only its own databases'
+/// rows; everyone else is refused. Verify's diff (policy bodies, counts)
+/// is the owner's only.
+fn handle_get(who: &Who, db: Option<&str>) -> CliResponse {
+    let filter_project: Option<String> = match who {
+        Who::Owner => None,
+        Who::Admin { .. } => None,
+        Who::Agent { project_id, .. } => {
+            let on = versions_access::switch_on(project_id);
+            if let Err(r) = versions_access::decide(who, VersionsAct::Check, Some(project_id), false, on) {
+                return err(r.status, r.code, r.hint);
+            }
+            Some(project_id.clone())
+        }
+        Who::Member { .. } | Who::Other => {
+            return err(403, versions_access::OWNER_ONLY, "move progress is the owner's, an Admin's, or an agent's own (with its switch)")
+        }
+    };
+    let owner = matches!(who, Who::Owner);
+    status(db, filter_project.as_deref(), owner)
+}
+
+/// The worker, the latch, recent moves (filtered to `project` when set).
+pub fn status(db: Option<&str>, project: Option<&str>, owner: bool) -> CliResponse {
     let k2db = k2_core::db::shared();
     let conn = k2db.lock();
     let mut moves = Vec::new();
     if let Ok(mut st) = conn.prepare(
-        "SELECT progress_json FROM sql_moves WHERE (?1 IS NULL OR db = ?1) ORDER BY started_at DESC LIMIT 20",
+        "SELECT m.progress_json FROM sql_moves m LEFT JOIN sql_databases d ON d.id = m.database_id \
+         WHERE (?1 IS NULL OR m.db = ?1) AND (?2 IS NULL OR d.project_id = ?2) ORDER BY m.started_at DESC LIMIT 20",
     ) {
-        if let Ok(rows) = st.query_map(rusqlite::params![db], |r| r.get::<_, Option<String>>(0)) {
+        if let Ok(rows) = st.query_map(rusqlite::params![db, project], |r| r.get::<_, Option<String>>(0)) {
             for pj in rows.flatten().flatten() {
-                if let Ok(v) = serde_json::from_str::<Value>(&pj) {
+                if let Ok(mut v) = serde_json::from_str::<Value>(&pj) {
+                    if !owner {
+                        if let Some(o) = v.as_object_mut() {
+                            o.remove("diff");
+                        }
+                    }
                     moves.push(v);
                 }
             }
         }
     }
-    ok(json!({"busy": worker::busy(), "failed": worker::failed(), "moves": moves}))
+    let (busy, failed) = if project.is_none() { (worker::busy(), worker::failed()) } else { (None, None) };
+    ok(json!({"busy": busy, "failed": failed, "recovering": worker::recovering(), "moves": moves}))
 }
 
-/// Once per boot: a move the last daemon died in is undone before its
-/// switch, finished after it (§13 last row).
+/// Once per boot, before any new move is taken (F6): the latch comes back
+/// from the newest unacknowledged failed row; a move or rollback the last
+/// daemon died in is undone before its switch, finished after it. Rollback
+/// copies past the window are swept (F7).
 pub fn recover_at_boot() {
+    worker::set_recovering(true);
+    {
+        let k2db = k2_core::db::shared();
+        let conn = k2db.lock();
+        worker::load_latch(&conn);
+    }
     let open: Vec<MoveProgress> = {
         let k2db = k2_core::db::shared();
         let conn = k2db.lock();
         let mut v = Vec::new();
         if let Ok(mut st) = conn.prepare(
-            "SELECT progress_json FROM sql_moves WHERE state IN ('queued','checking','copying','verifying','switching','interrupted')",
+            "SELECT progress_json FROM sql_moves WHERE state IN ('queued','checking','copying','verifying','switching','interrupted') \
+             ORDER BY started_at",
         ) {
             if let Ok(rows) = st.query_map([], |r| r.get::<_, Option<String>>(0)) {
                 for pj in rows.flatten().flatten() {
@@ -560,10 +712,16 @@ pub fn recover_at_boot() {
         }
         v
     };
+    let door = crate::root_helper::RealDoor;
+    let ops = super::helper_ops::HelperOps { door: &door };
     for p in open {
-        let Ok(busy) = worker::begin(&p.db) else { continue };
-        let door = crate::root_helper::RealDoor;
-        let ops = super::helper_ops::HelperOps { door: &door };
+        // Nothing else takes the worker while recovering; never skip a row.
+        let busy = loop {
+            match worker::begin_recovery(&p.db) {
+                Ok(b) => break b,
+                Err(_) => std::thread::sleep(std::time::Duration::from_secs(1)),
+            }
+        };
         let env = K2Env { actor: format!("recovery ({})", p.actor) };
         let db = p.db.clone();
         let done = recover(&ops, &env, p);
@@ -571,6 +729,35 @@ pub fn recover_at_boot() {
         drop(busy);
         eprintln!("[db] upgrade {db}: recovered after a restart → {:?}", done.state);
     }
+    for d in sweep_rollback_copies(&ops, now_secs()) {
+        eprintln!("[db] upgrade: dropped the rollback copy {d} (past 14 days)");
+    }
+    worker::set_recovering(false);
+}
+
+/// Boot: recover before anything else may move (F6). Waits for the sidecar
+/// to report running; moves answer `409 recovering` meanwhile.
+pub fn spawn_boot_recovery() {
+    if !crate::sql::sql_supported() {
+        return;
+    }
+    worker::set_recovering(true);
+    let _ = std::thread::Builder::new().name("db-upgrade-recovery".into()).spawn(|| {
+        loop {
+            if crate::sql::supervisor::current_status().as_deref() == Some("running") {
+                break;
+            }
+            // No sidecar: nothing can move either; no rows can be open.
+            if crate::sql::supervisor::current_status().is_none() {
+                worker::set_recovering(false);
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_secs(5));
+        }
+        if std::panic::catch_unwind(recover_at_boot).is_err() {
+            eprintln!("[db] upgrade: boot recovery panicked; moves stay blocked (recovering)");
+        }
+    });
 }
 
 #[cfg(test)]
@@ -603,13 +790,105 @@ mod tests {
     }
 
     #[test]
-    fn the_guest_doors_pause_per_workspace() {
-        set_maintenance("w1", true);
+    fn the_guest_doors_pause_per_workspace_and_the_db_is_locked() {
+        set_maintenance("w1", "ws_one", true);
         let r = maintenance_response("w1").expect("paused");
         assert!(r.status.starts_with("503"));
         assert!(r.body.contains("db_maintenance") && r.body.contains("retryAfter"));
+        assert!(moving("ws_one"));
         assert!(maintenance_response("w2").is_none());
-        set_maintenance("w1", false);
+        assert!(!moving("ws_two"));
+        set_maintenance("w1", "ws_one", false);
         assert!(maintenance_response("w1").is_none());
+        assert!(!moving("ws_one"));
+    }
+
+    /// Shell tabs never get the agent's switch (F11).
+    #[test]
+    fn shell_tabs_are_not_the_agent() {
+        use crate::compute_routes::Who as C;
+        assert_eq!(classify(&C::Shell { project_id: "w".into(), session_id: "s".into() }, true), Who::Other);
+        assert!(matches!(classify(&C::Agent { project_id: "w".into(), session_id: "s".into() }, true), Who::Agent { .. }));
+        assert_eq!(classify(&C::Owner, false), Who::Owner);
+        assert_eq!(classify(&C::Wrong, true), Who::Other);
+        assert_eq!(classify(&C::Invalid, true), Who::Other);
+    }
+
+    fn seed_moves() -> (crate::test_support::TempHome, k2_core::test_env::SerialGuard) {
+        let home = crate::test_support::TempHome::new();
+        let g = crate::sql::sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        for (id, name, project) in [("d1", "ws_mine", "w-mine"), ("d2", "ws_theirs", "w-theirs")] {
+            conn.execute(
+                "INSERT INTO sql_databases (id, project_id, name, status, created_at) VALUES (?1, ?2, ?3, 'active', 1)",
+                rusqlite::params![id, project, name],
+            )
+            .unwrap();
+            let pj = json!({"id": format!("mv_{name}"), "db": name, "diff": ["policies public.t.p: secret qual"], "state": "aborted"});
+            conn.execute(
+                "INSERT INTO sql_moves (id, database_id, db, from_major, to_major, state, progress_json, actor, started_at) \
+                 VALUES (?1, ?2, ?3, 16, 17, 'aborted', ?4, 'owner', 10)",
+                rusqlite::params![format!("mv_{name}"), id, name, pj.to_string()],
+            )
+            .unwrap();
+        }
+        (home, g)
+    }
+
+    fn body(r: &CliResponse) -> Value {
+        serde_json::from_str(&r.body).unwrap()
+    }
+
+    /// Review #2 F3: GET is gated and filtered.
+    #[test]
+    fn get_is_gated_and_filtered_to_the_caller() {
+        let (_home, _g) = seed_moves();
+        let params = HashMap::new();
+        // No token, App pass, API key (Other) and Member logins: refused.
+        for who in [Who::Other, Who::Member { username: "m".into() }] {
+            let r = handle(who.clone(), false, b"", &params);
+            assert!(r.status.starts_with("403"), "{who:?}: {}", r.status);
+            assert!(!r.body.contains("ws_mine") && !r.body.contains("ws_theirs"), "{}", r.body);
+        }
+        // The owner sees everything, diff included.
+        let v = body(&handle(Who::Owner, false, b"", &params));
+        assert_eq!(v["moves"].as_array().unwrap().len(), 2);
+        assert!(v.to_string().contains("secret qual"));
+        // An Admin sees every row, never the diff.
+        let v = body(&handle(Who::Admin { username: "a".into() }, false, b"", &params));
+        assert_eq!(v["moves"].as_array().unwrap().len(), 2);
+        assert!(!v.to_string().contains("secret qual"), "{v}");
+        // An agent: refused without its switch, its own rows only with it.
+        let agent = Who::Agent { project_id: "w-mine".into(), session_id: "s".into(), local: true, sandboxed: false };
+        let r = handle(agent.clone(), false, b"", &params);
+        assert!(r.status.starts_with("403"), "switch off: {}", r.status);
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO projects (id, name, path, handle) VALUES ('w-mine', 'mine', '/tmp/k2-pgb-w-mine', 'mine')",
+                [],
+            )
+            .unwrap();
+            assert_eq!(
+                conn.execute("UPDATE projects SET agents_can_upgrade_postgres = 1 WHERE id = 'w-mine'", []).unwrap(),
+                1
+            );
+        }
+        let v = body(&handle(agent, false, b"", &params));
+        let moves = v["moves"].as_array().unwrap();
+        assert_eq!(moves.len(), 1, "{v}");
+        assert_eq!(moves[0]["db"], "ws_mine");
+        assert!(!v.to_string().contains("ws_theirs") && !v.to_string().contains("secret qual"), "{v}");
+        // A sandboxed or remote passport: refused.
+        let remote = Who::Agent { project_id: "w-mine".into(), session_id: "s".into(), local: false, sandboxed: false };
+        assert!(handle(remote, false, b"", &params).status.starts_with("403"));
+        let boxed = Who::Agent { project_id: "w-mine".into(), session_id: "s".into(), local: true, sandboxed: true };
+        assert!(handle(boxed, false, b"", &params).status.starts_with("403"));
+        // POST from nobody: refused before anything.
+        let r = handle(Who::Other, true, br#"{"db":"ws_mine","check":true}"#, &params);
+        assert!(r.status.starts_with("403"), "{}", r.status);
     }
 }

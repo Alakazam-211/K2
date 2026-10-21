@@ -122,7 +122,29 @@ fn cluster_of(db_name: &str) -> Result<Cluster, OpsError> {
     cluster::for_db(db_name).map_err(OpsError::NotReady)
 }
 
+/// A database in a `k2 db upgrade` move or rollback: K2's own superuser
+/// paths (migrate, drop, grant, revoke, bind, restore, rotate, the boot
+/// seal) wait for it (PG-B security review #2 F8).
+fn refuse_if_moving(db_name: &str) -> Result<(), OpsError> {
+    if super::pgmove::k2::moving(db_name) {
+        return Err(OpsError::NotReady(format!(
+            "db_maintenance: {db_name} is moving to another Postgres major; try again after the move"
+        )));
+    }
+    Ok(())
+}
+
 /// SQL as postgres through the helper on `cl` (`psql [--cluster M] -d db`).
+///
+/// Every superuser session inside a tenant database starts with
+/// `search_path` pinned to pg_catalog (security review #2 F1): the
+/// database's owner (an agent's migrator) can create functions,
+/// operators and `ALTER DATABASE … SET search_path`, and an overload such
+/// as `public.format(text, text)` would otherwise run as the superuser
+/// (CVE-2018-1058 class). The protocol-9 helper pins it too
+/// (`PGOPTIONS`); this covers older helpers and the legacy pg helper.
+/// The `postgres` database is K2's own (tenants can't create objects
+/// there) and its answers are parsed, so it is left as it is.
 fn su_psql(
     ops: &dyn SystemOps,
     cl: &Cluster,
@@ -130,8 +152,21 @@ fn su_psql(
     flags: &[&str],
     stdin: Option<&[u8]>,
 ) -> Result<String, OpsError> {
-    cl.helper_psql(ops, db, flags, stdin).map_err(OpsError::Engine)
+    if db == "postgres" {
+        return cl.helper_psql(ops, db, flags, stdin).map_err(OpsError::Engine);
+    }
+    let pinned = pin_search_path(stdin.unwrap_or_default());
+    cl.helper_psql(ops, db, flags, Some(&pinned)).map_err(OpsError::Engine)
 }
+
+/// `SET search_path = pg_catalog, pg_temp;` ahead of the SQL.
+pub(crate) fn pin_search_path(sql: &[u8]) -> Vec<u8> {
+    let mut v = PIN_SEARCH_PATH.as_bytes().to_vec();
+    v.extend_from_slice(sql);
+    v
+}
+
+pub(crate) const PIN_SEARCH_PATH: &str = "SET search_path = pg_catalog, pg_temp;\n";
 
 /// Sanitize a project UUID into a Postgres identifier fragment.
 pub fn pg_ident_for_project(project_id: &str) -> String {
@@ -614,6 +649,7 @@ pub fn seal_existing_databases(ops: &dyn SystemOps) -> Vec<String> {
     };
     names
         .into_iter()
+        .filter(|name| !super::pgmove::k2::moving(name))
         .map(|name| match ensure_k2_helpers_db(ops, &name) {
             Ok(()) => format!("{name}: sealed"),
             Err(e) => format!("{name}: not sealed ({})", e.hint()),
@@ -1182,21 +1218,21 @@ fn create_database_inner(
          GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO {agent};\n\
          ALTER DEFAULT PRIVILEGES FOR ROLE {migrator} IN SCHEMA public \
            GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO {agent};\n\
-         CREATE TABLE IF NOT EXISTS _k2_migrations (\n\
+         CREATE TABLE IF NOT EXISTS public._k2_migrations (\n\
            version TEXT PRIMARY KEY,\n\
            checksum TEXT NOT NULL DEFAULT '',\n\
            applied_at TIMESTAMPTZ NOT NULL DEFAULT now()\n\
          );\n\
-         CREATE TABLE IF NOT EXISTS _k2_store (\n\
+         CREATE TABLE IF NOT EXISTS public._k2_store (\n\
            collection TEXT NOT NULL,\n\
            id TEXT NOT NULL,\n\
            doc JSONB NOT NULL,\n\
            updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),\n\
            PRIMARY KEY (collection, id)\n\
          );\n\
-         ALTER TABLE _k2_migrations OWNER TO {migrator};\n\
-         ALTER TABLE _k2_store OWNER TO {migrator};\n\
-         GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE _k2_migrations, _k2_store TO {agent};\n\
+         ALTER TABLE public._k2_migrations OWNER TO {migrator};\n\
+         ALTER TABLE public._k2_store OWNER TO {migrator};\n\
+         GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public._k2_migrations, public._k2_store TO {agent};\n\
          {helpers}\n\
          ALTER SCHEMA k2 OWNER TO {migrator};\n\
          {fn_owner}\n\
@@ -1505,7 +1541,7 @@ fn grant_agent_k2_tables(ops: &dyn SystemOps, db: &str) -> Result<(), OpsError> 
     let agent = pg_quote_ident(&agent_role_for_db(db));
     let sql = format!(
         "GRANT USAGE ON SCHEMA public TO {agent};\n\
-         GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE _k2_migrations, _k2_store TO {agent};"
+         GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public._k2_migrations, public._k2_store TO {agent};"
     );
     su_psql(ops, &cluster_of(db)?, db, &["-v", "ON_ERROR_STOP=1"], Some(sql.as_bytes()))?;
     Ok(())
@@ -1586,6 +1622,7 @@ pub fn migrate(
 ) -> Result<serde_json::Value, OpsError> {
     require_running()?;
     let row = active_row(project_id)?;
+    refuse_if_moving(&row.name)?;
     let (user, pw) = migrator_creds(secrets, &row)?;
     let rel = dir.unwrap_or(".k2/db/migrations");
     // Absolute `dir` replaces `ws_path` (std::path::Path::join).
@@ -2052,6 +2089,7 @@ pub fn restore(
         }
         Err(e) => return Err(e),
     };
+    refuse_if_moving(&row.name)?;
     replay_grants_for_restore(ops, secrets, &row, ws_path, file, &src)?;
     let (user, pw) = migrator_creds(secrets, &row)?;
     let cl = cluster_of(&row.name)?;
@@ -2080,6 +2118,7 @@ pub fn restore(
 pub fn drop_database(ops: &dyn SystemOps, project_id: &str) -> Result<serde_json::Value, OpsError> {
     require_running()?;
     let row = active_row(project_id)?;
+    refuse_if_moving(&row.name)?;
     let sql = format!(
         "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = {name};\n\
          DROP DATABASE IF EXISTS {ident};",
@@ -2247,6 +2286,10 @@ pub fn rotate_db_role_passwords(ops: &dyn SystemOps) -> Vec<String> {
     // vault changes, and back to the old one if any cluster refuses.
     let clusters = cluster::k2_clusters();
     for (name, agent_ref, mig_ref) in rows {
+        if super::pgmove::k2::moving(&name) {
+            out.push(format!("{name}: skipped (moving to another Postgres major)"));
+            continue;
+        }
         for (role, sref) in [(format!("{name}_agent"), agent_ref), (format!("{name}_migrator"), mig_ref)] {
             let Some(sref) = sref.filter(|s| !s.is_empty()) else { continue };
             match rotate_role_everywhere(ops, &clusters, &role, &sref, &store) {
@@ -2773,6 +2816,7 @@ pub fn grant_access(
     let level = validate_level(level)?;
     let relations = normalize_relations(relations)?;
     let row = find_database(db_spec, caller_project)?;
+    refuse_if_moving(&row.name)?;
     if !caller_can_manage(caller_project, &row) {
         return Err(OpsError::Forbidden(
             "requires owner or can_manage on this database — ask your human".into(),
@@ -2860,6 +2904,7 @@ pub fn revoke_access(
 ) -> Result<serde_json::Value, OpsError> {
     require_running()?;
     let row = find_database(db_spec, caller_project)?;
+    refuse_if_moving(&row.name)?;
     if !caller_can_manage(caller_project, &row) {
         return Err(OpsError::Forbidden(
             "requires owner or can_manage on this database — ask your human".into(),
@@ -2941,6 +2986,7 @@ pub fn bind_role(
             "bind requires --db or a workspace (k2 db bind --role <pg_role>)".into(),
         ));
     };
+    refuse_if_moving(&row.name)?;
     let bind = validate_bind_role(role)?;
     {
         let db = k2_core::db::shared();

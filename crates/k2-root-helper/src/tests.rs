@@ -952,6 +952,8 @@ fn psql_runs_through_runuser_with_an_argv_array() {
             "-u",
             "postgres",
             "--",
+            "/usr/bin/env",
+            "PGOPTIONS=-c search_path=pg_catalog,pg_temp",
             "/usr/bin/psql",
             "-X",
             "-d",

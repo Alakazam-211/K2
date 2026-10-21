@@ -56,6 +56,11 @@
 //! enough: the pass can already read that agent in `GET /cli/skin/agents`.
 //! The app refetches `skin/agents` (or `GET /cli/agent/identity`). An
 //! owner/Connect socket gets it for its own room only.
+//!
+//! Read frames (app-read-state-v1, 0.46.3): a pass holding `thread:read`
+//! in the room gets `{"kind":"read","workspace",…}` ([`read_frame_json`])
+//! when its OWN reader's cursor or mute moves in the room's Thread on any
+//! surface (another session, device, App or door of the same guest).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -111,6 +116,19 @@ pub fn rooms_changed_reaches(skin_pass: Option<&SkinPass>, socket_room: &str, ch
         Some(pass) => pass.has_room(changed),
         None => changed == socket_room,
     }
+}
+
+/// app-read-state-v1 (0.46.3) — a pass's own read cursor or mute moved in
+/// this room's Thread (on any surface): `{"kind":"read","workspace":
+/// "<handle>", id, addr, lastReadSeq, lastSeq, unread, waiting, muted,
+/// mutedUntil?, total, waitingTotal}`. Totals are over the pass's own
+/// rooms only (R3). Only a socket whose pass holds `thread:read` in the
+/// room gets it; owner/Connect sockets read `thread_read` on
+/// `/cli/sessions/events` instead.
+pub fn read_frame_json(wire_workspace: &str, mut body: serde_json::Map<String, serde_json::Value>) -> String {
+    body.insert("kind".into(), serde_json::json!("read"));
+    body.insert("workspace".into(), serde_json::json!(wire_workspace));
+    serde_json::Value::Object(body).to_string()
 }
 
 /// Room-scope R9 (0.46.1) — the room's access list may have changed: a
@@ -599,6 +617,13 @@ pub async fn serve_activity_events_connection(
     let want_members = skin_pass.as_ref().is_none_or(|p| p.has_cap_in_room(&project_id, k2_core::skin::CAP_ROOM_MEMBERS));
     let link_app = crate::apps::gateway::current().map(|l| l.app_id.clone());
     crate::apps::surfaces::install_listener();
+    // app-read-state-v1 (0.46.3): a pass with `thread:read` in this room
+    // hears its own reader's cursor or mute moving in the room's Thread.
+    let read_key = skin_pass
+        .as_ref()
+        .filter(|p| p.has_cap_in_room(&project_id, k2_core::skin::CAP_THREAD_READ))
+        .map(crate::read_routes::guest_person_key);
+    let mut read_rx = crate::read_live::subscribe_guest();
 
     let ws = match tokio_tungstenite::accept_async(&mut *stream).await {
         Ok(ws) => ws,
@@ -667,6 +692,25 @@ pub async fn serve_activity_events_connection(
                     Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
                     Some(Ok(Message::Pong(_))) | Some(Ok(Message::Text(_)))
                     | Some(Ok(Message::Binary(_))) | Some(Ok(Message::Frame(_))) => {}
+                }
+            }
+            moved = crate::read_live::next_guest_move(&mut read_rx, read_key.as_deref()) => {
+                let Some(pass) = skin_pass.clone() else { continue };
+                let room = project_id.clone();
+                let frame = tokio::task::spawn_blocking(move || {
+                    // Only this room's Thread (its pinned Chat), R3.
+                    if crate::overlay_routes::pinned_chat_of(&room).as_deref() != Some(moved.conversation_id.as_str()) {
+                        return None;
+                    }
+                    crate::read_routes::guest_read_frame(&pass, &moved.conversation_id)
+                })
+                .await
+                .ok()
+                .flatten();
+                if let Some(body) = frame {
+                    if write.send(Message::Text(read_frame_json(&wire_workspace, body))).await.is_err() {
+                        break;
+                    }
                 }
             }
             event = rx.recv() => {

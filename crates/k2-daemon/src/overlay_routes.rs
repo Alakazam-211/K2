@@ -300,6 +300,31 @@ pub(crate) fn guest_room_threads(pass: &SkinPass) -> Vec<(String, String)> {
     out
 }
 
+/// A room's pinned Chat conversation id, if it has one.
+pub(crate) fn pinned_chat_of(project_id: &str) -> Option<String> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    pinned_chat_id(&conn, project_id).ok().flatten()
+}
+
+/// The room handle a conversation answers at when it is its room's pinned
+/// Chat (the address an App and a Garden name it by); `None` for any other
+/// conversation (a sidecar's, a removed room's).
+pub(crate) fn address_of_conversation(conn: &rusqlite::Connection, conversation_id: &str) -> Option<String> {
+    let project_id: String = conn
+        .query_row(
+            "SELECT project_id FROM overlay_conversations WHERE conversation_id = ?1",
+            rusqlite::params![conversation_id],
+            |r| r.get(0),
+        )
+        .ok()?;
+    let pin = pinned_chat_id(conn, &project_id).ok()??;
+    if pin != conversation_id {
+        return None;
+    }
+    k2_core::workspace_session_handles::workspace_address_name(conn, &project_id).ok()
+}
+
 fn resolve_thread_addr(addr: &str) -> Result<ResolvedOverlay, CliResponse> {
     if let Some(pass) = request_skin() {
         return resolve_skin_thread_addr(addr, &pass);

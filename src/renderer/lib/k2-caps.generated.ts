@@ -26,7 +26,7 @@ export const K2_CAPS = {
   'thread:read': {
     label: 'Read the Thread',
     sentence: "Read your conversations with the agents in {where}, including each one's last message.",
-    exposure: ['widget', 'app'],
+    exposure: ['widget', 'app', 'garden-local'],
   },
   'thread:post': {
     label: 'Post to the Thread',
@@ -42,10 +42,22 @@ export const K2_CAPS = {
   'gardens:manage': { label: 'Create, rename and delete Gardens', exposure: [] },
   'gardens:template': { label: 'Turn this Garden into a built-in page', exposure: [] },
   'app:navigate': { label: 'Switch the rail view', exposure: [] },
-  'files:read': { label: 'Read files (also shows heartbeat instructions)', exposure: ['app'] },
+  'files:read': {
+    label: 'Read files (also shows heartbeat instructions)',
+    sentence: "Read files in the agents' rooms on this computer (the room's files, never a path outside it).",
+    exposure: ['app', 'garden-local'],
+  },
   'files:write': { label: "Write files (not the agent's .k2 folder)", exposure: ['app'] },
-  'tickets:read': { label: 'Read tickets and get live ticket updates', exposure: ['app'] },
-  'tickets:post': { label: 'Open, answer, assign and set status on tickets', exposure: ['app'] },
+  'tickets:read': {
+    label: 'Read tickets and get live ticket updates',
+    sentence: "Read the tickets in the agents' rooms on this computer, with their comments.",
+    exposure: ['app', 'garden-local'],
+  },
+  'tickets:post': {
+    label: 'Open, answer, assign and set status on tickets',
+    sentence: 'Open tickets for the agents on this computer, comment on them and set their status, as you.',
+    exposure: ['app', 'garden-local'],
+  },
   'wiki:read': { label: 'Read the wiki', exposure: ['app'] },
   'store:read': {
     label: 'Read the workspace store',
@@ -62,7 +74,11 @@ export const K2_CAPS = {
     sentence: "See and change which rooms an App's guests can reach on this computer. Every change asks you first, outside the widget.",
     exposure: ['app', 'garden-local'],
   },
-  'activity:read': { label: 'See when the agent is working', exposure: ['app'] },
+  'activity:read': {
+    label: 'See when the agent is working',
+    sentence: 'See when the agents on this computer are working (no tool names, text or paths).',
+    exposure: ['app', 'garden-local'],
+  },
   'heartbeats:read': { label: 'See heartbeats: schedule, next fire, history', exposure: ['app'] },
   'heartbeats:write': { label: 'Add, edit, turn on or off, archive and fire heartbeats', exposure: ['app'] },
   'agent:identity': { label: "Change the agent's name, color and picture", exposure: ['app'] },
@@ -78,6 +94,6 @@ export const K2_CAPS = {
 export type K2Cap = keyof typeof K2_CAPS
 
 /** Caps a custom widget may ask for (= the Rust `USER_WIDGET_CAPS`). */
-export const USER_WIDGET_CAPS = ['agents:read', 'presence:read', 'thread:read', 'thread:post', 'sources:read', 'store:read', 'store:write', 'guests:rooms', 'room:members'] as const
+export const USER_WIDGET_CAPS = ['agents:read', 'presence:read', 'thread:read', 'thread:post', 'sources:read', 'files:read', 'tickets:read', 'tickets:post', 'store:read', 'store:write', 'guests:rooms', 'activity:read', 'room:members'] as const
 
 export type UserWidgetCap = (typeof USER_WIDGET_CAPS)[number]

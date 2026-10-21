@@ -110,21 +110,58 @@ fn exposure_counts_are_pinned() {
     // thread.open, thread.links, thread.pickFiles and thread.markRead (was
     // none, UW51); app + thread.attachmentGet, thread.catchup,
     // thread.setRead, thread.unread and files.resolveLinks.
+    // Guest read state + Garden person rows (0.46.3, catalog v17): app +
+    // thread.mute (app-read-state-v1, on both transports); garden-local +
+    // thread.mute and 11 App rows that joined the Garden door
+    // (garden-person-rows-v1): thread.catchup, thread.unread,
+    // tickets.list/show/create/comment/resolve, activity.snapshot,
+    // files.list/read/readBinary. No project chat row on the Garden.
     let garden_local = c.verbs_exposed_to(Exposure::GardenLocal).len();
-    assert_eq!((widget, app, garden_local), (29, 71, 21), "per-exposure verb counts (widget, app, garden-local)");
+    assert_eq!((widget, app, garden_local), (29, 72, 33), "per-exposure verb counts (widget, app, garden-local)");
+    let both: Vec<&str> = c
+        .verbs
+        .iter()
+        .filter(|v| v.exposed_to(Exposure::App) && v.exposed_to(Exposure::GardenLocal))
+        .map(|v| v.verb.as_str())
+        .collect();
+    assert_eq!(both.len(), 17, "5 room-scope rows + the 12 person rows: {both:?}");
+    for verb in [
+        "thread.catchup",
+        "thread.unread",
+        "thread.mute",
+        "tickets.list",
+        "tickets.show",
+        "tickets.create",
+        "tickets.comment",
+        "tickets.resolve",
+        "activity.snapshot",
+        "files.list",
+        "files.read",
+        "files.readBinary",
+    ] {
+        assert!(both.contains(&verb), "{verb} is on both transports");
+    }
+    assert!(!both.iter().any(|v| v.starts_with("projects.")), "no project chat on the Garden bridge");
+    assert_eq!(c.catalog_version, 17);
     assert_eq!(
         c.verbs.len(),
-        137,
-        "today's 37 bridge verbs plus the frame rows theme.changed, canvas.setHitRegions, window.startDrag, sources.*, the 15 Garden data rows, the 66 app rows (5 on both transports) and widget.self, plus Thread parity 0.46.3's 4 widget and 5 app rows"
+        138,
+        "today's 37 bridge verbs plus the frame rows theme.changed, canvas.setHitRegions, window.startDrag, sources.*, the 15 Garden data rows, the 66 app rows (5 on both transports) and widget.self, plus Thread parity 0.46.3's 4 widget and 5 app rows, plus thread.mute"
     );
 }
 
 #[test]
 fn every_feature_is_a_boot_status_key() {
     // The DB-gated keys (thread-read-v1, inbox-catchup-v1,
-    // app-thread-parity-v1) are on once the DB is up.
+    // app-thread-parity-v1, app-read-state-v1, garden-person-rows-v1) are
+    // on once the DB is up.
     let _ = k2_core::db::shared();
     let mut known: BTreeSet<&str> = k2_daemon::boot_status::features().into_iter().collect();
+    for key in ["app-read-state-v1", "garden-person-rows-v1"] {
+        assert!(known.contains(key), "{key} is a /boot-status key once the DB is up");
+    }
+    assert!(k2_core::zen::widgets::KNOWN_FEATURES.contains(&"garden-person-rows-v1"), "a widget may require the Garden rows");
+    assert_eq!(catalog().verb("thread.mute").map(|v| v.feature.as_str()), Some("app-read-state-v1"));
     // Added by this build (UW36); B2 puts it in /boot-status.
     known.insert("zen-widgets-v1");
     for v in &catalog().verbs {

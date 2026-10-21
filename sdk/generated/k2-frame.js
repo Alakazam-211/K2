@@ -7,7 +7,7 @@
 (function () {
   'use strict'
   var K2_CONTRACT = Object.freeze({
-    catalogVersion: 16,
+    catalogVersion: 17,
     errors: Object.freeze(['cap_not_granted', 'not_bound', 'rate_limited', 'too_large', 'unknown_verb', 'verb_unavailable', 'verb_local', 'not_exposed', 'sending_off', 'server_not_saved', 'unreachable', 'removed', 'no_history', 'failed', 'conflict', 'space_full', 'value_too_large', 'bad_key', 'not_granted', 'resync', 'author_unknown', 'stale_widget', 'store_full', 'bad_tx', 'tx_expired', 'busy', 'paused', 'bad_args', 'bad_shape', 'pass_required', 'pass_invalid', 'pass_wrong_link', 'not_on_link', 'json_required', 'skin_room', 'usage', 'not_found', 'bad_login', 'locked', 'card_not_pending', 'guest_required', 'no_app_pass', 'no_app_key', 'no_chat_grant', 'chat_unavailable', 'app_pass_required', 'grant_required', 'outside_app_rooms', 'above_role', 'has_role', 'confirm_required', 'declined']),
     retryable: Object.freeze(['not_bound', 'rate_limited', 'unreachable', 'busy']),
     verbs: Object.freeze({
@@ -38,6 +38,9 @@
       'thread.attachment': Object.freeze({ cap: 'thread:read', reach: 'local', kind: 'call', feature: 'thread-images-v1' }),
       'thread.open': Object.freeze({ cap: 'thread:read', reach: 'local', kind: 'call', feature: 'thread-attachments-v1' }),
       'thread.links': Object.freeze({ cap: 'thread:read', reach: 'local', kind: 'call', feature: 'thread-attachments-v1' }),
+      'thread.catchup': Object.freeze({ cap: 'thread:read', reach: 'portable', kind: 'call', feature: 'inbox-catchup-v1' }),
+      'thread.unread': Object.freeze({ cap: 'thread:read', reach: 'portable', kind: 'call', feature: 'app-thread-parity-v1' }),
+      'thread.mute': Object.freeze({ cap: 'thread:read', reach: 'portable', kind: 'call', feature: 'app-read-state-v1' }),
       'thread.pickFiles': Object.freeze({ cap: 'thread:post', reach: 'local', kind: 'call', feature: 'thread-attachments-v1' }),
       'thread.post': Object.freeze({ cap: 'thread:post', reach: 'portable', kind: 'call', feature: 'zen-v1' }),
       'thread.answer': Object.freeze({ cap: 'thread:post', reach: 'portable', kind: 'call', feature: 'zen-v1' }),
@@ -48,6 +51,14 @@
       'sources.subscribe': Object.freeze({ cap: 'sources:read', reach: 'portable', kind: 'subscribe', feature: 'sources-v1' }),
       'sources.refresh': Object.freeze({ cap: 'sources:read', reach: 'portable', kind: 'call', feature: 'sources-v1' }),
       'sources.ask': Object.freeze({ cap: 'sources:read', reach: 'local', kind: 'call', feature: 'sources-v1' }),
+      'files.list': Object.freeze({ cap: 'files:read', reach: 'portable', kind: 'call', feature: 'app-api-v1' }),
+      'files.read': Object.freeze({ cap: 'files:read', reach: 'portable', kind: 'call', feature: 'app-api-v1' }),
+      'files.readBinary': Object.freeze({ cap: 'files:read', reach: 'portable', kind: 'call', feature: 'app-api-v1' }),
+      'tickets.list': Object.freeze({ cap: 'tickets:read', reach: 'portable', kind: 'call', feature: 'app-api-v1' }),
+      'tickets.show': Object.freeze({ cap: 'tickets:read', reach: 'portable', kind: 'call', feature: 'app-api-v1' }),
+      'tickets.create': Object.freeze({ cap: 'tickets:post', reach: 'portable', kind: 'call', feature: 'app-api-v1' }),
+      'tickets.comment': Object.freeze({ cap: 'tickets:post', reach: 'portable', kind: 'call', feature: 'app-api-v1' }),
+      'tickets.resolve': Object.freeze({ cap: 'tickets:post', reach: 'portable', kind: 'call', feature: 'app-api-v1' }),
       'store.get': Object.freeze({ cap: 'store:read', reach: 'local', kind: 'call', feature: 'garden-data-v1' }),
       'store.list': Object.freeze({ cap: 'store:read', reach: 'local', kind: 'call', feature: 'garden-data-v1' }),
       'store.changes': Object.freeze({ cap: 'store:read', reach: 'local', kind: 'call', feature: 'garden-data-v1' }),
@@ -60,6 +71,7 @@
       'store.txAbort': Object.freeze({ cap: 'store:write', reach: 'local', kind: 'call', feature: 'garden-data-v1' }),
       'guests.rooms': Object.freeze({ cap: 'guests:rooms', reach: 'portable', kind: 'call', feature: 'guests-rooms-v1' }),
       'guests.setRooms': Object.freeze({ cap: 'guests:rooms', reach: 'portable', kind: 'call', feature: 'guests-rooms-v1' }),
+      'activity.snapshot': Object.freeze({ cap: 'activity:read', reach: 'portable', kind: 'call', feature: 'app-api-v1' }),
       'room.members': Object.freeze({ cap: 'room:members', reach: 'portable', kind: 'call', feature: 'room-members-v1' }),
     }),
   })

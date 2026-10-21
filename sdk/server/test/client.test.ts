@@ -228,13 +228,35 @@ describe('the wire', () => {
 
     const rd = await g.thread.setRead({ addr: 'sales', seq: 5 })
     expect(JSON.parse(gw.seen[3]?.body ?? '')).toEqual({ addr: 'sales', seq: 5 })
-    expect(rd).toEqual({ ok: true, changed: true, id: 'conv-1', lastReadSeq: 5, lastSeq: 5, unread: 0, waiting: 0 })
+    // catalog v17 (app-read-state-v1): the read state carries addr and muted.
+    expect(rd).toEqual({ ok: true, changed: true, id: 'conv-1', addr: 'sales', lastReadSeq: 5, lastSeq: 5, unread: 0, waiting: 0, muted: false })
 
     const links = await g.files.resolveLinks({ workspace: 'sales', paths: ['docs/a.png', 'x'] })
     expect(links).toEqual({ links: [{ input: 'docs/a.png', linkable: true, kind: 'file', rel: 'docs/a.png' }, { input: 'x', linkable: false }] })
 
     await g.thread.send({ addr: 'sales', text: '', attachments: [{ relPath: 'docs/a.png', line: 2 }] })
     expect(JSON.parse(gw.seen[5]?.body ?? '')).toEqual({ addr: 'sales', text: '', attachments: [{ relPath: 'docs/a.png', line: 2 }] })
+  })
+
+  it('app-read-state-v1 (catalog v17): a guest mutes its own Thread and reads its badgeKey and mutes', async () => {
+    const k2 = client()
+    answer = (s) =>
+      s.url.startsWith('/cli/thread/mute')
+        ? { status: 200, body: { ok: true, changed: true, kind: 'thread', id: 'conv-1', seq: 4, lastReadSeq: 4, lastSeq: 5, unread: 1, waiting: 0, muted: true, mutedUntil: 1900000000, addr: 'sales', total: 0, waitingTotal: 0 } }
+        : { status: 200, body: { ok: true, total: 0, waitingTotal: 0, badgeKey: 'bk-1', person: 'guest:x', byConversation: [{ kind: 'thread', id: 'conv-1', seq: 4, lastReadSeq: 4, lastSeq: 5, unread: 1, waiting: 0, muted: true, mutedUntil: 1900000000, addr: 'sales' }], muted: [{ id: 'conv-1', addr: 'sales', mutedUntil: 1900000000 }] } }
+    const g = k2.asGuest(GUEST)
+    const m = await g.thread.mute({ addr: 'sales', muted: true, until: 1900000000 })
+    expect(gw.seen[0]?.method).toBe('POST')
+    expect(new URL(gw.seen[0]?.url ?? '', gw.url).pathname).toBe('/cli/thread/mute')
+    expect(JSON.parse(gw.seen[0]?.body ?? '')).toEqual({ addr: 'sales', muted: true, until: 1900000000 })
+    expect(m).toEqual({ ok: true, changed: true, id: 'conv-1', addr: 'sales', lastReadSeq: 4, lastSeq: 5, unread: 1, waiting: 0, muted: true, mutedUntil: 1900000000, total: 0, waitingTotal: 0 })
+    const u = await g.thread.unread()
+    expect(u).toEqual({
+      ok: true, total: 0, waitingTotal: 0, badgeKey: 'bk-1',
+      byConversation: [{ id: 'conv-1', addr: 'sales', lastReadSeq: 4, lastSeq: 5, unread: 1, waiting: 0, muted: true, mutedUntil: 1900000000 }],
+      muted: [{ id: 'conv-1', addr: 'sales', mutedUntil: 1900000000 }],
+    })
+    expect(JSON.stringify(u)).not.toContain('guest:x')
   })
 
   it('a browser-only verb and an unknown verb never reach K2', async () => {

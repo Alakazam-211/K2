@@ -5,7 +5,7 @@
 import type { CatalogReach, CatalogVerbKind } from '../contract/catalog-types'
 
 /** The catalog version this table was generated from. */
-export const ZEN_CATALOG_VERSION = 16
+export const ZEN_CATALOG_VERSION = 17
 
 /**
  * Every catalog row with a `builtin` or `registered` renderer binding,
@@ -57,7 +57,7 @@ export const ZEN_VERBS = {
 
 /** One custom-widget verb: its cap, portable or local, and how it answers. */
 export interface ZenCustomVerbRow {
-  readonly cap: 'agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | 'store:read' | 'store:write' | 'guests:rooms' | 'room:members' | null
+  readonly cap: 'agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | 'files:read' | 'tickets:read' | 'tickets:post' | 'store:read' | 'store:write' | 'guests:rooms' | 'activity:read' | 'room:members' | null
   readonly reach: CatalogReach
   readonly kind: CatalogVerbKind
 }
@@ -95,6 +95,9 @@ export const ZEN_CUSTOM_VERBS = {
   'thread.attachment': { cap: 'thread:read', reach: 'local', kind: 'call' },
   'thread.open': { cap: 'thread:read', reach: 'local', kind: 'call' },
   'thread.links': { cap: 'thread:read', reach: 'local', kind: 'call' },
+  'thread.catchup': { cap: 'thread:read', reach: 'portable', kind: 'call' },
+  'thread.unread': { cap: 'thread:read', reach: 'portable', kind: 'call' },
+  'thread.mute': { cap: 'thread:read', reach: 'portable', kind: 'call' },
   'thread.pickFiles': { cap: 'thread:post', reach: 'local', kind: 'call' },
   'thread.post': { cap: 'thread:post', reach: 'portable', kind: 'call' },
   'thread.answer': { cap: 'thread:post', reach: 'portable', kind: 'call' },
@@ -105,6 +108,14 @@ export const ZEN_CUSTOM_VERBS = {
   'sources.subscribe': { cap: 'sources:read', reach: 'portable', kind: 'subscribe' },
   'sources.refresh': { cap: 'sources:read', reach: 'portable', kind: 'call' },
   'sources.ask': { cap: 'sources:read', reach: 'local', kind: 'call' },
+  'files.list': { cap: 'files:read', reach: 'portable', kind: 'call' },
+  'files.read': { cap: 'files:read', reach: 'portable', kind: 'call' },
+  'files.readBinary': { cap: 'files:read', reach: 'portable', kind: 'call' },
+  'tickets.list': { cap: 'tickets:read', reach: 'portable', kind: 'call' },
+  'tickets.show': { cap: 'tickets:read', reach: 'portable', kind: 'call' },
+  'tickets.create': { cap: 'tickets:post', reach: 'portable', kind: 'call' },
+  'tickets.comment': { cap: 'tickets:post', reach: 'portable', kind: 'call' },
+  'tickets.resolve': { cap: 'tickets:post', reach: 'portable', kind: 'call' },
   'store.get': { cap: 'store:read', reach: 'local', kind: 'call' },
   'store.list': { cap: 'store:read', reach: 'local', kind: 'call' },
   'store.changes': { cap: 'store:read', reach: 'local', kind: 'call' },
@@ -117,6 +128,7 @@ export const ZEN_CUSTOM_VERBS = {
   'store.txAbort': { cap: 'store:write', reach: 'local', kind: 'call' },
   'guests.rooms': { cap: 'guests:rooms', reach: 'portable', kind: 'call' },
   'guests.setRooms': { cap: 'guests:rooms', reach: 'portable', kind: 'call' },
+  'activity.snapshot': { cap: 'activity:read', reach: 'portable', kind: 'call' },
   'room.members': { cap: 'room:members', reach: 'portable', kind: 'call' },
 } as const satisfies Record<string, ZenCustomVerbRow>
 

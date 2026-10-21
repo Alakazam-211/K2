@@ -127,6 +127,11 @@ pub fn handle(who: &DataWho, headers: &str, body: &[u8]) -> CliResponse {
     if crate::garden_data::guest_rooms::is_verb(&b.verb) {
         return crate::garden_data::guest_rooms::handle(&b);
     }
+    // garden-person-rows-v1 (0.46.3): the App rows the Garden shares, as
+    // the person on this computer (`person_rows`).
+    if crate::garden_data::person_rows::is_verb(&b.verb) {
+        return crate::garden_data::person_rows::handle(&b);
+    }
     match run(&b) {
         Ok(v) => crate::garden_data::ok(json!({ "ok": true, "result": v })),
         Err(e) => response(&e),

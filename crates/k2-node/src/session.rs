@@ -191,6 +191,7 @@ async fn ship_pass(node: &Node, tracks: &Tracks, tx: &mpsc::Sender<Frame>) -> Re
         let Some(row) = row else {
             if t.hinted {
                 let f = Frame::State(frames::StateUpdate {
+                    queue: None,
                     job_id: key.0.clone(),
                     generation: key.1,
                     state: JobState::Unknown,

@@ -401,6 +401,11 @@ pub mod tests {
 
     pub fn assign(job: &str, generation: u32) -> Assign {
         let plan = Plan {
+            class: None,
+            session_id: None,
+            est_secs: None,
+            est_p90_secs: None,
+            ws_max_running: None,
             job_id: job.into(),
             node_id: "n".into(),
             workspace_id: "w".into(),

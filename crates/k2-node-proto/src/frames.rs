@@ -29,8 +29,17 @@ use crate::crypto::{self, SigningKey};
 /// `update_offer`/`update_chunk`/`update_state`, `admin_keys`, `health`;
 /// prd-k2-node-admin-v1 §7.1). Additive: a protocol-1 node keeps running
 /// jobs, and the controller sends admin frames only to a node whose offer
-/// lists the `admin` feature.
-pub const PROTOCOL: u32 = 2;
+/// lists the `admin` feature. 3 = node sharing (0.46.3,
+/// prd-compute-shared-queue-v1 §10; [`crate::share`]): `Offer.share`,
+/// `StateUpdate.queue`, `Plan.class`…, `queue_get`/`queue_view`, the
+/// `withdraw`/`if_queued` cancel reasons. Additive: a node sends none of
+/// them to a server that said protocol < [`PROTOCOL_SHARED`] in
+/// `Challenge.protocol`, so its frames stay 0.46.2's apart from the
+/// version fields (V66).
+pub const PROTOCOL: u32 = 3;
+
+/// The first server protocol that gets sharing fields, features and frames.
+pub const PROTOCOL_SHARED: u32 = 3;
 
 /// Oldest node protocol a controller still attaches (jobs only).
 pub const MIN_PROTOCOL: u32 = 1;
@@ -122,6 +131,11 @@ pub struct EnrollRequest {
     /// code-path frames are byte-identical to protocol 1.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ticket: Option<String>,
+    /// Protocol 3: when this enrol adds a second server to a shared node,
+    /// the owner server's label (`rosson.k2.dev`), so the new server shows
+    /// "shared by …". Absent otherwise; an old server ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shared_by: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -277,6 +291,9 @@ pub enum Frame {
     AdminKeys(crate::admin::AdminKeys),
     /// Ask for one kept artifact (only to nodes offering `artifacts`).
     ArtifactGet(ArtifactGet),
+    /// Protocol 3: the node's queue as this server may see it (only to
+    /// nodes offering `queue`; older parsers reject unknown variants).
+    QueueGet(crate::share::QueueGet),
     // node → controller
     Offer(Offer),
     JobsSnapshot(JobsSnapshot),
@@ -292,6 +309,8 @@ pub enum Frame {
     /// One piece of an artifact asked for with `artifact_get`.
     ArtifactChunk(ArtifactChunk),
     ArtifactFailed(ArtifactFailed),
+    /// Protocol 3: the answer to `queue_get`.
+    QueueView(crate::share::QueueView),
 }
 
 impl Frame {
@@ -308,7 +327,8 @@ impl Frame {
             | Frame::UpdateOffer(_)
             | Frame::UpdateChunk(_)
             | Frame::AdminKeys(_)
-            | Frame::ArtifactGet(_) => Direction::ControllerToNode,
+            | Frame::ArtifactGet(_)
+            | Frame::QueueGet(_) => Direction::ControllerToNode,
             Frame::Offer(_)
             | Frame::JobsSnapshot(_)
             | Frame::Need(_)
@@ -320,7 +340,8 @@ impl Frame {
             | Frame::UpdateState(_)
             | Frame::Health(_)
             | Frame::ArtifactChunk(_)
-            | Frame::ArtifactFailed(_) => Direction::NodeToController,
+            | Frame::ArtifactFailed(_)
+            | Frame::QueueView(_) => Direction::NodeToController,
         }
     }
 
@@ -350,6 +371,8 @@ impl Frame {
             Frame::ArtifactGet(_) => "artifact_get",
             Frame::ArtifactChunk(_) => "artifact_chunk",
             Frame::ArtifactFailed(_) => "artifact_failed",
+            Frame::QueueGet(_) => "queue_get",
+            Frame::QueueView(_) => "queue_view",
         }
     }
 }
@@ -439,6 +462,24 @@ pub struct Plan {
     /// are unchanged; only sent to nodes offering [`FEATURE_STALL`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stall_secs: Option<u64>,
+    /// Protocol 3, only to nodes offering `queue` (absent otherwise, so
+    /// older digests are unchanged): the node queue's inputs (§7, §10.2).
+    /// The class the server set from facts (`--wait` = interactive,
+    /// `--detach` / big shard sets = batch, `--gate` where allowed).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub class: Option<crate::share::JobClass>,
+    /// The submitting session (fairness inside a workspace).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// The server's estimate of the run time (ETAs), p50 and p90.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub est_secs: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub est_p90_secs: Option<u64>,
+    /// The workspace's `max_parallel` on the server; the node honours it
+    /// inside the tenant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ws_max_running: Option<u32>,
 }
 
 /// Offer feature: this node ends a job that prints nothing for
@@ -540,8 +581,22 @@ pub struct TransferFailed {
 pub struct Cancel {
     pub job_id: String,
     pub generation: u32,
-    /// `cancelled`, `timeout`, `node_removed`, …
+    /// `cancelled`, `timeout`, `node_removed`, …, or one of the "only if
+    /// not started" reasons [`CANCEL_WITHDRAW`] / [`CANCEL_IF_QUEUED`].
     pub reason: String,
+}
+
+/// Protocol 3 (only to nodes offering `queue`): take a node-queued job
+/// back to move it. A started job is never touched; the node answers its
+/// real state, `cancelled/withdrawn` when it was still queued (V46, V57).
+pub const CANCEL_WITHDRAW: &str = "withdraw";
+/// Protocol 3: a cancel without `--force`. Same rule as withdraw; ends
+/// `cancelled` when it was still queued (V57).
+pub const CANCEL_IF_QUEUED: &str = "if_queued";
+
+/// Must a cancel with this reason leave a started job alone?
+pub fn cancel_only_if_not_started(reason: &str) -> bool {
+    reason == CANCEL_WITHDRAW || reason == CANCEL_IF_QUEUED
 }
 
 /// Controller narrowing of node caps. It can only tighten (§8.5).
@@ -655,6 +710,10 @@ pub struct Offer {
     /// `system-packages`). Older nodes send none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub features: Vec<String>,
+    /// Protocol 3: this session's share (V53). Absent for a server that
+    /// said protocol < 3, and on a node nobody shares.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub share: Option<crate::share::ShareView>,
 }
 
 /// Job states shared by the controller registry and the node ledger.
@@ -759,6 +818,10 @@ pub struct StateUpdate {
     /// Artifacts and test results (terminal states, `artifacts` nodes).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outputs: Option<crate::results::Outputs>,
+    /// Protocol 3: position and ETA while the job waits in the node queue
+    /// (state `queued`, reason `node_queued`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue: Option<crate::share::QueuePos>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -991,6 +1054,11 @@ mod tests {
 
     fn plan() -> Plan {
         Plan {
+            class: None,
+            session_id: None,
+            est_secs: None,
+            est_p90_secs: None,
+            ws_max_running: None,
             job_id: "j1".into(),
             node_id: "n1".into(),
             workspace_id: "w1".into(),
@@ -1028,6 +1096,7 @@ mod tests {
             r#"{"code":"node_upgrade_required","message":"m","t":"refused"}"#
         );
         let s = Frame::State(StateUpdate {
+            queue: None,
             job_id: "j".into(),
             generation: 1,
             state: JobState::Interrupted,
@@ -1152,6 +1221,94 @@ mod tests {
         let tampered = SignedReceipt { body: s.body.replace("\"code\":1", "\"code\":0"), sig: s.sig.clone() };
         assert!(tampered.verify(k.spki_der()).is_none());
         assert!(s.verify(SigningKey::generate().unwrap().spki_der()).is_none());
+    }
+
+    /// Protocol 3 fields are absent when unset: a 0.46.2 plan's digest,
+    /// offer, state and enrol request are unchanged (V66).
+    #[test]
+    fn sharing_fields_are_absent_when_unset() {
+        let p = plan();
+        let text = crate::canonical::to_string(&p).unwrap();
+        for f in ["class", "session_id", "est_secs", "est_p90_secs", "ws_max_running"] {
+            assert!(!text.contains(f), "{f} in {text}");
+        }
+        // This plan's digest as the v0.46.2 tag's k2-node-proto computes it.
+        assert_eq!(p.digest().unwrap(), "sha256:31d079662290d8b6e10bc3595162f277743d060a50046b1be2f020e99d948e14");
+        let mut q = p.clone();
+        q.class = Some(crate::share::JobClass::Batch);
+        assert_ne!(q.digest().unwrap(), p.digest().unwrap(), "class is bound by the digest");
+        assert!(crate::canonical::to_string(&q).unwrap().contains(r#""class":"batch""#));
+        let s = StateUpdate {
+            queue: None,
+            job_id: "j".into(),
+            generation: 1,
+            state: JobState::Queued,
+            reason: Some("node_queued".into()),
+            detail: None,
+            at: 1,
+            exit: None,
+            src: None,
+            log_seq: 0,
+            outputs: None,
+        };
+        assert!(!crate::canonical::to_string(&s).unwrap().contains("queue\""));
+        let e = EnrollRequest {
+            shared_by: None,
+            code_binding: "b".into(),
+            node_public_key_pem: "k".into(),
+            name: "mini-1".into(),
+            labels: BTreeMap::new(),
+            protocol: PROTOCOL,
+            node_version: "0.46.3".into(),
+            ticket: None,
+        };
+        assert!(!crate::canonical::to_string(&HandshakeFrame::EnrollRequest(e)).unwrap().contains("shared_by"));
+    }
+
+    #[test]
+    fn queue_frames_travel_their_way() {
+        let k = SigningKey::generate().unwrap();
+        let get = Frame::QueueGet(crate::share::QueueGet { request_id: "r1".into() });
+        assert_eq!((get.direction(), get.kind()), (Direction::ControllerToNode, "queue_get"));
+        let t = seal(&k, Direction::ControllerToNode, "s", 0, &get).unwrap();
+        assert_eq!(open(k.spki_der(), Direction::ControllerToNode, "s", 0, &t).unwrap(), get);
+        let view = Frame::QueueView(crate::share::QueueView {
+            request_id: "r1".into(),
+            at: 5,
+            entries: vec![crate::share::QueueEntry {
+                pos: 1,
+                mine: false,
+                class: crate::share::JobClass::Gate,
+                state: JobState::Running,
+                cpu_millis: 8000,
+                mem_bytes: 1 << 30,
+                eta_secs: Some(360),
+                eta_p90_secs: None,
+                blocked_by: None,
+                job_id: None,
+                generation: None,
+                workspace_id: None,
+                session_id: None,
+                server_label: None,
+            }],
+            totals: vec![],
+        });
+        assert_eq!((view.direction(), view.kind()), (Direction::NodeToController, "queue_view"));
+        assert!(seal(&k, Direction::ControllerToNode, "s", 0, &view).is_err());
+        let text = crate::canonical::to_string(&view).unwrap();
+        for hidden in ["job_id", "workspace_id", "session_id", "server_label", "totals"] {
+            assert!(!text.contains(hidden), "a redacted entry carries no {hidden}: {text}");
+        }
+    }
+
+    #[test]
+    fn only_withdraw_and_if_queued_spare_a_started_job() {
+        assert!(cancel_only_if_not_started(CANCEL_WITHDRAW));
+        assert!(cancel_only_if_not_started(CANCEL_IF_QUEUED));
+        for r in ["cancelled", "timeout", "node_removed", "superseded", ""] {
+            assert!(!cancel_only_if_not_started(r), "{r}");
+        }
+        const { assert!(PROTOCOL >= PROTOCOL_SHARED && PROTOCOL_SHARED > 2 && MIN_PROTOCOL == 1) };
     }
 
     #[test]

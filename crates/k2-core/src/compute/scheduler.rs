@@ -314,6 +314,7 @@ mod tests {
 
     fn offer(parallel: u32) -> Offer {
         Offer {
+            share: None,
             revision: 1,
             control: Control::Active,
             control_by: None,

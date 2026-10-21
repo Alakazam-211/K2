@@ -759,6 +759,7 @@ impl Node {
         }
         let ledger_id = self.ledger.lock().unwrap().ledger_id.clone();
         let mut o = Offer {
+            share: None,
             revision: 0,
             control,
             control_by: l.control.by.clone(),
@@ -800,6 +801,7 @@ impl Node {
 
     fn state_frame(&self, job_id: &str, generation: u32, state: JobState, reason: Option<&str>, detail: Option<&str>) -> Frame {
         Frame::State(StateUpdate {
+            queue: None,
             job_id: job_id.to_string(),
             generation,
             state,
@@ -815,6 +817,7 @@ impl Node {
 
     pub fn row_state_frame(&self, r: &crate::ledger::Row) -> Frame {
         Frame::State(StateUpdate {
+            queue: None,
             job_id: r.job_id.clone(),
             generation: r.generation,
             state: r.state,

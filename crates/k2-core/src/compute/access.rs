@@ -266,6 +266,7 @@ mod tests {
 
     fn offer(free_disk: u64) -> Offer {
         Offer {
+            share: None,
             revision: 1,
             control: Control::Active,
             control_by: None,

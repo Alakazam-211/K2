@@ -1740,12 +1740,17 @@ fn media_status_enable_disable_and_probe_record_argv_are_fixed() {
     ok(&t.call(&["engine", "sew", "media", "enable"]));
     ok(&t.call(&["engine", "sew", "media", "disable"]));
     ok(&t.call(&["engine", "sew", "media", "probe-record", "ok", "fail", "ok"]));
+    ok(&t.call(&["engine", "sew", "media", "uninstall"]));
     let argv: Vec<Vec<String>> = sew_calls(&t).into_iter().map(|(a, _)| a).collect();
+    // 0.46.3: disable and uninstall pass Sew's -y. Sew asks "Live calls
+    // end." on a terminal and refuses without one; the helper never has one
+    // (the daemon asked the person).
     let want: Vec<Vec<&str>> = vec![
         vec!["media", "status", "--json"],
         vec!["media", "enable", "--json"],
-        vec!["media", "disable", "--json"],
+        vec!["media", "disable", "-y", "--json"],
         vec!["media", "probe-record", "--udp", "ok", "--tcp", "fail", "--turn-tls", "ok", "--from", "k2", "--json"],
+        vec!["media", "uninstall", "-y", "--json"],
     ];
     assert_eq!(argv, want);
     assert_eq!(t.call(&["engine", "sew", "media", "probe-record", "yes", "ok", "ok"]).code, exit::ARGV);

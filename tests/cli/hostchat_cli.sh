@@ -20,6 +20,9 @@
 #   8. Voice flags (--voice, --voice-url, --node-ip) outside enable, and
 #      --media-tarball outside enable/upgrade/rollback, exit 2 before any
 #      request (they used to be dropped silently).
+#   9. media uninstall (0.46.3) asks on a terminal ([y/N]; n sends nothing),
+#      refuses with confirm_required naming --yes when there is no
+#      terminal, and --yes / -y send {"confirm": true}.
 # Fake values only (example.test, made-up ids). Never touches the real ~/.k2.
 
 set -euo pipefail
@@ -287,8 +290,69 @@ assert_eq "probe exit 0" "$rc" "0"
 assert_eq "probe body" "$(req_where /cli/sew/media/probe body)" '{"tcp": "fail", "turnTls": "ok", "udp": "ok"}'
 run owner hostchat media renew
 assert_eq "renew is a POST" "$(req_where /cli/sew/media/renew method)" "POST"
-run owner hostchat media uninstall
+# 0.46.3: media uninstall confirms (Sew: "Live calls end."). No terminal and
+# no --yes refuses before any request; --yes / -y send confirm: true.
+before="$(nreq)"
+run owner hostchat media uninstall </dev/null
+assert_eq "media uninstall, no tty, no --yes → exit 2" "$rc" "2"
+assert_contains "no-tty refusal says confirm_required" "$err" '"error":"confirm_required"'
+assert_contains "no-tty refusal names --yes" "$err" "pass --yes"
+assert_contains "no-tty refusal says what it costs" "$err" "Live calls end."
+run owner hostchat media uninstall --json </dev/null
+assert_eq "media uninstall --json, no tty → exit 2" "$rc" "2"
+assert_eq "no-tty refusals send nothing" "$(nreq)" "$before"
+run owner hostchat media status --yes </dev/null
+assert_eq "--yes on another media verb → exit 2" "$rc" "2"
+assert_contains "--yes elsewhere names the verb" "$err" "only applies to k2 hostchat media uninstall"
+assert_eq "--yes elsewhere sends nothing" "$(nreq)" "$before"
+run owner hostchat media uninstall --yes --json </dev/null
+assert_eq "media uninstall --yes exit 0" "$rc" "0"
 assert_eq "media uninstall is a POST" "$(req_where /cli/sew/media/uninstall method)" "POST"
+assert_eq "media uninstall --yes body" "$(req_where /cli/sew/media/uninstall body)" '{"confirm": true}'
+before="$(nreq)"
+run owner hostchat media uninstall -y </dev/null
+assert_eq "media uninstall -y exit 0" "$rc" "0"
+assert_eq "media uninstall -y sends one request" "$(nreq)" "$((before + 1))"
+assert_eq "media uninstall -y body" "$(req_where /cli/sew/media/uninstall body)" '{"confirm": true}'
+# On a terminal it asks; y sends the confirm, anything else sends nothing.
+tty_run() {
+    # tty_run <answer> <k2 args...>: run the CLI on a pseudo-terminal, type
+    # <answer> + Enter at the prompt; rc + everything it printed.
+    python3 - "$@" <<'PYEOF'
+import os, pty, sys, select, time
+answer, argv = sys.argv[1], sys.argv[2:]
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp(argv[0], argv)
+buf, sent, deadline = b"", False, time.time() + 30
+while time.time() < deadline:
+    r, _, _ = select.select([fd], [], [], 0.2)
+    if r:
+        try:
+            chunk = os.read(fd, 4096)
+        except OSError:
+            break
+        if not chunk:
+            break
+        buf += chunk
+    if not sent and b"[y/N]" in buf:
+        os.write(fd, answer.encode() + b"\n")
+        sent = True
+_, status = os.waitpid(pid, 0)
+sys.stdout.write(buf.decode("utf-8", "replace"))
+sys.stdout.write("\nRC=%d SENT=%s\n" % (os.waitstatus_to_exitcode(status), sent))
+PYEOF
+}
+before="$(nreq)"
+tout="$(tty_run n env HOME="$HOME2" K2_HOST=127.0.0.1 K2_PORT="$STUB_PORT" "$K2_CLI" hostchat media uninstall)"
+assert_contains "tty: asks Sew's question" "$tout" "Uninstall voice? Live calls end. [y/N]"
+assert_contains "tty: n → exit 1, prompt answered" "$tout" "RC=1 SENT=True"
+assert_contains "tty: n says nothing was removed" "$tout" "Voice not removed."
+assert_eq "tty: n sends nothing" "$(nreq)" "$before"
+tout="$(tty_run y env HOME="$HOME2" K2_HOST=127.0.0.1 K2_PORT="$STUB_PORT" "$K2_CLI" hostchat media uninstall)"
+assert_contains "tty: y → exit 0" "$tout" "RC=0 SENT=True"
+assert_eq "tty: y sends one request" "$(nreq)" "$((before + 1))"
+assert_eq "tty: y body" "$(req_where /cli/sew/media/uninstall body)" '{"confirm": true}'
 
 echo "== config =="
 run owner hostchat config --public-url https://hearth.box.example.test

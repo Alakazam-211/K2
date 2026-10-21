@@ -472,6 +472,81 @@ fn uninstall_removes_the_engine_record_label_and_key_and_purge_forgets_voice() {
     assert_eq!(uninstall(&t.env()).unwrap()["alreadyRemoved"], true);
 }
 
+/// 0.46.3: a box where Sew (or its voice) is already gone still gets K2's
+/// own voice records cleaned up: the TURN DNS record, the nested label,
+/// the vault key and the record. Both shapes: the helper refusing (no
+/// `/usr/local/bin/sew`) and Sew refusing (its layout is gone).
+#[test]
+fn uninstall_when_sew_says_not_installed_still_forgets_voice() {
+    let answers: [Result<Value, String>; 2] = [
+        Err("root helper engine sew media uninstall: exit 4: sew is not installed".into()),
+        Ok(json!({"sewExit": 4, "sew": null, "stderrTail": "",
+                  "reason": "Sew is not installed (/etc/sew/sew.toml or /usr/local/bin/sew missing); run sew install first"})),
+    ];
+    for answer in answers {
+        let t = t();
+        t.voice();
+        let key_ref = t.state().turn_key_ref.unwrap();
+        t.ops.queue("engine sew media uninstall", answer.clone());
+        let out = uninstall(&t.env()).unwrap_or_else(|f| panic!("{answer:?}: {} {}", f.code, f.hint));
+        assert_eq!(out["state"], "not-installed");
+        assert_eq!(out["engine"], "already-gone");
+        let w = out["warnings"].as_array().unwrap();
+        assert_eq!(w.len(), 1, "{out}");
+        assert!(w[0].as_str().unwrap().contains("K2's own voice records were cleaned up"), "{out}");
+        assert_eq!(t.ops.effects(), vec!["engine sew media uninstall"]);
+        assert_eq!(t.ops.cp_log(), vec!["DELETE /turn/dns/lztek"]);
+        assert_eq!(t.ops.nested.lock().unwrap().last().unwrap(), &("voice".to_string(), None));
+        assert_eq!(t.secrets.resolve(&key_ref).unwrap(), None);
+        assert!(t.ops.voice_load().is_none());
+        assert_eq!(uninstall(&t.env()).unwrap()["alreadyRemoved"], true);
+    }
+}
+
+/// Any other refusal keeps everything K2 holds, so voice is never half
+/// forgotten while its engine still runs. A helper from before 0.46.3
+/// (no `-y`, so Sew wants a terminal) says to update the helper.
+#[test]
+fn uninstall_refusals_keep_the_voice_record() {
+    let cases = [
+        (
+            Ok(json!({"sewExit": 2, "sew": null, "stderrTail": "",
+                      "reason": "Uninstall voice? Live calls end. needs confirmation: pass -y (no terminal to ask on)"})),
+            "helper_outdated",
+            409,
+            "k2 root-helper update",
+        ),
+        (
+            Ok(json!({"sewExit": 1, "sew": null, "stderrTail": "", "reason": "systemctl daemon-reload failed"})),
+            "media_uninstall_failed",
+            500,
+            "daemon-reload",
+        ),
+        (Err("root helper engine sew media uninstall: exit 4: sew helper: unknown sew binary".into()), "media_uninstall_failed", 500, "unknown sew binary"),
+    ];
+    for (answer, want_code, want_status, want_hint) in cases {
+        let t = t();
+        t.voice();
+        let key_ref = t.state().turn_key_ref.unwrap();
+        t.ops.queue("engine sew media uninstall", answer);
+        let f = uninstall(&t.env()).unwrap_err();
+        assert_eq!((f.code, f.status), (want_code, want_status), "{}", f.hint);
+        assert!(f.hint.contains(want_hint), "{}", f.hint);
+        assert!(t.ops.cp_log().is_empty(), "the TURN DNS record stays");
+        assert!(t.secrets.resolve(&key_ref).unwrap().is_some(), "the TURN key stays");
+        assert!(t.ops.voice_load().is_some(), "the voice record stays");
+    }
+}
+
+#[test]
+fn media_not_installed_matches_sew_and_helper_words_only() {
+    assert!(media_not_installed("root helper engine sew media uninstall: exit 4: sew is not installed"));
+    assert!(media_not_installed("sew media uninstall: exit 4: Sew is not installed (x missing); run sew install first"));
+    assert!(media_not_installed("sew media uninstall: exit 4: voice is not installed"));
+    assert!(!media_not_installed("sew helper: unknown sew binary"));
+    assert!(!media_not_installed("Uninstall voice? Live calls end. needs confirmation: pass -y (no terminal to ask on)"));
+}
+
 // ── standalone identity ──────────────────────────────────────────────────
 
 #[test]

@@ -161,9 +161,21 @@ fn exposure_counts_are_pinned() {
     assert_eq!(c.catalog_version, 19);
     assert_eq!(
         c.verbs.len(),
-        161,
-        "today's 38 bridge verbs (thread.inbox joined in 0.46.3) plus the frame rows theme.changed, canvas.setHitRegions, window.startDrag, sources.*, the 15 Garden data rows, the 66 app rows (5 on both transports) and widget.self, plus Thread parity 0.46.3's 4 widget and 5 app rows, plus thread.mute, plus App project chat's 5 app rows, plus App mobile access's 7 app rows, plus app-room-stream's thread.stream app row, plus the nine wallet.* app rows (0.46.3)"
+        168,
+        "today's 38 bridge verbs (thread.inbox joined in 0.46.3) plus the frame rows theme.changed, canvas.setHitRegions, window.startDrag, sources.*, the 15 Garden data rows, the 66 app rows (5 on both transports) and widget.self, plus Thread parity 0.46.3's 4 widget and 5 app rows, plus thread.mute, plus App project chat's 5 app rows, plus App mobile access's 7 app rows, plus app-room-stream's thread.stream app row, plus the nine wallet.* app rows (0.46.3), plus permission cards' 7 unexposed permission.* rows (0.46.3, no catalog bump)"
     );
+    // Permission cards (0.46.3 Beta): K2's own verbs, never a widget's or
+    // an App's (App guests never see a permission card).
+    let perm: Vec<&str> = c.verbs.iter().filter(|v| v.verb.starts_with("permission.")).map(|v| v.verb.as_str()).collect();
+    assert_eq!(
+        perm,
+        ["permission.request", "permission.update", "permission.cancel", "permission.status", "permission.list", "permission.enabled", "permission.pending"]
+    );
+    for verb in perm {
+        let row = c.verb(verb).expect("row");
+        assert!(row.exposure.is_empty(), "{verb} is exposed to nobody outside K2");
+        assert_eq!(row.feature, k2_core::permission::FEATURE_KEY, "{verb}");
+    }
 }
 
 #[test]
@@ -182,6 +194,9 @@ fn every_feature_is_a_boot_status_key() {
     known.insert("zen-widgets-v1");
     // DB-gated keys (reported once the daemon DB is up): this test opens no DB.
     known.insert(k2_daemon::boot_status::FEATURE_INBOX_CATCHUP);
+    // Listed only while the "Permission cards" switch is on (lane B's
+    // dynamic key); this test leaves the switch off.
+    known.insert(k2_core::permission::FEATURE_KEY);
     for v in &catalog().verbs {
         assert!(known.contains(v.feature.as_str()), "{}: feature {} isn't a /boot-status key", v.verb, v.feature);
     }
@@ -333,10 +348,20 @@ async fn get_on_every_write_binding_is_405() {
         .collect();
     assert!(read_gets.contains("/cli/db/rows") && read_gets.contains("/cli/agent/identity"), "{read_gets:?}");
     assert!(writes.len() >= 3, "thread.post, thread.answer and thread.void bind routes: {writes:?}");
+    // The permission-cards family is absent while its switch is off (PRD
+    // rev 3.1 §2.4, C1: today's answer, byte for byte); this daemon leaves it
+    // off, so its write rows must NOT answer 405 here (the family's own
+    // coded 405 is lane A1's, tested with the switch on).
+    assert!(!k2_core::permission::gate::server_on(), "this binary leaves the Permission cards switch off");
     for (verb, route) in &writes {
         let path = format!("{route}?token={OWNER_TOKEN}&addr=x&text=x&id=x&answer=x");
         let port = d.port;
         let (status, body) = tokio::task::spawn_blocking(move || get_status(port, &path)).await.expect("join");
+        if k2_core::permission::gate::route_gated(route) {
+            assert_ne!(status, 200, "GET {route} ({verb}) is not served while permission cards are off; body={body}");
+            assert!(!body.contains("method_not_allowed"), "GET {route} ({verb}) answers as an unknown route while off; body={body}");
+            continue;
+        }
         assert_eq!(status, 405, "GET {route} ({verb}) must be 405; body={body}");
     }
     match prev {

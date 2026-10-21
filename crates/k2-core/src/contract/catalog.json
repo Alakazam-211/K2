@@ -182,7 +182,18 @@
     {"code": "refresh_reused", "doc": "Device sign-in: a refresh token came back after it was used; that device is signed out (sign in again)."},
     {"code": "person_pass_required", "doc": "Wallet verbs need an App user's own login session pass. Connect logins, the owner token, agent passports and an App's own pass have no wallet."},
     {"code": "wallet_off", "doc": "This App doesn't use personal wallets; its owner turns them on."},
-    {"code": "duplicate_label", "doc": "The person already has an item with that label for that provider."}
+    {"code": "duplicate_label", "doc": "The person already has an item with that label for that provider."},
+    {"code": "bad_action", "doc": "Permission cards: no card-able action by that id (k2 permission list shows them)."},
+    {"code": "bad_params", "doc": "Permission cards: a value is missing, unknown or no longer valid for that action."},
+    {"code": "bad_why", "doc": "Permission cards: why is one line of at most 200 characters, with no secret in it."},
+    {"code": "not_cardable", "fields": ["permission"], "doc": "Permission cards: that change can't be requested (a person does it where `permission.where` says), or another action covers it."},
+    {"code": "recently_denied", "fields": ["denied"], "doc": "Permission cards: a person denied the same ask within 24 hours; `denied` says who, when and when to ask again."},
+    {"code": "ask_limit", "doc": "Permission cards: the same action and values were asked twice in 7 days; update the denied request instead."},
+    {"code": "too_many_requests", "doc": "Permission cards: this agent (5) or this server (50) has too many open requests, or 20 asks this hour."},
+    {"code": "request_not_pending", "doc": "Permission cards: someone answered first, the request closed, or it is no longer waiting."},
+    {"code": "already_updated", "doc": "Permission cards: a denied request takes one update (a new why) within 7 days."},
+    {"code": "action_card_person_only", "fields": ["required"], "doc": "A settings card is answered by a person at its floor (`required`: owner or admin): never an agent, a widget or an App guest."},
+    {"code": "vault_confirm_required", "doc": "This change takes the same confirm Settings takes: confirm, then answer again with confirmToken."}
   ],
   "bannedFields": [
     "projectPath",
@@ -16549,6 +16560,770 @@
       "errors": ["pass_required", "pass_invalid", "pass_wrong_link", "skin_room", "cap_not_granted", "usage", "failed"],
       "doc": "Live lines of one project chat, shaped like Thread frames (collection project), plus a guest's own read frames (collection read); after a gap, project.read with afterSeq.",
       "example": "const off = k2.project.events({group}, (f) => append(f.doc))"
+    },
+    {
+      "verb": "permission.request",
+      "cap": null,
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "permission-cards-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/permission/request"
+        }
+      },
+      "request": [
+        {
+          "title": "action",
+          "type": "string",
+          "description": "A catalog action id (compute.use)."
+        },
+        {
+          "title": "why",
+          "type": "string",
+          "description": "One line, at most 200 characters; shown as '<agent> says:'."
+        },
+        {
+          "title": "params",
+          "type": "object",
+          "default": {},
+          "description": "The action's values, key → value or list."
+        },
+        {
+          "title": "dryRun",
+          "type": "boolean",
+          "default": false
+        },
+        {
+          "title": "addr",
+          "type": "string",
+          "default": "",
+          "description": "The agent's own Thread address (a sidecar's); default its pinned Chat."
+        }
+      ],
+      "response": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "already_pending",
+              "already_done",
+              "dry_run"
+            ]
+          },
+          "action": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "integer",
+            "description": "Seconds since the epoch."
+          },
+          "routedTo": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "login": {
+                  "type": "string"
+                },
+                "role": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "approvers": {
+            "type": "string",
+            "description": "owner, or owner or admin."
+          },
+          "text": {
+            "type": "string"
+          },
+          "setting": {
+            "type": "string"
+          },
+          "consequences": {
+            "type": "string"
+          },
+          "duration": {
+            "type": "string"
+          },
+          "card": {
+            "type": "string"
+          },
+          "addr": {
+            "type": "string"
+          },
+          "batch": {
+            "type": "boolean"
+          },
+          "ask": {
+            "type": "integer"
+          },
+          "asksAllowed": {
+            "type": "integer"
+          },
+          "expiresIn": {
+            "type": "integer",
+            "description": "Seconds (dryRun)."
+          }
+        }
+      },
+      "errors": [
+        "bad_action",
+        "bad_params",
+        "bad_why",
+        "not_cardable",
+        "recently_denied",
+        "ask_limit",
+        "too_many_requests",
+        "usage"
+      ],
+      "doc": "An agent asks for one named change: K2 puts a permission card on its Thread for a person at the Settings floor (agents only; while both switches are on).",
+      "example": "k2 permission request compute.use --why 'Run the suite on k2n2-m1'"
+    },
+    {
+      "verb": "permission.update",
+      "cap": null,
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "permission-cards-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/permission/update"
+        }
+      },
+      "request": [
+        {
+          "title": "id",
+          "type": "string"
+        },
+        {
+          "title": "why",
+          "type": "string"
+        }
+      ],
+      "response": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "pending"
+            ]
+          },
+          "card": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "integer",
+            "description": "Seconds since the epoch."
+          },
+          "deniedBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "errors": [
+        "already_updated",
+        "request_not_pending",
+        "bad_why",
+        "not_found",
+        "usage"
+      ],
+      "doc": "Once, on a request denied within 7 days: a new why, and the card is posted again for the person who denied it (agents only).",
+      "example": "k2 permission update pr_7f3a2c --why 'Only for tonight's payroll run'"
+    },
+    {
+      "verb": "permission.cancel",
+      "cap": null,
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "permission-cards-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/permission/cancel"
+        }
+      },
+      "request": [
+        {
+          "title": "id",
+          "type": "string"
+        }
+      ],
+      "response": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "pr_…, or the held request's own id (ar_22)."
+          },
+          "action": {
+            "type": "string"
+          },
+          "params": {
+            "type": "object"
+          },
+          "state": {
+            "enum": [
+              "pending",
+              "already_done",
+              "applying",
+              "approved",
+              "denied",
+              "expired",
+              "stale",
+              "failed",
+              "cancelled",
+              "closed"
+            ]
+          },
+          "askedAt": {
+            "type": "integer",
+            "description": "Seconds since the epoch."
+          },
+          "expiresAt": {
+            "type": "integer",
+            "description": "Seconds since the epoch."
+          },
+          "answeredBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "answeredAt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Seconds since the epoch."
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "card": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The card's Thread doc id."
+          },
+          "addr": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ask": {
+            "type": "integer"
+          }
+        }
+      },
+      "errors": [
+        "request_not_pending",
+        "not_found",
+        "usage"
+      ],
+      "doc": "The agent withdraws its own waiting request; the card reads 'Withdrawn' and nothing is applied (agents only).",
+      "example": "k2 permission cancel pr_7f3a2c"
+    },
+    {
+      "verb": "permission.status",
+      "cap": null,
+      "reach": "local",
+      "effect": "read",
+      "kind": "call",
+      "feature": "permission-cards-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/permission/status"
+        }
+      },
+      "request": [
+        {
+          "title": "id",
+          "type": "string",
+          "default": "",
+          "description": "Empty: the 20 newest requests."
+        }
+      ],
+      "response": {
+        "type": "object",
+        "description": "One request summary, or {requests:[summary…]} without an id.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "pr_…, or the held request's own id (ar_22)."
+          },
+          "action": {
+            "type": "string"
+          },
+          "params": {
+            "type": "object"
+          },
+          "state": {
+            "enum": [
+              "pending",
+              "already_done",
+              "applying",
+              "approved",
+              "denied",
+              "expired",
+              "stale",
+              "failed",
+              "cancelled",
+              "closed"
+            ]
+          },
+          "askedAt": {
+            "type": "integer",
+            "description": "Seconds since the epoch."
+          },
+          "expiresAt": {
+            "type": "integer",
+            "description": "Seconds since the epoch."
+          },
+          "answeredBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "answeredAt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Seconds since the epoch."
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "card": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The card's Thread doc id."
+          },
+          "addr": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ask": {
+            "type": "integer"
+          },
+          "requests": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "pr_…, or the held request's own id (ar_22)."
+                },
+                "action": {
+                  "type": "string"
+                },
+                "params": {
+                  "type": "object"
+                },
+                "state": {
+                  "enum": [
+                    "pending",
+                    "already_done",
+                    "applying",
+                    "approved",
+                    "denied",
+                    "expired",
+                    "stale",
+                    "failed",
+                    "cancelled",
+                    "closed"
+                  ]
+                },
+                "askedAt": {
+                  "type": "integer",
+                  "description": "Seconds since the epoch."
+                },
+                "expiresAt": {
+                  "type": "integer",
+                  "description": "Seconds since the epoch."
+                },
+                "answeredBy": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "answeredAt": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "description": "Seconds since the epoch."
+                },
+                "reason": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "message": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "card": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The card's Thread doc id."
+                },
+                "addr": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "ask": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        }
+      },
+      "errors": [
+        "not_found",
+        "usage"
+      ],
+      "doc": "Where the agent's own requests stand (agents only).",
+      "example": "k2 permission status pr_7f3a2c"
+    },
+    {
+      "verb": "permission.list",
+      "cap": null,
+      "reach": "local",
+      "effect": "read",
+      "kind": "call",
+      "feature": "permission-cards-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/permission/list"
+        }
+      },
+      "request": [
+        {
+          "title": "area",
+          "type": "string",
+          "default": ""
+        },
+        {
+          "title": "search",
+          "type": "string",
+          "default": ""
+        }
+      ],
+      "response": {
+        "type": "object",
+        "properties": {
+          "agent": {
+            "type": "string"
+          },
+          "actions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "area": {
+                  "type": "string"
+                },
+                "setting": {
+                  "type": "string"
+                },
+                "whatChanges": {
+                  "type": "string"
+                },
+                "floor": {
+                  "type": "string"
+                },
+                "approvers": {
+                  "type": "string"
+                },
+                "proof": {
+                  "type": "string"
+                },
+                "grant": {
+                  "type": "string"
+                },
+                "direction": {
+                  "type": "string"
+                },
+                "params": {
+                  "type": "array"
+                },
+                "now": {
+                  "type": "string"
+                },
+                "command": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "requests": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "pr_…, or the held request's own id (ar_22)."
+                },
+                "action": {
+                  "type": "string"
+                },
+                "params": {
+                  "type": "object"
+                },
+                "state": {
+                  "enum": [
+                    "pending",
+                    "already_done",
+                    "applying",
+                    "approved",
+                    "denied",
+                    "expired",
+                    "stale",
+                    "failed",
+                    "cancelled",
+                    "closed"
+                  ]
+                },
+                "askedAt": {
+                  "type": "integer",
+                  "description": "Seconds since the epoch."
+                },
+                "expiresAt": {
+                  "type": "integer",
+                  "description": "Seconds since the epoch."
+                },
+                "answeredBy": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "answeredAt": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "description": "Seconds since the epoch."
+                },
+                "reason": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "message": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "card": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The card's Thread doc id."
+                },
+                "addr": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "ask": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        }
+      },
+      "errors": [
+        "usage"
+      ],
+      "doc": "What this agent can ask for (the catalog, with each setting's current state) and its open requests (agents only).",
+      "example": "k2 permission list --area apps"
+    },
+    {
+      "verb": "permission.enabled",
+      "cap": null,
+      "reach": "local",
+      "effect": "read",
+      "kind": "call",
+      "feature": "permission-cards-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/permission/enabled"
+        }
+      },
+      "request": [],
+      "response": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "agent": {
+            "type": "string",
+            "description": "An agent with both switches on: its handle."
+          },
+          "server": {
+            "type": "boolean",
+            "description": "A person: the server switch is on."
+          },
+          "cards": {
+            "type": "integer",
+            "description": "The contract version (2)."
+          }
+        }
+      },
+      "errors": [],
+      "doc": "Whether permission cards are on for this caller; while off, today's unknown-route answer (agents and people).",
+      "example": "k2 permission enabled"
+    },
+    {
+      "verb": "permission.pending",
+      "cap": null,
+      "reach": "local",
+      "effect": "read",
+      "kind": "call",
+      "feature": "permission-cards-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/permission/pending"
+        }
+      },
+      "request": [],
+      "response": {
+        "type": "object",
+        "properties": {
+          "requests": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "requestId": {
+                  "type": "string"
+                },
+                "addr": {
+                  "type": "string"
+                },
+                "cardId": {
+                  "type": "string"
+                },
+                "seq": {
+                  "type": "integer"
+                },
+                "action": {
+                  "type": "string"
+                },
+                "setting": {
+                  "type": "string"
+                },
+                "whatChanges": {
+                  "type": "string"
+                },
+                "agent": {
+                  "type": "string"
+                },
+                "askedFor": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "floor": {
+                  "enum": [
+                    "owner",
+                    "admin"
+                  ]
+                },
+                "proof": {
+                  "type": "object"
+                },
+                "createdAt": {
+                  "type": "integer",
+                  "description": "Seconds since the epoch."
+                },
+                "expiresAt": {
+                  "type": "integer",
+                  "description": "Seconds since the epoch."
+                }
+              }
+            }
+          }
+        }
+      },
+      "errors": [
+        "action_card_person_only"
+      ],
+      "doc": "Waiting on you: the permission requests this person can answer; open each card by addr + cardId (people only, admin floor).",
+      "example": "k2 permission pending"
     }
   ]
 }

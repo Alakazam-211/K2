@@ -521,7 +521,7 @@ pub fn status_json(
             "apps": k2_root_proto::version::APPS_MIN_PROTOCOL,
             "sew": k2_root_proto::version::SEW_MIN_PROTOCOL,
         },
-        "autoHeal": heal::status_value(),
+        "autoHeal": heal::status_value(st),
         // The doctor line for `/usr/local/bin/k2` (0.46.3).
         "cli": cli_refresh::status_value(),
         "plainSudoRestartUsed": plain_sudo_restart_used().load(std::sync::atomic::Ordering::SeqCst),

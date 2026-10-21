@@ -609,3 +609,65 @@ fn status_shape() {
         "an installed-but-refused root helper is not 'legacy'"
     );
 }
+
+#[test]
+fn auto_heal_needs_root_is_superseded_once_the_helper_is_installed() {
+    use super::heal::{status_from, HealStatus};
+    // The boot heal ran before the admin installed the helper.
+    let before = HealStatus {
+        last_attempt: Some(1_760_000_000),
+        last_result: Some(Outcome::NeedsRoot {
+            reason: "k2-root-helper is not installed".into(),
+        }),
+        next_attempt: Some(1_760_086_400),
+    };
+    // Live probe still says missing: the needs_root line stands.
+    let v = status_from(&before, &RootHelperState::missing());
+    assert_eq!(v["lastResult"]["result"], "needs_root");
+    assert_eq!(v["lastResult"]["reason"], "k2-root-helper is not installed");
+    assert!(v.get("superseded").is_none(), "{v}");
+
+    // Installed now (protocol 4): no contradicting lastResult; the earlier
+    // attempt is kept, labelled, with its time.
+    let v = status_from(&before, &root_at("0.46.3", 4));
+    assert!(v["lastResult"].is_null(), "{v}");
+    assert_eq!(v["superseded"]["result"], "needs_root");
+    assert_eq!(v["superseded"]["reason"], "k2-root-helper is not installed");
+    assert_eq!(v["superseded"]["at"], 1_760_000_000);
+    assert_eq!(
+        v["superseded"]["why"],
+        "the helper is installed now (v0.46.3, protocol 4)"
+    );
+    assert_eq!(v["lastAttempt"], 1_760_000_000);
+    assert_eq!(v["nextAttempt"], 1_760_086_400);
+
+    // Installed but too old to self-update (protocol 2): still needs root.
+    let v = status_from(&before, &root_at("0.45.0", 2));
+    assert_eq!(v["lastResult"]["result"], "needs_root");
+    assert!(v.get("superseded").is_none(), "{v}");
+
+    // Installed but sudoers refuses it: still needs root.
+    let not_allowed = RootHelperState {
+        kind: Kind::NotAllowed,
+        protocol: 4,
+        ..RootHelperState::missing()
+    };
+    let v = status_from(&before, &not_allowed);
+    assert_eq!(v["lastResult"]["result"], "needs_root");
+
+    // Other results are never rewritten, even with a healthy helper.
+    let retry = HealStatus {
+        last_result: Some(Outcome::Retry {
+            reason: "offline".into(),
+        }),
+        ..before.clone()
+    };
+    let v = status_from(&retry, &root_at("0.46.3", 4));
+    assert_eq!(v["lastResult"]["result"], "retry");
+    assert!(v.get("superseded").is_none(), "{v}");
+
+    // No heal yet: nulls, no superseded.
+    let v = status_from(&HealStatus::default(), &root_at("0.46.3", 4));
+    assert!(v["lastResult"].is_null());
+    assert!(v.get("superseded").is_none(), "{v}");
+}

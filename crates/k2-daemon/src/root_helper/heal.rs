@@ -215,25 +215,55 @@ fn install_window(
 
 /// The daemon's latest heal, for status.
 #[derive(Debug, Default, Clone)]
-struct HealStatus {
-    last_attempt: Option<i64>,
-    last_result: Option<Outcome>,
-    next_attempt: Option<i64>,
+pub(super) struct HealStatus {
+    pub(super) last_attempt: Option<i64>,
+    pub(super) last_result: Option<Outcome>,
+    pub(super) next_attempt: Option<i64>,
 }
 
 static STATUS: Mutex<Option<HealStatus>> = Mutex::new(None);
 
-pub fn status_value() -> Value {
+/// The `autoHeal` block of `GET /cli/root-helper/status`, against the live
+/// probe `live` that the same status read made.
+pub fn status_value(live: &RootHelperState) -> Value {
     let s = STATUS
         .lock()
         .unwrap_or_else(|p| p.into_inner())
         .clone()
         .unwrap_or_default();
-    json!({
-        "lastAttempt": s.last_attempt,
-        "lastResult": s.last_result,
-        "nextAttempt": s.next_attempt,
-    })
+    status_from(&s, live)
+}
+
+/// A `needs_root` result is about the helper the heal saw (missing, not
+/// allowed, or too old to self-update). Once the live probe shows a helper
+/// that is installed, allowed and able to self-update (an admin ran the
+/// installer after that heal), that result contradicts the live state: it
+/// moves out of `lastResult` into `superseded` with its time, so status
+/// never reports "not installed" for an installed helper.
+pub(super) fn status_from(s: &HealStatus, live: &RootHelperState) -> Value {
+    let healthy = live.kind == Kind::Root && live.protocol >= SELF_UPDATE_MIN_PROTOCOL;
+    match &s.last_result {
+        Some(Outcome::NeedsRoot { reason }) if healthy => json!({
+            "lastAttempt": s.last_attempt,
+            "lastResult": null,
+            "superseded": {
+                "result": "needs_root",
+                "reason": reason,
+                "at": s.last_attempt,
+                "why": format!(
+                    "the helper is installed now (v{}, protocol {})",
+                    live.version.as_deref().unwrap_or("?"),
+                    live.protocol
+                ),
+            },
+            "nextAttempt": s.next_attempt,
+        }),
+        _ => json!({
+            "lastAttempt": s.last_attempt,
+            "lastResult": s.last_result,
+            "nextAttempt": s.next_attempt,
+        }),
+    }
 }
 
 fn now() -> i64 {

@@ -27729,6 +27729,27 @@ cmd_schema() {
       ]
     },
     {
+      "name": "db upgrade",
+      "usage": "k2 db upgrade <db>|--app <id>|--all [--to 17] [--check] [--rollback --yes] [--forget-old [--force-now]] [--now] [--allow-adopted] [--acknowledge-failed] [--no-wait] [--json]",
+      "description": "Move a database to a newer Postgres major by copy (dump/restore into that major's cluster; the old copy is kept closed 14 days). --check is read-only. A move gives a 60 s notice, stops the database's Apps, pauses its guest doors (503 db_maintenance), recreates its roles with the same passwords, copies, verifies (rows, RLS, policies, grants, sequences, logins), re-points the vaulted DATABASE_URL and starts the Apps. --rollback --yes goes back within 14 days (writes since the move are lost). Agents need the \"Allow this agent to manage Postgres versions\" switch and move only their own and their Apps' databases; --forget-old, --now, --all, --allow-adopted and --acknowledge-failed are the owner's. Exit 0 done, 3 refused (nothing changed), 1 failed.",
+      "args": [{"name": "db", "required": false}],
+      "flags": [
+        {"name": "--app", "arg": "id", "description": "Every database of that App's workspace."},
+        {"name": "--all", "arg": null, "description": "Owner: every K2 database below --to, one at a time; stops at the first failure."},
+        {"name": "--to", "arg": "major", "description": "Target major (default 17). Upward only, supported majors only."},
+        {"name": "--check", "arg": null, "description": "Read-only report (ok / warn / refuse per line)."},
+        {"name": "--rollback", "arg": null, "description": "Back to the kept old copy (needs --yes)."},
+        {"name": "--yes", "arg": null, "description": "Confirms a rollback (writes since the move are not carried back)."},
+        {"name": "--forget-old", "arg": null, "description": "Owner: drop the kept old copy and its dump (24 h after the move)."},
+        {"name": "--force-now", "arg": null, "description": "Owner, with --forget-old: skip the 24 h wait."},
+        {"name": "--now", "arg": null, "description": "Owner: skip the 60 s notice."},
+        {"name": "--allow-adopted", "arg": null, "description": "Owner: move out of a cluster set up outside K2."},
+        {"name": "--acknowledge-failed", "arg": null, "description": "Owner: clear a failed move's block after fixing it."},
+        {"name": "--no-wait", "arg": null, "description": "Start the move and return (GET /cli/db/upgrade?db= shows progress)."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
       "name": "db default-major",
       "usage": "k2 db default-major <major> [--json]",
       "description": "Owner: pin the Postgres major k2 db create uses without --major. New boxes start on 17; an existing box keeps its current major until the owner moves it here (an agent with the Postgres versions switch may only suggest it). Unsupported or past-EOL majors exit 3. Agents exit 3.",
@@ -30162,7 +30183,7 @@ EOF
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-heartbeats app-tickets app-identity app-surfaces skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute vault notifications data-sources projects hooks agent-hire garden-data changes design"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-heartbeats app-tickets app-identity app-surfaces skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute vault notifications data-sources projects hooks agent-hire garden-data changes design db-upgrade"
 
 _study_usage() {
     cat <<'EOF'
@@ -30181,7 +30202,7 @@ Topics:
   context  db  mail  connect-boundary  apps  app-deploys  app-move  app-api  app-heartbeats  app-tickets
   app-identity  app-surfaces  skins  feedback-loop  ticket-brief  zen  sidecars  llm-tokens
   llm-accounts  publish-framing  compute  vault  notifications  data-sources  projects  hooks
-  agent-hire  garden-data  changes
+  agent-hire  garden-data  changes  db-upgrade
 EOF
 }
 
@@ -30198,6 +30219,7 @@ _study_title() {
         errors) echo "Exit codes" ;;
         context) echo "Always-on context" ;;
         db) echo "Workspace database" ;;
+        db-upgrade) echo "Moving a database to a newer Postgres" ;;
         mail) echo "Agent email" ;;
         connect-boundary) echo "K2 vs Connect" ;;
         apps) echo "Apps" ;;
@@ -30255,6 +30277,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   errors              Exit 0/1/2/3/4 and owner_only / gated / forbidden
   context             AGENTS.md, skills, layers — keep always-on lean
   db                  Loopback Postgres; db_agent_access is create-only
+  db-upgrade          Move a database to a newer Postgres; old copy kept 14 days
   mail                Agent email; bodies untrusted; send is governed
   connect-boundary    K2 app/daemon/CLI vs Connect (separate product)
   apps                App guests; k2skn_ prefix never grid
@@ -30301,6 +30324,7 @@ _study_page() {
         errors) _study_page_errors ;;
         context) _study_page_context ;;
         db) _study_page_db ;;
+        db-upgrade) _study_page_db_upgrade ;;
         mail) _study_page_mail ;;
         connect-boundary) _study_page_connect_boundary ;;
         apps) _study_page_skins ;;
@@ -31342,6 +31366,66 @@ STUDY VS CONTEXT
   from Tooling; keep ROLE.md / PROJECT.md for this workspace's job.
 
 K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+EOF
+}
+
+_study_page_db_upgrade() {
+    cat <<'EOF'
+k2 study db-upgrade — moving a database to a newer Postgres
+
+MAJORS SIDE BY SIDE
+  One Postgres cluster per major on the box: the first keeps 5432, the
+  next takes the first free port in 5432-5449. 16 and 17 are supported;
+  18 waits for K2's SQL parser (guest doors) and Supabase. Moving a
+  database never removes a major: 16 stays for the databases still on it
+  (`k2 db clusters`).
+
+THE MOVE (one database at a time, by copy)
+  k2 db upgrade <db> --check      read-only: majors, the target cluster
+                                   (created on a free band port if needed),
+                                   extensions, roles, disk (2 x size + 1 GiB),
+                                   Apps and the pause estimate
+  k2 db upgrade <db> [--to 17]     the move: a 60 s notice, then Apps stop,
+                                   guest doors answer 503 db_maintenance, the
+                                   roles are recreated with the SAME passwords,
+                                   the data is copied (17's pg_dump/pg_restore),
+                                   checked (rows, RLS, policies, grants,
+                                   sequences, logins), and the vaulted
+                                   DATABASE_URL is re-pointed under the same
+                                   k2v:// ref. Apps start again.
+  Pause: about 10-30 s + size / 40 MB/s (1 GB ~ 30-60 s).
+  Anything wrong before the switch: undone, the old copy keeps serving.
+
+THE OLD COPY (14 days)
+  Kept closed (no one connects) in the old cluster for 14 days.
+  k2 db upgrade <db> --rollback --yes   back to it. Writes made on the new
+                                         major since the move are NOT carried
+                                         back; the new copy is kept, renamed.
+  k2 db upgrade <db> --forget-old       owner only, 24 h after the move
+                                         (--force-now skips the wait): drops
+                                         the old copy and its dump. Never a
+                                         cluster, never a package.
+
+WHO
+  Owner: everything. Admin login: --check only.
+  An agent needs "Allow this agent to manage Postgres versions" (the owner
+  turns it on: Agent tab, or `k2 db versions-access on`), and then moves,
+  checks and rolls back its OWN workspace's and its own Apps' databases.
+  Owner only: --forget-old, --now (skip the notice), --allow-adopted,
+  --all, --acknowledge-failed.
+
+AIR-GAP
+  Installing 17 needs apt.postgresql.org (pinned key, pinned packages).
+  Without it: install postgresql-17 and postgresql-client-17 from your
+  mirror (apt install ./*.deb), then re-run.
+
+LATER (0.46.4)
+  Live dual-run (logical replication, a near-zero pause) and the
+  whole-cluster path for very large clusters.
+
+EXITS
+  0 done · 3 refused (nothing changed) · 1 failed (the owner gets an inbox
+  note; new moves wait for --acknowledge-failed).
 EOF
 }
 
@@ -54548,6 +54632,102 @@ print("Allow this agent to manage Postgres versions: %s for %s%s" % ("on" if on 
                 exit 2
             fi
             D_VERB="create" D_JSON="$as_json" D_ID="$client_id" D_NAME="$name" D_ACCESS="$access" D_TEST="$test" D_MAJOR="$major" _db_py ;;
+        upgrade)
+            # `k2 db upgrade` (0.46.3): move a database to a newer Postgres
+            # major by copy; the old copy is kept 14 days. POST/GET
+            # /cli/db/upgrade. Exit 0 done, 3 refused, 1 failed.
+            local u_db="" u_app="" u_all=false u_to="" u_check=false u_rb=false u_yes=false u_forget=false
+            local u_force=false u_now=false u_adopted=false u_ack=false u_wait=true
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --json) as_json=true; shift ;;
+                    --app) u_app="${2:-}"; shift 2 ;;
+                    --all) u_all=true; shift ;;
+                    --to) u_to="${2:-}"; shift 2 ;;
+                    --to=*) u_to="${1#*=}"; shift ;;
+                    --check) u_check=true; shift ;;
+                    --rollback) u_rb=true; shift ;;
+                    --yes) u_yes=true; shift ;;
+                    --forget-old) u_forget=true; shift ;;
+                    --force-now) u_force=true; shift ;;
+                    --now) u_now=true; shift ;;
+                    --allow-adopted) u_adopted=true; shift ;;
+                    --acknowledge-failed) u_ack=true; shift ;;
+                    --no-wait) u_wait=false; shift ;;
+                    -*) _db_err "usage" "unexpected '$1'"; exit 2 ;;
+                    *) [ -z "$u_db" ] || { _db_err "usage" "one database"; exit 2; }; u_db="$1"; shift ;;
+                esac
+            done
+            if [ -n "$u_to" ]; then
+                case "$u_to" in [1-9][0-9]) ;; *) _db_err "usage" "--to takes a Postgres major, e.g. 17"; exit 2 ;; esac
+            fi
+            local u_body
+            u_body="$(_compute_json K2_CJ_db="$u_db" K2_CJ_app="$u_app" K2_CJ_all_b="$($u_all && echo 1)" \
+                K2_CJ_to_n="$u_to" K2_CJ_check_b="$($u_check && echo 1)" K2_CJ_rollback_b="$($u_rb && echo 1)" \
+                K2_CJ_yes_b="$($u_yes && echo 1)" K2_CJ_forgetOld_b="$($u_forget && echo 1)" K2_CJ_forceNow_b="$($u_force && echo 1)" \
+                K2_CJ_now_b="$($u_now && echo 1)" K2_CJ_allowAdopted_b="$($u_adopted && echo 1)" \
+                K2_CJ_acknowledgeFailed_b="$($u_ack && echo 1)")"
+            _compute_split "$(K2_CP_MAX_TIME=900 _compute_send POST /cli/db/upgrade "$u_body" tcp)"
+            if [ "$_CP_STATUS" != "200" ]; then
+                printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
+raw=sys.stdin.read()
+try: v=json.loads(raw)
+except Exception: v={"error":"daemon_unreachable","hint":raw[:200] or "no answer from the K2 daemon"}
+print(json.dumps({"error": v.get("error"), "hint": v.get("hint", "")}))' >&2
+                case "$_CP_STATUS" in 400) exit 2 ;; *) exit 3 ;; esac
+            fi
+            if $as_json && { ! $u_wait || $u_check || $u_rb || $u_forget || $u_ack; }; then printf '%s\n' "$_CP_BODY"; exit 0; fi
+            if $u_check || $u_rb || $u_forget || $u_ack; then
+                printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
+v=json.load(sys.stdin)
+mark={"ok":"ok    ","warn":"warn  ","refuse":"REFUSE"}
+refused=False
+for r in v.get("check", []):
+    if "error" in r:
+        print("%s: %s" % (r.get("db"), r["error"])); refused=True; continue
+    print("%s: Postgres %s → %s (about %s–%s s pause)" % (r["db"], r["from"], r["to"], r["pauseSecs"][0], r["pauseSecs"][1]))
+    for l in r["lines"]:
+        print("  %s %-10s %s%s" % (mark.get(l["level"], l["level"]), l["id"], l["text"], ("  — " + l["hint"]) if l.get("hint") else ""))
+        refused = refused or l["level"] == "refuse"
+if "check" not in v:
+    print(json.dumps(v, indent=2))
+sys.exit(3 if refused else 0)'
+                exit $?
+            fi
+            # A move: watch it until it ends.
+            local u_name="$u_db"
+            [ -n "$u_name" ] || u_name="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["started"][0])')"
+            if ! $u_wait; then printf '%s\n' "$_CP_BODY"; exit 0; fi
+            echo "moving $u_name (the old copy stays 14 days; k2 db upgrade $u_name --rollback --yes)" >&2
+            local u_seen="" u_out u_rc
+            while true; do
+                sleep 3
+                _compute_split "$(_compute_send GET "/cli/db/upgrade?db=$(urlencode "$u_name")" "" tcp)"
+                [ "$_CP_STATUS" = "200" ] || continue
+                u_out="$(printf '%s' "$_CP_BODY" | U_SEEN="$u_seen" U_JSON="$as_json" python3 -c 'import json,os,sys
+v=json.load(sys.stdin)
+m=(v.get("moves") or [None])[0]
+if not m: print("wait"); sys.exit(0)
+step="%s/%s" % (m["step"], m["state"])
+if step != os.environ["U_SEEN"] and os.environ["U_JSON"] != "true":
+    print("  " + step, file=sys.stderr)
+end=m["state"] in ("succeeded","aborted","rolled_back","failed")
+if end:
+    if os.environ["U_JSON"] == "true": print(json.dumps(m), file=sys.stderr)
+    else:
+        if m.get("lastError"): print("  " + m["lastError"], file=sys.stderr)
+        for w in m.get("warnings", []): print("  warn: " + w, file=sys.stderr)
+        for d in m.get("diff", [])[:20]: print("  diff: " + d, file=sys.stderr)
+    print("end:" + m["state"])
+else:
+    print("seen:" + step)')"
+                case "$u_out" in
+                    end:succeeded) exit 0 ;;
+                    end:aborted|end:rolled_back) exit 3 ;;
+                    end:*) exit 1 ;;
+                    seen:*) u_seen="${u_out#seen:}" ;;
+                esac
+            done ;;
         clusters)
             while [ $# -gt 0 ]; do case "$1" in --json) as_json=true; shift ;; *) _db_err "usage" "unexpected '$1'"; exit 2 ;; esac; done
             D_VERB="clusters" D_JSON="$as_json" _db_py ;;

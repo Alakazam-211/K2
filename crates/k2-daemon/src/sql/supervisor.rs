@@ -425,6 +425,8 @@ pub fn spawn_health_loop() {
                         eprintln!("[db] boot seal: {line}");
                     }
                 });
+                // `k2 db upgrade`: a move the last daemon died in (§13).
+                let _ = std::panic::catch_unwind(super::pgmove::k2::recover_at_boot);
             }
         });
 }

@@ -482,6 +482,9 @@ pub const ROUTES: &[Route] = &[
     post("/cli/db/server/uninstall", Admin),
     get("/cli/db/status", Member),
     get("/cli/db/tables", Member),
+    // `k2 db upgrade` (0.46.3 S5): logins need Admin (check only); the
+    // handler's versions_access gate decides the rest (§12).
+    both("/cli/db/upgrade", Admin),
     post("/cli/dns-manage", Admin),
     both("/cli/dns/access", Member),
     both("/cli/dns/records", Member),

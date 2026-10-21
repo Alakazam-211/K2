@@ -7845,6 +7845,26 @@ async fn handle_one_request(
         }
         // Guest stamped SQL. Exact path, before the `/cli/db/` skin 404
         // glob. GET is 405 here; the top guard already 405s HEAD/PUT.
+        // `k2 db upgrade` (0.46.3 S5): its own arm so the caller is
+        // classified like the compute routes (owner token, login, passport)
+        // and "local" is the loopback listener; the handler's
+        // versions_access gate decides (§12). POST mutates; GET reads.
+        p if p == "/cli/db/upgrade" => {
+            let body_bytes = if is_post {
+                super::http::read_post_body(&mut *stream, &mut buf).await
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let who = crate::compute_routes::who_from_tcp(&query, bearer_token.as_deref(), state.token.as_str());
+            let local = ingress == Ingress::Loopback;
+            let who = crate::sql::versions_access::Who::from_compute(&who, local);
+            let params = super::http::parse_params(&path, &query);
+            let r = tokio::task::spawn_blocking(move || crate::sql::pgmove::k2::handle(who, is_post, &body_bytes, &params))
+                .await
+                .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         p if p == "/cli/db/query" => {
             if !is_post {
                 let _ = stream.read(&mut buf).await;

@@ -25,6 +25,7 @@
 pub mod catalog;
 pub mod check;
 pub mod helper_ops;
+pub mod k2;
 pub mod request;
 pub mod worker;
 
@@ -535,7 +536,6 @@ fn steps(run: &mut Run, rec: &DbRecord, report: &check::Report, opts: &MoveOpts)
     if !replay.is_empty() {
         run.ops.sql(to, "postgres", &replay).map_err(|e| format!("database grants: {e}"))?;
     }
-    run.env.rerun_k2_setup(to, &db).map_err(|e| format!("K2 setup on {to}: {e}"))?;
 
     // 7. verify
     run.at(Step::Verify, MoveState::Verifying);
@@ -565,7 +565,8 @@ fn steps(run: &mut Run, rec: &DbRecord, report: &check::Report, opts: &MoveOpts)
         Ok(done) => run.p.repointed = done,
         Err((done, why)) => {
             // §13 row 8: reverse what was re-pointed, the record back.
-            let back = run.env.unpoint(&db, &done, from_port, to_port).and_then(|_| run.env.set_major(&db, from));
+            // The record back first: the reversal re-points from it.
+            let back = run.env.set_major(&db, from).and_then(|_| run.env.unpoint(&db, &done, from_port, to_port));
             return match back {
                 Ok(()) => {
                     let errs = run.undo_before_switch();
@@ -624,6 +625,11 @@ fn finish_forward(run: &mut Run, from: Major, to: Major, to_port: u16) -> Result
     run.env.clear_notice(&db);
     if let Err(e) = run.ops.sql(to, &db, "ANALYZE;\n") {
         run.p.warnings.push(format!("ANALYZE on {to}: {e}"));
+    }
+    // K2's idempotent setup through the resolver, now pointing at `to`
+    // (V34; what it sets rode the dump and was verified above).
+    if let Err(e) = run.env.rerun_k2_setup(to, &db) {
+        run.p.warnings.push(format!("K2 setup on {to}: {e}"));
     }
     if let Err(e) = run.env.verify_k2(to, &db) {
         run.p.warnings.push(format!("K2 check through the guest door: {e}"));
@@ -736,7 +742,7 @@ pub fn rollback(ops: &dyn ClusterOps, env: &dyn MoveEnv, db: &str, o: &RollbackO
     ops.allow_conn(to, db, ConnMode::Quiesce).map_err(|e| undo(format!("quiesce: {e}")))?;
     env.set_major(db, from).map_err(|e| undo(format!("record: {e}")))?;
     if let Err((done, why)) = env.repoint(db, to_port, from_port) {
-        let back = env.unpoint(db, &done, to_port, from_port).and_then(|_| env.set_major(db, to));
+        let back = env.set_major(db, to).and_then(|_| env.unpoint(db, &done, to_port, from_port));
         return Err(undo(match back {
             Ok(()) => format!("re-point: {why} (reversed; still on {to})"),
             Err(e) => format!("re-point: {why}; reversing it failed: {e}"),

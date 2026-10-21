@@ -7522,9 +7522,11 @@ The box (Linux):
                                        --install-podman (or a yes at the prompt)
                                        installs K2's pinned Podman 5 in
                                        /opt/k2/podman for the k2app user only;
-                                       the distro's Podman is untouched. Never
-                                       without asking. --dry-run prints every
-                                       change and changes nothing (agents may
+                                       a distro Podman already there is left as
+                                       it is. Never without asking. --dry-run
+                                       prints every change, including the exact
+                                       distro packages it would install, and
+                                       changes nothing (agents may
                                        run it). --podman-from: air-gapped, a
                                        folder holding the pinned tarball.
   k2 app box podman uninstall [--json] Owner: remove K2's Podman (refused while
@@ -7850,7 +7852,21 @@ else:
     print("    sha256 %s (%s bytes)" % (b.get("sha256"), b.get("size")))
     for w in b.get("writes", []):
         print("    writes %s" % w)
-    print("    %s" % b.get("distroPodman", ""))
+k = v.get("packages") or {}
+if k.get("manager"):
+    if k.get("error"):
+        print("  Distro packages (%s): %s" % (k["manager"], k["error"]))
+    else:
+        inst = k.get("install") or []
+        print("  Distro packages prepare would install (%s): %s" % (k["manager"], " ".join(inst) if inst else "none, all already installed"))
+        if k.get("alreadyInstalled"):
+            print("    already installed: %s" % " ".join(k["alreadyInstalled"]))
+    if k.get("distroPodman"):
+        print("  Podman: %s" % k["distroPodman"])
+elif k:
+    print("  Distro packages: none (%s)" % k.get("note", "no package manager"))
+if k.get("manager") and k.get("note"):
+    print("    %s" % k["note"])
 print("Steps prepare would run:")
 for s in v.get("steps", []):
     print("  " + s)

@@ -130,8 +130,149 @@ pub fn bundle_json(arch: Option<&str>, k2app_uid: Option<u32>, userns_restricted
         "size": art.map(|a| a.size),
         "prefix": pb::PREFIX,
         "writes": writes,
-        "distroPodman": "left as it is (only the k2app user runs K2's Podman)",
+        "distroPodman": "a distro Podman already on the box is left as it is (only the k2app user runs K2's Podman)",
     })
+}
+
+/// The box's own Podman, as `apps packages install` sees it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BoxPodman {
+    None,
+    /// The distro's, at `/usr/bin/podman`.
+    Distro,
+    /// One the owner built, under /usr/local.
+    Local(String),
+}
+
+/// The packages `apps packages install` asks the package manager for
+/// (`pm`: `apt`, `dnf` or `pacman`). Mirrors the helper's
+/// `select_packages` (k2-root-helper `apps.rs`, 0.46.3 F3/F4) plus
+/// AppArmor's parser package: keep the two in step.
+pub fn planned_packages(pm: &str, bundle: bool, have: &BoxPodman, apparmor: bool) -> Result<Vec<&'static str>, String> {
+    use k2_root_proto::apps as ap;
+    let (base, aa): (&[&'static str], &[&'static str]) = match pm {
+        "apt" => (ap::APT_PACKAGES, ap::APT_APPARMOR_PACKAGES),
+        "dnf" => (ap::DNF_PACKAGES, &[]),
+        "pacman" => (ap::PACMAN_PACKAGES, ap::PACMAN_APPARMOR_PACKAGES),
+        other => return Err(format!("no package list for {other}")),
+    };
+    let mut out: Vec<&'static str> = if bundle {
+        base.iter().copied().filter(|p| !ap::BUNDLE_SHIPS.contains(p)).collect()
+    } else {
+        match have {
+            BoxPodman::Local(path) => {
+                return Err(format!(
+                    "customer_podman: a Podman K2 didn't install is at {path} and K2's Podman bundle isn't for this OS: prepare stops before installing anything"
+                ))
+            }
+            BoxPodman::Distro => base.iter().copied().filter(|p| *p != ap::PODMAN_PACKAGE).collect(),
+            BoxPodman::None => base.to_vec(),
+        }
+    };
+    if apparmor {
+        out.extend_from_slice(aa);
+    }
+    Ok(out)
+}
+
+/// What the box can tell the dry run (no root): which files exist, and
+/// whether a package is installed (`None`: couldn't ask).
+pub struct PackageProbe<'a> {
+    pub exists: &'a dyn Fn(&str) -> bool,
+    pub installed: &'a dyn Fn(&str, &str) -> Option<bool>,
+}
+
+/// The real box: the package manager's own read-only query.
+pub fn package_installed(pm: &str, pkg: &str) -> Option<bool> {
+    let out = match pm {
+        "apt" => std::process::Command::new("/usr/bin/dpkg-query").args(["-W", "-f=${db:Status-Abbrev}", pkg]).output(),
+        "dnf" => std::process::Command::new("/usr/bin/rpm").args(["-q", pkg]).output(),
+        "pacman" => std::process::Command::new(k2_root_proto::apps::PACMAN).args(["-Q", pkg]).output(),
+        _ => return None,
+    }
+    .ok()?;
+    Some(match pm {
+        // `ii ` = installed; unknown packages exit non-zero.
+        "apt" => out.status.success() && String::from_utf8_lossy(&out.stdout).starts_with("ii"),
+        _ => out.status.success(),
+    })
+}
+
+/// The dry run's `packages`: the exact distro packages prepare would
+/// install (only those missing), the ones already there, and what happens
+/// to a distro Podman, in words that match the plan (smoke r6 on
+/// linux-test: the dry run listed none, and said "the distro's Podman is
+/// untouched" while the apply installed the distro's Podman 4.9.3).
+/// `bundle`: K2's Podman runs k2app after this prep.
+pub fn packages_json(bundle: bool, apparmor: bool, probe: &PackageProbe) -> J {
+    use k2_root_proto::apps as ap;
+    let pm = if (probe.exists)(ap::APT_GET) {
+        "apt"
+    } else if (probe.exists)(ap::DNF) {
+        "dnf"
+    } else if (probe.exists)(ap::PACMAN) {
+        "pacman"
+    } else {
+        return json!({
+            "manager": null,
+            "install": [],
+            "alreadyInstalled": [],
+            "note": "no supported package manager (apt-get, dnf, pacman) on this machine: prepare installs nothing here",
+        });
+    };
+    let have = if (probe.exists)(ap::PODMAN) {
+        BoxPodman::Distro
+    } else if let Some(l) = ap::LOCAL_PODMAN.iter().find(|p| (probe.exists)(p)) {
+        BoxPodman::Local(l.to_string())
+    } else {
+        BoxPodman::None
+    };
+    let box_podman = match &have {
+        BoxPodman::None => J::Null,
+        BoxPodman::Distro => json!(ap::PODMAN),
+        BoxPodman::Local(p) => json!(p),
+    };
+    let requested = match planned_packages(pm, bundle, &have, apparmor) {
+        Ok(r) => r,
+        Err(e) => return json!({ "manager": pm, "install": [], "alreadyInstalled": [], "boxPodman": box_podman, "error": e }),
+    };
+    let mut install = Vec::new();
+    let mut already = Vec::new();
+    let mut unknown = false;
+    for p in &requested {
+        match (probe.installed)(pm, p) {
+            Some(true) => already.push(*p),
+            Some(false) => install.push(*p),
+            None => {
+                unknown = true;
+                install.push(*p)
+            }
+        }
+    }
+    let distro_podman = if install.contains(&ap::PODMAN_PACKAGE) {
+        "installs the distro's Podman (the podman package): this box has none yet".to_string()
+    } else {
+        match &have {
+            BoxPodman::Distro if bundle => format!("the distro's Podman at {} stays as it is (only the k2app user runs K2's Podman)", ap::PODMAN),
+            BoxPodman::Distro => format!("the distro's Podman at {} stays as it is (K2 doesn't upgrade a Podman it didn't install)", ap::PODMAN),
+            BoxPodman::Local(p) => format!("the Podman at {p} stays as it is"),
+            BoxPodman::None if bundle => "no distro Podman is installed: K2's Podman in /opt/k2/podman runs the k2app user".to_string(),
+            BoxPodman::None => "no Podman is installed".to_string(),
+        }
+    };
+    let mut v = json!({
+        "manager": pm,
+        "path": if bundle { "bundle" } else { "distro" },
+        "install": install,
+        "alreadyInstalled": already,
+        "requested": requested,
+        "boxPodman": box_podman,
+        "distroPodman": distro_podman,
+    });
+    if unknown {
+        v["note"] = json!(format!("couldn't ask {pm} which packages are installed: every listed package is shown as to install"));
+    }
+    v
 }
 
 /// The box prep plan with the install in it: `ensure-user` first (the
@@ -295,7 +436,7 @@ pub(crate) fn prepare_step(o: &PodmanOpts, d: &Decision, st: &root_helper::RootH
 }
 
 /// The dry run: what prepare would do, with no mutating root call.
-pub fn dry_run(d: &Decision, o: &PodmanOpts, plan: &[Vec<String>], uid: Option<u32>, doctor: J) -> J {
+pub fn dry_run(d: &Decision, o: &PodmanOpts, plan: &[Vec<String>], uid: Option<u32>, doctor: J, packages: J) -> J {
     let podman = match d {
         Decision::Keep { version, source } => json!({ "action": "keep", "have": version, "source": source }),
         Decision::Distro { have } => json!({ "action": "distro", "have": have, "note": "the bundle is for Ubuntu 24.04 and Debian 12; this box uses its distro's Podman" }),
@@ -308,7 +449,7 @@ pub fn dry_run(d: &Decision, o: &PodmanOpts, plan: &[Vec<String>], uid: Option<u
         }),
     };
     let steps: Vec<String> = plan.iter().map(|a| a.join(" ")).collect();
-    json!({ "ok": true, "dryRun": true, "changed": false, "podman": podman, "steps": steps, "box": doctor })
+    json!({ "ok": true, "dryRun": true, "changed": false, "podman": podman, "packages": packages, "steps": steps, "box": doctor })
 }
 
 /// Dry run is a read: anyone who may read the doctor (the owner, Admin
@@ -523,14 +664,14 @@ mod tests {
         let base = vec![vec!["apps".to_string(), "packages".into(), "install".into()], vec!["apps".into(), "ensure-user".into()]];
         let d = decide(Some("4.9.3"), false, Some(NOBLE));
         let o = PodmanOpts { install: true, dry_run: true, from: None };
-        let v = dry_run(&d, &o, &plan_with_install(base.clone()), Some(996), json!({"ready": false}));
+        let v = dry_run(&d, &o, &plan_with_install(base.clone()), Some(996), json!({"ready": false}), json!({"install": ["uidmap"]}));
         assert_eq!(v["dryRun"], true);
         assert_eq!(v["changed"], false);
         assert_eq!(v["podman"]["action"], "install");
         assert_eq!(v["steps"][1], "apps podman install");
         let writes = v["podman"]["bundle"]["writes"].as_array().unwrap();
         assert!(writes.iter().any(|w| w == "/etc/containers/containers.rootless.conf.d/996/90-k2-podman.conf"), "{writes:?}");
-        let keep = dry_run(&decide(Some("5.4.2"), false, Some(TRIXIE)), &o, &base, None, json!({}));
+        let keep = dry_run(&decide(Some("5.4.2"), false, Some(TRIXIE)), &o, &base, None, json!({}), json!({}));
         assert_eq!(keep["podman"]["action"], "keep");
         assert!(keep["steps"].as_array().unwrap().iter().all(|s| s != "apps podman install"));
     }
@@ -586,5 +727,75 @@ mod tests {
         // Dry run is a read anyone with a credential may ask.
         assert!(may_dry_run(&Who::Agent { project_id: "p".into(), session_id: "s".into() }).is_ok());
         assert!(may_dry_run(&Who::Invalid).is_err());
+    }
+
+    fn strs(v: &J) -> Vec<String> {
+        v.as_array().unwrap_or_else(|| panic!("not a list: {v}")).iter().map(|x| x.as_str().unwrap().to_string()).collect()
+    }
+
+    /// Smoke r6 (linux-test): the dry run listed no packages and said "the
+    /// distro's Podman is untouched", then the apply apt-installed the
+    /// distro's Podman 4.9.3, crun, conmon, passt, skopeo, uidmap,
+    /// catatonit… Now it lists exactly the missing packages and says what
+    /// happens to Podman.
+    #[test]
+    fn the_dry_run_lists_the_exact_missing_packages_and_the_podman_truth() {
+        use k2_root_proto::apps as ap;
+        // A bare apt box: no Podman at all, only nftables installed.
+        let exists = |p: &str| p == ap::APT_GET;
+        let installed = |pm: &str, pkg: &str| {
+            assert_eq!(pm, "apt");
+            Some(pkg == "nftables")
+        };
+        let v = packages_json(false, false, &PackageProbe { exists: &exists, installed: &installed });
+        assert_eq!(v["manager"], "apt", "{v}");
+        assert_eq!(strs(&v["install"]), vec!["podman", "crun", "passt", "uidmap", "dbus-user-session", "skopeo", "catatonit"], "{v}");
+        assert_eq!(strs(&v["alreadyInstalled"]), vec!["nftables"]);
+        assert_eq!(v["boxPodman"], J::Null);
+        let words = v["distroPodman"].as_str().unwrap();
+        assert!(words.contains("installs the distro's Podman"), "{words}");
+        assert!(!v.to_string().contains("untouched"), "{v}");
+        // The same box with the AppArmor parser missing: apparmor joins.
+        let v = packages_json(false, true, &PackageProbe { exists: &exists, installed: &installed });
+        assert!(strs(&v["install"]).ends_with(&["apparmor".to_string()]), "{v}");
+
+        // The distro's Podman is there: never in the list, and kept.
+        let exists = |p: &str| p == ap::APT_GET || p == ap::PODMAN;
+        let installed = |_: &str, pkg: &str| Some(matches!(pkg, "crun" | "uidmap"));
+        let v = packages_json(false, false, &PackageProbe { exists: &exists, installed: &installed });
+        assert_eq!(strs(&v["install"]), vec!["passt", "dbus-user-session", "skopeo", "catatonit", "nftables"], "{v}");
+        assert_eq!(strs(&v["alreadyInstalled"]), vec!["crun", "uidmap"]);
+        assert_eq!(v["boxPodman"], "/usr/bin/podman");
+        assert!(v["distroPodman"].as_str().unwrap().contains("stays as it is"), "{v}");
+
+        // K2's Podman runs k2app: the bundle's own parts are left out.
+        let exists = |p: &str| p == ap::APT_GET;
+        let installed = |_: &str, _: &str| Some(false);
+        let v = packages_json(true, false, &PackageProbe { exists: &exists, installed: &installed });
+        assert_eq!(strs(&v["install"]), vec!["uidmap", "dbus-user-session", "skopeo", "nftables"], "{v}");
+        assert_eq!(v["path"], "bundle");
+        assert!(v["distroPodman"].as_str().unwrap().contains("no distro Podman is installed"), "{v}");
+
+        // A source-built Podman with no bundle: prepare stops, says so.
+        let exists = |p: &str| p == ap::APT_GET || p == "/usr/local/bin/podman";
+        let v = packages_json(false, false, &PackageProbe { exists: &exists, installed: &installed });
+        assert!(v["error"].as_str().unwrap().starts_with("customer_podman"), "{v}");
+        assert_eq!(strs(&v["install"]), Vec::<String>::new());
+
+        // The package manager can't be asked: everything listed, said so.
+        let installed = |_: &str, _: &str| None;
+        let v = packages_json(true, false, &PackageProbe { exists: &|p: &str| p == ap::DNF, installed: &installed });
+        assert_eq!(v["manager"], "dnf");
+        assert_eq!(strs(&v["install"]), vec!["shadow-utils", "skopeo"], "{v}");
+        assert!(v["note"].as_str().unwrap().contains("couldn't ask dnf"), "{v}");
+
+        // No package manager (a Mac): nothing to install, said plainly.
+        let v = packages_json(false, false, &PackageProbe { exists: &|_: &str| false, installed: &installed });
+        assert_eq!((v["manager"].clone(), strs(&v["install"])), (J::Null, vec![]));
+
+        // The dry run carries it, text and JSON alike.
+        let d = decide(None, false, Some("ID=ubuntu\nVERSION_ID=\"22.04\"\n"));
+        let out = dry_run(&d, &PodmanOpts { dry_run: true, ..Default::default() }, &[], None, json!({}), json!({"install": ["podman"]}));
+        assert_eq!(strs(&out["packages"]["install"]), vec!["podman"]);
     }
 }

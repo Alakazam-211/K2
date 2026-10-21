@@ -707,6 +707,32 @@ fn sweep_in_background(now: i64) {
     });
 }
 
+/// `~/.k2/disk-sweep-now`: the next watch tick (≤ 60 s, mode not `off`)
+/// runs the Seed sweep at once instead of waiting for the daily one, and
+/// writes its report to `~/.k2/disk-sweep-now.done` (the A6 drill's
+/// `SWEEP_CMD`). The sweep removes only what it would remove anyway.
+pub const SWEEP_NOW_FILE: &str = "disk-sweep-now";
+
+fn sweep_requested() -> bool {
+    k2_core::paths::k2_home().join(SWEEP_NOW_FILE).exists()
+}
+
+fn run_requested_sweep(now: i64) {
+    let home = k2_core::paths::k2_home();
+    // A daily sweep still running: the request waits for the next tick.
+    if SWEEPING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let _ = std::fs::remove_file(home.join(SWEEP_NOW_FILE));
+    let r = run_sweep(now, &LiveEngine);
+    SWEEPING.store(false, Ordering::SeqCst);
+    super::disk_scan::republish();
+    let done = home.join(format!("{SWEEP_NOW_FILE}.done"));
+    if let Err(e) = std::fs::write(&done, serde_json::to_vec_pretty(&r).unwrap_or_default()) {
+        k2_core::log_debug!("[disk-watch] {}: {e}", done.display());
+    }
+}
+
 // ── the thread ───────────────────────────────────────────────────────
 
 fn host() -> String {
@@ -744,7 +770,9 @@ pub fn spawn() {
                 if let Err(e) = save_state(&path, &state) {
                     k2_core::log_debug!("[disk-watch] state: {e}");
                 }
-                if now >= NEXT_SWEEP_AT.load(Ordering::Relaxed) {
+                if sweep_requested() {
+                    run_requested_sweep(now);
+                } else if now >= NEXT_SWEEP_AT.load(Ordering::Relaxed) {
                     NEXT_SWEEP_AT.store(now + SWEEP_EVERY_SECS, Ordering::Relaxed);
                     state.last_sweep_at = Some(now);
                     sweep_in_background(now);

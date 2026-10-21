@@ -377,6 +377,7 @@ fn the_snapshot_names_every_rows_owner() {
     assert_eq!(ws.folder.as_deref(), Some(ws_path.to_string_lossy().as_ref()), "people get the folder");
     let agent_view = ws.for_agent();
     assert!(agent_view.folder.is_none() && agent_view.owner.workspace_id.is_none(), "agents never");
+    assert_eq!(agent_view.id, "nsi", "an agent sees the handle, never the workspace id");
     let plans_ws = row("workspace", "ws-plans");
     assert_eq!(plans_ws.disk_bytes, None, "not scanned yet: unknown");
     assert_eq!(s.scan.workspaces_at, Some(12));

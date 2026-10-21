@@ -1765,6 +1765,26 @@ mod unix_impl {
             assert!(misses.is_empty(), "agent GET verbs unknown on the cell socket:\n{}", misses.join("\n"));
         }
 
+        /// 0.46.3 box usage (prd-app-resources-disk-guard-v1 §12): the
+        /// existing App-route arm serves `GET /cli/app/resources` to the
+        /// cell's passport, and refuses GET on its two POST rows.
+        #[test]
+        fn cell_dispatch_serves_box_usage_and_its_post_rows_are_post_only() {
+            let _home = crate::test_support::TempHome::new();
+            let _ = k2_core::db::init_for_tests();
+            k2_core::deploy::set_enabled(true);
+            let p = principal();
+            let params: HashMap<String, String> = HashMap::new();
+            let (status, _, body) = dispatch_cell_verb("GET", "/cli/app/resources", &params, b"", &p, "sid-res");
+            assert!(!body.contains("route not found") && !body.contains("not served on cell socket"), "{status} {body}");
+            let v: serde_json::Value = serde_json::from_str(&body).expect("JSON body");
+            assert!(v.get("ok").is_some() || v["error"]["code"].is_string(), "the App arm answered: {status} {body}");
+            for path in ["/cli/app/resources/settings", "/cli/app/resources/rescan"] {
+                let (status, _, body) = dispatch_cell_verb("GET", path, &params, b"", &p, "sid-res");
+                assert_eq!(status, "405 Method Not Allowed", "{path}: {body}");
+            }
+        }
+
         #[test]
         fn cell_dispatch_serves_app_roster_reads_and_respond_get_is_405() {
             let _home = crate::test_support::TempHome::new();

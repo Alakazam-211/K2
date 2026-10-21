@@ -280,6 +280,12 @@ pub const ROUTES: &[Route] = &[
     get("/cli/app/remote-pass", Member),
     post("/cli/app/remote-pass/revoke", Admin),
     post("/cli/app/remote-pass/rotate", Owner),
+    // 0.46.3 box usage + disk guard (prd-app-resources-disk-guard-v1): the view
+    // is owner/Admin/agents (agents never see folder paths, handler); rescan is
+    // rate-limited; settings are the owner's (handler: owner token or Owner login).
+    get("/cli/app/resources", Admin),
+    post("/cli/app/resources/rescan", Admin),
+    post("/cli/app/resources/settings", Owner),
     post("/cli/app/restart", Admin),
     // S19: only the owner resumes a suspended App.
     post("/cli/app/resume", Owner),

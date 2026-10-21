@@ -49,6 +49,8 @@ pub mod podman_install;
 pub mod process_engine;
 pub mod process_exception;
 pub mod quotas;
+/// Box usage and the disk guard (prd-app-resources-disk-guard-v1, 0.46.3).
+pub mod resources;
 /// `requires.sew` / `requires.voice` against this box's Sew (0.46.3).
 pub mod requires;
 pub mod router;
@@ -79,3 +81,7 @@ mod ownership_tests;
 /// Slice B of prd-agent-app-permissions-v1: the App cores (0.46.3).
 #[cfg(test)]
 mod cores_tests;
+
+/// Box usage and the disk guard (prd-app-resources-disk-guard-v1, 0.46.3).
+#[cfg(test)]
+mod disk_guard_tests;

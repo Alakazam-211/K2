@@ -213,7 +213,8 @@ fn box_row(conn: &Connection, app: &AppRow, names: &mut HashMap<String, Maintain
             // Live usage arrives with the full shared budget (0.46.4).
             "usedBytes": J::Null,
         },
-        "disk": { "budgetBytes": cfg.resources.disk_bytes, "usedBytes": J::Null },
+        // 0.46.3: measured by the box-usage scan (null until it has run).
+        "disk": { "budgetBytes": cfg.resources.disk_bytes, "usedBytes": super::resources::app_disk_bytes(&app.app_id) },
         "cpuWeight": cfg.resources.cpu_weight,
         "hostnames": hostnames(conn, app),
         "ports": cfg.ports.iter().map(|p| json!({ "port": p.port, "proto": p.proto })).collect::<Vec<_>>(),

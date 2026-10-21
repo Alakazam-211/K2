@@ -457,8 +457,17 @@ fn apply_door(r: &reqs::AppRequest, by: &str) -> R<J> {
                 .iter()
                 .find(|p| **p == route)
                 .ok_or_else(|| no(dcodes::BAD_REQUEST, 400, format!("'{route}' is not a held App change")))?;
-            let ws = r.requester_workspace.clone().ok_or_else(|| no(dcodes::BAD_REQUEST, 400, "the held request has no requesting workspace"))?;
-            let who = Who::Agent { project_id: ws, session_id: r.requester_session.clone().unwrap_or_default() };
+            // An agent's request replays as that agent. A person's (the
+            // owner token at critical, an Admin login, a K2 shell tab) has
+            // no agent to replay as: the owner approved it in person, so
+            // it runs as the owner (as `publish_routes::run_approved` does;
+            // prd-app-resources-disk-guard-v1 §8 step 4).
+            let who = if r.requested_by.starts_with("agent:") {
+                let ws = r.requester_workspace.clone().ok_or_else(|| no(dcodes::BAD_REQUEST, 400, "the held request has no requesting workspace"))?;
+                Who::Agent { project_id: ws, session_id: r.requester_session.clone().unwrap_or_default() }
+            } else {
+                Who::Owner
+            };
             let body = r.body.get("body").cloned().unwrap_or_else(|| json!({}));
             let resp = with_manage_approved(|| super::routes::handle(route, who, body.to_string().as_bytes(), &HashMap::new()));
             let v: J = serde_json::from_str(&resp.body).unwrap_or(J::Null);

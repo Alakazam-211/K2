@@ -12,8 +12,12 @@
 //! switch off, the route tables skip `/cli/permission/` (C1, lane B), so
 //! the family answers exactly as an unknown route does today.
 //!
-//! P0: the reads exist; nothing calls them, and nothing syncs the setting
-//! into [`set_server_switch`] yet (lane B wires boot + settings updates).
+//! Wired (lane B): the daemon syncs the setting into [`set_server_switch`]
+//! at boot and on every settings update and reset
+//! (`settings_routes::sync_permission_cards`, which publishes the flip);
+//! the route tables read [`route_live`] (`route_policy::live_row`) and
+//! [`agent_verb_gated`] (`session_token::is_agent_verb`); `/boot-status`
+//! lists [`super::FEATURE_KEY`] while [`server_on`].
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -56,6 +60,37 @@ pub fn agent_switch_on(workspace_id: &str) -> bool {
 /// (routes, the refusal wrapper, the skill writer, the CLI probe).
 pub fn enabled_for(workspace_id: &str) -> bool {
     server_on() && agent_switch_on(workspace_id)
+}
+
+/// The feature's own routes (PRD §2.4, vs-live C1): the `/cli/permission/`
+/// family plus the two Thread routes that exist only for permission cards
+/// (the asker's note and "Turn off again"). While the global switch is off
+/// the route tables skip every one of them, so each answers exactly as an
+/// unknown route does today. The bare `/cli/permission` is not one: it was
+/// never a route and stays an unknown one in every state.
+pub fn route_gated(path: &str) -> bool {
+    path.starts_with(super::ROUTE_PREFIX) || path == super::NOTE_ROUTE || path == super::UNDO_ROUTE
+}
+
+/// [`route_live`] with the global switch given (pure, for tests and for
+/// callers that already read [`server_on`] once).
+pub fn route_live_when(path: &str, server_on: bool) -> bool {
+    server_on || !route_gated(path)
+}
+
+/// Whether the route tables may answer `path` now: every route that isn't
+/// [`route_gated`], and the gated ones only while the global switch is on.
+pub fn route_live(path: &str) -> bool {
+    route_live_when(path, server_on())
+}
+
+/// The family an agent's passport may reach as an agent verb
+/// (`session_token::is_agent_verb`), only while the global switch is on.
+/// The person verbs under the prefix refuse a passport in their handlers;
+/// with the agent's own switch off the handler answers that agent with
+/// today's unknown-route body (PRD §2.4, "server on, agent off").
+pub fn agent_verb_gated(path: &str) -> bool {
+    path.starts_with(super::ROUTE_PREFIX)
 }
 
 #[cfg(test)]
@@ -111,5 +146,55 @@ mod tests {
         assert!(enabled_for(&id), "both on → on");
         set_server_switch(false);
         assert!(!enabled_for(&id), "global off, agent on → off");
+    }
+
+    #[test]
+    fn gated_routes_are_the_family_and_the_two_card_thread_routes() {
+        for p in [
+            "/cli/permission/request",
+            "/cli/permission/enabled",
+            "/cli/permission/approve",
+            "/cli/permission/note",
+            "/cli/permission/",
+            "/cli/thread/permission-note",
+            "/cli/thread/permission-undo",
+        ] {
+            assert!(route_gated(p), "{p} must be gated");
+            assert!(!route_live_when(p, false), "{p} is skipped while the server switch is off");
+            assert!(route_live_when(p, true), "{p} is live while the server switch is on");
+        }
+        for p in [
+            "/cli/permission",
+            "/cli/permissions/request",
+            "/cli/thread/answer",
+            "/cli/thread/void",
+            "/cli/thread/permission-notes",
+            "/cli/agent-access/set",
+            "/cli/settings/get",
+        ] {
+            assert!(!route_gated(p), "{p} must not be gated");
+            assert!(route_live_when(p, false), "{p} is live in every state");
+            assert!(route_live_when(p, true));
+        }
+        assert!(agent_verb_gated("/cli/permission/request"));
+        assert!(!agent_verb_gated("/cli/permission"));
+        assert!(!agent_verb_gated("/cli/thread/permission-note"), "the note route is people and guests only");
+    }
+
+    #[test]
+    fn route_live_follows_the_server_switch() {
+        let _env = crate::test_env::lock();
+        let _unset = crate::test_env::EnvVar::remove(super::super::ENV_FORCE_ON);
+        set_server_switch(false);
+        assert!(!route_live("/cli/permission/request"));
+        assert!(route_live("/cli/thread/answer"));
+        set_server_switch(true);
+        assert!(route_live("/cli/permission/request"));
+        set_server_switch(false);
+        {
+            let _on = crate::test_env::EnvVar::set(super::super::ENV_FORCE_ON, "1");
+            assert!(route_live("/cli/thread/permission-note"), "the env force-on opens the routes too");
+        }
+        assert!(!route_live("/cli/thread/permission-note"));
     }
 }

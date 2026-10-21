@@ -432,7 +432,22 @@ impl SessionTokenRegistry {
 /// `clone/*`, tunnel control, `daemon/restart`, or PTY spawn — those are
 /// the owner-only escalation surface. The test suite asserts every entry
 /// in that denylist returns `false`.
+///
+/// Permission cards (prd-agent-settings-cards-v1 §2.4, vs-live C1): the
+/// `/cli/permission/` family is admitted only while the global "Permission
+/// cards" switch is on. Off, a passport on it gets exactly what it gets on
+/// any non-agent path today (`require_hook` → `None` → the cell's codeless
+/// 403). On, its handlers answer an agent whose own switch is off with that
+/// same body, and refuse a passport on the person verbs.
 pub fn is_agent_verb(path: &str) -> bool {
+    is_agent_verb_when(path, k2_core::permission::gate::server_on())
+}
+
+/// [`is_agent_verb`] with the permission-cards switch given (pure; tests).
+fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
+    if k2_core::permission::gate::agent_verb_gated(path) {
+        return permission_cards_on;
+    }
     // Hard denylist FIRST — owner-only escalation surface. Belt on top of
     // the allowlist so a future allowlist edit can't accidentally widen
     // into the escalation routes.
@@ -1604,6 +1619,29 @@ mod tests {
     }
 
     // ── capability allowlist / denylist (require_hook §3.3) ──────────
+
+    /// Permission cards (vs-live C1): the family is an agent verb only while
+    /// the global switch is on; off it is refused like any non-agent path.
+    /// Pure twin only: the process-wide switch is never flipped here.
+    #[test]
+    fn permission_family_is_an_agent_verb_only_while_the_server_switch_is_on() {
+        for p in [
+            "/cli/permission/request",
+            "/cli/permission/enabled",
+            "/cli/permission/status",
+            "/cli/permission/approve",
+        ] {
+            assert!(!is_agent_verb_when(p, false), "{p} admitted while off");
+            assert!(is_agent_verb_when(p, true), "{p} not admitted while on");
+        }
+        // Never the bare word, and nothing else moves with the switch.
+        for on in [false, true] {
+            assert!(!is_agent_verb_when("/cli/permission", on));
+            assert!(!is_agent_verb_when("/cli/agent-access/set", on));
+            assert!(!is_agent_verb_when("/cli/settings/update", on));
+            assert!(is_agent_verb_when("/cli/thread/answer", on));
+        }
+    }
 
     #[test]
     fn is_agent_verb_allows_agent_routes() {

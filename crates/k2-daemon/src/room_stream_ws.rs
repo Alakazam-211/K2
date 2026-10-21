@@ -79,8 +79,10 @@ pub enum Viewer {
     /// An App pass, as presented (re-resolved on every frame and tick).
     Guest { raw: String },
     /// The owner token or a Connect login (reads every Thread, as on
-    /// `GET /cli/thread`).
-    Login,
+    /// `GET /cli/thread`). `login`: `owner` for the owner token, else the
+    /// Connect username (the dispatcher resolves it), so permission cards
+    /// are projected for this person (rev 3.1 §4.2); `None` = not known.
+    Login { login: Option<String> },
 }
 
 /// The rooms a caller may stream now: room (project id) → its pinned
@@ -272,9 +274,10 @@ pub fn thread_message(conversation: &str, room: &str, seq: i64, id: &str, rev: u
 }
 
 /// The doc an overlay frame carries for this viewer (`wire_json_for`, the
-/// per-room socket's own builder).
-fn doc_for(frame: &OverlayFrame, guest: Option<&GuestWire>) -> Value {
-    serde_json::from_str::<Value>(&overlay_ws::wire_json_for(frame, guest))
+/// per-room socket's own builder, with the same permission-card
+/// projection: `seen` is this socket's viewer and its `cards=` opt-in).
+fn doc_for(frame: &OverlayFrame, guest: Option<&GuestWire>, seen: &crate::permission::view::Seen) -> Value {
+    serde_json::from_str::<Value>(&overlay_ws::wire_json_for(frame, guest, seen))
         .ok()
         .and_then(|mut v| v.get_mut("doc").map(Value::take))
         .unwrap_or(Value::Null)
@@ -349,7 +352,7 @@ impl Drop for RoomSlots {
 /// resolves (revoked, expired, App suspended).
 fn readable_now(viewer: &Viewer, link: Option<&LinkCtx>) -> Option<(Readable, Option<SkinPass>)> {
     match viewer {
-        Viewer::Login => {
+        Viewer::Login { .. } => {
             let db = k2_core::db::shared();
             let conn = db.lock();
             Some((readable_for_login(&conn), None))
@@ -387,7 +390,8 @@ fn guest_doc(raw: &str, link: Option<&LinkCtx>, frame: &OverlayFrame, room: &str
     }
     let root = crate::thread_attachments::project_root(room);
     let wire = GuestWire { pass, project_id: room.to_string(), root };
-    Ok(Some(doc_for(frame, Some(&wire))))
+    let seen = crate::permission::view::Seen::new(k2_core::permission::card::Viewer::Guest { app: None }, 0);
+    Ok(Some(doc_for(frame, Some(&wire), &seen)))
 }
 
 async fn send_http(stream: &mut TcpStream, status: &str, body: &str) {
@@ -415,6 +419,12 @@ pub async fn serve_room_stream_connection(stream: &mut TcpStream, params: HashMa
         }
     };
     let link: Option<Arc<LinkCtx>> = crate::apps::gateway::current();
+    // Permission cards (rev 3.1 §17.1): `cards=2` on the connect URL, for
+    // people only. A guest never gets an action card (`guest_doc`).
+    let seen = match &viewer {
+        Viewer::Login { login } => overlay_ws::socket_seen(&params, false, login.as_deref()),
+        Viewer::Guest { .. } => overlay_ws::socket_seen(&params, true, None),
+    };
     let Some((readable, _)) = readable_now(&viewer, link.as_deref()) else {
         let r = crate::skin_routes::revoked_skin_response();
         send_http(stream, r.status, &r.body).await;
@@ -545,18 +555,35 @@ pub async fn serve_room_stream_connection(stream: &mut TcpStream, params: HashMa
                 let Some(conv) = frame.conversation_id.clone() else { continue };
                 let Some(room) = view.room_of(&conv).map(str::to_string) else { continue };
                 let out = match (&viewer, frame.collection.as_str()) {
-                    (Viewer::Login, "thread") => {
-                        let doc = doc_for(&frame, None);
+                    (Viewer::Login { .. }, "thread") => {
+                        let doc = if overlay_ws::needs_blocking(&frame) {
+                            // A permission card: projected off the async worker.
+                            let (f, s) = (frame.clone(), seen.clone());
+                            match tokio::task::spawn_blocking(move || doc_for(&f, None, &s)).await {
+                                Ok(d) => d,
+                                Err(e) => {
+                                    // Never skip it silently: the client resyncs.
+                                    log_debug!("[daemon/room_stream] projection failed: {e}; inbox_reset");
+                                    let reset = json!({ "kind": "inbox_reset", "reason": "projection" }).to_string();
+                                    if write.send(Message::Text(reset)).await.is_err() {
+                                        break;
+                                    }
+                                    continue;
+                                }
+                            }
+                        } else {
+                            doc_for(&frame, None, &seen)
+                        };
                         Some(thread_message(&conv, &room, frame.seq, &frame.id, frame.rev, doc))
                     }
-                    (Viewer::Login, overlay_ws::MOVED_COLLECTION) => {
+                    (Viewer::Login { .. }, overlay_ws::MOVED_COLLECTION) => {
                         // Published under both keys; the set holds `from`.
                         let from = frame.activity.as_ref().and_then(|a| a.get("from")).and_then(Value::as_str).unwrap_or_default();
                         (from == conv).then(|| {
                             json!({ "kind": "thread_moved", "room": room, "from": from, "to": frame.id, "seq": frame.seq, "rev": frame.rev }).to_string()
                         })
                     }
-                    (Viewer::Login, overlay_ws::ADDRESS_COLLECTION) => {
+                    (Viewer::Login { .. }, overlay_ws::ADDRESS_COLLECTION) => {
                         let a = frame.activity.clone().unwrap_or(Value::Null);
                         Some(json!({ "kind": "thread_address", "room": room, "conversation_id": conv, "address": a["address"], "previous": a["previous"], "rev": frame.rev }).to_string())
                     }

@@ -2157,7 +2157,10 @@ async fn handle_one_request(
                         }
                     }
                 }
-                _ if super::http::token_ok(&query, state.token.as_str()) => crate::room_stream_ws::Viewer::Login,
+                _ if super::http::token_ok(&query, state.token.as_str()) => crate::room_stream_ws::Viewer::Login {
+                    // Permission cards are projected for this person (rev 3.1 §4.2).
+                    login: read_person_login(&query, bearer_token.as_deref(), state.token.as_str()),
+                },
                 _ => {
                     let _ = stream.read(&mut buf).await;
                     super::http::send_response(

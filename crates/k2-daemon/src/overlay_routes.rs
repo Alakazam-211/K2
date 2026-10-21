@@ -533,22 +533,38 @@ fn authorize_write(
 /// An App guest never sees an action (settings) card, as a card or as any
 /// fallback: owner/admin asks are none of a guest's business. Those items
 /// are dropped (a guest already gets seq gaps for hidden items).
-fn thread_items_view(items: &[overlay::OverlayItem], resolved: &ResolvedOverlay, pass: Option<&SkinPass>) -> serde_json::Value {
-    let mut v = if pass.is_some() {
-        serde_json::to_value(items.iter().filter(|i| !i.doc.is_action_card()).collect::<Vec<_>>())
-    } else {
-        serde_json::to_value(items)
-    }
-    .unwrap_or_else(|_| serde_json::json!([]));
+///
+/// Permission cards (prd-agent-settings-cards-v1 rev 3.1 §4.2, C9) are
+/// projected for `seen`'s viewer (`permission::view::project`): the
+/// `cards=2` view for a person who asked, else the text fallback. Every
+/// other doc is unchanged (borrowed, not copied).
+fn thread_items_view(
+    items: &[overlay::OverlayItem],
+    resolved: &ResolvedOverlay,
+    pass: Option<&SkinPass>,
+    seen: &crate::permission::view::Seen,
+) -> serde_json::Value {
+    let visible: Vec<std::borrow::Cow<'_, overlay::OverlayItem>> = items
+        .iter()
+        .filter(|i| pass.is_none() || !i.doc.is_action_card())
+        .map(|i| seen.item(i))
+        .collect();
+    let mut v = serde_json::to_value(visible).unwrap_or_else(|_| serde_json::json!([]));
     crate::thread_attachments::rewrite_items(&mut v, &resolved.project_id, pass);
     v
 }
 
 /// The page body (`ok:true`, newest page / `since_seq` / `before_seq`).
 /// `rev` must be read before the store read that produced `page`.
-fn snapshot_json(collection: &str, resolved: &ResolvedOverlay, page: OverlayPage, rev: u64) -> serde_json::Value {
+fn snapshot_json(
+    collection: &str,
+    resolved: &ResolvedOverlay,
+    page: OverlayPage,
+    rev: u64,
+    seen: &crate::permission::view::Seen,
+) -> serde_json::Value {
     let items = if collection == "thread" {
-        thread_items_view(&page.items, resolved, request_skin().as_ref())
+        thread_items_view(&page.items, resolved, request_skin().as_ref(), seen)
     } else {
         serde_json::to_value(&page.items).unwrap_or_else(|_| serde_json::json!([]))
     };
@@ -613,7 +629,13 @@ pub(crate) fn parse_after_seq(params: &HashMap<String, String>) -> Result<Option
 /// `items` and `changed` carry the same per-caller attachment view as the
 /// page ([`thread_items_view`]: live `state`, the App guest strip);
 /// `removed` is `{id, seq}` only.
-fn thread_delta_json(resolved: &ResolvedOverlay, after_seq: i64, delta: overlay::ThreadDelta, rev: u64) -> serde_json::Value {
+fn thread_delta_json(
+    resolved: &ResolvedOverlay,
+    after_seq: i64,
+    delta: overlay::ThreadDelta,
+    rev: u64,
+    seen: &crate::permission::view::Seen,
+) -> serde_json::Value {
     let pass = request_skin();
     let body = serde_json::json!({
         "ok": true,
@@ -621,9 +643,9 @@ fn thread_delta_json(resolved: &ResolvedOverlay, after_seq: i64, delta: overlay:
         "addr": resolved.addr,
         "conversation_id": resolved.conversation_id,
         "after_seq": after_seq,
-        "items": thread_items_view(&delta.items, resolved, pass.as_ref()),
+        "items": thread_items_view(&delta.items, resolved, pass.as_ref(), seen),
         "has_more": delta.has_more,
-        "changed": thread_items_view(&delta.changed, resolved, pass.as_ref()),
+        "changed": thread_items_view(&delta.changed, resolved, pass.as_ref(), seen),
         "removed": removed_json(&delta.removed),
         "pastAddresses": past_addresses(resolved),
     });
@@ -681,19 +703,24 @@ fn thread_read_target(addr: &str, principal: Option<&HookPrincipal>) -> Result<R
 
 /// Step 4: the store read and the body (`ok:true`, items through
 /// [`thread_items_view`], `rev` read BEFORE the store read, `instanceId`).
-fn thread_read_body(resolved: &ResolvedOverlay, mode: ThreadReadMode, limit: usize) -> Result<serde_json::Value, CliResponse> {
+fn thread_read_body(
+    resolved: &ResolvedOverlay,
+    mode: ThreadReadMode,
+    limit: usize,
+    seen: &crate::permission::view::Seen,
+) -> Result<serde_json::Value, CliResponse> {
     let rev = crate::overlay_ws::current_rev();
     let (since, before) = match mode {
         ThreadReadMode::After(after) => {
             return overlay::read_thread_delta(&resolved.conversation_id, after, limit)
-                .map(|delta| thread_delta_json(resolved, after, delta, rev))
+                .map(|delta| thread_delta_json(resolved, after, delta, rev, seen))
                 .map_err(|e| error_json("500 Internal Server Error", "store", e));
         }
         ThreadReadMode::Page { since, before } => (since, before),
         ThreadReadMode::Newest => (None, None),
     };
     overlay::read_thread_page(&resolved.conversation_id, since, before, limit)
-        .map(|page| snapshot_json("thread", resolved, page, rev))
+        .map(|page| snapshot_json("thread", resolved, page, rev, seen))
         .map_err(|e| error_json("500 Internal Server Error", "store", e))
 }
 
@@ -703,15 +730,29 @@ fn thread_read_body(resolved: &ResolvedOverlay, mode: ThreadReadMode, limit: usi
 /// /cli/thread/catchup` entry, so a catch-up entry can never drift from
 /// the plain read for any caller (the 0.46.1 delta leak, `c650ea6bb`, was
 /// exactly such a drift). Ok = the body with `ok:true`; Err = the plain
-/// read's error response (400 / 403 / 404 / 500).
+/// read's error response (400 / 403 / 404 / 500). `seen`: the caller as
+/// a permission-card viewer, with its `cards` opt-in.
 pub(crate) fn thread_read_for(
     addr: &str,
     mode: ThreadReadMode,
     limit: usize,
     principal: Option<&HookPrincipal>,
+    seen: &crate::permission::view::Seen,
 ) -> Result<serde_json::Value, CliResponse> {
     let resolved = thread_read_target(addr, principal)?;
-    thread_read_body(&resolved, mode, limit)
+    thread_read_body(&resolved, mode, limit, seen)
+}
+
+/// This request's viewer for the permission-card projection (rev 3.1
+/// §4.2): an App guest, an agent passport, the classified `caller`, else
+/// the login the dispatcher bound; `cards=` honoured for people only.
+pub(crate) fn request_seen(
+    params: &HashMap<String, String>,
+    caller: Option<&crate::sidecar_routes::Caller>,
+    cards: u8,
+) -> crate::permission::view::Seen {
+    let viewer = crate::permission::view::request_viewer(params, request_skin().is_some(), caller);
+    crate::permission::view::Seen::new(viewer, cards)
 }
 
 fn handle_get_thread(params: &HashMap<String, String>) -> CliResponse {
@@ -732,7 +773,8 @@ fn handle_get_thread(params: &HashMap<String, String>) -> CliResponse {
         }
         Ok(None) => ThreadReadMode::Page { since: parse_since_opt(params), before: parse_before_seq(params) },
     };
-    match thread_read_body(&resolved, mode, limit) {
+    let seen = request_seen(params, None, crate::permission::view::cards_param(params));
+    match thread_read_body(&resolved, mode, limit, &seen) {
         Ok(body) => CliResponse::ok_json(body.to_string()),
         Err(e) => e,
     }
@@ -811,6 +853,9 @@ fn handle_get_thread_latest(params: &HashMap<String, String>) -> CliResponse {
         ));
     }
     let principal = crate::caller_workspace::principal_from_params(params);
+    // Permission cards (rev 3.1 §17.1): the preview is the one-line text for
+    // THIS viewer; `cards=2` is accepted and has no effect here.
+    let seen = request_seen(params, None, 0);
     // thread-read-v1: a person (never an agent) also gets their own
     // `unread` / `waiting` / `muted` / `lastReadSeq` on each row.
     let reader = match crate::read_routes::request_login() {
@@ -870,7 +915,7 @@ fn handle_get_thread_latest(params: &HashMap<String, String>) -> CliResponse {
             let guest = request_skin().is_some();
             let window = if guest { THREAD_LATEST_GUEST_WINDOW } else { 1 };
             match overlay::read_thread_page(&resolved.conversation_id, None, None, window) {
-                Ok(page) => match page.items.iter().rev().find(|i| !guest || !i.doc.is_action_card()) {
+                Ok(page) => match page.items.iter().rev().find(|i| !guest || !i.doc.is_action_card()).map(|i| seen.item(i)) {
                     Some(item) => with_read(
                         serde_json::json!({
                             "addr": addr,
@@ -930,7 +975,11 @@ fn handle_get_chatter(params: &HashMap<String, String>) -> CliResponse {
     let limit = parse_overlay_limit(params);
     let rev = crate::overlay_ws::current_rev();
     match overlay::read_chatter_page(&resolved.conversation_id, since, before, limit) {
-        Ok(page) => CliResponse::ok_json(snapshot_json("chatter", &resolved, page, rev).to_string()),
+        Ok(page) => {
+            // Chatter never carries Thread cards; the viewer is unused there.
+            let seen = crate::permission::view::Seen::new(crate::permission::view::unknown(), 0);
+            CliResponse::ok_json(snapshot_json("chatter", &resolved, page, rev, &seen).to_string())
+        }
         Err(e) => error_json("500 Internal Server Error", "store", e),
     }
 }
@@ -2776,7 +2825,12 @@ pub fn spawn_card_expiry() {
         return;
     }
     let r = std::thread::Builder::new().name("thread-card-expiry".into()).spawn(|| loop {
-        sweep_expired_cards(overlay::now_secs());
+        let now = overlay::now_secs();
+        sweep_expired_cards(now);
+        // Permission cards (rev 3.1 §6.2): re-check open requests and
+        // republish any that became "Already on" (a no-op while the server
+        // switch is off).
+        crate::permission::view::sweep_already_done(now);
         std::thread::sleep(std::time::Duration::from_secs(60));
     });
     if let Err(e) = r {

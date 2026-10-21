@@ -33,6 +33,14 @@ use super::router;
 
 /// Health failures in a row that count as "unhealthy" (watch and after).
 const FAILS_TO_UNHEALTHY: u32 = 3;
+/// An unwalled instance re-adopted after a daemon restart is probed every
+/// second for this long (smoke r6: not once a minute). Failing it is a
+/// relaunch, never a crash.
+const ADOPT_CHECK_SECS: u64 = 15;
+/// Why a restart the daemon's own restart caused is not a crash.
+const WHY_DAEMON_RESTARTED: &str = "the K2 daemon restarted";
+const WHY_STALE_SINK: &str = "relaunch: its log pipe went with the old K2 daemon";
+const WHY_ADOPT_UNHEALTHY: &str = "relaunch: it didn't answer its health check after the K2 daemon restarted";
 /// Deployments of an App kept for rollback targets and the sweep.
 pub const KEEP_DEPLOYMENTS: usize = 10;
 
@@ -66,6 +74,16 @@ struct AppRt {
     next_restart_at: Option<i64>,
     live_fails: u32,
     last_probe: Option<Instant>,
+    /// Why the pending restart happens (`None`: a crash restart).
+    restart_why: Option<&'static str>,
+    /// A re-adopted unwalled instance is being checked (every second)
+    /// until this deadline.
+    adopt_check: Option<Instant>,
+    /// Start a fresh instance of the live Seed now (not a crash).
+    relaunch: Option<&'static str>,
+    /// The next instance to go live replaces the live one outright (no
+    /// warm copy, no rollback to it).
+    retire_on_live: bool,
 }
 
 fn state() -> &'static Mutex<HashMap<String, AppRt>> {
@@ -307,13 +325,33 @@ fn boot() {
             let inst = instance_for(h.clone(), seed);
             router::switch_with(&app.app_id, h.port, inst.client_ip);
             claimed.insert(h.deployment_id.clone());
-            with_rt(&app.app_id, |rt| rt.live = Some(inst));
-            audit(&app.app_id, "adopted", "system", json!({ "deployment": h.deployment_id, "port": h.port }));
+            // Smoke r6: an unwalled instance outlives a restart (KillMode=
+            // process). If its logs went through a pipe to the old daemon it
+            // is relaunched now; otherwise it is checked every second for a
+            // while. Walled engines adopt as before.
+            let unwalled = is_process_engine(h);
+            let stale = unwalled && super::process_engine::needs_relaunch(&h.deployment_id);
+            with_rt(&app.app_id, |rt| {
+                rt.live = Some(inst);
+                if stale {
+                    rt.relaunch = Some(WHY_STALE_SINK);
+                } else if unwalled {
+                    rt.adopt_check = Some(Instant::now() + Duration::from_secs(ADOPT_CHECK_SECS));
+                }
+            });
+            audit(&app.app_id, "adopted", "system", json!({ "deployment": h.deployment_id, "port": h.port, "relaunch": stale }));
         } else if !unwalled_ok && runs_unwalled(app) && app.state != store::STATE_STOPPED {
             let _ = db(|c| store::set_state(c, &app.app_id, store::STATE_STOPPED, Some(UNWALLED_STOPPED)));
             audit(&app.app_id, "process_engine_off", "system", json!({ "stopped": true }));
-        } else if app.state == store::STATE_RUNNING && app.live_seed.is_some() {
-            with_rt(&app.app_id, |rt| rt.next_restart_at = Some(now()));
+        } else if boot_restarts(&app.state) && app.live_seed.is_some() {
+            // Running (or waiting on a crash restart the old daemon had
+            // scheduled when it went down: smoke r6 sat at `restarting` for
+            // minutes) with no instance left: start it now, as the daemon's
+            // restart, not a crash.
+            with_rt(&app.app_id, |rt| {
+                rt.next_restart_at = Some(now());
+                rt.restart_why = Some(WHY_DAEMON_RESTARTED);
+            });
         }
     }
     // Orphans (warm instances from before the restart, uninstalled Apps,
@@ -326,6 +364,14 @@ fn boot() {
         });
     }
 }
+
+/// The App states a daemon boot restarts when no instance survived.
+pub(crate) fn boot_restarts(state: &str) -> bool {
+    state == store::STATE_RUNNING || state == STATE_RESTARTING
+}
+
+/// `crashed` waits on a restart in this state.
+const STATE_RESTARTING: &str = "restarting";
 
 fn instance_for(h: RunHandle, seed: &str) -> Instance {
     let m = seed_manifest(seed).ok();
@@ -450,7 +496,11 @@ pub fn begin(app: &AppRow, seed: &str, kind: &str, actor: &str, reason: Option<&
     let kind = kind.to_string();
     let spawned = std::thread::Builder::new().name(format!("app-deploy-{app_id}")).spawn(move || {
         pipeline(&app_id, &dep2, &seed, &kind);
-        with_rt(&app_id, |rt| rt.busy = false);
+        with_rt(&app_id, |rt| {
+            rt.busy = false;
+            // A relaunch that never went live leaves the live one in place.
+            rt.retire_on_live = false;
+        });
         if kind == store::KIND_RESTART {
             restart_outcome(&app_id, &dep2);
         }
@@ -678,16 +728,20 @@ fn pipeline(app_id: &str, dep: &str, seed: &str, kind: &str) {
 fn go_live(app: &AppRow, dep: &str, inst: Instance, kind: &str, t: &Timings) {
     let (_, prev_be) = router::switch_with(&app.app_id, inst.handle.port, inst.client_ip);
     let watch_secs = t.watch_secs;
-    let (older_warm, prev_live) = with_rt(&app.app_id, |rt| {
+    let (older_warm, prev_live, replace) = with_rt(&app.app_id, |rt| {
         let older = rt.warm.take();
         let prev = rt.live.take();
+        let replace = std::mem::take(&mut rt.retire_on_live);
         rt.live = Some(inst.clone());
-        rt.warm = prev.clone();
+        // A relaunch replaces the instance outright: nothing to roll back to.
+        rt.warm = if replace { None } else { prev.clone() };
         rt.watch = Some(Watch { deployment_id: dep.to_string(), until: Instant::now() + Duration::from_secs(watch_secs) });
         rt.next_restart_at = None;
+        rt.restart_why = None;
+        rt.adopt_check = None;
         rt.live_fails = 0;
         rt.last_probe = None;
-        (older, prev)
+        (older, prev, replace)
     });
     let _ = db(|c| {
         store::set_went_live(c, dep, now() + watch_secs as i64)?;
@@ -702,11 +756,22 @@ fn go_live(app: &AppRow, dep: &str, inst: Instance, kind: &str, t: &Timings) {
         json!({ "deployment": dep, "kind": kind, "seed": inst.seed, "port": inst.handle.port, "warm": prev_live.as_ref().map(|p| p.handle.deployment_id.clone()) }),
     );
     super::surfaces::emit_deployed(&app.app_id);
-    // Old connections drain in the background; the old instance stays up.
-    if let Some(be) = prev_be {
-        let drain = prev_live.as_ref().map(|p| p.drain_secs).unwrap_or(t.drain_secs);
+    // Old connections drain in the background; the old instance stays up
+    // (a relaunch stops it once they have drained).
+    let drain = prev_live.as_ref().map(|p| p.drain_secs).unwrap_or(t.drain_secs);
+    let replaced = if replace { prev_live.clone() } else { None };
+    if prev_be.is_some() || replaced.is_some() {
+        let grace = Duration::from_secs(t.stop_grace_secs);
+        let app_id = app.app_id.clone();
         let _ = std::thread::Builder::new().name("app-drain".into()).spawn(move || {
-            router::drain_blocking(&be, Duration::from_secs(drain));
+            if let Some(be) = prev_be {
+                router::drain_blocking(&be, Duration::from_secs(drain));
+            }
+            if let Some(old) = replaced {
+                let _ = engine_of(&old.handle).stop(&old.handle, grace);
+                let _ = db(|c| store::set_result(c, &old.handle.deployment_id, store::RESULT_SUPERSEDED, None));
+                audit(&app_id, "stopped", "system", json!({ "deployment": old.handle.deployment_id, "result": store::RESULT_SUPERSEDED, "relaunch": true }));
+            }
         });
     }
     // A deploy inside the watch window replaces the older warm one.
@@ -754,10 +819,14 @@ fn tick_app(app_id: &str, t: &Timings) {
     }
     let Some(live) = live else {
         if restart_at.is_some_and(|at| now() >= at) {
-            with_rt(app_id, |rt| rt.next_restart_at = None);
+            let why = with_rt(app_id, |rt| {
+                rt.next_restart_at = None;
+                rt.restart_why.take()
+            });
             if let Ok(Some(app)) = db(|c| store::get_app(c, app_id)) {
                 if let Some(seed) = app.live_seed.clone() {
-                    if let Err(e) = begin(&app, &seed, store::KIND_RESTART, "system", Some("restart after a crash")) {
+                    let reason = why.map(|w| format!("restart: {w}")).unwrap_or_else(|| "restart after a crash".to_string());
+                    if let Err(e) = begin(&app, &seed, store::KIND_RESTART, "system", Some(&reason)) {
                         k2_core::log_debug!("[apps] {app_id}: restart failed to begin: {}", e.message);
                     }
                 }
@@ -767,6 +836,36 @@ fn tick_app(app_id: &str, t: &Timings) {
     };
     let exit = Exit::of(&live.handle);
     let exited = exit.exited;
+    // A relaunch the boot asked for (an adopted instance whose logs went
+    // through a pipe to the old daemon), or one the adopt check decided.
+    if !exited {
+        if let Some(why) = with_rt(app_id, |rt| rt.relaunch.take()) {
+            return relaunch(app_id, &live, why);
+        }
+        if let Some(until) = with_rt(app_id, |rt| rt.adopt_check) {
+            if last_probe.is_none_or(|p| p.elapsed() >= Duration::from_secs(1)) {
+                let ok = probe(&live, t);
+                let fails = with_rt(app_id, |rt| {
+                    rt.last_probe = Some(Instant::now());
+                    if ok {
+                        rt.adopt_check = None;
+                        rt.live_fails = 0;
+                    } else {
+                        rt.live_fails += 1;
+                    }
+                    rt.live_fails
+                });
+                if !ok && (fails >= FAILS_TO_UNHEALTHY || Instant::now() >= until) {
+                    with_rt(app_id, |rt| {
+                        rt.adopt_check = None;
+                        rt.live_fails = 0;
+                    });
+                    return relaunch(app_id, &live, WHY_ADOPT_UNHEALTHY);
+                }
+            }
+            return;
+        }
+    }
     // Health: every second in the watch window, every live_probe_secs after.
     let every = if watch.is_some() { Duration::from_secs(1) } else { Duration::from_secs(t.live_probe_secs.max(1)) };
     let due = t.live_probe_secs > 0 || watch.is_some();
@@ -805,6 +904,22 @@ fn tick_app(app_id: &str, t: &Timings) {
                 retire(app_id, p, store::RESULT_SUPERSEDED, t);
             }
         }
+    }
+}
+
+/// Start a fresh instance of the live Seed beside `live` (still routed until
+/// the new one passes its gate, then stopped). The daemon's restart, not
+/// the App's crash: no backoff, no crash record, no agent woken. A fresh
+/// instance that fails its gate leaves `live` as it is (the normal health
+/// checks then decide).
+fn relaunch(app_id: &str, live: &Instance, why: &'static str) {
+    let Ok(Some(app)) = db(|c| store::get_app(c, app_id)) else { return };
+    with_rt(app_id, |rt| rt.retire_on_live = true);
+    if let Err(e) = begin(&app, &live.seed, store::KIND_RESTART, "system", Some(why)) {
+        with_rt(app_id, |rt| rt.retire_on_live = false);
+        k2_core::log_debug!("[apps] {app_id}: relaunch failed to begin: {}", e.message);
+    } else {
+        audit(app_id, "relaunch", "system", json!({ "deployment": live.handle.deployment_id, "why": why }));
     }
 }
 
@@ -897,7 +1012,7 @@ fn crashed(app_id: &str, inst: Instance, why: &str, exit: Exit, t: &Timings) {
     let _ = db(|c| store::set_result(c, &inst.handle.deployment_id, store::RESULT_EXITED, Some(why)));
     match decision {
         Decision::Restart { after_secs } => {
-            let _ = db(|c| store::set_state(c, app_id, "restarting", Some(why)));
+            let _ = db(|c| store::set_state(c, app_id, STATE_RESTARTING, Some(why)));
             audit(app_id, "crashed", "system", json!({ "deployment": inst.handle.deployment_id, "why": why, "restartInSecs": after_secs }));
         }
         Decision::Breaker => breaker(app_id, why),

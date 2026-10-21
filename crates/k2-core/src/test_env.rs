@@ -1019,19 +1019,32 @@ pub const TEST_PORT_END: u16 = 32_000;
 /// Prefer keeping a listener bound and handing it over when the code under
 /// test takes a listener; use this only when it takes a port number.
 pub fn loopback_test_port() -> u16 {
-    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::atomic::AtomicU32;
     use std::sync::OnceLock;
-    const SPAN: u32 = (TEST_PORT_END - TEST_PORT_FIRST) as u32;
     static START: OnceLock<u32> = OnceLock::new();
     static NEXT: AtomicU32 = AtomicU32::new(0);
-    let start = *START.get_or_init(|| (uuid::Uuid::new_v4().as_u128() % SPAN as u128) as u32);
-    for _ in 0..SPAN {
-        let n = NEXT.fetch_add(1, Ordering::SeqCst);
-        let port = TEST_PORT_FIRST + ((start + n) % SPAN) as u16;
-        // Free on the IPv4 loopback and the wildcard address right now (one
-        // at a time: on Linux the two binds conflict with each other).
-        let v4_free = std::net::TcpListener::bind(("127.0.0.1", port)).is_ok();
-        if v4_free && std::net::TcpListener::bind(("0.0.0.0", port)).is_ok() {
+    let start = *START.get_or_init(|| (uuid::Uuid::new_v4().as_u128() % TEST_PORT_SPAN as u128) as u32);
+    pick_test_port(start, &NEXT, test_port_free_now)
+}
+
+const TEST_PORT_SPAN: u32 = (TEST_PORT_END - TEST_PORT_FIRST) as u32;
+
+/// Free on the IPv4 loopback and the wildcard address right now (one at a
+/// time: on Linux the two binds conflict with each other).
+fn test_port_free_now(port: u16) -> bool {
+    let v4_free = std::net::TcpListener::bind(("127.0.0.1", port)).is_ok();
+    v4_free && std::net::TcpListener::bind(("0.0.0.0", port)).is_ok()
+}
+
+/// The allocator behind [`loopback_test_port`]: the next port from
+/// `start` (via the shared counter `next`, so no port is handed out twice)
+/// that `free` says is bindable at hand-out time.
+fn pick_test_port(start: u32, next: &std::sync::atomic::AtomicU32, free: impl Fn(u16) -> bool) -> u16 {
+    use std::sync::atomic::Ordering;
+    for _ in 0..TEST_PORT_SPAN {
+        let n = next.fetch_add(1, Ordering::SeqCst);
+        let port = TEST_PORT_FIRST + ((start + n) % TEST_PORT_SPAN) as u16;
+        if free(port) {
             return port;
         }
     }
@@ -1042,15 +1055,45 @@ pub fn loopback_test_port() -> u16 {
 mod loopback_test_port_tests {
     use super::*;
 
+    /// Every port is handed out once and in range. (Whether a port is still
+    /// free some time after hand-out depends on every other process on the
+    /// machine, so that is not asserted here; the hand-out check is, below.)
     #[test]
-    fn ports_are_unique_in_range_and_free() {
+    fn ports_are_unique_and_in_range() {
         let mut seen = std::collections::HashSet::new();
         for _ in 0..200 {
             let p = loopback_test_port();
             assert!((TEST_PORT_FIRST..TEST_PORT_END).contains(&p), "{p} out of range");
             assert!(seen.insert(p), "port {p} handed out twice");
-            std::net::TcpListener::bind(("127.0.0.1", p))
-                .unwrap_or_else(|e| panic!("handed-out port {p} must be bindable: {e}"));
         }
+    }
+
+    /// The allocator skips a port that is taken (one this test holds) and
+    /// hands out the next one only after the real bind check passed for it
+    /// at hand-out time.
+    #[test]
+    fn a_taken_port_is_skipped_and_the_one_handed_out_was_bindable() {
+        use std::sync::atomic::AtomicU32;
+        // Hold a port in range ourselves (the first one free now).
+        let (held_port, _held) = (TEST_PORT_FIRST..TEST_PORT_END)
+            .find_map(|p| std::net::TcpListener::bind(("127.0.0.1", p)).ok().map(|l| (p, l)))
+            .expect("some port in the test range is free");
+        let start = u32::from(held_port - TEST_PORT_FIRST);
+        let checked = std::sync::Mutex::new(Vec::new());
+        let next = AtomicU32::new(0);
+        let got = pick_test_port(start, &next, |p| {
+            let ok = test_port_free_now(p);
+            checked.lock().unwrap().push((p, ok));
+            ok
+        });
+        let checked = checked.into_inner().unwrap();
+        assert_eq!(checked[0], (held_port, false), "the held port is checked first and found taken: {checked:?}");
+        assert_ne!(got, held_port, "a taken port is never handed out");
+        assert_eq!(checked.last(), Some(&(got, true)), "the handed-out port passed the bind check at hand-out: {checked:?}");
+        assert!(checked[..checked.len() - 1].iter().all(|(_, ok)| !ok), "every port before it was taken: {checked:?}");
+        // A fixed checker: deterministic order and skipping.
+        let next = AtomicU32::new(0);
+        assert_eq!(pick_test_port(0, &next, |p| p >= TEST_PORT_FIRST + 3), TEST_PORT_FIRST + 3);
+        assert_eq!(pick_test_port(0, &next, |_| true), TEST_PORT_FIRST + 4, "the counter never hands a port out twice");
     }
 }

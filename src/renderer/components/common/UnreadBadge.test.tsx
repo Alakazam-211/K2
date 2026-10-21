@@ -4,8 +4,9 @@
 // read-while-looking rule:
 //   - a row with unread shows the count ("99+" above 99), muted draws grey,
 //     waiting draws the amber (needs-you) marker;
-//   - the Thread view menu carries the Thread's count on its button and
-//     row, and a Mute / Unmute Thread item that posts /cli/thread/mute;
+//   - the Thread view menu draws no unread count, dot or waiting marker
+//     (main nav only, Rosson 2026-10-21), and keeps a Mute / Unmute
+//     Thread item that posts /cli/thread/mute;
 //   - useAutoMarkRead: visible + focused with a newer seq posts read ONCE
 //     with that seq; not focused / not visible (panel collapsed) posts
 //     nothing; the same seq again posts nothing.
@@ -173,39 +174,28 @@ describe('Thread view menu', () => {
     return getByTestId('session-view-button')
   }
 
-  it('the button and the Thread row carry the Thread count', async () => {
+  // Rosson 2026-10-21: the unread count and the amber "waiting on you"
+  // marker belong in the main nav (the sidebar agent row draws
+  // WorkspaceThreadUnreadBadge), not on the view drop-down or its rows.
+  it('unread Thread: the count is in the main nav, not on the view button or its rows', async () => {
     seed(entry({ unread: 120 }))
+    const nav = render(<WorkspaceThreadUnreadBadge projectId="p1" />)
+    expect(nav.container.querySelector('[data-unread-count]')?.textContent).toBe('99+')
+
     const button = renderMenu()
-    expect(button.querySelector('[data-unread-count]')?.textContent).toBe('99+')
+    expect(button.querySelector('[data-unread-badge]')).toBeNull()
+    expect(button.querySelector('[data-unread-count]')).toBeNull()
+    expect(button.textContent).toBe('Terminal')
     await act(async () => {
       fireEvent.click(button)
     })
-    expect(menu.items.find((i) => i.id === 'thread')?.badge).toBe('99+')
+    expect(menu.items.length).toBeGreaterThan(0)
+    for (const item of menu.items) expect(item.badge === undefined || item.badge === 'Beta').toBe(true)
+    expect(menu.items.find((i) => i.id === 'thread')?.badge).toBeUndefined()
     expect(menu.items.find((i) => i.id === 'mute-thread')?.label).toBe('Mute Thread')
   })
 
-  it('Mute Thread posts /cli/thread/mute and the button turns grey', async () => {
-    seed(entry({ unread: 2 }))
-    const button = renderMenu()
-    menu.pick = 'mute-thread'
-    await act(async () => {
-      fireEvent.click(button)
-    })
-    await waitFor(() => expect(cli.post).toHaveBeenCalledWith('thread/mute', { kind: 'thread', id: 'c1', muted: true }))
-    await waitFor(() =>
-      expect(button.querySelector('[data-unread-count]')?.getAttribute('data-muted')).toBe('true'),
-    )
-    menu.pick = null
-    await act(async () => {
-      fireEvent.click(button)
-    })
-    expect(menu.items.find((i) => i.id === 'mute-thread')?.label).toBe('Unmute Thread')
-  })
-
-  // Rosson 2026-10-21: the amber "waiting on you" marker belongs in the
-  // main nav (the sidebar agent row draws WorkspaceThreadUnreadBadge), not
-  // on the view drop-down button.
-  it('a waiting agent: the amber marker is in the main nav, not on the view button', () => {
+  it('a waiting agent: the amber marker is in the main nav, not on the view button or its rows', async () => {
     seed(entry({ unread: 0, waiting: 1 }))
     const nav = render(<WorkspaceThreadUnreadBadge projectId="p1" />)
     const navWaiting = nav.container.querySelector('[data-unread-waiting]')
@@ -216,17 +206,41 @@ describe('Thread view menu', () => {
     const button = renderMenu()
     expect(button.querySelector('[data-unread-waiting]')).toBeNull()
     expect(button.querySelector('[data-unread-badge]')).toBeNull()
+    await act(async () => {
+      fireEvent.click(button)
+    })
+    expect(menu.items.find((i) => i.id === 'thread')?.badge).toBeUndefined()
   })
 
-  it('waiting plus unread: the view button keeps the count, drops the amber marker', () => {
+  it('waiting plus unread: the main nav shows both, the view button and rows neither', async () => {
     seed(entry({ unread: 3, waiting: 2 }))
     const nav = render(<WorkspaceThreadUnreadBadge projectId="p1" />)
     expect(nav.container.querySelector('[data-unread-waiting]')?.textContent).toBe('2')
     expect(nav.container.querySelector('[data-unread-count]')?.textContent).toBe('3')
 
     const button = renderMenu()
-    expect(button.querySelector('[data-unread-count]')?.textContent).toBe('3')
-    expect(button.querySelector('[data-unread-waiting]')).toBeNull()
+    expect(button.querySelector('[data-unread-badge]')).toBeNull()
+    await act(async () => {
+      fireEvent.click(button)
+    })
+    expect(menu.items.find((i) => i.id === 'thread')?.badge).toBeUndefined()
+  })
+
+  it('Mute Thread posts /cli/thread/mute and the item flips to Unmute Thread', async () => {
+    seed(entry({ unread: 2 }))
+    const button = renderMenu()
+    menu.pick = 'mute-thread'
+    await act(async () => {
+      fireEvent.click(button)
+    })
+    await waitFor(() => expect(cli.post).toHaveBeenCalledWith('thread/mute', { kind: 'thread', id: 'c1', muted: true }))
+    await waitFor(() => expect(useUnreadStore.getState().byKey['thread:c1']?.muted).toBe(true))
+    expect(button.querySelector('[data-unread-badge]')).toBeNull()
+    menu.pick = null
+    await act(async () => {
+      fireEvent.click(button)
+    })
+    expect(menu.items.find((i) => i.id === 'mute-thread')?.label).toBe('Unmute Thread')
   })
 
   it('no Thread id: no count, no mute item', async () => {

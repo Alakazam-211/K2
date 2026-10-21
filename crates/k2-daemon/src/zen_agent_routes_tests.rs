@@ -571,9 +571,9 @@ fn card(conv: &str, id: &str) -> k2_core::overlay::ChoiceBody {
 }
 
 /// Rosson 2026-10-20: with a Thread, the person gets a CARD there instead of
-/// the inbox note: "<agent> changed <widget> in <garden>. Keep it as yours
-/// so Garden sync never replaces it?" with Keep as mine / Let sync update
-/// it. A newer change replaces the waiting card (one per widget). The
+/// the inbox note: "<agent> changed <widget> in <garden>. Keep this version
+/// as yours? It will then read and write its data with your access instead
+/// of <agent>'s." with Keep as mine / Leave it as <agent>'s. A newer change replaces the waiting card (one per widget). The
 /// person's approval of an agent's proposal gets the card on the Thread with
 /// the agent that proposed it. One tap by the person keeps it.
 #[test]
@@ -592,10 +592,10 @@ fn with_a_thread_the_person_gets_a_keep_as_mine_card_not_a_note() {
     let c = card(&conv, &first);
     assert_eq!(
         c.prompt,
-        "w-keepc-mgr changed board in your widgets. Keep it as yours so Garden sync never replaces it?",
+        "w-keepc-mgr changed board in your widgets. Keep this version as yours? It will then read and write its data with your access instead of w-keepc-mgr's.",
         "the card's words"
     );
-    assert_eq!(c.options.iter().map(|o| o.label.as_str()).collect::<Vec<_>>(), vec!["Keep as mine", "Let sync update it"]);
+    assert_eq!(c.options.iter().map(|o| o.label.as_str()).collect::<Vec<_>>(), vec!["Keep as mine", "Leave it as w-keepc-mgr's"]);
     let action = c.action.expect("an action card");
     assert_eq!((action.id.as_str(), action.params["widget"].as_str()), (crate::action_cards::KEEP_WIDGET, Some("board")));
     let hash = live_hash(&e.f, "board");

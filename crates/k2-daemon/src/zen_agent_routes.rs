@@ -206,8 +206,8 @@ fn after_write() {
 // version was the person's, the new version is nobody's (or the agent's)
 // until the person keeps it, and the widget quietly loses its data. The
 // rule stays (only the person claims). Rosson 2026-10-20: the person gets a
-// CARD on their Thread with that agent, "Keep as mine" / "Let sync update
-// it", one tap ([`crate::action_cards::KEEP_WIDGET`]); the answer route
+// CARD on their Thread with that agent, "Keep as mine" / "Leave it as
+// <agent>'s", one tap ([`crate::action_cards::KEEP_WIDGET`]); the answer route
 // refuses the agent's own passport. Only where there is no Thread to put it
 // on, an inbox note points at Settings → Gardens → Local Data instead.
 // Nothing here claims anything.
@@ -229,15 +229,18 @@ pub(crate) fn keep_title(widget: &str) -> String {
     format!("Keep your widget {widget} as yours?")
 }
 
-/// The card's words: "<agent> changed <widget> in <garden>. Keep it as
-/// yours so Garden sync never replaces it?"
-pub(crate) fn keep_prompt(agent: &str, widget: &str) -> String {
+/// Where the widget is placed, for the card: its Gardens' names, or "your
+/// widgets" when it is on none.
+fn widget_place(widget: &str) -> String {
     let mut gardens: Vec<String> =
         files().custom_placements().into_iter().filter(|p| p.widget == widget).map(|p| p.garden_name).collect();
     gardens.sort();
     gardens.dedup();
-    let place = if gardens.is_empty() { "your widgets".to_string() } else { gardens.join(", ") };
-    format!("{agent} changed {widget} in {place}. Keep it as yours so Garden sync never replaces it?")
+    if gardens.is_empty() {
+        "your widgets".to_string()
+    } else {
+        gardens.join(", ")
+    }
 }
 
 /// After a write by (or proposed by) the agent of `agent_project`: when the
@@ -260,8 +263,10 @@ fn keep_as_mine(widget: &str, before: Option<(String, k2_core::garden_data::Made
         params: json!({ "widget": widget, "hash": new_hash, "agent": agent }),
         dedupe: widget.to_string(),
     };
-    let options = [crate::action_cards::KEEP_AS_MINE, crate::action_cards::LET_SYNC_UPDATE];
-    match crate::overlay_routes::present_action_card(project, &keep_prompt(&agent, widget), &options, action, true) {
+    let leave = crate::action_cards::leave_label(&agent);
+    let options = [crate::action_cards::KEEP_AS_MINE, leave.as_str()];
+    let prompt = crate::action_cards::keep_prompt(&agent, widget, &widget_place(widget));
+    match crate::overlay_routes::present_action_card(project, &prompt, &options, action, true) {
         Ok(crate::overlay_routes::Presented::Card { id, addr }) => return json!({ "card": id, "addr": addr }),
         Ok(crate::overlay_routes::Presented::Waiting { id }) => return json!({ "card": id }),
         Ok(crate::overlay_routes::Presented::NoThread) => {}
@@ -272,9 +277,10 @@ fn keep_as_mine(widget: &str, before: Option<(String, k2_core::garden_data::Made
     let open = k2_core::feedback::list_for_project(project, &k2_core::feedback::ListFilter::Open).unwrap_or_default();
     if !open.iter().any(|i| i.title == title) {
         let body = format!(
-            "{agent} changed your widget {widget} (version {} → {}). The new version isn't signed as yours, so it can't read or write the widget's data until you keep it.\n\n\
-             One click: Settings → Gardens → Local Data → {widget} → It's mine. Or leave it, and the widget runs without its data.\n\
+            "{} (version {} → {})\n\n\
+             To keep it: Settings → Gardens → Local Data → {widget} → It's mine. To leave it as {agent}'s, do nothing.\n\
              Every change is in Settings → Logs → Access Audit.",
+            crate::action_cards::keep_prompt(&agent, widget, &widget_place(widget)),
             short(&old_hash),
             short(&new_hash)
         );

@@ -19,9 +19,23 @@ use k2_core::overlay::CardAction;
 /// "Keep as mine": stamp a widget version as the person's (the same as
 /// Settings → Gardens → Local Data → It's mine).
 pub const KEEP_WIDGET: &str = "zen.widget.keep";
-/// [`KEEP_WIDGET`]'s options.
+/// [`KEEP_WIDGET`]'s first option; the second is [`leave_label`].
 pub const KEEP_AS_MINE: &str = "Keep as mine";
-pub const LET_SYNC_UPDATE: &str = "Let sync update it";
+
+/// [`KEEP_WIDGET`]'s second option: "Leave it as <agent>'s".
+pub fn leave_label(agent: &str) -> String {
+    format!("Leave it as {agent}'s")
+}
+
+/// [`KEEP_WIDGET`]'s words (the card asks for a rights decision, so it says
+/// what happens): "<agent> changed <widget> in <garden>. Keep this version
+/// as yours? It will then read and write its data with your access instead
+/// of <agent>'s."
+pub fn keep_prompt(agent: &str, widget: &str, garden: &str) -> String {
+    format!(
+        "{agent} changed {widget} in {garden}. Keep this version as yours? It will then read and write its data with your access instead of {agent}'s."
+    )
+}
 
 /// Run `action` for the person's `answer` (already checked to be one of the
 /// card's options). `by` is the answering person (`owner` or a login). The
@@ -34,10 +48,15 @@ pub fn run(action: &CardAction, answer: &str, by: &str) -> Result<J, String> {
 }
 
 /// The card for a widget version an agent changed: Keep as mine claims
-/// that version (`params.hash`); Let sync update it leaves it unsigned.
+/// that version (`params.hash`); Leave it as <agent>'s changes nothing.
+/// `message` is what the person is told after the tap.
 fn keep_widget(params: &J, answer: &str, by: &str) -> Result<J, String> {
     let widget = params["widget"].as_str().filter(|w| !w.is_empty()).ok_or("the card names no widget")?;
     let hash = params["hash"].as_str().filter(|h| !h.is_empty()).ok_or("the card names no widget version")?;
+    let agent = params["agent"].as_str().filter(|a| !a.is_empty()).ok_or("the card names no agent")?;
+    if answer == leave_label(agent) {
+        return Ok(json!({ "kept": false, "widget": widget, "hash": hash, "message": format!("Left as {agent}'s.") }));
+    }
     match answer {
         KEEP_AS_MINE => {
             let db = k2_core::db::shared();
@@ -49,9 +68,13 @@ fn keep_widget(params: &J, answer: &str, by: &str) -> Result<J, String> {
             if let Err(e) = crate::zen_routes::refresh_and_emit() {
                 k2_core::log_debug!("[action-card] refresh after keep: {e}");
             }
-            Ok(json!({ "kept": true, "widget": widget, "hash": hash }))
+            Ok(json!({
+                "kept": true,
+                "widget": widget,
+                "hash": hash,
+                "message": "Kept as yours. Undo in Settings → Gardens → Local Data.",
+            }))
         }
-        LET_SYNC_UPDATE => Ok(json!({ "kept": false, "widget": widget, "hash": hash })),
         other => Err(format!("'{other}' isn't an answer to this card")),
     }
 }

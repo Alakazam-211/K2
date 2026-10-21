@@ -2,8 +2,10 @@
 //! worktree → dirty patch, and the blob transfers over that tenant's
 //! session.
 //!
-//! Lane S3 owns this file after S0 (V49: https-only fetches for tenants,
-//! bundles under `no-lan` / `none`, hardened git).
+//! V49: a non-owner server's history comes over `https` from a public
+//! address only ([`crate::sync::Git::fetch_public`]), and never when its
+//! network is `no-lan` or `none`; otherwise its own bundle. Every git call
+//! is hardened (`crate::sync::HARDEN`).
 
 use std::path::Path;
 use std::time::Duration;
@@ -117,9 +119,24 @@ impl Node {
         git.ensure_mirror(&mirror).await.map_err(|e| fail("sync_failed", e))?;
         if !git.has_commit(&mirror, &src.commit).await {
             if let Some(url) = &src.remote_url {
-                match git.fetch_remote(&mirror, url).await {
-                    Ok(()) => sys(format!("fetched history from {url}")),
-                    Err(e) => sys(format!("couldn't fetch from the remote ({e}); asking the controller")),
+                if t.is_owner() {
+                    match git.fetch_remote(&mirror, url).await {
+                        Ok(()) => sys(format!("fetched history from {url}")),
+                        Err(e) => sys(format!("couldn't fetch from the remote ({e}); asking the controller")),
+                    }
+                } else {
+                    // V49: another server's remote is fetched only over
+                    // https from a public address, and never when its
+                    // network is no-lan or none (the fetch runs outside its
+                    // job's wall). Otherwise its server sends a bundle.
+                    match self.job_network(t) {
+                        Ok(k2_node_proto::share::Network::On) => match git.fetch_public(&mirror, url).await {
+                            Ok(at) => sys(format!("fetched history over https from {at}")),
+                            Err(e) => sys(format!("not fetching this remote ({e}); asking the controller for a bundle")),
+                        },
+                        Ok(n) => sys(format!("this server's network is {}: bundles only; asking the controller", n.as_str())),
+                        Err((code, e)) => sys(format!("{code}: {e}; asking the controller for a bundle")),
+                    }
                 }
             }
         }

@@ -21,6 +21,17 @@
 //! read by older executors after a rollback): an older k2-node simply
 //! never reads it, and without it there is no wall (jobs run as the node
 //! user, as before).
+//!
+//! **Tenants** (prd-compute-shared-queue-v1 §8.2, S3a): a non-owner
+//! server's job (`JobStart.tenant` = its slot 1–7) runs as that slot's own
+//! user `k2job-<slot>` with group `k2t-<slot>` (`[tenants]` in `jobs.toml`,
+//! written by `tenant.prepare`, see `admin::tenants`), in its own slice,
+//! with its own dirs under `<home>-t/<slot>/`, and with every other
+//! tenant's root and the owner's job-facing dirs gone. Root decides all of
+//! it from root-owned files (`jobs.toml`, `servers.toml`); the node only
+//! names the slot. The slot is also in the unit name (`k2job-t<slot>-<16
+//! hex>`, V48), so one slot's ops can never address another slot's unit,
+//! and a start never stops a running unit.
 
 use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
@@ -28,6 +39,7 @@ use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use k2_node_proto::admin::{code, AdminRefusal};
+use k2_node_proto::share::{self, Network, Slot, OWNER_SLOT};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -99,18 +111,36 @@ pub fn check_job_user(job_user: &str, node_user: &str) -> Result<(u32, u32), Str
     Ok((uid, gid))
 }
 
+/// gid of a group name.
+pub fn group_id(name: &str) -> Option<u32> {
+    let c = std::ffi::CString::new(name).ok()?;
+    // SAFETY: getgrnam reads a static buffer; we copy the id out at once.
+    unsafe {
+        let gr = libc::getgrnam(c.as_ptr());
+        if gr.is_null() {
+            return None;
+        }
+        Some((*gr).gr_gid)
+    }
+}
+
 /// `sudo k2-node admin job-user <name>` (setup): validate and write.
 pub fn write_jobs_file(config_dir: &Path, job_user: &str, node_user: &str) -> Result<String, String> {
     check_job_user(job_user, node_user)?;
     // Keep the tenants `tenant.prepare` wrote; setup only sets the owner's user.
     let tenants = read_jobs_file(config_dir).ok().flatten().map(|f| f.tenants).unwrap_or_default();
-    let body = toml::to_string(&JobsFile { job_user: job_user.to_string(), tenants }).map_err(|e| e.to_string())?;
+    write_jobs(config_dir, &JobsFile { job_user: job_user.to_string(), tenants })?;
+    Ok(format!("jobs run as {job_user}"))
+}
+
+/// Write `jobs.toml` (root, 0644: the node reads which slots have users).
+pub fn write_jobs(config_dir: &Path, f: &JobsFile) -> Result<(), String> {
+    let body = toml::to_string(f).map_err(|e| e.to_string())?;
     let text = format!(
         "# K2 compute node: jobs run as this user in a sandboxed systemd unit (0.46.3).\n\
-         # Written by k2-node setup; remove the file to go back to jobs as the node user.\n{body}"
+         # Written by k2-node setup and tenant.prepare; remove the file to go back to jobs as the node user.\n{body}"
     );
-    crate::util::atomic_write(&config_dir.join(JOBS_FILE), text.as_bytes(), 0o644)?;
-    Ok(format!("jobs run as {job_user}"))
+    crate::util::atomic_write(&config_dir.join(JOBS_FILE), text.as_bytes(), 0o644)
 }
 
 // ── the wire (node ↔ executor) ──────────────────────────────────────
@@ -132,20 +162,56 @@ pub enum JobOp {
     /// Give a job tree back to the node user (chown, never following a
     /// symlink) so it can delete or reuse it.
     Reclaim { path: PathBuf },
+    /// Can this executor wall tenants from each other, and which slots
+    /// have a user? Asked before every tenant start: an older executor
+    /// doesn't know this op (it refuses it), so a tenant's job never runs
+    /// as the owner's job user there.
+    Tenants,
+    /// `tenant.prepare` (V54, V64, V75): only for a slot `servers.toml`
+    /// approves (pending or active). Idempotent.
+    TenantPrepare(share::TenantPrepare),
+    /// `tenant.wipe` (V64): only for a slot `servers.toml` no longer
+    /// approves (revoked, or no line), with no unit of that slot loaded.
+    TenantWipe(share::TenantWipe),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JobStart {
-    /// `<job_id>-g<generation>`; the unit is `k2job-<key>.service`.
+    /// The owner's `<job_id>-g<generation>`, a tenant's `t<slot>-<16 hex>`
+    /// (`node::job_key`); the unit is `k2job-<key>.service`.
     pub key: String,
-    /// The job's dir: `<home>/jobs/<key>` (holds `exec.json`).
+    /// The job's dir: `<root>/jobs/<key>` (holds `exec.json`), where
+    /// `<root>` is the node home (owner) or `<home>-t/<slot>` (tenant).
     pub root: PathBuf,
-    /// More writable dirs: under the job root or `<home>/cache/`.
+    /// More writable dirs: under the job root, the tenant's `cache/`, or
+    /// the tenant's `tmp/` itself.
     pub rw: Vec<PathBuf>,
     pub network_none: bool,
     pub mem_bytes: Option<u64>,
     pub cpu_millis: Option<u64>,
     pub stop_grace_secs: u64,
+    /// The server's slot on this node (0 = the owner; absent = 0).
+    #[serde(default)]
+    pub tenant: Slot,
+    /// `no-lan`: no private, link-local, tailnet/CGNAT or multicast
+    /// address (V62). Root also applies the share's own network.
+    #[serde(default)]
+    pub no_lan: bool,
+}
+
+/// What `Tenants` answers.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TenantWall {
+    /// Tenant jobs can run here (Linux, systemd ≥ [`MIN_SYSTEMD_TENANT`],
+    /// the job wall set up).
+    pub ready: bool,
+    /// Why not, when not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
+    pub systemd: u32,
+    /// Slots with a user in `jobs.toml` (`"1" = "k2job-1"`).
+    #[serde(default)]
+    pub users: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -156,6 +222,7 @@ pub enum JobAnswer {
     Status(UnitStatus),
     Done { detail: Value },
     Refused(AdminRefusal),
+    Tenants(TenantWall),
 }
 
 /// What `systemctl show` says about a job unit.
@@ -223,6 +290,11 @@ pub fn parse_oom_kills(text: &str) -> u64 {
 /// Oldest systemd whose unit sandbox has every property the template uses
 /// (`ProtectClock`, 245: Ubuntu 20.04, Debian 11, current Arch/Fedora).
 pub const MIN_SYSTEMD: u32 = 245;
+/// Tenant units also need `ProtectProc=invisible` (247; kernel 5.8), so
+/// one tenant's jobs can't see another's processes or command lines (V75).
+pub const MIN_SYSTEMD_TENANT: u32 = 247;
+/// `PrivateIPC=` (248): used when there, on every unit.
+pub const MIN_SYSTEMD_PRIVATE_IPC: u32 = 248;
 
 /// `systemctl --version` → `255` from "systemd 255 (255.4-1ubuntu8)".
 pub fn systemd_version(text: &str) -> Option<u32> {
@@ -241,6 +313,61 @@ pub fn valid_unit(u: &str) -> bool {
     u.strip_prefix(UNIT_PREFIX).and_then(|r| r.strip_suffix(".service")).is_some_and(valid_key)
 }
 
+/// The slot a job key belongs to (V48): exactly `t<1-7>-<16 lowercase
+/// hex>` is that tenant's (`node::job_key`); anything else is the
+/// owner's. An owner key always ends in `-g<digits>` and `g` isn't hex,
+/// so it can never read as a tenant's.
+pub fn key_slot(key: &str) -> Slot {
+    let b = key.as_bytes();
+    if b.len() == 3 + 16 && b[0] == b't' && b[2] == b'-' && b[3..].iter().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f')) {
+        let s = b[1].wrapping_sub(b'0');
+        if s != OWNER_SLOT && share::valid_slot(s) {
+            return s;
+        }
+    }
+    OWNER_SLOT
+}
+
+/// The slot of a job unit (`k2job-<key>.service`), when it is one.
+pub fn unit_slot(unit: &str) -> Option<Slot> {
+    unit.strip_prefix(UNIT_PREFIX).and_then(|r| r.strip_suffix(".service")).filter(|k| valid_key(k)).map(key_slot)
+}
+
+/// A tenant's job user and group names.
+pub fn tenant_user_name(slot: Slot) -> String {
+    format!("{DEFAULT_JOB_USER}-{slot}")
+}
+pub fn tenant_group_name(slot: Slot) -> String {
+    format!("k2t-{slot}")
+}
+
+/// The slice a slot's units run in: today's `k2-jobs.slice` for the
+/// owner; a child slice per tenant (`k2-jobs-t1.slice` is under
+/// `k2-jobs.slice` by systemd's naming), with its `CPUWeight` and
+/// `TasksMax` set by `tenant.prepare` (V75).
+pub fn slice_name(slot: Slot) -> String {
+    if slot == OWNER_SLOT {
+        "k2-jobs.slice".into()
+    } else {
+        format!("k2-jobs-t{slot}.slice")
+    }
+}
+
+/// `no-lan` (V62): every non-public range through which a job could reach
+/// a machine on the LAN, the tailnet or a multicast group. Loopback stays.
+pub const NO_LAN_DENY: &[&str] = &[
+    "0.0.0.0/8",
+    "10.0.0.0/8",
+    "100.64.0.0/10",
+    "169.254.0.0/16",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "224.0.0.0/4",
+    "fc00::/7",
+    "fe80::/10",
+    "ff00::/8",
+];
+
 /// Everything root decides about one job unit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnitPlan {
@@ -251,12 +378,19 @@ pub struct UnitPlan {
     pub rw: Vec<PathBuf>,
     /// InaccessiblePaths (missing ones are skipped: `-` prefix).
     pub gone: Vec<PathBuf>,
-    pub network_none: bool,
+    /// The job's effective network (the node's ask; for a tenant also its
+    /// share's, the narrower wins).
+    pub network: Network,
     pub mem_bytes: Option<u64>,
     pub cpu_millis: Option<u64>,
     pub stop_grace_secs: u64,
     /// The installed `k2-node` (its `job-exec` shim).
     pub binary: PathBuf,
+    pub slice: String,
+    /// `ProtectProc=invisible` (systemd ≥ 247; required for tenants).
+    pub protect_proc: bool,
+    /// `PrivateIPC=yes` (systemd ≥ 248).
+    pub private_ipc: bool,
 }
 
 /// The fixed template (argv[0] is `systemd-run`).
@@ -268,7 +402,7 @@ pub fn systemd_run_argv(p: &UnitPlan) -> Vec<String> {
         "--quiet".into(),
         "--pipe".into(),
         "--wait".into(),
-        "--slice=k2-jobs.slice".into(),
+        format!("--slice={}", p.slice),
         format!("--uid={}", p.job_uid),
         format!("--gid={}", p.group_gid),
         format!("--working-directory={}", p.root.display()),
@@ -297,8 +431,22 @@ pub fn systemd_run_argv(p: &UnitPlan) -> Vec<String> {
         "LockPersonality=yes",
         "TasksMax=8192",
         "LimitNOFILE=65536",
+        // The job's own `/dev/shm` (PrivateDevices keeps the host's): no
+        // shared-memory name squatting between jobs or tenants.
+        "TemporaryFileSystem=/dev/shm:mode=1777",
+        // SysV/POSIX IPC objects of the job's user go when its last unit
+        // ends (a reused slot never inherits them, V64).
+        "RemoveIPC=yes",
     ] {
         prop(s.to_string());
+    }
+    if p.protect_proc {
+        // Other users' processes and command lines are invisible (T4).
+        // Not `ProcSubset=pid`: build tools read /proc/meminfo (V75).
+        prop("ProtectProc=invisible".into());
+    }
+    if p.private_ipc {
+        prop("PrivateIPC=yes".into());
     }
     prop(format!("TimeoutStopSec={}", p.stop_grace_secs.clamp(1, 600)));
     let mut rw = vec![p.root.display().to_string()];
@@ -316,12 +464,16 @@ pub fn systemd_run_argv(p: &UnitPlan) -> Vec<String> {
         // thousandths of a core → percent of one core (≥ 1%).
         prop(format!("CPUQuota={}%", (c / 10).max(1)));
     }
-    if p.network_none {
-        prop("PrivateNetwork=yes".into());
-        prop("IPAddressDeny=any".into());
-        // The resolver's local sockets would still answer from outside
-        // the namespace (DNS as a side channel).
-        prop("InaccessiblePaths=-/run/systemd/resolve -/run/nscd -/var/run/nscd".into());
+    match p.network {
+        Network::None => {
+            prop("PrivateNetwork=yes".into());
+            prop("IPAddressDeny=any".into());
+            // The resolver's local sockets would still answer from outside
+            // the namespace (DNS as a side channel).
+            prop("InaccessiblePaths=-/run/systemd/resolve -/run/nscd -/var/run/nscd".into());
+        }
+        Network::NoLan => prop(format!("IPAddressDeny={}", NO_LAN_DENY.join(" "))),
+        Network::On => {}
     }
     a.push("--".into());
     a.push(p.binary.display().to_string());
@@ -343,19 +495,49 @@ fn inside(child: &Path, parent: &Path) -> bool {
     child != parent && child.starts_with(parent)
 }
 
-/// The job root and writable dirs, resolved and confined to the node
-/// home's `jobs/<one dir>` and `cache/…`.
-pub fn check_paths(home: &Path, root: &Path, rw: &[PathBuf]) -> Result<(PathBuf, Vec<PathBuf>), AdminRefusal> {
-    let jobs = canon(&home.join("jobs"))?;
-    let cache = canon(&home.join("cache"))?;
+/// Where one slot's job-facing dirs are, as root sees them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlotRoots {
+    pub jobs: PathBuf,
+    pub cache: PathBuf,
+    /// The slot's `tmp/` (its sccache socket, V63); may be missing for the
+    /// owner (an older node), then nothing matches it.
+    pub tmp: Option<PathBuf>,
+}
+
+/// One slot's roots, canonical: the node home's for the owner;
+/// `<home>-t/<slot>/` for a tenant, which must be exactly that directory
+/// (no link anywhere on the way: the parent is root's, 0711).
+pub fn slot_roots(home: &Path, slot: Slot) -> Result<SlotRoots, AdminRefusal> {
+    let layout = crate::paths::Layout::new(home, "/nonexistent");
+    if slot == OWNER_SLOT {
+        let tmp = std::fs::canonicalize(layout.tenant(OWNER_SLOT).tmp()).ok();
+        return Ok(SlotRoots { jobs: canon(&home.join("jobs"))?, cache: canon(&home.join("cache"))?, tmp });
+    }
+    if !share::valid_slot(slot) {
+        return Err(refuse(code::BAD_ARGS, format!("slot {slot} is out of range")));
+    }
+    let parent = canon(&layout.tenants_root())?;
+    let base = canon(&layout.tenant(slot).root())?;
+    if base != parent.join(slot.to_string()) {
+        return Err(refuse(code::BAD_ARGS, "a tenant root is a plain folder under the tenants root"));
+    }
+    Ok(SlotRoots { jobs: canon(&base.join("jobs"))?, cache: canon(&base.join("cache"))?, tmp: Some(canon(&base.join("tmp"))?) })
+}
+
+/// The job root and writable dirs, resolved and confined to the slot's
+/// `jobs/<one dir>`, `cache/…` and `tmp/` (the owner's under the node
+/// home, a tenant's under `<home>-t/<slot>/`, V54).
+pub fn check_paths(home: &Path, slot: Slot, root: &Path, rw: &[PathBuf]) -> Result<(PathBuf, Vec<PathBuf>), AdminRefusal> {
+    let s = slot_roots(home, slot)?;
     let r = canon(root)?;
-    if r.parent() != Some(jobs.as_path()) {
-        return Err(refuse(code::BAD_ARGS, "a job root is one folder under the node home's jobs/"));
+    if r.parent() != Some(s.jobs.as_path()) {
+        return Err(refuse(code::BAD_ARGS, "a job root is one folder under its server's jobs/"));
     }
     let mut out = Vec::new();
     for p in rw {
         let c = canon(p)?;
-        if !(inside(&c, &r) || c == r || inside(&c, &cache)) {
+        if !(inside(&c, &r) || c == r || inside(&c, &s.cache) || s.tmp.as_ref() == Some(&c)) {
             return Err(refuse(code::BAD_ARGS, format!("{} is outside the job's own folders", p.display())));
         }
         out.push(c);
@@ -364,23 +546,24 @@ pub fn check_paths(home: &Path, root: &Path, rw: &[PathBuf]) -> Result<(PathBuf,
 }
 
 /// A path `reclaim` may take back: a job root or anything under one, or
-/// anything under `cache/` (not `cache/` itself).
-pub fn check_reclaim(home: &Path, path: &Path) -> Result<PathBuf, AdminRefusal> {
-    let jobs = canon(&home.join("jobs"))?;
-    let cache = canon(&home.join("cache"))?;
+/// anything under `cache/` (not `cache/` itself), of the owner or of a
+/// tenant. Returns it with its slot.
+pub fn check_reclaim(home: &Path, path: &Path) -> Result<(PathBuf, Slot), AdminRefusal> {
     let c = canon(path)?;
-    if inside(&c, &jobs) || inside(&c, &cache) {
-        Ok(c)
-    } else {
-        Err(refuse(code::BAD_ARGS, "only job folders and caches under the node home"))
+    for slot in 0..share::MAX_SLOTS {
+        let Ok(s) = slot_roots(home, slot) else { continue };
+        if inside(&c, &s.jobs) || inside(&c, &s.cache) {
+            return Ok((c, slot));
+        }
     }
+    Err(refuse(code::BAD_ARGS, "only job folders and caches of this node's servers"))
 }
 
 fn find_program(name: &str) -> Option<PathBuf> {
     ["/usr/bin", "/bin", "/usr/sbin", "/sbin"].iter().map(|d| Path::new(d).join(name)).find(|p| p.is_file())
 }
 
-fn systemctl(args: &[&str]) -> Result<String, String> {
+pub(crate) fn systemctl(args: &[&str]) -> Result<String, String> {
     let prog = find_program("systemctl").ok_or("systemctl not found")?;
     let out = std::process::Command::new(&prog)
         .args(args)
@@ -397,6 +580,12 @@ fn systemctl(args: &[&str]) -> Result<String, String> {
     }
 }
 
+/// This machine's systemd version (0 when unknown), asked once.
+pub fn systemd() -> u32 {
+    static V: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *V.get_or_init(|| systemctl(&["--version"]).ok().and_then(|t| systemd_version(&t)).unwrap_or(0))
+}
+
 /// Read one unit's status (root).
 pub fn unit_status(unit: &str) -> Result<UnitStatus, String> {
     let text = systemctl(&["show", "--property=LoadState,ActiveState,SubState,Result,ExecMainCode,ExecMainStatus,ControlGroup", unit])?;
@@ -409,8 +598,45 @@ pub fn unit_status(unit: &str) -> Result<UnitStatus, String> {
     Ok(s)
 }
 
+/// Units being started right now (two starts of one key never race).
+fn starting() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static S: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> = std::sync::OnceLock::new();
+    S.get_or_init(Default::default)
+}
+
+/// Who a job of one slot runs as, as root decided it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JobIds {
+    pub user: String,
+    pub uid: u32,
+    pub gid: u32,
+}
+
+/// `servers.toml` as root reads it (`None` = no file: solo mode).
+pub fn read_servers(config_dir: &Path) -> Result<Option<share::ServersFile>, String> {
+    let p = config_dir.join(share::SERVERS_FILE);
+    match std::fs::read_to_string(&p) {
+        Ok(s) => {
+            let f: share::ServersFile = toml::from_str(&s).map_err(|e| format!("{}: {e}", p.display()))?;
+            f.validate().map_err(|e| format!("{}: {e}", p.display()))?;
+            Ok(Some(f))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("read {}: {e}", p.display())),
+    }
+}
+
+/// A tenant slot's `servers.toml` line, fail closed: no file, a broken
+/// file or no line for the slot all refuse.
+pub fn tenant_entry(config_dir: &Path, slot: Slot) -> Result<share::ServerEntry, AdminRefusal> {
+    let f = read_servers(config_dir)
+        .map_err(|e| refuse(share::codes::TENANT_WALL_MISSING, e))?
+        .ok_or_else(|| refuse(share::codes::SERVER_NOT_APPROVED, "no servers.toml: this node serves only its owner"))?;
+    f.entry(slot).cloned().ok_or_else(|| refuse(share::codes::SERVER_NOT_APPROVED, format!("no server in slot {slot}")))
+}
+
 impl Executor {
-    fn node_user(&self) -> String {
+    pub(crate) fn node_user(&self) -> String {
         super::config::read(&self.paths.admin())
             .ok()
             .flatten()
@@ -434,11 +660,79 @@ impl Executor {
         if find_program("systemd-run").is_none() {
             return Err(refuse(code::NOT_CONFIGURED, "systemd-run not found"));
         }
-        let v = systemctl(&["--version"]).ok().and_then(|t| systemd_version(&t)).unwrap_or(0);
+        let v = systemd();
         if v < MIN_SYSTEMD {
             return Err(refuse(code::NOT_CONFIGURED, format!("systemd {v} is older than {MIN_SYSTEMD} (the job unit's sandbox needs it)")));
         }
         Ok((f.job_user, uid))
+    }
+
+    /// Can this machine run tenant jobs at all? (`team_needs_tenant_wall`
+    /// otherwise.) The owner's wall plus systemd ≥ 247.
+    pub fn tenant_wall_ready(&self) -> Result<(), AdminRefusal> {
+        self.job_user().map_err(|e| refuse(share::codes::TENANT_NEEDS_JOB_WALL, e.message))?;
+        let v = systemd();
+        if v < MIN_SYSTEMD_TENANT {
+            return Err(refuse(
+                share::codes::TEAM_NEEDS_TENANT_WALL,
+                format!("systemd {v} is older than {MIN_SYSTEMD_TENANT}: tenant jobs need ProtectProc=invisible"),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Who slot `slot`'s jobs run as. The owner: `jobs.toml`'s job user
+    /// with the node's group (today's wall). A tenant: its own user and
+    /// group from `jobs.toml [tenants]`, checked against the machine's
+    /// user database (name, uid and group all as `tenant.prepare` made
+    /// them, never root, the node user or the owner's job user), and only
+    /// while `servers.toml` says that server is usable. Anything off →
+    /// `tenant_wall_missing`: the job waits, it never runs as another user.
+    pub fn job_ids(&self, slot: Slot) -> Result<JobIds, AdminRefusal> {
+        let (owner_user, owner_uid) = self.job_user()?;
+        let node_user = self.node_user();
+        let (node_uid, node_gid) = super::server::user_ids(&node_user).ok_or_else(|| refuse(code::NOT_CONFIGURED, "the node user is missing"))?;
+        if node_gid == 0 {
+            // Group 0 sees every process through `ProtectProc=invisible`
+            // (procfs exempts its `gid=`, 0) and reads root-group files.
+            return Err(refuse(code::NOT_CONFIGURED, format!("the node user {node_user}'s group is root's; jobs never run in group 0")));
+        }
+        if slot == OWNER_SLOT {
+            return Ok(JobIds { user: owner_user, uid: owner_uid, gid: node_gid });
+        }
+        self.tenant_wall_ready()?;
+        let missing = |m: String| refuse(share::codes::TENANT_WALL_MISSING, m);
+        let entry = tenant_entry(&self.paths.config_dir, slot)?;
+        if !entry.usable(self.now()) {
+            return Err(refuse(share::codes::SERVER_NOT_APPROVED, format!("the server in slot {slot} is {}", entry.status(self.now()).as_str())));
+        }
+        let f = read_jobs_file(&self.paths.config_dir).map_err(missing)?.ok_or_else(|| missing("no jobs.toml".into()))?;
+        let t = f.tenant(slot).ok_or_else(|| missing(format!("slot {slot} has no job user (tenant.prepare)")))?;
+        if t.user != tenant_user_name(slot) {
+            return Err(missing(format!("slot {slot}'s job user must be {}", tenant_user_name(slot))));
+        }
+        let (uid, pgid) = super::server::user_ids(&t.user).ok_or_else(|| missing(format!("{} is not a user on this machine", t.user)))?;
+        let gid = group_id(&tenant_group_name(slot)).ok_or_else(|| missing(format!("group {} is missing", tenant_group_name(slot))))?;
+        if uid != t.uid || gid != t.gid || pgid != gid {
+            return Err(missing(format!("{} isn't the user tenant.prepare made (uid/gid changed)", t.user)));
+        }
+        if uid == 0 || gid == 0 || uid == node_uid || uid == owner_uid || gid == node_gid {
+            return Err(missing(format!("{} shares an id with root, the node or the owner's jobs", t.user)));
+        }
+        Ok(JobIds { user: t.user.clone(), uid, gid })
+    }
+
+    /// What the job ops tell the node about tenants.
+    pub fn tenant_wall(&self) -> TenantWall {
+        let mut w = TenantWall { systemd: systemd(), ..Default::default() };
+        match self.tenant_wall_ready() {
+            Ok(()) => w.ready = true,
+            Err(e) => w.why = Some(format!("{}: {}", e.code, e.message)),
+        }
+        if let Ok(Some(f)) = read_jobs_file(&self.paths.config_dir) {
+            w.users = f.tenants.iter().map(|(k, v)| (k.clone(), v.user.clone())).collect();
+        }
+        w
     }
 
     /// The job ops (the server checked the peer: root or the node user).
@@ -448,16 +742,24 @@ impl Executor {
             JobOp::Start(s) => self.start_job(s, fds).map(|unit| JobAnswer::Started { unit }),
             JobOp::Status { unit } => self.with_unit(unit, |u| unit_status(u).map(JobAnswer::Status)),
             JobOp::Stop { unit } => self.with_unit(unit, |u| systemctl(&["stop", "--no-block", u]).map(|_| JobAnswer::Done { detail: json!({"stopping": u}) })),
+            // Never blocks (V58): a job that ignores SIGTERM holds only its
+            // own unit until `TimeoutStopSec`; the node polls `status` and
+            // releases again once it ended (`reset-failed` forgets it).
             JobOp::Release { unit } => self.with_unit(unit, |u| {
-                let stopped = systemctl(&["stop", u]);
+                let stopped = systemctl(&["stop", "--no-block", u]);
                 let _ = systemctl(&["reset-failed", u]);
                 Ok(JobAnswer::Done { detail: json!({"released": u, "stop": stopped.err()}) })
             }),
             JobOp::Reclaim { path } => self.reclaim_path(path),
+            JobOp::Tenants => Ok(JobAnswer::Tenants(self.tenant_wall())),
+            JobOp::TenantPrepare(p) => self.tenant_prepare(p).map(|detail| JobAnswer::Done { detail }),
+            JobOp::TenantWipe(w) => self.tenant_wipe(w).map(|detail| JobAnswer::Done { detail }),
         };
         r.unwrap_or_else(JobAnswer::Refused)
     }
 
+    /// A K2 job unit (the slot is in its name, so an op can only ever
+    /// reach the slot that unit belongs to).
     fn with_unit(&self, unit: &str, f: impl FnOnce(&str) -> Result<JobAnswer, String>) -> Result<JobAnswer, AdminRefusal> {
         if !valid_unit(unit) {
             return Err(refuse(code::BAD_ARGS, "not a K2 job unit"));
@@ -468,38 +770,120 @@ impl Executor {
 
     fn reclaim_path(&self, path: &Path) -> Result<JobAnswer, AdminRefusal> {
         self.job_user()?;
-        let p = check_reclaim(&self.paths.home, path)?;
-        let (uid, gid) = super::server::user_ids(&self.node_user()).ok_or_else(|| refuse(code::NOT_CONFIGURED, "the node user is missing"))?;
+        let (p, slot) = check_reclaim(&self.paths.home, path)?;
+        let (uid, node_gid) = super::server::user_ids(&self.node_user()).ok_or_else(|| refuse(code::NOT_CONFIGURED, "the node user is missing"))?;
+        // A tenant's trees keep the tenant's group (its next job uses
+        // them); the node gets them back as their owner.
+        let gid = if slot == OWNER_SLOT {
+            node_gid
+        } else {
+            group_id(&tenant_group_name(slot)).ok_or_else(|| refuse(share::codes::TENANT_WALL_MISSING, "the tenant's group is missing"))?
+        };
         let s = crate::wall::reclaim(&p, uid, gid).map_err(|e| refuse(code::FAILED, e))?;
         Ok(JobAnswer::Done { detail: json!({"reclaimed": p, "changed": s.changed, "skipped": s.skipped}) })
     }
 
-    fn start_job(&self, s: &JobStart, fds: Vec<OwnedFd>) -> Result<String, AdminRefusal> {
-        let (_, job_uid) = self.job_user()?;
-        let unit = unit_name(&s.key).ok_or_else(|| refuse(code::BAD_ARGS, "job key is not a plain name"))?;
-        let (root, rw) = check_paths(&self.paths.home, &s.root, &s.rw)?;
-        let (_, group_gid) = super::server::user_ids(&self.node_user()).ok_or_else(|| refuse(code::NOT_CONFIGURED, "the node user is missing"))?;
-        let [out, err]: [OwnedFd; 2] = fds.try_into().map_err(|_| refuse(code::BAD_ARGS, "start needs exactly the job's stdout and stderr"))?;
+    /// What a slot's unit may not see beyond the node's own state: the
+    /// owner's never sees any tenant root; a tenant's sees no other
+    /// tenant's root and nothing of the node home but `toolchains/`
+    /// (read-only; the owner's jobs, mirrors, caches, logs and artifacts
+    /// are gone, T1/V61).
+    pub fn gone_for(&self, slot: Slot) -> Vec<PathBuf> {
         let home = &self.paths.home;
+        let layout = crate::paths::Layout::new(home, &self.paths.config_dir);
+        let mut gone = vec![home.join("state"), home.join("run"), self.paths.config_dir.clone(), self.paths.state_dir.clone()];
+        let troot = layout.tenants_root();
+        if slot == OWNER_SLOT {
+            gone.push(troot);
+            return gone;
+        }
+        if let Ok(rd) = std::fs::read_dir(home) {
+            let mut names: Vec<_> = rd.flatten().map(|e| e.file_name()).filter(|n| n != "toolchains").collect();
+            names.sort();
+            for n in names {
+                let p = home.join(n);
+                if !gone.contains(&p) {
+                    gone.push(p);
+                }
+            }
+        }
+        for other in 0..share::MAX_SLOTS {
+            if other != slot && other != OWNER_SLOT {
+                gone.push(troot.join(other.to_string()));
+            }
+        }
+        gone
+    }
+
+    fn start_job(&self, s: &JobStart, fds: Vec<OwnedFd>) -> Result<String, AdminRefusal> {
+        let ids = self.job_ids(s.tenant)?;
+        if key_slot(&s.key) != s.tenant {
+            return Err(refuse(code::BAD_ARGS, format!("job key {:?} isn't a slot-{} key", s.key, s.tenant)));
+        }
+        let unit = unit_name(&s.key).ok_or_else(|| refuse(code::BAD_ARGS, "job key is not a plain name"))?;
+        let (root, rw) = check_paths(&self.paths.home, s.tenant, &s.root, &s.rw)?;
+        let [out, err]: [OwnedFd; 2] = fds.try_into().map_err(|_| refuse(code::BAD_ARGS, "start needs exactly the job's stdout and stderr"))?;
+        // The node's ask, narrowed by a tenant's share (V65): root never
+        // widens what the node asked, and a tenant never gets more than
+        // its line in servers.toml.
+        let asked = if s.network_none {
+            Network::None
+        } else if s.no_lan {
+            Network::NoLan
+        } else {
+            Network::On
+        };
+        let network = if s.tenant == OWNER_SLOT { asked } else { asked.min(tenant_entry(&self.paths.config_dir, s.tenant)?.network) };
+        let v = systemd();
         let plan = UnitPlan {
             unit: unit.clone(),
-            job_uid,
-            group_gid,
+            job_uid: ids.uid,
+            group_gid: ids.gid,
             root,
             rw,
-            gone: vec![home.join("state"), home.join("run"), self.paths.config_dir.clone(), self.paths.state_dir.clone()],
-            network_none: s.network_none,
+            gone: self.gone_for(s.tenant),
+            network,
             mem_bytes: s.mem_bytes,
             cpu_millis: s.cpu_millis,
             stop_grace_secs: s.stop_grace_secs,
             binary: self.paths.binary.clone(),
+            slice: slice_name(s.tenant),
+            protect_proc: v >= MIN_SYSTEMD_TENANT,
+            private_ipc: v >= MIN_SYSTEMD_PRIVATE_IPC,
         };
-        // A leftover unit of the same name (a node restart) goes first.
-        if unit_status(&unit).is_ok_and(|st| st.loaded) {
-            let _ = systemctl(&["stop", &unit]);
-            let _ = systemctl(&["reset-failed", &unit]);
+        {
+            let mut g = starting().lock().unwrap_or_else(|e| e.into_inner());
+            if !g.insert(unit.clone()) {
+                return Err(refuse(code::BUSY, format!("{unit} is already starting")));
+            }
         }
-        let argv = systemd_run_argv(&plan);
+        let r = self.spawn_unit(&plan, &unit, out, err);
+        starting().lock().unwrap_or_else(|e| e.into_inner()).remove(&unit);
+        let _ = self.audit().append(
+            super::store::AuditEntry {
+                event: "job".into(),
+                detail: json!({"unit": unit, "tenant": s.tenant, "network": network.as_str(), "ok": r.is_ok()}),
+                ..Default::default()
+            },
+            self.now(),
+        );
+        r.map(|_| unit)
+    }
+
+    fn spawn_unit(&self, plan: &UnitPlan, unit: &str, out: OwnedFd, err: OwnedFd) -> Result<(), AdminRefusal> {
+        // A leftover unit of the same name (a node restart) goes first, but
+        // only once its command is over: a start never stops a running job
+        // (V48). The name carries the slot, so it's never another slot's.
+        if let Ok(st) = unit_status(unit) {
+            if st.loaded {
+                if !st.ended() {
+                    return Err(refuse(code::FAILED, format!("{unit} is still running; it isn't started twice")));
+                }
+                let _ = systemctl(&["stop", unit]);
+                let _ = systemctl(&["reset-failed", unit]);
+            }
+        }
+        let argv = systemd_run_argv(plan);
         let prog = find_program("systemd-run").ok_or_else(|| refuse(code::NOT_CONFIGURED, "systemd-run not found"))?;
         let mut child = std::process::Command::new(prog)
             .args(&argv[1..])
@@ -516,12 +900,12 @@ impl Executor {
         let t0 = Instant::now();
         let started = loop {
             if let Ok(Some(st)) = child.try_wait() {
-                if !unit_status(&unit).is_ok_and(|s| s.loaded) {
+                if !unit_status(unit).is_ok_and(|s| s.loaded) {
                     break Err(refuse(code::FAILED, format!("systemd-run ended before the job started ({st}); its message is in the job's log")));
                 }
                 break Ok(());
             }
-            if unit_status(&unit).is_ok_and(|s| s.loaded) {
+            if unit_status(unit).is_ok_and(|s| s.loaded) {
                 break Ok(());
             }
             if t0.elapsed() > Duration::from_secs(15) {
@@ -534,11 +918,7 @@ impl Executor {
         std::thread::spawn(move || {
             let _ = child.wait();
         });
-        let _ = self.audit().append(
-            super::store::AuditEntry { event: "job".into(), detail: json!({"unit": unit, "network_none": s.network_none, "ok": started.is_ok()}), ..Default::default() },
-            self.now(),
-        );
-        started.map(|_| unit)
+        started
     }
 
     /// `wall.enable` (owner-approved, Linux): what `sudo k2-node setup`
@@ -613,11 +993,14 @@ mod tests {
             root: PathBuf::from("/var/lib/k2node/jobs/j1-g1"),
             rw: vec![PathBuf::from("/var/lib/k2node/cache/pk/target-1")],
             gone: vec![PathBuf::from("/var/lib/k2node/state"), PathBuf::from("/etc/k2-node")],
-            network_none: false,
+            network: Network::On,
             mem_bytes: Some(2 << 30),
             cpu_millis: Some(4000),
             stop_grace_secs: 10,
             binary: PathBuf::from("/usr/local/libexec/k2-node"),
+            slice: slice_name(0),
+            protect_proc: false,
+            private_ipc: false,
         }
     }
 
@@ -649,10 +1032,14 @@ mod tests {
             assert!(has(s), "{s} missing from {a:?}");
         }
         assert!(!has("PrivateNetwork=yes"), "network = full");
+        assert!(has("--slice=k2-jobs.slice"), "the owner keeps today's slice");
+        assert!(has("TemporaryFileSystem=/dev/shm:mode=1777") && has("RemoveIPC=yes"), "own /dev/shm, IPC gone with the user");
+        assert!(!a.iter().any(|x| x.starts_with("IPAddressDeny")), "network = on adds no address rule");
+        assert!(!has("ProtectProc=invisible") && !has("PrivateIPC=yes"), "only when systemd has them");
         let tail = &a[a.len() - 4..];
         assert_eq!(tail, ["--", "/usr/local/libexec/k2-node", "job-exec", "/var/lib/k2node/jobs/j1-g1/exec/exec.json"], "root's binary runs root's shim; argv never on the command line");
         let mut p = plan();
-        p.network_none = true;
+        p.network = Network::None;
         p.mem_bytes = None;
         p.cpu_millis = Some(5);
         let a = systemd_run_argv(&p);
@@ -660,6 +1047,49 @@ mod tests {
         assert!(a.iter().any(|x| x.contains("-/run/systemd/resolve")), "no DNS side channel");
         assert!(!a.iter().any(|x| x.starts_with("MemoryMax")));
         assert!(a.iter().any(|x| x == "CPUQuota=1%"), "never below 1%");
+    }
+
+    /// A tenant's unit (S3a): its own uid/gid and slice, other users'
+    /// processes invisible, its own IPC, and `no-lan` closing every
+    /// private, link-local, tailnet/CGNAT and multicast range (V62).
+    #[test]
+    fn a_tenant_unit_is_walled_from_the_lan_and_other_users() {
+        let mut p = plan();
+        p.unit = "k2job-t3-0123456789abcdef.service".into();
+        p.job_uid = 61003;
+        p.group_gid = 61003;
+        p.slice = slice_name(3);
+        p.protect_proc = true;
+        p.private_ipc = true;
+        p.network = Network::NoLan;
+        let a = systemd_run_argv(&p);
+        let has = |s: &str| a.iter().any(|x| x == s);
+        for s in ["--uid=61003", "--gid=61003", "--slice=k2-jobs-t3.slice", "ProtectProc=invisible", "PrivateIPC=yes"] {
+            assert!(has(s), "{s} missing from {a:?}");
+        }
+        assert!(!a.iter().any(|x| x.starts_with("ProcSubset")), "V75: /proc/meminfo stays readable");
+        let deny = a.iter().find(|x| x.starts_with("IPAddressDeny=")).expect("no-lan denies addresses");
+        for r in ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "100.64.0.0/10", "0.0.0.0/8", "224.0.0.0/4", "fc00::/7", "fe80::/10", "ff00::/8"] {
+            assert!(deny.split([' ', '=']).any(|x| x == r), "{r} missing from {deny}");
+        }
+        assert!(!deny.contains("127.") && !deny.contains("::1"), "loopback stays: {deny}");
+        assert!(!has("PrivateNetwork=yes"), "no-lan keeps the internet");
+    }
+
+    /// V48: the slot is in the key, and an owner key can never read as a
+    /// tenant's (it always ends `-g<digits>`; `g` isn't hex).
+    #[test]
+    fn keys_and_units_carry_their_slot() {
+        for slot in 1..8u8 {
+            let k = crate::node::job_key(slot, "j", 1);
+            assert_eq!(key_slot(&k), slot, "{k}");
+            assert_eq!(unit_slot(&unit_name(&k).unwrap()), Some(slot));
+        }
+        for owner in ["j-g1", "t1-0123456789abcdef-g1", "t1-0123456789ABCDEF", "t0-0123456789abcdef", "t8-0123456789abcdef", "t1-0123456789abcde", "t1_0123456789abcdef"] {
+            assert_eq!(key_slot(owner), 0, "{owner}");
+        }
+        assert_eq!(unit_slot("sshd.service"), None);
+        assert_eq!((tenant_user_name(2), tenant_group_name(2), slice_name(2)), ("k2job-2".into(), "k2t-2".into(), "k2-jobs-t2.slice".into()));
     }
 
     #[test]
@@ -702,27 +1132,69 @@ mod tests {
 
     #[test]
     fn paths_are_confined_after_resolving_links() {
-        let home = crate::util::temp_dir("jobpaths");
+        let home = crate::util::temp_dir("jobpaths").join("home");
         for d in ["jobs/j1-g1/src", "cache/pk/target-1", "state", "etc"] {
             std::fs::create_dir_all(home.join(d)).unwrap();
         }
-        let (r, rw) = check_paths(&home, &home.join("jobs/j1-g1"), &[home.join("jobs/j1-g1/src"), home.join("cache/pk/target-1")]).unwrap();
+        let home = std::fs::canonicalize(&home).unwrap();
+        let (r, rw) = check_paths(&home, 0, &home.join("jobs/j1-g1"), &[home.join("jobs/j1-g1/src"), home.join("cache/pk/target-1")]).unwrap();
         assert_eq!(r, home.join("jobs/j1-g1"));
         assert_eq!(rw.len(), 2);
         // A symlink in a node-writable dir can't widen the job.
         std::os::unix::fs::symlink(home.join("state"), home.join("cache/pk/sneaky")).unwrap();
         std::os::unix::fs::symlink(home.join("etc"), home.join("jobs/j1-g1/out")).unwrap();
         for bad in [home.join("cache/pk/sneaky"), home.join("jobs/j1-g1/out"), home.join("state"), home.join("cache"), PathBuf::from("/etc")] {
-            assert!(check_paths(&home, &home.join("jobs/j1-g1"), std::slice::from_ref(&bad)).is_err(), "{}", bad.display());
+            assert!(check_paths(&home, 0, &home.join("jobs/j1-g1"), std::slice::from_ref(&bad)).is_err(), "{}", bad.display());
         }
-        assert!(check_paths(&home, &home.join("jobs"), &[]).is_err(), "jobs/ itself isn't a job root");
-        assert!(check_paths(&home, &home.join("jobs/j1-g1/src"), &[]).is_err(), "one level under jobs/");
-        assert!(check_paths(&home, &home.join("state"), &[]).is_err());
-        assert!(check_reclaim(&home, &home.join("jobs/j1-g1")).is_ok());
-        assert!(check_reclaim(&home, &home.join("cache/pk/target-1")).is_ok());
+        assert!(check_paths(&home, 0, &home.join("jobs"), &[]).is_err(), "jobs/ itself isn't a job root");
+        assert!(check_paths(&home, 0, &home.join("jobs/j1-g1/src"), &[]).is_err(), "one level under jobs/");
+        assert!(check_paths(&home, 0, &home.join("state"), &[]).is_err());
+        assert_eq!(check_reclaim(&home, &home.join("jobs/j1-g1")).unwrap().1, 0);
+        assert_eq!(check_reclaim(&home, &home.join("cache/pk/target-1")).unwrap().1, 0);
         for bad in [home.join("jobs"), home.join("cache"), home.join("state"), home.join("cache/pk/sneaky")] {
             assert!(check_reclaim(&home, &bad).is_err(), "{}", bad.display());
         }
+    }
+
+    /// V54: a tenant's job root is under `<home>-t/<slot>/jobs/`, and
+    /// never under the owner's or another tenant's; the root itself must
+    /// be the real folder (a link planted in its place is refused).
+    #[test]
+    fn tenant_paths_are_confined_to_the_tenant_root() {
+        let base = std::fs::canonicalize(crate::util::temp_dir("tenantpaths")).unwrap();
+        let home = base.join("home");
+        let l = crate::paths::Layout::new(&home, "/nonexistent");
+        for d in [home.join("jobs/o-g1"), home.join("cache/pk")] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        for slot in [1u8, 2] {
+            let t = l.tenant(slot);
+            for d in [t.jobs().join("k"), t.cache().join("pk/target-1"), t.tmp()] {
+                std::fs::create_dir_all(d).unwrap();
+            }
+        }
+        let t1 = l.tenant(1);
+        let (r, rw) = check_paths(&home, 1, &t1.jobs().join("k"), &[t1.cache().join("pk/target-1"), t1.tmp()]).unwrap();
+        assert_eq!((r, rw.len()), (t1.jobs().join("k"), 2));
+        let t2 = l.tenant(2);
+        for (root, rw) in [
+            (t2.jobs().join("k"), vec![]),
+            (home.join("jobs/o-g1"), vec![]),
+            (t1.jobs().join("k"), vec![t2.cache().join("pk/target-1")]),
+            (t1.jobs().join("k"), vec![home.join("cache/pk")]),
+            (t1.jobs().join("k"), vec![t2.tmp()]),
+            (t1.jobs().join("k"), vec![t1.cache()]),
+        ] {
+            assert!(check_paths(&home, 1, &root, &rw).is_err(), "{} {rw:?}", root.display());
+        }
+        assert!(check_paths(&home, 0, &t1.jobs().join("k"), &[]).is_err(), "the owner's job never runs in a tenant root");
+        assert_eq!(check_reclaim(&home, &t1.jobs().join("k")).unwrap().1, 1);
+        assert_eq!(check_reclaim(&home, &t2.cache().join("pk/target-1")).unwrap().1, 2);
+        assert!(check_reclaim(&home, &t1.root()).is_err() && check_reclaim(&home, &t1.repos()).is_err());
+        // Slot 3's root is a link to slot 1's: refused.
+        std::os::unix::fs::symlink(t1.root(), l.tenant(3).root()).unwrap();
+        assert!(check_paths(&home, 3, &l.tenant(3).jobs().join("k"), &[]).is_err());
+        assert!(slot_roots(&home, 3).is_err() && slot_roots(&home, 8).is_err());
     }
 
     #[test]
@@ -761,7 +1233,10 @@ mod tests {
     fn ops_round_trip_on_the_wire() {
         let ops = [
             JobOp::Ready,
-            JobOp::Start(JobStart { key: "j-g1".into(), root: "/r".into(), rw: vec![], network_none: true, mem_bytes: Some(1), cpu_millis: None, stop_grace_secs: 10 }),
+            JobOp::Start(JobStart { key: "j-g1".into(), root: "/r".into(), rw: vec![], network_none: true, mem_bytes: Some(1), cpu_millis: None, stop_grace_secs: 10, tenant: 2, no_lan: true }),
+            JobOp::Tenants,
+            JobOp::TenantPrepare(share::TenantPrepare { slot: 1, trust: share::Trust::Own, weight: 1, network: Network::On }),
+            JobOp::TenantWipe(share::TenantWipe { slot: 1 }),
             JobOp::Status { unit: "k2job-j-g1.service".into() },
             JobOp::Reclaim { path: "/r".into() },
         ];
@@ -769,5 +1244,9 @@ mod tests {
             let s = serde_json::to_string(&op).unwrap();
             assert_eq!(serde_json::from_str::<JobOp>(&s).unwrap(), op);
         }
+        // A 0.46.2 node's start (no tenant, no no_lan) is the owner's.
+        let old: JobOp = serde_json::from_str(r#"{"do":"start","key":"j-g1","root":"/r","rw":[],"network_none":false,"mem_bytes":null,"cpu_millis":null,"stop_grace_secs":10}"#).unwrap();
+        let JobOp::Start(s) = old else { panic!() };
+        assert_eq!((s.tenant, s.no_lan), (0, false));
     }
 }

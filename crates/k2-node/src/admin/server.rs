@@ -202,18 +202,67 @@ pub fn bind(path: &Path, group_gid: Option<u32>) -> Result<UnixListener, String>
     Ok(l)
 }
 
-/// Serve forever (or until `stop()` says so after a connection).
-pub fn serve(exec: &Executor, rule: &PeerRule, l: UnixListener, stop: &dyn Fn() -> bool) -> Result<(), String> {
-    for conn in l.incoming() {
-        match conn {
-            Ok(s) => serve_conn(exec, rule, s),
-            Err(e) => crate::nlog!("admin: accept: {e}"),
+/// Connections served at once (V58). Past it a connection is answered
+/// `busy` at once (the node retries), never queued behind a slow one.
+pub const MAX_CONNS: usize = 32;
+
+/// Serve until `stop()` says so (checked at least twice a second; the
+/// connections in flight finish first).
+///
+/// Each connection gets its own thread (V58): one tenant's job op that
+/// waits (a start polling for its unit, a status, an update upload) never
+/// holds up another tenant's start. Root actions that change the node
+/// (`command`, `update`, `keys`) still take the executor's `busy` lock;
+/// job ops for different units run side by side.
+pub fn serve(exec: &Executor, rule: &PeerRule, l: UnixListener, stop: &(dyn Fn() -> bool + Sync)) -> Result<(), String> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let live = AtomicUsize::new(0);
+    std::thread::scope(|scope| {
+        loop {
+            if stop() {
+                break;
+            }
+            // Wait for a connection, waking to check `stop`.
+            let mut pfd = libc::pollfd { fd: l.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+            // SAFETY: one valid pollfd.
+            let n = unsafe { libc::poll(&mut pfd, 1, 500) };
+            if n <= 0 {
+                continue;
+            }
+            let s = match l.accept() {
+                Ok((s, _)) => s,
+                Err(e) => {
+                    crate::nlog!("admin: accept: {e}");
+                    continue;
+                }
+            };
+            if live.load(Ordering::SeqCst) >= MAX_CONNS {
+                busy(exec, s);
+                continue;
+            }
+            live.fetch_add(1, Ordering::SeqCst);
+            let live = &live;
+            let spawned = std::thread::Builder::new().name("k2-admin-conn".into()).spawn_scoped(scope, move || {
+                serve_conn(exec, rule, s);
+                live.fetch_sub(1, Ordering::SeqCst);
+            });
+            if let Err(e) = spawned {
+                live.fetch_sub(1, Ordering::SeqCst);
+                crate::nlog!("admin: no thread for a connection: {e}");
+            }
         }
-        if stop() {
-            break;
-        }
-    }
+    });
     Ok(())
+}
+
+/// Over [`MAX_CONNS`]: answer `busy` without reading the request.
+fn busy(exec: &Executor, mut s: UnixStream) {
+    let _ = s.set_write_timeout(Some(Duration::from_secs(5)));
+    let r = LocalResponse::Result(AdminResult::refused("", "", &AdminRefusal::new(code::BUSY, "the executor is serving its limit of connections; try again")));
+    if let Ok(b) = serde_json::to_vec(&r) {
+        let _ = write_frame(&mut s, &b);
+    }
+    let _ = exec.audit().append(super::store::AuditEntry { event: "refused".into(), code: Some(code::BUSY.into()), ..Default::default() }, exec.now());
 }
 
 /// Node side: one request to the executor (blocking; call from

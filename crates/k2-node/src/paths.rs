@@ -175,6 +175,16 @@ impl TenantLayout {
     pub fn project_cache(&self, project_key: &str) -> PathBuf {
         self.cache().join(project_key)
     }
+    /// The slot's shared scratch (`<root>/tmp`): its sccache server socket
+    /// lives here, so one server's builds never reach another's sccache
+    /// (V63). Group-writable for the slot's job user only.
+    pub fn tmp(&self) -> PathBuf {
+        self.root().join("tmp")
+    }
+    /// The slot's sccache server socket (`SCCACHE_SERVER_UDS`).
+    pub fn sccache_socket(&self) -> PathBuf {
+        self.tmp().join("sccache.sock")
+    }
     /// An attempt's log journal. The owner's stays in its job dir (today);
     /// a tenant's is node-only, never in a dir its job can write (§8.2).
     pub fn journal(&self, job_id: &str, generation: u32) -> PathBuf {
@@ -293,6 +303,9 @@ mod tests {
         assert_eq!(t.project_cache("pk"), PathBuf::from("/var/lib/k2node-t/3/cache/pk"));
         assert_eq!(t.journal("j", 2), PathBuf::from("/var/lib/k2node/state/tenants/3/journal/j-g2.log"));
         assert_eq!(t.artifacts(), PathBuf::from("/var/lib/k2node/state/tenants/3/artifacts"));
+        assert_eq!(t.sccache_socket(), PathBuf::from("/var/lib/k2node-t/3/tmp/sccache.sock"));
+        assert_eq!(o.sccache_socket(), PathBuf::from("/var/lib/k2node/tmp/sccache.sock"));
+        assert!(t.sccache_socket().as_os_str().len() < 100, "fits sun_path");
         // Journals and artifacts are node-only state, never in the root a job writes.
         for p in [t.journal("j", 2), t.artifacts(), t.ledger(), t.pin()] {
             assert!(p.starts_with(l.state()) && !p.starts_with(t.root()), "{}", p.display());

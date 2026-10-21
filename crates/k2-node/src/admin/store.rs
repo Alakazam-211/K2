@@ -144,6 +144,10 @@ impl Audit {
 
     /// Append one line (fsync). Returns its seq.
     pub fn append(&self, e: AuditEntry, at: i64) -> Result<u64, String> {
+        // The executor serves connections on threads (V58): read-the-tail
+        // and append are one step, or two lines would chain to one parent.
+        static APPEND: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _g = APPEND.lock().unwrap_or_else(|p| p.into_inner());
         let (seq, prev) = self.tail()?;
         let mut l = AuditLine {
             seq: seq + 1,

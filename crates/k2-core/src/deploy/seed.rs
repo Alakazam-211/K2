@@ -290,6 +290,50 @@ pub fn remove_tree(hash: &str) -> Result<(), SeedError> {
     }
 }
 
+/// Name prefix of a Seed tree the sweep moved aside (a `.tmp-` name, so an
+/// interrupted removal is cleaned by [`clean_tmp`] at the next boot).
+pub const DETACHED_PREFIX: &str = ".tmp-sweep-";
+
+/// Move a stored Seed tree out of the store's name (one rename; fast
+/// enough under the DB lock). Returns where it went; the caller removes it
+/// with [`remove_detached`] outside the lock.
+pub fn detach_tree(hash: &str) -> Result<PathBuf, SeedError> {
+    if !valid_hash(hash) {
+        return Err(SeedError::new(codes::SEED_NOT_FOUND, format!("'{hash}' is not a Seed hash")));
+    }
+    let p = seed_path(hash);
+    let aside = super::seeds_dir().join(format!("{DETACHED_PREFIX}{hash}-{}", uuid::Uuid::new_v4().simple()));
+    // A sealed tree's top folder is 0555: renaming within the same parent
+    // needs only the parent's write bit, but open it anyway so the move
+    // works on every platform.
+    let _ = set_mode(&p, 0o755);
+    match fs::rename(&p, &aside) {
+        Ok(()) => Ok(aside),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(aside),
+        Err(e) => {
+            let _ = set_mode(&p, 0o555);
+            Err(SeedError::new(codes::SEED_INVALID, format!("move {} aside: {e}", p.display())))
+        }
+    }
+}
+
+/// Remove a tree [`detach_tree`] moved aside. Only paths in the Seed
+/// store with the detached prefix (never anything else).
+pub fn remove_detached(p: &Path) {
+    let ok = p.parent() == Some(super::seeds_dir().as_path())
+        && p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with(DETACHED_PREFIX));
+    if !ok {
+        crate::log_debug!("[seeds] refused to remove {} (not a detached Seed)", p.display());
+        return;
+    }
+    unseal(p);
+    if let Err(e) = fs::remove_dir_all(p) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            crate::log_debug!("[seeds] remove {}: {e} (cleaned at the next boot)", p.display());
+        }
+    }
+}
+
 /// The result of storing a folder.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Stored {

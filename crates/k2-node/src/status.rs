@@ -96,3 +96,37 @@ pub fn read(path: &std::path::Path) -> Result<Status, String> {
     let s = std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
     serde_json::from_str(&s).map_err(|e| format!("{}: {e}", path.display()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Several writers in one process (the node's loops) never trip over
+    /// each other's temp file: each write gets its own random temp name
+    /// (the old pid-named one let one writer rename the other's away, and
+    /// the other's chmod failed with ENOENT). Every write succeeds and
+    /// the file always reads whole.
+    #[test]
+    fn concurrent_status_writes_never_collide() {
+        let d = crate::util::temp_dir("status-race");
+        let p = d.join("run/status.json");
+        let threads: Vec<_> = (0..8)
+            .map(|t| {
+                let p = p.clone();
+                std::thread::spawn(move || {
+                    for i in 0..100 {
+                        let s = Status { state: format!("w{t}-{i}"), ..Default::default() };
+                        write(&p, &s).unwrap_or_else(|e| panic!("writer {t} write {i}: {e}"));
+                        read(&p).unwrap_or_else(|e| panic!("writer {t} read {i}: {e}"));
+                    }
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
+        assert!(read(&p).unwrap().state.starts_with('w'));
+        let left: Vec<_> = std::fs::read_dir(p.parent().unwrap()).unwrap().flatten().map(|e| e.file_name()).filter(|n| n.to_string_lossy().contains(".tmp-")).collect();
+        assert!(left.is_empty(), "no temp files left: {left:?}");
+    }
+}

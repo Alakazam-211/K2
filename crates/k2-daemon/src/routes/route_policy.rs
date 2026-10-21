@@ -486,6 +486,8 @@ pub const ROUTES: &[Route] = &[
     both("/cli/db/rows", Member),
     post("/cli/db/rows/delete", Member),
     post("/cli/db/rows/update", Member),
+    // Owner pins the major new databases go on (0.46.3).
+    post("/cli/db/server/default-major", Owner),
     post("/cli/db/server/disable", Admin),
     post("/cli/db/server/enable", Admin),
     post("/cli/db/server/uninstall", Admin),

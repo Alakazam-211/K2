@@ -131,7 +131,7 @@ impl Ctx {
             home: e.paths.home.clone(),
             now: e.now(),
             macos,
-            walled: node_walled(&layout, macos),
+            walled: node_walled(&layout, macos, false),
             tenant_wall: tenant_wall_available(&layout, macos),
             pinned_owner: cfg.as_ref().and_then(|c| c.controller.as_ref().map(|x| x.fp.clone())),
             node_user: cfg.map(|c| c.node_user).unwrap_or_else(|| super::config::default_node_user().to_string()),
@@ -142,8 +142,15 @@ impl Ctx {
 
 /// Does this node wall its jobs? Linux: root's `jobs.toml` names a job
 /// user. macOS: Seatbelt is there and the running node says it uses it.
-pub fn node_walled(layout: &Layout, macos: bool) -> bool {
-    let status_wall = crate::status::read(&layout.status()).map(|s| s.wall).unwrap_or_default();
+/// `allow_dev` (the machine owner's own CLI only, never the executor: the
+/// status file is the node user's): a `--dev` test node, which has no wall
+/// by design, may be shared for tests.
+pub fn node_walled(layout: &Layout, macos: bool, allow_dev: bool) -> bool {
+    let status = crate::status::read(&layout.status()).ok();
+    if allow_dev && status.as_ref().is_some_and(|s| s.dev) {
+        return true;
+    }
+    let status_wall = status.map(|s| s.wall).unwrap_or_default();
     use k2_node_proto::health::{WALL_JOB_USER, WALL_SEATBELT};
     if macos {
         crate::wall::seatbelt_available() && status_wall == WALL_SEATBELT

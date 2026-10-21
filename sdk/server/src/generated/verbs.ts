@@ -104,6 +104,105 @@ export const APP_VERBS = {
     responseNames: {},
     response: {"additionalProperties":false,"properties":{"ok":{"type":"boolean"}},"type":"object"},
   },
+  'wallet.list': {
+    cap: 'wallet:self',
+    effect: 'read',
+    kind: 'call',
+    feature: 'app-wallet-v1',
+    door: 'helper',
+    http: { method: 'GET', route: '/cli/skin/wallet/list', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"items":{"items":{"additionalProperties":false,"properties":{"addedVia":{"type":["string","null"]},"createdAt":{"type":"integer"},"dormantSince":{"type":["integer","null"]},"expiresAt":{"type":["integer","null"]},"id":{"type":"string"},"inUse":{"type":"boolean"},"label":{"type":"string"},"lastUsedAt":{"type":["integer","null"]},"plan":{"type":["string","null"]},"provider":{"type":"string"},"sealed":{"type":"boolean"},"state":{"type":"string"},"type":{"enum":["llm_subscription","llm_api_key"]},"usedBy":{"items":{"type":"string"},"type":"array"}},"type":"object"},"type":"array"},"ok":{"type":"boolean"},"providers":{"additionalProperties":false,"properties":{"apiKey":{"items":{"type":"string"},"type":"array"},"subscription":{"items":{"type":"string"},"type":"array"}},"type":"object"},"uses":{"additionalProperties":{"type":"string"},"type":"object"}},"type":"object"},
+  },
+  'wallet.status': {
+    cap: 'wallet:self',
+    effect: 'read',
+    kind: 'call',
+    feature: 'app-wallet-v1',
+    door: 'helper',
+    http: { method: 'GET', route: '/cli/skin/wallet/status', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"item":{"additionalProperties":false,"properties":{"addedVia":{"type":["string","null"]},"createdAt":{"type":"integer"},"dormantSince":{"type":["integer","null"]},"expiresAt":{"type":["integer","null"]},"id":{"type":"string"},"inUse":{"type":"boolean"},"label":{"type":"string"},"lastUsedAt":{"type":["integer","null"]},"plan":{"type":["string","null"]},"provider":{"type":"string"},"sealed":{"type":"boolean"},"state":{"type":"string"},"type":{"enum":["llm_subscription","llm_api_key"]},"usedBy":{"items":{"type":"string"},"type":"array"}},"type":"object"},"ok":{"type":"boolean"}},"type":"object"},
+  },
+  'wallet.add': {
+    cap: 'wallet:self',
+    effect: 'write',
+    kind: 'call',
+    feature: 'app-wallet-v1',
+    door: 'helper',
+    http: { method: 'POST', route: '/cli/skin/wallet/add', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"item":{"additionalProperties":false,"properties":{"addedVia":{"type":["string","null"]},"createdAt":{"type":"integer"},"dormantSince":{"type":["integer","null"]},"expiresAt":{"type":["integer","null"]},"id":{"type":"string"},"inUse":{"type":"boolean"},"label":{"type":"string"},"lastUsedAt":{"type":["integer","null"]},"plan":{"type":["string","null"]},"provider":{"type":"string"},"sealed":{"type":"boolean"},"state":{"type":"string"},"type":{"enum":["llm_subscription","llm_api_key"]},"usedBy":{"items":{"type":"string"},"type":"array"}},"type":"object"},"login":{"additionalProperties":false,"properties":{"code":{"type":["string","null"]},"done":{"type":"boolean"},"error":{"type":["string","null"]},"itemId":{"type":"string"},"label":{"type":"string"},"loginId":{"type":"string"},"needsPaste":{"type":"boolean"},"provider":{"type":"string"},"startedAt":{"type":"integer"},"state":{"type":"string"},"url":{"type":["string","null"]},"urlHost":{"type":["string","null"]}},"type":["object","null"]},"ok":{"type":"boolean"}},"type":"object"},
+  },
+  'wallet.login': {
+    cap: 'wallet:self',
+    effect: 'write',
+    kind: 'call',
+    feature: 'app-wallet-v1',
+    door: 'helper',
+    http: { method: 'POST', route: '/cli/skin/wallet/login', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"item":{"additionalProperties":false,"properties":{"addedVia":{"type":["string","null"]},"createdAt":{"type":"integer"},"dormantSince":{"type":["integer","null"]},"expiresAt":{"type":["integer","null"]},"id":{"type":"string"},"inUse":{"type":"boolean"},"label":{"type":"string"},"lastUsedAt":{"type":["integer","null"]},"plan":{"type":["string","null"]},"provider":{"type":"string"},"sealed":{"type":"boolean"},"state":{"type":"string"},"type":{"enum":["llm_subscription","llm_api_key"]},"usedBy":{"items":{"type":"string"},"type":"array"}},"type":"object"},"login":{"additionalProperties":false,"properties":{"code":{"type":["string","null"]},"done":{"type":"boolean"},"error":{"type":["string","null"]},"itemId":{"type":"string"},"label":{"type":"string"},"loginId":{"type":"string"},"needsPaste":{"type":"boolean"},"provider":{"type":"string"},"startedAt":{"type":"integer"},"state":{"type":"string"},"url":{"type":["string","null"]},"urlHost":{"type":["string","null"]}},"type":["object","null"]},"ok":{"type":"boolean"}},"type":"object"},
+  },
+  'wallet.loginStatus': {
+    cap: 'wallet:self',
+    effect: 'read',
+    kind: 'call',
+    feature: 'app-wallet-v1',
+    door: 'helper',
+    http: { method: 'GET', route: '/cli/skin/wallet/login/status', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"login":{"additionalProperties":false,"properties":{"code":{"type":["string","null"]},"done":{"type":"boolean"},"error":{"type":["string","null"]},"itemId":{"type":"string"},"label":{"type":"string"},"loginId":{"type":"string"},"needsPaste":{"type":"boolean"},"provider":{"type":"string"},"startedAt":{"type":"integer"},"state":{"type":"string"},"url":{"type":["string","null"]},"urlHost":{"type":["string","null"]}},"type":"object"},"ok":{"type":"boolean"}},"type":"object"},
+  },
+  'wallet.loginInput': {
+    cap: 'wallet:self',
+    effect: 'write',
+    kind: 'call',
+    feature: 'app-wallet-v1',
+    door: 'helper',
+    http: { method: 'POST', route: '/cli/skin/wallet/login/input', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"ok":{"type":"boolean"}},"type":"object"},
+  },
+  'wallet.loginCancel': {
+    cap: 'wallet:self',
+    effect: 'write',
+    kind: 'call',
+    feature: 'app-wallet-v1',
+    door: 'helper',
+    http: { method: 'POST', route: '/cli/skin/wallet/login/cancel', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"login":{"additionalProperties":false,"properties":{"code":{"type":["string","null"]},"done":{"type":"boolean"},"error":{"type":["string","null"]},"itemId":{"type":"string"},"label":{"type":"string"},"loginId":{"type":"string"},"needsPaste":{"type":"boolean"},"provider":{"type":"string"},"startedAt":{"type":"integer"},"state":{"type":"string"},"url":{"type":["string","null"]},"urlHost":{"type":["string","null"]}},"type":"object"},"ok":{"type":"boolean"}},"type":"object"},
+  },
+  'wallet.use': {
+    cap: 'wallet:self',
+    effect: 'write',
+    kind: 'call',
+    feature: 'app-wallet-v1',
+    door: 'helper',
+    http: { method: 'POST', route: '/cli/skin/wallet/use', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"id":{"type":["string","null"]},"ok":{"type":"boolean"},"provider":{"type":"string"}},"type":"object"},
+  },
+  'wallet.remove': {
+    cap: 'wallet:self',
+    effect: 'write',
+    kind: 'call',
+    feature: 'app-wallet-v1',
+    door: 'helper',
+    http: { method: 'POST', route: '/cli/skin/wallet/remove', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"note":{"type":"string"},"ok":{"type":"boolean"},"removed":{"type":"string"}},"type":"object"},
+  },
   'thread.page': {
     cap: 'thread:read',
     effect: 'read',
@@ -854,6 +953,96 @@ export interface AppGuestRooms {
 
 export interface AppOk {
   readonly ok: boolean
+}
+
+export interface WalletItem {
+  /** The App it was added through. */
+  readonly addedVia: string | null
+  /** Seconds since the epoch. */
+  readonly createdAt: number
+  /** Seconds since the epoch: set when the person lost App access; the item is deleted 30 days later. */
+  readonly dormantSince: number | null
+  /** Seconds since the epoch. */
+  readonly expiresAt: number | null
+  readonly id: string
+  /** This is the person's pick for its provider. */
+  readonly inUse: boolean
+  readonly label: string
+  /** Seconds since the epoch. */
+  readonly lastUsedAt: number | null
+  readonly plan: string | null
+  /** claude, codex, grok or gemini. */
+  readonly provider: string
+  /** The secret is sealed in K2's vault (false only while the vault is closed). */
+  readonly sealed: boolean
+  /** not_set_up, signing_in, signed_in or needs_login. */
+  readonly state: string
+  /** More item types (other third-party logins) come later. */
+  readonly type: 'llm_subscription' | 'llm_api_key'
+  /** Handles of the person's own agents that run on it. */
+  readonly usedBy: string[]
+}
+
+export interface WalletProviders {
+  readonly apiKey: string[]
+  readonly subscription: string[]
+}
+
+export interface WalletList {
+  readonly items: WalletItem[]
+  readonly ok: boolean
+  readonly providers: WalletProviders
+  /** provider → the item id the person's agents use. */
+  readonly uses: Record<string, string>
+}
+
+export interface WalletItemAnswer {
+  readonly item: WalletItem
+  readonly ok: boolean
+}
+
+export interface WalletLogin {
+  /** A device code to enter on the vendor's page. */
+  readonly code: string | null
+  readonly done: boolean
+  readonly error: string | null
+  readonly itemId: string
+  readonly label: string
+  readonly loginId: string
+  /** The vendor's page shows a code to paste back (wallet.loginInput). */
+  readonly needsPaste: boolean
+  readonly provider: string
+  /** Seconds since the epoch. */
+  readonly startedAt: number
+  /** signing_in, waiting_for_browser, waiting_for_code, signed_in, failed, cancelled or timed_out. */
+  readonly state: string
+  /** The whole sign-in URL: open and copy exactly this. */
+  readonly url: string | null
+  /** The vendor's host, for "Sign in at …". */
+  readonly urlHost: string | null
+}
+
+export interface WalletSignIn {
+  readonly item: WalletItem
+  readonly login: WalletLogin | null
+  readonly ok: boolean
+}
+
+export interface WalletLoginStatus {
+  readonly login: WalletLogin
+  readonly ok: boolean
+}
+
+export interface WalletUse {
+  readonly id: string | null
+  readonly ok: boolean
+  readonly provider: string
+}
+
+export interface WalletRemoved {
+  readonly note: string
+  readonly ok: boolean
+  readonly removed: string
 }
 
 export interface AppPostAuthor {
@@ -1632,7 +1821,7 @@ export interface AppChatPass {
 }
 
 /** The shared error codes (catalog `errors`). */
-export const APP_ERROR_CODES = ['cap_not_granted', 'not_bound', 'rate_limited', 'too_large', 'unknown_verb', 'verb_unavailable', 'verb_local', 'not_exposed', 'sending_off', 'server_not_saved', 'unreachable', 'removed', 'no_history', 'failed', 'conflict', 'space_full', 'value_too_large', 'bad_key', 'not_granted', 'resync', 'author_unknown', 'stale_widget', 'store_full', 'bad_tx', 'tx_expired', 'busy', 'paused', 'bad_args', 'bad_shape', 'pass_required', 'pass_invalid', 'pass_wrong_link', 'not_on_link', 'json_required', 'skin_room', 'usage', 'not_found', 'bad_login', 'locked', 'card_not_pending', 'guest_required', 'no_app_pass', 'no_app_key', 'no_chat_grant', 'chat_unavailable', 'app_pass_required', 'grant_required', 'outside_app_rooms', 'above_role', 'has_role', 'confirm_required', 'declined'] as const
+export const APP_ERROR_CODES = ['cap_not_granted', 'not_bound', 'rate_limited', 'too_large', 'unknown_verb', 'verb_unavailable', 'verb_local', 'not_exposed', 'sending_off', 'server_not_saved', 'unreachable', 'removed', 'no_history', 'failed', 'conflict', 'space_full', 'value_too_large', 'bad_key', 'not_granted', 'resync', 'author_unknown', 'stale_widget', 'store_full', 'bad_tx', 'tx_expired', 'busy', 'paused', 'bad_args', 'bad_shape', 'pass_required', 'pass_invalid', 'pass_wrong_link', 'not_on_link', 'json_required', 'skin_room', 'usage', 'not_found', 'bad_login', 'locked', 'card_not_pending', 'guest_required', 'no_app_pass', 'no_app_key', 'no_chat_grant', 'chat_unavailable', 'app_pass_required', 'grant_required', 'outside_app_rooms', 'above_role', 'has_role', 'confirm_required', 'declined', 'person_pass_required', 'wallet_off', 'duplicate_label'] as const
 
 export type AppErrorCode = (typeof APP_ERROR_CODES)[number]
 
@@ -1644,6 +1833,15 @@ export interface AppVerbs {
   'guests.rooms': { args: { app?: string; username: string }; value: AppGuestRooms }
   'guests.setRooms': { args: { app?: string; rooms: string[]; username: string }; value: AppGuestRooms }
   'password.change': { args: { oldPassword: string; password: string }; value: AppOk }
+  'wallet.list': { args: Record<string, never>; value: WalletList }
+  'wallet.status': { args: { id: string }; value: WalletItemAnswer }
+  'wallet.add': { args: { key?: string; label?: string; provider: string; type?: 'llm_subscription' | 'llm_api_key' }; value: WalletSignIn }
+  'wallet.login': { args: { id: string }; value: WalletSignIn }
+  'wallet.loginStatus': { args: { loginId: string }; value: WalletLoginStatus }
+  'wallet.loginInput': { args: { loginId: string; text: string }; value: AppOk }
+  'wallet.loginCancel': { args: { loginId: string }; value: WalletLoginStatus }
+  'wallet.use': { args: { id?: string | null; provider: string }; value: WalletUse }
+  'wallet.remove': { args: { id: string }; value: WalletRemoved }
   'thread.page': { args: { addr: string; beforeSeq?: number; limit?: number; sinceSeq?: number }; value: AppThreadPage }
   'thread.latest': { args: { addrs: string[] }; value: AppThreadLatest }
   'thread.send': { args: { addr: string; text: string; via?: string }; value: AppThreadPosted }

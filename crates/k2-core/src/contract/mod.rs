@@ -378,10 +378,15 @@ mod tests {
         let listed = err.split_once("accepted: ").map(|(_, l)| l).unwrap_or_else(|| panic!("no list in {err:?}"));
         let accepted: Vec<&str> = listed.split(", ").collect();
         // Caps an owner grants an App itself (RS-A15) are never a pass's.
-        let pass_caps: Vec<&str> =
-            c.caps_exposed_to(Exposure::App).into_iter().filter(|cap| *cap != crate::skin::guest_rooms::CAP).collect();
+        // So is `wallet:self` (0.46.3): an owner setting per App.
+        let pass_caps: Vec<&str> = c
+            .caps_exposed_to(Exposure::App)
+            .into_iter()
+            .filter(|cap| *cap != crate::skin::guest_rooms::CAP && *cap != crate::person_wallet::CAP)
+            .collect();
         assert_eq!(pass_caps, accepted, "ACCEPTED_CAPS vs the catalog's app caps");
         assert!(!accepted.contains(&crate::skin::guest_rooms::CAP), "guests:rooms is an owner grant, never a pass cap");
+        assert!(!accepted.contains(&crate::person_wallet::CAP), "wallet:self is an owner setting per App, never a pass cap");
     }
 
     /// TUWA1: every row's error codes and caps come from the shared tables,
@@ -488,6 +493,10 @@ mod tests {
                 "has_role",
                 "confirm_required",
                 "declined",
+                // App users' personal wallets (0.46.3).
+                "person_pass_required",
+                "wallet_off",
+                "duplicate_label",
             ]
         );
         let retry: Vec<&str> = catalog().errors.iter().filter(|e| e.retryable).map(|e| e.code.as_str()).collect();

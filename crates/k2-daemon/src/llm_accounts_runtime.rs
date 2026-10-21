@@ -572,7 +572,37 @@ pub fn login_command(
     (tool.program().to_string(), args, env)
 }
 
-fn write_browser_script(dir: &Path, mode: LoginMode) -> std::io::Result<PathBuf> {
+/// One read of a login terminal, for a watcher: the sign-in URL to hold
+/// next, a device code, and whether the tool waits for a pasted code.
+/// Person sign-ins (`person_wallet_runtime`) read the terminal through
+/// this, with the same S1 capture server sign-ins use: OSC 8 targets >
+/// the BROWSER shim > screen text (soft and hard wraps joined, 1,000
+/// columns, 200 lines of scrollback), picked by [`pick_url`], never
+/// shortened ([`next_url_from`]).
+pub struct LoginTick {
+    pub url: Option<String>,
+    pub code: Option<String>,
+    pub paste: bool,
+}
+
+pub fn read_login_tick(pty: &DaemonPtySession, dir: &Path, tool: Tool, mode: LoginMode, stored: Option<&str>) -> LoginTick {
+    let shim = std::fs::read_to_string(dir.join("urls")).unwrap_or_default();
+    login_tick_from(&pty.scan_rows(LOGIN_HISTORY), &shim, tool, mode, stored)
+}
+
+/// [`read_login_tick`] over captured rows and the shim file's text (pure;
+/// the fixtures test this).
+pub fn login_tick_from(rows: &[ScanRow], shim: &str, tool: Tool, mode: LoginMode, stored: Option<&str>) -> LoginTick {
+    let scan = scan_login(rows, LOGIN_COLS as usize, shim);
+    let picked = pick_url(tool, mode, &scan.candidates);
+    LoginTick {
+        url: next_url_from(stored, picked),
+        code: find_device_code(&scan.all_text),
+        paste: wants_pasted_code(&scan.screen_text),
+    }
+}
+
+pub(crate) fn write_browser_script(dir: &Path, mode: LoginMode) -> std::io::Result<PathBuf> {
     let script = dir.join("browser.sh");
     let urls = dir.join("urls");
     let open_line = match mode {
@@ -1006,6 +1036,9 @@ pub fn slot_in_use(account_id: &str) -> bool {
 pub struct SpawnGuard {
     pub login: k2_core::llm_accounts::pins::SpawnLogin,
     _slot: Option<store::SlotLock>,
+    /// A person's wallet item running their personal agent (workspace id):
+    /// the wallet sweep stops it when the person may no longer use it there.
+    person_project: Option<String>,
 }
 
 impl SpawnGuard {
@@ -1017,6 +1050,9 @@ impl SpawnGuard {
                 .entry(id.to_string())
                 .or_default()
                 .push(pid);
+        }
+        if let (Some(project), Some(id), Some(pid)) = (&self.person_project, &self.login.account_id, pid) {
+            crate::person_wallet_runtime::note_spawn(id, project, pid);
         }
     }
 }
@@ -1049,7 +1085,27 @@ pub fn apply_spawn_login(
         return Ok(None);
     };
     let conversation = k2_core::workspace::provider_resume::session_id_from_spawn_argv(program.unwrap_or(""), args);
-    let resume = is_resume_argv(tool, args);
+    let mut resume = is_resume_argv(tool, args);
+    // A person's own agent runs on their wallet item first (0.46.3):
+    // chat pin > person pin > workspace pin > server default.
+    let mut carry_from: Option<PathBuf> = None;
+    match crate::person_wallet_runtime::spawn_step(tool, session_key, project_id, conversation.as_deref(), resume, cwd)? {
+        crate::person_wallet_runtime::Step::Existing => {}
+        crate::person_wallet_runtime::Step::Ready { login, slot } => {
+            for (k, v) in &login.env {
+                env.insert(k.clone(), v.clone());
+            }
+            return Ok(Some(SpawnGuard { login, _slot: slot, person_project: project_id.map(str::to_string) }));
+        }
+        crate::person_wallet_runtime::Step::Fallback { carry_from: from } => {
+            // The company plan: the existing FRESH rules; a resumed
+            // conversation brings its history from the person's slot.
+            if resume {
+                resume = false;
+                carry_from = from;
+            }
+        }
+    }
     let login = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -1059,7 +1115,7 @@ pub fn apply_spawn_login(
         if let Some(cid) = conversation.as_deref() {
             k2_core::llm_accounts::pins::mirror_to_conversation(&conn, tool, session_key, cid)?;
         }
-        let login = k2_core::llm_accounts::pins::decide_spawn(
+        let mut login = k2_core::llm_accounts::pins::decide_spawn(
             &conn,
             tool,
             session_key,
@@ -1067,6 +1123,12 @@ pub fn apply_spawn_login(
             conversation.as_deref(),
             resume,
         )?;
+        if let (Some(from), Some(cid)) = (carry_from.take(), conversation.as_deref().filter(|c| k2_core::llm_accounts::pins::valid_conversation_id(c))) {
+            let to = login.home.clone().unwrap_or_else(|| store::live_home(tool).0);
+            if from != to {
+                login.carry = Some(k2_core::llm_accounts::pins::Carry { conversation_id: cid.to_string(), from, to });
+            }
+        }
         // A fresh spawn, or a resume moved to its chat's token: record
         // where the conversation now runs.
         if !resume || login.source == k2_core::llm_accounts::pins::Source::SessionPin {
@@ -1092,7 +1154,7 @@ pub fn apply_spawn_login(
     if login.account_id.is_none() && login.env.is_empty() {
         return Ok(None);
     }
-    Ok(Some(SpawnGuard { login, _slot: slot_lock }))
+    Ok(Some(SpawnGuard { login, _slot: slot_lock, person_project: None }))
 }
 
 // ── Refresh of idle slots ───────────────────────────────────────────

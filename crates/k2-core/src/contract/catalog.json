@@ -77,7 +77,8 @@
       "exposure": ["app", "garden-local"],
       "label": "See who has access to the room",
       "sentence": "See who has access to the agents on this computer: the App guests and agent logins with a grant on each room, and their roles."
-    }
+    },
+    {"name": "wallet:self", "exposure": ["app"], "label": "Use the person's own wallet (an owner setting per App, never a room cap)"}
   ],
   "errors": [
     {
@@ -151,7 +152,10 @@
     {"code": "above_role", "doc": "Guest rooms: a room the guest's role doesn't cover; rooms never add caps beyond the role."},
     {"code": "has_role", "doc": "Guest rooms: the guest's grant on this App carries a role, so its rooms are the role's; give a narrower role."},
     {"code": "confirm_required", "doc": "A Garden write that needs the person's confirm on K2's sheet, outside the frame."},
-    {"code": "declined", "doc": "The person said no on K2's confirm sheet."}
+    {"code": "declined", "doc": "The person said no on K2's confirm sheet."},
+    {"code": "person_pass_required", "doc": "Wallet verbs need an App user's own login session pass. Connect logins, the owner token, agent passports and an App's own pass have no wallet."},
+    {"code": "wallet_off", "doc": "This App doesn't use personal wallets; its owner turns them on."},
+    {"code": "duplicate_label", "doc": "The person already has an item with that label for that provider."}
   ],
   "bannedFields": [
     "projectPath",
@@ -4261,6 +4265,1293 @@
       ],
       "doc": "A guest changes their own password (browser only: it ends every session of theirs).",
       "example": "await fetch('/cli/skin/password/change', {method: 'POST', body})"
+    },
+    {
+      "verb": "wallet.list",
+      "cap": "wallet:self",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-wallet-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/skin/wallet/list",
+          "door": "helper"
+        }
+      },
+      "request": [],
+      "response": {
+        "title": "WalletList",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "title": "WalletItem",
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "llm_subscription",
+                    "llm_api_key"
+                  ],
+                  "description": "More item types (other third-party logins) come later."
+                },
+                "provider": {
+                  "type": "string",
+                  "description": "claude, codex, grok or gemini."
+                },
+                "label": {
+                  "type": "string"
+                },
+                "state": {
+                  "type": "string",
+                  "description": "not_set_up, signing_in, signed_in or needs_login."
+                },
+                "plan": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "expiresAt": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "description": "Seconds since the epoch."
+                },
+                "sealed": {
+                  "type": "boolean",
+                  "description": "The secret is sealed in K2's vault (false only while the vault is closed)."
+                },
+                "addedVia": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The App it was added through."
+                },
+                "createdAt": {
+                  "type": "integer",
+                  "description": "Seconds since the epoch."
+                },
+                "lastUsedAt": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "description": "Seconds since the epoch."
+                },
+                "dormantSince": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "description": "Seconds since the epoch: set when the person lost App access; the item is deleted 30 days later."
+                },
+                "inUse": {
+                  "type": "boolean",
+                  "description": "This is the person's pick for its provider."
+                },
+                "usedBy": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Handles of the person's own agents that run on it."
+                }
+              },
+              "required": [
+                "id",
+                "type",
+                "provider",
+                "label",
+                "state",
+                "plan",
+                "expiresAt",
+                "sealed",
+                "addedVia",
+                "createdAt",
+                "lastUsedAt",
+                "dormantSince",
+                "inUse",
+                "usedBy"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "uses": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "provider → the item id the person's agents use."
+          },
+          "providers": {
+            "title": "WalletProviders",
+            "type": "object",
+            "properties": {
+              "subscription": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "apiKey": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "subscription",
+              "apiKey"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "ok",
+          "items",
+          "uses",
+          "providers"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "person_pass_required",
+        "wallet_off",
+        "usage",
+        "not_found",
+        "failed"
+      ],
+      "doc": "The person's own wallet (a guest's session pass; never anyone else's). LLM subscriptions and API keys first.",
+      "example": "await fetch('/cli/skin/wallet/list')"
+    },
+    {
+      "verb": "wallet.status",
+      "cap": "wallet:self",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-wallet-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/skin/wallet/status",
+          "door": "helper"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "WalletItemAnswer",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "item": {
+            "title": "WalletItem",
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "llm_subscription",
+                  "llm_api_key"
+                ],
+                "description": "More item types (other third-party logins) come later."
+              },
+              "provider": {
+                "type": "string",
+                "description": "claude, codex, grok or gemini."
+              },
+              "label": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string",
+                "description": "not_set_up, signing_in, signed_in or needs_login."
+              },
+              "plan": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "expiresAt": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "Seconds since the epoch."
+              },
+              "sealed": {
+                "type": "boolean",
+                "description": "The secret is sealed in K2's vault (false only while the vault is closed)."
+              },
+              "addedVia": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The App it was added through."
+              },
+              "createdAt": {
+                "type": "integer",
+                "description": "Seconds since the epoch."
+              },
+              "lastUsedAt": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "Seconds since the epoch."
+              },
+              "dormantSince": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "Seconds since the epoch: set when the person lost App access; the item is deleted 30 days later."
+              },
+              "inUse": {
+                "type": "boolean",
+                "description": "This is the person's pick for its provider."
+              },
+              "usedBy": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Handles of the person's own agents that run on it."
+              }
+            },
+            "required": [
+              "id",
+              "type",
+              "provider",
+              "label",
+              "state",
+              "plan",
+              "expiresAt",
+              "sealed",
+              "addedVia",
+              "createdAt",
+              "lastUsedAt",
+              "dormantSince",
+              "inUse",
+              "usedBy"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "ok",
+          "item"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "person_pass_required",
+        "wallet_off",
+        "usage",
+        "not_found",
+        "failed"
+      ],
+      "doc": "One of the person's own items.",
+      "example": "await fetch('/cli/skin/wallet/status?id=' + id)"
+    },
+    {
+      "verb": "wallet.add",
+      "cap": "wallet:self",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-wallet-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/skin/wallet/add",
+          "door": "helper"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "type": {
+              "enum": [
+                "llm_subscription",
+                "llm_api_key"
+              ],
+              "default": "llm_subscription"
+            },
+            "provider": {
+              "type": "string",
+              "description": "claude, codex or grok (subscription); also gemini (API key)."
+            },
+            "label": {
+              "type": "string",
+              "description": "Default: \"<First name> <Tool>\" (letters, digits, spaces and . _ - @ +; at most 40).",
+              "default": ""
+            },
+            "key": {
+              "type": "string",
+              "description": "llm_api_key only. Sealed at once; never returned.",
+              "default": ""
+            }
+          },
+          "required": [
+            "provider"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "WalletSignIn",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "item": {
+            "title": "WalletItem",
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "llm_subscription",
+                  "llm_api_key"
+                ],
+                "description": "More item types (other third-party logins) come later."
+              },
+              "provider": {
+                "type": "string",
+                "description": "claude, codex, grok or gemini."
+              },
+              "label": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string",
+                "description": "not_set_up, signing_in, signed_in or needs_login."
+              },
+              "plan": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "expiresAt": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "Seconds since the epoch."
+              },
+              "sealed": {
+                "type": "boolean",
+                "description": "The secret is sealed in K2's vault (false only while the vault is closed)."
+              },
+              "addedVia": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The App it was added through."
+              },
+              "createdAt": {
+                "type": "integer",
+                "description": "Seconds since the epoch."
+              },
+              "lastUsedAt": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "Seconds since the epoch."
+              },
+              "dormantSince": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "Seconds since the epoch: set when the person lost App access; the item is deleted 30 days later."
+              },
+              "inUse": {
+                "type": "boolean",
+                "description": "This is the person's pick for its provider."
+              },
+              "usedBy": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Handles of the person's own agents that run on it."
+              }
+            },
+            "required": [
+              "id",
+              "type",
+              "provider",
+              "label",
+              "state",
+              "plan",
+              "expiresAt",
+              "sealed",
+              "addedVia",
+              "createdAt",
+              "lastUsedAt",
+              "dormantSince",
+              "inUse",
+              "usedBy"
+            ],
+            "additionalProperties": false
+          },
+          "login": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "title": "WalletLogin",
+            "properties": {
+              "loginId": {
+                "type": "string"
+              },
+              "itemId": {
+                "type": "string"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string",
+                "description": "signing_in, waiting_for_browser, waiting_for_code, signed_in, failed, cancelled or timed_out."
+              },
+              "url": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The whole sign-in URL: open and copy exactly this."
+              },
+              "urlHost": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The vendor's host, for \"Sign in at …\"."
+              },
+              "code": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "A device code to enter on the vendor's page."
+              },
+              "needsPaste": {
+                "type": "boolean",
+                "description": "The vendor's page shows a code to paste back (wallet.loginInput)."
+              },
+              "error": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "startedAt": {
+                "type": "integer",
+                "description": "Seconds since the epoch."
+              },
+              "done": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "loginId",
+              "itemId",
+              "provider",
+              "label",
+              "state",
+              "url",
+              "urlHost",
+              "code",
+              "needsPaste",
+              "error",
+              "startedAt",
+              "done"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "ok",
+          "item",
+          "login"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "person_pass_required",
+        "wallet_off",
+        "usage",
+        "not_found",
+        "failed",
+        "duplicate_label"
+      ],
+      "doc": "Add to the person's own wallet. A subscription starts the vendor's own sign-in on the server: show login.url (Open and Copy link), login.code, or a paste box when login.needsPaste; poll wallet.loginStatus. An API key is sealed at once (login is null).",
+      "example": "await fetch('/cli/skin/wallet/add', {method: 'POST', body: JSON.stringify({provider: 'claude'})})"
+    },
+    {
+      "verb": "wallet.login",
+      "cap": "wallet:self",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-wallet-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/skin/wallet/login",
+          "door": "helper"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "WalletSignIn",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "item": {
+            "title": "WalletItem",
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "llm_subscription",
+                  "llm_api_key"
+                ],
+                "description": "More item types (other third-party logins) come later."
+              },
+              "provider": {
+                "type": "string",
+                "description": "claude, codex, grok or gemini."
+              },
+              "label": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string",
+                "description": "not_set_up, signing_in, signed_in or needs_login."
+              },
+              "plan": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "expiresAt": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "Seconds since the epoch."
+              },
+              "sealed": {
+                "type": "boolean",
+                "description": "The secret is sealed in K2's vault (false only while the vault is closed)."
+              },
+              "addedVia": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The App it was added through."
+              },
+              "createdAt": {
+                "type": "integer",
+                "description": "Seconds since the epoch."
+              },
+              "lastUsedAt": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "Seconds since the epoch."
+              },
+              "dormantSince": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "Seconds since the epoch: set when the person lost App access; the item is deleted 30 days later."
+              },
+              "inUse": {
+                "type": "boolean",
+                "description": "This is the person's pick for its provider."
+              },
+              "usedBy": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Handles of the person's own agents that run on it."
+              }
+            },
+            "required": [
+              "id",
+              "type",
+              "provider",
+              "label",
+              "state",
+              "plan",
+              "expiresAt",
+              "sealed",
+              "addedVia",
+              "createdAt",
+              "lastUsedAt",
+              "dormantSince",
+              "inUse",
+              "usedBy"
+            ],
+            "additionalProperties": false
+          },
+          "login": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "title": "WalletLogin",
+            "properties": {
+              "loginId": {
+                "type": "string"
+              },
+              "itemId": {
+                "type": "string"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string",
+                "description": "signing_in, waiting_for_browser, waiting_for_code, signed_in, failed, cancelled or timed_out."
+              },
+              "url": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The whole sign-in URL: open and copy exactly this."
+              },
+              "urlHost": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The vendor's host, for \"Sign in at …\"."
+              },
+              "code": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "A device code to enter on the vendor's page."
+              },
+              "needsPaste": {
+                "type": "boolean",
+                "description": "The vendor's page shows a code to paste back (wallet.loginInput)."
+              },
+              "error": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "startedAt": {
+                "type": "integer",
+                "description": "Seconds since the epoch."
+              },
+              "done": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "loginId",
+              "itemId",
+              "provider",
+              "label",
+              "state",
+              "url",
+              "urlHost",
+              "code",
+              "needsPaste",
+              "error",
+              "startedAt",
+              "done"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "ok",
+          "item",
+          "login"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "person_pass_required",
+        "wallet_off",
+        "usage",
+        "not_found",
+        "failed"
+      ],
+      "doc": "Sign one of the person's own subscriptions in again (same item and label).",
+      "example": "await fetch('/cli/skin/wallet/login', {method: 'POST', body: JSON.stringify({id})})"
+    },
+    {
+      "verb": "wallet.loginStatus",
+      "cap": "wallet:self",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-wallet-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/skin/wallet/login/status",
+          "door": "helper"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "loginId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "loginId"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "WalletLoginStatus",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "login": {
+            "title": "WalletLogin",
+            "type": "object",
+            "properties": {
+              "loginId": {
+                "type": "string"
+              },
+              "itemId": {
+                "type": "string"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string",
+                "description": "signing_in, waiting_for_browser, waiting_for_code, signed_in, failed, cancelled or timed_out."
+              },
+              "url": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The whole sign-in URL: open and copy exactly this."
+              },
+              "urlHost": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The vendor's host, for \"Sign in at …\"."
+              },
+              "code": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "A device code to enter on the vendor's page."
+              },
+              "needsPaste": {
+                "type": "boolean",
+                "description": "The vendor's page shows a code to paste back (wallet.loginInput)."
+              },
+              "error": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "startedAt": {
+                "type": "integer",
+                "description": "Seconds since the epoch."
+              },
+              "done": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "loginId",
+              "itemId",
+              "provider",
+              "label",
+              "state",
+              "url",
+              "urlHost",
+              "code",
+              "needsPaste",
+              "error",
+              "startedAt",
+              "done"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "ok",
+          "login"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "person_pass_required",
+        "wallet_off",
+        "usage",
+        "not_found",
+        "failed"
+      ],
+      "doc": "A running sign-in, to the person who started it only (poll every 1.5 s). No terminal screen is ever sent.",
+      "example": "await fetch('/cli/skin/wallet/login/status?loginId=' + loginId)"
+    },
+    {
+      "verb": "wallet.loginInput",
+      "cap": "wallet:self",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-wallet-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/skin/wallet/login/input",
+          "door": "helper"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "loginId": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string",
+              "description": "The code from the vendor's page (1–4,096 printable characters). Never logged."
+            }
+          },
+          "required": [
+            "loginId",
+            "text"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppOk",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "person_pass_required",
+        "wallet_off",
+        "usage",
+        "not_found",
+        "failed"
+      ],
+      "doc": "Paste the code the vendor's page shows back into the person's own sign-in.",
+      "example": "await fetch('/cli/skin/wallet/login/input', {method: 'POST', body: JSON.stringify({loginId, text})})"
+    },
+    {
+      "verb": "wallet.loginCancel",
+      "cap": "wallet:self",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-wallet-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/skin/wallet/login/cancel",
+          "door": "helper"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "loginId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "loginId"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "WalletLoginStatus",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "login": {
+            "title": "WalletLogin",
+            "type": "object",
+            "properties": {
+              "loginId": {
+                "type": "string"
+              },
+              "itemId": {
+                "type": "string"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string",
+                "description": "signing_in, waiting_for_browser, waiting_for_code, signed_in, failed, cancelled or timed_out."
+              },
+              "url": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The whole sign-in URL: open and copy exactly this."
+              },
+              "urlHost": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The vendor's host, for \"Sign in at …\"."
+              },
+              "code": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "A device code to enter on the vendor's page."
+              },
+              "needsPaste": {
+                "type": "boolean",
+                "description": "The vendor's page shows a code to paste back (wallet.loginInput)."
+              },
+              "error": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "startedAt": {
+                "type": "integer",
+                "description": "Seconds since the epoch."
+              },
+              "done": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "loginId",
+              "itemId",
+              "provider",
+              "label",
+              "state",
+              "url",
+              "urlHost",
+              "code",
+              "needsPaste",
+              "error",
+              "startedAt",
+              "done"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "ok",
+          "login"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "person_pass_required",
+        "wallet_off",
+        "usage",
+        "not_found",
+        "failed"
+      ],
+      "doc": "Cancel the person's own running sign-in.",
+      "example": "await fetch('/cli/skin/wallet/login/cancel', {method: 'POST', body: JSON.stringify({loginId})})"
+    },
+    {
+      "verb": "wallet.use",
+      "cap": "wallet:self",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-wallet-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/skin/wallet/use",
+          "door": "helper"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "provider": {
+              "type": "string"
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "An item of theirs for that provider; null = none.",
+              "default": null
+            }
+          },
+          "required": [
+            "provider"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "WalletUse",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "ok",
+          "provider",
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "person_pass_required",
+        "wallet_off",
+        "usage",
+        "not_found",
+        "failed"
+      ],
+      "doc": "Choose which item the person's own agents run on for a provider.",
+      "example": "await fetch('/cli/skin/wallet/use', {method: 'POST', body: JSON.stringify({provider: 'claude', id})})"
+    },
+    {
+      "verb": "wallet.remove",
+      "cap": "wallet:self",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-wallet-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/skin/wallet/remove",
+          "door": "helper"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "WalletRemoved",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "removed": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "removed",
+          "note"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "person_pass_required",
+        "wallet_off",
+        "usage",
+        "not_found",
+        "failed"
+      ],
+      "doc": "Delete one of the person's own items for good (not Trash): its sessions stop, its sealed secret and folder are destroyed.",
+      "example": "await fetch('/cli/skin/wallet/remove', {method: 'POST', body: JSON.stringify({id})})"
     },
     {
       "verb": "thread.page",

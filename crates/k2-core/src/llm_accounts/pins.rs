@@ -550,6 +550,9 @@ pub enum Source {
     WorkspacePin,
     /// The pool: the tool's live store (or the pool's active API key).
     Pool,
+    /// A person's own wallet item, on their personal agent
+    /// (`k2_core::person_wallet`, 0.46.3).
+    PersonPin,
 }
 
 /// The login a spawn uses and the env it needs.
@@ -619,6 +622,19 @@ fn recorded(
             map,
         )
         .optional()?)
+}
+
+/// The login id a conversation (or, for ids the CLI minted itself, its
+/// session key) last started under: `Some(None)` = the live home / pool,
+/// `None` = never recorded. The person-wallet layer reads it to catch a
+/// resume recorded on a person item (`pw_*`).
+pub fn recorded_account(
+    conn: &Connection,
+    tool: Tool,
+    session_key: &str,
+    conversation_id: Option<&str>,
+) -> Result<Option<Option<String>>, WalletError> {
+    Ok(recorded(conn, tool, session_key, conversation_id)?.map(|(a, _)| a))
 }
 
 /// The home a resumed conversation's history is in: its recorded home,

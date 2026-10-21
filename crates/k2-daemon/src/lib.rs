@@ -242,6 +242,8 @@ pub mod zen_agent_routes;
 pub mod zen_data_routes;
 pub mod llm_accounts_routes;
 pub mod llm_accounts_runtime;
+pub mod person_wallet_routes;
+pub mod person_wallet_runtime;
 pub mod remote_session_routes;
 pub mod remote_session_sessions;
 pub mod signal_format;

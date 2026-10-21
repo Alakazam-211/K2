@@ -306,6 +306,15 @@ pub const ROUTES: &[Route] = &[
     // Room-scope R16: an App's quotas and per-call counts from its audit.
     get("/cli/app/usage", Member),
     post("/cli/app/validate", Admin),
+    // App users' personal wallets (0.46.3), the owner's side: existence,
+    // label and status only; force-remove; personal agents; per-App
+    // settings. Admin floor for logins (the handler also takes the owner
+    // token, and a switch-2 agent for its own App's fallback).
+    get("/cli/app/wallet/people", Admin),
+    post("/cli/app/wallet/personal-agent", Admin),
+    get("/cli/app/wallet/personal-agents", Admin),
+    post("/cli/app/wallet/remove", Admin),
+    split("/cli/app/wallet/settings", Admin, Admin),
     // 0.46.0 grace: what breaks at the 0.46.4 cut-over, per service.
     get("/cli/app/warnings", Member),
     post("/cli/auth/change-password", Member),
@@ -1138,6 +1147,18 @@ pub const ROUTES: &[Route] = &[
     post("/cli/skin/users/remove", Owner),
     post("/cli/skin/users/rooms", Owner),
     post("/cli/skin/users/unlock", Owner),
+    // App users' personal wallets (0.46.3): an App user's OWN session
+    // pass only (`person_pass_required` for anything else); no Connect
+    // login (Rosson #9: Connect members have no wallet).
+    post("/cli/skin/wallet/add", NoLogin),
+    get("/cli/skin/wallet/list", NoLogin),
+    post("/cli/skin/wallet/login", NoLogin),
+    post("/cli/skin/wallet/login/cancel", NoLogin),
+    post("/cli/skin/wallet/login/input", NoLogin),
+    get("/cli/skin/wallet/login/status", NoLogin),
+    post("/cli/skin/wallet/remove", NoLogin),
+    get("/cli/skin/wallet/status", NoLogin),
+    post("/cli/skin/wallet/use", NoLogin),
     // Garden v3 data sources (prd-garden-v3-external-data-cards-v1, contract-sources-v1 §4).
     post("/cli/sources/add", Admin),
     post("/cli/sources/approve", Admin),
@@ -2379,6 +2400,33 @@ mod tests {
                 assert!(role_gate("POST", p, &format!("token={OWNER}"), OWNER).is_none(), "{p}: owner token passes");
             }
             assert!(role_gate("GET", "/cli/llm/accounts/list", &format!("token={member}"), OWNER).is_none());
+        });
+    }
+
+    #[test]
+    fn wallets_are_for_app_users_never_a_connect_login() {
+        // Rosson #9 (0.46.3): Connect members have no wallet. Every person
+        // verb is NoLogin (an App user's own session pass); the owner's
+        // side is Admin.
+        crate::test_support::with_temp_home(|| {
+            let member = session("wallet_member", Role::Member);
+            let owner = session("wallet_owner", Role::Owner);
+            for (m, p) in [
+                ("GET", "/cli/skin/wallet/list"),
+                ("POST", "/cli/skin/wallet/add"),
+                ("POST", "/cli/skin/wallet/remove"),
+                ("GET", "/cli/skin/wallet/login/status"),
+            ] {
+                for who in [&member, &owner] {
+                    let r = role_gate(m, p, &format!("token={who}"), OWNER).expect("a Connect login is refused");
+                    assert_eq!(r.status, "403 Forbidden", "{p}: {}", r.body);
+                }
+                assert!(role_gate(m, p, "token=k2skn_abc", OWNER).is_none(), "{p}: an App pass reaches the handler");
+            }
+            for (m, p) in [("GET", "/cli/app/wallet/people"), ("POST", "/cli/app/wallet/remove"), ("POST", "/cli/app/wallet/settings")] {
+                assert!(role_gate(m, p, &format!("token={member}"), OWNER).is_some(), "{p}: Member refused");
+                assert!(role_gate(m, p, &format!("token={owner}"), OWNER).is_none(), "{p}: Owner passes");
+            }
         });
     }
 

@@ -10441,6 +10441,142 @@ cmd_app_guest() {
     printf '%s' "$_CP_BODY" | _app_guest_rooms_print
 }
 
+# ── App users' personal wallets (0.46.3) ─────────────────────────────
+# k2 app wallet settings|people|remove|personal-agent|personal-agents.
+# The owner side only: a person adds and signs in from the App itself
+# (wallet.* verbs with their own session). Exit codes: 0 done, 2 usage,
+# 3 refused or infra.
+
+_app_wallet_usage() {
+    cat <<'EOF'
+k2 app wallet — App users' personal wallets (0.46.3). Each App user can keep
+their own LLM subscriptions (Claude, Codex, Grok) and API keys in a wallet on
+this server, from the App (wallet.* verbs). Their subscription runs only
+their own personal agent. You see that it exists and its status; never the
+secret, the sign-in link or code.
+
+  k2 app wallet settings <app> [--on|--off] [--fallback on|off] [--json]
+                                       Show or change an App's wallet. --on lets
+                                       the App's users use their wallet. With
+                                       --fallback on, a personal agent whose
+                                       person's subscription can't be used runs
+                                       on the company plan; off (default), it
+                                       doesn't start. Owner or Admin; an agent of
+                                       the App's own workspace with "…and manage
+                                       them end to end" may set --fallback only.
+  k2 app wallet people [<app>] [--json]
+                                       Every wallet item (or those of <app>'s
+                                       users): user, provider, label, state,
+                                       which agents use it.
+  k2 app wallet remove <item-id>       Delete one item for good (not Trash): its
+                                       sessions stop; the person signs in again
+                                       to use it. Audited.
+  k2 app wallet personal-agent <app> <user> <workspace>
+                                       Mark <workspace> as <user>'s own agent
+                                       (they must have its room in <app>). It
+                                       then runs on <user>'s own subscription
+                                       while nobody else has its room. Your
+                                       extra tabs in it use the server default.
+  k2 app wallet personal-agent --clear <workspace>
+  k2 app wallet personal-agents [--json]
+
+Note: each person's subscription runs only their own agent. Check that your
+plan's terms allow the way your App uses it.
+EOF
+}
+
+cmd_app_wallet() {
+    local sub="${1:-}"
+    [ $# -gt 0 ] && shift
+    local json_out=0 a1="" a2="" a3="" on="" fb="" clear=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            --on) on=1; shift ;;
+            --off) on=0; shift ;;
+            --fallback) case "${2:-}" in on) fb=1 ;; off) fb=0 ;; *) echo "usage: --fallback on|off" >&2; exit 2 ;; esac; shift 2 ;;
+            --fallback=on) fb=1; shift ;;
+            --fallback=off) fb=0; shift ;;
+            --clear) clear=1; shift ;;
+            -h|--help) _app_wallet_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) if [ -z "$a1" ]; then a1="$1"; elif [ -z "$a2" ]; then a2="$1"; elif [ -z "$a3" ]; then a3="$1"; else echo "unexpected: $1" >&2; exit 2; fi; shift ;;
+        esac
+    done
+    case "$sub" in
+        settings)
+            [ -n "$a1" ] || { echo "usage: k2 app wallet settings <app> [--on|--off] [--fallback on|off]" >&2; exit 2; }
+            if [ -n "$on" ] || [ -n "$fb" ]; then
+                local en_b="" fb_b=""
+                [ "$on" = 1 ] && en_b=1; [ "$on" = 0 ] && en_b=0
+                [ "$fb" = 1 ] && fb_b=1; [ "$fb" = 0 ] && fb_b=0
+                # _compute_json skips empty values; "0" is false for _b keys.
+                _compute_call POST /cli/app/wallet/settings "$(_compute_json K2_CJ_app="$a1" K2_CJ_enabled_b="$en_b" K2_CJ_fallback_b="$fb_b")"
+            else
+                _compute_call GET /cli/app/wallet/settings "app=$(urlencode "$a1")"
+            fi
+            if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+            printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+s = json.load(sys.stdin)["settings"]
+print("%s: wallet %s, fallback to the company plan %s" % (s["serviceId"], "on" if s["enabled"] else "off", "on" if s["fallback"] else "off"))'
+            ;;
+        people)
+            if [ -n "$a1" ]; then
+                _compute_call GET /cli/app/wallet/people "app=$(urlencode "$a1")"
+            else
+                _compute_call GET /cli/app/wallet/people ""
+            fi
+            if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+            printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+items = json.load(sys.stdin).get("items") or []
+if not items:
+    print("No wallet items."); sys.exit(0)
+for i in items:
+    used = ", ".join(i.get("usedBy") or []) or "no agent"
+    extra = "  dormant" if i.get("dormantSince") else ""
+    print("%s  %s  %s %s \"%s\"  %s  used by %s%s" % (i["id"], i["username"], i["provider"], i["type"], i["label"], i["state"], used, extra))'
+            ;;
+        remove|rm)
+            [ -n "$a1" ] || { echo "usage: k2 app wallet remove <item-id>" >&2; exit 2; }
+            _compute_call POST /cli/app/wallet/remove "$(_compute_json K2_CJ_id="$a1")"
+            if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+            echo "Removed $a1 (deleted, not Trash; the person signs in again to use it)."
+            ;;
+        personal-agent)
+            if [ "$clear" = 1 ]; then
+                [ -n "$a1" ] || { echo "usage: k2 app wallet personal-agent --clear <workspace>" >&2; exit 2; }
+                _compute_call POST /cli/app/wallet/personal-agent "$(_compute_json K2_CJ_workspace="$a1" K2_CJ_clear_b=1)"
+            else
+                [ -n "$a3" ] || { echo "usage: k2 app wallet personal-agent <app> <user> <workspace>" >&2; exit 2; }
+                _compute_call POST /cli/app/wallet/personal-agent "$(_compute_json K2_CJ_app="$a1" K2_CJ_user="$a2" K2_CJ_workspace="$a3")"
+            fi
+            if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+            printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+if "cleared" in v:
+    print("%s: %s" % (v["workspace"], "no longer a personal agent" if v["cleared"] else "was not a personal agent"))
+else:
+    print("%s is now %s'"'"'s own agent (through %s)" % (v["workspace"], v["username"], v["app"]))'
+            ;;
+        personal-agents)
+            _compute_call GET /cli/app/wallet/personal-agents ""
+            if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+            printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+rows = json.load(sys.stdin).get("agents") or []
+if not rows:
+    print("No personal agents."); sys.exit(0)
+for r in rows:
+    print("%s  %s  through %s" % (r.get("handle") or r["workspace"], r.get("username") or "(gone)", r["app"]))'
+            ;;
+        ""|-h|--help|help) _app_wallet_usage ;;
+        *) echo "usage: k2 app wallet settings|people|remove|personal-agent|personal-agents (k2 app wallet --help)" >&2; exit 2 ;;
+    esac
+}
+
 cmd_app() {
     case "${1:-}" in
         validate) shift; cmd_app_validate "$@" ;;
@@ -10494,6 +10630,7 @@ cmd_app() {
             esac
             ;;
         guest) shift; cmd_app_guest "$@" ;;
+        wallet) shift; cmd_app_wallet "$@" ;;
         members) shift; cmd_app_members "$@" ;;
         room-names) shift; cmd_app_room_names "$@" ;;
         self) shift; cmd_app_self "$@" ;;
@@ -29454,6 +29591,19 @@ cmd_schema() {
       ]
     },
     {
+      "name": "app wallet",
+      "usage": "k2 app wallet settings <app> [--on|--off] [--fallback on|off] | people [<app>] | remove <item-id> | personal-agent <app> <user> <workspace> | personal-agent --clear <workspace> | personal-agents [--json]",
+      "description": "App users' personal wallets (0.46.3): each App user keeps their own LLM subscriptions and API keys from the App (wallet.* verbs); their subscription runs only their own personal agent. The owner (or an Admin) turns an App's wallet on, sets its fallback to the company plan, sees each item's existence, label and status (never a secret, link or code), force-removes (deleted, not Trash) and marks personal agents. An agent of the App's own workspace with switch 2 may set the fallback only. Each person's subscription runs only their own agent; check that your plan's terms allow the way your App uses it.",
+      "args": [{"name": "subcommand", "required": true}],
+      "flags": [
+        {"name": "--on", "arg": null, "description": "settings: the App's users may use their wallet."},
+        {"name": "--off", "arg": null, "description": "settings: turn the App's wallet off."},
+        {"name": "--fallback", "arg": "on|off", "description": "settings: run a personal agent on the company plan when its person's subscription can't be used (default off = it doesn't start)."},
+        {"name": "--clear", "arg": null, "description": "personal-agent: the workspace is no longer anyone's personal agent."},
+        {"name": "--json", "arg": null, "description": "Print the daemon's JSON."}
+      ]
+    },
+    {
       "name": "app hydra",
       "usage": "k2 app hydra [on|off] [--json]",
       "description": "OIDC issuer sidecar (Linux leftover). Still owner even when Agent-tab Apps is on.",
@@ -30413,88 +30563,98 @@ THE SERVER SDK (sdk/server, TypeScript, Node 22+, no dependencies)
 
 EVERY VERB, BY CAP (helper, method and route, what it does)
 no cap (your own rooms)
-  me.get                   GET  /cli/skin/me                              Who this pass is: guest or App, its rooms with their caps, and this server's features.
-  roomAgents.list          GET  /cli/skin/agents                          The agents in the pass's rooms: handle, name, color and picture.
-  guests.login             POST /cli/skin/login (server only)             Log a guest in through this App; the answer carries the guest's session pass.
-  password.change          POST /cli/skin/password/change (browser only)  A guest changes their own password (browser only: it ends every session of theirs).
-  agentIdentity.get        GET  /cli/agent/identity                       The room's agent: name, color, picture, handle, and what the pass may change.
-  app.self                 GET  /cli/skin/self (server only)              This App: its id, live Seed hash, health and when it was deployed (its own App only; the App pass, never a guest).
-  app.usage                GET  /cli/skin/usage (server only)             This App's quotas, live use and per-call counts from its own audit (its own App only; the App pass, never a guest).
-  chat.pass                POST /cli/sew/pass (server only)               Mint a Sew chat pass for the guest of this request (a login with a chat grant; server only, never a handoff code).
+  me.get                   GET  /cli/skin/me                                  Who this pass is: guest or App, its rooms with their caps, and this server's features.
+  roomAgents.list          GET  /cli/skin/agents                              The agents in the pass's rooms: handle, name, color and picture.
+  guests.login             POST /cli/skin/login (server only)                 Log a guest in through this App; the answer carries the guest's session pass.
+  password.change          POST /cli/skin/password/change (browser only)      A guest changes their own password (browser only: it ends every session of theirs).
+  agentIdentity.get        GET  /cli/agent/identity                           The room's agent: name, color, picture, handle, and what the pass may change.
+  app.self                 GET  /cli/skin/self (server only)                  This App: its id, live Seed hash, health and when it was deployed (its own App only; the App pass, never a guest).
+  app.usage                GET  /cli/skin/usage (server only)                 This App's quotas, live use and per-call counts from its own audit (its own App only; the App pass, never a guest).
+  chat.pass                POST /cli/sew/pass (server only)                   Mint a Sew chat pass for the guest of this request (a login with a chat grant; server only, never a handoff code).
 thread:read (Read the Thread)
-  thread.page              GET  /cli/thread                               A page of a room's Thread, oldest first; sinceSeq catches up, beforeSeq pages back.
-  thread.latest            GET  /cli/thread/latest                        The newest Thread item per room, for list previews; a room the pass can't read is an item with error.
-  thread.events            WS   /cli/overlay/events?conversation=         Live Thread items of one room (new posts and card changes; merge by id); after a gap, thread.page with sinceSeq.
-  thread.ensurePinned      POST /cli/workspace/ensure-pinned-chat         Check the room's pinned Chat is live (find-only for Apps: it never starts one).
+  thread.page              GET  /cli/thread                                   A page of a room's Thread, oldest first; sinceSeq catches up, beforeSeq pages back.
+  thread.latest            GET  /cli/thread/latest                            The newest Thread item per room, for list previews; a room the pass can't read is an item with error.
+  thread.events            WS   /cli/overlay/events?conversation=             Live Thread items of one room (new posts and card changes; merge by id); after a gap, thread.page with sinceSeq.
+  thread.ensurePinned      POST /cli/workspace/ensure-pinned-chat             Check the room's pinned Chat is live (find-only for Apps: it never starts one).
 thread:post (Post to the Thread)
-  thread.send              POST /cli/thread/post                          Post text to a room's Thread as the guest (or the App); the agent gets it at once.
-  thread.answerCard        POST /cli/thread/answer                        Answer a choice card (or set a secret card) in a room's Thread.
-  thread.voidCard          POST /cli/thread/void                          Dismiss a pending card in a room's Thread.
+  thread.send              POST /cli/thread/post                              Post text to a room's Thread as the guest (or the App); the agent gets it at once.
+  thread.answerCard        POST /cli/thread/answer                            Answer a choice card (or set a secret card) in a room's Thread.
+  thread.voidCard          POST /cli/thread/void                              Dismiss a pending card in a room's Thread.
 files:read (Read files (also shows heartbeat instructions))
-  files.list               GET  /cli/fs/read-dir                          A folder's entries, folders first.
-  files.read               GET  /cli/fs/read-file                         A UTF-8 text file (at most 10 MiB).
-  files.readBinary         GET  /cli/fs/read-binary                       A file as base64 (at most 50 MiB; read-range for more).
-  files.readRange          GET  /cli/fs/read-range                        A byte range of a file, as base64.
-  files.stat               GET  /cli/fs/stat                              One file's or folder's kind, size, modified time and content type, under the room's folder scope.
-  files.events             WS   /cli/fs/events?workspace=                 Live file changes in one room (paths only; refetch what you show).
-  resources.list           GET  /cli/workspace/resources                  The room's pinned resources (its links drawer).
+  files.list               GET  /cli/fs/read-dir                              A folder's entries, folders first.
+  files.read               GET  /cli/fs/read-file                             A UTF-8 text file (at most 10 MiB).
+  files.readBinary         GET  /cli/fs/read-binary                           A file as base64 (at most 50 MiB; read-range for more).
+  files.readRange          GET  /cli/fs/read-range                            A byte range of a file, as base64.
+  files.stat               GET  /cli/fs/stat                                  One file's or folder's kind, size, modified time and content type, under the room's folder scope.
+  files.events             WS   /cli/fs/events?workspace=                     Live file changes in one room (paths only; refetch what you show).
+  resources.list           GET  /cli/workspace/resources                      The room's pinned resources (its links drawer).
 files:write (Write files (not the agent's .k2 folder))
-  files.write              POST /cli/fs/write-file                        Write (or overwrite) a text file; its folder must exist.
-  files.uploadBinary       POST /cli/fs/upload-binary                     Upload a file in one request; a taken name becomes name (1).ext.
-  files.uploadChunk        POST /cli/fs/upload-chunk                      Resumable upload, one chunk per request (10 GiB in all); the last chunk lands the file.
-  files.create             POST /cli/fs/create                            Create an empty file or a folder.
-  files.copy               POST /cli/fs/copy                              Copy files or folders (a taken name becomes 'name copy').
-  files.move               POST /cli/fs/move                              Move files or folders.
-  files.rename             POST /cli/fs/rename                            Rename a file or folder in place.
-  resources.add            POST /cli/workspace/resources/add              Pin an existing file to the room's resources.
-  resources.remove         POST /cli/workspace/resources/remove           Unpin a file from the room's resources.
+  files.write              POST /cli/fs/write-file                            Write (or overwrite) a text file; its folder must exist.
+  files.uploadBinary       POST /cli/fs/upload-binary                         Upload a file in one request; a taken name becomes name (1).ext.
+  files.uploadChunk        POST /cli/fs/upload-chunk                          Resumable upload, one chunk per request (10 GiB in all); the last chunk lands the file.
+  files.create             POST /cli/fs/create                                Create an empty file or a folder.
+  files.copy               POST /cli/fs/copy                                  Copy files or folders (a taken name becomes 'name copy').
+  files.move               POST /cli/fs/move                                  Move files or folders.
+  files.rename             POST /cli/fs/rename                                Rename a file or folder in place.
+  resources.add            POST /cli/workspace/resources/add                  Pin an existing file to the room's resources.
+  resources.remove         POST /cli/workspace/resources/remove               Unpin a file from the room's resources.
 tickets:read (Read tickets and get live ticket updates)
-  tickets.list             GET  /cli/feedback/list                        A room's tickets, newest first.
-  tickets.show             GET  /cli/feedback/show                        One ticket with its comments (and brief).
+  tickets.list             GET  /cli/feedback/list                            A room's tickets, newest first.
+  tickets.show             GET  /cli/feedback/show                            One ticket with its comments (and brief).
 tickets:post (Open, answer, assign and set status on tickets)
-  tickets.create           POST /cli/feedback/create                      Open a ticket in a room for its agent.
-  tickets.comment          POST /cli/feedback/comment                     Comment on a ticket as the guest (free text moves it to needs_discussion).
-  tickets.answer           POST /cli/feedback/answer                      Answer a ticket as the guest.
-  tickets.resolve          POST /cli/feedback/resolve                     Set a ticket's status (Apps can't set answered).
-  tickets.assign           POST /cli/feedback/assign                      Set a ticket's assignees.
+  tickets.create           POST /cli/feedback/create                          Open a ticket in a room for its agent.
+  tickets.comment          POST /cli/feedback/comment                         Comment on a ticket as the guest (free text moves it to needs_discussion).
+  tickets.answer           POST /cli/feedback/answer                          Answer a ticket as the guest.
+  tickets.resolve          POST /cli/feedback/resolve                         Set a ticket's status (Apps can't set answered).
+  tickets.assign           POST /cli/feedback/assign                          Set a ticket's assignees.
 wiki:read (Read the wiki)
-  wiki.index               GET  /cli/wiki/index                           A room's wiki: its notes and the links between them.
-  wiki.note                GET  /cli/wiki/note                            One wiki note's markdown.
+  wiki.index               GET  /cli/wiki/index                               A room's wiki: its notes and the links between them.
+  wiki.note                GET  /cli/wiki/note                                One wiki note's markdown.
 store:read (Read the workspace store)
-  storeDocs.collections    GET  /cli/store/list                           The room's store collections (Linux, with the workspace database).
-  storeDocs.get            GET  /cli/store/get                            One store document.
-  storeDocs.query          GET  /cli/store/query                          Documents of one store collection.
-  db.tables                GET  /cli/db/tables                            The room database's tables (Linux, with the workspace database).
-  db.rows                  GET  /cli/db/rows                              Rows of a table as the guest (RLS decides which); with id, one row.
-  db.query                 POST /cli/db/query                             One brokered SQL statement as the guest (store:read to read, store:write to write; 5000 rows, 10 s).
+  storeDocs.collections    GET  /cli/store/list                               The room's store collections (Linux, with the workspace database).
+  storeDocs.get            GET  /cli/store/get                                One store document.
+  storeDocs.query          GET  /cli/store/query                              Documents of one store collection.
+  db.tables                GET  /cli/db/tables                                The room database's tables (Linux, with the workspace database).
+  db.rows                  GET  /cli/db/rows                                  Rows of a table as the guest (RLS decides which); with id, one row.
+  db.query                 POST /cli/db/query                                 One brokered SQL statement as the guest (store:read to read, store:write to write; 5000 rows, 10 s).
 store:write (Change dump-table rows)
-  db.insert                POST /cli/db/rows                              Insert one row as the guest (RLS checks it).
-  db.update                POST /cli/db/rows/update                       Update one row by id as the guest.
-  db.delete                POST /cli/db/rows/delete                       Delete one row by id as the guest; answers the deleted row.
+  db.insert                POST /cli/db/rows                                  Insert one row as the guest (RLS checks it).
+  db.update                POST /cli/db/rows/update                           Update one row by id as the guest.
+  db.delete                POST /cli/db/rows/delete                           Delete one row by id as the guest; answers the deleted row.
 guests:rooms (Set its own guests' rooms (an owner grant per App, never a guest's))
-  guests.rooms             GET  /cli/skin/guests/rooms (server only)      One of this App's guests: its rooms on this App and its role (App: its own guests; Garden: any local App's).
-  guests.setRooms          POST /cli/skin/guests/rooms (server only)      Set one guest's rooms on this App, within the rooms the App may hand out and never above the guest's role; idempotent, audited.
+  guests.rooms             GET  /cli/skin/guests/rooms (server only)          One of this App's guests: its rooms on this App and its role (App: its own guests; Garden: any local App's).
+  guests.setRooms          POST /cli/skin/guests/rooms (server only)          Set one guest's rooms on this App, within the rooms the App may hand out and never above the guest's role; idempotent, audited.
 activity:read (See when the agent is working)
-  activity.snapshot        GET  /cli/activity/snapshot                    Whether the room's agent is working now, per session.
-  activity.events          WS   /cli/activity/events?workspace=           Live room events: agent working, heartbeats, tickets, rooms_changed, room_members_changed, app_deployed; resync then close 4008 when behind.
+  activity.snapshot        GET  /cli/activity/snapshot                        Whether the room's agent is working now, per session.
+  activity.events          WS   /cli/activity/events?workspace=               Live room events: agent working, heartbeats, tickets, rooms_changed, room_members_changed, app_deployed; resync then close 4008 when behind.
 heartbeats:read (See heartbeats: schedule, next fire, history)
-  heartbeats.list          GET  /cli/heartbeat/list                       The room's heartbeats: schedule, next fire, why one waits.
-  heartbeats.show          GET  /cli/heartbeat/show                       One heartbeat, with its instructions when the pass has files:read.
-  heartbeats.status        GET  /cli/heartbeat/status                     One heartbeat's recent fires, newest first.
-  heartbeats.fires         GET  /cli/heartbeat/fires-list                 The room's recent heartbeat fires, newest first.
+  heartbeats.list          GET  /cli/heartbeat/list                           The room's heartbeats: schedule, next fire, why one waits.
+  heartbeats.show          GET  /cli/heartbeat/show                           One heartbeat, with its instructions when the pass has files:read.
+  heartbeats.status        GET  /cli/heartbeat/status                         One heartbeat's recent fires, newest first.
+  heartbeats.fires         GET  /cli/heartbeat/fires-list                     The room's recent heartbeat fires, newest first.
 heartbeats:write (Add, edit, turn on or off, archive and fire heartbeats)
-  heartbeats.add           POST /cli/heartbeat/add                        Add a heartbeat (60 changes per guest per room per 10 minutes).
-  heartbeats.edit          POST /cli/heartbeat/edit                       Change a heartbeat's schedule or instructions.
-  heartbeats.enable        POST /cli/heartbeat/enable                     Turn a heartbeat on or off.
-  heartbeats.rename        POST /cli/heartbeat/rename                     Rename a heartbeat.
-  heartbeats.archive       POST /cli/heartbeat/archive                    Archive a heartbeat.
-  heartbeats.fire          POST /cli/heartbeat/fire                       Fire a heartbeat now (once per 5 minutes per guest).
+  heartbeats.add           POST /cli/heartbeat/add                            Add a heartbeat (60 changes per guest per room per 10 minutes).
+  heartbeats.edit          POST /cli/heartbeat/edit                           Change a heartbeat's schedule or instructions.
+  heartbeats.enable        POST /cli/heartbeat/enable                         Turn a heartbeat on or off.
+  heartbeats.rename        POST /cli/heartbeat/rename                         Rename a heartbeat.
+  heartbeats.archive       POST /cli/heartbeat/archive                        Archive a heartbeat.
+  heartbeats.fire          POST /cli/heartbeat/fire                           Fire a heartbeat now (once per 5 minutes per guest).
 agent:identity (Change the agent's name, color and picture)
-  agentIdentity.set        POST /cli/agent/identity                       Change the room's agent's name, color or picture.
+  agentIdentity.set        POST /cli/agent/identity                           Change the room's agent's name, color or picture.
 agent:handle (Change the agent's handle (its address))
-  agentIdentity.setHandle  POST /cli/agent/handle                         Change the room's agent's handle (its address).
+  agentIdentity.setHandle  POST /cli/agent/handle                             Change the room's agent's handle (its address).
 room:members (See who has access to the room)
-  room.members             GET  /cli/skin/members                         Who holds a grant on the room: guests and agent logins with their roles (from grants, not presence); admins of this box are one line.
+  room.members             GET  /cli/skin/members                             Who holds a grant on the room: guests and agent logins with their roles (from grants, not presence); admins of this box are one line.
+wallet:self (Use the person's own wallet (an owner setting per App, never a room cap))
+  wallet.list              GET  /cli/skin/wallet/list (browser only)          The person's own wallet (a guest's session pass; never anyone else's). LLM subscriptions and API keys first.
+  wallet.status            GET  /cli/skin/wallet/status (browser only)        One of the person's own items.
+  wallet.add               POST /cli/skin/wallet/add (browser only)           Add to the person's own wallet. A subscription starts the vendor's own sign-in on the server: show login.url (Open and Copy link), login.code, or a paste box when login.needsPaste; poll wallet.loginStatus. An API key is sealed at once (login is null).
+  wallet.login             POST /cli/skin/wallet/login (browser only)         Sign one of the person's own subscriptions in again (same item and label).
+  wallet.loginStatus       GET  /cli/skin/wallet/login/status (browser only)  A running sign-in, to the person who started it only (poll every 1.5 s). No terminal screen is ever sent.
+  wallet.loginInput        POST /cli/skin/wallet/login/input (browser only)   Paste the code the vendor's page shows back into the person's own sign-in.
+  wallet.loginCancel       POST /cli/skin/wallet/login/cancel (browser only)  Cancel the person's own running sign-in.
+  wallet.use               POST /cli/skin/wallet/use (browser only)           Choose which item the person's own agents run on for a provider.
+  wallet.remove            POST /cli/skin/wallet/remove (browser only)        Delete one of the person's own items for good (not Trash): its sessions stop, its sealed secret and folder are destroyed.
 
 REFUSALS are JSON {error:{code,hint}} (some routes: {ok:false,error}).
   401 pass_required / pass_invalid (read K2_PASS_FILE again) /

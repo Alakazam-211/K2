@@ -243,6 +243,8 @@ describe('TUWA10: one cap table', () => {
       // RS-A15: an owner grant to the App itself, never a role's or a pass's cap.
       'guests:rooms': "Set its own guests' rooms (an owner grant per App, never a guest's)",
       'room:members': 'See who has access to the room',
+      // 0.46.3: an owner setting per App (its users' own wallets), never a pass's cap.
+      'wallet:self': "Use the person's own wallet (an owner setting per App, never a room cap)",
     })
   })
 

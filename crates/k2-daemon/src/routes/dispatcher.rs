@@ -6571,6 +6571,38 @@ async fn handle_one_request(
             .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
+        // App users' personal wallets, the owner's side (0.46.3): the
+        // owner token and Admin+ logins; an agent of an App's workspace with
+        // switch 2 may set its fallback. No route returns a secret.
+        p if crate::person_wallet_routes::is_owner_route(p) => {
+            let get_ok = crate::person_wallet_routes::OWNER_GET.contains(&p);
+            if !get_ok && !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = if is_post {
+                match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::person_wallet_routes::MAX_BODY).await {
+                    Ok(b) => b,
+                    Err(refused) => {
+                        let r = crate::person_wallet_routes::too_large();
+                        super::http::refuse_body_too_large(&mut *stream, &refused, r.status, r.content_type, &r.body).await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let caller = crate::sidecar_routes::caller_from_tcp(p, &query, bearer_token.as_deref(), state.token.as_str());
+            let params = super::http::parse_params(&path, &query);
+            let p_owned = p.to_string();
+            let ingress_label = ingress.as_str().to_string();
+            let r = tokio::task::spawn_blocking(move || {
+                crate::person_wallet_routes::handle_owner(&p_owned, caller, is_post, &body_bytes, &params, &ingress_label)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         p if crate::llm_accounts_routes::is_route(p) => {
             let post_row = crate::llm_accounts_routes::is_post_route(p);
             if post_row && !super::http::require_post(&mut *stream, &mut buf, is_post).await {
@@ -9108,6 +9140,37 @@ async fn handle_one_request(
                         }
                     } else {
                         crate::skin_me_routes::forbidden()
+                    }
+                }
+                // App users' personal wallets (0.46.3): `wallet.*` with an
+                // App user's OWN login session pass, self-scoped. Anything
+                // else (Connect login, owner token, passport, an App's own
+                // pass) is `person_pass_required` in the handler.
+                sp if crate::person_wallet_routes::is_skin_route(sp) => {
+                    let body = if is_post {
+                        match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::person_wallet_routes::MAX_BODY).await {
+                            Ok(b) => b,
+                            Err(refused) => {
+                                let r = crate::person_wallet_routes::too_large();
+                                super::http::refuse_body_too_large(&mut *stream, &refused, r.status, r.content_type, &r.body).await;
+                                return DispatchOutcome::Done;
+                            }
+                        }
+                    } else {
+                        let _ = stream.read(&mut buf).await;
+                        Vec::new()
+                    };
+                    let presented = super::http::extract_token(&query);
+                    let skin_pass = presented.is_some_and(|t| k2_core::skin::is_skin_token(t) && !k2_core::skin::is_api_key_prefix(t));
+                    let pass = if skin_pass { presented.and_then(crate::apps::gateway::resolve_pass) } else { None };
+                    if skin_pass && pass.is_none() {
+                        crate::skin_routes::revoked_skin_response()
+                    } else {
+                        let params = super::http::parse_params(&path, &query);
+                        let route = sp.to_string();
+                        tokio::task::spawn_blocking(move || crate::person_wallet_routes::handle_skin(&route, pass, is_post, &body, &params))
+                            .await
+                            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
                     }
                 }
                 // RS-A15 (0.46.1): an App reads and sets its own guests'

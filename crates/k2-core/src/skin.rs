@@ -79,6 +79,9 @@ pub mod link;
 pub mod guest_rooms;
 #[path = "skin_members.rs"]
 pub mod members;
+/// Person wallets (0.46.3): an App user's live access, read-only.
+#[path = "skin_wallet_access.rs"]
+pub mod wallet_access;
 #[path = "skin_paths.rs"]
 pub mod paths;
 pub use paths::{RoomPathScope, RoomPaths};

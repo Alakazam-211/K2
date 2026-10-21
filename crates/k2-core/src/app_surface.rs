@@ -28,6 +28,18 @@ pub const HTTP_ALLOWLIST: &[(&str, &str)] = &[
     ("GET", "/cli/skin/agents"),
     ("HEAD", "/cli/skin/agents"),
     ("POST", "/cli/skin/password/change"),
+    ("GET", "/cli/skin/wallet/list"),
+    ("HEAD", "/cli/skin/wallet/list"),
+    ("GET", "/cli/skin/wallet/status"),
+    ("HEAD", "/cli/skin/wallet/status"),
+    ("POST", "/cli/skin/wallet/add"),
+    ("POST", "/cli/skin/wallet/login"),
+    ("GET", "/cli/skin/wallet/login/status"),
+    ("HEAD", "/cli/skin/wallet/login/status"),
+    ("POST", "/cli/skin/wallet/login/input"),
+    ("POST", "/cli/skin/wallet/login/cancel"),
+    ("POST", "/cli/skin/wallet/use"),
+    ("POST", "/cli/skin/wallet/remove"),
     ("GET", "/cli/thread"),
     ("HEAD", "/cli/thread"),
     ("GET", "/cli/thread/latest"),
@@ -209,7 +221,7 @@ pub const WS_ALLOWLIST: &[(&str, &str)] = &[
 
 /// Routes only the browser helper forwards: they act on a guest's own
 /// login session (`session=1`), which an App pass never is.
-pub const HELPER_ONLY_HTTP: &[&str] = &["/cli/skin/password/change"];
+pub const HELPER_ONLY_HTTP: &[&str] = &["/cli/skin/password/change", "/cli/skin/wallet/list", "/cli/skin/wallet/status", "/cli/skin/wallet/add", "/cli/skin/wallet/login", "/cli/skin/wallet/login/status", "/cli/skin/wallet/login/input", "/cli/skin/wallet/login/cancel", "/cli/skin/wallet/use", "/cli/skin/wallet/remove"];
 
 /// Routes only an App's gateway link serves: a BFF's server-side calls.
 pub const LINK_ONLY_HTTP: &[&str] = &["/cli/skin/login", "/cli/skin/guests/rooms", "/cli/skin/self", "/cli/skin/usage", "/cli/sew/pass"];
@@ -224,6 +236,15 @@ pub const VERBS: &[(&str, &str, &str, &str)] = &[
     ("GET", "/cli/skin/guests/rooms", "guests.rooms", "link"),
     ("POST", "/cli/skin/guests/rooms", "guests.setRooms", "link"),
     ("POST", "/cli/skin/password/change", "password.change", "helper"),
+    ("GET", "/cli/skin/wallet/list", "wallet.list", "helper"),
+    ("GET", "/cli/skin/wallet/status", "wallet.status", "helper"),
+    ("POST", "/cli/skin/wallet/add", "wallet.add", "helper"),
+    ("POST", "/cli/skin/wallet/login", "wallet.login", "helper"),
+    ("GET", "/cli/skin/wallet/login/status", "wallet.loginStatus", "helper"),
+    ("POST", "/cli/skin/wallet/login/input", "wallet.loginInput", "helper"),
+    ("POST", "/cli/skin/wallet/login/cancel", "wallet.loginCancel", "helper"),
+    ("POST", "/cli/skin/wallet/use", "wallet.use", "helper"),
+    ("POST", "/cli/skin/wallet/remove", "wallet.remove", "helper"),
     ("GET", "/cli/thread", "thread.page", "both"),
     ("GET", "/cli/thread/latest", "thread.latest", "both"),
     ("POST", "/cli/thread/post", "thread.send", "both"),

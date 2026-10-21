@@ -227,6 +227,12 @@ pub struct Project {
     /// `thread`, `mail`, `sew`. DEFAULT `[]`. Read-only here.
     #[serde(default = "app_cores_default")]
     pub app_cores: String,
+    /// "Allow this agent to manage Postgres versions" (`db_upgrade`,
+    /// migration 0201). DEFAULT 0 (off). Read-only here (the Agent tab
+    /// shows it); written only by `POST /cli/agent-access/set {toggle:
+    /// "db_upgrade"}` (the owner raises, the owner or an Admin lowers).
+    #[serde(default)]
+    pub agents_can_upgrade_postgres: i64,
 }
 
 fn app_cores_default() -> String {
@@ -250,7 +256,7 @@ impl Project {
         let mut stmt = conn.prepare(
             "SELECT id, name, path, color, tab_order, last_opened_at, worktree_mode, icon_url, focus_group_id, pinned, manually_active, last_interaction_at, created_at, agent_enabled, \
              (EXISTS(SELECT 1 FROM workspace_heartbeats wh WHERE wh.project_id = projects.id AND wh.enabled = 1 AND wh.archived_at IS NULL)) AS heartbeat_enabled, \
-             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled, handle, default_model, force_model_on_resume, db_agent_access, agents_can_manage_skin, mail_manage_enabled, agents_can_manage_agents, agents_can_manage_vault, agents_can_use_compute, agents_can_operate_compute, agents_can_manage_projects, agents_can_manage_chat, design_mode_enabled, agents_can_manage_gardens, agents_can_manage_compute, agents_can_manage_apps_full, app_cores \
+             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled, handle, default_model, force_model_on_resume, db_agent_access, agents_can_manage_skin, mail_manage_enabled, agents_can_manage_agents, agents_can_manage_vault, agents_can_use_compute, agents_can_operate_compute, agents_can_manage_projects, agents_can_manage_chat, design_mode_enabled, agents_can_manage_gardens, agents_can_manage_compute, agents_can_manage_apps_full, app_cores, agents_can_upgrade_postgres \
              FROM projects ORDER BY tab_order",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -306,6 +312,7 @@ impl Project {
                 agents_can_manage_compute: row.get(40).unwrap_or(0),
                 agents_can_manage_apps_full: row.get(41).unwrap_or(0),
                 app_cores: row.get::<_, Option<String>>(42).ok().flatten().unwrap_or_else(|| "[]".to_string()),
+                agents_can_upgrade_postgres: row.get(43).unwrap_or(0),
             })
         })?;
         rows.collect()
@@ -316,7 +323,7 @@ impl Project {
         conn.query_row(
             "SELECT id, name, path, color, tab_order, last_opened_at, worktree_mode, icon_url, focus_group_id, pinned, manually_active, last_interaction_at, created_at, agent_enabled, \
              (EXISTS(SELECT 1 FROM workspace_heartbeats wh WHERE wh.project_id = projects.id AND wh.enabled = 1 AND wh.archived_at IS NULL)) AS heartbeat_enabled, \
-             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled, handle, default_model, force_model_on_resume, db_agent_access, agents_can_manage_skin, mail_manage_enabled, agents_can_manage_agents, agents_can_manage_vault, agents_can_use_compute, agents_can_operate_compute, agents_can_manage_projects, agents_can_manage_chat, design_mode_enabled, agents_can_manage_gardens, agents_can_manage_compute, agents_can_manage_apps_full, app_cores \
+             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled, handle, default_model, force_model_on_resume, db_agent_access, agents_can_manage_skin, mail_manage_enabled, agents_can_manage_agents, agents_can_manage_vault, agents_can_use_compute, agents_can_operate_compute, agents_can_manage_projects, agents_can_manage_chat, design_mode_enabled, agents_can_manage_gardens, agents_can_manage_compute, agents_can_manage_apps_full, app_cores, agents_can_upgrade_postgres \
              FROM projects WHERE id = ?1",
             params![id],
             |row| {
@@ -372,6 +379,7 @@ impl Project {
                 agents_can_manage_compute: row.get(40).unwrap_or(0),
                 agents_can_manage_apps_full: row.get(41).unwrap_or(0),
                 app_cores: row.get::<_, Option<String>>(42).ok().flatten().unwrap_or_else(|| "[]".to_string()),
+                agents_can_upgrade_postgres: row.get(43).unwrap_or(0),
                 })
             },
         )
@@ -5141,6 +5149,23 @@ mod unit_tests {
         assert_eq!(p.agents_can_manage_gardens, 0, "a neighbouring switch is untouched");
         let json = serde_json::to_value(&p).unwrap();
         assert_eq!(json["agentsCanManageCompute"], 1, "{json}");
+    }
+
+    #[test]
+    fn project_agents_can_upgrade_postgres_defaults_off_and_serializes_camel_case() {
+        let conn = fresh();
+        let id = make_project_row(&conn, "/tmp/proj-agents-upgrade-postgres");
+        let p = Project::get(&conn, &id).unwrap();
+        assert_eq!(p.agents_can_upgrade_postgres, 0, "0201 default is OFF");
+        let listed = Project::list(&conn).unwrap();
+        assert_eq!(listed.iter().find(|x| x.id == id).expect("listed").agents_can_upgrade_postgres, 0);
+        conn.execute("UPDATE projects SET agents_can_upgrade_postgres = 1 WHERE id = ?1", params![id]).unwrap();
+        let p = Project::get(&conn, &id).unwrap();
+        assert_eq!(p.agents_can_upgrade_postgres, 1);
+        assert_eq!(p.agents_can_manage_compute, 0, "a neighbouring switch is untouched");
+        assert_eq!(p.app_cores, "[]", "the column before it still reads");
+        let json = serde_json::to_value(&p).unwrap();
+        assert_eq!(json["agentsCanUpgradePostgres"], 1, "{json}");
     }
 
     #[test]

@@ -1357,11 +1357,12 @@ fn handle_access(
         && toggle != "compute_manage"
         && toggle != "app_core"
         && toggle != "app_review"
+        && toggle != "db_upgrade"
     {
         return Err(err(
             "bad_request",
             400,
-            "toggle must be 'agents_manage', 'app_core', 'app_review', 'apps_build', 'apps_manage_full', 'chat_manage', 'compute', 'compute_manage', 'compute_operate', 'gardens_manage', 'projects_manage' or 'vault_manage'",
+            "toggle must be 'agents_manage', 'app_core', 'app_review', 'apps_build', 'apps_manage_full', 'chat_manage', 'compute', 'compute_manage', 'compute_operate', 'db_upgrade', 'gardens_manage', 'projects_manage' or 'vault_manage'",
         ));
     }
     if toggle == "app_core" || toggle == "app_review" {
@@ -1400,6 +1401,18 @@ fn handle_access(
         )
         .map_err(|e| err("workspace_not_found", 404, e))?;
         return Ok((out, format!("ok {} compute={value}", ws.handle)));
+    }
+    if toggle == "db_upgrade" {
+        // "Allow this agent to manage Postgres versions" (0201, prd-pg17-
+        // and-db-upgrade-v1 §12, Rosson 2026-10-20). Default OFF. The
+        // owner raises; the owner or an Admin lowers (the Apps-switch
+        // floor). `/cli/agent-access/set` is not an agent verb, so an agent
+        // never sets it. `versions_access::set_switch` is the one writer
+        // (its own audit line, the agent's note); the caller writes the
+        // `agent-access-set` line.
+        let out = crate::sql::versions_access::set_switch(&ws.id, value, caller_is_owner(caller), &access_by(caller))
+            .map_err(|r| err(r.code, r.status, r.hint))?;
+        return Ok((out, format!("ok {} db_upgrade={value}", ws.handle)));
     }
     if toggle == "compute_operate" {
         // Node admin (prd-k2-node-admin-v1 Q14, 0156): "Allow this agent

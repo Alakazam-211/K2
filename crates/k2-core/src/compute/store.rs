@@ -1480,6 +1480,7 @@ mod tests {
             queued: 1,
             cpu_secs_today: 7,
             expires_in_secs: Some(100),
+            skew_secs: None,
             quotes: vec![],
         };
         store_share(&c, "n1", Some(&v), 50);

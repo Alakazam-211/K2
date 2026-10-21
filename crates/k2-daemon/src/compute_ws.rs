@@ -926,6 +926,14 @@ fn apply_observation(
     } else {
         reason
     };
+    // A shared node ends a queued job by itself when this server's share
+    // ends or is revoked: a result (never retried), said plainly.
+    let ended_by_node = match (state, reason) {
+        (JobState::Cancelled, Some(pshare::codes::SHARE_EXPIRED)) => Some("this server's share on the node has ended (the node's owner can extend it)"),
+        (JobState::Cancelled, Some(pshare::codes::SHARE_REVOKED)) => Some("the node's owner removed this server from the node"),
+        _ => None,
+    };
+    let detail = detail.or(ended_by_node);
     let _ = store::set_job_state(&conn, job_id, state, reason, detail, now);
     if let Some(s) = src {
         store::set_job_src(&conn, job_id, &s.commit, &s.tree);

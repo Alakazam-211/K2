@@ -624,7 +624,7 @@ fn answer_servers(node: String, list: Value, until: &'static str) -> std::thread
                 let body = crypto::unb64(&c.body_b64).unwrap();
                 let cmd: wire::Command = serde_json::from_slice(&body).unwrap();
                 seen.push(cmd.verb.clone());
-                let out = if cmd.verb == "servers.list" { json!({"servers": list}) } else { json!({}) };
+                let out = if cmd.verb == "servers.list" { list.clone() } else { json!({}) };
                 assert!(super::wait_deliver(&result(&cmd.cmd_id, "done", None, None, out)), "a route waits for {}", cmd.verb);
                 if cmd.verb == until {
                     return seen;
@@ -636,13 +636,36 @@ fn answer_servers(node: String, list: Value, until: &'static str) -> std::thread
     })
 }
 
+/// The pinned `servers.list` answer (`share::ServersList`).
 fn servers_listed() -> Value {
-    let owner = serde_json::to_value(pshare::ShareLimits::owner(2, 8, 16, 100, pshare::Network::On)).unwrap();
-    let tenant = serde_json::to_value(pshare::ShareLimits::new_server(pshare::Trust::Own, true)).unwrap();
-    json!([
-        {"slot": 0, "label": "rosson.k2.dev", "state": "active", "trust": "own", "limits": owner},
-        {"slot": 1, "label": "z3thon.k2.dev", "state": "active", "trust": "own", "fp_prefix": "0123456789abcdef", "limits": tenant, "running": 0, "queued": 0},
-    ])
+    let entry = |slot: u8, label: &str, limits: pshare::ShareLimits| pshare::ServerListing {
+        slot,
+        label: label.into(),
+        state: pshare::ServerStatus::Active,
+        trust: pshare::Trust::Own,
+        fp: None,
+        fp_prefix: if slot == 0 { "ab".repeat(32) } else { "0123456789abcdef".into() },
+        limits,
+        expires_at: None,
+        expires_in_secs: None,
+        added_at: 1,
+        added_by: "local:rosson".into(),
+        running: 0,
+        queued: 0,
+        cpu_secs_today: 0,
+        sas: None,
+        refusal: None,
+        online: true,
+    };
+    serde_json::to_value(pshare::ServersList {
+        max_servers: pshare::DEFAULT_MAX_SERVERS,
+        solo: false,
+        servers: vec![
+            entry(0, "rosson.k2.dev", pshare::ShareLimits::owner(2, 8, 16, 100, pshare::Network::On)),
+            entry(1, "z3thon.k2.dev", pshare::ShareLimits::new_server(pshare::Trust::Own, true)),
+        ],
+    })
+    .unwrap()
 }
 
 /// §4.1, §4.3, §9: an add is always held and goes out owner-signed once

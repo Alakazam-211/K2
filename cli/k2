@@ -58588,7 +58588,7 @@ if view == "put":
     else:
         print("Wrote %s%s" % (d.get("file"), "" if d.get("changed", True) else " (no change)"))
         if d.get("keepAsMine"):
-            print("This widget was your person's; its new version isn't theirs yet, so it runs without its data until they keep it (K2 sent them an inbox note: Settings → Gardens → Local Data → It's mine).")
+            print("This widget was your person’s; its new version is not theirs yet, so it runs without its data until they keep it (K2 sent them an inbox note: Settings → Gardens → Local Data → It’s mine).")
         if d.get("snapshot"):
             print("Previous version kept: %s (k2 zen reset --to %s)" % (d["snapshot"], d["snapshot"]))
         v = d.get("validate") or {}
@@ -58608,7 +58608,7 @@ elif view == "folder":
         w = d.get("written") or []
         print("Wrote %s: %s" % (d.get("file"), ", ".join(w) if w else "no change"))
         if d.get("keepAsMine"):
-            print("This widget was your person's; its new version isn't theirs yet, so it runs without its data until they keep it (K2 sent them an inbox note: Settings → Gardens → Local Data → It's mine).")
+            print("This widget was your person’s; its new version is not theirs yet, so it runs without its data until they keep it (K2 sent them an inbox note: Settings → Gardens → Local Data → It’s mine).")
         if d.get("removed"):
             print("Removed: %s" % ", ".join(d["removed"]))
         if d.get("kept"):
@@ -58663,7 +58663,7 @@ elif view == "show":
 elif view == "decide":
     print("%s: %s" % (d.get("id"), d.get("status")))
     if d.get("keepAsMine"):
-        print("The widget's new version isn't signed as yours, so it runs without its data. Keep it: Settings → Gardens → Local Data → %s → It's mine (or k2 zen widget claim %s outside K2)." % (d.get("target"), d.get("target")))
+        print("The widget’s new version is not signed as yours, so it runs without its data. Keep it: Settings → Gardens → Local Data → %s → It’s mine (or k2 zen widget claim %s outside K2)." % (d.get("target"), d.get("target")))
 '
 }
 

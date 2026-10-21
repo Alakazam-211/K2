@@ -193,7 +193,10 @@ impl Executor {
         // swap it (review A L6).
         let troot = layout.tenants_root();
         let above = troot.parent().ok_or_else(|| refuse(code::NOT_CONFIGURED, "the tenants root has no parent"))?;
-        crate::wall::open_root_owned_dir(above).map_err(|e| refuse(code::NOT_CONFIGURED, e))?;
+        // Its real path: on macOS `/var` is root's own link to `private/var`
+        // (the walk never follows a link at its last component).
+        let above = std::fs::canonicalize(above).map_err(|e| refuse(code::NOT_CONFIGURED, format!("{}: {e}", above.display())))?;
+        crate::wall::open_root_owned_dir(&above).map_err(|e| refuse(code::NOT_CONFIGURED, e))?;
         if cfg!(target_os = "macos") {
             if entry.trust == Trust::Team {
                 return Err(refuse(codes::TEAM_NEEDS_TENANT_WALL, "Macs take only your own servers until per-tenant users (0.46.4)"));

@@ -2933,10 +2933,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn skin_gateway_every_reply_carries_exactly_one_frame_policy() {
         let stub = start_stub().await;
-        let dead = {
-            let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind dead");
-            l.local_addr().expect("dead addr").port()
-        }; // listener dropped: connects are refused → 502 paths
+        // A port nothing in this process binds: connects are refused → 502
+        // paths. (Not bind(:0)-then-drop: another test could be handed it.)
+        let dead = k2_core::test_env::loopback_test_port();
         let root = std::env::temp_dir().join(format!(
             "k2-gw-frame-{}-{}",
             std::process::id(),

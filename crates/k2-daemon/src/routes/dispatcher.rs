@@ -3377,9 +3377,12 @@ async fn handle_one_request(
             if !super::http::require_owner_or_admin(&mut *stream, &mut buf, &query, state.token.as_str()).await {
                 return DispatchOutcome::Done;
             }
-            let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
-            // Blocking HTTP fetch off the accept loop.
-            let r = tokio::task::spawn_blocking(crate::update_routes::handle_check)
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            // Blocking HTTP fetch off the accept loop. 0.46.3: cached
+            // (10 min); `{"fresh":true}` skips the cache.
+            let r = tokio::task::spawn_blocking(move || {
+                crate::update_routes::handle_check_body(&body_bytes)
+            })
                 .await
                 .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
@@ -3443,6 +3446,25 @@ async fn handle_one_request(
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
             let shutdown_tx = state.shutdown_tx.clone();
             let r = crate::update_routes::handle_apply(&body_bytes, shutdown_tx);
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        // GET /cli/daemon/update/latest — 0.46.3: the cheap "is there an
+        // update?" signal for every login (Member and up) and the owner
+        // token: {current, installKind, latestKnown|null}. Never fetches —
+        // it reads what `check` or the daily background refresh last saw.
+        "/cli/daemon/update/latest" => {
+            let _ = stream.read(&mut buf).await;
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let r = crate::update_routes::handle_latest_known();
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
         // GET /cli/daemon/update/status?job_id= — poll a job's phase/progress.
@@ -12398,11 +12420,19 @@ async fn handle_one_request(
             let token = super::http::extract_token(&query)
                 .unwrap_or_default()
                 .to_string();
+            // 0.46.3: the desktop app names itself (`client=desktop-app`,
+            // owner token): only its subscription means "the app runs"
+            // for a bundled-app update trigger.
+            let desktop_app = crate::events::is_desktop_app_subscription(
+                &query,
+                super::http::token_is_owner(&query, state.token.as_str()),
+            );
             crate::events::serve_events_connection(
                 stream,
                 state.event_tx.clone(),
                 token,
                 state.token.to_string(),
+                desktop_app,
             )
             .await;
             return DispatchOutcome::Done;

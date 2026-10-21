@@ -2388,12 +2388,13 @@ mod tests {
         )
     }
 
+    /// A port for a published service the test's child binds later. Not
+    /// `bind(:0)`-then-drop: under parallel load the OS re-issued that
+    /// ephemeral port to another test before the child bound it ("bind
+    /// clash: … already accepting connections", 0.46.3). A per-process
+    /// unique port outside the ephemeral range instead.
     fn free_port() -> u16 {
-        TcpListener::bind(("127.0.0.1", 0))
-            .expect("bind")
-            .local_addr()
-            .unwrap()
-            .port()
+        k2_core::test_env::loopback_test_port()
     }
 
     fn python_ok() -> bool {

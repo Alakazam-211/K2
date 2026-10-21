@@ -219,6 +219,13 @@ pub fn detail() -> String {
 ///   - `"standalone"` — a bare `k2so-daemon` binary under a supervisor
 ///     (launchd/systemd). Updating is the in-daemon download→verify→
 ///     stage→swap path (Shape B).
+///   - `"package"` (0.46.3) — a package manager installed the binary
+///     (`/usr/bin/k2-daemon` from the Arch package or a .deb, or a Nix
+///     store path). The folder isn't the daemon's to write and the package
+///     manager owns the file, so the daemon never updates itself: `check`
+///     reports `available: false` (+ `newerViaPackage`), `start` / `apply`
+///     refuse with a clear message. Was reported as `"standalone"` before,
+///     and `apply` then failed with "Permission denied".
 ///   - `"unknown"` — the path couldn't be resolved; callers treat this
 ///     conservatively (no remote update shape is assumed).
 ///
@@ -232,7 +239,7 @@ pub fn install_kind() -> &'static str {
 
 /// Pure classifier behind [`install_kind`], split out so it's unit-
 /// testable without depending on the test binary's own path. Returns one
-/// of `"bundled-app" | "standalone" | "unknown"`.
+/// of `"bundled-app" | "package" | "standalone" | "unknown"`.
 pub fn classify_install_kind(exe: Option<&std::path::Path>) -> &'static str {
     let Some(exe) = exe else {
         return "unknown";
@@ -247,7 +254,20 @@ pub fn classify_install_kind(exe: Option<&std::path::Path>) -> &'static str {
     if s.contains(".app/Contents/") {
         return "bundled-app";
     }
+    if is_package_path(&s) {
+        return INSTALL_KIND_PACKAGE;
+    }
     "standalone"
+}
+
+/// `installKind` of a package-manager install (0.46.3).
+pub const INSTALL_KIND_PACKAGE: &str = "package";
+
+/// True for a path a package manager owns: under `/usr/` but not
+/// `/usr/local/` (FHS: `/usr` is the distribution's, `/usr/local` the
+/// admin's — where the standalone installers put K2), or the Nix store.
+fn is_package_path(s: &str) -> bool {
+    (s.starts_with("/usr/") && !s.starts_with("/usr/local/")) || s.starts_with("/nix/store/")
 }
 
 /// Home M4/M5: `sessions/v2/spawn` honours `attach_only` (a live session
@@ -670,6 +690,28 @@ mod tests {
             classify_install_kind(Some(Path::new("/home/u/.k2so/bin/k2so-daemon"))),
             "standalone"
         );
+    }
+
+    #[test]
+    fn classify_install_kind_detects_package_installs() {
+        use std::path::Path;
+        for p in [
+            "/usr/bin/k2-daemon",
+            "/usr/lib/k2/k2-daemon",
+            "/usr/sbin/k2-daemon",
+            "/nix/store/abc123-k2-0.46.3/bin/k2-daemon",
+        ] {
+            assert_eq!(classify_install_kind(Some(Path::new(p))), "package", "{p}");
+        }
+        // Standalone installs stay standalone.
+        for p in [
+            "/usr/local/bin/k2-daemon",
+            "/home/k2/.local/bin/k2-daemon",
+            "/opt/k2/k2-daemon",
+            "/usrx/bin/k2-daemon",
+        ] {
+            assert_eq!(classify_install_kind(Some(Path::new(p))), "standalone", "{p}");
+        }
     }
 
     #[test]

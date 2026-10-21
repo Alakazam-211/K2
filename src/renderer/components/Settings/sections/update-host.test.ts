@@ -21,6 +21,7 @@ import {
   updateAvailableCopy,
   hostVersionCopy,
   newerNoArtifactCopy,
+  newerViaPackageCopy,
   updatePhaseCopy,
   updateCompleteCopy,
   updateSlowComebackCopy,
@@ -289,6 +290,16 @@ describe('hostVersionCopy — B1 persistent host-version line', () => {
     const copy = hostVersionCopy('Hetzner box', '0.40.6')
     expect(copy).toContain('Hetzner box')
     expect(copy).toContain('v0.40.6')
+  })
+})
+
+describe('newerViaPackageCopy — 0.46.3 package installs', () => {
+  it('names the host and version, points at the package manager, never "up to date"', () => {
+    const copy = newerViaPackageCopy('arch box', '0.46.3')
+    expect(copy).toContain('arch box')
+    expect(copy).toContain('v0.46.3')
+    expect(copy).toContain('package manager')
+    expect(copy.toLowerCase()).not.toContain('up to date')
   })
 })
 

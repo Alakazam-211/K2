@@ -236,12 +236,11 @@ fn with_temp_home<F: FnOnce()>(f: F) {
     f();
 }
 
+/// A gateway port the daemon binds later: unique, outside the ephemeral
+/// range (not `bind(:0)`-then-drop, which another test can be handed
+/// meanwhile — "bind clash", 0.46.3).
 fn free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .expect("bind")
-        .local_addr()
-        .expect("addr")
-        .port()
+    k2_core::test_env::loopback_test_port()
 }
 
 fn port_up(port: u16) -> bool {

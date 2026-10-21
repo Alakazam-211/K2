@@ -458,6 +458,8 @@ pub const ROUTES: &[Route] = &[
     post("/cli/daemon/restart", Admin),
     post("/cli/daemon/update/apply", Admin),
     post("/cli/daemon/update/check", Admin),
+    // 0.46.3: cached latest-known version, readable by every login.
+    get("/cli/daemon/update/latest", Member),
     post("/cli/daemon/update/start", Admin),
     get("/cli/daemon/update/status", Admin),
     post("/cli/db/bind", Admin),
@@ -2094,6 +2096,7 @@ mod tests {
         ("/cli/agents/work/create", "410 Gone, no state"),
         ("/cli/agents/work/move", "410 Gone, no state"),
         ("/cli/work/inbox/create", "410 Gone, no state"),
+        ("/cli/daemon/update/latest", "reads the cached latest-known version; never fetches"),
         ("/cli/daemon/update/status", "reads the updater state"),
         ("/cli/project-config/has-run-command", "reads project config"),
         ("/cli/project-config/run-command", "returns the configured command string; never runs it"),

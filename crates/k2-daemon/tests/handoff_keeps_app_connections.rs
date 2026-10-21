@@ -157,12 +157,10 @@ fn read_trimmed(p: &Path) -> String {
         .to_string()
 }
 
+/// A port the App binds later: unique, outside the ephemeral range (not
+/// `bind(:0)`-then-drop, which another test can be handed meanwhile).
 fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
+    k2_core::test_env::loopback_test_port()
 }
 
 fn pid_alive(pid: i32) -> bool {

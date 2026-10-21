@@ -781,7 +781,8 @@ echo "  latest.json generated (darwin-aarch64; windows-x86_64 added after NSIS i
 #         "sig":    "<URL to the .sig asset>",
 #         "sha256": "<hex>"
 #       }, ...
-#     }
+#     },
+#     "notes": "<this version's WHATS_NEW.md section, markdown>"   (0.46.3)
 #   }
 # platform-key ∈ { macos-aarch64, linux-x86_64, linux-aarch64 }.
 echo ""
@@ -844,16 +845,17 @@ for LX in "linux-x86_64" "linux-aarch64"; do
     fi
 done
 
-cat > "$DIST_DIR/daemon-latest.json" <<MANIFEST
-{
-  "version": "${VERSION}",
-  "pub_date": "${PUB_DATE}",
-  "artifacts": {
-${ARTIFACTS_JSON}
-  }
-}
-MANIFEST
-echo "  daemon-latest.json generated at $DIST_DIR/daemon-latest.json"
+# 0.46.3: the manifest also carries `notes` (this version's WHATS_NEW.md
+# section), so a phone or remote host can show what's new before it
+# updates. scripts/daemon-manifest.sh, dry-tested by
+# tests/packaging/daemon-manifest.sh.
+# shellcheck source=daemon-manifest.sh
+source "$PROJECT_DIR/scripts/daemon-manifest.sh"
+k2_daemon_manifest "${VERSION}" "${PUB_DATE}" "${ARTIFACTS_JSON}" "$PROJECT_DIR/WHATS_NEW.md" \
+    > "$DIST_DIR/daemon-latest.json"
+grep -q '"notes"' "$DIST_DIR/daemon-latest.json" \
+    || { echo "ERROR: daemon-latest.json has no notes (WHATS_NEW.md '## ${VERSION}' section?)" >&2; exit 1; }
+echo "  daemon-latest.json generated at $DIST_DIR/daemon-latest.json (with notes)"
 
 # ── Step 8.55: Standalone k2-node for macOS (prd-k2-node-admin-v1 §8.2) ──
 # A Mac compute node runs /Library/Application Support/K2/node/k2-node,

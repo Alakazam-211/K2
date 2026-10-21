@@ -229,6 +229,9 @@ pub struct Node {
     pub admin_updates: crate::admin::courier::IncomingUpdates,
     /// The node queue (shared nodes; prd-compute-shared-queue-v1 §7).
     pub fairq: crate::fairq::FairQ,
+    /// `k2-node` is shutting down: nothing new starts (queued jobs stay
+    /// queued for the next start; new assigns are refused).
+    stopping: std::sync::atomic::AtomicBool,
 }
 
 /// What this node understands beyond protocol 1 (the offer says it).
@@ -294,6 +297,7 @@ impl Node {
             stuck_track: Default::default(),
             updates_refreshing: Default::default(),
             fairq: crate::fairq::FairQ::open(&layout)?,
+            stopping: std::sync::atomic::AtomicBool::new(false),
             opts,
         });
         node.refresh_local(true);
@@ -548,6 +552,17 @@ impl Node {
             }
         }
         out
+    }
+
+    /// The process is about to stop: from now on nothing new starts. Call
+    /// before stopping the running jobs, or the capacity they free starts
+    /// queued work during the shutdown.
+    pub fn begin_shutdown(&self) {
+        self.stopping.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    pub fn is_stopping(&self) -> bool {
+        self.stopping.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Stop every running job (the machine owner's stop, pause-now,

@@ -68,5 +68,7 @@ fn servers_list_pause_resume_and_root_only_verbs() {
     assert!(!ok && err.contains("sudo"), "{err}");
     let (ok, _, err) = run(&["servers", "revoke", "z3thon.k2.dev", "--home", h, "--config-dir", c]);
     assert!(!ok && err.contains("sudo"), "{err}");
+    let (ok, _, err) = run(&["servers", "prune", "--home", h, "--config-dir", c]);
+    assert!(!ok && err.contains("sudo"), "prune writes root's records too: {err}");
     assert_eq!(servers::read_file(&cfg).unwrap().unwrap().entry(1).unwrap().state, ShareState::Active);
 }

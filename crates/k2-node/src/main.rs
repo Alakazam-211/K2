@@ -44,6 +44,7 @@ More than one K2 server (0.46.3; the machine owner, at this machine):
   k2-node servers limits <server> [key=value...] [--weight N] [--for 7d|none]   (keys as the add flags)
   k2-node servers pause|resume <server>
   sudo k2-node servers revoke <server> [--now] [--wipe]
+  sudo k2-node servers prune                             promote confirmed adds, drop stale ones, wipe due slots now
   (<server> is a label, e.g. baden.k2.dev, or slot:<n>; the new server mints CODE.FP
    with `k2 compute node add <this node>`; then read it the SAS that `servers` shows)
   k2-node install-files --os linux|macos --binary PATH --home DIR --config-dir DIR --user NAME --group NAME --out DIR
@@ -215,6 +216,9 @@ async fn cmd_run(a: &Args) -> Result<(), String> {
     } else {
         "node_shutdown"
     };
+    // Nothing new starts from here: the capacity the stops free must not
+    // start queued work during the shutdown.
+    node.begin_shutdown();
     node.stop_all(k2_node_proto::frames::JobState::Interrupted, why);
     // Give jobs their SIGTERM grace (10 s) to finish and record a receipt.
     for _ in 0..60 {
@@ -512,7 +516,13 @@ fn cmd_servers(a: &Args) -> Result<(), String> {
             let args = share::RevokeArgs { server: server()?, now: a.has("--now"), wipe: a.has("--wipe") };
             servers::run(&ctx, share::VERB_REVOKE, &serde_json::to_value(&args).map_err(|e| e.to_string())?)
         }
-        Some(o) => return Err(format!("servers {o:?}: use list, add, limits, pause, resume, revoke")),
+        // What the executor does every 30 s on its own (promote confirmed
+        // adds, drop expired pending lines, wipe due slots), now.
+        Some("prune") => {
+            need_root("prune")?;
+            servers::prune(&ctx)
+        }
+        Some(o) => return Err(format!("servers {o:?}: use list, add, limits, pause, resume, revoke, prune")),
     };
     match r {
         Ok(v) => {

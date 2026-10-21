@@ -114,9 +114,69 @@ pub fn list_seeds(conn: &Connection) -> rusqlite::Result<Vec<SeedRow>> {
     Ok(v)
 }
 
-/// Seeds still referenced: any App's live or preview Seed, or a Seed in
-/// one of an App's last `keep_deployments` deployments (§7.1).
+/// Seeds still referenced: any App's live or preview Seed, a Seed in one
+/// of an App's last `keep_deployments` deployments (§7.1), a Seed of an
+/// unfinished deployment (`pending` / `starting`), and any Seed a
+/// **pending** held request names (0.46.3, prd-app-resources-disk-guard-v1
+/// §9.1: a held deploy or install carries `seed`, a held `manage` replay
+/// `body.seed`; any hex string of 8+ characters in a pending request's body
+/// keeps every Seed it is a prefix of, so a new request shape can't lose
+/// its Seed). The held-request table must exist: a database without it
+/// is an error, never "nothing pending".
 pub fn referenced_seeds(conn: &Connection, keep_deployments: usize) -> rusqlite::Result<std::collections::BTreeSet<String>> {
+    let mut out = referenced_by_apps(conn, keep_deployments)?;
+    let mut st = conn.prepare("SELECT from_seed, to_seed FROM deployments WHERE result IN ('pending', 'starting')")?;
+    let rows = st.query_map([], |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<String>>(1)?)))?;
+    for r in rows {
+        let (a, b) = r?;
+        out.extend(a);
+        out.extend(b);
+    }
+    let mut tokens = std::collections::BTreeSet::new();
+    let mut st = conn.prepare("SELECT body_json FROM app_widenings WHERE status = 'pending'")?;
+    for body in st.query_map([], |r| r.get::<_, String>(0))? {
+        let body = body?;
+        match serde_json::from_str::<J>(&body) {
+            Ok(v) => hex_tokens(&v, &mut tokens),
+            // Unreadable: keep anything its text could name.
+            Err(_) => {
+                for w in body.split(|c: char| !c.is_ascii_hexdigit()) {
+                    if w.len() >= 8 {
+                        tokens.insert(w.to_ascii_lowercase());
+                    }
+                }
+            }
+        }
+    }
+    if !tokens.is_empty() {
+        let mut st = conn.prepare("SELECT hash FROM seeds")?;
+        for h in st.query_map([], |r| r.get::<_, String>(0))? {
+            let h = h?;
+            if tokens.iter().any(|t| h.starts_with(t.as_str())) {
+                out.insert(h);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Every hex string of 8–64 characters anywhere in `v` (lowercased).
+fn hex_tokens(v: &J, out: &mut std::collections::BTreeSet<String>) {
+    match v {
+        J::String(s) => {
+            let t = s.trim();
+            if (8..=64).contains(&t.len()) && t.bytes().all(|b| b.is_ascii_hexdigit()) {
+                out.insert(t.to_ascii_lowercase());
+            }
+        }
+        J::Array(a) => a.iter().for_each(|x| hex_tokens(x, out)),
+        J::Object(m) => m.values().for_each(|x| hex_tokens(x, out)),
+        _ => {}
+    }
+}
+
+/// Live, preview and the last `keep_deployments` deployments' Seeds.
+fn referenced_by_apps(conn: &Connection, keep_deployments: usize) -> rusqlite::Result<std::collections::BTreeSet<String>> {
     let mut out = std::collections::BTreeSet::new();
     let mut st = conn.prepare("SELECT live_seed, preview_seed FROM apps")?;
     let rows = st.query_map([], |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<String>>(1)?)))?;
@@ -137,18 +197,57 @@ pub fn referenced_seeds(conn: &Connection, keep_deployments: usize) -> rusqlite:
     Ok(out)
 }
 
-/// The sweep (§7.1): Seeds not referenced and unused for `max_age_secs`.
-/// Removes the tree and the row; returns the hashes removed. Open
-/// widening requests (0151, stage 3) will join the referenced set.
-pub fn sweep_seeds(conn: &Connection, now: i64, max_age_secs: i64, keep_deployments: usize) -> rusqlite::Result<Vec<String>> {
+/// What the sweep keeps every Seed for (prd-app-resources-disk-guard-v1
+/// §9.1): 30 days unused, and the last 10 deployments of every App.
+pub const SWEEP_MAX_AGE_SECS: i64 = 30 * 86_400;
+pub const SWEEP_KEEP_DEPLOYMENTS: usize = 10;
+
+/// The Seeds the sweep would remove now: not referenced
+/// ([`referenced_seeds`]) and unused for `max_age_secs`. Reads only (the
+/// caller holds the DB lock for this pick, never for the deletes).
+pub fn sweep_candidates(conn: &Connection, now: i64, max_age_secs: i64, keep_deployments: usize) -> rusqlite::Result<Vec<SeedRow>> {
     let keep = referenced_seeds(conn, keep_deployments)?;
-    let mut removed = Vec::new();
-    for s in list_seeds(conn)? {
-        if keep.contains(&s.hash) || now - s.last_used_at < max_age_secs {
-            continue;
+    Ok(list_seeds(conn)?.into_iter().filter(|s| !keep.contains(&s.hash) && now - s.last_used_at >= max_age_secs).collect())
+}
+
+/// Take one candidate out of the store, fast enough to run under the DB
+/// lock: check again that it is still a candidate (a deploy may have
+/// started using it since the pick), move its tree aside (one rename, out
+/// of the store's name: a build of the same tree stores a fresh copy), and
+/// delete its row. `Ok(None)` = no longer a candidate (kept). The caller
+/// removes the returned tree with [`super::seed::remove_detached`] **after**
+/// releasing the lock.
+pub fn detach_seed(
+    conn: &Connection,
+    hash: &str,
+    now: i64,
+    max_age_secs: i64,
+    keep_deployments: usize,
+) -> rusqlite::Result<Option<std::path::PathBuf>> {
+    let Some(row) = get_seed(conn, hash)? else { return Ok(None) };
+    if now - row.last_used_at < max_age_secs || referenced_seeds(conn, keep_deployments)?.contains(hash) {
+        return Ok(None);
+    }
+    let aside = match super::seed::detach_tree(hash) {
+        Ok(p) => p,
+        Err(e) => {
+            crate::log_debug!("[seeds] sweep kept {hash}: {}", e.message);
+            return Ok(None);
         }
-        if super::seed::remove_tree(&s.hash).is_ok() {
-            conn.execute("DELETE FROM seeds WHERE hash = ?1", params![s.hash])?;
+    };
+    conn.execute("DELETE FROM seeds WHERE hash = ?1", params![hash])?;
+    Ok(Some(aside))
+}
+
+/// The sweep in one call, on the caller's connection: pick, detach,
+/// remove. Returns the hashes removed. The daemon's daily sweep does the
+/// same steps but holds the shared DB lock only for the pick and each
+/// detach, never while deleting a tree (`apps::disk_watch`).
+pub fn sweep_seeds(conn: &Connection, now: i64, max_age_secs: i64, keep_deployments: usize) -> rusqlite::Result<Vec<String>> {
+    let mut removed = Vec::new();
+    for s in sweep_candidates(conn, now, max_age_secs, keep_deployments)? {
+        if let Some(aside) = detach_seed(conn, &s.hash, now, max_age_secs, keep_deployments)? {
+            super::seed::remove_detached(&aside);
             removed.push(s.hash);
         }
     }
@@ -546,7 +645,121 @@ pub(crate) mod tests {
             .unwrap();
         c.execute_batch(include_str!("../../drizzle_sql/0170_app_walls_lite.sql").replace("--> statement-breakpoint", "").as_str())
             .unwrap();
+        // The held-request table the Seed keep set reads (0168's
+        // `app_widenings`; the rest of 0168 needs tables this fixture lacks).
+        for stmt in include_str!("../../drizzle_sql/0168_app_grace.sql").split("--> statement-breakpoint") {
+            if stmt.contains("CREATE TABLE IF NOT EXISTS app_widenings") || stmt.contains("ON app_widenings") {
+                c.execute_batch(stmt).unwrap();
+            }
+        }
         c
+    }
+
+    /// A held request (0168's CHECK predates 0183's door kinds; the keep
+    /// set reads only the body and status, so `config` stands in).
+    fn held(c: &Connection, id: &str, body: &str, status: &str) {
+        c.execute(
+            "INSERT INTO app_widenings (id, kind, app_id, app_label, workspace_id, body_json, diff_json, summary, reasons_json, requested_by, requested_at, expires_at, status) \
+             VALUES (?1, 'config', 'jim', 'jim', 'ws', ?2, '{}', 's', '[]', 'agent:ws', 1, 9999999999, ?3)",
+            params![id, body, status],
+        )
+        .unwrap();
+    }
+
+    fn store_tree(h: &crate::test_env::TempHome, c: &Connection, name: &str, body: &str, at: i64) -> String {
+        let f = h.path().join(name);
+        std::fs::create_dir_all(&f).unwrap();
+        std::fs::write(f.join("s.js"), body).unwrap();
+        let st = super::super::seed::store_folder(&f, &std::collections::BTreeSet::new()).unwrap();
+        let mut row = seed('0', at);
+        row.hash = st.hash.clone();
+        row.size_bytes = st.size_bytes as i64;
+        upsert_seed(c, &row).unwrap();
+        c.execute("UPDATE seeds SET last_used_at = ?2 WHERE hash = ?1", params![st.hash, at]).unwrap();
+        st.hash
+    }
+
+    /// 0.46.3 (prd-app-resources-disk-guard-v1 §9.1, G7): the sweep keeps
+    /// live, preview, the last 10 deployments, unfinished deployments and
+    /// every Seed a pending held request names (`seed`, a `manage`
+    /// replay's `body.seed`, an 8+ hex prefix); a decided request keeps
+    /// nothing. It removes the rest, both tree and row.
+    #[test]
+    fn the_sweep_keeps_what_a_pending_request_or_unfinished_deployment_needs() {
+        let h = crate::test_env::TempHome::new();
+        let c = conn();
+        let old = 1_000;
+        let now = old + SWEEP_MAX_AGE_SECS + 1;
+        let live = store_tree(&h, &c, "live", "1", old);
+        let held_deploy = store_tree(&h, &c, "hd", "2", old);
+        let held_manage = store_tree(&h, &c, "hm", "3", old);
+        let held_prefix = store_tree(&h, &c, "hp", "4", old);
+        let unfinished = store_tree(&h, &c, "uf", "5", old);
+        let denied = store_tree(&h, &c, "dn", "6", old);
+        let gone = store_tree(&h, &c, "gone", "7", old);
+        let fresh = store_tree(&h, &c, "fresh", "8", now - 60);
+        insert_app(
+            &c,
+            &NewApp {
+                app_id: "jim",
+                service_id: "svc-1",
+                seed_id: Some("jim"),
+                owner_workspace: "ws",
+                isolation: "process",
+                memory_limit_bytes: None,
+                front_port: 40000,
+                created_by: "owner",
+            },
+        )
+        .unwrap();
+        set_live(&c, "jim", Some(&live), None).unwrap();
+        // 11 finished deployments of other Seeds push `unfinished` out of the
+        // last 10; it is kept only because its own deployment is pending.
+        let dep = insert_deployment(
+            &c,
+            &NewDeployment { app_id: "jim", kind: KIND_DEPLOY, from_seed: None, to_seed: Some(&unfinished), commit_ref: None, actor: "owner", reason: None },
+        )
+        .unwrap();
+        c.execute("UPDATE deployments SET started_at = 1 WHERE id = ?1", params![dep]).unwrap();
+        for i in 0..11 {
+            let d = insert_deployment(
+                &c,
+                &NewDeployment { app_id: "jim", kind: KIND_DEPLOY, from_seed: None, to_seed: Some(&live), commit_ref: None, actor: "owner", reason: None },
+            )
+            .unwrap();
+            c.execute("UPDATE deployments SET started_at = ?2, result = 'live' WHERE id = ?1", params![d, 100 + i]).unwrap();
+        }
+        held(&c, "r1", &format!(r#"{{"app":"jim","seed":"{held_deploy}"}}"#), "pending");
+        held(&c, "r2", &format!(r#"{{"route":"/cli/app/deploy","body":{{"app":"jim","seed":"{held_manage}"}}}}"#), "pending");
+        held(&c, "r3", &format!(r#"{{"route":"/cli/app/deploy","body":{{"seed":"{}"}}}}"#, &held_prefix[..10]), "pending");
+        held(&c, "r4", &format!(r#"{{"seed":"{denied}"}}"#), "denied");
+        let picks: Vec<String> = sweep_candidates(&c, now, SWEEP_MAX_AGE_SECS, SWEEP_KEEP_DEPLOYMENTS).unwrap().into_iter().map(|s| s.hash).collect();
+        let mut want = vec![denied.clone(), gone.clone()];
+        want.sort();
+        let mut got = picks.clone();
+        got.sort();
+        assert_eq!(got, want, "only the decided request's Seed and the unreferenced one");
+        // A deploy starts using `gone` between the pick and the detach: kept.
+        touch_seed(&c, &gone, now).unwrap();
+        assert_eq!(detach_seed(&c, &gone, now, SWEEP_MAX_AGE_SECS, SWEEP_KEEP_DEPLOYMENTS).unwrap(), None);
+        assert!(super::super::seed::seed_path(&gone).is_dir());
+        let removed = sweep_seeds(&c, now, SWEEP_MAX_AGE_SECS, SWEEP_KEEP_DEPLOYMENTS).unwrap();
+        assert_eq!(removed, vec![denied.clone()]);
+        assert!(!super::super::seed::seed_path(&denied).exists());
+        assert!(get_seed(&c, &denied).unwrap().is_none());
+        for kept in [&live, &held_deploy, &held_manage, &held_prefix, &unfinished, &gone, &fresh] {
+            assert!(super::super::seed::seed_path(kept).is_dir(), "{kept}");
+            assert!(get_seed(&c, kept).unwrap().is_some(), "{kept}");
+        }
+        let leftovers: Vec<_> = std::fs::read_dir(super::super::seeds_dir())
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with(super::super::seed::DETACHED_PREFIX))
+            .collect();
+        assert!(leftovers.is_empty(), "the detached tree was removed");
+        // No held-request table: an error, never "nothing pending".
+        c.execute_batch("DROP TABLE app_widenings").unwrap();
+        assert!(sweep_candidates(&c, now, SWEEP_MAX_AGE_SECS, SWEEP_KEEP_DEPLOYMENTS).is_err());
     }
 
     pub(crate) fn seed(hash_char: char, at: i64) -> SeedRow {

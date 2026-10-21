@@ -896,6 +896,42 @@ pub fn handle_mail_manage(body: &[u8]) -> crate::cli_response::CliResponse {
     }
 }
 
+/// The route-level entry for `POST /cli/mail-manage` as `who` (permission
+/// cards, prd-agent-settings-cards-v1 §6.4, C15). The route's floor lives
+/// in the dispatcher (`token_is_owner_or_admin`) and route_policy (Admin);
+/// both are checked again here with the answerer's current role, then
+/// [`handle_mail_manage`] runs as on the Settings door.
+pub(crate) fn mail_manage_entry(
+    who: &crate::permission::actions::Answerer,
+    project_path: &str,
+    enable: bool,
+) -> crate::cli_response::CliResponse {
+    if let Err(r) = crate::permission::actions::switches::route_floor(who, "/cli/mail-manage") {
+        return r;
+    }
+    if !crate::permission::actions::switches::owner_or_admin(who) {
+        // The dispatcher's answer to a person below owner-or-admin.
+        return crate::cli_response::CliResponse::forbidden();
+    }
+    handle_mail_manage(serde_json::json!({ "project": project_path, "enable": i64::from(enable) }).to_string().as_bytes())
+}
+
+/// The route-level entry for "Let this agent send email": `POST
+/// /cli/mail/config/set {workspace, agentSend}` (what Settings writes), as
+/// `who` (route_policy's Admin floor, checked again here).
+pub(crate) fn mail_send_mode_entry(
+    who: &crate::permission::actions::Answerer,
+    project_path: &str,
+    mode: &str,
+) -> crate::cli_response::CliResponse {
+    if let Err(r) = crate::permission::actions::switches::route_floor(who, "/cli/mail/config/set") {
+        return r;
+    }
+    routes_server::handle_config_set(
+        serde_json::json!({ "workspace": project_path, "agentSend": mode }).to_string().as_bytes(),
+    )
+}
+
 // ──────────────────────────────────────────────────────────────────────
 // Inline unit tests — shim wiring
 // ──────────────────────────────────────────────────────────────────────

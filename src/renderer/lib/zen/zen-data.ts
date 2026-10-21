@@ -1797,6 +1797,26 @@ function rowsSubscribe(ctx: ZenVerbCtx, cb: (rows: ZenAgentRow[]) => void): () =
   }
 }
 
+/** Permission cards (0.46.3, D1): the card `cardId` on `address`'s open
+ *  conversation and the Thread's own server, for K2's sheet outside a
+ *  widget's frame. Null when the conversation isn't open or the item isn't
+ *  on screen. */
+export function zenThreadItemTarget(
+  address: string,
+  cardId: string,
+): { item: OverlayThreadItem; scope: ServerScope; threadAddr: string } | null {
+  const c = conversations.get(address)
+  if (!c || c.phase !== 'ready' || !c.scope || !c.threadAddr) return null
+  const item = feedViews.get(address)?.items.find((it) => it.id === cardId)
+  return item ? { item, scope: c.scope, threadAddr: c.threadAddr } : null
+}
+
+/** Every change to `address`'s Thread view (keeps its feed live while
+ *  subscribed): K2's permission sheet follows the card it shows. */
+export function onZenThreadChange(address: string, cb: () => void): () => void {
+  return threadSubscribe(address, () => cb())
+}
+
 function threadSubscribe(address: string, cb: (view: ZenThreadView) => void): () => void {
   let subs = threadListeners.get(address)
   if (!subs) {

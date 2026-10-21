@@ -282,6 +282,7 @@ pub mod workspace_resources_routes;
 pub mod workspace_routes;
 pub mod overlay_routes;
 pub mod overlay_ws;
+pub mod room_stream_ws;
 pub mod fs_events_ws;
 pub mod activity_events_ws;
 pub mod chat_overlay_ws;

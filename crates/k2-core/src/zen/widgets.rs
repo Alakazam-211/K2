@@ -62,6 +62,7 @@ pub const KNOWN_FEATURES: &[&str] = &[
     "thread-read-v1",
     "thread-attachments-v1",
     "thread-delta-v1",
+    "thread-stream-v1",
 ];
 
 /// A widget's manifest after checking (UW5, UWA7, UWB13).

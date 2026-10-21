@@ -2074,6 +2074,52 @@ async fn handle_one_request(
             crate::overlay_ws::serve_overlay_events_connection(stream, params, skin_ws, viewer_login).await;
             return DispatchOutcome::Done;
         }
+        // app-room-stream (0.46.3): one Thread stream across every room the
+        // caller may read, beside the per-room overlay socket above. An App
+        // pass (`?token=` or `Authorization: Bearer`) with `thread:read`
+        // admitted at the door (each room is checked in the handler, on
+        // every frame), or a login. Passports and everything else: 403.
+        p if p == crate::room_stream_ws::ROOM_STREAM_WS_PATH => {
+            let presented = super::http::extract_token(&query)
+                .map(str::to_string)
+                .or_else(|| bearer_token.clone());
+            let viewer = match presented.as_deref() {
+                Some(raw) if k2_core::skin::is_skin_token(raw) => {
+                    match crate::apps::gateway::resolve_pass(raw) {
+                        Some(pass) if pass.dispatcher_admits_cap(crate::skin_routes::THREAD_READ) => {
+                            crate::room_stream_ws::Viewer::Guest { raw: raw.to_string() }
+                        }
+                        Some(_) => {
+                            let _ = stream.read(&mut buf).await;
+                            let r = crate::skin_routes::missing_cap_response(crate::skin_routes::THREAD_READ);
+                            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                            return DispatchOutcome::Done;
+                        }
+                        None => {
+                            let _ = stream.read(&mut buf).await;
+                            let r = crate::skin_routes::revoked_skin_response();
+                            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                            return DispatchOutcome::Done;
+                        }
+                    }
+                }
+                _ if super::http::token_ok(&query, state.token.as_str()) => crate::room_stream_ws::Viewer::Login,
+                _ => {
+                    let _ = stream.read(&mut buf).await;
+                    super::http::send_response(
+                        &mut *stream,
+                        "403 Forbidden",
+                        "application/json",
+                        r#"{"error":"invalid or missing token"}"#,
+                    )
+                    .await;
+                    return DispatchOutcome::Done;
+                }
+            };
+            let params = super::http::parse_params(&path, &query);
+            crate::room_stream_ws::serve_room_stream_connection(stream, params, viewer).await;
+            return DispatchOutcome::Done;
+        }
         p if p == crate::fs_events_ws::FS_EVENTS_WS_PATH => {
             // Dedicated files WS. Never `/cli/sessions/events`. Skin: live
             // `k2skn_` + files:read; rooms 403 before accept_async in the

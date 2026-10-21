@@ -455,6 +455,13 @@ fn homes_sync_ready() -> bool {
 /// WS frames). No SQL migration.
 pub const FEATURE_INBOX_CATCHUP: &str = "inbox-catchup-v1";
 
+/// One live Thread stream across rooms (app-room-stream, 0.46.3):
+/// `WS /cli/thread/stream?rooms=all|<ids>` for an App pass (helper, link,
+/// main port) or a login, frames in the inbox stream format
+/// (`thread.stream` on the App surface and the Garden bridge). No SQL
+/// migration.
+pub const FEATURE_THREAD_STREAM: &str = "thread-stream-v1";
+
 /// True when the notify prefs tables exist in the daemon DB.
 fn thread_push_ready() -> bool {
     k2_core::db::try_shared()
@@ -509,6 +516,7 @@ pub fn features() -> Vec<&'static str> {
     if k2_core::db::try_shared().is_some() {
         out.push(FEATURE_INBOX_CATCHUP);
     }
+    out.push(FEATURE_THREAD_STREAM);
     out
 }
 
@@ -565,7 +573,8 @@ mod tests {
                 "push-previews-v1",
                 "thread-read-v1",
                 "homes-sync-v1",
-                "inbox-catchup-v1"
+                "inbox-catchup-v1",
+                "thread-stream-v1"
             ]
         );
     }

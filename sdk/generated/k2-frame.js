@@ -34,6 +34,7 @@
       'presence.subscribe': Object.freeze({ cap: 'presence:read', reach: 'local', kind: 'subscribe', feature: 'zen-v1' }),
       'thread.read': Object.freeze({ cap: 'thread:read', reach: 'portable', kind: 'call', feature: 'zen-v1' }),
       'thread.subscribe': Object.freeze({ cap: 'thread:read', reach: 'portable', kind: 'subscribe', feature: 'zen-v1' }),
+      'thread.inbox': Object.freeze({ cap: 'thread:read', reach: 'portable', kind: 'subscribe', feature: 'thread-stream-v1' }),
       'thread.post': Object.freeze({ cap: 'thread:post', reach: 'portable', kind: 'call', feature: 'zen-v1' }),
       'thread.answer': Object.freeze({ cap: 'thread:post', reach: 'portable', kind: 'call', feature: 'zen-v1' }),
       'compose.draft': Object.freeze({ cap: 'thread:post', reach: 'local', kind: 'call', feature: 'zen-v1' }),

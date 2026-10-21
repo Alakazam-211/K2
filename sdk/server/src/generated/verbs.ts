@@ -170,6 +170,17 @@ export const APP_VERBS = {
     responseNames: {},
     response: {"additionalProperties":false,"properties":{"collection":{"type":"string"},"doc":{"additionalProperties":false,"properties":{"author":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"body":{"type":"string"},"choice":{"additionalProperties":false,"properties":{"allow_custom":{"type":"boolean"},"answer":{"type":"string"},"answeredAt":{"type":"integer"},"answeredBy":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"expiresAt":{"type":"integer"},"options":{"items":{"additionalProperties":false,"properties":{"label":{"type":"string"}},"type":"object"},"type":"array"},"prompt":{"type":"string"},"status":{"type":"string"}},"type":"object"},"created_at":{"type":"number"},"from":{"type":"string"},"id":{"type":"string"},"kind":{"type":"string"},"secret":{"additionalProperties":false,"properties":{"answeredAt":{"type":"integer"},"answeredBy":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"delivery":{"type":"string"},"expiresAt":{"type":"integer"},"hosts":{"items":{"type":"string"},"type":"array"},"name":{"type":"string"},"prompt":{"type":"string"},"ref":{"type":"string"},"scope":{"type":"string"},"secretKind":{"type":"string"},"status":{"type":"string"}},"type":"object"},"to":{"type":"string"},"via":{"type":"string"},"widget":{"additionalProperties":false,"properties":{"garden":{"type":"string"},"widget":{"type":"string"}},"type":"object"}},"type":"object"},"id":{"type":"string"},"seq":{"type":"integer"}},"type":"object"},
   },
+  'thread.stream': {
+    cap: 'thread:read',
+    effect: 'read',
+    kind: 'subscribe',
+    feature: 'thread-stream-v1',
+    door: 'both',
+    http: null,
+    socket: { path: '/cli/thread/stream', param: 'rooms', frame: 'thread_message', refetch: 'thread.page' },
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"all":{"type":"boolean"},"bodyBytes":{"type":"integer"},"code":{"type":"string"},"collection":{"type":"string"},"conversation":{"type":"string"},"conversations":{"items":{"type":"string"},"type":"array"},"doc":{"additionalProperties":false,"properties":{"author":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"body":{"type":"string"},"choice":{"additionalProperties":false,"properties":{"allow_custom":{"type":"boolean"},"answer":{"type":"string"},"answeredAt":{"type":"integer"},"answeredBy":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"expiresAt":{"type":"integer"},"options":{"items":{"additionalProperties":false,"properties":{"label":{"type":"string"}},"type":"object"},"type":"array"},"prompt":{"type":"string"},"status":{"type":"string"}},"type":"object"},"created_at":{"type":"number"},"from":{"type":"string"},"id":{"type":"string"},"kind":{"type":"string"},"secret":{"additionalProperties":false,"properties":{"answeredAt":{"type":"integer"},"answeredBy":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"delivery":{"type":"string"},"expiresAt":{"type":"integer"},"hosts":{"items":{"type":"string"},"type":"array"},"name":{"type":"string"},"prompt":{"type":"string"},"ref":{"type":"string"},"scope":{"type":"string"},"secretKind":{"type":"string"},"status":{"type":"string"}},"type":"object"},"to":{"type":"string"},"via":{"type":"string"},"widget":{"additionalProperties":false,"properties":{"garden":{"type":"string"},"widget":{"type":"string"}},"type":"object"}},"type":"object"},"hint":{"type":"string"},"id":{"type":"string"},"kind":{"enum":["inbox_subscribed","thread_message","inbox_error","inbox_reset"]},"limit":{"type":"integer"},"max":{"type":"integer"},"reason":{"type":"string"},"resolved":{"additionalProperties":{"type":"string"},"type":"object"},"rev":{"type":"integer"},"room":{"type":"string"},"rooms":{"items":{"type":"string"},"type":"array"},"seq":{"type":"integer"},"truncated":{"type":"boolean"},"unknown":{"items":{"type":"string"},"type":"array"}},"type":"object"},
+  },
   'thread.ensurePinned': {
     cap: 'thread:read',
     effect: 'read',
@@ -1009,6 +1020,40 @@ export interface AppCardVoided {
   readonly status: string
 }
 
+export interface AppStreamFrame {
+  readonly all?: boolean
+  readonly bodyBytes?: number
+  /** inbox_error: usage, too_many or too_many_subscriptions. */
+  readonly code?: string
+  /** Always thread. */
+  readonly collection?: string
+  /** The room's pinned Chat (the conversation thread.page answers for it). */
+  readonly conversation?: string
+  /** inbox_subscribed: their pinned Chats, in the same order. */
+  readonly conversations?: string[]
+  readonly doc?: AppThreadDoc
+  readonly hint?: string
+  readonly id?: string
+  readonly kind: 'inbox_subscribed' | 'thread_message' | 'inbox_error' | 'inbox_reset'
+  readonly limit?: number
+  readonly max?: number
+  /** inbox_reset: lagged; catch up with thread.page sinceSeq (or POST /cli/thread/catchup). */
+  readonly reason?: string
+  /** inbox_subscribed: room id to its pinned Chat. */
+  readonly resolved?: Record<string, string>
+  /** This socket's own counter, not a time: a later frame has a higher rev; it restarts with the socket. */
+  readonly rev?: number
+  /** The room (its id in me.get) the item is in. */
+  readonly room?: string
+  /** inbox_subscribed: the rooms this socket streams now. */
+  readonly rooms?: string[]
+  readonly seq?: number
+  /** Over 32 KiB: the body (or the whole doc) was left off; read the item with thread.page. */
+  readonly truncated?: boolean
+  /** inbox_subscribed: asked-for ids this pass can't read (the same whether or not they exist). */
+  readonly unknown?: string[]
+}
+
 export interface AppPinnedChat {
   readonly freshSpawn: boolean
   readonly pendingSessionDiscovery: boolean
@@ -1650,6 +1695,7 @@ export interface AppVerbs {
   'thread.answerCard': { args: { addr: string; answer?: string; cardId: string; confirm?: boolean; delivery?: string; hosts?: string[]; scope?: string; secret?: string }; value: AppCardAnswered }
   'thread.voidCard': { args: { addr: string; cardId: string }; value: AppCardVoided }
   'thread.events': { args: { conversation: string }; value: AppThreadItem }
+  'thread.stream': { args: { rooms: string }; value: AppStreamFrame }
   'thread.ensurePinned': { args: { workspace: string }; value: AppPinnedChat }
   'files.list': { args: { relPath: string; showHidden?: boolean; workspace: string }; value: AppFileEntry[] }
   'files.read': { args: { relPath: string; workspace: string }; value: AppFileText }
@@ -1707,7 +1753,7 @@ export interface AppVerbs {
 }
 
 export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'guests.rooms' | 'guests.setRooms' | 'thread.page' | 'thread.latest' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage' | 'chat.pass'
-export type AppSubscribeVerb = 'thread.events' | 'files.events' | 'activity.events'
+export type AppSubscribeVerb = 'thread.events' | 'thread.stream' | 'files.events' | 'activity.events'
 
 /** The named helpers: one per App verb a server calls (browser-only rows have none), grouped by surface. */
 export interface AppSurfaces {
@@ -1740,6 +1786,8 @@ export interface AppSurfaces {
     voidCard(args: { addr: string; cardId: string }): Promise<AppCardVoided>
     /** Live Thread items of one room (new posts and card changes; merge by id); after a gap, thread.page with sinceSeq. cap thread:read · WS /cli/overlay/events?conversation=. e.g. `const off = k2.thread.events({conversation}, (item) => draw(item))` */
     events(args: { conversation: string }, onFrame: (frame: AppThreadItem) => void, onError?: (error: K2Error) => void): () => void
+    /** Live Thread items of every room the pass may read on one socket (inbox_subscribed names the set; grants and revokes apply live); after a gap, thread.page with sinceSeq. cap thread:read · WS /cli/thread/stream?rooms=. e.g. `const off = k2.thread.stream({rooms: 'all'}, (f) => f.kind === 'thread_message' && draw(f.room, f))` */
+    stream(args: { rooms: string }, onFrame: (frame: AppStreamFrame) => void, onError?: (error: K2Error) => void): () => void
     /** Check the room's pinned Chat is live (find-only for Apps: it never starts one). cap thread:read · POST /cli/workspace/ensure-pinned-chat. e.g. `await k2.thread.ensurePinned({workspace: 'sales'})` */
     ensurePinned(args: { workspace: string }): Promise<AppPinnedChat>
   }

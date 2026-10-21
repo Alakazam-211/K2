@@ -787,15 +787,15 @@ mod tests {
     #[test]
     fn zen_verbs_is_todays_37_plus_nothing_else() {
         let rows = bridge_rows(catalog());
-        assert_eq!(rows.len(), 37, "today's ZEN_VERBS has 37 entries");
+        assert_eq!(rows.len(), 38, "today's ZEN_VERBS has 37 entries, plus app-room-stream's thread.inbox (0.46.3)");
         assert!(!rows.iter().any(|v| v.verb == "theme.changed"), "a frame row is never in ZEN_VERBS");
         let widget: Vec<&str> = catalog().widget_callable_verbs().iter().map(|v| v.verb.as_str()).collect();
         assert_eq!(
             widget.len(),
-            45,
-            "UW16 + UWB10: 16 widget verbs, plus the whole canvas (canvas.setHitRegions, window.startDrag), plus Garden v3's six sources.* verbs, plus Garden data's 15 garden-local rows, plus RS-A15's guests.rooms / guests.setRooms (app + garden-local), plus room-scope 0.46.1's room.members, app.self, app.usage and widget.self"
+            46,
+            "UW16 + UWB10: 16 widget verbs, plus the whole canvas (canvas.setHitRegions, window.startDrag), plus Garden v3's six sources.* verbs, plus Garden data's 15 garden-local rows, plus RS-A15's guests.rooms / guests.setRooms (app + garden-local), plus room-scope 0.46.1's room.members, app.self, app.usage and widget.self, plus app-room-stream's thread.inbox (0.46.3)"
         );
-        assert_eq!(catalog().verbs_exposed_to(Exposure::Widget).len(), 24, "the bridge's own rows");
+        assert_eq!(catalog().verbs_exposed_to(Exposure::Widget).len(), 25, "the bridge's own rows (thread.inbox joined in 0.46.3)");
         for never in ["zen.exit", "controls.bind", "homes.list", "agents.local", "agents.add", "agents.home", "agents.setHome",
             "thread.void", "thread.markRead", "gardens.create", "gardens.rename", "gardens.delete", "app.open"]
         {

@@ -128,6 +128,7 @@ import { zenWidgetMayRun, type ZenCustomWidgetPayload } from './zen-custom-types
 import { useZenGardensStore } from './zen-gardens'
 import { draftZenCompose } from './zen-compose-drafts'
 import { zenAgentsSource } from './zen-rail-views'
+import { threadInboxSubscribe, type ZenInboxMessage } from './zen-thread-inbox'
 import { initUnreadEvents, unreadKey, useUnreadStore } from '@/stores/unread'
 import type { ZenAgentCounts } from './zen-counts'
 import {
@@ -1780,6 +1781,8 @@ export function installZenDataVerbs(): () => void {
     registerZenVerb('thread.subscribe', (_ctx, address, cb) =>
       threadSubscribe(str(address, 'address'), fn<ZenThreadView>(cb, 'thread.subscribe callback')),
     ),
+    // app-room-stream (0.46.3): one socket for every agent's new messages.
+    registerZenVerb('thread.inbox', (_ctx, cb) => threadInboxSubscribe(fn<ZenInboxMessage>(cb, 'thread.inbox callback'))),
     registerZenVerb('thread.read', async (_ctx, address, opts) => {
       const a = str(address, 'address')
       const o = isObj(opts) ? opts : {}

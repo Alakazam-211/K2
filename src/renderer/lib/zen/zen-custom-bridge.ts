@@ -49,9 +49,11 @@ import type { ZenAgentRow, ZenPerson, ZenThreadView } from './zen-data'
 import {
   projectZenPeople,
   projectZenRows,
+  projectZenThreadItem,
   projectZenThreadItems,
   projectZenThreadView,
 } from './zen-custom-projection'
+import type { ZenInboxMessage } from './zen-thread-inbox'
 import type { ZenWidgetStopReason } from './zen-custom-run'
 import { ZenCanvasError, zenHitRegionsFrom } from './zen-canvas'
 import type { ZenRect } from './zen-controls'
@@ -565,6 +567,13 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
       void deps.ensureConversation(address).catch((err: unknown) => console.warn(`[zen] widget Thread for ${address}:`, err))
       return off
     },
+    // app-room-stream (0.46.3): every new message on this server's agents,
+    // one socket for all of them; the item is projected like a Thread view's.
+    'thread.inbox': (_args, push) =>
+      inner('thread.inbox', (m: ZenInboxMessage) => {
+        const item = projectZenThreadItem(m.item)
+        if (item) push({ address: m.address, ...item })
+      }) as () => void,
     // Garden data: `k2.store.subscribe(prefix, cb)` subscribes on the
     // `store.changes` row; pushes whole revs from any writer.
     [ZEN_STORE_SUBSCRIBE_VERB]: (args, push, fail) => {
@@ -648,7 +657,7 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
         if (row.kind === 'call' && verb !== ZEN_STORE_SUBSCRIBE_VERB) refuse('failed', `${verb} is a call: use k2.call.`)
         if (subs.has(sub)) return null
         const budget = verb !== 'theme.changed'
-        const thread = verb === 'thread.subscribe'
+        const thread = verb === 'thread.subscribe' || verb === 'thread.inbox'
         const live = [...subs.values()]
         if (budget && live.filter((s) => s.budget).length >= ZEN_WIDGET_BUDGET.liveSubscriptions) {
           refuse('rate_limited', 'At most 16 live subscriptions.')

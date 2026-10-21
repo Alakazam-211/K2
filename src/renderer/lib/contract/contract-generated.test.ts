@@ -89,7 +89,7 @@ describe('TUWA4 twin: generated files match the catalog', () => {
 })
 
 describe('TUWA5: the generated tables', () => {
-  it('ZEN_VERBS is today’s 37 entries, key for key and cap for cap', () => {
+  it('ZEN_VERBS is today’s 38 entries, key for key and cap for cap', () => {
     expect(ZEN_VERBS).toEqual({
       'agents.list': 'agents:read',
       'agents.subscribe': 'agents:read',
@@ -103,6 +103,8 @@ describe('TUWA5: the generated tables', () => {
       'conversation.close': 'agents:read',
       'thread.read': 'thread:read',
       'thread.subscribe': 'thread:read',
+      // app-room-stream (0.46.3): one socket for every agent's new messages.
+      'thread.inbox': 'thread:read',
       'thread.markRead': 'thread:read',
       'thread.post': 'thread:post',
       'thread.answer': 'thread:post',
@@ -129,7 +131,7 @@ describe('TUWA5: the generated tables', () => {
       'controls.bind': null,
       'theme.get': null,
     })
-    expect(Object.keys(ZEN_VERBS)).toHaveLength(37)
+    expect(Object.keys(ZEN_VERBS)).toHaveLength(38)
   })
 
   it('ZEN_CUSTOM_VERBS is the UW16 list as amended by UWB10, plus the whole canvas (0.45.3)', () => {
@@ -156,6 +158,7 @@ describe('TUWA5: the generated tables', () => {
       'presence.subscribe': { cap: 'presence:read', reach: 'local', kind: 'subscribe' },
       'thread.read': { cap: 'thread:read', reach: 'portable', kind: 'call' },
       'thread.subscribe': { cap: 'thread:read', reach: 'portable', kind: 'subscribe' },
+      'thread.inbox': { cap: 'thread:read', reach: 'portable', kind: 'subscribe' },
       'thread.post': { cap: 'thread:post', reach: 'portable', kind: 'call' },
       'thread.answer': { cap: 'thread:post', reach: 'portable', kind: 'call' },
       'compose.draft': { cap: 'thread:post', reach: 'local', kind: 'call' },

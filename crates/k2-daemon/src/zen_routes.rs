@@ -945,9 +945,9 @@ pub(crate) fn widget_live_version(widget: &str) -> Result<(String, k2_core::gard
 
 /// The route entry for Keep as mine (`POST /cli/zen/widget/claim`): the
 /// same GardenOwner check [`handle`] makes, then the route's own handler,
-/// as `caller`. `version`, when given, must still be the live version
-/// (409 `widget_changed` otherwise: the person kept something else than
-/// the card showed). The permission card's `garden.keep-mine` applies
+/// as `caller`. `version`, when given (a hash or its first 12+ hex
+/// characters), must still be the live version (409 `widget_changed`
+/// otherwise: the person would keep something else than the card showed). The permission card's `garden.keep-mine` applies
 /// through this (§6.4, C15).
 pub(crate) fn claim_entry(caller: &Caller, widget: &str, version: Option<&str>, ingress: &str) -> CliResponse {
     let path = "/cli/zen/widget/claim";
@@ -957,7 +957,7 @@ pub(crate) fn claim_entry(caller: &Caller, widget: &str, version: Option<&str>, 
     }
     if let Some(want) = version.map(str::trim).filter(|v| !v.is_empty()) {
         match widget_live_version(widget) {
-            Ok((live, _)) if live == want => {}
+            Ok((live, _)) if want.len() >= 12 && live.starts_with(want) => {}
             Ok((live, _)) => {
                 return resp(
                     "409 Conflict",

@@ -833,6 +833,7 @@ fn approver(r: Role, caller: &Caller) -> Role {
 /// by people only, so anything but the owner token or a login is refused
 /// here (`person_only`), and an Admin or Member login gets the route's own
 /// `zen_local_only`.
+#[allow(dead_code)] // lane E2's garden.proposal.approve calls it
 pub(crate) fn approve_entry(caller: &Caller, id: &str) -> CliResponse {
     let r = match caller {
         Caller::Owner => Role::Person,

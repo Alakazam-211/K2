@@ -15314,6 +15314,11 @@ if "state" in d:
     ah = d.get("autoHeal") or {}
     if ah.get("lastResult"):
         print("auto-heal  :", ah["lastResult"].get("result"), ah["lastResult"].get("reason", ""))
+    elif ah.get("superseded"):
+        import time
+        sp = ah["superseded"]
+        at = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(sp["at"])) if sp.get("at") else "?"
+        print("auto-heal  : earlier attempt (%s) said %s: %s; %s" % (at, sp.get("result"), sp.get("reason", ""), sp.get("why", "")))
     c = d.get("cli") or {}
     if c:
         st = c.get("state")

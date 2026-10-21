@@ -76,6 +76,11 @@ pub const PODMAN_INSTALL_MIN_PROTOCOL: u32 = 8;
 /// front443's `front install|remove|status` (0.46.1). Gated on this AND
 /// `namespaces.front == true` in `helper version`, the way Sew is.
 pub const FRONT_MIN_PROTOCOL: u32 = 8;
+/// Postgres majors side by side (prd-pg17-and-db-upgrade-v1 rev 2, 0.46.3):
+/// `pg clusters`, `pg add-major`, `pg ensure-cluster`, `pg psql --cluster
+/// <M>` and the move verbs. 0.46.3's one helper bump (8 → 9), shared by
+/// every lane. Gated on this AND `namespaces.pgmajor == true`.
+pub const PGMAJOR_MIN_PROTOCOL: u32 = 9;
 
 pub const HELPER_NAME: &str = "k2-root-helper";
 

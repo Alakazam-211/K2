@@ -5,6 +5,7 @@
 //! [`sysops::SystemOps`] fakes. Never vendors, patches, or links libpq server.
 
 pub mod actor;
+pub mod cluster;
 pub mod identity;
 pub mod ops;
 pub mod paths;
@@ -126,7 +127,7 @@ mod tests {
         {
             let db = k2_core::db::shared();
             let conn = db.lock();
-            let _ = conn.execute("DELETE FROM sql_server", []);
+            let _ = conn.execute("DELETE FROM sql_server", []); let _ = conn.execute("DELETE FROM sql_clusters", []);
             let _ = conn.execute("DELETE FROM sql_databases", []);
             conn.execute(
                 "INSERT INTO sql_server (id, status, installed_major, listen, updated_at) \
@@ -175,7 +176,7 @@ mod tests {
         {
             let db = k2_core::db::shared();
             let conn = db.lock();
-            let _ = conn.execute("DELETE FROM sql_server", []);
+            let _ = conn.execute("DELETE FROM sql_server", []); let _ = conn.execute("DELETE FROM sql_clusters", []);
             let _ = conn.execute("DELETE FROM sql_databases", []);
             conn.execute(
                 "INSERT INTO sql_server (id, status, installed_major, listen, updated_at) \
@@ -275,7 +276,7 @@ mod tests {
         {
             let db = k2_core::db::shared();
             let conn = db.lock();
-            let _ = conn.execute("DELETE FROM sql_server", []);
+            let _ = conn.execute("DELETE FROM sql_server", []); let _ = conn.execute("DELETE FROM sql_clusters", []);
             let _ = conn.execute("DELETE FROM sql_databases", []);
             conn.execute(
                 "INSERT INTO sql_server (id, status, updated_at) VALUES (1, 'running', 1)",
@@ -343,7 +344,7 @@ mod tests {
         {
             let db = k2_core::db::shared();
             let conn = db.lock();
-            let _ = conn.execute("DELETE FROM sql_server", []);
+            let _ = conn.execute("DELETE FROM sql_server", []); let _ = conn.execute("DELETE FROM sql_clusters", []);
             let _ = conn.execute("DELETE FROM sql_databases", []);
             conn.execute(
                 "INSERT INTO sql_server (id, status, updated_at) VALUES (1, 'running', 1)",
@@ -606,7 +607,7 @@ mod tests {
         {
             let db = k2_core::db::shared();
             let conn = db.lock();
-            let _ = conn.execute("DELETE FROM sql_server", []);
+            let _ = conn.execute("DELETE FROM sql_server", []); let _ = conn.execute("DELETE FROM sql_clusters", []);
             let _ = conn.execute("DELETE FROM sql_databases", []);
             conn.execute(
                 "INSERT INTO sql_server (id, status, updated_at) VALUES (1, 'running', 1)",
@@ -676,7 +677,7 @@ mod tests {
         {
             let db = k2_core::db::shared();
             let conn = db.lock();
-            let _ = conn.execute("DELETE FROM sql_server", []);
+            let _ = conn.execute("DELETE FROM sql_server", []); let _ = conn.execute("DELETE FROM sql_clusters", []);
             let _ = conn.execute("DELETE FROM sql_databases", []);
             conn.execute(
                 "INSERT INTO sql_server (id, status, updated_at) VALUES (1, 'running', 1)",
@@ -719,7 +720,7 @@ mod tests {
         {
             let db = k2_core::db::shared();
             let conn = db.lock();
-            let _ = conn.execute("DELETE FROM sql_server", []);
+            let _ = conn.execute("DELETE FROM sql_server", []); let _ = conn.execute("DELETE FROM sql_clusters", []);
             let _ = conn.execute("DELETE FROM sql_databases", []);
             conn.execute(
                 "INSERT INTO sql_server (id, status, updated_at) VALUES (1, 'running', 1)",
@@ -765,7 +766,7 @@ mod tests {
         let db = k2_core::db::shared();
         let conn = db.lock();
         let _ = conn.execute("DELETE FROM sql_grants", []);
-        let _ = conn.execute("DELETE FROM sql_server", []);
+        let _ = conn.execute("DELETE FROM sql_server", []); let _ = conn.execute("DELETE FROM sql_clusters", []);
         let _ = conn.execute("DELETE FROM sql_databases", []);
         conn.execute(
             "INSERT INTO sql_server (id, status, installed_major, listen, updated_at) \
@@ -3579,6 +3580,7 @@ mod tests {
     }
 
     mod real_pg;
+    mod real_pg_majors;
 
     fn query_json(workspace: &str, sql: &str, params: Option<serde_json::Value>) -> Vec<u8> {
         let mut v = serde_json::json!({ "workspace": workspace, "sql": sql });

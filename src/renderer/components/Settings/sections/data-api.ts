@@ -21,6 +21,39 @@ export interface SqlStatus {
   lastError: string | null
   enableProgress?: unknown
   health?: unknown
+  /** Postgres majors side by side (0.46.3): one cluster per major. */
+  clusters?: SqlCluster[]
+  /** Each database's major (by catalog id). */
+  databases?: { id: string; name: string; major: number | null }[]
+  /** Databases on a major with a newer supported one. */
+  upgradeAvailable?: { id: string; name: string; from: number; to: number[]; check: string }[]
+  /** What `k2 db create` uses without --major. */
+  defaultMajor?: number
+  defaultMajorPinned?: boolean
+}
+
+export interface SqlCluster {
+  major: number
+  name: string
+  port: number
+  unit: string
+  role: string
+  state: string
+}
+
+/** "PG 16 · upgrade available" / "PG 17" for a database, from status. */
+export function dbMajorChip(status: Pick<SqlStatus, 'databases' | 'upgradeAvailable'> | null | undefined, dbId: string): string | null {
+  const row = status?.databases?.find((d) => d.id === dbId)
+  if (!row || row.major == null) return null
+  const up = status?.upgradeAvailable?.some((u) => u.id === dbId)
+  return up ? `PG ${row.major} · upgrade available` : `PG ${row.major}`
+}
+
+/** "PG 16 :5432 · PG 17 :5433" (the status card), or null with one or none. */
+export function clustersLine(status: Pick<SqlStatus, 'clusters'> | null | undefined): string | null {
+  const cl = status?.clusters ?? []
+  if (cl.length < 2) return null
+  return cl.map((c) => `PG ${c.major} :${c.port}`).join(' · ')
 }
 
 export type SqlLevel = 'read' | 'write'

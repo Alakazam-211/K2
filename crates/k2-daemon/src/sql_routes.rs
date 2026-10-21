@@ -22,6 +22,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/db/server/enable"
         | "/cli/db/server/disable"
         | "/cli/db/server/uninstall"
+        | "/cli/db/server/default-major"
         | "/cli/db/create"
         | "/cli/db/migrate"
         | "/cli/db/dump"
@@ -47,6 +48,7 @@ pub fn dispatch_post(path: &str, body: &[u8]) -> CliResponse {
         "/cli/db/server/enable" => routes::handle_server_enable(body),
         "/cli/db/server/disable" => routes::handle_server_disable(body),
         "/cli/db/server/uninstall" => routes::handle_server_uninstall(body),
+        "/cli/db/server/default-major" => routes::handle_server_default_major(body),
         "/cli/db/doctor" => routes::handle_doctor_run(body),
         "/cli/db/create" => routes::handle_create(body),
         "/cli/db/migrate" => routes::handle_migrate(body),

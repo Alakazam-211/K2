@@ -734,7 +734,10 @@ fi
 req helper "apps runtime crun" | grep -q '"rc": 0' || fail "back to crun"
 
 echo "== pg hba-app against a real Postgres =="
-HBA="$(ls /etc/postgresql/*/main/pg_hba.conf | head -n1)"
+# The 5432 cluster (several majors may sit side by side since 0.46.3).
+PG5432="$(pg_lsclusters -h | awk '$3 == 5432 { print $1; exit }')"
+[ -n "$PG5432" ] || fail "no cluster on 5432"
+HBA="/etc/postgresql/$PG5432/main/pg_hba.conf"
 req helper "pg hba-app add esc-a" >/tmp/hba.json
 jq_ 'assert v["rc"]==0, v' /tmp/hba.json
 grep -q '^host app_esc_a app_esc_a 127.0.0.1/32 scram-sha-256$' "$HBA" || fail "hba line"

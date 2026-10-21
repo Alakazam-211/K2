@@ -16,7 +16,9 @@ import {
   SAMPLE_DATABASES,
   SAMPLE_STATUS,
   bindSqlRole,
+  clustersLine,
   createSqlDatabase,
+  dbMajorChip,
   dbTypeLabel,
   formatSqlListen,
   disableSqlServer,
@@ -412,7 +414,7 @@ function ServerPanel({
       <div className="min-w-0" data-settings-id="data.server">
         <h2 className="text-base font-medium text-[var(--color-text-primary)]">Database sidecar</h2>
         <p className="text-[11px] text-[var(--color-text-muted)] mt-1">
-          K2 supervises a Postgres engine on this box (one postmaster, loopback only). Agents mint
+          K2 supervises Postgres on this box (one Postgres per major, loopback only). Agents mint
           a per-workspace database with <span className="font-mono">k2 db create</span>; documents
           live as JSONB in the same DB. Files stay in the workspace filesystem.
         </p>
@@ -428,10 +430,14 @@ function ServerPanel({
             />
             <span className="text-xs text-[var(--color-text-primary)]">{status.state}</span>
             <span className="flex-1" />
-            {status.installedMajor != null && (
-              <span className="text-[10px] text-[var(--color-text-muted)]">
-                PG {status.installedMajor}
-              </span>
+            {clustersLine(status) ? (
+              <span className="text-[10px] text-[var(--color-text-muted)]">{clustersLine(status)}</span>
+            ) : (
+              status.installedMajor != null && (
+                <span className="text-[10px] text-[var(--color-text-muted)]">
+                  PG {status.installedMajor}
+                </span>
+              )
             )}
           </div>
           {listenLine && (
@@ -744,6 +750,7 @@ export function DataSection(): React.JSX.Element {
                     <span className="text-[10px] text-[var(--color-text-muted)] truncate w-full">
                       {dbTypeLabel(d)} · {d.ownerWorkspace ?? 'workspace'} · {d.status}
                       {d.cap ? ` · ${d.cap.used}/${d.cap.cap === 0 ? '∞' : d.cap.cap}` : ''}
+                      {dbMajorChip(displayStatus, d.id) ? ` · ${dbMajorChip(displayStatus, d.id)}` : ''}
                     </span>
                   </button>
                 )

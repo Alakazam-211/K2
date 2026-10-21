@@ -358,8 +358,9 @@ pub fn preflight(env: &Env, req: &EnableRequest) -> Vec<Value> {
             "postgres",
             "fail",
             if pg.is_empty() { "no PostgreSQL binaries under /usr/lib/postgresql".to_string() } else { format!("PostgreSQL {pg:?}") },
-            "install PostgreSQL 16 or newer server binaries as root (the postgresql-16 package; on Ubuntu 22.04 and \
-             Debian 12 it comes from apt.postgresql.org) without creating a second cluster; K2 never runs apt",
+            "install the server binaries of a supported PostgreSQL major (16 or newer) without creating a second \
+             cluster: as root, `k2-root-helper pg add-major <major>` uses K2's pinned apt.postgresql.org source and \
+             never creates a cluster (older helpers: the postgresql-<major> package from your distro or PGDG)",
         )),
     }
     let helper_ok = match helper_check(env) {

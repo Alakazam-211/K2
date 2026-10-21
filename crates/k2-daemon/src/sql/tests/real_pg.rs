@@ -68,7 +68,15 @@ impl SystemOps for ClusterOps {
         let mut env: Vec<(&str, &str)> = env.to_vec();
         env.push(("PGPORT", &self.port));
         env.push(("PSQLRC", "/dev/null"));
-        RealSystemOps.run_cmd(cmd, args, &env, stdin)
+        // The resolver passes `-p <recorded port>` (0.46.3): point it at the
+        // throwaway cluster, never the box's own 5432.
+        let mut mapped: Vec<&str> = args.to_vec();
+        for i in 1..mapped.len() {
+            if mapped[i - 1] == "-p" {
+                mapped[i] = &self.port;
+            }
+        }
+        RealSystemOps.run_cmd(cmd, &mapped, &env, stdin)
     }
     fn sleep_ms(&self, ms: u64) {
         std::thread::sleep(std::time::Duration::from_millis(ms));

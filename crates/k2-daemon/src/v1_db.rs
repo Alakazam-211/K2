@@ -260,7 +260,7 @@ mod tests {
     fn seed_running() {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        let _ = conn.execute("DELETE FROM sql_server", []);
+        let _ = conn.execute("DELETE FROM sql_server", []); let _ = conn.execute("DELETE FROM sql_clusters", []);
         let _ = conn.execute("DELETE FROM sql_databases", []);
         conn.execute(
             "INSERT INTO sql_server (id, status, installed_major, listen, updated_at) \

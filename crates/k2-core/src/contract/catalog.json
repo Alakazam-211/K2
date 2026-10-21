@@ -1,5 +1,5 @@
 {
-  "catalogVersion": 15,
+  "catalogVersion": 16,
   "caps": [
     {
       "name": "agents:read",
@@ -151,7 +151,9 @@
     {"code": "above_role", "doc": "Guest rooms: a room the guest's role doesn't cover; rooms never add caps beyond the role."},
     {"code": "has_role", "doc": "Guest rooms: the guest's grant on this App carries a role, so its rooms are the role's; give a narrower role."},
     {"code": "confirm_required", "doc": "A Garden write that needs the person's confirm on K2's sheet, outside the frame."},
-    {"code": "declined", "doc": "The person said no on K2's confirm sheet."}
+    {"code": "declined", "doc": "The person said no on K2's confirm sheet."},
+    {"code": "refresh_invalid", "doc": "Device sign-in: the refresh token is unknown, ended, expired or for another App; sign in again."},
+    {"code": "refresh_reused", "doc": "Device sign-in: a refresh token came back after it was used; that device is signed out (sign in again)."}
   ],
   "bannedFields": [
     "projectPath",
@@ -3723,6 +3725,157 @@
           },
           "catalogVersion": {
             "type": "integer"
+          },
+          "agents": {
+            "type": "array",
+            "description": "The agents this person may reach here, one per room on the pass (the only list of 'my agents'; a room not on it doesn't exist for this pass).",
+            "items": {
+              "title": "AppMeAgent",
+              "type": "object",
+              "properties": {
+                "room": {
+                  "type": "string",
+                  "description": "The room's project id."
+                },
+                "handle": {
+                  "type": "string"
+                },
+                "displayName": {
+                  "type": "string"
+                },
+                "color": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "image": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The agent's picture as a data URL, or null."
+                },
+                "caps": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "can": {
+                  "title": "AppMeCan",
+                  "type": "object",
+                  "description": "What the caps allow, for drawing buttons: files, tickets, heartbeats and store are none, read or write.",
+                  "properties": {
+                    "chat": {
+                      "type": "boolean"
+                    },
+                    "send": {
+                      "type": "boolean"
+                    },
+                    "files": {
+                      "type": "string"
+                    },
+                    "tickets": {
+                      "type": "string"
+                    },
+                    "activity": {
+                      "type": "boolean"
+                    },
+                    "members": {
+                      "type": "boolean"
+                    },
+                    "heartbeats": {
+                      "type": "string"
+                    },
+                    "wiki": {
+                      "type": "boolean"
+                    },
+                    "store": {
+                      "type": "string"
+                    },
+                    "identity": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "chat",
+                    "send",
+                    "files",
+                    "tickets",
+                    "activity",
+                    "members",
+                    "heartbeats",
+                    "wiki",
+                    "store",
+                    "identity"
+                  ],
+                  "additionalProperties": false
+                },
+                "folders": {
+                  "title": "AppMeAgentFolders",
+                  "type": "object",
+                  "description": "This login's folders in the room (room-scope R3). Absent: the whole room.",
+                  "properties": {
+                    "read": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Room-relative folders it may list and read."
+                    },
+                    "write": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Room-relative folders it may also write."
+                    },
+                    "uploadDir": {
+                      "type": "string",
+                      "description": "Where an upload lands when it names no folder."
+                    }
+                  },
+                  "required": [],
+                  "additionalProperties": false
+                },
+                "unread": {
+                  "type": "integer",
+                  "description": "Unread Thread items for this person (when the server reads them)."
+                },
+                "muted": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "room",
+                "handle",
+                "displayName",
+                "color",
+                "image",
+                "caps",
+                "can"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "serverId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "This server's stable id (key rows across servers by serverId + room)."
+          },
+          "publicHost": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "<label>.k2.dev when the server has a tunnel."
+          },
+          "instanceId": {
+            "type": "string",
+            "description": "Changes when the server restarts."
           }
         },
         "required": [
@@ -3733,7 +3886,11 @@
           "principalId",
           "rooms",
           "features",
-          "catalogVersion"
+          "catalogVersion",
+          "agents",
+          "serverId",
+          "publicHost",
+          "instanceId"
         ],
         "additionalProperties": false
       },
@@ -3743,7 +3900,7 @@
         "pass_wrong_link",
         "failed"
       ],
-      "doc": "Who this pass is: guest or App, its rooms with their caps, and this server's features.",
+      "doc": "Who this pass is: guest or App, its agents (identity, caps, what they allow, folders), this server's ids and features.",
       "example": "const me = await k2.asGuest(pass).me.get()"
     },
     {
@@ -3858,6 +4015,23 @@
               "type": "string",
               "description": "This App's service id (the SDK sends K2_APP_ID); absent = the box login.",
               "default": ""
+            },
+            "device": {
+              "title": "AppDevice",
+              "type": "object",
+              "description": "Name a device to stay signed in: the answer adds a refresh token (when the owner left Stay signed in on).",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id"
+              ],
+              "additionalProperties": false
             }
           },
           "required": [
@@ -3936,6 +4110,35 @@
           "app": {
             "type": "string",
             "description": "host or the App's service id."
+          },
+          "refresh": {
+            "type": "string",
+            "description": "With device: the refresh token (k2skr_...). Store it; guests.refresh trades it."
+          },
+          "passExpiresAt": {
+            "type": "integer",
+            "description": "With device: when the pass ends, seconds since the epoch."
+          },
+          "refreshExpiresAt": {
+            "type": "integer",
+            "description": "With device: when the refresh token ends unless used, seconds since the epoch."
+          },
+          "device": {
+            "title": "AppDeviceRef",
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [
@@ -4261,6 +4464,531 @@
       ],
       "doc": "A guest changes their own password (browser only: it ends every session of theirs).",
       "example": "await fetch('/cli/skin/password/change', {method: 'POST', body})"
+    },
+    {
+      "verb": "guests.logout",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-mobile-access-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/skin/logout",
+          "door": "link"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false,
+          "default": {}
+        }
+      ],
+      "response": {
+        "title": "AppOk",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "failed"
+      ],
+      "doc": "Sign this guest's pass out; a device sign-in ends with it (its refresh token stops working).",
+      "example": "await k2.asGuest(pass).guests.logout()"
+    },
+    {
+      "verb": "guests.refresh",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-mobile-access-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/skin/refresh",
+          "responseNames": {
+            "pass": "token"
+          },
+          "door": "link"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "refresh": {
+              "type": "string",
+              "description": "The refresh token (k2skr_...) from the device's last login or refresh. Each one works once."
+            },
+            "app": {
+              "type": "string",
+              "description": "This App's service id; must be the App the token was minted for.",
+              "default": ""
+            }
+          },
+          "required": [
+            "refresh"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppDeviceSession",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "pass": {
+            "type": "string",
+            "description": "A new session pass (k2skn_...); the old one has ended."
+          },
+          "refresh": {
+            "type": "string",
+            "description": "The next refresh token: store it in place of the old one."
+          },
+          "passExpiresAt": {
+            "type": "integer",
+            "description": "Seconds since the epoch."
+          },
+          "refreshExpiresAt": {
+            "type": "integer",
+            "description": "Seconds since the epoch: unused this long, the device signs in again."
+          },
+          "username": {
+            "type": "string"
+          },
+          "principalId": {
+            "type": "string"
+          },
+          "app": {
+            "type": "string"
+          },
+          "device": {
+            "title": "AppDeviceRef",
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "ok",
+          "pass",
+          "refresh",
+          "passExpiresAt",
+          "refreshExpiresAt",
+          "username",
+          "principalId",
+          "app",
+          "device"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "refresh_invalid",
+        "refresh_reused",
+        "usage",
+        "failed"
+      ],
+      "doc": "Trade a device's refresh token for a new pass and a new refresh token (one-time, rotating; a reused token ends the device's sign-in).",
+      "example": "const s = await k2.guests.refresh({refresh})"
+    },
+    {
+      "verb": "guests.devices",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-mobile-access-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/skin/devices"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false,
+          "default": {}
+        }
+      ],
+      "response": {
+        "title": "AppDevices",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "devices": {
+            "type": "array",
+            "items": {
+              "title": "AppDeviceLogin",
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "What guests.revokeDevice takes."
+                },
+                "deviceId": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "createdAt": {
+                  "type": "integer",
+                  "description": "Signed in, seconds since the epoch."
+                },
+                "lastUsedAt": {
+                  "type": "integer",
+                  "description": "Last refresh, seconds since the epoch."
+                },
+                "expiresAt": {
+                  "type": "integer",
+                  "description": "Signs out unless used before then, seconds since the epoch."
+                },
+                "current": {
+                  "type": "boolean",
+                  "description": "The device this pass belongs to."
+                }
+              },
+              "required": [
+                "id",
+                "deviceId",
+                "name",
+                "createdAt",
+                "lastUsedAt",
+                "expiresAt",
+                "current"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "devices"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "guest_required",
+        "failed"
+      ],
+      "doc": "This guest's devices that stay signed in to this App.",
+      "example": "const {devices} = await k2.asGuest(pass).guests.devices()"
+    },
+    {
+      "verb": "guests.revokeDevice",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-mobile-access-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/skin/devices/revoke"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "A device sign-in id from guests.devices."
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppOk",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "guest_required",
+        "not_found",
+        "usage",
+        "failed"
+      ],
+      "doc": "Sign one of this guest's own devices out (its pass and refresh token end).",
+      "example": "await k2.asGuest(pass).guests.revokeDevice({id})"
+    },
+    {
+      "verb": "app.info",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-mobile-access-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/skin/app-info",
+          "door": "link"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "app": {
+              "type": "string",
+              "description": "The App's service id."
+            }
+          },
+          "required": [
+            "app"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppInfo",
+        "type": "object",
+        "properties": {
+          "app": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "description": "The App's display name."
+          },
+          "kind": {
+            "type": "string",
+            "description": "cmd or skin."
+          },
+          "signIn": {
+            "title": "AppSignIn",
+            "type": "object",
+            "properties": {
+              "methods": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "password (a username or an email)."
+              },
+              "staysSignedIn": {
+                "type": "boolean",
+                "description": "A login that names a device gets a refresh token."
+              },
+              "url": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Where the App signs people in, when it is published."
+              }
+            },
+            "required": [
+              "methods",
+              "staysSignedIn",
+              "url"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "app",
+          "name",
+          "kind",
+          "signIn"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "not_found"
+      ],
+      "doc": "Public: this one App's name and how to sign in, only when the owner listed it; anything else answers like a route that doesn't exist.",
+      "example": "const info = await fetch(server + '/cli/skin/app-info?app=' + id)"
+    },
+    {
+      "verb": "password.forgot",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-mobile-access-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/skin/password/forgot",
+          "door": "link"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "username": {
+              "type": "string",
+              "description": "A username, or an email (with @)."
+            }
+          },
+          "required": [
+            "username"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppOk",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "rate_limited",
+        "usage",
+        "failed"
+      ],
+      "doc": "Start a guest's password reset (a platform pass; the guest gets the reset link by email).",
+      "example": "await k2.asApp().password.forgot({username})"
+    },
+    {
+      "verb": "password.reset",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-mobile-access-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/skin/password/reset",
+          "door": "link",
+          "params": {
+            "resetToken": "token"
+          }
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "resetToken": {
+              "type": "string",
+              "description": "The reset code from the email."
+            },
+            "password": {
+              "type": "string",
+              "description": "At least 8 characters."
+            }
+          },
+          "required": [
+            "resetToken",
+            "password"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppOk",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "bad_login",
+        "usage",
+        "failed"
+      ],
+      "doc": "Public: finish a password reset with the emailed token (ends every session of that guest).",
+      "example": "await fetch('/cli/skin/password/reset', {method: 'POST', body})"
     },
     {
       "verb": "thread.page",
@@ -5411,6 +6139,812 @@
       ],
       "doc": "Live Thread items of one room (new posts and card changes; merge by id); after a gap, thread.page with sinceSeq.",
       "example": "const off = k2.thread.events({conversation}, (item) => draw(item))"
+    },
+    {
+      "verb": "thread.attachmentGet",
+      "cap": "thread:read",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "thread-attachments-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/thread/attachment"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "addr": {
+              "type": "string",
+              "description": "The room's handle (or its pinned Chat's conversation id)."
+            },
+            "id": {
+              "type": "string",
+              "description": "The message's doc id."
+            },
+            "n": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "The attachment's index in doc.attachments."
+            },
+            "mode": {
+              "enum": [
+                "meta",
+                "preview",
+                "thumb",
+                "range"
+              ],
+              "description": "meta (a fresh stat), preview (text up to 512 KB; images and PDFs up to 20 MB) or thumb (an image's thumbnail: PNG, JPEG, GIF, WebP, HEIC, BMP, TIFF; SVG comes back sanitized). range: offset/len chunks up to 16 MB."
+            },
+            "px": {
+              "type": "integer",
+              "minimum": 64,
+              "maximum": 512,
+              "description": "thumb: the longest side in pixels, 256 (default) or 512."
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "len": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "required": [
+            "addr",
+            "id"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppThreadFileData",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "file (meta), text, image or pdf (preview, thumb)."
+          },
+          "state": {
+            "type": "string",
+            "description": "ok, changed (since it was sent), gone (moved or deleted) or hidden (not shared with you: no name, type or size)."
+          },
+          "name": {
+            "type": "string"
+          },
+          "mime": {
+            "type": "string",
+            "description": "The content type; a thumb is image/jpeg, image/png or a sanitized image/svg+xml."
+          },
+          "size": {
+            "type": "integer",
+            "description": "Bytes now."
+          },
+          "modifiedAt": {
+            "type": "integer",
+            "description": "Milliseconds since the epoch (meta)."
+          },
+          "line": {
+            "type": "integer"
+          },
+          "lineEnd": {
+            "type": "integer"
+          },
+          "text": {
+            "type": "string",
+            "description": "preview of a text file: the first 512 KB, vault values redacted."
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "base64": {
+            "type": "string",
+            "description": "preview or thumb: the bytes. Show them as an image (an <img>, never inline markup)."
+          },
+          "width": {
+            "type": "integer",
+            "description": "thumb: pixels."
+          },
+          "height": {
+            "type": "integer",
+            "description": "thumb: pixels."
+          },
+          "sanitized": {
+            "type": "boolean",
+            "description": "An SVG with scripts, event handlers and outside links removed."
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "offset": {
+            "type": "integer",
+            "description": "range: the first byte."
+          },
+          "len": {
+            "type": "integer",
+            "description": "range: bytes in this chunk."
+          },
+          "eof": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "not_found",
+        "failed"
+      ],
+      "doc": "One attachment of a room's message: meta, preview, thumbnail or a byte range, only when your own file rights cover it.",
+      "example": "const t = await k2.thread.attachmentGet({addr: 'sales', id: item.id, n: 0, mode: 'thumb'})"
+    },
+    {
+      "verb": "thread.catchup",
+      "cap": "thread:read",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "inbox-catchup-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/thread/catchup",
+          "responseNames": {
+            "conversation": "conversation_id"
+          }
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "threads": {
+              "type": "array",
+              "description": "Up to 200 rooms: each {addr, afterSeq} (a delta) or {addr, newest: true} (the newest page).",
+              "items": {
+                "title": "AppCatchupAsk",
+                "type": "object",
+                "properties": {
+                  "addr": {
+                    "type": "string"
+                  },
+                  "afterSeq": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "newest": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "addr"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "description": "Items per room (default 50)."
+            }
+          },
+          "required": [
+            "threads"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppCatchup",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "has_more": {
+            "type": "boolean",
+            "description": "Some entries are deferred (the 4 MiB budget): call again with those."
+          },
+          "threads": {
+            "type": "array",
+            "items": {
+              "title": "AppCatchupEntry",
+              "type": "object",
+              "properties": {
+                "addr": {
+                  "type": "string"
+                },
+                "conversation": {
+                  "type": "string"
+                },
+                "after_seq": {
+                  "type": "integer"
+                },
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "title": "AppThreadItem",
+                    "type": "object",
+                    "properties": {
+                      "collection": {
+                        "type": "string",
+                        "description": "Always thread."
+                      },
+                      "seq": {
+                        "type": "integer"
+                      },
+                      "id": {
+                        "type": "string"
+                      },
+                      "doc": {
+                        "title": "AppThreadDoc",
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "type": "string",
+                            "description": "text, choice or secret."
+                          },
+                          "from": {
+                            "type": "string"
+                          },
+                          "to": {
+                            "type": "string"
+                          },
+                          "created_at": {
+                            "type": "number",
+                            "description": "Seconds since the epoch (not milliseconds)."
+                          },
+                          "body": {
+                            "type": "string",
+                            "description": "The text (redacted); a card's prompt."
+                          },
+                          "via": {
+                            "type": "string",
+                            "description": "Where it came from: thread, compose, card, msg, inbox, v1, …"
+                          },
+                          "choice": {
+                            "title": "AppChoiceCard",
+                            "type": "object",
+                            "properties": {
+                              "prompt": {
+                                "type": "string"
+                              },
+                              "options": {
+                                "type": "array",
+                                "items": {
+                                  "title": "ChoiceOption",
+                                  "type": "object",
+                                  "properties": {
+                                    "label": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "label"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "allow_custom": {
+                                "type": "boolean"
+                              },
+                              "status": {
+                                "type": "string",
+                                "description": "pending, answered, voided or expired."
+                              },
+                              "answer": {
+                                "type": "string"
+                              },
+                              "answeredBy": {
+                                "title": "AppPostAuthor",
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "description": "owner, user (a Connect login) or guest (an App pass or guest login)."
+                                  },
+                                  "login": {
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "type": "string",
+                                    "description": "The owner's display name, on an owner's answer only."
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "login"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "answeredAt": {
+                                "type": "integer",
+                                "description": "Seconds since the epoch, when answered."
+                              },
+                              "expiresAt": {
+                                "type": "integer",
+                                "description": "Seconds since the epoch, when a pending card expires."
+                              }
+                            },
+                            "required": [
+                              "prompt",
+                              "options",
+                              "allow_custom",
+                              "status"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "secret": {
+                            "title": "AppSecretCard",
+                            "type": "object",
+                            "properties": {
+                              "name": {
+                                "type": "string"
+                              },
+                              "status": {
+                                "type": "string",
+                                "description": "pending, set, voided or expired."
+                              },
+                              "prompt": {
+                                "type": "string"
+                              },
+                              "scope": {
+                                "type": "string",
+                                "description": "workspace, server or session."
+                              },
+                              "hosts": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "delivery": {
+                                "type": "string",
+                                "description": "fetch, file or env."
+                              },
+                              "secretKind": {
+                                "type": "string"
+                              },
+                              "ref": {
+                                "type": "string",
+                                "description": "A k2v:// reference to the stored secret (never its value)."
+                              },
+                              "answeredBy": {
+                                "title": "AppPostAuthor",
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "description": "owner, user (a Connect login) or guest (an App pass or guest login)."
+                                  },
+                                  "login": {
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "type": "string",
+                                    "description": "The owner's display name, on an owner's answer only."
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "login"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "answeredAt": {
+                                "type": "integer",
+                                "description": "Seconds since the epoch, when answered."
+                              },
+                              "expiresAt": {
+                                "type": "integer",
+                                "description": "Seconds since the epoch, when a pending card expires."
+                              }
+                            },
+                            "required": [
+                              "name",
+                              "status"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "widget": {
+                            "title": "AppPostWidget",
+                            "type": "object",
+                            "properties": {
+                              "widget": {
+                                "type": "string"
+                              },
+                              "garden": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "widget",
+                              "garden"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "author": {
+                            "title": "AppPostAuthor",
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "description": "owner, user (a Connect login) or guest (an App pass or guest login)."
+                              },
+                              "login": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string",
+                                "description": "The owner's display name, on an owner's answer only."
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "login"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "kind",
+                          "from",
+                          "created_at"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "seq",
+                      "id",
+                      "doc"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "has_more": {
+                  "type": "boolean"
+                },
+                "changed": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "title": "AppThreadItem",
+                      "type": "object",
+                      "properties": {
+                        "collection": {
+                          "type": "string",
+                          "description": "Always thread."
+                        },
+                        "seq": {
+                          "type": "integer"
+                        },
+                        "id": {
+                          "type": "string"
+                        },
+                        "doc": {
+                          "title": "AppThreadDoc",
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "kind": {
+                              "type": "string",
+                              "description": "text, choice or secret."
+                            },
+                            "from": {
+                              "type": "string"
+                            },
+                            "to": {
+                              "type": "string"
+                            },
+                            "created_at": {
+                              "type": "number",
+                              "description": "Seconds since the epoch (not milliseconds)."
+                            },
+                            "body": {
+                              "type": "string",
+                              "description": "The text (redacted); a card's prompt."
+                            },
+                            "via": {
+                              "type": "string",
+                              "description": "Where it came from: thread, compose, card, msg, inbox, v1, …"
+                            },
+                            "choice": {
+                              "title": "AppChoiceCard",
+                              "type": "object",
+                              "properties": {
+                                "prompt": {
+                                  "type": "string"
+                                },
+                                "options": {
+                                  "type": "array",
+                                  "items": {
+                                    "title": "ChoiceOption",
+                                    "type": "object",
+                                    "properties": {
+                                      "label": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "label"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                },
+                                "allow_custom": {
+                                  "type": "boolean"
+                                },
+                                "status": {
+                                  "type": "string",
+                                  "description": "pending, answered, voided or expired."
+                                },
+                                "answer": {
+                                  "type": "string"
+                                },
+                                "answeredBy": {
+                                  "title": "AppPostAuthor",
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "description": "owner, user (a Connect login) or guest (an App pass or guest login)."
+                                    },
+                                    "login": {
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "type": "string",
+                                      "description": "The owner's display name, on an owner's answer only."
+                                    }
+                                  },
+                                  "required": [
+                                    "kind",
+                                    "login"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "answeredAt": {
+                                  "type": "integer",
+                                  "description": "Seconds since the epoch, when answered."
+                                },
+                                "expiresAt": {
+                                  "type": "integer",
+                                  "description": "Seconds since the epoch, when a pending card expires."
+                                }
+                              },
+                              "required": [
+                                "prompt",
+                                "options",
+                                "allow_custom",
+                                "status"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "secret": {
+                              "title": "AppSecretCard",
+                              "type": "object",
+                              "properties": {
+                                "name": {
+                                  "type": "string"
+                                },
+                                "status": {
+                                  "type": "string",
+                                  "description": "pending, set, voided or expired."
+                                },
+                                "prompt": {
+                                  "type": "string"
+                                },
+                                "scope": {
+                                  "type": "string",
+                                  "description": "workspace, server or session."
+                                },
+                                "hosts": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                },
+                                "delivery": {
+                                  "type": "string",
+                                  "description": "fetch, file or env."
+                                },
+                                "secretKind": {
+                                  "type": "string"
+                                },
+                                "ref": {
+                                  "type": "string",
+                                  "description": "A k2v:// reference to the stored secret (never its value)."
+                                },
+                                "answeredBy": {
+                                  "title": "AppPostAuthor",
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "description": "owner, user (a Connect login) or guest (an App pass or guest login)."
+                                    },
+                                    "login": {
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "type": "string",
+                                      "description": "The owner's display name, on an owner's answer only."
+                                    }
+                                  },
+                                  "required": [
+                                    "kind",
+                                    "login"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "answeredAt": {
+                                  "type": "integer",
+                                  "description": "Seconds since the epoch, when answered."
+                                },
+                                "expiresAt": {
+                                  "type": "integer",
+                                  "description": "Seconds since the epoch, when a pending card expires."
+                                }
+                              },
+                              "required": [
+                                "name",
+                                "status"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "widget": {
+                              "title": "AppPostWidget",
+                              "type": "object",
+                              "properties": {
+                                "widget": {
+                                  "type": "string"
+                                },
+                                "garden": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "widget",
+                                "garden"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "author": {
+                              "title": "AppPostAuthor",
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "description": "owner, user (a Connect login) or guest (an App pass or guest login)."
+                                },
+                                "login": {
+                                  "type": "string"
+                                },
+                                "name": {
+                                  "type": "string",
+                                  "description": "The owner's display name, on an owner's answer only."
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "login"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "kind",
+                            "from",
+                            "created_at"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": [
+                        "seq",
+                        "id",
+                        "doc"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "removed": {
+                  "type": "array",
+                  "items": {
+                    "title": "AppThreadRemoved",
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "seq": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "seq"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "deferred": {
+                  "type": "boolean"
+                },
+                "error": {
+                  "title": "AppCatchupError",
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "hint": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "addr"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "threads"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "not_found",
+        "failed",
+        "rate_limited"
+      ],
+      "doc": "Deltas (or newest pages) for many rooms in one round trip, each exactly what thread.page answers for it.",
+      "example": "const {threads} = await k2.thread.catchup({threads: [{addr: 'sales', afterSeq: 41}]})"
     },
     {
       "verb": "thread.ensurePinned",

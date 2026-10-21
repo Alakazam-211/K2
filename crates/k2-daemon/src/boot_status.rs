@@ -455,6 +455,14 @@ fn homes_sync_ready() -> bool {
 /// WS frames). No SQL migration.
 pub const FEATURE_INBOX_CATCHUP: &str = "inbox-catchup-v1";
 
+/// App mobile access (app-mobile-access-v1, 0.46.3): the agent access
+/// list on `GET /cli/skin/me` (`agents`, `serverId`, `publicHost`,
+/// `instanceId`), device sign-in (`device` on login, `POST
+/// /cli/skin/refresh`, `/cli/skin/devices*`), per-App discovery (`GET
+/// /cli/skin/app-info`) and the main-port catalog gate for App passes.
+/// skin.db tables only, no SQL migration.
+pub const FEATURE_APP_MOBILE_ACCESS: &str = "app-mobile-access-v1";
+
 /// True when the notify prefs tables exist in the daemon DB.
 fn thread_push_ready() -> bool {
     k2_core::db::try_shared()
@@ -495,6 +503,7 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_THREAD_ATTACHMENTS);
     out.push(FEATURE_THREAD_DELTA);
     out.push(FEATURE_PROJECT_CHAT_PAGING);
+    out.push(FEATURE_APP_MOBILE_ACCESS);
     if thread_push_ready() {
         out.push(FEATURE_THREAD_PUSH);
         // Same DB as 0157: migration 0189 (push_devices.previews) ran with it.
@@ -561,6 +570,7 @@ mod tests {
                 "thread-attachments-v1",
                 "thread-delta-v1",
                 "project-chat-paging-v1",
+                "app-mobile-access-v1",
                 "thread-push-v1",
                 "push-previews-v1",
                 "thread-read-v1",

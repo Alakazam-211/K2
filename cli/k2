@@ -10107,6 +10107,87 @@ App only). More: k2 study app-surfaces.
 EOF
 }
 
+# ── app-mobile-access-v1 (0.46.3): People grid, discovery, stay signed in ──
+
+# k2 app people <app> [<user>] [--json]: who reaches which agents through
+# one App, and what they may do there (the owner's person × agent grid).
+cmd_app_people() {
+    local app="" user="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            -h|--help) echo "usage: k2 app people <app> [<user>] [--json]   (app: service id, <workspace>/<name> or host)"; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) if [ -z "$app" ]; then app="$1"; else user="$1"; fi; shift ;;
+        esac
+    done
+    [ -z "$app" ] && { echo "usage: k2 app people <app> [<user>] [--json]" >&2; exit 2; }
+    local q="app=$(urlencode "$app")"
+    [ -n "$user" ] && q="$q&user=$(urlencode "$user")"
+    _compute_call GET /cli/skin/access "$q" tcp
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+s = v.get("settings") or {}
+stay = s.get("staySignedInDays")
+print("App %s: stay signed in %s; listed for sign-in %s" % (v.get("app"), ("%s days" % stay) if stay else "off (7-day login)", "on" if s.get("listed") else "off"))
+people = v.get("people") or []
+if not people:
+    print("  nobody has this App yet")
+for p in people:
+    who = p.get("fullName") or p.get("username")
+    state = (p.get("role") or "rooms only (Thread)") if p.get("enabled") else "off"
+    print("  %s (%s) · %s" % (who, p.get("username"), state))
+    cells = p.get("cells") or []
+    if not cells and p.get("enabled"):
+        print("    no agents")
+    for c in cells:
+        f = c.get("folders") or {}
+        folders = ", ".join(["read " + x for x in f.get("read") or []] + ["write " + x for x in f.get("write") or []])
+        print("    %-20s %s%s" % (c.get("handle"), ", ".join(c.get("caps") or []), ("  [" + folders + "]") if folders else ""))
+for d in v.get("devices") or []:
+    print("  device %s: %s · %s" % (d.get("id"), d.get("username"), d.get("name")))'
+}
+
+# k2 app discovery <app> on|off: list one App for sign-in discovery (only
+# its name and how to sign in; off = the server answers as if nothing were
+# there). The owner, or the App's own agent with "…manage them end to end".
+cmd_app_discovery() {
+    local app="${1:-}" mode="${2:-}"
+    case "$mode" in
+        on) mode=true ;;
+        off) mode=false ;;
+        *) echo "usage: k2 app discovery <app> on|off" >&2; exit 2 ;;
+    esac
+    [ -z "$app" ] && { echo "usage: k2 app discovery <app> on|off" >&2; exit 2; }
+    local body
+    body=$(_compute_json K2_CJ_app="$app" K2_CJ_listed_j="$mode")
+    _compute_call POST /cli/skin/access/listed "$body"
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+s = v.get("settings") or {}
+print("Listed for sign-in: %s%s" % ("on" if s.get("listed") else "off", "" if v.get("changed") else " (unchanged)"))'
+}
+
+# k2 app stay-signed-in <app> <days>: how long a phone that signs in with a
+# device stays signed in without being used (0 = off: today's 7-day login).
+cmd_app_stay() {
+    local app="${1:-}" days="${2:-}"
+    case "$days" in
+        ''|*[!0-9]*) echo "usage: k2 app stay-signed-in <app> <days>   (0 = off, at most 90)" >&2; exit 2 ;;
+    esac
+    local body
+    body=$(_compute_json K2_CJ_app="$app" K2_CJ_staySignedInDays_n="$days")
+    _compute_call POST /cli/skin/access/settings "$body" tcp
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+s = json.load(sys.stdin).get("settings") or {}
+d = s.get("staySignedInDays")
+print("Stay signed in: %s" % (("%s days" % d) if d else "off (7-day login)"))'
+}
+
 cmd_app_members() {
     local room="" app="" json_out=0
     while [ $# -gt 0 ]; do
@@ -10495,6 +10576,9 @@ cmd_app() {
             ;;
         guest) shift; cmd_app_guest "$@" ;;
         members) shift; cmd_app_members "$@" ;;
+        people) shift; cmd_app_people "$@" ;;
+        discovery) shift; cmd_app_discovery "$@" ;;
+        stay-signed-in) shift; cmd_app_stay "$@" ;;
         room-names) shift; cmd_app_room_names "$@" ;;
         self) shift; cmd_app_self "$@" ;;
         usage) shift; cmd_app_usage "$@" ;;
@@ -11081,12 +11165,69 @@ import json,sys
 d=json.load(sys.stdin)
 print("Skin role removed." if d.get("success") else "No matching skin role.")'
                     ;;
+                suggest|suggestions|templates)
+                    # app-mobile-access-v1: the suggested role templates.
+                    # Nothing is created until `k2 app roles add --from <id>`.
+                    local json_out=0
+                    [ "${1:-}" = "--json" ] && json_out=1
+                    _compute_call GET /cli/skin/roles/suggest ""
+                    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+                    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+for t in json.load(sys.stdin).get("templates") or []:
+    print("%-8s %s: %s" % (t["id"], t["label"], t["description"]))
+    print("         caps: %s" % (", ".join(t.get("caps") or []) or "none (the App decides)"))
+    f = t.get("folders")
+    if f:
+        print("         folders: read %s; write %s; uploads to %s" % (", ".join(f.get("read") or []) or "-", ", ".join(f.get("write") or []) or "-", f.get("uploadDir") or "-"))
+    if t.get("note"):
+        print("         note: %s" % t["note"])
+print("Make one: k2 app roles add --from <id> --app <app> [--name <name>] [--agent <room> …]")'
+                    ;;
+                add)
+                    local from="" app="" name="" agents=()
+                    while [[ $# -gt 0 ]]; do
+                        case "$1" in
+                            --from|--template) from="${2:-}"; shift 2 ;;
+                            --app) app="${2:-}"; shift 2 ;;
+                            --name) name="${2:-}"; shift 2 ;;
+                            --agent|--agents|--room) agents+=("${2:-}"); shift 2 ;;
+                            --help|-h) echo "Usage: k2 app roles add --from <template> --app <app> [--name <name>] [--agent <room> …]   (k2 app roles suggest lists the templates)"; exit 0 ;;
+                            *) echo "Unknown argument: $1 (k2 app roles add --from <template> --app <app>)" >&2; exit 2 ;;
+                        esac
+                    done
+                    [[ -z "$from" ]] && { echo "Usage: k2 app roles add --from <template> --app <app> [--name <name>] [--agent <room> …]" >&2; exit 2; }
+                    local agents_nl="" a
+                    if [ ${#agents[@]} -gt 0 ]; then
+                        for a in "${agents[@]}"; do agents_nl+="$a"$'\n'; done
+                    fi
+                    local body raw
+                    body=$(K2_RT_FROM="$from" K2_RT_APP="$app" K2_RT_NAME="$name" K2_RT_AGENTS="$agents_nl" python3 -c '
+import json, os
+b = {"template": os.environ["K2_RT_FROM"]}
+for k, e in (("app", "K2_RT_APP"), ("name", "K2_RT_NAME")):
+    if os.environ.get(e, "").strip():
+        b[k] = os.environ[e].strip()
+rooms = [s.strip() for s in os.environ.get("K2_RT_AGENTS", "").splitlines() if s.strip()]
+if rooms:
+    b["rooms"] = rooms
+print(json.dumps(b))')
+                    raw=$(cli_post_json "/cli/skin/roles/from-template" "$body")
+                    printf '%s' "$raw" | _skin_die_if_err
+                    printf '%s' "$raw" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+r = d.get("role") or {}
+print("Role %s made from %s (edit it like any role: k2 app role room|paths|update %s)" % (r.get("name"), d.get("template"), r.get("name")))
+for line in r.get("roomAccess") or []:
+    print("  %-20s %s" % (line.get("handle"), ", ".join(line.get("caps") or [])))'
+                    ;;
                 --help|-h)
-                    echo "Usage: k2 app role <create|list|room|paths|update|remove>" >&2
+                    echo "Usage: k2 app role <create|list|room|paths|update|remove|suggest|add --from>" >&2
                     exit 0
                     ;;
                 *)
-                    echo "Usage: k2 app role <create|list|room|paths|update|remove>" >&2
+                    echo "Usage: k2 app role <create|list|room|paths|update|remove|suggest|add --from>" >&2
                     exit 1 ;;
             esac
             ;;
@@ -30389,7 +30530,7 @@ the daemon's loopback port). Every call carries a pass: this App's own
 every hour, so read the file again on pass_invalid) or a guest's
 session pass from POST /cli/skin/login. Users and rooms use the App
 key ($K2_SECRETS_DIR/K2_APP_KEY) on /v1/apps/$K2_APP_ID/... instead.
-From K2's verb catalog, version 15.
+From K2's verb catalog, version 16.
 
 THE SERVER SDK (sdk/server, TypeScript, Node 22+, no dependencies)
   import { fromEnv } from '@k2/server'
@@ -30406,10 +30547,17 @@ THE SERVER SDK (sdk/server, TypeScript, Node 22+, no dependencies)
 
 EVERY VERB, BY CAP (helper, method and route, what it does)
 no cap (your own rooms)
-  me.get                   GET  /cli/skin/me                              Who this pass is: guest or App, its rooms with their caps, and this server's features.
+  me.get                   GET  /cli/skin/me                              Who this pass is: guest or App, its agents (identity, caps, what they allow, folders), this server's ids and features.
   roomAgents.list          GET  /cli/skin/agents                          The agents in the pass's rooms: handle, name, color and picture.
   guests.login             POST /cli/skin/login (server only)             Log a guest in through this App; the answer carries the guest's session pass.
   password.change          POST /cli/skin/password/change (browser only)  A guest changes their own password (browser only: it ends every session of theirs).
+  guests.logout            POST /cli/skin/logout (server only)            Sign this guest's pass out; a device sign-in ends with it (its refresh token stops working).
+  guests.refresh           POST /cli/skin/refresh (server only)           Trade a device's refresh token for a new pass and a new refresh token (one-time, rotating; a reused token ends the device's sign-in).
+  guests.devices           GET  /cli/skin/devices                         This guest's devices that stay signed in to this App.
+  guests.revokeDevice      POST /cli/skin/devices/revoke                  Sign one of this guest's own devices out (its pass and refresh token end).
+  app.info                 GET  /cli/skin/app-info (server only)          Public: this one App's name and how to sign in, only when the owner listed it; anything else answers like a route that doesn't exist.
+  password.forgot          POST /cli/skin/password/forgot (server only)   Start a guest's password reset (a platform pass; the guest gets the reset link by email).
+  password.reset           POST /cli/skin/password/reset (server only)    Public: finish a password reset with the emailed token (ends every session of that guest).
   agentIdentity.get        GET  /cli/agent/identity                       The room's agent: name, color, picture, handle, and what the pass may change.
   app.self                 GET  /cli/skin/self (server only)              This App: its id, live Seed hash, health and when it was deployed (its own App only; the App pass, never a guest).
   app.usage                GET  /cli/skin/usage (server only)             This App's quotas, live use and per-call counts from its own audit (its own App only; the App pass, never a guest).
@@ -30418,6 +30566,8 @@ thread:read (Read the Thread)
   thread.page              GET  /cli/thread                               A page of a room's Thread, oldest first; sinceSeq catches up, beforeSeq pages back.
   thread.latest            GET  /cli/thread/latest                        The newest Thread item per room, for list previews; a room the pass can't read is an item with error.
   thread.events            WS   /cli/overlay/events?conversation=         Live Thread items of one room (new posts and card changes; merge by id); after a gap, thread.page with sinceSeq.
+  thread.attachmentGet     GET  /cli/thread/attachment                    One attachment of a room's message: meta, preview, thumbnail or a byte range, only when your own file rights cover it.
+  thread.catchup           POST /cli/thread/catchup                       Deltas (or newest pages) for many rooms in one round trip, each exactly what thread.page answers for it.
   thread.ensurePinned      POST /cli/workspace/ensure-pinned-chat         Check the room's pinned Chat is live (find-only for Apps: it never starts one).
 thread:post (Post to the Thread)
   thread.send              POST /cli/thread/post                          Post text to a room's Thread as the guest (or the App); the agent gets it at once.
@@ -56323,7 +56473,7 @@ k2 zen guide api — the k2 object in a custom widget
 A custom widget is a sealed page in a Garden: no network, no storage, no
 files. It reaches K2 only through window.k2. Each call needs a cap its
 manifest.json asks for; a widget in your own Garden gets every one it asks
-for at once (no review). From K2's verb catalog, version 15.
+for at once (no review). From K2's verb catalog, version 16.
 
 TEN EXAMPLES
   const off = k2.agents.subscribe((rows) => draw(rows))   // live, in scope

@@ -81,6 +81,14 @@ pub mod guest_rooms;
 pub mod members;
 #[path = "skin_paths.rs"]
 pub mod paths;
+/// Device sign-in (refresh tokens) and per-App sign-in settings
+/// (app-mobile-access-v1, 0.46.3).
+#[path = "skin_app_login.rs"]
+pub mod app_login;
+/// The agent access list, the owner's person × agent grid and the
+/// suggested role templates (app-mobile-access-v1, 0.46.3).
+#[path = "skin_access.rs"]
+pub mod access;
 pub use paths::{RoomPathScope, RoomPaths};
 
 /// `grants.created_by` on rows the 0.45.5 upgrade wrote (S24-10 backfill).
@@ -1373,6 +1381,9 @@ fn open_db(path: &Path) -> Result<Connection, String> {
     // RS-A15 (0.46.1): the owner's per-App grants (`guests-rooms`).
     // Additive, so no numbered step: an older K2 ignores the table.
     guest_rooms::ensure_schema(&conn)?;
+    // app-mobile-access-v1 (0.46.3): device sign-ins, per-App sign-in
+    // settings. Additive, no numbered step.
+    app_login::ensure_schema(&conn)?;
     // Copy existing guests once. A deleted host row stays deleted.
     ensure_host_grant_backfill(&mut conn)?;
     rebuild_tokens_table_if_needed(&mut conn)?;
@@ -2367,6 +2378,21 @@ pub fn normalize_app_target(raw: Option<&str>) -> String {
 pub fn create_app_session_token(username: &str, app: &str) -> Result<SkinAppSession, String> {
     let username = normalize_username(username)?;
     let app = normalize_app_target(Some(app));
+    let r = with_conn(|conn| mint_app_session_conn(conn, &username, &app))?;
+    crate::workspace::context_layers::refresh_skin_roster_after_people_change();
+    Ok(SkinAppSession {
+        meta: attach_token_handles(r.meta),
+        ..r
+    })
+}
+
+/// The mint behind [`create_app_session_token`] on an open connection (so
+/// device sign-in, [`app_login`], mints and rotates in one transaction).
+/// `username` and `app` are already normalized. The caller refreshes the
+/// roster and attaches handles.
+pub(crate) fn mint_app_session_conn(conn: &Connection, username: &str, app: &str) -> Result<SkinAppSession, String> {
+    let username = username.to_string();
+    let app = app.to_string();
     let id = uuid::Uuid::new_v4().to_string();
     let raw = generate_raw_key();
     debug_assert!(
@@ -2378,7 +2404,7 @@ pub fn create_app_session_token(username: &str, app: &str) -> Result<SkinAppSess
     let created_at = now_secs();
     let ttl_secs = crate::connect_users::session_ttl_days().saturating_mul(86_400);
     let expires_at = created_at.saturating_add(ttl_secs);
-    let r = with_conn(|conn| {
+    {
         let Some(principal) = principal_by_username(conn, &username)? else {
             return Err(format!("unknown skin user '{username}'"));
         };
@@ -2432,12 +2458,7 @@ pub fn create_app_session_token(username: &str, app: &str) -> Result<SkinAppSess
             app: app.clone(),
             role_name,
         })
-    })?;
-    crate::workspace::context_layers::refresh_skin_roster_after_people_change();
-    Ok(SkinAppSession {
-        meta: attach_token_handles(r.meta),
-        ..r
-    })
+    }
 }
 
 /// The enabled `kind=app` grant of one principal for one App, or `None`.
@@ -2906,6 +2927,8 @@ fn revoke_sessions_for_principal(conn: &Connection, principal_id: &str) -> Resul
             params![now_secs(), principal_id],
         )
         .map_err(|e| format!("skin session revoke: {e}"))?;
+    // A device sign-in ends with the person's sessions (app-mobile-access-v1).
+    app_login::end_chains_where(conn, "principal_id = ?3", &[&principal_id], app_login::REASON_SESSIONS_ENDED)?;
     if n > 0 && principal_has_chat_grant_conn(conn, principal_id)? {
         crate::sew_revoke::enqueue(
             conn,
@@ -2936,6 +2959,7 @@ fn revoke_sessions_for_principal_app(
             params![now_secs(), principal_id, HOST_APP_ID, app],
         )
         .map_err(|e| format!("skin session revoke: {e}"))?;
+    app_login::end_chains_where(conn, "principal_id = ?3 AND app_id = ?4", &[&principal_id, &app], app_login::REASON_SESSIONS_ENDED)?;
     enqueue_session_revokes(conn, &ended)?;
     Ok(n)
 }
@@ -2958,6 +2982,7 @@ pub fn revoke_sessions_for_app(service_id: &str) -> Result<usize, String> {
                 params![now_secs(), service_id],
             )
             .map_err(|e| format!("skin session revoke: {e}"))?;
+        app_login::end_chains_where(&tx, "app_id = ?3", &[&service_id], app_login::REASON_SESSIONS_ENDED)?;
         enqueue_session_revokes(&tx, &ended)?;
         tx.commit().map_err(|e| format!("skin session revoke commit: {e}"))?;
         Ok(n)
@@ -3455,6 +3480,9 @@ pub fn revoke_token(id: &str) -> Result<bool, String> {
             .map_err(|e| format!("skin token revoke: {e}"))?;
         if n > 0 {
             enqueue_session_revokes(&tx, &ended)?;
+            // Logout or an owner revoke of a device's pass ends that device
+            // sign-in too (its refresh token stops working).
+            app_login::end_chains_where(&tx, "session_token_id = ?3", &[&id], app_login::REASON_SELF)?;
         }
         tx.commit().map_err(|e| format!("skin token revoke commit: {e}"))?;
         Ok(n > 0)

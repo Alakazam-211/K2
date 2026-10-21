@@ -13,6 +13,7 @@ import { useServerSupports } from '@/lib/server-capabilities'
 import { K2_CAPS } from '@/lib/k2-caps.generated'
 import { AppsServerSection } from './AppsServerSection'
 import { AppsBoxSection } from './AppsBoxSection'
+import { AppPeopleAccess } from './AppPeopleAccess'
 
 export const SKIN_ACCESS_MANIFEST: SettingEntry[] = [
   {
@@ -1572,6 +1573,15 @@ export function SkinAccessSection(): React.JSX.Element {
                 </button>
               ) : null}
             </SettingsGroup>
+
+            {selectedApp ? (
+              <AppPeopleAccess
+                key={selectedApp}
+                app={selectedApp}
+                hasRoles={visibleRoles.length > 0}
+                onRolesChanged={() => void refresh()}
+              />
+            ) : null}
 
             {selectedApp === 'host' ? (
               <>

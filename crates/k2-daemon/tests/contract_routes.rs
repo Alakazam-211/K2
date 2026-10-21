@@ -106,12 +106,16 @@ fn exposure_counts_are_pinned() {
     // (app + garden-local). Room-scope 0.46.1: + room.members, app.self and
     // app.usage on both transports and the Garden's widget.self (garden-local).
     // Room-scope R3: + files.stat (GET /cli/fs/stat).
+    // app-mobile-access-v1 (0.46.3, catalog v16): + 9 app rows: thread.catchup
+    // and thread.attachmentGet (A′: the two arms that took passes without a
+    // row), guests.logout/refresh/devices/revokeDevice, app.info and
+    // password.forgot/reset.
     let garden_local = c.verbs_exposed_to(Exposure::GardenLocal).len();
-    assert_eq!((widget, app, garden_local), (24, 66, 21), "per-exposure verb counts (widget, app, garden-local)");
+    assert_eq!((widget, app, garden_local), (24, 75, 21), "per-exposure verb counts (widget, app, garden-local)");
     assert_eq!(
         c.verbs.len(),
-        128,
-        "today's 37 bridge verbs plus the frame rows theme.changed, canvas.setHitRegions, window.startDrag, sources.*, the 15 Garden data rows, the 66 app rows (5 on both transports) and widget.self"
+        137,
+        "today's 37 bridge verbs plus the frame rows theme.changed, canvas.setHitRegions, window.startDrag, sources.*, the 15 Garden data rows, the 75 app rows (5 on both transports) and widget.self"
     );
 }
 
@@ -120,6 +124,8 @@ fn every_feature_is_a_boot_status_key() {
     let mut known: BTreeSet<&str> = k2_daemon::boot_status::features().into_iter().collect();
     // Added by this build (UW36); B2 puts it in /boot-status.
     known.insert("zen-widgets-v1");
+    // DB-gated keys (reported once the daemon DB is up): this test opens no DB.
+    known.insert(k2_daemon::boot_status::FEATURE_INBOX_CATCHUP);
     for v in &catalog().verbs {
         assert!(known.contains(v.feature.as_str()), "{}: feature {} isn't a /boot-status key", v.verb, v.feature);
     }

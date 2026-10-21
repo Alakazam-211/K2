@@ -488,6 +488,9 @@ mod tests {
                 "has_role",
                 "confirm_required",
                 "declined",
+                // app-mobile-access-v1 (0.46.3): device sign-in.
+                "refresh_invalid",
+                "refresh_reused",
             ]
         );
         let retry: Vec<&str> = catalog().errors.iter().filter(|e| e.retryable).map(|e| e.code.as_str()).collect();

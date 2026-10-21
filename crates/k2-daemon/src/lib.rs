@@ -289,6 +289,7 @@ pub mod skin_hydra;
 pub mod skin_routes;
 // Room-scope R6: `GET /cli/skin/me` (lane 4, 0.46.1).
 pub mod skin_me_routes;
+pub mod app_mobile_routes;
 pub mod guest_rooms_routes;
 pub mod skin_gateway;
 // The boot sequence (was the body of `main.rs`).

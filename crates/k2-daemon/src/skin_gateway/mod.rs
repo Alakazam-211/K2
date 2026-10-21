@@ -1873,15 +1873,18 @@ mod tests {
         assert!(!allowlisted_http("GET", "/cli/fs/rename"));
         assert!(!allowlisted_http("POST", "/cli/fs/rename/foo"));
 
-        // AP3: the guest snapshot is one exact GET; the Thread strip's
-        // catch-up and the chat transcript never are (AP1).
+        // AP3: the guest snapshot is one exact GET; the chat transcript
+        // never is (AP1).
         assert!(allowlisted_http("GET", "/cli/activity/snapshot"));
         assert!(allowlisted_http("GET", "/cli/activity/snapshot?workspace=sales"));
         assert!(!allowlisted_http("POST", "/cli/activity/snapshot"));
         assert!(!allowlisted_http("HEAD", "/cli/activity/snapshot"));
         assert!(!allowlisted_http("GET", "/cli/activity/snapshot/foo"));
-        assert!(!allowlisted_http("GET", "/cli/thread/activity"));
-        assert!(!allowlisted_http("GET", "/cli/thread/activity?addr=sales"));
+        // 0.46.3: the counts-only ear's catch-up (`thread.activity`) is an
+        // App door; the handler answers a guest the guest projection only.
+        assert!(allowlisted_http("GET", "/cli/thread/activity"));
+        assert!(allowlisted_http("GET", "/cli/thread/activity?addr=sales"));
+        assert!(!allowlisted_http("POST", "/cli/thread/activity"));
         assert!(!allowlisted_ws("/cli/thread/activity"));
         assert!(!allowlisted_http("GET", "/cli/chat/transcript"));
         assert!(never_proxy("/cli/chat/transcript"));

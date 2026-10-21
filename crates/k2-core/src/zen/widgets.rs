@@ -67,6 +67,8 @@ pub const KNOWN_FEATURES: &[&str] = &[
     // thread.catchup/unread/mute through `/cli/zen/call`).
     "garden-person-rows-v1",
     "thread-stream-v1",
+    // 0.46.3: the App guests' counts-only activity ear.
+    "thread-activity-ear-v1",
 ];
 
 /// A widget's manifest after checking (UW5, UWA7, UWB13).

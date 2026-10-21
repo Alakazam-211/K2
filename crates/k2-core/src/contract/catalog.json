@@ -75,9 +75,15 @@
     },
     {
       "name": "activity:read",
+      "exposure": ["app"],
+      "label": "See when the agent is working on a Thread message (counts only)",
+      "sentence": "See when the agents on this computer are working on a message sent in their Thread, with counts only (no tool names, text or paths)."
+    },
+    {
+      "name": "activity:room",
       "exposure": ["app", "garden-local"],
-      "label": "See when the agent is working",
-      "sentence": "See when the agents on this computer are working (no tool names, text or paths)."
+      "label": "See every session's working counts in the room (the owner's other tabs too)",
+      "sentence": "See when any session of the agents on this computer is working, the owner's other tabs included, with counts only (no tool names, text or paths)."
     },
     {"name": "heartbeats:read", "exposure": ["app"], "label": "See heartbeats: schedule, next fire, history"},
     {
@@ -4418,7 +4424,12 @@
                       "type": "string"
                     },
                     "activity": {
-                      "type": "boolean"
+                      "type": "boolean",
+                      "description": "activity:read: the pinned-Chat ear (thread.activity), counts only."
+                    },
+                    "activityRoom": {
+                      "type": "boolean",
+                      "description": "activity:room: every session's counts in the room (activity.snapshot / activity.events)."
                     },
                     "members": {
                       "type": "boolean"
@@ -4442,6 +4453,7 @@
                     "files",
                     "tickets",
                     "activity",
+                    "activityRoom",
                     "members",
                     "heartbeats",
                     "wiki",
@@ -7793,6 +7805,208 @@
       "example": "const {items} = await k2.thread.latest({addrs: ['sales', 'ops']})"
     },
     {
+      "verb": "thread.activity",
+      "cap": "activity:read",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "thread-activity-ear-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/thread/activity",
+          "responseNames": {
+            "conversation": "conversation_id"
+          }
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "addr": {
+              "type": "string",
+              "description": "The room: the agent's handle (its pinned Chat)."
+            }
+          },
+          "required": [
+            "addr"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppThreadActivity",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "addr": {
+            "type": "string"
+          },
+          "conversation": {
+            "type": "string",
+            "description": "The room's pinned Chat."
+          },
+          "turn": {
+            "title": "AppThreadTurn",
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "The counts-only ear: the room's pinned-Chat Thread turn a Thread message started (no tool line, path, command or text).",
+            "properties": {
+              "turnId": {
+                "type": "string",
+                "description": "The Thread message that started the turn."
+              },
+              "rev": {
+                "type": "integer",
+                "description": "This turn's frame counter (not a time): a later frame has a higher rev."
+              },
+              "state": {
+                "type": "string",
+                "description": "working, monitoring, needs-you, unverifiable, stopped or idle."
+              },
+              "phase": {
+                "type": "string",
+                "description": "delivering, working, tool (no line), thinking, waiting, stale or children."
+              },
+              "phaseSince": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "Milliseconds since the epoch: when this phase began."
+              },
+              "startedAt": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "Milliseconds since the epoch: the first message's receipt time (the clock)."
+              },
+              "serverNow": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "Milliseconds since the epoch: the server clock when the frame was built."
+              },
+              "tally": {
+                "title": "AppThreadTally",
+                "type": "object",
+                "description": "Tools called in this turn, by kind (numbers only).",
+                "properties": {
+                  "read": {
+                    "type": "integer"
+                  },
+                  "search": {
+                    "type": "integer"
+                  },
+                  "cmd": {
+                    "type": "integer"
+                  },
+                  "edit": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "read",
+                  "search",
+                  "cmd",
+                  "edit"
+                ],
+                "additionalProperties": false
+              },
+              "subagents": {
+                "type": "integer",
+                "description": "Subagents running now."
+              },
+              "subagentsDone": {
+                "type": "integer",
+                "description": "Subagents done in this turn."
+              },
+              "background": {
+                "type": "integer",
+                "description": "Background tasks running now."
+              },
+              "messages": {
+                "type": "integer",
+                "description": "Thread messages in this turn."
+              },
+              "waitingOn": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "owner while the agent waits on the owner (never which prompt), else null."
+              },
+              "end": {
+                "title": "AppThreadTurnEnd",
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "description": "Null while it runs; the turn's end frame says how it ended.",
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "description": "done, stopped or failed."
+                  }
+                },
+                "required": [
+                  "reason"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "turnId",
+              "rev",
+              "state",
+              "phase",
+              "phaseSince",
+              "startedAt",
+              "serverNow",
+              "tally",
+              "subagents",
+              "subagentsDone",
+              "background",
+              "messages",
+              "waitingOn",
+              "end"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "ok",
+          "addr",
+          "conversation",
+          "turn"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "not_found",
+        "failed"
+      ],
+      "doc": "The room's live pinned-Chat Thread turn, counts only (needs thread:read and activity:read); null when none. Frames: collection activity on thread.events, kind thread_activity on thread.stream.",
+      "example": "const {turn} = await k2.thread.activity({addr})"
+    },
+    {
       "verb": "thread.send",
       "cap": "thread:post",
       "exposure": [
@@ -8203,12 +8417,140 @@
         }
       ],
       "response": {
-        "title": "AppThreadItem",
+        "title": "AppThreadEvent",
         "type": "object",
         "properties": {
           "collection": {
             "type": "string",
-            "description": "Always thread."
+            "description": "thread (doc), or activity (activity: the counts-only ear, with activity:read in the room since 0.46.3)."
+          },
+          "activity": {
+            "title": "AppThreadTurn",
+            "type": "object",
+            "description": "The counts-only ear: the room's pinned-Chat Thread turn a Thread message started (no tool line, path, command or text).",
+            "properties": {
+              "turnId": {
+                "type": "string",
+                "description": "The Thread message that started the turn."
+              },
+              "rev": {
+                "type": "integer",
+                "description": "This turn's frame counter (not a time): a later frame has a higher rev."
+              },
+              "state": {
+                "type": "string",
+                "description": "working, monitoring, needs-you, unverifiable, stopped or idle."
+              },
+              "phase": {
+                "type": "string",
+                "description": "delivering, working, tool (no line), thinking, waiting, stale or children."
+              },
+              "phaseSince": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "Milliseconds since the epoch: when this phase began."
+              },
+              "startedAt": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "Milliseconds since the epoch: the first message's receipt time (the clock)."
+              },
+              "serverNow": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "Milliseconds since the epoch: the server clock when the frame was built."
+              },
+              "tally": {
+                "title": "AppThreadTally",
+                "type": "object",
+                "description": "Tools called in this turn, by kind (numbers only).",
+                "properties": {
+                  "read": {
+                    "type": "integer"
+                  },
+                  "search": {
+                    "type": "integer"
+                  },
+                  "cmd": {
+                    "type": "integer"
+                  },
+                  "edit": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "read",
+                  "search",
+                  "cmd",
+                  "edit"
+                ],
+                "additionalProperties": false
+              },
+              "subagents": {
+                "type": "integer",
+                "description": "Subagents running now."
+              },
+              "subagentsDone": {
+                "type": "integer",
+                "description": "Subagents done in this turn."
+              },
+              "background": {
+                "type": "integer",
+                "description": "Background tasks running now."
+              },
+              "messages": {
+                "type": "integer",
+                "description": "Thread messages in this turn."
+              },
+              "waitingOn": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "owner while the agent waits on the owner (never which prompt), else null."
+              },
+              "end": {
+                "title": "AppThreadTurnEnd",
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "description": "Null while it runs; the turn's end frame says how it ended.",
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "description": "done, stopped or failed."
+                  }
+                },
+                "required": [
+                  "reason"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "turnId",
+              "rev",
+              "state",
+              "phase",
+              "phaseSince",
+              "startedAt",
+              "serverNow",
+              "tally",
+              "subagents",
+              "subagentsDone",
+              "background",
+              "messages",
+              "waitingOn",
+              "end"
+            ],
+            "additionalProperties": false
           },
           "seq": {
             "type": "integer"
@@ -8484,8 +8826,7 @@
         },
         "required": [
           "seq",
-          "id",
-          "doc"
+          "id"
         ],
         "additionalProperties": false
       },
@@ -8543,9 +8884,138 @@
             "enum": [
               "inbox_subscribed",
               "thread_message",
+              "thread_activity",
               "inbox_error",
               "inbox_reset"
             ]
+          },
+          "activity": {
+            "title": "AppThreadTurn",
+            "type": "object",
+            "description": "The counts-only ear: the room's pinned-Chat Thread turn a Thread message started (no tool line, path, command or text).",
+            "properties": {
+              "turnId": {
+                "type": "string",
+                "description": "The Thread message that started the turn."
+              },
+              "rev": {
+                "type": "integer",
+                "description": "This turn's frame counter (not a time): a later frame has a higher rev."
+              },
+              "state": {
+                "type": "string",
+                "description": "working, monitoring, needs-you, unverifiable, stopped or idle."
+              },
+              "phase": {
+                "type": "string",
+                "description": "delivering, working, tool (no line), thinking, waiting, stale or children."
+              },
+              "phaseSince": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "Milliseconds since the epoch: when this phase began."
+              },
+              "startedAt": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "Milliseconds since the epoch: the first message's receipt time (the clock)."
+              },
+              "serverNow": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "Milliseconds since the epoch: the server clock when the frame was built."
+              },
+              "tally": {
+                "title": "AppThreadTally",
+                "type": "object",
+                "description": "Tools called in this turn, by kind (numbers only).",
+                "properties": {
+                  "read": {
+                    "type": "integer"
+                  },
+                  "search": {
+                    "type": "integer"
+                  },
+                  "cmd": {
+                    "type": "integer"
+                  },
+                  "edit": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "read",
+                  "search",
+                  "cmd",
+                  "edit"
+                ],
+                "additionalProperties": false
+              },
+              "subagents": {
+                "type": "integer",
+                "description": "Subagents running now."
+              },
+              "subagentsDone": {
+                "type": "integer",
+                "description": "Subagents done in this turn."
+              },
+              "background": {
+                "type": "integer",
+                "description": "Background tasks running now."
+              },
+              "messages": {
+                "type": "integer",
+                "description": "Thread messages in this turn."
+              },
+              "waitingOn": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "owner while the agent waits on the owner (never which prompt), else null."
+              },
+              "end": {
+                "title": "AppThreadTurnEnd",
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "description": "Null while it runs; the turn's end frame says how it ended.",
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "description": "done, stopped or failed."
+                  }
+                },
+                "required": [
+                  "reason"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "turnId",
+              "rev",
+              "state",
+              "phase",
+              "phaseSince",
+              "startedAt",
+              "serverNow",
+              "tally",
+              "subagents",
+              "subagentsDone",
+              "background",
+              "messages",
+              "waitingOn",
+              "end"
+            ],
+            "additionalProperties": false
           },
           "room": {
             "type": "string",
@@ -14863,7 +15333,7 @@
     },
     {
       "verb": "activity.snapshot",
-      "cap": "activity:read",
+      "cap": "activity:room",
       "exposure": [
         "app",
         "garden-local"
@@ -14995,12 +15465,12 @@
         "author_unknown",
         "failed"
       ],
-      "doc": "Whether the room's agent is working now, per session.",
+      "doc": "Whether the room's agent is working now, per session (every session in the room, the owner's other tabs too; needs activity:room since 0.46.3).",
       "example": "const {status} = await k2.activity.snapshot({workspace})"
     },
     {
       "verb": "activity.events",
-      "cap": "activity:read",
+      "cap": "activity:room",
       "exposure": [
         "app"
       ],
@@ -15136,7 +15606,7 @@
         "usage",
         "failed"
       ],
-      "doc": "Live room events: agent working, heartbeats, tickets, rooms_changed, room_members_changed, app_deployed; resync then close 4008 when behind.",
+      "doc": "Live room events: agent working (every session in the room, activity:room since 0.46.3), heartbeats, tickets, rooms_changed, room_members_changed, app_deployed; resync then close 4008 when behind.",
       "example": "const off = k2.activity.events({workspace}, (f) => f.kind === 'resync' ? reload() : apply(f))"
     },
     {

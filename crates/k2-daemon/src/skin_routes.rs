@@ -13,7 +13,7 @@ use std::collections::HashSet;
 
 use crate::cli_response::CliResponse;
 use k2_core::skin::{
-    self, RoomPolicy, CAP_ACTIVITY_READ, CAP_FILES_READ, CAP_FILES_WRITE, CAP_STORE_READ,
+    self, RoomPolicy, CAP_ACTIVITY_READ, CAP_ACTIVITY_ROOM, CAP_FILES_READ, CAP_FILES_WRITE, CAP_STORE_READ,
     CAP_STORE_WRITE, CAP_THREAD_POST, CAP_THREAD_READ, CAP_TICKETS_POST, CAP_TICKETS_READ,
     CAP_WIKI_READ,
 };
@@ -1732,6 +1732,30 @@ pub fn missing_cap_response(cap: &str) -> CliResponse {
     }
 }
 
+/// A coded missing-cap refusal (`cap_not_granted`, the App surfaces'
+/// code) that names the cap, with `hint` in words. The text keeps
+/// `missing capability <cap>` for callers that read the words.
+pub fn cap_not_granted_response(cap: &str, hint: &str) -> CliResponse {
+    CliResponse {
+        status: "403 Forbidden",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "ok": false,
+            "error": { "code": "cap_not_granted", "cap": cap, "hint": format!("missing capability {cap}: {hint}") },
+        })
+        .to_string(),
+    }
+}
+
+/// 0.46.3: the room-wide counts' refusal. `activity:read` alone no longer
+/// opens them (it is the pinned-Chat ear now), so the words say so.
+pub fn activity_room_refused() -> CliResponse {
+    cap_not_granted_response(
+        ACTIVITY_ROOM,
+        "room-wide working counts (every session in the room) need activity:room; activity:read is the pinned-Chat Thread's counts (thread.activity)",
+    )
+}
+
 pub fn revoked_skin_response() -> CliResponse {
     CliResponse {
         status: "401 Unauthorized",
@@ -1822,6 +1846,8 @@ pub const THREAD_POST: &str = CAP_THREAD_POST;
 pub const FILES_READ: &str = CAP_FILES_READ;
 pub const FILES_WRITE: &str = CAP_FILES_WRITE;
 pub const ACTIVITY_READ: &str = CAP_ACTIVITY_READ;
+/// 0.46.3: the room-wide counts, split off [`ACTIVITY_READ`].
+pub const ACTIVITY_ROOM: &str = CAP_ACTIVITY_ROOM;
 pub const TICKETS_READ: &str = CAP_TICKETS_READ;
 pub const TICKETS_POST: &str = CAP_TICKETS_POST;
 pub const WIKI_READ: &str = CAP_WIKI_READ;

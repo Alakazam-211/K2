@@ -20,7 +20,7 @@ use serde_json::{json, Value};
 
 use super::{
     create_role_for_app, grant_login_policy, map_grant_row, normalize_app_target, normalize_username, paths,
-    with_conn, RoomPathScope, RoomPolicy, SkinRole, CAP_ACTIVITY_READ, CAP_AGENT_IDENTITY, CAP_FILES_READ,
+    with_conn, RoomPathScope, RoomPolicy, SkinRole, CAP_ACTIVITY_READ, CAP_ACTIVITY_ROOM, CAP_AGENT_IDENTITY, CAP_FILES_READ,
     CAP_FILES_WRITE, CAP_HEARTBEATS_READ, CAP_HEARTBEATS_WRITE, CAP_ROOM_MEMBERS, CAP_STORE_READ, CAP_STORE_WRITE,
     CAP_THREAD_POST, CAP_THREAD_READ, CAP_TICKETS_POST, CAP_TICKETS_READ, CAP_WIKI_READ, GRANT_SELECT,
 };
@@ -47,7 +47,10 @@ pub fn can_of(caps: &[String]) -> Value {
         "send": c.contains(CAP_THREAD_POST),
         "files": level(&c, CAP_FILES_READ, CAP_FILES_WRITE),
         "tickets": level(&c, CAP_TICKETS_READ, CAP_TICKETS_POST),
+        // `activity`: the pinned-Chat ear (counts only); `activityRoom`
+        // (0.46.3): the room-wide counts, every session in the room.
         "activity": c.contains(CAP_ACTIVITY_READ),
+        "activityRoom": c.contains(CAP_ACTIVITY_ROOM),
         "members": c.contains(CAP_ROOM_MEMBERS),
         "heartbeats": level(&c, CAP_HEARTBEATS_READ, CAP_HEARTBEATS_WRITE),
         "wiki": c.contains(CAP_WIKI_READ),

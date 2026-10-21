@@ -22,6 +22,16 @@
 //! strip traffic must never force a Thread resync. App guests never see
 //! them ([`skin_may_see_frame`] passes only `thread`).
 //!
+//! App guests' ear (0.46.3, Rosson 2026-10-21): the tracker also publishes
+//! each frame's counts-only guest projection on a THIRD bus
+//! ([`publish_guest_activity`]); an owner frame never goes to a guest. A
+//! guest socket sends it as the same `{collection:"activity", seq:0, id,
+//! activity}` shape only while [`guest_ear_allowed`] holds for the pass as
+//! it is NOW (re-resolved per frame: a revoked pass closes the socket, a
+//! revoked cap or room sends nothing): the room on the pass,
+//! `thread:read` AND `activity:read` there, this conversation its pinned
+//! Chat.
+//!
 //! Guest read frames (app-read-state-v1, 0.46.3): an App guest's socket
 //! also gets `{"collection":"read",…}` ([`guest_read_wire`]) when its own
 //! reader's cursor or mute moves in this Thread on any surface
@@ -185,6 +195,84 @@ pub fn publish_activity(frame: OverlayFrame) {
 
 pub fn subscribe_activity() -> broadcast::Receiver<OverlayFrame> {
     activity_bus().subscribe()
+}
+
+/// One Thread turn frame's guest projection (0.46.3,
+/// `thread_activity::guest_turn_body`). Never the owner body.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GuestTurnFrame {
+    pub conversation_id: String,
+    pub turn_id: String,
+    pub activity: serde_json::Value,
+}
+
+fn guest_activity_bus() -> &'static broadcast::Sender<GuestTurnFrame> {
+    static TX: OnceLock<broadcast::Sender<GuestTurnFrame>> = OnceLock::new();
+    TX.get_or_init(|| broadcast::channel(ACTIVITY_BUS_CAP).0)
+}
+
+/// Publish a guest turn frame (the tracker, beside [`publish_activity`]).
+pub fn publish_guest_activity(frame: GuestTurnFrame) {
+    let _ = guest_activity_bus().send(frame);
+}
+
+pub fn subscribe_guest_activity() -> broadcast::Receiver<GuestTurnFrame> {
+    guest_activity_bus().subscribe()
+}
+
+/// The guest turn frame on the per-room socket: the §7.6 shape, the guest
+/// body in `activity`, no `doc`, no `rev`.
+pub fn guest_activity_wire(frame: &GuestTurnFrame) -> String {
+    serde_json::json!({
+        "collection": "activity",
+        "seq": 0,
+        "id": frame.turn_id,
+        "activity": frame.activity,
+    })
+    .to_string()
+}
+
+/// 0.46.3: may `pass` hear the counts-only ear of `conversation` in
+/// `room`, NOW? The room on the pass, `thread:read` AND `activity:read` in
+/// that room, and `conversation` is the room's pinned Chat. Every guest
+/// door of the ear (this socket, the room stream, `GET
+/// /cli/thread/activity`) asks this with a freshly resolved pass.
+pub(crate) fn guest_ear_allowed(pass: &SkinPass, room: &str, conversation: &str) -> bool {
+    if room.trim().is_empty()
+        || !pass.has_room(room)
+        || !pass.has_cap_in_room(room, crate::skin_routes::THREAD_READ)
+        || !pass.has_cap_in_room(room, crate::skin_routes::ACTIVITY_READ)
+    {
+        return false;
+    }
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::db::schema::WorkspaceSession::get(&conn, room)
+        .ok()
+        .flatten()
+        .and_then(|s| s.session_id)
+        .is_some_and(|pin| pin.trim() == conversation)
+}
+
+/// What a guest socket does with one guest turn frame, after re-resolving
+/// its pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EarCheck {
+    Send,
+    /// Not (or no longer) allowed: nothing is sent.
+    Skip,
+    /// The pass no longer resolves: close the socket.
+    PassGone,
+}
+
+/// [`guest_ear_allowed`] for a raw pass as it resolves NOW (`link`: the
+/// App link the socket arrived on, if any).
+pub(crate) fn guest_ear_check(link: Option<&crate::apps::gateway::LinkCtx>, raw: &str, room: &str, conversation: &str) -> EarCheck {
+    match crate::apps::gateway::resolve_pass_on(link, raw) {
+        None => EarCheck::PassGone,
+        Some(pass) if guest_ear_allowed(&pass, room, conversation) => EarCheck::Send,
+        Some(_) => EarCheck::Skip,
+    }
 }
 
 /// Wire collection of the "this Thread moved" frame.
@@ -455,10 +543,13 @@ pub(crate) fn guest_read_wire(mut body: serde_json::Map<String, serde_json::Valu
 /// username; `None` for app guests). Its `{"t":"viewing","visible":bool}`
 /// text frames feed `thread_viewers` (state with a 90 s TTL, no ack); the
 /// socket closing clears them.
+/// `skin_raw` (0.46.3): the guest's raw pass, re-resolved on every guest
+/// turn frame ([`guest_ear_check`]); `None` for owner/Connect.
 pub async fn serve_overlay_events_connection(
     stream: &mut TcpStream,
     params: HashMap<String, String>,
     skin_pass: Option<SkinPass>,
+    skin_raw: Option<String>,
     viewer_login: Option<String>,
 ) {
     let skin = skin_pass.is_some();
@@ -513,6 +604,11 @@ pub async fn serve_overlay_events_connection(
     let seen = socket_seen(&params, skin, viewer_login.as_deref());
     let mut rx = subscribe();
     let mut activity_rx = subscribe_activity();
+    // 0.46.3: a guest socket's ear is the guest bus only (never the owner
+    // activity bus above, which `skin_may_see_frame` drops for it anyway).
+    let mut guest_activity_rx = subscribe_guest_activity();
+    let link = crate::apps::gateway::current();
+    let ear_room = guest_wire.as_ref().map(|g| g.project_id.clone());
     // app-read-state-v1 (0.46.3): a guest socket hears its own reader's
     // cursor or mute moving in this Thread, on any surface.
     let guest_key = skin_pass.as_ref().map(crate::read_routes::guest_person_key);
@@ -610,9 +706,45 @@ pub async fn serve_overlay_events_connection(
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
             }
+            event = guest_activity_rx.recv() => {
+                match event {
+                    Ok(frame) => {
+                        let (Some(raw), Some(room)) = (skin_raw.clone(), ear_room.clone()) else { continue };
+                        if frame.conversation_id != conversation {
+                            continue;
+                        }
+                        let (link2, conv) = (link.clone(), conversation.clone());
+                        let check = tokio::task::spawn_blocking(move || guest_ear_check(link2.as_deref(), &raw, &room, &conv)).await;
+                        match check {
+                            Ok(EarCheck::Send) => {
+                                if write.send(Message::Text(guest_activity_wire(&frame))).await.is_err() {
+                                    break;
+                                }
+                            }
+                            Ok(EarCheck::Skip) => {}
+                            Ok(EarCheck::PassGone) => {
+                                let _ = write.send(crate::presence::session_revoked_close_message()).await;
+                                break;
+                            }
+                            Err(e) => {
+                                log_debug!("[daemon/overlay_ws] guest ear check panicked: {e}");
+                                break;
+                            }
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        // Ephemeral, as the owner strip: the catch-up GET
+                        // re-reads the current turn.
+                        log_debug!("[daemon/overlay_ws] guest activity subscriber lagged {n} frames; skipped");
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
             event = activity_rx.recv() => {
                 match event {
                     Ok(frame) => {
+                        // A guest never gets an owner strip frame (its ear
+                        // is the guest bus above).
                         if !skin_may_see_frame(&frame, &conversation, skin) {
                             continue;
                         }
@@ -789,11 +921,13 @@ mod tests {
         );
     }
 
-    /// TW5 / AP1: the Thread working strip's `activity` frames (tool
-    /// lines, thinking) never reach an app guest; owners on the same
-    /// conversation get them, owners elsewhere don't.
+    /// TW5 / AP1, as changed in 0.46.3 (Rosson 2026-10-21): the OWNER
+    /// strip frame (tool lines, thinking) never reaches an app guest;
+    /// owners on the same conversation get it, owners elsewhere don't. A
+    /// guest's ear is only the guest bus ([`guest_activity_wire`], gated
+    /// per frame by [`guest_ear_allowed`]).
     #[test]
-    fn skin_ws_drops_activity_frames() {
+    fn skin_ws_drops_owner_activity_frames() {
         let conv = "conv-activity-filter";
         let activity = OverlayFrame {
             rev: 0,
@@ -804,9 +938,29 @@ mod tests {
             activity: Some(serde_json::json!({ "turnId": "turn-1", "line": "Running `cargo test`" })),
             conversation_id: Some(conv.into()),
         };
-        assert!(!skin_may_see_frame(&activity, conv, true), "an app guest must never see an activity frame");
+        assert!(!skin_may_see_frame(&activity, conv, true), "an app guest must never see an OWNER activity frame");
         assert!(skin_may_see_frame(&activity, conv, false));
         assert!(!skin_may_see_frame(&activity, "another-conv", false));
+    }
+
+    /// 0.46.3: a guest's ear frame is the §7.6 shape with the guest body
+    /// as given (built by `thread_activity::guest_turn_body`), no `doc`,
+    /// no `rev`, nothing else.
+    #[test]
+    fn guest_activity_wire_is_the_activity_shape_with_the_guest_body() {
+        let body = crate::thread_activity::guest_turn_body(&serde_json::json!({
+            "turnId": "turn-g", "state": "working", "phase": "tool", "line": "Running `cat /etc/secret`",
+            "rev": 3, "serverNow": 9, "end": null,
+        }));
+        let frame = GuestTurnFrame { conversation_id: "c".into(), turn_id: "turn-g".into(), activity: body.clone() };
+        let v: serde_json::Value = serde_json::from_str(&guest_activity_wire(&frame)).expect("json");
+        let mut keys: Vec<&str> = v.as_object().expect("object").keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["activity", "collection", "id", "seq"], "{v}");
+        assert_eq!((v["collection"].as_str(), v["seq"].as_i64(), v["id"].as_str()), (Some("activity"), Some(0), Some("turn-g")));
+        assert_eq!(v["activity"], body);
+        let text = v.to_string();
+        assert!(!text.contains("secret") && !text.contains('`') && !text.contains("line"), "{text}");
     }
 
     /// §7.6: an activity frame carries `activity`, no `doc`, seq 0.

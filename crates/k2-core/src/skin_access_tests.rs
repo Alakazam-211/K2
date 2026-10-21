@@ -43,6 +43,12 @@ fn can_reads_the_caps() {
     assert_eq!(c["heartbeats"], "none");
     assert_eq!((c["activity"].as_bool(), c["members"].as_bool(), c["wiki"].as_bool(), c["identity"].as_bool()), (Some(false), Some(false), Some(false), Some(false)));
     assert_eq!(can_of(&[])["files"], "none");
+    assert_eq!(c["activityRoom"], false);
+    // 0.46.3: the ear and the room-wide counts are separate switches.
+    let ear = can_of(&["thread:read".into(), "activity:read".into()]);
+    assert_eq!((ear["activity"].as_bool(), ear["activityRoom"].as_bool()), (Some(true), Some(false)));
+    let room = can_of(&["activity:room".into()]);
+    assert_eq!((room["activity"].as_bool(), room["activityRoom"].as_bool()), (Some(false), Some(true)));
 }
 
 #[test]

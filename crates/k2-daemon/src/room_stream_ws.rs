@@ -22,9 +22,18 @@
 //!   revoked pass, a suspended App: the next frame never goes out), and
 //!   the set is recomputed every [`RECHECK`] (grants and revokes show up
 //!   as a new `inbox_subscribed`; a dead pass closes 4003).
-//! - Only `thread` frames reach a guest (no chatter, chatterlog, activity,
-//!   moved or address frames); the doc is `wire_json_for` with the
-//!   guest's room, so attachments outside its folders are `hidden`.
+//! - Only `thread` frames reach a guest (no chatter, chatterlog, owner
+//!   activity, moved or address frames); the doc is `wire_json_for` with
+//!   the guest's room, so attachments outside its folders are `hidden`.
+//! - The counts-only ear (0.46.3, Rosson 2026-10-21): a
+//!   `{"kind":"thread_activity", room, conversation_id, conversation, id,
+//!   activity}` frame per Thread turn frame of a room's pinned Chat. A
+//!   guest gets the guest projection (`thread_activity::guest_turn_body`,
+//!   from the guest bus, never the owner body) only while the pass as it
+//!   resolves NOW has `thread:read` AND `activity:read` in the room
+//!   (`overlay_ws::guest_ear_check`); a revoked pass closes the socket, a
+//!   revoked cap or room sends nothing. A login gets the owner body. No
+//!   `rev` (the turn's own `rev` is inside `activity`).
 //! - R3 invisibility: nothing about rooms the pass can't read. Requested
 //!   ids that aren't readable come back in `unknown` whether they exist or
 //!   not; a guest's `rev` is this socket's own counter (C4: never the
@@ -57,6 +66,23 @@ pub const ROOM_STREAM_WS_PATH: &str = "/cli/thread/stream";
 pub const ROOMS_PARAM: &str = "rooms";
 /// Most rooms one socket streams (the inbox stream's 200).
 pub const MAX_ROOMS: usize = 200;
+/// The ear's frame kind on this socket (0.46.3).
+pub const ACTIVITY_KIND: &str = "thread_activity";
+
+/// One `thread_activity` frame: `activity` is the guest projection for a
+/// guest, the owner body for a login.
+pub fn activity_message(conversation: &str, room: &str, turn_id: &str, activity: &Value) -> String {
+    json!({
+        "kind": ACTIVITY_KIND,
+        "conversation_id": conversation,
+        "conversation": conversation,
+        "room": room,
+        "id": turn_id,
+        "activity": activity,
+    })
+    .to_string()
+}
+
 /// Largest serialized `thread_message` (the inbox stream's 32 KiB).
 pub const FRAME_CAP_BYTES: usize = 32 * 1024;
 /// How often the room set is recomputed (grants, revokes, a new pinned
@@ -440,6 +466,10 @@ pub async fn serve_room_stream_connection(stream: &mut TcpStream, params: HashMa
     };
     let (mut write, mut read) = ws.split();
     let mut rx = overlay_ws::subscribe();
+    // The ear (0.46.3): a guest hears only the guest bus, a login only the
+    // owner's.
+    let mut guest_act_rx = overlay_ws::subscribe_guest_activity();
+    let mut owner_act_rx = overlay_ws::subscribe_activity();
     let mut slots = RoomSlots { app_id: link.as_ref().map(|l| l.app_id.clone()), held: 0 };
     // A guest's `rev`: this socket's own counter (C4).
     let mut socket_rev: u64 = 0;
@@ -629,6 +659,71 @@ pub async fn serve_room_stream_connection(stream: &mut TcpStream, params: HashMa
                     if write.send(Message::Text(text)).await.is_err() {
                         break;
                     }
+                }
+            }
+            event = guest_act_rx.recv() => {
+                let frame = match event {
+                    Ok(f) => f,
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        // Ephemeral: `thread.activity` is the catch-up.
+                        log_debug!("[daemon/room_stream] guest activity lagged {n}; skipped");
+                        continue;
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                };
+                let Viewer::Guest { raw } = &viewer else { continue };
+                let Some(room) = view.room_of(&frame.conversation_id).map(str::to_string) else { continue };
+                let (raw2, link2, r2, c2) = (raw.clone(), link.clone(), room.clone(), frame.conversation_id.clone());
+                let checked = tokio::task::spawn_blocking(move || overlay_ws::guest_ear_check(link2.as_deref(), &raw2, &r2, &c2)).await;
+                match checked {
+                    Ok(overlay_ws::EarCheck::Send) => {
+                        let text = activity_message(&frame.conversation_id, &room, &frame.turn_id, &frame.activity);
+                        if write.send(Message::Text(text)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Ok(overlay_ws::EarCheck::Skip) => {
+                        // A revoked cap sends nothing; a revoked room (or a
+                        // new pinned Chat) also moves the set now.
+                        match readable_now(&viewer, link.as_deref()) {
+                            Some((r, _)) => {
+                                if !apply!(r, false) {
+                                    break;
+                                }
+                            }
+                            None => {
+                                let _ = write.send(crate::presence::session_revoked_close_message()).await;
+                                break;
+                            }
+                        }
+                    }
+                    Ok(overlay_ws::EarCheck::PassGone) => {
+                        let _ = write.send(crate::presence::session_revoked_close_message()).await;
+                        break;
+                    }
+                    Err(e) => {
+                        log_debug!("[daemon/room_stream] ear check panicked: {e}");
+                        break;
+                    }
+                }
+            }
+            event = owner_act_rx.recv() => {
+                let frame = match event {
+                    Ok(f) => f,
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        log_debug!("[daemon/room_stream] activity lagged {n}; skipped");
+                        continue;
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                };
+                // Never a guest's (its ear is the guest bus above).
+                if !matches!(viewer, Viewer::Login) || frame.collection != "activity" {
+                    continue;
+                }
+                let (Some(conv), Some(body)) = (frame.conversation_id.as_deref(), frame.activity.as_ref()) else { continue };
+                let Some(room) = view.room_of(conv).map(str::to_string) else { continue };
+                if write.send(Message::Text(activity_message(conv, &room, &frame.id, body))).await.is_err() {
+                    break;
                 }
             }
         }

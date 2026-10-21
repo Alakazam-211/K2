@@ -18,8 +18,9 @@
 //!
 //! App passes (`k2skn_`, S8: AP3) get only the guest projection, and only
 //! with `?workspace=<handle | id>` naming a room on the pass where it has
-//! `activity:read` (else 403 `skin_room` / `missing capability
-//! activity:read`; no `workspace=` is 400):
+//! `activity:room` (0.46.3; it was `activity:read`, which is now the
+//! pinned-Chat ear only) (else 403 `skin_room` / `cap_not_granted`
+//! naming activity:room; no `workspace=` is 400):
 //! `{workspace, status, since, serverNow, sessions:[{agentName,
 //! paneGroupId, status, since, counts}]}`. The words, `since` rule and
 //! `counts` (`{subagents, tools, commands}`, 0.45.2) are the room
@@ -104,8 +105,10 @@ pub fn handle_snapshot_gated(params: &HashMap<String, String>, skin: Option<Skin
         Ok(r) => r,
         Err(r) => return r,
     };
-    if !pass.has_cap_in_room(&room.project_id, crate::skin_routes::ACTIVITY_READ) {
-        return crate::skin_routes::missing_cap_response(crate::skin_routes::ACTIVITY_READ);
+    // 0.46.3: the room-wide counts are `activity:room` (they include the
+    // owner's other tabs); `activity:read` is the pinned-Chat ear.
+    if !pass.has_cap_in_room(&room.project_id, crate::skin_routes::ACTIVITY_ROOM) {
+        return crate::skin_routes::activity_room_refused();
     }
     let wire_workspace = if room.handle.is_empty() { token.to_string() } else { room.handle.clone() };
     let body = guest_snapshot(&wire_workspace, &room.project_id, chrono::Utc::now().timestamp_millis());

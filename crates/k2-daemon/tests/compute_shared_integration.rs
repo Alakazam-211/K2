@@ -676,7 +676,8 @@ async fn servers_add_is_held_one_at_a_time_and_hides_the_binding() {
         tenant["trust"] = json!("team");
         tenant["fp_prefix"] = json!("0123456789abcdef");
         tenant["sas"] = json!("482913");
-        let result = json!({"servers": [{"slot": 0, "label": "rosson.k2.dev", "state": "active", "trust": "own", "limits": owner}, tenant]});
+        let old = json!({"slot": 2, "label": "old.k2.dev", "state": "refused", "trust": "own", "fp_prefix": "fedcba9876543210", "refusal": "server_too_old", "limits": ShareLimits::new_server(Trust::Own, false)});
+        let result = json!({"servers": [{"slot": 0, "label": "rosson.k2.dev", "state": "active", "trust": "own", "limits": owner}, tenant, old]});
         compute_ws::test_frame(
             "own-1",
             Frame::AdminResult(k2_core::compute::proto::admin::AdminResult {
@@ -700,12 +701,14 @@ async fn servers_add_is_held_one_at_a_time_and_hides_the_binding() {
     assert_eq!(r.status, 200, "{}", r.body);
     let s = j(&r);
     let list = s["servers"].as_array().unwrap();
-    assert_eq!(list.len(), 2, "{s}");
+    assert_eq!(list.len(), 3, "{s}");
+    assert_eq!((list[2]["state"].as_str(), list[2]["refusal"].as_str()), (Some("refused"), Some("server_too_old")));
     assert_eq!((list[1]["state"].as_str(), list[1]["sas"].as_str()), (Some("pending"), Some("482 913")));
+    assert_eq!((list[0]["weight"].as_u64(), list[1]["weight"].as_u64(), list[0]["sas"].is_null(), list[1]["refusal"].is_null()), (Some(1), Some(1), true, true), "--json carries weight, SAS and refusal");
     assert_eq!(s["requests"].as_array().unwrap().len(), 1, "the held add shows with the list");
     {
         let db = k2_core::db::shared();
-        assert_eq!(store::node_servers(&db.lock(), "own-1").len(), 2);
+        assert_eq!(store::node_servers(&db.lock(), "own-1").len(), 3);
     }
     drop(n);
     for id in ["own-1", "own-old", "own-mac"] {

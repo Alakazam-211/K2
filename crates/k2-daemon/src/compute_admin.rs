@@ -1708,12 +1708,20 @@ pub fn share_note(node_id: &str, key: &str, text: &str) {
 fn server_json(r: &share::ServerRow, now: i64) -> Value {
     let mut v = serde_json::to_value(r).unwrap_or_default();
     v["role"] = if r.slot == pshare::OWNER_SLOT { "owner" } else { "tenant" }.into();
+    // Flat for scripts (`--json`): the weight, the pending SAS, a refusal.
+    v["weight"] = r.limits.weight.into();
     if let Some(e) = r.expires_at {
         v["expiresInSecs"] = (e - now).into();
     }
-    if let Some(sas) = r.usage.as_ref().and_then(|u| u.get("sas")).and_then(Value::as_str).filter(|_| r.state == "pending") {
-        v["sas"] = k2_core::compute::proto::pairing::display_sas(sas).into();
-    }
+    v["sas"] = r
+        .usage
+        .as_ref()
+        .and_then(|u| u.get("sas"))
+        .and_then(Value::as_str)
+        .filter(|_| r.state == "pending")
+        .map(k2_core::compute::proto::pairing::display_sas)
+        .into();
+    v["refusal"] = r.usage.as_ref().and_then(|u| u.get("refusal")).cloned().filter(|_| r.state == "refused").unwrap_or(Value::Null);
     v
 }
 
@@ -1896,9 +1904,11 @@ fn server_row(node: &store::NodeRow, server: &str) -> R<share::ServerRow> {
         .ok_or_else(|| no(codes::NODE_NOT_FOUND, 404, format!("no server '{server}' on {} (k2 compute node servers {})", node.name, node.name)))
 }
 
-fn server_arg(v: &Value) -> R<String> {
+/// The `server` argument. `owner_ok`: `limits` may name this server
+/// (slot 0, the owner) for its own weight; pause and revoke never.
+fn server_arg(v: &Value, owner_ok: bool) -> R<String> {
     let server = s(v, "server").ok_or_else(|| no(acodes::BAD_ARGS, 400, "name the server (its label, or slot:<n>)"))?;
-    if server == "slot:0" {
+    if server == "slot:0" && !owner_ok {
         return Err(no(acodes::BAD_ARGS, 400, "slot 0 is this server, the node's owner"));
     }
     Ok(server.to_string())
@@ -1927,7 +1937,7 @@ fn servers_limits(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<Value> {
     let v = json_body(body)?;
     let node = node_or_404(s(&v, "node"))?;
     servers_ready(&node)?;
-    let server = server_arg(&v)?;
+    let server = server_arg(&v, true)?;
     let largs = pshare::LimitsArgs { server: server.clone(), set: limits_from(&v)?, for_secs: crate::compute_routes::n(&v, "forSecs") };
     let args = serde_json::to_value(&largs).map_err(|e| no("internal", 500, e.to_string()))?;
     pshare::check_verb_args(pshare::VERB_LIMITS, &args).map_err(|e| no(acodes::BAD_ARGS, 400, e))?;
@@ -1962,7 +1972,7 @@ fn servers_pause(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<Value> {
     let v = json_body(body)?;
     let node = node_or_404(s(&v, "node"))?;
     servers_ready(&node)?;
-    let server = server_arg(&v)?;
+    let server = server_arg(&v, false)?;
     let verb = match s(&v, "action").unwrap_or("pause") {
         "pause" => pshare::VERB_PAUSE,
         "resume" => pshare::VERB_RESUME,
@@ -1985,7 +1995,7 @@ fn servers_revoke(who: &Who, body: &[u8]) -> R<Value> {
     let v = json_body(body)?;
     let node = node_or_404(s(&v, "node"))?;
     servers_ready(&node)?;
-    let server = server_arg(&v)?;
+    let server = server_arg(&v, false)?;
     let now = crate::compute_routes::b(&v, "now") == Some(true);
     let wipe = crate::compute_routes::b(&v, "wipe") == Some(true);
     let args = serde_json::to_value(pshare::RevokeArgs { server: server.clone(), now, wipe }).map_err(|e| no("internal", 500, e.to_string()))?;

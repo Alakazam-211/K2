@@ -63,7 +63,28 @@ static TUNING: std::sync::RwLock<Option<Tuning>> = std::sync::RwLock::new(None);
 
 /// The knobs in force.
 pub fn tuning() -> Tuning {
-    TUNING.read().ok().and_then(|g| *g).unwrap_or_default()
+    let mut t = TUNING.read().ok().and_then(|g| *g).unwrap_or_default();
+    let knobs = std::env::var(TEST_KNOBS_ENV).ok().is_some_and(|v| v.trim() == "1");
+    if let Some(s) = node_lost_override(std::env::var(NODE_LOST_ENV).ok().as_deref(), cfg!(debug_assertions), knobs) {
+        t.node_lost_secs = s;
+    }
+    t
+}
+
+/// Test knob (the headless two-server harness): a short `node_lost_secs`.
+pub const NODE_LOST_ENV: &str = "K2_COMPUTE_NODE_LOST_SECS";
+/// Required as well (`=1`) for [`NODE_LOST_ENV`] to count in a release
+/// build: a stray variable alone never shortens a real install's timeouts.
+pub const TEST_KNOBS_ENV: &str = "K2_COMPUTE_TEST_KNOBS";
+
+/// [`NODE_LOST_ENV`] as read: honoured only in a debug (test/dev) build or
+/// with [`TEST_KNOBS_ENV`]`=1`, and only 5–600 s (never longer than the
+/// product default, never a hair trigger).
+pub fn node_lost_override(value: Option<&str>, debug_build: bool, test_knobs: bool) -> Option<i64> {
+    if !(debug_build || test_knobs) {
+        return None;
+    }
+    value?.trim().parse::<i64>().ok().filter(|s| (5..=600).contains(s))
 }
 
 /// Tests only: shorten the waits for this process.
@@ -191,6 +212,19 @@ mod tests {
         // V55: a shared node's drained update retries, with no strike.
         assert!(is_infra(JobState::Interrupted, Some("node_update")));
         assert!(!counts_against_node(JobState::Interrupted, Some("node_update")));
+    }
+
+    /// The harness's short node_lost_secs never reaches a release build by
+    /// accident: it needs a debug build or the explicit test-knobs switch.
+    #[test]
+    fn the_node_lost_knob_needs_a_test_build_or_the_switch() {
+        assert_eq!(node_lost_override(Some("10"), false, false), None, "release build, no switch: ignored");
+        assert_eq!(node_lost_override(Some("10"), true, false), Some(10));
+        assert_eq!(node_lost_override(Some("10"), false, true), Some(10));
+        assert_eq!(node_lost_override(Some("1"), true, true), None, "under 5 s is refused");
+        assert_eq!(node_lost_override(Some("6000"), true, true), None, "never longer than the default");
+        assert_eq!(node_lost_override(Some("x"), true, true), None);
+        assert_eq!(node_lost_override(None, true, true), None);
     }
 
     #[test]

@@ -61,6 +61,11 @@ pub(crate) fn current_status() -> Option<String> {
     row_field("status")
 }
 
+/// `sql_server.last_error` (why the sidecar is stopped or degraded).
+pub(crate) fn current_last_error() -> Option<String> {
+    row_field("last_error")
+}
+
 fn set_status(status: &str) {
     set_row_field("status", status);
 }
@@ -466,7 +471,22 @@ pub fn status_json(include_health: bool) -> serde_json::Value {
         .and_then(|p| serde_json::from_str::<serde_json::Value>(&p).ok())
         .unwrap_or(serde_json::Value::Null);
     let port = listen_port(listen.as_deref());
-    let majors = majors_json();
+    let mut majors = majors_json();
+    // Never suggest `k2 db upgrade <db> --check` when it can't run: a
+    // stopped sidecar says what to do first (smoke r6).
+    let upgrade_blocked = super::pgmove::k2::sidecar_refusal(
+        Some(state.as_str()),
+        last_error.as_deref(),
+        &super::pgmove::worker::pending(),
+    )
+    .map(|(_, code, hint)| serde_json::json!({ "code": code, "hint": hint }));
+    if let (Some(b), Some(ups)) = (&upgrade_blocked, majors["upgradeAvailable"].as_array_mut()) {
+        for u in ups.iter_mut() {
+            u["check"] = serde_json::Value::Null;
+            u["blockedBy"] = b["code"].clone();
+            u["next"] = b["hint"].clone();
+        }
+    }
     serde_json::json!({
         "ok": true,
         "supported": sql_supported(),
@@ -481,6 +501,7 @@ pub fn status_json(include_health: bool) -> serde_json::Value {
         "clusters": majors["clusters"],
         "databases": majors["databases"],
         "upgradeAvailable": majors["upgradeAvailable"],
+        "upgradeBlocked": upgrade_blocked,
         "defaultMajor": majors["defaultMajor"],
         "defaultMajorPinned": majors["defaultMajorPinned"],
         "defaultMajorSource": majors["defaultMajorSource"],

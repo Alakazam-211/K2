@@ -478,6 +478,49 @@ fn status_lists_majors_and_upgrades() {
     assert!(dbs.iter().any(|d| d["name"] == "ws_b" && d["major"] == 17));
 }
 
+/// Smoke r6: with the sidecar stopped, `k2 db status` never suggests
+/// `k2 db upgrade <db> --check` (it can't run); it says how to start
+/// Postgres instead, the same words the upgrade route answers with.
+#[test]
+fn status_with_postgres_stopped_says_start_it_not_check() {
+    let _g = crate::sql::sql_server_test_lock();
+    crate::sql::pgmove::worker::reset_for_tests();
+    reset(Some(16));
+    record(16, 5432, "k2");
+    record(17, 5433, "k2");
+    db_row("d-a", "ws_a", Some(16));
+    // Running: the check is the next step.
+    let v = crate::sql::supervisor::status_json(false);
+    assert!(v["upgradeBlocked"].is_null(), "{v}");
+    assert_eq!(v["upgradeAvailable"][0]["check"], "k2 db upgrade ws_a --check");
+    // Stopped (what the health loop writes).
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "UPDATE sql_server SET status = 'stopped', last_error = 'systemd reports the postgresql unit is ''inactive''' WHERE id = 1",
+            [],
+        )
+        .unwrap();
+    }
+    let v = crate::sql::supervisor::status_json(false);
+    assert_eq!(v["upgradeBlocked"]["code"], "postgres_stopped", "{v}");
+    let hint = v["upgradeBlocked"]["hint"].as_str().unwrap();
+    assert!(hint.contains("start it with `k2 db enable`") && hint.contains("inactive"), "{hint}");
+    let up = &v["upgradeAvailable"][0];
+    assert_eq!(up["name"], "ws_a");
+    assert!(up["check"].is_null(), "no --check while it can't run: {up}");
+    assert_eq!(up["blockedBy"], "postgres_stopped");
+    assert_eq!(up["next"], hint);
+    assert!(!v.to_string().contains("--check"), "nothing in status suggests --check: {v}");
+    // The route's own words for the same state.
+    let (status, code, route_hint) =
+        crate::sql::pgmove::k2::sidecar_refusal(Some("stopped"), Some("systemd reports the postgresql unit is 'inactive'"), &[])
+            .expect("refused");
+    assert_eq!((status, code), (409, "postgres_stopped"));
+    assert_eq!(route_hint, hint);
+}
+
 /// `create --major` other than the default: an agent passport needs the
 /// "manage Postgres versions" switch; the owner token never does; the
 /// default major never needs it.

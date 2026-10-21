@@ -33063,6 +33063,12 @@ THE MOVE (one database at a time, by copy)
                                    k2v:// ref. Apps start again.
   Pause: about 10-30 s + size / 40 MB/s (1 GB ~ 30-60 s).
   Anything wrong before the switch: undone, the old copy keeps serving.
+  Postgres not running: every upgrade verb (--check too) exits 3 with
+  postgres_stopped (start it with `k2 db enable`), postgres_starting or
+  postgres_unhealthy (`k2 db doctor`); `k2 db status` says the same.
+  After a daemon restart mid-move, `recovering` lasts until K2 has
+  finished or undone that move (at most 30 minutes once Postgres runs;
+  then it becomes a failure for the owner: --acknowledge-failed).
 
 THE OLD COPY (14 days)
   Kept closed (no one connects) in the old cluster for 14 days.
@@ -56115,7 +56121,13 @@ if verb == "status":
     for c in d.get("clusters") or []:
         print("cluster:   Postgres %s on %s (%s, %s)" % (c.get("major"), c.get("port"), c.get("role"), c.get("state")))
     for u in d.get("upgradeAvailable") or []:
-        print("upgrade:   %s on %s → %s available: %s" % (u.get("name"), u.get("from"), "/".join(str(x) for x in u.get("to") or []), u.get("check")))
+        if u.get("check"):
+            print("upgrade:   %s on %s → %s available: %s" % (u.get("name"), u.get("from"), "/".join(str(x) for x in u.get("to") or []), u.get("check")))
+        else:
+            print("upgrade:   %s on %s → %s available, once Postgres runs" % (u.get("name"), u.get("from"), "/".join(str(x) for x in u.get("to") or [])))
+    blocked = d.get("upgradeBlocked")
+    if isinstance(blocked, dict) and (d.get("upgradeAvailable") or []):
+        print("first:     %s" % blocked.get("hint"))
 elif verb == "clusters":
     cl = d.get("clusters") or []
     print("%s cluster(s) · new databases go on Postgres %s%s" % (len(cl), d.get("defaultMajor"), " (pinned)" if d.get("defaultMajorPinned") else ""))

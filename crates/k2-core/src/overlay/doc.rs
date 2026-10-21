@@ -477,6 +477,13 @@ pub struct CollectedMeta {
 }
 
 impl OverlayDoc {
+    /// A settings (action) card: a choice card carrying `choice.action`
+    /// (keep-as-mine today; permission cards later). An owner/admin ask: App
+    /// guests never see one, neither as a card nor as any fallback text.
+    pub fn is_action_card(&self) -> bool {
+        self.choice.as_ref().is_some_and(|c| c.action.is_some())
+    }
+
     pub fn text(id: String, from: String, to: String, body: String, via: &str) -> Self {
         Self {
             id,

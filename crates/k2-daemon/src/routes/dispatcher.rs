@@ -12620,6 +12620,31 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
                 .await;
         }
+        // GET /cli/feedback/list-all — every ticket on the host. Claimed
+        // here (it rode the catchall) because K2's own notices (disk,
+        // Apps) are the Owner's and Admins': a Member login's list leaves
+        // them out (smoke r6). Same door as before: `token_ok`, app
+        // passes never (pass_gate's never-list).
+        p if p == "/cli/feedback/list-all" => {
+            let params =
+                super::http::read_request_params(&mut *stream, &mut buf, is_post, &path, &query)
+                    .await;
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                let r = crate::cli::CliResponse::forbidden();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            }
+            let sees_notices = super::http::token_is_owner_or_admin(&query, state.token.as_str());
+            let resp = tokio::task::spawn_blocking(move || {
+                crate::feedback_routes::handle_list_all_as(&params, sees_notices)
+            })
+            .await
+            .unwrap_or_else(|e| {
+                crate::cli_response::CliResponse::internal_error(format!("worker join: {e}"))
+            });
+            super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
+                .await;
+        }
         // Skin tickets GET — dedicated arms before the catchall. Do not
         // fall through to owner 404 `not_found`. waiting-count stays off
         // this door (its own `token_ok` arm above).
@@ -12669,11 +12694,13 @@ async fn handle_one_request(
             };
             let params = super::http::parse_params(&path, &query);
             let is_list = p == "/cli/feedback/list";
+            // K2's own notices are the Owner's and Admins' (smoke r6).
+            let sees_notices = super::http::token_is_owner_or_admin(&query, state.token.as_str());
             let resp = tokio::task::spawn_blocking(move || {
                 if is_list {
-                    crate::feedback_routes::handle_list_gated(&params, skin_pass)
+                    crate::feedback_routes::handle_list_gated_as(&params, skin_pass, sees_notices)
                 } else {
-                    crate::feedback_routes::handle_show_gated(&params, skin_pass)
+                    crate::feedback_routes::handle_show_gated_as(&params, skin_pass, sees_notices)
                 }
             })
             .await

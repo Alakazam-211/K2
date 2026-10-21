@@ -375,6 +375,10 @@ async fn async_main() {
     // wins in federation::enabled()).
     k2_core::federation::set_enabled(k2_core::app_settings::load().federation_enabled);
     k2_core::compute::set_enabled(k2_core::app_settings::load().compute_preview);
+    // Permission cards (Beta): the persisted global switch, so a daemon that
+    // boots with it on serves the family at once (K2_PERMISSION_CARDS=1
+    // still forces it on).
+    k2_core::permission::gate::set_server_switch(k2_core::app_settings::load().permission_cards);
     // Machines you can use (Settings → Compute): a node machine tells K2
     // Connect it offers compute and applies one-click enroll offers.
     crate::compute_advertise::spawn();

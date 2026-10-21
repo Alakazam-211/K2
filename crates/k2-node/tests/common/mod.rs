@@ -100,6 +100,8 @@ pub struct Fake {
     pub attaches: Arc<std::sync::atomic::AtomicU64>,
     /// SAS the fake computed on its side for the last enrollment.
     pub last_sas: Arc<Mutex<Option<String>>>,
+    /// The routes its `Welcome` teaches the node (none by default).
+    pub welcome_routes: Arc<Mutex<Vec<String>>>,
 }
 
 impl Fake {
@@ -112,12 +114,14 @@ impl Fake {
         let resume = Arc::new(Mutex::new(Vec::new()));
         let attaches = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let last_sas = Arc::new(Mutex::new(None));
+        let welcome_routes: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let wr = welcome_routes.clone();
         let (ctx, crx) = mpsc::unbounded_channel();
         let (k, n, c, r, a, s) = (key.clone(), nodes.clone(), codes.clone(), resume.clone(), attaches.clone(), last_sas.clone());
         tokio::spawn(async move {
             loop {
                 let Ok((tcp, _)) = listener.accept().await else { return };
-                let (k, n, c, r, a, s, ctx) = (k.clone(), n.clone(), c.clone(), r.clone(), a.clone(), s.clone(), ctx.clone());
+                let (k, n, c, r, a, s, ctx, wr) = (k.clone(), n.clone(), c.clone(), r.clone(), a.clone(), s.clone(), ctx.clone(), wr.clone());
                 tokio::spawn(async move {
                     let path = Arc::new(Mutex::new(String::new()));
                     let p2 = path.clone();
@@ -133,12 +137,12 @@ impl Fake {
                         serve_enroll(ws, &k, &n, &c, &s).await;
                     } else if p == "/cli/compute/attach" {
                         a.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                        serve_attach(ws, k, n, r, ctx).await;
+                        serve_attach(ws, k, n, r, ctx, wr).await;
                     }
                 });
             }
         });
-        Self { key, base, nodes, codes, resume, conns: crx, attaches, last_sas }
+        Self { key, base, nodes, codes, resume, conns: crx, attaches, last_sas, welcome_routes }
     }
 
     pub async fn next_conn(&mut self) -> Conn {
@@ -244,6 +248,7 @@ async fn serve_attach<S>(
     nodes: Arc<Mutex<HashMap<String, Registered>>>,
     resume: Arc<Mutex<Vec<ResumeHint>>>,
     conns: mpsc::UnboundedSender<Conn>,
+    welcome_routes: Arc<Mutex<Vec<String>>>,
 ) where
     S: futures_util::Sink<Message> + futures_util::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin + Send + 'static,
 {
@@ -275,7 +280,7 @@ async fn serve_attach<S>(
         name,
         controller: "fake.k2.dev".into(),
         resume: resume.lock().unwrap().clone(),
-        routes: vec![],
+        routes: welcome_routes.lock().unwrap().clone(),
         narrow: None,
         server_time: 0,
     });

@@ -57,6 +57,41 @@ fn v4_private(ip: Ipv4Addr) -> bool {
         || (o[0] == 100 && (o[1] & 0xc0) == 64)
 }
 
+/// Most routes a non-owner server may teach the node (review B7).
+pub const MAX_TENANT_ROUTES: usize = 8;
+
+/// A route another (non-owner) server's `Welcome` may teach the node
+/// (review B7): `https://` / `wss://` only, no userinfo, and a host that is
+/// a public address, or a name whose every address is public. The node
+/// never dials a LAN, tailnet or loopback host on another server's word.
+pub async fn tenant_route_ok(base: &str) -> bool {
+    let base = base.trim().trim_end_matches('/');
+    let Some((scheme, rest)) = base.split_once("://") else { return false };
+    if !matches!(scheme.to_ascii_lowercase().as_str(), "https" | "wss") {
+        return false;
+    }
+    let host_port = rest.split('/').next().unwrap_or("");
+    if host_port.is_empty() || host_port.contains('@') {
+        return false;
+    }
+    let host = host_of(host_port);
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return crate::sync::is_public_ip(&ip);
+    }
+    if host.is_empty() || host.eq_ignore_ascii_case("localhost") {
+        return false;
+    }
+    let port = host_port.rsplit_once(':').and_then(|(_, p)| p.parse::<u16>().ok()).unwrap_or(443);
+    let lookup = tokio::time::timeout(std::time::Duration::from_secs(5), tokio::net::lookup_host((host.as_str(), port))).await;
+    match lookup {
+        Ok(Ok(addrs)) => {
+            let addrs: Vec<_> = addrs.collect();
+            !addrs.is_empty() && addrs.iter().all(|a| crate::sync::is_public_ip(&a.ip()))
+        }
+        _ => false,
+    }
+}
+
 fn v6_private(ip: Ipv6Addr) -> bool {
     let s = ip.segments();
     ip.is_loopback() || (s[0] & 0xffc0) == 0xfe80 || (s[0] & 0xfe00) == 0xfc00
@@ -79,6 +114,30 @@ mod tests {
         }
         for bad in ["http://rosson.k2.dev", "http://8.8.8.8", "http://100.200.0.1", "http://[2001:db8::1]", "ftp://x", "rosson.k2.dev", "http://user@10.0.0.1"] {
             assert!(ws_url(bad, "/p").is_err(), "{bad}");
+        }
+    }
+
+    /// B7: another server teaches only https routes to public hosts.
+    #[tokio::test]
+    async fn tenant_routes_are_https_and_public() {
+        for ok in ["https://8.8.8.8", "wss://1.1.1.1:8443/", "https://[2606:4700:4700::1111]:443"] {
+            assert!(tenant_route_ok(ok).await, "{ok}");
+        }
+        for bad in [
+            "ws://192.168.1.20:9",
+            "http://8.8.8.8",
+            "https://192.168.1.20",
+            "https://10.0.0.1:8443",
+            "https://100.100.1.1",
+            "https://127.0.0.1:4000",
+            "https://localhost:1",
+            "https://[fd00::1]",
+            "https://[::1]",
+            "https://user@8.8.8.8",
+            "https://",
+            "8.8.8.8",
+        ] {
+            assert!(!tenant_route_ok(bad).await, "{bad}");
         }
     }
 }

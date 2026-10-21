@@ -573,6 +573,34 @@ async fn a_wiped_slot_is_reused_fresh() {
     assert!(n.node.tenant(1).unwrap().ledger.lock().unwrap().get("w1", 1).unwrap().is_none());
 }
 
+/// Review B7: another server's `Welcome` teaches only https routes to
+/// public hosts, at most 8; a LAN `ws://` route is dropped. The owner's
+/// routes are taken as today.
+#[tokio::test(flavor = "multi_thread")]
+async fn another_servers_lan_routes_are_dropped() {
+    let a = Fake::start().await;
+    a.welcome_routes.lock().unwrap().push("ws://192.168.1.21:9".into());
+    let mut a = a;
+    let b = Fake::start().await;
+    let mut taught = vec!["ws://192.168.1.20:9".to_string(), "https://10.0.0.5:8443".into(), "https://localhost:1".into()];
+    taught.extend((1..=10).map(|i| format!("https://8.8.4.{i}")));
+    *b.welcome_routes.lock().unwrap() = taught;
+    let mut b = b;
+    let n = start_node(&a, "srv-routes", "", walled(Wall::Seatbelt)).await;
+    let mut ca = a.next_conn().await;
+    ready(&mut ca).await;
+    pin_second(&n, &b, 1, "node-b");
+    write_shared(&n, 1, &prefix(&b.key), "b.k2.dev", ShareState::Active, None);
+    let mut cb = b.next_conn().await;
+    ready(&mut cb).await;
+    let learned = n.node.tenant(1).unwrap().learned_routes.lock().unwrap().clone();
+    assert!(!learned.iter().any(|r| r.starts_with("ws://") || r.contains("10.0.0.5") || r.contains("localhost")), "{learned:?}");
+    assert_eq!(learned.len(), 8, "at most 8: {learned:?}");
+    assert!(learned.iter().all(|r| r.starts_with("https://8.8.4.")));
+    let owner = n.node.owner().learned_routes.lock().unwrap().clone();
+    assert!(owner.contains(&"ws://192.168.1.21:9".to_string()), "the owner keeps today's behaviour: {owner:?}");
+}
+
 /// Review B9: a tenant the servers loop didn't open is kept only when its
 /// state was opened for this very line (the line mark), not merely
 /// because its pin's fingerprint fits: an unmarked one is ended and the

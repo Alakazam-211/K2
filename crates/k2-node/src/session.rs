@@ -335,12 +335,31 @@ where
     }
     // Learned routes (this server's only), the confirmed flag, narrowing:
     // all `tenant`'s (V51).
+    // Another server's routes are https to public hosts only, at most 8:
+    // it can't make the node dial into its LAN (review B7). The owner's
+    // are taken as today.
+    let mut learn = Vec::new();
+    for r in &start.welcome.routes {
+        if crate::url::ws_url(r, ATTACH_PATH).is_err() {
+            continue;
+        }
+        if !owner && !crate::url::tenant_route_ok(r).await {
+            crate::nlog!("server slot {}: dropped route {r:?} (another server's routes are https to public hosts only)", tenant.slot);
+            continue;
+        }
+        learn.push(r.clone());
+    }
     {
         let mut lr = tenant.learned_routes.lock().unwrap();
-        for r in &start.welcome.routes {
-            if crate::url::ws_url(r, ATTACH_PATH).is_ok() && !lr.contains(r) {
-                lr.push(r.clone());
+        for r in learn {
+            if lr.contains(&r) {
+                continue;
             }
+            if !owner && lr.len() >= crate::url::MAX_TENANT_ROUTES {
+                crate::nlog!("server slot {}: dropped route {r:?} (at most {} routes per server)", tenant.slot, crate::url::MAX_TENANT_ROUTES);
+                continue;
+            }
+            lr.push(r);
         }
     }
     node.mark_confirmed(&tenant);

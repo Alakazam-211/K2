@@ -2240,15 +2240,17 @@ fn action_card_person_only(hint: &str) -> CliResponse {
 /// the owner token or an Owner Connect login (the phone, the web). An agent
 /// passport (its own or another workspace's), a K2 terminal cell, a Garden
 /// widget, an App guest, an Admin or a Member login is refused. `verb`:
-/// "answers" or "dismisses". The daemon's own replace (a newer change voids
-/// the waiting card) never comes through a route, so it isn't checked here.
+/// "answers" or "dismisses" (the refusals also say "only you answer it":
+/// [`base_form`]). The daemon's own replace (a newer change voids the
+/// waiting card) never comes through a route, so it isn't checked here.
 fn require_action_card_person(params: &HashMap<String, String>, session_author: &str, verb: &str) -> Result<(), CliResponse> {
     let passport = principal_is_bound(params)
         || crate::caller_workspace::principal_from_params(params).is_some()
         || params.contains_key("cell_session_id");
     if passport {
         return Err(action_card_person_only(&format!(
-            "this card changes your settings, so only you {verb} it (the Thread tab, an owner login); an agent or a K2 terminal never can"
+            "this card changes your settings, so only you {} it (the Thread tab, an owner login); an agent or a K2 terminal never can",
+            base_form(verb)
         )));
     }
     if params.contains_key("origin") {
@@ -2265,6 +2267,11 @@ fn require_action_card_person(params: &HashMap<String, String>, session_author: 
         )));
     }
     Ok(())
+}
+
+/// "answers" → "answer", "dismisses" → "dismiss" (after "you").
+fn base_form(verb: &str) -> &str {
+    verb.strip_suffix("sses").map(|_| &verb[..verb.len() - 2]).or_else(|| verb.strip_suffix('s')).unwrap_or(verb)
 }
 
 /// A person's tap on an action card: check it's a person who may change
@@ -3448,6 +3455,9 @@ mod tests {
         // The agent's own passport (stamped params).
         let r = post_json("/cli/thread/answer", &passport_params(&project_id, &handle), body.clone());
         assert_error_code(&r, "403 Forbidden", "action_card_person_only");
+        // Smoke r6 polish: "only you answer it", never "only you answers it".
+        assert!(r.body.contains("only you answer it") && !r.body.contains("you answers"), "{}", r.body);
+        assert_eq!((base_form("answers"), base_form("dismisses")), ("answer", "dismiss"));
         // The agent's passport in the request slot (TCP).
         let r = crate::caller_workspace::with_request_principal(
             Some(crate::session_token::HookPrincipal { workspace_uuid: project_id.clone(), agent_address: handle.clone() }),

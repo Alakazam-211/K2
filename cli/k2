@@ -15695,7 +15695,7 @@ Agents:
                  (foreign locks), run/queue and the jobs, free CPU/mem, load,
                  disk free vs floor; plus this controller (disk, Time Machine
                  local snapshots). Hand-run lock files, cache sizes and pinned
-                 long-runners need node reporting: compute B (0.46.2+).
+                 long-runners need node reporting, which nodes don't send yet.
                  (k2 compute status <job> is get)
   k2 compute info <node> [--json]
   k2 compute run <node>|--any [--os linux] [--arch x86_64] [--label k=v]
@@ -17002,7 +17002,7 @@ print("RC %d %s" % (rc or 0, " ".join(i for i in failed_ids if i)))' "$dir")"
 # against the floor, the jobs running and queued) plus this controller
 # machine (disk, Time Machine local snapshots). Only what the controller
 # already knows; hand-run lock files, cache sizes and pinned long-runners
-# need node reporting (compute B, 0.46.2+).
+# need node reporting, which nodes don't send yet.
 cmd_compute_status() {
     local as_json=0
     while [ $# -gt 0 ]; do
@@ -40229,9 +40229,19 @@ _msg_inbox_delete_staged() {
 _msg_inbox_map_response() {
     local response="$1"
     local wake_mode="${2:-false}"
-    echo "$response"
     if ! command -v python3 >/dev/null 2>&1; then
+        echo "$response"
         return 0
+    fi
+    # An error is said once, as the stderr teaching line below; the raw
+    # body on stdout too printed it twice (smoke r6).
+    if ! printf '%s' "$response" | python3 -c 'import json,sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+sys.exit(0 if isinstance(d, dict) and (isinstance(d.get("error"), dict) or (isinstance(d.get("error"), str) and d.get("error"))) else 1)' 2>/dev/null; then
+        echo "$response"
     fi
     echo "$response" | WAKE_MODE="$wake_mode" python3 -c '
 import json, sys, os
@@ -40677,7 +40687,8 @@ print("OK\t" + (d.get("id") or "") + "\t" + (d.get("title") or ""))
                 local ecode hint
                 ecode=$(printf '%s' "$mapped" | cut -f2)
                 hint=$(printf '%s' "$mapped" | cut -f3-)
-                echo "$response"
+                # Said once, on stderr (smoke r6: the raw body on stdout
+                # repeated it).
                 printf '%s\n' "$(python3 -c 'import json,sys; print(json.dumps({"error":{"code":sys.argv[1],"hint":sys.argv[2]}},separators=(",",":")))' "$ecode" "$hint")" >&2
                 if [[ "$ecode" == "not_connected" || "$ecode" == "gated" || "$ecode" == "forbidden" ]]; then
                     return 3

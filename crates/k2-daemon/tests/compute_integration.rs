@@ -1458,7 +1458,10 @@ async fn status_detail_shows_waits_jobs_disk_and_the_controller() {
     if cfg!(target_os = "macos") {
         assert!(m.get("tmLocalSnapshots").is_some() || m.get("tmLocalSnapshotsError").is_some(), "{m}");
     }
-    assert!(v["notYet"].as_str().is_some_and(|s| s.contains("compute B")), "{v}");
+    // Current wording: no stale "compute B (0.46.2+)" promise (smoke r6).
+    let not_yet = v["notYet"].as_str().expect("notYet");
+    assert!(not_yet.contains("node reporting, which nodes don't send yet"), "{v}");
+    assert!(!not_yet.contains("compute B") && !not_yet.contains("0.46.2"), "{v}");
     // A foreign lock on the node shows as the node's wait.
     let lock = env.home.join("release.lock");
     std::fs::write(&lock, "held").expect("lock");

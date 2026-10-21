@@ -220,6 +220,26 @@ pub const VERBS: &[VerbSpec] = &[
     VerbSpec { name: "servers.revoke", base: Class::Operate, min_level: Level::Policy, runs: Runs::Executor },
 ];
 
+/// Verbs that restart `k2-node`. On a node with two or more active
+/// servers they drain first: no new starts, running jobs finish (up to
+/// 30 min), then the swap (prd-compute-shared-queue-v1 §8.2, V55). The
+/// optional argument [`ARG_NOW`] (`true`) skips the wait. Solo nodes never
+/// drain, as today.
+pub const DRAIN_VERBS: &[&str] = &["node.update", "node.rollback", "unit.restart"];
+/// `"now": true` on a [`DRAIN_VERBS`] command: don't wait for the drain.
+pub const ARG_NOW: &str = "now";
+/// The longest a drain waits before the swap goes ahead anyway.
+pub const DRAIN_MAX_SECS: i64 = 30 * 60;
+
+/// The `now` argument of a drain verb: absent = `false` (drain first).
+pub fn now_arg(args: &Value) -> Result<bool, AdminRefusal> {
+    match args.get(ARG_NOW) {
+        None => Ok(false),
+        Some(Value::Bool(b)) => Ok(*b),
+        Some(_) => Err(AdminRefusal::new(code::BAD_ARGS, "now is true or false")),
+    }
+}
+
 pub fn verb(name: &str) -> Option<&'static VerbSpec> {
     VERBS.iter().find(|v| v.name == name)
 }
@@ -864,6 +884,17 @@ mod tests {
                 assert_eq!(o.body, c.canonical().unwrap(), "only the signed body ever opens");
             }
         }
+    }
+
+    #[test]
+    fn drain_verbs_take_an_optional_now() {
+        for v in DRAIN_VERBS {
+            assert!(verb(v).is_some(), "{v} is in the catalog");
+        }
+        assert!(!now_arg(&serde_json::json!({})).unwrap(), "absent = drain first");
+        assert!(now_arg(&serde_json::json!({"now": true})).unwrap());
+        assert!(!now_arg(&serde_json::json!({"now": false})).unwrap());
+        assert_eq!(now_arg(&serde_json::json!({"now": "yes"})).unwrap_err().code, code::BAD_ARGS);
     }
 
     #[test]

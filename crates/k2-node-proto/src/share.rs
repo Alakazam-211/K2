@@ -806,9 +806,17 @@ pub struct ShareView {
     /// Seconds until the end date; absent = none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_in_secs: Option<i64>,
+    /// The node's clock minus this server's (`Welcome.server_time`, read at
+    /// attach): positive = the node is ahead. Shown when over
+    /// [`SKEW_SHOW_SECS`] (§9 `nodes`, §14). Order and ETAs never use it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skew_secs: Option<i64>,
     /// Start-now and ETA for this tenant's last [`MAX_QUOTES`] distinct
     /// asks. Not part of the offer's change check: they ride the 30 s
     /// offer, so queue movement doesn't trigger an offer on every server.
+    /// Keyed by the plan's own `limits.cpu_millis` / `limits.mem_bytes`,
+    /// an absent limit as 0 (the server matches its plan the same way; the
+    /// node quotes 0 as "an even share", like an unsized job).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub quotes: Vec<Quote>,
 }
@@ -828,6 +836,9 @@ pub struct Quote {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blocked_by: Option<String>,
 }
+
+/// Clock skew worth showing (`k2 compute nodes`, owner health).
+pub const SKEW_SHOW_SECS: i64 = 120;
 
 /// ETAs other servers see: up to 1 min below 10 min, up to 5 min above.
 /// A duration, never a clock time.
@@ -873,7 +884,9 @@ pub struct QueueView {
 
 /// One running or queued job. For other tenants' jobs only `mine = false`,
 /// class, state, size and ETA are set (and `server_label` for the owner):
-/// no job id, workspace, session, command or logs.
+/// no job id, workspace, session, command or logs. The asking server's own
+/// entries (`mine = true`) always carry `job_id` and `generation` (and
+/// `workspace_id`, `session_id` when the plan had them), with exact ETAs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QueueEntry {
     pub pos: u32,
@@ -911,6 +924,53 @@ pub struct TenantTotals {
     pub running: u32,
     pub queued: u32,
     pub cpu_secs_today: u64,
+}
+
+/// The `servers.list` result (§9 `node servers`): every line of
+/// `servers.toml` with the node's runtime facts. The owner server gets every
+/// server; nobody else may run the verb (owner-only admin).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServersList {
+    /// `servers.toml` `max_servers` (or the default when there's no file).
+    pub max_servers: u8,
+    /// No `servers.toml`: solo, the owner implied by `controller.json`.
+    pub solo: bool,
+    pub servers: Vec<ServerListing>,
+}
+
+/// One server on the node.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServerListing {
+    pub slot: Slot,
+    pub label: String,
+    /// The decision and time combined; `refused` = approved but its attach
+    /// is refused (see `refusal`).
+    pub state: ServerStatus,
+    pub trust: Trust,
+    /// The full key fingerprint once enrolled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fp: Option<String>,
+    /// The code's 16-hex prefix (the owner's: its full fingerprint).
+    pub fp_prefix: String,
+    pub limits: ShareLimits,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_in_secs: Option<i64>,
+    pub added_at: i64,
+    pub added_by: String,
+    pub running: u32,
+    pub queued: u32,
+    pub cpu_secs_today: u64,
+    /// The SAS to read to the new server's owner, while `pending`
+    /// (6 digits, no space).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sas: Option<String>,
+    /// Why its attach is refused (`server_too_old`), when `refused`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refusal: Option<String>,
+    /// Its session is up now.
+    pub online: bool,
 }
 
 // ── servers.* admin verbs (§10.2) ────────────────────────────────────
@@ -1213,6 +1273,37 @@ mod tests {
         assert!(check_verb_args(VERB_REVOKE, &serde_json::json!({"server": "slot:9"})).is_err());
         check_verb_args(VERB_LIST, &serde_json::json!({})).unwrap();
         assert!(check_verb_args("servers.owner", &serde_json::json!({})).is_err());
+    }
+
+    /// The pinned `servers.list` shape (L4 parses exactly this).
+    #[test]
+    fn servers_list_round_trips_with_absent_options_omitted() {
+        let entry = ServerListing {
+            slot: 1,
+            label: "b.k2.dev".into(),
+            state: ServerStatus::Pending,
+            trust: Trust::Team,
+            fp: None,
+            fp_prefix: "0123456789abcdef".into(),
+            limits: ShareLimits::new_server(Trust::Team, true),
+            expires_at: Some(9),
+            expires_in_secs: Some(5),
+            added_at: 1,
+            added_by: "local:rosson".into(),
+            running: 0,
+            queued: 2,
+            cpu_secs_today: 30,
+            sas: Some("482913".into()),
+            refusal: None,
+            online: false,
+        };
+        let l = ServersList { max_servers: DEFAULT_MAX_SERVERS, solo: false, servers: vec![entry] };
+        let v = serde_json::to_value(&l).unwrap();
+        assert_eq!(v["servers"][0]["state"], "pending");
+        assert_eq!(v["servers"][0]["limits"]["network"], "none");
+        assert_eq!(v["servers"][0]["sas"], "482913");
+        assert!(v["servers"][0].get("fp").is_none() && v["servers"][0].get("refusal").is_none());
+        assert_eq!(serde_json::from_value::<ServersList>(v).unwrap(), l);
     }
 
     #[test]

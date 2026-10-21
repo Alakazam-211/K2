@@ -256,8 +256,7 @@ impl Node {
             return None;
         }
         let epoch = *t.hub.connected.borrow();
-        let caps = self.queue_caps();
-        self.fairq.queued(t.slot, &a, epoch, self.now(), &caps);
+        self.fairq.queued(t.slot, &a, epoch, self.now());
         self.fairq.kick.notify_one();
         Some((job, gen))
     }

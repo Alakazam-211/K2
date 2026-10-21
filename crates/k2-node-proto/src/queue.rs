@@ -527,8 +527,9 @@ pub fn quote(input: &Input<'_>, slot: Slot, cpu_millis: u64, mem_bytes: u64) -> 
         workspace_id: "\u{0}quote".into(),
         session_id: None,
         class: JobClass::Interactive,
-        cpu_millis: Some(cpu_millis),
-        mem_bytes: Some(mem_bytes),
+        // 0 = the plan named no limit: an even share, like an unsized job.
+        cpu_millis: (cpu_millis > 0).then_some(cpu_millis),
+        mem_bytes: (mem_bytes > 0).then_some(mem_bytes),
         exclusive: false,
         enqueued_at: input.now,
         arrival: u64::MAX,
@@ -982,6 +983,10 @@ mod tests {
         assert_eq!(q1.eta_secs, Some(180), "130 s rounds up to 3 min");
         let q2 = quote(&w.input(), 1, 64_000, 1 << 30);
         assert_eq!(q2.blocked_by.as_deref(), Some("exceeds_node_caps"));
+        // An unsized job (0, 0) is quoted as an even share and keeps its key.
+        let q3 = quote(&w.input(), 1, 0, 0);
+        assert_eq!((q3.cpu_millis, q3.mem_bytes, q3.starts_now), (0, 0, false));
+        assert_eq!(q3.eta_secs, Some(180));
     }
 
     #[test]

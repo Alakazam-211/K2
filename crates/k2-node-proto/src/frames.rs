@@ -600,6 +600,15 @@ pub const CANCEL_WITHDRAW: &str = "withdraw";
 /// `cancelled` when it was still queued (V57).
 pub const CANCEL_IF_QUEUED: &str = "if_queued";
 
+/// The node's answers (V46, V57):
+/// - `withdraw` on a queued job → `cancelled` / `withdrawn`;
+/// - `if_queued` on a queued job → `cancelled` / `cancelled`;
+/// - either on a started job → its real state (`preparing`, `running`, …),
+///   the job untouched; on an ended one → its row; unknown → `unknown` /
+///   `not_on_node`.
+/// The node may also end queued rows by itself: `cancelled` / `superseded`
+/// (not in `Welcome.resume`, V47), `share_expired`, `share_revoked`.
+///
 /// Must a cancel with this reason leave a started job alone?
 pub fn cancel_only_if_not_started(reason: &str) -> bool {
     reason == CANCEL_WITHDRAW || reason == CANCEL_IF_QUEUED

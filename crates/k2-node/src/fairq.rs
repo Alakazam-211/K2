@@ -204,11 +204,13 @@ impl FairQ {
     // ── bookkeeping from the node ───────────────────────────────────
 
     /// A job entered the queue in the session with hub `epoch`.
-    pub(crate) fn queued(&self, slot: Slot, a: &Assign, epoch: u64, now: i64, caps: &Caps) {
+    pub(crate) fn queued(&self, slot: Slot, a: &Assign, epoch: u64, now: i64) {
         let key = (slot, a.fence.job_id.clone(), a.fence.generation);
         self.st.lock().unwrap().gates.insert(key, epoch);
-        let cpu = a.plan.limits.cpu_millis.unwrap_or_else(|| caps.default_cpu());
-        let mem = a.plan.limits.mem_bytes.unwrap_or_else(|| caps.default_mem());
+        // Keyed by the plan's own limits, absent = 0 (what the server
+        // matches its plans with); quoted as an even share.
+        let cpu = a.plan.limits.cpu_millis.unwrap_or(0);
+        let mem = a.plan.limits.mem_bytes.unwrap_or(0);
         if let Err(e) = self.store.lock().unwrap().add_ask(slot, cpu, mem, now) {
             crate::nlog!("queue store: {e}");
         }

@@ -843,6 +843,37 @@ pub fn handle_set_handle(body: &[u8]) -> CliResponse {
     }
 }
 
+/// The route-level entry for one agent permission switch on `POST
+/// /cli/workspace/set {project, fields: {<field>: <value>}}` as `who`
+/// (permission cards, prd-agent-settings-cards-v1 §6.4, C15). The route's
+/// floor lives in the dispatcher (an Admin or Owner login or the owner
+/// token for any [`AGENT_SWITCH_FIELDS`] key) and route_policy (Member);
+/// both are checked again here with the answerer's current role, then
+/// [`handle_workspace_set`] runs as on the Settings door. Only the agent
+/// switch fields are taken: a card never writes another workspace field.
+pub(crate) fn agent_switch_entry(
+    who: &crate::permission::actions::Answerer,
+    project: &str,
+    field: &str,
+    value: &str,
+) -> CliResponse {
+    if !AGENT_SWITCH_FIELDS.contains(&field) {
+        return CliResponse::bad_request(format!("'{field}' is not an agent permission switch"));
+    }
+    if let Err(r) = crate::permission::actions::switches::route_floor(who, "/cli/workspace/set") {
+        return r;
+    }
+    if let crate::permission::actions::Answerer::Login { user, .. } = who {
+        match k2_core::connect_users::role_for_user(user) {
+            Some(role) if role >= k2_core::connect_users::Role::Admin => {}
+            Some(role) => return agent_switch_role_required(field, role),
+            None => return CliResponse::forbidden(),
+        }
+    }
+    let body = serde_json::json!({ "project": project, "fields": { field: value } });
+    handle_workspace_set(body.to_string().as_bytes())
+}
+
 // ──────────────────────────────────────────────────────────────────────
 // Inline unit tests — 0.40.24 S2 settings plane
 // ──────────────────────────────────────────────────────────────────────

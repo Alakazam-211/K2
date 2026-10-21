@@ -323,6 +323,23 @@ pub fn handle(
     }
 }
 
+/// The route-level entry for `POST /cli/agent-access/set` (permission
+/// cards, prd-agent-settings-cards-v1 §6.4, C15): the Agent tab's switch
+/// writer as the person who answered the card. The route's login floor
+/// (route_policy's Admin row, which `role_gate` applies on the Settings
+/// door) is checked again here with the login's current role; then the
+/// same [`handle`] Settings reaches runs, so `handle_access`'s own rules
+/// (`compute_manage` owner-only both ways, the owner-only Apps raises)
+/// and its `agent-access-set` audit line are exactly Settings'.
+/// `body` is the route's own `{toggle, workspace, value, core?}`.
+pub(crate) fn access_entry(who: &crate::permission::actions::Answerer, body: &serde_json::Value) -> CliResponse {
+    let caller = match crate::permission::actions::switches::route_floor(who, "/cli/agent-access/set") {
+        Ok(c) => c,
+        Err(r) => return r,
+    };
+    handle("/cli/agent-access/set", caller, body.to_string().as_bytes(), &HashMap::new(), "permission-card")
+}
+
 // ── Shared resolution ────────────────────────────────────────────────
 
 struct Workspace {

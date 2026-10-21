@@ -1,19 +1,130 @@
-//! E1 — garden.keep-mine widget= version= (K2-presented; GardenOwner floor via `zen::garden_owner_may`, which Settings calls too, §5.2.1).
+//! E1 — `garden.keep-mine widget= version=` (PRD rev 3.1 §5.2, §5.2.1):
+//! keep an agent-changed widget version as the person's, so it reads its
+//! data with the person's rights again. K2 already presents a Keep-as-mine
+//! card of its own (`action_cards::KEEP_WIDGET`); this is the same act as a
+//! catalog action an agent may ask for.
 //!
-//! P0 stub: no action registered yet. Each spec passes
-//! `k2_core::permission::catalog::validate` and the floor-parity test.
+//! **Floor: `GardenOwner`**, the owner of that Garden from any signed-in
+//! surface (the owner token, or an Owner login from the phone, the web or
+//! another server). `apply` goes through `zen_routes::claim_entry`, which
+//! runs `zen_routes::garden_owner_may`, the one resolver Settings' "It's
+//! mine" uses too, so card and Settings stay one door (§6.4, C15).
+//!
+//! The current state (§6.2): the live version must still be `version`
+//! (else `stale`: the widget changed since the ask); a version that is
+//! already the person's is `already_done`.
 
-use k2_core::permission::catalog::NotCardableSpec;
+use k2_core::garden_data::MadeBy;
+use k2_core::permission::catalog::{
+    ActionSpec, Area, Direction, Expiry, Floor, Grant, NeverReason, NotCardable, NotCardableSpec, ParamKind, ParamSpec,
+    Proof, SettingsRef, Undo, WallCoverage, Words,
+};
 
-use super::Registered;
+use super::switches::{applied, as_caller, param};
+use super::{Answerer, Applied, Check, Ctx, Registered};
 
-pub(crate) fn actions() -> Vec<Registered> {
-    Vec::new()
+/// Where Settings' "It's mine" lives.
+const LOCAL_DATA: SettingsRef = SettingsRef { page: "gardens/local-data", path: "Settings → Gardens → Local Data" };
+
+pub(crate) static KEEP_MINE: ActionSpec = ActionSpec {
+    id: "garden.keep-mine",
+    area: Area::Gardens,
+    params: &[
+        ParamSpec { key: "widget", kind: ParamKind::Widget, required: true, list: false, choices: &[] },
+        ParamSpec { key: "version", kind: ParamKind::Version, required: true, list: false, choices: &[] },
+    ],
+    floor: Floor::GardenOwner,
+    direction: Direction::Loosen,
+    grant: Grant::OneTime,
+    proof: Proof::Click,
+    expiry: Expiry::STANDARD,
+    words: Words {
+        setting: "Keep as mine",
+        what_changes: "Keep {ws}'s change to the {widget} widget as yours",
+        consequences: "This version of {widget} reads its data with your rights. Undo in Settings → Gardens → Local Data.",
+        scope: "the {widget} widget",
+        duration: "once",
+        retry: "run your command again",
+    },
+    undo: Undo::None,
+    settings: LOCAL_DATA,
+    // K2-presented and asked for; no refusal names it (the claim route is
+    // the person's own, an agent can't reach it).
+    walls: &[],
+    coverage: WallCoverage::None,
+    machine_hints: &[],
+};
+
+fn check_keep(ctx: &Ctx) -> Check {
+    let (Some(widget), Some(version)) = (param(ctx, "widget"), param(ctx, "version")) else {
+        return Check::Moved("name the widget and its version: widget=<name> version=<hash>".into());
+    };
+    match crate::zen_routes::widget_live_version(widget) {
+        Err(m) => Check::Moved(m),
+        Ok((live, _)) if live != version => {
+            Check::Moved(format!("{widget} changed since this was asked (its live version is now {}); ask again", &live[..live.len().min(12)]))
+        }
+        Ok((_, MadeBy::Owner)) => Check::AlreadyDone,
+        Ok(_) => Check::Needed,
+    }
 }
 
-/// This area's rows that aren't card-able in v1 (never, later, dropped or
-/// covered), so their refusals say "It can't be requested." or name the
-/// covering action.
+fn apply_keep(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied {
+    let (Some(widget), Some(version)) = (param(ctx, "widget"), param(ctx, "version")) else {
+        return Applied::Refused { code: "bad_params".into(), message: "the request names no widget or version".into() };
+    };
+    let r = crate::zen_routes::claim_entry(&as_caller(who), widget, Some(version), "permission-card");
+    applied(&r, "Kept as yours. Undo in Settings → Gardens → Local Data.")
+}
+
+pub(crate) fn actions() -> Vec<Registered> {
+    vec![Registered { spec: &KEEP_MINE, check: check_keep, apply: apply_keep }]
+}
+
+/// The Garden and data-source rows that aren't v1 cards (§5.4, §9;
+/// Appendix A11).
+pub(crate) static NOT_CARDABLE: [NotCardableSpec; 6] = [
+    // Settings widened to GardenOwner now; the card row is "later" (trivial).
+    NotCardableSpec {
+        id: "garden.widget.resume",
+        area: Area::Gardens,
+        why: NotCardable::Later,
+        r#where: "the K2 app (click Resume on the widget) or the phone, signed in as the owner",
+    },
+    // Ruling 6: the lock is the person's own tool, owner token only.
+    NotCardableSpec {
+        id: "garden.lock",
+        area: Area::Gardens,
+        why: NotCardable::Never { reason: NeverReason::PersonalTool },
+        r#where: "Settings → Gardens, on this computer",
+    },
+    // RS-A15's own sheet.
+    NotCardableSpec {
+        id: "garden.guests",
+        area: Area::Gardens,
+        why: NotCardable::Never { reason: NeverReason::Secret },
+        r#where: "the widget's own guest sheet, by the owner",
+    },
+    NotCardableSpec {
+        id: "sources.allow-lan",
+        area: Area::Gardens,
+        why: NotCardable::Dropped,
+        r#where: "Settings → Gardens → External Data (owner)",
+    },
+    NotCardableSpec {
+        id: "sources.bind-secret",
+        area: Area::Gardens,
+        why: NotCardable::Dropped,
+        r#where: "Settings → Gardens → External Data",
+    },
+    NotCardableSpec {
+        id: "sources.field-limits",
+        area: Area::Gardens,
+        why: NotCardable::Dropped,
+        r#where: "Settings → Gardens → External Data",
+    },
+];
+
 pub(crate) fn not_cardable() -> Vec<&'static NotCardableSpec> {
-    Vec::new()
+    NOT_CARDABLE.iter().collect()
 }

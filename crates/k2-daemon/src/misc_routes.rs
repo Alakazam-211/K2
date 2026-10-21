@@ -1529,6 +1529,61 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
     Some(resp)
 }
 
+// ── Route entries for permission cards (prd-agent-settings-cards-v1 §6.4,
+// C15). These routes' floors live only in route_policy (and, for
+// connections, the dispatcher's `actor_privileged` stamp), so each entry
+// checks that floor again with the answerer's current role, then runs the
+// route's own arm above. Card and Settings stay one door.
+
+fn entry_params(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+    pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+}
+
+/// `POST /cli/dns-manage {project, enable}` as `who` (Admin floor).
+pub(crate) fn dns_manage_entry(who: &crate::permission::actions::Answerer, project_path: &str, enable: bool) -> CliResponse {
+    if let Err(r) = crate::permission::actions::switches::route_floor(who, "/cli/dns-manage") {
+        return r;
+    }
+    let p = entry_params(&[("project", project_path), ("enable", if enable { "1" } else { "0" })]);
+    dispatch("/cli/dns-manage", &p).unwrap_or_else(CliResponse::not_found)
+}
+
+/// `POST /cli/agents-create-connections {project, enable}` as `who`
+/// (Admin floor).
+pub(crate) fn connections_switch_entry(
+    who: &crate::permission::actions::Answerer,
+    project_path: &str,
+    enable: bool,
+) -> CliResponse {
+    if let Err(r) = crate::permission::actions::switches::route_floor(who, "/cli/agents-create-connections") {
+        return r;
+    }
+    let p = entry_params(&[("project", project_path), ("enable", if enable { "1" } else { "0" })]);
+    dispatch("/cli/agents-create-connections", &p).unwrap_or_else(CliResponse::not_found)
+}
+
+/// `POST /cli/connections {project, action:"add", target}` as `who`. The
+/// route's own floor is Member; the add is privileged only for the owner
+/// token or an Owner/Admin login (the dispatcher's `actor_privileged`
+/// stamp, computed here the same way, never taken from a client).
+pub(crate) fn connections_add_entry(
+    who: &crate::permission::actions::Answerer,
+    project_path: &str,
+    target: &str,
+) -> CliResponse {
+    if let Err(r) = crate::permission::actions::switches::route_floor(who, "/cli/connections") {
+        return r;
+    }
+    let privileged = crate::permission::actions::switches::owner_or_admin(who);
+    let p = entry_params(&[
+        ("project", project_path),
+        ("action", "add"),
+        ("target", target),
+        ("actor_privileged", if privileged { "1" } else { "0" }),
+    ]);
+    dispatch("/cli/connections", &p).unwrap_or_else(CliResponse::not_found)
+}
+
 /// 0.39.39 (#675.3 + #675.4) — push the canonical review-queue +
 /// review-detail change onto the `/cli/sessions/events` spine so the
 /// renderer can drop the `/cli/agents/review-queue` poll (review-queue.ts)

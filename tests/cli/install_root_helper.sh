@@ -600,6 +600,22 @@ for _case in "debian:apt-get install -y minisign" "ubuntu:apt-get install -y min
 	if printf '%s' "$out" | grep -q "download failed\|downloading"; then fail "no minisign: a download was attempted: $out"; fi
 done
 nothing_installed "$DNM" "no minisign"
+# Ubuntu/Debian ship /etc/os-release -> ../usr/lib/os-release (a relative
+# symlink): the distro hint must follow it, not fall back to the generic one.
+mkdir -p "$WORK/osl/etc" "$WORK/osl/usr/lib"
+os_release "$WORK/osl/usr/lib/os-release" "Ubuntu" ubuntu debian
+ln -s ../usr/lib/os-release "$WORK/osl/etc/os-release"
+[ -L "$WORK/osl/etc/os-release" ] || fail "test setup: os-release must be a symlink"
+PATH="$NOMS" K2_TEST_OS_RELEASE="$WORK/osl/etc/os-release" run "$DNM" --version 0.45.9
+expect_fail_with "no minisign (symlinked os-release)" "minisign is not installed"
+printf '%s' "$out" | grep -qF -- "apt-get install -y minisign" || fail "symlinked os-release: apt hint missing: $out"
+if printf '%s' "$out" | grep -q "jedisct1/minisign/releases"; then fail "symlinked os-release: generic hint shown: $out"; fi
+# A dangling link still falls back to the generic hint (never an error).
+ln -s ../usr/lib/no-such-file "$WORK/osl/etc/os-release-dangling"
+PATH="$NOMS" K2_TEST_OS_RELEASE="$WORK/osl/etc/os-release-dangling" run "$DNM" --version 0.45.9
+expect_fail_with "no minisign (dangling os-release)" "minisign is not installed"
+printf '%s' "$out" | grep -q "jedisct1/minisign/releases" || fail "dangling os-release: generic hint missing: $out"
+nothing_installed "$DNM" "no minisign (symlinked os-release)"
 # --file with no .sig never needs minisign (operator-supplied build).
 fake_elf "$WORK/local-helper" 0.45.5 4 x86_64
 PATH="$NOMS" run "$DNM" --file "$WORK/local-helper"

@@ -185,7 +185,10 @@ minisign_install_hint() {
 	local osr="/etc/os-release" id="" like=""
 	# Hermetic tests only (ignored unless K2_INSTALL_ROOT is set).
 	[ -z "$DEST_ROOT" ] || osr="${K2_TEST_OS_RELEASE:-$osr}"
-	if [ -f "$osr" ] && [ ! -L "$osr" ]; then
+	# Ubuntu/Debian/Arch ship /etc/os-release as a symlink to
+	# /usr/lib/os-release: follow it (-f/-r test the target). Only ID and
+	# ID_LIKE are read, and they only pick one of the fixed hints below.
+	if [ -f "$osr" ] && [ -r "$osr" ]; then
 		id="$(sed -n 's/^ID=//p' "$osr" | head -n1 | tr -d "\"'" | tr 'A-Z' 'a-z')"
 		like="$(sed -n 's/^ID_LIKE=//p' "$osr" | head -n1 | tr -d "\"'" | tr 'A-Z' 'a-z')"
 	fi

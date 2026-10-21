@@ -2216,7 +2216,7 @@ pub(crate) fn present_action_card(
         requested_addr: addr.clone(),
         canonical_alias: true,
     };
-    push_agent_post(&resolved, &addr, item.seq, k2_core::push::ThreadMsgKind::Choice, prompt, 0);
+    push_agent_post(&resolved, &item, k2_core::push::ThreadMsgKind::Choice, prompt, 0);
     Ok(Presented::Card { id: item.id, addr })
 }
 

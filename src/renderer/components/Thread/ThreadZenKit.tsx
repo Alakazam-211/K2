@@ -15,7 +15,7 @@
 // (`THREAD_ZEN_DESKTOP_TOKENS` on a `[data-k2-thread-zen]` box), so the
 // shapes are Zen's and the colours are the window's.
 
-import { isValidElement, memo, useCallback, useState, type CSSProperties, type JSX, type ReactNode, type Ref } from 'react'
+import { isValidElement, memo, useCallback, useMemo, useState, type CSSProperties, type JSX, type ReactNode, type Ref } from 'react'
 import { ChatMessageBody } from '@/components/common/ChatMessage'
 import { ChoiceCard } from '@/components/SessionView/ChoiceCard'
 import { SecretCard } from '@/components/SessionView/SecretCard'
@@ -30,6 +30,14 @@ import { cardAnswererLabel, type ThreadViewer } from '@/lib/thread-viewer'
 import { zenBubbleShield } from '@/lib/zen/zen-style-shield'
 import { ZEN_SOLID_PROPS, ZEN_TILE_RAISED_PROPS } from '@/lib/zen/zen-materials'
 import { ThreadFileObjects } from './ThreadFileObjects'
+import { useThreadAttachmentSource } from './ThreadImageObjects'
+import {
+  permissionCardActions,
+  permissionClient,
+  type PermissionCardActions,
+} from '@/components/SessionView/permissionCardView'
+import { openSettingsPage } from '@/lib/open-settings-page'
+import type { SettingsSection } from '@/stores/settings'
 import { threadBubbleMaxWidth, useThreadColumnNarrow } from './ThreadColumn'
 
 import {
@@ -291,6 +299,8 @@ export const zenEmptyThreadText = (label: string): string => `Message ${label}. 
  *  the agent's prompt itself, as plain text (VS13). */
 export function threadBubbleText(item: OverlayThreadItem): string {
   const d = item.doc
+  // A permission card draws its own headline (the prompt is for old clients).
+  if (d.kind === 'choice' && d.choice?.permission) return ''
   if (d.kind === 'choice') return d.choice?.prompt || d.body || ''
   if (d.kind === 'secret') return d.secret ? '' : d.body || ''
   // A handoff card draws itself; `body` is the plain line for old renderers.
@@ -394,6 +404,7 @@ export const ThreadBubble = memo(function ThreadBubble({
   const bubble = !(files.length > 0 && !text && kind === 'text')
   // A narrow column (ThreadColumn): the whole column but a small inset.
   const narrow = useThreadColumnNarrow()
+  const permissionActions = usePermissionActions(item, onAnswer)
   return (
     <div
       data-zen-message={item.id}
@@ -440,6 +451,9 @@ export const ThreadBubble = memo(function ThreadBubble({
             expiresAt={item.doc.choice.expiresAt}
             nowSec={nowSec}
             resultMessage={item.doc.choice.resultMessage}
+            permission={item.doc.choice.permission ?? null}
+            permissionActions={permissionActions}
+            from={item.doc.from || ''}
             onPick={(label) => {
               const warn = (err: unknown): void => console.warn('[thread] answer failed:', err)
               try {
@@ -507,6 +521,41 @@ export const ThreadBubble = memo(function ThreadBubble({
     </div>
   )
 }, sameBubbleProps)
+
+/** "Open in Settings" from a permission card. */
+const openPermissionSettings = (section: string): void => {
+  void openSettingsPage(section as SettingsSection).catch((err: unknown) => console.warn('[thread] open Settings failed:', err))
+}
+
+/**
+ * A permission card's actions (prd-agent-settings-cards-v1 §8): on the
+ * Thread's own server when the surface says which (the desktop Thread pane
+ * and Zen's conversation: answer, note, undo, the confirm step, Open in
+ * Settings); else through the surface's `onAnswer` (Allow / Deny only).
+ * Null for every other card.
+ */
+function usePermissionActions(
+  item: OverlayThreadItem,
+  onAnswer: ThreadBubbleProps['onAnswer'],
+): PermissionCardActions | null {
+  const source = useThreadAttachmentSource()
+  const isPermission = !!item.doc.choice?.permission
+  return useMemo(() => {
+    if (!isPermission) return null
+    if (source) return permissionCardActions(source.scope, source.addr, item.id, openPermissionSettings)
+    if (!onAnswer) return null
+    return {
+      answer: async (a) => {
+        await onAnswer({
+          answer: a.answer,
+          ...(a.item ? { item: a.item } : {}),
+          ...(a.reason ? { reason: a.reason } : {}),
+          client: permissionClient(),
+        })
+      },
+    }
+  }, [isPermission, source, item.id, onAnswer])
+}
 
 /** Stands in for the rows the render window does not draw (useRenderWindow):
  *  their measured height. It takes back the list's `gap` with a negative

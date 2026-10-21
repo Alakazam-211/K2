@@ -17,8 +17,10 @@ type Step = { step: 'starting' } | { step: 'mac' } | { step: 'password'; method:
 
 export interface ConfirmStepProps {
   scope: ServerScope
-  /** `garden-guests`: a Garden widget's guest-rooms change (RS-A15). */
-  action: 'source-secret' | 'source-batch' | 'garden-guests'
+  /** `garden-guests`: a Garden widget's guest-rooms change (RS-A15).
+   *  `app-approve` / `node-admin`: a permission card's confirm action (the
+   *  same confirm Settings asks, prd-agent-settings-cards-v1 §17.4). */
+  action: 'source-secret' | 'source-batch' | 'garden-guests' | 'app-approve' | 'node-admin'
   /** The source id, the batch hash, or the guest-rooms change's id. */
   secretId: string
   /** Shown in the Mac's sheet ("source secret deploys"). */

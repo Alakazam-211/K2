@@ -71,6 +71,8 @@ import {
   threadItemsFromSnapshot,
   threadWindowFloor,
   threadAnswerBody,
+  threadCardsParams,
+  threadCardsQuery,
   type OverlayThreadItem,
   type OverlayWsFrame,
   type ThreadAnswerPayload,
@@ -274,7 +276,7 @@ export function useOverlayThread(opts: {
         if (cancelled) return
         const sent = addrRef.current
         try {
-          const raw = await daemonCliGet<unknown>(scope, 'thread', { addr: sent, since_seq: since, limit: 0 })
+          const raw = await daemonCliGet<unknown>(scope, 'thread', { addr: sent, since_seq: since, limit: 0, ...threadCardsParams(scope) })
           if (cancelled) return
           const snap = threadItemsFromSnapshot(raw)
           if (snap.conversation_id && conv && snap.conversation_id !== conv) {
@@ -358,7 +360,8 @@ export function useOverlayThread(opts: {
       try {
         const creds = await getDaemonWs(scope)
         if (cancelled) return
-        const url = `${daemonWsBase(creds)}/cli/overlay/events?conversation=${encodeURIComponent(conv)}&token=${encodeURIComponent(creds.token)}`
+        // Permission cards: `cards=2` only to a server with the feature on.
+        const url = `${daemonWsBase(creds)}/cli/overlay/events?conversation=${encodeURIComponent(conv)}&token=${encodeURIComponent(creds.token)}${threadCardsQuery(scope)}`
         // MS70: through the per-server dial queue.
         const sock = await openQueuedWebSocket(scope, url)
         if (cancelled) {
@@ -467,7 +470,7 @@ export function useOverlayThread(opts: {
     async function boot(): Promise<void> {
       const sent = addrRef.current
       try {
-        const raw = await daemonCliGet<unknown>(scope, 'thread', { addr: sent, limit: OVERLAY_PAGE_SIZE })
+        const raw = await daemonCliGet<unknown>(scope, 'thread', { addr: sent, limit: OVERLAY_PAGE_SIZE, ...threadCardsParams(scope) })
         if (cancelled) return
         const snap = threadItemsFromSnapshot(raw)
         conv = snap.conversation_id || conversationId || ''
@@ -562,6 +565,7 @@ export function useOverlayThread(opts: {
         addr,
         limit: OVERLAY_PAGE_SIZE,
         before_seq: minSeq,
+        ...threadCardsParams(scope),
       })
       if (addrRef.current !== requestedAddr) return
       const snap = threadItemsFromSnapshot(raw)
@@ -645,6 +649,9 @@ export function useOverlayThread(opts: {
               },
             }
           }
+          // A permission card is rewritten by the daemon (the answer, a
+          // batch item, "applying"): its frame brings the new view.
+          if (it.doc.choice?.permission) return it
           if (it.doc.choice) {
             return {
               ...it,

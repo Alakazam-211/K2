@@ -10,6 +10,31 @@ import type { ServerScope } from '@/kessel/server-scope'
 import { httpCodeOf } from '@/lib/daemon-http-error'
 import { threadAttachmentRefusalText } from '@/lib/thread-compose-attachments'
 import { parseThreadAuthor, type ThreadAuthor } from '@/lib/thread-viewer'
+import { readPermissionCard, type PermissionCardData } from './permissionCardView'
+
+// ── Permission cards (prd-agent-settings-cards-v1 rev 3.1 §4.2, §17.1) ────
+//
+// The daemon draws a permission card per viewer. A client that can draw the
+// `cards=2` view opts in on every surface that serves Thread docs (`GET
+// /cli/thread` pages and deltas, `WS /cli/overlay/events`), and only on a
+// server that lists `permission-cards-v1` in `/boot-status` (the server's
+// switch is on). Everywhere else nothing is sent and nothing changes: the
+// daemon serves the fallback, which draws as an ordinary card or line.
+
+/** The `/boot-status` feature a server lists while its switch is on. */
+export const PERMISSION_CARDS_FEATURE = 'permission-cards-v1'
+/** The card contract this client draws (`cards=2`). */
+export const THREAD_CARDS_CONTRACT = 2
+
+/** `{cards: '2'}` for a GET's query on a server with the feature, else `{}`. */
+export function threadCardsParams(scope: Pick<ServerScope, 'serverSupports'>): { cards?: string } {
+  return scope.serverSupports(PERMISSION_CARDS_FEATURE) ? { cards: String(THREAD_CARDS_CONTRACT) } : {}
+}
+
+/** `&cards=2` for a socket URL on a server with the feature, else ''. */
+export function threadCardsQuery(scope: Pick<ServerScope, 'serverSupports'>): string {
+  return scope.serverSupports(PERMISSION_CARDS_FEATURE) ? `&cards=${THREAD_CARDS_CONTRACT}` : ''
+}
 
 export const OVERLAY_PAGE_SIZE = 25
 
@@ -94,6 +119,10 @@ export interface OverlayChoice {
    *  from the doc's `choice.action.result.message` ("Kept as yours. Undo
    *  in Settings → Gardens → Local Data."). Absent on every other card. */
   resultMessage?: string
+  /** A permission card's `cards=2` view for this viewer (`choice.action`
+   *  with id `permission` / `permission.batch` and a readable `view`).
+   *  Absent on every other card and on the fallback. */
+  permission?: PermissionCardData
 }
 
 export interface OverlaySecret {
@@ -196,6 +225,12 @@ export interface ThreadAnswerPayload {
   /** Set when a custom Garden widget answers (`thread.answer`, a choice
    *  only): the daemon checks the widget's approved `thread:post`. */
   origin?: ThreadWidgetOrigin
+  /** Permission cards (§17.3): a batch item, a Deny reason, the confirm
+   *  token, and where the answer came from (`view.answer.via`). */
+  item?: string
+  reason?: string
+  confirmToken?: string
+  client?: 'desktop' | 'web' | 'phone' | 'terminal'
 }
 
 /** The `POST thread/answer` body for a payload (values in the body only). */
@@ -207,6 +242,10 @@ export function threadAnswerBody(
   const body: Record<string, string | ThreadWidgetOrigin> = { addr, id }
   if (payload.origin) body.origin = threadWidgetOriginBody(payload.origin)
   if (payload.answer !== undefined) body.answer = payload.answer
+  if (payload.item) body.item = payload.item
+  if (payload.reason) body.reason = payload.reason
+  if (payload.confirmToken) body.confirmToken = payload.confirmToken
+  if (payload.client) body.client = payload.client
   if (payload.secret !== undefined) {
     body.secret = payload.secret
     if (payload.scope) body.scope = payload.scope
@@ -923,17 +962,26 @@ function coerceChoice(raw: unknown): OverlayChoice | null {
     answer: typeof c.answer === 'string' ? c.answer : null,
     ...closedExtras(c),
     ...actionResultMessage(c),
+    ...permissionExtra(c),
   }
 }
 
+/** `permission` when the choice is a permission card with a `cards=2` view
+ *  (left off otherwise, so every other card coerces as before). */
+function permissionExtra(src: Record<string, unknown>): Pick<OverlayChoice, 'permission'> {
+  const permission = readPermissionCard(src.action)
+  return permission ? { permission } : {}
+}
+
 /** A live frame's doc (frames are not coerced like snapshot rows): a
- *  settings card gains `choice.resultMessage` from `action.result.message`;
- *  every other doc is returned as is (the same object). */
+ *  settings card gains `choice.resultMessage` from `action.result.message`,
+ *  a permission card `choice.permission` from its view; every other doc is
+ *  returned as is (the same object). */
 function withChoiceResult(doc: OverlayDoc | null | undefined): OverlayDoc | null | undefined {
   const choice = doc?.choice as (OverlayChoice & Record<string, unknown>) | null | undefined
   if (!doc || !choice || typeof choice !== 'object') return doc
-  const extra = actionResultMessage(choice)
-  return extra.resultMessage ? { ...doc, choice: { ...choice, ...extra } } : doc
+  const extra = { ...actionResultMessage(choice), ...permissionExtra(choice) }
+  return extra.resultMessage || extra.permission ? { ...doc, choice: { ...choice, ...extra } } : doc
 }
 
 /** `resultMessage` from `action.result.message` when the daemon sent one

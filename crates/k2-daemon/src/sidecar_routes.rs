@@ -1426,6 +1426,11 @@ fn handle_access(
         // `permission-switch` one.
         k2_core::workspace::settings::set_agents_can_request_permissions(&ws.id, value)
             .map_err(|e| err("workspace_not_found", 404, e))?;
+        // This agent's teaching follows its switch (§11.4, lane C): the
+        // `k2-permissions` skill and the AGENTS.md pointer, written only
+        // while both switches are on. One workspace, so inline (this
+        // handler already runs on the blocking pool).
+        k2_core::workspace::skill_regen::sync_permission_teaching(&ws.path);
         k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
             k2_core::permission::audit_event::SWITCH,
             &caller.audit_user(),

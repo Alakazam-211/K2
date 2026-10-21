@@ -196,6 +196,14 @@ pub(crate) fn permission_cards_flipped(on: bool, by: &str) {
             "rehandshake": true,
         }),
     );
+    // The agents' teaching follows the switch (§11.4, lane C): every
+    // workspace's `k2-permissions` skill is written (both switches on) or
+    // removed, and its AGENTS.md pointer recomposed. Off its own thread: a
+    // flip recomposes every workspace, and the settings write answers now.
+    std::thread::spawn(|| {
+        let n = k2_core::workspace::skill_regen::sync_permission_teaching_everywhere();
+        k2_core::log_debug!("[permission-cards] teaching synced in {n} workspace(s)");
+    });
 }
 
 fn forbidden(msg: String) -> CliResponse {

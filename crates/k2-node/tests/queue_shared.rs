@@ -131,6 +131,49 @@ async fn jobs_wait_in_the_queue_and_start_in_fair_order() {
     let _ = &w.b;
 }
 
+/// Every server starts at weight 1 (the owner too); the node owner sets
+/// 2:1 and the starts follow it (the node half of `servers.limits
+/// --weight`). One slot, equal short jobs, both servers always waiting.
+#[tokio::test(flavor = "multi_thread")]
+async fn weights_set_by_the_node_owner_steer_the_starts() {
+    let w = two("q-weights", "max_parallel = 1\n").await;
+    let owner_default = w.n.node.fairq.share(1, &w.n.node).unwrap();
+    assert_eq!(owner_default.limits.weight, 1);
+    w.n.node.fairq.set_share(0, None);
+    assert_eq!(w.n.node.fairq.share(0, &w.n.node).unwrap().limits.weight, 1, "the owner's default share is weight 1 too");
+    w.n.node.fairq.set_share(0, share("a.k2.dev", ShareLimits { weight: 2, max_running: 1, max_queued: 30, ..limits() }, ServerStatus::Active));
+    w.n.node.fairq.set_share(1, share("b.k2.dev", ShareLimits { weight: 1, max_running: 1, max_queued: 30, ..limits() }, ServerStatus::Active));
+    let order = w.n.dir.join("order.txt");
+    let o = order.display().to_string();
+    w.ca.send(Frame::Assign(assign(job("node-1", "hold", &["/bin/sh", "-c", "sleep 1"]), 1)));
+    wait_row(&w.owner, "hold", 1, "started", started).await;
+    let n = 12;
+    for i in 0..n {
+        let line = format!("echo a{i} >> {o}; sleep 0.3");
+        w.ca.send(Frame::Assign(assign(job("node-1", &format!("a{i}"), &["/bin/sh", "-c", &line]), 1)));
+        let line = format!("echo b{i} >> {o}; sleep 0.3");
+        w.cb.send(Frame::Assign(assign(job("node-b", &format!("b{i}"), &["/bin/sh", "-c", &line]), 1)));
+    }
+    for i in 0..n {
+        wait_row(&w.owner, &format!("a{i}"), 1, "queued or later", |_| true).await;
+        wait_row(&w.tb, &format!("b{i}"), 1, "queued or later", |_| true).await;
+    }
+    // While both still wait (the first 12 starts after the hold), A gets
+    // about two of every three.
+    for _ in 0..400 {
+        if std::fs::read_to_string(&order).map(|s| s.lines().count()).unwrap_or(0) >= 12 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let text = std::fs::read_to_string(&order).unwrap();
+    let first: Vec<&str> = text.lines().take(12).collect();
+    assert_eq!(first.len(), 12, "{text}");
+    let a = first.iter().filter(|l| l.starts_with('a')).count();
+    assert!((7..=9).contains(&a), "2:1 weights gave A {a} of the first 12 starts: {first:?}");
+    w.n.node.stop_all(JobState::Cancelled, "test_over");
+}
+
 /// A queued job doesn't start while its server is away; after a
 /// reconnect only the rows `Welcome.resume` lists may start, the rest end
 /// `superseded` and never run (V47).

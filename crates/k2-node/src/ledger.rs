@@ -74,6 +74,8 @@ pub struct Row {
     /// When the node queued it (node clock; user_version 3). `None` for a
     /// job that started at once.
     pub enqueued_at: Option<i64>,
+    /// Insert order in this ledger (SQLite rowid).
+    pub seq: i64,
 }
 
 impl Row {
@@ -100,7 +102,7 @@ pub struct Ledger {
 }
 
 const COLS: &str = "job_id, generation, attempt, plan_digest, plan_json, state, reason, detail, created_at, \
-    started_at, ended_at, exit_code, signal, log_seq, boot_id, src_json, receipt_json, cleaned, outputs_json, enqueued_at";
+    started_at, ended_at, exit_code, signal, log_seq, boot_id, src_json, receipt_json, cleaned, outputs_json, enqueued_at, rowid";
 
 /// Terminal states, for SQL.
 const TERMINAL: &str = "('done','failed','cancelled','timeout','interrupted','unknown')";
@@ -141,6 +143,7 @@ fn row_of(r: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
         // outputs are lost.
         outputs: r.get::<_, Option<String>>(18)?.and_then(|s| serde_json::from_str(&s).ok()),
         enqueued_at: r.get(19)?,
+        seq: r.get(20)?,
     })
 }
 

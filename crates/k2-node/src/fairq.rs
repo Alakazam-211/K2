@@ -57,8 +57,12 @@ struct RunMeta {
     cpu: u64,
     mem: u64,
     exclusive: bool,
+    /// Node clock at start (ETAs).
     started_at: i64,
-    accounted_at: i64,
+    /// Monotonic start and last accounting: usage counts in milliseconds,
+    /// so short jobs weigh what they ran.
+    started: std::time::Instant,
+    accounted: std::time::Instant,
     /// (p50, p90) run time when it started.
     est: Option<(u64, u64)>,
 }
@@ -241,7 +245,8 @@ impl FairQ {
             mem: a.plan.limits.mem_bytes.unwrap_or_else(|| caps.default_mem()),
             exclusive: a.plan.exclusive,
             started_at: now,
-            accounted_at: now,
+            started: std::time::Instant::now(),
+            accounted: std::time::Instant::now(),
             est,
         };
         let key = (slot, a.fence.job_id.clone(), a.fence.generation);
@@ -270,10 +275,10 @@ impl FairQ {
         let mut add = Vec::new();
         let mut ended = Vec::new();
         for (k, m) in st.runs.iter_mut() {
-            let dt = (now - m.accounted_at).max(0) as u64;
-            if dt > 0 {
-                add.push((k.0, m.cpu.saturating_mul(dt)));
-                m.accounted_at = now;
+            let dt_ms = m.accounted.elapsed().as_millis() as u64;
+            if dt_ms > 0 {
+                add.push((k.0, m.cpu.saturating_mul(dt_ms) / 1000));
+                m.accounted = std::time::Instant::now();
             }
             if !live.contains(k) {
                 ended.push(k.clone());
@@ -286,7 +291,7 @@ impl FairQ {
         }
         for k in &ended {
             let m = st.runs.remove(k).expect("listed");
-            let secs = (now - m.started_at).max(0) as u64;
+            let secs = (m.started.elapsed().as_millis() as u64).div_ceil(1000);
             if secs > 0 {
                 let _ = store.add_duration(k.0, &m.cmd_hash, secs);
             }
@@ -370,6 +375,7 @@ impl FairQ {
                     mem_bytes: r.plan.limits.mem_bytes,
                     exclusive: r.plan.exclusive,
                     enqueued_at: r.enqueued_at.unwrap_or(r.created_at),
+                    arrival: r.seq as u64,
                     est_p50: hist.map(|h| h.0).or(r.plan.est_secs),
                     est_p90: hist.map(|h| h.1).or(r.plan.est_p90_secs).or(r.plan.est_secs),
                     ws_max_running: r.plan.ws_max_running,
@@ -477,7 +483,7 @@ impl FairQ {
 }
 
 /// The owner's share when `servers.toml` has no line for it: sized by the
-/// node's own policy, weight 2, gate allowed (§11.1).
+/// node's own policy, weight 1 like every server, gate allowed (§11.1).
 fn owner_default(node: &Node) -> ShareInfo {
     let caps = node.queue_caps();
     let gb = (caps.mem_bytes >> 30).max(1) as u32;

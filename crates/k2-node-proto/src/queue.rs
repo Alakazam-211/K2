@@ -132,6 +132,9 @@ pub struct Queued {
     pub exclusive: bool,
     /// Node clock when the node received it.
     pub enqueued_at: i64,
+    /// Arrival order within its server (FIFO among jobs received in the
+    /// same second; the ledger's insert order).
+    pub arrival: u64,
     /// Expected run time (p50 / p90); `None` = unknown.
     pub est_p50: Option<u64>,
     pub est_p90: Option<u64>,
@@ -238,7 +241,7 @@ fn tenant_head(pending: &[usize], input: &Input<'_>, t: &Tenant, rot: &Rotation)
     in_ws
         .into_iter()
         .filter(|i| q[*i].session_id.as_deref().unwrap_or("") == s)
-        .min_by(|a, b| (q[*a].enqueued_at, &q[*a].job_id, q[*a].generation).cmp(&(q[*b].enqueued_at, &q[*b].job_id, q[*b].generation)))
+        .min_by(|a, b| (q[*a].enqueued_at, q[*a].arrival, &q[*a].job_id).cmp(&(q[*b].enqueued_at, q[*b].arrival, &q[*b].job_id)))
         .expect("a job")
 }
 
@@ -289,7 +292,7 @@ pub fn order(input: &Input<'_>) -> Vec<usize> {
             pending.remove(&slot);
         }
     }
-    away.sort_by(|a, b| (q[*a].enqueued_at, &q[*a].job_id).cmp(&(q[*b].enqueued_at, &q[*b].job_id)));
+    away.sort_by(|a, b| (q[*a].enqueued_at, q[*a].arrival, &q[*a].job_id).cmp(&(q[*b].enqueued_at, q[*b].arrival, &q[*b].job_id)));
     out.extend(away);
     out
 }
@@ -528,6 +531,7 @@ pub fn quote(input: &Input<'_>, slot: Slot, cpu_millis: u64, mem_bytes: u64) -> 
         mem_bytes: Some(mem_bytes),
         exclusive: false,
         enqueued_at: input.now,
+        arrival: u64::MAX,
         est_p50: None,
         est_p90: None,
         ws_max_running: None,
@@ -679,6 +683,7 @@ mod tests {
             mem_bytes: Some(1 << 30),
             exclusive: false,
             enqueued_at: at,
+            arrival: 0,
             est_p50: Some(60),
             est_p90: Some(120),
             ws_max_running: None,
@@ -839,6 +844,12 @@ mod tests {
         let mut w = World::new(1, vec![tenant(0, 1)]);
         w.queued = vec![q(0, "late", "w", 50), q(0, "early", "w", 10)];
         assert_eq!(w.order(), vec!["early", "late"]);
+        // Same second: arrival order, not the job ids' spelling.
+        let (mut j10, mut j9) = (q(0, "j10", "w", 7), q(0, "j9", "w", 7));
+        j10.arrival = 1;
+        j9.arrival = 2;
+        w.queued = vec![j9, j10];
+        assert_eq!(w.order(), vec!["j10", "j9"]);
     }
 
     #[test]

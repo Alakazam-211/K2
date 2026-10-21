@@ -8,7 +8,7 @@
 import type { K2Error } from '../errors.ts'
 
 /** The catalog version this table was generated from. */
-export const CATALOG_VERSION = 18
+export const CATALOG_VERSION = 19
 
 /** A JSON Schema from the catalog's subset, reduced for projection. */
 export type Schema = { readonly [key: string]: unknown }
@@ -312,28 +312,6 @@ export const APP_VERBS = {
     socket: null,
     responseNames: {},
     response: {"additionalProperties":false,"properties":{"links":{"items":{"additionalProperties":false,"properties":{"input":{"type":"string"},"kind":{"type":"string"},"linkable":{"type":"boolean"},"rel":{"type":"string"}},"type":"object"},"type":"array"}},"type":"object"},
-  },
-  'thread.attachmentGet': {
-    cap: 'thread:read',
-    effect: 'read',
-    kind: 'call',
-    feature: 'thread-attachments-v1',
-    door: 'both',
-    http: { method: 'GET', route: '/cli/thread/attachment', params: {}, query: [] },
-    socket: null,
-    responseNames: {},
-    response: {"additionalProperties":false,"properties":{"base64":{"type":"string"},"eof":{"type":"boolean"},"height":{"type":"integer"},"kind":{"type":"string"},"len":{"type":"integer"},"line":{"type":"integer"},"lineEnd":{"type":"integer"},"mime":{"type":"string"},"modifiedAt":{"type":"integer"},"name":{"type":"string"},"offset":{"type":"integer"},"ok":{"type":"boolean"},"sanitized":{"type":"boolean"},"size":{"type":"integer"},"state":{"type":"string"},"text":{"type":"string"},"truncated":{"type":"boolean"},"width":{"type":"integer"}},"type":"object"},
-  },
-  'thread.catchup': {
-    cap: 'thread:read',
-    effect: 'read',
-    kind: 'call',
-    feature: 'inbox-catchup-v1',
-    door: 'both',
-    http: { method: 'POST', route: '/cli/thread/catchup', params: {}, query: [] },
-    socket: null,
-    responseNames: { 'conversation': 'conversation_id' },
-    response: {"additionalProperties":false,"properties":{"has_more":{"type":"boolean"},"ok":{"type":"boolean"},"threads":{"items":{"additionalProperties":false,"properties":{"addr":{"type":"string"},"after_seq":{"type":"integer"},"changed":{"items":{"items":{"additionalProperties":false,"properties":{"collection":{"type":"string"},"doc":{"additionalProperties":false,"properties":{"author":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"body":{"type":"string"},"choice":{"additionalProperties":false,"properties":{"allow_custom":{"type":"boolean"},"answer":{"type":"string"},"answeredAt":{"type":"integer"},"answeredBy":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"expiresAt":{"type":"integer"},"options":{"items":{"additionalProperties":false,"properties":{"label":{"type":"string"}},"type":"object"},"type":"array"},"prompt":{"type":"string"},"status":{"type":"string"}},"type":"object"},"created_at":{"type":"number"},"from":{"type":"string"},"id":{"type":"string"},"kind":{"type":"string"},"secret":{"additionalProperties":false,"properties":{"answeredAt":{"type":"integer"},"answeredBy":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"delivery":{"type":"string"},"expiresAt":{"type":"integer"},"hosts":{"items":{"type":"string"},"type":"array"},"name":{"type":"string"},"prompt":{"type":"string"},"ref":{"type":"string"},"scope":{"type":"string"},"secretKind":{"type":"string"},"status":{"type":"string"}},"type":"object"},"to":{"type":"string"},"via":{"type":"string"},"widget":{"additionalProperties":false,"properties":{"garden":{"type":"string"},"widget":{"type":"string"}},"type":"object"}},"type":"object"},"id":{"type":"string"},"seq":{"type":"integer"}},"type":"object"},"type":"array"},"type":"array"},"conversation":{"type":"string"},"deferred":{"type":"boolean"},"error":{"additionalProperties":false,"properties":{"code":{"type":"string"},"hint":{"type":"string"}},"type":"object"},"has_more":{"type":"boolean"},"items":{"items":{"additionalProperties":false,"properties":{"collection":{"type":"string"},"doc":{"additionalProperties":false,"properties":{"author":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"body":{"type":"string"},"choice":{"additionalProperties":false,"properties":{"allow_custom":{"type":"boolean"},"answer":{"type":"string"},"answeredAt":{"type":"integer"},"answeredBy":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"expiresAt":{"type":"integer"},"options":{"items":{"additionalProperties":false,"properties":{"label":{"type":"string"}},"type":"object"},"type":"array"},"prompt":{"type":"string"},"status":{"type":"string"}},"type":"object"},"created_at":{"type":"number"},"from":{"type":"string"},"id":{"type":"string"},"kind":{"type":"string"},"secret":{"additionalProperties":false,"properties":{"answeredAt":{"type":"integer"},"answeredBy":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"delivery":{"type":"string"},"expiresAt":{"type":"integer"},"hosts":{"items":{"type":"string"},"type":"array"},"name":{"type":"string"},"prompt":{"type":"string"},"ref":{"type":"string"},"scope":{"type":"string"},"secretKind":{"type":"string"},"status":{"type":"string"}},"type":"object"},"to":{"type":"string"},"via":{"type":"string"},"widget":{"additionalProperties":false,"properties":{"garden":{"type":"string"},"widget":{"type":"string"}},"type":"object"}},"type":"object"},"id":{"type":"string"},"seq":{"type":"integer"}},"type":"object"},"type":"array"},"removed":{"items":{"additionalProperties":false,"properties":{"id":{"type":"string"},"seq":{"type":"integer"}},"type":"object"},"type":"array"}},"type":"object"},"type":"array"}},"type":"object"},
   },
   'thread.ensurePinned': {
     cap: 'thread:read',
@@ -1139,6 +1117,60 @@ export interface AppGuestRooms {
 
 export interface AppOk {
   readonly ok: boolean
+}
+
+export interface AppDeviceSession {
+  readonly app: string
+  readonly device: AppDeviceRef
+  readonly ok: boolean
+  /** A new session pass (k2skn_...); the old one has ended. */
+  readonly pass: string
+  /** Seconds since the epoch. */
+  readonly passExpiresAt: number
+  readonly principalId: string
+  /** The next refresh token: store it in place of the old one. */
+  readonly refresh: string
+  /** Seconds since the epoch: unused this long, the device signs in again. */
+  readonly refreshExpiresAt: number
+  readonly username: string
+}
+
+export interface AppDeviceLogin {
+  /** Signed in, seconds since the epoch. */
+  readonly createdAt: number
+  /** The device this pass belongs to. */
+  readonly current: boolean
+  readonly deviceId: string
+  /** Signs out unless used before then, seconds since the epoch. */
+  readonly expiresAt: number
+  /** What guests.revokeDevice takes. */
+  readonly id: string
+  /** Last refresh, seconds since the epoch. */
+  readonly lastUsedAt: number
+  readonly name: string
+}
+
+export interface AppDevices {
+  readonly devices: AppDeviceLogin[]
+  readonly ok: boolean
+}
+
+export interface AppSignIn {
+  /** password (a username or an email). */
+  readonly methods: string[]
+  /** A login that names a device gets a refresh token. */
+  readonly staysSignedIn: boolean
+  /** Where the App signs people in, when it is published. */
+  readonly url: string | null
+}
+
+export interface AppInfo {
+  readonly app: string
+  /** cmd or skin. */
+  readonly kind: string
+  /** The App's display name. */
+  readonly name: string
+  readonly signIn: AppSignIn
 }
 
 export interface AppThreadFile {
@@ -2200,6 +2232,13 @@ export interface AppVerbs {
   'guests.rooms': { args: { app?: string; username: string }; value: AppGuestRooms }
   'guests.setRooms': { args: { app?: string; rooms: string[]; username: string }; value: AppGuestRooms }
   'password.change': { args: { oldPassword: string; password: string }; value: AppOk }
+  'guests.logout': { args: {  }; value: AppOk }
+  'guests.refresh': { args: { app?: string; refresh: string }; value: AppDeviceSession }
+  'guests.devices': { args: {  }; value: AppDevices }
+  'guests.revokeDevice': { args: { id: string }; value: AppOk }
+  'app.info': { args: { app: string }; value: AppInfo }
+  'password.forgot': { args: { username: string }; value: AppOk }
+  'password.reset': { args: { password: string; resetToken: string }; value: AppOk }
   'thread.page': { args: { addr: string; afterSeq?: number; beforeSeq?: number; limit?: number; sinceSeq?: number }; value: AppThreadPage }
   'thread.latest': { args: { addrs: string[] }; value: AppThreadLatest }
   'thread.send': { args: { addr: string; attachments?: AppThreadAttach[]; text?: string; via?: string }; value: AppThreadPosted }
@@ -2273,7 +2312,7 @@ export interface AppVerbs {
   'project.events': { args: { group: string }; value: AppProjectFrame }
 }
 
-export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'guests.rooms' | 'guests.setRooms' | 'thread.page' | 'thread.latest' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.attachmentGet' | 'thread.catchup' | 'thread.setRead' | 'thread.unread' | 'thread.mute' | 'files.resolveLinks' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage' | 'chat.pass' | 'project.list' | 'project.read' | 'project.post' | 'project.markRead'
+export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'guests.rooms' | 'guests.setRooms' | 'guests.logout' | 'guests.refresh' | 'guests.devices' | 'guests.revokeDevice' | 'app.info' | 'password.forgot' | 'password.reset' | 'thread.page' | 'thread.latest' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.attachmentGet' | 'thread.catchup' | 'thread.setRead' | 'thread.unread' | 'thread.mute' | 'files.resolveLinks' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage' | 'chat.pass' | 'project.list' | 'project.read' | 'project.post' | 'project.markRead'
 export type AppSubscribeVerb = 'thread.events' | 'files.events' | 'activity.events' | 'project.events'
 
 /** The named helpers: one per App verb a server calls (browser-only rows have none), grouped by surface. */
@@ -2483,4 +2522,4 @@ export interface AppSurfaces {
 }
 
 /** The surface names, in catalog order (the client builds one object each). */
-export const APP_SURFACES = ['me', 'roomAgents', 'guests', 'thread', 'files', 'resources', 'tickets', 'wiki', 'storeDocs', 'db', 'heartbeats', 'activity', 'agentIdentity', 'room', 'app', 'chat', 'project'] as const
+export const APP_SURFACES = ['me', 'roomAgents', 'guests', 'app', 'password', 'thread', 'files', 'resources', 'tickets', 'wiki', 'storeDocs', 'db', 'heartbeats', 'activity', 'agentIdentity', 'room', 'chat', 'project'] as const

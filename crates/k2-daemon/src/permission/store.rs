@@ -133,6 +133,15 @@ pub(crate) fn for_workspace(workspace_id: &str, limit: usize) -> Result<Vec<Perm
     })
 }
 
+/// The newest requests on this server (at most `limit`).
+pub(crate) fn recent(limit: usize) -> Result<Vec<PermissionRequest>, String> {
+    with_conn(|c| {
+        let mut st = c.prepare(&format!("SELECT {COLS} FROM permission_requests ORDER BY created_at DESC, rowid DESC LIMIT ?1"))?;
+        let rows = st.query_map(params![limit as i64], from_row)?;
+        rows.collect()
+    })
+}
+
 /// Every answerable request (pending or already-done, never answered),
 /// optionally for one workspace.
 pub(crate) fn open(workspace_id: Option<&str>) -> Result<Vec<PermissionRequest>, String> {

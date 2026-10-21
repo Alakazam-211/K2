@@ -68,7 +68,8 @@ fn tcp_blocking(port: u16, method: &str, pq: &str, body: Option<String>) -> Resp
 }
 
 async fn tcp(port: u16, method: &str, path: &str, token: &str, body: Option<&str>) -> Resp {
-    let pq = format!("{path}?token={token}");
+    let sep = if path.contains('?') { '&' } else { '?' };
+    let pq = format!("{path}{sep}token={token}");
     let (method, body) = (method.to_string(), body.map(str::to_string));
     tokio::task::spawn_blocking(move || tcp_blocking(port, &method, &pq, body)).await.unwrap()
 }
@@ -212,6 +213,24 @@ async fn the_family_answers_by_switch_state_on_tcp_and_the_cell() {
     assert!(json(&r)["actions"].is_array());
     let r = cell(&sock, "GET", "/cli/permission/status?id=pr_abcdef", &passport, None).await;
     assert_eq!(r.status, 404, "{}", r.body);
+
+    // The people route (D2's Settings page): the owner and an Admin, never
+    // an agent or a Member.
+    let r = tcp(port, "GET", "/cli/permission/agents?workspace=pci-billing", OWNER, None).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(json(&r)["agents"], serde_json::json!([{ "workspace": ws_id, "handle": "pci-billing", "name": "pci-billing", "on": true }]));
+    for (user, role) in [("pci-admin", k2_core::connect_users::Role::Admin), ("pci-member", k2_core::connect_users::Role::Member)] {
+        k2_core::connect_users::add_user(user, "correct-horse-battery-staple-1").expect("add user");
+        k2_core::connect_users::set_role(user, role).expect("set role");
+        let session = k2_core::connect_users::create_session(user);
+        let r = tcp(port, "GET", "/cli/permission/agents", &session, None).await;
+        let want = if role == k2_core::connect_users::Role::Admin { 200 } else { 403 };
+        assert_eq!(r.status, want, "{user}: {}", r.body);
+    }
+    let r = cell(&sock, "GET", "/cli/permission/agents", &passport, None).await;
+    assert_eq!((r.status, json(&r)["error"]["code"].as_str()), (403, Some("forbidden")), "an agent: {}", r.body);
+    let r = tcp(port, "GET", "/cli/permission/agents", &passport, None).await;
+    assert_eq!((r.status, json(&r)["error"]["code"].as_str()), (403, Some("forbidden")), "an agent over TCP: {}", r.body);
 
     // ── server off again (agent on): today's answers ──────────────────
     let r = tcp(port, "POST", "/cli/settings/update", OWNER, Some(r#"{"permissionCards":false}"#)).await;

@@ -486,13 +486,30 @@ mod unix_impl {
             cell_verb_authorized(validated.as_ref(), &this_session_id, peer_uid, self_uid, cell_uid)
         };
         if !authorized {
-            write_response(
-                &mut stream,
-                "403 Forbidden",
-                "application/json",
-                r#"{"error":"Invalid or missing auth token"}"#,
-            )
-            .await;
+            // Permission cards (PRD rev 3.1 §3.1, vs-live C3): a route that
+            // isn't an agent verb is refused here, before any handler. With
+            // the gate on for a VALID passport bound to this cell, that
+            // refusal teaches (`owner_only` + `permission`); a bad token, or
+            // the gate off, keeps today's text.
+            let gated = if k2_core::permission::gate::server_on() && path != "/hook/complete" && !hook_event {
+                crate::session_token::validate_hook(&presented)
+                    .filter(|v| {
+                        cell_verb_authorized(Some(v), &this_session_id, peer_uid, self_uid, cell_uid)
+                    })
+                    .and_then(|v| {
+                        crate::permission::walls::cell_gated_body(
+                            method,
+                            path,
+                            &params,
+                            &body,
+                            &v.principal.workspace_uuid,
+                        )
+                    })
+            } else {
+                None
+            };
+            let body = gated.as_deref().unwrap_or(r#"{"error":"Invalid or missing auth token"}"#);
+            write_response(&mut stream, "403 Forbidden", "application/json", body).await;
             return;
         }
 
@@ -583,6 +600,11 @@ mod unix_impl {
             );
         }
 
+        // Permission cards: what the refusal wrapper reads after dispatch
+        // (only while the global switch is on; nothing is copied otherwise).
+        let teach_input = k2_core::permission::gate::server_on().then(|| {
+            (params.clone(), body.clone(), principal.workspace_uuid.clone())
+        });
         let path_owned = path.to_string();
         let method_owned = method.to_string();
         // F2: the `/cli/respond` arm pins the response to THIS session — the body
@@ -616,6 +638,13 @@ mod unix_impl {
                     )
                 });
 
+        // Permission cards (PRD rev 3.1 §3.1): an agent verb's refusal (or
+        // hold) gains its `permission` object while both switches are on.
+        let out = match &teach_input {
+            Some((p, b, ws)) => crate::permission::walls::teach_cell(&status, method, path, p, b, ws, &out)
+                .unwrap_or(out),
+            None => out,
+        };
         write_response(&mut stream, &status, ctype, &out).await;
     }
 

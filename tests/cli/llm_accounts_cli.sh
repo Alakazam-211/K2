@@ -155,7 +155,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 work, scoped = sys.argv[1], sys.argv[2]
 POST_ONLY = {"add", "login", "login/input", "login/cancel", "switch", "next", "rename", "remove", "refresh",
-             "pin", "unpin", "add-key"}
+             "pin", "unpin", "add-key", "clear-default"}
 state = {"polls": 0, "input": None}
 
 def acct(i, label, active, st="signed_in", tool="claude"):
@@ -242,6 +242,9 @@ class H(BaseHTTPRequestHandler):
                 out = {"account": acct(b.get("id"), b.get("label"), False)}
         elif verb == "remove":
             out = {"removed": {"id": b.get("id"), "movedTo": "/tmp/x"}}
+        elif verb == "clear-default":
+            out = {"cleared": {"tool": b.get("tool"), "cleared": "acc_work", "clearedLabel": "work",
+                               "nowDefault": None, "nowDefaultLabel": None}}
         elif verb == "refresh":
             out = {"accounts": [acct("acc_work", "work", True)]}
         elif verb in ("add", "login"):
@@ -401,6 +404,15 @@ owner llm tokens remove claude nobody >/dev/null 2>"$WORK/err"; rc=$?
 set -e
 assert_eq "remove unknown label → exit 4" "$rc" "4"
 
+# Smoke r6: the server default API token goes with --clear-default, and
+# clear-default leaves a tool with no default.
+owner llm tokens remove claude personal --clear-default >/dev/null
+assert_eq "remove --clear-default body" "$(last_body)" '{"clearDefault": true, "id": "acc_personal"}'
+out="$(owner llm tokens clear-default claude)"
+assert_eq "clear-default path" "$(last path)" "/cli/llm/accounts/clear-default"
+assert_eq "clear-default body" "$(last_body)" '{"tool": "claude"}'
+assert_contains "clear-default says it" "$out" "claude server default cleared (was work)"
+
 owner llm tokens refresh --usage >/dev/null
 assert_eq "refresh body" "$(last_body)" '{"usage": true}'
 
@@ -409,7 +421,7 @@ assert_eq "refresh body" "$(last_body)" '{"usage": true}'
 python3 - "$WORK/reqs.jsonl" <<'PY' && ok "no POST-only route was ever a GET" || bad "a POST-only route was sent as GET"
 import json, sys
 post_only = {"add", "login", "login/input", "login/cancel", "switch", "next", "rename", "remove", "refresh",
-             "pin", "unpin", "add-key"}
+             "pin", "unpin", "add-key", "clear-default"}
 for line in open(sys.argv[1]):
     r = json.loads(line)
     verb = r["path"][len("/cli/llm/accounts/"):]

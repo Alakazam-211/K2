@@ -69,8 +69,12 @@ struct RunMeta {
 
 type Key = (Slot, String, u32);
 
-#[derive(Default)]
+/// Everything the queue keeps, behind ONE mutex (the SQLite store too):
+/// with a single lock there is no lock order to get wrong (an st/store
+/// inversion deadlocked a quote against a tick before). Never call into
+/// the node while holding it.
 struct State {
+    store: QueueStore,
     shares: BTreeMap<Slot, ShareInfo>,
     protocol: BTreeMap<Slot, u32>,
     blocked: BTreeMap<Slot, String>,
@@ -90,7 +94,6 @@ struct State {
 }
 
 pub struct FairQ {
-    store: Mutex<QueueStore>,
     pub cfg: Config,
     st: Mutex<State>,
     /// Run the loop now (an assign, a job end, an attach).
@@ -136,8 +139,20 @@ impl FairQ {
     }
 
     fn with_store(store: QueueStore) -> Result<Self, String> {
-        let st = State { usage: store.usage()?, rotation: store.rotation()?, ..Default::default() };
-        Ok(Self { store: Mutex::new(store), cfg: Config::default(), st: Mutex::new(st), kick: Notify::new() })
+        let st = State {
+            usage: store.usage()?,
+            rotation: store.rotation()?,
+            store,
+            shares: BTreeMap::new(),
+            protocol: BTreeMap::new(),
+            blocked: BTreeMap::new(),
+            gates: HashMap::new(),
+            runs: HashMap::new(),
+            sent: HashMap::new(),
+            last_persist: 0,
+            day_cpu: BTreeMap::new(),
+        };
+        Ok(Self { cfg: Config::default(), st: Mutex::new(st), kick: Notify::new() })
     }
 
     // ── inputs ──────────────────────────────────────────────────────
@@ -206,12 +221,13 @@ impl FairQ {
     /// A job entered the queue in the session with hub `epoch`.
     pub(crate) fn queued(&self, slot: Slot, a: &Assign, epoch: u64, now: i64) {
         let key = (slot, a.fence.job_id.clone(), a.fence.generation);
-        self.st.lock().unwrap().gates.insert(key, epoch);
+        let mut st = self.st.lock().unwrap();
+        st.gates.insert(key, epoch);
         // Keyed by the plan's own limits, absent = 0 (what the server
         // matches its plans with); quoted as an even share.
         let cpu = a.plan.limits.cpu_millis.unwrap_or(0);
         let mem = a.plan.limits.mem_bytes.unwrap_or(0);
-        if let Err(e) = self.store.lock().unwrap().add_ask(slot, cpu, mem, now) {
+        if let Err(e) = st.store.add_ask(slot, cpu, mem, now) {
             crate::nlog!("queue store: {e}");
         }
     }
@@ -236,7 +252,8 @@ impl FairQ {
     /// An attempt started (any path): account it from now.
     pub(crate) fn started(&self, slot: Slot, a: &Assign, now: i64, caps: &Caps) {
         let hash = cmd_hash(&a.plan.argv);
-        let hist = self.store.lock().unwrap().duration(slot, &hash).ok().flatten();
+        let mut st = self.st.lock().unwrap();
+        let hist = st.store.duration(slot, &hash).ok().flatten();
         let est = hist.or_else(|| a.plan.est_secs.map(|p| (p, a.plan.est_p90_secs.unwrap_or(p))));
         let meta = RunMeta {
             class: a.plan.class.unwrap_or_default(),
@@ -252,7 +269,6 @@ impl FairQ {
             est,
         };
         let key = (slot, a.fence.job_id.clone(), a.fence.generation);
-        let mut st = self.st.lock().unwrap();
         st.gates.remove(&key);
         st.sent.remove(&key);
         st.runs.insert(key, meta);
@@ -271,8 +287,8 @@ impl FairQ {
     fn account(&self, node: &Node, now: i64) {
         let live: HashSet<Key> = node.running_snaps().into_iter().map(|r| (r.slot, r.job_id, r.generation)).collect();
         let day = day_of(now);
-        let store = self.store.lock().unwrap();
-        let mut st = self.st.lock().unwrap();
+        let mut guard = self.st.lock().unwrap();
+        let st = &mut *guard;
         let half = self.cfg.half_life_secs;
         let mut add = Vec::new();
         let mut ended = Vec::new();
@@ -295,17 +311,17 @@ impl FairQ {
             let m = st.runs.remove(k).expect("listed");
             let secs = (m.started.elapsed().as_millis() as u64).div_ceil(1000);
             if secs > 0 {
-                let _ = store.add_duration(k.0, &m.cmd_hash, secs);
+                let _ = st.store.add_duration(k.0, &m.cmd_hash, secs);
             }
-            let _ = store.add_day(k.0, &day, 0, secs, 1);
+            let _ = st.store.add_day(k.0, &day, 0, secs, 1);
         }
         if !ended.is_empty() || now - st.last_persist >= PERSIST_SECS {
             for (slot, (u, at)) in st.usage.clone() {
-                let _ = store.set_usage(slot, u, at);
+                let _ = st.store.set_usage(slot, u, at);
             }
             // Whole CPU-seconds go down; the remainder waits for the next flush.
             for ((slot, d), ms) in st.day_cpu.iter_mut() {
-                if *ms >= 1000 && store.add_day(*slot, d, *ms / 1000, 0, 0).is_ok() {
+                if *ms >= 1000 && st.store.add_day(*slot, d, *ms / 1000, 0, 0).is_ok() {
                     *ms %= 1000;
                 }
             }
@@ -320,8 +336,9 @@ impl FairQ {
         let tenants_all = node.tenants();
         let day = day_of(now);
         let shares: Vec<(Arc<Tenant>, ShareInfo)> = tenants_all.iter().filter_map(|t| self.share(t.slot, node).map(|s| (t.clone(), s))).collect();
-        let store = self.store.lock().unwrap();
-        let st = self.st.lock().unwrap();
+        let guard = self.st.lock().unwrap();
+        let st = &*guard;
+        let store = &st.store;
         let tenants: Vec<queue::Tenant> = shares
             .iter()
             .filter(|(_, s)| matches!(s.status, ServerStatus::Active | ServerStatus::Paused))
@@ -420,12 +437,12 @@ impl FairQ {
                 started.insert(*i);
             }
         }
-        // Lock order is store → st everywhere (`account`, `snapshot`): never
-        // hold `st` while taking `store` (a concurrent quote or view
-        // deadlocked here).
-        self.st.lock().unwrap().rotation = d.rotation.clone();
-        if let Err(e) = self.store.lock().unwrap().set_rotation(&d.rotation) {
-            crate::nlog!("queue store: {e}");
+        {
+            let mut st = self.st.lock().unwrap();
+            st.rotation = d.rotation.clone();
+            if let Err(e) = st.store.set_rotation(&d.rotation) {
+                crate::nlog!("queue store: {e}");
+            }
         }
         // Positions and ETAs for the jobs still waiting, sent on change.
         for (i, (t, r)) in snap.rows.iter().enumerate() {
@@ -465,7 +482,8 @@ impl FairQ {
     /// job sizes on this node (V53). Rides the 30 s offer.
     pub fn quotes(&self, node: &Node, t: &Tenant) -> Vec<Quote> {
         let now = node.now();
-        let asks = self.store.lock().unwrap().asks(t.slot).unwrap_or_default();
+        // The lock is released before the snapshot takes it again.
+        let asks = self.st.lock().unwrap().store.asks(t.slot).unwrap_or_default();
         if asks.is_empty() {
             return Vec::new();
         }

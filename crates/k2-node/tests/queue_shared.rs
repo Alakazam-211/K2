@@ -414,3 +414,78 @@ async fn views_redact_other_servers_and_quotes_follow_asks() {
     assert_eq!((q[0].cpu_millis, q[0].mem_bytes), (1000, 1 << 30));
     w.n.node.stop_all(JobState::Cancelled, "test_over");
 }
+
+/// No deadlock under contention: the queue's tick, quotes and views (every
+/// offer and `queue_get`), assigns, withdraws and accounting all run at
+/// once from many threads. The queue keeps one lock; this catches an order
+/// inversion with the node's own locks (ledgers, jobs, hub) too. Every
+/// caller must finish within the deadline.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_queue_never_deadlocks_under_contention() {
+    let w = two("q-stress", "max_parallel = 2\n").await;
+    let node = w.n.node.clone();
+    let deadline = Duration::from_secs(60);
+    // Plain threads report on a channel: a hung one can't stall the test's
+    // runtime shutdown, so a deadlock fails at the deadline (loudly).
+    let (done_tx, done_rx) = std::sync::mpsc::channel::<u32>();
+    let rt = tokio::runtime::Handle::current();
+    for i in 0..4u32 {
+        let n = node.clone();
+        let (o, b) = (w.owner.clone(), w.tb.clone());
+        let done = done_tx.clone();
+        let rt = rt.clone();
+        std::thread::spawn(move || {
+            let _enter = rt.enter();
+            for k in 0..150u32 {
+                match (i + k) % 4 {
+                    0 => n.fairq.tick(&n),
+                    1 => {
+                        let _ = n.fairq.quotes(&n, &b);
+                    }
+                    2 => {
+                        let _ = n.fairq.view(&n, &o, "stress");
+                    }
+                    _ => {
+                        let _ = n.fairq.usage(n.now());
+                        let _ = n.fairq.shared(n.now());
+                    }
+                }
+            }
+            let _ = done.send(i);
+        });
+    }
+    drop(done_tx);
+    // Real traffic meanwhile: jobs in and out from both servers.
+    for k in 0..30 {
+        w.ca.send(Frame::Assign(assign(job("node-1", &format!("sa{k}"), &["/bin/sh", "-c", "sleep 0.05"]), 1)));
+        w.cb.send(Frame::Assign(assign(job("node-b", &format!("sb{k}"), &["/bin/sh", "-c", "sleep 0.05"]), 1)));
+        if k % 3 == 0 {
+            w.cb.send(Frame::Cancel(Cancel { job_id: format!("sb{k}"), generation: 1, reason: CANCEL_WITHDRAW.into() }));
+        }
+    }
+    let start = std::time::Instant::now();
+    let mut finished = 0;
+    while finished < 4 {
+        let left = deadline.saturating_sub(start.elapsed());
+        match tokio::task::block_in_place(|| done_rx.recv_timeout(left)) {
+            Ok(_) => finished += 1,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                // A deadlocked queue also blocks the node's own tick on the
+                // blocking pool, and dropping the runtime would wait for it
+                // forever: end the process so the run fails, not hangs.
+                eprintln!("DEADLOCK: a queue caller hung for {deadline:?} ({finished} of 4 finished)");
+                std::process::abort();
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => panic!("a queue caller panicked ({finished} of 4 finished)"),
+        }
+    }
+    // Everything still ends (max_queued 10 refuses some: those never exist).
+    for k in 0..30 {
+        for (t, id) in [(&w.owner, format!("sa{k}")), (&w.tb, format!("sb{k}"))] {
+            if t.ledger.lock().unwrap().get(&id, 1).unwrap().is_some() {
+                wait_row(t, &id, 1, "ended", ended).await;
+            }
+        }
+    }
+    node.stop_all(JobState::Cancelled, "test_over");
+}

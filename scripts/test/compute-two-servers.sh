@@ -270,6 +270,10 @@ share_add() {
     sleep 0.2
   done
   [[ ${#sas} == 6 ]] || die "no pending SAS for $other (slot $slot) on $node: $(node_servers "$node" list --json 2>&1)"
+  # The SAS lives only in the node's 0600 files, never in its log (B5).
+  if grep -q -e "${sas:0:3} ${sas:3}" -e "SAS $sas" "$ROOT/node-$node/node.log"; then
+    die "the SAS is in $node's log"
+  fi
   api "$other" POST /cli/compute/nodes/confirm "{\"node\":\"$node\",\"sas\":\"$sas\"}" >/dev/null
   if [[ $pending_only == 1 ]]; then
     echo "$slot"

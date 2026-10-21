@@ -43,9 +43,9 @@ use super::exec::Executor;
 use super::jobs::{self, TenantUser};
 
 /// First tenant uid/gid (the PRD's example `61001`).
-pub const TENANT_ID_FIRST: u32 = 61001;
+pub const TENANT_ID_FIRST: u32 = share::TENANT_UID_FIRST;
 /// Last one; past it `tenant.prepare` refuses (thousands of revokes).
-pub const TENANT_ID_LAST: u32 = 64999;
+pub const TENANT_ID_LAST: u32 = share::TENANT_UID_LAST;
 /// Root's record of handed-out tenant ids (in the executor's state dir).
 pub const IDS_FILE: &str = "tenant-ids.json";
 

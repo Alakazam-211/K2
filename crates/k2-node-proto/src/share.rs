@@ -44,6 +44,13 @@ pub type Slot = u8;
 pub const OWNER_SLOT: Slot = 0;
 /// Slots are `0..MAX_SLOTS`.
 pub const MAX_SLOTS: u8 = 8;
+/// Linux tenant job users (`k2job-<slot>`): uids and gids come from this
+/// range, never reused (V64). The K2 daemon refuses loopback clients in it
+/// (review A M2 interim).
+pub const TENANT_UID_FIRST: u32 = 61001;
+pub const TENANT_UID_LAST: u32 = 64999;
+/// A tenant job user's name prefix (`k2job-<slot>`).
+pub const TENANT_USER_PREFIX: &str = "k2job-";
 /// `servers.toml` `max_servers` when absent: 3 servers per node (the owner
 /// plus two; Rosson 2026-10-21, proposed for the Mac minis, pending his
 /// final answer). The node owner may set 1 (no sharing) up to [`MAX_SLOTS`].

@@ -413,7 +413,7 @@ pub fn unit_slot(unit: &str) -> Option<Slot> {
 
 /// A tenant's job user and group names.
 pub fn tenant_user_name(slot: Slot) -> String {
-    format!("{DEFAULT_JOB_USER}-{slot}")
+    format!("{}{slot}", share::TENANT_USER_PREFIX)
 }
 pub fn tenant_group_name(slot: Slot) -> String {
     format!("k2t-{slot}")

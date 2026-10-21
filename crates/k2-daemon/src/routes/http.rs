@@ -1238,6 +1238,12 @@ pub(crate) async fn send_response_with_cookie_and_location(
     set_cookie: Option<&str>,
     location: Option<&str>,
 ) {
+    // Permission cards (PRD rev 3.1 §3.1): a refusal to an agent whose
+    // switches are both on gains its `permission` object. A no-op (the same
+    // bytes) while the global switch is off, and for everyone but a valid
+    // agent passport.
+    let taught = crate::permission::walls::teach_tcp(status, body);
+    let body: &str = &taught;
     // CORS headers on every response so the Tauri WebView (cross-
     // origin from tauri://localhost or http://localhost:5173 to
     // http://127.0.0.1:<port>) can read the body. Token auth
@@ -1278,6 +1284,9 @@ pub(crate) async fn send_response_with_headers(
     body: &str,
     extra: &str,
 ) {
+    // Permission cards: as in `send_response_with_cookie_and_location`.
+    let taught = crate::permission::walls::teach_tcp(status, body);
+    let body: &str = &taught;
     let resp = format!(
         "HTTP/1.1 {status}\r\n\
          Content-Type: {ct}\r\n\
@@ -1693,6 +1702,14 @@ pub(crate) fn authorize_send_message(query: &str, owner_token: &str) -> SendMess
 /// streaming is deferred; the largest signal we expect is ~1KB, so
 /// 4KB is 4× the headroom.
 pub(crate) async fn read_post_body(stream: &mut TcpStream, buf: &mut [u8]) -> Vec<u8> {
+    let body = read_post_body_raw(stream, buf).await;
+    // Permission cards: the refusal wrapper may name a value from the body
+    // (a no-op unless the request was noted, i.e. the global switch is on).
+    super::pass_gate::note_body(&body);
+    body
+}
+
+async fn read_post_body_raw(stream: &mut TcpStream, buf: &mut [u8]) -> Vec<u8> {
     // Phase 4.5: the old single-read version worked with curl (which
     // batches headers + body into one TCP send) but broke with
     // browser fetch, which sends headers in one packet and body in
@@ -1832,6 +1849,21 @@ pub(crate) async fn refuse_body_too_large(
 /// sending) and closes the socket (`DispatchOutcome::Done`): the unread
 /// rest of the body must never be parsed as the next keep-alive request.
 pub(crate) async fn read_post_body_capped<R>(
+    stream: &mut R,
+    buf: &mut [u8],
+    max: usize,
+) -> Result<Vec<u8>, BodyTooLarge>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let body = read_post_body_capped_raw(stream, buf, max).await;
+    if let Ok(b) = &body {
+        super::pass_gate::note_body(b);
+    }
+    body
+}
+
+async fn read_post_body_capped_raw<R>(
     stream: &mut R,
     buf: &mut [u8],
     max: usize,

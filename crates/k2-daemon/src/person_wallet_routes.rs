@@ -474,6 +474,47 @@ fn owner_who(caller: &Caller) -> Result<OwnerWho, CliResponse> {
     }
 }
 
+/// The App an owner wallet verb names → its **service id** (what a guest's
+/// session pass, and so every wallet decision, keys on). Accepts the App id
+/// (`k2 app list`, what people type), the published service id, or
+/// `<workspace>/<publish name>`. Unknown → 404 `app_not_found` (smoke r6:
+/// `settings <AppName> --on` used to store a row under the name, which no
+/// guest ever matched, and accepted any made-up name). Returns
+/// `(service_id, app_id)`; `app_id` is `None` for a published service
+/// with no App row (a classic published App).
+pub(crate) fn resolve_wallet_app(raw: &str) -> Result<(String, Option<String>), CliResponse> {
+    let t = raw.trim();
+    if t.is_empty() {
+        return Err(refuse(400, "bad_request", "app is required"));
+    }
+    if t.eq_ignore_ascii_case(k2_core::skin::HOST_APP_ID) {
+        return Err(refuse(400, "bad_request", "name a published App (host is the box login, not an App)"));
+    }
+    let by_app_id = with_conn(|c| k2_core::deploy::store::get_app(c, &t.to_ascii_lowercase()));
+    match by_app_id {
+        Ok(Some(row)) => return Ok((row.service_id, Some(row.app_id))),
+        Ok(None) => {}
+        Err(e) => return Err(refuse(500, "internal", format!("app lookup: {e}"))),
+    }
+    // An App's own service id (what guests' sign-ins key the wallet on).
+    match with_conn(|c| k2_core::deploy::store::get_app_by_service(c, t)) {
+        Ok(Some(row)) => return Ok((row.service_id, Some(row.app_id))),
+        Ok(None) => {}
+        Err(e) => return Err(refuse(500, "internal", format!("app lookup: {e}"))),
+    }
+    match crate::skin_routes::resolve_app_target(t) {
+        Ok(svc) if svc != k2_core::skin::HOST_APP_ID => {
+            let app_id = with_conn(|c| k2_core::deploy::store::get_app_by_service(c, &svc)).ok().flatten().map(|r| r.app_id);
+            Ok((svc, app_id))
+        }
+        _ => Err(refuse(
+            404,
+            "app_not_found",
+            format!("no App {t:?} on this box: name it by its App id (k2 app list), its service id, or <workspace>/<name>"),
+        )),
+    }
+}
+
 /// May an agent of `project_id` manage `service_id` end to end (switch 1
 /// and switch 2 on, and the App is its workspace's own)?
 pub fn agent_manages_app(project_id: &str, service_id: &str) -> bool {
@@ -524,14 +565,25 @@ pub fn handle_owner(
         let Some(app) = app.map(|a| a.trim().to_string()).filter(|a| !a.is_empty()) else {
             return refuse(400, "bad_request", "app is required");
         };
+        // An agent never learns whether a name is an App (no 404 oracle):
+        // unknown and not-its-own read the same.
+        let switch2 = || refuse(403, "switch2_required", "Only an agent whose workspace owns this App, with \"…and manage them end to end\" on, may set its wallet fallback.");
+        let (app, app_id) = match resolve_wallet_app(&app) {
+            Ok(r) => r,
+            Err(r) if r.status.starts_with("400") => return r,
+            Err(_) => {
+                audit("wallet.refused", key, &format!("{path} {app}"), ingress);
+                return switch2();
+            }
+        };
         if !agent_manages_app(project_id, &app) {
             audit("wallet.refused", key, &format!("{path} {app}"), ingress);
-            return refuse(403, "switch2_required", "Only an agent whose workspace owns this App, with \"…and manage them end to end\" on, may set its wallet fallback.");
+            return switch2();
         }
         if is_post && b.enabled.is_some() {
             return refuse(403, "owner_only", "Turning an App's wallet on or off is the Owner's or an Admin's; agents set the fallback only.");
         }
-        return settings(&app, is_post, None, b.fallback, key, ingress);
+        return settings(&app, app_id.as_deref(), is_post, None, b.fallback, key, ingress);
     }
     let OwnerWho::Admin(key) = who else { unreachable!() };
     match path {
@@ -540,9 +592,19 @@ pub fn handle_owner(
             let Some(app) = app.map(|a| a.trim().to_string()).filter(|a| !a.is_empty()) else {
                 return refuse(400, "bad_request", "app is required");
             };
-            settings(&app, is_post, b.enabled, b.fallback, &key, ingress)
+            let (app, app_id) = match resolve_wallet_app(&app) {
+                Ok(r) => r,
+                Err(r) => return r,
+            };
+            settings(&app, app_id.as_deref(), is_post, b.enabled, b.fallback, &key, ingress)
         }
-        O_PEOPLE => people(params.get("app").map(String::as_str)),
+        O_PEOPLE => match params.get("app").map(|a| a.trim()).filter(|a| !a.is_empty()) {
+            None => people(None),
+            Some(a) => match resolve_wallet_app(a) {
+                Ok((svc, _)) => people(Some(&svc)),
+                Err(r) => r,
+            },
+        },
         O_AGENTS => {
             let marks = match with_conn(|c| pw::person_agents(c)) {
                 Ok(m) => m,
@@ -584,10 +646,10 @@ pub fn handle_owner(
     }
 }
 
-fn settings(app: &str, is_post: bool, enabled: Option<bool>, fallback: Option<bool>, key: &str, ingress: &str) -> CliResponse {
+fn settings(app: &str, app_id: Option<&str>, is_post: bool, enabled: Option<bool>, fallback: Option<bool>, key: &str, ingress: &str) -> CliResponse {
     if !is_post {
         return match with_conn(|c| pw::app_settings(c, app)) {
-            Ok(s) => ok(json!({"ok": true, "settings": s})),
+            Ok(s) => ok(json!({"ok": true, "appId": app_id, "settings": s})),
             Err(e) => wallet_err(e),
         };
     }
@@ -602,7 +664,7 @@ fn settings(app: &str, is_post: bool, enabled: Option<bool>, fallback: Option<bo
                 &format!("{app} enabled {}→{} fallback {}→{}", before.enabled, after.enabled, before.fallback, after.fallback),
                 ingress,
             );
-            ok(json!({"ok": true, "settings": after}))
+            ok(json!({"ok": true, "appId": app_id, "settings": after}))
         }
         Err(e) => wallet_err(e),
     }
@@ -657,6 +719,10 @@ fn personal_agent(b: &Body, key: &str, ingress: &str) -> CliResponse {
     }
     let app = match need(&b.app, "app") {
         Ok(a) => a.to_string(),
+        Err(r) => return r,
+    };
+    let app = match resolve_wallet_app(&app) {
+        Ok((svc, _)) => svc,
         Err(r) => return r,
     };
     let user = match need(&b.user, "user") {

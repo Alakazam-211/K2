@@ -618,7 +618,8 @@ async fn an_unmarked_open_tenant_is_never_adopted() {
     let fresh = eventually("the loop's own tenant", || n.node.tenant(1).filter(|t| !std::sync::Arc::ptr_eq(t, &by_hand))).await;
     assert!(!*by_hand.serve.borrow(), "the unmarked tenant was ended (never served)");
     assert!(by_hand.share().is_none_or(|s| s.entry.state == ShareState::Revoked), "and never given the line's share");
-    let mark = std::fs::read_to_string(n.layout.tenant(1).state().join("line")).unwrap();
+    // The loop writes the mark right after it opens the tenant.
+    let mark = eventually("the line mark", || std::fs::read_to_string(n.layout.tenant(1).state().join("line")).ok()).await;
     assert!(mark.starts_with(&prefix(&b.key)), "the loop's tenant is marked for its line: {mark}");
     assert!(fresh.share().is_some_and(|s| s.entry.state == ShareState::Active));
 }

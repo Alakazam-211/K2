@@ -577,7 +577,7 @@ where
                 // harness can share one. The share itself (paused, ended,
                 // revoked, not approved) is the node queue's to judge
                 // (`on_assign`). A fence the ledger knows still reports.
-                if !owner && !node.wall.is_walled() && !crate::node::dev_test_exemption(node.opts.dev) {
+                if !owner && !node.wall.is_walled() && !crate::node::dev_test_exemption(node.opts.dev, &node.layout().config) {
                     let code = codes::TENANT_WALL_MISSING;
                     let known = {
                         let l = tenant.ledger.lock().unwrap();
@@ -864,8 +864,7 @@ const WALL_PROBE_EVERY: Duration = Duration::from_secs(60);
 /// (`node.tenant_wall_on().await`). Until then: off, so no offer claims a
 /// wall that isn't there.
 async fn tenant_wall_on(node: &Arc<Node>) -> bool {
-    let _ = node;
-    false
+    node.tenant_wall_on().await
 }
 
 /// The servers loop's memory between passes.
@@ -975,6 +974,13 @@ async fn servers_pass(node: &Arc<Node>, st: &mut ServersLoop) {
     // slot opens fresh (new ledger and pin) for its next server.
     for t in node.tenants().into_iter().filter(|t| !t.is_owner()) {
         let line = lines.iter().find(|(e, _)| e.slot == t.slot).map(|(e, _)| e);
+        // A tenant this loop didn't open (a restarted loop; tests that open
+        // one by hand) is the line's when its pin serves the line: keep it.
+        if let Some(e) = line {
+            if !st.keys.contains_key(&t.slot) && t.pin.lock().unwrap().as_ref().is_some_and(|p| crate::node::tenant::pin_serves(e, p)) {
+                st.keys.insert(t.slot, line_key(e));
+            }
+        }
         let same = line.is_some_and(|e| st.keys.get(&t.slot) == Some(&line_key(e)));
         if same {
             continue;

@@ -579,8 +579,8 @@ mod drain_tests {
         wait("the restart", || calls(&r) == vec!["restart-unit k2-node".to_string()]);
         wait("control back", || control(&r) == Control::Active);
         assert!(recent_update_mark(&r.exec.paths.home, r.exec.now()), "the restart is marked an update");
-        let audit = r.exec.audit().verify().unwrap();
-        assert_eq!(audit.iter().filter(|l| l.event == "drain").count(), 2, "drain start and end are audited");
+        // The drain's end line is written after the control is put back.
+        wait("drain start and end audited", || r.exec.audit().verify().unwrap().iter().filter(|l| l.event == "drain").count() == 2);
 
         // Shared with `now`: at once.
         let n = Rig::new("full");

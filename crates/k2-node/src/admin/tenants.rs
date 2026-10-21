@@ -33,7 +33,6 @@
 //! is the wall between servers.
 
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 
 use k2_node_proto::admin::{code, AdminRefusal};
 use k2_node_proto::share::{self, codes, ServerStatus, ShareState, Slot, TenantPrepare, TenantWipe, Trust, OWNER_SLOT};
@@ -77,8 +76,15 @@ fn write_ids(e: &Executor, ids: &TenantIds) -> Result<(), String> {
     crate::util::atomic_write(&ids_path(e), &b, 0o600)
 }
 
-/// One tenant op at a time (they edit `jobs.toml` and the user database).
-static TENANT_OPS: Mutex<()> = Mutex::new(());
+/// One tenant op at a time (they edit `jobs.toml`, `tenant-ids.json` and
+/// the user database), across the executor's connection threads and
+/// `sudo k2-node servers …` (its add and wipe call these too).
+pub const OPS_LOCK_FILE: &str = "tenant-ops.lock";
+
+fn ops_lock(e: &Executor) -> Result<crate::util::FileLock, AdminRefusal> {
+    crate::util::mkdir_mode(&e.paths.state_dir, 0o700).map_err(failed)?;
+    crate::util::FileLock::exclusive(&e.paths.state_dir.join(OPS_LOCK_FILE)).map_err(failed)
+}
 
 fn refuse(c: &str, m: impl Into<String>) -> AdminRefusal {
     AdminRefusal::new(c, m)
@@ -132,7 +138,7 @@ impl Executor {
 
     /// `tenant.prepare` (see the module doc).
     pub fn tenant_prepare(&self, p: &TenantPrepare) -> Result<Value, AdminRefusal> {
-        let _g = TENANT_OPS.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = ops_lock(self)?;
         let entry = self.approved_entry(p.slot)?;
         if entry.state == ShareState::Revoked {
             return Err(refuse(codes::SHARE_REVOKED, format!("slot {} is revoked; wipe it, then add the server again", p.slot)));
@@ -255,7 +261,7 @@ impl Executor {
     /// artifacts, ledger, pin) and on Linux its user and group. The uid is
     /// never handed out again.
     pub fn tenant_wipe(&self, w: &TenantWipe) -> Result<Value, AdminRefusal> {
-        let _g = TENANT_OPS.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = ops_lock(self)?;
         if w.slot == OWNER_SLOT || !share::valid_slot(w.slot) {
             return Err(refuse(code::BAD_ARGS, format!("slot {} isn't a tenant slot (1–7)", w.slot)));
         }

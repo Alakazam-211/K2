@@ -140,13 +140,16 @@ pub async fn detect_wall(dev: bool, admin_socket: &Path) -> Wall {
     }
 }
 
-/// May this `--dev` node act as walled for sharing (V59) and run
-/// `k2-node servers` without sudo? Only in a DEBUG build: tests and the
-/// S5 harness run debug nodes in temp dirs; a release `k2-node` never
-/// takes the exemption, `--dev` or not (and the installers and service
-/// units never pass `--dev`; `tests/cli.rs` checks it).
-pub fn dev_test_exemption(dev: bool) -> bool {
-    dev && cfg!(debug_assertions)
+/// May this `--dev` node act as walled for sharing (V59), run other
+/// servers' jobs with no wall, and run `k2-node servers` without sudo?
+/// Only a test node: a DEBUG build (tests and the S5 harness run debug
+/// nodes in temp dirs; a release `k2-node` never takes the exemption,
+/// `--dev` or not) whose config dir has no `admin.toml` (an installed
+/// node always has one: `k2-node admin install` writes it, so even a
+/// debug binary pointed at a real install's config never takes it). The
+/// installers and service units never pass `--dev` (`tests/cli.rs`).
+pub fn dev_test_exemption(dev: bool, config_dir: &std::path::Path) -> bool {
+    dev && cfg!(debug_assertions) && !config_dir.join(crate::admin::config::ADMIN_FILE).exists()
 }
 
 pub fn current_user() -> String {
@@ -696,6 +699,9 @@ impl Node {
     /// Background loops: config poll, power, tools, janitor, the queue.
     pub fn spawn_background(self: &Arc<Self>) {
         crate::fairq::spawn(self);
+        // Another server's queue waits while its wall isn't there (or it's
+        // over its disk budget); the `team` disk scan (V74).
+        self.spawn_tenant_wall_watch(Duration::from_secs(60));
         let node = self.clone();
         tokio::spawn(async move {
             let mut n = 0u64;

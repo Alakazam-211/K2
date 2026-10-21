@@ -52,15 +52,19 @@ fn shares_up(n: &TestNode, slots: &[Slot]) -> Vec<tokio::sync::mpsc::Receiver<k2
 }
 
 
-fn write_servers(config: &Path, slots: &[(Slot, Trust, Network)]) {
-    let mut f = ServersFile::new(&"a".repeat(64), "owner.test", ShareLimits::owner(2, 8, 16, 100, Network::On), 8, 1000, "local:test");
+/// `servers.toml` as the node owner wrote it: the real owner (`owner_fp`)
+/// and each stand-in server's line (its pin names [`stand_in_fp`]), with
+/// the stand-ins' queue room, so the node's servers loop keeps them.
+fn write_servers(config: &Path, owner_fp: &str, slots: &[(Slot, Trust, Network)]) {
+    let room = |l: ShareLimits| ShareLimits { max_running: 4, max_queued: 100, ..l };
+    let mut f = ServersFile::new(owner_fp, "owner.test", room(ShareLimits::owner(2, 8, 16, 100, Network::On)), 8, 1000, "local:test");
     for (slot, trust, net) in slots {
         let mut e = f.servers[0].clone();
         e.slot = *slot;
         e.label = format!("server-{slot}.test");
         e.fp_prefix = format!("{:016x}", *slot as u64 + 1);
         e.trust = *trust;
-        e.set_limits(&ShareLimits::new_server(*trust, true));
+        e.set_limits(&room(ShareLimits::new_server(*trust, true)));
         e.network = *net;
         f.servers.push(e);
     }
@@ -89,7 +93,7 @@ async fn mac_in(dir: PathBuf, slots: &[(Slot, Trust, Network)], prepare: bool) -
     let mut fake = Fake::start().await;
     let n = start_node_in(&fake, dir, "", |o| o.wall = Some(Wall::Seatbelt)).await;
     let conn = fake.next_conn().await;
-    write_servers(&n.layout.config, slots);
+    write_servers(&n.layout.config, &fake.key.fingerprint(), slots);
     for (slot, ..) in slots {
         if prepare {
             let t = n.layout.tenant(*slot);
@@ -97,7 +101,7 @@ async fn mac_in(dir: PathBuf, slots: &[(Slot, Trust, Network)], prepare: bool) -
                 k2_node::util::mkdir_mode(&d, 0o700).unwrap();
             }
         }
-        k2_node::identity::write_pin(&n.layout.tenant(*slot).pin(), &fake.pin_for("node-1", "mini-1")).unwrap();
+        k2_node::identity::write_pin(&n.layout.tenant(*slot).pin(), &fake.stand_in_pin(*slot, "node-1", "mini-1")).unwrap();
         n.node.add_tenant(*slot).await.unwrap();
     }
     let slots: Vec<Slot> = slots.iter().map(|s| s.0).collect();

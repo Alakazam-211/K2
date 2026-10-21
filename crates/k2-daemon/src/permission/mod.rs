@@ -36,8 +36,18 @@ pub(crate) mod batch;
 pub(crate) mod expiry;
 pub(crate) mod inject;
 pub(crate) mod limits;
+/// A1 (S1a contract): the card's words, its stored view (`view_for`, which
+/// A3's `project()` reuses per viewer), floors and approvers, and
+/// `refresh_card` (every state change rewrites the same doc id and seq).
+pub(crate) mod present;
 pub(crate) mod routes;
 pub(crate) mod store;
+/// A1: test-only catalog actions (no E-lane action is needed to test the
+/// core).
+#[cfg(test)]
+pub(crate) mod testkit;
+#[cfg(test)]
+mod core_tests;
 
 // A3 · projection
 pub(crate) mod view;

@@ -1,3 +1,412 @@
-//! A1 — The `permission` / `permission.batch` arms behind `answer_action_card` (signature frozen; `confirmToken` and `item` come from `params`): the catalog floor, the current-state check (`already_done` / `stale`), the locked apply through the route entry, single use (§4.1, §6.2).
+//! A1 — The `permission` / `permission.batch` arms behind
+//! `overlay_routes::answer_action_card` (signature frozen; `confirmToken`,
+//! `item`, `reason` and `client` come from `params`): the catalog floor,
+//! the locked apply with the current-state check (`already_done` /
+//! `stale`), single use (§4.1, §4.5, §6.1, §6.2; C12, Rosson Q1).
 //!
-//! P0 stub: empty. Nothing calls it yet.
+//! The order for every item (§6.2), never cut:
+//! 1. **compare-and-set** `pending|already_done → applying` in one SQL
+//!    statement; zero rows → 409 `request_not_pending`, before any apply;
+//! 2. **current state**: the card text hash and the action's `check` on the
+//!    stored values: already in the asked-for state → `already_done`
+//!    (nothing applied, "Already on"); values that moved → `stale`;
+//! 3. **apply** through the route's own entry as the answerer (+ confirm);
+//! 4. **close**: the card (when no item is open), `result`, the stored
+//!    view, one audit line and the agent's one turn.
+//!
+//! A missing or refused confirm decides nothing: the request goes back to
+//! its open state and the person can try again (403
+//! `vault_confirm_required`, 429 `rate_limited`).
+
+use std::collections::HashMap;
+
+use k2_core::overlay::{CardAction, PostAuthor};
+use k2_core::permission::catalog::Proof;
+use k2_core::permission::request::{code, limits, PermissionRequest, RequestState};
+use k2_core::permission::{audit_event, label, CARD_ACTION_BATCH};
+use serde_json::json;
+
+use super::actions::{Answerer, Applied, Check};
+use super::present::{self, CardClose};
+use super::store::{self, Decided};
+use super::inject;
+use crate::cli_response::CliResponse;
+
+/// The card being answered.
+pub(crate) struct CardRef<'a> {
+    pub conversation_id: &'a str,
+    pub card_id: &'a str,
+}
+
+fn status_line(code: u16) -> &'static str {
+    match code {
+        200 => "200 OK",
+        400 => "400 Bad Request",
+        403 => "403 Forbidden",
+        404 => "404 Not Found",
+        405 => "405 Method Not Allowed",
+        409 => "409 Conflict",
+        413 => "413 Payload Too Large",
+        429 => "429 Too Many Requests",
+        _ => "500 Internal Server Error",
+    }
+}
+
+pub(crate) fn err(status: u16, code: &str, hint: impl std::fmt::Display) -> CliResponse {
+    CliResponse {
+        status: status_line(status),
+        content_type: "application/json",
+        body: json!({ "ok": false, "error": { "code": code, "hint": hint.to_string() } }).to_string(),
+    }
+}
+
+/// 403 `action_card_person_only` with `required` (§17.3).
+pub(crate) fn below_floor(required: &str) -> CliResponse {
+    CliResponse {
+        status: "403 Forbidden",
+        content_type: "application/json",
+        body: json!({
+            "ok": false,
+            "error": {
+                "code": code::ACTION_CARD_PERSON_ONLY,
+                "hint": format!("only a person with the {required} role answers this card"),
+                "required": required,
+            }
+        })
+        .to_string(),
+    }
+}
+
+/// Where the answer came from (`view.answer.via`): the body's `client`
+/// when it is one of the four, else the owner token is the desktop and a
+/// login the web.
+fn via_of(params: &HashMap<String, String>, who: &Answerer) -> String {
+    match params.get("client").map(|s| s.trim()) {
+        Some(c @ ("desktop" | "phone" | "web" | "terminal")) => c.to_string(),
+        _ => match who {
+            Answerer::OwnerToken => "desktop".to_string(),
+            Answerer::Login { .. } => "web".to_string(),
+        },
+    }
+}
+
+fn who_name(who: &Answerer) -> String {
+    match who {
+        Answerer::OwnerToken => "owner".to_string(),
+        Answerer::Login { user, .. } => user.clone(),
+    }
+}
+
+fn who_label(who: &Answerer) -> (String, &'static str) {
+    match who {
+        Answerer::OwnerToken => ("owner".to_string(), "owner-token"),
+        Answerer::Login { user, .. } => (format!("login:{user}"), "login"),
+    }
+}
+
+/// One Access Audit line (§6.5): `permission-request|answer|…` with who
+/// and `via`. Lane A2 owns the Access Audit filter and the note/undo/
+/// switch events; A1 writes the request and answer lines.
+pub(crate) fn audit(event: &str, user: &str, via: &str, req: &PermissionRequest) {
+    k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+        event,
+        user,
+        format!("{} {} {} via={via}", req.display_id(), req.action, req.state.as_str()),
+        "-",
+        "-",
+        "cli",
+    ));
+}
+
+/// The decision a person sent for one item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Decision {
+    Allow,
+    Deny,
+    Close,
+}
+
+fn decision_of(label_text: &str) -> Option<Decision> {
+    match label_text {
+        label::ALLOW => Some(Decision::Allow),
+        label::DENY => Some(Decision::Deny),
+        label::CLOSE => Some(Decision::Close),
+        _ => None,
+    }
+}
+
+/// The person's answer to a permission or batch card.
+pub(crate) fn answer(
+    params: &HashMap<String, String>,
+    card: CardRef<'_>,
+    action: &CardAction,
+    who: &Answerer,
+    by: Option<PostAuthor>,
+) -> CliResponse {
+    let Some(answer) = params.get("answer").or_else(|| params.get("option")).map(|a| a.trim().to_string()).filter(|a| !a.is_empty())
+    else {
+        return err(400, "usage", "answer required");
+    };
+    let reqs = match store::for_card(card.conversation_id, card.card_id) {
+        Ok(r) => r,
+        Err(e) => return err(500, "db", e),
+    };
+    if reqs.is_empty() {
+        return err(409, code::REQUEST_NOT_PENDING, "this card has no open request");
+    }
+    let batch = action.id == CARD_ACTION_BATCH;
+    let reason = params.get("reason").map(|r| r.trim().to_string()).filter(|r| !r.is_empty());
+    if reason.as_deref().is_some_and(|r| r.chars().count() > limits::DENY_REASON_MAX_CHARS || r.contains(['\n', '\r'])) {
+        return err(400, "usage", format!("a deny reason is one line of at most {} characters", limits::DENY_REASON_MAX_CHARS));
+    }
+    let token = params.get("confirmToken").or_else(|| params.get("confirm_token")).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+    let via = via_of(params, who);
+
+    // What to decide: (request, decision).
+    let mut targets: Vec<(PermissionRequest, Decision)> = Vec::new();
+    let item = params.get("item").map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let all_label = batch && item.is_none() && (answer == label::ALLOW_ALL || answer == label::DENY_ALL);
+    if all_label {
+        // Every open item must be at this person's floor (§4.5).
+        for r in reqs.iter().filter(|r| r.is_answerable()) {
+            if !present::meets_floor(present::floor_of(&r.floor), who) {
+                return below_floor(present::floor_of(&r.floor).as_str());
+            }
+        }
+        for r in reqs.iter().filter(|r| r.is_answerable()) {
+            let confirm = present::find_action(&r.action).is_some_and(|a| !a.spec.proof.batchable());
+            if answer == label::ALLOW_ALL {
+                // "Allow all" covers click items only; confirm items are
+                // answered one by one, as Settings does.
+                if !confirm {
+                    targets.push((r.clone(), Decision::Allow));
+                }
+            } else {
+                targets.push((r.clone(), Decision::Deny));
+            }
+        }
+        if targets.is_empty() {
+            return err(409, code::REQUEST_NOT_PENDING, "nothing on this card is waiting for that answer");
+        }
+    } else {
+        let Some(d) = decision_of(&answer) else {
+            return err(400, "usage", format!("'{answer}' is not an option on this card"));
+        };
+        let target = if batch {
+            let Some(id) = item.as_deref() else {
+                return err(400, "usage", format!("'{answer}' on a batch card names an item"));
+            };
+            match reqs.iter().find(|r| r.display_id() == id || r.id.as_str() == id) {
+                Some(r) => r.clone(),
+                None => return err(400, "usage", format!("{id} is not on this card")),
+            }
+        } else {
+            reqs[0].clone()
+        };
+        let floor = present::floor_of(&target.floor);
+        if !present::meets_floor(floor, who) {
+            return below_floor(floor.as_str());
+        }
+        targets.push((target, d));
+    }
+
+    let single = !batch;
+    let mut decided: Vec<PermissionRequest> = Vec::new();
+    for (req, d) in targets {
+        match decide_one(&req, d, who, &via, token.as_deref(), reason.as_deref(), single.then_some(&card)) {
+            Ok(done) => decided.push(done),
+            // One item of an "Allow all"/"Deny all" lost a race: skip it.
+            Err(_) if all_label => {}
+            Err(r) => return r,
+        }
+    }
+    if decided.is_empty() {
+        return err(409, code::REQUEST_NOT_PENDING, "someone answered first, or the request closed");
+    }
+    let cb = present::refresh_card(card.conversation_id, card.card_id, CardClose::Answer { label: &answer, by });
+    let (user, kind) = who_label(who);
+    for r in &decided {
+        audit(audit_event::ANSWER, &user, kind, r);
+        inject::send_outcome(r);
+    }
+    let (status, seq) = match &cb {
+        Some(cb) => (cb.doc.choice.as_ref().map(|c| c.status.clone()).unwrap_or_default(), cb.seq),
+        None => (String::new(), 0),
+    };
+    let result = match (&cb, single) {
+        (_, true) => present::result_for(&decided[0]),
+        (Some(cb), false) => cb.doc.choice.as_ref().and_then(|c| c.action.as_ref()).and_then(|a| a.result.clone()).unwrap_or(json!(null)),
+        (None, false) => json!(null),
+    };
+    CliResponse::ok_json(
+        json!({
+            "ok": true,
+            "id": card.card_id,
+            "seq": seq,
+            "kind": "choice",
+            "status": status,
+            "answer": answer,
+            "action": { "id": action.id, "result": result },
+            "decided": decided.iter().map(|r| json!({ "id": r.display_id(), "state": r.state.as_str() })).collect::<Vec<_>>(),
+        })
+        .to_string(),
+    )
+}
+
+/// Decide one request: the compare-and-set, the current-state check, the
+/// apply, the stored decision. Returns the request as decided. `single`:
+/// the card is this request's alone, so the "applying" view is drawn.
+fn decide_one(
+    req: &PermissionRequest,
+    d: Decision,
+    who: &Answerer,
+    via: &str,
+    token: Option<&str>,
+    reason: Option<&str>,
+    single: Option<&CardRef<'_>>,
+) -> Result<PermissionRequest, CliResponse> {
+    let now = k2_core::overlay::now_secs();
+    let by = who_name(who);
+    let registered = present::find_action(&req.action);
+    let prior = req.state;
+    let record = |state: RequestState, message: Option<&str>, reason: Option<&str>| -> Result<PermissionRequest, CliResponse> {
+        store::decide(req.id.as_str(), &Decided { state, by: Some(&by), via: Some(via), reason, message, at: now })
+            .map_err(|e| err(500, "db", e))?;
+        store::get(req.id.as_str()).map_err(|e| err(500, "db", e))?.ok_or_else(|| err(500, "db", "the request vanished"))
+    };
+
+    if d == Decision::Deny {
+        if !store::cas_open_to(req.id.as_str(), RequestState::Denied).map_err(|e| err(500, "db", e))? {
+            return Err(err(409, code::REQUEST_NOT_PENDING, "someone answered first, or the request closed"));
+        }
+        let msg = match reason {
+            Some(r) => format!("Denied: {r}"),
+            None => "Denied.".to_string(),
+        };
+        return record(RequestState::Denied, Some(&msg), reason);
+    }
+
+    // A confirm action needs its Settings confirm before anything moves.
+    let confirm = registered.as_ref().is_some_and(|r| matches!(r.spec.proof, Proof::SettingsConfirm { .. }));
+    if d == Decision::Allow && confirm && token.is_none() {
+        return Err(err(403, code::VAULT_CONFIRM_REQUIRED, "this action takes the same confirm as Settings: confirm, then answer with confirmToken"));
+    }
+
+    // 1. The compare-and-set, before any apply (C12).
+    if !store::cas_open_to(req.id.as_str(), RequestState::Applying).map_err(|e| err(500, "db", e))? {
+        return Err(err(409, code::REQUEST_NOT_PENDING, "someone answered first, or the request closed"));
+    }
+    let Some(registered) = registered else {
+        return record(RequestState::Stale, Some("K2 no longer offers this request"), None);
+    };
+    if d == Decision::Allow {
+        if let Some(card) = single {
+            // "Applying…": the card still pending, same id and seq.
+            if let Some(view) = store::get(req.id.as_str()).ok().flatten().and_then(|r| present::view_for(&[r], false, None)) {
+                if let Err(e) = crate::overlay_routes::update_action_view(card.conversation_id, card.card_id, view) {
+                    k2_core::log_debug!("[permission] applying view for {}: {e}", req.id);
+                }
+            }
+        }
+    }
+
+    // 2. The current state, on the stored values and the stored text.
+    let ctx = present::ctx_of(req);
+    if present::words_hash(&present::words(registered.spec, &ctx)) != req.text_hash {
+        return record(RequestState::Stale, Some("the card's wording changed after it was asked"), None);
+    }
+    match (registered.check)(&ctx) {
+        Check::AlreadyDone => {
+            let on = present::on_word(registered.spec.direction);
+            let msg = format!("Already {on}. Nothing was applied.");
+            let msg = msg[..1].to_uppercase() + &msg[1..];
+            return record(RequestState::AlreadyDone, Some(&msg), None);
+        }
+        Check::Moved(why) => return record(RequestState::Stale, Some(&why), None),
+        Check::Needed => {}
+    }
+    if d == Decision::Close {
+        // `Close` answers an already-done card; this one isn't any more.
+        store::revert_applying(req.id.as_str(), prior).map_err(|e| err(500, "db", e))?;
+        return Err(err(400, "usage", "'Close' is not an option on this card: it needs an answer again"));
+    }
+
+    // 3. The apply, through the route's own entry, as the answerer.
+    match (registered.apply)(&ctx, who, token) {
+        Applied::Done { message } => {
+            let w = present::words(registered.spec, &ctx);
+            let msg = if message.trim().is_empty() {
+                match registered.spec.grant {
+                    k2_core::permission::catalog::Grant::Standing => format!("Allowed. Turn it off again in {}.", w.settings_path),
+                    k2_core::permission::catalog::Grant::OneTime => "Allowed.".to_string(),
+                }
+            } else {
+                message
+            };
+            record(RequestState::Approved, Some(&msg), None)
+        }
+        Applied::Refused { code: c, message } if c == code::VAULT_CONFIRM_REQUIRED || c == "rate_limited" => {
+            store::revert_applying(req.id.as_str(), prior).map_err(|e| err(500, "db", e))?;
+            let status = if c == "rate_limited" { 429 } else { 403 };
+            Err(err(status, &c, message))
+        }
+        Applied::Refused { message, .. } => record(RequestState::Failed, Some(&message), None),
+    }
+}
+
+/// Close open requests for the daemon (no person): the agent withdrew
+/// them (`cancelled`), their time ran out (`expired`) or a permission-cards
+/// switch turned off (`closed`, §2.5). Each request wins its own
+/// compare-and-set; its card is refreshed (voided / expired when nothing on
+/// it stays open) and the agent gets one turn (none for `cancelled`).
+/// Returns the requests closed here.
+pub(crate) fn close_open(reqs: &[PermissionRequest], to: RequestState, message: &str) -> Vec<PermissionRequest> {
+    debug_assert!(matches!(to, RequestState::Cancelled | RequestState::Expired | RequestState::Closed));
+    let now = k2_core::overlay::now_secs();
+    let mut closed = Vec::new();
+    let mut cards: Vec<(String, String)> = Vec::new();
+    for req in reqs {
+        match store::cas_open_to(req.id.as_str(), to) {
+            Ok(true) => {}
+            Ok(false) => continue,
+            Err(e) => {
+                k2_core::log_debug!("[permission] close {}: {e}", req.id);
+                continue;
+            }
+        }
+        if let Err(e) = store::decide(req.id.as_str(), &Decided { state: to, by: None, via: None, reason: None, message: Some(message), at: now }) {
+            k2_core::log_debug!("[permission] close {}: {e}", req.id);
+        }
+        if let (Some(c), Some(k)) = (req.conversation_id.clone(), req.card_id.clone()) {
+            if !cards.contains(&(c.clone(), k.clone())) {
+                cards.push((c, k));
+            }
+        }
+        if let Ok(Some(r)) = store::get(req.id.as_str()) {
+            closed.push(r);
+        }
+    }
+    for (c, k) in &cards {
+        present::refresh_card(c, k, if to == RequestState::Expired { CardClose::Expire } else { CardClose::Void });
+    }
+    for r in &closed {
+        audit(audit_event::ANSWER, "k2", "daemon", r);
+        inject::send_outcome(r);
+    }
+    closed
+}
+
+/// The switch-off close (§2.5): every open request on this server (or of
+/// one workspace, when its agent switch turned off) closes with one turn
+/// each. Called from the settings write path (lane B wires it into the
+/// `permissionCards` setting and `agent-access/set toggle=permission_cards`),
+/// so it runs headless.
+pub(crate) fn close_for_switch_off(workspace_id: Option<&str>) -> usize {
+    match store::open(workspace_id) {
+        Ok(reqs) => close_open(&reqs, RequestState::Closed, "Closed: permission cards were turned off.").len(),
+        Err(e) => {
+            k2_core::log_debug!("[permission] switch-off close: {e}");
+            0
+        }
+    }
+}

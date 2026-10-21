@@ -63,19 +63,9 @@ pub(crate) fn too_large() -> CliResponse {
 /// Today's answer for an unknown `/cli` route, byte for byte (the
 /// off-goldens): what a caller the family doesn't serve gets while the
 /// server switch is on (an agent whose own switch is off, a bad token).
+/// (Lane B's `route_policy::permission_agent_off_response`.)
 pub(crate) fn today(transport: Transport, is_post: bool) -> CliResponse {
-    match (transport, is_post) {
-        (Transport::Tcp, true) => CliResponse {
-            status: "405 Method Not Allowed",
-            content_type: "application/json",
-            body: r#"{"error":"method not allowed for this route"}"#.to_string(),
-        },
-        _ => CliResponse {
-            status: "403 Forbidden",
-            content_type: "application/json",
-            body: r#"{"error":"Invalid or missing auth token"}"#.to_string(),
-        },
-    }
+    crate::routes::route_policy::permission_agent_off_response(transport == Transport::Cell, if is_post { "POST" } else { "GET" })
 }
 
 /// The family's door: the gate, then the verb. `is_post` is the request
@@ -99,7 +89,7 @@ pub(crate) fn handle_gated(path: &str, who: &Who, is_post: bool, body: &[u8], pa
     }
     if is_post_route(path) != is_post {
         return if is_post_route(path) {
-            CliResponse::method_not_allowed()
+            err(405, "method_not_allowed", "POST required")
         } else {
             err(405, "method_not_allowed", "use GET")
         };

@@ -1426,6 +1426,10 @@ fn handle_access(
         // `permission-switch` one.
         k2_core::workspace::settings::set_agents_can_request_permissions(&ws.id, value)
             .map_err(|e| err("workspace_not_found", 404, e))?;
+        // §2.5: this agent's open requests close, with one turn each.
+        if !value {
+            crate::permission::answer::close_for_switch_off(Some(&ws.id));
+        }
         k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
             k2_core::permission::audit_event::SWITCH,
             &caller.audit_user(),

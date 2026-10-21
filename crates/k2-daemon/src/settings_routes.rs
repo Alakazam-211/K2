@@ -180,6 +180,11 @@ pub(crate) fn sync_permission_cards(on: bool, by: &str) -> bool {
 /// where `permission-cards-v1` appears or goes. Headless: the daemon does
 /// it, whichever client (or none) is attached.
 pub(crate) fn permission_cards_flipped(on: bool, by: &str) {
+    // §2.5: turning the server switch off closes every open request, with
+    // one turn each (daemon-side, so it works headless).
+    if !on {
+        crate::permission::answer::close_for_switch_off(None);
+    }
     k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
         k2_core::permission::audit_event::SWITCH,
         by,

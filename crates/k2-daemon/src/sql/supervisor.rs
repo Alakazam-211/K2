@@ -1013,12 +1013,14 @@ mod tests {
 
     #[test]
     fn health_skip_shape_and_disable() {
+        // The guard first: health reads `sql_clusters`, which other tests
+        // fill (a 17 cluster row left by one made this read Degraded).
+        let _g = db_guard();
+        k2_core::db::init_for_tests();
+        clean_row();
         let ops = FakeSystemOps::baked();
         let h = health_check_with(&ops, &|| Ok(()));
         assert_eq!(h, Health::Running);
-        let _g = db_guard();
-        clean_row();
-        k2_core::db::init_for_tests();
         enable_with(&ops).ok();
         disable_with(&ops).expect("disable");
         assert_eq!(current_status().as_deref(), Some("disabled"));

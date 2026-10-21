@@ -498,13 +498,13 @@ fn approving_a_proposal_on_the_persons_widget_asks_keep_as_mine_too() {
     assert_eq!(keep_notes("w-keep-mgr2", "other"), 0);
 }
 
-/// Who may tap a Keep-as-mine card (the settings-cards review, 2026-10-20):
-/// the agent it's about is refused, so is another agent, and so is a
-/// Member login; an Owner login (phone, web) succeeds, at the role floor
-/// of the Settings control. Every refusal leaves the card waiting and the
-/// widget unkept. Other choice cards are untouched (not tested here).
+/// Who may tap a Keep-as-mine card (the permission-cards reviews, 2026-10-20
+/// and -21): never wider than Settings' "It's mine" (owner token only), so
+/// the owner token or an Owner login. The agent it's about is refused, so is
+/// another agent, an Admin and a Member login; an Owner login (phone, web)
+/// succeeds. Every refusal leaves the card waiting and the widget unkept.
 #[test]
-fn a_keep_card_is_answered_by_an_owner_or_admin_person_only() {
+fn a_keep_card_is_answered_by_the_owner_only() {
     let e = env();
     let mgr = workspace("w-keepw-mgr", true);
     let _other = workspace("w-keepw-other", false);
@@ -541,6 +541,10 @@ fn a_keep_card_is_answered_by_an_owner_or_admin_person_only() {
     k2_core::connect_users::add_user("mel", "password-for-tests-1").expect("add member");
     k2_core::connect_users::set_role("mel", k2_core::connect_users::Role::Member).expect("member");
     refused(&crate::overlay_routes::dispatch_post_as("/cli/thread/answer", &HashMap::new(), body.as_bytes(), "mel"), "a member");
+    // An Admin login: Settings doesn't let an admin keep it, so neither does the card.
+    k2_core::connect_users::add_user("ada", "password-for-tests-3").expect("add admin");
+    k2_core::connect_users::set_role("ada", k2_core::connect_users::Role::Admin).expect("admin");
+    refused(&crate::overlay_routes::dispatch_post_as("/cli/thread/answer", &HashMap::new(), body.as_bytes(), "ada"), "an admin");
     assert_eq!(card(&conv, &id).status, "pending", "refusals leave the card waiting");
     assert!(unkept(), "nothing kept by a refused tap");
     // An Owner login (the phone, the web).
@@ -554,6 +558,56 @@ fn a_keep_card_is_answered_by_an_owner_or_admin_person_only() {
     // Single use.
     let r = crate::overlay_routes::dispatch_post_as("/cli/thread/answer", &HashMap::new(), body.as_bytes(), "olga");
     assert_eq!(r.status, "409 Conflict", "{}", r.body);
+}
+
+/// Dismissing a Keep-as-mine card is the person's too (permission-cards
+/// review 2026-10-21): the agent it's about and another agent are refused
+/// 403 `action_card_person_only` and the card stays waiting; the daemon's
+/// own replace (a newer change) still voids it; an ordinary choice card is
+/// still dismissed by its agent as before.
+#[test]
+fn only_the_person_dismisses_a_keep_card_and_the_daemon_replace_still_works() {
+    let e = env();
+    let mgr = workspace("w-keepv-mgr", true);
+    let _other = workspace("w-keepv-other", false);
+    let conv = pin_chat("w-keepv-mgr");
+    call("/cli/zen/widget/folder/put", true, &Caller::Owner, json!({"widget": "board", "files": folder("board", "v1")}));
+    claim_live(&e.f, "board", 1);
+    let (_, v) = call("/cli/zen/widget/put", false, &mgr, json!({"widget": "board", "file": "app.js", "text": "console.log('agent')\n"}));
+    let id = v["keepCard"]["card"].as_str().expect("a card").to_string();
+    let passport = |ws: &str| -> HashMap<String, String> {
+        [
+            (crate::caller_workspace::PRINCIPAL_BOUND_KEY.to_string(), "1".to_string()),
+            ("project_id".to_string(), ws.to_string()),
+            ("from".to_string(), ws.to_string()),
+        ]
+        .into()
+    };
+    let void = |params: &HashMap<String, String>, card: &str| {
+        let body = json!({"addr": "w-keepv-mgr", "id": card}).to_string();
+        crate::overlay_routes::dispatch_post("/cli/thread/void", params, body.as_bytes())
+    };
+    for (who, ws) in [("its own agent", "w-keepv-mgr"), ("another agent", "w-keepv-other")] {
+        let r = void(&passport(ws), &id);
+        assert_eq!(r.status, "403 Forbidden", "{who}: {}", r.body);
+        let v: J = serde_json::from_str(&r.body).expect("json");
+        assert_eq!(v["error"]["code"], "action_card_person_only", "{who}: {v}");
+    }
+    assert_eq!(card(&conv, &id).status, "pending", "a refused dismiss leaves the card waiting");
+    // The daemon's replace: a newer change voids the waiting card.
+    let (_, v) = call("/cli/zen/widget/put", false, &mgr, json!({"widget": "board", "file": "app.js", "text": "console.log('agent 2')\n"}));
+    let newer = v["keepCard"]["card"].as_str().expect("a newer card").to_string();
+    assert_ne!(newer, id);
+    assert_eq!(card(&conv, &id).status, "voided", "the daemon's replace still voids it");
+    assert_eq!(card(&conv, &newer).status, "pending");
+    // An ordinary choice card (no action) is unchanged: its agent dismisses it.
+    let ask = json!({"addr": "w-keepv-mgr", "prompt": "Ship it?", "options": "Go,Stop", "from": "w-keepv-mgr"}).to_string();
+    let r = crate::overlay_routes::dispatch_post("/cli/thread/ask", &passport("w-keepv-mgr"), ask.as_bytes());
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    let plain: J = serde_json::from_str(&r.body).expect("json");
+    let plain_id = plain["id"].as_str().expect("id").to_string();
+    let r = void(&passport("w-keepv-mgr"), &plain_id);
+    assert_eq!(r.status, "200 OK", "an ordinary card is dismissed as before: {}", r.body);
 }
 
 /// Pin a Chat for a workspace: its agent has a Thread the person reads.

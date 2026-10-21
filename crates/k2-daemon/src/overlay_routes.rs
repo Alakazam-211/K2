@@ -2153,6 +2153,39 @@ fn action_card_person_only(hint: &str) -> CliResponse {
     error_json("403 Forbidden", "action_card_person_only", hint)
 }
 
+/// Who may answer or dismiss a settings (action) card: the person, at the
+/// floor of the Settings control it stands in for. Never wider than
+/// Settings: "It's mine" there takes the owner token only, so a card takes
+/// the owner token or an Owner Connect login (the phone, the web). An agent
+/// passport (its own or another workspace's), a K2 terminal cell, a Garden
+/// widget, an App guest, an Admin or a Member login is refused. `verb`:
+/// "answers" or "dismisses". The daemon's own replace (a newer change voids
+/// the waiting card) never comes through a route, so it isn't checked here.
+fn require_action_card_person(params: &HashMap<String, String>, session_author: &str, verb: &str) -> Result<(), CliResponse> {
+    let passport = principal_is_bound(params)
+        || crate::caller_workspace::principal_from_params(params).is_some()
+        || params.contains_key("cell_session_id");
+    if passport {
+        return Err(action_card_person_only(&format!(
+            "this card changes your settings, so only you {verb} it (the Thread tab, an owner login); an agent or a K2 terminal never can"
+        )));
+    }
+    if params.contains_key("origin") {
+        return Err(action_card_person_only(&format!("a Garden widget never {verb} a settings card; do it in the Thread")));
+    }
+    if request_skin().is_some() {
+        return Err(action_card_person_only(&format!("an App guest never {verb} a settings card")));
+    }
+    let owner = session_author == "owner"
+        || matches!(k2_core::connect_users::role_for_user(session_author), Some(k2_core::connect_users::Role::Owner));
+    if !owner {
+        return Err(action_card_person_only(&format!(
+            "only this server's owner {verb} a settings card (the same people as Settings → Gardens → Local Data)"
+        )));
+    }
+    Ok(())
+}
+
 /// A person's tap on an action card: check it's a person who may change
 /// this server's settings, check the option, run the action, then close
 /// the card (the agent hears the choice like any card answer).
@@ -2163,27 +2196,8 @@ fn answer_action_card(
     action: overlay::CardAction,
     session_author: &str,
 ) -> CliResponse {
-    let passport = principal_is_bound(params)
-        || crate::caller_workspace::principal_from_params(params).is_some()
-        || params.contains_key("cell_session_id");
-    if passport {
-        return action_card_person_only(
-            "this card changes your settings, so only you answer it (the Thread tab, a Connect login); an agent or a K2 terminal never can",
-        );
-    }
-    if params.contains_key("origin") {
-        return action_card_person_only("a Garden widget can't answer a settings card; answer it in the Thread");
-    }
-    if request_skin().is_some() {
-        return action_card_person_only("an App guest can't answer a settings card");
-    }
-    let may = session_author == "owner"
-        || matches!(
-            k2_core::connect_users::role_for_user(session_author),
-            Some(k2_core::connect_users::Role::Owner | k2_core::connect_users::Role::Admin)
-        );
-    if !may {
-        return action_card_person_only("only the owner or an admin of this server answers a settings card");
+    if let Err(r) = require_action_card_person(params, session_author, "answers") {
+        return r;
     }
     if let Some(r) = refuse_if_expired(resolved, card_id) {
         return r;
@@ -2283,6 +2297,17 @@ fn handle_void(params: &HashMap<String, String>, session_author: &str) -> CliRes
     }
     if let Err(e) = require_skin_cap_in_resolved(&resolved, k2_core::skin::CAP_THREAD_POST) {
         return e;
+    }
+    // 0.46.3: dismissing a settings (action) card is the person's alone,
+    // like answering it; other cards are unchanged.
+    match overlay::card_action(&resolved.conversation_id, &card_id) {
+        Ok(Some(_)) => {
+            if let Err(r) = require_action_card_person(params, session_author, "dismisses") {
+                return r;
+            }
+        }
+        Ok(None) => {}
+        Err(e) => return card_error(e),
     }
     let principal = crate::caller_workspace::principal_from_params(params);
     if let Err(e) = authorize_write(principal.as_ref(), &resolved, "k2") {
@@ -3383,8 +3408,8 @@ mod tests {
         assert_error_code(&r, "409 Conflict", "card_not_pending");
     }
 
-    /// "Leave it as builder's" keeps nothing; a login that isn't an
-    /// owner/admin) can't answer a settings card.
+    /// "Leave it as builder's" keeps nothing; a login that isn't this
+    /// server's owner can't answer a settings card.
     #[test]
     fn let_sync_keeps_nothing_and_a_member_cannot_answer() {
         let handle = format!("ovlact2{}", &uuid::Uuid::new_v4().to_string()[..8]);

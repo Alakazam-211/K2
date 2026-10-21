@@ -186,6 +186,7 @@ const OWN2: &[(Slot, Trust, Network)] = &[(1, Trust::Own, Network::On), (2, Trus
 async fn w1_w2_w3_the_profile_walls_each_servers_dirs_both_ways() {
     let m = mac("mac-w1", OWN2, true).await;
     let n = &m.n;
+    assert!(!n.node.tenant_wall_on().await, "macOS 0.46.3 never offers tenant-wall (one uid)");
     let l = &n.layout;
     let mut secrets: Vec<(Slot, PathBuf, String, bool)> = Vec::new();
     for s in [0u8, 1, 2] {

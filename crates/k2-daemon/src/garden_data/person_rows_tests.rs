@@ -74,6 +74,11 @@ impl Door {
     fn set(&self, caps: &[&str], maker: MadeBy) {
         let tag = uuid::Uuid::new_v4().simple().to_string();
         std::fs::write(self.f.widget_dir("board").join("manifest.json"), manifest(caps, &tag[..8])).expect("manifest");
+        // New code, so a new hash its maker signs first (the first signer of
+        // a hash keeps it).
+        let index = self.f.widget_dir("board").join("index.html");
+        let html = std::fs::read_to_string(&index).expect("index.html");
+        std::fs::write(&index, format!("{html}\n<!-- version {tag} -->\n")).expect("index.html");
         if maker == MadeBy::Unclaimed {
             return;
         }
@@ -188,8 +193,11 @@ fn tickets_read_and_write_as_the_person() {
     let said = d.call("tickets.comment", json!([{ "id": id, "body": "Looks right" }]));
     assert_eq!((said["author"].as_str(), said["ok"].as_bool()), (Some("owner"), Some(true)), "the person's own comment: {said}");
     let shown = d.call("tickets.show", json!([{ "id": id }]));
+    // The agent's question first, then the person's own comment.
     let comments = shown["comments"].as_array().expect("comments");
-    assert_eq!((comments.len(), comments[0]["author"].as_str()), (1, Some("owner")), "{shown}");
+    let last = comments.last().expect("a comment");
+    assert_eq!((last["author"].as_str(), last["body"].as_str()), (Some("owner"), Some("Looks right")), "{shown}");
+    assert_eq!(shown["status"], "needs_discussion", "free text moves it: {shown}");
     let done = d.call("tickets.resolve", json!([{ "id": id }]));
     assert_eq!(done["status"], "resolved", "{done}");
     assert_eq!(d.refuse("tickets.show", json!([{ "id": "no-such-ticket" }])), "not_found");

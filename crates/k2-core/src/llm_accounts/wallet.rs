@@ -808,17 +808,127 @@ pub struct RemoveOutcome {
     pub moved_to: Option<String>,
 }
 
+/// What clearing a tool's server default did.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClearOutcome {
+    pub tool: String,
+    /// The token that was the server default (`None`: there was none).
+    pub cleared: Option<String>,
+    pub cleared_label: Option<String>,
+    /// The subscription still signed in to the tool's own store, which is
+    /// what chats on Server default use without the API token, so it is
+    /// the default again; `None`: the tool has no server default now.
+    pub now_default: Option<String>,
+    pub now_default_label: Option<String>,
+}
+
+/// Leave a tool with no server default token (smoke r6: the only token,
+/// an API token, could never be removed). Only an API token can be
+/// cleared: it reaches chats as an env var K2 adds. A subscription sits in
+/// the tool's own store, and every chat on Server default uses it
+/// whatever K2 records, so it is refused (`subscription_default`) with
+/// what to do instead. The caller checks Admin and above.
+pub fn clear_default(conn: &Connection, tool: Tool, by: Option<&str>) -> Result<ClearOutcome, WalletError> {
+    let _lock = store::lock_tool(tool, LOCK_WAIT)?;
+    clear_default_locked(conn, tool, by)
+}
+
+fn clear_default_locked(conn: &Connection, tool: Tool, by: Option<&str>) -> Result<ClearOutcome, WalletError> {
+    let mut out = ClearOutcome {
+        tool: tool.as_str().into(),
+        cleared: None,
+        cleared_label: None,
+        now_default: None,
+        now_default_label: None,
+    };
+    let Some(info) = super::active_info(conn, tool)? else {
+        return Ok(out);
+    };
+    let active = get(conn, &info.account_id)?.filter(|e| e.removed_at.is_none());
+    if let Some(e) = &active {
+        if !e.is_api_key() {
+            return Err(WalletError::Conflict("subscription_default", subscription_default_hint(tool, e)));
+        }
+        out.cleared = Some(e.id.clone());
+        out.cleared_label = Some(e.label.clone());
+    }
+    let back = match info.live_account_id.as_deref() {
+        Some(l) => get(conn, l)?.filter(|e| e.removed_at.is_none() && !e.is_api_key()),
+        None => None,
+    };
+    match back {
+        Some(l) => {
+            set_active(conn, tool, &l.id, by)?;
+            out.now_default = Some(l.id);
+            out.now_default_label = Some(l.label);
+        }
+        None => {
+            conn.execute("DELETE FROM llm_active WHERE tool = ?1", rusqlite::params![tool.as_str()])?;
+        }
+    }
+    Ok(out)
+}
+
+fn subscription_default_hint(tool: Tool, e: &Entry) -> String {
+    format!(
+        "{} is a subscription signed in to {}'s own store, so every chat on Server default uses it whatever K2 records. \
+         Make another token the server default first (`k2 llm tokens switch {} <label>`, Admin or Owner), or sign {} out in a terminal outside K2.",
+        e.label,
+        tool.display(),
+        tool.as_str(),
+        tool.display()
+    )
+}
+
+/// Why the server default can't simply be removed, and how to.
+fn active_refusal(tool: Tool, e: &Entry) -> WalletError {
+    if e.is_api_key() {
+        WalletError::Conflict(
+            "active_login",
+            format!(
+                "{} is the server default {} token. Remove it and leave no default: `k2 llm tokens remove {} \"{}\" --clear-default` \
+                 (Admin or Owner; Settings asks you to confirm), or make another token the server default first.",
+                e.label,
+                tool.display(),
+                tool.as_str(),
+                e.label
+            ),
+        )
+    } else {
+        WalletError::Conflict("active_login", subscription_default_hint(tool, e))
+    }
+}
+
 /// Soft remove an idle login: move its slot to
 /// `~/.k2/llm-accounts/.removed/<id>-<ts>/` and mark the row removed.
-/// The active login can't be removed (switch first).
+/// The server default can't be removed (switch first; an API token may
+/// clear the default with [`remove_clearing_default`]).
 pub fn remove(conn: &Connection, id: &str) -> Result<RemoveOutcome, WalletError> {
+    remove_inner(conn, id, false, None)
+}
+
+/// [`remove`], and when the token is the server default API token, clear
+/// the default first ([`clear_default`]; the person confirmed it, the
+/// caller checked Admin and above).
+pub fn remove_clearing_default(conn: &Connection, id: &str, by: Option<&str>) -> Result<RemoveOutcome, WalletError> {
+    remove_inner(conn, id, true, by)
+}
+
+fn remove_inner(conn: &Connection, id: &str, clear: bool, by: Option<&str>) -> Result<RemoveOutcome, WalletError> {
     let e = lookup(conn, None, id)?;
     let tool = e.tool().ok_or_else(|| WalletError::UnknownTool(e.tool.clone()))?;
     let _lock = store::lock_tool(tool, LOCK_WAIT)?;
-    if active_id(conn, tool)?.as_deref() == Some(e.id.as_str())
-        || live_owner(conn, tool)?.as_deref() == Some(e.id.as_str())
-    {
-        return Err(WalletError::ActiveLogin);
+    if active_id(conn, tool)?.as_deref() == Some(e.id.as_str()) {
+        if !(clear && e.is_api_key()) {
+            return Err(active_refusal(tool, &e));
+        }
+        clear_default_locked(conn, tool, by)?;
+    }
+    if live_owner(conn, tool)?.as_deref() == Some(e.id.as_str()) {
+        // A subscription left in the tool's own store while an API token
+        // is the default: chats still fall back to it.
+        return Err(WalletError::Conflict("active_login", subscription_default_hint(tool, &e)));
     }
     if pins::is_pinned(conn, &e.id)? {
         return Err(pinned_conflict(&e));

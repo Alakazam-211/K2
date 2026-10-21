@@ -28,7 +28,9 @@ import {
   SWITCH_NOTE,
   ACTIVE_REMOVE_REASON,
   ACTIVE_RELOGIN_HINT,
+  ADMIN_SWITCH_REASON,
   SIGNING_IN_SWITCH_REASON,
+  noDefaultText,
 } from './AgentAccountsColumn'
 import { resetLlmAccountsForTests, parseAccountsDoc, errorText } from '@/stores/llm-accounts'
 import { resetUsageLimitsForTests } from '@/stores/usage-limits'
@@ -215,6 +217,45 @@ describe('Tokens column', () => {
     )!
     fireEvent.click(idleRemove)
     await waitFor(() => expect(h.daemonCliPost).toHaveBeenCalledWith('llm/accounts/remove', { id: 'acc_home' }))
+  })
+
+  it('the server default API token: No default and Remove (with clearDefault) after a confirm; Admin and above only', async () => {
+    // Smoke r6: the only token, an API token, is the server default.
+    const keyDoc = (canChangeDefault: boolean): Record<string, unknown> => {
+      const d = doc()
+      const tools = d.tools as Array<Record<string, unknown>>
+      tools[0] = { ...tools[0], accounts: [{ ...KEY, active: true }], activeId: 'acc_key', liveAccountId: null }
+      return { ...d, canChangeDefault, changeDefaultReason: canChangeDefault ? null : ADMIN_SWITCH_REASON }
+    }
+    const confirmFn = vi.fn(async () => true)
+    useConfirmDialogStore.setState({ confirm: confirmFn })
+    h.daemonCliGet.mockImplementation(async (route: string) => (route === 'llm/accounts/list' ? keyDoc(true) : routeGet(route)))
+    render(<AgentAccountsColumn />)
+    const row = await screen.findByTestId('llm-account-acc_key')
+    const remove = within(row).getByRole('button', { name: 'Remove' }) as HTMLButtonElement
+    expect(remove.disabled).toBe(false)
+    fireEvent.click(remove)
+    await waitFor(() =>
+      expect(h.daemonCliPost).toHaveBeenCalledWith('llm/accounts/remove', { id: 'acc_key', clearDefault: true }),
+    )
+    const removeAsk = (confirmFn.mock.calls[0] as unknown as [{ message: string }])[0]
+    expect(removeAsk.message).toContain('Claude then has no server default')
+    fireEvent.click(within(row).getByRole('button', { name: 'No default' }))
+    await waitFor(() => expect(h.daemonCliPost).toHaveBeenCalledWith('llm/accounts/clear-default', { tool: 'claude' }))
+    expect(noDefaultText({ display: 'Claude', activeId: 'acc_key', liveAccountId: 'acc_work', accounts: [WORK as never] })).toContain(
+      'still signed in to Claude itself',
+    )
+    cleanup()
+    // A Member: both are off, with the reason.
+    resetLlmAccountsForTests()
+    h.daemonCliGet.mockImplementation(async (route: string) => (route === 'llm/accounts/list' ? keyDoc(false) : routeGet(route)))
+    render(<AgentAccountsColumn />)
+    const memberRow = await screen.findByTestId('llm-account-acc_key')
+    for (const name of ['Remove', 'No default']) {
+      const b = within(memberRow).getByRole('button', { name }) as HTMLButtonElement
+      expect(b.disabled).toBe(true)
+      expect(b.getAttribute('title')).toBe(ADMIN_SWITCH_REASON)
+    }
   })
 
   it('Rename posts the new label on Enter', async () => {

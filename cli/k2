@@ -17999,7 +17999,11 @@ k2 llm tokens — LLM tokens: subscriptions and API tokens
   k2 llm tokens switch <tool> <label>                use this token as the server default (Admin or Owner)
   k2 llm tokens next <tool>                          use the next signed-in subscription (Admin or Owner)
   k2 llm tokens rename <tool> <label> <new-label>
-  k2 llm tokens remove <tool> <label>                not the server default (kept in Trash)
+  k2 llm tokens remove <tool> <label> [--clear-default]
+                                                     kept in Trash; the server default API token
+                                                     only with --clear-default (Admin or Owner)
+  k2 llm tokens clear-default <tool>                 no server default for that tool (an API token
+                                                     default only; Admin or Owner)
   k2 llm tokens refresh [<tool> <label>] [--usage]   re-read state (and usage)
   k2 llm tokens add-key <tool> <label>               add an API token (read from stdin)
   k2 llm tokens pin --workspace <ws> <tool> <label>  use this token for a workspace
@@ -18325,12 +18329,13 @@ cmd_llm_accounts() {
         _llm_accounts_usage
         return 0
     fi
-    local as_json=0 device=0 usage=0 tool_filter="" pin_ws="" pin_sess=""
+    local as_json=0 device=0 usage=0 tool_filter="" pin_ws="" pin_sess="" clear_default=""
     local pos=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) as_json=1; shift ;;
             --device) device=1; shift ;;
+            --clear-default) clear_default="__true__"; shift ;;
             --usage) usage=1; shift ;;
             --workspace)
                 [ -n "${2:-}" ] || { echo "usage: --workspace needs a value" >&2; exit 2; }
@@ -18430,13 +18435,30 @@ for r in rows:
             echo "renamed ${pos[0]} '${pos[1]}' to '${pos[2]}'"
             ;;
         remove|rm)
-            [ "${#pos[@]}" -eq 2 ] || { echo "usage: k2 llm tokens remove <tool> <label>" >&2; exit 2; }
+            [ "${#pos[@]}" -eq 2 ] || { echo "usage: k2 llm tokens remove <tool> <label> [--clear-default]" >&2; exit 2; }
             _llma_tool_ok "${pos[0]}"
             local xid
             xid="$(_llma_resolve "${pos[0]}" "${pos[1]}")" || exit $?
-            _llma_post remove "$(_llma_json id "$xid")"
+            _llma_post remove "$(_llma_json id "$xid" clearDefault "$clear_default")"
             if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
             echo "removed ${pos[0]} token '${pos[1]}' (its folder is kept in ~/.k2/llm-accounts/.removed)"
+            ;;
+        clear-default)
+            [ "${#pos[@]}" -eq 1 ] || { echo "usage: k2 llm tokens clear-default <tool>" >&2; exit 2; }
+            _llma_tool_ok "${pos[0]}"
+            _llma_post clear-default "$(_llma_json tool "${pos[0]}")"
+            if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
+            printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+c = json.load(sys.stdin).get("cleared") or {}
+tool = c.get("tool") or sys.argv[1]
+if not c.get("cleared"):
+    print("%s had no server default token" % tool)
+elif c.get("nowDefault"):
+    print("%s server default: %s → %s (the subscription signed in to %s itself)" % (tool, c.get("clearedLabel"), c.get("nowDefaultLabel"), tool))
+else:
+    print("%s server default cleared (was %s): chats on Server default get no K2 token" % (tool, c.get("clearedLabel")))
+' "${pos[0]}"
             ;;
         refresh)
             local fid="" u=""
@@ -34761,6 +34783,10 @@ SERVER DEFAULT
   conversations stay where they are. K2 first saves the outgoing
   subscription back to its folder (the tool may have refreshed it),
   then puts the chosen one in place.
+  No default: when an API token is the server default, Admin or Owner can
+  clear it (k2 llm tokens clear-default <tool>, or "No default" in
+  Settings), or remove it with --clear-default. A subscription signed in
+  to the tool itself stays the default (switch to another token first).
   When a session hits its limit, "Use next token" is one click on
   Settings → Language Models → Subs / Tokens (k2 llm tokens next <tool>).
   K2 never rotates tokens on its own.

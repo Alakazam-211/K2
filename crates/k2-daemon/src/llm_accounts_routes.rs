@@ -42,12 +42,14 @@ pub const PINS: &str = "/cli/llm/accounts/pins";
 pub const PIN: &str = "/cli/llm/accounts/pin";
 pub const UNPIN: &str = "/cli/llm/accounts/unpin";
 pub const ADD_KEY: &str = "/cli/llm/accounts/add-key";
+/// Leave a tool with no server default token (an API token default only).
+pub const CLEAR_DEFAULT: &str = "/cli/llm/accounts/clear-default";
 
 /// Read routes (passports allowed).
 pub const READ_ROUTES: &[&str] = &[LIST, STATUS, USAGE, LOGIN_STATUS, PINS];
 /// POST-only routes (humans only).
 pub const POST_ROUTES: &[&str] = &[
-    ADD, LOGIN, LOGIN_INPUT, LOGIN_CANCEL, SWITCH, NEXT, RENAME, REMOVE, REFRESH, PIN, UNPIN, ADD_KEY,
+    ADD, LOGIN, LOGIN_INPUT, LOGIN_CANCEL, SWITCH, NEXT, RENAME, REMOVE, REFRESH, PIN, UNPIN, ADD_KEY, CLEAR_DEFAULT,
 ];
 
 /// Request bodies here are small JSON objects.
@@ -446,6 +448,9 @@ struct Body {
     /// the conversation into another tab.
     conversation_id: Option<String>,
     key: Option<String>,
+    /// `remove`: the person confirmed removing the server default API
+    /// token, leaving the tool with no default.
+    clear_default: Option<bool>,
 }
 
 /// The conversation a chat pin follows: the body's `conversationId`, else
@@ -550,7 +555,10 @@ pub fn handle(
             "Agents and K2 terminals can only read tokens. Change tokens on Settings → Language Models → Subs / Tokens, or run k2 from a terminal outside K2.",
         );
     }
-    if path == SWITCH || path == NEXT {
+    // Changing the server default: switch, next, clear-default, and a
+    // remove that clears it (smoke r6) are Admin and above.
+    let clears_default = path == REMOVE && parse_body(body).is_ok_and(|b| b.clear_default == Some(true));
+    if path == SWITCH || path == NEXT || path == CLEAR_DEFAULT || clears_default {
         if let Some(r) = default_change_refusal(&caller) {
             audit("llm_accounts.switch_refused", key.as_deref().unwrap_or("-"), "admin_required", ingress);
             return r;
@@ -865,11 +873,42 @@ fn handle_post(path: &str, body: &[u8], key: String, ingress: &str) -> CliRespon
             if rt::running_for(&id).is_some() {
                 return refuse(409, "busy", "a sign-in is running for that subscription; cancel it first");
             }
-            match with_conn(|conn| wallet::remove(conn, &id)) {
+            // `clearDefault`: the person confirmed removing the server
+            // default API token, leaving no default (Admin and above,
+            // checked in `handle`).
+            let res = if b.clear_default == Some(true) {
+                with_conn(|conn| wallet::remove_clearing_default(conn, &id, Some(&key)))
+            } else {
+                with_conn(|conn| wallet::remove(conn, &id))
+            };
+            match res {
                 Ok(out) => {
                     audit("llm_accounts.remove", &key, &out.id, ingress);
                     crate::session_events::emit_llm_accounts_changed(None);
                     ok(json!({"removed": out}))
+                }
+                Err(e) => wallet_err(e),
+            }
+        }
+        CLEAR_DEFAULT => {
+            let tool = match tool_of(&b.tool) {
+                Ok(t) => t,
+                Err(r) => return r,
+            };
+            match with_conn(|conn| wallet::clear_default(conn, tool, Some(&key))) {
+                Ok(out) => {
+                    if out.cleared.is_some() {
+                        let line = format!(
+                            "{} default {} → {}",
+                            tool.as_str(),
+                            out.cleared_label.as_deref().unwrap_or("(none)"),
+                            out.now_default_label.as_deref().unwrap_or("(none)")
+                        );
+                        k2_core::log_debug!("llm: {line} by {key}");
+                        audit("llm_accounts.clear_default", &key, &line, ingress);
+                    }
+                    crate::session_events::emit_llm_accounts_changed(Some(tool.as_str()));
+                    ok(json!({"cleared": out, "note": rt::SWITCH_NOTE}))
                 }
                 Err(e) => wallet_err(e),
             }
@@ -1109,10 +1148,58 @@ mod tests {
         assert_eq!(st, "200 OK", "{v}");
         assert_eq!(v["canChangeDefault"], false, "{v}");
         assert_eq!(v["changeDefaultReason"], DEFAULT_CHANGE_AGENT_REASON);
-        for path in [SWITCH, NEXT, ADD, REMOVE, PIN] {
+        for path in [SWITCH, NEXT, ADD, REMOVE, PIN, CLEAR_DEFAULT] {
             let (st, v) = call(path, agent(), r#"{"id":"acc_nope","tool":"claude"}"#);
             assert_eq!(st, "403 Forbidden", "{path}: {v}");
             assert_eq!(v["error"]["code"], "owner_only", "{path}: {v}");
         }
+    }
+
+    /// Smoke r6: the only token (an API token) is the server default.
+    /// Clearing the default is Admin and above (the wallet rule for the
+    /// default); a plain remove says how; with the confirm it goes, and
+    /// the tool is left with no default.
+    #[test]
+    fn the_server_default_api_token_can_be_cleared_and_removed_by_an_admin() {
+        use k2_core::connect_users::Role;
+        let _home = crate::test_support::TempHome::new();
+        clear_claude_rows();
+        let member = login("llmclr_member", Role::Member);
+        let admin = login("llmclr_admin", Role::Admin);
+        let key = with_conn(|conn| {
+            let k = k2_core::llm_accounts::pins::add_api_key(conn, Tool::Claude, "smokekey", "sk-test-0123456789abcdef", None).unwrap();
+            wallet::switch(conn, Tool::Claude, &k.id, Some("owner"), None).unwrap();
+            k.id
+        });
+        let active = || with_conn(|conn| wallet_core::active_id(conn, Tool::Claude)).unwrap();
+        assert_eq!(active().as_deref(), Some(key.as_str()));
+        // A Member: refused on both ways of clearing; a plain remove is
+        // refused by the wallet with the way out.
+        let (st, v) = call(CLEAR_DEFAULT, member.clone(), r#"{"tool":"claude"}"#);
+        assert_eq!((st.as_str(), &v["error"]["code"]), ("403 Forbidden", &json!("admin_required")), "{v}");
+        let clear_body = format!(r#"{{"id":"{key}","clearDefault":true}}"#);
+        let (st, v) = call(REMOVE, member.clone(), &clear_body);
+        assert_eq!((st.as_str(), &v["error"]["code"]), ("403 Forbidden", &json!("admin_required")), "{v}");
+        let (st, v) = call(REMOVE, member, &format!(r#"{{"id":"{key}"}}"#));
+        assert_eq!(st, "409 Conflict", "{v}");
+        assert_eq!(v["error"]["code"], "active_login");
+        assert!(v["error"]["hint"].as_str().unwrap().contains("--clear-default"), "{v}");
+        assert_eq!(active().as_deref(), Some(key.as_str()), "nothing changed");
+        // An Admin clears the default: no default for Claude.
+        let (st, v) = call(CLEAR_DEFAULT, admin.clone(), r#"{"tool":"claude"}"#);
+        assert_eq!(st, "200 OK", "{v}");
+        assert_eq!(v["cleared"]["cleared"], json!(key));
+        assert!(v["cleared"]["nowDefault"].is_null(), "{v}");
+        assert_eq!(active(), None);
+        let (_, v) = call(LIST, admin.clone(), "");
+        let claude = v["tools"].as_array().unwrap().iter().find(|t| t["tool"] == "claude").unwrap().clone();
+        assert!(claude["activeId"].is_null(), "{claude}");
+        // Back to default, then removed in one step with the confirm.
+        with_conn(|conn| wallet::switch(conn, Tool::Claude, &key, Some("owner"), None)).unwrap();
+        let (st, v) = call(REMOVE, admin, &clear_body);
+        assert_eq!(st, "200 OK", "{v}");
+        assert_eq!(v["removed"]["id"], json!(key));
+        assert_eq!(active(), None);
+        clear_claude_rows();
     }
 }

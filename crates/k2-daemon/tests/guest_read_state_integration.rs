@@ -307,13 +307,17 @@ async fn a_guest_is_one_person_on_every_surface_with_live_read_frames() {
     let r = link(lport, "GET", "/cli/thread/unread", &app_pass, None).await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert!(r.json().get("badgeKey").is_none(), "no badge key for an App's own pass: {}", r.body);
-    assert_eq!(row(&r.json(), &conv)["lastReadSeq"], 0, "its own bookmark, never the guest's: {}", r.body);
+    // Its own bookmark: its first look starts at the head, like anyone's.
+    assert_eq!(row(&r.json(), &conv)["lastReadSeq"].as_i64(), Some(seqs[2]), "{}", r.body);
     let r = link(lport, "POST", "/cli/thread/mute", &app_pass, Some(json!({ "addr": ws.handle, "muted": true }))).await;
     assert_eq!((r.status, r.code()), (403, "forbidden".to_string()), "{}", r.body);
-    let r = link(lport, "POST", "/cli/thread/read", &app_pass, Some(json!({ "addr": ws.handle, "seq": seqs[0] }))).await;
-    assert_eq!((r.status, r.json()["lastReadSeq"].as_i64()), (200, Some(seqs[0])), "{}", r.body);
+    // A new line: the App's pass reads it, the person hasn't.
+    let s4 = agent_posts(port, &ws, 1).await[0];
+    let r = link(lport, "POST", "/cli/thread/read", &app_pass, Some(json!({ "addr": ws.handle }))).await;
+    assert_eq!((r.status, r.json()["lastReadSeq"].as_i64(), r.json()["unread"].as_i64()), (200, Some(s4), Some(0)), "{}", r.body);
     no_read(&mut phone_thread, 500, "the App's own bookmark").await;
-    assert_eq!(row(&unread(port, &phone).await, &conv)["lastReadSeq"].as_i64(), Some(seqs[2]));
+    let u = unread(port, &phone).await;
+    assert_eq!((row(&u, &conv)["lastReadSeq"].as_i64(), row(&u, &conv)["unread"].as_i64()), (Some(seqs[2]), Some(1)), "the person's own cursor: {u}");
     gateway::close(&format!("jobs{tag}"), None, true);
     k2_daemon::apps::alerts::set_sink(None);
 

@@ -1,5 +1,5 @@
 {
-  "catalogVersion": 17,
+  "catalogVersion": 18,
   "caps": [
     {
       "name": "agents:read",
@@ -97,6 +97,11 @@
       "exposure": ["app", "garden-local"],
       "label": "See who has access to the room",
       "sentence": "See who has access to the agents on this computer: the App guests and agent logins with a grant on each room, and their roles."
+    },
+    {
+      "name": "project:write",
+      "exposure": ["app"],
+      "label": "Post in project chats (needs it in every member room)"
     }
   ],
   "errors": [
@@ -13491,6 +13496,474 @@
       ],
       "doc": "Mint a Sew chat pass for the guest of this request (a login with a chat grant; server only, never a handoff code).",
       "example": "const {pass} = await k2.withGuest(guestPass, () => k2.chat.pass())"
+    },
+    {
+      "verb": "project.list",
+      "cap": "thread:read",
+      "exposure": ["app"],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-project-chat-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/skin/projects"
+        }
+      },
+      "request": [],
+      "response": {
+        "title": "AppProjectList",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "projects": {
+            "type": "array",
+            "items": {
+              "title": "AppProject",
+              "type": "object",
+              "properties": {
+                "groupId": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "color": {
+                  "type": ["string", "null"]
+                },
+                "poc": {
+                  "type": ["string", "null"],
+                  "description": "The point of contact agent's handle (it answers the chat)."
+                },
+                "members": {
+                  "type": "array",
+                  "items": {
+                    "title": "AppProjectMember",
+                    "type": "object",
+                    "properties": {
+                      "room": {
+                        "type": "string",
+                        "description": "The member agent's project id."
+                      },
+                      "handle": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["room", "handle"],
+                    "additionalProperties": false
+                  }
+                },
+                "lastSeq": {
+                  "type": "integer",
+                  "description": "The newest message's seq (0 = no messages)."
+                },
+                "canPost": {
+                  "type": "boolean",
+                  "description": "This pass holds project:write in every member room."
+                },
+                "unread": {
+                  "type": ["integer", "null"],
+                  "description": "Your unread lines (capped at 100); null for a pass with no person (an App's own pass)."
+                },
+                "muted": {
+                  "type": ["boolean", "null"]
+                },
+                "lastReadSeq": {
+                  "type": ["integer", "null"]
+                }
+              },
+              "required": ["groupId", "name", "color", "poc", "members", "lastSeq", "canPost", "unread", "muted", "lastReadSeq"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["ok", "projects"],
+        "additionalProperties": false
+      },
+      "errors": ["pass_required", "pass_invalid", "pass_wrong_link", "failed"],
+      "doc": "The project chats this pass can read: a project shows only when every member agent is a room it holds with thread:read.",
+      "example": "const {projects} = await k2.project.list()"
+    },
+    {
+      "verb": "project.read",
+      "cap": "thread:read",
+      "exposure": ["app"],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-project-chat-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/skin/projects/messages",
+          "params": {
+            "afterSeq": "after_seq",
+            "beforeSeq": "before_seq"
+          }
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "group": {
+              "type": "string",
+              "description": "The project: its groupId from project.list (or its exact name)."
+            },
+            "afterSeq": {
+              "type": "integer",
+              "description": "Only messages after this seq, oldest first (catch-up after a socket gap).",
+              "minimum": 0
+            },
+            "beforeSeq": {
+              "type": "integer",
+              "description": "The newest messages before this seq, oldest first (page back).",
+              "minimum": 1
+            },
+            "limit": {
+              "type": "integer",
+              "description": "Default 20, at most 500.",
+              "minimum": 1,
+              "maximum": 500
+            }
+          },
+          "required": ["group"],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppProjectPage",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "groupId": {
+            "type": "string"
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "title": "AppProjectMessage",
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "groupId": {
+                  "type": "string"
+                },
+                "author": {
+                  "type": "string",
+                  "description": "owner, a Connect login, an agent's workspace name, or guest:<username> for an App guest's line."
+                },
+                "authorKind": {
+                  "enum": ["person", "agent", "guest"]
+                },
+                "body": {
+                  "type": "string"
+                },
+                "createdAt": {
+                  "type": "integer",
+                  "description": "Seconds since the epoch."
+                },
+                "seq": {
+                  "type": "integer",
+                  "description": "1..n per project, in read order (the paging cursor)."
+                }
+              },
+              "required": ["id", "groupId", "author", "authorKind", "body", "createdAt", "seq"],
+              "additionalProperties": false
+            }
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "has_more": {
+            "type": "boolean",
+            "description": "afterSeq: newer messages remain; beforeSeq: older ones remain."
+          },
+          "after_seq": {
+            "type": "integer"
+          },
+          "before_seq": {
+            "type": "integer"
+          },
+          "changed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Always empty: project messages never change."
+          },
+          "removed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Always empty."
+          }
+        },
+        "required": ["ok", "groupId", "messages", "truncated"],
+        "additionalProperties": false
+      },
+      "errors": ["pass_required", "pass_invalid", "pass_wrong_link", "skin_room", "cap_not_granted", "usage", "failed"],
+      "doc": "A page of a project chat, oldest first: the latest page, afterSeq to catch up, or beforeSeq to page back.",
+      "example": "const page = await k2.project.read({group, beforeSeq: oldest, limit: 50})"
+    },
+    {
+      "verb": "project.post",
+      "cap": "project:write",
+      "exposure": ["app"],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-project-chat-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/skin/projects/post"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "group": {
+              "type": "string",
+              "description": "The project: its groupId from project.list (or its exact name)."
+            },
+            "body": {
+              "type": "string"
+            }
+          },
+          "required": ["group", "body"],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppProjectPosted",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "groupId": {
+            "type": "string"
+          },
+          "groupName": {
+            "type": "string"
+          },
+          "author": {
+            "type": "string",
+            "description": "guest:<username>."
+          },
+          "authorKind": {
+            "enum": ["guest"]
+          },
+          "body": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "integer",
+            "description": "Seconds since the epoch."
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "delivered": {
+            "type": "boolean",
+            "description": "The project's point of contact agent got the line."
+          },
+          "deliveryReason": {
+            "type": ["string", "null"]
+          }
+        },
+        "required": ["ok", "id", "groupId", "groupName", "author", "authorKind", "body", "createdAt", "seq", "delivered", "deliveryReason"],
+        "additionalProperties": false
+      },
+      "errors": ["pass_required", "pass_invalid", "pass_wrong_link", "skin_room", "cap_not_granted", "usage", "failed"],
+      "doc": "Post in a project chat as the guest (guest:<username>); needs project:write in every member room.",
+      "example": "await k2.project.post({group, body: 'Can we ship Friday?'})"
+    },
+    {
+      "verb": "project.markRead",
+      "cap": "thread:read",
+      "exposure": ["app"],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-project-chat-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/skin/projects/read"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "group": {
+              "type": "string",
+              "description": "The project: its groupId from project.list (or its exact name)."
+            },
+            "seq": {
+              "type": "integer",
+              "description": "Read through this seq (absent = the newest now). Forward only.",
+              "minimum": 0
+            }
+          },
+          "required": ["group"],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppProjectReadState",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "groupId": {
+            "type": "string"
+          },
+          "changed": {
+            "type": "boolean",
+            "description": "The cursor moved."
+          },
+          "unread": {
+            "type": "integer"
+          },
+          "muted": {
+            "type": "boolean"
+          },
+          "lastReadSeq": {
+            "type": "integer"
+          },
+          "lastSeq": {
+            "type": "integer"
+          }
+        },
+        "required": ["ok", "groupId", "changed", "unread", "muted", "lastReadSeq", "lastSeq"],
+        "additionalProperties": false
+      },
+      "errors": ["pass_required", "pass_invalid", "pass_wrong_link", "skin_room", "not_exposed", "usage", "failed"],
+      "doc": "Mark a project chat read for this guest (the person guest:<principalId> on every App surface; an App's own pass has none).",
+      "example": "await k2.project.markRead({group, seq: newest})"
+    },
+    {
+      "verb": "project.events",
+      "cap": "thread:read",
+      "exposure": ["app"],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "subscribe",
+      "feature": "app-project-chat-v1",
+      "bindings": {
+        "socket": {
+          "path": "/cli/skin/projects/events",
+          "frame": "project",
+          "param": "group",
+          "refetch": "project.read"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "group": {
+              "type": "string",
+              "description": "The project: its groupId from project.list (or its exact name)."
+            }
+          },
+          "required": ["group"],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppProjectFrame",
+        "type": "object",
+        "properties": {
+          "collection": {
+            "enum": ["project", "read"],
+            "description": "project: a new line (seq, doc); read: your own cursor moved on some surface (the read fields)."
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "id": {
+            "type": "string",
+            "description": "The line's id; on a read frame, the project's groupId."
+          },
+          "groupId": {
+            "type": "string"
+          },
+          "doc": {
+            "title": "AppProjectMessage",
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "groupId": {
+                "type": "string"
+              },
+              "author": {
+                "type": "string",
+                "description": "owner, a Connect login, an agent's workspace name, or guest:<username> for an App guest's line."
+              },
+              "authorKind": {
+                "enum": ["person", "agent", "guest"]
+              },
+              "body": {
+                "type": "string"
+              },
+              "createdAt": {
+                "type": "integer",
+                "description": "Seconds since the epoch."
+              },
+              "seq": {
+                "type": "integer",
+                "description": "1..n per project, in read order (the paging cursor)."
+              }
+            },
+            "required": ["id", "groupId", "author", "authorKind", "body", "createdAt", "seq"],
+            "additionalProperties": false
+          },
+          "lastReadSeq": {
+            "type": "integer"
+          },
+          "lastSeq": {
+            "type": "integer"
+          },
+          "unread": {
+            "type": "integer"
+          },
+          "waiting": {
+            "type": "integer",
+            "description": "Always 0: project chats have no cards."
+          },
+          "muted": {
+            "type": "boolean"
+          }
+        },
+        "required": ["collection", "id", "groupId"],
+        "additionalProperties": false
+      },
+      "errors": ["pass_required", "pass_invalid", "pass_wrong_link", "skin_room", "cap_not_granted", "usage", "failed"],
+      "doc": "Live lines of one project chat, shaped like Thread frames (collection project), plus a guest's own read frames (collection read); after a gap, project.read with afterSeq.",
+      "example": "const off = k2.project.events({group}, (f) => append(f.doc))"
     }
   ]
 }

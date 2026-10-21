@@ -8,7 +8,7 @@
 import type { K2Error } from '../errors.ts'
 
 /** The catalog version this table was generated from. */
-export const CATALOG_VERSION = 17
+export const CATALOG_VERSION = 18
 
 /** A JSON Schema from the catalog's subset, reduced for projection. */
 export type Schema = { readonly [key: string]: unknown }
@@ -829,6 +829,61 @@ export const APP_VERBS = {
     socket: null,
     responseNames: {},
     response: {"additionalProperties":false,"properties":{"app":{"type":"string"},"caps":{"items":{"type":"string"},"type":"array"},"expiresAt":{"type":"string"},"expiresInMs":{"type":"integer"},"jti":{"type":"string"},"ok":{"type":"boolean"},"pass":{"type":"string"},"personProof":{"type":"boolean"},"provenance":{"type":"string"},"sewRole":{"type":"string"},"sid":{"type":"string"},"sub":{"type":"string"}},"type":"object"},
+  },
+  'project.list': {
+    cap: 'thread:read',
+    effect: 'read',
+    kind: 'call',
+    feature: 'app-project-chat-v1',
+    door: 'both',
+    http: { method: 'GET', route: '/cli/skin/projects', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"ok":{"type":"boolean"},"projects":{"items":{"additionalProperties":false,"properties":{"canPost":{"type":"boolean"},"color":{"type":["string","null"]},"groupId":{"type":"string"},"lastReadSeq":{"type":["integer","null"]},"lastSeq":{"type":"integer"},"members":{"items":{"additionalProperties":false,"properties":{"handle":{"type":"string"},"room":{"type":"string"}},"type":"object"},"type":"array"},"muted":{"type":["boolean","null"]},"name":{"type":"string"},"poc":{"type":["string","null"]},"unread":{"type":["integer","null"]}},"type":"object"},"type":"array"}},"type":"object"},
+  },
+  'project.read': {
+    cap: 'thread:read',
+    effect: 'read',
+    kind: 'call',
+    feature: 'app-project-chat-v1',
+    door: 'both',
+    http: { method: 'GET', route: '/cli/skin/projects/messages', params: { 'afterSeq': 'after_seq', 'beforeSeq': 'before_seq' }, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"after_seq":{"type":"integer"},"before_seq":{"type":"integer"},"changed":{"items":{"type":"string"},"type":"array"},"groupId":{"type":"string"},"has_more":{"type":"boolean"},"messages":{"items":{"additionalProperties":false,"properties":{"author":{"type":"string"},"authorKind":{"enum":["person","agent","guest"]},"body":{"type":"string"},"createdAt":{"type":"integer"},"groupId":{"type":"string"},"id":{"type":"string"},"seq":{"type":"integer"}},"type":"object"},"type":"array"},"ok":{"type":"boolean"},"removed":{"items":{"type":"string"},"type":"array"},"truncated":{"type":"boolean"}},"type":"object"},
+  },
+  'project.post': {
+    cap: 'project:write',
+    effect: 'write',
+    kind: 'call',
+    feature: 'app-project-chat-v1',
+    door: 'both',
+    http: { method: 'POST', route: '/cli/skin/projects/post', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"author":{"type":"string"},"authorKind":{"enum":["guest"]},"body":{"type":"string"},"createdAt":{"type":"integer"},"delivered":{"type":"boolean"},"deliveryReason":{"type":["string","null"]},"groupId":{"type":"string"},"groupName":{"type":"string"},"id":{"type":"string"},"ok":{"type":"boolean"},"seq":{"type":"integer"}},"type":"object"},
+  },
+  'project.markRead': {
+    cap: 'thread:read',
+    effect: 'write',
+    kind: 'call',
+    feature: 'app-project-chat-v1',
+    door: 'both',
+    http: { method: 'POST', route: '/cli/skin/projects/read', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"changed":{"type":"boolean"},"groupId":{"type":"string"},"lastReadSeq":{"type":"integer"},"lastSeq":{"type":"integer"},"muted":{"type":"boolean"},"ok":{"type":"boolean"},"unread":{"type":"integer"}},"type":"object"},
+  },
+  'project.events': {
+    cap: 'thread:read',
+    effect: 'read',
+    kind: 'subscribe',
+    feature: 'app-project-chat-v1',
+    door: 'both',
+    http: null,
+    socket: { path: '/cli/skin/projects/events', param: 'group', frame: 'project', refetch: 'project.read' },
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"collection":{"enum":["project","read"]},"doc":{"additionalProperties":false,"properties":{"author":{"type":"string"},"authorKind":{"enum":["person","agent","guest"]},"body":{"type":"string"},"createdAt":{"type":"integer"},"groupId":{"type":"string"},"id":{"type":"string"},"seq":{"type":"integer"}},"type":"object"},"groupId":{"type":"string"},"id":{"type":"string"},"lastReadSeq":{"type":"integer"},"lastSeq":{"type":"integer"},"muted":{"type":"boolean"},"seq":{"type":"integer"},"unread":{"type":"integer"},"waiting":{"type":"integer"}},"type":"object"},
   },
 } as const satisfies Record<string, AppVerbRow>
 
@@ -1868,6 +1923,106 @@ export interface AppChatPass {
   readonly sub: string
 }
 
+export interface AppProjectMember {
+  readonly handle: string
+  /** The member agent's project id. */
+  readonly room: string
+}
+
+export interface AppProject {
+  /** This pass holds project:write in every member room. */
+  readonly canPost: boolean
+  readonly color: string | null
+  readonly groupId: string
+  readonly lastReadSeq: number | null
+  /** The newest message's seq (0 = no messages). */
+  readonly lastSeq: number
+  readonly members: AppProjectMember[]
+  readonly muted: boolean | null
+  readonly name: string
+  /** The point of contact agent's handle (it answers the chat). */
+  readonly poc: string | null
+  /** Your unread lines (capped at 100); null for a pass with no person (an App's own pass). */
+  readonly unread: number | null
+}
+
+export interface AppProjectList {
+  readonly ok: boolean
+  readonly projects: AppProject[]
+}
+
+export interface AppProjectMessage {
+  /** owner, a Connect login, an agent's workspace name, or guest:<username> for an App guest's line. */
+  readonly author: string
+  readonly authorKind: 'person' | 'agent' | 'guest'
+  readonly body: string
+  /** Seconds since the epoch. */
+  readonly createdAt: number
+  readonly groupId: string
+  readonly id: string
+  /** 1..n per project, in read order (the paging cursor). */
+  readonly seq: number
+}
+
+export interface AppProjectPage {
+  readonly after_seq?: number
+  readonly before_seq?: number
+  /** Always empty: project messages never change. */
+  readonly changed?: string[]
+  readonly groupId: string
+  /** afterSeq: newer messages remain; beforeSeq: older ones remain. */
+  readonly has_more?: boolean
+  readonly messages: AppProjectMessage[]
+  readonly ok: boolean
+  /** Always empty. */
+  readonly removed?: string[]
+  readonly truncated: boolean
+}
+
+export interface AppProjectPosted {
+  /** guest:<username>. */
+  readonly author: string
+  readonly authorKind: 'guest'
+  readonly body: string
+  /** Seconds since the epoch. */
+  readonly createdAt: number
+  /** The project's point of contact agent got the line. */
+  readonly delivered: boolean
+  readonly deliveryReason: string | null
+  readonly groupId: string
+  readonly groupName: string
+  readonly id: string
+  readonly ok: boolean
+  readonly seq: number
+}
+
+export interface AppProjectReadState {
+  /** The cursor moved. */
+  readonly changed: boolean
+  readonly groupId: string
+  readonly lastReadSeq: number
+  readonly lastSeq: number
+  readonly muted: boolean
+  readonly ok: boolean
+  readonly unread: number
+}
+
+export interface AppProjectFrame {
+  /** project: a new line (seq, doc); read: your own cursor moved on some surface (the read fields). */
+  readonly collection: 'project' | 'read'
+  readonly doc?: AppProjectMessage
+  readonly groupId: string
+  /** The line's id; on a read frame, the project's groupId. */
+  readonly id: string
+  readonly lastReadSeq?: number
+  readonly lastSeq?: number
+  readonly muted?: boolean
+  readonly seq?: number
+  readonly unread?: number
+  /** Always 0: project chats have no cards. */
+  readonly waiting?: number
+}
+
 /** The shared error codes (catalog `errors`). */
 export const APP_ERROR_CODES = ['cap_not_granted', 'not_bound', 'rate_limited', 'too_large', 'unknown_verb', 'verb_unavailable', 'verb_local', 'not_exposed', 'sending_off', 'server_not_saved', 'unreachable', 'removed', 'no_history', 'failed', 'conflict', 'space_full', 'value_too_large', 'bad_key', 'not_granted', 'resync', 'author_unknown', 'stale_widget', 'store_full', 'bad_tx', 'tx_expired', 'busy', 'paused', 'bad_args', 'bad_shape', 'pass_required', 'pass_invalid', 'pass_wrong_link', 'not_on_link', 'json_required', 'skin_room', 'usage', 'not_found', 'bad_login', 'locked', 'card_not_pending', 'guest_required', 'no_app_pass', 'no_app_key', 'no_chat_grant', 'chat_unavailable', 'app_pass_required', 'grant_required', 'outside_app_rooms', 'above_role', 'has_role', 'confirm_required', 'declined'] as const
 
@@ -1947,10 +2102,15 @@ export interface AppVerbs {
   'app.self': { args: { app?: string }; value: AppSelf }
   'app.usage': { args: { app?: string; hours?: number }; value: AppUsage }
   'chat.pass': { args: Record<string, never>; value: AppChatPass }
+  'project.list': { args: Record<string, never>; value: AppProjectList }
+  'project.read': { args: { afterSeq?: number; beforeSeq?: number; group: string; limit?: number }; value: AppProjectPage }
+  'project.post': { args: { body: string; group: string }; value: AppProjectPosted }
+  'project.markRead': { args: { group: string; seq?: number }; value: AppProjectReadState }
+  'project.events': { args: { group: string }; value: AppProjectFrame }
 }
 
-export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'guests.rooms' | 'guests.setRooms' | 'thread.page' | 'thread.latest' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.attachmentGet' | 'thread.catchup' | 'thread.setRead' | 'thread.unread' | 'thread.mute' | 'files.resolveLinks' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage' | 'chat.pass'
-export type AppSubscribeVerb = 'thread.events' | 'files.events' | 'activity.events'
+export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'guests.rooms' | 'guests.setRooms' | 'thread.page' | 'thread.latest' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.attachmentGet' | 'thread.catchup' | 'thread.setRead' | 'thread.unread' | 'thread.mute' | 'files.resolveLinks' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage' | 'chat.pass' | 'project.list' | 'project.read' | 'project.post' | 'project.markRead'
+export type AppSubscribeVerb = 'thread.events' | 'files.events' | 'activity.events' | 'project.events'
 
 /** The named helpers: one per App verb a server calls (browser-only rows have none), grouped by surface. */
 export interface AppSurfaces {
@@ -2128,7 +2288,19 @@ export interface AppSurfaces {
     /** Mint a Sew chat pass for the guest of this request (a login with a chat grant; server only, never a handoff code). no cap · POST /cli/sew/pass. e.g. `const {pass} = await k2.withGuest(guestPass, () => k2.chat.pass())` */
     pass(args?: Record<string, never>): Promise<AppChatPass>
   }
+  readonly project: {
+    /** The project chats this pass can read: a project shows only when every member agent is a room it holds with thread:read. cap thread:read · GET /cli/skin/projects. e.g. `const {projects} = await k2.project.list()` */
+    list(args?: Record<string, never>): Promise<AppProjectList>
+    /** A page of a project chat, oldest first: the latest page, afterSeq to catch up, or beforeSeq to page back. cap thread:read · GET /cli/skin/projects/messages. e.g. `const page = await k2.project.read({group, beforeSeq: oldest, limit: 50})` */
+    read(args: { afterSeq?: number; beforeSeq?: number; group: string; limit?: number }): Promise<AppProjectPage>
+    /** Post in a project chat as the guest (guest:<username>); needs project:write in every member room. cap project:write · POST /cli/skin/projects/post. e.g. `await k2.project.post({group, body: 'Can we ship Friday?'})` */
+    post(args: { body: string; group: string }): Promise<AppProjectPosted>
+    /** Mark a project chat read for this guest (the person guest:<principalId> on every App surface; an App's own pass has none). cap thread:read · POST /cli/skin/projects/read. e.g. `await k2.project.markRead({group, seq: newest})` */
+    markRead(args: { group: string; seq?: number }): Promise<AppProjectReadState>
+    /** Live lines of one project chat, shaped like Thread frames (collection project), plus a guest's own read frames (collection read); after a gap, project.read with afterSeq. cap thread:read · WS /cli/skin/projects/events?group=. e.g. `const off = k2.project.events({group}, (f) => append(f.doc))` */
+    events(args: { group: string }, onFrame: (frame: AppProjectFrame) => void, onError?: (error: K2Error) => void): () => void
+  }
 }
 
 /** The surface names, in catalog order (the client builds one object each). */
-export const APP_SURFACES = ['me', 'roomAgents', 'guests', 'thread', 'files', 'resources', 'tickets', 'wiki', 'storeDocs', 'db', 'heartbeats', 'activity', 'agentIdentity', 'room', 'app', 'chat'] as const
+export const APP_SURFACES = ['me', 'roomAgents', 'guests', 'thread', 'files', 'resources', 'tickets', 'wiki', 'storeDocs', 'db', 'heartbeats', 'activity', 'agentIdentity', 'room', 'app', 'chat', 'project'] as const

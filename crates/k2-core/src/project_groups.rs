@@ -96,8 +96,9 @@ pub struct ProjectGroupMessage {
     /// Per-group position, 1..n in read order (migration 0190): the
     /// thread-read-v1 cursor a client sends back to mark read.
     pub seq: i64,
-    /// [`AUTHOR_KIND_PERSON`] (owner token / a Connect login) or
-    /// [`AUTHOR_KIND_AGENT`]. Own posts never count as unread.
+    /// [`AUTHOR_KIND_PERSON`] (owner token / a Connect login),
+    /// [`AUTHOR_KIND_AGENT`] or [`AUTHOR_KIND_GUEST`] (an App guest, 0.46.3).
+    /// Own posts never count as unread.
     pub author_kind: String,
 }
 
@@ -105,6 +106,17 @@ pub struct ProjectGroupMessage {
 pub const AUTHOR_KIND_PERSON: &str = "person";
 /// `project_group_messages.author_kind` of an agent's post.
 pub const AUTHOR_KIND_AGENT: &str = "agent";
+/// `project_group_messages.author_kind` of an App guest's post (0.46.3, App
+/// project chat). The `author` is [`guest_author`] of the guest's username,
+/// so it can never read as `owner`, a Connect login or a workspace name in
+/// a client that looks only at `author`.
+pub const AUTHOR_KIND_GUEST: &str = "guest";
+
+/// The stored `author` of an App guest's project chat line:
+/// `guest:<username>` (a username never holds `:`).
+pub fn guest_author(username: &str) -> String {
+    format!("guest:{}", username.trim())
+}
 
 /// One `project_group_dashboards` row.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -895,8 +907,10 @@ pub fn post_message_as(
     author_kind: &str,
     body: &str,
 ) -> Result<ProjectGroupMessage, String> {
-    if author_kind != AUTHOR_KIND_PERSON && author_kind != AUTHOR_KIND_AGENT {
-        return Err(format!("usage: author kind must be '{AUTHOR_KIND_PERSON}' or '{AUTHOR_KIND_AGENT}'"));
+    if author_kind != AUTHOR_KIND_PERSON && author_kind != AUTHOR_KIND_AGENT && author_kind != AUTHOR_KIND_GUEST {
+        return Err(format!(
+            "usage: author kind must be '{AUTHOR_KIND_PERSON}', '{AUTHOR_KIND_AGENT}' or '{AUTHOR_KIND_GUEST}'"
+        ));
     }
     let author = author.trim();
     let body_t = body.trim();

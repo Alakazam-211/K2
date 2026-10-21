@@ -2074,6 +2074,28 @@ async fn handle_one_request(
             crate::overlay_ws::serve_overlay_events_connection(stream, params, skin_ws, viewer_login).await;
             return DispatchOutcome::Done;
         }
+        // 0.46.3 App project chat: `project.events`, one project's live
+        // lines for a pass (the handler checks the project before the
+        // upgrade and on every frame). Never an owner or login socket:
+        // they read project lines on `/events`.
+        p if p == crate::apps::project_chat::EVENTS_WS_PATH => {
+            let token = super::http::extract_token(&query).filter(|t| k2_core::skin::is_skin_token(t)).map(str::to_string);
+            let Some(token) = token else {
+                let _ = stream.read(&mut buf).await;
+                let r = crate::apps::project_chat::forbidden(p);
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            };
+            let Some(pass) = crate::apps::gateway::resolve_pass(&token) else {
+                let _ = stream.read(&mut buf).await;
+                let r = crate::skin_routes::revoked_skin_response();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            };
+            let params = super::http::parse_params(&path, &query);
+            crate::apps::project_chat::serve_events_connection(stream, params, pass, token).await;
+            return DispatchOutcome::Done;
+        }
         p if p == crate::fs_events_ws::FS_EVENTS_WS_PATH => {
             // Dedicated files WS. Never `/cli/sessions/events`. Skin: live
             // `k2skn_` + files:read; rooms 403 before accept_async in the
@@ -9202,6 +9224,36 @@ async fn handle_one_request(
                         }
                     } else {
                         crate::apps::surfaces::forbidden(sp)
+                    }
+                }
+                // 0.46.3 App project chat (App only): project.list / read /
+                // post / markRead for a pass; the handler applies the
+                // all-members rule and answers an unreadable project like
+                // an unknown one. Anything but a pass is `skin_token`.
+                sp if crate::apps::project_chat::PASS_ROUTES.contains(&sp) => {
+                    if crate::apps::project_chat::is_post_route(sp) && !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    let body = if is_post {
+                        super::http::read_post_body(&mut *stream, &mut buf).await
+                    } else {
+                        let _ = stream.read(&mut buf).await;
+                        Vec::new()
+                    };
+                    let presented = super::http::extract_token(&query);
+                    if presented.is_some_and(k2_core::skin::is_skin_token) {
+                        match presented.and_then(crate::apps::gateway::resolve_pass) {
+                            Some(pass) => {
+                                let params = super::http::parse_params(&path, &query);
+                                let route = sp.to_string();
+                                tokio::task::spawn_blocking(move || crate::apps::project_chat::handle_pass(&route, &pass, &params, &body))
+                                    .await
+                                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                            }
+                            None => crate::skin_routes::revoked_skin_response(),
+                        }
+                    } else {
+                        crate::apps::project_chat::forbidden(sp)
                     }
                 }
                 "/cli/skin/agents" => {

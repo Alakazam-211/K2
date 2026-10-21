@@ -141,12 +141,16 @@ fn exposure_counts_are_pinned() {
     ] {
         assert!(both.contains(&verb), "{verb} is on both transports");
     }
-    assert!(!both.iter().any(|v| v.starts_with("projects.")), "no project chat on the Garden bridge");
-    assert_eq!(c.catalog_version, 17);
+    assert!(!both.iter().any(|v| v.starts_with("projects.") || v.starts_with("project.")), "no project chat on the Garden bridge");
+    for verb in ["project.list", "project.read", "project.post", "project.markRead", "project.events"] {
+        let row = c.verb(verb).unwrap_or_else(|| panic!("{verb} row"));
+        assert!(row.exposed_to(Exposure::App) && !row.exposed_to(Exposure::GardenLocal), "{verb}: App only");
+    }
+    assert_eq!(c.catalog_version, 18);
     assert_eq!(
         c.verbs.len(),
-        138,
-        "today's 37 bridge verbs plus the frame rows theme.changed, canvas.setHitRegions, window.startDrag, sources.*, the 15 Garden data rows, the 66 app rows (5 on both transports) and widget.self, plus Thread parity 0.46.3's 4 widget and 5 app rows, plus thread.mute"
+        143,
+        "today's 37 bridge verbs plus the frame rows theme.changed, canvas.setHitRegions, window.startDrag, sources.*, the 15 Garden data rows, the 66 app rows (5 on both transports) and widget.self, plus Thread parity 0.46.3's 4 widget and 5 app rows, plus thread.mute, plus App project chat's 5 app rows (0.46.3)"
     );
 }
 

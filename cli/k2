@@ -30389,7 +30389,7 @@ the daemon's loopback port). Every call carries a pass: this App's own
 every hour, so read the file again on pass_invalid) or a guest's
 session pass from POST /cli/skin/login. Users and rooms use the App
 key ($K2_SECRETS_DIR/K2_APP_KEY) on /v1/apps/$K2_APP_ID/... instead.
-From K2's verb catalog, version 17.
+From K2's verb catalog, version 18.
 
 THE SERVER SDK (sdk/server, TypeScript, Node 22+, no dependencies)
   import { fromEnv } from '@k2/server'
@@ -30424,6 +30424,10 @@ thread:read (Read the Thread)
   thread.unread            GET  /cli/thread/unread                        The signed-in person's own unread counts: a guest's over the room Threads it may read, a Garden's over the person's Threads.
   thread.mute              POST /cli/thread/mute                          Mute or unmute a room's Thread for the signed-in person (their own state, on every surface); an App's own pass has no mutes.
   thread.ensurePinned      POST /cli/workspace/ensure-pinned-chat         Check the room's pinned Chat is live (find-only for Apps: it never starts one).
+  project.list             GET  /cli/skin/projects                        The project chats this pass can read: a project shows only when every member agent is a room it holds with thread:read.
+  project.read             GET  /cli/skin/projects/messages               A page of a project chat, oldest first: the latest page, afterSeq to catch up, or beforeSeq to page back.
+  project.markRead         POST /cli/skin/projects/read                   Mark a project chat read for this guest (the person guest:<principalId> on every App surface; an App's own pass has none).
+  project.events           WS   /cli/skin/projects/events?group=          Live lines of one project chat, shaped like Thread frames (collection project), plus a guest's own read frames (collection read); after a gap, project.read with afterSeq.
 thread:post (Post to the Thread)
   thread.send              POST /cli/thread/post                          Post text (and room files) to a room's Thread as the guest (or the App); the agent gets it at once.
   thread.answerCard        POST /cli/thread/answer                        Answer a choice card (or set a secret card) in a room's Thread.
@@ -30494,6 +30498,8 @@ agent:handle (Change the agent's handle (its address))
   agentIdentity.setHandle  POST /cli/agent/handle                         Change the room's agent's handle (its address).
 room:members (See who has access to the room)
   room.members             GET  /cli/skin/members                         Who holds a grant on the room: guests and agent logins with their roles (from grants, not presence); admins of this box are one line.
+project:write (Post in project chats (needs it in every member room))
+  project.post             POST /cli/skin/projects/post                   Post in a project chat as the guest (guest:<username>); needs project:write in every member room.
 
 REFUSALS are JSON {error:{code,hint}} (some routes: {ok:false,error}).
   401 pass_required / pass_invalid (read K2_PASS_FILE again) /
@@ -31906,6 +31912,18 @@ AN APP'S OWN SELF AND USAGE (app.self, app.usage; no cap, own App only)
           author and its last 7 days of saves (uses7d).
   Agents  k2 app self <app>, k2 app usage <app> [--hours N] (an agent: its
           own workspace's Apps).
+
+PROJECT CHAT (0.46.3, App only; never on the Garden bridge)
+  A pass sees a project only when EVERY member agent is a room it holds
+  with thread:read; one it can't reach and the project is skin_room, the
+  same as one that doesn't exist. Posting also needs project:write in
+  every member room (never a default; in no App core).
+  App     GET  /cli/skin/projects            project.list (+ own unread)
+          GET  /cli/skin/projects/messages?group=&after_seq=|before_seq=
+          POST /cli/skin/projects/post {group, body}   as guest:<username>
+          POST /cli/skin/projects/read {group, seq?}   a guest only
+          WS   /cli/skin/projects/events?group=   {collection:"project"|"read",...}
+  Read state is the guest's own person key (guest:<principalId>).
 
 EVENTS (WS /cli/activity/events?workspace=<handle>; room:members opens it)
   {"kind":"room_members_changed","workspace":"<handle>"}  refetch members
@@ -56329,7 +56347,7 @@ k2 zen guide api — the k2 object in a custom widget
 A custom widget is a sealed page in a Garden: no network, no storage, no
 files. It reaches K2 only through window.k2. Each call needs a cap its
 manifest.json asks for; a widget in your own Garden gets every one it asks
-for at once (no review). From K2's verb catalog, version 17.
+for at once (no review). From K2's verb catalog, version 18.
 
 TEN EXAMPLES
   const off = k2.agents.subscribe((rows) => draw(rows))   // live, in scope

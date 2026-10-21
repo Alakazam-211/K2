@@ -1190,7 +1190,9 @@ pub const APP_CORES: &[&str] = &["db", "files", "thread", "mail", "sew"];
 
 /// Which core an App cap belongs to (§3.1, the Use layer). `None` for a
 /// cap in no core: `heartbeats:write` and `files:agentconfig` reach the
-/// agent itself (person-present, N3), and unknown caps are never carried.
+/// agent itself (person-present, N3), `project:write` (0.46.3) is
+/// person-held until a Projects core exists, and unknown caps are never
+/// carried.
 /// Mail and Sew have no App caps yet (MCS11–12, the Sew App slice).
 pub fn app_core_of_cap(cap: &str) -> Option<&'static str> {
     use crate::skin::*;
@@ -2443,6 +2445,8 @@ mod tests {
             ("store:write", Some("db")),
             ("heartbeats:write", None),
             ("files:agentconfig", None),
+            // 0.46.3 App project chat: person-held until a Projects core exists.
+            ("project:write", None),
             ("bogus:cap", None),
         ] {
             assert_eq!(app_core_of_cap(cap), core, "{cap}");

@@ -17,7 +17,7 @@
 //! test fails a hand edit).
 
 /// The catalog version this table was generated from.
-pub const CATALOG_VERSION: u32 = 17;
+pub const CATALOG_VERSION: u32 = 18;
 
 /// Every `(method, path)` the browser helper forwards with a guest's
 /// pass (rows for both doors and helper-only rows; a GET row also opens
@@ -112,6 +112,12 @@ pub const HTTP_ALLOWLIST: &[(&str, &str)] = &[
     ("POST", "/cli/agent/handle"),
     ("GET", "/cli/skin/members"),
     ("HEAD", "/cli/skin/members"),
+    ("GET", "/cli/skin/projects"),
+    ("HEAD", "/cli/skin/projects"),
+    ("GET", "/cli/skin/projects/messages"),
+    ("HEAD", "/cli/skin/projects/messages"),
+    ("POST", "/cli/skin/projects/post"),
+    ("POST", "/cli/skin/projects/read"),
 ];
 
 /// Every `(method, path)` an App's gateway link serves to its App pass
@@ -213,6 +219,12 @@ pub const LINK_HTTP: &[(&str, &str)] = &[
     ("GET", "/cli/skin/usage"),
     ("HEAD", "/cli/skin/usage"),
     ("POST", "/cli/sew/pass"),
+    ("GET", "/cli/skin/projects"),
+    ("HEAD", "/cli/skin/projects"),
+    ("GET", "/cli/skin/projects/messages"),
+    ("HEAD", "/cli/skin/projects/messages"),
+    ("POST", "/cli/skin/projects/post"),
+    ("POST", "/cli/skin/projects/read"),
 ];
 
 /// The one table of App-facing sockets (helper and link), and the query
@@ -221,6 +233,7 @@ pub const WS_ALLOWLIST: &[(&str, &str)] = &[
     ("/cli/overlay/events", "conversation"),
     ("/cli/fs/events", "workspace"),
     ("/cli/activity/events", "workspace"),
+    ("/cli/skin/projects/events", "group"),
 ];
 
 /// Routes only the browser helper forwards: they act on a guest's own
@@ -303,9 +316,14 @@ pub const VERBS: &[(&str, &str, &str, &str)] = &[
     ("GET", "/cli/skin/self", "app.self", "link"),
     ("GET", "/cli/skin/usage", "app.usage", "link"),
     ("POST", "/cli/sew/pass", "chat.pass", "link"),
+    ("GET", "/cli/skin/projects", "project.list", "both"),
+    ("GET", "/cli/skin/projects/messages", "project.read", "both"),
+    ("POST", "/cli/skin/projects/post", "project.post", "both"),
+    ("POST", "/cli/skin/projects/read", "project.markRead", "both"),
     ("WS", "/cli/overlay/events", "thread.events", "both"),
     ("WS", "/cli/fs/events", "files.events", "both"),
     ("WS", "/cli/activity/events", "activity.events", "both"),
+    ("WS", "/cli/skin/projects/events", "project.events", "both"),
 ];
 
 fn path_only(path: &str) -> &str {

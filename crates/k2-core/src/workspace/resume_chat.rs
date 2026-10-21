@@ -32,6 +32,10 @@
 //!      v2_spawn's auto-stamp hook can match it against argv), then
 //!      return `<premint-flag> <uuid>`. The session is "pre-decided" —
 //!      the pinned tab and any subsequent attach see the same UUID.
+//!      A SAVED pin of the same provider with nothing on disk (its
+//!      spawn failed or never got a first turn) is re-used as that
+//!      UUID, never replaced: the pin keys the Thread, and a spawn,
+//!      failed or not, must not move it (0.46.3 smoke fix).
 //!    - Providers WITHOUT one (pi/codex/gemini/cursor mint their own
 //!      ids): spawn bare and return
 //!      [`ResumeChatArgs::pending_session_discovery`] `= true` so the
@@ -243,12 +247,15 @@ pub fn resolve_resume_chat_args_ex(
 
                 // Auto path: converge/mint WITHIN the saved harness's
                 // provider (a stale grok pick converges to the newest grok
-                // session, never to a claude one).
+                // session, never to a claude one). The saved id rides
+                // along: with nothing on disk to converge to, it stays the
+                // pin (it is this workspace's Thread), never a fresh mint.
                 return converge_or_mint(
                     adapter,
                     &default_cmd,
                     project_id.as_deref(),
                     project_path,
+                    Some(sid.as_str()),
                 );
             }
             None => {
@@ -289,7 +296,7 @@ pub fn resolve_resume_chat_args_ex(
     // agent governs.
     match provider_resume_for_command(&default_cmd.command) {
         Some(adapter) => {
-            let out = converge_or_mint(adapter, &default_cmd, project_id.as_deref(), project_path)?;
+            let out = converge_or_mint(adapter, &default_cmd, project_id.as_deref(), project_path, None)?;
             if let (Some(old), Some(pid)) = (prior_custom_id, project_id.as_deref()) {
                 follow_custom_thread(pid, &old, &out.resume_session);
             }
@@ -482,11 +489,22 @@ pub fn ensure_custom_thread_pin(project_path: &str) -> Option<String> {
 
 /// Cases 2 (GH#24 converge-to-newest) and 3 (brand-new premint /
 /// bare-spawn-with-pending-discovery) for a known provider.
+///
+/// `kept_pin` is the workspace's saved pinned id for THIS provider whose
+/// conversation is not on disk (case 1 fell through). A premint provider
+/// re-uses it as the premint id ([`reusable_pin`]) instead of minting:
+/// the pinned Chat is the Thread's key, so a fresh mint here left the
+/// Thread, its cards and everyone's read state behind on the old id
+/// (0.46.3 smoke: an agent whose CLI can't start got a NEW empty Chat on
+/// every failed `k2 msg`, because this mint was persisted before the
+/// spawn and never rolled back). Nothing to roll back now: a failed
+/// spawn leaves the pin exactly as it was.
 fn converge_or_mint(
     adapter: &'static ProviderResume,
     default_cmd: &ResolvedAgentCommand,
     project_id: Option<&str>,
     project_path: &str,
+    kept_pin: Option<&str>,
 ) -> Result<ResumeChatArgs, String> {
     let (command, base_args, env, readiness) = spawn_command_for(adapter, default_cmd);
 
@@ -530,7 +548,13 @@ fn converge_or_mint(
             // UUID and pin it via the premint flag. Persist to
             // workspace_sessions.session_id BEFORE the spawn so
             // v2_spawn's auto-stamp hook sees the matching id in argv.
-            let new_sid = uuid::Uuid::new_v4().to_string();
+            // A saved pin that never reached disk (a spawn that failed or
+            // never got a first turn) IS this id: keep it, so the spawn
+            // can't move the pinned Chat whether it starts or not.
+            let new_sid = match kept_pin.filter(|sid| reusable_pin(project_id, sid)) {
+                Some(sid) => sid.trim().to_string(),
+                None => uuid::Uuid::new_v4().to_string(),
+            };
             persist_session_identity(project_id, Some(&new_sid), adapter.provider);
             let args = adapter
                 .premint_args(&base_args, &new_sid)
@@ -565,6 +589,34 @@ fn converge_or_mint(
                 readiness,
             })
         }
+    }
+}
+
+/// May a saved pin whose conversation is not on disk be handed to the
+/// provider as its premint id? Only when it is a UUID (the premint flags
+/// take nothing else), no OTHER workspace pins it, and its Thread (if it
+/// has one yet) belongs to this workspace, so a copied or shared id is
+/// never adopted as this workspace's conversation.
+fn reusable_pin(project_id: Option<&str>, sid: &str) -> bool {
+    let Some(pid) = project_id else { return false };
+    let sid = sid.trim();
+    if uuid::Uuid::parse_str(sid).is_err() {
+        return false;
+    }
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let pinned_elsewhere: Result<bool, _> = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM workspace_sessions WHERE session_id = ?1 AND project_id <> ?2)",
+        params![sid, pid],
+        |r| r.get(0),
+    );
+    if !matches!(pinned_elsewhere, Ok(false)) {
+        return false;
+    }
+    match crate::overlay::catalog::get(&conn, sid) {
+        Ok(None) => true,
+        Ok(Some((owner, _, _))) => owner == pid,
+        Err(_) => false,
     }
 }
 
@@ -1056,6 +1108,109 @@ mod tests {
             saved_row(&project_id),
             Some((Some(out.resume_session.clone()), "claude".to_string()))
         );
+    }
+
+    // ── 0.46.3 smoke: a spawn never moves the pinned Chat ────────────
+    //
+    // The saved pin keys the Thread. When its conversation never reached
+    // disk (the CLI is missing, or the agent never got a first turn) and
+    // nothing else is on disk, the resolver used to mint + persist a NEW
+    // id before every spawn: each failed `k2 msg` gave the workspace a new,
+    // empty Thread. The saved id is the premint id now.
+
+    #[test]
+    fn saved_pin_with_nothing_on_disk_is_kept_as_the_premint_id() {
+        let _guard = HomeGuard::new("claude-keep-pin");
+        crate::db::init_for_tests();
+        let path = format!("/fixture/claude-keep-{}", uuid::Uuid::new_v4());
+        let project_id = insert_project(&path, None);
+        let pin = uuid::Uuid::new_v4().to_string();
+        set_saved_session(&project_id, &pin, "claude");
+
+        for attempt in 0..3 {
+            let out = resolve_resume_chat_args_ex(&path, false).expect("resolve");
+            assert_eq!(out.command, "claude");
+            assert_eq!(
+                out.args,
+                vec![
+                    "--dangerously-skip-permissions".to_string(),
+                    "--session-id".to_string(),
+                    pin.clone()
+                ],
+                "attempt {attempt}: the saved pin is the premint id, never a fresh mint"
+            );
+            assert_eq!(out.resume_session, pin, "attempt {attempt}");
+            assert!(!out.resumed_existing, "nothing on disk to resume (attempt {attempt})");
+            assert_eq!(
+                saved_row(&project_id),
+                Some((Some(pin.clone()), "claude".to_string())),
+                "attempt {attempt}: the SSOT still holds the same pin"
+            );
+        }
+    }
+
+    #[test]
+    fn grok_saved_pin_with_nothing_on_disk_is_kept() {
+        let _guard = HomeGuard::new("grok-keep-pin");
+        crate::db::init_for_tests();
+        let path = format!("/fixture/grok-keep-{}", uuid::Uuid::new_v4());
+        // The saved harness picks the adapter (case 1), whatever the default.
+        let project_id = insert_project(&path, None);
+        let pin = uuid::Uuid::new_v4().to_string();
+        set_saved_session(&project_id, &pin, "grok");
+
+        let out = resolve_resume_chat_args_ex(&path, false).expect("resolve");
+        assert_eq!(out.provider, "grok");
+        assert_eq!(out.resume_session, pin);
+        let i = out
+            .args
+            .iter()
+            .position(|a| a == "--session-id")
+            .unwrap_or_else(|| panic!("premint flag: {:?}", out.args));
+        assert_eq!(out.args.get(i + 1), Some(&pin), "{:?}", out.args);
+        assert_eq!(saved_row(&project_id), Some((Some(pin.clone()), "grok".to_string())));
+    }
+
+    #[test]
+    fn saved_pin_that_is_not_a_uuid_or_belongs_elsewhere_is_not_reused() {
+        let _guard = HomeGuard::new("claude-no-reuse");
+        crate::db::init_for_tests();
+
+        // Not a UUID: the premint flag can't carry it.
+        let path = format!("/fixture/claude-not-uuid-{}", uuid::Uuid::new_v4());
+        let project_id = insert_project(&path, None);
+        set_saved_session(&project_id, "not-a-uuid-pin", "claude");
+        let out = resolve_resume_chat_args_ex(&path, false).expect("resolve");
+        assert_ne!(out.resume_session, "not-a-uuid-pin");
+        assert!(uuid::Uuid::parse_str(&out.resume_session).is_ok(), "{}", out.resume_session);
+
+        // Another workspace pins the same id: never adopt it.
+        let shared = uuid::Uuid::new_v4().to_string();
+        let a = format!("/fixture/claude-shared-a-{}", uuid::Uuid::new_v4());
+        let b = format!("/fixture/claude-shared-b-{}", uuid::Uuid::new_v4());
+        let a_id = insert_project(&a, None);
+        let b_id = insert_project(&b, None);
+        set_saved_session(&a_id, &shared, "claude");
+        set_saved_session(&b_id, &shared, "claude");
+        let out = resolve_resume_chat_args_ex(&b, false).expect("resolve");
+        assert_ne!(out.resume_session, shared, "a pin another workspace holds is not this one's");
+
+        // Its Thread belongs to another workspace: never adopt it.
+        let foreign = uuid::Uuid::new_v4().to_string();
+        let c = format!("/fixture/claude-foreign-{}", uuid::Uuid::new_v4());
+        let c_id = insert_project(&c, None);
+        set_saved_session(&c_id, &foreign, "claude");
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO overlay_conversations (conversation_id, project_id) VALUES (?1, ?2)",
+                params![foreign, a_id],
+            )
+            .expect("foreign catalog row");
+        }
+        let out = resolve_resume_chat_args_ex(&c, false).expect("resolve");
+        assert_ne!(out.resume_session, foreign, "another workspace's Thread is not this one's");
     }
 
     #[test]

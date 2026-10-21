@@ -85,6 +85,10 @@ pub mod codes {
     pub const SERVER_NOT_APPROVED: &str = "server_not_approved";
     pub const SERVER_TOO_OLD: &str = "server_too_old";
     pub const SERVER_ADD_PENDING: &str = "server_add_pending";
+    /// `servers.add` on a node already at its `max_servers`.
+    pub const MAX_SERVERS_REACHED: &str = "max_servers_reached";
+    /// `servers.add` of a server (label or key) the node already has.
+    pub const SERVER_EXISTS: &str = "server_exists";
     pub const TENANT_NEEDS_JOB_WALL: &str = "tenant_needs_job_wall";
     pub const TEAM_NEEDS_TENANT_WALL: &str = "team_needs_tenant_wall";
     pub const TENANT_WALL_MISSING: &str = "tenant_wall_missing";
@@ -114,6 +118,8 @@ pub mod codes {
         SERVER_NOT_APPROVED,
         SERVER_TOO_OLD,
         SERVER_ADD_PENDING,
+        MAX_SERVERS_REACHED,
+        SERVER_EXISTS,
         TENANT_NEEDS_JOB_WALL,
         TEAM_NEEDS_TENANT_WALL,
         TENANT_WALL_MISSING,

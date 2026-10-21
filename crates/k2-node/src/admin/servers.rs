@@ -474,14 +474,14 @@ pub fn add(ctx: &Ctx, a: &AddArgs) -> Result<Value, AdminRefusal> {
     }
     let pending = f.servers.iter().filter(|e| e.state == ShareState::Pending).count();
     if f.active_count(ctx.now) + pending >= f.max_servers as usize {
-        return Err(refuse(code::BAD_ARGS, format!("this node takes at most {} servers (max_servers)", f.max_servers)));
+        return Err(refuse(codes::MAX_SERVERS_REACHED, format!("this node takes at most {} servers (max_servers)", f.max_servers)));
     }
     let label = label_of(&a.url);
     let clash = f.servers.iter().any(|e| {
         e.state != ShareState::Revoked && (e.label == label || e.fp_prefix.starts_with(&a.fp_prefix) || a.fp_prefix.starts_with(&e.fp_prefix))
     });
     if clash {
-        return Err(refuse(code::BAD_ARGS, format!("{label} (or a server with that key) is already on this node")));
+        return Err(refuse(codes::SERVER_EXISTS, format!("{label} (or a server with that key) is already on this node")));
     }
     let slot = f.free_slot().ok_or_else(|| refuse(code::BAD_ARGS, "no free slot (wipe a revoked server first)"))?;
     let uid = alloc_uid(&ctx.state_dir, &f)?;
@@ -964,7 +964,25 @@ mod tests {
         assert_eq!(f.servers.len(), 2);
         assert_eq!(read_enroll(&t.ctx.config_dir).unwrap().unwrap().fp_prefix, "1123456789abcdef");
         let e = add(&t.ctx, &add_args("https://a.k2.dev", "1123456789abcdef", Trust::Own));
-        assert!(e.is_err(), "same key twice");
+        assert!(e.is_err(), "same key twice while it's pending");
+        // Once active: the same key again is `server_exists`.
+        let mut f = read_file(&t.ctx.config_dir).unwrap().unwrap();
+        for e in f.servers.iter_mut() {
+            e.state = ShareState::Active;
+        }
+        crate::util::atomic_write(&t.ctx.config_dir.join(share::SERVERS_FILE), toml::to_string(&f).unwrap().as_bytes(), 0o664).unwrap();
+        let e = add(&t.ctx, &add_args("https://a.k2.dev", "1123456789abcdef", Trust::Own)).unwrap_err();
+        assert_eq!(e.code, codes::SERVER_EXISTS, "same key twice");
+        // Owner + two = the default three: a fourth is refused by count.
+        let mut g = read_file(&t.ctx.config_dir).unwrap().unwrap();
+        let mut third = g.servers[1].clone();
+        third.slot = 2;
+        third.label = "c.k2.dev".into();
+        third.fp_prefix = "2123456789abcdef".into();
+        g.servers.push(third);
+        crate::util::atomic_write(&t.ctx.config_dir.join(share::SERVERS_FILE), toml::to_string(&g).unwrap().as_bytes(), 0o664).unwrap();
+        let e = add(&t.ctx, &add_args("https://d.k2.dev", "3123456789abcdef", Trust::Own)).unwrap_err();
+        assert_eq!(e.code, codes::MAX_SERVERS_REACHED);
     }
 
     fn confirm_pin(t: &T, slot: Slot, prefix: &str) {

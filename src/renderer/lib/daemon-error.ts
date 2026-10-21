@@ -1,7 +1,15 @@
 // The daemon's machine-readable refusals: `{"error":{"code","hint"}}`
-// (vault routes, `thread/answer`). `daemonCliGet/Post` throw an Error whose
-// message is the raw body for this shape (it only unwraps a string `error`),
-// so this reads the code and hint back out of it.
+// (vault routes, `thread/answer`).
+//
+// Two shapes reach here. `daemonCliGet/Post` throw a `DaemonHttpError`
+// whose message is the hint and whose `code` is the body's code (since
+// 0.46.1, `daemon-cli` unwraps the `{error:{code,hint}}` shape). Other
+// callers (tests, older paths) throw an Error whose message is the raw
+// body. Both are read here. Reading only the raw body broke every
+// two-step refusal in 0.46.1/0.46.2 (the secret card's "Save anyway",
+// the API token vault confirm): the code was never seen.
+
+import { httpCodeOf } from './daemon-http-error'
 
 export interface DaemonErrorInfo {
   code: string
@@ -11,6 +19,16 @@ export interface DaemonErrorInfo {
 /** The `{error:{code,hint}}` inside a thrown daemon error, or null. */
 export function daemonErrorOf(e: unknown): DaemonErrorInfo | null {
   const msg = e instanceof Error ? e.message : typeof e === 'string' ? e : ''
+  const fromBody = errorInBody(msg)
+  if (fromBody) return fromBody
+  // `daemon-cli`'s DaemonHttpError: the code rides the error, the message
+  // is the hint.
+  const code = httpCodeOf(e)
+  if (code) return { code, hint: msg === code ? '' : msg }
+  return null
+}
+
+function errorInBody(msg: string): DaemonErrorInfo | null {
   const start = msg.indexOf('{')
   if (start < 0) return null
   let parsed: unknown

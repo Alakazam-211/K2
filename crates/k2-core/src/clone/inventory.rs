@@ -40,6 +40,16 @@ pub(crate) fn is_llm_wallet_path(rel: &str) -> bool {
     })
 }
 
+/// Is a workspace-relative path inside the K2 vault (`.k2/vault/…` or the
+/// legacy `.k2so/vault/…`): the vault store (`vault.db`, every secret,
+/// people's wallet items in the `person` scope included) and its box key
+/// (`vault/key/kek`)? Like the LLM wallet, it only enters a tree when a
+/// workspace IS the home folder, and it never travels.
+pub(crate) fn is_vault_path(rel: &str) -> bool {
+    let parts: Vec<&str> = rel.split(['/', '\\']).collect();
+    parts.windows(2).any(|w| (w[0] == ".k2" || w[0] == ".k2so") && w[1] == "vault")
+}
+
 /// Bulk file globs / names dropped everywhere.
 fn is_bulk_file(name: &str) -> bool {
     name == ".DS_Store"
@@ -298,8 +308,10 @@ fn process_workspace_file(
     }
     // The LLM login wallet (`<home>/.k2/llm-accounts/`) never travels, not
     // even with `carry_secrets`: it only enters a tree when a workspace IS
-    // the home folder. Listed as scrubbed so the report says so.
-    if is_llm_wallet_path(&rel) {
+    // the home folder. Listed as scrubbed so the report says so. The vault
+    // (`<home>/.k2/vault/`: the store and its key file) is the same: never,
+    // even with `carry_secrets` (secrets move only as signed vault carries).
+    if is_llm_wallet_path(&rel) || is_vault_path(&rel) {
         scrubbed.push(rel);
         return;
     }

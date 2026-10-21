@@ -149,14 +149,9 @@ fn a_widget_with_its_own_scheme_keeps_it_like_in_zen() {
     m.insert("colorScheme".into(), json!("own"));
     files.insert("manifest.json".into(), serde_json::to_vec(&m).expect("encode"));
     let v = shot_page("fleet-grid", &files, &ShotOptions::default()).expect("shot page");
-    if v["ok"] == true {
-        assert_eq!(v["colorScheme"], "own", "{v}");
-        assert!(!v["frame"].as_str().expect("frame").contains("!important"), "own scheme: no !important");
-    } else {
-        // This K2's manifest check doesn't know colorScheme yet: it must
-        // say so as an error, not shoot with the Garden's scheme.
-        assert!(v["errors"].to_string().contains("colorScheme"), "{v}");
-    }
+    assert_eq!(v["ok"], true, "{v}");
+    assert_eq!(v["colorScheme"], "own", "{v}");
+    assert!(!v["frame"].as_str().expect("frame").contains("!important"), "own scheme: no !important");
     let v = shot_page("fleet-grid", &staged_builtin("fleet-grid", 2), &ShotOptions::default()).expect("shot page");
     assert_eq!(v["colorScheme"], "garden");
 }

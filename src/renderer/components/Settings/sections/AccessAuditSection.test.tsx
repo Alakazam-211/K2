@@ -224,6 +224,36 @@ describe('AccessAuditSection', () => {
     expect(screen.getByText(SEND.outcome)).toBeTruthy()
   })
 
+  it('Permission cards shows only the five permission-* lines (asks, answers, notes, undo, switches)', async () => {
+    const line = (event: string, outcome: string, i: number): AuthAuditEvent => ({
+      ts: `2026-10-21T10:0${i}:00.000Z`,
+      event,
+      user: i === 0 ? 'agent:ws-billing/s1' : 'rosson',
+      outcome,
+      ingress: '-',
+      ip: '-',
+    })
+    const REQ = line('permission-request', 'ok pr_7f3a2c compute.use billing', 0)
+    const ANS = line('permission-answer', 'ok pr_7f3a2c allow via desktop', 1)
+    const NOTE = line('permission-note', 'ok pr_7f3a2c note', 2)
+    const UNDO = line('permission-undo', 'ok pr_7f3a2c turn off again', 3)
+    const SWITCH = line('permission-switch', 'server on', 4)
+    const LOOKALIKE = line('permissions-sync', 'not a card line', 5)
+    const HANDOFF: AuthAuditEvent = { ...REQ, ts: '2026-10-21T10:06:00.000Z', event: 'vault-handoff', outcome: 'ok send KEY to ops' }
+    h.fetchWhoamiRole.mockResolvedValue('owner')
+    h.fetchUsersAudit.mockResolvedValue({ kind: 'ok', events: [OK, REQ, ANS, NOTE, UNDO, SWITCH, LOOKALIKE, HANDOFF], tail: 200 })
+    render(<AccessAuditSection />)
+    await waitFor(() => expect(screen.getByRole('table')).toBeTruthy())
+    expect(screen.queryByText(REQ.outcome)).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Permission cards' }))
+    expect(screen.getByRole('button', { name: 'Permission cards' }).getAttribute('aria-pressed')).toBe('true')
+    for (const ev of [REQ, ANS, NOTE, UNDO, SWITCH]) expect(screen.getByText(ev.outcome)).toBeTruthy()
+    expect(screen.queryByText(LOOKALIKE.outcome)).toBeNull()
+    expect(screen.queryByText(HANDOFF.outcome)).toBeNull()
+    expect(screen.queryByText('203.0.113.9')).toBeNull()
+    expect(ACCESS_AUDIT_MANIFEST[0]?.keywords).toContain('permission cards')
+  })
+
   it('admin: owner-only note and no audit fetch', async () => {
     h.fetchWhoamiRole.mockResolvedValue('admin')
     render(<AccessAuditSection />)

@@ -27,6 +27,7 @@ import { LimitBar } from '@/components/Usage/LimitBar'
 import {
   addApiKey,
   checkedAgoText,
+  clearDefaultLogin,
   errorText,
   exhaustedWarnings,
   formatWhen,
@@ -78,6 +79,18 @@ export const ACTIVE_REMOVE_REASON = 'This is the server default; make another to
 export const ACTIVE_RELOGIN_HINT = 'To sign this token in again, make another token the server default first.'
 
 export const SIGNING_IN_SWITCH_REASON = 'This token is signing in; finish or cancel that sign-in first'
+
+/** What "no server default" means for `tool` (said in the confirm). A
+ *  subscription still signed in to the tool itself becomes the default
+ *  again; otherwise chats on Server default get no token from K2. */
+export function noDefaultText(tool: Pick<LlmTool, 'display' | 'activeId' | 'liveAccountId' | 'accounts'>): string {
+  const live = tool.liveAccountId && tool.liveAccountId !== tool.activeId
+    ? tool.accounts.find((a) => a.id === tool.liveAccountId) ?? null
+    : null
+  return live
+    ? `${tokenName(tool.display, live)}, still signed in to ${tool.display} itself, becomes the server default again.`
+    : `${tool.display} then has no server default: chats on Server default get no token from K2.`
+}
 
 /** The confirm before a server-default switch: from → to, plus a
  *  warning (never a refusal) when the target's last reading is used up. */
@@ -268,19 +281,41 @@ function AccountRow({
     if (ok) run(switchLogin(scope, account.id))
   }, [tool, account, run, scope])
 
+  // The server default API token may be removed (or just stop being the
+  // default) after a confirm: that leaves the tool with no default.
+  // Admin and above, like any default change. A subscription default
+  // can't: it sits in the tool's own store.
+  const clearsDefault = account.active && apiKey
   const remove = useCallback(async () => {
     const ok = await confirm({
       title: `Remove ${account.label}?`,
-      message: apiKey
-        ? `K2 moves this ${tool.display} API token to the trash on the server.`
-        : `K2 moves this ${tool.display} subscription to the trash on the server. Add it again later to use it.`,
+      message: clearsDefault
+        ? `${account.label} is the ${tool.display} server default. ${noDefaultText(tool)} K2 moves the token to the trash on the server.`
+        : apiKey
+          ? `K2 moves this ${tool.display} API token to the trash on the server.`
+          : `K2 moves this ${tool.display} subscription to the trash on the server. Add it again later to use it.`,
       confirmLabel: 'Remove',
       destructive: true,
     })
-    if (ok) run(removeLogin(scope, account.id))
-  }, [confirm, account, apiKey, tool.display, run, scope])
+    if (ok) run(removeLogin(scope, account.id, clearsDefault))
+  }, [confirm, account, apiKey, clearsDefault, tool.display, run, scope])
 
-  const removeBlocked = account.active ? ACTIVE_REMOVE_REASON : pinnedBlock ? PINNED_SWITCH_REASON : undefined
+  const clearDefault = useCallback(async () => {
+    const ok = await confirm({
+      title: `No ${tool.display} server default?`,
+      message: `${account.label} stops being the server default and stays in your tokens. ${noDefaultText(tool)}`,
+      confirmLabel: 'No default',
+    })
+    if (ok) run(clearDefaultLogin(scope, tool.tool))
+  }, [confirm, account.label, tool.display, tool.tool, run, scope])
+
+  const removeBlocked = account.active
+    ? clearsDefault
+      ? (doc.canChangeDefault ? undefined : (doc.changeDefaultReason ?? ADMIN_SWITCH_REASON))
+      : ACTIVE_REMOVE_REASON
+    : pinnedBlock
+      ? PINNED_SWITCH_REASON
+      : undefined
 
   return (
     <div className="px-3 py-2 border-t border-[var(--color-border)]" data-testid={`llm-account-${account.id}`}>
@@ -343,6 +378,17 @@ function AccountRow({
               onClick={() => onLoginAgain(account)}
             >
               Sign in again
+            </Button>
+          )}
+          {clearsDefault && (
+            <Button
+              className={ACTION_FOCUS}
+              disabled={!doc.canChangeDefault}
+              title={doc.canChangeDefault ? `Leave ${tool.display} with no server default` : (doc.changeDefaultReason ?? ADMIN_SWITCH_REASON)}
+              onClick={() => void clearDefault()}
+              data-testid={`llm-no-default-${account.id}`}
+            >
+              No default
             </Button>
           )}
           <Button

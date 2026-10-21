@@ -703,6 +703,7 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/llm/accounts/pin",
         "/cli/llm/accounts/unpin",
         "/cli/llm/accounts/add-key",
+        "/cli/llm/accounts/clear-default",
         // App users' wallets (0.46.3): an agent of an App's own workspace
         // with switch 2 reads and sets that App's fallback only (the
         // handler checks; every other /cli/app/wallet/* answers owner_only).

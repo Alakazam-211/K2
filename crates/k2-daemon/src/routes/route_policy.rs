@@ -704,6 +704,7 @@ pub const ROUTES: &[Route] = &[
     // (Rosson 2026-10-20); the list stays readable for Members.
     post("/cli/llm/accounts/add", Member),
     post("/cli/llm/accounts/add-key", Member),
+    post("/cli/llm/accounts/clear-default", Admin),
     get("/cli/llm/accounts/list", Member),
     post("/cli/llm/accounts/login", Member),
     post("/cli/llm/accounts/login/cancel", Member),

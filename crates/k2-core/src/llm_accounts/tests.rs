@@ -248,6 +248,71 @@ fn remove_refuses_the_active_login_and_trashes_an_idle_one() {
     assert_eq!(read_live_claude(&h), claude_cred("a", far_future_ms()), "live untouched");
 }
 
+const TEST_KEY: &str = "sk-test-0123456789abcdef";
+
+/// Smoke r6: the only token, an API token that is the server default,
+/// couldn't be removed and there was no "no default". The refusal says
+/// how; clearing leaves the tool with no default; then it removes.
+#[test]
+fn the_only_api_token_can_be_cleared_as_default_then_removed() {
+    let _h = Home::new("clear-only-key");
+    let conn = db();
+    let k = pins::add_api_key(&conn, Tool::Claude, "smokekey", TEST_KEY, None).unwrap();
+    wallet::switch(&conn, Tool::Claude, &k.id, Some("owner"), None).unwrap();
+    assert_eq!(active_id(&conn, Tool::Claude).unwrap().as_deref(), Some(k.id.as_str()));
+    let e = wallet::remove(&conn, &k.id).unwrap_err();
+    assert_eq!(e.code(), "active_login");
+    let hint = e.to_string();
+    assert!(hint.contains("--clear-default") && hint.contains("smokekey") && hint.contains("make another token"), "{hint}");
+    // Clearing: no default for Claude at all.
+    let out = wallet::clear_default(&conn, Tool::Claude, Some("owner")).unwrap();
+    assert_eq!(out.cleared.as_deref(), Some(k.id.as_str()));
+    assert_eq!(out.cleared_label.as_deref(), Some("smokekey"));
+    assert_eq!(out.now_default, None);
+    assert_eq!(active_id(&conn, Tool::Claude).unwrap(), None);
+    assert_eq!(active_info(&conn, Tool::Claude).unwrap(), None);
+    // Clearing again is a no-op, not an error.
+    assert_eq!(wallet::clear_default(&conn, Tool::Claude, None).unwrap().cleared, None);
+    wallet::remove(&conn, &k.id).unwrap();
+    assert!(list(&conn).unwrap().is_empty());
+}
+
+/// Remove with the confirm (`--clear-default`) does both at once; a
+/// subscription that was left in the tool's own store becomes the
+/// default again (chats on Server default use it anyway).
+#[test]
+fn removing_the_default_api_token_with_the_confirm_falls_back_to_the_live_subscription() {
+    let h = Home::new("clear-key-live");
+    let conn = db();
+    write_live_claude(&h, &claude_cred("a", far_future_ms()));
+    let a = wallet::import_live(&conn, Tool::Claude, None).unwrap().unwrap();
+    let k = pins::add_api_key(&conn, Tool::Claude, "metered", TEST_KEY, None).unwrap();
+    wallet::switch(&conn, Tool::Claude, &k.id, None, None).unwrap();
+    assert_eq!(active_id(&conn, Tool::Claude).unwrap().as_deref(), Some(k.id.as_str()));
+    wallet::remove_clearing_default(&conn, &k.id, Some("admin")).unwrap();
+    assert_eq!(active_id(&conn, Tool::Claude).unwrap().as_deref(), Some(a.id.as_str()));
+    assert!(list(&conn).unwrap().iter().all(|e| e.id != k.id));
+    assert_eq!(read_live_claude(&h), claude_cred("a", far_future_ms()), "the live sign-in untouched");
+}
+
+/// A subscription default can't be cleared to none (it sits in the
+/// tool's own store): refused with what to do; the confirm doesn't
+/// change that.
+#[test]
+fn a_subscription_default_is_not_cleared() {
+    let h = Home::new("clear-sub");
+    let conn = db();
+    write_live_claude(&h, &claude_cred("a", far_future_ms()));
+    let a = wallet::import_live(&conn, Tool::Claude, None).unwrap().unwrap();
+    let e = wallet::clear_default(&conn, Tool::Claude, None).unwrap_err();
+    assert_eq!(e.code(), "subscription_default");
+    assert!(e.to_string().contains("Make another token the server default"), "{e}");
+    let e = wallet::remove_clearing_default(&conn, &a.id, None).unwrap_err();
+    assert_eq!(e.code(), "active_login");
+    assert!(e.to_string().contains("own store"), "{e}");
+    assert_eq!(active_id(&conn, Tool::Claude).unwrap().as_deref(), Some(a.id.as_str()));
+}
+
 #[test]
 fn keep_warm_refreshes_due_idle_slots_only() {
     let h = Home::new("warm");

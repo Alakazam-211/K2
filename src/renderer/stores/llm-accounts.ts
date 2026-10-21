@@ -404,8 +404,17 @@ export function renameLogin(scope: ServerScope, id: string, label: string): Prom
   return mutate(scope, 'rename', { id, label })
 }
 
-export function removeLogin(scope: ServerScope, id: string): Promise<unknown> {
-  return mutate(scope, 'remove', { id })
+/** `clearDefault`: the person confirmed removing the server default API
+ *  token, which leaves the tool with no default (Admin and above). */
+export function removeLogin(scope: ServerScope, id: string, clearDefault = false): Promise<unknown> {
+  return mutate(scope, 'remove', clearDefault ? { id, clearDefault: true } : { id })
+}
+
+/** No server default token for `tool` (an API token default only; Admin
+ *  and above). A subscription left in the tool's own store becomes the
+ *  default again. */
+export function clearDefaultLogin(scope: ServerScope, tool: string): Promise<unknown> {
+  return mutate(scope, 'clear-default', { tool })
 }
 
 export function refreshLogins(scope: ServerScope, usage: boolean): Promise<unknown> {

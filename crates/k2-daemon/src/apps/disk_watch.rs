@@ -242,13 +242,16 @@ pub fn crossings(state: &mut WatchState, disks: &[Fs], lines: &Lines) -> Vec<(Fs
 
 /// An agent's share of the rows on one disk (or every row when no row
 /// names a disk).
+/// One of an agent's rows: (words, bytes, its biggest parts).
+type ShareRow = (String, u64, Vec<(String, u64)>);
+
 #[derive(Debug, Clone, Default)]
 struct Share {
     workspace: String,
     handle: String,
     total: u64,
     /// `(words, bytes)`: "your folder", "jobs_db", "App jobs".
-    rows: Vec<(String, u64, Vec<(String, u64)>)>,
+    rows: Vec<ShareRow>,
 }
 
 fn shares(snap: &Snapshot, fs_id: &str) -> Vec<Share> {
@@ -283,7 +286,7 @@ fn shares(snap: &Snapshot, fs_id: &str) -> Vec<Share> {
     }
     let mut v: Vec<Share> = by.into_values().collect();
     for s in &mut v {
-        s.rows.sort_by(|a, b| b.1.cmp(&a.1));
+        s.rows.sort_by_key(|r| std::cmp::Reverse(r.1));
     }
     v.sort_by(|a, b| b.total.cmp(&a.total).then_with(|| a.handle.cmp(&b.handle)));
     v
@@ -291,7 +294,7 @@ fn shares(snap: &Snapshot, fs_id: &str) -> Vec<Share> {
 
 fn parts_words(parts: &[(String, u64)]) -> String {
     let mut p: Vec<&(String, u64)> = parts.iter().collect();
-    p.sort_by(|a, b| b.1.cmp(&a.1));
+    p.sort_by_key(|r| std::cmp::Reverse(r.1));
     p.iter().map(|(n, b)| format!("{n} {}", human_gb(*b))).collect::<Vec<_>>().join(", ")
 }
 

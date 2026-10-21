@@ -238,11 +238,14 @@ impl Engine {
             // Out of the store's name first (a Seed is whole or absent),
             // then delete. A leftover `.tmp-` is cleaned at the next start.
             let tmp = self.seeds().join(format!(".tmp-gc-{h}-{}", std::process::id()));
-            if let Err(e) = std::fs::rename(&dir, &tmp) {
-                return Err((codes::IO, format!("move Seed {h} aside: {e}")));
+            // A Seed that can't be moved stays whole and is reported kept;
+            // the rest of the list still goes.
+            if std::fs::rename(&dir, &tmp).is_err() {
+                a.skipped.push(h.clone());
+                continue;
             }
             if let Err(e) = std::fs::remove_dir_all(&tmp) {
-                return Err((codes::IO, format!("remove Seed {h}: {e}")));
+                eprintln!("k2-app-engine: seeds-gc: remove {}: {e} (cleaned at the next start)", tmp.display());
             }
             a.freed_bytes = a.freed_bytes.saturating_add(bytes);
             a.removed.push(h.clone());
@@ -430,7 +433,7 @@ mod tests {
         std::fs::remove_file(root.join("b")).unwrap();
         let again = tree_bytes(&root, Instant::now() + Duration::from_secs(30)).unwrap();
         assert_eq!(one, again, "the hard link counted once");
-        assert!(one >= 64 * 1024 && one < 1024 * 1024, "{one}: the symlink to / was not followed");
+        assert!((64 * 1024..1024 * 1024).contains(&one), "{one}: the symlink to / was not followed");
         assert_eq!(tree_bytes(&root, Instant::now()), Err(std::fs::symlink_metadata(&root).map(|m| {
             use std::os::unix::fs::MetadataExt;
             m.blocks() * 512

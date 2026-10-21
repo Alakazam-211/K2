@@ -89,11 +89,33 @@ impl JobsFile {
 /// `Ok(None)` when missing (no wall set up).
 pub fn read_jobs_file(config_dir: &Path) -> Result<Option<JobsFile>, String> {
     let p = config_dir.join(JOBS_FILE);
-    match std::fs::read_to_string(&p) {
-        Ok(s) => toml::from_str(&s).map(Some).map_err(|e| format!("{}: {e}", p.display())),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(format!("read {}: {e}", p.display())),
+    let s = match read_root_trusted(&p) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("read {}: {e}", p.display())),
+    };
+    toml::from_str(&s).map(Some).map_err(|e| format!("{}: {e}", p.display()))
+}
+
+/// Read a file root trusts (who jobs run as): never through a link, and,
+/// read as root, only when root owns it and nobody else may write it. The
+/// config dir is the machine owner's group's to write (review A M5): a
+/// member could swap the file, never make root trust their copy.
+pub fn read_root_trusted(p: &Path) -> std::io::Result<String> {
+    use std::io::Read;
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    let mut f = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC).open(p)?;
+    let m = f.metadata()?;
+    // SAFETY: plain getter.
+    if unsafe { libc::geteuid() } == 0 && (!m.is_file() || m.uid() != 0 || m.mode() & 0o022 != 0) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!("{} must be root's and writable by root only (uid {}, mode {:o})", p.display(), m.uid(), m.mode() & 0o7777),
+        ));
     }
+    let mut s = String::new();
+    f.read_to_string(&mut s)?;
+    Ok(s)
 }
 
 /// Check a would-be job user against the node user.
@@ -108,7 +130,58 @@ pub fn check_job_user(job_user: &str, node_user: &str) -> Result<(u32, u32), Str
     if job_user == node_user || super::server::user_ids(node_user).is_some_and(|(n, _)| n == uid) {
         return Err(format!("{job_user} is the node user; jobs need their own user"));
     }
+    check_job_account(job_user, gid)?;
     Ok((uid, gid))
+}
+
+/// A job user is a bare account (review A L3, M5): no login shell, and no
+/// group but its own (systemd gives a unit its user's supplementary
+/// groups: group 0 would also lift `ProtectProc`, `adm`/`docker` more).
+pub fn check_job_account(user: &str, gid: u32) -> Result<(), String> {
+    if !cfg!(target_os = "linux") {
+        return Ok(());
+    }
+    let c = std::ffi::CString::new(user).map_err(|_| format!("{user:?} has a NUL"))?;
+    // SAFETY: getpwnam with a valid C string; the shell is copied out at once.
+    let shell = unsafe {
+        let pw = libc::getpwnam(c.as_ptr());
+        if pw.is_null() || (*pw).pw_shell.is_null() {
+            String::new()
+        } else {
+            std::ffi::CStr::from_ptr((*pw).pw_shell).to_string_lossy().into_owned()
+        }
+    };
+    if !(shell.ends_with("/nologin") || shell == "/bin/false" || shell == "/usr/bin/false") {
+        return Err(format!("{user} has a login shell ({shell}); a job user gets nologin"));
+    }
+    let groups = supplementary_groups(&c, gid)?;
+    if groups.iter().any(|g| *g != gid) {
+        return Err(format!("{user} is in other groups ({groups:?}); a job user has only its own"));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn supplementary_groups(user: &std::ffi::CStr, gid: u32) -> Result<Vec<u32>, String> {
+    let mut n: libc::c_int = 64;
+    loop {
+        let mut v: Vec<libc::gid_t> = vec![0; n as usize];
+        let want = n;
+        // SAFETY: a valid C string and a buffer of `n` gids.
+        let rc = unsafe { libc::getgrouplist(user.as_ptr(), gid, v.as_mut_ptr(), &mut n) };
+        if rc >= 0 {
+            v.truncate(n.max(0) as usize);
+            return Ok(v);
+        }
+        if n <= want || n > 65536 {
+            return Err("getgrouplist failed".into());
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn supplementary_groups(_user: &std::ffi::CStr, gid: u32) -> Result<Vec<u32>, String> {
+    Ok(vec![gid])
 }
 
 /// gid of a group name.
@@ -127,6 +200,8 @@ pub fn group_id(name: &str) -> Option<u32> {
 /// `sudo k2-node admin job-user <name>` (setup): validate and write.
 pub fn write_jobs_file(config_dir: &Path, job_user: &str, node_user: &str) -> Result<String, String> {
     check_job_user(job_user, node_user)?;
+    // One jobs.toml change at a time with tenant.prepare/wipe (review A M4).
+    let _g = crate::util::FileLock::exclusive(&config_dir.join(super::tenants::OPS_LOCK_FILE))?;
     // Keep the tenants `tenant.prepare` wrote; setup only sets the owner's user.
     let tenants = read_jobs_file(config_dir).ok().flatten().map(|f| f.tenants).unwrap_or_default();
     write_jobs(config_dir, &JobsFile { job_user: job_user.to_string(), tenants })?;
@@ -291,10 +366,13 @@ pub fn parse_oom_kills(text: &str) -> u64 {
 /// (`ProtectClock`, 245: Ubuntu 20.04, Debian 11, current Arch/Fedora).
 pub const MIN_SYSTEMD: u32 = 245;
 /// Tenant units also need `ProtectProc=invisible` (247; kernel 5.8), so
-/// one tenant's jobs can't see another's processes or command lines (V75).
-pub const MIN_SYSTEMD_TENANT: u32 = 247;
+/// one tenant's jobs can't see another's processes or command lines (V75),
+/// and `PrivateIPC=` (248), always on for them (review A L2).
+pub const MIN_SYSTEMD_TENANT: u32 = 248;
 /// `PrivateIPC=` (248): used when there, on every unit.
 pub const MIN_SYSTEMD_PRIVATE_IPC: u32 = 248;
+/// `ProtectProc=invisible` (247): used when there, on every unit.
+pub const MIN_SYSTEMD_PROTECT_PROC: u32 = 247;
 
 /// `systemctl --version` → `255` from "systemd 255 (255.4-1ubuntu8)".
 pub fn systemd_version(text: &str) -> Option<u32> {
@@ -358,19 +436,104 @@ pub fn slice_name(slot: Slot) -> String {
 pub const TENANT_TOOLS: &[&str] = &["setfacl", "useradd", "groupadd", "userdel", "groupdel"];
 
 /// `no-lan` (V62): every non-public range through which a job could reach
-/// a machine on the LAN, the tailnet or a multicast group. Loopback stays.
+/// a machine on the LAN, the tailnet or a multicast group, and the IPv6
+/// encodings of private IPv4 (6to4, NAT64; the fetch path's
+/// `is_public_ip` treats them the same, review B3). Loopback stays. At
+/// start the unit also gets every on-link prefix and address of this
+/// machine ([`lan_deny_extra`]: a dual-stack LAN's global IPv6, a LAN on
+/// public IPv4; review A M3).
 pub const NO_LAN_DENY: &[&str] = &[
     "0.0.0.0/8",
     "10.0.0.0/8",
     "100.64.0.0/10",
     "169.254.0.0/16",
     "172.16.0.0/12",
+    "192.0.0.0/24",
     "192.168.0.0/16",
+    "198.18.0.0/15",
     "224.0.0.0/4",
+    "240.0.0.0/4",
+    "2002::/16",
+    "64:ff9b::/96",
+    "64:ff9b:1::/48",
     "fc00::/7",
     "fe80::/10",
+    "fec0::/10",
     "ff00::/8",
 ];
+
+/// `addr` with only its first `len` bits, as `addr/len`.
+pub fn prefix_of(addr: std::net::IpAddr, len: u32) -> String {
+    use std::net::IpAddr;
+    match addr {
+        IpAddr::V4(a) => {
+            let len = len.min(32);
+            let mask = if len == 0 { 0 } else { u32::MAX << (32 - len) };
+            format!("{}/{len}", std::net::Ipv4Addr::from(u32::from(a) & mask))
+        }
+        IpAddr::V6(a) => {
+            let len = len.min(128);
+            let mask = if len == 0 { 0 } else { u128::MAX << (128 - len) };
+            format!("{}/{len}", std::net::Ipv6Addr::from(u128::from(a) & mask))
+        }
+    }
+}
+
+/// This machine's own LAN for `no-lan`: every non-loopback interface's
+/// on-link prefix and its own address (sorted, no duplicates).
+pub fn lan_deny_extra() -> Vec<String> {
+    let mut out = std::collections::BTreeSet::new();
+    for (addr, len) in interface_addrs() {
+        if addr.is_loopback() || addr.is_unspecified() {
+            continue;
+        }
+        out.insert(prefix_of(addr, len));
+        out.insert(prefix_of(addr, if addr.is_ipv4() { 32 } else { 128 }));
+    }
+    out.into_iter().collect()
+}
+
+/// (address, prefix length) of every interface address (getifaddrs).
+fn interface_addrs() -> Vec<(std::net::IpAddr, u32)> {
+    let mut out = Vec::new();
+    let mut head: *mut libc::ifaddrs = std::ptr::null_mut();
+    // SAFETY: getifaddrs fills a list we free below.
+    if unsafe { libc::getifaddrs(&mut head) } != 0 {
+        return out;
+    }
+    let mut cur = head;
+    while !cur.is_null() {
+        // SAFETY: a node of the list getifaddrs returned.
+        let ifa = unsafe { &*cur };
+        cur = ifa.ifa_next;
+        if ifa.ifa_addr.is_null() || ifa.ifa_netmask.is_null() {
+            continue;
+        }
+        // SAFETY: sockaddr pointers from getifaddrs, read per family.
+        unsafe {
+            match (*ifa.ifa_addr).sa_family as i32 {
+                libc::AF_INET => {
+                    let a = &*(ifa.ifa_addr as *const libc::sockaddr_in);
+                    let m = &*(ifa.ifa_netmask as *const libc::sockaddr_in);
+                    let addr = std::net::Ipv4Addr::from(u32::from_be(a.sin_addr.s_addr));
+                    let len = u32::from_be(m.sin_addr.s_addr).count_ones();
+                    out.push((std::net::IpAddr::V4(addr), len));
+                }
+                libc::AF_INET6 => {
+                    let a = &*(ifa.ifa_addr as *const libc::sockaddr_in6);
+                    let m = &*(ifa.ifa_netmask as *const libc::sockaddr_in6);
+                    let addr = std::net::Ipv6Addr::from(a.sin6_addr.s6_addr);
+                    let len: u32 = m.sin6_addr.s6_addr.iter().map(|b| b.count_ones()).sum();
+                    out.push((std::net::IpAddr::V6(addr), len));
+                }
+                _ => {}
+            }
+        }
+    }
+    // SAFETY: the list getifaddrs returned.
+    unsafe { libc::freeifaddrs(head) };
+    out
+}
 
 /// Everything root decides about one job unit.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -395,6 +558,9 @@ pub struct UnitPlan {
     pub protect_proc: bool,
     /// `PrivateIPC=yes` (systemd ≥ 248).
     pub private_ipc: bool,
+    /// `no-lan` only: this machine's own on-link prefixes and addresses,
+    /// denied beside [`NO_LAN_DENY`].
+    pub lan_extra: Vec<String>,
 }
 
 /// The fixed template (argv[0] is `systemd-run`).
@@ -476,7 +642,11 @@ pub fn systemd_run_argv(p: &UnitPlan) -> Vec<String> {
             // the namespace (DNS as a side channel).
             prop("InaccessiblePaths=-/run/systemd/resolve -/run/nscd -/var/run/nscd".into());
         }
-        Network::NoLan => prop(format!("IPAddressDeny={}", NO_LAN_DENY.join(" "))),
+        Network::NoLan => {
+            let mut deny: Vec<String> = NO_LAN_DENY.iter().map(|s| s.to_string()).collect();
+            deny.extend(p.lan_extra.iter().cloned());
+            prop(format!("IPAddressDeny={}", deny.join(" ")));
+        }
         Network::On => {}
     }
     a.push("--".into());
@@ -916,6 +1086,9 @@ impl Executor {
         };
         let network = if s.tenant == OWNER_SLOT { asked } else { asked.min(tenant_entry(&self.paths.config_dir, s.tenant)?.network) };
         let v = systemd();
+        if s.tenant != OWNER_SLOT && v < MIN_SYSTEMD_TENANT {
+            return Err(refuse(share::codes::TENANT_WALL_MISSING, format!("systemd {v} is older than {MIN_SYSTEMD_TENANT}: no tenant jobs here")));
+        }
         let plan = UnitPlan {
             unit: unit.clone(),
             job_uid: ids.uid,
@@ -929,8 +1102,9 @@ impl Executor {
             stop_grace_secs: s.stop_grace_secs,
             binary: self.paths.binary.clone(),
             slice: slice_name(s.tenant),
-            protect_proc: v >= MIN_SYSTEMD_TENANT,
+            protect_proc: v >= MIN_SYSTEMD_PROTECT_PROC,
             private_ipc: v >= MIN_SYSTEMD_PRIVATE_IPC,
+            lan_extra: if network == Network::NoLan { lan_deny_extra() } else { Vec::new() },
         };
         {
             let mut g = starting().lock().unwrap_or_else(|e| e.into_inner());
@@ -1082,7 +1256,30 @@ mod tests {
             slice: slice_name(0),
             protect_proc: false,
             private_ipc: false,
+            lan_extra: Vec::new(),
         }
+    }
+
+    /// Review A M3 / B3: no-lan denies the IPv6 encodings of private IPv4,
+    /// the benchmark and IETF ranges, and this machine's own on-link
+    /// prefixes and addresses (a dual-stack LAN's global IPv6).
+    #[test]
+    fn no_lan_denies_the_whole_lan() {
+        for r in ["2002::/16", "64:ff9b::/96", "198.18.0.0/15", "192.0.0.0/24", "10.0.0.0/8", "fc00::/7"] {
+            assert!(NO_LAN_DENY.contains(&r), "{r}");
+        }
+        use std::net::IpAddr;
+        assert_eq!(prefix_of("192.168.7.42".parse::<IpAddr>().unwrap(), 24), "192.168.7.0/24");
+        assert_eq!(prefix_of("2a01:4f8:1:2:3:4:5:6".parse::<IpAddr>().unwrap(), 64), "2a01:4f8:1:2::/64");
+        assert_eq!(prefix_of("203.0.113.9".parse::<IpAddr>().unwrap(), 32), "203.0.113.9/32");
+        let extra = lan_deny_extra();
+        assert!(extra.iter().all(|p| !p.starts_with("127.") && !p.starts_with("::1/")), "loopback stays: {extra:?}");
+        let mut p = plan();
+        p.network = Network::NoLan;
+        p.lan_extra = vec!["2a01:4f8:1:2::/64".into(), "2a01:4f8:1:2::9/128".into()];
+        let a = systemd_run_argv(&p);
+        let deny = a.iter().find(|x| x.starts_with("IPAddressDeny=")).unwrap();
+        assert!(deny.contains("2002::/16") && deny.contains("2a01:4f8:1:2::/64") && deny.contains("2a01:4f8:1:2::9/128"), "{deny}");
     }
 
     #[test]

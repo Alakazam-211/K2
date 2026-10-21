@@ -580,6 +580,10 @@ pub fn view(input: &Input<'_>, d: &Decision, viewer: &Viewer<'_>, request_id: &s
             e.eta_p90_secs = e.eta_p90_secs.map(share::round_eta);
             if viewer.owner {
                 e.server_label = viewer.labels.get(&slot).cloned();
+            } else {
+                // Why another server's job waits (its quota, its pause, its
+                // disk) is that server's business (review B1).
+                e.blocked_by = None;
             }
         }
         entries.push(e);
@@ -1014,6 +1018,18 @@ mod tests {
         assert_eq!(o.entries[1].server_label.as_deref(), Some("baden.k2.dev"));
         assert!(o.entries[1].job_id.is_none(), "the owner sees labels, not other servers' jobs");
         assert_eq!(o.totals.len(), 2);
+
+        // B1: why another server's job waits stays that server's business;
+        // its own server and the owner see it.
+        w.tenants[1].blocked = Some(codes::SHARE_PAUSED.into());
+        let d = w.decide();
+        let peer = Viewer { slot: 2, owner: false, labels: &labels };
+        let v = view(&w.input(), &d, &peer, "r3");
+        assert!(v.entries.iter().all(|e| e.blocked_by.is_none()), "{:?}", v.entries);
+        let own = view(&w.input(), &d, &Viewer { slot: 1, owner: false, labels: &labels }, "r4");
+        assert_eq!(own.entries[1].blocked_by.as_deref(), Some(codes::SHARE_PAUSED));
+        let o = view(&w.input(), &d, &Viewer { slot: 0, owner: true, labels: &labels }, "r5");
+        assert_eq!(o.entries[1].blocked_by.as_deref(), Some(codes::SHARE_PAUSED));
     }
 
     #[test]

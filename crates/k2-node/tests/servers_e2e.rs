@@ -61,8 +61,13 @@ async fn eventually<T>(what: &str, mut f: impl FnMut() -> Option<T>) -> T {
     panic!("timed out waiting for {what}");
 }
 
+/// The node's status as the machine owner's CLI shows it: the status file
+/// (0644, never a SAS) plus the 0600 SAS file (review B5).
 fn status(n: &TestNode) -> k2_node::status::Status {
-    k2_node::status::read(&n.layout.status()).unwrap()
+    let mut s = k2_node::status::read(&n.layout.status()).unwrap();
+    assert!(s.servers.iter().all(|l| l.sas.is_none()), "the status file never carries a SAS");
+    k2_node::admin::servers::fill_sas(&n.layout, &mut s.servers);
+    s
 }
 
 /// `servers.toml` with the owner (from the node's pin) and one more line.
@@ -159,6 +164,11 @@ async fn a_second_server_enrols_by_sas_and_sees_only_its_own() {
     // The node enrols itself; the SAS it shows is the one B computed.
     let line = eventually("the SAS on the node", || status(&n).servers.into_iter().find(|l| l.slot == 1 && l.sas.is_some())).await;
     assert_eq!(line.sas, b.last_sas.lock().unwrap().clone(), "both sides show the same SAS");
+    use std::os::unix::fs::PermissionsExt;
+    for f in [servers::SAS_FILE, servers::ENROLL_RESULT_FILE] {
+        let mode = std::fs::metadata(n.layout.run().join(f)).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "{f} is the node's only");
+    }
     assert_eq!(line.state, "pending");
     eventually("B in servers.list", || n.node.tenant(1).map(|_| ())).await;
     let l = servers::node_list(&n.node).unwrap();

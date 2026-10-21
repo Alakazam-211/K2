@@ -140,7 +140,9 @@ impl AdminConfig {
 
 /// `Ok(None)` when the file is missing (= remote admin off, never set up).
 pub fn read(path: &Path) -> Result<Option<AdminConfig>, String> {
-    let text = match std::fs::read_to_string(path) {
+    // Root trusts it (the pinned owner, the remote level, the node user):
+    // read as root, only root's own copy counts (review A M5).
+    let text = match super::jobs::read_root_trusted(path) {
         Ok(s) => s,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(format!("read {}: {e}", path.display())),

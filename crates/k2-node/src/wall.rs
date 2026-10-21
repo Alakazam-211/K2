@@ -298,10 +298,6 @@ pub fn job_exec(spec_path: &Path) -> String {
 
 // ── race-free tree walks (no symlink is ever followed) ──────────────
 
-fn cstr(p: &Path) -> Result<CString, String> {
-    CString::new(p.as_os_str().as_bytes()).map_err(|_| format!("{} has a NUL", p.display()))
-}
-
 fn errno() -> std::io::Error {
     std::io::Error::last_os_error()
 }
@@ -316,9 +312,76 @@ fn open_dir_at(dirfd: libc::c_int, name: &CStr) -> std::io::Result<OwnedFd> {
     Ok(unsafe { OwnedFd::from_raw_fd(fd) })
 }
 
+/// Open the directory at absolute `p` one component at a time, each with
+/// `O_NOFOLLOW` (review A, H2): a link the node or a job planted anywhere
+/// on the way fails the open instead of moving root somewhere else, and
+/// what's opened is the very directory checked (no re-resolution later).
+/// Only a link root owns, in a directory only root may write, is followed
+/// (`/var` → `private/var` on macOS; nobody else can plant or swap one).
+pub fn open_dir_path(p: &Path) -> Result<OwnedFd, String> {
+    use std::collections::VecDeque;
+    use std::path::Component;
+    let bad = |m: String| format!("open {}: {m}", p.display());
+    if !p.is_absolute() {
+        return Err(bad("not an absolute path".into()));
+    }
+    let slash = CString::new("/").unwrap();
+    let mut cur = open_dir_at(libc::AT_FDCWD, &slash).map_err(|e| bad(e.to_string()))?;
+    let mut todo: VecDeque<std::ffi::OsString> = VecDeque::new();
+    let push_path = |todo: &mut VecDeque<std::ffi::OsString>, q: &Path, front: bool| -> Result<(), String> {
+        let mut parts = Vec::new();
+        for c in q.components() {
+            match c {
+                Component::RootDir | Component::CurDir => {}
+                Component::Normal(n) => parts.push(n.to_os_string()),
+                Component::ParentDir => return Err("`..` on the way".into()),
+                Component::Prefix(_) => return Err("a path prefix".into()),
+            }
+        }
+        if front {
+            for n in parts.into_iter().rev() {
+                todo.push_front(n);
+            }
+        } else {
+            todo.extend(parts);
+        }
+        Ok(())
+    };
+    push_path(&mut todo, p, false).map_err(bad)?;
+    let mut hops = 0;
+    while let Some(n) = todo.pop_front() {
+        let name = CString::new(n.as_bytes()).map_err(|_| bad("a NUL".into()))?;
+        let st = lstat_at(&cur, &name).map_err(|e| bad(format!("{}: {e}", n.to_string_lossy())))?;
+        if mode_of(&st) & S_IFMT == S_IFLNK {
+            let parent = fstat(&cur).map_err(|e| bad(e.to_string()))?;
+            if st.st_uid != 0 || parent.st_uid != 0 || mode_of(&parent) & 0o022 != 0 {
+                return Err(bad(format!("{} is a link not root's own", n.to_string_lossy())));
+            }
+            hops += 1;
+            if hops > 16 {
+                return Err(bad("too many links".into()));
+            }
+            let mut buf = vec![0u8; 4096];
+            // SAFETY: a valid dir fd, C string and buffer.
+            let len = unsafe { libc::readlinkat(cur.as_raw_fd(), name.as_ptr(), buf.as_mut_ptr() as *mut libc::c_char, buf.len()) };
+            if len < 0 || len as usize >= buf.len() {
+                return Err(bad(format!("read link {}", n.to_string_lossy())));
+            }
+            buf.truncate(len as usize);
+            let target = std::path::PathBuf::from(std::ffi::OsStr::from_bytes(&buf));
+            if target.is_absolute() {
+                cur = open_dir_at(libc::AT_FDCWD, &slash).map_err(|e| bad(e.to_string()))?;
+            }
+            push_path(&mut todo, &target, true).map_err(bad)?;
+            continue;
+        }
+        cur = open_dir_at(cur.as_raw_fd(), &name).map_err(|e| bad(format!("{}: {e}", n.to_string_lossy())))?;
+    }
+    Ok(cur)
+}
+
 fn open_root(p: &Path) -> Result<OwnedFd, String> {
-    let c = cstr(p)?;
-    open_dir_at(libc::AT_FDCWD, &c).map_err(|e| format!("open {}: {e}", p.display()))
+    open_dir_path(p)
 }
 
 fn fstat(fd: &OwnedFd) -> std::io::Result<libc::stat> {
@@ -374,6 +437,7 @@ fn names(dir: &OwnedFd) -> std::io::Result<Vec<CString>> {
 const S_IFMT: u32 = libc::S_IFMT as u32;
 const S_IFDIR: u32 = libc::S_IFDIR as u32;
 const S_IFREG: u32 = libc::S_IFREG as u32;
+const S_IFLNK: u32 = libc::S_IFLNK as u32;
 
 fn mode_of(st: &libc::stat) -> u32 {
     st.st_mode as u32
@@ -435,6 +499,10 @@ fn reclaim_in(dir: &OwnedFd, uid: u32, gid: u32, depth: u32, s: &mut WalkStats) 
                 }
                 Err(_) => s.skipped += 1,
             }
+        } else if mode_of(&st) & S_IFMT == S_IFREG && st.st_nlink > 1 {
+            // A hard link may be a file from outside the tree (where
+            // protected_hardlinks is off): never chown one (review A H2).
+            s.skipped += 1;
         } else {
             // SAFETY: valid fd + name; NOFOLLOW changes a link itself.
             let rc = unsafe { libc::fchownat(dir.as_raw_fd(), n.as_ptr(), uid, gid, libc::AT_SYMLINK_NOFOLLOW) };
@@ -569,6 +637,51 @@ pub fn secure_dir(path: &Path, uid: u32, gid: u32, mode: u32) -> Result<(), Stri
         return Err(format!("chmod {}: {}", path.display(), errno()));
     }
     Ok(())
+}
+
+/// Root: remove `name` in the open directory `parent` and, for a
+/// directory, everything in it, through fds only: no link is followed
+/// anywhere (a link is removed as a link), nothing is reached by a path
+/// another user could swap (review A, M1). Bounded depth.
+pub fn remove_tree_at(parent: &OwnedFd, name: &CStr) -> Result<(), String> {
+    fn rm(parent: &OwnedFd, name: &CStr, depth: u32) -> std::io::Result<()> {
+        let st = match lstat_at(parent, name) {
+            Ok(st) => st,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e),
+        };
+        if mode_of(&st) & S_IFMT == S_IFDIR {
+            if depth >= MAX_DEPTH {
+                return Err(std::io::Error::other("too deep"));
+            }
+            let dir = open_dir_at(parent.as_raw_fd(), name)?;
+            for n in names(&dir)? {
+                rm(&dir, &n, depth + 1)?;
+            }
+            // SAFETY: valid dir fd and C string.
+            if unsafe { libc::unlinkat(parent.as_raw_fd(), name.as_ptr(), libc::AT_REMOVEDIR) } != 0 {
+                return Err(errno());
+            }
+        } else {
+            // SAFETY: valid dir fd and C string; a link goes as a link.
+            if unsafe { libc::unlinkat(parent.as_raw_fd(), name.as_ptr(), 0) } != 0 {
+                return Err(errno());
+            }
+        }
+        Ok(())
+    }
+    rm(parent, name, 0).map_err(|e| format!("remove {}: {e}", name.to_string_lossy()))
+}
+
+/// Root: the open, root-owned directory at `p` that only root may write
+/// (`<home>-t`, `/var/lib`): `Err` when it's anyone else's.
+pub fn open_root_owned_dir(p: &Path) -> Result<OwnedFd, String> {
+    let fd = open_dir_path(p)?;
+    let st = fstat(&fd).map_err(|e| format!("stat {}: {e}", p.display()))?;
+    if st.st_uid != 0 || mode_of(&st) & 0o022 != 0 {
+        return Err(format!("{} must be root's and writable by root only (uid {}, mode {:o})", p.display(), st.st_uid, mode_of(&st) & 0o7777));
+    }
+    Ok(fd)
 }
 
 /// Root: `chmod o-rwx` one directory (never through a link).
@@ -814,6 +927,37 @@ mod tests {
         assert_eq!(std::fs::metadata(&outside).unwrap().permissions().mode() & 0o777, 0o500, "the link's target is untouched");
         std::fs::remove_dir_all(&t).unwrap();
         std::fs::set_permissions(&outside, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    /// H2: a link anywhere on the way to a reclaim root (not only its last
+    /// component) fails the open: the race that swapped `cache/x` for a
+    /// link to `/` can't move root's chown. A hard-linked file is never
+    /// chowned. Root's own links in root's dirs still resolve (macOS /var).
+    #[test]
+    fn reclaim_never_follows_a_link_on_the_way() {
+        use std::os::unix::fs::MetadataExt;
+        let d = crate::util::temp_dir("reclaim-race");
+        let real = d.join("real");
+        std::fs::create_dir_all(real.join("etc")).unwrap();
+        std::os::unix::fs::symlink(&real, d.join("x")).unwrap();
+        let (uid, gid) = unsafe { (libc::geteuid(), libc::getegid()) };
+        let e = reclaim(&d.join("x/etc"), uid, gid).unwrap_err();
+        assert!(e.contains("a link not root's own") || e.contains("Too many levels") || e.contains("not a directory"), "{e}");
+        assert!(open_dir_path(&d.join("x")).is_err(), "the last component too");
+        assert!(open_dir_path(&real.join("etc")).is_ok());
+        assert!(open_dir_path(Path::new("relative/path")).is_err());
+        assert!(open_dir_path(&real.join("../real")).is_err(), "no `..` on the way");
+        // The system's own links (root's, in root's dirs) still resolve.
+        let tmp = std::env::temp_dir();
+        let via = open_dir_path(&tmp).unwrap();
+        assert_eq!(fstat(&via).unwrap().st_ino as u64, std::fs::metadata(&tmp).unwrap().ino());
+        // Hard links are skipped.
+        let t = d.join("tree");
+        std::fs::create_dir_all(&t).unwrap();
+        std::fs::write(d.join("victim"), "v").unwrap();
+        std::fs::hard_link(d.join("victim"), t.join("hl")).unwrap();
+        let s = reclaim(&t, uid, gid).unwrap();
+        assert!(s.skipped >= 1, "{s:?}");
     }
 
     #[test]

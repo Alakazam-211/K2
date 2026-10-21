@@ -211,7 +211,7 @@ async fn cmd_run(a: &Args) -> Result<(), String> {
     k2_node::nlog!("shutting down: stopping running jobs");
     // A shared node's update or restart (the executor marked it): the jobs
     // it couldn't drain end `node_update`, infra without a strike (V55).
-    let why = if k2_node::admin::update::recent_update_mark(&node.layout().home, k2_node::util::now()) {
+    let why = if k2_node::admin::update::recent_update_mark(&node.layout().config, k2_node::util::now()) {
         k2_node_proto::share::codes::NODE_UPDATE
     } else {
         "node_shutdown"
@@ -273,7 +273,8 @@ async fn cmd_enroll(a: &Args) -> Result<(), String> {
 }
 
 fn cmd_status(a: &Args) -> Result<(), String> {
-    let s = k2_node::status::read(&a.layout().status())?;
+    let mut s = k2_node::status::read(&a.layout().status())?;
+    k2_node::admin::servers::fill_sas(&a.layout(), &mut s.servers);
     if a.has("--json") {
         println!("{}", serde_json::to_string_pretty(&s).map_err(|e| e.to_string())?);
         return Ok(());
@@ -441,7 +442,10 @@ fn cmd_servers(a: &Args) -> Result<(), String> {
     let r = match a.positional.get(1).map(String::as_str) {
         Some("list") | None => {
             let file = servers::list_file(&ctx);
-            let status = k2_node::status::read(&layout.status()).ok();
+            let status = k2_node::status::read(&layout.status()).ok().map(|mut s| {
+                servers::fill_sas(&layout, &mut s.servers);
+                s
+            });
             if a.has("--json") {
                 return show(serde_json::json!({"file": file, "node": status.map(|s| s.servers)}));
             }
@@ -486,8 +490,16 @@ fn cmd_servers(a: &Args) -> Result<(), String> {
                 for_secs,
                 limits: share_overrides(&pairs, a.has("--gate"), a.has("--exclusive"))?,
             };
+            if dev_node && !is_root() {
+                // A --dev test node has no wall: its other servers' jobs run
+                // as you (review A L1). Own servers only, and said loudly.
+                if trust == share::Trust::Team {
+                    return Err("this is a --dev test node with no job wall: it never takes other people's servers (--trust team)".into());
+                }
+                eprintln!("WARNING: a --dev test node has no job wall: {}'s jobs run as you and can read your files. Tests only.", servers::label_of(&args.url));
+            }
             if trust == share::Trust::Team {
-                println!("Jobs from {} get their own user and folders here. They can't read your files or other servers' jobs. They do share this machine's kernel, CPU and disk, and they can reach the internet and any service on this machine's loopback. Only add people you trust.", servers::label_of(&args.url));
+                println!("Jobs from {} get their own user and folders here. They can't read your files or other servers' job folders. They do share this machine's kernel, CPU and disk, and they can reach the internet and any service on this machine's loopback, including servers other servers' jobs start there (and see this machine's open sockets in /proc/net). Only add people you trust.", servers::label_of(&args.url));
             }
             servers::run(&ctx, share::VERB_ADD, &serde_json::to_value(&args).map_err(|e| e.to_string())?)
         }

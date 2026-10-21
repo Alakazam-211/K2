@@ -412,6 +412,27 @@ async fn views_redact_other_servers_and_quotes_follow_asks() {
     assert_eq!(q.len(), 1, "one distinct size asked");
     assert!(!q[0].starts_now, "the node is busy");
     assert_eq!((q[0].cpu_millis, q[0].mem_bytes), (1000, 1 << 30));
+
+    // B6: a session asking faster than once a second gets the last view
+    // again (under its own request id); a second later, a fresh one.
+    let mut cb = w.cb;
+    let ask = |id: &str| Frame::QueueGet(k2_node_proto::share::QueueGet { request_id: id.into() });
+    let view_of = |f: Vec<Frame>| match f.last() {
+        Some(Frame::QueueView(v)) => v.clone(),
+        other => panic!("{other:?}"),
+    };
+    cb.send(ask("v1"));
+    let v1 = view_of(cb.until(|f| matches!(f, Frame::QueueView(_))).await);
+    w.ca.send(Frame::Assign(assign(job("node-1", "a-more", &["/bin/echo", "x"]), 1)));
+    wait_row(&w.owner, "a-more", 1, "queued", queued).await;
+    cb.send(ask("v2"));
+    let v2 = view_of(cb.until(|f| matches!(f, Frame::QueueView(_))).await);
+    assert_eq!(v2.request_id, "v2");
+    assert_eq!(v2.entries.len(), v1.entries.len(), "within a second: the same view, not recomputed");
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    cb.send(ask("v3"));
+    let v3 = view_of(cb.until(|f| matches!(f, Frame::QueueView(_))).await);
+    assert_eq!((v3.request_id.as_str(), v3.entries.len()), ("v3", v1.entries.len() + 1), "a second later: fresh");
     w.n.node.stop_all(JobState::Cancelled, "test_over");
 }
 

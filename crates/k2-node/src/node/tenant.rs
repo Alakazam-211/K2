@@ -436,7 +436,7 @@ pub fn job_key(slot: Slot, job_id: &str, generation: u32) -> String {
 pub(super) async fn reconcile(t: &Tenant, opts: &NodeOptions, wall: &Wall) -> Result<(), String> {
     // A restart the executor made for an update, rollback or k2-node
     // restart: `node_update` (infra, no node-health strike, V55).
-    let why = if crate::admin::update::recent_update_mark(&opts.layout.home, opts.clock.now()) {
+    let why = if crate::admin::update::recent_update_mark(&opts.layout.config, opts.clock.now()) {
         k2_node_proto::share::codes::NODE_UPDATE
     } else {
         "node_restart"

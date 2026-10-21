@@ -2272,6 +2272,10 @@ mod tests {
                 "0201_pg_majors",
                 "0211_push_device_keys",
                 "0213_person_wallets",
+                // 0.46.3: node sharing (the server's share mirror).
+                "0214_compute_node_share",
+                "0215_compute_jobs_node_queue",
+                "0216_compute_node_servers",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -3008,7 +3012,15 @@ mod tests {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
             conn.execute("DELETE FROM _migrations WHERE name = '0164_garden_data'", []).unwrap();
-            // 0213 (person wallets, 0.46.3) is the newest: its record goes
+            // 0216 (a shared node's server list, 0.46.3) is the newest: its
+            // table goes. 0215 and 0214 (node-queued jobs, the share mirror)
+            // came before it: their records go (their columns stay;
+            // re-adding them is skipped as duplicate columns).
+            conn.execute_batch("DROP TABLE compute_node_servers;").unwrap();
+            conn.execute("DELETE FROM _migrations WHERE name = '0216_compute_node_servers'", []).unwrap();
+            conn.execute("DELETE FROM _migrations WHERE name = '0215_compute_jobs_node_queue'", []).unwrap();
+            conn.execute("DELETE FROM _migrations WHERE name = '0214_compute_node_share'", []).unwrap();
+            // 0213 (person wallets, 0.46.3) came before them: its record goes
             // (its tables and indexes are all IF NOT EXISTS).
             conn.execute("DELETE FROM _migrations WHERE name = '0213_person_wallets'", []).unwrap();
             // 0211 (push device keys, 0.46.3) came before it: its record goes
@@ -3019,7 +3031,7 @@ mod tests {
             // (its tables are IF NOT EXISTS, its columns are skipped as
             // duplicates, its backfills are idempotent).
             conn.execute("DELETE FROM _migrations WHERE name = '0201_pg_majors'", []).unwrap();
-            // 0197 (agent App permissions, 0.46.3) came before it: its
+            // 0197 (agent App permissions, 0.46.3) came before them: its
             // record goes (its projects columns stay and re-adding them is
             // skipped as duplicate columns; its review table is IF NOT
             // EXISTS and its inserts/updates are idempotent).

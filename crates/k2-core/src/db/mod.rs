@@ -1482,6 +1482,14 @@ fn run_migrations_through(conn: &Connection, last: Option<&str>) -> Result<()> {
         // ever stored here. 0198–0212 belong to other 0.46.3 lanes;
         // renumber freely on a slip (and edit the migration-order tests).
         ("0213_person_wallets", include_str!("../../drizzle_sql/0213_person_wallets.sql")),
+        // 0218 — permission cards (prd-agent-settings-cards-v1 rev 3.1;
+        // 0.46.3 Beta): the per-agent switch column
+        // `projects.agents_can_request_permissions` (DEFAULT 0; deliberately
+        // not on `Project`) and the `permission_requests` /
+        // `permission_notes` tables. Additive only;
+        // nothing reads them while the switches are off. 0214–0216 are
+        // compute sharing and 0217 the disk guard; lane I orders them.
+        ("0218_permission_cards", include_str!("../../drizzle_sql/0218_permission_cards.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2145,7 +2153,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0213_person_wallets",
+            last_name, "0218_permission_cards",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2200,6 +2208,7 @@ mod tests {
                 "0201_pg_majors",
                 "0211_push_device_keys",
                 "0213_person_wallets",
+                "0218_permission_cards",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2258,6 +2267,7 @@ mod tests {
                 "0201_pg_majors",
                 "0211_push_device_keys",
                 "0213_person_wallets",
+                "0218_permission_cards",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -2280,6 +2290,39 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM _migrations WHERE name >= '0165'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(again, tail.len() as i64, "the 0.46.0 tail is recorded once: {tail:?}");
+    }
+
+    /// 0218 (permission cards) on a database that stops just before it
+    /// (0213 on r4): existing workspaces keep their rows and get the
+    /// per-agent switch OFF, the two tables appear empty, a second run is a
+    /// no-op, and the column never reaches `Project`'s JSON (vs-live C8:
+    /// off = today).
+    #[test]
+    fn a_pre_0218_database_upgrades_through_0218_permission_cards() {
+        let conn = fresh_memory();
+        run_migrations_through(&conn, Some("0213_person_wallets")).unwrap();
+        assert!(!table_names(&conn).iter().any(|n| n == "permission_requests"), "no cards tables before 0218");
+        conn.execute("INSERT INTO projects (id, name, path) VALUES ('p-old', 'old', '/tmp/p-old')", []).unwrap();
+        let before = serde_json::to_value(crate::db::schema::Project::get(&conn, "p-old").unwrap()).unwrap();
+
+        run_migrations(&conn).unwrap();
+        let switch: i64 = conn
+            .query_row("SELECT agents_can_request_permissions FROM projects WHERE id = 'p-old'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(switch, 0, "existing workspaces start with the per-agent switch off");
+        for t in ["permission_requests", "permission_notes"] {
+            assert!(table_names(&conn).iter().any(|n| n == t), "{t} missing after 0218");
+            let n: i64 = conn.query_row(&format!("SELECT COUNT(*) FROM {t}"), [], |r| r.get(0)).unwrap();
+            assert_eq!(n, 0, "{t} starts empty");
+        }
+        let after = serde_json::to_value(crate::db::schema::Project::get(&conn, "p-old").unwrap()).unwrap();
+        assert_eq!(after, before, "Project JSON is byte-identical across 0218");
+        assert!(!after.to_string().contains("RequestPermissions"), "the switch column is never serialized");
+        run_migrations(&conn).unwrap();
+        let once: i64 = conn
+            .query_row("SELECT COUNT(*) FROM _migrations WHERE name = '0218_permission_cards'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(once, 1, "0218 is recorded once");
     }
 
     /// A 0.46.0 database (last migration 0181) with a registered phone
@@ -2994,7 +3037,11 @@ mod tests {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
             conn.execute("DELETE FROM _migrations WHERE name = '0164_garden_data'", []).unwrap();
-            // 0213 (person wallets, 0.46.3) is the newest: its record goes
+            // 0218 (permission cards, 0.46.3) is the newest: its record
+            // goes (its projects column stays and re-adding it is skipped as
+            // a duplicate column; its tables and indexes are IF NOT EXISTS).
+            conn.execute("DELETE FROM _migrations WHERE name = '0218_permission_cards'", []).unwrap();
+            // 0213 (person wallets, 0.46.3) came before it: its record goes
             // (its tables and indexes are all IF NOT EXISTS).
             conn.execute("DELETE FROM _migrations WHERE name = '0213_person_wallets'", []).unwrap();
             // 0211 (push device keys, 0.46.3) came before it: its record goes

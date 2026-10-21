@@ -2169,24 +2169,48 @@ pub(crate) enum Presented {
     NoThread,
 }
 
-/// Post an action card on the person's Thread with the agent of
-/// `project_id`: `prompt`, one button per `options`, 7 days to answer. One
+/// Who an action card's push goes to (prd-agent-settings-cards-v1 rev 3.1
+/// §4.1, vs-live C11).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CardAudience {
+    /// Today's push for an agent post (`push_agent_post`): keep-as-mine.
+    AgentPost,
+    /// A permission card: a targeted Thread push to these eligible logins
+    /// only (`permission::routing::push_card`, lane A2). Permission cards
+    /// never call `push_agent_post`; an empty list sends no push.
+    // P0 contract: lane A1 constructs it when it posts permission cards.
+    #[allow(dead_code)]
+    Logins(Vec<String>),
+}
+
+/// Post an action card on a Thread with the agent of `project_id`:
+/// `prompt`, one button per `options`, open until `expires_at` (unix
+/// seconds). `conversation_id`: the asking conversation, or None for the
+/// workspace's pinned Chat (keep-as-mine; `NoThread` when it has none). One
 /// waiting card per `action.id` + `action.dedupe`: with `replace` the
 /// waiting one is voided and this (newer) one posted, else nothing new.
+/// `audience` picks the push.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn present_action_card(
+    conversation_id: Option<&str>,
     project_id: &str,
     prompt: &str,
     options: &[&str],
     action: overlay::CardAction,
     replace: bool,
+    expires_at: i64,
+    audience: CardAudience,
 ) -> Result<Presented, String> {
-    let conversation_id = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        match pinned_chat_id(&conn, project_id) {
-            Ok(Some(c)) => c,
-            Ok(None) => return Ok(Presented::NoThread),
-            Err(r) => return Err(format!("no Thread for {project_id}: {}", r.body)),
+    let conversation_id = match conversation_id {
+        Some(c) => c.to_string(),
+        None => {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            match pinned_chat_id(&conn, project_id) {
+                Ok(Some(c)) => c,
+                Ok(None) => return Ok(Presented::NoThread),
+                Err(r) => return Err(format!("no Thread for {project_id}: {}", r.body)),
+            }
         }
     };
     let addr = k2_core::workspace_session_handles::workspace_address_name_shared(project_id)?;
@@ -2213,20 +2237,38 @@ pub(crate) fn present_action_card(
         prompt,
         options.iter().map(|o| o.to_string()).collect(),
         false,
-        Some(now + overlay::DEFAULT_CARD_EXPIRY_SECS),
+        Some(expires_at),
         Some(action),
     )?;
     crate::overlay_ws::emit_links(&links, &item.doc);
     drop(conn);
-    let resolved = ResolvedOverlay {
-        conversation_id,
-        project_id: project_id.to_string(),
-        addr: addr.clone(),
-        requested_addr: addr.clone(),
-        canonical_alias: true,
-    };
-    push_agent_post(&resolved, &item, k2_core::push::ThreadMsgKind::Choice, prompt, 0);
+    match audience {
+        CardAudience::AgentPost => {
+            let resolved = ResolvedOverlay {
+                conversation_id,
+                project_id: project_id.to_string(),
+                addr: addr.clone(),
+                requested_addr: addr.clone(),
+                canonical_alias: true,
+            };
+            push_agent_post(&resolved, &item, k2_core::push::ThreadMsgKind::Choice, prompt, 0);
+        }
+        CardAudience::Logins(logins) => {
+            crate::permission::routing::push_card(&conversation_id, project_id, &addr, &item.id, item.seq, &logins);
+        }
+    }
     Ok(Presented::Card { id: item.id, addr })
+}
+
+/// Rewrite a **pending** action card's `view` (notes, guest counts,
+/// `applying`, the switch-off close) and publish the same id at the same
+/// seq, projected again for each subscriber (rev 3.1 §4.1, C11).
+// P0 contract: lanes A1/A2/F call it (notes, counts, applying, close).
+#[allow(dead_code)]
+pub(crate) fn update_action_view(conversation_id: &str, card_id: &str, view: serde_json::Value) -> Result<(), String> {
+    let cb = overlay::update_action_view(conversation_id, card_id, view)?;
+    publish_card_frame(&cb);
+    Ok(())
 }
 
 /// 403 `action_card_person_only`.
@@ -3402,7 +3444,28 @@ mod tests {
             params: serde_json::json!({ "widget": widget, "hash": hash, "agent": "builder" }),
             dedupe: widget.to_string(),
             result: None,
+            view: None,
         }
+    }
+
+    /// Keep-as-mine's call: the pinned Chat, 7 days, today's push.
+    fn present_keep(
+        project_id: &str,
+        prompt: &str,
+        options: &[&str],
+        action: overlay::CardAction,
+        replace: bool,
+    ) -> Result<Presented, String> {
+        present_action_card(
+            None,
+            project_id,
+            prompt,
+            options,
+            action,
+            replace,
+            overlay::now_secs() + overlay::DEFAULT_CARD_EXPIRY_SECS,
+            CardAudience::AgentPost,
+        )
     }
 
     const KEEP_OPTIONS: [&str; 2] = [crate::action_cards::KEEP_AS_MINE, "Leave it as builder's"];
@@ -3429,7 +3492,7 @@ mod tests {
         pin(&project_id, &conv);
         let widget = format!("kw{}", &uuid::Uuid::new_v4().simple().to_string()[..10]);
         let hash = "a".repeat(64);
-        let id = match present_action_card(&project_id, "builder changed it. Keep it?", &KEEP_OPTIONS, keep_action(&widget, &hash), true)
+        let id = match present_keep(&project_id, "builder changed it. Keep it?", &KEEP_OPTIONS, keep_action(&widget, &hash), true)
             .expect("present")
         {
             Presented::Card { id, addr } => {
@@ -3491,6 +3554,50 @@ mod tests {
         assert_error_code(&r, "409 Conflict", "card_not_pending");
     }
 
+    /// Permission cards P0 contract (rev 3.1 §4.1, C11): a card posted on a
+    /// named conversation with its own expiry and a Logins audience; a card
+    /// without a view serializes no `view` key; the view is rewritten while
+    /// pending (same id, same seq) and refused once the card is answered.
+    #[test]
+    fn action_card_on_a_conversation_and_its_pending_view_rewrite() {
+        let handle = format!("ovlact4{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        let conv = uuid::Uuid::new_v4().to_string();
+        pin(&project_id, &conv);
+        let expires = overlay::now_secs() + 3600;
+        let Presented::Card { id, .. } = present_action_card(
+            Some(&conv),
+            &project_id,
+            "Keep it?",
+            &KEEP_OPTIONS,
+            keep_action("kwv", &"e".repeat(64)),
+            true,
+            expires,
+            CardAudience::Logins(Vec::new()),
+        )
+        .expect("present") else {
+            panic!("a card on the named conversation")
+        };
+        let doc = overlay::get_thread_doc(&conv, &id).expect("doc").expect("card");
+        let choice = doc.choice.clone().expect("choice");
+        assert_eq!(choice.expires_at, Some(expires), "the caller's expiry, not the 7-day default");
+        let wire = serde_json::to_value(&doc).expect("doc json");
+        assert!(wire["choice"]["action"].get("view").is_none(), "no view key on a card without one: {wire}");
+
+        let view = serde_json::json!({ "v": 1, "kind": "permission", "state": "pending" });
+        let a = overlay::update_action_view(&conv, &id, view.clone()).expect("pending view rewrite");
+        let b = overlay::update_action_view(&conv, &id, view.clone()).expect("again");
+        assert_eq!((a.doc_id.as_str(), a.seq), (id.as_str(), b.seq), "same id, same seq");
+        update_action_view(&conv, &id, view.clone()).expect("route-level rewrite publishes the frame");
+        let stored = overlay::get_thread_doc(&conv, &id).expect("doc").expect("card").choice.expect("choice");
+        assert_eq!(stored.action.and_then(|x| x.view), Some(view));
+
+        let r = post_json("/cli/thread/answer", &HashMap::new(), serde_json::json!({ "addr": handle, "id": id, "answer": KEEP_OPTIONS[1] }));
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let e = overlay::update_action_view(&conv, &id, serde_json::json!({})).expect_err("answered: no rewrite");
+        assert_eq!(e, overlay::CARD_NOT_PENDING);
+    }
+
     /// "Leave it as builder's" keeps nothing; a login that isn't this
     /// server's owner can't answer a settings card.
     #[test]
@@ -3501,7 +3608,7 @@ mod tests {
         pin(&project_id, &conv);
         let widget = format!("kw{}", &uuid::Uuid::new_v4().simple().to_string()[..10]);
         let hash = "b".repeat(64);
-        let Presented::Card { id, .. } = present_action_card(&project_id, "Keep it?", &KEEP_OPTIONS, keep_action(&widget, &hash), true).expect("present")
+        let Presented::Card { id, .. } = present_keep(&project_id, "Keep it?", &KEEP_OPTIONS, keep_action(&widget, &hash), true).expect("present")
         else {
             panic!("a pinned Thread gets a card")
         };
@@ -3523,22 +3630,22 @@ mod tests {
         let handle = format!("ovlact3{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let (project_id, _) = seed(&handle);
         assert_eq!(
-            present_action_card(&project_id, "Keep it?", &KEEP_OPTIONS, keep_action("kwx", &"c".repeat(64)), true).expect("present"),
+            present_keep(&project_id, "Keep it?", &KEEP_OPTIONS, keep_action("kwx", &"c".repeat(64)), true).expect("present"),
             Presented::NoThread
         );
         let conv = uuid::Uuid::new_v4().to_string();
         pin(&project_id, &conv);
         let Presented::Card { id: first, .. } =
-            present_action_card(&project_id, "Keep it?", &KEEP_OPTIONS, keep_action("kwx", &"c".repeat(64)), true).expect("present")
+            present_keep(&project_id, "Keep it?", &KEEP_OPTIONS, keep_action("kwx", &"c".repeat(64)), true).expect("present")
         else {
             panic!("card")
         };
         assert_eq!(
-            present_action_card(&project_id, "Keep it?", &KEEP_OPTIONS, keep_action("kwx", &"d".repeat(64)), false).expect("present"),
+            present_keep(&project_id, "Keep it?", &KEEP_OPTIONS, keep_action("kwx", &"d".repeat(64)), false).expect("present"),
             Presented::Waiting { id: first.clone() }
         );
         let Presented::Card { id: second, .. } =
-            present_action_card(&project_id, "Keep it?", &KEEP_OPTIONS, keep_action("kwx", &"d".repeat(64)), true).expect("present")
+            present_keep(&project_id, "Keep it?", &KEEP_OPTIONS, keep_action("kwx", &"d".repeat(64)), true).expect("present")
         else {
             panic!("card")
         };
@@ -3547,7 +3654,7 @@ mod tests {
         assert_eq!(action_card_status(&conv, &second), "pending");
         // Another widget is another thing.
         assert!(matches!(
-            present_action_card(&project_id, "Keep it?", &KEEP_OPTIONS, keep_action("kwy", &"c".repeat(64)), false).expect("present"),
+            present_keep(&project_id, "Keep it?", &KEEP_OPTIONS, keep_action("kwy", &"c".repeat(64)), false).expect("present"),
             Presented::Card { .. }
         ));
     }

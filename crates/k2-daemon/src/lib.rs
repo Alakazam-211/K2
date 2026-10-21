@@ -113,6 +113,9 @@ pub mod usage_live;
 pub mod ops_routes;
 pub mod ops_stream_ws;
 pub mod pending_live;
+// Permission cards (prd-agent-settings-cards-v1, 0.46.3 Beta): P0 stubs per
+// lane; nothing is wired, so with the switches off K2 is unchanged.
+mod permission;
 pub mod pinned_chat;
 // S1 (presence/multiplayer arc): process-wide connected-users registry +
 // roster broadcast. Registered from the `/cli/sessions/events` WS handler.

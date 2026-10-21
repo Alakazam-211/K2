@@ -471,6 +471,14 @@ pub struct AppSettings {
     /// set. Owner-only to change. Default MUST stay OFF.
     #[serde(default)]
     pub compute_preview: bool,
+    /// Permission cards (Beta), Settings → Access → Permission Cards
+    /// (prd-agent-settings-cards-v1 §2.1): the global switch. Persisted
+    /// mirror of `K2_PERMISSION_CARDS` (force-on);
+    /// `permission::gate::server_on()` is true when EITHER is set.
+    /// Owner-only to change. Default MUST stay OFF while in Beta. P0: not
+    /// yet synced into the gate (lane B).
+    #[serde(default)]
+    pub permission_cards: bool,
     /// The App runtime switch, Settings → Apps → This server → "Apps
     /// (beta)" (wire `apps`; 0.46.2 and older wrote `appsPreview`, which
     /// [`normalize_legacy_apps`] maps). Persisted mirror of `K2_APPS`
@@ -1160,6 +1168,7 @@ impl Default for AppSettings {
             agents_can_create_connections: false,
             federation_enabled: false,
             compute_preview: false,
+            permission_cards: false,
             apps: true,
             apps_process_engine: false,
             apps_auto_prepare: crate::deploy::AUTO_PREPARE_DEFAULT,

@@ -263,11 +263,21 @@ fn keep_as_mine(widget: &str, before: Option<(String, k2_core::garden_data::Made
         params: json!({ "widget": widget, "hash": new_hash, "agent": agent }),
         dedupe: widget.to_string(),
         result: None,
+        view: None,
     };
     let leave = crate::action_cards::leave_label(&agent);
     let options = [crate::action_cards::KEEP_AS_MINE, leave.as_str()];
     let prompt = crate::action_cards::keep_prompt(&agent, widget, &widget_place(widget));
-    match crate::overlay_routes::present_action_card(project, &prompt, &options, action, true) {
+    match crate::overlay_routes::present_action_card(
+        None,
+        project,
+        &prompt,
+        &options,
+        action,
+        true,
+        k2_core::overlay::now_secs() + k2_core::overlay::DEFAULT_CARD_EXPIRY_SECS,
+        crate::overlay_routes::CardAudience::AgentPost,
+    ) {
         Ok(crate::overlay_routes::Presented::Card { id, addr }) => return json!({ "card": id, "addr": addr }),
         Ok(crate::overlay_routes::Presented::Waiting { id }) => return json!({ "card": id }),
         Ok(crate::overlay_routes::Presented::NoThread) => {}

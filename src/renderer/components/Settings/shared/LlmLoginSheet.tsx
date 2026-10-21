@@ -23,6 +23,7 @@ import {
   LOGIN_STATE_LABELS,
   type LlmLogin,
   type LoginMode,
+  useLlmAccountsStore,
 } from '@/stores/llm-accounts'
 
 export type LoginSheetStart =
@@ -49,6 +50,9 @@ export function LlmLoginSheet({
   const [showTerminal, setShowTerminal] = useState(false)
   const [copied, setCopied] = useState(false)
   const [madeActive, setMadeActive] = useState<null | 'active' | 'kept'>(null)
+  // Only Admin and above may make it the server default (the daemon says
+  // so in the list doc); a Member never sees the offer.
+  const canChangeDefault = useLlmAccountsStore((s) => s.entries[scope.id]?.doc?.canChangeDefault !== false)
   const loginRef = useRef<LlmLogin | null>(null)
   loginRef.current = login
 
@@ -275,7 +279,7 @@ export function LlmLoginSheet({
               </div>
             )}
 
-            {login.state === 'signed_in' && login.offerMakeActive && madeActive === null && (
+            {login.state === 'signed_in' && login.offerMakeActive && madeActive === null && canChangeDefault && (
               <div className="border border-[var(--color-border)] px-3 py-2 space-y-2">
                 <div className="text-xs text-[var(--color-text-secondary)]">Make the new subscription the server default?</div>
                 <div className="text-[10px] text-[var(--color-text-muted)]">

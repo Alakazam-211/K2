@@ -484,6 +484,28 @@ describe('Sign-in sheet', () => {
     })
     expect(polls).toBe(after)
   })
+
+  it('a Member is never offered "make it the server default" after a sign-in', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    h.daemonCliGet.mockImplementation(async (route: string, params?: Record<string, string>) => {
+      if (route === 'llm/accounts/list') {
+        return { ...doc(), canChangeDefault: false, changeDefaultReason: 'admins only' }
+      }
+      if (route !== 'llm/accounts/login/status') return routeGet(route, params)
+      return { login: { ...LOGIN, state: 'signed_in', done: true, offerMakeActive: true } }
+    })
+    await renderColumn()
+    fireEvent.click(within(screen.getByTestId('llm-account-acc_stale')).getByRole('button', { name: 'Sign in again' }))
+    fireEvent.click(screen.getByTestId('llm-login-start'))
+    await waitFor(() =>
+      expect(h.daemonCliPost).toHaveBeenCalledWith('llm/accounts/login', { id: 'acc_stale', mode: 'this_computer' }),
+    )
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1600)
+    })
+    expect(screen.queryByText('Make the new subscription the server default?')).toBeNull()
+    expect(h.daemonCliPost).not.toHaveBeenCalledWith('llm/accounts/switch', expect.anything())
+  })
 })
 
 describe('keychain repair warning', () => {
@@ -521,7 +543,15 @@ describe('keychain repair warning', () => {
 
 describe('store helpers', () => {
   it('parses a malformed list into an empty doc and reads a refusal hint', () => {
-    expect(parseAccountsDoc(null)).toEqual({ tools: [], logins: [], airgap: false, switchNote: '', keychainRepairs: [] })
+    expect(parseAccountsDoc(null)).toEqual({
+      tools: [],
+      logins: [],
+      airgap: false,
+      switchNote: '',
+      keychainRepairs: [],
+      canChangeDefault: true,
+      changeDefaultReason: null,
+    })
     expect(errorText(new Error('{"error":{"code":"owner_only","hint":"Change tokens on Settings → LLMs → Tokens."}}'))).toBe(
       'Change tokens on Settings → LLMs → Tokens.',
     )

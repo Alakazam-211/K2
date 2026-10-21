@@ -69,6 +69,9 @@ export const LOGIN_TOOL_ROWS: Array<{ id: string; label: string; agentIcon: stri
 export const SWITCH_NOTE =
   'One token per tool is the server default. Changing it affects every chat that uses Server default on this server; running sessions pick up the new token. Workspaces and chats set to their own token keep it.'
 
+/** A Member login can't change the server default (Admin and above). */
+export const ADMIN_SWITCH_REASON = 'Only an Admin or the Owner can change the server default token.'
+
 export const ACTIVE_REMOVE_REASON = 'This is the server default; make another token the server default first'
 
 /** On the server default's row: why it has no "Sign in again". */
@@ -241,7 +244,13 @@ function AccountRow({
   // A sign-in rewrites the token's slot: it can't become the default
   // until that finishes.
   const signingIn = isSigningIn(doc, account)
-  const switchBlocked = pinnedBlock ? PINNED_SWITCH_REASON : signingIn ? SIGNING_IN_SWITCH_REASON : undefined
+  const switchBlocked = !doc.canChangeDefault
+    ? (doc.changeDefaultReason ?? ADMIN_SWITCH_REASON)
+    : pinnedBlock
+      ? PINNED_SWITCH_REASON
+      : signingIn
+        ? SIGNING_IN_SWITCH_REASON
+        : undefined
   const who = [account.email, account.org].filter(Boolean).join(' · ')
   const pinnedTo = pinLabel(account)
 
@@ -547,6 +556,11 @@ export function AgentAccountsColumn(): React.JSX.Element {
       <p className="text-[10px] text-[var(--color-text-muted)] mb-4 leading-relaxed" data-testid="llm-switch-note">
         {SWITCH_NOTE}
       </p>
+      {doc && !doc.canChangeDefault && (
+        <p className="text-[10px] text-[var(--color-text-muted)] mb-3" data-testid="llm-default-admin-only">
+          {doc.changeDefaultReason ?? ADMIN_SWITCH_REASON}
+        </p>
+      )}
       {doc?.airgap && (
         <p className="text-[10px] text-[var(--color-text-muted)] mb-3">
           Air-gap mode is on: adding subscriptions and refreshing tokens are off. Switching between saved tokens still works.
@@ -670,7 +684,12 @@ export function AgentAccountsColumn(): React.JSX.Element {
                     </span>
                     <Button
                       className={`flex-shrink-0 ${ACTION_FOCUS}`}
-                      title={`Switch ${row.label} to its next signed-in token`}
+                      disabled={!doc.canChangeDefault}
+                      title={
+                        doc.canChangeDefault
+                          ? `Switch ${row.label} to its next signed-in token`
+                          : (doc.changeDefaultReason ?? ADMIN_SWITCH_REASON)
+                      }
                       onClick={() => void switchToNextToken(tool, doc)}
                     >
                       Use next token

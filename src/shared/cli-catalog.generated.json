@@ -276,12 +276,12 @@
    {
     "name": "llm tokens switch",
     "usage": "k2 llm tokens switch <tool> <label>",
-    "description": "Use this token as the server default. Affects every chat that uses Server default on this server. Not from K2 terminals."
+    "description": "Use this token as the server default. Affects every chat that uses Server default on this server. Admin or Owner only (a Member login is refused with admin_required). Not from K2 terminals."
    },
    {
     "name": "llm tokens next",
     "usage": "k2 llm tokens next <tool>",
-    "description": "Use the next signed-in subscription as the server default (one click when a session hits its limit). Never automatic."
+    "description": "Use the next signed-in subscription as the server default (one click when a session hits its limit). Never automatic. Admin or Owner only (a Member login is refused with admin_required)."
    },
    {
     "name": "llm tokens add-key",

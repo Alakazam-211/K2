@@ -37,12 +37,24 @@ pub struct EnvInputs<'a> {
     pub tool_paths: &'a [PathBuf],
     /// Toolchain env resolved for this job (`RUSTUP_TOOLCHAIN`, `MISE_*`).
     pub tool_env: &'a [(String, String)],
+    /// The job's server's sccache socket (`SCCACHE_SERVER_UDS`, V63): its
+    /// slot's `tmp/sccache.sock`, so a build never attaches to another
+    /// server's sccache on `127.0.0.1:4226`.
+    pub sccache_socket: Option<&'a Path>,
 }
+
+/// Names only the node sets, beyond the proto's list: the sccache server
+/// address (V63). A job's `--env` can't point its build at another
+/// server's sccache, or back at the shared TCP port.
+pub const NODE_SET_SCCACHE: &[&str] = &["SCCACHE_SERVER_UDS", "SCCACHE_SERVER_PORT"];
 
 /// The job's whole environment. `Err((code, name))` when an extra pair is
 /// refused.
 pub fn job_env(i: &EnvInputs<'_>) -> Result<Vec<(String, String)>, (String, String)> {
     check_env_pairs(i.extra.iter().map(|(k, v)| (k.as_str(), v.as_str())))?;
+    if let Some(k) = i.extra.keys().find(|k| NODE_SET_SCCACHE.contains(&k.as_str())) {
+        return Err(("env_node_reserved".to_string(), k.clone()));
+    }
     let lang = if cfg!(target_os = "macos") { "en_US.UTF-8" } else { "C.UTF-8" };
     let tc = i.node_home.join("toolchains");
     let mut env: Vec<(String, String)> = vec![
@@ -63,6 +75,9 @@ pub fn job_env(i: &EnvInputs<'_>) -> Result<Vec<(String, String)>, (String, Stri
         ("LOGNAME".into(), i.user.into()),
         ("SHELL".into(), "/bin/sh".into()),
     ];
+    if let Some(sock) = i.sccache_socket {
+        env.push(("SCCACHE_SERVER_UDS".into(), sock.display().to_string()));
+    }
     for (k, v) in i.tool_env {
         env.retain(|(ek, _)| ek != k);
         env.push((k.clone(), v.clone()));
@@ -249,7 +264,7 @@ mod tests {
     use tokio::io::AsyncReadExt;
 
     fn inputs<'a>(d: &'a Path, extra: &'a BTreeMap<String, String>) -> EnvInputs<'a> {
-        EnvInputs { node_home: d, job_home: d, job_tmp: d, target_dir: d, cache_dir: d, job_id: "j1", user: "k2node", extra, tool_paths: &[], tool_env: &[] }
+        EnvInputs { node_home: d, job_home: d, job_tmp: d, target_dir: d, cache_dir: d, job_id: "j1", user: "k2node", extra, tool_paths: &[], tool_env: &[], sccache_socket: None }
     }
 
     /// V28/V29: warm caches come from the cache dir the node picked (the
@@ -271,6 +286,25 @@ mod tests {
         assert_eq!(get("CARGO_HOME"), "/n/cache/0123456789abcdef/cargo-home");
         assert_eq!(get("RUSTUP_HOME"), "/n/toolchains/rustup");
         assert!(!env.iter().any(|(_, v)| v == "/n/cache/sccache"), "no node-wide sccache any more");
+    }
+
+    /// V63: the job's sccache server is its server's own socket, and no
+    /// `--env` moves it (to another server's socket, or to TCP).
+    #[test]
+    fn sccache_server_is_the_slots_socket_and_extras_cant_move_it() {
+        let home = PathBuf::from("/n");
+        let sock = PathBuf::from("/n-t/2/tmp/sccache.sock");
+        let none = BTreeMap::new();
+        let mut i = inputs(&home, &none);
+        i.sccache_socket = Some(&sock);
+        let env = job_env(&i).unwrap();
+        assert!(env.contains(&("SCCACHE_SERVER_UDS".to_string(), "/n-t/2/tmp/sccache.sock".to_string())));
+        for k in NODE_SET_SCCACHE {
+            let extra = BTreeMap::from([(k.to_string(), "/n-t/1/tmp/sccache.sock".to_string())]);
+            let mut i = inputs(&home, &extra);
+            i.sccache_socket = Some(&sock);
+            assert_eq!(job_env(&i).unwrap_err(), ("env_node_reserved".to_string(), k.to_string()));
+        }
     }
 
     #[test]

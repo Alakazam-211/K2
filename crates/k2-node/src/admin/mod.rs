@@ -29,6 +29,7 @@ pub mod launchd;
 pub mod policy;
 pub mod server;
 pub mod store;
+pub mod tenants;
 pub mod units;
 pub mod update;
 

@@ -31021,49 +31021,49 @@ THE SERVER SDK (sdk/server, TypeScript, Node 22+, no dependencies)
 
 EVERY VERB, BY CAP (helper, method and route, what it does)
 no cap (your own rooms)
-  me.get                   GET  /cli/skin/me                              Who this pass is: guest or App, its agents (identity, caps, what they allow, folders), this server's ids and features.
-  roomAgents.list          GET  /cli/skin/agents                          The agents in the pass's rooms: handle, name, color and picture.
-  guests.login             POST /cli/skin/login (server only)             Log a guest in through this App; the answer carries the guest's session pass.
-  password.change          POST /cli/skin/password/change (browser only)  A guest changes their own password (browser only: it ends every session of theirs).
-  guests.logout            POST /cli/skin/logout (server only)            Sign this guest's pass out; a device sign-in ends with it (its refresh token stops working).
-  guests.refresh           POST /cli/skin/refresh (server only)           Trade a device's refresh token for a new pass and a new refresh token (one-time, rotating; a reused token ends the device's sign-in).
-  guests.devices           GET  /cli/skin/devices                         This guest's devices that stay signed in to this App.
-  guests.revokeDevice      POST /cli/skin/devices/revoke                  Sign one of this guest's own devices out (its pass and refresh token end).
-  app.info                 GET  /cli/skin/app-info (server only)          Public: this one App's name and how to sign in, only when the owner listed it; anything else answers like a route that doesn't exist.
-  password.forgot          POST /cli/skin/password/forgot (server only)   Start a guest's password reset (a platform pass; the guest gets the reset link by email).
-  password.reset           POST /cli/skin/password/reset (server only)    Public: finish a password reset with the emailed token (ends every session of that guest).
-  agentIdentity.get        GET  /cli/agent/identity                       The room's agent: name, color, picture, handle, and what the pass may change.
-  app.self                 GET  /cli/skin/self (server only)              This App: its id, live Seed hash, health and when it was deployed (its own App only; the App pass, never a guest).
-  app.usage                GET  /cli/skin/usage (server only)             This App's quotas, live use and per-call counts from its own audit (its own App only; the App pass, never a guest).
-  chat.pass                POST /cli/sew/pass (server only)               Mint a Sew chat pass for the guest of this request (a login with a chat grant; server only, never a handoff code).
+  me.get                   GET  /cli/skin/me                                  Who this pass is: guest or App, its agents (identity, caps, what they allow, folders), this server's ids and features.
+  roomAgents.list          GET  /cli/skin/agents                              The agents in the pass's rooms: handle, name, color and picture.
+  guests.login             POST /cli/skin/login (server only)                 Log a guest in through this App; the answer carries the guest's session pass.
+  password.change          POST /cli/skin/password/change (browser only)      A guest changes their own password (browser only: it ends every session of theirs).
+  guests.logout            POST /cli/skin/logout (server only)                Sign this guest's pass out; a device sign-in ends with it (its refresh token stops working).
+  guests.refresh           POST /cli/skin/refresh (server only)               Trade a device's refresh token for a new pass and a new refresh token (one-time, rotating; a reused token ends the device's sign-in).
+  guests.devices           GET  /cli/skin/devices                             This guest's devices that stay signed in to this App.
+  guests.revokeDevice      POST /cli/skin/devices/revoke                      Sign one of this guest's own devices out (its pass and refresh token end).
+  app.info                 GET  /cli/skin/app-info (server only)              Public: this one App's name and how to sign in, only when the owner listed it; anything else answers like a route that doesn't exist.
+  password.forgot          POST /cli/skin/password/forgot (server only)       Start a guest's password reset (a platform pass; the guest gets the reset link by email).
+  password.reset           POST /cli/skin/password/reset (server only)        Public: finish a password reset with the emailed token (ends every session of that guest).
+  agentIdentity.get        GET  /cli/agent/identity                           The room's agent: name, color, picture, handle, and what the pass may change.
+  app.self                 GET  /cli/skin/self (server only)                  This App: its id, live Seed hash, health and when it was deployed (its own App only; the App pass, never a guest).
+  app.usage                GET  /cli/skin/usage (server only)                 This App's quotas, live use and per-call counts from its own audit (its own App only; the App pass, never a guest).
+  chat.pass                POST /cli/sew/pass (server only)                   Mint a Sew chat pass for the guest of this request (a login with a chat grant; server only, never a handoff code).
 thread:read (Read the Thread)
-  thread.page              GET  /cli/thread                               A page of a room's Thread, oldest first; sinceSeq catches up, beforeSeq pages back, afterSeq reads a delta (new, changed, removed).
-  thread.latest            GET  /cli/thread/latest                        The newest Thread item per room, for list previews; a room the pass can't read is an item with error.
-  thread.events            WS   /cli/overlay/events?conversation=         Live Thread items of one room (new posts and card changes; merge by id); after a gap, thread.page with sinceSeq.
-  thread.stream            WS   /cli/thread/stream?rooms=                 Live Thread items of every room the pass may read on one socket (inbox_subscribed names the set; grants and revokes apply live); after a gap, thread.page with sinceSeq.
-  thread.attachmentGet     GET  /cli/thread/attachment                    One attachment of a room's message: meta, preview, thumbnail or a byte range, only when your own file rights cover it.
-  thread.catchup           POST /cli/thread/catchup                       Deltas (or newest pages) for many rooms in one round trip, each exactly what thread.page answers for it.
-  thread.setRead           POST /cli/thread/read                          Mark the signed-in person's own read cursor in a room's Thread (an App's own pass: its bookmark); forward only, on every surface they use.
-  thread.unread            GET  /cli/thread/unread                        The signed-in person's own unread counts: a guest's over the room Threads it may read, a Garden's over the person's Threads.
-  thread.mute              POST /cli/thread/mute                          Mute or unmute a room's Thread for the signed-in person (their own state, on every surface); an App's own pass has no mutes.
-  thread.ensurePinned      POST /cli/workspace/ensure-pinned-chat         Check the room's pinned Chat is live (find-only for Apps: it never starts one).
-  project.list             GET  /cli/skin/projects                        The project chats this pass can read: a project shows only when every member agent is a room it holds with thread:read.
-  project.read             GET  /cli/skin/projects/messages               A page of a project chat, oldest first: the latest page, afterSeq to catch up, or beforeSeq to page back.
-  project.markRead         POST /cli/skin/projects/read                   Mark a project chat read for this guest (the person guest:<principalId> on every App surface; an App's own pass has none).
-  project.events           WS   /cli/skin/projects/events?group=          Live lines of one project chat, shaped like Thread frames (collection project), plus a guest's own read frames (collection read); after a gap, project.read with afterSeq.
+  thread.page              GET  /cli/thread                                   A page of a room's Thread, oldest first; sinceSeq catches up, beforeSeq pages back, afterSeq reads a delta (new, changed, removed).
+  thread.latest            GET  /cli/thread/latest                            The newest Thread item per room, for list previews; a room the pass can't read is an item with error.
+  thread.events            WS   /cli/overlay/events?conversation=             Live Thread items of one room (new posts and card changes; merge by id); after a gap, thread.page with sinceSeq.
+  thread.stream            WS   /cli/thread/stream?rooms=                     Live Thread items of every room the pass may read on one socket (inbox_subscribed names the set; grants and revokes apply live); after a gap, thread.page with sinceSeq.
+  thread.attachmentGet     GET  /cli/thread/attachment                        One attachment of a room's message: meta, preview, thumbnail or a byte range, only when your own file rights cover it.
+  thread.catchup           POST /cli/thread/catchup                           Deltas (or newest pages) for many rooms in one round trip, each exactly what thread.page answers for it.
+  thread.setRead           POST /cli/thread/read                              Mark the signed-in person's own read cursor in a room's Thread (an App's own pass: its bookmark); forward only, on every surface they use.
+  thread.unread            GET  /cli/thread/unread                            The signed-in person's own unread counts: a guest's over the room Threads it may read, a Garden's over the person's Threads.
+  thread.mute              POST /cli/thread/mute                              Mute or unmute a room's Thread for the signed-in person (their own state, on every surface); an App's own pass has no mutes.
+  thread.ensurePinned      POST /cli/workspace/ensure-pinned-chat             Check the room's pinned Chat is live (find-only for Apps: it never starts one).
+  project.list             GET  /cli/skin/projects                            The project chats this pass can read: a project shows only when every member agent is a room it holds with thread:read.
+  project.read             GET  /cli/skin/projects/messages                   A page of a project chat, oldest first: the latest page, afterSeq to catch up, or beforeSeq to page back.
+  project.markRead         POST /cli/skin/projects/read                       Mark a project chat read for this guest (the person guest:<principalId> on every App surface; an App's own pass has none).
+  project.events           WS   /cli/skin/projects/events?group=              Live lines of one project chat, shaped like Thread frames (collection project), plus a guest's own read frames (collection read); after a gap, project.read with afterSeq.
 thread:post (Post to the Thread)
-  thread.send              POST /cli/thread/post                          Post text (and room files) to a room's Thread as the guest (or the App); the agent gets it at once.
-  thread.answerCard        POST /cli/thread/answer                        Answer a choice card (or set a secret card) in a room's Thread.
-  thread.voidCard          POST /cli/thread/void                          Dismiss a pending card in a room's Thread.
+  thread.send              POST /cli/thread/post                              Post text (and room files) to a room's Thread as the guest (or the App); the agent gets it at once.
+  thread.answerCard        POST /cli/thread/answer                            Answer a choice card (or set a secret card) in a room's Thread.
+  thread.voidCard          POST /cli/thread/void                              Dismiss a pending card in a room's Thread.
 files:read (Read files (also shows heartbeat instructions))
-  files.resolveLinks       POST /cli/fs/resolve-links                     Which paths printed in a room's messages lead to a file or folder your file rights cover (the rest stay plain text).
-  files.list               GET  /cli/fs/read-dir                          A folder's entries, folders first.
-  files.read               GET  /cli/fs/read-file                         A UTF-8 text file (at most 10 MiB).
-  files.readBinary         GET  /cli/fs/read-binary                       A file as base64 (at most 50 MiB; read-range for more).
-  files.readRange          GET  /cli/fs/read-range                        A byte range of a file, as base64.
-  files.stat               GET  /cli/fs/stat                              One file's or folder's kind, size, modified time and content type, under the room's folder scope.
-  files.events             WS   /cli/fs/events?workspace=                 Live file changes in one room (paths only; refetch what you show).
-  resources.list           GET  /cli/workspace/resources                  The room's pinned resources (its links drawer).
+  files.resolveLinks       POST /cli/fs/resolve-links                         Which paths printed in a room's messages lead to a file or folder your file rights cover (the rest stay plain text).
+  files.list               GET  /cli/fs/read-dir                              A folder's entries, folders first.
+  files.read               GET  /cli/fs/read-file                             A UTF-8 text file (at most 10 MiB).
+  files.readBinary         GET  /cli/fs/read-binary                           A file as base64 (at most 50 MiB; read-range for more).
+  files.readRange          GET  /cli/fs/read-range                            A byte range of a file, as base64.
+  files.stat               GET  /cli/fs/stat                                  One file's or folder's kind, size, modified time and content type, under the room's folder scope.
+  files.events             WS   /cli/fs/events?workspace=                     Live file changes in one room (paths only; refetch what you show).
+  resources.list           GET  /cli/workspace/resources                      The room's pinned resources (its links drawer).
 files:write (Write files (not the agent's .k2 folder))
   files.write              POST /cli/fs/write-file                            Write (or overwrite) a text file; its folder must exist.
   files.uploadBinary       POST /cli/fs/upload-binary                         Upload a file in one request; a taken name becomes name (1).ext.
@@ -31120,9 +31120,19 @@ agent:identity (Change the agent's name, color and picture)
 agent:handle (Change the agent's handle (its address))
   agentIdentity.setHandle  POST /cli/agent/handle                             Change the room's agent's handle (its address).
 room:members (See who has access to the room)
-  room.members             GET  /cli/skin/members                         Who holds a grant on the room: guests and agent logins with their roles (from grants, not presence); admins of this box are one line.
+  room.members             GET  /cli/skin/members                             Who holds a grant on the room: guests and agent logins with their roles (from grants, not presence); admins of this box are one line.
 project:write (Post in project chats (needs it in every member room))
-  project.post             POST /cli/skin/projects/post                   Post in a project chat as the guest (guest:<username>); needs project:write in every member room.
+  project.post             POST /cli/skin/projects/post                       Post in a project chat as the guest (guest:<username>); needs project:write in every member room.
+wallet:self (Use the person's own wallet (an owner setting per App, never a room cap))
+  wallet.list              GET  /cli/skin/wallet/list (browser only)          The person's own wallet (a guest's session pass; never anyone else's). LLM subscriptions and API keys first.
+  wallet.status            GET  /cli/skin/wallet/status (browser only)        One of the person's own items.
+  wallet.add               POST /cli/skin/wallet/add (browser only)           Add to the person's own wallet. A subscription starts the vendor's own sign-in on the server: show login.url (Open and Copy link), login.code, or a paste box when login.needsPaste; poll wallet.loginStatus. An API key is sealed at once (login is null).
+  wallet.login             POST /cli/skin/wallet/login (browser only)         Sign one of the person's own subscriptions in again (same item and label).
+  wallet.loginStatus       GET  /cli/skin/wallet/login/status (browser only)  A running sign-in, to the person who started it only (poll every 1.5 s). No terminal screen is ever sent.
+  wallet.loginInput        POST /cli/skin/wallet/login/input (browser only)   Paste the code the vendor's page shows back into the person's own sign-in.
+  wallet.loginCancel       POST /cli/skin/wallet/login/cancel (browser only)  Cancel the person's own running sign-in.
+  wallet.use               POST /cli/skin/wallet/use (browser only)           Choose which item the person's own agents run on for a provider.
+  wallet.remove            POST /cli/skin/wallet/remove (browser only)        Delete one of the person's own items for good (not Trash): its sessions stop, its sealed secret and folder are destroyed.
 
 REFUSALS are JSON {error:{code,hint}} (some routes: {ok:false,error}).
   401 pass_required / pass_invalid (read K2_PASS_FILE again) /

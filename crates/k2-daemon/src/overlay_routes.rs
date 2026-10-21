@@ -2011,15 +2011,17 @@ fn handle_answer(params: &HashMap<String, String>, session_author: &str) -> CliR
     if let Err(e) = require_skin_cap_in_resolved(&resolved, k2_core::skin::CAP_THREAD_POST) {
         return e;
     }
-    let principal = crate::caller_workspace::principal_from_params(params);
-    if let Err(e) = authorize_write(principal.as_ref(), &resolved, "k2") {
-        return e;
-    }
-    // 0.46.3: a settings (action) card is the person's alone.
+    // 0.46.3: a settings (action) card is the person's alone, checked
+    // before any agent write rule so every agent (its own workspace's or
+    // another's) gets the same refusal. Other choice cards are unchanged.
     match overlay::card_action(&resolved.conversation_id, &card_id) {
         Ok(Some(action)) => return answer_action_card(params, &resolved, &card_id, action, session_author),
         Ok(None) => {}
         Err(e) => return card_error(e),
+    }
+    let principal = crate::caller_workspace::principal_from_params(params);
+    if let Err(e) = authorize_write(principal.as_ref(), &resolved, "k2") {
+        return e;
     }
     // 0.46.1: a Garden widget's card answer (`thread.answer`, cap
     // `thread:post`) carries `origin` like its posts, and the daemon checks

@@ -100,6 +100,9 @@ const CANARIES: &[&str] = &[
     "proj-canary-1",
     "rosson",
     "9f2c0a1b3d4e5f60",
+    // A permission card's push (prd-agent-settings-cards-v1 rev 3.1 §17.7).
+    "pr_c4a2f00d",
+    "CanarySettingWv",
 ];
 
 fn canary_events() -> Vec<PushEvent> {
@@ -120,9 +123,20 @@ fn canary_events() -> Vec<PushEvent> {
             agent_color: "#3b82f6".into(),
             preview: "canary-preview-text".into(),
             msg: Some(ThreadMsg::new("item-canary-5", 7, "conv-canary-77", "addr-canary/rev", 1_760_960_000, kind, "canary-msg-fulltext and more")),
+            budget: crate::push::ThreadBudget::Thread,
         })
     };
+    let permission = match thread(ThreadMsgKind::Choice, 1) {
+        PushEvent::ThreadPost(t) => PushEvent::ThreadPost(ThreadPush {
+            preview: String::new(),
+            msg: None,
+            budget: crate::push::ThreadBudget::Permission { request_id: "pr_c4a2f00d".into(), setting: "CanarySettingWv".into() },
+            ..t
+        }),
+        _ => unreachable!(),
+    };
     vec![
+        permission,
         thread(ThreadMsgKind::Text, 1),
         thread(ThreadMsgKind::Text, 3),
         thread(ThreadMsgKind::Choice, 1),

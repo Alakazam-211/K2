@@ -46,6 +46,7 @@ fn thread(preview: &str, agent: &str) -> PushEvent {
         agent_color: "#3b82f6".into(),
         preview: preview.into(),
         msg: None,
+        budget: crate::push::ThreadBudget::Thread,
     })
 }
 

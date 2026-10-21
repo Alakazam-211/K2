@@ -3709,6 +3709,10 @@ mod tests {
             "unset K2_PTYD before running k2-core tests (CLAUDE.md test rule)"
         );
         assert!(!DaemonPtyConfig::default().survive, "survive defaults to false");
+        // Both children inherit the process env: hold the crate-wide env
+        // lock so no parallel test's HOME/env guard changes it between the
+        // two spawns (a mini saw HOME swapped by an ensure_cli test).
+        let _env = crate::test_env::lock();
         let dir = std::env::temp_dir().join(format!("k2-survive-off-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let mut dumps = Vec::new();

@@ -247,7 +247,7 @@ mod tests {
         let helper = ops.pg.lock().unwrap().helper_sql.join("\n");
         assert!(
             helper.contains(
-                "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE _k2_migrations, _k2_store TO"
+                "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public._k2_migrations, public._k2_store TO"
             ),
             "explicit GRANT on _k2_store missing from helper_sql: {helper}"
         );
@@ -302,7 +302,7 @@ mod tests {
         assert!(
             helper.contains("GRANT USAGE ON SCHEMA public TO")
                 && helper.contains(
-                    "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE _k2_migrations, _k2_store TO"
+                    "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public._k2_migrations, public._k2_store TO"
                 ),
             "ensure GRANT via helper missing: {helper}"
         );

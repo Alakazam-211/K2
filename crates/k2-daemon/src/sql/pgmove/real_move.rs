@@ -244,6 +244,7 @@ fn fixture(ops: &dyn ClusterOps, db: &str, extra_ext: Option<&str>) {
     let ext = extra_ext.map(|x| format!("CREATE EXTENSION {x};\n")).unwrap_or_default();
     let body = format!(
         "SET ROLE {db}_migrator;\n\
+         SET search_path = public;\n\
          CREATE EXTENSION pgcrypto;\n\
          CREATE EXTENSION pg_trgm;\n\
          CREATE EXTENSION \"uuid-ossp\";\n\
@@ -284,6 +285,7 @@ fn plant_h1(ops: &dyn ClusterOps, db: &str) {
     let mig = format!("{db}_migrator");
     let body = format!(
         "SET ROLE {mig};\n\
+         SET search_path = public;\n\
          CREATE TABLE h1_hits (cu text, su text);\n\
          CREATE FUNCTION public.h1_probe(v int) RETURNS boolean LANGUAGE plpgsql AS $f$\n\
          BEGIN\n\
@@ -331,6 +333,7 @@ fn plant_f1(ops: &dyn ClusterOps, db: &str) {
     let mig = format!("{db}_migrator");
     let mut body = format!(
         "SET ROLE {mig};\n\
+         SET search_path = public;\n\
          CREATE SCHEMA evil;\n\
          CREATE TABLE evil.hits (tag text, cu text, su text);\n\
          GRANT USAGE ON SCHEMA evil TO PUBLIC;\n\
@@ -585,7 +588,7 @@ fn real_move_16_to_17_rollback_forget_and_refusals() {
     want(Ok(f1_hits(&ops, 17, db4)), "", "F1 17: the move ran no plant");
     want(
         ops.sql(17, "postgres", &format!("SELECT array_to_string(setconfig, ',') FROM pg_db_role_setting s JOIN pg_database d ON d.oid = s.setdatabase WHERE d.datname = '{db4}' AND s.setrole = 0;\n")),
-        "search_path=evil, public, pg_catalog",
+        "app.mode=fixture,search_path=\"evil, public, pg_catalog\"",
         "F1 17: the owner's database setting is carried as it was",
     );
     k2_superuser_paths(&ops, 17, db4);

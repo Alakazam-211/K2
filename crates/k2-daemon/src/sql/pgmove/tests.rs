@@ -588,6 +588,7 @@ fn check_refusals() {
             let r = s.rec.as_mut().unwrap();
             r.source_state = SourceState::Kept;
             r.moved_from = Some(16);
+            r.major = 17;
         })),
         ("roles", Box::new(|ops, _, _| {
             let mut s = ops.0.borrow_mut();

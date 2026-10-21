@@ -1284,7 +1284,7 @@ async fn enroll_pending(node: &Arc<Node>, st: &mut ServersLoop, e: &ServerEntry,
     .await;
     let o = match r {
         Ok(done) => {
-            crate::nlog!("server slot {}: enrolled with {} (pending): SAS {}", e.slot, req.url, done.sas);
+            crate::nlog!("server slot {}: enrolled with {} (pending): its SAS is in `k2-node servers` (never in the log)", e.slot, req.url);
             EnrollOutcome { id: req.id.clone(), slot: e.slot, ok: true, message: format!("enrolled with {} (pending): read code {} to its owner", e.label, done.sas), sas: Some(done.sas), at: now }
         }
         Err(err) => {

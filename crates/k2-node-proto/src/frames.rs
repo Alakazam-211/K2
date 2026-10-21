@@ -41,6 +41,12 @@ pub const PROTOCOL: u32 = 3;
 /// The first server protocol that gets sharing fields, features and frames.
 pub const PROTOCOL_SHARED: u32 = 3;
 
+/// The oldest node protocol a server places jobs on (`offer_refusal`
+/// answers `upgrade_required` below it). Not [`PROTOCOL`]: a 0.46.3 server
+/// keeps using 0.46.2 (protocol 2) nodes (prd-compute-shared-queue-v1
+/// §10.3).
+pub const JOBS_MIN_PROTOCOL: u32 = 2;
+
 /// Oldest node protocol a controller still attaches (jobs only).
 pub const MIN_PROTOCOL: u32 = 1;
 

@@ -164,7 +164,7 @@ pub fn refusal(v: &NodeView<'_>, ask: &JobAsk<'_>) -> Option<Refusal> {
 /// `exclusive_running` and `running` come from the controller's own
 /// registry when fresher than the offer.
 pub fn offer_refusal(o: &Offer, running: u32, exclusive_running: bool, ask: &JobAsk<'_>) -> Option<Refusal> {
-    if o.protocol < crate::frames::PROTOCOL {
+    if o.protocol < crate::frames::JOBS_MIN_PROTOCOL {
         return Some(Refusal::new(UPGRADE_REQUIRED, "the node runs an older protocol; update K2 on it"));
     }
     if let Some(r) = control_refusal(o.control) {
@@ -347,7 +347,14 @@ mod tests {
         let mut away = o.clone();
         away.availability = Availability { ok: false, reasons: vec![OUTSIDE_WINDOW.into()] };
         assert_eq!(code(offer_refusal(&away, 0, false, &ask())).as_deref(), Some(OUTSIDE_WINDOW));
+        // A 0.46.2 node (protocol 2) still takes jobs from a protocol-3
+        // server; protocol 1 is too old.
+        let mut v0462 = o.clone();
+        v0462.protocol = 2;
+        assert_eq!(offer_refusal(&v0462, 0, false, &ask()), None);
         let mut old = o;
+        old.protocol = 1;
+        assert_eq!(code(offer_refusal(&old, 0, false, &ask())).as_deref(), Some(UPGRADE_REQUIRED));
         old.protocol = 0;
         assert_eq!(code(offer_refusal(&old, 0, false, &ask())).as_deref(), Some(UPGRADE_REQUIRED));
     }

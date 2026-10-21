@@ -42,6 +42,7 @@ import { matchWholeFilePath } from '@/lib/file-link-match'
 import {
   isVoidedHitl,
   postThreadCompose,
+  threadCardsParams,
   threadItemsFromSnapshot,
   type OverlayThreadItem,
   type ThreadFileObject,
@@ -116,6 +117,8 @@ export async function zenThreadDelta(t: ZenThreadTarget, afterSeq: number, limit
     addr: t.threadAddr,
     after_seq: afterSeq,
     ...(limit !== undefined ? { limit } : {}),
+    // Permission cards: the `cards=2` view, as the live feed gets it.
+    ...threadCardsParams(t.scope),
   })
   const r = isObj(raw) ? raw : {}
   const snap = threadItemsFromSnapshot(r)

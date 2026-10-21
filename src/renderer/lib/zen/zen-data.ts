@@ -118,6 +118,7 @@ import {
   isTurnLive,
   isVoidedHitl,
   postThreadCompose,
+  threadCardsParams,
   threadItemsFromSnapshot,
   type OverlayDoc,
   type OverlayThreadItem,
@@ -1904,7 +1905,9 @@ export function installZenDataVerbs(): () => void {
         return threadView(a)
       }
       const limit = Math.min(100, Math.max(1, typeof o.limit === 'number' ? Math.floor(o.limit) : OVERLAY_PAGE_SIZE))
-      const snap = threadItemsFromSnapshot(await daemonCliGet<unknown>(c.scope, 'thread', { addr: c.threadAddr, limit }))
+      const snap = threadItemsFromSnapshot(
+        await daemonCliGet<unknown>(c.scope, 'thread', { addr: c.threadAddr, limit, ...threadCardsParams(c.scope) }),
+      )
       return {
         conversationId: snap.conversation_id,
         items: snap.items.filter((it) => !isVoidedHitl(it.doc)),

@@ -2,7 +2,7 @@
 import type { ServerScope } from '@/kessel/server-scope'
 import { describe, expect, it, afterEach, vi } from 'vitest'
 import { act, renderHook, waitFor } from '@testing-library/react'
-import { OVERLAY_PAGE_SIZE } from './overlayThread'
+import { OVERLAY_PAGE_SIZE, threadCardsParams } from './overlayThread'
 
 const daemonCliGet = vi.hoisted(() => vi.fn())
 const daemonCliPost = vi.hoisted(() => vi.fn())
@@ -96,7 +96,11 @@ describe('useOverlayThread paging', () => {
       useOverlayThread({ scope: primaryScope(), addr: 'sales', conversationId: null, enabled: true }),
     )
     await waitFor(() => expect(result.current.items).toHaveLength(25))
-    expect(daemonCliGet).toHaveBeenCalledWith('thread', { addr: 'sales', limit: OVERLAY_PAGE_SIZE })
+    // Permission cards: the `cards=2` opt-in rides every Thread GET exactly
+    // when the server lists the feature (the test's local daemon reports
+    // no list, which reads as "has it").
+    const cards = threadCardsParams(primaryScope())
+    expect(daemonCliGet).toHaveBeenCalledWith('thread', { addr: 'sales', limit: OVERLAY_PAGE_SIZE, ...cards })
     expect(result.current.hasMore).toBe(true)
     expect(result.current.items[0].seq).toBe(16)
     expect(result.current.items[24].seq).toBe(40)
@@ -108,6 +112,7 @@ describe('useOverlayThread paging', () => {
       addr: 'sales',
       limit: OVERLAY_PAGE_SIZE,
       before_seq: 16,
+      ...cards,
     })
     expect(result.current.items).toHaveLength(40)
     expect(result.current.items[0].seq).toBe(1)

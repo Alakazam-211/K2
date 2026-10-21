@@ -1,9 +1,16 @@
 // The Thread's choice card (ask/choice): lettered options, a time frame,
 // who answered. Shared by the desktop Thread, the Zen Thread widget and the
 // Grok Bot chat view.
+//
+// Permission cards (0.46.3, prd-agent-settings-cards-v1 §4, §8): a choice
+// whose `permission` carries the daemon's `cards=2` view routes to
+// `PermissionCard` / `PermissionBatchCard`. Without a view (the fallback, an
+// older daemon) it stays this card.
 
 import { useState, type JSX } from 'react'
 import { cardExpiryLabel } from './overlayThread'
+import { PermissionBatchCard, PermissionCard } from './PermissionCard'
+import type { PermissionCardActions, PermissionCardData } from './permissionCardView'
 import { CHAMFER_CUT, chamferCutFor, chamferVars } from '@/components/Thread/chamfer'
 
 const CARD_EDGE = 'var(--thread-card-border,var(--color-border))'
@@ -20,17 +27,21 @@ export function choiceLetter(index: number): string {
   return s
 }
 
-export function ChoiceCard({
-  options,
-  allowCustom,
-  status,
-  answer,
-  answeredBy,
-  expiresAt,
-  nowSec,
-  resultMessage,
-  onPick,
-}: {
+export function ChoiceCard(props: ChoiceCardProps): JSX.Element {
+  const p = props.permission
+  if (p) {
+    const actions = props.permissionActions ?? null
+    const from = props.from ?? ''
+    return p.view.kind === 'batch' ? (
+      <PermissionBatchCard view={p.view} from={from} actions={actions} nowSec={props.nowSec} />
+    ) : (
+      <PermissionCard view={p.view} resultMessage={p.result?.message || null} from={from} actions={actions} nowSec={props.nowSec} />
+    )
+  }
+  return <PlainChoiceCard {...props} />
+}
+
+export interface ChoiceCardProps {
   options: { label: string }[]
   allowCustom: boolean
   status: string
@@ -44,7 +55,27 @@ export function ChoiceCard({
    *  Settings → Gardens → Local Data."), shown under the chosen option. */
   resultMessage?: string | null
   onPick: (label: string) => void
-}): JSX.Element {
+  /** A permission card's `cards=2` view (`choice.permission`): drawn as
+   *  PermissionCard / PermissionBatchCard instead. */
+  permission?: PermissionCardData | null
+  /** What a permission card can do (answer, note, undo, confirm). Absent:
+   *  drawn read-only. */
+  permissionActions?: PermissionCardActions | null
+  /** The doc's sender, for a permission card without the agent's name. */
+  from?: string
+}
+
+function PlainChoiceCard({
+  options,
+  allowCustom,
+  status,
+  answer,
+  answeredBy,
+  expiresAt,
+  nowSec,
+  resultMessage,
+  onPick,
+}: ChoiceCardProps): JSX.Element {
   const pending = status === 'pending'
   const expiry =
     status === 'expired'

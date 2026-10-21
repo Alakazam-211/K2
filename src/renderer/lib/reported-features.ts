@@ -87,6 +87,12 @@ export const REPORTED_FEATURES = {
    *  converted where the box can). With it, an image attachment draws as
    *  the picture under the bubble (S3); without it, today's chip. */
   'thread-images-v1': 'thread-images-v1',
+  /** permission-cards-v1 (0.46.3, Beta): listed only while the server's
+   *  "Permission cards" switch is on. With it the Thread asks for the
+   *  `cards=2` permission card view (`GET /cli/thread`, the overlay socket)
+   *  and draws PermissionCard; without it nothing is asked and a permission
+   *  card is the daemon's fallback (an ordinary card or line). */
+  'permission-cards-v1': 'permission-cards-v1',
 } as const
 
 export type ReportedFeatureKey = keyof typeof REPORTED_FEATURES

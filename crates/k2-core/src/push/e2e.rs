@@ -295,7 +295,53 @@ pub fn alert_plaintext(event: &PushEvent, ctx: &SealCtx) -> Option<serde_json::V
     m.insert("body".into(), event.body().into());
     m.insert("group".into(), alert_group(event).into());
     m.insert("data".into(), event.data().to_value());
+    if let PushEvent::ThreadPost(t) = event {
+        if let Some(msg) = &t.msg {
+            m.insert("msg".into(), msg_value(msg));
+        }
+    }
     Some(serde_json::Value::Object(m))
+}
+
+/// The sealed `msg` object (prd-e2e-push-v1 follow-up): the latest post for
+/// the phone to show before it fetches. Sealed alerts only.
+pub fn msg_value(msg: &super::ThreadMsg) -> serde_json::Value {
+    serde_json::json!({
+        "id": msg.id,
+        "seq": msg.seq,
+        "conversationId": msg.conversation_id,
+        "from": msg.from,
+        "at": msg.at,
+        "kind": msg.kind.as_wire(),
+        "text": msg.text,
+        "truncated": msg.truncated,
+    })
+}
+
+/// Fit by cutting `msg.text` (grapheme boundary, `truncated: true`): the
+/// longest cut that fits. `None` when even an empty text doesn't fit.
+fn fit_msg_text(v: &serde_json::Value, max: usize) -> Option<serde_json::Value> {
+    let text = v.pointer("/msg/text").and_then(|t| t.as_str())?.to_string();
+    let total = text.graphemes(true).count();
+    let with = |k: usize| {
+        let mut c = v.clone();
+        c["msg"]["text"] = first_graphemes(&text, k).into();
+        c["msg"]["truncated"] = true.into();
+        c
+    };
+    if json_bytes(&with(0)).len() > max {
+        return None;
+    }
+    let (mut lo, mut hi) = (0usize, total.saturating_sub(1));
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        if json_bytes(&with(mid)).len() <= max {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    Some(with(lo))
 }
 
 /// The sealed nudge plaintext (§5): totals only. No conversation ids or
@@ -362,14 +408,30 @@ fn cap_name(v: &mut serde_json::Value, pointer: &str) {
 }
 
 /// The alert JSON bytes within the 1536-byte bucket (§3), never growing
-/// the bucket. In order: cut `body` (+ "…"); then cap names at 64
+/// the bucket. In order: cut `msg.text` (`truncated: true`; the app
+/// fetches the rest); then cut `body` (+ "…"); then cap names at 64
 /// characters; then drop `avatarRev`/`agentColor`.
 pub fn fit_alert(v: &serde_json::Value) -> Result<Vec<u8>, SealError> {
     let max = seal::max_json(SealKind::Alert);
-    if let Some(b) = fit_body(v, max) {
-        return Ok(b);
+    let bytes = json_bytes(v);
+    if bytes.len() <= max {
+        return Ok(bytes);
     }
     let mut v = v.clone();
+    if v.get("msg").is_some() {
+        match fit_msg_text(&v, max) {
+            Some(fitted) => return Ok(json_bytes(&fitted)),
+            None => {
+                // Even an empty text doesn't fit: keep it empty (truncated)
+                // and shrink the rest.
+                v["msg"]["text"] = "".into();
+                v["msg"]["truncated"] = true.into();
+            }
+        }
+    }
+    if let Some(b) = fit_body(&v, max) {
+        return Ok(b);
+    }
     cap_name(&mut v, "/title");
     cap_name(&mut v, "/data/agentName");
     if let Some(b) = fit_body(&v, max) {

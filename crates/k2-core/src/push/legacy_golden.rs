@@ -80,6 +80,7 @@ pub(crate) fn golden_events() -> Vec<(String, PushEvent)> {
             avatar_rev: "ba7816bf8f01cfea".into(),
             agent_color: "#3b82f6".into(),
             preview: preview.into(),
+            msg: None,
         })
     };
     let mut out = vec![

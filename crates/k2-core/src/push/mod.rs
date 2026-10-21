@@ -233,6 +233,58 @@ pub struct ThreadPush {
     /// PRIVACY: a non-empty preview is message text that leaves this
     /// server through K2's push relay and Apple (APNs) or Google (FCM).
     pub preview: String,
+    /// The latest post itself, for the phone to show the message before it
+    /// fetches (prd-e2e-push-v1 follow-up, Rosson 2026-10-21). It rides
+    /// ONLY inside a sealed alert (`msg`), never a legacy, generic or nudge
+    /// push, and it is independent of the previews switches (they decide
+    /// only the visible banner text). `None` = not known.
+    pub msg: Option<ThreadMsg>,
+}
+
+/// The latest Thread post a push covers (sealed alerts only).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadMsg {
+    /// The overlay item id.
+    pub id: String,
+    pub seq: i64,
+    pub conversation_id: String,
+    /// The post's `from` address.
+    pub from: String,
+    /// The post's `created_at` (unix seconds, as the Thread API returns it).
+    pub at: i64,
+    pub kind: ThreadMsgKind,
+    /// The full text (a choice card's question; `""` for a secret card), cut
+    /// to at most [`ThreadMsg::HOLD_MAX_CHARS`] when held.
+    pub text: String,
+    /// The text was cut (the app fetches the rest).
+    pub truncated: bool,
+}
+
+impl ThreadMsg {
+    /// The most text a held post keeps: more than any 1536-byte bucket can
+    /// carry, so the seal-time cut decides; the raw message is never held
+    /// in full.
+    pub const HOLD_MAX_CHARS: usize = 2048;
+
+    /// Build one, holding at most [`Self::HOLD_MAX_CHARS`] characters
+    /// (grapheme boundary). A secret card never carries text.
+    pub fn new(id: &str, seq: i64, conversation_id: &str, from: &str, at: i64, kind: ThreadMsgKind, text: &str) -> Self {
+        use unicode_segmentation::UnicodeSegmentation as _;
+        let text = if kind == ThreadMsgKind::Secret { "" } else { text };
+        let total = text.graphemes(true).count();
+        let truncated = total > Self::HOLD_MAX_CHARS;
+        let text = if truncated { text.graphemes(true).take(Self::HOLD_MAX_CHARS).collect() } else { text.to_string() };
+        Self {
+            id: id.to_string(),
+            seq,
+            conversation_id: conversation_id.to_string(),
+            from: from.to_string(),
+            at,
+            kind,
+            text,
+            truncated,
+        }
+    }
 }
 
 impl ThreadPush {
@@ -2084,6 +2136,7 @@ mod tests {
             avatar_rev: "ba7816bf8f01cfea".into(),
             agent_color: "#3b82f6".into(),
             preview: String::new(),
+            msg: None,
         })
     }
 

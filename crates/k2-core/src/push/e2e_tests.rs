@@ -91,6 +91,8 @@ const CANARIES: &[&str] = &[
     "CanaryAgentZx",
     "CanaryProjectQv",
     "canary-preview-text",
+    "canary-msg-fulltext",
+    "item-canary-5",
     "conv-canary-77",
     "addr-canary/rev",
     "fb-canary-42",
@@ -117,6 +119,7 @@ fn canary_events() -> Vec<PushEvent> {
             avatar_rev: "ba7816bf8f01cfea".into(),
             agent_color: "#3b82f6".into(),
             preview: "canary-preview-text".into(),
+            msg: Some(ThreadMsg::new("item-canary-5", 7, "conv-canary-77", "addr-canary/rev", 1_760_960_000, kind, "canary-msg-fulltext and more")),
         })
     };
     vec![
@@ -756,4 +759,139 @@ fn replayed_pushes_are_rejected_on_the_open_side() {
     assert!(!g.accept(999, now, now), "below the window minimum");
     assert!(g.accept(5000, now, now));
     assert!(!g.accept(1000, now, now), "evicted minimum can't come back");
+}
+
+// ── `msg`: the post itself, sealed alerts only (follow-up 2026-10-21) ────
+
+const MSG_CANARY: &str = "FULLTEXT-CANARY-31337";
+
+fn msg_thread(text: &str) -> PushEvent {
+    let (_, e) = legacy_golden::golden_events().into_iter().find(|(n, _)| n == "thread-text-x1-preview").expect("e");
+    let PushEvent::ThreadPost(mut t) = e else { unreachable!() };
+    t.msg = Some(ThreadMsg::new("item-9", t.seq, &t.conversation_id, "cortana", 1_760_960_000, ThreadMsgKind::Text, text));
+    PushEvent::ThreadPost(t)
+}
+
+/// A sealed alert carries `msg` with the FULL text, for previews on and
+/// off alike (previews decide only the visible body). Today's path, the
+/// generic path and the nudge never carry it.
+#[test]
+fn msg_rides_only_inside_sealed_alerts() {
+    let _db = crate::db::scoped_for_test();
+    let _relay = super::relay_state_test_lock();
+    let (sk1, k1) = phone_key(71);
+    let (sk2, k2) = phone_key(72);
+    let keyed = vec![
+        register("msg-on", "apns", "tok-msg-on", true, Some(&k1)),
+        register("msg-off", "fcm", "tok-msg-off", false, Some(&k2)),
+    ];
+    let unkeyed = vec![register("msg-old", "apns", "tok-msg-old", true, None)];
+    let text = format!("{MSG_CANARY}: the whole message, well past the 140-character preview. ").repeat(4);
+    let event = msg_thread(&text);
+    let url = unique_url("msg");
+    e2e::note_relay_caps(&url, true);
+    let relay = Relay::new(true);
+    let cloud = tunnel_cloud(&url, relay.clone());
+
+    // Sealed: both phones get msg.text in full; the previews-off phone's
+    // visible body stays generic.
+    cloud.dispatch_in_mode(&event, "bk", &keyed, PushE2eMode::SealedWhenSupported).expect("sealed");
+    let calls = relay.calls();
+    assert_eq!(calls.len(), 1);
+    assert!(!calls[0].1.to_string().contains(MSG_CANARY), "never in clear");
+    let open = |i: usize, sk: &[u8], psk: &[u8]| -> serde_json::Value {
+        let b = calls[0].1["devices"][i]["e2e"].as_str().expect("e2e");
+        assert_eq!(b.len(), 2159, "the blob length never changes");
+        serde_json::from_slice(&seal::open(SealKind::Alert, sk, psk, b).expect("open")).expect("json")
+    };
+    let on = open(0, &sk1, &k1.psk);
+    let off = open(1, &sk2, &k2.psk);
+    for v in [&on, &off] {
+        assert_eq!(v["msg"]["text"], text.as_str(), "full text, whatever the previews");
+        assert_eq!(v["msg"]["truncated"], false);
+        assert_eq!(v["msg"]["id"], "item-9");
+        assert_eq!(v["msg"]["seq"], 418);
+        assert_eq!(v["msg"]["conversationId"], "c-77");
+        assert_eq!(v["msg"]["from"], "cortana");
+        assert_eq!(v["msg"]["at"], 1_760_960_000);
+        assert_eq!(v["msg"]["kind"], "text");
+    }
+    assert_eq!(off["body"], "New message in Thread", "previews off: the visible body hides it");
+    assert!(!off["body"].as_str().expect("b").contains(MSG_CANARY));
+    assert!(!off["title"].as_str().expect("t").contains(MSG_CANARY));
+    assert!(!off["data"].to_string().contains(MSG_CANARY), "data never carries it");
+
+    // Today's path (unkeyed, and keyed with the switch off): no msg at all.
+    for (devices, mode) in [(&unkeyed, PushE2eMode::SealedWhenSupported), (&keyed, PushE2eMode::Off)] {
+        relay.clear();
+        cloud.dispatch_in_mode(&event, "bk", devices, mode).expect("legacy");
+        for (_, body, sealed) in relay.calls() {
+            assert!(!sealed);
+            let wire = body.to_string();
+            assert!(!wire.contains(MSG_CANARY) && !wire.contains("\"msg\"") && !wire.contains("item-9"), "{wire}");
+        }
+    }
+    // And the legacy payload itself is unchanged by msg.
+    let without = match &event {
+        PushEvent::ThreadPost(t) => PushEvent::ThreadPost(ThreadPush { msg: None, ..t.clone() }),
+        _ => unreachable!(),
+    };
+    let stamp = PushStamp { subdomain: "rosson".into(), instance_id: "x".into() };
+    assert_eq!(K2Cloud::payload(&event, &stamp, "bk"), K2Cloud::payload(&without, &stamp, "bk"));
+    // Generic (sealed-only, unkeyed): no msg.
+    relay.clear();
+    cloud.dispatch_in_mode(&event, "bk", &unkeyed, PushE2eMode::SealedOnly).expect("generic");
+    let wire = relay.calls()[0].1.to_string();
+    assert!(!wire.contains(MSG_CANARY) && !wire.contains("\"msg\""), "{wire}");
+    // The nudge plaintext never has msg (a badge push has no post).
+    let ctx = e2e::SealCtx { kid: "k".into(), ctr: 1, ts: 1, stamp: PushStamp::default(), badge_key: "b".into() };
+    let badge = BadgePush { principal: "o".into(), device_usernames: vec![], unread_total: "1".into(), waiting_total: "0".into() };
+    assert!(e2e::nudge_plaintext(&badge, &ctx).get("msg").is_none());
+}
+
+/// A text too long for the bucket is cut at a character boundary with
+/// `truncated: true`, filling the bucket; the visible body is untouched;
+/// a text that fits exactly is not marked truncated.
+#[test]
+fn msg_text_is_cut_at_the_bucket_edge() {
+    let ctx = e2e::SealCtx {
+        kid: "0011223344556677".into(),
+        ctr: 1_760_960_000_123,
+        ts: 1_760_960_000,
+        stamp: PushStamp { subdomain: "rosson".into(), instance_id: "9f2c0a1b3d4e5f60".into() },
+        badge_key: "0123456789abcdef0123456789abcdef".into(),
+    };
+    let max = seal::max_json(SealKind::Alert);
+    let long = "Long message 🚀 with emoji and words. ".repeat(80);
+    let event = msg_thread(&long);
+    let v = e2e::alert_plaintext(&event, &ctx).expect("v");
+    let bytes = e2e::fit_alert(&v).expect("fit");
+    assert!(bytes.len() <= max && bytes.len() > max - 6, "fills the bucket: {}", bytes.len());
+    let out: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+    assert_eq!(out["msg"]["truncated"], true);
+    let cut = out["msg"]["text"].as_str().expect("text");
+    assert!(!cut.is_empty() && long.starts_with(cut), "a prefix, cut at a character boundary");
+    assert_eq!(out["body"], v["body"], "the visible body is not cut first");
+    assert_eq!(out["title"], v["title"]);
+    // Sealed, the blob is exactly 2159.
+    let (_, pk) = seal::derive_keypair(&[3; 32]);
+    assert_eq!(seal::seal(SealKind::Alert, &pk, &[4; 32], &bytes).expect("seal").len(), 2159);
+    // A text at the edge (the cut less one character, since `false` is a
+    // byte longer than `true`): fits whole, not truncated.
+    let mut edge: Vec<char> = cut.chars().collect();
+    edge.pop();
+    let edge: String = edge.into_iter().collect();
+    let v = e2e::alert_plaintext(&msg_thread(&edge), &ctx).expect("v");
+    let bytes = e2e::fit_alert(&v).expect("fit");
+    assert!(bytes.len() > max - 12, "right at the edge: {}", bytes.len());
+    let out: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+    assert_eq!(out["msg"]["text"], edge.as_str());
+    assert_eq!(out["msg"]["truncated"], false, "fits: not truncated");
+    // The hold cap (and a secret never carries text).
+    let held = ThreadMsg::new("i", 1, "c", "f", 1, ThreadMsgKind::Text, &"x".repeat(5000));
+    assert_eq!(held.text.chars().count(), ThreadMsg::HOLD_MAX_CHARS);
+    assert!(held.truncated);
+    let secret = ThreadMsg::new("i", 1, "c", "f", 1, ThreadMsgKind::Secret, "hunter2");
+    assert_eq!(secret.text, "");
+    assert!(!secret.truncated);
 }

@@ -45,7 +45,15 @@ fn thread(preview: &str, agent: &str) -> PushEvent {
         avatar_rev: "ba7816bf8f01cfea".into(),
         agent_color: "#3b82f6".into(),
         preview: preview.into(),
+        msg: None,
     })
+}
+
+/// The same Thread push with its `msg` (the post itself).
+fn with_msg(event: PushEvent, text: &str) -> PushEvent {
+    let PushEvent::ThreadPost(mut t) = event else { unreachable!("a thread push") };
+    t.msg = Some(ThreadMsg::new("ov-0f8fad5b", t.seq, &t.conversation_id, "cortana", 1_760_959_998, t.msg_kind, text));
+    PushEvent::ThreadPost(t)
 }
 
 /// Build the whole vectors document.
@@ -145,6 +153,35 @@ pub(crate) fn build() -> serde_json::Value {
                 &ctx(1_760_960_000_128),
             ),
             "A silent nudge: totals only, no ids.".into(),
+        ),
+        (
+            "alert-thread-msg-full",
+            SealKind::Alert,
+            e2e::alert_plaintext(
+                &with_msg(
+                    thread("Deploy finished, 3 checks green…", "Cortana"),
+                    "Deploy finished, 3 checks green. Staging is on 0.46.3-rc2; smoke tests next, then I'll post the \
+                     release notes for review. Nothing needs you yet. 🚀",
+                ),
+                &ctx(1_760_960_000_130),
+            )
+            .expect("alert"),
+            "A Thread post with `msg` (follow-up 2026-10-21): the whole message text rides sealed, \
+             `truncated: false`. `msg` is present whatever the previews switches say (they decide only the \
+             visible title/body); it is never in a legacy push or a nudge."
+                .into(),
+        ),
+        (
+            "alert-thread-msg-truncated",
+            SealKind::Alert,
+            e2e::alert_plaintext(
+                &with_msg(thread("Release notes draft…", "Cortana"), &"Release notes draft, section by section. ".repeat(80)),
+                &ctx(1_760_960_000_131),
+            )
+            .expect("alert"),
+            "A Thread post too long for the bucket: `msg.text` is cut at a character boundary until the JSON fills \
+             the 1536-byte bucket and `truncated: true` (the app fetches the rest). The visible body is not cut."
+                .into(),
         ),
     ];
 
@@ -278,7 +315,7 @@ fn committed_vectors_decrypt_and_match_the_relay_contract() {
         serde_json::from_str(&std::fs::read_to_string(VECTORS_PATH).expect("vectors")).expect("json");
     let (sk, _, psk) = recipient();
     let cases = doc["cases"].as_array().expect("cases");
-    assert_eq!(cases.len(), 7);
+    assert_eq!(cases.len(), 9);
     for c in cases {
         let kind = if c["kind"] == "nudge" { SealKind::Nudge } else { SealKind::Alert };
         let b64 = c["e2e"].as_str().expect("e2e");
@@ -292,4 +329,17 @@ fn committed_vectors_decrypt_and_match_the_relay_contract() {
     let n = max["plaintextJsonBytes"].as_u64().expect("n") as usize;
     assert!(n <= seal::max_json(SealKind::Alert) && n > seal::max_json(SealKind::Alert) - 8, "fills the bucket: {n}");
     assert!(max["plaintextJson"].as_str().expect("pt").contains("…\""), "cut with an ellipsis");
+    let pt = |name: &str| -> serde_json::Value {
+        let c = cases.iter().find(|c| c["name"] == name).expect("case");
+        serde_json::from_str(c["plaintextJson"].as_str().expect("pt")).expect("json")
+    };
+    let full = pt("alert-thread-msg-full");
+    assert_eq!(full["msg"]["truncated"], false);
+    assert!(full["msg"]["text"].as_str().expect("t").ends_with("🚀"));
+    let cut = pt("alert-thread-msg-truncated");
+    assert_eq!(cut["msg"]["truncated"], true);
+    assert_eq!(cut["body"], "Release notes draft…", "the visible body is not cut");
+    for name in ["alert-thread-preview", "nudge"] {
+        assert!(pt(name).get("msg").is_none(), "{name}: no msg");
+    }
 }

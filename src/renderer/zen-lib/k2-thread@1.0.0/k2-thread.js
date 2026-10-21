@@ -949,7 +949,10 @@
     function growCompose() {
       textEl.style.height = 'auto'
       var cap = 220
-      var min = look === 'glass' ? 22 : 32
+      // The smallest box that shows one line: line-height plus padding
+      // (border-box). It used to be 22 for glass, so a compose measured
+      // while hidden (scrollHeight 0) clipped its placeholder.
+      var min = look === 'glass' ? 30 : 32
       var next = Math.min(cap, Math.max(min, textEl.scrollHeight))
       textEl.style.height = next + 'px'
       textEl.style.overflow = textEl.scrollHeight > cap ? 'auto' : 'hidden'

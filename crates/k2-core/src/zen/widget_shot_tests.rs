@@ -155,3 +155,16 @@ fn a_widget_with_its_own_scheme_keeps_it_like_in_zen() {
     let v = shot_page("fleet-grid", &staged_builtin("fleet-grid", 2), &ShotOptions::default()).expect("shot page");
     assert_eq!(v["colorScheme"], "garden");
 }
+
+/// The stand-in Thread speaks the real Thread view's units: the person's
+/// own messages are `via: "compose"` (how k2-thread@1 and k2:kanban@3 tell
+/// yours from the agent's) and a turn's `since` is in milliseconds (their
+/// working clock is `Date.now() - since`). A shot once drew every bubble
+/// on the agent's side and a 497,431-hour clock.
+#[test]
+fn the_sample_thread_uses_the_real_views_units() {
+    let host = super::HOST_TEMPLATE;
+    assert!(host.contains("via: from === 'you' ? 'compose' : null"), "own messages are via compose");
+    assert!(host.contains("since: NOW * 1000 - 5000"), "a turn's since is in milliseconds");
+    assert!(host.contains("var NOW = Math.floor(Date.now() / 1000)"), "NOW stays seconds (created_at)");
+}

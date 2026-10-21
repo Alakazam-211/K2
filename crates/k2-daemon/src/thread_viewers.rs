@@ -18,6 +18,13 @@
 //! `owner`, a Connect session → its username); the person key is computed
 //! per frame, so a role change or a new owner link applies at once. App
 //! guests never register (they are never recipients, TP13).
+//!
+//! **Last visible** (prd-agent-settings-cards-v1 rev 3.1 §6.7, C28): beside
+//! the live views, the registry remembers when each (person, conversation)
+//! was last seen looking ([`Viewers::last_visible_at`]): a permission card
+//! files a Tickets item only when nobody who may answer it looked at that
+//! Thread in the last 10 minutes. In memory only: after a restart it is
+//! empty, so the ticket is filed (the safe side).
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -33,6 +40,10 @@ type Key = (String, String);
 #[derive(Debug, Default)]
 pub struct Viewers {
     map: Mutex<HashMap<Key, HashMap<u64, Instant>>>,
+    /// When each (person, conversation) was last seen looking: the last
+    /// `visible:true` frame, or the moment a live view ended (`false`, the
+    /// socket closing).
+    seen: Mutex<HashMap<Key, Instant>>,
 }
 
 impl Viewers {
@@ -50,13 +61,45 @@ impl Viewers {
         let key = (person.to_string(), conversation.to_string());
         let mut map = self.lock();
         if visible {
-            map.entry(key).or_default().insert(socket, now + VIEW_TTL);
+            map.entry(key.clone()).or_default().insert(socket, now + VIEW_TTL);
+            self.note_seen(key, now);
         } else if let Some(sockets) = map.get_mut(&key) {
+            // A live view that ends now was visible until now.
+            if sockets.get(&socket).is_some_and(|until| now < *until) {
+                self.note_seen(key.clone(), now);
+            }
             sockets.remove(&socket);
             if sockets.is_empty() {
                 map.remove(&key);
             }
         }
+    }
+
+    fn note_seen(&self, key: Key, now: Instant) {
+        let mut seen = self.seen.lock().unwrap_or_else(|p| p.into_inner());
+        let at = seen.entry(key).or_insert(now);
+        if *at < now {
+            *at = now;
+        }
+    }
+
+    /// When `person` was last seen looking at `conversation`: `now` while a
+    /// view is live, else the last frame or view end. `None` = not since
+    /// this daemon started.
+    pub fn last_visible_at(&self, person: &str, conversation: &str, now: Instant) -> Option<Instant> {
+        if self.is_viewing(person, conversation, now) {
+            return Some(now);
+        }
+        self.seen
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&(person.to_string(), conversation.to_string()))
+            .copied()
+    }
+
+    /// `person` looked at `conversation` within `window` before `now`.
+    pub fn visible_within(&self, person: &str, conversation: &str, window: Duration, now: Instant) -> bool {
+        self.last_visible_at(person, conversation, now).is_some_and(|at| now.saturating_duration_since(at) <= window)
     }
 
     /// True when any socket of `person` has a live view of `conversation`.
@@ -68,8 +111,12 @@ impl Viewers {
 
     /// A socket closed: every entry it held goes.
     pub fn close_socket(&self, socket: u64) {
+        let now = Instant::now();
         let mut map = self.lock();
-        map.retain(|_, sockets| {
+        map.retain(|key, sockets| {
+            if sockets.get(&socket).is_some_and(|until| now < *until) {
+                self.note_seen(key.clone(), now);
+            }
             sockets.remove(&socket);
             !sockets.is_empty()
         });
@@ -154,6 +201,38 @@ mod tests {
         assert_eq!(parse_viewing(r#"{"t":"viewing","visible":"yes"}"#), None);
         assert_eq!(parse_viewing(r#"{"t":"other","visible":true}"#), None);
         assert_eq!(parse_viewing("not json"), None);
+    }
+
+    /// rev 3.1 §6.7 (C28): the registry remembers when a person last looked
+    /// at a Thread, live views and ended ones; another Thread or person
+    /// never counts, and nothing is remembered before the first frame.
+    #[test]
+    fn last_visible_at_remembers_the_last_look_per_person_and_thread() {
+        let v = Viewers::new();
+        let t0 = Instant::now();
+        let ten = Duration::from_secs(600);
+        assert_eq!(v.last_visible_at("owner", "ca", t0), None, "nothing before the first frame (a restart files the ticket)");
+        assert!(!v.visible_within("owner", "ca", ten, t0));
+        v.set(1, "owner", "ca", true, t0);
+        assert_eq!(v.last_visible_at("owner", "ca", t0 + Duration::from_secs(30)), Some(t0 + Duration::from_secs(30)), "live = now");
+        // The view lapses (no repeat): last seen at the frame.
+        let later = t0 + VIEW_TTL + Duration::from_secs(1);
+        assert_eq!(v.last_visible_at("owner", "ca", later), Some(t0));
+        assert!(v.visible_within("owner", "ca", ten, later));
+        assert!(!v.visible_within("owner", "ca", ten, t0 + Duration::from_secs(601)), "older than 10 minutes");
+        // `false` ends a live view now.
+        let t1 = t0 + Duration::from_secs(1000);
+        v.set(2, "gina", "ca", true, t1);
+        v.set(2, "gina", "ca", false, t1 + Duration::from_secs(20));
+        assert_eq!(v.last_visible_at("gina", "ca", t1 + Duration::from_secs(700)), Some(t1 + Duration::from_secs(20)));
+        assert_eq!(v.last_visible_at("gina", "cb", t1), None, "another Thread");
+        assert_eq!(v.last_visible_at("dana", "ca", t1), None, "another person");
+        // A socket closing ends its live view now.
+        let conv = format!("lv-{}", std::process::id());
+        v.set(3, "lee", &conv, true, Instant::now());
+        v.close_socket(3);
+        assert!(!v.is_viewing("lee", &conv, Instant::now()));
+        assert!(v.visible_within("lee", &conv, ten, Instant::now()), "seen just now");
     }
 
     /// A frame from a linked login lands on the owner person, and resets

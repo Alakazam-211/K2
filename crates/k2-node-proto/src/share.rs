@@ -127,6 +127,8 @@ pub mod blocked {
     pub const SERVER_OFFLINE: &str = "server_offline";
     pub const OVER_QUOTA: &str = "over_quota";
     pub const INSTALLING_TOOLS: &str = super::codes::INSTALLING_TOOLS;
+    /// Bigger than the node's caps even when idle (the server's code).
+    pub const EXCEEDS_NODE_CAPS: &str = "exceeds_node_caps";
 }
 
 // ── small enums ──────────────────────────────────────────────────────

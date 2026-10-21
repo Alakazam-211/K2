@@ -3,16 +3,39 @@
 //! name this node as that server knows it), its ledger, and its slot in
 //! the running-jobs map (V48).
 //!
-//! Solo mode: an assign starts or is refused, as today. Lane S2 adds the
-//! node queue here (accept into the queue, `withdraw` / `if_queued`).
+//! **Solo** (one active server, or none in `servers.toml`): an assign
+//! starts or is refused, exactly as in 0.46.2.
+//!
+//! **Shared** (two or more active servers; prd-compute-shared-queue-v1 §7):
+//! - a server that speaks protocol ≥ 3 sends jobs *into* the node queue:
+//!   share and node refusals answer at once (never written to the ledger),
+//!   anything else becomes a `queued/node_queued` ledger row that the queue
+//!   ([`crate::fairq`]) starts in fair order;
+//! - an old (protocol 2) server never queues: its assign starts only when
+//!   no other server has queued work and it fits now, otherwise it's
+//!   refused `fair_share_wait` and the server retries (V70 b);
+//! - `cancel` with `withdraw` or `if_queued` never touches a started job
+//!   (V57); a withdrawn row ends `cancelled/withdrawn` (V46);
+//! - after each attach, queued rows the server's `Welcome.resume` doesn't
+//!   list end `cancelled/superseded`, and only listed ones may start (V47).
 
 use std::sync::Arc;
 
-use k2_node_proto::frames::{Assign, Frame, JobState, StateUpdate};
+use k2_node_proto::crypto;
+use k2_node_proto::frames::{self, Assign, Fence, Frame, JobState, Receipt, ReceiptLog, ResumeHint, SignedReceipt, StateUpdate};
 use k2_node_proto::refusal::{self, JobAsk, NodeView};
+use k2_node_proto::share::{codes, JobClass, ServerStatus, OWNER_SLOT};
 use tokio::sync::watch;
 
 use super::{Node, RunningJob, StopReason, Tenant};
+
+/// One running attempt, as the queue sees it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunningSnap {
+    pub slot: u8,
+    pub job_id: String,
+    pub generation: u32,
+}
 
 impl Node {
     pub(super) fn state_frame(&self, job_id: &str, generation: u32, state: JobState, reason: Option<&str>, detail: Option<&str>) -> Frame {
@@ -48,8 +71,8 @@ impl Node {
     }
 
     /// Handle an `assign` from `t`'s server. Returns `Some((job_id,
-    /// generation))` when a new attempt started (the session tracks its
-    /// logs).
+    /// generation))` when the node took it (started or queued: the session
+    /// tracks its state and logs).
     pub fn on_assign(self: &Arc<Self>, t: &Arc<Tenant>, a: Assign) -> Option<(String, u32)> {
         let job = a.fence.job_id.clone();
         let gen = a.fence.generation;
@@ -74,6 +97,28 @@ impl Node {
             t.hub.send(self.row_state_frame(&r));
             return None;
         }
+        let now = self.now();
+        // Only the owner, on a node nobody shares, takes today's path. Any
+        // other server always goes through its share (a paused, expired or
+        // revoked share must never fall back to "solo").
+        if t.slot != OWNER_SLOT || self.fairq.shared(now) {
+            if self.fairq.protocol(t.slot) >= frames::PROTOCOL_SHARED {
+                return self.enqueue(t, a);
+            }
+            if t.slot != OWNER_SLOT {
+                // A second server must speak protocol 3 (its attach is
+                // refused `server_too_old`; this is the backstop).
+                t.hub.send(self.state_frame(&job, gen, JobState::Queued, Some(codes::SERVER_TOO_OLD), Some("update this server to 0.46.3 to use a shared node")));
+                return None;
+            }
+            // An old server on a shared node (V70 b): it can't wait in the
+            // queue, so it runs only when nobody else has queued work.
+            let others_waiting = self.tenants().iter().filter(|x| x.slot != t.slot).any(|x| x.ledger.lock().unwrap().queued().is_ok_and(|q| !q.is_empty()));
+            if others_waiting {
+                t.hub.send(self.state_frame(&job, gen, JobState::Queued, Some(codes::FAIR_SHARE_WAIT), Some("another server's jobs are queued on this shared node; update this server to 0.46.3 to queue")));
+                return None;
+            }
+        }
         if let Some(r) = self.assign_refusal(t, &a) {
             t.hub.send(self.state_frame(&job, gen, JobState::Queued, Some(&r.code), Some(&r.message)));
             return None;
@@ -82,21 +127,29 @@ impl Node {
             t.hub.send(self.state_frame(&job, gen, JobState::Failed, Some("ledger_error"), Some(&e)));
             return None;
         }
+        self.launch(t, a);
+        Some((job, gen))
+    }
+
+    /// Start an attempt whose ledger row is in place: the running map,
+    /// the queue's accounting, the job task.
+    fn launch(self: &Arc<Self>, t: &Arc<Tenant>, a: Assign) {
         let (stop_tx, stop_rx) = watch::channel(None);
         self.jobs.lock().unwrap().insert(
-            (t.slot, job.clone()),
+            (t.slot, a.fence.job_id.clone()),
             RunningJob {
-                generation: gen,
+                generation: a.fence.generation,
                 cpu_millis: a.plan.limits.cpu_millis,
                 mem_bytes: a.plan.limits.mem_bytes,
                 exclusive: a.plan.exclusive,
                 stop: stop_tx,
             },
         );
+        let caps = self.queue_caps();
+        self.fairq.started(t.slot, &a, self.now(), &caps);
         self.jobs_changed();
         let (node, tenant) = (self.clone(), t.clone());
         tokio::spawn(async move { node.run_job(tenant, a, stop_rx).await });
-        Some((job, gen))
     }
 
     fn assign_refusal(&self, t: &Tenant, a: &Assign) -> Option<k2_node_proto::frames::Refusal> {
@@ -136,22 +189,280 @@ impl Node {
         refusal::refusal(&view, &ask)
     }
 
-    /// `cancel` from `t`'s server: only ever its own jobs.
+    // ── the node queue (shared mode) ────────────────────────────────
+
+    /// The node's capacity and node-wide block for the queue: the
+    /// policy's caps narrowed by the persisted narrowing (a session's
+    /// narrowing narrows only that server's view), and the first reason
+    /// nothing may start (control, window, lock, disk, network policy, an
+    /// install).
+    pub(crate) fn queue_caps(&self) -> k2_node_proto::queue::Caps {
+        let l = self.local.lock().unwrap().clone();
+        let persisted = self.persisted_narrow.lock().unwrap().clone();
+        let mut cpu = l.policy.cpu_cap_millis(self.facts.cores);
+        let mut mem = l.policy.mem_cap_bytes;
+        let mut par = l.policy.max_parallel;
+        if let Some(c) = persisted.cpu_millis {
+            cpu = cpu.min(c);
+        }
+        if let Some(m) = persisted.mem_bytes {
+            mem = mem.min(m);
+        }
+        if let Some(p) = persisted.max_parallel {
+            par = par.min(p.max(1));
+        }
+        let (disk_free, _) = crate::sysinfo::disk(&self.layout().home);
+        let tools = self.tools.lock().unwrap().clone();
+        let none: [String; 0] = [];
+        let view = NodeView {
+            control: self.effective_control(&l),
+            unavailable: &l.unavailable,
+            foreign_lock: l.locks.holding.as_deref(),
+            disk_free_bytes: disk_free,
+            disk_floor_bytes: l.policy.disk_floor_bytes,
+            workspaces_allow: &none,
+            tools: &tools,
+            running: 0,
+            parallel_max: par,
+            exclusive_running: false,
+            free_cpu_millis: cpu,
+            free_mem_bytes: mem,
+            network_none: l.policy.network == "none",
+            network_none_enforced: self.wall.network_none(),
+        };
+        let mut blocked = refusal::node_refusal(&view).map(|r| r.code);
+        if blocked.is_none() && crate::toolchain::installing(&self.toolchains().root) {
+            blocked = Some(codes::INSTALLING_TOOLS.into());
+        }
+        k2_node_proto::queue::Caps { cpu_millis: cpu, mem_bytes: mem, parallel_max: par, blocked }
+    }
+
+    /// Every running attempt (all tenants).
+    pub(crate) fn running_snaps(&self) -> Vec<RunningSnap> {
+        self.jobs.lock().unwrap().iter().map(|((slot, id), j)| RunningSnap { slot: *slot, job_id: id.clone(), generation: j.generation }).collect()
+    }
+
+    /// Shared mode, protocol ≥ 3: refuse now, or write the job into the
+    /// queue (it may start at once: the queue decides).
+    fn enqueue(self: &Arc<Self>, t: &Arc<Tenant>, a: Assign) -> Option<(String, u32)> {
+        let job = a.fence.job_id.clone();
+        let gen = a.fence.generation;
+        if let Some((code, msg)) = self.queue_refusal(t, &a) {
+            t.hub.send(self.state_frame(&job, gen, JobState::Queued, Some(code), Some(&msg)));
+            return None;
+        }
+        if let Err(e) = t.ledger.lock().unwrap().insert_queued(&a, self.opts.clock.as_ref()) {
+            t.hub.send(self.state_frame(&job, gen, JobState::Failed, Some("ledger_error"), Some(&e)));
+            return None;
+        }
+        let epoch = *t.hub.connected.borrow();
+        let caps = self.queue_caps();
+        self.fairq.queued(t.slot, &a, epoch, self.now(), &caps);
+        self.fairq.kick.notify_one();
+        Some((job, gen))
+    }
+
+    /// Why a job can't even wait here: share caps and classes, the
+    /// tenant's queue, node facts no wait fixes. `None` = it may queue.
+    fn queue_refusal(&self, t: &Tenant, a: &Assign) -> Option<(&'static str, String)> {
+        let Some(share) = self.fairq.share(t.slot, self) else {
+            return Some((codes::SERVER_NOT_APPROVED, "this node has no approved share for this server".into()));
+        };
+        match share.status {
+            ServerStatus::Active | ServerStatus::Paused => {}
+            ServerStatus::Expired => return Some((codes::SHARE_EXPIRED, "this server's share of the node has ended".into())),
+            ServerStatus::Revoked => return Some((codes::SHARE_REVOKED, "this server's share of the node was revoked".into())),
+            ServerStatus::Pending | ServerStatus::Refused => return Some((codes::SERVER_NOT_APPROVED, "this server isn't active on the node".into())),
+        }
+        let l = self.local.lock().unwrap().clone();
+        // The owner's workspace allowlist applies to the owner only (V65).
+        if t.slot == OWNER_SLOT && !l.policy.workspaces.is_empty() && !l.policy.workspaces.contains(&a.plan.workspace_id) {
+            return Some((refusal::WORKSPACE_REFUSED, "the machine's owner doesn't allow this workspace".into()));
+        }
+        if l.policy.network == "none" && !self.wall.network_none() {
+            return Some((refusal::NETWORK_NONE_NOT_ENFORCED, refusal::NETWORK_NONE_MESSAGE.into()));
+        }
+        if a.plan.src.is_some() && !self.tools.lock().unwrap().contains_key("git") {
+            return Some((refusal::TOOL_MISSING, "git is not installed on the node".into()));
+        }
+        let lim = &share.limits;
+        let class = a.plan.class.unwrap_or_default();
+        if !lim.allows_class(class) {
+            return Some(if class == JobClass::Gate {
+                (codes::GATE_NOT_ALLOWED, "this server's share doesn't allow gate jobs".into())
+            } else {
+                (codes::EXCEEDS_SHARE_CAPS, format!("this server's share allows up to {} jobs", lim.top_class.as_str()))
+            });
+        }
+        if a.plan.exclusive && !lim.exclusive {
+            return Some((codes::EXCLUSIVE_NOT_ALLOWED, "this server's share doesn't allow exclusive jobs".into()));
+        }
+        let cpu = a.plan.limits.cpu_millis;
+        let mem = a.plan.limits.mem_bytes;
+        if cpu.is_some_and(|c| c > u64::from(lim.max_cpus) * 1000)
+            || mem.is_some_and(|m| m > u64::from(lim.max_mem_gb) << 30)
+            || a.plan.limits.max_secs > lim.max_job_secs
+        {
+            return Some((
+                codes::EXCEEDS_SHARE_CAPS,
+                format!("over this server's share: {} CPUs, {} GB, {} s per job", lim.max_cpus, lim.max_mem_gb, lim.max_job_secs),
+            ));
+        }
+        let caps = self.queue_caps();
+        if cpu.is_some_and(|c| c > caps.cpu_millis) || mem.is_some_and(|m| m > caps.mem_bytes) {
+            return Some((k2_node_proto::share::blocked::EXCEEDS_NODE_CAPS, "bigger than this node's caps".into()));
+        }
+        let queued = t.ledger.lock().unwrap().queued().map(|q| q.len()).unwrap_or(usize::MAX);
+        if queued >= lim.max_queued as usize {
+            return Some((codes::TENANT_QUEUE_FULL, format!("this server already has {queued} jobs queued here (its share allows {})", lim.max_queued)));
+        }
+        None
+    }
+
+    /// Start a queued row now (the queue chose it). False when it left
+    /// the queue meanwhile (withdrawn, cancelled): then nothing starts.
+    pub(crate) fn start_queued(self: &Arc<Self>, t: &Arc<Tenant>, r: &crate::ledger::Row) -> bool {
+        match t.ledger.lock().unwrap().dequeue(&r.job_id, r.generation, self.opts.clock.as_ref()) {
+            Ok(true) => {}
+            Ok(false) => return false,
+            Err(e) => {
+                crate::nlog!("start queued {}: {e}", r.job_id);
+                return false;
+            }
+        }
+        let a = Assign {
+            fence: Fence { job_id: r.job_id.clone(), attempt: r.attempt, generation: r.generation, plan_digest: r.plan_digest.clone() },
+            plan: r.plan.clone(),
+        };
+        self.launch(t, a);
+        true
+    }
+
+    /// End a still-queued row `cancelled/<reason>` with a receipt (it never
+    /// ran), tell its server, forget it in the queue. False when it had
+    /// started (or is gone): nothing changed.
+    pub(crate) fn cancel_queued_row(&self, t: &Tenant, job_id: &str, generation: u32, reason: &str, detail: Option<&str>) -> bool {
+        let now = self.now();
+        let row = {
+            let l = t.ledger.lock().unwrap();
+            match l.cancel_queued(job_id, generation, reason, detail, now) {
+                Ok(true) => {}
+                Ok(false) => return false,
+                Err(e) => {
+                    crate::nlog!("cancel queued {job_id}: {e}");
+                    return false;
+                }
+            }
+            let Ok(Some(row)) = l.get(job_id, generation) else { return false };
+            match self.unrun_receipt(t, &row) {
+                Ok(r) => {
+                    let _ = l.set_receipt(job_id, generation, &r);
+                }
+                Err(e) => crate::nlog!("receipt for {job_id}: {e}"),
+            }
+            l.get(job_id, generation).ok().flatten().unwrap_or(row)
+        };
+        self.fairq.forget(t.slot, job_id, generation);
+        t.hub.send(self.row_state_frame(&row));
+        t.ship.notify_one();
+        self.fairq.kick.notify_one();
+        true
+    }
+
+    /// The receipt of an attempt that never ran (no start, no exit, no log).
+    fn unrun_receipt(&self, t: &Tenant, r: &crate::ledger::Row) -> Result<SignedReceipt, String> {
+        let mut env_names: Vec<String> = r.plan.env.keys().cloned().collect();
+        env_names.sort();
+        let receipt = Receipt {
+            v: 1,
+            job_id: r.job_id.clone(),
+            attempt: r.attempt,
+            generation: r.generation,
+            plan_digest: r.plan_digest.clone(),
+            node_fp: self.key.fingerprint(),
+            controller_fp: t.pin.lock().unwrap().as_ref().map(|p| p.controller_fp.clone()).unwrap_or_default(),
+            workspace_id: r.plan.workspace_id.clone(),
+            argv_sha256: frames::argv_sha256(&r.plan.argv),
+            env_names,
+            src: None,
+            tools: self.tools.lock().unwrap().clone(),
+            boot_id: self.opts.clock.boot_id(),
+            started_at: None,
+            ended_at: r.ended_at.unwrap_or_else(|| self.now()),
+            state: r.state,
+            exit: None,
+            log: ReceiptLog { sha256: crypto::sha256_hex(b""), bytes: 0, truncated: false },
+            artifacts: Vec::new(),
+        };
+        SignedReceipt::sign(&self.key, &receipt)
+    }
+
+    /// After `t`'s server attached (call right after its hub attached,
+    /// with its `Welcome.resume`): queued rows it still lists may start in
+    /// this session; the rest end `cancelled/superseded` at once, so a job
+    /// the server re-placed elsewhere while the node was away never runs
+    /// here too (V47).
+    pub fn queue_attach(&self, t: &Tenant, resume: &[ResumeHint]) {
+        let epoch = *t.hub.connected.borrow();
+        let rows = t.ledger.lock().unwrap().queued().unwrap_or_default();
+        for r in rows {
+            if resume.iter().any(|h| h.job_id == r.job_id && h.generation == r.generation) {
+                self.fairq.gate(t.slot, &r.job_id, r.generation, epoch);
+            } else {
+                self.cancel_queued_row(t, &r.job_id, r.generation, codes::SUPERSEDED, Some("the server no longer lists this job"));
+            }
+        }
+        self.fairq.resend(t.slot);
+        self.fairq.kick.notify_one();
+    }
+
+    /// End every queued job of `t` (its share was revoked or expired, or
+    /// it left the node). Running jobs aren't touched.
+    pub fn queue_cancel_tenant(&self, t: &Tenant, reason: &str) -> usize {
+        let rows = t.ledger.lock().unwrap().queued().unwrap_or_default();
+        rows.iter().filter(|r| self.cancel_queued_row(t, &r.job_id, r.generation, reason, None)).count()
+    }
+
+    /// `cancel` from `t`'s server: only ever its own jobs. `withdraw` and
+    /// `if_queued` end a job only while it's still queued; a started one is
+    /// left alone and its real state is the answer (V57).
     pub fn cancel(&self, t: &Tenant, job_id: &str, generation: u32, reason: &str) {
+        let only_queued = frames::cancel_only_if_not_started(reason);
         let jobs = self.jobs.lock().unwrap();
         if let Some(j) = jobs.get(&(t.slot, job_id.to_string())).filter(|j| j.generation == generation) {
-            j.stop.send_replace(Some(StopReason { state: JobState::Cancelled, reason: reason.to_string() }));
-        } else {
-            drop(jobs);
-            // Not running: report what the ledger has (or that it's unknown).
-            let row = t.ledger.lock().unwrap().get(job_id, generation).ok().flatten();
-            match row {
-                Some(r) => {
+            if only_queued {
+                drop(jobs);
+                if let Ok(Some(r)) = t.ledger.lock().unwrap().get(job_id, generation) {
                     t.hub.send(self.row_state_frame(&r));
                 }
-                None => {
-                    t.hub.send(self.state_frame(job_id, generation, JobState::Unknown, Some("not_on_node"), None));
+                return;
+            }
+            j.stop.send_replace(Some(StopReason { state: JobState::Cancelled, reason: reason.to_string() }));
+            return;
+        }
+        drop(jobs);
+        // Not running: a queued row ends now; anything else reports what the
+        // ledger has (or that it's unknown).
+        let row = t.ledger.lock().unwrap().get(job_id, generation).ok().flatten();
+        match row {
+            Some(r) if r.state == JobState::Queued => {
+                let why = match reason {
+                    frames::CANCEL_WITHDRAW => codes::WITHDRAWN,
+                    frames::CANCEL_IF_QUEUED => "cancelled",
+                    other => other,
+                };
+                if !self.cancel_queued_row(t, job_id, generation, why, None) {
+                    // It started between the read and the cancel: its real state.
+                    if let Ok(Some(r)) = t.ledger.lock().unwrap().get(job_id, generation) {
+                        t.hub.send(self.row_state_frame(&r));
+                    }
                 }
+            }
+            Some(r) => {
+                t.hub.send(self.row_state_frame(&r));
+            }
+            None => {
+                t.hub.send(self.state_frame(job_id, generation, JobState::Unknown, Some("not_on_node"), None));
             }
         }
     }

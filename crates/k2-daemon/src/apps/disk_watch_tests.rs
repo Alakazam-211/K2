@@ -389,3 +389,21 @@ fn the_sweep_removes_only_k2s_unused_seeds_both_copies() {
     assert!(r.seeds.is_empty());
     assert!(engine2.asked.lock().unwrap().is_empty());
 }
+
+/// The drill's trigger: `~/.k2/disk-sweep-now` runs the sweep at once,
+/// is taken, and leaves the report in `disk-sweep-now.done`.
+#[test]
+fn the_sweep_now_file_runs_one_sweep_and_reports() {
+    let _h = crate::test_support::TempHome::new();
+    let _db = k2_core::db::scoped_for_test();
+    let home = k2_core::paths::k2_home();
+    std::fs::create_dir_all(&home).unwrap();
+    assert!(!sweep_requested());
+    std::fs::write(home.join(SWEEP_NOW_FILE), "").unwrap();
+    assert!(sweep_requested());
+    run_requested_sweep(2_000_000_000);
+    assert!(!sweep_requested(), "the request is taken");
+    let done: serde_json::Value = serde_json::from_slice(&std::fs::read(home.join(format!("{SWEEP_NOW_FILE}.done"))).unwrap()).unwrap();
+    assert_eq!(done["seeds"], serde_json::json!([]), "{done}");
+    assert!(done["error"].is_null(), "{done}");
+}

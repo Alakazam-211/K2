@@ -97,7 +97,8 @@ export function SessionViewMenu({
   onSplitLeft: (view: SplitPaneView) => void
   onSplitRight: (view: SplitPaneView) => void
   /** This chat's Thread (thread-read-v1): its unread count rides the
-   *  button and the Thread row, and the menu can mute it. */
+   *  button and the Thread row, and the menu can mute it. The amber
+   *  waiting-on-you marker is not drawn on the button. */
   threadConversationId?: string | null
   /** The room's server; the unread store reads only the window's. */
   threadScope?: ServerScope
@@ -151,10 +152,13 @@ export function SessionViewMenu({
         }}
       >
         {VIEW_LABEL[value]}
+        {/* Unread count only. The amber "waiting on you" marker lives in
+            the main nav (the sidebar agent row), not here (Rosson
+            2026-10-21: too much on the view button). */}
         {threadEntry ? (
           <UnreadBadge
             unread={threadEntry.unread}
-            waiting={threadEntry.waiting}
+            waiting={0}
             muted={threadEntry.muted}
             label="Thread messages"
           />

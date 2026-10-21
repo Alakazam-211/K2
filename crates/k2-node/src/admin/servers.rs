@@ -36,8 +36,12 @@ use crate::paths::Layout;
 
 /// The pending add's enrol credential (config dir, 0640 root:<node group>).
 pub const ENROLL_FILE: &str = "server-enroll.toml";
-/// What the node did with it (`run/`, 0644, node-written).
+/// What the node did with it (`run/`, 0600, node-written: it carries the
+/// SAS; review B5).
 pub const ENROLL_RESULT_FILE: &str = "server-enroll-result.json";
+/// Pending servers' SAS, slot → SAS (`run/`, 0600, node-written; the
+/// status file, 0644, never carries one).
+pub const SAS_FILE: &str = "servers-sas.json";
 /// Revoked slots whose running jobs stop at once (config dir, 0644).
 pub const STOP_FILE: &str = "servers-stop.toml";
 /// Root-only bookkeeping (executor state dir, 0600).
@@ -229,28 +233,17 @@ pub fn write_file(config_dir: &Path, f: &ServersFile) -> Result<(), String> {
         "# K2 node servers (prd-compute-shared-queue-v1 §11.1): the node owner's decisions only.\n\
          # Change it with `sudo k2-node servers …` here, or `k2 compute node servers …` from the owner server.\n{body}"
     );
-    let p = servers_path(config_dir);
-    crate::util::atomic_write(&p, text.as_bytes(), 0o664)?;
-    chown_to_dir_group(&p, config_dir);
-    Ok(())
+    crate::util::atomic_write_owned(&servers_path(config_dir), text.as_bytes(), 0o664, dir_group(config_dir))
 }
 
-fn chown_to_dir_group(p: &Path, dir: &Path) {
-    if !is_root() {
-        return;
-    }
+/// As root: root and the config dir's group (`k2nodectl`), set on the new
+/// file's fd before it's renamed in (never a chown by path, review A M5).
+fn dir_group(dir: &Path) -> Option<(u32, u32)> {
     use std::os::unix::fs::MetadataExt;
-    if let Ok(m) = std::fs::metadata(dir) {
-        chown(p, 0, m.gid());
+    if !is_root() {
+        return None;
     }
-}
-
-fn chown(p: &Path, uid: u32, gid: u32) {
-    let Ok(c) = std::ffi::CString::new(p.as_os_str().as_encoded_bytes()) else { return };
-    // SAFETY: a valid C string path.
-    if unsafe { libc::chown(c.as_ptr(), uid, gid) } != 0 {
-        crate::nlog!("chown {}: {}", p.display(), std::io::Error::last_os_error());
-    }
+    std::fs::symlink_metadata(dir).ok().filter(|m| m.is_dir()).map(|m| (0, m.gid()))
 }
 
 /// The node user's uid and primary gid.
@@ -268,32 +261,13 @@ fn user_ids(name: &str) -> Option<(u32, u32)> {
     }
 }
 
-/// A credential file: created 0600 (never briefly world-readable), then
-/// given to the node user's group (0640) when running as root.
+/// A credential file: 0600 (never briefly world-readable); as root,
+/// root's and the node user's group's, 0640 (set on its fd).
 fn write_private(p: &Path, bytes: &[u8], node_user: &str) -> Result<(), String> {
-    use std::io::Write;
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-    let dir = p.parent().ok_or("no parent dir")?;
-    let tmp = dir.join(format!(".{}.tmp-{}", p.file_name().and_then(|s| s.to_str()).unwrap_or("f"), std::process::id()));
-    let _ = std::fs::remove_file(&tmp);
-    {
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&tmp)
-            .map_err(|e| format!("create {}: {e}", tmp.display()))?;
-        f.write_all(bytes).map_err(|e| format!("write {}: {e}", tmp.display()))?;
-        f.sync_all().map_err(|e| format!("sync {}: {e}", tmp.display()))?;
+    match user_ids(node_user).filter(|_| is_root()) {
+        Some((_, gid)) => crate::util::atomic_write_owned(p, bytes, 0o640, Some((0, gid))),
+        None => crate::util::atomic_write(p, bytes, 0o600),
     }
-    if is_root() {
-        if let Some((_, gid)) = user_ids(node_user) {
-            chown(&tmp, 0, gid);
-            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o640)).map_err(|e| format!("chmod {}: {e}", tmp.display()))?;
-        }
-    }
-    std::fs::rename(&tmp, p).map_err(|e| format!("rename to {}: {e}", p.display()))
 }
 
 pub fn enroll_path(config_dir: &Path) -> PathBuf {
@@ -342,9 +316,7 @@ fn set_stop(config_dir: &Path, slot: Slot, on: bool) -> Result<(), String> {
         };
     }
     let body = toml::to_string(&s).map_err(|e| e.to_string())?;
-    crate::util::atomic_write(&p, body.as_bytes(), 0o644)?;
-    chown_to_dir_group(&p, config_dir);
-    Ok(())
+    crate::util::atomic_write_owned(&p, body.as_bytes(), 0o644, dir_group(config_dir))
 }
 
 fn book_path(state_dir: &Path) -> PathBuf {
@@ -745,6 +717,18 @@ fn prune_locked(ctx: &Ctx) -> Result<Value, AdminRefusal> {
         write_file(&ctx.config_dir, &f).map_err(failed)?;
     }
     Ok(json!({"changed": changed, "wiped": wiped}))
+}
+
+/// Put the pending servers' SAS into the status lines, from the node's
+/// 0600 SAS file, when this user may read it (the node user, root).
+pub fn fill_sas(layout: &Layout, lines: &mut [crate::status::ServerLine]) {
+    let Ok(b) = std::fs::read(layout.run().join(SAS_FILE)) else { return };
+    let Ok(m) = serde_json::from_slice::<BTreeMap<String, String>>(&b) else { return };
+    for l in lines {
+        if let Some(s) = m.get(&l.slot.to_string()) {
+            l.sas = Some(s.clone());
+        }
+    }
 }
 
 /// The lines as the file says them (the machine CLI adds the node's view).

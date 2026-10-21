@@ -213,7 +213,7 @@ pub fn apply(e: &Executor, c: &Checked, sig: &str, bytes: &[u8]) -> Result<Value
         let _ = std::fs::remove_file(&new);
         return Err(r);
     }
-    let staged = Staged { to: built.version.to_string(), key: built.key_id.to_string(), cmd_id: c.opened.cmd.cmd_id.clone() };
+    let staged = Staged { to: built.version.to_string(), key: built.key_id.to_string(), cmd_id: c.opened.cmd.cmd_id.clone(), sha };
     // A shared node lets running jobs finish first (V55); `.new` waits.
     drain_then(e, now_flag, "node.update", &c.opened.cmd.cmd_id, move |ex| swap_and_restart(ex, &staged))
 }
@@ -223,6 +223,8 @@ struct Staged {
     to: String,
     key: String,
     cmd_id: String,
+    /// The verified build's sha256: `.new` must still be it at the swap.
+    sha: String,
 }
 
 /// Swap `.new` in, restart the node, start the health gate.
@@ -233,6 +235,17 @@ fn swap_and_restart(e: &Executor, s: &Staged) -> Result<Value, AdminRefusal> {
         return Err(fail("the staged build is gone"));
     }
     let mut rec = load(e);
+    // A drained swap runs later: the version may have been rolled back
+    // meanwhile, or `.new` replaced (review A L7).
+    if rec.refused.iter().any(|v| *v == s.to) {
+        let _ = std::fs::remove_file(&new);
+        return Err(AdminRefusal::new(code::ROLLED_BACK_VERSION, "that version was rolled back on this node"));
+    }
+    let staged_sha = std::fs::read(&new).map(|b| k2_node_proto::crypto::sha256_hex(&b)).map_err(|x| fail(format!("read the staged build: {x}")))?;
+    if !k2_node_proto::crypto::ct_eq(staged_sha.as_bytes(), s.sha.as_bytes()) {
+        let _ = std::fs::remove_file(&new);
+        return Err(AdminRefusal::new(code::BAD_BUILD, "the staged build changed since it was verified"));
+    }
     // Swap.
     let prev = sib(&bin, ".prev");
     let swap = (|| -> std::io::Result<()> {
@@ -279,8 +292,17 @@ pub fn shared_node(e: &Executor) -> bool {
     super::servers::read_file(&e.paths.config_dir).ok().flatten().is_some_and(|f| f.shared(e.now()))
 }
 
-/// Running jobs, every server's, as the node's status file says.
+/// Running jobs, every server's: behind the Linux job wall, root counts
+/// the live job units itself (review A L7: never the node's word);
+/// otherwise (macOS, no wall: jobs are the node's children) the node's
+/// status file.
 pub fn running_jobs(e: &Executor) -> usize {
+    if cfg!(target_os = "linux") && matches!(super::jobs::read_jobs_file(&e.paths.config_dir), Ok(Some(_))) {
+        let pattern = format!("{}*", super::jobs::UNIT_PREFIX);
+        if let Ok(list) = super::jobs::systemctl(&["list-units", "--plain", "--no-legend", "--state=active,activating,deactivating", &pattern]) {
+            return list.lines().filter(|l| l.trim_start().starts_with(super::jobs::UNIT_PREFIX)).count();
+        }
+    }
     crate::status::read(&e.paths.layout().status()).map(|s| s.running.len()).unwrap_or(0)
 }
 
@@ -291,14 +313,16 @@ pub struct UpdateMark {
     pub at: i64,
 }
 
-pub fn update_mark_path(home: &Path) -> PathBuf {
-    home.join("run").join(UPDATE_MARK_FILE)
+/// In the config dir (root's; the node reads it): root never writes into
+/// the node's home (review A, H1).
+pub fn update_mark_path(config_dir: &Path) -> PathBuf {
+    config_dir.join(UPDATE_MARK_FILE)
 }
 
 fn write_update_mark(e: &Executor, what: &str) {
     let m = UpdateMark { what: what.to_string(), at: e.now() };
     if let Ok(b) = serde_json::to_vec(&m) {
-        if let Err(x) = crate::util::atomic_write(&update_mark_path(&e.paths.home), &b, 0o644) {
+        if let Err(x) = crate::util::atomic_write(&update_mark_path(&e.paths.config_dir), &b, 0o644) {
             crate::nlog!("admin: update mark: {x}");
         }
     }
@@ -306,8 +330,8 @@ fn write_update_mark(e: &Executor, what: &str) {
 
 /// Node side: was this process (or its jobs) stopped for an update the
 /// executor started in the last few minutes?
-pub fn recent_update_mark(home: &Path, now: i64) -> bool {
-    std::fs::read(update_mark_path(home))
+pub fn recent_update_mark(config_dir: &Path, now: i64) -> bool {
+    std::fs::read(update_mark_path(config_dir))
         .ok()
         .and_then(|b| serde_json::from_slice::<UpdateMark>(&b).ok())
         .is_some_and(|m| now >= m.at && now - m.at < UPDATE_MARK_SECS)
@@ -322,18 +346,24 @@ pub fn drain_then<F>(e: &Executor, now: bool, what: &str, cmd_id: &str, act: F) 
 where
     F: FnOnce(&Executor) -> Result<Value, AdminRefusal> + Send + 'static,
 {
+    // Any update or rollback that acts (now, or a new drain) supersedes a
+    // drain still waiting to act; a refused one changes nothing.
+    let supersede = || e.drain_gen.fetch_add(1, Ordering::SeqCst) + 1;
     if !shared_node(e) {
         // Solo: today's path, today's reasons.
+        supersede();
         return act(e);
     }
     let running = running_jobs(e);
     if now || running == 0 {
+        supersede();
         write_update_mark(e, what);
         return act(e);
     }
     if e.draining.swap(true, Ordering::SeqCst) {
         return Err(AdminRefusal::new(code::BUSY, "this node is already draining for an update or restart"));
     }
+    let gen = supersede();
     let control_path = e.paths.layout().control();
     let prior = match crate::config::read_control(&control_path) {
         Ok(c) => c,
@@ -359,6 +389,7 @@ where
         exit_after_update: e.exit_after_update,
         drain_max: e.drain_max,
         draining: e.draining.clone(),
+        drain_gen: e.drain_gen.clone(),
     };
     let resp = json!({"phase": "draining", "what": what, "running": running, "max_secs": e.drain_max.as_secs()});
     let (what, cmd_id) = (what.to_string(), cmd_id.to_string());
@@ -370,8 +401,14 @@ where
         let left = running_jobs(&ex);
         let r = {
             let _g = ex.busy.lock().unwrap_or_else(|p| p.into_inner());
-            write_update_mark(&ex, &what);
-            let r = act(&ex);
+            let r = if ex.drain_gen.load(Ordering::SeqCst) != gen {
+                // A later update or rollback (`now`) came first: this
+                // drained action is stale and never runs.
+                Err(AdminRefusal::new(code::BUSY, "superseded by a later update or rollback"))
+            } else {
+                write_update_mark(&ex, &what);
+                act(&ex)
+            };
             // Put the owner's switch back, unless someone changed it since.
             if let Ok(c) = crate::config::read_control(&control_path) {
                 if c.control == k2_node_proto::frames::Control::Draining && c.by.as_deref() == Some(by.as_str()) {
@@ -409,6 +446,7 @@ pub fn start_gate(e: &Executor) {
         exit_after_update: e.exit_after_update,
         drain_max: e.drain_max,
         draining: e.draining.clone(),
+        drain_gen: e.drain_gen.clone(),
     };
     std::thread::spawn(move || {
         // Wait until the request that started us released the lock.
@@ -560,7 +598,7 @@ mod drain_tests {
         let res = solo.run(&solo.approve(solo.cmd("unit.restart", json!({"unit": "k2-node"}))));
         assert_eq!(res.state, "done", "{res:?}");
         assert_eq!(calls(&solo), vec!["restart-unit k2-node".to_string()]);
-        assert!(!update_mark_path(&solo.exec.paths.home).exists(), "solo keeps today's reasons");
+        assert!(!update_mark_path(&solo.exec.paths.config_dir).exists(), "solo keeps today's reasons");
 
         // Shared with a running job: drains, then restarts.
         let r = Rig::new("full");
@@ -578,7 +616,7 @@ mod drain_tests {
         running(&r, &[]);
         wait("the restart", || calls(&r) == vec!["restart-unit k2-node".to_string()]);
         wait("control back", || control(&r) == Control::Active);
-        assert!(recent_update_mark(&r.exec.paths.home, r.exec.now()), "the restart is marked an update");
+        assert!(recent_update_mark(&r.exec.paths.config_dir, r.exec.now()), "the restart is marked an update");
         // The drain's end line is written after the control is put back.
         wait("drain start and end audited", || r.exec.audit().verify().unwrap().iter().filter(|l| l.event == "drain").count() == 2);
 
@@ -589,6 +627,26 @@ mod drain_tests {
         let res = n.run(&n.approve(n.cmd("unit.restart", json!({"unit": "k2-node", "now": true}))));
         assert_eq!((res.state.as_str(), calls(&n)), ("done", vec!["restart-unit k2-node".to_string()]), "{res:?}");
         assert_eq!(control(&n), Control::Active);
+    }
+
+    /// Review A L7: a later `now` supersedes a drain still waiting; the
+    /// drained action never runs after it (no second restart, no stale
+    /// swap after a rollback), and the drain still puts control back.
+    #[test]
+    fn a_later_now_supersedes_a_waiting_drain() {
+        let r = Rig::new("full");
+        share_node(&r, 2);
+        running(&r, &["j1", "t1-0123456789abcdef"]);
+        let res = r.run(&r.approve(r.cmd("unit.restart", json!({"unit": "k2-node"}))));
+        assert_eq!(res.result["phase"], "draining", "{res:?}");
+        let now = r.run(&r.approve(r.cmd("unit.restart", json!({"unit": "k2-node", "now": true}))));
+        assert_eq!(now.state, "done", "{now:?}");
+        assert_eq!(calls(&r), vec!["restart-unit k2-node".to_string()], "the `now` restart ran at once");
+        running(&r, &[]);
+        wait("the drain to end", || !r.exec.draining.load(Ordering::SeqCst));
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(calls(&r), vec!["restart-unit k2-node".to_string()], "the superseded drained restart never ran");
+        wait("control back", || control(&r) == Control::Active);
     }
 
     /// The drain gives up after `drain_max` and restarts anyway; a machine

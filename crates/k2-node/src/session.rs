@@ -519,6 +519,8 @@ where
     let mut serve = tenant.serve.subscribe();
     // A non-owner's owner-only frames are answered once per session (V52).
     let mut told_not_owner = false;
+    // The last queue view this session got, and when (B6).
+    let mut last_view: Option<(std::time::Instant, k2_node_proto::share::QueueView)> = None;
     let end = loop {
         let msg = tokio::select! {
             m = stream.next() => m,
@@ -625,10 +627,21 @@ where
             Frame::QueueGet(g) => {
                 // Only a protocol-3 session asks (older parsers don't know it).
                 if tenant.speaks_shared() {
+                    // At most one fresh view a second per session (review
+                    // B6): a faster asker gets the last one again, under
+                    // its own request id, and never makes the queue lock
+                    // every ledger for it.
+                    if let Some((_, v)) = last_view.as_ref().filter(|(at, _)| at.elapsed() < QUEUE_VIEW_EVERY) {
+                        let mut v = v.clone();
+                        v.request_id = g.request_id.clone();
+                        let _ = tx.send(Frame::QueueView(v)).await;
+                        continue;
+                    }
                     let (n, t, tx2) = (node.clone(), tenant.clone(), tx.clone());
                     let v = tokio::task::spawn_blocking(move || n.fairq.view(&n, &t, &g.request_id)).await;
                     match v {
                         Ok(v) => {
+                            last_view = Some((std::time::Instant::now(), v.clone()));
                             let _ = tx2.send(Frame::QueueView(v)).await;
                         }
                         Err(e) => crate::nlog!("queue view: {e}"),
@@ -887,6 +900,8 @@ struct ServersLoop {
     prune_error: Option<String>,
     /// What the node queue was last told about each server's share.
     fq: std::collections::BTreeMap<Slot, crate::fairq::ShareInfo>,
+    /// The SAS file as last written (slot → SAS).
+    sas: Option<std::collections::BTreeMap<String, String>>,
 }
 
 impl Drop for ServersLoop {
@@ -912,6 +927,34 @@ pub async fn run_servers(node: Arc<Node>) {
     loop {
         servers_pass(&node, &mut st).await;
         tokio::time::sleep(node.opts.config_poll).await;
+    }
+}
+
+/// A session gets a freshly computed queue view at most this often.
+const QUEUE_VIEW_EVERY: Duration = Duration::from_secs(1);
+
+/// Which line a slot's node-only state belongs to (`state/tenants/<slot>/`).
+const LINE_MARK_FILE: &str = "line";
+
+fn line_mark(e: &ServerEntry) -> String {
+    format!("{}:{}", e.fp_prefix, e.added_at)
+}
+
+/// Forget a slot that has no server: its state dir and pin (the node's own
+/// files; quiet when already gone).
+fn forget_slot(layout: &crate::paths::Layout, slot: Slot) {
+    let t = layout.tenant(slot);
+    let (state, pin) = (t.state(), t.pin());
+    if state.exists() {
+        match std::fs::remove_dir_all(&state) {
+            Ok(()) => crate::nlog!("server slot {slot}: no server there any more; its node state is gone"),
+            Err(e) => crate::nlog!("server slot {slot}: forget {}: {e}", state.display()),
+        }
+    }
+    if let Err(e) = std::fs::remove_file(&pin) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            crate::nlog!("server slot {slot}: forget {}: {e}", pin.display());
+        }
     }
 }
 
@@ -1010,6 +1053,18 @@ async fn servers_pass(node: &Arc<Node>, st: &mut ServersLoop) {
         }
     }
 
+    // A slot with no line and nothing open: its node-only state (ledger,
+    // journals, artifacts, pin) is the node's to forget (root's wipe
+    // removes only the slot's root, review A M1). Only with a good file in
+    // hand: a missing or broken one forgets nothing.
+    if let Some(f) = file.as_ref() {
+        for slot in 1..k2_node_proto::share::MAX_SLOTS {
+            if f.entry(slot).is_none() && node.tenant(slot).is_none() {
+                forget_slot(&layout, slot);
+            }
+        }
+    }
+
     let stop = crate::admin::servers::read_stop(&layout.config).unwrap_or_default();
     let mut due_prune = false;
     for (e, eff) in lines.iter().filter(|(e, _)| e.slot != OWNER_SLOT) {
@@ -1030,6 +1085,17 @@ async fn servers_pass(node: &Arc<Node>, st: &mut ServersLoop) {
                 if !pin_now.is_some_and(|(p, _)| crate::node::tenant::pin_serves(e, &p)) || e.state == ShareState::Revoked {
                     continue;
                 }
+                // The slot's node-only state belongs to one line: another
+                // server's (a wiped slot reused while the node was off)
+                // goes before this one opens (its ledger, journals).
+                let tstate = layout.tenant(slot).state();
+                let mark = line_mark(e);
+                if tstate.exists() && std::fs::read_to_string(tstate.join(LINE_MARK_FILE)).ok().as_deref() != Some(mark.as_str()) {
+                    if let Err(err) = std::fs::remove_dir_all(&tstate) {
+                        crate::nlog!("server slot {slot}: can't clear another server's state: {err}");
+                        continue;
+                    }
+                }
                 let t = match node.add_tenant(slot).await {
                     Ok(t) => t,
                     Err(err) => {
@@ -1037,6 +1103,9 @@ async fn servers_pass(node: &Arc<Node>, st: &mut ServersLoop) {
                         continue;
                     }
                 };
+                if let Err(err) = crate::util::atomic_write(&tstate.join(LINE_MARK_FILE), mark.as_bytes(), 0o600) {
+                    crate::nlog!("server slot {slot}: line mark: {err}");
+                }
                 st.keys.insert(slot, line_key(e));
                 st.tasks.insert(slot, tokio::spawn(run_tenant_forever(node.clone(), t.clone())));
                 t
@@ -1127,7 +1196,9 @@ async fn servers_pass(node: &Arc<Node>, st: &mut ServersLoop) {
                 link: if link.state.is_empty() { if e.state == ShareState::Pending { "enrolling".into() } else { "unenrolled".into() } } else { link.state },
                 route: link.route,
                 last_error: link.last_error,
-                sas: pin.as_ref().filter(|p| !p.confirmed && !p.revoked).map(|p| p.sas.clone()),
+                // The SAS isn't for everyone who can read the status file
+                // (0644): it goes to the 0600 SAS file below (review B5).
+                sas: None,
                 fp: pin.as_ref().map(|p| p.controller_fp.clone()),
                 running: running.get(&e.slot).map(|v| v.len() as u32).unwrap_or(0),
                 expires_at: e.expires_at,
@@ -1135,6 +1206,31 @@ async fn servers_pass(node: &Arc<Node>, st: &mut ServersLoop) {
             }
         })
         .collect();
+    // Pending servers' SAS, for the node owner at the machine only (0600).
+    let sas: std::collections::BTreeMap<String, String> = lines
+        .iter()
+        .filter(|(e, _)| e.slot != OWNER_SLOT)
+        .filter_map(|(e, _)| {
+            let t = node.tenant(e.slot).filter(|_| st.keys.get(&e.slot) == Some(&line_key(e)));
+            let pin = t.as_ref().and_then(|t| t.pin.lock().unwrap().clone()).or_else(|| crate::identity::read_tenant_pin(&layout.tenant(e.slot).pin()).ok().flatten().map(|(p, _)| p));
+            pin.filter(|p| !p.confirmed && !p.revoked && crate::node::tenant::pin_serves(e, p)).map(|p| (e.slot.to_string(), p.sas))
+        })
+        .collect();
+    if st.sas.as_ref() != Some(&sas) {
+        let p = layout.run().join(crate::admin::servers::SAS_FILE);
+        let r = if sas.is_empty() {
+            match std::fs::remove_file(&p) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
+                _ => Ok(()),
+            }
+        } else {
+            serde_json::to_vec(&sas).map_err(|e| e.to_string()).and_then(|b| crate::util::atomic_write(&p, &b, 0o600))
+        };
+        match r {
+            Ok(()) => st.sas = Some(sas),
+            Err(e) => crate::nlog!("servers SAS file: {e}"),
+        }
+    }
     let error = error.or_else(|| st.prune_error.clone());
     let write = {
         let mut s = node.status.lock().unwrap();
@@ -1197,7 +1293,7 @@ async fn enroll_pending(node: &Arc<Node>, st: &mut ServersLoop, e: &ServerEntry,
         }
     };
     if let Ok(b) = serde_json::to_vec_pretty(&o) {
-        if let Err(err) = crate::util::atomic_write(&result_path, &b, 0o644) {
+        if let Err(err) = crate::util::atomic_write(&result_path, &b, 0o600) {
             crate::nlog!("server enrol result: {err}");
         }
     }

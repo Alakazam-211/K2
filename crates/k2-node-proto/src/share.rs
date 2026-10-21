@@ -1067,9 +1067,8 @@ pub fn check_verb_args(verb: &str, args: &Value) -> Result<(), String> {
         }
         VERB_ADD => {
             let a: AddArgs = parse(verb, args)?;
-            let url_ok = a.url.starts_with("https://") || a.url.starts_with("http://");
-            if !url_ok || a.url.len() > 512 || a.url.chars().any(char::is_whitespace) {
-                return Err(format!("{verb}: url is an http(s) base URL"));
+            if !add_url_ok(&a.url) || a.url.len() > 512 || a.url.chars().any(char::is_whitespace) {
+                return Err(format!("{verb}: url is an https:// base URL (plain http:// only on this machine's loopback)"));
             }
             if a.code_binding.is_empty() || a.code_binding.len() > 128 {
                 return Err(format!("{verb}: code_binding is required"));
@@ -1125,12 +1124,46 @@ pub struct TenantWipe {
     pub slot: Slot,
 }
 
+/// A new server's base URL (review B4): `https://`, or plain `http://`
+/// only to this machine's loopback (tests; nothing crosses a wire). The
+/// enrol credential and SAS never travel in the clear.
+pub fn add_url_ok(url: &str) -> bool {
+    if url.starts_with("https://") {
+        return url.len() > "https://".len();
+    }
+    let Some(rest) = url.strip_prefix("http://") else { return false };
+    let host_port = rest.split('/').next().unwrap_or("");
+    if host_port.contains('@') {
+        return false;
+    }
+    let host = if let Some(r) = host_port.strip_prefix('[') {
+        r.split(']').next().unwrap_or("")
+    } else {
+        match host_port.rsplit_once(':') {
+            Some((h, p)) if p.chars().all(|c| c.is_ascii_digit()) => h,
+            _ => host_port,
+        }
+    };
+    host.eq_ignore_ascii_case("localhost") || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn fp(c: char) -> String {
         std::iter::repeat_n(c, 64).collect()
+    }
+
+    /// B4: a new server is https, or plain http only on loopback.
+    #[test]
+    fn add_urls_are_https_or_loopback() {
+        for ok in ["https://baden.k2.dev", "https://10.0.0.5:8443", "http://127.0.0.1:41234", "http://localhost:9", "http://[::1]:80"] {
+            assert!(add_url_ok(ok), "{ok}");
+        }
+        for bad in ["http://baden.k2.dev", "http://192.168.1.20:8080", "http://10.0.0.5", "http://user@127.0.0.1", "ftp://x", "https://", "baden.k2.dev"] {
+            assert!(!add_url_ok(bad), "{bad}");
+        }
     }
 
     fn file() -> ServersFile {

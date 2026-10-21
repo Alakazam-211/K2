@@ -20,21 +20,84 @@ macro_rules! nlog {
 
 /// Write `bytes` to `path` via a temp file + rename, then chmod `mode`.
 pub fn atomic_write(path: &Path, bytes: &[u8], mode: u32) -> Result<(), String> {
+    atomic_write_owned(path, bytes, mode, None)
+}
+
+/// [`atomic_write`], and as root give the new file `owner` (uid, gid).
+///
+/// Safe in a directory other users can write (review A, H1/M5): the
+/// parent is opened once (`O_DIRECTORY|O_NOFOLLOW`) and everything after
+/// goes through that fd. The temp file gets a random name and is created
+/// `O_CREAT|O_EXCL|O_NOFOLLOW` (a planted file or link at that name
+/// fails it; it never truncates or follows anything); its mode and owner
+/// are set on its fd; `renameat` replaces whatever `path` was (a link is
+/// replaced, never followed). As root, the parent must be root's: root
+/// never writes into a directory another user owns (the node's home).
+pub fn atomic_write_owned(path: &Path, bytes: &[u8], mode: u32, owner: Option<(u32, u32)>) -> Result<(), String> {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
     let dir = path.parent().ok_or_else(|| format!("{} has no parent", path.display()))?;
+    let name = path.file_name().ok_or_else(|| format!("{} has no file name", path.display()))?;
     std::fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
-    let tmp = dir.join(format!(
-        ".{}.tmp-{}",
-        path.file_name().and_then(|s| s.to_str()).unwrap_or("file"),
-        std::process::id()
-    ));
-    {
-        let mut f = std::fs::File::create(&tmp).map_err(|e| format!("create {}: {e}", tmp.display()))?;
-        f.write_all(bytes).map_err(|e| format!("write {}: {e}", tmp.display()))?;
-        f.sync_all().map_err(|e| format!("sync {}: {e}", tmp.display()))?;
+    let cdir = std::ffi::CString::new(dir.as_os_str().as_encoded_bytes()).map_err(|_| format!("{}: a NUL in the path", dir.display()))?;
+    // SAFETY: a valid C string; the fd is owned below.
+    let dfd = unsafe { libc::open(cdir.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC) };
+    if dfd < 0 {
+        return Err(format!("open {}: {}", dir.display(), std::io::Error::last_os_error()));
     }
-    std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode))
-        .map_err(|e| format!("chmod {}: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, path).map_err(|e| format!("rename to {}: {e}", path.display()))?;
+    // SAFETY: a fresh fd nothing else owns.
+    let dfd = unsafe { OwnedFd::from_raw_fd(dfd) };
+    // SAFETY: plain getter.
+    if unsafe { libc::geteuid() } == 0 {
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        // SAFETY: a valid fd and out-pointer.
+        if unsafe { libc::fstat(dfd.as_raw_fd(), &mut st) } != 0 {
+            return Err(format!("stat {}: {}", dir.display(), std::io::Error::last_os_error()));
+        }
+        if st.st_uid != 0 {
+            return Err(format!("root never writes into {} (owned by uid {})", dir.display(), st.st_uid));
+        }
+    }
+    let base = name.to_string_lossy();
+    let mut made = None;
+    for _ in 0..8 {
+        let rand = k2_node_proto::crypto::random_id()?;
+        let tmp = std::ffi::CString::new(format!(".{base}.tmp-{}", &rand[..16])).map_err(|_| format!("{}: a NUL in the name", path.display()))?;
+        // SAFETY: a valid dir fd and C string.
+        let fd = unsafe { libc::openat(dfd.as_raw_fd(), tmp.as_ptr(), libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC, 0o600 as libc::c_uint) };
+        if fd >= 0 {
+            // SAFETY: a fresh fd nothing else owns.
+            made = Some((unsafe { std::fs::File::from_raw_fd(fd) }, tmp));
+            break;
+        }
+        let e = std::io::Error::last_os_error();
+        if e.kind() != std::io::ErrorKind::AlreadyExists {
+            return Err(format!("create a temp file in {}: {e}", dir.display()));
+        }
+    }
+    let (mut f, tmp) = made.ok_or_else(|| format!("no free temp name in {}", dir.display()))?;
+    let unlink = |why: String| {
+        // SAFETY: a valid dir fd and C string; removes our own temp file.
+        unsafe { libc::unlinkat(dfd.as_raw_fd(), tmp.as_ptr(), 0) };
+        why
+    };
+    f.write_all(bytes).map_err(|e| unlink(format!("write {}: {e}", path.display())))?;
+    f.sync_all().map_err(|e| unlink(format!("sync {}: {e}", path.display())))?;
+    if let Some((uid, gid)) = owner {
+        // SAFETY: plain getter.
+        if unsafe { libc::geteuid() } == 0 && unsafe { libc::fchown(f.as_raw_fd(), uid, gid) } != 0 {
+            return Err(unlink(format!("chown {}: {}", path.display(), std::io::Error::last_os_error())));
+        }
+    }
+    // SAFETY: a valid fd.
+    if unsafe { libc::fchmod(f.as_raw_fd(), mode as libc::mode_t) } != 0 {
+        return Err(unlink(format!("chmod {}: {}", path.display(), std::io::Error::last_os_error())));
+    }
+    drop(f);
+    let cname = std::ffi::CString::new(name.as_encoded_bytes()).map_err(|_| unlink(format!("{}: a NUL in the name", path.display())))?;
+    // SAFETY: valid dir fd and C strings.
+    if unsafe { libc::renameat(dfd.as_raw_fd(), tmp.as_ptr(), dfd.as_raw_fd(), cname.as_ptr()) } != 0 {
+        return Err(unlink(format!("rename to {}: {}", path.display(), std::io::Error::last_os_error())));
+    }
     Ok(())
 }
 
@@ -207,5 +270,46 @@ mod tests {
         let link = d.join("link.lock");
         std::os::unix::fs::symlink(d.join("elsewhere"), &link).unwrap();
         assert!(FileLock::exclusive(&link).is_err(), "never through a symlink");
+    }
+
+    /// H1: a link planted at the target is replaced, never followed; a
+    /// parent that is a link is refused; no temp file is left behind.
+    #[test]
+    fn atomic_write_never_follows_a_link() {
+        let d = temp_dir("atomic");
+        let victim = d.join("victim");
+        std::fs::write(&victim, "keep me").unwrap();
+        let target = d.join("out.json");
+        std::os::unix::fs::symlink(&victim, &target).unwrap();
+        atomic_write(&target, b"new", 0o644).unwrap();
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep me", "the link's target is untouched");
+        assert!(!std::fs::symlink_metadata(&target).unwrap().file_type().is_symlink(), "the link itself was replaced");
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "new");
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(&target).unwrap().permissions().mode() & 0o777, 0o644);
+        let real = d.join("real");
+        std::fs::create_dir(&real).unwrap();
+        std::os::unix::fs::symlink(&real, d.join("linkdir")).unwrap();
+        assert!(atomic_write(&d.join("linkdir/x"), b"x", 0o644).is_err(), "a parent that is a link is refused");
+        assert!(!real.join("x").exists());
+        let left: Vec<_> = std::fs::read_dir(&d).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| n.contains(".tmp-")).collect();
+        assert!(left.is_empty(), "no temp files left: {left:?}");
+    }
+
+    /// H1 as root: root never writes into a directory another user owns.
+    #[test]
+    #[ignore = "root: run in the Linux container with --ignored"]
+    fn root_never_writes_into_another_users_dir() {
+        assert_eq!(unsafe { libc::geteuid() }, 0, "run as root");
+        let d = temp_dir("atomic-root");
+        let theirs = d.join("theirs");
+        std::fs::create_dir(&theirs).unwrap();
+        std::os::unix::fs::chown(&theirs, Some(65534), Some(65534)).unwrap();
+        let e = atomic_write(&theirs.join("mark.json"), b"x", 0o644).unwrap_err();
+        assert!(e.contains("root never writes into"), "{e}");
+        atomic_write_owned(&d.join("mine.json"), b"x", 0o640, Some((0, 65534))).unwrap();
+        use std::os::unix::fs::MetadataExt;
+        let m = std::fs::metadata(d.join("mine.json")).unwrap();
+        assert_eq!((m.uid(), m.gid(), m.mode() & 0o777), (0, 65534, 0o640));
     }
 }

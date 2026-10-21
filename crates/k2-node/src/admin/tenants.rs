@@ -35,7 +35,7 @@
 use std::path::{Path, PathBuf};
 
 use k2_node_proto::admin::{code, AdminRefusal};
-use k2_node_proto::share::{self, codes, ServerStatus, ShareState, Slot, TenantPrepare, TenantWipe, Trust, OWNER_SLOT};
+use k2_node_proto::share::{self, codes, ServerStatus, Slot, TenantPrepare, TenantWipe, Trust, OWNER_SLOT};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -77,13 +77,13 @@ fn write_ids(e: &Executor, ids: &TenantIds) -> Result<(), String> {
 }
 
 /// One tenant op at a time (they edit `jobs.toml`, `tenant-ids.json` and
-/// the user database), across the executor's connection threads and
-/// `sudo k2-node servers …` (its add and wipe call these too).
-pub const OPS_LOCK_FILE: &str = "tenant-ops.lock";
+/// the user database), across the executor's connection threads, `sudo
+/// k2-node servers …` (its add and wipe call these too) and setup's
+/// `jobs.toml` write. Beside `jobs.toml`.
+pub const OPS_LOCK_FILE: &str = ".tenant-ops.lock";
 
 fn ops_lock(e: &Executor) -> Result<crate::util::FileLock, AdminRefusal> {
-    crate::util::mkdir_mode(&e.paths.state_dir, 0o700).map_err(failed)?;
-    crate::util::FileLock::exclusive(&e.paths.state_dir.join(OPS_LOCK_FILE)).map_err(failed)
+    crate::util::FileLock::exclusive(&e.paths.config_dir.join(OPS_LOCK_FILE)).map_err(failed)
 }
 
 fn refuse(c: &str, m: impl Into<String>) -> AdminRefusal {
@@ -112,6 +112,28 @@ fn run(program: &str, args: &[&str]) -> Result<(), AdminRefusal> {
     super::exec::run_fixed(program, args).map_err(failed)
 }
 
+/// SIGKILL `pid` only if it is still `uid`'s: the pidfd pins the process,
+/// then its uid is read again (Linux; no pidfd → nothing is sent).
+#[cfg(target_os = "linux")]
+fn kill_if_still(pid: i32, uid: u32) {
+    // SAFETY: pidfd_open takes a pid and flags; the fd is closed below.
+    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) } as libc::c_int;
+    if fd < 0 {
+        return;
+    }
+    let st = std::fs::read_to_string(format!("/proc/{pid}/status")).unwrap_or_default();
+    let real = st.lines().find_map(|l| l.strip_prefix("Uid:")).and_then(|r| r.split_whitespace().next()?.parse::<u32>().ok());
+    if real == Some(uid) {
+        // SAFETY: a valid pidfd; no siginfo.
+        unsafe { libc::syscall(libc::SYS_pidfd_send_signal, fd, libc::SIGKILL, std::ptr::null::<libc::c_void>(), 0) };
+    }
+    // SAFETY: our own fd.
+    unsafe { libc::close(fd) };
+}
+
+#[cfg(not(target_os = "linux"))]
+fn kill_if_still(_pid: i32, _uid: u32) {}
+
 /// Every process of `uid` (from /proc; Linux).
 fn pids_of(uid: u32) -> Vec<i32> {
     let mut out = Vec::new();
@@ -136,12 +158,30 @@ impl Executor {
         jobs::tenant_entry(&self.paths.config_dir, slot)
     }
 
-    /// `tenant.prepare` (see the module doc).
+    /// `tenant.prepare` (see the module doc). Audited.
     pub fn tenant_prepare(&self, p: &TenantPrepare) -> Result<Value, AdminRefusal> {
         let _g = ops_lock(self)?;
+        let r = self.tenant_prepare_locked(p);
+        self.audit_tenant_op("tenant.prepare", p.slot, &r);
+        r
+    }
+
+    fn audit_tenant_op(&self, event: &str, slot: Slot, r: &Result<Value, AdminRefusal>) {
+        let (code, detail) = match r {
+            Ok(v) => (None, v.clone()),
+            Err(e) => (Some(e.code.clone()), json!({"slot": slot, "message": e.message})),
+        };
+        let _ = self.audit().append(super::store::AuditEntry { event: event.into(), code, detail, ..Default::default() }, self.now());
+    }
+
+    fn tenant_prepare_locked(&self, p: &TenantPrepare) -> Result<Value, AdminRefusal> {
         let entry = self.approved_entry(p.slot)?;
-        if entry.state == ShareState::Revoked {
-            return Err(refuse(codes::SHARE_REVOKED, format!("slot {} is revoked; wipe it, then add the server again", p.slot)));
+        match entry.status(self.now()) {
+            ServerStatus::Revoked => return Err(refuse(codes::SHARE_REVOKED, format!("slot {} is revoked; wipe it, then add the server again", p.slot))),
+            // Past its end date (or a pending add past its 10 minutes):
+            // nobody gets a user for it (review A L5).
+            ServerStatus::Expired => return Err(refuse(codes::SHARE_EXPIRED, format!("slot {}'s share has ended", p.slot))),
+            _ => {}
         }
         if entry.trust != p.trust || entry.network != p.network {
             return Err(refuse(code::BAD_ARGS, "trust or network differ from servers.toml (root reads servers.toml, not the ask)"));
@@ -149,6 +189,11 @@ impl Executor {
         let layout = self.paths.layout();
         let node_user = self.node_user();
         let (node_uid, node_gid) = super::server::user_ids(&node_user).ok_or_else(|| refuse(code::NOT_CONFIGURED, "the node user is missing"))?;
+        // `<home>-t` sits in a root-only directory, so nobody but root can
+        // swap it (review A L6).
+        let troot = layout.tenants_root();
+        let above = troot.parent().ok_or_else(|| refuse(code::NOT_CONFIGURED, "the tenants root has no parent"))?;
+        crate::wall::open_root_owned_dir(above).map_err(|e| refuse(code::NOT_CONFIGURED, e))?;
         if cfg!(target_os = "macos") {
             if entry.trust == Trust::Team {
                 return Err(refuse(codes::TEAM_NEEDS_TENANT_WALL, "Macs take only your own servers until per-tenant users (0.46.4)"));
@@ -262,15 +307,24 @@ impl Executor {
     /// never handed out again.
     pub fn tenant_wipe(&self, w: &TenantWipe) -> Result<Value, AdminRefusal> {
         let _g = ops_lock(self)?;
+        let r = self.tenant_wipe_locked(w);
+        self.audit_tenant_op("tenant.wipe", w.slot, &r);
+        r
+    }
+
+    fn tenant_wipe_locked(&self, w: &TenantWipe) -> Result<Value, AdminRefusal> {
         if w.slot == OWNER_SLOT || !share::valid_slot(w.slot) {
             return Err(refuse(code::BAD_ARGS, format!("slot {} isn't a tenant slot (1–7)", w.slot)));
         }
+        // Only what the owner decided: a revoked or expired line (review A
+        // M1). A slot with no line is never wiped on anyone's say.
         let servers = jobs::read_servers(&self.paths.config_dir).map_err(|e| refuse(codes::TENANT_WALL_MISSING, e))?;
-        if let Some(e) = servers.as_ref().and_then(|f| f.entry(w.slot)) {
-            let st = e.status(self.now());
-            if !matches!(st, ServerStatus::Revoked | ServerStatus::Expired) {
-                return Err(refuse(code::BAD_ARGS, format!("slot {} is {}; only a revoked or expired server is wiped", w.slot, st.as_str())));
-            }
+        let Some(e) = servers.as_ref().and_then(|f| f.entry(w.slot)) else {
+            return Err(refuse(code::BAD_ARGS, format!("slot {} has no line in servers.toml; only a revoked or expired server is wiped", w.slot)));
+        };
+        let st = e.status(self.now());
+        if !matches!(st, ServerStatus::Revoked | ServerStatus::Expired) {
+            return Err(refuse(code::BAD_ARGS, format!("slot {} is {}; only a revoked or expired server is wiped", w.slot, st.as_str())));
         }
         let layout = self.paths.layout();
         let mut removed: Vec<String> = Vec::new();
@@ -288,18 +342,22 @@ impl Executor {
                     }
                 }
             }
+            // Everything left in the slot's slice, by cgroup (review A L4).
+            let _ = jobs::systemctl(&["kill", "--signal=SIGKILL", &jobs::slice_name(w.slot)]);
             let f = jobs::read_jobs_file(&self.paths.config_dir).map_err(|e| refuse(code::NOT_CONFIGURED, e))?;
             let name = jobs::tenant_user_name(w.slot);
             let uid = f.as_ref().and_then(|f| f.tenant(w.slot)).map(|t| t.uid).or_else(|| super::server::user_ids(&name).map(|(u, _)| u));
             if let Some(uid) = uid.filter(|u| *u >= TENANT_ID_FIRST && *u <= TENANT_ID_LAST) {
+                // Anything of its uid outside the slice: signalled through a
+                // pidfd taken first and checked after, so a reused pid is
+                // never hit.
                 for _ in 0..20 {
                     let pids = pids_of(uid);
                     if pids.is_empty() {
                         break;
                     }
                     for p in pids {
-                        // SAFETY: plain kill of a pid we just listed.
-                        unsafe { libc::kill(p, libc::SIGKILL) };
+                        kill_if_still(p, uid);
                     }
                     std::thread::sleep(std::time::Duration::from_millis(100));
                 }
@@ -312,20 +370,22 @@ impl Executor {
                 }
             }
         }
-        // Files: the slot's root (job dirs, mirrors, caches) and its
-        // node-only state (journals, artifacts, ledger) and pin.
-        let t = layout.tenant(w.slot);
-        for p in [t.root(), t.state(), t.pin()] {
-            let r = match std::fs::symlink_metadata(&p) {
-                Ok(m) if m.is_dir() => std::fs::remove_dir_all(&p),
-                Ok(_) => std::fs::remove_file(&p),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(e) => Err(e),
-            };
-            match r {
-                Ok(()) => removed.push(p.display().to_string()),
-                Err(e) => errors.push(format!("{}: {e}", p.display())),
+        // Files: root removes only the slot's root (job dirs, mirrors,
+        // caches) under its own `<home>-t`, through fds (review A M1). The
+        // node-only state (journals, artifacts, ledger, pin) is the node's
+        // data in the node's dirs: the node forgets it once the line is
+        // gone.
+        let troot = layout.tenants_root();
+        match crate::wall::open_root_owned_dir(&troot) {
+            Ok(fd) => {
+                let name = std::ffi::CString::new(w.slot.to_string()).expect("digits");
+                match crate::wall::remove_tree_at(&fd, &name) {
+                    Ok(()) => removed.push(layout.tenant(w.slot).root().display().to_string()),
+                    Err(e) => errors.push(e),
+                }
             }
+            Err(_) if !troot.exists() => {}
+            Err(e) => errors.push(e),
         }
         if cfg!(target_os = "linux") {
             let name = jobs::tenant_user_name(w.slot);

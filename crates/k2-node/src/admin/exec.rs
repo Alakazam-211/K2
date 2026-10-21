@@ -230,6 +230,9 @@ pub struct Executor {
     pub drain_max: std::time::Duration,
     /// A drain is under way (one at a time).
     pub draining: Arc<std::sync::atomic::AtomicBool>,
+    /// Bumped by every update or rollback: a drain started under an older
+    /// value never acts (a later `now` or rollback cancelled it, review A L7).
+    pub drain_gen: Arc<std::sync::atomic::AtomicU64>,
 }
 
 type Refused = (String, String, AdminRefusal);
@@ -251,6 +254,7 @@ impl Executor {
             exit_after_update: false,
             drain_max: std::time::Duration::from_secs(super::update::DRAIN_MAX_SECS as u64),
             draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            drain_gen: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
 

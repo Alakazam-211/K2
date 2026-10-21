@@ -48,6 +48,75 @@
 
 use std::path::Path;
 
+/// Test builds only: the folder that stands in for the OS Trash
+/// (`K2_TEST_TRASH_DIR`; `TempHome` sets it to `<home>/.Trash`).
+pub const TEST_TRASH_DIR_ENV: &str = "K2_TEST_TRASH_DIR";
+
+/// The ONE call into the OS recycle bin (the `trash` crate). Every helper
+/// here and `fs_commands::delete` go through it.
+///
+/// 0.46.3: in test builds (`cfg(test)` or k2-core's `test-util`, which only
+/// dev-dependencies enable) it never touches the real Trash: on macOS that
+/// drives Finder over AppleEvents, which pops Touch ID on a desk Mac and
+/// times out (-1712) on the headless compute minis. It moves the path into
+/// [`TEST_TRASH_DIR_ENV`] instead, or `<temp>/k2-test-trash` when unset —
+/// still a move, never an unlink, so "it went to the Trash" assertions keep
+/// meaning something. A release build compiles none of this: production is
+/// `trash::delete`, unchanged.
+pub(crate) fn os_trash(path: &Path) -> Result<(), String> {
+    #[cfg(any(test, feature = "test-util"))]
+    {
+        test_trash(path)
+    }
+    #[cfg(not(any(test, feature = "test-util")))]
+    {
+        trash::delete(path).map_err(|e| e.to_string())
+    }
+}
+
+#[cfg(any(test, feature = "test-util"))]
+fn test_trash(path: &Path) -> Result<(), String> {
+    let dir = std::env::var_os(TEST_TRASH_DIR_ENV)
+        .filter(|v| !v.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("k2-test-trash"));
+    std::fs::create_dir_all(&dir).map_err(|e| format!("test trash dir {}: {e}", dir.display()))?;
+    let name = path
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "item".into());
+    let dest = dir.join(format!("{name}-{}", uuid::Uuid::new_v4().simple()));
+    match std::fs::rename(path, &dest) {
+        Ok(()) => Ok(()),
+        // Another filesystem (a temp HOME on one volume, the item on
+        // another): copy then remove, like a Trash move across volumes.
+        Err(_) => {
+            copy_recursive(path, &dest).map_err(|e| format!("test trash copy {}: {e}", path.display()))?;
+            if path.is_dir() {
+                std::fs::remove_dir_all(path)
+            } else {
+                std::fs::remove_file(path)
+            }
+            .map_err(|e| format!("test trash remove {}: {e}", path.display()))
+        }
+    }
+}
+
+#[cfg(any(test, feature = "test-util"))]
+fn copy_recursive(from: &Path, to: &Path) -> std::io::Result<()> {
+    let meta = std::fs::symlink_metadata(from)?;
+    if meta.is_dir() {
+        std::fs::create_dir_all(to)?;
+        for entry in std::fs::read_dir(from)? {
+            let entry = entry?;
+            copy_recursive(&entry.path(), &to.join(entry.file_name()))?;
+        }
+        Ok(())
+    } else {
+        std::fs::copy(from, to).map(|_| ())
+    }
+}
+
 /// Send a path (file or directory) to the OS recycle bin. Returns
 /// an error if the trash operation fails (most commonly: missing
 /// trash service on minimal Linux, permission denied, path doesn't
@@ -60,7 +129,7 @@ pub fn trash<P: AsRef<Path>>(path: P) -> Result<(), String> {
         // Mirror `fs::remove_*` semantics: not-existing is success.
         return Ok(());
     }
-    trash::delete(path_ref).map_err(|e| {
+    os_trash(path_ref).map_err(|e| {
         format!(
             "trash {} failed: {} (path NOT permanently deleted; intervene manually)",
             path_ref.display(),
@@ -106,7 +175,7 @@ pub fn trash_or_remove<P: AsRef<Path>>(path: P) -> std::io::Result<()> {
     if !path_ref.exists() {
         return Ok(());
     }
-    match trash::delete(path_ref) {
+    match os_trash(path_ref) {
         Ok(()) => Ok(()),
         Err(e) => {
             crate::log_debug!(
@@ -119,5 +188,35 @@ pub fn trash_or_remove<P: AsRef<Path>>(path: P) -> std::io::Result<()> {
                 std::fs::remove_file(path_ref)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod test_trash_tests {
+    use super::*;
+
+    /// Tests never reach the real Trash: the path moves into the test
+    /// trash folder, content intact.
+    #[test]
+    fn trash_in_tests_moves_into_the_test_trash_dir() {
+        let home = crate::test_env::TempHome::new();
+        let trash_dir = std::path::PathBuf::from(
+            std::env::var_os(TEST_TRASH_DIR_ENV).expect("TempHome sets the test trash dir"),
+        );
+        assert_eq!(trash_dir, home.path().join(".Trash"));
+        let f = home.path().join("note.md");
+        std::fs::write(&f, "keep me").unwrap();
+        trash(&f).expect("trash");
+        assert!(!f.exists(), "the file left its folder");
+        let moved: Vec<_> = std::fs::read_dir(&trash_dir).unwrap().map(|e| e.unwrap().path()).collect();
+        assert_eq!(moved.len(), 1, "{moved:?}");
+        assert_eq!(std::fs::read_to_string(&moved[0]).unwrap(), "keep me", "moved, never unlinked");
+
+        let d = home.path().join("folder");
+        std::fs::create_dir_all(d.join("sub")).unwrap();
+        std::fs::write(d.join("sub/x"), "x").unwrap();
+        trash_or_remove(&d).expect("trash_or_remove");
+        assert!(!d.exists());
+        assert_eq!(std::fs::read_dir(&trash_dir).unwrap().count(), 2);
     }
 }

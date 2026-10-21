@@ -250,13 +250,16 @@ async fn a_guest_is_one_person_on_every_surface_with_live_read_frames() {
     assert_eq!((r.json()["muted"].as_bool(), r.json()["total"].as_i64()), (Some(true), Some(0)), "{}", r.body);
     let f = next_read(&mut phone_thread, "after the phone's mute").await;
     assert_eq!((f["muted"].as_bool(), f["total"].as_i64(), f["unread"].as_i64()), (Some(true), Some(0), Some(1)), "{f}");
+    let a = next_read(&mut phone_activity, "activity socket after the phone's mute").await;
+    assert_eq!((a["muted"].as_bool(), a["workspace"].as_str()), (Some(true), Some(ws.handle.as_str())), "{a}");
     let u = unread(port, &desk).await;
     assert_eq!(u["total"], 0, "a muted room leaves the badge: {u}");
     assert_eq!(u["muted"], json!([{ "id": conv, "addr": ws.handle }]), "{u}");
     assert_eq!(row(&u, &conv)["muted"], true);
     let r = post(port, "/cli/thread/mute", &desk, json!({ "addr": ws.handle, "muted": false })).await;
     assert_eq!((r.status, r.json()["muted"].as_bool()), (200, Some(false)), "{}", r.body);
-    next_read(&mut phone_thread, "after the desktop's unmute").await;
+    assert_eq!(next_read(&mut phone_thread, "after the desktop's unmute").await["muted"], false);
+    assert_eq!(next_read(&mut phone_activity, "activity socket after the desktop's unmute").await["muted"], false);
     // A mute in a room it doesn't hold: the uniform skin_room.
     let r = post(port, "/cli/thread/mute", &phone, json!({ "addr": other.handle, "muted": true })).await;
     assert_eq!((r.status, r.code()), (403, "skin_room".to_string()), "{}", r.body);
@@ -340,6 +343,9 @@ async fn a_guests_counts_cover_its_own_rooms_only() {
     role(port, &one, &[&a], &["thread:read", "activity:read"]).await;
     owner_ok(port, "/cli/skin/roles/room", json!({ "name": one, "handle": c.handle, "caps": ["files:read", "activity:read"] })).await;
     let ben = guest_login(port, &format!("ben{tag}"), &one).await;
+    // First look: everything that exists now starts read.
+    assert_eq!(unread(port, &ana).await["total"], 0);
+    assert_eq!(unread(port, &ben).await["total"], 0);
     agent_posts(port, &a, 2).await;
     let sb = agent_posts(port, &b, 3).await;
     agent_posts(port, &c, 4).await;

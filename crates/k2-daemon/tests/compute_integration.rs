@@ -573,6 +573,7 @@ async fn node_sockets_fail_closed_over_the_tunnel() {
     // enroll: a made-up code is refused by the handler.
     let (mut ws, _) = tokio_tungstenite::connect_async(url("/cli/compute/enroll")).await.expect("enroll upgrades over the tunnel");
     let req = k2_node_proto::frames::HandshakeFrame::EnrollRequest(k2_node_proto::frames::EnrollRequest {
+        shared_by: None,
         code_binding: k2_node_proto::pairing::code_binding("ABCDEFGHJK"),
         node_public_key_pem: key.spki_pem(),
         name: "x".into(),
@@ -705,6 +706,7 @@ async fn one_click_tickets_and_declared_toolchains() {
     let enroll_raw = |ticket: String, name: &str, key: &k2_node_proto::crypto::SigningKey| {
         let t = k2_node_proto::ticket::Ticket::decode(&ticket).unwrap();
         HandshakeFrame::EnrollRequest(EnrollRequest {
+            shared_by: None,
             code_binding: t.binding(),
             node_public_key_pem: key.spki_pem(),
             name: name.into(),
@@ -851,6 +853,11 @@ fn pending_node(id: &str, name: &str) {
 fn running_job(job: &str, node: &str, ws: &str) {
     use k2_node_proto::frames::{JobLimits, JobState, Plan};
     let plan = Plan {
+        class: None,
+        session_id: None,
+        est_secs: None,
+        est_p90_secs: None,
+        ws_max_running: None,
         job_id: job.into(),
         node_id: node.into(),
         workspace_id: ws.into(),

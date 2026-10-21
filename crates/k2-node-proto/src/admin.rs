@@ -204,6 +204,20 @@ pub const VERBS: &[VerbSpec] = &[
     // Linux: create the `k2job` user and turn the job wall on (what setup
     // does at the machine), for nodes updated remotely (0.46.3).
     VerbSpec { name: "wall.enable", base: Class::Privileged, min_level: Level::Full, runs: Runs::Executor },
+    // Node sharing (protocol 3, prd-compute-shared-queue-v1 §10.2;
+    // arguments: `crate::share::check_verb_args`). The node lists its
+    // servers itself; the rest write root-owned `servers.toml`.
+    VerbSpec { name: "servers.list", base: Class::Read, min_level: Level::Off, runs: Runs::Node },
+    // Runs `tenant.prepare`; always the owner's approval. `full` like every
+    // privileged verb (the PRD's table said `policy`; the catalog rule wins:
+    // at `policy` a node adds servers at the machine only).
+    VerbSpec { name: "servers.add", base: Class::Privileged, min_level: Level::Full, runs: Runs::Executor },
+    // Operate when it only narrows; the executor re-classes a widening
+    // (`share::ShareLimits::widens`) as privileged, like `policy.set`.
+    VerbSpec { name: "servers.limits", base: Class::Operate, min_level: Level::Policy, runs: Runs::Executor },
+    VerbSpec { name: "servers.pause", base: Class::Operate, min_level: Level::Policy, runs: Runs::Executor },
+    VerbSpec { name: "servers.resume", base: Class::Operate, min_level: Level::Policy, runs: Runs::Executor },
+    VerbSpec { name: "servers.revoke", base: Class::Operate, min_level: Level::Policy, runs: Runs::Executor },
 ];
 
 pub fn verb(name: &str) -> Option<&'static VerbSpec> {

@@ -1657,6 +1657,11 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     };
     let stall_secs = crate::compute_place::stall_for(&ctl, &node_features(&node), timeout as u64);
     let plan = Plan {
+        class: None,
+        session_id: None,
+        est_secs: None,
+        est_p90_secs: None,
+        ws_max_running: None,
         job_id: job_id.clone(),
         node_id: node.id.clone(),
         workspace_id: ws.id.clone(),
@@ -2290,6 +2295,11 @@ fn run_sharded(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reque
     let parent_id = crypto::random_id().map_err(|e| no("internal", 500, e))?;
     let now = compute::now();
     let parent_plan = Plan {
+        class: None,
+        session_id: None,
+        est_secs: None,
+        est_p90_secs: None,
+        ws_max_running: None,
         job_id: parent_id.clone(),
         node_id: String::new(),
         workspace_id: ws.id.clone(),

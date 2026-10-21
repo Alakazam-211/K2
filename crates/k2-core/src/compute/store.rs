@@ -1079,6 +1079,11 @@ mod tests {
 
     fn plan(id: &str, node: &str, ws: &str) -> Plan {
         Plan {
+            class: None,
+            session_id: None,
+            est_secs: None,
+            est_p90_secs: None,
+            ws_max_running: None,
             job_id: id.into(),
             node_id: node.into(),
             workspace_id: ws.into(),

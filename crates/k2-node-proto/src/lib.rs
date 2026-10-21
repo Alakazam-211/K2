@@ -17,6 +17,9 @@
 //!   verb catalog and refusal codes (prd-k2-node-admin-v1 §7). SSOT.
 //! - [`health`]: node health facts (§10.1).
 //! - [`results`]: artifact globs, collected artifacts, JUnit test summaries.
+//! - [`share`]: one node, many servers (protocol 3): slots, classes,
+//!   shares, `servers.toml`, quotes and queue views, the `servers.*` verb
+//!   arguments and the sharing reason codes.
 
 pub mod admin;
 pub mod canonical;
@@ -28,6 +31,7 @@ pub mod needs;
 pub mod pairing;
 pub mod refusal;
 pub mod results;
+pub mod share;
 pub mod ticket;
 
 pub use frames::PROTOCOL;

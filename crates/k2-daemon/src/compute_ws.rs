@@ -1487,6 +1487,11 @@ mod tests {
 
     fn job_on(conn: &rusqlite::Connection, id: &str, node: &str) -> store::JobRow {
         let plan = Plan {
+            class: None,
+            session_id: None,
+            est_secs: None,
+            est_p90_secs: None,
+            ws_max_running: None,
             job_id: id.into(),
             node_id: node.into(),
             workspace_id: "ws".into(),

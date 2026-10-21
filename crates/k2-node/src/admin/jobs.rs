@@ -43,8 +43,35 @@ pub const UNIT_PREFIX: &str = "k2job-";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct JobsFile {
-    /// The user jobs run as. Never root, never the node user.
+    /// The user jobs run as. Never root, never the node user. The owner
+    /// server's jobs (slot 0) always run as this user.
     pub job_user: String,
+    /// Non-owner servers' job users, by slot (`[tenants] 1 = { user =
+    /// "k2job-1", uid = 61001, gid = 61001 }`), written by the executor's
+    /// `tenant.prepare` (prd-compute-shared-queue-v1 §8.2, §11.1). A reused
+    /// slot always gets a new uid (V64). Absent = no tenant users.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub tenants: std::collections::BTreeMap<String, TenantUser>,
+}
+
+/// One tenant's job user and group (Linux).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TenantUser {
+    pub user: String,
+    pub uid: u32,
+    pub gid: u32,
+}
+
+impl JobsFile {
+    /// Slot `slot`'s job user; `None` for the owner (it's [`Self::job_user`])
+    /// and for a slot with no user yet (its jobs wait, `tenant_wall_missing`).
+    pub fn tenant(&self, slot: u8) -> Option<&TenantUser> {
+        if slot == k2_node_proto::share::OWNER_SLOT {
+            return None;
+        }
+        self.tenants.get(&slot.to_string())
+    }
 }
 
 /// `Ok(None)` when missing (no wall set up).
@@ -75,7 +102,9 @@ pub fn check_job_user(job_user: &str, node_user: &str) -> Result<(u32, u32), Str
 /// `sudo k2-node admin job-user <name>` (setup): validate and write.
 pub fn write_jobs_file(config_dir: &Path, job_user: &str, node_user: &str) -> Result<String, String> {
     check_job_user(job_user, node_user)?;
-    let body = toml::to_string(&JobsFile { job_user: job_user.to_string() }).map_err(|e| e.to_string())?;
+    // Keep the tenants `tenant.prepare` wrote; setup only sets the owner's user.
+    let tenants = read_jobs_file(config_dir).ok().flatten().map(|f| f.tenants).unwrap_or_default();
+    let body = toml::to_string(&JobsFile { job_user: job_user.to_string(), tenants }).map_err(|e| e.to_string())?;
     let text = format!(
         "# K2 compute node: jobs run as this user in a sandboxed systemd unit (0.46.3).\n\
          # Written by k2-node setup; remove the file to go back to jobs as the node user.\n{body}"
@@ -710,9 +739,22 @@ mod tests {
         let d = crate::util::temp_dir("jobsfile");
         assert_eq!(read_jobs_file(&d).unwrap(), None);
         std::fs::write(d.join(JOBS_FILE), "job_user = \"k2job\"\n").unwrap();
-        assert_eq!(read_jobs_file(&d).unwrap(), Some(JobsFile { job_user: "k2job".into() }));
+        assert_eq!(read_jobs_file(&d).unwrap(), Some(JobsFile { job_user: "k2job".into(), tenants: Default::default() }));
         std::fs::write(d.join(JOBS_FILE), "job_user = \"k2job\"\nextra = 1\n").unwrap();
         assert!(read_jobs_file(&d).is_err(), "fail closed");
+        // Tenant users by slot; the owner (slot 0) is always `job_user`.
+        std::fs::write(
+            d.join(JOBS_FILE),
+            "job_user = \"k2job\"\n\n[tenants]\n1 = { user = \"k2job-1\", uid = 61001, gid = 61001 }\n",
+        )
+        .unwrap();
+        let f = read_jobs_file(&d).unwrap().unwrap();
+        assert_eq!(f.tenant(1), Some(&TenantUser { user: "k2job-1".into(), uid: 61001, gid: 61001 }));
+        assert_eq!((f.tenant(0), f.tenant(2)), (None, None));
+        let back: JobsFile = toml::from_str(&toml::to_string(&f).unwrap()).unwrap();
+        assert_eq!(back, f);
+        std::fs::write(d.join(JOBS_FILE), "job_user = \"k2job\"\n[tenants]\n1 = { user = \"k2job-1\", uid = 1, gid = 1, shell = \"x\" }\n").unwrap();
+        assert!(read_jobs_file(&d).is_err(), "tenant lines are strict too");
     }
 
     #[test]

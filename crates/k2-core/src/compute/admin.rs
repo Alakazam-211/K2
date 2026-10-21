@@ -625,6 +625,8 @@ pub fn validate_step(verb: &str, args: &Value) -> Result<Class, (&'static str, S
             }
         }
         "wall.enable" => only_keys(a, &[]).map_err(bad)?,
+        // Node sharing (protocol 3): one checker on both ends.
+        v if v.starts_with("servers.") => super::proto::share::check_verb_args(v, args).map_err(|e| (codes::BAD_ARGS, e))?,
         "homes.private" => {
             // Absent = every open home the node reports; else named ones.
             only_keys(a, &["homes"]).map_err(bad)?;

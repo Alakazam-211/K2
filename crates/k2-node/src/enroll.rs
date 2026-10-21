@@ -105,6 +105,7 @@ where
     };
     let fut = async {
         send_hs(ws, &HandshakeFrame::EnrollRequest(EnrollRequest {
+            shared_by: None,
             code_binding: binding.clone(),
             node_public_key_pem: key.spki_pem(),
             name: name.to_string(),

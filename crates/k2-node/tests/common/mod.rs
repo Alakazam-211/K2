@@ -371,6 +371,11 @@ pub async fn start_node_in(fake: &Fake, dir: PathBuf, policy_extra: &str, tweak:
 
 pub fn plan(job: &str, argv: &[&str]) -> Plan {
     Plan {
+        class: None,
+        session_id: None,
+        est_secs: None,
+        est_p90_secs: None,
+        ws_max_running: None,
         job_id: job.into(),
         node_id: "node-1".into(),
         workspace_id: "ws-1".into(),

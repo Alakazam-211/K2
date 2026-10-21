@@ -29,7 +29,7 @@
 //! - Switch (Rosson's standing rule): `K2_APP_PASS_GATE=off` in the
 //!   daemon's environment is today's behaviour (no fence). On by default.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
 /// The daemon environment switch; `off` (or `0`/`false`) = no fence.
 pub const SWITCH_ENV: &str = "K2_APP_PASS_GATE";
@@ -54,6 +54,7 @@ pub fn admits(method: &str, path: &str) -> bool {
 /// (Bearer, `?token=` and cookie folded in). Only a **live** pass is fenced
 /// (a dead one resolves to nothing anyway, so its answers stay today's).
 pub fn fences(on_link: bool, method: &str, path: &str, query: &str) -> bool {
+    note_request(method, path, query);
     if on_link || !enabled() {
         return false;
     }
@@ -66,17 +67,96 @@ pub fn fences(on_link: bool, method: &str, path: &str, query: &str) -> bool {
 
 tokio::task_local! {
     static FENCE: Cell<bool>;
+    static REQUEST: RefCell<Noted>;
 }
 
-/// Run one connection with its per-request fence (the dispatcher's loop).
+/// Run one connection with its per-request fence (the dispatcher's loop)
+/// and the request the permission-card refusal wrapper reads.
 pub async fn scope<F: std::future::Future>(f: F) -> F::Output {
-    FENCE.scope(Cell::new(false), f).await
+    FENCE.scope(Cell::new(false), REQUEST.scope(RefCell::new(Noted::default()), f)).await
 }
 
 /// Set the current request's fence (the dispatcher, before the route match
-/// and at the top of every request).
+/// and at the top of every request). Also makes the request noted by
+/// [`fences`] (if any) the current one: at the top of a request nothing is
+/// pending, so the previous request's context is cleared.
 pub fn set_fenced(on: bool) {
     let _ = FENCE.try_with(|c| c.set(on));
+    let _ = REQUEST.try_with(|r| {
+        let mut r = r.borrow_mut();
+        r.current = r.pending.take();
+    });
+}
+
+// ── Permission cards (PRD rev 3.1 §3.1, vs-live C2; lane C) ──────────────
+//
+// `handle_one_request` answers through hundreds of direct `send_response`
+// calls, so the refusal wrapper (`permission::walls::teach_tcp`) sits in
+// `http::send_response*` and reads the request from this task-local. The
+// dispatcher already calls [`fences`] once per request with the method,
+// path and effective auth query, right before [`set_fenced`]; `fences`
+// notes them (pending) and `set_fenced` makes them current. No dispatcher
+// edit, no second wrapper. Nothing is noted while the global "Permission
+// cards" switch is off, or for a request with no token.
+
+/// One request as the refusal wrapper sees it.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct NotedRequest {
+    pub method: String,
+    pub path: String,
+    /// The effective auth query (Bearer / `?token=` / cookie folded in).
+    pub query: String,
+    /// The request's JSON-object body, once an arm has read it.
+    pub body: Option<serde_json::Value>,
+    /// The request's form body params, once an arm has read them.
+    pub form: std::collections::HashMap<String, String>,
+}
+
+#[derive(Debug, Default)]
+struct Noted {
+    pending: Option<NotedRequest>,
+    current: Option<NotedRequest>,
+}
+
+fn note_request(method: &str, path: &str, query: &str) {
+    if !k2_core::permission::gate::server_on() {
+        return;
+    }
+    if super::http::extract_token(query).is_none_or(str::is_empty) {
+        return;
+    }
+    let _ = REQUEST.try_with(|r| {
+        r.borrow_mut().pending = Some(NotedRequest {
+            method: method.to_string(),
+            path: path.split('?').next().unwrap_or(path).to_string(),
+            query: query.to_string(),
+            body: None,
+            form: Default::default(),
+        });
+    });
+}
+
+/// Record the current request's body (`http::read_post_body*`). A no-op
+/// unless a request is noted: a JSON object is kept as is, anything else
+/// is read as a form.
+pub(crate) fn note_body(raw: &[u8]) {
+    let _ = REQUEST.try_with(|r| {
+        let mut r = r.borrow_mut();
+        let Some(cur) = r.current.as_mut() else { return };
+        let Ok(s) = std::str::from_utf8(raw) else { return };
+        if s.trim_start().starts_with('{') {
+            if let Ok(v @ serde_json::Value::Object(_)) = serde_json::from_str::<serde_json::Value>(s) {
+                cur.body = Some(v);
+            }
+        } else if !s.trim().is_empty() {
+            cur.form = super::http::parse_form_body(raw);
+        }
+    });
+}
+
+/// Run `f` on the current noted request, if there is one.
+pub(crate) fn with_request<T>(f: impl FnOnce(&NotedRequest) -> T) -> Option<T> {
+    REQUEST.try_with(|r| r.borrow().current.as_ref().map(f)).ok().flatten()
 }
 
 /// Is the current request fenced? (`apps::gateway::resolve_pass`.)

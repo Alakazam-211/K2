@@ -1242,13 +1242,28 @@ fn load_build(os: &str, arch: &str) -> R<NodeBuild> {
     let root = assets_dir();
     let dir = root.join(&want);
     prune_other_versions(&root, &want);
-    if let Some(b) = cached_build(os, arch, &dir, &asset)? {
-        if b.version == want {
-            return Ok(b);
-        }
-        // Another version's build under this version's name: replace it.
+    let drop_cached = || {
         let _ = std::fs::remove_file(dir.join(&asset));
         let _ = std::fs::remove_file(dir.join(format!("{asset}.sig")));
+    };
+    match cached_build(os, arch, &dir, &asset) {
+        Ok(Some(b)) if b.version == want => return Ok(b),
+        // Another version's build under this version's name: replace it.
+        Ok(Some(_)) => drop_cached(),
+        Ok(None) => {}
+        // A pair that fails the check (a crash between the two writes, or
+        // tampering) is never offered: refilled once from the source; if
+        // that fails too, the check's error stands.
+        Err(bad) => {
+            drop_cached();
+            if fill_cache(os, arch, &asset, &want, &dir).is_err() {
+                return Err(bad);
+            }
+            return match cached_build(os, arch, &dir, &asset)? {
+                Some(b) if b.version == want => Ok(b),
+                _ => Err(bad),
+            };
+        }
     }
     fill_cache(os, arch, &asset, &want, &dir)?;
     let b = cached_build(os, arch, &dir, &asset)?.ok_or_else(|| no(acodes::NO_UPDATE, 409, format!("no {asset} in {}", dir.display())))?;
@@ -1311,9 +1326,19 @@ fn fill_cache(os: &str, arch: &str, asset: &str, want: &str, dir: &std::path::Pa
     store(dir, asset, &bin, &sig)
 }
 
+/// Each file is written whole (temp + rename); the pair is checked on
+/// every read and refilled when it doesn't match.
 fn store(dir: &std::path::Path, asset: &str, bin: &[u8], sig: &[u8]) -> R<()> {
-    std::fs::write(dir.join(format!("{asset}.sig")), sig).map_err(|e| no("store", 500, e.to_string()))?;
-    std::fs::write(dir.join(asset), bin).map_err(|e| no("store", 500, e.to_string()))
+    let put = |name: String, bytes: &[u8]| -> R<()> {
+        let tmp = dir.join(format!(".{name}.tmp-{}", crypto::random_id().map_err(|e| no("random", 500, e))?));
+        std::fs::write(&tmp, bytes).map_err(|e| no("store", 500, e.to_string()))?;
+        std::fs::rename(&tmp, dir.join(&name)).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            no("store", 500, e.to_string())
+        })
+    };
+    put(asset.to_string(), bin)?;
+    put(format!("{asset}.sig"), sig)
 }
 
 /// The k2-node this K2 ships beside the daemon (macOS app bundle), for its

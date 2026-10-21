@@ -361,6 +361,88 @@ pub enum Request {
     /// The last `lines` lines of one deployment's own log (protocol 3:
     /// each container logs to a capped file, [`Resources::log_bytes`]).
     Logs { app: String, deployment: String, lines: u32 },
+    /// 0.46.3 box usage (prd-app-resources-disk-guard-v1 §5.3), **no
+    /// protocol bump**: listed in `version`'s `verbs` ([`ENGINE_VERBS`]);
+    /// the daemon sends it only to an engine that lists it (an older
+    /// engine refuses the unknown verb). Measures, at idle priority and
+    /// within [`DISK_USAGE_SECS`], each App folder (`podman unshare du`:
+    /// its files belong to the App's mapped ids), the Seeds, the image
+    /// store and the build folder. Answer: [`DiskUsage`].
+    DiskUsage,
+    /// 0.46.3 Seed sweep (§9.2, no protocol bump, listed in `verbs`):
+    /// remove exactly these engine Seed copies. The engine refuses (answers
+    /// `skipped`) any hash a run state or unit file still names. At most
+    /// [`MAX_SEEDS_GC`] hashes. Answer: [`SeedsGcAnswer`].
+    SeedsGc { remove: Vec<String> },
+}
+
+/// Verbs past the protocol number, announced in `version`'s `verbs`
+/// (0.46.3). The daemon calls one only when the engine lists it, so a box
+/// on an older engine build keeps deploying (no protocol bump, which
+/// `guarded.rs` would turn into a refusal of every walled deploy).
+pub const VERB_DISK_USAGE: &str = "disk-usage";
+pub const VERB_SEEDS_GC: &str = "seeds-gc";
+pub const ENGINE_VERBS: &[&str] = &[VERB_DISK_USAGE, VERB_SEEDS_GC];
+
+/// `disk-usage`'s whole time budget (seconds); past it the answer marks
+/// what wasn't reached `partial`.
+pub const DISK_USAGE_SECS: u64 = 120;
+/// Most hashes one `seeds-gc` names.
+pub const MAX_SEEDS_GC: usize = 4096;
+
+/// One App folder in a `disk-usage` answer (bytes, allocated like `du`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AppDisk {
+    pub data: u64,
+    pub cache: u64,
+    pub logs: u64,
+    /// Everything else in `apps/<id>/` (stages, work copies, home).
+    pub other: u64,
+    pub partial: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl AppDisk {
+    pub fn total(&self) -> u64 {
+        self.data.saturating_add(self.cache).saturating_add(self.logs).saturating_add(self.other)
+    }
+}
+
+/// The image store (`podman system df`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ImagesDisk {
+    pub total_bytes: u64,
+    pub unused_bytes: u64,
+}
+
+/// The `disk-usage` answer.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DiskUsage {
+    pub apps: std::collections::BTreeMap<String, AppDisk>,
+    /// Engine Seed copies by hash.
+    pub seeds: std::collections::BTreeMap<String, u64>,
+    /// `None` when Podman couldn't say.
+    pub images: Option<ImagesDisk>,
+    pub builds: u64,
+    pub took_ms: u64,
+    /// The time budget ran out before everything was measured.
+    pub partial: bool,
+}
+
+/// The `seeds-gc` answer.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SeedsGcAnswer {
+    pub removed: Vec<String>,
+    /// Still named by a run state or unit file: kept.
+    pub skipped: Vec<String>,
+    /// Not on the engine.
+    pub absent: Vec<String>,
+    pub freed_bytes: u64,
 }
 
 /// The wall a container start renders (protocol 3).
@@ -1385,5 +1467,31 @@ mod tests {
         assert!(t.contains("d /run/k2app 0750 k2app k2app -\n"));
         assert!(t.contains("a+ /run/k2app - - - - u:k2:x\n"));
         assert!(t.contains("a+ /run/k2app - - - - u:k2std:x\n"));
+    }
+
+    /// 0.46.3 box usage: the two verbs ride protocol 3 (no bump) and are
+    /// announced in `version`'s `verbs`; their wire shapes are fixed.
+    #[test]
+    fn disk_usage_and_seeds_gc_ride_protocol_3() {
+        assert_eq!(ENGINE_PROTOCOL, 3, "no engine bump in 0.46.3 (a bump stops every walled deploy)");
+        assert_eq!(ENGINE_VERBS, &["disk-usage", "seeds-gc"]);
+        let line = serde_json::to_string(&Request::DiskUsage).unwrap();
+        assert_eq!(line, "{\"verb\":\"disk-usage\"}");
+        assert_eq!(serde_json::from_str::<Request>(&line).unwrap(), Request::DiskUsage);
+        let gc = Request::SeedsGc { remove: vec!["a".repeat(64)] };
+        let line = serde_json::to_string(&gc).unwrap();
+        assert_eq!(line, format!("{{\"verb\":\"seeds-gc\",\"remove\":[\"{}\"]}}", "a".repeat(64)));
+        assert_eq!(serde_json::from_str::<Request>(&line).unwrap(), gc);
+        assert!(serde_json::from_str::<Request>("{\"verb\":\"seeds-gc\",\"remove\":[],\"all\":true}").is_err(), "unknown fields refused");
+        let a: DiskUsage = serde_json::from_str(
+            r#"{"apps":{"jobs":{"data":4800000000,"cache":100,"logs":50,"other":0,"partial":false}},
+                "seeds":{"h":1300},"images":{"totalBytes":4000,"unusedBytes":1200},"builds":52,"tookMs":8123}"#,
+        )
+        .unwrap();
+        assert_eq!(a.apps["jobs"].total(), 4800000150);
+        assert_eq!(a.images, Some(ImagesDisk { total_bytes: 4000, unused_bytes: 1200 }));
+        assert!(!a.partial);
+        let back: DiskUsage = serde_json::from_str(&serde_json::to_string(&a).unwrap()).unwrap();
+        assert_eq!(back, a);
     }
 }

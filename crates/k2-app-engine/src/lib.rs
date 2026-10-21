@@ -29,6 +29,8 @@ pub mod server;
 pub mod slots;
 pub mod sys;
 pub mod tty;
+/// `disk-usage` and `seeds-gc` (0.46.3 box usage, no protocol bump).
+pub mod usage;
 
 /// The marker a signed build must carry exactly once.
 #[cfg(target_arch = "x86_64")]

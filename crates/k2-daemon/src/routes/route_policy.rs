@@ -2004,7 +2004,7 @@ mod tests {
     #[test]
     fn permission_rows_exist_and_are_every_gated_row() {
         let paths: Vec<&str> = permission_rows().iter().map(|r| r.path).collect();
-        for p in ["/cli/permission/request", "/cli/permission/enabled", "/cli/permission/pending"] {
+        for p in ["/cli/permission/request", "/cli/permission/enabled", "/cli/permission/pending", "/cli/permission/agents"] {
             assert!(paths.contains(&p), "{p} has a row: {paths:?}");
         }
         for r in permission_rows() {

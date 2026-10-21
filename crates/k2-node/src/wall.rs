@@ -174,8 +174,8 @@ pub struct SeatbeltTenant {
 ///   or `/private/var/tmp` (their `TMPDIR` is their own), can't connect
 ///   to a socket in another server's root or the node home.
 ///
-/// One uid means other servers' processes stay visible (`ps`; a Seatbelt
-/// `process-info*` deny also hid a job's own children) and signals
+/// One uid means other servers' processes stay visible (no Seatbelt
+/// `process-info*` deny: unproven, see below) and signals
 /// between servers' jobs are **not** stopped (a
 /// Seatbelt `signal` deny would also stop a job signalling its own
 /// children; V60): that's why Macs take only your own servers in 0.46.3.
@@ -202,11 +202,12 @@ pub fn seatbelt_tenant_profile(deny_dirs: &[PathBuf], deny_sockets: &[PathBuf], 
         p.push_str(&format!("(deny network-outbound (subpath {}))\n", sb_str(&troot)));
         p.push_str(&format!("(deny network-outbound (subpath {}))\n", sb_str(&real_path(&t.home))));
         p.push_str(&format!("(allow network-outbound (subpath {}))\n", sb_str(&own)));
-        // No `process-info*` deny: on macOS 27 `(deny process-info*
-        // (target others))` with `(allow … (target same-sandbox))` also
-        // hid a job's own children from `ps` (found on a mini), which
-        // breaks build and test tools. Other jobs' processes stay visible
-        // on a Mac in 0.46.3 (one uid; own servers only).
+        // No `process-info*` deny: unproven on macOS 27 (on a mini, `ps`
+        // of a job's own child shows nothing inside the node's nested
+        // Seatbelt with or without it, so it can't be shown to hide only
+        // others), and hiding a job's own children would break build and
+        // test tools. Other jobs' processes stay visible on a Mac in
+        // 0.46.3 (one uid; own servers only).
     }
     // The node's own sockets (the executor) stay closed whatever the
     // allows above say: after them, so they win.

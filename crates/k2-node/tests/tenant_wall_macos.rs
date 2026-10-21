@@ -361,16 +361,21 @@ async fn w6_no_lan_is_none_and_team_is_refused_on_a_mac() {
     );
 }
 
-/// T4 on a Mac (W4 is Linux's): one uid, and no `process-info*` deny
-/// (it also hid a job's own children, found on a mini), so other jobs'
-/// processes stay visible to a tenant's job (in the report; Macs take
-/// only your own servers in 0.46.3). What must hold: a tenant's job sees
-/// and manages its own children.
+/// T4 on a Mac (W4 is Linux's): one uid and no `process-info*` rule in
+/// the tenant profile, so it changes process visibility no more than the
+/// owner's (N3) profile: both see (or both don't see) a child the same
+/// way, and both signal their own children. Other jobs' processes are not
+/// hidden on a Mac in 0.46.3 (in the report; own servers only). (On a
+/// mini under the node's own sandbox, `ps -p` of a child says nothing in
+/// either profile, so `ps` can't show more here.)
 #[tokio::test(flavor = "multi_thread")]
-async fn w4_a_tenants_job_sees_its_own_children_on_a_mac() {
+async fn w4_a_tenants_profile_hides_no_more_than_the_owners_on_a_mac() {
     let m = mac("mac-w4", OWN2, true).await;
     let n = &m.n;
     let script = "/bin/sleep 30 & c=$!; ps -p $c -o command= 2>&1 | grep -q sleep && echo CHILD-SEEN || echo CHILD-HIDDEN; kill $c && echo KILLED";
-    let got = run(n, 1, "ps", &["/bin/sh", "-c", script]).await;
-    assert!(got.out.contains("CHILD-SEEN") && got.out.contains("KILLED"), "a tenant job's own children: {}\n{}", got.out, got.err);
+    let owner = run(n, 0, "ps-owner", &["/bin/sh", "-c", script]).await;
+    let tenant = run(n, 1, "ps-tenant", &["/bin/sh", "-c", script]).await;
+    eprintln!("owner: {:?} tenant: {:?}", owner.out, tenant.out);
+    assert!(tenant.out.contains("KILLED") && owner.out.contains("KILLED"), "a job signals its own children: {} / {}", owner.out, tenant.out);
+    assert_eq!(tenant.out, owner.out, "the tenant profile changes process visibility no more than the owner's");
 }

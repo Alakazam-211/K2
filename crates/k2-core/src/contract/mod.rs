@@ -574,7 +574,7 @@ mod tests {
             ["agents:read", "presence:read", "thread:read", "thread:post", "sources:read"]
         );
         // 0.46.3 (garden-person-rows-v1): files:read, tickets:read,
-        // tickets:post and activity:read join through the Garden door.
+        // tickets:post and activity:room join through the Garden door.
         assert_eq!(
             c.widget_caps(),
             [
@@ -589,11 +589,15 @@ mod tests {
                 "store:read",
                 "store:write",
                 "guests:rooms",
-                "activity:read",
+                "activity:room",
                 "room:members"
             ]
         );
-        for name in ["files:read", "tickets:read", "tickets:post", "activity:read"] {
+        // 0.46.3: activity:read became the App guests' pinned-Chat ear (an
+        // App cap only); the room-wide counts joined the Garden door as
+        // activity:room.
+        assert_eq!(c.cap("activity:read").map(|r| r.exposure.clone()), Some(vec![Exposure::App]));
+        for name in ["files:read", "tickets:read", "tickets:post", "activity:room"] {
             let row = c.cap(name).unwrap_or_else(|| panic!("{name}"));
             assert_eq!(row.exposure, [Exposure::App, Exposure::GardenLocal], "{name}: App and Garden, never the widget bridge");
             assert!(row.sentence.as_deref().is_some_and(|s| s.contains("on this computer")), "{name}: its sentence says where");
@@ -607,7 +611,7 @@ mod tests {
             "store:read",
             "store:write",
             "guests:rooms",
-            "activity:read",
+            "activity:room",
             "room:members",
         ];
         for name in c.widget_caps() {

@@ -117,7 +117,6 @@ mod tests {
         ("POST", "/cli/skin/roles"),
         ("GET", "/cli/skin/access"),
         ("POST", "/cli/skin/access/settings"),
-        ("GET", "/cli/thread/activity"),
         ("GET", "/cli/chatter"),
         ("POST", "/cli/browser/notes"),
         ("GET", "/cli/projects/list"),
@@ -142,6 +141,61 @@ mod tests {
         assert!(admits("POST", "/cli/thread/catchup"));
         assert!(admits("GET", "/cli/thread/attachment"));
         assert!(admits("POST", "/cli/skin/logout"));
+        // 0.46.3: the ear's catch-up is an App row (its handler gates the
+        // room, thread:read and activity:read, and answers counts only).
+        assert!(admits("GET", "/cli/thread/activity"));
+        assert!(!admits("POST", "/cli/thread/activity"));
+    }
+
+    /// A live legacy App's routes (in production on a customer box): every
+    /// one must stay admitted for a `k2skn_` pass on the main port, so a
+    /// later catalog edit can't silently close one. A cap change (such as
+    /// 0.46.3's `activity:room`) may change what a route answers, never
+    /// whether a pass reaches it. `WS` = a GET upgrade.
+    const LIVE_LEGACY_APP_ROUTES: &[(&str, &str)] = &[
+        ("POST", "/cli/skin/logout"),
+        ("GET", "/cli/skin/agents"),
+        ("POST", "/cli/skin/password/change"),
+        ("GET", "/cli/thread"),
+        ("POST", "/cli/thread/post"),
+        ("POST", "/cli/thread/answer"),
+        ("POST", "/cli/workspace/ensure-pinned-chat"),
+        ("WS", "/cli/overlay/events"),
+        ("GET", "/cli/activity/snapshot"),
+        ("WS", "/cli/activity/events"),
+        ("GET", "/cli/heartbeat/list"),
+        ("GET", "/cli/heartbeat/show"),
+        ("GET", "/cli/feedback/list"),
+        ("GET", "/cli/feedback/show"),
+        ("POST", "/cli/feedback/comment"),
+        ("GET", "/cli/fs/read-dir"),
+        ("GET", "/cli/fs/read-file"),
+        ("GET", "/cli/fs/read-binary"),
+        ("GET", "/cli/fs/read-range"),
+        ("POST", "/cli/fs/upload-binary"),
+        ("POST", "/cli/fs/create"),
+        ("POST", "/cli/fs/copy"),
+        ("POST", "/cli/fs/move"),
+        ("POST", "/cli/fs/rename"),
+        ("GET", "/cli/workspace/resources"),
+        ("POST", "/cli/workspace/resources/add"),
+        ("POST", "/cli/workspace/resources/remove"),
+    ];
+
+    #[test]
+    fn a_live_legacy_apps_routes_stay_admitted_for_a_pass() {
+        for (m, p) in LIVE_LEGACY_APP_ROUTES {
+            let (method, is_ws) = if *m == "WS" { ("GET", true) } else { (*m, false) };
+            assert!(admits(method, p), "{m} {p}: a live legacy App calls it with a pass; it must stay admitted");
+            assert!(!fences(false, method, p, &pass_query()), "{m} {p} must not be fenced");
+            if is_ws {
+                assert!(k2_core::app_surface::ws_param(p).is_some(), "{p} must stay an App socket");
+            } else {
+                assert!(k2_core::app_surface::verb_for(method, p).is_some(), "{m} {p} must stay a catalog app row");
+            }
+            // The query string never closes a route.
+            assert!(admits(method, &format!("{p}?workspace=x")), "{m} {p}?…");
+        }
     }
 
     #[test]
@@ -241,7 +295,6 @@ mod tests {
         "/cli/browser/notes",
         "/cli/browser/notes/redeliver",
         "/cli/workspace/set",
-        "/cli/thread/activity",
         "/cli/chatter",
         "/cli/chatterlog",
         "/cli/workspace/msg",

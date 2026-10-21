@@ -1769,8 +1769,8 @@ async fn handle_one_request(
         // row + workspace rollup + `seq`, pulled by a client on socket
         // (re)open, daemon restart and `seq` gap. A plain read: owner
         // token or a live Connect login (Member). An app pass gets the
-        // guest projection of one room with `activity:read` there (S8,
-        // AP3). GET-only.
+        // guest projection of one room with `activity:room` there (S8,
+        // AP3; `activity:read` until 0.46.3). GET-only.
         "/cli/activity/snapshot" => {
             if is_post {
                 let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
@@ -1787,8 +1787,8 @@ async fn handle_one_request(
             let skin_pass = if super::http::extract_token(&query).is_some_and(k2_core::skin::is_skin_token) {
                 let r = match super::http::extract_token(&query).and_then(crate::apps::gateway::resolve_pass) {
                     // Session passes defer the cap to the room (handler).
-                    Some(pass) if pass.dispatcher_admits_cap(crate::skin_routes::ACTIVITY_READ) => Ok(pass),
-                    Some(_) => Err(crate::skin_routes::missing_cap_response(crate::skin_routes::ACTIVITY_READ)),
+                    Some(pass) if pass.dispatcher_admits_cap(crate::skin_routes::ACTIVITY_ROOM) => Ok(pass),
+                    Some(_) => Err(crate::skin_routes::activity_room_refused()),
                     None => Err(crate::skin_routes::revoked_skin_response()),
                 };
                 match r {
@@ -2086,7 +2086,13 @@ async fn handle_one_request(
             } else {
                 super::http::extract_token(&query).and_then(k2_core::connect_users::validate_session)
             };
-            crate::overlay_ws::serve_overlay_events_connection(stream, params, skin_ws, viewer_login).await;
+            // 0.46.3: the guest's raw pass, re-resolved on every frame of
+            // its counts-only ear.
+            let skin_raw = skin_ws
+                .as_ref()
+                .and_then(|_| super::http::extract_token(&query))
+                .map(str::to_string);
+            crate::overlay_ws::serve_overlay_events_connection(stream, params, skin_ws, skin_raw, viewer_login).await;
             return DispatchOutcome::Done;
         }
         // 0.46.3 App project chat: `project.events`, one project's live
@@ -2218,7 +2224,7 @@ async fn handle_one_request(
         }
         p if p == crate::activity_events_ws::ACTIVITY_EVENTS_WS_PATH => {
             // Agent-working socket. Not `/cli/sessions/events`. Skin: live
-            // `k2skn_` + activity:read. Session tokens pass
+            // `k2skn_` + one socket cap (activity:room since 0.46.3). Session tokens pass
             // `dispatcher_admits_cap`; the handler checks the room, then
             // `activity:read`, and 403s before upgrade. Owner/Connect
             // token_ok still requires workspace=.
@@ -2227,9 +2233,9 @@ async fn handle_one_request(
             {
                 match super::http::extract_token(&query).and_then(crate::apps::gateway::resolve_pass)
                 {
-                    // AH29: activity:read, heartbeats:read or (0.43.3)
-                    // tickets:read opens the socket; each frame checks
-                    // its own cap.
+                    // AH29: activity:room (0.46.3; was activity:read),
+                    // heartbeats:read, tickets:read or room:members opens
+                    // the socket; each frame checks its own cap.
                     Some(pass)
                         if pass.dispatcher_admits_any(
                             &crate::activity_events_ws::SOCKET_CAPS,
@@ -2239,9 +2245,7 @@ async fn handle_one_request(
                     }
                     Some(_) => {
                         let _ = stream.read(&mut buf).await;
-                        let r = crate::skin_routes::missing_cap_response(
-                            crate::activity_events_ws::SOCKET_CAPS_TEXT,
-                        );
+                        let r = crate::activity_events_ws::socket_caps_refused();
                         super::http::send_response(
                             &mut *stream,
                             r.status,
@@ -12137,19 +12141,11 @@ async fn handle_one_request(
             // Zen Z41/Z66 previews; room-scope R5 (0.46.1): a guest or App
             // pass reads `thread/latest` for its own rooms (the handler
             // checks each addr's room and thread:read, like `GET /cli/thread`).
-            // prd-daemon-activity-and-thread-working-v1 TW9 / AP1: the
-            // Thread strip's catch-up carries tool lines; app guests never
-            // read it (not in the gateway allowlist either).
-            if skin_presented && p == "/cli/thread/activity" {
-                super::http::send_response(
-                    &mut *stream,
-                    "403 Forbidden",
-                    "application/json",
-                    r#"{"error":"app passes cannot use thread/activity"}"#,
-                )
-                .await;
-                return DispatchOutcome::Done;
-            }
+            // prd-daemon-activity-and-thread-working-v1 TW9: the Thread
+            // strip's catch-up. 0.46.3 (Rosson 2026-10-21): an App pass
+            // reads the counts-only guest projection of its room's pinned
+            // Chat turn (`thread.activity`); the handler checks the room,
+            // `thread:read` AND `activity:read` there. Never the owner body.
             if skin_presented && (p == "/cli/chatter" || p == "/cli/chatterlog") {
                 super::http::send_response(
                     &mut *stream,
@@ -12165,7 +12161,10 @@ async fn handle_one_request(
             // with its Thread read rights here; the handler adds its file
             // rights (files:read + folder scope) per attachment.
             let (auth_ok, scoped_principal) = if skin_presented
-                && (p == "/cli/thread" || p == "/cli/thread/latest" || p == crate::thread_attachments::ROUTE)
+                && (p == "/cli/thread"
+                    || p == "/cli/thread/latest"
+                    || p == "/cli/thread/activity"
+                    || p == crate::thread_attachments::ROUTE)
             {
                 match super::http::extract_token(&query).and_then(crate::apps::gateway::resolve_pass)
                 {
@@ -12176,8 +12175,9 @@ async fn handle_one_request(
                         (true, None)
                     }
                     Some(_) => {
-                        // thread-attachments-v1: that route's refusals carry a code.
-                        let r = if p == crate::thread_attachments::ROUTE {
+                        // thread-attachments-v1: that route's refusals carry a code
+                        // (and so does the ear's catch-up, 0.46.3).
+                        let r = if p == crate::thread_attachments::ROUTE || p == "/cli/thread/activity" {
                             crate::thread_attachments::cap_refused(crate::skin_routes::THREAD_READ)
                         } else {
                             crate::skin_routes::missing_cap_response(crate::skin_routes::THREAD_READ)

@@ -26,11 +26,13 @@
 //! `GET /cli/activity/snapshot?workspace=` is the same projection for the
 //! whole room (AP3, `activity_routes`).
 //!
-//! Skin: pass `Some(SkinPass)`. Room, then `activity:read` OR
-//! `heartbeats:read` (AH20/AH29), both before `accept_async`. Each frame
-//! then needs its own cap: `session_activity_changed` → `activity:read`,
-//! `heartbeat_changed` → `heartbeats:read`. Owner/Connect: `None` (both
-//! kinds; still requires `workspace=`).
+//! Skin: pass `Some(SkinPass)`. Room, then one of [`SOCKET_CAPS`]
+//! (AH20/AH29), both before `accept_async`. Each frame then needs its own
+//! cap: `session_activity_changed` → `activity:room` (0.46.3: these counts
+//! cover every session in the room, the owner's other tabs included, so
+//! they left `activity:read`, which is now only the pinned-Chat ear on
+//! the Thread sockets), `heartbeat_changed` → `heartbeats:read`.
+//! Owner/Connect: `None` (both kinds; still requires `workspace=`).
 //!
 //! Heartbeat frames (prd-app-heartbeats-surface-v1 AH21): one guest kind,
 //! `{"kind":"heartbeat_changed","workspace":"<handle>"}` from
@@ -87,16 +89,32 @@ pub const RESYNC_FRAME: &str = r#"{"kind":"resync"}"#;
 
 /// AH29 — the caps that open this socket (any one, in the room).
 /// `tickets:read` joined in 0.43.3 (prd-app-tickets-websocket-v1).
-pub const SOCKET_CAPS: [&str; 4] = [
+/// 0.46.3: `activity:room` joined. `activity:read` still OPENS the socket
+/// (a live App that opens it with that cap keeps a working socket: rooms
+/// and identity nudges), but its `session_activity_changed` frames need
+/// `activity:room` now (the room-wide counts include the owner's other
+/// tabs; `activity:read` is the pinned-Chat ear on the Thread sockets).
+pub const SOCKET_CAPS: [&str; 5] = [
     crate::skin_routes::ACTIVITY_READ,
+    crate::skin_routes::ACTIVITY_ROOM,
     k2_core::skin::CAP_HEARTBEATS_READ,
     crate::skin_routes::TICKETS_READ,
     k2_core::skin::CAP_ROOM_MEMBERS,
 ];
 
 /// AH20/AH29 refusal cap text: names every socket cap, so the 403 says
-/// `missing capability activity:read, heartbeats:read, tickets:read or room:members`.
-pub const SOCKET_CAPS_TEXT: &str = "activity:read, heartbeats:read, tickets:read or room:members";
+/// `missing capability activity:read, activity:room, heartbeats:read, tickets:read or room:members`.
+pub const SOCKET_CAPS_TEXT: &str = "activity:read, activity:room, heartbeats:read, tickets:read or room:members";
+
+/// The socket's refusal when the pass holds none of [`SOCKET_CAPS`] in the
+/// room: coded `cap_not_granted`, naming every socket cap, and saying
+/// which cap the room-wide counts need (0.46.3).
+pub fn socket_caps_refused() -> crate::cli_response::CliResponse {
+    crate::skin_routes::cap_not_granted_response(
+        SOCKET_CAPS_TEXT,
+        "room-wide working counts (session_activity_changed) need activity:room; activity:read is the pinned-Chat Thread's counts (thread.activity)",
+    )
+}
 
 /// 0.45.2 — at most one counts-only `session_activity_changed` per session
 /// per this (ms); the last value always goes out (a trailing frame).
@@ -550,7 +568,7 @@ async fn write_http(stream: &mut TcpStream, status: &str, body: &str) {
 }
 
 /// WS handler. Dispatcher already token-authed. Requires `workspace=`.
-/// Skin: room, then `activity:read`, both before upgrade.
+/// Skin: room, then one of [`SOCKET_CAPS`], both before upgrade.
 pub async fn serve_activity_events_connection(
     stream: &mut TcpStream,
     params: HashMap<String, String>,
@@ -577,7 +595,7 @@ pub async fn serve_activity_events_connection(
                 // AH29: any one of the socket caps opens it; each frame
                 // checks its own below.
                 if !pass.has_any_cap_in_room(&ws.project_id, &SOCKET_CAPS) {
-                    let r = crate::skin_routes::missing_cap_response(SOCKET_CAPS_TEXT);
+                    let r = socket_caps_refused();
                     write_http(stream, r.status, &r.body).await;
                     return;
                 }
@@ -607,7 +625,7 @@ pub async fn serve_activity_events_connection(
     let room_root = resolved.path.clone();
     let (want_activity, want_heartbeats, want_tickets) = match skin_pass {
         Some(ref pass) => (
-            pass.has_cap_in_room(&project_id, crate::skin_routes::ACTIVITY_READ),
+            pass.has_cap_in_room(&project_id, crate::skin_routes::ACTIVITY_ROOM),
             pass.has_cap_in_room(&project_id, k2_core::skin::CAP_HEARTBEATS_READ),
             pass.has_cap_in_room(&project_id, crate::skin_routes::TICKETS_READ),
         ),
@@ -827,7 +845,7 @@ mod tests {
 
     use futures_util::StreamExt;
     use k2_core::skin::{
-        RoomPolicy, SkinPass, CAP_ACTIVITY_READ, CAP_FILES_READ, CAP_FILES_WRITE,
+        RoomPolicy, SkinPass, CAP_ACTIVITY_ROOM, CAP_FILES_READ, CAP_FILES_WRITE,
         CAP_HEARTBEATS_READ, CAP_HEARTBEATS_WRITE, CAP_THREAD_POST, CAP_THREAD_READ,
         CAP_TICKETS_POST, CAP_TICKETS_READ,
     };
@@ -915,6 +933,7 @@ mod tests {
         let dir = temp_dir("cap");
         let handle = format!("act{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let id = insert_project(&dir.to_string_lossy(), &handle);
+        // 0.46.3: the refusal is coded and names activity:room.
         for caps in [
             vec![CAP_THREAD_READ, CAP_THREAD_POST],
             vec![CAP_THREAD_READ, CAP_THREAD_POST, CAP_FILES_READ],
@@ -926,13 +945,14 @@ mod tests {
                 "caps {caps:?} must 403 before upgrade: {raw}"
             );
             assert!(
-                raw.contains("missing capability activity:read"),
+                raw.contains("missing capability ") && raw.contains("activity:room"),
                 "caps {caps:?}: {raw}"
             );
+            assert!(raw.contains(r#""code":"cap_not_granted""#), "caps {caps:?}: {raw}");
             assert!(!raw.contains("101"), "must not upgrade: {raw}");
             assert!(!raw.contains("skin_room"), "room is on the pass: {raw}");
         }
-        let other = session_pass(&uuid::Uuid::new_v4().to_string(), &[CAP_ACTIVITY_READ]);
+        let other = session_pass(&uuid::Uuid::new_v4().to_string(), &[CAP_ACTIVITY_ROOM]);
         let raw = pre_upgrade(Some(other), &handle).await;
         assert!(raw.starts_with("HTTP/1.1 403"), "{raw}");
         assert!(raw.contains("skin_room"), "{raw}");
@@ -941,7 +961,7 @@ mod tests {
             "unknown room is skin_room, not a cap miss: {raw}"
         );
         assert!(!raw.contains("101"), "{raw}");
-        let raw = pre_upgrade(Some(session_pass(&id, &[CAP_ACTIVITY_READ])), "").await;
+        let raw = pre_upgrade(Some(session_pass(&id, &[CAP_ACTIVITY_ROOM])), "").await;
         assert!(raw.starts_with("HTTP/1.1 400"), "{raw}");
         assert!(raw.contains("missing workspace"), "{raw}");
         let _ = std::fs::remove_dir_all(&dir);
@@ -1265,8 +1285,12 @@ mod tests {
         let path_a = root_a.to_string_lossy().to_string();
         let path_b = root_b.to_string_lossy().to_string();
 
-        let mut sock_a = connect_room(Some(session_pass(&id_a, &[CAP_ACTIVITY_READ])), &handle_a).await;
-        let mut sock_b = connect_room(Some(session_pass(&id_b, &[CAP_ACTIVITY_READ])), &handle_b).await;
+        let mut sock_a = connect_room(Some(session_pass(&id_a, &[CAP_ACTIVITY_ROOM])), &handle_a).await;
+        let mut sock_b = connect_room(Some(session_pass(&id_b, &[CAP_ACTIVITY_ROOM])), &handle_b).await;
+        // 0.46.3: `activity:read` alone still opens the socket (a live App
+        // keeps a working socket) but never hears the room-wide counts.
+        let mut ear_only =
+            connect_room(Some(session_pass(&id_a, &[CAP_THREAD_READ, k2_core::skin::CAP_ACTIVITY_READ])), &handle_a).await;
         tokio::time::sleep(Duration::from_millis(200)).await;
 
         let sid_a = uuid::Uuid::new_v4().to_string();
@@ -1292,6 +1316,10 @@ mod tests {
             assert!(!text.contains(secret), "{secret} must not reach an app: {text}");
         }
         assert!(take_text(&mut sock_a, Duration::from_millis(300)).await.is_none(), "room A never hears room B or compat");
+        assert!(
+            take_text(&mut ear_only, Duration::from_millis(300)).await.is_none(),
+            "activity:read without activity:room must get no room-wide session_activity_changed"
+        );
 
         let text_b = take_text(&mut sock_b, Duration::from_secs(2)).await.expect("room B frame");
         let vb: serde_json::Value = serde_json::from_str(&text_b).expect("json");
@@ -1329,11 +1357,11 @@ mod tests {
         let id_a = insert_project(&root_a.to_string_lossy(), &handle_a);
         let id_b = insert_project(&root_b.to_string_lossy(), &handle_b);
 
-        let mut both_rooms = session_pass(&id_a, &[CAP_ACTIVITY_READ]);
+        let mut both_rooms = session_pass(&id_a, &[CAP_ACTIVITY_ROOM]);
         both_rooms.room_policy.insert(id_b.clone(), vec![CAP_THREAD_READ.to_string()]);
         both_rooms.rooms.push(id_b.clone());
         assert!(rooms_changed_reaches(Some(&both_rooms), &id_a, &id_b));
-        assert!(!rooms_changed_reaches(Some(&session_pass(&id_a, &[CAP_ACTIVITY_READ])), &id_a, &id_b));
+        assert!(!rooms_changed_reaches(Some(&session_pass(&id_a, &[CAP_ACTIVITY_ROOM])), &id_a, &id_b));
         assert!(rooms_changed_reaches(None, &id_a, &id_a));
         assert!(!rooms_changed_reaches(None, &id_a, &id_b));
         assert!(!rooms_changed_reaches(Some(&both_rooms), &id_a, "  "));
@@ -1388,11 +1416,11 @@ mod tests {
             let raw = pre_upgrade(Some(session_pass(&id_a, &caps)), &handle_a).await;
             assert!(raw.starts_with("HTTP/1.1 403"), "{caps:?}: {raw}");
             assert!(raw.contains("heartbeats:read"), "{caps:?}: {raw}");
-            assert!(raw.contains("activity:read"), "{caps:?}: {raw}");
+            assert!(raw.contains("activity:room"), "{caps:?}: {raw}");
         }
 
         let mut hb_only = connect_room(Some(session_pass(&id_a, &[CAP_HEARTBEATS_READ])), &handle_a).await;
-        let mut act_only = connect_room(Some(session_pass(&id_a, &[CAP_ACTIVITY_READ])), &handle_a).await;
+        let mut act_only = connect_room(Some(session_pass(&id_a, &[CAP_ACTIVITY_ROOM])), &handle_a).await;
         tokio::time::sleep(Duration::from_millis(200)).await;
 
         // Room B and agent activity never reach the heartbeats-only pass.
@@ -1435,7 +1463,7 @@ mod tests {
             serde_json::json!({"kind": "heartbeat_changed", "workspace": handle_a, "name": "inbox-sweep", "live": true})
         );
 
-        // activity:read only: the agent frame, never a heartbeat frame.
+        // activity:room only: the agent frame, never a heartbeat frame.
         let act = take_text(&mut act_only, Duration::from_secs(2)).await.expect("activity frame");
         assert!(act.contains("session_activity_changed"), "{act}");
         assert!(
@@ -1509,7 +1537,7 @@ mod tests {
 
         let mut tk_a = connect_room(Some(session_pass(&id_a, &[CAP_TICKETS_READ])), &handle_a).await;
         let mut tk_b = connect_room(Some(session_pass(&id_b, &[CAP_TICKETS_READ])), &handle_b).await;
-        let mut act_a = connect_room(Some(session_pass(&id_a, &[CAP_ACTIVITY_READ])), &handle_a).await;
+        let mut act_a = connect_room(Some(session_pass(&id_a, &[CAP_ACTIVITY_ROOM])), &handle_a).await;
         let mut hb_a = connect_room(Some(session_pass(&id_a, &[CAP_HEARTBEATS_READ])), &handle_a).await;
         tokio::time::sleep(Duration::from_millis(200)).await;
 
@@ -1544,7 +1572,7 @@ mod tests {
 
         assert!(
             take_text(&mut act_a, Duration::from_millis(400)).await.is_none(),
-            "activity:read alone gets no ticket frame"
+            "activity:room alone gets no ticket frame"
         );
         assert!(
             take_text(&mut hb_a, Duration::from_millis(400)).await.is_none(),

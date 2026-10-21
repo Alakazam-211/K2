@@ -781,6 +781,15 @@ pub const FEATURE_APP_MOBILE_ACCESS: &str = "app-mobile-access-v1";
 /// migration.
 pub const FEATURE_THREAD_STREAM: &str = "thread-stream-v1";
 
+/// The counts-only activity ear for App guests (0.46.3, Rosson
+/// 2026-10-21): with `thread:read` AND `activity:read` in a room, the
+/// pinned-Chat Thread turn's guest projection on `WS /cli/overlay/events`
+/// (`collection: "activity"`), `WS /cli/thread/stream` (`kind:
+/// "thread_activity"`) and `GET /cli/thread/activity` (`thread.activity`).
+/// The room-wide counts (`activity.snapshot` / `activity.events`) moved to
+/// `activity:room` in the same release. No SQL migration.
+pub const FEATURE_THREAD_ACTIVITY_EAR: &str = "thread-activity-ear-v1";
+
 /// True when the notify prefs tables exist in the daemon DB.
 fn thread_push_ready() -> bool {
     k2_core::db::try_shared()
@@ -865,6 +874,7 @@ pub fn features() -> Vec<&'static str> {
         out.push(FEATURE_GARDEN_PERSON_ROWS);
     }
     out.push(FEATURE_THREAD_STREAM);
+    out.push(FEATURE_THREAD_ACTIVITY_EAR);
     // Last on purpose: boot_status_views_integration pins it as the tail.
     out.push(FEATURE_BOOT_STATUS_VIEWS);
     out
@@ -941,6 +951,7 @@ mod tests {
                 "app-read-state-v1",
                 "garden-person-rows-v1",
                 "thread-stream-v1",
+                "thread-activity-ear-v1",
                 "boot-status-views-v1"
             ]
         );

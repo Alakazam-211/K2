@@ -2758,11 +2758,16 @@ fn display_addr_for(
 /// `GET /cli/thread/activity?addr=` (TW9, A26): the conversation's live
 /// Thread turn as its latest `activity` frame body, or `null`. A client
 /// calls it on every overlay socket (re)open, because `since_seq` never
-/// replays ephemeral frames. A Member read; app passes are refused by the
-/// dispatcher (AP1) and again here.
+/// replays ephemeral frames. A Member read.
+///
+/// An App pass (0.46.3, `thread.activity`): only its room's pinned Chat
+/// (`resolve_skin_thread_addr`), only with `thread:read` AND
+/// `activity:read` in that room (coded `cap_not_granted` naming the cap),
+/// and only the counts-only guest projection
+/// (`thread_activity::guest_turn_body`), never the owner body.
 fn handle_get_thread_activity(params: &HashMap<String, String>) -> CliResponse {
-    if request_skin().is_some() {
-        return forbidden("app passes cannot read thread activity");
+    if let Some(pass) = request_skin() {
+        return guest_thread_activity(params, &pass);
     }
     let addr = str_param(params, "addr");
     if addr.is_empty() {
@@ -2786,6 +2791,38 @@ fn handle_get_thread_activity(params: &HashMap<String, String>) -> CliResponse {
         }),
         &resolved,
     ))
+}
+
+/// [`handle_get_thread_activity`] for an App pass (0.46.3).
+fn guest_thread_activity(params: &HashMap<String, String>, pass: &SkinPass) -> CliResponse {
+    let addr = str_param(params, "addr");
+    if addr.is_empty() {
+        return usage("missing addr");
+    }
+    let resolved = match resolve_skin_thread_addr(&addr, pass) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+    for cap in [crate::skin_routes::THREAD_READ, crate::skin_routes::ACTIVITY_READ] {
+        if !pass.has_cap_in_room(&resolved.project_id, cap) {
+            return crate::thread_attachments::cap_refused(cap);
+        }
+    }
+    // The same check every guest door of the ear makes (room, both caps,
+    // the pinned Chat), so the three can't drift.
+    if !crate::overlay_ws::guest_ear_allowed(pass, &resolved.project_id, &resolved.conversation_id) {
+        return skin_room_denied();
+    }
+    let turn = crate::thread_activity::current_turn_guest(&resolved.conversation_id);
+    CliResponse::ok_json(
+        serde_json::json!({
+            "ok": true,
+            "addr": resolved.addr,
+            "conversation_id": resolved.conversation_id,
+            "turn": turn,
+        })
+        .to_string(),
+    )
 }
 
 /// The outcome of a Design-notes post or redelivery (D-A10).

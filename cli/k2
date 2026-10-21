@@ -27715,13 +27715,32 @@ cmd_schema() {
       "flags": [
         {"name": "--id", "arg": "client-id", "description": "Idempotency key."},
         {"name": "--db-access", "arg": "off|read|write", "description": "Set the create-only db_agent_access flag on this workspace (hire convenience). Default stays off. Does not gate list/dsn/store."},
+        {"name": "--major", "arg": "16|17", "description": "The Postgres major to create on. Default: the box's (17 unless the owner pinned another). A major other than the default needs the agent switch \"Allow this agent to manage Postgres versions\". Unsupported or past-EOL majors exit 3."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "db clusters",
+      "usage": "k2 db clusters [--json]",
+      "description": "Postgres majors side by side: one cluster per major (the first on 5432, the rest 5433-5449), how many databases each serves, the default major for new databases, and the databases that can move up (k2 db upgrade <db> --check).",
+      "args": [],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "db default-major",
+      "usage": "k2 db default-major <major> [--json]",
+      "description": "Owner: pin the Postgres major k2 db create uses without --major (K2's default is 17). Unsupported or past-EOL majors exit 3. Agents exit 3.",
+      "args": [{"name": "major", "required": true}],
+      "flags": [
         {"name": "--json", "arg": null, "description": "JSON output."}
       ]
     },
     {
       "name": "db status",
       "usage": "k2 db status [--health] [--json]",
-      "description": "Postgres sidecar status: supported, state, pg major, listen, port (5432 unless catalog says otherwise). JSON includes publishHint: off-box *.k2.dev is k2 publish subdomain create <label> --target localhost:<port> (port already listening). Not a static-IP feature. No k2 db expose.",
+      "description": "Postgres sidecar status: supported, state, pg major (the 5432 cluster), clusters (one per major), each database's major, upgradeAvailable, defaultMajor, listen, port (5432 unless catalog says otherwise). JSON includes publishHint: off-box *.k2.dev is k2 publish subdomain create <label> --target localhost:<port> (port already listening). Not a static-IP feature. No k2 db expose.",
       "args": [],
       "flags": [
         {"name": "--health", "arg": null, "description": "Probe SELECT 1 / unit."},

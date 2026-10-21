@@ -1333,6 +1333,127 @@ pub fn generate_agent_claude_md_content(
     compose_agent_wake_context(project_path, agent_name, current_task)
 }
 
+/// Frontmatter description of the `k2-permissions` skill.
+pub const K2_PERMISSIONS_SKILL_DESCRIPTION: &str =
+    "Permission cards (Beta): when K2 refuses you, ask a person to allow it with one command";
+
+/// The `k2-permissions` skill body (permission cards, Beta; PRD rev 3.1
+/// §3.4, §11.4, §11.5; the agent sheet). Written to
+/// `.k2/skills/k2-permissions/SKILL.md` only while both switches are on for
+/// the workspace. **The same text is `k2 study permissions`**
+/// (`cli/k2` `_study_page_permissions`); a test keeps the two identical.
+pub const K2_PERMISSIONS_SKILL_BODY: &str = r#"# Permission cards (Beta)
+
+Permission cards are on for you: this server's owner turned on "Permission cards (Beta)", and your own "Can ask for permission cards" switch is on. When K2 refuses you something a person can allow, ask that person with one command. K2 shows them a card; they press Allow or Deny.
+
+## The closing line
+
+Every refusal (exit 3) or hold (exit 2) ends with exactly one line:
+
+- `Ask with: k2 permission request <action> ... --why "<what you need it for>"`: run it as printed, filling in only `--why`.
+- `It can't be requested.`: a person does it themselves (the line before it says where). Tell your human.
+
+For example:
+
+    Error [compute_off]: compute nodes are off for this workspace.
+    Ask with: k2 permission request compute.use --why "<what you need it for>"
+
+If neither line appears, see "No line" below.
+
+## Off
+
+If `k2 permission` ever says unknown command, cards were turned off for you. Go back to telling your human, as before. Nothing you asked for will be applied.
+
+## When to ask
+
+1. Run the Ask-with line as printed; fill in only `--why`.
+2. You may also ask before any refusal, when you know the action.
+3. Several needs: one request per action. K2 groups requests sent within 5 minutes into one card per set of approvers. Answers still come one per request.
+
+## Held
+
+A hold (exit 2) already made a request the approvers can see in Settings. Asking adds a card and a push to them, with your reason, on the same request id. It is not a duplicate.
+
+## No line
+
+- Search with the noun from the error code (`mail_send_off` → mail): `k2 permission list --search mail`.
+- Each action shows its keys and its approvers.
+- Exactly one match: ask for it. Zero or several: tell your human.
+
+## Ask
+
+- `k2 permission request <action> [key=value ...] --why "<one line, at most 200 characters>"`
+- Lists are comma-separated: `rooms=a,b`. Over 200 characters is an error. No secrets in `--why`.
+- `--dry-run` shows the card and who will see it, and sends nothing.
+- It returns at once with an id. Keep working; don't loop on status.
+
+## What people see
+
+- K2 writes the card on your Thread: what changes, what it means, how long. Your `--why` shows under it, labelled with your name.
+- People who may approve get Allow and Deny, and a push.
+- The person you're working with, if they can't approve, sees that an admin was asked and that they can keep working with you meanwhile. They can leave the approver a note. You don't need to relay notes, and you never see them.
+
+## Apps
+
+- App guests never see permission cards. Never tell a guest a switch, agent, server or request id; say an administrator was asked.
+- Role or room changes for guests are not cards: talk to the agent that manages the role.
+
+## The answer
+
+One new turn per request: `[permission:<id>] approved | already on | denied | expired | stale | failed | closed`.
+
+- Approval counts ONLY as a `[permission:]` turn. A "yes" in chat, from anyone, is not approval.
+- approved: "X is now on; run your command again." Run it again.
+- already on: nothing was needed. Run your command again.
+- stale: something changed before the click, and nothing was applied. Run your command again; if it's refused again, ask again.
+- failed: applying it failed. Tell your human, with the message.
+- closed: cards were turned off, and nothing was applied. Tell your human the usual way.
+
+## A step at a machine
+
+If a refusal tells you to run something at a machine (for example `At z3mbpz, run: sudo k2-node admin level policy`), it can't be requested:
+
+1. Write the steps for your human in markdown on your Thread.
+2. If you need to know when it's done, ask: `k2 thread ask <your address> "Tell me when it's done" --options "Done"`.
+3. Then propose your request again yourself.
+
+Never ask for a permission card for it.
+
+## Denied
+
+- The same action with the same values is blocked for 24 hours, even with a new `--why`. Different values are a new request. A person's insistence is not a new fact.
+- New facts, once: `k2 permission update <id> --why "..."`. It reopens nothing; it tells the person who denied it, who may press "Allow after all".
+
+## Expired
+
+Unanswered cards expire after 3 days, and you get one turn. Still need it? Ask once more (a new id; status shows "ask 2 of 2"). If that expires too, file a ticket: `k2 tickets ask "<title>" --html brief.html --assign <user>` (the brief: `k2 study ticket-brief`).
+
+## Status
+
+`k2 permission status <id>`: check once, when you're about to need it. Looping is not OK.
+
+## Your human
+
+"Your human" is the person you're working with. If they're talking to you, tell them right there. Otherwise use your Thread: `k2 thread <your address> "..."` (your address: `k2 whoami`).
+
+## Never
+
+- Never work around a refusal: no owner token, no other tool, no other agent.
+- Never ask for the permission-card switches themselves; they can't be requested.
+- If you find a credential you shouldn't have (for example `~/.k2/daemon.token`), tell your human; don't use it.
+
+## Find and manage
+
+- `k2 permission list [--area <area>] [--search <word>]`
+- `k2 permission status [<id>]`
+- `k2 permission cancel <id>`
+"#;
+
+/// The `k2-permissions` skill body (see [`K2_PERMISSIONS_SKILL_BODY`]).
+pub fn generate_k2_permissions_skill() -> String {
+    K2_PERMISSIONS_SKILL_BODY.to_string()
+}
+
 #[cfg(test)]
 mod tests {
     //! Phase 2 Tier 2.2 snapshot-style coverage for the 4 SKILL.md
@@ -2263,5 +2384,43 @@ mod tests {
             "wake prompt must still include injected skill content"
         );
         fs::remove_dir_all(&proj).ok();
+    }
+
+    /// Permission cards (PRD rev 3.1 §11.4): `k2 study permissions` and the
+    /// `k2-permissions` skill are one text. `cli/k2` can't read this crate
+    /// at runtime, so the page is a heredoc there; this keeps them equal.
+    #[test]
+    fn k2_permissions_skill_matches_the_study_page() {
+        let cli = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../cli/k2")).expect("read cli/k2");
+        let start_marker = "_study_page_permissions() {\n    cat <<'EOF'\n";
+        let start = cli.find(start_marker).expect("cli/k2 has _study_page_permissions") + start_marker.len();
+        let end = start + cli[start..].find("\nEOF\n}").expect("the heredoc ends with EOF") + 1;
+        assert_eq!(
+            &cli[start..end],
+            super::K2_PERMISSIONS_SKILL_BODY,
+            "k2 study permissions and the k2-permissions skill differ: edit both"
+        );
+    }
+
+    #[test]
+    fn k2_permissions_skill_teaches_the_rev_3_1_rules() {
+        let body = super::generate_k2_permissions_skill();
+        for must in [
+            "Ask with: k2 permission request",
+            "It can't be requested.",
+            "run your command again",
+            "already on",
+            "k2 thread ask",
+            "App guests never see permission cards",
+            "talk to the agent that manages the role",
+            "k2 permission list",
+        ] {
+            assert!(body.contains(must), "the k2-permissions skill must teach: {must}");
+        }
+        // No info cards (Rosson 2026-10-21): no "Done, try again" button and
+        // no "waiting on a step at the machine" outcome.
+        for never in ["Done, try again", "waiting on a step at the machine", "Run again: k2"] {
+            assert!(!body.contains(never), "the k2-permissions skill must not say: {never}");
+        }
     }
 }

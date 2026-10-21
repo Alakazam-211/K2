@@ -36,9 +36,9 @@ pub const CARDS_CONTRACT: u8 = 2;
 
 /// The `k2-permissions` skill's own version constant (vs-live C8, PRD
 /// §11.4): bumping it never touches `SKILL_VERSION_WORKSPACE` or `_ZEN`, so
-/// the k2-cli skill stays byte-identical in every switch state. Lane C
-/// moves it to `skills/version.rs` (one new line) when it writes the skill.
-pub const SKILL_VERSION_PERMISSIONS: u32 = 1;
+/// the k2-cli skill stays byte-identical in every switch state. It lives
+/// in `skills/version.rs` with the other skill versions (lane C).
+pub use crate::skills::version::SKILL_VERSION_PERMISSIONS;
 
 /// Folder name of the separate teaching skill (`.k2/skills/k2-permissions/`),
 /// written only while both switches are on (PRD §11.4; lane C).

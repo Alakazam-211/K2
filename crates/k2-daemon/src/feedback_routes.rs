@@ -147,17 +147,80 @@ pub fn dispatch_post_as_gated(
 
 /// Skin tickets GET list. Owner/Connect use [`dispatch`].
 pub fn handle_list_gated(params: &HashMap<String, String>, skin: Option<SkinPass>) -> CliResponse {
+    handle_list_gated_as(params, skin, true)
+}
+
+/// [`handle_list_gated`] for a caller that may (`sees_notices`) or may not
+/// see K2's own notices ([`is_owner_notice`]).
+pub fn handle_list_gated_as(params: &HashMap<String, String>, skin: Option<SkinPass>, sees_notices: bool) -> CliResponse {
     match skin {
         Some(pass) => handle_skin_list(params, &pass),
-        None => handle_list(params),
+        None if sees_notices => handle_list(params),
+        None => without_owner_notices(handle_list(params)),
     }
 }
 
 pub fn handle_show_gated(params: &HashMap<String, String>, skin: Option<SkinPass>) -> CliResponse {
+    handle_show_gated_as(params, skin, true)
+}
+
+/// [`handle_show_gated`]; a notice shows as not found to a caller that
+/// may not see it (no oracle: the same answer as a wrong id).
+pub fn handle_show_gated_as(params: &HashMap<String, String>, skin: Option<SkinPass>, sees_notices: bool) -> CliResponse {
     match skin {
         Some(pass) => handle_skin_show(params, &pass),
-        None => handle_show(params),
+        None if sees_notices => handle_show(params),
+        None => {
+            let id = str_param(params, "id");
+            if let Ok(full) = feedback::resolve_id_prefix(&id) {
+                if feedback::get_item(&full).is_some_and(|i| is_owner_notice(&i.project_id)) {
+                    return prefix_error_response(&id, PrefixError::NotFound);
+                }
+            }
+            handle_show(params)
+        }
     }
+}
+
+/// `GET /cli/feedback/list-all` for a caller that may or may not see K2's
+/// own notices.
+pub fn handle_list_all_as(params: &HashMap<String, String>, sees_notices: bool) -> CliResponse {
+    if sees_notices {
+        handle_list_all(params)
+    } else {
+        without_owner_notices(handle_list_all(params))
+    }
+}
+
+/// K2's own notices (the disk watch, Apps ownership and preparation) are
+/// filed on an audit sentinel for the server's Owner and Admin logins
+/// ([`file_owner_notice`]); a Member login never sees them (smoke r6: it
+/// saw the owner's disk tickets).
+pub fn is_owner_notice(project_id: &str) -> bool {
+    k2_core::db::AUDIT_SENTINEL_IDS.contains(&project_id)
+}
+
+/// Who may see [`is_owner_notice`] tickets: the owner token, an Owner or
+/// Admin login. A Member (or any other) login may not.
+pub fn sees_owner_notices(owner_token: bool, username: Option<&str>) -> bool {
+    owner_token
+        || username
+            .and_then(k2_core::connect_users::role_for_user)
+            .is_some_and(k2_core::connect_users::can_manage_users)
+}
+
+/// Drop notice tickets from a list body (`items[]`); errors pass through.
+fn without_owner_notices(resp: CliResponse) -> CliResponse {
+    if !resp.status.starts_with("200") {
+        return resp;
+    }
+    let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&resp.body) else {
+        return resp;
+    };
+    if let Some(items) = v.get_mut("items").and_then(|i| i.as_array_mut()) {
+        items.retain(|i| !i.get("projectId").and_then(|p| p.as_str()).is_some_and(is_owner_notice));
+    }
+    CliResponse::ok_json(v.to_string())
 }
 
 // ── Tickets badge count ───────────────────────────────────────────────
@@ -4033,5 +4096,60 @@ mod tests {
         let v = parse(&r);
         assert_eq!(v["projectPath"], path_a.as_str(), "{v}");
         assert_eq!(v["sessionId"], "sess-secret", "{v}");
+    }
+
+    /// Smoke r6: K2's own notices (the disk watch's, on an audit sentinel)
+    /// are the Owner's and Admins'. A Member login's list-all, list and
+    /// show leave them out (show answers like a wrong id); its own
+    /// workspace tickets are unchanged.
+    #[test]
+    fn a_member_login_never_sees_k2_notices() {
+        let _home = crate::test_support::TempHome::new();
+        k2_core::db::init_for_tests();
+        k2_core::connect_users::add_user("ana_admin", "password123").unwrap();
+        k2_core::connect_users::set_role("ana_admin", k2_core::connect_users::Role::Admin).unwrap();
+        k2_core::connect_users::add_user("mo_member", "password123").unwrap();
+        k2_core::connect_users::set_role("mo_member", k2_core::connect_users::Role::Member).unwrap();
+        assert!(sees_owner_notices(true, None), "the owner token");
+        assert!(sees_owner_notices(false, Some("ana_admin")));
+        assert!(!sees_owner_notices(false, Some("mo_member")));
+        assert!(!sees_owner_notices(false, Some("nobody")));
+        assert!(!sees_owner_notices(false, None));
+
+        let notice = file_owner_notice(k2_core::db::AUDIT_SENTINEL_IDS[0], "k2-disk", "Disk / 90% full on box (9 GB free)", "body")
+            .unwrap();
+        // Filed for the Owner and Admin logins, never the Member.
+        assert!(notice.assignees.contains(&"ana_admin".to_string()), "{:?}", notice.assignees);
+        assert!(!notice.assignees.contains(&"mo_member".to_string()), "{:?}", notice.assignees);
+        let (name, path) = unique("member-notices");
+        insert_project(&name, &path);
+        let own = create_via_route(&path, "Ship it?", serde_json::json!({}))["id"].as_str().unwrap().to_string();
+
+        let ids = |r: CliResponse| -> Vec<String> {
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+            parse(&r)["items"].as_array().unwrap().iter().map(|i| i["id"].as_str().unwrap().to_string()).collect()
+        };
+        let all = HashMap::new();
+        let admin = ids(handle_list_all_as(&all, true));
+        assert!(admin.contains(&notice.id) && admin.contains(&own));
+        let member = ids(handle_list_all_as(&all, false));
+        assert!(!member.contains(&notice.id), "member list-all: {member:?}");
+        assert!(member.contains(&own));
+        // `list?project=` of the sentinel itself.
+        let sentinel = list_params(k2_core::db::AUDIT_SENTINEL_IDS[0], &[]);
+        let r = handle_list_gated_as(&sentinel, None, false);
+        match r.status {
+            "200 OK" => assert!(!ids(r).contains(&notice.id)),
+            "404 Not Found" => {}
+            s => panic!("list of the sentinel: {s} {}", r.body),
+        }
+        assert!(ids(handle_list_gated_as(&list_params(&path, &[]), None, false)).contains(&own));
+        // show: not found for the Member (same as a wrong id), whole for the Admin.
+        let show = |sees: bool, id: &str| handle_show_gated_as(&HashMap::from([("id".to_string(), id.to_string())]), None, sees);
+        let r = show(false, &notice.id);
+        assert_eq!(r.status, "404 Not Found", "{}", r.body);
+        assert_eq!(parse(&r)["error"]["code"], "not_found");
+        assert_eq!(show(true, &notice.id).status, "200 OK");
+        assert_eq!(show(false, &own).status, "200 OK");
     }
 }

@@ -354,6 +354,65 @@ async fn pause_resume_and_revoke_now_act_on_that_server_only() {
     run_to_receipt(&mut ca, "a1").await;
 }
 
+/// §4.3, V64, P7 (node half): revoke `--wipe` stops the server's running
+/// job, wipes its slot (pin, ledger, journals, root) and frees the slot;
+/// the next server added there enrols afresh with a new uid and sees
+/// nothing of the old one.
+#[cfg(target_os = "macos")]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_wiped_slot_is_reused_fresh() {
+    let mut a = Fake::start().await;
+    let mut b = Fake::start().await;
+    let n = start_node(&a, "srv-wipe", "", walled(Wall::Seatbelt)).await;
+    let mut ca = a.next_conn().await;
+    ready(&mut ca).await;
+    let c = ctx(&n);
+    // B is added and confirmed through the real path.
+    let add = |f: &Fake, label_url: &str| {
+        let code = pairing::new_code().unwrap();
+        let norm = pairing::normalize_code(&code).unwrap();
+        f.codes.lock().unwrap().push(norm.clone());
+        let es = EnrollString::new(&code, &f.key.fingerprint()).unwrap();
+        serde_json::json!({"url": label_url, "code_binding": pairing::code_binding(&norm), "fp_prefix": es.controller_fp_prefix, "trust": "own"})
+    };
+    let r = servers::run(&c, "servers.add", &add(&b, &b.base)).unwrap();
+    let uid_b = r["uid"].as_u64().unwrap();
+    eventually("B's SAS", || status(&n).servers.into_iter().find(|l| l.slot == 1 && l.sas.is_some())).await;
+    let key = n.node.key.fingerprint();
+    b.nodes.lock().unwrap().get_mut(&key).unwrap().state = NodeState::Active;
+    let mut cb = b.next_conn().await;
+    ready(&mut cb).await;
+    let node_b = n.node.tenant(1).unwrap().node_id();
+    let mut p = plan("w1", &["/bin/sh", "-c", "echo b; sleep 30"]);
+    p.node_id = node_b;
+    cb.send(Frame::Assign(assign(p, 1)));
+    cb.until(|f| matches!(f, Frame::State(s) if s.job_id == "w1" && s.state == JobState::Running)).await;
+    let slot_state = n.layout.tenant(1).state();
+    assert!(slot_state.join("ledger.sqlite").exists());
+
+    // Revoke and wipe at once.
+    let mut rc = ctx(&n);
+    rc.now = k2_node::util::now();
+    let r = servers::run(&rc, "servers.revoke", &serde_json::json!({"server": "slot:1", "wipe": true})).unwrap();
+    assert_eq!(r["wiped"], serde_json::json!([1]), "{r}");
+    assert!(cb.wait_closed(Duration::from_secs(10)).await, "B's session ends");
+    eventually("B's slot forgotten", || n.node.tenant(1).is_none().then_some(())).await;
+    assert!(n.node.running_by_tenant().get(&1).is_none(), "B's job stopped");
+    assert!(!n.layout.tenant(1).pin().exists());
+
+    // C takes slot 1: a fresh enrol, a new uid, an empty ledger.
+    let mut cc_fake = Fake::start().await;
+    let r = servers::run(&ctx(&n), "servers.add", &add(&cc_fake, &cc_fake.base)).unwrap();
+    assert_eq!(r["slot"], 1);
+    assert!(r["uid"].as_u64().unwrap() > uid_b, "a reused slot never reuses a uid: {r}");
+    eventually("C's SAS", || status(&n).servers.into_iter().find(|l| l.slot == 1 && l.sas.is_some())).await;
+    cc_fake.nodes.lock().unwrap().get_mut(&key).unwrap().state = NodeState::Active;
+    let mut cc = cc_fake.next_conn().await;
+    let first = cc.until(|f| matches!(f, Frame::Offer(_))).await;
+    assert!(matches!(first[0], Frame::JobsSnapshot(ref s) if s.jobs.is_empty()), "C sees nothing of B: {:?}", first[0]);
+    assert!(n.node.tenant(1).unwrap().ledger.lock().unwrap().get("w1", 1).unwrap().is_none());
+}
+
 /// §4.3: past its end date a server with nothing running isn't served
 /// (judged by time, nothing written); a server whose line is live is.
 #[tokio::test(flavor = "multi_thread")]

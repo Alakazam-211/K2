@@ -900,10 +900,8 @@ async fn servers_pass(node: &Arc<Node>, st: &mut ServersLoop) {
         }
         t.serve.send_replace(false);
         set_share(&t, None);
-        if line.is_some() {
-            // The slot was wiped and re-added: the old server's jobs end.
-            node.stop_tenant(t.slot, JobState::Cancelled, codes::SHARE_REVOKED);
-        }
+        // The slot was wiped (and maybe re-added): the old server's jobs end.
+        node.stop_tenant(t.slot, JobState::Cancelled, codes::SHARE_REVOKED);
         let idle = !node.running_by_tenant().contains_key(&t.slot) && t.hub.connected.borrow().eq(&0);
         if idle && node.drop_tenant(t.slot) {
             st.keys.remove(&t.slot);

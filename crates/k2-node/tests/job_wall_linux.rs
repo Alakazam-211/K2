@@ -6,9 +6,11 @@
 //!
 //!   cargo test -p k2-node --test job_wall_linux -- --ignored --test-threads=1
 //!
-//! Real users: the job user is `nobody`, the "node user" is root (the test
-//! process), so the job runs as `nobody` with root's group, as a real job
-//! runs as `k2job` with `k2node`'s group. Nothing on the machine is
+//! Real users: the job user is `nobody`; the node runs in the test process
+//! (root) with the group of a real node user, `k2nodet` (made once in the
+//! box), so the job runs as `nobody` with `k2nodet`'s group, as a real job
+//! runs as `k2job` with `k2node`'s group (never group 0: the executor
+//! refuses it). Nothing on the machine is
 //! changed: each test makes its own dir under /var/lib (the unit hides
 //! /tmp, /home and /root, so a temp dir there would vanish inside it) and
 //! removes it; the units are transient. Every wall check runs a control
@@ -43,6 +45,23 @@ impl Drop for Rig {
     }
 }
 
+/// The test node user and its gid; the test process takes that group as
+/// its effective gid (see the module doc).
+fn node_test_user() -> (String, u32) {
+    let name = "k2nodet";
+    if server::user_ids(name).is_none() {
+        let st = std::process::Command::new("useradd")
+            .args(["--system", "--user-group", "--no-create-home", "--home-dir", "/nonexistent", "--shell", "/usr/sbin/nologin", name])
+            .status()
+            .unwrap();
+        assert!(st.success(), "useradd {name}");
+    }
+    let (_, gid) = server::user_ids(name).unwrap();
+    // SAFETY: glibc applies setegid to every thread of the process.
+    assert_eq!(unsafe { libc::setegid(gid) }, 0, "setegid {gid}");
+    (name.to_string(), gid)
+}
+
 fn rig(tag: &str) -> Rig {
     assert_eq!(unsafe { libc::geteuid() }, 0, "the Linux wall tests run as root (cargo test … -- --ignored)");
     let id = k2_node_proto::crypto::random_id().unwrap();
@@ -56,9 +75,11 @@ fn rig(tag: &str) -> Rig {
     }
     std::fs::set_permissions(&state, std::fs::Permissions::from_mode(0o700)).unwrap();
     // The node home like the installer makes it: 0750, group = the node's.
+    let (node_user, node_gid) = node_test_user();
+    std::os::unix::fs::chown(base.join("home"), Some(0), Some(node_gid)).unwrap();
     std::fs::set_permissions(base.join("home"), std::fs::Permissions::from_mode(0o750)).unwrap();
-    std::fs::write(config.join("admin.toml"), "remote_admin = \"off\"\nnode_user = \"root\"\n").unwrap();
-    k2_node::admin::jobs::write_jobs_file(&config, "nobody", "root").expect("nobody is a job user");
+    std::fs::write(config.join("admin.toml"), format!("remote_admin = \"off\"\nnode_user = \"{node_user}\"\n")).unwrap();
+    k2_node::admin::jobs::write_jobs_file(&config, "nobody", &node_user).expect("nobody is a job user");
     std::fs::create_dir_all(base.join("bin")).unwrap();
     let bin = base.join("bin/k2-node");
     std::fs::copy(env!("CARGO_BIN_EXE_k2-node"), &bin).unwrap();

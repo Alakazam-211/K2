@@ -3,8 +3,13 @@
 //! ledger). Paths, the journal and the ledger are the job's tenant's; unit
 //! and cgroup names use its per-slot key (V48).
 //!
-//! Lane S3 (the tenant wall) owns this file after S0: tenant users,
-//! per-tenant Seatbelt profiles and caches.
+//! The tenant wall (S3a/S3m): a non-owner server's job runs only behind a
+//! wall that keeps it from the other servers' (V59): on Linux as its own
+//! user (`k2job-<slot>`, the executor's `[tenants]`), on macOS (own
+//! servers only, 0.46.3) in its own Seatbelt profile. Its network is the
+//! narrower of the node policy's and its share's (V65), its caches and
+//! sccache socket are its slot's (V63), and nothing it wrote is read by
+//! the node until its unit is gone.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -15,6 +20,7 @@ use k2_node_proto::crypto;
 use k2_node_proto::frames::{Assign, ExitInfo, JobState, Receipt, ReceiptLog, SignedReceipt, SrcRan};
 use k2_node_proto::refusal;
 use k2_node_proto::results::Outputs;
+use k2_node_proto::share::{codes, Network, Trust};
 use tokio::sync::watch;
 
 use super::{Node, StopReason, Tenant};
@@ -91,6 +97,67 @@ fn prepare_for_job_user(target: &Path, caches: &[&Path], src: Option<&Path>) -> 
 }
 
 impl Node {
+    /// This crate's own unit tests only (`cfg(test)` is never set in a
+    /// build that ships, nor in the integration tests): an unwalled
+    /// `--dev` node with no `servers.toml` may run a tenant's job, so the
+    /// node's per-tenant bookkeeping can be tested without root. Every
+    /// real build refuses that (V59).
+    fn unit_test_escape(&self) -> bool {
+        cfg!(test) && self.opts.dev && matches!(self.wall, Wall::None { .. })
+    }
+
+    /// A job's network: the node policy's for the owner; for a tenant the
+    /// narrower of the policy's and its share's (V65). macOS can't close
+    /// only the LAN, so a tenant's `no-lan` is `none` there.
+    pub fn job_network(&self, t: &Tenant) -> Result<Network, (String, String)> {
+        let policy = Network::of_policy(&self.local.lock().unwrap().policy.network);
+        if t.is_owner() || self.unit_test_escape() {
+            return Ok(policy);
+        }
+        let entry = crate::admin::jobs::tenant_entry(&self.layout().config, t.slot).map_err(|r| (r.code, r.message))?;
+        let n = policy.min(entry.network);
+        Ok(if cfg!(target_os = "macos") && n == Network::NoLan { Network::None } else { n })
+    }
+
+    /// May a job of `t` start behind this node's wall? Always for the
+    /// owner. A tenant needs (V59): a wall at all; on Linux the executor's
+    /// tenant wall and a user for its slot; on macOS an `own` server and
+    /// its prepared root. `Err((code, detail))`: the job never runs as
+    /// another server's user.
+    pub async fn tenant_wall_check(&self, t: &Tenant) -> Result<(), (String, String)> {
+        if t.is_owner() || self.unit_test_escape() {
+            return Ok(());
+        }
+        let missing = |m: String| (codes::TENANT_WALL_MISSING.to_string(), m);
+        let entry = crate::admin::jobs::tenant_entry(&self.layout().config, t.slot).map_err(|r| (r.code, r.message))?;
+        match &self.wall {
+            Wall::None { why } => Err(missing(format!("this node has no job wall ({why}); it serves only its owner"))),
+            Wall::Seatbelt => {
+                if entry.trust == Trust::Team {
+                    return Err((codes::TEAM_NEEDS_TENANT_WALL.into(), "Macs take only your own servers until per-tenant users (0.46.4)".into()));
+                }
+                if !t.paths.root().is_dir() {
+                    return Err(missing(format!("{} isn't prepared (tenant.prepare)", t.paths.root().display())));
+                }
+                Ok(())
+            }
+            Wall::JobUser { .. } => match self.job_op(crate::admin::jobs::JobOp::Tenants, vec![], Duration::from_secs(30)).await {
+                Ok(crate::admin::jobs::JobAnswer::Tenants(w)) if !w.ready => {
+                    let why = w.why.unwrap_or_default();
+                    let code = if why.starts_with(codes::TEAM_NEEDS_TENANT_WALL) { codes::TEAM_NEEDS_TENANT_WALL } else { codes::TENANT_WALL_MISSING };
+                    Err((code.into(), why))
+                }
+                Ok(crate::admin::jobs::JobAnswer::Tenants(w)) => match w.users.get(&t.slot.to_string()) {
+                    Some(u) if *u == crate::admin::jobs::tenant_user_name(t.slot) && crate::admin::server::user_ids(u).is_some() => Ok(()),
+                    Some(u) => Err(missing(format!("{u} isn't a user on this machine (tenant.prepare)"))),
+                    None => Err(missing(format!("slot {} has no job user (tenant.prepare)", t.slot))),
+                },
+                Ok(other) => Err(missing(format!("the executor can't wall tenants (an older k2-node admin?): {other:?}"))),
+                Err(e) => Err(missing(format!("the executor can't wall tenants (an older k2-node admin?): {e}"))),
+            },
+        }
+    }
+
     async fn unit_status(&self, unit: &str) -> Option<crate::admin::jobs::UnitStatus> {
         match self.job_op(crate::admin::jobs::JobOp::Status { unit: unit.to_string() }, vec![], Duration::from_secs(30)).await {
             Ok(crate::admin::jobs::JobAnswer::Status(s)) => Some(s),
@@ -115,6 +182,15 @@ impl Node {
         let gen = a.fence.generation;
         let dirs = JobDirs::new(t.paths.job_dir(&job, gen));
         let unit_mode = matches!(self.wall, Wall::JobUser { .. });
+        // A tenant's job runs only behind its own wall (V59): nothing of it
+        // is made before that's sure.
+        let network = match self.tenant_wall_check(&t).await.and_then(|_| self.job_network(&t)) {
+            Ok(n) => n,
+            Err((code, detail)) => {
+                self.finish_job(&t, &a, None, JobState::Failed, Some(&code), Some(&detail), None, None, None, None, None).await;
+                return;
+            }
+        };
         let mut journal = match dirs.create_for(unit_mode).and_then(|_| JournalWriter::create(&t.paths.journal(&job, gen), a.plan.limits.log_cap_bytes)) {
             Ok(j) => j,
             Err(e) => {
@@ -185,6 +261,15 @@ impl Node {
         for d in [&sccache, &cargo_home] {
             let _ = std::fs::create_dir_all(d);
         }
+        // The slot's sccache socket dir (V63). A tenant's is made by
+        // tenant.prepare (its group's); the owner's here, for its job user.
+        let slot_tmp = t.paths.tmp();
+        if t.is_owner() {
+            if let Err(e) = crate::util::mkdir_mode(&slot_tmp, if unit_mode { 0o1770 } else { 0o700 }) {
+                sys(&mut journal, &format!("preparing {}: {e}", slot_tmp.display()));
+            }
+        }
+        let sccache_socket = t.paths.sccache_socket();
         if unit_mode {
             // The job (k2job, the node's group) writes these.
             let prep = (target.clone(), sccache.clone(), cargo_home.clone(), a.plan.src.is_some().then(|| dirs.src.clone()));
@@ -200,13 +285,15 @@ impl Node {
             target_dir: &target,
             cache_dir: &cache_dir,
             job_id: &job,
-            user: match &self.wall {
-                Wall::JobUser { user } => user,
-                _ => &self.opts.user,
+            user: &match &self.wall {
+                Wall::JobUser { .. } if !t.is_owner() => crate::admin::jobs::tenant_user_name(t.slot),
+                Wall::JobUser { user } => user.clone(),
+                _ => self.opts.user.clone(),
             },
             extra: &a.plan.env,
             tool_paths: &resolved.path_prepend,
             tool_env: &resolved.env,
+            sccache_socket: slot_tmp.is_dir().then_some(sccache_socket.as_path()),
         }) {
             Ok(e) => e,
             Err((code, name)) => {
@@ -221,13 +308,16 @@ impl Node {
         }
 
         // Smoke lock + spawn, behind the wall.
-        let network_none = self.local.lock().unwrap().policy.network == "none";
         let mem_limit = a.plan.limits.mem_bytes.unwrap_or_else(|| self.local.lock().unwrap().policy.mem_cap_bytes);
         self.take_smoke_lock(&job);
         let started = if unit_mode {
-            self.start_unit(&t, &a, &dirs, &cwd, &env, vec![target.clone(), sccache.clone(), cargo_home.clone()], network_none, mem_limit).await
+            let mut rw = vec![target.clone(), sccache.clone(), cargo_home.clone()];
+            if slot_tmp.is_dir() {
+                rw.push(slot_tmp.clone());
+            }
+            self.start_unit(&t, &a, &dirs, &cwd, &env, rw, network, mem_limit).await
         } else {
-            self.start_local(&t, &a, &cwd, &env, network_none)
+            self.start_local(&t, &a, &cwd, &env, network)
         };
         let (mut proc, out_pipe, err_pipe) = match started {
             Ok(s) => s,
@@ -386,9 +476,13 @@ impl Node {
     }
 
     /// A plain child process (no wall, or the Seatbelt profile around it).
-    fn start_local(&self, t: &Tenant, a: &Assign, cwd: &Path, env: &[(String, String)], network_none: bool) -> Result<(Proc, Option<OutPipe>, Option<OutPipe>), String> {
+    fn start_local(&self, t: &Tenant, a: &Assign, cwd: &Path, env: &[(String, String)], network: Network) -> Result<(Proc, Option<OutPipe>, Option<OutPipe>), String> {
+        let network_none = network != Network::On;
         if network_none && !self.wall.network_none() {
             return Err(refusal::NETWORK_NONE_MESSAGE.to_string());
+        }
+        if !t.is_owner() && !matches!(self.wall, Wall::Seatbelt) && !self.unit_test_escape() {
+            return Err(format!("{}: a tenant's job never runs without its wall", codes::TENANT_WALL_MISSING));
         }
         let key = t.job_key(&a.fence.job_id, a.fence.generation);
         let leaf: Option<Leaf> = self.cgroups.as_ref().and_then(|cg| {
@@ -397,7 +491,8 @@ impl Node {
         let argv = match &self.wall {
             Wall::Seatbelt => {
                 let (dirs, sockets) = self.seatbelt_deny();
-                crate::wall::seatbelt_argv(&crate::wall::seatbelt_profile(&dirs, &sockets, network_none), &a.plan.argv)
+                let who = crate::wall::SeatbeltTenant { slot: t.slot, home: self.layout().home.clone(), tenants_root: self.layout().tenants_root() };
+                crate::wall::seatbelt_argv(&crate::wall::seatbelt_tenant_profile(&dirs, &sockets, network_none, &who), &a.plan.argv)
             }
             _ => a.plan.argv.clone(),
         };
@@ -427,7 +522,7 @@ impl Node {
         cwd: &Path,
         env: &[(String, String)],
         rw: Vec<PathBuf>,
-        network_none: bool,
+        network: Network,
         mem_limit: u64,
     ) -> Result<(Proc, Option<OutPipe>, Option<OutPipe>), String> {
         use crate::admin::jobs::{JobAnswer, JobOp, JobStart};
@@ -439,10 +534,12 @@ impl Node {
             key,
             root: dirs.root.clone(),
             rw,
-            network_none,
+            network_none: network == Network::None,
             mem_bytes: Some(mem_limit),
             cpu_millis: a.plan.limits.cpu_millis,
             stop_grace_secs: self.opts.cancel_grace.as_secs().max(1),
+            tenant: t.slot,
+            no_lan: network == Network::NoLan,
         };
         // The write ends go to root (and the unit); ours close with the call.
         let ans = self.job_op(JobOp::Start(start), vec![out_w.into(), err_w.into()], Duration::from_secs(60)).await;
@@ -495,8 +592,29 @@ impl Node {
         match p {
             Proc::Local { pgid, leaf, .. } => runner::reap_group(*pgid, leaf.as_ref()),
             Proc::Unit { unit, .. } => {
-                if let Err(e) = self.job_op(crate::admin::jobs::JobOp::Release { unit: unit.clone() }, vec![], Duration::from_secs(120)).await {
+                // `release` doesn't wait (V58): poll until the unit is
+                // stopped, so nothing of the job still runs while the node
+                // reads its tree (artifacts, slots), then forget it.
+                if let Err(e) = self.job_op(crate::admin::jobs::JobOp::Release { unit: unit.clone() }, vec![], Duration::from_secs(60)).await {
                     crate::nlog!("release {unit}: {e}");
+                }
+                let deadline = tokio::time::Instant::now() + self.opts.cancel_grace + Duration::from_secs(60);
+                loop {
+                    match self.unit_status(unit).await {
+                        Some(s) if s.loaded && s.active_state != "inactive" && s.active_state != "failed" => {}
+                        Some(s) => {
+                            if s.loaded {
+                                let _ = self.job_op(crate::admin::jobs::JobOp::Release { unit: unit.clone() }, vec![], Duration::from_secs(60)).await;
+                            }
+                            break;
+                        }
+                        None => {}
+                    }
+                    if tokio::time::Instant::now() >= deadline {
+                        crate::nlog!("{unit} didn't stop within its stop timeout");
+                        break;
+                    }
+                    tokio::time::sleep(self.opts.unit_poll).await;
                 }
             }
         }

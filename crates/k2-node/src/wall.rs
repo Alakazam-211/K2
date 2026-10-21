@@ -153,6 +153,84 @@ pub fn seatbelt_profile(deny_dirs: &[PathBuf], deny_sockets: &[PathBuf], network
     p
 }
 
+/// Which server's job a Seatbelt profile walls (S3m; macOS 0.46.3 has one
+/// uid for every job, so the profile is the whole wall between servers).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SeatbeltTenant {
+    pub slot: k2_node_proto::share::Slot,
+    /// The node home (`/var/k2node`).
+    pub home: PathBuf,
+    /// `<home>-t` (every tenant's root is under it).
+    pub tenants_root: PathBuf,
+}
+
+/// The Seatbelt profile around one server's job (macOS): today's denies
+/// ([`seatbelt_profile`]) plus the wall between servers.
+///
+/// - **The owner's jobs** can't read or write any tenant root, or connect
+///   to a socket in one (V61).
+/// - **A tenant's jobs** can't read or write the node home (only
+///   `toolchains/`, read-only), any other tenant's root, `/private/tmp`
+///   or `/private/var/tmp` (their `TMPDIR` is their own), can't connect
+///   to a socket outside their own root and loopback, and can't read
+///   other processes' info (`ps` shows only their own sandbox).
+///
+/// One uid means signals between servers' jobs are **not** stopped (a
+/// Seatbelt `signal` deny would also stop a job signalling its own
+/// children; V60): that's why Macs take only your own servers in 0.46.3.
+pub fn seatbelt_tenant_profile(deny_dirs: &[PathBuf], deny_sockets: &[PathBuf], network_none: bool, t: &SeatbeltTenant) -> String {
+    let mut p = String::from("(version 1)\n(allow default)\n");
+    let rw = |p: &mut String, verb: &str, d: &Path| p.push_str(&format!("({verb} file-read* file-write* (subpath {}))\n", sb_str(&real_path(d))));
+    for d in deny_dirs {
+        rw(&mut p, "deny", d);
+    }
+    let troot = real_path(&t.tenants_root);
+    if t.slot == k2_node_proto::share::OWNER_SLOT {
+        rw(&mut p, "deny", &troot);
+        p.push_str(&format!("(deny network-outbound (subpath {}))\n", sb_str(&troot)));
+    } else {
+        let own = troot.join(t.slot.to_string());
+        rw(&mut p, "deny", &t.home);
+        p.push_str(&format!("(allow file-read* (subpath {}))\n", sb_str(&real_path(&t.home.join("toolchains")))));
+        for d in TENANT_DENY_SHARED {
+            rw(&mut p, "deny", Path::new(d));
+        }
+        rw(&mut p, "deny", &troot);
+        rw(&mut p, "allow", &own);
+        // Unix sockets: none in another server's root or the node home.
+        p.push_str(&format!("(deny network-outbound (subpath {}))\n", sb_str(&troot)));
+        p.push_str(&format!("(deny network-outbound (subpath {}))\n", sb_str(&real_path(&t.home))));
+        p.push_str(&format!("(allow network-outbound (subpath {}))\n", sb_str(&own)));
+        // Other processes (other servers' jobs) are invisible.
+        p.push_str("(deny process-info* (target others))\n");
+        p.push_str("(allow process-info* (target same-sandbox))\n");
+    }
+    // The node's own sockets (the executor) stay closed whatever the
+    // allows above say: after them, so they win.
+    for s in deny_sockets {
+        p.push_str(&format!("(deny network-outbound (literal {}))\n", sb_str(&real_path(s))));
+    }
+    if network_none {
+        push_network_none(&mut p);
+    }
+    p
+}
+
+/// Shared scratch a tenant's job can't use on a one-uid Mac (another
+/// server's job could read or plant files there).
+pub const TENANT_DENY_SHARED: &[&str] = &["/private/tmp", "/private/var/tmp", "/Users/Shared"];
+
+fn push_network_none(p: &mut String) {
+    p.push_str("(deny mach-lookup (global-name \"com.apple.dnssd.service\"))\n");
+    p.push_str("(deny network-outbound (literal \"/private/var/run/mDNSResponder\"))\n");
+    p.push_str("(deny network-outbound (remote ip))\n");
+    p.push_str("(deny network-bind (local ip))\n");
+    p.push_str("(deny network-inbound (local ip))\n");
+    p.push_str("(allow network-outbound (remote ip \"localhost:*\"))\n");
+    p.push_str("(allow network-bind (local ip \"localhost:*\"))\n");
+    p.push_str("(allow network-inbound (local ip \"localhost:*\"))\n");
+}
+
 /// `sandbox-exec -p <profile> -- argv…`.
 pub fn seatbelt_argv(profile: &str, argv: &[String]) -> Vec<String> {
     let mut v = vec![SANDBOX_EXEC.to_string(), "-p".to_string(), profile.to_string(), "--".to_string()];
@@ -462,6 +540,71 @@ pub fn group_dir(p: &Path) -> Result<(), String> {
 
 /// Marks a warm target dir whose node-made contents were shared once.
 pub const SHARED_MARK: &str = ".k2-job-wall";
+
+// ── tenant roots (root side) ────────────────────────────────────────
+
+/// Root: make `path` a real directory (created if missing; never through
+/// a symlink at its last component) owned by `uid:gid` with `mode`
+/// (setgid allowed). Refuses anything that isn't a plain directory.
+pub fn secure_dir(path: &Path, uid: u32, gid: u32, mode: u32) -> Result<(), String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(m) if m.is_dir() => {}
+        Ok(_) => return Err(format!("{} exists and isn't a plain folder", path.display())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::create_dir(path).map_err(|e| format!("create {}: {e}", path.display()))?;
+        }
+        Err(e) => return Err(format!("stat {}: {e}", path.display())),
+    }
+    let fd = open_root(path)?;
+    // SAFETY: valid fd.
+    if unsafe { libc::fchown(fd.as_raw_fd(), uid, gid) } != 0 {
+        return Err(format!("chown {}: {}", path.display(), errno()));
+    }
+    // SAFETY: valid fd.
+    if unsafe { libc::fchmod(fd.as_raw_fd(), mode as libc::mode_t) } != 0 {
+        return Err(format!("chmod {}: {}", path.display(), errno()));
+    }
+    Ok(())
+}
+
+/// Root: `chmod o-rwx` one directory (never through a link).
+pub fn drop_other_bits(path: &Path) -> Result<(), String> {
+    let fd = open_root(path)?;
+    let st = fstat(&fd).map_err(|e| format!("stat {}: {e}", path.display()))?;
+    let mode = mode_of(&st) & 0o7777;
+    if mode & 0o007 == 0 {
+        return Ok(());
+    }
+    // SAFETY: valid fd.
+    if unsafe { libc::fchmod(fd.as_raw_fd(), (mode & !0o007) as libc::mode_t) } != 0 {
+        return Err(format!("chmod {}: {}", path.display(), errno()));
+    }
+    Ok(())
+}
+
+/// Root (`tenant.wipe`): remove the entries directly in `dir` owned by
+/// `uid` (a wiped tenant's leftovers in `/dev/shm`, `/tmp`, `/var/tmp`).
+/// Links are removed as links; trees are removed without following any.
+pub fn remove_owned_by(dir: &Path, uid: u32) -> Result<Vec<String>, String> {
+    use std::os::unix::fs::MetadataExt;
+    let mut out = Vec::new();
+    let rd = match std::fs::read_dir(dir) {
+        Ok(rd) => rd,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
+        Err(e) => return Err(format!("read {}: {e}", dir.display())),
+    };
+    for e in rd.flatten() {
+        let p = e.path();
+        let Ok(m) = std::fs::symlink_metadata(&p) else { continue };
+        if m.uid() != uid {
+            continue;
+        }
+        let r = if m.is_dir() { std::fs::remove_dir_all(&p) } else { std::fs::remove_file(&p) };
+        r.map_err(|e| format!("remove {}: {e}", p.display()))?;
+        out.push(p.display().to_string());
+    }
+    Ok(out)
+}
 
 // ── people's home folders ───────────────────────────────────────────
 

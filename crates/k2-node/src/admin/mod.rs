@@ -31,6 +31,7 @@ pub mod policy;
 pub mod server;
 pub mod servers;
 pub mod store;
+pub mod tenants;
 pub mod units;
 pub mod update;
 

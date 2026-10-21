@@ -784,6 +784,12 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/app/link/rotate",
         "/cli/app/list",
         "/cli/app/logs",
+        // 0.46.3 box usage (the view: no folder paths for passports), its
+        // rescan, and settings (listed so a passport gets the teaching
+        // owner_only from the handler, like box/prepare).
+        "/cli/app/resources",
+        "/cli/app/resources/rescan",
+        "/cli/app/resources/settings",
         "/cli/app/restart",
         "/cli/app/rollback",
         "/cli/app/shell",

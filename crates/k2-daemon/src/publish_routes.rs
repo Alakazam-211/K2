@@ -749,30 +749,57 @@ fn handle_run(params: &HashMap<String, String>) -> CliResponse {
     // unprepared box) the run stays as in 0.46.0, with the notice.
     let gate = publish_run_gate(&project_id, &name, skin);
     let who = CALLER.with(|c| c.borrow().clone()).unwrap_or(crate::compute_routes::Who::Invalid);
+    let hold_run = |reasons: Vec<String>| {
+        let body = serde_json::json!({
+            "projectId": project_id, "name": name, "cmd": cmd, "cwd": cwd.display().to_string(),
+            "port": port, "noTunnel": no_tunnel, "cwdExplicit": cwd_explicit,
+            "probeTimeout": probe_timeout_body(probe_timeout),
+        });
+        let diff = serde_json::json!([format!("new open-path App {name}: {cmd} (port {port})")]);
+        crate::apps::routes::respond(crate::apps::grace::hold(
+            &who,
+            k2_core::app_grace::requests::KIND_PUBLISH_RUN,
+            None,
+            &name,
+            &project_id,
+            body,
+            diff,
+            reasons,
+        ))
+    };
+    // C4 (disk guard, prd-app-resources-disk-guard-v1 §6.1): a NEW --cmd
+    // service, or an open-path run that takes a new snapshot, before the
+    // gate (an agent without --disk-override gets disk_low instead of a
+    // request the owner would approve into a full disk). A re-run of an
+    // existing legacy service is never checked.
+    let disk = match publish_disk_check(&who, &project_id, &name, &cwd, &route, skin, opt_param(params, "diskOverride").as_deref()) {
+        Ok(d) => d,
+        Err(resp) => return resp,
+    };
+    let disk_extra = match disk {
+        DiskStep::Go(x) => x,
+        DiskStep::Hold(reasons) => {
+            let mut all: Vec<String> = gate.as_ref().map(|g| vec![g.why.clone()]).unwrap_or_default();
+            all.extend(reasons);
+            return hold_run(all);
+        }
+    };
     if let Some(g) = gate.as_ref() {
         let why = g.why.as_str();
         if gate_holds(gate_mode(), &route, g.switch_off) {
-            let body = serde_json::json!({
-                "projectId": project_id, "name": name, "cmd": cmd, "cwd": cwd.display().to_string(),
-                "port": port, "noTunnel": no_tunnel, "cwdExplicit": cwd_explicit,
-                "probeTimeout": probe_timeout_body(probe_timeout),
-            });
-            let diff = serde_json::json!([format!("new open-path App {name}: {cmd} (port {port})")]);
-            return crate::apps::routes::respond(crate::apps::grace::hold(
-                &who,
-                k2_core::app_grace::requests::KIND_PUBLISH_RUN,
-                None,
-                &name,
-                &project_id,
-                body,
-                diff,
-                vec![why.to_string()],
-            ));
+            let mut reasons = vec![why.to_string()];
+            if let Some(o) = disk_extra.get("diskOverride") {
+                reasons.push(format!("past the disk guard: {}", o["reason"].as_str().unwrap_or("")));
+            }
+            return hold_run(reasons);
         }
     }
     if matches!(route, CmdRoute::Open) {
         let run = crate::apps::open::Run { project_id, name, cmd, cwd, port, no_tunnel };
-        return crate::apps::routes::respond(crate::apps::open::publish_run(&who, &run));
+        return crate::apps::routes::respond(crate::apps::open::publish_run(&who, &run).map(|mut v| {
+            crate::apps::resources::decorate(&mut v, disk_extra);
+            v
+        }));
     }
     let not_ready = match &route {
         CmdRoute::NotReady(why) => Some(why.clone()),
@@ -802,6 +829,9 @@ fn handle_run(params: &HashMap<String, String>) -> CliResponse {
                     let name = o.get("name").and_then(|n| n.as_str()).unwrap_or("this service").to_string();
                     o.insert("crossover".into(), crossover_notice(&name, &g.why));
                 }
+                if let serde_json::Value::Object(m) = disk_extra {
+                    o.extend(m);
+                }
                 if let Some(why) = not_ready {
                     o.insert(
                         "wall".into(),
@@ -819,6 +849,57 @@ fn handle_run(params: &HashMap<String, String>) -> CliResponse {
     }
 }
 
+/// What the disk guard decided for a `k2 publish run`.
+pub(crate) enum DiskStep {
+    /// Go ahead; merge these fields into the answer.
+    Go(serde_json::Value),
+    /// An override that waits for the owner: file the `publish_run` hold
+    /// with these reasons.
+    Hold(Vec<String>),
+}
+
+/// C4: the disk check for a run that creates a service or a snapshot.
+pub(crate) fn publish_disk_check(
+    who: &crate::compute_routes::Who,
+    project_id: &str,
+    name: &str,
+    cwd: &std::path::Path,
+    route: &CmdRoute,
+    skin: bool,
+    disk_override: Option<&str>,
+) -> Result<DiskStep, CliResponse> {
+    use crate::apps::resources as res;
+    if skin {
+        return Ok(DiskStep::Go(serde_json::json!({})));
+    }
+    let need = match route {
+        // An open-path run snapshots the whole folder, stored twice.
+        CmdRoute::Open => crate::apps::open::folder_app(project_id, name)
+            .and_then(|a| res::seed_size(a.live_seed.as_deref()))
+            .unwrap_or(0)
+            .saturating_mul(2),
+        _ => {
+            let exists = {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                k2_core::published_services::get_by_project_name(&conn, project_id, name).ok().flatten().is_some()
+            };
+            if exists {
+                // A re-run of an existing legacy service: never checked.
+                return Ok(DiskStep::Go(serde_json::json!({})));
+            }
+            0
+        }
+    };
+    let paths = vec![cwd.to_path_buf(), k2_core::paths::k2_home()];
+    match res::decide(who, "publish run", name, &paths, need, disk_override, None, false) {
+        Ok(res::Decision::Go(x)) => Ok(DiskStep::Go(x)),
+        Ok(res::Decision::Refuse(r)) => Err(crate::apps::routes::refusal_response(&r)),
+        Ok(res::Decision::Hold { finding, reason }) => Ok(DiskStep::Hold(res::hold_reasons(&finding, "publish run", &reason))),
+        Err(r) => Err(crate::apps::routes::refusal_response(&r)),
+    }
+}
+
 /// `k2 publish stop|start|rm` on an open-path folder App: the App's own
 /// routes (§8.2), with the caller's rights there. `None` = not one.
 fn open_path_verb(verb: &str, project_id: &str, name: &str, keep_hostname: bool) -> Option<CliResponse> {
@@ -829,7 +910,7 @@ fn open_path_verb(verb: &str, project_id: &str, name: &str, keep_hostname: bool)
 
 /// Where a `--cmd` run goes (K5).
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum CmdRoute {
+pub(crate) enum CmdRoute {
     /// An existing `--cmd` service: unchanged in 0.46.1.
     Legacy,
     /// A new label (or an open-path folder App's re-run) on a box with the

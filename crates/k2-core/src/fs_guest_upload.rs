@@ -305,12 +305,21 @@ fn write_guest_upload_chunk_locked(
             }
             if let Some(free) = free_disk_space(dir) {
                 if total > free {
-                    return Err(GuestChunkError::NoSpace(format!(
-                        "not enough free disk space: transfer needs {total} bytes, volume has {free}"
-                    )));
+                    // A guest's message names nobody and no numbers
+                    // (prd-app-resources-disk-guard-v1 §6.2).
+                    return Err(GuestChunkError::NoSpace(crate::disk_guard::GUEST_NO_SPACE.to_string()));
                 }
             }
         }
+    }
+    // C6 (disk guard, mode on): the declared total on the first chunk,
+    // else each chunk, must leave the box's reserve free.
+    let need = match (offset, total_bytes) {
+        (0, Some(total)) => total,
+        _ => bytes.len() as u64,
+    };
+    if crate::disk_guard::reserve_ok(dir, need).is_err() {
+        return Err(GuestChunkError::NoSpace(crate::disk_guard::GUEST_NO_SPACE.to_string()));
     }
 
     let part = dir.join(part_name);

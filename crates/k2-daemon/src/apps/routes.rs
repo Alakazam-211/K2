@@ -100,6 +100,7 @@ pub fn is_route(p: &str) -> bool {
         || door_route(p)
         || super::ownership::ROUTES.contains(&p)
         || super::seal::ROUTES.contains(&p)
+        || super::resources::ROUTES.contains(&p)
 }
 
 pub fn is_post_route(p: &str) -> bool {
@@ -110,6 +111,7 @@ pub fn is_post_route(p: &str) -> bool {
         // Hand over, park, unpark, release (slice D): all POST.
         || super::ownership::ROUTES.contains(&p)
         || super::seal::POST_ROUTES.contains(&p)
+        || super::resources::POST_ROUTES.contains(&p)
 }
 
 /// The 0.46.1 door's routes (lane 2): audit, quotas, suspend/resume and
@@ -427,6 +429,8 @@ pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String
         p if super::ownership::ROUTES.contains(&p) => super::ownership::handle(p, &who, body),
         // K-M3 (0.46.3): the App's seal key (status; rotate: owner/switch 2).
         p if super::seal::ROUTES.contains(&p) => super::seal::handle(p, &who, body, params),
+        // 0.46.3: box usage and the disk guard's settings (resources.rs).
+        p if super::resources::ROUTES.contains(&p) => super::resources::handle(p, &who, body, params),
         // S28 and the process exception.
         "/cli/app/exec" => super::exec::exec_route(&who, body),
         "/cli/app/exception" => super::exception::route(&who, body),
@@ -445,8 +449,31 @@ fn build(who: &Who, body: &[u8]) -> R<J> {
     need_build(who)?;
     let v = json_body(body)?;
     let folder = resolve_folder(who, s(&v, "folder").ok_or_else(|| no(codes::BAD_REQUEST, 400, "folder is required"))?)?;
+    // C1 (disk guard): a new Seed on ~/.k2 (and the wall's tree).
+    let label = folder.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "(folder)".into());
+    let ws = folder_ws(who, &folder);
+    let paths = super::resources::app_paths(true);
+    let need = super::resources::build_need(&folder);
+    let extra = match super::resources::app_gate(who, "/cli/app/build", "build", &label, &ws, None, &paths, need, &v, false)? {
+        super::resources::Gate::Go(x) => x,
+        super::resources::Gate::Held(h) => return Ok(h),
+    };
     let (built, wall) = build_seed(who, &folder, &v, super::wall_build::BUILD_SLOT, false)?;
-    Ok(json!({ "ok": true, "seed": built.seed, "reused": built.reused, "entries": built.entries, "build": wall }))
+    let mut out = json!({ "ok": true, "seed": built.seed, "reused": built.reused, "entries": built.entries, "build": wall });
+    super::resources::decorate(&mut out, extra);
+    Ok(out)
+}
+
+/// The workspace a folder belongs to (a held build names it): the
+/// passport's own, else the registered workspace holding the folder.
+fn folder_ws(who: &Who, folder: &Path) -> String {
+    if let Some((ws, _)) = who.passport() {
+        return ws.to_string();
+    }
+    crate::workspace_msg::resolve_workspace(&folder.to_string_lossy())
+        .and_then(|p| ws_by_token(&p))
+        .map(|w| w.id)
+        .unwrap_or_default()
 }
 
 /// The Seed for a folder: built in the wall when the manifest declares a
@@ -617,6 +644,24 @@ fn install(who: &Who, body: &[u8]) -> R<J> {
     })?;
     // §4.3 admission-lite: the box's App memory pool (every caller).
     super::admission::check_memory(&app_id, memory)?;
+    // C2 (disk guard), before the limits hold and before any folder: a
+    // walled App's first start copies its image.
+    let walled = s(&v, "engine") != Some("process");
+    let disk_extra = match super::resources::app_gate(
+        who,
+        "/cli/app/install",
+        "install",
+        &app_id,
+        &ws.id,
+        None,
+        &super::resources::app_paths(walled),
+        if walled { super::resources::WALLED_FIRST_START } else { 0 },
+        &v,
+        true,
+    )? {
+        super::resources::Gate::Go(x) => x,
+        super::resources::Gate::Held(h) => return Ok(h),
+    };
     // Switch-1 default limits: past them the install waits for the owner.
     if let Some(bound) = super::limits::bound(who) {
         let over = super::limits::install_overages(&bound, memory, tunnel)?;
@@ -704,7 +749,9 @@ fn install(who: &Who, body: &[u8]) -> R<J> {
     if s(&v, "seed").is_some() || s(&v, "folder").is_some() {
         let mut dv = v.clone();
         dv["app"] = json!(app_id);
-        let d = deploy_inner(who, &dv)?;
+        // The install passed the disk guard: its first deploy isn't
+        // checked again.
+        let d = super::resources::with_guard_done(|| deploy_inner(who, &dv))?;
         // A first install held for the owner (S20): the App exists, its
         // deploy waits (exit 2 in the CLI).
         if d.get("status").and_then(J::as_str) == Some("held") {
@@ -714,6 +761,7 @@ fn install(who: &Who, body: &[u8]) -> R<J> {
         }
         out["deploy"] = d;
     }
+    super::resources::decorate(&mut out, disk_extra);
     Ok(out)
 }
 
@@ -880,11 +928,28 @@ fn deploy_inner(who: &Who, v: &J) -> R<J> {
     let app = app_for(who, s(v, "app"))?;
     super::suspend::refuse_if_suspended(&app.app_id)?;
     super::ownership::refuse_if_parked(&app)?;
+    // C3 (disk guard): before any Seed is built or copied.
+    let disk_extra = match super::resources::app_gate(
+        who,
+        "/cli/app/deploy",
+        "deploy",
+        &app.app_id,
+        &app.owner_workspace,
+        Some(&app),
+        &super::resources::app_paths(app.isolation == "container"),
+        super::resources::deploy_need(&app),
+        v,
+        true,
+    )? {
+        super::resources::Gate::Go(x) => x,
+        super::resources::Gate::Held(h) => return Ok(h),
+    };
     let app = apply_engine(who, app, v)?;
     let seed = seed_for_deploy(who, &app, v)?;
     // S20: caps past the App's approved set (or a first install) are held
     // for the owner, whoever deploys; the live Seed keeps serving.
-    if let Some(held) = hold_new_caps(who, &app, &seed, v)? {
+    if let Some(mut held) = hold_new_caps(who, &app, &seed, v)? {
+        super::resources::decorate(&mut held, disk_extra);
         return Ok(held);
     }
     // Box services the Seed asks for are filed before the start renders
@@ -902,6 +967,7 @@ fn deploy_inner(who: &Who, v: &J) -> R<J> {
     if let Some(b) = box_services {
         out["boxServices"] = b;
     }
+    super::resources::decorate(&mut out, disk_extra);
     Ok(out)
 }
 

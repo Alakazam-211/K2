@@ -7396,6 +7396,22 @@ See and run it:
                                        memory/disk budgets, hostnames, ports and
                                        box services. Never its data or logs.
   k2 app inspect <app-id>              Runtime, Seed, createdWith, audit chain.
+  k2 app inspect <app-id> --resources  That App's row of the box usage view.
+  k2 app resources [--json] [--app A] [--owner AGENT] [--rescan [--wait]]
+                                       Box usage: disk per filesystem and per
+                                       App, service, database, agent folder
+                                       and shared part, each with its owner
+                                       (k2 msg <address>); RAM, load; the disk
+                                       guard's lines. Agents never see paths.
+  k2 app resources settings [--mode on|warn|off] [--warn 85] [--warn-free 20G]
+                 [--refuse 95] [--reserve 10G] [--critical 98] [--critical-free 2G]
+                                       The disk guard (owner only to change).
+                                       New installs, deploys, builds, data put
+                                       and new --cmd services stop past the
+                                       lines; restarts and rollbacks never do.
+                                       --disk-override "<reason>" on those
+                                       verbs: the owner's goes through once,
+                                       anyone else's waits for the owner.
   k2 app history <app-id>              Deploys: who, from, to, why, result.
   k2 app history --widget <name>       A Garden widget's version history.
   k2 app logs <app-id> [--deployment D] [--tail N] [--follow]
@@ -7928,28 +7944,32 @@ _app_validate_seed() {
 }
 
 cmd_app_build() {
-    local folder="" types=0 json_out=0
+    local folder="" types=0 json_out=0 dov=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --types) types=1; shift ;;
+            --disk-override) dov="${2:-}"; shift 2 ;;
+            --disk-override=*) dov="${1#--disk-override=}"; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_rt_usage; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
             *) folder="$1"; shift ;;
         esac
     done
-    [ -z "$folder" ] && { echo "usage: k2 app build <folder> [--types] [--json]" >&2; exit 2; }
+    [ -z "$folder" ] && { echo "usage: k2 app build <folder> [--types] [--disk-override REASON] [--json]" >&2; exit 2; }
     [ -d "$folder" ] || { echo "k2 app build: $folder is not a folder" >&2; exit 2; }
-    _app_rt_post /cli/app/build "$(_compute_json K2_CJ_folder="$(_app_rt_abs "$folder")" K2_CJ_types_b="$types")"
+    _app_rt_post /cli/app/build "$(_compute_json K2_CJ_folder="$(_app_rt_abs "$folder")" K2_CJ_types_b="$types" K2_CJ_diskOverride="$dov")"
     if [ "$_CP_STATUS" = "422" ]; then
         if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; else printf '%s' "$_CP_BODY" | _app_rt_report >&2; fi
         exit 1
     fi
-    [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+    # Held for the owner (a disk override, or S42 without the switch): exit 2.
+    _app_grace_done "$json_out"
     if [ "$json_out" = 1 ]; then
         printf '%s\n' "$_CP_BODY"
         return 0
     fi
+    _app_disk_notes
     printf '%s' "$_CP_BODY" | python3 -c '
 import json, sys
 v = json.load(sys.stdin)
@@ -8001,9 +8021,11 @@ else:
 
 # k2 app install <app-id> [--workspace WS] [--tunnel] [--memory 8G|none] [--seed S | --folder F] [--json]
 cmd_app_install() {
-    local app="" ws="" tunnel=0 memory="" seed="" folder="" engine="" json_out=0
+    local app="" ws="" tunnel=0 memory="" seed="" folder="" engine="" json_out=0 dov=""
     while [ $# -gt 0 ]; do
         case "$1" in
+            --disk-override) dov="${2:-}"; shift 2 ;;
+            --disk-override=*) dov="${1#--disk-override=}"; shift ;;
             --workspace) ws="${2:-}"; shift 2 ;;
             --tunnel) tunnel=1; shift ;;
             --memory) memory="${2:-}"; shift 2 ;;
@@ -8021,13 +8043,16 @@ cmd_app_install() {
     local wait=""
     { [ -n "$seed" ] || [ -n "$folder" ]; } && wait=150
     _app_rt_post /cli/app/install "$(_compute_json K2_CJ_app="$app" K2_CJ_workspace="$ws" K2_CJ_tunnel_b="$tunnel" \
-        K2_CJ_memory="$memory" K2_CJ_engine="$engine" K2_CJ_seed="$seed" K2_CJ_folder="$folder" K2_CJ_wait_n="$wait")"
-    # An agent asking for the unwalled process engine: held for the owner.
+        K2_CJ_memory="$memory" K2_CJ_engine="$engine" K2_CJ_seed="$seed" K2_CJ_folder="$folder" K2_CJ_wait_n="$wait" \
+        K2_CJ_diskOverride="$dov")"
+    # An agent asking for the unwalled process engine, or a disk override
+    # that waits for the owner: held for the owner.
     if [ "$_CP_STATUS" = "202" ] && [[ "$_CP_BODY" != *'"frontPort"'* ]]; then
         _app_grace_done "$json_out"
     fi
     [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
     if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    _app_disk_notes
     printf '%s' "$_CP_BODY" | python3 -c '
 import json, sys
 v = json.load(sys.stdin)
@@ -8044,9 +8069,11 @@ else:
 
 # k2 app deploy <app-id> <folder|seed> [--reason TEXT] [--no-wait] [--types] [--json]
 cmd_app_deploy() {
-    local app="" target="" reason="" wait=150 types=0 json_out=0 engine=""
+    local app="" target="" reason="" wait=150 types=0 json_out=0 engine="" dov=""
     while [ $# -gt 0 ]; do
         case "$1" in
+            --disk-override) dov="${2:-}"; shift 2 ;;
+            --disk-override=*) dov="${1#--disk-override=}"; shift ;;
             --engine) engine="${2:-}"; shift 2 ;;
             --engine=*) engine="${1#--engine=}"; shift ;;
             --reason) reason="${2:-}"; shift 2 ;;
@@ -8058,20 +8085,23 @@ cmd_app_deploy() {
             *) if [ -z "$app" ]; then app="$1"; else target="$1"; fi; shift ;;
         esac
     done
-    { [ -z "$app" ] || [ -z "$target" ]; } && { echo "usage: k2 app deploy <app-id> <folder|seed> [--engine guarded|process] [--reason TEXT] [--no-wait]" >&2; exit 2; }
+    { [ -z "$app" ] || [ -z "$target" ]; } && { echo "usage: k2 app deploy <app-id> <folder|seed> [--engine guarded|process] [--reason TEXT] [--no-wait] [--disk-override REASON]" >&2; exit 2; }
     case "$engine" in ""|guarded|process) ;; *) echo "--engine is guarded or process" >&2; exit 2 ;; esac
     local body
     if [ -d "$target" ]; then
-        body="$(_compute_json K2_CJ_app="$app" K2_CJ_folder="$(_app_rt_abs "$target")" K2_CJ_reason="$reason" K2_CJ_wait_n="$wait" K2_CJ_types_b="$types" K2_CJ_engine="$engine")"
+        body="$(_compute_json K2_CJ_app="$app" K2_CJ_folder="$(_app_rt_abs "$target")" K2_CJ_reason="$reason" K2_CJ_wait_n="$wait" K2_CJ_types_b="$types" K2_CJ_engine="$engine" K2_CJ_diskOverride="$dov")"
     else
-        body="$(_compute_json K2_CJ_app="$app" K2_CJ_seed="$target" K2_CJ_reason="$reason" K2_CJ_wait_n="$wait" K2_CJ_engine="$engine")"
+        body="$(_compute_json K2_CJ_app="$app" K2_CJ_seed="$target" K2_CJ_reason="$reason" K2_CJ_wait_n="$wait" K2_CJ_engine="$engine" K2_CJ_diskOverride="$dov")"
     fi
     _app_rt_post /cli/app/deploy "$body"
     if [ "$_CP_STATUS" = "422" ]; then
         printf '%s' "$_CP_BODY" | _app_rt_report >&2
         exit 1
     fi
-    [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+    # Held for the owner (new caps S20, no switch S42, a disk override):
+    # exit 2 with the request, never exit 3 with an empty error.
+    _app_grace_done "$json_out"
+    [ "$json_out" = 1 ] || _app_disk_notes
     _app_rt_deployment_exit "$json_out"
 }
 
@@ -8403,17 +8433,24 @@ for n in v.get("notices", []):
 
 # k2 app inspect <app-id> [--json]
 cmd_app_inspect() {
-    local app="" json_out=0
+    local app="" json_out=0 res=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) json_out=1; shift ;;
-            --resources) echo "k2 app inspect --resources arrives with the resource layer (a later 0.46 release)" >&2; exit 2 ;;
+            --resources) res=1; shift ;;
             -h|--help) _app_rt_usage; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
             *) app="$1"; shift ;;
         esac
     done
-    [ -z "$app" ] && { echo "usage: k2 app inspect <app-id> [--json]" >&2; exit 2; }
+    [ -z "$app" ] && { echo "usage: k2 app inspect <app-id> [--resources] [--json]" >&2; exit 2; }
+    if [ "$res" = 1 ]; then
+        # The App's row of the box usage view (k2 app resources).
+        _compute_call GET /cli/app/resources "app=$(urlencode "$app")"
+        if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+        printf '%s' "$_CP_BODY" | _app_resources_print
+        return 0
+    fi
     _compute_call GET /cli/app/inspect "app=$(urlencode "$app")"
     if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
     printf '%s' "$_CP_BODY" | python3 -c '
@@ -9592,16 +9629,310 @@ for h in helds:
     [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
 }
 
+# Disk and memory warnings, and an applied disk override, on stderr (human
+# output; the JSON already carries them). prd-app-resources-disk-guard-v1.
+_app_disk_notes() {
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+try:
+    v = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+if not isinstance(v, dict):
+    sys.exit(0)
+for key, label in (("diskWarning", "disk"), ("memoryWarning", "memory")):
+    w = v.get(key)
+    if isinstance(w, dict) and w.get("hint"):
+        sys.stderr.write("%s warning: %s\n" % (label, w["hint"]))
+o = v.get("diskOverride")
+if isinstance(o, dict) and o.get("applied"):
+    sys.stderr.write("disk override (%s): %s\n" % (o.get("via", ""), o.get("reason", "")))
+' || true
+}
+
+# Print the box usage view (stdin: GET /cli/app/resources).
+_app_resources_print() {
+    python3 -c '
+import json, sys, time
+v = json.load(sys.stdin)
+def gb(b):
+    if b is None:
+        return "—"
+    f = float(b)
+    for unit, size in (("TB", 1e12), ("GB", 1e9), ("MB", 1e6), ("KB", 1e3)):
+        if f >= size:
+            return ("%.1f %s" % (f / size, unit)) if f < 10 * size else ("%.0f %s" % (f / size, unit))
+    return "%d B" % f
+def gib(b):
+    if b is None:
+        return "—"
+    g = float(b) / (1 << 30)
+    return ("%.0f GiB" % g) if abs(g - round(g)) < 0.05 else ("%.1f GiB" % g)
+def ago(t):
+    if not t:
+        return "never"
+    s = int(time.time() - t)
+    if s < 120:
+        return "%d s ago" % s
+    if s < 7200:
+        return "%d min ago" % (s // 60)
+    return "%d h ago" % (s // 3600)
+b, g, scan = v.get("box") or {}, v.get("guard") or {}, v.get("scan") or {}
+l = g.get("lines") or {}
+mode = g.get("mode", "?") + (" (from the environment)" if g.get("modeSource") == "env" else "")
+print("%s · %s cores · %s RAM · disk guard %s · checked %s (folders scanned %s)" % (
+    b.get("host") or "this box", b.get("cores") or "?", gib(b.get("memBytes")), mode,
+    time.strftime("%H:%M", time.localtime(b.get("checkedAt") or time.time())), ago(scan.get("workspacesAt"))))
+rows = v.get("consumers") or []
+print()
+print("DISK")
+for d in v.get("disks") or []:
+    print("  %-8s %s used of %s (%s%%) · %s free · %s" % (d.get("mount") or d.get("id"), gb(d.get("usedBytes")), gb(d.get("totalBytes")),
+          d.get("usedPct"), gb(d.get("freeBytes")), str(d.get("level", "?")).upper()))
+    if d.get("holds"):
+        print("           holds: %s" % ", ".join(d["holds"]))
+print("           Lines: warn %s%% or %s free · refuse %s%% or %s left · critical %s%% or %s free" % (
+    l.get("warnPct"), gib(l.get("warnFreeBytes")), l.get("refusePct"), gib(l.get("reserveBytes")),
+    l.get("criticalPct"), gib(l.get("criticalFreeBytes"))))
+m = v.get("mem") or {}
+print("RAM        %s total · %s available · agents %s" % (gib(m.get("totalBytes")), gib(m.get("availableBytes")), gib(m.get("agentsBytes"))))
+print("CPU        load %s (5 min) on %s cores" % ((v.get("cpu") or {}).get("load5") or "—", b.get("cores") or "?"))
+def who(r):
+    o = r.get("owner") or {}
+    return o.get("handle") or ("server" if o.get("kind") == "server" else "—")
+def parts(r, n=3):
+    p = sorted((r.get("parts") or {}).items(), key=lambda kv: -kv[1])[:n]
+    return " · ".join("%s %s" % (k, gb(x)) for k, x in p)
+sections = ((("app", "service"), "APPS AND SERVICES"), (("database",), "DATABASES"), (("workspace",), "AGENT FOLDERS"), (("shared",), "SHARED"))
+for kinds, title in sections:
+    sel = [r for r in rows if r.get("kind") in kinds]
+    if not sel:
+        continue
+    print()
+    if "app" in kinds:
+        print("%-28s %-15s %-14s %-9s %-9s %s" % (title, "KIND", "OWNER", "DISK", "RAM", "STATE"))
+    else:
+        print(title)
+    for r in sel:
+        if r.get("kind") in ("app", "service"):
+            k = ("app · %s" % r.get("path", "?")) if r.get("kind") == "app" else "service"
+            state = r.get("state") or ""
+            if r.get("kind") == "service" and r.get("walled") is False:
+                state += " · unwalled --cmd"
+            print("%-28s %-15s %-14s %-9s %-9s %s" % (r.get("id"), k, who(r), gb(r.get("diskBytes")), gib(r.get("memBytes")), state))
+            if r.get("parts"):
+                print("    %s" % parts(r, 6))
+        else:
+            extra = parts(r)
+            if r.get("unusedBytes") is not None:
+                extra = (extra + " · " if extra else "") + "%s unused" % gb(r["unusedBytes"])
+            if r.get("folder"):
+                extra = (extra + "  " if extra else "") + r["folder"]
+            print("%-44s %-14s %-9s %s" % (r.get("id"), who(r), gb(r.get("diskBytes")), extra))
+        if r.get("partial"):
+            print("    (partial: the scan ran out of time)")
+for d in v.get("disks") or []:
+    if d.get("notMeasuredBytes") is not None:
+        print("%-44s %-14s ~%s  (%s)" % ("Not measured by K2 (OS, other users)", "", gb(d["notMeasuredBytes"]), d.get("mount")))
+by = v.get("byOwner") or []
+if by:
+    print()
+    print("BIGGEST OWNERS   " + " · ".join("%s %s" % ((o.get("owner") or {}).get("handle") or "?", gb(o.get("diskBytes"))) for o in by[:3]))
+    top = (by[0].get("owner") or {}).get("address")
+    if top:
+        print("Ask an agent:    k2 msg %s \"…\"" % top)
+w = v.get("k2WillClear") or {}
+if w.get("seedsBytes"):
+    print("K2 will clear:   %s of old Seeds (%s) at the next sweep" % (gb(w["seedsBytes"]), w.get("seeds")))
+if not scan.get("workspacesAt") and not scan.get("appsAt"):
+    print()
+    print("No scan has measured Apps and folders yet: their disk shows as —.")
+if v.get("suggestion"):
+    print()
+    print(v["suggestion"])
+'
+}
+
+# k2 app resources [--json] [--app A] [--owner AGENT] [--rescan [--wait]]
+# k2 app resources settings [--mode on|warn|off] [--warn 85] [--warn-free 20G]
+#     [--refuse 95] [--reserve 10G] [--critical 98] [--critical-free 2G] [--json]
+# Box usage and the disk guard (prd-app-resources-disk-guard-v1, 0.46.3).
+cmd_app_resources() {
+    if [ "${1:-}" = settings ]; then shift; cmd_app_resources_settings "$@"; return; fi
+    local json_out=0 app="" owner="" rescan=0 wait=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            --app) app="${2:-}"; shift 2 ;;
+            --owner) owner="${2:-}"; shift 2 ;;
+            --rescan) rescan=1; shift ;;
+            --wait) wait=1; shift ;;
+            -h|--help) _app_resources_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) echo "usage: k2 app resources [--json] [--app A] [--owner AGENT] [--rescan [--wait]]" >&2; exit 2 ;;
+        esac
+    done
+    [ "$wait" = 1 ] && [ "$rescan" = 0 ] && { echo "--wait goes with --rescan" >&2; exit 2; }
+    if [ "$rescan" = 1 ]; then
+        _compute_call POST /cli/app/resources/rescan '{}'
+        local started
+        started="$(printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+if v.get("started"):
+    print("started")
+elif v.get("running"):
+    print("running")
+elif v.get("skipped"):
+    print("skipped: " + v["skipped"])
+else:
+    print("noscanner")')"
+        case "$started" in
+            started|running) echo "box usage scan: $started" >&2 ;;
+            noscanner) echo "box usage scan: no scanner runs on this daemon yet; the numbers below are the disks only" >&2; wait=0 ;;
+            *) echo "box usage scan $started (one every 5 minutes at most)" >&2; wait=0 ;;
+        esac
+        if [ "$wait" = 1 ]; then
+            local i running=1
+            for i in $(seq 1 120); do
+                sleep 5
+                _compute_call GET /cli/app/resources ""
+                running="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print(1 if (json.load(sys.stdin).get("scan") or {}).get("running") else 0)')"
+                [ "$running" = 0 ] && break
+            done
+            [ "$running" = 0 ] || echo "the scan is still running after 10 minutes; showing what is known" >&2
+        fi
+    fi
+    local q=""
+    [ -n "$app" ] && q="app=$(urlencode "$app")"
+    [ -n "$owner" ] && q="${q:+$q&}owner=$(urlencode "$owner")"
+    _compute_call GET /cli/app/resources "$q"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | _app_resources_print
+}
+
+cmd_app_resources_settings() {
+    local json_out=0 mode="" warn="" warn_free="" refuse="" reserve="" critical="" critical_free="" changed=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            --mode) mode="${2:-}"; changed=1; shift 2 ;;
+            --warn) warn="${2:-}"; changed=1; shift 2 ;;
+            --warn-free) warn_free="${2:-}"; changed=1; shift 2 ;;
+            --refuse) refuse="${2:-}"; changed=1; shift 2 ;;
+            --reserve) reserve="${2:-}"; changed=1; shift 2 ;;
+            --critical) critical="${2:-}"; changed=1; shift 2 ;;
+            --critical-free) critical_free="${2:-}"; changed=1; shift 2 ;;
+            -h|--help) _app_resources_usage; return 0 ;;
+            *) echo "Unknown argument: $1 (k2 app resources --help)" >&2; exit 2 ;;
+        esac
+    done
+    case "$mode" in ""|on|warn|off) ;; *) echo "--mode is on, warn or off" >&2; exit 2 ;; esac
+    local p
+    for p in "$warn" "$refuse" "$critical"; do
+        case "$p" in ""|[0-9]|[0-9][0-9]) ;; *) echo "percent lines are whole numbers 1-99 (got $p)" >&2; exit 2 ;; esac
+    done
+    local sizes
+    sizes="$(K2_S_WF="$warn_free" K2_S_RS="$reserve" K2_S_CF="$critical_free" python3 -c '
+import os, re, sys
+out = []
+for k in ("K2_S_WF", "K2_S_RS", "K2_S_CF"):
+    s = os.environ.get(k, "").strip()
+    if not s:
+        out.append("-")
+        continue
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([kKmMgGtT]?)(i?[bB])?", s)
+    if not m:
+        sys.stderr.write("bad size %r (use 20G, 512M or bytes)\n" % s)
+        sys.exit(2)
+    mult = {"": 1, "k": 1 << 10, "m": 1 << 20, "g": 1 << 30, "t": 1 << 40}[m.group(2).lower()]
+    out.append(str(int(round(float(m.group(1)) * mult))))
+print(" ".join(out))')" || exit 2
+    local wfb rsb cfb
+    read -r wfb rsb cfb <<<"$sizes"
+    [ "$wfb" = "-" ] && wfb=""
+    [ "$rsb" = "-" ] && rsb=""
+    [ "$cfb" = "-" ] && cfb=""
+    if [ "$changed" = 0 ]; then
+        # No flags: print the lines and the mode (anyone who can read the
+        # view; changing them is the owner's).
+        _compute_call GET /cli/app/resources ""
+        _CP_BODY="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print(json.dumps({"ok": True, "guard": json.load(sys.stdin).get("guard")}))')"
+    else
+        _app_rt_post /cli/app/resources/settings "$(_compute_json K2_CJ_mode="$mode" K2_CJ_warnPct_n="$warn" \
+            K2_CJ_warnFreeBytes_n="$wfb" K2_CJ_refusePct_n="$refuse" K2_CJ_reserveBytes_n="$rsb" \
+            K2_CJ_criticalPct_n="$critical" K2_CJ_criticalFreeBytes_n="$cfb")"
+        [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+    fi
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+g = v.get("guard") or {}
+l = g.get("lines") or {}
+def gib(b):
+    if b is None:
+        return "—"
+    x = b / 1073741824.0
+    return ("%.0f GiB" % x) if abs(x - round(x)) < 0.05 else ("%.1f GiB" % x)
+if v.get("changed"):
+    print("disk guard saved")
+print("mode      %s (%s)" % (g.get("mode"), g.get("modeSource")))
+print("warn      %s%% used or under %s free" % (l.get("warnPct"), gib(l.get("warnFreeBytes"))))
+print("refuse    %s%% used, or an action that would leave under %s" % (l.get("refusePct"), gib(l.get("reserveBytes"))))
+print("critical  %s%% used or under %s free" % (l.get("criticalPct"), gib(l.get("criticalFreeBytes"))))
+if v.get("note"):
+    print("note: " + v["note"])'
+}
+
+_app_resources_usage() {
+    cat <<'EOF'
+k2 app resources — box usage (not k2 workspace resources, not k2 app usage)
+
+  k2 app resources [--json] [--app A] [--owner AGENT] [--rescan [--wait]]
+      Disk per filesystem (used, free, level) and per consumer: each App,
+      --cmd service, Postgres database, agent folder, the mail store, K2's
+      own files and the agent tools' caches. Every row names its owner and
+      the address k2 msg takes. RAM and load too. Unknown shows as —.
+      Agents see names and addresses, never folder paths.
+      --rescan asks for a fresh folder scan (one at a time, at most every
+      5 minutes); --wait waits up to 10 minutes for it.
+  k2 app inspect <app> --resources
+      One App's row.
+  k2 app resources settings [--mode on|warn|off] [--warn 85] [--warn-free 20G]
+                            [--refuse 95] [--reserve 10G] [--critical 98]
+                            [--critical-free 2G] [--json]
+      No flags: print the lines. With flags: change them (the owner only).
+
+The disk guard: before new disk work starts (k2 app build, install, deploy,
+data put, a new k2 publish run --cmd service, uploads) K2 checks the disk.
+  warn      85% or under 20 GiB free: it goes through, with a warning.
+  refuse    95%, or the action would leave under 10 GiB: refused (exit 3,
+            disk_low). --disk-override "<reason>": the owner's goes through
+            once; anyone else's waits for the owner (exit 2, a request).
+  critical  98% or under 2 GiB free: every override waits for the owner
+            in person.
+It never stops a running App, never blocks a restart, start, stop or
+rollback, and never deletes App data, databases, mail or folders.
+--mode off is today's behaviour; K2_DISK_GUARD=off|warn|on in the daemon's
+environment wins over the setting.
+
+Exit codes: 0 ok, 2 usage error or held for the owner, 3 refused.
+EOF
+}
+
 # k2 app data put <app-id> <path> [--to <dir>] [--json] (0.46.3): copy a file
 # or folder of the App's workspace into its data folder.
 cmd_app_data() {
     local sub="${1:-}"
     shift || true
     [ "$sub" = put ] || { echo "usage: k2 app data put <app-id> <path> [--to <dir>] [--json]" >&2; exit 2; }
-    local app="" from="" to="" json_out=0
+    local app="" from="" to="" json_out=0 dov=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --to) to="${2:-}"; shift 2 ;;
+            --disk-override) dov="${2:-}"; shift 2 ;;
+            --disk-override=*) dov="${1#--disk-override=}"; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_grace_usage; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
@@ -9611,10 +9942,11 @@ cmd_app_data() {
     [ -z "$app" ] || [ -z "$from" ] && { echo "usage: k2 app data put <app-id> <path> [--to <dir>]" >&2; exit 2; }
     [ -e "$from" ] && from="$(cd "$(dirname "$from")" && pwd -P)/$(basename "$from")"
     local raw
-    raw="$(K2_CP_MAX_TIME=1800 _compute_send POST /cli/app/data/put "$(_compute_json K2_CJ_app="$app" K2_CJ_from="$from" K2_CJ_to="$to")")"
+    raw="$(K2_CP_MAX_TIME=1800 _compute_send POST /cli/app/data/put "$(_compute_json K2_CJ_app="$app" K2_CJ_from="$from" K2_CJ_to="$to" K2_CJ_diskOverride="$dov")")"
     _compute_split "$raw"
     _app_grace_done "$json_out"
     if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    _app_disk_notes
     printf '%s' "$_CP_BODY" | python3 -c '
 import json, sys
 v = json.load(sys.stdin)
@@ -10820,6 +11152,7 @@ cmd_app() {
         box) shift; cmd_app_box "$@" ;;
         engine) shift; cmd_app_engine "$@" ;;
         data) shift; cmd_app_data "$@" ;;
+        resources) shift; cmd_app_resources "$@" ;;
         label) shift; cmd_app_label "$@" ;;
         warnings) shift; cmd_app_warnings "$@" ;;
         clean-mode) shift; cmd_app_clean_mode "$@" ;;
@@ -22439,6 +22772,9 @@ def fail(code, hint, exit_code=1):
             exit_code = 2
         elif code in ("owner_only", "role_required"):
             exit_code = 3
+    # The disk guard (0.46.3): a refusal is exit 3, like every k2 app verb.
+    if code == "disk_low":
+        exit_code = 3
     hint = hint if isinstance(hint, str) else str(hint)
     text = hint.rstrip("\n")
     if as_json:
@@ -22537,6 +22873,26 @@ def env_warning(n, s):
             "Switch with: k2 publish env %s clean (grant secrets with k2 publish secret add)."
             % (n, env_ends(s), n))
 
+# 0.46.3: held for the owner (a new --cmd service from an agent, or a disk
+# override that waits for the owner): print the request and exit 2.
+if mode == "service" and verb == "run" and d.get("status") == "held":
+    if as_json:
+        print(json.dumps(d, separators=(",", ":")))
+    else:
+        r = d.get("request") if isinstance(d.get("request"), dict) else {}
+        print("held for the owner: %s  %s" % (r.get("id") or d.get("requestId") or "?", r.get("summary") or ""))
+        for why in d.get("reasons") or []:
+            print("  why: %s" % why)
+        if d.get("hint"):
+            print(d["hint"])
+    sys.exit(2)
+if mode == "service" and verb == "run":
+    for _k, _label in (("diskWarning", "disk"), ("diskOverride", "disk override")):
+        _x = d.get(_k)
+        if isinstance(_x, dict) and _x.get("hint"):
+            sys.stderr.write("%s warning: %s\n" % (_label, _x["hint"]))
+        elif isinstance(_x, dict) and _x.get("applied"):
+            sys.stderr.write("disk override (%s): %s\n" % (_x.get("via", ""), _x.get("reason", "")))
 # run/start of a legacy service: one stderr line, so --json stdout stays clean.
 if mode == "service" and verb in ("run", "start"):
     _s = d.get("service") if isinstance(d.get("service"), dict) else d
@@ -22803,9 +23159,14 @@ cmd_publish() {
 # `k2 publish run <name> --skin [<dir>] --port <n> [--no-tunnel]`
 cmd_publish_run() {
     if _wants_help "$@"; then _publish_usage; exit 0; fi
-    local name="" cmd="" port="" cwd="" no_tunnel=0 as_json=false skin=0 skin_root="" transfer=0 probe_timeout=""
+    local name="" cmd="" port="" cwd="" no_tunnel=0 as_json=false skin=0 skin_root="" transfer=0 probe_timeout="" dov=""
     while [ $# -gt 0 ]; do
         case "$1" in
+            --disk-override)
+                [ $# -ge 2 ] || { as_json="$as_json" _publish_err "usage" "--disk-override needs a reason"; exit 2; }
+                dov="$2"; shift 2 ;;
+            --disk-override=*)
+                dov="${1#--disk-override=}"; shift ;;
             --probe-timeout)
                 [ $# -ge 2 ] || { as_json="$as_json" _publish_err "usage" "--probe-timeout needs a duration (90s, 10m, at most 15m) or 'default'"; exit 2; }
                 probe_timeout="$2"; shift 2 ;;
@@ -22907,7 +23268,7 @@ cmd_publish_run() {
     local body RESP
     body=$(P_NAME="$name" P_CMD="$cmd" P_PORT="$port" P_CWD="$cwd" \
            P_PROJECT="$PROJECT" P_NO_TUNNEL="$no_tunnel" P_TRANSFER="$transfer" \
-           P_SKIN="$skin" P_SKIN_ROOT="$skin_root" P_PROBE_TIMEOUT="$probe_timeout" python3 -c '
+           P_SKIN="$skin" P_SKIN_ROOT="$skin_root" P_PROBE_TIMEOUT="$probe_timeout" P_DISK_OVERRIDE="$dov" python3 -c '
 import json, os
 b = {
     "name": os.environ["P_NAME"],
@@ -22927,6 +23288,9 @@ if os.environ.get("P_TRANSFER") == "1":
 pt = (os.environ.get("P_PROBE_TIMEOUT") or "").strip()
 if pt:
     b["probeTimeout"] = pt
+dov = (os.environ.get("P_DISK_OVERRIDE") or "").strip()
+if dov:
+    b["diskOverride"] = dov
 if os.environ.get("P_SKIN") == "1":
     b["skin"] = True
     root = os.environ.get("P_SKIN_ROOT") or ""

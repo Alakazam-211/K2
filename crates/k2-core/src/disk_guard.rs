@@ -861,10 +861,14 @@ pub struct Consumer {
 }
 
 impl Consumer {
-    /// The same row as an agent may see it: no folder, no workspace id.
+    /// The same row as an agent may see it: no folder, no workspace id (a
+    /// workspace row's `id` becomes the agent's handle).
     pub fn for_agent(&self) -> Consumer {
         let mut c = self.clone();
         c.folder = None;
+        if c.kind == "workspace" {
+            c.id = c.owner.handle.clone().or_else(|| c.owner.address.clone()).unwrap_or_else(|| "workspace".into());
+        }
         c.owner.workspace_id = None;
         c
     }
@@ -1671,6 +1675,7 @@ mod tests {
         assert!(a["owner"].get("workspaceId").is_none());
         assert!(a["diskBytes"].is_null());
         assert_eq!(a["owner"]["address"], "nsi::box.k2.dev");
+        assert_eq!(a["id"], "nsi", "a workspace row's id is the handle for agents");
     }
 
     #[test]

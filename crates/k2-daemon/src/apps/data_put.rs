@@ -179,6 +179,15 @@ pub(crate) fn route(who: &Who, body: &[u8]) -> R<J> {
     let raw = s(&v, "from").ok_or_else(|| no(codes::BAD_REQUEST, 400, "from is required (a file or folder in your workspace)"))?;
     let ws = ws_by_id(&app.owner_workspace).ok_or_else(|| no(codes::FORBIDDEN, 404, "the App's workspace is not registered"))?;
     let from = resolve_from(Path::new(&ws.path), raw).map_err(|e| no(codes::FOLDER_OUTSIDE_WORKSPACE, 403, e))?;
+    // C5 (disk guard): the App's data lands on ~/.k2 (process engine) or
+    // the wall's tree.
+    let walled = !super::supervisor::runs_unwalled(&app);
+    let paths = if walled { super::resources::app_paths(true).split_off(1) } else { super::resources::app_paths(false) };
+    let need = super::resources::size_capped(&from, MAX_BYTES as u64);
+    let extra = match super::resources::app_gate(who, "/cli/app/data/put", "data put", &app.app_id, &app.owner_workspace, Some(&app), &paths, need, &v, false)? {
+        super::resources::Gate::Go(x) => x,
+        super::resources::Gate::Held(h) => return Ok(h),
+    };
     let by = actor(who);
     let (files, bytes, into) = if super::supervisor::runs_unwalled(&app) {
         let dest = deploy::app_dir(&app.app_id).join("data").join(&to);
@@ -215,7 +224,9 @@ pub(crate) fn route(who: &Who, body: &[u8]) -> R<J> {
             &json!({ "from": from, "to": into, "files": files, "bytes": bytes }),
         );
     }
-    Ok(json!({ "ok": true, "app": app.app_id, "from": from, "to": into, "files": files, "compressedBytes": bytes }))
+    let mut out = json!({ "ok": true, "app": app.app_id, "from": from, "to": into, "files": files, "compressedBytes": bytes });
+    super::resources::decorate(&mut out, extra);
+    Ok(out)
 }
 
 #[cfg(test)]

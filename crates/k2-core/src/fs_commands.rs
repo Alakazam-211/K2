@@ -564,6 +564,10 @@ pub fn write_upload(dir: &str, filename: &str, bytes: &[u8]) -> Result<PathBuf, 
     if !dir_path.is_dir() {
         return Err(format!("Destination is not a directory: {dir}"));
     }
+    // C6 (disk guard, mode on): the upload keeps the box's reserve.
+    if let Err(f) = crate::disk_guard::reserve_ok(&dir_path, bytes.len() as u64) {
+        return Err(crate::disk_guard::upload_refusal_text(&f));
+    }
     let safe_name = sanitize_filename(filename);
     let target = collision_free_path(&dir_path, &safe_name);
     fs::write(&target, bytes).map_err(map_io_err)?;
@@ -704,6 +708,16 @@ pub fn write_upload_chunk(
                 }
             }
         }
+    }
+
+    // C6 (disk guard, mode on): the declared total on the first chunk,
+    // else each chunk, must leave the box's reserve free.
+    let need = match (offset, total_bytes) {
+        (0, Some(total)) => total,
+        _ => bytes.len() as u64,
+    };
+    if let Err(f) = crate::disk_guard::reserve_ok(&dir_path, need) {
+        return Err(crate::disk_guard::upload_refusal_text(&f));
     }
 
     let part_path = dir_path.join(format!(".k2-upload-{}.part", sanitize_upload_id(upload_id)));
@@ -1688,6 +1702,27 @@ mod tests {
             .expect("declared-total transfer")
             .expect("finalized path");
         assert_eq!(fs::read(&path).unwrap(), b"DATA");
+    }
+
+    /// C6 (prd-app-resources-disk-guard-v1): with the guard on, a chunked
+    /// upload keeps the box's reserve, on the declared total and per chunk.
+    #[test]
+    fn upload_chunk_keeps_the_disk_guards_reserve() {
+        use crate::disk_guard::{fake, Mode, RawStat, GIB, MIB};
+        let _home = crate::test_env::TempHome::new();
+        let tmp = TempDir::new("chunk-reserve");
+        let disk = fake::install(Path::new(&tmp.s()), "7:3", "/fake", RawStat::sized(100 * GIB, 10 * GIB + 8 * MIB), Some(Mode::On));
+        // The declared total would cross the reserve: refused before a byte.
+        let e = write_upload_chunk(&tmp.s(), "b.bin", "dt", 0, b"DATA", false, Some(64 * MIB)).expect_err("total crosses the reserve");
+        assert!(e.contains("keeps 10 GiB free"), "{e}");
+        assert!(!Path::new(&tmp.s()).join(".k2-upload-dt.part").exists());
+        // No total: each chunk is checked (4 MiB fits, 16 MiB doesn't).
+        write_upload_chunk(&tmp.s(), "b.bin", "pc", 0, &vec![0u8; 4 * 1024 * 1024], false, None).expect("4 MiB fits");
+        let e = write_upload_chunk(&tmp.s(), "b.bin", "pc", 4 * 1024 * 1024, &vec![0u8; 16 * 1024 * 1024], true, None).expect_err("16 MiB crosses");
+        assert!(e.contains("Not enough disk space"), "{e}");
+        // Mode warn never refuses an upload.
+        disk.set_mode(Some(Mode::Warn));
+        write_upload_chunk(&tmp.s(), "c.bin", "w", 0, b"DATA", true, Some(64 * MIB)).expect("warn mode passes");
     }
 
     #[test]

@@ -71,9 +71,23 @@ fn write_servers(config: &Path, slots: &[(Slot, Trust, Network)]) {
 /// A Seatbelt node with the owner and `slots`, each tenant root made as
 /// `tenant.prepare` makes it on macOS (the node user's, 0700).
 async fn mac(tag: &str, slots: &[(Slot, Trust, Network)], prepare: bool) -> Mac {
+    mac_in(k2_node::util::temp_dir(tag), slots, prepare).await
+}
+
+/// A short base dir (this user's `DARWIN_USER_TEMP_DIR`): socket paths
+/// under it fit `sun_path` (104 bytes), as the real `/var/k2node-t/<n>/…` do.
+fn short_dir() -> PathBuf {
+    let out = std::process::Command::new("/usr/bin/getconf").arg("DARWIN_USER_TEMP_DIR").output().unwrap();
+    let base = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
+    let d = base.join(format!("k2w-{}", &k2_node_proto::crypto::random_id().unwrap()[..4]));
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::canonicalize(&d).unwrap()
+}
+
+async fn mac_in(dir: PathBuf, slots: &[(Slot, Trust, Network)], prepare: bool) -> Mac {
     assert!(k2_node::wall::seatbelt_available(), "sandbox-exec is missing");
     let mut fake = Fake::start().await;
-    let n = start_node(&fake, tag, "", |o| o.wall = Some(Wall::Seatbelt)).await;
+    let n = start_node_in(&fake, dir, "", |o| o.wall = Some(Wall::Seatbelt)).await;
     let conn = fake.next_conn().await;
     write_servers(&n.layout.config, slots);
     for (slot, ..) in slots {
@@ -172,6 +186,14 @@ fn line_ok(out: &str, kind: &str, path: &str) -> bool {
 fn put(p: &Path, s: &str) {
     std::fs::create_dir_all(p.parent().unwrap()).unwrap();
     std::fs::write(p, s).unwrap();
+}
+
+/// The k2-node binary (its `wall-probe`), copied out of the build tree.
+fn probe_bin() -> PathBuf {
+    let d = k2_node::util::temp_dir("probe-bin");
+    let p = d.join("k2-node");
+    std::fs::copy(env!("CARGO_BIN_EXE_k2-node"), &p).unwrap();
+    p
 }
 
 const OWN2: &[(Slot, Trust, Network)] = &[(1, Trust::Own, Network::On), (2, Trust::Own, Network::On)];
@@ -276,7 +298,7 @@ async fn w1_w2_w3_the_profile_walls_each_servers_dirs_both_ways() {
 /// the node home). Control: the test process connects to all of them.
 #[tokio::test(flavor = "multi_thread")]
 async fn w9_sockets_in_another_servers_root_are_closed() {
-    let m = mac("mac-w9", OWN2, true).await;
+    let m = mac_in(short_dir(), OWN2, true).await;
     let n = &m.n;
     let l = &n.layout;
     k2_node::util::mkdir_mode(&l.tenant(0).tmp(), 0o700).unwrap();
@@ -310,17 +332,19 @@ async fn w6_no_lan_is_none_and_team_is_refused_on_a_mac() {
     let m = mac("mac-w6", &[(1, Trust::Own, Network::NoLan), (2, Trust::Team, Network::None), (3, Trust::Own, Network::On)], true).await;
     let n = &m.n;
     let lo = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let lo_a = lo.local_addr().unwrap().port();
-    let script = format!(
-        "if /usr/bin/nc -z -w 2 192.0.2.1 9 2>/tmp/e1; then echo OFF-OK; else echo \"OFF-NO $(cat /tmp/e1)\"; fi; \
-         if /usr/bin/nc -z -w 2 127.0.0.1 {lo_a}; then echo LO-OK; else echo LO-NO; fi"
-    )
-    .replace("/tmp/e1", "$TMPDIR/e1");
-    let got = run(n, 1, "nolan", &["/bin/sh", "-c", &script]).await;
-    assert!(got.out.contains("OFF-NO") && got.out.contains("Operation not permitted"), "W6: no-lan let a socket leave the Mac: {}", got.out);
-    assert!(got.out.contains("LO-OK"), "loopback stays: {}", got.out);
-    let got = run(n, 0, "owner-net", &["/bin/sh", "-c", &script]).await;
-    assert!(!got.out.contains("Operation not permitted"), "the owner's network is on: {}", got.out);
+    let lo_a = lo.local_addr().unwrap().to_string();
+    // TEST-NET-1: off this machine, never a real host.
+    let off = "192.0.2.1:9".to_string();
+    let bin = probe_bin();
+    let argv = vec![bin.display().to_string(), "wall-probe".into(), "--connect".into(), off.clone(), "--connect".into(), lo_a.clone()];
+    let denied = |v: &serde_json::Value, a: &str| v["connect"][a].as_str().unwrap_or("").contains("Operation not permitted");
+    let got = run(n, 1, "nolan", &strs(&argv)).await;
+    let v: serde_json::Value = serde_json::from_str(got.out.trim()).unwrap_or_else(|e| panic!("{e}: {} {}", got.out, got.err));
+    assert!(denied(&v, &off), "W6: no-lan let a socket leave the Mac: {v}");
+    assert_eq!(v["connect"][&lo_a], "ok", "loopback stays: {v}");
+    let got = run(n, 0, "owner-net", &strs(&argv)).await;
+    let v: serde_json::Value = serde_json::from_str(got.out.trim()).unwrap();
+    assert!(!denied(&v, &off), "the owner's network is on: {v}");
     let got = run_plan(n, 2, plan("team", &["/bin/echo", "never"])).await;
     assert_eq!((got.state, got.reason.as_deref()), (JobState::Failed, Some(codes::TEAM_NEEDS_TENANT_WALL)), "{}", got.err);
     assert!(!got.out.contains("never"));
@@ -337,24 +361,16 @@ async fn w6_no_lan_is_none_and_team_is_refused_on_a_mac() {
     );
 }
 
-/// T4 on one uid (best effort; W4 is Linux's): a tenant's job can't read
-/// another process's info (`ps` of a process outside its sandbox shows
-/// nothing), while its own children stay visible.
+/// T4 on a Mac (W4 is Linux's): one uid, and no `process-info*` deny
+/// (it also hid a job's own children, found on a mini), so other jobs'
+/// processes stay visible to a tenant's job (in the report; Macs take
+/// only your own servers in 0.46.3). What must hold: a tenant's job sees
+/// and manages its own children.
 #[tokio::test(flavor = "multi_thread")]
-async fn w4_other_processes_are_hidden_from_a_tenants_job() {
+async fn w4_a_tenants_job_sees_its_own_children_on_a_mac() {
     let m = mac("mac-w4", OWN2, true).await;
     let n = &m.n;
-    let mut other = std::process::Command::new("/bin/sleep").arg("120").spawn().unwrap();
-    let pid = other.id();
-    let ctl = std::process::Command::new("/bin/ps").args(["-p", &pid.to_string(), "-o", "command="]).output().unwrap();
-    assert!(String::from_utf8_lossy(&ctl.stdout).contains("sleep"), "control: ps sees {pid}");
-    let script = format!(
-        "ps -p {pid} -o command= 2>&1 | grep -q sleep && echo OTHER-SEEN || echo OTHER-HIDDEN; \
-         /bin/sleep 30 & c=$!; ps -p $c -o command= 2>&1 | grep -q sleep && echo CHILD-SEEN || echo CHILD-HIDDEN; kill $c"
-    );
-    let got = run(n, 1, "ps", &["/bin/sh", "-c", &script]).await;
-    let _ = other.kill();
-    let _ = other.wait();
-    assert!(got.out.contains("OTHER-HIDDEN"), "T4: a tenant's job saw another process: {}\n{}", got.out, got.err);
-    assert!(got.out.contains("CHILD-SEEN"), "its own children stay visible: {}\n{}", got.out, got.err);
+    let script = "/bin/sleep 30 & c=$!; ps -p $c -o command= 2>&1 | grep -q sleep && echo CHILD-SEEN || echo CHILD-HIDDEN; kill $c && echo KILLED";
+    let got = run(n, 1, "ps", &["/bin/sh", "-c", script]).await;
+    assert!(got.out.contains("CHILD-SEEN") && got.out.contains("KILLED"), "a tenant job's own children: {}\n{}", got.out, got.err);
 }

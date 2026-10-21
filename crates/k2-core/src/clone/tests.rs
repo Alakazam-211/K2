@@ -1928,6 +1928,39 @@ fn llm_wallet_never_travels_even_when_carrying_secrets() {
     }
 }
 
+/// The vault (`<home>/.k2/vault/`: its store, every secret including
+/// people's wallet items, and its box key file) never travels in a clone
+/// bundle, even with `carry_secrets`, when the workspace is the home folder
+/// (k2-vault keystore/file.rs: "excluded from every K2-made backup and
+/// clone"). Listed as scrubbed.
+#[test]
+fn the_vault_never_travels_even_when_carrying_secrets() {
+    let fx = build_fixture();
+    // The home-folder workspace's own `.k2/vault/` (store + key + tag), and
+    // the legacy `.k2so/vault/`.
+    write(&fx.project.join(".k2/vault/vault.db"), "SQLite format 3 K2TEST_SECRET_MARKER");
+    write(&fx.project.join(".k2/vault/vault.db-wal"), "K2TEST_SECRET_MARKER");
+    write(&fx.project.join(".k2/vault/key/kek"), "K2TEST_SECRET_MARKER-kek-bytes");
+    write(&fx.project.join(".k2/vault/key/CACHEDIR.TAG"), "Signature: 8a477f597d28d172789f06886806bc55\n");
+    write(&fx.project.join(".k2so/vault/vault.db"), "K2TEST_SECRET_MARKER");
+    write(&fx.project.join("notes/vault/readme.md"), "a project folder named vault travels");
+    for carry in [false, true] {
+        let mut o = opts(&fx.home);
+        o.carry_secrets = carry;
+        let inv = inventory(&fx.project.to_string_lossy(), o).unwrap();
+        let all: Vec<String> = inv.entries.iter().map(|e| e.rel_path.clone()).collect();
+        assert!(
+            !all.iter().any(|p| p.starts_with(".k2/vault/") || p.starts_with(".k2so/vault/")),
+            "no vault file may travel (carry={carry}): {all:?}"
+        );
+        for p in [".k2/vault/vault.db", ".k2/vault/vault.db-wal", ".k2/vault/key/kek", ".k2/vault/key/CACHEDIR.TAG", ".k2so/vault/vault.db"] {
+            assert!(inv.scrubbed_secrets.iter().any(|s| s == p), "{p} listed as left behind (carry={carry}): {:?}", inv.scrubbed_secrets);
+        }
+        let ws = rel_paths(&inv, DestinationClass::Workspace);
+        assert!(ws.contains("notes/vault/readme.md"), "only the vault under .k2 is excluded");
+    }
+}
+
 // ── 0.46.0: a clone carries its Threads (slice B) ──────────────────────
 
 /// A clone id + `threads/threads.json` ride the bundle; a bundle built the

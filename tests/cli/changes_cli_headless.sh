@@ -477,10 +477,13 @@ jok "$info" 'j["isRepo"] is False and j["gitAvailable"] is True and isinstance(j
 run owner changes init --workspace "$PLAIN"
 want_rc 3 "init a folder that is no workspace"
 [ "$(errcode)" = "not_found" ] || fail "init unregistered code: $ERR"
+# A folder with no git is added with add-without-git (add-from-path only
+# answers needsGitInit for it and registers nothing). The reply must be the
+# new project row, not just any body that names the path.
 reg="$(curl -s -X POST -H 'Content-Type: application/json' \
     -d "$(python3 -c 'import json,sys; print(json.dumps({"path": sys.argv[1], "seedWiki": False, "seedAgentsMd": False}))' "$PLAIN")" \
-    "$BASE/cli/projects/add-from-path?token=$DTOKEN")"
-case "$reg" in *"$PLAIN"*) ;; *) fail "register plain: $reg" ;; esac
+    "$BASE/cli/projects/add-without-git?token=$DTOKEN")"
+jok "$reg" "j['path'] == '$PLAIN' and bool(j['id']) and 'needsGitInit' not in j" "register plain (a workspace with no git)"
 mkdir -p "$PLAIN/sub"
 run owner changes init --workspace "$PLAIN/sub"
 want_rc 3 "init below a workspace root"

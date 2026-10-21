@@ -27,27 +27,19 @@ EOF
 
 REG_URL="http://127.0.0.1:${K2SO_PORT}/cli/projects/add-from-path?token=${K2SO_TOKEN}"
 REG_BODY="$(python3 -c "import json,sys; print(json.dumps({'path': sys.argv[1]}))" "$WS")"
-curl -s -X POST -H "Content-Type: application/json" \
+if ! REG_RESP="$(curl -sS -X POST -H "Content-Type: application/json" \
     --connect-timeout 5 --max-time 15 \
-    -d "$REG_BODY" "$REG_URL" >/dev/null 2>&1
+    -d "$REG_BODY" "$REG_URL" 2>&1)"; then
+    echo "FAIL: add-from-path request failed: $REG_RESP" >&2
+    exit 1
+fi
+if ! echo "$REG_RESP" | grep -qF "\"path\":\"$WS\""; then
+    echo "FAIL: add-from-path response did not echo our workspace path" >&2
+    echo "response: $REG_RESP" >&2
+    exit 1
+fi
 
-kill "$SANDBOX_DAEMON_PID" 2>/dev/null || true
-wait "$SANDBOX_DAEMON_PID" 2>/dev/null || true
-unset SANDBOX_DAEMON_PID
-
-# Boot daemon B — first sweep, real work.
-TMPDIR="$SANDBOX_HOME/tmp" XDG_RUNTIME_DIR="$SANDBOX_HOME/run" K2_RUNTIME_DIR= HOME="$SANDBOX_HOME" "$SANDBOX_DAEMON_BIN" >"$SANDBOX_HOME/daemon-2.log" 2>&1 &
-SANDBOX_DAEMON_PID=$!
-export SANDBOX_DAEMON_PID
-for i in $(seq 1 50); do
-    if [ -f "$SANDBOX_HOME/.k2so/daemon.port" ]; then
-        NEW_PORT="$(cat "$SANDBOX_HOME/.k2so/daemon.port")"
-        if curl -sf --connect-timeout 1 "http://127.0.0.1:${NEW_PORT}/health" >/dev/null 2>&1; then
-            break
-        fi
-    fi
-    sleep 0.2
-done
+sandbox_daemon_restart daemon-2.log
 
 MARKER="$WS/.k2/.skills-consolidation-v1-done"
 if [ ! -f "$MARKER" ]; then
@@ -62,26 +54,12 @@ fi
 
 MARKER_MTIME_1="$(stat -f '%m' "$MARKER" 2>/dev/null || stat -c '%Y' "$MARKER")"
 
-# Kill daemon B and boot daemon C — sweep must short-circuit on marker.
-kill "$SANDBOX_DAEMON_PID" 2>/dev/null || true
-wait "$SANDBOX_DAEMON_PID" 2>/dev/null || true
-unset SANDBOX_DAEMON_PID
-
 # Sleep enough that an unguarded re-run would bump the mtime.
 sleep 1
 
-TMPDIR="$SANDBOX_HOME/tmp" XDG_RUNTIME_DIR="$SANDBOX_HOME/run" K2_RUNTIME_DIR= HOME="$SANDBOX_HOME" "$SANDBOX_DAEMON_BIN" >"$SANDBOX_HOME/daemon-3.log" 2>&1 &
-SANDBOX_DAEMON_PID=$!
-export SANDBOX_DAEMON_PID
-for i in $(seq 1 50); do
-    if [ -f "$SANDBOX_HOME/.k2so/daemon.port" ]; then
-        NEW_PORT="$(cat "$SANDBOX_HOME/.k2so/daemon.port")"
-        if curl -sf --connect-timeout 1 "http://127.0.0.1:${NEW_PORT}/health" >/dev/null 2>&1; then
-            break
-        fi
-    fi
-    sleep 0.2
-done
+# Boot daemon C — its sweep must short-circuit on the marker. Waiting for
+# ready (not /health) means the sweep has really run before we look.
+sandbox_daemon_restart daemon-3.log
 
 MARKER_MTIME_2="$(stat -f '%m' "$MARKER" 2>/dev/null || stat -c '%Y' "$MARKER")"
 if [ "$MARKER_MTIME_1" != "$MARKER_MTIME_2" ]; then

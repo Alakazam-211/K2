@@ -494,6 +494,8 @@ fn approving_a_proposal_on_the_persons_widget_says_keep_as_mine_without_a_note()
     let (_, v2) = call("/cli/zen/widget/folder/put", false, &mgr, json!({"widget": "other", "files": folder("other", "o2")}));
     assert_eq!((v["keepAsMine"].as_bool(), v2["keepAsMine"].as_bool()), (Some(false), Some(false)), "{v} {v2}");
     assert_eq!(keep_notes("w-keep-mgr2", "other"), 0);
+}
+
 // ── validate reflects reality (0.46.3) ─────────────────────────────────
 
 #[test]

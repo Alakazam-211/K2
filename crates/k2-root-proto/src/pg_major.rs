@@ -340,7 +340,133 @@ pub const CLUSTER_CONF_FILE: &str = "98-k2-cluster.conf";
 /// Every `postgresql@` instance runs in this slice; the cap is for all
 /// clusters together (V11, V47).
 pub const SLICE_UNIT_PATH: &str = "/etc/systemd/system/k2-postgres.slice";
-pub const SLICE_DROPIN_PATH: &str = "/etc/systemd/system/postgresql@.service.d/k2-slice.conf";
+/// The slice drop-in goes on each K2-created cluster's own instance
+/// (`postgresql@<M>-main.service.d`), never on the template: clusters K2
+/// doesn't own keep their own slice (review #1 L3).
+pub fn instance_slice_dropin(major: u32) -> String {
+    format!("/etc/systemd/system/postgresql@{major}-main.service.d/k2-slice.conf")
+}
+/// unattended-upgrades also takes PGDG's updates (the pins still limit
+/// what PGDG may supply), so libpq5 and the PGDG servers keep getting
+/// security fixes (review #1 M2).
+pub const UNATTENDED_DROPIN: &str = "/etc/apt/apt.conf.d/51k2-pgdg-unattended";
+
+pub fn unattended_dropin() -> &'static str {
+    "// K2: security and minor updates from apt.postgresql.org for the Postgres\n\
+     // majors K2 installed (pinned by /etc/apt/preferences.d/k2-pgdg.pref).\n\
+     // Written by k2-root-helper `pg add-major`.\n\
+     Unattended-Upgrade::Origins-Pattern {\n\
+     \t\"origin=apt.postgresql.org,codename=${distro_codename}-pgdg\";\n\
+     };\n"
+}
+
+/// Every psql the helper runs as postgres gets this in its environment:
+/// a client option beats `ALTER DATABASE/ROLE … SET search_path`, so a
+/// tenant's schema, operator or overload never resolves ahead of
+/// pg_catalog in a superuser session (review #2 F1, CVE-2018-1058 class).
+pub const SAFE_PGOPTIONS: &str = "PGOPTIONS=-c search_path=pg_catalog,pg_temp";
+
+/// The oldest minor of each major's `pg_dump`/`pg_restore` the helper
+/// runs (CVE-2024-7348, CVE-2025-8714/8715).
+pub fn min_tool_minor(major: u32) -> u32 {
+    match major {
+        16 => 10,
+        17 => 6,
+        _ => 0,
+    }
+}
+
+/// `(major, minor)` from `pg_dump (PostgreSQL) 17.11 (Ubuntu …)`.
+pub fn parse_tool_version(text: &str) -> Option<(u32, u32)> {
+    let rest = text.split("(PostgreSQL)").nth(1)?.trim();
+    let v = rest.split_whitespace().next()?;
+    let mut it = v.split('.');
+    let major = it.next()?.parse().ok()?;
+    let minor = it.next().map(|m| m.chars().take_while(char::is_ascii_digit).collect::<String>()).and_then(|m| m.parse().ok())?;
+    Some((major, minor))
+}
+
+/// `move-restore` stdin: the database owner's login, so the data and
+/// post-data sections load as the owner, never as the superuser (review
+/// #1 H1 / #2 F2).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MoveLogin {
+    pub role: String,
+    pub password: String,
+}
+
+impl MoveLogin {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if !role_name_ok(&self.role) {
+            return Err("move-restore: the owner is not a K2 role name");
+        }
+        if self.password.is_empty() || self.password.len() > 512 || self.password.chars().any(|c| c.is_control()) {
+            return Err("move-restore: the owner's password is empty, too long or has control characters");
+        }
+        Ok(())
+    }
+
+    /// One `.pgpass` line for this login on loopback (`:` and `\` escaped).
+    pub fn passfile_line(&self, port: u16, db: &str) -> String {
+        let esc = |s: &str| s.replace('\\', "\\\\").replace(':', "\\:");
+        format!("127.0.0.1:{port}:{}:{}:{}\n", esc(db), esc(&self.role), esc(&self.password))
+    }
+}
+
+/// Is `datname` a database K2 made, by its owner (review #1 L1)? K2's
+/// databases are owned by `<name>_migrator`; a rolled-back copy keeps its
+/// owner under `<name>__k2rb_<unix secs>`.
+pub fn k2_stamp_ok(datname: &str, owner: &str) -> bool {
+    let base = match datname.split_once("__k2rb_") {
+        Some((b, ts)) if !ts.is_empty() && ts.bytes().all(|c| c.is_ascii_digit()) => b,
+        Some(_) => return false,
+        None => datname,
+    };
+    !base.is_empty() && owner == format!("{base}_migrator")
+}
+
+/// Every in-band port Sew's config names (any `*port = N`), so K2 never
+/// takes it even while Sew is stopped (review #1 L6).
+pub fn sew_ports(toml_text: &str) -> Vec<u16> {
+    toml_text
+        .lines()
+        .filter_map(|l| {
+            let (k, v) = l.split_once('=')?;
+            if !k.trim().ends_with("port") {
+                return None;
+            }
+            v.trim().trim_matches('"').parse::<u16>().ok()
+        })
+        .filter(|p| in_band(*p))
+        .collect()
+}
+
+/// `dpkg-query -W -f '${Package} ${Version} ${Status}\n'` → installed
+/// package → version.
+pub fn installed_versions(text: &str) -> std::collections::BTreeMap<String, String> {
+    text.lines()
+        .filter(|l| l.ends_with("install ok installed"))
+        .filter_map(|l| {
+            let mut w = l.split_whitespace();
+            Some((w.next()?.to_string(), w.next()?.to_string()))
+        })
+        .collect()
+}
+
+/// Packages whose installed version an install changed or removed
+/// (`libpq5` may move: PGDG's 17 needs `libpq5 >= 17`).
+pub fn changed_packages(
+    before: &std::collections::BTreeMap<String, String>,
+    after: &std::collections::BTreeMap<String, String>,
+) -> Vec<String> {
+    before
+        .iter()
+        .filter(|(p, _)| p.as_str() != "libpq5")
+        .filter(|(p, v)| after.get(*p) != Some(*v))
+        .map(|(p, v)| format!("{p} {v} → {}", after.get(p).map(String::as_str).unwrap_or("removed")))
+        .collect()
+}
 /// Move dumps (postgres-owned, 0700), kept with the source for the
 /// rollback window.
 pub const MOVES_DIR: &str = "/var/lib/postgresql/k2-moves";
@@ -557,9 +683,16 @@ pub fn apt_sim_refusal(sim: &str, sew_major: Option<u32>) -> Option<String> {
         let mut w = line.split_whitespace();
         let (Some(op), Some(pkg)) = (w.next(), w.next()) else { continue };
         let name = pkg.split(':').next().unwrap_or(pkg);
+        // The major a package belongs to: postgresql-16, postgresql-client-16,
+        // postgresql-16-pgvector…
         let server_major = name
-            .strip_prefix("postgresql-")
+            .strip_prefix("postgresql-client-")
+            .or_else(|| name.strip_prefix("postgresql-"))
+            .and_then(|m| m.split('-').next())
             .and_then(|m| m.parse::<u32>().ok());
+        // Every Postgres package an install must leave as it is (review #1
+        // M1): servers, clients, extensions, postgresql-common.
+        let guarded = server_major.is_some() || matches!(name, "postgresql-common" | "postgresql-client-common");
         let sew_note = |m: Option<u32>| match (m, sew_major) {
             (Some(a), Some(b)) if a == b => format!(" (Sew's own Postgres runs postgresql-{a})"),
             _ => String::new(),
@@ -573,9 +706,9 @@ pub fn apt_sim_refusal(sim: &str, sew_major: Option<u32>) -> Option<String> {
             }
             // `Inst postgresql-16 [16.15-…] (16.16-…pgdg…)`: an installed
             // version in brackets = a version change of an installed package.
-            "Inst" if server_major.is_some() && w.next().is_some_and(|t| t.starts_with('[')) => {
+            "Inst" if guarded && w.next().is_some_and(|t| t.starts_with('[')) => {
                 return Some(format!(
-                    "apt_would_change_installed: the install would replace the installed {name}{}; K2 never changes an installed Postgres server (nothing changed)",
+                    "apt_would_change_installed: the install would replace the installed {name}{}; K2 never changes an installed Postgres package (nothing changed)",
                     sew_note(server_major)
                 ))
             }
@@ -939,5 +1072,60 @@ mod helper_tests {
         let why = apt_sim_refusal(change, Some(16)).unwrap();
         assert!(why.starts_with("apt_would_change_installed") && why.contains("Sew"), "{why}");
         assert!(apt_sim_refusal("Purg postgresql-client-16\n", None).is_some());
+    }
+
+    #[test]
+    fn review_fixes_pure_parts() {
+        assert_eq!(SAFE_PGOPTIONS, "PGOPTIONS=-c search_path=pg_catalog,pg_temp");
+        assert_eq!(instance_slice_dropin(17), "/etc/systemd/system/postgresql@17-main.service.d/k2-slice.conf");
+        assert!(unattended_dropin().contains("\"origin=apt.postgresql.org,codename=${distro_codename}-pgdg\";"));
+        assert_eq!(parse_tool_version("pg_dump (PostgreSQL) 17.11 (Ubuntu 17.11-1.pgdg24.04+2)"), Some((17, 11)));
+        assert_eq!(parse_tool_version("pg_restore (PostgreSQL) 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)\n"), Some((16, 15)));
+        assert_eq!(parse_tool_version("pg_dump (PostgreSQL) 18.0"), Some((18, 0)));
+        assert_eq!(parse_tool_version("nonsense"), None);
+        assert_eq!((min_tool_minor(16), min_tool_minor(17), min_tool_minor(18)), (10, 6, 0));
+        let l = MoveLogin { role: "ws_x_migrator".into(), password: "a:b\\c".into() };
+        assert!(l.validate().is_ok());
+        assert_eq!(l.passfile_line(5433, "ws_x"), "127.0.0.1:5433:ws_x:ws_x_migrator:a\\:b\\\\c\n");
+        for bad in [
+            MoveLogin { role: "postgres".into(), password: "x".into() },
+            MoveLogin { role: "ws_x_migrator".into(), password: "".into() },
+            MoveLogin { role: "ws_x_migrator".into(), password: "a\nb".into() },
+        ] {
+            assert!(bad.validate().is_err(), "{bad:?}");
+        }
+        assert!(serde_json::from_str::<MoveLogin>(r#"{"role":"a","password":"b","x":1}"#).is_err());
+        assert!(k2_stamp_ok("ws_jobs", "ws_jobs_migrator"));
+        assert!(k2_stamp_ok("ws_jobs__k2rb_1792541220", "ws_jobs_migrator"));
+        assert!(!k2_stamp_ok("ws_jobs", "postgres"));
+        assert!(!k2_stamp_ok("customer_db", "alice"));
+        assert!(!k2_stamp_ok("ws_jobs__k2rb_x", "ws_jobs_migrator"));
+        assert_eq!(sew_ports("[db]\nport = 5440\n[server]\nhttp_port = 8470\ndb_port=\"5433\"\n"), vec![5440, 5433]);
+        let before = installed_versions("postgresql-16 16.15-0u install ok installed\nlibpq5 16.15 install ok installed\npostgresql-common 257 install ok installed\nfoo 1 deinstall ok config-files\n");
+        assert_eq!(before.len(), 3);
+        let mut after = before.clone();
+        after.insert("libpq5".into(), "18.6".into());
+        after.insert("postgresql-17".into(), "17.11".into());
+        assert!(changed_packages(&before, &after).is_empty(), "libpq5 may move; new packages are not changes");
+        after.remove("postgresql-16");
+        after.insert("postgresql-common".into(), "282".into());
+        let c = changed_packages(&before, &after);
+        assert_eq!(c, vec!["postgresql-16 16.15-0u → removed".to_string(), "postgresql-common 257 → 282".to_string()]);
+    }
+
+    /// Review #1 M1: clients, extensions and postgresql-common are guarded too.
+    #[test]
+    fn apt_sim_guards_every_postgres_package() {
+        for line in [
+            "Inst postgresql-client-16 [16.15-0ubuntu0.24.04.1] (16.11-1.pgdg24.04+1)",
+            "Inst postgresql-16-pgvector [0.6.0-1] (0.8.0-1.pgdg24.04+1)",
+            "Inst postgresql-common [257build1.1] (282.pgdg24.04+1)",
+            "Inst postgresql-client-common [257build1.1] (282.pgdg24.04+1)",
+        ] {
+            let why = apt_sim_refusal(line, Some(16)).unwrap_or_else(|| panic!("{line}"));
+            assert!(why.starts_with("apt_would_change_installed"), "{why}");
+        }
+        assert!(apt_sim_refusal("Inst libpq5 [16.15] (18.6-1.pgdg24.04+2)", Some(16)).is_none());
+        assert!(apt_sim_refusal("Inst postgresql-client-17 (17.11-1.pgdg24.04+2)", Some(16)).is_none());
     }
 }

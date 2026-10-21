@@ -314,10 +314,21 @@ pub fn psql(ctx: &Ctx, db: &DbName, flags: PsqlFlags, cluster: Option<PgMajor>, 
         Some(m) => crate::pg_major::psql_args(ctx, m)?,
         None => (PSQL.to_string(), Vec::new()),
     };
-    let mut args: Vec<String> = ["-u", PG_OS_USER, "--", prog.as_str(), "-X"]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
+    // search_path pinned to pg_catalog for every superuser session, with or
+    // without --cluster (review #2 F1): the daemon's boot seal, K2 helper
+    // installs, grants and revokes run here inside tenant databases.
+    let mut args: Vec<String> = [
+        "-u",
+        PG_OS_USER,
+        "--",
+        k2_root_proto::pg_major::ENV,
+        k2_root_proto::pg_major::SAFE_PGOPTIONS,
+        prog.as_str(),
+        "-X",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
     args.extend(conn);
     args.push("-d".into());
     args.push(db.as_str().into());
@@ -351,7 +362,7 @@ pub fn redact_passwords(stderr: &str) -> String {
     stderr
         .lines()
         .map(|l| {
-            if l.to_ascii_lowercase().contains("password") {
+            if l.to_ascii_lowercase().contains("password") || has_verifier(l) {
                 "[line with a password redacted]"
             } else {
                 l
@@ -359,6 +370,19 @@ pub fn redact_passwords(stderr: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// A SCRAM verifier or an md5 hash anywhere in the line (a psql context
+/// window can start mid-verifier without the word PASSWORD; review #1 L2).
+fn has_verifier(l: &str) -> bool {
+    if l.contains("SCRAM-SHA-256$") || l.contains("$4096:") {
+        return true;
+    }
+    let b = l.as_bytes();
+    l.match_indices("md5").any(|(i, _)| {
+        let h = &b[i + 3..];
+        h.len() >= 32 && h[..32].iter().all(u8::is_ascii_hexdigit)
+    })
 }
 
 #[cfg(test)]
@@ -370,5 +394,9 @@ mod tests {
         assert!(!r.contains("hunter2"));
         assert!(r.contains("syntax error"));
         assert!(r.contains("[line with a password redacted]"));
+        let ctxline = "LINE 1: ...s3RvcmVk:c2VydmVy' $4096:c2FsdA==$a2V5:c2Vy";
+        assert!(!super::redact_passwords(ctxline).contains("c2Vy"));
+        assert!(!super::redact_passwords("x md50123456789abcdef0123456789abcdef y").contains("0123456789abcdef"));
+        assert_eq!(super::redact_passwords("syntax error near md5x"), "syntax error near md5x");
     }
 }

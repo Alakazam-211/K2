@@ -548,7 +548,11 @@ fn cmd_servers(a: &Args) -> Result<(), String> {
                     "Added {label} (slot {}, pending). The node enrols with it now; `k2-node servers` shows the SAS to read to its owner within 10 minutes.",
                     v["slot"]
                 ),
-                Some("revoke") => println!("Revoked {label}: its session ends{}; the slot is wiped {}.", if v["now"] == true { " and its running jobs stop" } else { ", running jobs finish" }, if v["wiped"].as_array().is_some_and(|w| !w.is_empty()) { "now" } else { "in 24 h" }),
+                Some("revoke") => println!(
+                    "Revoked {label}: it can't add work and its queued jobs are cancelled; {}, and its session stays open only until they have reported, then ends. The slot is wiped {}.",
+                    if v["now"] == true { "its running jobs stop now" } else { "its running jobs finish" },
+                    if v["wiped"].as_array().is_some_and(|w| !w.is_empty()) { "now" } else { "in 24 h" }
+                ),
                 _ => println!("{label}: {}", serde_json::to_string(&v).map_err(|e| e.to_string())?),
             }
             Ok(())

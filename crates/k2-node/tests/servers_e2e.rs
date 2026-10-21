@@ -456,6 +456,51 @@ async fn a_plain_revoke_lets_running_jobs_finish_and_report() {
     assert!(n.node.owner().ledger.lock().unwrap().all().unwrap().is_empty(), "the owner was never touched");
 }
 
+/// Review B8: a revoked server whose jobs still run keeps its session only
+/// to hear them end; its queue view shows its own rows and nothing of the
+/// other servers' (no sizes, no ETAs, no totals).
+#[cfg(target_os = "macos")]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_draining_revoked_server_sees_only_its_own_rows() {
+    let mut a = Fake::start().await;
+    let mut b = Fake::start().await;
+    let n = start_node(&a, "srv-revoke-view", "", walled(Wall::Seatbelt)).await;
+    let mut ca = a.next_conn().await;
+    ready(&mut ca).await;
+    pin_second(&n, &b, 1, "node-b");
+    write_shared(&n, 1, &prefix(&b.key), "b.k2.dev", ShareState::Active, None);
+    let mut cb = b.next_conn().await;
+    ready(&mut cb).await;
+    ca.send(Frame::Assign(assign(plan("a1", &["/bin/sh", "-c", "echo a; sleep 30"]), 1)));
+    ca.until(|f| matches!(f, Frame::State(s) if s.job_id == "a1" && s.state == JobState::Running)).await;
+    let mut p = plan("f1", &["/bin/sh", "-c", "echo b; sleep 6; echo done"]);
+    p.node_id = "node-b".into();
+    cb.send(Frame::Assign(assign(p, 1)));
+    cb.until(|f| matches!(f, Frame::State(s) if s.job_id == "f1" && s.state == JobState::Running)).await;
+    let view = |f: Vec<Frame>| match f.last() {
+        Some(Frame::QueueView(v)) => v.clone(),
+        other => panic!("{other:?}"),
+    };
+    cb.send(Frame::QueueGet(k2_node_proto::share::QueueGet { request_id: "before".into() }));
+    let v = view(cb.until(|f| matches!(f, Frame::QueueView(_))).await);
+    assert!(v.entries.iter().any(|e| !e.mine), "while shared, B sees the owner's job as another server's: {v:?}");
+
+    let mut rc = ctx(&n);
+    rc.now = k2_node::util::now();
+    servers::run(&rc, "servers.revoke", &serde_json::json!({"server": "b.k2.dev"})).unwrap();
+    cb.until(|f| matches!(f, Frame::Offer(o) if o.share.as_ref().is_some_and(|s| s.state == ServerStatus::Revoked))).await;
+    tokio::time::sleep(Duration::from_millis(1100)).await; // past the 1 s view cache
+    cb.send(Frame::QueueGet(k2_node_proto::share::QueueGet { request_id: "after".into() }));
+    let v = view(cb.until(|f| matches!(f, Frame::QueueView(_))).await);
+    assert_eq!(v.request_id, "after");
+    assert!(!v.entries.is_empty() && v.entries.iter().all(|e| e.mine), "a revoked server sees only its own rows: {v:?}");
+    assert_eq!((v.entries[0].pos, v.entries[0].job_id.as_deref()), (1, Some("f1")));
+    assert!(v.totals.is_empty());
+    run_to_receipt(&mut cb, "f1").await;
+    ca.send(Frame::Cancel(frames::Cancel { job_id: "a1".into(), generation: 1, reason: "cancelled".into() }));
+    run_to_receipt(&mut ca, "a1").await;
+}
+
 /// §4.3, V64, P7 (node half): revoke `--wipe` stops the server's running
 /// job, wipes its slot (pin, ledger, journals, root) and frees the slot;
 /// the next server added there enrols afresh with a new uid and sees

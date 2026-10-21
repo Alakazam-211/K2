@@ -431,6 +431,7 @@ fn turn_off_again_runs_the_twin_once_as_the_person_within_7_days() {
     let d = doc(&ws, &card);
     assert_eq!(d["choice"]["status"], "answered", "same card");
     assert_eq!(d["choice"]["action"]["result"]["message"], msg);
+    assert_eq!(d["choice"]["action"]["view"]["undo"], Value::Null, "no second Turn off again: {d}");
 
     // Once.
     let (s, r) = undo_as(&ws, &card, &person(&admin, "admin"));

@@ -1562,7 +1562,12 @@ pub const V1_POST_EXACT: &[&str] = &[
 /// `X-K2-Pane` session; outside the login role table.
 pub const HOOK_POST_EXACT: &[&str] = &["/hook/event"];
 
-/// Look up the classified row for an exact `/cli/*` path.
+/// Look up the classified row for an exact `/cli/*` path: the table as
+/// written, in every switch state. This is the classifier (the source
+/// walk, the contract and the floor tests read it). Every decision on the
+/// wire (the POST allowlist, the GET refusal, the login role gate) reads
+/// [`live_row`] instead, which skips the permission-cards rows while that
+/// switch is off.
 pub fn lookup(path: &str) -> Option<&'static Route> {
     ROUTES
         .binary_search_by(|r| r.path.cmp(path))
@@ -1570,12 +1575,57 @@ pub fn lookup(path: &str) -> Option<&'static Route> {
         .map(|i| &ROUTES[i])
 }
 
+/// The row the wire answers from: [`lookup`], except that the permission
+/// cards routes (`/cli/permission/*`, `/cli/thread/permission-note`,
+/// `/cli/thread/permission-undo`) are absent while the global "Permission
+/// cards" switch is off (prd-agent-settings-cards-v1 §2.4, vs-live C1).
+/// Off, they answer exactly as a path with no row does today: the 405
+/// guard for a non-GET, `route_unclassified` for a login, the codeless 403
+/// for a passport.
+pub fn live_row(path: &str) -> Option<&'static Route> {
+    live_row_when(path, k2_core::permission::gate::server_on())
+}
+
+/// [`live_row`] with the global switch given (pure; tests).
+fn live_row_when(path: &str, server_on: bool) -> Option<&'static Route> {
+    lookup(path).filter(|_| k2_core::permission::gate::route_live_when(path, server_on))
+}
+
+/// The answer a `/cli/permission/*` handler gives an AGENT whose own "Can
+/// ask for permission cards" switch is off while the global switch is on
+/// (PRD §2.4): exactly today's unknown-route body for its transport and
+/// method, so the agent can't tell the family exists. TCP (port or
+/// tunnel): a GET gets the passport's 403 `Invalid or missing auth token`,
+/// a POST the 405 guard's body (any other method never gets this far: the
+/// guard answers it). The cell socket: its codeless 403 for every method.
+/// Pinned against the off-golden fixtures.
+pub fn permission_agent_off_response(on_cell: bool, method: &str) -> CliResponse {
+    if on_cell || method.eq_ignore_ascii_case("GET") {
+        CliResponse {
+            status: "403 Forbidden",
+            content_type: "application/json",
+            body: r#"{"error":"Invalid or missing auth token"}"#.to_string(),
+        }
+    } else {
+        CliResponse {
+            status: "405 Method Not Allowed",
+            content_type: "application/json",
+            body: r#"{"error":"method not allowed for this route"}"#.to_string(),
+        }
+    }
+}
+
 /// The POST allowlist (was the inline `matches!` in the dispatcher). A
 /// non-GET request whose path is not allowlisted here gets the top-level
 /// 405. Sandbox v2 `/v1/w` + `/v1/w/<ws>/…` carry dynamic segments, so
 /// they are admitted by prefix and method-gated inside the `/v1/` arm.
 pub fn post_allowed(path: &str) -> bool {
-    lookup(path).is_some_and(|r| r.post.is_some())
+    post_allowed_when(path, k2_core::permission::gate::server_on())
+}
+
+/// [`post_allowed`] with the permission-cards switch given (pure; tests).
+fn post_allowed_when(path: &str, server_on: bool) -> bool {
+    live_row_when(path, server_on).is_some_and(|r| r.post.is_some())
         || V1_POST_EXACT.contains(&path)
         || HOOK_POST_EXACT.contains(&path)
         || crate::apps::app_key_routes::post_allowed(path)
@@ -1719,8 +1769,18 @@ pub const GET_READS_WITH_HOUSEKEEPING: &[(&str, &str)] = &[
 /// `path?query` must be refused with 405: the row is POST-only, or the
 /// query carries a [`GET_WRITE_PARAMS`] write param. Runs for every
 /// caller, before auth.
+///
+/// The permission-cards family is never refused here (PRD §2.4, vs-live
+/// C1): before auth nobody knows the caller's workspace, so refusing a GET
+/// to one of its POST rows would tell an agent whose own switch is off that
+/// the family exists. Its handlers keep their own method guard after auth.
+/// While the global switch is off its rows are absent, so this is false
+/// for it today as well.
 pub fn get_refused(path: &str, query: &str) -> bool {
-    if lookup(path).is_some_and(|r| r.get.is_none() && r.post.is_some()) {
+    if k2_core::permission::gate::agent_verb_gated(path) {
+        return false;
+    }
+    if live_row(path).is_some_and(|r| r.get.is_none() && r.post.is_some()) {
         return true;
     }
     if !GET_WRITE_PARAMS.iter().any(|(p, _, _)| *p == path) {
@@ -1730,12 +1790,24 @@ pub fn get_refused(path: &str, query: &str) -> bool {
 }
 
 /// [`get_refused`] over an already-parsed params map (the per-cell socket
-/// parses once up front).
+/// parses once up front). Same permission-cards rule as [`get_refused`].
 pub fn get_refused_params(
     path: &str,
     params: &std::collections::HashMap<String, String>,
 ) -> bool {
-    if lookup(path).is_some_and(|r| r.get.is_none() && r.post.is_some()) {
+    get_refused_params_when(path, params, k2_core::permission::gate::server_on())
+}
+
+/// [`get_refused_params`] with the permission-cards switch given (pure).
+fn get_refused_params_when(
+    path: &str,
+    params: &std::collections::HashMap<String, String>,
+    server_on: bool,
+) -> bool {
+    if k2_core::permission::gate::agent_verb_gated(path) {
+        return false;
+    }
+    if live_row_when(path, server_on).is_some_and(|r| r.get.is_none() && r.post.is_some()) {
         return true;
     }
     let Some((_, param, reads)) = GET_WRITE_PARAMS.iter().find(|(p, _, _)| *p == path) else {
@@ -1822,7 +1894,8 @@ pub fn role_gate(
     // A session whose account vanished between the two reads: let the
     // per-route gates refuse it as they always have.
     let role = k2_core::connect_users::role_for_user(&username)?;
-    let Some(route) = lookup(path) else {
+    // The permission-cards rows are unclassified while that switch is off.
+    let Some(route) = live_row(path) else {
         return Some(unclassified());
     };
     let floor = if method == "POST" {
@@ -1874,6 +1947,11 @@ mod tests {
     #[test]
     fn post_allowed_matches_the_table_and_the_v1_carve_out() {
         for r in ROUTES {
+            // The permission-cards rows follow their switch (tested below,
+            // without touching the process-wide switch).
+            if k2_core::permission::gate::route_gated(r.path) {
+                continue;
+            }
             assert_eq!(post_allowed(r.path), r.post.is_some(), "{}", r.path);
         }
         assert!(post_allowed("/v1/sandboxes"));
@@ -1895,6 +1973,75 @@ mod tests {
         // S6 (TW9, A26): the Thread strip's catch-up is a plain read.
         assert!(!post_allowed("/cli/thread/activity"));
         assert_eq!(lookup("/cli/thread/activity").and_then(|r| r.get), Some(Member));
+    }
+
+    // ── permission cards: the tables follow the global switch (C1) ────
+    //
+    // These never flip the process-wide switch (other tests in this binary
+    // walk ROUTES in parallel); they drive the pure `_when` twins. The
+    // daemon-level flip is in tests/permission_gate_integration.rs.
+
+    fn permission_rows() -> Vec<&'static Route> {
+        ROUTES.iter().filter(|r| k2_core::permission::gate::route_gated(r.path)).collect()
+    }
+    #[test]
+    fn permission_family_is_never_get_refused_before_auth() {
+        let none = std::collections::HashMap::new();
+        for r in permission_rows() {
+            if !k2_core::permission::gate::agent_verb_gated(r.path) {
+                continue;
+            }
+            // A POST-only row: off it has no row (false today); on, the
+            // handler's own guard answers after auth (an agent whose own
+            // switch is off must get today's body, not a 405 that shows
+            // the route exists).
+            assert!(!get_refused_params_when(r.path, &none, false), "{}", r.path);
+            assert!(!get_refused_params_when(r.path, &none, true), "{}", r.path);
+            assert!(!get_refused(r.path, ""), "{}", r.path);
+        }
+        // Every other POST-only row is still refused on GET, in both states.
+        assert!(get_refused_params_when("/cli/heartbeat/remove", &none, false));
+        assert!(get_refused_params_when("/cli/heartbeat/remove", &none, true));
+    }
+
+    #[test]
+    fn the_thread_card_routes_follow_the_switch_too() {
+        // Their rows come with lane A2; the gate already covers them, so a
+        // row added later is skipped while off with no other change.
+        for p in [k2_core::permission::NOTE_ROUTE, k2_core::permission::UNDO_ROUTE] {
+            assert!(k2_core::permission::gate::route_gated(p));
+            assert!(live_row_when(p, false).is_none());
+            assert_eq!(live_row_when(p, true).map(|r| r.path), lookup(p).map(|r| r.path));
+        }
+    }
+
+    #[test]
+    fn agent_off_response_is_todays_unknown_route_body_for_each_transport() {
+        // The exact bodies the off-goldens captured for a passport on an
+        // unknown /cli route (tests/golden/permission_off/daemon/unknown/).
+        let tcp_get = permission_agent_off_response(false, "GET");
+        assert_eq!(tcp_get.status, "403 Forbidden");
+        assert_eq!(tcp_get.content_type, "application/json");
+        assert_eq!(tcp_get.body, r#"{"error":"Invalid or missing auth token"}"#);
+        let tcp_post = permission_agent_off_response(false, "POST");
+        assert_eq!(tcp_post.status, "405 Method Not Allowed");
+        assert_eq!(tcp_post.body, r#"{"error":"method not allowed for this route"}"#);
+        for m in ["GET", "POST", "PUT", "DELETE"] {
+            let cell = permission_agent_off_response(true, m);
+            assert_eq!(cell.status, "403 Forbidden", "{m}");
+            assert_eq!(cell.body, r#"{"error":"Invalid or missing auth token"}"#, "{m}");
+        }
+        let golden = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../tests/golden/permission_off/daemon/unknown/permission_request.txt"),
+        )
+        .expect("the off-golden for /cli/permission/request");
+        for body in [&tcp_get.body, &tcp_post.body] {
+            assert!(golden.contains(body.as_str()), "{body} is not a captured off body");
+        }
+        assert!(golden.contains("## tcp passport\n> GET /cli/permission/request\n> body: \nHTTP/1.1 403 Forbidden\ncontent-type: application/json\n{\"error\":\"Invalid or missing auth token\"}"));
+        assert!(golden.contains("## tcp passport\n> POST /cli/permission/request\n> body: {\"action\":\"compute.use\",\"why\":\"x\"}\nHTTP/1.1 405 Method Not Allowed\ncontent-type: application/json\n{\"error\":\"method not allowed for this route\"}"));
+        assert!(golden.contains("## cell passport\n> POST /cli/permission/request\n> body: {\"action\":\"compute.use\",\"why\":\"x\"}\nHTTP/1.1 403 Forbidden\ncontent-type: application/json\n{\"error\":\"Invalid or missing auth token\"}"));
     }
 
     // ── source walk: every /cli route literal is classified ───────────

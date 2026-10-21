@@ -141,6 +141,10 @@ impl Node {
             return None;
         }
         let running = self.running_by_tenant().get(&t.slot).map(|v| v.len() as u32).unwrap_or(0);
+        // Its own statement: the ledger guard must be gone before `quotes`
+        // (the queue's snapshot locks every ledger).
+        let queued = t.ledger.lock().unwrap().queued().map(|q| q.len() as u32).unwrap_or(0);
+        let quotes = self.fairq.quotes(self, t);
         Some(ShareView {
             role: t.role(),
             slot: t.slot,
@@ -150,12 +154,12 @@ impl Node {
             state,
             limits: info.entry.limits(),
             running,
-            queued: t.ledger.lock().unwrap().queued().map(|q| q.len() as u32).unwrap_or(0),
+            queued,
             // Today's CPU isn't exposed by the queue store yet (S2 follow-up).
             cpu_secs_today: 0,
             expires_in_secs: info.entry.expires_at.map(|e| (e - now).max(0)),
             // Start-now / ETA for this server's last four sizes (V53).
-            quotes: self.fairq.quotes(self, t),
+            quotes,
         })
     }
 }

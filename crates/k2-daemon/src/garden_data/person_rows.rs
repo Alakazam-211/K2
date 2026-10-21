@@ -361,7 +361,7 @@ fn answer(row: &VerbRow, w: &Placed, args: &Map<String, J>, wire: &Map<String, J
                     // A person files it (no agent brief rules), in the room
                     // the reach check resolved.
                     let mut b = wire.clone();
-                    b.insert("project".into(), json!(room));
+                    b.insert("project".into(), json!(handle));
                     crate::feedback_routes::dispatch_post_as_gated(
                         "/cli/feedback/create",
                         J::Object(b).to_string().as_bytes(),

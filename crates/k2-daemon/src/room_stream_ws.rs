@@ -682,21 +682,12 @@ pub async fn serve_room_stream_connection(stream: &mut TcpStream, params: HashMa
                             break;
                         }
                     }
-                    Ok(overlay_ws::EarCheck::Skip) => {
-                        // A revoked cap sends nothing; a revoked room (or a
-                        // new pinned Chat) also moves the set now.
-                        match readable_now(&viewer, link.as_deref()) {
-                            Some((r, _)) => {
-                                if !apply!(r, false) {
-                                    break;
-                                }
-                            }
-                            None => {
-                                let _ = write.send(crate::presence::session_revoked_close_message()).await;
-                                break;
-                            }
-                        }
-                    }
+                    // No activity:read here (the common case for a
+                    // Thread-only pass), or the cap / room / pin was just
+                    // revoked: nothing is sent. The set itself follows at the
+                    // next RECHECK tick (or the next Thread frame), so a
+                    // Thread-only guest costs no set rebuild per turn frame.
+                    Ok(overlay_ws::EarCheck::Skip) => {}
                     Ok(overlay_ws::EarCheck::PassGone) => {
                         let _ = write.send(crate::presence::session_revoked_close_message()).await;
                         break;

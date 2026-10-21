@@ -9,6 +9,7 @@ pub mod cluster;
 pub mod identity;
 pub mod ops;
 pub mod paths;
+pub mod pgmove;
 pub mod query;
 pub mod routes;
 pub mod secrets;

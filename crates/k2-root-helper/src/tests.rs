@@ -27,6 +27,9 @@ type Effect = Rc<dyn Fn(&[String])>;
 /// `sew` that behaves like a given Sew release).
 pub(crate) type Program = Rc<dyn Fn(&[String]) -> ExecOut>;
 
+/// A fake program that also reads its stdin (a fake `psql`).
+pub(crate) type ProgramIn = Rc<dyn Fn(&[String], Option<&[u8]>) -> ExecOut>;
+
 #[derive(Default)]
 struct ExecLog {
     calls: Vec<(String, Vec<String>, Option<Vec<u8>>)>,
@@ -43,6 +46,8 @@ struct ExecLog {
     /// prog → a fake program; when set, it alone answers (after the call is
     /// logged), ahead of `rules`, `answers` and `effects`.
     programs: HashMap<String, Program>,
+    /// Like `programs`, with the call's stdin.
+    programs_in: HashMap<String, ProgramIn>,
 }
 
 #[derive(Clone, Default)]
@@ -79,6 +84,10 @@ impl Exec for FakeExec {
         if let Some(prog_fn) = log.programs.get(prog).cloned() {
             drop(log);
             return Ok(prog_fn(args));
+        }
+        if let Some(prog_fn) = log.programs_in.get(prog).cloned() {
+            drop(log);
+            return Ok(prog_fn(args, stdin));
         }
         let effects: Vec<_> = log
             .effects
@@ -1692,3 +1701,7 @@ mod podman_tests;
 // The `front` namespace (protocol 8, front443) lives in its own file, same fakes.
 #[path = "front_tests.rs"]
 mod front_tests;
+
+// The several-majors verbs (protocol 9, `namespaces.pgmajor`), same fakes.
+#[path = "pg_major_tests.rs"]
+mod pg_major_tests;

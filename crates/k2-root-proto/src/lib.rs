@@ -35,7 +35,8 @@
 //!   and the stdin-JSON validators of the `engine sew` verbs.
 //! - [`pg_major`]: Postgres majors side by side (0.46.3): the supported /
 //!   preview / layout majors, EOL dates, the Debian layout of a major and
-//!   K2's port band 5432–5449.
+//!   K2's port band 5432–5449; and (protocol 9, `namespaces.pgmajor`)
+//!   the helper's canned apt and cluster files and shared parsers.
 
 pub mod apps;
 pub mod caller;

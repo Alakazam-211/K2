@@ -35,6 +35,13 @@
 //!   daemon, gated on `namespaces.front`, [`FRONT_MIN_PROTOCOL`]) and
 //!   `turn_tls: "passthrough"` in the Sew media requests. Anything after
 //!   an 8 build ships needs 9.
+//! - 9 = every root-helper change 0.46.3 makes, in one bump. Here: the
+//!   `pg` namespace's several-majors verbs (`namespaces.pgmajor`,
+//!   [`PGMAJOR_MIN_PROTOCOL`], `prd-pg17-and-db-upgrade-v1` §15 S2):
+//!   `clusters`, `add-major`, `ensure-cluster`, `start-conf`,
+//!   `install-slice`, `psql --cluster`, `copy-roles`, `move-dump`,
+//!   `move-restore`, `move-file-remove`, `allow-conn`, `drop-db`.
+//!   Anything after a 9 build ships needs 10.
 //!
 //! The first `k2-root-helper` build ships 3 and 4 together and answers 4.
 //! Protocols are additive: a newer helper serves an older daemon.
@@ -43,7 +50,7 @@ use std::cmp::Ordering;
 use std::fmt;
 
 /// What this build of the helper speaks.
-pub const PROTOCOL: u32 = 8;
+pub const PROTOCOL: u32 = 9;
 
 /// `k2 hostmail upgrade` through the root helper. 4, not 2: the daemon's
 /// table moves from 0.16.20 OR 0.16.10 (pin 0.16.25), so `install-bin`
@@ -235,7 +242,30 @@ mod tests {
         assert_eq!(HANDOFF_MIN_PROTOCOL, 5);
         assert_eq!(APPS_MIN_PROTOCOL, 6);
         assert_eq!(SEW_MIN_PROTOCOL, 7);
-        assert_eq!(PROTOCOL, 8, "protocol 8 = 0.46.1's helper changes; 7 is Sew's engine sew");
+        assert_eq!(PROTOCOL, 9, "protocol 9 = 0.46.3's helper changes; 8 = 0.46.1's");
+        assert_eq!(PGMAJOR_MIN_PROTOCOL, 9, "the majors verbs join 0.46.3's one bump; never 10");
+        let pgmajor: Vec<_> = crate::verbs::catalog()
+            .into_iter()
+            .filter(|v| {
+                let a = v.argv();
+                a[0] == "pg"
+                    && matches!(
+                        a[1].as_str(),
+                        "clusters"
+                            | "add-major"
+                            | "ensure-cluster"
+                            | "start-conf"
+                            | "install-slice"
+                            | "copy-roles"
+                            | "move-dump"
+                            | "move-restore"
+                            | "move-file-remove"
+                            | "allow-conn"
+                            | "drop-db"
+                    )
+            })
+            .collect();
+        assert!(pgmajor.len() >= 11, "{pgmajor:?}");
         let sew: Vec<_> = crate::verbs::catalog()
             .into_iter()
             .filter(|v| v.namespace() == "sew")

@@ -111,7 +111,7 @@ pub fn version_json(ctx: &Ctx) -> serde_json::Value {
         "packageOwned": !ctx.is_canonical_path(),
         "keyIds": keys,
         "testKeys": ctx.test_keys,
-        "namespaces": {"helper": true, "mail": true, "pg": true, "backup": false, "keep": true, "daemon": true, "apps": true, "sew": true, "front": true},
+        "namespaces": {"helper": true, "mail": true, "pg": true, "backup": false, "keep": true, "daemon": true, "apps": true, "sew": true, "front": true, "pgmajor": true},
         "stalwartPin": STALWART_PINNED_VERSION,
         "stalwartPinSha256": artifact_for_arch(ctx.arch).map(|a| a.sha256).ok(),
         "stalwartPrevious": STALWART_PREVIOUS_VERSION,

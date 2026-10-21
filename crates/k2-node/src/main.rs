@@ -413,14 +413,17 @@ fn cmd_servers(a: &Args) -> Result<(), String> {
         home: layout.home.clone(),
         now: k2_node::util::now(),
         macos,
-        walled: servers::node_walled(&layout, macos),
+        walled: servers::node_walled(&layout, macos, true),
         tenant_wall: servers::tenant_wall_available(&layout, macos),
         pinned_owner: cfg.as_ref().and_then(|c| c.controller.as_ref().map(|x| x.fp.clone())),
         node_user: cfg.map(|c| c.node_user).unwrap_or_else(|| acfg::default_node_user().to_string()),
         by: format!("local:{}", who(a)),
     };
+    // A `--dev` test node (the person running it owns everything; tests
+    // and the S5 harness pass their own --state-dir) needs no sudo.
+    let dev_node = k2_node::status::read(&layout.status()).is_ok_and(|s| s.dev);
     let need_root = |what: &str| -> Result<(), String> {
-        if is_root() {
+        if is_root() || dev_node {
             Ok(())
         } else {
             Err(format!("servers {what} changes root's records (tenant users, the wipe schedule): run it with sudo"))

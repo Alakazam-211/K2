@@ -552,11 +552,13 @@ where
         match frame {
             Frame::Assign(a) => {
                 // A node that lost its job wall serves only its owner: another
-                // server's jobs stay queued on that server (V59). The share
-                // itself (paused, ended, revoked, not approved) is the node
-                // queue's to judge (`on_assign`). A fence the ledger knows
-                // still reports its state.
-                if !owner && !node.wall.is_walled() {
+                // server's jobs stay queued on that server (V59). A `--dev`
+                // node (a person's own test node; never an installed one,
+                // and it never has a wall) is exempt so tests and the S5
+                // harness can share one. The share itself (paused, ended,
+                // revoked, not approved) is the node queue's to judge
+                // (`on_assign`). A fence the ledger knows still reports.
+                if !owner && !node.wall.is_walled() && !node.opts.dev {
                     let code = codes::TENANT_WALL_MISSING;
                     let known = {
                         let l = tenant.ledger.lock().unwrap();
@@ -869,6 +871,10 @@ impl Drop for ServersLoop {
 /// = solo mode: only the owner's session, as today.
 pub async fn run_servers(node: Arc<Node>) {
     let mut st = ServersLoop::default();
+    if node.opts.dev {
+        node.status.lock().unwrap().dev = true;
+        node.write_status();
+    }
     loop {
         servers_pass(&node, &mut st).await;
         tokio::time::sleep(node.opts.config_poll).await;

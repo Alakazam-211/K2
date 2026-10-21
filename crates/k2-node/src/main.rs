@@ -21,7 +21,7 @@ Install (root, once; the installers are inside this binary):
     ssh host 'sudo -S -p "" /path/to/k2-node setup --no-private-home …' < password-file
     (the password comes from stdin, e.g. a secret file you delete after)
 
-  k2-node run [--home DIR] [--config-dir DIR] [--dev]
+  k2-node run [--home DIR] [--config-dir DIR] [--dev [--allow-fake-clock]]   (tests: K2_NODE_FAKE_CLOCK_OFFSET=+600 moves a --dev node's clock)
   k2-node enroll --controller <https://you.k2.dev> (--enroll <ABCDE-FGHJK.0123456789abcdef> | --ticket T) --name <name>
                  [--label k=v]... [--home DIR] [--force]
   k2-node request --controller URL (--enroll CODE.FP | --ticket T) --name NAME [--config-dir DIR]
@@ -41,7 +41,7 @@ More than one K2 server (0.46.3; the machine owner, at this machine):
   sudo k2-node servers add --url URL --code CODE.FP [--trust own|team] [--for 7d|none]
                  [--weight N] [--max-running N] [--max-queued N] [--cpu-hours N] [--max-time 2h]
                  [--cpus N] [--mem 8G] [--disk 40G] [--network on|no-lan|none] [--gate] [--exclusive]
-  k2-node servers limits <server> key=value... [--for 7d|none]   (keys as the add flags, with _)
+  k2-node servers limits <server> [key=value...] [--weight N] [--for 7d|none]   (keys as the add flags)
   k2-node servers pause|resume <server>
   sudo k2-node servers revoke <server> [--now] [--wipe]
   (<server> is a label, e.g. baden.k2.dev, or slot:<n>; the new server mints CODE.FP
@@ -90,6 +90,7 @@ const SWITCHES: &[&str] = &[
     "--gate",
     "--exclusive",
     "--wipe",
+    "--allow-fake-clock",
 ];
 
 fn parse(args: &[String]) -> Result<Args, String> {
@@ -178,6 +179,10 @@ async fn cmd_run(a: &Args) -> Result<(), String> {
     }
     let mut opts = NodeOptions::new(a.layout());
     opts.dev = a.has("--dev");
+    if let Some(off) = fake_clock_offset(std::env::var(FAKE_CLOCK_ENV).ok().as_deref(), opts.dev, a.has("--allow-fake-clock"))? {
+        eprintln!("WARNING: {FAKE_CLOCK_ENV}={off}: this test node's clock is off by {off} s (tests only)");
+        opts.clock = std::sync::Arc::new(OffsetClock { inner: k2_node::ledger::SystemClock::new(), offset: off });
+    }
     let node = Node::open(opts).await?;
     k2_node::nlog!("k2-node {NODE_VERSION} fp {} home {}", &node.key.fingerprint()[..16], node.layout().home.display());
     #[cfg(k2_node_test_broken)]
@@ -292,6 +297,9 @@ fn cmd_status(a: &Args) -> Result<(), String> {
     }
     println!("running: {}", if s.running.is_empty() { "-".to_string() } else { s.running.join(", ") });
     println!("caps: {}", if s.caps_hard { "hard (cgroups)" } else { "soft" });
+    if let Some(k) = s.clock_skew_secs.filter(|k| k.abs() > k2_node::status::SKEW_WARN_SECS) {
+        println!("clock skew: the owner server's clock is {k:+} s from this machine's");
+    }
     if let Some(e) = &s.servers_error {
         println!("servers.toml: {e}");
     }
@@ -314,6 +322,9 @@ fn server_line(l: &k2_node::status::ServerLine) -> String {
     }
     if let Some(e) = l.expires_at {
         s.push_str(&format!(" · until {}", fmt_time(e)));
+    }
+    if let Some(k) = l.skew_secs.filter(|k| k.abs() > k2_node::status::SKEW_WARN_SECS) {
+        s.push_str(&format!(" · clock skew {k:+} s"));
     }
     if let Some(e) = &l.last_error {
         s.push_str(&format!(" · {e}"));
@@ -483,6 +494,9 @@ fn cmd_servers(a: &Args) -> Result<(), String> {
                 Some(v) => Some(parse_for(v)?.unwrap_or(0)),
                 None => None,
             };
+            if let Some(w) = a.get("weight") {
+                pairs.push(("weight".to_string(), w.to_string()));
+            }
             let args = share::LimitsArgs { server: server()?, set: share_overrides(&pairs, false, false)?, for_secs };
             servers::run(&ctx, share::VERB_LIMITS, &serde_json::to_value(&args).map_err(|e| e.to_string())?)
         }
@@ -514,6 +528,48 @@ fn cmd_servers(a: &Args) -> Result<(), String> {
             Ok(())
         }
         Err(r) => Err(format!("{}: {}", r.code, r.message)),
+    }
+}
+
+/// A test-only node clock offset in seconds (S5 expiry and skew scenarios).
+const FAKE_CLOCK_ENV: &str = "K2_NODE_FAKE_CLOCK_OFFSET";
+
+/// The fake clock offset to use, if any. Honoured only on a `--dev` node
+/// started with the explicit `--allow-fake-clock` switch: a real node (never
+/// `--dev`) ignores the variable entirely, whatever its environment says.
+/// With the switch, a malformed value is an error, never a silent zero.
+fn fake_clock_offset(env: Option<&str>, dev: bool, allow: bool) -> Result<Option<i64>, String> {
+    if allow && !dev {
+        return Err("--allow-fake-clock is for --dev test nodes only".into());
+    }
+    if !allow {
+        return Ok(None);
+    }
+    match env {
+        None => Ok(None),
+        Some(v) => {
+            let v = v.trim().trim_start_matches('+');
+            let n: i64 = v.parse().map_err(|_| format!("{FAKE_CLOCK_ENV}={v:?}: a whole number of seconds, e.g. +600"))?;
+            if n.abs() > 366 * 24 * 3600 {
+                return Err(format!("{FAKE_CLOCK_ENV}: at most a year either way"));
+            }
+            Ok(Some(n))
+        }
+    }
+}
+
+/// The system clock moved by a fixed offset (test nodes only).
+struct OffsetClock {
+    inner: k2_node::ledger::SystemClock,
+    offset: i64,
+}
+
+impl k2_node::ledger::Clock for OffsetClock {
+    fn now(&self) -> i64 {
+        self.inner.now() + self.offset
+    }
+    fn boot_id(&self) -> String {
+        self.inner.boot_id()
     }
 }
 
@@ -875,5 +931,42 @@ async fn main() -> ExitCode {
             eprintln!("k2-node: {e}");
             ExitCode::from(1)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use k2_node::ledger::Clock;
+
+    /// The fake clock is a test node's alone: without the explicit switch
+    /// (every real node) the variable changes nothing; the switch needs
+    /// `--dev`; a bad value fails loudly.
+    #[test]
+    fn the_fake_clock_needs_dev_and_the_switch() {
+        assert_eq!(fake_clock_offset(Some("+600"), false, false), Ok(None), "a real node ignores the variable");
+        assert_eq!(fake_clock_offset(Some("+600"), true, false), Ok(None), "--dev alone isn't enough");
+        assert!(fake_clock_offset(Some("+600"), false, true).is_err(), "the switch is for --dev nodes only");
+        assert_eq!(fake_clock_offset(Some("+600"), true, true), Ok(Some(600)));
+        assert_eq!(fake_clock_offset(Some("-30"), true, true), Ok(Some(-30)));
+        assert_eq!(fake_clock_offset(None, true, true), Ok(None));
+        assert!(fake_clock_offset(Some("ten minutes"), true, true).is_err());
+        assert!(fake_clock_offset(Some("99999999999"), true, true).is_err());
+        let c = OffsetClock { inner: k2_node::ledger::SystemClock::new(), offset: 600 };
+        let real = k2_node::util::now();
+        assert!((c.now() - real - 600).abs() <= 1, "offset applied");
+        assert_eq!(c.boot_id(), k2_node::ledger::SystemClock::new().boot_id(), "same boot");
+    }
+
+    #[test]
+    fn durations_and_sizes_parse() {
+        assert_eq!(parse_for("7d"), Ok(Some(7 * 86400)));
+        assert_eq!(parse_for("2h"), Ok(Some(7200)));
+        assert_eq!(parse_for("none"), Ok(None));
+        assert!(parse_for("soon").is_err());
+        assert_eq!(parse_gb("8G"), Ok(8));
+        let o = share_overrides(&[("weight".into(), "3".into()), ("max-running".into(), "2".into())], true, false).unwrap();
+        assert_eq!((o.weight, o.max_running, o.gate), (Some(3), Some(2), Some(true)));
+        assert!(share_overrides(&[("weight".into(), "x".into())], false, false).is_err());
     }
 }

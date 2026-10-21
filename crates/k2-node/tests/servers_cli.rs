@@ -52,6 +52,14 @@ fn servers_list_pause_resume_and_root_only_verbs() {
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     assert_eq!((v["limits"]["max_running"].as_u64(), v["limits"]["cpu_hours_day"].as_u64()), (Some(2), Some(4)), "{v}");
     assert!(v["expires_at"].as_i64().is_some());
+    let (ok, _, err) = run(&["servers", "limits", "slot:0", "--weight", "3", "--home", h, "--config-dir", c]);
+    assert!(ok, "{err}");
+    assert_eq!(servers::read_file(&cfg).unwrap().unwrap().entry(0).unwrap().weight, 3, "the machine owner sets a weight");
+    for bad in ["0", "101", "two"] {
+        let (ok, _, err) = run(&["servers", "limits", "slot:0", "--weight", bad, "--home", h, "--config-dir", c]);
+        assert!(!ok && err.contains("weight"), "--weight {bad}: {err}");
+    }
+    assert_eq!(servers::read_file(&cfg).unwrap().unwrap().entry(0).unwrap().weight, 3, "a bad weight changes nothing");
     let (ok, _, err) = run(&["servers", "limits", "z3thon.k2.dev", "surprise=1", "--home", h, "--config-dir", c]);
     assert!(!ok && err.contains("surprise"), "{err}");
 

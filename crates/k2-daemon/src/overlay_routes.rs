@@ -1004,15 +1004,23 @@ fn card_actor_from(params: &HashMap<String, String>, resolved: &ResolvedOverlay,
     }
 }
 
+/// [`overlay::PostAuthor::kind`] for an agent session's answer or dismissal
+/// (prd-agent-settings-cards-v1 §6.10): `login` is the agent's stamped
+/// address. Clients that don't know the kind show the login, never "You".
+const AUTHOR_AGENT: &str = "agent";
+
 /// The card's `answeredBy`, from the same credential as [`card_actor_from`]
-/// (and as a compose post's `author`). None for an agent's own answer. The
-/// owner token's carries the owner's display name (`name`), the same name
-/// the agent hears in `[from <name>]` and an owner post shows in `from`.
+/// (and as a compose post's `author`). The owner token's carries the
+/// owner's display name (`name`), the same name the agent hears in
+/// `[from <name>]` and an owner post shows in `from`. An agent session's
+/// own answer to an ordinary choice card is stamped with its name (§6.10:
+/// it used to carry none, so it read like nobody answered).
 fn card_actor_author(params: &HashMap<String, String>, session_author: &str) -> Option<overlay::PostAuthor> {
     if let Some(pass) = request_skin() {
         Some(overlay::PostAuthor::guest(&skin_from_stamp(&pass)))
     } else if principal_is_bound(params) {
-        None
+        let from = params.get("from").map(|s| s.trim()).unwrap_or("");
+        (!from.is_empty()).then(|| overlay::PostAuthor { kind: AUTHOR_AGENT.to_string(), login: from.to_string(), name: None })
     } else {
         Some(with_owner_name(compose_author_for_session(session_author), &workspace_msg::resolve_owner_from()))
     }
@@ -1554,6 +1562,11 @@ fn handle_ask(params: &HashMap<String, String>) -> CliResponse {
         Ok(o) => o,
         Err(e) => return e,
     };
+    // §6.10 (prd-agent-settings-cards-v1): at most 8 options of 80
+    // characters and a 1,000-character prompt.
+    if let Err(e) = overlay::check_ask_caps(&prompt, &options) {
+        return usage(e);
+    }
     let allow_custom = bool_param(params, "allow_custom") || bool_param(params, "allow-custom");
     let expires_at = match choice_card_expiry(params, overlay::now_secs()) {
         Ok(e) => e,
@@ -2072,7 +2085,10 @@ fn handle_answer(params: &HashMap<String, String>, session_author: &str) -> CliR
         Err(e) => return card_error(e),
     }
     let principal = crate::caller_workspace::principal_from_params(params);
-    if let Err(e) = authorize_write(principal.as_ref(), &resolved, "k2") {
+    // §6.10 (prd-agent-settings-cards-v1): the caller's real stamped `from`
+    // decides, as for a post, so a sidecar can't answer the canonical
+    // Thread's cards (it used to pass as "k2").
+    if let Err(e) = authorize_write(principal.as_ref(), &resolved, &overlay_sender_from(params, &resolved)) {
         return e;
     }
     // 0.46.1: a Garden widget's card answer (`thread.answer`, cap
@@ -2438,20 +2454,52 @@ fn handle_void(params: &HashMap<String, String>, session_author: &str) -> CliRes
     if let Err(e) = require_skin_cap_in_resolved(&resolved, k2_core::skin::CAP_THREAD_POST) {
         return e;
     }
-    // 0.46.3: dismissing a settings (action) card is the person's alone,
-    // like answering it; other cards are unchanged.
+    // A settings (action) card, keep-as-mine or a permission card, is never
+    // voided through this route, by ANY caller (prd-agent-settings-cards-v1
+    // §6.9, vs-live C13): an agent passport, an App guest with thread:post,
+    // a Garden widget, a Member and the owner alike. Its answer is the
+    // person's (deny it instead); the daemon's own closes (expiry,
+    // supersede, the switch-off close, cancel) call `overlay::void_card`
+    // directly and never come through here. Unswitched (§6.10).
     match overlay::card_action(&resolved.conversation_id, &card_id) {
         Ok(Some(_)) => {
-            if let Err(r) = require_action_card_person(params, session_author, "dismisses") {
-                return r;
-            }
+            return action_card_person_only(
+                "a settings card can't be dismissed: deny it instead (its Deny or \"leave it\" option, from the Thread tab or an owner login)",
+            );
         }
         Ok(None) => {}
         Err(e) => return card_error(e),
     }
     let principal = crate::caller_workspace::principal_from_params(params);
-    if let Err(e) = authorize_write(principal.as_ref(), &resolved, "k2") {
+    // §6.10: a sidecar can't void the canonical Thread's cards (its real
+    // stamped `from`, not "k2", decides, as for a post).
+    let caller_from = overlay_sender_from(params, &resolved);
+    if let Err(e) = authorize_write(principal.as_ref(), &resolved, &caller_from) {
         return e;
+    }
+    // §6.10: an agent session voids only a card it posted itself, and never
+    // a secret card (a person's ask for a secret is theirs to dismiss).
+    if principal.is_some() {
+        match overlay::get_thread_doc(&resolved.conversation_id, &card_id) {
+            Ok(Some(doc)) => {
+                if doc.secret.is_some() {
+                    return error_json(
+                        "403 Forbidden",
+                        "card_not_yours",
+                        "an agent never dismisses a secret card; the person answers or dismisses it",
+                    );
+                }
+                if doc.from.trim() != caller_from.trim() {
+                    return error_json(
+                        "403 Forbidden",
+                        "card_not_yours",
+                        "an agent dismisses only the cards it posted itself",
+                    );
+                }
+            }
+            Ok(None) => return not_found(format!("card not found: {card_id}")),
+            Err(e) => return card_error(e),
+        }
     }
     if let Some(r) = refuse_if_expired(&resolved, &card_id) {
         return r;
@@ -6998,4 +7046,8 @@ mod tests {
         let void = post_json("/cli/thread/void", &HashMap::new(), serde_json::json!({ "addr": dst, "id": card }));
         assert_error_code(&void, "409 Conflict", "imported_read_only");
     }
+
+    // Thread card hygiene (permission cards lane B, §6.9, §6.10).
+    #[path = "card_hygiene_tests.rs"]
+    mod card_hygiene;
 }

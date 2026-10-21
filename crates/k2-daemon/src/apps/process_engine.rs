@@ -16,10 +16,21 @@
 //!   the vault's grants for the App's service id.
 //!   Never the daemon's `K2_*` (hook socket, scoped token, API flags).
 //! - Per-deployment log (`~/.k2/apps/<id>/logs/<deployment>.log`), rotated
-//!   once at 50 MiB.
+//!   once at 50 MiB. Since 0.46.3 (smoke r6) the App's stdout and stderr
+//!   ARE that file (an `O_APPEND` descriptor the App holds), not a pipe to
+//!   the daemon: an App that outlives a daemon restart (`KillMode=process`)
+//!   keeps logging and answering. Before, its pipe pointed at the dead
+//!   daemon, every write failed, requests got empty replies while `k2 app
+//!   list` said running, and the health checks restarted it minutes later
+//!   as a crash. Rotation is copy-and-truncate (the descriptor stays put).
+//!   `K2_APPS_PROCESS_LOG=pipe` puts back the old pipe (the way back while
+//!   the file sink proves itself).
 //! - `adopt`: each instance writes `~/.k2/apps/<id>/run/<deployment>.json`
-//!   (pid, port); after a daemon restart a live pid whose process group is
-//!   its own is re-adopted.
+//!   (pid, port, log sink); after a daemon restart a live pid whose process
+//!   group is its own is re-adopted. One that logged through a pipe (an
+//!   instance an older daemon started, or the `pipe` opt-out) can't be
+//!   re-attached: [`needs_relaunch`] says so, and the supervisor starts a
+//!   fresh instance at once (not a crash, no agent woken).
 //! - No memory limit is enforced here (`caps().memory_limit = false`); a
 //!   stored per-App limit takes effect with the walled engines (stage 3/R).
 
@@ -46,6 +57,72 @@ struct RunFile {
     deployment_id: String,
     port: u16,
     pid: i32,
+    /// Where the App's stdout/stderr go: `file` (its log, held by the App)
+    /// or `pipe` (to the daemon that started it). Run files from before
+    /// 0.46.3 have none: a pipe.
+    #[serde(default = "pipe_sink")]
+    log: String,
+}
+
+const SINK_FILE: &str = "file";
+const SINK_PIPE: &str = "pipe";
+
+fn pipe_sink() -> String {
+    SINK_PIPE.to_string()
+}
+
+/// The way back (`K2_APPS_PROCESS_LOG=pipe`): the pre-0.46.3 pipe and pump.
+fn pipe_sink_wanted() -> bool {
+    std::env::var("K2_APPS_PROCESS_LOG").is_ok_and(|v| v.trim().eq_ignore_ascii_case(SINK_PIPE))
+}
+
+/// Deployments adopted at boot whose stdout/stderr were a pipe to the old
+/// daemon (nothing reads it any more): they need a fresh instance.
+fn stale_sinks() -> &'static Mutex<std::collections::HashSet<String>> {
+    static S: OnceLock<Mutex<std::collections::HashSet<String>>> = OnceLock::new();
+    S.get_or_init(|| Mutex::new(std::collections::HashSet::new()))
+}
+
+/// Was this adopted instance logging through a pipe to the daemon that
+/// started it (so its writes fail now)? The supervisor relaunches it.
+pub fn needs_relaunch(deployment_id: &str) -> bool {
+    stale_sinks().lock().unwrap_or_else(|e| e.into_inner()).contains(deployment_id)
+}
+
+/// Logs held by Apps (the file sink): rotated by copy-and-truncate.
+fn file_logs() -> &'static Mutex<HashMap<String, PathBuf>> {
+    static L: OnceLock<Mutex<HashMap<String, PathBuf>>> = OnceLock::new();
+    L.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Copy-and-truncate a log an App holds open with `O_APPEND`: the copy
+/// becomes `<log>.1`, the App's next write lands at the start of the
+/// emptied file. (A rename would leave the App writing to `.1`.)
+pub(crate) fn rotate_held_log(path: &Path, cap: u64) -> bool {
+    let Ok(meta) = fs::metadata(path) else { return false };
+    if meta.len() <= cap {
+        return false;
+    }
+    let bak = path.with_extension("log.1");
+    if fs::copy(path, &bak).is_err() {
+        return false;
+    }
+    OpenOptions::new().write(true).open(path).and_then(|f| f.set_len(0)).is_ok()
+}
+
+fn watch_file_log(deployment_id: &str, path: &Path) {
+    file_logs().lock().unwrap_or_else(|e| e.into_inner()).insert(deployment_id.to_string(), path.to_path_buf());
+    static STARTED: OnceLock<()> = OnceLock::new();
+    if STARTED.set(()).is_err() {
+        return;
+    }
+    let _ = std::thread::Builder::new().name("app-log-rotate".into()).spawn(|| loop {
+        std::thread::sleep(Duration::from_secs(30));
+        let paths: Vec<PathBuf> = file_logs().lock().unwrap_or_else(|e| e.into_inner()).values().cloned().collect();
+        for p in paths {
+            rotate_held_log(&p, deploy::LOG_CAP_BYTES);
+        }
+    });
 }
 
 struct Live {
@@ -213,6 +290,8 @@ impl ProcessEngine {
     }
 
     fn forget(&self, h: &RunHandle) {
+        file_logs().lock().unwrap_or_else(|e| e.into_inner()).remove(&h.deployment_id);
+        stale_sinks().lock().unwrap_or_else(|e| e.into_inner()).remove(&h.deployment_id);
         let removed = children().lock().unwrap_or_else(|e| e.into_inner()).remove(&h.deployment_id);
         if let Some(Live { secrets_dir: Some(d), .. }) = removed {
             let _ = fs::remove_dir_all(d);
@@ -255,7 +334,27 @@ impl RuntimeEngine for ProcessEngine {
             cmd.env(k, v);
         }
         let secrets_dir = crate::vault::publish_env::apply_granted(&mut cmd, &spec.service_id, &spec.workspace_id, &p.workdir);
-        cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        cmd.stdin(Stdio::null());
+        let sink = if pipe_sink_wanted() {
+            cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+            SINK_PIPE
+        } else {
+            // The App holds its own log (O_APPEND), so it outlives the
+            // daemon that started it. Rotate a full one before it starts.
+            rotate_if_needed(&spec.log_path);
+            let open = || OpenOptions::new().create(true).append(true).open(&spec.log_path);
+            let (out, err) = match open().and_then(|f| f.try_clone().map(|g| (f, g))) {
+                Ok(pair) => pair,
+                Err(e) => {
+                    return Err(EngineError::new(
+                        codes::ENGINE_UNAVAILABLE,
+                        format!("open the App's log {}: {e}", spec.log_path.display()),
+                    ))
+                }
+            };
+            cmd.stdout(Stdio::from(out)).stderr(Stdio::from(err));
+            SINK_FILE
+        };
         unsafe {
             cmd.pre_exec(|| {
                 if libc::setsid() == -1 {
@@ -275,7 +374,10 @@ impl RuntimeEngine for ProcessEngine {
             pump(o, spec.log_path.clone());
             pump(e, spec.log_path.clone());
         }
-        let rf = RunFile { app_id: spec.app_id.clone(), deployment_id: spec.deployment_id.clone(), port, pid };
+        if sink == SINK_FILE {
+            watch_file_log(&spec.deployment_id, &spec.log_path);
+        }
+        let rf = RunFile { app_id: spec.app_id.clone(), deployment_id: spec.deployment_id.clone(), port, pid, log: sink.to_string() };
         let _ = fs::create_dir_all(run_dir(&spec.app_id));
         let _ = fs::write(run_file(&spec.app_id, &spec.deployment_id), serde_json::to_vec(&rf).unwrap_or_default());
         children()
@@ -388,6 +490,11 @@ impl RuntimeEngine for ProcessEngine {
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .insert(rf.deployment_id.clone(), Live { child: None, secrets_dir: None });
+                if rf.log == SINK_FILE {
+                    watch_file_log(&rf.deployment_id, &deploy::deployment_log_path(&rf.app_id, &rf.deployment_id));
+                } else {
+                    stale_sinks().lock().unwrap_or_else(|e| e.into_inner()).insert(rf.deployment_id.clone());
+                }
                 out.push(RunHandle {
                     app_id: rf.app_id,
                     deployment_id: rf.deployment_id,
@@ -493,5 +600,99 @@ mod tests {
         assert!(e.adopt().unwrap().is_empty());
         let log = fs::read_to_string(&s.log_path).unwrap();
         assert!(log.contains("started"), "{log}");
+    }
+
+    fn wait_log(path: &Path, want: &str) -> String {
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            let log = fs::read_to_string(path).unwrap_or_default();
+            if log.contains(want) {
+                return log;
+            }
+            assert!(Instant::now() < end, "{want:?} never reached the log: {log:?}");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    fn run_json(app: &str, dep: &str) -> serde_json::Value {
+        serde_json::from_slice(&fs::read(run_file(app, dep)).expect("run file")).expect("run file JSON")
+    }
+
+    /// Smoke r6: an unwalled App's stdout/stderr are its log FILE (held by
+    /// the App), never a pipe into the daemon, so it keeps logging (and
+    /// answering) when the daemon that started it is gone. The run file
+    /// says so; adopting it needs no relaunch.
+    #[test]
+    fn the_app_holds_its_own_log_and_adopts_without_a_relaunch() {
+        let h = TempHome::new();
+        let _sink = k2_core::test_env::EnvVar::remove("K2_APPS_PROCESS_LOG");
+        let seed_dir = h.path().join("seed");
+        fs::create_dir_all(&seed_dir).unwrap();
+        let e = ProcessEngine;
+        let mut s = spec(h.path(), &["sh", "-c", "if [ -p /dev/stdout ]; then echo sink=pipe; else echo sink=notpipe; fi; echo oops >&2; exec sleep 30"]);
+        s.deployment_id = "d-pe-file".into();
+        s.log_path = deploy::deployment_log_path("pe-test", "d-pe-file");
+        let p = e.prepare(&SeedRef { hash: "x".into(), path: seed_dir.clone() }, &s).unwrap();
+        let hdl = e.start(&s, &p, 1).unwrap();
+        let log = wait_log(&s.log_path, "oops");
+        assert!(log.contains("sink=notpipe"), "stdout is the log file, not a pipe: {log}");
+        assert_eq!(run_json("pe-test", "d-pe-file")["log"], "file");
+        let mut child = children().lock().unwrap().remove("d-pe-file").unwrap().child.take().unwrap();
+        let adopted = e.adopt().unwrap();
+        assert_eq!(adopted.iter().map(|a| a.deployment_id.as_str()).collect::<Vec<_>>(), vec!["d-pe-file"]);
+        assert!(!needs_relaunch("d-pe-file"), "a file sink survives the daemon");
+        let reaper = std::thread::spawn(move || child.wait().map(|s| s.code()));
+        e.stop(&adopted[0], Duration::from_secs(2)).unwrap();
+        reaper.join().unwrap().expect("wait");
+        assert!(!run_file("pe-test", "d-pe-file").exists());
+        let _ = hdl;
+    }
+
+    /// A run file an older daemon wrote (no `log`: a pipe), or the
+    /// `K2_APPS_PROCESS_LOG=pipe` way back: adopted, but marked for a
+    /// relaunch (its pipe went with the daemon).
+    #[test]
+    fn a_pipe_sink_is_adopted_for_a_relaunch() {
+        let h = TempHome::new();
+        let _sink = k2_core::test_env::EnvVar::set("K2_APPS_PROCESS_LOG", "pipe");
+        let seed_dir = h.path().join("seed");
+        fs::create_dir_all(&seed_dir).unwrap();
+        let e = ProcessEngine;
+        let mut s = spec(h.path(), &["sh", "-c", "if [ -p /dev/stdout ]; then echo sink=pipe; else echo sink=notpipe; fi; exec sleep 30"]);
+        s.deployment_id = "d-pe-pipe".into();
+        s.log_path = deploy::deployment_log_path("pe-test", "d-pe-pipe");
+        let p = e.prepare(&SeedRef { hash: "x".into(), path: seed_dir.clone() }, &s).unwrap();
+        e.start(&s, &p, 1).unwrap();
+        let log = wait_log(&s.log_path, "sink=");
+        assert!(log.contains("sink=pipe"), "the way back pumps a pipe: {log}");
+        assert_eq!(run_json("pe-test", "d-pe-pipe")["log"], "pipe");
+        // An older daemon's run file: no `log` field at all.
+        let mut v = run_json("pe-test", "d-pe-pipe");
+        v.as_object_mut().unwrap().remove("log");
+        fs::write(run_file("pe-test", "d-pe-pipe"), serde_json::to_vec(&v).unwrap()).unwrap();
+        let mut child = children().lock().unwrap().remove("d-pe-pipe").unwrap().child.take().unwrap();
+        let adopted = e.adopt().unwrap();
+        assert_eq!(adopted.len(), 1);
+        assert!(needs_relaunch("d-pe-pipe"), "no log field = a pipe to the old daemon");
+        let reaper = std::thread::spawn(move || child.wait().map(|s| s.code()));
+        e.stop(&adopted[0], Duration::from_secs(2)).unwrap();
+        reaper.join().unwrap().expect("wait");
+        assert!(!needs_relaunch("d-pe-pipe"), "forgotten once stopped");
+    }
+
+    /// Rotation of a log the App holds `O_APPEND`: copy to `.1`, truncate in
+    /// place; the holder's next write lands in the emptied file.
+    #[test]
+    fn a_held_log_rotates_by_copy_and_truncate() {
+        let h = TempHome::new();
+        let path = h.path().join("held.log");
+        let mut holder = OpenOptions::new().create(true).append(true).open(&path).unwrap();
+        holder.write_all(&vec![b'a'; 4096]).unwrap();
+        assert!(!rotate_held_log(&path, 8192), "under the cap: untouched");
+        assert!(rotate_held_log(&path, 1024));
+        assert_eq!(fs::metadata(path.with_extension("log.1")).unwrap().len(), 4096);
+        assert_eq!(fs::metadata(&path).unwrap().len(), 0);
+        holder.write_all(b"next\n").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "next\n", "the holder writes into the emptied file, not the copy");
     }
 }

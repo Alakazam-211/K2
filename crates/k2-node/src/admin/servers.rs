@@ -1024,6 +1024,26 @@ mod tests {
         assert_eq!(add(&l.ctx, &add_args("https://baden.k2.dev", "0123456789abcdef", Trust::Team)).unwrap_err().code, codes::TEAM_NEEDS_TENANT_WALL);
     }
 
+    /// z3mbpZ e2e fix 2: after a plain revoke, `revoke <label> --now` (and
+    /// `--wipe`) still finds the line by its label, not only by `slot:N`.
+    #[test]
+    fn a_revoked_line_is_found_by_its_label() {
+        let mut t = setup(false);
+        add(&t.ctx, &add_args("https://a.k2.dev", "0123456789abcdef", Trust::Own)).unwrap();
+        confirm_pin(&t, 1, "0123456789abcdef");
+        prune(&t.ctx).unwrap();
+        revoke(&t.ctx, &RevokeArgs { server: "a.k2.dev".into(), now: false, wipe: false }).unwrap();
+        assert!(read_stop(&t.ctx.config_dir).unwrap().slots.is_empty(), "a plain revoke lets jobs finish");
+        let r = run(&t.ctx, share::VERB_REVOKE, &json!({"server": "a.k2.dev", "now": true})).unwrap();
+        assert_eq!(r["slot"], 1, "{r}");
+        assert_eq!(read_stop(&t.ctx.config_dir).unwrap().slots, vec![1], "--now by label stops its jobs");
+        t.ctx.now += 1;
+        let r = run(&t.ctx, share::VERB_REVOKE, &json!({"server": "a.k2.dev", "wipe": true})).unwrap();
+        assert_eq!(r["wiped"], json!([1]), "{r}");
+        let e = run(&t.ctx, share::VERB_REVOKE, &json!({"server": "a.k2.dev", "now": true})).unwrap_err();
+        assert_eq!(e.code, code::BAD_ARGS, "gone once wiped");
+    }
+
     /// Review B10: an expired pending add whose wipe failed keeps its line
     /// (as revoked, holding its slot) until a later prune finishes the wipe.
     #[test]

@@ -119,6 +119,11 @@ async fn failed_wakes_keep_the_thread(env: &Env, label: &str, expect_spawn_faile
     let ws = seed_ws(env, &format!("{label}{env_tag}"));
     let conv = pin_chat(&ws);
     let agent = passport(&ws);
+    // The guest looks first (a first look starts at the head: empty now),
+    // so the lines below are new to them.
+    let pass = guest(port, &format!("g{label}{env_tag}"), &ws).await;
+    let first = ok_get(port, "/cli/thread/unread", &pass, "").await;
+    assert_eq!(first["total"].as_i64(), Some(0), "{first}");
 
     // Earlier Thread: three agent lines and a card (agent posts wake nobody).
     for i in 0..3 {
@@ -131,8 +136,7 @@ async fn failed_wakes_keep_the_thread(env: &Env, label: &str, expect_spawn_faile
     let keys = item_keys(&before);
     assert_eq!(keys.len(), 4, "three lines and a card: {before}");
 
-    // A guest reads through the second line.
-    let pass = guest(port, &format!("g{label}{env_tag}"), &ws).await;
+    // The guest reads through the second line.
     ok_post(port, "/cli/thread/read", &pass, json!({ "addr": ws.handle, "seq": keys[1].1 })).await;
     let guest_before = unread_row(&ok_get(port, "/cli/thread/unread", &pass, "").await, &conv);
     assert_eq!(

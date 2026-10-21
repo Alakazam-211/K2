@@ -276,7 +276,8 @@ pub(crate) fn item_view(req: &PermissionRequest, spec: &ActionSpec) -> ItemView 
         reason: req.reason.clone(),
     });
     let undo = match (req.state, spec.grant, spec.undo, req.answered_at) {
-        (RequestState::Approved, Grant::Standing, Undo::Twin { .. }, Some(at)) => {
+        // Once turned off again from the card (lane A2), no second undo.
+        (RequestState::Approved, Grant::Standing, Undo::Twin { .. }, Some(at)) if !super::undo::is_undone(req) => {
             Some(UndoView { label: label::TURN_OFF_AGAIN.to_string(), until: at + limits::TURN_OFF_AGAIN_SECS })
         }
         _ => None,

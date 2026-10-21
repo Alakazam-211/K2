@@ -396,7 +396,7 @@ fn owner_file(ctx: &Ctx) -> Result<ServersFile, AdminRefusal> {
     let mem = (policy.mem_cap_bytes / GIB).clamp(1, 4096) as u32;
     let disk = (policy.disk_budget_bytes / GIB).clamp(1, 65536) as u32;
     let limits = ShareLimits::owner(policy.max_parallel.clamp(1, 64), cpus, mem, disk, Network::of_policy(&policy.network));
-    let max = if ctx.macos { 2 } else { share::DEFAULT_MAX_SERVERS };
+    let max = share::DEFAULT_MAX_SERVERS;
     Ok(ServersFile::new(&pin.controller_fp, &label_of(pin.routes.first().map(String::as_str).unwrap_or("owner")), limits, max, ctx.now, &ctx.by))
 }
 
@@ -880,9 +880,9 @@ mod tests {
         assert_eq!((r["slot"].as_u64(), r["state"].as_str()), (Some(1), Some("pending")));
         let f = read_file(&t.ctx.config_dir).unwrap().unwrap();
         assert_eq!(f.owner, t.owner.fingerprint());
-        assert_eq!(f.max_servers, 2, "the minis start at 2 (Q13)");
+        assert_eq!(f.max_servers, share::DEFAULT_MAX_SERVERS, "three servers per node by default");
         let o = f.entry(0).unwrap();
-        assert_eq!((o.label.as_str(), o.weight, o.gate, o.max_running), ("rosson.k2.dev", 2, true, 3));
+        assert_eq!((o.label.as_str(), o.weight, o.gate, o.max_running), ("rosson.k2.dev", 1, true, 3));
         let b = f.entry(1).unwrap();
         assert_eq!((b.label.as_str(), b.state, b.trust, b.expires_at), ("z3thon.k2.dev", ShareState::Pending, Trust::Own, None));
         assert_eq!(b.pending_until, t.ctx.now + PENDING_SECS);

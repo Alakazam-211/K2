@@ -201,6 +201,15 @@ async fn a_second_server_enrols_by_sas_and_sees_only_its_own() {
     let s = cb.until(|f| matches!(f, Frame::State(s) if s.job_id == "only-a")).await;
     assert!(matches!(s.last().unwrap(), Frame::State(s) if s.state == JobState::Unknown));
 
+    // B's protocol-3 session can read the node queue (S2's view, redacted
+    // for B).
+    cb.send(Frame::QueueGet(k2_node_proto::share::QueueGet { request_id: "q1".into() }));
+    let v = cb.until(|f| matches!(f, Frame::QueueView(_))).await;
+    match v.last().unwrap() {
+        Frame::QueueView(v) => assert!(v.request_id == "q1" && v.totals.is_empty(), "only the owner sees totals: {v:?}"),
+        _ => unreachable!(),
+    }
+
     // The status file lists B online; servers.list (the owner's read verb)
     // says the same.
     let line = eventually("B online", || status(&n).servers.into_iter().find(|l| l.slot == 1 && l.link == "online")).await;

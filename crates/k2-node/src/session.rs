@@ -318,6 +318,18 @@ where
     tenant.protocol.store(start.protocol, std::sync::atomic::Ordering::SeqCst);
     // The queue: an old (protocol < 3) owner never queues (V70 b).
     node.fairq.set_protocol(tenant.slot, Some(start.protocol));
+    // Clock skew (§14): order and ETAs never depend on it; it's shown.
+    if start.welcome.server_time != 0 {
+        let skew = start.welcome.server_time - node.now();
+        if skew.abs() > crate::status::SKEW_WARN_SECS {
+            crate::nlog!("server slot {}: its clock is {skew:+} s from this node's", tenant.slot);
+        }
+        if owner {
+            node.status.lock().unwrap().clock_skew_secs = Some(skew);
+        } else {
+            tenant.link.lock().unwrap().skew_secs = Some(skew);
+        }
+    }
     // Learned routes (this server's only), the confirmed flag, narrowing:
     // all `tenant`'s (V51).
     {
@@ -329,6 +341,12 @@ where
         }
     }
     node.mark_confirmed(&tenant);
+    // A server whose SAS was just confirmed is active from this attach on:
+    // tell the queue now, not on the servers loop's next pass, so its
+    // first assign isn't refused `server_not_approved`.
+    if let (Some(info), Some(status)) = (tenant.share(), tenant.status_at(node.now())) {
+        node.fairq.set_share(tenant.slot, Some(crate::fairq::ShareInfo { label: info.entry.label.clone(), limits: info.entry.limits(), status }));
+    }
     // Self-update health gate: this build reached its owner server (V52:
     // another server's attach says nothing about the owner's update).
     if owner {
@@ -1032,6 +1050,7 @@ async fn servers_pass(node: &Arc<Node>, st: &mut ServersLoop) {
                 fp: pin.as_ref().map(|p| p.controller_fp.clone()),
                 running: running.get(&e.slot).map(|v| v.len() as u32).unwrap_or(0),
                 expires_at: e.expires_at,
+                skew_secs: link.skew_secs,
             }
         })
         .collect();

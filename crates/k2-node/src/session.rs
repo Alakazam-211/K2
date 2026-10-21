@@ -319,6 +319,12 @@ where
 
     let owner = tenant.is_owner();
     tenant.protocol.store(start.protocol, std::sync::atomic::Ordering::SeqCst);
+    if owner {
+        let name = start.welcome.controller.trim();
+        if !name.is_empty() && name.len() <= 253 {
+            *node.owner_name.lock().unwrap() = Some(name.to_string());
+        }
+    }
     // The queue: an old (protocol < 3) owner never queues (V70 b).
     node.fairq.set_protocol(tenant.slot, Some(start.protocol));
     // Clock skew (§14): order and ETAs never depend on it; it's shown.
@@ -1031,7 +1037,13 @@ async fn servers_pass(node: &Arc<Node>, st: &mut ServersLoop) {
 
     // Each line's status as the node sees it, and the counts.
     let lines: Vec<(ServerEntry, ServerStatus)> = file.as_ref().map(|f| f.servers.iter().map(|e| (e.clone(), effective(&layout, e, now))).collect()).unwrap_or_default();
-    let servers = lines.iter().filter(|(_, s)| matches!(s, ServerStatus::Active | ServerStatus::Paused)).count() as u32;    let owner_label = file.as_ref().and_then(|f| f.entry(OWNER_SLOT)).map(|e| e.label.clone()).unwrap_or_default();
+    let servers = lines.iter().filter(|(_, s)| matches!(s, ServerStatus::Active | ServerStatus::Paused)).count() as u32;    // Other servers see the owner by its own name when its line has only
+    // an address for a label (enrolled over loopback: `127.0.0.1-60710`).
+    let owner_label = file.as_ref().and_then(|f| f.entry(OWNER_SLOT)).map(|e| e.label.clone()).unwrap_or_default();
+    let owner_label = match node.owner_name.lock().unwrap().clone() {
+        Some(name) if address_label(&owner_label) => name,
+        _ => owner_label,
+    };
     let info = |e: &ServerEntry| ShareInfo { entry: e.clone(), servers, shared: servers >= 2, owner_label: owner_label.clone() };
     set_share(&owner, file.as_ref().and_then(|f| f.entry(OWNER_SLOT)).map(info));
 
@@ -1339,6 +1351,32 @@ async fn enroll_pending(node: &Arc<Node>, st: &mut ServersLoop, e: &ServerEntry,
     if let Ok(b) = serde_json::to_vec_pretty(&o) {
         if let Err(err) = crate::util::atomic_write(&result_path, &b, 0o600) {
             crate::nlog!("server enrol result: {err}");
+        }
+    }
+}
+
+/// A server label that is only an address (`127.0.0.1-60710`,
+/// `localhost-8080`, `::1`, `10.0.0.5`): `servers::label_of` of a URL
+/// with no name in it.
+fn address_label(label: &str) -> bool {
+    let host = match label.rsplit_once('-') {
+        Some((h, p)) if p.chars().all(|c| c.is_ascii_digit()) && !p.is_empty() => h,
+        _ => label,
+    };
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    // `[::1]:80` comes out of label_of as `---1--80`.
+    host.is_empty() || host.starts_with("--") || host.eq_ignore_ascii_case("localhost") || host.parse::<std::net::IpAddr>().is_ok()
+}
+
+#[cfg(test)]
+mod address_label_tests {
+    #[test]
+    fn address_labels_are_addresses_only() {
+        for a in ["127.0.0.1-60710", "localhost-8080", "10.0.0.5", "---1--80", "192.168.1.20"] {
+            assert!(super::address_label(a), "{a}");
+        }
+        for n in ["rosson.k2.dev", "z3thon.k2.dev-8443", "mini-1", "k2n2-m1"] {
+            assert!(!super::address_label(n), "{n}");
         }
     }
 }

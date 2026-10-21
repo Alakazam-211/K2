@@ -235,6 +235,10 @@ pub struct Node {
     /// `k2-node` is shutting down: nothing new starts (queued jobs stay
     /// queued for the next start; new assigns are refused).
     stopping: std::sync::atomic::AtomicBool,
+    /// The owner server's own name, as its last `Welcome` gave it
+    /// (`controller`): what other servers see when the owner's line has
+    /// only an address for a label (a loopback enrol).
+    pub owner_name: Mutex<Option<String>>,
 }
 
 /// What this node understands beyond protocol 1 (the offer says it).
@@ -301,6 +305,7 @@ impl Node {
             updates_refreshing: Default::default(),
             fairq: crate::fairq::FairQ::open(&layout)?,
             stopping: std::sync::atomic::AtomicBool::new(false),
+            owner_name: Mutex::new(None),
             opts,
         });
         node.refresh_local(true);

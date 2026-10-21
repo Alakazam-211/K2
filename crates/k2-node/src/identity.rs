@@ -73,6 +73,50 @@ pub fn write_pin(path: &Path, pin: &Pin) -> Result<(), String> {
     crate::util::atomic_write(path, &body, 0o600)
 }
 
+/// The node's own runtime state for one non-owner server, kept beside its
+/// [`Pin`] in `state/servers/<slot>.json` (node-owned; prd-compute-shared-
+/// queue-v1 V45). `servers.toml` holds only the node owner's decisions; the
+/// node never writes it. The owner's `controller.json` never carries these
+/// (it stays the 0.46.2 file).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TenantFlags {
+    /// The server itself removed this node (`Revoked` / `Refused{revoked}`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub revoked_by_server: bool,
+    /// Node clock of the last good attach.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_seen: Option<i64>,
+    /// Why the node refused this server's attach (`server_too_old`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refused: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct TenantPinFile {
+    #[serde(flatten)]
+    pin: Pin,
+    #[serde(flatten)]
+    flags: TenantFlags,
+}
+
+/// A non-owner server's pin and the node's runtime flags for it.
+pub fn read_tenant_pin(path: &Path) -> Result<Option<(Pin, TenantFlags)>, String> {
+    match std::fs::read_to_string(path) {
+        Ok(s) => serde_json::from_str::<TenantPinFile>(&s).map(|f| Some((f.pin, f.flags))).map_err(|e| format!("{}: {e}", path.display())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("read {}: {e}", path.display())),
+    }
+}
+
+pub fn write_tenant_pin(path: &Path, pin: &Pin, flags: &TenantFlags) -> Result<(), String> {
+    let f = TenantPinFile { pin: pin.clone(), flags: flags.clone() };
+    let body = serde_json::to_vec_pretty(&f).map_err(|e| format!("encode pin: {e}"))?;
+    if let Some(dir) = path.parent() {
+        crate::util::mkdir_mode(dir, 0o700)?;
+    }
+    crate::util::atomic_write(path, &body, 0o600)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -108,5 +152,35 @@ mod tests {
         assert_eq!(pin.controller_label(), "rosson.k2.dev");
         pin.controller_fp = "0".repeat(64);
         assert!(pin.controller_spki().is_err());
+    }
+
+    /// A tenant pin file is a plain `Pin` plus the node's runtime flags
+    /// (V45): `read_pin` still reads it, and empty flags add nothing.
+    #[test]
+    fn tenant_pins_carry_runtime_flags() {
+        let d = crate::util::temp_dir("tenant-pin");
+        let p = d.join("state/servers/1.json");
+        let k = SigningKey::generate().unwrap();
+        let pin = Pin {
+            controller_fp: k.fingerprint(),
+            controller_public_key_pem: k.spki_pem(),
+            routes: vec!["https://baden.k2.dev".into()],
+            node_id: "n".into(),
+            name: "mini-1".into(),
+            enrolled_at: 1,
+            sas: "123 456".into(),
+            revoked: false,
+            revoked_reason: None,
+            labels: BTreeMap::new(),
+            confirmed: false,
+        };
+        write_tenant_pin(&p, &pin, &TenantFlags::default()).unwrap();
+        let plain: serde_json::Value = serde_json::from_slice(&std::fs::read(&p).unwrap()).unwrap();
+        assert_eq!(plain, serde_json::to_value(&pin).unwrap(), "no flags, no extra keys");
+        let flags = TenantFlags { revoked_by_server: true, last_seen: Some(7), refused: Some("server_too_old".into()) };
+        write_tenant_pin(&p, &pin, &flags).unwrap();
+        assert_eq!(read_tenant_pin(&p).unwrap().unwrap(), (pin.clone(), flags));
+        assert_eq!(read_pin(&p).unwrap().unwrap(), pin, "the plain reader ignores the flags");
+        assert!(read_tenant_pin(&d.join("none.json")).unwrap().is_none());
     }
 }

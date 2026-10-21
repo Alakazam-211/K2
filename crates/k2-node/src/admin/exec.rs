@@ -167,6 +167,18 @@ pub enum LocalRequest {
     /// fixes everything that makes the wall. An older executor answers
     /// `malformed`, and the node runs jobs without the wall.
     Job { job: super::jobs::JobOp },
+    /// Node sharing housekeeping the node's ticker asks for (unsigned, node
+    /// user only; it does only what `servers.toml` and time already
+    /// decided: [`super::servers::prune`]).
+    Servers { servers: ServersOp },
+}
+
+/// Internal `servers.*` ops (prd-compute-shared-queue-v1 §10.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ServersOp {
+    /// Promote confirmed adds, drop expired pending lines, wipe due slots.
+    Prune,
 }
 
 /// The executor's answer.
@@ -213,6 +225,11 @@ pub struct Executor {
     /// After a healthy update (or a rollback) exit so the service manager
     /// starts the new binary. True in `admin serve`; false in tests.
     pub exit_after_update: bool,
+    /// How long a shared node's update or restart waits for running jobs
+    /// (V55; 30 min; tests shorten it).
+    pub drain_max: std::time::Duration,
+    /// A drain is under way (one at a time).
+    pub draining: Arc<std::sync::atomic::AtomicBool>,
 }
 
 type Refused = (String, String, AdminRefusal);
@@ -226,7 +243,15 @@ fn refused(o: Option<&Opened>, r: AdminRefusal) -> Refused {
 
 impl Executor {
     pub fn new(paths: ExecPaths, platform: Arc<dyn Platform>) -> Self {
-        Self { paths, platform, test_keys: cfg!(feature = "test-keys"), busy: Arc::new(Mutex::new(())), exit_after_update: false }
+        Self {
+            paths,
+            platform,
+            test_keys: cfg!(feature = "test-keys"),
+            busy: Arc::new(Mutex::new(())),
+            exit_after_update: false,
+            drain_max: std::time::Duration::from_secs(super::update::DRAIN_MAX_SECS as u64),
+            draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
     }
 
     pub fn audit(&self) -> Audit {
@@ -305,6 +330,7 @@ impl Executor {
         let spec = admin::verb(verb).ok_or_else(|| AdminRefusal::new(code::VERB_NOT_ALLOWED, "unknown verb"))?;
         match verb {
             "policy.set" => super::policy::classify_set(&self.paths.layout(), args),
+            k2_node_proto::share::VERB_LIMITS => super::servers::classify_limits(&self.paths.config_dir, args, self.now()),
             _ => Ok(spec.base),
         }
     }
@@ -346,7 +372,7 @@ impl Executor {
         };
         let now = self.now();
         let audit = self.audit();
-        let exec_seq = match audit.append(AuditEntry { event: "exec".into(), detail: json!({"args": o.cmd.args}), ..base.clone() }, now) {
+        let exec_seq = match audit.append(AuditEntry { event: "exec".into(), detail: json!({"args": audit_args(&o.cmd.verb, &o.cmd.args)}), ..base.clone() }, now) {
             Ok(s) => s,
             Err(e) => return AdminResult::refused(&o.cmd.cmd_id, &digest, &AdminRefusal::new(code::FAILED, format!("audit write failed, not running: {e}"))),
         };
@@ -451,9 +477,17 @@ impl Executor {
             }
             "unit.restart" => {
                 let unit = str_arg(args, "unit")?;
-                only_keys(args, &["unit"])?;
+                only_keys(args, &["unit", "now"])?;
                 if !K2_UNITS.contains(&unit.as_str()) {
                     return Err(AdminRefusal::new(code::BAD_ARGS, "unit must be a K2 unit (k2-node, k2-node-packages)"));
+                }
+                if unit == "k2-node" {
+                    // A shared node waits for running jobs first (V55).
+                    let now = super::update::now_arg(args)?;
+                    return super::update::drain_then(self, now, "unit.restart", &c.opened.cmd.cmd_id, move |e| {
+                        e.platform.restart_unit("k2-node").map_err(|x| AdminRefusal::new(code::FAILED, x))?;
+                        Ok(json!({"restarted": "k2-node"}))
+                    });
                 }
                 self.platform.restart_unit(&unit).map_err(|e| AdminRefusal::new(code::FAILED, e))?;
                 Ok(json!({"restarted": unit}))
@@ -467,8 +501,13 @@ impl Executor {
                 super::update::apply(self, c, sig, bytes)
             }
             "node.rollback" => {
-                no_args_except(args, &["reason"])?;
-                super::update::rollback(self, "manual")
+                no_args_except(args, &["reason", "now"])?;
+                let now = super::update::now_arg(args)?;
+                super::update::drain_then(self, now, "node.rollback", &c.opened.cmd.cmd_id, |e| super::update::rollback(e, "manual"))
+            }
+            v if k2_node_proto::share::VERBS.contains(&v) => {
+                let ctx = super::servers::Ctx::for_executor(self, &format!("owner-approval:{}", c.opened.cmd.cmd_id));
+                super::servers::run(&ctx, v, args)
             }
             _ => Err(AdminRefusal::new(code::VERB_NOT_ALLOWED, "verb is not built on this node yet")),
         }
@@ -575,8 +614,45 @@ impl Executor {
             LocalRequest::Update { cmd, sig, .. } => LocalResponse::Result(self.handle_update(cmd, sig, payload.unwrap_or(&[]))),
             // fds (a job's pipes) come only through `serve_conn`.
             LocalRequest::Job { job } => LocalResponse::Job(self.handle_job(job, Vec::new())),
+            LocalRequest::Servers { servers } => LocalResponse::Result(self.handle_servers_op(*servers)),
         }
     }
+
+    /// An internal `servers.*` op from the node (unsigned: the socket's peer
+    /// check let only the node user or root in, and the op only applies
+    /// what the owner's file and the clock already say).
+    pub fn handle_servers_op(&self, op: ServersOp) -> AdminResult {
+        let name = match op {
+            ServersOp::Prune => k2_node_proto::share::OP_SERVERS_PRUNE,
+        };
+        let Some(_g) = self.lock_briefly() else {
+            return AdminResult::refused(name, "", &AdminRefusal::new(code::BUSY, "busy; try again"));
+        };
+        let ctx = super::servers::Ctx::for_executor(self, "node:prune");
+        match super::servers::prune(&ctx) {
+            Ok(v) => {
+                let changed = v.get("changed").and_then(|c| c.as_array()).is_some_and(|c| !c.is_empty())
+                    || v.get("wiped").and_then(|c| c.as_array()).is_some_and(|c| !c.is_empty());
+                if changed {
+                    let _ = self.audit().append(AuditEntry { event: name.into(), detail: v.clone(), ..Default::default() }, self.now());
+                }
+                AdminResult::done(name, "", v)
+            }
+            Err(r) => self.refuse_result((name.to_string(), String::new(), r)),
+        }
+    }
+}
+
+/// A command's args as the audit keeps them: the `servers.add` code
+/// binding is a credential and never written down (V79).
+pub fn audit_args(verb: &str, args: &Value) -> Value {
+    let mut a = args.clone();
+    if verb == k2_node_proto::share::VERB_ADD {
+        if let Some(b) = a.get_mut("code_binding") {
+            *b = Value::String("<redacted>".into());
+        }
+    }
+    a
 }
 
 // ── arg helpers (strict: unknown keys refuse) ────────────────────────

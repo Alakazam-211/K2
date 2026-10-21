@@ -16,16 +16,17 @@
 //! frames per tenant; S2 adds the node queue; S3 the tenant wall.
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use k2_node_proto::frames::{Frame, JobState, NodeLimits, Offer, Transfer, TransferFailed, TransferKind};
-use k2_node_proto::share::{Role, Slot, OWNER_SLOT};
+use k2_node_proto::frames::{Frame, JobState, NodeLimits, Offer, Transfer, TransferFailed, TransferKind, PROTOCOL_SHARED};
+use k2_node_proto::share::{codes, Network, Role, ServerEntry, ServerStatus, ShareState, Slot, OWNER_SLOT};
+use serde::Serialize;
 use tokio::sync::{mpsc, watch, Notify};
 
 use super::{Node, NodeOptions, StopReason};
-use crate::identity::{self, Pin};
+use crate::identity::{self, Pin, TenantFlags};
 use crate::ledger::Ledger;
 use crate::paths::{Layout, TenantLayout};
 use crate::wall::Wall;
@@ -97,12 +98,54 @@ impl Hub {
     }
 }
 
+/// What `servers.toml` says about one tenant right now, set by the servers
+/// loop ([`crate::session::run_forever`]). `None` in solo mode (no file).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShareInfo {
+    /// This server's line (the node owner's decision).
+    pub entry: ServerEntry,
+    /// Servers counting toward shared mode (active or paused).
+    pub servers: u32,
+    /// Two or more of them.
+    pub shared: bool,
+    /// The owner server's label (for "shared by …").
+    pub owner_label: String,
+}
+
+/// One server's connection, for `k2-node status` and `servers list`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct Link {
+    /// unenrolled | enrolling | pending | connecting | online | offline |
+    /// refused | revoked | stopped
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub route: Option<String>,
+    pub since: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+}
+
 /// One server on this node.
 pub struct Tenant {
     pub slot: Slot,
     pub paths: TenantLayout,
     /// The server pin (`controller.json` for the owner).
     pub pin: Mutex<Option<Pin>>,
+    /// The node's runtime flags for a non-owner server (beside its pin,
+    /// V45). Always default for the owner.
+    pub flags: Mutex<TenantFlags>,
+    /// What the live session's server said in `Challenge.protocol` (0 = no
+    /// session). Sharing fields and features go only to ≥ 3 (§10.1).
+    pub protocol: AtomicU32,
+    /// This server's line in `servers.toml` (`None` = solo mode).
+    pub share: Mutex<Option<ShareInfo>>,
+    /// Keep a session with this server (the owner always; another server
+    /// while `servers.toml` lets it attach). Turning it off ends the live
+    /// session after a last offer.
+    pub serve: watch::Sender<bool>,
+    /// This server's connection state (non-owners; the owner's is the
+    /// status file's own `state`).
+    pub link: Mutex<Link>,
     /// This server's jobs (the owner's is `state/ledger.sqlite`).
     pub ledger: Mutex<Ledger>,
     /// This server's live session.
@@ -131,11 +174,23 @@ impl Tenant {
         let paths = layout.tenant(slot);
         paths.ensure_state()?;
         let ledger = Ledger::open(&paths.ledger())?;
-        let pin = identity::read_pin(&paths.pin())?;
+        let (pin, flags) = if slot == OWNER_SLOT {
+            (identity::read_pin(&paths.pin())?, TenantFlags::default())
+        } else {
+            match identity::read_tenant_pin(&paths.pin())? {
+                Some((p, f)) => (Some(p), f),
+                None => (None, TenantFlags::default()),
+            }
+        };
         Ok(Self {
             slot,
             paths,
             pin: Mutex::new(pin),
+            flags: Mutex::new(flags),
+            protocol: AtomicU32::new(0),
+            share: Mutex::new(None),
+            serve: watch::channel(slot == OWNER_SLOT).0,
+            link: Mutex::new(Link::default()),
             ledger: Mutex::new(ledger),
             hub: Hub::new(),
             ship: Notify::new(),
@@ -183,9 +238,51 @@ impl Tenant {
     }
 
     pub fn reload_pin(&self) {
-        match identity::read_pin(&self.paths.pin()) {
-            Ok(p) => *self.pin.lock().unwrap() = p,
+        if self.is_owner() {
+            match identity::read_pin(&self.paths.pin()) {
+                Ok(p) => *self.pin.lock().unwrap() = p,
+                Err(e) => crate::nlog!("{e}"),
+            }
+            return;
+        }
+        match identity::read_tenant_pin(&self.paths.pin()) {
+            Ok(Some((p, f))) => {
+                *self.pin.lock().unwrap() = Some(p);
+                *self.flags.lock().unwrap() = f;
+            }
+            Ok(None) => {
+                *self.pin.lock().unwrap() = None;
+                *self.flags.lock().unwrap() = TenantFlags::default();
+            }
             Err(e) => crate::nlog!("{e}"),
+        }
+    }
+
+    /// Write this server's pin (and, for a non-owner, its runtime flags).
+    pub fn write_pin(&self, p: &Pin) -> Result<(), String> {
+        if self.is_owner() {
+            identity::write_pin(&self.paths.pin(), p)
+        } else {
+            identity::write_tenant_pin(&self.paths.pin(), p, &self.flags.lock().unwrap())
+        }
+    }
+
+    /// Change a non-owner's runtime flags and write them beside its pin.
+    pub fn update_flags(&self, f: impl FnOnce(&mut TenantFlags)) {
+        if self.is_owner() {
+            return;
+        }
+        let mut flags = self.flags.lock().unwrap();
+        let before = flags.clone();
+        f(&mut flags);
+        if *flags == before {
+            return;
+        }
+        let pin = self.pin.lock().unwrap().clone();
+        if let Some(p) = pin {
+            if let Err(e) = identity::write_tenant_pin(&self.paths.pin(), &p, &flags) {
+                crate::nlog!("server slot {}: {e}", self.slot);
+            }
         }
     }
 
@@ -193,6 +290,121 @@ impl Tenant {
     pub fn session_narrow(&self) -> NodeLimits {
         self.narrow.lock().unwrap().clone()
     }
+
+    /// The live session's protocol (0 = none).
+    pub fn protocol(&self) -> u32 {
+        self.protocol.load(Ordering::SeqCst)
+    }
+
+    /// May this session see protocol-3 sharing fields and features?
+    pub fn speaks_shared(&self) -> bool {
+        self.protocol() >= PROTOCOL_SHARED
+    }
+
+    pub fn share(&self) -> Option<ShareInfo> {
+        self.share.lock().unwrap().clone()
+    }
+
+    /// Does this server's pin belong to its `servers.toml` line? (A reused
+    /// slot's old pin never serves a new line; the owner's line carries the
+    /// full fingerprint.)
+    pub fn pin_matches(&self, entry: &ServerEntry) -> bool {
+        let pin = self.pin.lock().unwrap();
+        let Some(p) = pin.as_ref() else { return false };
+        if self.is_owner() {
+            k2_node_proto::crypto::ct_eq(p.controller_fp.as_bytes(), entry.fp_prefix.as_bytes())
+        } else {
+            pin_serves(entry, p)
+        }
+    }
+
+    /// This server's status at `now`: the owner's decision, judged by time,
+    /// plus what the node knows (a pending line whose SAS was confirmed is
+    /// active; the executor's `servers.prune` writes it so; a server this
+    /// node refused or that removed the node). `None` in solo mode.
+    pub fn status_at(&self, now: i64) -> Option<ServerStatus> {
+        let info = self.share()?;
+        let e = &info.entry;
+        let pin = self.pin.lock().unwrap().clone();
+        let matches = self.pin_matches(e);
+        let confirmed = matches && pin.as_ref().is_some_and(|p| p.confirmed && !p.revoked);
+        let expired = e.expires_at.is_some_and(|x| now >= x);
+        let mut s = e.status(now);
+        if e.state == ShareState::Pending && confirmed && !expired {
+            s = ServerStatus::Active;
+        }
+        if !self.is_owner() && matches!(s, ServerStatus::Active | ServerStatus::Paused | ServerStatus::Pending) {
+            if pin.as_ref().is_some_and(|p| p.revoked) && matches {
+                s = ServerStatus::Revoked;
+            } else if self.flags.lock().unwrap().refused.is_some() {
+                s = ServerStatus::Refused;
+            }
+        }
+        Some(s)
+    }
+
+    /// Why this server may not start a job now, if it may not: the share's
+    /// state by time (pause, end date, revoke), and for a non-owner a node
+    /// that lost its job wall (V59). `None` = go ahead. Solo mode always
+    /// goes ahead (today).
+    pub fn job_gate(&self, now: i64, walled: bool) -> Option<&'static str> {
+        let Some(s) = self.status_at(now) else {
+            return (!self.is_owner()).then_some(codes::SERVER_NOT_APPROVED);
+        };
+        if !self.is_owner() && !walled {
+            return Some(codes::TENANT_WALL_MISSING);
+        }
+        match s {
+            ServerStatus::Active => None,
+            ServerStatus::Paused => Some(codes::SHARE_PAUSED),
+            ServerStatus::Expired => Some(codes::SHARE_EXPIRED),
+            ServerStatus::Revoked => Some(codes::SHARE_REVOKED),
+            ServerStatus::Pending | ServerStatus::Refused => Some(codes::SERVER_NOT_APPROVED),
+        }
+    }
+
+    /// This server's jobs' network: `min(policy, share)` (V65). Solo mode:
+    /// the policy's.
+    pub fn network(&self, policy: Network) -> Network {
+        match self.share() {
+            Some(i) => policy.min(i.entry.network),
+            None => policy,
+        }
+    }
+
+    /// The node policy's `workspaces` allowlist names the owner server's
+    /// workspaces only (V65). For the owner it gates as today (a non-empty
+    /// list refuses every other id). Another server's jobs are governed by
+    /// its share instead, and a plan of its naming one of the owner's listed
+    /// ids is refused (P8): those ids are the owner's, never a tenant's.
+    pub fn workspace_refused(&self, allow: &[String], workspace_id: &str) -> bool {
+        if self.is_owner() {
+            !allow.is_empty() && !allow.iter().any(|w| w == workspace_id)
+        } else {
+            allow.iter().any(|w| w == workspace_id)
+        }
+    }
+
+    pub fn set_link(&self, state: &str, route: Option<String>, err: Option<String>, now: i64) {
+        let mut l = self.link.lock().unwrap();
+        if l.state != state {
+            l.since = now;
+        }
+        l.state = state.to_string();
+        if route.is_some() || state != "online" {
+            l.route = route;
+        }
+        if err.is_some() || state == "online" {
+            l.last_error = err;
+        }
+    }
+}
+
+/// Does a non-owner pin belong to this `servers.toml` line? Its server's
+/// key starts with the line's prefix, and for a line still waiting for its
+/// SAS the pin came from this add's enrol (not an earlier, expired one).
+pub fn pin_serves(entry: &ServerEntry, p: &Pin) -> bool {
+    entry.matches_fp(&p.controller_fp) && (entry.state != ShareState::Pending || p.enrolled_at >= entry.added_at)
 }
 
 /// One attempt's key on this node: unit names (`k2job-<key>.service`) and
@@ -214,11 +426,18 @@ pub fn job_key(slot: Slot, job_id: &str, generation: u32) -> String {
 /// `k2-node` process's, which can't be re-adopted)
 /// `interrupted/node_restart`, stopping what's left of them.
 pub(super) async fn reconcile(t: &Tenant, opts: &NodeOptions, wall: &Wall) -> Result<(), String> {
+    // A restart the executor made for an update, rollback or k2-node
+    // restart: `node_update` (infra, no node-health strike, V55).
+    let why = if crate::admin::update::recent_update_mark(&opts.layout.home, opts.clock.now()) {
+        k2_node_proto::share::codes::NODE_UPDATE
+    } else {
+        "node_restart"
+    };
     let (changed, interrupted) = {
         let ledger = t.ledger.lock().unwrap();
         let changed = ledger.reconcile_boot(opts.clock.as_ref())?;
         // Same boot, new process: the old process's jobs can't be re-adopted.
-        let interrupted = ledger.interrupt_open("node_restart", opts.clock.as_ref())?;
+        let interrupted = ledger.interrupt_open(why, opts.clock.as_ref())?;
         (changed, interrupted)
     };
     for (j, g) in &changed {
@@ -275,6 +494,16 @@ impl Node {
         Ok(m.entry(slot).or_insert(t).clone())
     }
 
+    /// Forget a non-owner tenant whose `servers.toml` line went away (wiped)
+    /// or changed hands, so its slot opens fresh for the next server. Never
+    /// the owner, never while one of its jobs runs. True when it's gone.
+    pub fn drop_tenant(&self, slot: Slot) -> bool {
+        if slot == OWNER_SLOT || self.jobs.lock().unwrap().keys().any(|(s, _)| *s == slot) {
+            return false;
+        }
+        self.tenants.write().unwrap().remove(&slot).is_some()
+    }
+
     /// Wake every session's offer sender (node-wide state changed).
     pub fn notify_offers(&self) {
         for t in self.tenants() {
@@ -305,18 +534,30 @@ impl Node {
         self.owner().reload_pin();
     }
 
+    /// `t`'s server accepted an attach: its SAS was confirmed. Only `t`'s
+    /// pin changes (V51).
     pub fn mark_confirmed(&self, t: &Tenant) {
-        let changed = {
+        let confirmed = {
             let mut g = t.pin.lock().unwrap();
             match g.as_mut() {
                 Some(p) if !p.confirmed => {
                     p.confirmed = true;
-                    let _ = identity::write_pin(&t.paths.pin(), p);
-                    true
+                    Some(p.clone())
                 }
-                _ => false,
+                _ => None,
             }
         };
+        let changed = confirmed.is_some();
+        if let Some(p) = confirmed {
+            let _ = t.write_pin(&p);
+        }
+        if !t.is_owner() {
+            let now = self.now();
+            t.update_flags(|f| {
+                f.last_seen = Some(now);
+                f.refused = None;
+            });
+        }
         // `k2-node status` must stop showing the enroll code the moment the
         // controller accepts the node (found in the mini-1 smoke: the status
         // file still said "waiting for confirmation" while online).
@@ -327,20 +568,38 @@ impl Node {
 
     /// `revoked` from `t`'s server (or `Refused{revoked}`): end that
     /// server's jobs and mark its pin revoked.
+    ///
+    /// Only `t` ends (V51): a tenant leaving stops its own jobs and marks its
+    /// own pin; the owner's `controller.json`, the status file and every
+    /// other server's jobs are untouched.
     pub fn revoke(&self, t: &Tenant, reason: &str) {
-        crate::nlog!("controller removed this node: {reason}");
+        if t.is_owner() {
+            crate::nlog!("controller removed this node: {reason}");
+        } else {
+            crate::nlog!("server slot {} removed this node: {reason}", t.slot);
+        }
         self.stop_tenant(t.slot, JobState::Cancelled, "node_removed");
-        let mut g = t.pin.lock().unwrap();
-        if let Some(p) = g.as_mut() {
-            p.revoked = true;
-            p.revoked_reason = Some(reason.to_string());
-            if let Err(e) = identity::write_pin(&t.paths.pin(), p) {
+        let pin = {
+            let mut g = t.pin.lock().unwrap();
+            g.as_mut().map(|p| {
+                p.revoked = true;
+                p.revoked_reason = Some(reason.to_string());
+                p.clone()
+            })
+        };
+        if !t.is_owner() {
+            t.flags.lock().unwrap().revoked_by_server = true;
+        }
+        if let Some(p) = pin {
+            if let Err(e) = t.write_pin(&p) {
                 crate::nlog!("can't record revoke: {e}");
             }
         }
-        drop(g);
         if t.is_owner() {
             self.set_status_state("revoked", None, Some(format!("Removed by the controller: {reason}")));
+        } else {
+            t.set_link("revoked", None, Some(format!("removed by the server: {reason}")), self.now());
+            self.write_status();
         }
     }
 

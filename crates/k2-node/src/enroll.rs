@@ -33,6 +33,10 @@ pub enum Credential {
     Code(EnrollString),
     /// A control-plane ticket (one-click, same Connect account).
     Ticket(k2_node_proto::ticket::Ticket),
+    /// A code's binding and fingerprint prefix, without the code: how the
+    /// node enrols with a second server (`servers.add` carries only the
+    /// binding, V79; prd-compute-shared-queue-v1 §4.1).
+    Binding { binding: String, fp_prefix: String },
 }
 
 impl Credential {
@@ -40,6 +44,17 @@ impl Credential {
         match self {
             Credential::Code(e) => pairing::code_binding(&e.code),
             Credential::Ticket(t) => t.binding(),
+            Credential::Binding { binding, .. } => binding.clone(),
+        }
+    }
+
+    /// The fingerprint prefix the server's key must start with (the code
+    /// paths; a ticket names its host instead).
+    fn fp_prefix(&self) -> Option<&str> {
+        match self {
+            Credential::Code(e) => Some(&e.controller_fp_prefix),
+            Credential::Binding { fp_prefix, .. } => Some(fp_prefix),
+            Credential::Ticket(_) => None,
         }
     }
 }
@@ -76,13 +91,35 @@ where
         + futures_util::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
         + Unpin,
 {
+    enroll_shared(ws, key, controller_base, cred, name, labels, now, None).await
+}
+
+/// [`enroll_on`] for a second server on a shared node: `shared_by` is the
+/// owner server's label (`EnrollRequest.shared_by`, protocol 3; an old
+/// server ignores it). `None` sends today's frame exactly.
+#[allow(clippy::too_many_arguments)]
+pub async fn enroll_shared<S>(
+    ws: &mut S,
+    key: &SigningKey,
+    controller_base: &str,
+    cred: &Credential,
+    name: &str,
+    labels: &BTreeMap<String, String>,
+    now: i64,
+    shared_by: Option<&str>,
+) -> Result<Enrolled, String>
+where
+    S: futures_util::Sink<Message, Error = tokio_tungstenite::tungstenite::Error>
+        + futures_util::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
+        + Unpin,
+{
     if !valid_name(name) {
         return Err(format!("node name {name:?}: use 1-32 of a-z, 0-9 and -"));
     }
     let binding = cred.binding();
     let node_fp = key.fingerprint();
     let ticket = match cred {
-        Credential::Code(_) => None,
+        Credential::Code(_) | Credential::Binding { .. } => None,
         Credential::Ticket(t) => {
             if t.node_fp != node_fp {
                 return Err(format!(
@@ -105,7 +142,7 @@ where
     };
     let fut = async {
         send_hs(ws, &HandshakeFrame::EnrollRequest(EnrollRequest {
-            shared_by: None,
+            shared_by: shared_by.map(str::to_string),
             code_binding: binding.clone(),
             node_public_key_pem: key.spki_pem(),
             name: name.to_string(),
@@ -121,20 +158,24 @@ where
             other => return Err(format!("protocol_error: expected enroll_challenge, got {other:?}")),
         };
         let controller_fp = crypto::fingerprint_of_spki_pem(&ch.controller_public_key_pem)?;
-        if let Credential::Code(enroll) = cred {
-        if !enroll.matches_controller(&controller_fp) {
-            let _ = send_hs(ws, &HandshakeFrame::Refused(Refused {
-                code: "controller_mismatch".into(),
-                message: "controller fingerprint doesn't match the enroll string".into(),
-            }))
-            .await;
-            return Err(format!(
-                "this controller's fingerprint starts with {}, not {} as the enroll string says. Refusing: \
-                 something between this machine and the controller may be impersonating it.",
-                &controller_fp[..16],
-                enroll.controller_fp_prefix
-            ));
-        }
+        if let Some(prefix) = cred.fp_prefix() {
+            let ok = match cred {
+                Credential::Code(enroll) => enroll.matches_controller(&controller_fp),
+                _ => !prefix.is_empty() && controller_fp.len() == 64 && controller_fp.starts_with(prefix),
+            };
+            if !ok {
+                let _ = send_hs(ws, &HandshakeFrame::Refused(Refused {
+                    code: "controller_mismatch".into(),
+                    message: "controller fingerprint doesn't match the enroll string".into(),
+                }))
+                .await;
+                return Err(format!(
+                    "this controller's fingerprint starts with {}, not {} as the enroll string says. Refusing: \
+                     something between this machine and the controller may be impersonating it.",
+                    &controller_fp[..16],
+                    prefix
+                ));
+            }
         }
         let spki = crypto::pem_decode("PUBLIC KEY", &ch.controller_public_key_pem)?;
         if !crypto::verify_domain(

@@ -442,6 +442,10 @@ function ItemOutcome({
 }): JSX.Element {
   const approver = viewer.mode === 'approve' && viewer.canAnswer
   const open = item.state === 'pending' || (item.state === 'already_done' && !item.answer)
+  // A batch item's note and undo name the item (A2's routes take `item`).
+  const forItem = batchItem ? item.requestId : undefined
+  const note = actions?.note
+  const undoFn = actions?.undo
   if (item.state === 'pending') {
     if (!approver) {
       return (
@@ -450,8 +454,7 @@ function ItemOutcome({
             {waitingLine(item, viewer, agent)}
           </div>
           {!batchItem && <Muted testId="permission-approvers">Who can answer: {item.approvers.label}</Muted>}
-          {/* The note route names the card, not an item: notes ride single cards. */}
-          {!batchItem && item.noteBox.allowed && actions?.note && <PermissionNoteBox item={item} onNote={actions.note} />}
+          {item.noteBox.allowed && note && <PermissionNoteBox item={item} onNote={(text) => (forItem ? note(text, forItem) : note(text))} />}
         </>
       )
     }
@@ -462,8 +465,7 @@ function ItemOutcome({
     )
   }
   const line = stateLine(item, viewer, agent, resultMessage)
-  // The undo route names the card, not an item: single cards only.
-  const undo = !batchItem && item.undo && item.undo.until > nowSec && approver && actions?.undo ? item.undo : null
+  const undo = item.undo && item.undo.until > nowSec && approver ? item.undo : null
   return (
     <>
       {line && <StateLine text={line} item={item} />}
@@ -476,7 +478,7 @@ function ItemOutcome({
       {open && item.state === 'already_done' && approver && actions && (
         <CloseButton onClose={() => actions.answer(batchItem ? { answer: PERMISSION_LABEL.close, item: item.requestId } : { answer: PERMISSION_LABEL.close })} />
       )}
-      {undo && actions?.undo && <UndoButton label={undo.label} onUndo={actions.undo} />}
+      {undo && undoFn && <UndoButton label={undo.label} onUndo={() => (forItem ? undoFn(forItem) : undoFn())} />}
     </>
   )
 }

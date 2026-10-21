@@ -355,6 +355,38 @@ describe('PermissionBatchCard (§17.11.12, §4.5)', () => {
   })
 })
 
+describe('A3’s real projection details', () => {
+  it('the owner token (desktop): viewer "owner", answered by "owner" reads as you, from the desktop', () => {
+    const owner = { login: 'owner', role: 'owner', via: 'owner-token', mode: 'approve', canAnswer: true, isAsker: false }
+    draw(
+      permissionDoc({
+        ...APPROVED,
+        viewer: owner,
+        view: { ...APPROVED.view, answer: { decision: 'allow', by: 'owner', via: 'desktop', at: 1761061200, reason: null } },
+      }),
+    )
+    expect(text('permission-state-line')).toBe(`Allowed by you, from the desktop, ${permissionTime(1761061200)}`)
+  })
+
+  it('a batch item’s note and Turn off again name the item', async () => {
+    const actions = actionsMock()
+    const waiting = batchDoc({ viewer: { ...VIEWERS.lee, canAnswerAll: false } })
+    const items = (waiting.choice as { action: { view: { items: Record<string, unknown>[] } } }).action.view.items
+    items[0].noteBox = { allowed: true, max: 500, mine: null }
+    draw(waiting, actions)
+    fireEvent.change(screen.getByTestId('permission-note-input'), { target: { value: 'Needed for the launch' } })
+    fireEvent.click(screen.getByTestId('permission-note-send'))
+    await waitFor(() => expect(actions.note).toHaveBeenCalledWith('Needed for the launch', 'pr_a1'))
+    cleanup()
+    const done = batchDoc({ state: 'done' })
+    const doneItems = (done.choice as { action: { view: { items: Record<string, unknown>[] } } }).action.view.items
+    Object.assign(doneItems[1], APPROVED.view)
+    draw(done, actions)
+    fireEvent.click(screen.getByTestId('permission-undo'))
+    await waitFor(() => expect(actions.undo).toHaveBeenCalledWith('pr_a2'))
+  })
+})
+
 describe('routing and the wire', () => {
   it('the fallback (no view) stays an ordinary choice card', () => {
     const c = choiceOf(FALLBACK_CHOICE)

@@ -411,10 +411,11 @@ export interface PermissionAnswer {
  *  throws its refusal; the rewritten card comes back as a frame. */
 export interface PermissionCardActions {
   answer(a: PermissionAnswer): Promise<unknown>
-  /** People below the floor: `""` deletes the note. Absent: no note box. */
-  note?(text: string): Promise<unknown>
+  /** People below the floor: `""` deletes the note; `item` names a batch
+   *  item. Absent: no note box. */
+  note?(text: string, item?: string): Promise<unknown>
   /** "Turn off again" on an approved standing grant. Absent: not offered. */
-  undo?(): Promise<unknown>
+  undo?(item?: string): Promise<unknown>
   /** The server the confirm step runs on (the Thread's). Absent: a confirm
    *  action says to answer it in the agent's Thread or on the phone. */
   confirmScope?: ServerScope
@@ -445,8 +446,8 @@ export function permissionCardActions(
 ): PermissionCardActions {
   return {
     answer: (a) => daemonCliPost(scope, 'thread/answer', permissionAnswerBody(addr, id, a)),
-    note: (text) => daemonCliPost(scope, 'thread/permission-note', { addr, id, text }),
-    undo: () => daemonCliPost(scope, 'thread/permission-undo', { addr, id }),
+    note: (text, item) => daemonCliPost(scope, 'thread/permission-note', { addr, id, text, ...(item ? { item } : {}) }),
+    undo: (item) => daemonCliPost(scope, 'thread/permission-undo', { addr, id, ...(item ? { item } : {}) }),
     confirmScope: scope,
     ...(openSettings ? { openSettings } : {}),
   }

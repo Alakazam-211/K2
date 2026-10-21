@@ -9,6 +9,11 @@ pub mod access;
 pub mod auto_prepare;
 /// `k2 app data put`: a workspace's files into an App's data folder.
 pub mod data_put;
+/// Box usage, measuring: folder walks, the engine's `disk-usage`,
+/// Postgres, mail, memory, the scan cache (0.46.3, disk guard A1).
+pub mod disk_scan;
+/// The disk watch, notices and the daily Seed sweep (0.46.3, A4/A5).
+pub mod disk_watch;
 /// `k2 app label take|return`: a legacy service's label to its App.
 pub mod labels;
 /// Legacy `--cmd` services, labelled (0.46.3).

@@ -85,7 +85,9 @@
 
   function sampleThread(address) {
     var doc = function (n, from, body) {
-      return { seq: n, id: 'm' + n, doc: { id: 'm' + n, kind: 'text', from: from, to: from === 'you' ? address : null, created_at: NOW - 120 + n * 30, body: body, via: null, choice: null } }
+      // The person's own messages are via "compose" (that is how a Thread
+      // tells yours from the agent's); created_at is in seconds.
+      return { seq: n, id: 'm' + n, doc: { id: 'm' + n, kind: 'text', from: from, to: from === 'you' ? address : null, created_at: NOW - 120 + n * 30, body: body, via: from === 'you' ? 'compose' : null, choice: null } }
     }
     return {
       address: String(address),
@@ -93,7 +95,8 @@
       note: null,
       items: [doc(1, 'you', 'Can you check the fleet before the release?'), doc(2, String(address), 'On it. Every box answers; one is a version behind.'), doc(3, 'you', 'Which one?')],
       hasMore: false,
-      turn: { state: 'working', since: NOW - 5 },
+      // A turn's `since` is in milliseconds, like the real Thread view's.
+      turn: { state: 'working', since: NOW * 1000 - 5000 },
     }
   }
 

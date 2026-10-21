@@ -279,6 +279,20 @@ describe('k2-thread@1: the message box', () => {
     expect(send.disabled).toBe(true)
   })
 
+  it('an empty box measured before layout (scrollHeight 0) is one whole line tall in each look, never clipped', () => {
+    // jsdom has no layout: scrollHeight is 0, as for a box measured while
+    // hidden. The floor is line-height + padding (border-box): glass 22+8,
+    // chamfer 20+12. Glass's used to be 22 and clipped its placeholder.
+    for (const [look, px] of [
+      ['glass', '30px'],
+      ['chamfer', '32px'],
+    ] as const) {
+      const { win, root, $ } = boot(fakeK2())
+      win.K2Thread.mount(root, { address: AGENT, label: 'Ada', look })
+      expect(($('.k2t-field textarea') as HTMLTextAreaElement).style.height, look).toBe(px)
+    }
+  })
+
   it('a refused post keeps the text and says why', async () => {
     const f = fakeK2({ postError: 'sending_off' })
     const { win, root, $, type, key } = boot(f)

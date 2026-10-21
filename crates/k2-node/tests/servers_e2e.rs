@@ -327,13 +327,25 @@ async fn pause_resume_and_revoke_now_act_on_that_server_only() {
     // B is told its share is paused.
     cb.until(|f| matches!(f, Frame::Offer(o) if o.share.as_ref().is_some_and(|s| s.state == ServerStatus::Paused))).await;
     assert_eq!(t1.status_at(n.node.now()), Some(ServerStatus::Paused));
+    // A paused share still queues (§4.3): the job waits in the node queue,
+    // blocked by the pause, and starts once the share resumes.
     cb.send(Frame::Assign(bplan("p1", &["/bin/echo", "x"])));
-    let s = cb.until(|f| matches!(f, Frame::State(s) if s.job_id == "p1")).await;
-    assert!(matches!(s.last().unwrap(), Frame::State(s) if s.state == JobState::Queued && s.reason.as_deref() == Some(codes::SHARE_PAUSED)), "{s:?}");
-    assert!(t1.ledger.lock().unwrap().get("p1", 1).unwrap().is_none(), "a paused share's job never reaches the ledger");
+    let s = cb.until(|f| matches!(f, Frame::State(s) if s.job_id == "p1" && s.queue.is_some())).await;
+    match s.last().unwrap() {
+        Frame::State(s) => {
+            assert_eq!((s.state, s.reason.as_deref()), (JobState::Queued, Some(codes::NODE_QUEUED)));
+            assert_eq!(s.queue.as_ref().unwrap().blocked_by.as_deref(), Some(codes::SHARE_PAUSED), "{s:?}");
+        }
+        _ => unreachable!(),
+    }
+    assert_eq!(t1.ledger.lock().unwrap().get("p1", 1).unwrap().unwrap().state, JobState::Queued);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(n.node.running_by_tenant().get(&1).is_none(), "nothing of a paused share starts");
 
     servers::run(&c, "servers.resume", &serde_json::json!({"server": "slot:1"})).unwrap();
     eventually("the resume", || (t1.status_at(n.node.now()) == Some(ServerStatus::Active)).then_some(())).await;
+    let r = run_to_receipt(&mut cb, "p1").await;
+    assert_eq!(states_of(&r, "p1").last().unwrap().state, JobState::Done, "the queued job ran after the resume");
     cb.send(Frame::Assign(bplan("r1", &["/bin/sh", "-c", "echo b; sleep 30"])));
     cb.until(|f| matches!(f, Frame::State(s) if s.job_id == "r1" && s.state == JobState::Running)).await;
     ca.send(Frame::Assign(assign(plan("a1", &["/bin/sh", "-c", "echo a; sleep 30"]), 1)));

@@ -579,6 +579,7 @@ impl Node {
             crate::nlog!("server slot {} removed this node: {reason}", t.slot);
         }
         self.stop_tenant(t.slot, JobState::Cancelled, "node_removed");
+        self.queue_cancel_tenant(t, "node_removed");
         let pin = {
             let mut g = t.pin.lock().unwrap();
             g.as_mut().map(|p| {

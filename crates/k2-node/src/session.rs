@@ -316,6 +316,8 @@ where
 
     let owner = tenant.is_owner();
     tenant.protocol.store(start.protocol, std::sync::atomic::Ordering::SeqCst);
+    // The queue: an old (protocol < 3) owner never queues (V70 b).
+    node.fairq.set_protocol(tenant.slot, Some(start.protocol));
     // Learned routes (this server's only), the confirmed flag, narrowing:
     // all `tenant`'s (V51).
     {
@@ -381,6 +383,9 @@ where
     }
 
     let epoch = tenant.hub.attach(tx.clone());
+    // The node queue (S2): queued rows this server still lists may start in
+    // this session; the rest end `superseded` (V47).
+    node.queue_attach(&tenant, &start.welcome.resume);
 
     // Tracks: resume hints + every open attempt.
     let tracks: Tracks = Arc::new(Mutex::new(HashMap::new()));
@@ -528,11 +533,13 @@ where
         }
         match frame {
             Frame::Assign(a) => {
-                // A share that may not start jobs now (paused, past its end
-                // date, revoked, not yet confirmed, or a node that lost its
-                // wall) leaves the job queued on its server (§4.3, V59).
-                // A fence the ledger knows still reports its state.
-                if let Some(code) = tenant.job_gate(node.now(), node.wall.is_walled()) {
+                // A node that lost its job wall serves only its owner: another
+                // server's jobs stay queued on that server (V59). The share
+                // itself (paused, ended, revoked, not approved) is the node
+                // queue's to judge (`on_assign`). A fence the ledger knows
+                // still reports its state.
+                if !owner && !node.wall.is_walled() {
+                    let code = codes::TENANT_WALL_MISSING;
                     let known = {
                         let l = tenant.ledger.lock().unwrap();
                         l.get(&a.fence.job_id, a.fence.generation).ok().flatten().is_some()
@@ -576,6 +583,19 @@ where
             }
             Frame::UpdateOffer(o) => crate::admin::courier::update_offer(&node, &tx, o),
             Frame::UpdateChunk(c) => crate::admin::courier::update_chunk(&node, &tx, c),
+            Frame::QueueGet(g) => {
+                // Only a protocol-3 session asks (older parsers don't know it).
+                if tenant.speaks_shared() {
+                    let (n, t, tx2) = (node.clone(), tenant.clone(), tx.clone());
+                    let v = tokio::task::spawn_blocking(move || n.fairq.view(&n, &t, &g.request_id)).await;
+                    match v {
+                        Ok(v) => {
+                            let _ = tx2.send(Frame::QueueView(v)).await;
+                        }
+                        Err(e) => crate::nlog!("queue view: {e}"),
+                    }
+                }
+            }
             Frame::Revoked(r) => {
                 node.revoke(&tenant, &r.reason);
                 break SessionEnd::Revoked(r.reason);
@@ -811,6 +831,8 @@ struct ServersLoop {
     enrolls_tried: std::collections::BTreeSet<String>,
     last_prune: Option<std::time::Instant>,
     prune_error: Option<String>,
+    /// What the node queue was last told about each server's share.
+    fq: std::collections::BTreeMap<Slot, crate::fairq::ShareInfo>,
 }
 
 impl Drop for ServersLoop {
@@ -902,6 +924,7 @@ async fn servers_pass(node: &Arc<Node>, st: &mut ServersLoop) {
         set_share(&t, None);
         // The slot was wiped (and maybe re-added): the old server's jobs end.
         node.stop_tenant(t.slot, JobState::Cancelled, codes::SHARE_REVOKED);
+        node.queue_cancel_tenant(&t, codes::SHARE_REVOKED);
         let idle = !node.running_by_tenant().contains_key(&t.slot) && t.hub.connected.borrow().eq(&0);
         if idle && node.drop_tenant(t.slot) {
             st.keys.remove(&t.slot);
@@ -966,6 +989,26 @@ async fn servers_pass(node: &Arc<Node>, st: &mut ServersLoop) {
         st.last_prune = Some(std::time::Instant::now());
         ask_prune(node, st).await;
     }
+
+    // The node queue's view of every share (S2): the line's limits and its
+    // status as the node sees it (time, a confirmed SAS, a server that left
+    // or was refused). No line = no share (the owner then gets the queue's
+    // policy-sized default; a missing server can't queue).
+    let mut fq = std::collections::BTreeMap::new();
+    for (e, eff) in &lines {
+        let t = node.tenant(e.slot).filter(|_| e.slot == OWNER_SLOT || st.keys.get(&e.slot) == Some(&line_key(e)));
+        let status = t.and_then(|t| t.status_at(now)).unwrap_or(*eff);
+        fq.insert(e.slot, crate::fairq::ShareInfo { label: e.label.clone(), limits: e.limits(), status });
+    }
+    for slot in st.fq.keys().filter(|s| !fq.contains_key(s)).copied().collect::<Vec<_>>() {
+        node.fairq.set_share(slot, None);
+    }
+    for (slot, info) in &fq {
+        if st.fq.get(slot) != Some(info) {
+            node.fairq.set_share(*slot, Some(info.clone()));
+        }
+    }
+    st.fq = fq;
 
     // The status file lists the other servers.
     let running = node.running_by_tenant();

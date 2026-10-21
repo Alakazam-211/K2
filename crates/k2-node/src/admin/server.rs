@@ -265,6 +265,17 @@ fn busy(exec: &Executor, mut s: UnixStream) {
     let _ = exec.audit().append(super::store::AuditEntry { event: "refused".into(), code: Some(code::BUSY.into()), ..Default::default() }, exec.now());
 }
 
+/// The executor's answer. It may answer (a refusal: not allowed, busy)
+/// before reading the whole request and close, so a failed write is
+/// followed by a read; only when there's no answer either is it an error.
+fn answer(s: &mut UnixStream, sent: Result<(), String>) -> Result<Vec<u8>, String> {
+    match (read_frame(s, 4 << 20), sent) {
+        (Ok(r), _) => Ok(r),
+        (Err(_), Err(w)) => Err(w),
+        (Err(e), Ok(())) => Err(e),
+    }
+}
+
 /// Node side: one request to the executor (blocking; call from
 /// `spawn_blocking`).
 pub fn request(socket: &Path, req: &LocalRequest, payload: Option<&[u8]>, timeout: Duration) -> Result<LocalResponse, AdminRefusal> {
@@ -273,11 +284,8 @@ pub fn request(socket: &Path, req: &LocalRequest, payload: Option<&[u8]>, timeou
     let _ = s.set_read_timeout(Some(timeout));
     let _ = s.set_write_timeout(Some(timeout));
     let h = serde_json::to_vec(req).map_err(|e| AdminRefusal::new(code::MALFORMED, e.to_string()))?;
-    write_frame(&mut s, &h).map_err(unreachable)?;
-    if let Some(p) = payload {
-        write_frame(&mut s, p).map_err(unreachable)?;
-    }
-    let r = read_frame(&mut s, 4 << 20).map_err(unreachable)?;
+    let sent = write_frame(&mut s, &h).and_then(|_| payload.map_or(Ok(()), |p| write_frame(&mut s, p)));
+    let r = answer(&mut s, sent).map_err(unreachable)?;
     serde_json::from_slice(&r).map_err(|e| unreachable(format!("executor answer unreadable: {e}")))
 }
 
@@ -288,11 +296,8 @@ pub fn job_request(socket: &Path, op: &super::jobs::JobOp, fds: &[std::os::fd::R
     let _ = s.set_read_timeout(Some(timeout));
     let _ = s.set_write_timeout(Some(timeout));
     let h = serde_json::to_vec(&LocalRequest::Job { job: op.clone() }).map_err(|e| AdminRefusal::new(code::MALFORMED, e.to_string()))?;
-    write_frame(&mut s, &h).map_err(unreachable)?;
-    if !fds.is_empty() {
-        super::fdpass::send_fds(&s, fds).map_err(|e| unreachable(format!("pass fds: {e}")))?;
-    }
-    let r = read_frame(&mut s, 4 << 20).map_err(unreachable)?;
+    let sent = write_frame(&mut s, &h).and_then(|_| if fds.is_empty() { Ok(()) } else { super::fdpass::send_fds(&s, fds).map_err(|e| format!("pass fds: {e}")) });
+    let r = answer(&mut s, sent).map_err(unreachable)?;
     match serde_json::from_slice::<LocalResponse>(&r) {
         Ok(LocalResponse::Job(a)) => Ok(a),
         // An older executor: it doesn't know `job` and says so.

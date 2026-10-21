@@ -158,6 +158,58 @@ impl Node {
         }
     }
 
+    /// Bytes a tenant's root holds on disk (V74): allocated blocks, never
+    /// following a link, bounded (a hostile tree can't make the scan
+    /// endless). The owner's home isn't a tenant root (0).
+    pub fn tenant_disk_bytes(&self, t: &Tenant) -> u64 {
+        if t.is_owner() {
+            return 0;
+        }
+        disk_usage(&t.paths.root())
+    }
+
+    /// Is `t` over its share's disk budget (`disk_gb`)? New jobs of an
+    /// over-budget tenant wait (`tenant_disk_full`; the queue asks this).
+    pub fn tenant_over_disk(&self, t: &Tenant) -> bool {
+        self.tenant_over_disk_with(t, |gb| u64::from(gb) << 30)
+    }
+
+    fn tenant_over_disk_with(&self, t: &Tenant, budget: impl Fn(u32) -> u64) -> bool {
+        if t.is_owner() {
+            return false;
+        }
+        match crate::admin::jobs::tenant_entry(&self.layout().config, t.slot) {
+            Ok(e) => self.tenant_disk_bytes(t) > budget(e.disk_gb),
+            Err(_) => false,
+        }
+    }
+
+    /// The 60 s `team` scan (V74): every `team` tenant over its disk
+    /// budget has its running jobs stopped as a **result** (`failed /
+    /// tenant_disk_full`, not infra, so it isn't retried into the same
+    /// full disk). Returns the stopped `(slot, job_id)`s. The node ticker
+    /// calls it.
+    pub fn team_disk_scan(&self) -> Vec<(k2_node_proto::share::Slot, String)> {
+        self.team_disk_scan_with(|gb| u64::from(gb) << 30)
+    }
+
+    fn team_disk_scan_with(&self, budget: impl Fn(u32) -> u64) -> Vec<(k2_node_proto::share::Slot, String)> {
+        let mut stopped = Vec::new();
+        for t in self.tenants() {
+            let Ok(e) = crate::admin::jobs::tenant_entry(&self.layout().config, t.slot) else { continue };
+            if t.is_owner() || e.trust != Trust::Team || !self.tenant_over_disk_with(&t, &budget) {
+                continue;
+            }
+            for ((slot, job), j) in self.jobs.lock().unwrap().iter() {
+                if *slot == t.slot && j.stop.borrow().is_none() {
+                    j.stop.send_replace(Some(StopReason { state: JobState::Failed, reason: codes::TENANT_DISK_FULL.into() }));
+                    stopped.push((*slot, job.clone()));
+                }
+            }
+        }
+        stopped
+    }
+
     async fn unit_status(&self, unit: &str) -> Option<crate::admin::jobs::UnitStatus> {
         match self.job_op(crate::admin::jobs::JobOp::Status { unit: unit.to_string() }, vec![], Duration::from_secs(30)).await {
             Ok(crate::admin::jobs::JobAnswer::Status(s)) => Some(s),
@@ -791,10 +843,127 @@ impl Node {
     }
 }
 
+/// Allocated bytes under `root` (V74), no link followed, at most
+/// 2 million entries and 256 levels.
+pub fn disk_usage(root: &Path) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    let mut total = 0u64;
+    let mut seen = 0u64;
+    let mut stack = vec![(root.to_path_buf(), 0u32)];
+    while let Some((p, depth)) = stack.pop() {
+        let Ok(m) = std::fs::symlink_metadata(&p) else { continue };
+        total += m.blocks() * 512;
+        seen += 1;
+        if seen > 2_000_000 {
+            break;
+        }
+        if m.is_dir() && depth < 256 {
+            if let Ok(rd) = std::fs::read_dir(&p) {
+                stack.extend(rd.flatten().map(|e| (e.path(), depth + 1)));
+            }
+        }
+    }
+    total
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::cgroup::Cgroups;
+
+    /// V74: a `team` tenant over its disk budget has its running job
+    /// stopped as a result (`failed / tenant_disk_full`); an `own` tenant
+    /// over budget and a team tenant under it are left alone. The budget
+    /// is scaled down here (1 "GB" = 4 KiB) so a small file crosses it.
+    #[tokio::test]
+    async fn the_team_disk_scan_stops_an_over_budget_tenants_job() {
+        use k2_node_proto::share::{Network, ServersFile, ShareLimits};
+        let d = crate::util::temp_dir("disk-scan");
+        let layout = crate::paths::Layout::new(d.join("home"), d.join("cfg"));
+        layout.ensure().unwrap();
+        std::fs::create_dir_all(&layout.config).unwrap();
+        let mut f = ServersFile::new(&"a".repeat(64), "o", ShareLimits::owner(2, 8, 16, 100, Network::On), 8, 1, "local:t");
+        for (slot, trust) in [(1u8, Trust::Team), (2, Trust::Own), (3, Trust::Team)] {
+            let mut e = f.servers[0].clone();
+            e.slot = slot;
+            e.label = format!("s{slot}");
+            e.fp_prefix = format!("{:016x}", slot);
+            e.trust = trust;
+            e.set_limits(&ShareLimits::new_server(trust, false));
+            e.disk_gb = 1;
+            f.servers.push(e);
+        }
+        std::fs::write(layout.config.join(k2_node_proto::share::SERVERS_FILE), toml::to_string(&f).unwrap()).unwrap();
+        std::fs::write(layout.policy(), "availability = \"always\"\nforeign_locks = []\nwrite_smoke_lock = \"\"\ndisk_floor_gb = 0\nmax_parallel = 4\n").unwrap();
+        let pin = |id: &str| crate::identity::Pin {
+            controller_fp: "c".repeat(64),
+            controller_public_key_pem: String::new(),
+            routes: vec![],
+            node_id: id.into(),
+            name: "n".into(),
+            enrolled_at: 1,
+            sas: String::new(),
+            revoked: false,
+            revoked_reason: None,
+            labels: Default::default(),
+            confirmed: true,
+        };
+        for slot in [1u8, 2, 3] {
+            layout.tenant(slot).ensure_state().unwrap();
+            crate::identity::write_pin(&layout.tenant(slot).pin(), &pin("node-b")).unwrap();
+        }
+        let mut o = super::super::NodeOptions::new(layout.clone());
+        o.dev = true;
+        o.health = false;
+        o.keep_awake = false;
+        o.use_cgroups = false;
+        o.cancel_grace = Duration::from_millis(200);
+        o.wall = Some(Wall::None { why: "t".into() });
+        o.facts = Some(crate::config::MachineFacts { cores: 8, mem_bytes: 32 << 30, disk_total_bytes: 1 << 40, has_battery: false, is_macos: cfg!(target_os = "macos") });
+        let n = Node::open(o).await.unwrap();
+        let mut tens = Vec::new();
+        for s in [1u8, 2, 3] {
+            tens.push(n.add_tenant(s).await.unwrap());
+        }
+        // Slots 1 (team) and 2 (own) hold 64 KiB; slot 3 (team) almost nothing.
+        for s in [1u8, 2] {
+            let p = layout.tenant(s).cache().join("big");
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, vec![7u8; 64 << 10]).unwrap();
+        }
+        let budget = |gb: u32| u64::from(gb) * 4096;
+        assert!(n.tenant_disk_bytes(&tens[0]) >= 64 << 10);
+        assert!(n.tenant_over_disk_with(&tens[0], budget) && n.tenant_over_disk_with(&tens[1], budget));
+        assert!(!n.tenant_over_disk_with(&tens[2], budget), "slot 3 is under");
+        assert!(!n.tenant_over_disk(&tens[0]), "40 real GB is far away");
+        let job = |t: &Arc<Tenant>| {
+            let mut a = crate::ledger::tests::assign("j", 1);
+            a.plan.node_id = "node-b".into();
+            a.plan.argv = vec!["/bin/sleep".into(), "30".into()];
+            a.fence.plan_digest = a.plan.digest().unwrap();
+            assert_eq!(n.on_assign(t, a), Some(("j".into(), 1)));
+        };
+        for t in &tens {
+            job(t);
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let stopped = n.team_disk_scan_with(budget);
+        assert_eq!(stopped, vec![(1u8, "j".to_string())], "only the over-budget team tenant's job");
+        let t0 = std::time::Instant::now();
+        let row = loop {
+            let r = tens[0].ledger.lock().unwrap().get("j", 1).unwrap().unwrap();
+            if r.state.is_terminal() {
+                break r;
+            }
+            assert!(t0.elapsed() < Duration::from_secs(20));
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        };
+        assert_eq!((row.state, row.reason.as_deref()), (JobState::Failed, Some(codes::TENANT_DISK_FULL)));
+        for t in &tens[1..] {
+            assert!(!t.ledger.lock().unwrap().get("j", 1).unwrap().unwrap().state.is_terminal(), "slot {} untouched", t.slot);
+        }
+        n.stop_all(JobState::Cancelled, "test_over");
+    }
 
     /// V24 on an unwalled Linux node: the job's delegated cgroup leaf
     /// counts an OOM kill in `memory.events`, and that's `mem_cap`.

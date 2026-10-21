@@ -159,7 +159,7 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// onError?)` K2 refused for a retryable reason subscribes again by itself;
 /// frames follow the Garden's light/dark (manifest `colorScheme: "own"`
 /// opts out); an agent's change to the person's widget sends a "Keep as
-/// mine" inbox note.
+/// mine" card on the person's Thread with that agent (inbox note without one).
 pub const SKILL_VERSION_ZEN: u32 = 28;
 /// Bumped to 5 in 0.39.0: same Phase 2.1 A25 verb refresh applied to
 /// the workspace-root template body (Cli tools section, workflow

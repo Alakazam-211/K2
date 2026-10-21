@@ -30,6 +30,23 @@ pub struct ChoiceBody {
     /// None: open until answered or voided (`--no-expiry`, older cards).
     #[serde(default, rename = "expiresAt", skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<i64>,
+    /// 0.46.3: an action card (agents present settings cards). K2 runs the
+    /// action when a PERSON taps an option; an agent, a K2 terminal, a
+    /// Garden widget or an App guest is refused. None on every other card.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<CardAction>,
+}
+
+/// What an action card does when a person answers it: the daemon's action
+/// `id` (e.g. `zen.widget.keep`) with its `params`. `dedupe` keys "one
+/// pending card per thing" (a widget, a setting).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CardAction {
+    pub id: String,
+    #[serde(default)]
+    pub params: serde_json::Value,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub dedupe: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -491,6 +508,7 @@ impl OverlayDoc {
                 answered_by: None,
                 answered_at: None,
                 expires_at: None,
+                action: None,
             }),
             secret: None,
             widget: None,

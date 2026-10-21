@@ -1969,6 +1969,12 @@ fn handle_answer(params: &HashMap<String, String>, session_author: &str) -> CliR
     if let Err(e) = authorize_write(principal.as_ref(), &resolved, "k2") {
         return e;
     }
+    // 0.46.3: a settings (action) card is the person's alone.
+    match overlay::card_action(&resolved.conversation_id, &card_id) {
+        Ok(Some(action)) => return answer_action_card(params, &resolved, &card_id, action, session_author),
+        Ok(None) => {}
+        Err(e) => return card_error(e),
+    }
     // 0.46.1: a Garden widget's card answer (`thread.answer`, cap
     // `thread:post`) carries `origin` like its posts, and the daemon checks
     // the placement's approved caps ([`widget_post_gate`]). A widget
@@ -2057,6 +2063,180 @@ fn secret_card_human_only() -> CliResponse {
         "only a person can answer a secret card (from the Thread tab, a Connect login or an app); \
          agents and K2 terminal tabs cannot",
     )
+}
+
+// ── Action cards (0.46.3): agents present settings cards ────────────────
+//
+// Rosson 2026-10-20: "agents should be able to present cards to the user so
+// that they don't have to go hunting around in the settings to make those
+// changes." K2 posts a choice card carrying an action (id + params) on the
+// person's Thread with an agent; one tap by the PERSON runs it
+// ([`crate::action_cards::run`]). An agent, a K2 terminal, a cell, a Garden
+// widget (its code may be agent-written) and an App guest are refused, so an
+// agent can never answer its own card. Settings stays the place to undo.
+
+/// Where [`present_action_card`] put the card.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Presented {
+    /// Posted on the person's Thread with the agent at `addr`.
+    Card { id: String, addr: String },
+    /// One for the same thing is still waiting; nothing new was posted.
+    Waiting { id: String },
+    /// The workspace has no Thread (no pinned Chat) a person answers on.
+    NoThread,
+}
+
+/// Post an action card on the person's Thread with the agent of
+/// `project_id`: `prompt`, one button per `options`, 7 days to answer. One
+/// waiting card per `action.id` + `action.dedupe`: with `replace` the
+/// waiting one is voided and this (newer) one posted, else nothing new.
+pub(crate) fn present_action_card(
+    project_id: &str,
+    prompt: &str,
+    options: &[&str],
+    action: overlay::CardAction,
+    replace: bool,
+) -> Result<Presented, String> {
+    let conversation_id = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        match pinned_chat_id(&conn, project_id) {
+            Ok(Some(c)) => c,
+            Ok(None) => return Ok(Presented::NoThread),
+            Err(r) => return Err(format!("no Thread for {project_id}: {}", r.body)),
+        }
+    };
+    let addr = k2_core::workspace_session_handles::workspace_address_name_shared(project_id)?;
+    let now = overlay::now_secs();
+    let waiting = overlay::pending_action_cards(&conversation_id, &action.id, &action.dedupe, now)?;
+    if let Some(last) = waiting.last() {
+        if !replace {
+            return Ok(Presented::Waiting { id: last.clone() });
+        }
+        for id in &waiting {
+            // A newer change: the old card no longer describes what's live.
+            let cb = overlay::void_card(&conversation_id, project_id, id, None)?;
+            publish_card_frame(&cb);
+        }
+    }
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let (item, links) = overlay::post_choice_with_action(
+        &conn,
+        &conversation_id,
+        project_id,
+        &addr,
+        &addr,
+        prompt,
+        options.iter().map(|o| o.to_string()).collect(),
+        false,
+        Some(now + overlay::DEFAULT_CARD_EXPIRY_SECS),
+        Some(action),
+    )?;
+    crate::overlay_ws::emit_links(&links, &item.doc);
+    drop(conn);
+    let resolved = ResolvedOverlay {
+        conversation_id,
+        project_id: project_id.to_string(),
+        addr: addr.clone(),
+        requested_addr: addr.clone(),
+        canonical_alias: true,
+    };
+    push_agent_post(&resolved, &addr, item.seq, k2_core::push::ThreadMsgKind::Choice, prompt, 0);
+    Ok(Presented::Card { id: item.id, addr })
+}
+
+/// 403 `action_card_person_only`.
+fn action_card_person_only(hint: &str) -> CliResponse {
+    error_json("403 Forbidden", "action_card_person_only", hint)
+}
+
+/// A person's tap on an action card: check it's a person who may change
+/// this server's settings, check the option, run the action, then close
+/// the card (the agent hears the choice like any card answer).
+fn answer_action_card(
+    params: &HashMap<String, String>,
+    resolved: &ResolvedOverlay,
+    card_id: &str,
+    action: overlay::CardAction,
+    session_author: &str,
+) -> CliResponse {
+    let passport = principal_is_bound(params)
+        || crate::caller_workspace::principal_from_params(params).is_some()
+        || params.contains_key("cell_session_id");
+    if passport {
+        return action_card_person_only(
+            "this card changes your settings, so only you answer it (the Thread tab, a Connect login); an agent or a K2 terminal never can",
+        );
+    }
+    if params.contains_key("origin") {
+        return action_card_person_only("a Garden widget can't answer a settings card; answer it in the Thread");
+    }
+    if request_skin().is_some() {
+        return action_card_person_only("an App guest can't answer a settings card");
+    }
+    let may = session_author == "owner"
+        || matches!(
+            k2_core::connect_users::role_for_user(session_author),
+            Some(k2_core::connect_users::Role::Owner | k2_core::connect_users::Role::Admin)
+        );
+    if !may {
+        return action_card_person_only("only the owner or an admin of this server answers a settings card");
+    }
+    if let Some(r) = refuse_if_expired(resolved, card_id) {
+        return r;
+    }
+    let Some(answer) = opt_param(params, "answer").or_else(|| opt_param(params, "option")).map(|a| a.trim().to_string()).filter(|a| !a.is_empty())
+    else {
+        return usage("answer required");
+    };
+    let doc = match overlay::get_thread_doc(&resolved.conversation_id, card_id) {
+        Ok(Some(d)) => d,
+        Ok(None) => return not_found(format!("card not found: {card_id}")),
+        Err(e) => return card_error(e),
+    };
+    let Some(choice) = doc.choice.as_ref() else {
+        return usage("that card has no options");
+    };
+    if choice.status != "pending" {
+        return card_error(overlay::CARD_NOT_PENDING.to_string());
+    }
+    if !choice.options.iter().any(|o| o.label == answer) {
+        return usage(format!("'{answer}' is not an option on this card"));
+    }
+    let result = match crate::action_cards::run(&action, &answer, session_author) {
+        Ok(r) => r,
+        Err(e) => return error_json("409 Conflict", "action_failed", e),
+    };
+    match overlay::answer_card(
+        &resolved.conversation_id,
+        &resolved.project_id,
+        card_id,
+        Some(&answer),
+        None,
+        card_actor_author(params, session_author),
+    ) {
+        Ok(cb) => {
+            let from = card_actor_from(params, resolved, session_author);
+            note_card_reader(params, session_author, &cb);
+            fire_card_callbacks(&resolved.addr, &from, vec![cb.clone()], true);
+            CliResponse::ok_json(with_moved_from(
+                serde_json::json!({
+                    "ok": true,
+                    "id": cb.doc_id,
+                    "seq": cb.seq,
+                    "kind": cb.doc.kind,
+                    "status": "answered",
+                    "answer": answer,
+                    "action": { "id": action.id, "result": result },
+                    "conversation_id": resolved.conversation_id,
+                    "addr": resolved.addr,
+                }),
+                resolved,
+            ))
+        }
+        Err(e) => card_error(e),
+    }
 }
 
 /// Map a card store error: a card that is no longer pending is 409
@@ -3095,6 +3275,155 @@ mod tests {
         );
         assert_eq!(tap.status, "200 OK", "{}", tap.body);
         assert_eq!(json_body(&tap)["status"], "answered");
+    }
+
+    // ── action cards (0.46.3): agents present settings cards ──────────────
+
+    fn keep_action(widget: &str, hash: &str) -> overlay::CardAction {
+        overlay::CardAction {
+            id: crate::action_cards::KEEP_WIDGET.to_string(),
+            params: serde_json::json!({ "widget": widget, "hash": hash, "agent": "builder" }),
+            dedupe: widget.to_string(),
+        }
+    }
+
+    const KEEP_OPTIONS: [&str; 2] = [crate::action_cards::KEEP_AS_MINE, crate::action_cards::LET_SYNC_UPDATE];
+
+    fn maker(widget: &str, hash: &str) -> k2_core::garden_data::MadeBy {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::garden_data::authors::maker_of(&conn, widget, hash).expect("maker")
+    }
+
+    fn action_card_status(conv: &str, id: &str) -> String {
+        overlay::get_thread_doc(conv, id).expect("doc").expect("card").choice.expect("choice").status
+    }
+
+    /// The agent can never answer its own settings card: its passport (the
+    /// stamped params and the request principal slot), a K2 terminal cell
+    /// and a Garden widget are all refused, the card stays pending and
+    /// nothing is kept. The person's tap keeps the widget, once.
+    #[test]
+    fn an_action_card_is_answered_by_the_person_never_the_agent() {
+        let handle = format!("ovlact{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        let conv = uuid::Uuid::new_v4().to_string();
+        pin(&project_id, &conv);
+        let widget = format!("kw{}", &uuid::Uuid::new_v4().simple().to_string()[..10]);
+        let hash = "a".repeat(64);
+        let id = match present_action_card(&project_id, "builder changed it. Keep it?", &KEEP_OPTIONS, keep_action(&widget, &hash), true)
+            .expect("present")
+        {
+            Presented::Card { id, addr } => {
+                assert_eq!(addr, handle);
+                id
+            }
+            other => panic!("a pinned Thread gets a card: {other:?}"),
+        };
+        let doc = overlay::get_thread_doc(&conv, &id).expect("doc").expect("card on the pinned Thread");
+        let choice = doc.choice.expect("choice");
+        assert_eq!(choice.options.iter().map(|o| o.label.as_str()).collect::<Vec<_>>(), KEEP_OPTIONS.to_vec());
+        assert_eq!(choice.action.as_ref().map(|a| a.id.as_str()), Some(crate::action_cards::KEEP_WIDGET));
+        assert!(choice.expires_at.is_some(), "a settings card expires like any card");
+
+        let body = serde_json::json!({ "addr": handle, "id": id, "answer": crate::action_cards::KEEP_AS_MINE });
+        // The agent's own passport (stamped params).
+        let r = post_json("/cli/thread/answer", &passport_params(&project_id, &handle), body.clone());
+        assert_error_code(&r, "403 Forbidden", "action_card_person_only");
+        // The agent's passport in the request slot (TCP).
+        let r = crate::caller_workspace::with_request_principal(
+            Some(crate::session_token::HookPrincipal { workspace_uuid: project_id.clone(), agent_address: handle.clone() }),
+            || post_json("/cli/thread/answer", &HashMap::new(), body.clone()),
+        );
+        assert_error_code(&r, "403 Forbidden", "action_card_person_only");
+        // A K2 terminal cell.
+        let r = post_json("/cli/thread/answer", &params_of(&[("cell_session_id", "cell-1")]), body.clone());
+        assert_error_code(&r, "403 Forbidden", "action_card_person_only");
+        // A Garden widget (its code may be an agent's).
+        let r = post_json(
+            "/cli/thread/answer",
+            &params_of(&[("origin", r#"{"widget":"board","garden":"g-1","placement":"p1"}"#)]),
+            body.clone(),
+        );
+        assert_error_code(&r, "403 Forbidden", "action_card_person_only");
+        assert_eq!(action_card_status(&conv, &id), "pending", "a refused answer leaves the card waiting");
+        assert_eq!(maker(&widget, &hash), k2_core::garden_data::MadeBy::Unclaimed, "nothing was kept");
+
+        // Not an option: refused before anything runs.
+        let r = post_json("/cli/thread/answer", &HashMap::new(), serde_json::json!({ "addr": handle, "id": id, "answer": "Sure" }));
+        assert_eq!(r.status, "400 Bad Request", "{}", r.body);
+        assert_eq!(maker(&widget, &hash), k2_core::garden_data::MadeBy::Unclaimed);
+
+        // The person (owner token): one tap keeps it.
+        let r = post_json("/cli/thread/answer", &HashMap::new(), body.clone());
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let v = json_body(&r);
+        assert_eq!((v["status"].as_str(), v["action"]["id"].as_str()), (Some("answered"), Some(crate::action_cards::KEEP_WIDGET)), "{v}");
+        assert_eq!(v["action"]["result"]["kept"], true, "{v}");
+        assert_eq!(maker(&widget, &hash), k2_core::garden_data::MadeBy::Owner);
+        assert_eq!(action_card_status(&conv, &id), "answered");
+        let r = post_json("/cli/thread/answer", &HashMap::new(), body);
+        assert_error_code(&r, "409 Conflict", "card_not_pending");
+    }
+
+    /// "Let sync update it" keeps nothing; a Connect member (not an
+    /// owner/admin) can't answer a settings card.
+    #[test]
+    fn let_sync_keeps_nothing_and_a_member_cannot_answer() {
+        let handle = format!("ovlact2{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        let conv = uuid::Uuid::new_v4().to_string();
+        pin(&project_id, &conv);
+        let widget = format!("kw{}", &uuid::Uuid::new_v4().simple().to_string()[..10]);
+        let hash = "b".repeat(64);
+        let Presented::Card { id, .. } = present_action_card(&project_id, "Keep it?", &KEEP_OPTIONS, keep_action(&widget, &hash), true).expect("present")
+        else {
+            panic!("a pinned Thread gets a card")
+        };
+        let body = serde_json::json!({ "addr": handle, "id": id, "answer": crate::action_cards::LET_SYNC_UPDATE });
+        let r = dispatch_post_as("/cli/thread/answer", &HashMap::new(), body.to_string().as_bytes(), "no-such-login");
+        assert_error_code(&r, "403 Forbidden", "action_card_person_only");
+        let r = post_json("/cli/thread/answer", &HashMap::new(), body);
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        assert_eq!(json_body(&r)["action"]["result"]["kept"], false);
+        assert_eq!(maker(&widget, &hash), k2_core::garden_data::MadeBy::Unclaimed);
+    }
+
+    /// One waiting card per thing: without `replace` the waiting card is
+    /// returned; with it the old card is voided and a new one posted. No
+    /// pinned Chat: NoThread (the caller falls back to an inbox note).
+    #[test]
+    fn one_waiting_action_card_per_thing_and_no_thread_says_so() {
+        let handle = format!("ovlact3{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        assert_eq!(
+            present_action_card(&project_id, "Keep it?", &KEEP_OPTIONS, keep_action("kwx", &"c".repeat(64)), true).expect("present"),
+            Presented::NoThread
+        );
+        let conv = uuid::Uuid::new_v4().to_string();
+        pin(&project_id, &conv);
+        let Presented::Card { id: first, .. } =
+            present_action_card(&project_id, "Keep it?", &KEEP_OPTIONS, keep_action("kwx", &"c".repeat(64)), true).expect("present")
+        else {
+            panic!("card")
+        };
+        assert_eq!(
+            present_action_card(&project_id, "Keep it?", &KEEP_OPTIONS, keep_action("kwx", &"d".repeat(64)), false).expect("present"),
+            Presented::Waiting { id: first.clone() }
+        );
+        let Presented::Card { id: second, .. } =
+            present_action_card(&project_id, "Keep it?", &KEEP_OPTIONS, keep_action("kwx", &"d".repeat(64)), true).expect("present")
+        else {
+            panic!("card")
+        };
+        assert_ne!(first, second);
+        assert_eq!(action_card_status(&conv, &first), "voided", "a newer change replaces the waiting card");
+        assert_eq!(action_card_status(&conv, &second), "pending");
+        // Another widget is another thing.
+        assert!(matches!(
+            present_action_card(&project_id, "Keep it?", &KEEP_OPTIONS, keep_action("kwy", &"c".repeat(64)), false).expect("present"),
+            Presented::Card { .. }
+        ));
     }
 
     #[test]

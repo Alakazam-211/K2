@@ -205,9 +205,12 @@ fn after_write() {
 // (contract-garden-data-v1 §4): when an agent changes a widget whose live
 // version was the person's, the new version is nobody's (or the agent's)
 // until the person keeps it, and the widget quietly loses its data. The
-// rule stays (only the person claims); K2 now TELLS them: one inbox note
-// per widget, pointing at the one-click It's mine in Settings → Gardens →
-// Local Data. Nothing here claims anything.
+// rule stays (only the person claims). Rosson 2026-10-20: the person gets a
+// CARD on their Thread with that agent, "Keep as mine" / "Let sync update
+// it", one tap ([`crate::action_cards::KEEP_WIDGET`]); the answer route
+// refuses the agent's own passport. Only where there is no Thread to put it
+// on, an inbox note points at Settings → Gardens → Local Data instead.
+// Nothing here claims anything.
 
 /// The live version (bundle hash) of a user widget and its maker, before a
 /// write. `None`: no good version, a built-in, or no such widget.
@@ -220,43 +223,74 @@ fn live_maker(widget: &str) -> Option<(String, k2_core::garden_data::MadeBy)> {
     Some((hash, maker))
 }
 
-/// The inbox note's title for `widget` (also its dedupe key).
+/// The inbox note's title for `widget` (its dedupe key), used only when
+/// there's no Thread for a card.
 pub(crate) fn keep_title(widget: &str) -> String {
     format!("Keep your widget {widget} as yours?")
 }
 
-/// After a write: the person's widget has a new live version that isn't
-/// theirs → `true`, and, when an agent wrote it (`note`), one fyi note to
-/// the owner (none while one is open). The person's own approval gets no
-/// note, only the answer's `keepAsMine` (the CLI prints where to keep it).
-fn keep_as_mine_notice(widget: &str, before: Option<(String, k2_core::garden_data::MadeBy)>, caller: &Caller, note: bool) -> bool {
+/// The card's words: "<agent> changed <widget> in <garden>. Keep it as
+/// yours so Garden sync never replaces it?"
+pub(crate) fn keep_prompt(agent: &str, widget: &str) -> String {
+    let mut gardens: Vec<String> =
+        files().custom_placements().into_iter().filter(|p| p.widget == widget).map(|p| p.garden_name).collect();
+    gardens.sort();
+    gardens.dedup();
+    let place = if gardens.is_empty() { "your widgets".to_string() } else { gardens.join(", ") };
+    format!("{agent} changed {widget} in {place}. Keep it as yours so Garden sync never replaces it?")
+}
+
+/// After a write by (or proposed by) the agent of `agent_project`: when the
+/// person's widget has a new live version that isn't theirs, present the
+/// Keep-as-mine card on the person's Thread with that agent (one waiting
+/// card per widget: a newer change replaces it), or an inbox note where
+/// there's no Thread. `null` when nothing needs keeping; else
+/// `{card, addr}` or `{note: true}`.
+fn keep_as_mine(widget: &str, before: Option<(String, k2_core::garden_data::MadeBy)>, agent_project: Option<&str>) -> J {
     use k2_core::garden_data::MadeBy;
-    let Some((old_hash, MadeBy::Owner)) = before else { return false };
-    let Some((new_hash, maker)) = live_maker(widget) else { return false };
+    let Some((old_hash, MadeBy::Owner)) = before else { return J::Null };
+    let Some((new_hash, maker)) = live_maker(widget) else { return J::Null };
     if new_hash == old_hash || maker == MadeBy::Owner {
-        return false;
+        return J::Null;
     }
-    if !note {
-        return true;
+    let Some(project) = agent_project else { return json!({ "card": J::Null }) };
+    let agent = k2_core::workspace_session_handles::workspace_address_name_shared(project).unwrap_or_else(|_| project.to_string());
+    let action = k2_core::overlay::CardAction {
+        id: crate::action_cards::KEEP_WIDGET.to_string(),
+        params: json!({ "widget": widget, "hash": new_hash, "agent": agent }),
+        dedupe: widget.to_string(),
+    };
+    let options = [crate::action_cards::KEEP_AS_MINE, crate::action_cards::LET_SYNC_UPDATE];
+    match crate::overlay_routes::present_action_card(project, &keep_prompt(&agent, widget), &options, action, true) {
+        Ok(crate::overlay_routes::Presented::Card { id, addr }) => return json!({ "card": id, "addr": addr }),
+        Ok(crate::overlay_routes::Presented::Waiting { id }) => return json!({ "card": id }),
+        Ok(crate::overlay_routes::Presented::NoThread) => {}
+        Err(e) => k2_core::log_debug!("[zen/agent] keep-as-mine card for {widget}: {e}"),
     }
-    let Some(project) = project_of(caller) else { return true };
+    // No Thread to put a card on: one inbox note (none while one is open).
     let title = keep_title(widget);
     let open = k2_core::feedback::list_for_project(project, &k2_core::feedback::ListFilter::Open).unwrap_or_default();
-    if open.iter().any(|i| i.title == title) {
-        return true;
+    if !open.iter().any(|i| i.title == title) {
+        let body = format!(
+            "{agent} changed your widget {widget} (version {} → {}). The new version isn't signed as yours, so it can't read or write the widget's data until you keep it.\n\n\
+             One click: Settings → Gardens → Local Data → {widget} → It's mine. Or leave it, and the widget runs without its data.\n\
+             Every change is in Settings → Logs → Access Audit.",
+            short(&old_hash),
+            short(&new_hash)
+        );
+        if let Err(e) = crate::feedback_routes::file_owner_notice(project, &agent, &title, &body) {
+            k2_core::log_debug!("[zen/agent] keep-as-mine note for {widget}: {e}");
+        }
     }
-    let who = caller.audit_user();
-    let body = format!(
-        "{who} changed your widget {widget} (version {} → {}). The new version isn't signed as yours, so it can't read or write the widget's data until you keep it.\n\n\
-         One click: Settings → Gardens → Local Data → {widget} → It's mine. Or leave it, and the widget runs without its data.\n\
-         Every change is in Settings → Logs → Access Audit.",
-        short(&old_hash),
-        short(&new_hash)
-    );
-    if let Err(e) = crate::feedback_routes::file_owner_notice(project, &who, &title, &body) {
-        k2_core::log_debug!("[zen/agent] keep-as-mine note for {widget}: {e}");
+    json!({ "note": true })
+}
+
+/// `keepAsMine` (bool) and, when true, `keepCard` on a write's answer.
+fn with_keep(v: &mut J, keep: J) {
+    v["keepAsMine"] = json!(!keep.is_null());
+    if !keep.is_null() {
+        v["keepCard"] = keep;
     }
-    true
 }
 
 fn short(hash: &str) -> &str {
@@ -373,7 +407,7 @@ fn widget_put(r: Role, caller: &Caller, body: &[u8]) -> CliResponse {
                     after_write();
                     if r == Role::Manager {
                         audit("zen-widget-put", caller, v["file"].as_str().unwrap_or(&b.widget));
-                        v["keepAsMine"] = json!(keep_as_mine_notice(&b.widget, before, caller, true));
+                        with_keep(&mut v, keep_as_mine(&b.widget, before, project_of(caller)));
                     }
                     resp("200 OK", v)
                 }
@@ -509,7 +543,7 @@ fn folder_put(r: Role, caller: &Caller, body: &[u8]) -> CliResponse {
                     after_write();
                     if r == Role::Manager {
                         audit("zen-widget-folder-put", caller, v["file"].as_str().unwrap_or(&b.widget));
-                        v["keepAsMine"] = json!(keep_as_mine_notice(&b.widget, before, caller, true));
+                        with_keep(&mut v, keep_as_mine(&b.widget, before, project_of(caller)));
                     }
                     resp("200 OK", v)
                 }
@@ -835,8 +869,12 @@ fn approve(r: Role, caller: &Caller, body: &[u8]) -> CliResponse {
     }
     after_write();
     audit("zen-proposal-approve", caller, &format!("{} {}", p.id, describe(&p)));
-    let keep = p.kind != ProposalKind::Garden && keep_as_mine_notice(&p.target, before, caller, r == Role::Manager);
-    resp("200 OK", json!({ "ok": true, "id": p.id, "status": "approved", "applied": v, "keepAsMine": keep, "target": p.target }))
+    // The person approving an agent's widget change gets the card too, on
+    // their Thread with the agent that proposed it.
+    let keep = if p.kind == ProposalKind::Garden { J::Null } else { keep_as_mine(&p.target, before, Some(p.made_by_project.as_str())) };
+    let mut out = json!({ "ok": true, "id": p.id, "status": "approved", "applied": v, "target": p.target });
+    with_keep(&mut out, keep);
+    resp("200 OK", out)
 }
 
 fn reject(r: Role, caller: &Caller, body: &[u8]) -> CliResponse {

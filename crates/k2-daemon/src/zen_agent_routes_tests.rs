@@ -477,7 +477,7 @@ fn an_agent_changing_the_persons_widget_sends_one_keep_as_mine_note() {
 }
 
 #[test]
-fn approving_a_proposal_on_the_persons_widget_says_keep_as_mine_without_a_note() {
+fn approving_a_proposal_on_the_persons_widget_asks_keep_as_mine_too() {
     let e = env();
     let plain = workspace("w-keep-plain", false);
     call("/cli/zen/widget/folder/put", true, &Caller::Owner, json!({"widget": "board", "files": folder("board", "v1")}));
@@ -487,13 +487,106 @@ fn approving_a_proposal_on_the_persons_widget_says_keep_as_mine_without_a_note()
     let (s, v) = call("/cli/zen/proposals/approve", true, &Caller::Owner, json!({"id": id}));
     assert_eq!(s, "200 OK", "{v}");
     assert_eq!((v["keepAsMine"].as_bool(), v["target"].as_str()), (Some(true), Some("board")), "{v}");
-    assert_eq!(keep_notes("w-keep-plain", "board"), 0, "the person approved it: no note to themselves");
+    // No Thread with the proposing agent here (no pinned Chat): the note.
+    assert_eq!(v["keepCard"], json!({"note": true}), "{v}");
+    assert_eq!(keep_notes("w-keep-plain", "board"), 1, "no Thread for a card: one inbox note");
     // A widget that was never the person's: nothing to keep.
     let mgr = workspace("w-keep-mgr2", true);
     let (_, v) = call("/cli/zen/widget/folder/put", false, &mgr, json!({"widget": "other", "files": folder("other", "o1")}));
     let (_, v2) = call("/cli/zen/widget/folder/put", false, &mgr, json!({"widget": "other", "files": folder("other", "o2")}));
     assert_eq!((v["keepAsMine"].as_bool(), v2["keepAsMine"].as_bool()), (Some(false), Some(false)), "{v} {v2}");
     assert_eq!(keep_notes("w-keep-mgr2", "other"), 0);
+}
+
+/// Pin a Chat for a workspace: its agent has a Thread the person reads.
+fn pin_chat(project_id: &str) -> String {
+    let conv = uuid::Uuid::new_v4().to_string();
+    let h = k2_core::db::shared();
+    let c = h.lock();
+    k2_core::db::schema::WorkspaceSession::upsert(&c, &format!("ws-{conv}"), project_id, None, Some(&conv), "claude", "system", "running")
+        .expect("pin chat");
+    conv
+}
+
+fn card(conv: &str, id: &str) -> k2_core::overlay::ChoiceBody {
+    k2_core::overlay::get_thread_doc(conv, id).expect("doc").expect("card on the Thread").choice.expect("a choice card")
+}
+
+/// Rosson 2026-10-20: with a Thread, the person gets a CARD there instead of
+/// the inbox note: "<agent> changed <widget> in <garden>. Keep it as yours
+/// so Garden sync never replaces it?" with Keep as mine / Let sync update
+/// it. A newer change replaces the waiting card (one per widget). The
+/// person's approval of an agent's proposal gets the card on the Thread with
+/// the agent that proposed it. One tap by the person keeps it.
+#[test]
+fn with_a_thread_the_person_gets_a_keep_as_mine_card_not_a_note() {
+    let e = env();
+    let mgr = workspace("w-keepc-mgr", true);
+    let conv = pin_chat("w-keepc-mgr");
+    call("/cli/zen/widget/folder/put", true, &Caller::Owner, json!({"widget": "board", "files": folder("board", "v1")}));
+    claim_live(&e.f, "board", 1);
+    let (s, v) = call("/cli/zen/widget/put", false, &mgr, json!({"widget": "board", "file": "app.js", "text": "console.log('agent')\n"}));
+    assert_eq!(s, "200 OK", "{v}");
+    assert_eq!(v["keepAsMine"], true, "{v}");
+    let first = v["keepCard"]["card"].as_str().expect("a card id").to_string();
+    assert_eq!(v["keepCard"]["addr"], "w-keepc-mgr", "{v}");
+    assert_eq!(keep_notes("w-keepc-mgr", "board"), 0, "the card replaces the inbox note");
+    let c = card(&conv, &first);
+    assert_eq!(
+        c.prompt,
+        "w-keepc-mgr changed board in your widgets. Keep it as yours so Garden sync never replaces it?",
+        "the card's words"
+    );
+    assert_eq!(c.options.iter().map(|o| o.label.as_str()).collect::<Vec<_>>(), vec!["Keep as mine", "Let sync update it"]);
+    let action = c.action.expect("an action card");
+    assert_eq!((action.id.as_str(), action.params["widget"].as_str()), (crate::action_cards::KEEP_WIDGET, Some("board")));
+    let hash = live_hash(&e.f, "board");
+    assert_eq!(action.params["hash"], hash.as_str(), "the card keeps the version it describes");
+
+    // Kept, changed again: the waiting card is replaced by one for the new version.
+    claim_live(&e.f, "board", 2);
+    let (_, v) = call("/cli/zen/widget/put", false, &mgr, json!({"widget": "board", "file": "app.js", "text": "console.log('agent 2')\n"}));
+    let second = v["keepCard"]["card"].as_str().expect("a card id").to_string();
+    assert_ne!(first, second);
+    assert_eq!(card(&conv, &first).status, "voided", "one waiting card per widget");
+    assert_eq!(card(&conv, &second).status, "pending");
+
+    // The agent can't tap it; the person can, and the widget is theirs again.
+    let mut passport = HashMap::new();
+    passport.insert(crate::caller_workspace::PRINCIPAL_BOUND_KEY.to_string(), "1".to_string());
+    passport.insert("project_id".to_string(), "w-keepc-mgr".to_string());
+    passport.insert("from".to_string(), "w-keepc-mgr".to_string());
+    let body = json!({"addr": "w-keepc-mgr", "id": second, "answer": "Keep as mine"}).to_string();
+    let r = crate::overlay_routes::dispatch_post("/cli/thread/answer", &passport, body.as_bytes());
+    assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+    assert!(r.body.contains("action_card_person_only"), "{}", r.body);
+    let live = live_hash(&e.f, "board");
+    {
+        let h = k2_core::db::shared();
+        let c = h.lock();
+        assert_eq!(k2_core::garden_data::authors::maker_of(&c, "board", &live).expect("maker"), k2_core::garden_data::MadeBy::Unclaimed);
+    }
+    let r = crate::overlay_routes::dispatch_post("/cli/thread/answer", &HashMap::new(), body.as_bytes());
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    {
+        let h = k2_core::db::shared();
+        let c = h.lock();
+        assert_eq!(k2_core::garden_data::authors::maker_of(&c, "board", &live).expect("maker"), k2_core::garden_data::MadeBy::Owner, "one tap keeps it");
+    }
+    assert_eq!(keep_notes("w-keepc-mgr", "board"), 0);
+
+    // The person approving an agent's proposal: the card is on the Thread
+    // with the agent that proposed it.
+    let plain = workspace("w-keepc-plain", false);
+    let plain_conv = pin_chat("w-keepc-plain");
+    let (_, v) = call("/cli/zen/widget/folder/put", false, &plain, json!({"widget": "board", "files": folder("board", "v9")}));
+    let pid = v["proposal"]["id"].as_str().expect("proposal id").to_string();
+    let (s, v) = call("/cli/zen/proposals/approve", true, &Caller::Owner, json!({"id": pid}));
+    assert_eq!(s, "200 OK", "{v}");
+    assert_eq!(v["keepCard"]["addr"], "w-keepc-plain", "{v}");
+    let on_plain = v["keepCard"]["card"].as_str().expect("card").to_string();
+    assert_eq!(card(&plain_conv, &on_plain).status, "pending");
+    assert_eq!(keep_notes("w-keepc-plain", "board"), 0);
 }
 
 // ── validate reflects reality (0.46.3) ─────────────────────────────────

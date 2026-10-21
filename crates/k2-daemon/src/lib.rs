@@ -10,6 +10,7 @@
 // ── Full module tree (mirrors `main.rs`'s private `mod` graph) ──────
 // Declared `pub` so the route dispatcher's `crate::*` references all
 // resolve when `routes` is compiled into the lib for the #630 harness.
+pub mod action_cards;
 pub mod active_reaper;
 pub mod session_reaper;
 pub mod agents_routes;

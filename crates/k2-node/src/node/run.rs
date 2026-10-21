@@ -97,13 +97,15 @@ fn prepare_for_job_user(target: &Path, caches: &[&Path], src: Option<&Path>) -> 
 }
 
 impl Node {
-    /// This crate's own unit tests only (`cfg(test)` is never set in a
-    /// build that ships, nor in the integration tests): an unwalled
-    /// `--dev` node with no `servers.toml` may run a tenant's job, so the
-    /// node's per-tenant bookkeeping can be tested without root. Every
-    /// real build refuses that (V59).
-    fn unit_test_escape(&self) -> bool {
-        cfg!(test) && self.opts.dev && matches!(self.wall, Wall::None { .. })
+    /// `k2-node run --dev` (dev/smoke only: the node runs as a person and
+    /// every job can read that person's files; it claims no wall) may run
+    /// another server's job without one, so the queue and per-tenant
+    /// bookkeeping are testable without root. It can't get a second server
+    /// in life: its offer has no `job-wall`, so `servers.add` refuses
+    /// (V59). Every node without `--dev` and without a wall (no
+    /// `jobs.toml`, an old setup) refuses tenant jobs.
+    fn dev_unwalled(&self) -> bool {
+        self.opts.dev && matches!(self.wall, Wall::None { .. })
     }
 
     /// A job's network: the node policy's for the owner; for a tenant the
@@ -111,7 +113,7 @@ impl Node {
     /// only the LAN, so a tenant's `no-lan` is `none` there.
     pub fn job_network(&self, t: &Tenant) -> Result<Network, (String, String)> {
         let policy = Network::of_policy(&self.local.lock().unwrap().policy.network);
-        if t.is_owner() || self.unit_test_escape() {
+        if t.is_owner() || self.dev_unwalled() {
             return Ok(policy);
         }
         let entry = crate::admin::jobs::tenant_entry(&self.layout().config, t.slot).map_err(|r| (r.code, r.message))?;
@@ -125,7 +127,7 @@ impl Node {
     /// its prepared root. `Err((code, detail))`: the job never runs as
     /// another server's user.
     pub async fn tenant_wall_check(&self, t: &Tenant) -> Result<(), (String, String)> {
-        if t.is_owner() || self.unit_test_escape() {
+        if t.is_owner() || self.dev_unwalled() {
             return Ok(());
         }
         let missing = |m: String| (codes::TENANT_WALL_MISSING.to_string(), m);
@@ -574,7 +576,7 @@ impl Node {
         if network_none && !self.wall.network_none() {
             return Err(refusal::NETWORK_NONE_MESSAGE.to_string());
         }
-        if !t.is_owner() && !matches!(self.wall, Wall::Seatbelt) && !self.unit_test_escape() {
+        if !t.is_owner() && !matches!(self.wall, Wall::Seatbelt) && !self.dev_unwalled() {
             return Err(format!("{}: a tenant's job never runs without its wall", codes::TENANT_WALL_MISSING));
         }
         let key = t.job_key(&a.fence.job_id, a.fence.generation);

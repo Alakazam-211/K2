@@ -72,7 +72,11 @@ export const SKIN_TICKET_CAPS = ['tickets:read', 'tickets:post'] as const
 export const SKIN_WIKI_CAPS = ['wiki:read'] as const
 export const SKIN_STORE_CAPS = ['store:read', 'store:write'] as const
 // Own group. Not a files cap — files:read / files:write do not imply it.
-export const SKIN_ACTIVITY_CAPS = ['activity:read'] as const
+// 0.46.3: `activity:read` = the pinned-Chat Thread's counts-only ear;
+// `activity:room` = every session's counts in the room (the owner's other
+// tabs too). Neither implies the other.
+export const SKIN_ACTIVITY_CAPS = ['activity:read', 'activity:room'] as const
+export const SKIN_ACTIVITY_ROOM_CAP = 'activity:room' as const
 // Own group (prd-app-heartbeats-surface-v1 AH1). Not implied by files or
 // activity, and neither implies the other. Offered only when the window's
 // server supports `app-heartbeats` (AH24).
@@ -141,13 +145,15 @@ export const SKIN_CAP_LABELS: Record<SkinCap, string> = Object.fromEntries(
 ) as Record<SkinCap, string>
 
 /** AH24: the heartbeat caps are offered only when the server ships them;
- *  the agent identity caps likewise (an older server refuses an unknown cap). */
-export function skinCapChoices(appHeartbeats: boolean, agentIdentity: boolean): readonly SkinCap[] {
-  if (appHeartbeats && agentIdentity) return SKIN_CAP_CHOICES
+ *  the agent identity caps likewise, and `activity:room` (0.46.3,
+ *  `thread-activity-ear-v1`): an older server refuses an unknown cap. */
+export function skinCapChoices(appHeartbeats: boolean, agentIdentity: boolean, activityRoom = true): readonly SkinCap[] {
+  if (appHeartbeats && agentIdentity && activityRoom) return SKIN_CAP_CHOICES
   return SKIN_CAP_CHOICES.filter(
     (c) =>
       (appHeartbeats || !(SKIN_HEARTBEAT_CAPS as readonly string[]).includes(c)) &&
-      (agentIdentity || !(SKIN_AGENT_IDENTITY_CAPS as readonly string[]).includes(c)),
+      (agentIdentity || !(SKIN_AGENT_IDENTITY_CAPS as readonly string[]).includes(c)) &&
+      (activityRoom || c !== SKIN_ACTIVITY_ROOM_CAP),
   )
 }
 
@@ -600,9 +606,10 @@ export function prefixLabel(prefix: string): string {
 export function SkinAccessSection(): React.JSX.Element {
   const appHeartbeats = useServerSupports('app-heartbeats')
   const agentIdentity = useServerSupports('agent-identity')
+  const activityRoom = useServerSupports('thread-activity-ear-v1')
   const agentConfigOptIn = useServerSupports('agent-config-write')
   const capChoices = useMemo(
-    () => skinCapChoices(appHeartbeats, agentIdentity),
+    () => skinCapChoices(appHeartbeats, agentIdentity, activityRoom),
     [appHeartbeats, agentIdentity],
   )
   const [users, setUsers] = useState<SkinUser[]>([])

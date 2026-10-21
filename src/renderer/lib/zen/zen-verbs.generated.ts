@@ -58,7 +58,7 @@ export const ZEN_VERBS = {
 
 /** One custom-widget verb: its cap, portable or local, and how it answers. */
 export interface ZenCustomVerbRow {
-  readonly cap: 'agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | 'files:read' | 'tickets:read' | 'tickets:post' | 'store:read' | 'store:write' | 'guests:rooms' | 'activity:read' | 'room:members' | null
+  readonly cap: 'agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | 'files:read' | 'tickets:read' | 'tickets:post' | 'store:read' | 'store:write' | 'guests:rooms' | 'activity:room' | 'room:members' | null
   readonly reach: CatalogReach
   readonly kind: CatalogVerbKind
 }
@@ -130,7 +130,7 @@ export const ZEN_CUSTOM_VERBS = {
   'store.txAbort': { cap: 'store:write', reach: 'local', kind: 'call' },
   'guests.rooms': { cap: 'guests:rooms', reach: 'portable', kind: 'call' },
   'guests.setRooms': { cap: 'guests:rooms', reach: 'portable', kind: 'call' },
-  'activity.snapshot': { cap: 'activity:read', reach: 'portable', kind: 'call' },
+  'activity.snapshot': { cap: 'activity:room', reach: 'portable', kind: 'call' },
   'room.members': { cap: 'room:members', reach: 'portable', kind: 'call' },
 } as const satisfies Record<string, ZenCustomVerbRow>
 

@@ -19,7 +19,7 @@ use std::sync::atomic::Ordering;
 
 use k2_node_proto::frames::{Availability, Caps, Free, Offer, PROTOCOL};
 use k2_node_proto::refusal::{self, NodeView};
-use k2_node_proto::share::{ShareView, FEATURE_SERVERS};
+use k2_node_proto::share::{ShareView, FEATURE_SERVERS, FEATURE_TENANT_WALL};
 
 use super::{Node, Tenant, NODE_VERSION};
 
@@ -101,6 +101,7 @@ impl Node {
             // The end-date countdown and quotes ride the periodic offer.
             if let (Some(qs), Some(os)) = (q.share.as_mut(), o.share.as_ref()) {
                 qs.expires_in_secs = os.expires_in_secs;
+                qs.skew_secs = os.skew_secs;
                 qs.quotes = os.quotes.clone();
             }
             q == o && p.free.disk_free_bytes.abs_diff(o.free.disk_free_bytes) < (1 << 30)
@@ -123,6 +124,11 @@ impl Node {
         }
         if t.speaks_shared() && !f.iter().any(|x| x == FEATURE_SERVERS) {
             f.push(FEATURE_SERVERS.to_string());
+        }
+        // `tenant-wall` only when the per-tenant wall is really on (lane
+        // S3's probe), and only to protocol 3.
+        if t.speaks_shared() && t.tenant_wall.load(Ordering::SeqCst) && !f.iter().any(|x| x == FEATURE_TENANT_WALL) {
+            f.push(FEATURE_TENANT_WALL.to_string());
         }
         f
     }
@@ -158,6 +164,7 @@ impl Node {
             // Today's CPU isn't exposed by the queue store yet (S2 follow-up).
             cpu_secs_today: 0,
             expires_in_secs: info.entry.expires_at.map(|e| (e - now).max(0)),
+            skew_secs: t.link.lock().unwrap().skew_secs,
             // Start-now / ETA for this server's last four sizes (V53).
             quotes,
         })

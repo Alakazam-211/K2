@@ -298,7 +298,7 @@ fn cmd_status(a: &Args) -> Result<(), String> {
     println!("running: {}", if s.running.is_empty() { "-".to_string() } else { s.running.join(", ") });
     println!("caps: {}", if s.caps_hard { "hard (cgroups)" } else { "soft" });
     if let Some(k) = s.clock_skew_secs.filter(|k| k.abs() > k2_node::status::SKEW_WARN_SECS) {
-        println!("clock skew: the owner server's clock is {k:+} s from this machine's");
+        println!("clock skew: this machine's clock is {k:+} s off the owner server's");
     }
     if let Some(e) = &s.servers_error {
         println!("servers.toml: {e}");

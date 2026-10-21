@@ -118,7 +118,8 @@ async fn node_verb(node: &Arc<Node>, verb: &str, args: &Value) -> Result<Value, 
         "gc" => super::housekeeping::gc(node, args).await,
         "servers.list" => {
             super::exec::no_args(args)?;
-            Ok(super::servers::node_list(node))
+            let l = super::servers::node_list(node).map_err(|e| AdminRefusal::new(code::NOT_CONFIGURED, e))?;
+            serde_json::to_value(l).map_err(|e| AdminRefusal::new(code::FAILED, e.to_string()))
         }
         "policy.show" => {
             super::exec::no_args(args)?;

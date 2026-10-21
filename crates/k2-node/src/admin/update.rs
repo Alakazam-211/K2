@@ -31,7 +31,7 @@ pub const HEALTH_GATE_SECS: i64 = 120;
 
 /// How long a shared node's update, rollback or k2-node restart waits for
 /// running jobs before it goes ahead anyway (V55).
-pub const DRAIN_MAX_SECS: i64 = 30 * 60;
+pub const DRAIN_MAX_SECS: i64 = k2_node_proto::admin::DRAIN_MAX_SECS;
 
 /// `<home>/run/node-update.json`: written by the executor just before it
 /// restarts the node for an update, rollback or restart, so the jobs that
@@ -271,11 +271,7 @@ fn swap_and_restart(e: &Executor, s: &Staged) -> Result<Value, AdminRefusal> {
 
 /// The optional `now` arg (skip the drain).
 pub fn now_arg(args: &Value) -> Result<bool, AdminRefusal> {
-    match args.get("now") {
-        None => Ok(false),
-        Some(Value::Bool(b)) => Ok(*b),
-        Some(_) => Err(AdminRefusal::new(code::BAD_ARGS, "now is true or false")),
-    }
+    k2_node_proto::admin::now_arg(args)
 }
 
 /// Two or more active servers (§2): restarts drain first.

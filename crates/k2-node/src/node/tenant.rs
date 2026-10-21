@@ -123,8 +123,8 @@ pub struct Link {
     pub since: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
-    /// The server's clock minus this node's at the last attach
-    /// (`Welcome.server_time`), seconds.
+    /// This node's clock minus the server's at the last attach
+    /// (`Welcome.server_time`), seconds; positive = the node is ahead.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skew_secs: Option<i64>,
 }
@@ -150,6 +150,9 @@ pub struct Tenant {
     /// This server's connection state (non-owners; the owner's is the
     /// status file's own `state`).
     pub link: Mutex<Link>,
+    /// The node's per-tenant wall is really on (lane S3's probe, mirrored
+    /// here by the servers loop): offers say `tenant-wall` then.
+    pub tenant_wall: std::sync::atomic::AtomicBool,
     /// This server's jobs (the owner's is `state/ledger.sqlite`).
     pub ledger: Mutex<Ledger>,
     /// This server's live session.
@@ -195,6 +198,7 @@ impl Tenant {
             share: Mutex::new(None),
             serve: watch::channel(slot == OWNER_SLOT).0,
             link: Mutex::new(Link::default()),
+            tenant_wall: std::sync::atomic::AtomicBool::new(false),
             ledger: Mutex::new(ledger),
             hub: Hub::new(),
             ship: Notify::new(),

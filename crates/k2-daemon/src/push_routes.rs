@@ -31,7 +31,6 @@ use std::time::Instant;
 
 use crate::cli_response::CliResponse;
 use k2_core::push::{K2Cloud, PushEvent, PushTarget};
-#[cfg(not(test))]
 use k2_core::push::budget;
 use k2_core::push_devices;
 
@@ -958,6 +957,24 @@ pub(crate) fn deliver_thread(event: PushEvent) {
     if airgap_blocks() {
         note_airgap_drop();
         return;
+    }
+    // Permission cards (prd-agent-settings-cards-v1 rev 3.1 §6.7): never
+    // coalesced, so the budget is taken here, from the card bucket, one
+    // push per person an hour-window of 30. Over it, the push is dropped
+    // (the card is on the Thread and in "Waiting on you").
+    if let PushEvent::ThreadPost(t) = &event {
+        if matches!(t.budget, k2_core::push::ThreadBudget::Permission { .. })
+            && !budget::global().try_take_for(
+                budget::BudgetClass::Permission,
+                &t.principal,
+                budget::PERMISSION_PER_HOUR,
+                Instant::now(),
+                1,
+            )
+        {
+            note_budget_drop(budget::BudgetClass::Permission);
+            return;
+        }
     }
     #[cfg(test)]
     {

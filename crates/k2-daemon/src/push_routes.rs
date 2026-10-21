@@ -42,16 +42,27 @@ use k2_core::push_devices;
 /// from the token, like the POSTs.
 pub const DEVICE_PATH: &str = "/cli/push/device";
 
-/// Push-domain GET dispatch. The two mutations are POST-only — reached
+/// prd-e2e-push-v1 §4a: `GET /cli/push/devices` — every phone with its E2E
+/// state (owner only; never a vendor token, key or PSK).
+pub const DEVICES_PATH: &str = "/cli/push/devices";
+/// `GET /cli/push/e2e` reads the server switch `pushE2E`; `POST` sets it
+/// (owner only).
+pub const E2E_PATH: &str = "/cli/push/e2e";
+/// `POST /cli/push/device/e2e` — the owner's per-device override
+/// (`off` | `sealed` | `default`).
+pub const DEVICE_E2E_PATH: &str = "/cli/push/device/e2e";
+
+/// Push-domain GET dispatch. The mutations are POST-only — reached
 /// via the GET chain they answer an explicit 405. [`DEVICE_PATH`] needs
 /// the caller's login, which only the dispatcher's push arm resolves, so
 /// this chain (no caller) refuses it. Returns `None` if the path isn't a
 /// push-domain route.
 pub fn dispatch(path: &str, _params: &HashMap<String, String>) -> Option<CliResponse> {
     match path {
-        "/cli/push/register-device" | "/cli/push/unregister-device" => {
+        "/cli/push/register-device" | "/cli/push/unregister-device" | DEVICE_E2E_PATH => {
             Some(CliResponse::method_not_allowed())
         }
+        DEVICES_PATH | E2E_PATH => Some(owner_only()),
         DEVICE_PATH => Some(CliResponse {
             status: "403 Forbidden",
             content_type: "application/json",
@@ -81,11 +92,50 @@ pub fn dispatch_post_for_session(
     username: &str,
     session_sid: Option<&str>,
 ) -> CliResponse {
+    dispatch_post_ctx(
+        path,
+        body,
+        username,
+        &PushCallCtx { session_sid, owner: username == k2_core::notify_prefs::OWNER, via_web: false },
+    )
+}
+
+/// What the dispatcher resolved about a `/cli/push/*` POST caller (never
+/// from the body).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PushCallCtx<'a> {
+    /// The caller's Connect login session (`cu_…`), `None` for the owner token.
+    pub session_sid: Option<&'a str>,
+    /// The owner token or an Owner login (the E2E switch + override).
+    pub owner: bool,
+    /// The request came through the hosted web path (the Cloudflare
+    /// Worker's markers): a push key must not (V15).
+    pub via_web: bool,
+}
+
+/// [`dispatch_post_for_session`] with the full caller context.
+pub fn dispatch_post_ctx(path: &str, body: &[u8], username: &str, ctx: &PushCallCtx) -> CliResponse {
     match path {
-        "/cli/push/register-device" => handle_register(body, username, session_sid),
+        "/cli/push/register-device" => handle_register(body, username, ctx),
         "/cli/push/unregister-device" => handle_unregister(body, username),
-        DEVICE_PATH => CliResponse::method_not_allowed(),
+        E2E_PATH if !ctx.owner => owner_only(),
+        E2E_PATH => handle_set_mode(body),
+        DEVICE_E2E_PATH if !ctx.owner => owner_only(),
+        DEVICE_E2E_PATH => handle_set_override(body),
+        DEVICE_PATH | DEVICES_PATH => CliResponse::method_not_allowed(),
         _ => CliResponse::not_found(),
+    }
+}
+
+fn owner_only() -> CliResponse {
+    CliResponse {
+        status: "403 Forbidden",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "ok": false,
+            "error": { "code": "owner_only", "hint": "encrypted push settings are the server owner's" },
+        })
+        .to_string(),
     }
 }
 
@@ -102,6 +152,11 @@ pub(crate) fn previews_allowed() -> bool {
 fn device_reply(device: &push_devices::PushDevice) -> CliResponse {
     let mut v = serde_json::to_value(device).unwrap_or_else(|_| serde_json::json!({}));
     if let Some(map) = v.as_object_mut() {
+        // prd-e2e-push-v1 (V14): the vendor token never comes back (the
+        // phone has it; an Admin reading another person's phone must not).
+        map.remove("token");
+        // The phone's E2E state (§7.1), or null with no key.
+        map.insert("e2e".to_string(), e2e_reply(&device.device_id));
         map.insert("ok".to_string(), serde_json::json!(true));
         map.insert("previewsAllowed".to_string(), serde_json::json!(previews_allowed()));
         // 0.46.1: pushes carry `badgeKey` instead of the person's name; the
@@ -147,6 +202,22 @@ struct RegisterBody {
     /// keep the stored value (an older phone); a new device then reads
     /// as on. Anything but a JSON bool is a usage error.
     previews: Option<bool>,
+    /// prd-e2e-push-v1 §7.1: the phone's push key + PSK. ABSENT keeps the
+    /// stored key (an old app; only if the login is unchanged), `null`
+    /// deletes it, an object stores it. A double `Option` tells absent
+    /// from `null` (V14).
+    #[serde(deserialize_with = "double_option")]
+    e2e: Option<Option<serde_json::Value>>,
+}
+
+/// `Some(None)` for an explicit `null`, `Some(Some(v))` for a value; an
+/// absent field never calls this (the container `default` gives `None`).
+fn double_option<'de, D>(d: D) -> Result<Option<Option<serde_json::Value>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize as _;
+    Ok(Some(Option::<serde_json::Value>::deserialize(d)?))
 }
 
 /// Handler for `POST /cli/push/register-device` — upsert keyed by
@@ -156,21 +227,257 @@ struct RegisterBody {
 /// 0.46.3: the row is linked to the caller's login session
 /// (`session_sid`); when that login ends the row goes. Every register
 /// re-links, so the phone's per-launch register follows a new login.
-fn handle_register(body: &[u8], username: &str, session_sid: Option<&str>) -> CliResponse {
+///
+/// prd-e2e-push-v1 §7.1: `e2e` registers the phone's key; refused with
+/// `400 e2e_needs_direct_path` through the hosted web path (V15). A
+/// register that changes the login drops the old key (V12).
+fn handle_register(body: &[u8], username: &str, ctx: &PushCallCtx) -> CliResponse {
     let b: RegisterBody = match serde_json::from_slice(body) {
         Ok(b) => b,
         Err(e) => return usage_error(format!("invalid JSON body: {e}")),
     };
-    match push_devices::upsert_device_for_session(
+    let change = match b.e2e {
+        None => k2_core::push_device_keys::E2eChange::Keep,
+        Some(None) => k2_core::push_device_keys::E2eChange::Delete,
+        Some(Some(v)) => {
+            if ctx.via_web {
+                return CliResponse {
+                    status: "400 Bad Request",
+                    content_type: "application/json",
+                    body: serde_json::json!({
+                        "ok": false,
+                        "error": {
+                            "code": "e2e_needs_direct_path",
+                            "hint": "register the push key over https://<label>.k2.dev or the LAN, not the hosted web path",
+                        },
+                    })
+                    .to_string(),
+                };
+            }
+            let reg: k2_core::push_device_keys::E2eRegistration = match serde_json::from_value(v) {
+                Ok(r) => r,
+                Err(e) => return usage_error(format!("e2e: {e}")),
+            };
+            match k2_core::push_device_keys::validate(&reg) {
+                Ok(k) => k2_core::push_device_keys::E2eChange::Set(k),
+                Err(e) => return usage_error(e),
+            }
+        }
+    };
+    match push_devices::upsert_device_e2e(
         &b.device_id,
         &b.platform,
         &b.token,
         username,
         b.previews,
-        session_sid,
+        ctx.session_sid,
+        change,
     ) {
         Ok(device) => device_reply(&device),
         Err(e) => usage_error(e),
+    }
+}
+
+/// True when this daemon may send sealed pushes now: per-daemon path up and
+/// the relay advertised `s1`. `false` under test (no gateway there).
+pub(crate) fn sealed_ready() -> bool {
+    current_config().is_some_and(|c| c.sealed_ready(unix_now()))
+}
+
+/// The `e2e` object of a device reply (§7.1), or `null` without a key.
+/// Never the public key or PSK; only `keyId`.
+pub(crate) fn e2e_reply(device_id: &str) -> serde_json::Value {
+    e2e_reply_with(device_id, k2_core::push::e2e::server_mode(), sealed_ready(), unix_now())
+}
+
+fn e2e_reply_with(
+    device_id: &str,
+    mode: k2_core::push::e2e::PushE2eMode,
+    sealed_ok: bool,
+    now: i64,
+) -> serde_json::Value {
+    use k2_core::push::e2e;
+    let st = match k2_core::push_device_keys::state(device_id) {
+        Ok(s) => s,
+        Err(e) => {
+            k2_core::log_debug!("[push] e2e state read failed: {e}");
+            return serde_json::Value::Null;
+        }
+    };
+    let Some(key) = st.key else {
+        return serde_json::Value::Null;
+    };
+    let eff = e2e::effective(mode, st.override_);
+    let active = e2e::lane(eff, key.is_active(now), sealed_ok) == e2e::Lane::Sealed;
+    serde_json::json!({
+        "v": 1,
+        "keyId": key.key_id,
+        "suite": key.suite,
+        "active": active,
+        "enforce": e2e::enforce(mode, st.override_),
+        "mode": mode.as_wire(),
+        "override": st.override_.map(|o| o.as_wire()),
+        "expiresAt": key.expires_at,
+        "rotateAfter": key.rotate_after(),
+        "alertBytes": k2_core::push::seal::ALERT_PAD,
+        "nudgeBytes": k2_core::push::seal::NUDGE_PAD,
+    })
+}
+
+/// The Settings / `k2 push devices` label for one phone (§4a).
+fn e2e_label(st: &k2_core::push_device_keys::DeviceE2e, mode: k2_core::push::e2e::PushE2eMode, sealed_ok: bool, now: i64) -> &'static str {
+    use k2_core::push::e2e;
+    let Some(key) = st.key.as_ref() else { return "Update app" };
+    if !key.is_active(now) {
+        return "Key expired (reopen the app)";
+    }
+    if st.override_ == Some(k2_core::push_device_keys::DeviceOverride::Off) {
+        return "Not encrypted (override)";
+    }
+    match e2e::effective(mode, st.override_) {
+        e2e::Effective::Off => "Not encrypted (switch off)",
+        _ if !sealed_ok => "Encrypted when the relay is ready",
+        _ => "Encrypted",
+    }
+}
+
+/// `GET /cli/push/devices` and `GET /cli/push/e2e` (owner only).
+pub fn handle_owner_get(path: &str, owner: bool) -> CliResponse {
+    if !owner {
+        return owner_only();
+    }
+    let mode = k2_core::push::e2e::server_mode();
+    let sealed_ok = sealed_ready();
+    let now = unix_now();
+    match path {
+        E2E_PATH => CliResponse::ok_json(
+            serde_json::json!({
+                "ok": true,
+                "mode": mode.as_wire(),
+                "modes": k2_core::push::e2e::PUSH_E2E_MODES,
+                "relaySealed": sealed_ok,
+            })
+            .to_string(),
+        ),
+        DEVICES_PATH => {
+            let devices = match push_devices::list_devices() {
+                Ok(d) => d,
+                Err(e) => return usage_error(e),
+            };
+            let rows: Vec<serde_json::Value> = devices
+                .iter()
+                .map(|d| {
+                    let st = k2_core::push_device_keys::state(&d.device_id).unwrap_or_default();
+                    serde_json::json!({
+                        "deviceId": d.device_id,
+                        "platform": d.platform,
+                        "username": d.username,
+                        "createdAt": d.created_at,
+                        "lastSeenAt": d.last_seen_at,
+                        "previews": d.previews,
+                        "status": e2e_label(&st, mode, sealed_ok, now),
+                        "e2e": e2e_reply_with(&d.device_id, mode, sealed_ok, now),
+                    })
+                })
+                .collect();
+            CliResponse::ok_json(
+                serde_json::json!({ "ok": true, "mode": mode.as_wire(), "relaySealed": sealed_ok, "devices": rows })
+                    .to_string(),
+            )
+        }
+        _ => CliResponse::not_found(),
+    }
+}
+
+#[derive(Debug, serde::Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct ModeBody {
+    mode: String,
+}
+
+/// `POST /cli/push/e2e {"mode": "off"|"sealed-when-supported"|"sealed-only"}`.
+/// `off` is the instant rollback: the next dispatch takes today's path.
+fn handle_set_mode(body: &[u8]) -> CliResponse {
+    let b: ModeBody = match serde_json::from_slice(body) {
+        Ok(b) => b,
+        Err(e) => return usage_error(format!("invalid JSON body: {e}")),
+    };
+    let Some(mode) = k2_core::push::e2e::PushE2eMode::from_wire(&b.mode) else {
+        return usage_error(format!(
+            "mode must be one of {} (got '{}')",
+            k2_core::push::e2e::PUSH_E2E_MODES.join("|"),
+            b.mode
+        ));
+    };
+    match k2_core::app_settings::update(serde_json::json!({ "pushE2E": mode.as_wire() })) {
+        Ok(_) => CliResponse::ok_json(serde_json::json!({ "ok": true, "mode": mode.as_wire() }).to_string()),
+        Err(e) => usage_error(e),
+    }
+}
+
+#[derive(Debug, serde::Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct OverrideBody {
+    device_id: String,
+    mode: String,
+}
+
+/// `POST /cli/push/device/e2e {"deviceId", "mode": "off"|"sealed"|"default"}`.
+fn handle_set_override(body: &[u8]) -> CliResponse {
+    let b: OverrideBody = match serde_json::from_slice(body) {
+        Ok(b) => b,
+        Err(e) => return usage_error(format!("invalid JSON body: {e}")),
+    };
+    if b.device_id.trim().is_empty() {
+        return usage_error("missing 'deviceId'");
+    }
+    let value = match b.mode.trim() {
+        "default" => None,
+        m => match k2_core::push_device_keys::DeviceOverride::from_wire(m) {
+            Some(o) => Some(o),
+            None => return usage_error(format!("mode must be one of off|sealed|default (got '{}')", b.mode)),
+        },
+    };
+    match k2_core::push_device_keys::set_override(&b.device_id, value) {
+        Ok(true) => CliResponse::ok_json(
+            serde_json::json!({
+                "ok": true,
+                "deviceId": b.device_id.trim(),
+                "override": value.map(|o| o.as_wire()),
+            })
+            .to_string(),
+        ),
+        Ok(false) => CliResponse {
+            status: "404 Not Found",
+            content_type: "application/json",
+            body: serde_json::json!({
+                "ok": false,
+                "error": { "code": "not_found", "hint": "no such device" },
+            })
+            .to_string(),
+        },
+        Err(e) => usage_error(e),
+    }
+}
+
+/// The Thread coalescer's budget split (prd-e2e-push-v1 §4, V9): today's
+/// previews split for legacy phones, plus how many phones go sealed or
+/// `sealed-only` generic.
+pub(crate) fn thread_lane_split(devices: &[push_devices::PushDevice]) -> crate::thread_push::PreviewSplit {
+    let cfg = current_config();
+    let plan = K2Cloud::plan_device_lanes(
+        cfg.as_ref(),
+        devices,
+        k2_core::push::e2e::server_mode(),
+        unix_now(),
+        false,
+    );
+    let on = plan.legacy.iter().filter(|d| d.previews).count();
+    crate::thread_push::PreviewSplit {
+        on,
+        off: plan.legacy.len() - on,
+        sealed: plan.sealed.len(),
+        generic: plan.generic.len(),
     }
 }
 
@@ -738,7 +1045,7 @@ mod tests {
     #[test]
     fn push_mutations_405_on_get_and_post_404_unknown() {
         let params = HashMap::new();
-        for route in ["/cli/push/register-device", "/cli/push/unregister-device"] {
+        for route in ["/cli/push/register-device", "/cli/push/unregister-device", "/cli/push/device/e2e"] {
             let resp = dispatch(route, &params).expect("route claimed");
             assert_eq!(resp.status, "405 Method Not Allowed", "route={route}");
             let resp = crate::cli::dispatch(route, &params);
@@ -769,7 +1076,9 @@ mod tests {
         ));
         assert_eq!(v["deviceId"], id.as_str());
         assert_eq!(v["platform"], "apns");
-        assert_eq!(v["token"], t1.as_str());
+        assert!(v.get("token").is_none(), "V14: the reply never echoes the vendor token");
+        assert_eq!(push_devices::get_device(&id).expect("get").expect("row").token, t1);
+        assert!(v["e2e"].is_null(), "no key: e2e null");
         assert_eq!(v["username"], "owner", "attribution = the RESOLVED actor");
         let created = v["createdAt"].as_i64().expect("createdAt");
         assert!(created > 0);
@@ -781,7 +1090,7 @@ mod tests {
             "rosson",
         ));
         assert_eq!(v2["platform"], "fcm");
-        assert_eq!(v2["token"], t2.as_str(), "token rotation lands via the upsert");
+        assert_eq!(push_devices::get_device(&id).expect("get").expect("row").token, t2, "token rotation lands via the upsert");
         assert_eq!(v2["username"], "rosson");
         assert_eq!(v2["createdAt"].as_i64(), Some(created), "created_at survives");
 
@@ -1248,5 +1557,220 @@ mod tests {
         });
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].0, "bellmo");
+    }
+
+    // ── prd-e2e-push-v1: registration, replies, owner routes ─────────────
+
+    fn e2e_json(seed: u8) -> (serde_json::Value, String) {
+        use base64::Engine as _;
+        let (_, pk) = k2_core::push::seal::derive_keypair(&[seed; 32]);
+        let psk = vec![seed ^ 0x33; 32];
+        let b64 = k2_core::push::seal::B64;
+        (
+            serde_json::json!({
+                "v": 1,
+                "suite": "p256-sha256-aes256gcm-psk",
+                "publicKey": b64.encode(&pk),
+                "psk": b64.encode(&psk),
+                "createdAt": 1_760_960_000,
+            }),
+            k2_core::push::seal::key_id(&pk),
+        )
+    }
+
+    fn register_ctx(body: serde_json::Value, username: &str, ctx: &PushCallCtx) -> CliResponse {
+        dispatch_post_ctx("/cli/push/register-device", body.to_string().as_bytes(), username, ctx)
+    }
+
+    /// §7.1: `e2e` stores the key (the reply carries `keyId`, never the
+    /// key, PSK or vendor token); absent keeps it; `null` deletes it; a bad
+    /// key is a usage error naming the field.
+    #[test]
+    fn register_e2e_absent_keeps_null_deletes_and_the_reply_never_echoes_secrets() {
+        let id = did("e2e-reg");
+        let t = tok("e2e-reg");
+        let (e2e, kid) = e2e_json(7);
+        let v = ok_json(post_json(
+            "/cli/push/register-device",
+            serde_json::json!({ "deviceId": id, "platform": "apns", "token": t, "e2e": e2e }),
+            "owner",
+        ));
+        assert_eq!(v["e2e"]["keyId"], kid.as_str());
+        assert_eq!(v["e2e"]["suite"], "p256-sha256-aes256gcm-psk");
+        assert_eq!(v["e2e"]["alertBytes"], 1536);
+        assert_eq!(v["e2e"]["nudgeBytes"], 256);
+        assert_eq!(v["e2e"]["active"], false, "no relay under test: not active yet");
+        let exp = v["e2e"]["expiresAt"].as_i64().expect("expiresAt");
+        assert_eq!(v["e2e"]["rotateAfter"].as_i64().expect("rotate") + 30 * 86_400, exp);
+        let wire = v.to_string();
+        assert!(v.get("token").is_none() && !wire.contains(&t), "no vendor token: {wire}");
+        assert!(!wire.contains(e2e["publicKey"].as_str().expect("pk")), "no public key echoed");
+        assert!(!wire.contains(e2e["psk"].as_str().expect("psk")), "no PSK echoed");
+        // Absent keeps it.
+        let v = ok_json(post_json(
+            "/cli/push/register-device",
+            serde_json::json!({ "deviceId": id, "platform": "apns", "token": t }),
+            "owner",
+        ));
+        assert_eq!(v["e2e"]["keyId"], kid.as_str(), "absent e2e keeps the key");
+        // GET /cli/push/device carries it too.
+        let mut params = HashMap::new();
+        params.insert("deviceId".to_string(), id.clone());
+        let g = ok_json(handle_device_get(&params, "owner"));
+        assert_eq!(g["e2e"]["keyId"], kid.as_str());
+        assert!(g.get("token").is_none());
+        // null deletes it.
+        let v = ok_json(post_json(
+            "/cli/push/register-device",
+            serde_json::json!({ "deviceId": id, "platform": "apns", "token": t, "e2e": null }),
+            "owner",
+        ));
+        assert!(v["e2e"].is_null(), "null deletes the key");
+        assert!(k2_core::push_device_keys::get_key(&id).expect("get").is_none());
+        // Bad keys: usage errors naming the field; nothing stored.
+        for (field, bad) in [
+            ("e2e.suite", serde_json::json!({ "v": 1, "suite": "x", "publicKey": e2e["publicKey"], "psk": e2e["psk"] })),
+            ("e2e.v", serde_json::json!({ "v": 9, "suite": "p256-sha256-aes256gcm-psk", "publicKey": e2e["publicKey"], "psk": e2e["psk"] })),
+            ("e2e.psk", serde_json::json!({ "v": 1, "suite": "p256-sha256-aes256gcm-psk", "publicKey": e2e["publicKey"], "psk": "AAAA" })),
+            ("e2e.publicKey", serde_json::json!({ "v": 1, "suite": "p256-sha256-aes256gcm-psk", "publicKey": "AAAA", "psk": e2e["psk"] })),
+        ] {
+            let r = post_json(
+                "/cli/push/register-device",
+                serde_json::json!({ "deviceId": id, "platform": "apns", "token": t, "e2e": bad }),
+                "owner",
+            );
+            assert_eq!(r.status, "400 Bad Request", "{field}: {}", r.body);
+            assert!(r.body.contains(field), "{field}: {}", r.body);
+            assert!(r.body.contains("\"usage\""), "{}", r.body);
+        }
+        assert!(k2_core::push_device_keys::get_key(&id).expect("get").is_none());
+        push_devices::remove_device(&id).expect("cleanup");
+    }
+
+    /// V15 belt: a key through the hosted web path is refused, and nothing
+    /// is stored. A key-less register through it still works (today).
+    #[test]
+    fn register_e2e_through_the_web_path_is_refused() {
+        let id = did("e2e-web");
+        let t = tok("e2e-web");
+        let (e2e, _) = e2e_json(8);
+        let web = PushCallCtx { session_sid: None, owner: true, via_web: true };
+        let r = register_ctx(serde_json::json!({ "deviceId": id, "platform": "apns", "token": t, "e2e": e2e }), "owner", &web);
+        assert_eq!(r.status, "400 Bad Request");
+        assert!(r.body.contains("e2e_needs_direct_path"), "{}", r.body);
+        assert!(push_devices::get_device(&id).expect("get").is_none(), "nothing stored");
+        ok_json(register_ctx(serde_json::json!({ "deviceId": id, "platform": "apns", "token": t }), "owner", &web));
+        push_devices::remove_device(&id).expect("cleanup");
+    }
+
+    /// V12 through the route: another login re-registering the same device
+    /// id drops the first person's key.
+    #[test]
+    fn a_new_login_registering_the_device_drops_the_old_key() {
+        let id = did("e2e-owner");
+        let t = tok("e2e-owner");
+        let (e2e, _) = e2e_json(9);
+        ok_json(post_json(
+            "/cli/push/register-device",
+            serde_json::json!({ "deviceId": id, "platform": "apns", "token": t, "e2e": e2e }),
+            "gina",
+        ));
+        assert!(k2_core::push_device_keys::get_key(&id).expect("get").is_some());
+        let v = ok_json(post_json(
+            "/cli/push/register-device",
+            serde_json::json!({ "deviceId": id, "platform": "apns", "token": t }),
+            "mo",
+        ));
+        assert!(v["e2e"].is_null(), "gina's key must not stay on mo's row");
+        assert!(k2_core::push_device_keys::get_key(&id).expect("get").is_none());
+        push_devices::remove_device(&id).expect("cleanup");
+    }
+
+    /// §4a: the switch and the override are owner-only; GET on the POST
+    /// override is 405; values are validated loudly.
+    #[test]
+    fn e2e_switch_and_override_are_owner_only_and_validated() {
+        crate::test_support::with_temp_home(|| {
+            let member = PushCallCtx { session_sid: Some("cu_x"), owner: false, via_web: false };
+            let owner = PushCallCtx { session_sid: None, owner: true, via_web: false };
+            let post = |path: &str, body: serde_json::Value, ctx: &PushCallCtx| {
+                dispatch_post_ctx(path, body.to_string().as_bytes(), "someone", ctx)
+            };
+            // Not the owner: 403 for every owner route, nothing changes.
+            let r = post(E2E_PATH, serde_json::json!({ "mode": "off" }), &member);
+            assert_eq!(r.status, "403 Forbidden");
+            assert!(r.body.contains("owner_only"));
+            assert_eq!(handle_owner_get(DEVICES_PATH, false).status, "403 Forbidden");
+            assert_eq!(handle_owner_get(E2E_PATH, false).status, "403 Forbidden");
+            let r = post(DEVICE_E2E_PATH, serde_json::json!({ "deviceId": "x", "mode": "off" }), &member);
+            assert_eq!(r.status, "403 Forbidden");
+            assert_eq!(k2_core::app_settings::load().push_e2e, "sealed-when-supported", "default");
+            // The owner: set and read back; a bad mode is a usage error.
+            ok_json(post(E2E_PATH, serde_json::json!({ "mode": "off" }), &owner));
+            assert_eq!(k2_core::app_settings::load().push_e2e, "off");
+            let g = ok_json(handle_owner_get(E2E_PATH, true));
+            assert_eq!(g["mode"], "off");
+            let r = post(E2E_PATH, serde_json::json!({ "mode": "sealed" }), &owner);
+            assert_eq!(r.status, "400 Bad Request", "{}", r.body);
+            assert_eq!(k2_core::app_settings::load().push_e2e, "off", "a bad mode writes nothing");
+            ok_json(post(E2E_PATH, serde_json::json!({ "mode": "sealed-only" }), &owner));
+            ok_json(post(E2E_PATH, serde_json::json!({ "mode": "sealed-when-supported" }), &owner));
+            // The override.
+            let id = did("e2e-ov");
+            let (e2e, kid) = e2e_json(10);
+            ok_json(post_json(
+                "/cli/push/register-device",
+                serde_json::json!({ "deviceId": id, "platform": "fcm", "token": tok("ov"), "e2e": e2e }),
+                "owner",
+            ));
+            let v = ok_json(post(DEVICE_E2E_PATH, serde_json::json!({ "deviceId": id, "mode": "off" }), &owner));
+            assert_eq!(v["override"], "off");
+            let list = ok_json(handle_owner_get(DEVICES_PATH, true));
+            let row = list["devices"].as_array().expect("devices").iter().find(|d| d["deviceId"] == id.as_str()).expect("row").clone();
+            assert_eq!(row["status"], "Not encrypted (override)");
+            assert_eq!(row["e2e"]["keyId"], kid.as_str());
+            assert_eq!(row["e2e"]["override"], "off");
+            assert!(row.get("token").is_none() && !list.to_string().contains("\"token\""), "never a token");
+            let v = ok_json(post(DEVICE_E2E_PATH, serde_json::json!({ "deviceId": id, "mode": "default" }), &owner));
+            assert!(v["override"].is_null());
+            let r = post(DEVICE_E2E_PATH, serde_json::json!({ "deviceId": id, "mode": "maybe" }), &owner);
+            assert_eq!(r.status, "400 Bad Request");
+            let r = post(DEVICE_E2E_PATH, serde_json::json!({ "deviceId": "nope", "mode": "off" }), &owner);
+            assert_eq!(r.status, "404 Not Found");
+            // sealed-only: enforce shows on the phone's reply.
+            ok_json(post(E2E_PATH, serde_json::json!({ "mode": "sealed-only" }), &owner));
+            let mut params = HashMap::new();
+            params.insert("deviceId".to_string(), id.clone());
+            let g = ok_json(handle_device_get(&params, "owner"));
+            assert_eq!(g["e2e"]["enforce"], true);
+            assert_eq!(g["e2e"]["mode"], "sealed-only");
+            ok_json(post(DEVICE_E2E_PATH, serde_json::json!({ "deviceId": id, "mode": "off" }), &owner));
+            let g = ok_json(handle_device_get(&params, "owner"));
+            assert_eq!(g["e2e"]["enforce"], false, "an off override never enforces");
+            // An unkeyed phone reads "Update app".
+            let old = did("e2e-old");
+            ok_json(post_json(
+                "/cli/push/register-device",
+                serde_json::json!({ "deviceId": old, "platform": "apns", "token": tok("old") }),
+                "owner",
+            ));
+            let list = ok_json(handle_owner_get(DEVICES_PATH, true));
+            let row = list["devices"].as_array().expect("devices").iter().find(|d| d["deviceId"] == old.as_str()).expect("row").clone();
+            assert_eq!(row["status"], "Update app");
+            assert!(row["e2e"].is_null());
+            push_devices::remove_device(&id).expect("cleanup");
+            push_devices::remove_device(&old).expect("cleanup");
+        });
+    }
+
+    /// The GET chain refuses the owner reads without a caller (403) and the
+    /// override on GET (405).
+    #[test]
+    fn e2e_routes_on_the_get_chain() {
+        let params = HashMap::new();
+        assert_eq!(dispatch(DEVICES_PATH, &params).expect("claimed").status, "403 Forbidden");
+        assert_eq!(dispatch(E2E_PATH, &params).expect("claimed").status, "403 Forbidden");
+        assert_eq!(dispatch(DEVICE_E2E_PATH, &params).expect("claimed").status, "405 Method Not Allowed");
+        assert_eq!(dispatch_post(DEVICES_PATH, b"{}", "owner").status, "405 Method Not Allowed");
     }
 }

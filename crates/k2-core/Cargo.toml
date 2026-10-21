@@ -192,6 +192,13 @@ sha2 = "0.10"
 # OS RNG. Already in the lock tree (the daemon and the shell use the same
 # 0.2).
 getrandom = "0.2"
+# End-to-end encrypted pushes (prd-e2e-push-v1 rev 2 §3): HPKE RFC 9180 PSK
+# mode, DHKEM(P-256, HKDF-SHA256) / HKDF-SHA256 / AES-256-GCM. rust-hpke 0.12
+# is MIT/Apache-2.0 and pulls only RustCrypto crates already in the tree
+# (p256 0.13, aes-gcm 0.10, hkdf 0.12). `p256` validates a phone key is on
+# the curve.
+hpke = { version = "0.12", default-features = false, features = ["alloc", "p256"] }
+p256 = { version = "0.13", default-features = false, features = ["ecdh", "arithmetic"] }
 # Ticket HTML brief (prd-ticket-html-brief-v1 H11/H34): the daemon cleans
 # an agent's brief on write. ammonia is MIT/Apache, built on html5ever.
 # html5ever is pinned to ammonia's major so the tokenizer the brief

@@ -47,7 +47,13 @@ use std::fmt;
 
 pub mod budget;
 pub mod preview;
+// End-to-end encrypted pushes (prd-e2e-push-v1 rev 2, 0.46.3): additive,
+// beside today's path. `seal` = HPKE PSK + padding; `e2e` = who gets what.
+pub mod e2e;
+pub mod seal;
+mod e2e_tests;
 mod legacy_golden;
+mod vectors;
 
 /// Events the daemon emits to the user's configured push target.
 #[derive(Debug, Clone)]
@@ -726,6 +732,9 @@ pub struct GatewayResponse {
     pub body: String,
     /// The response carried [`S0_MARKER_HEADER`]: [`S0_MARKER_VALUE`].
     pub s0: bool,
+    /// prd-e2e-push-v1: the response carried `X-K2-Push-Caps` listing
+    /// `s1` ([`e2e::CAPS_HEADER`]): this relay accepts the sealed kinds.
+    pub s1: bool,
 }
 
 impl GatewayResponse {
@@ -761,7 +770,22 @@ pub trait DispatchSender: Send + Sync {
         auth: &GatewayAuth,
         body: &serde_json::Value,
     ) -> Result<GatewayResponse, PushError>;
+
+    /// One SEALED dispatch (prd-e2e-push-v1 §4): the same POST with a 10 s
+    /// timeout. The caller never retries it and never falls back to the
+    /// shared token.
+    fn post_sealed(
+        &self,
+        url: &str,
+        auth: &GatewayAuth,
+        body: &serde_json::Value,
+    ) -> Result<GatewayResponse, PushError> {
+        self.post(url, auth, body)
+    }
 }
+
+/// The timeout of a sealed dispatch call.
+pub const SEALED_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Production sender: blocking reqwest POST with the chosen bearer (and
 /// `X-K2-Subdomain` on the per-daemon path). Mirrors the [`Webhook`]
@@ -777,7 +801,31 @@ impl DispatchSender for HttpDispatchSender {
         auth: &GatewayAuth,
         body: &serde_json::Value,
     ) -> Result<GatewayResponse, PushError> {
-        let mut request = reqwest::blocking::Client::new()
+        Self::send(reqwest::blocking::Client::new(), url, auth, body)
+    }
+
+    fn post_sealed(
+        &self,
+        url: &str,
+        auth: &GatewayAuth,
+        body: &serde_json::Value,
+    ) -> Result<GatewayResponse, PushError> {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(SEALED_TIMEOUT)
+            .build()
+            .map_err(|e| PushError::Transport(e.to_string()))?;
+        Self::send(client, url, auth, body)
+    }
+}
+
+impl HttpDispatchSender {
+    fn send(
+        client: reqwest::blocking::Client,
+        url: &str,
+        auth: &GatewayAuth,
+        body: &serde_json::Value,
+    ) -> Result<GatewayResponse, PushError> {
+        let mut request = client
             .post(url)
             .header("Content-Type", "application/json")
             .header("Authorization", format!("Bearer {}", auth.bearer()))
@@ -795,8 +843,13 @@ impl DispatchSender for HttpDispatchSender {
             .get(S0_MARKER_HEADER)
             .and_then(|v| v.to_str().ok())
             .is_some_and(|v| v.trim().eq_ignore_ascii_case(S0_MARKER_VALUE));
+        let s1 = response
+            .headers()
+            .get(e2e::CAPS_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(e2e::caps_has_s1);
         let body = response.text().unwrap_or_default();
-        Ok(GatewayResponse { status, body, s0 })
+        Ok(GatewayResponse { status, body, s0, s1 })
     }
 }
 
@@ -877,6 +930,16 @@ impl GatewayConfig {
         let tunnel = crate::tunnel::config::load().unwrap_or_default();
         Self::resolve(url, token, Some(tunnel.token), Some(tunnel.subdomain))
     }
+
+    /// prd-e2e-push-v1 §4: sealed pushes may go now. They need the
+    /// per-daemon path (the relay refuses them on the shared token), no
+    /// fresh refusal of it, and a relay that advertised `s1`.
+    pub fn sealed_ready(&self, now: i64) -> bool {
+        self.tunnel.is_some()
+            && tunnel_rejected_recently(now).is_none()
+            && !old_gateway_recently(now)
+            && e2e::relay_s1(&self.url)
+    }
 }
 
 // ── Relay path state (§6.3, k2-connect PR #13 review finding 2) ─────────
@@ -954,6 +1017,16 @@ pub fn tunnel_rejected_recently(now: i64) -> Option<String> {
 #[cfg(any(test, feature = "test-util"))]
 pub fn reset_relay_state_for_test() {
     note_tunnel_accepted();
+}
+
+/// Test-only: serialize the tests that drive the per-daemon relay path
+/// (its refusal state is process-wide). Resets the state on entry.
+#[cfg(test)]
+pub(crate) fn relay_state_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let g = LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    reset_relay_state_for_test();
+    g
 }
 
 /// The `push` field of `GET /cli/notify/prefs` (§5.6, TP25).
@@ -1046,6 +1119,44 @@ impl RelayPath {
 pub struct K2Cloud {
     config: GatewayConfig,
     sender: std::sync::Arc<dyn DispatchSender>,
+}
+
+/// One person's devices split into lanes (prd-e2e-push-v1 §4).
+#[derive(Debug, Default)]
+pub struct LanePlan<'a> {
+    /// Today's path, unchanged.
+    pub legacy: Vec<&'a crate::push_devices::PushDevice>,
+    /// Sealed, each with its active key.
+    pub sealed: Vec<(&'a crate::push_devices::PushDevice, crate::push_device_keys::StoredKey)>,
+    /// `sealed-only` generic ("K2 / New message").
+    pub generic: Vec<&'a crate::push_devices::PushDevice>,
+}
+
+/// Why one device's sealed push was skipped (logged by class only).
+#[derive(Debug)]
+enum SealFailure {
+    Counter,
+    Kind,
+    Seal(seal::SealError),
+}
+
+impl SealFailure {
+    fn class(&self) -> &'static str {
+        match self {
+            Self::Counter => "counter",
+            Self::Kind => "kind",
+            Self::Seal(seal::SealError::TooLarge { .. }) => "too_large",
+            Self::Seal(seal::SealError::BadKey(_)) => "bad_key",
+            Self::Seal(_) => "seal",
+        }
+    }
+}
+
+fn unix_now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 /// The exact env/settings keys [`GatewayConfig::from_config`] reads.
@@ -1201,6 +1312,9 @@ impl K2Cloud {
             if !old_gateway_recently(now) || shared.is_none() {
                 let auth = GatewayAuth::Tunnel { token: token.clone(), subdomain: subdomain.clone() };
                 let resp = self.sender.post(url, &auth, body)?;
+                // prd-e2e-push-v1: learn the relay's `s1` capability from
+                // every per-daemon response (a rollback clears it).
+                e2e::note_relay_caps(&self.config.url, resp.s1);
                 if resp.is_success() {
                     note_tunnel_accepted();
                     return Ok(serde_json::from_str(&resp.body).unwrap_or(serde_json::Value::Null));
@@ -1266,7 +1380,52 @@ impl K2Cloud {
     /// payload variant ([`Self::payload_groups`]: a Thread preview to
     /// devices with previews on, the generic body to the rest) and per
     /// [`MAX_DEVICES_PER_CALL`] devices; dead tokens are pruned.
+    ///
+    /// prd-e2e-push-v1 (0.46.3): the devices are first split into lanes
+    /// ([`Self::plan_lanes`], with the server's `pushE2E`): today's path
+    /// (unchanged, byte for byte), sealed, and `sealed-only` generic.
     pub fn dispatch(
+        &self,
+        event: &PushEvent,
+        badge_key: &str,
+        devices: &[crate::push_devices::PushDevice],
+    ) -> Result<(), PushError> {
+        self.dispatch_in_mode(event, badge_key, devices, e2e::server_mode())
+    }
+
+    /// [`Self::dispatch`] with the server mode given.
+    pub fn dispatch_in_mode(
+        &self,
+        event: &PushEvent,
+        badge_key: &str,
+        devices: &[crate::push_devices::PushDevice],
+        mode: e2e::PushE2eMode,
+    ) -> Result<(), PushError> {
+        let now = unix_now();
+        let plan = Self::plan_lanes(Some(&self.config), event, devices, mode, now);
+        let mut result = Ok(());
+        if !plan.legacy.is_empty() {
+            // Today's path, unchanged.
+            let legacy: Vec<_> = plan.legacy.iter().map(|d| (*d).clone()).collect();
+            result = self.dispatch_legacy(event, badge_key, &legacy);
+        }
+        if !plan.generic.is_empty() {
+            let r = self.dispatch_generic(event, badge_key, &plan.generic);
+            if result.is_ok() {
+                result = r;
+            }
+        }
+        if !plan.sealed.is_empty() {
+            let r = self.dispatch_sealed(event, badge_key, &plan.sealed, now);
+            if result.is_ok() {
+                result = r;
+            }
+        }
+        result
+    }
+
+    /// Today's path (0.46.3-r3), unchanged: one call per payload variant.
+    fn dispatch_legacy(
         &self,
         event: &PushEvent,
         badge_key: &str,
@@ -1277,6 +1436,175 @@ impl K2Cloud {
             self.dispatch_one(&variant, badge_key, &group)?;
         }
         Ok(())
+    }
+
+    /// Split one person's devices into lanes (prd-e2e-push-v1 §4). Kinds
+    /// the sealed path doesn't handle (the desktop-era events) are all
+    /// today's path. A badge push to a `sealed-only` unkeyed phone is
+    /// today's badge payload (it carries no names or ids), so it stays on
+    /// today's path.
+    pub fn plan_lanes<'a>(
+        config: Option<&GatewayConfig>,
+        event: &PushEvent,
+        devices: &'a [crate::push_devices::PushDevice],
+        mode: e2e::PushE2eMode,
+        now: i64,
+    ) -> LanePlan<'a> {
+        if !e2e::is_sealable(event) {
+            return LanePlan { legacy: devices.iter().collect(), ..Default::default() };
+        }
+        Self::plan_device_lanes(config, devices, mode, now, matches!(event, PushEvent::Badge(_)))
+    }
+
+    /// [`Self::plan_lanes`] for a sealable kind (`badge` = a badge push).
+    pub fn plan_device_lanes<'a>(
+        config: Option<&GatewayConfig>,
+        devices: &'a [crate::push_devices::PushDevice],
+        mode: e2e::PushE2eMode,
+        now: i64,
+        badge: bool,
+    ) -> LanePlan<'a> {
+        let mut plan = LanePlan::default();
+        if devices.is_empty() {
+            return plan;
+        }
+        let ids: Vec<&str> = devices.iter().map(|d| d.device_id.as_str()).collect();
+        let states = match crate::push_device_keys::states(&ids) {
+            Ok(s) => s,
+            Err(e) => {
+                // No keys known: every device falls to its no-key lane.
+                crate::log_debug!("[push] e2e state read failed: {e}");
+                Default::default()
+            }
+        };
+        let sealed_ok = config.is_some_and(|c| c.sealed_ready(now));
+        for d in devices {
+            let st = states.get(&d.device_id).cloned().unwrap_or_default();
+            let eff = e2e::effective(mode, st.override_);
+            let key = st.key.filter(|k| k.is_active(now));
+            match e2e::lane(eff, key.is_some(), sealed_ok) {
+                e2e::Lane::Legacy => plan.legacy.push(d),
+                e2e::Lane::Generic if badge => plan.legacy.push(d),
+                e2e::Lane::Generic => plan.generic.push(d),
+                e2e::Lane::Sealed => plan.sealed.push((d, key.expect("sealed lane has a key"))),
+            }
+        }
+        plan
+    }
+
+    /// `sealed-only`: "K2 / New message" to phones without a key.
+    fn dispatch_generic(
+        &self,
+        event: &PushEvent,
+        badge_key: &str,
+        devices: &[&crate::push_devices::PushDevice],
+    ) -> Result<(), PushError> {
+        let stamp = PushStamp { subdomain: self.config.subdomain.clone(), instance_id: instance_id() };
+        let payload = e2e::generic_payload(event, &stamp, badge_key);
+        let url = format!("{}/push/dispatch", self.config.url);
+        let devices: Vec<_> = devices.iter().map(|d| (*d).clone()).collect();
+        for chunk in devices.chunks(MAX_DEVICES_PER_CALL) {
+            let body = Self::dispatch_body(chunk, &payload);
+            let response = self.post_with_fallback(&url, &body)?;
+            Self::prune_dead(&response);
+        }
+        Ok(())
+    }
+
+    /// The sealed lane (prd-e2e-push-v1 §4, §5): one blob per device, all of
+    /// a person's keyed devices in one relay call (per
+    /// [`MAX_DEVICES_PER_CALL`]). Per-daemon auth only, a 10 s timeout, no
+    /// retry, no shared-token fallback; errors carry the class only.
+    fn dispatch_sealed(
+        &self,
+        event: &PushEvent,
+        badge_key: &str,
+        devices: &[(&crate::push_devices::PushDevice, crate::push_device_keys::StoredKey)],
+        now: i64,
+    ) -> Result<(), PushError> {
+        let kind = if matches!(event, PushEvent::Badge(_)) { seal::SealKind::Nudge } else { seal::SealKind::Alert };
+        let stamp = PushStamp { subdomain: self.config.subdomain.clone(), instance_id: instance_id() };
+        let now_ms = unix_now_ms();
+        let mut entries = Vec::with_capacity(devices.len());
+        for (d, key) in devices {
+            match Self::seal_for(event, kind, d, key, &stamp, badge_key, now, now_ms) {
+                Ok(e2e) => entries.push(e2e::SealedEntry { platform: d.platform.clone(), token: d.token.clone(), e2e }),
+                // Never a plaintext fallback for a keyed phone; the class only.
+                Err(e) => crate::log_debug!("[push] sealed push skipped for one device: {}", e.class()),
+            }
+        }
+        let url = format!("{}/push/dispatch", self.config.url);
+        for chunk in entries.chunks(MAX_DEVICES_PER_CALL) {
+            let body = e2e::sealed_dispatch_body(kind, chunk);
+            let response = self.post_sealed(&url, &body, now)?;
+            Self::prune_dead(&response);
+        }
+        Ok(())
+    }
+
+    /// Build, fit, pad and seal one device's plaintext.
+    #[allow(clippy::too_many_arguments)]
+    fn seal_for(
+        event: &PushEvent,
+        kind: seal::SealKind,
+        device: &crate::push_devices::PushDevice,
+        key: &crate::push_device_keys::StoredKey,
+        stamp: &PushStamp,
+        badge_key: &str,
+        now: i64,
+        now_ms: i64,
+    ) -> Result<String, SealFailure> {
+        let ctr = crate::push_device_keys::take_ctr(&device.device_id, now_ms).map_err(|_| SealFailure::Counter)?;
+        let ctx = e2e::SealCtx { kid: key.key_id.clone(), ctr, ts: now, stamp: stamp.clone(), badge_key: badge_key.to_string() };
+        let json = match event {
+            PushEvent::Badge(b) => e2e::fit_nudge(&e2e::nudge_plaintext(b, &ctx)),
+            _ => {
+                // The device's own previews choice decides the lock screen
+                // text; names and ids always ride inside the blob.
+                let shown = if device.previews { event.clone() } else { event.without_preview() };
+                let v = e2e::alert_plaintext(&shown, &ctx).ok_or(SealFailure::Kind)?;
+                e2e::fit_alert(&v)
+            }
+        }
+        .map_err(SealFailure::Seal)?;
+        seal::seal(kind, &key.public_key, &key.psk, &json).map_err(SealFailure::Seal)
+    }
+
+    /// POST one sealed body: per-daemon auth, 10 s timeout, never retried,
+    /// never the shared token. The relay capability is learned from the
+    /// response. An error carries the status and the relay's error code
+    /// only (V37: `results[].error` can hold a device URL).
+    fn post_sealed(&self, url: &str, body: &serde_json::Value, now: i64) -> Result<serde_json::Value, PushError> {
+        let Some((token, subdomain)) = self.config.tunnel.as_ref() else {
+            return Err(PushError::BadConfig("sealed pushes need the per-daemon relay path".into()));
+        };
+        let auth = GatewayAuth::Tunnel { token: token.clone(), subdomain: subdomain.clone() };
+        let resp = self.sender.post_sealed(url, &auth, body)?;
+        e2e::note_relay_caps(&self.config.url, resp.s1);
+        if resp.is_success() {
+            note_tunnel_accepted();
+            return Ok(serde_json::from_str(&resp.body).unwrap_or(serde_json::Value::Null));
+        }
+        let reason = resp.reason();
+        if matches!(resp.status, 401 | 403) && resp.s0 {
+            note_tunnel_rejected(now, &reason);
+        }
+        Err(PushError::Remote { status: resp.status, body: reason })
+    }
+
+    /// Prune tokens the gateway marks `dead:true`.
+    fn prune_dead(response: &serde_json::Value) {
+        if let Some(results) = response.get("results").and_then(|r| r.as_array()) {
+            for entry in results {
+                let dead = entry.get("dead").and_then(|d| d.as_bool()).unwrap_or(false);
+                let token = entry.get("token").and_then(|t| t.as_str());
+                if let (true, Some(token)) = (dead, token) {
+                    if let Err(e) = crate::push_devices::prune_device_by_token(token) {
+                        crate::log_debug!("[push] dead-token prune failed: {e}");
+                    }
+                }
+            }
+        }
     }
 
     /// One payload to these devices.
@@ -1506,6 +1834,7 @@ mod tests {
                 status: 200,
                 body: self.response.to_string(),
                 s0: false,
+                s1: false,
             }))
         }
     }
@@ -1971,6 +2300,9 @@ mod tests {
     /// they never race each other.
     #[test]
     fn per_daemon_auth_falls_back_only_for_an_unmarked_refusal() {
+        // The relay path state is process-wide: tests that drive the
+        // per-daemon path take turns.
+        let _relay = relay_state_test_lock();
         set_instance_id(TEST_INSTANCE);
         let both = GatewayConfig::resolve(None, Some("shared-gw".into()), Some("tun-tok".into()), Some("rosson".into()))
             .expect("config");
@@ -1981,8 +2313,9 @@ mod tests {
             status,
             body: serde_json::json!({ "error": { "code": code } }).to_string(),
             s0,
+            s1: false,
         };
-        let ok = || GatewayResponse { status: 200, body: r#"{"results":[]}"#.into(), s0: true };
+        let ok = || GatewayResponse { status: 200, body: r#"{"results":[]}"#.into(), s0: true, s1: false };
         let now = unix_now();
 
         // 1. Accepted: one call, tunnel token + X-K2-Subdomain.
@@ -2048,7 +2381,7 @@ mod tests {
 
     #[test]
     fn gateway_response_reason_reads_the_error_code() {
-        let r = |b: &str| GatewayResponse { status: 403, body: b.into(), s0: true }.reason();
+        let r = |b: &str| GatewayResponse { status: 403, body: b.into(), s0: true, s1: false }.reason();
         assert_eq!(r(r#"{"error":{"code":"suspended"}}"#), "suspended");
         assert_eq!(r(r#"{"error":"unknown_token"}"#), "unknown_token");
         assert_eq!(r(r#"{"code":"subdomain_not_owned"}"#), "subdomain_not_owned");

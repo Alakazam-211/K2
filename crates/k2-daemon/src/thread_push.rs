@@ -80,10 +80,15 @@ pub struct Post {
 /// How one person's phones split on previews right now.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PreviewSplit {
-    /// Phones with previews on.
+    /// Phones on today's path with previews on.
     pub on: usize,
-    /// Phones with previews off.
+    /// Phones on today's path with previews off.
     pub off: usize,
+    /// Phones that get a sealed push (prd-e2e-push-v1 §4): one gateway
+    /// call for all of them, whatever their previews.
+    pub sealed: usize,
+    /// Phones that get the `sealed-only` generic push: one call.
+    pub generic: usize,
 }
 
 /// What the coalescer needs from the daemon.
@@ -239,17 +244,27 @@ impl Coalescer {
         } else {
             String::new()
         };
-        let mut calls = 1;
-        if !preview.is_empty() {
-            let split = env.preview_split(&w.devices);
+        //
+        // prd-e2e-push-v1 §4 (V9): budget by the MODE split. Sealed phones
+        // are one more call (whatever their previews; the preview rides
+        // inside each phone's blob), `sealed-only` generic phones one more.
+        // With neither, this is today's rule unchanged.
+        let split = env.preview_split(&w.devices);
+        let extra = usize::from(split.sealed > 0) + usize::from(split.generic > 0);
+        let legacy = split.on + split.off;
+        let mut calls = if legacy > 0 || extra == 0 { 1 } else { 0 };
+        if !preview.is_empty() && (legacy > 0 || extra == 0) {
             if split.on == 0 {
-                preview.clear();
+                // No legacy phone shows it; sealed phones still need it.
+                if split.sealed == 0 {
+                    preview.clear();
+                }
             } else if split.off > 0 {
                 calls = 2;
             }
         }
-        let mut granted = env.take_budget(now, calls);
-        if !granted && calls == 2 {
+        let mut granted = env.take_budget(now, calls + extra);
+        if !granted && calls == 2 && extra == 0 {
             // One token left: one generic call to every phone.
             preview.clear();
             granted = env.take_budget(now, 1);
@@ -338,8 +353,7 @@ impl PushEnv for DaemonEnv {
 
     fn preview_split(&self, device_usernames: &[String]) -> PreviewSplit {
         let devices = k2_core::push_devices::list_devices_for_usernames(device_usernames).unwrap_or_default();
-        let on = devices.iter().filter(|d| d.previews).count();
-        PreviewSplit { on, off: devices.len() - on }
+        crate::push_routes::thread_lane_split(&devices)
     }
 
     fn send(&self, event: PushEvent) {
@@ -547,6 +561,8 @@ mod tests {
         previews_off: Cell<bool>,
         /// Logins whose phones have previews OFF.
         previews_off_logins: RefCell<HashSet<String>>,
+        /// Logins whose phones get sealed pushes (prd-e2e-push-v1).
+        sealed_logins: RefCell<HashSet<String>>,
         /// Gateway calls taken from the budget, in order.
         calls_taken: RefCell<Vec<usize>>,
         /// (person, conversation) pairs that are muted.
@@ -600,7 +616,8 @@ mod tests {
         fn preview_split(&self, device_usernames: &[String]) -> PreviewSplit {
             let off_set = self.previews_off_logins.borrow();
             let off = device_usernames.iter().filter(|u| off_set.contains(*u)).count();
-            PreviewSplit { on: device_usernames.len() - off, off }
+            let sealed = self.sealed_logins.borrow().iter().filter(|u| device_usernames.contains(u)).count();
+            PreviewSplit { on: device_usernames.len() - off - sealed, off, sealed, generic: 0 }
         }
         fn send(&self, event: PushEvent) {
             match event {
@@ -972,5 +989,50 @@ mod tests {
                 ("New message in Thread".to_string(), vec!["off".to_string()]),
             ]
         );
+    }
+
+    /// prd-e2e-push-v1 §4 (V9): the budget counts the MODE split. Sealed
+    /// phones are one call whatever their previews, and they keep the
+    /// preview (it rides inside each blob) even when no legacy phone shows
+    /// it.
+    #[test]
+    fn sealed_phones_are_one_more_call_and_keep_the_preview() {
+        let t0 = Instant::now();
+        // owner: one legacy phone (previews on) + one sealed phone.
+        let env = Fake::with(&[("owner", &["owner", "ipad"])]);
+        env.sealed_logins.borrow_mut().insert("ipad".into());
+        let mut c = Coalescer::new();
+        c.post(&env, said("e2e1", 1, ThreadMsgKind::Text, "Deploy done."), t0);
+        assert_eq!(*env.calls_taken.borrow(), vec![2], "legacy + sealed");
+        assert_eq!(env.sent()[0].preview, "Deploy done.");
+
+        // Only sealed phones: one call, preview kept for the blob.
+        let env = Fake::with(&[("owner", &["ipad"])]);
+        env.sealed_logins.borrow_mut().insert("ipad".into());
+        let mut c = Coalescer::new();
+        c.post(&env, said("e2e2", 1, ThreadMsgKind::Text, "Deploy done."), t0);
+        assert_eq!(*env.calls_taken.borrow(), vec![1]);
+        assert_eq!(env.sent()[0].preview, "Deploy done.", "sealed phones still get the preview");
+
+        // Legacy previews off + sealed: the preview is NOT cleared (the
+        // sealed phone needs it); K2Cloud sends legacy-off the generic body.
+        let env = Fake::with(&[("owner", &["owner", "ipad"])]);
+        env.sealed_logins.borrow_mut().insert("ipad".into());
+        env.previews_off_logins.borrow_mut().insert("owner".into());
+        let mut c = Coalescer::new();
+        c.post(&env, said("e2e3", 1, ThreadMsgKind::Text, "Deploy done."), t0);
+        assert_eq!(*env.calls_taken.borrow(), vec![2]);
+        assert_eq!(env.sent()[0].preview, "Deploy done.");
+
+        // Split legacy + sealed = 3 calls; with too little budget nothing is
+        // sent (no partial fallback that would blank the sealed phone).
+        let env = Fake::with(&[("owner", &["owner", "z3thon", "ipad"])]);
+        env.sealed_logins.borrow_mut().insert("ipad".into());
+        env.previews_off_logins.borrow_mut().insert("z3thon".into());
+        env.budget.set(Some(2));
+        let mut c = Coalescer::new();
+        c.post(&env, said("e2e4", 1, ThreadMsgKind::Text, "Deploy done."), t0);
+        assert!(env.sent().is_empty(), "over budget: held, not half-sent");
+        assert_eq!(env.budget.get(), Some(2), "nothing spent");
     }
 }

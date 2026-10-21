@@ -115,6 +115,33 @@ pub fn upsert_device_for_session(
     previews: Option<bool>,
     session_sid: Option<&str>,
 ) -> Result<PushDevice, String> {
+    upsert_device_e2e(
+        device_id,
+        platform,
+        token,
+        username,
+        previews,
+        session_sid,
+        crate::push_device_keys::E2eChange::Keep,
+    )
+}
+
+/// [`upsert_device_for_session`] plus the phone's push key
+/// (prd-e2e-push-v1 rev 2 §7.1, migration 0211), in ONE transaction:
+/// - a register that changes the device's login deletes the key row
+///   first (V12: the old person's key must never stay attached);
+/// - then `e2e`: [`Keep`](crate::push_device_keys::E2eChange::Keep) leaves
+///   it, `Delete` removes it, `Set` stores it (the same key again is a
+///   no-op).
+pub fn upsert_device_e2e(
+    device_id: &str,
+    platform: &str,
+    token: &str,
+    username: &str,
+    previews: Option<bool>,
+    session_sid: Option<&str>,
+    e2e: crate::push_device_keys::E2eChange,
+) -> Result<PushDevice, String> {
     let session_sid = session_sid.map(str::trim).filter(|s| !s.is_empty());
     let device_id = device_id.trim();
     let token = token.trim();
@@ -137,7 +164,21 @@ pub fn upsert_device_for_session(
     let now = now_secs();
     let db = crate::db::shared();
     let conn = db.lock();
-    conn.execute(
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|e| format!("push device upsert failed: {e}"))?;
+    let prev_user: Option<String> = tx
+        .query_row(
+            "SELECT username FROM push_devices WHERE device_id = ?1",
+            params![device_id],
+            |r| r.get(0),
+        )
+        .map(Some)
+        .or_else(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            e => Err(format!("push device upsert failed: {e}")),
+        })?;
+    tx.execute(
         "INSERT INTO push_devices (device_id, platform, token, username, \
          created_at, updated_at, last_seen_at, previews, session_sid) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?5, ?6, ?7) \
@@ -150,12 +191,33 @@ pub fn upsert_device_for_session(
         params![device_id, platform, token, username, now, previews.map(i64::from), session_sid],
     )
     .map_err(|e| format!("push device upsert failed: {e}"))?;
-    conn.query_row(
-        &format!("{DEVICE_SELECT} WHERE device_id = ?1"),
-        params![device_id],
-        row_to_device,
+    if prev_user.as_deref().is_some_and(|u| u != username) {
+        crate::push_device_keys::delete_key_in(&tx, device_id)?;
+    }
+    match e2e {
+        crate::push_device_keys::E2eChange::Keep => {}
+        crate::push_device_keys::E2eChange::Delete => {
+            crate::push_device_keys::delete_key_in(&tx, device_id)?;
+        }
+        crate::push_device_keys::E2eChange::Set(key) => {
+            crate::push_device_keys::put_key_in(&tx, device_id, &key, now)?;
+        }
+    }
+    let device = tx
+        .query_row(&format!("{DEVICE_SELECT} WHERE device_id = ?1"), params![device_id], row_to_device)
+        .map_err(|e| format!("push device readback failed: {e}"))?;
+    tx.commit().map_err(|e| format!("push device upsert failed: {e}"))?;
+    Ok(device)
+}
+
+/// Delete the key rows of the devices a `WHERE` clause selects (V13: every
+/// delete path deletes key rows explicitly; the FK is the second guard).
+fn delete_keys_where(conn: &rusqlite::Connection, clause: &str, p: &dyn rusqlite::ToSql) -> Result<usize, String> {
+    conn.execute(
+        &format!("DELETE FROM push_device_keys WHERE device_id IN (SELECT device_id FROM push_devices WHERE {clause})"),
+        [p],
     )
-    .map_err(|e| format!("push device readback failed: {e}"))
+    .map_err(|e| format!("push key delete failed: {e}"))
 }
 
 /// Unregister a device by its id. `Ok(true)` when a row was removed,
@@ -164,6 +226,7 @@ pub fn upsert_device_for_session(
 pub fn remove_device(device_id: &str) -> Result<bool, String> {
     let db = crate::db::shared();
     let conn = db.lock();
+    crate::push_device_keys::delete_key_in(&conn, device_id)?;
     let n = conn
         .execute(
             "DELETE FROM push_devices WHERE device_id = ?1",
@@ -241,6 +304,7 @@ pub fn remove_devices_for_sessions(
 ) -> Result<usize, String> {
     let mut n = 0;
     for sid in session_sids {
+        delete_keys_where(conn, "session_sid = ?1", sid)?;
         n += conn
             .execute("DELETE FROM push_devices WHERE session_sid = ?1", params![sid])
             .map_err(|e| format!("push device session cleanup failed: {e}"))?;
@@ -296,6 +360,7 @@ pub fn prune_devices_without_live_session(
             }
         };
         if dead {
+            crate::push_device_keys::delete_key_in(conn, &device_id)?;
             n += conn
                 .execute("DELETE FROM push_devices WHERE device_id = ?1", params![device_id])
                 .map_err(|e| format!("push device sweep failed: {e}"))?;
@@ -311,6 +376,7 @@ pub fn prune_devices_without_live_session(
 pub fn prune_device_by_token(token: &str) -> Result<usize, String> {
     let db = crate::db::shared();
     let conn = db.lock();
+    delete_keys_where(&conn, "token = ?1", &token)?;
     conn.execute(
         "DELETE FROM push_devices WHERE token = ?1",
         params![token],

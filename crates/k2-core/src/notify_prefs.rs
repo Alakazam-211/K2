@@ -387,6 +387,14 @@ pub fn cleanup_removed_user(conn: &Connection, username: &str) -> Result<(), Str
         return Ok(());
     }
     delete_person(conn, &name)?;
+    // prd-e2e-push-v1 (V13): their phones' push keys go explicitly first
+    // (the foreign key cascade is only the second guard).
+    conn.execute(
+        "DELETE FROM push_device_keys WHERE device_id IN \
+         (SELECT device_id FROM push_devices WHERE username = ?1)",
+        params![name],
+    )
+    .map_err(|e| format!("push key cleanup: {e}"))?;
     conn.execute("DELETE FROM push_devices WHERE username = ?1", params![name])
         .map_err(|e| format!("push device cleanup: {e}"))?;
     // Their read cursors and mutes go too (thread-read-v1).

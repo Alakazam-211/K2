@@ -958,6 +958,11 @@ pub const ROUTES: &[Route] = &[
     // decision-k2-runtime-v1 stage 0: `k2 app validate` (parse + leak lints).
     get("/cli/publish/validate", Member),
     get("/cli/push/device", Member),
+    // prd-e2e-push-v1 §4a: the E2E switch, the per-device override and
+    // the phone list are the owner's (testing and rollback controls).
+    post("/cli/push/device/e2e", Owner),
+    get("/cli/push/devices", Owner),
+    both("/cli/push/e2e", Owner),
     post("/cli/push/register-device", Member),
     post("/cli/push/unregister-device", Member),
     post("/cli/relations/create", Member),

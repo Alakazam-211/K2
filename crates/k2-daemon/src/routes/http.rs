@@ -218,6 +218,19 @@ pub(crate) fn host_is_web_app(headers_blob: &str) -> bool {
         .contains(WEB_APP_HOST_MARKER)
 }
 
+/// prd-e2e-push-v1 rev 2 §7.1 (V15): true when a request carries the
+/// Cloudflare Worker's markers (`X-K2-Client: web`, an `X-Forwarded-Host`
+/// under `.app.k2.dev`) or a `.app.k2.dev` Host. A phone's push key + PSK
+/// must never come that way; the daemon refuses `e2e` on such a request.
+/// A belt only: the Worker sends `Host: <label>.k2.dev`, so the real
+/// guarantee is the phone's (it never sends `e2e` to an `.app.k2.dev` URL).
+pub(crate) fn push_key_via_web_path(headers_blob: &str) -> bool {
+    has_web_client_header(headers_blob)
+        || host_is_web_app(headers_blob)
+        || extract_header(headers_blob, "X-Forwarded-Host")
+            .is_some_and(|h| host_no_port(h).to_ascii_lowercase().contains(WEB_APP_HOST_MARKER))
+}
+
 /// Caddy front door: reserved `skin.*` **or** a nested Connect label
 /// whose target is Caddy loopback 38472. Dual filter with the Caddy
 /// path-allow list: even a Connect token on this Host must not get

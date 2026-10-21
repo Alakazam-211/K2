@@ -1380,6 +1380,12 @@ pub fn live_inputs() -> Result<PlanInputs, CliResponse> {
 
 /// k2.db (+ WAL), mail-secrets.json, certs/, settings.json, tunnel.json
 /// under `home` (PRD §3 step 3). Missing parts count 0.
+///
+/// prd-e2e-push-v1 (V17): when a backup COPIES k2.db, it must call
+/// `k2_core::push_device_keys::scrub_snapshot` on the copy before it leaves
+/// the box (phones' push keys + PSKs never travel; phones re-register
+/// after a restore). As of 0.46.3 the backup only plans sizes here; no copy
+/// of k2.db is made yet.
 pub fn k2_half_bytes(home: &Path) -> u64 {
     let len = |p: PathBuf| std::fs::symlink_metadata(&p).map(|m| m.len()).unwrap_or(0);
     let db = k2_core::db::resolve_home_db_path(home);

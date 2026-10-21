@@ -1,0 +1,622 @@
+//! The tests that guard the E2E push claim (prd-e2e-push-v1 rev 2 §8):
+//! the no-leak canary test, the legacy-unchanged golden with keys present,
+//! the switch modes, the `s1` relay gate, the dispatch round trip and the
+//! phone-side replay check (a test helper, as the phones implement it).
+
+#![cfg(test)]
+
+use super::e2e::{self, PushE2eMode};
+use super::legacy_golden;
+use super::seal::{self, SealKind};
+use super::*;
+use crate::push_device_keys::{self as keys, DeviceOverride, E2eChange, NewKey};
+use std::sync::{Arc, Mutex};
+
+/// Records every call (auth + body); answers 200 with the S0 marker and,
+/// when `caps_s1`, `X-K2-Push-Caps: s1`. Scripted responses go first.
+struct Relay {
+    calls: Mutex<Vec<(GatewayAuth, serde_json::Value, bool)>>,
+    caps_s1: Mutex<bool>,
+    script: Mutex<std::collections::VecDeque<GatewayResponse>>,
+}
+
+impl Relay {
+    fn new(caps_s1: bool) -> Arc<Self> {
+        Arc::new(Self { calls: Mutex::new(Vec::new()), caps_s1: Mutex::new(caps_s1), script: Mutex::new(Default::default()) })
+    }
+    fn calls(&self) -> Vec<(GatewayAuth, serde_json::Value, bool)> {
+        self.calls.lock().expect("relay").clone()
+    }
+    fn clear(&self) {
+        self.calls.lock().expect("relay").clear();
+    }
+    fn respond(&self) -> GatewayResponse {
+        if let Some(r) = self.script.lock().expect("relay").pop_front() {
+            return r;
+        }
+        GatewayResponse {
+            status: 200,
+            body: "{\"ok\":true,\"results\":[]}".into(),
+            s0: true,
+            s1: *self.caps_s1.lock().expect("relay"),
+        }
+    }
+}
+
+impl DispatchSender for Relay {
+    fn post(&self, _url: &str, auth: &GatewayAuth, body: &serde_json::Value) -> Result<GatewayResponse, PushError> {
+        self.calls.lock().expect("relay").push((auth.clone(), body.clone(), false));
+        Ok(self.respond())
+    }
+    fn post_sealed(&self, _url: &str, auth: &GatewayAuth, body: &serde_json::Value) -> Result<GatewayResponse, PushError> {
+        self.calls.lock().expect("relay").push((auth.clone(), body.clone(), true));
+        Ok(self.respond())
+    }
+}
+
+fn unique_url(label: &str) -> String {
+    format!("https://push-{label}-{}.k2.dev", uuid::Uuid::new_v4().simple())
+}
+
+/// A per-daemon (tunnel) cloud, `subdomain` = rosson.
+fn tunnel_cloud(url: &str, relay: Arc<Relay>) -> K2Cloud {
+    K2Cloud::with_config(
+        GatewayConfig {
+            url: url.into(),
+            tunnel: Some(("tunnel-tok".into(), "rosson".into())),
+            shared_token: Some("shared-tok".into()),
+            subdomain: "rosson".into(),
+        },
+        relay,
+    )
+}
+
+/// The phone's key for a seed: (private key, NewKey).
+fn phone_key(seed: u8) -> (Vec<u8>, NewKey) {
+    let (sk, pk) = seal::derive_keypair(&[seed; 32]);
+    let psk = vec![seed ^ 0x5a; 32];
+    (sk, NewKey { key_id: seal::key_id(&pk), public_key: pk, psk })
+}
+
+/// Register a device in the (scoped) DB, optionally with a key.
+fn register(id: &str, platform: &str, token: &str, previews: bool, key: Option<&NewKey>) -> crate::push_devices::PushDevice {
+    let change = match key {
+        Some(k) => E2eChange::Set(k.clone()),
+        None => E2eChange::Keep,
+    };
+    crate::push_devices::upsert_device_e2e(id, platform, token, "owner", Some(previews), None, change).expect("register")
+}
+
+const CANARIES: &[&str] = &[
+    "CanaryAgentZx",
+    "CanaryProjectQv",
+    "canary-preview-text",
+    "conv-canary-77",
+    "addr-canary/rev",
+    "fb-canary-42",
+    "grp-canary-9",
+    "proj-canary-1",
+    "rosson",
+    "9f2c0a1b3d4e5f60",
+];
+
+fn canary_events() -> Vec<PushEvent> {
+    let thread = |kind: ThreadMsgKind, count: u32| {
+        PushEvent::ThreadPost(ThreadPush {
+            agent_name: "CanaryAgentZx".into(),
+            conversation_id: "conv-canary-77".into(),
+            addr: "addr-canary/rev".into(),
+            seq: 7,
+            project_id: "proj-canary-1".into(),
+            msg_kind: kind,
+            count,
+            principal: "owner".into(),
+            device_usernames: vec!["owner".into()],
+            unread_total: "4".into(),
+            waiting_total: "1".into(),
+            avatar_rev: "ba7816bf8f01cfea".into(),
+            agent_color: "#3b82f6".into(),
+            preview: "canary-preview-text".into(),
+        })
+    };
+    vec![
+        thread(ThreadMsgKind::Text, 1),
+        thread(ThreadMsgKind::Text, 3),
+        thread(ThreadMsgKind::Choice, 1),
+        thread(ThreadMsgKind::Secret, 1),
+        PushEvent::FeedbackCreated { agent_name: "CanaryAgentZx".into(), feedback_id: "fb-canary-42".into(), assignees: vec![] },
+        PushEvent::FeedbackCommented { feedback_id: "fb-canary-42".into(), assignees: vec![] },
+        PushEvent::ProjectMessageCreated { project_name: "CanaryProjectQv".into(), group_id: "grp-canary-9".into() },
+        PushEvent::ProjectPost(ProjectPush {
+            project_name: "CanaryProjectQv".into(),
+            group_id: "grp-canary-9".into(),
+            principal: "owner".into(),
+            device_usernames: vec!["owner".into()],
+            unread_total: "7".into(),
+            waiting_total: "2".into(),
+        }),
+        PushEvent::Badge(BadgePush {
+            principal: "owner".into(),
+            device_usernames: vec!["owner".into()],
+            unread_total: "3".into(),
+            waiting_total: "1".into(),
+        }),
+    ]
+}
+
+fn assert_no_canary(wire: &str, what: &str) {
+    for c in CANARIES {
+        assert!(!wire.contains(c), "{what}: canary {c:?} on the wire: {wire}");
+    }
+}
+
+/// The canary invariant (§8): for every mobile kind × (sealed, legacy-
+/// generic) × device previews × owner previews switch, the full dispatch
+/// body carries none of the plaintext fields: agent/project names, the
+/// preview, conversationId, addr, feedbackId, groupId, projectId, and
+/// (sealed kinds) not even the server name or instance id.
+#[test]
+fn no_plaintext_field_ever_rides_a_sealed_or_generic_push() {
+    let _db = crate::db::scoped_for_test();
+    let _relay = super::relay_state_test_lock();
+    set_instance_id(legacy_golden::GOLDEN_INSTANCE);
+    let (_, k1) = phone_key(1);
+    let (_, k2) = phone_key(2);
+    let keyed = vec![
+        register("nl-on", "apns", "tok-nl-on", true, Some(&k1)),
+        register("nl-off", "fcm", "tok-nl-off", false, Some(&k2)),
+    ];
+    let unkeyed = vec![register("nl-old-on", "apns", "tok-nl-old-on", true, None), register("nl-old-off", "fcm", "tok-nl-old-off", false, None)];
+    for owner_previews in [true, false] {
+        for event in canary_events() {
+            let event = if owner_previews { event } else { event.without_preview() };
+            // Sealed: keyed devices, sealed-when-supported and sealed-only.
+            for mode in [PushE2eMode::SealedWhenSupported, PushE2eMode::SealedOnly] {
+                let url = unique_url("noleak");
+                let relay = Relay::new(true);
+                e2e::note_relay_caps(&url, true);
+                tunnel_cloud(&url, relay.clone()).dispatch_in_mode(&event, "0123456789abcdef0123456789abcdef", &keyed, mode).expect("sealed");
+                let calls = relay.calls();
+                assert_eq!(calls.len(), 1, "one relay call for the person's keyed phones: {event:?}");
+                let (auth, body, sealed) = &calls[0];
+                assert!(*sealed && auth.is_tunnel(), "sealed rides the per-daemon path");
+                let wire = body.to_string();
+                assert_no_canary(&wire, &format!("sealed {mode:?} {event:?}"));
+                assert!(!wire.contains("badgeKey") && !wire.contains("0123456789abcdef0123456789abcdef"), "no badgeKey in clear");
+                assert!(!wire.contains(legacy_golden::GOLDEN_INSTANCE) && !wire.contains("instanceId"), "no instance id in clear");
+                assert!(!wire.contains("subdomain") && !wire.contains("unreadTotal"), "no stamp or counts in clear");
+                let payload = body["payload"].as_object().expect("payload");
+                assert_eq!(payload.keys().collect::<Vec<_>>(), vec!["data"], "payload is data only: {wire}");
+                let data = body["payload"]["data"].as_object().expect("data");
+                assert_eq!(data.len(), 2, "data is exactly {{kind, v}}: {wire}");
+                assert_eq!(data["v"], "1");
+                let want_kind = if matches!(event, PushEvent::Badge(_)) { "nudge" } else { "e2e" };
+                assert_eq!(data["kind"], want_kind);
+                for d in body["devices"].as_array().expect("devices") {
+                    let obj = d.as_object().expect("device");
+                    assert_eq!(obj.len(), 3, "device = platform, token, e2e: {d}");
+                    let len = d["e2e"].as_str().expect("e2e").len();
+                    assert_eq!(len, if want_kind == "nudge" { 452 } else { 2159 });
+                }
+            }
+            // Legacy-generic: unkeyed devices at sealed-only.
+            let url = unique_url("noleak-generic");
+            let relay = Relay::new(true);
+            e2e::note_relay_caps(&url, true);
+            tunnel_cloud(&url, relay.clone())
+                .dispatch_in_mode(&event, "0123456789abcdef0123456789abcdef", &unkeyed, PushE2eMode::SealedOnly)
+                .expect("generic");
+            for (_, body, sealed) in relay.calls() {
+                assert!(!sealed);
+                let wire = body.to_string();
+                if matches!(event, PushEvent::Badge(_)) {
+                    // A badge push is today's badge payload (no names or ids).
+                    assert_eq!(body["payload"], K2Cloud::payload(&event, &PushStamp { subdomain: "rosson".into(), instance_id: legacy_golden::GOLDEN_INSTANCE.into() }, "0123456789abcdef0123456789abcdef"));
+                    continue;
+                }
+                for c in CANARIES.iter().filter(|c| **c != "rosson" && **c != "9f2c0a1b3d4e5f60") {
+                    assert!(!wire.contains(c), "generic: canary {c:?}: {wire}");
+                }
+                assert_eq!(body["payload"]["title"], "K2");
+                assert_eq!(body["payload"]["body"], "New message");
+                assert!(body["payload"].get("threadId").is_none() && body["payload"].get("collapseId").is_none());
+            }
+        }
+    }
+}
+
+/// Opening what dispatch sent: each device's own blob opens with its own
+/// key only, carries today's title/body/data for that device's previews,
+/// the server stamp sealed, and a fresh counter.
+#[test]
+fn dispatch_seals_per_device_and_the_phone_opens_it() {
+    let _db = crate::db::scoped_for_test();
+    let _relay = super::relay_state_test_lock();
+    set_instance_id(legacy_golden::GOLDEN_INSTANCE);
+    let (sk1, k1) = phone_key(11);
+    let (sk2, k2) = phone_key(12);
+    let devices = vec![
+        register("rt-on", "apns", "tok-rt-on", true, Some(&k1)),
+        register("rt-off", "fcm", "tok-rt-off", false, Some(&k2)),
+    ];
+    let url = unique_url("roundtrip");
+    let relay = Relay::new(true);
+    e2e::note_relay_caps(&url, true);
+    let cloud = tunnel_cloud(&url, relay.clone());
+    let event = legacy_golden::golden_events()
+        .into_iter()
+        .find(|(n, _)| n == "thread-text-x1-preview")
+        .expect("case")
+        .1;
+    cloud.dispatch_in_mode(&event, "bk-test", &devices, PushE2eMode::SealedWhenSupported).expect("dispatch");
+    let calls = relay.calls();
+    assert_eq!(calls.len(), 1);
+    let devs = calls[0].1["devices"].as_array().expect("devices").clone();
+    assert_eq!(devs.len(), 2);
+    let blob_on = devs[0]["e2e"].as_str().expect("e2e");
+    let blob_off = devs[1]["e2e"].as_str().expect("e2e");
+    assert!(seal::open(SealKind::Alert, &sk2, &k2.psk, blob_on).is_err(), "another phone's key can't open it");
+    let on: serde_json::Value = serde_json::from_slice(&seal::open(SealKind::Alert, &sk1, &k1.psk, blob_on).expect("open")).expect("json");
+    let off: serde_json::Value = serde_json::from_slice(&seal::open(SealKind::Alert, &sk2, &k2.psk, blob_off).expect("open")).expect("json");
+    assert_eq!(on["v"], 1);
+    assert_eq!(on["kind"], "thread");
+    assert_eq!(on["kid"], k1.key_id);
+    assert_eq!(on["srv"], serde_json::json!({ "sub": "rosson", "iid": legacy_golden::GOLDEN_INSTANCE }));
+    assert_eq!(on["bk"], "bk-test");
+    assert_eq!(on["title"], "Cortana");
+    assert_eq!(on["body"], "Deploy finished, 3 checks green 🚀");
+    assert_eq!(off["body"], "New message in Thread", "previews off: today's generic line, inside the blob");
+    assert_eq!(on["group"], "thread:c-77");
+    assert_eq!(on["data"], event.data().to_value(), "today's data keys for the router");
+    assert!(on["ctr"].as_u64().expect("ctr") > 1_700_000_000_000, "ctr = max(next_ctr, unix_ms)");
+    // A second dispatch: a bigger counter.
+    let first = on["ctr"].as_u64().expect("ctr");
+    relay.clear();
+    cloud.dispatch_in_mode(&event, "bk-test", &devices[..1], PushE2eMode::SealedWhenSupported).expect("again");
+    let again = relay.calls()[0].1["devices"][0]["e2e"].as_str().expect("e2e").to_string();
+    let again: serde_json::Value = serde_json::from_slice(&seal::open(SealKind::Alert, &sk1, &k1.psk, &again).expect("open")).expect("json");
+    assert!(again["ctr"].as_u64().expect("ctr") > first);
+
+    // The nudge: totals only.
+    relay.clear();
+    let badge = legacy_golden::golden_events().into_iter().find(|(n, _)| n == "badge").expect("badge").1;
+    cloud.dispatch_in_mode(&badge, "bk-test", &devices[..1], PushE2eMode::SealedWhenSupported).expect("nudge");
+    let calls = relay.calls();
+    assert_eq!(calls[0].1["payload"], serde_json::json!({ "data": { "kind": "nudge", "v": "1" } }), "no title, no body");
+    let n: serde_json::Value = serde_json::from_slice(
+        &seal::open(SealKind::Nudge, &sk1, &k1.psk, calls[0].1["devices"][0]["e2e"].as_str().expect("e2e")).expect("open"),
+    )
+    .expect("json");
+    assert_eq!(n["kind"], "nudge");
+    assert_eq!(n["data"], serde_json::json!({ "unreadTotal": "3", "waitingTotal": "1" }));
+    assert!(n.get("group").is_none() && n.get("title").is_none());
+}
+
+/// Today's bodies, byte for byte, with keys registered: the switch `off`,
+/// a device override `off`, and a relay that never said `s1`.
+#[test]
+fn legacy_bodies_stay_byte_identical_with_keys_present() {
+    let _db = crate::db::scoped_for_test();
+    let _relay = super::relay_state_test_lock();
+    let (_, k1) = phone_key(21);
+    let (_, k2) = phone_key(22);
+    // The golden devices, now keyed in the DB.
+    register("golden-dev-on", "apns", "tok-golden-on", true, Some(&k1));
+    register("golden-dev-off", "fcm", "tok-golden-off", false, Some(&k2));
+    let run = |mode: PushE2eMode, caps: bool| {
+        let url = unique_url("golden-keys");
+        e2e::note_relay_caps(&url, caps);
+        legacy_golden::collect_with(
+            &|sender| {
+                K2Cloud::with_config(
+                    GatewayConfig {
+                        url: url.clone(),
+                        tunnel: Some(("tunnel-tok".into(), "rosson".into())),
+                        shared_token: Some("gw".into()),
+                        subdomain: "rosson".into(),
+                    },
+                    sender,
+                )
+            },
+            &|cloud, event, devices| {
+                cloud.dispatch_in_mode(event, legacy_golden::GOLDEN_BADGE_KEY, devices, mode).expect("dispatch");
+            },
+        )
+    };
+    legacy_golden::assert_matches_golden(&run(PushE2eMode::Off, true), "pushE2E off, keys present, relay s1");
+    legacy_golden::assert_matches_golden(&run(PushE2eMode::SealedWhenSupported, false), "relay without s1");
+    keys::set_override("golden-dev-on", Some(DeviceOverride::Off)).expect("override");
+    keys::set_override("golden-dev-off", Some(DeviceOverride::Off)).expect("override");
+    legacy_golden::assert_matches_golden(&run(PushE2eMode::SealedWhenSupported, true), "device override off");
+    legacy_golden::assert_matches_golden(&run(PushE2eMode::SealedOnly, true), "override off beats sealed-only");
+}
+
+/// §4's table, end to end through dispatch.
+#[test]
+fn switch_modes_and_overrides_follow_the_table() {
+    let _db = crate::db::scoped_for_test();
+    let _relay = super::relay_state_test_lock();
+    let (_, k) = phone_key(31);
+    let keyed = register("sw-key", "apns", "tok-sw-key", true, Some(&k));
+    let old = register("sw-old", "apns", "tok-sw-old", true, None);
+    let event = legacy_golden::golden_events().into_iter().find(|(n, _)| n == "ticket-created").expect("t").1;
+    let run = |mode: PushE2eMode| -> Vec<(bool, serde_json::Value)> {
+        let url = unique_url("switch");
+        let relay = Relay::new(true);
+        e2e::note_relay_caps(&url, true);
+        tunnel_cloud(&url, relay.clone())
+            .dispatch_in_mode(&event, "bk", &[keyed.clone(), old.clone()], mode)
+            .expect("dispatch");
+        relay.calls().into_iter().map(|(_, b, s)| (s, b)).collect()
+    };
+    let tokens = |b: &serde_json::Value| -> Vec<String> {
+        b["devices"].as_array().expect("d").iter().map(|d| d["token"].as_str().expect("t").to_string()).collect()
+    };
+    // off: one legacy call for both.
+    let c = run(PushE2eMode::Off);
+    assert_eq!(c.len(), 1);
+    assert!(!c[0].0);
+    assert_eq!(tokens(&c[0].1), vec!["tok-sw-key", "tok-sw-old"]);
+    // sealed-when-supported: legacy for the old phone, sealed for the keyed.
+    let c = run(PushE2eMode::SealedWhenSupported);
+    assert_eq!(c.len(), 2);
+    assert_eq!((c[0].0, tokens(&c[0].1)), (false, vec!["tok-sw-old".to_string()]));
+    assert_eq!((c[1].0, tokens(&c[1].1)), (true, vec!["tok-sw-key".to_string()]));
+    assert_eq!(c[0].1["payload"]["body"], "Cortana needs you on a ticket", "old phone: today's push");
+    // sealed-only: generic for the old phone.
+    let c = run(PushE2eMode::SealedOnly);
+    assert_eq!(c.len(), 2);
+    assert_eq!(c[0].1["payload"]["body"], "New message");
+    assert!(c[1].0);
+    // Override sealed beats a server `off`.
+    keys::set_override("sw-key", Some(DeviceOverride::Sealed)).expect("o");
+    let c = run(PushE2eMode::Off);
+    assert_eq!(c.len(), 2);
+    assert!(c.iter().any(|(s, b)| *s && tokens(b) == vec!["tok-sw-key"]));
+    // Override off beats sealed-when-supported.
+    keys::set_override("sw-key", Some(DeviceOverride::Off)).expect("o");
+    let c = run(PushE2eMode::SealedWhenSupported);
+    assert_eq!(c.len(), 1);
+    assert!(!c[0].0);
+    // An expired key is no key.
+    keys::set_override("sw-key", None).expect("o");
+    {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        conn.execute("UPDATE push_device_keys SET expires_at = 1 WHERE device_id = 'sw-key'", []).expect("expire");
+    }
+    let c = run(PushE2eMode::SealedWhenSupported);
+    assert_eq!(c.len(), 1, "expired key: today's path");
+    assert!(!c[0].0);
+    // The pure table.
+    use e2e::{effective, lane, Effective, Lane};
+    assert_eq!(effective(PushE2eMode::Off, None), Effective::Off);
+    assert_eq!(lane(Effective::Sealed, true, false), Lane::Legacy);
+    assert_eq!(lane(Effective::SealedOnly, false, true), Lane::Generic);
+    assert_eq!(lane(Effective::SealedOnly, true, false), Lane::Generic);
+    assert!(e2e::enforce(PushE2eMode::SealedOnly, None));
+    assert!(!e2e::enforce(PushE2eMode::SealedOnly, Some(DeviceOverride::Off)));
+    assert!(!e2e::enforce(PushE2eMode::SealedWhenSupported, None));
+}
+
+/// The `s1` gate: sealed only after the relay said `X-K2-Push-Caps: s1`;
+/// a response without it sends the next dispatch back to today's path; no
+/// tunnel (shared token only) is never sealed; a sealed refusal never
+/// falls back to the shared token or retries.
+#[test]
+fn sealed_waits_for_s1_and_never_falls_back() {
+    let _db = crate::db::scoped_for_test();
+    let _relay = super::relay_state_test_lock();
+    crate::push::reset_relay_state_for_test();
+    let (_, k) = phone_key(41);
+    let d = vec![register("s1-key", "apns", "tok-s1-key", true, Some(&k))];
+    let event = legacy_golden::golden_events().into_iter().find(|(n, _)| n == "project-post").expect("p").1;
+    let url = unique_url("s1");
+    let relay = Relay::new(true);
+    let cloud = tunnel_cloud(&url, relay.clone());
+    assert!(!e2e::relay_s1(&url), "unknown until seen");
+    cloud.dispatch_in_mode(&event, "bk", &d, PushE2eMode::SealedWhenSupported).expect("first");
+    assert!(!relay.calls()[0].2, "first push before s1 was seen: today's path");
+    assert!(e2e::relay_s1(&url), "learned from the legacy response");
+    relay.clear();
+    cloud.dispatch_in_mode(&event, "bk", &d, PushE2eMode::SealedWhenSupported).expect("second");
+    assert!(relay.calls()[0].2, "now sealed");
+    // Relay rollback: a response without s1.
+    *relay.caps_s1.lock().expect("relay") = false;
+    relay.clear();
+    cloud.dispatch_in_mode(&event, "bk", &d, PushE2eMode::SealedWhenSupported).expect("third");
+    assert!(relay.calls()[0].2, "this one was decided before the rollback was seen");
+    assert!(!e2e::relay_s1(&url), "the response without s1 is cached");
+    relay.clear();
+    cloud.dispatch_in_mode(&event, "bk", &d, PushE2eMode::SealedWhenSupported).expect("fourth");
+    assert!(!relay.calls()[0].2, "back on today's path");
+
+    // Shared token only: never sealed, whatever the cache says.
+    let url2 = unique_url("s1-shared");
+    e2e::note_relay_caps(&url2, true);
+    let relay2 = Relay::new(true);
+    K2Cloud::with_config(
+        GatewayConfig { url: url2.clone(), tunnel: None, shared_token: Some("gw".into()), subdomain: "rosson".into() },
+        relay2.clone(),
+    )
+    .dispatch_in_mode(&event, "bk", &d, PushE2eMode::SealedWhenSupported)
+    .expect("shared");
+    assert!(!relay2.calls()[0].2, "the relay refuses sealed kinds on the shared token");
+
+    // A sealed refusal: no shared fallback, no retry, error class only.
+    let url3 = unique_url("s1-refused");
+    e2e::note_relay_caps(&url3, true);
+    let relay3 = Relay::new(true);
+    relay3.script.lock().expect("relay").push_back(GatewayResponse {
+        status: 401,
+        body: "{\"error\":{\"code\":\"secret-detail-canary\"},\"results\":[{\"error\":\"/3/device/tok\"}]}".into(),
+        s0: false,
+        s1: false,
+    });
+    let err = tunnel_cloud(&url3, relay3.clone())
+        .dispatch_in_mode(&event, "bk", &d, PushE2eMode::SealedWhenSupported)
+        .expect_err("refused");
+    assert_eq!(relay3.calls().len(), 1, "exactly one call: no shared-token retry");
+    assert!(relay3.calls()[0].1.get("payload").is_some());
+    assert!(!err.to_string().contains("/3/device"), "the error carries the class only: {err}");
+    crate::push::reset_relay_state_for_test();
+}
+
+/// The capability header name and parsing are the relay contract.
+#[test]
+fn caps_header_contract() {
+    assert_eq!(e2e::CAPS_HEADER, "X-K2-Push-Caps");
+    assert_eq!(S0_MARKER_HEADER, "X-K2-Push-Gateway");
+    assert_eq!(S0_MARKER_VALUE, "s0", "the S0 marker never changes");
+    assert!(e2e::caps_has_s1("s1"));
+    assert!(e2e::caps_has_s1("s1, s2"));
+    assert!(e2e::caps_has_s1("x, S1"));
+    assert!(!e2e::caps_has_s1("s0"));
+    assert!(!e2e::caps_has_s1(""));
+    assert!(!e2e::caps_has_s1("s10"));
+    assert_eq!(seal::SealKind::Alert.b64_len(), 2159);
+    assert_eq!(seal::SealKind::Nudge.b64_len(), 452);
+}
+
+/// The truncation rule (§3): a too-long body is cut with "…" to fit;
+/// names are capped at 64 only when the body alone can't make room; the
+/// bucket never grows.
+#[test]
+fn alert_truncation_rule() {
+    let ctx = e2e::SealCtx {
+        kid: "0011223344556677".into(),
+        ctr: u64::MAX,
+        ts: i64::MAX,
+        stamp: PushStamp { subdomain: "s".repeat(63), instance_id: "f".repeat(16) },
+        badge_key: "b".repeat(32),
+    };
+    let ev = |preview: &str, agent: &str| {
+        let (_, e) = legacy_golden::golden_events().into_iter().find(|(n, _)| n == "thread-text-x1-preview").expect("e");
+        let PushEvent::ThreadPost(mut t) = e else { unreachable!() };
+        t.preview = preview.into();
+        t.agent_name = agent.into();
+        PushEvent::ThreadPost(t)
+    };
+    let max = seal::max_json(SealKind::Alert);
+    // Short: unchanged.
+    let v = e2e::alert_plaintext(&ev("hi", "Cortana"), &ctx).expect("v");
+    assert_eq!(e2e::fit_alert(&v).expect("fit"), serde_json::to_vec(&v).expect("json"));
+    // 140 chars of 4-byte emoji fits as is.
+    let emoji = "🚀".repeat(140);
+    let v = e2e::alert_plaintext(&ev(&emoji, "Cortana"), &ctx).expect("v");
+    let out: serde_json::Value = serde_json::from_slice(&e2e::fit_alert(&v).expect("fit")).expect("json");
+    assert_eq!(out["body"].as_str().expect("b").chars().count(), 140);
+    // A Thread preview is already capped at 140: a long one fits as is.
+    let long = "word ".repeat(1000);
+    let agent70 = "A".repeat(70);
+    let v = e2e::alert_plaintext(&ev(&long, &agent70), &ctx).expect("v");
+    let out: serde_json::Value = serde_json::from_slice(&e2e::fit_alert(&v).expect("fit")).expect("json");
+    assert_eq!(out["title"], agent70, "fits: a 70-char name is not capped");
+    // A body far over the bucket (a huge project name): cut with "…",
+    // fills the bucket.
+    let project = PushEvent::ProjectPost(ProjectPush {
+        project_name: "Apollo 🚀 ".repeat(400),
+        group_id: "pg-9".into(),
+        principal: "owner".into(),
+        device_usernames: vec!["owner".into()],
+        unread_total: "7".into(),
+        waiting_total: "2".into(),
+    });
+    let v = e2e::alert_plaintext(&project, &ctx).expect("v");
+    let bytes = e2e::fit_alert(&v).expect("fit");
+    assert!(bytes.len() <= max && bytes.len() > max - 6, "fills the bucket: {}", bytes.len());
+    let out: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+    assert!(out["body"].as_str().expect("b").starts_with("New message in Apollo"));
+    assert!(out["body"].as_str().expect("b").ends_with('…'));
+    assert_eq!(out["title"], "K2");
+    assert_eq!(out["data"]["groupId"], "pg-9", "ids are never cut");
+    let _ = &long;
+    // A huge name too: capped at 64 (63 + "…").
+    let agent2k = "N".repeat(2000);
+    let v = e2e::alert_plaintext(&ev(&long, &agent2k), &ctx).expect("v");
+    let out: serde_json::Value = serde_json::from_slice(&e2e::fit_alert(&v).expect("fit")).expect("json");
+    assert_eq!(out["title"].as_str().expect("t").chars().count(), 64);
+    assert_eq!(out["data"]["agentName"].as_str().expect("a").chars().count(), 64);
+    assert!(out["data"].get("avatarRev").is_some(), "avatarRev dropped only as the last step");
+    // An id that can't fit at all: an error, never a bigger bucket.
+    let mut v = e2e::alert_plaintext(&ev("x", "C"), &ctx).expect("v");
+    v["data"]["conversationId"] = "c".repeat(2000).into();
+    assert!(matches!(e2e::fit_alert(&v), Err(seal::SealError::TooLarge { .. })));
+}
+
+// ── Phone-side replay check (a test helper, as the phones implement it) ──
+
+/// §3 Replay, phone side: per key, the last 256 accepted `ctr` values. A
+/// push is fresh if its `ctr` isn't in the set, the set isn't full or the
+/// `ctr` is above the set's minimum, and `ts` is within 30 days and not
+/// more than 1 day ahead.
+struct ReplayGuard {
+    seen: std::collections::BTreeSet<u64>,
+}
+
+impl ReplayGuard {
+    const CAP: usize = 256;
+
+    fn new() -> Self {
+        Self { seen: Default::default() }
+    }
+
+    fn accept(&mut self, ctr: u64, ts: i64, now: i64) -> bool {
+        if ts < now - 30 * 86_400 || ts > now + 86_400 {
+            return false;
+        }
+        if self.seen.contains(&ctr) {
+            return false;
+        }
+        if self.seen.len() >= Self::CAP {
+            let min = *self.seen.iter().next().expect("non-empty");
+            if ctr <= min {
+                return false;
+            }
+            self.seen.remove(&min);
+        }
+        self.seen.insert(ctr);
+        true
+    }
+}
+
+#[test]
+fn replayed_pushes_are_rejected_on_the_open_side() {
+    let _db = crate::db::scoped_for_test();
+    let _relay = super::relay_state_test_lock();
+    let (sk, k) = phone_key(51);
+    let d = vec![register("rp-key", "apns", "tok-rp-key", true, Some(&k))];
+    let url = unique_url("replay");
+    let relay = Relay::new(true);
+    e2e::note_relay_caps(&url, true);
+    let cloud = tunnel_cloud(&url, relay.clone());
+    let event = legacy_golden::golden_events().into_iter().find(|(n, _)| n == "ticket-commented").expect("t").1;
+    let mut blobs = Vec::new();
+    for _ in 0..3 {
+        relay.clear();
+        cloud.dispatch_in_mode(&event, "bk", &d, PushE2eMode::SealedWhenSupported).expect("dispatch");
+        blobs.push(relay.calls()[0].1["devices"][0]["e2e"].as_str().expect("e2e").to_string());
+    }
+    let open = |b: &str| -> (u64, i64) {
+        let v: serde_json::Value = serde_json::from_slice(&seal::open(SealKind::Alert, &sk, &k.psk, b).expect("open")).expect("json");
+        (v["ctr"].as_u64().expect("ctr"), v["ts"].as_i64().expect("ts"))
+    };
+    let now = unix_now();
+    let mut guard = ReplayGuard::new();
+    for b in &blobs {
+        let (ctr, ts) = open(b);
+        assert!(guard.accept(ctr, ts, now), "a fresh push is accepted");
+    }
+    let (ctr0, ts0) = open(&blobs[0]);
+    assert!(!guard.accept(ctr0, ts0, now), "a replayed push is rejected");
+    assert!(!guard.accept(ctr0 + 10_000_000, now - 31 * 86_400, now), "older than 30 days");
+    assert!(!guard.accept(ctr0 + 10_000_001, now + 2 * 86_400, now), "more than a day ahead");
+    // A full set: anything at or below its minimum is stale.
+    let mut g = ReplayGuard::new();
+    for c in 1000..1256u64 {
+        assert!(g.accept(c, now, now));
+    }
+    assert!(!g.accept(999, now, now), "below the window minimum");
+    assert!(g.accept(5000, now, now));
+    assert!(!g.accept(1000, now, now), "evicted minimum can't come back");
+}

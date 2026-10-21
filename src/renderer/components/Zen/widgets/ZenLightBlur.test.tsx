@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+//
 // 0.46.3 Gardens "Light blur" (Garden settings → Appearance, this computer):
 // the Glass theme's progressive blur draws two backdrop layers per stack
 // instead of four. Off by default — today's look.

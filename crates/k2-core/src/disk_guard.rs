@@ -505,27 +505,41 @@ fn dev_parts(dev: u64) -> (u64, u64) {
     ((dev >> 24) & 0xff, dev & 0xff_ffff)
 }
 
-/// Mount point and fs type: `/proc/self/mountinfo` on Linux (the entry
-/// with this device whose mount point is the longest prefix of `path`).
+/// Mount point and fs type: `/proc/self/mountinfo` on Linux
+/// ([`pick_mount`]).
 #[cfg(target_os = "linux")]
 fn mount_of(path: &Path, maj: u64, min: u64) -> (Option<String>, Option<String>) {
     let Ok(info) = std::fs::read_to_string("/proc/self/mountinfo") else {
         return (None, None);
     };
     let canon = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let want = format!("{maj}:{min}");
-    let mut best: Option<(usize, String, String)> = None;
-    for line in info.lines() {
-        if let Some((mp, ty, dev)) = parse_mountinfo_line(line) {
-            if dev != want || !canon.starts_with(&mp) {
-                continue;
-            }
-            if best.as_ref().is_none_or(|(len, _, _)| mp.len() > *len) {
-                best = Some((mp.len(), mp, ty));
+    pick_mount(&info, &canon, &format!("{maj}:{min}"))
+}
+
+/// The mountinfo entry for `canon`: the entry with this device whose mount
+/// point is the longest prefix of the path; when no entry has the device
+/// (btrfs: `stat().st_dev` is a subvolume's anonymous device, e.g. `0:31`,
+/// that mountinfo never lists), the entry whose mount point is the longest
+/// prefix of the path.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn pick_mount(info: &str, canon: &Path, want: &str) -> (Option<String>, Option<String>) {
+    let longest = |by_dev: bool| -> Option<(usize, String, String)> {
+        let mut best: Option<(usize, String, String)> = None;
+        for line in info.lines() {
+            if let Some((mp, ty, dev)) = parse_mountinfo_line(line) {
+                if (by_dev && dev != want) || !canon.starts_with(&mp) {
+                    continue;
+                }
+                // `>=`: a later line over the same mount point (a mount on
+                // top of another) is the one in effect.
+                if best.as_ref().is_none_or(|(len, _, _)| mp.len() >= *len) {
+                    best = Some((mp.len(), mp, ty));
+                }
             }
         }
-    }
-    match best {
+        best
+    };
+    match longest(true).or_else(|| longest(false)) {
         Some((_, mp, ty)) => (Some(mp), Some(ty)),
         None => (None, None),
     }
@@ -1721,5 +1735,32 @@ mod tests {
         assert_eq!(meminfo_kib("MemTotal:  32818588 kB\nMemAvailable: 10485760 kB\n", "MemAvailable:"), Some(10_485_760));
         let line = "36 35 98:0 /mnt1 /mnt\\040two rw,noatime master:1 - ext4 /dev/root rw,errors=continue";
         assert_eq!(parse_mountinfo_line(line), Some(("/mnt two".into(), "ext4".into(), "98:0".into())));
+    }
+
+    /// btrfs (Arch/Omarchy, Fedora, openSUSE): `stat().st_dev` of a path
+    /// is the subvolume's anonymous device (`0:31`), which mountinfo never
+    /// lists (it shows `0:26` for every subvolume mount). The device match
+    /// finds nothing, so the longest mount-point prefix of the path wins;
+    /// an ext4 entry with a matching device still wins by device first.
+    #[test]
+    fn mount_lookup_falls_back_to_the_path_on_btrfs() {
+        let info = "\
+22 1 0:26 /@ / rw,relatime shared:1 - btrfs /dev/nvme0n1p2 rw,ssd,subvol=/@
+23 22 0:26 /@home /home rw,relatime shared:2 - btrfs /dev/nvme0n1p2 rw,ssd,subvol=/@home
+24 22 0:22 / /dev/shm rw,nosuid,nodev shared:3 - tmpfs tmpfs rw
+25 22 259:1 / /boot rw,relatime shared:4 - vfat /dev/nvme0n1p1 rw
+";
+        assert_eq!(pick_mount(info, Path::new("/"), "0:31"), (Some("/".into()), Some("btrfs".into())));
+        assert_eq!(pick_mount(info, Path::new("/home/k2/.k2"), "0:33"), (Some("/home".into()), Some("btrfs".into())));
+        assert_eq!(pick_mount(info, Path::new("/var/lib/postgresql"), "0:31"), (Some("/".into()), Some("btrfs".into())));
+        // A device that is listed still decides first.
+        assert_eq!(pick_mount(info, Path::new("/dev/shm/x"), "0:22"), (Some("/dev/shm".into()), Some("tmpfs".into())));
+        assert_eq!(pick_mount(info, Path::new("/boot/efi"), "259:1"), (Some("/boot".into()), Some("vfat".into())));
+        // ext4 with a matching device: the device entry, even under a
+        // longer unrelated prefix (none here), as before.
+        let ext4 = "36 1 8:1 / / rw - ext4 /dev/sda1 rw\n37 36 8:17 / /data rw - ext4 /dev/sdb1 rw\n";
+        assert_eq!(pick_mount(ext4, Path::new("/data/x"), "8:17"), (Some("/data".into()), Some("ext4".into())));
+        assert_eq!(pick_mount(ext4, Path::new("/srv"), "8:1"), (Some("/".into()), Some("ext4".into())));
+        assert_eq!(pick_mount("", Path::new("/"), "8:1"), (None, None));
     }
 }

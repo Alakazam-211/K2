@@ -996,8 +996,15 @@ pub fn call_capacity(total_bytes: u64) -> (u64, u64) {
     (m, (n / 10 * 10).min(500))
 }
 
-/// Remove voice: `sew media uninstall`, the TURN DNS record, the nested
+/// Remove voice: `sew media uninstall -y`, the TURN DNS record, the nested
 /// label, the vault key and the record. Chat keeps running.
+///
+/// The person already confirmed (the route needs `confirm: true`); the
+/// root helper passes Sew's `-y` (0.46.3: Sew asks "Uninstall voice? Live
+/// calls end." and, with no terminal to ask on, refused). Idempotent: when
+/// Sew (or the helper) says Sew or voice is not installed, K2's own voice
+/// records are still cleaned up, so a partly removed box can always be
+/// finished.
 pub fn uninstall(env: &Env) -> R<Value> {
     if !env.ops.linux() {
         return Err(no("unsupported", 409, "Sew voice runs on Linux boxes only"));
@@ -1008,10 +1015,43 @@ pub fn uninstall(env: &Env) -> R<Value> {
     }
     sup::helper_check(env)?;
     let _l = sup::begin(env)?;
-    sup::sew_run(env, &["media", "uninstall"], None).map_err(|e| no("media_uninstall_failed", 500, e))?;
-    let warnings = forget(env, &st);
+    let mut warnings = Vec::new();
+    let mut engine = "removed";
+    if let Err(e) = sup::sew_run(env, &["media", "uninstall"], None) {
+        if sew_needs_confirm(&e) {
+            // A root helper from before 0.46.3 runs Sew without `-y`.
+            return Err(no(
+                "helper_outdated",
+                409,
+                format!(
+                    "this root helper runs Sew's voice uninstall without -y, so Sew asked for a terminal: update the \
+                     helper (k2 root-helper update), then run k2 hostchat media uninstall --yes again ({e})"
+                ),
+            ));
+        }
+        if !media_not_installed(&e) {
+            return Err(no("media_uninstall_failed", 500, e));
+        }
+        engine = "already-gone";
+        warnings.push(format!("Sew had no voice engine to remove ({e}); K2's own voice records were cleaned up"));
+    }
+    warnings.extend(forget(env, &st));
     sup::changed("voice-removed");
-    Ok(json!({"ok": true, "state": "not-installed", "warnings": warnings}))
+    Ok(json!({"ok": true, "state": "not-installed", "engine": engine, "warnings": warnings}))
+}
+
+/// Sew's (or the helper's) words for "nothing to uninstall": the Sew
+/// binary is gone (`sew is not installed`, the helper), Sew's layout is
+/// gone (`Sew is not installed (… missing)`, Sew's preflight), or voice is
+/// (`voice is not installed`).
+pub fn media_not_installed(err: &str) -> bool {
+    let e = err.to_ascii_lowercase();
+    e.contains("sew is not installed") || e.contains("voice is not installed")
+}
+
+/// Sew's own confirm refusing for want of a terminal (no `-y` passed).
+fn sew_needs_confirm(err: &str) -> bool {
+    err.contains("needs confirmation: pass -y")
 }
 
 /// Drop everything K2 holds for voice (DNS record, nested label, vault

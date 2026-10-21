@@ -490,6 +490,16 @@ fn route(env: Env<'static>, path: &str, who: &Who, body: &[u8], params: &HashMap
         }
         "/cli/sew/media/uninstall" => {
             need_manage(who)?;
+            // Sew's own question, asked by the client (0.46.3): live calls
+            // end. Nothing runs without `confirm: true`.
+            let v = json_body(body)?;
+            if !b(&v, "confirm") {
+                return Err(no(
+                    "confirm_required",
+                    409,
+                    "Uninstall voice? Live calls end. Send {\"confirm\": true} (k2 hostchat media uninstall --yes)",
+                ));
+            }
             super::voice::uninstall(&env)
         }
         "/cli/sew/meet/bind" => {

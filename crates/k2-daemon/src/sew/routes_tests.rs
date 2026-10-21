@@ -497,6 +497,34 @@ fn the_meet_label_binds_to_an_apps_front_port_and_unbinds() {
     assert_eq!(t.ops.nested.lock().unwrap().len(), n);
 }
 
+/// 0.46.3 (ops on a real box): Sew asks "Uninstall voice? Live calls end."
+/// and refused with no terminal. The route now needs `confirm: true` (the
+/// client asked the person) and runs nothing without it.
+#[test]
+fn media_uninstall_needs_an_explicit_confirm_and_runs_nothing_without_it() {
+    let t = t();
+    with_media(&t);
+    let (st, v) = t.call(&Who::Owner, "/cli/sew/server/enable", json!({"tarballPath": TARBALL, "voice": {"mediaTarballPath": MEDIA}}));
+    assert_eq!(st, "200 OK", "{v}");
+    assert_eq!(t.get(&Who::Owner, "/cli/sew/status").1["voice"]["state"], "running");
+    t.ops.clear();
+    for body in [json!({}), json!({"confirm": false}), json!({"confirm": "yes"}), json!({"yes": true})] {
+        let (st, v) = t.call(&Who::Owner, "/cli/sew/media/uninstall", body.clone());
+        assert_eq!((st.as_str(), code(&v)), ("409 Conflict", "confirm_required"), "{body}: {v}");
+        assert!(v["error"]["hint"].as_str().unwrap().contains("--yes"), "the hint names the CLI flag: {v}");
+    }
+    assert_eq!(t.ops.effects(), Vec::<String>::new(), "no confirm, no helper call");
+    assert_eq!(t.get(&Who::Owner, "/cli/sew/status").1["voice"]["state"], "running", "voice untouched");
+    t.ops.clear(); // the status read asked `media status`
+    // A Manage Sew agent with the confirm gets through.
+    let (st, v) = t.call(&agent("w-it"), "/cli/sew/media/uninstall", json!({"confirm": true}));
+    assert_eq!(st, "200 OK", "{v}");
+    assert_eq!(v["state"], "not-installed");
+    assert_eq!(v["engine"], "removed");
+    assert_eq!(t.ops.effects(), vec!["engine sew media uninstall"]);
+    assert_eq!(t.get(&Who::Owner, "/cli/sew/status").1["voice"]["state"], "not-installed");
+}
+
 #[test]
 fn enable_takes_an_explicit_standalone_identity_and_voice_in_one_call() {
     let t = t();

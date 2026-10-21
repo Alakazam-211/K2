@@ -290,6 +290,9 @@ pub enum SewVerb {
     /// sysctl drop-in when `sysctl` is `apply`). TURN TLS PEM text in the
     /// request is written to the helper's fixed staging files (K13).
     MediaInstall,
+    /// `sew media uninstall -y` (0.46.3: `-y` answers Sew's "Live calls
+    /// end." prompt, which refuses with no terminal; the daemon asks the
+    /// person first).
     MediaUninstall,
     /// `sew media upgrade --tarball <staged pin media tarball> --now`, run
     /// by the installed core once it IS the pin (protocol 8): the sidecar
@@ -313,7 +316,8 @@ pub enum SewVerb {
     MediaTurnCert,
     /// `sew media status` (read-only).
     MediaStatus,
-    /// `sew media enable` / `sew media disable` (start / drain and stop).
+    /// `sew media enable` / `sew media disable -y` (start / drain and stop;
+    /// `-y` answers Sew's "Disable voice?" prompt, 0.46.3).
     MediaEnable,
     MediaDisable,
     /// `sew media probe-record --udp <r> --tcp <r> --turn-tls <r> --from k2`

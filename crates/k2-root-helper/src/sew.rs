@@ -145,9 +145,13 @@ pub fn run(ctx: &Ctx, verb: &SewVerb, stdin: &[u8], who: &Caller) -> HResult<J> 
         SewVerb::MediaInstall => media_install(ctx, stdin),
         SewVerb::MediaUpgrade => media_upgrade(ctx),
         SewVerb::MediaRollback => media_rollback(ctx),
+        // `-y`: Sew asks "Uninstall voice? Live calls end." / "Disable
+        // voice? …" on a terminal and refuses without one (the helper never
+        // has one). Both verbs are daemon-only and the daemon asks the
+        // person first (`/cli/sew/media/uninstall` needs `confirm: true`).
         SewVerb::MediaUninstall => {
             require_known(ctx)?;
-            let mut out = run_sew(ctx, &["media", "uninstall"], None)?;
+            let mut out = run_sew(ctx, &["media", "uninstall", "-y"], None)?;
             if out["sewExit"] == 0 {
                 out["noticesRemoved"] = notices_or_error(remove_notices(ctx, SEW_MEDIA_DOC_DIR).map(|a| json!(a)));
             }
@@ -165,7 +169,7 @@ pub fn run(ctx: &Ctx, verb: &SewVerb, stdin: &[u8], who: &Caller) -> HResult<J> 
         }
         SewVerb::MediaDisable => {
             require_known(ctx)?;
-            run_sew(ctx, &["media", "disable"], None)
+            run_sew(ctx, &["media", "disable", "-y"], None)
         }
         SewVerb::MediaProbeRecord { udp, tcp, tls } => {
             require_known(ctx)?;

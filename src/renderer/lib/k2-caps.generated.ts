@@ -89,6 +89,7 @@ export const K2_CAPS = {
     sentence: 'See who has access to the agents on this computer: the App guests and agent logins with a grant on each room, and their roles.',
     exposure: ['app', 'garden-local'],
   },
+  'project:write': { label: 'Post in project chats (needs it in every member room)', exposure: ['app'] },
 } as const satisfies Record<string, K2CapInfo>
 
 export type K2Cap = keyof typeof K2_CAPS

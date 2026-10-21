@@ -137,94 +137,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                 Ok(id) => id,
                 Err(e) => return Some(e),
             };
-            let after = match opt_param(params, "after") {
-                Some(raw) => match raw.parse::<i64>() {
-                    Ok(ts) => Some(ts),
-                    Err(_) => {
-                        return Some(usage_error(format!(
-                            "invalid after '{raw}' — expected a unix-seconds timestamp"
-                        )))
-                    }
-                },
-                None => None,
-            };
-            let limit = match opt_param(params, "limit") {
-                Some(raw) => match raw.parse::<i64>() {
-                    Ok(n) => Some(n),
-                    Err(_) => {
-                        return Some(usage_error(format!(
-                            "invalid limit '{raw}' — expected a positive integer"
-                        )))
-                    }
-                },
-                None => None,
-            };
-            // thread-delta-v1: `after_seq=N` → seq > N, oldest first,
-            // `has_more` when newer messages remain. Messages never change
-            // after posting, so `changed` / `removed` are always empty.
-            if let Some(raw) = params.get("after_seq") {
-                let after_seq = match raw.trim().parse::<i64>() {
-                    Ok(n) if n >= 0 => n,
-                    _ => {
-                        return Some(usage_error(format!(
-                            "invalid after_seq '{raw}' — expected a whole number >= 0"
-                        )))
-                    }
-                };
-                if after.is_some() {
-                    return Some(usage_error("after_seq cannot be combined with after"));
-                }
-                if params.contains_key("before_seq") {
-                    return Some(usage_error("after_seq cannot be combined with before_seq"));
-                }
-                return Some(match messages_after_seq_body(&group_id, after_seq, limit) {
-                    Ok(body) => CliResponse::ok_json(body.to_string()),
-                    Err(e) => e,
-                });
-            }
-            // project-chat-paging-v1: `before_seq=N` → the newest `limit`
-            // messages with seq < N, oldest first; `has_more` when OLDER
-            // messages remain. The phone pages back from its oldest cached
-            // seq until `has_more` is false.
-            if let Some(raw) = params.get("before_seq") {
-                let before_seq = match raw.trim().parse::<i64>() {
-                    Ok(n) if n >= 1 => n,
-                    _ => {
-                        return Some(usage_error(format!(
-                            "invalid before_seq '{raw}' — expected a whole number >= 1"
-                        )))
-                    }
-                };
-                if after.is_some() {
-                    return Some(usage_error("before_seq cannot be combined with after"));
-                }
-                return Some(match project_groups::list_messages_before_seq(&group_id, before_seq, limit) {
-                    Ok(page) => CliResponse::ok_json(
-                        serde_json::json!({
-                            "ok": true,
-                            "groupId": group_id,
-                            "before_seq": before_seq,
-                            "messages": messages_view(&page.messages),
-                            "has_more": page.truncated,
-                            "truncated": page.truncated,
-                        })
-                        .to_string(),
-                    ),
-                    Err(e) => core_error(e),
-                });
-            }
-            match project_groups::list_messages(&group_id, after, limit) {
-                Ok(page) => CliResponse::ok_json(
-                    serde_json::json!({
-                        "ok": true,
-                        "groupId": group_id,
-                        "messages": messages_view(&page.messages),
-                        "truncated": page.truncated,
-                    })
-                    .to_string(),
-                ),
-                Err(e) => core_error(e),
-            }
+            messages_read(&group_id, params)
         }
 
         // GET /cli/project-group/resources?group=<id|name|prefix>
@@ -304,6 +217,103 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         _ => return None,
     };
     Some(resp)
+}
+
+/// The body of every `/cli/project-group/messages` read for a resolved
+/// project: the plain latest page, `after` (unix seconds), `after_seq`
+/// (thread-delta-v1) or `before_seq` (project-chat-paging-v1). The App
+/// transport (`project.read`, 0.46.3) answers through this same function,
+/// so a guest's page is byte-identical to the owner's for the same seqs.
+pub(crate) fn messages_read(group_id: &str, params: &HashMap<String, String>) -> CliResponse {
+    let group_id = group_id.to_string();
+    let after = match opt_param(params, "after") {
+        Some(raw) => match raw.parse::<i64>() {
+            Ok(ts) => Some(ts),
+            Err(_) => {
+                return usage_error(format!(
+                    "invalid after '{raw}' — expected a unix-seconds timestamp"
+                ))
+            }
+        },
+        None => None,
+    };
+    let limit = match opt_param(params, "limit") {
+        Some(raw) => match raw.parse::<i64>() {
+            Ok(n) => Some(n),
+            Err(_) => {
+                return usage_error(format!(
+                    "invalid limit '{raw}' — expected a positive integer"
+                ))
+            }
+        },
+        None => None,
+    };
+    // thread-delta-v1: `after_seq=N` → seq > N, oldest first,
+    // `has_more` when newer messages remain. Messages never change
+    // after posting, so `changed` / `removed` are always empty.
+    if let Some(raw) = params.get("after_seq") {
+        let after_seq = match raw.trim().parse::<i64>() {
+            Ok(n) if n >= 0 => n,
+            _ => {
+                return usage_error(format!(
+                    "invalid after_seq '{raw}' — expected a whole number >= 0"
+                ))
+            }
+        };
+        if after.is_some() {
+            return usage_error("after_seq cannot be combined with after");
+        }
+        if params.contains_key("before_seq") {
+            return usage_error("after_seq cannot be combined with before_seq");
+        }
+        return match messages_after_seq_body(&group_id, after_seq, limit) {
+            Ok(body) => CliResponse::ok_json(body.to_string()),
+            Err(e) => e,
+        };
+    }
+    // project-chat-paging-v1: `before_seq=N` → the newest `limit`
+    // messages with seq < N, oldest first; `has_more` when OLDER
+    // messages remain. The phone pages back from its oldest cached
+    // seq until `has_more` is false.
+    if let Some(raw) = params.get("before_seq") {
+        let before_seq = match raw.trim().parse::<i64>() {
+            Ok(n) if n >= 1 => n,
+            _ => {
+                return usage_error(format!(
+                    "invalid before_seq '{raw}' — expected a whole number >= 1"
+                ))
+            }
+        };
+        if after.is_some() {
+            return usage_error("before_seq cannot be combined with after");
+        }
+        return match project_groups::list_messages_before_seq(&group_id, before_seq, limit) {
+            Ok(page) => CliResponse::ok_json(
+                serde_json::json!({
+                    "ok": true,
+                    "groupId": group_id,
+                    "before_seq": before_seq,
+                    "messages": messages_view(&page.messages),
+                    "has_more": page.truncated,
+                    "truncated": page.truncated,
+                })
+                .to_string(),
+            ),
+            Err(e) => core_error(e),
+        };
+    }
+    match project_groups::list_messages(&group_id, after, limit) {
+        Ok(page) => CliResponse::ok_json(
+            serde_json::json!({
+                "ok": true,
+                "groupId": group_id,
+                "messages": messages_view(&page.messages),
+                "truncated": page.truncated,
+            })
+            .to_string(),
+        ),
+        Err(e) => core_error(e),
+    }
 }
 
 /// The project chat read path (`k2 project read`, the drawer, K2 Companion).
@@ -1550,19 +1560,81 @@ pub fn handle_msg_as(body: &[u8], session_author: &str, agent_workspace: Option<
         }
     });
 
+    let posted = match store_and_deliver(
+        &group,
+        &group_id,
+        author,
+        author_kind,
+        author_workspace_id.as_deref(),
+        author_person.as_deref(),
+        &b.body,
+    ) {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
+    let Posted { msg, delivered, delivery_reason, delivered_session } = posted;
+
+    CliResponse::ok_json(
+        serde_json::json!({
+            "ok": true,
+            "id": msg.id,
+            "groupId": group_id,
+            "groupName": group.name,
+            "author": msg.author,
+            "authorKind": msg.author_kind,
+            "body": msg.body,
+            "createdAt": msg.created_at,
+            "seq": msg.seq,
+            "delivered": delivered,
+            "deliveryReason": delivery_reason,
+            "deliveredSessionId": delivered_session,
+        })
+        .to_string(),
+    )
+}
+
+/// A stored project chat line and what its point-of-contact delivery did.
+pub(crate) struct Posted {
+    pub msg: project_groups::ProjectGroupMessage,
+    pub delivered: bool,
+    pub delivery_reason: Option<String>,
+    pub delivered_session: Option<String>,
+}
+
+/// Store -> read state -> live frames -> emit -> push -> best-effort PoC
+/// injection, for an author the caller already resolved and admitted (the
+/// frozen §4.3 matrix in [`handle_msg`]). One path for every author kind:
+/// the owner, a Connect login, a member agent ([`handle_msg_as`]) and an App
+/// guest (`apps::project_chat`, 0.46.3). `author_workspace_id` is the
+/// posting agent's workspace (`None` for people and guests);
+/// `author_person` is a person author's read-state key (`None` for agents
+/// and guests: a guest advances its own cursor itself, and a guest's line
+/// pushes to every person's phone).
+pub(crate) fn store_and_deliver(
+    group: &project_groups::ProjectGroup,
+    group_id: &str,
+    author: &str,
+    author_kind: &str,
+    author_workspace_id: Option<&str>,
+    author_person: Option<&str>,
+    body: &str,
+) -> Result<Posted, CliResponse> {
     // Store.
-    let msg = match project_groups::post_message_as(&group_id, author, author_kind, &b.body) {
+    let msg = match project_groups::post_message_as(group_id, author, author_kind, body) {
         Ok(m) => m,
-        Err(e) => return core_error(e),
+        Err(e) => return Err(core_error(e)),
     };
     // A person's own line advances their own cursor (it never counts as
     // unread for them), then every connected person's counts follow.
-    if let Some(person) = author_person.as_deref() {
+    if let Some(person) = author_person {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        crate::read_routes::note_own_read(&conn, person, k2_core::read_state::KIND_PROJECT, &group_id, msg.seq);
+        crate::read_routes::note_own_read(&conn, person, k2_core::read_state::KIND_PROJECT, group_id, msg.seq);
     }
-    crate::read_live::conversation_changed(k2_core::read_state::KIND_PROJECT, &group_id);
+    crate::read_live::conversation_changed(k2_core::read_state::KIND_PROJECT, group_id);
+    // 0.46.3 App project chat: the line goes out on the project chat bus
+    // (`project.events`, and any App stream that includes project frames).
+    crate::apps::project_chat::publish(&msg);
 
     // Emit BEFORE the injection so an open drawer / badge never waits
     // on a slow wake (the feedback_routes ordering).
@@ -1581,11 +1653,11 @@ pub fn handle_msg_as(body: &[u8], session_author: &str, agent_workspace: Option<
     // muted the chat, each with that person's totals. Content-free:
     // project name + group id, NEVER the message text (§4.5).
     // Dormant/fire-and-forget inside push_routes.
-    crate::push_routes::notify_project_message_created(&group.name, &group_id, author_person.as_deref());
+    crate::push_routes::notify_project_message_created(&group.name, group_id, author_person);
 
     // §4.3 — best-effort PoC injection. PoC identity is read AT STORE
     // TIME (re-read after the insert, not from the pre-store snapshot).
-    let poc = match project_groups::get_poc(&group_id) {
+    let poc = match project_groups::get_poc(group_id) {
         Ok(p) => p,
         Err(_) => None, // group deleted mid-post: message stored; nothing to inject into.
     };
@@ -1594,7 +1666,7 @@ pub fn handle_msg_as(body: &[u8], session_author: &str, agent_workspace: Option<
         // post is a NORMAL success.
         None => (false, Some("no_poc".to_string()), None),
         // The PoC's own posts never self-inject (frozen matrix).
-        Some(poc_id) if author_workspace_id.as_deref() == Some(poc_id) => {
+        Some(poc_id) if author_workspace_id == Some(poc_id) => {
             (false, Some("author-is-poc".to_string()), None)
         }
         Some(poc_id) => {
@@ -1626,23 +1698,7 @@ pub fn handle_msg_as(body: &[u8], session_author: &str, agent_workspace: Option<
         }
     };
 
-    CliResponse::ok_json(
-        serde_json::json!({
-            "ok": true,
-            "id": msg.id,
-            "groupId": group_id,
-            "groupName": group.name,
-            "author": msg.author,
-            "authorKind": msg.author_kind,
-            "body": msg.body,
-            "createdAt": msg.created_at,
-            "seq": msg.seq,
-            "delivered": delivered,
-            "deliveryReason": delivery_reason,
-            "deliveredSessionId": delivered_session,
-        })
-        .to_string(),
-    )
+    Ok(Posted { msg, delivered, delivery_reason, delivered_session })
 }
 
 // ── Dashboards ────────────────────────────────────────────────────────

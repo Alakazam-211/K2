@@ -289,6 +289,8 @@ describe('TUWA10: one cap table', () => {
       // RS-A15: an owner grant to the App itself, never a role's or a pass's cap.
       'guests:rooms': "Set its own guests' rooms (an owner grant per App, never a guest's)",
       'room:members': 'See who has access to the room',
+      // 0.46.3 App project chat: per room, needed in every member room.
+      'project:write': 'Post in project chats (needs it in every member room)',
     })
   })
 

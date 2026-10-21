@@ -1117,6 +1117,13 @@ pub const ROUTES: &[Route] = &[
     post("/cli/skin/password/change", Public),
     post("/cli/skin/password/forgot", Public),
     post("/cli/skin/password/reset", Public),
+    // 0.46.3 App project chat: a pass reads and posts in the projects
+    // whose every member room it holds (the handler's all-members rule).
+    get("/cli/skin/projects", NoLogin),
+    get("/cli/skin/projects/events", NoLogin),
+    get("/cli/skin/projects/messages", NoLogin),
+    post("/cli/skin/projects/post", NoLogin),
+    post("/cli/skin/projects/read", NoLogin),
     both("/cli/skin/roles", Owner),
     post("/cli/skin/roles/assign", Owner),
     post("/cli/skin/roles/paths", Owner),

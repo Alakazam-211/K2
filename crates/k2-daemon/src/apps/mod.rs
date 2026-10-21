@@ -48,6 +48,8 @@ pub mod ownership;
 pub mod podman_install;
 pub mod process_engine;
 pub mod process_exception;
+/// Project chat as an App surface (0.46.3, App only).
+pub mod project_chat;
 pub mod quotas;
 /// `requires.sew` / `requires.voice` against this box's Sew (0.46.3).
 pub mod requires;
@@ -71,6 +73,10 @@ mod access_tests;
 /// Room-scope R9/R16 surface tests (0.46.1).
 #[cfg(test)]
 mod surfaces_tests;
+
+/// Project chat App surface tests (0.46.3).
+#[cfg(test)]
+mod project_chat_tests;
 
 /// Slices D, F, G of prd-agent-app-permissions-v1 (0.46.3).
 #[cfg(test)]

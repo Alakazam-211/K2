@@ -12,7 +12,11 @@
 //!
 //! **Who.** `person` is [`People::person_key`]: the owner token and every
 //! login the owner linked are `owner`; any other Connect login is its
-//! username. Agents and app guests have no read state.
+//! username. An App guest is the person `guest:<principalId>` and an App's
+//! own pass the bookmark `app:<serviceId>` (keyed by the daemon's
+//! `read_routes::PassReader`, 0.46.3; [`Person::app_guest`]); neither can
+//! collide with a person key, which never holds `:`. Agents have no read
+//! state.
 //!
 //! **Moves.** A cursor only moves forward ([`ack`]), except when a
 //! conversation move renumbers a Thread: [`remap_thread_move`] rewrites it
@@ -119,6 +123,10 @@ impl Person {
         Self { key: key.to_string(), logins: Vec::new(), guest: Some(username.trim().to_string()) }
     }
 
+    fn is_guest_login(&self, login: &str) -> bool {
+        self.guest.as_deref().is_some_and(|g| g.eq_ignore_ascii_case(login.trim()))
+    }
+
     fn is_login(&self, login: &str) -> bool {
         let l = login.trim().to_ascii_lowercase();
         self.logins.iter().any(|x| *x == l)
@@ -137,9 +145,14 @@ impl Person {
         }
     }
 
-    /// True when this person wrote a project chat line.
+    /// True when this person wrote a project chat line. A guest line's
+    /// author is `guest:<username>` ([`crate::project_groups::guest_author`]).
     pub fn wrote_project_message(&self, author_kind: &str, author: &str) -> bool {
-        author_kind == crate::project_groups::AUTHOR_KIND_PERSON && self.is_login(author)
+        use crate::project_groups::{AUTHOR_KIND_GUEST, AUTHOR_KIND_PERSON};
+        if author_kind == AUTHOR_KIND_PERSON {
+            return self.is_login(author);
+        }
+        author_kind == AUTHOR_KIND_GUEST && author.strip_prefix("guest:").is_some_and(|u| self.is_guest_login(u))
     }
 }
 
@@ -991,6 +1004,43 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM read_cursors WHERE conv_id = ?1", params![gid], |r| r.get(0))
             .expect("count");
         assert_eq!(n, 0);
+    }
+
+    /// 0.46.3 App project chat: an App guest is its own person
+    /// (`guest:<principalId>`), its own `guest:` lines never count for it, and
+    /// a guest named like a Connect user shares nothing with that user.
+    #[test]
+    fn an_app_guest_is_its_own_person_and_skips_its_own_lines() {
+        let (g, _) = db();
+        let h = g.handle();
+        let gid = crate::project_groups::create_group(&format!("rs-guest-{}", uuid::Uuid::new_v4())).expect("group").id;
+        let conn = h.lock();
+        let guest = Person::app_guest("guest:pid-1", "alice");
+        assert_eq!(guest.key, "guest:pid-1");
+        ensure_person(&conn, &guest.key).expect("guest");
+        ensure_person(&conn, "alice").expect("alice");
+        let author = crate::project_groups::guest_author("alice");
+        assert_eq!(author, "guest:alice");
+        let m1 = crate::project_groups::post_message_as(&gid, &author, crate::project_groups::AUTHOR_KIND_GUEST, "from the app")
+            .expect("guest line");
+        assert_eq!(m1.author_kind, "guest");
+        crate::project_groups::post_message_as(&gid, "alice", "person", "from connect alice").expect("person line");
+        crate::project_groups::post_message_as(&gid, "scout", "agent", "ack").expect("agent line");
+        let now = now_secs();
+        assert_eq!(item(&conn, &guest, KIND_PROJECT, &gid, now).expect("guest item").unread, 2, "its own guest line is never unread");
+        assert_eq!(item(&conn, &alice(), KIND_PROJECT, &gid, now).expect("alice item").unread, 2, "the guest's line is unread for Connect alice");
+        // Another guest with the same username in a different principal is not it.
+        assert!(!Person::app_guest("guest:pid-2", "bob").wrote_project_message("guest", "guest:alice"));
+        assert!(!guest.wrote_project_message("person", "alice"), "Connect alice's line is not the guest's");
+        assert!(!guest.wrote_project_message("guest", "alice"), "an unprefixed author is never a guest line");
+        // Cursors are per person.
+        ack(&conn, &guest.key, KIND_PROJECT, &gid, None).expect("ack");
+        assert_eq!(item(&conn, &guest, KIND_PROJECT, &gid, now).expect("guest").unread, 0);
+        assert_eq!(item(&conn, &alice(), KIND_PROJECT, &gid, now).expect("alice").unread, 2);
+        assert!(matches!(
+            crate::project_groups::post_message_as(&gid, "x", "robot", "no"),
+            Err(e) if e.starts_with("usage:")
+        ));
     }
 
     #[test]

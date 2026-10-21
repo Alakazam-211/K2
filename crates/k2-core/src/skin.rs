@@ -154,6 +154,13 @@ pub const CAP_FILES_AGENT_CONFIG: &str = "files:agentconfig";
 /// Never in the defaults; meant for staff roles. Names can be hidden from
 /// guests per room by the owner.
 pub const CAP_ROOM_MEMBERS: &str = "room:members";
+/// Post in a project chat as the guest (0.46.3, App project chat). Held per
+/// room like every cap: a pass may post in a project's chat only when it
+/// holds this cap in EVERY member room of that project (the all-members
+/// rule; reading needs `thread:read` in every member room). Never in the
+/// defaults; owner/role-granted. In no App core (the person approves it)
+/// until a Projects core exists.
+pub const CAP_PROJECT_WRITE: &str = "project:write";
 
 const KEY_BODY_LEN: usize = 43;
 const BASE62: &[u8; 62] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -177,6 +184,7 @@ const ACCEPTED_CAPS: &[&str] = &[
     CAP_AGENT_HANDLE,
     CAP_FILES_AGENT_CONFIG,
     CAP_ROOM_MEMBERS,
+    CAP_PROJECT_WRITE,
 ];
 
 /// Connect / Server Access names — never a skin role. `viewer` stays

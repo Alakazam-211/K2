@@ -29,8 +29,10 @@
 //! guest is the person `guest:<principalId>` on every App, door, device
 //! and session (with a `badgeKey`, mutes and live `read` frames on its
 //! overlay and activity sockets, app-read-state-v1); an App's own pass
-//! is a service account (`app:<serviceId>`), not a person. Project chat
-//! stays people-only.
+//! is a service account (`app:<serviceId>`), not a person. These routes
+//! stay Thread-only for passes: an App guest's project chat read state is
+//! `POST /cli/skin/projects/read` (`apps::project_chat`, 0.46.3), on the
+//! same `guest:<principalId>` key.
 //!
 //! **The Garden bridge** (garden-person-rows-v1): [`garden_unread`] and
 //! [`garden_thread_mute`] answer `thread.unread` / `thread.mute` for the
@@ -461,7 +463,8 @@ fn mute_is_people_only() -> CliResponse {
 ///   person only; `kind: project` is refused) → the same shape.
 ///
 /// A moved cursor or mute sends a `read` frame to every socket of the same
-/// reader (`read_live::guest_moved`). Project chat stays people-only (403).
+/// reader (`read_live::guest_moved`). `kind: project` stays 403 here: a
+/// guest's project read state is `apps::project_chat` (same key).
 pub fn handle_guest(is_post: bool, path: &str, params: &HashMap<String, String>, body: &[u8], pass: &k2_core::skin::SkinPass) -> CliResponse {
     if is_post_only(path) && !is_post {
         return CliResponse::method_not_allowed();

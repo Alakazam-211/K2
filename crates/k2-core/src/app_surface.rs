@@ -251,7 +251,7 @@ pub const WS_ALLOWLIST: &[(&str, &str)] = &[
 
 /// Routes only the browser helper forwards: they act on a guest's own
 /// login session (`session=1`), which an App pass never is.
-pub const HELPER_ONLY_HTTP: &[&str] = &["/cli/skin/password/change"];
+pub const HELPER_ONLY_HTTP: &[&str] = &["/cli/skin/password/change", "/cli/skin/wallet/list", "/cli/skin/wallet/status", "/cli/skin/wallet/add", "/cli/skin/wallet/login", "/cli/skin/wallet/login/status", "/cli/skin/wallet/login/input", "/cli/skin/wallet/login/cancel", "/cli/skin/wallet/use", "/cli/skin/wallet/remove"];
 
 /// Routes only an App's gateway link serves: a BFF's server-side calls.
 pub const LINK_ONLY_HTTP: &[&str] = &["/cli/skin/login", "/cli/skin/guests/rooms", "/cli/skin/logout", "/cli/skin/refresh", "/cli/skin/app-info", "/cli/skin/password/forgot", "/cli/skin/password/reset", "/cli/skin/self", "/cli/skin/usage", "/cli/sew/pass"];

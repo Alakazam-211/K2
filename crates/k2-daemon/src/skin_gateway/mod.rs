@@ -327,6 +327,10 @@ pub fn never_proxy(path: &str) -> bool {
         // Sew S28 §15.3: the pass mint and key routes are never reachable
         // from a browser through the gateway.
         || p.starts_with("/cli/sew/")
+        // The server's LLM tokens are people-only (V26, 0.46.3): never
+        // through the gateway, explicit rather than only default-deny. A
+        // person's own wallet is `/cli/skin/wallet/*`.
+        || p.starts_with("/cli/llm/")
         || p.starts_with("/v1/")
         || p == "/v1"
 }
@@ -1679,6 +1683,16 @@ mod tests {
         assert!(!never_proxy("/cli/skin/password/reset"));
         assert!(!never_proxy("/cli/skin/password/change"));
         assert!(!never_proxy("/cli/skin/password/forgot"));
+        // V26 (0.46.3): the server's LLM tokens never; a person's own
+        // wallet verbs are allow-listed helper rows.
+        for p in ["/cli/llm/accounts/list", "/cli/llm/accounts/login/status", "/cli/llm/accounts/switch", "/cli/llm/chat"] {
+            assert!(never_proxy(p), "{p}");
+            assert!(!allowlisted_http("GET", p) && !allowlisted_http("POST", p), "{p}");
+        }
+        assert!(!never_proxy("/cli/skin/wallet/list"));
+        assert!(allowlisted_http("GET", "/cli/skin/wallet/list"));
+        assert!(allowlisted_http("POST", "/cli/skin/wallet/add"));
+        assert!(!allowlisted_http("GET", "/cli/skin/wallet/add"));
     }
 
     #[test]

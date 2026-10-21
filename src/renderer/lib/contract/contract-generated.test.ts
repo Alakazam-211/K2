@@ -295,6 +295,8 @@ describe('TUWA10: one cap table', () => {
       'room:members': 'See who has access to the room',
       // 0.46.3 App project chat: per room, needed in every member room.
       'project:write': 'Post in project chats (needs it in every member room)',
+      // 0.46.3: an owner setting per App (its users' own wallets), never a pass's cap.
+      'wallet:self': "Use the person's own wallet (an owner setting per App, never a room cap)",
     })
   })
 

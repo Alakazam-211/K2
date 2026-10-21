@@ -1460,6 +1460,12 @@ fn run_migrations_through(conn: &Connection, last: Option<&str>) -> Result<()> {
         // 0.46.3 lane; renumber freely on a slip (and edit the
         // migration-order tests below).
         ("0197_agent_app_permissions", include_str!("../../drizzle_sql/0197_agent_app_permissions.sql")),
+        // 0213 — App users' personal wallets (prd-app-user-llm-logins-v1
+        // rev 2; 0.46.3): wallet items, the person pin, personal-agent marks
+        // and per-App wallet settings. Additive tables only; no secret is
+        // ever stored here. 0198–0212 belong to other 0.46.3 lanes;
+        // renumber freely on a slip (and edit the migration-order tests).
+        ("0213_person_wallets", include_str!("../../drizzle_sql/0213_person_wallets.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2123,7 +2129,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0197_agent_app_permissions",
+            last_name, "0213_person_wallets",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2175,6 +2181,7 @@ mod tests {
                 "0194_compute_manage",
                 "0195_push_device_session",
                 "0197_agent_app_permissions",
+                "0213_person_wallets",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2230,6 +2237,7 @@ mod tests {
                 "0194_compute_manage",
                 "0195_push_device_session",
                 "0197_agent_app_permissions",
+                "0213_person_wallets",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -2836,7 +2844,10 @@ mod tests {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
             conn.execute("DELETE FROM _migrations WHERE name = '0164_garden_data'", []).unwrap();
-            // 0197 (agent App permissions, 0.46.3) is the newest: its
+            // 0213 (person wallets, 0.46.3) is the newest: its record goes
+            // (its tables and indexes are all IF NOT EXISTS).
+            conn.execute("DELETE FROM _migrations WHERE name = '0213_person_wallets'", []).unwrap();
+            // 0197 (agent App permissions, 0.46.3) came before it: its
             // record goes (its projects columns stay and re-adding them is
             // skipped as duplicate columns; its review table is IF NOT
             // EXISTS and its inserts/updates are idempotent).

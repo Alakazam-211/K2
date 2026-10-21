@@ -42,7 +42,9 @@ str_enum!(
         App = "app",
         Session = "session",
         Engine = "engine",
-        /// Reserved.
+        /// A person's wallet (an App user, 0.46.3): `system` namespace
+        /// only ([`Scope::validate_for`]); the `user` namespace and `k2v://`
+        /// refs still refuse it.
         Person = "person",
     }
 );
@@ -162,6 +164,24 @@ impl Scope {
     pub fn engine(id: impl Into<String>) -> Scope {
         Scope { kind: ScopeKind::Engine, id: id.into() }
     }
+    /// A person's wallet: `id` = the App user's principal id.
+    pub fn person(id: impl Into<String>) -> Scope {
+        Scope { kind: ScopeKind::Person, id: id.into() }
+    }
+
+    /// [`Self::validate`] for a write into `namespace`: the `person` scope
+    /// opens in the `system` namespace only (a person's wallet is K2's
+    /// own secret: no route ever returns a system value). Everything else
+    /// is [`Self::validate`].
+    pub fn validate_for(&self, namespace: Namespace) -> Result<()> {
+        if self.kind == ScopeKind::Person && namespace == Namespace::System {
+            if self.id.is_empty() || self.id.len() > 128 || self.id.chars().any(|c| c.is_control()) {
+                return Err(VaultError::bad_request("bad_scope", "person scope needs an id"));
+            }
+            return Ok(());
+        }
+        self.validate()
+    }
 
     pub fn validate(&self) -> Result<()> {
         match self.kind {
@@ -266,5 +286,15 @@ mod tests {
         Scope::workspace("ws-1").validate().expect("ok");
         assert!(Scope::workspace("").validate().is_err());
         assert_eq!(Scope { kind: ScopeKind::App, id: "x".into() }.validate().expect_err("reserved").code, "scope_reserved");
+    }
+
+    #[test]
+    fn the_person_scope_opens_in_the_system_namespace_only() {
+        Scope::person("p-1").validate_for(Namespace::System).expect("system ok");
+        assert_eq!(Scope::person("p-1").validate_for(Namespace::User).expect_err("user").code, "scope_reserved");
+        assert_eq!(Scope::person("p-1").validate().expect_err("plain validate").code, "scope_reserved");
+        assert_eq!(Scope::person("").validate_for(Namespace::System).expect_err("id").code, "bad_scope");
+        // App stays reserved everywhere.
+        assert_eq!(Scope { kind: ScopeKind::App, id: "x".into() }.validate_for(Namespace::System).expect_err("app").code, "scope_reserved");
     }
 }

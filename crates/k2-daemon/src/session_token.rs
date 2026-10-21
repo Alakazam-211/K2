@@ -688,6 +688,10 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/llm/accounts/pin",
         "/cli/llm/accounts/unpin",
         "/cli/llm/accounts/add-key",
+        // App users' wallets (0.46.3): an agent of an App's own workspace
+        // with switch 2 reads and sets that App's fallback only (the
+        // handler checks; every other /cli/app/wallet/* answers owner_only).
+        "/cli/app/wallet/settings",
         // K2 compute nodes (CN18): the agent verbs. The handler checks the
         // workspace switch (`compute_off`) and the node grant
         // (`not_granted`) and scopes everything to the passport's

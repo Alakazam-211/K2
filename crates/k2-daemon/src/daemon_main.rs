@@ -1445,6 +1445,10 @@ async fn async_main() {
     // "Default" entry when nothing is active, then keep idle logins warm
     // (never the active one, never under air-gap).
     llm_accounts_runtime::spawn();
+    // App users' personal wallets (0.46.3): re-seal idle slots, keep them
+    // warm, and the lifecycle (dormant after App access is lost, deleted
+    // 30 days later). Headless: runs with no client attached.
+    crate::person_wallet_runtime::spawn_loop();
 
     // Published services: boot reattach/respawn of desired=running
     // rows. Own process group / Job Object — stop_tunnel / Active

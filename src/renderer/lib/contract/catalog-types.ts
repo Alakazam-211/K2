@@ -141,6 +141,10 @@ export const CATALOG_ERROR_CODES = [
   'declined',
   'refresh_invalid',
   'refresh_reused',
+  // App users' personal wallets (0.46.3).
+  'person_pass_required',
+  'wallet_off',
+  'duplicate_label',
 ] as const
 
 export type CatalogErrorCode = (typeof CATALOG_ERROR_CODES)[number]

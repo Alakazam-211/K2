@@ -662,6 +662,10 @@ pub const FEATURE_PROJECT_CHAT_PAGING: &str = "project-chat-paging-v1";
 /// member agent is a room it holds with `thread:read`; posting also needs
 /// `project:write` in every member room.
 pub const FEATURE_APP_PROJECT_CHAT: &str = crate::apps::project_chat::FEATURE;
+/// App users' personal wallets (0.46.3): the `wallet.*` verbs
+/// (`/cli/skin/wallet/*`, a guest's own session pass, cap `wallet:self`)
+/// and the owner's `/cli/app/wallet/*`.
+pub const FEATURE_APP_WALLET: &str = "app-wallet-v1";
 /// Thread push message previews (0.46.1): `POST /cli/push/register-device`
 /// takes `previews` (absent = keep the stored value), its reply and
 /// `GET /cli/push/device` carry `previews` + `previewsAllowed`, and a
@@ -809,6 +813,7 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_PROJECT_CHAT_PAGING);
     out.push(FEATURE_APP_PROJECT_CHAT);
     out.push(FEATURE_APP_MOBILE_ACCESS);
+    out.push(FEATURE_APP_WALLET);
     if thread_push_ready() {
         out.push(FEATURE_THREAD_PUSH);
         // Same DB as 0157: migration 0189 (push_devices.previews) ran with it.
@@ -893,6 +898,7 @@ mod tests {
                 "project-chat-paging-v1",
                 "app-project-chat-v1",
                 "app-mobile-access-v1",
+                "app-wallet-v1",
                 "thread-push-v1",
                 "push-previews-v1",
                 "thread-read-v1",

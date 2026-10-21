@@ -1464,6 +1464,11 @@
     "description": "Read or set one guest's rooms on <app> (RS-A15). The owner acts with owner rights (any room); an agent acts on its own workspace's App only while the owner's guests-rooms grant stands, and only within it. Never above the guest's role (a role guest keeps its role's rooms). Idempotent (the same rooms are a no-op), 60 calls a minute per App, every change audited with before and after. Other Apps' guests and unknown names are the same not_found."
    },
    {
+    "name": "app wallet",
+    "usage": "k2 app wallet settings <app> [--on|--off] [--fallback on|off] | people [<app>] | remove <item-id> | personal-agent <app> <user> <workspace> | personal-agent --clear <workspace> | personal-agents [--json]",
+    "description": "App users' personal wallets (0.46.3): each App user keeps their own LLM subscriptions and API keys from the App (wallet.* verbs); their subscription runs only their own personal agent. The owner (or an Admin) turns an App's wallet on, sets its fallback to the company plan, sees each item's existence, label and status (never a secret, link or code), force-removes (deleted, not Trash) and marks personal agents. An agent of the App's own workspace with switch 2 may set the fallback only. Each person's subscription runs only their own agent; check that your plan's terms allow the way your App uses it."
+   },
+   {
     "name": "app hydra",
     "usage": "k2 app hydra [on|off] [--json]",
     "description": "OIDC issuer sidecar (Linux leftover). Still owner even when Agent-tab Apps is on."

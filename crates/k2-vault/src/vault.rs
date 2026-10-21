@@ -903,7 +903,9 @@ impl LocalVault {
 
     fn put_inner(&self, req: PutRequest, value: SecretBytes, actor: &Actor) -> Result<PutOutcome> {
         validate_name(&req.name, req.namespace == Namespace::User)?;
-        req.scope.validate().or_else(|e| if req.scope.kind == ScopeKind::Engine && req.namespace == Namespace::System { Ok(()) } else { Err(e) })?;
+        // `person` (a person's wallet, 0.46.3) opens in the system namespace
+        // only; `validate_for` refuses it in `user` like before.
+        req.scope.validate_for(req.namespace).or_else(|e| if req.scope.kind == ScopeKind::Engine && req.namespace == Namespace::System { Ok(()) } else { Err(e) })?;
         if req.scope.kind == ScopeKind::Engine && req.namespace != Namespace::System {
             return Err(VaultError::bad_request("bad_scope", "engine scope is for K2's own secrets"));
         }

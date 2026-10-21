@@ -49,6 +49,11 @@ pub(crate) mod testkit;
 #[cfg(test)]
 mod core_tests;
 
+// F · golden samples and the drift test (`cargo test -p k2-daemon
+// permission_samples`; PRD rev 3.1 §13.4, §17.10).
+#[cfg(test)]
+pub(crate) mod permission_samples;
+
 // A3 · projection
 pub(crate) mod view;
 

@@ -13,7 +13,7 @@
 //     same drawers, and the same room area as Agents.
 //   - A row on the connected server selects that workspace and the page
 //     stays Home; the room then shows in the main area.
-//   - With "Open agents from other servers here" off, a row on another
+//   - With "Open other servers' agents in Home" off, a row on another
 //     server switches through `pickHost` and the pending select lands on
 //     Home (not Agents). Homes do not change. With the default on a mac
 //     (nothing stored) it opens that server's room instead; on Windows the

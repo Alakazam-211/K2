@@ -2,7 +2,7 @@
 // Z41, vs-live Z52, Z54). Run with `bun run test:multiserver`.
 //
 // The window is on A (`local` = daemon A). B is a saved server, signed in as
-// the Member `anna`, and "Open agents from other servers here" is OFF.
+// the Member `anna`, and "Open other servers' agents in Home" is OFF.
 //   - previews: one `GET /cli/thread/latest` per server, read with each
 //     server's own login, and parsed from both daemons' real answers;
 //   - a remote row opens in place through the bridge: B's room opens, the

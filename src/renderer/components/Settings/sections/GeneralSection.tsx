@@ -89,6 +89,11 @@ export const GENERAL_MANIFEST: SettingEntry[] = [
   { id: 'general.completion-sound-volume', section: 'general', group: 'Workspaces', label: 'Completion sound volume', description: 'How loud the sound is when an agent finishes', keywords: ['sound', 'volume', 'loud', 'quiet', 'level', 'ping', 'chime', 'audio'] },
   { id: 'general.workspace-switch-focus', section: 'general', group: 'Workspaces', label: 'When moving between workspaces, auto-select', description: 'Switching workspaces or project panes (⌘1–⌘9) focuses the terminal or the agent message box so you can type immediately', keywords: ['workspace', 'switch', 'focus', 'terminal', 'composer', 'message', 'agent', 'auto-select', 'input', 'pane', 'project'] },
   { id: 'general.new-agent-view', section: 'general', group: 'Workspaces', label: 'New agents open in', description: 'The view a new agent opens in: Terminal, Chat (beta), Thread, Chatter, or Split view with the two sides you choose. Agents you already set a view for keep it.', keywords: ['new', 'agent', 'default', 'view', 'open', 'terminal', 'chat', 'thread', 'chatter', 'split', 'split view', 'left', 'right', 'side', 'layout', 'workspace'] },
+  // Graduated out of Experimental in 0.46.3 (Rosson 2026-10-21). Desktop
+  // only: the hosted web client is single-server (MS56).
+  ...(webFeatures.multiHost
+    ? [{ id: 'general.remote-rooms-preview', section: 'general' as const, group: 'Workspaces', label: "Open other servers' agents in Home (don't switch servers)", description: 'On: clicking an agent on Home that lives on another server opens it right here. Off: it switches this window to that server', keywords: ['home', 'remote', 'room', 'rooms', 'server', 'servers', 'other', 'multi', 'switch', 'open', 'agent', 'agents', 'here'] }]
+    : []),
   { id: 'general.daemon', section: 'general', group: 'Server', label: 'K2 Server', description: 'Background service that keeps agents running when the app is closed', keywords: ['server', 'daemon', 'background', 'launchd', 'persistent', 'lid', 'sleep', 'wake', 'agent'] },
   { id: 'general.keep-daemon-on-quit', section: 'general', group: 'Server', label: 'Keep server running when the window is closed', description: 'When on, clicking the red close button hides the window and keeps the Agent & Companion server running. When off, the red button stops everything. Cmd+Q always closes everything.', keywords: ['daemon', 'server', 'agent', 'companion', 'close', 'red button', 'window', 'hide', 'background', 'persistent'] },
   { id: 'general.clone-personal-computers', section: 'general', group: 'Server', label: "Allow cloning agents to people's personal computers", description: 'When off, Admins and Members cannot clone agents from this server to their own computers. Owner only.', keywords: ['clone', 'copy', 'agent', 'workspace', 'personal', 'computer', 'pull', 'permission', 'migrate'] },
@@ -98,9 +103,6 @@ export const GENERAL_MANIFEST: SettingEntry[] = [
   { id: 'general.model-status', section: 'general', group: 'Local LLM', label: 'Model Status', description: 'Current local LLM load state', keywords: ['model', 'llm', 'loaded', 'download'] },
   { id: 'general.download-model', section: 'general', group: 'Local LLM', label: 'Download Default Model', description: 'Fetch Qwen2.5-1.5B locally (~1.1GB)', keywords: ['download', 'model', 'qwen', 'local llm'] },
   { id: 'general.custom-model', section: 'general', group: 'Local LLM', label: 'Custom Model', description: 'Point at any GGUF model file', keywords: ['model', 'gguf', 'custom', 'load'] },
-  ...(webFeatures.multiHost
-    ? [{ id: 'general.remote-rooms-preview', section: 'general' as const, group: 'Experimental', label: 'Open agents from other servers here', description: 'Off: clicking an agent that lives on another server switches this window to that server', keywords: ['home', 'remote', 'room', 'rooms', 'server', 'other', 'experimental', 'multi', 'switch'] }]
-    : []),
 ]
 
 const GENERAL_TABS: Array<{ id: GeneralSubTab; label: string; beta?: boolean }> = [
@@ -108,8 +110,8 @@ const GENERAL_TABS: Array<{ id: GeneralSubTab; label: string; beta?: boolean }> 
   { id: 'workspaces', label: 'Workspaces' },
   { id: 'server', label: 'Server' },
   { id: 'local-llm', label: 'Local LLM', beta: true },
-  // Home M4 (MS55, answer Q3). Desktop only: web is single-server (MS56).
-  ...(webFeatures.multiHost ? [{ id: 'experimental' as const, label: 'Experimental' }] : []),
+  // The Experimental tab held only "Open other servers' agents in Home";
+  // that row graduated to Workspaces in 0.46.3, so the tab is gone.
 ]
 
 export function GeneralSection(): React.JSX.Element {
@@ -469,14 +471,6 @@ export function GeneralSection(): React.JSX.Element {
         </div>
       )}
 
-      {tab === 'experimental' && webFeatures.multiHost && (
-        <div className="space-y-4">
-          <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed -mt-1">
-            Early features on this computer. They may change or go away.
-          </p>
-          <RemoteRoomsPreviewRow />
-        </div>
-      )}
       </div>
     </div>
   )
@@ -507,6 +501,8 @@ export function WorkspaceBehaviorRows(): React.JSX.Element {
       <CompletionSoundRow />
       <WorkspaceSwitchFocusRow />
       <NewAgentViewRow />
+      {/* Graduated from Experimental in 0.46.3. Desktop only (MS56). */}
+      {webFeatures.multiHost && <RemoteRoomsPreviewRow />}
     </>
   )
 }

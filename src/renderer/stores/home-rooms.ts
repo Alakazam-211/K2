@@ -1,7 +1,7 @@
 // Home M4 — remote rooms on Home (prd-home-multi-server-client MS24, MS39,
 // MS40, MS45, MS55; prd-home-v1 R6–R9, R11).
 //
-// With "Open agents from other servers here" on (the default on macOS and
+// With "Open other servers' agents in Home" on (the default on macOS and
 // Linux from 0.43.2), a Home row on another server opens THAT server's room
 // in Home's main area. The window's server does not change.
 // The room is the same components the Agents page mounts (R8/R9), bound to

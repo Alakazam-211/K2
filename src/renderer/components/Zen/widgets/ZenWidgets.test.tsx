@@ -578,7 +578,7 @@ beforeEach(() => {
   __resetZenDataForTests()
   __resetZenDraftsForTests()
   localStorage.clear()
-  // "Open agents from other servers here" OFF: Zen still opens in place.
+  // "Open other servers' agents in Home" OFF: Zen still opens in place.
   useRemoteRoomsPreviewStore.getState().setEnabled(false)
   useConnectHostStore.setState({
     activeHost: 'local',
@@ -1793,7 +1793,7 @@ describe('picking an agent focuses its message box', () => {
 })
 
 describe('Conversation widget', () => {
-  it('a remote row opens in place with "Open agents from other servers here" off', async () => {
+  it(`a remote row opens in place with "Open other servers' agents in Home" off`, async () => {
     expect(useRemoteRoomsPreviewStore.getState().enabled).toBe(false)
     await mountZen()
     await select(ROWS.sales.address)

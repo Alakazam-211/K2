@@ -364,7 +364,32 @@ pub fn unattended_dropin() -> &'static str {
 /// a client option beats `ALTER DATABASE/ROLE … SET search_path`, so a
 /// tenant's schema, operator or overload never resolves ahead of
 /// pg_catalog in a superuser session (review #2 F1, CVE-2018-1058 class).
-pub const SAFE_PGOPTIONS: &str = "PGOPTIONS=-c search_path=pg_catalog,pg_temp";
+/// `role=none` likewise beats `ALTER DATABASE … SET role`, so the session
+/// stays postgres (re-check #2 L-a: a tenant role would break the helper
+/// install, the seal and the move's own reads).
+pub const SAFE_PGOPTIONS: &str = "PGOPTIONS=-c search_path=pg_catalog,pg_temp -c role=none";
+
+/// The oldest source server a move dumps (re-check #1 R2): the
+/// CVE-2024-7348 protection (`restrict_nonsystem_relation_kind`) needs
+/// the server at 16.4 / 17.0 or later, not only the client tools.
+pub fn min_server_num(major: u32) -> u32 {
+    match major {
+        16 => 160_004,
+        m => m * 10_000,
+    }
+}
+
+/// How many characters of a database name a rollback copy keeps
+/// (`<first 46>__k2rb_<10-digit ts>` fits 63).
+pub const ROLLBACK_BASE_MAX: usize = 63 - 17;
+
+/// The migrator role Postgres actually has for `db`: `<db>_migrator`, cut
+/// at 63 bytes like every identifier.
+pub fn migrator_of(db: &str) -> String {
+    let mut m = format!("{db}_migrator");
+    m.truncate(63);
+    m
+}
 
 /// The oldest minor of each major's `pg_dump`/`pg_restore` the helper
 /// runs (CVE-2024-7348, CVE-2025-8714/8715).
@@ -421,9 +446,28 @@ pub fn k2_stamp_ok(datname: &str, owner: &str) -> bool {
     let base = match datname.split_once("__k2rb_") {
         Some((b, ts)) if !ts.is_empty() && ts.bytes().all(|c| c.is_ascii_digit()) => b,
         Some(_) => return false,
-        None => datname,
+        None => return !datname.is_empty() && owner != datname && owner == migrator_of(datname),
     };
-    !base.is_empty() && owner == format!("{base}_migrator")
+    if base.is_empty() {
+        return false;
+    }
+    if base.len() < ROLLBACK_BASE_MAX {
+        return owner == migrator_of(base);
+    }
+    // A rollback copy of a long name keeps only its first 46 characters
+    // (re-check #1 R3): the owner is `migrator_of(<base><rest>)` for the
+    // original name's unknown rest. So the owner starts with the base, and
+    // what follows is name characters ending in `_migrator`, or (cut at
+    // 63) in a non-empty prefix of it.
+    let Some(tail) = owner.strip_prefix(base) else { return false };
+    let name_chars = |s: &str| s.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_');
+    if !name_chars(tail) || owner.len() > 63 {
+        return false;
+    }
+    if tail.ends_with("_migrator") {
+        return true;
+    }
+    owner.len() == 63 && (1.."_migrator".len()).any(|k| tail.ends_with(&"_migrator"[..k]))
 }
 
 /// Every in-band port Sew's config names (any `*port = N`), so K2 never
@@ -1076,7 +1120,8 @@ mod helper_tests {
 
     #[test]
     fn review_fixes_pure_parts() {
-        assert_eq!(SAFE_PGOPTIONS, "PGOPTIONS=-c search_path=pg_catalog,pg_temp");
+        assert_eq!(SAFE_PGOPTIONS, "PGOPTIONS=-c search_path=pg_catalog,pg_temp -c role=none");
+        assert_eq!((min_server_num(16), min_server_num(17), min_server_num(18)), (160_004, 170_000, 180_000));
         assert_eq!(instance_slice_dropin(17), "/etc/systemd/system/postgresql@17-main.service.d/k2-slice.conf");
         assert!(unattended_dropin().contains("\"origin=apt.postgresql.org,codename=${distro_codename}-pgdg\";"));
         assert_eq!(parse_tool_version("pg_dump (PostgreSQL) 17.11 (Ubuntu 17.11-1.pgdg24.04+2)"), Some((17, 11)));
@@ -1127,5 +1172,103 @@ mod helper_tests {
         }
         assert!(apt_sim_refusal("Inst libpq5 [16.15] (18.6-1.pgdg24.04+2)", Some(16)).is_none());
         assert!(apt_sim_refusal("Inst postgresql-client-17 (17.11-1.pgdg24.04+2)", Some(16)).is_none());
+    }
+
+    /// Re-check #1 R3: a rollback copy keeps the first 46 characters, so a
+    /// long name's copy must still carry the K2 stamp (close, drop, roll
+    /// back). Every length from 1 to 62, a 60-character name spelled out.
+    #[test]
+    fn the_stamp_holds_for_long_names_and_their_rollback_copies() {
+        let ts = "1792560309";
+        let cut = |s: String| -> String { s.chars().take(63).collect() };
+        for len in 1..=62usize {
+            let db: String = "ws_".chars().chain(std::iter::repeat('a')).take(len).collect();
+            let owner = migrator_of(&db);
+            assert!(owner.len() <= 63);
+            assert!(k2_stamp_ok(&db, &owner), "{len}: {db} / {owner}");
+            let base: String = db.chars().take(ROLLBACK_BASE_MAX).collect();
+            let copy = format!("{base}__k2rb_{ts}");
+            assert!(copy.len() <= 63, "{copy}");
+            assert!(k2_stamp_ok(&copy, &owner), "{len}: {copy} / {owner}");
+            assert!(!k2_stamp_ok(&copy, "postgres"));
+            assert!(!k2_stamp_ok(&copy, &migrator_of(&format!("x{db}"))), "{len}");
+            if len < 62 {
+                // (At 62 the agent and migrator names both cut to `<db>_`.)
+                assert!(!k2_stamp_ok(&copy, &cut(format!("{db}_agent"))), "{len}");
+                assert!(!k2_stamp_ok(&db, &cut(format!("{db}_agent"))), "{len}");
+            }
+        }
+        // 63: the role would be the name itself; never K2's.
+        let db63: String = "ws_".chars().chain(std::iter::repeat('a')).take(63).collect();
+        assert!(!k2_stamp_ok(&db63, &migrator_of(&db63)));
+        let db60 = format!("ws_{}", "k".repeat(57));
+        assert_eq!(db60.len(), 60);
+        assert_eq!(migrator_of(&db60), format!("{db60}_mi"));
+        let copy = format!("{}__k2rb_{ts}", &db60[..ROLLBACK_BASE_MAX]);
+        assert_eq!(copy.len(), 63);
+        assert!(k2_stamp_ok(&db60, &migrator_of(&db60)));
+        assert!(k2_stamp_ok(&copy, &migrator_of(&db60)));
+        assert!(
+            !k2_stamp_ok(&copy, &format!("{}zzzzzzzzzzzzzzzzz", &db60[..ROLLBACK_BASE_MAX])),
+            "a 63-character role that doesn't end in a prefix of _migrator"
+        );
+        // 54 characters: the longest whose migrator isn't cut.
+        let db54 = format!("ws_{}", "q".repeat(51));
+        let copy = format!("{}__k2rb_{ts}", &db54[..ROLLBACK_BASE_MAX]);
+        assert!(k2_stamp_ok(&copy, &format!("{db54}_migrator")));
+        assert!(!k2_stamp_ok(&copy, &format!("{db54}_migratorx")));
+    }
+
+    /// Re-check #1 I3: the bundled PGDG key is the one with the pinned
+    /// fingerprint (v4: SHA-1 over 0x99, the 2-byte length and the primary
+    /// public-key packet).
+    #[test]
+    fn the_pgdg_key_file_has_the_pinned_fingerprint() {
+        use base64::Engine;
+        use sha1::Digest;
+        let mut b64 = String::new();
+        let mut in_body = false;
+        for line in PGDG_KEY_ASC.lines() {
+            let line = line.trim_end();
+            if line.starts_with("-----BEGIN") {
+                continue;
+            }
+            if !in_body {
+                if line.is_empty() {
+                    in_body = true;
+                }
+                continue;
+            }
+            if line.starts_with('=') || line.starts_with("-----END") {
+                break;
+            }
+            b64.push_str(line);
+        }
+        let raw = base64::engine::general_purpose::STANDARD.decode(b64).expect("armored base64");
+        let body: &[u8] = match raw[0] {
+            // old-format packet, tag 6, 1/2/4-byte length
+            0x98 => &raw[2..2 + raw[1] as usize],
+            0x99 => &raw[3..3 + u16::from_be_bytes([raw[1], raw[2]]) as usize],
+            0x9a => &raw[5..5 + u32::from_be_bytes([raw[1], raw[2], raw[3], raw[4]]) as usize],
+            // new-format packet, tag 6
+            0xc6 => {
+                let l0 = raw[1] as usize;
+                if l0 < 192 {
+                    &raw[2..2 + l0]
+                } else if l0 < 224 {
+                    &raw[3..3 + ((l0 - 192) << 8) + raw[2] as usize + 192]
+                } else {
+                    &raw[6..6 + u32::from_be_bytes([raw[2], raw[3], raw[4], raw[5]]) as usize]
+                }
+            }
+            other => panic!("the first packet is not a public key: {other:#x}"),
+        };
+        assert_eq!(body[0], 4, "a v4 key");
+        let mut h = sha1::Sha1::new();
+        h.update([0x99]);
+        h.update((body.len() as u16).to_be_bytes());
+        h.update(body);
+        let fpr: String = h.finalize().iter().map(|b| format!("{b:02X}")).collect();
+        assert_eq!(fpr, PGDG_FPR);
     }
 }

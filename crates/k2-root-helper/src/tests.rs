@@ -953,7 +953,7 @@ fn psql_runs_through_runuser_with_an_argv_array() {
             "postgres",
             "--",
             "/usr/bin/env",
-            "PGOPTIONS=-c search_path=pg_catalog,pg_temp",
+            "PGOPTIONS=-c search_path=pg_catalog,pg_temp -c role=none",
             "/usr/bin/psql",
             "-X",
             "-d",

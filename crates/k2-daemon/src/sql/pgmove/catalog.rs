@@ -32,6 +32,7 @@ pub fn facts_sql(db: &str) -> String {
     format!(
         "SELECT json_build_object(\
          'size', pg_database_size(current_database()), \
+         'serverVersionNum', current_setting('server_version_num')::int, \
          'extensions', (SELECT coalesce(json_agg(extname ORDER BY extname), '[]'::json) FROM pg_extension), \
          'eventTriggers', (SELECT count(*) FROM pg_event_trigger), \
          'publications', (SELECT count(*) FROM pg_publication), \

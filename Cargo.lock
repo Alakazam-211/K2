@@ -4326,6 +4326,7 @@ dependencies = [
  "ring",
  "serde",
  "serde_json",
+ "sha1",
  "sha2 0.10.9",
  "toml 0.8.2",
 ]

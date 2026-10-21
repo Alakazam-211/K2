@@ -126,6 +126,7 @@ pub fn lsclusters(ctx: &Ctx) -> HResult<Vec<ClusterRow>> {
 const CHMOD: &str = "/usr/bin/chmod";
 const DD: &str = "/usr/bin/dd";
 const DU: &str = "/usr/bin/du";
+const FIND: &str = "/usr/bin/find";
 
 /// The K2-layout cluster of `m` (`<M>/main` under /var/lib/postgresql).
 fn cluster_of(ctx: &Ctx, m: PgMajor) -> HResult<ClusterRow> {
@@ -498,6 +499,7 @@ pub fn ensure_cluster(ctx: &Ctx, m: PgMajor, port: Option<u16>) -> HResult<J> {
                     "cluster_leftover: a data or config dir for that major exists without a cluster; nothing changed",
                 ));
             }
+            no_links_above(ctx, m)?;
             let mut busy = listening(ctx)?;
             busy.extend(sew_band_ports(ctx));
             let port = match port {
@@ -525,6 +527,14 @@ pub fn ensure_cluster(ctx: &Ctx, m: PgMajor, port: Option<u16>) -> HResult<J> {
                     "cluster_leftover: a data or config dir for that major exists without a cluster; nothing changed",
                 ));
             }
+            // Review #1 L5: postgres owns /var/lib/postgresql and
+            // /etc/postgresql, so a process running as postgres could plant
+            // a link where root's pg_createcluster is about to write. Check
+            // again right before it (no link on the way), and after it (the
+            // new dirs are real directories, not links). A window of a few
+            // instructions between the check and pg_createcluster remains;
+            // closing it would mean creating the dirs ourselves no-follow.
+            no_links_above(ctx, m)?;
             put_at(ctx, CREATECLUSTER_DROPIN, createcluster_dropin().as_bytes())?;
             let mt = m.token();
             let pt = port.to_string();
@@ -533,6 +543,14 @@ pub fn ensure_cluster(ctx: &Ctx, m: PgMajor, port: Option<u16>) -> HResult<J> {
                 &[&mt, "main", "-p", &pt, "--start-conf", "auto", "--", "--auth-local=peer", "--auth-host=scram-sha-256"],
                 None,
             )?;
+            for d in [m.data_dir(), m.etc_dir()] {
+                if !real_dir(ctx, &d) {
+                    return Err(Fail::state(format!(
+                        "cluster_layout_refused: {d} is not a real directory after pg_createcluster; the cluster is left stopped for the owner"
+                    )));
+                }
+            }
+            no_links_above(ctx, m)?;
             let d = confd(ctx, m)?;
             put(ctx, &d, CLUSTER_CONF_FILE, cluster_conf().as_bytes())?;
             put(ctx, &d, k2_root_proto::paths::PG_CONFD_FILE, pg_guc_conf().as_bytes())?;
@@ -553,6 +571,22 @@ pub fn ensure_cluster(ctx: &Ctx, m: PgMajor, port: Option<u16>) -> HResult<J> {
     v["created"] = json!(created);
     v["started"] = json!(started);
     Ok(v)
+}
+
+/// A directory, not a link (`symlink_metadata`: never follows).
+fn real_dir(ctx: &Ctx, abs: &str) -> bool {
+    ctx.p(abs).symlink_metadata().is_ok_and(|m| m.file_type().is_dir())
+}
+
+/// Review #1 L5: no link on the way to `m`'s data and config dirs (each
+/// component either missing or a real directory).
+fn no_links_above(ctx: &Ctx, m: PgMajor) -> HResult<()> {
+    for parent in ["/var/lib/postgresql".to_string(), format!("/var/lib/postgresql/{}", m.get()), "/etc/postgresql".to_string(), format!("/etc/postgresql/{}", m.get())] {
+        if present(ctx, &parent) && !real_dir(ctx, &parent) {
+            return Err(Fail::state(format!("cluster_layout_refused: {parent} is a link or a file; nothing changed")));
+        }
+    }
+    Ok(())
 }
 
 /// `pg start-conf <M> auto|manual`.
@@ -756,6 +790,17 @@ pub fn move_dump(ctx: &Ctx, from: PgMajor, to: PgMajor, db: &DbName, tag: &str) 
         return Err(Fail::state("cluster_down: the source cluster is not running"));
     }
     tool_floor(ctx, to, "pg_dump")?;
+    // Re-check #1 R2: the CVE-2024-7348 guard needs the source server at
+    // 16.4 / 17.0 or later too, not only the new pg_dump.
+    let num = sql_at(ctx, from, src.port, "postgres", "SHOW server_version_num;\n")?;
+    let num: u32 = num.trim().parse().map_err(|_| Fail::io("the source server answered no server_version_num"))?;
+    if num < min_server_num(from.get()) || num / 10_000 != from.get() {
+        return Err(Fail::state(format!(
+            "server_too_old: the source server is {num}; a move needs {} or later (update postgresql-{} and restart it first); nothing changed",
+            min_server_num(from.get()),
+            from.get()
+        )));
+    }
     moves_dir(ctx)?;
     let file = dump_path(db.as_str(), tag);
     if postgres_test(ctx, &file)?.is_some() {
@@ -783,6 +828,9 @@ fn moves_dir(ctx: &Ctx) -> HResult<()> {
         return Err(Fail::state("moves_dir_refused: /var/lib/postgresql/k2-moves is not a postgres-owned directory"));
     }
     as_postgres(ctx, CHMOD, &["0700", "--", MOVES_DIR], None)?;
+    // Re-check #1 R1: an owner passfile a killed helper left behind (one
+    // move at a time, so any passfile here is stale).
+    as_postgres(ctx, FIND, &[MOVES_DIR, "-maxdepth", "1", "-type", "f", "-name", ".k2pass-*", "-delete"], None)?;
     Ok(())
 }
 
@@ -831,6 +879,17 @@ pub fn move_restore(ctx: &Ctx, to: PgMajor, db: &DbName, tag: &str, stdin: &[u8]
     if owner != login.role {
         return Err(Fail::state("owner_mismatch: the login is not the target database's owner"));
     }
+    // Backstop (re-check #1 R6): the data never loads as a superuser.
+    let su = sql_at(
+        ctx,
+        to,
+        dst.port,
+        "postgres",
+        &format!("SELECT rolsuper::text FROM pg_catalog.pg_roles WHERE rolname = '{}';\n", login.role),
+    )?;
+    if su.trim() != "false" {
+        return Err(Fail::state("owner_superuser: the database's owner is a superuser (or missing); K2 never loads data as one; nothing changed"));
+    }
     let rels = sql_at(
         ctx,
         to,
@@ -852,7 +911,7 @@ pub fn move_restore(ctx: &Ctx, to: PgMajor, db: &DbName, tag: &str, stdin: &[u8]
         "pre-data",
         &[
             ENV,
-            "PGOPTIONS=-c search_path=pg_catalog,pg_temp -c temp_file_limit=-1 -c statement_timeout=0 -c lock_timeout=0",
+            "PGOPTIONS=-c search_path=pg_catalog,pg_temp -c role=none -c temp_file_limit=-1 -c statement_timeout=0 -c lock_timeout=0",
             &restore,
             "--section=pre-data",
             "--exit-on-error",
@@ -882,16 +941,24 @@ pub fn move_restore(ctx: &Ctx, to: PgMajor, db: &DbName, tag: &str, stdin: &[u8]
             if on { "" } else { "NO" }
         )
     };
-    if !forced.is_empty() {
-        sql_at(ctx, to, dst.port, d, &force_sql(false))?;
-    }
-    // The owner's sessions may need big temp files (index builds, V40):
-    // for this database only, reset after.
+    // FORCE, the owner's temp-file setting and the passfile come back in
+    // one cleanup path, whatever fails (re-check #1 R1). A helper killed
+    // mid-load leaves the passfile to the next `moves_dir` sweep; the
+    // target copy (with its FORCE and temp setting) is dropped by the
+    // daemon's undo.
     let quoted = format!("\"{r}\" IN DATABASE \"{d}\"");
-    sql_at(ctx, to, dst.port, "postgres", &format!("ALTER ROLE {quoted} SET temp_file_limit = -1;\n"))?;
-    // 3–4. data and post-data as the owner, its password in a 0600 file.
     let pass = format!("{MOVES_DIR}/.k2pass-{tag}");
+    let (mut force_lifted, mut temp_set) = (false, false);
     let owner_steps = (|| -> HResult<()> {
+        if !forced.is_empty() {
+            force_lifted = true;
+            sql_at(ctx, to, dst.port, d, &force_sql(false))?;
+        }
+        // The owner's sessions may need big temp files (index builds,
+        // V40): for this database only, reset after.
+        temp_set = true;
+        sql_at(ctx, to, dst.port, "postgres", &format!("ALTER ROLE {quoted} SET temp_file_limit = -1;\n"))?;
+        // 3–4. data and post-data as the owner, its password in a 0600 file.
         moves_dir(ctx)?;
         as_postgres(ctx, DD, &[&format!("of={pass}"), "status=none"], Some(login.passfile_line(dst.port, d).as_bytes()))?;
         as_postgres(ctx, CHMOD, &["0600", "--", &pass], None)?;
@@ -921,14 +988,30 @@ pub fn move_restore(ctx: &Ctx, to: PgMajor, db: &DbName, tag: &str, stdin: &[u8]
         }
         Ok(())
     })();
-    let _ = as_postgres(ctx, RM, &["-f", "--", &pass], None);
-    let _ = sql_at(ctx, to, dst.port, "postgres", &format!("ALTER ROLE {quoted} RESET temp_file_limit;\n"));
-    owner_steps?;
-    // 5. FORCE back.
-    if !forced.is_empty() {
-        sql_at(ctx, to, dst.port, d, &force_sql(true))?;
+    // 5. Cleanup, on success and failure alike.
+    let mut undone: Vec<String> = Vec::new();
+    if let Err(e) = as_postgres(ctx, RM, &["-f", "--", &pass], None) {
+        undone.push(format!("remove the passfile: {}", e.msg));
     }
-    Ok(json!({"to": to.get(), "file": file, "loadedAs": r, "forcedTables": forced.len()}))
+    if temp_set {
+        if let Err(e) = sql_at(ctx, to, dst.port, "postgres", &format!("ALTER ROLE {quoted} RESET temp_file_limit;\n")) {
+            undone.push(format!("reset temp_file_limit: {}", e.msg));
+        }
+    }
+    if force_lifted {
+        if let Err(e) = sql_at(ctx, to, dst.port, d, &force_sql(true)) {
+            undone.push(format!("put FORCE back: {}", e.msg));
+        }
+    }
+    match (owner_steps, undone.is_empty()) {
+        (Ok(()), true) => Ok(json!({"to": to.get(), "file": file, "loadedAs": r, "forcedTables": forced.len()})),
+        (Ok(()), false) => Err(Fail::io(format!("restore cleanup: {}", undone.join("; ")))),
+        (Err(e), true) => Err(e),
+        (Err(mut e), false) => {
+            e.msg = format!("{}; cleanup: {}", e.msg, undone.join("; "));
+            Err(e)
+        }
+    }
 }
 
 /// `pg move-file-remove <db> <tag>`.

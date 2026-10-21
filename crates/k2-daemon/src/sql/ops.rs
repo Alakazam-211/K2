@@ -159,14 +159,18 @@ fn su_psql(
     cl.helper_psql(ops, db, flags, Some(&pinned)).map_err(OpsError::Engine)
 }
 
-/// `SET search_path = pg_catalog, pg_temp;` ahead of the SQL.
+/// [`PIN_SEARCH_PATH`] ahead of the SQL.
 pub(crate) fn pin_search_path(sql: &[u8]) -> Vec<u8> {
     let mut v = PIN_SEARCH_PATH.as_bytes().to_vec();
     v.extend_from_slice(sql);
     v
 }
 
-pub(crate) const PIN_SEARCH_PATH: &str = "SET search_path = pg_catalog, pg_temp;\n";
+/// `SET ROLE NONE` first: a tenant's `ALTER DATABASE … SET role` would
+/// otherwise start K2's superuser maintenance as the tenant's role, and the
+/// k2 helper install and the guest seal would fail (re-check #2 L-a; from
+/// the separate search_path hotfix, which this pin replaces).
+pub(crate) const PIN_SEARCH_PATH: &str = "SET ROLE NONE;\nSET search_path = pg_catalog, pg_temp;\n";
 
 /// Sanitize a project UUID into a Postgres identifier fragment.
 pub fn pg_ident_for_project(project_id: &str) -> String {

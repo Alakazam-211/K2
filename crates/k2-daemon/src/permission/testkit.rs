@@ -197,6 +197,12 @@ pub(crate) fn all() -> Vec<Registered> {
 }
 
 pub(crate) fn find(id: &str) -> Option<Registered> {
+    // Lane F: while the golden-sample run is active on THIS thread, its
+    // catalog actions (the real spec when registered, sample check/apply)
+    // win. Every other test and thread is unaffected.
+    if let Some(r) = super::permission_samples::stand_in(id) {
+        return Some(r);
+    }
     all().into_iter().find(|r| r.spec.id == id)
 }
 

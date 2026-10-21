@@ -1993,6 +1993,9 @@ fn answer_secret_card(params: &HashMap<String, String>, resolved: &ResolvedOverl
         hosts,
         delivery,
         confirmed_warnings: opt_param(params, "confirm").is_some_and(|c| c == "1" || c == "true"),
+        // 0.46.3: the simple card drew "Sales will get this as a file it
+        // can read" before Save; that is the readable-delivery disclosure.
+        readable_disclosed: opt_param(params, "disclosed").is_some_and(|c| c == "1" || c == "true"),
     };
     let result = match vault.request_answer(card_id, k2_vault::SecretBytes::from_string(value), &ans, &actor) {
         Ok(r) => r,
@@ -3423,6 +3426,78 @@ mod tests {
             .expect("the vault holds the first human answer");
         assert_eq!(got.value.expose(), b"human-typed", "the first human answer is final");
         assert!(!k2_core::overlay::vault::exists(&project_id, name), "nothing in the old folder");
+    }
+
+    /// VS12 + 0.46.3 simple card: a readable delivery answered without
+    /// `confirm` or `disclosed` is still 409 (older cards, the CLI); the
+    /// simple card's `disclosed=1` (it showed "the agent can read it" before
+    /// Save) saves in one click; `disclosed` never skips the host-mismatch
+    /// check, which still needs `confirm`.
+    #[test]
+    fn readable_delivery_needs_confirm_or_the_disclosure() {
+        let _vault = crate::vault::ensure_test_vault();
+        let handle = format!("ovlvs12{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        pin(&project_id, &uuid::Uuid::new_v4().to_string());
+        let card = |name: &str, extra: serde_json::Value| -> String {
+            let mut body = serde_json::json!({ "addr": handle, "name": name, "from": "k2" });
+            for (k, v) in extra.as_object().expect("extra") {
+                body[k] = v.clone();
+            }
+            let posted = post_json("/cli/thread/secret", &HashMap::new(), body);
+            assert_eq!(posted.status, "200 OK", "{}", posted.body);
+            json_body(&posted)["id"].as_str().expect("id").to_string()
+        };
+
+        let file = card(
+            "VS12_FILE",
+            serde_json::json!({ "delivery": "file", "scope": "workspace", "kind": "password" }),
+        );
+        // Old client: no confirm, no disclosed → the second-click refusal.
+        let old = post_json(
+            "/cli/thread/answer",
+            &HashMap::new(),
+            serde_json::json!({ "addr": handle, "id": file, "secret": "pw-old-client" }),
+        );
+        assert_error_code(&old, "409 Conflict", "card_readable_delivery");
+        // `disclosed` must be "1"/"true"; anything else is not the signal.
+        let junk = post_json(
+            "/cli/thread/answer",
+            &HashMap::new(),
+            serde_json::json!({ "addr": handle, "id": file, "secret": "pw-junk", "disclosed": "yes" }),
+        );
+        assert_error_code(&junk, "409 Conflict", "card_readable_delivery");
+        // The simple card: one click.
+        let simple = post_json(
+            "/cli/thread/answer",
+            &HashMap::new(),
+            serde_json::json!({ "addr": handle, "id": file, "secret": "pw-simple-card", "disclosed": "1" }),
+        );
+        assert_eq!(simple.status, "200 OK", "{}", simple.body);
+        assert_eq!(json_body(&simple)["status"], "set");
+        assert_eq!(json_body(&simple)["agentCanSee"], true);
+
+        // A Stripe-looking key bound for another host: `disclosed` does not
+        // get past the mismatch guard; `confirm` does.
+        let stripe = [
+            k2_vault::inject::preset("stripe").expect("stripe preset").prefixes[0].as_bytes(),
+            b"abcdef123456",
+        ]
+        .concat();
+        let stripe = String::from_utf8(stripe).expect("utf8");
+        let off = card("VS12_OFF", serde_json::json!({ "for": "api.example.com" }));
+        let tricked = post_json(
+            "/cli/thread/answer",
+            &HashMap::new(),
+            serde_json::json!({ "addr": handle, "id": off, "secret": stripe, "disclosed": "1" }),
+        );
+        assert_error_code(&tricked, "409 Conflict", "card_host_mismatch");
+        let confirmed = post_json(
+            "/cli/thread/answer",
+            &HashMap::new(),
+            serde_json::json!({ "addr": handle, "id": off, "secret": stripe, "disclosed": "1", "confirm": "1" }),
+        );
+        assert_eq!(confirmed.status, "200 OK", "{}", confirmed.body);
     }
 
     /// KV8 is scoped to secret cards: an agent may still tap its own

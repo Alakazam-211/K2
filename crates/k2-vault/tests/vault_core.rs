@@ -660,7 +660,23 @@ fn secret_cards_are_for_people() {
     let e = v.request_answer("card-mismatch-0123456", SecretBytes::from_slice(&[k2_vault::inject::preset("stripe").expect("stripe preset").prefixes[0].as_bytes(), b"abcdef123456"].concat()), &ans, &Actor::Owner).err().expect("red");
     assert_eq!(e.code, "card_host_mismatch");
     let yes = CardAnswer { confirmed_warnings: true, ..Default::default() };
+    // The simple card's disclosure skips only the readable check, never this one.
+    let disclosed = CardAnswer { readable_disclosed: true, ..Default::default() };
+    let e = v.request_answer("card-mismatch-0123456", SecretBytes::from_slice(&[k2_vault::inject::preset("stripe").expect("stripe preset").prefixes[0].as_bytes(), b"abcdef123456"].concat()), &disclosed, &Actor::Owner).err().expect("still red");
+    assert_eq!(e.code, "card_host_mismatch");
     v.request_answer("card-mismatch-0123456", SecretBytes::from_slice(&[k2_vault::inject::preset("stripe").expect("stripe preset").prefixes[0].as_bytes(), b"abcdef123456"].concat()), &yes, &Actor::Owner).expect("confirmed");
+    // A readable delivery: refused without a signal (older cards, the CLI),
+    // saved with the simple card's disclosure.
+    let mut file = mk("card-readable-0123456");
+    file.name = "FILE_PW".into();
+    file.kind = Kind::Password;
+    file.proposed_hosts = vec![];
+    file.proposed_delivery = Delivery::File;
+    v.request_create(file).expect("card");
+    let e = v.request_answer("card-readable-0123456", SecretBytes::from_slice(b"pw-readable-1"), &ans, &Actor::Owner).err().expect("second click");
+    assert_eq!(e.code, "card_readable_delivery");
+    let out = v.request_answer("card-readable-0123456", SecretBytes::from_slice(b"pw-readable-1"), &disclosed, &Actor::Owner).expect("disclosed saves");
+    assert!(out.meta.agent_can_see());
     // Guests: chat scope, fetch only, a host required.
     let mut g = mk("card-guest-0123456789");
     g.name = "GUEST_KEY".into();

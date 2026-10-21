@@ -334,6 +334,14 @@ pub struct CardAnswer {
     /// Second click after a red mismatch / readable-delivery warning.
     #[serde(default)]
     pub confirmed_warnings: bool,
+    /// 0.46.3: the card showed, in plain words before Save, that the agent
+    /// can read this value ("Sales will get this as a file it can read").
+    /// That sentence is the readable-delivery disclosure, so this skips
+    /// only that check. A key that looks like another provider's still
+    /// needs `confirmed_warnings`. Clients that don't show the sentence
+    /// (older cards, the CLI) never send it and keep the second click.
+    #[serde(default)]
+    pub readable_disclosed: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2382,7 +2390,11 @@ impl LocalVault {
             return Err(VaultError::bad_request("hosts_required", "add a site, or let the agent read it"));
         }
         // VS12: a key that looks like another provider's, or a readable
-        // delivery, needs the second click.
+        // delivery, needs the second click. A card that already showed the
+        // readable delivery in plain words (`readable_disclosed`) skips
+        // only the second. The mismatch check stays first: an older card
+        // that retries a `card_readable_delivery` with `confirm` relies on
+        // it having passed.
         if !ans.confirmed_warnings {
             if let Some(p) = inject::host_mismatch(value.expose(), &hosts) {
                 return Err(VaultError::conflict(
@@ -2390,7 +2402,7 @@ impl LocalVault {
                     format!("this looks like a {} key, but the card sends it somewhere else; confirm to save anyway", p.label),
                 ));
             }
-            if delivery.readable() {
+            if delivery.readable() && !ans.readable_disclosed {
                 return Err(VaultError::conflict("card_readable_delivery", "the agent will be able to see this value; confirm to save"));
             }
         }

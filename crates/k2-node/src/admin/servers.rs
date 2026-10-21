@@ -143,7 +143,10 @@ impl Ctx {
             pinned_owner: cfg.as_ref().and_then(|c| c.controller.as_ref().map(|x| x.fp.clone())),
             node_user: cfg.map(|c| c.node_user).unwrap_or_else(|| super::config::default_node_user().to_string()),
             by: by.to_string(),
-            root: true,
+            // The executor is root in life; its unit tests drive it in
+            // process (as root too in the Linux container) with fake
+            // platforms and no users: they keep the files-only path.
+            root: is_root() && !cfg!(test),
         }
     }
 }

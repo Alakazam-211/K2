@@ -152,12 +152,14 @@ impl Fake {
         );
     }
 
-    /// A pin for another server in `slot` that never dials (tests that
-    /// stand in for its session): this fake's routes under a fingerprint
-    /// of its own ([`stand_in_fp`]), which the slot's `servers.toml` line
-    /// names, so the node's servers loop keeps the tenant as that line's.
+    /// A pin for another server in `slot` whose session the test stands in
+    /// for: a real key of its own ([`stand_in_key`]; its line in
+    /// `servers.toml` names [`stand_in_fp`]), so the node's servers loop
+    /// opens the tenant as that line's. Its dials reach this fake, which
+    /// isn't that server: they never attach.
     pub fn stand_in_pin(&self, slot: u8, node_id: &str, name: &str) -> Pin {
-        Pin { controller_fp: stand_in_fp(slot), ..self.pin_for(node_id, name) }
+        let k = stand_in_key(slot);
+        Pin { controller_fp: k.fingerprint(), controller_public_key_pem: k.spki_pem(), ..self.pin_for(node_id, name) }
     }
 
     pub fn pin_for(&self, node_id: &str, name: &str) -> Pin {
@@ -377,10 +379,28 @@ pub async fn start_node_in(fake: &Fake, dir: PathBuf, policy_extra: &str, tweak:
     TestNode { node, layout, runner, dir }
 }
 
-/// A stand-in server's 64-hex fingerprint for `slot` (its line's
-/// `fp_prefix` is the first 16).
+/// A stand-in server's key for `slot` (one per slot per test process).
+pub fn stand_in_key(slot: u8) -> Arc<SigningKey> {
+    static KEYS: std::sync::OnceLock<Mutex<HashMap<u8, Arc<SigningKey>>>> = std::sync::OnceLock::new();
+    KEYS.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap().entry(slot).or_insert_with(|| Arc::new(SigningKey::generate().unwrap())).clone()
+}
+
+/// A stand-in server's fingerprint for `slot` (its line's `fp_prefix` is
+/// the first 16).
 pub fn stand_in_fp(slot: u8) -> String {
-    format!("{:016x}{}", slot as u64 + 1, "0".repeat(48))
+    stand_in_key(slot).fingerprint()
+}
+
+/// Wait until the node's servers loop opened `slot`'s tenant (the loop
+/// opens every server; tests never open one by hand).
+pub async fn tenant_opened(n: &TestNode, slot: u8) -> Arc<k2_node::node::Tenant> {
+    for _ in 0..400 {
+        if let Some(t) = n.node.tenant(slot) {
+            return t;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!("the servers loop never opened slot {slot}");
 }
 
 pub fn plan(job: &str, argv: &[&str]) -> Plan {

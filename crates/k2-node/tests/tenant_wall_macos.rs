@@ -62,7 +62,7 @@ fn write_servers(config: &Path, owner_fp: &str, slots: &[(Slot, Trust, Network)]
         let mut e = f.servers[0].clone();
         e.slot = *slot;
         e.label = format!("server-{slot}.test");
-        e.fp_prefix = format!("{:016x}", *slot as u64 + 1);
+        e.fp_prefix = stand_in_fp(*slot)[..16].to_string();
         e.trust = *trust;
         e.set_limits(&room(ShareLimits::new_server(*trust, true)));
         e.network = *net;
@@ -102,7 +102,9 @@ async fn mac_in(dir: PathBuf, slots: &[(Slot, Trust, Network)], prepare: bool) -
             }
         }
         k2_node::identity::write_pin(&n.layout.tenant(*slot).pin(), &fake.stand_in_pin(*slot, "node-1", "mini-1")).unwrap();
-        n.node.add_tenant(*slot).await.unwrap();
+    }
+    for (slot, ..) in slots {
+        tenant_opened(&n, *slot).await;
     }
     let slots: Vec<Slot> = slots.iter().map(|s| s.0).collect();
     let sessions = shares_up(&n, &slots);

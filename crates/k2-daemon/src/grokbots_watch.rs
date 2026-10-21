@@ -67,7 +67,12 @@ pub fn tick(p: &GrokBot, seen: &mut Seen) -> Change {
     let names: HashMap<String, String> = list.iter().map(|a| (a.id.clone(), a.name.clone())).collect();
     // The 0.45.7 live tail file: moved into Threads once.
     let mut tail_moved = match collect::migrate_legacy_tail(p, &names) {
-        Ok(v) => v,
+        Ok(v) => {
+            for id in &v {
+                crate::grokbots_routes::note_collected_change(id);
+            }
+            v
+        }
         Err(e) => {
             log_debug!("[grokbots] old live tail not migrated yet: {e}");
             Vec::new()
@@ -89,7 +94,11 @@ pub fn tick(p: &GrokBot, seen: &mut Seen) -> Change {
         // every poll.
         let read_store = seen.revs.get(&a.id) != Some(&rev);
         match collect::sync_agent(p, a, read_store, now) {
-            Ok(s) if s.changed => tail_moved.push(a.id.clone()),
+            Ok(s) if s.changed => {
+                // Even before the watcher is primed: a catch-up must see it.
+                crate::grokbots_routes::note_collected_change(&a.id);
+                tail_moved.push(a.id.clone())
+            }
             Ok(_) => {}
             Err(e) => log_debug!("[grokbots] collect {}: {e}", a.id),
         }

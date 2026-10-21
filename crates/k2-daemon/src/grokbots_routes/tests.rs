@@ -501,9 +501,19 @@ fn a_stale_bots_thread_collects_sends_and_new_latest_lines() {
     assert_eq!(t["messages"].as_array().expect("arr").len(), 1, "{t}");
     assert_eq!(t["messages"][0]["system"], json!("start"));
 
+    // catchup-unchanged-v1: a collected Thread has no overlay frames, so
+    // every change to it moves `rev` explicitly.
+    let conv = k2_core::external_agents::collect::conversation_id(sid);
+    let bumps = || crate::overlay_ws::test_bumps::for_conversation(&conv).len();
+    let started = bumps();
+    assert!(started >= 1, "the collection start moved rev");
+
     // Sends go through to the live conversation and land in the Thread.
+    let before = crate::overlay_ws::current_rev();
     let r = post("/cli/grokbots/send", Who::Owner, json!({"agent": sid, "text": "hi"}));
     assert_eq!(r.status, "200 OK", "{}", r.body);
+    assert!(bumps() > started, "our own send moved rev");
+    assert!(crate::overlay_ws::current_rev() > before, "a sinceRev from before the send is stale");
     let nonce = body(&r)["clientNonce"].as_str().expect("nonce").to_string();
     assert_eq!(sent_prompts(&e), vec![json!("[from owner] hi")]);
     let t = body(&get("/cli/grokbots/thread", Who::Owner, &[("agent", sid)]));
@@ -525,7 +535,9 @@ fn a_stale_bots_thread_collects_sends_and_new_latest_lines() {
     let mut reply = stale_item(sid, "Grok", "r2", "send-message", "Done: report sent.", 9);
     reply["lastActivityAt"] = json!(now_ms() + 1_000);
     e.gw.set(|s| s.agents[0] = reply);
+    let sent = bumps();
     let t = body(&get("/cli/grokbots/thread", Who::Owner, &[("agent", sid)]));
+    assert!(bumps() > sent, "a newly collected line moved rev");
     assert_eq!(
         said(&t)[1..].to_vec(),
         vec![

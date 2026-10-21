@@ -149,6 +149,10 @@ fn import(who: &Who, body: &[u8], home: &std::path::Path) -> R<J> {
         },
     )
     .map_err(|e| no("import_failed", 400, e))?;
+    drop(conn);
+    // An import writes Thread lines with no frame: move `rev` for each
+    // conversation it wrote into (catchup-unchanged-v1).
+    crate::overlay_ws::note_import(&report);
     Ok(json!({ "ok": true, "workspace": w.handle, "report": report }))
 }
 
@@ -231,9 +235,23 @@ mod tests {
         assert_eq!(r.status, "200 OK", "{}", r.body);
         let v: J = serde_json::from_str(&r.body).expect("json");
         assert_eq!(v["report"]["docsImported"], 3, "{v}");
+        // catchup-unchanged-v1: imported lines have no frame; the import
+        // moves `rev` for each conversation it wrote into.
+        let locals: Vec<String> = v["report"]["conversations"]
+            .as_array()
+            .expect("conversations")
+            .iter()
+            .filter(|c| c["imported"].as_u64().unwrap_or(0) > 0)
+            .map(|c| c["localConversationId"].as_str().expect("local").to_string())
+            .collect();
+        assert!(!locals.is_empty(), "{v}");
+        let counts: Vec<usize> = locals.iter().map(|c| crate::overlay_ws::test_bumps::for_conversation(c).len()).collect();
+        assert!(counts.iter().all(|n| *n == 1), "one bump per written conversation: {counts:?}");
         let again = handle(IMPORT, &Who::Owner, json!({"path": path, "to": dst}).to_string().as_bytes(), &HashMap::new(), &h);
         let v2: J = serde_json::from_str(&again.body).expect("json");
         assert_eq!(v2["report"]["docsImported"], 0, "re-import is a no-op: {v2}");
+        let counts2: Vec<usize> = locals.iter().map(|c| crate::overlay_ws::test_bumps::for_conversation(c).len()).collect();
+        assert_eq!(counts, counts2, "a no-op re-import moves nothing");
         let mut q = HashMap::new();
         q.insert("ws".to_string(), dst.clone());
         let l = handle(IMPORTS, &Who::Owner, b"", &q, &h);

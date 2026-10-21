@@ -1127,9 +1127,21 @@ pub struct LanePlan<'a> {
     /// Today's path, unchanged.
     pub legacy: Vec<&'a crate::push_devices::PushDevice>,
     /// Sealed, each with its active key.
-    pub sealed: Vec<(&'a crate::push_devices::PushDevice, crate::push_device_keys::StoredKey)>,
+    pub sealed: Vec<SealedDevice<'a>>,
     /// `sealed-only` generic ("K2 / New message").
     pub generic: Vec<&'a crate::push_devices::PushDevice>,
+}
+
+/// One device on the sealed lane.
+#[derive(Debug)]
+pub struct SealedDevice<'a> {
+    pub device: &'a crate::push_devices::PushDevice,
+    /// Its active key.
+    pub key: crate::push_device_keys::StoredKey,
+    /// If the relay refuses the sealed send (a stale stored `s1`), this
+    /// push may go today's way: `sealed-when-supported` or a `sealed`
+    /// override. Never under `sealed-only`.
+    pub legacy_fallback: bool,
 }
 
 /// Why one device's sealed push was skipped (logged by class only).
@@ -1150,6 +1162,13 @@ impl SealFailure {
             Self::Seal(_) => "seal",
         }
     }
+}
+
+/// `true` the first time a device id is seen here (log-once per device).
+fn note_skip_once(device_id: &str) -> bool {
+    static SEEN: std::sync::Mutex<Option<std::collections::HashSet<String>>> = std::sync::Mutex::new(None);
+    let mut g = SEEN.lock().unwrap_or_else(|p| p.into_inner());
+    g.get_or_insert_with(Default::default).insert(device_id.to_string())
 }
 
 fn unix_now_ms() -> i64 {
@@ -1486,7 +1505,11 @@ impl K2Cloud {
                 e2e::Lane::Legacy => plan.legacy.push(d),
                 e2e::Lane::Generic if badge => plan.legacy.push(d),
                 e2e::Lane::Generic => plan.generic.push(d),
-                e2e::Lane::Sealed => plan.sealed.push((d, key.expect("sealed lane has a key"))),
+                e2e::Lane::Sealed => plan.sealed.push(SealedDevice {
+                    device: d,
+                    key: key.expect("sealed lane has a key"),
+                    legacy_fallback: eff == e2e::Effective::Sealed,
+                }),
             }
         }
         plan
@@ -1519,27 +1542,70 @@ impl K2Cloud {
         &self,
         event: &PushEvent,
         badge_key: &str,
-        devices: &[(&crate::push_devices::PushDevice, crate::push_device_keys::StoredKey)],
+        devices: &[SealedDevice<'_>],
         now: i64,
     ) -> Result<(), PushError> {
         let kind = if matches!(event, PushEvent::Badge(_)) { seal::SealKind::Nudge } else { seal::SealKind::Alert };
         let stamp = PushStamp { subdomain: self.config.subdomain.clone(), instance_id: instance_id() };
         let now_ms = unix_now_ms();
-        let mut entries = Vec::with_capacity(devices.len());
-        for (d, key) in devices {
-            match Self::seal_for(event, kind, d, key, &stamp, badge_key, now, now_ms) {
-                Ok(e2e) => entries.push(e2e::SealedEntry { platform: d.platform.clone(), token: d.token.clone(), e2e }),
+        let mut sealed: Vec<(e2e::SealedEntry, &SealedDevice<'_>)> = Vec::with_capacity(devices.len());
+        for sd in devices {
+            let d = sd.device;
+            match Self::seal_for(event, kind, d, &sd.key, &stamp, badge_key, now, now_ms) {
+                Ok(e2e) => sealed.push((e2e::SealedEntry { platform: d.platform.clone(), token: d.token.clone(), e2e }, sd)),
+                // A nudge that can't fit (a very long server name): skipped,
+                // logged once per device so it shows.
+                Err(SealFailure::Seal(seal::SealError::TooLarge { len, max })) if kind == seal::SealKind::Nudge => {
+                    if note_skip_once(&d.device_id) {
+                        crate::log_debug!(
+                            "[push] sealed nudge skipped for device {}: plaintext {len} > {max} bytes (server name too long)",
+                            d.device_id
+                        );
+                    }
+                }
                 // Never a plaintext fallback for a keyed phone; the class only.
                 Err(e) => crate::log_debug!("[push] sealed push skipped for one device: {}", e.class()),
             }
         }
         let url = format!("{}/push/dispatch", self.config.url);
-        for chunk in entries.chunks(MAX_DEVICES_PER_CALL) {
-            let body = e2e::sealed_dispatch_body(kind, chunk);
-            let response = self.post_sealed(&url, &body, now)?;
-            Self::prune_dead(&response);
+        let mut result = Ok(());
+        for chunk in sealed.chunks(MAX_DEVICES_PER_CALL) {
+            let entries: Vec<e2e::SealedEntry> = chunk.iter().map(|(e, _)| e.clone()).collect();
+            let body = e2e::sealed_dispatch_body(kind, &entries);
+            match self.post_sealed(&url, &body, now) {
+                Ok(response) => Self::prune_dead(&response),
+                // The relay refused the sealed send (e.g. a stale stored
+                // `s1` after a relay rollback; the refusal already cleared
+                // it). Under `sealed-when-supported` (or a `sealed`
+                // override) this one push goes today's way so delivery is
+                // never blocked; under `sealed-only`, never.
+                Err(PushError::Remote { status, body: reason }) => {
+                    let fallback: Vec<crate::push_devices::PushDevice> =
+                        chunk.iter().filter(|(_, sd)| sd.legacy_fallback).map(|(_, sd)| sd.device.clone()).collect();
+                    let dropped = chunk.len() - fallback.len();
+                    crate::log_debug!(
+                        "[push] sealed send refused (HTTP {status}, {reason}); {} device(s) get today's push, {dropped} (sealed-only) get nothing",
+                        fallback.len()
+                    );
+                    if !fallback.is_empty() {
+                        if let Err(e) = self.dispatch_legacy(event, badge_key, &fallback) {
+                            if result.is_ok() {
+                                result = Err(e);
+                            }
+                        }
+                    }
+                    if dropped > 0 && result.is_ok() {
+                        result = Err(PushError::Remote { status, body: reason });
+                    }
+                }
+                Err(e) => {
+                    if result.is_ok() {
+                        result = Err(e);
+                    }
+                }
+            }
         }
-        Ok(())
+        result
     }
 
     /// Build, fit, pad and seal one device's plaintext.

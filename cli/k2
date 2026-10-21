@@ -15507,18 +15507,32 @@ k2 push — the phones that get this server's pushes, and encrypted pushes
                                     one phone's override (testing): off = today's
                                     pushes, sealed = encrypted when it can,
                                     default = follow the server switch
+  k2 push log [--json] [--device <id>]
+                                    the last 200 push attempts, one per phone per
+                                    relay call, oldest first: device (8 chars),
+                                    kind, sealed/legacy/generic, bytes, key
+                                    fingerprint (sealed), relay status or error,
+                                    path (s0/s1/shared), relay markers, the
+                                    vendor result and ms. In memory only (gone on
+                                    restart); never message text, titles, names
+                                    or tokens. The daemon log has the same lines
+                                    ("[push] attempt ...").
 
 Owner only (the owner token or an Owner login). Exit 2 usage, 3 not allowed,
 4 no such device.
 EOF
 }
 
-# _push_send <GET|POST> <path> [json body] → prints "body\ncode". TCP with
-# the owner token (the cell socket's passport is never the owner).
+# _push_send <GET|POST> <path> [json body] [k=v GET params...] → prints
+# "body\ncode". TCP with the owner token (the cell socket's passport is
+# never the owner).
 _push_send() {
-    local method="$1" path="$2" payload="${3:-}" _K2_CFG=""
+    local method="$1" path="$2" payload="${3:-}" _K2_CFG="" kv
     if [ "$method" = "GET" ]; then
         _k2_cfg_add data-urlencode "token=${TOKEN}"
+        for kv in "${@:4}"; do
+            _k2_cfg_add data-urlencode "$kv"
+        done
         _k2_curl "$_K2_CFG" -s -G "${BASE_URL}${path}" \
             --connect-timeout 5 --max-time 30 \
             -w $'\n%{http_code}' 2>/dev/null || true
@@ -15585,6 +15599,26 @@ elif view == "mode":
         print("relay           :", "ready (s1)" if d.get("relaySealed") else "not ready: phones get today\x27s pushes")
 elif view == "override":
     print("device", d.get("deviceId"), "override:", d.get("override") or "default (follows the server switch)")
+elif view == "log":
+    import datetime
+    rows = d.get("attempts") or []
+    if not rows:
+        print("no push attempts since the daemon started" + (" for device " + str(d.get("device")) if d.get("device") else ""))
+    for a in rows:
+        at = datetime.datetime.fromtimestamp((a.get("atMs") or 0) / 1000).strftime("%Y-%m-%d %H:%M:%S")
+        bits = ["device=" + str(a.get("device")), "kind=" + str(a.get("kind")), "lane=" + str(a.get("lane")),
+                "bytes=" + str(a.get("bytes"))]
+        if a.get("key"):
+            bits.append("key=" + str(a.get("key")))
+        bits.append("status=" + (str(a.get("status")) if a.get("status") is not None else "-"))
+        if a.get("error"):
+            bits.append("error=" + str(a.get("error")))
+        bits.append("path=" + str(a.get("path")))
+        bits.append("relay=" + str(a.get("relay")))
+        if a.get("vendor"):
+            bits.append("vendor=" + str(a.get("vendor")))
+        bits.append("ms=" + str(a.get("ms")))
+        print(at + "  " + " ".join(bits))
 '
 }
 
@@ -15633,8 +15667,29 @@ cmd_push() {
             raw="$(_push_send POST /cli/push/device/e2e "$body")"
             _push_render "$as_json" override "$raw"
             ;;
+        log)
+            local dev="" i=0
+            while [ "$i" -lt "${#args[@]}" ]; do
+                case "${args[$i]}" in
+                    --device)
+                        i=$((i + 1))
+                        dev="${args[$i]:-}"
+                        [ -n "$dev" ] || { echo "usage: k2 push log [--json] [--device <id>]" >&2; exit 2; }
+                        ;;
+                    --device=*) dev="${args[$i]#--device=}" ;;
+                    *) echo "usage: k2 push log [--json] [--device <id>] (got '${args[$i]}')" >&2; exit 2 ;;
+                esac
+                i=$((i + 1))
+            done
+            if [ -n "$dev" ]; then
+                raw="$(_push_send GET /cli/push/log "" "device=${dev}")"
+            else
+                raw="$(_push_send GET /cli/push/log)"
+            fi
+            _push_render "$as_json" log "$raw"
+            ;;
         *)
-            echo "usage: unknown push verb '$sub' (devices|e2e|device e2e)" >&2
+            echo "usage: unknown push verb '$sub' (devices|e2e|device e2e|log)" >&2
             exit 2
             ;;
     esac

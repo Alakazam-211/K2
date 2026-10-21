@@ -51,6 +51,12 @@ pub const E2E_PATH: &str = "/cli/push/e2e";
 /// `POST /cli/push/device/e2e` — the owner's per-device override
 /// (`off` | `sealed` | `default`).
 pub const DEVICE_E2E_PATH: &str = "/cli/push/device/e2e";
+/// `GET /cli/push/log[?device=<id>]` — the last
+/// [`k2_core::push::attempts::RING_CAP`] push attempts, one per device per
+/// relay call (0.46.3, for the phone team's e2e push tests). Owner only,
+/// read-only, memory only: never content, titles, names, conversation ids
+/// or tokens.
+pub const LOG_PATH: &str = "/cli/push/log";
 
 /// Push-domain GET dispatch. The mutations are POST-only — reached
 /// via the GET chain they answer an explicit 405. [`DEVICE_PATH`] needs
@@ -62,7 +68,7 @@ pub fn dispatch(path: &str, _params: &HashMap<String, String>) -> Option<CliResp
         "/cli/push/register-device" | "/cli/push/unregister-device" | DEVICE_E2E_PATH => {
             Some(CliResponse::method_not_allowed())
         }
-        DEVICES_PATH | E2E_PATH => Some(owner_only()),
+        DEVICES_PATH | E2E_PATH | LOG_PATH => Some(owner_only()),
         DEVICE_PATH => Some(CliResponse {
             status: "403 Forbidden",
             content_type: "application/json",
@@ -122,7 +128,7 @@ pub fn dispatch_post_ctx(path: &str, body: &[u8], username: &str, ctx: &PushCall
         E2E_PATH => handle_set_mode(body),
         DEVICE_E2E_PATH if !ctx.owner => owner_only(),
         DEVICE_E2E_PATH => handle_set_override(body),
-        DEVICE_PATH | DEVICES_PATH => CliResponse::method_not_allowed(),
+        DEVICE_PATH | DEVICES_PATH | LOG_PATH => CliResponse::method_not_allowed(),
         _ => CliResponse::not_found(),
     }
 }
@@ -387,6 +393,26 @@ pub fn handle_owner_get(path: &str, owner: bool) -> CliResponse {
         }
         _ => CliResponse::not_found(),
     }
+}
+
+/// `GET /cli/push/log` (owner only): the attempt ring, oldest first;
+/// `device` (or `deviceId`) keeps one phone's, matched on the first 8
+/// characters of its id.
+pub fn handle_log_get(params: &HashMap<String, String>, owner: bool) -> CliResponse {
+    if !owner {
+        return owner_only();
+    }
+    let device = params.get("device").or_else(|| params.get("deviceId")).map(|d| d.trim()).filter(|d| !d.is_empty());
+    let attempts = k2_core::push::attempts::recent(device);
+    CliResponse::ok_json(
+        serde_json::json!({
+            "ok": true,
+            "cap": k2_core::push::attempts::RING_CAP,
+            "device": device.map(k2_core::push::attempts::short),
+            "attempts": attempts,
+        })
+        .to_string(),
+    )
 }
 
 #[derive(Debug, serde::Deserialize, Default)]
@@ -1772,5 +1798,142 @@ mod tests {
         assert_eq!(dispatch(E2E_PATH, &params).expect("claimed").status, "403 Forbidden");
         assert_eq!(dispatch(DEVICE_E2E_PATH, &params).expect("claimed").status, "405 Method Not Allowed");
         assert_eq!(dispatch_post(DEVICES_PATH, b"{}", "owner").status, "405 Method Not Allowed");
+    }
+
+    /// `GET /cli/push/log` is the owner's and GET-only: refused without the
+    /// owner (handler, GET chain), 405 on POST, and classified GET/Owner
+    /// with no POST row (so the dispatcher 405s a POST before auth).
+    #[test]
+    fn push_log_route_is_owner_only_and_get_only() {
+        let params = HashMap::new();
+        let r = handle_log_get(&params, false);
+        assert_eq!(r.status, "403 Forbidden");
+        assert!(r.body.contains("owner_only"), "{}", r.body);
+        assert_eq!(dispatch(LOG_PATH, &params).expect("claimed").status, "403 Forbidden");
+        assert_eq!(dispatch_post(LOG_PATH, b"{}", "owner").status, "405 Method Not Allowed");
+        let row = crate::routes::route_policy::lookup(LOG_PATH).expect("classified");
+        assert_eq!(row.get, Some(crate::routes::route_policy::Floor::Owner));
+        assert_eq!(row.post, None);
+        assert!(!crate::routes::route_policy::post_allowed(LOG_PATH));
+    }
+
+    /// Answers 200 with the S0 marker; `results` marks the device sent.
+    struct LogRelay;
+
+    impl k2_core::push::DispatchSender for LogRelay {
+        fn post(
+            &self,
+            _url: &str,
+            _auth: &k2_core::push::GatewayAuth,
+            body: &serde_json::Value,
+        ) -> Result<k2_core::push::GatewayResponse, k2_core::push::PushError> {
+            let results: Vec<serde_json::Value> = body["devices"]
+                .as_array()
+                .expect("devices")
+                .iter()
+                .map(|d| serde_json::json!({ "token": d["token"], "sent": true, "dead": false }))
+                .collect();
+            Ok(k2_core::push::GatewayResponse {
+                status: 200,
+                body: serde_json::json!({ "ok": true, "results": results }).to_string(),
+                s0: true,
+                s1: false,
+            })
+        }
+    }
+
+    /// A real dispatch lands in the ring and `k2 push log` reads it back,
+    /// filtered by device, with no preview, title, conversation id or token.
+    #[test]
+    fn push_log_route_reads_the_ring_and_never_content() {
+        use k2_core::push::{GatewayConfig, ThreadMsgKind, ThreadPush};
+        let id = format!("{}-push-log-route", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+        let token = format!("tok-LOGROUTE-{}", uuid::Uuid::new_v4().simple());
+        let device = push_devices::PushDevice {
+            device_id: id.clone(),
+            platform: "apns".into(),
+            token: token.clone(),
+            username: "owner".into(),
+            created_at: 1,
+            updated_at: 1,
+            last_seen_at: 1,
+            previews: true,
+        };
+        let cloud = K2Cloud::with_config(
+            GatewayConfig {
+                url: format!("https://push-log-{}.k2.dev", uuid::Uuid::new_v4().simple()),
+                tunnel: None,
+                shared_token: Some("shared-LOGROUTE-secret".into()),
+                subdomain: "logroute-sub".into(),
+            },
+            Arc::new(LogRelay),
+        );
+        let event = PushEvent::ThreadPost(ThreadPush {
+            agent_name: "TitleLogRouteAgent".into(),
+            conversation_id: "conv-logroute-1".into(),
+            addr: "addr-logroute/x".into(),
+            seq: 3,
+            project_id: "proj-logroute".into(),
+            msg_kind: ThreadMsgKind::Choice,
+            count: 1,
+            principal: "owner".into(),
+            device_usernames: vec!["owner".into()],
+            unread_total: "2".into(),
+            waiting_total: "1".into(),
+            avatar_rev: String::new(),
+            agent_color: String::new(),
+            preview: "ZEBRA-logroute-preview-text".into(),
+            msg: None,
+        });
+        cloud
+            .dispatch_in_mode(&event, "bk-logroute-0123", std::slice::from_ref(&device), k2_core::push::e2e::PushE2eMode::Off)
+            .expect("dispatch");
+
+        let mut params = HashMap::new();
+        params.insert("device".to_string(), id.clone());
+        let v = ok_json(handle_log_get(&params, true));
+        assert_eq!(v["cap"], 200);
+        assert_eq!(v["device"], &id[..8]);
+        let rows = v["attempts"].as_array().expect("attempts");
+        assert_eq!(rows.len(), 1, "{v}");
+        let a = &rows[0];
+        assert_eq!(a["device"], &id[..8]);
+        assert_eq!(a["kind"], "thread_card");
+        assert_eq!(a["lane"], "legacy");
+        assert!(a["bytes"].as_u64().expect("bytes") > 0);
+        assert!(a["key"].is_null());
+        assert_eq!(a["status"], 200);
+        assert!(a["error"].is_null());
+        assert_eq!(a["path"], "shared");
+        assert_eq!(a["relay"], "s0");
+        assert_eq!(a["vendor"], "sent");
+        assert!(a["ms"].is_u64() && a["atMs"].is_i64());
+        // `deviceId` works too; another device's filter is empty.
+        let mut by_id = HashMap::new();
+        by_id.insert("deviceId".to_string(), id.clone());
+        assert_eq!(ok_json(handle_log_get(&by_id, true))["attempts"].as_array().expect("rows").len(), 1);
+        let mut other = HashMap::new();
+        other.insert("device".to_string(), "zzzzzzzz-none".to_string());
+        assert!(ok_json(handle_log_get(&other, true))["attempts"].as_array().expect("rows").is_empty());
+
+        // Never content or tokens, filtered or not.
+        let all = handle_log_get(&HashMap::new(), true);
+        for body in [handle_log_get(&params, true).body, all.body] {
+            for f in [
+                "ZEBRA",
+                "logroute-preview",
+                "TitleLogRouteAgent",
+                "conv-logroute",
+                "addr-logroute",
+                "proj-logroute",
+                "LOGROUTE",
+                &token,
+                "bk-logroute",
+                "logroute-sub",
+                "push-log-route",
+            ] {
+                assert!(!body.contains(f), "push log carries {f:?}: {body}");
+            }
+        }
     }
 }

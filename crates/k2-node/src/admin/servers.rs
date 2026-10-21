@@ -500,7 +500,7 @@ pub fn add(ctx: &Ctx, a: &AddArgs) -> Result<Value, AdminRefusal> {
     f.validate().map_err(|m| refuse(code::BAD_ARGS, m))?;
     prepare_tenant(ctx, &e)?;
     let enroll = ServerEnroll {
-        id: format!("add-{slot}-{}", ctx.now),
+        id: format!("add-{slot}-{}", k2_node_proto::crypto::random_id().map_err(failed)?),
         slot,
         url: a.url.trim_end_matches('/').to_string(),
         code_binding: a.code_binding.clone(),
@@ -617,7 +617,8 @@ pub fn revoke(ctx: &Ctx, a: &RevokeArgs) -> Result<Value, AdminRefusal> {
     let at = b.revoked.get(&slot.to_string()).map(|r| r.0).unwrap_or(ctx.now);
     b.revoked.insert(slot.to_string(), (at, a.wipe));
     write_book(&ctx.state_dir, &b).map_err(failed)?;
-    if a.now {
+    // A wipe at once takes the files from under running jobs: they stop too.
+    if a.now || a.wipe {
         set_stop(&ctx.config_dir, slot, true).map_err(failed)?;
     }
     if read_enroll(&ctx.config_dir).ok().flatten().is_some_and(|x| x.slot == slot) {

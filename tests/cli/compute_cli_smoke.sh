@@ -210,6 +210,9 @@ WT_HEAD="$(git -C "$WT" rev-parse HEAD)"
 echo "dirty main checkout" > "$WS/main-untracked.txt"
 wt_k2() { (cd "$WT" && unset K2_PROJECT_PATH && HOME="$DHOME" "$K2" "$@"); }
 jfield() { python3 -c 'import json,sys; v=json.load(sys.stdin); print(v.get(sys.argv[1]) if v.get(sys.argv[1]) is not None else "")' "$1"; }
+# The daemon's full job row (what `get --json` printed before compute B made
+# it the result object): srcCommit, detach, … straight from the route.
+job_row() { curl -sf "http://127.0.0.1:$PORT/cli/compute/jobs/get?job=$1&token=$OWNER_TOKEN"; }
 set +e
 wt_k2 compute run mini --no-source -- true >/dev/null 2>"$SANDBOX/err"; rc=$?
 set -e
@@ -226,7 +229,10 @@ for _ in $(seq 1 100); do
     wt_k2 compute get "$JOBW" | grep -q ": done" && break
     sleep 0.2
 done
-expect_eq "job.srcCommit is the worktree HEAD" "$(wt_k2 compute get "$JOBW" --json | jfield srcCommit)" "$WT_HEAD"
+# `get --json` prints the one result object (compute B); its `commit` is the
+# job row's srcCommit. The full row (srcCommit itself) is the daemon's body.
+expect_eq "result.commit is the worktree HEAD" "$(wt_k2 compute get "$JOBW" --json | jfield commit)" "$WT_HEAD"
+expect_eq "job.srcCommit is the worktree HEAD" "$(job_row "$JOBW" | jfield srcCommit)" "$WT_HEAD"
 echo 'echo dirty-ok' > "$WT/untracked.sh"
 set +e
 stdout="$(wt_k2 compute run mini --dirty -- sh untracked.sh 2>"$SANDBOX/err")"; rc=$?
@@ -352,7 +358,7 @@ RW="$(printf '%s\n' "$rout" | head -1)"
 expect_eq "run --wait prints only the job id on stdout" "$rout" "$RW"
 expect_has "the id is the job's" "$(k2 compute get "$RW")" "job $RW on mini: done"
 case "$rout$(cat "$SANDBOX/err")" in *never-streamed*) bad "run --wait streams no log text" ;; *) ok "run --wait streams no log text" ;; esac
-expect_has "run --wait posted detach:false" "$(k2 compute get "$RW" --json)" '"detach":false'
+expect_has "run --wait posted detach:false" "$(job_row "$RW")" '"detach":false'
 set +e
 k2 compute run mini --wait --detach -- true >/dev/null 2>&1; rc=$?
 set -e

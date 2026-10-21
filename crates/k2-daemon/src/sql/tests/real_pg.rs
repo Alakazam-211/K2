@@ -619,3 +619,226 @@ fn real_pg_guest_doors_smoke() {
     let _ = std::fs::remove_dir_all(&dir);
     assert_eq!(failed, 0, "{failed} real-Postgres checks failed (see [realpg] lines)");
 }
+
+/// Regression + happy-path for the superuser `search_path` pin.
+///
+/// As the `{db}_migrator` (the tenant's own role, through a migration),
+/// plants objects in `public` that shadow the `pg_catalog` names the guest
+/// seal and revoke use unqualified — `public.format(text,text)`,
+/// `public.to_regclass(text)`, a `public.=(text,text)` operator, and
+/// `pg_catalog`-shadowing views `public.pg_roles` / `public.pg_class`.
+/// Every one is SECURITY INVOKER, so when the seal (running as the
+/// `postgres` superuser) resolves to it, it runs *as postgres*; it then
+/// records a marker row stamped with `current_user`. The migration also
+/// sets `ALTER DATABASE … SET search_path = public, pg_catalog`, which puts
+/// `pg_catalog` explicitly last so the planted names win name resolution.
+///
+/// Then runs every superuser-into-tenant path: migrate (the end-of-run
+/// seal A1 + the pre-apply seal A2), the boot seal pass (A5) and a
+/// grant/revoke (B).
+///
+/// Proof: no marker row is ever stamped `postgres` (nothing planted ran as
+/// the superuser). On v0.46.2 the seal resolves the plants and the marker
+/// fills with `postgres` rows, so this test FAILS there; with the pin it
+/// stays empty. Markers stamped with the *migrator* role are fine — that
+/// is the tenant running its own code in its own session, not escalation.
+///
+/// The happy-path half proves the pin changes nothing else: the seal's end
+/// state (RLS on, `k2_internal_no_guest` present, `_k2_*` owned by the
+/// migrator, agent still granted), a pre-existing `_k2_store` row, and
+/// `public` extensions (pgcrypto, pg_trgm, uuid-ossp) are all intact.
+#[test]
+#[ignore = "needs a throwaway Postgres 16 cluster (REALPG_PORT/REALPG_SOCK/REALPG_BIN)"]
+fn real_pg_search_path_pin_holds() {
+    let cluster: &'static ClusterOps = Box::leak(Box::new(ClusterOps {
+        port: need_env("REALPG_PORT"),
+        sock: need_env("REALPG_SOCK"),
+        psql: format!("{}/psql", need_env("REALPG_BIN")),
+    }));
+    let _home = crate::test_support::TempHome::new();
+    let _g = sql_server_test_lock();
+    k2_core::db::init_for_tests();
+    seed_running_sidecar();
+
+    let dir = std::env::temp_dir().join(format!("k2-realpg-sp-{}", uuid::Uuid::new_v4()));
+    let mig = dir.join(".k2/db/migrations");
+    std::fs::create_dir_all(&mig).unwrap();
+    // 0001: a normal migration that also seeds _k2_store (a real tenant row
+    // in K2's own table, to prove the seal leaves data alone).
+    std::fs::write(
+        mig.join("0001_init.sql"),
+        "CREATE TABLE app_rows (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), owner uuid NOT NULL);\n\
+         INSERT INTO _k2_store (collection, id, doc) VALUES ('c', 'keep', '{\"v\":1}'::jsonb);\n",
+    )
+    .unwrap();
+    // 0002: the plant. Runs as {db}_migrator. refuse_user_migration_sql lets
+    // all of this through (it only blocks FORCE RLS / CREATE ROLE). Every
+    // planted object is SECURITY INVOKER (the default) so it runs as whoever
+    // calls it — the postgres superuser, when the seal resolves to it.
+    std::fs::write(
+        mig.join("0002_plant.sql"),
+        "CREATE TABLE k2_pwned (how text, who text);\n\
+         GRANT INSERT ON k2_pwned TO PUBLIC;\n\
+         CREATE FUNCTION public.k2_pwn_mark(tag text) RETURNS boolean\n\
+           LANGUAGE plpgsql AS $f$\n\
+           BEGIN INSERT INTO public.k2_pwned VALUES (tag, current_user); RETURN true; END $f$;\n\
+         CREATE FUNCTION public.format(text, text) RETURNS text\n\
+           LANGUAGE plpgsql AS $f$\n\
+           BEGIN PERFORM public.k2_pwn_mark('format'); RETURN pg_catalog.format($1, $2); END $f$;\n\
+         CREATE FUNCTION public.to_regclass(text) RETURNS regclass\n\
+           LANGUAGE plpgsql AS $f$\n\
+           BEGIN PERFORM public.k2_pwn_mark('to_regclass'); RETURN pg_catalog.to_regclass($1); END $f$;\n\
+         CREATE FUNCTION public.k2_evil_eq(text, text) RETURNS boolean\n\
+           LANGUAGE plpgsql AS $f$\n\
+           BEGIN PERFORM public.k2_pwn_mark('op='); RETURN $1 OPERATOR(pg_catalog.=) $2; END $f$;\n\
+         CREATE OPERATOR public.= (leftarg = text, rightarg = text, function = public.k2_evil_eq);\n\
+         CREATE VIEW public.pg_roles AS\n\
+           SELECT r.* FROM pg_catalog.pg_roles r WHERE public.k2_pwn_mark('view pg_roles');\n\
+         CREATE VIEW public.pg_class AS\n\
+           SELECT c.* FROM pg_catalog.pg_class c WHERE public.k2_pwn_mark('view pg_class');\n\
+         ALTER DATABASE CURRENT_DATABASE_PLACEHOLDER SET search_path = public, pg_catalog;\n",
+    )
+    .unwrap();
+
+    let path = dir.to_string_lossy().into_owned();
+    let handle = format!("spg{}", &uuid::Uuid::new_v4().to_string()[..8]);
+    let pid = insert_project_handle("real-pg-sp", &path, &handle);
+    let secrets = crate::sql::secrets::FileSecretStore::default();
+    let created = ops::create_database(cluster, &secrets, &pid, 1, None, None).expect("create db");
+    let db = created["name"].as_str().expect("db name").to_string();
+
+    // Rewrite the placeholder now that we know the database name.
+    let plant = std::fs::read_to_string(mig.join("0002_plant.sql")).unwrap();
+    std::fs::write(
+        mig.join("0002_plant.sql"),
+        plant.replace("CURRENT_DATABASE_PLACEHOLDER", &format!("\"{db}\"")),
+    )
+    .unwrap();
+
+    // Superuser psql over the socket. Verification reads pin their own path
+    // so they never touch the planted public.* names (pg_class view etc.).
+    let su = |sql: &str| {
+        cluster.run_helper(
+            &["psql", "-d", db.as_str(), "-q", "-tA", "-v", "ON_ERROR_STOP=1"],
+            Some(format!("SET search_path = pg_catalog, pg_temp;\n{sql}").as_bytes()),
+        )
+    };
+    // Any marker row stamped `postgres` means planted code ran as the
+    // superuser — the thing the pin must prevent.
+    let pwned_as_super = || {
+        su("SELECT coalesce(string_agg(DISTINCT how, ','), '') FROM public.k2_pwned WHERE who = 'postgres'")
+            .expect("read k2_pwned")
+    };
+    // For the record: everything the plants caught, with the caller.
+    let pwned_all = || {
+        su("SELECT coalesce(string_agg(how || ' as ' || who, ', '), '(none)') FROM public.k2_pwned")
+            .unwrap_or_default()
+    };
+
+    for ext in ["pgcrypto", "pg_trgm", "\"uuid-ossp\""] {
+        su(&format!("CREATE EXTENSION IF NOT EXISTS {ext} SCHEMA public"))
+            .unwrap_or_else(|e| panic!("CREATE EXTENSION {ext}: {e}"));
+    }
+
+    let migrator = format!("{db}_migrator");
+    let agent = format!("{db}_agent");
+
+    let mut results: Vec<(&str, Result<(), String>)> = Vec::new();
+
+    // migrate: applies 0001 + 0002 as the migrator, then the end-of-run
+    // seal (A1); the pre-apply seal (A2) ran before any plant existed.
+    ops::migrate(cluster, &secrets, &pid, &path, None).expect("migrate");
+    println!("[realpg-sp] after migrate, plants caught: {}", pwned_all());
+    results.push((
+        "migrate seal (A1/A2) ran no planted object as superuser",
+        want(pwned_as_super().is_empty(), format!("postgres markers={:?}", pwned_as_super())),
+    ));
+    su("TRUNCATE public.k2_pwned").expect("truncate");
+
+    // Boot seal pass (A5): sealing an already-planted database.
+    let sealed = ops::seal_existing_databases(cluster);
+    results.push((
+        "boot seal pass (A5) completes",
+        want(sealed.iter().any(|l| l == &format!("{db}: sealed")), format!("{sealed:?}")),
+    ));
+    results.push((
+        "boot seal (A5) ran no planted object as superuser",
+        want(pwned_as_super().is_empty(), format!("postgres markers={:?}", pwned_as_super())),
+    ));
+    su("TRUNCATE public.k2_pwned").expect("truncate");
+
+    // Revoke path (B): grant a second workspace, then revoke it.
+    let dir_b = std::env::temp_dir().join(format!("k2-realpg-spb-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir_b).unwrap();
+    let pid_b = insert_project("real-pg-sp-b", &dir_b.to_string_lossy());
+    ops::grant_access(cluster, &secrets, None, &db, &pid_b, "read", false, &[]).expect("grant");
+    ops::revoke_access(cluster, None, &db, &pid_b).expect("revoke");
+    results.push((
+        "grant+revoke (B) ran no planted object as superuser",
+        want(pwned_as_super().is_empty(), format!("postgres markers={:?}", pwned_as_super())),
+    ));
+
+    // The migrator is never promoted; still only postgres is superuser.
+    let super_roles = su("SELECT coalesce(string_agg(rolname, ','), '') FROM pg_catalog.pg_roles WHERE rolsuper")
+        .expect("read superusers");
+    results.push((
+        "no new superuser; only postgres",
+        want(super_roles == "postgres", format!("rolsuper={super_roles:?}")),
+    ));
+
+    // ---- Happy path: the seal's end state is exactly what it always was. ----
+    for t in ["_k2_migrations", "_k2_store"] {
+        let owner = su(&format!(
+            "SELECT pg_catalog.pg_get_userbyid(relowner) FROM pg_catalog.pg_class WHERE oid = 'public.{t}'::regclass"
+        )).expect("owner");
+        results.push((
+            "seal: _k2_* owned by the migrator",
+            want(owner == migrator, format!("{t} owner={owner:?}")),
+        ));
+        let rls = su(&format!(
+            "SELECT relrowsecurity::text FROM pg_catalog.pg_class WHERE oid = 'public.{t}'::regclass"
+        )).expect("rls");
+        results.push((
+            "seal: RLS enabled on _k2_*",
+            want(rls == "true", format!("{t} relrowsecurity={rls:?}")),
+        ));
+        let pol = su(&format!(
+            "SELECT count(*)::text FROM pg_catalog.pg_policy WHERE polrelid = 'public.{t}'::regclass AND polname = 'k2_internal_no_guest'"
+        )).expect("policy");
+        results.push((
+            "seal: k2_internal_no_guest policy present",
+            want(pol == "1", format!("{t} policy_count={pol:?}")),
+        ));
+    }
+    let grant = su(&format!(
+        "SELECT pg_catalog.has_table_privilege('{agent}', 'public._k2_store', 'SELECT')::text"
+    )).expect("grant");
+    results.push((
+        "seal: agent keeps SELECT on _k2_store",
+        want(grant == "true", format!("has_table_privilege={grant:?}")),
+    ));
+    let kept = su("SELECT doc->>'v' FROM public._k2_store WHERE id = 'keep'").expect("kept");
+    results.push((
+        "seal left tenant data in _k2_store untouched",
+        want(kept == "1", format!("kept={kept:?}")),
+    ));
+    let dig = su("SELECT (encode(public.digest('x','sha256'), 'hex') <> '')::text").expect("digest");
+    results.push((
+        "pgcrypto still works after the seal",
+        want(dig == "true", format!("digest ok={dig:?}")),
+    ));
+
+    let mut failed = 0;
+    for (name, res) in &results {
+        match res {
+            Ok(()) => println!("[realpg-sp] PASS {name}"),
+            Err(e) => {
+                failed += 1;
+                println!("[realpg-sp] FAIL {name}: {e}");
+            }
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&dir_b);
+    assert_eq!(failed, 0, "{failed} search_path-pin checks failed (see [realpg-sp] lines)");
+}

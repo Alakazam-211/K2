@@ -244,7 +244,7 @@ mod tests {
         let helper = ops.pg.lock().unwrap().helper_sql.join("\n");
         assert!(
             helper.contains(
-                "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE _k2_migrations, _k2_store TO"
+                "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public._k2_migrations, public._k2_store TO"
             ),
             "explicit GRANT on _k2_store missing from helper_sql: {helper}"
         );
@@ -299,7 +299,7 @@ mod tests {
         assert!(
             helper.contains("GRANT USAGE ON SCHEMA public TO")
                 && helper.contains(
-                    "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE _k2_migrations, _k2_store TO"
+                    "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public._k2_migrations, public._k2_store TO"
                 ),
             "ensure GRANT via helper missing: {helper}"
         );
@@ -3679,6 +3679,71 @@ mod tests {
         assert!(
             !revoked.contains(&format!("GRANT \"{migrator}\" TO \"{role}\"")),
             "revoke must not grant the migrator to the role: {revoked}"
+        );
+        let _ = std::fs::remove_dir_all(dir_a);
+        let _ = std::fs::remove_dir_all(dir_b);
+    }
+
+    /// Every superuser psql K2 sends into a workspace database (create,
+    /// migrate + seal, status, store, the boot seal pass, grant, revoke)
+    /// starts with the session pin. Only `-d postgres` runs may skip it.
+    #[test]
+    fn superuser_psql_into_a_workspace_database_always_starts_pinned() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir_a = std::env::temp_dir().join(format!("k2-sql-pin-a-{}", uuid::Uuid::new_v4()));
+        let dir_b = std::env::temp_dir().join(format!("k2-sql-pin-b-{}", uuid::Uuid::new_v4()));
+        let mig = dir_a.join(".k2/db/migrations");
+        std::fs::create_dir_all(&mig).unwrap();
+        std::fs::create_dir_all(&dir_b).unwrap();
+        std::fs::write(mig.join("0001_init.sql"), b"CREATE TABLE t (id int);\n").unwrap();
+        let path_a = dir_a.to_string_lossy().into_owned();
+        let id_a = insert_project("sql-pin-a", &path_a);
+        let id_b = insert_project("sql-pin-b", &dir_b.to_string_lossy());
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        let created = ops::create_database(&ops, &secrets, &id_a, 1, None, None).expect("create");
+        let db_name = created["name"].as_str().expect("name").to_string();
+        ops::migrate(&ops, &secrets, &id_a, &path_a, None).expect("migrate");
+        ops::database_status(&ops, &secrets, &id_a).expect("status");
+        ops::store_create(&ops, &secrets, &id_a, "items").expect("store create");
+        ops::store_put(&ops, &secrets, &id_a, "items", "a", &serde_json::json!({"v": 1}))
+            .expect("store put");
+        let sealed = ops::seal_existing_databases(&ops);
+        assert!(
+            sealed.iter().any(|l| l == &format!("{db_name}: sealed")),
+            "boot seal pass: {sealed:?}"
+        );
+        ops::grant_access(&ops, &secrets, None, &db_name, &id_b, "read", false, &[]).expect("grant");
+        ops::revoke_access(&ops, None, &db_name, &id_b).expect("revoke");
+
+        let calls = ops.pg.lock().expect("pg").helper_psql.clone();
+        let tenant: Vec<&(String, String)> = calls.iter().filter(|(db, _)| db != "postgres").collect();
+        for (db, sql) in &tenant {
+            assert_eq!(db, &db_name, "superuser psql into an unexpected database: {sql}");
+            assert!(
+                sql.starts_with(ops::SU_TENANT_SESSION_PIN),
+                "superuser psql into {db} is not pinned first:\n{sql}"
+            );
+        }
+        for (what, needle) in [
+            ("guest seal", "$k2seal$"),
+            ("revoke", "$k2revoke$"),
+            ("k2 helpers", "CREATE OR REPLACE FUNCTION k2.skin_uid()"),
+            ("helper owner", "ALTER FUNCTION k2.skin_uid() OWNER TO"),
+            ("agent table grant", "ON TABLE public._k2_migrations, public._k2_store TO"),
+        ] {
+            assert!(
+                tenant.iter().any(|(_, sql)| sql.contains(needle)),
+                "{what} never ran into {db_name}; calls={tenant:?}"
+            );
+        }
+        // The pin itself, exactly: role back to the session user, then a
+        // path with no tenant schema on it.
+        assert_eq!(
+            ops::SU_TENANT_SESSION_PIN,
+            "SET ROLE NONE;\nSET search_path = pg_catalog, pg_temp;\n"
         );
         let _ = std::fs::remove_dir_all(dir_a);
         let _ = std::fs::remove_dir_all(dir_b);

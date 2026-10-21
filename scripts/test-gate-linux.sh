@@ -44,6 +44,7 @@ ALLOWLIST=(
   "classify_routes::tests::checkbox_on_no_marker_reaches_model_path" # needs the bundled GGUF model
   "cell_egress::tests::refused_localhost_port_is_refused_while_a_cell_table_exists" # root + nft; run below as root
   "sql::tests::real_pg::real_pg_guest_doors_smoke"                  # needs a throwaway Postgres 16; run below when K2_GATE_REALPG_* is set
+  "sql::tests::real_pg::real_pg_search_path_pin_holds"              # needs a throwaway Postgres 16; run below when K2_GATE_REALPG_* is set
 )
 
 # Root-only ignored tests the gate RUNS explicitly when it is root:
@@ -130,6 +131,9 @@ if [ $REALPG_SET -eq 3 ]; then
   echo "gate: real-Postgres smoke on 127.0.0.1:$K2_GATE_REALPG_PORT"
   EXTRA_ENV=(REALPG_PORT="$K2_GATE_REALPG_PORT" REALPG_SOCK="$K2_GATE_REALPG_SOCK" REALPG_BIN="$K2_GATE_REALPG_BIN")
   if ! clean_cargo "$LOGS/realpg.log" test -p k2-daemon --lib -- --ignored --exact sql::tests::real_pg::real_pg_guest_doors_smoke; then
+    STATUS=1
+  fi
+  if ! clean_cargo "$LOGS/realpg-searchpath.log" test -p k2-daemon --lib -- --ignored --exact sql::tests::real_pg::real_pg_search_path_pin_holds; then
     STATUS=1
   fi
   EXTRA_ENV=()

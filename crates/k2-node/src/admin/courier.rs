@@ -65,7 +65,8 @@ pub async fn handle(node: Arc<Node>, cmd: SignedCommand) -> AdminResult {
         Ok(r) => r,
         Err(e) => return AdminResult::refused("", "", &AdminRefusal::new(code::MALFORMED, e)),
     };
-    let pin = node.pin.lock().unwrap().clone();
+    // Admin is the owner server's alone: its pin signs every command.
+    let pin = node.owner().pin.lock().unwrap().clone();
     let spki = match pin.as_ref().map(|p| p.controller_spki()) {
         Some(Ok(s)) => s,
         _ => return AdminResult::refused("", "", &AdminRefusal::new(code::NOT_CONFIGURED, "node has no controller pin")),

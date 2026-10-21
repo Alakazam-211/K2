@@ -366,7 +366,7 @@ async fn a_reboot_marks_open_jobs_interrupted_and_the_snapshot_says_so() {
     let mut o = options(layout.clone());
     o.clock = std::sync::Arc::new(Boot("boot-2".into()));
     let node = Node::open(o).await.unwrap();
-    let r = node.ledger.lock().unwrap().get("old", 1).unwrap().unwrap();
+    let r = node.owner().ledger.lock().unwrap().get("old", 1).unwrap().unwrap();
     assert_eq!((r.state, r.reason.as_deref()), (JobState::Interrupted, Some("node_reboot")));
     let runner = tokio::spawn(k2_node::session::run_forever(node.clone()));
     let mut c = fake.next_conn().await;
@@ -389,7 +389,7 @@ async fn a_paused_node_returns_assigns_to_the_queue() {
     let fr = c.until(|f| matches!(f, Frame::State(s) if s.job_id == "p1")).await;
     let s = states_of(&fr, "p1").pop().unwrap();
     assert_eq!((s.state, s.reason.as_deref()), (JobState::Queued, Some("local_paused")));
-    assert!(n.node.ledger.lock().unwrap().get("p1", 1).unwrap().is_none(), "a refused assign is never recorded");
+    assert!(n.node.owner().ledger.lock().unwrap().get("p1", 1).unwrap().is_none(), "a refused assign is never recorded");
     // Stopped interrupts running work.
     k2_node::config::write_control(&n.layout.control(), frames::Control::Active, "rosson", 6).unwrap();
     c.until(|f| matches!(f, Frame::Offer(o) if o.control == frames::Control::Active)).await;
@@ -460,12 +460,12 @@ async fn revoked_cancels_jobs_and_the_node_stops_dialing() {
     c.send(Frame::Revoked(Revoked { reason: "removed by rosson".into() }));
     assert!(c.wait_closed(Duration::from_secs(5)).await);
     for _ in 0..100 {
-        if n.node.ledger.lock().unwrap().get("v1", 1).unwrap().unwrap().state.is_terminal() {
+        if n.node.owner().ledger.lock().unwrap().get("v1", 1).unwrap().unwrap().state.is_terminal() {
             break;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    let r = n.node.ledger.lock().unwrap().get("v1", 1).unwrap().unwrap();
+    let r = n.node.owner().ledger.lock().unwrap().get("v1", 1).unwrap().unwrap();
     assert_eq!((r.state, r.reason.as_deref()), (JobState::Cancelled, Some("node_removed")));
     let pin = k2_node::identity::read_pin(&n.layout.pin()).unwrap().unwrap();
     assert!(pin.revoked);

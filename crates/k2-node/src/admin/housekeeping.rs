@@ -11,7 +11,7 @@ use k2_node_proto::admin::{code, AdminRefusal};
 use k2_node_proto::health::StuckJob;
 use serde_json::{json, Value};
 
-use crate::node::{journal_path, Node};
+use crate::node::{Node, Tenant};
 
 /// A job counts as stuck after this long with no output and no CPU.
 pub const STUCK_SECS: i64 = 30 * 60;
@@ -61,23 +61,30 @@ fn mtime(p: &Path) -> Option<i64> {
     Some(m.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs() as i64)
 }
 
-/// One row per running job.
-fn running_rows(node: &Node) -> Vec<(crate::ledger::Row, Option<i64>)> {
-    let ids = node.running_ids();
-    let l = node.ledger.lock().unwrap();
+/// One row per running job, every tenant's (with its tenant).
+fn running_rows(node: &Node) -> Vec<(std::sync::Arc<Tenant>, crate::ledger::Row, Option<i64>)> {
+    let running = node.running_by_tenant();
     let mut out = Vec::new();
-    for id in ids {
-        if let Ok(Some(r)) = l.latest(&id) {
-            let pid = l.pid(&r.job_id, r.generation).ok().flatten();
-            out.push((r, pid));
+    for t in node.tenants() {
+        let Some(ids) = running.get(&t.slot) else { continue };
+        let l = t.ledger.lock().unwrap();
+        for id in ids {
+            if let Ok(Some(r)) = l.latest(id) {
+                let pid = l.pid(&r.job_id, r.generation).ok().flatten();
+                out.push((t.clone(), r, pid));
+            }
         }
     }
     out
 }
 
-/// Tracks CPU per job between calls (for the stuck watch).
+/// Tracks CPU per job between calls (for the stuck watch), by
+/// `(slot, job_id, generation)`.
 #[derive(Default)]
-pub struct StuckTrack(std::sync::Mutex<HashMap<(String, u32), (u64, i64)>>);
+pub struct StuckTrack(std::sync::Mutex<HashMap<StuckKey, (u64, i64)>>);
+
+/// `(slot, job_id, generation)`.
+type StuckKey = (u8, String, u32);
 
 /// Jobs quiet (no journal write) and idle (no CPU change) ≥ `STUCK_SECS`.
 pub fn stuck_jobs(node: &Node) -> Vec<StuckJob> {
@@ -89,16 +96,16 @@ pub fn stuck_jobs(node: &Node) -> Vec<StuckJob> {
     }
     let cpu = cpu_by_group();
     let mut track = node.stuck_track.0.lock().unwrap();
-    track.retain(|k, _| rows.iter().any(|(r, _)| r.job_id == k.0 && r.generation == k.1));
+    track.retain(|k, _| rows.iter().any(|(t, r, _)| t.slot == k.0 && r.job_id == k.1 && r.generation == k.2));
     let mut out = Vec::new();
-    for (r, pid) in rows {
-        let key = (r.job_id.clone(), r.generation);
+    for (t, r, pid) in rows {
+        let key = (t.slot, r.job_id.clone(), r.generation);
         let c = pid.and_then(|p| cpu.get(&(p as i32)).copied()).unwrap_or(0);
         let entry = track.entry(key).or_insert((c, now));
         if entry.0 != c {
             *entry = (c, now);
         }
-        let last_out = mtime(&journal_path(node.layout(), &r.job_id, r.generation)).or(r.started_at).unwrap_or(now);
+        let last_out = mtime(&t.paths.journal(&r.job_id, r.generation)).or(r.started_at).unwrap_or(now);
         let quiet = now - last_out.max(entry.1);
         if now - last_out >= STUCK_SECS && now - entry.1 >= STUCK_SECS {
             out.push(StuckJob { job_id: r.job_id.clone(), generation: r.generation, quiet_secs: quiet.max(0) as u64 });
@@ -113,8 +120,8 @@ pub fn ps(node: &Node) -> Value {
     let cpu = cpu_by_group();
     let rows: Vec<Value> = running_rows(node)
         .into_iter()
-        .map(|(r, pid)| {
-            let last_out = mtime(&journal_path(node.layout(), &r.job_id, r.generation));
+        .map(|(t, r, pid)| {
+            let last_out = mtime(&t.paths.journal(&r.job_id, r.generation));
             json!({
                 "job_id": r.job_id, "generation": r.generation, "state": r.state.as_str(),
                 "workspace": r.plan.workspace_label, "requested_by": r.plan.requested_by,
@@ -131,9 +138,9 @@ pub fn ps(node: &Node) -> Value {
 pub fn kill(node: &Node, args: &Value) -> Result<Value, AdminRefusal> {
     super::exec::only_keys(args, &["job_id"])?;
     let job = super::exec::str_arg(args, "job_id")?;
-    let row = running_rows(node).into_iter().find(|(r, _)| r.job_id == job).map(|(r, _)| r);
-    let r = row.ok_or_else(|| bad("that job is not running on this node"))?;
-    node.cancel(&r.job_id, r.generation, "admin_kill");
+    let row = running_rows(node).into_iter().find(|(_, r, _)| r.job_id == job).map(|(t, r, _)| (t, r));
+    let (t, r) = row.ok_or_else(|| bad("that job is not running on this node"))?;
+    node.cancel(&t, &r.job_id, r.generation, "admin_kill");
     Ok(json!({"job_id": r.job_id, "generation": r.generation, "stopping": true}))
 }
 
@@ -168,19 +175,23 @@ pub async fn gc(node: &Node, args: &Value) -> Result<Value, AdminRefusal> {
     };
     let cutoff = node.now() - days * 86400;
     let (mut freed, mut job_dirs, mut slots, mut caches) = (0u64, 0u32, 0u32, 0u32);
-    // Job trees: ended (terminal) before the cutoff.
-    let rows = node.ledger.lock().unwrap().all().unwrap_or_default();
+    // Job trees: ended (terminal) before the cutoff, every tenant's.
+    let running_by = node.running_by_tenant();
     let running = node.running_ids();
-    for r in &rows {
-        if !r.state.is_terminal() || r.cleaned || running.contains(&r.job_id) || r.ended_at.is_none_or(|t| t > cutoff) {
-            continue;
+    for t in node.tenants() {
+        let rows = t.ledger.lock().unwrap().all().unwrap_or_default();
+        let mine = running_by.get(&t.slot).cloned().unwrap_or_default();
+        for r in &rows {
+            if !r.state.is_terminal() || r.cleaned || mine.contains(&r.job_id) || r.ended_at.is_none_or(|e| e > cutoff) {
+                continue;
+            }
+            let dir = t.paths.job_dir(&r.job_id, r.generation);
+            if dir.exists() {
+                node.reclaim_blocking(&dir);
+                remove(&dir, &mut freed, &mut job_dirs);
+            }
+            let _ = t.ledger.lock().unwrap().mark_cleaned(&r.job_id, r.generation);
         }
-        let dir = node.layout().job_dir(&r.job_id, r.generation);
-        if dir.exists() {
-            node.reclaim_blocking(&dir);
-            remove(&dir, &mut freed, &mut job_dirs);
-        }
-        let _ = node.ledger.lock().unwrap().mark_cleaned(&r.job_id, r.generation);
     }
     // Idle warm slots.
     for (dir, bytes) in node.gc_slots(cutoff) {

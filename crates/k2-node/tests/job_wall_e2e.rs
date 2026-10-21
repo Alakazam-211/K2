@@ -85,14 +85,14 @@ async fn an_unwalled_node_refuses_network_none_jobs_and_offers_no_wall() {
     let n = start_node(&fake, "wall-none", "network = \"none\"\n", |o| o.wall = Some(Wall::None { why: "test".into() })).await;
     let mut c = fake.next_conn().await;
     ready(&mut c).await;
-    let offer = n.node.offer();
+    let offer = n.node.offer(&n.node.owner());
     assert!(!offer.features.iter().any(|f| f == frames::FEATURE_JOB_WALL || f == frames::FEATURE_NETWORK_NONE), "{:?}", offer.features);
     assert_eq!(offer.refusal.as_ref().map(|r| r.code.as_str()), Some("network_none_not_enforced_yet"));
     c.send(Frame::Assign(assign(plan("nn1", &["/bin/true"]), 1)));
     let fr = c.until(|f| matches!(f, Frame::State(s) if s.job_id == "nn1")).await;
     let s = last_state(&fr, "nn1");
     assert_eq!((s.state, s.reason.as_deref()), (JobState::Queued, Some("network_none_not_enforced_yet")));
-    assert!(n.node.ledger.lock().unwrap().get("nn1", 1).unwrap().is_none(), "never ran");
+    assert!(n.node.owner().ledger.lock().unwrap().get("nn1", 1).unwrap().is_none(), "never ran");
     let st = k2_node::status::read(&n.layout.status()).unwrap();
     assert_eq!((st.wall.as_str(), st.network_none), ("none", false), "status.json tells the machine's K2");
 }
@@ -110,7 +110,7 @@ mod seatbelt {
         let n = start_node(&fake, "wall-sb", "", |o| o.wall = Some(Wall::Seatbelt)).await;
         let mut c = fake.next_conn().await;
         ready(&mut c).await;
-        let offer = n.node.offer();
+        let offer = n.node.offer(&n.node.owner());
         assert!(offer.features.iter().any(|f| f == frames::FEATURE_JOB_WALL), "{:?}", offer.features);
         let bin = probe_bin();
         let key = n.layout.key();
@@ -152,7 +152,7 @@ mod seatbelt {
         let n = start_node(&fake, "wall-sb-net", "network = \"none\"\n", |o| o.wall = Some(Wall::Seatbelt)).await;
         let mut c = fake.next_conn().await;
         ready(&mut c).await;
-        let offer = n.node.offer();
+        let offer = n.node.offer(&n.node.owner());
         assert!(offer.features.iter().any(|f| f == frames::FEATURE_NETWORK_NONE), "{:?}", offer.features);
         assert_eq!(offer.refusal, None, "a walled node takes network = none jobs");
         let _route = lan_ip();

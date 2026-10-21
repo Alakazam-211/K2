@@ -145,7 +145,7 @@ pub async fn process(node: &Arc<Node>) -> bool {
         write_result(&layout, &Outcome { id: req.id.clone(), ok: false, message: msg.clone(), name: Some(req.name.clone()), at: now, ..Default::default() });
         msg
     };
-    if let Some(p) = node.pin.lock().unwrap().clone() {
+    if let Some(p) = node.owner().pin.lock().unwrap().clone() {
         if !p.revoked {
             let m = fail(format!(
                 "already enrolled as {} with {}; remove it on the controller first",

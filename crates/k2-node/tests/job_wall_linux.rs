@@ -143,7 +143,7 @@ async fn a_job_runs_as_the_job_user_and_cant_read_the_node_or_homes() {
     let n = walled_node(&fake, &r, "").await;
     let mut c = fake.next_conn().await;
     ready(&mut c).await;
-    let offer = n.node.offer();
+    let offer = n.node.offer(&n.node.owner());
     assert!(offer.features.iter().any(|f| f == "job-wall") && offer.caps.hard, "{:?}", offer.features);
     std::fs::set_permissions(n.layout.state(), std::fs::Permissions::from_mode(0o755)).unwrap();
     std::fs::set_permissions(n.layout.key(), std::fs::Permissions::from_mode(0o644)).unwrap();
@@ -184,7 +184,7 @@ async fn network_none_blocks_sockets() {
     let n = walled_node(&fake, &r, "network = \"none\"\n").await;
     let mut c = fake.next_conn().await;
     ready(&mut c).await;
-    assert_eq!(n.node.offer().refusal, None, "a walled node takes network = none jobs");
+    assert_eq!(n.node.offer(&n.node.owner()).refusal, None, "a walled node takes network = none jobs");
     let s = std::net::UdpSocket::bind("0.0.0.0:0").unwrap();
     s.connect("192.0.2.1:9").expect("a default route");
     let ip = s.local_addr().unwrap().ip();

@@ -908,6 +908,9 @@ pub const ROUTES: &[Route] = &[
     // login asks for a card); "Waiting on you" is for the people who can
     // answer one (Admin is the lowest catalog floor). People answer and
     // deny through `/cli/thread/answer`, so there is no approve route.
+    // Permission cards (A1, D2's ask): the agents' switches and recent
+    // requests for the Settings page; people only (Owner/Admin).
+    get("/cli/permission/agents", Admin),
     post("/cli/permission/cancel", NoLogin),
     get("/cli/permission/enabled", NoLogin),
     get("/cli/permission/list", NoLogin),

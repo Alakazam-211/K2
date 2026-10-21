@@ -452,7 +452,9 @@ pub fn add(ctx: &Ctx, a: &AddArgs) -> Result<Value, AdminRefusal> {
             return Err(refuse(code::NOT_CONFIGURED, "servers.toml names another owner than the controller root pinned"));
         }
     }
-    prune_file(ctx, &mut f, &mut Vec::new());
+    let mut pruned = Vec::new();
+    prune_file(ctx, &mut f, &mut pruned);
+    wipe_failed_now(ctx, &pruned)?;
     if f.live_pending(ctx.now).is_some() {
         return Err(refuse(codes::SERVER_ADD_PENDING, "another server is waiting for its SAS; confirm it or wait 10 minutes"));
     }
@@ -643,6 +645,9 @@ pub fn revoke(ctx: &Ctx, a: &RevokeArgs) -> Result<Value, AdminRefusal> {
     if a.wipe {
         let r = prune_locked(ctx)?;
         wiped = r.get("wiped").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        if let Some(e) = r["wipe_failed"].as_array().and_then(|v| v.iter().find(|x| x["slot"] == slot)) {
+            return Err(failed(format!("{label} is revoked, but wiping slot {slot} failed: {} (retried on every prune)", e["error"].as_str().unwrap_or("?"))));
+        }
     }
     Ok(json!({"slot": slot, "label": label, "state": "revoked", "now": a.now, "wipe_at": if a.wipe { ctx.now } else { at + WIPE_AFTER_SECS }, "wiped": wiped}))
 }
@@ -660,16 +665,27 @@ fn prune_file(ctx: &Ctx, f: &mut ServersFile, changed: &mut Vec<String>) {
                 e.pending_until = 0;
                 changed.push(format!("promoted:{}", e.slot));
             } else if ctx.now >= e.pending_until {
-                changed.push(format!("expired:{}", e.slot));
                 if enroll.as_ref().is_some_and(|x| x.slot == e.slot) {
                     let _ = std::fs::remove_file(enroll_path(&ctx.config_dir));
                 }
-                // It never took a job: its unconfirmed pin and empty dirs go,
-                // so a re-add enrols afresh.
-                if let Err(x) = wipe_slot(ctx, &e) {
-                    crate::nlog!("servers: wipe expired slot {}: {}", e.slot, x.message);
+                // It never took a job: its unconfirmed pin, user and empty
+                // dirs go, so a re-add enrols afresh. A wipe that failed
+                // keeps the line (expired by time, holding its slot) and is
+                // tried again on the next prune, as a revoked line's is: a
+                // slot whose user wasn't removed is never handed out again
+                // (review B10, V64).
+                match wipe_slot(ctx, &e) {
+                    Ok(()) => {
+                        changed.push(format!("expired:{}", e.slot));
+                        continue;
+                    }
+                    Err(x) => {
+                        crate::nlog!("servers: wipe expired slot {}: {} (kept as revoked; retried on every prune)", e.slot, x.message);
+                        changed.push(format!("wipe_failed:{}", e.slot));
+                        // An ended line nobody may use, holding its slot.
+                        e.state = ShareState::Revoked;
+                    }
                 }
-                continue;
             }
         }
         keep.push(e);
@@ -706,14 +722,22 @@ fn prune_locked(ctx: &Ctx) -> Result<Value, AdminRefusal> {
     let before = f.clone();
     let mut changed = Vec::new();
     prune_file(ctx, &mut f, &mut changed);
+    wipe_failed_now(ctx, &changed)?;
     let mut b = read_book(&ctx.state_dir).map_err(failed)?;
     let mut wiped = Vec::new();
+    let mut wipe_failed = Vec::new();
     let revoked: Vec<ServerEntry> = f.servers.iter().filter(|e| e.state == ShareState::Revoked).cloned().collect();
     for e in revoked {
         let key = e.slot.to_string();
         let (at, now) = *b.revoked.entry(key.clone()).or_insert((ctx.now, false));
         if now || ctx.now >= at + WIPE_AFTER_SECS {
-            wipe_slot(ctx, &e)?;
+            // A wipe that fails keeps the line (and its slot) for the next
+            // prune; what else this pass decided is still written.
+            if let Err(x) = wipe_slot(ctx, &e) {
+                crate::nlog!("servers: wipe slot {}: {} (kept; retried on the next prune)", e.slot, x.message);
+                wipe_failed.push(json!({"slot": e.slot, "error": x.message}));
+                continue;
+            }
             f.servers.retain(|x| x.slot != e.slot);
             b.revoked.remove(&key);
             set_stop(&ctx.config_dir, e.slot, false).map_err(failed)?;
@@ -724,7 +748,21 @@ fn prune_locked(ctx: &Ctx) -> Result<Value, AdminRefusal> {
     if f != before {
         write_file(&ctx.config_dir, &f).map_err(failed)?;
     }
-    Ok(json!({"changed": changed, "wiped": wiped}))
+    Ok(json!({"changed": changed, "wiped": wiped, "wipe_failed": wipe_failed}))
+}
+
+/// Expired adds whose wipe failed (now revoked lines): wiped again on
+/// every prune, not 24 h later.
+fn wipe_failed_now(ctx: &Ctx, changed: &[String]) -> Result<(), AdminRefusal> {
+    let slots: Vec<&str> = changed.iter().filter_map(|c| c.strip_prefix("wipe_failed:")).collect();
+    if slots.is_empty() {
+        return Ok(());
+    }
+    let mut b = read_book(&ctx.state_dir).map_err(failed)?;
+    for s in slots {
+        b.revoked.insert(s.to_string(), (ctx.now, true));
+    }
+    write_book(&ctx.state_dir, &b).map_err(failed)
 }
 
 /// Put the pending servers' SAS into the status lines, from the node's
@@ -976,6 +1014,36 @@ mod tests {
         let mut l = setup(false);
         l.ctx.tenant_wall = false;
         assert_eq!(add(&l.ctx, &add_args("https://baden.k2.dev", "0123456789abcdef", Trust::Team)).unwrap_err().code, codes::TEAM_NEEDS_TENANT_WALL);
+    }
+
+    /// Review B10: an expired pending add whose wipe failed keeps its line
+    /// (as revoked, holding its slot) until a later prune finishes the wipe.
+    #[test]
+    fn an_expired_add_whose_wipe_failed_keeps_its_slot() {
+        use std::os::unix::fs::PermissionsExt;
+        let mut t = setup(false);
+        add(&t.ctx, &add_args("https://a.k2.dev", "0123456789abcdef", Trust::Own)).unwrap();
+        // Something of slot 1 can't be removed (as a userdel that failed
+        // would leave its user behind).
+        let stuck = t.ctx.layout().tenant(1).root().join("stuck");
+        std::fs::create_dir_all(&stuck).unwrap();
+        std::fs::write(stuck.join("f"), "x").unwrap();
+        std::fs::set_permissions(&stuck, std::fs::Permissions::from_mode(0o500)).unwrap();
+        t.ctx.now += PENDING_SECS;
+        let r = prune(&t.ctx).unwrap();
+        assert_eq!(r["changed"], json!(["wipe_failed:1"]), "{r}");
+        assert_eq!(r["wipe_failed"].as_array().unwrap().len(), 1, "retried at once in the same pass, still failing: {r}");
+        let f = read_file(&t.ctx.config_dir).unwrap().unwrap();
+        assert!(f.entry(1).is_some_and(|e| e.state == ShareState::Revoked), "the line stays, ended (revoked)");
+        // The next server never gets that slot (nor its leftovers).
+        let b = add(&t.ctx, &add_args("https://b.k2.dev", "1123456789abcdef", Trust::Own)).unwrap();
+        assert_eq!(b["slot"].as_u64(), Some(2), "{b}");
+        // Once the wipe can finish, the line goes and the slot is free.
+        std::fs::set_permissions(&stuck, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let r = prune(&t.ctx).unwrap();
+        assert_eq!(r["wiped"], json!([1]), "the next prune finishes the wipe (not 24 h later): {r}");
+        assert!(read_file(&t.ctx.config_dir).unwrap().unwrap().entry(1).is_none());
+        assert!(!t.ctx.layout().tenant(1).root().exists());
     }
 
     /// One pending add at a time (P3); after 10 minutes it's dropped by

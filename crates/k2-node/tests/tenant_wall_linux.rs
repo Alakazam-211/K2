@@ -367,7 +367,8 @@ async fn w1_w2_w3_files_are_walled_between_servers_both_ways() {
     let r = rig("w1", SLOTS3);
     let mut fake = Fake::start().await;
     let n = node(&fake, &r, "", |_| {}).await;
-    let _c = fake.next_conn().await;
+    let mut _c = fake.next_conn().await;
+    ready(&mut _c).await;
     // (a): the wall is really on: the executor's runtime self-test passed
     // and both servers have their users.
     r.exec.wall_selftest().expect("the tenant sandbox self-test passes here");
@@ -488,7 +489,8 @@ async fn w4_w5_other_servers_processes_are_invisible_and_unsignalable() {
     let r = rig("w4", SLOTS3);
     let mut fake = Fake::start().await;
     let n = node(&fake, &r, "", |_| {}).await;
-    let _c = fake.next_conn().await;
+    let mut _c = fake.next_conn().await;
+    ready(&mut _c).await;
     for (a, b) in [(1u8, 2u8), (0, 1), (1, 0)] {
         let marker = format!("SECRETMARKER{a}x{b}");
         let job = format!("victim{a}{b}");
@@ -565,7 +567,8 @@ async fn w6_no_lan_and_none_close_the_network() {
     let r = rig("w6", &[(1, Trust::Team, Network::NoLan), (2, Trust::Team, Network::None)]);
     let mut fake = Fake::start().await;
     let n = node(&fake, &r, "", |_| {}).await;
-    let _c = fake.next_conn().await;
+    let mut _c = fake.next_conn().await;
+    ready(&mut _c).await;
     let lo = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let lo_t = format!("tcp,127.0.0.1,{}", lo.local_addr().unwrap().port());
     let lan = ["udp,10.77.0.1,9", "udp,172.16.77.1,9", "udp,192.168.77.1,9", "udp,169.254.77.1,9", "udp,100.64.77.1,9", "udp,100.127.1.1,9", "udp,224.0.0.251,5353"];
@@ -626,7 +629,8 @@ async fn w7_a_colliding_job_id_never_touches_the_other_servers_job() {
     let r = rig("w7", SLOTS3);
     let mut fake = Fake::start().await;
     let n = node(&fake, &r, "", |_| {}).await;
-    let _c = fake.next_conn().await;
+    let mut _c = fake.next_conn().await;
+    ready(&mut _c).await;
     start(&n, 0, plan("w7", &["/bin/sh", "-c", "echo owner-up; sleep 60"]));
     printed(&n, 0, "w7", "owner-up").await;
     let owner_unit = "k2job-w7-g1.service";
@@ -702,7 +706,8 @@ async fn w8_a_tenants_remote_is_https_public_or_bundles_only() {
     let r = rig("w8", &[(1, Trust::Team, Network::On), (2, Trust::Team, Network::NoLan)]);
     let mut fake = Fake::start().await;
     let n = node(&fake, &r, "", |o| o.transfer_timeout = Duration::from_secs(3)).await;
-    let _c = fake.next_conn().await;
+    let mut _c = fake.next_conn().await;
+    ready(&mut _c).await;
     let repo = r.base.join("victim-repo");
     std::fs::create_dir_all(&repo).unwrap();
     git(&repo, &["init", "-q", "-b", "main"]);
@@ -756,7 +761,8 @@ async fn w9_sccache_servers_are_per_server() {
     let r = rig("w9", SLOTS3);
     let mut fake = Fake::start().await;
     let n = node(&fake, &r, "", |_| {}).await;
-    let _c = fake.next_conn().await;
+    let mut _c = fake.next_conn().await;
+    ready(&mut _c).await;
     for (a, b) in [(0u8, 1u8), (1, 0), (1, 2)] {
         let job = format!("sc{a}{b}");
         // A's build goes through its sccache once (its stats say so, and
@@ -805,7 +811,8 @@ async fn q9_a_job_ignoring_sigterm_doesnt_hold_up_another_servers_start() {
     let r = rig("q9", SLOTS3);
     let mut fake = Fake::start().await;
     let n = node(&fake, &r, "", |o| o.cancel_grace = Duration::from_secs(20)).await;
-    let _c = fake.next_conn().await;
+    let mut _c = fake.next_conn().await;
+    ready(&mut _c).await;
     start(&n, 1, plan("stubborn", &["/bin/sh", "-c", "trap '' TERM; echo up; while :; do sleep 1; done"]));
     printed(&n, 1, "stubborn", "up").await;
     let unit = format!("k2job-{}.service", k2_node::node::job_key(1, "stubborn", 1));
@@ -896,7 +903,8 @@ async fn a_tenants_job_runs_as_its_own_user_in_its_own_dirs() {
     std::process::Command::new("userdel").arg("k2job-3").status().unwrap();
     let mut fake = Fake::start().await;
     let n = node(&fake, &r, "", |_| {}).await;
-    let _c = fake.next_conn().await;
+    let mut _c = fake.next_conn().await;
+    ready(&mut _c).await;
     assert!(!n.node.tenant_wall_on().await, "an approved server without its user: tenant-wall is off");
     let got = run(
         &n,

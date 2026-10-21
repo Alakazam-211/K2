@@ -92,7 +92,8 @@ async fn mac_in(dir: PathBuf, slots: &[(Slot, Trust, Network)], prepare: bool) -
     assert!(k2_node::wall::seatbelt_available(), "sandbox-exec is missing");
     let mut fake = Fake::start().await;
     let n = start_node_in(&fake, dir, "", |o| o.wall = Some(Wall::Seatbelt)).await;
-    let conn = fake.next_conn().await;
+    let mut conn = fake.next_conn().await;
+    ready(&mut conn).await;
     write_servers(&n.layout.config, &fake.key.fingerprint(), slots);
     for (slot, ..) in slots {
         if prepare {

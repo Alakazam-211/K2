@@ -257,7 +257,9 @@ share_add() {
   mkdir -p "$ROOT/node-$node/state"
   code="$(api "$other" POST /cli/compute/nodes/enroll-code "{\"name\":\"$node\",\"url\":\"$(url_of "$other")\"}" | jq -r '.enroll')"
   [[ "$code" == *.* ]] || die "no code from $other"
-  out="$(node_servers "$node" add --url "$(url_of "$other")" --code "$code" "$@" --json 2>&1)" || die "servers add: $out"
+  # stdout is the JSON; stderr carries the --dev node's warning.
+  out="$(node_servers "$node" add --url "$(url_of "$other")" --code "$code" "$@" --json 2>"$ROOT/add-$node.err")" || die "servers add: $out $(cat "$ROOT/add-$node.err")"
+  grep -q "no job wall" "$ROOT/add-$node.err" || die "a --dev node's add doesn't warn: $(cat "$ROOT/add-$node.err")"
   slot="$(printf '%s' "$out" | jq -r '.slot')"
   for _ in $(seq 1 150); do
     sas="$(node_servers "$node" list --json 2>/dev/null | jq -r --argjson s "$slot" '.node[] | select(.slot == $s and .state == "pending") | .sas // empty' | tr -d ' ')"

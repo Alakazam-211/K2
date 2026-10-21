@@ -493,10 +493,42 @@ fn wipe_slot_cred(tool: Tool, item_id: &str) -> Result<(), WalletError> {
             store::keychain::delete(&svc, &acct).map_err(WalletError::Io)?;
         }
     }
-    match std::fs::remove_file(store::slot_cred_path(tool, item_id)) {
+    overwrite_then_unlink(&store::slot_cred_path(tool, item_id))
+}
+
+/// Overwrite a credential file with zeros (its whole length, fsynced),
+/// then unlink it. Best effort against recovery: on copy-on-write
+/// filesystems and SSDs old blocks may survive (the same honest limit as
+/// the vault's own key wipe). A missing file is fine.
+pub(crate) fn overwrite_then_unlink(path: &Path) -> Result<(), WalletError> {
+    use std::io::Write;
+    match std::fs::symlink_metadata(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(WalletError::Io(e.to_string())),
+        Ok(m) if m.file_type().is_symlink() => {
+            // Never write through a link: just remove the link itself.
+        }
+        Ok(m) => {
+            let len = m.len() as usize;
+            let mut f = std::fs::OpenOptions::new().write(true).open(path).map_err(|e| WalletError::Io(e.to_string()))?;
+            f.write_all(&vec![0u8; len.max(1)]).map_err(|e| WalletError::Io(e.to_string()))?;
+            f.sync_all().map_err(|e| WalletError::Io(e.to_string()))?;
+        }
+    }
+    match std::fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(WalletError::Io(e.to_string())),
+    }
+}
+
+/// Did the vault keep exactly `bytes` for this item? Reads it back.
+fn vault_holds(sealer: &dyn Sealer, item: &Item, bytes: &[u8]) -> Result<(), String> {
+    match sealer.unseal(&item.principal_id, &item.id) {
+        Ok(Some(back)) if back == bytes => Ok(()),
+        Ok(Some(back)) => Err(format!("read back {} bytes, not the {} written", back.len(), bytes.len())),
+        Ok(None) => Err("read back nothing".into()),
+        Err(e) => Err(format!("read back failed ({e})")),
     }
 }
 
@@ -505,10 +537,17 @@ pub fn slot_has_plaintext(tool: Tool, item_id: &str) -> bool {
     matches!(store::read_slot(tool, item_id), Ok(Some(_)))
 }
 
-/// Seal a subscription slot: its credential (keychain-first on macOS, as
-/// Claude reads it) goes into the vault, then the plaintext is wiped.
-/// The caller holds the slot lock and has checked no session uses it.
-/// `Ok(false)` when the slot holds nothing to seal (already sealed).
+/// Seal a subscription slot, never losing the login:
+/// 1. write its credential (keychain-first on macOS, as Claude reads it)
+///    into the vault;
+/// 2. read it back and compare byte for byte;
+/// 3. only then remove the plaintext (overwrite, then unlink; and Claude's
+///    per-slot keychain item).
+///
+/// A failed write or a read-back that doesn't match keeps the plaintext
+/// (the slot stays usable), marks the item unsealed, logs it, and returns
+/// `Err(seal_unverified)`. The caller holds the slot lock and has checked
+/// no session uses it. `Ok(false)` when the slot holds nothing to seal.
 pub fn seal_slot(conn: &Connection, sealer: &dyn Sealer, item: &Item) -> Result<bool, WalletError> {
     let tool = item.tool().ok_or_else(|| WalletError::UnknownTool(item.provider.clone()))?;
     if !item.is_subscription() {
@@ -519,12 +558,43 @@ pub fn seal_slot(conn: &Connection, sealer: &dyn Sealer, item: &Item) -> Result<
     };
     store::validate_cred(tool, &bytes).map_err(|why| store::invalid_cred(tool, "sign-in to seal", why))?;
     set_meta(conn, &item.id, &store::parse_meta(tool, &bytes))?;
-    sealer
+    let verified = sealer
         .seal(&item.principal_id, &item.id, SealKind::LoginSlot, &bytes)
-        .map_err(|e| WalletError::Io(format!("could not seal the sign-in in the vault ({e}); it stays in its private folder")))?;
+        .map_err(|e| format!("vault write failed ({e})"))
+        .and_then(|()| vault_holds(sealer, item, &bytes));
+    if let Err(why) = verified {
+        crate::log_debug!("[wallet] {}: not sealed, plaintext kept: {why}", item.id);
+        set_sealed(conn, &item.id, false)?;
+        return Err(WalletError::Conflict(
+            "seal_unverified",
+            format!("could not seal the sign-in in the vault ({why}); it stays in its private folder"),
+        ));
+    }
     wipe_slot_cred(tool, &item.id)?;
     set_sealed(conn, &item.id, true)?;
     Ok(true)
+}
+
+/// Reconcile each item's `sealed` column with the facts: a subscription is
+/// sealed when the vault holds its secret and no plaintext is in its slot;
+/// an API key when the vault holds it. Items whose vault read fails (the
+/// vault is closed) are left as they are. Returns how many changed. The
+/// daemon runs it at boot and on every sweep.
+pub fn reconcile_sealed(conn: &Connection, sealer: &dyn Sealer) -> Result<usize, WalletError> {
+    let mut changed = 0;
+    for item in list_all(conn)? {
+        let Some(tool) = item.tool() else { continue };
+        let in_vault = match sealer.unseal(&item.principal_id, &item.id) {
+            Ok(v) => v.is_some(),
+            Err(_) => continue,
+        };
+        let truth = if item.is_subscription() { in_vault && !slot_has_plaintext(tool, &item.id) } else { in_vault };
+        if truth != item.sealed {
+            set_sealed(conn, &item.id, truth)?;
+            changed += 1;
+        }
+    }
+    Ok(changed)
 }
 
 /// Put a sealed subscription back into its slot for a session (0600). The
@@ -638,9 +708,15 @@ pub fn add_api_key(
         return Err(WalletError::InvalidLabel("the API key must be 8–512 characters with no spaces".into()));
     }
     let item = create(conn, principal_id, item_type::LLM_API_KEY, provider, label, added_via)?;
-    if let Err(e) = sealer.seal(principal_id, &item.id, SealKind::ApiKey, k.as_bytes()) {
+    // Write, then read back byte for byte: the vault is the key's only home.
+    let verified = sealer
+        .seal(principal_id, &item.id, SealKind::ApiKey, k.as_bytes())
+        .map_err(|e| format!("vault write failed ({e})"))
+        .and_then(|()| vault_holds(sealer, &item, k.as_bytes()));
+    if let Err(why) = verified {
+        let _ = sealer.destroy(principal_id, &item.id);
         conn.execute("DELETE FROM person_wallet_items WHERE id = ?1", params![item.id])?;
-        return Err(WalletError::Io(format!("could not seal the key in the vault ({e}); nothing was saved")));
+        return Err(WalletError::Io(format!("could not seal the key in the vault ({why}); nothing was saved")));
     }
     conn.execute(
         "UPDATE person_wallet_items SET state = 'signed_in', sealed = 1, plan = 'API key' WHERE id = ?1",

@@ -2452,6 +2452,71 @@ fn answer_permission_card(
     r
 }
 
+/// The two person routes on a permission card (prd-agent-settings-cards-v1
+/// rev 3.1 §4.3, §4.4, §17.3, §17.5; lane A2): `permission-note` (a person
+/// below the floor leaves a note for the approvers) and `permission-undo`
+/// ("Turn off again"). While the global switch is off they answer exactly
+/// as an unknown thread route does today. People only: an agent passport,
+/// a K2 terminal, a Garden widget and an App guest get 403
+/// `action_card_person_only`, before anything is read.
+fn handle_permission_card_route(path: &str, params: &HashMap<String, String>, session_author: &str) -> CliResponse {
+    if !k2_core::permission::gate::server_on() {
+        return CliResponse::not_found();
+    }
+    let note = path == k2_core::permission::NOTE_ROUTE;
+    if let Err(r) = refuse_action_card_non_person(params, if note { "notes on" } else { "turns off" }) {
+        return r;
+    }
+    let addr = str_param(params, "addr");
+    let card_id = card_id_of(params);
+    if addr.is_empty() {
+        return usage("missing addr");
+    }
+    if card_id.is_empty() {
+        return usage("missing card id");
+    }
+    let resolved = match resolve_thread_addr(&addr) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+    if let Some(r) = refuse_if_imported(&resolved, Some(&card_id)) {
+        return r;
+    }
+    let action = match overlay::card_action(&resolved.conversation_id, &card_id) {
+        Ok(Some(a)) if a.id == k2_core::permission::CARD_ACTION_PERMISSION || a.id == k2_core::permission::CARD_ACTION_BATCH => a,
+        Ok(_) => return not_found(format!("no permission card {card_id}")),
+        Err(e) => return card_error(e),
+    };
+    // Check-on-touch, as for an answer: a card past its time expires now
+    // (its request too, with the agent's one turn).
+    if let Ok(Some(cb)) = overlay::expire_if_due(&resolved.conversation_id, &card_id, overlay::now_secs()) {
+        publish_card_frame(&cb);
+        crate::permission::expiry::on_cards_expired(&[cb]);
+    }
+    let who = crate::permission::present::answerer_for(session_author);
+    let card = crate::permission::notes::CardCtx {
+        conversation_id: &resolved.conversation_id,
+        card_id: &card_id,
+        batch: action.id == k2_core::permission::CARD_ACTION_BATCH,
+    };
+    let r = if note {
+        crate::permission::notes::handle(params, &card, &who)
+    } else {
+        crate::permission::undo::handle(params, &card, &who)
+    };
+    if r.status != "200 OK" {
+        return r;
+    }
+    match serde_json::from_str::<serde_json::Value>(&r.body) {
+        Ok(mut body) => {
+            body["conversation_id"] = serde_json::json!(resolved.conversation_id);
+            body["addr"] = serde_json::json!(resolved.addr);
+            CliResponse::ok_json(with_moved_from(body, &resolved))
+        }
+        Err(_) => r,
+    }
+}
+
 /// A permission card's new state, to every open view of its Thread (the
 /// same id at the same seq; lane A1's `present::refresh_card`).
 pub(crate) fn publish_action_frame(cb: &CardCallback) {
@@ -3375,6 +3440,9 @@ pub fn dispatch_post_as(
         "/cli/thread/secret" => handle_secret(&params),
         "/cli/thread/answer" => handle_answer(&params, session_author),
         "/cli/thread/void" => handle_void(&params, session_author),
+        k2_core::permission::NOTE_ROUTE | k2_core::permission::UNDO_ROUTE => {
+            handle_permission_card_route(path, &params, session_author)
+        }
         _ => CliResponse::not_found(),
     }
 }

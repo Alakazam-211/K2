@@ -35,10 +35,12 @@ pub(crate) const ENABLED: &str = "/cli/permission/enabled";
 /// People only (Owner/Admin): every agent's "Can ask for permission cards"
 /// switch and the recent requests (the Settings page, the Agent tab; D2).
 pub(crate) const AGENTS: &str = "/cli/permission/agents";
+/// "Waiting on you" (people only; lane A2, `waiting.rs`).
+pub(crate) const PENDING: &str = "/cli/permission/pending";
 
 /// Every route A1 serves (rows for lane B's tables: [`POST_ROUTES`] are
 /// POST, the rest GET; all are agent verbs).
-pub(crate) const ROUTES: &[&str] = &[REQUEST, UPDATE, STATUS, CANCEL, LIST, ENABLED, AGENTS];
+pub(crate) const ROUTES: &[&str] = &[REQUEST, UPDATE, STATUS, CANCEL, LIST, ENABLED, AGENTS, PENDING];
 pub(crate) const POST_ROUTES: &[&str] = &[REQUEST, UPDATE, CANCEL];
 
 /// Request bodies are small: an action, a few values and one line of why.
@@ -102,6 +104,9 @@ pub(crate) fn handle_gated(path: &str, who: &Who, is_post: bool, body: &[u8], pa
     }
     if path == ENABLED {
         return enabled(who);
+    }
+    if path == PENDING {
+        return super::waiting::pending(who);
     }
     let Some((workspace_id, session_id)) = who.passport().map(|(w, s)| (w.to_string(), s.to_string())) else {
         return err(

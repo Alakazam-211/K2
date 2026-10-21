@@ -46,8 +46,6 @@ import {
 } from '@/components/Thread/ThreadZenKit'
 import { ThreadMessageColumn } from '@/components/Thread/ThreadColumn'
 import { WorkspaceFileLinks } from '@/components/common/WorkspaceFileLinks'
-import { useStore } from 'zustand'
-import { zenThreadFeeds } from '@/lib/zen/zen-data'
 import { useZenMaterials } from '@/lib/zen/zen-materials'
 import type { ZenAgentRow } from '@/lib/zen/zen-data'
 import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'

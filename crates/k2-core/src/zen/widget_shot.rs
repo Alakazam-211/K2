@@ -186,8 +186,9 @@ fn nonced(nonce: &str, text: &str) -> String {
     format!("<script nonce=\"{nonce}\">{}</script>", script_text(text))
 }
 
-/// `zenFrameThemeCss`.
-pub fn frame_theme_css(vars: &BTreeMap<String, String>, scheme: Scheme) -> String {
+/// `zenFrameThemeCss(theme, ownScheme)`: the Garden's scheme `!important`
+/// unless the widget's manifest says `"colorScheme": "own"`.
+pub fn frame_theme_css(vars: &BTreeMap<String, String>, scheme: Scheme, own_scheme: bool) -> String {
     let mut lines = String::new();
     for (k, v) in vars {
         if k.starts_with("--zen-") && k.len() > 6 && k[6..].chars().all(|c| c.is_ascii_alphanumeric() || c == '-') && safe_css_value(v) {
@@ -195,16 +196,19 @@ pub fn frame_theme_css(vars: &BTreeMap<String, String>, scheme: Scheme) -> Strin
         }
     }
     format!(
-        "<style data-k2-theme=\"\">:root{{{lines}color-scheme:{}!important;background:transparent;}}html,body{{background:transparent;}}</style>",
-        scheme.as_str()
+        "<style data-k2-theme=\"\">:root{{{lines}color-scheme:{}{};background:transparent;}}html,body{{background:transparent;}}</style>",
+        scheme.as_str(),
+        if own_scheme { "" } else { "!important" }
     )
 }
 
-/// `zenFramePrelude` with `libs` already as script texts (or slots).
-pub fn frame_prelude(nonce: &str, vars: &BTreeMap<String, String>, scheme: Scheme, libs: &[String]) -> String {
-    let attr = format!("document.documentElement.setAttribute('data-zen-scheme', {});", json!(scheme.as_str()));
+/// `zenFramePrelude({nonce, theme, libs, ownScheme})` with `libs` already
+/// as script texts (or slots).
+pub fn frame_prelude(nonce: &str, vars: &BTreeMap<String, String>, scheme: Scheme, libs: &[String], own_scheme: bool) -> String {
+    let own = if own_scheme { "document.documentElement.setAttribute('data-k2-scheme', 'own');" } else { "" };
+    let attr = format!("document.documentElement.setAttribute('data-zen-scheme', {});{own}", json!(scheme.as_str()));
     let mut out = nonced(nonce, SEALED_FRAME_GUARD);
-    out.push_str(&frame_theme_css(vars, scheme));
+    out.push_str(&frame_theme_css(vars, scheme, own_scheme));
     out.push_str(&nonced(nonce, &attr));
     out.push_str(&nonced(nonce, K2_FRAME_JS));
     for l in libs {
@@ -334,8 +338,14 @@ pub fn shot_page(name: &str, files: &BTreeMap<String, Vec<u8>>, o: &ShotOptions)
         slots.push(format!("__K2_SHOT_LIB_{i}__"));
         libs.push(json!({ "slot": format!("__K2_SHOT_LIB_{i}__"), "key": entry.key(), "files": entry.files }));
     }
+    // A manifest's `"colorScheme": "own"` (0.46.3) opts out of the Garden's
+    // scheme winning; read from the file so the shot follows Zen exactly.
+    let own_scheme = files
+        .get(widgets::MANIFEST_FILE)
+        .and_then(|b| serde_json::from_slice::<J>(b).ok())
+        .is_some_and(|m| m["colorScheme"] == "own");
     let nonce = new_nonce();
-    let prelude = frame_prelude(&nonce, &vars, scheme, &slots);
+    let prelude = frame_prelude(&nonce, &vars, scheme, &slots, own_scheme);
     let frame = frame_src_doc(&bundle.render(&nonce), &nonce, &prelude);
     let hello = json!({
         "k2": "hello",
@@ -369,6 +379,7 @@ pub fn shot_page(name: &str, files: &BTreeMap<String, Vec<u8>>, o: &ShotOptions)
         "scheme": scheme.as_str(),
         "theme": o.theme,
         "caps": manifest.caps,
+        "colorScheme": if own_scheme { "own" } else { "garden" },
         "warnings": c.warnings,
     }))
 }

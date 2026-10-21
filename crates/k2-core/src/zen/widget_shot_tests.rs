@@ -17,7 +17,7 @@ fn the_daemon_frame_is_the_renderer_frame() {
     let nonce = "AAAAAAAAAAAAAAAAAAAAAA";
     let vars: BTreeMap<String, String> =
         [("--zen-canvas".to_string(), "#222222".to_string()), ("--zen-text".to_string(), "#111111".to_string())].into();
-    let prelude = frame_prelude(nonce, &vars, Scheme::Dark, &["LIB_ONE".to_string(), "x</script>y".to_string()]);
+    let prelude = frame_prelude(nonce, &vars, Scheme::Dark, &["LIB_ONE".to_string(), "x</script>y".to_string()], false);
     let html = "<!DOCTYPE html>\n<html><body><p>shape</p><script nonce=\"AAAAAAAAAAAAAAAAAAAAAA\">k2.ready()</script></body></html>";
     let frame = frame_src_doc(html, nonce, &prelude)
         .replace(&script_text(SEALED_FRAME_GUARD), "{{GUARD}}")
@@ -135,4 +135,28 @@ fn fixtures_cant_break_out_of_the_host_script() {
     let host = v["host"].as_str().expect("host");
     assert_eq!(host.matches("__K2_SHOT_FRAME__").count(), 1, "only the template's own slot");
     assert!(!host.contains("__K2_SHOT_DATA__"));
+}
+
+#[test]
+fn a_widget_with_its_own_scheme_keeps_it_like_in_zen() {
+    let vars: BTreeMap<String, String> = [("--zen-text".to_string(), "#111".to_string())].into();
+    let own = frame_prelude("AAAAAAAAAAAAAAAAAAAAAA", &vars, Scheme::Dark, &[], true);
+    assert!(own.contains("color-scheme:dark;background"), "no !important: {own}");
+    assert!(own.contains("setAttribute('data-zen-scheme', \"dark\");document.documentElement.setAttribute('data-k2-scheme', 'own');"));
+    let mut files = staged_builtin("fleet-grid", 2);
+    let m: J = serde_json::from_slice(&files["manifest.json"]).expect("manifest");
+    let mut m = m.as_object().expect("object").clone();
+    m.insert("colorScheme".into(), json!("own"));
+    files.insert("manifest.json".into(), serde_json::to_vec(&m).expect("encode"));
+    let v = shot_page("fleet-grid", &files, &ShotOptions::default()).expect("shot page");
+    if v["ok"] == true {
+        assert_eq!(v["colorScheme"], "own", "{v}");
+        assert!(!v["frame"].as_str().expect("frame").contains("!important"), "own scheme: no !important");
+    } else {
+        // This K2's manifest check doesn't know colorScheme yet: it must
+        // say so as an error, not shoot with the Garden's scheme.
+        assert!(v["errors"].to_string().contains("colorScheme"), "{v}");
+    }
+    let v = shot_page("fleet-grid", &staged_builtin("fleet-grid", 2), &ShotOptions::default()).expect("shot page");
+    assert_eq!(v["colorScheme"], "garden");
 }

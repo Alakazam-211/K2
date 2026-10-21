@@ -1017,10 +1017,13 @@ async fn servers_pass(node: &Arc<Node>, st: &mut ServersLoop) {
     // slot opens fresh (new ledger and pin) for its next server.
     for t in node.tenants().into_iter().filter(|t| !t.is_owner()) {
         let line = lines.iter().find(|(e, _)| e.slot == t.slot).map(|(e, _)| e);
-        // A tenant this loop didn't open (a restarted loop; tests that open
-        // one by hand) is the line's when its pin serves the line: keep it.
+        // A tenant this loop didn't open (a restarted loop) is the line's
+        // only when its pin serves the line AND its state was opened for
+        // this very line (the line mark, fingerprint and add time): a
+        // re-added server never inherits an old one's tenant (review B9).
         if let Some(e) = line {
-            if !st.keys.contains_key(&t.slot) && t.pin.lock().unwrap().as_ref().is_some_and(|p| crate::node::tenant::pin_serves(e, p)) {
+            let marked = std::fs::read_to_string(layout.tenant(t.slot).state().join(LINE_MARK_FILE)).is_ok_and(|m| m == line_mark(e));
+            if !st.keys.contains_key(&t.slot) && marked && t.pin.lock().unwrap().as_ref().is_some_and(|p| crate::node::tenant::pin_serves(e, p)) {
                 st.keys.insert(t.slot, line_key(e));
             }
         }

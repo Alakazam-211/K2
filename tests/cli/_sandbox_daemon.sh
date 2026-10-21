@@ -96,6 +96,54 @@ sandbox_daemon_start() {
 
     # Best-effort cleanup on exit.
     trap _sandbox_daemon_cleanup EXIT
+
+    # /health answers as soon as the port is bound; every real route 503s
+    # until the boot migrations finish (0.39.5 handshake). Wait for ready.
+    sandbox_daemon_wait_ready "$SANDBOX_HOME/daemon.log"
+}
+
+# Wait until the daemon on $SANDBOX_HOME/.k2/daemon.port reports
+# /boot-status phase "ready". Since 0.39.5 the daemon binds FIRST and runs
+# the first-boot migration sweeps (unification, work→inbox, skills
+# consolidation, …) after bind, so /health (liveness) is 200 before any
+# migration ran; only `ready` means the sweep is done. Fails loudly after
+# 30 s. $1 = the log to tail on failure.
+sandbox_daemon_wait_ready() {
+    local log="$1" i port phase=""
+    for i in $(seq 1 150); do
+        if [ -s "$SANDBOX_HOME/.k2/daemon.port" ]; then
+            port="$(cat "$SANDBOX_HOME/.k2/daemon.port")"
+            phase="$(curl -s --connect-timeout 1 "http://127.0.0.1:${port}/boot-status" 2>/dev/null \
+                | python3 -c 'import json,sys; print(json.load(sys.stdin).get("phase",""))' 2>/dev/null || true)"
+            [ "$phase" = "ready" ] && break
+        fi
+        sleep 0.2
+    done
+    if [ "$phase" != "ready" ]; then
+        echo "FAIL: daemon never reached boot phase ready (last: '${phase}')" >&2
+        tail -40 "$log" >&2 || true
+        return 1
+    fi
+    K2SO_PORT="$port"
+    K2SO_TOKEN="$(cat "$SANDBOX_HOME/.k2/daemon.token")"
+    export K2SO_PORT K2SO_TOKEN
+}
+
+# Stop the running sandbox daemon (waits for it to exit), then boot a fresh
+# one under the SAME $SANDBOX_HOME and wait until it is ready, so its
+# first-boot sweep has finished. $1 = log file name under $SANDBOX_HOME.
+sandbox_daemon_restart() {
+    local log="$SANDBOX_HOME/$1"
+    if [ -n "${SANDBOX_DAEMON_PID:-}" ]; then
+        kill "$SANDBOX_DAEMON_PID" 2>/dev/null || true
+        wait "$SANDBOX_DAEMON_PID" 2>/dev/null || true
+        unset SANDBOX_DAEMON_PID
+    fi
+    TMPDIR="$SANDBOX_HOME/tmp" XDG_RUNTIME_DIR="$SANDBOX_HOME/run" K2_RUNTIME_DIR= \
+        HOME="$SANDBOX_HOME" "$SANDBOX_DAEMON_BIN" >"$log" 2>&1 &
+    SANDBOX_DAEMON_PID=$!
+    export SANDBOX_DAEMON_PID
+    sandbox_daemon_wait_ready "$log"
 }
 
 _sandbox_daemon_cleanup() {

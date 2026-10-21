@@ -116,6 +116,10 @@ async fn node_verb(node: &Arc<Node>, verb: &str, args: &Value) -> Result<Value, 
         }
         "jobs.kill" => super::housekeeping::kill(node, args),
         "gc" => super::housekeeping::gc(node, args).await,
+        "servers.list" => {
+            super::exec::no_args(args)?;
+            Ok(super::servers::node_list(node))
+        }
         "policy.show" => {
             super::exec::no_args(args)?;
             Ok(super::policy::show(node.layout(), &node.facts, &node.session_narrow()))
@@ -129,6 +133,13 @@ async fn node_verb(node: &Arc<Node>, verb: &str, args: &Value) -> Result<Value, 
 /// node-writable spool path (§12.2).
 #[derive(Default)]
 pub struct IncomingUpdates(Mutex<HashMap<String, Incoming>>);
+
+impl IncomingUpdates {
+    /// The transfers being received (only ever the owner server's, V52).
+    pub fn transfer_ids(&self) -> Vec<String> {
+        self.0.lock().unwrap().keys().cloned().collect()
+    }
+}
 
 pub struct Incoming {
     offer: UpdateOffer,
@@ -202,7 +213,12 @@ pub fn update_chunk(node: &Arc<Node>, tx: &mpsc::Sender<Frame>, c: UpdateChunk) 
     tokio::spawn(async move {
         let req = LocalRequest::Update { cmd: inc.offer.cmd.clone(), sig: inc.offer.sig.clone(), size: inc.buf.len() as u64 };
         let r = as_result(ask(&n, req, Some(inc.buf), Duration::from_secs(180)).await, "", "");
-        let f = if r.state == "done" {
+        let f = if r.state == "done" && r.result.get("phase").and_then(|p| p.as_str()) == Some("draining") {
+            // A shared node: the build waits staged until the running jobs
+            // end (V55); the restart and the health report come after.
+            let n_running = r.result.get("running").and_then(|x| x.as_u64()).unwrap_or(0);
+            update_state(&n, &inc.offer, UpdatePhase::Staged, None, Some(format!("draining: waiting for {n_running} running job(s) to finish (up to 30 min)")))
+        } else if r.state == "done" {
             // The executor restarts this node next; this may not get out.
             update_state(&n, &inc.offer, UpdatePhase::Swapped, None, None)
         } else {

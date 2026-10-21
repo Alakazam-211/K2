@@ -29,6 +29,18 @@ use super::store::AuditEntry;
 /// How long a new build has to say it's healthy.
 pub const HEALTH_GATE_SECS: i64 = 120;
 
+/// How long a shared node's update, rollback or k2-node restart waits for
+/// running jobs before it goes ahead anyway (V55).
+pub const DRAIN_MAX_SECS: i64 = 30 * 60;
+
+/// `<home>/run/node-update.json`: written by the executor just before it
+/// restarts the node for an update, rollback or restart, so the jobs that
+/// restart interrupts end `interrupted/node_update` (infra, no node-health
+/// strike on the server; V55) instead of `node_shutdown` / `node_restart`.
+pub const UPDATE_MARK_FILE: &str = "node-update.json";
+/// A mark older than this is stale (a restart that never came).
+pub const UPDATE_MARK_SECS: i64 = 600;
+
 /// The macOS Developer ID team that signs K2 (release.sh).
 pub const APPLE_TEAM_ID: &str = "36B8R93HXV";
 
@@ -141,7 +153,8 @@ fn verify_codesign(e: &Executor, staged: &Path) -> Result<(), AdminRefusal> {
 /// signature + the version rule are the gate).
 pub fn apply(e: &Executor, c: &Checked, sig: &str, bytes: &[u8]) -> Result<Value, AdminRefusal> {
     let args = &c.opened.cmd.args;
-    only_keys(args, &["version", "sha256", "trigger"])?;
+    only_keys(args, &["version", "sha256", "trigger", "now"])?;
+    let now_flag = now_arg(args)?;
     let want_v = str_arg(args, "version")?;
     let want_sha = str_arg(args, "sha256")?;
     let trigger = args.get("trigger").and_then(|v| v.as_str()).unwrap_or("explicit");
@@ -167,7 +180,7 @@ pub fn apply(e: &Executor, c: &Checked, sig: &str, bytes: &[u8]) -> Result<Value
     if built.version < running || built.protocol < k2_node_proto::PROTOCOL {
         return Err(AdminRefusal::new(code::DOWNGRADE, "older than the running k2-node (roll back instead)"));
     }
-    let mut rec = load(e);
+    let rec = load(e);
     if rec.refused.iter().any(|v| *v == built.version.to_string()) {
         return Err(AdminRefusal::new(code::ROLLED_BACK_VERSION, "that version was rolled back on this node"));
     }
@@ -200,6 +213,26 @@ pub fn apply(e: &Executor, c: &Checked, sig: &str, bytes: &[u8]) -> Result<Value
         let _ = std::fs::remove_file(&new);
         return Err(r);
     }
+    let staged = Staged { to: built.version.to_string(), key: built.key_id.to_string(), cmd_id: c.opened.cmd.cmd_id.clone() };
+    // A shared node lets running jobs finish first (V55); `.new` waits.
+    drain_then(e, now_flag, "node.update", &c.opened.cmd.cmd_id, move |ex| swap_and_restart(ex, &staged))
+}
+
+/// A verified build waiting in `<bin>.new`.
+struct Staged {
+    to: String,
+    key: String,
+    cmd_id: String,
+}
+
+/// Swap `.new` in, restart the node, start the health gate.
+fn swap_and_restart(e: &Executor, s: &Staged) -> Result<Value, AdminRefusal> {
+    let bin = e.paths.binary.clone();
+    let new = sib(&bin, ".new");
+    if !is_regular(&new) {
+        return Err(fail("the staged build is gone"));
+    }
+    let mut rec = load(e);
     // Swap.
     let prev = sib(&bin, ".prev");
     let swap = (|| -> std::io::Result<()> {
@@ -219,10 +252,10 @@ pub fn apply(e: &Executor, c: &Checked, sig: &str, bytes: &[u8]) -> Result<Value
     let from = crate::PRODUCT_VERSION.to_string();
     rec.phase = "swapped".into();
     rec.from = from.clone();
-    rec.to = built.version.to_string();
+    rec.to = s.to.clone();
     rec.at = now;
     rec.deadline = now + HEALTH_GATE_SECS;
-    rec.cmd_id = Some(c.opened.cmd.cmd_id.clone());
+    rec.cmd_id = Some(s.cmd_id.clone());
     rec.reason = None;
     save(e, &rec)?;
     let _ = std::fs::remove_file(healthy_path(&e.paths.home));
@@ -231,13 +264,156 @@ pub fn apply(e: &Executor, c: &Checked, sig: &str, bytes: &[u8]) -> Result<Value
         return Err(fail(format!("restart after swap failed ({x}); rolled back: {}", r.map(|_| "yes".to_string()).unwrap_or_else(|z| z.message))));
     }
     start_gate(e);
-    Ok(json!({"phase": "swapped", "from": from, "to": rec.to, "key": built.key_id, "health_gate_secs": HEALTH_GATE_SECS}))
+    Ok(json!({"phase": "swapped", "from": from, "to": rec.to, "key": s.key, "health_gate_secs": HEALTH_GATE_SECS}))
+}
+
+// ── the drain on shared nodes (V55) ──────────────────────────────────
+
+/// The optional `now` arg (skip the drain).
+pub fn now_arg(args: &Value) -> Result<bool, AdminRefusal> {
+    match args.get("now") {
+        None => Ok(false),
+        Some(Value::Bool(b)) => Ok(*b),
+        Some(_) => Err(AdminRefusal::new(code::BAD_ARGS, "now is true or false")),
+    }
+}
+
+/// Two or more active servers (§2): restarts drain first.
+pub fn shared_node(e: &Executor) -> bool {
+    super::servers::read_file(&e.paths.config_dir).ok().flatten().is_some_and(|f| f.shared(e.now()))
+}
+
+/// Running jobs, every server's, as the node's status file says.
+pub fn running_jobs(e: &Executor) -> usize {
+    crate::status::read(&e.paths.layout().status()).map(|s| s.running.len()).unwrap_or(0)
+}
+
+/// The mark the node reads when the restart interrupts jobs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpdateMark {
+    pub what: String,
+    pub at: i64,
+}
+
+pub fn update_mark_path(home: &Path) -> PathBuf {
+    home.join("run").join(UPDATE_MARK_FILE)
+}
+
+fn write_update_mark(e: &Executor, what: &str) {
+    let m = UpdateMark { what: what.to_string(), at: e.now() };
+    if let Ok(b) = serde_json::to_vec(&m) {
+        if let Err(x) = crate::util::atomic_write(&update_mark_path(&e.paths.home), &b, 0o644) {
+            crate::nlog!("admin: update mark: {x}");
+        }
+    }
+}
+
+/// Node side: was this process (or its jobs) stopped for an update the
+/// executor started in the last few minutes?
+pub fn recent_update_mark(home: &Path, now: i64) -> bool {
+    std::fs::read(update_mark_path(home))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<UpdateMark>(&b).ok())
+        .is_some_and(|m| now >= m.at && now - m.at < UPDATE_MARK_SECS)
+}
+
+/// Run `act` (which restarts the node) now on a solo node, with `now`, or
+/// when nothing runs. On a shared node with running jobs: set the node
+/// draining (no new starts), answer at once, and run `act` in the
+/// background once every running job ended or `drain_max` passed; then
+/// put the machine owner's control back as it was.
+pub fn drain_then<F>(e: &Executor, now: bool, what: &str, cmd_id: &str, act: F) -> Result<Value, AdminRefusal>
+where
+    F: FnOnce(&Executor) -> Result<Value, AdminRefusal> + Send + 'static,
+{
+    if !shared_node(e) {
+        // Solo: today's path, today's reasons.
+        return act(e);
+    }
+    let running = running_jobs(e);
+    if now || running == 0 {
+        write_update_mark(e, what);
+        return act(e);
+    }
+    if e.draining.swap(true, Ordering::SeqCst) {
+        return Err(AdminRefusal::new(code::BUSY, "this node is already draining for an update or restart"));
+    }
+    let control_path = e.paths.layout().control();
+    let prior = match crate::config::read_control(&control_path) {
+        Ok(c) => c,
+        Err(x) => {
+            e.draining.store(false, Ordering::SeqCst);
+            return Err(fail(x));
+        }
+    };
+    let by = format!("k2-node {what} (draining)");
+    if let Err(x) = crate::config::write_control(&control_path, k2_node_proto::frames::Control::Draining, &by, e.now()) {
+        e.draining.store(false, Ordering::SeqCst);
+        return Err(fail(x));
+    }
+    let _ = e.audit().append(
+        AuditEntry { event: "drain".into(), cmd_id: Some(cmd_id.to_string()), detail: json!({"what": what, "running": running}), ..Default::default() },
+        e.now(),
+    );
+    let ex = Executor {
+        paths: e.paths.clone(),
+        platform: e.platform.clone(),
+        test_keys: e.test_keys,
+        busy: e.busy.clone(),
+        exit_after_update: e.exit_after_update,
+        drain_max: e.drain_max,
+        draining: e.draining.clone(),
+    };
+    let resp = json!({"phase": "draining", "what": what, "running": running, "max_secs": e.drain_max.as_secs()});
+    let (what, cmd_id) = (what.to_string(), cmd_id.to_string());
+    std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + ex.drain_max;
+        while running_jobs(&ex) > 0 && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(if cfg!(test) { 20 } else { 2000 }));
+        }
+        let left = running_jobs(&ex);
+        let r = {
+            let _g = ex.busy.lock().unwrap_or_else(|p| p.into_inner());
+            write_update_mark(&ex, &what);
+            let r = act(&ex);
+            // Put the owner's switch back, unless someone changed it since.
+            if let Ok(c) = crate::config::read_control(&control_path) {
+                if c.control == k2_node_proto::frames::Control::Draining && c.by.as_deref() == Some(by.as_str()) {
+                    let back_by = prior.by.clone().unwrap_or_else(|| "k2-node".into());
+                    if let Err(x) = crate::config::write_control(&control_path, prior.control, &back_by, prior.at.unwrap_or_else(|| ex.now())) {
+                        crate::nlog!("admin: can't restore control after the drain: {x}");
+                    }
+                }
+            }
+            r
+        };
+        let _ = ex.audit().append(
+            AuditEntry {
+                event: "drain".into(),
+                cmd_id: Some(cmd_id),
+                code: r.as_ref().err().map(|x| x.code.clone()),
+                detail: json!({"what": what, "phase": "done", "left_running": left}),
+                ..Default::default()
+            },
+            ex.now(),
+        );
+        ex.draining.store(false, Ordering::SeqCst);
+    });
+    Ok(resp)
 }
 
 /// Run the health gate in the background (holding the busy lock so no
 /// other root action interleaves). Healthy → record; else roll back.
 pub fn start_gate(e: &Executor) {
-    let ex = Executor { paths: e.paths.clone(), platform: e.platform.clone(), test_keys: e.test_keys, busy: e.busy.clone(), exit_after_update: e.exit_after_update };
+    let ex = Executor {
+        paths: e.paths.clone(),
+        platform: e.platform.clone(),
+        test_keys: e.test_keys,
+        busy: e.busy.clone(),
+        exit_after_update: e.exit_after_update,
+        drain_max: e.drain_max,
+        draining: e.draining.clone(),
+    };
     std::thread::spawn(move || {
         // Wait until the request that started us released the lock.
         std::thread::sleep(Duration::from_millis(50));
@@ -329,4 +505,111 @@ fn rollback_inner(e: &Executor, why: &str) -> Result<Value, AdminRefusal> {
     );
     restarted.map_err(|x| fail(format!("rolled back, but restarting the node failed: {x}")))?;
     Ok(json!({"phase": "rolled_back", "from": current, "to": back_to, "why": why}))
+}
+
+#[cfg(test)]
+mod drain_tests {
+    use super::*;
+    use crate::admin::tests::Rig;
+    use k2_node_proto::frames::Control;
+    use k2_node_proto::share::{Network, ServersFile, ShareLimits, ShareState, Trust};
+
+    fn share_node(r: &Rig, servers: usize) {
+        let mut f = ServersFile::new(&"a".repeat(64), "owner.k2.dev", ShareLimits::owner(2, 8, 16, 100, Network::On), 8, r.exec.now() - 10, "local:t");
+        for slot in 1..servers {
+            let mut e = f.servers[0].clone();
+            e.slot = slot as u8;
+            e.label = format!("s{slot}.k2.dev");
+            e.fp_prefix = format!("{slot:016x}");
+            e.trust = Trust::Own;
+            e.state = ShareState::Active;
+            e.set_limits(&ShareLimits::new_server(Trust::Own, false));
+            f.servers.push(e);
+        }
+        crate::admin::servers::write_file(&r.exec.paths.config_dir, &f).unwrap();
+    }
+
+    fn running(r: &Rig, jobs: &[&str]) {
+        let st = crate::status::Status { running: jobs.iter().map(|s| s.to_string()).collect(), ..Default::default() };
+        crate::status::write(&r.exec.paths.layout().status(), &st).unwrap();
+    }
+
+    fn control(r: &Rig) -> Control {
+        crate::config::read_control(&r.exec.paths.layout().control()).unwrap().control
+    }
+
+    fn calls(r: &Rig) -> Vec<String> {
+        r.plat.calls.lock().unwrap().clone()
+    }
+
+    fn wait(what: &str, mut f: impl FnMut() -> bool) {
+        for _ in 0..300 {
+            if f() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        panic!("timed out waiting for {what}");
+    }
+
+    /// V55: a k2-node restart on a shared node with running jobs drains
+    /// first (no new starts), restarts once they end, puts the owner's
+    /// control back and marks the restart an update. Solo and `now` restart
+    /// at once; solo leaves no mark (today's reasons).
+    #[test]
+    fn shared_restarts_drain_and_solo_ones_dont() {
+        // Solo: at once, no mark.
+        let solo = Rig::new("full");
+        running(&solo, &["j1"]);
+        let res = solo.run(&solo.approve(solo.cmd("unit.restart", json!({"unit": "k2-node"}))));
+        assert_eq!(res.state, "done", "{res:?}");
+        assert_eq!(calls(&solo), vec!["restart-unit k2-node".to_string()]);
+        assert!(!update_mark_path(&solo.exec.paths.home).exists(), "solo keeps today's reasons");
+
+        // Shared with a running job: drains, then restarts.
+        let r = Rig::new("full");
+        share_node(&r, 2);
+        running(&r, &["j1", "t1-0123456789abcdef"]);
+        let res = r.run(&r.approve(r.cmd("unit.restart", json!({"unit": "k2-node"}))));
+        assert_eq!(res.state, "done", "{res:?}");
+        assert_eq!(res.result["phase"], "draining");
+        assert_eq!(res.result["running"], 2);
+        assert_eq!(control(&r), Control::Draining, "no new starts while draining");
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(calls(&r).is_empty(), "nothing restarts while jobs run");
+        let again = r.run(&r.approve(r.cmd("unit.restart", json!({"unit": "k2-node"}))));
+        assert_eq!(again.code.as_deref(), Some(code::BUSY), "one drain at a time: {again:?}");
+        running(&r, &[]);
+        wait("the restart", || calls(&r) == vec!["restart-unit k2-node".to_string()]);
+        wait("control back", || control(&r) == Control::Active);
+        assert!(recent_update_mark(&r.exec.paths.home, r.exec.now()), "the restart is marked an update");
+        let audit = r.exec.audit().verify().unwrap();
+        assert_eq!(audit.iter().filter(|l| l.event == "drain").count(), 2, "drain start and end are audited");
+
+        // Shared with `now`: at once.
+        let n = Rig::new("full");
+        share_node(&n, 3);
+        running(&n, &["j1"]);
+        let res = n.run(&n.approve(n.cmd("unit.restart", json!({"unit": "k2-node", "now": true}))));
+        assert_eq!((res.state.as_str(), calls(&n)), ("done", vec!["restart-unit k2-node".to_string()]), "{res:?}");
+        assert_eq!(control(&n), Control::Active);
+    }
+
+    /// The drain gives up after `drain_max` and restarts anyway; a machine
+    /// owner's pause set during the drain is never overwritten.
+    #[test]
+    fn a_drain_ends_at_its_limit_and_keeps_the_owners_pause() {
+        let mut r = Rig::new("full");
+        r.exec.drain_max = Duration::from_millis(300);
+        share_node(&r, 2);
+        running(&r, &["stuck"]);
+        let res = r.run(&r.approve(r.cmd("unit.restart", json!({"unit": "k2-node"}))));
+        assert_eq!(res.result["phase"], "draining", "{res:?}");
+        crate::config::write_control(&r.exec.paths.layout().control(), Control::Paused, "rosson", r.exec.now()).unwrap();
+        wait("the restart at the limit", || calls(&r) == vec!["restart-unit k2-node".to_string()]);
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(control(&r), Control::Paused, "the owner's pause stands");
+        let bad = r.run(&r.approve(r.cmd("unit.restart", json!({"unit": "k2-node", "now": "yes"}))));
+        assert_eq!(bad.code.as_deref(), Some(code::BAD_ARGS));
+    }
 }

@@ -42,6 +42,7 @@ die() {
   say "FAIL: $*"
   say "logs: $ROOT (kept)"
   K2X2_KEEP=1
+  : >"$ROOT/.keep" 2>/dev/null || true # a die inside $(...) must keep the logs too
   exit 1
 }
 pass() { say "PASS: $*"; }
@@ -55,7 +56,9 @@ cleanup() {
     [[ -n "$p" ]] && kill -9 "$p" 2>/dev/null || true
   done
   pkill -9 -f "frpc -c $ROOT/" 2>/dev/null || true
-  if [[ "${K2X2_KEEP:-0}" != 1 ]]; then
+  # Nodes carry the root in their arguments: nothing of this run survives it.
+  pkill -9 -f -- "--home $ROOT/" 2>/dev/null || true
+  if [[ "${K2X2_KEEP:-0}" != 1 && ! -e "$ROOT/.keep" ]]; then
     rm -rf "$ROOT"
   else
     say "kept $ROOT"
@@ -81,7 +84,7 @@ start_daemon() {
   chmod 700 "$h/tmp" "$h/run"
   rm -f "$h/.k2/daemon.token"
   # Keep the port across restarts (the daemon reuses daemon.port if free).
-  clean "$h" TMPDIR="$h/tmp" XDG_RUNTIME_DIR="$h/run" K2_RUNTIME_DIR= \
+  env -i HOME="$h" PATH="$PATH_CLEAN" USER="$(id -un)" LANG=C.UTF-8 SHELL=/bin/sh TMPDIR="$h/tmp" XDG_RUNTIME_DIR="$h/run" K2_RUNTIME_DIR= \
     K2_TEST_AGENT_SHIM_DIR="$h/agent-shim-empty" K2SO_WATCHDOG_DISABLED=1 K2_HEARTBEAT_NO_SELF_HEAL=1 \
     K2_SUBSCRIPTION_PROBE=deny K2_COMPUTE=1 K2_AIRGAP=1 K2_TUNNEL_LEASE=off K2_HOOK_INSTALL=0 \
     K2_LLM_ACCOUNTS_KEYCHAIN=0 K2_LLM_ACCOUNTS_LOOP=0 K2_COMPUTE_ADVERTISE=0 K2_USAGE_PRICES_FETCH=0 \
@@ -158,7 +161,7 @@ start_node() {
     die "enroll $node with $server: $out"
   sas="$(printf '%s' "$out" | sed -n 's/.*Code: \([0-9]\{3\}\) \([0-9]\{3\}\).*/\1\2/p')"
   [[ ${#sas} == 6 ]] || die "no SAS in: $out"
-  clean "$d" "$bin" run --home "$d/home" --config-dir "$d/config" --dev >>"$d/node.log" 2>&1 &
+  env -i HOME="$d" PATH="$PATH_CLEAN" USER="$(id -un)" LANG=C.UTF-8 SHELL=/bin/sh "$bin" run --home "$d/home" --config-dir "$d/config" --dev >>"$d/node.log" 2>&1 &
   PIDS+=("$!")
   disown "$!"
   echo "$!" >"$d/pid"
@@ -169,10 +172,16 @@ start_node() {
 
 stop_node() { local pid; pid="$(cat "$ROOT/node-$1/pid")"; kill "$pid" 2>/dev/null || true; sleep 1; kill -9 "$pid" 2>/dev/null || true; }
 
+# restart_node NODE [binary] [clock-offset]: e.g. +3700 runs the node's
+# clock ahead (test-only: --dev --allow-fake-clock, K2_NODE_FAKE_CLOCK_OFFSET).
 restart_node() {
-  local node="$1" bin="${2:-$BIN/k2-node}" d="$ROOT/node-$1"
+  local node="$1" bin="${2:-$BIN/k2-node}" off="${3:-}" d="$ROOT/node-$1"
   stop_node "$node"
-  clean "$d" ${K2X2_NODE_ENV:-} "$bin" run --home "$d/home" --config-dir "$d/config" --dev >>"$d/node.log" 2>&1 &
+  if [[ -n "$off" ]]; then
+    env -i HOME="$d" PATH="$PATH_CLEAN" USER="$(id -un)" LANG=C.UTF-8 SHELL=/bin/sh K2_NODE_FAKE_CLOCK_OFFSET="$off" "$bin" run --home "$d/home" --config-dir "$d/config" --dev --allow-fake-clock >>"$d/node.log" 2>&1 &
+  else
+    env -i HOME="$d" PATH="$PATH_CLEAN" USER="$(id -un)" LANG=C.UTF-8 SHELL=/bin/sh "$bin" run --home "$d/home" --config-dir "$d/config" --dev >>"$d/node.log" 2>&1 &
+  fi
   PIDS+=("$!")
   disown "$!"
   echo "$!" >"$d/pid"
@@ -227,43 +236,76 @@ old_build() {
 
 # ── sharing steps (S1 + S4a; the PRD §9 verbs) ───────────────────────
 
-# share_add NODE OWNER OTHER [extra add flags]: OTHER mints a code, OWNER
-# adds OTHER (approved), OTHER confirms the SAS the owner shows.
+# node_servers NODE args… : `k2-node servers …` at the machine. The harness
+# nodes are --dev debug builds in temp dirs, so the machine owner is this
+# user (no sudo) and there's no root executor: sharing goes through the
+# machine path. The remote path (k2 compute node servers add + approve)
+# is covered by the daemon's tier-2 tests and the real-mini drill.
+node_servers() {
+  local node="$1" d="$ROOT/node-$1"
+  shift
+  clean "$d" "$BIN/k2-node" servers "$@" --home "$d/home" --config-dir "$d/config" --state-dir "$d/state"
+}
+
+# share_add NODE OWNER OTHER [extra add flags]: OTHER mints a code, the
+# machine owner adds OTHER, OTHER confirms the SAS the node shows. Prints
+# OTHER's slot.
 share_add() {
   local node="$1" owner="$2" other="$3"
   shift 3
-  local code req sas
-  code="$(k2 "$other" compute node add "$node" --url "$(url_of "$other")" --json | jq -r '.enroll')"
+  local code out sas slot
+  mkdir -p "$ROOT/node-$node/state"
+  code="$(api "$other" POST /cli/compute/nodes/enroll-code "{\"name\":\"$node\",\"url\":\"$(url_of "$other")\"}" | jq -r '.enroll')"
   [[ "$code" == *.* ]] || die "no code from $other"
-  req="$(k2 "$owner" compute node servers "$node" add --url "$(url_of "$other")" --code "$code" --trust own "$@" --json)" ||
-    die "servers add: $req"
-  # Approval: the vault confirm with the test key (never Touch ID here).
-  k2 "$owner" compute node servers "$node" approve "$(printf '%s' "$req" | jq -r '.request.id // .id')" --json >/dev/null ||
-    die "approve the add"
+  out="$(node_servers "$node" add --url "$(url_of "$other")" --code "$code" "$@" --json 2>&1)" || die "servers add: $out"
+  slot="$(printf '%s' "$out" | jq -r '.slot')"
   for _ in $(seq 1 150); do
-    sas="$(k2 "$owner" compute node servers "$node" --json | jq -r --arg u "$(url_of "$other")" '.servers[] | select(.state == "pending") | .sas // empty' | tr -d ' ')"
+    sas="$(node_servers "$node" list --json 2>/dev/null | jq -r --argjson s "$slot" '.node[] | select(.slot == $s and .state == "pending") | .sas // empty' | tr -d ' ')"
     [[ ${#sas} == 6 ]] && break
     sleep 0.2
   done
-  [[ ${#sas} == 6 ]] || die "no pending SAS for $other on $node"
-  k2 "$other" compute node confirm "$node" "$sas" >/dev/null || die "confirm on $other"
+  [[ ${#sas} == 6 ]] || die "no pending SAS for $other (slot $slot) on $node: $(node_servers "$node" list --json 2>&1)"
+  api "$other" POST /cli/compute/nodes/confirm "{\"node\":\"$node\",\"sas\":\"$sas\"}" >/dev/null
+  # The executor promotes a confirmed add every 30 s; these --dev nodes have
+  # none, so the machine owner prunes (promotes) now.
+  for _ in $(seq 1 100); do
+    node_servers "$node" prune >/dev/null 2>&1 || true
+    node_servers "$node" list --json 2>/dev/null | jq -e --argjson s "$slot" '.file.servers[] | select(.slot == $s) | .state == "active"' >/dev/null && break
+    sleep 0.2
+  done
+  node_servers "$node" list --json | jq -e --argjson s "$slot" '.file.servers[] | select(.slot == $s) | .state == "active"' >/dev/null ||
+    die "slot $slot never became active on $node: $(node_servers "$node" list --json 2>&1)"
+  echo "$slot"
 }
 
 # share_node NODE OWNER OTHER [flags]: share_add, then both see it shared.
 share_node() {
   local node="$1" owner="$2" other="$3"
-  share_add "$@"
+  share_add "$@" >/dev/null
   wait_online "$other" "$node"
-  node_row "$other" "$node" | jq -e '.share.shared == true and .role == "tenant"' >/dev/null ||
-    die "$other doesn't see $node as shared: $(node_row "$other" "$node" | jq -c '{role,share}')"
-  node_row "$owner" "$node" | jq -e '.role == "owner" and .share.shared == true' >/dev/null ||
-    die "$owner doesn't see $node as shared"
+  # The node's servers loop and the next offer carry it (seconds).
+  for _ in $(seq 1 200); do
+    node_row "$other" "$node" | jq -e '.share.shared == true and .role == "tenant"' >/dev/null 2>&1 &&
+      node_row "$owner" "$node" | jq -e '.role == "owner" and .share.shared == true' >/dev/null 2>&1 && return
+    sleep 0.2
+  done
+  die "$node isn't shared on both: $other $(node_row "$other" "$node" | jq -c '{role,shared: .share.shared,servers: .share.servers}'), $owner $(node_row "$owner" "$node" | jq -c '{role,shared: .share.shared}')"
 }
 
 # The owner A with its workspace and node n1, made once per run.
 ensure_a() {
   [[ -n "${PORT_A:-}" ]] || { start_daemon A; seed_ws A; }
   [[ -d "$ROOT/node-n1" ]] || start_node n1 A
+}
+
+# A, B and n1 shared with B (slot 1), made once per run.
+ensure_shared() {
+  ensure_a
+  if [[ -z "${PORT_B:-}" ]]; then
+    start_daemon B
+    seed_ws B
+  fi
+  node_row B n1 2>/dev/null | jq -e '.share.shared == true' >/dev/null 2>&1 || share_node n1 A B --max-running 3 --max-queued 30
 }
 
 # ── scenarios ────────────────────────────────────────────────────────
@@ -319,14 +361,12 @@ s_rollback() {
 }
 
 s_share() {
-  ensure_a
-  start_daemon B
-  seed_ws B
-  share_node n1 A B --max-running 3
+  ensure_shared
   pass "share: B added, approved, SAS confirmed; both see n1 shared"
 }
 
 s_both() {
+  ensure_shared
   # Mixed classes from both, two workspaces on B (PRD §16 tier 3 step 3).
   local a1 a2 b1 b2
   a1="$(run_job A n1 both-a1 "$(burn 6)" '"cpus":1')"
@@ -349,22 +389,26 @@ s_both() {
 # Rosson 2026-10-21); the node owner sets A to 2 (a raise is a widening, so
 # it's approved), and the CPU then converges to 2:1 within 10 %.
 s_fair() {
-  local n=14 secs=15 ids_a=() ids_b=() i t0 req
-  k2 A compute node servers n1 --json | jq -e '[.servers[] | .share.weight // .weight] | all(. == 1)' >/dev/null ||
-    die "fair: servers don't all start at weight 1: $(k2 A compute node servers n1 --json)"
-  req="$(k2 A compute node servers n1 limits slot:0 --weight 2 --json)" || die "limits --weight: $req"
-  k2 A compute node servers n1 approve "$(printf '%s' "$req" | jq -r '.request.id // .id')" --json >/dev/null || die "approve the weight"
-  for _ in $(seq 1 100); do
-    k2 A compute node servers n1 --json | jq -e '[.servers[] | select(.slot == 0) | .share.weight // .weight] == [2]' >/dev/null && break
-    sleep 0.2
-  done
+  local n=30 secs=15 ids_a=() ids_b=() i t0
+  ensure_shared
+  node_servers n1 list --json | jq -e '[.file.servers[].limits.weight] | all(. == 1)' >/dev/null ||
+    die "fair: servers don't all start at weight 1: $(node_servers n1 list --json)"
+  node_servers n1 limits slot:0 --weight 2 >/dev/null || die "limits --weight"
+  k2 A compute node servers n1 --json | jq -e '[.servers[] | select(.slot == 0) | .weight // .limits.weight] == [2]' >/dev/null ||
+    die "A's server list doesn't show weight 2: $(k2 A compute node servers n1 --json)"
+  sleep 4 # the node's servers loop hands the weight to the queue
+  # Each server's workspace may run 3 at once (its max_parallel travels in
+  # the plan as ws_max_running; 1 by default would cap both at one slot).
+  api A POST /cli/compute/grants/set "{\"node\":\"n1\",\"workspace\":\"$WS_A\",\"maxParallel\":3,\"maxQueued\":30}" >/dev/null
+  api B POST /cli/compute/grants/set "{\"node\":\"n1\",\"workspace\":\"$WS_B\",\"maxParallel\":3,\"maxQueued\":30}" >/dev/null
   t0="$(date +%s)"
   for i in $(seq 1 $n); do
     ids_a+=("$(run_job A n1 "fair-a$i" "$(burn $secs)" '"cpus":1')")
     ids_b+=("$(run_job B n1 "fair-b$i" "$(burn $secs)" '"cpus":1')")
   done
-  # Measure while both sides still have queued work: [t0+20, t0+20+150].
-  local from=$((t0 + 20)) to=$((t0 + 170))
+  # Measure while both sides still have queued work (A needs 30 x 15 s / 2
+  # slots = 225 s to drain): [t0+20, t0+140].
+  local from=$((t0 + 20)) to=$((t0 + 140))
   sleep $((to - $(date +%s) + 2))
   cpu_in() {
     local server="$1" sum=0 s e j
@@ -387,13 +431,14 @@ s_fair() {
   local r=$((ca * 10 / cb))
   ((r >= 18 && r <= 22)) || die "fair share: A $ca CPU-s, B $cb CPU-s (ratio $((r / 10)).$((r % 10)), want 2.0 ± 10 %)"
   pass "fair: A $ca CPU-s vs B $cb CPU-s (ratio $((r / 10)).$((r % 10)))"
-  for j in "${ids_a[@]}"; do api A POST /cli/compute/jobs/cancel "{\"job\":\"$j\"}" >/dev/null; done
-  for j in "${ids_b[@]}"; do api B POST /cli/compute/jobs/cancel "{\"job\":\"$j\"}" >/dev/null; done
+  for j in "${ids_a[@]}"; do API_OK=any api A POST /cli/compute/jobs/cancel "{\"job\":\"$j\"}" >/dev/null; done
+  for j in "${ids_b[@]}"; do API_OK=any api B POST /cli/compute/jobs/cancel "{\"job\":\"$j\"}" >/dev/null; done
 }
 
 # Kill B mid-job: its running job finishes, its queued ones wait, A's go on;
 # restart B: logs replay, each job ends once (§16 tier 3 step 4).
 s_reconnect() {
+  ensure_shared
   local hold run q a
   hold="$(run_job A n1 rc-hold "$(burn 8)" '"cpus":1')"
   run="$(run_job B n1 rc-run '["sh","-c","for i in 1 2 3 4 5 6; do echo line$i; sleep 1; done"]' '"cpus":1')"
@@ -418,13 +463,15 @@ s_reconnect() {
 # re-placed without a retry; the returning node drops the stale row
 # (§16 step 5, V47/V56). Needs K2_COMPUTE_NODE_LOST_SECS on B.
 s_lost() {
+  ensure_shared
   [[ "${K2X2_DAEMON_ENV:-}" == *K2_COMPUTE_NODE_LOST_SECS* ]] || die "lost: start B with K2X2_DAEMON_ENV='K2_COMPUTE_NODE_LOST_SECS=20' (the test knob)"
-  start_node n2 B
+  [[ -d "$ROOT/node-n2" ]] || start_node n2 B
   api B POST /cli/compute/nodes/pause '{"node":"n2","action":"pause"}' >/dev/null
   local hold any
-  hold="$(run_job A n1 lost-hold "$(burn 60)" '"cpus":3')"
+  hold="$(run_job A n1 lost-hold "$(burn 60)" '"exclusive":true')"
+  wait_job A "$hold" '.state == "running"' >/dev/null
   any="$(api B POST /cli/compute/run "{\"any\":true,\"argv\":[\"sh\",\"-c\",\"echo moved\"],\"clientJobId\":\"k2x2-lost-any-00000000\",\"workspace\":\"$WS_B\",\"noSource\":true,\"detach\":true}" | jq -r '.job.id')"
-  wait_job B "$any" '.nodeQueued == true or .reason == "node_queued"' 90 >/dev/null
+  wait_job B "$any" '.queue != null or .nodeQueued == true or .reason == "node_queued"' 90 >/dev/null
   stop_node n1
   api B POST /cli/compute/nodes/pause '{"node":"n2","action":"resume"}' >/dev/null
   local j
@@ -439,11 +486,12 @@ s_lost() {
 # Restart the node with jobs queued: queued rows survive, running ones are
 # interrupted and retried (§16 step 7).
 s_restart() {
+  ensure_shared
   local hold q
-  hold="$(run_job A n1 rs-hold "$(burn 30)" '"cpus":3,"retryInterrupted":true')"
+  hold="$(run_job A n1 rs-hold "$(burn 30)" '"exclusive":true,"retryInterrupted":true')"
   wait_job A "$hold" '.state == "running"' >/dev/null
   q="$(run_job B n1 rs-q '["sh","-c","echo survived"]' '"cpus":1')"
-  wait_job B "$q" '.reason == "node_queued"' 30 >/dev/null
+  wait_job B "$q" '.queue != null or .reason == "node_queued"' 30 >/dev/null
   restart_node n1
   wait_online A n1
   wait_online B n1
@@ -451,15 +499,16 @@ s_restart() {
   local h
   h="$(wait_job A "$hold" '.attempt >= 2 or .generation >= 2' 120)"
   pass "restart: the queued job survived; the running one was interrupted and retried ($(printf '%s' "$h" | jq -c '{attempt,generation,state}'))"
-  api A POST /cli/compute/jobs/cancel "{\"job\":\"$hold\"}" >/dev/null
+  API_OK=any api A POST /cli/compute/jobs/cancel "{\"job\":\"$hold\"}" >/dev/null
 }
 
 # A withdrawn job reruns under a new generation and runs once (V46, V71).
 s_withdraw() {
-  [[ -n "$(node_row B n2 2>/dev/null)" ]] || start_node n2 B
+  ensure_shared
+  [[ -d "$ROOT/node-n2" ]] || start_node n2 B
   api B POST /cli/compute/nodes/pause '{"node":"n2","action":"pause"}' >/dev/null
   local hold any
-  hold="$(run_job A n1 wd-hold "$(burn 40)" '"cpus":3')"
+  hold="$(run_job A n1 wd-hold "$(burn 40)" '"exclusive":true')"
   any="$(api B POST /cli/compute/run "{\"any\":true,\"argv\":[\"sh\",\"-c\",\"echo once >> /tmp/k2x2-withdraw-$$\"],\"clientJobId\":\"k2x2-wd-any-00000000\",\"workspace\":\"$WS_B\",\"noSource\":true,\"detach\":true}" | jq -r '.job.id')"
   wait_job B "$any" '.node == "n1"' 120 >/dev/null
   api B POST /cli/compute/nodes/pause '{"node":"n2","action":"resume"}' >/dev/null
@@ -469,18 +518,27 @@ s_withdraw() {
     die "withdraw: $(printf '%s' "$j" | jq -c '{node,generation,ctl}')"
   [[ "$(wc -l <"/tmp/k2x2-withdraw-$$" | tr -d ' ')" == 1 ]] || die "withdraw: the job ran more than once"
   rm -f "/tmp/k2x2-withdraw-$$"
-  api A POST /cli/compute/jobs/cancel "{\"job\":\"$hold\"}" >/dev/null
+  API_OK=any api A POST /cli/compute/jobs/cancel "{\"job\":\"$hold\"}" >/dev/null
   pass "withdraw: moved to n2 under a new generation, ran exactly once"
 }
 
 # Revoke B --now: its job stops, its session closes, B sees the node revoked.
 s_revoke() {
+  ensure_shared
   local run q
+  # One at a time for B (a narrowing applies at once), so its second waits.
+  node_servers n1 limits slot:1 max_running=1 >/dev/null || die "limits max_running=1"
+  sleep 3
   run="$(run_job B n1 rv-run "$(burn 60)" '"cpus":1')"
   wait_job B "$run" '.state == "running"' >/dev/null
-  q="$(run_job B n1 rv-q '["sh","-c","echo never"]' '"cpus":3')"
-  k2 A compute node servers n1 revoke "$(url_of B | sed 's|http://||')" --now >/dev/null || die "revoke"
-  wait_job B "$run" "$ended" 60 >/dev/null
+  q="$(run_job B n1 rv-q '["sh","-c","echo never"]' '"cpus":1')"
+  wait_job B "$q" '.queue != null or .reason == "node_queued"' 30 >/dev/null
+  node_servers n1 revoke slot:1 --now --wipe >/dev/null || die "revoke"
+  local j
+  j="$(wait_job B "$run" "$ended" 60)"
+  # B heard how it ended before its session closed: never lost, never retried.
+  printf '%s' "$j" | jq -e '.state == "cancelled" and .reason == "share_revoked"' >/dev/null ||
+    die "revoke: B's running job: $(printf '%s' "$j" | jq -c '{state,reason,generation}')"
   wait_job B "$q" '.state == "cancelled" or .reason == "share_revoked"' 60 >/dev/null
   for _ in $(seq 1 100); do
     node_row B n1 | jq -e '.state == "revoked" or .online == false' >/dev/null && break
@@ -488,18 +546,61 @@ s_revoke() {
   done
   node_row B n1 | jq -e '.state == "revoked" or .online == false' >/dev/null || die "B still sees n1: $(node_row B n1 | jq -c '{state,online}')"
   node_row A n1 | jq -e '.online == true' >/dev/null || die "A lost n1 when B was revoked"
-  pass "revoke: B's job stopped, its queue cleared, A untouched"
+  # Clean slate for later scenarios: B forgets n1, the machine owner wipes
+  # the slot now (`--wipe`), and the next share starts fresh.
+  api B POST /cli/compute/nodes/remove '{"node":"n1"}' >/dev/null
+  node_servers n1 prune >/dev/null || die "prune after revoke --wipe"
+  node_servers n1 list --json | jq -e '[.file.servers[] | select(.slot == 1)] | length == 0' >/dev/null ||
+    die "revoke: slot 1 not wiped: $(node_servers n1 list --json | jq -c '.file.servers')"
+  pass "revoke: B's job stopped (cancelled/share_revoked), its queue cleared, A untouched"
 }
 
 # A share past its end date (node clock jumped with the test knob):
 # queued jobs end share_expired, running ones finish.
 s_expiry() {
-  die "expiry: needs the node's test clock offset (K2_NODE_FAKE_CLOCK_OFFSET) and a fresh B share --for 1h; wire at S5"
+  ensure_shared
+  local hold q
+  node_servers n1 limits slot:1 --for 1h >/dev/null || die "limits --for 1h"
+  hold="$(run_job A n1 ex-hold "$(burn 40)" '"exclusive":true')"
+  wait_job A "$hold" '.state == "running"' >/dev/null
+  q="$(run_job B n1 ex-q '["sh","-c","echo never"]' '"cpus":1')"
+  wait_job B "$q" '.reason == "node_queued" or .queue != null' 30 >/dev/null
+  # An hour and a bit later on the node's clock: B's share has ended.
+  restart_node n1 "$BIN/k2-node" +3700
+  wait_online A n1
+  local j
+  j="$(wait_job B "$q" "$ended" 90)"
+  printf '%s' "$j" | jq -e '.state == "cancelled" and .reason == "share_expired"' >/dev/null ||
+    die "expiry: B's queued job: $(printf '%s' "$j" | jq -c '{state,reason}')"
+  local late
+  late="$(API_OK=any api B POST /cli/compute/run "{\"node\":\"n1\",\"argv\":[\"sh\",\"-c\",\"echo late\"],\"clientJobId\":\"k2x2-ex-late-00000000\",\"workspace\":\"$WS_B\",\"noSource\":true,\"detach\":true}")"
+  printf '%s' "$late" | grep -q 'share_expired' || {
+    local id
+    id="$(printf '%s' "$late" | jq -r '.job.id // empty')"
+    [[ -n "$id" ]] && wait_job B "$id" '.reason == "share_expired"' 60 >/dev/null
+  } || die "expiry: new work from B wasn't refused share_expired: $late"
+  API_OK=any api A POST /cli/compute/jobs/cancel "{\"job\":\"$hold\"}" >/dev/null
+  pass "expiry: past its end date B's queued job ended share_expired and new work is refused"
 }
 
 # Clock skew (§16 step 10): health and nodes show it; order unchanged.
 s_skew() {
-  die "skew: needs K2_NODE_FAKE_CLOCK_OFFSET=+600 on the node; wire at S5"
+  ensure_shared
+  restart_node n1 "$BIN/k2-node" +600
+  wait_online A n1
+  for _ in $(seq 1 150); do
+    node_row A n1 | jq -e '((.share.skewSecs // .skewSecs // 0) | . >= 590 and . <= 610)' >/dev/null 2>&1 && break
+    sleep 0.2
+  done
+  node_row A n1 | jq -e '((.share.skewSecs // .skewSecs // 0) | . >= 590 and . <= 610)' >/dev/null ||
+    die "skew: A doesn't show the node 10 min ahead: $(node_row A n1 | jq -c '{skew: (.share.skewSecs // .skewSecs)}')"
+  k2 A compute nodes 2>&1 | grep -q 'skew' || die "skew: k2 compute nodes doesn't show it: $(k2 A compute nodes 2>&1 | head -5)"
+  local j
+  j="$(run_job A n1 skew-run '["sh","-c","echo fine"]')"
+  wait_job A "$j" '.state == "done"' 60 >/dev/null
+  restart_node n1
+  wait_online A n1
+  pass "skew: a node 10 min ahead shows its skew and still runs jobs"
 }
 
 # C2/C3: a 0.46.2 owner against the 0.46.3 node: solo as before; shared,

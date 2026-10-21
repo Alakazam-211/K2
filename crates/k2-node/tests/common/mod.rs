@@ -152,6 +152,14 @@ impl Fake {
         );
     }
 
+    /// A pin for another server in `slot` that never dials (tests that
+    /// stand in for its session): this fake's routes under a fingerprint
+    /// of its own ([`stand_in_fp`]), which the slot's `servers.toml` line
+    /// names, so the node's servers loop keeps the tenant as that line's.
+    pub fn stand_in_pin(&self, slot: u8, node_id: &str, name: &str) -> Pin {
+        Pin { controller_fp: stand_in_fp(slot), ..self.pin_for(node_id, name) }
+    }
+
     pub fn pin_for(&self, node_id: &str, name: &str) -> Pin {
         Pin {
             controller_fp: self.key.fingerprint(),
@@ -367,6 +375,12 @@ pub async fn start_node_in(fake: &Fake, dir: PathBuf, policy_extra: &str, tweak:
     node.spawn_background();
     let runner = tokio::spawn(k2_node::session::run_forever(node.clone()));
     TestNode { node, layout, runner, dir }
+}
+
+/// A stand-in server's 64-hex fingerprint for `slot` (its line's
+/// `fp_prefix` is the first 16).
+pub fn stand_in_fp(slot: u8) -> String {
+    format!("{:016x}{}", slot as u64 + 1, "0".repeat(48))
 }
 
 pub fn plan(job: &str, argv: &[&str]) -> Plan {

@@ -66,6 +66,9 @@ struct Rig {
     config: PathBuf,
     exec: Arc<Executor>,
     slots: Vec<(Slot, Trust, Network)>,
+    /// The node's real owner once a node runs here (its servers loop
+    /// serves only a `servers.toml` naming it).
+    owner_fp: std::sync::Mutex<String>,
 }
 
 impl Rig {
@@ -89,14 +92,16 @@ impl Rig {
     }
 
     fn write_servers(&self, states: &[(Slot, ShareState)]) {
-        let mut f = ServersFile::new(&"a".repeat(64), "owner.test", ShareLimits::owner(2, 8, 16, 100, Network::On), 8, 1000, "local:test");
+        let room = |l: ShareLimits| ShareLimits { max_running: 4, max_queued: 100, ..l };
+        let owner = self.owner_fp.lock().unwrap().clone();
+        let mut f = ServersFile::new(&owner, "owner.test", room(ShareLimits::owner(2, 8, 16, 100, Network::On)), 8, 1000, "local:test");
         for (slot, trust, net) in &self.slots {
             let mut e = f.servers[0].clone();
             e.slot = *slot;
             e.label = format!("server-{slot}.test");
             e.fp_prefix = format!("{:016x}", *slot as u64 + 1);
             e.trust = *trust;
-            e.set_limits(&ShareLimits::new_server(*trust, false));
+            e.set_limits(&room(ShareLimits::new_server(*trust, false)));
             e.network = *net;
             e.state = states.iter().find(|(s, _)| s == slot).map(|(_, st)| *st).unwrap_or(ShareState::Active);
             f.servers.push(e);
@@ -166,7 +171,7 @@ fn rig(tag: &str, slots: &[(Slot, Trust, Network)]) -> Rig {
     std::thread::spawn(move || {
         let _ = server::serve(&e2, &PeerRule { allowed_uids: vec![0] }, l, &|| false);
     });
-    let r = Rig { base, socket, bin, config, exec, slots: slots.to_vec() };
+    let r = Rig { base, socket, bin, config, exec, slots: slots.to_vec(), owner_fp: std::sync::Mutex::new("a".repeat(64)) };
     r.write_servers(&[]);
     for (slot, ..) in slots {
         let d = r.prepare(*slot);
@@ -203,8 +208,14 @@ async fn node(fake: &Fake, r: &Rig, policy_extra: &str, tweak: impl FnOnce(&mut 
         tweak(o);
     })
     .await;
+    // The file names the real owner from here on (states kept).
+    *r.owner_fp.lock().unwrap() = fake.key.fingerprint();
+    let mut f: ServersFile = toml::from_str(&std::fs::read_to_string(r.config.join(share::SERVERS_FILE)).unwrap()).unwrap();
+    f.owner = fake.key.fingerprint();
+    f.servers[0].fp_prefix = fake.key.fingerprint();
+    std::fs::write(r.config.join(share::SERVERS_FILE), toml::to_string(&f).unwrap()).unwrap();
     for (slot, ..) in &r.slots {
-        k2_node::identity::write_pin(&n.layout.tenant(*slot).pin(), &fake.pin_for("node-1", "mini-1")).unwrap();
+        k2_node::identity::write_pin(&n.layout.tenant(*slot).pin(), &fake.stand_in_pin(*slot, "node-1", "mini-1")).unwrap();
         n.node.add_tenant(*slot).await.unwrap();
     }
     let slots: Vec<Slot> = r.slots.iter().map(|s| s.0).collect();
@@ -920,4 +931,58 @@ async fn a_tenants_job_runs_as_its_own_user_in_its_own_dirs() {
     assert!(journal(&tenant(&n, 3), "held").0.is_empty());
     let ok = run(&n, 1, "still", &["/bin/echo", "walled"]).await;
     assert_eq!(ok.out, "walled\n", "the other server runs on");
+}
+
+/// S1 × S3 (V64): `servers.add` as root has root's `tenant.prepare` make
+/// the user and records its uid in the server's `servers.toml` line (the
+/// same uid jobs.toml holds); revoke `--wipe` has `tenant.wipe` remove the
+/// user; the next server in that slot gets a new uid, recorded too.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "root + systemd ≥ 247: run in a throwaway Linux box with --ignored"]
+async fn servers_add_prepares_the_user_and_records_its_uid() {
+    use k2_node::admin::servers;
+    let r = rig("add", &[]);
+    let (node_user, _) = node_test_user();
+    let ctx = servers::Ctx {
+        config_dir: r.config.clone(),
+        state_dir: r.base.join("admin-state"),
+        home: r.home(),
+        now: k2_node::util::now(),
+        macos: false,
+        walled: true,
+        tenant_wall: false,
+        pinned_owner: None,
+        node_user,
+        by: "local:test".into(),
+    };
+    let add = |url: &str, prefix: &str| share::AddArgs {
+        url: url.into(),
+        code_binding: "binding-b64".into(),
+        fp_prefix: prefix.into(),
+        trust: Trust::Team,
+        for_secs: None,
+        limits: Default::default(),
+    };
+    let a = servers::add(&ctx, &add("https://a.test", "0123456789abcdef")).unwrap();
+    let slot = a["slot"].as_u64().unwrap() as Slot;
+    let uid = r.uid_of(slot);
+    assert_eq!(a["uid"].as_u64(), Some(uid as u64), "{a}");
+    let line_uid = |f: &ServersFile| f.entry(slot).and_then(|e| e.uid);
+    assert_eq!(line_uid(&servers::read_file(&r.config).unwrap().unwrap()), Some(uid), "servers.toml records the user's uid");
+    assert_eq!(k2_node::admin::jobs::read_jobs_file(&r.config).unwrap().unwrap().tenant(slot).map(|t| t.uid), Some(uid));
+
+    servers::revoke(&ctx, &share::RevokeArgs { server: format!("slot:{slot}"), now: true, wipe: true }).unwrap();
+    assert!(server::user_ids(&format!("k2job-{slot}")).is_none(), "revoke --wipe removed the user (tenant.wipe)");
+    assert!(servers::read_file(&r.config).unwrap().unwrap().entry(slot).is_none());
+
+    let b = servers::add(&ctx, &add("https://b.test", "1123456789abcdef")).unwrap();
+    assert_eq!(b["slot"].as_u64(), Some(slot as u64), "the slot is reused");
+    let again = r.uid_of(slot);
+    assert!(again > uid, "a reused slot never gets an old uid ({uid} → {again})");
+    assert_eq!(line_uid(&servers::read_file(&r.config).unwrap().unwrap()), Some(again));
+    // The rig's cleanup wipes only its own slots: this one goes here.
+    let mut f = servers::read_file(&r.config).unwrap().unwrap();
+    f.servers.iter_mut().filter(|e| e.slot == slot).for_each(|e| e.state = ShareState::Revoked);
+    servers::write_file(&r.config, &f).unwrap();
+    r.exec.tenant_wipe(&TenantWipe { slot }).unwrap();
 }

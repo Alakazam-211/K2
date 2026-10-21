@@ -44,9 +44,9 @@ pub struct EnvInputs<'a> {
 }
 
 /// Names only the node sets, beyond the proto's list: the sccache server
-/// address (V63). A job's `--env` can't point its build at another
-/// server's sccache, or back at the shared TCP port.
-pub const NODE_SET_SCCACHE: &[&str] = &["SCCACHE_SERVER_UDS", "SCCACHE_SERVER_PORT"];
+/// address (V63; the proto reserves them, so the server refuses them at
+/// submit too).
+pub use k2_node_proto::env::SCCACHE_SERVER_VARS as NODE_SET_SCCACHE;
 
 /// The job's whole environment. `Err((code, name))` when an extra pair is
 /// refused.

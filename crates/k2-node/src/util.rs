@@ -38,6 +38,48 @@ pub fn atomic_write(path: &Path, bytes: &[u8], mode: u32) -> Result<(), String> 
     Ok(())
 }
 
+/// An exclusive `flock` on a lock file, held until dropped. It excludes
+/// other threads (each holder opens its own file description) and other
+/// processes alike: root's executor and `sudo k2-node …` at the machine
+/// edit the same root records. Never take the same lock twice on one
+/// thread (it would wait on itself).
+#[derive(Debug)]
+pub struct FileLock {
+    _f: std::fs::File,
+}
+
+impl FileLock {
+    /// Wait for the lock on `path`. A missing lock file is created 0644
+    /// (empty, never written); it's opened read-only and never through a
+    /// symlink, so anyone who may change what it guards can take it (the
+    /// machine owner's group in a shared config dir) and nothing else
+    /// happens to the file. Its parent must exist.
+    pub fn exclusive(path: &Path) -> Result<Self, String> {
+        use std::os::fd::{AsRawFd, FromRawFd};
+        let c = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).map_err(|_| format!("{}: a NUL in the path", path.display()))?;
+        // SAFETY: a valid C string; the fd is owned by the File below.
+        let fd = unsafe { libc::open(c.as_ptr(), libc::O_RDONLY | libc::O_CREAT | libc::O_NOFOLLOW | libc::O_CLOEXEC, 0o644 as libc::c_uint) };
+        if fd < 0 {
+            return Err(format!("open {}: {}", path.display(), std::io::Error::last_os_error()));
+        }
+        // SAFETY: a fresh fd nothing else owns.
+        let f = unsafe { std::fs::File::from_raw_fd(fd) };
+        if !f.metadata().map_err(|e| format!("stat {}: {e}", path.display()))?.is_file() {
+            return Err(format!("{} isn't a plain file", path.display()));
+        }
+        loop {
+            // SAFETY: a valid open fd.
+            if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX) } == 0 {
+                return Ok(Self { _f: f });
+            }
+            let e = std::io::Error::last_os_error();
+            if e.kind() != std::io::ErrorKind::Interrupted {
+                return Err(format!("lock {}: {e}", path.display()));
+            }
+        }
+    }
+}
+
 /// `mkdir -p` with a mode on the leaf.
 pub fn mkdir_mode(path: &Path, mode: u32) -> Result<(), String> {
     std::fs::create_dir_all(path).map_err(|e| format!("create {}: {e}", path.display()))?;
@@ -138,4 +180,32 @@ pub fn temp_dir(tag: &str) -> std::path::PathBuf {
     std::fs::create_dir_all(&p).expect("create temp dir");
     // macOS: /var → /private/var; git and cwd comparisons want the real path.
     std::fs::canonicalize(&p).expect("canonicalize temp dir")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A held lock keeps another holder (another thread here; another
+    /// process alike) waiting until it's dropped; a lock file that is a
+    /// symlink is refused.
+    #[test]
+    fn file_lock_excludes_until_dropped() {
+        let d = temp_dir("filelock");
+        let p = d.join("x.lock");
+        let held = FileLock::exclusive(&p).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let p2 = p.clone();
+        let t = std::thread::spawn(move || {
+            let _g = FileLock::exclusive(&p2).unwrap();
+            tx.send(()).unwrap();
+        });
+        assert!(rx.recv_timeout(Duration::from_millis(300)).is_err(), "the second holder waits");
+        drop(held);
+        rx.recv_timeout(Duration::from_secs(5)).expect("the second holder gets it once the first drops it");
+        t.join().unwrap();
+        let link = d.join("link.lock");
+        std::os::unix::fs::symlink(d.join("elsewhere"), &link).unwrap();
+        assert!(FileLock::exclusive(&link).is_err(), "never through a symlink");
+    }
 }

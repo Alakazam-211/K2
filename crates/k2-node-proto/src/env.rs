@@ -48,6 +48,13 @@ pub const NODE_SET_VARS: &[&str] = &[
     "RUSTUP_TOOLCHAIN",
 ];
 
+/// The sccache server's address: the node sets `SCCACHE_SERVER_UDS` to
+/// the job's own server's socket (V63), so an agent can't point a build at
+/// another server's sccache or back at the shared TCP port. Reserved like
+/// [`NODE_SET_VARS`] (both ends refuse them in `--env`), but kept out of
+/// that list: it names what every job gets (receipts list it).
+pub const SCCACHE_SERVER_VARS: &[&str] = &["SCCACHE_SERVER_UDS", "SCCACHE_SERVER_PORT"];
+
 /// Longest `--env` value.
 pub const MAX_ENV_VALUE: usize = 8 * 1024;
 /// Most `--env` pairs per job.
@@ -68,7 +75,7 @@ pub fn env_name_refusal(name: &str) -> Option<&'static str> {
     if name.starts_with("K2_") || name.starts_with("K2SO_") {
         return Some("env_k2_reserved");
     }
-    if NODE_SET_VARS.contains(&name) || name.starts_with("MISE_") {
+    if NODE_SET_VARS.contains(&name) || SCCACHE_SERVER_VARS.contains(&name) || name.starts_with("MISE_") {
         return Some("env_node_reserved");
     }
     None
@@ -124,6 +131,9 @@ mod tests {
         assert_eq!(env_name_refusal("K2SO_X"), Some("env_k2_reserved"));
         assert_eq!(env_name_refusal("CARGO_TARGET_DIR"), Some("env_node_reserved"));
         assert_eq!(env_name_refusal("HOME"), Some("env_node_reserved"));
+        assert_eq!(env_name_refusal("SCCACHE_SERVER_UDS"), Some("env_node_reserved"));
+        assert_eq!(env_name_refusal("SCCACHE_SERVER_PORT"), Some("env_node_reserved"));
+        assert_eq!(env_name_refusal("SCCACHE_CACHE_SIZE"), None, "other sccache knobs stay the agent's");
         assert_eq!(env_name_refusal("RUST_LOG"), None);
         assert_eq!(env_name_refusal("NEXTEST_PROFILE"), None);
         assert_eq!(env_name_refusal("1BAD"), Some("env_name_invalid"));

@@ -105,7 +105,7 @@ impl Node {
     /// (V59). Every node without `--dev` and without a wall (no
     /// `jobs.toml`, an old setup) refuses tenant jobs.
     fn dev_unwalled(&self) -> bool {
-        self.opts.dev && matches!(self.wall, Wall::None { .. })
+        crate::node::dev_test_exemption(self.opts.dev, &self.layout().config) && matches!(self.wall, Wall::None { .. })
     }
 
     /// A job's network: the node policy's for the owner; for a tenant the

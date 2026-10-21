@@ -211,7 +211,11 @@ fn no_install_path_ever_runs_dev() {
         }
         assert!(seen >= 2, "{os}: install-files wrote {seen} files");
     }
-    // And the exemption itself exists only in debug builds.
-    assert_eq!(k2_node::node::dev_test_exemption(true), cfg!(debug_assertions));
-    assert!(!k2_node::node::dev_test_exemption(false));
+    // And the exemption itself exists only in debug builds, and never for
+    // an installed node's config (it has admin.toml), even in a debug one.
+    let cfg = k2_node::util::temp_dir("cli-dev-exempt");
+    assert_eq!(k2_node::node::dev_test_exemption(true, &cfg), cfg!(debug_assertions));
+    assert!(!k2_node::node::dev_test_exemption(false, &cfg));
+    std::fs::write(cfg.join("admin.toml"), "remote_admin = \"off\"\n").unwrap();
+    assert!(!k2_node::node::dev_test_exemption(true, &cfg), "an installed node's config never takes the --dev exemption");
 }

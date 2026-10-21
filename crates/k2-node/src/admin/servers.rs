@@ -12,12 +12,14 @@
 //!   binding, never the code; 10 minutes; group-readable by the node only);
 //! - [`STOP_FILE`]: revoked slots whose running jobs stop now (`--now`).
 //!
-//! In the executor's root-only state dir, [`BOOK_FILE`]: every tenant uid
-//! ever handed out (a reused slot always gets a new one, V64) and when each
-//! revoke happened (the wipe is 24 h later, or at once with `--wipe`).
+//! In the executor's root-only state dir, [`BOOK_FILE`]: when each revoke
+//! happened (the wipe is 24 h later, or at once with `--wipe`).
 //!
-//! The user, group and per-tenant wall (`tenant.prepare` / `tenant.wipe`)
-//! are lane S3's: [`prepare_tenant`] and [`wipe_slot`] are the seams.
+//! The user, group and per-tenant wall are root's `tenant.prepare` /
+//! `tenant.wipe` (`admin/tenants.rs`, which also hands out tenant uids,
+//! never reused, V64): [`prepare_tenant`] and [`wipe_slot`] call them as
+//! root and write the uid into the server's line. A `--dev` test node
+//! (no root) gets only its files.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -40,8 +42,6 @@ pub const ENROLL_RESULT_FILE: &str = "server-enroll-result.json";
 pub const STOP_FILE: &str = "servers-stop.toml";
 /// Root-only bookkeeping (executor state dir, 0600).
 pub const BOOK_FILE: &str = "servers-book.json";
-/// The first uid a tenant's job user gets; never reused (V64).
-pub const TENANT_UID_BASE: u32 = 61001;
 /// A revoked slot is wiped this long after the revoke (or at once).
 pub const WIPE_AFTER_SECS: i64 = 24 * 3600;
 
@@ -86,8 +86,6 @@ pub struct StopFile {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 struct Book {
-    #[serde(default)]
-    used_uids: Vec<u32>,
     /// slot → (revoked at, wipe at once).
     #[serde(default)]
     revoked: BTreeMap<String, (i64, bool)>,
@@ -104,7 +102,8 @@ pub struct Ctx {
     pub macos: bool,
     /// Jobs here run behind the job wall (`job-wall`; V59).
     pub walled: bool,
-    /// A per-tenant OS user wall is set up (lane S3a's `tenant.prepare`).
+    /// The per-tenant wall is known to be ready (tests). `false` = ask
+    /// root's executor when it matters (a `team` add, Linux, as root).
     pub tenant_wall: bool,
     /// The owner server's fingerprint as root pinned it (`admin.toml`).
     pub pinned_owner: Option<String>,
@@ -132,7 +131,7 @@ impl Ctx {
             now: e.now(),
             macos,
             walled: node_walled(&layout, macos, false),
-            tenant_wall: tenant_wall_available(&layout, macos),
+            tenant_wall: false,
             pinned_owner: cfg.as_ref().and_then(|c| c.controller.as_ref().map(|x| x.fp.clone())),
             node_user: cfg.map(|c| c.node_user).unwrap_or_else(|| super::config::default_node_user().to_string()),
             by: by.to_string(),
@@ -147,7 +146,7 @@ impl Ctx {
 /// by design, may be shared for tests.
 pub fn node_walled(layout: &Layout, macos: bool, allow_dev: bool) -> bool {
     let status = crate::status::read(&layout.status()).ok();
-    if allow_dev && status.as_ref().is_some_and(|s| s.dev) {
+    if allow_dev && crate::node::dev_test_exemption(status.as_ref().is_some_and(|s| s.dev), &layout.config) {
         return true;
     }
     let status_wall = status.map(|s| s.wall).unwrap_or_default();
@@ -159,12 +158,34 @@ pub fn node_walled(layout: &Layout, macos: bool, allow_dev: bool) -> bool {
     }
 }
 
-/// A wall between tenants that takes other people's servers (`team`):
-/// lane S3a's per-tenant users on Linux. Not on macOS in 0.46.3 (§8.2).
-/// Lane S3 turns this on with `tenant.prepare`.
-pub fn tenant_wall_available(_layout: &Layout, macos: bool) -> bool {
-    let _ = macos;
-    false
+impl Ctx {
+    /// Root's tenant ops (`tenant.prepare` / `tenant.wipe`) for this
+    /// context: the same files the root executor reads.
+    fn executor(&self) -> super::exec::Executor {
+        super::exec::Executor::new(
+            super::exec::ExecPaths {
+                config_dir: self.config_dir.clone(),
+                state_dir: self.state_dir.clone(),
+                home: self.home.clone(),
+                binary: std::env::current_exe().unwrap_or_default(),
+            },
+            std::sync::Arc::new(super::exec::SystemPlatform),
+        )
+    }
+
+    /// A wall between tenants that takes other people's servers (`team`):
+    /// the per-tenant users on Linux, as root's executor finds them ready
+    /// (job wall, systemd ≥ 247, the tools, its runtime self-test). Never
+    /// on macOS in 0.46.3 (§8.2), nor without root.
+    fn team_wall_ready(&self) -> Result<(), AdminRefusal> {
+        if self.tenant_wall {
+            return Ok(());
+        }
+        if self.macos || !is_root() {
+            return Err(refuse(codes::TEAM_NEEDS_TENANT_WALL, "other people's servers need the per-tenant wall on this node, which isn't set up"));
+        }
+        self.executor().tenant_wall_ready()
+    }
 }
 
 fn refuse(c: &str, m: impl Into<String>) -> AdminRefusal {
@@ -245,11 +266,6 @@ fn user_ids(name: &str) -> Option<(u32, u32)> {
             Some(((*pw).pw_uid, (*pw).pw_gid))
         }
     }
-}
-
-fn uid_taken(uid: u32) -> bool {
-    // SAFETY: getpwuid with any uid.
-    unsafe { !libc::getpwuid(uid).is_null() }
 }
 
 /// A credential file: created 0600 (never briefly world-readable), then
@@ -350,18 +366,6 @@ fn write_book(state_dir: &Path, b: &Book) -> Result<(), String> {
     crate::util::atomic_write(&book_path(state_dir), &body, 0o600)
 }
 
-/// A uid no tenant ever had and no account has (V64). Recorded before use.
-fn alloc_uid(state_dir: &Path, f: &ServersFile) -> Result<u32, AdminRefusal> {
-    let mut b = read_book(state_dir).map_err(failed)?;
-    let mut uid = TENANT_UID_BASE.max(b.used_uids.iter().max().map(|m| m + 1).unwrap_or(0));
-    while f.servers.iter().any(|e| e.uid == Some(uid)) || uid_taken(uid) {
-        uid += 1;
-    }
-    b.used_uids.push(uid);
-    write_book(state_dir, &b).map_err(failed)?;
-    Ok(uid)
-}
-
 // ── shared helpers ───────────────────────────────────────────────────
 
 /// A plain label from a URL's host (`https://baden.k2.dev:8443/` →
@@ -427,6 +431,7 @@ fn args<T: serde::de::DeserializeOwned>(verb: &str, v: &Value) -> Result<T, Admi
 /// Run one `servers.*` verb (the executor after its checks, or the machine
 /// owner's CLI).
 pub fn run(ctx: &Ctx, verb: &str, a: &Value) -> Result<Value, AdminRefusal> {
+    let _g = if verb == share::VERB_LIST { None } else { Some(servers_lock(ctx)?) };
     match verb {
         share::VERB_ADD => add(ctx, &args(verb, a)?),
         share::VERB_LIMITS => limits(ctx, &args(verb, a)?),
@@ -449,15 +454,14 @@ pub fn add(ctx: &Ctx, a: &AddArgs) -> Result<Value, AdminRefusal> {
             "this node runs jobs without the job wall; a second server needs it (Linux: sudo k2-node admin job-user k2job; macOS: the node's Seatbelt profile)",
         ));
     }
-    if a.trust == Trust::Team && (ctx.macos || !ctx.tenant_wall) {
+    if a.trust == Trust::Team && ctx.macos && !ctx.tenant_wall {
         return Err(refuse(
             codes::TEAM_NEEDS_TENANT_WALL,
-            if ctx.macos {
-                "other people's servers need per-tenant users, which come to macOS nodes in 0.46.4; add your own servers with --trust own"
-            } else {
-                "other people's servers need the per-tenant wall on this node, which isn't set up"
-            },
+            "other people's servers need per-tenant users, which come to macOS nodes in 0.46.4; add your own servers with --trust own",
         ));
+    }
+    if a.trust == Trust::Team {
+        ctx.team_wall_ready()?;
     }
     let mut f = match read_file(&ctx.config_dir).map_err(|e| refuse(code::NOT_CONFIGURED, e))? {
         Some(f) => f,
@@ -484,7 +488,6 @@ pub fn add(ctx: &Ctx, a: &AddArgs) -> Result<Value, AdminRefusal> {
         return Err(refuse(codes::SERVER_EXISTS, format!("{label} (or a server with that key) is already on this node")));
     }
     let slot = f.free_slot().ok_or_else(|| refuse(code::BAD_ARGS, "no free slot (wipe a revoked server first)"))?;
-    let uid = alloc_uid(&ctx.state_dir, &f)?;
     let limits = a.limits.apply(&ShareLimits::new_server(a.trust, ctx.macos));
     limits.validate().map_err(|m| refuse(code::BAD_ARGS, m))?;
     let mut e = f.servers[0].clone();
@@ -493,7 +496,8 @@ pub fn add(ctx: &Ctx, a: &AddArgs) -> Result<Value, AdminRefusal> {
     e.state = ShareState::Pending;
     e.trust = a.trust;
     e.slot = slot;
-    e.uid = Some(uid);
+    // Root's tenant.prepare hands it out (below), never reused (V64).
+    e.uid = None;
     e.set_limits(&limits);
     e.expires_at = match (a.for_secs, a.trust) {
         (Some(s), _) => Some(ctx.now + s),
@@ -511,14 +515,24 @@ pub fn add(ctx: &Ctx, a: &AddArgs) -> Result<Value, AdminRefusal> {
     let had_file = servers_path(&ctx.config_dir).exists();
     set_stop(&ctx.config_dir, slot, false).map_err(failed)?;
     write_file(&ctx.config_dir, &f).map_err(failed)?;
-    if let Err(r) = prepare_tenant(ctx, &e) {
-        if had_file {
-            f.servers.retain(|x| x.slot != slot);
-            let _ = write_file(&ctx.config_dir, &f);
-        } else {
-            let _ = std::fs::remove_file(servers_path(&ctx.config_dir));
+    let uid = match prepare_tenant(ctx, &e) {
+        Ok(uid) => uid,
+        Err(r) => {
+            if had_file {
+                f.servers.retain(|x| x.slot != slot);
+                let _ = write_file(&ctx.config_dir, &f);
+            } else {
+                let _ = std::fs::remove_file(servers_path(&ctx.config_dir));
+            }
+            return Err(r);
         }
-        return Err(r);
+    };
+    // The line records the uid its user got (Linux; one uid on macOS).
+    if uid.is_some() {
+        if let Some(x) = f.servers.iter_mut().find(|x| x.slot == slot) {
+            x.uid = uid;
+        }
+        write_file(&ctx.config_dir, &f).map_err(failed)?;
     }
     // Last: the credential the node enrols with.
     let enroll = ServerEnroll {
@@ -647,7 +661,7 @@ pub fn revoke(ctx: &Ctx, a: &RevokeArgs) -> Result<Value, AdminRefusal> {
     write_file(&ctx.config_dir, &f).map_err(failed)?;
     let mut wiped = Vec::new();
     if a.wipe {
-        let r = prune(ctx)?;
+        let r = prune_locked(ctx)?;
         wiped = r.get("wiped").and_then(|v| v.as_array()).cloned().unwrap_or_default();
     }
     Ok(json!({"slot": slot, "label": label, "state": "revoked", "now": a.now, "wipe_at": if a.wipe { ctx.now } else { at + WIPE_AFTER_SECS }, "wiped": wiped}))
@@ -687,6 +701,25 @@ fn prune_file(ctx: &Ctx, f: &mut ServersFile, changed: &mut Vec<String>) {
 /// promote confirmed adds, drop expired pending lines, wipe revoked slots
 /// that are due. Idempotent.
 pub fn prune(ctx: &Ctx) -> Result<Value, AdminRefusal> {
+    let _g = servers_lock(ctx)?;
+    prune_locked(ctx)
+}
+
+/// One `servers.*` change at a time: root's executor (signed verbs on its
+/// connection threads, the node's `servers.prune`) and `sudo k2-node
+/// servers …` read-modify-write the same `servers.toml`, book and stop
+/// file. Lock order: the executor's `busy`, then this, then the tenant
+/// ops lock, then the audit log's.
+pub const SERVERS_LOCK_FILE: &str = ".servers.lock";
+
+fn servers_lock(ctx: &Ctx) -> Result<crate::util::FileLock, AdminRefusal> {
+    // Beside servers.toml: the machine owner's group (pause, resume,
+    // limits without sudo) and root both reach it.
+    std::fs::create_dir_all(&ctx.config_dir).map_err(|x| failed(format!("create {}: {x}", ctx.config_dir.display())))?;
+    crate::util::FileLock::exclusive(&ctx.config_dir.join(SERVERS_LOCK_FILE)).map_err(failed)
+}
+
+fn prune_locked(ctx: &Ctx) -> Result<Value, AdminRefusal> {
     let Some(mut f) = read_file(&ctx.config_dir).map_err(|e| refuse(code::NOT_CONFIGURED, e))? else {
         return Ok(json!({"changed": [], "wiped": []}));
     };
@@ -812,35 +845,38 @@ pub fn node_list(node: &crate::node::Node) -> Result<ServersList, String> {
     Ok(ServersList { max_servers: f.max_servers, solo: false, servers })
 }
 
-// ── the tenant wall seams (lane S3) ──────────────────────────────────
+// ── the tenant wall (root's tenant.prepare / tenant.wipe) ───────────
 
-/// Make the new tenant's job-facing root: node-owned, under a root-owned
-/// parent (V54). Lane S3a's `tenant.prepare` adds the user, group, slice
-/// and modes here.
-pub fn prepare_tenant(ctx: &Ctx, e: &ServerEntry) -> Result<(), AdminRefusal> {
+/// The new tenant's user, group, slice and job-facing root: root's
+/// `tenant.prepare` (V54, V64, V75), which reads the pending line this add
+/// just wrote. Returns the uid it handed out (Linux; `None` on macOS,
+/// where 0.46.3 tenants share the node's uid behind Seatbelt). A `--dev`
+/// test node (not root) gets only a plain root dir.
+pub fn prepare_tenant(ctx: &Ctx, e: &ServerEntry) -> Result<Option<u32>, AdminRefusal> {
     let root = ctx.layout().tenants_root();
     let dir = root.join(e.slot.to_string());
     if std::fs::symlink_metadata(&dir).is_ok_and(|m| m.file_type().is_symlink()) {
         return Err(failed(format!("{} is a symlink", dir.display())));
     }
     if is_root() {
-        crate::util::mkdir_mode(&root, 0o711).map_err(failed)?;
-        chown(&root, 0, 0);
-        crate::util::mkdir_mode(&dir, 0o750).map_err(failed)?;
-        let (uid, gid) = user_ids(&ctx.node_user).ok_or_else(|| failed(format!("no user {}", ctx.node_user)))?;
-        chown(&dir, uid, gid);
-    } else {
-        std::fs::create_dir_all(&dir).map_err(|x| failed(format!("create {}: {x}", dir.display())))?;
+        let ask = share::TenantPrepare { slot: e.slot, trust: e.trust, weight: e.weight, network: e.network };
+        let r = ctx.executor().tenant_prepare(&ask)?;
+        return Ok(r.get("uid").and_then(|v| v.as_u64()).and_then(|v| u32::try_from(v).ok()));
     }
-    Ok(())
+    std::fs::create_dir_all(&dir).map_err(|x| failed(format!("create {}: {x}", dir.display())))?;
+    Ok(None)
 }
 
-/// Wipe a revoked slot's files: the node-only state (pin, ledger, journals,
-/// artifacts) and its job-facing root. Lane S3a's `tenant.wipe` adds the
-/// user and group (and on macOS the uid's `DARWIN_USER_DIR`).
+/// Wipe a revoked (or never-confirmed) slot: as root, `tenant.wipe` (its
+/// units and processes, files, user and group; the uid stays burned); a
+/// `--dev` test node's files only: the node-only state (pin, ledger,
+/// journals, artifacts) and its job-facing root.
 pub fn wipe_slot(ctx: &Ctx, e: &ServerEntry) -> Result<(), AdminRefusal> {
     if e.slot == OWNER_SLOT {
         return Err(failed("never wipe the owner"));
+    }
+    if is_root() {
+        return ctx.executor().tenant_wipe(&share::TenantWipe { slot: e.slot }).map(|_| ());
     }
     let t = ctx.layout().tenant(e.slot);
     for p in [t.state(), t.pin(), t.root()] {
@@ -925,7 +961,7 @@ mod tests {
         let b = f.entry(1).unwrap();
         assert_eq!((b.label.as_str(), b.state, b.trust, b.expires_at), ("z3thon.k2.dev", ShareState::Pending, Trust::Own, None));
         assert_eq!(b.pending_until, t.ctx.now + PENDING_SECS);
-        assert_eq!(b.uid, Some(TENANT_UID_BASE.max(b.uid.unwrap())));
+        assert_eq!(b.uid, None, "not root (a test): root's tenant.prepare hands out the uid (tenant_wall_linux S1)");
         let en = read_enroll(&t.ctx.config_dir).unwrap().unwrap();
         assert_eq!((en.slot, en.url.as_str(), en.code_binding.as_str()), (1, "https://z3thon.k2.dev", "binding-b64"));
         use std::os::unix::fs::PermissionsExt;
@@ -1005,9 +1041,11 @@ mod tests {
     }
 
     /// Prune promotes a pending line once the node's pin is confirmed;
-    /// revoke --wipe wipes at once; a reused slot gets a new uid (V64).
+    /// revoke wipes after 24 h (or at once with --wipe); a reused slot
+    /// starts fresh. (The uid a reused slot gets, never an old one, is
+    /// root's tenant.prepare: tenant_wall_linux.)
     #[test]
-    fn prune_promotes_and_revoke_wipes_with_a_new_uid_next_time() {
+    fn prune_promotes_and_revoke_wipes() {
         let mut t = setup(false);
         add(&t.ctx, &add_args("https://a.k2.dev", "0123456789abcdef", Trust::Own)).unwrap();
         prune(&t.ctx).unwrap();
@@ -1016,7 +1054,6 @@ mod tests {
         let r = prune(&t.ctx).unwrap();
         assert_eq!(r["changed"], json!(["promoted:1"]));
         let f = read_file(&t.ctx.config_dir).unwrap().unwrap();
-        let uid1 = f.entry(1).unwrap().uid.unwrap();
         assert_eq!(f.entry(1).unwrap().state, ShareState::Active);
         assert!(f.shared(t.ctx.now));
 
@@ -1043,10 +1080,11 @@ mod tests {
         assert!(!led.state().exists() && !led.pin().exists() && !led.root().exists(), "the slot's files are gone");
         assert!(read_stop(&t.ctx.config_dir).unwrap().slots.is_empty());
 
-        // The slot is reused; its uid never is.
+        // The slot is reused, fresh.
         let r = add(&t.ctx, &add_args("https://b.k2.dev", "2123456789abcdef", Trust::Own)).unwrap();
         assert_eq!(r["slot"].as_u64(), Some(1));
-        assert!(r["uid"].as_u64().unwrap() as u32 > uid1, "{r}");
+        let b = read_file(&t.ctx.config_dir).unwrap().unwrap();
+        assert_eq!((b.entry(1).unwrap().label.as_str(), b.entry(1).unwrap().state), ("b.k2.dev", ShareState::Pending));
     }
 
     /// Narrowing is Operate; any widening (or a later end date) is

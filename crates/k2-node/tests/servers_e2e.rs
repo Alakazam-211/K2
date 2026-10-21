@@ -91,6 +91,11 @@ fn pin_second(n: &TestNode, b: &Fake, slot: u8, node_id: &str) {
     let t = n.layout.tenant(slot);
     t.ensure_state().unwrap();
     k2_node::identity::write_tenant_pin(&t.pin(), &b.pin_for(node_id, "mini-1"), &TenantFlags::default()).unwrap();
+    // Its root, as root's tenant.prepare makes it on macOS (the wall
+    // checks it's there before a job of B's starts).
+    for d in [t.root(), t.jobs(), t.cache(), t.repos(), t.tmp()] {
+        k2_node::util::mkdir_mode(&d, 0o700).unwrap();
+    }
 }
 
 fn prefix(k: &SigningKey) -> String {
@@ -462,7 +467,10 @@ async fn a_wiped_slot_is_reused_fresh() {
         serde_json::json!({"url": label_url, "code_binding": pairing::code_binding(&norm), "fp_prefix": es.controller_fp_prefix, "trust": "own"})
     };
     let r = servers::run(&c, "servers.add", &add(&b, &b.base)).unwrap();
-    let uid_b = r["uid"].as_u64().unwrap();
+    // macOS 0.46.3 tenants share the node's uid behind Seatbelt: no uid
+    // per server (a new one per tenant, never reused, is Linux's:
+    // tenant_wall_linux).
+    assert!(r["uid"].is_null(), "{r}");
     eventually("B's SAS", || status(&n).servers.into_iter().find(|l| l.slot == 1 && l.sas.is_some())).await;
     let key = n.node.key.fingerprint();
     b.nodes.lock().unwrap().get_mut(&key).unwrap().state = NodeState::Active;
@@ -500,7 +508,7 @@ async fn a_wiped_slot_is_reused_fresh() {
     let mut cc_fake = Fake::start().await;
     let r = servers::run(&ctx(&n), "servers.add", &add(&cc_fake, &cc_fake.base)).unwrap();
     assert_eq!(r["slot"], 1);
-    assert!(r["uid"].as_u64().unwrap() > uid_b, "a reused slot never reuses a uid: {r}");
+    assert!(r["uid"].is_null(), "{r}");
     eventually("C's SAS", || status(&n).servers.into_iter().find(|l| l.slot == 1 && l.sas.is_some())).await;
     cc_fake.nodes.lock().unwrap().get_mut(&key).unwrap().state = NodeState::Active;
     let mut cc = cc_fake.next_conn().await;

@@ -89,9 +89,15 @@ export const ZEN_SOLID_PROPS = zenMaterialProps('solid')
 export interface ZenMaterialsState {
   materials: 'mobile' | null
   reducedTransparency: boolean
+  /** 0.46.3: Garden settings → Light blur (this computer): two blur
+   *  layers per progressive-blur stack instead of four. Off by default. */
+  lightBlur?: boolean
 }
 
-export const ZenMaterialsContext = createContext<ZenMaterialsState>({ materials: null, reducedTransparency: false })
+export const ZenMaterialsContext = createContext<ZenMaterialsState>({ materials: null, reducedTransparency: false, lightBlur: false })
+
+/** On the Zen root while Light blur is on. */
+export const ZEN_LIGHT_BLUR_ATTR = 'data-zen-light-blur'
 
 export function useZenMaterials(): ZenMaterialsState {
   return useContext(ZenMaterialsContext)
@@ -147,6 +153,25 @@ export const ZEN_PROGRESSIVE_BLUR_LAYERS: ReadonlyArray<readonly [number, number
   [24, 65, 100],
 ]
 
+/** 0.46.3 Light blur (K2 Companion's Diagnostics → Light blur): two
+ *  layers instead of four, same `[blur px, clear until %, on at %]` shape.
+ *  The 4px layer takes layers 1+2's soft reach, the 16px layer layers
+ *  3+4's heavy band (the phone's masks, measured from the light edge). */
+export const ZEN_PROGRESSIVE_BLUR_LAYERS_LIGHT: ReadonlyArray<readonly [number, number, number]> = [
+  [4, 0, 45],
+  [16, 40, 75],
+]
+
+/** The layers a stack draws: four, or two with Light blur. */
+export function zenProgressiveBlurLayers(lightBlur: boolean): ReadonlyArray<readonly [number, number, number]> {
+  return lightBlur ? ZEN_PROGRESSIVE_BLUR_LAYERS_LIGHT : ZEN_PROGRESSIVE_BLUR_LAYERS
+}
+
+/** A layer's class: `zen-blur-layer-<n>`, or `zen-blur-layer-light-<n>`. */
+export function zenBlurLayerClass(lightBlur: boolean, i: number): string {
+  return lightBlur ? `zen-blur-layer-light-${i + 1}` : `zen-blur-layer-${i + 1}`
+}
+
 /** The dark tint (the window's canvas) over the blur, same direction:
  *  [% from the light edge, % of the canvas]. */
 export const ZEN_PROGRESSIVE_TINT_STOPS: ReadonlyArray<readonly [number, number]> = [
@@ -177,13 +202,15 @@ const tint = (dir: string, stops: ReadonlyArray<readonly [number, number]>, unit
 const progressiveCss = (edge: 'header' | 'footer'): string => {
   const scope = `${ROOT} .zen-${edge}-blur`
   const dir = TOWARD[edge]
-  const layers = ZEN_PROGRESSIVE_BLUR_LAYERS.map(([px, from, to], i) => {
-    const mask = `linear-gradient(${dir}, transparent ${from}%, #000 ${to}%)`
-    return (
-      `${scope} > .zen-blur-layer-${i + 1} { -webkit-backdrop-filter: blur(${px}px); backdrop-filter: blur(${px}px); ` +
-      `-webkit-mask-image: ${mask}; mask-image: ${mask}; }`
-    )
-  }).join('\n')
+  const layerCss = (light: boolean) =>
+    zenProgressiveBlurLayers(light).map(([px, from, to], i) => {
+      const mask = `linear-gradient(${dir}, transparent ${from}%, #000 ${to}%)`
+      return (
+        `${scope} > .${zenBlurLayerClass(light, i)} { -webkit-backdrop-filter: blur(${px}px); backdrop-filter: blur(${px}px); ` +
+        `-webkit-mask-image: ${mask}; mask-image: ${mask}; }`
+      )
+    })
+  const layers = [...layerCss(false), ...layerCss(true)].join('\n')
   return `${layers}
 ${scope} > .zen-blur-tint { ${tint(dir, ZEN_PROGRESSIVE_TINT_STOPS, '%')} }
 ${ROOT}[${ZEN_REDUCED_TRANSPARENCY_ATTR}] .zen-${edge}-blur > .zen-blur-tint { ${tint(dir, ZEN_PROGRESSIVE_TINT_STOPS_OPAQUE, 'px')} }

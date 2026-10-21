@@ -33,6 +33,7 @@ import { ZEN_KEYFRAMES_CSS } from '@/lib/zen/zen-motion'
 import { ZEN_SHIELD_CSS, ZEN_STYLE_SHIELD } from '@/lib/zen/zen-style-shield'
 import { ZEN_GLASS_CSS } from '@/lib/zen/zen-glass'
 import { ZEN_MATERIALS_CSS, ZenMaterialsContext, zenThemeMaterials, type ZenMaterialsState } from '@/lib/zen/zen-materials'
+import { useZenLightBlurStore } from '@/lib/zen/zen-light-blur'
 import { noteZenEntered } from '@/lib/zen/zen-compose-focus'
 import type { ZenBackgroundFit } from '@/lib/zen/zen-tokens'
 import {
@@ -289,6 +290,8 @@ export function ZenRoot(): React.JSX.Element {
   const systemScheme = useSystemScheme()
   const reducedMotion = useMediaFlag(REDUCED_MOTION_QUERY)
   const reducedTransparency = useMediaFlag(REDUCED_TRANSPARENCY_QUERY)
+  // 0.46.3: Garden settings → Light blur (this computer, off by default).
+  const lightBlur = useZenLightBlurStore((s) => s.on)
   const os = useMemo(() => currentDesktopOs(), [])
   const inSafeMode = safe !== null
   const livePage = gardenId !== null && config.gardenId === gardenId ? config.page : null
@@ -359,8 +362,8 @@ export function ZenRoot(): React.JSX.Element {
   // 0.46.0: the Glass theme draws K2 Companion's materials (zen-materials).
   const materials = inSafeMode ? null : zenThemeMaterials(theme.name)
   const materialsState = useMemo<ZenMaterialsState>(
-    () => ({ materials, reducedTransparency }),
-    [materials, reducedTransparency],
+    () => ({ materials, reducedTransparency, lightBlur }),
+    [materials, reducedTransparency, lightBlur],
   )
 
   // Terminals shown in Zen read the bundle's palette and font from here.
@@ -436,6 +439,7 @@ export function ZenRoot(): React.JSX.Element {
       data-zen-reduced-motion={reducedMotion ? '' : undefined}
       data-zen-reduced-transparency={reducedTransparency ? '' : undefined}
       data-zen-materials={materials ?? undefined}
+      data-zen-light-blur={lightBlur ? '' : undefined}
       data-zen-corners={chrome.corners}
       data-zen-stoplights={chrome.stoplights}
       style={style}

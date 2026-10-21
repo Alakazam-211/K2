@@ -20,6 +20,7 @@
 import { useEffect, useState } from 'react'
 import { SettingsIcon } from '@/components/icons/K2Icons'
 import { useZenRecentFirst, useZenRecentFirstStore } from '@/lib/zen/zen-recent-first'
+import { ZEN_LIGHT_BLUR_LABEL, ZEN_LIGHT_BLUR_NOTE, useZenLightBlurStore } from '@/lib/zen/zen-light-blur'
 import { loadZenGardenThemes, setZenTheme } from '@/lib/zen/zen-theme-switch'
 import type { ZenThemeEntry } from '@/lib/zen/zen-page'
 import { zenPinGridText } from '@/lib/zen/zen-pin-grid'
@@ -70,14 +71,25 @@ function Group({ id, title, children, data }: { id: string; title: string; child
   )
 }
 
-function Switch({ on, onToggle, labelledBy }: { on: boolean; onToggle(): void; labelledBy: string }): React.JSX.Element {
+function Switch({
+  on,
+  onToggle,
+  labelledBy,
+  marker = 'data-zen-recent-first-switch',
+}: {
+  on: boolean
+  onToggle(): void
+  labelledBy: string
+  /** The switch's own data attribute (`on` / `off`), for tests and themes. */
+  marker?: string
+}): React.JSX.Element {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={on}
       aria-labelledby={labelledBy}
-      data-zen-recent-first-switch={on ? 'on' : 'off'}
+      {...{ [marker]: on ? 'on' : 'off' }}
       onClick={onToggle}
       className="relative flex-shrink-0 cursor-pointer"
       style={{
@@ -216,11 +228,25 @@ export function ZenGardenSettings({
   const stored = useZenRecentFirstStore((s) => s.stored)
   const on = useZenRecentFirst(recentFirstDefault)
   const setOn = useZenRecentFirstStore((s) => s.setOn)
+  const lightBlur = useZenLightBlurStore((s) => s.on)
+  const setLightBlur = useZenLightBlurStore((s) => s.setOn)
   return (
     <ZenOverlay label="Garden settings" onClose={onClose} testId="zen-garden-settings" width={420}>
       <strong style={{ fontSize: '1.1em' }}>Garden settings</strong>
       <Group id="zen-garden-settings-appearance" title="Appearance" data="data-zen-garden-settings-appearance">
         <ThemeRow gardenId={gardenId} />
+        <div className="flex items-center justify-between" style={rowStyle} {...ZEN_TILE_PROPS}>
+          <span id="zen-light-blur-label">{ZEN_LIGHT_BLUR_LABEL}</span>
+          <Switch
+            on={lightBlur}
+            onToggle={() => setLightBlur(!lightBlur)}
+            labelledBy="zen-light-blur-label"
+            marker="data-zen-light-blur-switch"
+          />
+        </div>
+        <span data-zen-light-blur-note="" style={noteStyle}>
+          {ZEN_LIGHT_BLUR_NOTE}
+        </span>
       </Group>
       {pinsOn && (
         <Group id="zen-garden-settings-pins" title="Pinned agents" data="data-zen-garden-settings-pins">

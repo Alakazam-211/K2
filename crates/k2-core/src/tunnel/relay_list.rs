@@ -1110,7 +1110,7 @@ mod tests {
         let hint = crate::tunnel::failover::DnsHint::Active(l.active.clone().expect("named"));
         let t0 = std::time::Instant::now();
         for s in 0..140u64 {
-            let d = sel.on_failure_at(t0 + Duration::from_secs(s), &hint);
+            let d = sel.on_failure_at(t0 + Duration::from_secs(s), &hint, &mut |_| true);
             assert!(
                 !matches!(d, crate::tunnel::failover::FailureDecision::Switch(..)),
                 "an unlisted active relay must not trigger a move ({s}s): {d:?}"

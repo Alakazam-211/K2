@@ -607,6 +607,41 @@ fn failback_policy(mode: FailoverMode) -> super::failover::FailbackPolicy {
     }
 }
 
+#[cfg(test)]
+static TEST_REACHABLE: Mutex<Option<fn(&RelayEndpoint) -> bool>> = Mutex::new(None);
+
+/// Overrides the standby reachability probe for supervisors running while
+/// it lives (tests only; hold it inside `with_temp_home`).
+#[cfg(test)]
+pub(crate) struct TestReachability;
+
+#[cfg(test)]
+impl TestReachability {
+    pub(crate) fn install(f: fn(&RelayEndpoint) -> bool) -> Self {
+        *TEST_REACHABLE.lock().unwrap_or_else(|e| e.into_inner()) = Some(f);
+        TestReachability
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestReachability {
+    fn drop(&mut self) {
+        *TEST_REACHABLE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+}
+
+/// 0.46.3: whether a relay we are about to move to answers (TCP connect to
+/// its frps port, [`probe_relay`]).
+fn relay_reachable(relay: &RelayEndpoint) -> bool {
+    #[cfg(test)]
+    {
+        if let Some(f) = *TEST_REACHABLE.lock().unwrap_or_else(|e| e.into_inner()) {
+            return f(relay);
+        }
+    }
+    probe_relay(relay)
+}
+
 fn dns_min_outage() -> Duration {
     #[cfg(test)]
     {
@@ -681,7 +716,16 @@ impl HintSource {
 /// same line as 0.46.2.
 fn decide_failure(selector: &mut RelaySelector, hints: &mut HintSource) -> Option<RelaySwitch> {
     let hint = hints.decide();
-    match selector.on_failure_at(Instant::now(), &hint) {
+    // DNS mode probes a standby before moving to it (never the primary);
+    // legacy never calls this.
+    let mut reachable = |r: &RelayEndpoint| {
+        let ok = relay_reachable(r);
+        if !ok {
+            crate::log_debug!("[tunnel] failover: standby {r} probe: unreachable");
+        }
+        ok
+    };
+    match selector.on_failure_at(Instant::now(), &hint, &mut reachable) {
         FailureDecision::Count => None,
         FailureDecision::Hold(why) => {
             crate::log_debug!("[tunnel] failover: {why}");
@@ -3119,6 +3163,8 @@ mod tests {
     #[test]
     fn watchdog_kills_stuck_midsession_child_and_supervisor_rotates() {
         with_temp_home(|| {
+            // 0.46.3: the standby a DNS-mode move goes to must answer.
+            let _reach = TestReachability::install(|_| true);
             // 0.46.3 default (DNS) rules: k2.dev says the standby is the
             // live relay, so the 3rd watchdog kill moves there at once.
             super::super::relay_list::reset_state_for_test();
@@ -3245,6 +3291,8 @@ mod tests {
     #[test]
     fn status_reports_live_relay_after_failover_rotation() {
         with_temp_home(|| {
+            // 0.46.3: the standby a DNS-mode move goes to must answer.
+            let _reach = TestReachability::install(|_| true);
             // DNS rules with no k2.dev answer and a zero minimum outage:
             // the move happens at the plain 3-failure threshold.
             super::super::relay_list::reset_state_for_test();
@@ -3329,6 +3377,8 @@ mod tests {
     #[test]
     fn dns_supervisor_stays_on_the_primary_while_k2dev_says_the_standby_is_inactive() {
         with_temp_home(|| {
+            // 0.46.3: the standby a DNS-mode move goes to must answer.
+            let _reach = TestReachability::install(|_| true);
             super::super::relay_list::reset_state_for_test();
             super::super::relay_list::set_dns_for_test(Some(ten(1)), Duration::ZERO);
             seed_two_relays();
@@ -3365,6 +3415,8 @@ mod tests {
     #[test]
     fn dns_supervisor_with_k2dev_silent_waits_the_minimum_outage_then_moves() {
         with_temp_home(|| {
+            // 0.46.3: the standby a DNS-mode move goes to must answer.
+            let _reach = TestReachability::install(|_| true);
             super::super::relay_list::reset_state_for_test(); // no answer: Unknown
             let _gate = TestDnsMinOutage::install(Duration::from_secs(6));
             seed_two_relays();
@@ -3407,6 +3459,8 @@ mod tests {
     #[test]
     fn dns_supervisor_fails_back_fast_once_k2dev_points_the_name_at_the_primary() {
         with_temp_home(|| {
+            // 0.46.3: the standby a DNS-mode move goes to must answer.
+            let _reach = TestReachability::install(|_| true);
             super::super::relay_list::reset_state_for_test();
             // Fast DNS-mode timing: probe every 1 s, 2 healthy probes.
             let _policy = TestFailbackPolicy::install(super::super::failover::FailbackPolicy {
@@ -3469,6 +3523,50 @@ mod tests {
             super::super::relay_list::reset_state_for_test();
         });
     }
+
+    #[test]
+    fn dns_supervisor_with_no_relay_reachable_stays_on_the_primary_and_backs_off() {
+        // z3mbpZ on a dead network: 0.46.2 alternated every ~6 s. Even
+        // with every switch rule met (k2.dev names the standby, zero
+        // minimum outage) an unreachable standby is never switched to.
+        with_temp_home(|| {
+            super::super::relay_list::reset_state_for_test();
+            super::super::relay_list::set_dns_for_test(Some(ten(2)), Duration::ZERO);
+            let _gate = TestDnsMinOutage::install(Duration::ZERO);
+            let _reach = TestReachability::install(|_| false);
+            let dir = crate::test_env::unique_temp_path("fake-frpc-offline");
+            std::fs::create_dir_all(&dir).expect("mk dir");
+            let script = dir.join("frpc-offline.sh");
+            // Every dial fails; each one is recorded (host per line).
+            crate::test_env::write_executable(
+                &script,
+                &format!(
+                    "#!/bin/sh\ngrep '^serverAddr' \"$2\" | tr -d '\" ' | cut -d= -f2 >> '{dials}'\nexit 1\n",
+                    dials = dir.join("dials").display(),
+                ),
+            );
+            seed_two_relays();
+            start(None, 57839, &FrpcBinary::Explicit(script)).expect("start");
+            wait_until("the no-relay hold", 30, || {
+                failover_state().is_some_and(|(_, s, _)| s == "no_relay_reachable")
+            });
+            std::thread::sleep(Duration::from_secs(12));
+            let dials = std::fs::read_to_string(dir.join("dials")).expect("dials");
+            let hosts: Vec<&str> = dials.lines().collect();
+            assert!(
+                hosts.iter().all(|h| *h == "10.0.0.1"),
+                "must only ever dial the primary: {hosts:?}"
+            );
+            // Backoff 0.5, 1, 2, 4, 8 s… (never reset by a switch): a
+            // handful of dials, not one every second or two.
+            assert!(hosts.len() <= 8, "{} dials — the backoff must grow: {hosts:?}", hosts.len());
+            assert_eq!(status().relay_primary, Some(true));
+            stop("test").expect("stop");
+            let _ = std::fs::remove_dir_all(&dir);
+            super::super::relay_list::reset_state_for_test();
+        });
+    }
+
 
     #[test]
     fn legacy_switch_reports_legacy_and_never_asks_k2dev() {

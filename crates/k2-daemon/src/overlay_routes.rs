@@ -2264,7 +2264,14 @@ fn answer_action_card(
         None,
         card_actor_author(params, session_author),
     ) {
-        Ok(cb) => {
+        Ok(mut cb) => {
+            // The card keeps what the action did (`choice.action.result`,
+            // whose `message` every client shows under the chosen option),
+            // and the frame that goes out carries it.
+            match overlay::record_action_result(&resolved.conversation_id, card_id, result.clone()) {
+                Ok(with_result) => cb.doc = with_result.doc,
+                Err(e) => k2_core::log_debug!("[overlay] action card {card_id}: result not stored: {e}"),
+            }
             let from = card_actor_from(params, resolved, session_author);
             note_card_reader(params, session_author, &cb);
             fire_card_callbacks(&resolved.addr, &from, vec![cb.clone()], true);
@@ -3334,6 +3341,7 @@ mod tests {
             id: crate::action_cards::KEEP_WIDGET.to_string(),
             params: serde_json::json!({ "widget": widget, "hash": hash, "agent": "builder" }),
             dedupe: widget.to_string(),
+            result: None,
         }
     }
 
@@ -3411,6 +3419,12 @@ mod tests {
         assert_eq!((v["status"].as_str(), v["action"]["id"].as_str()), (Some("answered"), Some(crate::action_cards::KEEP_WIDGET)), "{v}");
         assert_eq!(v["action"]["result"]["kept"], true, "{v}");
         assert_eq!(v["action"]["result"]["message"], "Kept as yours. Undo in Settings → Gardens → Local Data.", "{v}");
+        // The card itself keeps it (every client renders it under the option).
+        let stored = overlay::get_thread_doc(&conv, &id).expect("doc").expect("card").choice.expect("choice");
+        assert_eq!(
+            stored.action.and_then(|a| a.result).map(|r| r["message"].clone()),
+            Some(serde_json::json!("Kept as yours. Undo in Settings → Gardens → Local Data."))
+        );
         assert_eq!(maker(&widget, &hash), k2_core::garden_data::MadeBy::Owner);
         assert_eq!(action_card_status(&conv, &id), "answered");
         let r = post_json("/cli/thread/answer", &HashMap::new(), body);

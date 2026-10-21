@@ -638,6 +638,10 @@
                         "expiresAt": {
                           "type": ["integer", "null"],
                           "description": "Unix seconds when a still-pending card expires (K2 closes it as expired); null when it never does."
+                        },
+                        "resultMessage": {
+                          "type": "string",
+                          "description": "A settings card the person answered: what K2 did (Kept as yours. Undo in Settings → Gardens → Local Data.), shown under the chosen option. Absent on every other card."
                         }
                       },
                       "required": ["prompt", "options", "allow_custom", "status"],
@@ -890,6 +894,10 @@
                         "expiresAt": {
                           "type": ["integer", "null"],
                           "description": "Unix seconds when a still-pending card expires (K2 closes it as expired); null when it never does."
+                        },
+                        "resultMessage": {
+                          "type": "string",
+                          "description": "A settings card the person answered: what K2 did (Kept as yours. Undo in Settings → Gardens → Local Data.), shown under the chosen option. Absent on every other card."
                         }
                       },
                       "required": ["prompt", "options", "allow_custom", "status"],

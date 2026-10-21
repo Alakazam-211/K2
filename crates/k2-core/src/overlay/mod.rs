@@ -575,6 +575,23 @@ pub fn card_action(conversation_id: &str, card_id: &str) -> Result<Option<CardAc
     Ok(thread_item(conversation_id, card_id)?.doc.choice.and_then(|c| c.action))
 }
 
+/// Store what an answered action card's action did (`result`, with the
+/// `message` clients show under the chosen option). The card must already
+/// be answered and carry an action.
+pub fn record_action_result(conversation_id: &str, card_id: &str, result: serde_json::Value) -> Result<CardCallback, String> {
+    let _guard = WRITE.lock();
+    let item = thread_item(conversation_id, card_id)?;
+    let mut doc = item.doc;
+    let choice = doc.choice.as_mut().ok_or("not a choice card")?;
+    if choice.status != "answered" {
+        return Err("the card isn't answered".to_string());
+    }
+    let action = choice.action.as_mut().ok_or("the card has no action")?;
+    action.result = Some(result);
+    store::put_card_doc(conversation_id, item.seq, &doc)?;
+    Ok(CardCallback { conversation_id: conversation_id.to_string(), doc_id: doc.id.clone(), seq: item.seq, doc, inject_line: String::new() })
+}
+
 /// The pending action cards in this conversation for `action_id` with this
 /// `dedupe` key (not yet due), newest last.
 pub fn pending_action_cards(conversation_id: &str, action_id: &str, dedupe: &str, now: i64) -> Result<Vec<String>, String> {

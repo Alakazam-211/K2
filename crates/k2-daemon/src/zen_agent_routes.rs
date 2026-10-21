@@ -262,6 +262,7 @@ fn keep_as_mine(widget: &str, before: Option<(String, k2_core::garden_data::Made
         id: crate::action_cards::KEEP_WIDGET.to_string(),
         params: json!({ "widget": widget, "hash": new_hash, "agent": agent }),
         dedupe: widget.to_string(),
+        result: None,
     };
     let leave = crate::action_cards::leave_label(&agent);
     let options = [crate::action_cards::KEEP_AS_MINE, leave.as_str()];

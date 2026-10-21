@@ -28,6 +28,7 @@ export function ChoiceCard({
   answeredBy,
   expiresAt,
   nowSec,
+  resultMessage,
   onPick,
 }: {
   options: { label: string }[]
@@ -39,6 +40,9 @@ export function ChoiceCard({
   /** The card's time frame (unix seconds); the daemon expires it. */
   expiresAt?: number | null
   nowSec?: number
+  /** 0.46.3: what a settings card's action did ("Kept as yours. Undo in
+   *  Settings → Gardens → Local Data."), shown under the chosen option. */
+  resultMessage?: string | null
   onPick: (label: string) => void
 }): JSX.Element {
   const pending = status === 'pending'
@@ -60,7 +64,8 @@ export function ChoiceCard({
       {options.map((opt, i) => {
           const selected = answer === opt.label
           const letter = choiceLetter(i)
-          return (
+          const result = selected && status === 'answered' && resultMessage ? resultMessage : null
+          const chip = (
             <button
               key={`${opt.label}-${i}`}
               type="button"
@@ -97,6 +102,18 @@ export function ChoiceCard({
               </span>
               <span className="min-w-0 flex-1">{opt.label}</span>
             </button>
+          )
+          if (!result) return chip
+          return (
+            <div key={`${opt.label}-${i}`} className="flex flex-col gap-0.5">
+              {chip}
+              <div
+                data-testid="thread-choice-result"
+                className="pl-6 text-[10px] text-[var(--thread-card-muted,var(--color-text-muted))]"
+              >
+                {result}
+              </div>
+            </div>
           )
       })}
       {expiry && (

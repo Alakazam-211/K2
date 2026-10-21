@@ -160,6 +160,9 @@ export interface ZenWidgetChoice {
   answeredBy: ZenWidgetCardAnswerer | null
   /** Unix seconds a pending card expires; null when it never does. */
   expiresAt: number | null
+  /** 0.46.3: what an answered settings card's action did (shown under the
+   *  chosen option). Absent on every other card. */
+  resultMessage?: string
 }
 
 /** One file on a message as a widget sees it (the catalog's ThreadFile). */
@@ -220,6 +223,7 @@ function projectChoice(c: OverlayChoice | null | undefined): ZenWidgetChoice | n
     // Re-checked here: the port never trusts the doc's own fields.
     answeredBy: projectAnswerer(c.answeredBy),
     expiresAt: typeof c.expiresAt === 'number' && Number.isInteger(c.expiresAt) ? c.expiresAt : null,
+    ...(typeof c.resultMessage === 'string' && c.resultMessage ? { resultMessage: c.resultMessage.slice(0, 300) } : {}),
   }
 }
 

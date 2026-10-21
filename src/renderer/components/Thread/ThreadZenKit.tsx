@@ -439,6 +439,7 @@ export const ThreadBubble = memo(function ThreadBubble({
             answeredBy={cardAnswererLabel(item.doc.choice.answeredBy, viewer)}
             expiresAt={item.doc.choice.expiresAt}
             nowSec={nowSec}
+            resultMessage={item.doc.choice.resultMessage}
             onPick={(label) => {
               const warn = (err: unknown): void => console.warn('[thread] answer failed:', err)
               try {

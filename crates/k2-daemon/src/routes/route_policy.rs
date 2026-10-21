@@ -898,6 +898,10 @@ pub const ROUTES: &[Route] = &[
     // login asks for a card); "Waiting on you" is for the people who can
     // answer one (Admin is the lowest catalog floor). People answer and
     // deny through `/cli/thread/answer`, so there is no approve route.
+    // The Permission Cards page and the Agent-tab row (lane D2's ask): every
+    // agent's "Can ask for permission cards" switch and the recent requests.
+    // People only, at the Settings floor for that switch (Owner/Admin).
+    get("/cli/permission/agents", Admin),
     post("/cli/permission/cancel", NoLogin),
     get("/cli/permission/enabled", NoLogin),
     get("/cli/permission/list", NoLogin),
@@ -1989,7 +1993,7 @@ mod tests {
     #[test]
     fn permission_rows_exist_and_are_every_gated_row() {
         let paths: Vec<&str> = permission_rows().iter().map(|r| r.path).collect();
-        for p in ["/cli/permission/request", "/cli/permission/enabled", "/cli/permission/pending"] {
+        for p in ["/cli/permission/request", "/cli/permission/enabled", "/cli/permission/pending", "/cli/permission/agents"] {
             assert!(paths.contains(&p), "{p} has a row: {paths:?}");
         }
         for r in permission_rows() {

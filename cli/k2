@@ -15770,10 +15770,13 @@ Sharing a node with other K2 servers (the node's owner server; 0.46.3):
                    to `policy`, add servers at the machine instead:
                    sudo k2-node servers add --url URL --code CODE.FP
   k2 compute node servers <node> approve|deny <request>   (= node admin approve/deny)
-  k2 compute node servers <node> limits <server> key=value…   narrowing at
-                   once, widening waits for approval (max_running, max_queued,
-                   cpu_hours_day, max_job_secs, max_cpus, max_mem_gb, disk_gb,
-                   weight, network, top_class, gate, exclusive; for=7d|none)
+  k2 compute node servers <node> limits <server> [--weight N] key=value…
+                   narrowing at once, widening (a higher weight too) waits
+                   for approval (max_running, max_queued, cpu_hours_day,
+                   max_job_secs, max_cpus, max_mem_gb, disk_gb, weight,
+                   network, top_class, gate, exclusive; for=7d|none). Every
+                   server starts at weight 1, the owner too; <server> may be
+                   slot:0 (this server) for its weight
   k2 compute node servers <node> pause|resume <server>
   k2 compute node servers <node> revoke <server> [--now] [--wipe]   (owner)
   k2 compute grant <node> --workspace WS [--max-time 2h] [--max-disk 60G]
@@ -17285,11 +17288,12 @@ if v.get("warning"): print("note: " + v["warning"], file=sys.stderr)'
         deny) cmd_compute_node_admin deny "$@" ;;
         limits)
             local server="${1:-}" reason="" forv="" pairs=()
-            [ -n "$server" ] || { echo "usage: k2 compute node servers <node> limits <server> key=value…" >&2; exit 2; }
+            [ -n "$server" ] && [ "${server#-}" = "$server" ] || { echo "usage: k2 compute node servers <node> limits <server> [--weight N] key=value…" >&2; exit 2; }
             shift
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --reason) reason="${2:-}"; shift 2 ;;
+                    --weight) pairs+=("weight=${2:-}"); shift 2 ;;
                     for=*) forv="${1#for=}"; shift ;;
                     --for) forv="${2:-}"; shift 2 ;;
                     max_job_secs=*h|max_job_secs=*m|max_job_secs=*s) pairs+=("max_job_secs=$(_compute_secs "${1#max_job_secs=}")"); shift ;;
@@ -20519,6 +20523,15 @@ _vault_confirm_token() {
     local methods
     methods="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print(" ".join(json.load(sys.stdin).get("methods") or []))')"
     local body
+    # K2_VAULT_CONFIRM_METHOD=vault-password: use the vault password even on
+    # a Mac with Touch ID (a headless run, e.g. the two-server harness). The
+    # same check as always: the daemon verifies the vault password.
+    if [ "${K2_VAULT_CONFIRM_METHOD:-}" = "vault-password" ]; then
+        case " $methods " in
+            *" vault-password "*) methods="vault-password" ;;
+            *) echo "no_confirm_method: K2_VAULT_CONFIRM_METHOD=vault-password, but no vault password is set (k2 vault confirm-password set)" >&2; exit 3 ;;
+        esac
+    fi
     case " $methods " in
         *" local-auth "*)
             echo "Approve on this Mac (Touch ID or your login password)…" >&2
@@ -34604,7 +34617,8 @@ THE QUEUE (the node decides, one queue for every server)
   3 interactive before batch (you get interactive for an attached run or
     --wait; --detach, more than 4 shards and soaks are batch). A batch job
     waiting over 60 min counts as interactive.
-  4 fair share by recent use and weight (the owner weighs 2)
+  4 fair share by recent use and weight (every server starts at 1, the
+    owner too; the node's owner raises a weight with servers limits)
   Inside one server: workspaces take turns, then sessions, then first come.
   Over your limits you WAIT, never fail. A job bigger than your share's
   per-job limits is refused at submit (exit 3).

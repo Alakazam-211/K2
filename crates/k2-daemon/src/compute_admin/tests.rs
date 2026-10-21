@@ -668,8 +668,13 @@ fn servers_add_limits_pause_and_revoke() {
     let id = r["request"]["id"].as_str().unwrap().to_string();
     let e = call(SERVERS_ADD, &agent(&f), json!({"node": f.node_name, "url": "https://b.k2.dev", "code": "ABCDE-FGHJK.0123456789abcdef"})).unwrap_err();
     assert_eq!(e, (409, pshare::codes::SERVER_ADD_PENDING.to_string()), "one add at a time");
-    let r = call(APPROVE, &Who::Owner, json!({"request": id, "confirmToken": token_for(&id)})).unwrap();
-    assert_eq!(r["sent"], true, "{r}");
+    // The headless approval (the two-server harness): the existing vault
+    // password confirm, never a new path. No confirm at all is refused.
+    let e = call(APPROVE, &Who::Owner, json!({"request": id})).unwrap_err();
+    assert_eq!(e, (403, cadmin::codes::VAULT_CONFIRM_REQUIRED.to_string()));
+    let pw_token = test_seams::vault_handle().confirm.mint(cadmin::CONFIRM_ACTION, Some(&id), "owner", "vault-password");
+    let r = call(APPROVE, &Who::Owner, json!({"request": id, "confirmToken": pw_token})).unwrap();
+    assert_eq!((r["sent"].as_bool(), r["request"]["decidedVia"].as_str()), (Some(true), Some("vault-password")), "{r}");
     let cmds = admin_cmds(test_seams::take_sent(&f.node));
     assert_eq!(cmds.len(), 1);
     let o = node_open(&f, &cmds[0]).expect("the node accepts the owner-signed add");
@@ -691,6 +696,13 @@ fn servers_add_limits_pause_and_revoke() {
     assert!(test_seams::take_sent(&f.node).is_empty());
     let e = call(SERVERS_LIMITS, &agent(&f), json!({"node": f.node_name, "server": "nobody.k2.dev", "set": {"max_queued": 1}})).unwrap_err();
     assert_eq!(e.0, 404);
+    // Every server starts at weight 1, the owner too; raising the owner's
+    // own weight (slot 0) is a widening: held.
+    let r = call(SERVERS_LIMITS, &agent(&f), json!({"node": f.node_name, "server": "slot:0", "set": {"weight": 2}})).unwrap();
+    assert_eq!(r["held"], true, "{r}");
+    assert!(test_seams::take_sent(&f.node).is_empty());
+    let e = call(SERVERS_LIMITS, &agent(&f), json!({"node": f.node_name, "server": "z3thon.k2.dev", "set": {"weight": 0}})).unwrap_err();
+    assert_eq!(e.1, cadmin::codes::BAD_ARGS, "weight is 1–100");
     // Pause: at once.
     let responder = answer_servers(f.node.clone(), servers_listed(), "servers.pause");
     let r = call(SERVERS_PAUSE, &agent(&f), json!({"node": f.node_name, "server": "z3thon.k2.dev", "action": "pause"})).unwrap();

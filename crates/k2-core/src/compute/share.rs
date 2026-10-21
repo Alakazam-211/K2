@@ -429,7 +429,7 @@ mod tests {
             "limits": ShareLimits::owner(2, 8, 16, 100, share::Network::On), "running": 1, "queued": 0});
         let rows = parse_servers_list(&json!({"servers": [nested, Value::Object(flat)]})).expect("parses");
         assert_eq!(rows.len(), 2);
-        assert_eq!((rows[0].slot, rows[0].trust.as_str(), rows[0].limits.weight), (0, "own", 2));
+        assert_eq!((rows[0].slot, rows[0].trust.as_str(), rows[0].limits.weight), (0, "own", 1));
         assert_eq!(rows[1].fp.as_deref(), Some("0123456789abcdef"));
         assert_eq!(rows[1].usage.as_ref().unwrap()["sas"], "482913");
         assert_eq!(rows[1].expires_at, Some(1_761_600_000));

@@ -233,13 +233,13 @@ pub fn handle_server_uninstall(_body: &[u8]) -> CliResponse {
 /// `--major` other than the box default is a version choice: an agent
 /// passport needs "Allow this agent to manage Postgres versions" (S6). The
 /// owner token and people logins pass (the route's own floor already ran).
-fn may_choose_major(project_id: &str, major: u32) -> Result<(), CliResponse> {
+pub(crate) fn may_choose_major(project_id: &str, major: u32) -> Result<(), CliResponse> {
     let (default, _) = super::cluster::default_major();
     if major == default {
         return Ok(());
     }
     let agent = crate::caller_workspace::request_principal().is_some();
-    if agent && !postgres_versions_switch_on(project_id) {
+    if agent && !super::versions_access::switch_on(project_id) {
         return Err(err_json(
             "403 Forbidden",
             "db_upgrade_off",
@@ -249,19 +249,6 @@ fn may_choose_major(project_id: &str, major: u32) -> Result<(), CliResponse> {
         ));
     }
     Ok(())
-}
-
-/// `projects.agents_can_upgrade_postgres` (0201), fail-closed.
-fn postgres_versions_switch_on(project_id: &str) -> bool {
-    let db = k2_core::db::shared();
-    let conn = db.lock();
-    conn.query_row(
-        "SELECT agents_can_upgrade_postgres FROM projects WHERE id = ?1",
-        [project_id],
-        |r| r.get::<_, i64>(0),
-    )
-    .map(|v| v != 0)
-    .unwrap_or(false)
 }
 
 /// `POST /cli/db/server/default-major {"major": N}` (owner only: the

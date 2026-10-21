@@ -421,3 +421,27 @@ fn status_lists_majors_and_upgrades() {
     let dbs = v["databases"].as_array().unwrap();
     assert!(dbs.iter().any(|d| d["name"] == "ws_b" && d["major"] == 17));
 }
+
+/// `create --major` other than the default: an agent passport needs the
+/// "manage Postgres versions" switch; the owner token never does; the
+/// default major never needs it.
+#[test]
+fn create_on_a_non_default_major_needs_the_switch_for_agents() {
+    let _g = crate::sql::sql_server_test_lock();
+    reset(Some(16));
+    let (pid, _) = insert_project("gate");
+    let agent = Some(crate::session_token::HookPrincipal { workspace_uuid: pid.clone(), agent_address: "a".into() });
+    let as_agent =
+        |m: u32| crate::caller_workspace::with_request_principal(agent.clone(), || crate::sql::routes::may_choose_major(&pid, m));
+    let refused = as_agent(16).unwrap_err();
+    assert_eq!(refused.status, "403 Forbidden");
+    assert!(refused.body.contains("db_upgrade_off"), "{}", refused.body);
+    assert!(as_agent(17).is_ok(), "the default major needs no switch");
+    assert!(crate::sql::routes::may_choose_major(&pid, 16).is_ok(), "the owner token");
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute("UPDATE projects SET agents_can_upgrade_postgres = 1 WHERE id = ?1", [&pid]).unwrap();
+    }
+    assert!(as_agent(16).is_ok(), "with the switch on");
+}

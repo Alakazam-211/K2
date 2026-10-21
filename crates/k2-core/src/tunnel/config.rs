@@ -182,6 +182,16 @@ pub struct TunnelConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relays_fetched_at: Option<u64>,
 
+    /// 0.46.3: which relay failover rules run (see
+    /// [`super::failover::FailoverMode`] and [`failover_mode`]). Absent =
+    /// the default, DNS-aware rules (move only when the `*.k2.dev` name
+    /// can follow). `"legacy"` restores the 0.46.2 rules exactly. Kept a
+    /// loose string so an unknown value can never make `tunnel.json`
+    /// unreadable (it falls back to the default). Read at tunnel start;
+    /// the env var `K2_TUNNEL_FAILOVER` overrides it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failover: Option<String>,
+
     /// 0.45.7: set by [`load`] when the token lives in the K2 vault and
     /// the vault could NOT be read (locked, unavailable, a transient
     /// keychain error). `token` is then empty, but that empty means
@@ -285,9 +295,31 @@ impl Default for TunnelConfig {
             // (PRD tunnel-disable-unpair §2A).
             enabled: default_enabled(),
             relays_fetched_at: None,
+            failover: None,
             token_read_error: None,
         }
     }
+}
+
+/// Env var overriding `tunnel.json` `failover` (`legacy` | `dns`).
+pub const FAILOVER_ENV: &str = "K2_TUNNEL_FAILOVER";
+
+/// 0.46.3: the failover rules this tunnel runs. Precedence like
+/// [`e2e_enabled`]: a recognised [`FAILOVER_ENV`] wins, then a recognised
+/// `tunnel.json` `failover`, else the default
+/// ([`super::failover::FailoverMode::Dns`]). Unrecognised values are
+/// ignored (logged by the connector), never fatal.
+pub fn failover_mode(cfg: &TunnelConfig) -> super::failover::FailoverMode {
+    use super::failover::FailoverMode;
+    if let Ok(raw) = std::env::var(FAILOVER_ENV) {
+        if let Some(m) = FailoverMode::parse(&raw) {
+            return m;
+        }
+    }
+    cfg.failover
+        .as_deref()
+        .and_then(FailoverMode::parse)
+        .unwrap_or_default()
 }
 
 impl TunnelConfig {
@@ -718,6 +750,7 @@ mod tests {
                 e2e: true,
                 enabled: true,
                 relays_fetched_at: Some(1_792_060_000),
+                failover: Some("legacy".to_string()),
                 token_read_error: None,
             };
             save(&cfg).expect("save");
@@ -792,6 +825,41 @@ mod tests {
             serde_json::from_str(r#"{"token":"tok","subdomain":"rosson","e2e":false}"#)
                 .expect("parse opt-out config");
         assert!(!cfg.e2e, "explicit e2e:false must deserialize false (opt-out)");
+    }
+
+    #[test]
+    fn failover_mode_default_config_field_and_env_precedence() {
+        use super::super::failover::FailoverMode;
+        let _unset = crate::test_env::EnvVar::remove(FAILOVER_ENV);
+        let mut cfg = TunnelConfig::default();
+        assert_eq!(failover_mode(&cfg), FailoverMode::Dns, "DNS-aware is the default");
+        cfg.failover = Some("legacy".to_string());
+        assert_eq!(failover_mode(&cfg), FailoverMode::Legacy, "tunnel.json switch");
+        cfg.failover = Some("nonsense".to_string());
+        assert_eq!(failover_mode(&cfg), FailoverMode::Dns, "unknown value → default");
+        {
+            let _v = crate::test_env::EnvVar::set(FAILOVER_ENV, "legacy");
+            assert_eq!(failover_mode(&cfg), FailoverMode::Legacy, "env wins");
+        }
+        cfg.failover = Some("legacy".to_string());
+        {
+            let _v = crate::test_env::EnvVar::set(FAILOVER_ENV, "dns");
+            assert_eq!(failover_mode(&cfg), FailoverMode::Dns, "env wins both ways");
+        }
+        {
+            let _v = crate::test_env::EnvVar::set(FAILOVER_ENV, "maybe");
+            assert_eq!(failover_mode(&cfg), FailoverMode::Legacy, "bad env → config");
+        }
+        // Round trip: absent stays absent on disk; a legacy switch persists
+        // and an unknown value never breaks parsing.
+        let json = serde_json::to_string(&TunnelConfig::default()).expect("ser");
+        assert!(!json.contains("failover"), "{json}");
+        let back: TunnelConfig =
+            serde_json::from_str(r#"{"token":"t","failover":"legacy"}"#).expect("de");
+        assert_eq!(back.failover.as_deref(), Some("legacy"));
+        let odd: TunnelConfig =
+            serde_json::from_str(r#"{"token":"t","failover":"???"}"#).expect("de odd");
+        assert_eq!(failover_mode(&odd), FailoverMode::Dns);
     }
 
     #[test]

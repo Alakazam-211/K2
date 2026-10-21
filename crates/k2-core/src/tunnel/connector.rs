@@ -27,7 +27,9 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 
 use super::config::{self, RelayEndpoint, TunnelConfig, SUBDOMAIN_HOST};
-use super::failover::{RelaySelector, RelaySwitch};
+use super::failover::{
+    DnsHint, FailoverMode, FailoverStatus, FailureDecision, RelaySelector, RelaySwitch,
+};
 use super::frpc_proc::{self, FrpcProc};
 use super::render::render_frpc_toml_for_relay;
 use super::watchdog::DisconnectTracker;
@@ -422,6 +424,9 @@ struct ConnectorState {
     /// Whether `current_relay` is the primary (index 0 of the list the
     /// supervisor runs), republished with it (0.45.7).
     relay_primary: Arc<AtomicBool>,
+    /// 0.46.3: the failover state (rules + what they are doing), published
+    /// by the supervise loop with every decision. `None` for one relay.
+    failover: Arc<Mutex<Option<FailoverStatus>>>,
     /// Whether frps accepted the current child's proxy (holder evidence
     /// for a release).
     proxy: Arc<ProxyRegistration>,
@@ -566,22 +571,133 @@ impl Drop for TestFailbackPolicy {
     }
 }
 
-fn failback_policy() -> super::failover::FailbackPolicy {
+#[cfg(test)]
+static TEST_DNS_MIN_OUTAGE: Mutex<Option<Duration>> = Mutex::new(None);
+
+/// Overrides the DNS-mode minimum outage (150 s) for supervisors started
+/// while it lives (tests only; hold it inside `with_temp_home`).
+#[cfg(test)]
+pub(crate) struct TestDnsMinOutage;
+
+#[cfg(test)]
+impl TestDnsMinOutage {
+    pub(crate) fn install(d: Duration) -> Self {
+        *TEST_DNS_MIN_OUTAGE.lock().unwrap_or_else(|e| e.into_inner()) = Some(d);
+        TestDnsMinOutage
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestDnsMinOutage {
+    fn drop(&mut self) {
+        *TEST_DNS_MIN_OUTAGE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+}
+
+fn failback_policy(mode: FailoverMode) -> super::failover::FailbackPolicy {
     #[cfg(test)]
     {
         if let Some(p) = *TEST_FAILBACK_POLICY.lock().unwrap_or_else(|e| e.into_inner()) {
             return p;
         }
     }
-    super::failover::FailbackPolicy::DEFAULT
+    match mode {
+        FailoverMode::Legacy => super::failover::FailbackPolicy::DEFAULT,
+        FailoverMode::Dns => super::failover::FailbackPolicy::DNS_AWARE,
+    }
 }
 
-fn new_selector(relays: Vec<RelayEndpoint>) -> RelaySelector {
-    RelaySelector::with_policy(
+fn dns_min_outage() -> Duration {
+    #[cfg(test)]
+    {
+        if let Some(d) = *TEST_DNS_MIN_OUTAGE.lock().unwrap_or_else(|e| e.into_inner()) {
+            return d;
+        }
+    }
+    super::failover::DEFAULT_DNS_MIN_OUTAGE
+}
+
+/// The selector for a tunnel start. [`FailoverMode::Legacy`] builds the
+/// 0.46.2 selector exactly; [`FailoverMode::Dns`] adds the DNS gate and the
+/// faster fail-back.
+fn new_selector(relays: Vec<RelayEndpoint>, mode: FailoverMode) -> RelaySelector {
+    let sel = RelaySelector::with_policy(
         relays,
         super::failover::DEFAULT_FAILURE_THRESHOLD,
-        failback_policy(),
-    )
+        failback_policy(mode),
+    );
+    match mode {
+        FailoverMode::Legacy => sel,
+        FailoverMode::Dns => sel.with_dns_gate(dns_min_outage()),
+    }
+}
+
+/// 0.46.3: where the supervise loop gets k2.dev's word on which relay
+/// `*.k2.dev` points at. Never blocks: a fresh list is fetched on the
+/// relay-list refresher thread ([`super::relay_list::request_refresh`],
+/// at most every [`super::relay_list::DNS_HINT_REQUEST_EVERY`]) while the
+/// last known answer is used meanwhile. In legacy mode it never asks and
+/// always says [`DnsHint::Unknown`] (which the legacy rules ignore).
+struct HintSource {
+    mode: FailoverMode,
+    last_request: Option<Instant>,
+}
+
+impl HintSource {
+    fn new(mode: FailoverMode) -> Self {
+        Self {
+            mode,
+            last_request: None,
+        }
+    }
+
+    /// For a decision: ask for a fresh answer (async, rate-limited) and
+    /// return the last known one.
+    fn decide(&mut self) -> DnsHint {
+        if self.mode == FailoverMode::Legacy {
+            return DnsHint::Unknown;
+        }
+        let due = self
+            .last_request
+            .map_or(true, |t| t.elapsed() >= super::relay_list::DNS_HINT_REQUEST_EVERY);
+        if due {
+            self.last_request = Some(Instant::now());
+            super::relay_list::request_refresh("failover check");
+        }
+        self.cached()
+    }
+
+    /// The last known answer, no request.
+    fn cached(&self) -> DnsHint {
+        if self.mode == FailoverMode::Legacy {
+            return DnsHint::Unknown;
+        }
+        super::relay_list::dns_hint(super::relay_list::DNS_HINT_MAX_AGE)
+    }
+}
+
+/// Feed one failure to the selector under its rules and log a hold or
+/// (DNS mode) why it moves. The caller logs the move itself, with the
+/// same line as 0.46.2.
+fn decide_failure(selector: &mut RelaySelector, hints: &mut HintSource) -> Option<RelaySwitch> {
+    let hint = hints.decide();
+    match selector.on_failure_at(Instant::now(), &hint) {
+        FailureDecision::Count => None,
+        FailureDecision::Hold(why) => {
+            crate::log_debug!("[tunnel] failover: {why}");
+            None
+        }
+        FailureDecision::Switch(sw, why) => {
+            if selector.mode() == FailoverMode::Dns {
+                crate::log_debug!("[tunnel] failover: moving to {}: {why}", sw.to);
+            }
+            Some(sw)
+        }
+    }
+}
+
+fn publish_failover(slot: &Mutex<Option<FailoverStatus>>, sel: &RelaySelector) {
+    *slot.lock().unwrap_or_else(|p| p.into_inner()) = sel.failover_status();
 }
 
 /// One health probe of a relay: a plain TCP connect to its frps port.
@@ -665,6 +781,10 @@ pub struct TunnelStatus {
     /// and returns after 3 healthy probes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub relay_primary: Option<bool>,
+    /// Running with 2+ relays only (0.46.3): the failover rules in use
+    /// (`dns` / `legacy`) and what they are doing (e.g. waiting for DNS).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failover: Option<FailoverStatus>,
     /// The relay list on disk: where it came from (`fetched` /
     /// `provisioned` / `default`), its order, and the last k2.dev refresh.
     /// Always emitted.
@@ -694,6 +814,7 @@ impl TunnelStatus {
             repaired: None,
             server_port: None,
             relay_primary: None,
+            failover: None,
             relay_list,
         }
     }
@@ -993,12 +1114,31 @@ pub fn start(
     let relay_primary = Arc::new(AtomicBool::new(true));
     let proxy = Arc::new(ProxyRegistration::new(&cfg));
     let health = Arc::new(FrpcHealth::new());
+    // 0.46.3: the failover rules, read once per start (tunnel.json
+    // `failover`, K2_TUNNEL_FAILOVER wins).
+    let failover_mode = config::failover_mode(&cfg);
+    if let Some(raw) = cfg.failover.as_deref() {
+        if FailoverMode::parse(raw).is_none() {
+            crate::log_debug!(
+                "[tunnel] WARN: tunnel.json failover={raw:?} is not \"dns\" or \"legacy\"; using {}",
+                failover_mode.as_str()
+            );
+        }
+    }
+    if cfg.relay_list().len() > 1 {
+        crate::log_debug!("[tunnel] relay failover rules: {}", failover_mode.as_str());
+    }
+    let failover = Arc::new(Mutex::new(
+        new_selector(cfg.relay_list(), failover_mode).failover_status(),
+    ));
     spawn_supervised(
         frpc,
         child.clone(),
         running.clone(),
         current_relay.clone(),
         relay_primary.clone(),
+        failover.clone(),
+        failover_mode,
         &cfg,
         resolved_port_slot.clone(),
         default_local_port,
@@ -1029,6 +1169,7 @@ pub fn start(
         running,
         current_relay,
         relay_primary,
+        failover,
         proxy,
         health,
     };
@@ -1248,6 +1389,11 @@ fn status_from(st: &ConnectorState) -> TunnelStatus {
         repaired: None,
         server_port: Some(relay.port),
         relay_primary: Some(st.relay_primary.load(Ordering::SeqCst)),
+        failover: st
+            .failover
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone(),
         relay_list,
     }
 }
@@ -1588,6 +1734,8 @@ fn wait_for_exit(
     child: &mut FrpcProc,
     running: &AtomicBool,
     selector: &mut RelaySelector,
+    hints: &mut HintSource,
+    failover_slot: &Mutex<Option<FailoverStatus>>,
     spawned_at: Instant,
     watch: Option<&SessionWatch>,
     local_port: &AtomicU16,
@@ -1596,6 +1744,7 @@ fn wait_for_exit(
     run: &mut RunHealth<'_>,
 ) -> ChildOutcome {
     let mut ticks_since_probe = 0u32;
+    let mut published_up = false;
     // Solo: stop-observability + localPort self-heal — no fail-back. The
     // watchdog only acts when the session is dead AND `tunnel.json` now
     // lists other relays (0.45.7: a refreshed list must reach a box whose
@@ -1699,22 +1848,40 @@ fn wait_for_exit(
         // failure counter.
         if spawned_at.elapsed() >= HEALTHY_UPTIME {
             selector.on_success();
+            // 0.46.3: a hold ("waiting for DNS") ends with a working run.
+            if !published_up {
+                published_up = true;
+                publish_failover(failover_slot, selector);
+            }
         }
         // Fail-back (0.45.7): on a fallback, TCP-probe the primary on the
         // selector's schedule; after enough healthy probes in a row (and
         // its random delay) return to it with one controlled reconnect.
         // Never fires while the primary is in use.
+        // 0.46.3 DNS mode: not while k2.dev says the name points at the
+        // fallback in use (legacy: the hint is always Unknown and the
+        // selector runs the 0.46.2 rules).
         if selector.primary_probe_due(Instant::now()) {
             let primary = selector.primary().clone();
             let healthy = probe_relay(&primary);
-            selector.on_primary_probe(healthy, Instant::now());
+            let hint = hints.decide();
+            selector.on_primary_probe_at(healthy, Instant::now(), &hint);
             crate::log_debug!(
                 "[tunnel] primary relay {primary} probe: {} ({} healthy in a row)",
                 if healthy { "healthy" } else { "unreachable" },
                 selector.probe_streak()
             );
+            if selector.mode() == FailoverMode::Dns
+                && matches!(&hint, DnsHint::Active(r) if r == selector.current())
+            {
+                crate::log_debug!(
+                    "[tunnel] failover: staying on {}, k2.dev says the name points here",
+                    selector.current()
+                );
+            }
+            publish_failover(failover_slot, selector);
         }
-        if let Some(sw) = selector.poll_failback(Instant::now()) {
+        if let Some(sw) = selector.poll_failback_at(Instant::now(), &hints.cached()) {
             child.kill_and_wait();
             return ChildOutcome::FailBack(sw);
         }
@@ -1838,6 +2005,8 @@ fn spawn_supervised(
     running: Arc<AtomicBool>,
     current_relay: Arc<Mutex<RelayEndpoint>>,
     relay_primary: Arc<AtomicBool>,
+    failover_slot: Arc<Mutex<Option<FailoverStatus>>>,
+    failover_mode: FailoverMode,
     cfg: &TunnelConfig,
     resolved_local_port: Arc<AtomicU16>,
     daemon_http_port: u16,
@@ -1883,14 +2052,17 @@ fn spawn_supervised(
             let initial_backoff = Duration::from_millis(500);
             let max_backoff = Duration::from_secs(30);
             let mut backoff = initial_backoff;
-            let mut selector = new_selector(cfg_thread.relay_list());
+            let mut selector = new_selector(cfg_thread.relay_list(), failover_mode);
+            let mut hints = HintSource::new(failover_mode);
             // Republish the selector's current relay into the shared slot
             // status() reads — called after every rotation decision so the
             // reported endpoint tracks the selector (the render source of
-            // truth) even across a failed frpc.toml rewrite.
+            // truth) even across a failed frpc.toml rewrite. 0.46.3: the
+            // failover state rides along.
             let publish_relay = |sel: &RelaySelector| {
                 *current_relay.lock().unwrap_or_else(|p| p.into_inner()) = sel.current().clone();
                 relay_primary.store(sel.on_primary(), Ordering::SeqCst);
+                publish_failover(&failover_slot, sel);
             };
             // 0.45.7: a relay list that changed on disk (k2.dev refresh,
             // pairing, a manual edit) is applied HERE, at a reconnect —
@@ -2013,6 +2185,8 @@ fn spawn_supervised(
                     &mut child,
                     &running,
                     &mut selector,
+                    &mut hints,
+                    &failover_slot,
                     spawned_at,
                     watch.as_deref(),
                     &port_slot,
@@ -2085,8 +2259,11 @@ fn spawn_supervised(
                             selector.on_success();
                             None
                         } else {
-                            selector.on_failure()
+                            // 0.46.3: legacy = exactly on_failure(); DNS
+                            // mode may hold on the primary (logged).
+                            decide_failure(&mut selector, &mut hints)
                         };
+                        publish_failover(&failover_slot, &selector);
                         if let Some(sw) = switch {
                             if sw.is_failback() {
                                 crate::log_debug!(
@@ -2148,7 +2325,11 @@ fn spawn_supervised(
                         // relay answers the redial never rotates — no
                         // thrash). WatchdogKill is never a fail-back:
                         // on_failure() only ever returns rotations.
-                        if let Some(sw) = selector.on_failure() {
+                        // 0.46.3: through decide_failure (legacy = exactly
+                        // on_failure(); DNS mode may hold, logged).
+                        let switch = decide_failure(&mut selector, &mut hints);
+                        publish_failover(&failover_slot, &selector);
+                        if let Some(sw) = switch {
                             crate::log_debug!(
                                 "[tunnel] relay failover: {} -> {} after {} failures",
                                 sw.from,
@@ -2878,6 +3059,8 @@ mod tests {
                     RelayEndpoint { host: "10.0.0.1".to_string(), port: 7000 },
                     RelayEndpoint { host: "10.0.0.2".to_string(), port: 7000 },
                 ],
+                // 0.46.3: the old-path switch — 0.46.2 rotation, end to end.
+                failover: Some("legacy".to_string()),
                 token: "tok".to_string(),
                 subdomain: "rosson".to_string(),
                 e2e: false, // skip the HTTPS-listener path in this unit context
@@ -2936,6 +3119,13 @@ mod tests {
     #[test]
     fn watchdog_kills_stuck_midsession_child_and_supervisor_rotates() {
         with_temp_home(|| {
+            // 0.46.3 default (DNS) rules: k2.dev says the standby is the
+            // live relay, so the 3rd watchdog kill moves there at once.
+            super::super::relay_list::reset_state_for_test();
+            super::super::relay_list::set_dns_for_test(
+                Some(RelayEndpoint { host: "10.0.0.2".to_string(), port: 7000 }),
+                Duration::ZERO,
+            );
             // Fake frpc: one success line, then an error storm, never exits.
             // The storm rate (10 lines/s) crosses the watchdog threshold
             // (3 in 30s) almost immediately.
@@ -3055,6 +3245,10 @@ mod tests {
     #[test]
     fn status_reports_live_relay_after_failover_rotation() {
         with_temp_home(|| {
+            // DNS rules with no k2.dev answer and a zero minimum outage:
+            // the move happens at the plain 3-failure threshold.
+            super::super::relay_list::reset_state_for_test();
+            let _gate = TestDnsMinOutage::install(Duration::ZERO);
             config::save(&TunnelConfig {
                 relays: vec![
                     RelayEndpoint { host: "10.0.0.1".to_string(), port: 7000 },
@@ -3104,6 +3298,212 @@ mod tests {
             assert!(!status().running);
         });
     }
+
+    // ── 0.46.3 DNS-aware failover, end to end through the supervisor ──
+
+    fn ten(last: u8) -> RelayEndpoint {
+        RelayEndpoint { host: format!("10.0.0.{last}"), port: 7000 }
+    }
+
+    fn seed_two_relays() {
+        config::save(&TunnelConfig {
+            relays: vec![ten(1), ten(2)],
+            token: "tok".to_string(),
+            subdomain: "rosson".to_string(),
+            e2e: false, // skip the HTTPS-listener path in this unit context
+            ..Default::default()
+        })
+        .expect("seed two-relay config");
+    }
+
+    fn failover_state() -> Option<(String, String, String)> {
+        status().failover.map(|f| (f.mode, f.state, f.detail))
+    }
+
+    fn dialing(host: &str) -> bool {
+        std::fs::read_to_string(frpc_config_path())
+            .map(|t| t.contains(&format!("serverAddr = \"{host}\"")))
+            .unwrap_or(false)
+    }
+
+    #[test]
+    fn dns_supervisor_stays_on_the_primary_while_k2dev_says_the_standby_is_inactive() {
+        with_temp_home(|| {
+            super::super::relay_list::reset_state_for_test();
+            super::super::relay_list::set_dns_for_test(Some(ten(1)), Duration::ZERO);
+            seed_two_relays();
+            let st = start(None, 57839, &FrpcBinary::Explicit(true_bin())).expect("start");
+            assert!(st.running);
+            let f = st.failover.expect("two relays report failover");
+            assert_eq!((f.mode.as_str(), f.state.as_str()), ("dns", "ready"), "{f:?}");
+
+            // /bin/true fails every dial fast: past the threshold the
+            // supervisor must hold on the primary, not rotate.
+            wait_until("the DNS hold", 30, || {
+                failover_state().is_some_and(|(_, s, _)| s == "waiting_for_dns")
+            });
+            let (_, _, detail) = failover_state().expect("status");
+            assert!(detail.contains("standby inactive per k2.dev"), "{detail}");
+            std::thread::sleep(Duration::from_secs(5));
+            assert!(dialing("10.0.0.1"), "must keep dialing the primary");
+            assert_eq!(status().server_addr.as_deref(), Some("10.0.0.1"));
+            assert_eq!(status().relay_primary, Some(true));
+
+            // The DNS watcher flips the name: the next failure follows it.
+            super::super::relay_list::set_dns_for_test(Some(ten(2)), Duration::ZERO);
+            wait_until("the move to the now-active standby", 60, || dialing("10.0.0.2"));
+            wait_until("status to report the standby", 10, || {
+                status().server_addr.as_deref() == Some("10.0.0.2")
+            });
+            assert_eq!(status().relay_primary, Some(false));
+            assert_eq!(failover_state().expect("status").1, "on_fallback");
+            stop("test").expect("stop");
+            super::super::relay_list::reset_state_for_test();
+        });
+    }
+
+    #[test]
+    fn dns_supervisor_with_k2dev_silent_waits_the_minimum_outage_then_moves() {
+        with_temp_home(|| {
+            super::super::relay_list::reset_state_for_test(); // no answer: Unknown
+            let _gate = TestDnsMinOutage::install(Duration::from_secs(6));
+            seed_two_relays();
+            let started = Instant::now();
+            start(None, 57839, &FrpcBinary::Explicit(true_bin())).expect("start");
+            wait_until("the DNS hold", 30, || {
+                failover_state().is_some_and(|(_, s, _)| s == "waiting_for_dns")
+            });
+            let (_, _, detail) = failover_state().expect("status");
+            assert!(detail.contains("did not say"), "{detail}");
+            assert!(dialing("10.0.0.1"), "held on the primary first");
+            wait_until("the move after the minimum outage", 60, || dialing("10.0.0.2"));
+            assert!(
+                started.elapsed() >= Duration::from_secs(6),
+                "moved before the minimum outage: {:?}",
+                started.elapsed()
+            );
+            stop("test").expect("stop");
+        });
+    }
+
+    #[test]
+    fn dns_supervisor_with_k2dev_silent_never_moves_inside_150s() {
+        // The production minimum (no override): a fast-failing primary for
+        // ~10 s never rotates when k2.dev gives no answer.
+        with_temp_home(|| {
+            super::super::relay_list::reset_state_for_test();
+            seed_two_relays();
+            start(None, 57839, &FrpcBinary::Explicit(true_bin())).expect("start");
+            wait_until("the DNS hold", 30, || {
+                failover_state().is_some_and(|(_, s, _)| s == "waiting_for_dns")
+            });
+            std::thread::sleep(Duration::from_secs(8));
+            assert!(dialing("10.0.0.1"), "must not leave the primary inside 150 s");
+            assert_eq!(status().relay_primary, Some(true));
+            stop("test").expect("stop");
+        });
+    }
+
+    #[test]
+    fn dns_supervisor_fails_back_fast_once_k2dev_points_the_name_at_the_primary() {
+        with_temp_home(|| {
+            super::super::relay_list::reset_state_for_test();
+            // Fast DNS-mode timing: probe every 1 s, 2 healthy probes.
+            let _policy = TestFailbackPolicy::install(super::super::failover::FailbackPolicy {
+                probe_every: Duration::from_secs(1),
+                probe_spread: Duration::ZERO,
+                healthy_probes: 2,
+                failback_delay_max: Duration::ZERO,
+            });
+            let primary = std::net::TcpListener::bind("127.0.0.1:0").expect("bind primary");
+            let p_port = primary.local_addr().expect("addr").port();
+            let fallback = crate::test_env::ClosedPort::new();
+            let f_port = fallback.port();
+            let p_ep = RelayEndpoint { host: "127.0.0.1".to_string(), port: p_port };
+            let f_ep = RelayEndpoint { host: "127.0.0.1".to_string(), port: f_port };
+            // The name is on the standby (DNS flipped during the outage).
+            super::super::relay_list::set_dns_for_test(Some(f_ep.clone()), Duration::ZERO);
+
+            let dir = crate::test_env::unique_temp_path("fake-frpc-dns-failback");
+            std::fs::create_dir_all(&dir).expect("mk dir");
+            let script = dir.join("frpc-pick.sh");
+            crate::test_env::write_executable(
+                &script,
+                &format!(
+                    "#!/bin/sh\nport=$(grep '^serverPort' \"$2\" | tr -dc 0-9)\n\
+                     if [ \"$port\" = \"{p_port}\" ] && [ ! -e '{allow}' ]; then exit 1; fi\n\
+                     exec sleep 600\n",
+                    allow = dir.join("allow").display(),
+                ),
+            );
+            config::save(&TunnelConfig {
+                relays: vec![p_ep.clone(), f_ep.clone()],
+                token: "tok".to_string(),
+                subdomain: "rosson".to_string(),
+                e2e: false,
+                ..Default::default()
+            })
+            .expect("seed two-relay config");
+            start(None, 57839, &FrpcBinary::Explicit(script)).expect("start");
+            wait_until("failover to the active standby", 30, || {
+                status().server_port == Some(f_port)
+            });
+            // The primary answers TCP again, but k2.dev still says the
+            // name is on the standby: going back would take the box off
+            // its public name, so it stays.
+            std::fs::write(dir.join("allow"), b"").expect("allow primary");
+            wait_until("the name-here hold", 15, || {
+                failover_state().is_some_and(|(_, _, d)| d.contains("points here"))
+            });
+            std::thread::sleep(Duration::from_secs(4));
+            assert_eq!(status().server_port, Some(f_port), "no fail-back while the name is here");
+
+            // k2.dev: the name is back on the primary → 2 healthy probes.
+            super::super::relay_list::set_dns_for_test(Some(p_ep), Duration::ZERO);
+            wait_until("fail-back to the primary", 30, || status().server_port == Some(p_port));
+            assert_eq!(status().relay_primary, Some(true));
+            assert_eq!(failover_state().expect("status").1, "ready");
+            stop("test").expect("stop");
+            drop(primary);
+            let _ = std::fs::remove_dir_all(&dir);
+            super::super::relay_list::reset_state_for_test();
+        });
+    }
+
+    #[test]
+    fn legacy_switch_reports_legacy_and_never_asks_k2dev() {
+        with_temp_home(|| {
+            super::super::relay_list::reset_state_for_test();
+            // Even a k2.dev answer naming the primary is ignored in legacy.
+            super::super::relay_list::set_dns_for_test(Some(ten(1)), Duration::ZERO);
+            let _env = crate::test_env::EnvVar::set(config::FAILOVER_ENV, "legacy");
+            seed_two_relays();
+            let st = start(None, 57839, &FrpcBinary::Explicit(true_bin())).expect("start");
+            let f = st.failover.expect("two relays report failover");
+            assert_eq!((f.mode.as_str(), f.state.as_str()), ("legacy", "legacy"));
+            wait_until("the 0.46.2 rotation after 3 failures", 30, || dialing("10.0.0.2"));
+            stop("test").expect("stop");
+            super::super::relay_list::reset_state_for_test();
+        });
+    }
+
+    #[test]
+    fn solo_relay_reports_no_failover() {
+        with_temp_home(|| {
+            config::save(&TunnelConfig {
+                server_addr: "9.9.9.9".to_string(),
+                token: "tok".to_string(),
+                subdomain: "rosson".to_string(),
+                e2e: false,
+                ..Default::default()
+            })
+            .expect("seed");
+            let st = start(None, 57839, &FrpcBinary::Explicit(true_bin())).expect("start");
+            assert_eq!(st.failover, None);
+            let _ = stop("test");
+        });
+    }
+
 
     /// A fake frpc that stays up (a healthy, connected tunnel) and records
     /// each launch in `<dir>/spawns`.
@@ -3362,6 +3762,8 @@ mod tests {
                     RelayEndpoint { host: "127.0.0.1".to_string(), port: p_port },
                     RelayEndpoint { host: "127.0.0.1".to_string(), port: f_port },
                 ],
+                // The 0.45.7/0.46.2 probe-driven fail-back, end to end.
+                failover: Some("legacy".to_string()),
                 token: "tok".to_string(),
                 subdomain: "rosson".to_string(),
                 e2e: false,
@@ -4171,6 +4573,8 @@ mod tests {
                         port: 7000,
                     },
                 ],
+                // Rotation-timing independent of the DNS gate.
+                failover: Some("legacy".to_string()),
                 token: "tok".to_string(),
                 subdomain: "rosson".to_string(),
                 e2e: false,

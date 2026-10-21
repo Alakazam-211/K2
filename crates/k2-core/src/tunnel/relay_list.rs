@@ -14,6 +14,19 @@
 //! outage. Any non-200 (401 bad/missing token, 503 lookup failed, …) keeps
 //! the old list.
 //!
+//! **Live relay (0.46.3, k2-dev-web #20)** — additive under `v:1`: each
+//! relay may carry `"active": true|false` (true = the `*.k2.dev` wildcard
+//! points at that relay's host right now) plus a top-level
+//! `"active_checked_at"`. When k2.dev's DNS check is unknown both are
+//! omitted. Exactly one `true` among OUR listed relays is the only "known"
+//! answer; omitted, all `false`, two `true` or a non-boolean flag all mean
+//! unknown. The answer is kept in memory only (never in `tunnel.json`) and
+//! read by the tunnel failover through [`dns_hint`], which never does I/O;
+//! the failover asks for a fresh fetch via [`request_refresh`] at most
+//! every [`DNS_HINT_REQUEST_EVERY`] (k2.dev caches its check for 15 s).
+//! Unknown fields stay ignored (no `deny_unknown_fields`), so older
+//! daemons read the new body unchanged.
+//!
 //! **When** — at daemon start (after the vault holder is installed, before
 //! the tunnel auto-start), every `refresh_s` (default 6 h, ± 10 %), right
 //! after any relay switch ([`request_refresh`] from the connector), and
@@ -98,6 +111,11 @@ struct WireList {
     relays: Option<Vec<WireRelay>>,
     #[serde(default)]
     refresh_s: Option<i64>,
+    /// 0.46.3 (k2-dev-web #20): unix seconds of k2.dev's DNS check behind
+    /// the `active` flags. Omitted when the check is unknown. Loose type:
+    /// a malformed value only drops the hint, never the list.
+    #[serde(default)]
+    active_checked_at: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -108,6 +126,11 @@ struct WireRelay {
     /// a clear message rather than a parse error.
     #[serde(default)]
     port: Option<i64>,
+    /// 0.46.3 (k2-dev-web #20): true when the `*.k2.dev` wildcard points
+    /// at this relay right now. Omitted on every relay when unknown. Loose
+    /// type for the same reason as `active_checked_at`.
+    #[serde(default)]
+    active: Option<serde_json::Value>,
 }
 
 /// A list that passed validation.
@@ -117,6 +140,35 @@ pub struct ValidRelayList {
     pub relays: Vec<RelayEndpoint>,
     /// `refresh_s`, clamped.
     pub refresh: Duration,
+    /// 0.46.3: the relay `*.k2.dev` points at right now, per k2.dev's DNS
+    /// check — `Some` only when exactly one listed relay says
+    /// `"active": true` (see [`active_relay`]). `None` = unknown (an old
+    /// server, the check failed, none or several marked active).
+    pub active: Option<RelayEndpoint>,
+    /// `active_checked_at` (unix seconds) when `active` is known.
+    pub active_checked_at: Option<u64>,
+}
+
+/// The relay the `active` flags name, or `None` (unknown) unless exactly
+/// one flag is `true` and every flag present is a boolean. Omitted on all
+/// relays (today's server, or k2.dev's DNS check failed), all `false`
+/// (the wildcard points at neither relay) and two `true` all count as
+/// unknown; the failover then falls back to its 150 s rule.
+fn active_relay(flags: &[Option<serde_json::Value>], relays: &[RelayEndpoint]) -> Option<RelayEndpoint> {
+    let mut found = None;
+    for (flag, relay) in flags.iter().zip(relays) {
+        match flag {
+            None | Some(serde_json::Value::Bool(false)) => {}
+            Some(serde_json::Value::Bool(true)) => {
+                if found.is_some() {
+                    return None; // two marked active
+                }
+                found = Some(relay.clone());
+            }
+            Some(_) => return None, // not a boolean: don't guess
+        }
+    }
+    found
 }
 
 /// True for an IP literal (v4 or v6) or a DNS hostname (labels 1–63 of
@@ -165,7 +217,9 @@ pub fn parse_and_validate(body: &str) -> Result<ValidRelayList, String> {
     }
     let mut seen = HashSet::new();
     let mut relays = Vec::with_capacity(wire_relays.len());
+    let mut flags = Vec::with_capacity(wire_relays.len());
     for (i, r) in wire_relays.into_iter().enumerate() {
+        flags.push(r.active);
         let host = r.host.unwrap_or_default();
         if !valid_host(&host) {
             return Err(format!("relay #{i}: invalid host {host:?}"));
@@ -184,7 +238,17 @@ pub fn parse_and_validate(body: &str) -> Result<ValidRelayList, String> {
         Some(s) if s > 0 => Duration::from_secs(s as u64).clamp(MIN_REFRESH, MAX_REFRESH),
         _ => DEFAULT_REFRESH,
     };
-    Ok(ValidRelayList { relays, refresh })
+    let active = active_relay(&flags, &relays);
+    let active_checked_at = match (&active, wire.active_checked_at) {
+        (Some(_), Some(serde_json::Value::Number(n))) => n.as_u64(),
+        _ => None,
+    };
+    Ok(ValidRelayList {
+        relays,
+        refresh,
+        active,
+        active_checked_at,
+    })
 }
 
 // ── Fetch ─────────────────────────────────────────────────────────────
@@ -334,6 +398,11 @@ struct RefreshState {
     logged_error: Option<String>,
     /// Attempts made (tests / diagnostics).
     attempts: u64,
+    /// 0.46.3: what the last successful fetch said about where
+    /// `*.k2.dev` points — (when, in this process's monotonic clock; the
+    /// active relay or `None` for unknown; k2.dev's `active_checked_at`).
+    /// A failed fetch leaves it to age out ([`dns_hint`]).
+    dns: Option<(std::time::Instant, Option<RelayEndpoint>, Option<u64>)>,
 }
 
 fn state() -> &'static Mutex<RefreshState> {
@@ -392,6 +461,12 @@ pub fn refresh_once() -> RefreshOutcome {
         None => {
             lock_state().attempts += 1;
             fetch(&url, &token).and_then(|list| {
+                // 0.46.3: the DNS hint counts even if saving the list fails.
+                lock_state().dns = Some((
+                    std::time::Instant::now(),
+                    list.active.clone(),
+                    list.active_checked_at,
+                ));
                 persist_if_changed(&list.relays, &token)
                     .map(|wrote| (list, wrote))
                     .map_err(FetchError::Persist)
@@ -475,6 +550,47 @@ pub struct RelayListStatus {
     pub notice: Option<String>,
     /// The refresh interval in use, seconds.
     pub refresh_s: u64,
+    /// 0.46.3: the relay `*.k2.dev` pointed at per the last successful
+    /// fetch (`host:port`). Absent when k2.dev did not say (today's
+    /// server, its DNS check failed, none or two marked active).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active: Option<String>,
+    /// 0.46.3: k2.dev's `active_checked_at` behind `active` (unix s).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_checked_at: Option<u64>,
+}
+
+/// 0.46.3: how old a k2.dev answer about the live relay may be and still
+/// steer the failover. The connector asks for a fresh one at most every
+/// [`DNS_HINT_REQUEST_EVERY`] while it is deciding.
+pub const DNS_HINT_MAX_AGE: Duration = Duration::from_secs(60);
+
+/// 0.46.3: the fastest the failover asks k2.dev for a fresh list. k2.dev
+/// caches its DNS check for 15 s; asking faster gains nothing.
+pub const DNS_HINT_REQUEST_EVERY: Duration = Duration::from_secs(20);
+
+/// 0.46.3: what the last successful fetch, if no older than `max_age`,
+/// said about where `*.k2.dev` points. Never does I/O: the fetch runs on
+/// the refresher thread ([`request_refresh`]), so a slow or failed k2.dev
+/// never blocks the tunnel's reconnect loop; the last known value is used
+/// meanwhile and ages out to [`DnsHint::Unknown`].
+pub fn dns_hint(max_age: Duration) -> super::failover::DnsHint {
+    let st = lock_state();
+    match &st.dns {
+        Some((at, Some(relay), _)) if at.elapsed() <= max_age => {
+            super::failover::DnsHint::Active(relay.clone())
+        }
+        _ => super::failover::DnsHint::Unknown,
+    }
+}
+
+/// Plant a DNS answer as if a fetch had just returned it (tests).
+#[cfg(test)]
+pub(crate) fn set_dns_for_test(active: Option<RelayEndpoint>, age: Duration) {
+    let at = std::time::Instant::now()
+        .checked_sub(age)
+        .expect("test age fits the monotonic clock");
+    lock_state().dns = Some((at, active, None));
 }
 
 /// Build the status block for `cfg` (no I/O beyond the in-memory state).
@@ -498,6 +614,12 @@ pub fn status_for(cfg: &TunnelConfig) -> RelayListStatus {
         last_error: st.last_error,
         notice: st.refused_at.map(|_| NOTICE_NOT_SERVED.to_string()),
         refresh_s: st.refresh.unwrap_or(DEFAULT_REFRESH).as_secs(),
+        active: st
+            .dns
+            .as_ref()
+            .and_then(|(_, a, _)| a.as_ref())
+            .map(|r| r.to_string()),
+        active_checked_at: st.dns.as_ref().and_then(|(_, a, c)| a.as_ref().and(*c)),
     }
 }
 
@@ -896,6 +1018,219 @@ mod tests {
         assert_eq!(r(r#","refresh_s":7200"#), Duration::from_secs(7200));
         assert_eq!(r(""), DEFAULT_REFRESH);
         assert_eq!(r(r#","refresh_s":-3"#), DEFAULT_REFRESH);
+    }
+
+    // ── 0.46.3: the live-relay signal (k2-dev-web #20, merged 25f816f) ──
+
+    /// The "known" body, verbatim from the live k2.dev code.
+    const KNOWN: &str = r#"{"v":1,"relays":[{"host":"178.156.232.105","port":7000,"role":"primary","active":true},{"host":"40.160.53.25","port":7000,"role":"standby","active":false}],"refresh_s":21600,"ts":1792606947,"active_checked_at":1792606947}"#;
+
+    /// The "unknown" variant: the same body with no `active` on either
+    /// relay and no `active_checked_at` (DoH check failed / resolvers
+    /// disagree).
+    const UNKNOWN: &str = r#"{"v":1,"relays":[{"host":"178.156.232.105","port":7000,"role":"primary"},{"host":"40.160.53.25","port":7000,"role":"standby"}],"refresh_s":21600,"ts":1792606947}"#;
+
+    fn with_flags(a: &str, b: &str, extra: &str) -> String {
+        format!(
+            r#"{{"v":1,"relays":[{{"host":"178.156.232.105","port":7000,"role":"primary"{a}}},{{"host":"40.160.53.25","port":7000,"role":"standby"{b}}}],"refresh_s":21600,"ts":1792606947{extra}}}"#
+        )
+    }
+
+    #[test]
+    fn known_fixture_names_the_primary_as_active() {
+        let l = parse_and_validate(KNOWN).expect("the live known body is valid");
+        assert_eq!(l.relays, both(), "the list itself is unchanged by the new fields");
+        assert_eq!(l.active, Some(ep("178.156.232.105", 7000)));
+        assert_eq!(l.active_checked_at, Some(1_792_606_947));
+    }
+
+    #[test]
+    fn known_fixture_with_the_standby_active() {
+        let body = with_flags(r#","active":false"#, r#","active":true"#, r#","active_checked_at":1792606947"#);
+        let l = parse_and_validate(&body).expect("valid");
+        assert_eq!(l.active, Some(ep("40.160.53.25", 7000)));
+    }
+
+    #[test]
+    fn unknown_fixture_is_unknown() {
+        let l = parse_and_validate(UNKNOWN).expect("the unknown body is valid");
+        assert_eq!(l.relays, both());
+        assert_eq!(l.active, None);
+        assert_eq!(l.active_checked_at, None);
+    }
+
+    #[test]
+    fn old_server_body_is_unknown() {
+        // Today's (pre-#20) body: no `active`, no `active_checked_at`.
+        let l = parse_and_validate(GOOD).expect("valid");
+        assert_eq!(l.relays, both());
+        assert_eq!(l.active, None);
+    }
+
+    #[test]
+    fn two_relays_marked_active_is_unknown() {
+        let body = with_flags(r#","active":true"#, r#","active":true"#, r#","active_checked_at":1792606947"#);
+        let l = parse_and_validate(&body).expect("the list stays valid");
+        assert_eq!(l.relays, both());
+        assert_eq!(l.active, None, "two active relays: don't guess");
+        assert_eq!(l.active_checked_at, None);
+    }
+
+    #[test]
+    fn every_relay_inactive_is_unknown() {
+        // The wildcard points at neither relay.
+        let body = with_flags(r#","active":false"#, r#","active":false"#, r#","active_checked_at":1792606947"#);
+        let l = parse_and_validate(&body).expect("the list stays valid");
+        assert_eq!(l.active, None);
+        assert_eq!(l.active_checked_at, None);
+    }
+
+    #[test]
+    fn a_non_boolean_active_flag_is_unknown_and_keeps_the_list() {
+        let body = with_flags(r#","active":"yes""#, "", "");
+        let l = parse_and_validate(&body).expect("a bad hint never drops the list");
+        assert_eq!(l.relays, both());
+        assert_eq!(l.active, None);
+    }
+
+    #[test]
+    fn active_on_a_relay_not_in_our_list_never_becomes_a_target() {
+        // k2.dev lists a relay this box doesn't run: the parsed hint names
+        // it, but the failover only moves to relays in ITS OWN list.
+        let body = r#"{"v":1,"relays":[{"host":"178.156.232.105","port":7000,"role":"primary","active":false},{"host":"203.0.113.9","port":7000,"role":"standby","active":true}],"refresh_s":21600,"ts":1792606947,"active_checked_at":1792606947}"#;
+        let l = parse_and_validate(body).expect("valid");
+        assert_eq!(l.active, Some(ep("203.0.113.9", 7000)));
+        let mut sel = crate::tunnel::failover::RelaySelector::with_policy_seeded(
+            both(),
+            3,
+            crate::tunnel::failover::FailbackPolicy::DNS_AWARE,
+            5,
+        )
+        .with_dns_gate(crate::tunnel::failover::DEFAULT_DNS_MIN_OUTAGE);
+        let hint = crate::tunnel::failover::DnsHint::Active(l.active.clone().expect("named"));
+        let t0 = std::time::Instant::now();
+        for s in 0..140u64 {
+            let d = sel.on_failure_at(t0 + Duration::from_secs(s), &hint);
+            assert!(
+                !matches!(d, crate::tunnel::failover::FailureDecision::Switch(..)),
+                "an unlisted active relay must not trigger a move ({s}s): {d:?}"
+            );
+        }
+        assert_eq!(sel.current(), &ep("178.156.232.105", 7000));
+    }
+
+    #[test]
+    fn a_fetched_known_list_feeds_the_failover_hint_and_status() {
+        with_temp_home(|| {
+            reset_state_for_test();
+            seed("k2c_good");
+            assert_eq!(dns_hint(DNS_HINT_MAX_AGE), crate::tunnel::failover::DnsHint::Unknown);
+            let srv = FakeServer::start(200, KNOWN);
+            let _u = crate::test_env::EnvVar::set(RELAY_LIST_URL_ENV, &srv.url);
+            let out = refresh_once();
+            assert_eq!(out, RefreshOutcome::Updated(both()));
+            assert_eq!(
+                dns_hint(DNS_HINT_MAX_AGE),
+                crate::tunnel::failover::DnsHint::Active(ep("178.156.232.105", 7000))
+            );
+            let cfg = config::load().expect("load");
+            let st = status_for(&cfg);
+            assert_eq!(st.active.as_deref(), Some("178.156.232.105:7000"));
+            assert_eq!(st.active_checked_at, Some(1_792_606_947));
+            // The on-disk list never carries the hint.
+            let raw = std::fs::read_to_string(config::config_path()).expect("read tunnel.json");
+            assert!(!raw.contains("active"), "{raw}");
+        });
+    }
+
+    #[test]
+    fn a_fetched_unknown_list_clears_the_hint() {
+        with_temp_home(|| {
+            reset_state_for_test();
+            seed("k2c_good");
+            set_dns_for_test(Some(ep("178.156.232.105", 7000)), Duration::ZERO);
+            let srv = FakeServer::start(200, UNKNOWN);
+            let _u = crate::test_env::EnvVar::set(RELAY_LIST_URL_ENV, &srv.url);
+            assert_eq!(refresh_once(), RefreshOutcome::Updated(both()));
+            assert_eq!(dns_hint(DNS_HINT_MAX_AGE), crate::tunnel::failover::DnsHint::Unknown);
+            assert_eq!(status_for(&config::load().expect("load")).active, None);
+        });
+    }
+
+    #[test]
+    fn the_hint_ages_out_to_unknown() {
+        with_temp_home(|| {
+            reset_state_for_test();
+            set_dns_for_test(Some(ep("40.160.53.25", 7000)), Duration::from_secs(30));
+            assert_eq!(
+                dns_hint(DNS_HINT_MAX_AGE),
+                crate::tunnel::failover::DnsHint::Active(ep("40.160.53.25", 7000)),
+                "a 30 s old answer is still used"
+            );
+            set_dns_for_test(Some(ep("40.160.53.25", 7000)), Duration::from_secs(61));
+            assert_eq!(
+                dns_hint(DNS_HINT_MAX_AGE),
+                crate::tunnel::failover::DnsHint::Unknown,
+                "a stale answer must not steer the failover"
+            );
+            reset_state_for_test();
+        });
+    }
+
+    #[test]
+    fn a_failed_fetch_keeps_the_last_known_hint_until_it_ages_out() {
+        with_temp_home(|| {
+            reset_state_for_test();
+            seed("k2c_good");
+            set_dns_for_test(Some(ep("178.156.232.105", 7000)), Duration::from_secs(5));
+            let srv = FakeServer::start(503, r#"{"error":"Lookup failed."}"#);
+            let _u = crate::test_env::EnvVar::set(RELAY_LIST_URL_ENV, &srv.url);
+            assert!(matches!(refresh_once(), RefreshOutcome::Failed(FetchError::Http(503))));
+            assert_eq!(
+                dns_hint(DNS_HINT_MAX_AGE),
+                crate::tunnel::failover::DnsHint::Active(ep("178.156.232.105", 7000)),
+                "the last known value is used meanwhile"
+            );
+            reset_state_for_test();
+        });
+    }
+
+    #[test]
+    fn fetch_timeouts_cover_k2devs_slow_dns_check() {
+        // A cache miss on k2.dev can take ~1.5 s while it runs its DNS
+        // check; the fetch runs off the reconnect loop (refresher thread).
+        assert!(HTTP_TIMEOUT >= Duration::from_secs(5), "{HTTP_TIMEOUT:?}");
+        assert!(CONNECT_TIMEOUT >= Duration::from_secs(5), "{CONNECT_TIMEOUT:?}");
+        assert!(DNS_HINT_REQUEST_EVERY >= Duration::from_secs(15), "k2.dev caches 15 s");
+    }
+
+    #[test]
+    fn a_slow_k2dev_never_blocks_reading_the_hint() {
+        // A fake k2.dev that never answers: a refresh on another thread
+        // hangs on it, while dns_hint() (what the reconnect loop calls)
+        // returns at once with the last known value.
+        with_temp_home(|| {
+            reset_state_for_test();
+            seed("k2c_good");
+            set_dns_for_test(Some(ep("178.156.232.105", 7000)), Duration::ZERO);
+            let silent = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+            let url = format!("http://{}/api/tunnel/relays", silent.local_addr().expect("addr"));
+            let _u = crate::test_env::EnvVar::set(RELAY_LIST_URL_ENV, &url);
+            let t = std::thread::spawn(refresh_once);
+            std::thread::sleep(Duration::from_millis(300));
+            assert!(!t.is_finished(), "setup: the fetch must still be hanging");
+            let started = std::time::Instant::now();
+            let hint = dns_hint(DNS_HINT_MAX_AGE);
+            assert!(started.elapsed() < Duration::from_millis(100), "dns_hint must not wait on I/O");
+            assert_eq!(
+                hint,
+                crate::tunnel::failover::DnsHint::Active(ep("178.156.232.105", 7000))
+            );
+            let out = t.join().expect("refresh thread");
+            assert!(matches!(out, RefreshOutcome::Failed(FetchError::Network(_))), "{out:?}");
+            drop(silent);
+            reset_state_for_test();
+        });
     }
 
     // ── refresh_once against a fake server ──

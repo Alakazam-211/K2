@@ -368,6 +368,12 @@ describe('A3’s real projection details', () => {
     expect(text('permission-state-line')).toBe(`Allowed by you, from the desktop, ${permissionTime(1761061200)}`)
   })
 
+  it('buttons follow the options A3 offers this viewer: none offered, none drawn', () => {
+    draw(permissionDoc({ options: [] }))
+    expect(screen.queryByTestId('permission-allow')).toBeNull()
+    expect(screen.queryByTestId('permission-deny')).toBeNull()
+  })
+
   it('a batch item’s note and Turn off again name the item', async () => {
     const actions = actionsMock()
     const waiting = batchDoc({ viewer: { ...VIEWERS.lee, canAnswerAll: false } })

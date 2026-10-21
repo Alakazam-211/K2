@@ -431,6 +431,7 @@ function ItemOutcome({
   resultMessage,
   nowSec,
   batchItem,
+  offered = true,
 }: {
   item: PermissionItem
   viewer: PermissionViewer
@@ -439,7 +440,9 @@ function ItemOutcome({
   resultMessage: string | null
   nowSec: number
   batchItem: boolean
-}): JSX.Element {
+  /** The daemon offers this viewer a label now (`choice.options`). */
+  offered?: boolean
+}): JSX.Element | null {
   const approver = viewer.mode === 'approve' && viewer.canAnswer
   const open = item.state === 'pending' || (item.state === 'already_done' && !item.answer)
   // A batch item's note and undo name the item (A2's routes take `item`).
@@ -458,6 +461,7 @@ function ItemOutcome({
         </>
       )
     }
+    if (!offered) return null
     return actions ? (
       <AnswerControls item={item} actions={actions} batchItem={batchItem} />
     ) : (
@@ -475,7 +479,7 @@ function ItemOutcome({
         </div>
       )}
       {item.state === 'approved' && resultMessage && <Muted testId="permission-result">{resultMessage}</Muted>}
-      {open && item.state === 'already_done' && approver && actions && (
+      {open && item.state === 'already_done' && approver && actions && offered && (
         <CloseButton onClose={() => actions.answer(batchItem ? { answer: PERMISSION_LABEL.close, item: item.requestId } : { answer: PERMISSION_LABEL.close })} />
       )}
       {undo && undoFn && <UndoButton label={undo.label} onUndo={() => (forItem ? undoFn(forItem) : undoFn())} />}
@@ -514,11 +518,16 @@ export interface PermissionCardProps {
   from: string
   /** Absent: drawn read-only ("Answer this in the agent's Thread"). */
   actions: PermissionCardActions | null
+  /** `choice.options`: the labels the daemon offers THIS viewer now (A3).
+   *  Empty (a wait viewer, "applying"): no buttons, whatever the view says. */
+  options?: { label: string }[]
   nowSec?: number
 }
 
 /** One permission request (`action.id = "permission"`). */
-export function PermissionCard({ view, resultMessage, from, actions, nowSec }: PermissionCardProps): JSX.Element {
+export function PermissionCard({ view, resultMessage, from, actions, options, nowSec }: PermissionCardProps): JSX.Element {
+  // The daemon draws the options per viewer; no label offered, no button.
+  const offered = options === undefined || options.length > 0
   const now = nowSec ?? Math.floor(Date.now() / 1000)
   const agent = permissionAgent(view, from)
   const approver = view.viewer.mode === 'approve' && view.viewer.canAnswer
@@ -549,6 +558,7 @@ export function PermissionCard({ view, resultMessage, from, actions, nowSec }: P
         resultMessage={resultMessage}
         nowSec={now}
         batchItem={false}
+        offered={offered}
       />
       {expiry && <Muted testId="permission-expiry">{expiry}</Muted>}
       {approver && <SettingsLink item={view} actions={actions} />}

@@ -521,7 +521,7 @@
    {
     "name": "db default-major",
     "usage": "k2 db default-major <major> [--json]",
-    "description": "Owner: pin the Postgres major k2 db create uses without --major (K2's default is 17). Unsupported or past-EOL majors exit 3. Agents exit 3."
+    "description": "Owner: pin the Postgres major k2 db create uses without --major. New boxes start on 17; an existing box keeps its current major until the owner moves it here (an agent with the Postgres versions switch may only suggest it). Unsupported or past-EOL majors exit 3. Agents exit 3."
    },
    {
     "name": "db status",

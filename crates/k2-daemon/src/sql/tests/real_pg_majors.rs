@@ -187,8 +187,12 @@ fn real_pg_majors_side_by_side() {
     let (pa, path_a) = mk("a");
     let (pb, path_b) = mk("b");
 
-    // A on 16 (explicit), B on the default (17).
-    let a = ops::create_database_on(ops, &secrets, &pa, 1, None, None, Some(16));
+    // A with no --major on this upgraded 16 box: stays on 16 (PRD Q8).
+    // Then the owner moves the default (`k2 db default-major 17`) and B,
+    // also with no --major, lands on 17.
+    let a = ops::create_database(ops, &secrets, &pa, 1, None, None);
+    let moved = crate::sql::routes::handle_server_default_major(br#"{"major":17}"#);
+    c.check("owner moves the default to 17", want(moved.status == "200 OK", moved.body.clone()));
     let b = ops::create_database(ops, &secrets, &pb, 1, None, None);
     let (a, b) = match (a, b) {
         (Ok(a), Ok(b)) => (a, b),
@@ -198,7 +202,7 @@ fn real_pg_majors_side_by_side() {
     let name_b = b["name"].as_str().unwrap().to_string();
     let dsn_a = a["dsn"].as_str().unwrap().to_string();
     let dsn_b = b["dsn"].as_str().unwrap().to_string();
-    c.check("create: A on 16, B on 17 (default)", want(a["major"] == 16 && b["major"] == 17, format!("{a} {b}")));
+    c.check("create (no --major): A on 16 before, B on 17 after default-major 17", want(a["major"] == 16 && b["major"] == 17, format!("{a} {b}")));
     c.check("DSN ports follow the record", want(dsn_a.contains(":5432/") && dsn_b.contains(":5433/"), format!("{dsn_a} {dsn_b}")));
     c.check("A's DSN reaches a 16 server", server_major_via_dsn(&dsn_a, 16).and_then(|m| want(m == 16, format!("{m}"))));
     c.check("B's DSN reaches a 17 server", server_major_via_dsn(&dsn_b, 17).and_then(|m| want(m == 17, format!("{m}"))));

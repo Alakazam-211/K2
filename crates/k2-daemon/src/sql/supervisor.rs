@@ -480,6 +480,7 @@ pub fn status_json(include_health: bool) -> serde_json::Value {
         "upgradeAvailable": majors["upgradeAvailable"],
         "defaultMajor": majors["defaultMajor"],
         "defaultMajorPinned": majors["defaultMajorPinned"],
+        "defaultMajorSource": majors["defaultMajorSource"],
         "supportedMajors": majors["supportedMajors"],
     })
 }
@@ -515,7 +516,7 @@ pub fn majors_json() -> serde_json::Value {
             })
         })
         .collect();
-    let (default_major, pinned) = cluster::default_major_in(&conn);
+    let (default_major, source) = cluster::default_major_source_in(&conn);
     serde_json::json!({
         "clusters": clusters.iter().map(cluster::Cluster::json).collect::<Vec<_>>(),
         "databases": dbs.iter().map(|(id, name, m)| serde_json::json!({
@@ -525,7 +526,8 @@ pub fn majors_json() -> serde_json::Value {
         })).collect::<Vec<_>>(),
         "upgradeAvailable": upgrades,
         "defaultMajor": default_major,
-        "defaultMajorPinned": pinned,
+        "defaultMajorPinned": source == "set",
+        "defaultMajorSource": source,
         "supportedMajors": pg_major::SUPPORTED,
     })
 }

@@ -225,18 +225,61 @@ fn ensure_cluster_records_what_the_helper_made() {
 }
 
 #[test]
-fn default_major_is_17_until_the_owner_pins_one() {
+fn default_major_follows_the_box_until_the_owner_moves_it() {
     let _g = crate::sql::sql_server_test_lock();
+    // An existing 16 box (unset default): the 5432 cluster's major, never
+    // a silent 17 (PRD Q8; keep today's path until the new one is proven).
     reset(Some(16));
-    assert_eq!(default_major(), (17, false));
+    let source = |_: ()| {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        default_major_source_in(&conn)
+    };
+    assert_eq!(default_major(), (16, true));
+    assert_eq!(source(()), (16, "primary"));
     {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        set_default_major_in(&conn, 16).unwrap();
+        set_default_major_in(&conn, 17).unwrap();
         assert_eq!(set_default_major_in(&conn, 18).unwrap_err().code(), "unsupported_major");
         assert_eq!(set_default_major_in(&conn, 14).unwrap_err().code(), "unknown_major");
     }
-    assert_eq!(default_major(), (16, true));
+    assert_eq!(default_major(), (17, true), "after k2 db default-major 17");
+    assert_eq!(source(()), (17, "set"));
+    // A fresh box (no Postgres major read yet): K2's new-install major.
+    reset(None);
+    assert_eq!(default_major(), (17, false));
+    assert_eq!(source(()), (17, "new-install"));
+}
+
+/// The 0.46.2 → 0.46.3 upgrade of a 16 box: 0201 recorded 16/main on
+/// 5432 and pinned the default to 16. `k2 db create` with no `--major`
+/// lands on 16 (5432), asks the helper for nothing new, creates no
+/// cluster and carries no note. The same holds with the default unset.
+#[test]
+fn an_upgraded_16_box_keeps_creating_on_16() {
+    let _g = crate::sql::sql_server_test_lock();
+    for pinned in [true, false] {
+        reset(Some(16));
+        record(16, 5432, "k2");
+        if pinned {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute("UPDATE sql_server SET default_major = 16 WHERE id = 1", []).unwrap();
+        }
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        let (pid, _) = insert_project(if pinned { "up16-pinned" } else { "up16-unset" });
+        let v = ops::create_database(&ops, &secrets, &pid, 1, None, None).unwrap();
+        let name = v["name"].as_str().unwrap().to_string();
+        assert_eq!(v["major"], 16, "pinned={pinned}: {v}");
+        assert!(v["dsn"].as_str().unwrap().contains("@127.0.0.1:5432/"), "{v}");
+        assert!(v.get("majorNote").is_none(), "{v}");
+        assert_eq!(major_of(&name), Some(16));
+        assert!(lines_with(&ops, "ensure-cluster").is_empty(), "no new cluster asked for");
+        assert!(lines_with(&ops, "--cluster").is_empty(), "today's argv on 5432");
+        assert_eq!(list().len(), 1, "no cluster recorded beyond 16/main");
+    }
 }
 
 #[test]
@@ -271,7 +314,12 @@ fn every_caller_goes_through_the_resolver() {
     let (p17, path17) = insert_project("pg17");
     let (p16, _path16) = insert_project("pg16");
 
-    // Default (17, recorded): no --major needed.
+    // The owner moved the default (`k2 db default-major 17`): no --major
+    // needed for 17 from here on.
+    assert_eq!(default_major(), (16, true), "before: the 5432 cluster's major");
+    let r = crate::sql::routes::handle_server_default_major(br#"{"major":17}"#);
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    assert_eq!(default_major(), (17, true));
     let v = ops::create_database(&ops, &secrets, &p17, 1, None, None).unwrap();
     let name17 = v["name"].as_str().unwrap().to_string();
     assert_eq!(v["major"], 17);
@@ -354,16 +402,23 @@ fn every_caller_goes_through_the_resolver() {
 #[test]
 fn create_major_choice_and_refusals() {
     let _g = crate::sql::sql_server_test_lock();
-    reset(Some(16));
+    // A box whose Postgres major was never read: K2's new-install default
+    // (17) isn't there and the helper is too old, so the 5432 cluster,
+    // with a note.
+    reset(None);
     let ops = FakeSystemOps::baked();
     let secrets = MemSecretStore::default();
-    let (pa, _) = insert_project("pick-a");
-    // K2's default (17) isn't on this box and the helper is too old: the
-    // 5432 cluster, with a note.
-    let v = ops::create_database(&ops, &secrets, &pa, 1, None, None).unwrap();
-    assert_eq!(v["major"], 16);
+    let (p0, _) = insert_project("pick-0");
+    let v = ops::create_database(&ops, &secrets, &p0, 1, None, None).unwrap();
+    assert!(v["major"].is_null(), "{v}");
     let note = v["majorNote"].as_str().unwrap();
     assert!(note.contains("Postgres 17") && note.contains("k2 db upgrade"), "{note}");
+    // An existing 16 box: 16, no note.
+    reset(Some(16));
+    let (pa, _) = insert_project("pick-a");
+    let v = ops::create_database(&ops, &secrets, &pa, 1, None, None).unwrap();
+    assert_eq!(v["major"], 16);
+    assert!(v.get("majorNote").is_none(), "{v}");
     // The test database follows the live one.
     let t = ops::create_test_database(&ops, &secrets, &pa, 1, None).unwrap();
     assert_eq!(t["major"], 16);
@@ -410,8 +465,9 @@ fn status_lists_majors_and_upgrades() {
     db_row("d-b", "ws_b", Some(17));
     let v = crate::sql::supervisor::majors_json();
     assert_eq!(v["clusters"].as_array().unwrap().len(), 2);
-    assert_eq!(v["defaultMajor"], 17);
+    assert_eq!(v["defaultMajor"], 16, "an existing 16 box");
     assert_eq!(v["defaultMajorPinned"], false);
+    assert_eq!(v["defaultMajorSource"], "primary");
     let up = v["upgradeAvailable"].as_array().unwrap();
     assert_eq!(up.len(), 1, "{v}");
     assert_eq!(up[0]["name"], "ws_a");
@@ -433,15 +489,45 @@ fn create_on_a_non_default_major_needs_the_switch_for_agents() {
     let agent = Some(crate::session_token::HookPrincipal { workspace_uuid: pid.clone(), agent_address: "a".into() });
     let as_agent =
         |m: u32| crate::caller_workspace::with_request_principal(agent.clone(), || crate::sql::routes::may_choose_major(&pid, m));
-    let refused = as_agent(16).unwrap_err();
+    let refused = as_agent(17).unwrap_err();
     assert_eq!(refused.status, "403 Forbidden");
     assert!(refused.body.contains("db_upgrade_off"), "{}", refused.body);
-    assert!(as_agent(17).is_ok(), "the default major needs no switch");
-    assert!(crate::sql::routes::may_choose_major(&pid, 16).is_ok(), "the owner token");
+    assert!(as_agent(16).is_ok(), "the default major (this 16 box's) needs no switch");
+    assert!(crate::sql::routes::may_choose_major(&pid, 17).is_ok(), "the owner token");
     {
         let db = k2_core::db::shared();
         let conn = db.lock();
         conn.execute("UPDATE projects SET agents_can_upgrade_postgres = 1 WHERE id = ?1", [&pid]).unwrap();
     }
-    assert!(as_agent(16).is_ok(), "with the switch on");
+    assert!(as_agent(17).is_ok(), "with the switch on");
+}
+
+/// `k2 db default-major` is the owner's: an Owner-floor POST, GET is 405,
+/// and agent passports are denied by the `/cli/db/server/` prefix (an
+/// agent with the Postgres versions switch may only suggest it).
+#[test]
+fn default_major_is_owner_only() {
+    use crate::routes::route_policy::{lookup, Floor};
+    let row = lookup("/cli/db/server/default-major").expect("policy row");
+    assert_eq!(row.post, Some(Floor::Owner));
+    assert_eq!(row.get, None);
+    assert!(!crate::session_token::is_agent_verb("/cli/db/server/default-major"));
+    let get = crate::sql_routes::dispatch("/cli/db/server/default-major", &Default::default()).expect("claimed");
+    assert_eq!(get.status, "405 Method Not Allowed");
+    assert!(
+        crate::sql::versions_access::decide(
+            &crate::sql::versions_access::Who::Agent {
+                project_id: "p".into(),
+                session_id: "s".into(),
+                local: true,
+                sandboxed: false
+            },
+            crate::sql::versions_access::VersionsAct::DefaultMajor,
+            Some("p"),
+            false,
+            true,
+        )
+        .is_err(),
+        "the switch does not grant default-major"
+    );
 }

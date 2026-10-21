@@ -120,7 +120,7 @@ async fn solo_is_today_plus_the_servers_feature() {
     let mut ca = a.next_conn().await;
     let o = offer_of(&ca.until(|f| matches!(f, Frame::Offer(_))).await);
     assert!(o.share.is_none(), "nobody shares this node");
-    for f in [k2_node_proto::admin::FEATURE_ADMIN, k2_node_proto::admin::FEATURE_SELF_UPDATE, k2_node_proto::admin::FEATURE_HEALTH, k2_node_proto::share::FEATURE_SERVERS] {
+    for f in [k2_node_proto::admin::FEATURE_ADMIN, k2_node_proto::admin::FEATURE_SELF_UPDATE, k2_node_proto::admin::FEATURE_HEALTH, k2_node_proto::share::FEATURE_SERVERS, k2_node_proto::share::FEATURE_QUEUE] {
         assert!(has(&o, f), "{f} in {:?}", o.features);
     }
     assert!(n.node.tenants().len() == 1 && status(&n).servers.is_empty() && status(&n).servers_error.is_none());
@@ -183,7 +183,7 @@ async fn a_second_server_enrols_by_sas_and_sees_only_its_own() {
     for f in [k2_node_proto::admin::FEATURE_ADMIN, k2_node_proto::admin::FEATURE_SELF_UPDATE, k2_node_proto::admin::FEATURE_HEALTH] {
         assert!(!has(&ob, f), "B is offered no {f} (V52): {:?}", ob.features);
     }
-    assert!(has(&ob, k2_node_proto::share::FEATURE_SERVERS) && has(&ob, frames::FEATURE_JOB_WALL));
+    assert!(has(&ob, k2_node_proto::share::FEATURE_SERVERS) && has(&ob, k2_node_proto::share::FEATURE_QUEUE) && has(&ob, frames::FEATURE_JOB_WALL), "a protocol-3 server is told the node keeps a queue: {:?}", ob.features);
     assert!(ob.control_by.is_none(), "no person's name to another server");
     assert_ne!(ob.ledger_id, n.node.offer(&n.node.owner()).ledger_id, "per-server ledgers");
     assert!(t1.pin.lock().unwrap().as_ref().unwrap().confirmed);
@@ -377,8 +377,16 @@ async fn pause_resume_and_revoke_now_act_on_that_server_only() {
     let mut rc = c.clone();
     rc.now = k2_node::util::now();
     servers::run(&rc, "servers.revoke", &serde_json::json!({"server": "b.k2.dev", "now": true})).unwrap();
-    let last = cb.until(|f| matches!(f, Frame::Offer(o) if o.share.as_ref().is_some_and(|s| s.state == ServerStatus::Revoked))).await;
-    assert!(matches!(last.last(), Some(Frame::Offer(_))));
+    // B hears how its stopped job ended (and gets its receipt) before its
+    // session closes: a server that never hears counts the job lost and
+    // retries it.
+    let seen = run_to_receipt(&mut cb, "r1").await;
+    let end = states_of(&seen, "r1").last().cloned().expect("r1's final state reaches B");
+    assert_eq!((end.state, end.reason.as_deref()), (JobState::Cancelled, Some(codes::SHARE_REVOKED)));
+    let revoked = |f: &Frame| matches!(f, Frame::Offer(o) if o.share.as_ref().is_some_and(|s| s.state == ServerStatus::Revoked));
+    if !seen.iter().any(revoked) {
+        cb.until(revoked).await;
+    }
     assert!(cb.wait_closed(Duration::from_secs(10)).await, "B's session closes");
     let row = eventually("B's job to stop", || t1.ledger.lock().unwrap().get("r1", 1).unwrap().filter(|r| r.state.is_terminal())).await;
     assert_eq!((row.state, row.reason.as_deref()), (JobState::Cancelled, Some(codes::SHARE_REVOKED)));
@@ -387,6 +395,49 @@ async fn pause_resume_and_revoke_now_act_on_that_server_only() {
     assert_eq!(b.attaches.load(std::sync::atomic::Ordering::SeqCst), 1, "a revoked server is never dialled again");
     ca.send(Frame::Cancel(frames::Cancel { job_id: "a1".into(), generation: 1, reason: "cancelled".into() }));
     run_to_receipt(&mut ca, "a1").await;
+}
+
+/// §4.3: a plain revoke (no `--now`) lets B's running job finish. B's
+/// session stays open only to report it (state and receipt), takes no new
+/// work meanwhile, and then closes with a last offer saying revoked.
+#[cfg(target_os = "macos")]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_plain_revoke_lets_running_jobs_finish_and_report() {
+    let mut a = Fake::start().await;
+    let mut b = Fake::start().await;
+    let n = start_node(&a, "srv-revoke-finish", "", walled(Wall::Seatbelt)).await;
+    let mut ca = a.next_conn().await;
+    ready(&mut ca).await;
+    pin_second(&n, &b, 1, "node-b");
+    write_shared(&n, 1, &prefix(&b.key), "b.k2.dev", ShareState::Active, None);
+    let mut cb = b.next_conn().await;
+    ready(&mut cb).await;
+    let c = ctx(&n);
+    let bplan = |job: &str, argv: &[&str]| {
+        let mut p = plan(job, argv);
+        p.node_id = "node-b".into();
+        assign(p, 1)
+    };
+    cb.send(Frame::Assign(bplan("f1", &["/bin/sh", "-c", "echo b; sleep 4; echo done"])));
+    cb.until(|f| matches!(f, Frame::State(s) if s.job_id == "f1" && s.state == JobState::Running)).await;
+
+    let mut rc = c.clone();
+    rc.now = k2_node::util::now();
+    servers::run(&rc, "servers.revoke", &serde_json::json!({"server": "b.k2.dev"})).unwrap();
+    cb.until(|f| matches!(f, Frame::Offer(o) if o.share.as_ref().is_some_and(|s| s.state == ServerStatus::Revoked))).await;
+    // Still open while its job runs, and it takes no new work.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert!(!cb.wait_closed(Duration::from_millis(1)).await, "B's session stays open while its job runs");
+    cb.send(Frame::Assign(bplan("f2", &["/bin/echo", "late"])));
+    let late = cb.until(|f| matches!(f, Frame::State(s) if s.job_id == "f2")).await;
+    let late = states_of(&late, "f2").last().cloned().unwrap();
+    assert!(late.state != JobState::Running && late.state != JobState::Done, "a revoked share starts nothing: {late:?}");
+    assert!(n.node.running_by_tenant().get(&1).is_some_and(|v| v == &vec!["f1".to_string()]), "f1 runs on");
+
+    let seen = run_to_receipt(&mut cb, "f1").await;
+    assert_eq!(states_of(&seen, "f1").last().unwrap().state, JobState::Done, "f1 finished and B heard so");
+    assert!(cb.wait_closed(Duration::from_secs(10)).await, "then B's session closes");
+    assert!(n.node.owner().ledger.lock().unwrap().all().unwrap().is_empty(), "the owner was never touched");
 }
 
 /// §4.3, V64, P7 (node half): revoke `--wipe` stops the server's running
@@ -430,6 +481,16 @@ async fn a_wiped_slot_is_reused_fresh() {
     rc.now = k2_node::util::now();
     let r = servers::run(&rc, "servers.revoke", &serde_json::json!({"server": "slot:1", "wipe": true})).unwrap();
     assert_eq!(r["wiped"], serde_json::json!([1]), "{r}");
+    // B hears its job ended (cancelled/share_revoked, with its receipt) and
+    // that its share is revoked before its session ends: a server that
+    // never hears counts the job lost and retries it.
+    let seen = run_to_receipt(&mut cb, "w1").await;
+    let end = states_of(&seen, "w1").last().cloned().expect("w1's final state reaches B");
+    assert_eq!((end.state, end.reason.as_deref()), (JobState::Cancelled, Some(codes::SHARE_REVOKED)));
+    let revoked = |f: &Frame| matches!(f, Frame::Offer(o) if o.share.as_ref().is_some_and(|s| s.state == ServerStatus::Revoked));
+    if !seen.iter().any(revoked) {
+        cb.until(revoked).await;
+    }
     assert!(cb.wait_closed(Duration::from_secs(10)).await, "B's session ends");
     eventually("B's slot forgotten", || n.node.tenant(1).is_none().then_some(())).await;
     assert!(n.node.running_by_tenant().get(&1).is_none(), "B's job stopped");

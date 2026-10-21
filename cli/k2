@@ -32980,83 +32980,41 @@ THE FULL GUIDE
   k2 zen guide gardens               start here
   k2 zen guide example --list        whole files you can pipe
 
-USING THE WHOLE CANVAS
-  On a full canvas ([layout] canvas = "full") K2's top band floats over
-  a custom widget and drags the window. The widget takes clicks there
-  with k2.canvas.setHitRegions(rects) (frame-viewport CSS px, [] clears,
-  at most 32) and drags the window from its own element with
-  k2.window.startDrag() in a mousedown. K2's controls always win, and
-  some drag space always stays. Details: k2 zen guide api.
-
-LOCKED GARDENS
-  A locked Garden: don't edit it. Ask the person. k2 zen garden list
-  marks it locked; K2 puts back any edit to its file, refuses k2 zen
-  changes to it (exit 3, garden_locked), and only the person unlocks
-  it, in Settings → Gardens.
+FULL CANVAS AND LOCKS
+  On [layout] canvas = "full" K2's top band floats over a custom widget:
+  take clicks with k2.canvas.setHitRegions(rects), drag the window with
+  k2.window.startDrag() (k2 zen guide api). A locked Garden: don't edit it;
+  K2 refuses (exit 3, garden_locked) and only the person unlocks it.
 
 WRITE THROUGH K2, OR PROPOSE
-  k2 zen garden put <id> --from page.toml   (checked; refused if it has errors)
-  k2 zen widget put <name> index.html --from index.html
-  Without "Manage Gardens and data sources" a put is a PROPOSAL: nothing
-  is written until a person approves it (k2 zen proposals; withdraw your
-  own with reject). With it (the owner/admin turns it on per agent:
-  Settings → Workspaces → <ws> → Agent) a put writes now, garden new makes
-  a Garden, and you may approve proposals; each act is logged with your
-  session. Never K2's built-in widgets (k2:<name>) or defaults: copy one
-  with k2 zen widget new <name> --from k2:<name>.
+  k2 zen garden put <id> --from page.toml · k2 zen widget put <name> <file> --from <file>
+  Without "Manage Gardens and data sources" a put is a PROPOSAL (k2 zen
+  proposals; a person approves). With it a put writes now, audited. Never
+  K2's built-ins (k2:<name>): copy one with k2 zen widget new --from.
+  Changing the person's widget: they get a "Keep as mine" note.
 
 THE WIDGET DEV LOOP (keep your widget outside ~/.k2)
   k2 zen validate --dir ./board              check; writes nothing
-  k2 zen widget preview --dir ./board --config sources=fleet
-                                             K2's own "Widget preview" Garden,
-                                             never one of the person's
-  k2 zen widget preview --dir ./board --shot board.png --theme dark
-                                             a headless PNG (sample data or
-                                             --data; writes nothing else)
-  k2 zen widget put board --dir ./board      the whole folder, one checked
-                                             write (errors: nothing written;
-                                             --prune drops files it lacks)
-  k2 zen validate --garden <id> --from page.toml   a staged page, unwritten
-  k2 zen widget errors board                 runtime errors and refusals
-  k2 zen widget errors board --clear         drop the ones validate ignores
-  validate never signs (--widget --sign does) and "pending" (not run in a
-  Zen window yet) exits 0; --strict keeps exit 2 for a loop. Runtime
-  errors fail validate only for a placed widget's saved version in the
-  last 24 h; older ones, or an unplaced widget's, are warnings. Without the
-  switch, put --dir is ONE proposal for the folder (approved and written
-  as one); preview needs the switch.
+  k2 zen widget preview --dir ./board        on K2's own Garden, never one of the person's
+  k2 zen widget preview --dir ./board --shot board.png --theme dark   headless PNG
+  k2 zen widget put board --dir ./board      one checked write (ONE proposal without the switch)
+  k2 zen widget errors board [--clear]       runtime errors; --clear drops stale ones
+  validate never signs (--widget --sign does); "pending" exits 0, --strict keeps exit 2.
+  Runtime errors fail only a placed widget's saved version in the last 24 h.
 
-THE WIDGET SDK (0.46.1, catalog 11)
-  Errors: every refusal is a K2Error (err instanceof k2.K2Error) with a
-  code from the catalog's closed list, the verb, and retryable (not_bound,
-  rate_limited, unreachable, busy). bad_args: an argument isn't plain data
-  (refused in the frame). bad_shape: a value isn't the verb's shape.
-  Subscribe with a handler object and K2 keeps it alive for you:
-    const stop = k2.sources.subscribe(addr, {
-      data(view) {...}, error(err) {...}, state(s) {...} })
-  It re-subscribes after a retryable refusal (1, 2, 4, 8, 16, then every
-  30 s), normalises a card view (items is a list, fields an object), and
-  calls nothing after stop(). Since 0.46.3 k2.sources.subscribe(addr, cb,
-  onError) retries too (onError sees err.retrying; rate_limited ends it).
-  Light/dark follow the Garden, never the OS: style with --zen-* and
-  [data-zen-scheme=dark]; manifest "colorScheme": "own" opts out.
-  Guards for data you didn't make: k2.shape.view/list/obj/num/str.
-  Charts, offline and pinned: "requires": {"libs": ["uplot@1.6.32"]} (or
-  chart.js@4.5.1, echarts@6.1.0, d3@7.9.0). No CDN, no eval, no imports.
-  Types: sdk/generated/k2.d.ts · docs/zen-contract.md · props: k2-zen skill
+THE WIDGET SDK
+  Refusals are K2Errors with a code and retryable. Subscribe with a handler
+  object ({data, error, state}) and K2 re-subscribes after a retryable
+  refusal; since 0.46.3 k2.sources.subscribe(addr, cb, onError) does too.
+  Light/dark follow the Garden, never the OS (--zen-*, [data-zen-scheme];
+  manifest "colorScheme": "own" opts out). Charts: requires.libs uplot@1.6.32.
 
 THE WIDGET KIT (0.46.3): don't hand-build these, require them
   "k2-thread@1"  K2Thread.mount(el, {look: 'chamfer' | 'glass', address})
-                 a Thread panel to one agent: bubbles, choice cards, Enter
-                 sends, the working tab, the new-messages pill, a narrow
-                 layout, attachments. chamfer = K2's Thread (cut corners,
-                 Garden colours); glass = K2 Companion's round look. Caps
-                 thread:read, thread:post (agents:read for names, counters).
-  "k2-help@1"    K2Help.tip(text, {label, key, title}) → an ⓘ: tooltip on
-                 hover/focus, pinned on click/tap/Enter, a popover past 160
-                 characters; Esc or a tap outside closes. Put explanations
+                 a Thread panel: bubbles, Enter sends, the working tab, the
+                 new-messages pill. chamfer = K2's Thread; glass = Companion.
+  "k2-help@1"    K2Help.tip(text, {label}) → an ⓘ. Put explanations
                  behind an ⓘ, not on the canvas.
-  Both follow the Garden's light/dark, never the computer's.
 
 K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF

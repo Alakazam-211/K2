@@ -148,6 +148,7 @@ fn the_held_actions_are_registered_with_the_code_floors_and_proofs() {
         ("apps.approve", Floor::Owner, Proof::SettingsConfirm { action: ConfirmAction::AppApprove }, "/cli/app/approve"),
         ("mail.approve", Floor::Admin, Proof::Click, "/cli/mail/approvals/approve"),
         ("sources.approve", Floor::Admin, Proof::Click, "/cli/sources/approve"),
+        ("garden.proposal.approve", Floor::GardenOwner, Proof::Click, "/cli/zen/proposals/approve"),
     ];
     for (id, floor, proof, route) in rows {
         let r = super::super::find(id).unwrap_or_else(|| panic!("{id} is registered"));
@@ -470,6 +471,12 @@ fn spec_hash() -> String {
     format!("{:064}", 7)
 }
 
+/// What an agent passes as `spec=`: the first 32 characters (a full 64-hex
+/// hash is refused as secret-shaped by the request's value check today).
+fn spec_arg() -> String {
+    spec_hash()[..super::super::held::SPEC_PREFIX_MIN].to_string()
+}
+
 /// A source `ws`'s agent proposed.
 fn proposed_source(ws: &Ws, secret: Option<&str>, lan: bool) -> String {
     let name = format!("e2src{}", uniq());
@@ -497,7 +504,7 @@ fn sources_approve_activates_plain_sources_as_one_batch() {
     let _home = crate::test_support::TempHome::new();
     let ws = seed("e2sr");
     let (a, b) = (proposed_source(&ws, None, false), proposed_source(&ws, None, false));
-    let v = ask_ok(&ws, "sources.approve", json!({ "source": [a, b], "spec": [spec_hash(), spec_hash()] }));
+    let v = ask_ok(&ws, "sources.approve", json!({ "source": [a, b], "spec": [spec_arg(), spec_arg()] }));
     let id = id_of(&v);
     let card = card_of(&v);
     let vw = view(&ws, &card);
@@ -521,7 +528,7 @@ fn sources_approve_activates_plain_sources_as_one_batch() {
     assert_eq!(last_turn(&ws), format!("[permission:{id}] approved by {admin}: once, for data source {a}, {b}. K2 starts fetching all 2 now."));
 
     // Asking again about active sources: nothing to ask.
-    let (s, v) = ask(&ws, "sources.approve", json!({ "source": a, "spec": spec_hash() }));
+    let (s, v) = ask(&ws, "sources.approve", json!({ "source": a, "spec": spec_arg() }));
     assert_eq!((s.as_str(), &v["status"]), ("200 OK", &json!("already_done")), "{v}");
 }
 
@@ -533,18 +540,19 @@ fn sources_approve_takes_only_plain_unchanged_sources_of_ones_own() {
     let secret = proposed_source(&ws, Some("VERCEL_RO"), false);
     let lan = proposed_source(&ws, None, true);
     for name in [&secret, &lan] {
-        let hint = ask_refused(&ws, "sources.approve", json!({ "source": name, "spec": spec_hash() }));
+        let hint = ask_refused(&ws, "sources.approve", json!({ "source": name, "spec": spec_arg() }));
         assert!(hint.contains("Settings → Gardens → External Data") && hint.ends_with("It can't be requested."), "{hint}");
     }
     let theirs = proposed_source(&other, None, false);
-    assert!(ask_refused(&ws, "sources.approve", json!({ "source": theirs, "spec": spec_hash() })).contains("no source"));
+    assert!(ask_refused(&ws, "sources.approve", json!({ "source": theirs, "spec": spec_arg() })).contains("no source"));
     let plain = proposed_source(&ws, None, false);
     assert!(ask_refused(&ws, "sources.approve", json!({ "source": plain })).contains("needs spec="), "spec= is required");
-    assert!(ask_refused(&ws, "sources.approve", json!({ "source": plain, "spec": [spec_hash(), spec_hash()] })).contains("one spec= per source="));
-    assert!(ask_refused(&ws, "sources.approve", json!({ "source": plain, "spec": "0".repeat(64) })).contains("changed since it was asked"));
+    assert!(ask_refused(&ws, "sources.approve", json!({ "source": plain, "spec": &spec_arg()[..16] })).contains("changed since it was asked"), "a short prefix is not enough");
+    assert!(ask_refused(&ws, "sources.approve", json!({ "source": plain, "spec": [spec_arg(), spec_arg()] })).contains("one spec= per source="));
+    assert!(ask_refused(&ws, "sources.approve", json!({ "source": plain, "spec": "1".repeat(32) })).contains("changed since it was asked"));
 
     // Edited after the ask → stale at the click; nothing is approved.
-    let v = ask_ok(&ws, "sources.approve", json!({ "source": plain, "spec": spec_hash() }));
+    let v = ask_ok(&ws, "sources.approve", json!({ "source": plain, "spec": spec_arg() }));
     let id = id_of(&v);
     {
         let db = k2_core::db::shared();
@@ -555,4 +563,119 @@ fn sources_approve_takes_only_plain_unchanged_sources_of_ones_own() {
     assert_eq!(s, "200 OK", "{a}");
     assert_eq!(row(&id).state, RequestState::Stale);
     assert_eq!(source_row(&plain).status, k2_core::sources::spec::SourceStatus::Proposed);
+}
+
+// ── garden.proposal.approve ─────────────────────────────────────────
+
+struct ZenEnv {
+    _home: crate::test_support::TempHome,
+    _db: k2_core::db::TestDbGuard,
+}
+
+fn zen_env() -> ZenEnv {
+    let home = crate::test_support::TempHome::new();
+    let db = k2_core::db::scoped_for_test();
+    k2_core::zen::ZenFiles::local().setup().expect("zen setup");
+    ZenEnv { _home: home, _db: db }
+}
+
+fn zen(path: &str, owner: bool, caller: &crate::sidecar_routes::Caller, body: Value) -> (String, Value) {
+    let r = crate::zen_routes::handle(path, owner, caller, "test", &HashMap::new(), body.to_string().as_bytes());
+    (r.status.to_string(), serde_json::from_str(&r.body).unwrap_or_else(|e| panic!("{path}: {e}: {}", r.body)))
+}
+
+fn widget_folder(id: &str, body: &str) -> Value {
+    json!([
+        {"name": "manifest.json", "text": format!("{{\"schema\": 1, \"id\": \"{id}\", \"name\": \"Board\", \"caps\": [\"agents:read\"]}}")},
+        {"name": "index.html", "text": format!("<!doctype html><p>{body}</p><script src=\"app.js\"></script>")},
+        {"name": "app.js", "text": "console.log(1)\n"},
+    ])
+}
+
+/// `ws`'s agent (no "Manage Gardens") proposes a new version of `widget`
+/// (which the owner made first).
+fn garden_proposal(ws: &Ws, widget: &str, body: &str) -> String {
+    let agent = crate::sidecar_routes::Caller::Agent(crate::sidecar_routes::AgentCaller {
+        project_id: ws.id.clone(),
+        map_key: None,
+        args: vec![],
+        sandboxed: false,
+    });
+    let (s, v) = zen("/cli/zen/widget/folder/put", false, &agent, json!({ "widget": widget, "files": widget_folder(widget, body) }));
+    assert_eq!(s, "200 OK", "{v}");
+    v["proposal"]["id"].as_str().unwrap_or_else(|| panic!("a proposal: {v}")).to_string()
+}
+
+fn proposal_status(id: &str) -> String {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::zen::agent_edit::get(&conn, id).expect("db").expect("the proposal").status
+}
+
+#[test]
+fn garden_proposal_approve_is_the_gardens_owner_through_the_same_door_as_settings() {
+    let _e = zen_env();
+    let owner_c = crate::sidecar_routes::Caller::Owner;
+    let (s, v) = zen("/cli/zen/widget/folder/put", true, &owner_c, json!({ "widget": "board", "files": widget_folder("board", "v1") }));
+    assert_eq!(s, "200 OK", "{v}");
+    let ws = seed("e2gp");
+    let id = garden_proposal(&ws, "board", "v2");
+
+    let v = ask_ok(&ws, "garden.proposal.approve", json!({ "proposal": id }));
+    let pr = id_of(&v);
+    assert_eq!(v["approvers"], "owner");
+    let card = card_of(&v);
+    let vw = view(&ws, &card);
+    assert_eq!(vw["whatChanges"], format!("Apply {}'s Garden proposal {id}.", ws.handle));
+    assert_eq!(vw["proof"], json!({ "kind": "click" }));
+    assert_eq!(vw["approvers"]["floor"], "owner");
+
+    // An Admin login is not the Garden's owner: at the card and in Settings.
+    let admin = login("e2gpa", Role::Admin);
+    below_floor(answer_as(&admin, &ws, &card, json!({ "answer": "Allow" })), "owner");
+    let (s, v) = zen("/cli/zen/proposals/approve", false, &crate::sidecar_routes::Caller::Login { username: admin.clone() }, json!({ "id": id }));
+    assert_eq!((s.as_str(), v["error"].as_str()), ("403 Forbidden", Some("zen_local_only")), "{v}");
+    assert_eq!(refused_code(apply_as(&pr, &Answerer::Login { user: admin, role: "admin".into() }, None)), "zen_local_only");
+    assert_eq!(proposal_status(&id), "pending");
+
+    // An Owner login (the phone, the web) approves it as the person.
+    let owner = login("e2gpo", Role::Owner);
+    let (s, a) = answer_as(&owner, &ws, &card, json!({ "answer": "Allow", "client": "phone" }));
+    assert_eq!(s, "200 OK", "{a}");
+    assert_eq!(a["action"]["result"]["outcome"], "approved", "{a}");
+    assert_eq!(proposal_status(&id), "approved", "decided by the route");
+    assert_eq!(row(&pr).state, RequestState::Approved);
+    assert_eq!(last_turn(&ws), format!("[permission:{pr}] approved by {owner}: once, for proposal {id}. It is written now."));
+}
+
+#[test]
+fn garden_proposal_approve_follows_the_queue() {
+    let _e = zen_env();
+    let owner_c = crate::sidecar_routes::Caller::Owner;
+    let (s, v) = zen("/cli/zen/widget/folder/put", true, &owner_c, json!({ "widget": "deck", "files": widget_folder("deck", "v1") }));
+    assert_eq!(s, "200 OK", "{v}");
+    let ws = seed("e2gq");
+    let other = seed("e2gr");
+    let theirs = garden_proposal(&other, "deck", "theirs");
+    assert!(ask_refused(&ws, "garden.proposal.approve", json!({ "proposal": theirs })).contains("no Garden proposal"));
+
+    // Rejected in Settings while the card waits → stale.
+    let id = garden_proposal(&ws, "deck", "v2");
+    let v = ask_ok(&ws, "garden.proposal.approve", json!({ "proposal": id }));
+    let pr = id_of(&v);
+    let (s, r) = zen("/cli/zen/proposals/reject", true, &owner_c, json!({ "id": id }));
+    assert_eq!(s, "200 OK", "{r}");
+    let (s, a) = answer_as("owner", &ws, &card_of(&v), json!({ "answer": "Allow" }));
+    assert_eq!(s, "200 OK", "{a}");
+    assert_eq!(row(&pr).state, RequestState::Stale);
+    let status = proposal_status(&id);
+    assert_ne!(status, "pending");
+    assert_eq!(last_turn(&ws), format!("[permission:{pr}] stale: Garden proposal {id} was {status} meanwhile. Nothing was applied."));
+
+    // Approved in Settings first: nothing to ask.
+    let done = garden_proposal(&ws, "deck", "v3");
+    let (s, r) = zen("/cli/zen/proposals/approve", true, &owner_c, json!({ "id": done }));
+    assert_eq!(s, "200 OK", "{r}");
+    let (s, v) = ask(&ws, "garden.proposal.approve", json!({ "proposal": done }));
+    assert_eq!((s.as_str(), &v["status"]), ("200 OK", &json!("already_done")), "{v}");
 }

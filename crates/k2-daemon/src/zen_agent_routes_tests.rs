@@ -498,6 +498,64 @@ fn approving_a_proposal_on_the_persons_widget_asks_keep_as_mine_too() {
     assert_eq!(keep_notes("w-keep-mgr2", "other"), 0);
 }
 
+/// Who may tap a Keep-as-mine card (the settings-cards review, 2026-10-20):
+/// the agent it's about is refused, so is another agent, and so is a
+/// Member login; an Owner login (phone, web) succeeds, at the role floor
+/// of the Settings control. Every refusal leaves the card waiting and the
+/// widget unkept. Other choice cards are untouched (not tested here).
+#[test]
+fn a_keep_card_is_answered_by_an_owner_or_admin_person_only() {
+    let e = env();
+    let mgr = workspace("w-keepw-mgr", true);
+    let _other = workspace("w-keepw-other", false);
+    let conv = pin_chat("w-keepw-mgr");
+    call("/cli/zen/widget/folder/put", true, &Caller::Owner, json!({"widget": "board", "files": folder("board", "v1")}));
+    claim_live(&e.f, "board", 1);
+    let (_, v) = call("/cli/zen/widget/put", false, &mgr, json!({"widget": "board", "file": "app.js", "text": "console.log('agent')\n"}));
+    let id = v["keepCard"]["card"].as_str().expect("a card").to_string();
+    let live = live_hash(&e.f, "board");
+    let unkept = || {
+        let h = k2_core::db::shared();
+        let c = h.lock();
+        k2_core::garden_data::authors::maker_of(&c, "board", &live).expect("maker") != k2_core::garden_data::MadeBy::Owner
+    };
+    let body = json!({"addr": "w-keepw-mgr", "id": id, "answer": "Keep as mine"}).to_string();
+    let passport = |ws: &str| -> HashMap<String, String> {
+        [
+            (crate::caller_workspace::PRINCIPAL_BOUND_KEY.to_string(), "1".to_string()),
+            ("project_id".to_string(), ws.to_string()),
+            ("from".to_string(), ws.to_string()),
+        ]
+        .into()
+    };
+    let refused = |r: &crate::cli_response::CliResponse, who: &str| {
+        assert_eq!(r.status, "403 Forbidden", "{who}: {}", r.body);
+        let v: J = serde_json::from_str(&r.body).expect("json");
+        assert_eq!(v["error"]["code"], "action_card_person_only", "{who}: {v}");
+    };
+    // The agent the card is about.
+    refused(&crate::overlay_routes::dispatch_post("/cli/thread/answer", &passport("w-keepw-mgr"), body.as_bytes()), "its own agent");
+    // Another agent on this server.
+    refused(&crate::overlay_routes::dispatch_post("/cli/thread/answer", &passport("w-keepw-other"), body.as_bytes()), "another agent");
+    // A Member login.
+    k2_core::connect_users::add_user("mel", "password-for-tests-1").expect("add member");
+    k2_core::connect_users::set_role("mel", k2_core::connect_users::Role::Member).expect("member");
+    refused(&crate::overlay_routes::dispatch_post_as("/cli/thread/answer", &HashMap::new(), body.as_bytes(), "mel"), "a member");
+    assert_eq!(card(&conv, &id).status, "pending", "refusals leave the card waiting");
+    assert!(unkept(), "nothing kept by a refused tap");
+    // An Owner login (the phone, the web).
+    k2_core::connect_users::add_user("olga", "password-for-tests-2").expect("add owner");
+    k2_core::connect_users::set_role("olga", k2_core::connect_users::Role::Owner).expect("owner");
+    let r = crate::overlay_routes::dispatch_post_as("/cli/thread/answer", &HashMap::new(), body.as_bytes(), "olga");
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    assert!(!unkept(), "the owner login kept it");
+    let c = card(&conv, &id);
+    assert_eq!((c.status.as_str(), c.answer.as_deref()), ("answered", Some("Keep as mine")));
+    // Single use.
+    let r = crate::overlay_routes::dispatch_post_as("/cli/thread/answer", &HashMap::new(), body.as_bytes(), "olga");
+    assert_eq!(r.status, "409 Conflict", "{}", r.body);
+}
+
 /// Pin a Chat for a workspace: its agent has a Thread the person reads.
 fn pin_chat(project_id: &str) -> String {
     let conv = uuid::Uuid::new_v4().to_string();

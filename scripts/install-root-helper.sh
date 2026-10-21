@@ -262,10 +262,51 @@ too_old() {
 if [ -n "$VERSION" ] && ver_lt "$VERSION" "$ROOT_HELPER_FROM"; then
 	too_old "$VERSION"
 fi
+# boot_status_version: the TOP-LEVEL "version" string of the /boot-status
+# JSON on stdin (at most 64 KiB read). Nested ones (ops.version is "1")
+# are skipped by tracking object/array depth and string state; prints
+# nothing when there is no top-level string "version". awk only (no
+# jq/python3 on a bare box); the caller still checks x.y.z.
+boot_status_version() {
+	head -c 65536 | tr -d '\r\n' | awk '
+	{ s = s $0 }
+	END {
+		n = length(s); d = 0; i = 1; want = 0
+		while (i <= n) {
+			c = substr(s, i, 1)
+			if (c == "\"") {
+				j = i + 1; str = ""
+				while (j <= n) {
+					ch = substr(s, j, 1)
+					if (ch == "\\") { str = str ch substr(s, j + 1, 1); j += 2; continue }
+					if (ch == "\"") break
+					str = str ch; j++
+				}
+				if (j > n) exit 1
+				if (d == 1) {
+					if (want) { print str; exit 0 }
+					k = j + 1
+					while (k <= n && (substr(s, k, 1) == " " || substr(s, k, 1) == "\t")) k++
+					if (str == "version" && substr(s, k, 1) == ":") { want = 1; i = k + 1; continue }
+				}
+				i = j + 1; continue
+			}
+			if (want && c != " " && c != "\t") exit 1
+			if (c == "{" || c == "[") d++
+			else if (c == "}" || c == "]") d--
+			i++
+		}
+		exit 1
+	}' || true
+}
 RUNNING_DAEMON=""
 if [ -n "$DEST_ROOT" ]; then
-	# Hermetic tests only: stand in for the running daemon's answer.
+	# Hermetic tests only: stand in for the running daemon's answer
+	# (a version, or a /boot-status body run through the real parse).
 	RUNNING_DAEMON="${K2_TEST_RUNNING_DAEMON_VERSION:-}"
+	if [ -n "${K2_TEST_BOOT_STATUS_FILE:-}" ]; then
+		RUNNING_DAEMON="$(boot_status_version <"$K2_TEST_BOOT_STATUS_FILE")"
+	fi
 else
 	# Ask the running daemon (its own port file; never execute its binary).
 	_home="$(getent passwd "$RUN_USER" 2>/dev/null | cut -d: -f6 || true)"
@@ -274,7 +315,7 @@ else
 	if [ -n "$_home" ] && [ -f "$_home/.k2/daemon.port" ] && [ ! -L "$_home/.k2/daemon.port" ]; then _port="$(head -c 16 "$_home/.k2/daemon.port" | tr -dc '0-9' | head -c 5)"; fi
 	if [ -n "$_port" ] && command -v curl >/dev/null 2>&1; then
 		RUNNING_DAEMON="$(curl -fsS --max-time 3 "http://127.0.0.1:$_port/boot-status" 2>/dev/null \
-			| grep -o '"version":"[0-9.]*"' | head -n1 | sed 's/.*:"\(.*\)"/\1/' || true)"
+			| boot_status_version || true)"
 	fi
 fi
 if [[ "$RUNNING_DAEMON" =~ $SEMVER_RE ]]; then

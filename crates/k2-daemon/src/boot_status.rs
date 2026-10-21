@@ -778,10 +778,11 @@ pub fn features() -> Vec<&'static str> {
     if k2_core::db::try_shared().is_some() {
         out.push(FEATURE_INBOX_CATCHUP);
     }
-    out.push(FEATURE_BOOT_STATUS_VIEWS);
     if thread_read_ready() {
         out.push(FEATURE_APP_THREAD_PARITY);
     }
+    // Last on purpose: boot_status_views_integration pins it as the tail.
+    out.push(FEATURE_BOOT_STATUS_VIEWS);
     out
 }
 
@@ -847,8 +848,8 @@ mod tests {
                 "thread-read-v1",
                 "homes-sync-v1",
                 "inbox-catchup-v1",
-                "boot-status-views-v1",
-                "app-thread-parity-v1"
+                "app-thread-parity-v1",
+                "boot-status-views-v1"
             ]
         );
     }

@@ -626,6 +626,16 @@ fn emit(tool: Option<Tool>) {
     crate::session_events::emit_llm_accounts_changed(tool.map(|t| t.as_str()));
 }
 
+/// Server sign-in watcher threads still running (each emits its last
+/// `llm_accounts_changed` before it counts down).
+static WATCHERS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// How many sign-in watchers are still running. Tests wait for 0 so a
+/// previous test's sign-in can't emit into the next test's event bus.
+pub fn login_watchers() -> usize {
+    WATCHERS.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 /// Start the login terminal for `entry`. One at a time per account: a
 /// second request returns the running one.
 pub fn start_login(
@@ -730,10 +740,19 @@ pub fn start_login(
     let v = view_of(&login, true);
     lock_logins().insert(login_id.clone(), login);
     let id = login_id.clone();
-    std::thread::Builder::new()
+    WATCHERS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let spawned = std::thread::Builder::new()
         .name(format!("llm-login-{}", &login_id[6..12]))
-        .spawn(move || watch(id, events))
-        .map_err(|e| WalletError::Io(e.to_string()))?;
+        .spawn(move || {
+            watch(id, events);
+            // After the watcher's last event (finish emits), so a caller
+            // waiting on `login_watchers() == 0` sees no late event.
+            WATCHERS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        });
+    if let Err(e) = spawned {
+        WATCHERS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        return Err(WalletError::Io(e.to_string()));
+    }
     emit(Some(tool));
     Ok(v)
 }

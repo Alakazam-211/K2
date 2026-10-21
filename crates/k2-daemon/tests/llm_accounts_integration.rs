@@ -45,6 +45,10 @@ struct TestEnv {
 
 const VARS: &[&str] = &[
     "HOME",
+    "PATH",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "XDG_STATE_HOME",
     "K2_TEST_AGENT_SHIM_DIR",
     "K2_AIRGAP",
     "K2_LLM_LOGIN_LIVE",
@@ -110,6 +114,16 @@ exec /bin/cat
 fn setup() -> TestEnv {
     let guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     k2_core::test_isolation::assert_no_prod_env();
+    // Hermetic across tests: a sign-in an earlier test started (and
+    // cancelled) emits its last llm_accounts_changed from its watcher
+    // thread; wait for every watcher to end so none lands on this test's
+    // event bus (a late `grok` event failed boot-import asserts on a slow
+    // mini). Loud if one never ends.
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    while k2_daemon::llm_accounts_runtime::login_watchers() > 0 {
+        assert!(std::time::Instant::now() < deadline, "a sign-in watcher from an earlier test never ended");
+        std::thread::sleep(Duration::from_millis(50));
+    }
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("clock")
@@ -131,6 +145,9 @@ fn setup() -> TestEnv {
         std::env::remove_var(v);
     }
     std::env::set_var("HOME", &home);
+    // Stub PATH: the shims first, then system tools only, so a real
+    // claude / codex / grok (or its login) on the node can never answer.
+    std::env::set_var("PATH", format!("{}:/usr/bin:/bin:/usr/sbin:/sbin", shim.display()));
     std::env::set_var("K2_TEST_AGENT_SHIM_DIR", &shim);
     k2_core::airgap::set_setting_enabled(false);
     TestEnv { home, log, prev, _guard: guard }
@@ -184,6 +201,26 @@ fn post(port: u16, path: &str, token: &str, body: Value) -> Resp {
 
 fn code(r: &Resp) -> String {
     js(r)["error"]["code"].as_str().unwrap_or_else(|| panic!("error.code: {}", r.body)).to_string()
+}
+
+/// A Connect login with the Admin role (the server-default floor, #7).
+fn admin_login(port: u16, username: &str) -> String {
+    let _ = member_login(port, username);
+    let r = req(
+        port,
+        "POST",
+        &format!("/cli/users/set-role?token={OWNER}"),
+        Some(&format!(r#"{{"username":"{username}","role":"admin"}}"#)),
+    );
+    assert_eq!(r.status, 200, "set-role: {}", r.body);
+    let r = req(
+        port,
+        "POST",
+        "/cli/auth/login",
+        Some(&format!(r#"{{"username":"{username}","password":"password123"}}"#)),
+    );
+    assert_eq!(r.status, 200, "login: {}", r.body);
+    js(&r)["token"].as_str().expect("token").to_string()
 }
 
 fn member_login(port: u16, username: &str) -> String {
@@ -429,8 +466,15 @@ async fn wallet_routes_end_to_end() {
     let refreshed = format!(r#"{{"claudeAiOauth":{{"accessToken":"{MARKER}-at-1b","refreshToken":"{MARKER}-rt-1b","expiresAt":4000000000000}}}}"#);
     std::fs::write(&live, &refreshed).unwrap();
 
-    // Switch: outgoing saved back, target swapped in.
+    // Rosson #7 (0.46.3): a Member can't change the server default; the
+    // live login is untouched.
     let r = post(port, "/cli/llm/accounts/switch", &member, json!({"id": work_id}));
+    assert_eq!(r.status, 403, "a Member's switch is refused: {}", r.body);
+    assert_eq!(js(&r)["error"], "role_required", "{}", r.body);
+    assert_eq!(std::fs::read_to_string(&live).unwrap(), refreshed, "a refused switch changes nothing");
+    // An Admin can. Switch: outgoing saved back, target swapped in.
+    let admin = admin_login(port, "admin1");
+    let r = post(port, "/cli/llm/accounts/switch", &admin, json!({"id": work_id}));
     assert_eq!(r.status, 200, "switch: {}", r.body);
     assert!(!r.body.contains(MARKER));
     let v = js(&r);
@@ -450,7 +494,7 @@ async fn wallet_routes_end_to_end() {
     assert_eq!(cfg["oauthAccount"]["emailAddress"], "second@example.test");
     let claude_doc = js(&get(port, "/cli/llm/accounts/list", OWNER));
     let t = tool_doc(&claude_doc, "claude");
-    assert_eq!(t["switchedBy"], "login:member1", "who made it the default");
+    assert_eq!(t["switchedBy"], "login:admin1", "who made it the default");
     assert!(t["switchedAt"].as_i64().is_some_and(|x| x > 0), "since when: {t}");
     let audit = std::fs::read_to_string(env.home.join(".k2/auth-audit.jsonl")).unwrap_or_default();
     assert!(audit.contains("claude default Default → Work"), "one audit line per switch: {audit}");

@@ -20,7 +20,7 @@ use rusqlite::Connection;
 
 pub use doc::{CardAction, ChoiceBody, ChoiceOption, CollectedMeta, DesignOrigin, HandoffCardBody, ImportedMeta, OverlayDoc, OverlayItem, OverlayLink, PostAuthor, SecretBody, SecretProposal, WidgetOrigin, WidgetPlacementClaim};
 pub use attachments::ThreadAttachment;
-pub use options::{parse_options_value, split_options_csv};
+pub use options::{check_ask_caps, parse_options_value, split_options_csv};
 pub use store::{ExtTxn, OverlayPage, SeqRemap, ThreadDelta};
 pub use transfer::IMPORTED_READ_ONLY;
 

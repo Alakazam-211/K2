@@ -165,6 +165,7 @@ mod tests {
             receipt_ok: None,
             notified_at: None,
             ctl: Default::default(),
+            ..Default::default()
         }
     }
 

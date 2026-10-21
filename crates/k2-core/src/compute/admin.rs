@@ -221,6 +221,9 @@ pub fn insert_request(conn: &Connection, n: &NewRequest<'_>) -> Result<RequestRo
     }
     let digest = request_digest(&json!({"kind": n.kind, "node": n.node_id, "body": n.body})).map_err(|e| (codes::BAD_ARGS, e))?;
     let id = new_request_id().map_err(|e| (codes::BAD_ARGS, e))?;
+    // A `servers.add` carries the new server's enrol-code binding, a
+    // credential for 10 minutes (V79): the request lives no longer.
+    let ttl = if carries_code_binding(n.kind, n.body) { super::proto::share::PENDING_SECS } else { REQUEST_TTL_SECS };
     conn.execute(
         "INSERT INTO compute_admin_requests (id, node_id, kind, class, body_json, digest, summary, reason, proposed_by, \
          proposer_workspace, proposer_session, proposed_at, state, expires_at) \
@@ -238,11 +241,40 @@ pub fn insert_request(conn: &Connection, n: &NewRequest<'_>) -> Result<RequestRo
             n.proposer_workspace,
             n.proposer_session,
             n.now,
-            n.now + REQUEST_TTL_SECS
+            n.now + ttl
         ],
     )
     .map_err(|e| (codes::BAD_ARGS, e.to_string()))?;
     request_by_id(conn, &id).ok_or((codes::REQUEST_NOT_FOUND, "request vanished after insert".into()))
+}
+
+/// Does a request body hold a `servers.add` step (and so an enrol-code
+/// binding)?
+pub fn carries_code_binding(kind: &str, body: &Value) -> bool {
+    steps_of(kind, body).is_ok_and(|steps| steps.iter().any(|s| s.args.get("code_binding").is_some()))
+}
+
+/// `[redacted]` in place of every step's `code_binding` (V79: the binding
+/// is the credential; it never shows in a listing, audit or message).
+pub fn redact_body(body: &Value) -> Value {
+    fn walk(v: &mut Value) {
+        match v {
+            Value::Object(m) => {
+                for (k, x) in m.iter_mut() {
+                    if k == "code_binding" {
+                        *x = Value::String("[redacted]".into());
+                    } else {
+                        walk(x);
+                    }
+                }
+            }
+            Value::Array(a) => a.iter_mut().for_each(walk),
+            _ => {}
+        }
+    }
+    let mut b = body.clone();
+    walk(&mut b);
+    b
 }
 
 pub fn request_by_id(conn: &Connection, id: &str) -> Option<RequestRow> {
@@ -553,12 +585,43 @@ pub fn classify_policy_change(current: &Map<String, Value>, changes: &Map<String
 }
 
 /// The class a request step carries when the owner approves it: the
-/// node's base class, except `policy.set` (re-classed by the node; a
-/// proposed one is treated as a widening, so it carries the owner
-/// signature).
+/// node's base class, except `policy.set` and `servers.limits`
+/// (re-classed by the node; a proposed one is treated as a widening, so it
+/// carries the owner signature).
 pub fn step_class(verb: &str) -> Option<Class> {
     let v = wire::verb(verb)?;
-    Some(if v.name == "policy.set" { Class::Privileged } else { v.base })
+    Some(if v.name == "policy.set" || v.name == super::proto::share::VERB_LIMITS { Class::Privileged } else { v.base })
+}
+
+/// `servers.limits` against the share the node last listed (§4.3, §9):
+/// `Operate` (sent at once) when every change narrows, `Privileged` (held
+/// for the owner's approval) when any field widens or the end date moves
+/// out or is cleared, `Read` when nothing changes. The node classifies
+/// again with the same rule ([`ShareLimits::widens`]).
+///
+/// [`ShareLimits::widens`]: super::proto::share::ShareLimits::widens
+pub fn classify_servers_limits(
+    current: &super::proto::share::ShareLimits,
+    current_expires_at: Option<i64>,
+    args: &super::proto::share::LimitsArgs,
+    now: i64,
+) -> Class {
+    let next = args.set.apply(current);
+    let widens = !next.widens(current).is_empty();
+    let end_wider = match args.for_secs {
+        None => false,
+        // Clearing the end date gives more time.
+        Some(0) => current_expires_at.is_some(),
+        // No end date today = forever: any end date narrows.
+        Some(s) => current_expires_at.is_some_and(|e| now + s > e),
+    };
+    if widens || end_wider {
+        Class::Privileged
+    } else if next == *current && args.for_secs.is_none() {
+        Class::Read
+    } else {
+        Class::Operate
+    }
 }
 
 /// The controller's argument check against the node's catalog
@@ -699,6 +762,33 @@ pub fn summarize(node: &str, verb: &str, args: &Value) -> String {
         "svc.apply" => format!("create or change service {} on {node}", a.get("spec").and_then(|x| x.get("name")).and_then(Value::as_str).unwrap_or("?")),
         "svc.adopt" => format!("adopt the existing {} as a managed service on {node}", s("label")),
         "svc.remove" => format!("remove service {} from {node}", s("name")),
+        "servers.add" => {
+            let trust = s("trust");
+            let until = a.get("for_secs").and_then(Value::as_i64).map(|f| format!(" for {}", super::share::human_secs(f.max(0) as u64))).unwrap_or_default();
+            let lim = a.get("limits").and_then(Value::as_object).filter(|m| !m.is_empty()).map(|m| format!(" ({})", arg_list(m))).unwrap_or_default();
+            format!(
+                "share {node} with the server at {} as {trust}{until}{lim}: it gets its own folders{} and a share of the machine",
+                s("url"),
+                if trust == "team" { ", user" } else { "" }
+            )
+        }
+        "servers.limits" => {
+            let set = a.get("set").and_then(Value::as_object).map(arg_list).unwrap_or_default();
+            let until = match a.get("for_secs").and_then(Value::as_i64) {
+                Some(0) => ", no end date".to_string(),
+                Some(f) => format!(", ends in {}", super::share::human_secs(f as u64)),
+                None => String::new(),
+            };
+            format!("change {}'s share of {node}: {set}{until}", s("server"))
+        }
+        "servers.pause" => format!("pause {} on {node} (its queued jobs wait; running ones finish)", s("server")),
+        "servers.resume" => format!("resume {} on {node}", s("server")),
+        "servers.revoke" => format!(
+            "revoke {} on {node}: cancel its queued jobs{}{}",
+            s("server"),
+            if a.get("now").and_then(Value::as_bool) == Some(true) { ", stop its running jobs" } else { ", let running jobs finish" },
+            if a.get("wipe").and_then(Value::as_bool) == Some(true) { ", wipe its files now" } else { ", wipe its files in 24 h" }
+        ),
         "node.update" => format!("update k2-node on {node} to {}", s("version")),
         "node.rollback" => format!("roll k2-node on {node} back to its previous build"),
         other => format!("{other} on {node}: {}", arg_list(a)),
@@ -1164,6 +1254,61 @@ mod tests {
         assert_eq!(ch(json!({"availability": "plugged_in"})), Class::Privileged);
         assert_eq!(ch(json!({"cpu_cap_percent": 50})), Class::Privileged, "unknown current is not provably narrower");
         assert_eq!(ch(json!({"mem_cap_gb": 8})), Class::Read, "no change");
+    }
+
+    /// §4.3, §9: narrowing a share goes at once; any widening (a bigger
+    /// limit, a class, a later or cleared end date) waits for the owner.
+    #[test]
+    fn servers_limits_classification() {
+        use crate::compute::proto::share::{LimitsArgs, ShareLimits, ShareOverrides, Trust};
+        let cur = ShareLimits::new_server(Trust::Team, false);
+        let args = |set: ShareOverrides, for_secs: Option<i64>| LimitsArgs { server: "baden.k2.dev".into(), set, for_secs };
+        let c = |a: LimitsArgs, exp: Option<i64>| classify_servers_limits(&cur, exp, &a, 1000);
+        assert_eq!(c(args(ShareOverrides { max_queued: Some(5), ..Default::default() }, None), None), Class::Operate);
+        assert_eq!(c(args(ShareOverrides { max_running: Some(2), ..Default::default() }, None), None), Class::Privileged);
+        assert_eq!(c(args(ShareOverrides { max_queued: Some(5), cpu_hours_day: Some(12), ..Default::default() }, None), None), Class::Privileged, "one widening holds the whole change");
+        assert_eq!(c(args(ShareOverrides { max_queued: Some(10), ..Default::default() }, None), None), Class::Read, "no change");
+        assert_eq!(c(args(ShareOverrides::default(), Some(3600)), Some(10_000)), Class::Operate, "an earlier end date narrows");
+        assert_eq!(c(args(ShareOverrides::default(), Some(86_400)), Some(10_000)), Class::Privileged, "a later end date widens");
+        assert_eq!(c(args(ShareOverrides::default(), Some(0)), Some(10_000)), Class::Privileged, "clearing the end date widens");
+        assert_eq!(c(args(ShareOverrides::default(), Some(3600)), None), Class::Operate, "adding an end date narrows");
+        assert_eq!(step_class("servers.limits"), Some(Class::Privileged), "a held limits change carries the owner signature");
+        assert_eq!(step_class("servers.pause"), Some(Class::Operate));
+        assert_eq!(step_class("servers.add"), Some(Class::Privileged));
+        assert_eq!(validate_step("servers.add", &json!({"url": "https://b.k2.dev", "code_binding": "ab", "fp_prefix": "0123456789abcdef", "trust": "team"})).unwrap(), Class::Privileged);
+        assert_eq!(validate_step("servers.add", &json!({"url": "https://b.k2.dev"})).unwrap_err().0, codes::BAD_ARGS);
+    }
+
+    /// V79: the enrol-code binding is a credential: the request expires in
+    /// 10 minutes and no listing shows it.
+    #[test]
+    fn a_servers_add_request_expires_in_ten_minutes_and_hides_the_binding() {
+        let c = crate::db::isolated_test_connection();
+        crate::compute::store::insert_pending_node(&c, "n1", "m", "fp", "pem", &Default::default(), "o", "1", 1).unwrap();
+        let body = json!({"verb": "servers.add", "args": {"url": "https://b.k2.dev", "code_binding": "SECRETBINDING", "fp_prefix": "0123456789abcdef", "trust": "own"}});
+        let n = NewRequest {
+            node_id: "n1",
+            kind: "command",
+            class: Class::Privileged,
+            body: &body,
+            summary: "s",
+            reason: None,
+            proposed_by: "owner",
+            proposer_workspace: None,
+            proposer_session: None,
+            now: 100,
+        };
+        let r = insert_request(&c, &n).unwrap();
+        assert_eq!(r.expires_at, 100 + crate::compute::proto::share::PENDING_SECS);
+        assert!(carries_code_binding(&r.kind, &r.body));
+        let shown = redact_body(&r.body).to_string();
+        assert!(!shown.contains("SECRETBINDING") && shown.contains("[redacted]"), "{shown}");
+        let other = json!({"verb": "gc", "args": {}});
+        let r2 = insert_request(&c, &NewRequest { body: &other, ..n }).unwrap();
+        assert_eq!(r2.expires_at, 100 + REQUEST_TTL_SECS);
+        assert!(summarize("k2n2-m1", "servers.add", &body["args"]).contains("https://b.k2.dev"));
+        assert!(!summarize("k2n2-m1", "servers.add", &body["args"]).contains("SECRET"));
+        assert!(summarize("k2n2-m1", "servers.revoke", &json!({"server": "b", "now": true})).contains("stop its running jobs"));
     }
 
     #[test]

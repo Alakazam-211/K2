@@ -811,6 +811,17 @@ mod unix_impl {
                 let who = crate::compute_routes::who_from_cell(this_session_id, principal);
                 from_cli(crate::sew::routes::handle(p, who, body, params))
             }
+            // `k2 db upgrade` (0.46.3 S5): an agent with "Allow this agent
+            // to manage Postgres versions" checks, moves and rolls back its
+            // own databases, and reads the move's progress, from its tab.
+            // The cell socket is on this box, so the caller is local; the
+            // handler's versions_access gate still refuses a sandboxed
+            // session and everything the switch doesn't grant.
+            p if p == "/cli/db/upgrade" => {
+                let who = crate::compute_routes::who_from_cell(this_session_id, principal);
+                let who = crate::sql::versions_access::Who::from_compute(&who, true);
+                from_cli(crate::sql::pgmove::k2::handle(who, is_post, body, params))
+            }
             p if crate::compute_routes::is_route(p) && !crate::compute_routes::is_socket(p) => {
                 if crate::compute_routes::is_post_route(p) && !is_post {
                     return ("405 Method Not Allowed".to_string(), "application/json", r#"{"error":"POST required"}"#.to_string());

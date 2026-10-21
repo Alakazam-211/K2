@@ -106,12 +106,14 @@ fn exposure_counts_are_pinned() {
     // (app + garden-local). Room-scope 0.46.1: + room.members, app.self and
     // app.usage on both transports and the Garden's widget.self (garden-local).
     // Room-scope R3: + files.stat (GET /cli/fs/stat).
+    // app-room-stream (0.46.3): + the thread.stream socket (app) and the
+    // Garden's thread.inbox (widget, a registered bridge row).
     let garden_local = c.verbs_exposed_to(Exposure::GardenLocal).len();
-    assert_eq!((widget, app, garden_local), (24, 66, 21), "per-exposure verb counts (widget, app, garden-local)");
+    assert_eq!((widget, app, garden_local), (25, 67, 21), "per-exposure verb counts (widget, app, garden-local)");
     assert_eq!(
         c.verbs.len(),
-        128,
-        "today's 37 bridge verbs plus the frame rows theme.changed, canvas.setHitRegions, window.startDrag, sources.*, the 15 Garden data rows, the 66 app rows (5 on both transports) and widget.self"
+        130,
+        "today's 38 bridge verbs (thread.inbox joined in 0.46.3) plus the frame rows theme.changed, canvas.setHitRegions, window.startDrag, sources.*, the 15 Garden data rows, the 67 app rows (5 on both transports) and widget.self"
     );
 }
 
@@ -218,7 +220,7 @@ fn generated_zen_verbs_holds_exactly_the_bridge_rows() {
             None => {}
         }
     }
-    assert_eq!(generated.len(), 37);
+    assert_eq!(generated.len(), 38, "37 plus app-room-stream's thread.inbox (0.46.3)");
 }
 
 // ── TUWA3: no GET side effects, headless ────────────────────────────────

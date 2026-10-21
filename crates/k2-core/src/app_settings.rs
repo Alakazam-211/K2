@@ -294,6 +294,22 @@ where
     })
 }
 
+fn default_push_e2e() -> String {
+    crate::push::e2e::PushE2eMode::DEFAULT.as_wire().to_string()
+}
+
+/// Read path: an unknown `pushE2E` falls back to the default.
+fn de_push_e2e<'de, D>(d: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(match v.as_str().and_then(crate::push::e2e::PushE2eMode::from_wire) {
+        Some(m) => m.as_wire().to_string(),
+        None => default_push_e2e(),
+    })
+}
+
 fn default_true() -> bool {
     true
 }
@@ -644,6 +660,14 @@ pub struct AppSettings {
     /// through K2's push relay and Apple (APNs) or Google (FCM).
     #[serde(default = "default_true")]
     pub push_message_previews: bool,
+    /// End-to-end encrypted pushes (prd-e2e-push-v1 rev 2 §4a, 0.46.3):
+    /// `off` | `sealed-when-supported` (default) | `sealed-only`. Owner
+    /// only (`OWNER_ONLY_KEYS`, `k2 push e2e`). It changes nothing for a
+    /// phone without a registered key; `off` is the instant rollback to
+    /// today's pushes. An unknown value on disk reads as the default
+    /// ([`de_push_e2e`]); [`update`] refuses one. Wire name `pushE2E`.
+    #[serde(rename = "pushE2E", default = "default_push_e2e", deserialize_with = "de_push_e2e")]
+    pub push_e2e: String,
     /// Owner-linked accounts (prd-thread-push-notifications-v1, Rosson
     /// 2026-10-11): Connect usernames that ARE the server owner, e.g. the
     /// login the owner's phone uses. They resolve to the person key
@@ -1155,6 +1179,7 @@ impl Default for AppSettings {
             push_gateway_url: None,
             push_gateway_token: None,
             push_message_previews: true,
+            push_e2e: default_push_e2e(),
             owner_accounts: Vec::new(),
             owner_color: None,
             owner_display_name_carried: false,
@@ -1424,6 +1449,14 @@ pub fn update(mut partial: serde_json::Value) -> Result<AppSettings, String> {
     if let Some(v) = partial.get("completionSoundVolume") {
         if completion_sound_volume_from(v).is_none() {
             return Err(format!("completionSoundVolume must be a number 0-100 (got {v})"));
+        }
+    }
+    if let Some(v) = partial.get("pushE2E") {
+        if v.as_str().and_then(crate::push::e2e::PushE2eMode::from_wire).is_none() {
+            return Err(format!(
+                "pushE2E must be one of {} (got {v})",
+                crate::push::e2e::PUSH_E2E_MODES.join("|")
+            ));
         }
     }
     if let Some(v) = partial.get("completionSound") {

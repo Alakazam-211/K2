@@ -1015,6 +1015,8 @@ async fn handle_one_request(
     // header detection must run while the request head is still borrowed.
     let request_secure = super::http::request_is_secure(&req);
     let web_client_header = super::http::has_web_client_header(&req);
+    // prd-e2e-push-v1 §7.1: a push key must not arrive through the Worker.
+    let push_via_web = super::http::push_key_via_web_path(&req);
 
     let first_line = req.lines().next().unwrap_or("");
     let parts: Vec<&str> = first_line.split_whitespace().collect();
@@ -8363,6 +8365,23 @@ async fn handle_one_request(
         // caller resolution as the POSTs below (owner token → "owner", a
         // live Connect session → its username; never a param). A POST here
         // goes to the arm below, which answers 405.
+        // prd-e2e-push-v1 §4a: `GET /cli/push/devices` (every phone and its
+        // E2E state) and `GET /cli/push/e2e` (the server switch). Owner
+        // only: the owner token or an Owner login.
+        p if !is_post && (p == crate::push_routes::DEVICES_PATH || p == crate::push_routes::E2E_PATH) => {
+            let owner = super::http::owner_role_identity(&query, state.token.as_str()).is_some();
+            let _ = stream.read(&mut buf).await;
+            let p_owned = p.to_string();
+            let result = tokio::task::spawn_blocking(move || crate::push_routes::handle_owner_get(&p_owned, owner))
+                .await
+                .unwrap_or_else(|e| crate::cli_response::CliResponse {
+                    status: "500 Internal Server Error",
+                    content_type: "application/json",
+                    body: serde_json::json!({ "error": format!("worker join: {e}") }).to_string(),
+                });
+            super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
+                .await;
+        }
         p if !is_post && p == crate::push_routes::DEVICE_PATH => {
             let username = if !super::http::token_ok(&query, state.token.as_str()) {
                 None
@@ -8447,14 +8466,21 @@ async fn handle_one_request(
                 .await;
                 return DispatchOutcome::Done;
             };
+            // prd-e2e-push-v1 §4a: the E2E switch and per-device override
+            // are owner-only (the owner token or an Owner login).
+            let push_owner = super::http::owner_role_identity(&query, state.token.as_str()).is_some();
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
             let p_owned = p.to_string();
             let result = tokio::task::spawn_blocking(move || {
-                crate::push_routes::dispatch_post_for_session(
+                crate::push_routes::dispatch_post_ctx(
                     &p_owned,
                     &body_bytes,
                     &username,
-                    session_sid.as_deref(),
+                    &crate::push_routes::PushCallCtx {
+                        session_sid: session_sid.as_deref(),
+                        owner: push_owner,
+                        via_web: push_via_web,
+                    },
                 )
             })
             .await

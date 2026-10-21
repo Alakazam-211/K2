@@ -1460,6 +1460,13 @@ fn run_migrations_through(conn: &Connection, last: Option<&str>) -> Result<()> {
         // 0.46.3 lane; renumber freely on a slip (and edit the
         // migration-order tests below).
         ("0197_agent_app_permissions", include_str!("../../drizzle_sql/0197_agent_app_permissions.sql")),
+        // 0211 — end-to-end encrypted pushes (prd-e2e-push-v1 rev 2, 0.46.3):
+        // `push_device_keys` (a phone's P-256 public key + PSK, the replay
+        // counter, 60-day expiry; FK ON DELETE CASCADE) and the owner's
+        // per-device `push_devices.e2e_override`. Additive, no backfill.
+        // 0198–0210 are reserved by other 0.46.3 lanes; renumber freely on a
+        // slip (and edit the migration-order tests below).
+        ("0211_push_device_keys", include_str!("../../drizzle_sql/0211_push_device_keys.sql")),
         // 0213 — App users' personal wallets (prd-app-user-llm-logins-v1
         // rev 2; 0.46.3): wallet items, the person pin, personal-agent marks
         // and per-App wallet settings. Additive tables only; no secret is
@@ -2181,6 +2188,7 @@ mod tests {
                 "0194_compute_manage",
                 "0195_push_device_session",
                 "0197_agent_app_permissions",
+                "0211_push_device_keys",
                 "0213_person_wallets",
             ],
             "tail migrations out of order: {names:?}"
@@ -2237,6 +2245,7 @@ mod tests {
                 "0194_compute_manage",
                 "0195_push_device_session",
                 "0197_agent_app_permissions",
+                "0211_push_device_keys",
                 "0213_person_wallets",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
@@ -2847,6 +2856,10 @@ mod tests {
             // 0213 (person wallets, 0.46.3) is the newest: its record goes
             // (its tables and indexes are all IF NOT EXISTS).
             conn.execute("DELETE FROM _migrations WHERE name = '0213_person_wallets'", []).unwrap();
+            // 0211 (push device keys, 0.46.3) came before it: its record goes
+            // (its table is IF NOT EXISTS; re-adding the override column is
+            // skipped as a duplicate column).
+            conn.execute("DELETE FROM _migrations WHERE name = '0211_push_device_keys'", []).unwrap();
             // 0197 (agent App permissions, 0.46.3) came before it: its
             // record goes (its projects columns stay and re-adding them is
             // skipped as duplicate columns; its review table is IF NOT

@@ -290,6 +290,9 @@ pub mod person_name;
 // registration, dead-token pruning. The `push::K2Cloud` adapter
 // reads it at dispatch time.
 pub mod push_devices;
+// End-to-end encrypted pushes (prd-e2e-push-v1 rev 2, migration 0211): the
+// per-device P-256 public key + PSK registry.
+pub mod push_device_keys;
 pub mod review_checklist;
 pub mod safe_delete;
 // 0.39.0: test-aware trash wrapper for production call sites that are

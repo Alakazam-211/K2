@@ -672,6 +672,12 @@ pub const FEATURE_APP_WALLET: &str = "app-wallet-v1";
 /// Thread push body may be a message preview. K2 Companion sends
 /// `previews` only to a server with this key.
 pub const FEATURE_PUSH_PREVIEWS: &str = "push-previews-v1";
+/// End-to-end encrypted pushes (prd-e2e-push-v1 rev 2, 0.46.3, migration
+/// 0211): `POST /cli/push/register-device` takes `e2e` (the phone's P-256
+/// public key + PSK; absent = keep, `null` = delete), and its reply and
+/// `GET /cli/push/device` carry `e2e` (or `null`) and no vendor token.
+/// K2 Companion sends `e2e` only to a server with this key.
+pub const FEATURE_PUSH_E2E: &str = "push-e2e-v1";
 
 /// Unread counts (thread-read-v1, 0.46.1, migration 0190): per-person read
 /// cursors and mutes for Threads and project chats — `GET
@@ -777,6 +783,22 @@ fn thread_push_ready() -> bool {
         .unwrap_or(false)
 }
 
+/// Migration 0211 ran: `push_device_keys` exists.
+fn push_e2e_ready() -> bool {
+    k2_core::db::try_shared()
+        .map(|db| {
+            db.lock()
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'push_device_keys'",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )
+                .map(|n| n > 0)
+                .unwrap_or(false)
+        })
+        .unwrap_or(false)
+}
+
 /// Client-visible features this daemon has that its version string cannot
 /// tell apart (`/boot-status` `features`). A client treats a key that is
 /// absent — or a daemon with no `features` at all — as unsupported.
@@ -818,6 +840,9 @@ pub fn features() -> Vec<&'static str> {
         out.push(FEATURE_THREAD_PUSH);
         // Same DB as 0157: migration 0189 (push_devices.previews) ran with it.
         out.push(FEATURE_PUSH_PREVIEWS);
+        if push_e2e_ready() {
+            out.push(FEATURE_PUSH_E2E);
+        }
     }
     if thread_read_ready() {
         out.push(FEATURE_THREAD_READ);
@@ -901,6 +926,7 @@ mod tests {
                 "app-wallet-v1",
                 "thread-push-v1",
                 "push-previews-v1",
+                "push-e2e-v1",
                 "thread-read-v1",
                 "homes-sync-v1",
                 "inbox-catchup-v1",

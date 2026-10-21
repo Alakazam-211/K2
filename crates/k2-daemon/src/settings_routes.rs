@@ -95,6 +95,9 @@ const OWNER_ONLY_KEYS: &[&str] = &[
     "airgap",
     "pushGatewayUrl",
     "pushGatewayToken",
+    // prd-e2e-push-v1 §4a: encrypted pushes on/off for every phone (and
+    // the instant rollback). Same switch as `k2 push e2e`.
+    "pushE2E",
     "companion",
     // K2 compute nodes preview (CN30): lets agents run programs on paired
     // machines once grants exist, so only the Owner turns it on.

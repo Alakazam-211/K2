@@ -34,7 +34,7 @@ impl DispatchSender for Recorder {
 }
 
 fn golden_ok() -> GatewayResponse {
-    GatewayResponse { status: 200, body: "{\"results\":[]}".into(), s0: false }
+    GatewayResponse { status: 200, body: "{\"results\":[]}".into(), s0: false, s1: false }
 }
 
 pub(crate) fn golden_cloud(sender: Arc<dyn DispatchSender>) -> K2Cloud {
@@ -164,12 +164,20 @@ pub(crate) fn golden_device_sets() -> Vec<(String, Vec<crate::push_devices::Push
 
 /// Run every case through `dispatch` and collect `{case: [body, …]}`.
 pub(crate) fn collect(dispatch: &dyn Fn(&K2Cloud, &PushEvent, &[crate::push_devices::PushDevice])) -> serde_json::Value {
+    collect_with(&golden_cloud, dispatch)
+}
+
+/// [`collect`] with the cloud built by `make` (e.g. a per-daemon config).
+pub(crate) fn collect_with(
+    make: &dyn Fn(Arc<dyn DispatchSender>) -> K2Cloud,
+    dispatch: &dyn Fn(&K2Cloud, &PushEvent, &[crate::push_devices::PushDevice]),
+) -> serde_json::Value {
     set_instance_id(GOLDEN_INSTANCE);
     let mut map = serde_json::Map::new();
     for (ename, event) in golden_events() {
         for (dname, devices) in golden_device_sets() {
             let rec = Arc::new(Recorder::default());
-            let cloud = golden_cloud(rec.clone());
+            let cloud = make(rec.clone());
             dispatch(&cloud, &event, &devices);
             let bodies = rec.bodies.lock().expect("recorder").clone();
             map.insert(format!("{ename}/{dname}"), serde_json::json!(bodies));
@@ -197,13 +205,18 @@ pub(crate) fn assert_matches_golden(got: &serde_json::Value, label: &str) {
 
 #[test]
 fn legacy_bodies_are_byte_identical_to_r3() {
+    // Through the production entry point (the server mode as configured:
+    // the default `sealed-when-supported`), devices with no key.
     let got = collect(&|cloud, event, devices| {
         cloud.dispatch(event, GOLDEN_BADGE_KEY, devices).expect("dispatch");
     });
-    if std::env::var("BLESS_PUSH_GOLDEN_R3").is_ok() {
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/push_legacy_golden_r3.json");
-        std::fs::write(path, serde_json::to_string_pretty(&got).expect("json") + "\n").expect("write golden");
-        return;
-    }
     assert_matches_golden(&got, "unkeyed devices");
+    // And with the switch in every mode: no key means today's path in
+    // `off` and `sealed-when-supported`.
+    for mode in [super::e2e::PushE2eMode::Off, super::e2e::PushE2eMode::SealedWhenSupported] {
+        let got = collect(&|cloud, event, devices| {
+            cloud.dispatch_in_mode(event, GOLDEN_BADGE_KEY, devices, mode).expect("dispatch");
+        });
+        assert_matches_golden(&got, &format!("unkeyed devices, {mode:?}"));
+    }
 }

@@ -52,6 +52,13 @@ pub struct CardAction {
     /// Undo in Settings → Gardens → Local Data."). None while pending.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<serde_json::Value>,
+    /// Permission cards (prd-agent-settings-cards-v1 rev 3.1 §4.1, §17.2):
+    /// the daemon-written card view, `k2_core::permission::card::{PermissionView,
+    /// BatchView}` as JSON. Written only by the daemon and projected per
+    /// viewer at the serve doors (`cards=2` people only). None on every other
+    /// action card (keep-as-mine), so their docs are unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]

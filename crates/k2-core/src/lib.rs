@@ -155,6 +155,9 @@ pub mod deploy;
 pub mod disk_guard;
 pub mod migration_home;
 pub mod paths;
+/// Permission cards (prd-agent-settings-cards-v1, 0.46.3 Beta): catalog,
+/// request and card-view types plus the two switches. Off by default.
+pub mod permission;
 pub mod private_home;
 pub mod session_archive;
 pub mod migration_launchd;

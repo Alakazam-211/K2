@@ -592,6 +592,25 @@ pub fn record_action_result(conversation_id: &str, card_id: &str, result: serde_
     Ok(CardCallback { conversation_id: conversation_id.to_string(), doc_id: doc.id.clone(), seq: item.seq, doc, inject_line: String::new() })
 }
 
+/// Rewrite a **pending** action card's `action.view` (permission cards,
+/// prd-agent-settings-cards-v1 rev 3.1 §4.1, vs-live C11): notes, guest
+/// counts, `applying`, the switch-off close. Same id, same seq; the daemon
+/// then publishes the card frame. Refused (`CARD_NOT_PENDING`) once the card
+/// is answered, voided or expired, and for a card without an action.
+pub fn update_action_view(conversation_id: &str, card_id: &str, view: serde_json::Value) -> Result<CardCallback, String> {
+    let _guard = WRITE.lock();
+    let item = thread_item(conversation_id, card_id)?;
+    let mut doc = item.doc;
+    let choice = doc.choice.as_mut().ok_or("not a choice card")?;
+    if choice.status != "pending" {
+        return Err(CARD_NOT_PENDING.to_string());
+    }
+    let action = choice.action.as_mut().ok_or("the card has no action")?;
+    action.view = Some(view);
+    store::put_card_doc(conversation_id, item.seq, &doc)?;
+    Ok(CardCallback { conversation_id: conversation_id.to_string(), doc_id: doc.id.clone(), seq: item.seq, doc, inject_line: String::new() })
+}
+
 /// The pending action cards in this conversation for `action_id` with this
 /// `dedupe` key (not yet due), newest last.
 pub fn pending_action_cards(conversation_id: &str, action_id: &str, dedupe: &str, now: i64) -> Result<Vec<String>, String> {

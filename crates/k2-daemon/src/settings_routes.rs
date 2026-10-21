@@ -102,6 +102,9 @@ const OWNER_ONLY_KEYS: &[&str] = &[
     // K2 compute nodes preview (CN30): lets agents run programs on paired
     // machines once grants exist, so only the Owner turns it on.
     "computePreview",
+    // Permission cards (Beta, prd-agent-settings-cards-v1 §2.1): the global
+    // switch that lets agents ask people for setting changes.
+    "permissionCards",
     // Apps (beta) (prd-k2-app-runtime-v1 AR28): the App runtime switch.
     // `appsPreview` is its 0.46.2-and-older name (an old client may still
     // send it; `app_settings::update` maps it to `apps`).
@@ -680,6 +683,29 @@ mod tests {
             // An Admin still manages the remote-access keys.
             let r = handle_settings_update(br#"{"federationEnabled":false}"#, admin);
             assert_eq!(r.status, "200 OK", "Admin keeps its tier: {}", r.body);
+        });
+    }
+
+    /// Permission cards (Beta, prd-agent-settings-cards-v1 §2.1): the
+    /// global switch defaults OFF, an Admin or a Member can't turn it on
+    /// (atomic 403), and only the Owner can.
+    #[test]
+    fn permission_cards_switch_is_owner_only_and_defaults_off() {
+        with_temp_home(|| {
+            assert!(!k2_core::app_settings::load().permission_cards, "the Beta switch defaults off");
+            let admin = session_actor("adminpc", connect_users::Role::Admin);
+            let member = session_actor("memberpc", connect_users::Role::Member);
+            for actor in [admin, member] {
+                let r = handle_settings_update(br#"{"permissionCards":true,"defaultAgent":"codex"}"#, actor);
+                assert_eq!(r.status, "403 Forbidden", "{actor:?}: {}", r.body);
+                assert!(r.body.contains("requires the Owner role"), "{actor:?}: {}", r.body);
+            }
+            let s = k2_core::app_settings::load();
+            assert!(!s.permission_cards, "403 leaves it off");
+            assert_eq!(s.default_agent, "claude", "nothing half-applied");
+            let r = handle_settings_update(br#"{"permissionCards":true}"#, SettingsActor::Owner);
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+            assert!(k2_core::app_settings::load().permission_cards);
         });
     }
 

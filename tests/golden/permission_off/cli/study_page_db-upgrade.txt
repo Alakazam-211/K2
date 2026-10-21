@@ -1,0 +1,60 @@
+$ k2 study db-upgrade
+exit: 0
+--- stdout
+k2 study db-upgrade — moving a database to a newer Postgres
+
+MAJORS SIDE BY SIDE
+  One Postgres cluster per major on the box: the first keeps 5432, the
+  next takes the first free port in 5432-5449. 16 and 17 are supported;
+  18 waits for K2's SQL parser (guest doors) and Supabase. Moving a
+  database never removes a major: 16 stays for the databases still on it
+  (`k2 db clusters`).
+
+THE MOVE (one database at a time, by copy)
+  k2 db upgrade <db> --check      read-only: majors, the target cluster
+                                   (created on a free band port if needed),
+                                   extensions, roles, disk (2 x size + 1 GiB),
+                                   Apps and the pause estimate
+  k2 db upgrade <db> [--to 17]     the move: a 60 s notice, then Apps stop,
+                                   guest doors answer 503 db_maintenance, the
+                                   roles are recreated with the SAME passwords,
+                                   the data is copied (17's pg_dump/pg_restore),
+                                   checked (rows, RLS, policies, grants,
+                                   sequences, logins), and the vaulted
+                                   DATABASE_URL is re-pointed under the same
+                                   k2v:// ref. Apps start again.
+  Pause: about 10-30 s + size / 40 MB/s (1 GB ~ 30-60 s).
+  Anything wrong before the switch: undone, the old copy keeps serving.
+
+THE OLD COPY (14 days)
+  Kept closed (no one connects) in the old cluster for 14 days.
+  k2 db upgrade <db> --rollback --yes   back to it. Writes made on the new
+                                         major since the move are NOT carried
+                                         back; the new copy is kept, renamed.
+  k2 db upgrade <db> --forget-old       owner only, 24 h after the move
+                                         (--force-now skips the wait): drops
+                                         the old copy and its dump. Never a
+                                         cluster, never a package.
+
+WHO
+  Owner: everything. Admin login: --check only.
+  An agent needs "Allow this agent to manage Postgres versions" (the owner
+  turns it on: Agent tab, or `k2 db versions-access on`), and then moves,
+  checks and rolls back its OWN workspace's and its own Apps' databases.
+  Owner only: --forget-old, --now (skip the notice), --allow-adopted,
+  --all, --acknowledge-failed.
+
+AIR-GAP
+  Installing 17 needs apt.postgresql.org (pinned key, pinned packages).
+  Without it: install postgresql-17 and postgresql-client-17 from your
+  mirror (apt install ./*.deb), then re-run.
+
+LATER (0.46.4)
+  Live dual-run (logical replication, a near-zero pause) and the
+  whole-cluster path for very large clusters.
+
+EXITS
+  0 done · 3 refused (nothing changed) · 1 failed (the owner gets an inbox
+  note; new moves wait for --acknowledge-failed).
+--- stderr
+--- requests

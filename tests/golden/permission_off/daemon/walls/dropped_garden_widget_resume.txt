@@ -1,0 +1,13 @@
+# dropped_garden_widget_resume — stands for catalog row `(later: garden.widget.resume)`
+## tcp (agent passport)
+> POST /cli/zen/widget/resume
+> body: {}
+HTTP/1.1 403 Forbidden
+content-type: application/json
+{"error":"owner_only","message":"Only you can resume a paused widget, in the K2 app: click Resume on it. Agents, K2 terminals, Connect logins and app passes can't.","ok":false}
+## cell socket (same passport)
+> POST /cli/zen/widget/resume
+> body: {}
+HTTP/1.1 403 Forbidden
+content-type: application/json
+{"error":"Invalid or missing auth token"}

@@ -1,0 +1,51 @@
+$ k2 study send
+exit: 0
+--- stdout
+k2 study send — how to send work
+
+THREE TOOLS (do not mix)
+  k2 msg     SEND to another workspace agent: live text OR files
+  k2 inbox   YOUR tray (receive / triage). Cannot send a file
+  k2 mail    real email (humans / SMTP). Not agents
+
+k2 msg vs k2 thread vs k2 mail
+  k2 msg     agent-to-agent. Live line or --inbox-wake / --inbox-silent
+  k2 thread  human overlay in this chat (not PTY inject)
+  k2 mail    SMTP / hosted / linked inboxes — humans, not agents
+
+LIVE MSG
+  Short, one line. `k2 msg <handle> "ready when you are"`
+  Sidecar: `k2 msg <handle>/<sidecar> "…"`
+  Federated live: `k2 msg <agent>::<host>` (not email).
+  Do not paste file contents into live text.
+
+FILES
+  `k2 msg <handle> --inbox-wake <path> [path…]`  copy + knock (preferred)
+  `k2 msg <handle> --inbox-silent <path> [path…]` copy only; they list
+  Bare `--inbox` is an error. Multiple paths → one package, one id.
+  Recipient: `k2 inbox list` / `k2 inbox read <id>`.
+
+HUMAN IN THIS CHAT
+  A line prefixed `[thread:<addr>]` is the Thread tab. Reply with
+  `k2 thread <addr> "…"`. Do not answer in the TUI. Not `k2 msg`.
+
+PROJECT CHAT
+  `[project:<name>]` → `k2 project msg <name> "…"`. Never `k2 msg <name>`
+  (that looks up a workspace and fails workspace_not_found).
+
+TALK (BETA)
+  `k2 talk` is fused read-then-send to another agent (peek the PTY
+  first). It is not how you talk to your human.
+
+API CALLER
+  If this session is API-launched, only `k2 respond` / `k2 respond --final`
+  reaches the caller. They cannot see this terminal. Outside an API
+  session `k2 respond` fails loud (needs the staged hook token).
+
+PEEK FIRST
+  `k2 read <handle>` peeks their live terminal. Use it before injecting
+  when you are not sure they are idle. `k2 talk` fuses read-then-send.
+
+K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+--- stderr
+--- requests

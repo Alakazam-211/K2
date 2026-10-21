@@ -1,0 +1,13 @@
+# never_compute_local_enable — stands for catalog row `(never: this Mac as a node)`
+## tcp (agent passport)
+> POST /cli/compute/local/enable
+> body: {}
+HTTP/1.1 403 Forbidden
+content-type: application/json
+{"error":{"code":"owner_only","hint":"only the server's owner (or an admin, where noted) can do this, and not through an agent or a K2 terminal (those send the tab's passport). Use Settings or a terminal outside K2."}}
+## cell socket (same passport)
+> POST /cli/compute/local/enable
+> body: {}
+HTTP/1.1 403 Forbidden
+content-type: application/json
+{"error":"Invalid or missing auth token"}

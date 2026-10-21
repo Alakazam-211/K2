@@ -1,0 +1,13 @@
+$ k2 connections add billing
+exit: 1
+--- stdout
+Error: only the server's owner may do this
+--- stderr
+--- requests
+> POST /cli/connections?token=passport-golden&project=<SANDBOX>%2Fws&action=add&target=billing
+> Host: 127.0.0.1:<PORT>
+> User-Agent: curl/<VERSION>
+> Accept: */*
+> Content-Length: 0
+> Content-Type: application/x-www-form-urlencoded
+> body: 

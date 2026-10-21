@@ -1,0 +1,13 @@
+# never_heartbeat_list_all — stands for catalog row `(no: heartbeat list-all)`
+## tcp (agent passport)
+> GET /cli/heartbeat/list-all
+> body: 
+HTTP/1.1 403 Forbidden
+content-type: application/json
+{"error":{"code":"owner_only","hint":"requires owner/admin — ask your human (OS schedule install, fleet-wide heartbeat list, set-show-sessions, and hard delete are owner surfaces; use k2 heartbeat schedule/list/fire for workspace schedules, and k2 heartbeat archive instead of remove)"},"ok":false}
+## cell socket (same passport)
+> GET /cli/heartbeat/list-all
+> body: 
+HTTP/1.1 403 Forbidden
+content-type: application/json
+{"error":"Invalid or missing auth token"}

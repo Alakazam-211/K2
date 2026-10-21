@@ -1,0 +1,119 @@
+# v1_apps_approve_held — stands for catalog row `apps.approve request=`
+## tcp (agent passport)
+> POST /cli/app/build
+> body: {"folder":"pog-app"}
+HTTP/1.1 202 Accepted
+content-type: application/json
+{
+  "app": "pog-app",
+  "diff": {
+    "lines": [
+      "k2 app build pog-app"
+    ],
+    "route": "/cli/app/build"
+  },
+  "expiresAt": "<expiresAt>",
+  "hint": "held for the owner: \"Build and run Apps\" is off for this workspace, so every App change waits for the owner (k2 app approve <W_ID> outside K2, or Settings → App Approvals). To stop a misbehaving App now: k2 app suspend <app>.",
+  "kind": "manage",
+  "ok": true,
+  "reasons": [
+    "this agent's workspace doesn't have \"Build and run Apps\" on"
+  ],
+  "request": {
+    "appId": null,
+    "appLabel": "pog-app",
+    "body": {
+      "body": {
+        "folder": "pog-app"
+      },
+      "route": "/cli/app/build"
+    },
+    "confirmVia": null,
+    "decidedAt": null,
+    "decidedBy": null,
+    "decisionReason": null,
+    "deploymentId": null,
+    "diff": {
+      "lines": [
+        "k2 app build pog-app"
+      ],
+      "route": "/cli/app/build"
+    },
+    "expiresAt": "<expiresAt>",
+    "id": "<W_ID>",
+    "kind": "manage",
+    "reason": null,
+    "reasons": [
+      "this agent's workspace doesn't have \"Build and run Apps\" on"
+    ],
+    "requestedAt": "<requestedAt>",
+    "requestedBy": "agent:pog-billing",
+    "requesterWorkspace": "<WS_ID>",
+    "result": null,
+    "serviceId": null,
+    "status": "pending",
+    "summary": "k2 app build pog-app",
+    "workspaceHandle": "pog-billing",
+    "workspaceId": "<WS_ID>"
+  },
+  "status": "held"
+}
+## cell socket (same passport)
+> POST /cli/app/build
+> body: {"folder":"pog-app"}
+HTTP/1.1 202 Accepted
+content-type: application/json
+{
+  "app": "pog-app",
+  "diff": {
+    "lines": [
+      "k2 app build pog-app"
+    ],
+    "route": "/cli/app/build"
+  },
+  "expiresAt": "<expiresAt>",
+  "hint": "held for the owner: \"Build and run Apps\" is off for this workspace, so every App change waits for the owner (k2 app approve <W_ID> outside K2, or Settings → App Approvals). To stop a misbehaving App now: k2 app suspend <app>.",
+  "kind": "manage",
+  "ok": true,
+  "reasons": [
+    "this agent's workspace doesn't have \"Build and run Apps\" on"
+  ],
+  "request": {
+    "appId": null,
+    "appLabel": "pog-app",
+    "body": {
+      "body": {
+        "folder": "pog-app"
+      },
+      "route": "/cli/app/build"
+    },
+    "confirmVia": null,
+    "decidedAt": null,
+    "decidedBy": null,
+    "decisionReason": null,
+    "deploymentId": null,
+    "diff": {
+      "lines": [
+        "k2 app build pog-app"
+      ],
+      "route": "/cli/app/build"
+    },
+    "expiresAt": "<expiresAt>",
+    "id": "<W_ID>",
+    "kind": "manage",
+    "reason": null,
+    "reasons": [
+      "this agent's workspace doesn't have \"Build and run Apps\" on"
+    ],
+    "requestedAt": "<requestedAt>",
+    "requestedBy": "agent:pog-billing",
+    "requesterWorkspace": "<WS_ID>",
+    "result": null,
+    "serviceId": null,
+    "status": "pending",
+    "summary": "k2 app build pog-app",
+    "workspaceHandle": "pog-billing",
+    "workspaceId": "<WS_ID>"
+  },
+  "status": "held"
+}

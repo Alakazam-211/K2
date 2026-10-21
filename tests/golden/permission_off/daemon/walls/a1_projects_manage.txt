@@ -1,0 +1,13 @@
+# a1_projects_manage — stands for catalog row `projects.manage`
+## tcp (agent passport)
+> POST /cli/project-group/create
+> body: {"name":"pog-demo"}
+HTTP/1.1 403 Forbidden
+content-type: application/json
+{"error":{"code":"agent_permission_off","hint":"'Manage K2 projects' is off for pog-billing, so this agent can't create, rename or delete projects or change their members or settings. Reading projects and posting in your project chat still work. Ask your human to turn it on in Settings → Workspaces → pog-billing → Agent (or the owner runs: k2 project access on --workspace pog-billing)."},"ok":false}
+## cell socket (same passport)
+> POST /cli/project-group/create
+> body: {"name":"pog-demo"}
+HTTP/1.1 403 Forbidden
+content-type: application/json
+{"error":{"code":"agent_permission_off","hint":"'Manage K2 projects' is off for pog-billing, so this agent can't create, rename or delete projects or change their members or settings. Reading projects and posting in your project chat still work. Ask your human to turn it on in Settings → Workspaces → pog-billing → Agent (or the owner runs: k2 project access on --workspace pog-billing)."},"ok":false}

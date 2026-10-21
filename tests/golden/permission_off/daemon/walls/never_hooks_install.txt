@@ -1,0 +1,13 @@
+# never_hooks_install — stands for catalog row `(never: hooks install)`
+## tcp (agent passport)
+> POST /cli/hooks/install
+> body: {}
+HTTP/1.1 403 Forbidden
+content-type: application/json
+{"error":"invalid or missing token"}
+## cell socket (same passport)
+> POST /cli/hooks/install
+> body: {}
+HTTP/1.1 403 Forbidden
+content-type: application/json
+{"error":"Invalid or missing auth token"}

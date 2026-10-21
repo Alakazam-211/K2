@@ -1,0 +1,13 @@
+$ k2 sidecar new reviewer --harness claude
+exit: 3
+--- stdout
+--- stderr
+owner_only: only the server's owner may do this
+--- requests
+> POST /cli/sidecar/new?token=passport-golden
+> Host: 127.0.0.1:<PORT>
+> User-Agent: curl/<VERSION>
+> Accept: */*
+> Content-Type: application/json
+> Content-Length: 86
+> body: {"workspace": "<SANDBOX>/ws", "name": "reviewer", "harness": "claude"}

@@ -1,0 +1,11 @@
+$ k2 compute nodes
+exit: 3
+--- stdout
+--- stderr
+{"error": "owner_only", "hint": "only the server's owner may do this"}
+--- requests
+> GET /cli/compute/nodes?token=passport-golden
+> Host: 127.0.0.1:<PORT>
+> User-Agent: curl/<VERSION>
+> Accept: */*
+> body: 

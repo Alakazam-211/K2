@@ -1,0 +1,13 @@
+# a12_tickets_settings — stands for catalog row `(never: tickets settings)`
+## tcp (agent passport)
+> POST /cli/tickets/settings
+> body: {}
+HTTP/1.1 403 Forbidden
+content-type: application/json
+{"error":{"code":"owner_only","hint":"Ticket rules are owner settings: an agent can't change them. Ask your human to use Settings → Tickets, or to run `k2 tickets settings` from a terminal outside K2 (ran as agent; run as owner)."},"ok":false}
+## cell socket (same passport)
+> POST /cli/tickets/settings
+> body: {}
+HTTP/1.1 403 Forbidden
+content-type: application/json
+{"error":"Invalid or missing auth token"}

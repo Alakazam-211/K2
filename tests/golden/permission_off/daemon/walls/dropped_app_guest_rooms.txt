@@ -1,0 +1,13 @@
+# dropped_app_guest_rooms — stands for catalog row `(dropped: app.guest-rooms)`
+## tcp (agent passport)
+> POST /cli/app/grant
+> body: {"kind":"guests-rooms"}
+HTTP/1.1 403 Forbidden
+content-type: application/json
+{"error":{"code":"owner_only","hint":"only the server's owner grants an App guests:rooms (k2 app grant <app> --kind guests-rooms) (the owner token or an Owner login; never an agent)"}}
+## cell socket (same passport)
+> POST /cli/app/grant
+> body: {"kind":"guests-rooms"}
+HTTP/1.1 403 Forbidden
+content-type: application/json
+{"error":"Invalid or missing auth token"}

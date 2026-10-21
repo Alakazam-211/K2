@@ -1,0 +1,35 @@
+$ k2 help --internal
+exit: 0
+--- stdout
+K2 CLI — Internal surface (rare; used by agent runtimes)
+
+These verbs exist for orchestrators and tools that integrate with K2.
+Humans rarely run them directly.
+
+TERMINAL (raw PTY I/O)
+  terminal spawn --command "..."                Spawn a sub-terminal
+  terminal write <id> "text"                    Paste + Enter to PTY by id
+  terminal read <id> [--lines N]                Last N lines from buffer
+
+SESSIONS (low-level session lifecycle)
+  sessions list [--json]                        Raw session map
+  sessions live                                 Subscribe to session events
+  sessions compact                              Compact archive ring
+
+AGENT (single-item ops on the workspace's primary agent)
+  agent profile [<path>]                        Equivalent to `workspace profile`
+  agent update --field <f> --value <v>          Equivalent to `workspace update`
+  agent complete --file <f>                     Mark work item complete
+
+HOOKS (Claude Code / Cursor / Gemini integration state)
+  hooks status [--limit N] [--json]             Hook pipeline state
+                                                (same as `daemon hooks status`)
+  hooks install [--json]                        Re-run the daemon's hook installer
+  hooks uninstall [--json]                      Remove K2's hook entries (others kept)
+  hooks emit <event> [--json '<obj>']           A custom program reports its lifecycle
+                                                (session passport only; k2 study hooks)
+
+For "what's running" use `workspace list --running` (daily tier).
+For workspace-scoped ops use the `workspace` verb (daily tier).
+--- stderr
+--- requests

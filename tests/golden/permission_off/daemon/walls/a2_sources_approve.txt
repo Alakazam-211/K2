@@ -1,0 +1,13 @@
+# a2_sources_approve — stands for catalog row `sources.approve source=`
+## tcp (agent passport)
+> POST /cli/sources/approve
+> body: {}
+HTTP/1.1 403 Forbidden
+content-type: application/json
+{"error":{"code":"person_only","hint":"This needs a person (run it outside K2, or use Settings → Gardens → External Data), or turn on \"Manage Gardens and data sources\" for this agent (Settings → Workspaces → Agent)."}}
+## cell socket (same passport)
+> POST /cli/sources/approve
+> body: {}
+HTTP/1.1 403 Forbidden
+content-type: application/json
+{"error":{"code":"person_only","hint":"This needs a person (run it outside K2, or use Settings → Gardens → External Data), or turn on \"Manage Gardens and data sources\" for this agent (Settings → Workspaces → Agent)."}}

@@ -1,0 +1,57 @@
+$ k2 study app-move
+exit: 0
+--- stdout
+k2 study app-move — Moving your --cmd service to an App
+
+WHY. A service you started with `k2 publish run <name> --cmd "…"` runs
+unwalled: as the daemon's user, with the daemon's whole environment and
+reach to the owner token. Lists show it as "legacy (--cmd) — move it to an
+App before 0.46.4". In 0.46.3 nothing stops it. In 0.46.4 --cmd goes. You
+move it yourself: you need "Build and run Apps" on your workspace (your
+owner turns it on). No terminal on the box, no sudo: the box is prepared
+by K2 (k2 app doctor says whether it is ready).
+
+THE OLD SERVICE KEEPS RUNNING until you stop it, and its URL keeps serving
+it until you move the label. Nothing below is one-way.
+
+  1. Write a manifest from your start command: manifest.json at the root
+     of the folder you deploy (your code, not your data):
+       {"schema":1,"kind":"app","id":"jobs","name":"Jobs","version":"1.0.0",
+        "host":{"mode":"cmd","start":["node","server.js"],
+                "health":{"path":"/healthz"}},
+        "egress":{"hosts":["api.stripe.com"]}}
+     - listen on $PORT (not a fixed port); health = a 2xx on that path
+     - no K2_OWNER_TOKEN, no ~/.k2 files: call K2 with an App key
+       (k2 app key mint <app-id> --scopes …) at $K2_GATEWAY_URL
+     - secrets from the vault by name, granted to the App: k2 publish secret
+       add <app-id> NAME --as env (or ask your owner to grant them)
+     - files that must last go in $K2_APP_DATA (/data); the code is read-only
+     - outside hosts it calls go in "egress" (each new host waits for your
+       owner, or applies at once with "…and manage them end to end")
+     k2 app validate <folder> checks it; k2 app warnings <name> lists what
+     your old service reads that the wall won't give.
+  2. Install (a new App id; your old label can't be one: pick e.g. jobs2,
+     or `agent` → `jobs`, since k2 nouns are reserved):
+       k2 app install <app-id>                 512 MiB; --memory 1G for more
+  3. Deploy:
+       k2 app deploy <app-id> <folder>
+     It starts walled; traffic goes to it only when the health check passes.
+  4. Copy your data in (the App must be live):
+       k2 app data put <app-id> <your-data-folder> [--to <dir>]
+     Copies a file or folder of your workspace into $K2_APP_DATA. Copy
+     again right before step 6 if the old service keeps writing.
+  5. Check it:
+       k2 app deployment <app-id> ; k2 app logs <app-id> ; k2 app errors <app-id>
+       k2 app inspect <app-id>                 the front port: curl it
+  6. Take your hostname (the same URL; the App must be healthy):
+       k2 app label take <app-id> <old-name>
+     The old service keeps running, without a public label.
+  7. Stop the old service once you're sure:
+       k2 publish stop <old-name>
+  MOVE BACK (any time): start the old service (k2 publish start <old-name>)
+     and k2 app label return <app-id> <old-name>.
+
+Exit codes: 0 done, 2 held for your owner, 3 refused (JSON on stderr: the
+hint says why, e.g. app_not_healthy, label_owned_by_other_workspace).
+--- stderr
+--- requests

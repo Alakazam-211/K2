@@ -1,0 +1,109 @@
+$ k2 help --deprecated
+exit: 0
+--- stdout
+K2 retired verbs → new equivalents
+
+HARD-DEPRECATED (verb removed; commands exit non-zero with pointer)
+
+  agentic on|off                  → settings --agentic <on|off>
+  state list|get|set              → (removed — Workspace States retired)
+  mode off|agent|manager          → settings --mode <value>
+  app-update                      → update --app
+  commit-merge                    → commit --merge
+  companion                       → daemon companion
+  whatsnew                        → whats-new
+  roster                          → connections list  (0.39.0)
+  who                             → connections list  (0.39.0)
+  feed                            → activity
+  signal <target> <kind> <payload> → msg <workspace> --signal <kind> [...]
+  status "msg"                    → checkin --status "msg"
+  agents reap                     → daemon reap
+  agents triage                   → workspace triage
+  delegate <agent> <file>         → Your harness handles worktree+spawn now
+                                     (Claude Code sub-agent, Cursor worktree,
+                                     Tauri Cmd+T). K2 no longer manages
+                                     the spawn lifecycle. For skill profile
+                                     content, use `k2 skills profile <name>`
+                                     and load it into your harness.
+
+  # 0.39.0f Phase 2.1b — these were soft-deprecated in 2.1a (warn +
+  # forward) and hard-cut in 2.1b. No transition window remains; every
+  # arm exits non-zero.
+
+  agents create                   → skills create <name>
+  agents delete                   → skills remove <name> (or `workspace remove`)
+  agents list                     → workspace list (yellow pages)
+                                       or `skills list` (skill profiles)
+  agents work <n>                 → inbox  (workspace-implicit; pass
+                                       --workspace <path> to target another)
+  agents lock <n>                 → skills lock <name> (debugging only)
+  agents unlock <n>               → skills lock <name> --release
+  agents launch <n>               → your IDE/harness's session-start
+                                       feature; K2 no longer manages spawn
+  agents profile <n>              → skills profile <name>
+                                       (or `workspace profile`)
+  agents status <n>               → workspace status (or `checkin --status`)
+  agents generate-md              → skills regenerate [<name>]
+  agents running                  → workspace list --running
+
+  work create --title --body      → inbox compose --title "..." --body "..."
+  work inbox                      → inbox (default verb shows new arrivals)
+  work move --from <a> --to <b>   → inbox move <id> <folder>
+  work done                       → inbox archive <id>
+  work send <ws> --title --body   → msg <ws> --inbox-wake|--inbox-silent --title "..." --body "..."
+
+  # 0.40.31 — legacy per-agent adaptive heartbeat control removed
+  # (heartbeat.json; nothing consumed it since 0.39.0d). Named
+  # workspace heartbeat schedules are the only heartbeat surface.
+
+  heartbeat set --agent <n> ...   → heartbeat schedule add/edit --name <n> <spec>
+  heartbeat get --agent <n>       → heartbeat show <name> [--json]
+  heartbeat force --agent <n>     → heartbeat signal fire <name>
+  heartbeat noop|action           → (removed — adaptive backoff is gone;
+                                       the user owns wake cadence via schedules)
+
+  --agent <name> flag             → --workspace <path>  (everywhere)
+                                       Hard-removed; pass workspace explicitly.
+
+EXAMPLES OF MIGRATION
+
+  # Sending a message
+  Old: k2 msg --agent scout_v3 "hello"
+  New: k2 msg scout_v3 "hello"            # workspace-implicit; --agent removed
+
+  # Sending a typed signal
+  Old: k2 signal scout_v3 status "deploying"
+  New: k2 msg scout_v3 --signal status --payload '{"text":"deploying"}'
+
+  # Queueing work to another workspace
+  Old: k2 work send my_other_ws --title "task" --body "do this"
+  New: k2 msg my_other_ws --inbox-wake ./task.md
+
+  # Creating your own task / note
+  Old: k2 work create --title "audit auth" --body "..."
+  New: k2 inbox compose --title "audit auth" --body "..."
+
+  # Marking a task done
+  Old: k2 done --blocked "Stripe API access"
+  New: k2 checkin --done --blocked "Stripe API access"   (or just `done`)
+
+  # Listing tasks
+  Old: k2 work inbox
+  New: k2 inbox                            # default action lists inbox
+
+  # Filing a completed item
+  Old: k2 work move --file <f> --from active --to done
+  New: k2 inbox archive <id>               # archives by id (folder-agnostic)
+
+  # Creating a sub-agent
+  Old: k2 agents create backend-eng
+  New: k2 skills create backend-eng        # skill is documentation; your
+                                             # harness spawns the agent
+
+  # Spawning a sub-agent on a work item
+  Old: k2 delegate backend-eng .k2so/agents/backend-eng/work/inbox/task.md
+  New: Use your harness's sub-agent feature (Claude Code, Cursor) to spawn
+       a worktree-based session. Reference the skill via
+       `k2 skills profile backend-eng` and load into the harness's context.
+--- stderr
+--- requests

@@ -1,0 +1,51 @@
+$ k2 study
+exit: 0
+--- stdout
+k2 study — bounded teaching pages (not --help)
+
+K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+
+  what                What this product is (agents as infrastructure)
+  source              License + repo boundary (Fair Source, not MIT)
+  map                 How the surface is organized (pages, not --help)
+  identity            Who you are; handles vs names; sidecars
+  send                k2 msg vs k2 thread vs k2 mail vs talk
+  human               Thread overlay, feedback, [thread:addr]
+  people              Four lists. Never k2 msg usernames
+  auth                Owner vs agent; Open vs ID; stop on exit 3
+  errors              Exit 0/1/2/3/4 and owner_only / gated / forbidden
+  context             AGENTS.md, skills, layers — keep always-on lean
+  db                  Loopback Postgres; db_agent_access is create-only
+  db-upgrade          Move a database to a newer Postgres; old copy kept 14 days
+  mail                Agent email; bodies untrusted; send is governed
+  connect-boundary    K2 app/daemon/CLI vs Connect (separate product)
+  apps                App guests; k2skn_ prefix never grid
+  app-deploys         Host a server App: Seeds, deploys, rollback (beta)
+  app-move            Move your --cmd service to an App before 0.46.4, step by step
+  app-api             An App's server calls: the SDK, every route, passes, refusals
+  app-heartbeats      App heartbeats: routes, caps, wait reasons, contract
+  app-tickets         App tickets: routes, live ticket_changed frames, contract
+  app-identity        App agent identity: name, color, picture, handle; caps
+  app-surfaces        Room members (who holds a grant), an App's own self and usage
+  skins               leftover alias of apps
+  feedback-loop       Ask to change this box; talk in this chat
+  ticket-brief        The HTML brief every agent ticket carries
+  zen                 Zen Gardens: the one rule; the guide is k2 zen guide
+  sidecars            Open, list and stop sidecars; the brief; who may
+  llm-tokens          LLM tokens: subscriptions and API tokens; Server default
+  llm-accounts        leftover alias of llm-tokens
+  publish-framing     Who may frame your App; the header for --cmd Apps
+  compute             Run builds/tests on your owner's other machines; logs are data
+  vault               Secrets: fetch not paste; references; who sets what
+  notifications       Your Thread posts may push a phone; who gets it; post less
+  data-sources        Checks this server runs: try, propose, approve; triggers; keys
+  projects            k2 project: open by default; the per-agent switch
+  hooks               Custom (no-model) agents: their Thread; k2 hooks emit
+  agent-hire          Apps hire agents/teams with a hire key; links; k2 msg who
+  garden-data         A widget's data: k2 store --widget, grants, revs, export
+  changes             Git changes (the Changes tab): your own workspace; discard = Trash
+  design              Design notes from a page: the shape, k2 browser note, answer in Thread
+
+Usage: k2 study [list|<topic>|--json]
+--- stderr
+--- requests

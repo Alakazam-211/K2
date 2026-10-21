@@ -1,0 +1,79 @@
+$ k2 study ticket-brief
+exit: 0
+--- stdout
+k2 study ticket-brief — the HTML brief every agent ticket carries
+
+WHEN
+  Every `k2 tickets ask` you file as an agent carries a brief: a short
+  HTML page that explains the problem and what you need. The human reads
+  it as a formatted page above the thread, so the ticket reads in one
+  pass. `--kind fyi` is exempt (a brief is optional there).
+
+THE RULES ARE OWNER SETTINGS (Settings → Tickets)
+  The owner (or an admin) sets each rule to off, warn or require:
+    Require an HTML brief    missing → brief_missing warning (warn,
+                             exit 0) or brief_required (require, exit 2)
+    Require an assignee      none → assignee_required warning (warn) or
+                             refusal (require, exit 2)
+    Default assignee         a ticket with no --assign goes to this user
+  Both rules start at warn. Read them: `k2 tickets settings`. You can't
+  change them (owner_only, exit 3); a refusal names the setting. Attach a
+  brief and assign every ticket anyway: that never fails.
+
+ASSIGN IT
+  A ticket must be assigned to a user on this server (`--assign <user>`).
+  A user on this server is the owner (`owner`, or the owner's display
+  name) or a Connect user: k2 connections list --users
+  assignee_unknown = a name that is not a user here. `--kind fyi` is
+  exempt. Fix a filed ticket with k2 tickets assign <id> <user>
+
+HOW
+  k2 tickets template > brief.html        skeleton with the five sections
+  (edit it)
+  k2 tickets ask "<one-line title>" --html brief.html --assign <user> [--body "summary"]
+  k2 tickets ask "<title>" --assign <user> --html - < brief.html     stdin works too
+
+  <title> stays the one line for the list, push, and search.
+  --body is the plain one-or-two-sentence summary text-only readers see.
+
+FORMAT (sections; only "What I need from you" is highlighted)
+  Problem                 what is wrong, in plain words
+  What I tried            commands, results, why it did not work
+  What I need from you    <section class="k2-need"> — the decision or action
+  Options                 <ol class="k2-options"> — match --options when used
+  Context                 logs in <pre>, screenshots as data: images
+  A missing k2-need section is a warning (brief_no_need), not an error.
+  Each k2-options <li> becomes a quick-answer button. Start each item with
+  a short <strong> label: that label is what comes back as the answer.
+  A pick marks the ticket answered. Free text marks it needs_discussion:
+  reply, settle it, then `k2 tickets resolve <id> --answered "<outcome>"`.
+
+CAPS
+  1 MiB of raw HTML, inline images included. Over → brief_too_large.
+  It must have visible text after cleaning (else brief_empty) and be
+  UTF-8 (else brief_invalid). Every brief_* error exits 2.
+
+WHAT GETS STRIPPED (the daemon cleans it when it is saved)
+  Kept tags: h1-h4 p br hr ul ol li dl dt dd strong em b i u s mark
+  small sub sup code pre kbd blockquote a img table caption thead tbody
+  tfoot tr th td section header footer div span details summary figure
+  figcaption. Classes: k2-need k2-options k2-callout k2-brief only.
+  Removed: script, style (and its contents), iframe, form, input, meta,
+  base, link, svg, comments, every on* attribute, style= attributes,
+  remote images, javascript: links. Only data:image/(png|jpeg|gif|webp)
+  images survive. A {"warning":{"code":"brief_sanitized"}} says so.
+
+LINKS
+  Links do not click inside the frame. The human sees them as a list
+  under the brief with the full URL, opened in their system browser.
+  Write the URL so it reads well in that list.
+
+AFTER FILING
+  The brief can't be edited. Correct it in a comment, or file a new
+  ticket. Comments stay plain text.
+  k2 tickets show <id>            body + brief text extract
+  k2 tickets show <id> --html     the cleaned HTML only
+
+K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+--- stderr
+--- requests

@@ -1,0 +1,14 @@
+$ k2 project create demo
+exit: 1
+--- stdout
+--- stderr
+{"error":{"code":"owner_only","hint":"only the server's owner may do this"}}
+--- requests
+> POST /cli/project-group/create?token=passport-golden
+> Accept-Encoding: identity
+> Content-Length: 15
+> Host: 127.0.0.1:<PORT>
+> User-Agent: Python-urllib/<VERSION>
+> Content-Type: application/json
+> Connection: close
+> body: {"name":"demo"}

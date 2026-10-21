@@ -1,0 +1,13 @@
+# never_garden_lock — stands for catalog row `(never: the Garden lock)`
+## tcp (agent passport)
+> POST /cli/zen/garden/lock
+> body: {}
+HTTP/1.1 403 Forbidden
+content-type: application/json
+{"error":"owner_only","message":"Only the person can lock or unlock a Garden, in Settings → Gardens. Agents and K2 terminals can't, either way.","ok":false}
+## cell socket (same passport)
+> POST /cli/zen/garden/lock
+> body: {}
+HTTP/1.1 403 Forbidden
+content-type: application/json
+{"error":"Invalid or missing auth token"}

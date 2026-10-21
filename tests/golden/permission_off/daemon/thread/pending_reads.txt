@@ -1,0 +1,322 @@
+## thread items, tcp owner token
+> GET /cli/thread?addr=pog-thread&limit=20
+> body: 
+HTTP/1.1 200 OK
+content-type: application/json
+{
+  "addr": "pog-thread",
+  "collection": "thread",
+  "conversation_id": "<UUID>",
+  "has_more": false,
+  "instanceId": "<instanceId>",
+  "items": [
+    {
+      "collection": "thread",
+      "conversation_id": "<UUID>",
+      "doc": {
+        "body": "Ship it?",
+        "choice": {
+          "allow_custom": false,
+          "expiresAt": "<expiresAt>",
+          "options": [
+            {
+              "label": "Ship"
+            },
+            {
+              "label": "Wait"
+            }
+          ],
+          "prompt": "Ship it?",
+          "status": "pending"
+        },
+        "created_at": "<created_at>",
+        "from": "pog-thread",
+        "id": "<UUID>",
+        "kind": "choice",
+        "to": "pog-thread",
+        "via": "card"
+      },
+      "id": "<UUID>",
+      "seq": 1
+    }
+  ],
+  "ok": true,
+  "pastAddresses": [],
+  "rev": "<rev>"
+}
+## thread items, tcp member login
+> GET /cli/thread?addr=pog-thread&limit=20
+> body: 
+HTTP/1.1 200 OK
+content-type: application/json
+{
+  "addr": "pog-thread",
+  "collection": "thread",
+  "conversation_id": "<UUID>",
+  "has_more": false,
+  "instanceId": "<instanceId>",
+  "items": [
+    {
+      "collection": "thread",
+      "conversation_id": "<UUID>",
+      "doc": {
+        "body": "Ship it?",
+        "choice": {
+          "allow_custom": false,
+          "expiresAt": "<expiresAt>",
+          "options": [
+            {
+              "label": "Ship"
+            },
+            {
+              "label": "Wait"
+            }
+          ],
+          "prompt": "Ship it?",
+          "status": "pending"
+        },
+        "created_at": "<created_at>",
+        "from": "pog-thread",
+        "id": "<UUID>",
+        "kind": "choice",
+        "to": "pog-thread",
+        "via": "card"
+      },
+      "id": "<UUID>",
+      "seq": 1
+    }
+  ],
+  "ok": true,
+  "pastAddresses": [],
+  "rev": "<rev>"
+}
+## thread items, tcp agent passport
+> GET /cli/thread?addr=pog-thread&limit=20
+> body: 
+HTTP/1.1 200 OK
+content-type: application/json
+{
+  "addr": "pog-thread",
+  "collection": "thread",
+  "conversation_id": "<UUID>",
+  "has_more": false,
+  "instanceId": "<instanceId>",
+  "items": [
+    {
+      "collection": "thread",
+      "conversation_id": "<UUID>",
+      "doc": {
+        "body": "Ship it?",
+        "choice": {
+          "allow_custom": false,
+          "expiresAt": "<expiresAt>",
+          "options": [
+            {
+              "label": "Ship"
+            },
+            {
+              "label": "Wait"
+            }
+          ],
+          "prompt": "Ship it?",
+          "status": "pending"
+        },
+        "created_at": "<created_at>",
+        "from": "pog-thread",
+        "id": "<UUID>",
+        "kind": "choice",
+        "to": "pog-thread",
+        "via": "card"
+      },
+      "id": "<UUID>",
+      "seq": 1
+    }
+  ],
+  "ok": true,
+  "pastAddresses": [],
+  "rev": "<rev>"
+}
+## thread items, cell passport
+> GET /cli/thread?addr=pog-thread&limit=20
+> body: 
+HTTP/1.1 200 OK
+content-type: application/json
+{
+  "addr": "pog-thread",
+  "collection": "thread",
+  "conversation_id": "<UUID>",
+  "has_more": false,
+  "instanceId": "<instanceId>",
+  "items": [
+    {
+      "collection": "thread",
+      "conversation_id": "<UUID>",
+      "doc": {
+        "body": "Ship it?",
+        "choice": {
+          "allow_custom": false,
+          "expiresAt": "<expiresAt>",
+          "options": [
+            {
+              "label": "Ship"
+            },
+            {
+              "label": "Wait"
+            }
+          ],
+          "prompt": "Ship it?",
+          "status": "pending"
+        },
+        "created_at": "<created_at>",
+        "from": "pog-thread",
+        "id": "<UUID>",
+        "kind": "choice",
+        "to": "pog-thread",
+        "via": "card"
+      },
+      "id": "<UUID>",
+      "seq": 1
+    }
+  ],
+  "ok": true,
+  "pastAddresses": [],
+  "rev": "<rev>"
+}
+## latest, tcp owner token
+> GET /cli/thread/latest?addrs=pog-thread
+> body: 
+HTTP/1.1 200 OK
+content-type: application/json
+{
+  "items": [
+    {
+      "addr": "pog-thread",
+      "at": "<at>",
+      "attachmentCount": 0,
+      "author": null,
+      "conversationId": "<UUID>",
+      "from": "pog-thread",
+      "kind": "choice",
+      "lastReadSeq": 0,
+      "muted": false,
+      "preview": "Asked: Ship it?",
+      "seq": 1,
+      "unread": 0,
+      "via": "card",
+      "waiting": 1
+    }
+  ],
+  "ok": true
+}
+## latest, tcp member login
+> GET /cli/thread/latest?addrs=pog-thread
+> body: 
+HTTP/1.1 200 OK
+content-type: application/json
+{
+  "items": [
+    {
+      "addr": "pog-thread",
+      "at": "<at>",
+      "attachmentCount": 0,
+      "author": null,
+      "conversationId": "<UUID>",
+      "from": "pog-thread",
+      "kind": "choice",
+      "lastReadSeq": 0,
+      "muted": false,
+      "preview": "Asked: Ship it?",
+      "seq": 1,
+      "unread": 0,
+      "via": "card",
+      "waiting": 1
+    }
+  ],
+  "ok": true
+}
+## latest, tcp agent passport
+> GET /cli/thread/latest?addrs=pog-thread
+> body: 
+HTTP/1.1 200 OK
+content-type: application/json
+{
+  "items": [
+    {
+      "addr": "pog-thread",
+      "at": "<at>",
+      "attachmentCount": 0,
+      "author": null,
+      "conversationId": "<UUID>",
+      "from": "pog-thread",
+      "kind": "choice",
+      "preview": "Asked: Ship it?",
+      "seq": 1,
+      "via": "card"
+    }
+  ],
+  "ok": true
+}
+## read-state totals, tcp owner token
+> GET /cli/thread/unread
+> body: 
+HTTP/1.1 200 OK
+content-type: application/json
+{
+  "badgeKey": "<badgeKey>",
+  "byConversation": [
+    {
+      "id": "<UUID>",
+      "kind": "thread",
+      "lastReadSeq": 0,
+      "lastSeq": 1,
+      "muted": false,
+      "projectId": "<THREAD_WS_ID>",
+      "seq": 0,
+      "unread": 0,
+      "waiting": 1
+    }
+  ],
+  "muted": [],
+  "ok": true,
+  "person": "owner",
+  "total": 1,
+  "waitingTotal": 1
+}
+## read-state totals, tcp member login
+> GET /cli/thread/unread
+> body: 
+HTTP/1.1 200 OK
+content-type: application/json
+{
+  "badgeKey": "<badgeKey>",
+  "byConversation": [
+    {
+      "id": "<UUID>",
+      "kind": "thread",
+      "lastReadSeq": 0,
+      "lastSeq": 1,
+      "muted": false,
+      "projectId": "<THREAD_WS_ID>",
+      "seq": 0,
+      "unread": 0,
+      "waiting": 1
+    }
+  ],
+  "muted": [],
+  "ok": true,
+  "person": "pog-member",
+  "total": 1,
+  "waitingTotal": 1
+}
+## read-state totals, tcp agent passport
+> GET /cli/thread/unread
+> body: 
+HTTP/1.1 403 Forbidden
+content-type: application/json
+{
+  "error": {
+    "code": "forbidden",
+    "hint": "read state belongs to a person: use the owner token or a K2 login (agents and app passes have none)"
+  },
+  "ok": false
+}

@@ -480,6 +480,14 @@ fn an_agent_changing_the_persons_widget_sends_one_keep_as_mine_note() {
 fn approving_a_proposal_on_the_persons_widget_asks_keep_as_mine_too() {
     let e = env();
     let plain = workspace("w-keep-plain", false);
+    for (user, role) in [
+        ("olivia", k2_core::connect_users::Role::Owner),
+        ("adam", k2_core::connect_users::Role::Admin),
+        ("mark", k2_core::connect_users::Role::Member),
+    ] {
+        k2_core::connect_users::add_user(user, "password-for-tests-9").expect("add login");
+        k2_core::connect_users::set_role(user, role).expect("role");
+    }
     call("/cli/zen/widget/folder/put", true, &Caller::Owner, json!({"widget": "board", "files": folder("board", "v1")}));
     claim_live(&e.f, "board", 1);
     let (_, v) = call("/cli/zen/widget/folder/put", false, &plain, json!({"widget": "board", "files": folder("board", "v2")}));
@@ -490,6 +498,14 @@ fn approving_a_proposal_on_the_persons_widget_asks_keep_as_mine_too() {
     // No Thread with the proposing agent here (no pinned Chat): the note.
     assert_eq!(v["keepCard"], json!({"note": true}), "{v}");
     assert_eq!(keep_notes("w-keep-plain", "board"), 1, "no Thread for a card: one inbox note");
+    // The note goes only to people who can act on it: Owner logins (Settings'
+    // "It's mine" is owner-only), never an Admin or a Member.
+    let note = k2_core::feedback::list_for_project("w-keep-plain", &k2_core::feedback::ListFilter::Open)
+        .expect("tickets")
+        .into_iter()
+        .find(|i| i.title == crate::zen_agent_routes::keep_title("board"))
+        .expect("the note");
+    assert_eq!(note.assignees, vec!["olivia".to_string()], "owners only: {:?}", note.assignees);
     // A widget that was never the person's: nothing to keep.
     let mgr = workspace("w-keep-mgr2", true);
     let (_, v) = call("/cli/zen/widget/folder/put", false, &mgr, json!({"widget": "other", "files": folder("other", "o1")}));

@@ -524,6 +524,28 @@ pub(crate) fn file_owner_notice(
     title: &str,
     body: &str,
 ) -> Result<feedback::FeedbackItem, String> {
+    file_notice_for(project_id, agent_name, title, body, true)
+}
+
+/// [`file_owner_notice`] for Owner logins only (no Admins): a notice whose
+/// one action is owner-only (0.46.3, the Keep-as-mine fallback note points
+/// at Settings' "It's mine", which Admins can't use).
+pub(crate) fn file_owners_only_notice(
+    project_id: &str,
+    agent_name: &str,
+    title: &str,
+    body: &str,
+) -> Result<feedback::FeedbackItem, String> {
+    file_notice_for(project_id, agent_name, title, body, false)
+}
+
+fn file_notice_for(
+    project_id: &str,
+    agent_name: &str,
+    title: &str,
+    body: &str,
+    admins_too: bool,
+) -> Result<feedback::FeedbackItem, String> {
     let mut item = feedback::create(feedback::NewFeedback {
         project_id: project_id.to_string(),
         agent_name: agent_name.to_string(),
@@ -536,7 +558,14 @@ pub(crate) fn file_owner_notice(
     let people: Vec<String> = k2_core::connect_users::list_users()
         .unwrap_or_default()
         .into_iter()
-        .filter(|u| !u.disabled && matches!(u.role, k2_core::connect_users::Role::Owner | k2_core::connect_users::Role::Admin))
+        .filter(|u| {
+            !u.disabled
+                && match u.role {
+                    k2_core::connect_users::Role::Owner => true,
+                    k2_core::connect_users::Role::Admin => admins_too,
+                    _ => false,
+                }
+        })
         .map(|u| u.username)
         .collect();
     if !people.is_empty() {

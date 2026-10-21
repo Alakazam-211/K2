@@ -285,7 +285,7 @@ fn keep_as_mine(widget: &str, before: Option<(String, k2_core::garden_data::Made
             short(&old_hash),
             short(&new_hash)
         );
-        if let Err(e) = crate::feedback_routes::file_owner_notice(project, &agent, &title, &body) {
+        if let Err(e) = crate::feedback_routes::file_owners_only_notice(project, &agent, &title, &body) {
             k2_core::log_debug!("[zen/agent] keep-as-mine note for {widget}: {e}");
         }
     }

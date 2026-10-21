@@ -156,7 +156,10 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// moves to @3, an own copy keeps its board.
 /// v28 = Garden gaps (0.46.3): a folder put without the switch is ONE
 /// proposal for the whole folder; a `k2.sources.subscribe(address, cb,
-/// onError?)` K2 refused for a retryable reason subscribes again by itself.
+/// onError?)` K2 refused for a retryable reason subscribes again by itself;
+/// frames follow the Garden's light/dark (manifest `colorScheme: "own"`
+/// opts out); an agent's change to the person's widget sends a "Keep as
+/// mine" inbox note.
 pub const SKILL_VERSION_ZEN: u32 = 28;
 /// Bumped to 5 in 0.39.0: same Phase 2.1 A25 verb refresh applied to
 /// the workspace-root template body (Cli tools section, workflow

@@ -431,6 +431,10 @@ saves). `k2 zen guide services` has every rule; `k2 study garden-data` is your s
   <w>` signs alone; a plain validate never signs.) An unsigned\n\
   version gets no data (`author_unknown`). Never sign with the owner token (never use\n\
   `~/.k2/daemon.token`), and never edit a widget the person made unless they ask.\n\
+  When you change a widget the person made (with the switch), its new version isn't\n\
+  theirs, so it runs without its data until they keep it: K2 sends them one inbox note\n\
+  (\"Keep your widget <w> as yours?\"), and the answer says `keepAsMine`. They keep it in\n\
+  one click (Settings → Gardens → Local Data → It's mine); you can't claim for them.\n\
 - **Project grants are a convenience; any agent can join a project.** Don't add yourself\n\
   to a project to get its data; ask the person. A grant admin grants only inside its\n\
   own prefix, never above its own level, never to itself.\n\
@@ -538,6 +542,12 @@ inlines it all into one page; `k2.asset(\"cat.png\")` gives a file as a `data:` 
   inlined before your scripts. `id` is optional and must equal the folder name.\n\
 - `reads` (0.46.1): up to 8 other widgets on the same Garden whose data this one reads\n\
   (`[\"fleet-ops-lists\", \"k2:kanban\"]`; needs `store:read`; never itself). Read-only.\n\
+- **Light and dark follow the Garden, never the computer** (0.46.3): K2 sets the frame's\n\
+  `color-scheme` to the Garden's (`!important`, kept in step on a theme switch), so a\n\
+  stylesheet's `color-scheme: light dark` can't paint a dark Garden's card white on a\n\
+  Mac in Light mode. Style with the `--zen-*` variables and `[data-zen-scheme=dark]`,\n\
+  never `@media (prefers-color-scheme)`. `\"colorScheme\": \"own\"` opts out (your CSS\n\
+  decides); `\"garden\"` is the default.\n\
 - `version`, `license`, `bindings` are accepted and ignored for now. `net` and `secrets`\n\
   are errors: outside data comes from **data sources** (`sources`, below).\n\n\
 ### Placing it\n\n\

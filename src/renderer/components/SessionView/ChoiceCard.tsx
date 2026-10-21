@@ -35,7 +35,14 @@ export function ChoiceCard(props: ChoiceCardProps): JSX.Element {
     return p.view.kind === 'batch' ? (
       <PermissionBatchCard view={p.view} from={from} actions={actions} nowSec={props.nowSec} />
     ) : (
-      <PermissionCard view={p.view} resultMessage={p.result?.message || null} from={from} actions={actions} nowSec={props.nowSec} />
+      <PermissionCard
+        view={p.view}
+        resultMessage={p.result?.message || null}
+        from={from}
+        actions={actions}
+        options={props.options}
+        nowSec={props.nowSec}
+      />
     )
   }
   return <PlainChoiceCard {...props} />

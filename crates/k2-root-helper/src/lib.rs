@@ -27,6 +27,7 @@ pub mod keep;
 pub mod mail;
 pub mod mail_data;
 pub mod pg;
+pub mod pg_major;
 pub mod sew;
 pub mod sew_teardown;
 pub mod podman;
@@ -187,8 +188,19 @@ fn dispatch(
         Verb::PgSystemctl { op, now, unit } => pg::systemctl(ctx, *op, *now, unit).map(|_| None)?,
         Verb::PgDaemonReload => pg::daemon_reload(ctx).map(|_| None)?,
         Verb::PgInstallRamFence => Some(pg::install_ram_fence(ctx)?),
-        Verb::PgPsql { db, flags } => pg::psql(ctx, db, *flags, stdin).map(|_| None)?,
+        Verb::PgPsql { db, flags, cluster } => pg::psql(ctx, db, *flags, *cluster, stdin).map(|_| None)?,
         Verb::PgHbaApp { add, id } => Some(pg::hba_app(ctx, *add, id)?),
+        Verb::PgClusters => Some(pg_major::clusters(ctx)?),
+        Verb::PgAddMajor { major, dry_run } => Some(pg_major::add_major(ctx, *major, *dry_run)?),
+        Verb::PgEnsureCluster { major, port } => Some(pg_major::ensure_cluster(ctx, *major, *port)?),
+        Verb::PgStartConf { major, auto } => Some(pg_major::start_conf(ctx, *major, *auto)?),
+        Verb::PgInstallSlice => Some(pg_major::install_slice(ctx)?),
+        Verb::PgCopyRoles { from, to, dry_run } => Some(pg_major::copy_roles(ctx, *from, *to, *dry_run, stdin)?),
+        Verb::PgMoveDump { from, to, db, tag } => Some(pg_major::move_dump(ctx, *from, *to, db, tag)?),
+        Verb::PgMoveRestore { to, db, tag } => Some(pg_major::move_restore(ctx, *to, db, tag)?),
+        Verb::PgMoveFileRemove { db, tag } => Some(pg_major::move_file_remove(ctx, db, tag)?),
+        Verb::PgAllowConn { major, db, mode } => Some(pg_major::allow_conn(ctx, *major, db, *mode)?),
+        Verb::PgDropDb { major, db } => Some(pg_major::drop_db(ctx, *major, db)?),
 
         Verb::KeepStatus => Some(keep::status(ctx, who.user.as_deref())?),
         Verb::KeepKekInit => keep::kek_init(ctx, &user()?).map(|_| None)?,
@@ -311,6 +323,32 @@ fn audit(
     }
     if let Some(Verb::PgPsql { db, .. }) = verb {
         line["db"] = serde_json::json!(db.as_str());
+    }
+    // A move's steps: which database (validated), which tag; what a copy
+    // or an install did. Never a role's password.
+    match verb {
+        Some(
+            Verb::PgMoveDump { db, tag, .. }
+            | Verb::PgMoveRestore { db, tag, .. }
+            | Verb::PgMoveFileRemove { db, tag },
+        ) => {
+            line["db"] = serde_json::json!(db.as_str());
+            line["tag"] = serde_json::json!(tag);
+        }
+        Some(Verb::PgAllowConn { db, .. } | Verb::PgDropDb { db, .. }) => {
+            line["db"] = serde_json::json!(db.as_str());
+        }
+        _ => {}
+    }
+    if let (Some(Verb::PgCopyRoles { .. }), Some(x)) = (verb, extra) {
+        line["rolesCreated"] = x["created"].clone();
+    }
+    if let (Some(Verb::PgAddMajor { .. }), Some(x)) = (verb, extra) {
+        for k in ["result", "source", "major"] {
+            if let Some(v) = x.get(k) {
+                line[k] = v.clone();
+            }
+        }
     }
     ctx.audit.line(&line.to_string());
 }

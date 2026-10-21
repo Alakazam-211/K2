@@ -111,7 +111,7 @@ pub fn version_json(ctx: &Ctx) -> serde_json::Value {
         "packageOwned": !ctx.is_canonical_path(),
         "keyIds": keys,
         "testKeys": ctx.test_keys,
-        "namespaces": {"helper": true, "mail": true, "pg": true, "backup": false, "keep": true, "daemon": true, "apps": true, "sew": true, "front": true, "cli": true},
+        "namespaces": {"helper": true, "mail": true, "pg": true, "backup": false, "keep": true, "daemon": true, "apps": true, "sew": true, "front": true, "cli": true, "pgmajor": true},
         // `helper cli-refresh` (protocol 9): the K2 CLI this helper carries.
         "cliVersion": cli_version_of(CLI_CONTENT.as_bytes()),
         // ...and its sha256: the daemon refreshes only when this equals

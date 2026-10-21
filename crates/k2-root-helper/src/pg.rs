@@ -17,6 +17,7 @@ use std::ffi::{OsStr, OsString};
 use k2_root_proto::apps::{hba_edit, AppId, HBA_MAX_BYTES};
 use k2_root_proto::paths::*;
 use k2_root_proto::templates::{pg_guc_conf, pg_ram_dropin};
+use k2_root_proto::pg_major::PgMajor;
 use k2_root_proto::verbs::{DbName, PgOp, PgUnit, PsqlFlags};
 
 use crate::ctx::{Ctx, Fail, HResult, KindStr};
@@ -305,11 +306,21 @@ pub fn hba_app(ctx: &Ctx, add: bool, id: &AppId) -> HResult<serde_json::Value> {
 /// `runuser -u postgres -- /usr/bin/psql -X -d <db> …`, SQL on stdin.
 /// psql's own stdout goes to stdout; its stderr (Postgres's words) is
 /// relayed on failure so the daemon can show the SQL error.
-pub fn psql(ctx: &Ctx, db: &DbName, flags: PsqlFlags, sql: &[u8]) -> HResult<()> {
-    let mut args: Vec<String> = ["-u", PG_OS_USER, "--", PSQL, "-X", "-d", db.as_str()]
+///
+/// With `--cluster <M>` (protocol 9): that major's own `psql` against its
+/// cluster's port over the socket, never pg_wrapper's pick (V1, V39).
+pub fn psql(ctx: &Ctx, db: &DbName, flags: PsqlFlags, cluster: Option<PgMajor>, sql: &[u8]) -> HResult<()> {
+    let (prog, conn) = match cluster {
+        Some(m) => crate::pg_major::psql_args(ctx, m)?,
+        None => (PSQL.to_string(), Vec::new()),
+    };
+    let mut args: Vec<String> = ["-u", PG_OS_USER, "--", prog.as_str(), "-X"]
         .iter()
         .map(|s| s.to_string())
         .collect();
+    args.extend(conn);
+    args.push("-d".into());
+    args.push(db.as_str().into());
     if flags.on_error_stop {
         args.push("-v".into());
         args.push("ON_ERROR_STOP=1".into());

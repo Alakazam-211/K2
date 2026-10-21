@@ -35,13 +35,16 @@
 //!   daemon, gated on `namespaces.front`, [`FRONT_MIN_PROTOCOL`]) and
 //!   `turn_tls: "passthrough"` in the Sew media requests. Anything after
 //!   an 8 build ships needs 9.
-//! - 9 = 0.46.3's one helper bump, shared by every lane: `helper
-//!   cli-refresh` (the daemon's auto-heal refreshes a stale root-owned
-//!   `/usr/local/bin/k2` to the CLI compiled into the helper; gated on this
-//!   AND `namespaces.cli`, [`CLI_REFRESH_MIN_PROTOCOL`]) and Postgres majors
-//!   side by side (`pg clusters`, `pg add-major`, `pg ensure-cluster`, `pg
-//!   psql --cluster` and the move verbs; gated on this AND
-//!   `namespaces.pgmajor`, [`PGMAJOR_MIN_PROTOCOL`]).
+//! - 9 = every root-helper change 0.46.3 makes, in one bump, shared by
+//!   every lane: `helper cli-refresh` (the daemon's auto-heal refreshes a
+//!   stale root-owned `/usr/local/bin/k2` to the CLI compiled into the
+//!   helper; gated on this AND `namespaces.cli`,
+//!   [`CLI_REFRESH_MIN_PROTOCOL`]) and the `pg` namespace's several-majors
+//!   verbs (`namespaces.pgmajor`, [`PGMAJOR_MIN_PROTOCOL`],
+//!   `prd-pg17-and-db-upgrade-v1` §15 S2): `clusters`, `add-major`,
+//!   `ensure-cluster`, `start-conf`, `install-slice`, `psql --cluster`,
+//!   `copy-roles`, `move-dump`, `move-restore`, `move-file-remove`,
+//!   `allow-conn`, `drop-db`. Anything after a 9 build ships needs 10.
 //!
 //! The first `k2-root-helper` build ships 3 and 4 together and answers 4.
 //! Protocols are additive: a newer helper serves an older daemon.
@@ -247,7 +250,29 @@ mod tests {
         assert_eq!(SEW_MIN_PROTOCOL, 7);
         assert_eq!(PROTOCOL, 9, "protocol 9 = 0.46.3's one bump (cli-refresh + Postgres majors); 8 = 0.46.1's helper changes");
         assert_eq!(CLI_REFRESH_MIN_PROTOCOL, 9);
-        assert_eq!(PGMAJOR_MIN_PROTOCOL, 9);
+        assert_eq!(PGMAJOR_MIN_PROTOCOL, 9, "the majors verbs join 0.46.3's one bump; never 10");
+        let pgmajor: Vec<_> = crate::verbs::catalog()
+            .into_iter()
+            .filter(|v| {
+                let a = v.argv();
+                a[0] == "pg"
+                    && matches!(
+                        a[1].as_str(),
+                        "clusters"
+                            | "add-major"
+                            | "ensure-cluster"
+                            | "start-conf"
+                            | "install-slice"
+                            | "copy-roles"
+                            | "move-dump"
+                            | "move-restore"
+                            | "move-file-remove"
+                            | "allow-conn"
+                            | "drop-db"
+                    )
+            })
+            .collect();
+        assert!(pgmajor.len() >= 11, "{pgmajor:?}");
         let sew: Vec<_> = crate::verbs::catalog()
             .into_iter()
             .filter(|v| v.namespace() == "sew")

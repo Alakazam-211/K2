@@ -34,6 +34,8 @@ pub const CAP_ENGINE: usize = 64 * 1024 * 1024;
 pub const CAP_SEW_KEY: usize = 64;
 /// `engine sew install|config|media install`: one small JSON object.
 pub const CAP_SEW_JSON: usize = 64 * 1024;
+/// `pg copy-roles`: one small JSON object (at most 256 role names).
+pub const CAP_ROLES: usize = 32 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Class {
@@ -141,6 +143,32 @@ impl DbName {
     }
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+/// `pg allow-conn` modes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnMode {
+    On,
+    Quiesce,
+    Off,
+}
+
+impl ConnMode {
+    pub fn parse(t: &str) -> Option<Self> {
+        Some(match t {
+            "on" => Self::On,
+            "quiesce" => Self::Quiesce,
+            "off" => Self::Off,
+            _ => return None,
+        })
+    }
+    pub fn token(self) -> &'static str {
+        match self {
+            Self::On => "on",
+            Self::Quiesce => "quiesce",
+            Self::Off => "off",
+        }
     }
 }
 
@@ -493,12 +521,69 @@ pub enum Verb {
     PgSystemctl { op: PgOp, now: bool, unit: PgUnit },
     PgDaemonReload,
     PgInstallRamFence,
-    PgPsql { db: DbName, flags: PsqlFlags },
+    /// `pg psql [--cluster <M>] -d <db> …`: `--cluster` (protocol 9) runs
+    /// that major's own `psql` against its cluster's port as postgres.
+    PgPsql { db: DbName, flags: PsqlFlags, cluster: Option<PgMajor> },
     /// `pg hba-app add|remove <app-id>` (protocol 6, AR17/AR38): one canned
     /// `host app_<id> app_<id> 127.0.0.1/32 scram-sha-256` line in a
     /// K2-owned block at the top of each cluster's `pg_hba.conf`, then a
     /// reload. The App's own database and role only; nothing else.
     PgHbaApp { add: bool, id: AppId },
+    // pg, protocol 9 (`namespaces.pgmajor`, see `crate::pg_major`)
+    /// `pg clusters` (open, read-only): `pg_lsclusters` rows (Sew's own
+    /// Postgres never counted), each cluster's `start.conf`, the majors
+    /// installed, the codename, K2's apt files, the shared slice, Sew.
+    PgClusters,
+    /// `pg add-major <M> [--dry-run]`: the `createcluster.d` drop-in, then
+    /// (only when `postgresql-<M>` isn't installed) the compiled-in PGDG
+    /// keyring, K2's deb822 source and pins, a simulated install that
+    /// refuses any removal or change of an installed server, the install;
+    /// every installed `postgresql-<n>` marked manual. `--dry-run` writes
+    /// nothing and answers the plan.
+    PgAddMajor { major: PgMajor, dry_run: bool },
+    /// `pg ensure-cluster <M> [<port>]`: `<M>/main`, created when missing
+    /// (`add-major <M>` first when its packages are missing, then
+    /// `pg_createcluster`, start `auto`) on `<port>` or, without one, the
+    /// first free port in K2's band; K2's cluster conf + RAM fence + the
+    /// shared slice; then started. Answers the cluster (`major`, `name`,
+    /// `port`, `dataDir`, `running`, `startConf`, `unit`). An existing
+    /// cluster on another port than the one asked for is a refusal.
+    PgEnsureCluster { major: PgMajor, port: Option<u16> },
+    /// `pg start-conf <M> auto|manual` (`clusters tidy` sets an empty
+    /// cluster `manual`; never a drop).
+    PgStartConf { major: PgMajor, auto: bool },
+    /// `pg install-slice` (open): `k2-postgres.slice` and the
+    /// `postgresql@` drop-in that puts every cluster in it.
+    PgInstallSlice,
+    /// `pg copy-roles <from> <to>`, stdin [`crate::pg_major::CopyRolesRequest`]:
+    /// recreate each role in the target cluster with the source's stored
+    /// password (SCRAM verifier) and attributes. Any role already in the
+    /// target with another verifier or other attributes refuses the whole
+    /// call before any change. Verifiers never leave the helper.
+    /// `--dry-run`: the same comparison, nothing created (a move's
+    /// `--check`): names only.
+    PgCopyRoles { from: PgMajor, to: PgMajor, dry_run: bool },
+    /// `pg move-dump <from> <to> <db> <tag>`: `<to>`'s `pg_dump -Fc
+    /// --no-subscriptions --no-publications` of `<db>` on `<from>`'s
+    /// cluster, as postgres, into `MOVES_DIR/<db>-<tag>.dump`.
+    PgMoveDump { from: PgMajor, to: PgMajor, db: DbName, tag: String },
+    /// `pg move-restore <to> <db> <tag>`: `<to>`'s `pg_restore
+    /// --exit-on-error` of that dump into `<db>` (which must exist) on
+    /// `<to>`'s cluster, as postgres, with the temp-file and statement caps
+    /// lifted for the session (V40).
+    PgMoveRestore { to: PgMajor, db: DbName, tag: String },
+    /// `pg move-file-remove <db> <tag>`: that dump file (forget-old).
+    PgMoveFileRemove { db: DbName, tag: String },
+    /// `pg allow-conn <M> <db> on|quiesce|off` (a move's lock, §6.2):
+    /// - `quiesce`: `CONNECTION LIMIT 0` and the database's sessions ended;
+    ///   only superusers (the helper's own dump) still connect;
+    /// - `off`: `ALLOW_CONNECTIONS false` (no one connects: the kept source
+    ///   of a finished move) and the sessions ended;
+    /// - `on`: `ALLOW_CONNECTIONS true`, `CONNECTION LIMIT -1`.
+    PgAllowConn { major: PgMajor, db: DbName, mode: ConnMode },
+    /// `pg drop-db <M> <db>`: `DROP DATABASE … WITH (FORCE)` on that
+    /// cluster (forget-old; the daemon allows it for the owner only).
+    PgDropDb { major: PgMajor, db: DbName },
     // keep
     KeepStatus,
     KeepKekInit,
@@ -601,6 +686,7 @@ pub enum Verb {
 }
 
 use crate::apps::{bounded, AppId, IoMax, OciRuntime, PortRange, BUDGET_MEM_MIB, BUDGET_TASKS, CORES_MIN_MIB};
+use crate::pg_major::{port_token, tag_ok, PgMajor};
 
 const REFUSED: &str = "refused arguments";
 
@@ -659,6 +745,22 @@ fn remove_target(t: &str) -> Option<RemoveTarget> {
     })
 }
 
+fn major(t: &str) -> Result<PgMajor, &'static str> {
+    PgMajor::parse(t).ok_or(REFUSED)
+}
+
+fn db_name(t: &str) -> Result<DbName, &'static str> {
+    DbName::parse(t).ok_or(REFUSED)
+}
+
+fn tag_token(t: &str) -> Result<String, &'static str> {
+    if tag_ok(t) {
+        Ok(t.to_string())
+    } else {
+        Err(REFUSED)
+    }
+}
+
 fn pg_op(t: &str) -> Option<PgOp> {
     Some(match t {
         "start" => PgOp::Start,
@@ -674,9 +776,15 @@ fn pg_op(t: &str) -> Option<PgOp> {
 fn parse_psql(rest: &[&str]) -> Option<Verb> {
     let mut db: Option<DbName> = None;
     let mut flags = PsqlFlags::default();
+    let mut cluster: Option<PgMajor> = None;
     let mut i = 0;
     while i < rest.len() {
         match rest[i] {
+            // Only first, so the canonical argv stays one spelling.
+            "--cluster" if i == 0 => {
+                cluster = Some(PgMajor::parse(rest.get(1)?)?);
+                i += 2;
+            }
             "-d" => {
                 if db.is_some() {
                     return None;
@@ -707,7 +815,7 @@ fn parse_psql(rest: &[&str]) -> Option<Verb> {
             _ => return None,
         }
     }
-    Some(Verb::PgPsql { db: db?, flags })
+    Some(Verb::PgPsql { db: db?, flags, cluster })
 }
 
 impl Verb {
@@ -716,8 +824,15 @@ impl Verb {
         if args.is_empty() {
             return Err("empty argv");
         }
-        // 8 tokens, except `apps process caps` (6 + its device grants).
-        let max = if args.starts_with(&["apps", "process", "caps"]) { 6 + crate::apps::MAX_DEVICES } else { 8 };
+        // 8 tokens, except `apps process caps` (6 + its device grants) and
+        // `pg psql --cluster <M>` with every flag (9; protocol 9).
+        let max = if args.starts_with(&["apps", "process", "caps"]) {
+            6 + crate::apps::MAX_DEVICES
+        } else if args.starts_with(&["pg", "psql", "--cluster"]) {
+            9
+        } else {
+            8
+        };
         if args.len() > max || !args.iter().all(|a| token_ok(a)) {
             return Err(REFUSED);
         }
@@ -778,6 +893,55 @@ impl Verb {
                 },
                 id: AppId::parse(id).ok_or(REFUSED)?,
             },
+            ["pg", "clusters"] => Verb::PgClusters,
+            ["pg", "add-major", m] => Verb::PgAddMajor { major: major(m)?, dry_run: false },
+            ["pg", "add-major", m, "--dry-run"] => Verb::PgAddMajor { major: major(m)?, dry_run: true },
+            ["pg", "ensure-cluster", m] => Verb::PgEnsureCluster { major: major(m)?, port: None },
+            ["pg", "ensure-cluster", m, p] => Verb::PgEnsureCluster {
+                major: major(m)?,
+                port: Some(port_token(p).ok_or(REFUSED)?),
+            },
+            ["pg", "start-conf", m, c] => Verb::PgStartConf {
+                major: major(m)?,
+                auto: match *c {
+                    "auto" => true,
+                    "manual" => false,
+                    _ => return Err(REFUSED),
+                },
+            },
+            ["pg", "install-slice"] => Verb::PgInstallSlice,
+            ["pg", "copy-roles", f, t, rest @ ..] => {
+                let (from, to) = (major(f)?, major(t)?);
+                if from == to {
+                    return Err(REFUSED);
+                }
+                let dry_run = match rest {
+                    [] => false,
+                    ["--dry-run"] => true,
+                    _ => return Err(REFUSED),
+                };
+                Verb::PgCopyRoles { from, to, dry_run }
+            }
+            ["pg", "move-dump", f, t, db, tag] => {
+                let (from, to) = (major(f)?, major(t)?);
+                // Never an older pg_dump than the server it reads.
+                if to < from {
+                    return Err(REFUSED);
+                }
+                Verb::PgMoveDump { from, to, db: db_name(db)?, tag: tag_token(tag)? }
+            }
+            ["pg", "move-restore", t, db, tag] => {
+                Verb::PgMoveRestore { to: major(t)?, db: db_name(db)?, tag: tag_token(tag)? }
+            }
+            ["pg", "move-file-remove", db, tag] => {
+                Verb::PgMoveFileRemove { db: db_name(db)?, tag: tag_token(tag)? }
+            }
+            ["pg", "allow-conn", m, db, t] => Verb::PgAllowConn {
+                major: major(m)?,
+                db: db_name(db)?,
+                mode: ConnMode::parse(t).ok_or(REFUSED)?,
+            },
+            ["pg", "drop-db", m, db] => Verb::PgDropDb { major: major(m)?, db: db_name(db)? },
 
             ["keep", "status"] => Verb::KeepStatus,
             ["keep", "kek", "init"] => Verb::KeepKekInit,
@@ -955,8 +1119,14 @@ impl Verb {
                 v
             }
             Verb::PgInstallRamFence => s(&["pg", "install-ram-fence"]),
-            Verb::PgPsql { db, flags } => {
-                let mut v = s(&["pg", "psql", "-d", db.as_str()]);
+            Verb::PgPsql { db, flags, cluster } => {
+                let mut v = s(&["pg", "psql"]);
+                if let Some(m) = cluster {
+                    v.push("--cluster".into());
+                    v.push(m.token());
+                }
+                v.push("-d".into());
+                v.push(db.as_str().into());
                 if flags.on_error_stop {
                     v.push("-v".into());
                     v.push("ON_ERROR_STOP=1".into());
@@ -975,6 +1145,43 @@ impl Verb {
                 if *add { "add" } else { "remove" },
                 id.as_str(),
             ]),
+            Verb::PgClusters => s(&["pg", "clusters"]),
+            Verb::PgAddMajor { major, dry_run } => {
+                let mut v = s(&["pg", "add-major", &major.token()]);
+                if *dry_run {
+                    v.push("--dry-run".into());
+                }
+                v
+            }
+            Verb::PgEnsureCluster { major, port } => {
+                let mut v = s(&["pg", "ensure-cluster", &major.token()]);
+                if let Some(p) = port {
+                    v.push(p.to_string());
+                }
+                v
+            }
+            Verb::PgStartConf { major, auto } => {
+                s(&["pg", "start-conf", &major.token(), if *auto { "auto" } else { "manual" }])
+            }
+            Verb::PgInstallSlice => s(&["pg", "install-slice"]),
+            Verb::PgCopyRoles { from, to, dry_run } => {
+                let mut v = s(&["pg", "copy-roles", &from.token(), &to.token()]);
+                if *dry_run {
+                    v.push("--dry-run".into());
+                }
+                v
+            }
+            Verb::PgMoveDump { from, to, db, tag } => {
+                s(&["pg", "move-dump", &from.token(), &to.token(), db.as_str(), tag])
+            }
+            Verb::PgMoveRestore { to, db, tag } => {
+                s(&["pg", "move-restore", &to.token(), db.as_str(), tag])
+            }
+            Verb::PgMoveFileRemove { db, tag } => s(&["pg", "move-file-remove", db.as_str(), tag]),
+            Verb::PgAllowConn { major, db, mode } => {
+                s(&["pg", "allow-conn", &major.token(), db.as_str(), mode.token()])
+            }
+            Verb::PgDropDb { major, db } => s(&["pg", "drop-db", &major.token(), db.as_str()]),
             Verb::KeepStatus => s(&["keep", "status"]),
             Verb::KeepKekInit => s(&["keep", "kek", "init"]),
             Verb::KeepKekGet => s(&["keep", "kek", "get"]),
@@ -1074,6 +1281,24 @@ impl Verb {
             Verb::PgPsql { .. } => Daemon,
             // Changes who may log in to Postgres: the daemon's call only.
             Verb::PgHbaApp { .. } => Daemon,
+            // Reading, the shared memory cap (a tightening), a dry run and
+            // a cluster that starts at boot converge to what K2 sets anyway.
+            Verb::PgClusters
+            | Verb::PgInstallSlice
+            | Verb::PgAddMajor { dry_run: true, .. }
+            | Verb::PgStartConf { auto: true, .. } => Open,
+            // Packages and apt trust, a new cluster on a port, roles with
+            // their passwords, a database's data, who may connect, a drop:
+            // the daemon's call (the owner's or the toggle's, PRD §12).
+            Verb::PgAddMajor { dry_run: false, .. }
+            | Verb::PgEnsureCluster { .. }
+            | Verb::PgStartConf { auto: false, .. }
+            | Verb::PgCopyRoles { .. }
+            | Verb::PgMoveDump { .. }
+            | Verb::PgMoveRestore { .. }
+            | Verb::PgMoveFileRemove { .. }
+            | Verb::PgAllowConn { .. }
+            | Verb::PgDropDb { .. } => Daemon,
 
             Verb::KeepStatus | Verb::KeepGenGet => Open,
             Verb::KeepKekInit
@@ -1166,6 +1391,7 @@ impl Verb {
             Verb::AppsInstallEngine => Some(CAP_ENGINE),
             Verb::AppsPodmanInstall => Some(crate::podman::CAP_BUNDLE),
             Verb::PgPsql { .. } => Some(CAP_SQL),
+            Verb::PgCopyRoles { .. } => Some(CAP_ROLES),
             Verb::Sew(v) => v.stdin_cap(),
             _ => None,
         }
@@ -1184,6 +1410,13 @@ impl Verb {
                 | Verb::HelperAuditTail
                 | Verb::MailUsage
                 | Verb::PgPsql { .. }
+                | Verb::PgClusters
+                | Verb::PgAddMajor { dry_run: true, .. }
+                // A dump or restore runs as long as the data takes, as
+                // postgres (no root write); holding the pg lock for it would
+                // make every restart "busy" (Postgres orders the SQL).
+                | Verb::PgMoveDump { .. }
+                | Verb::PgMoveRestore { .. }
                 | Verb::PgSystemctl {
                     op: PgOp::IsActive,
                     ..
@@ -1209,7 +1442,16 @@ impl Verb {
         match self {
             // DB names are validated ids; keep them out of the audit verb
             // field anyway (the db goes in its own field).
-            Verb::PgPsql { .. } => "pg psql".to_string(),
+            Verb::PgPsql { cluster: None, .. } => "pg psql".to_string(),
+            Verb::PgPsql { cluster: Some(m), .. } => format!("pg psql --cluster {}", m.token()),
+            // The db and tag go in their own fields.
+            Verb::PgMoveDump { from, to, .. } => format!("pg move-dump {} {}", from.token(), to.token()),
+            Verb::PgMoveRestore { to, .. } => format!("pg move-restore {}", to.token()),
+            Verb::PgMoveFileRemove { .. } => "pg move-file-remove".to_string(),
+            Verb::PgAllowConn { major, mode, .. } => {
+                format!("pg allow-conn {} {}", major.token(), mode.token())
+            }
+            Verb::PgDropDb { major, .. } => format!("pg drop-db {}", major.token()),
             _ => v.join(" "),
         }
     }
@@ -1244,6 +1486,8 @@ fn pg_op_name(op: PgOp) -> &'static str {
 pub fn catalog() -> Vec<Verb> {
     let unit = PgUnit::parse("postgresql").expect("unit");
     let db = DbName::parse("postgres").expect("db");
+    let jobs = DbName::parse("ws_jobs").expect("db");
+    let (m16, m17) = (PgMajor::new(16).expect("16"), PgMajor::new(17).expect("17"));
     let mut v = vec![
         Verb::HelperVersion,
         Verb::HelperSelfUpdate,
@@ -1262,13 +1506,40 @@ pub fn catalog() -> Vec<Verb> {
         Verb::PgDaemonReload,
         Verb::PgInstallRamFence,
         Verb::PgPsql {
+            db: db.clone(),
+            flags: PsqlFlags {
+                on_error_stop: true,
+                tuples_only: true,
+                unaligned: true,
+            },
+            cluster: None,
+        },
+        Verb::PgPsql {
             db,
             flags: PsqlFlags {
                 on_error_stop: true,
                 tuples_only: true,
                 unaligned: true,
             },
+            cluster: Some(m17),
         },
+        Verb::PgClusters,
+        Verb::PgAddMajor { major: m17, dry_run: false },
+        Verb::PgAddMajor { major: m17, dry_run: true },
+        Verb::PgEnsureCluster { major: m17, port: Some(5433) },
+        Verb::PgEnsureCluster { major: m17, port: None },
+        Verb::PgStartConf { major: m16, auto: true },
+        Verb::PgStartConf { major: m16, auto: false },
+        Verb::PgInstallSlice,
+        Verb::PgCopyRoles { from: m16, to: m17, dry_run: false },
+        Verb::PgCopyRoles { from: m16, to: m17, dry_run: true },
+        Verb::PgMoveDump { from: m16, to: m17, db: jobs.clone(), tag: "20261020T101500Z".into() },
+        Verb::PgMoveRestore { to: m17, db: jobs.clone(), tag: "20261020T101500Z".into() },
+        Verb::PgMoveFileRemove { db: jobs.clone(), tag: "20261020T101500Z".into() },
+        Verb::PgAllowConn { major: m16, db: jobs.clone(), mode: ConnMode::Off },
+        Verb::PgAllowConn { major: m16, db: jobs.clone(), mode: ConnMode::Quiesce },
+        Verb::PgAllowConn { major: m16, db: jobs.clone(), mode: ConnMode::On },
+        Verb::PgDropDb { major: m16, db: jobs },
         Verb::PgHbaApp {
             add: true,
             id: AppId::parse("jobs").expect("id"),
@@ -1863,6 +2134,7 @@ mod tests {
                 Verb::MailRenderUnit => assert_eq!(cap, Some(CAP_TEMPLATE)),
                 Verb::MailInstallBin => assert_eq!(cap, Some(CAP_INSTALL_BIN)),
                 Verb::PgPsql { .. } => assert_eq!(cap, Some(CAP_SQL)),
+                Verb::PgCopyRoles { .. } => assert_eq!(cap, Some(CAP_ROLES)),
                 Verb::AppsInstallEngine => assert_eq!(cap, Some(CAP_ENGINE)),
                 Verb::Sew(SewVerb::Stage | SewVerb::StageMedia) => assert_eq!(cap, Some(CAP_INSTALL_BIN)),
                 Verb::Sew(
@@ -1878,12 +2150,167 @@ mod tests {
                 Verb::AppsPodmanInstall => assert_eq!(cap, Some(crate::podman::CAP_BUNDLE)),
                 _ => assert_eq!(cap, None, "{v:?} reads no stdin"),
             }
-            if v.class() == Class::Daemon && !matches!(v, Verb::PgPsql { .. } | Verb::KeepKekGet | Verb::AppsLogs { .. }) {
+            if v.class() == Class::Daemon
+                && !matches!(
+                    v,
+                    Verb::PgPsql { .. }
+                        | Verb::KeepKekGet
+                        | Verb::AppsLogs { .. }
+                        | Verb::PgMoveDump { .. }
+                        | Verb::PgMoveRestore { .. }
+                )
+            {
                 assert!(v.takes_lock(), "{v:?}");
             }
         }
         assert!(!Verb::HelperVersion.needs_root());
         assert!(catalog().iter().filter(|v| !v.needs_root()).count() == 1);
+    }
+
+    /// The several-majors verbs (protocol 9): classes, locks and stdin
+    /// written out by hand. A verb moving class must change this on purpose.
+    #[test]
+    fn pgmajor_class_table() {
+        let open: &[&[&str]] = &[
+            &["pg", "clusters"],
+            &["pg", "install-slice"],
+            &["pg", "add-major", "17", "--dry-run"],
+            &["pg", "start-conf", "17", "auto"],
+        ];
+        let daemon: &[&[&str]] = &[
+            &["pg", "add-major", "17"],
+            &["pg", "add-major", "18"],
+            &["pg", "ensure-cluster", "17", "5433"],
+            &["pg", "ensure-cluster", "16", "5432"],
+            &["pg", "ensure-cluster", "17"],
+            &["pg", "start-conf", "16", "manual"],
+            &["pg", "copy-roles", "16", "17"],
+            // Reads verifiers server-side to compare: the daemon's call too.
+            &["pg", "copy-roles", "16", "17", "--dry-run"],
+            &["pg", "move-dump", "16", "17", "ws_jobs", "20261020T101500Z"],
+            &["pg", "move-dump", "17", "17", "ws_jobs", "20261020T101500Z"],
+            &["pg", "move-restore", "17", "ws_jobs", "20261020T101500Z"],
+            &["pg", "move-file-remove", "ws_jobs", "20261020T101500Z"],
+            &["pg", "allow-conn", "16", "ws_jobs", "off"],
+            &["pg", "allow-conn", "16", "ws_jobs", "quiesce"],
+            &["pg", "allow-conn", "16", "ws_jobs", "on"],
+            &["pg", "drop-db", "16", "ws_jobs"],
+            &["pg", "psql", "--cluster", "17", "-d", "ws_jobs", "-v", "ON_ERROR_STOP=1", "-tA"],
+        ];
+        for a in open {
+            let v = Verb::parse(a).unwrap_or_else(|e| panic!("{a:?}: {e}"));
+            assert_eq!(v.class(), Class::Open, "{a:?}");
+            assert_eq!(v.namespace(), "pg");
+        }
+        for a in daemon {
+            let v = Verb::parse(a).unwrap_or_else(|e| panic!("{a:?}: {e}"));
+            assert_eq!(v.class(), Class::Daemon, "{a:?}");
+        }
+        let lockless = [
+            &["pg", "clusters"][..],
+            &["pg", "add-major", "17", "--dry-run"],
+            &["pg", "move-dump", "16", "17", "ws_jobs", "20261020T101500Z"],
+            &["pg", "move-restore", "17", "ws_jobs", "20261020T101500Z"],
+            &["pg", "psql", "--cluster", "17", "-d", "ws_jobs"],
+        ];
+        for a in lockless {
+            assert!(!Verb::parse(a).unwrap().takes_lock(), "{a:?}");
+        }
+        for a in [
+            &["pg", "add-major", "17"][..],
+            &["pg", "ensure-cluster", "17", "5433"],
+            &["pg", "copy-roles", "16", "17"],
+            &["pg", "allow-conn", "16", "ws_jobs", "off"],
+            &["pg", "drop-db", "16", "ws_jobs"],
+            &["pg", "install-slice"],
+        ] {
+            assert!(Verb::parse(a).unwrap().takes_lock(), "{a:?}");
+        }
+        assert_eq!(Verb::parse(&["pg", "copy-roles", "16", "17"]).unwrap().stdin_cap(), Some(CAP_ROLES));
+        let v = Verb::parse(&["pg", "move-dump", "16", "17", "ws_jobs", "20261020T101500Z"]).unwrap();
+        assert_eq!(v.audit_name(), "pg move-dump 16 17", "the db goes in its own audit field");
+        let v = Verb::parse(&["pg", "psql", "--cluster", "17", "-d", "ws_jobs"]).unwrap();
+        assert_eq!(v.audit_name(), "pg psql --cluster 17");
+        assert_eq!(v.argv(), vec!["pg", "psql", "--cluster", "17", "-d", "ws_jobs"]);
+    }
+
+    /// Majors outside the table, ports outside the band, paths, SQL,
+    /// packages, users and flags never parse.
+    #[test]
+    fn pgmajor_attack_table_is_refused() {
+        let rejects: &[&[&str]] = &[
+            &["pg", "clusters", "--json"],
+            &["pg", "clusters", "16"],
+            &["pg", "add-major"],
+            &["pg", "add-major", "15"],
+            &["pg", "add-major", "19"],
+            &["pg", "add-major", "017"],
+            &["pg", "add-major", "17.1"],
+            &["pg", "add-major", "latest"],
+            &["pg", "add-major", "postgresql-17"],
+            &["pg", "add-major", "17", "postgresql-17-pgvector"],
+            &["pg", "add-major", "17", "--dry-run", "x"],
+            &["pg", "add-major", "17", "-y"],
+            &["pg", "add-major", "17", "noble"],
+            &["pg", "add-major", "17", "http://evil/apt"],
+            &["pg", "add-major", "17;id"],
+            &["pg", "ensure-cluster"],
+            &["pg", "ensure-cluster", "17", "5431"],
+            &["pg", "ensure-cluster", "17", "5450"],
+            &["pg", "ensure-cluster", "17", "22"],
+            &["pg", "ensure-cluster", "17", "05433"],
+            &["pg", "ensure-cluster", "17", "5433", "main"],
+            &["pg", "ensure-cluster", "17", "5433-5440"],
+            &["pg", "ensure-cluster", "17/main", "5433"],
+            &["pg", "ensure-cluster", "17", "5433", "--datadir=/tmp"],
+            &["pg", "start-conf", "17"],
+            &["pg", "start-conf", "17", "disabled"],
+            &["pg", "start-conf", "17", "auto", "now"],
+            &["pg", "install-slice", "MemoryMax=100%"],
+            &["pg", "copy-roles", "16"],
+            &["pg", "copy-roles", "16", "16"],
+            &["pg", "copy-roles", "16", "17", "ws_x_agent"],
+            &["pg", "copy-roles", "16", "17", "--dry-run", "x"],
+            &["pg", "copy-roles", "16", "17", "dry-run"],
+            &["pg", "copy-roles", "16", "15"],
+            &["pg", "move-dump", "16", "17", "ws_jobs"],
+            &["pg", "move-dump", "17", "16", "ws_jobs", "20261020T101500Z"],
+            &["pg", "move-dump", "16", "17", "template1", "20261020T101500Z"],
+            &["pg", "move-dump", "16", "17", "ws_jobs", "/tmp/x.dump"],
+            &["pg", "move-dump", "16", "17", "ws_jobs", "20261020T101500Z", "-Fp"],
+            &["pg", "move-dump", "16", "17", "ws_jobs", "2026-10-20"],
+            &["pg", "move-dump", "16", "17", "Ws_Jobs", "20261020T101500Z"],
+            &["pg", "move-restore", "17", "ws_jobs", "20261020T101500Z", "--clean"],
+            &["pg", "move-restore", "17", "ws_jobs", "../../etc/passwd"],
+            &["pg", "move-restore", "17", "postgres;", "20261020T101500Z"],
+            &["pg", "move-file-remove", "ws_jobs", "*"],
+            &["pg", "move-file-remove", "ws_jobs"],
+            &["pg", "allow-conn", "16", "ws_jobs"],
+            &["pg", "allow-conn", "16", "ws_jobs", "true"],
+            &["pg", "allow-conn", "16", "ws_jobs", "off", "terminate"],
+            &["pg", "allow-conn", "16", "template0", "on"],
+            &["pg", "drop-db", "16"],
+            &["pg", "drop-db", "16", "template1"],
+            &["pg", "drop-db", "16", "ws_jobs", "--force"],
+            &["pg", "drop-db", "16", "a b"],
+            &["pg", "drop-cluster", "16", "main"],
+            &["pg", "remove-major", "16"],
+            &["pg", "upgradecluster", "16", "main"],
+            // psql --cluster: first, a table major, once.
+            &["pg", "psql", "--cluster", "-d", "ws_jobs"],
+            &["pg", "psql", "--cluster", "15", "-d", "ws_jobs"],
+            &["pg", "psql", "--cluster", "17/main", "-d", "ws_jobs"],
+            &["pg", "psql", "-d", "ws_jobs", "--cluster", "17"],
+            &["pg", "psql", "--cluster", "17", "--cluster", "16", "-d", "ws_jobs"],
+            &["pg", "psql", "--cluster", "17", "-d", "ws_jobs", "-p", "5433"],
+            &["pg", "psql", "--cluster", "17", "-d", "ws_jobs", "-h", "/tmp"],
+            // 9 tokens only for `--cluster` with every flag; never 10.
+            &["pg", "psql", "--cluster", "17", "-d", "ws_jobs", "-v", "ON_ERROR_STOP=1", "-tA", "-t"],
+            &["pg", "psql", "-d", "ws_jobs", "-v", "ON_ERROR_STOP=1", "-t", "-A", "-d"],
+        ];
+        for r in rejects {
+            assert!(Verb::parse(r).is_err(), "expected refusal: {r:?}");
+        }
     }
 
     /// `engine sew` (protocol 7): classes written out by hand. A verb

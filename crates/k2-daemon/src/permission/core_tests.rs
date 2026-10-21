@@ -667,3 +667,43 @@ fn todays_bodies_match_the_off_goldens() {
         assert_eq!((r.status, r.body.as_str()), ("403 Forbidden", r#"{"error":"Invalid or missing auth token"}"#));
     }
 }
+
+// ── GET /cli/permission/agents (people; D2's Settings page) ─────────
+
+#[test]
+fn the_agents_route_lists_switches_and_recent_requests_for_owners_and_admins() {
+    let _home = crate::test_support::TempHome::new();
+    let ws = seed("pcag");
+    k2_core::workspace::settings::set_agents_can_request_permissions(&ws.id, true).expect("switch on");
+    let v = ask_ok(&ws, "test.switch", json!({}));
+    let id = v["id"].as_str().unwrap().to_string();
+    let admin = login("pcaga", k2_core::connect_users::Role::Admin);
+    let member = login("pcagm", k2_core::connect_users::Role::Member);
+    let admin_who = Who::Login { username: admin.clone(), role: k2_core::connect_users::Role::Admin };
+
+    // Every agent (server-wide), and this one with `workspace=` (id or handle).
+    let (s, all) = call(&Who::Owner, routes::AGENTS, json!({}));
+    assert_eq!(s, "200 OK", "{all}");
+    let mine = all["agents"].as_array().expect("agents").iter().find(|a| a["workspace"] == ws.id).cloned().expect("listed");
+    assert_eq!(mine, json!({ "workspace": ws.id, "handle": ws.handle, "name": ws.handle, "on": true }));
+    for token in [ws.id.as_str(), ws.handle.as_str()] {
+        let (s, one) = call(&admin_who, routes::AGENTS, json!({ "workspace": token }));
+        assert_eq!(s, "200 OK", "{token}: {one}");
+        assert_eq!(one["agents"].as_array().map(Vec::len), Some(1), "{one}");
+        let r = &one["recent"][0];
+        assert_eq!((r["id"].as_str(), r["agent"].as_str(), r["workspace"].as_str()), (Some(id.as_str()), Some(ws.handle.as_str()), Some(ws.id.as_str())));
+        assert_eq!((r["setting"].as_str(), r["state"].as_str(), r["action"].as_str()), (Some("Allow test things"), Some("pending"), Some("test.switch")));
+        assert_eq!(r["card"], v["card"]);
+        assert_eq!(r["addr"], ws.handle);
+    }
+    let (s, e) = call(&Who::Owner, routes::AGENTS, json!({ "workspace": "no-such-workspace-pcag" }));
+    assert_eq!((s.as_str(), &e["error"]["code"]), ("404 Not Found", &json!("workspace_not_found")));
+
+    // A Member and any passport are refused; it's a GET.
+    let (s, e) = call(&Who::Login { username: member, role: k2_core::connect_users::Role::Member }, routes::AGENTS, json!({}));
+    assert_eq!((s.as_str(), &e["error"]["code"]), ("403 Forbidden", &json!("role_required")), "{e}");
+    let (s, e) = call(&agent(&ws), routes::AGENTS, json!({}));
+    assert_eq!((s.as_str(), &e["error"]["code"]), ("403 Forbidden", &json!("forbidden")), "a passport: {e}");
+    let r = handle_gated(routes::AGENTS, &Who::Owner, true, b"{}", &HashMap::new());
+    assert_eq!(r.status, "405 Method Not Allowed");
+}

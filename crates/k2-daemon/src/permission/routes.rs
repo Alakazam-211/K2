@@ -32,10 +32,13 @@ pub(crate) const STATUS: &str = "/cli/permission/status";
 pub(crate) const CANCEL: &str = "/cli/permission/cancel";
 pub(crate) const LIST: &str = "/cli/permission/list";
 pub(crate) const ENABLED: &str = "/cli/permission/enabled";
+/// People only (Owner/Admin): every agent's "Can ask for permission cards"
+/// switch and the recent requests (the Settings page, the Agent tab; D2).
+pub(crate) const AGENTS: &str = "/cli/permission/agents";
 
 /// Every route A1 serves (rows for lane B's tables: [`POST_ROUTES`] are
 /// POST, the rest GET; all are agent verbs).
-pub(crate) const ROUTES: &[&str] = &[REQUEST, UPDATE, STATUS, CANCEL, LIST, ENABLED];
+pub(crate) const ROUTES: &[&str] = &[REQUEST, UPDATE, STATUS, CANCEL, LIST, ENABLED, AGENTS];
 pub(crate) const POST_ROUTES: &[&str] = &[REQUEST, UPDATE, CANCEL];
 
 /// Request bodies are small: an action, a few values and one line of why.
@@ -93,6 +96,9 @@ pub(crate) fn handle_gated(path: &str, who: &Who, is_post: bool, body: &[u8], pa
         } else {
             err(405, "method_not_allowed", "use GET")
         };
+    }
+    if path == AGENTS {
+        return agents(who, &body_map(body, params));
     }
     if path == ENABLED {
         return enabled(who);
@@ -493,6 +499,84 @@ fn own(workspace_id: &str, body: &Map<String, Value>) -> Result<PermissionReques
         Ok(_) => Err(err(404, "not_found", format!("no request {id} of yours"))),
         Err(e) => Err(err(500, "db", e)),
     }
+}
+
+// ── GET /cli/permission/agents (people, Admin floor) ────────────────
+
+/// A workspace by id, handle or path (the Settings page sends the id).
+fn workspace_id_of(token: &str) -> Option<String> {
+    let token = token.trim();
+    if token.is_empty() {
+        return None;
+    }
+    let db = k2_core::db::shared();
+    if k2_core::db::schema::Project::get(&db.lock(), token).is_ok() {
+        return Some(token.to_string());
+    }
+    let path = crate::workspace_msg::resolve_workspace(token)?;
+    let conn = db.lock();
+    k2_core::workspace::agent_identity::resolve_project_id(&conn, &path)
+}
+
+/// `{agents:[{workspace, handle, name, on}], recent:[summary + agent,
+/// workspace, setting]}`: every agent's switch (name order) and the 20
+/// newest requests server-wide, or one workspace's with `workspace=`.
+fn agents(who: &Who, body: &Map<String, Value>) -> CliResponse {
+    match who {
+        Who::Owner => {}
+        Who::Login { role, .. } if *role >= k2_core::connect_users::Role::Admin => {}
+        Who::Login { .. } => return err(403, "role_required", "an owner or an admin sees the agents' permission-card switches"),
+        _ => return err(403, "forbidden", "a people route: the Settings page's agent list (an agent asks with k2 permission request)"),
+    }
+    let only = match str_field(body, "workspace") {
+        Some(t) => match workspace_id_of(t) {
+            Some(id) => Some(id),
+            None => return err(404, "workspace_not_found", format!("no workspace '{t}'")),
+        },
+        None => None,
+    };
+    let names: std::collections::HashMap<String, String> = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let mut out = std::collections::HashMap::new();
+        if let Ok(mut st) = conn.prepare("SELECT id, name FROM projects") {
+            if let Ok(rows) = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))) {
+                out.extend(rows.filter_map(Result::ok));
+            }
+        }
+        out
+    };
+    let agents: Vec<Value> = k2_core::workspace::settings::agents_permission_switches()
+        .into_iter()
+        .filter(|(id, _)| only.as_deref().map_or(true, |o| o == id))
+        .map(|(id, on)| {
+            json!({
+                "workspace": id,
+                "handle": present::workspace_handle(&id),
+                "name": names.get(&id).cloned().unwrap_or_default(),
+                "on": on,
+            })
+        })
+        .collect();
+    let rows = match only.as_deref() {
+        Some(ws) => store::for_workspace(ws, 20),
+        None => store::recent(20),
+    };
+    let rows = match rows {
+        Ok(r) => r,
+        Err(e) => return err(500, "db", e),
+    };
+    let recent: Vec<Value> = rows
+        .iter()
+        .map(|r| {
+            let mut v = summary(r);
+            v["agent"] = json!(present::workspace_handle(&r.workspace_id));
+            v["workspace"] = json!(r.workspace_id);
+            v["setting"] = json!(present::find_action(&r.action).map(|a| a.spec.words.setting).unwrap_or(r.action.as_str()));
+            v
+        })
+        .collect();
+    ok(json!({ "agents": agents, "recent": recent }))
 }
 
 fn summary(r: &PermissionRequest) -> Value {

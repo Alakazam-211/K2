@@ -40,6 +40,14 @@
 //! - Totals: `total` = unread across unmuted conversations + every
 //!   waiting card (muted or not) = the badge; `waitingTotal` = waiting
 //!   across everything.
+//! - **Action cards** (0.46.3): an App guest never sees one (keep-as-mine,
+//!   permission cards), so for a guest it is neither waiting nor unread:
+//!   counting it would tell the guest a card exists. A **permission card**
+//!   (prd-agent-settings-cards-v1 rev 3.1 §4.6, C10) waits only for people
+//!   at its floor (`view.approvers.floor`: `owner`, or `admin` = an Owner or
+//!   Admin login); for every other person it is an ordinary unread line.
+//!   The push `waitingTotal` reads these totals, so it follows the same
+//!   rule. Every other card is unchanged.
 
 use std::collections::HashMap;
 
@@ -383,13 +391,69 @@ pub fn is_muted(conn: &Connection, person: &str, kind: &str, id: &str, now: i64)
 }
 
 /// Does this Thread doc count as unread for `person` (when past the
-/// cursor)? Someone else's post, not history, not a waiting card.
+/// cursor)? Someone else's post, not history, not a card waiting on them,
+/// and never an action card for an App guest (it can't see one).
 fn thread_doc_counts(person: &Person, doc: &OverlayDoc, now: i64) -> bool {
+    if person.guest.is_some() && doc.is_action_card() {
+        return false;
+    }
     !person.wrote_thread_doc(doc)
         && doc.imported.is_none()
         && doc.external.is_none()
         && doc.via.as_deref() != Some("import")
-        && !overlay::is_waiting_now(doc, now)
+        && !(overlay::is_waiting_now(doc, now) && card_waits_for(person, doc))
+}
+
+/// A permission card's floor (`choice.action.view.approvers.floor`), or
+/// `None` for any other doc. A permission card without a readable floor
+/// waits for the owner only (the strictest floor).
+fn permission_floor(doc: &OverlayDoc) -> Option<&str> {
+    let action = doc.choice.as_ref()?.action.as_ref()?;
+    if action.id != crate::permission::CARD_ACTION_PERMISSION && action.id != crate::permission::CARD_ACTION_BATCH {
+        return None;
+    }
+    let floor = action
+        .view
+        .as_ref()
+        .and_then(|v| v.get("approvers"))
+        .and_then(|a| a.get("floor"))
+        .and_then(serde_json::Value::as_str);
+    Some(match floor {
+        Some("admin") => "admin",
+        _ => "owner",
+    })
+}
+
+/// Whether a waiting card is waiting on `person` (§4.6): never an action
+/// card for an App guest; a permission card only for people at its floor
+/// (the owner person, or a Connect login whose role meets it); every other
+/// card for everyone, as before.
+fn card_waits_for(person: &Person, doc: &OverlayDoc) -> bool {
+    if person.guest.is_some() {
+        return !doc.is_action_card();
+    }
+    let Some(floor) = permission_floor(doc) else { return true };
+    if person.key == OWNER {
+        return true;
+    }
+    match crate::connect_users::role_for_user(&person.key) {
+        Some(crate::connect_users::Role::Owner) => true,
+        Some(crate::connect_users::Role::Admin) => floor == "admin",
+        _ => false,
+    }
+}
+
+/// The waiting cards in one conversation (or every one) that wait on
+/// `person`, as `(conversation, card id)`.
+fn waiting_for(person: &Person, conversation_id: Option<&str>, now: i64) -> Result<Vec<(String, String)>, ReadError> {
+    let mut out = Vec::new();
+    for (conv, card) in overlay::waiting_cards(conversation_id, now)? {
+        match overlay::get_doc(&card)? {
+            Some(doc) if !card_waits_for(person, &doc) => {}
+            _ => out.push((conv, card)),
+        }
+    }
+    Ok(out)
 }
 
 fn thread_unread(person: &Person, conv: &str, after: i64, head: i64, now: i64) -> Result<i64, ReadError> {
@@ -424,8 +488,8 @@ fn project_unread(conn: &Connection, person: &Person, group: &str, after: i64, h
     Ok(rows.iter().filter(|(k, a)| !person.wrote_project_message(k, a)).count() as i64)
 }
 
-fn thread_waiting(conv: &str, now: i64) -> Result<i64, ReadError> {
-    Ok(overlay::waiting_cards(Some(conv), now)?.len() as i64)
+fn thread_waiting(person: &Person, conv: &str, now: i64) -> Result<i64, ReadError> {
+    Ok(waiting_for(person, Some(conv), now)?.len() as i64)
 }
 
 fn thread_project_id(conn: &Connection, conv: &str) -> Result<Option<String>, ReadError> {
@@ -446,7 +510,7 @@ pub fn item(conn: &Connection, person: &Person, kind: &str, id: &str, now: i64) 
     let (unread, waiting, project_id) = match kind {
         KIND_THREAD => (
             thread_unread(person, id, cur.last_read_seq, head, now)?,
-            thread_waiting(id, now)?,
+            thread_waiting(person, id, now)?,
             thread_project_id(conn, id)?,
         ),
         _ => (project_unread(conn, person, id, cur.last_read_seq, head)?, 0, None),
@@ -475,7 +539,7 @@ pub fn totals(conn: &Connection, person: &Person, now: i64) -> Result<Totals, Re
 pub fn summary(conn: &Connection, person: &Person, now: i64) -> Result<Summary, ReadError> {
     ensure_person(conn, &person.key)?;
     let mut waiting: HashMap<String, i64> = HashMap::new();
-    for (conv, _) in overlay::waiting_cards(None, now)? {
+    for (conv, _) in waiting_for(person, None, now)? {
         *waiting.entry(conv).or_default() += 1;
     }
     let mut out = Summary::default();
@@ -877,6 +941,107 @@ mod tests {
         assert_eq!(it.unread, UNREAD_CAP, "{it:?}");
         ack(&conn, "owner", KIND_THREAD, &c, Some(10)).expect("ack");
         assert_eq!(item(&conn, &owner(), KIND_THREAD, &c, now_secs()).expect("item").unread, 95);
+    }
+
+    /// An action card on the Thread (keep-as-mine, or a permission card
+    /// with `view.approvers.floor`).
+    fn action_card(conn: &Connection, conv: &str, project: &str, id: &str, floor: Option<&str>) -> String {
+        let mut action = serde_json::json!({ "id": id, "params": {}, "dedupe": uuid::Uuid::new_v4().to_string() });
+        if let Some(f) = floor {
+            action["view"] = serde_json::json!({ "approvers": { "floor": f, "label": "x", "names": [] } });
+        }
+        let action: overlay::CardAction = serde_json::from_value(action).expect("action");
+        let (item, _) = overlay::post_choice_with_action(
+            conn, conv, project, "rs-agent", "rs-agent", "Ask", vec!["Allow".into(), "Deny".into()], false, None, Some(action),
+        )
+        .expect("action card");
+        item.id
+    }
+
+    /// prd-agent-settings-cards-v1 rev 3.1 §4.6 (C10): a permission card is
+    /// waiting only for people at its floor; for everyone else it is an
+    /// ordinary unread line, and the totals (the push's `waitingTotal`)
+    /// follow. Every other card is unchanged for people.
+    #[test]
+    fn a_permission_card_waits_only_for_people_at_its_floor() {
+        let _home = crate::test_env::TempHome::new();
+        crate::connect_users::add_user("rsmaya", "a-long-password-1").expect("maya");
+        crate::connect_users::set_role("rsmaya", crate::connect_users::Role::Admin).expect("admin");
+        crate::connect_users::add_user("rsdana", "a-long-password-2").expect("dana");
+        crate::connect_users::set_role("rsdana", crate::connect_users::Role::Member).expect("member");
+        crate::connect_users::add_user("rsboss", "a-long-password-3").expect("boss");
+        crate::connect_users::set_role("rsboss", crate::connect_users::Role::Owner).expect("owner");
+        let (g, project) = db();
+        let h = g.handle();
+        let conn = h.lock();
+        let (maya, dana, boss) =
+            (Person::of_login(&people(), "rsmaya"), Person::of_login(&people(), "rsdana"), Person::of_login(&people(), "rsboss"));
+        for p in [&owner(), &maya, &dana, &boss] {
+            ensure_person(&conn, &p.key).expect("seen");
+        }
+        let now = now_secs();
+
+        let admin_floor = conv();
+        action_card(&conn, &admin_floor, &project, crate::permission::CARD_ACTION_PERMISSION, Some("admin"));
+        let owner_floor = conv();
+        action_card(&conn, &owner_floor, &project, crate::permission::CARD_ACTION_BATCH, Some("owner"));
+        let no_floor = conv();
+        action_card(&conn, &no_floor, &project, crate::permission::CARD_ACTION_PERMISSION, None);
+
+        let st = |p: &Person, c: &str| {
+            let it = item(&conn, p, KIND_THREAD, c, now).expect("item");
+            (it.unread, it.waiting)
+        };
+        // Admin floor: the owner and an Admin wait on it; a Member reads it.
+        assert_eq!(st(&owner(), &admin_floor), (0, 1));
+        assert_eq!(st(&boss, &admin_floor), (0, 1), "an Owner login");
+        assert_eq!(st(&maya, &admin_floor), (0, 1), "an Admin login");
+        assert_eq!(st(&dana, &admin_floor), (1, 0), "a Member: an ordinary unread line");
+        // Owner floor (and a card with no readable floor): owners only.
+        for c in [&owner_floor, &no_floor] {
+            assert_eq!(st(&owner(), c), (0, 1));
+            assert_eq!(st(&boss, c), (0, 1));
+            assert_eq!(st(&maya, c), (1, 0), "an Admin below an owner floor");
+            assert_eq!(st(&dana, c), (1, 0));
+        }
+        // The totals (badge, push `waitingTotal`) follow.
+        assert_eq!(summary(&conn, &owner(), now).expect("s").totals, Totals { total: 3, waiting_total: 3 });
+        assert_eq!(summary(&conn, &maya, now).expect("s").totals, Totals { total: 3, waiting_total: 1 });
+        assert_eq!(summary(&conn, &dana, now).expect("s").totals, Totals { total: 3, waiting_total: 0 });
+
+        // Keep-as-mine and plain asks are unchanged: they wait for everyone.
+        let other = conv();
+        action_card(&conn, &other, &project, "zen.widget.keep", None);
+        ask(&conn, &other, &project);
+        assert_eq!(st(&dana, &other), (0, 2));
+    }
+
+    /// K2's rule (2026-10-21): an App guest never sees an action card, so
+    /// none counts for it — not as waiting (that would say a card exists)
+    /// and not as unread once answered. Its other lines count as before.
+    #[test]
+    fn an_app_guest_never_counts_an_action_card() {
+        let (g, project) = db();
+        let h = g.handle();
+        let conn = h.lock();
+        let guest = Person::app_guest("guest:pid-ac", "ana");
+        ensure_person(&conn, &guest.key).expect("guest");
+        let c = conv();
+        let now = now_secs();
+        let perm = action_card(&conn, &c, &project, crate::permission::CARD_ACTION_PERMISSION, Some("admin"));
+        action_card(&conn, &c, &project, "zen.widget.keep", None);
+        let it = item(&conn, &guest, KIND_THREAD, &c, now).expect("item");
+        assert_eq!((it.unread, it.waiting), (0, 0), "a guest learns nothing: {it:?}");
+        assert_eq!(summary(&conn, &guest, now).expect("s").totals, Totals { total: 0, waiting_total: 0 });
+        // The owner still waits on both.
+        assert_eq!(item(&conn, &owner(), KIND_THREAD, &c, now).expect("owner").waiting, 2);
+        // Answered: still never unread for the guest; a plain post and a
+        // plain ask still count.
+        overlay::answer_card(&c, &project, &perm, Some("Allow"), None, None).expect("answer");
+        agent_post(&conn, &c, &project, "hi");
+        ask(&conn, &c, &project);
+        let it = item(&conn, &guest, KIND_THREAD, &c, now).expect("item");
+        assert_eq!((it.unread, it.waiting), (1, 1), "{it:?}");
     }
 
     #[test]

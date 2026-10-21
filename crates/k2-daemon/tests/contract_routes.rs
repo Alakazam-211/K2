@@ -116,8 +116,11 @@ fn exposure_counts_are_pinned() {
     // (garden-person-rows-v1): thread.catchup, thread.unread,
     // tickets.list/show/create/comment/resolve, activity.snapshot,
     // files.list/read/readBinary. No project chat row on the Garden.
+    // App project chat (0.46.3, catalog v18): app + project.list,
+    // project.read, project.post, project.markRead and project.events
+    // (App only, never garden-local).
     let garden_local = c.verbs_exposed_to(Exposure::GardenLocal).len();
-    assert_eq!((widget, app, garden_local), (29, 72, 33), "per-exposure verb counts (widget, app, garden-local)");
+    assert_eq!((widget, app, garden_local), (29, 77, 33), "per-exposure verb counts (widget, app, garden-local)");
     let both: Vec<&str> = c
         .verbs
         .iter()

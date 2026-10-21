@@ -20,7 +20,11 @@
 #   * the CLI version string (K2_CLI_VERSION, bumped by release.sh) → <K2_CLI_VERSION>
 #   * the stub's ephemeral port → <PORT>
 #   * the sandbox path → <SANDBOX>
-#   * the sandbox path in its URL-encoded forms (upper/lower hex) → <SANDBOX>
+#   * percent-escapes → upper case (macOS and Linux encoders differ in case
+#     only), then the sandbox path's URL-encoded form → <SANDBOX>
+#   * a request's Content-Length, when its body carries the sandbox path →
+#     "<bytes without it>+<k>x<SANDBOX>" (still exact; the path's length
+#     differs between macOS /private/tmp and Linux /tmp)
 #   * a `User-Agent: curl/x.y.z` / `Python-urllib/x.y` value → …/<VERSION>
 #
 # Modes:
@@ -115,8 +119,26 @@ import re, sys
 ver, port, sandbox = sys.argv[1], sys.argv[2], sys.argv[3]
 from urllib.parse import quote
 t = sys.stdin.read()
-enc = quote(sandbox, safe="")
-for form in (sandbox, enc, re.sub(r"%[0-9A-F]{2}", lambda m: m.group(0).lower(), enc)):
+# A logged request body that carries the sandbox path has a Content-Length
+# that depends on that path (/private/tmp/… on macOS, /tmp/… on Linux).
+# Keep it exact, relative to the path: "<bytes without it>+<k>x<SANDBOX>".
+lines = t.split("\n")
+cl_at = None
+for i, line in enumerate(lines):
+    if re.match(r"> [A-Z]+ /", line):
+        cl_at = None
+    elif line.lower().startswith("> content-length: "):
+        cl_at = i
+    elif line.startswith("> body: ") and cl_at is not None:
+        k = line.count(sandbox)
+        if k:
+            n = int(lines[cl_at].split(":", 1)[1].strip()) - k * len(sandbox.encode())
+            lines[cl_at] = lines[cl_at].split(":", 1)[0] + ": %d+%dx<SANDBOX>" % (n, k)
+        cl_at = None
+t = "\n".join(lines)
+# Percent-escapes in upper case: macOS and Linux encoders differ in case only.
+t = re.sub(r"%[0-9a-fA-F]{2}", lambda m: m.group(0).upper(), t)
+for form in (sandbox, quote(sandbox, safe="")):
     t = t.replace(form, "<SANDBOX>")
 t = t.replace(ver, "<K2_CLI_VERSION>")
 t = re.sub(r"(?<![0-9])" + re.escape(port) + r"(?![0-9])", "<PORT>", t)

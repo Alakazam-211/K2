@@ -9,5 +9,5 @@ owner_only: only the server's owner may do this
 > User-Agent: curl/<VERSION>
 > Accept: */*
 > Content-Type: application/json
-> Content-Length: 86
+> Content-Length: 61+1x<SANDBOX>
 > body: {"workspace": "<SANDBOX>/ws", "name": "reviewer", "harness": "claude"}

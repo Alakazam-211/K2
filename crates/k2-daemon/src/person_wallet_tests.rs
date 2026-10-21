@@ -409,18 +409,45 @@ fn losing_app_access_makes_items_dormant_then_deleted_after_30_days() {
 }
 
 #[test]
-fn a_deleted_person_loses_their_wallet_at_once() {
+fn a_deleted_person_loses_their_wallet_and_marks_at_the_next_sweep() {
     let f = fx("gone");
     let bob_id = f.bob.principal_id.clone().unwrap();
     let key = format!("sk-{MARKER}-bob-0123456789");
     let (s, v, _) = skin_call(Some(&f.bob), ADD, true, json!({"type": "llm_api_key", "provider": "codex", "key": key}), &[]);
     assert_eq!(s, 200, "{v}");
     let id = v["item"]["id"].as_str().unwrap().to_string();
+    mark(&f, "bob", &f.ws_bob);
     assert!(skin::remove_principal("bob").unwrap());
     let (_, _, deleted, _) = prt::lifecycle(1_900_000_000);
     assert_eq!(deleted, 1);
     assert!(with_conn(|c| pw::get(c, &id)).unwrap().is_none());
     assert!(VaultSealer.unseal(&bob_id, &id).unwrap().is_none());
+    assert!(with_conn(|c| pw::person_agent(c, &f.ws_bob)).unwrap().is_none(), "his mark goes in the same pass");
+    let audit = std::fs::read_to_string(dirs::home_dir().unwrap().join(".k2/auth-audit.jsonl")).unwrap_or_default();
+    assert!(audit.contains("person_gone") && audit.contains(&f.ws_bob), "audited: {audit}");
+}
+
+#[test]
+fn turning_a_person_into_an_agent_login_clears_their_wallet_and_their_marks() {
+    let f = fx("toagent");
+    let sub = signed_in_claude(&f.alice, "personal", "alice");
+    mark(&f, "alice", &f.ws_alice);
+    mark(&f, "bob", &f.ws_bob);
+    // Alice's login becomes an agent's own login (no longer a person).
+    skin::set_principal_agent("alice", Some(&f.own)).unwrap();
+    let (_, _, deleted, _) = prt::lifecycle(1_900_000_000);
+    assert_eq!(deleted, 1);
+    assert!(with_conn(|c| pw::get(c, &sub.id)).unwrap().is_none(), "her items go");
+    assert!(VaultSealer.unseal(&f.alice_id(), &sub.id).unwrap().is_none());
+    assert!(with_conn(|c| pw::person_agent(c, &f.ws_alice)).unwrap().is_none(), "her personal-agent mark goes in the same pass");
+    let bobs = with_conn(|c| pw::person_agent(c, &f.ws_bob)).unwrap().expect("Bob's mark is untouched");
+    assert_eq!(bobs.principal_id, f.bob.principal_id.clone().unwrap());
+    let audit = std::fs::read_to_string(dirs::home_dir().unwrap().join(".k2/auth-audit.jsonl")).unwrap_or_default();
+    assert!(audit.contains("now_an_agent_login") && audit.contains(&f.ws_alice), "the mark's removal is audited: {audit}");
+    // The owner's list no longer names her.
+    let (_, v, _) = owner_call(Caller::Owner, O_AGENTS, false, json!({}), &[]);
+    let rows = v["agents"].as_array().unwrap();
+    assert!(rows.iter().all(|r| r["workspace"] != json!(f.ws_alice)), "{v}");
 }
 
 #[test]

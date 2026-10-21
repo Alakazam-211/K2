@@ -10690,6 +10690,12 @@ secret, the sign-in link or code.
   k2 app wallet personal-agent --clear <workspace>
   k2 app wallet personal-agents [--json]
 
+Lifecycle: an App user who loses App access keeps their items unused for
+30 days (back at once if access returns), then they are deleted. An App user
+who is deleted, or turned into an agent's login, loses their items and their
+personal-agent marks at the next sweep (within a minute). Removed items are
+deleted, never kept in Trash.
+
 Note: each person's subscription runs only their own agent. Check that your
 plan's terms allow the way your App uses it.
 EOF

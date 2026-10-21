@@ -27,7 +27,9 @@
 //!
 //! **Lifecycle.** Removing an item deletes it (row, slot, vault secret),
 //! never Trash. Losing App access makes items dormant; 30 days later they
-//! are deleted; a principal that is gone loses them at once.
+//! are deleted; a principal that is gone, or turned into an agent's own
+//! login, loses them and its personal-agent marks at the daemon's next
+//! sweep (within a minute).
 
 pub mod decide;
 

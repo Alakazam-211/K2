@@ -1,0 +1,11 @@
+{
+  "body": {
+    "error": {
+      "code": "action_card_person_only",
+      "hint": "only a person with the owner role answers this card",
+      "required": "owner"
+    },
+    "ok": false
+  },
+  "status": 403
+}

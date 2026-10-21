@@ -1,0 +1,26 @@
+{
+  "body": {
+    "action": {
+      "id": "permission.batch",
+      "result": {
+        "message": "3 of 3 answered.",
+        "outcome": "done"
+      }
+    },
+    "addr": "billing",
+    "answer": "Allow",
+    "conversation_id": "6f1c0b52-2b1e-4d0e-9c1a-1b2f3e4d5a60",
+    "decided": [
+      {
+        "id": "ar_23",
+        "state": "approved"
+      }
+    ],
+    "id": "b4a1c0de-5e6f-4a7b-9c8d-0e1f2a3b4c5d",
+    "kind": "choice",
+    "ok": true,
+    "seq": 1,
+    "status": "answered"
+  },
+  "status": 200
+}

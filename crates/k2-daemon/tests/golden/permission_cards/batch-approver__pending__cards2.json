@@ -1,0 +1,200 @@
+{
+  "body": "billing asks for 3 permissions.",
+  "choice": {
+    "action": {
+      "dedupe": "batch:sess_9:owner",
+      "id": "permission.batch",
+      "params": {
+        "requests": [
+          "pr_a1a1a1",
+          "pr_a2a2a2",
+          "ar_23"
+        ]
+      },
+      "view": {
+        "approvers": {
+          "floor": "owner",
+          "label": "owner",
+          "names": [
+            "rosson"
+          ]
+        },
+        "expiresAt": 1761319200,
+        "items": [
+          {
+            "action": "apps.build",
+            "answer": null,
+            "approvers": {
+              "floor": "owner",
+              "label": "owner",
+              "names": [
+                "rosson"
+              ]
+            },
+            "askedFor": null,
+            "askers": null,
+            "consequences": "It can build, deploy and restart its own Apps inside the default limits.",
+            "direction": "loosen",
+            "duration": "until someone turns it off",
+            "expiresAt": 1761319200,
+            "grant": "standing",
+            "noteBox": {
+              "allowed": false,
+              "max": 500,
+              "mine": null
+            },
+            "notes": [],
+            "proof": {
+              "kind": "click"
+            },
+            "requestId": "pr_a1a1a1",
+            "scope": "billing",
+            "setting": "Build and run Apps",
+            "settingsPage": "workspaces/billing/agent",
+            "state": "pending",
+            "undo": null,
+            "values": [
+              {
+                "key": "workspace",
+                "value": "billing"
+              }
+            ],
+            "whatChanges": "Let billing build and run Apps.",
+            "why": {
+              "by": "billing",
+              "text": "Run the test suite on k2n2-m1; it takes 40 min here"
+            }
+          },
+          {
+            "action": "apps.core",
+            "answer": null,
+            "approvers": {
+              "floor": "owner",
+              "label": "owner",
+              "names": [
+                "rosson"
+              ]
+            },
+            "askedFor": null,
+            "askers": null,
+            "consequences": "Its Apps may use that core without asking each time.",
+            "direction": "loosen",
+            "duration": "until someone turns it off",
+            "expiresAt": 1761319200,
+            "grant": "standing",
+            "noteBox": {
+              "allowed": false,
+              "max": 500,
+              "mine": null
+            },
+            "notes": [],
+            "proof": {
+              "kind": "click"
+            },
+            "requestId": "pr_a2a2a2",
+            "scope": "billing",
+            "setting": "App cores",
+            "settingsPage": "workspaces/billing/agent",
+            "state": "pending",
+            "undo": null,
+            "values": [
+              {
+                "key": "workspace",
+                "value": "billing"
+              },
+              {
+                "key": "core",
+                "value": "db"
+              }
+            ],
+            "whatChanges": "Let billing's Apps use the db core.",
+            "why": {
+              "by": "billing",
+              "text": "Run the test suite on k2n2-m1; it takes 40 min here"
+            }
+          },
+          {
+            "action": "apps.approve",
+            "answer": null,
+            "approvers": {
+              "floor": "owner",
+              "label": "owner",
+              "names": [
+                "rosson"
+              ]
+            },
+            "askedFor": null,
+            "askers": null,
+            "consequences": "The App's process runs as asked in ar_23 until someone stops it.",
+            "direction": "loosen",
+            "duration": "once",
+            "expiresAt": 1761319200,
+            "grant": "one-time",
+            "noteBox": {
+              "allowed": false,
+              "max": 500,
+              "mine": null
+            },
+            "notes": [],
+            "proof": {
+              "action": "app-approve",
+              "kind": "confirm",
+              "secretId": "ar_23"
+            },
+            "requestId": "ar_23",
+            "scope": "request ar_23",
+            "setting": "App Approvals",
+            "settingsPage": "app-approvals",
+            "state": "pending",
+            "undo": null,
+            "values": [
+              {
+                "key": "workspace",
+                "value": "billing"
+              },
+              {
+                "key": "request",
+                "value": "ar_23"
+              }
+            ],
+            "whatChanges": "Run billing's held App request ar_23 on this server.",
+            "why": {
+              "by": "billing",
+              "text": "Run the test suite on k2n2-m1; it takes 40 min here"
+            }
+          }
+        ],
+        "kind": "batch",
+        "state": "pending",
+        "v": 1,
+        "viewer": {
+          "canAnswer": true,
+          "canAnswerAll": false,
+          "isAsker": false,
+          "login": "rosson",
+          "mode": "approve",
+          "role": "owner",
+          "via": "login"
+        }
+      }
+    },
+    "allow_custom": false,
+    "expiresAt": 1761319200,
+    "options": [
+      {
+        "label": "Allow all"
+      },
+      {
+        "label": "Deny all"
+      }
+    ],
+    "prompt": "billing asks for 3 permissions.",
+    "status": "pending"
+  },
+  "created_at": 1761060000,
+  "from": "billing",
+  "id": "b4a1c0de-5e6f-4a7b-9c8d-0e1f2a3b4c5d",
+  "kind": "choice",
+  "to": "billing",
+  "via": "permission"
+}

@@ -1,0 +1,29 @@
+{
+  "body": "billing asks: Let billing run jobs on this server's compute nodes (Allow compute nodes).",
+  "choice": {
+    "action": {
+      "id": "permission",
+      "params": {
+        "request": "pr_7f3a2c"
+      }
+    },
+    "allow_custom": false,
+    "expiresAt": 1761319200,
+    "options": [
+      {
+        "label": "Allow"
+      },
+      {
+        "label": "Deny"
+      }
+    ],
+    "prompt": "billing asks: Let billing run jobs on this server's compute nodes (Allow compute nodes).\nbilling says: \"Run the test suite on k2n2-m1; it takes 40 min here\"\ndana (member): \"I need this for the payroll run\"",
+    "status": "pending"
+  },
+  "created_at": 1761060000,
+  "from": "billing",
+  "id": "7f3a2c90-4f1e-4c2a-9b0d-3e5f6a7b8c90",
+  "kind": "choice",
+  "to": "billing",
+  "via": "permission"
+}

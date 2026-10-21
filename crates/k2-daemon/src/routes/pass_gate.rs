@@ -216,6 +216,19 @@ mod tests {
                 crate::heartbeat_app_routes::READ_PATHS.iter().chain(crate::heartbeat_app_routes::WRITE_PATHS.iter()).copied().collect(),
             ),
             ("crate::app_mobile_routes::PASS_ROUTES", crate::app_mobile_routes::PASS_ROUTES.to_vec()),
+            // 0.46.3 lanes folded in at r4: App project chat's socket, the
+            // App room stream and the read-state arm.
+            ("crate::apps::project_chat::EVENTS_WS_PATH", vec![crate::apps::project_chat::EVENTS_WS_PATH]),
+            ("crate::room_stream_ws::ROOM_STREAM_WS_PATH", vec![crate::room_stream_ws::ROOM_STREAM_WS_PATH]),
+            (
+                "crate::read_routes::is_read_route",
+                vec![
+                    crate::read_routes::UNREAD_PATH,
+                    crate::read_routes::READ_PATH,
+                    crate::read_routes::MUTE_PATH,
+                    crate::read_routes::PROJECT_READ_PATH,
+                ],
+            ),
         ]
     }
 
@@ -235,6 +248,9 @@ mod tests {
         "/cli/terminal/read",
         "/cli/terminal/write",
         "/cli/browser/open-url",
+        // A pass on the read-state arm's project route only gets
+        // not_a_person (a guest's project read state is App project chat's).
+        "/cli/project-group/read",
     ];
 
     /// Prefix arms (a route family matched with `starts_with`) that touch a

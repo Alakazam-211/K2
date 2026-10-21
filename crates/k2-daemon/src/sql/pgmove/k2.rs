@@ -401,6 +401,59 @@ fn ok(v: Value) -> CliResponse {
     CliResponse::ok_json(v.to_string())
 }
 
+/// What a move, rollback, forget-old or check meets when the Postgres
+/// sidecar isn't running (`sql_server.status`): `(status, code, hint)`,
+/// or `None` when it runs. Every answer names the one command that
+/// helps; `pending` (a move the last daemon left open) is said too,
+/// since it is finished or undone first once Postgres runs. `k2 db
+/// status` shows the same answer (`upgradeBlocked`).
+pub fn sidecar_refusal(state: Option<&str>, detail: Option<&str>, pending: &[String]) -> Option<(u16, &'static str, String)> {
+    let detail = detail.map(str::trim).filter(|d| !d.is_empty());
+    let why = detail.map(|d| format!(" ({d})")).unwrap_or_default();
+    let then = if pending.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "; once it runs, K2 first finishes or undoes the move of {} the last daemon was in",
+            pending.join(", ")
+        )
+    };
+    let (code, hint) = match state {
+        Some("running") => return None,
+        None | Some("not-installed") => (
+            "postgres_not_enabled",
+            "Postgres isn't enabled on this server: `k2 db enable` (the owner or an Admin) first".to_string(),
+        ),
+        Some("stopped") | Some("disabled") => (
+            "postgres_stopped",
+            format!("Postgres is stopped{why}: start it with `k2 db enable` (the owner or an Admin), then run this again{then}"),
+        ),
+        Some("installing") => (
+            "postgres_starting",
+            format!("Postgres is being enabled right now: run this again when `k2 db status` says running{then}"),
+        ),
+        Some("degraded") => (
+            "postgres_unhealthy",
+            format!("Postgres is up but doesn't answer{why}: `k2 db doctor` shows why; run this again when `k2 db status --health` says running{then}"),
+        ),
+        Some(other) => (
+            "postgres_unhealthy",
+            format!("Postgres is {other}{why}: fix it, then `k2 db enable` (the owner or an Admin) and run this again{then}"),
+        ),
+    };
+    Some((409, code, hint))
+}
+
+/// The `409 recovering` hint: which move, for how long, and that it ends.
+pub fn recovering_hint(pending: &[String], since: Option<i64>, now: i64) -> String {
+    let what = if pending.is_empty() { "a move".to_string() } else { format!("the move of {}", pending.join(", ")) };
+    let took = match since {
+        Some(at) => format!(" (working for {} s; it gives up after {} minutes and leaves the owner a failure to look at)", (now - at).max(0), worker::RECOVERY_TIMEOUT_SECS / 60),
+        None => String::new(),
+    };
+    format!("K2 is finishing or undoing {what} the last daemon was in{took}; try again in a minute")
+}
+
 /// The `versions_access` acts a request needs (every one must pass).
 pub fn acts_for(r: &UpgradeRequest) -> Vec<VersionsAct> {
     let mut v = vec![match r.act {
@@ -529,9 +582,21 @@ pub fn handle(who: Who, is_post: bool, body: &[u8], params: &HashMap<String, Str
             }
         }
     }
-    // Boot recovery first (F6).
+    // The sidecar first: nothing moves, checks or recovers while Postgres
+    // isn't running, and saying "recovering" then never ends (smoke r6).
+    if let Some((status, code, hint)) = sidecar_refusal(
+        crate::sql::supervisor::current_status().as_deref(),
+        crate::sql::supervisor::current_last_error().as_deref(),
+        &worker::pending(),
+    ) {
+        return err(status, code, hint);
+    }
+    // Boot recovery next (F6); it ends or times out into the latch.
+    if let Some(msg) = worker::expire_recovery(now_secs()) {
+        eprintln!("[db] upgrade: {msg}");
+    }
     if worker::recovering() {
-        return err(409, "recovering", "K2 is finishing or undoing a move the last daemon was in; try again in a minute");
+        return err(409, "recovering", recovering_hint(&worker::pending(), worker::recovery_running_since(), now_secs()));
     }
     let is_agent = matches!(who, Who::Agent { .. });
     if is_agent && matches!(req.act, Act::Move | Act::Rollback) {
@@ -679,43 +744,114 @@ pub fn status(db: Option<&str>, project: Option<&str>, owner: bool) -> CliRespon
             }
         }
     }
+    if let Some(msg) = worker::expire_recovery(now_secs()) {
+        eprintln!("[db] upgrade: {msg}");
+    }
     let (busy, failed) = if project.is_none() { (worker::busy(), worker::failed()) } else { (None, None) };
-    ok(json!({"busy": busy, "failed": failed, "recovering": worker::recovering(), "moves": moves}))
+    let postgres = crate::sql::supervisor::current_status();
+    let blocked = sidecar_refusal(
+        postgres.as_deref(),
+        crate::sql::supervisor::current_last_error().as_deref(),
+        &worker::pending(),
+    )
+    .map(|(_, code, hint)| json!({"code": code, "hint": hint}));
+    ok(json!({
+        "busy": busy,
+        "failed": failed,
+        "recovering": worker::recovering(),
+        "recoveringSince": worker::recovery_running_since(),
+        "pending": worker::pending(),
+        "postgres": postgres,
+        "blocked": blocked,
+        "moves": moves,
+    }))
 }
 
-/// Once per boot, before any new move is taken (F6): the latch comes back
-/// from the newest unacknowledged failed row; a move or rollback the last
-/// daemon died in is undone before its switch, finished after it. Rollback
-/// copies past the window are swept (F7).
-pub fn recover_at_boot() {
-    worker::set_recovering(true);
-    {
-        let k2db = k2_core::db::shared();
-        let conn = k2db.lock();
-        worker::load_latch(&conn);
-    }
-    let open: Vec<MoveProgress> = {
-        let k2db = k2_core::db::shared();
-        let conn = k2db.lock();
-        let mut v = Vec::new();
-        if let Ok(mut st) = conn.prepare(
-            "SELECT progress_json FROM sql_moves WHERE state IN ('queued','checking','copying','verifying','switching','interrupted') \
-             ORDER BY started_at",
-        ) {
-            if let Ok(rows) = st.query_map([], |r| r.get::<_, Option<String>>(0)) {
-                for pj in rows.flatten().flatten() {
-                    if let Ok(p) = serde_json::from_str::<MoveProgress>(&pj) {
-                        v.push(p);
-                    }
+/// Moves the last daemon left open (any state before an end), oldest
+/// first.
+fn open_moves(conn: &rusqlite::Connection) -> Vec<MoveProgress> {
+    let mut v = Vec::new();
+    if let Ok(mut st) = conn.prepare(
+        "SELECT progress_json FROM sql_moves WHERE state IN ('queued','checking','copying','verifying','switching','interrupted') \
+         ORDER BY started_at",
+    ) {
+        if let Ok(rows) = st.query_map([], |r| r.get::<_, Option<String>>(0)) {
+            for pj in rows.flatten().flatten() {
+                if let Ok(p) = serde_json::from_str::<MoveProgress>(&pj) {
+                    v.push(p);
                 }
             }
         }
-        v
-    };
+    }
+    v
+}
+
+/// Once per boot, before the recovery thread (F6): the latch comes back
+/// from the newest unacknowledged failed row, and the gate closes only
+/// when a move was left open. No open move: nothing to recover, so moves
+/// are never told "recovering" (smoke r6: with the sidecar stopped, that
+/// answer never ended).
+pub(crate) fn arm_boot_recovery(conn: &rusqlite::Connection) -> Vec<MoveProgress> {
+    worker::load_latch(conn);
+    let open = open_moves(conn);
+    if open.is_empty() {
+        worker::set_recovering(false);
+    } else {
+        worker::set_pending(open.iter().map(|p| p.db.clone()).collect());
+        worker::set_recovering(true);
+    }
+    open
+}
+
+/// The outside world boot recovery needs (tests pass their own).
+pub(crate) struct BootSteps<'a> {
+    /// `sql_server.status`.
+    pub status: &'a dyn Fn() -> Option<String>,
+    /// Between two looks at the status.
+    pub pause: &'a dyn Fn(),
+    pub now: &'a dyn Fn() -> i64,
+    /// Finish or undo the open moves, one at a time.
+    pub recover: &'a dyn Fn(Vec<MoveProgress>),
+    /// Drop rollback copies past the window (F7).
+    pub sweep: &'a dyn Fn(),
+}
+
+/// The recovery thread: wait for the sidecar to run (the route answers
+/// `postgres_stopped` meanwhile, not "recovering"); then a move the last
+/// daemon died in is undone before its switch, finished after it, with
+/// the clock running ([`worker::expire_recovery`] ends a stuck one); then
+/// the sweep. No sidecar row at all: nothing can move, done.
+pub(crate) fn boot_recovery_with(open: Vec<MoveProgress>, s: &BootSteps<'_>) {
+    loop {
+        match (s.status)().as_deref() {
+            Some("running") => break,
+            None => {
+                worker::set_recovering(false);
+                return;
+            }
+            _ => (s.pause)(),
+        }
+    }
+    if !open.is_empty() {
+        worker::recovery_started((s.now)());
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (s.recover)(open))).is_err() {
+            eprintln!("[db] upgrade: boot recovery panicked; moves wait for the owner (failed_latched)");
+            worker::recovery_failed(
+                "boot recovery panicked; see the daemon log ([db] upgrade), then `k2 db upgrade --acknowledge-failed` \
+                 (restarting the daemon tries the recovery again)",
+            );
+            return;
+        }
+    }
+    (s.sweep)();
+    worker::set_recovering(false);
+}
+
+/// Each open move, one at a time under the worker (never skipped).
+fn recover_open(open: Vec<MoveProgress>) {
     let door = crate::root_helper::RealDoor;
     let ops = super::helper_ops::HelperOps { door: &door };
     for p in open {
-        // Nothing else takes the worker while recovering; never skip a row.
         let busy = loop {
             match worker::begin_recovery(&p.db) {
                 Ok(b) => break b,
@@ -729,34 +865,42 @@ pub fn recover_at_boot() {
         drop(busy);
         eprintln!("[db] upgrade {db}: recovered after a restart → {:?}", done.state);
     }
+}
+
+/// Rollback copies past 14 days (F7), holding the worker so no move or
+/// forget-old runs beside it.
+fn sweep_now() {
+    let busy = loop {
+        match worker::begin_recovery("rollback-sweep") {
+            Ok(b) => break b,
+            Err(_) => std::thread::sleep(std::time::Duration::from_secs(5)),
+        }
+    };
+    let door = crate::root_helper::RealDoor;
+    let ops = super::helper_ops::HelperOps { door: &door };
     for d in sweep_rollback_copies(&ops, now_secs()) {
         eprintln!("[db] upgrade: dropped the rollback copy {d} (past 14 days)");
     }
-    worker::set_recovering(false);
+    drop(busy);
 }
 
-/// Boot: recover before anything else may move (F6). Waits for the sidecar
-/// to report running; moves answer `409 recovering` meanwhile.
+/// Boot: recover before anything else may move (F6).
 pub fn spawn_boot_recovery() {
     if !crate::sql::sql_supported() {
         return;
     }
-    worker::set_recovering(true);
-    let _ = std::thread::Builder::new().name("db-upgrade-recovery".into()).spawn(|| {
-        loop {
-            if crate::sql::supervisor::current_status().as_deref() == Some("running") {
-                break;
-            }
-            // No sidecar: nothing can move either; no rows can be open.
-            if crate::sql::supervisor::current_status().is_none() {
-                worker::set_recovering(false);
-                return;
-            }
-            std::thread::sleep(std::time::Duration::from_secs(5));
-        }
-        if std::panic::catch_unwind(recover_at_boot).is_err() {
-            eprintln!("[db] upgrade: boot recovery panicked; moves stay blocked (recovering)");
-        }
+    let open = {
+        let k2db = k2_core::db::shared();
+        let conn = k2db.lock();
+        arm_boot_recovery(&conn)
+    };
+    let _ = std::thread::Builder::new().name("db-upgrade-recovery".into()).spawn(move || {
+        let status = crate::sql::supervisor::current_status;
+        let pause = || std::thread::sleep(std::time::Duration::from_secs(5));
+        boot_recovery_with(
+            open,
+            &BootSteps { status: &status, pause: &pause, now: &now_secs, recover: &recover_open, sweep: &sweep_now },
+        );
     });
 }
 
@@ -890,5 +1034,204 @@ mod tests {
         // POST from nobody: refused before anything.
         let r = handle(Who::Other, true, br#"{"db":"ws_mine","check":true}"#, &params);
         assert!(r.status.starts_with("403"), "{}", r.status);
+    }
+
+    // ── smoke r6: a stopped sidecar, the recovery gate ───────────────────
+
+    /// Every non-running sidecar state answers with its own code and the
+    /// one command that helps; none says "recovering" or "try again in a
+    /// minute".
+    #[test]
+    fn a_sidecar_that_isnt_running_gets_an_actionable_answer() {
+        assert!(sidecar_refusal(Some("running"), None, &[]).is_none());
+        let (st, code, hint) = sidecar_refusal(Some("stopped"), Some("systemd reports the postgresql unit is 'inactive'"), &[]).unwrap();
+        assert_eq!((st, code), (409, "postgres_stopped"));
+        assert!(hint.contains("start it with `k2 db enable`") && hint.contains("'inactive'"), "{hint}");
+        assert!(!hint.contains("try again in a minute") && !hint.contains("recovering"), "{hint}");
+        assert_eq!(sidecar_refusal(Some("disabled"), None, &[]).unwrap().1, "postgres_stopped");
+        assert_eq!(sidecar_refusal(Some("installing"), None, &[]).unwrap().1, "postgres_starting");
+        let (_, code, hint) = sidecar_refusal(Some("degraded"), Some("ping failed"), &[]).unwrap();
+        assert_eq!(code, "postgres_unhealthy");
+        assert!(hint.contains("k2 db doctor") && hint.contains("ping failed"), "{hint}");
+        let (_, code, hint) = sidecar_refusal(Some("error"), Some("start: unit failed"), &[]).unwrap();
+        assert_eq!(code, "postgres_unhealthy");
+        assert!(hint.contains("k2 db enable") && hint.contains("unit failed"), "{hint}");
+        for none in [None, Some("not-installed")] {
+            let (_, code, hint) = sidecar_refusal(none, None, &[]).unwrap();
+            assert_eq!(code, "postgres_not_enabled");
+            assert!(hint.contains("k2 db enable"), "{hint}");
+        }
+        // A move left open is named: it runs first once Postgres does.
+        let (_, _, hint) = sidecar_refusal(Some("stopped"), None, &["ws_a".to_string()]).unwrap();
+        assert!(hint.contains("ws_a") && hint.contains("finishes or undoes"), "{hint}");
+        // The recovering hint says it ends.
+        let h = recovering_hint(&["ws_a".into()], Some(100), 160);
+        assert!(h.contains("ws_a") && h.contains("60 s") && h.contains("gives up after 30 minutes"), "{h}");
+    }
+
+    fn open_move(db: &str) -> MoveProgress {
+        serde_json::from_value(json!({
+            "id": format!("mv_{db}"), "db": db, "from": 16, "to": 17, "tag": "20261020T101500Z", "actor": "owner",
+            "state": "copying", "step": "copy", "startedAt": 5, "fromPort": 5432, "toPort": 5433, "targetCreated": true,
+            "quiesced": false, "stoppedApps": [], "doorsPaused": false, "repointed": [], "rolesCreated": [], "dumpBytes": 0,
+            "diff": [], "warnings": [], "check": []
+        }))
+        .unwrap()
+    }
+
+    fn fresh() -> (crate::test_support::TempHome, k2_core::test_env::SerialGuard) {
+        let home = crate::test_support::TempHome::new();
+        let g = crate::sql::sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        worker::reset_for_tests();
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute("DELETE FROM sql_moves", []).unwrap();
+        (home, g)
+    }
+
+    /// The smoke-r6 case: no move was left open, the sidecar is stopped.
+    /// Moves are never gated as "recovering"; the route's sidecar check
+    /// answers postgres_stopped; the sweep waits for Postgres.
+    #[test]
+    fn no_open_move_never_gates_as_recovering() {
+        let (_home, _g) = fresh();
+        let open = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            arm_boot_recovery(&conn)
+        };
+        assert!(open.is_empty());
+        assert!(!worker::recovering());
+        assert!(worker::pending().is_empty());
+        drop(worker::begin("ws_a").expect("no recovery gate"));
+        // The thread with a stopped sidecar that comes back on the third look.
+        let looks = std::cell::Cell::new(0);
+        let swept = std::cell::Cell::new(0);
+        let status = || {
+            looks.set(looks.get() + 1);
+            Some(if looks.get() < 3 { "stopped" } else { "running" }.to_string())
+        };
+        let pause = || assert!(!worker::recovering(), "never recovering while waiting with nothing open");
+        let recover = |_: Vec<MoveProgress>| panic!("nothing to recover");
+        let sweep = || swept.set(swept.get() + 1);
+        boot_recovery_with(open, &BootSteps { status: &status, pause: &pause, now: &|| 50, recover: &recover, sweep: &sweep });
+        assert_eq!((looks.get(), swept.get()), (3, 1));
+        assert!(!worker::recovering());
+    }
+
+    /// A move left open: the gate closes at boot, waits (no clock) while
+    /// the sidecar is stopped, starts its clock when Postgres runs,
+    /// recovers, sweeps and opens.
+    #[test]
+    fn an_open_move_waits_for_postgres_then_recovers_and_opens() {
+        let (_home, _g) = fresh();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO sql_moves (id, database_id, db, from_major, to_major, state, progress_json, actor, started_at) \
+                 VALUES ('mv_ws_a', 'd1', 'ws_a', 16, 17, 'copying', ?1, 'owner', 5)",
+                rusqlite::params![serde_json::to_string(&open_move("ws_a")).unwrap()],
+            )
+            .unwrap();
+        }
+        let open = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            arm_boot_recovery(&conn)
+        };
+        assert_eq!(open.len(), 1);
+        assert!(worker::recovering());
+        assert_eq!(worker::pending(), vec!["ws_a".to_string()]);
+        let looks = std::cell::Cell::new(0);
+        let recovered = std::cell::RefCell::new(Vec::new());
+        let swept = std::cell::Cell::new(0);
+        let status = || {
+            looks.set(looks.get() + 1);
+            Some(if looks.get() < 3 { "stopped" } else { "running" }.to_string())
+        };
+        let pause = || {
+            assert!(worker::recovering());
+            assert_eq!(worker::recovery_running_since(), None, "no clock while Postgres is stopped");
+            assert_eq!(worker::expire_recovery(i64::MAX / 2), None);
+            // What the route answers meanwhile.
+            let (_, code, hint) = sidecar_refusal(Some("stopped"), None, &worker::pending()).unwrap();
+            assert_eq!(code, "postgres_stopped");
+            assert!(hint.contains("ws_a"), "{hint}");
+        };
+        let recover = |v: Vec<MoveProgress>| {
+            assert_eq!(worker::recovery_running_since(), Some(777), "the clock starts when Postgres runs");
+            recovered.borrow_mut().extend(v.into_iter().map(|p| p.db));
+        };
+        let sweep = || swept.set(swept.get() + 1);
+        boot_recovery_with(open, &BootSteps { status: &status, pause: &pause, now: &|| 777, recover: &recover, sweep: &sweep });
+        assert_eq!(*recovered.borrow(), vec!["ws_a".to_string()]);
+        assert_eq!(swept.get(), 1);
+        assert!(!worker::recovering());
+        assert!(worker::pending().is_empty());
+        drop(worker::begin("ws_a").expect("gate open"));
+    }
+
+    /// The sidecar row is gone (uninstalled): nothing can move; the gate
+    /// opens. A recovery that panics ends in the owner's latch, never a
+    /// gate that stays shut.
+    #[test]
+    fn recovery_ends_without_a_sidecar_or_after_a_panic() {
+        let (_home, _g) = fresh();
+        worker::set_pending(vec!["ws_a".into()]);
+        worker::set_recovering(true);
+        let recover = |_: Vec<MoveProgress>| panic!("must not run");
+        boot_recovery_with(
+            vec![open_move("ws_a")],
+            &BootSteps { status: &|| None, pause: &|| panic!("no wait"), now: &|| 1, recover: &recover, sweep: &|| panic!("no sweep") },
+        );
+        assert!(!worker::recovering());
+        assert!(worker::failed().is_none());
+
+        worker::set_pending(vec!["ws_a".into()]);
+        worker::set_recovering(true);
+        let boom = |_: Vec<MoveProgress>| panic!("helper went away");
+        boot_recovery_with(
+            vec![open_move("ws_a")],
+            &BootSteps {
+                status: &|| Some("running".into()),
+                pause: &|| panic!("no wait"),
+                now: &|| 1,
+                recover: &boom,
+                sweep: &|| panic!("no sweep after a panic"),
+            },
+        );
+        assert!(!worker::recovering());
+        let e = worker::begin("ws_b").unwrap_err();
+        assert_eq!(worker::refusal_code(&e), "failed_latched", "{e}");
+        assert!(e.contains("boot recovery panicked"), "{e}");
+        worker::reset_for_tests();
+    }
+
+    /// The GET status says why moves can't run and what's pending.
+    #[test]
+    fn get_status_shows_the_sidecar_and_the_recovery() {
+        let (_home, _g) = fresh();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute("DELETE FROM sql_server", []).unwrap();
+            conn.execute(
+                "INSERT INTO sql_server (id, status, listen, updated_at, last_error) VALUES (1, 'stopped', 'localhost', 1, 'unit inactive')",
+                [],
+            )
+            .unwrap();
+        }
+        worker::set_pending(vec!["ws_a".into()]);
+        worker::set_recovering(true);
+        let v = body(&handle(Who::Owner, false, b"", &HashMap::new()));
+        assert_eq!(v["postgres"], "stopped");
+        assert_eq!(v["blocked"]["code"], "postgres_stopped", "{v}");
+        assert!(v["blocked"]["hint"].as_str().unwrap().contains("k2 db enable"), "{v}");
+        assert_eq!(v["pending"], json!(["ws_a"]));
+        assert_eq!(v["recovering"], true);
+        assert!(v["recoveringSince"].is_null());
+        worker::reset_for_tests();
     }
 }

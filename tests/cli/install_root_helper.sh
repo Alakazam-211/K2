@@ -485,6 +485,28 @@ K2_TEST_RUNNING_DAEMON_VERSION=0.45.4 run "$D9" --version 0.45.5
 printf '%s' "$out" | grep -q "daemon      : v0.45.4 (running)" || fail "daemon line: $out"
 ok "a daemon below 0.45.4 (asked for or running) is refused before any change"
 
+echo "== /boot-status: the TOP-LEVEL version, not ops.version (keys sort; ops comes first) =="
+D9B="$WORK/box9b"
+BOOT="$WORK/boot-status.json"
+# Shape of a real 0.46.2 answer: ops.version "1" precedes the top-level one,
+# and a string value that merely contains "version":"x" must not count.
+printf '%s' '{"airgap":{"baked":false},"detail":"say \"version\":\"9.9.9\"","features":["a"],"ops":{"supported":true,"version":"1"},"phase":"ready","protocol":1,"version":"0.41.3","webClient":{"enabled":true}}' >"$BOOT"
+legacy "$D9B"
+K2_TEST_BOOT_STATUS_FILE="$BOOT" run "$D9B" --version 0.45.5
+expect_fail_with "old daemon via boot-status" "is v0.41.3, older than v0.45.4"
+nothing_installed "$D9B" "old daemon via boot-status"
+printf '%s' '{"ops":{"supported":true,"version":"1"},"phase":"ready","version":"0.46.2"}' >"$BOOT"
+K2_TEST_BOOT_STATUS_FILE="$BOOT" run "$D9B" --version 0.45.5
+[ "$rc" -eq 0 ] || fail "0.46.2 via boot-status: $out"
+printf '%s' "$out" | grep -q "daemon      : v0.46.2 (running)" || fail "boot-status daemon line: $out"
+printf '%s' "$out" | grep -q "could not read the running daemon's version" && fail "boot-status: must not warn: $out"
+D9C="$WORK/box9c"
+printf '%s' '{"ops":{"supported":true,"version":"1"},"phase":"ready"}' >"$BOOT"
+K2_TEST_BOOT_STATUS_FILE="$BOOT" run "$D9C" --version 0.45.5
+[ "$rc" -eq 0 ] || fail "no top-level version: $out"
+printf '%s' "$out" | grep -q "could not read the running daemon's version" || fail "no top-level version must warn: $out"
+ok "boot-status: top-level version read past a nested ops.version; none at top level warns"
+
 echo "== a box with no prior helpers at all (iascm shape) =="
 D10="$WORK/box10"
 run "$D10" --version 0.45.5

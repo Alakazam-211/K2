@@ -181,7 +181,10 @@ export function threadWidgetOriginBody(o: ThreadWidgetOrigin): ThreadWidgetOrigi
  *  body only and never lands in Thread state, a store or a log. The other
  *  fields are what the person chose on a secret card (sent only when they
  *  differ from the agent's proposal); `confirm` is the second click after a
- *  `card_host_mismatch` / `card_readable_delivery` warning. */
+ *  `card_host_mismatch` / `card_readable_delivery` warning. `disclosed`
+ *  (0.46.3): the card showed the agent's choice in a plain sentence before
+ *  Save ("Sales will get this as a file it can read"), so the daemon skips
+ *  the readable-delivery second click. It never skips the mismatch check. */
 export interface ThreadAnswerPayload {
   answer?: string
   secret?: string
@@ -189,6 +192,7 @@ export interface ThreadAnswerPayload {
   hosts?: string[]
   delivery?: SecretDelivery
   confirm?: boolean
+  disclosed?: boolean
   /** Set when a custom Garden widget answers (`thread.answer`, a choice
    *  only): the daemon checks the widget's approved `thread:post`. */
   origin?: ThreadWidgetOrigin
@@ -209,6 +213,7 @@ export function threadAnswerBody(
     if (payload.hosts) body.hosts = payload.hosts.join(',')
     if (payload.delivery) body.delivery = payload.delivery
     if (payload.confirm) body.confirm = '1'
+    if (payload.disclosed) body.disclosed = '1'
   }
   return body
 }

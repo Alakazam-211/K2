@@ -1965,6 +1965,7 @@ export function installZenDataVerbs(): () => void {
                   ? { delivery: answer.delivery }
                   : {}),
                 ...(answer.confirm === true ? { confirm: true } : {}),
+                ...(answer.disclosed === true ? { disclosed: true } : {}),
               }
             : null
       if (!payload || (payload.answer === undefined && payload.secret === undefined)) {

@@ -1,28 +1,40 @@
 // K2 vault secret card (prd-k2-vault-v1 §10.1, KV9; §23.4 VS12/VS13).
 //
-// K2 draws this card; the agent only proposes (scope, sites, delivery) and
-// writes a short plain-text prompt. The person picks where the secret is
-// kept, which sites it may go to, and how the agent gets it, then pastes the
-// value.
+// 0.46.3 (Rosson 2026-10-21): the simple card. The agent makes the choices
+// (where the secret is kept, which sites it may go to, how the agent gets
+// it) with `k2 thread secret`. The card says what it chose in one plain
+// sentence ("Sales will get this as a file it can read, for this
+// workspace"), and the person pastes the value and clicks Save once. If the
+// choice is wrong they tell the agent in the chat, and the agent voids the
+// card and asks again. "Advanced" (closed by default) holds the old
+// controls for people who want to change things by hand; the sentence
+// follows whatever is picked there.
+//
+// The sentence IS the readable-delivery disclosure: the card sends
+// `disclosed` with every answer, and the daemon skips the readable-delivery
+// second click for it (older cards and the CLI never send it and keep that
+// click). The host-mismatch guard (a key that looks like another provider's
+// but would go somewhere else; a tricked agent) stays a second step.
 //
 // The value: the field is an uncontrolled password input. Its text is read
 // from the DOM once, on Save, and handed to `onSubmit` (which POSTs it); it
 // is never put in React state, a store, a log or the Thread item, and the
-// field is emptied after a successful save. A refusal that needs a second
-// click (`card_host_mismatch`, `card_readable_delivery`) keeps the field as
-// it is so "Save anyway" resends the same value with `confirm`.
+// field is emptied after a successful save. A host-mismatch refusal keeps
+// the field as it is so "Save anyway" resends the same value with `confirm`.
 //
-// `compact` (the Zen Conversation widget): the proposal's defaults as one
-// line plus "More options", which opens the full card in the Thread pane.
+// `compact` (the Zen Conversation widget): the same simple card, with
+// "More options" opening the full card in the Thread pane.
 
-import { useRef, useState, type JSX } from 'react'
+import { useRef, useState, type JSX, type ReactNode } from 'react'
 import { daemonErrorOf, daemonErrorText } from '@/lib/daemon-error'
 import { SquareRadio } from '@/components/ui'
 import { CHAMFER_CUT, chamferVars } from '@/components/Thread/chamfer'
 import { cardExpiryLabel, type OverlaySecret, type SecretDelivery, type SecretScope, type ThreadAnswerPayload } from './overlayThread'
 
-/** The daemon refusals that turn the card red and want a second click. */
-export const SECRET_CARD_WARNINGS = new Set(['card_host_mismatch', 'card_readable_delivery'])
+/** The daemon refusals that turn the card red and want a second click.
+ *  `card_readable_delivery` only comes from a server older than 0.46.3
+ *  (it doesn't know `disclosed`); the card answers it itself. */
+export const SECRET_CARD_WARNINGS = new Set(['card_host_mismatch'])
 
 /** Prompt cap (VS13): plain text, at most 200 characters. */
 export const SECRET_PROMPT_MAX = 200
@@ -76,6 +88,74 @@ function keyLike(kind: string | null | undefined): boolean {
   return !kind || kind === 'api_key' || kind === 'oauth_token' || kind === 'generic'
 }
 
+/** "a, b and c". */
+function listWords(items: readonly string[]): string {
+  if (items.length <= 1) return items.join('')
+  return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`
+}
+
+/** Where the secret is kept, in the plain sentence. */
+export const SECRET_SCOPE_WORDS: Record<SecretScope, string> = {
+  workspace: 'this workspace',
+  server: 'all your agents',
+  session: 'this chat only',
+}
+
+/** The plain sentence: what the agent chose, as the person reads it.
+ *  Bold parts are `<strong>`; the text alone reads as one sentence. */
+export function SecretPlan({
+  agent,
+  delivery,
+  scope,
+  sites,
+  compact = false,
+}: {
+  agent: string
+  delivery: SecretDelivery
+  scope: SecretScope
+  sites: readonly string[]
+  compact?: boolean
+}): JSX.Element {
+  const b = (t: string): ReactNode => <strong className="font-semibold">{t}</strong>
+  const where = SECRET_SCOPE_WORDS[scope]
+  let body: ReactNode
+  if (delivery === 'file' || delivery === 'env') {
+    body = (
+      <>
+        {b(agent)} will get this as {delivery === 'file' ? 'a ' : 'an '}
+        {b(delivery === 'file' ? 'file it can read' : 'environment variable it can read')}, for {b(where)}.
+      </>
+    )
+  } else if (sites.length > 0) {
+    body = (
+      <>
+        K2 will add this to calls to {b(listWords(sites.map(siteLabel)))}, for {b(where)}; {b(agent)} never sees it.
+      </>
+    )
+  } else {
+    body = (
+      <>
+        {agent} didn't say which site this is for, so K2 can't use it yet. {compact ? 'Use More options' : 'Open Advanced'} to
+        add one.
+      </>
+    )
+  }
+  return (
+    <div data-testid="thread-secret-plan" data-delivery={delivery} data-scope={scope} className="break-words">
+      {body}
+    </div>
+  )
+}
+
+/** The host-mismatch warning in plain words. */
+function mismatchText(hint: string, sites: readonly string[]): string {
+  const provider = /looks like an? (.+?) key/i.exec(hint)?.[1]
+  const to = sites.length > 0 ? listWords(sites.map(siteLabel)) : 'another site'
+  if (provider) return `This looks like a ${provider} key, but it would be sent to ${to}. Save it only if that's right.`
+  const h = hint.trim() || 'Check this before saving.'
+  return h.charAt(0).toUpperCase() + h.slice(1)
+}
+
 interface SiteChip {
   /** What is sent: the agent's normalised origin, or what the person typed. */
   value: string
@@ -123,6 +203,7 @@ export function SecretCard({
 
   const fieldRef = useRef<HTMLInputElement>(null)
   const [hasValue, setHasValue] = useState(false)
+  const [advanced, setAdvanced] = useState(false)
   const [scope, setScope] = useState<SecretScope>(proposedScope)
   const [sites, setSites] = useState<SiteChip[]>(() => proposedSites.map((value) => ({ value, byAgent: true })))
   const [delivery, setDelivery] = useState<SecretDelivery>(proposedDelivery)
@@ -161,15 +242,29 @@ export function SecretCard({
     const confirm = warning !== null
     setBusy(true)
     setError(null)
-    try {
-      // Read once from the field; nothing keeps it past this call.
-      await onSubmit({
-        secret: el.value,
+    // Read once from the field; nothing keeps it past this call.
+    const value = el.value
+    const send = (withConfirm: boolean): Promise<void> =>
+      onSubmit({
+        secret: value,
         ...(scope !== proposedScope ? { scope } : {}),
         ...(sitesChanged ? { hosts: siteValues } : {}),
         ...(delivery !== proposedDelivery ? { delivery } : {}),
-        ...(confirm ? { confirm: true } : {}),
+        // The plain sentence above the field said what the agent can do with it.
+        disclosed: true,
+        ...(withConfirm ? { confirm: true } : {}),
       })
+    try {
+      try {
+        await send(confirm)
+      } catch (e) {
+        // A server older than 0.46.3 doesn't know `disclosed` and asks for a
+        // second click on a readable delivery. The person read the sentence,
+        // and that server checks the host mismatch before this, so it passed:
+        // resend once with `confirm`.
+        if (confirm || daemonErrorOf(e)?.code !== 'card_readable_delivery') throw e
+        await send(true)
+      }
       el.value = ''
       setHasValue(false)
       setWarning(null)
@@ -246,16 +341,18 @@ export function SecretCard({
     >
       {/* K2-drawn header: who asks, from where. */}
       <div data-testid="thread-secret-header">
-        <div className="font-medium">{agent} asks for a secret</div>
-        <div className={`text-[10px] ${muted}`}>{[workspace, server].filter(Boolean).join(' · ')}</div>
-        {expiry && (
-          <div className={`text-[10px] ${muted}`} data-testid="thread-secret-expiry">
-            {expiry}
-          </div>
-        )}
-      </div>
-      <div className="font-mono text-[11px]" data-testid="thread-secret-name">
-        {secret.name}
+        <div className="font-medium">
+          {agent} asks for a secret: <span className="font-mono font-normal" data-testid="thread-secret-name">{secret.name}</span>
+        </div>
+        <div className={`text-[10px] ${muted}`}>
+          {[workspace, server].filter(Boolean).join(' · ')}
+          {expiry && (
+            <span data-testid="thread-secret-expiry">
+              {' · '}
+              {expiry}
+            </span>
+          )}
+        </div>
       </div>
       {prompt && (
         <div data-testid="thread-secret-prompt" className="whitespace-pre-wrap break-words">
@@ -263,6 +360,7 @@ export function SecretCard({
           {prompt}
         </div>
       )}
+      <SecretPlan agent={agent} delivery={delivery} scope={scope} sites={siteValues} compact={compact} />
       <input
         ref={fieldRef}
         data-testid="thread-secret-field"
@@ -277,140 +375,147 @@ export function SecretCard({
         }}
         className={`w-full box-border bg-transparent text-[12px] ${text} outline-none border ${border} px-2 py-1`}
       />
+      <div className={`text-[10px] ${muted}`} data-testid="thread-secret-hint">
+        Not right? Tell {agent} in the chat; it can cancel this and ask again.
+      </div>
 
       {compact ? (
-        <div className={`flex flex-col gap-1 ${muted}`} data-testid="thread-secret-summary">
-          <div>
-            Kept for {scopeLabel[scope]}.{' '}
-            {sites.length > 0 ? `Only sent to ${sites.map((s) => siteLabel(s.value)).join(', ')}.` : 'No site yet.'}{' '}
-            {deliveryLabel[delivery]}.
-          </div>
-          {onMoreOptions && (
-            <button
-              type="button"
-              data-testid="thread-secret-more"
-              onClick={onMoreOptions}
-              className={`self-start underline ${text} cursor-pointer`}
-            >
-              More options
-            </button>
-          )}
-        </div>
+        onMoreOptions && (
+          <button
+            type="button"
+            data-testid="thread-secret-more"
+            onClick={onMoreOptions}
+            className={`self-start underline ${muted} cursor-pointer`}
+          >
+            More options
+          </button>
+        )
       ) : (
         <>
-          <fieldset className="flex flex-col gap-1" data-testid="thread-secret-scope">
-            <legend className={`mb-0.5 ${muted}`}>Keep it for</legend>
-            <div className="flex flex-wrap gap-x-3 gap-y-1">
-              {(['workspace', 'server', 'session'] as const).map((s) => (
-                <label key={s} className="flex items-center gap-1 cursor-pointer">
-                  <SquareRadio
-                    name={`secret-scope-${secret.name}`}
-                    value={s}
-                    checked={scope === s}
-                    onChange={() => {
-                      setScope(s)
-                      changed()
-                    }}
-                  />
-                  {scopeLabel[s]}
-                </label>
-              ))}
-            </div>
-          </fieldset>
+          <button
+            type="button"
+            data-testid="thread-secret-advanced-toggle"
+            aria-expanded={advanced}
+            onClick={() => setAdvanced((v) => !v)}
+            className={`self-start ${muted} cursor-pointer`}
+          >
+            {advanced ? '▾' : '▸'} Advanced
+          </button>
+          {advanced && (
+            <div data-testid="thread-secret-advanced" className={`flex flex-col gap-2 border-t ${border} pt-2`}>
+              <fieldset className="flex flex-col gap-1" data-testid="thread-secret-delivery">
+                <legend className={`mb-0.5 ${muted}`}>How {agent} uses it</legend>
+                {(['fetch', 'file', 'env'] as const).map((d) => (
+                  <label key={d} className="flex items-start gap-1 cursor-pointer">
+                    <SquareRadio
+                      className="mt-0.5"
+                      name={`secret-delivery-${secret.name}`}
+                      value={d}
+                      checked={delivery === d}
+                      onChange={() => {
+                        setDelivery(d)
+                        changed()
+                      }}
+                    />
+                    <span>
+                      {deliveryLabel[d]}
+                      {isReadableDelivery(d) && delivery === d && (
+                        <span className={`block text-[10px] ${muted}`} data-testid="thread-secret-readable">
+                          {agent} can see this value
+                        </span>
+                      )}
+                    </span>
+                  </label>
+                ))}
+              </fieldset>
 
-          <div className="flex flex-col gap-1" data-testid="thread-secret-sites">
-            <div className={muted}>Only send it to</div>
-            <div className="flex flex-wrap gap-1">
-              {sites.map((s) => (
-                <span
-                  key={s.value}
-                  data-testid="thread-secret-site"
-                  data-by-agent={s.byAgent ? 'true' : 'false'}
-                  className={`inline-flex items-center gap-1 border ${border} px-1.5 py-0.5`}
-                >
-                  <span className="font-mono">{siteLabel(s.value)}</span>
-                  {s.byAgent && <span className={`text-[10px] ${muted}`}>{agent} suggests</span>}
+              <div className="flex flex-col gap-1" data-testid="thread-secret-sites">
+                <div className={muted}>Only send it to</div>
+                <div className="flex flex-wrap gap-1">
+                  {sites.map((s) => (
+                    <span
+                      key={s.value}
+                      data-testid="thread-secret-site"
+                      data-by-agent={s.byAgent ? 'true' : 'false'}
+                      className={`inline-flex items-center gap-1 border ${border} px-1.5 py-0.5`}
+                    >
+                      <span className="font-mono">{siteLabel(s.value)}</span>
+                      {s.byAgent && <span className={`text-[10px] ${muted}`}>{agent} suggests</span>}
+                      <button
+                        type="button"
+                        aria-label={`Remove ${siteLabel(s.value)}`}
+                        onClick={() => {
+                          setSites((prev) => prev.filter((c) => c.value !== s.value))
+                          changed()
+                        }}
+                        className={`${muted} cursor-pointer`}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+                <div className="flex gap-1">
+                  <input
+                    data-testid="thread-secret-site-input"
+                    value={siteDraft}
+                    onChange={(e) => setSiteDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        addSites()
+                      }
+                    }}
+                    placeholder="Add a site, like api.example.com"
+                    className={`flex-1 min-w-0 bg-transparent ${text} outline-none border ${border} px-2 py-0.5`}
+                  />
                   <button
                     type="button"
-                    aria-label={`Remove ${siteLabel(s.value)}`}
-                    onClick={() => {
-                      setSites((prev) => prev.filter((c) => c.value !== s.value))
-                      changed()
-                    }}
-                    className={`${muted} cursor-pointer`}
+                    data-testid="thread-secret-site-add"
+                    disabled={!siteDraft.trim()}
+                    onClick={addSites}
+                    className={`px-2 py-0.5 border ${border} disabled:opacity-40 cursor-pointer`}
                   >
-                    ×
+                    Add
                   </button>
-                </span>
-              ))}
-            </div>
-            <div className="flex gap-1">
-              <input
-                data-testid="thread-secret-site-input"
-                value={siteDraft}
-                onChange={(e) => setSiteDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault()
-                    addSites()
-                  }
-                }}
-                placeholder="Add a site, like api.example.com"
-                className={`flex-1 min-w-0 bg-transparent ${text} outline-none border ${border} px-2 py-0.5`}
-              />
-              <button
-                type="button"
-                data-testid="thread-secret-site-add"
-                disabled={!siteDraft.trim()}
-                onClick={addSites}
-                className={`px-2 py-0.5 border ${border} disabled:opacity-40 cursor-pointer`}
-              >
-                Add
-              </button>
-            </div>
-          </div>
+                </div>
+              </div>
 
-          <fieldset className="flex flex-col gap-1" data-testid="thread-secret-delivery">
-            <legend className={`mb-0.5 ${muted}`}>How {agent} uses it</legend>
-            {(['fetch', 'file', 'env'] as const).map((d) => (
-              <label key={d} className="flex items-start gap-1 cursor-pointer">
-                <SquareRadio
-                  className="mt-0.5"
-                  name={`secret-delivery-${secret.name}`}
-                  value={d}
-                  checked={delivery === d}
-                  onChange={() => {
-                    setDelivery(d)
-                    changed()
-                  }}
-                />
-                <span>
-                  {deliveryLabel[d]}
-                  {isReadableDelivery(d) && delivery === d && (
-                    <span className={`block text-[10px] ${muted}`} data-testid="thread-secret-readable">
-                      {agent} can see this value
-                    </span>
-                  )}
-                </span>
-              </label>
-            ))}
-          </fieldset>
+              <fieldset className="flex flex-col gap-1" data-testid="thread-secret-scope">
+                <legend className={`mb-0.5 ${muted}`}>Keep it for</legend>
+                <div className="flex flex-wrap gap-x-3 gap-y-1">
+                  {(['workspace', 'server', 'session'] as const).map((s) => (
+                    <label key={s} className="flex items-center gap-1 cursor-pointer">
+                      <SquareRadio
+                        name={`secret-scope-${secret.name}`}
+                        value={s}
+                        checked={scope === s}
+                        onChange={() => {
+                          setScope(s)
+                          changed()
+                        }}
+                      />
+                      {scopeLabel[s]}
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+
+              {keyLike(secret.secretKind) && (
+                <div className={`text-[10px] ${muted}`} data-testid="thread-secret-honest">
+                  This key can still do anything {provider ?? 'its service'} allows it to. Use a restricted key if you
+                  can.
+                </div>
+              )}
+            </div>
+          )}
         </>
       )}
 
-      {keyLike(secret.secretKind) && (
-        <div className={`text-[10px] ${muted}`} data-testid="thread-secret-honest">
-          This key can still do anything {provider ?? 'its service'} allows it to. Use a restricted key if you can.
-        </div>
-      )}
-      {needsSite && (
-        <div className={`text-[10px] ${danger}`} data-testid="thread-secret-needs-site">
-          Add a site, or let {agent} read it.
-        </div>
-      )}
       {warning && (
         <div className={`text-[11px] ${danger}`} role="alert" data-testid="thread-secret-warning">
-          {warning.hint || 'Check this before saving.'}
+          <strong>Check this first.</strong> {mismatchText(warning.hint, siteValues)} If {agent} set this up wrong,
+          tell it in the chat instead.
         </div>
       )}
       {error && (

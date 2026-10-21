@@ -700,6 +700,22 @@ pub fn delete_now(item: &Item, event: &str, by: &str, ingress: &str) -> Result<(
     Ok(())
 }
 
+/// Clear a principal's personal-agent marks, one audit line each.
+fn clear_marks<'a>(pid: &str, marks: impl Iterator<Item = &'a pw::PersonAgent>, why: &str) {
+    for m in marks {
+        match with_conn(|c| pw::set_person_agent(c, &m.project_id, None, Some("sweep"))) {
+            Ok(true) => audit(
+                "wallet.personal_agent",
+                "system",
+                &format!("clear {} (was {} via {}; {why})", m.project_id, person_key(pid), m.service_id),
+                "sweep",
+            ),
+            Ok(false) => {}
+            Err(e) => k2_core::log_debug!("[wallet] clear mark {}: {}", m.project_id, e.code()),
+        }
+    }
+}
+
 /// Lifecycle (Rosson #4/#5). Returns `(dormant, woke, deleted, stopped)`
 /// counts for tests and logs.
 /// - principal gone (or an agent login): delete every item now, drop
@@ -724,27 +740,23 @@ pub fn lifecycle(now: i64) -> (usize, usize, usize, usize) {
             }
         };
         let mine: Vec<&Item> = items.iter().filter(|i| i.principal_id == pid).collect();
-        match person {
-            None => {
+        // Gone, or turned into an agent's own login: no longer a person, so
+        // the wallet and the personal-agent marks both go (PRD §3.4).
+        let p = match person {
+            None => Err("person_gone"),
+            Some(p) if p.is_agent_login => Err("now_an_agent_login"),
+            Some(p) => Ok(p),
+        };
+        match p {
+            Err(why) => {
                 for i in &mine {
                     if delete_now(i, "wallet.expired", "system", "sweep").is_ok() {
                         deleted += 1;
                     }
                 }
-                with_conn(|c| {
-                    for m in marks.iter().filter(|m| m.principal_id == pid) {
-                        let _ = pw::set_person_agent(c, &m.project_id, None, Some("sweep"));
-                    }
-                });
+                clear_marks(&pid, marks.iter().filter(|m| m.principal_id == pid), why);
             }
-            Some(p) if p.is_agent_login => {
-                for i in &mine {
-                    if delete_now(i, "wallet.expired", "system", "sweep").is_ok() {
-                        deleted += 1;
-                    }
-                }
-            }
-            Some(p) => {
+            Ok(p) => {
                 if !p.has_any_app() {
                     let n = with_conn(|c| pw::set_dormant(c, &pid, Some(now))).unwrap_or(0);
                     if n > 0 {

@@ -1453,6 +1453,8 @@ mod tests {
             &["daemon", "handoff-dropin", "remove"],
             &["front", "install"],
             &["front", "remove"],
+            // Root writes a file on every admin's PATH (protocol 9).
+            &["helper", "cli-refresh"],
         ];
         let open: &[&[&str]] = &[
             &["front", "status"],
@@ -1494,6 +1496,14 @@ mod tests {
             &["helper", "self-update", "/tmp/x"],
             &["helper", "legacy-retire", "all"],
             &["helper", "legacy-retire", "/etc/sudoers"],
+            // cli-refresh takes nothing: no path, version, content or flag.
+            &["helper", "cli-refresh", "--force"],
+            &["helper", "cli-refresh", "/usr/local/bin/k2"],
+            &["helper", "cli-refresh", "0.40.148"],
+            &["helper", "cli-refresh", ""],
+            &["helper", "cli-refresh", "--", "x"],
+            &["helper", "cli_refresh"],
+            &["cli", "refresh"],
             // Paths are never tokens.
             &["mail", "mkdir", "/etc/stalwart"],
             &["mail", "mkdir", "../etc"],

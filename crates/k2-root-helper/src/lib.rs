@@ -170,7 +170,7 @@ fn dispatch(
         Verb::HelperSelfRollback => Some(core::self_rollback(ctx)?),
         Verb::HelperLegacyRetire(which) => Some(core::legacy_retire(ctx, *which)?),
         Verb::HelperAuditTail => Some(core::audit_tail(ctx)?),
-        Verb::HelperCliRefresh => Some(core::cli_refresh(ctx)?),
+        Verb::HelperCliRefresh => Some(core::cli_refresh(ctx, who)?),
 
         Verb::MailEnsureUser => mail::ensure_user(ctx).map(|_| None)?,
         Verb::MailMkdir(t) => mail::mkdir(ctx, *t).map(|_| None)?,

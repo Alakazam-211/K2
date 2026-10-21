@@ -38,6 +38,10 @@ sha2 = "0.10"
 flate2 = "1.1.9"
 tar = "0.4.45"
 
+[build-dependencies]
+# build.rs hashes the embedded K2 CLI (`helper version` cliSha256).
+sha2 = "0.10"
+
 [dev-dependencies]
 k2-root-proto = { path = "../k2-root-proto", features = ["test-signer"] }
 tempfile = "3"

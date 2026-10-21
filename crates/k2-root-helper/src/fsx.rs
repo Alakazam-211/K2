@@ -141,18 +141,17 @@ impl Dir {
         Ok(unsafe { std::fs::File::from_raw_fd(fd) })
     }
 
-    /// Read a regular file (never through a link). `None` when missing.
-    pub fn read_file(&self, name: &OsStr, cap: usize) -> io::Result<Option<Vec<u8>>> {
-        use std::io::Read;
+    /// Open `name` for reading without ever blocking or following a link:
+    /// `O_NONBLOCK` (a FIFO or device swapped in after an `lstat` opens at
+    /// once instead of hanging root), `O_NOFOLLOW`, `O_NOCTTY`, then
+    /// `fstat` on the opened fd. Anything but a regular file is an
+    /// `InvalidData` error; the returned stat is the fd's (what will be
+    /// read), not an earlier `lstat`'s. `None` when missing.
+    pub fn open_regular(&self, name: &OsStr) -> io::Result<Option<(std::fs::File, libc::stat)>> {
         let c = cstr(name)?;
+        let flags = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY | libc::O_CLOEXEC;
         // SAFETY: valid dirfd and name.
-        let fd = unsafe {
-            libc::openat(
-                self.raw(),
-                c.as_ptr(),
-                libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-            )
-        };
+        let fd = unsafe { libc::openat(self.raw(), c.as_ptr(), flags) };
         if fd < 0 {
             let e = io::Error::last_os_error();
             if e.kind() == io::ErrorKind::NotFound {
@@ -160,15 +159,24 @@ impl Dir {
             }
             return Err(e);
         }
-        // SAFETY: fresh fd.
+        // SAFETY: fresh fd, owned by the File from here.
         let f = unsafe { std::fs::File::from_raw_fd(fd) };
-        let meta = f.metadata()?;
-        if !meta.is_file() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "not a regular file",
-            ));
+        // SAFETY: zeroed stat is a valid out-param; fd is open.
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        check(unsafe { libc::fstat(f.as_raw_fd(), &mut st) })?;
+        if kind_of(st.st_mode as u32) != Kind::File {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "not a regular file"));
         }
+        Ok(Some((f, st)))
+    }
+
+    /// Read a regular file (never through a link, never blocking on a FIFO
+    /// or device). `None` when missing.
+    pub fn read_file(&self, name: &OsStr, cap: usize) -> io::Result<Option<Vec<u8>>> {
+        use std::io::Read;
+        let Some((f, _)) = self.open_regular(name)? else {
+            return Ok(None);
+        };
         let mut buf = Vec::new();
         f.take(cap as u64 + 1).read_to_end(&mut buf)?;
         if buf.len() > cap {

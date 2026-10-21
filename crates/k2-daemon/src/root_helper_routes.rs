@@ -157,7 +157,7 @@ pub fn handle(
             };
             let cli = root_helper::cli_refresh::run_once(
                 &root_helper::cli_refresh::LiveCliOps,
-                &root_helper::cli_refresh::daemon_cli_version(),
+                &root_helper::cli_refresh::daemon_cli(),
                 &who,
             );
             ok(

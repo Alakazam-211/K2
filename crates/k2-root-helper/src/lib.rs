@@ -197,7 +197,7 @@ fn dispatch(
         Verb::PgInstallSlice => Some(pg_major::install_slice(ctx)?),
         Verb::PgCopyRoles { from, to, dry_run } => Some(pg_major::copy_roles(ctx, *from, *to, *dry_run, stdin)?),
         Verb::PgMoveDump { from, to, db, tag } => Some(pg_major::move_dump(ctx, *from, *to, db, tag)?),
-        Verb::PgMoveRestore { to, db, tag } => Some(pg_major::move_restore(ctx, *to, db, tag)?),
+        Verb::PgMoveRestore { to, db, tag } => Some(pg_major::move_restore(ctx, *to, db, tag, stdin)?),
         Verb::PgMoveFileRemove { db, tag } => Some(pg_major::move_file_remove(ctx, db, tag)?),
         Verb::PgAllowConn { major, db, mode } => Some(pg_major::allow_conn(ctx, *major, db, *mode)?),
         Verb::PgDropDb { major, db } => Some(pg_major::drop_db(ctx, *major, db)?),

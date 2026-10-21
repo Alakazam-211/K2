@@ -112,14 +112,20 @@ fn major_installed(ctx: &Ctx, m: PgMajor) -> bool {
     present(ctx, &m.bin("postgres")) && present(ctx, &m.bin("pg_dump")) && present(ctx, &m.bin("psql"))
 }
 
-/// `pg_lsclusters -h` (empty when postgresql-common isn't installed).
+/// `pg_lsclusters -h` as postgres (it parses config files postgres owns,
+/// so it never runs as root: review #1 L7). Empty when postgresql-common
+/// isn't installed.
 pub fn lsclusters(ctx: &Ctx) -> HResult<Vec<ClusterRow>> {
     if !present(ctx, PG_LSCLUSTERS) {
         return Ok(Vec::new());
     }
-    let out = ctx.run_ok(PG_LSCLUSTERS, &["-h"], None)?;
+    let out = as_postgres(ctx, PG_LSCLUSTERS, &["-h"], None)?;
     Ok(parse_lsclusters(&String::from_utf8_lossy(&out.stdout)))
 }
+
+const CHMOD: &str = "/usr/bin/chmod";
+const DD: &str = "/usr/bin/dd";
+const DU: &str = "/usr/bin/du";
 
 /// The K2-layout cluster of `m` (`<M>/main` under /var/lib/postgresql).
 fn cluster_of(ctx: &Ctx, m: PgMajor) -> HResult<ClusterRow> {
@@ -138,6 +144,15 @@ fn sew_status(ctx: &Ctx) -> (bool, Option<u32>) {
     let toml = read_small(ctx, SEW_TOML, 256 * 1024).ok().flatten();
     let present = toml.is_some() || SEW_DB_UNITS.iter().any(|u| present(ctx, u));
     (present, toml.and_then(|t| sew_pg_major(&String::from_utf8_lossy(&t))))
+}
+
+/// In-band ports Sew's config names: taken even while Sew is stopped.
+fn sew_band_ports(ctx: &Ctx) -> Vec<u16> {
+    read_small(ctx, SEW_TOML, 256 * 1024)
+        .ok()
+        .flatten()
+        .map(|t| sew_ports(&String::from_utf8_lossy(&t)))
+        .unwrap_or_default()
 }
 
 /// `/etc/os-release`, else `/usr/lib/os-release` (os-release(5)): on
@@ -183,6 +198,7 @@ fn cluster_json(ctx: &Ctx, r: &ClusterRow) -> J {
         "k2Layout": k2_layout(r),
         "unit": format!("postgresql@{}-{}.service", r.major, r.name),
         "startConf": start_conf_of(ctx, r.major),
+        "inSlice": present(ctx, &instance_slice_dropin(r.major)),
     })
 }
 
@@ -191,14 +207,21 @@ pub fn clusters(ctx: &Ctx) -> HResult<J> {
     let rows = lsclusters(ctx)?;
     let (sew, sew_major) = sew_status(ctx);
     let code = codename(ctx);
+    let sew_ports = sew_band_ports(ctx);
     let listening_band: Vec<u16> = listening(ctx)
         .map(|v| {
-            let mut b: Vec<u16> = v.into_iter().filter(|p| in_band(*p)).collect();
+            // Sew's configured ports count as taken (review #1 L6).
+            let mut b: Vec<u16> = v.into_iter().chain(sew_ports.iter().copied()).filter(|p| in_band(*p)).collect();
             b.sort_unstable();
             b.dedup();
             b
         })
         .unwrap_or_default();
+    // What moves keep on disk (dumps), for the check's disk line (review #2 F7).
+    let moves_bytes: u64 = as_postgres(ctx, DU, &["-sb", "--", MOVES_DIR], None)
+        .ok()
+        .and_then(|o| String::from_utf8_lossy(&o.stdout).split_whitespace().next().and_then(|n| n.parse().ok()))
+        .unwrap_or(0);
     Ok(json!({
         "clusters": rows.iter().map(|r| cluster_json(ctx, r)).collect::<Vec<_>>(),
         "installed": installed_majors(ctx),
@@ -211,9 +234,10 @@ pub fn clusters(ctx: &Ctx) -> HResult<J> {
             "pins": present(ctx, PGDG_PREF),
             "createclusterDropin": present(ctx, CREATECLUSTER_DROPIN),
         },
-        "slice": {"unit": present(ctx, SLICE_UNIT_PATH), "dropin": present(ctx, SLICE_DROPIN_PATH)},
+        "slice": {"unit": present(ctx, SLICE_UNIT_PATH)},
         "bandListening": listening_band,
-        "sew": {"present": sew, "pgMajor": sew_major},
+        "movesBytes": moves_bytes,
+        "sew": {"present": sew, "pgMajor": sew_major, "ports": sew_ports},
     }))
 }
 
@@ -290,7 +314,10 @@ pub fn add_major(ctx: &Ctx, m: PgMajor, dry_run: bool) -> HResult<J> {
             source = "k2";
         }
         put_at(ctx, PGDG_PREF, pgdg_pref(&code).expect("allow-listed").as_bytes())?;
+        // PGDG's security and minor updates arrive unattended (review #1 M2).
+        put_at(ctx, UNATTENDED_DROPIN, unattended_dropin().as_bytes())?;
     }
+    let before = dpkg_versions(ctx)?;
     ctx.run_ok(ENV, &[FE, APT_GET, "update", "-q"], None)?;
     let pk = packages(m.get());
     let opts = [
@@ -323,10 +350,20 @@ pub fn add_major(ctx: &Ctx, m: PgMajor, dry_run: bool) -> HResult<J> {
     if let Some(why) = apt_sim_refusal(&String::from_utf8_lossy(&out.stdout), sew_major) {
         return Err(Fail::state(why));
     }
-    let mut inst = vec![FE, APT_GET, "install", "-y"];
+    // `--no-remove`: whatever apt decides now (lists can change after the
+    // simulation), it never removes a package (review #1 M1).
+    let mut inst = vec![FE, APT_GET, "install", "-y", "--no-remove"];
     inst.extend_from_slice(&opts);
     inst.extend(pk.iter().map(String::as_str));
     ctx.run_ok(ENV, &inst, None)?;
+    let changed = changed_packages(&before, &dpkg_versions(ctx)?);
+    if !changed.is_empty() {
+        return Err(Fail::state(format!(
+            "installed_changed: the install changed installed Postgres packages: {}{}",
+            changed.join(", "),
+            if sew_major.is_some() { " (Sew's own Postgres runs on one of them; check sew-db)" } else { "" }
+        )));
+    }
     if !major_installed(ctx, m) {
         return Err(Fail::io(format!(
             "apt finished but {} is missing",
@@ -339,6 +376,22 @@ pub fn add_major(ctx: &Ctx, m: PgMajor, dry_run: bool) -> HResult<J> {
     p["source"] = json!(source);
     p["markedManual"] = json!(marked);
     Ok(p)
+}
+
+/// Installed version of every Postgres package and libpq5.
+fn dpkg_versions(ctx: &Ctx) -> HResult<std::collections::BTreeMap<String, String>> {
+    if !present(ctx, DPKG_QUERY) {
+        return Ok(Default::default());
+    }
+    let out = ctx
+        .exec
+        .run(
+            DPKG_QUERY,
+            &["-W".into(), "-f".into(), "${Package} ${Version} ${Status}\\n".into(), "postgresql*".into(), "libpq5".into()],
+            None,
+        )
+        .map_err(|e| Fail::io(format!("dpkg-query: {}", e.kind_str())))?;
+    Ok(installed_versions(&String::from_utf8_lossy(&out.stdout)))
 }
 
 /// `apt-mark manual` every installed `postgresql-<n>` server and client:
@@ -376,15 +429,29 @@ fn mark_manual(ctx: &Ctx) -> HResult<Vec<String>> {
 
 // ── clusters ────────────────────────────────────────────────────────────
 
-/// The shared slice (`pg install-slice`, and every `ensure-cluster`).
+/// The shared slice unit (`pg install-slice`, and every `ensure-cluster`).
+/// An existing slice the owner tuned is left as it is (`drift`, review #1
+/// L3); only K2-created clusters join it, through their own instance
+/// drop-in ([`slice_in`]).
 pub fn install_slice(ctx: &Ctx) -> HResult<J> {
-    let a = put_at(ctx, SLICE_UNIT_PATH, slice_unit().as_bytes())?;
-    let b = put_at(ctx, SLICE_DROPIN_PATH, slice_dropin().as_bytes())?;
-    if a || b {
+    let have = read_small(ctx, SLICE_UNIT_PATH, 64 * 1024)?;
+    let (changed, drift) = match have {
+        None => (put_at(ctx, SLICE_UNIT_PATH, slice_unit().as_bytes())?, false),
+        Some(b) => (false, b != slice_unit().as_bytes()),
+    };
+    if changed {
         ctx.run_ok(SYSTEMCTL, &["daemon-reload"], None)?;
     }
-    // A running instance moves into the slice at its next start.
-    Ok(json!({"changed": a || b, "slice": "k2-postgres.slice"}))
+    Ok(json!({"changed": changed, "drift": drift, "slice": "k2-postgres.slice"}))
+}
+
+/// Put one K2-created cluster's instance in the slice (at its next start).
+fn slice_in(ctx: &Ctx, m: PgMajor) -> HResult<bool> {
+    let changed = put_at(ctx, &instance_slice_dropin(m.get()), slice_dropin().as_bytes())?;
+    if changed {
+        ctx.run_ok(SYSTEMCTL, &["daemon-reload"], None)?;
+    }
+    Ok(changed)
 }
 
 /// `/etc/postgresql/<M>/main/conf.d` of a cluster, opened without links.
@@ -431,14 +498,15 @@ pub fn ensure_cluster(ctx: &Ctx, m: PgMajor, port: Option<u16>) -> HResult<J> {
                     "cluster_leftover: a data or config dir for that major exists without a cluster; nothing changed",
                 ));
             }
-            let busy = listening(ctx)?;
+            let mut busy = listening(ctx)?;
+            busy.extend(sew_band_ports(ctx));
             let port = match port {
                 Some(p) => {
                     if rows.iter().any(|r| r.port == p) {
                         return Err(Fail::state("port_taken: another cluster is configured on that port"));
                     }
                     if busy.contains(&p) {
-                        return Err(Fail::state("port_taken: something already listens on that port"));
+                        return Err(Fail::state("port_taken: something already listens on that port, or Sew's config names it"));
                     }
                     p
                 }
@@ -472,6 +540,9 @@ pub fn ensure_cluster(ctx: &Ctx, m: PgMajor, port: Option<u16>) -> HResult<J> {
         }
     };
     install_slice(ctx)?;
+    if created {
+        slice_in(ctx, m)?;
+    }
     let before = cluster_of(ctx, m)?;
     let started = !before.online();
     if started {
@@ -500,6 +571,10 @@ pub fn start_conf(ctx: &Ctx, m: PgMajor, auto: bool) -> HResult<J> {
     let body = format!("# K2 (pg start-conf): auto | manual | disabled\n{word}\n");
     let owner = ctx.real_owners.then_some((st.st_uid, st.st_gid));
     let before = start_conf_of(ctx, m.get());
+    // The owner's "never start" stays (review #1 L3).
+    if before.as_deref() == Some("disabled") {
+        return Err(Fail::state("start_conf_disabled: the owner set this cluster disabled; K2 leaves it"));
+    }
     if before.as_deref() != Some(word) {
         d.write_atomic(name, body.as_bytes(), (st.st_mode as u32) & 0o7777, owner)
             .map_err(|e| Fail::io_err("write start.conf", e))?;
@@ -524,16 +599,54 @@ fn as_postgres(ctx: &Ctx, prog: &str, args: &[&str], stdin: Option<&[u8]>) -> HR
     Ok(out)
 }
 
-/// `psql -X -tA -v ON_ERROR_STOP=1` of `m` against `db`, SQL on stdin.
+/// `psql -X -tA -v ON_ERROR_STOP=1` of `m` against `db`, SQL on stdin, with
+/// `search_path` pinned to pg_catalog (review #2 F1): every superuser
+/// session the helper opens goes through here or `pg::psql`.
 fn sql_at(ctx: &Ctx, m: PgMajor, port: u16, db: &str, sql: &str) -> HResult<String> {
     let pt = port.to_string();
+    let psql = m.bin("psql");
     let out = as_postgres(
         ctx,
-        &m.bin("psql"),
-        &["-X", "-h", PG_SOCKET_DIR, "-p", &pt, "-d", db, "-v", "ON_ERROR_STOP=1", "-tA"],
+        ENV,
+        &[SAFE_PGOPTIONS, &psql, "-X", "-h", PG_SOCKET_DIR, "-p", &pt, "-d", db, "-v", "ON_ERROR_STOP=1", "-tA"],
         Some(sql.as_bytes()),
     )?;
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// Refuse a `pg_dump`/`pg_restore` older than the CVE floor.
+fn tool_floor(ctx: &Ctx, m: PgMajor, tool: &str) -> HResult<()> {
+    let out = as_postgres(ctx, &m.bin(tool), &["--version"], None)?;
+    let v = parse_tool_version(&String::from_utf8_lossy(&out.stdout));
+    match v {
+        Some((maj, min)) if maj == m.get() && min >= min_tool_minor(maj) => Ok(()),
+        Some((maj, min)) => Err(Fail::state(format!(
+            "tool_too_old: {tool} {maj}.{min} is older than {maj}.{}; update postgresql-client-{maj} first",
+            min_tool_minor(maj)
+        ))),
+        None => Err(Fail::state(format!("tool_unknown: {tool} answered no version"))),
+    }
+}
+
+/// The owner of a database (`None`: no such database).
+fn db_owner(ctx: &Ctx, m: PgMajor, port: u16, db: &DbName) -> HResult<Option<String>> {
+    let o = sql_at(
+        ctx,
+        m,
+        port,
+        "postgres",
+        &format!("SELECT pg_catalog.pg_get_userbyid(datdba) FROM pg_catalog.pg_database WHERE datname = '{}';\n", db.as_str()),
+    )?;
+    Ok((!o.is_empty()).then_some(o))
+}
+
+/// Only databases K2 made (review #1 L1).
+fn k2_db(ctx: &Ctx, m: PgMajor, port: u16, db: &DbName) -> HResult<String> {
+    let owner = db_owner(ctx, m, port, db)?.ok_or_else(|| Fail::state("no_database: no such database in that cluster"))?;
+    if !k2_stamp_ok(db.as_str(), &owner) {
+        return Err(Fail::state("not_k2_database: that database isn't one K2 made (owner <name>_migrator); nothing changed"));
+    }
+    Ok(owner)
 }
 
 /// `pg psql --cluster <M> …` (pg.rs routes here).
@@ -564,7 +677,16 @@ pub fn copy_roles(ctx: &Ctx, from: PgMajor, to: PgMajor, dry_run: bool, stdin: &
     let have = read(from, src.port)?;
     let there = read(to, dst.port)?;
     let missing: Vec<&String> = req.roles.iter().filter(|r| !have.iter().any(|h| &h.rolname == *r)).collect();
-    let mut sql = String::from("BEGIN;\n");
+    // The verifiers never reach the server log or pg_stat_statements
+    // (review #1 L2).
+    let mut sql = String::from(
+        "SET log_min_error_statement = panic;\n\
+         SET log_statement = 'none';\n\
+         SET log_min_duration_statement = -1;\n\
+         DO $k2$BEGIN IF pg_catalog.current_setting('pg_stat_statements.track_utility', true) IS NOT NULL THEN \
+         PERFORM pg_catalog.set_config('pg_stat_statements.track_utility', 'off', false); END IF; END$k2$;\n\
+         BEGIN;\n",
+    );
     let (mut created, mut same, mut refused, mut mismatch) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for row in &have {
         let Some(create) = row.create_sql() else {
@@ -603,7 +725,10 @@ pub fn copy_roles(ctx: &Ctx, from: PgMajor, to: PgMajor, dry_run: bool, stdin: &
     }
     sql.push_str("COMMIT;\n");
     if !created.is_empty() {
-        sql_at(ctx, to, dst.port, "postgres", &sql)?;
+        // A fixed error: psql's context lines can carry part of a verifier.
+        sql_at(ctx, to, dst.port, "postgres", &sql).map_err(|_| {
+            Fail::io("copy-roles: creating the roles failed; the batch is one transaction, so none were created")
+        })?;
     }
     Ok(json!({"from": from.get(), "to": to.get(), "created": created, "same": same}))
 }
@@ -630,54 +755,180 @@ pub fn move_dump(ctx: &Ctx, from: PgMajor, to: PgMajor, db: &DbName, tag: &str) 
     if !src.online() {
         return Err(Fail::state("cluster_down: the source cluster is not running"));
     }
-    as_postgres(ctx, MKDIR, &["-p", "-m", "0700", "--", MOVES_DIR], None)?;
+    tool_floor(ctx, to, "pg_dump")?;
+    moves_dir(ctx)?;
     let file = dump_path(db.as_str(), tag);
     if postgres_test(ctx, &file)?.is_some() {
         return Err(Fail::state("dump_exists: a dump with that tag exists; nothing changed"));
     }
     let pt = src.port.to_string();
+    let pg_dump = to.bin("pg_dump");
     as_postgres(
         ctx,
-        &to.bin("pg_dump"),
-        &["-Fc", "--no-subscriptions", "--no-publications", "-h", PG_SOCKET_DIR, "-p", &pt, "-f", &file, "-d", db.as_str()],
+        ENV,
+        &[SAFE_PGOPTIONS, &pg_dump, "-Fc", "--no-subscriptions", "--no-publications", "-h", PG_SOCKET_DIR, "-p", &pt, "-f", &file, "-d", db.as_str()],
         None,
     )?;
+    // Full tenant data: postgres only (review #1 L4).
+    as_postgres(ctx, CHMOD, &["0600", "--", &file], None)?;
     let bytes = postgres_test(ctx, &file)?.ok_or_else(|| Fail::io("pg_dump finished but the dump is missing"))?;
     Ok(json!({"file": file, "bytes": bytes, "from": from.get(), "pgDump": to.get()}))
 }
 
-/// `pg move-restore <to> <db> <tag>`.
-pub fn move_restore(ctx: &Ctx, to: PgMajor, db: &DbName, tag: &str) -> HResult<J> {
+/// `MOVES_DIR`, postgres-owned 0700 whatever made it first (review #1 L4).
+fn moves_dir(ctx: &Ctx) -> HResult<()> {
+    as_postgres(ctx, MKDIR, &["-p", "-m", "0700", "--", MOVES_DIR], None)?;
+    let st = as_postgres(ctx, STAT, &["-c", "%F %U", "--", MOVES_DIR], None)?;
+    if String::from_utf8_lossy(&st.stdout).trim() != "directory postgres" {
+        return Err(Fail::state("moves_dir_refused: /var/lib/postgresql/k2-moves is not a postgres-owned directory"));
+    }
+    as_postgres(ctx, CHMOD, &["0700", "--", MOVES_DIR], None)?;
+    Ok(())
+}
+
+/// A pg_restore failure without row values (review #2 info / #1 I4): only
+/// the first `ERROR:` line, never DETAIL, CONTEXT or the command.
+fn restore_failed(section: &str, out: &ExecOut) -> Fail {
+    let err = String::from_utf8_lossy(&out.stderr);
+    let line = err.lines().find(|l| l.contains("ERROR:")).unwrap_or("pg_restore failed");
+    let line = crate::pg::redact_passwords(line);
+    Fail::io(format!("pg_restore ({section}) exit {}: {}", out.status, line.trim().chars().take(300).collect::<String>()))
+}
+
+fn run_restore(ctx: &Ctx, section: &str, args: &[&str]) -> HResult<()> {
+    let mut a: Vec<String> = vec!["-u".into(), PG_OS_USER.into(), "--".into()];
+    a.extend(args.iter().map(|s| s.to_string()));
+    let out = ctx
+        .exec
+        .run(RUNUSER, &a, None)
+        .map_err(|e| Fail::io(format!("runuser: {}", e.kind_str())))?;
+    if out.status != 0 {
+        return Err(restore_failed(section, &out));
+    }
+    Ok(())
+}
+
+/// `pg move-restore <to> <db> <tag>`, stdin [`MoveLogin`] (the database
+/// owner). No tenant code ever runs as the superuser (review #1 H1, #2 F2):
+/// - pre-data (DDL: schemas, tables, types, functions, ACLs) as postgres:
+///   nothing in it executes a tenant function;
+/// - FORCE ROW LEVEL SECURITY lifted from the tables that have it;
+/// - data and post-data as the owner, over loopback with its own password
+///   (CHECK and domain constraints, generated columns, triggers, index
+///   expressions and REFRESH run as the owner, a non-superuser);
+/// - FORCE put back.
+pub fn move_restore(ctx: &Ctx, to: PgMajor, db: &DbName, tag: &str, stdin: &[u8]) -> HResult<J> {
+    let login: MoveLogin =
+        serde_json::from_slice(stdin).map_err(|_| Fail::argv("move-restore: stdin is not the owner's login JSON"))?;
+    login.validate().map_err(Fail::argv)?;
+    tool_floor(ctx, to, "pg_restore")?;
     let dst = cluster_of(ctx, to)?;
     let file = dump_path(db.as_str(), tag);
     if postgres_test(ctx, &file)?.is_none() {
         return Err(Fail::state("dump_missing: no dump with that tag"));
     }
-    if !db_exists(ctx, to, dst.port, db)? {
-        return Err(Fail::state("no_database: create the target database first"));
+    let owner = k2_db(ctx, to, dst.port, db)?;
+    if owner != login.role {
+        return Err(Fail::state("owner_mismatch: the login is not the target database's owner"));
+    }
+    let rels = sql_at(
+        ctx,
+        to,
+        dst.port,
+        db.as_str(),
+        "SELECT count(*) FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
+         WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg\\_%';\n",
+    )?;
+    if rels.trim() != "0" {
+        return Err(Fail::state("target_not_empty: the target database already has relations; nothing changed"));
     }
     let pt = dst.port.to_string();
     let restore = to.bin("pg_restore");
-    as_postgres(
+    let (d, r) = (db.as_str(), login.role.as_str());
+
+    // 1. pre-data as postgres.
+    run_restore(
         ctx,
-        ENV,
+        "pre-data",
         &[
-            // The box's 1 GB temp cap and 60 s statement cap would fail a
-            // big index build (V40); for this session only.
-            "PGOPTIONS=-c temp_file_limit=-1 -c statement_timeout=0 -c lock_timeout=0 -c idle_in_transaction_session_timeout=0",
+            ENV,
+            "PGOPTIONS=-c search_path=pg_catalog,pg_temp -c temp_file_limit=-1 -c statement_timeout=0 -c lock_timeout=0",
             &restore,
+            "--section=pre-data",
             "--exit-on-error",
             "-h",
             PG_SOCKET_DIR,
             "-p",
             &pt,
             "-d",
-            db.as_str(),
+            d,
             &file,
         ],
-        None,
     )?;
-    Ok(json!({"to": to.get(), "file": file}))
+    // 2. FORCE off while the owner loads (it would hide its own rows).
+    let forced = sql_at(
+        ctx,
+        to,
+        dst.port,
+        d,
+        "SELECT coalesce(pg_catalog.string_agg(c.oid::text, ','), '') FROM pg_catalog.pg_class c WHERE c.relforcerowsecurity;\n",
+    )?;
+    let forced: Vec<u32> = forced.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+    let force_sql = |on: bool| {
+        let list = forced.iter().map(u32::to_string).collect::<Vec<_>>().join(", ");
+        format!(
+            "DO $k2$DECLARE t oid; BEGIN FOREACH t IN ARRAY ARRAY[{list}]::oid[] LOOP \
+             EXECUTE pg_catalog.format('ALTER TABLE %s {} FORCE ROW LEVEL SECURITY', t::regclass); END LOOP; END$k2$;\n",
+            if on { "" } else { "NO" }
+        )
+    };
+    if !forced.is_empty() {
+        sql_at(ctx, to, dst.port, d, &force_sql(false))?;
+    }
+    // The owner's sessions may need big temp files (index builds, V40):
+    // for this database only, reset after.
+    let quoted = format!("\"{r}\" IN DATABASE \"{d}\"");
+    sql_at(ctx, to, dst.port, "postgres", &format!("ALTER ROLE {quoted} SET temp_file_limit = -1;\n"))?;
+    // 3–4. data and post-data as the owner, its password in a 0600 file.
+    let pass = format!("{MOVES_DIR}/.k2pass-{tag}");
+    let owner_steps = (|| -> HResult<()> {
+        moves_dir(ctx)?;
+        as_postgres(ctx, DD, &[&format!("of={pass}"), "status=none"], Some(login.passfile_line(dst.port, d).as_bytes()))?;
+        as_postgres(ctx, CHMOD, &["0600", "--", &pass], None)?;
+        let env_pass = format!("PGPASSFILE={pass}");
+        for section in ["data", "post-data"] {
+            run_restore(
+                ctx,
+                section,
+                &[
+                    ENV,
+                    &env_pass,
+                    "PGOPTIONS=-c statement_timeout=0 -c lock_timeout=0 -c idle_in_transaction_session_timeout=0",
+                    &restore,
+                    &format!("--section={section}"),
+                    "--exit-on-error",
+                    "-h",
+                    "127.0.0.1",
+                    "-p",
+                    &pt,
+                    "-U",
+                    r,
+                    "-d",
+                    d,
+                    &file,
+                ],
+            )?;
+        }
+        Ok(())
+    })();
+    let _ = as_postgres(ctx, RM, &["-f", "--", &pass], None);
+    let _ = sql_at(ctx, to, dst.port, "postgres", &format!("ALTER ROLE {quoted} RESET temp_file_limit;\n"));
+    owner_steps?;
+    // 5. FORCE back.
+    if !forced.is_empty() {
+        sql_at(ctx, to, dst.port, d, &force_sql(true))?;
+    }
+    Ok(json!({"to": to.get(), "file": file, "loadedAs": r, "forcedTables": forced.len()}))
 }
 
 /// `pg move-file-remove <db> <tag>`.
@@ -696,9 +947,7 @@ pub fn allow_conn(ctx: &Ctx, m: PgMajor, db: &DbName, mode: ConnMode) -> HResult
         return Err(Fail::state("refused: the postgres database"));
     }
     let row = cluster_of(ctx, m)?;
-    if !db_exists(ctx, m, row.port, db)? {
-        return Err(Fail::state("no_database: no such database in that cluster"));
-    }
+    k2_db(ctx, m, row.port, db)?;
     let n = db.as_str();
     let end = format!(
         "SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity WHERE datname = '{n}' AND pid <> pg_backend_pid();\n"
@@ -721,7 +970,22 @@ pub fn drop_db(ctx: &Ctx, m: PgMajor, db: &DbName) -> HResult<J> {
     let row = cluster_of(ctx, m)?;
     let had = db_exists(ctx, m, row.port, db)?;
     if had {
-        // A kept source is ALLOW_CONNECTIONS false; DROP needs no connection to it.
+        k2_db(ctx, m, row.port, db)?;
+        // Only a closed (kept source) or quiesced (aborted move) copy: a
+        // live database is never dropped here (review #1 L1).
+        let state = sql_at(
+            ctx,
+            m,
+            row.port,
+            "postgres",
+            &format!(
+                "SELECT (NOT datallowconn OR datconnlimit = 0)::text FROM pg_catalog.pg_database WHERE datname = '{}';\n",
+                db.as_str()
+            ),
+        )?;
+        if state.trim() != "true" {
+            return Err(Fail::state("db_open: the database accepts connections; quiesce or close it first; nothing dropped"));
+        }
         sql_at(ctx, m, row.port, "postgres", &format!("DROP DATABASE IF EXISTS \"{}\" WITH (FORCE);\n", db.as_str()))?;
     }
     Ok(json!({"major": m.get(), "dropped": had}))

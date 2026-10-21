@@ -36,6 +36,8 @@ pub const CAP_SEW_KEY: usize = 64;
 pub const CAP_SEW_JSON: usize = 64 * 1024;
 /// `pg copy-roles`: one small JSON object (at most 256 role names).
 pub const CAP_ROLES: usize = 32 * 1024;
+/// `pg move-restore`: `{"role": …, "password": …}`.
+pub const CAP_MOVE_LOGIN: usize = 4096;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Class {
@@ -1281,12 +1283,11 @@ impl Verb {
             Verb::PgPsql { .. } => Daemon,
             // Changes who may log in to Postgres: the daemon's call only.
             Verb::PgHbaApp { .. } => Daemon,
-            // Reading, the shared memory cap (a tightening), a dry run and
-            // a cluster that starts at boot converge to what K2 sets anyway.
-            Verb::PgClusters
-            | Verb::PgInstallSlice
-            | Verb::PgAddMajor { dry_run: true, .. }
-            | Verb::PgStartConf { auto: true, .. } => Open,
+            // Reading and a dry run.
+            Verb::PgClusters | Verb::PgAddMajor { dry_run: true, .. } => Open,
+            // A cluster's boot setting and the shared slice override what
+            // the owner chose: the daemon's call only (review #1 L3).
+            Verb::PgInstallSlice | Verb::PgStartConf { auto: true, .. } => Daemon,
             // Packages and apt trust, a new cluster on a port, roles with
             // their passwords, a database's data, who may connect, a drop:
             // the daemon's call (the owner's or the toggle's, PRD §12).
@@ -1392,6 +1393,8 @@ impl Verb {
             Verb::AppsPodmanInstall => Some(crate::podman::CAP_BUNDLE),
             Verb::PgPsql { .. } => Some(CAP_SQL),
             Verb::PgCopyRoles { .. } => Some(CAP_ROLES),
+            // The database owner's login (review #1 H1): one small JSON object.
+            Verb::PgMoveRestore { .. } => Some(CAP_MOVE_LOGIN),
             Verb::Sew(v) => v.stdin_cap(),
             _ => None,
         }
@@ -2135,6 +2138,7 @@ mod tests {
                 Verb::MailInstallBin => assert_eq!(cap, Some(CAP_INSTALL_BIN)),
                 Verb::PgPsql { .. } => assert_eq!(cap, Some(CAP_SQL)),
                 Verb::PgCopyRoles { .. } => assert_eq!(cap, Some(CAP_ROLES)),
+                Verb::PgMoveRestore { .. } => assert_eq!(cap, Some(CAP_MOVE_LOGIN)),
                 Verb::AppsInstallEngine => assert_eq!(cap, Some(CAP_ENGINE)),
                 Verb::Sew(SewVerb::Stage | SewVerb::StageMedia) => assert_eq!(cap, Some(CAP_INSTALL_BIN)),
                 Verb::Sew(
@@ -2171,13 +2175,10 @@ mod tests {
     /// written out by hand. A verb moving class must change this on purpose.
     #[test]
     fn pgmajor_class_table() {
-        let open: &[&[&str]] = &[
-            &["pg", "clusters"],
-            &["pg", "install-slice"],
-            &["pg", "add-major", "17", "--dry-run"],
-            &["pg", "start-conf", "17", "auto"],
-        ];
+        let open: &[&[&str]] = &[&["pg", "clusters"], &["pg", "add-major", "17", "--dry-run"]];
         let daemon: &[&[&str]] = &[
+            &["pg", "install-slice"],
+            &["pg", "start-conf", "17", "auto"],
             &["pg", "add-major", "17"],
             &["pg", "add-major", "18"],
             &["pg", "ensure-cluster", "17", "5433"],

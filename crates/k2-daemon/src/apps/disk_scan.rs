@@ -939,6 +939,16 @@ pub fn full_sweep(db_due: bool) {
     dg::set_scan_running(false, Some(k2_core::deploy::now()));
 }
 
+/// Block until the daemon's shared DB is open. `db::shared()` before
+/// `init_database` panics in a release build and, in a `test-util` build
+/// (the daemon binary integration tests run), silently opens a private
+/// in-memory DB for the whole process: never call it early.
+pub fn wait_for_db() {
+    while k2_core::db::try_shared().is_none() {
+        std::thread::sleep(Duration::from_millis(500));
+    }
+}
+
 static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn scanner_started() -> bool {
@@ -953,6 +963,7 @@ pub fn spawn() {
     }
     let _ = std::thread::Builder::new().name("disk-scan".into()).spawn(|| {
         lower_priority();
+        wait_for_db();
         dg::register_scanner();
         *cache().lock().unwrap_or_else(|p| p.into_inner()) = load_cache_file(&cache_path());
         republish();

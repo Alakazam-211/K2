@@ -725,6 +725,7 @@ pub fn spawn() {
     }
     super::disk_scan::spawn();
     let _ = std::thread::Builder::new().name("disk-watch".into()).spawn(|| {
+        super::disk_scan::wait_for_db();
         let path = state_path();
         let mut state = load_state(&path);
         let boot = k2_core::deploy::now();

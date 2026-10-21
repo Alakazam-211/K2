@@ -175,6 +175,25 @@ fn rig(tag: &str, slots: &[(Slot, Trust, Network)]) -> Rig {
     r
 }
 
+
+/// Register every server with the node queue as S1 does (S2): an active
+/// share (room for a few jobs), protocol 3, and for each tenant a session
+/// stand-in (the owner has the fake's real one). The receivers are kept.
+fn shares_up(n: &TestNode, slots: &[Slot]) -> Vec<tokio::sync::mpsc::Receiver<k2_node_proto::frames::Frame>> {
+    let limits = ShareLimits { max_running: 4, max_queued: 100, ..ShareLimits::new_server(Trust::Own, cfg!(target_os = "macos")) };
+    let mut keep = Vec::new();
+    for s in std::iter::once(0u8).chain(slots.iter().copied()) {
+        n.node.fairq.set_share(s, Some(k2_node::fairq::ShareInfo { label: format!("server-{s}"), limits: limits.clone(), status: k2_node_proto::share::ServerStatus::Active }));
+        n.node.fairq.set_protocol(s, Some(3));
+        if s != 0 {
+            let (tx, rx) = tokio::sync::mpsc::channel(4096);
+            n.node.tenant(s).unwrap().hub.attach(tx);
+            keep.push(rx);
+        }
+    }
+    keep
+}
+
 async fn node(fake: &Fake, r: &Rig, policy_extra: &str, tweak: impl FnOnce(&mut k2_node::node::NodeOptions)) -> TestNode {
     let sock = r.socket.clone();
     let n = start_node_in(fake, r.base.clone(), policy_extra, move |o| {
@@ -188,6 +207,10 @@ async fn node(fake: &Fake, r: &Rig, policy_extra: &str, tweak: impl FnOnce(&mut 
         k2_node::identity::write_pin(&n.layout.tenant(*slot).pin(), &fake.pin_for("node-1", "mini-1")).unwrap();
         n.node.add_tenant(*slot).await.unwrap();
     }
+    let slots: Vec<Slot> = r.slots.iter().map(|s| s.0).collect();
+    // The stand-in sessions live as long as the test process (tests here
+    // run one at a time).
+    std::mem::forget(shares_up(&n, &slots));
     n
 }
 
@@ -881,4 +904,15 @@ async fn a_tenants_job_runs_as_its_own_user_in_its_own_dirs() {
     assert_eq!((got.state, got.reason.as_deref()), (JobState::Failed, Some(share::codes::TENANT_WALL_MISSING)), "{}", got.sys);
     assert!(!got.out.contains("never"));
     let _ = u3;
+    // The wall watch holds that server's queue (S2 `set_blocked`) and
+    // leaves the walled one alone: its next job waits, never runs.
+    let held = n.node.tenant_wall_pass().await;
+    assert_eq!(held.into_iter().collect::<Vec<_>>(), vec![(3u8, share::codes::TENANT_WALL_MISSING.to_string())]);
+    start(&n, 3, plan("held", &["/bin/echo", "never"]));
+    tokio::time::sleep(k2_node::fairq::TICK * 2).await;
+    let row = tenant(&n, 3).ledger.lock().unwrap().get("held", 1).unwrap().unwrap();
+    assert_eq!(row.state, JobState::Queued, "a held server's job waits in the queue");
+    assert!(journal(&tenant(&n, 3), "held").0.is_empty());
+    let ok = run(&n, 1, "still", &["/bin/echo", "walled"]).await;
+    assert_eq!(ok.out, "walled\n", "the other server runs on");
 }

@@ -184,6 +184,47 @@ impl Node {
         }
     }
 
+    /// One pass of the tenant wall watch: for every other server, hold
+    /// its queued jobs (`fairq.set_blocked`) while its wall isn't there
+    /// (`tenant_wall_missing`, `team_needs_tenant_wall`: no job wall, no
+    /// user, an older executor, an unprepared root) or its root is over
+    /// its disk budget (`tenant_disk_full`); clear the hold once it is.
+    /// Then the `team` disk scan stops running jobs over budget (V74).
+    /// Returns the holds set, by slot.
+    pub async fn tenant_wall_pass(&self) -> std::collections::BTreeMap<k2_node_proto::share::Slot, String> {
+        let mut held = std::collections::BTreeMap::new();
+        for t in self.tenants() {
+            if t.is_owner() {
+                continue;
+            }
+            let why = match self.tenant_wall_check(&t).await {
+                Err((code, _)) => Some(code),
+                Ok(()) if self.tenant_over_disk(&t) => Some(codes::TENANT_DISK_FULL.to_string()),
+                Ok(()) => None,
+            };
+            if let Some(w) = &why {
+                held.insert(t.slot, w.clone());
+            }
+            self.fairq.set_blocked(t.slot, why);
+        }
+        for (slot, job) in self.team_disk_scan() {
+            crate::nlog!("slot {slot} job {job}: stopped, its server is over its disk budget");
+        }
+        held
+    }
+
+    /// Run [`Self::tenant_wall_pass`] now and every `every` (60 s in life;
+    /// the node's background start calls this once).
+    pub fn spawn_tenant_wall_watch(self: &Arc<Self>, every: Duration) {
+        let node = self.clone();
+        tokio::spawn(async move {
+            loop {
+                node.tenant_wall_pass().await;
+                tokio::time::sleep(every).await;
+            }
+        });
+    }
+
     /// The 60 s `team` scan (V74): every `team` tenant over its disk
     /// budget has its running jobs stopped as a **result** (`failed /
     /// tenant_disk_full`, not infra, so it isn't retried into the same
@@ -925,6 +966,18 @@ mod tests {
         for s in [1u8, 2, 3] {
             tens.push(n.add_tenant(s).await.unwrap());
         }
+        // Approved, protocol 3, a session stand-in each (as S1 sets up).
+        let mut sessions = Vec::new();
+        for s in [0u8, 1, 2, 3] {
+            let limits = ShareLimits { max_running: 2, ..ShareLimits::new_server(Trust::Own, false) };
+            n.fairq.set_share(s, Some(crate::fairq::ShareInfo { label: format!("s{s}"), limits, status: k2_node_proto::share::ServerStatus::Active }));
+            n.fairq.set_protocol(s, Some(3));
+        }
+        for t in &tens {
+            let (tx, rx) = tokio::sync::mpsc::channel(256);
+            t.hub.attach(tx);
+            sessions.push(rx);
+        }
         // Slots 1 (team) and 2 (own) hold 64 KiB; slot 3 (team) almost nothing.
         for s in [1u8, 2] {
             let p = layout.tenant(s).cache().join("big");
@@ -946,6 +999,8 @@ mod tests {
         for t in &tens {
             job(t);
         }
+        n.fairq.tick(&n);
+        assert_eq!(n.running_by_tenant().len(), 3, "all three started: {:?}", n.running_by_tenant());
         tokio::time::sleep(Duration::from_millis(300)).await;
         let stopped = n.team_disk_scan_with(budget);
         assert_eq!(stopped, vec![(1u8, "j".to_string())], "only the over-budget team tenant's job");

@@ -145,8 +145,8 @@ export const SKIN_CAP_LABELS: Record<SkinCap, string> = Object.fromEntries(
 ) as Record<SkinCap, string>
 
 /** AH24: the heartbeat caps are offered only when the server ships them;
- *  the agent identity caps likewise, and `activity:room` (0.46.3,
- *  `thread-activity-ear-v1`): an older server refuses an unknown cap. */
+ *  the agent identity caps likewise, and `activity:room` (0.46.3, feature
+ *  `activity-room`): an older server refuses an unknown cap. */
 export function skinCapChoices(appHeartbeats: boolean, agentIdentity: boolean, activityRoom = true): readonly SkinCap[] {
   if (appHeartbeats && agentIdentity && activityRoom) return SKIN_CAP_CHOICES
   return SKIN_CAP_CHOICES.filter(
@@ -606,7 +606,7 @@ export function prefixLabel(prefix: string): string {
 export function SkinAccessSection(): React.JSX.Element {
   const appHeartbeats = useServerSupports('app-heartbeats')
   const agentIdentity = useServerSupports('agent-identity')
-  const activityRoom = useServerSupports('thread-activity-ear-v1')
+  const activityRoom = useServerSupports('activity-room')
   const agentConfigOptIn = useServerSupports('agent-config-write')
   const capChoices = useMemo(
     () => skinCapChoices(appHeartbeats, agentIdentity, activityRoom),

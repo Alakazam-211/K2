@@ -139,6 +139,11 @@ export const FEATURES = {
    *  above this (an older server refuses the unknown cap). Confirm at the
    *  release cut. */
   'agent-config-write': '0.45.6',
+  /** The `activity:room` app cap (0.46.3, `thread-activity-ear-v1`): the
+   *  room-wide working counts moved off `activity:read` (now the pinned-Chat
+   *  ear). Settings → Apps offers the cap only at or above this (an older
+   *  server refuses the unknown cap). Confirm at the release cut. */
+  'activity-room': '0.46.3',
   /** GET /cli/wiki/index + /cli/wiki/note — the Wiki page's routes (first
    *  shipped in 0.40.47, `c3153b1d5`). Gates the Workspace tab's View Wiki
    *  in a room on another server (0.46.0): it switches the window there,

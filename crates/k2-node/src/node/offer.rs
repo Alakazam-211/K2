@@ -1,15 +1,34 @@
 //! The offer one session's server sees (§10.1 of the nodes PRD; per
 //! session since node sharing, prd-compute-shared-queue-v1 V53).
 //!
-//! Solo mode: the owner's offer, exactly today's. Lane S1 adds the share
-//! view, per-session features and the owner-only labels here.
+//! Solo mode with a 0.46.2 server: exactly today's offer (the solo goldens
+//! hold it). Per session:
+//! - `slots`: only this server's project keys (its own cache root);
+//! - `features`: the build's and the wall's; `servers` to a server that
+//!   speaks protocol 3; never `admin`, `self-update` or `health` to a
+//!   server that isn't the node's owner (V52);
+//! - `labels`: this server's own pin labels (never the owner's) plus the
+//!   machine facts;
+//! - `control_by` (a person's name) only to the owner;
+//! - `share`: this server's [`ShareView`] when it speaks protocol 3 and the
+//!   node is set up for sharing (`servers.toml`);
+//! - revision and dedupe per session; `share.expires_in_secs` and the
+//!   quotes don't count as a change (they ride the 30 s offer).
 
 use std::sync::atomic::Ordering;
 
 use k2_node_proto::frames::{Availability, Caps, Free, Offer, PROTOCOL};
 use k2_node_proto::refusal::{self, NodeView};
+use k2_node_proto::share::{ShareView, FEATURE_SERVERS};
 
 use super::{Node, Tenant, NODE_VERSION};
+
+/// Features only the owner server may see (V52).
+const OWNER_ONLY_FEATURES: &[&str] = &[
+    k2_node_proto::admin::FEATURE_ADMIN,
+    k2_node_proto::admin::FEATURE_SELF_UPDATE,
+    k2_node_proto::admin::FEATURE_HEALTH,
+];
 
 impl Node {
     /// `t`'s offer right now (its revision bumps only when content changed).
@@ -53,10 +72,10 @@ impl Node {
         }
         let ledger_id = t.ledger_id();
         let mut o = Offer {
-            share: None,
+            share: self.share_view(t),
             revision: 0,
             control,
-            control_by: l.control.by.clone(),
+            control_by: if t.is_owner() { l.control.by.clone() } else { None },
             control_at: l.control.at,
             availability: Availability { ok: l.unavailable.is_empty(), reasons: l.unavailable.clone() },
             caps: Caps { cpu_millis: cap_cpu, mem_bytes: cap_mem, disk_budget_bytes: l.policy.disk_budget_bytes, hard: self.caps_hard() },
@@ -71,7 +90,7 @@ impl Node {
             boot_id: self.opts.clock.boot_id(),
             ledger_id,
             node_version: NODE_VERSION.to_string(),
-            features: self.features(),
+            features: self.session_features(t),
         };
         let mut last = t.last_offer.lock().unwrap();
         let same = last.as_ref().is_some_and(|p| {
@@ -79,6 +98,11 @@ impl Node {
             q.revision = 0;
             // Free disk moves constantly; only a 1 GiB change is news.
             q.free.disk_free_bytes = o.free.disk_free_bytes;
+            // The end-date countdown and quotes ride the periodic offer.
+            if let (Some(qs), Some(os)) = (q.share.as_mut(), o.share.as_ref()) {
+                qs.expires_in_secs = os.expires_in_secs;
+                qs.quotes = os.quotes.clone();
+            }
             q == o && p.free.disk_free_bytes.abs_diff(o.free.disk_free_bytes) < (1 << 30)
         });
         if same {
@@ -89,5 +113,48 @@ impl Node {
             *last = Some(o.clone());
         }
         o
+    }
+
+    /// What `t`'s session is told this node understands (§10.1, V52).
+    pub fn session_features(&self, t: &Tenant) -> Vec<String> {
+        let mut f = self.features();
+        if !t.is_owner() {
+            f.retain(|x| !OWNER_ONLY_FEATURES.contains(&x.as_str()));
+        }
+        if t.speaks_shared() && !f.iter().any(|x| x == FEATURE_SERVERS) {
+            f.push(FEATURE_SERVERS.to_string());
+        }
+        f
+    }
+
+    /// `Offer.share` for `t` (V53): only to a protocol-3 server, only on a
+    /// node set up for sharing, and only `t`'s own share and counts.
+    pub fn share_view(&self, t: &Tenant) -> Option<ShareView> {
+        if !t.speaks_shared() {
+            return None;
+        }
+        let info = t.share()?;
+        let now = self.now();
+        let state = t.status_at(now)?;
+        // The owner sees a share view only once someone shares its node.
+        if t.is_owner() && !info.shared {
+            return None;
+        }
+        let running = self.running_by_tenant().get(&t.slot).map(|v| v.len() as u32).unwrap_or(0);
+        Some(ShareView {
+            role: t.role(),
+            slot: t.slot,
+            shared: info.shared,
+            servers: info.servers,
+            owner_label: (!t.is_owner()).then(|| info.owner_label.clone()),
+            state,
+            limits: info.entry.limits(),
+            running,
+            // The node queue (lane S2) fills these.
+            queued: 0,
+            cpu_secs_today: 0,
+            expires_in_secs: info.entry.expires_at.map(|e| (e - now).max(0)),
+            quotes: Vec::new(),
+        })
     }
 }

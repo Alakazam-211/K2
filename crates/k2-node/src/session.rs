@@ -2,8 +2,17 @@
 //! session's loops, and the run loop with backoff (§11.5, §12.1).
 //!
 //! Every session belongs to one [`Tenant`]: one server's pin, ledger,
-//! journals and hub (prd-compute-shared-queue-v1 §5). Solo mode runs one
-//! session, the owner's ([`run_forever`]).
+//! journals and hub (prd-compute-shared-queue-v1 §5). Solo mode (no
+//! `servers.toml`) runs one session, the owner's, exactly as 0.46.2 did.
+//! With `servers.toml`, [`run_forever`] also runs one session per server it
+//! approves ([`run_servers`]): each with its own attach, offers, logs and
+//! receipts, so one server going down touches nothing else.
+//!
+//! Per session (V51, V52): a non-owner server's `Revoked` ends only that
+//! server; it gets no `Health`, and its `Admin`, `AdminKeys`, `UpdateOffer`
+//! and `UpdateChunk` frames are dropped before they touch any state
+//! (`not_node_owner`, once per session); only the owner's attach marks a
+//! self-update healthy. A non-owner server must speak protocol 3.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -13,15 +22,19 @@ use futures_util::{SinkExt, StreamExt};
 use k2_node_proto::crypto::{self, SigningKey};
 use k2_node_proto::frames::{
     self, Challenge, Direction, Frame, HandshakeFrame, Hello, JobState, JobsSnapshot, Proof, ReceiptFrame, Refused,
-    Welcome, HANDSHAKE_SECS, MAX_FRAME_BYTES, PROTOCOL,
+    Welcome, HANDSHAKE_SECS, MAX_FRAME_BYTES, PROTOCOL, PROTOCOL_SHARED,
 };
+use k2_node_proto::share::codes::{self, NOT_NODE_OWNER};
+use k2_node_proto::share::{ServerEntry, ServerStatus, ServersFile, ShareState, Slot, OWNER_SLOT};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::identity::Pin;
 use crate::journal::JournalReader;
+use crate::node::tenant::ShareInfo;
 use crate::node::{Node, Tenant, NODE_VERSION};
+use crate::status::ServerLine;
 
 pub const ATTACH_PATH: &str = "/cli/compute/attach";
 pub const ENROLL_PATH: &str = "/cli/compute/enroll";
@@ -97,15 +110,34 @@ pub struct SessionStart {
     pub session: String,
     pub welcome: Welcome,
     pub controller_spki: Vec<u8>,
+    /// What the server said in `Challenge.protocol`: sharing fields and
+    /// features go only to ≥ `PROTOCOL_SHARED` (§10.1).
+    pub protocol: u32,
 }
 
 pub enum AttachOutcome {
     Session(SessionStart),
     Refused(Refused),
+    /// The node refused the server: it speaks an older protocol than this
+    /// server's role needs (`server_too_old`, §4.1). Carries what it said.
+    TooOld(u32),
 }
 
 /// The node side of the attach handshake. Every check fails closed.
 pub async fn attach<S>(ws: &mut S, key: &SigningKey, pin: &Pin, boot_id: &str, ledger_id: &str) -> Result<AttachOutcome, String>
+where
+    S: futures_util::Sink<Message, Error = tokio_tungstenite::tungstenite::Error>
+        + futures_util::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
+        + Unpin,
+{
+    attach_as(ws, key, pin, boot_id, ledger_id, 0).await
+}
+
+/// [`attach`] refusing a server below `min_protocol` before the node proves
+/// itself: a non-owner server must speak protocol 3 (a 0.46.2 server
+/// enrols, its SAS is confirmed, then its attach is refused
+/// `server_too_old`, §4.1, V79). The owner passes 0 (any server, today).
+pub async fn attach_as<S>(ws: &mut S, key: &SigningKey, pin: &Pin, boot_id: &str, ledger_id: &str, min_protocol: u32) -> Result<AttachOutcome, String>
 where
     S: futures_util::Sink<Message, Error = tokio_tungstenite::tungstenite::Error>
         + futures_util::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
@@ -140,6 +172,15 @@ where
         ) {
             return Err("controller challenge signature is bad".into());
         }
+        if ch.protocol < min_protocol {
+            let _ = send_hs(ws, &HandshakeFrame::Refused(Refused {
+                code: k2_node_proto::share::codes::SERVER_TOO_OLD.into(),
+                message: format!("this node is shared and needs a K2 server on protocol {min_protocol} (0.46.3) or newer; this server said {}: update it", ch.protocol),
+            }))
+            .await;
+            return Ok(AttachOutcome::TooOld(ch.protocol));
+        }
+        let protocol = ch.protocol;
         let sig = key.sign_domain(frames::DOMAIN_ATTACH_NODE, &[ch.nonce_c.as_bytes(), pin.controller_fp.as_bytes(), nonce_n.as_bytes()])?;
         send_hs(ws, &HandshakeFrame::Proof(Proof { sig })).await?;
         let text = recv_text(ws).await?;
@@ -152,7 +193,7 @@ where
         }
         let session = frames::session_id(&nonce_n, &ch.nonce_c);
         match frames::open(&controller_spki, Direction::ControllerToNode, &session, 0, &text) {
-            Ok(Frame::Welcome(welcome)) => Ok(AttachOutcome::Session(SessionStart { session, welcome, controller_spki })),
+            Ok(Frame::Welcome(welcome)) => Ok(AttachOutcome::Session(SessionStart { session, welcome, controller_spki, protocol })),
             Ok(other) => Err(format!("protocol_error: first frame is {}", other.kind())),
             Err(e) => Err(format!("protocol_error: {e}")),
         }
@@ -273,7 +314,10 @@ where
     let session = start.session.clone();
     let spki = start.controller_spki.clone();
 
-    // Learned routes, the confirmed flag, narrowing.
+    let owner = tenant.is_owner();
+    tenant.protocol.store(start.protocol, std::sync::atomic::Ordering::SeqCst);
+    // Learned routes (this server's only), the confirmed flag, narrowing:
+    // all `tenant`'s (V51).
     {
         let mut lr = tenant.learned_routes.lock().unwrap();
         for r in &start.welcome.routes {
@@ -283,8 +327,11 @@ where
         }
     }
     node.mark_confirmed(&tenant);
-    // Self-update health gate: this build reached its controller.
-    crate::admin::update::mark_healthy(&node.layout().home, true);
+    // Self-update health gate: this build reached its owner server (V52:
+    // another server's attach says nothing about the owner's update).
+    if owner {
+        crate::admin::update::mark_healthy(&node.layout().home, true);
+    }
     if let Some(n) = start.welcome.narrow.clone() {
         node.narrow(&tenant, n);
     }
@@ -359,18 +406,20 @@ where
     }
     let first = node.offer(&tenant);
     let _ = tx.send(Frame::Offer(first.clone())).await;
-    // Tell the controller how the last self-update ended (it dedups).
-    {
+    // Tell the owner server how the last self-update ended (it dedups).
+    if owner {
         let (n, t) = (node.clone(), tx.clone());
         tokio::spawn(async move { crate::admin::courier::report_last_update(n, t).await });
     }
 
     // Health (node admin §10): at once, then on change (checked every
-    // minute) and at least every HEALTH_SECS.
+    // minute) and at least every HEALTH_SECS. The owner server's only: it
+    // carries people's home paths, update state and every server's stuck
+    // jobs (V52).
     let health_node = node.clone();
     let health_tx = tx.clone();
     let health = tokio::spawn(async move {
-        if !health_node.opts.health {
+        if !health_node.opts.health || !owner {
             return;
         }
         let mut last: Option<(k2_node_proto::health::Health, std::time::Instant)> = None;
@@ -433,12 +482,21 @@ where
 
     // Reader.
     let mut expected = 1u64; // Welcome was seq 0
+    let mut serve = tenant.serve.subscribe();
+    // A non-owner's owner-only frames are answered once per session (V52).
+    let mut told_not_owner = false;
     let end = loop {
         let msg = tokio::select! {
             m = stream.next() => m,
             _ = async { while !writer.is_finished() { tokio::time::sleep(Duration::from_millis(200)).await; } } => {
                 let why = writer_why.lock().unwrap().clone().unwrap_or_else(|| "stopped".into());
                 break SessionEnd::Closed(format!("writer ended: {why}"));
+            }
+            _ = async { let _ = serve.wait_for(|on| !*on).await; } => {
+                // The node owner revoked, ended or reset this server: a
+                // last offer says why (its share state), then close.
+                let _ = tx.send(Frame::Offer(node.offer(&tenant))).await;
+                break SessionEnd::Closed("ended by the node owner".into());
             }
         };
         let text = match msg {
@@ -454,8 +512,37 @@ where
             Err(e) => break SessionEnd::ProtocolError(e.to_string()),
         };
         expected += 1;
+        // Owner-only frames from any other server: dropped before they touch
+        // any state (the owner's update transfer, the executor's audit),
+        // answered `not_node_owner` once per session (V52, P4).
+        if !owner {
+            if let Some(answer) = not_owner_answer(&node, &frame) {
+                if !told_not_owner {
+                    told_not_owner = true;
+                    if let Some(f) = answer {
+                        let _ = tx.send(f).await;
+                    }
+                }
+                continue;
+            }
+        }
         match frame {
             Frame::Assign(a) => {
+                // A share that may not start jobs now (paused, past its end
+                // date, revoked, not yet confirmed, or a node that lost its
+                // wall) leaves the job queued on its server (§4.3, V59).
+                // A fence the ledger knows still reports its state.
+                if let Some(code) = tenant.job_gate(node.now(), node.wall.is_walled()) {
+                    let known = {
+                        let l = tenant.ledger.lock().unwrap();
+                        l.get(&a.fence.job_id, a.fence.generation).ok().flatten().is_some()
+                            || l.latest(&a.fence.job_id).ok().flatten().is_some_and(|r| r.generation > a.fence.generation)
+                    };
+                    if !known {
+                        let _ = tx.send(gate_frame(&node, &a.fence.job_id, a.fence.generation, code)).await;
+                        continue;
+                    }
+                }
                 if let Some((job, gen)) = node.on_assign(&tenant, a) {
                     tracks.lock().unwrap().insert((job.clone(), gen), track(&tenant, &job, gen, 0, false));
                     tenant.ship.notify_one();
@@ -498,6 +585,7 @@ where
         }
     };
     tenant.hub.detach(epoch);
+    tenant.protocol.store(0, std::sync::atomic::Ordering::SeqCst);
     shipper.abort();
     offers.abort();
     health.abort();
@@ -513,28 +601,105 @@ where
     end
 }
 
-/// Dial, attach, serve, back off — forever: the owner server (solo mode,
-/// today's one session).
-pub async fn run_forever(node: Arc<Node>) {
-    let owner = node.owner();
-    run_tenant_forever(node, owner).await
+/// A frame only the node's owner server may send, from another server:
+/// `Some(answer)` (the inner `None` = nothing to say back); `None` when any
+/// server may send it (V52). Nothing here touches state.
+fn not_owner_answer(node: &Node, f: &Frame) -> Option<Option<Frame>> {
+    use k2_node_proto::admin::{AdminRefusal, AdminResult, UpdatePhase};
+    let why = "only this node's owner server sends admin commands, keys and updates";
+    let refusal = || AdminRefusal::new(NOT_NODE_OWNER, why);
+    match f {
+        Frame::Admin(_) => Some(Some(Frame::AdminResult(AdminResult::refused("", "", &refusal())))),
+        Frame::AdminKeys(_) => Some(Some(Frame::AdminResult(AdminResult::refused("admin_keys", "", &refusal())))),
+        Frame::UpdateOffer(o) => Some(Some(Frame::UpdateState(frames::UpdateState {
+            transfer_id: Some(o.transfer_id.clone()),
+            cmd_id: None,
+            phase: UpdatePhase::Refused,
+            version: o.version.clone(),
+            from: Some(crate::PRODUCT_VERSION.into()),
+            code: Some(NOT_NODE_OWNER.into()),
+            message: Some(why.into()),
+            at: node.now(),
+        }))),
+        Frame::UpdateChunk(_) => Some(None),
+        _ => None,
+    }
 }
 
-/// [`run_forever`] for one tenant's server. Status and enrol requests are
-/// the owner's (the status file shows the node and its owner server).
+/// An assign the share may not start now stays queued on its server, with
+/// the reason (the same shape as a node refusal).
+fn gate_frame(node: &Node, job: &str, generation: u32, code: &str) -> Frame {
+    let detail = match code {
+        codes::SHARE_PAUSED => "the node owner paused this server's share",
+        codes::SHARE_EXPIRED => "this server's share on the node has ended",
+        codes::SHARE_REVOKED => "the node owner revoked this server",
+        codes::TENANT_WALL_MISSING => "the node lost its job wall; it serves only its owner server",
+        _ => "this server isn't approved on the node yet (confirm its SAS)",
+    };
+    Frame::State(frames::StateUpdate {
+        queue: None,
+        job_id: job.to_string(),
+        generation,
+        state: JobState::Queued,
+        reason: Some(code.to_string()),
+        detail: Some(detail.to_string()),
+        at: node.now(),
+        exit: None,
+        src: None,
+        log_seq: 0,
+        outputs: None,
+    })
+}
+
+/// Dial, attach, serve, back off — forever: the owner server (today's one
+/// session; solo mode is just this), plus one session per other server
+/// `servers.toml` approves ([`run_servers`]).
+pub async fn run_forever(node: Arc<Node>) {
+    let owner = node.owner();
+    tokio::select! {
+        _ = run_tenant_forever(node.clone(), owner) => {}
+        _ = run_servers(node) => {}
+    }
+}
+
+/// Sleep, or wake early when the node owner turns this server off.
+async fn pause(serve: &mut tokio::sync::watch::Receiver<bool>, d: Duration) {
+    tokio::select! {
+        _ = tokio::time::sleep(d) => {}
+        _ = async { let _ = serve.wait_for(|on| !*on).await; } => {}
+    }
+}
+
+/// [`run_forever`] for one server. The owner's state is the status file's
+/// (and it takes enrol requests); another server's is its [`Link`]
+/// (`k2-node status` lists it). A non-owner must speak protocol 3.
+///
+/// [`Link`]: crate::node::tenant::Link
 pub async fn run_tenant_forever(node: Arc<Node>, tenant: Arc<Tenant>) {
     let mut backoff = node.opts.backoff_min;
-    // The status file and enrol requests are the owner's; another
-    // server's session only logs (lane S1 adds per-server status).
     let owner = tenant.is_owner();
     let status = |state: &str, route: Option<String>, err: Option<String>| {
         if owner {
             node.set_status_state(state, route, err);
-        } else if let Some(e) = &err {
-            crate::nlog!("server slot {}: {state}: {e}", tenant.slot);
+        } else {
+            let before = tenant.link.lock().unwrap().clone();
+            if let Some(e) = err.as_ref().filter(|e| before.last_error.as_ref() != Some(*e) || before.state != state) {
+                crate::nlog!("server slot {}: {state}: {e}", tenant.slot);
+            }
+            tenant.set_link(state, route, err, node.now());
         }
     };
+    let cur = || if owner { node.status.lock().unwrap().state.clone() } else { tenant.link.lock().unwrap().state.clone() };
+    let min_protocol = if owner { 0 } else { PROTOCOL_SHARED };
+    let mut serve = tenant.serve.subscribe();
     loop {
+        if !*serve.borrow_and_update() {
+            status("stopped", None, None);
+            if serve.wait_for(|on| *on).await.is_err() {
+                return;
+            }
+            backoff = node.opts.backoff_min;
+        }
         tenant.reload_pin();
         let pin = tenant.pin.lock().unwrap().clone();
         let pin = match pin {
@@ -542,10 +707,10 @@ pub async fn run_tenant_forever(node: Arc<Node>, tenant: Arc<Tenant>) {
                 if owner && crate::request::process(&node).await {
                     continue;
                 }
-                if node.status.lock().unwrap().state != "unenrolled" {
+                if cur() != "unenrolled" {
                     status("unenrolled", None, None);
                 }
-                tokio::time::sleep(Duration::from_secs(5).min(node.opts.backoff_max)).await;
+                pause(&mut serve, Duration::from_secs(5).min(node.opts.backoff_max)).await;
                 continue;
             }
             Some(p) if p.revoked => {
@@ -553,7 +718,7 @@ pub async fn run_tenant_forever(node: Arc<Node>, tenant: Arc<Tenant>) {
                     continue;
                 }
                 status("revoked", None, p.revoked_reason.clone().map(|r| format!("Removed by the controller: {r}")));
-                tokio::time::sleep(Duration::from_secs(30).min(node.opts.backoff_max * 2)).await;
+                pause(&mut serve, Duration::from_secs(30).min(node.opts.backoff_max * 2)).await;
                 continue;
             }
             Some(p) => p,
@@ -562,7 +727,7 @@ pub async fn run_tenant_forever(node: Arc<Node>, tenant: Arc<Tenant>) {
         let ledger_id = tenant.ledger_id();
         let mut last_err = None;
         for route in tenant.routes() {
-            if node.status.lock().unwrap().state != "pending" {
+            if cur() != "pending" {
                 status("connecting", Some(route.clone()), last_err.clone());
             }
             let mut ws = match connect(&route, ATTACH_PATH).await {
@@ -572,10 +737,14 @@ pub async fn run_tenant_forever(node: Arc<Node>, tenant: Arc<Tenant>) {
                     continue;
                 }
             };
-            match attach(&mut ws, &node.key, &pin, &boot, &ledger_id).await {
+            match attach_as(&mut ws, &node.key, &pin, &boot, &ledger_id, min_protocol).await {
                 Ok(AttachOutcome::Session(start)) => {
                     status("online", Some(route.clone()), None);
-                    crate::nlog!("online via {route}");
+                    if owner {
+                        crate::nlog!("online via {route}");
+                    } else {
+                        crate::nlog!("server slot {}: online via {route} (protocol {})", tenant.slot, start.protocol);
+                    }
                     let end = run_session(node.clone(), tenant.clone(), ws, start).await;
                     crate::nlog!("session ended: {end:?}");
                     backoff = node.opts.backoff_min;
@@ -594,6 +763,13 @@ pub async fn run_tenant_forever(node: Arc<Node>, tenant: Arc<Tenant>) {
                     }
                     break;
                 }
+                Ok(AttachOutcome::TooOld(p)) => {
+                    let _ = ws.close(None).await;
+                    tenant.update_flags(|f| f.refused = Some(NODE_REFUSED_TOO_OLD.into()));
+                    last_err = Some(format!("{NODE_REFUSED_TOO_OLD}: the server speaks protocol {p}; update it to 0.46.3"));
+                    status("refused", Some(route.clone()), last_err.clone());
+                    break;
+                }
                 Err(e) => {
                     last_err = Some(e);
                     let _ = ws.close(None).await;
@@ -601,13 +777,311 @@ pub async fn run_tenant_forever(node: Arc<Node>, tenant: Arc<Tenant>) {
             }
         }
         if let Some(e) = &last_err {
-            let st = node.status.lock().unwrap().state.clone();
-            if st != "pending" && st != "revoked" && st != "online" {
+            let st = cur();
+            if st != "pending" && st != "revoked" && st != "online" && st != "refused" {
                 status("offline", None, Some(e.clone()));
             }
         }
         let wait = backoff + Duration::from_millis(crate::util::jitter_ms(backoff.as_millis() as u64 / 2 + 1));
-        tokio::time::sleep(wait).await;
+        pause(&mut serve, wait).await;
         backoff = (backoff * 2).min(node.opts.backoff_max);
+    }
+}
+
+const NODE_REFUSED_TOO_OLD: &str = codes::SERVER_TOO_OLD;
+
+// ── many servers: the servers loop ───────────────────────────────────
+
+/// How often the node asks the executor for due `servers.toml`
+/// housekeeping (a confirmed add, an expired pending line, a due wipe).
+const PRUNE_EVERY: Duration = Duration::from_secs(30);
+
+/// The servers loop's memory between passes.
+#[derive(Default)]
+struct ServersLoop {
+    /// The last `servers.toml` that read and validated (§14: a broken file
+    /// never fails open; the node serves on with this).
+    last_good: Option<ServersFile>,
+    /// Which line each open tenant serves: `(fp_prefix, added_at)`. A slot
+    /// whose line changed hands is ended and reopened fresh.
+    keys: HashMap<Slot, (String, i64)>,
+    /// Each open tenant's `run_tenant_forever`.
+    tasks: HashMap<Slot, tokio::task::JoinHandle<()>>,
+    /// Enrol request ids already tried (once each).
+    enrolls_tried: std::collections::BTreeSet<String>,
+    last_prune: Option<std::time::Instant>,
+    prune_error: Option<String>,
+}
+
+impl Drop for ServersLoop {
+    /// The loop is gone (shutdown): every other server's session ends on
+    /// its own (its sub-tasks clean up), the idle tasks go with the runtime.
+    fn drop(&mut self) {
+        for (_, h) in self.tasks.drain() {
+            drop(h);
+        }
+    }
+}
+
+/// Every `config_poll`: read `servers.toml`, open a tenant (and its
+/// session) per server it approves, enrol a pending one, end the ones it
+/// revoked or that expired, and show them all in the status file. No file
+/// = solo mode: only the owner's session, as today.
+pub async fn run_servers(node: Arc<Node>) {
+    let mut st = ServersLoop::default();
+    loop {
+        servers_pass(&node, &mut st).await;
+        tokio::time::sleep(node.opts.config_poll).await;
+    }
+}
+
+fn line_key(e: &ServerEntry) -> (String, i64) {
+    (e.fp_prefix.clone(), e.added_at)
+}
+
+/// Set `t`'s share view; wake its offer sender when it changed.
+fn set_share(t: &Tenant, info: Option<ShareInfo>) -> bool {
+    let mut g = t.share.lock().unwrap();
+    if *g == info {
+        return false;
+    }
+    *g = info;
+    drop(g);
+    t.offer_changed.notify_one();
+    true
+}
+
+/// A line's status with what the node knows: a pending line whose pin is
+/// confirmed counts as active (`servers.prune` writes it so later).
+fn effective(layout: &crate::paths::Layout, e: &ServerEntry, now: i64) -> ServerStatus {
+    let s = e.status(now);
+    if e.slot == OWNER_SLOT || e.state != ShareState::Pending || e.expires_at.is_some_and(|x| now >= x) {
+        return s;
+    }
+    match crate::identity::read_tenant_pin(&layout.tenant(e.slot).pin()) {
+        Ok(Some((p, _))) if p.confirmed && !p.revoked && crate::node::tenant::pin_serves(e, &p) => ServerStatus::Active,
+        _ => s,
+    }
+}
+
+async fn servers_pass(node: &Arc<Node>, st: &mut ServersLoop) {
+    let layout = node.layout().clone();
+    let now = node.now();
+    let owner = node.owner();
+    let owner_fp = owner.pin.lock().unwrap().as_ref().filter(|p| !p.revoked).map(|p| p.controller_fp.clone());
+    let mine = |f: &ServersFile| owner_fp.as_deref() == Some(f.owner.as_str());
+    let (file, error) = match crate::admin::servers::read_file(&layout.config) {
+        Ok(None) => {
+            st.last_good = None;
+            (None, None)
+        }
+        Ok(Some(f)) if mine(&f) => {
+            st.last_good = Some(f.clone());
+            (Some(f), None)
+        }
+        Ok(Some(_)) => (None, Some("servers.toml names another owner server than this node's; serving the owner only (re-add the servers after a re-enrol)".to_string())),
+        Err(e) => (st.last_good.clone().filter(|f| mine(f)), Some(format!("{e} (serving on with the last good copy)"))),
+    };
+
+    // Each line's status as the node sees it, and the counts.
+    let lines: Vec<(ServerEntry, ServerStatus)> = file.as_ref().map(|f| f.servers.iter().map(|e| (e.clone(), effective(&layout, e, now))).collect()).unwrap_or_default();
+    let servers = lines.iter().filter(|(_, s)| matches!(s, ServerStatus::Active | ServerStatus::Paused)).count() as u32;    let owner_label = file.as_ref().and_then(|f| f.entry(OWNER_SLOT)).map(|e| e.label.clone()).unwrap_or_default();
+    let info = |e: &ServerEntry| ShareInfo { entry: e.clone(), servers, shared: servers >= 2, owner_label: owner_label.clone() };
+    set_share(&owner, file.as_ref().and_then(|f| f.entry(OWNER_SLOT)).map(info));
+
+    // Open tenants whose line went away or changed hands: end them; once
+    // their session stopped and no job of theirs runs, forget them so the
+    // slot opens fresh (new ledger and pin) for its next server.
+    for t in node.tenants().into_iter().filter(|t| !t.is_owner()) {
+        let line = lines.iter().find(|(e, _)| e.slot == t.slot).map(|(e, _)| e);
+        let same = line.is_some_and(|e| st.keys.get(&t.slot) == Some(&line_key(e)));
+        if same {
+            continue;
+        }
+        t.serve.send_replace(false);
+        set_share(&t, None);
+        if line.is_some() {
+            // The slot was wiped and re-added: the old server's jobs end.
+            node.stop_tenant(t.slot, JobState::Cancelled, codes::SHARE_REVOKED);
+        }
+        let idle = !node.running_by_tenant().contains_key(&t.slot) && t.hub.connected.borrow().eq(&0);
+        if idle && node.drop_tenant(t.slot) {
+            st.keys.remove(&t.slot);
+            if let Some(h) = st.tasks.remove(&t.slot) {
+                h.abort();
+            }
+        }
+    }
+
+    let stop = crate::admin::servers::read_stop(&layout.config).unwrap_or_default();
+    let mut due_prune = false;
+    for (e, eff) in lines.iter().filter(|(e, _)| e.slot != OWNER_SLOT) {
+        let slot = e.slot;
+        if node.tenant(slot).is_some_and(|_| st.keys.get(&slot) != Some(&line_key(e))) {
+            continue; // the old server's tenant is still ending
+        }
+        let pin = crate::identity::read_tenant_pin(&layout.tenant(slot).pin()).ok().flatten().map(|(p, _)| p);
+        let pin_ok = pin.as_ref().is_some_and(|p| crate::node::tenant::pin_serves(e, p));
+        due_prune |= e.state == ShareState::Revoked || (e.state == ShareState::Pending && (*eff == ServerStatus::Active || now >= e.pending_until));
+        if e.state == ShareState::Pending && *eff == ServerStatus::Pending && !pin_ok {
+            enroll_pending(node, st, e, &owner_label).await;
+        }
+        let t = match node.tenant(slot) {
+            Some(t) => t,
+            None => {
+                let pin_now = crate::identity::read_tenant_pin(&layout.tenant(slot).pin()).ok().flatten();
+                if !pin_now.is_some_and(|(p, _)| crate::node::tenant::pin_serves(e, &p)) || e.state == ShareState::Revoked {
+                    continue;
+                }
+                let t = match node.add_tenant(slot).await {
+                    Ok(t) => t,
+                    Err(err) => {
+                        crate::nlog!("server slot {slot}: can't open: {err}");
+                        continue;
+                    }
+                };
+                st.keys.insert(slot, line_key(e));
+                st.tasks.insert(slot, tokio::spawn(run_tenant_forever(node.clone(), t.clone())));
+                t
+            }
+        };
+        t.reload_pin();
+        set_share(&t, Some(info(e)));
+        let open_jobs = t.ledger.lock().unwrap().non_terminal().map(|v| !v.is_empty()).unwrap_or(false);
+        let want = e.state != ShareState::Revoked
+            && match t.status_at(now) {
+                Some(ServerStatus::Active | ServerStatus::Paused | ServerStatus::Pending | ServerStatus::Refused) => true,
+                // Past its end date: no new work; stay only to report the
+                // jobs still running (§4.3).
+                Some(ServerStatus::Expired) => open_jobs && e.state != ShareState::Pending,
+                _ => false,
+            };
+        if *t.serve.borrow() != want {
+            t.serve.send_replace(want);
+        }
+        if e.state == ShareState::Revoked && stop.slots.contains(&slot) {
+            node.stop_tenant(slot, JobState::Cancelled, codes::SHARE_REVOKED);
+        }
+    }
+
+    if due_prune && st.last_prune.is_none_or(|t| t.elapsed() >= PRUNE_EVERY) {
+        st.last_prune = Some(std::time::Instant::now());
+        ask_prune(node, st).await;
+    }
+
+    // The status file lists the other servers.
+    let running = node.running_by_tenant();
+    let out: Vec<ServerLine> = lines
+        .iter()
+        .filter(|(e, _)| e.slot != OWNER_SLOT)
+        .map(|(e, eff)| {
+            let t = node.tenant(e.slot).filter(|_| st.keys.get(&e.slot) == Some(&line_key(e)));
+            let pin = t.as_ref().and_then(|t| t.pin.lock().unwrap().clone());
+            let link = t.as_ref().map(|t| t.link.lock().unwrap().clone()).unwrap_or_default();
+            let state = t.as_ref().and_then(|t| t.status_at(now)).unwrap_or(*eff);
+            ServerLine {
+                slot: e.slot,
+                label: e.label.clone(),
+                state: state.as_str().into(),
+                trust: e.trust.as_str().into(),
+                link: if link.state.is_empty() { if e.state == ShareState::Pending { "enrolling".into() } else { "unenrolled".into() } } else { link.state },
+                route: link.route,
+                last_error: link.last_error,
+                sas: pin.as_ref().filter(|p| !p.confirmed && !p.revoked).map(|p| p.sas.clone()),
+                fp: pin.as_ref().map(|p| p.controller_fp.clone()),
+                running: running.get(&e.slot).map(|v| v.len() as u32).unwrap_or(0),
+                expires_at: e.expires_at,
+            }
+        })
+        .collect();
+    let error = error.or_else(|| st.prune_error.clone());
+    let write = {
+        let mut s = node.status.lock().unwrap();
+        let changed = s.servers != out || s.servers_error != error;
+        s.servers = out;
+        s.servers_error = error;
+        changed
+    };
+    if write {
+        node.write_status();
+    }
+}
+
+/// Run the pending add's enrol once (§4.1 step 4): the node enrols itself
+/// with the new server using the code's binding, refusing a server whose
+/// key doesn't start with the code's prefix; the SAS goes to the status
+/// file and the result file for the node owner to read out.
+async fn enroll_pending(node: &Arc<Node>, st: &mut ServersLoop, e: &ServerEntry, owner_label: &str) {
+    use crate::admin::servers::{read_enroll, EnrollOutcome, ENROLL_RESULT_FILE};
+    let layout = node.layout().clone();
+    let req = match read_enroll(&layout.config) {
+        Ok(Some(r)) => r,
+        Ok(None) => return,
+        Err(err) => {
+            crate::nlog!("server enrol: {err}");
+            return;
+        }
+    };
+    let now = node.now();
+    if req.slot != e.slot || req.fp_prefix != e.fp_prefix || now >= req.expires_at || st.enrolls_tried.contains(&req.id) {
+        return;
+    }
+    let result_path = layout.run().join(ENROLL_RESULT_FILE);
+    let last: Option<EnrollOutcome> = std::fs::read(&result_path).ok().and_then(|b| serde_json::from_slice(&b).ok());
+    st.enrolls_tried.insert(req.id.clone());
+    if last.is_some_and(|o| o.id == req.id) {
+        return;
+    }
+    let name = node.owner().pin.lock().unwrap().as_ref().map(|p| p.name.clone());
+    let t = layout.tenant(e.slot);
+    let r: Result<crate::enroll::Enrolled, String> = async {
+        let name = name.ok_or("this node has no owner server")?;
+        let cred = crate::enroll::Credential::Binding { binding: req.code_binding.clone(), fp_prefix: req.fp_prefix.clone() };
+        let mut ws = connect(&req.url, ENROLL_PATH).await?;
+        let shared_by = (!owner_label.is_empty()).then_some(owner_label);
+        let done = crate::enroll::enroll_shared(&mut ws, &node.key, &req.url, &cred, &name, &Default::default(), now, shared_by).await?;
+        t.ensure_state()?;
+        crate::identity::write_tenant_pin(&t.pin(), &done.pin, &Default::default())?;
+        Ok(done)
+    }
+    .await;
+    let o = match r {
+        Ok(done) => {
+            crate::nlog!("server slot {}: enrolled with {} (pending): SAS {}", e.slot, req.url, done.sas);
+            EnrollOutcome { id: req.id.clone(), slot: e.slot, ok: true, message: format!("enrolled with {} (pending): read code {} to its owner", e.label, done.sas), sas: Some(done.sas), at: now }
+        }
+        Err(err) => {
+            crate::nlog!("server slot {}: enrol with {} failed: {err}", e.slot, req.url);
+            EnrollOutcome { id: req.id.clone(), slot: e.slot, ok: false, message: err, sas: None, at: now }
+        }
+    };
+    if let Ok(b) = serde_json::to_vec_pretty(&o) {
+        if let Err(err) = crate::util::atomic_write(&result_path, &b, 0o644) {
+            crate::nlog!("server enrol result: {err}");
+        }
+    }
+}
+
+/// Ask the root executor for `servers.prune` (best effort; the node acts
+/// on what it knows meanwhile).
+async fn ask_prune(node: &Arc<Node>, st: &mut ServersLoop) {
+    use crate::admin::exec::{LocalRequest, LocalResponse, ServersOp};
+    let sock = node.opts.admin_socket.clone();
+    let r = tokio::task::spawn_blocking(move || {
+        crate::admin::server::request(&sock, &LocalRequest::Servers { servers: ServersOp::Prune }, None, Duration::from_secs(30))
+    })
+    .await;
+    let err = match r {
+        Ok(Ok(LocalResponse::Result(res))) if res.state == "done" => None,
+        Ok(Ok(LocalResponse::Result(res))) => Some(format!("servers.prune: {}", res.message.unwrap_or(res.state))),
+        Ok(Ok(_)) => Some("servers.prune: unexpected executor answer".to_string()),
+        Ok(Err(e)) => Some(format!("servers.prune: {}: {}", e.code, e.message)),
+        Err(e) => Some(format!("servers.prune: {e}")),
+    };
+    if err != st.prune_error {
+        if let Some(e) = &err {
+            crate::nlog!("{e}");
+        }
+        st.prune_error = err;
     }
 }

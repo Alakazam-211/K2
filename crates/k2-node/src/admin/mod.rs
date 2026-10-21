@@ -14,6 +14,7 @@
 //! - [`policy`]: remote policy show/set/narrow and the widen classifier (S3).
 //! - [`update`]: signed self-update, health gate, rollback (S5).
 //! - [`courier`]: the node relaying admin frames to the executor.
+//! - [`servers`]: `servers.toml` (node sharing): the `servers.*` verbs.
 //! - [`units`]: systemd/launchd files for the executor.
 
 pub mod cli;
@@ -28,6 +29,7 @@ pub mod jobs;
 pub mod launchd;
 pub mod policy;
 pub mod server;
+pub mod servers;
 pub mod store;
 pub mod units;
 pub mod update;

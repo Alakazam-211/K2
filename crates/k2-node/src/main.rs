@@ -35,6 +35,17 @@ Install (root, once; the installers are inside this binary):
   k2-node resume [--by NAME] [--config-dir DIR]
   k2-node policy show [--config-dir DIR] [--home DIR]
   k2-node policy set key=value... [--config-dir DIR] [--home DIR]
+
+More than one K2 server (0.46.3; the machine owner, at this machine):
+  k2-node servers [list] [--json]                        every server this node serves
+  sudo k2-node servers add --url URL --code CODE.FP [--trust own|team] [--for 7d|none]
+                 [--weight N] [--max-running N] [--max-queued N] [--cpu-hours N] [--max-time 2h]
+                 [--cpus N] [--mem 8G] [--disk 40G] [--network on|no-lan|none] [--gate] [--exclusive]
+  k2-node servers limits <server> key=value... [--for 7d|none]   (keys as the add flags, with _)
+  k2-node servers pause|resume <server>
+  sudo k2-node servers revoke <server> [--now] [--wipe]
+  (<server> is a label, e.g. baden.k2.dev, or slot:<n>; the new server mints CODE.FP
+   with `k2 compute node add <this node>`; then read it the SAS that `servers` shows)
   k2-node install-files --os linux|macos --binary PATH --home DIR --config-dir DIR --user NAME --group NAME --out DIR
   k2-node check-home <dir>        (installer: refuse a home that runs K2)
   k2-node version
@@ -76,6 +87,9 @@ const SWITCHES: &[&str] = &[
     "--nextest",
     "--fix",
     "--yes",
+    "--gate",
+    "--exclusive",
+    "--wipe",
 ];
 
 fn parse(args: &[String]) -> Result<Args, String> {
@@ -189,7 +203,14 @@ async fn cmd_run(a: &Args) -> Result<(), String> {
         _ = runner => {}
     }
     k2_node::nlog!("shutting down: stopping running jobs");
-    node.stop_all(k2_node_proto::frames::JobState::Interrupted, "node_shutdown");
+    // A shared node's update or restart (the executor marked it): the jobs
+    // it couldn't drain end `node_update`, infra without a strike (V55).
+    let why = if k2_node::admin::update::recent_update_mark(&node.layout().home, k2_node::util::now()) {
+        k2_node_proto::share::codes::NODE_UPDATE
+    } else {
+        "node_shutdown"
+    };
+    node.stop_all(k2_node_proto::frames::JobState::Interrupted, why);
     // Give jobs their SIGTERM grace (10 s) to finish and record a receipt.
     for _ in 0..60 {
         if node.running_ids().is_empty() {
@@ -271,10 +292,229 @@ fn cmd_status(a: &Args) -> Result<(), String> {
     }
     println!("running: {}", if s.running.is_empty() { "-".to_string() } else { s.running.join(", ") });
     println!("caps: {}", if s.caps_hard { "hard (cgroups)" } else { "soft" });
+    if let Some(e) = &s.servers_error {
+        println!("servers.toml: {e}");
+    }
+    for l in &s.servers {
+        println!("{}", server_line(l));
+    }
     if let Some(e) = &s.last_error {
         println!("last error: {e}");
     }
     Ok(())
+}
+
+fn server_line(l: &k2_node::status::ServerLine) -> String {
+    let mut s = format!("server slot {}: {}  {} ({}) · {}", l.slot, l.label, l.state, l.trust, l.link);
+    if let Some(sas) = &l.sas {
+        s.push_str(&format!(" · SAS {sas} (read it to {}'s owner: k2 compute node confirm <node> {})", l.label, sas.replace(' ', "")));
+    }
+    if l.running > 0 {
+        s.push_str(&format!(" · running {}", l.running));
+    }
+    if let Some(e) = l.expires_at {
+        s.push_str(&format!(" · until {}", fmt_time(e)));
+    }
+    if let Some(e) = &l.last_error {
+        s.push_str(&format!(" · {e}"));
+    }
+    s
+}
+
+fn fmt_time(t: i64) -> String {
+    let left = t - k2_node::util::now();
+    if left <= 0 {
+        "ended".into()
+    } else if left < 2 * 3600 {
+        format!("in {} min", left / 60)
+    } else if left < 2 * 86400 {
+        format!("in {} h", left / 3600)
+    } else {
+        format!("in {} days", left / 86400)
+    }
+}
+
+/// `7d`, `12h`, `30m`, `90s`, or `none` (Some(None)).
+fn parse_for(v: &str) -> Result<Option<i64>, String> {
+    if v == "none" {
+        return Ok(None);
+    }
+    let (n, unit) = v.split_at(v.find(|c: char| !c.is_ascii_digit()).unwrap_or(v.len()));
+    let n: i64 = n.parse().map_err(|_| format!("{v:?}: use e.g. 7d, 12h, 30m or none"))?;
+    let mul = match unit {
+        "d" => 86400,
+        "h" => 3600,
+        "m" => 60,
+        "s" | "" => 1,
+        _ => return Err(format!("{v:?}: use e.g. 7d, 12h, 30m or none")),
+    };
+    Ok(Some(n * mul))
+}
+
+/// `8G` / `8` → 8 (whole GB).
+fn parse_gb(v: &str) -> Result<u32, String> {
+    v.trim_end_matches(['G', 'g', 'B', 'b']).parse().map_err(|_| format!("{v:?}: use whole GB, e.g. 8G"))
+}
+
+/// Share changes from `--flag value` (add) or `key=value` (limits).
+fn share_overrides(pairs: &[(String, String)], gate: bool, exclusive: bool) -> Result<k2_node_proto::share::ShareOverrides, String> {
+    use k2_node_proto::share::{JobClass, Network, ShareOverrides};
+    let mut o = ShareOverrides::default();
+    let num = |k: &str, v: &str| v.parse::<u32>().map_err(|_| format!("{k}: {v:?} is not a whole number"));
+    for (k, v) in pairs {
+        match k.replace('-', "_").as_str() {
+            "weight" => o.weight = Some(num(k, v)?),
+            "max_running" => o.max_running = Some(num(k, v)?),
+            "max_queued" => o.max_queued = Some(num(k, v)?),
+            "cpu_hours" | "cpu_hours_day" => o.cpu_hours_day = Some(num(k, v)?),
+            "max_time" | "max_job_secs" => o.max_job_secs = Some(parse_for(v)?.ok_or("max time can't be none")? as u64),
+            "cpus" | "max_cpus" => o.max_cpus = Some(num(k, v)?),
+            "mem" | "max_mem_gb" => o.max_mem_gb = Some(parse_gb(v)?),
+            "disk" | "disk_gb" => o.disk_gb = Some(parse_gb(v)?),
+            "network" => o.network = Some(Network::parse(v).ok_or_else(|| format!("network {v:?}: on, no-lan or none"))?),
+            "top_class" => o.top_class = Some(JobClass::parse(v).ok_or_else(|| format!("top_class {v:?}: batch, interactive or gate"))?),
+            "gate" => o.gate = Some(v == "true"),
+            "exclusive" => o.exclusive = Some(v == "true"),
+            other => return Err(format!("unknown share setting {other:?}")),
+        }
+    }
+    if gate {
+        o.gate = Some(true);
+        o.top_class = Some(JobClass::Gate);
+    }
+    if exclusive {
+        o.exclusive = Some(true);
+    }
+    Ok(o)
+}
+
+/// `k2-node servers …`: the machine owner's own `servers.*` (§9).
+fn cmd_servers(a: &Args) -> Result<(), String> {
+    use k2_node::admin::{config as acfg, servers};
+    use k2_node_proto::share;
+    let layout = a.layout();
+    let state_dir = a.get("state-dir").map(PathBuf::from).unwrap_or_else(acfg::default_state_dir);
+    let cfg = acfg::read(&layout.config.join(acfg::ADMIN_FILE)).ok().flatten();
+    let macos = cfg!(target_os = "macos");
+    let ctx = servers::Ctx {
+        config_dir: layout.config.clone(),
+        state_dir,
+        home: layout.home.clone(),
+        now: k2_node::util::now(),
+        macos,
+        walled: servers::node_walled(&layout, macos),
+        tenant_wall: servers::tenant_wall_available(&layout, macos),
+        pinned_owner: cfg.as_ref().and_then(|c| c.controller.as_ref().map(|x| x.fp.clone())),
+        node_user: cfg.map(|c| c.node_user).unwrap_or_else(|| acfg::default_node_user().to_string()),
+        by: format!("local:{}", who(a)),
+    };
+    let need_root = |what: &str| -> Result<(), String> {
+        if is_root() {
+            Ok(())
+        } else {
+            Err(format!("servers {what} changes root's records (tenant users, the wipe schedule): run it with sudo"))
+        }
+    };
+    let server = || a.positional.get(2).cloned().ok_or("give a server: its label (baden.k2.dev) or slot:<n>");
+    let show = |v: serde_json::Value| -> Result<(), String> {
+        println!("{}", serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?);
+        Ok(())
+    };
+    let r = match a.positional.get(1).map(String::as_str) {
+        Some("list") | None => {
+            let file = servers::list_file(&ctx);
+            let status = k2_node::status::read(&layout.status()).ok();
+            if a.has("--json") {
+                return show(serde_json::json!({"file": file, "node": status.map(|s| s.servers)}));
+            }
+            let lines = file.get("servers").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+            if lines.is_empty() {
+                println!("Solo: this node serves only its owner server (no servers.toml).");
+                return Ok(());
+            }
+            for l in lines {
+                let slot = l["slot"].as_u64().unwrap_or(0);
+                let node_line = status.as_ref().and_then(|s| s.servers.iter().find(|x| x.slot as u64 == slot).cloned());
+                match node_line {
+                    Some(n) => println!("{}", server_line(&n)),
+                    None => println!("server slot {slot}: {}  {} ({}){}", l["label"].as_str().unwrap_or(""), l["state"].as_str().unwrap_or(""), l["trust"].as_str().unwrap_or(""), if slot == 0 { " · owner" } else { "" }),
+                }
+            }
+            if let Some(e) = file.get("error").and_then(|v| v.as_str()) {
+                println!("servers.toml: {e}");
+            }
+            return Ok(());
+        }
+        Some("add") => {
+            need_root("add")?;
+            let code = k2_node_proto::pairing::EnrollString::parse(a.need("code")?)
+                .ok_or("--code must look like ABCDE-FGHJK.0123456789abcdef (from `k2 compute node add` on the new server)")?;
+            let trust = share::Trust::parse(a.get("trust").unwrap_or("own")).ok_or("--trust own|team")?;
+            let mut pairs = Vec::new();
+            for k in ["weight", "max-running", "max-queued", "cpu-hours", "max-time", "cpus", "mem", "disk", "network"] {
+                if let Some(v) = a.get(k) {
+                    pairs.push((k.to_string(), v.to_string()));
+                }
+            }
+            let for_secs = match a.get("for") {
+                Some(v) => parse_for(v)?,
+                None => None,
+            };
+            let args = share::AddArgs {
+                url: a.need("url")?.trim_end_matches('/').to_string(),
+                code_binding: k2_node_proto::pairing::code_binding(&code.code),
+                fp_prefix: code.controller_fp_prefix.clone(),
+                trust,
+                for_secs,
+                limits: share_overrides(&pairs, a.has("--gate"), a.has("--exclusive"))?,
+            };
+            if trust == share::Trust::Team {
+                println!("Jobs from {} get their own user and folders here. They can't read your files or other servers' jobs. They do share this machine's kernel, CPU and disk, and they can reach the internet and any service on this machine's loopback. Only add people you trust.", servers::label_of(&args.url));
+            }
+            servers::run(&ctx, share::VERB_ADD, &serde_json::to_value(&args).map_err(|e| e.to_string())?)
+        }
+        Some("limits") => {
+            let mut pairs = Vec::new();
+            for kv in a.positional.iter().skip(3) {
+                let (k, v) = kv.split_once('=').ok_or_else(|| format!("{kv:?}: use key=value"))?;
+                pairs.push((k.to_string(), v.to_string()));
+            }
+            let for_secs = match a.get("for") {
+                Some(v) => Some(parse_for(v)?.unwrap_or(0)),
+                None => None,
+            };
+            let args = share::LimitsArgs { server: server()?, set: share_overrides(&pairs, false, false)?, for_secs };
+            servers::run(&ctx, share::VERB_LIMITS, &serde_json::to_value(&args).map_err(|e| e.to_string())?)
+        }
+        Some(v @ ("pause" | "resume")) => {
+            let verb = if v == "pause" { share::VERB_PAUSE } else { share::VERB_RESUME };
+            servers::run(&ctx, verb, &serde_json::json!({ "server": server()? }))
+        }
+        Some("revoke") => {
+            need_root("revoke")?;
+            let args = share::RevokeArgs { server: server()?, now: a.has("--now"), wipe: a.has("--wipe") };
+            servers::run(&ctx, share::VERB_REVOKE, &serde_json::to_value(&args).map_err(|e| e.to_string())?)
+        }
+        Some(o) => return Err(format!("servers {o:?}: use list, add, limits, pause, resume, revoke")),
+    };
+    match r {
+        Ok(v) => {
+            if a.has("--json") {
+                return show(v);
+            }
+            let label = v.get("label").and_then(|x| x.as_str()).unwrap_or("");
+            match a.positional.get(1).map(String::as_str) {
+                Some("add") => println!(
+                    "Added {label} (slot {}, pending). The node enrols with it now; `k2-node servers` shows the SAS to read to its owner within 10 minutes.",
+                    v["slot"]
+                ),
+                Some("revoke") => println!("Revoked {label}: its session ends{}; the slot is wiped {}.", if v["now"] == true { " and its running jobs stop" } else { ", running jobs finish" }, if v["wiped"].as_array().is_some_and(|w| !w.is_empty()) { "now" } else { "in 24 h" }),
+                _ => println!("{label}: {}", serde_json::to_string(&v).map_err(|e| e.to_string())?),
+            }
+            Ok(())
+        }
+        Err(r) => Err(format!("{}: {}", r.code, r.message)),
+    }
 }
 
 fn cmd_control(a: &Args, c: Control) -> Result<(), String> {
@@ -597,6 +837,7 @@ async fn main() -> ExitCode {
         Some("drain") => cmd_control(&a, Control::Draining),
         Some("resume") => cmd_control(&a, Control::Active),
         Some("policy") => cmd_policy(&a),
+        Some("servers") => cmd_servers(&a),
         Some("install-files") => cmd_install_files(&a),
         Some("request") => cmd_request(&a),
         Some("tools") => cmd_tools(&a).await,

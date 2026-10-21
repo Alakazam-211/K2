@@ -1253,6 +1253,9 @@ pub const ROUTES: &[Route] = &[
     both("/cli/thread/post", Member),
     post("/cli/thread/read", Member),
     post("/cli/thread/secret", Member),
+    // app-room-stream (0.46.3): one Thread socket across the caller's
+    // rooms (a login reads every Thread, as on GET /cli/thread).
+    get("/cli/thread/stream", Member),
     get("/cli/thread/unread", Member),
     both("/cli/thread/void", Member),
     // Settings → Tickets (0.45.4): any login reads the rules; changing

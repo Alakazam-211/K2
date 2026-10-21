@@ -243,6 +243,7 @@ pub const LINK_HTTP: &[(&str, &str)] = &[
 /// parameter each one must carry (GA1).
 pub const WS_ALLOWLIST: &[(&str, &str)] = &[
     ("/cli/overlay/events", "conversation"),
+    ("/cli/thread/stream", "rooms"),
     ("/cli/fs/events", "workspace"),
     ("/cli/activity/events", "workspace"),
     ("/cli/skin/projects/events", "group"),
@@ -340,6 +341,7 @@ pub const VERBS: &[(&str, &str, &str, &str)] = &[
     ("POST", "/cli/skin/projects/post", "project.post", "both"),
     ("POST", "/cli/skin/projects/read", "project.markRead", "both"),
     ("WS", "/cli/overlay/events", "thread.events", "both"),
+    ("WS", "/cli/thread/stream", "thread.stream", "both"),
     ("WS", "/cli/fs/events", "files.events", "both"),
     ("WS", "/cli/activity/events", "activity.events", "both"),
     ("WS", "/cli/skin/projects/events", "project.events", "both"),

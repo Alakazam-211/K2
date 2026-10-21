@@ -759,6 +759,13 @@ pub const FEATURE_INBOX_CATCHUP: &str = "inbox-catchup-v1";
 /// skin.db tables only, no SQL migration.
 pub const FEATURE_APP_MOBILE_ACCESS: &str = "app-mobile-access-v1";
 
+/// One live Thread stream across rooms (app-room-stream, 0.46.3):
+/// `WS /cli/thread/stream?rooms=all|<ids>` for an App pass (helper, link,
+/// main port) or a login, frames in the inbox stream format
+/// (`thread.stream` on the App surface and the Garden bridge). No SQL
+/// migration.
+pub const FEATURE_THREAD_STREAM: &str = "thread-stream-v1";
+
 /// True when the notify prefs tables exist in the daemon DB.
 fn thread_push_ready() -> bool {
     k2_core::db::try_shared()
@@ -821,6 +828,7 @@ pub fn features() -> Vec<&'static str> {
         out.push(FEATURE_APP_READ_STATE);
         out.push(FEATURE_GARDEN_PERSON_ROWS);
     }
+    out.push(FEATURE_THREAD_STREAM);
     // Last on purpose: boot_status_views_integration pins it as the tail.
     out.push(FEATURE_BOOT_STATUS_VIEWS);
     out
@@ -893,6 +901,7 @@ mod tests {
                 "app-thread-parity-v1",
                 "app-read-state-v1",
                 "garden-person-rows-v1",
+                "thread-stream-v1",
                 "boot-status-views-v1"
             ]
         );

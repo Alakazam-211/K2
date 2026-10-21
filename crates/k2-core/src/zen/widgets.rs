@@ -66,6 +66,7 @@ pub const KNOWN_FEATURES: &[&str] = &[
     // 0.46.3: the Garden bridge's person rows (tickets, activity, files,
     // thread.catchup/unread/mute through `/cli/zen/call`).
     "garden-person-rows-v1",
+    "thread-stream-v1",
 ];
 
 /// A widget's manifest after checking (UW5, UWA7, UWB13).

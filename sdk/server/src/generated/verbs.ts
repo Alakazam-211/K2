@@ -313,6 +313,17 @@ export const APP_VERBS = {
     responseNames: {},
     response: {"additionalProperties":false,"properties":{"links":{"items":{"additionalProperties":false,"properties":{"input":{"type":"string"},"kind":{"type":"string"},"linkable":{"type":"boolean"},"rel":{"type":"string"}},"type":"object"},"type":"array"}},"type":"object"},
   },
+  'thread.stream': {
+    cap: 'thread:read',
+    effect: 'read',
+    kind: 'subscribe',
+    feature: 'thread-stream-v1',
+    door: 'both',
+    http: null,
+    socket: { path: '/cli/thread/stream', param: 'rooms', frame: 'thread_message', refetch: 'thread.page' },
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"all":{"type":"boolean"},"bodyBytes":{"type":"integer"},"code":{"type":"string"},"collection":{"type":"string"},"conversation":{"type":"string"},"conversations":{"items":{"type":"string"},"type":"array"},"doc":{"additionalProperties":false,"properties":{"author":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"body":{"type":"string"},"choice":{"additionalProperties":false,"properties":{"allow_custom":{"type":"boolean"},"answer":{"type":"string"},"answeredAt":{"type":"integer"},"answeredBy":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"expiresAt":{"type":"integer"},"options":{"items":{"additionalProperties":false,"properties":{"label":{"type":"string"}},"type":"object"},"type":"array"},"prompt":{"type":"string"},"status":{"type":"string"}},"type":"object"},"created_at":{"type":"number"},"from":{"type":"string"},"id":{"type":"string"},"kind":{"type":"string"},"secret":{"additionalProperties":false,"properties":{"answeredAt":{"type":"integer"},"answeredBy":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"delivery":{"type":"string"},"expiresAt":{"type":"integer"},"hosts":{"items":{"type":"string"},"type":"array"},"name":{"type":"string"},"prompt":{"type":"string"},"ref":{"type":"string"},"scope":{"type":"string"},"secretKind":{"type":"string"},"status":{"type":"string"}},"type":"object"},"to":{"type":"string"},"via":{"type":"string"},"widget":{"additionalProperties":false,"properties":{"garden":{"type":"string"},"widget":{"type":"string"}},"type":"object"}},"type":"object"},"hint":{"type":"string"},"id":{"type":"string"},"kind":{"enum":["inbox_subscribed","thread_message","inbox_error","inbox_reset"]},"limit":{"type":"integer"},"max":{"type":"integer"},"reason":{"type":"string"},"resolved":{"additionalProperties":{"type":"string"},"type":"object"},"rev":{"type":"integer"},"room":{"type":"string"},"rooms":{"items":{"type":"string"},"type":"array"},"seq":{"type":"integer"},"truncated":{"type":"boolean"},"unknown":{"items":{"type":"string"},"type":"array"}},"type":"object"},
+  },
   'thread.ensurePinned': {
     cap: 'thread:read',
     effect: 'read',

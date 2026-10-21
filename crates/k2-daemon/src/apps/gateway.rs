@@ -121,7 +121,16 @@ pub fn resolve_pass(raw: &str) -> Option<SkinPass> {
     if crate::routes::pass_gate::fenced() {
         return None;
     }
-    match current() {
+    resolve_pass_on(current().as_deref(), raw)
+}
+
+/// [`resolve_pass`] for an explicit link (`None` = off a link). A
+/// long-lived socket captures its link once and re-resolves its pass on
+/// a blocking thread, where the task-local link isn't visible
+/// (`room_stream_ws`). The fence check is the caller's (`resolve_pass` at
+/// the door).
+pub fn resolve_pass_on(link: Option<&LinkCtx>, raw: &str) -> Option<SkinPass> {
+    match link {
         Some(l) => passes::resolve_link_pass(raw, &l.link_id, &l.service_id).or_else(|| app_session(raw, &l.service_id)),
         None => k2_core::skin::resolve_skin_token(raw),
     }

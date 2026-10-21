@@ -24,6 +24,7 @@ export const ZEN_VERBS = {
   'conversation.close': 'agents:read',
   'thread.read': 'thread:read',
   'thread.subscribe': 'thread:read',
+  'thread.inbox': 'thread:read',
   'thread.markRead': 'thread:read',
   'thread.attachment': 'thread:read',
   'thread.open': 'thread:read',

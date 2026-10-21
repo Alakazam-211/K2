@@ -91,7 +91,8 @@ describe('TUWA4 twin: generated files match the catalog', () => {
 describe('TUWA5: the generated tables', () => {
   // 37 until catalog v16; Thread parity (0.46.3, Rosson 2026-10-20) adds
   // thread.attachment, thread.open, thread.links and thread.pickFiles.
-  it('ZEN_VERBS is today’s 41 entries, key for key and cap for cap', () => {
+  // app-room-stream (0.46.3) adds thread.inbox.
+  it('ZEN_VERBS is today’s 42 entries, key for key and cap for cap', () => {
     expect(ZEN_VERBS).toEqual({
       'agents.list': 'agents:read',
       'agents.subscribe': 'agents:read',
@@ -105,6 +106,8 @@ describe('TUWA5: the generated tables', () => {
       'conversation.close': 'agents:read',
       'thread.read': 'thread:read',
       'thread.subscribe': 'thread:read',
+      // app-room-stream (0.46.3): one socket for every agent's new messages.
+      'thread.inbox': 'thread:read',
       'thread.markRead': 'thread:read',
       'thread.attachment': 'thread:read',
       'thread.open': 'thread:read',
@@ -135,7 +138,7 @@ describe('TUWA5: the generated tables', () => {
       'controls.bind': null,
       'theme.get': null,
     })
-    expect(Object.keys(ZEN_VERBS)).toHaveLength(41)
+    expect(Object.keys(ZEN_VERBS)).toHaveLength(42)
   })
 
   it('ZEN_CUSTOM_VERBS is the UW16 list as amended by UWB10, plus the whole canvas (0.45.3)', () => {
@@ -169,6 +172,7 @@ describe('TUWA5: the generated tables', () => {
       'thread.open': { cap: 'thread:read', reach: 'local', kind: 'call' },
       'thread.links': { cap: 'thread:read', reach: 'local', kind: 'call' },
       'thread.pickFiles': { cap: 'thread:post', reach: 'local', kind: 'call' },
+      'thread.inbox': { cap: 'thread:read', reach: 'portable', kind: 'subscribe' },
       'thread.post': { cap: 'thread:post', reach: 'portable', kind: 'call' },
       'thread.answer': { cap: 'thread:post', reach: 'portable', kind: 'call' },
       'compose.draft': { cap: 'thread:post', reach: 'local', kind: 'call' },

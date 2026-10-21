@@ -26,8 +26,10 @@
 //! each frame's counts-only guest projection on a THIRD bus
 //! ([`publish_guest_activity`]); an owner frame never goes to a guest. A
 //! guest socket sends it as the same `{collection:"activity", seq:0, id,
-//! activity}` shape only while [`guest_ear_allowed`] holds for the pass as
-//! it is NOW (re-resolved per frame: a revoked pass closes the socket, a
+//! activity}` shape only when the client opted in on the URL (`?ear=1`,
+//! [`EAR_PARAM`]: a live legacy App reloads its Thread on any frame, so
+//! without the opt-in a guest gets exactly the r5 frames) and only while
+//! [`guest_ear_allowed`] holds for the pass as it is NOW (re-resolved per frame: a revoked pass closes the socket, a
 //! revoked cap or room sends nothing): the room on the pass,
 //! `thread:read` AND `activity:read` there, this conversation its pinned
 //! Chat.
@@ -195,6 +197,17 @@ pub fn publish_activity(frame: OverlayFrame) {
 
 pub fn subscribe_activity() -> broadcast::Receiver<OverlayFrame> {
     activity_bus().subscribe()
+}
+
+/// The per-connection opt-in for the guest ear (0.46.3): `?ear=1` on
+/// `/cli/overlay/events` and `/cli/thread/stream`. The App SDK's
+/// `thread.events` / `thread.stream` helpers set it (the catalog row's
+/// socket `query`). The catch-up GET is a pull and needs none.
+pub const EAR_PARAM: &str = "ear";
+
+/// Did this socket ask for the ear (`ear=1` / `ear=true`)?
+pub fn ear_opted_in(params: &HashMap<String, String>) -> bool {
+    params.get(EAR_PARAM).is_some_and(|v| matches!(v.trim(), "1" | "true"))
 }
 
 /// One Thread turn frame's guest projection (0.46.3,
@@ -507,7 +520,8 @@ pub(crate) fn guest_read_wire(mut body: serde_json::Map<String, serde_json::Valu
 /// text frames feed `thread_viewers` (state with a 90 s TTL, no ack); the
 /// socket closing clears them.
 /// `skin_raw` (0.46.3): the guest's raw pass, re-resolved on every guest
-/// turn frame ([`guest_ear_check`]); `None` for owner/Connect.
+/// turn frame ([`guest_ear_check`]); `None` for owner/Connect. A guest
+/// gets ear frames only with `?ear=1` ([`ear_opted_in`]).
 pub async fn serve_overlay_events_connection(
     stream: &mut TcpStream,
     params: HashMap<String, String>,
@@ -570,7 +584,8 @@ pub async fn serve_overlay_events_connection(
     // activity bus above, which `skin_may_see_frame` drops for it anyway).
     let mut guest_activity_rx = subscribe_guest_activity();
     let link = crate::apps::gateway::current();
-    let ear_room = guest_wire.as_ref().map(|g| g.project_id.clone());
+    // Only a guest that opted in (`?ear=1`) has an ear room.
+    let ear_room = guest_wire.as_ref().filter(|_| ear_opted_in(&params)).map(|g| g.project_id.clone());
     // app-read-state-v1 (0.46.3): a guest socket hears its own reader's
     // cursor or mute moving in this Thread, on any surface.
     let guest_key = skin_pass.as_ref().map(crate::read_routes::guest_person_key);
@@ -894,6 +909,16 @@ mod tests {
     /// 0.46.3: a guest's ear frame is the §7.6 shape with the guest body
     /// as given (built by `thread_activity::guest_turn_body`), no `doc`,
     /// no `rev`, nothing else.
+    #[test]
+    fn the_ear_is_opt_in_per_connection() {
+        let q = |pairs: &[(&str, &str)]| pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<HashMap<_, _>>();
+        assert!(!ear_opted_in(&q(&[("conversation", "c")])), "no opt-in: today's frames only");
+        assert!(!ear_opted_in(&q(&[("ear", "0")])));
+        assert!(!ear_opted_in(&q(&[("ear", "")])));
+        assert!(ear_opted_in(&q(&[("ear", "1")])));
+        assert!(ear_opted_in(&q(&[("ear", "true")])));
+    }
+
     #[test]
     fn guest_activity_wire_is_the_activity_shape_with_the_guest_body() {
         let body = crate::thread_activity::guest_turn_body(&serde_json::json!({

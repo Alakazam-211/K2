@@ -29,7 +29,8 @@ export interface AppVerbRow {
     /** POST arguments sent in the query string (the rest go in the JSON body). */
     readonly query: readonly string[]
   } | null
-  readonly socket: { readonly path: string; readonly param: string; readonly frame: string; readonly refetch: string | null } | null
+  /** `query`: fixed query parameters the SDK adds to the socket URL (e.g. the ear's `ear=1` opt-in). */
+  readonly socket: { readonly path: string; readonly param: string; readonly frame: string; readonly refetch: string | null; readonly query: Readonly<Record<string, string>> } | null
   /** Catalog response field → live wire field, at any depth. */
   readonly responseNames: Readonly<Record<string, string>>
   /** The closed answer (or frame) schema the SDK projects onto. */
@@ -353,9 +354,9 @@ export const APP_VERBS = {
     feature: 'app-api-v1',
     door: 'both',
     http: null,
-    socket: { path: '/cli/overlay/events', param: 'conversation', frame: 'thread', refetch: 'thread.page' },
+    socket: { path: '/cli/overlay/events', param: 'conversation', frame: 'thread', refetch: 'thread.page', query: {} },
     responseNames: {},
-    response: {"additionalProperties":false,"properties":{"activity":{"additionalProperties":false,"properties":{"background":{"type":"integer"},"end":{"additionalProperties":false,"properties":{"reason":{"type":"string"}},"type":["object","null"]},"messages":{"type":"integer"},"phase":{"type":"string"},"phaseSince":{"type":["integer","null"]},"rev":{"type":"integer"},"serverNow":{"type":["integer","null"]},"startedAt":{"type":["integer","null"]},"state":{"type":"string"},"subagents":{"type":"integer"},"subagentsDone":{"type":"integer"},"tally":{"additionalProperties":false,"properties":{"cmd":{"type":"integer"},"edit":{"type":"integer"},"read":{"type":"integer"},"search":{"type":"integer"}},"type":"object"},"turnId":{"type":"string"},"waitingOn":{"type":["string","null"]}},"type":"object"},"collection":{"type":"string"},"doc":{"additionalProperties":false,"properties":{"attachments":{"items":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"line":{"type":"integer"},"lineEnd":{"type":"integer"},"mime":{"type":"string"},"modifiedAt":{"type":"integer"},"name":{"type":"string"},"size":{"type":"integer"},"state":{"type":"string"}},"type":"object"},"type":"array"},"author":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"body":{"type":"string"},"choice":{"additionalProperties":false,"properties":{"allow_custom":{"type":"boolean"},"answer":{"type":"string"},"answeredAt":{"type":"integer"},"answeredBy":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"expiresAt":{"type":"integer"},"options":{"items":{"additionalProperties":false,"properties":{"label":{"type":"string"}},"type":"object"},"type":"array"},"prompt":{"type":"string"},"status":{"type":"string"}},"type":"object"},"created_at":{"type":"number"},"from":{"type":"string"},"id":{"type":"string"},"kind":{"type":"string"},"secret":{"additionalProperties":false,"properties":{"answeredAt":{"type":"integer"},"answeredBy":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"delivery":{"type":"string"},"expiresAt":{"type":"integer"},"hosts":{"items":{"type":"string"},"type":"array"},"name":{"type":"string"},"prompt":{"type":"string"},"ref":{"type":"string"},"scope":{"type":"string"},"secretKind":{"type":"string"},"status":{"type":"string"}},"type":"object"},"to":{"type":"string"},"via":{"type":"string"},"widget":{"additionalProperties":false,"properties":{"garden":{"type":"string"},"widget":{"type":"string"}},"type":"object"}},"type":"object"},"id":{"type":"string"},"seq":{"type":"integer"}},"type":"object"},
+    response: {"additionalProperties":false,"properties":{"collection":{"type":"string"},"doc":{"additionalProperties":false,"properties":{"attachments":{"items":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"line":{"type":"integer"},"lineEnd":{"type":"integer"},"mime":{"type":"string"},"modifiedAt":{"type":"integer"},"name":{"type":"string"},"size":{"type":"integer"},"state":{"type":"string"}},"type":"object"},"type":"array"},"author":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"body":{"type":"string"},"choice":{"additionalProperties":false,"properties":{"allow_custom":{"type":"boolean"},"answer":{"type":"string"},"answeredAt":{"type":"integer"},"answeredBy":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"expiresAt":{"type":"integer"},"options":{"items":{"additionalProperties":false,"properties":{"label":{"type":"string"}},"type":"object"},"type":"array"},"prompt":{"type":"string"},"status":{"type":"string"}},"type":"object"},"created_at":{"type":"number"},"from":{"type":"string"},"id":{"type":"string"},"kind":{"type":"string"},"secret":{"additionalProperties":false,"properties":{"answeredAt":{"type":"integer"},"answeredBy":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"delivery":{"type":"string"},"expiresAt":{"type":"integer"},"hosts":{"items":{"type":"string"},"type":"array"},"name":{"type":"string"},"prompt":{"type":"string"},"ref":{"type":"string"},"scope":{"type":"string"},"secretKind":{"type":"string"},"status":{"type":"string"}},"type":"object"},"to":{"type":"string"},"via":{"type":"string"},"widget":{"additionalProperties":false,"properties":{"garden":{"type":"string"},"widget":{"type":"string"}},"type":"object"}},"type":"object"},"id":{"type":"string"},"seq":{"type":"integer"}},"type":"object"},
   },
   'thread.stream': {
     cap: 'thread:read',
@@ -364,7 +365,7 @@ export const APP_VERBS = {
     feature: 'thread-stream-v1',
     door: 'both',
     http: null,
-    socket: { path: '/cli/thread/stream', param: 'rooms', frame: 'thread_message', refetch: 'thread.page' },
+    socket: { path: '/cli/thread/stream', param: 'rooms', frame: 'thread_message', refetch: 'thread.page', query: { 'ear': '1' } },
     responseNames: {},
     response: {"additionalProperties":false,"properties":{"activity":{"additionalProperties":false,"properties":{"background":{"type":"integer"},"end":{"additionalProperties":false,"properties":{"reason":{"type":"string"}},"type":["object","null"]},"messages":{"type":"integer"},"phase":{"type":"string"},"phaseSince":{"type":["integer","null"]},"rev":{"type":"integer"},"serverNow":{"type":["integer","null"]},"startedAt":{"type":["integer","null"]},"state":{"type":"string"},"subagents":{"type":"integer"},"subagentsDone":{"type":"integer"},"tally":{"additionalProperties":false,"properties":{"cmd":{"type":"integer"},"edit":{"type":"integer"},"read":{"type":"integer"},"search":{"type":"integer"}},"type":"object"},"turnId":{"type":"string"},"waitingOn":{"type":["string","null"]}},"type":"object"},"all":{"type":"boolean"},"bodyBytes":{"type":"integer"},"code":{"type":"string"},"collection":{"type":"string"},"conversation":{"type":"string"},"conversations":{"items":{"type":"string"},"type":"array"},"doc":{"additionalProperties":false,"properties":{"attachments":{"items":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"line":{"type":"integer"},"lineEnd":{"type":"integer"},"mime":{"type":"string"},"modifiedAt":{"type":"integer"},"name":{"type":"string"},"size":{"type":"integer"},"state":{"type":"string"}},"type":"object"},"type":"array"},"author":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"body":{"type":"string"},"choice":{"additionalProperties":false,"properties":{"allow_custom":{"type":"boolean"},"answer":{"type":"string"},"answeredAt":{"type":"integer"},"answeredBy":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"expiresAt":{"type":"integer"},"options":{"items":{"additionalProperties":false,"properties":{"label":{"type":"string"}},"type":"object"},"type":"array"},"prompt":{"type":"string"},"status":{"type":"string"}},"type":"object"},"created_at":{"type":"number"},"from":{"type":"string"},"id":{"type":"string"},"kind":{"type":"string"},"secret":{"additionalProperties":false,"properties":{"answeredAt":{"type":"integer"},"answeredBy":{"additionalProperties":false,"properties":{"kind":{"type":"string"},"login":{"type":"string"},"name":{"type":"string"}},"type":"object"},"delivery":{"type":"string"},"expiresAt":{"type":"integer"},"hosts":{"items":{"type":"string"},"type":"array"},"name":{"type":"string"},"prompt":{"type":"string"},"ref":{"type":"string"},"scope":{"type":"string"},"secretKind":{"type":"string"},"status":{"type":"string"}},"type":"object"},"to":{"type":"string"},"via":{"type":"string"},"widget":{"additionalProperties":false,"properties":{"garden":{"type":"string"},"widget":{"type":"string"}},"type":"object"}},"type":"object"},"hint":{"type":"string"},"id":{"type":"string"},"kind":{"enum":["inbox_subscribed","thread_message","thread_activity","inbox_error","inbox_reset"]},"limit":{"type":"integer"},"max":{"type":"integer"},"reason":{"type":"string"},"resolved":{"additionalProperties":{"type":"string"},"type":"object"},"rev":{"type":"integer"},"room":{"type":"string"},"rooms":{"items":{"type":"string"},"type":"array"},"seq":{"type":"integer"},"truncated":{"type":"boolean"},"unknown":{"items":{"type":"string"},"type":"array"}},"type":"object"},
   },
@@ -584,7 +585,7 @@ export const APP_VERBS = {
     feature: 'app-api-v1',
     door: 'both',
     http: null,
-    socket: { path: '/cli/fs/events', param: 'workspace', frame: 'fs_changed', refetch: 'files.list' },
+    socket: { path: '/cli/fs/events', param: 'workspace', frame: 'fs_changed', refetch: 'files.list', query: {} },
     responseNames: {},
     response: {"additionalProperties":false,"properties":{"kind":{"enum":["fs_changed","workspace_resources_changed"]},"paths":{"items":{"type":"string"},"type":"array"},"workspace":{"type":"string"},"workspaceId":{"type":"string"}},"type":"object"},
   },
@@ -947,7 +948,7 @@ export const APP_VERBS = {
     feature: 'app-api-v1',
     door: 'both',
     http: null,
-    socket: { path: '/cli/activity/events', param: 'workspace', frame: 'session_activity_changed', refetch: 'activity.snapshot' },
+    socket: { path: '/cli/activity/events', param: 'workspace', frame: 'session_activity_changed', refetch: 'activity.snapshot', query: {} },
     responseNames: {},
     response: {"additionalProperties":false,"properties":{"agentName":{"type":"string"},"app":{"type":"string"},"change":{"type":"string"},"counts":{"additionalProperties":false,"properties":{"commands":{"type":"integer"},"subagents":{"type":"integer"},"tools":{"type":"integer"}},"type":"object"},"hasBrief":{"type":"boolean"},"id":{"type":"string"},"kind":{"enum":["session_activity_changed","heartbeat_changed","ticket_changed","rooms_changed","room_members_changed","app_deployed","resync"]},"live":{"type":"boolean"},"name":{"type":"string"},"paneGroupId":{"type":["string","null"]},"serverNow":{"type":"integer"},"since":{"type":["integer","null"]},"status":{"type":"string"},"via":{"type":["string","null"]},"workspace":{"type":"string"}},"type":"object"},
   },
@@ -1079,7 +1080,7 @@ export const APP_VERBS = {
     feature: 'app-project-chat-v1',
     door: 'both',
     http: null,
-    socket: { path: '/cli/skin/projects/events', param: 'group', frame: 'project', refetch: 'project.read' },
+    socket: { path: '/cli/skin/projects/events', param: 'group', frame: 'project', refetch: 'project.read', query: {} },
     responseNames: {},
     response: {"additionalProperties":false,"properties":{"collection":{"enum":["project","read"]},"doc":{"additionalProperties":false,"properties":{"author":{"type":"string"},"authorKind":{"enum":["person","agent","guest"]},"body":{"type":"string"},"createdAt":{"type":"integer"},"groupId":{"type":"string"},"id":{"type":"string"},"seq":{"type":"integer"}},"type":"object"},"groupId":{"type":"string"},"id":{"type":"string"},"lastReadSeq":{"type":"integer"},"lastSeq":{"type":"integer"},"muted":{"type":"boolean"},"seq":{"type":"integer"},"unread":{"type":"integer"},"waiting":{"type":"integer"}},"type":"object"},
   },
@@ -1626,16 +1627,6 @@ export interface AppCardVoided {
   readonly ok: boolean
   readonly seq?: number
   readonly status: string
-}
-
-export interface AppThreadEvent {
-  /** The counts-only ear: the room's pinned-Chat Thread turn a Thread message started (no tool line, path, command or text). */
-  readonly activity?: AppThreadTurn
-  /** thread (doc), or activity (activity: the counts-only ear, with activity:read in the room since 0.46.3). */
-  readonly collection?: string
-  readonly doc?: AppThreadDoc
-  readonly id: string
-  readonly seq: number
 }
 
 export interface AppStreamFrame {
@@ -2566,7 +2557,7 @@ export interface AppVerbs {
   'thread.send': { args: { addr: string; attachments?: AppThreadAttach[]; text?: string; via?: string }; value: AppThreadPosted }
   'thread.answerCard': { args: { addr: string; answer?: string; cardId: string; confirm?: boolean; delivery?: string; hosts?: string[]; scope?: string; secret?: string }; value: AppCardAnswered }
   'thread.voidCard': { args: { addr: string; cardId: string }; value: AppCardVoided }
-  'thread.events': { args: { conversation: string }; value: AppThreadEvent }
+  'thread.events': { args: { conversation: string }; value: AppThreadItem }
   'thread.stream': { args: { rooms: string }; value: AppStreamFrame }
   'thread.attachmentGet': { args: { addr: string; id: string; len?: number; mode?: 'meta' | 'preview' | 'thumb' | 'range'; n?: number; offset?: number; px?: number }; value: AppThreadFileData }
   'thread.catchup': { args: { limit?: number; threads: AppCatchupAsk[] }; value: AppCatchup }
@@ -2683,7 +2674,7 @@ export interface AppSurfaces {
     page(args: { addr: string; afterSeq?: number; beforeSeq?: number; limit?: number; sinceSeq?: number }): Promise<AppThreadPage>
     /** The newest Thread item per room, for list previews; a room the pass can't read is an item with error. cap thread:read · GET /cli/thread/latest. e.g. `const {items} = await k2.thread.latest({addrs: ['sales', 'ops']})` */
     latest(args: { addrs: string[] }): Promise<AppThreadLatest>
-    /** The room's live pinned-Chat Thread turn, counts only (needs thread:read and activity:read); null when none. Frames: collection activity on thread.events, kind thread_activity on thread.stream. cap activity:read · GET /cli/thread/activity. e.g. `const {turn} = await k2.thread.activity({addr})` */
+    /** The room's live pinned-Chat Thread turn, counts only (needs thread:read and activity:read); null when none. Live: kind thread_activity on thread.stream (the SDK opens it with ear=1); a raw overlay socket opened with ear=1 gets collection activity frames. cap activity:read · GET /cli/thread/activity. e.g. `const {turn} = await k2.thread.activity({addr})` */
     activity(args: { addr: string }): Promise<AppThreadActivity>
     /** Post text (and room files) to a room's Thread as the guest (or the App); the agent gets it at once. cap thread:post · POST /cli/thread/post. e.g. `await k2.thread.send({addr: 'sales', text: 'Hi'})` */
     send(args: { addr: string; attachments?: AppThreadAttach[]; text?: string; via?: string }): Promise<AppThreadPosted>
@@ -2691,8 +2682,8 @@ export interface AppSurfaces {
     answerCard(args: { addr: string; answer?: string; cardId: string; confirm?: boolean; delivery?: string; hosts?: string[]; scope?: string; secret?: string }): Promise<AppCardAnswered>
     /** Dismiss a pending card in a room's Thread. cap thread:post · POST /cli/thread/void. e.g. `await k2.thread.voidCard({addr, cardId})` */
     voidCard(args: { addr: string; cardId: string }): Promise<AppCardVoided>
-    /** Live Thread items of one room (new posts and card changes; merge by id); after a gap, thread.page with sinceSeq. cap thread:read · WS /cli/overlay/events?conversation=. e.g. `const off = k2.thread.events({conversation}, (item) => draw(item))` */
-    events(args: { conversation: string }, onFrame: (frame: AppThreadEvent) => void, onError?: (error: K2Error) => void): () => void
+    /** Live Thread items of one room (new posts and card changes; merge by id); after a gap, thread.page with sinceSeq. The SDK never asks for the counts-only ear here (it keeps every frame a Thread item); a raw socket opened with ear=1 also gets collection activity frames: use thread.stream or thread.activity for the ear. cap thread:read · WS /cli/overlay/events?conversation=. e.g. `const off = k2.thread.events({conversation}, (item) => draw(item))` */
+    events(args: { conversation: string }, onFrame: (frame: AppThreadItem) => void, onError?: (error: K2Error) => void): () => void
     /** Live Thread items of every room the pass may read on one socket (inbox_subscribed names the set; grants and revokes apply live); after a gap, thread.page with sinceSeq. cap thread:read · WS /cli/thread/stream?rooms=. e.g. `const off = k2.thread.stream({rooms: 'all'}, (f) => f.kind === 'thread_message' && draw(f.room, f))` */
     stream(args: { rooms: string }, onFrame: (frame: AppStreamFrame) => void, onError?: (error: K2Error) => void): () => void
     /** One attachment of a room's message: meta, preview, thumbnail or a byte range, only when your own file rights cover it. cap thread:read · GET /cli/thread/attachment. e.g. `const t = await k2.thread.attachmentGet({addr: 'sales', id: item.id, n: 0, mode: 'thumb'})` */

@@ -473,6 +473,22 @@ describe('sockets', () => {
     off()
   })
 
+  it('the room stream asks for the counts-only ear (ear=1); thread.events and other sockets never do', async () => {
+    const k2 = client()
+    const offs = [
+      k2.asGuest(GUEST).thread.events({ conversation: 'c1' }, () => {}),
+      k2.asGuest(GUEST).thread.stream({ rooms: 'all' }, () => {}),
+      k2.asGuest(GUEST).activity.events({ workspace: 'ops' }, () => {}),
+    ]
+    await until('three sockets', () => gw.sockets.length === 3)
+    const byPath = Object.fromEntries(gw.sockets.map((s) => { const u = new URL(s.url, gw.url); return [u.pathname, u.searchParams] }))
+    expect(byPath['/cli/overlay/events']?.get('ear')).toBeNull()
+    expect(byPath['/cli/overlay/events']?.get('conversation')).toBe('c1')
+    expect(byPath['/cli/thread/stream']?.get('ear')).toBe('1')
+    expect(byPath['/cli/activity/events']?.get('ear')).toBeNull()
+    for (const off of offs) off()
+  })
+
   it('a refused socket ends with one failed error and no retry', async () => {
     const k2 = client()
     gw.onUpgrade = () => 403

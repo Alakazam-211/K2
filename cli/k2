@@ -31608,7 +31608,7 @@ no cap (your own rooms)
 thread:read (Read the Thread)
   thread.page              GET  /cli/thread                                   A page of a room's Thread, oldest first; sinceSeq catches up, beforeSeq pages back, afterSeq reads a delta (new, changed, removed).
   thread.latest            GET  /cli/thread/latest                            The newest Thread item per room, for list previews; a room the pass can't read is an item with error.
-  thread.events            WS   /cli/overlay/events?conversation=             Live Thread items of one room (new posts and card changes; merge by id); after a gap, thread.page with sinceSeq.
+  thread.events            WS   /cli/overlay/events?conversation=             Live Thread items of one room (new posts and card changes; merge by id); after a gap, thread.page with sinceSeq. The SDK never asks for the counts-only ear here (it keeps every frame a Thread item); a raw socket opened with ear=1 also gets collection activity frames: use thread.stream or thread.activity for the ear.
   thread.stream            WS   /cli/thread/stream?rooms=                     Live Thread items of every room the pass may read on one socket (inbox_subscribed names the set; grants and revokes apply live); after a gap, thread.page with sinceSeq.
   thread.attachmentGet     GET  /cli/thread/attachment                        One attachment of a room's message: meta, preview, thumbnail or a byte range, only when your own file rights cover it.
   thread.catchup           POST /cli/thread/catchup                           Deltas (or newest pages) for many rooms in one round trip, each exactly what thread.page answers for it.
@@ -31670,7 +31670,7 @@ guests:rooms (Set its own guests' rooms (an owner grant per App, never a guest's
   guests.rooms             GET  /cli/skin/guests/rooms (server only)          One of this App's guests: its rooms on this App and its role (App: its own guests; Garden: any local App's).
   guests.setRooms          POST /cli/skin/guests/rooms (server only)          Set one guest's rooms on this App, within the rooms the App may hand out and never above the guest's role; idempotent, audited.
 activity:read (See when the agent is working on a Thread message (counts only))
-  thread.activity          GET  /cli/thread/activity                          The room's live pinned-Chat Thread turn, counts only (needs thread:read and activity:read); null when none. Frames: collection activity on thread.events, kind thread_activity on thread.stream.
+  thread.activity          GET  /cli/thread/activity                          The room's live pinned-Chat Thread turn, counts only (needs thread:read and activity:read); null when none. Live: kind thread_activity on thread.stream (the SDK opens it with ear=1); a raw overlay socket opened with ear=1 gets collection activity frames.
 activity:room (See every session's working counts in the room (the owner's other tabs too))
   activity.snapshot        GET  /cli/activity/snapshot                        Whether the room's agent is working now, per session (every session in the room, the owner's other tabs too; needs activity:room since 0.46.3).
   activity.events          WS   /cli/activity/events?workspace=               Live room events: agent working (every session in the room, activity:room since 0.46.3), heartbeats, tickets, rooms_changed, room_members_changed, app_deployed; resync then close 4008 when behind.
@@ -33691,8 +33691,12 @@ THREAD EAR (thread:read + activity:read; K2 0.46.3+, thread-activity-ear-v1)
   message (anyone's: a guest's or the owner's). Counts only. Never a turn
   the owner typed straight into the agent's terminal. Exact paths:
     GET      /cli/thread/activity?addr=<handle>      (k2.thread.activity)
-    WS GET   /cli/overlay/events?conversation=<id>   frames collection "activity"
-    WS GET   /cli/thread/stream?rooms=all            frames kind "thread_activity"
+    WS GET   /cli/overlay/events?conversation=<id>&ear=1   frames collection "activity"
+    WS GET   /cli/thread/stream?rooms=all&ear=1            frames kind "thread_activity"
+  OPT-IN: the sockets send ear frames only when opened with ear=1. The
+  App SDK's thread.stream adds it; its thread.events never does (every
+  frame there stays a Thread item with a doc). Without ear=1 a socket
+  gets exactly the frames it got before 0.46.3. The GET needs no opt-in.
   Catch-up: {"ok":true,"addr":"<handle>","conversation_id":"<id>",
              "turn":{…}|null}
   turn / activity (exactly these keys):

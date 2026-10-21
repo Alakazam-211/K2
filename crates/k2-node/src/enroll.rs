@@ -227,6 +227,7 @@ fn refused_msg(r: &Refused) -> String {
         "code_invalid" => " (wrong or used code: mint a new one with `k2 compute node add` on the controller)",
         "code_locked" => " (too many wrong codes: mint a new one on the controller)",
         "name_taken" => " (pick another --name)",
+        "already_enrolled" => " (that server still has this node from before, e.g. after a revoke: on that server run `k2 compute node remove <node>` for its old entry; the node retries on its own)",
         "compute_off" => " (compute nodes are off on the controller: K2_COMPUTE)",
         "ticket_invalid" => " (the one-click ticket was refused: get a new one, or use an enroll code)",
         "ticket_unsupported" => " (this controller doesn't take one-click tickets yet: use an enroll code)",

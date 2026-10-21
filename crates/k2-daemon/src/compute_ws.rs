@@ -373,6 +373,12 @@ pub async fn serve_enroll(stream: &mut TcpStream, ingress: Ingress) {
     };
     if let Err(e) = inserted {
         let code = if e.contains("fingerprint") { "already_enrolled" } else { "name_taken" };
+        // The node proved the code and its key; only this server's old row
+        // for it is in the way. The code stays good (until its own expiry)
+        // so the node's retry works once the owner removes that row.
+        if code == "already_enrolled" && via == "code" {
+            compute::enroll::restore(entry.clone());
+        }
         return refuse(&mut ws, code, "a live node already has this name or key; remove it first").await;
     }
     k2_core::agent_hooks::emit(

@@ -911,7 +911,11 @@ struct ServersLoop {
     /// Each open tenant's `run_tenant_forever`.
     tasks: HashMap<Slot, tokio::task::JoinHandle<()>>,
     /// Enrol request ids already tried (once each).
-    enrolls_tried: std::collections::BTreeSet<String>,
+    /// Enrol attempts per request id: how many failed, and when the next
+    /// may run (backoff; a request that succeeded is never tried again).
+    enroll_tries: HashMap<String, (u32, std::time::Instant)>,
+    /// The last enrol failure per slot, shown in `k2-node servers`.
+    enroll_error: std::collections::BTreeMap<Slot, String>,
     last_prune: Option<std::time::Instant>,
     /// When the per-tenant wall was last probed (lane S3's probe is an
     /// executor round trip: once a minute).
@@ -1215,9 +1219,17 @@ async fn servers_pass(node: &Arc<Node>, st: &mut ServersLoop) {
                 label: e.label.clone(),
                 state: state.as_str().into(),
                 trust: e.trust.as_str().into(),
-                link: if link.state.is_empty() { if e.state == ShareState::Pending { "enrolling".into() } else { "unenrolled".into() } } else { link.state },
+                link: if link.state.is_empty() {
+                    if e.state == ShareState::Pending {
+                        if st.enroll_error.contains_key(&e.slot) { "enrol_failed (retrying)".into() } else { "enrolling".into() }
+                    } else {
+                        "unenrolled".into()
+                    }
+                } else {
+                    link.state
+                },
                 route: link.route,
-                last_error: link.last_error,
+                last_error: link.last_error.or_else(|| (e.state == ShareState::Pending).then(|| st.enroll_error.get(&e.slot).cloned()).flatten()),
                 // The SAS isn't for everyone who can read the status file
                 // (0644): it goes to the 0600 SAS file below (review B5).
                 sas: None,
@@ -1282,13 +1294,17 @@ async fn enroll_pending(node: &Arc<Node>, st: &mut ServersLoop, e: &ServerEntry,
         }
     };
     let now = node.now();
-    if req.slot != e.slot || req.fp_prefix != e.fp_prefix || now >= req.expires_at || st.enrolls_tried.contains(&req.id) {
+    if req.slot != e.slot || req.fp_prefix != e.fp_prefix || now >= req.expires_at {
+        return;
+    }
+    // A failed attempt is retried with backoff until the code's 10 minutes
+    // end (the server may only need its old row removed first).
+    if st.enroll_tries.get(&req.id).is_some_and(|(_, next)| std::time::Instant::now() < *next) {
         return;
     }
     let result_path = layout.run().join(ENROLL_RESULT_FILE);
     let last: Option<EnrollOutcome> = std::fs::read(&result_path).ok().and_then(|b| serde_json::from_slice(&b).ok());
-    st.enrolls_tried.insert(req.id.clone());
-    if last.is_some_and(|o| o.id == req.id) {
+    if last.is_some_and(|o| o.id == req.id && o.ok) {
         return;
     }
     let name = node.owner().pin.lock().unwrap().as_ref().map(|p| p.name.clone());
@@ -1307,10 +1323,16 @@ async fn enroll_pending(node: &Arc<Node>, st: &mut ServersLoop, e: &ServerEntry,
     let o = match r {
         Ok(done) => {
             crate::nlog!("server slot {}: enrolled with {} (pending): its SAS is in `k2-node servers` (never in the log)", e.slot, req.url);
+            st.enroll_tries.remove(&req.id);
+            st.enroll_error.remove(&e.slot);
             EnrollOutcome { id: req.id.clone(), slot: e.slot, ok: true, message: format!("enrolled with {} (pending): read code {} to its owner", e.label, done.sas), sas: Some(done.sas), at: now }
         }
         Err(err) => {
-            crate::nlog!("server slot {}: enrol with {} failed: {err}", e.slot, req.url);
+            let tries = st.enroll_tries.get(&req.id).map(|(n, _)| n + 1).unwrap_or(1);
+            let wait = enroll_backoff(tries);
+            crate::nlog!("server slot {}: enrol with {} failed (try {tries}, again in {}s): {err}", e.slot, req.url, wait.as_secs());
+            st.enroll_tries.insert(req.id.clone(), (tries, std::time::Instant::now() + wait));
+            st.enroll_error.insert(e.slot, err.clone());
             EnrollOutcome { id: req.id.clone(), slot: e.slot, ok: false, message: err, sas: None, at: now }
         }
     };
@@ -1319,6 +1341,17 @@ async fn enroll_pending(node: &Arc<Node>, st: &mut ServersLoop, e: &ServerEntry,
             crate::nlog!("server enrol result: {err}");
         }
     }
+}
+
+/// The wait before enrol attempt `tries + 1`: 5 s, 15 s, 30 s, then a
+/// minute each (the code lasts 10 minutes).
+fn enroll_backoff(tries: u32) -> Duration {
+    Duration::from_secs(match tries {
+        0 | 1 => 5,
+        2 => 15,
+        3 => 30,
+        _ => 60,
+    })
 }
 
 /// Ask the root executor for `servers.prune` (best effort; the node acts

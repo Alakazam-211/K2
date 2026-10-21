@@ -234,8 +234,9 @@
     if (t.scheme === 'light' || t.scheme === 'dark') {
       root.setAttribute('data-zen-scheme', t.scheme)
       // The Garden's scheme wins over the widget's own (0.46.3), as the
-      // frame's first style does: a switch keeps it in step.
-      root.style.setProperty('color-scheme', t.scheme, 'important')
+      // frame's first style does: a switch keeps it in step. A widget whose
+      // manifest says "colorScheme": "own" keeps its own.
+      if (root.getAttribute('data-k2-scheme') !== 'own') root.style.setProperty('color-scheme', t.scheme, 'important')
     }
   }
 

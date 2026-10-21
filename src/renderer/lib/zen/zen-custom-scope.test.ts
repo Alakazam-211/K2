@@ -205,6 +205,14 @@ describe('UW38: parsing a custom widget', () => {
     expect(parseZenCustomWidget({ ...raw, state: 'weird' }, { id: 'a', column: 0, props: {} }).state).toBe('broken')
   })
 
+  it('0.46.3: colorScheme is "own" only when the daemon says so; anything else (or an older daemon) follows the Garden', () => {
+    const at = { id: 'a', column: 0, props: {} }
+    expect(parseZenCustomWidget({ ...raw, colorScheme: 'own' }, at).colorScheme).toBe('own')
+    for (const v of ['garden', 'dark', undefined, 1, null]) {
+      expect(parseZenCustomWidget({ ...raw, colorScheme: v }, at).colorScheme, String(v)).toBe('garden')
+    }
+  })
+
   it("Garden v3: the daemon's sourceAddresses reach the bridge's bound() (else every sources.* is not_bound)", () => {
     const page = parseZenGet({
       ok: true,

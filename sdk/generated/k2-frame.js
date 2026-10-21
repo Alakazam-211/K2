@@ -242,7 +242,7 @@ if (k.indexOf('--zen-') === 0 && typeof t.vars[k] === 'string') root.style.setPr
 }
 if (t.scheme === 'light' || t.scheme === 'dark') {
 root.setAttribute('data-zen-scheme', t.scheme)
-root.style.setProperty('color-scheme', t.scheme, 'important')
+if (root.getAttribute('data-k2-scheme') !== 'own') root.style.setProperty('color-scheme', t.scheme, 'important')
 }
 }
 

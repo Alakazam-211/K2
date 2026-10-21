@@ -736,6 +736,10 @@ impl ZenFiles {
             let config = w["props"].get("config").cloned().unwrap_or_else(|| json!({}));
             w["sourceAddresses"] = json!(widgets::placement_source_addresses(sources.as_ref(), &config));
             w["sources"] = sources.unwrap_or(J::Null);
+            // 0.46.3: "garden" (the frame follows the Garden's light/dark)
+            // unless the manifest says "own".
+            let own = m.and_then(|m| m.color_scheme.as_deref()) == Some(widgets::OWN_COLOR_SCHEME);
+            w["colorScheme"] = json!(if own { "own" } else { "garden" });
         }
     }
 

@@ -22,6 +22,8 @@ interface Realm {
   pending(): number
   /** Every `documentElement.style.setProperty` the runtime made. */
   rootStyle(): Array<[string, string, string | undefined]>
+  /** The root's attributes (the prelude's scheme script sets them). */
+  rootAttrs: Record<string, string>
 }
 
 const ports: MessagePort[] = []
@@ -29,6 +31,7 @@ const ports: MessagePort[] = []
 function realm(): Realm {
   const listeners = new Map<string, Listener[]>()
   const rootStyle: Array<[string, string, string | undefined]> = []
+  const rootAttrs: Record<string, string> = {}
   let timers: Array<{ id: number; f: () => void; ms: number }> = []
   let nextTimer = 1
   const parent = {}
@@ -48,7 +51,8 @@ function realm(): Realm {
     document: {
       documentElement: {
         style: { setProperty: (k: string, v: string, p?: string) => rootStyle.push([k, v, p]) },
-        setAttribute: () => undefined,
+        setAttribute: (k: string, v: string) => void (rootAttrs[k] = v),
+        getAttribute: (k: string) => rootAttrs[k] ?? null,
       },
     },
     console,
@@ -70,6 +74,7 @@ function realm(): Realm {
     },
     pending: () => timers.filter((t) => t.id !== 1).length,
     rootStyle: () => rootStyle,
+    rootAttrs,
   }
 }
 
@@ -310,7 +315,7 @@ describe('0.46.3: a refused (cb, onError) source subscription is retried too', (
     host.postMessage({ sub: s1, value: { anything: true } })
     host.postMessage({ sub: s1, error: { code: 'not_bound', message: 'x' } })
     await tick()
-    expect(got).toEqual([{ anything: true }], 'the old form gets raw values: no shape guard')
+    expect(got, 'the old form gets raw values: no shape guard').toEqual([{ anything: true }])
     expect(errors.map((e) => [e.code, e.retryable, e.retrying, e.attempt])).toEqual([['not_bound', true, true, 1]])
     expect(r.runTimers()).toEqual([1000])
     await tick()
@@ -414,6 +419,16 @@ describe('0.46.3: the Garden’s scheme wins in the frame', () => {
       ['--zen-text', '#eee', undefined],
       ['color-scheme', 'dark', 'important'],
     ])
+  })
+
+  it('a widget whose manifest says colorScheme "own" keeps its own scheme on a switch', async () => {
+    const r = realm()
+    r.rootAttrs['data-k2-scheme'] = 'own'
+    const { host, heard } = connect(r)
+    await tick()
+    host.postMessage({ sub: subsOf(heard, 'theme.changed')[0], value: { theme: { scheme: 'dark', vars: { '--zen-text': '#eee' } } } })
+    await tick()
+    expect(r.rootStyle()).toEqual([['--zen-text', '#eee', undefined]])
   })
 })
 

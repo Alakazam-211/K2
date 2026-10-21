@@ -92,7 +92,15 @@ pub struct Manifest {
     /// the reader's maker needs read rights there. Needs `store:read`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub reads: Vec<String>,
+    /// 0.46.3: `"own"` opts out of K2 forcing the Garden's light/dark
+    /// (`color-scheme`) on the frame; the widget's CSS decides. `None` (the
+    /// default, `"garden"`): the frame follows the Garden, never the OS.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color_scheme: Option<String>,
 }
+
+/// The manifest's `colorScheme` that lets the widget's own CSS decide.
+pub const OWN_COLOR_SCHEME: &str = "own";
 
 /// At most this many other widgets in a manifest's `reads`.
 pub const MAX_MANIFEST_READS: usize = 8;
@@ -162,6 +170,7 @@ impl Manifest {
                 .and_then(J::as_array)
                 .map(|a| a.iter().filter_map(J::as_str).map(str::to_string).collect())
                 .unwrap_or_default(),
+            color_scheme: v.get("colorScheme").and_then(J::as_str).filter(|s| *s == OWN_COLOR_SCHEME).map(str::to_string),
         })
     }
 }
@@ -319,6 +328,7 @@ pub fn parse_manifest(file: &str, src: &str, folder: &str) -> (Option<Manifest>,
     let mut features: Vec<String> = Vec::new();
     let mut sources: Option<J> = None;
     let mut reads: Vec<String> = Vec::new();
+    let mut color_scheme: Option<String> = None;
     let mut saw_schema = false;
 
     for (k, val) in obj {
@@ -514,6 +524,15 @@ pub fn parse_manifest(file: &str, src: &str, folder: &str) -> (Option<Manifest>,
                 Some(_) => err(k, format!("reads lists at most {MAX_MANIFEST_READS} widgets")),
                 None => err(k, "reads is a list of other widgets whose data this one reads: [\"fleet-ops-lists\"]".into()),
             },
+            // 0.46.3: the frame follows the Garden's light/dark unless "own".
+            "colorScheme" => match val.as_str() {
+                Some("garden") => {}
+                Some(OWN_COLOR_SCHEME) => color_scheme = Some(OWN_COLOR_SCHEME.to_string()),
+                _ => err(
+                    k,
+                    "colorScheme is \"garden\" (the default: the frame follows the Garden's light/dark, never the computer's) or \"own\" (your CSS decides)".into(),
+                ),
+            },
             "net" | "secrets" => {
                 err(k, format!("'{k}' isn't part of manifest schema 1; outside data comes from data sources: ask for sources:read and name them in \"sources\" (k2 study data-sources)"))
             }
@@ -555,7 +574,7 @@ pub fn parse_manifest(file: &str, src: &str, folder: &str) -> (Option<Manifest>,
                     err(
                         k,
                         format!(
-                            "unknown key '{other}' in manifest.json; use schema, name, description, entry, caps, reasons, id, requires, sources, reads"
+                            "unknown key '{other}' in manifest.json; use schema, name, description, entry, caps, reasons, id, requires, sources, reads, colorScheme"
                         ),
                     );
                 }
@@ -622,6 +641,7 @@ pub fn parse_manifest(file: &str, src: &str, folder: &str) -> (Option<Manifest>,
         features,
         sources,
         reads,
+        color_scheme,
     };
     (Some(m), errors, warnings)
 }
@@ -937,6 +957,28 @@ mod tests {
         let w: Vec<&str> = warns.iter().map(|d| d.message.as_str()).collect();
         assert!(w.iter().any(|m| m.starts_with("sources_reach_store")), "{w:?}");
         assert!(!w.iter().any(|m| m.starts_with("sources_reach_thread")), "{w:?}");
+    }
+
+    /// 0.46.3: `colorScheme` is "garden" (the default, not written) or
+    /// "own"; anything else is an error; it round-trips through the saved
+    /// manifest.
+    #[test]
+    fn color_scheme_is_garden_by_default_and_own_opts_out() {
+        let plain = manifest(&with("\"reasons\": {}")).0.expect("plain");
+        assert_eq!(plain.color_scheme, None);
+        assert!(serde_json::to_value(&plain).expect("json").get("colorScheme").is_none());
+        let garden = manifest(&with("\"colorScheme\": \"garden\"")).0.expect("garden");
+        assert_eq!(garden.color_scheme, None, "garden is the default, nothing to write");
+        let own = manifest(&with("\"colorScheme\": \"own\"")).0.expect("own");
+        assert_eq!(own.color_scheme.as_deref(), Some("own"));
+        let saved = serde_json::to_value(&own).expect("json");
+        assert_eq!(saved["colorScheme"], "own");
+        assert_eq!(Manifest::from_saved(&saved).expect("saved").color_scheme.as_deref(), Some("own"));
+        for bad in ["\"colorScheme\": \"dark\"", "\"colorScheme\": \"light dark\"", "\"colorScheme\": true"] {
+            let (m, e, _) = manifest(&with(bad));
+            assert!(m.is_none(), "{bad}");
+            assert!(e.iter().any(|d| d.message.starts_with("colorScheme is \"garden\"")), "{bad}: {e:?}");
+        }
     }
 
     /// Gap 5 (0.46.1): `reads` names other widgets, needs store:read, never

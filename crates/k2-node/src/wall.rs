@@ -317,7 +317,8 @@ fn open_dir_at(dirfd: libc::c_int, name: &CStr) -> std::io::Result<OwnedFd> {
 /// on the way fails the open instead of moving root somewhere else, and
 /// what's opened is the very directory checked (no re-resolution later).
 /// Only a link root owns, in a directory only root may write, is followed
-/// (`/var` → `private/var` on macOS; nobody else can plant or swap one).
+/// (`/var` → `private/var` on macOS; nobody else can plant or swap one),
+/// and never at the last component: the directory itself is never a link.
 pub fn open_dir_path(p: &Path) -> Result<OwnedFd, String> {
     use std::collections::VecDeque;
     use std::path::Component;
@@ -353,6 +354,9 @@ pub fn open_dir_path(p: &Path) -> Result<OwnedFd, String> {
         let name = CString::new(n.as_bytes()).map_err(|_| bad("a NUL".into()))?;
         let st = lstat_at(&cur, &name).map_err(|e| bad(format!("{}: {e}", n.to_string_lossy())))?;
         if mode_of(&st) & S_IFMT == S_IFLNK {
+            if todo.is_empty() {
+                return Err(bad(format!("{} is a link", n.to_string_lossy())));
+            }
             let parent = fstat(&cur).map_err(|e| bad(e.to_string()))?;
             if st.st_uid != 0 || parent.st_uid != 0 || mode_of(&parent) & 0o022 != 0 {
                 return Err(bad(format!("{} is a link not root's own", n.to_string_lossy())));
@@ -940,6 +944,10 @@ mod tests {
         let real = d.join("real");
         std::fs::create_dir_all(real.join("etc")).unwrap();
         std::os::unix::fs::symlink(&real, d.join("x")).unwrap();
+        // The planted link is the node user's (as root here, say so).
+        if unsafe { libc::geteuid() } == 0 {
+            std::os::unix::fs::lchown(d.join("x"), Some(65534), Some(65534)).unwrap();
+        }
         let (uid, gid) = unsafe { (libc::geteuid(), libc::getegid()) };
         let e = reclaim(&d.join("x/etc"), uid, gid).unwrap_err();
         assert!(e.contains("a link not root's own") || e.contains("Too many levels") || e.contains("not a directory"), "{e}");

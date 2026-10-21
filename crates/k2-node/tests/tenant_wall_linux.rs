@@ -99,7 +99,7 @@ impl Rig {
             let mut e = f.servers[0].clone();
             e.slot = *slot;
             e.label = format!("server-{slot}.test");
-            e.fp_prefix = format!("{:016x}", *slot as u64 + 1);
+            e.fp_prefix = stand_in_fp(*slot)[..16].to_string();
             e.trust = *trust;
             e.set_limits(&room(ShareLimits::new_server(*trust, false)));
             e.network = *net;
@@ -216,7 +216,9 @@ async fn node(fake: &Fake, r: &Rig, policy_extra: &str, tweak: impl FnOnce(&mut 
     std::fs::write(r.config.join(share::SERVERS_FILE), toml::to_string(&f).unwrap()).unwrap();
     for (slot, ..) in &r.slots {
         k2_node::identity::write_pin(&n.layout.tenant(*slot).pin(), &fake.stand_in_pin(*slot, "node-1", "mini-1")).unwrap();
-        n.node.add_tenant(*slot).await.unwrap();
+    }
+    for (slot, ..) in &r.slots {
+        tenant_opened(&n, *slot).await;
     }
     let slots: Vec<Slot> = r.slots.iter().map(|s| s.0).collect();
     // The stand-in sessions live as long as the test process (tests here
@@ -856,8 +858,11 @@ async fn p7_a_wiped_slot_gets_a_new_uid_and_nothing_of_the_old_server() {
     let d = r.done(&JobOp::TenantWipe(TenantWipe { slot: 1 }));
     eprintln!("wiped: {d}");
     assert!(server::user_ids("k2job-1").is_none() && k2_node::admin::jobs::group_id("k2t-1").is_none(), "user and group gone");
-    for p in [l.tenant(1).root(), l.tenant(1).state(), l.tenant(1).pin()] {
-        assert!(!p.exists(), "{} gone", p.display());
+    assert!(!l.tenant(1).root().exists(), "the slot's root is gone");
+    // Root never deletes in the node's own dirs (review A M1): the node
+    // forgets its slot state itself once the line is gone (servers_e2e).
+    for p in [l.tenant(1).state(), l.tenant(1).pin()] {
+        assert!(p.exists(), "{} is the node's to forget", p.display());
     }
     assert!(k2_node::admin::jobs::read_jobs_file(&r.config).unwrap().unwrap().tenant(1).is_none());
     r.write_servers(&[]);

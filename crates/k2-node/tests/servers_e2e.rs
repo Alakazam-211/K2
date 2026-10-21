@@ -528,6 +528,36 @@ async fn a_wiped_slot_is_reused_fresh() {
     assert!(n.node.tenant(1).unwrap().ledger.lock().unwrap().get("w1", 1).unwrap().is_none());
 }
 
+/// Review A M1: root's wipe removes only the slot's root; the node forgets
+/// its own state for a slot with no line (ledger, journals, pin), and a
+/// slot reused by another server never opens the old server's state.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_node_forgets_a_slot_with_no_server() {
+    let mut a = Fake::start().await;
+    let mut b = Fake::start().await;
+    let n = start_node(&a, "srv-forget", "", walled(Wall::Seatbelt)).await;
+    let mut ca = a.next_conn().await;
+    ready(&mut ca).await;
+    // Leftovers of a wiped slot 3, and another server's state in slot 1.
+    let t3 = n.layout.tenant(3);
+    t3.ensure_state().unwrap();
+    std::fs::write(t3.state().join("ledger.sqlite"), b"old").unwrap();
+    std::fs::write(t3.pin(), b"{}").unwrap();
+    let t1 = n.layout.tenant(1);
+    t1.ensure_state().unwrap();
+    std::fs::write(t1.state().join("line"), b"0000000000000000:1").unwrap();
+    std::fs::write(t1.state().join("old-server.txt"), b"SECRET-old").unwrap();
+    pin_second(&n, &b, 1, "node-b");
+    write_shared(&n, 1, &prefix(&b.key), "b.k2.dev", ShareState::Active, None);
+    let mut cb = b.next_conn().await;
+    ready(&mut cb).await;
+    eventually("slot 3 forgotten", || (!t3.state().exists() && !t3.pin().exists()).then_some(())).await;
+    assert!(!t1.state().join("old-server.txt").exists(), "B never opens another server's state");
+    assert!(t1.pin().exists(), "B's own pin stays");
+    let mark = std::fs::read_to_string(t1.state().join("line")).unwrap();
+    assert!(mark.starts_with(&prefix(&b.key)), "the state is B's now: {mark}");
+}
+
 /// §4.3: past its end date a server with nothing running isn't served
 /// (judged by time, nothing written); a server whose line is live is.
 #[tokio::test(flavor = "multi_thread")]

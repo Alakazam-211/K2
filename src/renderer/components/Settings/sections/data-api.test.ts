@@ -10,6 +10,8 @@ import { primaryScope } from '@/kessel/server-scope'
 import {
   SAMPLE_DATABASES,
   SAMPLE_STATUS,
+  clustersLine,
+  dbMajorChip,
   dbTypeLabel,
   formatSqlListen,
   setSqlDbAgentAccess,
@@ -61,6 +63,29 @@ describe('data-api helpers', () => {
     expect(formatSqlListen('localhost:15432', 5432)).toBe('localhost:15432')
     expect(formatSqlListen(null, 5432)).toBeNull()
     expect(formatSqlListen('localhost')).toBe('localhost')
+  })
+
+  it('majors side by side: per-database chip and the clusters line', () => {
+    const status = {
+      clusters: [
+        { major: 16, name: 'main', port: 5432, unit: 'postgresql@16-main.service', role: 'k2', state: 'online' },
+        { major: 17, name: 'main', port: 5433, unit: 'postgresql@17-main.service', role: 'k2', state: 'online' },
+      ],
+      databases: [
+        { id: 'a', name: 'ws_a', major: 16 },
+        { id: 'b', name: 'ws_b', major: 17 },
+        { id: 'c', name: 'ws_c', major: null },
+      ],
+      upgradeAvailable: [{ id: 'a', name: 'ws_a', from: 16, to: [17], check: 'k2 db upgrade ws_a --check' }],
+    }
+    expect(dbMajorChip(status, 'a')).toBe('PG 16 · upgrade available')
+    expect(dbMajorChip(status, 'b')).toBe('PG 17')
+    expect(dbMajorChip(status, 'c')).toBeNull()
+    expect(dbMajorChip(status, 'missing')).toBeNull()
+    expect(dbMajorChip(null, 'a')).toBeNull()
+    expect(clustersLine(status)).toBe('PG 16 :5432 · PG 17 :5433')
+    expect(clustersLine({ clusters: [status.clusters[0]] })).toBeNull()
+    expect(clustersLine(SAMPLE_STATUS)).toBeNull()
   })
 
   it('sqlErrorMessage prefers daemon hint', () => {

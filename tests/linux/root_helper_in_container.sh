@@ -344,7 +344,10 @@ ok "uninstall/purge through named targets"
 
 echo "== pg namespace =="
 systemctl is-active --quiet postgresql || systemctl start postgresql
-CONF="$(ls -d /etc/postgresql/*/main/conf.d | head -n1)"
+# The 5432 cluster (several majors may sit side by side since 0.46.3).
+PG5432="$(pg_lsclusters -h | awk '$3 == 5432 { print $1; exit }')"
+[ -n "$PG5432" ] || fail "no cluster on 5432"
+CONF="/etc/postgresql/$PG5432/main/conf.d"
 mv "$CONF" "$CONF.real"
 ln -s /etc/sudoers.d "$CONF"
 req agent pg install-ram-fence

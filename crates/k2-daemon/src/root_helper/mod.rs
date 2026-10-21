@@ -38,7 +38,7 @@ use k2_root_proto::paths::{
 use k2_root_proto::templates::{hardening_dropin, recovery_pw_ok, systemd_unit};
 use k2_root_proto::verbs::{exit, Verb};
 pub use k2_root_proto::version::{
-    BACKUP_MIN_PROTOCOL, KEEP_MIN_PROTOCOL, PG_MIN_PROTOCOL, PROTOCOL, SELF_UPDATE_MIN_PROTOCOL,
+    BACKUP_MIN_PROTOCOL, KEEP_MIN_PROTOCOL, PGMAJOR_MIN_PROTOCOL, PG_MIN_PROTOCOL, PROTOCOL, SELF_UPDATE_MIN_PROTOCOL,
     UPGRADE_MIN_PROTOCOL,
 };
 

@@ -203,6 +203,12 @@ impl SystemOps for RealSystemOps {
     /// the legacy `k2-pg-helper` (one train). Both through the absolute
     /// `/usr/bin/sudo` (RH12: never a PATH lookup).
     fn run_helper(&self, args: &[&str], stdin: Option<&[u8]>) -> Result<String, String> {
+        // A second cluster (`--cluster <M>`) and the cluster verbs need the
+        // `pgmajor` helper (protocol 9). Refused here, before any argv is
+        // sent to an older helper or the legacy pg helper.
+        if needs_pgmajor(args) {
+            pgmajor_gate()?;
+        }
         if crate::root_helper::state().usable(crate::root_helper::PG_MIN_PROTOCOL) {
             let argv = crate::root_helper::pg_argv(args)?;
             return crate::root_helper::call_text(&argv, stdin);
@@ -285,16 +291,59 @@ impl SystemOps for RealSystemOps {
     }
 }
 
+/// Helper argv that only the `pgmajor` helper (protocol 9) understands:
+/// `psql --cluster <M> …` and the cluster verbs.
+pub fn needs_pgmajor(args: &[&str]) -> bool {
+    matches!(
+        args.first().copied(),
+        Some("clusters" | "ensure-cluster" | "add-major")
+    ) || (args.first().copied() == Some("psql") && args.contains(&"--cluster"))
+}
+
+/// `Ok` when the root helper speaks `pgmajor` (protocol ≥ 9 and
+/// `namespaces.pgmajor`), else the `helper_needed: …` message.
+pub fn pgmajor_gate() -> Result<(), String> {
+    use crate::root_helper::PGMAJOR_MIN_PROTOCOL;
+    let st = crate::root_helper::state();
+    let ns = st
+        .version_json
+        .as_ref()
+        .and_then(|v| v.pointer("/namespaces/pgmajor"))
+        .and_then(serde_json::Value::as_bool)
+        == Some(true);
+    if st.usable(PGMAJOR_MIN_PROTOCOL) && ns {
+        Ok(())
+    } else {
+        Err(crate::root_helper::helper_needed(
+            "a second Postgres major",
+            PGMAJOR_MIN_PROTOCOL,
+            &st,
+        ))
+    }
+}
+
 /// Mirror of `scripts/k2-pg-helper`'s `psql` argv allowlist (after the
 /// `psql` word): `-d <db>` exactly once, optional `-v ON_ERROR_STOP=1`
 /// and `-tA`, nothing else; `<db>` is `[a-z0-9_]{1,63}` and not
 /// template0/1. [`FakeSystemOps`] refuses anything else, so every daemon
 /// call path exercised by the sql tests proves it stays inside what the
 /// real helper accepts (tests/cli/k2_pg_helper.sh checks the script).
+/// Protocol 9 (`pgmajor`) adds a leading `--cluster <M>` (M a layout
+/// major), sent only for clusters other than the one on 5432.
 #[cfg(test)]
 pub fn helper_psql_argv_ok(args: &[&str]) -> bool {
     let mut db: Option<&str> = None;
     let mut i = 0;
+    if args.first().copied() == Some("--cluster") {
+        let ok = args
+            .get(1)
+            .and_then(|m| k2_root_proto::pg_major::parse_major(m))
+            .is_some_and(|m| k2_root_proto::pg_major::LAYOUT.contains(&m));
+        if !ok {
+            return false;
+        }
+        i = 2;
+    }
     while i < args.len() {
         match args[i] {
             "-d" => {
@@ -1299,6 +1348,23 @@ impl SystemOps for FakeSystemOps {
         }
         if args.first().copied() == Some("psql") && !helper_psql_argv_ok(&args[1..]) {
             return Err(format!("k2-pg-helper would refuse psql argv: {joined}"));
+        }
+        // The `pgmajor` verbs answer only what a test set up
+        // (`query_answers["helper <argv>"]`); otherwise the box's helper is
+        // too old, like a protocol-8 helper on the fleet.
+        if matches!(args.first().copied(), Some("clusters" | "ensure-cluster" | "add-major")) {
+            return match self.query_answers.get(&format!("helper {joined}")) {
+                Some(a) => {
+                    self.record(format!("helper {joined} stdin=0"));
+                    Ok(a.clone())
+                }
+                None => Err(format!(
+                    "helper_needed: a second Postgres major needs k2-root-helper protocol 9 (fake: no answer for {joined})"
+                )),
+            };
+        }
+        if args.contains(&"--cluster") && self.query_answers.contains_key("helper refuses --cluster") {
+            return Err("helper_needed: a second Postgres major needs k2-root-helper protocol 9".into());
         }
         self.record(format!(
             "helper {joined} stdin={}",

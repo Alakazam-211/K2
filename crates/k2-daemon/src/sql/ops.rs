@@ -9,7 +9,8 @@ use super::actor::GuestActor;
 use super::paths::{resolve_in_path, resolve_out_path, InPathError};
 use super::secrets::{generate_secret, SecretStore};
 use super::supervisor::current_status;
-use super::sysops::{SystemOps, PG_DUMP_PATH, PG_RESTORE_PATH, PSQL_PATH};
+use super::cluster::{self, Cluster};
+use super::sysops::SystemOps;
 
 #[derive(Debug)]
 pub enum OpsError {
@@ -25,6 +26,9 @@ pub enum OpsError {
     RowCap(String),
     /// Guest statement hit `statement_timeout` (10s).
     StatementTimeout(String),
+    /// A policy refusal with its own reason code (exit 3): an unsupported
+    /// or EOL major, a cluster K2 never creates into, a helper too old.
+    Refused(&'static str, String),
 }
 
 impl OpsError {
@@ -34,6 +38,7 @@ impl OpsError {
             Self::NotFound(_) => "404 Not Found",
             Self::CapReached(_) | Self::NotReady(_) | Self::ChecksumMismatch(_) => "409 Conflict",
             Self::RowCap(_) | Self::StatementTimeout(_) => "409 Conflict",
+            Self::Refused(..) => "409 Conflict",
             Self::Forbidden(_) => "403 Forbidden",
             Self::Engine(_) => "502 Bad Gateway",
         }
@@ -49,6 +54,7 @@ impl OpsError {
             Self::Engine(_) => "engine",
             Self::RowCap(_) => "row_cap",
             Self::StatementTimeout(_) => "statement_timeout",
+            Self::Refused(code, _) => code,
         }
     }
     pub fn hint(&self) -> &str {
@@ -61,7 +67,8 @@ impl OpsError {
             | Self::Forbidden(h)
             | Self::Engine(h)
             | Self::RowCap(h)
-            | Self::StatementTimeout(h) => h,
+            | Self::StatementTimeout(h)
+            | Self::Refused(_, h) => h,
         }
     }
 }
@@ -107,6 +114,23 @@ fn require_running() -> Result<(), OpsError> {
                 .into(),
         )),
     }
+}
+
+/// The cluster a database lives on (the resolver, V31). A database whose
+/// recorded major has no cluster record is not ready, never 5432.
+fn cluster_of(db_name: &str) -> Result<Cluster, OpsError> {
+    cluster::for_db(db_name).map_err(OpsError::NotReady)
+}
+
+/// SQL as postgres through the helper on `cl` (`psql [--cluster M] -d db`).
+fn su_psql(
+    ops: &dyn SystemOps,
+    cl: &Cluster,
+    db: &str,
+    flags: &[&str],
+    stdin: Option<&[u8]>,
+) -> Result<String, OpsError> {
+    cl.helper_psql(ops, db, flags, stdin).map_err(OpsError::Engine)
 }
 
 /// Sanitize a project UUID into a Postgres identifier fragment.
@@ -486,26 +510,16 @@ fn ensure_k2_helpers_db(ops: &dyn SystemOps, db_name: &str) -> Result<(), OpsErr
     // Privileged helper (postgres), not `{db}_migrator`: create already
     // installed schema `k2` as postgres; migrator cannot CREATE OR REPLACE
     // functions there (AX41: permission denied for schema k2).
-    ops.run_helper(
-        &["psql", "-d", db_name, "-v", "ON_ERROR_STOP=1"],
-        Some(sql.as_bytes()),
-    )
-    .map_err(OpsError::Engine)?;
+    let cl = cluster_of(db_name)?;
+    su_psql(ops, &cl, db_name, &["-v", "ON_ERROR_STOP=1"], Some(sql.as_bytes()))?;
     let migrator = pg_quote_ident(&format!("{db_name}_migrator"));
     let owner = format!("ALTER SCHEMA k2 OWNER TO {migrator};");
-    let _ = ops.run_helper(
-        &["psql", "-d", db_name, "-v", "ON_ERROR_STOP=1"],
-        Some(owner.as_bytes()),
-    );
+    let _ = su_psql(ops, &cl, db_name, &["-v", "ON_ERROR_STOP=1"], Some(owner.as_bytes()));
     // ALTER SCHEMA does not change function owners. SECURITY DEFINER must
     // be the migrator, not postgres. CREATE OR REPLACE keeps the old owner.
     let fn_owner = k2_helper_owner_sql(db_name);
-    ops.run_helper(
-        &["psql", "-d", db_name, "-v", "ON_ERROR_STOP=1"],
-        Some(fn_owner.as_bytes()),
-    )
-    .map_err(OpsError::Engine)?;
-    seal_k2_internal_tables(ops, db_name)
+    su_psql(ops, &cl, db_name, &["-v", "ON_ERROR_STOP=1"], Some(fn_owner.as_bytes()))?;
+    seal_k2_internal_tables(ops, &cl, db_name)
 }
 
 /// K2's own tables in a workspace database. Guests never read or write
@@ -574,18 +588,17 @@ pub(crate) fn seal_k2_internal_tables_sql(db_name: &str) -> String {
     )
 }
 
-fn seal_k2_internal_tables(ops: &dyn SystemOps, db_name: &str) -> Result<(), OpsError> {
+fn seal_k2_internal_tables(ops: &dyn SystemOps, cl: &Cluster, db_name: &str) -> Result<(), OpsError> {
     let sql = seal_k2_internal_tables_sql(db_name);
-    ops.run_helper(
-        &["psql", "-d", db_name, "-v", "ON_ERROR_STOP=1"],
-        Some(sql.as_bytes()),
-    )
-    .map_err(OpsError::Engine)?;
+    su_psql(ops, cl, db_name, &["-v", "ON_ERROR_STOP=1"], Some(sql.as_bytes()))?;
     Ok(())
 }
 
 /// Boot pass: databases created before the seal (e.g. live boxes) get the
-/// k2 helpers + seal once. One line per database; never fatal.
+/// k2 helpers + seal once. One line per database; never fatal. Each one is
+/// sealed on the cluster its record names (V50): after a move the same
+/// name also exists as the kept source in the old cluster
+/// (`ALLOW_CONNECTIONS false`), which this never touches.
 pub fn seal_existing_databases(ops: &dyn SystemOps) -> Vec<String> {
     let names: Vec<String> = {
         let db = k2_core::db::shared();
@@ -834,8 +847,14 @@ fn project_db_agent_access(conn: &rusqlite::Connection, project_id: &str) -> Str
     .unwrap_or_else(|| "off".to_string())
 }
 
-fn dsn_for(name: &str, user: &str, password: &str) -> String {
-    format!("postgres://{user}:{password}@127.0.0.1:5432/{name}")
+/// The DSN for a role on a database: its cluster's port (V2, V35).
+fn dsn_for(name: &str, user: &str, password: &str) -> Result<String, OpsError> {
+    let cl = cluster_of(name)?;
+    Ok(dsn_on(&cl, name, user, password))
+}
+
+fn dsn_on(cl: &Cluster, name: &str, user: &str, password: &str) -> String {
+    format!("postgres://{user}:{password}@127.0.0.1:{port}/{name}", port = cl.port)
 }
 
 fn json_create(name: &str, dsn: &str, existing: bool, used: u32, cap: u32) -> serde_json::Value {
@@ -874,7 +893,8 @@ fn assert_no_superuser_json(v: &serde_json::Value) {
     debug_assert!(!s.contains("postgres://postgres"));
 }
 
-/// Mint (or idempotently return) the workspace DB.
+/// Mint (or idempotently return) the workspace DB on the box's default
+/// major.
 pub fn create_database(
     ops: &dyn SystemOps,
     secrets: &dyn SecretStore,
@@ -882,6 +902,20 @@ pub fn create_database(
     cap: u32,
     client_id: Option<&str>,
     name_override: Option<&str>,
+) -> Result<serde_json::Value, OpsError> {
+    create_database_on(ops, secrets, project_id, cap, client_id, name_override, None)
+}
+
+/// `k2 db create [--major N]`: `major` None = the box's default
+/// (`sql_server.default_major`, else 17).
+pub fn create_database_on(
+    ops: &dyn SystemOps,
+    secrets: &dyn SecretStore,
+    project_id: &str,
+    cap: u32,
+    client_id: Option<&str>,
+    name_override: Option<&str>,
+    major: Option<u32>,
 ) -> Result<serde_json::Value, OpsError> {
     create_database_inner(
         ops,
@@ -891,6 +925,7 @@ pub fn create_database(
         client_id,
         name_override,
         false,
+        major,
     )
 }
 
@@ -902,9 +937,82 @@ pub fn create_test_database(
     cap: u32,
     client_id: Option<&str>,
 ) -> Result<serde_json::Value, OpsError> {
-    create_database_inner(ops, secrets, project_id, cap, client_id, None, true)
+    create_test_database_on(ops, secrets, project_id, cap, client_id, None)
 }
 
+/// `k2 db create --test [--major N]`: without `--major` the test database
+/// goes on the same major as the workspace's live database.
+pub fn create_test_database_on(
+    ops: &dyn SystemOps,
+    secrets: &dyn SecretStore,
+    project_id: &str,
+    cap: u32,
+    client_id: Option<&str>,
+    major: Option<u32>,
+) -> Result<serde_json::Value, OpsError> {
+    create_database_inner(ops, secrets, project_id, cap, client_id, None, true, major)
+}
+
+/// Where a new database goes (S3): `--major`, else (for `--test`) the
+/// live database's cluster, else the box default. An explicit or pinned
+/// major is exact: refused if the policy refuses it or its cluster can't
+/// be had. K2's own default (17, not pinned) falls back to the 5432
+/// cluster with a note when 17 isn't on the box yet (root helper below
+/// protocol 9, no PGDG reach), so `k2 db create` keeps working there.
+fn target_cluster(
+    ops: &dyn SystemOps,
+    project_id: &str,
+    test: bool,
+    explicit: Option<u32>,
+) -> Result<(Cluster, Option<String>), OpsError> {
+    if test && explicit.is_none() {
+        let live = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            load_active_default(&conn, project_id).map(|r| r.name)
+        };
+        if let Some(name) = live {
+            return Ok((cluster_of(&name)?, None));
+        }
+    }
+    let (want, exact) = match explicit {
+        Some(m) => (m, true),
+        None => cluster::default_major(),
+    };
+    let today = k2_root_proto::pg_major::today_days();
+    if let Err(r) = k2_root_proto::pg_major::check_target(want, false, today) {
+        return Err(OpsError::Refused(r.code(), r.hint()));
+    }
+    match cluster::ensure_cluster(ops, want, false) {
+        Ok(cl) if cl.role == "k2" => Ok((cl, None)),
+        Ok(cl) => Err(OpsError::Refused(
+            "cluster_refused",
+            format!(
+                "the Postgres {want} cluster on port {} was set up outside K2 (adopted); K2 creates databases only in its own clusters",
+                cl.port
+            ),
+        )),
+        Err(e) if !exact => {
+            let p = cluster::primary();
+            let primary_ok = p.role == "k2"
+                && (p.major == 0 || k2_root_proto::pg_major::check_target(p.major, false, today).is_ok());
+            if !primary_ok {
+                return Err(OpsError::Refused(e.code(), e.hint()));
+            }
+            let on = if p.major > 0 { format!("Postgres {}", p.major) } else { "this box's Postgres".into() };
+            Ok((
+                p,
+                Some(format!(
+                    "Postgres {want} (K2's default) isn't on this box yet ({}); created on {on}. Move it later with `k2 db upgrade`.",
+                    e.hint()
+                )),
+            ))
+        }
+        Err(e) => Err(OpsError::Refused(e.code(), e.hint())),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn create_database_inner(
     ops: &dyn SystemOps,
     secrets: &dyn SecretStore,
@@ -913,6 +1021,7 @@ fn create_database_inner(
     client_id: Option<&str>,
     name_override: Option<&str>,
     test: bool,
+    major: Option<u32>,
 ) -> Result<serde_json::Value, OpsError> {
     require_running()?;
     if test {
@@ -1018,6 +1127,9 @@ fn create_database_inner(
     };
     let _ = existing;
 
+    // The cluster it goes on (records + helper; may create the cluster).
+    let (cl, major_note) = target_cluster(ops, project_id, test, major)?;
+
     let migrator = format!("{name}_migrator");
     let agent = format!("{name}_agent");
     let migrator_pw = generate_secret().map_err(OpsError::Engine)?;
@@ -1048,25 +1160,17 @@ fn create_database_inner(
     }
     refuse_dangerous_role_sql(&role_sql)?;
 
-    ops.run_helper(
-        &["psql", "-d", "postgres", "-v", "ON_ERROR_STOP=1"],
-        Some(role_sql.as_bytes()),
-    )
-    .map_err(OpsError::Engine)?;
+    su_psql(ops, &cl, "postgres", &["-v", "ON_ERROR_STOP=1"], Some(role_sql.as_bytes()))?;
     // Migrator is NOINHERIT and is not a member of the agent until this
     // GRANT. SET ROLE on the guest query session needs it. Never the reverse.
-    grant_grantee_membership(ops, &name, &agent)?;
+    grant_grantee_membership(ops, &cl, &name, &agent)?;
 
     let create_db = format!(
         "CREATE DATABASE {db} OWNER {owner};",
         db = pg_quote_ident(&name),
         owner = pg_quote_ident(&migrator),
     );
-    ops.run_helper(
-        &["psql", "-d", "postgres", "-v", "ON_ERROR_STOP=1"],
-        Some(create_db.as_bytes()),
-    )
-    .map_err(OpsError::Engine)?;
+    su_psql(ops, &cl, "postgres", &["-v", "ON_ERROR_STOP=1"], Some(create_db.as_bytes()))?;
 
     let grants = format!(
         "GRANT CONNECT ON DATABASE {db} TO {agent};\n\
@@ -1103,11 +1207,7 @@ fn create_database_inner(
         fn_owner = k2_helper_owner_sql(&name),
         seal = seal_k2_internal_tables_sql(&name),
     );
-    ops.run_helper(
-        &["psql", "-d", &name, "-v", "ON_ERROR_STOP=1"],
-        Some(grants.as_bytes()),
-    )
-    .map_err(OpsError::Engine)?;
+    su_psql(ops, &cl, &name, &["-v", "ON_ERROR_STOP=1"], Some(grants.as_bytes()))?;
 
     let agent_ref = if let Some(sref) = existing_agent_ref {
         sref
@@ -1128,8 +1228,8 @@ fn create_database_inner(
         let conn = db.lock();
         conn.execute(
             "INSERT INTO sql_databases (id, project_id, name, client_id, status, \
-             agent_secret_ref, migrator_secret_ref, created_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+             agent_secret_ref, migrator_secret_ref, created_at, cluster_major) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             rusqlite::params![
                 id,
                 project_id,
@@ -1138,19 +1238,24 @@ fn create_database_inner(
                 status,
                 agent_ref,
                 migrator_ref,
-                now_secs()
+                now_secs(),
+                (cl.major > 0).then_some(cl.major as i64)
             ],
         )
         .map_err(|e| OpsError::Engine(format!("catalog insert: {e}")))?;
     }
     let used = if test { used } else { used + 1 };
-    let dsn = dsn_for(&name, &agent, &agent_pw);
-    let v = if test {
-        let migrator_dsn = dsn_for(&name, &migrator, &migrator_pw);
+    let dsn = dsn_on(&cl, &name, &agent, &agent_pw);
+    let mut v = if test {
+        let migrator_dsn = dsn_on(&cl, &name, &migrator, &migrator_pw);
         json_create_test(&name, &dsn, &migrator_dsn, false, used, cap)
     } else {
         json_create(&name, &dsn, false, used, cap)
     };
+    v["major"] = if cl.major > 0 { serde_json::json!(cl.major) } else { serde_json::Value::Null };
+    if let Some(note) = major_note {
+        v["majorNote"] = serde_json::json!(note);
+    }
     assert_no_superuser_json(&v);
     if test {
         debug_assert!(
@@ -1179,12 +1284,12 @@ fn dsn_json(
     let user = connect_user(row, via, caller_project_id);
     let pw = match via {
         ResolvedVia::Owned => owner_agent_password(secrets, row)?,
-        ResolvedVia::Grant => mint_workspace_agent_secret(ops, secrets, &user, false)?.1,
+        ResolvedVia::Grant => mint_workspace_agent_secret(ops, secrets, &user, false, &cluster_of(&row.name)?)?.1,
     };
     if via == ResolvedVia::Owned {
         ensure_owned_bind(ops, row)?;
     }
-    let dsn = dsn_for(&row.name, &user, &pw);
+    let dsn = dsn_for(&row.name, &user, &pw)?;
     let v = json_create(&row.name, &dsn, existing, used, cap);
     assert_no_superuser_json(&v);
     Ok(v)
@@ -1204,8 +1309,8 @@ fn test_dsn_json(
     let (mig_user, mig_pw) = migrator_creds(secrets, row)?;
     let v = json_create_test(
         &row.name,
-        &dsn_for(&row.name, &agent, &agent_pw),
-        &dsn_for(&row.name, &mig_user, &mig_pw),
+        &dsn_for(&row.name, &agent, &agent_pw)?,
+        &dsn_for(&row.name, &mig_user, &mig_pw)?,
         existing,
         used,
         cap,
@@ -1258,7 +1363,7 @@ pub fn dsn_for_project_opts(
             let v = serde_json::json!({
                 "ok": true,
                 "name": row.name,
-                "dsn": dsn_for(&row.name, &user, &pw),
+                "dsn": dsn_for(&row.name, &user, &pw)?,
                 "role": "migrator",
                 "existing": true,
                 "cap": { "used": used, "cap": cap },
@@ -1269,7 +1374,7 @@ pub fn dsn_for_project_opts(
         }
         let agent = agent_login_for(&row);
         let pw = owner_agent_password(secrets, &row)?;
-        let v = json_create(&row.name, &dsn_for(&row.name, &agent, &pw), true, used, cap);
+        let v = json_create(&row.name, &dsn_for(&row.name, &agent, &pw)?, true, used, cap);
         assert_no_superuser_json(&v);
         return Ok(v);
     }
@@ -1330,6 +1435,7 @@ fn exec_as(
 /// `INSERT 0 1`) so stdout is only the statement's rows. `-tA` without
 /// `-F` uses `|`; force tab so `SELECT version, checksum` splits cleanly.
 fn role_psql_args<'a>(
+    port: &'a str,
     db: &'a str,
     user: &'a str,
     set_sql: Option<&'a str>,
@@ -1338,6 +1444,8 @@ fn role_psql_args<'a>(
     let mut args: Vec<&str> = vec![
         "-h",
         "127.0.0.1",
+        "-p",
+        port,
         "-U",
         user,
         "-d",
@@ -1372,9 +1480,11 @@ fn exec_as_role(
     let set_sql = set_role
         .filter(|role| *role != user)
         .map(|role| format!("SET ROLE {}", pg_quote_ident(role)));
-    let (args, stdin) = role_psql_args(db, user, set_sql.as_deref(), sql);
+    let cl = cluster_of(db)?;
+    let port = cl.port_arg();
+    let (args, stdin) = role_psql_args(&port, db, user, set_sql.as_deref(), sql);
     let out = ops
-        .run_cmd(PSQL_PATH, &args, &[("PGPASSWORD", password)], stdin)
+        .run_cmd(&cl.client_bin(ops, "psql"), &args, &[("PGPASSWORD", password)], stdin)
         .map_err(OpsError::Engine)?;
     Ok(String::from_utf8_lossy(&out).trim().to_string())
 }
@@ -1396,11 +1506,7 @@ fn grant_agent_k2_tables(ops: &dyn SystemOps, db: &str) -> Result<(), OpsError> 
         "GRANT USAGE ON SCHEMA public TO {agent};\n\
          GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE _k2_migrations, _k2_store TO {agent};"
     );
-    ops.run_helper(
-        &["psql", "-d", db, "-v", "ON_ERROR_STOP=1"],
-        Some(sql.as_bytes()),
-    )
-    .map_err(OpsError::Engine)?;
+    su_psql(ops, &cluster_of(db)?, db, &["-v", "ON_ERROR_STOP=1"], Some(sql.as_bytes()))?;
     Ok(())
 }
 
@@ -1570,7 +1676,7 @@ pub fn migrate(
     // Migration SQL runs as the tables' owner: put the seal back in case
     // a file touched K2's own tables (re-grants never undo row security).
     if !ran.is_empty() {
-        seal_k2_internal_tables(ops, &row.name)?;
+        seal_k2_internal_tables(ops, &cluster_of(&row.name)?, &row.name)?;
     }
     Ok(serde_json::json!({
         "ok": true,
@@ -1863,12 +1969,15 @@ pub fn dump(
     };
     let dest = resolve_out_path(ws_path, &rel).map_err(OpsError::Usage)?;
     let dest_s = dest.to_string_lossy().into_owned();
+    let cl = cluster_of(&row.name)?;
     ops.run_cmd(
-        PG_DUMP_PATH,
+        &cl.client_bin(ops, "pg_dump"),
         &[
             "-Fc",
             "-h",
             "127.0.0.1",
+            "-p",
+            &cl.port_arg(),
             "-U",
             &user,
             "-d",
@@ -1944,11 +2053,14 @@ pub fn restore(
     };
     replay_grants_for_restore(ops, secrets, &row, ws_path, file, &src)?;
     let (user, pw) = migrator_creds(secrets, &row)?;
+    let cl = cluster_of(&row.name)?;
     ops.run_cmd(
-        PG_RESTORE_PATH,
+        &cl.client_bin(ops, "pg_restore"),
         &[
             "-h",
             "127.0.0.1",
+            "-p",
+            &cl.port_arg(),
             "-U",
             &user,
             "-d",
@@ -1973,11 +2085,7 @@ pub fn drop_database(ops: &dyn SystemOps, project_id: &str) -> Result<serde_json
         name = pg_quote_literal(&row.name),
         ident = pg_quote_ident(&row.name),
     );
-    ops.run_helper(
-        &["psql", "-d", "postgres", "-v", "ON_ERROR_STOP=1"],
-        Some(sql.as_bytes()),
-    )
-    .map_err(OpsError::Engine)?;
+    su_psql(ops, &cluster_of(&row.name)?, "postgres", &["-v", "ON_ERROR_STOP=1"], Some(sql.as_bytes()))?;
     {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -2009,11 +2117,7 @@ pub fn drop_test_database(
         name = pg_quote_literal(&row.name),
         ident = pg_quote_ident(&row.name),
     );
-    ops.run_helper(
-        &["psql", "-d", "postgres", "-v", "ON_ERROR_STOP=1"],
-        Some(sql.as_bytes()),
-    )
-    .map_err(OpsError::Engine)?;
+    su_psql(ops, &cluster_of(&row.name)?, "postgres", &["-v", "ON_ERROR_STOP=1"], Some(sql.as_bytes()))?;
     {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -2136,52 +2240,88 @@ pub fn rotate_db_role_passwords(ops: &dyn SystemOps) -> Vec<String> {
             Err(_) => vec![],
         }
     };
+    // Roles are cluster-global and a login may live in several clusters
+    // (a grantee granted on databases on two majors, V32/V36): the new
+    // password goes to every K2 cluster that holds the role before the
+    // vault changes, and back to the old one if any cluster refuses.
+    let clusters = cluster::k2_clusters();
     for (name, agent_ref, mig_ref) in rows {
         for (role, sref) in [(format!("{name}_agent"), agent_ref), (format!("{name}_migrator"), mig_ref)] {
             let Some(sref) = sref.filter(|s| !s.is_empty()) else { continue };
-            match pg_role_exists(ops, &role) {
-                Ok(true) => {}
-                Ok(false) => continue,
-                Err(e) => {
-                    out.push(format!("{role}: {e:?}"));
-                    continue;
-                }
-            }
-            let pw = match generate_secret() {
-                Ok(p) => p,
-                Err(e) => {
-                    out.push(format!("{role}: {e}"));
-                    continue;
-                }
-            };
-            let sql = alter_role_password_sql(&role, &pw);
-            if let Err(e) = refuse_dangerous_role_sql(&sql) {
-                out.push(format!("{role}: {e:?}"));
-                continue;
-            }
-            match ops.run_helper(&["psql", "-d", "postgres", "-v", "ON_ERROR_STOP=1"], Some(sql.as_bytes())) {
-                Ok(_) => match store.put_exact(&sref, &pw) {
-                    Ok(()) => out.push(format!("{role}: rotated")),
-                    Err(e) => out.push(format!("{role}: ROLE CHANGED BUT NOT SAVED ({e}); run k2 db grant again")),
-                },
-                Err(e) => out.push(format!("{role}: kept ({e:?})")),
+            match rotate_role_everywhere(ops, &clusters, &role, &sref, &store) {
+                Some(line) => out.push(line),
+                None => continue,
             }
         }
     }
     out
 }
 
-fn pg_role_exists(ops: &dyn SystemOps, role: &str) -> Result<bool, OpsError> {
+/// Rotate one role on every cluster holding it. `None` = no cluster holds
+/// it (nothing to do).
+fn rotate_role_everywhere(
+    ops: &dyn SystemOps,
+    clusters: &[Cluster],
+    role: &str,
+    sref: &str,
+    store: &crate::vault::refstore::VaultRefStore,
+) -> Option<String> {
+    let mut holders: Vec<&Cluster> = Vec::new();
+    for cl in clusters {
+        match pg_role_exists(ops, cl, role) {
+            Ok(true) => holders.push(cl),
+            Ok(false) => {}
+            Err(e) => return Some(format!("{role}: {e:?}")),
+        }
+    }
+    if holders.is_empty() {
+        return None;
+    }
+    let pw = match generate_secret() {
+        Ok(p) => p,
+        Err(e) => return Some(format!("{role}: {e}")),
+    };
+    let sql = alter_role_password_sql(role, &pw);
+    if let Err(e) = refuse_dangerous_role_sql(&sql) {
+        return Some(format!("{role}: {e:?}"));
+    }
+    let mut done: Vec<&Cluster> = Vec::new();
+    for cl in &holders {
+        if let Err(e) = su_psql(ops, cl, "postgres", &["-v", "ON_ERROR_STOP=1"], Some(sql.as_bytes())) {
+            // Put the clusters already changed back on the vaulted password.
+            let old = store.resolve(sref).ok().flatten();
+            let mut stranded = Vec::new();
+            for back in &done {
+                let restored = old.as_deref().is_some_and(|old| {
+                    su_psql(ops, back, "postgres", &["-v", "ON_ERROR_STOP=1"], Some(alter_role_password_sql(role, old).as_bytes()))
+                        .is_ok()
+                });
+                if !restored {
+                    stranded.push(back.major.to_string());
+                }
+            }
+            if stranded.is_empty() {
+                return Some(format!("{role}: kept ({e:?})"));
+            }
+            return Some(format!(
+                "{role}: NOT ROTATED ON EVERY CLUSTER ({e:?}); Postgres {} kept the new password — run k2 db grant again",
+                stranded.join(", ")
+            ));
+        }
+        done.push(cl);
+    }
+    Some(match store.put_exact(sref, &pw) {
+        Ok(()) => format!("{role}: rotated"),
+        Err(e) => format!("{role}: ROLE CHANGED BUT NOT SAVED ({e}); run k2 db grant again"),
+    })
+}
+
+fn pg_role_exists(ops: &dyn SystemOps, cl: &Cluster, role: &str) -> Result<bool, OpsError> {
     let sql = format!(
         "SELECT rolname FROM pg_roles WHERE rolname = {lit};",
         lit = pg_quote_literal(role),
     );
-    let out = ops
-        .run_helper(
-            &["psql", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-tA"],
-            Some(sql.as_bytes()),
-        )
-        .map_err(OpsError::Engine)?;
+    let out = su_psql(ops, cl, "postgres", &["-v", "ON_ERROR_STOP=1", "-tA"], Some(sql.as_bytes()))?;
     Ok(!out.trim().is_empty())
 }
 
@@ -2194,15 +2334,25 @@ fn mint_workspace_agent_secret(
     secrets: &dyn SecretStore,
     role: &str,
     create_if_missing: bool,
+    cl: &Cluster,
 ) -> Result<(String, String), OpsError> {
-    {
+    let found = {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        if let Some(found) = vaulted_secret_for_role(&conn, secrets, role)? {
-            return Ok(found);
+        vaulted_secret_for_role(&conn, secrets, role)?
+    };
+    if let Some(found) = found {
+        // One login, one password (V32): the grant path brings the login
+        // into this database's cluster with its vaulted password when the
+        // login was minted on another major. Never an ALTER.
+        if create_if_missing && !cl.is_primary() && !pg_role_exists(ops, cl, role)? {
+            let sql = ensure_role_sql(role, &found.1);
+            refuse_dangerous_role_sql(&sql)?;
+            su_psql(ops, cl, "postgres", &["-v", "ON_ERROR_STOP=1"], Some(sql.as_bytes()))?;
         }
+        return Ok(found);
     }
-    let exists = pg_role_exists(ops, role)?;
+    let exists = pg_role_exists(ops, cl, role)?;
     let pw = generate_secret().map_err(OpsError::Engine)?;
     let sql = if exists {
         alter_role_password_sql(role, &pw)
@@ -2218,11 +2368,7 @@ fn mint_workspace_agent_secret(
         )));
     };
     refuse_dangerous_role_sql(&sql)?;
-    ops.run_helper(
-        &["psql", "-d", "postgres", "-v", "ON_ERROR_STOP=1"],
-        Some(sql.as_bytes()),
-    )
-    .map_err(OpsError::Engine)?;
+    su_psql(ops, cl, "postgres", &["-v", "ON_ERROR_STOP=1"], Some(sql.as_bytes()))?;
     let sref = secrets.store("agent", &pw).map_err(OpsError::Engine)?;
     sync_grant_secret_refs_for_role(role, &sref)?;
     Ok((sref, pw))
@@ -2230,7 +2376,7 @@ fn mint_workspace_agent_secret(
 
 fn ensure_bind_membership(
     ops: &dyn SystemOps,
-    _db_name: &str,
+    db_name: &str,
     bind: &str,
     agent: &str,
 ) -> Result<(), OpsError> {
@@ -2242,11 +2388,7 @@ fn ensure_bind_membership(
         agent = pg_quote_ident(agent),
     );
     refuse_dangerous_role_sql(&sql)?;
-    ops.run_helper(
-        &["psql", "-d", "postgres", "-v", "ON_ERROR_STOP=1"],
-        Some(sql.as_bytes()),
-    )
-    .map_err(OpsError::Engine)?;
+    su_psql(ops, &cluster_of(db_name)?, "postgres", &["-v", "ON_ERROR_STOP=1"], Some(sql.as_bytes()))?;
     Ok(())
 }
 
@@ -2380,18 +2522,15 @@ fn mint_grantee_login(
     db_name: &str,
     role: &str,
 ) -> Result<String, OpsError> {
-    let (sref, _pw) = mint_workspace_agent_secret(ops, secrets, role, true)?;
+    let cl = cluster_of(db_name)?;
+    let (sref, _pw) = mint_workspace_agent_secret(ops, secrets, role, true, &cl)?;
     let connect = format!(
         "GRANT CONNECT ON DATABASE {db} TO {role};",
         db = pg_quote_ident(db_name),
         role = pg_quote_ident(role),
     );
     refuse_dangerous_role_sql(&connect)?;
-    ops.run_helper(
-        &["psql", "-d", "postgres", "-v", "ON_ERROR_STOP=1"],
-        Some(connect.as_bytes()),
-    )
-    .map_err(OpsError::Engine)?;
+    su_psql(ops, &cl, "postgres", &["-v", "ON_ERROR_STOP=1"], Some(connect.as_bytes()))?;
     Ok(sref)
 }
 
@@ -2399,6 +2538,7 @@ fn mint_grantee_login(
 /// SET ROLE. Never `GRANT {db}_migrator TO` the agent or the grantee.
 fn grant_grantee_membership(
     ops: &dyn SystemOps,
+    cl: &Cluster,
     db_name: &str,
     role: &str,
 ) -> Result<(), OpsError> {
@@ -2408,16 +2548,13 @@ fn grant_grantee_membership(
         role = pg_quote_ident(role),
         migrator = pg_quote_ident(&migrator),
     );
-    ops.run_helper(
-        &["psql", "-d", "postgres", "-v", "ON_ERROR_STOP=1"],
-        Some(sql.as_bytes()),
-    )
-    .map_err(OpsError::Engine)?;
+    su_psql(ops, cl, "postgres", &["-v", "ON_ERROR_STOP=1"], Some(sql.as_bytes()))?;
     Ok(())
 }
 
 fn revoke_grantee_membership(
     ops: &dyn SystemOps,
+    cl: &Cluster,
     db_name: &str,
     role: &str,
 ) -> Result<(), OpsError> {
@@ -2427,11 +2564,7 @@ fn revoke_grantee_membership(
         role = pg_quote_ident(role),
         migrator = pg_quote_ident(&migrator),
     );
-    ops.run_helper(
-        &["psql", "-d", "postgres", "-v", "ON_ERROR_STOP=1"],
-        Some(sql.as_bytes()),
-    )
-    .map_err(OpsError::Engine)?;
+    su_psql(ops, cl, "postgres", &["-v", "ON_ERROR_STOP=1"], Some(sql.as_bytes()))?;
     Ok(())
 }
 
@@ -2469,21 +2602,16 @@ fn revoke_grantee_privileges_sql(db_name: &str, role: &str) -> String {
 }
 
 fn apply_pg_revoke(ops: &dyn SystemOps, db_name: &str, role: &str) -> Result<(), OpsError> {
+    let cl = cluster_of(db_name)?;
     let connect = format!(
         "REVOKE CONNECT ON DATABASE {db} FROM {role};",
         db = pg_quote_ident(db_name),
         role = pg_quote_ident(role),
     );
-    let _ = ops.run_helper(
-        &["psql", "-d", "postgres", "-v", "ON_ERROR_STOP=1"],
-        Some(connect.as_bytes()),
-    );
+    let _ = su_psql(ops, &cl, "postgres", &["-v", "ON_ERROR_STOP=1"], Some(connect.as_bytes()));
     let dml = revoke_grantee_privileges_sql(db_name, role);
-    let _ = ops.run_helper(
-        &["psql", "-d", db_name, "-v", "ON_ERROR_STOP=1"],
-        Some(dml.as_bytes()),
-    );
-    let _ = revoke_grantee_membership(ops, db_name, role);
+    let _ = su_psql(ops, &cl, db_name, &["-v", "ON_ERROR_STOP=1"], Some(dml.as_bytes()));
+    let _ = revoke_grantee_membership(ops, &cl, db_name, role);
     Ok(())
 }
 
@@ -2690,7 +2818,7 @@ pub fn grant_access(
     if let Err(e) = apply_privilege_sync(ops, secrets, &row, &intended) {
         return Err(e);
     }
-    if let Err(e) = grant_grantee_membership(ops, &row.name, &role) {
+    if let Err(e) = cluster_of(&row.name).and_then(|cl| grant_grantee_membership(ops, &cl, &row.name, &role)) {
         restore_previous_privileges(ops, secrets, &row, &role, previous_existed);
         return Err(e);
     }
@@ -3038,7 +3166,7 @@ fn store_dml_creds(
     let user = connect_user(&row, via, project_id);
     let password = match via {
         ResolvedVia::Owned => owner_agent_password(secrets, &row)?,
-        ResolvedVia::Grant => mint_workspace_agent_secret(ops, secrets, &user, false)?.1,
+        ResolvedVia::Grant => mint_workspace_agent_secret(ops, secrets, &user, false, &cluster_of(&row.name)?)?.1,
     };
     let bind = if via == ResolvedVia::Owned {
         ensure_owned_bind(ops, &row)?;
@@ -3372,6 +3500,8 @@ fn map_dump_engine(err: String) -> OpsError {
 /// database login).
 struct GuestConn {
     db: String,
+    /// The cluster the database lives on (port + that major's psql).
+    cluster: Cluster,
     mig_user: String,
     mig_pw: String,
     login: String,
@@ -3398,7 +3528,9 @@ fn guest_conn(
         login.clone(),
         dml.user.clone(),
     ];
+    let cluster = cluster_of(&dml.row.name)?;
     Ok(GuestConn {
+        cluster,
         db: dml.row.name,
         mig_user,
         mig_pw,
@@ -3431,6 +3563,8 @@ fn guest_psql_args(g: &GuestConn, rows_only: bool) -> Vec<String> {
     let mut args: Vec<String> = vec![
         "-h".into(),
         "127.0.0.1".into(),
+        "-p".into(),
+        g.cluster.port_arg(),
         "-U".into(),
         g.mig_user.clone(),
         "-d".into(),
@@ -3462,7 +3596,7 @@ fn run_guest_psql(
     let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
     let out = ops
         .run_cmd(
-            PSQL_PATH,
+            &g.cluster.client_bin(ops, "psql"),
             &arg_refs,
             &[("PGPASSWORD", g.mig_pw.as_str())],
             None,
@@ -3874,14 +4008,15 @@ mod tests {
 
     #[test]
     fn exec_as_role_with_set_role_sends_the_statement_as_c_not_stdin() {
-        let (args, stdin) = role_psql_args("db", "u", Some("SET ROLE \"r\""), "SELECT 1");
+        let (args, stdin) = role_psql_args("5433", "db", "u", Some("SET ROLE \"r\""), "SELECT 1");
+        assert!(args.join(" ").starts_with("-h 127.0.0.1 -p 5433 -U u -d db "), "the resolver's port: {args:?}");
         assert!(stdin.is_none(), "psql never reads stdin once -c is set");
         let joined = args.join(" ");
         let role = joined.find("-c SET ROLE").expect("set role");
         let stmt = joined.find("-c SELECT 1").expect("statement as -c");
         assert!(role < stmt, "{joined}");
         assert!(args.contains(&"-q"), "{joined}");
-        let (args, stdin) = role_psql_args("db", "u", None, "SELECT 1");
+        let (args, stdin) = role_psql_args("5432", "db", "u", None, "SELECT 1");
         assert_eq!(stdin, Some("SELECT 1".as_bytes()));
         assert!(!args.contains(&"-c"), "{args:?}");
     }

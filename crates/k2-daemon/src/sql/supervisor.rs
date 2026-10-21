@@ -3,6 +3,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use super::cluster;
 use super::sql_supported;
 use super::sysops::{
     guc_show_sql, is_baked, pin_gucs_sql, ram_dropin, RealSystemOps, SystemOps, GUC_PINNED,
@@ -222,6 +223,13 @@ fn run_enable_machine(ops: &dyn SystemOps) -> Result<serde_json::Value, EnableEr
              installed_at = COALESCE(installed_at, ?2), updated_at = ?2 WHERE id = 1",
             rusqlite::params![major, now_secs()],
         );
+        // The 5432 cluster's record (0.46.3). A live major that differs
+        // from the record is never rewritten here: the doctor fails (V6).
+        if major > 0 {
+            if let Err(e) = cluster::record_primary_major(&conn, major as u32) {
+                eprintln!("[db] enable: {e}");
+            }
+        }
     }
     mark_step("catalog");
 
@@ -312,10 +320,39 @@ pub fn health_check_with(ops: &dyn SystemOps, ping: &dyn Fn() -> Result<(), Stri
             }
         ));
     }
+    // The wrapper reads "active" whatever its instances do (V3): every
+    // other cluster that serves a live database must be up itself.
+    for (c, _) in serving_clusters().into_iter().filter(|(c, _)| !c.is_primary()) {
+        let a = ops.systemctl_query(&["is-active", &c.unit]);
+        if a != "active" {
+            return Health::Degraded(format!(
+                "the Postgres {} cluster ({}, port {}) serves databases but is '{}'",
+                c.major,
+                c.unit,
+                c.port,
+                if a.is_empty() { "unknown" } else { &a }
+            ));
+        }
+    }
     match ping() {
         Ok(()) => Health::Running,
         Err(e) => Health::Degraded(format!("unit is active but SELECT 1 failed: {e}")),
     }
+}
+
+/// Each K2 cluster with the number of live databases it serves.
+fn serving_clusters() -> Vec<(cluster::Cluster, usize)> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let majors = cluster::database_majors_in(&conn);
+    cluster::k2_clusters_in(&conn)
+        .into_iter()
+        .map(|c| {
+            let n = majors.iter().filter(|(_, _, m)| *m == c.major).count();
+            (c, n)
+        })
+        .filter(|(_, n)| *n > 0)
+        .collect()
 }
 
 pub fn refresh_health() -> serde_json::Value {
@@ -373,6 +410,15 @@ pub fn spawn_health_loop() {
             if current_status().as_deref() == Some("running")
                 && !BOOT_SEAL_DONE.swap(true, Ordering::SeqCst)
             {
+                // Fold the box's clusters into K2's records (helper 9);
+                // older helpers: the records stay as enable wrote them.
+                let _ = std::panic::catch_unwind(|| {
+                    if let Err(e) = cluster::reconcile(&RealSystemOps) {
+                        if !e.starts_with("helper_needed") {
+                            eprintln!("[db] clusters: {e}");
+                        }
+                    }
+                });
                 let _ = std::panic::catch_unwind(|| {
                     let ops = RealSystemOps;
                     for line in super::ops::seal_existing_databases(&ops) {
@@ -417,6 +463,7 @@ pub fn status_json(include_health: bool) -> serde_json::Value {
         .and_then(|p| serde_json::from_str::<serde_json::Value>(&p).ok())
         .unwrap_or(serde_json::Value::Null);
     let port = listen_port(listen.as_deref());
+    let majors = majors_json();
     serde_json::json!({
         "ok": true,
         "supported": sql_supported(),
@@ -428,6 +475,58 @@ pub fn status_json(include_health: bool) -> serde_json::Value {
         "enableProgress": enable_progress,
         "lastError": last_error,
         "health": health,
+        "clusters": majors["clusters"],
+        "databases": majors["databases"],
+        "upgradeAvailable": majors["upgradeAvailable"],
+        "defaultMajor": majors["defaultMajor"],
+        "defaultMajorPinned": majors["defaultMajorPinned"],
+        "supportedMajors": majors["supportedMajors"],
+    })
+}
+
+/// Majors side by side for status and the doctor (§14, V24: agents read
+/// status, so `upgradeAvailable` lives here).
+pub fn majors_json() -> serde_json::Value {
+    use k2_root_proto::pg_major;
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let clusters = cluster::list_in(&conn);
+    let clusters = if clusters.is_empty() {
+        let p = cluster::primary_in(&conn);
+        if p.major > 0 { vec![p] } else { vec![] }
+    } else {
+        clusters
+    };
+    let today = pg_major::today_days();
+    let dbs = cluster::database_majors_in(&conn);
+    let upgrades: Vec<serde_json::Value> = dbs
+        .iter()
+        .filter(|(_, _, m)| *m > 0)
+        .filter_map(|(id, name, m)| {
+            let to = pg_major::upgrades_from(*m, today);
+            (!to.is_empty()).then(|| {
+                serde_json::json!({
+                    "id": id,
+                    "name": name,
+                    "from": m,
+                    "to": to,
+                    "check": format!("k2 db upgrade {name} --check"),
+                })
+            })
+        })
+        .collect();
+    let (default_major, pinned) = cluster::default_major_in(&conn);
+    serde_json::json!({
+        "clusters": clusters.iter().map(cluster::Cluster::json).collect::<Vec<_>>(),
+        "databases": dbs.iter().map(|(id, name, m)| serde_json::json!({
+            "id": id,
+            "name": name,
+            "major": if *m > 0 { serde_json::json!(m) } else { serde_json::Value::Null },
+        })).collect::<Vec<_>>(),
+        "upgradeAvailable": upgrades,
+        "defaultMajor": default_major,
+        "defaultMajorPinned": pinned,
+        "supportedMajors": pg_major::SUPPORTED,
     })
 }
 
@@ -503,6 +602,12 @@ fn dropin_matches_policy(ops: &dyn SystemOps) -> bool {
 }
 
 fn cluster_unit_name(ops: &dyn SystemOps, major: Option<i64>) -> String {
+    // The recorded 5432 cluster's own unit (V4): with two clusters running
+    // "the first active postgresql@" could be either.
+    let p = cluster::primary();
+    if !p.synthesized {
+        return p.unit;
+    }
     let listed = ops.systemctl_query(&[
         "list-units",
         "--type=service",
@@ -700,9 +805,59 @@ pub fn doctor_with(ops: &dyn SystemOps) -> serde_json::Value {
     } else {
         (serde_json::json!({}), false)
     };
-    let ok = baked && active == "active" && ping.is_ok() && ram_applied && gucs_ok && within_cap;
+    // Live ≠ recorded major on 5432 is a failure (V6); every other
+    // cluster serving databases must be up (V3).
+    let live_major = if ping.is_ok() {
+        ops.run_helper(&["psql", "-d", "postgres", "-tA"], Some(b"SHOW server_version_num;"))
+            .ok()
+            .and_then(|o| parse_installed_major(&o))
+    } else {
+        None
+    };
+    let primary = cluster::primary();
+    let major_mismatch = match (live_major, primary.synthesized) {
+        (Some(live), false) => live != primary.major as i64,
+        (Some(live), true) => recorded_major.is_some_and(|r| r > 0 && r != live),
+        _ => false,
+    };
+    let mut clusters_ok = true;
+    let serving = serving_clusters();
+    let clusters_view: Vec<serde_json::Value> = {
+        let all = cluster::k2_clusters();
+        all.iter()
+            .map(|c| {
+                let dbs = serving.iter().find(|(s, _)| s.major == c.major).map(|(_, n)| *n).unwrap_or(0);
+                let unit_state = if c.is_primary() { active.clone() } else { ops.systemctl_query(&["is-active", &c.unit]) };
+                if dbs > 0 && unit_state != "active" {
+                    clusters_ok = false;
+                }
+                let mut v = c.json();
+                v["unitState"] = serde_json::json!(unit_state);
+                v["databases"] = serde_json::json!(dbs);
+                v
+            })
+            .collect()
+    };
+    let ok = baked
+        && active == "active"
+        && ping.is_ok()
+        && ram_applied
+        && gucs_ok
+        && within_cap
+        && !major_mismatch
+        && clusters_ok;
     let hint = if ok {
         serde_json::Value::Null
+    } else if major_mismatch {
+        serde_json::Value::String(format!(
+            "the 5432 cluster answers Postgres {}, but K2 recorded {} — something outside K2 changed it; do not create or move databases until it is understood",
+            live_major.unwrap_or_default(),
+            if primary.synthesized { recorded_major.unwrap_or_default() } else { primary.major as i64 }
+        ))
+    } else if !clusters_ok {
+        serde_json::Value::String(
+            "a Postgres cluster that serves databases is not running — see clusters[] (k2 db doctor --json)".into(),
+        )
     } else if !baked {
         serde_json::Value::String(NOT_BAKED_HINT.into())
     } else if !ram_applied {
@@ -731,6 +886,9 @@ pub fn doctor_with(ops: &dyn SystemOps) -> serde_json::Value {
         "unit": active,
         "select1": ping.is_ok(),
         "installedMajor": recorded_major,
+        "liveMajor": live_major,
+        "majorMismatch": major_mismatch,
+        "clusters": clusters_view,
         "listen": "localhost",
         "ram": {
             "unit": ram_unit,
@@ -770,7 +928,7 @@ mod tests {
     fn clean_row() {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        let _ = conn.execute("DELETE FROM sql_server WHERE id = 1", []);
+        let _ = conn.execute("DELETE FROM sql_server WHERE id = 1", []); let _ = conn.execute("DELETE FROM sql_clusters", []);
     }
 
     #[test]

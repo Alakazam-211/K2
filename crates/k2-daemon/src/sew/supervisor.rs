@@ -368,8 +368,9 @@ pub fn preflight(env: &Env, req: &EnableRequest) -> Vec<Value> {
             },
             format!(
                 "Sew needs the postgresql-{want} package (/usr/lib/postgresql/{want}/bin/postgres, initdb, pg_dump, \
-                 pg_restore): install it as root (on Ubuntu 22.04 and Debian 12 from apt.postgresql.org) without \
-                 creating a second cluster, and keep it installed while Sew is; K2 never runs apt"
+                 pg_restore) without a second cluster: as root, `k2-root-helper pg add-major {want}` uses K2's pinned \
+                 apt.postgresql.org source and never creates a cluster (older helpers: install postgresql-{want} from \
+                 apt.postgresql.org on Ubuntu 22.04 and Debian 12). Keep it installed while Sew is; the daemon never runs apt"
             ),
         ));
     }

@@ -456,7 +456,31 @@ if [ "$WITH_DB" = 1 ] && [ -n "$PG_EXISTING" ]; then
 	PG_EXISTING="$(printf '%s' "$PG_EXISTING" | sed 's#/postgresql\.conf##g; s/^ //')"
 	log "Postgres: existing cluster(s) adopted, not re-initialized and not reconfigured: ${PG_EXISTING}"
 	log "Postgres: review, then fence RAM with: sudo /usr/local/libexec/k2-root-helper pg install-ram-fence"
+elif [ "$WITH_DB" = 1 ] && [ "${ROOT_HELPER_MODE:-root}" != "legacy" ] \
+	&& [ -x /usr/local/libexec/k2-root-helper ] \
+	&& /usr/local/libexec/k2-root-helper version 2>/dev/null | grep -Eq '"pgmajor": ?true'; then
+	# 0.46.3: new boxes are born on Postgres 17 (prd-pg17-and-db-upgrade-v1
+	# §5, V13). The root helper's `pg add-major` writes the pinned PGDG key
+	# and source, the apt pins (PGDG never replaces the distro's packages)
+	# and `create_main_cluster = false`, then installs postgresql-17 +
+	# client; `pg ensure-cluster` creates 17/main on the first free port of
+	# K2's band (5432 here), localhost only, RAM fence, scram, wal_level
+	# logical. K2_PG_MAJOR overrides the major (supported ones only; the
+	# helper refuses anything else). Air-gapped: install the two .deb files
+	# from your mirror first, then re-run.
+	PG_NEW_MAJOR="${K2_PG_MAJOR:-17}"
+	log "baking Postgres ${PG_NEW_MAJOR} sidecar (PGDG, pinned key) through the root helper"
+	/usr/local/libexec/k2-root-helper pg add-major "$PG_NEW_MAJOR" >/dev/null \
+		|| die "root helper: pg add-major ${PG_NEW_MAJOR} failed (air-gapped? apt install ./postgresql-${PG_NEW_MAJOR}*.deb ./postgresql-client-${PG_NEW_MAJOR}*.deb, then re-run)"
+	/usr/local/libexec/k2-root-helper pg ensure-cluster "$PG_NEW_MAJOR" >/dev/null \
+		|| die "root helper: pg ensure-cluster ${PG_NEW_MAJOR} failed"
+	systemctl enable postgresql >/dev/null 2>&1 || true
+	systemctl daemon-reload
+	log "Postgres ${PG_NEW_MAJOR} sidecar baked (cluster ${PG_NEW_MAJOR}/main, RAM fence via k2-root-helper)"
 elif [ "$WITH_DB" = 1 ]; then
+	# A root helper without `pgmajor` (or the legacy daemon): the distro's
+	# Postgres, as before 0.46.3. Databases move to 17 later with
+	# `k2 db upgrade` once the helper self-updates.
 	log "baking Postgres sidecar (postgresql + postgresql-client)"
 	apt-get install -y -qq postgresql postgresql-client >/dev/null
 	# Distro default PGDATA (never the workspace). Empty cluster.

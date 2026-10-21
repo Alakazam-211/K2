@@ -223,10 +223,71 @@ pub fn handle_server_uninstall(_body: &[u8]) -> CliResponse {
         Ok(()) => {
             let db = k2_core::db::shared();
             let conn = db.lock();
-            let _ = conn.execute("DELETE FROM sql_server WHERE id = 1", []);
+            let _ = conn.execute("DELETE FROM sql_server WHERE id = 1", []); let _ = conn.execute("DELETE FROM sql_clusters", []);
             ok_json(serde_json::json!({ "ok": true, "state": "not-installed" }))
         }
         Err(e) => err_json("502 Bad Gateway", "engine", e),
+    }
+}
+
+/// `--major` other than the box default is a version choice: an agent
+/// passport needs "Allow this agent to manage Postgres versions" (S6). The
+/// owner token and people logins pass (the route's own floor already ran).
+fn may_choose_major(project_id: &str, major: u32) -> Result<(), CliResponse> {
+    let (default, _) = super::cluster::default_major();
+    if major == default {
+        return Ok(());
+    }
+    let agent = crate::caller_workspace::request_principal().is_some();
+    if agent && !postgres_versions_switch_on(project_id) {
+        return Err(err_json(
+            "403 Forbidden",
+            "db_upgrade_off",
+            format!(
+                "creating on Postgres {major} (not this box's default {default}) needs \"Allow this agent to manage Postgres versions\" — ask your human to turn it on, or leave out --major"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// `projects.agents_can_upgrade_postgres` (0201), fail-closed.
+fn postgres_versions_switch_on(project_id: &str) -> bool {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT agents_can_upgrade_postgres FROM projects WHERE id = ?1",
+        [project_id],
+        |r| r.get::<_, i64>(0),
+    )
+    .map(|v| v != 0)
+    .unwrap_or(false)
+}
+
+/// `POST /cli/db/server/default-major {"major": N}` (owner only: the
+/// `/cli/db/server/` prefix): what `k2 db create` uses without --major.
+pub fn handle_server_default_major(body: &[u8]) -> CliResponse {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct B {
+        major: u32,
+    }
+    let b: B = match serde_json::from_slice(body) {
+        Ok(b) => b,
+        Err(e) => return err_json("400 Bad Request", "usage", format!("body is {{\"major\": N}}: {e}")),
+    };
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let installed: bool = conn
+        .query_row("SELECT COUNT(*) FROM sql_server WHERE id = 1", [], |r| r.get::<_, i64>(0))
+        .map(|n| n > 0)
+        .unwrap_or(false);
+    if !installed {
+        return err_json("409 Conflict", "not_ready", "the SQL sidecar is not enabled (k2 db enable)");
+    }
+    match super::cluster::set_default_major_in(&conn, b.major) {
+        Ok(()) => ok_json(serde_json::json!({ "ok": true, "defaultMajor": b.major, "pinned": true })),
+        Err(r) => err_json("409 Conflict", r.code(), r.hint()),
     }
 }
 
@@ -245,6 +306,9 @@ struct CreateBody {
     access: Option<String>,
     /// Disposable cap-exempt test database (P11).
     test: bool,
+    /// `k2 db create --major N` (0.46.3): the Postgres major to create on.
+    /// None = the box default (`sql_server.default_major`, else 17).
+    major: Option<u32>,
 }
 
 fn truthy_param(params: &HashMap<String, String>, key: &str) -> bool {
@@ -310,22 +374,29 @@ pub fn handle_create(body: &[u8]) -> CliResponse {
         return ops_err(e);
     }
     let secrets = FileSecretStore::default();
+    if let Some(m) = b.major {
+        if let Err(resp) = may_choose_major(&project_id, m) {
+            return resp;
+        }
+    }
     let created = if b.test {
-        ops::create_test_database(
+        ops::create_test_database_on(
             ops(),
             &secrets,
             &project_id,
             cap_for(&path),
             b.client_id.as_deref(),
+            b.major,
         )
     } else {
-        ops::create_database(
+        ops::create_database_on(
             ops(),
             &secrets,
             &project_id,
             cap_for(&path),
             b.client_id.as_deref(),
             b.name.as_deref(),
+            b.major,
         )
     };
     match created {

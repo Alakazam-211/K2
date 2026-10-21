@@ -35,9 +35,13 @@
 //!   daemon, gated on `namespaces.front`, [`FRONT_MIN_PROTOCOL`]) and
 //!   `turn_tls: "passthrough"` in the Sew media requests. Anything after
 //!   an 8 build ships needs 9.
-//! - 9 = `helper cli-refresh` (0.46.3): the daemon's auto-heal refreshes a
-//!   stale root-owned `/usr/local/bin/k2` to the CLI compiled into the
-//!   helper. Gated on this AND `namespaces.cli` ([`CLI_REFRESH_MIN_PROTOCOL`]).
+//! - 9 = 0.46.3's one helper bump, shared by every lane: `helper
+//!   cli-refresh` (the daemon's auto-heal refreshes a stale root-owned
+//!   `/usr/local/bin/k2` to the CLI compiled into the helper; gated on this
+//!   AND `namespaces.cli`, [`CLI_REFRESH_MIN_PROTOCOL`]) and Postgres majors
+//!   side by side (`pg clusters`, `pg add-major`, `pg ensure-cluster`, `pg
+//!   psql --cluster` and the move verbs; gated on this AND
+//!   `namespaces.pgmajor`, [`PGMAJOR_MIN_PROTOCOL`]).
 //!
 //! The first `k2-root-helper` build ships 3 and 4 together and answers 4.
 //! Protocols are additive: a newer helper serves an older daemon.
@@ -82,6 +86,11 @@ pub const FRONT_MIN_PROTOCOL: u32 = 8;
 /// `helper cli-refresh` (0.46.3). Gated on this AND `namespaces.cli == true`
 /// in `helper version`, the way Sew and front are.
 pub const CLI_REFRESH_MIN_PROTOCOL: u32 = 9;
+/// Postgres majors side by side (prd-pg17-and-db-upgrade-v1 rev 2, 0.46.3):
+/// `pg clusters`, `pg add-major`, `pg ensure-cluster`, `pg psql --cluster
+/// <M>` and the move verbs. 0.46.3's one helper bump (8 → 9), shared by
+/// every lane. Gated on this AND `namespaces.pgmajor == true`.
+pub const PGMAJOR_MIN_PROTOCOL: u32 = 9;
 
 pub const HELPER_NAME: &str = "k2-root-helper";
 
@@ -236,8 +245,9 @@ mod tests {
         assert_eq!(HANDOFF_MIN_PROTOCOL, 5);
         assert_eq!(APPS_MIN_PROTOCOL, 6);
         assert_eq!(SEW_MIN_PROTOCOL, 7);
-        assert_eq!(PROTOCOL, 9, "protocol 9 = 0.46.3's helper cli-refresh; 8 = 0.46.1's helper changes");
+        assert_eq!(PROTOCOL, 9, "protocol 9 = 0.46.3's one bump (cli-refresh + Postgres majors); 8 = 0.46.1's helper changes");
         assert_eq!(CLI_REFRESH_MIN_PROTOCOL, 9);
+        assert_eq!(PGMAJOR_MIN_PROTOCOL, 9);
         let sew: Vec<_> = crate::verbs::catalog()
             .into_iter()
             .filter(|v| v.namespace() == "sew")

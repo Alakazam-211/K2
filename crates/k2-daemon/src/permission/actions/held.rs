@@ -5,7 +5,7 @@
 //! | `apps.approve request=` | Owner | `app-approve` | `apps::approvals::handle("/cli/app/approve")` |
 //! | `mail.approve message=` | Admin | click | `mail::routes_send::handle_approvals_approve` |
 //! | `sources.approve source= spec=` (plain sources; a list is one batch) | Admin | click | `sources::approve_routes::handle("/cli/sources/{approve,batch-approve}")` |
-//! | `garden.proposal.approve proposal=` | GardenOwner | click | E1's resolver (not yet registered) |
+//! | `garden.proposal.approve proposal=` | GardenOwner | click | `zen_agent_routes::approve_entry` (E1's `garden_owner_may`) |
 //!
 //! `compute.admin-approve` lives in [`super::compute`].
 //!
@@ -31,8 +31,11 @@
 //! **Sources.** Only a *plain* source is card-able: no secret to bind, no
 //! LAN or plain-http address (`approval_kind == "one_click"`). The card is
 //! bound to the spec the agent asked about (`spec=`, the `specHash` from
-//! `k2 sources pending`): a source edited after the ask is `stale`, and
-//! the route's own `spec_changed` check backs that up.
+//! `k2 sources pending`, or its first [`SPEC_PREFIX_MIN`] characters: the
+//! request's value check refuses 40+-character tokens as secret-shaped, so a
+//! full 64-hex hash can't pass it yet, e2-asks.md): a source edited after
+//! the ask is `stale`, and the route's own `spec_changed` check backs that
+//! up (the click sends the full hash it matched).
 
 use std::collections::HashMap;
 
@@ -323,7 +326,8 @@ pub(crate) static SOURCES_APPROVE: ActionSpec = ActionSpec {
     area: Area::Held,
     params: &[
         ParamSpec { key: "source", kind: ParamKind::Source, required: true, list: true, choices: &[] },
-        // The specHash of each source, in the same order (k2 sources pending).
+        // The specHash of each source (or its first 32 characters), in the
+        // same order (k2 sources pending).
         ParamSpec { key: "spec", kind: ParamKind::Version, required: true, list: true, choices: &[] },
     ],
     floor: Floor::Admin,
@@ -358,6 +362,16 @@ pub(crate) static SOURCES_APPROVE: ActionSpec = ActionSpec {
     coverage: WallCoverage::PrefixOnly,
     machine_hints: &[],
 };
+
+/// The shortest `spec=` taken: 32 hex characters (128 bits) of the
+/// sha-256 `specHash`.
+pub(crate) const SPEC_PREFIX_MIN: usize = 32;
+
+/// `spec` names this spec hash: the full hash, or a prefix of at least
+/// [`SPEC_PREFIX_MIN`] characters.
+fn spec_matches(hash: &str, spec: &str) -> bool {
+    spec.len() >= SPEC_PREFIX_MIN && hash.starts_with(spec)
+}
 
 /// The asked-for `(name, specHash)` pairs, or why they don't pair up.
 fn source_pairs(ctx: &Ctx) -> Result<Vec<(String, String)>, String> {
@@ -394,14 +408,14 @@ fn check_sources(ctx: &Ctx) -> Check {
             return Check::Moved(format!("no source {name} of {}'s (k2 sources pending)", ctx.workspace_handle));
         };
         match row.status {
-            SourceStatus::Active if row.approved_spec_hash.as_deref() == Some(spec.as_str()) => {
+            SourceStatus::Active if row.approved_spec_hash.as_deref().is_some_and(|h| spec_matches(h, spec)) => {
                 done.push(name);
                 continue;
             }
             SourceStatus::Proposed => {}
             _ => return Check::Moved(format!("source {name} isn't waiting for approval any more")),
         }
-        if row.spec_hash != *spec {
+        if !spec_matches(&row.spec_hash, spec) {
             return Check::Moved(format!("source {name} changed since it was asked (or spec= isn't its specHash); ask again with its current specHash"));
         }
         if crate::sources::approve_routes::util::approval_kind(&row) != "one_click" {
@@ -422,7 +436,19 @@ fn apply_sources(ctx: &Ctx, who: &Answerer, _token: Option<&str>) -> Applied {
         Ok(p) => p,
         Err(e) => return Applied::Refused { code: "bad_params".into(), message: e },
     };
-    let (path, body) = match pairs.as_slice() {
+    // The full hash each source has now, when it is still the one asked
+    // about; the route refuses it if the source changes after this read.
+    let mut full: Vec<(String, String)> = Vec::with_capacity(pairs.len());
+    for (name, spec) in &pairs {
+        let row = db(|c| k2_core::sources::store::get_by_name(c, name)).ok().flatten();
+        match row {
+            Some(r) if spec_matches(&r.spec_hash, spec) => full.push((name.clone(), r.spec_hash)),
+            _ => {
+                return Applied::Refused { code: "spec_changed".into(), message: format!("source {name} changed since it was asked") }
+            }
+        }
+    }
+    let (path, body) = match full.as_slice() {
         [(name, spec)] => (SOURCES_APPROVE_ROUTE, json!({ "name": name, "specHash": spec })),
         many => (
             SOURCES_BATCH_ROUTE,
@@ -439,6 +465,63 @@ fn apply_sources(ctx: &Ctx, who: &Answerer, _token: Option<&str>) -> Applied {
     }
 }
 
+// ── garden.proposal.approve ─────────────────────────────────────────
+
+/// The Garden's owner from any signed-in surface (§5.2.1): the owner token
+/// or an Owner login, through E1's `zen_routes::garden_owner_may`, the one
+/// resolver Settings calls too.
+pub(crate) static GARDEN_PROPOSAL_APPROVE: ActionSpec = ActionSpec {
+    id: "garden.proposal.approve",
+    area: Area::Held,
+    params: &[one("proposal", ParamKind::Proposal)],
+    floor: Floor::GardenOwner,
+    direction: Direction::Loosen,
+    grant: Grant::OneTime,
+    proof: Proof::Click,
+    expiry: Expiry::STANDARD,
+    words: Words {
+        setting: "Gardens",
+        what_changes: "Apply {ws}'s Garden proposal {proposal}",
+        consequences: "The proposed change is written to the Garden or widget now, exactly as proposed; a widget runs the new code. Read it first in Settings → Gardens.",
+        scope: "proposal {proposal}",
+        duration: ONE_TIME,
+        retry: "",
+    },
+    undo: Undo::None,
+    settings: SettingsRef { page: "zen-gardens", path: "Settings → Gardens" },
+    walls: &[Wall {
+        matches: WallMatch::Code { status: 403, code: "person_only" },
+        route_prefix: "/cli/zen/proposals/approve",
+        method: WallMethod::Post,
+        params: &[("proposal", ParamFrom::Body("/id"))],
+    }],
+    coverage: WallCoverage::PrefixOnly,
+    machine_hints: &[],
+};
+
+fn check_proposal(ctx: &Ctx) -> Check {
+    let Some(id) = text_param(ctx, "proposal") else {
+        return Check::Moved("name the Garden proposal: proposal=<its zp-… id> (k2 zen proposals)".into());
+    };
+    let p = match db(|c| k2_core::zen::agent_edit::get(c, id)).ok().flatten() {
+        Some(p) if p.made_by_project == ctx.workspace_id => p,
+        _ => return Check::Moved(format!("no Garden proposal {id} of {}'s (k2 zen proposals)", ctx.workspace_handle)),
+    };
+    match p.status.as_str() {
+        "pending" => Check::Needed,
+        "approved" => Check::AlreadyDone,
+        other => Check::Moved(format!("Garden proposal {id} was {other} meanwhile")),
+    }
+}
+
+fn apply_proposal(ctx: &Ctx, who: &Answerer, _token: Option<&str>) -> Applied {
+    let Some(id) = text_param(ctx, "proposal") else {
+        return Applied::Refused { code: "bad_params".into(), message: "the request names no Garden proposal".into() };
+    };
+    let r = crate::zen_agent_routes::approve_entry(&super::switches::as_caller(who), id);
+    super::switches::applied(&r, "It is written now.")
+}
+
 // ── the registry ────────────────────────────────────────────────────
 
 pub(crate) fn actions() -> Vec<Registered> {
@@ -446,6 +529,7 @@ pub(crate) fn actions() -> Vec<Registered> {
         Registered { spec: &APPS_APPROVE, check: check_app, apply: apply_app },
         Registered { spec: &MAIL_APPROVE, check: check_mail, apply: apply_mail },
         Registered { spec: &SOURCES_APPROVE, check: check_sources, apply: apply_sources },
+        Registered { spec: &GARDEN_PROPOSAL_APPROVE, check: check_proposal, apply: apply_proposal },
     ]
 }
 

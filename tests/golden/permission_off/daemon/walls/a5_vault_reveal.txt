@@ -1,0 +1,13 @@
+# a5_vault_reveal — stands for catalog row `(never: vault reveal)`
+## tcp (agent passport)
+> POST /cli/vault/reveal
+> body: 
+HTTP/1.1 403 Forbidden
+content-type: application/json
+{"error":{"code":"wrong_credential","hint":"app passes and API keys can't use the vault; agents and people can"}}
+## cell socket (same passport)
+> POST /cli/vault/reveal
+> body: 
+HTTP/1.1 403 Forbidden
+content-type: application/json
+{"error":"Invalid or missing auth token"}

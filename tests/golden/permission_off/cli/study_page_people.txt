@@ -1,0 +1,48 @@
+$ k2 study people
+exit: 0
+--- stdout
+k2 study people — four lists (never k2 msg usernames)
+
+There are four different people-shaped lists. Mixing them is the
+classic footgun. `k2 msg` talks to connected workspace AGENTS only.
+
+1. CONNECTIONS (AGENTS)
+   `k2 connections list`
+   Workspace agents this workspace can reach. Handles, not display
+   names. This is the yellow pages for `k2 msg` / `k2 read` / `k2 talk`.
+   Add/remove may be gated for agents (exit 3). List is always allowed.
+   Unconnected live/tray/read → exit 3 `not_connected`.
+
+2. CONNECT USERS
+   `k2 connections list --users` (agents) · `k2 users list` (owner/admin)
+   Local daemon accounts (owner / admin / member) who log into
+   this server. Humans. Not agents. Never `k2 msg` those names.
+   `k2 users` is people only (an agent passport exits 3); mutations
+   are owner-tier.
+
+3. APP GUESTS
+   `k2 app user list` (leftover: `k2 skin user list`)
+   App principals — guests for custom UIs that talk to agents
+   without a terminal. Capability passes use a k2skn_ prefix and never
+   open the grid. Not Connect users. Never `k2 msg` those names.
+   See `k2 study apps` (leftover: `k2 study skins`).
+
+4. --users HUMANS
+   `k2 connections list --users`
+   Humans on this host and their roles (also `k2 agent context add
+   users:roster`). Roster for awareness. Never `k2 msg` those names.
+
+RULE
+  If it is a username, Connect user, app guest, or `--users` row:
+  never `k2 msg` it. Msg handles come from connections (agents).
+  Optional context packs: `users:roster`, `apps:roster` (leftover
+  `skin:roster`), `connections:roster` — still do not msg humans.
+
+PROJECT NAMES
+  A Project is a group of workspaces, not a person and not a
+  workspace handle. `[project:<name>]` → `k2 project msg`. Msg'ing
+  the project name looks up a workspace and fails.
+
+K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+--- stderr
+--- requests

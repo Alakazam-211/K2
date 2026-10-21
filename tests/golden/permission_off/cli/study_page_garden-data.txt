@@ -1,0 +1,76 @@
+$ k2 study garden-data
+exit: 0
+--- stdout
+k2 study garden-data — a widget's data on this computer, and your part in it
+
+WHAT
+  Each custom Garden widget has its own keyspace, data:<widget>, in a file
+  the daemon owns on THIS computer. The widget reads and writes it with
+  k2.store (and keeps private saves with k2.save). You reach the same data
+  with `k2 store … --widget <name>`, inside the grants the person sets. It
+  never leaves this computer and no Connect login can reach it.
+
+KEYS AND REVS
+  A key is 1–256 chars of letters, digits and . _ ~ : @ + / - (no leading
+  /, no .. or empty segment). One key per object: obj/<id>, or under a
+  project: project/<pid>/board/<bid>/obj/<id>. A value is JSON, ≤ 60 KiB.
+  Every write moves the space's rev. --if-rev <n> writes only if the key is
+  still at rev n (0 = only if missing); a miss is `conflict`, exit 5: read
+  it again and retry. `k2 store changes --since <rev> --wait 30` waits for
+  the next change; --follow keeps printing (on `resync`, list again).
+
+GRANTS (you need one; the person gives it)
+  k2 store grants --widget <w>     what you can read and write, and why.
+  An agent grant is a wall: only that agent gets it. A grant for a K2
+  project is a convenience, NOT a wall: any agent can join a project, so
+  never rely on one to keep data private. Never add yourself to a project
+  to get data; ask the person (k2 feedback or the Thread).
+  A grant admin (named by the person) may grant others inside its own
+  prefix, up to its own level, never itself (self_grant), and revoke only
+  the grants it made (not_own). Grants are re-read on every call.
+
+WIDGETS YOU MAKE
+  After editing a widget, run `k2 zen validate --widget <w> --sign` (or
+  k2 zen widget sign <w>): when clean it signs that version as you, and the
+  widget then reads and writes data with YOUR grants. A plain validate is a
+  check only and never signs (0.46.1). An unsigned version gets no data (author_unknown) until
+  someone signs it or the person clicks It's mine. Never edit a widget the
+  person made unless asked; an edit is a new version signed by its editor.
+
+BIG WRITES
+  k2 store batch --widget <w> < ops.json   ≤ 64 ops in one call, or up to
+  1,000 ops / 1 MiB as one transaction: all or nothing, one rev, one push.
+  Write through the widget's own script when it has one (Board: bin/board
+  checks the shape; a raw put skips it). Widgets must tolerate bad values.
+
+HISTORY AND EXPORT
+  k2 store export --widget <w> > data.jsonl   header line, then one row per
+  key (only keys you can read). --at YYYY-MM-DD reads that day's snapshot
+  (7 daily + 4 weekly kept), still only keys you can read TODAY. Import,
+  restore, delete and move are the person's (k2 zen data …, exit 3 for you).
+
+LOCK AND SOURCES
+  Lock freezes how a Garden works, not what's in it: a locked Garden's data
+  still changes. A widget that asks for sources:read may also write its
+  data when it asks for store:write (0.46.1); agents granted that data can
+  then read what it saves, so don't save values from sources that hide them.
+
+YOUR OWN WIDGET (0.46.1)
+  With the person's "Manage Gardens and data sources" switch, the agent that
+  signed a widget's newest version reads and writes its data with no grant
+  (seed what you built). One Access Audit line per widget. Without the
+  switch, ask for a grant as before.
+
+READING ANOTHER WIDGET (0.46.1)
+  A widget lists the widgets it reads in manifest.json: "reads": ["lists"]
+  (needs store:read, both placed on one Garden). It reads with
+  k2.store.get(key, {from: "lists"}), list({prefix, from}),
+  subscribe({prefix, from}, cb). Read-only; else not_bound.
+
+LIMITS
+  20 MiB / 100,000 keys per widget; 60 writes/s (burst 120) per agent per
+  space (429 rate_limited, retryAfterSecs). Exits: 3 not_granted,
+  person_only, self_grant, level_too_high, not_own, author_unknown;
+  4 not found (no_snapshot too); 5 conflict.
+--- stderr
+--- requests

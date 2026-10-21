@@ -1,0 +1,6 @@
+$ k2 study projects --json
+exit: 0
+--- stdout
+{"id":"projects","body":"k2 study projects \u2014 K2 projects and who may change them\n\nWHAT A PROJECT IS\n  A named group of agent workspaces with one shared chat and one Point\n  of Contact (PoC). Posts from anyone else land in the PoC's session.\n  `k2 project --help` has every command.\n\nOPEN BY DEFAULT, WITH A PER-AGENT SWITCH\n  Every workspace has \"Manage K2 projects\" (Settings \u2192 Workspaces \u2192\n  <ws> \u2192 Agent). It starts ON: your agent may create, rename and delete\n  projects and add or remove members, its own or others'.\n  Off: create, rename, delete, add, remove, poc and settings fail with\n  agent_permission_off (exit 1). list, show, read and msg still work.\n  Ask your human with `k2 thread` if you need it on; don't work around it.\n\nWHO MAY FLIP IT\n  Only the owner or an admin (`k2 project access on|off --workspace\n  <ws>` outside K2, or the Agent tab). An agent never can, its own or\n  another's. Inside a K2 terminal `k2 project` sends your session\n  passport, never the owner token, so the switch always applies.\n\nTHE LOG\n  Every project created or deleted and every member added or removed\n  is logged with who did it (owner, a person's login, or agent:<ws>),\n  what, and when; refused changes are logged too."}
+--- stderr
+--- requests

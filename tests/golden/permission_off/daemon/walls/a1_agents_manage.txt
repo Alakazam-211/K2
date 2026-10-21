@@ -1,0 +1,13 @@
+# a1_agents_manage — stands for catalog row `agents.manage`
+## tcp (agent passport)
+> POST /cli/sidecar/new
+> body: {}
+HTTP/1.1 403 Forbidden
+content-type: application/json
+{"error":{"code":"gated","hint":"Ask your human to turn on 'Allow hiring and managing agents' in Settings → Workspaces / Agents → pog-billing → Agent (or run k2 sidecar access on --workspace pog-billing as the owner)."}}
+## cell socket (same passport)
+> POST /cli/sidecar/new
+> body: {}
+HTTP/1.1 403 Forbidden
+content-type: application/json
+{"error":{"code":"gated","hint":"Ask your human to turn on 'Allow hiring and managing agents' in Settings → Workspaces / Agents → pog-billing → Agent (or run k2 sidecar access on --workspace pog-billing as the owner)."}}

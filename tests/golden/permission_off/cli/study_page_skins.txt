@@ -1,0 +1,449 @@
+$ k2 study skins
+exit: 0
+--- stdout
+k2 study skins is now k2 study apps — this page still works.
+
+k2 study apps — Apps
+
+FIND THE ROOM, THEN THE FUNCTIONS
+  Guests think “this user, this room, these functions in that room.”
+  Files on Documents does not grant files on Sales. Tickets on Documents
+  does not grant tickets on Sales. Wiki on Documents does not grant wiki
+  on Sales. Store on Documents does not grant store on Sales. One login.
+  Unassigned guests stay Thread-only. Want files, tickets, wiki, or store
+  (store:read / store:write) on one room → `k2 app role room`. Platform
+  tokens (`k2 app token create --name`; leftover `k2 skin-token`) stay flat.
+
+LANES (read this first)
+  Hosting the UI  = k2 publish. Always. Not k2 app (leftover: not k2 skin).
+  k2 app          = guests + roles + passwords + platform k2skn_ tokens +
+                    per-room functions. In preview it also hosts server
+                    Apps (Seeds, deploys, rollback): k2 study app-deploys.
+                    Leftover: k2 skin / k2 skin-token.
+  If this page on your box still talks about two veins, Caddy,
+  or k2 app front-door as how you serve a UI, that copy is stale.
+  The recipe below is still the product.
+
+An app is a custom UI that talks to agents WITHOUT a terminal.
+Not Connect users, not /v1 API keys, not a grid login, not a
+special hostname.
+
+HOW TO MAKE ONE (copy this)
+  1. Official site (bundled login + Thread):
+       k2 publish run <label> --skin --port N
+     Custom static files + the same BFF:
+       k2 publish run <label> --skin <dir> --port N
+     → https://<label>.<your-sub>.k2.dev  (Pro parent)
+     Local only: add --no-tunnel.
+     A --cmd server that builds before it listens: add
+     --probe-timeout 10m (default 15s, at most 15m). It shows
+     "starting (waiting for port N, …left)" and the URL goes live
+     when the port answers; k2 publish status <label> exits 2 meanwhile.
+  2. Owner adds guests and passwords (Settings → Cores →
+     Apps, or `k2 app user add` / `password` / `email`; leftover
+     `k2 skin user …`).
+     Email is optional. Guests log in; they never copy a key.
+     Platform tokens (BYO servers) are separate: `k2 app token
+     create --name vercel --agent sales` (leftover `k2 skin-token`).
+     Agents: exit 3. Do not sudo k2 — that is not an owner passport.
+     Do not mint a key for this user.
+  3. Browser logs in on THIS origin:
+       POST /login   {"username":"…","password":"…"}
+     200 body (no token):
+       {"ok":true,"username":"…","rooms":[…],"roomHandles":[…],
+        "caps":[…],"role":"dentist"|null,
+        "roomAccess":[{"handle":"docs","caps":["thread:read","thread:post"]}]}
+     Set-Cookie: __Host-k2_skin_ui=…; HttpOnly; SameSite=Lax; Path=/; Secure
+     (plain `k2_skin_ui` only on a loopback / http dev origin).
+     The gateway holds k2skn_ in helper memory. Guests re-login
+     after a helper/daemon restart.
+  4. Daemon login (if you are not using the gateway):
+       POST /cli/skin/login   {"username":"…","password":"…"[,"app":"<service id>"]}
+     200 body (verbatim):
+       {"ok":true,"token":"k2skn_…","username":"…","principalId":"<uuid>",
+        "rooms":["<id>",…],"roomHandles":["sales",…],
+        "caps":[…],"role":"dentist"|null,
+        "roomAccess":[{"handle":"sales","caps":[…]}],"app":"host"|"<service id>"}
+     `token` is a Bearer session. Cookie `k2_skin_session` may
+     also be set (leftover Caddy door). Prefer keeping the
+     token on the SERVER so the browser never holds the pass.
+     No "app" = the box login (host), exactly as before 0.45.5.
+     "username" may also be the guest's email (any case); an unknown
+     email is the same 401 as a bad password. A BFF never reads skin.db.
+     Locked (3 bad tries → 15 min): 423 {"error":"locked","retryAfterSecs":N}
+     plus Retry-After: N. The lock counts per presented name, known or
+     not, so "locked" says nothing about which usernames exist. The
+     --skin helper passes the same 423 to the browser. Owner clears it:
+     k2 app user unlock <username|email>.
+
+PER-APP LOGINS (0.45.5)
+  Every login is for ONE App: the box login (`host`) or one published
+  App (its service id). It needs that person's ENABLED app grant for that
+  App, and the pass reaches only that App's rooms: the role on that grant,
+  or its rooms with Thread-only caps. Two Apps can give one person two
+  different roles. Wrong App, no grant, a disabled grant, an unknown or
+  removed App: the same 401 as a bad password (no App enumeration).
+  --skin Apps: the helper always logs in for its own App (`--app`); the
+    browser body can't choose another one.
+  --cmd Apps (BFF): K2 sets K2_APP_ID (this service's id), K2_HOST and
+    K2_PORT (the daemon's loopback address). Send {"app": $K2_APP_ID} on
+    POST /cli/skin/login to make logins per App. Before you switch, give
+    people the App: `k2 app grant copy-host <workspace>/<name>`.
+    K2_APP_ORIGIN / K2_APP_ORIGINS are its public https origin(s) (a
+    custom domain bound with --role app:<name>, then the nested label):
+    check Origin against them on POSTs and WebSocket upgrades. Unset =
+    no public URL (k2 study app-deploys, PUBLIC ORIGINS).
+  New Apps start with NOBODY. Owner adds people:
+    k2 app grant copy-host <app>               everyone with the box login
+    k2 app user add <u> --app <app> [--role R]  a guest of this App only
+                                               (no box login)
+    k2 app user rooms <u> --app <app> --agent sales   that App's rooms
+    k2 app grant add … --kind app --target <app> --role R | --room sales
+    k2 app role create R --app <app>           a role only that App can use
+  <app> = a service id, or <workspace>/<publish name>. `host` = box login.
+  Isolation for a person only holds when they have no box login (User
+  Access → host switch off). Box login off still ends ALL their sessions.
+  Removing an App (`k2 publish rm`) ends its passes; its grants stay.
+
+GUESTS' ROOMS FROM THE APP (RS-A15, 0.46.1; no owner token)
+  An App resets its OWN guests' rooms (say at login) with its own pass:
+    owner, once:  k2 app grant <app> --kind guests-rooms [--room acme]...
+    the App:      GET  /cli/skin/guests/rooms?username=dana
+                  POST /cli/skin/guests/rooms {"username":"dana","rooms":["acme"]}
+                  Authorization: Bearer <its App pass: K2_PASS_FILE in the
+                  wall, or its remote pass (k2 app token rotate) elsewhere>
+                  SDK: await k2.asApp().guests.setRooms({username, rooms})
+    → 200 {"ok":true,"app":"<service id>","username":"dana","rooms":[ids],
+           "roomHandles":["acme"],"role":null,"enabled":true,"changed":true}
+  Rules: only this App's guests (anyone else, Connect users included, is
+  404 not_found); only the --room rooms plus the App's own (403
+  outside_app_rooms); never above a role (403 above_role; a role guest
+  keeps its role's rooms, 409 has_role); the same rooms = changed:false;
+  60 calls a minute per App (429 rate_limited, retryAfterMs); no grant =
+  403 grant_required; a guest's pass, a platform pass or the owner token =
+  403 app_pass_required. Every change is audited (k2 app history <app>).
+  Agents, end to end within the grant: k2 app guest rooms <app> <u> [set a,b].
+  Gardens: k2.guests.rooms / k2.guests.setRooms({app, username, rooms}) for
+  any local App (cap guests:rooms); every write asks you on K2's own sheet.
+  This replaces POST /cli/skin/users/rooms with the owner token.
+
+BYO BFF (not --skin)
+  Same permission system as official --skin. Same Apps roster,
+  same POST /cli/skin/login, same session k2skn_ (session=1), same
+  has_cap_in_room, same HTTP and WS doors (Thread, overlay, files,
+  tickets, wiki, store). Attach Authorization: Bearer <session> on
+  HTTP and on WS /cli/overlay/events and /cli/fs/events.
+  --skin is only the cookie (k2_skin_ui) + allowlist proxy. BYO does
+  that job itself. Keep the pass on the SERVER. Never
+  ?token= in the browser. Never a platform --name token for "this
+  dentist" (no principal; 403 store; K2 cannot tell users apart).
+  --cmd and --skin are mutually exclusive on one published name.
+  Guests never hold a Postgres DSN (dump-table HTTP is their path;
+  the daemon stamps GUC). Next-class pool: on checkout
+  `SELECT k2.clear_principal()` and assert `k2.principal_hygiene()`;
+  per request SET LOCAL via `k2.set_principal($principalId)` (uuid
+  from login JSON). Username in the GUC errors, it does not degrade.
+  Hygiene true means the GUC is empty now — not anti-spoof (Keep 128:
+  the BFF LOGIN can still SET another uuid). Do not CREATE ROLE skin_*.
+
+PASSWORD RESET
+  Three exact POST paths (never a /cli/skin/password glob):
+    POST /cli/skin/password/forgot  {"username":"…"}
+      username field matches username OR email.
+      Mint = platform --name or owner. Guest session / agent hook /
+      Connect member → 403. 200 {ok:true, token, expiresAt, email}
+      once when the guest has a password AND an email; unknown /
+      invalid username / invalid email string / no password / no
+      email → 200 {ok:true} no extra keys. 60s per presented string
+      (even when no user). Delivery is the operator BYO BFF. BFF
+      uses forgot JSON email. K2 never emails guests. Never k2 mail.
+      BFF must not return forgot JSON token to the browser.
+      Official --skin: this path 404s.
+    POST /cli/skin/password/reset   {"token":"…","password":"…"}
+      PUBLIC consume. Body only — never token= on the consume POST.
+      Mail link may be /reset?token= (page query). Does not mint a
+      session. Password min length 8. Official consume POST on this
+      origin. GET /reset serves the bundled page (never 404).
+    POST /cli/skin/password/change  {"oldPassword":"…","password":"…"}
+      session k2skn_ only (session=1). No username field. Platform
+      403. Success revokes every session=1; caller logs in again.
+  Never put an owner or platform token in the browser.
+  OIDC issuer still this password file. RP/Google reset at the IdP.
+
+TWO CREDENTIALS (same prefix k2skn_)
+  Login session  = password → create_session_token on that guest.
+                   Official --skin: browser JSON has no token; gateway holds it.
+                   BYO BFF: step 4 JSON includes token; hold it on the server.
+  Platform token = `k2 app token create --name vercel --agent sales`
+                   (leftover: `k2 skin-token create --name`).
+                   User-agnostic site key. Not a guest. Secret shown once.
+  Do not mint a copyable key per person.
+
+ROLES (named bundles for guests — not Connect, not a platform token)
+  k2 app role create dentist
+  k2 app role room dentist sales --caps thread:read,thread:post
+  k2 app role room dentist docs --caps thread:read,thread:post,files:read,tickets:read,tickets:post,wiki:read,store:read,store:write
+  k2 app user role bob dentist
+  Session inherits the role at login (and live sessions rewrite on
+  change). Platform token keeps its own caps+rooms — it is not a role.
+  Empty rooms on a role = Thread dark, not omnipotent.
+  files:*, tickets:*, wiki:read, store:read, and store:write on a role are has_cap_in_room (per room, not union).
+  Never grid. Never a DSN.
+
+FOLDERS PER ROOM LINE (path scope, 0.46.1)
+  k2 app role paths adam-jobs docs --read jobs/J1/,jobs/J3/ --write jobs/J1/photos/ --upload-dir jobs/J1/photos
+  k2 app role paths adam-jobs docs --clear      (back to the whole room)
+  - Per role, per room line; any room the role holds (not only a home room).
+  - Same walls for people and agent logins (k2 app user agent).
+  - Unlisted folder = the same 403 as a missing cap, before the disk is read
+    (no "does it exist" answer). Listing a parent shows only the way in.
+  - --write folders are readable; caps still decide (files:write to write).
+  - Uploads with no dir land in --upload-dir. fs/events carries only your folders.
+  - GET /cli/fs/stat?workspace=<room>&path=… (files.stat): kind, size,
+    modifiedAt, ext, mime under the same rules.
+  - Native agents reading another room by disk path are NOT walled (RS-A4);
+    give an agent its own marked App login for the walled route.
+
+Find the room, then the functions. Empty rooms = Thread dark. Never grid.
+
+CAPABILITY CHECK (full paths — do not shorten them)
+  GET /cli/thread?addr=<room>     200 if thread:read + that room
+  GET /cli/sessions/grid          403 {"error":"skin tokens cannot use the terminal"}
+  GET /cli/sessions/bytes         403 same teaching string
+  GET /cli/sessions/events        403 invalid or missing token
+  GET /cli/grid  and  GET /cli/pty  also 403, DIFFERENT body
+     ("Invalid or missing auth token") — not the teaching
+     string. A test against those short paths goes red with
+     a perfectly good pass.
+
+THREAD + OVERLAY (verbatim — copy this; silent empty history is
+usually a wrong key, not a 403)
+  GET /cli/thread?addr=<handle>
+    not ?agent=. Handle is the room (sales, docs).
+  200:
+    {"ok":true,"collection":"thread","addr":"…",
+     "conversation_id":"<id>",
+     "items":[{"doc":{"text":"…"}},…],"has_more":false}
+    Read item.doc.text (or item.doc.body). Not item.text.
+  Open the socket ONLY after that GET (need conversation_id):
+    WS /cli/overlay/events?conversation=<conversation_id>
+    not the thread path, not ?addr=, not a stream flag.
+  Frames: {"doc":{"text":"…"}}. Same nesting as history.
+  POST /cli/thread/post  {"addr":"<handle>","text":"…"}
+    not {agent,text}.
+  Reference client: k2 publish run ref --skin --port N --no-tunnel
+  then read /assets/app.js.
+
+FILES
+  Exact paths on the official origin (cookie k2_skin_ui; never ?token=):
+    GET|HEAD /cli/fs/read-dir?workspace=<handle>&path=.
+    GET|HEAD /cli/fs/read-file?workspace=<handle>&path=README.md
+    GET|HEAD /cli/fs/read-binary?workspace=<handle>&path=doc.pdf
+    GET|HEAD /cli/fs/read-range?workspace=<handle>&path=doc.pdf&offset=0&len=…
+    GET|HEAD /cli/fs/stat?workspace=<handle>&path=doc.pdf   ({name,path,kind,size,modifiedAt,ext,mime})
+    POST     /cli/fs/write-file  {"workspace":"<handle>","path":"notes.md","content":"…"}
+    POST     /cli/fs/upload-binary  {"workspace":"<handle>","dir":".","filename":"a.pdf","base64":"…"}
+    POST     /cli/fs/upload-chunk   large files, resumable (files:write):
+             {"workspace":"<handle>","dir":"plans","filename":"set.pdf","upload_id":"<yours>",
+              "offset":0,"base64":"<≤16 MiB>","is_last":false,"total_bytes":N}
+             → 200 {"received":N,"done":false} … last chunk → {"path":"plans/set.pdf","done":true}
+             Resume: same body with "status":true (no offset/base64) → {"received":N};
+             send the next chunk at that offset. Wrong offset → 409 {"expected":N};
+             one chunk at a time per upload (a racing retry → 409 upload_busy).
+             One chunk per request (body over one chunk → 413). Part is hidden
+             (.k2-upload-g-….part) and bound to you; a taken name lands as "name (1)".
+    POST     /cli/fs/create  {"workspace":"<handle>","path":"folder","is_directory":true}
+    POST     /cli/fs/copy  {"workspace":"<handle>","sources":["a.pdf"],"destination":"inbox/"}
+    POST     /cli/fs/move  {"workspace":"<handle>","sources":["a.pdf"],"destination":"inbox/"}
+    POST     /cli/workspace/ensure-pinned-chat  {"workspace":"<handle>"}  (find-only; 200 live / 404 none)
+    WS GET   /cli/fs/events?workspace=<handle>
+  One socket per workspace. Do not omit workspace= and fan in every agent.
+  Doors are has_cap_in_room: files on Documents does not grant files on Sales.
+  Jail is that room's workspace root. Relative path= only — never host-wide
+  path=/etc/passwd or path=../. info / delete / search-tree and
+  the rest of the fs family stay 404 not found. Never /cli/fs/*. Never owner BFF.
+  Never /cli/sessions/events for files. Token never in the browser.
+  ensure-pinned-chat is thread:read find-only (never spawn, never forceRespawn).
+
+THE AGENT'S .k2 FOLDER (0.45.6)
+  files:write stops at the room's .k2/ folder: that is the agent's own
+  config (its role, inbox, skills, settings). Every write door refuses a
+  target in .k2/ (any letter case, through a symlink too): write-file,
+  upload-binary, upload-chunk, create, copy or move into it, move or
+  rename out of it.
+    403 {"error":"agent_config_protected","message":"…"}
+  Reads are unchanged: files:read reads .k2/ like any other folder, and
+  copying a file OUT of .k2/ is a read.
+  Opt-in, per room, owner only: add files:agentconfig next to files:write
+    k2 app role room <role> <handle> --caps files:read,files:write,files:agentconfig
+  or tick "Also allow writing the agent's .k2 folder (not recommended)"
+  under files:write in Settings → User Access. It means nothing without
+  files:write (refused alone). .k2/heartbeats/ stays heartbeat-managed
+  even with it (heartbeats_area). An agent with "manage Apps" can never
+  add it, mint it on a platform token, widen a token that holds it, or
+  give a guest a role that holds it (403 owner_only).
+
+TICKETS
+  Exact paths on the official origin (cookie k2_skin_ui; never ?token=):
+    GET|HEAD /cli/feedback/list?project=<handle>
+    GET|HEAD /cli/feedback/show?id=<id>
+    GET|HEAD /cli/feedback/show?id=<id>&brief=1   adds brief {html,text,…}
+    POST     /cli/feedback/create   {"project":"<handle>","title":"…"}
+             optional "briefHtml":"…" (cleaned + capped; never required for guests)
+    POST     /cli/feedback/comment  {"id":"<id>","body":"…"}
+    POST     /cli/feedback/answer   {"id":"<id>","answer":"…"}
+    POST     /cli/feedback/resolve  {"id":"<id>"}
+    POST     /cli/feedback/assign   {"id":"<id>","usernames":["owner"]}
+    WS GET   /cli/activity/events?workspace=<handle>   (tickets:read: ticket_changed)
+  project= is handle or uuid only — never a folder basename or absolute path.
+  Doors are has_cap_in_room: tickets on Documents does not grant tickets on Sales.
+  waiting-count, list-all, and unknown /cli/feedback/foo stay 404.
+  Live frames, option pick vs free text, statuses: `k2 study app-tickets`.
+  Render `brief.html` in `sandbox=""` with a `default-src 'none'; img-src data:` CSP.
+  Never inject it into your page DOM. List its links outside the frame.
+  Never /cli/tickets. Never /cli/sessions/events. Never grid.
+
+AGENT WORKING (activity:read)
+  Exact paths on the official origin (cookie k2_skin_ui; never ?token=):
+    GET      /cli/activity/snapshot?workspace=<handle>
+    WS GET   /cli/activity/events?workspace=<handle>
+  Snapshot (the room now):
+    {"workspace":"<handle>","status":"working","since":1781812201000,
+     "serverNow":1781812273000,
+     "sessions":[{"agentName":"tab-…","paneGroupId":"…",
+                  "status":"working","since":1781812201000,
+                  "counts":{"subagents":2,"tools":14,"commands":5}}]}
+  Frame (one session changed):
+    {"kind":"session_activity_changed","workspace":"<handle>",
+     "agentName":"tab-…","paneGroupId":"…"|null,"status":"working",
+     "since":1781812201000|null,
+     "counts":{"subagents":2,"tools":14,"commands":5},
+     "serverNow":1781812273000}
+  status   working     the agent is on a turn, or watching background tasks
+           permission  the agent waits for a person to approve a step
+           idle        nothing running
+           unknown     no update from the agent for 30 minutes; it may be
+                       stuck or finished silently. Not an error.
+  since    ms epoch when the current turn started, while the agent works a
+           turn; null otherwise (permission, idle, unknown, and background
+           tasks only). Elapsed = serverNow - since; correct your clock by
+           serverNow, never trust the device clock alone.
+  counts   numbers only (K2 0.45.2+; absent on older servers):
+           subagents  helper agents running now
+           tools      tool calls the agent started this turn
+           commands   the shell commands among those tools
+           tools and commands go back to 0 when a new turn starts and keep
+           the finished turn's numbers while idle. Show them while working.
+  Room status is the busiest session: permission > working > unknown > idle.
+  Since K2 0.45: the daemon's own activity (agent hooks), not terminal
+  titles. permission and unknown are NEW words; older servers send only
+  working and idle, and never since or serverNow. Treat any other word
+  (a newer server) like unknown.
+  A frame goes out only when status, since or counts change. A change to
+  counts alone goes out at most once a second per session (the last value
+  always arrives); a status change goes out at once with the latest counts.
+  A session that goes away sends idle once.
+  No tool names, commands, files, thinking text, paths or ids, ever: a
+  pulse, a clock and three numbers.
+  WHAT THE APP MUST DO: open the socket, then GET the snapshot and replace
+  your state with it. Pull the snapshot again on every socket (re)open,
+  and when a {"kind":"resync"} frame arrives (the socket fell behind and
+  closes with 4008 right after). Frames sent while you were away are gone.
+  Errors: 400 missing workspace | 403 skin_room (room not on the pass) |
+  403 missing capability activity:read. Never the host-wide snapshot.
+  Never /cli/thread/activity (the desktop's Thread strip; 403 / 404 for
+  apps). Never /cli/chat/transcript.
+
+WIKI
+  Exact paths on the official origin (cookie k2_skin_ui; never ?token=):
+    GET|HEAD /cli/wiki/index?project=<handle>
+    GET|HEAD /cli/wiki/note?project=<handle>&id=Home.md
+  project= is handle or uuid only — never a folder basename or absolute path.
+  Doors are has_cap_in_room: wiki on Documents does not grant wiki on Sales.
+  Never scope=k2/host/fleet. Never fleet ids ({ws}::{note}). Never seed/serve/chat.
+  Never /cli/wiki/read. Never /cli/notes. Never glob. Never wiki WS.
+
+STORE
+  Exact paths on the official origin (cookie k2_skin_ui; never ?token=):
+    GET|HEAD /cli/store/list?workspace=<handle>
+    GET|HEAD /cli/store/get?workspace=<handle>&name=<coll>&id=<id>
+    GET|HEAD /cli/store/query?workspace=<handle>&name=<coll>
+    GET|HEAD /cli/db/tables?workspace=<handle>
+    GET|HEAD /cli/db/rows?workspace=<handle>&table=<name>
+    GET|HEAD /cli/db/rows?workspace=<handle>&table=<name>&id=<id>
+    POST     /cli/db/rows         {"workspace":"<handle>","table":"<name>","row":{…}}
+    POST     /cli/db/rows/update  {"workspace":"<handle>","table":"<name>","id":"<id>","row":{…}}
+    POST     /cli/db/rows/delete  {"workspace":"<handle>","table":"<name>","id":"<id>"}
+  workspace= is handle or uuid only — never a folder basename or absolute path.
+  Doors are has_cap_in_room: store on Documents does not grant store on Sales.
+  store:read = store GET + dump SELECT. store:write = dump insert/update/delete
+  only — not POST /cli/store/put.
+  Dump (rows) doors run like POST /cli/db/query: the session's principal is
+  locked into the connection, then SET ROLE to the rows login, so your RLS
+  policies apply. Policies call k2.skin_uid(). The actor is locked the
+  same way, from the pass only: k2.actor_kind() is 'guest' for your own
+  login session (k2.actor() = guest:<principal>), 'agent' for a login
+  the owner marked as a workspace's agent (k2 app user agent), NULL off
+  this lane — e.g. person-only confirm USING (k2.actor_kind() = 'guest'). See
+  `k2 study db` ACTOR for an append-only audit table. Store doors read K2's own
+  store (room store cap only). K2's own tables (_k2_*) are closed to guests.
+  Errors show only the Postgres message. Guests never hold a DSN.
+  GET /cli/db/dsn teaching 403.
+  Never /cli/db/list. Never /cli/db/dump. Never /cli/db/migrate. Never /cli/db/foo.
+  Never POST put/create/rm/drop. Never /cli/store/foo. Platform --name tokens
+  403 store. Never glob. Never store WS. Never dump WS.
+
+STATIC DIR (--skin <dir>)
+  GET / and /assets/* are PUBLIC. No cookie. Login guards
+  Thread and files. Do not copy wiki, contracts, or any private
+  files into that folder — the URL fetches them with no auth.
+  Custom dir may ship login.html. GET /login serves that
+  file when present (Cache-Control: no-store). Missing file
+  still bundled — never 404. POST /login is always the
+  gateway; custom HTML must POST to /login on this origin.
+
+NOT THIS
+  Do not require Caddy, `k2 app front-door`, or port 38472.
+  Nested labels `skin`, `meet`, `chat` and `mail` are reserved (box front
+  doors: Apps, K2 Meet, K2 chat, K2 webmail) — pick any other name.
+  Do not CNAME a customer domain here (no Connect cert).
+  Do not apt install caddy for an app. If a leftover install
+  already happened: stop AND disable the systemd unit
+  (it binds *:80 on all interfaces). Binary-on-PATH is enough
+  for leftover apply; new apps do not need it.
+  Do not k2 msg app usernames. See `k2 study people`.
+
+ROSTER
+  App guests are people-list 3. Never `k2 msg` those names.
+  Opt-in: `k2 agent context add apps:roster` (leftover: `skin:roster`).
+  See `k2 study people`.
+
+OWNER VS AGENT
+  List roster / list tokens: workspace agent always (no secrets).
+  Toggle off does not hide the roster.
+  Mutations (user add/password/remove/rooms, role create/update/remove/assign/unassign,
+  k2 app token create/rooms/revoke): if this workspace's Agent-tab toggle is on
+  (Settings → Workspaces → Agent → Allow this agent to manage Apps).
+  Leftover front-door / hydra: still owner, even when the toggle is on.
+  Do not sudo. Exit 3 `owner_only` if the toggle is off — ask `k2 feedback ask`,
+  do not retry.
+
+GUEST CARDS
+  Guests tap a choice or fill a secret via
+    POST /cli/thread/answer
+  Agents create those cards from the PTY:
+    k2 thread ask / k2 thread secret
+  Ask/secret create stay off the official origin (404).
+
+WALLED APPS AND SERVICES ON THIS BOX
+  A walled App (k2 app deploy --engine guarded) reaches K2 through its
+  gateway link and the internet through its own proxy, never this box's
+  loopback. For a service on this box (Sew's client API, its voice
+  signalling) declare it: "boxServices": [{"name": "sew-api"}] in the
+  manifest, or k2 app box-service request <app-id> <name> [<port>].
+  The owner approves it in person; then the App dials 127.0.0.1:<port>
+  in its wall (env K2_BOX_<NAME>). Details: k2 study app-deploys.
+
+K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+--- stderr
+--- requests

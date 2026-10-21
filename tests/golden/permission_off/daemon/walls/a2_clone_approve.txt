@@ -1,0 +1,13 @@
+# a2_clone_approve — stands for catalog row `clone.approve proposal=`
+## tcp (agent passport)
+> POST /cli/clone-proposal/approve
+> body: 
+HTTP/1.1 403 Forbidden
+content-type: application/json
+{"error":{"code":"person_only","hint":"only a person (the owner or an admin) can approve a clone proposal, from a terminal outside K2 or the K2 app"}}
+## cell socket (same passport)
+> POST /cli/clone-proposal/approve
+> body: 
+HTTP/1.1 403 Forbidden
+content-type: application/json
+{"error":"Invalid or missing auth token"}

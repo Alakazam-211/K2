@@ -1,0 +1,46 @@
+HTTP/1.1 200 OK
+content-type: application/json
+keys: airgap, api, connectLogin, detail, features, installKind, instanceId, listen, ops, phase, protocol, protocolMin, publicHost, scopedHooks, serverId, version, view, webClient
+features:
+  spawn-attach-only
+  tickets-list-all
+  tickets-badge-me
+  zen-v1
+  zen-gardens-v1
+  zen-chrome-v1
+  zen-widgets-v1
+  zen-lib-v1
+  zen-sync-v1
+  zen-garden-lock-v1
+  thread-latest
+  thread-widget-origin
+  home-avatars-v1
+  daemon-activity
+  thread-address-stable
+  sources-v1
+  garden-data-v1
+  grokbots-v1
+  app-api-v1
+  guests-rooms-v1
+  room-members-v1
+  app-self-v1
+  files-path-scope-v1
+  thread-attachments-v1
+  thread-images-v1
+  thread-delta-v1
+  project-chat-paging-v1
+  app-project-chat-v1
+  app-mobile-access-v1
+  app-wallet-v1
+  thread-push-v1
+  push-previews-v1
+  push-e2e-v1
+  thread-read-v1
+  homes-sync-v1
+  inbox-catchup-v1
+  catchup-unchanged-v1
+  app-thread-parity-v1
+  app-read-state-v1
+  garden-person-rows-v1
+  thread-stream-v1
+  boot-status-views-v1

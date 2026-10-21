@@ -1,0 +1,13 @@
+# dropped_label_transfer — stands for catalog row `(dropped: label.transfer)`
+## tcp (agent passport)
+> POST /cli/publish/subdomain/claim?label=pogshop&transfer=1
+> body: 
+HTTP/1.1 403 Forbidden
+content-type: application/json
+{"code":"transfer_owner_only","error":"transfer_owner_only: only the server owner or an admin can transfer 'pogshop'.","hint":"Pick another name, or ask the server owner to transfer this one.","label":"pogshop"}
+## cell socket (same passport)
+> POST /cli/publish/subdomain/claim?label=pogshop&transfer=1
+> body: 
+HTTP/1.1 403 Forbidden
+content-type: application/json
+{"code":"transfer_owner_only","error":"transfer_owner_only: only the server owner or an admin can transfer 'pogshop'.","hint":"Pick another name, or ask the server owner to transfer this one.","label":"pogshop"}

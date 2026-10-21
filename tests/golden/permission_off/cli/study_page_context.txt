@@ -1,0 +1,46 @@
+$ k2 study context
+exit: 0
+--- stdout
+k2 study context — always-on context
+
+ONE GENERATED ENTRYPOINT
+  `.k2/AGENTS.md` is composed (role + project + optional layers + a
+  Tooling pointer). Do not edit it. Edit `.k2/agent/ROLE.md`,
+  `.k2/PROJECT.md`, or layers; then `k2 agent context regen` (or let
+  the daemon watch).
+
+KEEP IT LEAN
+  Always-on text is what every harness reads every turn. Short
+  standing orders. Depth belongs in loadable skills
+  (`.k2/skills/<name>/SKILL.md`), including `k2-cli`.
+
+LAYERS
+  `k2 agent context list|add|on|off|move|regen`
+  `k2 agent context catalog` — local ids (wiki, connections:roster,
+  users:roster, apps:roster, leftover skin:roster, manager:pack, …).
+  Hire can seed: `k2 agent hire <dir> --context connections:roster`
+
+  Live-generated rosters (connections / users / apps) are awareness.
+  They do not make those names `k2 msg` targets. See `k2 study people`.
+
+WHAT STUDY IS NOT
+  `k2 study` is not a dump of the wiki vault, PRDs, or ARCHITECTURE.md.
+  Wiki is the workspace brain (`k2 wiki`); PRDs are work artifacts.
+
+HARNESS NAMES
+  New agents get cwd AGENTS.md (generate default on). Leftover names
+  (CLAUDE.md, GEMINI.md, …) only when fan-out is on. A user-authored
+  cwd AGENTS.md is not overwritten.
+
+THREAD RULE (ALWAYS-ON)
+  `[thread:<addr>]` → `k2 thread <addr>`, not the TUI. Tooling in
+  AGENTS.md repeats this so new agents see it without loading k2-cli.
+
+STUDY VS CONTEXT
+  `k2 study` is product teaching baked into the CLI. It is not a
+  context layer and does not compose into AGENTS.md. Point at study
+  from Tooling; keep ROLE.md / PROJECT.md for this workspace's job.
+
+K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+--- stderr
+--- requests

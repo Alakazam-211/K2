@@ -1,0 +1,54 @@
+$ k2 study errors
+exit: 0
+--- stdout
+k2 study errors — exit codes and teaching errors
+
+EXITS
+  0  ok. Includes "queued for approval" on governed mail send.
+  1  error (daemon down, parse, unexpected).
+  2  bad usage — wrong flags, unknown topic, some timeouts
+     (`k2 mail wait` timeout is 2; the item may still be queued).
+  3  teaching refusal. STOP LOOPING.
+  4  not found (workspace, feedback id, …). Ambiguous prefix is 4 too.
+
+EXIT 3 — STOP LOOPING
+  A valid identity was not enough. Retrying will not mint owner
+  rights. File `k2 feedback ask` or talk with `k2 thread`.
+
+  Codes you will see on stderr (often JSON {"error":{"code","hint"}}):
+
+  owner_only     owner/admin verb (db enable, skin mint, users add,
+                 leftover M6: uninstall, domain remove, oauth,
+                 mail-manage toggle). Ask your human.
+                 mail_manage agents may call status, doctor,
+                 approvals, grant, config (workspace), import.
+  gated          a workspace/server toggle is off (connections create,
+                 DNS manage, db create passport, mail send=off, …).
+  forbidden      policy said no (including some peer/federation cases).
+  not_connected  live msg / tray / read needs a local connection first
+                 (`k2 connections add`). Not "try a different username".
+
+USAGE (2)
+  Unknown flags fail loud. `k2 study nosuch` is exit 2 and lists
+  valid topic ids. Do not treat 2 as "daemon missing".
+
+STUCK BOOTSTRAP
+  `bootstrap: data store already initialized` means Stalwart's store
+  exists and bootstrap cannot re-run. Do not add a reset verb.
+  `k2 hostmail disable` then `k2 hostmail enable --hostname <name>`.
+  A healthy enable stays a no-op.
+
+NOT CONNECTED TO THE DAEMON
+  Live verbs without PORT/TOKEN print a connection error and exit 1.
+  That is not exit 3. `k2 study` and `k2 --schema` skip that gate.
+  `k2 help` does not.
+
+JSON ERRORS
+  Many verbs print `{"error":{"code","hint"}}` on stderr even when
+  stdout is human. Scripts should key on `code`, not the prose.
+  `usage` is usually exit 2. Teaching codes above are exit 3.
+  Stop looping on 3. Fix the flag on 2. Check the daemon on 1.
+
+K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+--- stderr
+--- requests

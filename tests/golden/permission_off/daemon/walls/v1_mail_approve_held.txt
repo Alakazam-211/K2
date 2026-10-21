@@ -1,0 +1,25 @@
+# v1_mail_approve_held — stands for catalog row `mail.approve message=`
+## tcp (agent passport)
+> POST /cli/mail/send
+> body: {"project":"pog-billing","to":"human@example.com","subject":"Digest","body":"All green.","from":"bot@pog.example"}
+HTTP/1.1 200 OK
+content-type: application/json
+{
+  "hint": "queued for approval (<OUT_ID>) — your human decides in Settings → Email → Approvals; track with 'k2 mail outbox <OUT_ID>'",
+  "id": "<OUT_ID>",
+  "ok": true,
+  "queued": true,
+  "status": "pending_approval"
+}
+## cell socket (same passport)
+> POST /cli/mail/send
+> body: {"project":"pog-billing","to":"human@example.com","subject":"Digest","body":"All green.","from":"bot@pog.example"}
+HTTP/1.1 200 OK
+content-type: application/json
+{
+  "hint": "queued for approval (<OUT_ID>) — your human decides in Settings → Email → Approvals; track with 'k2 mail outbox <OUT_ID>'",
+  "id": "<OUT_ID>",
+  "ok": true,
+  "queued": true,
+  "status": "pending_approval"
+}

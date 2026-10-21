@@ -1,0 +1,13 @@
+# v1_compute_admin_approve — stands for catalog row `compute.admin-approve`
+## tcp (agent passport)
+> POST /cli/compute/admin/approve
+> body: {}
+HTTP/1.1 403 Forbidden
+content-type: application/json
+{"error":{"code":"owner_only","hint":"only the server's owner approves node admin requests, in person: Settings → Compute → Approvals, or k2 compute node admin approve <id> from a terminal outside K2. An agent can never approve."}}
+## cell socket (same passport)
+> POST /cli/compute/admin/approve
+> body: {}
+HTTP/1.1 403 Forbidden
+content-type: application/json
+{"error":"Invalid or missing auth token"}

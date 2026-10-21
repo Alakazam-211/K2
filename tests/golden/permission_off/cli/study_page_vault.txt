@@ -1,0 +1,97 @@
+$ k2 study vault
+exit: 0
+--- stdout
+k2 study vault — using secrets without seeing them
+
+THE RULE
+  Never paste a key into a file, a chat, a ticket or git. If you need one,
+  ask a person: k2 thread secret <addr> --name STRIPE_KEY --for api.stripe.com
+  The value goes straight into the vault; you get a reference back.
+
+HOW YOU GET A SECRET (delivery)
+  fetch   K2 makes the HTTPS call and adds the key. You never see it.
+          k2 vault fetch --secret STRIPE_KEY https://api.stripe.com/v1/charges
+          Only to the secret's sites. Where the key goes in the request
+          (header and format) was fixed by whoever created the secret —
+          you just name it. Echoes of the key come back as [k2v:NAME].
+  file    $K2_SECRETS_DIR/<NAME>, memory-backed, removed at session end.
+          You CAN read it — so can anything you run. Opt-in.
+  env     $NAME in new sessions. You can read it. Needs a respawn.
+  api     k2 vault get NAME prints it into your transcript. Rare.
+  Default for keys is fetch. "Agent can see this" in k2 vault list means
+  file/env/api.
+
+REFERENCES, NOT COPIES
+  k2v://ws/<workspace>/<NAME>   k2v://server/<NAME>
+  Safe anywhere a value would go: .env.k2, preset env, publish bindings,
+  tickets, wiki. `k2 db dsn --ref` prints the DB reference form.
+
+WHO SETS WHAT
+  The creator fixes the sites and where the key goes (k2 vault presets:
+  Stripe, OpenAI, Anthropic, xAI, Gemini, GitHub, Slack, Supabase fill this
+  in). Exact hosts only; wildcards are for people, and never over shared
+  suffixes (*.supabase.co, *.vercel.app, *.k2.dev are many owners).
+  You may narrow, lower or disable a secret a person gave you, and rotate
+  it with a new value from the provider (the owner is told, with undo).
+  You may not widen its sites, raise its delivery, share it, or read it
+  (vault_owner_confirm_required → ask the owner in Settings → Vault).
+  Secrets your workspace created are yours to widen.
+  "Allow managing server-wide secrets" (vault_manage) lets an IT agent
+  share server secrets with OTHER workspaces — never its own.
+
+PEOPLE ONLY
+  The recovery key, the vault password, reveal and key rotation are for
+  your owner, from their own terminal or Settings. If doctor/status says
+  "recovery: not confirmed", don't run it — tell your owner.
+  Backups (k2 vault backup) and restoring one (k2 vault restore) are
+  theirs too.
+
+MOVING TO ANOTHER BOX
+  With "Allow managing server-wide secrets" you may move secrets in a
+  migration: on the new box `k2 vault recipient`, on the old box
+  `k2 vault carry export --recipient … --target … --workspace <ws>
+  --out carry.age`, then on the new box `k2 vault carry import carry.age
+  --workspace <id>` with the workspace id on the new box (it lists first;
+  add --apply). Secrets go to a workspace by id, never by name. The file
+  opens only in that vault. The
+  recovery key is never used for this. Every export is logged with who
+  ran it, the secret names and the target key, and your owner sees it
+  (k2 vault audit, Settings → Access).
+
+GIVING A SECRET TO ANOTHER AGENT
+  Never paste it into k2 msg (K2 now redacts known values there anyway).
+  Send it by name: k2 vault send STRIPE_KEY --to ops --note "refund job"
+  (or --to ops::luzz.k2.dev on another server; or k2 msg ops "…" --secret
+  STRIPE_KEY). You never handle the value; it moves vault to vault, sealed
+  to the other server's vault across servers.
+  It arrives pending: a person there accepts it (k2 vault incoming), unless
+  that agent accepts from you (k2 vault accept-from, set by a person). A
+  same-named secret is never overwritten; re-sending yours makes a new
+  version. A secret a person gave you needs a person to send it to
+  another server. Server-wide secrets aren't sent (the owner shares them
+  with k2 vault grant). The copy you get is fetch/file only, never api,
+  and you can't widen it: use it with k2 vault fetch --secret NAME.
+  Exit 3 = a person must act (pending, held, not connected): don't retry.
+  Unlike k2 msg (exit 2 on a declined federated message), a handoff that
+  waits or is declined is exit 3. Exit 2 = the request or the other server
+  can't (peer_too_old: it needs K2 0.46.1 with federation on). Exit 4 = no
+  such secret or agent. Every send, receive, accept, decline, expiry and
+  refusal is logged (Settings → Logs → Access Audit), names only.
+
+PUBLISHED SERVICES
+  New services start clean (base env + granted secrets). Ones from before
+  0.45.4 show [legacy env (ends 0.46.0)] in k2 publish ps: they inherit the
+  daemon's whole environment until K2 0.46.0. Switch now with
+  `k2 publish env <name> clean`; grant what it needs with
+  `k2 publish secret add <name> NAME` (or k2v:// refs in its .env.k2).
+
+HONEST LIMITS
+  Fetch can't stop a harmful call to the allowed site (use restricted
+  keys). On boxes where agents have admin rights, an agent that goes
+  looking for the vault's key can find it; the vault keeps secrets out of
+  chats, logs, git and copies, sends them only where they belong, and
+  logs every use.
+
+  k2 vault --help   k2 vault list   k2 vault doctor
+--- stderr
+--- requests

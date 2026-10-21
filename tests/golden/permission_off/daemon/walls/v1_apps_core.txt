@@ -1,0 +1,189 @@
+# v1_apps_core — stands for catalog row `apps.core core=`
+## tcp (agent passport)
+> POST /cli/app/deploy
+> body: {"app":"pogapp","folder":"<HOME>/ws-pog-apps/pogapp"}
+HTTP/1.1 202 Accepted
+content-type: application/json
+{
+  "app": "pogapp",
+  "diff": {
+    "caps": {
+      "add": [
+        "thread:read"
+      ],
+      "approvedAfter": [
+        "thread:read"
+      ]
+    },
+    "cores": {
+      "missing": [
+        "thread"
+      ],
+      "person": [],
+      "ticked": [],
+      "workspace": "pog-apps"
+    },
+    "first": true,
+    "lines": [
+      "+ cap thread:read"
+    ]
+  },
+  "expiresAt": "<expiresAt>",
+  "hint": "Tick Thread for pog-apps (k2 app access pog-apps --core thread=on, the owner, from a terminal outside K2) and deploy again, or held for the owner: they approve it in person (k2 app approve <W_ID> from a terminal outside K2, or Settings → App Approvals), or deny it. Check with k2 app approvals.",
+  "kind": "install",
+  "note": "nothing runs until the owner approves",
+  "ok": true,
+  "reasons": [
+    "an App's first install sets the caps it may use: the owner approves them",
+    "tick Thread for pog-apps to let its Apps use it without asking (the owner: Settings → Workspaces → pog-apps → Agent → Apps, or k2 app access pog-apps --core thread=on from a terminal outside K2)"
+  ],
+  "request": {
+    "appId": "pogapp",
+    "appLabel": "pogapp",
+    "body": {
+      "app": "pogapp",
+      "reason": null,
+      "seed": "47fbe0931ce36d44dba35c8f24e7d8ca5d1239ceff7dfc1bfdd2e470bf8a55d2"
+    },
+    "confirmVia": null,
+    "decidedAt": null,
+    "decidedBy": null,
+    "decisionReason": null,
+    "deploymentId": null,
+    "diff": {
+      "caps": {
+        "add": [
+          "thread:read"
+        ],
+        "approvedAfter": [
+          "thread:read"
+        ]
+      },
+      "cores": {
+        "missing": [
+          "thread"
+        ],
+        "person": [],
+        "ticked": [],
+        "workspace": "pog-apps"
+      },
+      "first": true,
+      "lines": [
+        "+ cap thread:read"
+      ]
+    },
+    "expiresAt": "<expiresAt>",
+    "id": "<W_ID>",
+    "kind": "install",
+    "reason": null,
+    "reasons": [
+      "an App's first install sets the caps it may use: the owner approves them",
+      "tick Thread for pog-apps to let its Apps use it without asking (the owner: Settings → Workspaces → pog-apps → Agent → Apps, or k2 app access pog-apps --core thread=on from a terminal outside K2)"
+    ],
+    "requestedAt": "<requestedAt>",
+    "requestedBy": "agent:pog-apps",
+    "requesterWorkspace": "<APPS_WS_ID>",
+    "result": null,
+    "serviceId": "<UUID>",
+    "status": "pending",
+    "summary": "first install of pogapp: approve caps thread:read",
+    "workspaceHandle": "pog-apps",
+    "workspaceId": "<APPS_WS_ID>"
+  },
+  "seed": "47fbe0931ce36d44dba35c8f24e7d8ca5d1239ceff7dfc1bfdd2e470bf8a55d2",
+  "status": "held"
+}
+## cell socket (same passport)
+> POST /cli/app/deploy
+> body: {"app":"pogapp","folder":"<HOME>/ws-pog-apps/pogapp"}
+HTTP/1.1 202 Accepted
+content-type: application/json
+{
+  "app": "pogapp",
+  "diff": {
+    "caps": {
+      "add": [
+        "thread:read"
+      ],
+      "approvedAfter": [
+        "thread:read"
+      ]
+    },
+    "cores": {
+      "missing": [
+        "thread"
+      ],
+      "person": [],
+      "ticked": [],
+      "workspace": "pog-apps"
+    },
+    "first": true,
+    "lines": [
+      "+ cap thread:read"
+    ]
+  },
+  "expiresAt": "<expiresAt>",
+  "hint": "Tick Thread for pog-apps (k2 app access pog-apps --core thread=on, the owner, from a terminal outside K2) and deploy again, or held for the owner: they approve it in person (k2 app approve <W_ID> from a terminal outside K2, or Settings → App Approvals), or deny it. Check with k2 app approvals.",
+  "kind": "install",
+  "note": "nothing runs until the owner approves",
+  "ok": true,
+  "reasons": [
+    "an App's first install sets the caps it may use: the owner approves them",
+    "tick Thread for pog-apps to let its Apps use it without asking (the owner: Settings → Workspaces → pog-apps → Agent → Apps, or k2 app access pog-apps --core thread=on from a terminal outside K2)"
+  ],
+  "request": {
+    "appId": "pogapp",
+    "appLabel": "pogapp",
+    "body": {
+      "app": "pogapp",
+      "reason": null,
+      "seed": "47fbe0931ce36d44dba35c8f24e7d8ca5d1239ceff7dfc1bfdd2e470bf8a55d2"
+    },
+    "confirmVia": null,
+    "decidedAt": null,
+    "decidedBy": null,
+    "decisionReason": null,
+    "deploymentId": null,
+    "diff": {
+      "caps": {
+        "add": [
+          "thread:read"
+        ],
+        "approvedAfter": [
+          "thread:read"
+        ]
+      },
+      "cores": {
+        "missing": [
+          "thread"
+        ],
+        "person": [],
+        "ticked": [],
+        "workspace": "pog-apps"
+      },
+      "first": true,
+      "lines": [
+        "+ cap thread:read"
+      ]
+    },
+    "expiresAt": "<expiresAt>",
+    "id": "<W_ID>",
+    "kind": "install",
+    "reason": null,
+    "reasons": [
+      "an App's first install sets the caps it may use: the owner approves them",
+      "tick Thread for pog-apps to let its Apps use it without asking (the owner: Settings → Workspaces → pog-apps → Agent → Apps, or k2 app access pog-apps --core thread=on from a terminal outside K2)"
+    ],
+    "requestedAt": "<requestedAt>",
+    "requestedBy": "agent:pog-apps",
+    "requesterWorkspace": "<APPS_WS_ID>",
+    "result": null,
+    "serviceId": "<UUID>",
+    "status": "pending",
+    "summary": "first install of pogapp: approve caps thread:read",
+    "workspaceHandle": "pog-apps",
+    "workspaceId": "<APPS_WS_ID>"
+  },
+  "seed": "47fbe0931ce36d44dba35c8f24e7d8ca5d1239ceff7dfc1bfdd2e470bf8a55d2",
+  "status": "held"
+}

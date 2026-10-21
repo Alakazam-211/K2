@@ -1,0 +1,22 @@
+$ k2 study permissions --json
+exit: 2
+--- stdout
+--- stderr
+Error: unknown study topic 'permissions'
+Usage: k2 study [list|<topic>|--json]
+
+Bounded teaching pages. Not a reprint of --help. Not a crawl of wiki or PRDs.
+
+  k2 study                 catalog
+  k2 study list            same
+  k2 study <topic>         one page
+  k2 study --json          catalog JSON
+  k2 study <topic> --json  page JSON {id,body}
+
+Topics:
+  what  source  map  identity  send  human  people  auth  errors
+  context  db  mail  connect-boundary  apps  app-deploys  app-move  app-api  app-heartbeats  app-tickets
+  app-identity  app-surfaces  skins  feedback-loop  ticket-brief  zen  sidecars  llm-tokens
+  llm-accounts  publish-framing  compute  vault  notifications  data-sources  projects  hooks
+  agent-hire  garden-data  changes  db-upgrade
+--- requests

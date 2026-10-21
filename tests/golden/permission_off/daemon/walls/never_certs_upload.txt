@@ -1,0 +1,13 @@
+# never_certs_upload — stands for catalog row `(never: certs upload)`
+## tcp (agent passport)
+> POST /cli/certs/upload
+> body: {}
+HTTP/1.1 403 Forbidden
+content-type: application/json
+{"error":{"code":"owner_only","hint":"requires owner/admin — agents cannot attach or remove an apex (k2 domain add/remove). Hostname add/remove is k2 domain name (dns_manage). Use k2 domain list and k2 dns on attached zones."},"ok":false}
+## cell socket (same passport)
+> POST /cli/certs/upload
+> body: {}
+HTTP/1.1 403 Forbidden
+content-type: application/json
+{"error":"Invalid or missing auth token"}

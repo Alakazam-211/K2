@@ -1,0 +1,13 @@
+# v1_mail_send_mode — stands for catalog row `mail.send-mode mode=`
+## tcp (agent passport)
+> POST /cli/mail/send
+> body: {"project":"pog-billing","to":"human@example.com","subject":"Digest","body":"All green.","from":"me@linked.example"}
+HTTP/1.1 403 Forbidden
+content-type: application/json
+{"error":{"code":"gated","hint":"outbound email is disabled for this workspace. Your human can turn it on with `k2 mail sending <workspace> on` (the owner runs it from a terminal outside a K2 agent session) or Settings → Workspaces / Agents → <workspace> → Email sending"},"ok":false}
+## cell socket (same passport)
+> POST /cli/mail/send
+> body: {"project":"pog-billing","to":"human@example.com","subject":"Digest","body":"All green.","from":"me@linked.example"}
+HTTP/1.1 403 Forbidden
+content-type: application/json
+{"error":{"code":"gated","hint":"outbound email is disabled for this workspace. Your human can turn it on with `k2 mail sending <workspace> on` (the owner runs it from a terminal outside a K2 agent session) or Settings → Workspaces / Agents → <workspace> → Email sending"},"ok":false}

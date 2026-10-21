@@ -1,0 +1,66 @@
+$ k2 study connect-boundary
+exit: 0
+--- stdout
+k2 study connect-boundary — K2 vs Connect
+
+TWO PRODUCTS
+  K2         app + daemon + CLI in this repo. Device-local agent
+             server. Fair Source. See `k2 study source`.
+  Connect    separate control plane: accounts, purchased hostnames,
+             tunnel pairing. Not "the daemon with extra flags".
+
+WHAT THE CLI TOUCHES
+  k2 connect login|status|logout
+             pair a purchased hostname to THIS device. Account
+             session is local; password is never stored.
+  k2 tunnel  the device tunnel once paired (start/stop/status).
+  k2 publish nested hostname for a port ALREADY listening, or a
+             daemon-owned process. Two lists: processes vs DNS labels.
+  k2 dns     Connect zones (toggle-gated). Not nested labels (publish),
+             not the device tunnel, not mail MX (hostmail).
+  k2 domain  Attach an apex to THIS server (owner). Not hostmail domain.
+  k2 cert    Certs for attached hostnames. Not hostmail cert.
+
+WHAT NOT TO CONFUSE
+  Connect users (`k2 users`) are humans on this daemon — study people.
+  Apps are guests+passes+websocket rooms. Host the UI with
+  k2 publish on any nested label except the reserved box doors
+  `skin`, `meet`, `chat` and `mail`. See `k2 study apps`.
+  Federation (`agent::host`) is peer messaging, not Connect login.
+
+WHAT THIS PAGE WILL NOT DO
+  No IPs, no tunnel client configs, no control-plane secrets, no
+  this-box hostnames, no runbooks. If you need a hostname, ask your
+  human or use the verbs above when you have a daemon.
+
+AIR-GAP
+  Hosted-network verbs refuse in air-gap even without a daemon.
+  `--help` still prints. Study itself is local copy.
+
+OWNERSHIP
+  Connect login/status/logout can run without the workspace daemon
+  for the account step; bind/start still need a live daemon.
+  Do not paste JWTs into study notes or chat.
+
+K2 BOX VS CONNECT ACCOUNT
+  Logging into Connect does not make Connect-user names `k2 msg`
+  targets. The daemon on this box is still K2. See `k2 study people`.
+
+PASSWORD SIGN-IN OVER THE TUNNEL
+  On the public tunnel (`<sub>.k2.dev`) the daemon serves no login
+  page and answers `POST /cli/auth/login` only when the request was
+  signed by a K2 edge (`<sub>.app.k2.dev` or the k2.dev dashboard).
+  Scanners get 404. Tokens, sessions and local/LAN login are unchanged.
+  Setting `connectLoginIngress` (Settings → K2 Connect → Policies;
+  `k2 tunnel status` shows it):
+    edge   default — only via the K2 edge
+    any    self-hosters NOT behind the K2 edge (your own relay/proxy):
+           restores plain password login over the tunnel; the daemon
+           lockout still applies
+    off    never over the tunnel
+  Every attempt is audited: `k2 users audit` (~/.k2/auth-audit.jsonl).
+  Sessions last 7 days; the desktop app re-signs in silently.
+
+K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+--- stderr
+--- requests

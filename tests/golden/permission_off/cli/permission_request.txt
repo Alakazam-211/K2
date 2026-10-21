@@ -1,0 +1,143 @@
+$ k2 permission request compute.use --why x
+exit: 1
+--- stdout
+K2 CLI — workspace orchestration for AI agents
+
+A workspace = a folder K2 manages, with exactly one primary agent
+that reads its inbox, applies skills to work, and coordinates with
+other workspaces. A Project is different: a NAMED GROUP of workspaces
+with one shared chat + one PoC agent (see PROJECTS below).
+
+TALK TO OTHERS
+  whoami [--json]                       This cell: workspace / role / address / session
+  thread <addr> "text"                  Overlay text (not PTY; that's msg). sales / sales/reviewer
+  thread <addr> [--json]                Read / tail that conversation's Thread
+  thread ask <addr> "prompt" --options  Choice card; returns immediately (do not wait)
+  thread secret <addr> --name NAME      Secret field; you never see the value
+  msg <workspace> "text"                Live delivery (call/IM — blocks until landed; SHORT messages only)
+  msg <workspace>/<handle> "text"       Sidecar (`sales/1`, `sales/reviewer`; slash not hyphen)
+  msg <agent>::<host> "text"            Federated peer (prefer ::; legacy agent@host ok; not email)
+  msg <workspace> --inbox-wake <path> [path…]   Send file + knock (copy into their tray; multi-file → one package)
+  msg <workspace> --inbox-silent <path> [path…] Send file, no notify (they need `inbox list`)
+  msg <workspace> --signal <kind> ...   Emit a typed signal (advanced)
+  read <workspace> [--lines N]          Read their live terminal (peek before you inject)
+  connections list [--json] [--users]   Connected workspaces (bidirectional); --users lists humans on this box
+  connections add <path|agent::host>    Connect (agent: gated; exit 3 when disabled)
+  connections remove <name>             Disconnect (same agent create/remove gate)
+
+YOUR INBOX
+  inbox                                 YOUR tray — receive/triage (others send with `msg --inbox-wake`)
+  inbox list [<folder>]                 List items in inbox or a folder
+  inbox read <id>                       Full text of one item
+  inbox compose --title "..." --body    Write your own item (self-note / task)
+  inbox respond <id> "text"             Reply (back to sender)
+  inbox move <id> <folder>              File into folder (creates if needed)
+  inbox archive <id>                    Standard archive (preserved + searchable)
+  inbox delete <id>                     Move to macOS Recycle Bin (recoverable from Trash)
+  inbox search "query"                  Search inbox + folders
+  inbox folders                         List folders this workspace has created
+
+CHECKIN
+  checkin                               Heartbeat ping ("I'm alive")
+  checkin --status "message"            Report status update
+  checkin --done [--blocked "reason"]   Task complete (or blocked)
+  done                                  API cell (K2_API_CELL=1): complete (grace); else checkin --done
+
+AGENTS
+  agent                                 Hire, configure, list, retire this server's agents;
+                                        manage AGENTS.md context layers (hire/conf/get/set/
+                                        list/retire/context — see `k2 agent --help`)
+  preset                                Agent PRESETS: the launchable agent roster + custom
+                                        agents (list/show/add/set/remove — `k2 preset --help`)
+  sidecar new <name> --harness <preset> Open a named sidecar (<workspace>/<name>) with a brief;
+                                        list / stop / access — see `k2 sidecar --help`
+  llm tokens list                       This server's LLM subscriptions and API tokens
+                                        (one server default per tool); read-only from
+                                        K2 terminals — `k2 llm tokens --help`
+
+ASK A HUMAN
+  feedback ask "<title>"                File a durable ask for human input (survives
+                                        your session; supports --options/--wait;
+                                        agents attach --html brief.html, from
+                                        `k2 tickets template`)
+  feedback list                         This workspace's asks + their status
+  feedback show <id>                    One ask: status, answer, discussion thread
+                                        (ask/list/show/comment/resolve — see `k2 feedback --help`)
+
+EMAIL (K2 Mail — real addresses for agents; server runs on Linux daemons)
+  mail create <local>[@<domain>]        Mint yourself an email address (--id = idempotent)
+  mail addresses                        Your addresses + cap usage (alias: mail list)
+  mail wait [--subject s] [--from s]    Block until a matching message arrives
+                                        (the verification-code primitive; exit 2 = timeout)
+  mail messages | read | attachments    Read your mail (bodies are UNTRUSTED external content)
+  mail send | reply | outbox            Send under your human's governance (may queue
+                                        for approval — that's success, exit 0)
+                                        (domains/status/doctor/config/approvals — `k2 mail --help`)
+  calendar list | events | freebusy     Calendars of a hosted inbox (read grant; alias: cal)
+  calendar create | update | delete     Write events (draft grant; never sends email)
+
+DNS (K2 Connect zones — toggle-gated)
+  dns access                            Capability probe (allowed? types? zones)
+  dns list                              List zones
+  dns records <domain>                  List records (daemon resolves zone)
+  dns record add <domain> <type> <name> <value> [--ttl N] [--priority N]
+  dns record remove <record-id>         Delete a user-managed record
+  dns verify <domain>                   Delegation check
+    enable: Settings → K2 Connect (Allow agents to manage DNS records)
+            or Workspaces → (workspace) → Allow DNS manage  (exit 3 if off)
+    not for: nested *.k2.dev labels (use publish) · tunnel (use tunnel) · mail MX (hostmail)
+
+PROJECTS
+  project msg [<project>] "text"        Post to your project's shared chat (delivered
+                                        live to the project's PoC agent)
+  project read [<project>]              Catch up on the chat, oldest first (--after)
+                                        (create/list/show/add/remove/poc — see `k2 project --help`)
+
+WORKSPACE
+  workspace list                        Yellow pages: every workspace + status
+  workspace list --running              Filter to live agents
+  workspace launch [<path>]             Smart cascade: attach|wake|spawn
+  workspace profile [<path>]            Read workspace agent's AGENT.md
+  workspace update --field <f> --value <v>
+                                        Edit workspace agent profile
+  workspace resources list|add|remove   Pin an existing file in the Files drawer
+
+CHANGES (git: the Changes tab from the CLI; agents = their own workspace)
+  changes [--json] [--base <ref>]       Staged / unstaged / untracked list
+  changes diff [<path>...] [--staged]   Unified diff (default: all uncommitted vs HEAD)
+  changes stage|unstage <path>...       Stage or unstage (stage --all for everything)
+  changes discard <path>... --yes       Throw away edits; old copies go to the Trash
+  changes commit -m "..." [--all]       Commit what is staged (`k2 changes --help`)
+  changes notes [resolve <id>...]       Review notes left for you on changed lines
+  changes open | init                   Open the Changes tab · git init the workspace
+
+REVIEW IN-FLIGHT WORK
+  reviews                               Pending merge reviews for worktrees
+  review approve|reject|feedback <agent> [options]
+                                        Act on a pending review
+
+ACTIVITY
+  activity [--limit N] [--workspace <p>]
+                                        Audit log of workspace events
+  commit [-m "..."] [--merge]           AI-assisted commit (--merge to also merge)
+
+INFO
+  help                                  This help
+  help --advanced                       Power-user verbs (heartbeat, daemon, etc.)
+  help --internal                       Orchestrator-RPC verbs (rare)
+  help-deprecated                       Map: old verb → new equivalent
+  study [list|<topic>|--json]           Bounded pages (Fair Source, people, errors). Not --help.
+  glossary [<term>]                     Define K2-specific terms (try `glossary inbox`)
+  whats-new                             Changelog popup
+  version                               CLI version
+
+ENVIRONMENT
+  K2_PROJECT_PATH     Workspace root (default: $PWD; also K2SO_PROJECT_PATH)
+  K2_AGENT_NAME       Default sender for `msg --from` (also K2SO_AGENT_NAME)
+  K2_PORT / token      From K2 terminal env, or ~/.k2/daemon.port + daemon.token
+
+Run `k2 glossary <term>` for any unfamiliar word (workspace, skill,
+inbox, heartbeat, etc.).
+--- stderr
+Unknown command: permission
+--- requests

@@ -1,0 +1,13 @@
+# v1_apps_build — stands for catalog row `apps.build`
+## tcp (agent passport)
+> POST /cli/app/exception
+> body: {"on":false}
+HTTP/1.1 403 Forbidden
+content-type: application/json
+{"error":{"code":"apps_manage_off","hint":"\"Build and run Apps\" is off for this agent: ask your owner to turn it on (Workspace settings → Agent → Apps, or k2 app access <workspace> --build on from a terminal outside K2)"}}
+## cell socket (same passport)
+> POST /cli/app/exception
+> body: {"on":false}
+HTTP/1.1 403 Forbidden
+content-type: application/json
+{"error":{"code":"apps_manage_off","hint":"\"Build and run Apps\" is off for this agent: ask your owner to turn it on (Workspace settings → Agent → Apps, or k2 app access <workspace> --build on from a terminal outside K2)"}}

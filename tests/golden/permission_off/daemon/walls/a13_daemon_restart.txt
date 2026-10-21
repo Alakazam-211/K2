@@ -1,0 +1,13 @@
+# a13_daemon_restart — stands for catalog row `(never: daemon restart)`
+## tcp (agent passport)
+> POST /cli/daemon/restart
+> body: 
+HTTP/1.1 403 Forbidden
+content-type: application/json
+{"error":"invalid or missing token"}
+## cell socket (same passport)
+> POST /cli/daemon/restart
+> body: 
+HTTP/1.1 403 Forbidden
+content-type: application/json
+{"error":"Invalid or missing auth token"}

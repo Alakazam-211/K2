@@ -1,0 +1,13 @@
+# never_mail_server_uninstall — stands for catalog row `(never: mail uninstall)`
+## tcp (agent passport)
+> POST /cli/mail/server/uninstall
+> body: {}
+HTTP/1.1 403 Forbidden
+content-type: application/json
+{"error":{"code":"owner_only","hint":"requires owner/admin — ask your human (k2 hostmail and mail access/link/domain/server/config/approvals/doctor are owner surfaces)"},"ok":false}
+## cell socket (same passport)
+> POST /cli/mail/server/uninstall
+> body: {}
+HTTP/1.1 403 Forbidden
+content-type: application/json
+{"error":"Invalid or missing auth token"}

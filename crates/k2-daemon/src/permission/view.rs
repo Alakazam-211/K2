@@ -14,13 +14,14 @@
 //! - App guests never reach it: every guest path drops action cards first
 //!   (and if one ever did, it gets an empty text doc, never the card);
 //! - the doc's `id` and `seq` never change;
-//! - the current Settings state is shown: `check` runs at render (cached
-//!   [`limits::CHECK_CACHE_SECS`] per request id), so a satisfied pending
-//!   card is drawn `already_done` with one option, `Close` (§4.2, Rosson Q1).
+//! - the current Settings state is shown: `check` runs at render (A1's
+//!   `limits::cached_check`, 2 s per request), so a satisfied pending card
+//!   is drawn `already_done` with one option, `Close` (§4.2, Rosson Q1).
 //!
 //! **The stored view.** A1 writes the card's view (`choice.action.view`,
-//! a `PermissionView` / `BatchView`) when it posts or rewrites the card; its
-//! `viewer` is whatever A1 put there and is always replaced here. Everything
+//! a `PermissionView` / `BatchView`, `present::view_for` with a neutral
+//! viewer) when it posts or rewrites the card; its `viewer` is always
+//! replaced here. Everything
 //! per viewer — `viewer`, `mode`, `noteBox`, the options, `undo` (approvers
 //! only) and the asker's result line — is computed here, never stored.
 //!
@@ -33,16 +34,15 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
 
 use k2_core::overlay::doc::{CardAction, ChoiceOption, OverlayDoc, OverlayItem};
 use k2_core::permission::card::{BatchState, BatchView, ItemView, Mode, PermissionView, ViewProof, Viewer, ViewerView};
-use k2_core::permission::request::{limits, RequestState};
+use k2_core::permission::request::{limits as lim, RequestState};
 use k2_core::permission::{label, CARDS_CONTRACT, CARD_ACTION_BATCH, CARD_ACTION_PERMISSION};
 use serde_json::Value;
 
-use super::actions::{self, Check, Ctx};
+use super::actions::{Answerer, Check};
+use super::{limits, present, store};
 
 // ── who is looking ───────────────────────────────────────────────────
 
@@ -188,90 +188,35 @@ fn facts(viewer: &Viewer) -> Facts {
 }
 
 /// The viewer meets a card floor (`approvers.floor`: `owner` or `admin`;
-/// the GardenOwner floor reads `owner`). Re-checked at the tap (A1).
+/// the GardenOwner floor reads `owner`), by A1's own rule
+/// (`present::meets_floor`). Re-checked at the tap (A1).
 fn meets(floor: &str, f: &Facts) -> bool {
-    f.person && (f.role == "owner" || (floor == "admin" && f.role == "admin"))
+    if !f.person {
+        return false;
+    }
+    let who = if f.via == "owner-token" {
+        Answerer::OwnerToken
+    } else {
+        Answerer::Login { user: f.login.clone(), role: f.role.clone() }
+    };
+    present::meets_floor(present::floor_of(floor), &who)
 }
 
 // ── the current Settings state (§4.2, §6.2) ──────────────────────────
 
-fn check_cache() -> &'static Mutex<HashMap<String, (Instant, Check)>> {
-    static C: std::sync::OnceLock<Mutex<HashMap<String, (Instant, Check)>>> = std::sync::OnceLock::new();
-    C.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-const CACHE_TTL: Duration = Duration::from_secs(limits::CHECK_CACHE_SECS);
-/// Past this many entries, expired ones are dropped on the next insert.
-const CACHE_TRIM_AT: usize = 1024;
-
-/// The stored values a request's `check` runs on. A narrow read of the 0218
-/// row (A1's `store` owns the table; this reads three columns). `request_id`
-/// is the card's `view.requestId`: the row's `pr_…` id, or the held
-/// request's own id (`held_ref`, e.g. `ar_22`; the newest row for it).
-fn request_ctx(request_id: &str) -> Option<(String, Ctx)> {
-    let db = k2_core::db::try_shared()?;
-    let row = {
-        let conn = db.lock();
-        conn.query_row(
-            "SELECT workspace_id, action, params_json FROM permission_requests WHERE id = ?1 OR held_ref = ?1 \
-             ORDER BY (id = ?1) DESC, created_at DESC LIMIT 1",
-            rusqlite::params![request_id],
-            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)),
-        )
-    };
-    let (workspace_id, action, params_json) = match row {
-        Ok(r) => r,
-        Err(rusqlite::Error::QueryReturnedNoRows) => return None,
+/// `check` for the request a card shows (`view.requestId`: `pr_…` or a
+/// held id), through A1's 2 s render cache (`limits::cached_check`).
+/// `None`: no such request — the stored state stands.
+fn render_check(request_id: &str) -> Option<Check> {
+    let req = match store::get_by_display_id(request_id) {
+        Ok(Some(r)) => r,
+        Ok(None) => return None,
         Err(e) => {
             k2_core::log_debug!("[permission/view] request {request_id}: {e}");
             return None;
         }
     };
-    let params = match serde_json::from_str::<Value>(&params_json) {
-        Ok(Value::Object(m)) => m,
-        _ => serde_json::Map::new(),
-    };
-    let workspace_handle =
-        k2_core::workspace_session_handles::workspace_address_name_shared(&workspace_id).unwrap_or_else(|_| workspace_id.clone());
-    Some((action, Ctx { workspace_id, workspace_handle, params }))
-}
-
-/// Run `check` for one request now (no cache). `None`: no such request or
-/// no registered action (an E-lane row not built yet) — the stored state
-/// stands.
-fn run_check(request_id: &str) -> Option<Check> {
-    #[cfg(test)]
-    if let Some(c) = test_checks::get(request_id) {
-        return Some(c);
-    }
-    let (action, ctx) = request_ctx(request_id)?;
-    let reg = actions::find(&action)?;
-    Some((reg.check)(&ctx))
-}
-
-/// [`run_check`] behind the 2 s cache (§4.2: many viewers of one card on
-/// one socket burst share a check).
-fn cached_check(request_id: &str) -> Option<Check> {
-    let now = Instant::now();
-    {
-        let cache = check_cache().lock().unwrap_or_else(|p| p.into_inner());
-        if let Some((at, c)) = cache.get(request_id) {
-            if now.duration_since(*at) < CACHE_TTL {
-                return Some(c.clone());
-            }
-        }
-    }
-    let c = run_check(request_id)?;
-    remember(request_id, c.clone(), now);
-    Some(c)
-}
-
-fn remember(request_id: &str, c: Check, at: Instant) {
-    let mut cache = check_cache().lock().unwrap_or_else(|p| p.into_inner());
-    if cache.len() >= CACHE_TRIM_AT {
-        cache.retain(|_, (t, _)| at.duration_since(*t) < CACHE_TTL);
-    }
-    cache.insert(request_id.to_string(), (at, c));
+    Some(limits::cached_check(&req))
 }
 
 /// Where a request stands for drawing: the stored state, with the card's
@@ -298,7 +243,7 @@ fn current_state(stored: RequestState, request_id: &str, choice_status: &str, an
     if !stored.is_open() {
         return stored;
     }
-    match cached_check(request_id) {
+    match render_check(request_id) {
         Some(Check::AlreadyDone) => RequestState::AlreadyDone,
         Some(Check::Needed) => RequestState::Pending,
         // Values that moved are `stale` only at the click (A1); drawn as stored.
@@ -450,7 +395,7 @@ fn approver_options(state: RequestState, answer: Option<&str>) -> Vec<ChoiceOpti
 fn item_for(mut item: ItemView, state: RequestState, can: bool, f: &Facts) -> ItemView {
     item.state = state;
     item.note_box.allowed = f.person && !can && state == RequestState::Pending;
-    item.note_box.max = limits::NOTE_MAX_CHARS;
+    item.note_box.max = lim::NOTE_MAX_CHARS;
     item.note_box.mine = my_note(&item, f);
     if !can {
         item.undo = None;
@@ -625,109 +570,24 @@ fn project_batch(doc: &OverlayDoc, view: BatchView, viewer: &Viewer, cards: u8) 
 
 // ── the sweep's already_done republish (§6.2) ────────────────────────
 
-/// One open request the sweep re-checks.
-struct OpenRow {
-    id: String,
-    /// `view.requestId`: the held id when there is one, else `id`.
-    display_id: String,
-    state: RequestState,
-    conversation_id: String,
-    card_id: String,
-}
-
-fn open_rows(now: i64) -> Result<Vec<OpenRow>, String> {
-    let Some(db) = k2_core::db::try_shared() else { return Ok(Vec::new()) };
-    let conn = db.lock();
-    let mut st = conn
-        .prepare(
-            "SELECT id, state, conversation_id, card_id, held_ref FROM permission_requests \
-             WHERE state IN ('pending', 'already_done') AND answered_at IS NULL AND expires_at > ?1 \
-             AND conversation_id IS NOT NULL AND card_id IS NOT NULL",
-        )
-        .map_err(|e| format!("open requests: {e}"))?;
-    let rows = st
-        .query_map(rusqlite::params![now], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, String>(2)?,
-                r.get::<_, String>(3)?,
-                r.get::<_, Option<String>>(4)?,
-            ))
-        })
-        .map_err(|e| format!("open requests: {e}"))?;
-    let mut out = Vec::new();
-    for row in rows {
-        let (id, state, conversation_id, card_id, held_ref) = row.map_err(|e| format!("open requests: {e}"))?;
-        let Some(state) = RequestState::parse(&state) else { continue };
-        let display_id = held_ref.filter(|h| !h.trim().is_empty()).unwrap_or_else(|| id.clone());
-        out.push(OpenRow { id, display_id, state, conversation_id, card_id });
-    }
-    Ok(out)
-}
-
-/// `pending ⇄ already_done` as a compare-and-set: true when this call
-/// moved it (A1's click CAS may have taken it first).
-fn cas_state(id: &str, from: RequestState, to: RequestState) -> Result<bool, String> {
-    let db = k2_core::db::shared();
-    let conn = db.lock();
-    let n = conn
-        .execute(
-            "UPDATE permission_requests SET state = ?1 WHERE id = ?2 AND state = ?3 AND answered_at IS NULL",
-            rusqlite::params![to.as_str(), id, from.as_str()],
-        )
-        .map_err(|e| format!("request {id}: {e}"))?;
-    Ok(n == 1)
-}
-
-/// The stored view with `request_id`'s state set (the single view's
-/// `state`, or that item's in a batch, plus the batch state).
-fn view_with_state(mut view: Value, request_id: &str, state: RequestState) -> Option<Value> {
-    if view.get("kind").and_then(Value::as_str) == Some("batch") {
-        let items = view.get_mut("items")?.as_array_mut()?;
-        let it = items.iter_mut().find(|i| i.get("requestId").and_then(Value::as_str) == Some(request_id))?;
-        it["state"] = Value::String(state.as_str().to_string());
-        return Some(view);
-    }
-    if view.get("requestId").and_then(Value::as_str) != Some(request_id) {
-        return None;
-    }
-    view["state"] = Value::String(state.as_str().to_string());
-    Some(view)
-}
-
-/// Rewrite the pending card's stored state for one request and publish it
-/// (each subscriber gets it projected for them).
-fn republish(row: &OpenRow, state: RequestState) -> Result<(), String> {
-    let Some(doc) = k2_core::overlay::get_thread_doc(&row.conversation_id, &row.card_id)? else {
-        return Ok(());
-    };
-    let Some(view) = doc.choice.as_ref().and_then(|c| c.action.as_ref()).and_then(|a| a.view.clone()) else {
-        return Ok(());
-    };
-    let Some(view) = view_with_state(view, &row.display_id, state) else { return Ok(()) };
-    match crate::overlay_routes::update_action_view(&row.conversation_id, &row.card_id, view) {
-        Ok(()) => Ok(()),
-        // Answered, voided or expired meanwhile: nothing to redraw.
-        Err(e) if e == k2_core::overlay::CARD_NOT_PENDING => Ok(()),
-        Err(e) => Err(e),
-    }
-}
-
 /// One sweep (§6.2): re-check every open request; a pending one that is
 /// now satisfied moves to `already_done`, an `already_done` one that no
-/// longer is goes back to `pending`, and its card is republished. Only
-/// while the server switch is on. Returns how many moved.
+/// longer is goes back to `pending` (A1's guarded `store::set_open_state`:
+/// a request the click already took is never touched), and its card is
+/// rebuilt and republished (`present::refresh_card`; each subscriber gets
+/// it projected for them). Only while the server switch is on. Returns
+/// how many moved.
 pub(crate) fn sweep_already_done(now: i64) -> usize {
     if !k2_core::permission::gate::server_on() {
         return 0;
     }
-    sweep_open_requests(now)
+    sweep_open_requests(None, now)
 }
 
-/// [`sweep_already_done`] without the switch check.
-fn sweep_open_requests(now: i64) -> usize {
-    let rows = match open_rows(now) {
+/// [`sweep_already_done`] without the switch check, for every workspace or
+/// one.
+fn sweep_open_requests(workspace_id: Option<&str>, now: i64) -> usize {
+    let reqs = match store::open(workspace_id) {
         Ok(r) => r,
         Err(e) => {
             k2_core::log_debug!("[permission/view] already_done sweep: {e}");
@@ -735,49 +595,28 @@ fn sweep_open_requests(now: i64) -> usize {
         }
     };
     let mut moved = 0;
-    for row in rows {
-        let Some(c) = run_check(&row.display_id) else { continue };
-        remember(&row.display_id, c.clone(), Instant::now());
-        let to = match c {
+    for req in reqs.iter().filter(|r| r.expires_at > now) {
+        let (Some(conv), Some(card)) = (req.conversation_id.as_deref(), req.card_id.as_deref()) else { continue };
+        let Some(action) = present::find_action(&req.action) else { continue };
+        // Fresh, never the render cache: this is what the cache serves next.
+        let to = match (action.check)(&present::ctx_of(req)) {
             Check::AlreadyDone => RequestState::AlreadyDone,
             Check::Needed => RequestState::Pending,
             Check::Moved(_) => continue,
         };
-        if to == row.state {
+        if to == req.state {
             continue;
         }
-        match cas_state(&row.id, row.state, to) {
+        match store::set_open_state(req.id.as_str(), to) {
             Ok(true) => {
                 moved += 1;
-                if let Err(e) = republish(&row, to) {
-                    k2_core::log_debug!("[permission/view] republish {}: {e}", row.id);
-                }
+                present::refresh_card(conv, card, present::CardClose::Void);
             }
             Ok(false) => {}
-            Err(e) => k2_core::log_debug!("[permission/view] already_done sweep: {e}"),
+            Err(e) => k2_core::log_debug!("[permission/view] already_done sweep {}: {e}", req.id),
         }
     }
     moved
-}
-
-/// Test-only `check` results by request id (the E-lane actions aren't
-/// registered on this branch).
-#[cfg(test)]
-pub(crate) mod test_checks {
-    use super::Check;
-    use std::collections::HashMap;
-    use std::sync::Mutex;
-
-    static MAP: Mutex<Option<HashMap<String, Check>>> = Mutex::new(None);
-
-    pub(crate) fn set(request_id: &str, c: Check) {
-        MAP.lock().unwrap_or_else(|p| p.into_inner()).get_or_insert_with(HashMap::new).insert(request_id.to_string(), c);
-        super::check_cache().lock().unwrap_or_else(|p| p.into_inner()).remove(request_id);
-    }
-
-    pub(crate) fn get(request_id: &str) -> Option<Check> {
-        MAP.lock().unwrap_or_else(|p| p.into_inner()).as_ref().and_then(|m| m.get(request_id).cloned())
-    }
 }
 
 #[cfg(test)]

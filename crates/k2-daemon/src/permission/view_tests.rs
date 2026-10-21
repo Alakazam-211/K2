@@ -221,35 +221,6 @@ fn id_seq_and_guest_safety() {
 }
 
 #[test]
-fn a_satisfied_pending_card_draws_already_on_with_close() {
-    let id = format!("pr_{}", &uuid::Uuid::new_v4().simple().to_string()[..12]);
-    let mut v = approver_pending();
-    v["choice"]["action"]["params"]["request"] = json!(id);
-    v["choice"]["action"]["view"]["requestId"] = json!(id);
-    let stored = doc(v);
-    test_checks::set(&id, Check::AlreadyDone);
-    let a = wire(&project(&stored, &rosson(), 2));
-    assert_eq!(a["choice"]["action"]["view"]["state"], "already_done");
-    assert_eq!(a["choice"]["options"], json!([{"label":"Close"}]), "§17.11.9");
-    assert_eq!(a["choice"]["status"], "pending");
-    assert!(a["choice"]["action"].get("result").is_none(), "no result until Close: {a}");
-    let d = wire(&project(&stored, &dana(), 2));
-    assert_eq!((d["choice"]["action"]["view"]["state"].clone(), d["choice"]["options"].clone()), (json!("already_done"), json!([])));
-    assert_eq!(d["choice"]["action"]["view"]["noteBox"]["allowed"], false, "notes only while pending");
-    for viewer in [rosson(), dana(), billing_passport()] {
-        assert_eq!(wire(&project(&stored, &viewer, 0))["body"], "Already on: Allow compute nodes for billing.");
-    }
-    // Turned off again in Settings: back to the buttons.
-    test_checks::set(&id, Check::Needed);
-    let a = wire(&project(&stored, &rosson(), 2));
-    assert_eq!((a["choice"]["action"]["view"]["state"].clone(), a["choice"]["options"].clone()),
-        (json!("pending"), json!([{"label":"Allow"},{"label":"Deny"}])));
-    // Values that moved are drawn as stored (stale is decided at the click).
-    test_checks::set(&id, Check::Moved("gone".into()));
-    assert_eq!(wire(&project(&stored, &rosson(), 2))["choice"]["action"]["view"]["state"], "pending");
-}
-
-#[test]
 fn after_close_the_card_stays_already_done_and_closed_cards_never_show_buttons() {
     let mut v = approver_pending();
     v["choice"]["status"] = json!("answered");
@@ -265,18 +236,6 @@ fn after_close_the_card_stays_already_done_and_closed_cards_never_show_buttons()
     let x = wire(&project(&doc(e.clone()), &rosson(), 2));
     assert_eq!(x["choice"]["action"]["view"]["state"], "expired");
     assert_eq!(wire(&project(&doc(e), &dana(), 0))["body"], "Expired unanswered: Allow compute nodes for billing.");
-}
-
-#[test]
-fn a_cache_hit_lasts_two_seconds() {
-    let id = format!("pr_{}", &uuid::Uuid::new_v4().simple().to_string()[..12]);
-    // No test override and no row: nothing to check, the stored state stands.
-    assert_eq!(cached_check(&id), None);
-    let old = Instant::now() - CACHE_TTL - Duration::from_millis(5);
-    remember(&id, Check::AlreadyDone, old);
-    assert_eq!(cached_check(&id), None, "an expired entry is re-checked");
-    remember(&id, Check::AlreadyDone, Instant::now());
-    assert_eq!(cached_check(&id), Some(Check::AlreadyDone), "a fresh entry answers without a check");
 }
 
 fn batch_doc(confirm_item: bool) -> OverlayDoc {
@@ -350,125 +309,146 @@ fn cards_opt_in_parsing() {
     assert_eq!(cards_body(None), 0);
 }
 
-// ── the sweep ────────────────────────────────────────────────────────
+// ── on A1's real requests (the test kit's actions) ──────────────────
 
-fn seed_request(conn: &rusqlite::Connection, id: &str, ws: &str, conv: &str, card: &str, state: &str) {
-    conn.execute(
-        "INSERT INTO permission_requests (id, workspace_id, conversation_id, card_id, action, params_json, params_hash, \
-         text_hash, why, state, floor, created_at, expires_at) VALUES (?1, ?2, ?3, ?4, 'compute.use', '{}', 'h', 't', 'w', ?5, 'admin', 1, ?6)",
-        rusqlite::params![id, ws, conv, card, state, k2_core::overlay::now_secs() + 3600],
-    )
-    .expect("seed request");
+use super::super::routes::{self as proutes, handle_gated};
+use super::super::testkit;
+use crate::compute_routes::Who;
+use k2_core::db::schema::WorkspaceSession;
+
+struct Ws {
+    id: String,
+    handle: String,
+    conv: String,
 }
 
+fn seed() -> Ws {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let id = uuid::Uuid::new_v4().to_string();
+    let handle = format!("pv{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+    conn.execute(
+        "INSERT INTO projects (id, name, path, handle) VALUES (?1, ?2, ?3, ?2)",
+        rusqlite::params![id, handle, format!("/tmp/pc-a3-{handle}")],
+    )
+    .expect("seed project");
+    let conv = uuid::Uuid::new_v4().to_string();
+    WorkspaceSession::upsert(&conn, &format!("ws-{conv}"), &id, None, Some(&conv), "claude", "system", "running").expect("pin");
+    Ws { id, handle, conv }
+}
+
+/// The agent asks for `test.switch` (A1's request route, gate passed):
+/// the request id and its card id.
+fn ask(ws: &Ws) -> (String, String) {
+    let who = Who::Agent { project_id: ws.id.clone(), session_id: format!("sess-{}", &ws.id[..8]) };
+    let body = json!({ "action": "test.switch", "why": "Run the suite on the minis" });
+    let r = handle_gated(proutes::REQUEST, &who, true, body.to_string().as_bytes(), &HashMap::new());
+    let v: Value = serde_json::from_str(&r.body).unwrap_or_else(|e| panic!("{e}: {}", r.body));
+    assert_eq!((r.status, v["status"].as_str()), ("200 OK", Some("pending")), "{v}");
+    let id = v["id"].as_str().expect("id").to_string();
+    let card = store::get_by_display_id(&id).expect("db").expect("row").card_id.expect("a card");
+    (id, card)
+}
+
+fn stored(ws: &Ws, card: &str) -> OverlayDoc {
+    k2_core::overlay::get_thread_doc(&ws.conv, card).expect("read").expect("the card")
+}
+
+/// Rosson Q1 at render: a pending card whose Settings switch is already on
+/// is drawn "Already on" with `Close` for approvers, nothing for others,
+/// and "Already on: …" on old clients and for the agent.
+#[test]
+fn a_satisfied_pending_card_draws_already_on_with_close() {
+    let ws = seed();
+    let (_, card) = ask(&ws);
+    testkit::set_on(&ws.id, "test.switch", true);
+    let d = stored(&ws, &card);
+    let a = wire(&project(&d, &rosson(), 2));
+    assert_eq!(a["choice"]["action"]["view"]["state"], "already_done", "{a}");
+    assert_eq!(a["choice"]["options"], json!([{"label":"Close"}]), "§17.11.9");
+    assert_eq!(a["choice"]["status"], "pending");
+    assert!(a["choice"]["action"].get("result").is_none(), "no result until Close: {a}");
+    let m = wire(&project(&d, &dana(), 2));
+    assert_eq!((m["choice"]["action"]["view"]["state"].clone(), m["choice"]["options"].clone()), (json!("already_done"), json!([])));
+    assert_eq!(m["choice"]["action"]["view"]["noteBox"]["allowed"], false, "notes only while pending");
+    let line = format!("Already on: Allow test things for {}.", ws.handle);
+    for viewer in [rosson(), dana(), Viewer::Passport { workspace_id: ws.id.clone() }] {
+        assert_eq!(wire(&project(&d, &viewer, 0))["body"], line.as_str());
+    }
+    // The stored doc is untouched (the projection never writes).
+    assert_eq!(stored(&ws, &card), d);
+}
+
+/// The real stored view (A1's `present::view_for`, neutral viewer) projects
+/// to the approve and wait views.
+#[test]
+fn a1s_stored_view_projects_per_viewer() {
+    let ws = seed();
+    let (id, card) = ask(&ws);
+    let d = stored(&ws, &card);
+    assert_eq!(d.choice.as_ref().unwrap().action.as_ref().unwrap().view.as_ref().unwrap()["viewer"]["login"], "", "stored neutral");
+    let a = wire(&project(&d, &Viewer::OwnerToken, 2));
+    assert_eq!(a["choice"]["action"]["view"]["viewer"],
+        json!({"login":"owner","role":"owner","via":"owner-token","mode":"approve","canAnswer":true,"isAsker":false}));
+    assert_eq!(a["choice"]["action"]["view"]["requestId"], id.as_str());
+    assert_eq!(a["choice"]["options"], json!([{"label":"Allow"},{"label":"Deny"}]));
+    let m = wire(&project(&d, &dana(), 2));
+    assert_eq!((m["choice"]["action"]["view"]["viewer"]["mode"].clone(), m["choice"]["options"].clone()), (json!("wait"), json!([])));
+    assert_eq!(m["choice"]["action"]["view"]["noteBox"]["allowed"], true);
+    let p = wire(&project(&d, &Viewer::Passport { workspace_id: ws.id.clone() }, 2));
+    assert_eq!(p["body"], format!("{} asked an admin to turn on Allow test things.", ws.handle));
+}
+
+/// §6.2: the minute sweep moves a pending request whose switch was turned
+/// on in Settings to `already_done` (and back), rebuilds and republishes
+/// its card; it never touches a request the click already took, nor one
+/// that was answered with `Close`.
 #[test]
 fn the_sweep_moves_pending_to_already_done_and_back_and_republishes() {
-    let g = k2_core::db::scoped_for_test();
-    let ws = uuid::Uuid::new_v4().to_string();
-    let conv = format!("pv-conv-{}", uuid::Uuid::new_v4());
-    let id = format!("pr_{}", &uuid::Uuid::new_v4().simple().to_string()[..12]);
-    let card = {
-        let h = g.handle();
-        let conn = h.lock();
-        conn.execute(
-            "INSERT INTO projects (id, name, path, handle) VALUES (?1, ?2, ?3, ?2)",
-            rusqlite::params![ws, format!("pv{}", &ws[..6]), format!("/tmp/pv-{ws}")],
-        )
-        .expect("project");
-        let mut v = approver_pending();
-        v["choice"]["action"]["params"]["request"] = json!(id);
-        v["choice"]["action"]["view"]["requestId"] = json!(id);
-        let action: k2_core::overlay::CardAction = serde_json::from_value(v["choice"]["action"].clone()).expect("action");
-        let (item, _) = k2_core::overlay::post_choice_with_action(
-            &conn, &conv, &ws, "billing", "billing", "billing asks: …", vec!["Allow".into(), "Deny".into()], false,
-            Some(k2_core::overlay::now_secs() + 3600), Some(action),
-        )
-        .expect("card");
-        seed_request(&conn, &id, &ws, &conv, &item.id, "pending");
-        item.id
-    };
-    let state_of = |id: &str| -> String {
-        let h = g.handle();
-        let conn = h.lock();
-        conn.query_row("SELECT state FROM permission_requests WHERE id = ?1", [id], |r| r.get(0)).expect("state")
-    };
-    let stored_state = || -> Value {
-        let d = k2_core::overlay::get_thread_doc(&conv, &card).expect("read").expect("card");
-        d.choice.unwrap().action.unwrap().view.unwrap()["state"].clone()
-    };
+    let ws = seed();
+    let (id, card) = ask(&ws);
+    let state = || store::get_by_display_id(&id).expect("db").expect("row").state;
+    let view_state = || stored(&ws, &card).choice.unwrap().action.unwrap().view.unwrap()["state"].clone();
     let mut rx = crate::overlay_ws::subscribe();
     let now = k2_core::overlay::now_secs();
 
-    // Off by default: the public sweep does nothing.
-    assert!(!k2_core::permission::gate::server_on(), "the server switch defaults off in tests");
-    assert_eq!(sweep_already_done(now), 0);
+    assert!(!k2_core::permission::gate::server_on(), "the server switch is off in lib tests");
+    assert_eq!(sweep_already_done(now), 0, "a no-op while the switch is off");
 
-    test_checks::set(&id, Check::Needed);
-    assert_eq!(sweep_open_requests(now), 0, "still needed: nothing moves");
-    test_checks::set(&id, Check::AlreadyDone);
-    assert_eq!(sweep_open_requests(now), 1);
-    assert_eq!(state_of(&id), "already_done");
-    assert_eq!(stored_state(), "already_done");
+    assert_eq!(sweep_open_requests(Some(&ws.id), now), 0, "still needed: nothing moves");
+    testkit::set_on(&ws.id, "test.switch", true);
+    assert_eq!(sweep_open_requests(Some(&ws.id), now), 1);
+    assert_eq!((state(), view_state()), (RequestState::AlreadyDone, json!("already_done")));
     let frame = loop {
         let f = rx.try_recv().expect("the card was republished");
         if f.id == card {
             break f;
         }
     };
-    assert_eq!(frame.conversation_id.as_deref(), Some(conv.as_str()));
-    assert_eq!(frame.doc.unwrap().choice.unwrap().action.unwrap().view.unwrap()["state"], "already_done");
-    assert_eq!(sweep_open_requests(now), 0, "already done: nothing more");
+    assert_eq!(frame.conversation_id.as_deref(), Some(ws.conv.as_str()));
+    assert_eq!(frame.doc.unwrap().choice.unwrap().status, "pending");
+    assert_eq!(sweep_open_requests(Some(&ws.id), now), 0, "already done: nothing more");
 
-    test_checks::set(&id, Check::Needed);
-    assert_eq!(sweep_open_requests(now), 1, "turned off again in Settings");
-    assert_eq!((state_of(&id), stored_state()), ("pending".to_string(), json!("pending")));
+    testkit::set_on(&ws.id, "test.switch", false);
+    assert_eq!(sweep_open_requests(Some(&ws.id), now), 1, "turned off again in Settings");
+    assert_eq!((state(), view_state()), (RequestState::Pending, json!("pending")));
 
-    // A request A1 already took (applying) is never touched.
+    // The click took it (applying): never touched.
     {
-        let h = g.handle();
-        let conn = h.lock();
+        let db = k2_core::db::shared();
+        let conn = db.lock();
         conn.execute("UPDATE permission_requests SET state = 'applying' WHERE id = ?1", [&id]).expect("applying");
     }
-    test_checks::set(&id, Check::AlreadyDone);
-    assert_eq!(sweep_open_requests(now), 0);
-    assert_eq!(state_of(&id), "applying");
-
-    // Closed with `Close` (answered_at set, state stays already_done): the
-    // sweep never reopens it, even when Settings changes back.
+    testkit::set_on(&ws.id, "test.switch", true);
+    assert_eq!(sweep_open_requests(Some(&ws.id), now), 0);
+    assert_eq!(state(), RequestState::Applying);
+    // Answered with Close (answered_at set): never reopened.
     {
-        let h = g.handle();
-        let conn = h.lock();
-        conn.execute("UPDATE permission_requests SET state = 'already_done', answered_at = 5 WHERE id = ?1", [&id])
-            .expect("closed");
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute("UPDATE permission_requests SET state = 'already_done', answered_at = 5 WHERE id = ?1", [&id]).expect("closed");
     }
-    test_checks::set(&id, Check::Needed);
-    assert_eq!(sweep_open_requests(now), 0);
-    assert_eq!(state_of(&id), "already_done");
-}
-
-/// A held-request card shows the held id (`view.requestId = "ar_…"`); the
-/// row's own id is `pr_…` with the held id in `held_ref` (A1). The live
-/// check finds the row either way.
-#[test]
-fn the_live_check_finds_a_row_by_its_held_id() {
-    let g = k2_core::db::scoped_for_test();
-    let ws = uuid::Uuid::new_v4().to_string();
-    let pr = format!("pr_{}", &uuid::Uuid::new_v4().simple().to_string()[..12]);
-    let ar = format!("ar_{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
-    {
-        let h = g.handle();
-        let conn = h.lock();
-        seed_request(&conn, &pr, &ws, "c", "card", "pending");
-        conn.execute(
-            "UPDATE permission_requests SET held_ref = ?1, params_json = '{\"request\":\"x\"}' WHERE id = ?2",
-            [&ar, &pr],
-        )
-        .expect("held");
-    }
-    for id in [&pr, &ar] {
-        let (action, ctx) = request_ctx(id).unwrap_or_else(|| panic!("row for {id}"));
-        assert_eq!((action.as_str(), ctx.workspace_id.as_str()), ("compute.use", ws.as_str()));
-        assert_eq!(ctx.params.get("request"), Some(&json!("x")));
-    }
-    assert!(request_ctx("ar_nope").is_none());
+    testkit::set_on(&ws.id, "test.switch", false);
+    assert_eq!(sweep_open_requests(Some(&ws.id), now), 0);
+    assert_eq!(state(), RequestState::AlreadyDone);
 }

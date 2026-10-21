@@ -2,8 +2,8 @@ import { useState, type JSX, type MouseEvent } from 'react'
 import { useContextMenuStore, type ContextMenuItemDef } from '@/stores/context-menu'
 import type { SessionViewTab, SplitPaneView } from './sessionViewTab'
 import type { ServerScope } from '@/kessel/server-scope'
-import { unreadCountText, unreadSupported, useUnreadEntry, type UnreadEntry } from '@/stores/unread'
-import { UnreadBadge, muteMenuState, toggleMute } from '@/components/common/UnreadBadge'
+import { unreadSupported, useUnreadEntry } from '@/stores/unread'
+import { muteMenuState, toggleMute } from '@/components/common/UnreadBadge'
 
 const PANE_LABEL: Record<SplitPaneView, string> = {
   chat: 'Chat',
@@ -23,31 +23,23 @@ const VIEW_LABEL: Record<SessionViewTab, string> = {
 
 const MUTE_THREAD_ID = 'mute-thread'
 
-/** The Thread row's pill: its unread count, or how many cards wait on
- *  you (thread-read-v1). */
-function threadRowBadge(entry: UnreadEntry | null): string | undefined {
-  if (!entry) return undefined
-  const unread = unreadCountText(entry.unread)
-  const waiting = unreadCountText(entry.waiting)
-  if (waiting !== null) return unread !== null ? `${unread} · ${waiting} waiting` : `${waiting} waiting`
-  if (unread !== null) return entry.muted ? `${unread} muted` : unread
-  return undefined
-}
-
+/** No unread count, unread dot or waiting count on the button or its
+ *  rows: those live in the main nav (Rosson 2026-10-21). The menu keeps
+ *  only the Mute / Unmute Thread item. */
 export function viewMenuItems(
   chatEligible: boolean,
-  thread?: { entry: UnreadEntry | null; canMute: boolean },
+  thread?: { muted: boolean; canMute: boolean },
 ): ContextMenuItemDef[] {
   const items: ContextMenuItemDef[] = [
     { id: 'terminal', label: VIEW_LABEL.terminal },
     { id: 'chat', label: VIEW_LABEL.chat, badge: 'Beta', enabled: chatEligible },
-    { id: 'thread', label: VIEW_LABEL.thread, badge: threadRowBadge(thread?.entry ?? null) },
+    { id: 'thread', label: VIEW_LABEL.thread },
     { id: 'chatter', label: VIEW_LABEL.chatter },
     { id: 'split', label: VIEW_LABEL.split },
   ]
   if (thread?.canMute) {
     items.push({ id: 'separator-mute', label: '', type: 'separator' })
-    items.push({ id: MUTE_THREAD_ID, label: muteMenuState(thread.entry?.muted === true, 'Thread').label })
+    items.push({ id: MUTE_THREAD_ID, label: muteMenuState(thread.muted, 'Thread').label })
   }
   return items
 }
@@ -96,9 +88,8 @@ export function SessionViewMenu({
   onChange: (tab: SessionViewTab) => void
   onSplitLeft: (view: SplitPaneView) => void
   onSplitRight: (view: SplitPaneView) => void
-  /** This chat's Thread (thread-read-v1): its unread count rides the
-   *  button and the Thread row, and the menu can mute it. The amber
-   *  waiting-on-you marker is not drawn on the button. */
+  /** This chat's Thread (thread-read-v1): the menu can mute it. Its
+   *  unread count and waiting marker are not drawn here (main nav only). */
   threadConversationId?: string | null
   /** The room's server; the unread store reads only the window's. */
   threadScope?: ServerScope
@@ -139,7 +130,7 @@ export function SessionViewMenu({
         aria-expanded={openKind === 'view'}
         className={BUTTON_CLASS}
         onClick={(event) => {
-          void openAt(event, 'view', viewMenuItems(chatEligible, { entry: threadEntry, canMute })).then((picked) => {
+          void openAt(event, 'view', viewMenuItems(chatEligible, { muted: threadEntry?.muted === true, canMute })).then((picked) => {
             if (picked === MUTE_THREAD_ID && threadConversationId) {
               const { next } = muteMenuState(threadEntry?.muted === true, 'Thread')
               void toggleMute('thread', threadConversationId, next, 'Thread')
@@ -152,17 +143,6 @@ export function SessionViewMenu({
         }}
       >
         {VIEW_LABEL[value]}
-        {/* Unread count only. The amber "waiting on you" marker lives in
-            the main nav (the sidebar agent row), not here (Rosson
-            2026-10-21: too much on the view button). */}
-        {threadEntry ? (
-          <UnreadBadge
-            unread={threadEntry.unread}
-            waiting={0}
-            muted={threadEntry.muted}
-            label="Thread messages"
-          />
-        ) : null}
         <svg
           width="10"
           height="10"

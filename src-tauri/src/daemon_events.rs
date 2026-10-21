@@ -84,7 +84,11 @@ fn connect_once(app_handle: &AppHandle) -> ConnectOutcome {
         None => return ConnectOutcome::NoDaemon,
     };
 
-    let url = format!("ws://127.0.0.1:{port}/events?token={token}");
+    // 0.46.3: `client=desktop-app` tells the daemon this subscription is the
+    // desktop app, so a bundled-app update trigger only goes out while the
+    // app is really open (a phone on /events no longer counts). Older
+    // daemons ignore the extra parameter.
+    let url = format!("ws://127.0.0.1:{port}/events?token={token}&client=desktop-app");
     let request = match url.clone().into_client_request() {
         Ok(r) => r,
         Err(e) => {

@@ -1517,7 +1517,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let dir_s = dir.to_string_lossy().to_string();
         seed_ws(&ws, &dir_s, "Grace");
-        let port = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
+        // Not bind(:0)-then-drop: another test can be handed that port first.
+        let port = k2_core::test_env::loopback_test_port();
         let name = format!("graceroute{pid}");
         let params = |extra: &[(&str, &str)]| {
             let mut p = HashMap::new();

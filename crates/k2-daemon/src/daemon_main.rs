@@ -362,6 +362,10 @@ async fn async_main() {
     // job id, so a remote client's `update/status` poll gets the verdict
     // instead of a 404. Every OS (bundled-app, macOS helper, Linux swap).
     crate::update_routes::reconcile_persisted_job(env!("CARGO_PKG_VERSION"));
+    // 0.46.3 — the cheap "is there an update?" signal (`latestKnown`): a
+    // plain thread that waits a few minutes, then refreshes at most once a
+    // day. Never on the boot path; skips air-gap.
+    crate::update_routes::spawn_latest_known_refresher();
     // Sync the persisted federation master switch into the process so a daemon
     // that boots with it already ON has the /cli/federation/* surface live
     // immediately (the K2 Connect toggle persists it; env-var force-on still

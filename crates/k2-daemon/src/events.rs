@@ -220,6 +220,71 @@ impl AgentHookEventSink for DaemonBroadcastSink {
     }
 }
 
+// ── Desktop app presence (0.46.3) ────────────────────────────────────
+//
+// A bundled-app host updates through its co-located desktop app: the
+// daemon emits `app:update-trigger` on `/events` and the app runs its own
+// updater. The daemon used to treat ANY `/events` subscriber as "the app
+// is running", so a phone watching `/events` while the app was closed made
+// `update/start` send a trigger nobody heard (the job sat in `downloading`
+// forever). The desktop app now says who it is: it opens `/events` with
+// `client=desktop-app` (and the on-box owner token), and only those
+// subscriptions count.
+
+/// `/events?client=` value the desktop app sends.
+pub const DESKTOP_APP_CLIENT: &str = "desktop-app";
+
+/// Env switch back to the old rule (any `/events` subscriber = the app
+/// runs), for a desktop app too old to send `client=desktop-app`.
+pub const APP_PRESENCE_ANY_SUBSCRIBER_ENV: &str = "K2_APP_PRESENCE_ANY_SUBSCRIBER";
+
+static DESKTOP_APP_SUBSCRIBERS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Held for the life of one desktop-app `/events` subscription.
+pub struct DesktopAppPresence(());
+
+impl DesktopAppPresence {
+    pub fn mark() -> Self {
+        DESKTOP_APP_SUBSCRIBERS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        DesktopAppPresence(())
+    }
+}
+
+impl Drop for DesktopAppPresence {
+    fn drop(&mut self) {
+        DESKTOP_APP_SUBSCRIBERS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// Live desktop-app `/events` subscriptions.
+pub fn desktop_app_subscribers() -> usize {
+    DESKTOP_APP_SUBSCRIBERS.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Whether the co-located desktop app is running, for `update/start` on a
+/// bundled-app host. `any_subscribers` is the `/events` receiver count, used
+/// only under [`APP_PRESENCE_ANY_SUBSCRIBER_ENV`] (the old rule).
+pub fn desktop_app_present(any_subscribers: usize) -> bool {
+    let legacy = std::env::var(APP_PRESENCE_ANY_SUBSCRIBER_ENV)
+        .map(|v| matches!(v.trim(), "1" | "true" | "on"))
+        .unwrap_or(false);
+    if legacy {
+        return any_subscribers > 0;
+    }
+    desktop_app_subscribers() > 0
+}
+
+/// Whether an `/events` upgrade is the desktop app's: `client=desktop-app`
+/// with the owner token (a phone or a remote login never counts, whatever
+/// it sends).
+pub fn is_desktop_app_subscription(query: &str, is_owner_token: bool) -> bool {
+    is_owner_token
+        && query
+            .split('&')
+            .any(|kv| kv == format!("client={DESKTOP_APP_CLIENT}").as_str())
+}
+
 /// Serve a single accepted TCP connection as a `/events` WebSocket.
 ///
 /// Preconditions:
@@ -235,7 +300,11 @@ pub async fn serve_events_connection(
     tx: Arc<broadcast::Sender<WireEvent>>,
     token: String,
     owner_token: String,
+    desktop_app: bool,
 ) {
+    // 0.46.3: the desktop app's own subscription marks "the app runs" for
+    // as long as it is open (see `desktop_app_present`).
+    let _presence = desktop_app.then(DesktopAppPresence::mark);
     // `token` is the credential that authorized this connection (the
     // dispatcher already validated it at upgrade via `token_ok`). It's
     // re-validated on a timer below so a revoked connect-user is dropped

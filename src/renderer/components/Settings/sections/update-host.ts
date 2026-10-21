@@ -40,7 +40,13 @@ export interface UpdateCheckResult {
    *  no separate manual "Install & restart" step); "standalone" hosts via
    *  the in-daemon binary swap (Shape B). Used only to vary copy; the daemon
    *  routes on it server-side. May be absent on older hosts. */
-  installKind?: 'standalone' | 'bundled-app' | 'unknown'
+  installKind?: 'standalone' | 'bundled-app' | 'package' | 'unknown'
+  /** 0.46.3: a newer version exists but the host's K2 came from a package
+   *  manager (`installKind: "package"`, e.g. the Arch package): it can't
+   *  update itself, so `available` is false. Absent on older hosts. */
+  newerViaPackage?: boolean
+  /** 0.46.3: when the manifest behind this answer was fetched (unix s). */
+  checkedAt?: number
   /** B4: TRUE when a strictly-newer version exists but there's no published
    *  artifact for this host's platform (a standalone host whose `os-arch`
    *  wasn't built). DISTINCT from "up to date" — `available` is false, but
@@ -536,6 +542,12 @@ export function newerNoArtifactCopy(
 ): string {
   const plat = platform && platform.trim() ? platform : 'this platform'
   return `A newer version (v${latest}) exists, but there's no build for ${hostLabel}'s platform (${plat}). Nothing to install yet.`
+}
+
+/** 0.46.3: a newer version exists but the host's K2 came from a package
+ *  manager, so it updates there, not from here. */
+export function newerViaPackageCopy(hostLabel: string, latest: string): string {
+  return `A newer version (v${latest}) is out. ${hostLabel}'s K2 was installed with a package manager, so update it there (for example \`sudo pacman -Syu k2\`).`
 }
 
 /** The confirm-dialog copy for the install-&-restart step — it NAMES the

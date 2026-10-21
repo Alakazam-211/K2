@@ -14,6 +14,7 @@ import {
   updateAvailableCopy,
   hostVersionCopy,
   newerNoArtifactCopy,
+  newerViaPackageCopy,
   updatePhaseCopy,
   updateSlowComebackCopy,
   updateReconnectingCopy,
@@ -1692,7 +1693,9 @@ function UpdateHostRow(): React.JSX.Element | null {
       if (!result.available) {
         // B4: a newer version exists but there's no build for this host's
         // platform — DON'T claim "up to date"; surface the distinct state.
-        if (result.newerNoArtifact) {
+        if (result.newerViaPackage) {
+          addToast(newerViaPackageCopy(hostLabel, result.latest), 'info', 8000)
+        } else if (result.newerNoArtifact) {
           addToast(
             newerNoArtifactCopy(hostLabel, result.latest, result.platform),
             'info',
@@ -1855,6 +1858,11 @@ function UpdateHostRow(): React.JSX.Element | null {
       {check?.newerNoArtifact && !inProgress && !staged && (
         <div className="mt-1 text-[11px] text-[color-mix(in_srgb,var(--color-status-warn-amber-bright)_90%,transparent)]">
           {newerNoArtifactCopy(hostLabel, check.latest, check.platform)}
+        </div>
+      )}
+      {check?.newerViaPackage && !inProgress && !staged && (
+        <div className="mt-1 text-[11px] text-[color-mix(in_srgb,var(--color-status-warn-amber-bright)_90%,transparent)]">
+          {newerViaPackageCopy(hostLabel, check.latest)}
         </div>
       )}
 

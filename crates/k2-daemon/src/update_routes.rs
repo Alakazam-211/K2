@@ -158,6 +158,12 @@ pub struct CheckResult {
     /// omitted from the wire when false so older clients ignore it cleanly.
     #[serde(rename = "newerNoArtifact", skip_serializing_if = "is_false")]
     pub newer_no_artifact: bool,
+    /// 0.46.3: TRUE when a newer version exists but this host's K2 was
+    /// installed by a package manager (`installKind: "package"`), so the
+    /// daemon can't update itself: `available` is false and the update
+    /// comes from the package manager (pacman / apt). Omitted when false.
+    #[serde(rename = "newerViaPackage", skip_serializing_if = "is_false")]
+    pub newer_via_package: bool,
     /// B4: this host's platform key (`os-arch`, e.g. `linux-aarch64`) — used
     /// to name the missing build in the renderer's `newerNoArtifact` copy.
     #[serde(rename = "platform")]
@@ -243,8 +249,12 @@ pub fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {
 pub fn decide_check(current: &str, manifest: &DaemonManifest, install_kind: &str) -> CheckResult {
     let newer = compare_versions(&manifest.version, current) == std::cmp::Ordering::Greater;
     let artifact = manifest.artifact_for_current_platform();
+    let package = install_kind == crate::boot_status::INSTALL_KIND_PACKAGE;
     let available = if install_kind == "bundled-app" {
         newer
+    } else if package {
+        // 0.46.3: the package manager updates this host, never the daemon.
+        false
     } else {
         newer && artifact.is_some()
     };
@@ -252,7 +262,9 @@ pub fn decide_check(current: &str, manifest: &DaemonManifest, install_kind: &str
     // artifact for its platform is NOT up to date — flag it distinctly so
     // the UI doesn't read it as "current". Bundled-app hosts never hit this
     // (their own updater downloads, not the daemon artifact).
-    let newer_no_artifact = newer && artifact.is_none() && install_kind != "bundled-app";
+    let newer_no_artifact =
+        newer && artifact.is_none() && install_kind != "bundled-app" && !package;
+    let newer_via_package = newer && package;
     CheckResult {
         current: current.to_string(),
         latest: manifest.version.clone(),
@@ -261,6 +273,7 @@ pub fn decide_check(current: &str, manifest: &DaemonManifest, install_kind: &str
         url: artifact.map(|a| a.url.clone()),
         install_kind: install_kind.to_string(),
         newer_no_artifact,
+        newer_via_package,
         platform: platform_key(),
     }
 }
@@ -773,6 +786,14 @@ fn backup_path(version: &str) -> PathBuf {
 /// I/O runs on a blocking worker (the dispatcher spawns this on
 /// `spawn_blocking`).
 pub fn handle_check() -> CliResponse {
+    handle_check_body(b"")
+}
+
+/// `check` with its (optional) body. 0.46.3: the manifest is cached
+/// ([`check_cache_ttl`], default 10 min) so a phone or a page that checks
+/// often does not hit GitHub every time; `{"fresh":true}` skips the cache.
+/// Any other body (or none) is ignored, as before.
+pub fn handle_check_body(body: &[u8]) -> CliResponse {
     if k2_core::airgap::enabled() {
         return CliResponse {
             status: "403 Forbidden",
@@ -780,21 +801,26 @@ pub fn handle_check() -> CliResponse {
             body: k2_core::airgap::error_json(),
         };
     }
-    let url = manifest_url();
-    let bytes = match fetch_bytes(&url) {
-        Ok(b) => b,
-        Err(e) => return CliResponse::bad_request(format!("fetch manifest: {e}")),
-    };
-    let manifest = match DaemonManifest::parse(&bytes) {
+    let fresh = serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("fresh").and_then(|f| f.as_bool()))
+        .unwrap_or(false);
+    let max_age = if fresh { Duration::ZERO } else { check_cache_ttl() };
+    let manifest = match manifest_cached(max_age) {
         Ok(m) => m,
         Err(e) => return CliResponse::bad_request(e),
     };
     let result = decide_check(
         current_version(),
-        &manifest,
+        &manifest.manifest,
         crate::boot_status::install_kind(),
     );
-    CliResponse::ok_json(serde_json::to_string(&result).unwrap_or_default())
+    let mut v = serde_json::to_value(&result).unwrap_or_default();
+    if let Some(o) = v.as_object_mut() {
+        // When the manifest behind this answer was fetched (unix seconds).
+        o.insert("checkedAt".to_string(), serde_json::json!(manifest.fetched_at));
+    }
+    CliResponse::ok_json(v.to_string())
 }
 
 /// `POST /cli/daemon/update/start` — body `{version?}`. Create a job,
@@ -850,17 +876,21 @@ pub fn handle_start(
         return start_bundled_app_update(req.version, event_tx);
     }
 
+    // ── Package install (0.46.3) ────────────────────────────────────────
+    // A daemon a package manager installed (/usr/bin/k2-daemon from the
+    // Arch package or a .deb) can't swap its own binary: the folder is not
+    // writable and the package manager owns the file. Refuse before any
+    // download.
+    if crate::boot_status::install_kind() == crate::boot_status::INSTALL_KIND_PACKAGE {
+        return package_install_refusal();
+    }
+
     // ── Shape B (standalone) ────────────────────────────────────────────
     // Resolve the manifest synchronously enough to learn the target
     // version + reject "nothing to do" up front; the heavy download then
-    // runs detached.
-    let url = manifest_url();
-    let bytes = match fetch_bytes(&url) {
-        Ok(b) => b,
-        Err(e) => return CliResponse::bad_request(format!("fetch manifest: {e}")),
-    };
-    let manifest = match DaemonManifest::parse(&bytes) {
-        Ok(m) => m,
+    // runs detached. Always a fresh fetch (it also refreshes the cache).
+    let manifest = match manifest_cached(Duration::ZERO) {
+        Ok(m) => m.manifest,
         Err(e) => return CliResponse::bad_request(e),
     };
     // If the caller pinned a version it must match the manifest's (we only
@@ -901,11 +931,12 @@ pub fn handle_start(
 ///   1. Create the job (target version is best-effort — the app's updater
 ///      resolves the actual version from its own feed; we record what the
 ///      caller asked for, or the current version as a placeholder).
-///   2. Confirm the app is RUNNING by checking the `/events` broadcast has
-///      at least one subscriber (`receiver_count() > 0`). The app's
-///      `daemon_events` subscriber holds exactly such a receiver. If it's
-///      0, the app isn't open on this host → fail the job with a clear,
-///      actionable message rather than emitting a trigger nobody hears.
+///   2. Confirm the app is RUNNING: 0.46.3, its own `/events` subscription
+///      (`client=desktop-app`, owner token) is open
+///      ([`crate::events::desktop_app_present`]); any subscriber counted
+///      before, so a phone on `/events` passed for the app. If it isn't
+///      open, fail the job with a clear, actionable message rather than
+///      emitting a trigger nobody hears.
 ///   3. Emit `WireEvent { event: "app:update-trigger", payload: {job_id} }`.
 ///      The app re-emits it through Tauri, runs its updater, and POSTs
 ///      phases back to `/cli/daemon/app-update/progress` (see
@@ -934,8 +965,12 @@ fn start_bundled_app_update(
         return CliResponse::ok_json(serde_json::json!({ "job_id": job_id }).to_string());
     };
 
-    if tx.receiver_count() == 0 {
-        // No `/events` subscriber ⇒ K2SO.app isn't running on this host.
+    // 0.46.3: the desktop app's own `/events` subscription (it sends
+    // `client=desktop-app`), not just any subscriber: a phone watching
+    // `/events` while the app is closed must not count. The old rule is
+    // behind `K2_APP_PRESENCE_ANY_SUBSCRIBER=1`.
+    if !crate::events::desktop_app_present(tx.receiver_count()) {
+        // The co-located app isn't running on this host.
         // Fail the job (the remote client polling /status sees a real
         // reason) but still return {job_id} so the client can read it.
         fail_job(&job_id, app_not_running_msg());
@@ -1225,6 +1260,11 @@ pub fn handle_apply(
         Ok(r) => r,
         Err(e) => return CliResponse::bad_request(format!("invalid body: {e}")),
     };
+
+    // 0.46.3: a package-installed daemon never swaps its own binary.
+    if crate::boot_status::install_kind() == crate::boot_status::INSTALL_KIND_PACKAGE {
+        return package_install_refusal();
+    }
 
     let plan = match prepare_apply(&req.job_id) {
         Ok(p) => p,
@@ -1742,6 +1782,241 @@ fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     resp.bytes()
         .map(|b| b.to_vec())
         .map_err(|e| format!("read body: {e}"))
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Package installs (0.46.3)
+// ─────────────────────────────────────────────────────────────────────
+
+/// The refusal `start` / `apply` send on a package-installed host. 409:
+/// the request is fine, this host just isn't updated this way.
+fn package_install_refusal() -> CliResponse {
+    CliResponse {
+        status: "409 Conflict",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "error": "This K2 was installed by a package manager, so it can't update itself. \
+                      Update it with the package manager on that machine (for example \
+                      `sudo pacman -Syu k2` on Arch, or `sudo apt upgrade` for a .deb).",
+            "code": "package_install",
+            "installKind": crate::boot_status::INSTALL_KIND_PACKAGE,
+        })
+        .to_string(),
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Manifest cache + latestKnown (0.46.3)
+// ─────────────────────────────────────────────────────────────────────
+//
+// `check` used to fetch `daemon-latest.json` from GitHub on every call, and
+// nothing below Admin could learn that an update exists. Now:
+//
+//   - one in-memory manifest cache: `check` reuses a fetch younger than
+//     [`check_cache_ttl`] (default 10 min, `{"fresh":true}` skips it);
+//     `start` always fetches fresh and refreshes the cache;
+//   - every real fetch records `latestKnown` ({version, checkedAt}) in
+//     memory and in `~/.k2/update/latest-known.json`;
+//   - a background thread refreshes it at most once a day (also across
+//     restarts: a recent file is not refetched), starting a few minutes
+//     after boot — never on the boot path, never with air-gap on;
+//   - `GET /cli/daemon/update/latest` (Member) reads it. It never fetches.
+
+/// Env override for the `check` cache, in seconds (`0` = no cache).
+pub const CHECK_CACHE_ENV: &str = "K2_UPDATE_CHECK_CACHE_SECS";
+const CHECK_CACHE_DEFAULT: Duration = Duration::from_secs(10 * 60);
+/// The background `latestKnown` refresh runs at most this often.
+pub const LATEST_KNOWN_MAX_AGE: Duration = Duration::from_secs(24 * 3600);
+/// First background refresh after boot (off the boot path).
+const LATEST_KNOWN_FIRST_DELAY: Duration = Duration::from_secs(5 * 60);
+/// Retry gap after a failed background refresh.
+const LATEST_KNOWN_RETRY: Duration = Duration::from_secs(6 * 3600);
+
+/// How long `check` reuses a manifest fetch.
+pub fn check_cache_ttl() -> Duration {
+    std::env::var(CHECK_CACHE_ENV)
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .unwrap_or(CHECK_CACHE_DEFAULT)
+}
+
+fn now_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// A manifest and when it was fetched (unix seconds).
+#[derive(Debug, Clone)]
+pub struct CachedManifest {
+    pub manifest: DaemonManifest,
+    pub fetched_at: u64,
+    /// The manifest URL it came from: a changed URL (self-hosting, tests)
+    /// never reuses another URL's manifest.
+    pub url: String,
+}
+
+fn manifest_cache() -> &'static StdMutex<Option<CachedManifest>> {
+    static C: OnceLock<StdMutex<Option<CachedManifest>>> = OnceLock::new();
+    C.get_or_init(|| StdMutex::new(None))
+}
+
+/// The manifest, from the cache when it is younger than `max_age`, else
+/// fetched (and cached, and recorded as `latestKnown`). `Duration::ZERO`
+/// always fetches. Errors are the strings `check` / `start` answered with
+/// before (`fetch manifest: …` / `invalid daemon-latest.json: …`).
+pub fn manifest_cached(max_age: Duration) -> Result<CachedManifest, String> {
+    let now = now_unix();
+    let url = manifest_url();
+    if !max_age.is_zero() {
+        let cache = manifest_cache().lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(c) = cache.as_ref() {
+            if c.url == url && now.saturating_sub(c.fetched_at) < max_age.as_secs() {
+                return Ok(c.clone());
+            }
+        }
+    }
+    let bytes = fetch_bytes(&url).map_err(|e| format!("fetch manifest: {e}"))?;
+    let manifest = DaemonManifest::parse(&bytes)?;
+    let fresh = CachedManifest { manifest, fetched_at: now, url };
+    *manifest_cache().lock().unwrap_or_else(|p| p.into_inner()) = Some(fresh.clone());
+    record_latest_known(&LatestKnown {
+        version: fresh.manifest.version.clone(),
+        checked_at: now,
+    });
+    Ok(fresh)
+}
+
+/// Forget the cached manifest and `latestKnown` (tests).
+#[cfg(test)]
+fn clear_manifest_cache_for_test() {
+    *manifest_cache().lock().unwrap_or_else(|p| p.into_inner()) = None;
+    *latest_known_mem().lock().unwrap_or_else(|p| p.into_inner()) = None;
+}
+
+/// The newest published version this daemon has seen, and when.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LatestKnown {
+    pub version: String,
+    /// Unix seconds of the fetch that saw it.
+    #[serde(rename = "checkedAt")]
+    pub checked_at: u64,
+}
+
+fn latest_known_mem() -> &'static StdMutex<Option<LatestKnown>> {
+    static L: OnceLock<StdMutex<Option<LatestKnown>>> = OnceLock::new();
+    L.get_or_init(|| StdMutex::new(None))
+}
+
+/// `~/.k2/update/latest-known.json`.
+fn latest_known_path() -> PathBuf {
+    k2_core::paths::k2_home().join("update").join("latest-known.json")
+}
+
+/// Remember `k` in memory and on disk (atomic, best-effort: a failed write
+/// only means the next boot fetches once more).
+fn record_latest_known(k: &LatestKnown) {
+    *latest_known_mem().lock().unwrap_or_else(|p| p.into_inner()) = Some(k.clone());
+    let path = latest_known_path();
+    let Some(dir) = path.parent() else { return };
+    if let Err(e) = std::fs::create_dir_all(dir) {
+        k2_core::log_debug!("[daemon/update] latest-known: create {}: {e}", dir.display());
+        return;
+    }
+    let tmp = path.with_extension("json.tmp");
+    let body = serde_json::to_vec(k).unwrap_or_default();
+    if let Err(e) = std::fs::write(&tmp, body).and_then(|_| std::fs::rename(&tmp, &path)) {
+        let _ = std::fs::remove_file(&tmp);
+        k2_core::log_debug!("[daemon/update] latest-known: write {}: {e}", path.display());
+    }
+}
+
+/// The last `latestKnown`: this process's, else the file from an earlier
+/// run, else `None`. No network.
+pub fn read_latest_known() -> Option<LatestKnown> {
+    if let Some(k) = latest_known_mem().lock().unwrap_or_else(|p| p.into_inner()).clone() {
+        return Some(k);
+    }
+    let raw = std::fs::read(latest_known_path()).ok()?;
+    let k: LatestKnown = serde_json::from_slice(&raw).ok()?;
+    if k.version.trim().is_empty() {
+        return None;
+    }
+    *latest_known_mem().lock().unwrap_or_else(|p| p.into_inner()) = Some(k.clone());
+    Some(k)
+}
+
+/// `GET /cli/daemon/update/latest` (Member) — the cheap "is there an
+/// update?" signal: `{current, installKind, latestKnown: {version,
+/// checkedAt, newer} | null}`. Never fetches; `latestKnown` is null until
+/// a check (or the daily background refresh) has run.
+pub fn handle_latest_known() -> CliResponse {
+    let current = current_version();
+    let latest = read_latest_known().map(|k| {
+        serde_json::json!({
+            "version": k.version,
+            "checkedAt": k.checked_at,
+            "newer": compare_versions(&k.version, current) == std::cmp::Ordering::Greater,
+        })
+    });
+    CliResponse::ok_json(
+        serde_json::json!({
+            "current": current,
+            "installKind": crate::boot_status::install_kind(),
+            "latestKnown": latest,
+        })
+        .to_string(),
+    )
+}
+
+/// When the next background refresh is due, from the last `latestKnown`.
+fn latest_known_wait(last: Option<&LatestKnown>, now: u64) -> Duration {
+    match last {
+        Some(k) => {
+            let age = now.saturating_sub(k.checked_at);
+            LATEST_KNOWN_MAX_AGE.saturating_sub(Duration::from_secs(age))
+        }
+        None => Duration::ZERO,
+    }
+}
+
+/// Daemon boot: the background `latestKnown` refresher. A plain thread that
+/// first sleeps [`LATEST_KNOWN_FIRST_DELAY`] (never on the boot path), then
+/// fetches only when the last `latestKnown` is a day old, so restarts don't
+/// add fetches. Skips air-gap. Call once.
+pub fn spawn_latest_known_refresher() {
+    let spawned = std::thread::Builder::new()
+        .name("k2-update-latest".to_string())
+        .spawn(|| {
+            std::thread::sleep(LATEST_KNOWN_FIRST_DELAY);
+            loop {
+                let wait = latest_known_wait(read_latest_known().as_ref(), now_unix());
+                if !wait.is_zero() {
+                    std::thread::sleep(wait);
+                    continue;
+                }
+                if k2_core::airgap::enabled() {
+                    std::thread::sleep(LATEST_KNOWN_MAX_AGE);
+                    continue;
+                }
+                match manifest_cached(Duration::ZERO) {
+                    Ok(m) => k2_core::log_debug!(
+                        "[daemon/update] latest known: {} (running {})",
+                        m.manifest.version,
+                        current_version()
+                    ),
+                    Err(e) => {
+                        k2_core::log_debug!("[daemon/update] latest-known refresh failed: {e}");
+                        std::thread::sleep(LATEST_KNOWN_RETRY);
+                    }
+                }
+            }
+        });
+    if let Err(e) = spawned {
+        k2_core::log_debug!("[daemon/update] WARN: latest-known refresher: {e}");
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -2409,8 +2684,10 @@ mod tests {
     #[test]
     fn bundled_start_emits_trigger_when_app_listening() {
         let _g = clear_jobs_for_test();
-        // A live subscriber ⇒ the app is "running": the job is NOT failed and
-        // an app:update-trigger frame carrying the job_id is broadcast.
+        // The desktop app's own subscription (0.46.3: `client=desktop-app`)
+        // ⇒ the app is "running": the job is NOT failed and an
+        // app:update-trigger frame carrying the job_id is broadcast.
+        let _app = crate::events::DesktopAppPresence::mark();
         let (tx, mut rx) = tokio::sync::broadcast::channel::<crate::events::WireEvent>(4);
         let tx = std::sync::Arc::new(tx);
         let resp = start_bundled_app_update(Some("9.9.9".into()), Some(tx));
@@ -2421,6 +2698,63 @@ mod tests {
         let frame = rx.try_recv().expect("trigger frame broadcast");
         assert_eq!(frame.event, "app:update-trigger");
         assert_eq!(frame.payload["job_id"].as_str(), Some(id.as_str()));
+    }
+
+    /// 0.46.3 B4: a phone (or any other client) watching `/events` while
+    /// the desktop app is closed no longer counts as "the app runs".
+    #[test]
+    fn bundled_start_fails_when_only_a_non_app_client_listens() {
+        let _g = clear_jobs_for_test();
+        let _legacy =
+            k2_core::test_env::EnvVar::remove(crate::events::APP_PRESENCE_ANY_SUBSCRIBER_ENV);
+        assert_eq!(crate::events::desktop_app_subscribers(), 0, "setup: no app presence");
+        let (tx, mut rx) = tokio::sync::broadcast::channel::<crate::events::WireEvent>(4);
+        let tx = std::sync::Arc::new(tx);
+        let resp = start_bundled_app_update(None, Some(tx));
+        let v: serde_json::Value = serde_json::from_str(&resp.body).expect("json");
+        let id = v["job_id"].as_str().expect("job_id");
+        let j = get_job(id).unwrap();
+        assert_eq!(j.phase, Phase::Failed, "a phone subscriber is not the app");
+        assert!(
+            j.error.as_deref().unwrap_or_default().contains("isn't running"),
+            "{:?}",
+            j.error
+        );
+        assert!(rx.try_recv().is_err(), "no trigger may be sent into the void");
+    }
+
+    /// The old rule stays behind `K2_APP_PRESENCE_ANY_SUBSCRIBER=1` (for a
+    /// desktop app too old to name itself).
+    #[test]
+    fn bundled_start_any_subscriber_rule_is_behind_a_switch() {
+        let _g = clear_jobs_for_test();
+        let _legacy =
+            k2_core::test_env::EnvVar::set(crate::events::APP_PRESENCE_ANY_SUBSCRIBER_ENV, "1");
+        let (tx, mut rx) = tokio::sync::broadcast::channel::<crate::events::WireEvent>(4);
+        let tx = std::sync::Arc::new(tx);
+        let resp = start_bundled_app_update(None, Some(tx));
+        let v: serde_json::Value = serde_json::from_str(&resp.body).expect("json");
+        let id = v["job_id"].as_str().expect("job_id").to_string();
+        assert_eq!(get_job(&id).unwrap().phase, Phase::Downloading);
+        assert_eq!(rx.try_recv().expect("trigger").event, "app:update-trigger");
+    }
+
+    #[test]
+    fn desktop_app_subscription_needs_the_flag_and_the_owner_token() {
+        use crate::events::is_desktop_app_subscription as is_app;
+        let _g = clear_jobs_for_test();
+        assert!(is_app("token=t&client=desktop-app", true));
+        assert!(is_app("client=desktop-app&token=t", true));
+        assert!(!is_app("token=t&client=desktop-app", false), "a login session never counts");
+        assert!(!is_app("token=t", true), "no flag: not the app");
+        assert!(!is_app("token=t&client=desktop-apps", true));
+        assert!(!is_app("token=t&xclient=desktop-app", true));
+        let before = crate::events::desktop_app_subscribers();
+        {
+            let _p = crate::events::DesktopAppPresence::mark();
+            assert_eq!(crate::events::desktop_app_subscribers(), before + 1);
+        }
+        assert_eq!(crate::events::desktop_app_subscribers(), before, "dropping clears it");
     }
 
     #[test]
@@ -2875,5 +3209,161 @@ mod tests {
             body["error"],
             "v0.41.0 did not start after 3 tries; the previous version was put back"
         );
+    }
+
+    // ── 0.46.3: package installs, manifest cache, latestKnown ─────────────
+
+    fn manifest_with_platform(version: &str) -> DaemonManifest {
+        let mut artifacts = std::collections::HashMap::new();
+        artifacts.insert(
+            platform_key(),
+            Artifact { url: "https://x/bin".into(), sig: "https://x/bin.sig".into(), sha256: "00".into() },
+        );
+        DaemonManifest { version: version.into(), pub_date: String::new(), artifacts, notes: None }
+    }
+
+    #[test]
+    fn decide_check_package_install_is_never_available_but_flags_newer() {
+        let m = manifest_with_platform("999.0.0");
+        let r = decide_check("0.1.0", &m, "package");
+        assert!(!r.available, "the daemon never updates a package install");
+        assert!(r.newer_via_package, "a newer version must still be flagged");
+        assert!(!r.newer_no_artifact, "not the no-artifact state");
+        assert_eq!(r.install_kind, "package");
+        let wire = serde_json::to_value(&r).expect("serialize");
+        assert_eq!(wire["newerViaPackage"], serde_json::json!(true), "{wire}");
+        let same = decide_check("999.0.0", &m, "package");
+        assert!(!same.newer_via_package, "up to date: no flag");
+        let wire = serde_json::to_value(&same).expect("serialize");
+        assert!(wire.get("newerViaPackage").is_none(), "omitted when false: {wire}");
+        // Standalone is untouched.
+        let r = decide_check("0.1.0", &m, "standalone");
+        assert!(r.available && !r.newer_via_package);
+    }
+
+    #[test]
+    fn package_refusal_is_a_clear_409() {
+        let r = package_install_refusal();
+        assert_eq!(r.status, "409 Conflict");
+        let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+        assert_eq!(v["code"], "package_install", "{v}");
+        assert_eq!(v["installKind"], "package", "{v}");
+        let msg = v["error"].as_str().expect("error string");
+        assert!(msg.contains("package manager"), "{msg}");
+    }
+
+    /// A loopback manifest server that counts its requests.
+    fn counting_manifest_server(body: String) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let h = hits.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut sock) = stream else { continue };
+                let _ = sock.set_read_timeout(Some(Duration::from_secs(5)));
+                let mut buf = [0u8; 4096];
+                let _ = sock.read(&mut buf);
+                h.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = sock.write_all(resp.as_bytes());
+            }
+        });
+        (format!("http://{addr}/daemon-latest.json"), hits)
+    }
+
+    #[test]
+    fn check_reuses_the_cached_manifest_and_fresh_skips_it() {
+        let _home = crate::test_support::TempHome::new();
+        let _air = k2_core::test_env::EnvVar::remove("K2_AIRGAP");
+        let _ttl = k2_core::test_env::EnvVar::set(CHECK_CACHE_ENV, "600");
+        let (url, hits) = counting_manifest_server(SAMPLE_MANIFEST.to_string());
+        let _u = k2_core::test_env::EnvVar::set("K2_DAEMON_MANIFEST_URL", &url);
+        clear_manifest_cache_for_test();
+
+        let r = handle_check();
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+        assert_eq!(v["latest"], "0.40.0", "{v}");
+        assert!(v["checkedAt"].as_u64().is_some(), "checkedAt stamped: {v}");
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        let r = handle_check_body(b"{}");
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1, "second check served from the cache");
+
+        let r = handle_check_body(br#"{"fresh":true}"#);
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 2, "fresh:true fetches");
+
+        let _ttl0 = k2_core::test_env::EnvVar::set(CHECK_CACHE_ENV, "0");
+        let _ = handle_check();
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 3, "TTL 0 = no cache");
+
+        // A different manifest URL never reuses the cache.
+        let (url2, hits2) = counting_manifest_server(SAMPLE_MANIFEST.replace("0.40.0", "0.41.0"));
+        let _u2 = k2_core::test_env::EnvVar::set("K2_DAEMON_MANIFEST_URL", &url2);
+        let _ttl2 = k2_core::test_env::EnvVar::set(CHECK_CACHE_ENV, "600");
+        let r = handle_check();
+        let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+        assert_eq!(v["latest"], "0.41.0", "{v}");
+        assert_eq!(hits2.load(std::sync::atomic::Ordering::SeqCst), 1);
+        clear_manifest_cache_for_test();
+    }
+
+    #[test]
+    fn latest_known_is_recorded_persisted_and_served_without_fetching() {
+        let _home = crate::test_support::TempHome::new();
+        let _air = k2_core::test_env::EnvVar::remove("K2_AIRGAP");
+        clear_manifest_cache_for_test();
+
+        // Nothing seen yet: null, and no fetch.
+        let _u = k2_core::test_env::EnvVar::set("K2_DAEMON_MANIFEST_URL", "http://127.0.0.1:9/never");
+        let r = handle_latest_known();
+        assert_eq!(r.status, "200 OK");
+        let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+        assert!(v["latestKnown"].is_null(), "{v}");
+        assert_eq!(v["current"], current_version(), "{v}");
+        assert!(v["installKind"].as_str().is_some(), "{v}");
+
+        let manifest = SAMPLE_MANIFEST.replace("0.40.0", "999.1.0");
+        let (url, hits) = counting_manifest_server(manifest);
+        let _u2 = k2_core::test_env::EnvVar::set("K2_DAEMON_MANIFEST_URL", &url);
+        let _ = manifest_cached(Duration::ZERO).expect("fetch");
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        let v: serde_json::Value =
+            serde_json::from_str(&handle_latest_known().body).expect("json");
+        assert_eq!(v["latestKnown"]["version"], "999.1.0", "{v}");
+        assert_eq!(v["latestKnown"]["newer"], true, "{v}");
+        assert!(v["latestKnown"]["checkedAt"].as_u64().is_some(), "{v}");
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1, "latest never fetches");
+
+        // Survives a restart: memory gone, the file answers.
+        let on_disk: LatestKnown = serde_json::from_slice(
+            &std::fs::read(latest_known_path()).expect("latest-known.json written"),
+        )
+        .expect("parse");
+        assert_eq!(on_disk.version, "999.1.0");
+        clear_manifest_cache_for_test();
+        assert_eq!(read_latest_known().map(|k| k.version).as_deref(), Some("999.1.0"));
+        clear_manifest_cache_for_test();
+    }
+
+    #[test]
+    fn latest_known_refresh_runs_at_most_daily() {
+        let now = 2_000_000_000u64;
+        assert_eq!(latest_known_wait(None, now), Duration::ZERO, "never checked: due now");
+        let fresh = LatestKnown { version: "1.0.0".into(), checked_at: now - 3600 };
+        assert_eq!(latest_known_wait(Some(&fresh), now), LATEST_KNOWN_MAX_AGE - Duration::from_secs(3600));
+        let old = LatestKnown { version: "1.0.0".into(), checked_at: now - 2 * 86_400 };
+        assert_eq!(latest_known_wait(Some(&old), now), Duration::ZERO, "a day old: due");
+        let future = LatestKnown { version: "1.0.0".into(), checked_at: now + 60 };
+        assert_eq!(latest_known_wait(Some(&future), now), LATEST_KNOWN_MAX_AGE, "clock skew: wait a day");
     }
 }

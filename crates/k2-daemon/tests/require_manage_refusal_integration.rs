@@ -145,3 +145,35 @@ async fn unauthenticated_stays_byte_identical_and_a_passport_hears_owner_admin_o
         assert_eq!(r.status, 200, "owner GET /cli/users: {}", r.body);
     });
 }
+
+/// 0.46.3 B1: `GET /cli/daemon/update/latest` is readable by a Member
+/// login (the phone's cheap update signal), refused without a token, and
+/// never fetches anything (null until a check has run).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn update_latest_is_member_readable_and_never_fetches() {
+    let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    with_temp_home(|| {
+        // A URL nothing answers: a fetch here would fail the 200 below.
+        std::env::set_var("K2_DAEMON_MANIFEST_URL", "http://127.0.0.1:9/never");
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+        k2_core::connect_users::add_user("member_latest", "password123").expect("add_user");
+        let member = k2_core::connect_users::create_session("member_latest");
+
+        let r = http(d.port, "GET", &format!("/cli/daemon/update/latest?token={member}"), None);
+        assert_eq!(r.status, 200, "member GET latest: {}", r.body);
+        let v: serde_json::Value = serde_json::from_str(&r.body)
+            .unwrap_or_else(|e| panic!("latest is not JSON ({e}): {}", r.body));
+        assert!(v["current"].as_str().is_some(), "current: {v}");
+        assert!(v["installKind"].as_str().is_some(), "installKind: {v}");
+        assert!(v.get("latestKnown").is_some(), "latestKnown key present: {v}");
+
+        let r = http(d.port, "GET", "/cli/daemon/update/latest", None);
+        assert_eq!(r.status, 403, "no token: {}", r.body);
+        assert_eq!(r.body, INVALID_BODY);
+
+        // check stays Admin-only: a Member still can't fetch.
+        let r = http(d.port, "POST", &format!("/cli/daemon/update/check?token={member}"), Some("{}"));
+        assert_eq!(r.status, 403, "member check: {}", r.body);
+        std::env::remove_var("K2_DAEMON_MANIFEST_URL");
+    });
+}

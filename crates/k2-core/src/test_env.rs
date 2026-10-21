@@ -952,3 +952,65 @@ const K2_CORE_ENV_BASELINE: &[(&str, usize, usize)] = &[
     ("lib.rs", 1, 1),
     ("test_env.rs", 13, 3),
 ];
+
+// ── Loopback ports for tests that can't keep their listener (0.46.3) ──
+
+/// First port of the test range. Below every OS's ephemeral range (Linux
+/// 32768–60999, macOS/BSD and Windows 49152–65535), so no `bind(":0")` and
+/// no outgoing connection anywhere in the process can be handed a port from
+/// it while a test is between "pick" and "the child binds".
+pub const TEST_PORT_FIRST: u16 = 20_000;
+/// One past the last port of the test range.
+pub const TEST_PORT_END: u16 = 32_000;
+
+/// A loopback TCP port for a test that must name a port and let something
+/// else (a child process, a service it starts) bind it later.
+///
+/// The old pattern — `bind("127.0.0.1:0")`, read the port, drop the
+/// listener, bind it again later — loses that port under parallel load:
+/// the OS hands the just-freed ephemeral port to another test's `bind(0)`
+/// or to an outgoing connection, and the later bind (or a "port must be
+/// free" check) fails ("bind clash: … already accepting connections").
+///
+/// This hands out each port at most once per process, from
+/// [`TEST_PORT_FIRST`]..[`TEST_PORT_END`] (outside the ephemeral range),
+/// starting at a random offset so separate test processes (nextest, two
+/// test binaries) rarely meet, and checks the port is free right now.
+/// Prefer keeping a listener bound and handing it over when the code under
+/// test takes a listener; use this only when it takes a port number.
+pub fn loopback_test_port() -> u16 {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::OnceLock;
+    const SPAN: u32 = (TEST_PORT_END - TEST_PORT_FIRST) as u32;
+    static START: OnceLock<u32> = OnceLock::new();
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    let start = *START.get_or_init(|| (uuid::Uuid::new_v4().as_u128() % SPAN as u128) as u32);
+    for _ in 0..SPAN {
+        let n = NEXT.fetch_add(1, Ordering::SeqCst);
+        let port = TEST_PORT_FIRST + ((start + n) % SPAN) as u16;
+        // Free on the IPv4 loopback and the wildcard address right now (one
+        // at a time: on Linux the two binds conflict with each other).
+        let v4_free = std::net::TcpListener::bind(("127.0.0.1", port)).is_ok();
+        if v4_free && std::net::TcpListener::bind(("0.0.0.0", port)).is_ok() {
+            return port;
+        }
+    }
+    panic!("loopback_test_port: no free port in {TEST_PORT_FIRST}..{TEST_PORT_END}");
+}
+
+#[cfg(test)]
+mod loopback_test_port_tests {
+    use super::*;
+
+    #[test]
+    fn ports_are_unique_in_range_and_free() {
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..200 {
+            let p = loopback_test_port();
+            assert!((TEST_PORT_FIRST..TEST_PORT_END).contains(&p), "{p} out of range");
+            assert!(seen.insert(p), "port {p} handed out twice");
+            std::net::TcpListener::bind(("127.0.0.1", p))
+                .unwrap_or_else(|e| panic!("handed-out port {p} must be bindable: {e}"));
+        }
+    }
+}

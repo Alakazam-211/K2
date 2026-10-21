@@ -417,7 +417,8 @@ async fn publish_run_mapping_notice_now_held_when_enforced_and_the_admin_switche
     k2_daemon::vault::boot(&k2_core::paths::k2_home());
     let ws = seed_ws(&env, "pubws");
     let agent = passport(&ws);
-    let free = || std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    // Unique, outside the ephemeral range (not bind(:0)-then-drop).
+    let free = k2_core::test_env::loopback_test_port;
     let run = |name: &str, port: u16| json!({"name": name, "cmd": "exec python3 -m http.server $PORT --bind 127.0.0.1", "port": port, "noTunnel": true});
 
     // Switches: only the owner raises; switch 2 needs switch 1; the old
@@ -659,7 +660,7 @@ http.server.HTTPServer(("127.0.0.1", int(os.environ["PORT"])), H).serve_forever(
 "#,
     )
     .unwrap();
-    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let port = k2_core::test_env::loopback_test_port();
     // Absolute: clean mode's system PATH must still find it.
     let python = String::from_utf8(std::process::Command::new("sh").arg("-c").arg("command -v python3").output().unwrap().stdout).unwrap();
     let cmd = format!("exec {} bff.py", python.trim());

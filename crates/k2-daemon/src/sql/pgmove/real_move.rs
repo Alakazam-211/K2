@@ -405,10 +405,16 @@ fn k2_superuser_paths(ops: &dyn ClusterOps, m: Major, db: &str) {
     hostile.push_str(&String::from_utf8(k2ops::pin_search_path(sql.as_bytes())).unwrap());
     ops.sql(m, db, &hostile).expect("K2 helpers + boot seal (daemon pin over a hostile path and role)");
     let probe = format!("{hostile_start}{}SELECT current_user || '/' || current_setting('search_path');\n", k2ops::PIN_SEARCH_PATH);
-    want(ops.sql(m, db, &probe), "postgres/pg_catalog, pg_temp", &format!("F1 {m}: the daemon pin resets a hostile role and path"));
+    // (The answer's last line: psql prints a tag for each SET.)
+    want(
+        ops.sql(m, db, &probe).map(|s| s.lines().last().unwrap_or_default().to_string()),
+        "postgres/pg_catalog, pg_temp",
+        &format!("F1 {m}: the daemon pin resets a hostile role and path"),
+    );
     want(
         ops.sql(m, db, "SELECT current_user || '/' || current_setting('search_path');\n"),
-        "postgres/pg_catalog, pg_temp",
+        // (PGOPTIONS spells the path without a space.)
+        "postgres/pg_catalog,pg_temp",
         &format!("F1 {m}: a helper session is postgres on pg_catalog despite ALTER DATABASE SET role/search_path"),
     );
 }

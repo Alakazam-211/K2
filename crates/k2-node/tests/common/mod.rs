@@ -155,11 +155,13 @@ impl Fake {
     /// A pin for another server in `slot` whose session the test stands in
     /// for: a real key of its own ([`stand_in_key`]; its line in
     /// `servers.toml` names [`stand_in_fp`]), so the node's servers loop
-    /// opens the tenant as that line's. Its dials reach this fake, which
-    /// isn't that server: they never attach.
+    /// opens the tenant as that line's. Its dials never attach.
     pub fn stand_in_pin(&self, slot: u8, node_id: &str, name: &str) -> Pin {
         let k = stand_in_key(slot);
-        Pin { controller_fp: k.fingerprint(), controller_public_key_pem: k.spki_pem(), ..self.pin_for(node_id, name) }
+        // Its dials go nowhere (port 9 on loopback refuses): they must
+        // never reach this fake, which would take them for the owner's
+        // node reconnecting and drop the owner's session.
+        Pin { controller_fp: k.fingerprint(), controller_public_key_pem: k.spki_pem(), routes: vec!["http://127.0.0.1:9".into()], ..self.pin_for(node_id, name) }
     }
 
     pub fn pin_for(&self, node_id: &str, name: &str) -> Pin {

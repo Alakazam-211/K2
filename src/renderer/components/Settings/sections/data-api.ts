@@ -30,6 +30,8 @@ export interface SqlStatus {
   /** What `k2 db create` uses without --major. */
   defaultMajor?: number
   defaultMajorPinned?: boolean
+  /** `set` (k2 db default-major) | `primary` (the 5432 cluster) | `new-install`. */
+  defaultMajorSource?: 'set' | 'primary' | 'new-install'
 }
 
 export interface SqlCluster {

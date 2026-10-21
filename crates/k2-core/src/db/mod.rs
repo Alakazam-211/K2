@@ -2424,7 +2424,7 @@ mod tests {
     /// upgrades through 0201: the 5432 cluster `enable` read is recorded
     /// (16/main, 'k2', 'baked'), every database (dropped ones too) gets
     /// `cluster_major = 16` and `source_state = 'none'`, the default major
-    /// stays NULL (= 17, K2's pick), the switch starts off, and `sql_moves`
+    /// is pinned to 16 (the 5432 cluster), the switch starts off, and `sql_moves`
     /// refuses states the machine doesn't have. A second run is a no-op.
     #[test]
     fn a_046_2_database_upgrades_through_0201_pg_majors() {
@@ -2483,7 +2483,7 @@ mod tests {
         );
         let default_major: Option<i64> =
             conn.query_row("SELECT default_major FROM sql_server WHERE id = 1", [], |r| r.get(0)).unwrap();
-        assert_eq!(default_major, None, "NULL = the policy default (17)");
+        assert_eq!(default_major, Some(16), "an existing 16 box keeps creating on 16 until the owner moves it (PRD Q8)");
         let toggle: i64 = conn
             .query_row("SELECT agents_can_upgrade_postgres FROM projects WHERE id = 'w1'", [], |r| r.get(0))
             .unwrap();
@@ -2534,6 +2534,20 @@ mod tests {
         assert_eq!(clusters, 0);
         let moves: i64 = conn.query_row("SELECT COUNT(*) FROM sql_moves", [], |r| r.get(0)).unwrap();
         assert_eq!(moves, 0);
+
+        // A sidecar row whose major was never read (enable not finished):
+        // nothing to pin, the default stays NULL (17 at runtime, no cluster).
+        let conn = fresh_memory();
+        run_migrations_through(&conn, Some("0197_agent_app_permissions")).unwrap();
+        conn.execute(
+            "INSERT INTO sql_server (id, status, installed_major, listen, updated_at) VALUES (1, 'installing', NULL, 'localhost', 1)",
+            [],
+        )
+        .unwrap();
+        run_migrations(&conn).unwrap();
+        let default_major: Option<i64> =
+            conn.query_row("SELECT default_major FROM sql_server WHERE id = 1", [], |r| r.get(0)).unwrap();
+        assert_eq!(default_major, None);
     }
 
     /// A 0.46.0-era database (last migration 0189) with project chat lines

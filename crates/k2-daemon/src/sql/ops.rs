@@ -907,7 +907,8 @@ pub fn create_database(
 }
 
 /// `k2 db create [--major N]`: `major` None = the box's default
-/// (`sql_server.default_major`, else 17).
+/// (`sql_server.default_major`; unset, the 5432 cluster's major; 17 only
+/// on a box with no Postgres major yet).
 pub fn create_database_on(
     ops: &dyn SystemOps,
     secrets: &dyn SecretStore,

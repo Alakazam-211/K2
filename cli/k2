@@ -27715,7 +27715,7 @@ cmd_schema() {
       "flags": [
         {"name": "--id", "arg": "client-id", "description": "Idempotency key."},
         {"name": "--db-access", "arg": "off|read|write", "description": "Set the create-only db_agent_access flag on this workspace (hire convenience). Default stays off. Does not gate list/dsn/store."},
-        {"name": "--major", "arg": "16|17", "description": "The Postgres major to create on. Default: the box's (17 unless the owner pinned another). A major other than the default needs the agent switch \"Allow this agent to manage Postgres versions\". Unsupported or past-EOL majors exit 3."},
+        {"name": "--major", "arg": "16|17", "description": "The Postgres major to create on. Default: the box's (17 on new boxes; an existing box keeps its current major until the owner runs k2 db default-major 17). A major other than the default needs the agent switch \"Allow this agent to manage Postgres versions\". Unsupported or past-EOL majors exit 3."},
         {"name": "--json", "arg": null, "description": "JSON output."}
       ]
     },
@@ -27731,7 +27731,7 @@ cmd_schema() {
     {
       "name": "db default-major",
       "usage": "k2 db default-major <major> [--json]",
-      "description": "Owner: pin the Postgres major k2 db create uses without --major (K2's default is 17). Unsupported or past-EOL majors exit 3. Agents exit 3.",
+      "description": "Owner: pin the Postgres major k2 db create uses without --major. New boxes start on 17; an existing box keeps its current major until the owner moves it here (an agent with the Postgres versions switch may only suggest it). Unsupported or past-EOL majors exit 3. Agents exit 3.",
       "args": [{"name": "major", "required": true}],
       "flags": [
         {"name": "--json", "arg": null, "description": "JSON output."}
@@ -54100,6 +54100,7 @@ elif verb == "clusters":
     if isinstance(d, dict) and d.get("ok") is not False:
         d = {"ok": True, "clusters": d.get("clusters") or [], "databases": d.get("databases") or [],
              "defaultMajor": d.get("defaultMajor"), "defaultMajorPinned": d.get("defaultMajorPinned"),
+             "defaultMajorSource": d.get("defaultMajorSource"),
              "upgradeAvailable": d.get("upgradeAvailable") or []}
 elif verb == "default_major":
     status, raw = request("POST", "/cli/db/server/default-major", body={"major": int(os.environ.get("D_MAJOR") or 0)})
@@ -54228,7 +54229,8 @@ if verb == "status":
     if d.get("lastError"):
         print("last error: %s" % d["lastError"])
     if d.get("defaultMajor") is not None:
-        print("new dbs:   Postgres %s%s" % (d.get("defaultMajor"), " (pinned)" if d.get("defaultMajorPinned") else " (K2 default)"))
+        src = {"set": " (set: k2 db default-major)", "primary": " (this box's 5432 cluster)", "new-install": " (K2's new-install default)"}
+        print("new dbs:   Postgres %s%s" % (d.get("defaultMajor"), src.get(d.get("defaultMajorSource"), "")))
     for c in d.get("clusters") or []:
         print("cluster:   Postgres %s on %s (%s, %s)" % (c.get("major"), c.get("port"), c.get("role"), c.get("state")))
     for u in d.get("upgradeAvailable") or []:
@@ -54328,7 +54330,8 @@ Owner token only for a foreign workspace; a cell stamp still pins identity.
 OWNER (engine — server-side owner/admin gate; agents exit 3)
   status [--health] [--json]     supported, state, pg major, clusters, upgrades available
   clusters [--json]              Postgres majors side by side (one cluster per major, 5432-5449)
-  default-major <M> [--json]     the major new databases go on (K2's default: 17)
+  default-major <M> [--json]     owner: the major new databases go on (new boxes: 17;
+                                 existing boxes keep their current major until set)
   enable [--json]                catalog + start unit if baked (--bake --with-db)
   disable [--json]               stop unit, keep PGDATA
   doctor [--json]                RSS vs MemoryMax + GUC caps (work_mem, max_connections, …)
@@ -54342,8 +54345,9 @@ AGENT (workspace — identity from token, never body project=)
   create [--id <client-id>] [--db-access off|read|write] [--json]
                                  needs db_agent_access=write (create-only passport)
   create --test                  disposable scratch DB (not cap; owner/cell only)
-  create --major 16|17           pick the Postgres major (default: the box's, 17 unless
-                                 pinned); another major needs "Allow this agent to
+  create --major 16|17           pick the Postgres major (default: the box's: 17 on new
+                                 boxes, the current major on existing ones until
+                                 k2 db default-major); another major needs "Allow this agent to
                                  manage Postgres versions". --test follows the live DB
   list [--json]                  active + test (no dropped tombstones)
   dsn | creds [--json] [--workspace <ws>]

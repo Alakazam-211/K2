@@ -337,17 +337,31 @@ pub fn record_primary_major(conn: &rusqlite::Connection, major: u32) -> Result<C
     Ok(c)
 }
 
-/// The major `k2 db create` uses without `--major`: the owner's pin, else
-/// K2's policy default ([`pg_major::NEW_INSTALL`]). `.1` = the owner
-/// pinned it.
+/// The major `k2 db create` uses without `--major` (PRD §2 goal 2, Q8):
+/// the recorded `sql_server.default_major` (0201 pins an existing box to
+/// its 5432 cluster's major; `k2 db default-major` moves it); unset, the
+/// 5432 cluster's major (a box that already runs Postgres never silently
+/// starts creating on another major); and only a box whose Postgres major
+/// is unknown gets K2's new-install major ([`pg_major::NEW_INSTALL`]).
+/// `.1` = it was set (exact: no fallback when its cluster can't be had).
 pub fn default_major_in(conn: &rusqlite::Connection) -> (u32, bool) {
-    let pinned: Option<i64> = conn
+    let (m, source) = default_major_source_in(conn);
+    (m, source != "new-install")
+}
+
+/// [`default_major_in`] with where it came from: `set` (the record),
+/// `primary` (unset: the 5432 cluster's major) or `new-install`.
+pub fn default_major_source_in(conn: &rusqlite::Connection) -> (u32, &'static str) {
+    let set: Option<i64> = conn
         .query_row("SELECT default_major FROM sql_server WHERE id = 1", [], |r| r.get(0))
         .ok()
         .flatten();
-    match pinned.filter(|m| (10..=99).contains(m)) {
-        Some(m) => (m as u32, true),
-        None => (pg_major::NEW_INSTALL, false),
+    if let Some(m) = set.filter(|m| (10..=99).contains(m)) {
+        return (m as u32, "set");
+    }
+    match primary_in(conn).major {
+        0 => (pg_major::NEW_INSTALL, "new-install"),
+        m => (m, "primary"),
     }
 }
 

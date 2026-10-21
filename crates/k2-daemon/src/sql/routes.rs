@@ -294,7 +294,8 @@ struct CreateBody {
     /// Disposable cap-exempt test database (P11).
     test: bool,
     /// `k2 db create --major N` (0.46.3): the Postgres major to create on.
-    /// None = the box default (`sql_server.default_major`, else 17).
+    /// None = the box default (`sql_server.default_major`; unset, the 5432
+    /// cluster's major; 17 only on a box with no Postgres yet).
     major: Option<u32>,
 }
 

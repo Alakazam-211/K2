@@ -98,11 +98,17 @@ CREATE INDEX IF NOT EXISTS idx_sql_moves_db ON sql_moves (database_id, started_a
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS idx_sql_moves_state ON sql_moves (state);
 --> statement-breakpoint
--- What `k2 db create` uses without --major. NULL = K2's policy default
--- (`pg_major::NEW_INSTALL`, 17): existing boxes default new databases to
--- 17 as soon as they run 0.46.3 (Rosson 2026-10-20, K2's pick). The owner
--- may pin it (`k2 db default-major <M>`).
+-- What `k2 db create` uses without --major (PRD §2 goal 2, Q8): 17 on new
+-- boxes, and on a box that already runs Postgres the major of its 5432
+-- cluster until the owner moves it (`k2 db default-major 17`). Keep
+-- today's path until the new one is proven: an existing 16 box keeps
+-- creating on 16. The backfill pins it to the cluster `enable` read; NULL
+-- (a box with no Postgres yet) resolves at runtime to the 5432 cluster's
+-- major, and to 17 only when there is none.
 ALTER TABLE sql_server ADD COLUMN default_major INTEGER;
+--> statement-breakpoint
+UPDATE sql_server SET default_major = installed_major
+WHERE id = 1 AND default_major IS NULL AND installed_major BETWEEN 10 AND 99;
 --> statement-breakpoint
 -- The per-agent "Allow this agent to manage Postgres versions" switch
 -- (`db_upgrade`). Default 0. Written only by POST /cli/agent-access/set:

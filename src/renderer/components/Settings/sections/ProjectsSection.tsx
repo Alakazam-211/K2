@@ -69,6 +69,7 @@ import { metaChordLabel } from '@/lib/shortcut-label'
 import { reorderedZoneIds } from '@/components/Sidebar/row-drag-reorder'
 import { AgentHandoffAcceptFrom } from './HandoffAcceptFrom'
 import { AgentAppsAccess } from './AgentAppsAccess'
+import { AgentPermissionCardsRow, AskedChip, PermissionAsksProvider } from './PermissionCardsSection'
 
 /**
  * Plan B cross-window sync: the old Tauri `projects_update` /
@@ -105,6 +106,7 @@ export const PROJECTS_MANIFEST: SettingEntry[] = [
   { id: 'projects.agents-can-use-compute', section: 'projects', label: 'Allow compute nodes', description: 'Lets this workspace\'s agents run builds and tests on the machines switched on in Settings → Compute (k2 compute run); on grants every machine, and ones added later', keywords: ['agents_can_use_compute', 'compute', 'compute nodes', 'node', 'machines', 'build', 'tests', 'k2 compute', 'passport', 'agent'] },
   { id: 'projects.agents-can-manage-compute', section: 'projects', label: 'Allow managing compute nodes', description: 'Lets this workspace\'s agent add and confirm compute machines, rename, pause, drain, resume, retire and route them, and grant or revoke them for any workspace (k2 compute node, k2 compute grant); every act is logged and adding or confirming a machine sends you an inbox note. Turning the preview on or off and removing a machine stay yours. Only the owner can switch it', keywords: ['agents_can_manage_compute', 'compute_manage', 'manage', 'compute', 'compute nodes', 'node', 'machines', 'enroll', 'confirm', 'grant', 'revoke', 'retire', 'k2 compute', 'passport', 'agent'] },
   { id: 'projects.agents-can-upgrade-postgres', section: 'projects', label: 'Allow this agent to manage Postgres versions', description: 'Move this agent\'s databases (and its Apps\' databases) to a newer Postgres, create on a chosen version, and roll back (k2 db upgrade, k2 db create --major); every act is logged. Deleting the old copy stays with you. The owner turns it on; the owner or an Admin may turn it off', keywords: ['agents_can_upgrade_postgres', 'db_upgrade', 'postgres', 'postgresql', 'pg', 'pg 17', 'version', 'major', 'upgrade', 'database', 'rollback', 'k2 db upgrade', 'agent'] },
+  { id: 'projects.agents-can-request-permissions', section: 'projects', label: 'Can ask for permission cards', description: 'Beta: lets this agent ask you or an admin for a setting change with a card in its Thread (k2 permission request); nothing changes until someone allows it. Shown while Permission cards is on for the server (Settings → Access → Permission Cards). The owner or an admin switches it', keywords: ['agents_can_request_permissions', 'permission_cards', 'permission cards', 'permission', 'card', 'ask', 'request', 'approve', 'beta', 'k2 permission', 'agent'] },
   { id: 'projects.agents-can-operate-compute', section: 'projects', label: 'Allow this agent to operate compute nodes', description: 'Lets this workspace\'s agent pause, drain, resume, narrow, update and restart services on your compute machines without asking each time; root actions still wait for you (k2 compute operate)', keywords: ['agents_can_operate_compute', 'compute_operate', 'operate', 'compute', 'compute nodes', 'node', 'machines', 'pause', 'update', 'k2 compute', 'passport', 'agent'] },
   { id: 'projects.agents-can-manage-projects', section: 'projects', label: 'Manage K2 projects', description: 'Lets this workspace\'s agent create, rename and delete K2 projects and add or remove their members (k2 project); on by default. Off: it can still read projects and post in its project chat', keywords: ['agents_can_manage_projects', 'projects_manage', 'project', 'projects', 'k2 project', 'members', 'project chat', 'passport', 'agent'] },
   { id: 'projects.agents-can-manage-gardens', section: 'projects', label: 'Manage Gardens and data sources', description: 'Lets this workspace\'s agent approve data sources, bind secrets it may already use, pause, pin, enable triggers and edit Gardens and widgets with no confirm (k2 sources, k2 zen); every act is logged. Off: it proposes and you approve', keywords: ['agents_can_manage_gardens', 'gardens_manage', 'gardens', 'garden', 'zen', 'widgets', 'data sources', 'sources', 'triggers', 'approve', 'k2 sources', 'k2 zen', 'passport', 'agent'] },
@@ -1333,7 +1335,7 @@ function ProjectDetail({
         }
       >
         {settingsTab === 'agent' && (
-          <>
+          <PermissionAsksProvider project={project}>
             <SettingsGroup title="Identity">
               {/* Picture, color, name and handle: the shared identity
                   controls (`components/AgentIdentity`), the same ones the
@@ -1400,6 +1402,7 @@ function ProjectDetail({
               <DbAgentCreateToggle project={project} />
             </SettingsGroup>
             <SettingsGroup title="Apps">
+              <AskedChip row="projects.agents-can-manage-skin" />
               <AgentAppsAccess project={project} />
             </SettingsGroup>
             <SettingsGroup title="Agents">
@@ -1412,6 +1415,7 @@ function ProjectDetail({
               <AgentsManagePostgresToggle project={project} />
               <AgentsManageProjectsToggle project={project} />
               <AgentsManageGardensToggle project={project} />
+              <AgentPermissionCardsRow project={project} />
             </SettingsGroup>
 
             <div className="pt-2 border-t border-[var(--color-border)]">
@@ -1422,7 +1426,7 @@ function ProjectDetail({
                 Remove Workspace
               </button>
             </div>
-          </>
+          </PermissionAsksProvider>
         )}
 
         {settingsTab === 'context' && (
@@ -1443,14 +1447,14 @@ function ProjectDetail({
         )}
 
         {settingsTab === 'connections' && (
-          <>
+          <PermissionAsksProvider project={project}>
             <SettingsGroup title="Connections">
               <AgentsCreateConnectionsToggle project={project} fetchProjects={fetchProjects} />
             </SettingsGroup>
             <SettingsGroup title="Connected Workspaces">
               <ConnectedWorkspacesPanel projectId={project.id} />
             </SettingsGroup>
-          </>
+          </PermissionAsksProvider>
         )}
 
         {settingsTab === 'skills' && (
@@ -1818,6 +1822,7 @@ export function DnsManageToggle({
         <div className="flex-1 min-w-0">
           <div className="text-xs font-medium text-[var(--color-text-primary)]">
             Allow agents to manage DNS for this workspace
+            <AskedChip row="projects.dns-manage-enabled" />
           </div>
           <div className={permissionDescClass(compact)}>
             {enabled
@@ -1913,6 +1918,7 @@ export function AgentsManageAgentsToggle({
         <div className="flex-1 min-w-0">
           <div className="text-xs font-medium text-[var(--color-text-primary)]">
             Allow hiring and managing agents
+            <AskedChip row="projects.agents-can-manage-agents" />
           </div>
           <div className={permissionDescClass(compact)}>
             Lets this workspace&rsquo;s main agent open and stop sidecars (k2 sidecar). Later it also
@@ -1999,6 +2005,7 @@ export function AgentsManageVaultToggle({
         <div className="flex-1 min-w-0">
           <div className="text-xs font-medium text-[var(--color-text-primary)]">
             Allow managing server-wide secrets
+            <AskedChip row="projects.agents-can-manage-vault" />
           </div>
           <div className={permissionDescClass(compact)}>
             Lets this workspace&rsquo;s main agent share server secrets with other workspaces and look
@@ -2100,6 +2107,7 @@ export function AgentsUseComputeToggle({
         <div className="flex-1 min-w-0">
           <div className="text-xs font-medium text-[var(--color-text-primary)]">
             Allow compute nodes
+            <AskedChip row="projects.agents-can-use-compute" />
           </div>
           <div className={permissionDescClass(compact)}>
             Allow this agent to use compute nodes: run builds and tests on the machines you&rsquo;ve
@@ -2227,6 +2235,7 @@ export function AgentsOperateComputeToggle({
           <div className="text-xs font-medium text-[var(--color-text-primary)]">
             Allow this agent to operate compute nodes{' '}
             <span className="text-[10px] font-normal text-[var(--color-text-muted)]">Beta</span>
+            <AskedChip row="projects.agents-can-operate-compute" />
           </div>
           <div className={permissionDescClass(compact)}>
             Lets this agent look after your compute machines without asking each time: pause, drain
@@ -2352,6 +2361,7 @@ export function AgentsManageComputeToggle({
           <div className="text-xs font-medium text-[var(--color-text-primary)]">
             Allow managing compute nodes{' '}
             <span className="text-[10px] font-normal text-[var(--color-text-muted)]">Beta</span>
+            <AskedChip row="projects.agents-can-manage-compute" />
           </div>
           <div className={permissionDescClass(compact)}>
             Lets this agent add and confirm compute machines, rename, pause, drain, resume, retire
@@ -2575,6 +2585,7 @@ export function AgentsManageProjectsToggle({
         <div className="flex-1 min-w-0">
           <div className="text-xs font-medium text-[var(--color-text-primary)]">
             Manage K2 projects
+            <AskedChip row="projects.agents-can-manage-projects" />
           </div>
           <div className={permissionDescClass(compact)}>
             Lets this workspace&rsquo;s agent create, rename and delete K2 projects and add or remove
@@ -2663,6 +2674,7 @@ export function AgentsManageGardensToggle({
         <div className="flex-1 min-w-0">
           <div className="text-xs font-medium text-[var(--color-text-primary)]">
             Manage Gardens and data sources
+            <AskedChip row="projects.agents-can-manage-gardens" />
           </div>
           <div className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
             Lets this workspace&rsquo;s agent approve data sources (its own and others&rsquo;), pause and
@@ -2751,6 +2763,7 @@ export function MailManageToggle({
         <div className="flex-1 min-w-0">
           <div className="text-xs font-medium text-[var(--color-text-primary)]">
             Allow agents to manage hosted mail on this host
+            <AskedChip row="projects.mail-manage-enabled" />
           </div>
           <div className={permissionDescClass(compact)}>
             {enabled
@@ -2834,6 +2847,7 @@ export function DbAgentCreateToggle({
         <div className="flex-1 min-w-0">
           <div className="text-xs font-medium text-[var(--color-text-primary)]">
             Allow this agent to create databases
+            <AskedChip row="projects.db-agent-create" />
           </div>
           <div className={permissionDescClass(compact)}>
             Existing databases this workspace owns or is granted are usable without this toggle;
@@ -2913,6 +2927,7 @@ export function AgentsCreateConnectionsToggle({
         <div className="flex-1 min-w-0">
           <div className="text-xs font-medium text-[var(--color-text-primary)]">
             Allow agents to create connections for this workspace
+            <AskedChip row="projects.agents-can-create-connections" />
           </div>
           <div className={permissionDescClass(compact)}>
             {enabled
@@ -4561,6 +4576,7 @@ function MailAgentSendControl({
         <div className="flex-1 min-w-0">
           <div className="text-xs font-medium text-[var(--color-text-primary)]">
             Let this agent send email
+            <AskedChip row="projects.mail-agent-send" />
           </div>
           <div className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
             Covers hosted K2 mailboxes and linked inboxes (Gmail, Outlook, IMAP). The inbox

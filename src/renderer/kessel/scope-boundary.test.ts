@@ -171,6 +171,9 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   // 0.45.5 Settings → Compute approvals (node admin S10): the window's
   // server's held admin requests.
   'components/Settings/sections/compute-admin-api.ts',
+  // 0.46.3 Settings → Access → Permission Cards (Beta): the window's
+  // server's switches, agents and requests waiting on you.
+  'components/Settings/sections/permission-cards-api.ts',
   // 0.45.4 federation: peer-list change events for the window's server.
   'components/Settings/sections/ConnectionsSection.tsx',
   // 0.45.5 Settings → Notifications (Thread push): the window's server's

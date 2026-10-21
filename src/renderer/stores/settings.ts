@@ -117,6 +117,9 @@ export type SettingsSection =
   /** Settings → Access → User Templates (access_templates recipes). */
   | 'user-templates'
   | 'api-tokens'
+  /** Settings → Access → Permission Cards (Beta, prd-agent-settings-cards-v1
+   *  §2.1): the owner's global switch, agents' switches, Waiting on you. */
+  | 'permission-cards'
   /** Settings → Access → Vault (prd-k2-vault-v1 §16.1, KV39). */
   | 'vault'
   /** Settings → Gardens → External Data (contract-sources-v1 §8). */

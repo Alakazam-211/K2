@@ -528,7 +528,7 @@ s_withdraw() {
   # V71: an `--any` job waits on its server (any_hold, 60 s) for a node
   # that starts it now, then joins n1's queue; only a node-queued job is
   # withdrawn (a new generation).
-  wait_job B "$any" '.node == "n1" and (.reason == "node_queued" or .queue != null)' 120 >/dev/null
+  wait_job B "$any" '.node == "n1" and .reason == "node_queued" and .generation == 1' 120 >/dev/null
   api B POST /cli/compute/nodes/pause '{"node":"n2","action":"resume"}' >/dev/null
   local j
   j="$(wait_job B "$any" '.state == "done"' 120)"

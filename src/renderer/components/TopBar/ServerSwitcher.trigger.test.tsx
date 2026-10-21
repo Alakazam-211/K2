@@ -98,7 +98,7 @@ describe('server switcher trigger: fixed width, ellipsis', () => {
     expect(t.getAttribute('aria-expanded')).toBe('false')
     // Tokens only: no hard-coded colour in the chip's classes.
     expect(t.className).not.toMatch(/#[0-9a-f]{3,8}|rgba?\(/i)
-    // Air before the cog tab: -8 against the cluster's 14px gap.
+    // Air before the first page tab: -8 against the cluster's 14px gap.
     expect(SERVER_CHIP_MARGIN_RIGHT_PX).toBe(-8)
     expect(t.parentElement?.style.marginRight).toBe('-8px')
   })

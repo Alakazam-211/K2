@@ -1,11 +1,11 @@
 // Projects V1 P4 (prd-projects-v1 §6.0) — the top bar's page switcher:
-// ⚙ | Home | Agents | Projects | Tickets | Wiki. Replaces the standalone
+// Home | Agents | Projects | Tickets | Wiki | ⚙. Replaces the standalone
 // v0.40.26 FeedbackTopBarButton: its waiting-count badge moves onto the
 // Feedback tab (same count, same show/hide semantics) and its event
 // wiring (initFeedbackEvents + the badge re-count on projects changes)
 // moves here unchanged. The Projects tab carries the unread-groups badge
-// (§4.4). The settings cog is a fourth tab with the same selected
-// underline. Rendered in the workspace TopBar, overlay pages, AND
+// (§4.4). The settings cog is a tab too, with the same selected
+// underline; since 0.46.3 it is the last one, right of the Wiki tab. Rendered in the workspace TopBar, overlay pages, AND
 // Settings so the switcher stays available while Settings is open.
 
 import { useEffect, type ReactNode } from 'react'
@@ -203,18 +203,6 @@ export default function PageTabs(): React.JSX.Element {
 
   return (
     <div className="no-drag flex items-center gap-0.5">
-      <PageTab
-        selected={settingsOpen}
-        onSelect={() => {
-          if (!useSettingsStore.getState().settingsOpen) {
-            useSettingsStore.getState().openSettings()
-          }
-        }}
-        title={withChord('Settings', 'Meta+,')}
-        ariaLabel="Settings"
-      >
-        <SettingsIcon size={PAGE_TAB_ICON_PX} />
-      </PageTab>
       {PAGE_TAB_ITEMS.map(({ page: p, Icon }) => {
         const badge =
           p === 'projects'
@@ -243,6 +231,20 @@ export default function PageTabs(): React.JSX.Element {
           </PageTab>
         )
       })}
+      {/* 0.46.3 (Rosson 2026-10-21): the cog is last, right of the Wiki
+          (library) tab, so DOM, Tab-key and visual order all agree. */}
+      <PageTab
+        selected={settingsOpen}
+        onSelect={() => {
+          if (!useSettingsStore.getState().settingsOpen) {
+            useSettingsStore.getState().openSettings()
+          }
+        }}
+        title={withChord('Settings', 'Meta+,')}
+        ariaLabel="Settings"
+      >
+        <SettingsIcon size={PAGE_TAB_ICON_PX} />
+      </PageTab>
     </div>
   )
 }

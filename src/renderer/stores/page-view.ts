@@ -1,6 +1,6 @@
 // Projects V1 P4 (prd-projects-v1 §6.0) — which top-level PAGE the app
-// shows. The top bar's switcher (⚙ | Home | Agents | Projects | Tickets |
-// Wiki) selects one of the page views: 'agents' is today's default workspace
+// shows. The top bar's switcher (Home | Agents | Projects | Tickets |
+// Wiki | ⚙) selects one of the page views: 'agents' is today's default workspace
 // view (Sidebar + tabs + terminal); 'home' is the SAME shell with the Home
 // roster in the sidebar (agents picked from any saved server — Home P1,
 // prd-home-v1 H2: "reuses the Agents page shell"); 'projects', 'feedback'

@@ -134,6 +134,11 @@ export interface LlmAccountsDoc {
   airgap: boolean
   switchNote: string
   keychainRepairs: KeychainRepair[]
+  /** May THIS viewer change the server default (switch / next)? Admin
+   *  and above only (Rosson 2026-10-20); the daemon decides. */
+  canChangeDefault: boolean
+  /** Why not, shown on the disabled control. */
+  changeDefaultReason: string | null
 }
 
 export interface AccountsEntry {
@@ -223,6 +228,9 @@ export function parseAccountsDoc(raw: unknown): LlmAccountsDoc {
     logins: asArray<LlmLogin>(o.logins),
     airgap: o.airgap === true,
     switchNote: typeof o.switchNote === 'string' ? o.switchNote : '',
+    // An older daemon doesn't send it: it still lets every login switch.
+    canChangeDefault: o.canChangeDefault !== false,
+    changeDefaultReason: typeof o.changeDefaultReason === 'string' ? o.changeDefaultReason : null,
     keychainRepairs: asArray<Record<string, unknown>>(o.keychainRepairs)
       .filter((r) => typeof r.command === 'string' && r.command !== '')
       .map((r) => ({

@@ -17090,8 +17090,8 @@ k2 llm tokens — LLM tokens: subscriptions and API tokens
   k2 llm tokens usage [--json]
   k2 llm tokens add <tool> <label> [--device]        add a subscription (the tool's own sign-in)
   k2 llm tokens login <tool> <label> [--device]      sign a subscription in again
-  k2 llm tokens switch <tool> <label>                use this token as the server default
-  k2 llm tokens next <tool>                          use the next signed-in subscription
+  k2 llm tokens switch <tool> <label>                use this token as the server default (Admin or Owner)
+  k2 llm tokens next <tool>                          use the next signed-in subscription (Admin or Owner)
   k2 llm tokens rename <tool> <label> <new-label>
   k2 llm tokens remove <tool> <label>                not the server default (kept in Trash)
   k2 llm tokens refresh [<tool> <label>] [--usage]   re-read state (and usage)
@@ -27720,14 +27720,14 @@ cmd_schema() {
     {
       "name": "llm tokens switch",
       "usage": "k2 llm tokens switch <tool> <label>",
-      "description": "Use this token as the server default. Affects every chat that uses Server default on this server. Not from K2 terminals.",
+      "description": "Use this token as the server default. Affects every chat that uses Server default on this server. Admin or Owner only (a Member login is refused with admin_required). Not from K2 terminals.",
       "args": [{"name": "tool", "required": true}, {"name": "label", "required": true}],
       "flags": []
     },
     {
       "name": "llm tokens next",
       "usage": "k2 llm tokens next <tool>",
-      "description": "Use the next signed-in subscription as the server default (one click when a session hits its limit). Never automatic.",
+      "description": "Use the next signed-in subscription as the server default (one click when a session hits its limit). Never automatic. Admin or Owner only (a Member login is refused with admin_required).",
       "args": [{"name": "tool", "required": true}],
       "flags": []
     },

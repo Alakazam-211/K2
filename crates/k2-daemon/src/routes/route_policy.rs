@@ -670,6 +670,8 @@ pub const ROUTES: &[Route] = &[
     get("/cli/inbox/search", Member),
     // LLM login wallet (Settings → LLMs, `k2 llm accounts`): the
     // `/cli/agents/*` floor. Passports are read-only in the handler.
+    // Changing the server default (switch / next) is Admin and above
+    // (Rosson 2026-10-20); the list stays readable for Members.
     post("/cli/llm/accounts/add", Member),
     post("/cli/llm/accounts/add-key", Member),
     get("/cli/llm/accounts/list", Member),
@@ -677,14 +679,14 @@ pub const ROUTES: &[Route] = &[
     post("/cli/llm/accounts/login/cancel", Member),
     post("/cli/llm/accounts/login/input", Member),
     get("/cli/llm/accounts/login/status", Member),
-    post("/cli/llm/accounts/next", Member),
+    post("/cli/llm/accounts/next", Admin),
     post("/cli/llm/accounts/pin", Member),
     get("/cli/llm/accounts/pins", Member),
     post("/cli/llm/accounts/refresh", Member),
     post("/cli/llm/accounts/remove", Member),
     post("/cli/llm/accounts/rename", Member),
     get("/cli/llm/accounts/status", Member),
-    post("/cli/llm/accounts/switch", Member),
+    post("/cli/llm/accounts/switch", Admin),
     post("/cli/llm/accounts/unpin", Member),
     get("/cli/llm/accounts/usage", Member),
     post("/cli/llm/chat", Member),
@@ -2377,6 +2379,37 @@ mod tests {
         assert!(floor.admits(Role::Owner));
         let status = lookup("/cli/power/status").expect("power status is classified");
         assert_eq!(status.get.expect("power status is a GET route").as_wire(), "member");
+    }
+
+    #[test]
+    fn llm_server_default_change_needs_admin_and_the_list_stays_member() {
+        // Rosson 2026-10-20 (#7): switch / next move every chat on Server
+        // default, so they are Admin and above. Reading stays Member.
+        for p in ["/cli/llm/accounts/switch", "/cli/llm/accounts/next"] {
+            let row = lookup(p).expect("classified");
+            assert!(row.get.is_none(), "{p} is POST-only");
+            let floor = row.post.expect("POST floor");
+            assert_eq!(floor.as_wire(), "admin", "{p}");
+            assert!(!floor.admits(Role::Member), "{p}");
+            assert!(floor.admits(Role::Admin), "{p}");
+            assert!(floor.admits(Role::Owner), "{p}");
+        }
+        for p in ["/cli/llm/accounts/list", "/cli/llm/accounts/status", "/cli/llm/accounts/usage"] {
+            assert_eq!(lookup(p).expect("classified").get.expect("GET").as_wire(), "member", "{p}");
+        }
+        crate::test_support::with_temp_home(|| {
+            let member = session("llm_member", Role::Member);
+            let admin = session("llm_admin", Role::Admin);
+            let owner = session("llm_owner", Role::Owner);
+            for p in ["/cli/llm/accounts/switch", "/cli/llm/accounts/next"] {
+                let r = role_gate("POST", p, &format!("token={member}"), OWNER).expect("member refused");
+                assert_eq!(r.status, "403 Forbidden", "{p}: {}", r.body);
+                assert!(role_gate("POST", p, &format!("token={admin}"), OWNER).is_none(), "{p}: admin passes");
+                assert!(role_gate("POST", p, &format!("token={owner}"), OWNER).is_none(), "{p}: owner login passes");
+                assert!(role_gate("POST", p, &format!("token={OWNER}"), OWNER).is_none(), "{p}: owner token passes");
+            }
+            assert!(role_gate("GET", "/cli/llm/accounts/list", &format!("token={member}"), OWNER).is_none());
+        });
     }
 
     #[test]

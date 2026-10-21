@@ -3,7 +3,9 @@
 //!
 //! Callers:
 //! - the owner token and Connect logins (Member+, the `/cli/agents/*`
-//!   floor) may do everything;
+//!   floor) may do everything, except changing the server default
+//!   (`switch`, `next`), which needs an Admin or Owner login (Rosson
+//!   2026-10-20; [`default_change_refusal`]);
 //! - a session passport — an agent tab **and** a K2 shell tab (Rosson:
 //!   a K2 terminal has its workspace agent's permissions) — is read-only:
 //!   `list`, `status`, `usage`, and sees no email / org;
@@ -74,6 +76,35 @@ fn who(caller: &Caller) -> Option<Who> {
         Caller::Shell { .. } | Caller::Agent(_) => Some(Who::Passport),
         Caller::WrongCredential | Caller::Invalid => None,
     }
+}
+
+/// Why this caller may not change the server-wide default token
+/// (`switch` / `next`), or `None` when it may. The owner token and Admin
+/// or Owner logins may; a Member login may not (Rosson 2026-10-20: the
+/// default moves every chat on Server default, so it is Admin and above).
+/// Passports never reach a mutation (refused earlier as `owner_only`).
+pub fn default_change_blocked(caller: &Caller) -> Option<&'static str> {
+    use k2_core::connect_users::Role;
+    match caller {
+        Caller::Owner => None,
+        Caller::Login { username } => {
+            match k2_core::connect_users::role_for_user(username) {
+                Some(r) if r >= Role::Admin => None,
+                _ => Some(DEFAULT_CHANGE_ADMIN_REASON),
+            }
+        }
+        _ => Some(DEFAULT_CHANGE_AGENT_REASON),
+    }
+}
+
+/// Shown on the refusal and next to the disabled control in Settings.
+pub const DEFAULT_CHANGE_ADMIN_REASON: &str =
+    "Only an Admin or the Owner can change the server default token. Ask an Admin, or set a token for your own chat instead.";
+pub const DEFAULT_CHANGE_AGENT_REASON: &str =
+    "Agents and K2 terminals can only read tokens. Change the server default on Settings → Language Models → Subs / Tokens.";
+
+fn default_change_refusal(caller: &Caller) -> Option<CliResponse> {
+    default_change_blocked(caller).map(|why| refuse(403, "admin_required", why))
 }
 
 fn status_line(code: u16) -> &'static str {
@@ -316,7 +347,7 @@ fn with_conn<T>(f: impl FnOnce(&rusqlite::Connection) -> T) -> T {
     f(&conn)
 }
 
-fn list_doc(human: bool, who_key: Option<&str>) -> Result<Value, WalletError> {
+fn list_doc(human: bool, who_key: Option<&str>, default_blocked: Option<&str>) -> Result<Value, WalletError> {
     let mut tools = Vec::new();
     let all_pins = with_conn(|conn| -> Result<Vec<Value>, WalletError> {
         Ok(k2_core::llm_accounts::pins::list_pins(conn)?.iter().map(|p| pin_json(conn, p)).collect())
@@ -379,6 +410,10 @@ fn list_doc(human: bool, who_key: Option<&str>) -> Result<Value, WalletError> {
         "keychainRepairs": keychain_repairs,
         "airgap": k2_core::airgap::enabled(),
         "switchNote": rt::SWITCH_NOTE,
+        // May THIS caller change the server default (switch / next)?
+        // Admin and above only; the reason is shown on the disabled control.
+        "canChangeDefault": default_blocked.is_none(),
+        "changeDefaultReason": default_blocked,
     }))
 }
 
@@ -515,8 +550,14 @@ pub fn handle(
             "Agents and K2 terminals can only read tokens. Change tokens on Settings → Language Models → Subs / Tokens, or run k2 from a terminal outside K2.",
         );
     }
+    if path == SWITCH || path == NEXT {
+        if let Some(r) = default_change_refusal(&caller) {
+            audit("llm_accounts.switch_refused", key.as_deref().unwrap_or("-"), "admin_required", ingress);
+            return r;
+        }
+    }
     match path {
-        LIST => match list_doc(human, key.as_deref()) {
+        LIST => match list_doc(human, key.as_deref(), default_change_blocked(&caller)) {
             Ok(v) => ok(v),
             Err(e) => wallet_err(e),
         },
@@ -1000,5 +1041,78 @@ mod tests {
         let active = with_conn(|conn| wallet_core::active_id(conn, Tool::Claude)).unwrap();
         assert_eq!(active.as_deref(), Some(a.as_str()));
         clear_claude_rows();
+    }
+
+    // ── #7: the server default is Admin and above ────────────────────
+
+    fn login(name: &str, role: k2_core::connect_users::Role) -> Caller {
+        k2_core::connect_users::add_user(name, "password123").expect("add_user");
+        if role != k2_core::connect_users::Role::Member {
+            k2_core::connect_users::set_role(name, role).expect("set_role");
+        }
+        Caller::Login { username: name.into() }
+    }
+
+    fn agent() -> Caller {
+        Caller::Agent(crate::sidecar_routes::AgentCaller {
+            project_id: "ws-test".into(),
+            map_key: None,
+            args: vec![],
+            sandboxed: false,
+        })
+    }
+
+    fn call(path: &str, caller: Caller, body: &str) -> (String, Value) {
+        let r = handle(path, caller, body.as_bytes(), &HashMap::new(), "test");
+        (r.status.to_string(), serde_json::from_str(&r.body).expect("json body"))
+    }
+
+    #[test]
+    fn a_member_cannot_change_the_server_default_but_admin_and_owner_can() {
+        use k2_core::connect_users::Role;
+        let _home = crate::test_support::TempHome::new();
+        clear_claude_rows();
+        let member = login("llmdef_member", Role::Member);
+        let admin = login("llmdef_admin", Role::Admin);
+        let owner_login = login("llmdef_owner", Role::Owner);
+        let body = r#"{"id":"acc_nope","tool":"claude"}"#;
+        for path in [SWITCH, NEXT] {
+            let (st, v) = call(path, member.clone(), body);
+            assert_eq!(st, "403 Forbidden", "{path}: {v}");
+            assert_eq!(v["error"]["code"], "admin_required", "{path}: {v}");
+            assert_eq!(v["error"]["hint"], DEFAULT_CHANGE_ADMIN_REASON, "{v}");
+            // Admin, an Owner login and the owner token clear the gate and
+            // get the wallet's own answer (no such token / no next).
+            for c in [admin.clone(), owner_login.clone(), Caller::Owner] {
+                let (st, v) = call(path, c.clone(), body);
+                assert_ne!(v["error"]["code"], "admin_required", "{path} {c:?}: {st} {v}");
+                assert_eq!(st, "404 Not Found", "{path} {c:?}: {v}");
+            }
+        }
+        // The list stays readable for a Member and says why the control is off.
+        let (st, v) = call(LIST, member, "");
+        assert_eq!(st, "200 OK", "{v}");
+        assert_eq!(v["canChangeDefault"], false, "{v}");
+        assert_eq!(v["changeDefaultReason"], DEFAULT_CHANGE_ADMIN_REASON);
+        for c in [admin, owner_login, Caller::Owner] {
+            let (st, v) = call(LIST, c.clone(), "");
+            assert_eq!(st, "200 OK", "{v}");
+            assert_eq!(v["canChangeDefault"], true, "{c:?}: {v}");
+            assert!(v["changeDefaultReason"].is_null(), "{c:?}: {v}");
+        }
+    }
+
+    #[test]
+    fn an_agent_passport_stays_read_only() {
+        let _home = crate::test_support::TempHome::new();
+        let (st, v) = call(LIST, agent(), "");
+        assert_eq!(st, "200 OK", "{v}");
+        assert_eq!(v["canChangeDefault"], false, "{v}");
+        assert_eq!(v["changeDefaultReason"], DEFAULT_CHANGE_AGENT_REASON);
+        for path in [SWITCH, NEXT, ADD, REMOVE, PIN] {
+            let (st, v) = call(path, agent(), r#"{"id":"acc_nope","tool":"claude"}"#);
+            assert_eq!(st, "403 Forbidden", "{path}: {v}");
+            assert_eq!(v["error"]["code"], "owner_only", "{path}: {v}");
+        }
     }
 }

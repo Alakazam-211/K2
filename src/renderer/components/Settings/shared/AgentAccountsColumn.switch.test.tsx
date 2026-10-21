@@ -29,6 +29,7 @@ vi.mock('@tauri-apps/plugin-opener', () => ({ openUrl: async () => {} }))
 import {
   AgentAccountsColumn,
   ACTIVE_RELOGIN_HINT,
+  ADMIN_SWITCH_REASON,
   SIGNING_IN_SWITCH_REASON,
   switchConfirmText,
 } from './AgentAccountsColumn'
@@ -76,6 +77,7 @@ const LZTEK = account({
 const SWITCHED_AT = NOW_S - 2 * 3600
 
 let logins: unknown[] = []
+let docExtra: Record<string, unknown> = {}
 
 function doc(): Record<string, unknown> {
   const notYet = (tool: string, display: string) => ({
@@ -94,6 +96,7 @@ function doc(): Record<string, unknown> {
     logins,
     airgap: false,
     switchNote: 'x',
+    ...docExtra,
   }
 }
 
@@ -102,6 +105,7 @@ const confirmSpy = vi.fn(async (_o: { title: string; message: string; confirmLab
 beforeEach(() => {
   resetLlmAccountsForTests()
   logins = []
+  docExtra = {}
   h.daemonCliGet.mockReset()
   h.daemonCliPost.mockReset()
   confirmSpy.mockReset()
@@ -158,6 +162,44 @@ describe('switching the server default', () => {
     fireEvent.click(btn)
     expect(confirmSpy).not.toHaveBeenCalled()
     expect(h.daemonCliPost).not.toHaveBeenCalledWith('llm/accounts/switch', expect.anything())
+  })
+})
+
+describe('the server default is Admin and above (Rosson 2026-10-20)', () => {
+  const REASON = 'Only an Admin or the Owner can change the server default token. Ask an Admin, or set a token for your own chat instead.'
+
+  it('a Member sees the tokens, but both switch controls are off with the reason shown', async () => {
+    docExtra = { canChangeDefault: false, changeDefaultReason: REASON }
+    await renderColumn()
+    expect(screen.getByTestId('llm-default-admin-only').textContent).toBe(REASON)
+    const use = within(screen.getByTestId('llm-account-acc_afsrow')).getByRole('button', { name: 'Use this token' }) as HTMLButtonElement
+    expect(use.disabled).toBe(true)
+    expect(use.title).toBe(REASON)
+    fireEvent.click(use)
+    const next = screen.getByRole('button', { name: 'Use next token' }) as HTMLButtonElement
+    expect(next.disabled).toBe(true)
+    expect(next.title).toBe(REASON)
+    fireEvent.click(next)
+    await Promise.resolve()
+    expect(confirmSpy).not.toHaveBeenCalled()
+    expect(h.daemonCliPost).not.toHaveBeenCalledWith('llm/accounts/switch', expect.anything())
+  })
+
+  it('an Admin or the Owner keeps both controls', async () => {
+    docExtra = { canChangeDefault: true, changeDefaultReason: null }
+    await renderColumn()
+    expect(screen.queryByTestId('llm-default-admin-only')).toBeNull()
+    const use = within(screen.getByTestId('llm-account-acc_afsrow')).getByRole('button', { name: 'Use this token' }) as HTMLButtonElement
+    expect(use.disabled).toBe(false)
+    expect((screen.getByRole('button', { name: 'Use next token' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('a doc without the field (older daemon) keeps the controls, and a missing reason falls back', () => {
+    expect(parseAccountsDoc({ tools: [] }).canChangeDefault).toBe(true)
+    const d = parseAccountsDoc({ tools: [], canChangeDefault: false })
+    expect(d.canChangeDefault).toBe(false)
+    expect(d.changeDefaultReason).toBeNull()
+    expect(ADMIN_SWITCH_REASON).toContain('Admin')
   })
 })
 

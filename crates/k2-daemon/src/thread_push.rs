@@ -302,6 +302,7 @@ impl Coalescer {
             // The latest post itself: sealed alerts only (never a legacy
             // push), whatever the previews switches say.
             msg: w.post.msg.clone(),
+            budget: k2_core::push::ThreadBudget::Thread,
         });
         w.pending = 0;
         w.last_push = Some(now);

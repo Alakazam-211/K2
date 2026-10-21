@@ -244,6 +244,32 @@ pub struct ThreadPush {
     /// govern the lock-screen text (the visible title/body). `None` = not
     /// known.
     pub msg: Option<ThreadMsg>,
+    /// Which budget this push draws from, and what it announces
+    /// (prd-agent-settings-cards-v1 rev 3.1 §6.7, §17.7). Every agent post
+    /// is [`ThreadBudget::Thread`]; a permission card's targeted push is
+    /// [`ThreadBudget::Permission`]: still a Thread push (`kind:"thread"`,
+    /// sealed plaintext included), no new `PushEvent`.
+    pub budget: ThreadBudget,
+}
+
+/// [`ThreadPush::budget`]: the bucket a Thread push draws from, and for a
+/// permission card the request it is about.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum ThreadBudget {
+    /// An agent's post, coalesced (the daemon's Thread bucket).
+    #[default]
+    Thread,
+    /// A permission card, to the people who may answer it only
+    /// ([`budget::BudgetClass::Permission`], 30 an hour per person). The
+    /// title is "{agent} asks for a permission", the body the Settings
+    /// label; `data` gains `requestId` and `permission:"1"`. Never the
+    /// agent's `--why`, a note or a value.
+    Permission {
+        /// `data.requestId`: `pr_…` or the held request's own id.
+        request_id: String,
+        /// The Settings label (`view.setting`): the body.
+        setting: String,
+    },
 }
 
 /// The latest Thread post a push covers (sealed alerts only).
@@ -387,6 +413,10 @@ impl PushEvent {
             | Self::ProjectPost(_) => "K2".to_string(),
             // Silent: no visible text.
             Self::Badge(_) => String::new(),
+            // Permission cards (rev 3.1 §17.7): "billing asks for a permission".
+            Self::ThreadPost(ThreadPush { budget: ThreadBudget::Permission { .. }, agent_name, .. }) => {
+                format!("{agent_name} asks for a permission")
+            }
             // §7: the agent's display name; name-only.
             Self::ThreadPost(t) => t.agent_name.clone(),
         }
@@ -406,6 +436,9 @@ impl PushEvent {
                 format!("New message in {project_name}")
             }
             Self::Badge(_) => String::new(),
+            // The Settings label, whatever the previews switches say: it is
+            // K2's own words, never the agent's or a note (§17.7).
+            Self::ThreadPost(ThreadPush { budget: ThreadBudget::Permission { setting, .. }, .. }) => setting.clone(),
             Self::ThreadPost(t) => thread_body(t.msg_kind, t.count, t.shown_preview()),
         }
     }
@@ -466,6 +499,7 @@ impl PushEvent {
     /// The local budget a send of this event draws from (TP2).
     pub fn budget_class(&self) -> budget::BudgetClass {
         match self {
+            Self::ThreadPost(ThreadPush { budget: ThreadBudget::Permission { .. }, .. }) => budget::BudgetClass::Permission,
             Self::ThreadPost(_) => budget::BudgetClass::Thread,
             Self::Badge(_) => budget::BudgetClass::Badge,
             _ => budget::BudgetClass::Other,
@@ -523,26 +557,39 @@ impl PushEvent {
                 ("unreadTotal", b.unread_total.clone()),
                 ("waitingTotal", b.waiting_total.clone()),
             ]),
-            Self::ThreadPost(t) => PushData::of(&[
-                ("kind", PUSH_KIND_THREAD.to_string()),
-                ("addr", t.addr.clone()),
-                ("conversationId", t.conversation_id.clone()),
-                ("seq", t.seq.to_string()),
-                ("projectId", t.project_id.clone()),
-                ("agentName", t.agent_name.clone()),
-                ("msgKind", t.msg_kind.as_wire().to_string()),
-                ("count", t.count.to_string()),
-                ("unreadTotal", t.unread_total.clone()),
-                ("waitingTotal", t.waiting_total.clone()),
-                // iOS Communication Notifications: the phone's Notification
-                // Service Extension draws the agent's avatar (cached by
-                // rev, compared with the list's `iconRev`) and colour.
-                ("avatarRev", t.avatar_rev.clone()),
-                ("agentColor", t.agent_color.clone()),
-            ]),
+            Self::ThreadPost(t) => {
+                let mut d = Self::thread_data(t);
+                if let ThreadBudget::Permission { request_id, .. } = &t.budget {
+                    d.insert("requestId", request_id.clone());
+                    d.insert("permission", "1");
+                }
+                d
+            }
             // Legacy desktop-era events carry no mobile deep link.
             Self::AgentNeedsAttention { .. } | Self::HeartbeatFailed { .. } => PushData::default(),
         }
+    }
+
+    /// Today's Thread `data` (every Thread push; a permission card adds
+    /// two keys on top).
+    fn thread_data(t: &ThreadPush) -> PushData {
+        PushData::of(&[
+            ("kind", PUSH_KIND_THREAD.to_string()),
+            ("addr", t.addr.clone()),
+            ("conversationId", t.conversation_id.clone()),
+            ("seq", t.seq.to_string()),
+            ("projectId", t.project_id.clone()),
+            ("agentName", t.agent_name.clone()),
+            ("msgKind", t.msg_kind.as_wire().to_string()),
+            ("count", t.count.to_string()),
+            ("unreadTotal", t.unread_total.clone()),
+            ("waitingTotal", t.waiting_total.clone()),
+            // iOS Communication Notifications: the phone's Notification
+            // Service Extension draws the agent's avatar (cached by
+            // rev, compared with the list's `iconRev`) and colour.
+            ("avatarRev", t.avatar_rev.clone()),
+            ("agentColor", t.agent_color.clone()),
+        ])
     }
 }
 
@@ -2195,6 +2242,7 @@ mod tests {
             agent_color: "#3b82f6".into(),
             preview: String::new(),
             msg: None,
+            budget: ThreadBudget::Thread,
         })
     }
 
@@ -2437,6 +2485,46 @@ mod tests {
         let ticket = PushEvent::FeedbackCommented { feedback_id: "f".into(), assignees: vec![] }.data();
         assert_eq!(ticket.get("avatarRev"), None);
         assert_eq!(ticket.get("agentColor"), None);
+    }
+
+    /// A permission card's push (prd-agent-settings-cards-v1 rev 3.1 §6.7,
+    /// §17.7): still a Thread push (`kind:"thread"`, grouped by the
+    /// conversation, targeted), with today's keys plus `requestId` and
+    /// `permission:"1"`; title "{agent} asks for a permission", body the
+    /// Settings label whatever the previews say; its own budget class.
+    #[test]
+    fn a_permission_push_is_a_thread_push_with_its_request_and_budget() {
+        let cid = "c-permission";
+        let PushEvent::ThreadPost(base) = thread_event(ThreadMsgKind::Choice, 1, cid) else { unreachable!() };
+        let event = PushEvent::ThreadPost(ThreadPush {
+            agent_name: "billing".into(),
+            preview: "Use the minis tonight".into(),
+            budget: ThreadBudget::Permission { request_id: "pr_7f3a2c".into(), setting: "Allow compute nodes".into() },
+            ..base.clone()
+        });
+        assert_eq!(event.title(), "billing asks for a permission");
+        assert_eq!(event.body(), "Allow compute nodes", "the Settings label, never a preview");
+        assert_eq!(event.without_preview().body(), "Allow compute nodes");
+        assert_eq!(event.budget_class(), budget::BudgetClass::Permission);
+        assert_eq!(event.thread_id().as_deref(), Some("thread:c-permission"));
+        assert_eq!(event.target_usernames(), Some(&["owner".to_string()][..]));
+        let stamp = PushStamp { subdomain: "rosson".into(), instance_id: TEST_INSTANCE.into() };
+        let p = K2Cloud::payload(&event, &stamp, TEST_KEY);
+        let plain = K2Cloud::payload(&PushEvent::ThreadPost(base), &stamp, TEST_KEY);
+        let mut want = plain["data"].as_object().expect("data").clone();
+        want.insert("requestId".into(), serde_json::json!("pr_7f3a2c"));
+        want.insert("permission".into(), serde_json::json!("1"));
+        assert_eq!(p["data"], serde_json::Value::Object(want), "today's Thread keys plus two");
+        assert_eq!(p["data"]["kind"], "thread");
+        assert_eq!(p["data"]["msgKind"], "choice");
+        // The sealed plaintext is the same `kind:"thread"` with the same data.
+        let ctx = e2e::SealCtx { kid: "k".into(), ctr: 1, ts: 1, stamp, badge_key: TEST_KEY.into() };
+        let sealed = e2e::alert_plaintext(&event, &ctx).expect("a Thread push seals");
+        assert_eq!(sealed["kind"], "thread");
+        assert_eq!(sealed["title"], "billing asks for a permission");
+        assert_eq!(sealed["body"], "Allow compute nodes");
+        assert_eq!(sealed["data"]["requestId"], "pr_7f3a2c");
+        assert_eq!(sealed["data"]["permission"], "1");
     }
 
     #[test]

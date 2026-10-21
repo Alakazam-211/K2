@@ -1031,7 +1031,7 @@
    {
     "name": "hostchat media",
     "usage": "k2 hostchat media <preflight|install|url|status|renew|probe|uninstall> ...",
-    "description": "Voice: preflight (ports TCP 7881, UDP 7882, TCP 5349, loopback 7880), install [--url wss://HOST] [--node-ip IP] [--tarball FILE] (the URL goes to sew media install), url <wss://HOST> (change voice.public_url later: re-runs sew media install --reconfigure with the new URL, then restarts sew), status, renew (the TURN certificate), probe --udp ok|fail --tcp ok|fail --turn-tls ok|fail (record a call test from outside), uninstall. K2 opens no firewall."
+    "description": "Voice: preflight (ports TCP 7881, UDP 7882, TCP 5349, loopback 7880), install [--url wss://HOST] [--node-ip IP] [--tarball FILE] (the URL goes to sew media install), url <wss://HOST> (change voice.public_url later: re-runs sew media install --reconfigure with the new URL, then restarts sew), status, renew (the TURN certificate), probe --udp ok|fail --tcp ok|fail --turn-tls ok|fail (record a call test from outside), uninstall [--yes] (live calls end: asks on a terminal, needs --yes without one; Sew's voice already gone still cleans up K2's TURN DNS, label and key). K2 opens no firewall."
    },
    {
     "name": "hostchat users",

@@ -243,4 +243,6 @@ export const K2_NODE_BLURBS: Record<string, string> = {
   'check-home': 'Installer: refuse a home that runs K2.',
   version: 'Node version.',
   admin: 'Remote admin level, audit chain and the root executor.',
+  servers: 'The K2 servers this node serves: add, limits, pause, revoke (node sharing).',
+  'wall-probe': 'Tests only: what a walled job on this node can reach.',
 }

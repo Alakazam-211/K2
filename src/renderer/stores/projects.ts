@@ -310,6 +310,13 @@ interface Project {
   // revokes any workspace (audited). Written via POST
   // /cli/agent-access/set `toggle: 'compute_manage'` (the owner only).
   agentsCanManageCompute?: number
+  // "Allow this agent to manage Postgres versions" (0201, `db_upgrade`;
+  // 0/1, default 0). On: a local agent from this workspace moves its own
+  // and its Apps' databases to a newer Postgres, creates on a chosen
+  // version and rolls back (audited). Written via POST
+  // /cli/agent-access/set `toggle: 'db_upgrade'` (the owner raises, the
+  // owner or an Admin lowers).
+  agentsCanUpgradePostgres?: number
   // Per-agent App permissions (0197, prd-agent-app-permissions-v1): switch 1
   // "Build and run Apps" is `agentsCanManageSkin`; switch 2 "…and manage
   // them end to end" is this (0/1, default 0; counts only under switch 1).

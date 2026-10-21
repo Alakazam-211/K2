@@ -180,6 +180,22 @@ export async function setSqlDbAgentAccess(
   })
 }
 
+/** "Allow this agent to manage Postgres versions" (`db_upgrade`, 0201):
+ *  a local agent from the workspace may move its own (and its Apps')
+ *  databases to a newer Postgres, create on a chosen version and roll
+ *  back; deleting the old copy stays the owner's. The daemon lets the
+ *  owner raise it and the owner or an Admin lower it; an agent never. */
+export interface DbUpgradeSetResult {
+  ok: boolean
+  workspace?: string
+  toggle?: string
+  agentsCanUpgradePostgres?: boolean
+}
+
+export async function setWorkspaceDbUpgrade(workspace: string, value: boolean): Promise<DbUpgradeSetResult> {
+  return daemonCliPost(primaryScope(), 'agent-access/set', { toggle: 'db_upgrade', value, workspace })
+}
+
 // ── Sample fixture (unsupported / Mac example mode) ──────────────────
 
 export const SAMPLE_STATUS: SqlStatus = {

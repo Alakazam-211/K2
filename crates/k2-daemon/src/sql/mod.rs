@@ -14,6 +14,7 @@ pub mod routes;
 pub mod secrets;
 pub mod supervisor;
 pub mod sysops;
+pub mod versions_access;
 
 /// Optional dump template (not auto-applied by create_database).
 /// GUC `k2.skin_principal` + POLICY example; no per-dentist role; no FORCE RLS.

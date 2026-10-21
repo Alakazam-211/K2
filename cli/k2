@@ -54334,6 +54334,9 @@ OWNER (engine — server-side owner/admin gate; agents exit 3)
   doctor [--json]                RSS vs MemoryMax + GUC caps (work_mem, max_connections, …)
   uninstall [--json]             drop catalog row + stop unit
   bind --role <pg_role> [--db …] assistant PG role (default ws_<id>_agent; no secrets)
+  versions-access on|off [--workspace <ws>]
+                                 "Allow this agent to manage Postgres versions"
+                                 (owner turns on; owner or Admin turns off; never an agent)
 
 AGENT (workspace — identity from token, never body project=)
   create [--id <client-id>] [--db-access off|read|write] [--json]
@@ -54491,6 +54494,31 @@ cmd_db() {
         doctor)
             while [ $# -gt 0 ]; do case "$1" in --json) as_json=true; shift ;; *) _db_err "usage" "unexpected '$1'"; exit 2 ;; esac; done
             D_VERB="doctor" D_JSON="$as_json" _db_py ;;
+        versions-access)
+            # "Allow this agent to manage Postgres versions" (db_upgrade,
+            # 0201): the owner turns it on; the owner or an Admin turns it
+            # off. Inside a K2 terminal this sends the passport, which the
+            # daemon refuses (an agent never sets it, on or off).
+            local action="${1:-}"
+            shift 2>/dev/null || true
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --json) as_json=true; shift ;;
+                    *) _db_err "usage" "k2 db versions-access on|off [--workspace WS] [--json]"; exit 2 ;;
+                esac
+            done
+            case "$action" in
+                on|off) ;;
+                *) _db_err "usage" "k2 db versions-access on|off [--workspace WS] [--json]"; exit 2 ;;
+            esac
+            local ws; ws="$(_compute_ws "")"
+            _compute_call POST /cli/agent-access/set "$(_compute_json K2_CJ_workspace="$ws" K2_CJ_toggle=db_upgrade K2_CJ_value_b="$([ "$action" = on ] && echo 1 || echo 0)")" tcp
+            if $as_json; then printf '%s\n' "$_CP_BODY"; exit 0; fi
+            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
+v=json.load(sys.stdin)
+on=v["agentsCanUpgradePostgres"]
+print("Allow this agent to manage Postgres versions: %s for %s%s" % ("on" if on else "off", v["workspace"], " (check, move, roll back and create --major on its own and its Apps databases; each act is in Access Audit; deleting the old copy stays yours)" if on else ""))'
+            ;;
         create)
             local access="" test=false major=""
             while [ $# -gt 0 ]; do

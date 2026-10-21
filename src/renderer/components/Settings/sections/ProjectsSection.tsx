@@ -59,7 +59,7 @@ import { WorkspaceCompletionSoundToggle } from '@/components/WorkspacePanel/Work
 import { DesignModeSettingRow } from '@/components/Design/DesignModeSettingRow'
 import { WorkspacePhonePushToggle } from '@/components/WorkspacePanel/WorkspacePhonePushToggle'
 import { workspaceGrantSlug } from './api-keys-api'
-import { setSqlDbAgentAccess } from './data-api'
+import { setSqlDbAgentAccess, setWorkspaceDbUpgrade } from './data-api'
 import { primaryScope } from '@/kessel/server-scope'
 import { RemoteInstructToggle } from '../shared/RemoteInstructToggle'
 import { SquareCheckbox } from '@/components/ui'
@@ -104,6 +104,7 @@ export const PROJECTS_MANIFEST: SettingEntry[] = [
   { id: 'projects.agents-can-manage-vault', section: 'projects', label: 'Allow managing server-wide secrets', description: 'Lets this workspace\'s main agent share server secrets with other workspaces and look after them (k2 vault); never with itself, and never loosen a secret it uses', keywords: ['vault_manage', 'vault', 'secret', 'secrets', 'passport', 'agent', 'it agent'] },
   { id: 'projects.agents-can-use-compute', section: 'projects', label: 'Allow compute nodes', description: 'Lets this workspace\'s agents run builds and tests on the machines switched on in Settings → Compute (k2 compute run); on grants every machine, and ones added later', keywords: ['agents_can_use_compute', 'compute', 'compute nodes', 'node', 'machines', 'build', 'tests', 'k2 compute', 'passport', 'agent'] },
   { id: 'projects.agents-can-manage-compute', section: 'projects', label: 'Allow managing compute nodes', description: 'Lets this workspace\'s agent add and confirm compute machines, rename, pause, drain, resume, retire and route them, and grant or revoke them for any workspace (k2 compute node, k2 compute grant); every act is logged and adding or confirming a machine sends you an inbox note. Turning the preview on or off and removing a machine stay yours. Only the owner can switch it', keywords: ['agents_can_manage_compute', 'compute_manage', 'manage', 'compute', 'compute nodes', 'node', 'machines', 'enroll', 'confirm', 'grant', 'revoke', 'retire', 'k2 compute', 'passport', 'agent'] },
+  { id: 'projects.agents-can-upgrade-postgres', section: 'projects', label: 'Allow this agent to manage Postgres versions', description: 'Move this agent\'s databases (and its Apps\' databases) to a newer Postgres, create on a chosen version, and roll back (k2 db upgrade, k2 db create --major); every act is logged. Deleting the old copy stays with you. The owner turns it on; the owner or an Admin may turn it off', keywords: ['agents_can_upgrade_postgres', 'db_upgrade', 'postgres', 'postgresql', 'pg', 'pg 17', 'version', 'major', 'upgrade', 'database', 'rollback', 'k2 db upgrade', 'agent'] },
   { id: 'projects.agents-can-operate-compute', section: 'projects', label: 'Allow this agent to operate compute nodes', description: 'Lets this workspace\'s agent pause, drain, resume, narrow, update and restart services on your compute machines without asking each time; root actions still wait for you (k2 compute operate)', keywords: ['agents_can_operate_compute', 'compute_operate', 'operate', 'compute', 'compute nodes', 'node', 'machines', 'pause', 'update', 'k2 compute', 'passport', 'agent'] },
   { id: 'projects.agents-can-manage-projects', section: 'projects', label: 'Manage K2 projects', description: 'Lets this workspace\'s agent create, rename and delete K2 projects and add or remove their members (k2 project); on by default. Off: it can still read projects and post in its project chat', keywords: ['agents_can_manage_projects', 'projects_manage', 'project', 'projects', 'k2 project', 'members', 'project chat', 'passport', 'agent'] },
   { id: 'projects.agents-can-manage-gardens', section: 'projects', label: 'Manage Gardens and data sources', description: 'Lets this workspace\'s agent approve data sources, bind secrets it may already use, pause, pin, enable triggers and edit Gardens and widgets with no confirm (k2 sources, k2 zen); every act is logged. Off: it proposes and you approve', keywords: ['agents_can_manage_gardens', 'gardens_manage', 'gardens', 'garden', 'zen', 'widgets', 'data sources', 'sources', 'triggers', 'approve', 'k2 sources', 'k2 zen', 'passport', 'agent'] },
@@ -1408,6 +1409,7 @@ function ProjectDetail({
               <AgentsUseComputeToggle project={project} />
               <AgentsOperateComputeToggle project={project} />
               <AgentsManageComputeToggle project={project} />
+              <AgentsManagePostgresToggle project={project} />
               <AgentsManageProjectsToggle project={project} />
               <AgentsManageGardensToggle project={project} />
             </SettingsGroup>
@@ -2360,6 +2362,129 @@ export function AgentsManageComputeToggle({
           </div>
           {error ? (
             <div className="text-[10px] text-[var(--color-status-error-soft)] mt-1" data-testid="agents-compute-manage-error">
+              {error}
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Postgres versions (0201, prd-pg17-and-db-upgrade-v1 §12) — "Allow this
+// agent to manage Postgres versions" (`db_upgrade`). DEFAULTS OFF. On: a
+// local agent from this workspace may check, move and roll back its own and
+// its Apps' databases to a newer Postgres, create on a chosen version and
+// tidy empty clusters, each act audited. Deleting the old copy, other
+// workspaces' databases and `--all` stay the owner's. Writes POST
+// /cli/agent-access/set `{workspace, toggle: 'db_upgrade', value}`. The
+// daemon lets the owner raise it and the owner or an Admin lower it (the
+// Apps-switch floor): an Admin sees it flippable only while it is on, a
+// Member never sees it. The check lives in the daemon.
+export function dbUpgradeVisibility(
+  role: OperateComputeRole | null,
+  enabled: boolean,
+): { show: boolean; canFlip: boolean } {
+  if (role === 'member') return { show: false, canFlip: false }
+  if (role === 'owner') return { show: true, canFlip: true }
+  if (role === 'admin') return { show: true, canFlip: enabled }
+  return { show: true, canFlip: false }
+}
+
+export function AgentsManagePostgresToggle({
+  project,
+  compact = false,
+  readOnly = false,
+}: {
+  project: ProjectWithWorkspaces
+  compact?: boolean
+  readOnly?: boolean
+}): React.JSX.Element | null {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [role, setRole] = useState<OperateComputeRole | null>(null)
+  const enabled = (project.agentsCanUpgradePostgres ?? 0) === 1
+
+  useEffect(() => {
+    let cancelled = false
+    void fetchViewerRole().then((r) => {
+      if (!cancelled) setRole(r)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const { show, canFlip } = dbUpgradeVisibility(role, enabled)
+  if (!show) return null
+
+  const toggle = async (): Promise<void> => {
+    if (busy || !canFlip || readOnly) return
+    const next = !enabled
+    const before = project.agentsCanUpgradePostgres
+    setBusy(true)
+    setError(null)
+    useProjectsStore.setState((s) => ({
+      projects: s.projects.map((p) =>
+        p.id === project.id ? { ...p, agentsCanUpgradePostgres: next ? 1 : 0 } : p,
+      ),
+    }))
+    try {
+      await setWorkspaceDbUpgrade(project.path, next)
+      noteOptimisticProjectsMutationSuccess()
+      emitProjectsChanged()
+    } catch (err) {
+      useProjectsStore.setState((s) => ({
+        projects: s.projects.map((p) =>
+          p.id === project.id ? { ...p, agentsCanUpgradePostgres: before } : p,
+        ),
+      }))
+      setError(computeErrorMessage(err))
+      console.error('[agent-access] db_upgrade write failed', err)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className={permissionRowClass(compact)}>
+      <div className="flex items-start gap-3">
+        <button
+          onClick={toggle}
+          role="switch"
+          aria-checked={enabled}
+          aria-label="Allow this agent to manage Postgres versions"
+          disabled={busy || !canFlip || readOnly}
+          data-settings-id="projects.agents-can-upgrade-postgres"
+          className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
+            enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
+          }`}
+          title={
+            role === null
+              ? 'Checking your role on this server'
+              : !canFlip
+                ? 'Only the server\'s owner can turn this on (an Admin may turn it off)'
+                : enabled
+                  ? 'This workspace\'s agent manages its databases\' Postgres versions (logged)'
+                  : 'This workspace\'s agent cannot change Postgres versions'
+          }
+        >
+          <span
+            className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
+              enabled ? 'translate-x-3.5' : 'translate-x-0.5'
+            }`}
+          />
+        </button>
+        <div className="flex-1 min-w-0">
+          <div className="text-xs font-medium text-[var(--color-text-primary)]">
+            Allow this agent to manage Postgres versions
+          </div>
+          <div className={permissionDescClass(compact)}>
+            Move this agent&apos;s databases to a newer Postgres, create on a chosen version, and roll
+            back. Deleting the old copy stays with you.
+          </div>
+          {error ? (
+            <div className="text-[10px] text-[var(--color-status-error-soft)] mt-1" data-testid="agents-db-upgrade-error">
               {error}
             </div>
           ) : null}

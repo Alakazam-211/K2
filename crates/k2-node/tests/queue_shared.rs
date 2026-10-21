@@ -415,6 +415,33 @@ async fn views_redact_other_servers_and_quotes_follow_asks() {
     w.n.node.stop_all(JobState::Cancelled, "test_over");
 }
 
+/// A stopping k2-node starts nothing new: the capacity its stopped jobs
+/// free doesn't start queued work (it stays queued for the next start, so
+/// a server that re-placed it meanwhile never gets a double run), and new
+/// assigns are refused.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stopping_node_starts_nothing() {
+    let mut w = two("q-stop", "max_parallel = 1\n").await;
+    w.ca.send(Frame::Assign(assign(job("node-1", "hold", &["/bin/sh", "-c", "sleep 30"]), 1)));
+    wait_row(&w.owner, "hold", 1, "started", started).await;
+    w.cb.send(Frame::Assign(assign(job("node-b", "b1", &["/bin/echo", "b1"]), 1)));
+    wait_row(&w.tb, "b1", 1, "queued", queued).await;
+    w.n.node.begin_shutdown();
+    w.n.node.stop_all(JobState::Interrupted, "node_shutdown");
+    wait_row(&w.owner, "hold", 1, "ended", ended).await;
+    for _ in 0..5 {
+        w.n.node.fairq.tick(&w.n.node);
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    let b1 = w.tb.ledger.lock().unwrap().get("b1", 1).unwrap().unwrap();
+    assert_eq!((b1.state, b1.started_at), (JobState::Queued, None), "nothing starts while stopping");
+    w.cb.send(Frame::Assign(assign(job("node-b", "late", &["/bin/echo", "x"]), 1)));
+    let fr = w.cb.until(|f| matches!(f, Frame::State(s) if s.job_id == "late")).await;
+    let Some(Frame::State(s)) = fr.last() else { unreachable!() };
+    assert_eq!(s.reason.as_deref(), Some(k2_node_proto::refusal::LOCAL_STOPPED));
+    assert!(w.tb.ledger.lock().unwrap().get("late", 1).unwrap().is_none());
+}
+
 /// No deadlock under contention: the queue's tick, quotes and views (every
 /// offer and `queue_get`), assigns, withdraws and accounting all run at
 /// once from many threads. The queue keeps one lock; this catches an order

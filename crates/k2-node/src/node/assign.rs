@@ -98,6 +98,10 @@ impl Node {
             return None;
         }
         let now = self.now();
+        if self.is_stopping() {
+            t.hub.send(self.state_frame(&job, gen, JobState::Queued, Some(refusal::LOCAL_STOPPED), Some("k2-node is stopping")));
+            return None;
+        }
         // Only the owner, on a node nobody shares, takes today's path. Any
         // other server always goes through its share (a paused, expired or
         // revoked share must never fall back to "solo").
@@ -231,6 +235,9 @@ impl Node {
             network_none_enforced: self.wall.network_none(),
         };
         let mut blocked = refusal::node_refusal(&view).map(|r| r.code);
+        if self.is_stopping() {
+            blocked = Some(refusal::LOCAL_STOPPED.into());
+        }
         if blocked.is_none() && crate::toolchain::installing(&self.toolchains().root) {
             blocked = Some(codes::INSTALLING_TOOLS.into());
         }

@@ -217,6 +217,13 @@ pub const SKILL_VERSION_ZEN: u32 = 29;
 /// AGENTS.md Tooling line names `--file`.
 pub const SKILL_VERSION_WORKSPACE: u32 = 34;
 
+/// The `k2-permissions` skill (permission cards, Beta; PRD rev 3.1 §11.4,
+/// vs-live C8): its own constant, so the k2-cli skill (`_WORKSPACE`) and
+/// `_ZEN` stay byte-identical in every switch state. Written only while
+/// both permission-card switches are on for the workspace.
+/// v1 = 0.46.3, the first release.
+pub const SKILL_VERSION_PERMISSIONS: u32 = 1;
+
 // ── Content checksumming ─────────────────────────────────────────────
 
 /// 64-bit FNV-1a hex. Deterministic across Rust versions (unlike

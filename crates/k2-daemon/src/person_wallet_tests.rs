@@ -352,6 +352,91 @@ fn fallback_off_refuses_and_on_uses_the_company_plan() {
     assert!(!env.contains_key("CLAUDE_CONFIG_DIR"), "company plan (server default): {env:?}");
 }
 
+// ── Naming the App (smoke r6: settings <AppName> --on, guests wallet_off) ──
+
+#[test]
+fn settings_by_app_name_reach_the_guests_service_id() {
+    let f = fx("byname");
+    with_conn(|c| {
+        c.execute(
+            "INSERT INTO apps (app_id, service_id, owner_workspace, state, created_by, created_at, updated_at) \
+             VALUES ('hrapp', ?1, ?2, 'running', 'test', 1, 1)",
+            params![f.app, f.own],
+        )
+    })
+    .unwrap();
+    // Off by the App's name → the guest (keyed on the service id) is off.
+    let (s, v, _) = owner_call(Caller::Owner, O_SETTINGS, true, json!({"app": "hrapp", "enabled": false}), &[]);
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(v["settings"]["serviceId"], json!(f.app), "stored under the service id: {v}");
+    assert_eq!(v["appId"], json!("hrapp"), "{v}");
+    let (s, v, _) = skin_call(Some(&f.alice), LIST, false, json!({}), &[]);
+    assert_eq!((s, code(&v).as_str()), (403, "wallet_off"), "{v}");
+    // On by name (any case) → the guest is on.
+    let (s, v, _) = owner_call(Caller::Owner, O_SETTINGS, true, json!({"app": "HRApp", "enabled": true}), &[]);
+    assert_eq!(s, 200, "{v}");
+    let (s, v, _) = skin_call(Some(&f.alice), LIST, false, json!({}), &[]);
+    assert_eq!(s, 200, "the guest sees the wallet the owner turned on by name: {v}");
+    // The GET by name reads the same row.
+    let (s, v, _) = owner_call(Caller::Owner, O_SETTINGS, false, json!({}), &[("app", "hrapp")]);
+    assert_eq!((s, v["settings"]["enabled"].clone(), v["settings"]["serviceId"].clone()), (200, json!(true), json!(f.app)), "{v}");
+    // No row was ever written under the name.
+    let n: i64 = with_conn(|c| c.query_row("SELECT COUNT(*) FROM app_wallet_settings WHERE service_id = 'hrapp' OR service_id = 'HRApp'", [], |r| r.get(0))).unwrap();
+    assert_eq!(n, 0);
+}
+
+#[test]
+fn settings_by_service_id_and_workspace_name_still_work() {
+    let f = fx("bysvc");
+    let (s, v, _) = owner_call(Caller::Owner, O_SETTINGS, true, json!({"app": f.app, "enabled": false}), &[]);
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(v["settings"]["serviceId"], json!(f.app));
+    assert_eq!(v["appId"], J::Null, "a published service with no App row: {v}");
+    let (s, v, _) = skin_call(Some(&f.alice), LIST, false, json!({}), &[]);
+    assert_eq!((s, code(&v).as_str()), (403, "wallet_off"), "{v}");
+    let target = format!("{}/hr", f.own);
+    let (s, v, _) = owner_call(Caller::Owner, O_SETTINGS, true, json!({"app": target, "enabled": true}), &[]);
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(v["settings"]["serviceId"], json!(f.app));
+    let (s, v, _) = skin_call(Some(&f.alice), LIST, false, json!({}), &[]);
+    assert_eq!(s, 200, "{v}");
+}
+
+#[test]
+fn an_unknown_app_is_refused_and_nothing_is_stored() {
+    let f = fx("unknown");
+    let before: i64 = with_conn(|c| c.query_row("SELECT COUNT(*) FROM app_wallet_settings", [], |r| r.get(0))).unwrap();
+    let (s, v, _) = owner_call(Caller::Owner, O_SETTINGS, true, json!({"app": "nosuchapp-zz", "enabled": true}), &[]);
+    assert_eq!((s, code(&v).as_str()), (404, "app_not_found"), "{v}");
+    assert!(v["error"]["hint"].as_str().unwrap().contains("nosuchapp-zz"), "{v}");
+    let (s, v, _) = owner_call(Caller::Owner, O_SETTINGS, false, json!({}), &[("app", "nosuchapp-zz")]);
+    assert_eq!((s, code(&v).as_str()), (404, "app_not_found"), "{v}");
+    let (s, v, _) = owner_call(Caller::Owner, O_PEOPLE, false, json!({}), &[("app", "nosuchapp-zz")]);
+    assert_eq!((s, code(&v).as_str()), (404, "app_not_found"), "{v}");
+    let (s, v, _) = owner_call(Caller::Owner, O_AGENT, true, json!({"app": "nosuchapp-zz", "user": "alice", "workspace": f.ws_alice}), &[]);
+    assert_eq!((s, code(&v).as_str()), (404, "app_not_found"), "{v}");
+    let (s, v, _) = owner_call(Caller::Owner, O_SETTINGS, true, json!({"app": "host", "enabled": true}), &[]);
+    assert_eq!((s, code(&v).as_str()), (400, "bad_request"), "{v}");
+    // An agent never learns whether a name is an App: unknown reads like
+    // "not yours" (403 switch2_required), never a 404.
+    let (s, v, _) = owner_call(agent(&f.own), O_SETTINGS, false, json!({}), &[("app", "nosuchapp-zz")]);
+    assert_eq!((s, code(&v).as_str()), (403, "switch2_required"), "{v}");
+    let after: i64 = with_conn(|c| c.query_row("SELECT COUNT(*) FROM app_wallet_settings", [], |r| r.get(0))).unwrap();
+    assert_eq!(before, after, "no row for an unknown App");
+    // An App's own service id is known even without a published row.
+    with_conn(|c| {
+        c.execute(
+            "INSERT INTO apps (app_id, service_id, owner_workspace, state, created_by, created_at, updated_at) \
+             VALUES ('bare', 'svc-bare-only', ?1, 'running', 'test', 1, 1)",
+            params![f.own],
+        )
+    })
+    .unwrap();
+    let (s, v, _) = owner_call(Caller::Owner, O_SETTINGS, true, json!({"app": "svc-bare-only", "enabled": true}), &[]);
+    assert_eq!(s, 200, "{v}");
+    assert_eq!((v["settings"]["serviceId"].clone(), v["appId"].clone()), (json!("svc-bare-only"), json!("bare")));
+}
+
 #[test]
 fn a_shared_room_suspends_the_person_pin() {
     let f = fx("shared");

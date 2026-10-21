@@ -11006,6 +11006,9 @@ secret, the sign-in link or code.
                                        doesn't start. Owner or Admin; an agent of
                                        the App's own workspace with "…and manage
                                        them end to end" may set --fallback only.
+                                       <app> is the App id (k2 app list), its
+                                       service id or <workspace>/<name>; an
+                                       unknown App is refused.
   k2 app wallet people [<app>] [--json]
                                        Every wallet item (or those of <app>'s
                                        users): user, provider, label, state,
@@ -11066,8 +11069,9 @@ cmd_app_wallet() {
             if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
             printf '%s' "$_CP_BODY" | python3 -c '
 import json, sys
-s = json.load(sys.stdin)["settings"]
-print("%s: wallet %s, fallback to the company plan %s" % (s["serviceId"], "on" if s["enabled"] else "off", "on" if s["fallback"] else "off"))'
+v = json.load(sys.stdin); s = v["settings"]
+name = ("%s (%s)" % (v["appId"], s["serviceId"])) if v.get("appId") else s["serviceId"]
+print("%s: wallet %s, fallback to the company plan %s" % (name, "on" if s["enabled"] else "off", "on" if s["fallback"] else "off"))'
             ;;
         people)
             if [ -n "$a1" ]; then

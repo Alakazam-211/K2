@@ -151,6 +151,8 @@ pub mod db;
 pub mod handoff_state;
 /// App runtime stage 1: Seeds, deployments, deploy audit (prd-k2-app-runtime-v1).
 pub mod deploy;
+/// The disk guard's shared contract (prd-app-resources-disk-guard-v1, 0.46.3).
+pub mod disk_guard;
 pub mod migration_home;
 pub mod paths;
 pub mod private_home;

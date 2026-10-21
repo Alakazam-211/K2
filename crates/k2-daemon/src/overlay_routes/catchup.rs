@@ -83,6 +83,11 @@ struct Request {
     /// catchup-unchanged-v1: the caller's last `(rev, instanceId)`. When it
     /// still matches, the answer is `unchanged` with no store reads.
     since: Option<(u64, String)>,
+    /// Permission cards (prd-agent-settings-cards-v1 rev 3.1 §17.1): top
+    /// level `"cards": 2` applies to every `threads[]` entry. Honoured for
+    /// people only; anything that is not a whole number is ignored, as an
+    /// unknown field was before.
+    cards: u8,
 }
 
 /// A whole number `>= 0` (a JSON integer; `4.0`, `"4"` and `-1` are not).
@@ -200,7 +205,8 @@ fn parse(body: &[u8]) -> Result<Request, CliResponse> {
         (None, None) => None,
         _ => return Err(usage("sinceRev and instanceId go together (both from the last catch-up's answer)")),
     };
-    Ok(Request { threads, groups, limit, since })
+    let cards = crate::permission::view::cards_body(obj.get("cards"));
+    Ok(Request { threads, groups, limit, since, cards })
 }
 
 // ── one in flight per token (C2) ─────────────────────────────────────
@@ -278,7 +284,13 @@ fn without_ok(mut v: Value) -> Value {
     v
 }
 
-fn thread_entry(t: &ThreadReq, limit: usize, principal: Option<&crate::session_token::HookPrincipal>, gb_who: Option<&Who>) -> Value {
+fn thread_entry(
+    t: &ThreadReq,
+    limit: usize,
+    principal: Option<&crate::session_token::HookPrincipal>,
+    gb_who: Option<&Who>,
+    seen: &crate::permission::view::Seen,
+) -> Value {
     // `gb:<name>`: a person's read goes through the Grok Bots gate, exactly
     // as the TCP `GET /cli/thread` does. Everyone else (an agent's cell, an
     // App guest) falls through to the overlay reader, which refuses it.
@@ -302,7 +314,7 @@ fn thread_entry(t: &ThreadReq, limit: usize, principal: Option<&crate::session_t
         Want::After(n) => ThreadReadMode::After(n),
         Want::Newest => ThreadReadMode::Newest,
     };
-    match thread_read_for(&t.addr, mode, limit, principal) {
+    match thread_read_for(&t.addr, mode, limit, principal, seen) {
         Ok(v) => without_ok(v),
         Err(r) => error_entry("addr", &t.addr, &r),
     }
@@ -502,6 +514,8 @@ pub(crate) fn handle_with_budget(
         }
     }
     let mut budget = Budget::new(budget_bytes);
+    // Permission cards: every entry is projected for this caller (§4.2).
+    let seen = super::request_seen(params, caller, req.cards);
 
     let mut threads = Vec::with_capacity(req.threads.len());
     for t in &req.threads {
@@ -509,7 +523,7 @@ pub(crate) fn handle_with_budget(
             threads.push(json!({ "addr": t.addr, "deferred": true }));
             continue;
         }
-        let entry = thread_entry(t, req.limit, principal.as_ref(), gb_who);
+        let entry = thread_entry(t, req.limit, principal.as_ref(), gb_who, &seen);
         let cut = match t.want {
             Want::After(_) => Cut::DeltaItems,
             Want::Newest => Cut::PageItems,

@@ -272,12 +272,44 @@ pub(crate) struct GuestWire {
 /// each gains `state: "ok"` (frames go out at post time; clients refresh
 /// state on the next GET), and a guest sees only the files its own file
 /// rights cover (the rest are `{kind, state:"hidden"}`).
-pub(crate) fn wire_json_for(frame: &OverlayFrame, guest: Option<&GuestWire>) -> String {
+///
+/// A permission card (prd-agent-settings-cards-v1 rev 3.1 §4.2, C9) is
+/// projected for `seen`'s viewer first: same id, same seq, the `cards=2`
+/// view for a person who asked on the connect URL, else the fallback.
+/// Projecting may read the database (the live Settings check, cached
+/// 2 s): async callers run it on the blocking pool ([`needs_blocking`]).
+pub(crate) fn wire_json_for(frame: &OverlayFrame, guest: Option<&GuestWire>, seen: &crate::permission::view::Seen) -> String {
+    if let Some(doc) = frame.doc.as_ref().filter(|d| crate::permission::view::is_permission_card(d)) {
+        let projected = OverlayFrame { doc: Some(seen.doc(doc).into_owned()), ..frame.clone() };
+        return wire_json_projected(&projected, guest);
+    }
+    wire_json_projected(frame, guest)
+}
+
+/// True when [`wire_json_for`] would project this frame (it may then read
+/// the database).
+pub(crate) fn needs_blocking(frame: &OverlayFrame) -> bool {
+    frame.doc.as_ref().is_some_and(crate::permission::view::is_permission_card)
+}
+
+/// This socket's viewer (rev 3.1 §17.1): the dispatcher's login (owner
+/// token → `owner`, a Connect session → its username), an App guest, or
+/// nobody we can name; `cards=` on the connect URL.
+pub(crate) fn socket_seen(params: &HashMap<String, String>, skin: bool, viewer_login: Option<&str>) -> crate::permission::view::Seen {
+    let viewer = match (skin, viewer_login) {
+        (true, _) => k2_core::permission::card::Viewer::Guest { app: None },
+        (false, Some(login)) => crate::permission::view::viewer_of_login(login),
+        (false, None) => crate::permission::view::unknown(),
+    };
+    crate::permission::view::Seen::new(viewer, crate::permission::view::cards_param(params))
+}
+
+fn wire_json_projected(frame: &OverlayFrame, guest: Option<&GuestWire>) -> String {
     // inbox-catchup-v1 C4 (0.46.3): a guest's frames never carry `rev` (a
     // server-wide write counter would show how busy other rooms are).
     if guest.is_some() && frame.rev > 0 {
         let unstamped = OverlayFrame { rev: 0, ..frame.clone() };
-        return wire_json_for(&unstamped, guest);
+        return wire_json_projected(&unstamped, guest);
     }
     let has_files = frame.doc.as_ref().is_some_and(|d| !d.attachments.is_empty());
     if !has_files || frame.activity.is_some() {
@@ -478,6 +510,7 @@ pub async fn serve_overlay_events_connection(
     let (mut write, mut read) = ws.split();
     let socket_id = crate::thread_viewers::next_socket_id();
     let viewer_login = if skin { None } else { viewer_login };
+    let seen = socket_seen(&params, skin, viewer_login.as_deref());
     let mut rx = subscribe();
     let mut activity_rx = subscribe_activity();
     // app-read-state-v1 (0.46.3): a guest socket hears its own reader's
@@ -542,11 +575,25 @@ pub async fn serve_overlay_events_connection(
                         if !skin_may_see_frame(&frame, &conversation, skin) {
                             continue;
                         }
-                        if write
-                            .send(Message::Text(wire_json_for(&frame, guest_wire.as_ref())))
-                            .await
-                            .is_err()
-                        {
+                        let text = if needs_blocking(&frame) {
+                            // A permission card: projected off the async
+                            // worker (guests never get here: skin_may_see_frame
+                            // drops every action card for them).
+                            let (f, s) = (frame.clone(), seen.clone());
+                            match tokio::task::spawn_blocking(move || wire_json_for(&f, None, &s)).await {
+                                Ok(t) => t,
+                                Err(e) => {
+                                    // Never skip a frame silently: close so
+                                    // the client reconnects and catches up.
+                                    log_debug!("[daemon/overlay_ws] projection failed: {e}; closing for resync");
+                                    let _ = write.send(Message::Close(None)).await;
+                                    break;
+                                }
+                            }
+                        } else {
+                            wire_json_for(&frame, guest_wire.as_ref(), &seen)
+                        };
+                        if write.send(Message::Text(text)).await.is_err() {
                             break;
                         }
                     }
@@ -817,7 +864,7 @@ mod tests {
         let nums: Vec<u64> = revs.iter().map(|f| f.rev).collect();
         assert!(nums[0] > before && nums[0] < nums[1] && nums[1] < nums[2], "rising revs after {before}: {nums:?}");
         assert!(current_rev() >= nums[2]);
-        let person: serde_json::Value = serde_json::from_str(&wire_json_for(&revs[2], None)).expect("json");
+        let person: serde_json::Value = serde_json::from_str(&wire_json_for(&revs[2], None, &crate::permission::view::Seen::new(k2_core::permission::card::Viewer::OwnerToken, 0))).expect("json");
         assert_eq!(person["rev"], nums[2], "{person}");
         let pass = k2_core::skin::SkinPass {
             id: "skin-pass".into(),
@@ -831,7 +878,7 @@ mod tests {
             room_paths: Default::default(),
         };
         let guest = GuestWire { pass, project_id: "p".into(), root: None };
-        let g: serde_json::Value = serde_json::from_str(&wire_json_for(&revs[2], Some(&guest))).expect("json");
+        let g: serde_json::Value = serde_json::from_str(&wire_json_for(&revs[2], Some(&guest), &crate::permission::view::Seen::new(k2_core::permission::card::Viewer::Guest { app: None }, 0))).expect("json");
         assert!(g.get("rev").is_none(), "a guest frame carries no rev: {g}");
         assert_eq!(g["id"], "d2", "{g}");
     }

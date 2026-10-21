@@ -2464,7 +2464,7 @@ fn handle_permission_card_route(path: &str, params: &HashMap<String, String>, se
         return CliResponse::not_found();
     }
     let note = path == k2_core::permission::NOTE_ROUTE;
-    if let Err(r) = refuse_action_card_non_person(params, if note { "notes on" } else { "turns off" }) {
+    if let Err(r) = refuse_action_card_non_person(params, if note { "leaves a note on" } else { "undoes" }) {
         return r;
     }
     let addr = str_param(params, "addr");

@@ -331,10 +331,13 @@ async fn the_gate_follows_both_switches_and_off_is_today() {
     assert_eq!(json(&r)["error"], "role_required", "a Member meets the row's Admin floor: {}", r.body);
     let r = tcp(port, "GET", "/cli/permission/pending", Some(&sessions["pgi-admin"]), None).await;
     assert_ne!(json(&r)["error"], "route_unclassified", "an Admin passes the table: {}", r.body);
+    // The family is an agent verb while on, so the cell dispatches it; this
+    // agent's own switch is still off, so A1's handler answers it today's
+    // body (PRD §2.4). Served with both on: `permission_core_integration`.
     let r = cell(&sock, "POST", "/cli/permission/request", &passport, Some("{}")).await;
-    assert_ne!(
+    assert_eq!(
         r.body, r#"{"error":"Invalid or missing auth token"}"#,
-        "the family is an agent verb while on, so the cell dispatches it"
+        "server on, agent off: today's cell body"
     );
 
     // ── 4. the per-agent switch ───────────────────────────────────────

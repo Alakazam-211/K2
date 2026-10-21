@@ -320,14 +320,14 @@ where
     node.fairq.set_protocol(tenant.slot, Some(start.protocol));
     // Clock skew (§14): order and ETAs never depend on it; it's shown.
     if start.welcome.server_time != 0 {
-        let skew = start.welcome.server_time - node.now();
+        // The node's clock minus the server's: positive = the node is ahead.
+        let skew = node.now() - start.welcome.server_time;
         if skew.abs() > crate::status::SKEW_WARN_SECS {
-            crate::nlog!("server slot {}: its clock is {skew:+} s from this node's", tenant.slot);
+            crate::nlog!("server slot {}: this node's clock is {skew:+} s off the server's", tenant.slot);
         }
+        tenant.link.lock().unwrap().skew_secs = Some(skew);
         if owner {
             node.status.lock().unwrap().clock_skew_secs = Some(skew);
-        } else {
-            tenant.link.lock().unwrap().skew_secs = Some(skew);
         }
     }
     // Learned routes (this server's only), the confirmed flag, narrowing:
@@ -836,6 +836,19 @@ const NODE_REFUSED_TOO_OLD: &str = codes::SERVER_TOO_OLD;
 /// housekeeping (a confirmed add, an expired pending line, a due wipe).
 const PRUNE_EVERY: Duration = Duration::from_secs(30);
 
+/// How often the servers loop asks whether the per-tenant wall is on.
+const WALL_PROBE_EVERY: Duration = Duration::from_secs(60);
+
+/// Is this node's per-tenant wall really on (Linux tenant users ready for
+/// every approved server)? Lane S3's `Node::tenant_wall_on()` answers; this
+/// is the one call site to wire at the S3 integration
+/// (`node.tenant_wall_on().await`). Until then: off, so no offer claims a
+/// wall that isn't there.
+async fn tenant_wall_on(node: &Arc<Node>) -> bool {
+    let _ = node;
+    false
+}
+
 /// The servers loop's memory between passes.
 #[derive(Default)]
 struct ServersLoop {
@@ -850,6 +863,9 @@ struct ServersLoop {
     /// Enrol request ids already tried (once each).
     enrolls_tried: std::collections::BTreeSet<String>,
     last_prune: Option<std::time::Instant>,
+    /// When the per-tenant wall was last probed (lane S3's probe is an
+    /// executor round trip: once a minute).
+    last_wall_probe: Option<std::time::Instant>,
     prune_error: Option<String>,
     /// What the node queue was last told about each server's share.
     fq: std::collections::BTreeMap<Slot, crate::fairq::ShareInfo>,
@@ -1006,6 +1022,18 @@ async fn servers_pass(node: &Arc<Node>, st: &mut ServersLoop) {
         }
         if e.state == ShareState::Revoked && stop.slots.contains(&slot) {
             node.stop_tenant(slot, JobState::Cancelled, codes::SHARE_REVOKED);
+        }
+    }
+
+    // Is the per-tenant wall really on? Every tenant's offer says so
+    // (`tenant-wall`, protocol 3 only).
+    if st.last_wall_probe.is_none_or(|t| t.elapsed() >= WALL_PROBE_EVERY) {
+        st.last_wall_probe = Some(std::time::Instant::now());
+        let on = tenant_wall_on(node).await;
+        for t in node.tenants() {
+            if t.tenant_wall.swap(on, std::sync::atomic::Ordering::SeqCst) != on {
+                t.offer_changed.notify_one();
+            }
         }
     }
 

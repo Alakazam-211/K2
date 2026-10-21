@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 
 use k2_node_proto::admin::{code, AdminRefusal, Class};
 use k2_node_proto::share::{
-    self, codes, AddArgs, LimitsArgs, Network, RevokeArgs, ServerArgs, ServerEntry, ServersFile, ShareLimits,
+    self, codes, AddArgs, LimitsArgs, Network, RevokeArgs, ServerArgs, ServerEntry, ServerListing, ServerStatus, ServersFile, ServersList, ShareLimits,
     ShareState, Slot, Trust, OWNER_SLOT, PENDING_SECS,
 };
 use serde::{Deserialize, Serialize};
@@ -505,7 +505,22 @@ pub fn add(ctx: &Ctx, a: &AddArgs) -> Result<Value, AdminRefusal> {
     e.added_by = ctx.by.clone();
     f.servers.push(e.clone());
     f.validate().map_err(|m| refuse(code::BAD_ARGS, m))?;
-    prepare_tenant(ctx, &e)?;
+    // The pending line first (lane S3's tenant.prepare acts only on a slot
+    // servers.toml has), then the tenant's user and root; a failed prepare
+    // takes the line back out (and the file, if this add created it).
+    let had_file = servers_path(&ctx.config_dir).exists();
+    set_stop(&ctx.config_dir, slot, false).map_err(failed)?;
+    write_file(&ctx.config_dir, &f).map_err(failed)?;
+    if let Err(r) = prepare_tenant(ctx, &e) {
+        if had_file {
+            f.servers.retain(|x| x.slot != slot);
+            let _ = write_file(&ctx.config_dir, &f);
+        } else {
+            let _ = std::fs::remove_file(servers_path(&ctx.config_dir));
+        }
+        return Err(r);
+    }
+    // Last: the credential the node enrols with.
     let enroll = ServerEnroll {
         id: format!("add-{slot}-{}", k2_node_proto::crypto::random_id().map_err(failed)?),
         slot,
@@ -516,8 +531,6 @@ pub fn add(ctx: &Ctx, a: &AddArgs) -> Result<Value, AdminRefusal> {
     };
     let body = toml::to_string(&enroll).map_err(|x| failed(x.to_string()))?;
     write_private(&enroll_path(&ctx.config_dir), body.as_bytes(), &ctx.node_user).map_err(failed)?;
-    set_stop(&ctx.config_dir, slot, false).map_err(failed)?;
-    write_file(&ctx.config_dir, &f).map_err(failed)?;
     Ok(json!({
         "slot": slot,
         "label": label,
@@ -727,57 +740,76 @@ pub fn list_file(ctx: &Ctx) -> Value {
 }
 
 /// `servers.list` (a read verb the node answers for its owner server, §9):
-/// every line with what the node knows (connection, SAS while pending,
-/// running jobs). The owner server mirrors it into `compute_node_servers`.
-pub fn node_list(node: &crate::node::Node) -> Value {
+/// the pinned [`ServersList`]: every line with what the node knows
+/// (status by time and attach, the SAS while pending, online, running and
+/// queued). The owner server mirrors it into `compute_node_servers`.
+/// `Err` = `servers.toml` is broken (the node serves on with its last good
+/// copy; the owner is told, never a fake "solo").
+pub fn node_list(node: &crate::node::Node) -> Result<ServersList, String> {
     let now = node.now();
-    let file = match read_file(&node.layout().config) {
-        Ok(f) => f,
-        Err(e) => return json!({"shared": false, "error": e, "servers": []}),
-    };
-    let Some(f) = file else {
-        return json!({"shared": false, "servers": [{
-            "slot": OWNER_SLOT,
-            "label": node.owner().pin.lock().unwrap().as_ref().map(|p| label_of(p.routes.first().map(String::as_str).unwrap_or(""))),
-            "role": "owner",
-            "state": "active",
-            "trust": "own",
-        }]});
-    };
-    let status = node.status.lock().unwrap().clone();
+    let owner = node.owner();
     let running = node.running_by_tenant();
-    let owner_state = node.owner().status_at(now).unwrap_or(k2_node_proto::share::ServerStatus::Active);
-    let servers: Vec<Value> = f
+    let queued_of = |t: &crate::node::Tenant| t.ledger.lock().unwrap().queued().map(|q| q.len() as u32).unwrap_or(0);
+    let Some(f) = read_file(&node.layout().config)? else {
+        // Solo: the owner alone, implied by controller.json.
+        let pin = owner.pin.lock().unwrap().clone();
+        let servers = pin
+            .map(|p| ServerListing {
+                slot: OWNER_SLOT,
+                label: label_of(p.routes.first().map(String::as_str).unwrap_or("owner")),
+                state: if p.revoked { ServerStatus::Revoked } else { ServerStatus::Active },
+                trust: Trust::Own,
+                fp: Some(p.controller_fp.clone()),
+                fp_prefix: p.controller_fp.clone(),
+                limits: node.fairq.share(OWNER_SLOT, node).map(|s| s.limits).unwrap_or_else(|| ShareLimits::owner(1, 1, 1, 1, Network::On)),
+                expires_at: None,
+                expires_in_secs: None,
+                added_at: p.enrolled_at,
+                added_by: "enrol".into(),
+                running: running.get(&OWNER_SLOT).map(|v| v.len() as u32).unwrap_or(0),
+                queued: queued_of(&owner),
+                cpu_secs_today: 0,
+                sas: None,
+                refusal: None,
+                online: *owner.hub.connected.borrow() != 0,
+            })
+            .into_iter()
+            .collect();
+        return Ok(ServersList { max_servers: share::DEFAULT_MAX_SERVERS, solo: true, servers });
+    };
+    let servers = f
         .servers
         .iter()
         .map(|e| {
-            let seen = status.servers.iter().find(|l| l.slot == e.slot);
-            let state = if e.slot == OWNER_SLOT { owner_state.as_str().to_string() } else { seen.map(|l| l.state.clone()).unwrap_or_else(|| e.status(now).as_str().into()) };
-            json!({
-                "slot": e.slot,
-                "label": e.label,
-                "role": if e.slot == OWNER_SLOT { "owner" } else { "tenant" },
-                "state": state,
-                "trust": e.trust.as_str(),
-                "limits": e.limits(),
-                "running": running.get(&e.slot).map(|v| v.len()).unwrap_or(0),
-                "queued": 0,
-                "expires_at": e.expires_at,
-                "added_at": e.added_at,
-                "added_by": e.added_by,
-                "link": if e.slot == OWNER_SLOT { Some(status.state.clone()) } else { seen.map(|l| l.link.clone()) },
-                "sas": seen.and_then(|l| l.sas.clone()),
-                "fp": if e.slot == OWNER_SLOT { Some(f.owner.clone()) } else { seen.and_then(|l| l.fp.clone()) },
-                "last_error": seen.and_then(|l| l.last_error.clone()),
-            })
+            // The open tenant serving this very line (a reused slot's old
+            // tenant doesn't count).
+            let t = node.tenant(e.slot).filter(|t| t.is_owner() || t.share().is_some_and(|i| i.entry.fp_prefix == e.fp_prefix && i.entry.added_at == e.added_at));
+            let pin = t.as_ref().and_then(|t| t.pin.lock().unwrap().clone());
+            let state = t.as_ref().and_then(|t| t.status_at(now)).unwrap_or_else(|| e.status(now));
+            let refusal = t.as_ref().and_then(|t| t.flags.lock().unwrap().refused.clone());
+            ServerListing {
+                slot: e.slot,
+                label: e.label.clone(),
+                state,
+                trust: e.trust,
+                fp: pin.as_ref().map(|p| p.controller_fp.clone()),
+                fp_prefix: e.fp_prefix.clone(),
+                limits: e.limits(),
+                expires_at: e.expires_at,
+                expires_in_secs: e.expires_at.map(|x| (x - now).max(0)),
+                added_at: e.added_at,
+                added_by: e.added_by.clone(),
+                running: running.get(&e.slot).map(|v| v.len() as u32).unwrap_or(0),
+                queued: t.as_ref().map(|t| queued_of(t)).unwrap_or(0),
+                // Per-day CPU lives in the queue store (lane S2): not exposed yet.
+                cpu_secs_today: 0,
+                sas: pin.as_ref().filter(|p| !p.confirmed && !p.revoked).map(|p| p.sas.replace(' ', "")),
+                refusal: (state == ServerStatus::Refused).then_some(refusal).flatten(),
+                online: t.as_ref().is_some_and(|t| *t.hub.connected.borrow() != 0),
+            }
         })
         .collect();
-    json!({
-        "shared": status.servers.iter().filter(|l| l.state == "active" || l.state == "paused").count() >= 1,
-        "max_servers": f.max_servers,
-        "servers": servers,
-        "error": status.servers_error,
-    })
+    Ok(ServersList { max_servers: f.max_servers, solo: false, servers })
 }
 
 // ── the tenant wall seams (lane S3) ──────────────────────────────────

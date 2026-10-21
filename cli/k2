@@ -32177,9 +32177,11 @@ store:write (Change dump-table rows)
 guests:rooms (Set its own guests' rooms (an owner grant per App, never a guest's))
   guests.rooms             GET  /cli/skin/guests/rooms (server only)          One of this App's guests: its rooms on this App and its role (App: its own guests; Garden: any local App's).
   guests.setRooms          POST /cli/skin/guests/rooms (server only)          Set one guest's rooms on this App, within the rooms the App may hand out and never above the guest's role; idempotent, audited.
-activity:read (See when the agent is working)
-  activity.snapshot        GET  /cli/activity/snapshot                        Whether the room's agent is working now, per session.
-  activity.events          WS   /cli/activity/events?workspace=               Live room events: agent working, heartbeats, tickets, rooms_changed, room_members_changed, app_deployed; resync then close 4008 when behind.
+activity:read (See when the agent is working on a Thread message (counts only))
+  thread.activity          GET  /cli/thread/activity                          The room's live pinned-Chat Thread turn, counts only (needs thread:read and activity:read); null when none. Frames: collection activity on thread.events, kind thread_activity on thread.stream.
+activity:room (See every session's working counts in the room (the owner's other tabs too))
+  activity.snapshot        GET  /cli/activity/snapshot                        Whether the room's agent is working now, per session (every session in the room, the owner's other tabs too; needs activity:room since 0.46.3).
+  activity.events          WS   /cli/activity/events?workspace=               Live room events: agent working (every session in the room, activity:room since 0.46.3), heartbeats, tickets, rooms_changed, room_members_changed, app_deployed; resync then close 4008 when behind.
 heartbeats:read (See heartbeats: schedule, next fire, history)
   heartbeats.list          GET  /cli/heartbeat/list                           The room's heartbeats: schedule, next fire, why one waits.
   heartbeats.show          GET  /cli/heartbeat/show                           One heartbeat, with its instructions when the pass has files:read.
@@ -33514,9 +33516,9 @@ ROUTES (project= is the room handle or uuid; never a path)
                 ← {"kind":"ticket_changed","workspace":"<handle>","id":"<id>",
                    "change":"<change>","status":"<status after>",
                    "via":"<via>"|null,"hasBrief":true|false}
-  The same socket carries agent working (activity:read; frames and the
-  snapshot: `k2 study apps`, AGENT WORKING) and heartbeats
-  (heartbeats:read). Any one of the three caps opens it; each frame needs
+  The same socket carries agent working (activity:room since K2 0.46.3;
+  frames and the snapshot: `k2 study apps`, AGENT WORKING) and heartbeats
+  (heartbeats:read). Any one of the socket caps opens it; each frame needs
   its own cap in the room. A pass without tickets:read never gets a ticket
   frame.
 
@@ -33738,8 +33740,8 @@ An app with heartbeats:read / heartbeats:write on a room can see and
 change THAT room's heartbeats. Never another workspace's, never the
 machine's scheduler, wake settings, Keep awake or power routes.
 Grant: `k2 app role room <role> <room> --caps heartbeats:read,heartbeats:write`.
-heartbeats:write does not imply heartbeats:read. files:* and
-activity:read imply neither.
+heartbeats:write does not imply heartbeats:read. files:*,
+activity:read and activity:room imply neither.
 
 ROUTES (send workspace=<room handle>; never a path)
   heartbeats:read   GET  /cli/heartbeat/list?workspace=
@@ -34154,7 +34156,12 @@ TICKETS
   Never inject it into your page DOM. List its links outside the frame.
   Never /cli/tickets. Never /cli/sessions/events. Never grid.
 
-AGENT WORKING (activity:read)
+AGENT WORKING (activity:room; was activity:read before K2 0.46.3)
+  Every session in the room, the owner's other tabs included. Since K2
+  0.46.3 these need activity:room (never a default; the owner grants it).
+  activity:read alone now gets 403 cap_not_granted (cap activity:room) on
+  the snapshot, and the socket opens but sends no session_activity_changed.
+  For the Thread's own turn, counts only, see THREAD EAR below.
   Exact paths on the official origin (cookie k2_skin_ui; never ?token=):
     GET      /cli/activity/snapshot?workspace=<handle>
     WS GET   /cli/activity/events?workspace=<handle>
@@ -34201,9 +34208,39 @@ AGENT WORKING (activity:read)
   and when a {"kind":"resync"} frame arrives (the socket fell behind and
   closes with 4008 right after). Frames sent while you were away are gone.
   Errors: 400 missing workspace | 403 skin_room (room not on the pass) |
-  403 missing capability activity:read. Never the host-wide snapshot.
-  Never /cli/thread/activity (the desktop's Thread strip; 403 / 404 for
-  apps). Never /cli/chat/transcript.
+  403 cap_not_granted (cap activity:room). Never the host-wide snapshot.
+  Never /cli/chat/transcript.
+
+THREAD EAR (thread:read + activity:read; K2 0.46.3+, thread-activity-ear-v1)
+  The room's pinned-Chat Thread turn while the agent works on a Thread
+  message (anyone's: a guest's or the owner's). Counts only. Never a turn
+  the owner typed straight into the agent's terminal. Exact paths:
+    GET      /cli/thread/activity?addr=<handle>      (k2.thread.activity)
+    WS GET   /cli/overlay/events?conversation=<id>   frames collection "activity"
+    WS GET   /cli/thread/stream?rooms=all            frames kind "thread_activity"
+  Catch-up: {"ok":true,"addr":"<handle>","conversation_id":"<id>",
+             "turn":{…}|null}
+  turn / activity (exactly these keys):
+    {"turnId":"<thread message id>","rev":3,"state":"working",
+     "phase":"tool","phaseSince":1781812201000,"startedAt":1781812199000,
+     "serverNow":1781812273000,
+     "tally":{"read":2,"search":1,"cmd":3,"edit":0},
+     "subagents":1,"subagentsDone":0,"background":0,"messages":1,
+     "waitingOn":"owner"|null,"end":{"reason":"done"}|null}
+  state    working, monitoring, needs-you, unverifiable, stopped, idle
+  phase    delivering, working, tool (no line: never which tool), thinking,
+           waiting, stale, children
+  waitingOn  "owner" while the agent waits on the owner; never which prompt
+  end      null while it runs; the last frame has reason done, stopped or
+           failed, then nothing (catch-up turn: null)
+  Times are ms since the epoch; correct your clock by serverNow. No tool
+  line, command, path, file, argument or text, ever. No Stop.
+  WHAT THE APP MUST DO: on every socket (re)open GET the catch-up and
+  replace the turn; the frames are not stored and never replayed. Ignore
+  frame collections and kinds you don't know.
+  Errors: 403 skin_room (not the room's pinned Chat, room not on the pass)
+  | 403 cap_not_granted (cap thread:read or activity:read) | 401 a revoked
+  pass. A pass revoked mid-turn gets no further frame (its sockets close).
 
 WIKI
   Exact paths on the official origin (cookie k2_skin_ui; never ?token=):
@@ -58666,7 +58703,7 @@ store:write (Change dump-table rows)
 guests:rooms (Set its own guests' rooms (an owner grant per App, never a guest's))
   k2.guests.rooms({app, username})                                                                    portable guests-rooms-v1        const g = await k2.asApp().guests.rooms({username: 'dana'})  [app_pass_required pass_required pass_invalid pass_wrong_link grant_required usage not_found rate_limited stale_widget author_unknown]
   k2.guests.setRooms({app, rooms, username})                                                          portable guests-rooms-v1        await k2.asApp().guests.setRooms({username: 'dana', rooms: ['acme']})  [app_pass_required pass_required pass_invalid pass_wrong_link grant_required usage not_found outside_app_rooms above_role has_role rate_limited stale_widget author_unknown confirm_required declined paused]
-activity:read (See when the agent is working)
+activity:room (See every session's working counts in the room (the owner's other tabs too))
   k2.activity.snapshot({workspace})                                                                   portable app-api-v1             const {status} = await k2.activity.snapshot({workspace})  [pass_required pass_invalid pass_wrong_link skin_room usage not_bound author_unknown]
 room:members (See who has access to the room)
   k2.room.members({app, workspace})                                                                   portable room-members-v1        const {members} = await k2.room.members({workspace})  [pass_required pass_invalid pass_wrong_link skin_room not_bound not_found usage]

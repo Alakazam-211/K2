@@ -132,7 +132,7 @@ fn apply_create_off(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applie
 /// Is `ctx`'s workspace already connected to `to=`? `Err` = the values
 /// don't hold (no such workspace, itself, a malformed remote address).
 fn connected(ctx: &Ctx) -> Result<bool, String> {
-    let path = ws_path(&ctx.workspace_id).ok_or_else(|| GONE.to_string())?;
+    ws_path(&ctx.workspace_id).ok_or_else(|| GONE.to_string())?;
     let to = param(ctx, "to").ok_or("name the workspace: to=<workspace or agent::host>")?;
     if k2_core::connections::is_remote_target(to) {
         // Read-only (the `list` action may soft-bind fingerprints; this

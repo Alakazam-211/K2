@@ -18,7 +18,7 @@ use k2_node_proto::crypto;
 use k2_node_proto::frames::{ArtifactChunk, ArtifactFailed, ArtifactGet, Frame, TRANSFER_CHUNK};
 use k2_node_proto::results::{self, ArtifactInfo, Outputs, TestSummary};
 
-use crate::paths::{safe_relative, Layout};
+use crate::paths::safe_relative;
 
 /// Where to look.
 pub struct Roots<'a> {
@@ -128,9 +128,11 @@ fn matches(globs: &[String], roots: &Roots<'_>, notes: &mut Vec<String>) -> Vec<
     out
 }
 
-/// `artifacts/<job>-g<gen>/` under the node home.
-pub fn dir(layout: &Layout, job: &str, generation: u32) -> PathBuf {
-    layout.home.join("artifacts").join(format!("{job}-g{generation}"))
+/// `<root>/<job>-g<gen>/`, `root` being the tenant's artifacts dir
+/// ([`crate::paths::TenantLayout::artifacts`]: `artifacts/` under the home
+/// for the owner).
+pub fn dir(root: &Path, job: &str, generation: u32) -> PathBuf {
+    root.join(format!("{job}-g{generation}"))
 }
 
 /// Copy `src` to `dst` and hash it (one read).
@@ -202,10 +204,9 @@ pub fn collect(globs: &[String], roots: &Roots<'_>, keep: &Path) -> Outputs {
     Outputs { artifacts, tests, notes }.capped()
 }
 
-/// Remove artifact dirs older than [`results::KEEP_SECS`].
-pub fn sweep(layout: &Layout, now: i64) {
-    let root = layout.home.join("artifacts");
-    let Ok(rd) = std::fs::read_dir(&root) else { return };
+/// Remove artifact dirs under `root` older than [`results::KEEP_SECS`].
+pub fn sweep(root: &Path, now: i64) {
+    let Ok(rd) = std::fs::read_dir(root) else { return };
     for e in rd.flatten() {
         let old = e
             .metadata()
@@ -224,7 +225,7 @@ pub fn sweep(layout: &Layout, now: i64) {
 /// chunks carry the hash the node reported; the controller checks the
 /// bytes it got against it. `known` is the attempt's reported artifacts
 /// (from the ledger). Blocking.
-pub fn answer(layout: &Layout, g: &ArtifactGet, known: Option<&[ArtifactInfo]>, send: &mut dyn FnMut(Frame) -> bool) {
+pub fn answer(root: &Path, g: &ArtifactGet, known: Option<&[ArtifactInfo]>, send: &mut dyn FnMut(Frame) -> bool) {
     let failed = |code: &str, message: String| Frame::ArtifactFailed(ArtifactFailed { request_id: g.request_id.clone(), code: code.into(), message });
     macro_rules! fail {
         ($code:expr, $msg:expr) => {{
@@ -241,7 +242,7 @@ pub fn answer(layout: &Layout, g: &ArtifactGet, known: Option<&[ArtifactInfo]>, 
     let Some(rel) = safe_relative(&info.name) else {
         fail!("artifact_not_found", "not a plain relative name".into());
     };
-    let path = dir(layout, &g.job_id, g.generation).join(rel);
+    let path = dir(root, &g.job_id, g.generation).join(rel);
     let mut f = match std::fs::symlink_metadata(&path) {
         Ok(m) if m.file_type().is_file() => match std::fs::File::open(&path) {
             Ok(f) => f,
@@ -286,6 +287,7 @@ pub fn answer(layout: &Layout, g: &ArtifactGet, known: Option<&[ArtifactInfo]>, 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::paths::Layout;
 
     fn touch(p: &Path, body: &str) {
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
@@ -328,7 +330,7 @@ mod tests {
     fn answer_streams_chunks_and_refuses_unknown_or_changed_files() {
         let d = crate::util::temp_dir("artifacts-answer");
         let layout = Layout::new(d.join("home"), d.join("config"));
-        let keep = dir(&layout, "j1", 1);
+        let keep = dir(&layout.tenant(0).artifacts(), "j1", 1);
         let body = vec![7u8; TRANSFER_CHUNK + 10];
         std::fs::create_dir_all(keep.join("out")).unwrap();
         std::fs::write(keep.join("out/a.bin"), &body).unwrap();
@@ -336,7 +338,7 @@ mod tests {
         let g = |name: &str| ArtifactGet { request_id: "r".into(), job_id: "j1".into(), generation: 1, name: name.into() };
         let run = |name: &str, known: Option<&[ArtifactInfo]>| {
             let mut frames = Vec::new();
-            answer(&layout, &g(name), known, &mut |f| {
+            answer(&layout.tenant(0).artifacts(), &g(name), known, &mut |f| {
                 frames.push(f);
                 true
             });

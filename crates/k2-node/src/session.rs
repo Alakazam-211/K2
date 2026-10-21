@@ -1,5 +1,9 @@
 //! Dialing the controller, the signed attach handshake (§7.3), one
 //! session's loops, and the run loop with backoff (§11.5, §12.1).
+//!
+//! Every session belongs to one [`Tenant`]: one server's pin, ledger,
+//! journals and hub (prd-compute-shared-queue-v1 §5). Solo mode runs one
+//! session, the owner's ([`run_forever`]).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -17,7 +21,7 @@ use tokio_tungstenite::tungstenite::Message;
 
 use crate::identity::Pin;
 use crate::journal::JournalReader;
-use crate::node::{journal_path, Node, NODE_VERSION};
+use crate::node::{Node, Tenant, NODE_VERSION};
 
 pub const ATTACH_PATH: &str = "/cli/compute/attach";
 pub const ENROLL_PATH: &str = "/cli/compute/enroll";
@@ -175,19 +179,19 @@ struct Track {
 
 type Tracks = Arc<Mutex<HashMap<(String, u32), Track>>>;
 
-fn track(node: &Node, job: &str, gen: u32, since: u64, hinted: bool) -> Track {
-    let mut reader = JournalReader::new(journal_path(node.layout(), job, gen));
+fn track(t: &Tenant, job: &str, gen: u32, since: u64, hinted: bool) -> Track {
+    let mut reader = JournalReader::new(t.paths.journal(job, gen));
     reader.skip_to(since);
     Track { reader, sent: None, hinted }
 }
 
 /// One pass of the shipper: logs first, then state, then the receipt.
 /// `Err` when the session's queue is gone.
-async fn ship_pass(node: &Node, tracks: &Tracks, tx: &mpsc::Sender<Frame>) -> Result<(), ()> {
+async fn ship_pass(node: &Node, tenant: &Tenant, tracks: &Tracks, tx: &mpsc::Sender<Frame>) -> Result<(), ()> {
     let keys: Vec<(String, u32)> = tracks.lock().unwrap().keys().cloned().collect();
     for key in keys {
         let Some(mut t) = tracks.lock().unwrap().remove(&key) else { continue };
-        let row = node.ledger.lock().unwrap().get(&key.0, key.1).ok().flatten();
+        let row = tenant.ledger.lock().unwrap().get(&key.0, key.1).ok().flatten();
         let Some(row) = row else {
             if t.hinted {
                 let f = Frame::State(frames::StateUpdate {
@@ -250,13 +254,13 @@ async fn ship_pass(node: &Node, tracks: &Tracks, tx: &mpsc::Sender<Frame>) -> Re
     Ok(())
 }
 
-/// Run one established session until it ends.
-pub async fn run_session(node: Arc<Node>, ws: Ws, start: SessionStart) -> SessionEnd {
-    run_session_on(node, ws, start).await
+/// Run one established session of `tenant`'s server until it ends.
+pub async fn run_session(node: Arc<Node>, tenant: Arc<Tenant>, ws: Ws, start: SessionStart) -> SessionEnd {
+    run_session_on(node, tenant, ws, start).await
 }
 
 /// [`run_session`] over any WebSocket (tests use the loopback one).
-pub async fn run_session_on<S>(node: Arc<Node>, ws: S, start: SessionStart) -> SessionEnd
+pub async fn run_session_on<S>(node: Arc<Node>, tenant: Arc<Tenant>, ws: S, start: SessionStart) -> SessionEnd
 where
     S: futures_util::Sink<Message, Error = tokio_tungstenite::tungstenite::Error>
         + futures_util::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
@@ -271,18 +275,18 @@ where
 
     // Learned routes, the confirmed flag, narrowing.
     {
-        let mut lr = node.learned_routes.lock().unwrap();
+        let mut lr = tenant.learned_routes.lock().unwrap();
         for r in &start.welcome.routes {
             if crate::url::ws_url(r, ATTACH_PATH).is_ok() && !lr.contains(r) {
                 lr.push(r.clone());
             }
         }
     }
-    node.mark_confirmed();
+    node.mark_confirmed(&tenant);
     // Self-update health gate: this build reached its controller.
     crate::admin::update::mark_healthy(&node.layout().home, true);
     if let Some(n) = start.welcome.narrow.clone() {
-        node.narrow(n);
+        node.narrow(&tenant, n);
     }
 
     // Writer: seal with the per-direction sequence, ping every 20 s.
@@ -329,22 +333,22 @@ where
         }
     }
 
-    let epoch = node.hub.attach(tx.clone());
+    let epoch = tenant.hub.attach(tx.clone());
 
     // Tracks: resume hints + every open attempt.
     let tracks: Tracks = Arc::new(Mutex::new(HashMap::new()));
     {
         let mut t = tracks.lock().unwrap();
         for h in &start.welcome.resume {
-            t.insert((h.job_id.clone(), h.generation), track(&node, &h.job_id, h.generation, h.since_seq, true));
+            t.insert((h.job_id.clone(), h.generation), track(&tenant, &h.job_id, h.generation, h.since_seq, true));
         }
-        for r in node.ledger.lock().unwrap().non_terminal().unwrap_or_default() {
-            t.entry((r.job_id.clone(), r.generation)).or_insert_with(|| track(&node, &r.job_id, r.generation, 0, false));
+        for r in tenant.ledger.lock().unwrap().non_terminal().unwrap_or_default() {
+            t.entry((r.job_id.clone(), r.generation)).or_insert_with(|| track(&tenant, &r.job_id, r.generation, 0, false));
         }
     }
 
     // Snapshot pages, then the first offer.
-    let rows = node.ledger.lock().unwrap().all().unwrap_or_default();
+    let rows = tenant.ledger.lock().unwrap().all().unwrap_or_default();
     let jobs: Vec<_> = rows.iter().map(|r| r.to_ledger_job()).collect();
     let pages: Vec<_> = if jobs.is_empty() { vec![vec![]] } else { jobs.chunks(200).map(|c| c.to_vec()).collect() };
     let last = pages.len() - 1;
@@ -353,7 +357,7 @@ where
             break;
         }
     }
-    let first = node.offer();
+    let first = node.offer(&tenant);
     let _ = tx.send(Frame::Offer(first.clone())).await;
     // Tell the controller how the last self-update ended (it dedups).
     {
@@ -389,15 +393,16 @@ where
 
     // Shipper.
     let ship_node = node.clone();
+    let ship_tenant = tenant.clone();
     let ship_tracks = tracks.clone();
     let ship_tx = tx.clone();
     let shipper = tokio::spawn(async move {
         loop {
-            if ship_pass(&ship_node, &ship_tracks, &ship_tx).await.is_err() {
+            if ship_pass(&ship_node, &ship_tenant, &ship_tracks, &ship_tx).await.is_err() {
                 return;
             }
             tokio::select! {
-                _ = ship_node.ship.notified() => {}
+                _ = ship_tenant.ship.notified() => {}
                 _ = tokio::time::sleep(Duration::from_millis(500)) => {}
             }
         }
@@ -405,6 +410,7 @@ where
 
     // Offers: on change, and every OFFER_SECS regardless.
     let offer_node = node.clone();
+    let offer_tenant = tenant.clone();
     let offer_tx = tx.clone();
     let offers = tokio::spawn(async move {
         let mut last_rev = first.revision;
@@ -412,10 +418,10 @@ where
         tick.tick().await;
         loop {
             let force = tokio::select! {
-                _ = offer_node.offer_changed.notified() => false,
+                _ = offer_tenant.offer_changed.notified() => false,
                 _ = tick.tick() => true,
             };
-            let o = offer_node.offer();
+            let o = offer_node.offer(&offer_tenant);
             if force || o.revision != last_rev {
                 last_rev = o.revision;
                 if offer_tx.send(Frame::Offer(o)).await.is_err() {
@@ -450,15 +456,15 @@ where
         expected += 1;
         match frame {
             Frame::Assign(a) => {
-                if let Some((job, gen)) = node.on_assign(a) {
-                    tracks.lock().unwrap().insert((job.clone(), gen), track(&node, &job, gen, 0, false));
-                    node.ship.notify_one();
+                if let Some((job, gen)) = node.on_assign(&tenant, a) {
+                    tracks.lock().unwrap().insert((job.clone(), gen), track(&tenant, &job, gen, 0, false));
+                    tenant.ship.notify_one();
                 }
             }
-            Frame::Transfer(t) => node.hub.route_transfer((t.job_id.clone(), t.generation, crate::node::kind_name(t.kind)), crate::node::TransferEvent::Chunk(t)),
-            Frame::TransferFailed(t) => node.hub.route_transfer((t.job_id.clone(), t.generation, crate::node::kind_name(t.kind)), crate::node::TransferEvent::Failed(t)),
-            Frame::Cancel(c) => node.cancel(&c.job_id, c.generation, &c.reason),
-            Frame::PolicyNarrow(p) => node.narrow(p.limits),
+            Frame::Transfer(t) => tenant.hub.route_transfer((t.job_id.clone(), t.generation, crate::node::kind_name(t.kind)), crate::node::TransferEvent::Chunk(t)),
+            Frame::TransferFailed(t) => tenant.hub.route_transfer((t.job_id.clone(), t.generation, crate::node::kind_name(t.kind)), crate::node::TransferEvent::Failed(t)),
+            Frame::Cancel(c) => node.cancel(&tenant, &c.job_id, c.generation, &c.reason),
+            Frame::PolicyNarrow(p) => node.narrow(&tenant, p.limits),
             Frame::Admin(a) => {
                 let (n, t) = (node.clone(), tx.clone());
                 tokio::spawn(async move {
@@ -475,23 +481,23 @@ where
             }
             Frame::ArtifactGet(g) => {
                 // Streamed from a blocking thread; the bounded queue paces it.
-                let (n, t) = (node.clone(), tx.clone());
+                let (n, t) = (tenant.clone(), tx.clone());
                 tokio::task::spawn_blocking(move || {
                     let known = n.ledger.lock().unwrap().get(&g.job_id, g.generation).ok().flatten().map(|r| r.outputs.map(|o| o.artifacts).unwrap_or_default());
-                    crate::artifacts::answer(n.layout(), &g, known.as_deref(), &mut |f| t.blocking_send(f).is_ok());
+                    crate::artifacts::answer(&n.paths.artifacts(), &g, known.as_deref(), &mut |f| t.blocking_send(f).is_ok());
                 });
             }
             Frame::UpdateOffer(o) => crate::admin::courier::update_offer(&node, &tx, o),
             Frame::UpdateChunk(c) => crate::admin::courier::update_chunk(&node, &tx, c),
             Frame::Revoked(r) => {
-                node.revoke(&r.reason);
+                node.revoke(&tenant, &r.reason);
                 break SessionEnd::Revoked(r.reason);
             }
             Frame::Welcome(_) => break SessionEnd::ProtocolError("second welcome".into()),
             other => break SessionEnd::ProtocolError(format!("{} can't come from the controller", other.kind())),
         }
     };
-    node.hub.detach(epoch);
+    tenant.hub.detach(epoch);
     shipper.abort();
     offers.abort();
     health.abort();
@@ -507,39 +513,57 @@ where
     end
 }
 
-/// Dial, attach, serve, back off — forever.
+/// Dial, attach, serve, back off — forever: the owner server (solo mode,
+/// today's one session).
 pub async fn run_forever(node: Arc<Node>) {
+    let owner = node.owner();
+    run_tenant_forever(node, owner).await
+}
+
+/// [`run_forever`] for one tenant's server. Status and enrol requests are
+/// the owner's (the status file shows the node and its owner server).
+pub async fn run_tenant_forever(node: Arc<Node>, tenant: Arc<Tenant>) {
     let mut backoff = node.opts.backoff_min;
+    // The status file and enrol requests are the owner's; another
+    // server's session only logs (lane S1 adds per-server status).
+    let owner = tenant.is_owner();
+    let status = |state: &str, route: Option<String>, err: Option<String>| {
+        if owner {
+            node.set_status_state(state, route, err);
+        } else if let Some(e) = &err {
+            crate::nlog!("server slot {}: {state}: {e}", tenant.slot);
+        }
+    };
     loop {
-        node.reload_pin();
-        let pin = node.pin.lock().unwrap().clone();
+        tenant.reload_pin();
+        let pin = tenant.pin.lock().unwrap().clone();
         let pin = match pin {
             None => {
-                if crate::request::process(&node).await {
+                if owner && crate::request::process(&node).await {
                     continue;
                 }
                 if node.status.lock().unwrap().state != "unenrolled" {
-                    node.set_status_state("unenrolled", None, None);
+                    status("unenrolled", None, None);
                 }
                 tokio::time::sleep(Duration::from_secs(5).min(node.opts.backoff_max)).await;
                 continue;
             }
             Some(p) if p.revoked => {
-                if crate::request::process(&node).await {
+                if owner && crate::request::process(&node).await {
                     continue;
                 }
-                node.set_status_state("revoked", None, p.revoked_reason.clone().map(|r| format!("Removed by the controller: {r}")));
+                status("revoked", None, p.revoked_reason.clone().map(|r| format!("Removed by the controller: {r}")));
                 tokio::time::sleep(Duration::from_secs(30).min(node.opts.backoff_max * 2)).await;
                 continue;
             }
             Some(p) => p,
         };
         let boot = node.opts.clock.boot_id();
-        let ledger_id = node.ledger.lock().unwrap().ledger_id.clone();
+        let ledger_id = tenant.ledger_id();
         let mut last_err = None;
-        for route in node.routes() {
+        for route in tenant.routes() {
             if node.status.lock().unwrap().state != "pending" {
-                node.set_status_state("connecting", Some(route.clone()), last_err.clone());
+                status("connecting", Some(route.clone()), last_err.clone());
             }
             let mut ws = match connect(&route, ATTACH_PATH).await {
                 Ok(ws) => ws,
@@ -550,23 +574,23 @@ pub async fn run_forever(node: Arc<Node>) {
             };
             match attach(&mut ws, &node.key, &pin, &boot, &ledger_id).await {
                 Ok(AttachOutcome::Session(start)) => {
-                    node.set_status_state("online", Some(route.clone()), None);
+                    status("online", Some(route.clone()), None);
                     crate::nlog!("online via {route}");
-                    let end = run_session(node.clone(), ws, start).await;
+                    let end = run_session(node.clone(), tenant.clone(), ws, start).await;
                     crate::nlog!("session ended: {end:?}");
                     backoff = node.opts.backoff_min;
                     last_err = Some(format!("{end:?}"));
                     if !matches!(end, SessionEnd::Revoked(_)) {
-                        node.set_status_state("offline", None, last_err.clone());
+                        status("offline", None, last_err.clone());
                     }
                     break;
                 }
                 Ok(AttachOutcome::Refused(r)) => {
                     last_err = Some(format!("{}: {}", r.code, r.message));
                     match r.code.as_str() {
-                        "pending_confirmation" => node.set_status_state("pending", Some(route.clone()), None),
-                        "revoked" => node.revoke(&r.message),
-                        _ => node.set_status_state("offline", Some(route.clone()), last_err.clone()),
+                        "pending_confirmation" => status("pending", Some(route.clone()), None),
+                        "revoked" => node.revoke(&tenant, &r.message),
+                        _ => status("offline", Some(route.clone()), last_err.clone()),
                     }
                     break;
                 }
@@ -579,7 +603,7 @@ pub async fn run_forever(node: Arc<Node>) {
         if let Some(e) = &last_err {
             let st = node.status.lock().unwrap().state.clone();
             if st != "pending" && st != "revoked" && st != "online" {
-                node.set_status_state("offline", None, Some(e.clone()));
+                status("offline", None, Some(e.clone()));
             }
         }
         let wait = backoff + Duration::from_millis(crate::util::jitter_ms(backoff.as_millis() as u64 / 2 + 1));

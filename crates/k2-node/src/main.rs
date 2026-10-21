@@ -176,7 +176,7 @@ async fn cmd_run(a: &Args) -> Result<(), String> {
         // No controller to shake hands with: starting is healthy enough
         // for a self-update's health gate (enrolled nodes mark it after
         // the attach, in the session).
-        let pin = node.pin.lock().unwrap().clone();
+        let pin = node.owner().pin.lock().unwrap().clone();
         if pin.map(|p| p.revoked).unwrap_or(true) {
             k2_node::admin::update::mark_healthy(&node.layout().home, true);
         }

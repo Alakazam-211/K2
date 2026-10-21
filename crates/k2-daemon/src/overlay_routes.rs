@@ -1739,7 +1739,16 @@ fn create_secret_card(
         answered_at: None,
     };
     if let Err(e) = vault.request_create(req) {
-        let _ = overlay::mark_secret(&resolved.conversation_id, &item.id, "voided", None, "card withdrawn".into(), None);
+        // The card was committed, so its withdrawn state is a Thread change
+        // like any other: publish it (every view, and `rev` moves so a
+        // catch-up `sinceRev` from before is stale).
+        match overlay::mark_secret(&resolved.conversation_id, &item.id, "voided", None, "card withdrawn".into(), None) {
+            Ok(cb) => publish_card_frame(&cb),
+            Err(err) => {
+                k2_core::log_debug!("[overlay] withdraw secret card {}: {err}", item.id);
+                crate::overlay_ws::emit_links(&links, &item.doc);
+            }
+        }
         return Err(error_json("400 Bad Request", e.code, e.hint));
     }
     crate::overlay_ws::emit_links(&links, &item.doc);
@@ -6614,6 +6623,98 @@ mod tests {
         assert_eq!(c[0].msg.as_ref().expect("msg").text, "Ship *it*?", "a choice card's question");
         let sm = s[0].msg.as_ref().expect("msg");
         assert_eq!(sm.text, "", "a secret card never carries text");
+    }
+
+    /// catchup-unchanged-v1 audit: every Thread doc change a catch-up would
+    /// report goes out as a frame, so it moves `rev` past any `sinceRev`
+    /// taken before it. Covers a post, a card answer, a void, the daemon's
+    /// expiry sweep, and a secret card withdrawn when its vault request
+    /// fails (that one used to commit with no frame at all).
+    #[test]
+    fn every_thread_change_moves_rev_with_a_frame() {
+        let _home = crate::test_support::TempHome::new();
+        let _vault = crate::vault::ensure_test_vault();
+        let handle = format!("ovlrev{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        let conv = uuid::Uuid::new_v4().to_string();
+        pin(&project_id, &conv);
+        let mut rx = crate::overlay_ws::subscribe();
+        // The revs of frames for (conv, id) received so far.
+        let mut drain = |id: &str| -> Vec<(u64, Option<k2_core::overlay::OverlayDoc>)> {
+            let mut out = Vec::new();
+            loop {
+                match rx.try_recv() {
+                    Ok(f) if f.conversation_id.as_deref() == Some(conv.as_str()) && f.id == id => out.push((f.rev, f.doc)),
+                    Ok(_) => {}
+                    Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {}
+                    Err(_) => break,
+                }
+            }
+            out
+        };
+        let check = |what: &str, before: u64, frames: &[(u64, Option<k2_core::overlay::OverlayDoc>)]| {
+            assert!(!frames.is_empty(), "{what}: no frame, so `rev` would not move");
+            assert!(frames.iter().all(|(r, _)| *r > before), "{what}: frame rev must pass {before}: {frames:?}");
+            assert!(crate::overlay_ws::current_rev() > before, "{what}: a sinceRev of {before} is stale");
+        };
+        let ask = |expires: Option<&str>| -> String {
+            let mut body = serde_json::json!({ "addr": handle, "prompt": "Ship?", "options": "Go,Stop", "from": "k2" });
+            if let Some(e) = expires {
+                body["expires"] = serde_json::json!(e);
+            }
+            let r = post_json("/cli/thread/ask", &HashMap::new(), body);
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+            json_body(&r)["id"].as_str().expect("id").to_string()
+        };
+
+        // A post.
+        let before = crate::overlay_ws::current_rev();
+        let r = post_json("/cli/thread/post", &HashMap::new(), serde_json::json!({ "addr": handle, "text": "hello", "from": "k2" }));
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let id = json_body(&r)["id"].as_str().expect("id").to_string();
+        check("post", before, &drain(&id));
+
+        // A card answered.
+        let card = ask(None);
+        drain(&card);
+        let before = crate::overlay_ws::current_rev();
+        let r = post_json("/cli/thread/answer", &passport_params(&project_id, &handle), serde_json::json!({ "addr": handle, "id": card, "answer": "Go" }));
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        check("answer", before, &drain(&card));
+
+        // A card voided.
+        let card = ask(None);
+        drain(&card);
+        let before = crate::overlay_ws::current_rev();
+        let r = post_json("/cli/thread/void", &passport_params(&project_id, &handle), serde_json::json!({ "addr": handle, "id": card }));
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        check("void", before, &drain(&card));
+
+        // A ticker expiry (the vault request sweep's `close_expired_card`;
+        // the card sweep `sweep_expired_cards` sends the same
+        // `publish_card_frame`). Not the global sweep here: it would expire
+        // other tests' cards.
+        let card = ask(Some("60"));
+        drain(&card);
+        let before = crate::overlay_ws::current_rev();
+        close_expired_card(&conv, &card);
+        let frames = drain(&card);
+        check("expiry sweep", before, &frames);
+        assert_eq!(frames.last().and_then(|(_, d)| d.as_ref()).and_then(|d| d.choice.as_ref()).map(|c| c.status.as_str()), Some("expired"));
+
+        // A secret card whose vault request fails: committed, then withdrawn
+        // (voided) with a frame. A 250-character prompt passes the overlay
+        // but the vault refuses it.
+        let before = crate::overlay_ws::current_rev();
+        let err = post_clone_secret_card(&conv, &project_id, &handle, "REV_TOKEN", "api_key", &[], "none", &"p".repeat(250))
+            .expect_err("the vault refuses a 250-character prompt");
+        assert!(err.contains("prompt"), "{err}");
+        let voided = crate::overlay_ws::current_rev();
+        assert!(voided > before, "the withdrawn card moved rev");
+        let page = overlay::read_thread_page(&conv, None, None, 50).expect("page");
+        let card = page.items.iter().rev().find(|i| i.doc.secret.is_some()).expect("the withdrawn card is stored");
+        assert_eq!(card.doc.secret.as_ref().expect("secret").status, "voided");
+        check("secret withdrawn", before, &drain(&card.id));
     }
 
     /// Push titles name the agent by its DISPLAY name (`projects.name`, as

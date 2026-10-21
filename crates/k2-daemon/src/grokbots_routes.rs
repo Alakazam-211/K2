@@ -398,6 +398,7 @@ fn collect_now(p: &GrokBot, agent: &str) -> Result<Bot, CliResponse> {
     let names: HashMap<String, String> = roster.iter().map(|a| (a.id.clone(), a.name.clone())).collect();
     if let Ok(moved) = collect::migrate_legacy_tail(p, &names) {
         for id in moved {
+            note_collected_change(&id);
             crate::grokbots_watch::announce_agent(&id);
         }
     }
@@ -407,6 +408,7 @@ fn collect_now(p: &GrokBot, agent: &str) -> Result<Bot, CliResponse> {
             let synced = collect::sync_agent(p, a, true, now)
                 .map_err(|e| CliResponse::internal_error(format!("collect: {e}")))?;
             if synced.changed {
+                note_collected_change(&a.id);
                 crate::grokbots_watch::announce_agent(&a.id);
             }
             Ok(Bot {
@@ -480,6 +482,13 @@ fn resolve_gb(p: &GrokBot, wanted: &str) -> Result<(String, String), CliResponse
 }
 
 /// Whether `/cli/thread` should hand `addr` to [`thread_by_addr`].
+/// A bot's collected Thread changed (a new or updated line, our own send,
+/// a migrated tail). Collected writes have no overlay frame, so move `rev`
+/// (catchup-unchanged-v1): a catch-up `sinceRev` from before is stale.
+pub(crate) fn note_collected_change(agent_id: &str) {
+    crate::overlay_ws::bump_rev("collected", &collect::conversation_id(agent_id));
+}
+
 pub fn is_gb_addr(addr: &str) -> bool {
     collect::parse_addr(addr).is_some()
 }
@@ -639,6 +648,8 @@ fn send(who: &Who, body: &[u8]) -> CliResponse {
                 now,
             ) {
                 log_debug!("[grokbots] send to {} not recorded in its Thread: {e}", b.agent);
+            } else {
+                note_collected_change(&b.agent);
             }
             crate::grokbots_watch::announce_agent(&b.agent);
             crate::grokbots_watch::nudge_agent(&b.agent);

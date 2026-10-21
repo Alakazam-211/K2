@@ -707,7 +707,11 @@ pub fn import_threads_for_clone(
         travelled_sessions: travelled,
         copied_secret_names: copied_secret_names.clone(),
     };
-    t::import_threads(&conn, &export, &ctx)
+    let report = t::import_threads(&conn, &export, &ctx)?;
+    drop(conn);
+    // Imported lines have no frame: move `rev` (catchup-unchanged-v1).
+    crate::overlay_ws::note_import(&report);
+    Ok(report)
 }
 
 /// Session / conversation ids whose transcript files are in the bundle:

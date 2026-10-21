@@ -120,6 +120,54 @@ pub fn publish(mut frame: OverlayFrame) {
     let _ = bus().send(frame);
 }
 
+/// catchup-unchanged-v1: a Thread change that has NO frame of its own (a
+/// Thread import, a collected outside-agent conversation such as `gb:`)
+/// still moves `rev`, so a catch-up `sinceRev` taken before it is stale
+/// and the next catch-up reads. `rev` is a high-water mark: it may skip
+/// numbers on the wire (never a cursor, never contiguous). Returns the new
+/// `rev`.
+pub fn bump_rev(reason: &str, conversation_id: &str) -> u64 {
+    let _guard = PUBLISH_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let rev = REV.fetch_add(1, Ordering::SeqCst) + 1;
+    #[cfg(test)]
+    test_bumps::record(reason, conversation_id, rev);
+    #[cfg(not(test))]
+    let _ = (reason, conversation_id);
+    rev
+}
+
+/// [`bump_rev`] for every conversation a Thread import wrote lines into.
+pub fn note_import(report: &k2_core::overlay::transfer::ImportReport) {
+    for c in &report.conversations {
+        if c.imported > 0 {
+            bump_rev("import", &c.local_conversation_id);
+        }
+    }
+}
+
+/// Test-only record of [`bump_rev`] calls (process-global; tests filter by
+/// their own conversation ids).
+#[cfg(test)]
+pub(crate) mod test_bumps {
+    use std::sync::Mutex;
+    static BUMPS: Mutex<Vec<(String, String, u64)>> = Mutex::new(Vec::new());
+
+    pub(crate) fn record(reason: &str, conversation_id: &str, rev: u64) {
+        BUMPS.lock().unwrap_or_else(|p| p.into_inner()).push((reason.to_string(), conversation_id.to_string(), rev));
+    }
+
+    /// The `(reason, rev)` bumps recorded for one conversation.
+    pub(crate) fn for_conversation(conversation_id: &str) -> Vec<(String, u64)> {
+        BUMPS
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+            .filter(|(_, c, _)| c == conversation_id)
+            .map(|(r, _, v)| (r.clone(), *v))
+            .collect()
+    }
+}
+
 pub fn subscribe() -> broadcast::Receiver<OverlayFrame> {
     bus().subscribe()
 }

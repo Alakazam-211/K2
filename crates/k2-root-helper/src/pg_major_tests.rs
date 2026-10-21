@@ -54,6 +54,10 @@ struct World {
     /// package → version (default 1.0); `bump_on_install` changes one at install
     vers: HashMap<String, String>,
     bump_on_install: Option<(String, String)>,
+    /// port → `server_version_num` (default 160015 on 5432, 170011 else)
+    server_num: HashMap<u16, String>,
+    /// the restore target's owner is a superuser
+    super_owner: bool,
 }
 
 type W = Rc<RefCell<World>>;
@@ -266,6 +270,13 @@ fn pg_box() -> (T, W) {
                     let port: u16 = arg_after(a, "-p").map(|p| p.parse().unwrap()).unwrap_or(5432);
                     let sql = String::from_utf8_lossy(stdin.unwrap_or_default()).to_string();
                     w.sql.push((port, sql.clone()));
+                    if sql.starts_with("SHOW server_version_num") {
+                        let d = if port == 5432 { "160015" } else { "170011" };
+                        return out(0, &format!("{}\n", w.server_num.get(&port).cloned().unwrap_or_else(|| d.into())));
+                    }
+                    if sql.contains("rolsuper::text FROM pg_catalog.pg_roles") {
+                        return out(0, if w.super_owner { "true\n" } else { "false\n" });
+                    }
                     if sql.contains("FROM pg_authid") {
                         let rows = w.roles.get(&port).cloned().unwrap_or_default();
                         let mut want: Vec<AuthRow> = rows.into_iter().filter(|r| sql.contains(&format!("'{}'", r.rolname))).collect();
@@ -306,7 +317,7 @@ fn pg_box() -> (T, W) {
                     }
                     out(0, "")
                 }
-                "mkdir" | "chmod" | "du" => out(0, ""),
+                "mkdir" | "chmod" | "du" | "find" => out(0, ""),
                 "dd" => {
                     let of = a.iter().find_map(|x| x.strip_prefix("of=")).unwrap().to_string();
                     w.passfiles.push((of, String::from_utf8_lossy(stdin.unwrap_or_default()).to_string()));
@@ -645,6 +656,17 @@ fn ensure_cluster_refusals_change_nothing() {
             bins(&t.root, 17);
             w.borrow_mut().clusters.push((17, 5434, true));
         }), "port_mismatch"),
+        // Review #1 L5: a link planted on the way to the new dirs.
+        ("link above the data dir", Box::new(|t, _| {
+            bins(&t.root, 17);
+            mkdirs(&t.root, &["/srv/elsewhere"]);
+            std::os::unix::fs::symlink(t.p("/srv/elsewhere"), t.p("/var/lib/postgresql/17")).unwrap();
+        }), "cluster_layout_refused"),
+        ("link above the config dir", Box::new(|t, _| {
+            bins(&t.root, 17);
+            mkdirs(&t.root, &["/srv/elsewhere"]);
+            std::os::unix::fs::symlink(t.p("/srv/elsewhere"), t.p("/etc/postgresql/17")).unwrap();
+        }), "cluster_layout_refused"),
     ];
     for (what, setup, want) in cases {
         let (t, w) = pg_box();
@@ -855,8 +877,13 @@ fn dump_restore_use_the_targets_binaries_as_postgres() {
     let pc = w.borrow().postgres_calls.clone();
     assert!(pc.contains(&"/usr/bin/mkdir -p -m 0700 -- /var/lib/postgresql/k2-moves".to_string()), "{pc:?}");
     assert!(pc.contains(&"/usr/bin/chmod 0700 -- /var/lib/postgresql/k2-moves".to_string()), "L4: {pc:?}");
+    assert!(
+        pc.contains(&"/usr/bin/find /var/lib/postgresql/k2-moves -maxdepth 1 -type f -name .k2pass-* -delete".to_string()),
+        "R1: stale passfiles swept: {pc:?}"
+    );
+    assert!(w.borrow().sql.iter().any(|(p, s)| *p == 5432 && s.starts_with("SHOW server_version_num")), "R2: the source server's version read");
     assert!(pc.contains(&format!(
-        "PGOPTIONS=-c search_path=pg_catalog,pg_temp /usr/lib/postgresql/17/bin/pg_dump -Fc --no-subscriptions --no-publications -h /var/run/postgresql -p 5432 -f {file} -d ws_jobs"
+        "PGOPTIONS=-c search_path=pg_catalog,pg_temp -c role=none /usr/lib/postgresql/17/bin/pg_dump -Fc --no-subscriptions --no-publications -h /var/run/postgresql -p 5432 -f {file} -d ws_jobs"
     )), "17's pg_dump against 16's port: {pc:?}");
     assert!(pc.contains(&format!("/usr/bin/chmod 0600 -- {file}")), "L4: {pc:?}");
     // The same tag twice: refused, nothing overwritten.
@@ -907,16 +934,44 @@ fn dump_restore_use_the_targets_binaries_as_postgres() {
     assert!(sql.iter().any(|s| s == "ALTER ROLE \"ws_jobs_migrator\" IN DATABASE \"ws_jobs\" SET temp_file_limit = -1;\n"));
     assert!(sql.iter().any(|s| s == "ALTER ROLE \"ws_jobs_migrator\" IN DATABASE \"ws_jobs\" RESET temp_file_limit;\n"));
 
-    // A failing data load: only the ERROR line, never the row (I4); the
-    // passfile and the temp setting are cleaned up anyway.
-    w.borrow_mut().restore_fail = Some("data".into());
+    // A failing data or post-data load: only the ERROR line, never the row
+    // (I4); the passfile, the temp setting and FORCE all come back in the
+    // same cleanup (re-check #1 R1).
+    for section in ["data", "post-data"] {
+        w.borrow_mut().restore_fail = Some(section.into());
+        w.borrow_mut().postgres_calls.clear();
+        w.borrow_mut().sql.clear();
+        let o = t.call_in(&["pg", "move-restore", "17", "ws_jobs", tag], &login("ws_jobs_migrator"));
+        assert_eq!(o.code, exit::IO, "{}", o.stderr);
+        assert!(o.stderr.contains(&format!("pg_restore ({section})")) && o.stderr.contains("violates check constraint"), "{}", o.stderr);
+        assert!(!o.stderr.contains("secret-row-value") && !o.stderr.contains("COPY"), "{}", o.stderr);
+        assert!(w.borrow().postgres_calls.iter().any(|c| c.starts_with("/usr/bin/rm -f -- /var/lib/postgresql/k2-moves/.k2pass-")));
+        let sql: Vec<String> = w.borrow().sql.iter().map(|(_, s)| s.clone()).collect();
+        let nof = sql.iter().position(|s| s.contains("NO FORCE ROW LEVEL SECURITY")).expect("FORCE lifted");
+        let refo = sql
+            .iter()
+            .rposition(|s| s.contains(" FORCE ROW LEVEL SECURITY") && !s.contains("NO FORCE"))
+            .unwrap_or_else(|| panic!("{section}: FORCE put back after a failed load: {sql:?}"));
+        assert!(nof < refo);
+        assert!(sql.iter().any(|s| s.ends_with("RESET temp_file_limit;\n")), "{section}: {sql:?}");
+    }
+    w.borrow_mut().restore_fail = None;
+    // Backstop (re-check #1 R6): never as a superuser owner.
+    w.borrow_mut().super_owner = true;
     w.borrow_mut().postgres_calls.clear();
     let o = t.call_in(&["pg", "move-restore", "17", "ws_jobs", tag], &login("ws_jobs_migrator"));
-    assert_eq!(o.code, exit::IO, "{}", o.stderr);
-    assert!(o.stderr.contains("pg_restore (data)") && o.stderr.contains("violates check constraint"), "{}", o.stderr);
-    assert!(!o.stderr.contains("secret-row-value") && !o.stderr.contains("COPY"), "{}", o.stderr);
-    assert!(w.borrow().postgres_calls.iter().any(|c| c.starts_with("/usr/bin/rm -f -- /var/lib/postgresql/k2-moves/.k2pass-")));
-    w.borrow_mut().restore_fail = None;
+    assert!(o.stderr.starts_with("owner_superuser"), "{}", o.stderr);
+    assert!(!w.borrow().postgres_calls.iter().any(|c| c.contains("pg_restore")), "nothing loaded");
+    w.borrow_mut().super_owner = false;
+    // R2: a source server older than 16.4 is refused before any dump.
+    w.borrow_mut().server_num.insert(5432, "160003".into());
+    w.borrow_mut().postgres_calls.clear();
+    let o = t.call(&["pg", "move-dump", "16", "17", "ws_jobs", "20261020T131500Z"]);
+    assert!(o.stderr.starts_with("server_too_old: the source server is 160003; a move needs 160004"), "{}", o.stderr);
+    assert!(!w.borrow().postgres_calls.iter().any(|c| c.contains("pg_dump")), "nothing dumped");
+    w.borrow_mut().server_num.insert(5432, "160004".into());
+    ok(&t.call(&["pg", "move-dump", "16", "17", "ws_jobs", "20261020T131500Z"]));
+    w.borrow_mut().server_num.clear();
 
     // Refusals: not the owner, a non-K2 database, a non-empty target, an
     // old pg_restore / pg_dump, bad stdin, a foreign moves dir.
@@ -1021,7 +1076,7 @@ fn psql_cluster_runs_that_majors_psql_on_its_port() {
     let (t, w) = two_clusters();
     ok(&t.call_in(&["pg", "psql", "--cluster", "17", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-tA"], b"SELECT 1;\n"));
     assert!(t.non_query_calls().contains(&format!(
-        "{RUNUSER} -u postgres -- /usr/bin/env PGOPTIONS=-c search_path=pg_catalog,pg_temp /usr/lib/postgresql/17/bin/psql -X -h /var/run/postgresql -p 5433 -d postgres -v ON_ERROR_STOP=1 -tA"
+        "{RUNUSER} -u postgres -- /usr/bin/env PGOPTIONS=-c search_path=pg_catalog,pg_temp -c role=none /usr/lib/postgresql/17/bin/psql -X -h /var/run/postgresql -p 5433 -d postgres -v ON_ERROR_STOP=1 -tA"
     )), "{:?}", t.non_query_calls());
     assert_eq!(w.borrow().sql.last().unwrap().0, 5433);
     // Without --cluster: pg_wrapper's psql as before (protocol 3).
@@ -1029,7 +1084,7 @@ fn psql_cluster_runs_that_majors_psql_on_its_port() {
     // Pinned too (F1): the boot seal and K2's helper installs run here.
     assert!(t
         .non_query_calls()
-        .contains(&format!("{RUNUSER} -u postgres -- /usr/bin/env PGOPTIONS=-c search_path=pg_catalog,pg_temp {PSQL} -X -d postgres")));
+        .contains(&format!("{RUNUSER} -u postgres -- /usr/bin/env PGOPTIONS=-c search_path=pg_catalog,pg_temp -c role=none {PSQL} -X -d postgres")));
     // A major with no cluster: refused, nothing run.
     let o = t.call_in(&["pg", "psql", "--cluster", "18", "-d", "postgres"], b"SELECT 1;\n");
     assert_eq!(o.code, exit::STATE);

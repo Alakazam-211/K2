@@ -37,3 +37,6 @@ base64 = { version = "0.22", optional = true }
 [dev-dependencies]
 # Fixture tarball checks in `sew.rs` tests only.
 sha2 = "0.10"
+# The PGDG key's fingerprint pin (`pg_major` tests only).
+sha1 = "0.10"
+base64 = "0.22"

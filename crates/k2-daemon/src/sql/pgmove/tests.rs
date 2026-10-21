@@ -32,6 +32,8 @@ struct OpsState {
     event_triggers: u64,
     /// forget-old's look at the old copy: "<closed>,<sessions>"
     src_state: String,
+    /// the source server's `server_version_num`
+    server_num: u64,
 }
 
 struct FakeOps(RefCell<OpsState>);
@@ -60,6 +62,7 @@ impl FakeOps {
             extensions: vec!["pgcrypto", "pg_trgm"],
             roles_dry: json!({"wouldCreate": ["ws_jobs_agent"], "same": [], "mismatch": [], "refused": [], "missing": []}),
             src_state: "true,0".into(),
+            server_num: 160_015,
             ..Default::default()
         };
         s.dbs.insert((16, "ws_jobs".into()));
@@ -136,7 +139,7 @@ impl ClusterOps for FakeOps {
         }
         if sql.contains("'eventTriggers'") {
             let st = s.borrow();
-            return Ok(json!({"size": st.size, "extensions": st.extensions, "eventTriggers": st.event_triggers, "publications": 0,
+            return Ok(json!({"size": st.size, "serverVersionNum": st.server_num, "extensions": st.extensions, "eventTriggers": st.event_triggers, "publications": 0,
                 "subscriptions": 0, "tablespaces": 0, "largeObjects": 0, "dbSettings": 0, "sessions": 2, "connlimit": -1,
                 "allowConn": true, "unloggedTables": 0}).to_string());
         }
@@ -582,6 +585,8 @@ fn check_refusals() {
             e.0.borrow_mut().role.insert(16, ClusterRole::Adopted);
         })),
         ("objects", Box::new(|ops, _, _| ops.0.borrow_mut().event_triggers = 1)),
+        // Re-check #1 R2: a 16 server older than 16.4.
+        ("source", Box::new(|ops, _, _| ops.0.borrow_mut().server_num = 160_003)),
         ("target", Box::new(|ops, _, _| ops.0.borrow_mut().listening = (5432..=5449).collect())),
         ("kept", Box::new(|_, e, _| {
             let mut s = e.0.borrow_mut();

@@ -365,7 +365,10 @@ fn plant_f1(ops: &dyn ClusterOps, db: &str) {
          CREATE FUNCTION public.lower(a text) RETURNS text LANGUAGE plpgsql AS $f$\n\
          BEGIN PERFORM evil.hit('lower'); RETURN pg_catalog.lower(a); END $f$;\n",
     );
-    body.push_str(&format!("ALTER DATABASE {db} SET search_path = evil, public, pg_catalog;\nRESET ROLE;\n"));
+    // ...and its own role for every new session (re-check #2 L-a).
+    body.push_str(&format!(
+        "ALTER DATABASE {db} SET search_path = evil, public, pg_catalog;\nALTER DATABASE {db} SET role = {mig};\nRESET ROLE;\n"
+    ));
     ops.sql(16, db, &body).expect("F1 plant");
     println!("F1 plant in {db}: ready");
 }
@@ -396,10 +399,18 @@ fn k2_superuser_paths(ops: &dyn ClusterOps, m: Major, db: &str) {
     // The helper's PGOPTIONS pin alone (an older daemon's SQL).
     ops.sql(m, db, &sql).expect("K2 helpers + boot seal (helper pin)");
     // The daemon's prefix alone beats a session that already chose the
-    // planted path.
-    let mut hostile = String::from("SET search_path = evil, public, pg_catalog;\n");
+    // planted path and the tenant's role.
+    let hostile_start = format!("SET ROLE {db}_migrator;\nSET search_path = evil, public, pg_catalog;\n");
+    let mut hostile = hostile_start.clone();
     hostile.push_str(&String::from_utf8(k2ops::pin_search_path(sql.as_bytes())).unwrap());
-    ops.sql(m, db, &hostile).expect("K2 helpers + boot seal (daemon pin over a hostile path)");
+    ops.sql(m, db, &hostile).expect("K2 helpers + boot seal (daemon pin over a hostile path and role)");
+    let probe = format!("{hostile_start}{}SELECT current_user || '/' || current_setting('search_path');\n", k2ops::PIN_SEARCH_PATH);
+    want(ops.sql(m, db, &probe), "postgres/pg_catalog, pg_temp", &format!("F1 {m}: the daemon pin resets a hostile role and path"));
+    want(
+        ops.sql(m, db, "SELECT current_user || '/' || current_setting('search_path');\n"),
+        "postgres/pg_catalog, pg_temp",
+        &format!("F1 {m}: a helper session is postgres on pg_catalog despite ALTER DATABASE SET role/search_path"),
+    );
 }
 
 fn agent_checks(m: Major, port: u16, db: &str, jobs_seen: &str, next_id: &str) {
@@ -587,11 +598,31 @@ fn real_move_16_to_17_rollback_forget_and_refusals() {
     assert_eq!(p.state, MoveState::Succeeded, "F1 move: {:?} diff {:?}", p.last_error, p.diff);
     want(Ok(f1_hits(&ops, 17, db4)), "", "F1 17: the move ran no plant");
     want(
-        ops.sql(17, "postgres", &format!("SELECT array_to_string(setconfig, ',') FROM pg_db_role_setting s JOIN pg_database d ON d.oid = s.setdatabase WHERE d.datname = '{db4}' AND s.setrole = 0;\n")),
-        "app.mode=fixture,search_path=\"evil, public, pg_catalog\"",
+        ops.sql(17, "postgres", &format!("SELECT string_agg(x, ';' ORDER BY x) FROM pg_db_role_setting s JOIN pg_database d ON d.oid = s.setdatabase, unnest(s.setconfig) x WHERE d.datname = '{db4}' AND s.setrole = 0;\n")),
+        &format!("app.mode=fixture;role={mig4};search_path=\"evil, public, pg_catalog\""),
         "F1 17: the owner's database setting is carried as it was",
     );
     k2_superuser_paths(&ops, 17, db4);
     want(Ok(f1_hits(&ops, 17, db4)), "", "F1 17: K2 helpers and the boot seal ran no plant");
+
+    // Re-check #1 R3: a 54-character name (the longest whose migrator
+    // isn't cut) rolls back to a 63-character `<first 46>__k2rb_<ts>` copy
+    // that the helper can still close and drop.
+    let db5 = format!("ws_fx_long_{}", "n".repeat(43));
+    assert_eq!(db5.len(), 54);
+    fixture(&ops, &db5, None);
+    let env5 = E2eEnv::new(&db5);
+    let p = run_move(&ops, &env5, &db5, &opts).expect("long-name move");
+    assert_eq!(p.state, MoveState::Succeeded, "long-name move: {:?} diff {:?}", p.last_error, p.diff);
+    let v = rollback(&ops, &env5, &db5, &RollbackOpts { actor: "owner".into(), yes: true, now: true, owner: true }).expect("long-name rollback");
+    assert_eq!(v.state, MoveState::Succeeded, "{:?}", v.last_error);
+    assert!(v.warnings.is_empty(), "the renamed copy was closed: {:?}", v.warnings);
+    let kept5 = v.kept_as.clone().expect("renamed");
+    assert_eq!(kept5.len(), 63, "{kept5}");
+    want(ops.sql(17, "postgres", &format!("SELECT datallowconn::text FROM pg_database WHERE datname = '{kept5}';\n")), "false", "R3: the 63-character rollback copy is closed");
+    want(as_role(16, 5432, &db5, &format!("{db5}_agent"), PW_AGENT, "SELECT count(*) FROM jobs"), "250", "R3: the long name serves on 16 again");
+    let f = forget_old(&ops, &env5, &db5, &ForgetOpts { actor: "owner".into(), owner: true, force_now: true }).expect("long-name forget-old");
+    assert_eq!(f["rollbackCopies"], serde_json::json!([format!("17/{kept5}")]), "{f}");
+    want(ops.sql(17, "postgres", &format!("SELECT count(*) FROM pg_database WHERE datname = '{kept5}';\n")), "0", "R3: forget-old dropped the 63-character copy");
     println!("ALL PASS");
 }

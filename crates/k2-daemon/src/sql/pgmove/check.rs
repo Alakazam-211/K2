@@ -178,6 +178,17 @@ pub fn run(ops: &dyn ClusterOps, env: &dyn MoveEnv, rec: &DbRecord, opts: &MoveO
     } else {
         Value::Null
     };
+    // Re-check #1 R2: the source server itself must be new enough for the
+    // CVE-2024-7348 guard (the helper refuses the dump too).
+    let server = n(&facts, "serverVersionNum");
+    let floor = u64::from(k2_root_proto::pg_major::min_server_num(from));
+    if server > 0 && server < floor {
+        l.refuse(
+            "source",
+            format!("the {from} server is {server}; a move needs {floor} or later"),
+            "update the Postgres packages and restart the cluster first",
+        );
+    }
     let size = n(&facts, "size");
     let extensions: Vec<String> = facts["extensions"]
         .as_array()

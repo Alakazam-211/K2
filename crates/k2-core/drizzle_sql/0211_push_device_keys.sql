@@ -32,3 +32,12 @@ CREATE TABLE IF NOT EXISTS push_device_keys (
 -- The owner's per-device test override: NULL (follow the server's
 -- `pushE2E`) | 'off' | 'sealed'.
 ALTER TABLE push_devices ADD COLUMN e2e_override TEXT;
+--> statement-breakpoint
+-- The relay's last-seen sealed capability (`X-K2-Push-Caps: s1`) per
+-- gateway URL, so the first push after a restart is sealed too. Written
+-- only when the value changes. Not a secret.
+CREATE TABLE IF NOT EXISTS push_relay_caps (
+    gateway_url TEXT PRIMARY KEY NOT NULL,
+    s1          INTEGER NOT NULL,
+    seen_at     INTEGER NOT NULL
+);

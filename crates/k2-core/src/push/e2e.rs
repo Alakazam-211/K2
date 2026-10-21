@@ -142,18 +142,84 @@ pub fn caps_has_s1(value: &str) -> bool {
 
 static RELAY_S1: std::sync::Mutex<Option<std::collections::HashMap<String, bool>>> = std::sync::Mutex::new(None);
 
-/// Cache the relay's capability from a per-daemon-path response (any
-/// status). A response without `s1` (a rollback, or a failover to an
-/// older relay) sends the next dispatch back to today's path.
-pub fn note_relay_caps(gateway_url: &str, s1: bool) {
-    let mut g = RELAY_S1.lock().unwrap_or_else(|p| p.into_inner());
-    g.get_or_insert_with(Default::default).insert(gateway_url.to_string(), s1);
+fn relay_map() -> std::sync::MutexGuard<'static, Option<std::collections::HashMap<String, bool>>> {
+    RELAY_S1.lock().unwrap_or_else(|p| p.into_inner())
 }
 
-/// The last seen capability for this gateway (`false` until seen).
+/// Cache the relay's capability from a per-daemon-path response (any
+/// status). A response without `s1` (a rollback, or a failover to an
+/// older relay) sends the next dispatch back to today's path. A change is
+/// persisted (`push_relay_caps`, migration 0211) so the first push after
+/// a restart is sealed too.
+pub fn note_relay_caps(gateway_url: &str, s1: bool) {
+    let changed = {
+        let mut g = relay_map();
+        let map = g.get_or_insert_with(Default::default);
+        map.insert(gateway_url.to_string(), s1) != Some(s1)
+    };
+    if changed {
+        if let Err(e) = store_relay_caps(gateway_url, s1) {
+            crate::log_debug!("[push] relay caps store failed: {e}");
+        }
+    }
+}
+
+/// The last seen capability for this gateway: memory first, then the
+/// stored value from before a restart; `false` when never seen (a fresh
+/// install: the first push takes today's path).
 pub fn relay_s1(gateway_url: &str) -> bool {
-    let g = RELAY_S1.lock().unwrap_or_else(|p| p.into_inner());
-    g.as_ref().and_then(|m| m.get(gateway_url)).copied().unwrap_or(false)
+    if let Some(v) = relay_map().as_ref().and_then(|m| m.get(gateway_url)).copied() {
+        return v;
+    }
+    let stored = match load_relay_caps(gateway_url) {
+        Ok(v) => v.unwrap_or(false),
+        Err(e) => {
+            crate::log_debug!("[push] relay caps read failed: {e}");
+            false
+        }
+    };
+    relay_map().get_or_insert_with(Default::default).insert(gateway_url.to_string(), stored);
+    stored
+}
+
+fn store_relay_caps(gateway_url: &str, s1: bool) -> Result<(), String> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.execute(
+        "INSERT INTO push_relay_caps (gateway_url, s1, seen_at) VALUES (?1, ?2, ?3) \
+         ON CONFLICT(gateway_url) DO UPDATE SET s1 = excluded.s1, seen_at = excluded.seen_at",
+        rusqlite::params![gateway_url, i64::from(s1), now],
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
+/// The stored capability (`None` = never seen).
+pub fn load_relay_caps(gateway_url: &str) -> Result<Option<bool>, String> {
+    use rusqlite::OptionalExtension as _;
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT s1 FROM push_relay_caps WHERE gateway_url = ?1",
+        rusqlite::params![gateway_url],
+        |r| r.get::<_, i64>(0),
+    )
+    .optional()
+    .map(|v| v.map(|n| n != 0))
+    .map_err(|e| e.to_string())
+}
+
+/// Test-only: forget the in-memory capability for one gateway, as a daemon
+/// restart does (the stored value stays).
+#[cfg(test)]
+pub fn forget_relay_caps_memory(gateway_url: &str) {
+    if let Some(m) = relay_map().as_mut() {
+        m.remove(gateway_url);
+    }
 }
 
 // ── Sealed plaintexts (§4, §5) ───────────────────────────────────────────

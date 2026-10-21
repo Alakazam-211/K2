@@ -443,7 +443,8 @@ fn sealed_waits_for_s1_and_never_falls_back() {
     .expect("shared");
     assert!(!relay2.calls()[0].2, "the relay refuses sealed kinds on the shared token");
 
-    // A sealed refusal: no shared fallback, no retry, error class only.
+    // A sealed refusal under sealed-only: no shared fallback, no retry, no
+    // legacy fallback, error class only.
     let url3 = unique_url("s1-refused");
     e2e::note_relay_caps(&url3, true);
     let relay3 = Relay::new(true);
@@ -454,12 +455,148 @@ fn sealed_waits_for_s1_and_never_falls_back() {
         s1: false,
     });
     let err = tunnel_cloud(&url3, relay3.clone())
-        .dispatch_in_mode(&event, "bk", &d, PushE2eMode::SealedWhenSupported)
+        .dispatch_in_mode(&event, "bk", &d, PushE2eMode::SealedOnly)
         .expect_err("refused");
-    assert_eq!(relay3.calls().len(), 1, "exactly one call: no shared-token retry");
-    assert!(relay3.calls()[0].1.get("payload").is_some());
+    assert_eq!(relay3.calls().len(), 1, "exactly one call: no shared-token retry, no legacy fallback");
+    assert!(relay3.calls()[0].2, "the one call was the sealed one");
     assert!(!err.to_string().contains("/3/device"), "the error carries the class only: {err}");
     crate::push::reset_relay_state_for_test();
+}
+
+/// A restart: the stored `s1` seals the FIRST push (no plaintext to a
+/// keyed phone after a routine restart). A fresh install (nothing stored)
+/// keeps today's behaviour.
+#[test]
+fn restart_with_stored_s1_seals_the_first_push() {
+    let _db = crate::db::scoped_for_test();
+    let _relay = super::relay_state_test_lock();
+    let (_, k) = phone_key(61);
+    let d = vec![register("rs-key", "apns", "tok-rs-key", true, Some(&k))];
+    let event = legacy_golden::golden_events().into_iter().find(|(n, _)| n == "thread-text-x1-preview").expect("e").1;
+    // Before the restart: a per-daemon response said s1 (persisted).
+    let url = unique_url("restart");
+    e2e::note_relay_caps(&url, true);
+    assert_eq!(e2e::load_relay_caps(&url).expect("load"), Some(true), "stored");
+    // The restart: memory is empty, the stored value stays.
+    e2e::forget_relay_caps_memory(&url);
+    let relay = Relay::new(true);
+    tunnel_cloud(&url, relay.clone())
+        .dispatch_in_mode(&event, "bk", &d, PushE2eMode::SealedWhenSupported)
+        .expect("dispatch");
+    let calls = relay.calls();
+    assert_eq!(calls.len(), 1);
+    assert!(calls[0].2, "the first push after a restart is sealed");
+    assert!(!calls[0].1.to_string().contains("Cortana"), "no plaintext");
+
+    // A fresh install (nothing stored): today's path first.
+    let fresh = unique_url("fresh");
+    assert_eq!(e2e::load_relay_caps(&fresh).expect("load"), None);
+    let relay = Relay::new(true);
+    tunnel_cloud(&fresh, relay.clone())
+        .dispatch_in_mode(&event, "bk", &d, PushE2eMode::SealedWhenSupported)
+        .expect("dispatch");
+    assert!(!relay.calls()[0].2, "nothing stored: the first push takes today's path");
+    assert_eq!(e2e::load_relay_caps(&fresh).expect("load"), Some(true), "learned and stored");
+}
+
+/// A stale stored `s1` and a relay that no longer has it: the sealed send
+/// is refused, that push goes today's way under sealed-when-supported, the
+/// caps are cleared (memory and store), and the next push is legacy from
+/// the start. Under sealed-only it never falls back.
+#[test]
+fn stale_stored_s1_falls_back_once_and_clears_the_caps() {
+    let _db = crate::db::scoped_for_test();
+    let _relay = super::relay_state_test_lock();
+    let (_, k) = phone_key(62);
+    let d = vec![register("st-key", "apns", "tok-st-key", true, Some(&k))];
+    let event = legacy_golden::golden_events().into_iter().find(|(n, _)| n == "ticket-created").expect("e").1;
+    let old_relay_refusal = || GatewayResponse {
+        status: 400,
+        body: "{\"error\":{\"code\":\"invalid_title\"}}".into(),
+        s0: true,
+        s1: false,
+    };
+
+    // sealed-when-supported: refused, then today's push.
+    let url = unique_url("stale");
+    e2e::note_relay_caps(&url, true);
+    e2e::forget_relay_caps_memory(&url);
+    let relay = Relay::new(false);
+    relay.script.lock().expect("relay").push_back(old_relay_refusal());
+    tunnel_cloud(&url, relay.clone())
+        .dispatch_in_mode(&event, "bk", &d, PushE2eMode::SealedWhenSupported)
+        .expect("delivered the legacy way");
+    let calls = relay.calls();
+    assert_eq!(calls.len(), 2, "sealed (refused), then today's push");
+    assert!(calls[0].2 && !calls[1].2);
+    assert!(calls[1].0.is_tunnel(), "the legacy push still goes per-daemon first");
+    assert_eq!(calls[1].1["payload"]["body"], "Cortana needs you on a ticket", "today's payload");
+    assert!(!e2e::relay_s1(&url), "caps cleared in memory");
+    assert_eq!(e2e::load_relay_caps(&url).expect("load"), Some(false), "and in the store");
+    relay.clear();
+    tunnel_cloud(&url, relay.clone())
+        .dispatch_in_mode(&event, "bk", &d, PushE2eMode::SealedWhenSupported)
+        .expect("legacy");
+    assert_eq!(relay.calls().len(), 1);
+    assert!(!relay.calls()[0].2, "next push: today's path from the start");
+
+    // A sealed override behaves like sealed-when-supported.
+    let url_ov = unique_url("stale-ov");
+    e2e::note_relay_caps(&url_ov, true);
+    keys::set_override("st-key", Some(DeviceOverride::Sealed)).expect("override");
+    let relay = Relay::new(false);
+    relay.script.lock().expect("relay").push_back(old_relay_refusal());
+    tunnel_cloud(&url_ov, relay.clone())
+        .dispatch_in_mode(&event, "bk", &d, PushE2eMode::Off)
+        .expect("delivered");
+    assert_eq!(relay.calls().len(), 2);
+    keys::set_override("st-key", None).expect("clear");
+
+    // sealed-only: refused, nothing else is sent, caps cleared.
+    let url2 = unique_url("stale-only");
+    e2e::note_relay_caps(&url2, true);
+    e2e::forget_relay_caps_memory(&url2);
+    let relay = Relay::new(false);
+    relay.script.lock().expect("relay").push_back(old_relay_refusal());
+    let err = tunnel_cloud(&url2, relay.clone())
+        .dispatch_in_mode(&event, "bk", &d, PushE2eMode::SealedOnly)
+        .expect_err("sealed-only never falls back");
+    assert_eq!(relay.calls().len(), 1, "no legacy send under sealed-only");
+    assert!(relay.calls()[0].2);
+    assert!(err.to_string().contains("invalid_title"), "{err}");
+    assert_eq!(e2e::load_relay_caps(&url2).expect("load"), Some(false));
+}
+
+/// A nudge that can't fit (a very long server name) is skipped, logged
+/// once per device; alerts still go.
+#[test]
+fn an_oversized_nudge_is_skipped_not_sent_in_clear() {
+    let _db = crate::db::scoped_for_test();
+    let _relay = super::relay_state_test_lock();
+    let (_, k) = phone_key(63);
+    let d = vec![register("nz-key", "apns", "tok-nz-key", true, Some(&k))];
+    let url = unique_url("nudge-long");
+    e2e::note_relay_caps(&url, true);
+    let relay = Relay::new(true);
+    let long = "a".repeat(63);
+    let cloud = K2Cloud::with_config(
+        GatewayConfig {
+            url: url.clone(),
+            tunnel: Some(("tunnel-tok".into(), long.clone())),
+            shared_token: None,
+            subdomain: long,
+        },
+        relay.clone(),
+    );
+    let badge = legacy_golden::golden_events().into_iter().find(|(n, _)| n == "badge").expect("b").1;
+    set_instance_id(legacy_golden::GOLDEN_INSTANCE);
+    let bk = legacy_golden::GOLDEN_BADGE_KEY;
+    cloud.dispatch_in_mode(&badge, bk, &d, PushE2eMode::SealedWhenSupported).expect("no error");
+    assert!(relay.calls().is_empty(), "skipped: no sealed call, and never a plaintext one");
+    let ticket = legacy_golden::golden_events().into_iter().find(|(n, _)| n == "ticket-created").expect("t").1;
+    cloud.dispatch_in_mode(&ticket, bk, &d, PushE2eMode::SealedWhenSupported).expect("alert");
+    assert_eq!(relay.calls().len(), 1);
+    assert!(relay.calls()[0].2, "alerts still seal");
 }
 
 /// The capability header name and parsing are the relay contract.

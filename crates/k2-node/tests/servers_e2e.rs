@@ -573,6 +573,28 @@ async fn a_wiped_slot_is_reused_fresh() {
     assert!(n.node.tenant(1).unwrap().ledger.lock().unwrap().get("w1", 1).unwrap().is_none());
 }
 
+/// Review B9: a tenant the servers loop didn't open is kept only when its
+/// state was opened for this very line (the line mark), not merely
+/// because its pin's fingerprint fits: an unmarked one is ended and the
+/// loop opens the slot afresh.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unmarked_open_tenant_is_never_adopted() {
+    let mut a = Fake::start().await;
+    let b = Fake::start().await;
+    let n = start_node(&a, "srv-adopt", "", walled(Wall::Seatbelt)).await;
+    let mut ca = a.next_conn().await;
+    ready(&mut ca).await;
+    pin_second(&n, &b, 1, "node-b");
+    let by_hand = n.node.add_tenant(1).await.unwrap();
+    write_shared(&n, 1, &prefix(&b.key), "b.k2.dev", ShareState::Active, None);
+    let fresh = eventually("the loop's own tenant", || n.node.tenant(1).filter(|t| !std::sync::Arc::ptr_eq(t, &by_hand))).await;
+    assert!(!*by_hand.serve.borrow(), "the unmarked tenant was ended (never served)");
+    assert!(by_hand.share().is_none_or(|s| s.entry.state == ShareState::Revoked), "and never given the line's share");
+    let mark = std::fs::read_to_string(n.layout.tenant(1).state().join("line")).unwrap();
+    assert!(mark.starts_with(&prefix(&b.key)), "the loop's tenant is marked for its line: {mark}");
+    assert!(fresh.share().is_some_and(|s| s.entry.state == ShareState::Active));
+}
+
 /// Review A M1: root's wipe removes only the slot's root; the node forgets
 /// its own state for a slot with no line (ledger, journals, pin), and a
 /// slot reused by another server never opens the old server's state.

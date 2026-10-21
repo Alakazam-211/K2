@@ -420,12 +420,12 @@ impl FairQ {
                 started.insert(*i);
             }
         }
-        {
-            let mut st = self.st.lock().unwrap();
-            st.rotation = d.rotation.clone();
-            if let Err(e) = self.store.lock().unwrap().set_rotation(&d.rotation) {
-                crate::nlog!("queue store: {e}");
-            }
+        // Lock order is store → st everywhere (`account`, `snapshot`): never
+        // hold `st` while taking `store` (a concurrent quote or view
+        // deadlocked here).
+        self.st.lock().unwrap().rotation = d.rotation.clone();
+        if let Err(e) = self.store.lock().unwrap().set_rotation(&d.rotation) {
+            crate::nlog!("queue store: {e}");
         }
         // Positions and ETAs for the jobs still waiting, sent on change.
         for (i, (t, r)) in snap.rows.iter().enumerate() {

@@ -2,9 +2,11 @@
 //! tier 1): one real node, two fake servers (the owner at slot 0, another
 //! at slot 1), real jobs.
 //!
-//! Until lane S1 wires them into the session, these tests do what S1's
-//! session will: set each server's share and protocol, and call
-//! `queue_attach` with the `Welcome.resume` after each attach.
+//! The node is shared the real way (lane S1): the node owner's
+//! `servers.toml` names A (owner) and B, B's pin is on disk, and the node's
+//! servers loop opens B's session; each attach sets the server's protocol
+//! and runs `queue_attach` with its `Welcome.resume`. Tests that change a
+//! share mid-run (weights, an end date) set it on the queue directly.
 
 mod common;
 
@@ -15,7 +17,7 @@ use common::*;
 use k2_node::fairq::ShareInfo;
 use k2_node::node::Tenant;
 use k2_node_proto::frames::{Cancel, Frame, JobState, ResumeHint, CANCEL_IF_QUEUED, CANCEL_WITHDRAW};
-use k2_node_proto::share::{codes, JobClass, ServerStatus, ShareLimits, Trust};
+use k2_node_proto::share::{codes, JobClass, ServerStatus, ServersFile, ShareLimits, ShareState, Trust};
 
 fn limits() -> ShareLimits {
     ShareLimits { max_running: 4, max_queued: 10, weight: 1, ..ShareLimits::new_server(Trust::Own, false) }
@@ -34,13 +36,6 @@ struct Two {
     cb: Conn,
     owner: Arc<Tenant>,
     tb: Arc<Tenant>,
-    b_runner: tokio::task::JoinHandle<()>,
-}
-
-impl Drop for Two {
-    fn drop(&mut self) {
-        self.b_runner.abort();
-    }
 }
 
 async fn two(tag: &str, policy_extra: &str) -> Two {
@@ -52,22 +47,31 @@ async fn two(tag: &str, policy_extra: &str) -> Two {
     let tl = n.layout.tenant(1);
     tl.ensure_state().unwrap();
     k2_node::identity::write_pin(&tl.pin(), &b.pin_for("node-b", "mini-1")).unwrap();
-    let tb = n.node.add_tenant(1).await.unwrap();
+    // The node owner shares the node with B (S1 opens B's session).
+    let mut f = ServersFile::new(&a.key.fingerprint(), "a.k2.dev", limits(), 8, k2_node::util::now(), "local:test");
+    let mut e = f.servers[0].clone();
+    e.slot = 1;
+    e.label = "b.k2.dev".into();
+    e.fp_prefix = b.key.fingerprint()[..16].to_string();
+    e.trust = Trust::Own;
+    e.state = ShareState::Active;
+    f.servers.push(e);
+    k2_node::admin::servers::write_file(&n.layout.config, &f).unwrap();
     let owner = n.node.owner();
-    n.node.fairq.set_share(0, share("a.k2.dev", limits(), ServerStatus::Active));
-    n.node.fairq.set_share(1, share("b.k2.dev", limits(), ServerStatus::Active));
-    n.node.fairq.set_protocol(0, Some(3));
-    n.node.fairq.set_protocol(1, Some(3));
-    let b_runner = tokio::spawn(k2_node::session::run_tenant_forever(n.node.clone(), tb.clone()));
     let mut a2 = a;
     let mut ca = a2.next_conn().await;
     ready(&mut ca).await;
-    n.node.queue_attach(&owner, &[]);
     let mut cb = b.next_conn().await;
     ready(&mut cb).await;
-    n.node.queue_attach(&tb, &[]);
-    assert!(n.node.fairq.shared(0));
-    Two { a: a2, b, n, ca, cb, owner, tb, b_runner }
+    let tb = n.node.tenant(1).expect("S1 opened B");
+    for _ in 0..400 {
+        if n.node.fairq.shared(0) && n.node.fairq.protocol(0) >= 3 && n.node.fairq.protocol(1) >= 3 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert!(n.node.fairq.shared(0) && n.node.fairq.protocol(1) >= 3, "S1 told the queue both shares and protocols");
+    Two { a: a2, b, n, ca, cb, owner, tb }
 }
 
 /// A plan from server A (`node-1`) or B (`node-b`).
@@ -186,28 +190,26 @@ async fn queued_jobs_wait_for_their_server_and_the_resume_list_decides() {
     w.cb.send(Frame::Assign(assign(job("node-b", "kept", &["/bin/sh", "-c", "echo kept"]), 1)));
     wait_row(&w.tb, "gone", 1, "queued", queued).await;
     wait_row(&w.tb, "kept", 1, "queued", queued).await;
-    // B goes away; the node redials it (a new session, not yet gated).
+    // B goes away; the node redials it. The new session's attach lists
+    // only "kept": S1 runs queue_attach with that resume list.
     *w.b.resume.lock().unwrap() = vec![ResumeHint { job_id: "kept".into(), generation: 1, since_seq: 0 }];
     w.cb.tx.send(Out::Close).unwrap();
     let mut cb2 = w.b.next_conn().await;
-    ready(&mut cb2).await;
-    // Capacity frees, and A has queued work too: only A's job may start.
-    w.ca.send(Frame::Assign(assign(job("node-1", "a-next", &["/bin/sh", "-c", "echo next"]), 1)));
-    wait_row(&w.owner, "a-next", 1, "queued", queued).await;
-    w.ca.send(Frame::Cancel(Cancel { job_id: "hold".into(), generation: 1, reason: "cancelled".into() }));
-    wait_row(&w.owner, "a-next", 1, "ended", ended).await;
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    assert!(wait_row(&w.tb, "gone", 1, "still queued", queued).await.started_at.is_none());
-    assert!(wait_row(&w.tb, "kept", 1, "still queued", queued).await.started_at.is_none(), "B's session isn't gated yet");
-    // The attach lists only "kept".
-    w.n.node.queue_attach(&w.tb, &w.b.resume.lock().unwrap().clone());
+    let first = cb2.until(|f| matches!(f, Frame::Offer(_))).await;
     let g = wait_row(&w.tb, "gone", 1, "superseded", ended).await;
     assert_eq!((g.state, g.reason.as_deref(), g.started_at), (JobState::Cancelled, Some(codes::SUPERSEDED), None));
+    let told = first.iter().any(|f| match f {
+        Frame::State(s) => s.job_id == "gone" && s.state == JobState::Cancelled && s.reason.as_deref() == Some(codes::SUPERSEDED),
+        Frame::JobsSnapshot(p) => p.jobs.iter().any(|j| j.job_id == "gone" && j.state == JobState::Cancelled),
+        _ => false,
+    });
+    assert!(told, "B hears at once that gone was superseded: {first:?}");
+    // "kept" waits for capacity (A's hold runs), then runs in this session.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(wait_row(&w.tb, "kept", 1, "still queued", queued).await.started_at.is_none(), "no capacity yet");
+    w.ca.send(Frame::Cancel(Cancel { job_id: "hold".into(), generation: 1, reason: "cancelled".into() }));
     let k = wait_row(&w.tb, "kept", 1, "ended", ended).await;
     assert_eq!(k.state, JobState::Done);
-    let fr = cb2.until(|f| matches!(f, Frame::State(s) if s.job_id == "gone" && s.state == JobState::Cancelled)).await;
-    let Some(Frame::State(s)) = fr.last() else { unreachable!() };
-    assert_eq!(s.reason.as_deref(), Some(codes::SUPERSEDED));
 }
 
 /// Queued rows survive a k2-node restart; the started one doesn't (V47).

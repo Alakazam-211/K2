@@ -460,7 +460,13 @@ async fn an_expired_share_is_not_served() {
 async fn without_the_wall_only_the_owner_runs_jobs() {
     let mut a = Fake::start().await;
     let mut b = Fake::start().await;
-    let n = start_node(&a, "srv-v59", "", walled(Wall::None { why: "test".into() })).await;
+    // Not `--dev`: a real node that lost its wall (a --dev test node has no
+    // wall by design and may be shared for tests).
+    let n = start_node(&a, "srv-v59", "", |o| {
+        walled(Wall::None { why: "test".into() })(o);
+        o.dev = false;
+    })
+    .await;
     let mut ca = a.next_conn().await;
     ready(&mut ca).await;
     pin_second(&n, &b, 1, "node-b");
@@ -478,7 +484,7 @@ async fn without_the_wall_only_the_owner_runs_jobs() {
     assert_eq!(states_of(&fr, "o1").last().unwrap().state, JobState::Done);
     // And an add is refused on an unwalled node.
     let mut c = ctx(&n);
-    c.walled = servers::node_walled(&n.layout, cfg!(target_os = "macos"));
+    c.walled = servers::node_walled(&n.layout, cfg!(target_os = "macos"), true);
     assert!(!c.walled, "status.json says no wall");
     let e = servers::run(&c, "servers.add", &serde_json::json!({"url": "https://c.k2.dev", "code_binding": "x", "fp_prefix": "0123456789abcdef", "trust": "own"})).unwrap_err();
     assert_eq!(e.code, codes::TENANT_NEEDS_JOB_WALL);

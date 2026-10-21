@@ -48,6 +48,10 @@ pub struct Status {
     /// (seconds; §14 "Clock skew": over 120 s is worth showing).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clock_skew_secs: Option<i64>,
+    /// A `--dev` node (a person's own smoke/test node, never an installed
+    /// one): it has no job wall and may still be shared for tests.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dev: bool,
 }
 
 /// A skew worth telling people about (§14).

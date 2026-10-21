@@ -70,25 +70,7 @@ if [ -f "$MARKER" ]; then
     exit 1
 fi
 
-# Kill daemon A.
-kill "$SANDBOX_DAEMON_PID" 2>/dev/null || true
-wait "$SANDBOX_DAEMON_PID" 2>/dev/null || true
-unset SANDBOX_DAEMON_PID
-
-# Boot daemon B under the same sandbox HOME — its sweep should
-# migrate.
-TMPDIR="$SANDBOX_HOME/tmp" XDG_RUNTIME_DIR="$SANDBOX_HOME/run" K2_RUNTIME_DIR= HOME="$SANDBOX_HOME" "$SANDBOX_DAEMON_BIN" >"$SANDBOX_HOME/daemon-2.log" 2>&1 &
-SANDBOX_DAEMON_PID=$!
-export SANDBOX_DAEMON_PID
-for i in $(seq 1 50); do
-    if [ -f "$SANDBOX_HOME/.k2so/daemon.port" ]; then
-        NEW_PORT="$(cat "$SANDBOX_HOME/.k2so/daemon.port")"
-        if curl -sf --connect-timeout 1 "http://127.0.0.1:${NEW_PORT}/health" >/dev/null 2>&1; then
-            break
-        fi
-    fi
-    sleep 0.2
-done
+sandbox_daemon_restart daemon-2.log
 
 # Verify the migration ran.
 if [ ! -f "$MARKER" ]; then

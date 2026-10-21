@@ -251,8 +251,11 @@ node_servers() {
 # machine owner adds OTHER, OTHER confirms the SAS the node shows. Prints
 # OTHER's slot.
 share_add() {
-  local node="$1" owner="$2" other="$3"
+  local node="$1" owner="$2" other="$3" pending_only=0
   shift 3
+  # --pending: stop once the SAS is confirmed (a server the node then
+  # refuses, e.g. a 0.46.2 one, never gets promoted).
+  [[ "${1:-}" == --pending ]] && { pending_only=1; shift; }
   local code out sas slot
   mkdir -p "$ROOT/node-$node/state"
   code="$(api "$other" POST /cli/compute/nodes/enroll-code "{\"name\":\"$node\",\"url\":\"$(url_of "$other")\"}" | jq -r '.enroll')"
@@ -268,6 +271,10 @@ share_add() {
   done
   [[ ${#sas} == 6 ]] || die "no pending SAS for $other (slot $slot) on $node: $(node_servers "$node" list --json 2>&1)"
   api "$other" POST /cli/compute/nodes/confirm "{\"node\":\"$node\",\"sas\":\"$sas\"}" >/dev/null
+  if [[ $pending_only == 1 ]]; then
+    echo "$slot"
+    return
+  fi
   # The executor promotes a confirmed add every 30 s; these --dev nodes have
   # none, so the machine owner prunes (promotes) now.
   for _ in $(seq 1 100); do
@@ -316,7 +323,8 @@ s_solo() {
   ensure_a
   local j
   j="$(run_job A n1 solo '["sh","-c","echo hello; exit 3"]')"
-  j="$(wait_job A "$j" "$ended")"
+  # The receipt frame follows the final state: wait for both.
+  j="$(wait_job A "$j" "($ended) and .receiptOk != null")"
   printf '%s' "$j" | jq -e '.state == "done" and .exitCode == 3 and .receiptOk == true' >/dev/null ||
     die "solo job: $(printf '%s' "$j" | jq -c '{state,exitCode,receiptOk,reason}')"
   local logs
@@ -396,8 +404,10 @@ s_fair() {
   node_servers n1 list --json | jq -e '[.file.servers[].limits.weight] | all(. == 1)' >/dev/null ||
     die "fair: servers don't all start at weight 1: $(node_servers n1 list --json)"
   node_servers n1 limits slot:0 --weight 2 >/dev/null || die "limits --weight"
-  k2 A compute node servers n1 --json | jq -e '[.servers[] | select(.slot == 0) | .weight // .limits.weight] == [2]' >/dev/null ||
-    die "A's server list doesn't show weight 2: $(k2 A compute node servers n1 --json)"
+  # A change made at the machine reaches the owner server's mirror on its
+  # next refresh; --refresh asks the node now.
+  k2 A compute node servers n1 --json --refresh | jq -e '[.servers[] | select(.slot == 0) | .weight // .limits.weight] == [2]' >/dev/null ||
+    die "A's server list doesn't show weight 2: $(k2 A compute node servers n1 --json --refresh)"
   sleep 4 # the node's servers loop hands the weight to the queue
   # Each server's workspace may run 3 at once (its max_parallel travels in
   # the plan as ws_max_running; 1 by default would cap both at one slot).
@@ -508,11 +518,17 @@ s_restart() {
 s_withdraw() {
   ensure_shared
   [[ -d "$ROOT/node-n2" ]] || start_node n2 B
+  wait_online A n1
+  wait_online B n1
   api B POST /cli/compute/nodes/pause '{"node":"n2","action":"pause"}' >/dev/null
   local hold any
-  hold="$(run_job A n1 wd-hold "$(burn 40)" '"exclusive":true')"
+  hold="$(run_job A n1 wd-hold "$(burn 150)" '"exclusive":true')"
+  wait_job A "$hold" '.state == "running"' >/dev/null
   any="$(api B POST /cli/compute/run "{\"any\":true,\"argv\":[\"sh\",\"-c\",\"echo once >> /tmp/k2x2-withdraw-$$\"],\"clientJobId\":\"k2x2-wd-any-00000000\",\"workspace\":\"$WS_B\",\"noSource\":true,\"detach\":true}" | jq -r '.job.id')"
-  wait_job B "$any" '.node == "n1"' 120 >/dev/null
+  # V71: an `--any` job waits on its server (any_hold, 60 s) for a node
+  # that starts it now, then joins n1's queue; only a node-queued job is
+  # withdrawn (a new generation).
+  wait_job B "$any" '.node == "n1" and (.reason == "node_queued" or .queue != null)' 120 >/dev/null
   api B POST /cli/compute/nodes/pause '{"node":"n2","action":"resume"}' >/dev/null
   local j
   j="$(wait_job B "$any" '.state == "done"' 120)"
@@ -582,6 +598,13 @@ s_expiry() {
     [[ -n "$id" ]] && wait_job B "$id" '.reason == "share_expired"' 60 >/dev/null
   } || die "expiry: new work from B wasn't refused share_expired: $late"
   API_OK=any api A POST /cli/compute/jobs/cancel "{\"job\":\"$hold\"}" >/dev/null
+  # Clean slate for later scenarios: the node's clock back, B forgets n1,
+  # the ended share is wiped.
+  restart_node n1
+  wait_online A n1
+  api B POST /cli/compute/nodes/remove '{"node":"n1"}' >/dev/null
+  node_servers n1 revoke slot:1 --wipe >/dev/null || die "expiry: wipe slot 1"
+  node_servers n1 prune >/dev/null || true
   pass "expiry: past its end date B's queued job ended share_expired and new work is refused"
 }
 
@@ -623,12 +646,12 @@ s_old_tenant() {
   old_build
   [[ -n "${PORT_O:-}" ]] || { start_daemon O "$OLD_DIR/target/debug/k2-daemon"; seed_ws O; }
   ensure_a
-  share_add n1 A O
+  share_add n1 A O --pending >/dev/null
   for _ in $(seq 1 100); do
-    k2 A compute node servers n1 --json | jq -e '[.servers[] | select(.state == "refused" and .reason == "server_too_old")] | length == 1' >/dev/null && break
+    k2 A compute node servers n1 --json --refresh | jq -e '[.servers[] | select(.state == "refused" and ((.refusal // .reason) | tostring | contains("server_too_old")))] | length == 1' >/dev/null && break
     sleep 0.2
   done
-  k2 A compute node servers n1 --json | jq -e '[.servers[] | select(.state == "refused" and .reason == "server_too_old")] | length == 1' >/dev/null ||
+  k2 A compute node servers n1 --json --refresh | jq -e '[.servers[] | select(.state == "refused" and ((.refusal // .reason) | tostring | contains("server_too_old")))] | length == 1' >/dev/null ||
     die "old-tenant: no server_too_old: $(k2 A compute node servers n1 --json)"
   node_row O n1 | jq -e '.online != true' >/dev/null || die "old-tenant: the 0.46.2 server attached"
   pass "old-tenant: a 0.46.2 server is refused server_too_old after its SAS"

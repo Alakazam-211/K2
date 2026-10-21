@@ -10,9 +10,12 @@
 //!   Thread store.
 //! - T-S6b: a nested `claude -p` (a foreign pid) stamped prompt never binds.
 //! - T-S6d: the catch-up route returns the live turn mid-turn, `null`
-//!   after; app passes 403; POST 405.
-//! - T-S6e: an app guest on the same conversation receives zero activity
-//!   frames.
+//!   after; POST 405.
+//! - T-S6e, as changed in 0.46.3 (Rosson 2026-10-21): an app guest with
+//!   `thread:read` + `activity:read` on the same conversation gets only
+//!   the counts-only guest projection (never a line), on the socket and
+//!   the catch-up. The full leak and gate tests are
+//!   `app_activity_ear_integration.rs`.
 //! - T-S6f (0.46.1): a second compose while the agent works joins the
 //!   running turn: same `turnId` and `startedAt`, `messages` 2, no end
 //!   and no frame under the second message's id.
@@ -479,20 +482,31 @@ async fn a_compose_turn_streams_its_steps_and_ends_on_the_reply() {
             // Only the two messages were stored (TW5: activity never is).
             assert_eq!(thread_len(&agent.conv), before + 2, "activity frames must not be stored");
 
-            // T-S6e: the app guest saw the Thread, never the strip.
+            // T-S6e (0.46.3): the app guest saw the Thread and the
+            // counts-only ear, never the owner strip (no line, no detail).
             let mut thread_ids = Vec::new();
+            let mut ear = Vec::new();
             while let Some(f) = next_frame_within(&mut g, 300).await {
-                assert_ne!(f["collection"], "activity", "an app guest must never get activity frames: {f}");
+                if f["collection"] == "activity" {
+                    let text = f.to_string();
+                    assert!(!text.contains("\"line\"") && !text.contains('`') && !text.contains("cargo"), "a guest gets counts only: {f}");
+                    assert!(f["activity"].get("detail").is_none() && f["activity"].get("since").is_none(), "{f}");
+                    ear.push(f["activity"].clone());
+                }
                 if f["collection"] == "thread" {
                     thread_ids.push(f["id"].as_str().unwrap_or_default().to_string());
                 }
             }
             assert!(thread_ids.contains(&turn), "the guest socket was live on this conversation: {thread_ids:?}");
             assert!(thread_ids.iter().any(|id| reply["id"] == id.as_str()), "{thread_ids:?}");
+            assert!(ear.iter().any(|a| a["phase"] == "tool" && a["tally"]["cmd"] == 1), "the counts reached the guest: {ear:?}");
+            assert_eq!(ear.last().map(|a| a["end"].clone()), Some(serde_json::json!({ "reason": "done" })), "{ear:?}");
 
-            // The catch-up route: app passes 403, POST 405, bad addrs.
+            // The catch-up route: a guest's turn is null after the end;
+            // POST 405, bad addrs.
             let r = catch_up(port, &guest, &room.handle);
-            assert_eq!(r.status, 403, "app pass: {}", r.body);
+            assert_eq!(r.status, 200, "app pass: {}", r.body);
+            assert!(r.json()["turn"].is_null(), "{}", r.body);
             let r = http(port, "POST", &format!("/cli/thread/activity?token={OWNER_TOKEN}&addr={}", room.handle), Some("{}"));
             assert_eq!(r.status, 405, "POST: {}", r.body);
             let r = http(port, "GET", &format!("/cli/thread/activity?token={OWNER_TOKEN}"), None);

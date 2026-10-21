@@ -36,7 +36,7 @@ fn route_of(m: HttpMethod) -> &'static str {
 fn both_doors_serve_exactly_the_catalogs_app_rows() {
     let c = catalog();
     let rows = c.verbs_exposed_to(Exposure::App);
-    assert_eq!(rows.len(), 94, "app rows (89 routes + 5 sockets; RS-A15 added guests.rooms / guests.setRooms, room-scope 0.46.1 room.members, app.self and app.usage, R3 files.stat, Thread parity 0.46.3 thread.attachmentGet, thread.catchup, thread.setRead, thread.unread, files.resolveLinks, guest read state thread.mute, App project chat 0.46.3 project.list/read/post/markRead and the project.events socket, app-mobile-access-v1 guests.logout/refresh/devices/revokeDevice, app.info, password.forgot/reset, app-room-stream 0.46.3 the thread.stream socket, App users' wallets 0.46.3 the nine wallet.* helper rows)");
+    assert_eq!(rows.len(), 95, "app rows (90 routes + 5 sockets; the counts-only ear 0.46.3 thread.activity; RS-A15 added guests.rooms / guests.setRooms, room-scope 0.46.1 room.members, app.self and app.usage, R3 files.stat, Thread parity 0.46.3 thread.attachmentGet, thread.catchup, thread.setRead, thread.unread, files.resolveLinks, guest read state thread.mute, App project chat 0.46.3 project.list/read/post/markRead and the project.events socket, app-mobile-access-v1 guests.logout/refresh/devices/revokeDevice, app.info, password.forgot/reset, app-room-stream 0.46.3 the thread.stream socket, App users' wallets 0.46.3 the nine wallet.* helper rows)");
     for v in &rows {
         if let Some(h) = &v.bindings.http {
             let m = route_of(h.method);
@@ -62,7 +62,6 @@ fn both_doors_serve_exactly_the_catalogs_app_rows() {
     }
     // Default deny: no app row, no door.
     for (m, p) in [
-        ("GET", "/cli/thread/activity"),
         ("POST", "/cli/thread/ask"),
         ("POST", "/cli/thread/secret"),
         ("GET", "/cli/chatter"),
@@ -290,7 +289,7 @@ async fn r1_r5_r6_me_thread_latest_and_login_on_both_doors() {
         }
     }
     // And a route with no app row is refused before any handler.
-    let r = link(lport, "GET", "/cli/thread/activity".into(), pass.clone(), None).await;
+    let r = link(lport, "GET", "/cli/chatter".into(), pass.clone(), None).await;
     assert_eq!(r.status, 404);
     assert_eq!(r.code(), "not_on_link");
 

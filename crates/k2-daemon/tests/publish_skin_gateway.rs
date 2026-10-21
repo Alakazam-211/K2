@@ -3992,16 +3992,20 @@ fn open_socket(port: u16, path_and_query: &str, extra_headers: &str) -> StdTcpSt
     sock
 }
 
-/// S8 through the official helper (AP1–AP4):
-/// - T-S8a: an app guest never gets an `activity` overlay frame (the owner
-///   on the same conversation does); `/cli/thread/activity` is not an app
-///   door (helper 404, daemon 403); `/cli/chat/transcript` stays refused.
+/// S8 through the official helper (AP1–AP4), as changed in 0.46.3:
+/// - T-S8a: an app guest never gets an OWNER `activity` overlay frame (the
+///   owner on the same conversation does; the guest's counts-only ear is
+///   its own bus, tested in `app_activity_ear_integration.rs`);
+///   `/cli/thread/activity` is an app door (`thread.activity`) answering a
+///   guest the guest projection only; `/cli/chat/transcript` stays refused.
 /// - T-S8b: the guest snapshot and the guest frames carry exactly the
 ///   documented keys and nothing from the row (no path, id, reason, tool,
 ///   count); `permission`, `unknown`, `since`, change-only sends, and a
 ///   removed working session going `idle`.
-/// - T-S8c: `activity:read` in one room never reads another room
-///   (`skin_room`), and a room without the cap is `missing capability`.
+/// - T-S8c: `activity:room` in one room never reads another room
+///   (`skin_room`), and a room without the cap is `cap_not_granted`
+///   naming activity:room (0.46.3: `activity:read` alone no longer reads
+///   the room-wide counts).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn publish_run_skin_gateway_activity_guest_projection() {
     let _g = lock();
@@ -4021,8 +4025,8 @@ async fn publish_run_skin_gateway_activity_guest_projection() {
         let created = http(dport, "POST", &format!("/cli/skin/roles?token={OWNER_TOKEN}"), Some(r#"{"name":"watcher"}"#));
         assert_eq!(created.status, 200, "role; {}", created.body);
         for (handle, caps) in [
-            (&docs, r#"["thread:read","thread:post","activity:read"]"#),
-            (&anna, r#"["thread:read"]"#),
+            (&docs, r#"["thread:read","thread:post","activity:read","activity:room"]"#),
+            (&anna, r#"["thread:read","activity:read"]"#),
         ] {
             let r = http(
                 dport,
@@ -4083,8 +4087,8 @@ async fn publish_run_skin_gateway_activity_guest_projection() {
 
         // ── T-S8c: room isolation and the cap ──
         let no_cap = http_ex(gport, "GET", &format!("/cli/activity/snapshot?workspace={anna}"), None, &cookie);
-        assert_eq!(no_cap.status, 403, "anna has no activity:read; {}", no_cap.body);
-        assert!(no_cap.body.contains("missing capability activity:read"), "{}", no_cap.body);
+        assert_eq!(no_cap.status, 403, "anna has activity:read but no activity:room; {}", no_cap.body);
+        assert!(no_cap.body.contains("cap_not_granted") && no_cap.body.contains("missing capability activity:room"), "{}", no_cap.body);
         let not_mine = http_ex(gport, "GET", &format!("/cli/activity/snapshot?workspace={other}"), None, &cookie);
         assert_eq!(not_mine.status, 403, "room not on the pass; {}", not_mine.body);
         assert!(not_mine.body.contains("skin_room"), "{}", not_mine.body);
@@ -4093,10 +4097,10 @@ async fn publish_run_skin_gateway_activity_guest_projection() {
         assert_eq!(no_ws.status, 400, "an app pass needs workspace=; {}", no_ws.body);
         let post = http_ex(gport, "POST", &format!("/cli/activity/snapshot?workspace={docs}"), Some("{}"), &cookie);
         assert_eq!(post.status, 404, "GET only on the helper; {}", post.body);
-        // A platform pass with activity:read in anna only (daemon door).
-        let anna_pass = mint(dport, &format!("act{tag}"), &["activity:read"], &[&anna]);
+        // A platform pass with activity:room in anna only (daemon door).
+        let anna_pass = mint(dport, &format!("act{tag}"), &["activity:room"], &[&anna]);
         let cross = http(dport, "GET", &format!("/cli/activity/snapshot?workspace={docs}&token={anna_pass}"), None);
-        assert_eq!(cross.status, 403, "activity:read in anna never reads docs; {}", cross.body);
+        assert_eq!(cross.status, 403, "activity:room in anna never reads docs; {}", cross.body);
         assert!(cross.body.contains("skin_room"), "{}", cross.body);
         let own = http(dport, "GET", &format!("/cli/activity/snapshot?workspace={anna}&token={anna_pass}"), None);
         assert_eq!(own.status, 200, "{}", own.body);
@@ -4105,10 +4109,10 @@ async fn publish_run_skin_gateway_activity_guest_projection() {
         assert_eq!(ov["sessions"][0]["agentName"], "tab-annawork", "{ov}");
         let all = http(dport, "GET", &format!("/cli/activity/snapshot?token={anna_pass}"), None);
         assert_eq!(all.status, 400, "never the host-wide snapshot; {}", all.body);
-        let thread_pass = mint(dport, &format!("thr{tag}"), &["thread:read"], &[&anna]);
+        let thread_pass = mint(dport, &format!("thr{tag}"), &["thread:read", "activity:read"], &[&anna]);
         let cap = http(dport, "GET", &format!("/cli/activity/snapshot?workspace={anna}&token={thread_pass}"), None);
         assert_eq!(cap.status, 403, "{}", cap.body);
-        assert!(cap.body.contains("missing capability activity:read"), "{}", cap.body);
+        assert!(cap.body.contains("cap_not_granted") && cap.body.contains("missing capability activity:room"), "{}", cap.body);
 
         // ── T-S8b: guest frames on the room socket ──
         let mut sock = open_room_socket(gport, &docs, &cookie);
@@ -4164,7 +4168,8 @@ async fn publish_run_skin_gateway_activity_guest_projection() {
         assert!(f["since"].is_null(), "{f}");
         drop(sock);
 
-        // ── T-S8a (1): activity overlay frames never reach an app guest ──
+        // ── T-S8a (1): OWNER activity overlay frames never reach an app
+        // guest (its ear is the guest bus, never this one) ──
         let thread = http_ex(gport, "GET", &format!("/cli/thread?addr={docs}"), None, &cookie);
         assert_eq!(thread.status, 200, "{}", thread.body);
         let conv = json(&thread.body)["conversation_id"].as_str().expect("conversation_id").to_string();
@@ -4212,7 +4217,7 @@ async fn publish_run_skin_gateway_activity_guest_projection() {
                 continue;
             };
             let v = json(&text);
-            assert_ne!(v["collection"], "activity", "an app guest must never get an activity frame: {v}");
+            assert_ne!(v["collection"], "activity", "an app guest must never get an owner activity frame: {v}");
             assert!(v.get("activity").is_none(), "{v}");
             saw_card |= v["collection"] == "thread" && v["id"] == card.as_str();
         }
@@ -4221,16 +4226,23 @@ async fn publish_run_skin_gateway_activity_guest_projection() {
         drop(guest_ov);
         drop(owner_ov);
 
-        // ── T-S8a (2): the Thread strip catch-up is not an app door ──
+        // ── T-S8a (2), 0.46.3: the strip's catch-up is an app door
+        // (`thread.activity`), counts only; never a socket ──
         let gw = http_ex(gport, "GET", &format!("/cli/thread/activity?addr={docs}"), None, &cookie);
-        assert_eq!(gw.status, 404, "never allowlisted; {}", gw.body);
+        assert_eq!(gw.status, 200, "allowlisted for thread:read + activity:read; {}", gw.body);
+        assert!(json(&gw.body)["turn"].is_null(), "no live turn: {}", gw.body);
+        let gw_anna = http_ex(gport, "GET", &format!("/cli/thread/activity?addr={anna}"), None, &cookie);
+        assert_eq!(gw_anna.status, 200, "anna has thread:read + activity:read; {}", gw_anna.body);
         let gw_ws = ws_upgrade(gport, &format!("/cli/thread/activity?addr={docs}"), &cookie);
         assert_eq!(gw_ws.status, 403, "{}", gw_ws.body);
         assert!(gw_ws.body.contains("not allowed"), "{}", gw_ws.body);
         let docs_pass = mint(dport, &format!("dcs{tag}"), &["thread:read", "activity:read"], &[&docs]);
         let direct = http(dport, "GET", &format!("/cli/thread/activity?addr={docs}&token={docs_pass}"), None);
-        assert_eq!(direct.status, 403, "app pass at the daemon; {}", direct.body);
-        assert!(direct.body.contains("app passes cannot use thread/activity"), "{}", direct.body);
+        assert_eq!(direct.status, 200, "app pass at the daemon; {}", direct.body);
+        let no_ear = mint(dport, &format!("dcn{tag}"), &["thread:read"], &[&docs]);
+        let direct = http(dport, "GET", &format!("/cli/thread/activity?addr={docs}&token={no_ear}"), None);
+        assert_eq!(direct.status, 403, "thread:read alone; {}", direct.body);
+        assert!(direct.body.contains("cap_not_granted") && direct.body.contains("activity:read"), "{}", direct.body);
 
         // ── T-S8a (3): the chat transcript stays refused ──
         let gw = http_ex(gport, "GET", "/cli/chat/transcript?session=x", None, &cookie);

@@ -871,6 +871,22 @@ mod unix_impl {
                 let caller = crate::sidecar_routes::caller_from_session(this_session_id, principal);
                 from_cli(crate::llm_accounts_routes::handle(p, caller, body, params, "cell"))
             }
+            // App users' wallets (0.46.3), the owner side, over the cell
+            // socket: the same handler and gate as the main port. A passport
+            // (agent or K2 shell tab) reaches `settings` only, for an App its
+            // own workspace owns with switch 2 (read; fallback writes);
+            // people, remove and personal agents answer `owner_only`. No
+            // wallet route ever returns a person's item or secret to an agent.
+            p if crate::person_wallet_routes::is_owner_route(p) => {
+                if !is_post && !crate::person_wallet_routes::OWNER_GET.contains(&p) {
+                    return from_cli(crate::cli_response::CliResponse::method_not_allowed());
+                }
+                if body.len() > crate::person_wallet_routes::MAX_BODY {
+                    return from_cli(crate::person_wallet_routes::too_large());
+                }
+                let caller = crate::sidecar_routes::caller_from_session(this_session_id, principal);
+                from_cli(crate::person_wallet_routes::handle_owner(p, caller, is_post, body, params, "cell"))
+            }
             p if p.starts_with("/cli/sidecar/") && crate::sidecar_routes::is_route(p) => {
                 if crate::sidecar_routes::is_post_route(p) && !is_post {
                     return from_cli(crate::cli_response::CliResponse::method_not_allowed());
@@ -1739,6 +1755,67 @@ mod unix_impl {
         /// not found" (the CLI only falls back to TCP on the cell sentinel,
         /// so that 404 is a dead end) nor the cell sentinel itself (a GET
         /// agent verb belongs on this socket).
+        /// App users' wallets on the cell socket (0.46.3): an agent reaches
+        /// its own App's wallet settings only, with switch 2, through the
+        /// main port's gate; people, personal agents and remove are
+        /// `owner_only`, and nothing returns a person's item.
+        #[test]
+        fn wallet_settings_on_the_cell_socket_use_the_main_port_gate() {
+            let _home = crate::test_support::TempHome::new();
+            let _db = k2_core::db::scoped_for_test();
+            let p = principal();
+            let ws = p.workspace_uuid.clone();
+            let app = "svc-cell-wallet";
+            let q: HashMap<String, String> = [("app".to_string(), app.to_string())].into_iter().collect();
+            let code = |b: &str| -> String {
+                serde_json::from_str::<serde_json::Value>(b).expect("json")["error"]["code"].as_str().unwrap_or("").to_string()
+            };
+            // No switch 2 (not even an App of its own): refused, never a 404.
+            let (status, _, body) = dispatch_cell_verb("GET", "/cli/app/wallet/settings", &q, b"", &p, "sid-wallet");
+            assert!(status.starts_with("403"), "{status} {body}");
+            assert_eq!(code(&body), "switch2_required", "{body}");
+            // Its workspace owns the App with switch 1 + 2: it reads the setting
+            // and may set the fallback (never `enabled`).
+            {
+                let h = k2_core::db::shared();
+                let c = h.lock();
+                c.execute("INSERT INTO projects (id, name, path, handle, agents_can_manage_skin, agents_can_manage_apps_full) VALUES (?1, ?1, '/tmp/cw', ?1, 1, 1)", rusqlite::params![ws]).unwrap();
+                c.execute(
+                    "INSERT INTO apps (app_id, service_id, owner_workspace, state, created_by, created_at, updated_at) VALUES ('app-cw', ?1, ?2, 'running', 'test', 1, 1)",
+                    rusqlite::params![app, ws],
+                )
+                .unwrap();
+            }
+            let (status, _, body) = dispatch_cell_verb("GET", "/cli/app/wallet/settings", &q, b"", &p, "sid-wallet");
+            assert!(status.starts_with("200"), "{status} {body}");
+            assert!(body.contains("\"fallback\":false"), "{body}");
+            let (status, _, body) = dispatch_cell_verb(
+                "POST",
+                "/cli/app/wallet/settings",
+                &HashMap::new(),
+                serde_json::json!({"app": app, "fallback": true}).to_string().as_bytes(),
+                &p,
+                "sid-wallet",
+            );
+            assert!(status.starts_with("200"), "{status} {body}");
+            let (status, _, body) = dispatch_cell_verb(
+                "POST",
+                "/cli/app/wallet/settings",
+                &HashMap::new(),
+                serde_json::json!({"app": app, "enabled": true}).to_string().as_bytes(),
+                &p,
+                "sid-wallet",
+            );
+            assert!(status.starts_with("403"), "{status} {body}");
+            assert_eq!(code(&body), "owner_only", "{body}");
+            // Everything else on the owner side: owner_only.
+            for path in ["/cli/app/wallet/people", "/cli/app/wallet/personal-agents"] {
+                let (status, _, body) = dispatch_cell_verb("GET", path, &q, b"", &p, "sid-wallet");
+                assert!(status.starts_with("403"), "{path}: {status} {body}");
+                assert_eq!(code(&body), "owner_only", "{path}: {body}");
+            }
+        }
+
         #[test]
         fn every_agent_get_verb_is_known_on_the_cell_socket() {
             // The sweep calls the mail GET verbs, which can read the

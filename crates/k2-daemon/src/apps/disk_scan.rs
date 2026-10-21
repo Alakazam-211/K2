@@ -478,6 +478,20 @@ pub fn agents_mem_bytes() -> Option<u64> {
 
 // ── the snapshot ─────────────────────────────────────────────────────
 
+/// The real workspaces, `(id, path)` by id: `projects` without K2's
+/// internal audit sentinels (`_orphan`, `_broadcast`), whose "path" is a
+/// bare word, not a folder. Smoke r6: `k2 app resources` listed them as
+/// agent folders (and the sweep walked `_orphan` relative to the daemon's
+/// working directory).
+pub fn workspace_rows(conn: &Connection) -> Vec<(String, String)> {
+    conn.prepare("SELECT id, path FROM projects ORDER BY id")
+        .and_then(|mut st| st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?.collect::<Result<Vec<_>, _>>())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(id, _)| !k2_core::db::AUDIT_SENTINEL_IDS.contains(&id.as_str()))
+        .collect()
+}
+
 /// The paths whose filesystems the guard and the watch track, labelled as
 /// the view's `holds` (`k2Home`, `workspaces`, `k2app`, `postgres`, `mail`).
 pub fn tracked_paths() -> Vec<(String, PathBuf)> {
@@ -485,9 +499,7 @@ pub fn tracked_paths() -> Vec<(String, PathBuf)> {
     let ws: Vec<String> = {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        conn.prepare("SELECT path FROM projects")
-            .and_then(|mut st| st.query_map([], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>())
-            .unwrap_or_default()
+        workspace_rows(&conn).into_iter().map(|(_, p)| p).collect()
     };
     v.extend(ws.into_iter().filter(|p| !p.trim().is_empty()).map(|p| ("workspaces".to_string(), PathBuf::from(p))));
     if Path::new(K2APP_HOME).exists() {
@@ -593,10 +605,7 @@ fn read_rows(now: i64, sweeping: bool) -> Rows {
     for (_, ws, _) in &services {
         owner_of(&conn, ws, &mut owners);
     }
-    let projects: Vec<(String, String)> = conn
-        .prepare("SELECT id, path FROM projects ORDER BY id")
-        .and_then(|mut st| st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<Vec<_>, _>>())
-        .unwrap_or_default();
+    let projects: Vec<(String, String)> = workspace_rows(&conn);
     for (ws, _) in &projects {
         owner_of(&conn, ws, &mut owners);
     }
@@ -941,10 +950,7 @@ pub fn scan_folders(now: i64) {
     let (projects, with_apps): (Vec<(String, String)>, BTreeSet<String>) = {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        let p = conn
-            .prepare("SELECT id, path FROM projects")
-            .and_then(|mut st| st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?.collect::<Result<Vec<_>, _>>())
-            .unwrap_or_default();
+        let p = workspace_rows(&conn);
         let a = store::list_apps(&conn, None).unwrap_or_default().into_iter().map(|a| a.owner_workspace).collect();
         (p, a)
     };

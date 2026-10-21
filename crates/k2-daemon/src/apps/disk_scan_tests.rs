@@ -471,4 +471,15 @@ fn the_snapshot_names_every_rows_owner() {
     let by = s.by_owner();
     assert_eq!(by[0].owner.handle.as_deref(), Some("nsi"));
     assert_eq!(by[0].disk_bytes, 6000 + 58_200 + 38_400);
+    // Smoke r6: K2's internal audit sentinels are not agent folders.
+    let ids: Vec<&str> = {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM projects WHERE id IN ('_orphan', '_broadcast')", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 2, "the scoped DB seeds both sentinels, so the filter is exercised");
+        s.consumers.iter().filter(|r| r.kind == "workspace").map(|r| r.id.as_str()).collect()
+    };
+    assert_eq!(ids, vec!["ws-nsi", "ws-plans"], "no _orphan / _broadcast rows");
+    let tracked: Vec<String> = tracked_paths().into_iter().map(|(_, p)| p.to_string_lossy().to_string()).collect();
+    assert!(tracked.iter().all(|p| p != "_orphan" && p != "_broadcast"), "{tracked:?}");
 }

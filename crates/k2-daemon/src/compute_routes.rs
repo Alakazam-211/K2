@@ -711,7 +711,7 @@ fn nodes_list(who: &Who, params: &HashMap<String, String>, mgr: Option<&Manager>
     if detail {
         out["controllerMachine"] = controller_machine();
         out["notYet"] = "hand-run lock files (sew-ci, k2-release, runner) with holder and age, build-cache size against its cap, \
-            and pinned long-runners need node reporting: they come with compute B (0.46.2+). Locks a node already refuses \
+            and pinned long-runners need node reporting, which nodes don't send yet. Locks a node already refuses \
             on show as waiting: foreign_lock."
             .into();
     }

@@ -1221,45 +1221,142 @@ pub(crate) fn verify_build(os: &str, arch: &str, bytes: &[u8], sig_text: &str) -
     Ok(NodeBuild { sha256: crypto::sha256_hex(bytes), bytes: bytes.to_vec(), sig: sig_text.to_string(), version: v.version.to_string(), protocol: v.protocol })
 }
 
+/// The k2-node build this server offers its nodes: always the one of this
+/// server's own version, so nodes never get stuck behind a stale cache
+/// after the server updates.
+///
+/// - The cache is per version (`node-assets/<version>/<asset>` + `.sig`);
+///   another version's files (and the old unversioned ones) are never
+///   used and are removed.
+/// - A cached build is used when its signature checks out and it IS this
+///   version; a build that fails the check is an error (tampered), one of
+///   another version is replaced.
+/// - Filling the cache prefers the k2-node bundled beside this daemon
+///   (`K2.app/Contents/MacOS/k2-node`) with the release's `.sig` (a small
+///   download), then the release asset itself. Every build is checked
+///   (signature over the bytes, the asset's name and the version) before
+///   it's offered.
 fn load_build(os: &str, arch: &str) -> R<NodeBuild> {
     let asset = k2_root_proto::node_build::asset_name(os, arch);
-    let dir = assets_dir();
-    let bin = dir.join(&asset);
-    let sig = dir.join(format!("{asset}.sig"));
+    let want = server_version();
+    let root = assets_dir();
+    let dir = root.join(&want);
+    prune_other_versions(&root, &want);
+    if let Some(b) = cached_build(os, arch, &dir, &asset)? {
+        if b.version == want {
+            return Ok(b);
+        }
+        // Another version's build under this version's name: replace it.
+        let _ = std::fs::remove_file(dir.join(&asset));
+        let _ = std::fs::remove_file(dir.join(format!("{asset}.sig")));
+    }
+    fill_cache(os, arch, &asset, &want, &dir)?;
+    let b = cached_build(os, arch, &dir, &asset)?.ok_or_else(|| no(acodes::NO_UPDATE, 409, format!("no {asset} in {}", dir.display())))?;
+    if b.version != want {
+        return Err(no(acodes::NO_UPDATE, 409, format!("{asset} for {want} is version {} (a release asset mismatch)", b.version)));
+    }
+    Ok(b)
+}
+
+/// This server's version (the node build it offers matches it).
+fn server_version() -> String {
+    #[cfg(test)]
+    if let Some(v) = test_seams::server_version() {
+        return v;
+    }
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+/// The cached build in `dir`, checked; `None` when not cached.
+fn cached_build(os: &str, arch: &str, dir: &std::path::Path, asset: &str) -> R<Option<NodeBuild>> {
+    let (bin, sig) = (dir.join(asset), dir.join(format!("{asset}.sig")));
     if !bin.exists() || !sig.exists() {
-        fetch_build(&asset, &dir)?;
+        return Ok(None);
     }
     let bytes = std::fs::read(&bin).map_err(|e| no(acodes::NO_UPDATE, 409, format!("read {}: {e}", bin.display())))?;
     let sig_text = std::fs::read_to_string(&sig).map_err(|e| no(acodes::NO_UPDATE, 409, format!("read {}: {e}", sig.display())))?;
-    verify_build(os, arch, &bytes, &sig_text)
+    verify_build(os, arch, &bytes, &sig_text).map(Some)
 }
 
-/// Download this release's build into `dir` (not air-gapped, not tests).
-fn fetch_build(asset: &str, dir: &std::path::Path) -> R<()> {
-    let missing = || no(acodes::NO_UPDATE, 409, format!("no {asset} here: put the release asset and its .sig in {}", dir.display()));
-    if cfg!(test) || k2_core::airgap::enabled() {
-        return Err(missing());
+/// Remove every other version's cache dir and the old unversioned files.
+fn prune_other_versions(root: &std::path::Path, want: &str) {
+    let Ok(rd) = std::fs::read_dir(root) else { return };
+    for e in rd.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if name == want {
+            continue;
+        }
+        let ft = e.file_type().ok();
+        let r = if ft.is_some_and(|t| t.is_dir()) { std::fs::remove_dir_all(e.path()) } else { std::fs::remove_file(e.path()) };
+        if let Err(x) = r {
+            log_debug!("[compute] node-assets: remove {}: {x}", e.path().display());
+        }
     }
-    let base = std::env::var("K2_NODE_RELEASE_BASE").unwrap_or_else(|_| "https://github.com/Alakazam-211/K2/releases/download".into());
-    let url = format!("{}/v{}/{asset}", base.trim_end_matches('/'), env!("CARGO_PKG_VERSION"));
-    let client = reqwest::blocking::Client::builder()
-        .connect_timeout(Duration::from_secs(15))
-        .timeout(Duration::from_secs(300))
-        .build()
-        .map_err(|e| no(acodes::NO_UPDATE, 502, format!("http client: {e}")))?;
-    let get = |u: &str| -> R<Vec<u8>> {
-        let r = client.get(u).send().map_err(|e| no(acodes::NO_UPDATE, 502, format!("{u}: {e}")))?;
+}
+
+/// Put this version's build and its `.sig` in `dir`: the bundled k2-node
+/// with the release's `.sig` when they match, else the release asset.
+fn fill_cache(os: &str, arch: &str, asset: &str, want: &str, dir: &std::path::Path) -> R<()> {
+    std::fs::create_dir_all(dir).map_err(|e| no("store", 500, e.to_string()))?;
+    let sig = fetch_release(asset, want, true)?;
+    let sig_text = String::from_utf8(sig.clone()).map_err(|_| no(acodes::NO_UPDATE, 409, format!("{asset}.sig isn't text")))?;
+    if let Some(bundled) = bundled_node(os, arch) {
+        if let Ok(bytes) = std::fs::read(&bundled) {
+            if verify_build(os, arch, &bytes, &sig_text).is_ok_and(|b| b.version == want) {
+                return store(dir, asset, &bytes, &sig);
+            }
+        }
+    }
+    let bin = fetch_release(asset, want, false)?;
+    store(dir, asset, &bin, &sig)
+}
+
+fn store(dir: &std::path::Path, asset: &str, bin: &[u8], sig: &[u8]) -> R<()> {
+    std::fs::write(dir.join(format!("{asset}.sig")), sig).map_err(|e| no("store", 500, e.to_string()))?;
+    std::fs::write(dir.join(asset), bin).map_err(|e| no("store", 500, e.to_string()))
+}
+
+/// The k2-node this K2 ships beside the daemon (macOS app bundle), for its
+/// own platform only.
+fn bundled_node(os: &str, arch: &str) -> Option<std::path::PathBuf> {
+    #[cfg(test)]
+    if let Some(p) = test_seams::bundled_node() {
+        return Some(p);
+    }
+    if os != std::env::consts::OS || k2_root_proto::node_build::asset_name(os, arch) != k2_root_proto::node_build::asset_name(std::env::consts::OS, std::env::consts::ARCH) {
+        return None;
+    }
+    let p = std::env::current_exe().ok()?.parent()?.join("k2-node");
+    p.is_file().then_some(p)
+}
+
+/// One file of this version's release: the asset, or its `.sig`.
+fn fetch_release(asset: &str, version: &str, sig: bool) -> R<Vec<u8>> {
+    let name = if sig { format!("{asset}.sig") } else { asset.to_string() };
+    let missing = || no(acodes::NO_UPDATE, 409, format!("no {name} for {version}: put the release asset and its .sig in {}", assets_dir().join(version).display()));
+    #[cfg(test)]
+    {
+        let dir = test_seams::release_dir().ok_or_else(missing)?;
+        return std::fs::read(dir.join(&name)).map_err(|_| missing());
+    }
+    #[cfg(not(test))]
+    {
+        if k2_core::airgap::enabled() {
+            return Err(missing());
+        }
+        let base = std::env::var("K2_NODE_RELEASE_BASE").unwrap_or_else(|_| "https://github.com/Alakazam-211/K2/releases/download".into());
+        let url = format!("{}/v{version}/{name}", base.trim_end_matches('/'));
+        let client = reqwest::blocking::Client::builder()
+            .connect_timeout(Duration::from_secs(15))
+            .timeout(Duration::from_secs(300))
+            .build()
+            .map_err(|e| no(acodes::NO_UPDATE, 502, format!("http client: {e}")))?;
+        let r = client.get(&url).send().map_err(|e| no(acodes::NO_UPDATE, 502, format!("{url}: {e}")))?;
         if !r.status().is_success() {
             return Err(missing());
         }
-        r.bytes().map(|b| b.to_vec()).map_err(|e| no(acodes::NO_UPDATE, 502, format!("{u}: {e}")))
-    };
-    let bin = get(&url)?;
-    let sig = get(&format!("{url}.sig"))?;
-    std::fs::create_dir_all(dir).map_err(|e| no("store", 500, e.to_string()))?;
-    std::fs::write(dir.join(format!("{asset}.sig")), sig).map_err(|e| no("store", 500, e.to_string()))?;
-    std::fs::write(dir.join(asset), bin).map_err(|e| no("store", 500, e.to_string()))?;
-    Ok(())
+        r.bytes().map(|b| b.to_vec()).map_err(|e| no(acodes::NO_UPDATE, 502, format!("{url}: {e}")))
+    }
 }
 
 fn newer(candidate: &str, running: Option<&str>) -> bool {
@@ -2117,6 +2214,39 @@ pub(crate) mod test_seams {
 
     pub fn set_assets_dir(p: Option<std::path::PathBuf>) {
         ASSETS.with(|a| *a.borrow_mut() = p);
+    }
+
+    thread_local! {
+        static SERVER_VERSION: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+        static RELEASE_DIR: std::cell::RefCell<Option<std::path::PathBuf>> = const { std::cell::RefCell::new(None) };
+        static BUNDLED: std::cell::RefCell<Option<std::path::PathBuf>> = const { std::cell::RefCell::new(None) };
+    }
+
+    /// The version this (test) server reports.
+    pub fn set_server_version(v: Option<&str>) {
+        SERVER_VERSION.with(|s| *s.borrow_mut() = v.map(str::to_string));
+    }
+
+    pub(super) fn server_version() -> Option<String> {
+        SERVER_VERSION.with(|s| s.borrow().clone())
+    }
+
+    /// Where "the release" serves its assets from (tests never download).
+    pub fn set_release_dir(p: Option<std::path::PathBuf>) {
+        RELEASE_DIR.with(|r| *r.borrow_mut() = p);
+    }
+
+    pub(super) fn release_dir() -> Option<std::path::PathBuf> {
+        RELEASE_DIR.with(|r| r.borrow().clone())
+    }
+
+    /// The k2-node "bundled" beside the daemon.
+    pub fn set_bundled_node(p: Option<std::path::PathBuf>) {
+        BUNDLED.with(|b| *b.borrow_mut() = p);
+    }
+
+    pub(super) fn bundled_node() -> Option<std::path::PathBuf> {
+        BUNDLED.with(|b| b.borrow().clone())
     }
 
     pub(super) fn assets_dir() -> Option<std::path::PathBuf> {

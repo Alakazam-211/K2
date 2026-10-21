@@ -530,21 +530,25 @@ fn update_offers_a_signed_build_and_records_rollback() {
     let dir = std::env::temp_dir().join(format!("k2-admin-assets-{}", crypto::random_id().unwrap()));
     test_seams::set_assets_dir(Some(dir.clone()));
 
+    // The server offers the build of its own version (cached per version).
+    test_seams::set_server_version(Some("0.46.0"));
     // A build whose signature names another file is refused.
-    stage_build(&dir, "linux", "0.46.0");
+    stage_build(&dir.join("0.46.0"), "linux", "0.46.0");
     assert_eq!(call(NODE_UPDATE, &agent(&f), json!({"node": f.node_name})).unwrap_err().1, cadmin::codes::NO_UPDATE);
     // Not newer than what runs (0.45.5): refused (anti-downgrade).
-    stage_build(&dir, "macos", "0.45.5");
+    test_seams::set_server_version(Some("0.45.5"));
+    stage_build(&dir.join("0.45.5"), "macos", "0.45.5");
     assert_eq!(call(NODE_UPDATE, &agent(&f), json!({"node": f.node_name})).unwrap_err().1, cadmin::codes::NO_UPDATE);
     // Tampered bytes: refused.
-    stage_build(&dir, "macos", "0.46.0");
-    let mut evil = std::fs::read(dir.join("k2-node-macos-aarch64")).unwrap();
+    test_seams::set_server_version(Some("0.46.0"));
+    stage_build(&dir.join("0.46.0"), "macos", "0.46.0");
+    let mut evil = std::fs::read(dir.join("0.46.0/k2-node-macos-aarch64")).unwrap();
     let last = evil.len() - 1;
     evil[last] ^= 1;
-    std::fs::write(dir.join("k2-node-macos-aarch64"), &evil).unwrap();
+    std::fs::write(dir.join("0.46.0/k2-node-macos-aarch64"), &evil).unwrap();
     assert_eq!(call(NODE_UPDATE, &agent(&f), json!({"node": f.node_name})).unwrap_err().1, cadmin::codes::NO_UPDATE);
 
-    let bytes = stage_build(&dir, "macos", "0.46.0");
+    let bytes = stage_build(&dir.join("0.46.0"), "macos", "0.46.0");
     let r = call(NODE_UPDATE, &agent(&f), json!({"node": f.node_name, "canary": true})).unwrap();
     assert_eq!(r["update"]["state"], "offered");
     let sent = test_seams::take_sent(&f.node);
@@ -595,7 +599,67 @@ fn update_offers_a_signed_build_and_records_rollback() {
     test_seams::set_online(&f.node, false);
     assert_eq!(call(NODE_ROLLBACK, &agent(&f), json!({"node": f.node_name})).unwrap_err(), (409, codes::NODE_OFFLINE.to_string()));
     test_seams::set_assets_dir(None);
+    test_seams::set_server_version(None);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// After the server updates, its nodes are offered the new server's own
+/// k2-node: a cache of another version (or the old unversioned one) is
+/// replaced, a matching cache is reused, a tampered one fails the check,
+/// and the k2-node bundled beside the daemon is used with the release's
+/// `.sig` when it is this version's.
+#[test]
+fn the_node_build_cache_follows_the_server_version() {
+    let tmp = |t: &str| std::env::temp_dir().join(format!("k2-assets-{t}-{}", crypto::random_id().unwrap()));
+    let (cache, release) = (tmp("cache"), tmp("release"));
+    test_seams::set_assets_dir(Some(cache.clone()));
+    test_seams::set_release_dir(Some(release.clone()));
+    test_seams::set_server_version(Some("0.46.1"));
+    // Left by the server before it updated: an unversioned 0.46.0 build,
+    // and a 0.46.0 build under this version's name.
+    stage_build(&cache, "macos", "0.46.0");
+    stage_build(&cache.join("0.46.1"), "macos", "0.46.0");
+    let fresh = stage_build(&release, "macos", "0.46.1");
+
+    let b = load_build("macos", "aarch64").unwrap();
+    assert_eq!((b.version.as_str(), b.sha256.as_str()), ("0.46.1", crypto::sha256_hex(&fresh).as_str()), "the stale cache was replaced");
+    assert!(!cache.join("k2-node-macos-aarch64").exists(), "the old unversioned cache is gone");
+
+    // Reused: the release is gone, the cache still serves 0.46.1.
+    std::fs::remove_dir_all(&release).unwrap();
+    assert_eq!(load_build("macos", "aarch64").unwrap().version, "0.46.1", "a matching cache is reused");
+
+    // Tampered: the check fails, nothing is offered.
+    let p = cache.join("0.46.1/k2-node-macos-aarch64");
+    let mut evil = std::fs::read(&p).unwrap();
+    let last = evil.len() - 1;
+    evil[last] ^= 1;
+    std::fs::write(&p, &evil).unwrap();
+    match load_build("macos", "aarch64") {
+        Err(e) => assert_eq!(e.code, cadmin::codes::NO_UPDATE, "a tampered cache fails the check"),
+        Ok(b) => panic!("a tampered cache was offered: {}", b.version),
+    }
+
+    // Bundled: an empty cache and a release holding only the .sig: the
+    // k2-node beside the daemon fills it.
+    let (cache2, release2, bundle) = (tmp("cache2"), tmp("release2"), tmp("bundle"));
+    let bytes = stage_build(&bundle, "macos", "0.46.1");
+    std::fs::create_dir_all(&release2).unwrap();
+    std::fs::copy(bundle.join("k2-node-macos-aarch64.sig"), release2.join("k2-node-macos-aarch64.sig")).unwrap();
+    test_seams::set_assets_dir(Some(cache2.clone()));
+    test_seams::set_release_dir(Some(release2.clone()));
+    test_seams::set_bundled_node(Some(bundle.join("k2-node-macos-aarch64")));
+    let b = load_build("macos", "aarch64").unwrap();
+    assert_eq!((b.version.as_str(), b.sha256.as_str()), ("0.46.1", crypto::sha256_hex(&bytes).as_str()));
+    assert!(cache2.join("0.46.1/k2-node-macos-aarch64").exists(), "the bundled build is cached");
+
+    test_seams::set_bundled_node(None);
+    test_seams::set_release_dir(None);
+    test_seams::set_server_version(None);
+    test_seams::set_assets_dir(None);
+    for d in [cache, cache2, release2, bundle] {
+        let _ = std::fs::remove_dir_all(d);
+    }
 }
 
 #[test]

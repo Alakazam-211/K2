@@ -723,11 +723,14 @@ impl ServersFile {
         self.servers.iter().find(|e| e.label == label && e.state != ShareState::Revoked)
     }
 
-    /// A `servers.*` verb's `server` argument: a label, or `slot:<n>`.
+    /// A `servers.*` verb's `server` argument: a label, or `slot:<n>`. A
+    /// label names its live line first, else its revoked one (still
+    /// draining or waiting for its wipe: `revoke <label> --now` after a
+    /// plain revoke), the latest if there are several.
     pub fn find(&self, server: &str) -> Option<&ServerEntry> {
         match server.strip_prefix("slot:").and_then(|n| n.parse::<Slot>().ok()) {
             Some(n) => self.entry(n),
-            None => self.by_label(server),
+            None => self.by_label(server).or_else(|| self.servers.iter().filter(|e| e.label == server && e.state == ShareState::Revoked).max_by_key(|e| e.added_at)),
         }
     }
 

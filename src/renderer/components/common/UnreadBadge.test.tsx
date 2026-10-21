@@ -46,7 +46,7 @@ vi.mock('@/stores/context-menu', () => ({
 
 import { act } from 'react'
 import { cleanup, fireEvent, render, renderHook, waitFor } from '@testing-library/react'
-import { UnreadBadge } from './UnreadBadge'
+import { UnreadBadge, WorkspaceThreadUnreadBadge } from './UnreadBadge'
 import { SessionViewMenu } from '@/components/SessionView/SessionViewMenu'
 import {
   __resetUnreadForTests,
@@ -200,6 +200,33 @@ describe('Thread view menu', () => {
       fireEvent.click(button)
     })
     expect(menu.items.find((i) => i.id === 'mute-thread')?.label).toBe('Unmute Thread')
+  })
+
+  // Rosson 2026-10-21: the amber "waiting on you" marker belongs in the
+  // main nav (the sidebar agent row draws WorkspaceThreadUnreadBadge), not
+  // on the view drop-down button.
+  it('a waiting agent: the amber marker is in the main nav, not on the view button', () => {
+    seed(entry({ unread: 0, waiting: 1 }))
+    const nav = render(<WorkspaceThreadUnreadBadge projectId="p1" />)
+    const navWaiting = nav.container.querySelector('[data-unread-waiting]')
+    expect(navWaiting).not.toBeNull()
+    expect(navWaiting?.getAttribute('title')).toBe('1 waiting on you')
+    expect(navWaiting?.className).toContain('bg-[var(--color-status-needs-you)]')
+
+    const button = renderMenu()
+    expect(button.querySelector('[data-unread-waiting]')).toBeNull()
+    expect(button.querySelector('[data-unread-badge]')).toBeNull()
+  })
+
+  it('waiting plus unread: the view button keeps the count, drops the amber marker', () => {
+    seed(entry({ unread: 3, waiting: 2 }))
+    const nav = render(<WorkspaceThreadUnreadBadge projectId="p1" />)
+    expect(nav.container.querySelector('[data-unread-waiting]')?.textContent).toBe('2')
+    expect(nav.container.querySelector('[data-unread-count]')?.textContent).toBe('3')
+
+    const button = renderMenu()
+    expect(button.querySelector('[data-unread-count]')?.textContent).toBe('3')
+    expect(button.querySelector('[data-unread-waiting]')).toBeNull()
   })
 
   it('no Thread id: no count, no mute item', async () => {

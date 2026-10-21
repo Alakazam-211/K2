@@ -14,6 +14,7 @@ import {
   fetchWhoamiRole,
   formatAuditTimeUtc,
   isAgentVaultExport,
+  isPermissionCardsEvent,
   isSuccessLogin,
   isVaultHandoff,
   newestFirst,
@@ -26,7 +27,7 @@ export const ACCESS_AUDIT_MANIFEST: SettingEntry[] = [
     section: 'access-audit',
     label: 'Access Audit',
     description: 'Login history and vault handoffs for this host — who got in, from where, when; which secrets agents sent each other',
-    keywords: ['access audit', 'login history', 'audit', 'sign-in', 'compromised', 'vault handoff', 'secret sent'],
+    keywords: ['access audit', 'login history', 'audit', 'sign-in', 'compromised', 'vault handoff', 'secret sent', 'permission cards', 'permission request'],
   },
 ]
 
@@ -35,11 +36,14 @@ const EMPTY_COPY =
 const OLD_HOST_COPY = 'This host predates login history — update it to v0.40.144.'
 const OWNER_ONLY_COPY = 'Login history is visible to the server owner.'
 
-type FilterMode = 'successes' | 'handoffs' | 'all'
+type FilterMode = 'successes' | 'handoffs' | 'permission' | 'all'
 
 const FILTERS: { mode: FilterMode; label: string }[] = [
   { mode: 'successes', label: 'Successes' },
   { mode: 'handoffs', label: 'Vault handoffs' },
+  // Permission cards (Beta, prd-agent-settings-cards-v1 §6.5): asks,
+  // answers, notes, Turn off again and the switches.
+  { mode: 'permission', label: 'Permission cards' },
   { mode: 'all', label: 'All' },
 ]
 
@@ -131,6 +135,7 @@ export function AccessAuditSection(): React.JSX.Element {
       // An agent's vault export always shows: it is why this page is open.
       if (filter === 'successes' && !isSuccessLogin(ev) && !isAgentVaultExport(ev)) return false
       if (filter === 'handoffs' && !isVaultHandoff(ev)) return false
+      if (filter === 'permission' && !isPermissionCardsEvent(ev)) return false
       if (q && !ev.user.toLowerCase().includes(q)) return false
       return true
     })

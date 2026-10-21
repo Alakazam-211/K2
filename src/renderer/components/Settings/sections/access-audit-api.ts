@@ -77,6 +77,21 @@ export function isVaultHandoff(ev: AuthAuditEvent): boolean {
   return ev.event === VAULT_HANDOFF_EVENT
 }
 
+/** Permission cards (Beta, prd-agent-settings-cards-v1 §6.5): the daemon's
+ *  `permission-request`, `permission-answer`, `permission-note`,
+ *  `permission-undo` and `permission-switch` lines (who, and `via`). */
+export const PERMISSION_CARD_EVENTS = [
+  'permission-request',
+  'permission-answer',
+  'permission-note',
+  'permission-undo',
+  'permission-switch',
+] as const
+
+export function isPermissionCardsEvent(ev: AuthAuditEvent): boolean {
+  return (PERMISSION_CARD_EVENTS as readonly string[]).includes(ev.event)
+}
+
 export function isSuccessLogin(ev: AuthAuditEvent): boolean {
   return ev.event === 'login' && ev.outcome === 'ok'
 }

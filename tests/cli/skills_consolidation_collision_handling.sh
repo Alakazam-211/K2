@@ -30,26 +30,19 @@ EOF
 
 REG_URL="http://127.0.0.1:${K2SO_PORT}/cli/projects/add-from-path?token=${K2SO_TOKEN}"
 REG_BODY="$(python3 -c "import json,sys; print(json.dumps({'path': sys.argv[1]}))" "$WS")"
-curl -s -X POST -H "Content-Type: application/json" \
+if ! REG_RESP="$(curl -sS -X POST -H "Content-Type: application/json" \
     --connect-timeout 5 --max-time 15 \
-    -d "$REG_BODY" "$REG_URL" >/dev/null 2>&1
+    -d "$REG_BODY" "$REG_URL" 2>&1)"; then
+    echo "FAIL: add-from-path request failed: $REG_RESP" >&2
+    exit 1
+fi
+if ! echo "$REG_RESP" | grep -qF "\"path\":\"$WS\""; then
+    echo "FAIL: add-from-path response did not echo our workspace path" >&2
+    echo "response: $REG_RESP" >&2
+    exit 1
+fi
 
-kill "$SANDBOX_DAEMON_PID" 2>/dev/null || true
-wait "$SANDBOX_DAEMON_PID" 2>/dev/null || true
-unset SANDBOX_DAEMON_PID
-
-TMPDIR="$SANDBOX_HOME/tmp" XDG_RUNTIME_DIR="$SANDBOX_HOME/run" K2_RUNTIME_DIR= HOME="$SANDBOX_HOME" "$SANDBOX_DAEMON_BIN" >"$SANDBOX_HOME/daemon-2.log" 2>&1 &
-SANDBOX_DAEMON_PID=$!
-export SANDBOX_DAEMON_PID
-for i in $(seq 1 50); do
-    if [ -f "$SANDBOX_HOME/.k2so/daemon.port" ]; then
-        NEW_PORT="$(cat "$SANDBOX_HOME/.k2so/daemon.port")"
-        if curl -sf --connect-timeout 1 "http://127.0.0.1:${NEW_PORT}/health" >/dev/null 2>&1; then
-            break
-        fi
-    fi
-    sleep 0.2
-done
+sandbox_daemon_restart daemon-2.log
 
 if [ ! -f "$WS/.k2/.skills-consolidation-v1-done" ]; then
     echo "FAIL: marker missing after sweep" >&2

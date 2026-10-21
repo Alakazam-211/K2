@@ -44,8 +44,8 @@ pub struct Status {
     /// last good copy (or solo), never "fail open" (§14).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub servers_error: Option<String>,
-    /// The owner server's clock minus this node's at its last attach
-    /// (seconds; §14 "Clock skew": over 120 s is worth showing).
+    /// This node's clock minus the owner server's at its last attach
+    /// (seconds, positive = the node is ahead; §14: over 120 s is shown).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clock_skew_secs: Option<i64>,
     /// A `--dev` node (a person's own smoke/test node, never an installed
@@ -55,7 +55,7 @@ pub struct Status {
 }
 
 /// A skew worth telling people about (§14).
-pub const SKEW_WARN_SECS: i64 = 120;
+pub const SKEW_WARN_SECS: i64 = k2_node_proto::share::SKEW_SHOW_SECS;
 
 /// One non-owner server as the node sees it.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,7 +82,7 @@ pub struct ServerLine {
     pub running: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<i64>,
-    /// That server's clock minus this node's at its last attach.
+    /// This node's clock minus that server's at its last attach.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skew_secs: Option<i64>,
 }

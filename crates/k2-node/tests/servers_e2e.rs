@@ -155,6 +155,11 @@ async fn a_second_server_enrols_by_sas_and_sees_only_its_own() {
     let line = eventually("the SAS on the node", || status(&n).servers.into_iter().find(|l| l.slot == 1 && l.sas.is_some())).await;
     assert_eq!(line.sas, b.last_sas.lock().unwrap().clone(), "both sides show the same SAS");
     assert_eq!(line.state, "pending");
+    eventually("B in servers.list", || n.node.tenant(1).map(|_| ())).await;
+    let l = servers::node_list(&n.node).unwrap();
+    let pend = l.servers.iter().find(|s| s.slot == 1).unwrap();
+    assert_eq!((pend.state, pend.online), (ServerStatus::Pending, false));
+    assert_eq!(pend.sas, line.sas.as_ref().map(|s| s.replace(' ', "")), "six digits, no space");
     eventually("pending at B", || (n.node.tenant(1).map(|t| t.link.lock().unwrap().state.clone()).as_deref() == Some("pending")).then_some(())).await;
     let t1 = n.node.tenant(1).unwrap();
     assert_eq!(t1.job_gate(n.node.now(), true), Some(codes::SERVER_NOT_APPROVED), "no jobs before the SAS");
@@ -214,9 +219,18 @@ async fn a_second_server_enrols_by_sas_and_sees_only_its_own() {
     // says the same.
     let line = eventually("B online", || status(&n).servers.into_iter().find(|l| l.slot == 1 && l.link == "online")).await;
     assert_eq!((line.state.as_str(), line.sas.as_deref()), ("active", None));
-    let list = servers::node_list(&n.node);
-    assert_eq!(list["servers"][1]["state"], "active", "{list}");
-    assert_eq!(list["servers"][0]["role"], "owner");
+    let list = servers::node_list(&n.node).unwrap();
+    assert!(!list.solo);
+    assert_eq!(list.max_servers, k2_node_proto::share::DEFAULT_MAX_SERVERS);
+    let (o, b1) = (&list.servers[0], &list.servers[1]);
+    assert_eq!((o.slot, o.state, o.online), (0, ServerStatus::Active, true), "{list:?}");
+    assert_eq!((b1.slot, b1.state, b1.online, b1.sas.as_deref()), (1, ServerStatus::Active, true, None), "{list:?}");
+    assert_eq!(b1.fp.as_deref(), Some(b.key.fingerprint().as_str()));
+    assert!(ob.share.as_ref().unwrap().skew_secs.is_none(), "the fake server sends no clock (server_time 0): no skew claimed");
+    assert!(!has(&ob, k2_node_proto::share::FEATURE_TENANT_WALL), "no tenant-wall claim while the wall isn't on");
+    // The pinned wire shape round-trips.
+    let v = serde_json::to_value(&list).unwrap();
+    assert_eq!(serde_json::from_value::<k2_node_proto::share::ServersList>(v).unwrap(), list);
 }
 
 /// V52 / P4: another server's admin, keys and update frames are dropped

@@ -460,6 +460,11 @@ fn homes_sync_ready() -> bool {
 /// `instanceId` on every `GET /cli/thread` answer (and `rev` on overlay
 /// WS frames). No SQL migration.
 pub const FEATURE_INBOX_CATCHUP: &str = "inbox-catchup-v1";
+/// `POST /cli/thread/catchup` takes optional `sinceRev` + `instanceId` and
+/// answers `{ok, rev, instanceId, unchanged: true}` with no reads when no
+/// Thread changed since (0.46.3). Threads only: project chats still need a
+/// normal call.
+pub const FEATURE_CATCHUP_UNCHANGED: &str = "catchup-unchanged-v1";
 
 /// True when the notify prefs tables exist in the daemon DB.
 fn thread_push_ready() -> bool {
@@ -533,6 +538,7 @@ pub fn features() -> Vec<&'static str> {
     }
     if k2_core::db::try_shared().is_some() {
         out.push(FEATURE_INBOX_CATCHUP);
+        out.push(FEATURE_CATCHUP_UNCHANGED);
     }
     out
 }
@@ -591,7 +597,8 @@ mod tests {
                 "push-e2e-v1",
                 "thread-read-v1",
                 "homes-sync-v1",
-                "inbox-catchup-v1"
+                "inbox-catchup-v1",
+                "catchup-unchanged-v1"
             ]
         );
     }

@@ -20,6 +20,13 @@
 //!   the DB connection one at a time; nothing is held across the call.
 //! - Top-level `rev` is read BEFORE the first store read; `rev` and
 //!   `instanceId` are left off App guest answers (C4).
+//! - catchup-unchanged-v1 (0.46.3): optional `sinceRev` + `instanceId`
+//!   (both from the last answer, both or neither). When they match this
+//!   process and nothing was written to a Thread since, the answer is
+//!   `{ok, rev, instanceId, unchanged: true}` with NO store reads. Threads
+//!   only: project chat posts don't move `rev`, so a caller that needs
+//!   `groups` still makes a normal call for them. A request without
+//!   `sinceRev` is answered exactly as before.
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -73,6 +80,9 @@ struct Request {
     threads: Vec<ThreadReq>,
     groups: Vec<GroupReq>,
     limit: usize,
+    /// catchup-unchanged-v1: the caller's last `(rev, instanceId)`. When it
+    /// still matches, the answer is `unchanged` with no store reads.
+    since: Option<(u64, String)>,
 }
 
 /// A whole number `>= 0` (a JSON integer; `4.0`, `"4"` and `-1` are not).
@@ -172,7 +182,25 @@ fn parse(body: &[u8]) -> Result<Request, CliResponse> {
             groups.push(GroupReq { group, after_seq });
         }
     }
-    Ok(Request { threads, groups, limit })
+    // catchup-unchanged-v1: both or neither.
+    let since_rev = match obj.get("sinceRev") {
+        None | Some(Value::Null) => None,
+        Some(raw) => match raw.as_u64() {
+            Some(n) => Some(n),
+            None => return Err(usage(format!("invalid sinceRev {raw}: expected a whole number >= 0"))),
+        },
+    };
+    let instance = match obj.get("instanceId") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) if !s.trim().is_empty() => Some(s.trim().to_string()),
+        Some(raw) => return Err(usage(format!("invalid instanceId {raw}: expected the instanceId a catch-up returned"))),
+    };
+    let since = match (since_rev, instance) {
+        (Some(r), Some(i)) => Some((r, i)),
+        (None, None) => None,
+        _ => return Err(usage("sinceRev and instanceId go together (both from the last catch-up's answer)")),
+    };
+    Ok(Request { threads, groups, limit, since })
 }
 
 // ── one in flight per token (C2) ─────────────────────────────────────
@@ -458,6 +486,21 @@ pub(crate) fn handle_with_budget(
     // Read BEFORE the first store read (§3): any frame at or below it is
     // already in the answer.
     let rev = crate::overlay_ws::current_rev();
+    // catchup-unchanged-v1: the caller's last answer is still current (same
+    // daemon process, no Thread write since). No store reads. THREADS ONLY:
+    // project chat posts don't move `rev`, so `groups` must still be
+    // checked by a normal call. App guests never get `rev` (C4), so this
+    // never applies to them.
+    if !guest {
+        if let Some((since_rev, since_instance)) = &req.since {
+            let instance = crate::boot_status::instance_id();
+            if *since_rev == rev && since_instance.as_str() == instance {
+                return CliResponse::ok_json(
+                    json!({ "ok": true, "rev": rev, "instanceId": instance, "unchanged": true }).to_string(),
+                );
+            }
+        }
+    }
     let mut budget = Budget::new(budget_bytes);
 
     let mut threads = Vec::with_capacity(req.threads.len());

@@ -3,7 +3,8 @@
 //!
 //! `zen_routes::handle` has already applied Zen's rules (this computer's
 //! owner token, or a LOCAL agent / K2 shell passport; a Connect login, an
-//! app pass or a sandboxed agent gets 403 `zen_local_only`), refused a GET
+//! app pass or a sandboxed agent gets 403 `zen_local_only`; an Owner login
+//! may approve a proposal, `zen_routes::GARDEN_OWNER_ROUTES`), refused a GET
 //! on a POST row, and refused a put that names a locked Garden (423).
 //!
 //! | route                         | person | agent with the switch | other agent |
@@ -187,7 +188,7 @@ pub fn handle(path: &str, owner_token: bool, caller: &Caller, params: &HashMap<S
         "/cli/zen/widget/shot" => shot(body),
         "/cli/zen/proposals" => list(params),
         "/cli/zen/proposals/show" => show(params),
-        "/cli/zen/proposals/approve" => approve(r, caller, body),
+        "/cli/zen/proposals/approve" => approve(approver(r, caller), caller, body),
         "/cli/zen/proposals/reject" => reject(r, caller, body),
         _ => refuse("404 Not Found", "not_found", "no such zen route"),
     }
@@ -812,6 +813,40 @@ fn show_folder(f: &ZenFiles, p: &Proposal) -> CliResponse {
 
 fn decided_by(caller: &Caller) -> String {
     caller.audit_user()
+}
+
+/// Proposal approve takes the Garden's owner from any signed-in surface
+/// (permission cards §5.2.1, Rosson Q2): an Owner login approves as the
+/// person, through the same `zen_routes::garden_owner_may` the card uses.
+/// An Admin or Member login never gets here (`zen_routes::handle` answers
+/// it `zen_local_only`), and a passport keeps its own role.
+fn approver(r: Role, caller: &Caller) -> Role {
+    match caller {
+        Caller::Login { .. } if crate::zen_routes::garden_owner_may(caller, None) => Role::Person,
+        _ => r,
+    }
+}
+
+/// The route entry for `POST /cli/zen/proposals/approve {id}` as `caller`
+/// (the permission card's `garden.proposal.approve`, lane E2; §6.4, C15):
+/// the GardenOwner check, then the route's own handler. A card is answered
+/// by people only, so anything but the owner token or a login is refused
+/// here (`person_only`), and an Admin or Member login gets the route's own
+/// `zen_local_only`.
+pub(crate) fn approve_entry(caller: &Caller, id: &str) -> CliResponse {
+    let r = match caller {
+        Caller::Owner => Role::Person,
+        Caller::Login { .. } if crate::zen_routes::garden_owner_may(caller, None) => Role::Person,
+        Caller::Login { .. } => return crate::zen_routes::local_only(),
+        _ => {
+            return refuse(
+                "403 Forbidden",
+                "person_only",
+                "A person approves Garden proposals (Settings → Gardens, or k2 zen proposals approve outside K2), or an agent with \"Manage Gardens and data sources\".",
+            )
+        }
+    };
+    approve(r, caller, json!({ "id": id }).to_string().as_bytes())
 }
 
 fn approve(r: Role, caller: &Caller, body: &[u8]) -> CliResponse {

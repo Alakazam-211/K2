@@ -14344,8 +14344,9 @@ k2 thread — user-agent overlay (not PTY inject; that is k2 msg)
       [--prompt "…"] (≤ 200 chars) [--for api.stripe.com[,…]] [--delivery fetch|file|env]
       [--scope workspace|server|session] [--kind api_key|password|…] [--ttl 24h]
       The value goes into the K2 vault; you get a k2v:// reference and use it with
-      `k2 vault fetch --secret NAME …`. The person can change the sites, the scope and
-      how you get it. Exact hosts only. More: k2 study vault
+      `k2 vault fetch --secret NAME …`. YOU choose the sites, scope and delivery: the
+      card shows your choice in one sentence and the person just clicks Save. If they
+      say it's wrong, `k2 thread void` it and ask again. Exact hosts only. More: k2 study vault
   k2 thread void <addr> <card-id>                 # close your own card when it is obsolete
   k2 thread unread [--kind thread|project] [--json]  # a PERSON's unread + waiting counts
       (owner token or a K2 login; agents have no read state and get 403)
@@ -32196,6 +32197,17 @@ THE RULE
   Never paste a key into a file, a chat, a ticket or git. If you need one,
   ask a person: k2 thread secret <addr> --name STRIPE_KEY --for api.stripe.com
   The value goes straight into the vault; you get a reference back.
+
+ASKING: YOU MAKE THE CHOICES
+  Pick them on the card yourself: --for (sites), --delivery fetch|file|env,
+  --scope workspace|server|session, --kind. The card tells the person in
+  one sentence ("K2 will add this to calls to api.stripe.com; you never see
+  it", or "you will get this as a file you can read") and they just paste
+  and Save. Prefer fetch with exact sites; ask for file/env only when a
+  tool must read the value itself. If the person says the setup is wrong,
+  void the card (k2 thread void <addr> <card-id>) and ask again with the
+  right choices. They can change things by hand under Advanced, but don't
+  count on it.
 
 HOW YOU GET A SECRET (delivery)
   fetch   K2 makes the HTTPS call and adds the key. You never see it.

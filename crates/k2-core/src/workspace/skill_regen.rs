@@ -302,7 +302,90 @@ fn compose_agents_md(project_path: &str) -> String {
     if inc_tooling {
         out.push_str(AGENTS_MD_TOOLING_SECTION);
     }
+    // Permission cards (Beta, PRD rev 3.1 §11.4): only while both switches
+    // are on for this workspace. Off = no pointer, today's bytes.
+    if permission_cards_on(project_path) {
+        out.push('\n');
+        out.push_str(AGENTS_MD_PERMISSIONS_POINTER);
+    }
     out
+}
+
+/// The AGENTS.md pointer to the `k2-permissions` skill, composed only while
+/// both permission-card switches are on for the workspace (PRD §11.4).
+pub const AGENTS_MD_PERMISSIONS_POINTER: &str = "\
+## Permission cards (Beta)\n\
+\n\
+When K2 refuses you (exit 3) or holds a change (exit 2), the error ends with one \
+line: `Ask with: k2 permission request …` (run it as printed, filling in only \
+`--why`) or `It can't be requested.` Load the **k2-permissions** skill \
+(`.k2/skills/k2-permissions/SKILL.md`, or `k2 study permissions`) for the rules.\n";
+
+/// Both permission-card switches are on for the workspace at `project_path`
+/// (`permission::gate::enabled_for`). Reads nothing while the global switch
+/// is off.
+pub fn permission_cards_on(project_path: &str) -> bool {
+    if !crate::permission::gate::server_on() {
+        return false;
+    }
+    let Some(db) = crate::db::try_shared() else { return false };
+    let want = project_path.trim_end_matches('/');
+    let id: Option<String> = {
+        let conn = db.lock();
+        conn.query_row(
+            "SELECT id FROM projects WHERE path = ?1 OR path = ?2 LIMIT 1",
+            rusqlite::params![want, format!("{want}/")],
+            |row| row.get::<_, String>(0),
+        )
+        .ok()
+    };
+    id.is_some_and(|id| crate::permission::gate::enabled_for(&id))
+}
+
+/// Write the `k2-permissions` skill while both switches are on; remove the
+/// folder (it is K2's own, never user-authored) while either is off. With
+/// the switches off and no folder this touches nothing.
+fn sync_permissions_skill(project_path: &str, dot: &Path) {
+    use crate::skills::version::{ensure_skill_up_to_date, SKILL_VERSION_PERMISSIONS};
+    let dir = dot.join("skills").join(crate::permission::SKILL_DIR);
+    if permission_cards_on(project_path) {
+        let _ = ensure_skill_up_to_date(
+            &dir.join("SKILL.md"),
+            crate::permission::SKILL_DIR,
+            SKILL_VERSION_PERMISSIONS,
+            &crate::skills::content::generate_k2_permissions_skill(),
+            Some(&format!(
+                "name: {}\ndescription: {}",
+                crate::permission::SKILL_DIR,
+                crate::skills::content::K2_PERMISSIONS_SKILL_DESCRIPTION
+            )),
+        );
+    } else if dir.exists() {
+        if let Err(e) = fs::remove_dir_all(&dir) {
+            log_debug!("[skill_regen] remove {}: {e}", dir.display());
+        }
+    }
+}
+
+/// Permission cards: a switch flipped (the global one, or one agent's).
+/// Recompose the workspace's AGENTS.md (pointer) and its `k2-permissions`
+/// skill so the agent's teaching follows the switches (lane B calls this
+/// from the switch writers).
+pub fn sync_permission_teaching(project_path: &str) {
+    recompose_agents_md(project_path);
+    sync_permissions_skill(project_path, &crate::workspace_dot_dir(project_path));
+}
+
+/// [`sync_permission_teaching`] for every registered workspace (the global
+/// switch flipped). Returns how many workspaces were refreshed.
+pub fn sync_permission_teaching_everywhere() -> usize {
+    let Ok(projects) = crate::projects_ops::projects_list() else {
+        return 0;
+    };
+    for p in &projects {
+        sync_permission_teaching(&p.path);
+    }
+    projects.len()
 }
 
 /// The K2 CLI reference, shipped as a LOADABLE skill (`.k2/skills/k2-cli/`)
@@ -674,6 +757,11 @@ fn ensure_compose_sidecar_skills(dot: &Path) {
     // Zen Mode (prd-zen-mode-v1 Z18/Z68): only on a computer that has set
     // Zen up, so agents on headless servers never see the skill.
     ensure_zen_skill(dot, crate::zen::is_set_up());
+
+    // Permission cards (Beta): only while both switches are on.
+    if let Some(project_path) = dot.parent().and_then(|p| p.to_str()) {
+        sync_permissions_skill(project_path, dot);
+    }
 }
 
 /// Write (or refresh) `.k2/skills/k2-zen/SKILL.md` when `zen_set_up`.

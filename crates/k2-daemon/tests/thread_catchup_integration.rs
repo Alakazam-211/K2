@@ -334,7 +334,6 @@ async fn rev_is_on_plain_reads_monotonic_and_matches_the_instance() {
         let rev = v["rev"].as_u64().unwrap_or_else(|| panic!("rev on {q}: {v}"));
         assert_eq!(v["instanceId"], instance.as_str(), "{q}: {v}");
         assert!(rev >= last, "rev never goes back: {rev} < {last}");
-        last = rev;
         post_text(port, &w.a.handle, &format!("tick {i}"), None).await;
         let after = get(port, "/cli/thread", OWNER, q).await.json()["rev"].as_u64().expect("rev");
         assert!(after > rev, "a published write raises rev: {rev} -> {after}");

@@ -15,7 +15,7 @@
 //   - A row on another server paints through the same row shell
 //     (`AgentRowButton`) with a small machine chip and its live / offline /
 //     sign-in state on the second line, plus that server's presence.
-//     With "Open agents from other servers here" on (the default on macOS
+//     With "Open other servers' agents in Home" on (the default on macOS
 //     and Linux from 0.43.2), clicking it opens that server's room in the
 //     main area without switching (usable from K2 0.43.0, view only from
 //     the floor up to that). Off, or below the floor, it switches this

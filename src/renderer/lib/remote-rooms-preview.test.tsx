@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
-// "Open agents from other servers here" (MS55; prd-home-seamless-0432 Z1,
+// "Open other servers' agents in Home" (MS55; prd-home-seamless-0432 Z1,
 // Z2, Z4, Z28, T1.1, T1.2, T1.4; Rosson 2026-10-03 Q1, Q2; Rosson
-// 2026-10-11): on by default on every OS from 0.45.5 (Windows included), an
-// explicit off (or on) is kept on every OS, junk is migrated to "never
-// touched", per computer in localStorage, shared across windows, and the
-// Settings row flips it.
+// 2026-10-11; graduated Rosson 2026-10-21): on by default on every OS from
+// 0.45.5 (Windows included), an explicit off (or on) is kept on every OS,
+// junk is migrated to "never touched", an Experimental-era off is reset
+// exactly once (0.46.3 graduation), per computer in localStorage, shared
+// across windows, and the Settings row flips it.
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { createElement } from 'react'
@@ -13,8 +14,10 @@ import { act } from 'react'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import {
+  LS_REMOTE_ROOMS_GRADUATED,
   LS_REMOTE_ROOMS_PREVIEW,
   REMOTE_ROOMS_DEFAULT_ON,
+  graduateRemoteRoomsPreview,
   installRemoteRoomsPreviewSync,
   migrateRemoteRoomsPreview,
   parseRemoteRoomsPreview,
@@ -44,21 +47,40 @@ const blocked: PreviewStorage = {
   },
 }
 
-/** An in-memory storage that records writes. */
-function memStorage(initial: string | null): PreviewStorage & { value: string | null; writes: string[] } {
+/** An in-memory storage that records writes. `value` is the switch key,
+ *  `flag` the graduation flag; any other key throws. Writes to the switch
+ *  are recorded as `set:<v>` / `remove`, to the flag as `flag:<v>` /
+ *  `flag:remove`. */
+function memStorage(
+  initial: string | null,
+  flag: string | null = null,
+): PreviewStorage & { value: string | null; flag: string | null; writes: string[] } {
   const s = {
     value: initial,
+    flag,
     writes: [] as string[],
-    getItem: (k: string) => (k === LS_REMOTE_ROOMS_PREVIEW ? s.value : null),
+    getItem: (k: string) => {
+      if (k === LS_REMOTE_ROOMS_PREVIEW) return s.value
+      if (k === LS_REMOTE_ROOMS_GRADUATED) return s.flag
+      throw new Error(`unexpected key ${k}`)
+    },
     setItem: (k: string, v: string) => {
-      if (k !== LS_REMOTE_ROOMS_PREVIEW) throw new Error(`unexpected key ${k}`)
-      s.writes.push(`set:${v}`)
-      s.value = v
+      if (k === LS_REMOTE_ROOMS_PREVIEW) {
+        s.writes.push(`set:${v}`)
+        s.value = v
+      } else if (k === LS_REMOTE_ROOMS_GRADUATED) {
+        s.writes.push(`flag:${v}`)
+        s.flag = v
+      } else throw new Error(`unexpected key ${k}`)
     },
     removeItem: (k: string) => {
-      if (k !== LS_REMOTE_ROOMS_PREVIEW) throw new Error(`unexpected key ${k}`)
-      s.writes.push('remove')
-      s.value = null
+      if (k === LS_REMOTE_ROOMS_PREVIEW) {
+        s.writes.push('remove')
+        s.value = null
+      } else if (k === LS_REMOTE_ROOMS_GRADUATED) {
+        s.writes.push('flag:remove')
+        s.flag = null
+      } else throw new Error(`unexpected key ${k}`)
     },
   }
   return s
@@ -168,6 +190,8 @@ describe('the 0.43.2 migration (Q1)', () => {
 
   it('runs when the store loads: a fresh window on a mac with junk stored reads on, an explicit off stays off', async () => {
     vi.spyOn(navigator, 'platform', 'get').mockReturnValue('MacIntel')
+    // Past the 0.46.3 graduation, so a '0' below is a post-graduation off.
+    localStorage.setItem(LS_REMOTE_ROOMS_GRADUATED, '1')
     localStorage.setItem(LS_REMOTE_ROOMS_PREVIEW, 'junk')
     vi.resetModules()
     const fresh = await import('./remote-rooms-preview')
@@ -217,12 +241,126 @@ describe('the 0.45.5 default flip (Rosson 2026-10-11)', () => {
     }
   })
 
-  it('an explicit off (a stored "0") loads off on every OS and is left as is', async () => {
+  it('an explicit off (a stored "0", after the 0.46.3 graduation) loads off on every OS and is left as is', async () => {
+    localStorage.setItem(LS_REMOTE_ROOMS_GRADUATED, '1')
     for (const [name, platform, ua] of PLATFORMS) {
       localStorage.setItem(LS_REMOTE_ROOMS_PREVIEW, '0')
       expect([name, await loadOn(platform, ua)]).toEqual([name, false])
       expect([name, localStorage.getItem(LS_REMOTE_ROOMS_PREVIEW)]).toEqual([name, '0'])
     }
+  })
+})
+
+describe('the 0.46.3 graduation (Rosson 2026-10-21)', () => {
+  it("resets an Experimental-era '0' exactly once: flag first, then the '0' is removed and it reads on", () => {
+    const s = memStorage('0')
+    expect(graduateRemoteRoomsPreview(s)).toBe('reset')
+    expect(s.writes).toEqual(['flag:1', 'remove'])
+    expect(s.value).toBe(null)
+    expect(s.flag).toBe('1')
+    for (const os of OSES) expect([os, readRemoteRoomsPreview(s, os)]).toEqual([os, true])
+    // A second run (the next load, another window) does nothing.
+    expect(graduateRemoteRoomsPreview(s)).toBe('already')
+    expect(s.writes).toEqual(['flag:1', 'remove'])
+  })
+
+  it("a '0' set after the flag (turned off after graduation) is kept forever", () => {
+    const s = memStorage(null)
+    expect(graduateRemoteRoomsPreview(s)).toBe('marked')
+    expect(s.writes).toEqual(['flag:1'])
+    // The person turns it off after graduation.
+    s.setItem(LS_REMOTE_ROOMS_PREVIEW, '0')
+    for (let i = 0; i < 3; i++) {
+      expect(graduateRemoteRoomsPreview(s)).toBe('already')
+      expect(migrateRemoteRoomsPreview(s)).toBe('kept')
+    }
+    expect(s.value).toBe('0')
+    expect(s.writes).toEqual(['flag:1', 'set:0'])
+    expect(readRemoteRoomsPreview(s, 'mac')).toBe(false)
+  })
+
+  it("never touches '1' (the flag is set, the '1' stays)", () => {
+    const s = memStorage('1')
+    expect(graduateRemoteRoomsPreview(s)).toBe('marked')
+    expect(s.value).toBe('1')
+    expect(s.writes).toEqual(['flag:1'])
+    const done = memStorage('1', '1')
+    expect(graduateRemoteRoomsPreview(done)).toBe('already')
+    expect(done.value).toBe('1')
+    expect(done.writes).toEqual([])
+  })
+
+  it('a missing key stays missing (the default is never written); only the flag is set', () => {
+    const s = memStorage(null)
+    expect(graduateRemoteRoomsPreview(s)).toBe('marked')
+    expect(s.value).toBe(null)
+    expect(s.writes).toEqual(['flag:1'])
+  })
+
+  it("if the flag cannot be written, the '0' is kept (no reset on every load)", () => {
+    const s = memStorage('0')
+    const failing: PreviewStorage = {
+      getItem: (k) => s.getItem(k),
+      setItem: (k) => {
+        throw new Error(`quota: ${k}`)
+      },
+      removeItem: (k) => s.removeItem(k),
+    }
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(graduateRemoteRoomsPreview(failing)).toBe('untouched')
+    expect(s.value).toBe('0')
+    expect(s.writes).toEqual([])
+  })
+
+  it('blocked storage is left alone', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(graduateRemoteRoomsPreview(blocked)).toBe('untouched')
+    expect(graduateRemoteRoomsPreview(null)).toBe('untouched')
+  })
+
+  it('the hosted web client is left alone and still reads off', () => {
+    const features = webFeatures as { multiHost: boolean }
+    expect(features.multiHost).toBe(true)
+    features.multiHost = false
+    try {
+      const s = memStorage('0')
+      expect(graduateRemoteRoomsPreview(s)).toBe('untouched')
+      expect(s.writes).toEqual([])
+      expect(readRemoteRoomsPreview(memStorage(null), 'mac')).toBe(false)
+    } finally {
+      features.multiHost = true
+    }
+  })
+
+  it("runs when the store loads: a pre-0.46.3 '0' loads on once, then a new '0' loads off on every later load", async () => {
+    vi.spyOn(navigator, 'platform', 'get').mockReturnValue('MacIntel')
+    localStorage.setItem(LS_REMOTE_ROOMS_PREVIEW, '0')
+    expect(localStorage.getItem(LS_REMOTE_ROOMS_GRADUATED)).toBe(null)
+    vi.resetModules()
+    const first = await import('./remote-rooms-preview')
+    expect(first.useRemoteRoomsPreviewStore.getState().enabled).toBe(true)
+    expect(localStorage.getItem(LS_REMOTE_ROOMS_PREVIEW)).toBe(null)
+    expect(localStorage.getItem(LS_REMOTE_ROOMS_GRADUATED)).toBe('1')
+
+    // The person turns it off again after graduation, through the toggle.
+    first.useRemoteRoomsPreviewStore.getState().setEnabled(false)
+    expect(localStorage.getItem(LS_REMOTE_ROOMS_PREVIEW)).toBe('0')
+    for (let i = 0; i < 2; i++) {
+      vi.resetModules()
+      const later = await import('./remote-rooms-preview')
+      expect(later.useRemoteRoomsPreviewStore.getState().enabled).toBe(false)
+      expect(localStorage.getItem(LS_REMOTE_ROOMS_PREVIEW)).toBe('0')
+    }
+  })
+
+  it("runs when the store loads: a stored '1' loads on and is untouched", async () => {
+    vi.spyOn(navigator, 'platform', 'get').mockReturnValue('MacIntel')
+    localStorage.setItem(LS_REMOTE_ROOMS_PREVIEW, '1')
+    vi.resetModules()
+    const fresh = await import('./remote-rooms-preview')
+    expect(fresh.useRemoteRoomsPreviewStore.getState().enabled).toBe(true)
+    expect(localStorage.getItem(LS_REMOTE_ROOMS_PREVIEW)).toBe('1')
+    expect(localStorage.getItem(LS_REMOTE_ROOMS_GRADUATED)).toBe('1')
   })
 })
 
@@ -311,8 +449,8 @@ describe('across windows and React', () => {
     document.body.appendChild(el)
     const root = createRoot(el)
     act(() => root.render(createElement(RemoteRoomsPreviewRow)))
-    expect(REMOTE_ROOMS_LABEL).toBe('Open agents from other servers here')
-    expect(el.textContent).toContain('Open agents from other servers here')
+    expect(REMOTE_ROOMS_LABEL).toBe("Open other servers' agents in Home (don't switch servers)")
+    expect(el.textContent).toContain("Open other servers' agents in Home (don't switch servers)")
     expect(el.textContent).toContain('Off: it switches this window to that server.')
     const sw = el.querySelector(`[aria-label="${REMOTE_ROOMS_LABEL}"]`)
     if (!sw) throw new Error('no switch rendered')

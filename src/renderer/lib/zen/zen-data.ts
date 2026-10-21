@@ -50,7 +50,7 @@
 // Conversations (`conversation.open`): Zen NEVER switches the window's server
 // (Z35, vs-live Z54). A row on the window's server selects the primary room;
 // any other row opens its pinned room in place (`homeRooms.open`) whatever
-// "Open agents from other servers here" says; a server below the floor shows
+// "Open other servers' agents in Home" says; a server below the floor shows
 // "Update <server> to message this agent here". The Thread address is
 // resolved like the Agents page resolves it (`resolvePinnedChatCopyableAddress`,
 // vs-live Z52), not the row handle. "Open in Agents" turns Zen off first
@@ -1416,7 +1416,7 @@ export async function openZenConversation(
       workspacePath = ws.path
       projectId = ws.id
     } else {
-      // In place, whatever "Open agents from other servers here" says.
+      // In place, whatever "Open other servers' agents in Home" says.
       const entry = await homeRooms.open(row, current.hostKey)
       if (stale()) return rowFor(row, index, view)
       if (entry.phase !== 'open' || !entry.room) {

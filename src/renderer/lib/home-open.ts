@@ -10,7 +10,7 @@
 //     server's list lands (lib/home-pending-select), then land on Home.
 //     Homes never change.
 //   - Web: there is no switcher, so another server's row has no Open.
-//   - "Open agents from other servers here" on (the default on macOS and
+//   - "Open other servers' agents in Home" on (the default on macOS and
 //     Linux from 0.43.2, `lib/remote-rooms-preview.ts`): a row on another
 //     server opens that server's room in Home's main area without switching
 //     (`stores/home-rooms.ts`). A server below the floor

@@ -1,11 +1,15 @@
-// Home — "Open agents from other servers here" (prd-home-multi-server-client
-// MS55; prd-home-seamless-0432 item 1: Z1, Z2, Z4; Rosson 2026-10-03 Q1, Q2).
+// Home — "Open other servers' agents in Home" (prd-home-multi-server-client
+// MS55; prd-home-seamless-0432 item 1: Z1, Z2, Z4; Rosson 2026-10-03 Q1, Q2;
+// graduated Rosson 2026-10-21).
 //
 // On: a Home row on another server opens that server's room in Home's main
 // area without switching (M4/M5). Off: the row switches the window's server
 // (H15 / P1.1). On by default from 0.43.2 on macOS and Linux, and on every
-// OS (Windows included) from 0.45.5 (Rosson 2026-10-11). The setting stays
-// in Settings → General → Experimental as an opt-out.
+// OS (Windows included) from 0.45.5 (Rosson 2026-10-11). From 0.46.3 it is
+// no longer experimental: the row moved from Settings → General →
+// Experimental to General → Workspaces ("Open other servers' agents in
+// Home"), and the Experimental tab is gone. It stays a toggle, so people
+// can still turn it off.
 //
 // Per-computer view preference, never a daemon setting: localStorage
 // `k2.homeRemoteRooms.v1`, like `k2.workspaceSwitchFocus`. Every window on
@@ -17,7 +21,9 @@
 //   | stored value          | reads as                                       |
 //   |-----------------------|------------------------------------------------|
 //   | `'1'`                 | on (this person turned it on), on every OS     |
-//   | `'0'`                 | off (this person turned it off), on every OS   |
+//   | `'0'`                 | off (this person turned it off), on every OS;  |
+//   |                       | a `'0'` from before 0.46.3 is reset once (the  |
+//   |                       | graduation, below)                             |
 //   | missing               | the default: on, on every OS (0.45.5; before   |
 //   |                       | that Windows and an unknown OS read off)       |
 //   | blocked storage       | the platform default; a toggle holds for this  |
@@ -37,12 +43,36 @@
 // `'true'`, junk) was never written by the toggle, read as off before
 // 0.43.2, and is not anyone's choice, so it is removed: that computer then
 // reads the platform default, like one that never touched the switch.
+//
+// The graduation (`graduateRemoteRoomsPreview`, 0.46.3, Rosson 2026-10-21;
+// runs once per computer, at load, after the migration). A `'0'` stored
+// while the switch sat under Experimental was an opt-out of an experiment,
+// not of the feature, so it is reset once:
+//
+//   | graduation flag `k2.homeRemoteRooms.graduated.v1` | what happens    |
+//   |---------------------------------------------------|-----------------|
+//   | missing, `'0'` stored                             | `'0'` removed   |
+//   |                                                   | (reads on), flag|
+//   |                                                   | set             |
+//   | missing, `'1'` or nothing stored                  | flag set only   |
+//   | present                                           | nothing, ever:  |
+//   |                                                   | a `'0'` set     |
+//   |                                                   | after it is kept|
+//   | blocked storage / the hosted web client           | nothing         |
+//
+// The flag is written before the `'0'` is removed: if the flag cannot be
+// written, the `'0'` stays, so a reset can never repeat on every load.
+// `'1'` is never touched.
 
 import { create } from 'zustand'
 import { webFeatures } from '@/web/features'
 import { desktopOsFromNavigator, type DesktopOs } from '@/lib/desktop-chrome'
 
 export const LS_REMOTE_ROOMS_PREVIEW = 'k2.homeRemoteRooms.v1'
+
+/** Set once this computer has had its pre-0.46.3 (Experimental) off reset;
+ *  see the graduation table in the header. */
+export const LS_REMOTE_ROOMS_GRADUATED = 'k2.homeRemoteRooms.graduated.v1'
 
 /**
  * The default for people who never touched the switch, per OS. Q2 (Rosson
@@ -119,6 +149,33 @@ export function migrateRemoteRoomsPreview(storage: PreviewStorage | null = defau
   }
 }
 
+export type RemoteRoomsGraduation = 'reset' | 'marked' | 'already' | 'untouched'
+
+/** 0.46.3 graduation (see the header): once per computer, reset an
+ *  Experimental-era `'0'` so it reads the default (on). `'reset'` removed a
+ *  `'0'`; `'marked'` only set the flag; `'already'` found the flag;
+ *  `'untouched'` is blocked storage or the hosted web client. */
+export function graduateRemoteRoomsPreview(
+  storage: PreviewStorage | null = defaultStorage(),
+): RemoteRoomsGraduation {
+  if (!webFeatures.multiHost) return 'untouched'
+  if (!storage) return 'untouched'
+  try {
+    if (storage.getItem(LS_REMOTE_ROOMS_GRADUATED) !== null) return 'already'
+    const raw = storage.getItem(LS_REMOTE_ROOMS_PREVIEW)
+    // Flag first: if it cannot be written, nothing is reset (no reset loop).
+    storage.setItem(LS_REMOTE_ROOMS_GRADUATED, '1')
+    if (raw === '0') {
+      storage.removeItem(LS_REMOTE_ROOMS_PREVIEW)
+      return 'reset'
+    }
+    return 'marked'
+  } catch (err) {
+    console.warn('[remote-rooms-preview] graduation failed:', err)
+    return 'untouched'
+  }
+}
+
 interface RemoteRoomsPreviewState {
   enabled: boolean
   setEnabled(next: boolean): void
@@ -126,6 +183,7 @@ interface RemoteRoomsPreviewState {
 
 function initialEnabled(): boolean {
   migrateRemoteRoomsPreview()
+  graduateRemoteRoomsPreview()
   return readRemoteRoomsPreview()
 }
 

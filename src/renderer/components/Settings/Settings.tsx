@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useSettingsStore } from '@/stores/settings'
-import type { SettingsSection } from '@/stores/settings'
+import type { GeneralSubTab, SettingsSection } from '@/stores/settings'
 import { SectionErrorBoundary } from './SectionErrorBoundary'
 import { SettingsSearchModal } from './SettingsSearchModal'
 import type { SettingEntry } from './searchManifest'
@@ -384,12 +384,11 @@ export default function Settings(): React.JSX.Element {
     // General sub-tabs: search entries carry a group so we open the right tab
     // (e.g. Canonical Agent Flow → Workspaces) before scrolling to the row.
     if (entry.section === 'general' && entry.group) {
-      const subByGroup: Record<string, 'general' | 'workspaces' | 'server' | 'local-llm' | 'experimental'> = {
+      const subByGroup: Record<string, GeneralSubTab> = {
         General: 'general',
         Workspaces: 'workspaces',
         Server: 'server',
         'Local LLM': 'local-llm',
-        Experimental: 'experimental',
       }
       const sub = subByGroup[entry.group]
       if (sub) useSettingsStore.setState({ generalSubTab: sub })

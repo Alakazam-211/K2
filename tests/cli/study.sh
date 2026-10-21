@@ -136,7 +136,7 @@ for needle in '"boxServices": [{"name": "sew-api"}]' "k2 app box-service request
     assert_contains "apps names $needle" "$apps_out" "$needle"
 done
 dep_out="$("$K2" study app-deploys)"
-for needle in "BOX SERVICES" "K2_BOX_SEW_API=127.0.0.1:8470" "k2 app box-service revoke" "5432 (Postgres)"; do
+for needle in "BOX SERVICES" "K2_BOX_SEW_API=127.0.0.1:8470" "k2 app box-service revoke" "5432-5449 (Postgres)"; do
     assert_contains "app-deploys names $needle" "$dep_out" "$needle"
 done
 echo "== k2 study app-deploys: identity, seal key, requires (0.46.3) =="

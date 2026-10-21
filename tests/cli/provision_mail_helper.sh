@@ -56,7 +56,9 @@ ok "7b: no pg helper copy, no unchecked sudoers, RAM fence via k2-root-helper"
 L_PGEXIST="$(line_of 'PG_EXISTING=""')"
 L_APT="$(line_of 'apt-get install -y -qq postgresql')"
 [ -n "$L_PGEXIST" ] && [ -n "$L_APT" ] && [ "$L_PGEXIST" -lt "$L_APT" ] || fail "7b must look for an existing cluster before apt"
-ADOPT="$(sed -n '/^if \[ "\$WITH_DB" = 1 \] && \[ -n "\$PG_EXISTING" \]; then$/,/^elif \[ "\$WITH_DB" = 1 \]; then$/p' "$PROVISION")"
+# The adopt branch ends at the next branch of that if (0.46.3: the PG 17
+# helper branch, then the distro branch).
+ADOPT="$(sed -n '/^if \[ "\$WITH_DB" = 1 \] && \[ -n "\$PG_EXISTING" \]; then$/,/^elif /p' "$PROVISION")"
 [ -n "$ADOPT" ] || fail "7b adopt branch not found"
 if printf '%s\n' "$ADOPT" | grep -Ev '^[[:space:]]*(#|log )' | grep -Eq 'apt-get|initdb|pg_createcluster|listen_addresses|sed -i|install-ram-fence|systemctl'; then
 	fail "the adopt branch must not install, init, reconfigure or fence an existing cluster"

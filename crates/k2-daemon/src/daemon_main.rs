@@ -397,10 +397,6 @@ async fn async_main() {
     // installed, K2 prepares the box for walled Apps by itself (after every
     // update = every boot; ~3 min in, then daily). Linux only.
     crate::apps::auto_prepare::spawn();
-    // 0.46.3 box usage (prd-app-resources-disk-guard-v1 A1/A4/A5): the
-    // scanner, the 60 s disk watch with its notices, and the daily Seed
-    // sweep. Headless, every platform; mode `off` = no notices, no sweep.
-    crate::apps::disk_watch::spawn();
     // 0.40.43 (1c): same deal for the public /v1 API switch — a daemon that
     // boots with the Settings toggle already ON must serve /v1 immediately.
     // misc_routes::api_enabled() reads this mirror per request; the K2_API
@@ -512,6 +508,12 @@ async fn async_main() {
         log_debug!("[daemon] FATAL: db::init_database: {e}");
         std::process::exit(2);
     }
+    // 0.46.3 box usage (prd-app-resources-disk-guard-v1 A1/A4/A5): the
+    // scanner, the 60 s disk watch with its notices, and the daily Seed
+    // sweep. Own threads (never the ticker), headless, every platform;
+    // mode `off` = no notices, no sweep. MUST run after `init_database`:
+    // the scanner reads `db::shared()` at once.
+    crate::apps::disk_watch::spawn();
 
     // Viewer role removal (prd-remove-viewer-role-v1.md RV3): rewrite any
     // stored `"role":"viewer"` account as a DISABLED Member flagged

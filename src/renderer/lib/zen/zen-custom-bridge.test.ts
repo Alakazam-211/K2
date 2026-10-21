@@ -536,6 +536,12 @@ describe('TUW3.4 / TUWA7: the guest projection', () => {
     // answeredAt is not part of the widget shape (closed: only catalog fields cross).
     const c = (answered?.doc as unknown as { choice: Record<string, unknown> }).choice
     expect(Object.keys(c).sort()).toEqual(['allow_custom', 'answer', 'answeredBy', 'expiresAt', 'options', 'prompt', 'status'])
+    // 0.46.3: an answered settings card's result line crosses (catalog field
+    // resultMessage); a card without one keeps the exact shape above.
+    const kept = projectZenThreadItem(card({ status: 'answered', answer: 'Go', resultMessage: 'Kept as yours.' }))
+    const kc = (kept?.doc as unknown as { choice: Record<string, unknown> }).choice
+    expect(kc.resultMessage).toBe('Kept as yours.')
+    expect(Object.keys(kc).sort()).toEqual(['allow_custom', 'answer', 'answeredBy', 'expiresAt', 'options', 'prompt', 'resultMessage', 'status'])
     expect(projectZenThreadItem(card({ status: 'answered', answeredBy: { kind: 'guest', login: 'patty', name: 'Spoof' } }))?.doc).toMatchObject({
       choice: { answeredBy: { kind: 'guest', login: 'patty', name: null } },
     })

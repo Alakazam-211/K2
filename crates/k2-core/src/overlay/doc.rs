@@ -47,6 +47,11 @@ pub struct CardAction {
     pub params: serde_json::Value,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub dedupe: String,
+    /// What the action did, once a person answered: `{message, ...}`.
+    /// Clients show `message` under the chosen option ("Kept as yours.
+    /// Undo in Settings → Gardens → Local Data."). None while pending.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]

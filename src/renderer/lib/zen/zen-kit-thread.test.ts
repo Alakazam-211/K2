@@ -232,6 +232,23 @@ describe('k2-thread@1: messages', () => {
     expect(doc.querySelector('[data-kind="secret"]')?.textContent).toContain('K2’s own Thread')
   })
 
+  it('0.46.3: an answered settings card shows what K2 did under the answer; other cards look as before', () => {
+    const f = fakeK2()
+    const { win, root, doc } = boot(f)
+    win.K2Thread.mount(root, { address: AGENT })
+    const answered = (seq: number, extra: Record<string, unknown>) =>
+      msg(seq, '', false, {
+        kind: 'choice',
+        choice: { prompt: 'Keep it?', options: [{ label: 'Keep as mine' }, { label: 'Leave it' }], allow_custom: false, status: 'answered', answer: 'Keep as mine', ...extra },
+      })
+    f.threadSubs[0].cb(view([answered(3, { resultMessage: 'Kept as yours. Undo in Settings → Gardens → Local Data.' }), answered(4, {})]))
+    const results = [...doc.querySelectorAll('.k2t-result')]
+    expect(results.map((r) => r.textContent)).toEqual(['Kept as yours. Undo in Settings → Gardens → Local Data.'])
+    const plain = doc.querySelector('[data-seq="4"]') ?? [...doc.querySelectorAll('.k2t-status')][1]?.parentElement
+    expect(plain?.querySelector('.k2t-result')).toBeNull()
+    expect([...doc.querySelectorAll('.k2t-status')].map((s) => s.textContent)).toEqual(['Answered: Keep as mine', 'Answered: Keep as mine'])
+  })
+
   it('attachments: a data: image inline, other files as chips; onOpenFile makes them buttons', () => {
     const f = fakeK2()
     const { win, root, doc } = boot(f)

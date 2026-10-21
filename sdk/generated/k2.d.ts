@@ -204,6 +204,8 @@ export interface ChoiceCard {
   readonly expiresAt?: number | null
   readonly options: ChoiceOption[]
   readonly prompt: string
+  /** A settings card the person answered: what K2 did (Kept as yours. Undo in Settings → Gardens → Local Data.), shown under the chosen option. Absent on every other card. */
+  readonly resultMessage?: string
   readonly status: string
 }
 

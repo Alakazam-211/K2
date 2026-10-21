@@ -88,6 +88,10 @@ export interface OverlayChoice {
   /** Unix seconds a still-pending card expires (the daemon turns it
    *  `expired`; never a client timer). Absent: open until answered. */
   expiresAt?: number | null
+  /** 0.46.3, a settings (action) card the person answered: what K2 did,
+   *  from the doc's `choice.action.result.message` ("Kept as yours. Undo
+   *  in Settings → Gardens → Local Data."). Absent on every other card. */
+  resultMessage?: string
 }
 
 export interface OverlaySecret {
@@ -554,7 +558,7 @@ export function applyOverlayFrame(
   const seq = overlaySeq(frame.seq)
   const id = typeof frame.id === 'string' ? frame.id : ''
   if (!id) return items
-  const doc = frame.doc
+  const doc = withChoiceResult(frame.doc)
   if (!doc || isChatterDoc(doc)) return items
   const existing = items.findIndex((it) => it.id === id)
   if (existing >= 0) {
@@ -874,7 +878,29 @@ function coerceChoice(raw: unknown): OverlayChoice | null {
     status: typeof c.status === 'string' ? c.status : 'pending',
     answer: typeof c.answer === 'string' ? c.answer : null,
     ...closedExtras(c),
+    ...actionResultMessage(c),
   }
+}
+
+/** A live frame's doc (frames are not coerced like snapshot rows): a
+ *  settings card gains `choice.resultMessage` from `action.result.message`;
+ *  every other doc is returned as is (the same object). */
+function withChoiceResult(doc: OverlayDoc | null | undefined): OverlayDoc | null | undefined {
+  const choice = doc?.choice as (OverlayChoice & Record<string, unknown>) | null | undefined
+  if (!doc || !choice || typeof choice !== 'object') return doc
+  const extra = actionResultMessage(choice)
+  return extra.resultMessage ? { ...doc, choice: { ...choice, ...extra } } : doc
+}
+
+/** `resultMessage` from `action.result.message` when the daemon sent one
+ *  (left off otherwise, so a card without an action coerces as before). */
+function actionResultMessage(src: Record<string, unknown>): Pick<OverlayChoice, 'resultMessage'> {
+  const action = src.action
+  if (!action || typeof action !== 'object' || Array.isArray(action)) return {}
+  const result = (action as Record<string, unknown>).result
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return {}
+  const message = (result as Record<string, unknown>).message
+  return typeof message === 'string' && message.trim() ? { resultMessage: message.trim() } : {}
 }
 
 /** `answeredBy` / `answeredAt` / `expiresAt` when the daemon sent them

@@ -109,6 +109,7 @@
     '.k2t-md code,.k2t-md pre{background:color-mix(in srgb,currentColor 14%,transparent)}.k2t-md pre{padding:6px 8px;overflow:auto}',
     '.k2t-bubble-me a{color:inherit;text-decoration:underline}',
     '.k2t-status{margin-top:4px;font-size:.85em;opacity:.8}',
+    '.k2t-result{margin-top:2px;font-size:.75em;color:var(--k2t-muted)}',
     '.k2t-meta{padding:0 6px;font-size:.72em;color:var(--k2t-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}',
     '.k2t-opts,.k2t-custom{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}.k2t-custom{flex-wrap:nowrap}',
     '.k2t-chip{padding:5px 12px;border:1px solid color-mix(in srgb,currentColor 40%,transparent);border-radius:999px;background:transparent;color:inherit;font:inherit;line-height:1.2;cursor:pointer}',
@@ -552,6 +553,10 @@
               }
             } else {
               bubble.appendChild(el('div', 'k2t-status', c.status === 'voided' ? 'Voided' : 'Answered' + (c.answer ? ': ' + c.answer : '')))
+              // A settings card: what K2 did, under the chosen option.
+              if (c.status === 'answered' && typeof c.resultMessage === 'string' && c.resultMessage) {
+                bubble.appendChild(el('div', 'k2t-result', c.resultMessage))
+              }
             }
           }
         }

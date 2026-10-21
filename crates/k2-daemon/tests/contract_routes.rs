@@ -123,8 +123,10 @@ fn exposure_counts_are_pinned() {
     // guests.logout, guests.refresh, guests.devices, guests.revokeDevice,
     // app.info, password.forgot and password.reset (its thread.catchup and
     // thread.attachmentGet are Thread parity's rows above).
+    // app-room-stream (0.46.3, catalog v19): + the thread.stream socket (app)
+    // and the Garden's thread.inbox (widget, a registered bridge row).
     let garden_local = c.verbs_exposed_to(Exposure::GardenLocal).len();
-    assert_eq!((widget, app, garden_local), (29, 84, 33), "per-exposure verb counts (widget, app, garden-local)");
+    assert_eq!((widget, app, garden_local), (30, 85, 33), "per-exposure verb counts (widget, app, garden-local)");
     let both: Vec<&str> = c
         .verbs
         .iter()
@@ -156,8 +158,8 @@ fn exposure_counts_are_pinned() {
     assert_eq!(c.catalog_version, 19);
     assert_eq!(
         c.verbs.len(),
-        150,
-        "today's 37 bridge verbs plus the frame rows theme.changed, canvas.setHitRegions, window.startDrag, sources.*, the 15 Garden data rows, the 66 app rows (5 on both transports) and widget.self, plus Thread parity 0.46.3's 4 widget and 5 app rows, plus thread.mute, plus App project chat's 5 app rows, plus App mobile access's 7 app rows (0.46.3)"
+        152,
+        "today's 38 bridge verbs (thread.inbox joined in 0.46.3) plus the frame rows theme.changed, canvas.setHitRegions, window.startDrag, sources.*, the 15 Garden data rows, the 66 app rows (5 on both transports) and widget.self, plus Thread parity 0.46.3's 4 widget and 5 app rows, plus thread.mute, plus App project chat's 5 app rows, plus App mobile access's 7 app rows, plus app-room-stream's thread.stream app row (0.46.3)"
     );
 }
 
@@ -276,8 +278,8 @@ fn generated_zen_verbs_holds_exactly_the_bridge_rows() {
         }
     }
     // Today's 37 plus Thread parity 0.46.3's thread.attachment, thread.open,
-    // thread.links and thread.pickFiles.
-    assert_eq!(generated.len(), 41);
+    // thread.links and thread.pickFiles, plus app-room-stream's thread.inbox.
+    assert_eq!(generated.len(), 42);
 }
 
 // ── TUWA3: no GET side effects, headless ────────────────────────────────

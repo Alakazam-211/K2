@@ -193,6 +193,16 @@ fn features(r: &Resp) -> Vec<String> {
         .collect()
 }
 
+/// Poll `cond` for up to 10 s (the global flip syncs teaching on its own
+/// thread); fail loudly with `what` when it never holds.
+async fn wait_for(cond: impl Fn() -> bool, what: &str) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !cond() {
+        assert!(std::time::Instant::now() < deadline, "timed out: {what}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 fn audit_lines(event: &str) -> Vec<Value> {
     k2_core::auth_audit::tail(500)
         .expect("read the access audit")
@@ -234,6 +244,9 @@ async fn the_gate_follows_both_switches_and_off_is_today() {
         )
         .unwrap();
     }
+    let skill_dir = k2_core::workspace_dot_dir(&ws_path)
+        .join("skills")
+        .join(k2_core::permission::SKILL_DIR);
     let sid = SessionId::new();
     let passport = k2_daemon::session_token::mint_session_token(
         &sid,
@@ -322,6 +335,11 @@ async fn the_gate_follows_both_switches_and_off_is_today() {
         "no flip, no permission frame"
     );
 
+    // Server on, agent off: still no teaching for this agent (the flip's
+    // sync runs on its own thread; give it the same time the waits below do).
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(!skill_dir.exists(), "no k2-permissions skill while the agent's own switch is off");
+
     // ── 3. on: the rows are live (agent switch still off) ─────────────
     let r = tcp(port, "POST", "/cli/permission/request", Some(OWNER), Some("{}")).await;
     assert_ne!(r.body, r#"{"error":"method not allowed for this route"}"#, "the 405 guard admits it while on");
@@ -352,6 +370,8 @@ async fn the_gate_follows_both_switches_and_off_is_today() {
     assert_eq!(json(&r)["agentsCanRequestPermissions"], true);
     assert!(k2_core::workspace::settings::agents_can_request_permissions(&ws_id));
     assert!(k2_core::permission::gate::enabled_for(&ws_id), "both on");
+    // The agent's teaching follows its switch at once (lane C's skill).
+    assert!(skill_dir.join("SKILL.md").is_file(), "the agent switch writes the k2-permissions skill");
     let r = tcp(port, "POST", "/cli/agent-access/set", Some(OWNER), Some(r#"{"toggle":"nope","workspace":"pgi-billing","value":true}"#)).await;
     assert!(json(&r).to_string().contains("'permission_cards'"), "the toggle list names it: {}", r.body);
     assert!(
@@ -375,6 +395,16 @@ async fn the_gate_follows_both_switches_and_off_is_today() {
     assert!(!features(&r).contains(&"permission-cards-v1".to_string()));
     let again = off_matrix(port, tunnel, &sock, &passport, &callers).await;
     assert_eq!(again, off, "server off with the agent on answers exactly as before any switch was touched");
+    // The global flip syncs every workspace's teaching (off its own thread).
+    wait_for(|| !skill_dir.exists(), "the global switch off removes the k2-permissions skill").await;
+    let r = tcp(port, "POST", "/cli/settings/update", Some(OWNER), Some(r#"{"permissionCards":true}"#)).await;
+    assert!(r.status_line.contains("200"), "{}", r.body);
+    wait_for(|| skill_dir.join("SKILL.md").is_file(), "the global switch on writes it back (the agent's is on)").await;
+    let r = tcp(port, "POST", "/cli/settings/update", Some(OWNER), Some(r#"{"permissionCards":false}"#)).await;
+    assert!(r.status_line.contains("200"), "{}", r.body);
+    wait_for(|| !skill_dir.exists(), "and off removes it again").await;
+    let again = off_matrix(port, tunnel, &sock, &passport, &callers).await;
+    assert_eq!(again, off);
     // And with the agent's switch back off.
     let r = tcp(port, "POST", "/cli/agent-access/set", Some(OWNER), Some(&set(false))).await;
     assert!(r.status_line.contains("200"), "{}", r.body);

@@ -1430,6 +1430,11 @@ fn handle_access(
         if !value {
             crate::permission::answer::close_for_switch_off(Some(&ws.id));
         }
+        // This agent's teaching follows its switch (§11.4, lane C): the
+        // `k2-permissions` skill and the AGENTS.md pointer, written only
+        // while both switches are on. One workspace, so inline (this
+        // handler already runs on the blocking pool).
+        k2_core::workspace::skill_regen::sync_permission_teaching(&ws.path);
         k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
             k2_core::permission::audit_event::SWITCH,
             &caller.audit_user(),

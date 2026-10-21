@@ -53,7 +53,12 @@ fn cred(tag: &str) -> Vec<u8> {
 #[derive(Default)]
 struct FakeVault {
     m: Mutex<HashMap<(String, String), (SealKind, Vec<u8>)>>,
+    /// Every call fails (a locked / closed vault).
     broken: bool,
+    /// The write "succeeds" but stores a corrupted copy (read-back mismatch).
+    corrupts: bool,
+    /// The write "succeeds" but stores nothing (a crash after the call).
+    drops: bool,
 }
 
 impl Sealer for FakeVault {
@@ -61,7 +66,14 @@ impl Sealer for FakeVault {
         if self.broken {
             return Err("vault: locked".into());
         }
-        self.m.lock().unwrap().insert((p.into(), i.into()), (k, b.to_vec()));
+        if self.drops {
+            return Ok(());
+        }
+        let mut stored = b.to_vec();
+        if self.corrupts {
+            stored.truncate(stored.len() / 2);
+        }
+        self.m.lock().unwrap().insert((p.into(), i.into()), (k, stored));
         Ok(())
     }
     fn unseal(&self, p: &str, i: &str) -> Result<Option<Vec<u8>>, String> {
@@ -193,6 +205,72 @@ fn a_closed_vault_keeps_the_sign_in_unsealed_and_says_so() {
     assert_eq!(done.state, "signed_in");
     assert!(!done.sealed, "must report sealed=false, not pretend");
     assert!(slot_has_plaintext(Tool::Claude, &item.id), "the sign-in is kept, in its private folder");
+}
+
+/// Crash in the middle of a seal: whatever goes wrong between the vault
+/// write and the wipe, the plaintext login stays, and the item says it
+/// isn't sealed.
+#[test]
+fn a_seal_that_cannot_be_verified_never_wipes_the_plaintext() {
+    let _h = Home::new();
+    let conn = db();
+    for (name, v) in [
+        ("vault write fails", FakeVault { broken: true, ..Default::default() }),
+        ("read-back mismatch", FakeVault { corrupts: true, ..Default::default() }),
+        ("write lost", FakeVault { drops: true, ..Default::default() }),
+    ] {
+        let item = create(&conn, "p-alice", item_type::LLM_SUBSCRIPTION, "claude", name.replace(' ', "-").as_str(), None).unwrap();
+        let path = store::slot_cred_path(Tool::Claude, &item.id);
+        store::write_private(&path, &cred("keep")).unwrap();
+        set_state(&conn, &item.id, "signed_in", None).unwrap();
+        // Pretend an earlier pass claimed it sealed: the failed seal corrects it.
+        conn.execute("UPDATE person_wallet_items SET sealed = 1 WHERE id = ?1", rusqlite::params![item.id]).unwrap();
+        let fresh = get(&conn, &item.id).unwrap().unwrap();
+        let e = seal_slot(&conn, &v, &fresh).unwrap_err();
+        if name != "vault write fails" {
+            assert_eq!(e.code(), "seal_unverified", "{name}: {e}");
+        }
+        assert_eq!(std::fs::read(&path).unwrap(), cred("keep"), "{name}: the plaintext login is kept");
+        assert!(!get(&conn, &item.id).unwrap().unwrap().sealed, "{name}: sealed says false");
+        // A spawn still works from the kept plaintext.
+        unseal_into_slot(&v, &fresh).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), cred("keep"));
+    }
+}
+
+#[test]
+fn a_verified_seal_overwrites_then_unlinks_and_reconcile_follows_the_facts() {
+    let _h = Home::new();
+    let conn = db();
+    let v = FakeVault::default();
+    let item = signed_in_sub(&conn, &v, "p-alice", "work", "a");
+    assert!(item.sealed);
+    assert!(!store::slot_cred_path(Tool::Claude, &item.id).exists());
+    // overwrite_then_unlink zeroes before unlinking (a hard link keeps the
+    // inode to look at).
+    let p = slot_dir(Tool::Claude, &item.id).join("probe");
+    let witness = slot_dir(Tool::Claude, &item.id).join("probe-link");
+    std::fs::write(&p, format!("{MARKER}-plain")).unwrap();
+    std::fs::hard_link(&p, &witness).unwrap();
+    overwrite_then_unlink(&p).unwrap();
+    assert!(!p.exists());
+    let left = std::fs::read(&witness).unwrap();
+    assert!(left.iter().all(|b| *b == 0) && !left.is_empty(), "the bytes were overwritten before unlink");
+    // The column disagrees with the facts (e.g. a crash): reconcile fixes it.
+    conn.execute("UPDATE person_wallet_items SET sealed = 0 WHERE id = ?1", rusqlite::params![item.id]).unwrap();
+    assert_eq!(reconcile_sealed(&conn, &v).unwrap(), 1);
+    assert!(get(&conn, &item.id).unwrap().unwrap().sealed, "vault holds it, no plaintext → sealed");
+    // Plaintext back in the slot (a running session) → not sealed.
+    unseal_into_slot(&v, &item).unwrap();
+    assert_eq!(reconcile_sealed(&conn, &v).unwrap(), 1);
+    assert!(!get(&conn, &item.id).unwrap().unwrap().sealed);
+    // Nothing in the vault → not sealed; a closed vault changes nothing.
+    let broken = FakeVault { broken: true, ..Default::default() };
+    assert_eq!(reconcile_sealed(&conn, &broken).unwrap(), 0);
+    // An API key whose read-back fails is never saved.
+    let corrupt = FakeVault { corrupts: true, ..Default::default() };
+    assert!(add_api_key(&conn, &corrupt, "p-alice", "gemini", "k", "sk-0123456789abcdef", None).is_err());
+    assert!(list_for(&conn, "p-alice").unwrap().iter().all(|i| !i.is_api_key()), "no half-saved key");
 }
 
 #[test]

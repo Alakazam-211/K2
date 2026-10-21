@@ -805,6 +805,22 @@ pub fn lifecycle(now: i64) -> (usize, usize, usize, usize) {
     (dormant, woke, deleted, stopped)
 }
 
+/// Reconcile every item's `sealed` flag with the vault and the slot.
+pub fn reconcile() -> usize {
+    match with_conn(|c| pw::reconcile_sealed(c, &VaultSealer)) {
+        Ok(n) => {
+            if n > 0 {
+                k2_core::log_debug!("[wallet] reconciled the sealed flag of {n} item(s)");
+            }
+            n
+        }
+        Err(e) => {
+            k2_core::log_debug!("[wallet] reconcile: {}", e.code());
+            0
+        }
+    }
+}
+
 /// The sweep loop: re-seal and lifecycle every minute, keep-warm every 30
 /// minutes. `K2_LLM_ACCOUNTS_LOOP=0` turns it off (with the server loop).
 pub fn spawn_loop() {
@@ -813,9 +829,13 @@ pub fn spawn_loop() {
     }
     let _ = std::thread::Builder::new().name("person-wallet".into()).spawn(|| {
         let mut last_warm = Instant::now();
+        // Boot: the `sealed` column follows the facts (vault item present,
+        // no plaintext), whatever a crash mid-seal left behind.
+        reconcile();
         loop {
             std::thread::sleep(SWEEP_EVERY);
             let _ = reseal_idle();
+            reconcile();
             let _ = lifecycle(chrono::Utc::now().timestamp());
             if last_warm.elapsed() >= WARM_EVERY {
                 keep_warm(&rt::DaemonRefresher);

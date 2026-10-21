@@ -266,6 +266,10 @@ pub fn count_wrap(union: &str) -> Option<String> {
 /// The structure a move must carry, as one JSON object (§6.2 step 7):
 /// extensions, RLS flags, policies, relation / schema / function /
 /// default ACLs and owners, sequences, the database ACL and owner.
+/// A NULL ACL reads as its default (`acldefault`): `GRANT … TO PUBLIC`
+/// on a function writes the default out explicitly, and pg_dump leaves
+/// an ACL equal to the default unwritten (container drill 2026-10-20:
+/// every K2 database's `k2.*` helpers).
 pub fn fingerprint_sql() -> String {
     format!(
         "SELECT json_build_object(\
@@ -275,19 +279,19 @@ pub fn fingerprint_sql() -> String {
          'policies', (SELECT coalesce(json_object_agg(schemaname || '.' || tablename || '.' || policyname, \
                  json_build_array(permissive, roles::text, cmd, qual, with_check)), '{{}}'::json) FROM pg_policies), \
          'relations', (SELECT coalesce(json_object_agg(n.nspname || '.' || c.relname, json_build_array(c.relkind, pg_get_userbyid(c.relowner), \
-                 ARRAY(SELECT x::text FROM unnest(c.relacl) x ORDER BY 1))), '{{}}'::json) \
+                 ARRAY(SELECT x::text FROM unnest(coalesce(c.relacl, acldefault(CASE WHEN c.relkind = 'S' THEN 's' ELSE 'r' END::\"char\", c.relowner))) x ORDER BY 1))), '{{}}'::json) \
                  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f') AND {USER_NS} \
                  AND NOT EXISTS (SELECT 1 FROM pg_depend dp WHERE dp.classid = 'pg_class'::regclass AND dp.objid = c.oid AND dp.deptype = 'e')), \
          'schemas', (SELECT coalesce(json_object_agg(n.nspname, json_build_array(pg_get_userbyid(n.nspowner), \
-                 ARRAY(SELECT x::text FROM unnest(n.nspacl) x ORDER BY 1))), '{{}}'::json) FROM pg_namespace n WHERE {USER_NS}), \
+                 ARRAY(SELECT x::text FROM unnest(coalesce(n.nspacl, acldefault('n', n.nspowner))) x ORDER BY 1))), '{{}}'::json) FROM pg_namespace n WHERE {USER_NS}), \
          'functions', (SELECT coalesce(json_object_agg(p.oid::regprocedure::text, json_build_array(pg_get_userbyid(p.proowner), p.prosecdef, \
-                 ARRAY(SELECT x::text FROM unnest(p.proacl) x ORDER BY 1))), '{{}}'::json) \
+                 ARRAY(SELECT x::text FROM unnest(coalesce(p.proacl, acldefault('f', p.proowner))) x ORDER BY 1))), '{{}}'::json) \
                  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE {USER_NS} \
                  AND NOT EXISTS (SELECT 1 FROM pg_depend dp WHERE dp.classid = 'pg_proc'::regclass AND dp.objid = p.oid AND dp.deptype = 'e')), \
          'defaultAcls', (SELECT coalesce(json_object_agg(pg_get_userbyid(defaclrole) || ':' || coalesce(defaclnamespace::regnamespace::text, '') || ':' || defaclobjtype::text, \
                  ARRAY(SELECT x::text FROM unnest(defaclacl) x ORDER BY 1)), '{{}}'::json) FROM pg_default_acl), \
          'sequences', (SELECT coalesce(json_object_agg(schemaname || '.' || sequencename, last_value), '{{}}'::json) FROM pg_sequences), \
-         'database', (SELECT json_build_array(pg_get_userbyid(datdba), ARRAY(SELECT x::text FROM unnest(datacl) x ORDER BY 1)) \
+         'database', (SELECT json_build_array(pg_get_userbyid(datdba), ARRAY(SELECT x::text FROM unnest(coalesce(datacl, acldefault('d', datdba))) x ORDER BY 1)) \
                  FROM pg_database WHERE datname = current_database())\
          );\n"
     )

@@ -353,6 +353,10 @@ pub fn slice_name(slot: Slot) -> String {
     }
 }
 
+/// What `tenant.prepare` / `tenant.wipe` run (the wall isn't offered
+/// without them).
+pub const TENANT_TOOLS: &[&str] = &["setfacl", "useradd", "groupadd", "userdel", "groupdel"];
+
 /// `no-lan` (V62): every non-public range through which a job could reach
 /// a machine on the LAN, the tailnet or a multicast group. Loopback stays.
 pub const NO_LAN_DENY: &[&str] = &[
@@ -678,7 +682,84 @@ impl Executor {
                 format!("systemd {v} is older than {MIN_SYSTEMD_TENANT}: tenant jobs need ProtectProc=invisible"),
             ));
         }
-        Ok(())
+        for t in TENANT_TOOLS {
+            if find_program(t).is_none() {
+                return Err(refuse(share::codes::TEAM_NEEDS_TENANT_WALL, format!("{t} not found (tenant users and ACLs need it)")));
+            }
+        }
+        self.wall_selftest().map_err(|e| refuse(share::codes::TEAM_NEEDS_TENANT_WALL, format!("the tenant wall's self-test failed: {e}")))
+    }
+
+    /// The wall's runtime check, as root, once per executor process (only
+    /// a pass is remembered): a throwaway unit with the tenant template's
+    /// sandbox (`ProtectProc=invisible`, `PrivateIPC`, a private
+    /// `/dev/shm`, the `no-lan` address filter, `ProtectSystem=strict`)
+    /// starts as the owner's job user, and from inside it PID 1 (root's)
+    /// is invisible and `/dev/shm` is its own. A kernel without hidepid
+    /// (< 5.8), cgroup BPF or IPC namespaces, or a systemd that drops a
+    /// property, fails it, and the node offers no `tenant-wall`.
+    pub fn wall_selftest(&self) -> Result<(), String> {
+        static PASSED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+        if PASSED.get().is_some() {
+            return Ok(());
+        }
+        let ids = self.job_ids(OWNER_SLOT).map_err(|e| e.message)?;
+        let prog = find_program("systemd-run").ok_or("systemd-run not found")?;
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let unit = format!("{UNIT_PREFIX}selftest-{}-{}.service", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+        let mut a: Vec<String> = vec![
+            format!("--unit={unit}"),
+            "--quiet".into(),
+            "--wait".into(),
+            "--collect".into(),
+            "--pipe".into(),
+            format!("--uid={}", ids.uid),
+            format!("--gid={}", ids.gid),
+        ];
+        for p in [
+            "NoNewPrivileges=yes".to_string(),
+            "ProtectSystem=strict".into(),
+            "PrivateTmp=yes".into(),
+            "PrivateDevices=yes".into(),
+            "ProtectProc=invisible".into(),
+            "PrivateIPC=yes".into(),
+            "TemporaryFileSystem=/dev/shm:mode=1777".into(),
+            format!("IPAddressDeny={}", NO_LAN_DENY.join(" ")),
+            "RuntimeMaxSec=20".into(),
+        ] {
+            a.push("-p".into());
+            a.push(p);
+        }
+        a.extend(["--".into(), "/bin/sh".into(), "-c".into(), "test ! -e /proc/1/cmdline && test -z \"$(ls -A /dev/shm)\" && echo k2-wall-ok".into()]);
+        let mut child = std::process::Command::new(prog)
+            .args(&a)
+            .env_clear()
+            .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
+            .current_dir("/")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("systemd-run: {e}"))?;
+        let t0 = Instant::now();
+        let status = loop {
+            if let Some(s) = child.try_wait().map_err(|e| e.to_string())? {
+                break s;
+            }
+            if t0.elapsed() > Duration::from_secs(30) {
+                let _ = child.kill();
+                let _ = systemctl(&["stop", &unit]);
+                return Err("the self-test unit didn't finish within 30 s".into());
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        let out = child.wait_with_output().map_err(|e| e.to_string())?;
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        if status.success() && stdout.trim() == "k2-wall-ok" {
+            let _ = PASSED.set(());
+            return Ok(());
+        }
+        Err(format!("{status}: {} {}", stdout.trim(), String::from_utf8_lossy(&out.stderr).trim()))
     }
 
     /// Who slot `slot`'s jobs run as. The owner: `jobs.toml`'s job user

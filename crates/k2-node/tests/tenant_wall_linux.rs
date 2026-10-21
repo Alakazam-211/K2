@@ -355,6 +355,10 @@ async fn w1_w2_w3_files_are_walled_between_servers_both_ways() {
     let mut fake = Fake::start().await;
     let n = node(&fake, &r, "", |_| {}).await;
     let _c = fake.next_conn().await;
+    // (a): the wall is really on: the executor's runtime self-test passed
+    // and both servers have their users.
+    r.exec.wall_selftest().expect("the tenant sandbox self-test passes here");
+    assert!(n.node.tenant_wall_on().await, "tenant-wall is on with every server provisioned");
     let all: Vec<Slot> = vec![0, 1, 2];
     let mut secrets: Vec<(Slot, PathBuf, String)> = Vec::new();
     for &s in &all {
@@ -877,6 +881,7 @@ async fn a_tenants_job_runs_as_its_own_user_in_its_own_dirs() {
     let mut fake = Fake::start().await;
     let n = node(&fake, &r, "", |_| {}).await;
     let _c = fake.next_conn().await;
+    assert!(!n.node.tenant_wall_on().await, "an approved server without its user: tenant-wall is off");
     let got = run(
         &n,
         1,

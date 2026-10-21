@@ -186,6 +186,39 @@ impl Node {
         }
     }
 
+    /// Is the per-tenant wall really on here (offer `tenant-wall` only
+    /// then)? Conservative: Linux only (macOS 0.46.3 is one uid, own
+    /// servers only: false); the node runs behind the job-user wall; the
+    /// executor says the tenant wall is ready, which includes its runtime
+    /// self-test (a unit with the tenant sandbox where root's PID 1 is
+    /// invisible, `/dev/shm` private and the `no-lan` filter accepted;
+    /// systemd ≥ 247; the user/ACL tools); and every approved server
+    /// already on this node has its own user. One local socket round
+    /// trip (the self-test runs once per executor process).
+    pub async fn tenant_wall_on(&self) -> bool {
+        if !cfg!(target_os = "linux") || !matches!(self.wall, Wall::JobUser { .. }) {
+            return false;
+        }
+        let w = match self.job_op(crate::admin::jobs::JobOp::Tenants, vec![], Duration::from_secs(60)).await {
+            Ok(crate::admin::jobs::JobAnswer::Tenants(w)) if w.ready => w,
+            _ => return false,
+        };
+        for t in self.tenants() {
+            if t.is_owner() {
+                continue;
+            }
+            let approved = crate::admin::jobs::tenant_entry(&self.layout().config, t.slot).is_ok_and(|e| e.may_attach(self.now()));
+            if !approved {
+                continue;
+            }
+            let want = crate::admin::jobs::tenant_user_name(t.slot);
+            if w.users.get(&t.slot.to_string()) != Some(&want) || crate::admin::server::user_ids(&want).is_none() {
+                return false;
+            }
+        }
+        true
+    }
+
     /// One pass of the tenant wall watch: for every other server, hold
     /// its queued jobs (`fairq.set_blocked`) while its wall isn't there
     /// (`tenant_wall_missing`, `team_needs_tenant_wall`: no job wall, no
@@ -991,6 +1024,7 @@ mod tests {
         assert!(n.tenant_over_disk_with(&tens[0], budget) && n.tenant_over_disk_with(&tens[1], budget));
         assert!(!n.tenant_over_disk_with(&tens[2], budget), "slot 3 is under");
         assert!(!n.tenant_over_disk(&tens[0]), "40 real GB is far away");
+        assert!(!n.tenant_wall_on().await, "an unwalled node never offers tenant-wall");
         let job = |t: &Arc<Tenant>| {
             let mut a = crate::ledger::tests::assign("j", 1);
             a.plan.node_id = "node-b".into();

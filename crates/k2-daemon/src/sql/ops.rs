@@ -477,6 +477,38 @@ fn privilege_sync_for_row(
     apply_privilege_sync(ops, secrets, row, &grants)
 }
 
+/// First lines of every superuser psql session K2 opens inside a
+/// workspace database (any database but `postgres`).
+///
+/// The database is owned by `{db}_migrator`, and the agent's migrations
+/// run as that role, so the objects in it and its per-database settings
+/// are the tenant's. Without a pin, a superuser session there resolves
+/// unqualified names (`format`, `=`, `pg_roles`, …) through `"$user",
+/// public` or an `ALTER DATABASE … SET search_path` the owner chose, and a
+/// planted `public.format(text, text)` wins overload resolution over
+/// `pg_catalog.format(text, VARIADIC "any")`. Session-level `SET`s run
+/// after the connection's database and role defaults, so they win over
+/// both. `SET ROLE NONE` undoes an owner's `ALTER DATABASE … SET role`
+/// (which would otherwise run this session as another role).
+pub(crate) const SU_TENANT_SESSION_PIN: &str =
+    "SET ROLE NONE;\nSET search_path = pg_catalog, pg_temp;\n";
+
+/// `sql` with [`SU_TENANT_SESSION_PIN`] in front.
+pub(crate) fn su_tenant_sql(sql: &str) -> String {
+    format!("{SU_TENANT_SESSION_PIN}{sql}")
+}
+
+/// Superuser psql (the root helper's `pg psql`) inside workspace database
+/// `db_name`, with the session pinned first. The only way K2 sends
+/// superuser SQL into a tenant database. Output starts with psql's `SET`
+/// tags; no caller parses it.
+fn run_su_tenant(ops: &dyn SystemOps, db_name: &str, sql: &str) -> Result<String, String> {
+    ops.run_helper(
+        &["psql", "-d", db_name, "-v", "ON_ERROR_STOP=1"],
+        Some(su_tenant_sql(sql).as_bytes()),
+    )
+}
+
 fn ensure_k2_helpers_db(ops: &dyn SystemOps, db_name: &str) -> Result<(), OpsError> {
     let sql = ensure_k2_helpers_sql();
     debug_assert!(
@@ -486,25 +518,14 @@ fn ensure_k2_helpers_db(ops: &dyn SystemOps, db_name: &str) -> Result<(), OpsErr
     // Privileged helper (postgres), not `{db}_migrator`: create already
     // installed schema `k2` as postgres; migrator cannot CREATE OR REPLACE
     // functions there (AX41: permission denied for schema k2).
-    ops.run_helper(
-        &["psql", "-d", db_name, "-v", "ON_ERROR_STOP=1"],
-        Some(sql.as_bytes()),
-    )
-    .map_err(OpsError::Engine)?;
+    run_su_tenant(ops, db_name, &sql).map_err(OpsError::Engine)?;
     let migrator = pg_quote_ident(&format!("{db_name}_migrator"));
     let owner = format!("ALTER SCHEMA k2 OWNER TO {migrator};");
-    let _ = ops.run_helper(
-        &["psql", "-d", db_name, "-v", "ON_ERROR_STOP=1"],
-        Some(owner.as_bytes()),
-    );
+    let _ = run_su_tenant(ops, db_name, &owner);
     // ALTER SCHEMA does not change function owners. SECURITY DEFINER must
     // be the migrator, not postgres. CREATE OR REPLACE keeps the old owner.
     let fn_owner = k2_helper_owner_sql(db_name);
-    ops.run_helper(
-        &["psql", "-d", db_name, "-v", "ON_ERROR_STOP=1"],
-        Some(fn_owner.as_bytes()),
-    )
-    .map_err(OpsError::Engine)?;
+    run_su_tenant(ops, db_name, &fn_owner).map_err(OpsError::Engine)?;
     seal_k2_internal_tables(ops, db_name)
 }
 
@@ -576,11 +597,7 @@ pub(crate) fn seal_k2_internal_tables_sql(db_name: &str) -> String {
 
 fn seal_k2_internal_tables(ops: &dyn SystemOps, db_name: &str) -> Result<(), OpsError> {
     let sql = seal_k2_internal_tables_sql(db_name);
-    ops.run_helper(
-        &["psql", "-d", db_name, "-v", "ON_ERROR_STOP=1"],
-        Some(sql.as_bytes()),
-    )
-    .map_err(OpsError::Engine)?;
+    run_su_tenant(ops, db_name, &sql).map_err(OpsError::Engine)?;
     Ok(())
 }
 
@@ -1077,21 +1094,21 @@ fn create_database_inner(
          GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO {agent};\n\
          ALTER DEFAULT PRIVILEGES FOR ROLE {migrator} IN SCHEMA public \
            GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO {agent};\n\
-         CREATE TABLE IF NOT EXISTS _k2_migrations (\n\
+         CREATE TABLE IF NOT EXISTS public._k2_migrations (\n\
            version TEXT PRIMARY KEY,\n\
            checksum TEXT NOT NULL DEFAULT '',\n\
            applied_at TIMESTAMPTZ NOT NULL DEFAULT now()\n\
          );\n\
-         CREATE TABLE IF NOT EXISTS _k2_store (\n\
+         CREATE TABLE IF NOT EXISTS public._k2_store (\n\
            collection TEXT NOT NULL,\n\
            id TEXT NOT NULL,\n\
            doc JSONB NOT NULL,\n\
            updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),\n\
            PRIMARY KEY (collection, id)\n\
          );\n\
-         ALTER TABLE _k2_migrations OWNER TO {migrator};\n\
-         ALTER TABLE _k2_store OWNER TO {migrator};\n\
-         GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE _k2_migrations, _k2_store TO {agent};\n\
+         ALTER TABLE public._k2_migrations OWNER TO {migrator};\n\
+         ALTER TABLE public._k2_store OWNER TO {migrator};\n\
+         GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public._k2_migrations, public._k2_store TO {agent};\n\
          {helpers}\n\
          ALTER SCHEMA k2 OWNER TO {migrator};\n\
          {fn_owner}\n\
@@ -1103,11 +1120,7 @@ fn create_database_inner(
         fn_owner = k2_helper_owner_sql(&name),
         seal = seal_k2_internal_tables_sql(&name),
     );
-    ops.run_helper(
-        &["psql", "-d", &name, "-v", "ON_ERROR_STOP=1"],
-        Some(grants.as_bytes()),
-    )
-    .map_err(OpsError::Engine)?;
+    run_su_tenant(ops, &name, &grants).map_err(OpsError::Engine)?;
 
     let agent_ref = if let Some(sref) = existing_agent_ref {
         sref
@@ -1394,13 +1407,9 @@ fn grant_agent_k2_tables(ops: &dyn SystemOps, db: &str) -> Result<(), OpsError> 
     let agent = pg_quote_ident(&agent_role_for_db(db));
     let sql = format!(
         "GRANT USAGE ON SCHEMA public TO {agent};\n\
-         GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE _k2_migrations, _k2_store TO {agent};"
+         GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public._k2_migrations, public._k2_store TO {agent};"
     );
-    ops.run_helper(
-        &["psql", "-d", db, "-v", "ON_ERROR_STOP=1"],
-        Some(sql.as_bytes()),
-    )
-    .map_err(OpsError::Engine)?;
+    run_su_tenant(ops, db, &sql).map_err(OpsError::Engine)?;
     Ok(())
 }
 
@@ -2479,10 +2488,7 @@ fn apply_pg_revoke(ops: &dyn SystemOps, db_name: &str, role: &str) -> Result<(),
         Some(connect.as_bytes()),
     );
     let dml = revoke_grantee_privileges_sql(db_name, role);
-    let _ = ops.run_helper(
-        &["psql", "-d", db_name, "-v", "ON_ERROR_STOP=1"],
-        Some(dml.as_bytes()),
-    );
+    let _ = run_su_tenant(ops, db_name, &dml);
     let _ = revoke_grantee_membership(ops, db_name, role);
     Ok(())
 }

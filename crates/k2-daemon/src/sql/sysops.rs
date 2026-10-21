@@ -336,6 +336,9 @@ pub struct FakePg {
     pub roles: Vec<String>,
     pub role_sql: Vec<String>,
     pub helper_sql: Vec<String>,
+    /// Every helper (superuser) `psql` run as (`-d` database, stdin SQL),
+    /// in order. The session-pin guard reads this.
+    pub helper_psql: Vec<(String, String)>,
     /// Stdin SQL from unprivileged `psql` (`run_cmd`) — migrate files + P7.
     pub psql_sql: Vec<String>,
     /// (version, checksum) rows per database name.
@@ -384,6 +387,7 @@ impl Default for FakePg {
             roles: Vec::new(),
             role_sql: Vec::new(),
             helper_sql: Vec::new(),
+            helper_psql: Vec::new(),
             psql_sql: Vec::new(),
             migrations: HashMap::new(),
             select_field_sep: "|",
@@ -1333,6 +1337,10 @@ impl SystemOps for FakeSystemOps {
             .windows(2)
             .find(|w| w[0] == "-d")
             .map(|w| w[1].to_string());
+        if args.first().copied() == Some("psql") {
+            pg.helper_psql
+                .push((db.clone().unwrap_or_default(), sql.clone()));
+        }
         if sql.contains("k2_internal_no_guest") {
             pg.sealed.insert(db.clone().unwrap_or_default());
         }

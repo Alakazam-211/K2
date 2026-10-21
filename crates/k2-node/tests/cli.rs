@@ -219,3 +219,30 @@ fn no_install_path_ever_runs_dev() {
     std::fs::write(cfg.join("admin.toml"), "remote_admin = \"off\"\n").unwrap();
     assert!(!k2_node::node::dev_test_exemption(true, &cfg), "an installed node's config never takes the --dev exemption");
 }
+
+/// z3mbpZ e2e fix 3: re-running the macOS installer with --binary pointing
+/// at the installed k2-node (an upgrade in place with nothing to copy) is a
+/// no-op copy, not `install`'s "are the same file" stopping the script
+/// under `set -e`. The script's own `install_binary` is run on its own.
+#[test]
+fn the_macos_installer_takes_the_installed_binary_as_is() {
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/node/install-node-macos.sh");
+    let text = std::fs::read_to_string(&script).unwrap();
+    let start = text.find("install_binary() {").expect("install_binary in the installer");
+    let end = start + text[start..].find("\n}\n").expect("its end") + 3;
+    let func = &text[start..end];
+    assert!(text.contains("install_binary \"$BINARY\" \"$BIN_DIR/k2-node\""), "the installer copies through it");
+    let d = k2_node::util::temp_dir("installer-same-file");
+    let bin = d.join("k2-node");
+    std::fs::write(&bin, "#!/bin/sh\n").unwrap();
+    let link = d.join("via-link");
+    std::os::unix::fs::symlink(&bin, &link).unwrap();
+    for src in [&bin, &link] {
+        let out = Command::new("bash")
+            .args(["-c", &format!("set -euo pipefail\n{func}\ninstall_binary \"$1\" \"$2\"\necho AFTER"), "x", src.to_str().unwrap(), bin.to_str().unwrap()])
+            .output()
+            .unwrap();
+        let said = String::from_utf8_lossy(&out.stdout);
+        assert!(out.status.success() && said.contains("already that binary") && said.contains("AFTER"), "{said} {}", String::from_utf8_lossy(&out.stderr));
+    }
+}

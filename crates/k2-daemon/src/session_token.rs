@@ -532,6 +532,10 @@ pub fn is_agent_verb(path: &str) -> bool {
         // allow prefix would otherwise admit them). Covers `imports`.
         "/cli/thread/export",
         "/cli/thread/import",
+        // app-room-stream (0.46.3): the multi-room Thread socket is for App
+        // passes and people (contract-app-room-stream-0463 §1: a passport
+        // is 403). A WebSocket, never a cell-socket GET.
+        "/cli/thread/stream",
     ];
     if DENY_PREFIXES.iter().any(|p| path.starts_with(p)) {
         return false;

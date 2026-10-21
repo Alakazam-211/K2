@@ -116,3 +116,13 @@ fn off_a_link_room_slots_are_free() {
     assert_eq!(s.resize(150), Ok(()));
     assert_eq!(s.held, 0, "quotas count only on an App's gateway link");
 }
+
+/// The contract refuses agent passports (§1), so the path is not an agent
+/// verb: the `/cli/thread/` allow prefix would otherwise send `k2` on the
+/// cell socket to a route the cell can't serve (it's a WebSocket).
+#[test]
+fn the_stream_is_not_an_agent_verb() {
+    assert!(!crate::session_token::is_agent_verb(ROOM_STREAM_WS_PATH));
+    assert!(crate::session_token::is_agent_verb("/cli/thread"), "Thread reads stay agent verbs");
+    assert!(crate::session_token::is_agent_verb("/cli/thread/catchup"), "the catch-up stays an agent verb");
+}

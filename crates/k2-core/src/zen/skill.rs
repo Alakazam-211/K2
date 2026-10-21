@@ -433,7 +433,7 @@ saves). `k2 zen guide services` has every rule; `k2 study garden-data` is your s
   `~/.k2/daemon.token`), and never edit a widget the person made unless they ask.\n\
   When you change a widget the person made (with the switch), its new version isn't\n\
   theirs, so it runs without its data until they keep it: K2 puts a card on their Thread\n\
-  with you (\"Keep as mine\" / \"Let sync update it\"; the answer says `keepAsMine` and\n\
+  with you (\"Keep as mine\" / \"Leave it as <you>'s\"; the answer says `keepAsMine` and\n\
   `keepCard`), or an inbox note when you have no Thread. Only they can tap it (your\n\
   passport is refused); Settings → Gardens → Local Data undoes it.\n\
 - **Project grants are a convenience; any agent can join a project.** Don't add yourself\n\

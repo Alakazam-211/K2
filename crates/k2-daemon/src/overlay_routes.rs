@@ -3289,7 +3289,7 @@ mod tests {
         }
     }
 
-    const KEEP_OPTIONS: [&str; 2] = [crate::action_cards::KEEP_AS_MINE, crate::action_cards::LET_SYNC_UPDATE];
+    const KEEP_OPTIONS: [&str; 2] = [crate::action_cards::KEEP_AS_MINE, "Leave it as builder's"];
 
     fn maker(widget: &str, hash: &str) -> k2_core::garden_data::MadeBy {
         let db = k2_core::db::shared();
@@ -3362,13 +3362,14 @@ mod tests {
         let v = json_body(&r);
         assert_eq!((v["status"].as_str(), v["action"]["id"].as_str()), (Some("answered"), Some(crate::action_cards::KEEP_WIDGET)), "{v}");
         assert_eq!(v["action"]["result"]["kept"], true, "{v}");
+        assert_eq!(v["action"]["result"]["message"], "Kept as yours. Undo in Settings → Gardens → Local Data.", "{v}");
         assert_eq!(maker(&widget, &hash), k2_core::garden_data::MadeBy::Owner);
         assert_eq!(action_card_status(&conv, &id), "answered");
         let r = post_json("/cli/thread/answer", &HashMap::new(), body);
         assert_error_code(&r, "409 Conflict", "card_not_pending");
     }
 
-    /// "Let sync update it" keeps nothing; a Connect member (not an
+    /// "Leave it as builder's" keeps nothing; a login that isn't an
     /// owner/admin) can't answer a settings card.
     #[test]
     fn let_sync_keeps_nothing_and_a_member_cannot_answer() {
@@ -3382,12 +3383,13 @@ mod tests {
         else {
             panic!("a pinned Thread gets a card")
         };
-        let body = serde_json::json!({ "addr": handle, "id": id, "answer": crate::action_cards::LET_SYNC_UPDATE });
+        let body = serde_json::json!({ "addr": handle, "id": id, "answer": "Leave it as builder's" });
         let r = dispatch_post_as("/cli/thread/answer", &HashMap::new(), body.to_string().as_bytes(), "no-such-login");
         assert_error_code(&r, "403 Forbidden", "action_card_person_only");
         let r = post_json("/cli/thread/answer", &HashMap::new(), body);
         assert_eq!(r.status, "200 OK", "{}", r.body);
         assert_eq!(json_body(&r)["action"]["result"]["kept"], false);
+        assert_eq!(json_body(&r)["action"]["result"]["message"], "Left as builder's.");
         assert_eq!(maker(&widget, &hash), k2_core::garden_data::MadeBy::Unclaimed);
     }
 

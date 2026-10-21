@@ -22480,6 +22480,12 @@ if d.get("running"):
         elif d.get("relay_primary") is False:
             sa += " (fallback relay; returns to the primary once it answers again)"
         print(f"  Server:     {sa}")
+    # 0.46.3: the failover rules and what they are doing, e.g.
+    # "waiting for DNS (standby inactive per k2.dev)". Running with 2+
+    # relays only; older daemons omit it.
+    fo = d.get("failover")
+    if isinstance(fo, dict) and fo.get("detail"):
+        print("  Failover:   " + fo["detail"])
 # 0.45.7: the relay list and where it came from (fetched from k2.dev,
 # provisioned, or the built-in default). Older daemons omit it.
 rl = d.get("relay_list")
@@ -22491,6 +22497,9 @@ if isinstance(rl, dict):
     if rl.get("checked_at"):
         ts = datetime.datetime.fromtimestamp(rl["checked_at"]).strftime("%Y-%m-%d %H:%M")
         print(f"  Relay list: checked with k2.dev {ts}")
+    if rl.get("active"):
+        # 0.46.3: where the k2.dev DNS check says *.k2.dev points.
+        print("  Live relay: *.k2.dev points at " + rl["active"] + " (per k2.dev)")
     if rl.get("last_error") and str(rl["last_error"]).startswith("401"):
         # A pre-0.46.3 daemon reports the k2.dev 401 as an error.
         print("  Relay list: k2.dev does not hand out a relay list for this tunnel token; the saved list stays in use")

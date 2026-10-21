@@ -477,7 +477,8 @@ export interface AppVerbRow {
     /** POST arguments sent in the query string (the rest go in the JSON body). */
     readonly query: readonly string[]
   } | null
-  readonly socket: { readonly path: string; readonly param: string; readonly frame: string; readonly refetch: string | null } | null
+  /** `query`: fixed query parameters the SDK adds to the socket URL (e.g. the ear's `ear=1` opt-in). */
+  readonly socket: { readonly path: string; readonly param: string; readonly frame: string; readonly refetch: string | null; readonly query: Readonly<Record<string, string>> } | null
   /** Catalog response field → live wire field, at any depth. */
   readonly responseNames: Readonly<Record<string, string>>
   /** The closed answer (or frame) schema the SDK projects onto. */
@@ -512,11 +513,12 @@ pub fn sdk_verbs_ts(c: &Catalog) -> Result<String, String> {
         };
         let socket = match &v.bindings.socket {
             Some(s) => format!(
-                "{{ path: {}, param: {}, frame: {}, refetch: {} }}",
+                "{{ path: {}, param: {}, frame: {}, refetch: {}, query: {} }}",
                 ts_str(&s.path),
                 ts_str(s.param.as_deref().unwrap_or("")),
                 ts_str(&s.frame),
-                s.refetch.as_deref().map(ts_str).unwrap_or_else(|| "null".into())
+                s.refetch.as_deref().map(ts_str).unwrap_or_else(|| "null".into()),
+                ts_record(&s.query)
             ),
             None => "null".into(),
         };

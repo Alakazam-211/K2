@@ -297,6 +297,9 @@ export class K2App {
       url: () => {
         const pass = this.passFor(bound, verb)
         const q = new URLSearchParams({ [sock.param]: value })
+        // Fixed opt-ins the row names (0.46.3: `ear=1`, the guest ear on
+        // the Thread sockets).
+        for (const [k, v] of Object.entries(sock.query ?? {})) q.set(k, v)
         if (pass) q.set('token', pass)
         return `${this.gatewayUrl.replace(/^http/, 'ws')}${sock.path}?${q.toString()}`
       },

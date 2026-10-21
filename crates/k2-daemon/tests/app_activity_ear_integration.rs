@@ -353,12 +353,24 @@ fn mint(port: u16, name: &str, caps: &[&str], rooms: &[&str]) -> (String, String
     (tok, v["id"].as_str().expect("id").to_string())
 }
 
-async fn open_stream(port: u16, token: &str) -> Ws {
-    let url = format!("ws://127.0.0.1:{port}/cli/thread/stream?rooms=all&token={token}");
+/// The room stream; `ear` = the per-connection opt-in (`&ear=1`).
+async fn open_stream_with(port: u16, token: &str, ear: bool) -> Ws {
+    let opt = if ear { "&ear=1" } else { "" };
+    let url = format!("ws://127.0.0.1:{port}/cli/thread/stream?rooms=all{opt}&token={token}");
     let (ws, _) = tokio_tungstenite::connect_async(&url)
         .await
         .unwrap_or_else(|e| panic!("room stream must open: {e}"));
     ws
+}
+
+/// The room stream WITH the ear opt-in.
+async fn open_stream(port: u16, token: &str) -> Ws {
+    open_stream_with(port, token, true).await
+}
+
+/// The per-room overlay socket WITH the ear opt-in (`&ear=1`).
+async fn open_ear_ws(port: u16, conv: &str, token: &str) -> Ws {
+    open_ws(port, &format!("{conv}&ear=1"), token).await
 }
 
 async fn open_room_events(port: u16, handle: &str, token: &str) -> Ws {
@@ -499,10 +511,16 @@ async fn the_counts_only_ear_reaches_gated_guests_on_every_route_and_never_a_too
                 "activity:read alone opens no room stream"
             );
 
+            // The owner's socket: no opt-in, unchanged (the owner strip).
             let mut owner_ov = open_ws(port, &agent.conv, OWNER_TOKEN).await;
-            let mut ear_ov = open_ws(port, &agent.conv, &ear).await;
-            let mut rev_ov = open_ws(port, &agent.conv, &revokee).await;
-            let mut thr_ov = open_ws(port, &agent.conv, &thread_only).await;
+            let mut ear_ov = open_ear_ws(port, &agent.conv, &ear).await;
+            // The same ear-holding pass WITHOUT the opt-in: a live legacy
+            // App's socket. It must get exactly the pre-0.46.3 frames.
+            let mut legacy_ov = open_ws(port, &agent.conv, &ear).await;
+            let mut legacy_st = open_stream_with(port, &ear, false).await;
+            let mut owner_plain_st = open_stream_with(port, OWNER_TOKEN, false).await;
+            let mut rev_ov = open_ear_ws(port, &agent.conv, &revokee).await;
+            let mut thr_ov = open_ear_ws(port, &agent.conv, &thread_only).await;
             let mut owner_st = open_stream(port, OWNER_TOKEN).await;
             let mut ear_st = open_stream(port, &ear).await;
             let mut rev_st = open_stream(port, &revokee).await;
@@ -613,6 +631,25 @@ async fn the_counts_only_ear_reaches_gated_guests_on_every_route_and_never_a_too
             }
             assert_eq!(st_turn.last().expect("frames")["end"], serde_json::json!({ "reason": "done" }));
 
+            // ── no opt-in: exactly the pre-0.46.3 frames ──
+            let (legacy_frames, _) = drain(&mut legacy_ov, 1_000).await;
+            assert!(
+                legacy_frames.iter().all(|f| f["collection"] != "activity"),
+                "a guest socket without ear=1 gets zero activity frames: {legacy_frames:?}"
+            );
+            let without_ear: Vec<&J> = ear_frames.iter().filter(|f| f["collection"] != "activity").collect();
+            assert_eq!(
+                legacy_frames.iter().collect::<Vec<_>>(),
+                without_ear,
+                "the same pass without the opt-in gets the opted-in socket's frames minus the ear, in order"
+            );
+            assert!(legacy_frames.iter().any(|f| f["collection"] == "thread" && f["id"] == turn.as_str()), "{legacy_frames:?}");
+            let (legacy_st_frames, _) = drain(&mut legacy_st, 500).await;
+            assert!(legacy_st_frames.iter().all(|f| f["kind"] != "thread_activity"), "{legacy_st_frames:?}");
+            assert!(legacy_st_frames.iter().any(|f| f["kind"] == "thread_message" && f["id"] == turn.as_str()), "{legacy_st_frames:?}");
+            let (owner_plain, _) = drain(&mut owner_plain_st, 500).await;
+            assert!(owner_plain.iter().all(|f| f["kind"] != "thread_activity"), "a login's stream without ear=1 is unchanged: {owner_plain:?}");
+
             let (owner_frames, _) = drain(&mut owner_st, 1_000).await;
             let owner_turn = stream_ear(&owner_frames, &turn);
             assert!(owner_turn.iter().any(|a| a["line"].as_str().is_some_and(|l| l.contains('`'))), "a login's stream keeps the owner line: {owner_frames:?}");
@@ -637,6 +674,7 @@ async fn the_counts_only_ear_reaches_gated_guests_on_every_route_and_never_a_too
             let (owner_after, _) = drain(&mut owner_ov, 1_500).await;
             assert!(owner_after.iter().all(|f| f["collection"] != "activity"), "no Thread message, no Thread turn: {owner_after:?}");
             let (ear_after, _) = drain(&mut ear_ov, 500).await;
+            let _ = drain(&mut legacy_ov, 100).await;
             assert!(ear_after.iter().all(|f| f["collection"] != "activity"), "an owner-typed turn never reaches a guest: {ear_after:?}");
             let (ear_st_after, _) = drain(&mut ear_st, 500).await;
             assert!(ear_st_after.iter().all(|f| f["kind"] != "thread_activity"), "{ear_st_after:?}");

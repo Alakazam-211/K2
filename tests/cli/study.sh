@@ -357,6 +357,7 @@ assert_contains "counts throttle rate" "$apps_out" "counts alone goes out at mos
 assert_contains "the ear's catch-up (0.46.3)" "$apps_out" "GET      /cli/thread/activity?addr=<handle>      (k2.thread.activity)"
 assert_contains "the ear is counts only" "$apps_out" "No tool"
 assert_contains "the ear never shows a typed turn" "$apps_out" "Never a turn"
+assert_contains "the ear is opt-in per socket" "$apps_out" "OPT-IN: the sockets send ear frames only when opened with ear=1"
 assert_contains "app-tickets points at the section" "$tk_out" "AGENT WORKING"
 
 echo "== k2 study ticket-brief (prd-ticket-html-brief-v1 T13) =="

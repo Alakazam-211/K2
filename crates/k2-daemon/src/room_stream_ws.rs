@@ -25,7 +25,9 @@
 //! - Only `thread` frames reach a guest (no chatter, chatterlog, owner
 //!   activity, moved or address frames); the doc is `wire_json_for` with
 //!   the guest's room, so attachments outside its folders are `hidden`.
-//! - The counts-only ear (0.46.3, Rosson 2026-10-21): a
+//! - The counts-only ear (0.46.3, Rosson 2026-10-21), only on a socket
+//!   opened with `?ear=1` (`overlay_ws::EAR_PARAM`; without it every
+//!   viewer gets exactly the r5 frames): a
 //!   `{"kind":"thread_activity", room, conversation_id, conversation, id,
 //!   activity}` frame per Thread turn frame of a room's pinned Chat. A
 //!   guest gets the guest projection (`thread_activity::guest_turn_body`,
@@ -470,6 +472,8 @@ pub async fn serve_room_stream_connection(stream: &mut TcpStream, params: HashMa
     // owner's.
     let mut guest_act_rx = overlay_ws::subscribe_guest_activity();
     let mut owner_act_rx = overlay_ws::subscribe_activity();
+    // Opt-in per connection (`?ear=1`): a legacy client gets r5's frames.
+    let ear = overlay_ws::ear_opted_in(&params);
     let mut slots = RoomSlots { app_id: link.as_ref().map(|l| l.app_id.clone()), held: 0 };
     // A guest's `rev`: this socket's own counter (C4).
     let mut socket_rev: u64 = 0;
@@ -671,6 +675,9 @@ pub async fn serve_room_stream_connection(stream: &mut TcpStream, params: HashMa
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
                 };
+                if !ear {
+                    continue;
+                }
                 let Viewer::Guest { raw } = &viewer else { continue };
                 let Some(room) = view.room_of(&frame.conversation_id).map(str::to_string) else { continue };
                 let (raw2, link2, r2, c2) = (raw.clone(), link.clone(), room.clone(), frame.conversation_id.clone());
@@ -708,7 +715,7 @@ pub async fn serve_room_stream_connection(stream: &mut TcpStream, params: HashMa
                     Err(broadcast::error::RecvError::Closed) => break,
                 };
                 // Never a guest's (its ear is the guest bus above).
-                if !matches!(viewer, Viewer::Login) || frame.collection != "activity" {
+                if !ear || !matches!(viewer, Viewer::Login) || frame.collection != "activity" {
                     continue;
                 }
                 let (Some(conv), Some(body)) = (frame.conversation_id.as_deref(), frame.activity.as_ref()) else { continue };

@@ -251,6 +251,11 @@ pub struct SocketBinding {
     /// socket can't be App-facing without naming it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub param: Option<String>,
+    /// `app` rows: fixed query parameters the SDK always adds (0.46.3:
+    /// `ear=1`, the guest ear's per-connection opt-in on the Thread
+    /// sockets; a raw client that omits it gets today's frames).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub query: BTreeMap<String, String>,
 }
 
 /// One cap (UWA9, UW23).
@@ -564,6 +569,24 @@ mod tests {
         );
         let retry: Vec<&str> = catalog().errors.iter().filter(|e| e.retryable).map(|e| e.code.as_str()).collect();
         assert_eq!(retry, ["not_bound", "rate_limited", "unreachable", "busy"], "what a handler-object subscription retries");
+    }
+
+    /// 0.46.3: the guest ear is opt-in per connection. Only the room
+    /// stream's row carries `ear=1` (the SDK adds it). `thread.events`
+    /// never asks: its frames stay Thread items (live legacy Apps read
+    /// `item.doc` on every frame); a raw client may still opt in.
+    #[test]
+    fn only_the_room_stream_asks_for_the_ear() {
+        let c = catalog();
+        for v in &c.verbs {
+            let Some(s) = &v.bindings.socket else { continue };
+            let want: BTreeMap<String, String> = if v.verb == "thread.stream" {
+                [("ear".to_string(), "1".to_string())].into_iter().collect()
+            } else {
+                BTreeMap::new()
+            };
+            assert_eq!(s.query, want, "{}", v.verb);
+        }
     }
 
     #[test]

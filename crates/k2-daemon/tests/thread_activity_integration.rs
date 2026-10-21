@@ -392,7 +392,9 @@ async fn a_compose_turn_streams_its_steps_and_ends_on_the_reply() {
 
         futures_block(async {
             let mut a = open_ws(port, &agent.conv, OWNER_TOKEN).await;
-            let mut g = open_ws(port, &agent.conv, &guest).await;
+            // 0.46.3: the guest ear is opt-in per connection (`&ear=1`).
+            let mut g = open_ws(port, &format!("{}&ear=1", agent.conv), &guest).await;
+            let mut g_legacy = open_ws(port, &agent.conv, &guest).await;
             tokio::time::sleep(Duration::from_millis(50)).await;
             let before = thread_len(&agent.conv);
 
@@ -500,6 +502,10 @@ async fn a_compose_turn_streams_its_steps_and_ends_on_the_reply() {
             assert!(thread_ids.contains(&turn), "the guest socket was live on this conversation: {thread_ids:?}");
             assert!(thread_ids.iter().any(|id| reply["id"] == id.as_str()), "{thread_ids:?}");
             assert!(ear.iter().any(|a| a["phase"] == "tool" && a["tally"]["cmd"] == 1), "the counts reached the guest: {ear:?}");
+            // Without the opt-in: never an activity frame (r5 behaviour).
+            while let Some(f) = next_frame_within(&mut g_legacy, 300).await {
+                assert_ne!(f["collection"], "activity", "no ear=1, no activity frame: {f}");
+            }
             assert_eq!(ear.last().map(|a| a["end"].clone()), Some(serde_json::json!({ "reason": "done" })), "{ear:?}");
 
             // The catch-up route: a guest's turn is null after the end;

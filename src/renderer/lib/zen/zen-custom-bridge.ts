@@ -64,6 +64,7 @@ import {
   projectZenThreadView,
 } from './zen-custom-projection'
 import { ZenThreadVerbError, projectZenThreadFileData, zenThreadAttachments, type ZenThreadDelta } from './zen-thread-files'
+import type { ZenPermissionSheet } from './permission-sheet'
 import { DaemonHttpError } from '../daemon-http-error'
 import type { ZenInboxMessage } from './zen-thread-inbox'
 import type { ZenWidgetStopReason } from './zen-custom-run'
@@ -148,6 +149,10 @@ export interface ZenCustomLayerDeps {
    *  through this computer's daemon; every write goes through K2's confirm
    *  sheet outside the frame. Without it those verbs answer `verb_unavailable`. */
   guests?: ZenCustomGuests
+  /** 0.46.3 permission cards (Beta): `thread.answer` on a permission card
+   *  opens K2's sheet outside the frame instead of answering (a widget
+   *  never answers one). Without it the daemon's own check refuses. */
+  permissions?: ZenPermissionSheet
   /** Stop this widget (its frame goes; K2 draws the card). */
   stop(reason: ZenWidgetStopReason): void
   /** Did the person just press in this frame (or does it have the focus)?
@@ -606,6 +611,13 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
       if (typeof args[2] !== 'string') refuse('failed', 'Widgets answer with a choice only, never a secret.')
       needText('thread.answer', args[2])
       needSending()
+      // Permission cards: only a person answers, on K2's sheet outside the
+      // frame. The widget hears `null` once the person closed it.
+      if (deps.permissions?.handles(address, cardId as string)) {
+        const opened = await deps.permissions.open(address, cardId as string)
+        if (!opened.ok) refuse(opened.code, opened.message)
+        return null
+      }
       await deps.ensureConversation(address)
       await inner('thread.answer', address, cardId, { answer: args[2], origin: origin() })
       return null

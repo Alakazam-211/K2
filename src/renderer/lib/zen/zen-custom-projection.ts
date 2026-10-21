@@ -29,6 +29,7 @@ import type { OverlayChoice, OverlayThreadItem, ThreadFileObject } from '@/compo
 import type { UserWidgetCap } from '../k2-caps.generated'
 import { agentLookColor, agentLookImage } from '../agent-look'
 import type { ZenAgentRow, ZenPerson, ZenPreview, ZenThreadView } from './zen-data'
+import { zenPermissionField, type ZenWidgetPermission } from './permission-sheet'
 
 export type ZenWidgetActivity = 'working' | 'monitoring' | 'needs-you' | 'unverifiable' | 'idle' | 'unreachable'
 
@@ -163,6 +164,10 @@ export interface ZenWidgetChoice {
   /** 0.46.3: what an answered settings card's action did (shown under the
    *  chosen option). Absent on every other card. */
   resultMessage?: string
+  /** 0.46.3 permission cards (Beta): K2's words for the card, closed shape
+   *  (`permission-sheet.ts`). The kit's one button opens K2's sheet outside
+   *  the frame; a widget never answers it. Absent on every other card. */
+  permission?: ZenWidgetPermission
 }
 
 /** One file on a message as a widget sees it (the catalog's ThreadFile). */
@@ -212,7 +217,7 @@ export interface ZenWidgetThreadItem {
     | { id: string; kind: 'secret' }
 }
 
-function projectChoice(c: OverlayChoice | null | undefined): ZenWidgetChoice | null {
+function projectChoice(c: OverlayChoice | null | undefined, from = ''): ZenWidgetChoice | null {
   if (!c) return null
   return {
     prompt: c.prompt,
@@ -224,6 +229,7 @@ function projectChoice(c: OverlayChoice | null | undefined): ZenWidgetChoice | n
     answeredBy: projectAnswerer(c.answeredBy),
     expiresAt: typeof c.expiresAt === 'number' && Number.isInteger(c.expiresAt) ? c.expiresAt : null,
     ...(typeof c.resultMessage === 'string' && c.resultMessage ? { resultMessage: c.resultMessage.slice(0, 300) } : {}),
+    ...zenPermissionField(c, from, Math.floor(Date.now() / 1000)),
   }
 }
 
@@ -254,7 +260,7 @@ export function projectZenThreadItem(item: OverlayThreadItem): ZenWidgetThreadIt
       ...(typeof d.created_at === 'number' ? { created_at: d.created_at } : {}),
       body: d.body ?? null,
       via: d.via ?? null,
-      choice: d.kind === 'choice' ? projectChoice(d.choice) : null,
+      choice: d.kind === 'choice' ? projectChoice(d.choice, d.from) : null,
       ...(Array.isArray(d.attachments) && d.attachments.length > 0
         ? { attachments: d.attachments.map(projectZenThreadFile) }
         : {}),

@@ -26,7 +26,9 @@
 // root, which K2 keeps in step), never the computer's.
 //
 // The core (from k2:kanban@3's dock): bubbles, yours right and the agent's
-// left, "author · time" under each; choice cards answered with a tap;
+// left, "author · time" under each; choice cards answered with a tap
+// (a permission card shows K2's words and one button that asks K2 to open
+// its own sheet outside the frame: only a person answers those, there);
 // Enter sends, Shift+Enter is a new line, one post at a time and the text
 // stays until K2 took it; the working tab on the field's top edge (state,
 // counters, clock; "Sent" until the agent picks it up); K2's stick-to-bottom
@@ -110,6 +112,14 @@
     '.k2t-bubble-me a{color:inherit;text-decoration:underline}',
     '.k2t-status{margin-top:4px;font-size:.85em;opacity:.8}',
     '.k2t-result{margin-top:2px;font-size:.75em;color:var(--k2t-muted)}',
+    // ── Permission cards (0.46.3): K2's words; the button opens K2's sheet ──
+    '.k2t-perm{display:flex;flex-direction:column;gap:4px}',
+    '.k2t-perm-head{display:flex;align-items:center;gap:6px;font-size:.72em;text-transform:uppercase;letter-spacing:.04em;opacity:.75}',
+    '.k2t-perm-tag{padding:0 6px;border:1px solid color-mix(in srgb,var(--k2t-ok) 45%,transparent);color:var(--k2t-ok);text-transform:none;letter-spacing:0}',
+    '.k2t-perm-tag[data-direction="loosen"]{border-color:color-mix(in srgb,var(--k2t-needs-you) 45%,transparent);color:var(--k2t-needs-you)}',
+    '.k2t-perm-title{font-weight:600}',
+    '.k2t-perm-meta,.k2t-perm-why{font-size:.85em;opacity:.85}',
+    '.k2t-perm-line{font-size:.85em}',
     '.k2t-meta{padding:0 6px;font-size:.72em;color:var(--k2t-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}',
     '.k2t-opts,.k2t-custom{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}.k2t-custom{flex-wrap:nowrap}',
     '.k2t-chip{padding:5px 12px;border:1px solid color-mix(in srgb,currentColor 40%,transparent);border-radius:999px;background:transparent;color:inherit;font:inherit;line-height:1.2;cursor:pointer}',
@@ -458,6 +468,37 @@
       })
     }
 
+    // A permission card (`choice.permission`, K2's words): only a person
+    // answers it, on K2's own sheet outside this frame. The button asks K2
+    // to show it (`thread.answer` on a permission card opens the sheet).
+    function permissionBlock(id, p) {
+      var box = el('div', 'k2t-perm')
+      box.setAttribute('data-k2t-permission', p.state || '')
+      var head = el('div', 'k2t-perm-head', p.count > 1 ? 'Permissions' : 'Permission')
+      var tag = el('span', 'k2t-perm-tag', p.direction === 'tighten' ? 'Tightens access' : 'Loosens access')
+      tag.setAttribute('data-direction', p.direction === 'tighten' ? 'tighten' : 'loosen')
+      head.appendChild(tag)
+      box.appendChild(head)
+      box.appendChild(el('div', 'k2t-perm-title', p.headline || p.setting || ''))
+      var meta = [p.setting, p.duration].filter(function (x) { return !!x }).join(' · ')
+      if (meta && p.count === 1) box.appendChild(el('div', 'k2t-perm-meta', meta))
+      if (p.why) box.appendChild(el('div', 'k2t-perm-why', p.why))
+      if (p.line) box.appendChild(el('div', 'k2t-perm-line', p.line))
+      if (p.button) {
+        var opts = el('div', 'k2t-opts')
+        var b = el('button', 'k2t-chip', p.button)
+        b.type = 'button'
+        b.setAttribute('data-k2t-ch', '')
+        b.setAttribute('data-k2t-permission-open', '')
+        b.addEventListener('click', function () {
+          answer(id, p.button)
+        })
+        opts.appendChild(b)
+        box.appendChild(opts)
+      }
+      return box
+    }
+
     function choiceRow(id, c) {
       var opts = el('div', 'k2t-opts')
       ;(c.options || []).forEach(function (opt) {
@@ -518,7 +559,8 @@
       if (id) wrap.setAttribute('data-msg-id', id)
       if (typeof item.seq === 'number') wrap.setAttribute('data-seq', String(item.seq))
       var files = Array.isArray(doc.attachments) ? doc.attachments.filter(function (f) { return f && typeof f === 'object' }) : []
-      var bodyText = kind === 'choice' ? (doc.choice && doc.choice.prompt) || doc.body || '' : doc.body || ''
+      var perm = kind === 'choice' && doc.choice && doc.choice.permission && typeof doc.choice.permission === 'object' ? doc.choice.permission : null
+      var bodyText = perm ? '' : kind === 'choice' ? (doc.choice && doc.choice.prompt) || doc.body || '' : doc.body || ''
       // A post that is only files has no bubble (as K2's Thread).
       if (!(files.length && !bodyText && kind === 'text')) {
         var bubble = el('div', 'k2t-bubble ' + (mine ? 'k2t-bubble-me' : 'k2t-bubble-agent'))
@@ -527,6 +569,8 @@
         if (kind === 'secret') {
           bubble.appendChild(el('div', 'k2t-text', doc.body || 'Secret requested'))
           bubble.appendChild(el('div', 'k2t-status', 'Answer secret cards in K2’s own Thread (widgets can’t send secrets).'))
+        } else if (perm) {
+          bubble.appendChild(permissionBlock(id, perm))
         } else {
           var body = el('div')
           fillBody(body, bodyText, item)

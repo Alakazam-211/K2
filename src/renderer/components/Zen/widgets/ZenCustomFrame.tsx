@@ -32,6 +32,8 @@ import { zenCustomSourcesFor } from '@/lib/zen/zen-custom-sources'
 import { createZenCustomStore, zenDataSpace } from '@/lib/zen/zen-custom-store'
 import { createZenCustomGuests, type ZenGuestRoomsAsk } from '@/lib/zen/zen-custom-guests'
 import { ZenGuestRoomsSheet } from './ZenGuestRoomsSheet'
+import { createZenPermissionSheet, type ZenPermissionAsk } from '@/lib/zen/permission-sheet'
+import { ZenPermissionSheet } from './ZenPermissionSheet'
 import { gardenCall } from '@/lib/garden-data/garden-data-api'
 import type { GardenCallBody } from '@/lib/garden-data/garden-data-types'
 import { onGardenDataChanged } from '@/stores/session-events'
@@ -43,7 +45,7 @@ import {
   stopZenWidget,
   zenPlacementKey,
 } from '@/lib/zen/zen-custom-run'
-import { ensureZenConversation, zenAgentRows, zenCustomViewFor } from '@/lib/zen/zen-data'
+import { ensureZenConversation, zenAgentRows, zenCustomViewFor, zenThreadItemTarget } from '@/lib/zen/zen-data'
 import { zenWidgetDisplayName } from '@/lib/zen/zen-custom-words'
 import { createZenChordGate, zenFrameHasFocus, type ZenChordActions } from '@/lib/zen/zen-shortcut'
 import { currentZenGardenId, switchZenGardenByIndex } from '@/lib/zen/zen-gardens'
@@ -144,6 +146,8 @@ export function ZenCustomFrame({
   const [loaded, setLoaded] = useState<Loaded | null>(null)
   // RS-A15: K2's confirm sheet for a guests.setRooms write (outside the frame).
   const [guestAsk, setGuestAsk] = useState<{ ask: ZenGuestRoomsAsk; resolve: (token: string | null) => void } | null>(null)
+  // Permission cards (0.46.3): K2's sheet for a card the widget shows.
+  const [permissionAsk, setPermissionAsk] = useState<{ ask: ZenPermissionAsk; resolve: () => void } | null>(null)
   const loadedRef = useRef<Loaded | null>(null)
   loadedRef.current = loaded
   const boxRef = useRef<HTMLDivElement | null>(null)
@@ -281,6 +285,13 @@ export function ZenCustomFrame({
               }).then((r) => r.result),
             confirm: (ask) => new Promise((resolve) => setGuestAsk({ ask, resolve })),
           }),
+          // Permission cards: `thread.answer` on one opens K2's sheet over
+          // the card (outside the frame), only after a press in the widget.
+          permissions: createZenPermissionSheet({
+            find: (address, cardId) => zenThreadItemTarget(address, cardId)?.item ?? null,
+            show: (ask) => new Promise<void>((resolve) => setPermissionAsk({ ask, resolve })),
+            gesture: () => zenCanvasPressedWithin(key, ZEN_PICK_GESTURE_MS) || zenFrameHasFocus(frameRef.current),
+          }),
           stop: (reason) => stopZenWidget(key, reason),
           // `thread.pickFiles` opens K2's picker only after the person
           // pressed in this widget a moment ago, or while it has the focus.
@@ -332,6 +343,15 @@ export function ZenCustomFrame({
           onLoad={onLoad}
           className="h-full w-full flex-1"
           style={{ border: 0, background: 'transparent', minHeight: 0 }}
+        />
+      )}
+      {permissionAsk && (
+        <ZenPermissionSheet
+          ask={permissionAsk.ask}
+          onDone={() => {
+            permissionAsk.resolve()
+            setPermissionAsk(null)
+          }}
         />
       )}
       {guestAsk && (

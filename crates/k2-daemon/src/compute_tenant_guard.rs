@@ -61,8 +61,9 @@ fn user_name(uid: u32) -> Option<String> {
 pub fn refusal_response() -> Vec<u8> {
     let body = r#"{"error":{"code":"compute_tenant_refused","hint":"a compute job of another K2 server can't use this K2 server; it runs walled on this machine"}}"#;
     format!(
-        "HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
+        "HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{}Connection: close\r\n\r\n{body}",
+        body.len(),
+        k2_core::frame_policy::CONNECT_HEADER_LINES
     )
     .into_bytes()
 }

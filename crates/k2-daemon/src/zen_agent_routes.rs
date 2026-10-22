@@ -775,7 +775,10 @@ fn shot(body: &[u8]) -> CliResponse {
 }
 
 fn list(params: &HashMap<String, String>) -> CliResponse {
-    let all = params.get("all").is_some_and(|v| v == "1" || v == "true");
+    // Garden access (G20, switch on): proposals are retired, so the list
+    // shows only the pending rows still draining (decided ones live in each
+    // Garden's History).
+    let all = params.get("all").is_some_and(|v| v == "1" || v == "true") && !k2_core::zen::garden_access::enabled();
     let db = k2_core::db::shared();
     let conn = db.lock();
     match agent_edit::list(&conn, all) {

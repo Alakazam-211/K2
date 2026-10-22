@@ -1,0 +1,26 @@
+{
+  "body": {
+    "action": {
+      "id": "permission",
+      "result": {
+        "message": "Denied.",
+        "outcome": "denied"
+      }
+    },
+    "addr": "billing",
+    "answer": "Deny",
+    "conversation_id": "6f1c0b52-2b1e-4d0e-9c1a-1b2f3e4d5a60",
+    "decided": [
+      {
+        "id": "pr_6a7d3e",
+        "state": "denied"
+      }
+    ],
+    "id": "3c0ffee5-1a2b-4c3d-8e4f-5a6b7c8d9e01",
+    "kind": "choice",
+    "ok": true,
+    "seq": 1,
+    "status": "answered"
+  },
+  "status": 200
+}

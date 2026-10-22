@@ -43,4 +43,5 @@ features:
   app-read-state-v1
   garden-person-rows-v1
   thread-stream-v1
+  thread-activity-ear-v1
   boot-status-views-v1

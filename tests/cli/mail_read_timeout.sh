@@ -95,6 +95,18 @@ assert_contains "hung read hint secs" "$out" "within 1s"
 assert_absent "hung read not unreachable" "$out" "daemon_unreachable"
 assert_absent "hung read not 'is it running'" "$out" "is it running?"
 
+echo "== attachments --get timeout says the download keeps going (0.46.3) =="
+set +e
+out="$("${K2_HANG[@]}" "$K2_CLI" mail attachments m_test123 --get 1 --out calls/ --json 2>&1)"
+rc=$?
+set -e
+assert_exit "hung attachment exit" 1 "$rc"
+assert_contains "hung attachment code" "$out" '"code":"timeout"'
+assert_contains "hung attachment hint" "$out" "still downloading"
+assert_contains "hung attachment hint path" "$out" "calls/"
+assert_contains "hung attachment hint retry" "$out" "before retrying"
+assert_absent "hung attachment not unreachable" "$out" "daemon_unreachable"
+
 # Closed port: connect fails immediately.
 python3 -c '
 import socket, sys

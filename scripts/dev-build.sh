@@ -44,6 +44,8 @@ fi
 source "$PROJECT_DIR/scripts/require-mail-oauth-build-env.sh"
 # shellcheck source=scripts/macos-daemon-helper-app.sh
 source "$PROJECT_DIR/scripts/macos-daemon-helper-app.sh"
+# shellcheck source=scripts/lib/build-binaries.sh
+source "$PROJECT_DIR/scripts/lib/build-binaries.sh"
 export K2_REQUIRE_MICROSOFT_OAUTH="${K2_REQUIRE_MICROSOFT_OAUTH:-0}"
 require_mail_oauth_build_env
 
@@ -58,39 +60,17 @@ LAUNCH_LABEL="dev.k2.daemon"
 VER="$(grep -m1 '"version"' src-tauri/tauri.conf.json | sed 's/.*: *"\([^"]*\)".*/\1/')"
 echo "Dev-building K2.app v${VER} — GUI + k2-daemon (no Linux gate / notarize / publish)."
 
-echo ""; echo "Step 1: tauri build..."
+echo ""; echo "Step 1: building K2.app + sidecars (scripts/lib/build-binaries.sh)..."
 export APPLE_SIGNING_IDENTITY="$SIGNING_IDENTITY"
 export APPLE_TEAM_ID="36B8R93HXV"
-bun run tauri build || { echo "FATAL: tauri build failed" >&2; exit 1; }
-
-echo ""; echo "Step 2: bundling k2-daemon sidecar..."
-cargo build --release -p k2-daemon || { echo "FATAL: k2-daemon build failed" >&2; exit 1; }
-[ -x "target/release/k2-daemon" ] || { echo "FATAL: k2-daemon missing after build" >&2; exit 1; }
-assert_daemon_oauth_not_placeholder "target/release/k2-daemon"
-# k2-ptyd rides beside the daemon in K2 Daemon.app (prd-k2-ptyd-v1 §7.1).
-cargo build --release -p k2-ptyd --bin k2-ptyd || { echo "FATAL: k2-ptyd build failed" >&2; exit 1; }
-# macOS: the daemon lives in a nested background-only helper app so
-# Activity Monitor shows the K2 icon + "K2 Daemon".
-k2_daemon_helper_assemble "$APP" "target/release/k2-daemon" "target/release/k2-ptyd" || exit 1
-k2_daemon_helper_verify "$APP" || exit 1
-# Heartbeat S2 (D11): the wake helper, built by the same cargo build. The
-# daemon copies it to /Library/PrivilegedHelperTools only after the user
-# approves the one admin dialog.
-[ -x "target/release/k2-power-helper" ] || { echo "FATAL: k2-power-helper missing after build" >&2; exit 1; }
-cp "target/release/k2-power-helper" "$APP/Contents/MacOS/k2-power-helper"
-echo "  k2-power-helper copied into the bundle."
-
-echo ""; echo "Step 2b: bundling k2-menubar helper..."
-cargo build --release -p k2-menubar || { echo "FATAL: k2-menubar build failed" >&2; exit 1; }
-[ -x "target/release/k2-menubar" ] || { echo "FATAL: k2-menubar missing after build" >&2; exit 1; }
-cp "target/release/k2-menubar" "$APP/Contents/MacOS/k2-menubar"
-echo "  k2-menubar copied into the bundle."
+k2_build_mac_binaries "$APP" || exit 1
 
 echo ""; echo "Step 3: signing with hardened runtime + entitlements..."
 codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/k2"
 k2_daemon_helper_sign "$APP" "$SIGNING_IDENTITY" "$DAEMON_ENTITLEMENTS" || exit 1
 codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/k2-menubar"
 codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/k2-power-helper"
+codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/k2-node"
 FRPC_BIN="$APP/Contents/MacOS/frpc"
 if [ -x "$FRPC_BIN" ]; then
     codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$FRPC_BIN"

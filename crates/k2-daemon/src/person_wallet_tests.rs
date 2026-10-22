@@ -402,6 +402,45 @@ fn settings_by_service_id_and_workspace_name_still_work() {
     assert_eq!(s, 200, "{v}");
 }
 
+/// Security review D (LOW): an App id equal to ANOTHER App's service id
+/// must not shadow it. The name is refused as ambiguous, naming both;
+/// nothing is stored; each App stays reachable another way.
+#[test]
+fn an_app_id_that_is_another_apps_service_id_is_refused_as_ambiguous() {
+    let f = fx("ambig");
+    // App "shadow" whose App id is exactly f.app (the hr App's service id).
+    let shadow_id = f.app.to_ascii_lowercase();
+    with_conn(|c| {
+        c.execute(
+            "INSERT INTO apps (app_id, service_id, owner_workspace, state, created_by, created_at, updated_at) \
+             VALUES ('hrapp2', ?1, ?2, 'running', 'test', 1, 1), (?3, 'svc-shadow', ?2, 'running', 'test', 1, 1)",
+            params![f.app, f.own, shadow_id],
+        )
+    })
+    .unwrap();
+    let before: i64 = with_conn(|c| c.query_row("SELECT COUNT(*) FROM app_wallet_settings", [], |r| r.get(0))).unwrap();
+    for post in [true, false] {
+        let (s, v, _) = if post {
+            owner_call(Caller::Owner, O_SETTINGS, true, json!({"app": f.app, "enabled": false}), &[])
+        } else {
+            owner_call(Caller::Owner, O_SETTINGS, false, json!({}), &[("app", f.app.as_str())])
+        };
+        assert_eq!((s, code(&v).as_str()), (400, "app_ambiguous"), "{v}");
+        let hint = v["error"]["hint"].as_str().unwrap();
+        assert!(hint.contains("svc-shadow") && hint.contains("hrapp2"), "names both: {hint}");
+    }
+    let after: i64 = with_conn(|c| c.query_row("SELECT COUNT(*) FROM app_wallet_settings", [], |r| r.get(0))).unwrap();
+    assert_eq!(before, after, "nothing stored for an ambiguous name");
+    // Each App stays reachable: the hr App by its App id, the other by its service id.
+    let (s, v, _) = owner_call(Caller::Owner, O_SETTINGS, true, json!({"app": "hrapp2", "enabled": false}), &[]);
+    assert_eq!((s, v["settings"]["serviceId"].clone()), (200, json!(f.app)), "{v}");
+    let (s, v, _) = owner_call(Caller::Owner, O_SETTINGS, true, json!({"app": "svc-shadow", "enabled": true}), &[]);
+    assert_eq!((s, v["settings"]["serviceId"].clone()), (200, json!("svc-shadow")), "{v}");
+    // The guest of the hr App sees its own setting (off), not the shadow's.
+    let (s, v, _) = skin_call(Some(&f.alice), LIST, false, json!({}), &[]);
+    assert_eq!((s, code(&v).as_str()), (403, "wallet_off"), "{v}");
+}
+
 #[test]
 fn an_unknown_app_is_refused_and_nothing_is_stored() {
     let f = fx("unknown");

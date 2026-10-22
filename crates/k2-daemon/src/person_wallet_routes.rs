@@ -492,7 +492,28 @@ pub(crate) fn resolve_wallet_app(raw: &str) -> Result<(String, Option<String>), 
     }
     let by_app_id = with_conn(|c| k2_core::deploy::store::get_app(c, &t.to_ascii_lowercase()));
     match by_app_id {
-        Ok(Some(row)) => return Ok((row.service_id, Some(row.app_id))),
+        Ok(Some(row)) => {
+            // An App id that is also ANOTHER App's (or published service's)
+            // service id would shadow it: refuse rather than guess (security
+            // review D, LOW). The same name pointing at one App is fine.
+            let other = with_conn(|c| {
+                let by_svc = k2_core::deploy::store::get_app_by_service(c, t).ok().flatten().map(|a| (a.service_id, Some(a.app_id)));
+                let by_pub = k2_core::published_services::get_by_id(c, t).ok().flatten().map(|s| (s.id, None));
+                by_svc.or(by_pub)
+            });
+            if let Some((svc, other_app)) = other.filter(|(svc, _)| *svc != row.service_id) {
+                let other_name = other_app.map(|a| format!("App {a:?}")).unwrap_or_else(|| "a published service".to_string());
+                return Err(refuse(
+                    400,
+                    "app_ambiguous",
+                    format!(
+                        "{t:?} is both App {:?} (service id {:?}) and the service id of {other_name} ({svc:?}): name the App by its <workspace>/<name> instead",
+                        row.app_id, row.service_id
+                    ),
+                ));
+            }
+            return Ok((row.service_id, Some(row.app_id)));
+        }
         Ok(None) => {}
         Err(e) => return Err(refuse(500, "internal", format!("app lookup: {e}"))),
     }

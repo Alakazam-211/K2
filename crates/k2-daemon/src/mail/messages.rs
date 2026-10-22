@@ -945,6 +945,94 @@ pub fn resolve_out_path(ws_root: &str, out: &str) -> Result<PathBuf, String> {
     Ok(parent.join(file_name))
 }
 
+/// Where `attachments --get --out` lands: a FILE the caller named, or a
+/// DIRECTORY the daemon names the file in (`<dir>/<attachment name>`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OutTarget {
+    File(PathBuf),
+    Dir(PathBuf),
+}
+
+/// Resolve `--out` for `attachments --get` (0.46.3). Same jail as
+/// [`resolve_out_path`], plus the directory forms:
+/// - a path ending in `/` (or `.`) is a directory — created when missing,
+///   the way the file form creates its parent;
+/// - a path naming an existing directory is that directory.
+///
+/// Everything else is a file path, unchanged. The directory itself is
+/// canonicalized and must sit under the root (a symlinked dir that
+/// points outside is refused). Runs BEFORE any engine dial, so a bad
+/// path answers at once.
+pub fn resolve_out_target(ws_root: &str, out: &str) -> Result<OutTarget, String> {
+    let out = out.trim();
+    if out.is_empty() {
+        return Err("empty 'out' path".to_string());
+    }
+    let dir_form = out.ends_with('/') || out == "." || out.ends_with("/.");
+    if !dir_form {
+        let file = resolve_out_path(ws_root, out)?;
+        if !file.is_dir() {
+            return Ok(OutTarget::File(file));
+        }
+    }
+    let rel = Path::new(out);
+    if rel.is_absolute() {
+        return Err(format!(
+            "'out' must be a path inside the workspace (relative), got absolute: {out}"
+        ));
+    }
+    if rel
+        .components()
+        .any(|c| matches!(c, Component::ParentDir | Component::Prefix(_) | Component::RootDir))
+    {
+        return Err(format!("'out' must not contain '..' components: {out}"));
+    }
+    let root = Path::new(ws_root)
+        .canonicalize()
+        .map_err(|e| format!("workspace root unavailable: {e}"))?;
+    let dir = root.join(rel);
+    std::fs::create_dir_all(&dir).map_err(|e| {
+        format!("'{out}' names a folder, but it could not be created ({e}) — is part of it a file?")
+    })?;
+    let dir = dir
+        .canonicalize()
+        .map_err(|e| format!("resolve '{out}': {e}"))?;
+    if !dir.starts_with(&root) {
+        return Err(format!("'out' escapes the workspace: {out}"));
+    }
+    Ok(OutTarget::Dir(dir))
+}
+
+/// The file name the daemon writes inside a directory `--out`: the
+/// attachment's own name made safe. Path separators, control characters
+/// and characters Windows refuses become `_`; leading dots go (no
+/// hidden files, no `.` / `..`); long names are cut to 200 bytes. An
+/// empty result falls back to `attachment-<n>` (n is the 1-based index).
+pub fn safe_attachment_filename(raw: Option<&str>, n: usize) -> String {
+    let fallback = format!("attachment-{n}");
+    let Some(raw) = raw else { return fallback };
+    let mapped: String = raw
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            c if c.is_control() => '_',
+            c => c,
+        })
+        .collect();
+    let trimmed = mapped.trim().trim_start_matches('.').trim();
+    let mut name = String::new();
+    for c in trimmed.chars() {
+        if name.len() + c.len_utf8() > 200 {
+            break;
+        }
+        name.push(c);
+    }
+    if name.trim_matches(|c: char| c == '_' || c == '.' || c.is_whitespace()).is_empty() {
+        return fallback;
+    }
+    name
+}
+
 /// Why a workspace-relative READ path was refused. The route maps
 /// `Usage` → 400 `usage` (absolute / traversal / escapes the root) and
 /// `NotFound` → 404 `not_found` (no such file) — a workspace never
@@ -1555,6 +1643,88 @@ pub(crate) mod tests {
             let _ = std::fs::remove_dir_all(&outside);
         }
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn out_targets_tell_folders_from_files_and_stay_in_the_root() {
+        let root = std::env::temp_dir().join(format!(
+            "mail-out-dir-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(root.join("calls")).unwrap();
+        let root_s = root.to_string_lossy().to_string();
+        let canon = root.canonicalize().unwrap();
+
+        // An existing folder, with or without the trailing slash.
+        for out in ["calls", "calls/"] {
+            assert_eq!(
+                resolve_out_target(&root_s, out).expect(out),
+                OutTarget::Dir(canon.join("calls")),
+                "out={out}"
+            );
+        }
+        // The workspace root itself.
+        assert_eq!(resolve_out_target(&root_s, ".").unwrap(), OutTarget::Dir(canon.clone()));
+        // A trailing-slash folder that does not exist yet is CREATED.
+        assert_eq!(
+            resolve_out_target(&root_s, "new/inbox/").unwrap(),
+            OutTarget::Dir(canon.join("new/inbox"))
+        );
+        assert!(canon.join("new/inbox").is_dir(), "trailing-slash folder must be created");
+        // A plain file path stays a file path (unchanged behaviour).
+        assert_eq!(
+            resolve_out_target(&root_s, "calls/call.m4a").unwrap(),
+            OutTarget::File(canon.join("calls/call.m4a"))
+        );
+        // A trailing slash on an existing FILE is refused, not overwritten.
+        std::fs::write(root.join("note.txt"), b"x").unwrap();
+        let err = resolve_out_target(&root_s, "note.txt/").expect_err("file is not a folder");
+        assert!(err.contains("folder"), "{err}");
+        // The jail holds for the folder forms too.
+        assert!(resolve_out_target(&root_s, "../out/").is_err());
+        assert!(resolve_out_target(&root_s, "/tmp/").is_err());
+        assert!(resolve_out_target(&root_s, " ").is_err());
+        #[cfg(unix)]
+        {
+            let outside = std::env::temp_dir().join(format!(
+                "mail-out-dir-escape-{}-{}",
+                std::process::id(),
+                uuid::Uuid::new_v4()
+            ));
+            std::fs::create_dir_all(&outside).unwrap();
+            std::os::unix::fs::symlink(&outside, root.join("away")).unwrap();
+            for out in ["away", "away/"] {
+                let err = resolve_out_target(&root_s, out).expect_err("symlinked folder escapes");
+                assert!(err.contains("escapes"), "out={out}: {err}");
+            }
+            let _ = std::fs::remove_dir_all(&outside);
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn attachment_filenames_are_made_safe() {
+        assert_eq!(safe_attachment_filename(Some("call.m4a"), 1), "call.m4a");
+        assert_eq!(safe_attachment_filename(Some("../../etc/passwd"), 1), "_.._etc_passwd");
+        assert_eq!(safe_attachment_filename(Some("a\\b/c.txt"), 1), "a_b_c.txt");
+        assert_eq!(safe_attachment_filename(Some(".bashrc"), 1), "bashrc");
+        assert_eq!(safe_attachment_filename(Some("x\0y\n.pdf"), 1), "x_y_.pdf");
+        for empty in [None, Some(""), Some("  "), Some(".."), Some("."), Some("/"), Some("../")] {
+            assert_eq!(safe_attachment_filename(empty, 3), "attachment-3", "{empty:?}");
+        }
+        let long = "é".repeat(300);
+        let cut = safe_attachment_filename(Some(&long), 1);
+        assert!(cut.len() <= 200 && !cut.is_empty(), "len {}", cut.len());
+        for name in ["../../etc/passwd", "a/b", "..\\..\\x", "./.ssh/id"] {
+            let safe = safe_attachment_filename(Some(name), 1);
+            let mut comps = Path::new(&safe).components();
+            assert!(
+                matches!(comps.next(), Some(Component::Normal(_))) && comps.next().is_none(),
+                "{name} -> {safe} must be one plain path component"
+            );
+            assert!(!safe.starts_with('.'), "{name} -> {safe}");
+        }
     }
 
     #[test]

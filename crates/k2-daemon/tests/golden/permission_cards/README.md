@@ -20,6 +20,7 @@ disagree, the sample is right.**
 | `ws` | one `WS /cli/overlay/events?cards=2` frame `{collection, seq, id, doc, rev}` | ws |
 | `response` | `POST /cli/thread/answer`: `{status, body}` for each answer and error a phone can meet | http |
 | `hidden` | App guests: **no doc at all** on any path | none |
+| `legacy` / `sealed-plaintext` | `push__permission__*`: the push to rosson's phone when the card is posted (lane A2): the relay payload (`K2Cloud::payload`) and the sealed lane's plaintext before sealing/padding (`e2e::alert_plaintext`); server stamp `rosson` / `inst_01`, `kid` and `ctr` fixed | push |
 
 | view | who |
 |---|---|
@@ -51,8 +52,6 @@ batch). Request ids are `pr_` + 6–32 hex, or the held request's own id
 
 ## Not here yet
 
-- **Push** (`push__permission__legacy`, `push__permission__sealed-plaintext`):
-  lane A2's targeted push isn't built yet; its samples join with it.
 - **Words:** until lanes E1/E2 register the real catalog actions, the
   `compute.use`, `apps.*` cards use stand-in specs with the PRD's words. When
   the real actions land, the samples take the real spec's words; shapes don't

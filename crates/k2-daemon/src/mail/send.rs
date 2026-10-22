@@ -1596,6 +1596,35 @@ mod tests {
         }
     }
 
+    /// Hosted send/reply: K2 hands Stalwart the body VERBATIM in
+    /// `bodyValues`, and Stalwart's own composer (mail-builder 1.0, the
+    /// version Stalwart 0.16.x pins) encodes it without a hard wrap —
+    /// the text part decodes to the input line for line, wire lines ≤ 998.
+    #[test]
+    fn hosted_send_and_reply_keep_paragraphs_exactly() {
+        let body = crate::mail::external::tests::fidelity_body();
+        for reply in [false, true] {
+            let mut m = msg();
+            m.text_body = body.clone();
+            if reply {
+                m.subject = "Re: Weekly digest".to_string();
+                m.in_reply_to = Some("<src@example.com>".to_string());
+                m.references = Some("<src@example.com>".to_string());
+            }
+            let v = submission_email_json(&m);
+            let value = v["bodyValues"]["k2body"]["value"].as_str().expect("body value");
+            assert_eq!(value, body, "the hosted body reaches Stalwart verbatim");
+            let wire = mail_builder::MessageBuilder::new()
+                .from(("Research Bot", "bot@acme.dev"))
+                .to("human@example.com")
+                .subject(m.subject.as_str())
+                .text_body(value)
+                .write_to_vec()
+                .expect("compose");
+            crate::mail::external::tests::assert_body_fidelity(&wire, &body);
+        }
+    }
+
     /// Recording fake store: counts inserts, canned failure switches.
     #[derive(Default)]
     struct FakeStore {

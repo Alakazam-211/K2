@@ -536,9 +536,14 @@ fn switch_on_retires_keep_mine_and_proposals_and_voids_what_waits() {
     .expect("keep card");
     let crate::overlay_routes::Presented::Card { id: keep_id, .. } = keep else { panic!("{keep:?}") };
 
-    // The old guard's drop turns the switch off: drop it first.
+    // The person turns Garden access lists on (A1's flip, which runs the
+    // void): the old guard's drop turns the switch off, so drop it first.
     e.switch = None;
+    assert!(crate::settings_routes::sync_garden_access(true, "owner"), "off -> on");
     e.switch = Some(Switch::set(true));
+    assert_eq!(doc(&ws, &keep_id).choice.unwrap().status, "voided", "the flip voided the Keep-as-mine card");
+    let after = crate::permission::store::get(req.id.as_str()).expect("read").expect("row");
+    assert_eq!((after.state, after.result_message.as_deref()), (RequestState::Cancelled, Some(RETIRED_WORDS)));
     for (id, params) in [("garden.keep-mine", json!({ "widget": "board", "version": live })), ("garden.proposal.approve", json!({ "proposal": "zp_1" }))] {
         let r = actions::find(id).expect("still registered");
         match (r.check)(&ctx(&ws, params.clone())) {
@@ -548,12 +553,61 @@ fn switch_on_retires_keep_mine_and_proposals_and_voids_what_waits() {
         let (s, v) = beta_ask(&ws, id, params);
         assert_eq!((s.as_str(), v["error"]["code"].as_str()), ("409 Conflict", Some("retired")), "{id}: {v}");
     }
-    assert_eq!(void_on_switch_on(), 2, "one Keep-as-mine card and one request");
-    assert_eq!(doc(&ws, &keep_id).choice.unwrap().status, "voided");
-    let after = crate::permission::store::get(req.id.as_str()).expect("read").expect("row");
-    assert_eq!((after.state, after.result_message.as_deref()), (RequestState::Cancelled, Some(RETIRED_WORDS)));
     assert_eq!(void_on_switch_on(), 0, "a second run closes nothing");
     assert!(list(&g.0).is_empty(), "the void lists nobody");
+}
+
+/// The void itself counts what it closed: one card and one request.
+#[test]
+fn the_void_counts_cards_and_requests() {
+    let _e = env(true);
+    let ws = seed("cnt");
+    let keep = crate::overlay_routes::present_action_card(
+        None,
+        &ws.id,
+        "keep?",
+        &[crate::action_cards::KEEP_AS_MINE, "Leave it"],
+        overlay::CardAction { id: crate::action_cards::KEEP_WIDGET.into(), params: json!({}), dedupe: "w".into(), result: None, view: None },
+        false,
+        overlay::now_secs() + 3600,
+        crate::overlay_routes::CardAudience::AgentPost,
+    )
+    .expect("keep card");
+    assert!(matches!(keep, crate::overlay_routes::Presented::Card { .. }), "{keep:?}");
+    let mut params = serde_json::Map::new();
+    params.insert("proposal".into(), json!("zp_9"));
+    let now = overlay::now_secs();
+    let req = k2_core::permission::request::PermissionRequest {
+        id: k2_core::permission::request::RequestId::new(),
+        workspace_id: ws.id.clone(),
+        session_id: Some("sess-cnt".into()),
+        conversation_id: None,
+        addr: Some(ws.handle.clone()),
+        card_id: None,
+        action: "garden.proposal.approve".into(),
+        params_hash: k2_core::permission::request::params_hash(&params),
+        params: Value::Object(params),
+        text_hash: "x".into(),
+        why: "approve it".into(),
+        state: RequestState::Pending,
+        floor: "garden-owner".into(),
+        held_ref: None,
+        batch_id: None,
+        ask_number: 1,
+        asked_for: None,
+        created_at: now,
+        expires_at: now + 3600,
+        answered_at: None,
+        answered_by: None,
+        answered_via: None,
+        reason: None,
+        result_message: None,
+        updated_why: None,
+        updated_at: None,
+    };
+    crate::permission::store::insert(&req).expect("insert");
+    assert_eq!(void_on_switch_on(), 2, "one Keep-as-mine card and one request");
+    assert_eq!(void_on_switch_on(), 0, "then nothing");
 }
 
 /// Deny on any other action leaves the asks table alone.

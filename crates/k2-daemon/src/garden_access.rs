@@ -18,6 +18,31 @@ use k2_core::zen::garden_access::{self as ga, Actor, EventKind, On};
 
 use crate::sidecar_routes::Caller;
 
+/// `~/.k2/garden-access-on`: present only while the switch is on (A6). The
+/// `k2` CLI reads it before treating `k2 zen garden access|history` and
+/// `k2 zen widget history` as verbs, so with the switch off it asks this
+/// daemon nothing and answers exactly as 0.46.3 did (off-golden
+/// `cli_zen.txt`). The daemon stays the authority: with the file but the
+/// switch off, those routes still answer as unknown.
+pub const SWITCH_MARK: &str = "garden-access-on";
+
+/// Make [`SWITCH_MARK`] match the switch (boot, and every flip). Off and
+/// never on: one stat, nothing written.
+pub fn mark_switch(on: bool) {
+    let path = k2_core::paths::k2_home().join(SWITCH_MARK);
+    let r = if on {
+        std::fs::create_dir_all(k2_core::paths::k2_home())
+            .and_then(|_| std::fs::write(&path, "on\n"))
+    } else if path.exists() {
+        std::fs::remove_file(&path)
+    } else {
+        Ok(())
+    };
+    if let Err(e) = r {
+        k2_core::log_debug!("[garden-access] switch mark {}: {e}", path.display());
+    }
+}
+
 /// How often the History sweep runs.
 pub const SWEEP_EVERY: Duration = Duration::from_secs(24 * 60 * 60);
 
@@ -130,6 +155,25 @@ mod tests {
         let ns: Vec<i64> = left.iter().map(|e| e.detail["n"].as_i64().expect("n")).collect();
         assert_eq!(ns, vec![3, 2]);
         assert_eq!(SWEEP_EVERY, Duration::from_secs(86_400), "daily");
+    }
+
+    /// The CLI's switch mark follows every flip, and an off switch that was
+    /// never on writes nothing under `~/.k2`.
+    #[test]
+    fn the_switch_mark_exists_only_while_the_switch_is_on() {
+        let home = crate::test_support::TempHome::new();
+        let _db = k2_core::db::scoped_for_test();
+        let mark = home.path().join(".k2").join(SWITCH_MARK);
+        let was = ga::set_switch(false);
+        mark_switch(false);
+        assert!(!mark.exists(), "off, never on: nothing written");
+        assert!(crate::settings_routes::sync_garden_access(true, "test"), "flipped on");
+        assert_eq!(std::fs::read_to_string(&mark).expect("the mark while on"), "on\n");
+        assert!(!crate::settings_routes::sync_garden_access(true, "test"), "already on");
+        assert!(mark.exists());
+        assert!(crate::settings_routes::sync_garden_access(false, "test"), "flipped off");
+        assert!(!mark.exists(), "off removes the mark");
+        ga::set_switch(was);
     }
 
     /// G8 through the real route: with the switch off and no rows, a Garden

@@ -189,6 +189,9 @@ call "$OWNER" POST /cli/zen/widget/new '{"name":"early"}'
 want "off: the person makes widget 'early' (stamped as at 0.46.3)" 200
 call "$OWNER" GET /cli/zen/garden/access '' "garden=x"
 want "off: garden/access is an unknown route" 404
+call "$OWNER" POST /cli/zen/garden/access '{"garden":"x","agent":"y","allow":true}'
+want "off: a POST to garden/access is 0.46.3's 405" 405
+[[ ! -e "$H/.k2/garden-access-on" ]] && ok "off: no CLI switch mark" || bad "off: ~/.k2/garden-access-on exists"
 call "$PASS_alpha" POST /cli/zen/garden/new '{"name":"Off garden"}'
 want "off: an agent's garden/new is 0.46.3's refusal" 403 '.error == "zen_local_only"'
 call "$LOGIN" POST /cli/settings/update '{"gardenAccess":true}'
@@ -197,6 +200,7 @@ call "$PASS_alpha" POST /cli/settings/update '{"gardenAccess":false}'
 [[ "$CODE" == 4?? ]] && ok "an agent can't flip the switch ($CODE)" || bad "an agent flipped the switch: $CODE $BODY"
 call "$OWNER" GET /cli/settings/get
 want "the switch is on" 200 '.gardenAccess == true'
+[[ -e "$H/.k2/garden-access-on" ]] && ok "on: the CLI switch mark exists" || bad "on: no ~/.k2/garden-access-on"
 
 # ── 1. alpha makes a Garden ──────────────────────────────────────────
 say "step 1: alpha makes a Garden"
@@ -414,6 +418,7 @@ fi
 say "step 9: switch off"
 call "$OWNER" POST /cli/settings/update '{"gardenAccess":false}'
 want "the person turns the switch off" 200 '.gardenAccess == false'
+[[ ! -e "$H/.k2/garden-access-on" ]] && ok "off again: the CLI switch mark is gone" || bad "off: ~/.k2/garden-access-on stayed"
 for r in /cli/zen/garden/access /cli/zen/garden/history /cli/zen/widget/history /cli/zen/gardens/deleted /cli/zen/snapshot; do
   call "$OWNER" GET "$r" '' "garden=$G&widget=tally"
   want "off: $r is unknown (404)" 404

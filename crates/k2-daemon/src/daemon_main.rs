@@ -382,7 +382,9 @@ async fn async_main() {
     // Garden access lists (prd-garden-access-v1 G0, default off): the
     // persisted switch. No G4 pass here: the pass runs only on an off→on
     // flip (settings update), never at boot.
-    k2_core::zen::garden_access::set_switch(k2_core::app_settings::load().garden_access);
+    let garden_access_on = k2_core::app_settings::load().garden_access;
+    k2_core::zen::garden_access::set_switch(garden_access_on);
+    crate::garden_access::mark_switch(garden_access_on);
     // Garden History: the daily 2-year sweep (G29a), headless.
     crate::garden_access::spawn_sweep();
     // Machines you can use (Settings → Compute): a node machine tells K2

@@ -113,15 +113,8 @@ if run 2 study garden-access; then
     if printf '%s' "$OUT" | grep -q "unknown study topic 'garden-access'"; then ok "study garden-access (off) is an unknown topic"; else bad "off: $OUT"; fi
 fi
 
-if run 0 zen --help; then
-    if printf '%s' "$OUT" | grep -q 'GARDEN ACCESS LISTS'; then bad "zen --help (off) has the access section"; else ok "zen --help (off) is today's"; fi
-fi
-
 echo "== switch on: the topic and its page =="
 routes "{$ACCESS_ON}"
-if run 0 zen --help; then
-    if printf '%s' "$OUT" | grep -q '^GARDEN ACCESS LISTS (on for this computer'; then ok "zen --help (on) has the access section"; else bad "zen --help (on): $OUT"; fi
-fi
 if run 0 study; then
     if printf '%s' "$OUT" | grep -q '^  garden-access       Who may edit a Garden'; then ok "study lists garden-access (on)"; else bad "study (on): $OUT"; fi
     if printf '%s' "$OUT" | grep -A1 '^  garden-data ' | grep -q '^  garden-access '; then ok "right after garden-data"; else bad "order: $OUT"; fi

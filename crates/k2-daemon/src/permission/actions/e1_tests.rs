@@ -100,12 +100,24 @@ fn answer(author: &str, ws: &Ws, card: &str, label: &str) -> (String, Value) {
     (r.status.to_string(), serde_json::from_str(&r.body).unwrap_or_else(|e| panic!("{e}: {}", r.body)))
 }
 
+/// The state this answer left the card's request in (`decided[]`: a
+/// batch card's `result` is the batch's, not the item's).
+fn decided(a: &Value, card: &str) -> String {
+    let (_, id) = card.split_once('#').unwrap_or_else(|| panic!("a card from ask_card: {card}"));
+    a["decided"]
+        .as_array()
+        .and_then(|d| d.iter().find(|x| x["id"] == id))
+        .and_then(|x| x["state"].as_str())
+        .unwrap_or_else(|| panic!("{id} was not decided: {a}"))
+        .to_string()
+}
+
 /// Ask, then Allow as `author`; the request must end `approved`.
 fn ask_and_allow(ws: &Ws, action: &str, params: Value, author: &str) -> Value {
     let card = ask_card(ws, action, params);
     let (s, a) = answer(author, ws, &card, "Allow");
     assert_eq!(s, "200 OK", "{action} by {author}: {a}");
-    assert_eq!(a["action"]["result"]["outcome"], "approved", "{action} by {author}: {a}");
+    assert_eq!(decided(&a, &card), "approved", "{action} by {author}: {a}");
     a
 }
 
@@ -379,7 +391,7 @@ fn an_admin_answers_admin_rows_and_lowers_the_owners_but_never_raises_them() {
     // Admin may lower it.
     let owner = login("e1own", Role::Owner);
     let (s, v) = answer(&owner, &ws, &cards["apps.build"], "Allow");
-    assert_eq!((s.as_str(), v["action"]["result"]["outcome"].as_str()), ("200 OK", Some("approved")), "{v}");
+    assert_eq!((s.as_str(), decided(&v, &cards["apps.build"]).as_str()), ("200 OK", "approved"), "{v}");
     assert!(state(Writer::Access("apps_build"), &ws));
     ask_and_allow(&ws, "apps.build-off", json!({}), &admin);
     assert!(!state(Writer::Access("apps_build"), &ws), "an Admin lowers switch 1");

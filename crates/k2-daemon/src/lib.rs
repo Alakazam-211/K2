@@ -321,6 +321,9 @@ pub mod daemon_main;
 mod test_support;
 #[cfg(test)]
 mod codex_no_daemon_tests;
+// prd-garden-access-v1 §8: the switch-off golden for the Garden catalog rows.
+#[cfg(test)]
+mod garden_access_off_golden_tests;
 
 use std::sync::Arc;
 use std::time::Instant;

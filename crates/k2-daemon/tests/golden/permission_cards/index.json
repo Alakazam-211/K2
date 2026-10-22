@@ -153,6 +153,38 @@
       "view": "answer"
     },
     {
+      "file": "answer__garden-access-allow__response.json",
+      "form": "response",
+      "sha256": "8aab2d3cb6008fe33d3b71eff11abb136dc61b2d0208ea21a971b8d5a4a0097d",
+      "state": "garden-access-allow",
+      "transport": "http",
+      "view": "answer"
+    },
+    {
+      "file": "answer__garden-access-not-now__response.json",
+      "form": "response",
+      "sha256": "28dfd68a1ea8911e3bde4fc80e5e0adf5dd3b368ee6baf471866e84d689971c5",
+      "state": "garden-access-not-now",
+      "transport": "http",
+      "view": "answer"
+    },
+    {
+      "file": "answer__garden-delete-allow__response.json",
+      "form": "response",
+      "sha256": "cab994c7b4620d67cc0dba81e58b835d60b06ace9b6e57c0c990b35fea21de86",
+      "state": "garden-delete-allow",
+      "transport": "http",
+      "view": "answer"
+    },
+    {
+      "file": "answer__garden-delete-keep-it__response.json",
+      "form": "response",
+      "sha256": "dfd1efefd997e4e566eaa3a7163964f44514ef216a465726e028fff7296f620e",
+      "state": "garden-delete-keep-it",
+      "transport": "http",
+      "view": "answer"
+    },
+    {
       "file": "answer__not-an-option__response.json",
       "form": "response",
       "sha256": "e06fece5bfce2ad1bc8d2ebefa7d58832b1be0dd2c7c38a406084ea5253dd9cd",
@@ -703,6 +735,126 @@
       "state": "pending",
       "transport": "doc",
       "view": "batch-approver"
+    },
+    {
+      "file": "garden-access-admin__pending__cards2.json",
+      "form": "cards2",
+      "sha256": "0c6d5f7aeff4d52d668f308463a709274f429feab3be99530848f6947a1c755f",
+      "state": "pending",
+      "transport": "doc",
+      "view": "garden-access-admin"
+    },
+    {
+      "file": "garden-access-admin__pending__fallback.json",
+      "form": "fallback",
+      "sha256": "dc59dc67bea2fb7048c5a55ae30b6e0a4f8337e403b30ebe9f3d261fe4a95304",
+      "state": "pending",
+      "transport": "doc",
+      "view": "garden-access-admin"
+    },
+    {
+      "file": "garden-access-agent__pending__fallback.json",
+      "form": "fallback",
+      "sha256": "dc59dc67bea2fb7048c5a55ae30b6e0a4f8337e403b30ebe9f3d261fe4a95304",
+      "state": "pending",
+      "transport": "doc",
+      "view": "garden-access-agent"
+    },
+    {
+      "file": "garden-access__approved__cards2.json",
+      "form": "cards2",
+      "sha256": "482668d4658de3920c8feacc36d5739e8d5f78bbdbaf74440d576585c35634a2",
+      "state": "approved",
+      "transport": "doc",
+      "view": "garden-access"
+    },
+    {
+      "file": "garden-access__approved__fallback.json",
+      "form": "fallback",
+      "sha256": "fa7ac07ad58dac0dbe25d04e1e74f3e9f0138fb909fca1f2719c67579ae2ee80",
+      "state": "approved",
+      "transport": "doc",
+      "view": "garden-access"
+    },
+    {
+      "file": "garden-access__denied__cards2.json",
+      "form": "cards2",
+      "sha256": "89b88ba7d856020842292c7959e9f1254a7b6d78f206a9db940a5cdffbb2fe28",
+      "state": "denied",
+      "transport": "doc",
+      "view": "garden-access"
+    },
+    {
+      "file": "garden-access__denied__fallback.json",
+      "form": "fallback",
+      "sha256": "89c522c2b57c5f7374d9922ad444a96ddda3e10985109662f4004614e18764f0",
+      "state": "denied",
+      "transport": "doc",
+      "view": "garden-access"
+    },
+    {
+      "file": "garden-access__pending__cards2.json",
+      "form": "cards2",
+      "sha256": "5202aeee144f313eacf509b3f8f0fd26d33e4383760f37b87df1c96892a61fdf",
+      "state": "pending",
+      "transport": "doc",
+      "view": "garden-access"
+    },
+    {
+      "file": "garden-access__pending__fallback.json",
+      "form": "fallback",
+      "sha256": "f9bd481ff010b3cdc17a1644c10b1ba6429e787eb9275ca99946fc3d793eafcc",
+      "state": "pending",
+      "transport": "doc",
+      "view": "garden-access"
+    },
+    {
+      "file": "garden-delete__approved__cards2.json",
+      "form": "cards2",
+      "sha256": "279936660e00a921277e8dff7b5a81dd7d72e637fbd48c7384b8f278427a9969",
+      "state": "approved",
+      "transport": "doc",
+      "view": "garden-delete"
+    },
+    {
+      "file": "garden-delete__approved__fallback.json",
+      "form": "fallback",
+      "sha256": "406ffd19efa933b33266eb29c976b5d1e03ab25a464e6916e490a254f8fdaffe",
+      "state": "approved",
+      "transport": "doc",
+      "view": "garden-delete"
+    },
+    {
+      "file": "garden-delete__denied__cards2.json",
+      "form": "cards2",
+      "sha256": "8a264bfc8d42d4c83bc301bd15c3c33dc6bc15d6a7252ad7846bc84336600f5a",
+      "state": "denied",
+      "transport": "doc",
+      "view": "garden-delete"
+    },
+    {
+      "file": "garden-delete__denied__fallback.json",
+      "form": "fallback",
+      "sha256": "06aeaca359ac0196478d0f0dee7d6d6a7ba07182192de8bef79e0e081b906759",
+      "state": "denied",
+      "transport": "doc",
+      "view": "garden-delete"
+    },
+    {
+      "file": "garden-delete__pending__cards2.json",
+      "form": "cards2",
+      "sha256": "10150cfd4f18aa3c24eeceecc1d8f95db40955f18276f32a0fe7974036c0acb5",
+      "state": "pending",
+      "transport": "doc",
+      "view": "garden-delete"
+    },
+    {
+      "file": "garden-delete__pending__fallback.json",
+      "form": "fallback",
+      "sha256": "b51cd246b2de3555373c5371bc2b35596101eb689c0aca7a92e8fcfe7d82383a",
+      "state": "pending",
+      "transport": "doc",
+      "view": "garden-delete"
     },
     {
       "file": "guest__approved__hidden.json",

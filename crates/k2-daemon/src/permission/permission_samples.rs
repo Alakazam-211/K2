@@ -103,6 +103,15 @@ const DANA: &str = "dana";
 const LEE: &str = "lee";
 const CAST_PASSWORD: &str = "sample-password-1";
 
+/// K2's own Garden cards (prd-garden-access-v1 G16–G17, Appendix C): the
+/// request ids, the doc ids and the Gardens' ids (K2 mints `g-` + 8 hex).
+const REQ_GA: &str = "pr_6a7d3e";
+const REQ_GD: &str = "pr_6d31e7";
+const GA_CARD_ID: &str = "3c0ffee5-1a2b-4c3d-8e4f-5a6b7c8d9e01";
+const GD_CARD_ID: &str = "4d1e7e7e-2b3c-4d4e-9f50-6b7c8d9e0f12";
+const GARDEN_SALES: &str = "g-5a1e5b0a";
+const GARDEN_OLD: &str = "g-0e1db0a7";
+
 const WHY: &str = "Run the test suite on k2n2-m1; it takes 40 min here";
 const NOTE: &str = "I need this for the payroll run";
 
@@ -316,7 +325,7 @@ fn row(w: &World, id: &str, action: &str, params: Value, held: Option<&str>, ask
         action: action.to_string(),
         params: Value::Object(values.clone()),
         params_hash: params_hash(&values),
-        text_hash: present::words_hash(&present::words(reg.spec, &ctx)),
+        text_hash: present::text_hash_of(reg.spec, &ctx),
         why: WHY.to_string(),
         state: RequestState::Pending,
         floor: present::floor_str(reg.spec.floor).to_string(),
@@ -429,6 +438,16 @@ impl Out {
         let name = format!("{view}__{state}__{form}.json");
         let s = Sample { view: view.into(), state: state.into(), form: form.into(), transport, body };
         assert!(self.files.insert(name.clone(), s).is_none(), "two samples named {name}");
+    }
+
+    /// Replace `real` with `fixed` in every sample whose name starts with
+    /// one of `prefixes` (a Garden's minted id).
+    fn retag(&mut self, prefixes: &[&str], real: &str, fixed: &str) {
+        for (name, s) in self.files.iter_mut() {
+            if prefixes.iter().any(|p| name.starts_with(p)) {
+                s.body = serde_json::from_str(&s.body.to_string().replace(real, fixed)).expect("still JSON");
+            }
+        }
     }
 }
 
@@ -730,6 +749,95 @@ fn push_samples(out: &mut Out) {
     drop(w);
 }
 
+/// K2's own Garden cards (prd-garden-access-v1 G16–G17): `garden.access`
+/// (the "made" prompt, `garden/new`) and `garden.delete`, presented by
+/// `garden_cards::present_detail` with Garden access lists on, answered on
+/// the Thread route. The same `cards=2` permission view as every card
+/// (Appendix C): only the words differ. Floor GardenOwner reads `owner`,
+/// so maya (Admin) waits.
+fn garden_samples(out: &mut Out) {
+    // Garden access lists on for these cards only (generate() holds the
+    // TempHome's env lock, so no other test sees the switch).
+    struct On;
+    impl Drop for On {
+        fn drop(&mut self) {
+            k2_core::zen::garden_access::set_switch(false);
+        }
+    }
+    k2_core::zen::garden_access::set_switch(true);
+    let _on = On;
+    let f = k2_core::zen::ZenFiles::local();
+    f.setup().expect("zen setup");
+    let sales = f.new_garden("Sales board", None, None, None).expect("a Garden").id;
+    let old = f.new_garden("Old board", None, None, None).expect("a Garden").id;
+    use crate::zen_garden_cards::{present_detail, GardenAsk};
+    for state in ["pending", "approved", "denied"] {
+        let w = billing();
+        let id = RequestId::parse(REQ_GA).expect("an id");
+        let v = present_detail(GardenAsk::Access, w.ws, &sales, true, true, None, id);
+        let card = v["card"].as_str().unwrap_or_else(|| panic!("no Garden card: {v}")).to_string();
+        match state {
+            "pending" => {}
+            "approved" => {
+                let v = answer_ok(ROSSON, &w, &card, json!({ "answer": "Allow", "client": "phone" }));
+                response(out, "garden-access-allow", 200, v, &card, GA_CARD_ID);
+            }
+            _ => {
+                let v = answer_ok(ROSSON, &w, &card, json!({ "answer": "Deny", "client": "phone" }));
+                response(out, "garden-access-not-now", 200, v, &card, GA_CARD_ID);
+            }
+        }
+        pin(&w, &card, ANSWERED);
+        let d = doc_of(&w, &card);
+        both(out, "garden-access", state, &d, &rosson(), &card, GA_CARD_ID, ANSWERED);
+        if state == "pending" {
+            both(out, "garden-access-admin", state, &d, &maya(), &card, GA_CARD_ID, ANSWERED);
+            fallback(out, "garden-access-agent", state, &d, &agent(&w), &card, GA_CARD_ID, ANSWERED);
+        }
+        drop(w);
+    }
+    // Delete last: the approved one deletes "Old board".
+    for state in ["pending", "denied", "approved"] {
+        let w = billing();
+        {
+            let shared = k2_core::db::shared();
+            let conn = shared.lock();
+            assert!(k2_core::zen::garden_access::record_made(&conn, &old, w.ws, T0).expect("made"), "billing made Old board");
+        }
+        let id = RequestId::parse(REQ_GD).expect("an id");
+        let v = present_detail(GardenAsk::Delete, w.ws, &old, false, true, None, id);
+        let card = v["card"].as_str().unwrap_or_else(|| panic!("no Garden card: {v}")).to_string();
+        match state {
+            "pending" => {}
+            "approved" => {
+                let v = answer_ok(ROSSON, &w, &card, json!({ "answer": "Allow", "client": "phone" }));
+                response(out, "garden-delete-allow", 200, v, &card, GD_CARD_ID);
+            }
+            _ => {
+                let v = answer_ok(ROSSON, &w, &card, json!({ "answer": "Deny", "client": "phone" }));
+                response(out, "garden-delete-keep-it", 200, v, &card, GD_CARD_ID);
+            }
+        }
+        pin(&w, &card, ANSWERED);
+        let d = doc_of(&w, &card);
+        both(out, "garden-delete", state, &d, &rosson(), &card, GD_CARD_ID, ANSWERED);
+        drop(w);
+    }
+    assert!(f.find_garden(&old).is_none(), "the approved delete card deleted Old board");
+    // The minted ids, and the card dedupe key made from them
+    // (`<action>:<8 of the values hash>`, `present::single_dedupe`).
+    let hash8 = |g: &str| {
+        let mut m = serde_json::Map::new();
+        m.insert("garden".to_string(), json!(g));
+        params_hash(&m)[..8].to_string()
+    };
+    let prefixes = ["garden-", "answer__garden-"];
+    for (real, fixed) in [(&sales, GARDEN_SALES), (&old, GARDEN_OLD)] {
+        out.retag(&prefixes, &format!(":{}\"", hash8(real)), &format!(":{}\"", hash8(fixed)));
+        out.retag(&prefixes, real, fixed);
+    }
+}
+
 /// Every sample, as file name → pretty JSON (with a trailing newline).
 fn generate() -> BTreeMap<String, String> {
     let _home = crate::test_support::TempHome::new();
@@ -745,6 +853,7 @@ fn generate() -> BTreeMap<String, String> {
     confirm_samples(&mut out);
     batch_samples(&mut out);
     push_samples(&mut out);
+    garden_samples(&mut out);
 
     let cast = [ROSSON, MAYA, DANA, LEE];
     let mut files = BTreeMap::new();
@@ -887,6 +996,14 @@ fn check_coverage(produced: &BTreeMap<String, String>) {
         ("guest", "approved", &["hidden"][..]),
         ("agent", "pending", &["fallback"][..]),
         ("push", "permission", &["legacy", "sealed-plaintext"][..]),
+        // K2's own Garden cards (prd-garden-access-v1 Appendix C).
+        ("garden-access", "pending", &["cards2", "fallback"][..]),
+        ("garden-access", "approved", &["cards2", "fallback"][..]),
+        ("garden-access", "denied", &["cards2", "fallback"][..]),
+        ("garden-access-admin", "pending", &["cards2", "fallback"][..]),
+        ("garden-delete", "pending", &["cards2", "fallback"][..]),
+        ("garden-delete", "approved", &["cards2", "fallback"][..]),
+        ("garden-delete", "denied", &["cards2", "fallback"][..]),
     ] {
         for form in forms {
             let name = format!("{view}__{state}__{form}.json");
@@ -905,6 +1022,26 @@ fn check_coverage(produced: &BTreeMap<String, String>) {
     assert_eq!(state_of("approver-confirm__approved__cards2.json"), json!("approved"));
     let v: Value = serde_json::from_str(&produced["batch-approver__pending__cards2.json"]).expect("JSON");
     assert_eq!(v["choice"]["action"]["view"]["viewer"]["canAnswerAll"], json!(false), "a confirm item blocks Allow all: {v}");
+    // The Garden cards are standard permission cards (Appendix C).
+    for (name, state, action) in [
+        ("garden-access__pending__cards2.json", "pending", "garden.access"),
+        ("garden-access__approved__cards2.json", "approved", "garden.access"),
+        ("garden-access__denied__cards2.json", "denied", "garden.access"),
+        ("garden-delete__pending__cards2.json", "pending", "garden.delete"),
+        ("garden-delete__approved__cards2.json", "approved", "garden.delete"),
+        ("garden-delete__denied__cards2.json", "denied", "garden.delete"),
+    ] {
+        let v: Value = serde_json::from_str(&produced[name]).expect("JSON");
+        let a = &v["choice"]["action"];
+        assert_eq!(a["id"], json!("permission"), "{name}");
+        assert_eq!((a["view"]["v"].as_u64(), a["view"]["kind"].as_str()), (Some(1), Some("permission")), "{name}");
+        assert_eq!((a["view"]["state"].as_str(), a["view"]["action"].as_str()), (Some(state), Some(action)), "{name}");
+        assert_eq!(a["view"]["proof"], json!({ "kind": "click" }), "{name}");
+    }
+    let v: Value = serde_json::from_str(&produced["garden-access__pending__cards2.json"]).expect("JSON");
+    assert_eq!(v["choice"]["options"], json!([{ "label": "Allow" }, { "label": "Deny" }]), "{v}");
+    let v: Value = serde_json::from_str(&produced["garden-access-admin__pending__cards2.json"]).expect("JSON");
+    assert_eq!(v["choice"]["options"], json!([]), "an Admin waits on a GardenOwner card: {v}");
     let v: Value = serde_json::from_str(&produced["asker__pending__cards2.json"]).expect("JSON");
     assert_eq!(v["choice"]["options"], json!([]), "a wait viewer gets no options: {v}");
     assert_eq!(v["choice"]["action"]["view"]["noteBox"]["mine"], json!(NOTE), "{v}");

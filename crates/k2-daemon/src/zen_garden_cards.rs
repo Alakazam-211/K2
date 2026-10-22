@@ -486,3 +486,6 @@ pub(crate) fn void_on_switch_on() -> usize {
     n
 }
 
+#[cfg(test)]
+#[path = "zen_garden_cards_tests.rs"]
+mod tests;

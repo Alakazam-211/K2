@@ -69,17 +69,27 @@ export function openSocket(o: SocketOpts): () => void {
       }
       o.onFrame(project(o.row.response, v, o.row.responseNames))
     })
+    const refusedBeforeOpen = (): void => {
+      stopped = true
+      fail(
+        new K2Error({
+          code: 'failed',
+          hint: `${o.verb}: the socket was refused before it opened (check the room, its cap and the pass)`,
+          verb: o.verb,
+        }),
+      )
+    }
+    // A refused handshake (a non-101 answer): some runtimes (Node 22's
+    // WebSocket) report it with `error` and never fire `close`, so a
+    // refusal must not wait for `close`. `stopped` keeps it to one error.
+    sock.addEventListener('error', () => {
+      if (stopped || everOpened) return
+      refusedBeforeOpen()
+    })
     sock.addEventListener('close', (ev: CloseEvent) => {
       if (stopped) return
       if (!everOpened) {
-        stopped = true
-        fail(
-          new K2Error({
-            code: 'failed',
-            hint: `${o.verb}: the socket was refused before it opened (check the room, its cap and the pass)`,
-            verb: o.verb,
-          }),
-        )
+        refusedBeforeOpen()
         return
       }
       const why = ev.code === 4008 ? 'K2 dropped it for lagging (4008)' : `it closed (${ev.code})`

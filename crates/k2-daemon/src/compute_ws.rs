@@ -940,6 +940,19 @@ fn apply_observation(
         _ => None,
     };
     let detail = detail.or(ended_by_node);
+    // A job someone asked to cancel that comes back interrupted (the node
+    // restarted, rebooted or lost it) or unknown ends `cancelled`: that is
+    // what was asked, and it is never sent again (k2n4, 2026-10-21: two
+    // cancelled jobs whose ends a full disk lost came back
+    // `interrupted/node_restart` and were re-dispatched).
+    let cancel_owed = asked == Some("cancel_requested");
+    let interrupted_detail;
+    let (state, reason, detail) = if cancel_owed && matches!(state, JobState::Interrupted | JobState::Unknown) {
+        interrupted_detail = format!("cancelled as asked; the node then reported {}{}", state.as_str(), reason.map(|r| format!("/{r}")).unwrap_or_default());
+        (JobState::Cancelled, Some("cancelled"), Some(interrupted_detail.as_str()))
+    } else {
+        (state, reason, detail)
+    };
     let _ = store::set_job_state(&conn, job_id, state, reason, detail, now);
     if let Some(s) = src {
         store::set_job_src(&conn, job_id, &s.commit, &s.tree);
@@ -964,7 +977,7 @@ fn apply_observation(
     // Infrastructure failures retry (with backoff, on another node for
     // `--any`); results never do. A retried job gets no message yet. A job
     // whose cancel was asked for (slice A) is never retried.
-    if asked != Some("cancel_requested") && crate::compute_place::after_attempt(job_id) {
+    if !cancel_owed && crate::compute_place::after_attempt(job_id) {
         return;
     }
     finalize(job_id);
@@ -2019,6 +2032,49 @@ mod tests {
         let ids = |v: Vec<store::JobRow>| v.into_iter().map(|j| j.id).collect::<Vec<_>>();
         assert_eq!(ids(rotation_order(jobs.clone(), None)), ["a1", "b1", "c1", "a2"]);
         assert_eq!(ids(rotation_order(jobs, Some("a"))), ["b1", "c1", "a1", "a2"]);
+    }
+
+    /// k2n4, 2026-10-21: a running job whose cancel was asked for, that
+    /// then comes back `interrupted/node_restart` (a full disk lost its
+    /// end; the node was restarted), ends `cancelled` and is never sent
+    /// again, even with retries and `retry_interrupted` on. Without a
+    /// pending cancel the same interruption is retried as before.
+    #[test]
+    fn a_cancel_requested_job_that_comes_back_interrupted_ends_cancelled() {
+        let _db = k2_core::db::scoped_for_test();
+        let db = k2_core::db::shared();
+        let mk = |id: &str, cancel: bool| {
+            let conn = db.lock();
+            let j = job_on(&conn, id, "n1");
+            assert!(store::assign_if_queued(&conn, &j.id, 20).expect("assign"));
+            let ctl = store::JobCtl { retries: 2, ..Default::default() };
+            store::set_job_ctl(&conn, &j.id, &ctl).expect("ctl");
+            conn.execute("UPDATE compute_jobs SET retry_interrupted = 1 WHERE id = ?1", [&j.id]).expect("retry_interrupted");
+            if cancel {
+                store::set_job_reason(&conn, &j.id, Some("cancel_requested"), None);
+            }
+            store::job_by_id(&conn, &j.id).expect("row")
+        };
+        {
+            let conn = db.lock();
+            store::insert_pending_node(&conn, "n1", "n1", "fp", "pem", &BTreeMap::new(), "owner", "123456", 1).expect("node");
+        }
+        let job = mk("cccccccc0123456789abcdef01234567", true);
+        apply_observation("n1", &job.id, job.generation as u32, JobState::Running, None, None, None, None, None);
+        let row = store::job_by_id(&db.lock(), &job.id).expect("row");
+        assert_eq!((row.state.as_str(), row.reason.as_deref()), ("running", Some("cancel_requested")), "the cancel stays owed while it runs");
+        apply_observation("n1", &job.id, job.generation as u32, JobState::Interrupted, Some("node_restart"), None, None, None, None);
+        let row = store::job_by_id(&db.lock(), &job.id).expect("row");
+        assert_eq!((row.state.as_str(), row.reason.as_deref()), ("cancelled", Some("cancelled")), "{row:?}");
+        assert_eq!(row.generation, job.generation, "not re-dispatched");
+        assert!(row.detail.as_deref().is_some_and(|d| d.contains("interrupted/node_restart")), "{:?}", row.detail);
+        assert!(row.ended_at.is_some());
+        // The control: no cancel owed, the interruption is retried.
+        let other = mk("dddddddd0123456789abcdef01234567", false);
+        apply_observation("n1", &other.id, other.generation as u32, JobState::Interrupted, Some("node_restart"), None, None, None, None);
+        let row = store::job_by_id(&db.lock(), &other.id).expect("row");
+        assert_eq!(row.state.as_str(), "queued", "retried: {row:?}");
+        assert!(row.attempt > other.attempt, "a new attempt: {row:?}");
     }
 
     /// C11: a job whose cancel was asked for while assigned, and that the

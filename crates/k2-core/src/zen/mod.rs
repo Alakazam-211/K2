@@ -46,6 +46,7 @@ pub mod agent_edit;
 pub mod builtin_widgets;
 pub mod bundle;
 pub mod defaults;
+pub mod garden_access;
 pub mod garden_catalog;
 pub mod lock;
 pub mod news;

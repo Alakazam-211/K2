@@ -615,6 +615,11 @@ pub fn projects_delete(id: &str) -> Result<(), String> {
     crate::garden_data::grants::delete_for_workspace(&conn, id).map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM zen_widget_authors WHERE author_project_id = ?1", rusqlite::params![id])
         .map_err(|e| e.to_string())?;
+    // Garden access (prd-garden-access-v1 G7, migration 0219): its list,
+    // ask and made rows go; its History lines stay. With the switch never
+    // on there are no rows and nothing is written.
+    crate::zen::garden_access::delete_for_workspace(&conn, id, chrono::Utc::now().timestamp())
+        .map_err(|e| e.to_string())?;
     Project::delete(&conn, id).map_err(|e| e.to_string())?;
     for gid in &member_groups {
         crate::agent_hooks::emit(

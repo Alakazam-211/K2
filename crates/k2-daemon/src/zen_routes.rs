@@ -518,6 +518,11 @@ fn audit(event: &str, caller: &Caller, outcome: String, ingress: &str) {
     ));
 }
 
+/// [`audit`] for `zen_access_routes` (garden access, switch on).
+pub(crate) fn audit_refusal(event: &str, caller: &Caller, outcome: String, ingress: &str) {
+    audit(event, caller, outcome, ingress);
+}
+
 /// A custom placement on a Garden's live page: `(garden id, widget)`.
 fn find_placement(f: &ZenFiles, garden: &str, placement: &str) -> Result<(String, String), ZenError> {
     let (_, g) = f.garden(garden)?;
@@ -1024,7 +1029,7 @@ pub fn zen_caller(path: &str, query: &str, bearer: Option<&str>, owner_token: &s
 /// A passport the daemon treats as an agent on Zen writes (§5.3): any
 /// harness session or K2 terminal on this computer. A sandboxed agent and
 /// an API cell never reach Zen.
-fn is_local_passport(caller: &Caller) -> bool {
+pub(crate) fn is_local_passport(caller: &Caller) -> bool {
     match caller {
         Caller::Agent(a) => !a.sandboxed,
         Caller::Shell { .. } => true,
@@ -1308,6 +1313,12 @@ pub fn handle(
         return resp("404 Not Found", json!({ "error": "unknown zen route", "path": path }));
     }
     let owner_token = owner && *caller == Caller::Owner;
+    // Garden access (prd-garden-access-v1 §2, G20): Keep as mine is retired
+    // with the switch on; a listed agent's or the person's sign covers it.
+    let access_on = k2_core::zen::garden_access::enabled();
+    if access_on && path == "/cli/zen/widget/claim" {
+        return crate::zen_access_routes::retired("Keep as mine (It's mine)");
+    }
     if path == LOCK_ROUTE && !owner_token {
         // §5.2: agents can neither lock nor unlock (Rosson ruling 6). The
         // lock stays owner-token only (it isn't a GardenOwner row).
@@ -1331,8 +1342,16 @@ pub fn handle(
         audit("zen.widget.refused", caller, format!("{path}: owner token only"), ingress);
         return err(ZenError::OwnerOnly(CLAIM_OWNER_ONLY.into()));
     }
-    let garden_owner_login = garden_owner && !owner && GARDEN_OWNER_ROUTES.contains(&path);
-    if !owner && !garden_owner_login {
+    // Garden access (G14): with the switch on, an Owner login may also Sign
+    // (the history modal's button).
+    let garden_owner_login =
+        garden_owner && !owner && (GARDEN_OWNER_ROUTES.contains(&path) || (access_on && path == "/cli/zen/widget/sign"));
+    if !owner && !garden_owner_login && access_on {
+        // G11/G12: the lock, then the Garden's list (zen_access_routes).
+        if let Some(r) = crate::zen_access_routes::passport_gate(path, caller, body, ingress) {
+            return r;
+        }
+    } else if !owner && !garden_owner_login {
         // §5.3: a passport (an agent or a K2 terminal) may make the Garden
         // writes it always could, unless the Garden is locked; and it may
         // make and sign widget folders (Garden data authorship, no Lock).
@@ -1361,7 +1380,14 @@ pub fn handle(
     }
     let r = match path {
         "/cli/zen/get" => handle_get(params),
-        "/cli/zen/gardens" => Ok(handle_gardens()),
+        "/cli/zen/gardens" => {
+            let mut v = handle_gardens();
+            if access_on {
+                // Garden access (a5-asks #6): editors and maker per row.
+                crate::zen_access_routes::decorate_gardens(&mut v);
+            }
+            Ok(v)
+        }
         "/cli/zen/validate" => {
             let f = files();
             match param(params, "widget") {
@@ -1411,6 +1437,14 @@ pub fn handle(
                 .and_then(|_| refresh_and_emit())
                 .and_then(|_| f.widgets_json(&pauses()))
                 .and_then(|mut v| with_made_by(&mut v).map(|_| v))
+                .map(|mut v| {
+                    if access_on {
+                        // Garden access (a5-asks #9): signer, change time,
+                        // and the signer gate per placement.
+                        crate::zen_access_routes::decorate_widgets(&f, &mut v);
+                    }
+                    v
+                })
         }
         "/cli/zen/widget/bundle" => {
             let f = files();
@@ -1439,6 +1473,7 @@ pub fn handle(
         // Garden data authorship (contract-garden-data-v1 §4.3, BG3):
         // sign = the owner token or a local agent/shell passport; claim =
         // the owner token only (checked above).
+        "/cli/zen/widget/sign" if access_on => return crate::zen_access_routes::sign(caller, body, ingress),
         "/cli/zen/widget/sign" => handle_widget_sign(body, caller, ingress),
         "/cli/zen/widget/claim" => handle_widget_claim(body, caller, ingress),
         "/cli/zen/theme/list" => refuse_home(params).and_then(|_| files().theme_list(param(params, "garden"))),
@@ -1447,6 +1482,9 @@ pub fn handle(
         "/cli/zen/status" => Ok(handle_status()),
         "/cli/zen/doctor" => Ok(handle_doctor()),
         "/cli/zen/setup" => handle_setup(body),
+        // G13: any live local passport makes a Garden, with its first page
+        // and widgets, and K2 asks the person in the same step.
+        "/cli/zen/garden/new" if access_on => return crate::zen_access_routes::garden_new(owner_token, caller, body, ingress),
         "/cli/zen/garden/new" => {
             let r = handle_garden_new(body);
             if !owner {
@@ -1479,6 +1517,12 @@ pub fn handle(
         p if crate::zen_sync_routes::is_route(p) => crate::zen_sync_routes::handle(p, params, body),
         _ => unreachable!("checked against GET_ROUTES/POST_ROUTES above"),
     };
+    if access_on {
+        if let Ok(v) = &r {
+            // G9 + G29: the History line, and a widget reset's stamp.
+            crate::zen_access_routes::after_write(path, caller, body, v);
+        }
+    }
     match r {
         Ok(v) => ok(v),
         Err(e) => err(e),

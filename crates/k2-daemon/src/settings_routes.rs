@@ -268,6 +268,10 @@ pub(crate) fn garden_access_flipped(on: bool, by: &str) {
                 }
             }
         }
+        // G18 (A4): the old path's waiting Keep-as-mine cards and open
+        // keep-mine / proposal-approve requests close ("No longer needed").
+        let closed = crate::zen_garden_cards::void_on_switch_on();
+        k2_core::log_debug!("[garden-access] switch on: {closed} old card(s) and request(s) closed");
     }
     // A6 hooks here: regenerate the k2-zen skill in every workspace (G0).
     k2_core::agent_hooks::emit(

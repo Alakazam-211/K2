@@ -343,8 +343,12 @@ async fn tuw1_widgets_round_trip_on_the_real_daemon() {
     assert_eq!(arcade["placements"][0]["paused"], J::Null, "{arcade}");
     assert!(arcade["placements"][0].get("grant").is_none(), "{arcade}");
 
-    // Connect logins (every role) never reach Zen; Resume (a person's
-    // click) says owner_only, the rest zen_local_only.
+    // Connect logins (every role) never reach Zen's other routes
+    // (zen_local_only). Resume (a person's click) takes the Garden's owner
+    // from any signed-in surface since permission cards (PRD rev 3.1
+    // §5.2.1, §2.4 named exception 3, Rosson Q2): a Member or Admin login
+    // still gets owner_only; an Owner login is past the gate (this empty
+    // body is then refused as a bad request).
     for role in ["member", "admin", "owner"] {
         let user = format!("u-{role}");
         let (s, v) = call(port, "POST", &format!("/cli/users/add?token={tok}"), Some(&format!(r#"{{"username":"{user}","password":"correct-horse-battery-9"}}"#)));
@@ -359,7 +363,8 @@ async fn tuw1_widgets_round_trip_on_the_real_daemon() {
         let (s, v) = call(port, "GET", &format!("/cli/zen/widgets?token={session}"), None);
         assert_eq!((s, v["error"].as_str()), (403, Some("zen_local_only")), "{role}: {v}");
         let (s, v) = call(port, "POST", &format!("/cli/zen/widget/resume?token={session}"), Some("{}"));
-        assert_eq!((s, v["error"].as_str()), (403, Some("owner_only")), "{role}: {v}");
+        let want = if role == "owner" { (400, Some("bad_request")) } else { (403, Some("owner_only")) };
+        assert_eq!((s, v["error"].as_str()), want, "{role}: {v}");
     }
     // A body past the Zen cap (zen_routes::MAX_BODY, 320 KiB), sent in full
     // → 413. The daemon answers from the declared length, then drains the
@@ -506,11 +511,16 @@ async fn widgets_work_with_zero_clicks_and_only_a_person_resumes_a_pause() {
         let arcade = v["widgets"].as_array().expect("widgets").iter().find(|w| w["name"] == "agent-arcade").cloned().expect("listed");
         assert_eq!(arcade["placements"][0]["paused"]["reason"], "runaway", "{arcade}");
 
-        // Only a person resumes: passport, Connect login, app pass, API key → 403.
+        // Only a person resumes: passport, an Admin login, app pass, API key
+        // → 403. The Garden's owner may resume from any signed-in surface
+        // (an Owner login: permission cards PRD rev 3.1 §5.2.1, named
+        // exception 3), below.
         let passport = mint_passport();
         assert!(session_token::validate_hook(&passport).is_some(), "passport validates");
         let session = login("zen-owner-login");
-        for (who, cred) in [("passport", passport.as_str()), ("connect login", session.as_str()), ("app pass", "k2skn_notreal"), ("api key", "k2sk_notreal")] {
+        let admin = login("zen-admin-login");
+        connect_users::set_role("zen-admin-login", connect_users::Role::Admin).unwrap_or_else(|e| panic!("set_role: {e:?}"));
+        for (who, cred) in [("passport", passport.as_str()), ("admin login", admin.as_str()), ("app pass", "k2skn_notreal"), ("api key", "k2sk_notreal")] {
             let (s, v) = call(port, "POST", &format!("/cli/zen/widget/resume?token={cred}"), Some(&resume));
             assert_eq!((s, v["error"].as_str()), (403, Some("owner_only")), "{who}: {v}");
         }
@@ -520,8 +530,8 @@ async fn widgets_work_with_zero_clicks_and_only_a_person_resumes_a_pause() {
         let (s, v) = call(port, "POST", &format!("/cli/zen/widget/pause?token={passport}"), Some(&pause));
         assert_eq!((s, v["error"].as_str()), (403, Some("zen_local_only")), "{v}");
 
-        // The person's one click.
-        let (s, v) = owner("POST", "/cli/zen/widget/resume", Some(&resume));
+        // The person's one click, here from the phone (an Owner login).
+        let (s, v) = call(port, "POST", &format!("/cli/zen/widget/resume?token={session}"), Some(&resume));
         assert_eq!(s, 200, "{v}");
         assert_eq!((v["resumed"].as_bool(), v["changed"].as_bool()), (Some(true), Some(true)), "{v}");
         let (_, g) = owner("GET", &format!("/cli/zen/get?garden={garden}"), None);

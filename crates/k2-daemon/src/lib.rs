@@ -303,6 +303,8 @@ pub mod skin_me_routes;
 pub mod app_mobile_routes;
 pub mod guest_rooms_routes;
 pub mod skin_gateway;
+// The daemon's Tokio runtime for plain std threads (wakes off the runtime).
+pub mod rt;
 // The boot sequence (was the body of `main.rs`).
 pub mod daemon_main;
 
@@ -402,6 +404,8 @@ pub mod test_harness {
     /// must assert it is unspecified, not merely that 127.0.0.1 connects.
     pub async fn start_on(owner_token: impl Into<String>, addr: &str) -> TestDaemon {
         let owner_token = owner_token.into();
+        // As at daemon boot: std-thread wakes run in this test's runtime.
+        crate::rt::install(tokio::runtime::Handle::current());
 
         let std_listener = StdTcpListener::bind(addr).unwrap_or_else(|e| {
             panic!("bind {addr}: {e}");

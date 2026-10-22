@@ -17621,6 +17621,145 @@
       "errors": [],
       "doc": "Waiting on you: the permission requests this person can answer; open each card by addr + cardId (people only, admin floor). A caller below the floor gets 403 action_card_person_only (+required).",
       "example": "k2 permission pending"
+    },
+    {
+      "verb": "permission.note",
+      "cap": null,
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "permission-cards-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/thread/permission-note"
+        }
+      },
+      "request": [
+        {
+          "title": "addr",
+          "type": "string",
+          "description": "The Thread the permission card is on."
+        },
+        {
+          "title": "id",
+          "type": "string",
+          "description": "The card's id (also card_id)."
+        },
+        {
+          "title": "text",
+          "type": "string",
+          "description": "One line for the approvers; \"\" deletes your note."
+        },
+        {
+          "title": "item",
+          "type": "string",
+          "default": "",
+          "description": "On a batch card: the item's request id."
+        }
+      ],
+      "response": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "seq": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "The card's seq after the change, or null."
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "note": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "{by, role, text, at}, or null once deleted."
+          }
+        }
+      },
+      "errors": [
+        "usage",
+        "not_found"
+      ],
+      "doc": "A person below a permission card's floor leaves a note for the people who can answer it (people only; Member floor). Family errors: request_not_pending (409), note_not_allowed and action_card_person_only (403).",
+      "example": "POST /cli/thread/permission-note {addr, id, text}"
+    },
+    {
+      "verb": "permission.undo",
+      "cap": null,
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "permission-cards-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/thread/permission-undo"
+        }
+      },
+      "request": [
+        {
+          "title": "addr",
+          "type": "string",
+          "description": "The Thread the permission card is on."
+        },
+        {
+          "title": "id",
+          "type": "string",
+          "description": "The card's id (also card_id)."
+        },
+        {
+          "title": "item",
+          "type": "string",
+          "default": "",
+          "description": "On a batch card: the item's request id."
+        }
+      ],
+      "response": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "seq": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "The card's seq after the change, or null."
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "undone": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "errors": [
+        "usage",
+        "not_found"
+      ],
+      "doc": "Turn off again: undo an approved standing grant from its permission card (people only; Admin floor). Family errors: request_not_pending (409), action_card_person_only (403).",
+      "example": "POST /cli/thread/permission-undo {addr, id}"
     }
   ]
 }

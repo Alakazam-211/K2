@@ -2,7 +2,7 @@
   "generatedBy": "contract-gen",
   "regen": "cargo run -p k2-core --bin contract-gen",
   "catalogVersion": 19,
-  "catalogSha256": "71b5915b53d3a4ad51036382d2fb1613bc410bae94705038df9cfc29c6f1bb2c",
+  "catalogSha256": "f8c0c00b800dc3da4a521c38fca54fd222fd3adfad61da8804c4f5e9de34de14",
   "runtimeSha256": "6fa6da429f20400d163a736c88cf76d86799dba2d346889381aeec954098a230",
   "files": {
     "cli/k2": "6a49575b9392ba9c6517ce597e70f6587e98701ed06af17c9e601bab1b4150da",

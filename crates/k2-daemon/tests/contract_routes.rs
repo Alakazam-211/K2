@@ -163,15 +163,15 @@ fn exposure_counts_are_pinned() {
     assert_eq!(c.catalog_version, 19);
     assert_eq!(
         c.verbs.len(),
-        169,
-        "today's 38 bridge verbs (thread.inbox joined in 0.46.3) plus the frame rows theme.changed, canvas.setHitRegions, window.startDrag, sources.*, the 15 Garden data rows, the 66 app rows (5 on both transports) and widget.self, plus Thread parity 0.46.3's 4 widget and 5 app rows, plus thread.mute, plus App project chat's 5 app rows, plus App mobile access's 7 app rows, plus app-room-stream's thread.stream app row, plus the nine wallet.* app rows (0.46.3), plus the counts-only ear's thread.activity app row (0.46.3), plus permission cards' 7 unexposed permission.* rows (0.46.3, no catalog bump)"
+        171,
+        "today's 38 bridge verbs (thread.inbox joined in 0.46.3) plus the frame rows theme.changed, canvas.setHitRegions, window.startDrag, sources.*, the 15 Garden data rows, the 66 app rows (5 on both transports) and widget.self, plus Thread parity 0.46.3's 4 widget and 5 app rows, plus thread.mute, plus App project chat's 5 app rows, plus App mobile access's 7 app rows, plus app-room-stream's thread.stream app row, plus the nine wallet.* app rows (0.46.3), plus the counts-only ear's thread.activity app row (0.46.3), plus permission cards' 9 unexposed permission.* rows (7 + A2's note and undo person routes; 0.46.3, no catalog bump)"
     );
     // Permission cards (0.46.3 Beta): K2's own verbs, never a widget's or
     // an App's (App guests never see a permission card).
     let perm: Vec<&str> = c.verbs.iter().filter(|v| v.verb.starts_with("permission.")).map(|v| v.verb.as_str()).collect();
     assert_eq!(
         perm,
-        ["permission.request", "permission.update", "permission.cancel", "permission.status", "permission.list", "permission.enabled", "permission.pending"]
+        ["permission.request", "permission.update", "permission.cancel", "permission.status", "permission.list", "permission.enabled", "permission.pending", "permission.note", "permission.undo"]
     );
     for verb in perm {
         let row = c.verb(verb).expect("row");

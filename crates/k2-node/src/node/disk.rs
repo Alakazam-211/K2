@@ -286,6 +286,32 @@ impl Node {
     /// One guard pass (see the module doc). Returns the jobs it stopped,
     /// `(slot, job_id)`.
     pub async fn disk_guard_pass(self: &Arc<Self>) -> Vec<(k2_node_proto::share::Slot, String)> {
+        self.disk_guard_pass_with(|gb| u64::from(gb) << 30).await
+    }
+
+    /// The other server with running jobs furthest over its disk share
+    /// (`disk_gb`, measured as the V74 scan does), with its overage.
+    /// `budget` turns a share's GB into bytes (tests scale it down).
+    async fn furthest_over_share(&self, budget: impl Fn(u32) -> u64) -> Option<(k2_node_proto::share::Slot, u64)> {
+        let running = self.running_by_tenant();
+        let mut worst: Option<(k2_node_proto::share::Slot, u64)> = None;
+        for t in self.tenants() {
+            if t.is_owner() || !running.get(&t.slot).is_some_and(|v| !v.is_empty()) {
+                continue;
+            }
+            let Ok(e) = crate::admin::jobs::tenant_entry(&self.layout().config, t.slot) else { continue };
+            let share = budget(e.disk_gb);
+            let root = t.paths.root();
+            let used = tokio::task::spawn_blocking(move || bytes_of(&root)).await.unwrap_or(0);
+            let over = used.saturating_sub(share);
+            if over > 0 && worst.is_none_or(|(_, w)| over > w) {
+                worst = Some((t.slot, over));
+            }
+        }
+        worst
+    }
+
+    async fn disk_guard_pass_with(self: &Arc<Self>, budget: impl Fn(u32) -> u64) -> Vec<(k2_node_proto::share::Slot, String)> {
         let floor = self.local.lock().unwrap().policy.disk_floor_bytes;
         if floor == 0 {
             return vec![];
@@ -320,12 +346,20 @@ impl Node {
         if free >= floor {
             return vec![];
         }
-        // Still under the floor: the newest running job stops (one a
-        // pass; its dir goes when it ends, then the next pass looks again).
+        // Still under the floor: one job stops a pass (its dir goes when it
+        // ends, then the next pass looks again). The server furthest over
+        // its disk share pays first (its newest job), so no server fills
+        // the disk to get another's job stopped (review A-disk 3); with
+        // none over, the newest job on the node.
+        let over = self.furthest_over_share(budget).await;
         let jobs = self.jobs.lock().unwrap();
-        let newest = jobs.iter().filter(|(_, j)| j.stop.borrow().is_none()).max_by_key(|(_, j)| j.seq);
+        let newest = jobs
+            .iter()
+            .filter(|((slot, _), j)| j.stop.borrow().is_none() && over.is_none_or(|(s, _)| s == *slot))
+            .max_by_key(|(_, j)| j.seq);
         let Some(((slot, job), j)) = newest else { return vec![] };
-        crate::nlog!("disk low ({} GB free, floor {} GB): stopping job {job} (slot {slot})", free >> 30, floor >> 30);
+        let why = over.map(|(s, b)| format!(", server slot {s} is {} MB over its disk share", b >> 20)).unwrap_or_default();
+        crate::nlog!("disk low ({} GB free, floor {} GB{why}): stopping job {job} (slot {slot})", free >> 30, floor >> 30);
         j.stop.send_replace(Some(StopReason { state: JobState::Failed, reason: refusal::DISK_LOW.into() }));
         vec![(*slot, job.clone())]
     }
@@ -513,6 +547,73 @@ mod tests {
         a.plan.argv = vec!["/bin/sh".into(), "-c".into(), "exit 0".into()];
         a.fence.plan_digest = a.plan.digest().unwrap();
         assert_eq!(n.on_assign(&n.owner(), a), Some((ok.clone(), 1)));
+    }
+
+    /// Review A-disk 3: under the floor, the server furthest over its disk
+    /// share loses its newest job first, not whoever started last; with
+    /// nobody over, the newest job on the node. (Budget scaled: 1 "GB" =
+    /// 1 MiB, so a 4 MiB file is over a 1 GB share.)
+    #[tokio::test]
+    async fn under_the_floor_the_server_over_its_share_pays_first() {
+        use k2_node_proto::share::{Network, ServersFile, ShareLimits, Trust};
+        let free = Arc::new(AtomicU64::new(500 * GIB));
+        let (n, layout) = node("disk-share", "disk_floor_gb = 50\n", free.clone()).await;
+        let mut f = ServersFile::new(&"a".repeat(64), "o", ShareLimits::owner(2, 8, 16, 100, Network::On), 8, 1, "local:t");
+        for slot in [1u8, 2] {
+            let mut e = f.servers[0].clone();
+            e.slot = slot;
+            e.label = format!("s{slot}");
+            e.fp_prefix = format!("{:016x}", slot);
+            e.trust = Trust::Own;
+            e.set_limits(&ShareLimits::new_server(Trust::Own, false));
+            e.disk_gb = 1;
+            f.servers.push(e);
+        }
+        std::fs::write(layout.config.join(k2_node_proto::share::SERVERS_FILE), toml::to_string(&f).unwrap()).unwrap();
+        let mut tens = Vec::new();
+        for slot in [1u8, 2] {
+            layout.tenant(slot).ensure_state().unwrap();
+            crate::identity::write_pin(&layout.tenant(slot).pin(), &crate::identity::Pin::for_test("n")).unwrap();
+            tens.push(n.add_tenant(slot).await.unwrap());
+        }
+        let mut sessions = Vec::new();
+        for s in [0u8, 1, 2] {
+            let limits = ShareLimits { max_running: 2, ..ShareLimits::new_server(Trust::Own, false) };
+            n.fairq.set_share(s, Some(crate::fairq::ShareInfo { label: format!("s{s}"), limits, status: k2_node_proto::share::ServerStatus::Active }));
+            n.fairq.set_protocol(s, Some(3));
+        }
+        for t in &tens {
+            let (tx, rx) = tokio::sync::mpsc::channel(256);
+            t.hub.attach(tx);
+            sessions.push(rx);
+        }
+        let start = |t: &Arc<Tenant>, id: &str| {
+            let mut a = crate::ledger::tests::assign(id, 1);
+            a.plan.argv = vec!["/bin/sleep".into(), "30".into()];
+            a.fence.plan_digest = a.plan.digest().unwrap();
+            assert_eq!(n.on_assign(t, a), Some((id.to_string(), 1)));
+            n.fairq.tick(&n);
+        };
+        // Slot 1 starts first and is over its share; slot 2 starts last.
+        start(&tens[0], "one");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        start(&tens[1], "two");
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(n.running_by_tenant().values().map(|v| v.len()).sum::<usize>(), 2, "{:?}", n.running_by_tenant());
+        put(&layout.tenant(1).cache().join("big"), 4 << 20);
+        let budget = |gb: u32| u64::from(gb) << 20;
+        free.store(40 * GIB, Ordering::SeqCst);
+        assert_eq!(n.disk_guard_pass_with(budget).await, vec![(1u8, "one".to_string())], "the server over its share, not the newest job");
+        let t0 = std::time::Instant::now();
+        while n.running_by_tenant().get(&1).is_some_and(|v| !v.is_empty()) {
+            assert!(t0.elapsed() < Duration::from_secs(20));
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let r = tens[0].ledger.lock().unwrap().get("one", 1).unwrap().unwrap();
+        assert_eq!((r.state, r.reason.as_deref()), (JobState::Failed, Some(refusal::DISK_LOW)));
+        // Nobody over (slot 1 has nothing running): the newest job.
+        assert_eq!(n.disk_guard_pass_with(budget).await, vec![(2u8, "two".to_string())]);
+        n.stop_all(JobState::Cancelled, "test_over");
     }
 
     /// (c) Under the floor the guard reclaims first (ended job dirs, idle

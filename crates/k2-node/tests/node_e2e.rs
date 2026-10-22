@@ -194,6 +194,32 @@ async fn assign_runs_and_reports_logs_exit_and_a_verified_receipt() {
     assert_eq!(receipt.log.bytes, 7);
 }
 
+/// Found by the daemon's results test on a busy Linux node: a job over
+/// before the shipper looked reached the server as `done` with no
+/// `running` first, so the server had no start (`startedAt`/`durationSecs`
+/// null). Every job this session assigned now reports `running` (at its
+/// start) before any later state, however quick it was.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_quick_job_still_reports_running_before_it_ends() {
+    let mut fake = Fake::start().await;
+    let n = start_node(&fake, "e2e-quick", "max_parallel = 4\n", |_| {}).await;
+    let mut c = fake.next_conn().await;
+    ready(&mut c).await;
+    for i in 0..6 {
+        let job = format!("q{i}");
+        c.send(Frame::Assign(assign(plan(&job, &["/bin/sh", "-c", "exit 0"]), 1)));
+        let fr = run_to_receipt(&mut c, &job).await;
+        let states = states_of(&fr, &job);
+        let ran = states.iter().position(|s| s.state == JobState::Running).unwrap_or_else(|| panic!("{job}: no running: {states:?}"));
+        let end = states.iter().position(|s| s.state == JobState::Done).unwrap_or_else(|| panic!("{job}: no done: {states:?}"));
+        assert!(ran < end, "{job}: running comes first: {states:?}");
+        assert_eq!(states.iter().filter(|s| s.state == JobState::Running).count(), 1, "{job}: once: {states:?}");
+        let Frame::Receipt(r) = fr.last().unwrap() else { unreachable!() };
+        let receipt = r.receipt.verify(n.node.key.spki_der()).unwrap();
+        assert_eq!(Some(states[ran].at), receipt.started_at, "{job}: running is at the job's start");
+    }
+}
+
 /// A grant's disk ceiling is not a reservation: a job whose ceiling is far
 /// bigger than the free disk still starts (only the node's floor gates a
 /// start). Found on a 28 GB-free Linux box with the 60 GB default grant.

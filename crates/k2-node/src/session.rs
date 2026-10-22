@@ -216,6 +216,11 @@ struct Track {
     reader: JournalReader,
     sent: Option<(JobState, Option<String>)>,
     hinted: bool,
+    /// Assigned in this session: its server sees `running` before any
+    /// later state, even when the job was over before the shipper looked
+    /// (the server's start time and duration come from it).
+    fresh: bool,
+    ran_sent: bool,
 }
 
 type Tracks = Arc<Mutex<HashMap<(String, u32), Track>>>;
@@ -223,7 +228,7 @@ type Tracks = Arc<Mutex<HashMap<(String, u32), Track>>>;
 fn track(t: &Tenant, job: &str, gen: u32, since: u64, hinted: bool) -> Track {
     let mut reader = JournalReader::new(t.paths.journal(job, gen));
     reader.skip_to(since);
-    Track { reader, sent: None, hinted }
+    Track { reader, sent: None, hinted, fresh: false, ran_sent: false }
 }
 
 /// One pass of the shipper: logs first, then state, then the receipt.
@@ -279,6 +284,7 @@ async fn ship_pass(node: &Node, tenant: &Tenant, tracks: &Tracks, tx: &mpsc::Sen
                 continue;
             }
             if t.sent.as_ref() != Some(&state_key) {
+                send_running_first(&mut t, &row, tx).await?;
                 tx.send(node.row_state_frame(&row)).await.map_err(|_| ())?;
             }
             if let Some(receipt) = row.receipt.clone() {
@@ -289,6 +295,7 @@ async fn ship_pass(node: &Node, tenant: &Tenant, tracks: &Tracks, tx: &mpsc::Sen
             tracks.lock().unwrap().insert(key, t);
         } else {
             if t.sent.as_ref() != Some(&state_key) {
+                send_running_first(&mut t, &row, tx).await?;
                 tx.send(node.row_state_frame(&row)).await.map_err(|_| ())?;
                 t.sent = Some(state_key);
             }
@@ -296,6 +303,36 @@ async fn ship_pass(node: &Node, tenant: &Tenant, tracks: &Tracks, tx: &mpsc::Sen
         }
     }
     Ok(())
+}
+
+/// A job this session assigned that ran but whose `running` the shipper
+/// never sent (it was over, or finishing, before the shipper looked): send
+/// `running` at its start time first, so the server has its start
+/// (`startedAt`, `durationSecs`). Once per attempt.
+async fn send_running_first(t: &mut Track, row: &crate::ledger::Row, tx: &mpsc::Sender<Frame>) -> Result<(), ()> {
+    if row.state == JobState::Running {
+        t.ran_sent = true;
+        return Ok(());
+    }
+    let Some(started) = row.started_at else { return Ok(()) };
+    if !t.fresh || t.ran_sent {
+        return Ok(());
+    }
+    t.ran_sent = true;
+    let f = Frame::State(frames::StateUpdate {
+        queue: None,
+        job_id: row.job_id.clone(),
+        generation: row.generation,
+        state: JobState::Running,
+        reason: None,
+        detail: None,
+        at: started,
+        exit: None,
+        src: row.src.clone(),
+        log_seq: 0,
+        outputs: None,
+    });
+    tx.send(f).await.map_err(|_| ())
 }
 
 /// Run one established session of `tenant`'s server until it ends.
@@ -619,7 +656,9 @@ where
                     }
                 }
                 if let Some((job, gen)) = node.on_assign(&tenant, a) {
-                    tracks.lock().unwrap().insert((job.clone(), gen), track(&tenant, &job, gen, 0, false));
+                    let mut fresh = track(&tenant, &job, gen, 0, false);
+                    fresh.fresh = true;
+                    tracks.lock().unwrap().insert((job.clone(), gen), fresh);
                     tenant.ship.notify_one();
                 }
             }

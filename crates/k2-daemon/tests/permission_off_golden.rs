@@ -1114,27 +1114,36 @@ async fn permission_cards_off_is_today_byte_for_byte() {
         let r = tcp(port, "GET", "/cli/thread/unread", Some(tok), None).await;
         assert!(r.status_line.contains(" 200 "), "read-state baseline: {} {}", r.status_line, r.body);
     }
-    // Warm-up: a person's compose post wakes the agent (the shim); its
-    // first wake pins a NEW conversation. Wait until the address answers
-    // at one stable conversation, so every capture below lands on it.
-    let r = tcp(port, "POST", "/cli/thread/post", Some(OWNER), Some(r#"{"addr":"pog-thread","text":"warm-up","via":"compose"}"#)).await;
-    assert!(r.status_line.contains(" 200 "), "warm-up post: {} {}", r.status_line, r.body);
-    let conv = {
-        let deadline = Instant::now() + Duration::from_secs(15);
-        let (mut last, mut stable) = (String::new(), 0);
-        loop {
-            let r = tcp(port, "GET", "/cli/thread?addr=pog-thread&limit=1", Some(OWNER), None).await;
-            let v: Value = serde_json::from_str(&r.body).unwrap_or_else(|e| panic!("thread JSON ({e}): {}", r.body));
-            let c = v["conversation_id"].as_str().unwrap_or_else(|| panic!("no conversation_id: {v}")).to_string();
-            stable = if c != seeded_conv && c == last { stable + 1 } else { 0 };
-            last = c;
-            if stable >= 2 {
-                break last;
-            }
-            assert!(Instant::now() < deadline, "the pin never swapped after the warm-up: {v}");
-            tokio::time::sleep(Duration::from_millis(200)).await;
-        }
-    };
+    // Warm-up: wake the agent (`k2 msg`, which posts nothing to the
+    // Thread) so the card answers below land on a live Chat. A wake used
+    // to pin a NEW conversation (the shim writes no transcript); it keeps
+    // the seeded pin now (0.46.3 smoke, as thread_read's warm-up), so every
+    // capture below lands on the seeded conversation, still empty.
+    let r = tcp(
+        port,
+        "POST",
+        "/cli/workspace/msg?workspace=pog-thread&text=warm-up&from=tester&wake=true&wake_timeout=2",
+        Some(OWNER),
+        None,
+    )
+    .await;
+    assert!(r.status_line.contains(" 200 "), "warm-up wake: {} {}", r.status_line, r.body);
+    let v: Value = serde_json::from_str(&r.body).unwrap_or_else(|e| panic!("warm-up wake JSON ({e}): {}", r.body));
+    assert_eq!(v["success"].as_bool(), Some(true), "the warm-up wake: {v}");
+    // Warmed up: the wake reached a live Chat session.
+    assert!(
+        v["target_session_id"].as_str().is_some_and(|s| !s.is_empty()),
+        "the warm-up wake reached no live session: {v}"
+    );
+    // Empty: the capture conversation is the seeded pin with no items.
+    for _ in 0..3 {
+        let r = tcp(port, "GET", "/cli/thread?addr=pog-thread&limit=1", Some(OWNER), None).await;
+        let v: Value = serde_json::from_str(&r.body).unwrap_or_else(|e| panic!("thread JSON ({e}): {}", r.body));
+        assert_eq!(v["conversation_id"].as_str(), Some(seeded_conv.as_str()), "a wake must keep the pinned Chat: {v}");
+        assert_eq!(v["items"], serde_json::json!([]), "a k2 msg wake posts nothing to the Thread: {v}");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    let conv = seeded_conv.clone();
     let r = tcp(
         port,
         "POST",

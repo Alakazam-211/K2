@@ -2456,6 +2456,8 @@ fn answer_permission_card(
 /// same id at the same seq; lane A1's `present::refresh_card`).
 pub(crate) fn publish_action_frame(cb: &CardCallback) {
     publish_card_frame(cb);
+}
+
 /// "answers" → "answer", "dismisses" → "dismiss" (after "you").
 fn base_form(verb: &str) -> &str {
     verb.strip_suffix("sses").map(|_| &verb[..verb.len() - 2]).or_else(|| verb.strip_suffix('s')).unwrap_or(verb)

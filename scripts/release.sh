@@ -170,6 +170,9 @@ if [ -f "$PROJECT_DIR/.env" ]; then
 fi
 # shellcheck source=scripts/require-mail-oauth-build-env.sh
 source "$PROJECT_DIR/scripts/require-mail-oauth-build-env.sh"
+# Shared build step (also sources macos-daemon-helper-app.sh).
+# shellcheck source=scripts/lib/build-binaries.sh
+source "$PROJECT_DIR/scripts/lib/build-binaries.sh"
 # Gmail is required OOTB (DTL invalid_client). MS is optional unless set above.
 require_mail_oauth_build_env
 
@@ -452,15 +455,13 @@ echo ""
 echo "Step 1.6: Arch build gate (k2-arch, background)..."
 k2_arch_gate_start
 
-# ── Step 2: Build ──
-echo ""
-echo "Step 2: Building release..."
-export APPLE_SIGNING_IDENTITY="$SIGNING_IDENTITY"
-export APPLE_TEAM_ID="36B8R93HXV"
-bun run tauri build
-echo "  Build complete."
-
-# ── Step 2.5: Build + bundle k2-daemon sidecar ──
+# ── Step 2: Build K2.app + every sidecar binary ──
+#
+# One shared build step for dev-build.sh, build-app.sh and release.sh:
+# scripts/lib/build-binaries.sh. It runs `tauri build` (frontend + the `k2`
+# Tauri crate + bundle), then builds k2-daemon + k2-power-helper, k2-ptyd,
+# k2-node and k2-menubar in release mode and copies them in: `tauri build`
+# copies only its own primary bin into the bundle.
 #
 # k2-daemon is a peer binary to the main Tauri app that owns the
 # persistent-agent runtime (launched by launchd, outlives the Tauri
@@ -468,78 +469,21 @@ echo "  Build complete."
 # app, `Contents/Helpers/K2 Daemon.app/Contents/MacOS/k2-daemon`, so
 # Activity Monitor shows the K2 icon + "K2 Daemon". The app finds it
 # via `k2_core::daemon_lifecycle::bundled_daemon_path` (plist install
-# + heal); sidecars stay in `Contents/MacOS/`.
-#
-# We build it explicitly in release mode (cargo workspace builds it
-# alongside the Tauri crate, but `tauri build` copies only its own
-# primary bin into the bundle) then `cp` it in. Hardened-runtime
-# signing in Step 3 covers this binary too.
-echo ""
-echo "Step 2.5: Bundling k2-daemon sidecar..."
-# cargo workspace root is the repo root — both `k2` (Tauri) and
-# `k2-daemon` build into `target/release/`. Tauri's bundler writes
-# only its own primary bin into the .app, so we copy k2-daemon in
-# explicitly.
+# + heal); sidecars stay in `Contents/MacOS/`. k2-ptyd (PRD
+# prd-k2-ptyd-v1 §7.1), the PTY host the daemon launches so agents can
+# outlive it, is nested beside k2-daemon (the daemon looks next to its
+# own exe), signed inside k2_daemon_helper_sign (hardened runtime, no
+# entitlements), notarized with the app below. Own version line:
+# release.sh never bumps crates/k2-ptyd. k2-node rides inside K2.app so
+# Settings → Compute installs it; k2-menubar is staged to ~/.k2/bin on
+# first GUI open. Hardened-runtime signing in Step 3 covers them all.
 # OAuth client id/secret already required + exported (require_mail_oauth_build_env).
-cargo build --release -p k2-daemon
-DAEMON_SRC="target/release/k2-daemon"
-if [ ! -x "$DAEMON_SRC" ]; then
-    echo "  FATAL: k2-daemon not at $DAEMON_SRC after cargo build" >&2
-    exit 1
-fi
-assert_daemon_oauth_not_placeholder "$DAEMON_SRC"
-# k2-ptyd (PRD prd-k2-ptyd-v1 §7.1): the PTY host the daemon launches so
-# agents can outlive it. Nested beside k2-daemon in K2 Daemon.app (the
-# daemon looks next to its own exe), signed inside k2_daemon_helper_sign
-# (hardened runtime, no entitlements), notarized with the app below.
-# Own version line: release.sh never bumps crates/k2-ptyd.
-cargo build --release -p k2-ptyd --bin k2-ptyd
-PTYD_SRC="target/release/k2-ptyd"
-if [ ! -x "$PTYD_SRC" ]; then
-    echo "  FATAL: k2-ptyd not at $PTYD_SRC after cargo build" >&2
-    exit 1
-fi
-# shellcheck source=scripts/macos-daemon-helper-app.sh
-source "$PROJECT_DIR/scripts/macos-daemon-helper-app.sh"
-k2_daemon_helper_assemble "target/release/bundle/macos/K2.app" "$DAEMON_SRC" "$PTYD_SRC"
-k2_daemon_helper_verify "target/release/bundle/macos/K2.app"
-# Heartbeat S2 (D11): the macOS wake helper, built by the same cargo
-# build. The daemon copies it to /Library/PrivilegedHelperTools only
-# after the user approves the one admin dialog.
-POWER_HELPER_SRC="target/release/k2-power-helper"
-if [ ! -x "$POWER_HELPER_SRC" ]; then
-    echo "  FATAL: k2-power-helper not at $POWER_HELPER_SRC after cargo build" >&2
-    exit 1
-fi
-cp "$POWER_HELPER_SRC" \
-    "target/release/bundle/macos/K2.app/Contents/MacOS/k2-power-helper"
-echo "  k2-power-helper copied into K2.app/Contents/MacOS/"
-# Compute nodes (polish v1): k2-node rides inside K2.app so Settings →
-# Compute → "Make this computer a compute node" installs it with one
-# admin prompt (k2-node setup copies it to /Library/Application Support/
-# K2/node). Separate crate: it never links k2-core.
-cargo build --release -p k2-node --bin k2-node
-NODE_SRC="target/release/k2-node"
-if [ ! -x "$NODE_SRC" ]; then
-    echo "  FATAL: k2-node not at $NODE_SRC after cargo build" >&2
-    exit 1
-fi
-cp "$NODE_SRC" "target/release/bundle/macos/K2.app/Contents/MacOS/k2-node"
-echo "  k2-node copied into K2.app/Contents/MacOS/"
-
-# Menu-bar helper. Staged out of the bundle to ~/.k2/bin on first GUI
-# open (same shape as frpc). Not executed from Contents/MacOS.
 echo ""
-echo "Step 2.6: Bundling k2-menubar helper..."
-cargo build --release -p k2-menubar
-MENUBAR_SRC="target/release/k2-menubar"
-if [ ! -x "$MENUBAR_SRC" ]; then
-    echo "  FATAL: k2-menubar not at $MENUBAR_SRC after cargo build" >&2
-    exit 1
-fi
-cp "$MENUBAR_SRC" \
-    "target/release/bundle/macos/K2.app/Contents/MacOS/k2-menubar"
-echo "  k2-menubar copied into K2.app/Contents/MacOS/"
+echo "Step 2: Building release (K2.app + sidecars)..."
+export APPLE_SIGNING_IDENTITY="$SIGNING_IDENTITY"
+export APPLE_TEAM_ID="36B8R93HXV"
+k2_build_mac_binaries "target/release/bundle/macos/K2.app"
+echo "  Build complete."
 
 # ── Step 3: Sign with hardened runtime ──
 echo ""

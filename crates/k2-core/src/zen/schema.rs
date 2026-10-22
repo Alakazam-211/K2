@@ -240,6 +240,12 @@ pub const LAYOUT_KINDS: &[&str] = &["columns"];
 pub const MAX_COLUMNS: usize = 3;
 /// `[[layout.column]] min-width`, px, 0..=this.
 pub const COLUMN_MIN_WIDTH_MAX: f64 = 800.0;
+/// `[[layout.column]] label` (prd-garden-column-collapse A1): the folded
+/// column's edge-tab text, 1 to this many characters, no control
+/// characters. The renderer shows "Column N" when a file sets none.
+pub const COLUMN_LABEL_MAX: usize = 24;
+/// The keys a `[[layout.column]]` takes.
+pub const COLUMN_KEYS: &[&str] = &["size", "min-width", "widget", "collapsible", "collapsed", "label"];
 /// At most this many content widgets (`WIDGET_KINDS`) on one page. Counted
 /// after each table's kind is known (FC47): chrome has its own limit.
 pub const MAX_WIDGETS: usize = 12;
@@ -622,6 +628,13 @@ pub fn valid_widget_id(id: &str) -> bool {
     matches!(chars.next(), Some(c) if c.is_ascii_alphanumeric())
         && id.len() <= 64
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// A `[[layout.column]] label`: 1 to [`COLUMN_LABEL_MAX`] characters, not
+/// all blank, no control characters (A1).
+pub fn valid_column_label(label: &str) -> bool {
+    let n = label.chars().count();
+    (1..=COLUMN_LABEL_MAX).contains(&n) && !label.trim().is_empty() && !label.chars().any(char::is_control)
 }
 
 /// Fill a widget's unset props with K2's defaults and derive `agents.mode`.
@@ -1426,6 +1439,13 @@ fn table_pos(ctx: &Ctx, t: &dyn TableLike, fallback: (usize, usize)) -> (usize, 
 
 /// `[layout]`: `kind = "columns"` and 1–3 `[[layout.column]]` whose
 /// `size` (percent) adds up to 100. Sets `page.layout`.
+///
+/// prd-garden-column-collapse A1: a column may also take `collapsible`,
+/// `collapsed` (where it starts) and `label` (its folded tab's text). They
+/// reach the page only when the file sets them (CA5). Refused here:
+/// `collapsed` without `collapsible`, a collapsible one-column page, and
+/// every column starting collapsed. What the column holds is checked with
+/// the whole page ([`check_collapsible`]).
 fn check_layout(ctx: &mut Ctx, item: &Item, at: (usize, usize)) {
     let Some(t) = require_table(ctx, item, at, "layout") else { return };
     let mut kind: Option<String> = None;
@@ -1499,11 +1519,42 @@ fn check_layout(ctx: &mut Ctx, item: &Item, at: (usize, usize)) {
                                     ok = false;
                                 }
                             },
+                            // prd-garden-column-collapse A1 (CA5): sent only when set.
+                            "collapsible" | "collapsed" => match cv.as_value().and_then(Value::as_bool) {
+                                Some(b) => {
+                                    let p = item_pos(ctx, cv, kp);
+                                    ctx.pos.insert(format!("page.layout.column.{i}.{ck}"), p);
+                                    col.insert(ck.into(), json!(b));
+                                }
+                                None => {
+                                    let p = item_pos(ctx, cv, kp);
+                                    ctx.error(p, format!("column {ck} is true or false"));
+                                    ok = false;
+                                }
+                            },
+                            "label" => match cv.as_value().and_then(Value::as_str) {
+                                Some(l) if valid_column_label(l) => {
+                                    col.insert("label".into(), json!(l));
+                                }
+                                _ => {
+                                    let p = item_pos(ctx, cv, kp);
+                                    ctx.error(
+                                        p,
+                                        format!("column label is text, 1 to {COLUMN_LABEL_MAX} characters, with no control characters (it names the folded column's tab)"),
+                                    );
+                                    ok = false;
+                                }
+                            },
                             other => {
-                                ctx.error(kp, unknown_key(other, "[[layout.column]]", &["size", "min-width", "widget"]));
+                                ctx.error(kp, unknown_key(other, "[[layout.column]]", COLUMN_KEYS));
                                 ok = false;
                             }
                         }
+                    }
+                    if col.contains_key("collapsed") && col.get("collapsible") != Some(&json!(true)) {
+                        let p = ctx.pos.get(&format!("page.layout.column.{i}.collapsed")).copied().unwrap_or(cpos);
+                        ctx.error(p, "collapsed is where a collapsible column starts; set collapsible = true too, or drop collapsed");
+                        ok = false;
                     }
                     match size {
                         Some(n) => {
@@ -1522,6 +1573,20 @@ fn check_layout(ctx: &mut Ctx, item: &Item, at: (usize, usize)) {
                 }
                 if ok && (sum - 100.0).abs() > 0.01 {
                     ctx.error(pos, format!("column sizes add up to {}; they must add up to 100", num_json(sum)));
+                    ok = false;
+                }
+                // A1: a fold needs another column to give its width to, and
+                // the page always starts with one column open.
+                let is_true = |c: &J, k: &str| c.get(k) == Some(&json!(true));
+                if ok && columns.len() == 1 && is_true(&columns[0], "collapsible") {
+                    let p = ctx.pos.get("page.layout.column.0.collapsible").copied().unwrap_or(pos);
+                    ctx.error(p, "a one-column page can't fold its column: there is nothing to give the width to; drop collapsible");
+                    ok = false;
+                }
+                if ok && columns.len() > 1 && columns.iter().all(|c| is_true(c, "collapsed")) {
+                    let last = columns.len() - 1;
+                    let p = ctx.pos.get(&format!("page.layout.column.{last}.collapsed")).copied().unwrap_or(pos);
+                    ctx.error(p, "every column starts collapsed; leave at least one open (drop collapsed on one)");
                     ok = false;
                 }
             }
@@ -2396,6 +2461,17 @@ fn cross_check_page(ctx: &mut Ctx, at: (usize, usize)) {
             }
         }
     }
+    // A1 / CA9: what a collapsible column may hold. Chrome is the file's
+    // when it places any, else the template's (FC24 rule 1).
+    if let Some(l) = &file_layout {
+        let chrome: Vec<J> = if file_chrome.is_empty() {
+            tpl["chrome"]["items"].as_array().cloned().unwrap_or_default()
+        } else {
+            file_chrome.iter().map(|(_, w)| w.clone()).collect()
+        };
+        let content: Vec<J> = widgets.iter().map(|(_, w)| w.clone()).collect();
+        check_collapsible(ctx, l, &chrome, &content, layout_at);
+    }
     if let Some(l) = &file_layout {
         let ids: Vec<&str> = widgets.iter().filter_map(|(_, w)| w["id"].as_str()).collect();
         for (i, c) in l["columns"].as_array().into_iter().flatten().enumerate() {
@@ -2405,6 +2481,60 @@ fn cross_check_page(ctx: &mut Ctx, at: (usize, usize)) {
                     ctx.error(p, format!("column {i} names widget '{w}', which is not on this page"));
                 }
             }
+        }
+    }
+}
+
+/// prd-garden-column-collapse A1 (CA9): a folded column hides everything in
+/// it, so a `collapsible` column may not hold:
+/// - a required control (`zen-toggle`, `garden-switcher`) at its edge,
+///   directly or inside a `menu` placed at its edge, in the page's
+///   effective chrome (`chrome`: the file's, else the template's);
+/// - a `nav-rail` (the strip, or a row at its edge).
+///
+/// Otherwise the Z28 required-controls check would fail on a hidden
+/// control and drop the page to safe mode. One error per column and
+/// reason, at the column's `collapsible`.
+fn check_collapsible(ctx: &mut Ctx, layout: &J, chrome: &[J], content: &[J], at: (usize, usize)) {
+    let Some(cols) = layout["columns"].as_array() else { return };
+    let in_column = |w: &J, c: usize| {
+        w["slot"].as_str().unwrap_or(DEFAULT_SLOT) == DEFAULT_SLOT && w["column"].as_u64().unwrap_or(0) as usize == c
+    };
+    for (c, col) in cols.iter().enumerate() {
+        if col.get("collapsible") != Some(&json!(true)) {
+            continue;
+        }
+        let p = ctx.pos.get(&format!("page.layout.column.{c}.collapsible")).copied().unwrap_or(at);
+        let mut held: Vec<String> = Vec::new();
+        for w in chrome.iter().filter(|w| in_column(w, c)) {
+            let kind = w["kind"].as_str().unwrap_or_default();
+            if super::REQUIRED_CONTROLS.contains(&kind) {
+                held.push(format!("the {kind}"));
+            } else if kind == "menu" {
+                let id = w["id"].as_str().unwrap_or("menu");
+                for item in chrome.iter().filter(|i| i["slot"] == MENU_SLOT && i["menu"].as_str() == Some(id)) {
+                    let k = item["kind"].as_str().unwrap_or_default();
+                    if super::REQUIRED_CONTROLS.contains(&k) {
+                        held.push(format!("the {k} (in menu '{id}')"));
+                    }
+                }
+            }
+        }
+        if !held.is_empty() {
+            ctx.error(
+                p,
+                format!(
+                    "column {c} is collapsible, but its edge holds {}: a folded column would hide it. Move it to a band (slot = \"top\") or another column, or drop collapsible",
+                    held.join(" and ")
+                ),
+            );
+        }
+        if let Some(rail) = content.iter().find(|w| w["kind"] == "nav-rail" && in_column(w, c)) {
+            let id = rail["id"].as_str().unwrap_or("nav-rail");
+            ctx.error(
+                p,
+                format!("column {c} is collapsible, but it holds the nav rail '{id}': folding it would hide the rail. Move the rail to another column or the top band, or drop collapsible"),
+            );
         }
     }
 }

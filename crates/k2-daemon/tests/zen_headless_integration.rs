@@ -1352,3 +1352,74 @@ template = \"k2.blank@1\"\n\
     .await
     .expect("blocking body");
 }
+
+/// prd-garden-column-collapse A1 (CA5), headless: `GET /cli/zen/get` sends
+/// a column's `collapsible`, `collapsed` and `label` only when the Garden
+/// file sets them; Garden 1 (no keys) answers columns with none of them.
+/// A collapsible column holding the template's nav rail is an error at its
+/// line, and the last good page stays.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a1_collapsible_columns_reach_the_page_answer_headless() {
+    let home = new_home();
+    let d = spawn_daemon(&home.0);
+    let tok = d.owner.clone();
+    let port = d.port;
+    let (v, one) = setup(port, &tok);
+    let two = v["gardens"][1]["id"].as_str().expect("Garden 2 id").to_string();
+    let home_dir = home.0.clone();
+    tokio::task::spawn_blocking(move || {
+        let (s, g1) = call(port, "GET", &format!("/cli/zen/get?token={tok}&garden={one}"), None);
+        assert_eq!(s, 200, "{g1}");
+        for c in g1["page"]["layout"]["columns"].as_array().unwrap_or_else(|| panic!("Garden 1 columns: {g1}")) {
+            for k in ["collapsible", "collapsed", "label"] {
+                assert!(c.get(k).is_none(), "Garden 1 sets no {k}: {c}");
+            }
+        }
+        let page = zen_dir(&home_dir).join(format!("gardens/{two}.toml"));
+        std::fs::write(
+            &page,
+            "schema = 1\n\
+template = \"k2.texting@1\"\n\
+[layout]\nkind = \"columns\"\n\
+[[layout.column]]\nsize = 34\n\
+[[layout.column]]\nsize = 66\ncollapsible = true\ncollapsed = true\nlabel = \"Chat\"\n",
+        )
+        .expect("save page");
+        let g = wait_for("get to show the collapsible column", Duration::from_secs(5), || {
+            let (s, g) = call(port, "GET", &format!("/cli/zen/get?token={tok}&garden={two}"), None);
+            (s == 200 && g["page"]["layout"]["columns"][1].get("collapsible").is_some()).then_some(g)
+        });
+        assert_eq!(g["errors"], serde_json::json!([]), "{g}");
+        let cols = &g["page"]["layout"]["columns"];
+        assert_eq!(cols[1]["collapsible"], true, "{g}");
+        assert_eq!(cols[1]["collapsed"], true, "{g}");
+        assert_eq!(cols[1]["label"], "Chat", "{g}");
+        for k in ["collapsible", "collapsed", "label"] {
+            assert!(cols[0].get(k).is_none(), "column 0 sets no {k}: {g}");
+        }
+        assert_eq!(g["page"]["layout"]["split"], serde_json::json!([34, 66]), "{g}");
+
+        // Column 0 holds the template's rail: refused at its line, last good kept.
+        let good = g["version"].clone();
+        std::fs::write(
+            &page,
+            "schema = 1\n\
+template = \"k2.texting@1\"\n\
+[layout]\nkind = \"columns\"\n\
+[[layout.column]]\nsize = 34\ncollapsible = true\n\
+[[layout.column]]\nsize = 66\n",
+        )
+        .expect("break page");
+        let broken = wait_for("get to report the rail error", Duration::from_secs(5), || {
+            let (_, g) = call(port, "GET", &format!("/cli/zen/get?token={tok}&garden={two}"), None);
+            g["errors"].as_array().is_some_and(|e| !e.is_empty()).then_some(g)
+        });
+        assert_eq!(broken["version"], good, "{broken}");
+        assert_eq!(broken["errors"][0]["line"], 7, "{broken}");
+        let msg = broken["errors"][0]["message"].as_str().expect("message");
+        assert!(msg.contains("column 0 is collapsible, but it holds the nav rail 'nav'"), "{msg}");
+        assert_eq!(broken["page"]["layout"]["columns"][1]["label"], "Chat", "the last good page stays: {broken}");
+    })
+    .await
+    .expect("blocking body");
+}

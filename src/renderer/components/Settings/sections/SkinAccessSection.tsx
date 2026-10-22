@@ -84,8 +84,8 @@ export const SKIN_HEARTBEAT_CAPS = ['heartbeats:read', 'heartbeats:write'] as co
 export const SKIN_AGENT_IDENTITY_CAPS = ['agent:identity', 'agent:handle'] as const
 // Own group (0.46.3 Thread downloads, Rosson 2026-10-22): save Thread files.
 // Never implied by thread:read or files:read, never a default, and a
-// person's grant (an agent can't set it). Offered on servers with
-// `app-thread-parity-v1` (0.46.3, the release that also accepts the cap).
+// person's grant (an agent can't set it). Offered only on servers that
+// accept it (`thread-download`, 0.46.3).
 export const SKIN_DOWNLOAD_CAPS = ['files:download'] as const
 // GH#72 (0.45.6): `files:write` stops at the agent's own `.k2/` folder.
 // This opt-in modifier lifts that for one room. Off by default, owner only
@@ -608,7 +608,7 @@ export function SkinAccessSection(): React.JSX.Element {
   const appHeartbeats = useServerSupports('app-heartbeats')
   const agentIdentity = useServerSupports('agent-identity')
   const agentConfigOptIn = useServerSupports('agent-config-write')
-  const fileDownload = useServerSupports('app-thread-parity-v1')
+  const fileDownload = useServerSupports('thread-download')
   const capChoices = useMemo(
     () => skinCapChoices(appHeartbeats, agentIdentity, fileDownload),
     [appHeartbeats, agentIdentity, fileDownload],

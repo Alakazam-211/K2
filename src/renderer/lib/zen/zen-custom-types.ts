@@ -77,6 +77,10 @@ export interface ZenCustomWidgetPayload {
    *  the computer's) unless the manifest says `"colorScheme": "own"`.
    *  Absent from an older daemon: `garden`. */
   colorScheme?: 'garden' | 'own'
+  /** prd-garden-access-v1 G26a (switch on only): does the live version pass
+   *  the signer gate in this Garden? False: the ⋯ menu reads "History · not
+   *  signed". Absent with Garden access off. */
+  signed?: boolean
 }
 
 /** The v4 seam: only a widget from your own Garden runs today. One that

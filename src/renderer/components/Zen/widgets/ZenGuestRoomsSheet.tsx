@@ -13,6 +13,7 @@ import { useState } from 'react'
 import { ConfirmStep } from '@/components/Settings/sections/DataSourceConfirm'
 import { zenLocalScope } from '@/lib/zen/zen-api'
 import { ZEN_GUESTS_CONFIRM_ACTION, type ZenGuestRoomsAsk } from '@/lib/zen/zen-custom-guests'
+import { useGardenAccessSwitchStore } from '@/lib/zen/garden-access-api'
 import { zenButtonStyle } from './ZenOverlay'
 
 function list(handles: string[]): string {
@@ -29,6 +30,7 @@ export interface ZenGuestRoomsSheetProps {
 
 export function ZenGuestRoomsSheet({ ask, onDone }: ZenGuestRoomsSheetProps): React.JSX.Element {
   const [confirming, setConfirming] = useState(false)
+  const accessOn = useGardenAccessSwitchStore((s) => s.on) === true
   const c = ask.change
   const added = c.afterHandles.filter((h) => !c.beforeHandles.includes(h))
   const removed = c.beforeHandles.filter((h) => !c.afterHandles.includes(h))
@@ -79,7 +81,12 @@ export function ZenGuestRoomsSheet({ ask, onDone }: ZenGuestRoomsSheetProps): Re
           {added.length > 0 && <div>Adds {added.join(', ')}.</div>}
           {removed.length > 0 && <div>Removes {removed.join(', ')}.</div>}
           {c.role && <div style={muted}>Their role ({c.role}) still decides what they can do in each room.</div>}
-          {c.madeBy.startsWith('agent:') && <div style={muted}>An agent made this widget ({c.madeBy}).</div>}
+          {/* prd-garden-access-v1 G23: with Garden access on, `madeBy` is the last signer. */}
+          {c.madeBy.startsWith('agent:') && (
+            <div style={muted}>
+              {accessOn ? `An agent last signed this widget (${c.madeBy}).` : `An agent made this widget (${c.madeBy}).`}
+            </div>
+          )}
         </dl>
         {confirming ? (
           <ConfirmStep

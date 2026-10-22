@@ -22,6 +22,10 @@
 //      about this" there (one row per source it reads; K2's own Ask box,
 //      `ZenSourceAsk`) and "Open <host>" for a source's link; K2's built-in
 //      data-source cards get the menu too.
+//      prd-garden-access-v1 G26a: with Garden access on, an agent-written
+//      widget's menu also has History… (the widget history modal), read
+//      "History · not signed" when its live version fails the signer gate
+//      here. With the switch off the menu is as 0.46.3.
 
 import { useContext, useEffect, useState } from 'react'
 import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
@@ -47,6 +51,8 @@ import { ZenCustomFrame, type ZenCustomLoadProblem } from './ZenCustomFrame'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { zenBoundSourceAddresses, zenCustomSourcesFor } from '@/lib/zen/zen-custom-sources'
 import { zenSourcesReader } from '@/lib/zen/zen-sources-live'
+import { loadGardenAccessSwitch, useGardenAccessSwitchStore } from '@/lib/zen/garden-access-api'
+import { ZenGardenHistoryModal } from './ZenGardenHistoryModal'
 
 /** A source's link, when it's a plain https URL (PRD §12.8: opened in the
  *  system browser by K2, never by the sealed frame). */
@@ -131,20 +137,50 @@ function PausedStrip({ onResume, busy, error }: { onResume(): void; busy: boolea
   )
 }
 
+/** The ⋯ menu's History item (G26a), or null when it has none. */
+export function zenWidgetHistoryLabel(opts: {
+  /** Garden access is on (the switch, or the daemon's `signed` field). */
+  on: boolean
+  builtin: boolean
+  signed: boolean | undefined
+}): string | null {
+  if (!opts.on || opts.builtin) return null
+  return opts.signed === false ? 'History · not signed' : 'History…'
+}
+
 /** K2's ⋯ menu at the box's top right, outside the frame (UW25): Reload,
- *  and for a card reading data sources, Ask an agent about each source. */
+ *  and for a card reading data sources, Ask an agent about each source.
+ *  With Garden access on, History… for an agent-written widget (G26a). */
 function CornerMenu({
   name,
   onReload,
   askAbout = [],
   onAsk,
+  history,
 }: {
   name: string
   onReload(): void
   askAbout?: readonly string[]
   onAsk?(address: string): void
+  /** The widget folder and Garden for History…; absent for a built-in. */
+  history?: { widget: string; garden: string; builtin: boolean; signed: boolean | undefined }
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const switchOn = useGardenAccessSwitchStore((s) => s.on)
+  const switchLoaded = useGardenAccessSwitchStore((s) => s.loaded)
+  // Read the switch when the menu opens (a gesture), never on render.
+  const mayHaveHistory = !!history && !history.builtin
+  useEffect(() => {
+    if (open && mayHaveHistory && !switchLoaded) void loadGardenAccessSwitch()
+  }, [open, mayHaveHistory, switchLoaded])
+  const historyLabel = history
+    ? zenWidgetHistoryLabel({
+        on: switchOn === true || history.signed !== undefined,
+        builtin: history.builtin,
+        signed: history.signed,
+      })
+    : null
   const links = open ? zenSourceLinks(askAbout) : []
   const menu = useAnchoredMenu<HTMLButtonElement>({ open, onClose: () => setOpen(false), gap: 4, width: 'min', minWidth: 160, align: 'end' })
   return (
@@ -241,8 +277,30 @@ function CornerMenu({
                 Open {l.host}
               </button>
             ))}
+            {historyLabel && (
+              <button
+                type="button"
+                role="menuitem"
+                data-zen-custom-menu-item="history"
+                data-zen-widget-not-signed={history?.signed === false ? '' : undefined}
+                onClick={() => {
+                  setOpen(false)
+                  setHistoryOpen(true)
+                }}
+                className="flex w-full items-center text-left cursor-pointer"
+                style={{ padding: '6px 10px', borderRadius: 'calc(var(--zen-radius) - 4px)', color: 'var(--zen-text)' }}
+              >
+                {historyLabel}
+              </button>
+            )}
           </div>,
         )}
+      {historyOpen && history && (
+        <ZenGardenHistoryModal
+          target={{ kind: 'widget', widget: history.widget, garden: history.garden }}
+          onClose={() => setHistoryOpen(false)}
+        />
+      )}
     </>
   )
 }
@@ -374,6 +432,7 @@ export function ZenCustomWidget({ decl, bridge }: ZenWidgetProps): React.JSX.Ele
             onReload={() => reloadZenWidget(key)}
             askAbout={zenBoundSourceAddresses(widget)}
             onAsk={(address) => void zenCustomSourcesFor(gid, () => widget).ask(address, null)}
+            history={{ widget: widget.widget, garden: gid, builtin, signed: widget.signed }}
           />
         )}
       </div>

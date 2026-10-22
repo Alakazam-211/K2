@@ -310,6 +310,12 @@ export function setZenGlobalTheme(name: string): Promise<void> {
   return post('zen/theme/set', { name })
 }
 
+/** Styles (prd-garden-access-v1 G25): reset `zen.toml` to its stub,
+ *  `POST zen/reset {}` (the current file is kept as a snapshot first). */
+export function resetZenSettingsFile(): Promise<void> {
+  return post('zen/reset', {})
+}
+
 /** One Garden's own theme, or `null` to follow the global theme. */
 export function setZenGardenTheme(id: string, name: string | null): Promise<void> {
   return post('zen/theme/set', name === null ? { garden: id, clear: true } : { name, garden: id })

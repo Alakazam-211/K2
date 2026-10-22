@@ -188,18 +188,7 @@
     {"code": "refresh_reused", "doc": "Device sign-in: a refresh token came back after it was used; that device is signed out (sign in again)."},
     {"code": "person_pass_required", "doc": "Wallet verbs need an App user's own login session pass. Connect logins, the owner token, agent passports and an App's own pass have no wallet."},
     {"code": "wallet_off", "doc": "This App doesn't use personal wallets; its owner turns them on."},
-    {"code": "duplicate_label", "doc": "The person already has an item with that label for that provider."},
-    {"code": "bad_action", "doc": "Permission cards: no card-able action by that id (k2 permission list shows them)."},
-    {"code": "bad_params", "doc": "Permission cards: a value is missing, unknown or no longer valid for that action."},
-    {"code": "bad_why", "doc": "Permission cards: why is one line of at most 200 characters, with no secret in it."},
-    {"code": "not_cardable", "fields": ["permission"], "doc": "Permission cards: that change can't be requested (a person does it where `permission.where` says), or another action covers it."},
-    {"code": "recently_denied", "fields": ["denied"], "doc": "Permission cards: a person denied the same ask within 24 hours; `denied` says who, when and when to ask again."},
-    {"code": "ask_limit", "doc": "Permission cards: the same action and values were asked twice in 7 days; update the denied request instead."},
-    {"code": "too_many_requests", "doc": "Permission cards: this agent (5) or this server (50) has too many open requests, or 20 asks this hour."},
-    {"code": "request_not_pending", "doc": "Permission cards: someone answered first, the request closed, or it is no longer waiting."},
-    {"code": "already_updated", "doc": "Permission cards: a denied request takes one update (a new why) within 7 days."},
-    {"code": "action_card_person_only", "fields": ["required"], "doc": "A settings card is answered by a person at its floor (`required`: owner or admin): never an agent, a widget or an App guest."},
-    {"code": "vault_confirm_required", "doc": "This change takes the same confirm Settings takes: confirm, then answer again with confirmToken."}
+    {"code": "duplicate_label", "doc": "The person already has an item with that label for that provider."}
   ],
   "bannedFields": [
     "projectPath",
@@ -17021,17 +17010,8 @@
           }
         }
       },
-      "errors": [
-        "bad_action",
-        "bad_params",
-        "bad_why",
-        "not_cardable",
-        "recently_denied",
-        "ask_limit",
-        "too_many_requests",
-        "usage"
-      ],
-      "doc": "An agent asks for one named change: K2 puts a permission card on its Thread for a person at the Settings floor (agents only; while both switches are on).",
+      "errors": ["usage", "rate_limited"],
+      "doc": "An agent asks for one named change: K2 puts a permission card on its Thread for a person at the Settings floor (agents only; while both switches are on). Errors {ok:false, error:{code, hint}}: bad_action, bad_params, bad_why, not_cardable (+permission), recently_denied (+denied), ask_limit, too_many_requests.",
       "example": "k2 permission request compute.use --why 'Run the suite on k2n2-m1'"
     },
     {
@@ -17086,14 +17066,8 @@
           }
         }
       },
-      "errors": [
-        "already_updated",
-        "request_not_pending",
-        "bad_why",
-        "not_found",
-        "usage"
-      ],
-      "doc": "Once, on a request denied within 7 days: a new why, and the card is posted again for the person who denied it (agents only).",
+      "errors": ["usage", "not_found"],
+      "doc": "Once, on a request denied within 7 days: a new why, and the card is posted again for the person who denied it (agents only). Errors: already_updated, request_not_pending (409), bad_why.",
       "example": "k2 permission update pr_7f3a2c --why 'Only for tonight's payroll run'"
     },
     {
@@ -17193,12 +17167,8 @@
           }
         }
       },
-      "errors": [
-        "request_not_pending",
-        "not_found",
-        "usage"
-      ],
-      "doc": "The agent withdraws its own waiting request; the card reads 'Withdrawn' and nothing is applied (agents only).",
+      "errors": ["usage", "not_found"],
+      "doc": "The agent withdraws its own waiting request; the card reads 'Withdrawn' and nothing is applied (agents only). Errors: request_not_pending (409).",
       "example": "k2 permission cancel pr_7f3a2c"
     },
     {
@@ -17382,10 +17352,7 @@
           }
         }
       },
-      "errors": [
-        "not_found",
-        "usage"
-      ],
+      "errors": ["usage", "not_found"],
       "doc": "Where the agent's own requests stand (agents only).",
       "example": "k2 permission status pr_7f3a2c"
     },
@@ -17547,9 +17514,7 @@
           }
         }
       },
-      "errors": [
-        "usage"
-      ],
+      "errors": ["usage"],
       "doc": "What this agent can ask for (the catalog, with each setting's current state) and its open requests (agents only).",
       "example": "k2 permission list --area apps"
     },
@@ -17665,10 +17630,8 @@
           }
         }
       },
-      "errors": [
-        "action_card_person_only"
-      ],
-      "doc": "Waiting on you: the permission requests this person can answer; open each card by addr + cardId (people only, admin floor).",
+      "errors": [],
+      "doc": "Waiting on you: the permission requests this person can answer; open each card by addr + cardId (people only, admin floor). A caller below the floor gets 403 action_card_person_only (+required).",
       "example": "k2 permission pending"
     }
   ]

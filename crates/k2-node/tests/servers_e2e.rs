@@ -603,8 +603,13 @@ async fn an_enrol_refused_already_enrolled_says_why_and_retries() {
     assert!(why.contains("already_enrolled") && why.contains("k2 compute node remove"), "{why}");
     // The old row goes; the node retries by itself and enrols.
     b.nodes.lock().unwrap().clear();
-    let fresh = eventually("the retried enrol's SAS", || status(&n).servers.into_iter().find(|l| l.slot == 1 && l.sas.is_some())).await;
-    assert_ne!(fresh.link, "enrol_failed (retrying)", "{fresh:?}");
+    // The SAS (the tenant's pin) can show a pass before the status file's
+    // link catches up: wait for both, the link off `enrol_failed`.
+    let fresh = eventually("the retried enrol's SAS and a link off enrol_failed", || {
+        status(&n).servers.into_iter().find(|l| l.slot == 1 && l.sas.is_some() && l.link != "enrol_failed (retrying)")
+    })
+    .await;
+    assert!(!fresh.last_error.as_deref().unwrap_or("").contains("already_enrolled"), "the old refusal is gone: {fresh:?}");
 }
 
 /// z3mbpZ e2e fix 4: an owner enrolled over loopback (its line labelled

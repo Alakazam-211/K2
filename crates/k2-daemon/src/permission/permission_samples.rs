@@ -691,6 +691,45 @@ fn batch_samples(out: &mut Out) {
     }
 }
 
+/// The push a just-posted card sends (lane A2's `routing::push_card`, PRD
+/// §17.7): rosson has a phone; the captured `PushEvent` rendered by the
+/// relay payload builder (`K2Cloud::payload`, the legacy lane's `data`)
+/// and the sealed lane's plaintext (`e2e::alert_plaintext`, before
+/// sealing and padding). Fixed server stamp and seal context.
+fn push_samples(out: &mut Out) {
+    let w = billing();
+    k2_core::push_devices::upsert_device("dev-rosson-phone", "ios", "apns-token-sample", ROSSON).expect("register rosson's phone");
+    let mark = crate::push_routes::test_push_capture::mark();
+    let req = row(&w, REQ, "compute.use", json!({}), None, Some(DANA));
+    let card = ask(&w, &req);
+    let events: Vec<k2_core::push::PushEvent> = crate::push_routes::test_push_capture::since(mark)
+        .into_iter()
+        .filter(|e| match e {
+            k2_core::push::PushEvent::ThreadPost(t) => {
+                t.conversation_id == w.conv
+                    && matches!(&t.budget, k2_core::push::ThreadBudget::Permission { request_id, .. } if request_id == REQ)
+            }
+            _ => false,
+        })
+        .collect();
+    assert_eq!(events.len(), 1, "one permission push, to rosson's phone only: {events:?}");
+    let event = &events[0];
+    let stamp = k2_core::push::PushStamp { subdomain: "rosson".to_string(), instance_id: "inst_01".to_string() };
+    let badge_key = "rosson:inst_01";
+    let legacy = k2_core::push::K2Cloud::payload(event, &stamp, badge_key);
+    out.put("push", "permission", "legacy", "push", fix_ids(legacy, &card, CARD_ID));
+    let ctx = k2_core::push::e2e::SealCtx {
+        kid: "a1b2c3d4e5f60718".to_string(),
+        ctr: 7,
+        ts: T0,
+        stamp: stamp.clone(),
+        badge_key: badge_key.to_string(),
+    };
+    let sealed = k2_core::push::e2e::alert_plaintext(event, &ctx).expect("a Thread push has a sealed plaintext");
+    out.put("push", "permission", "sealed-plaintext", "push", fix_ids(sealed, &card, CARD_ID));
+    drop(w);
+}
+
 /// Every sample, as file name → pretty JSON (with a trailing newline).
 fn generate() -> BTreeMap<String, String> {
     let _home = crate::test_support::TempHome::new();
@@ -705,6 +744,7 @@ fn generate() -> BTreeMap<String, String> {
     click_samples(&mut out);
     confirm_samples(&mut out);
     batch_samples(&mut out);
+    push_samples(&mut out);
 
     let cast = [ROSSON, MAYA, DANA, LEE];
     let mut files = BTreeMap::new();
@@ -819,8 +859,8 @@ fn permission_samples_match_the_golden_files() {
     );
 }
 
-/// PRD §17.10's required set is there (the push forms are lane A2's and
-/// join with it), and each file's state is the state its view says.
+/// PRD §17.10's required set is there, and each file's state is the state
+/// its view says.
 fn check_coverage(produced: &BTreeMap<String, String>) {
     for (view, state, forms) in [
         ("approver-click", "pending", &["cards2", "fallback", "item", "ws"][..]),
@@ -846,6 +886,7 @@ fn check_coverage(produced: &BTreeMap<String, String>) {
         ("guest", "pending", &["hidden"][..]),
         ("guest", "approved", &["hidden"][..]),
         ("agent", "pending", &["fallback"][..]),
+        ("push", "permission", &["legacy", "sealed-plaintext"][..]),
     ] {
         for form in forms {
             let name = format!("{view}__{state}__{form}.json");

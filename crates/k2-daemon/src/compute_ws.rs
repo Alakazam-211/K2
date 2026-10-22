@@ -1059,6 +1059,8 @@ pub fn finalize(job_id: &str) {
         // tool timed out and killed `k2 compute run`): otherwise its result
         // would only ever be found by polling.
         let wants = job.detach || (job.session_id.is_some() && !follower_recent(&job.id));
+        // A job its requester cancelled: they know how it ended.
+        let wants = wants && !(job.state == "cancelled" && job.ctl.cancelled_by_requester);
         if !job.is_terminal() || !wants || job.notified_at.is_some() {
             return;
         }
@@ -2032,6 +2034,44 @@ mod tests {
         let ids = |v: Vec<store::JobRow>| v.into_iter().map(|j| j.id).collect::<Vec<_>>();
         assert_eq!(ids(rotation_order(jobs.clone(), None)), ["a1", "b1", "c1", "a2"]);
         assert_eq!(ids(rotation_order(jobs, Some("a"))), ["b1", "c1", "a1", "a2"]);
+    }
+
+    /// r8 (2026-10-22): a job its requester cancelled sends no `[compute]`
+    /// completion message (they just did it, and wait on nothing); a job
+    /// someone else cancelled still tells its requester.
+    #[test]
+    fn a_job_its_requester_cancelled_sends_no_completion_message() {
+        let _db = k2_core::db::scoped_for_test();
+        let db = k2_core::db::shared();
+        let mk = |id: &str, sid: &str, by_requester: bool| {
+            let conn = db.lock();
+            let j = job_on(&conn, id, "n1");
+            conn.execute("UPDATE compute_jobs SET session_id = ?2, detach = 1 WHERE id = ?1", [&j.id, &sid.to_string()]).expect("session");
+            if by_requester {
+                let ctl = store::JobCtl { cancelled_by_requester: true, ..Default::default() };
+                store::set_job_ctl(&conn, &j.id, &ctl).expect("ctl");
+            }
+            let _ = store::set_job_state(&conn, &j.id, JobState::Cancelled, Some("cancelled"), None, 30);
+            j.id
+        };
+        {
+            let conn = db.lock();
+            store::insert_pending_node(&conn, "n1", "n1", "fp", "pem", &BTreeMap::new(), "owner", "123456", 1).expect("node");
+        }
+        let (mine, theirs) = ("sess-requester-cancel", "sess-owner-cancel");
+        test_sink_register(mine);
+        test_sink_register(theirs);
+        let own = mk("eeeeeeee0123456789abcdef01234567", mine, true);
+        let other = mk("ffffffff0123456789abcdef01234567", theirs, false);
+        finalize(&own);
+        finalize(&other);
+        let t0 = std::time::Instant::now();
+        while test_sink_peek(theirs).is_empty() {
+            assert!(t0.elapsed() < Duration::from_secs(10), "the requester of a job someone else cancelled is told");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(test_sink_take(theirs)[0].contains("cancelled"));
+        assert_eq!(test_sink_take(mine), Vec::<String>::new(), "no message for a job its requester cancelled");
     }
 
     /// k2n4, 2026-10-21: a running job whose cancel was asked for, that

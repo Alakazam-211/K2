@@ -2897,6 +2897,13 @@ fn cancel_one(who: &Who, seen: &store::JobRow, queued_only: bool) -> R<serde_jso
         if j.is_terminal() {
             return Err(no("already_ended", 409, format!("job {short} already ended ({})", j.state)));
         }
+        // The one who asked for the job is cancelling it: its `cancelled`
+        // end needs no completion message (they just did it).
+        if by == j.requested_by && !j.ctl.cancelled_by_requester {
+            let mut ctl = j.ctl.clone();
+            ctl.cancelled_by_requester = true;
+            store::set_job_ctl(&conn, &j.id, &ctl).map_err(|e| no("internal", 500, e))?;
+        }
         if j.state == "queued" && store::cancel_if_queued(&conn, &j.id, compute::now()).map_err(|e| no("internal", 500, e))? {
             store::record_event(
                 &conn,

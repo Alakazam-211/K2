@@ -566,6 +566,10 @@ pub struct JobCtl {
     /// A split run's parent: the child job ids, shard 1 first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shards: Vec<String>,
+    /// Whoever asked for the job also cancelled it: ending `cancelled` is
+    /// no news to them, so no `[compute]` completion message.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cancelled_by_requester: bool,
 }
 
 /// Which shard a child job is.

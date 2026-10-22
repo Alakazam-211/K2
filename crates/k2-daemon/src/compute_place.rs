@@ -583,7 +583,13 @@ pub fn sweep(now: i64) {
             let db = k2_core::db::shared();
             let conn = db.lock();
             let detail = format!("{} has been offline for {mins} min; if it comes back, it is told to stop this attempt", n.name);
-            let _ = store::set_job_state(&conn, &j.id, JobState::Interrupted, Some("node_lost"), Some(&detail), now);
+            // A job someone asked to cancel ends `cancelled` (what was asked).
+            if j.reason.as_deref() == Some("cancel_requested") {
+                let detail = format!("cancelled as asked; {detail}");
+                let _ = store::set_job_state(&conn, &j.id, JobState::Cancelled, Some("cancelled"), Some(&detail), now);
+            } else {
+                let _ = store::set_job_state(&conn, &j.id, JobState::Interrupted, Some("node_lost"), Some(&detail), now);
+            }
             store::record_event(&conn, "controller", "job_lost", Some(&n.id), Some(&j.workspace_id), Some(&j.id), serde_json::json!({"offlineMins": mins}));
         }
         // A job someone asked to cancel is never retried.

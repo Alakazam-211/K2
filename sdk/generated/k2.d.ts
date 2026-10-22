@@ -974,7 +974,7 @@ export interface RoomMembers {
 }
 
 /** A cap a widget may ask for. */
-export type K2Cap = 'agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | 'files:read' | 'tickets:read' | 'tickets:post' | 'store:read' | 'store:write' | 'guests:rooms' | 'activity:room' | 'room:members'
+export type K2Cap = 'agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | 'files:read' | 'tickets:read' | 'tickets:post' | 'store:read' | 'store:write' | 'guests:rooms' | 'activity:read' | 'room:members'
 
 /** What k2.store.subscribe delivers: the changed keys (value null = deleted), or after a gap the whole list again. `by` names the writer: you (by your name), `<you> via <widget>`, or `agent:<handle>`. */
 export type StoreDelivery = Array<{ key: string; rev: number; value: unknown; by: string }> | { resync: true; items: StoreEntry[] }
@@ -1317,7 +1317,7 @@ export interface K2 {
     setRooms(args: { app?: string; rooms: string[]; username: string }): Promise<AppGuestRooms>
   }
   readonly activity: {
-    /** Whether the room's agent is working now, per session (every session in the room, the owner's other tabs too; needs activity:room since 0.46.3). This computer only. cap activity:room · portable · app-api-v1. e.g. `const {status} = await k2.activity.snapshot({workspace})` */
+    /** Whether the room's agent is working now, per session. This computer only. cap activity:read · portable · app-api-v1. e.g. `const {status} = await k2.activity.snapshot({workspace})` */
     snapshot(args: { workspace: string }): Promise<AppActivity>
   }
   readonly room: {

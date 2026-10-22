@@ -203,8 +203,6 @@ async fn me_lists_my_agents_and_other_rooms_do_not_exist() {
         "files:read",
         "tickets:read",
         "activity:read",
-        // 0.46.3: the room-wide counts (activity.snapshot) are their own cap.
-        "activity:room",
         "room:members",
         "heartbeats:read",
         "agent:identity",
@@ -228,7 +226,7 @@ async fn me_lists_my_agents_and_other_rooms_do_not_exist() {
     assert_eq!(a["can"]["files"], "read");
     assert_eq!(a["can"]["tickets"], "read");
     assert_eq!(a["can"]["members"], true);
-    assert_eq!((a["can"]["activity"].as_bool(), a["can"]["activityRoom"].as_bool()), (Some(true), Some(true)), "{a}");
+    assert_eq!(a["can"]["activity"], true, "{a}");
     assert_eq!(me["rooms"].as_array().map(|r| r.len()), Some(1), "rooms stays for older Apps");
     for k in ["serverId", "publicHost", "instanceId"] {
         assert!(me.get(k).is_some(), "me has {k}: {me}");

@@ -215,7 +215,7 @@ describe('TUWA5: the generated tables', () => {
       'tickets.create': { cap: 'tickets:post', reach: 'portable', kind: 'call' },
       'tickets.comment': { cap: 'tickets:post', reach: 'portable', kind: 'call' },
       'tickets.resolve': { cap: 'tickets:post', reach: 'portable', kind: 'call' },
-      'activity.snapshot': { cap: 'activity:room', reach: 'portable', kind: 'call' },
+      'activity.snapshot': { cap: 'activity:read', reach: 'portable', kind: 'call' },
     })
     for (const v of ['projects.list', 'projects.messages', 'projects.post']) {
       expect(v in ZEN_CUSTOM_VERBS, `${v}: no project chat on the Garden bridge`).toBe(false)
@@ -235,7 +235,7 @@ describe('TUWA5: the generated tables', () => {
       'files:read',
       'tickets:read',
       'tickets:post',
-      'activity:room',
+      'activity:read',
     ]
     for (const c of USER_WIDGET_CAPS) expect(bridgeCaps.has(c) || extra.includes(c), c).toBe(true)
     expect([...USER_WIDGET_CAPS]).toEqual([
@@ -250,7 +250,7 @@ describe('TUWA5: the generated tables', () => {
       'store:read',
       'store:write',
       'guests:rooms',
-      'activity:room',
+      'activity:read',
       'room:members',
     ])
     expect(bridgeCaps.has('sources:read'), 'sources.* are answered by the custom layer, never ZEN_VERBS').toBe(false)
@@ -284,8 +284,7 @@ describe('TUWA10: one cap table', () => {
       'wiki:read': 'Read the wiki',
       'store:read': 'Read the workspace store',
       'store:write': 'Change dump-table rows',
-      'activity:read': 'See when the agent is working on a Thread message (counts only)',
-      'activity:room': "See every session's working counts in the room (the owner's other tabs too)",
+      'activity:read': 'See when the agent is working',
       'heartbeats:read': 'See heartbeats: schedule, next fire, history',
       'heartbeats:write': 'Add, edit, turn on or off, archive and fire heartbeats',
       'agent:identity': "Change the agent's name, color and picture",

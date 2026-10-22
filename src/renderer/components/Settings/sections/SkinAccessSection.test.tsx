@@ -357,8 +357,7 @@ describe('SkinAccessSection', () => {
     expect(DEFAULT_SKIN_CAPS).not.toContain('activity:read')
     expect(SKIN_FILE_CAPS).toEqual(['files:read', 'files:write'])
     expect(SKIN_FILE_CAPS).not.toContain('activity:read')
-    expect(SKIN_ACTIVITY_CAPS).toEqual(['activity:read', 'activity:room'])
-    expect(DEFAULT_SKIN_CAPS).not.toContain('activity:room')
+    expect(SKIN_ACTIVITY_CAPS).toEqual(['activity:read'])
     expect(SKIN_STORE_CAPS).toEqual(['store:read', 'store:write'])
     expect(SKIN_CAP_CHOICES).toEqual([
       'thread:read',
@@ -371,14 +370,11 @@ describe('SkinAccessSection', () => {
       'store:read',
       'store:write',
       'activity:read',
-      'activity:room',
       'heartbeats:read',
       'heartbeats:write',
       'agent:identity',
       'agent:handle',
     ])
-    expect(skinCapChoices(true, true, false)).not.toContain('activity:room')
-    expect(skinCapChoices(true, true, false)).toContain('activity:read')
     expect(screen.getByText('Store this key now — it cannot be retrieved again')).not.toBeNull()
     expect(screen.getByText('k2skn_…ab12')).not.toBeNull()
   })
@@ -990,8 +986,7 @@ describe('TUWA10: Settings → Apps reads the shared cap table', () => {
       'wiki:read': 'Read the wiki',
       'store:read': 'Read the workspace store',
       'store:write': 'Change dump-table rows',
-      'activity:read': 'See when the agent is working on a Thread message (counts only)',
-      'activity:room': "See every session's working counts in the room (the owner's other tabs too)",
+      'activity:read': 'See when the agent is working',
       'heartbeats:read': 'See heartbeats: schedule, next fire, history',
       'heartbeats:write': 'Add, edit, turn on or off, archive and fire heartbeats',
       'agent:identity': "Change the agent's name, color and picture",

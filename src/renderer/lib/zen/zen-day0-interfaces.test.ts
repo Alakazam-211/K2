@@ -89,7 +89,7 @@ describe('day-0: verb tables', () => {
       // by this computer's daemon as the person (portable, Garden-door caps).
       if (ZEN_STORE_VERBS.has(verb)) {
         expect(row.reach).toBe('portable')
-        expect(['thread:read', 'files:read', 'tickets:read', 'tickets:post', 'activity:room']).toContain(row.cap)
+        expect(['thread:read', 'files:read', 'tickets:read', 'tickets:post', 'activity:read']).toContain(row.cap)
         expect(USER_WIDGET_CAPS as readonly string[]).toContain(row.cap)
         continue
       }

@@ -48,7 +48,7 @@ export const APP_VERBS = {
     http: { method: 'GET', route: '/cli/skin/me', params: {}, query: [] },
     socket: null,
     responseNames: {},
-    response: {"additionalProperties":false,"properties":{"agents":{"items":{"additionalProperties":false,"properties":{"can":{"additionalProperties":false,"properties":{"activity":{"type":"boolean"},"activityRoom":{"type":"boolean"},"chat":{"type":"boolean"},"files":{"type":"string"},"heartbeats":{"type":"string"},"identity":{"type":"boolean"},"members":{"type":"boolean"},"send":{"type":"boolean"},"store":{"type":"string"},"tickets":{"type":"string"},"wiki":{"type":"boolean"}},"type":"object"},"caps":{"items":{"type":"string"},"type":"array"},"color":{"type":["string","null"]},"displayName":{"type":"string"},"folders":{"additionalProperties":false,"properties":{"read":{"items":{"type":"string"},"type":"array"},"uploadDir":{"type":"string"},"write":{"items":{"type":"string"},"type":"array"}},"type":"object"},"handle":{"type":"string"},"image":{"type":["string","null"]},"muted":{"type":"boolean"},"room":{"type":"string"},"unread":{"type":"integer"}},"type":"object"},"type":"array"},"app":{"type":"string"},"catalogVersion":{"type":"integer"},"features":{"items":{"type":"string"},"type":"array"},"instanceId":{"type":"string"},"kind":{"enum":["guest","app","token"]},"ok":{"type":"boolean"},"principalId":{"type":["string","null"]},"publicHost":{"type":["string","null"]},"rooms":{"items":{"additionalProperties":false,"properties":{"caps":{"items":{"type":"string"},"type":"array"},"folders":{"additionalProperties":false,"properties":{"read":{"items":{"type":"string"},"type":"array"},"uploadDir":{"type":"string"},"write":{"items":{"type":"string"},"type":"array"}},"type":"object"},"handle":{"type":"string"},"room":{"type":"string"}},"type":"object"},"type":"array"},"serverId":{"type":["string","null"]},"username":{"type":"string"}},"type":"object"},
+    response: {"additionalProperties":false,"properties":{"agents":{"items":{"additionalProperties":false,"properties":{"can":{"additionalProperties":false,"properties":{"activity":{"type":"boolean"},"chat":{"type":"boolean"},"files":{"type":"string"},"heartbeats":{"type":"string"},"identity":{"type":"boolean"},"members":{"type":"boolean"},"send":{"type":"boolean"},"store":{"type":"string"},"tickets":{"type":"string"},"wiki":{"type":"boolean"}},"type":"object"},"caps":{"items":{"type":"string"},"type":"array"},"color":{"type":["string","null"]},"displayName":{"type":"string"},"folders":{"additionalProperties":false,"properties":{"read":{"items":{"type":"string"},"type":"array"},"uploadDir":{"type":"string"},"write":{"items":{"type":"string"},"type":"array"}},"type":"object"},"handle":{"type":"string"},"image":{"type":["string","null"]},"muted":{"type":"boolean"},"room":{"type":"string"},"unread":{"type":"integer"}},"type":"object"},"type":"array"},"app":{"type":"string"},"catalogVersion":{"type":"integer"},"features":{"items":{"type":"string"},"type":"array"},"instanceId":{"type":"string"},"kind":{"enum":["guest","app","token"]},"ok":{"type":"boolean"},"principalId":{"type":["string","null"]},"publicHost":{"type":["string","null"]},"rooms":{"items":{"additionalProperties":false,"properties":{"caps":{"items":{"type":"string"},"type":"array"},"folders":{"additionalProperties":false,"properties":{"read":{"items":{"type":"string"},"type":"array"},"uploadDir":{"type":"string"},"write":{"items":{"type":"string"},"type":"array"}},"type":"object"},"handle":{"type":"string"},"room":{"type":"string"}},"type":"object"},"type":"array"},"serverId":{"type":["string","null"]},"username":{"type":"string"}},"type":"object"},
   },
   'roomAgents.list': {
     cap: null,
@@ -931,7 +931,7 @@ export const APP_VERBS = {
     response: {"additionalProperties":false,"properties":{"decision":{"type":"string"},"name":{"type":"string"},"reason":{"type":["string","null"]},"success":{"type":"boolean"}},"type":"object"},
   },
   'activity.snapshot': {
-    cap: 'activity:room',
+    cap: 'activity:read',
     effect: 'read',
     kind: 'call',
     feature: 'app-api-v1',
@@ -942,7 +942,7 @@ export const APP_VERBS = {
     response: {"additionalProperties":false,"properties":{"serverNow":{"type":"integer"},"sessions":{"items":{"additionalProperties":false,"properties":{"agentName":{"type":"string"},"counts":{"additionalProperties":false,"properties":{"commands":{"type":"integer"},"subagents":{"type":"integer"},"tools":{"type":"integer"}},"type":"object"},"paneGroupId":{"type":["string","null"]},"since":{"type":["integer","null"]},"status":{"type":"string"}},"type":"object"},"type":"array"},"since":{"type":["integer","null"]},"status":{"type":"string"},"workspace":{"type":"string"}},"type":"object"},
   },
   'activity.events': {
-    cap: 'activity:room',
+    cap: 'activity:read',
     effect: 'read',
     kind: 'subscribe',
     feature: 'app-api-v1',
@@ -1089,10 +1089,7 @@ export const APP_VERBS = {
 export type AppVerb = keyof typeof APP_VERBS
 
 export interface AppMeCan {
-  /** activity:read: the pinned-Chat ear (thread.activity), counts only. */
   readonly activity: boolean
-  /** activity:room: every session's counts in the room (activity.snapshot / activity.events). */
-  readonly activityRoom: boolean
   readonly chat: boolean
   readonly files: string
   readonly heartbeats: string
@@ -2804,9 +2801,9 @@ export interface AppSurfaces {
     fire(args: { name: string; workspace: string }): Promise<AppHeartbeatFired>
   }
   readonly activity: {
-    /** Whether the room's agent is working now, per session (every session in the room, the owner's other tabs too; needs activity:room since 0.46.3). cap activity:room · GET /cli/activity/snapshot. e.g. `const {status} = await k2.activity.snapshot({workspace})` */
+    /** Whether the room's agent is working now, per session. cap activity:read · GET /cli/activity/snapshot. e.g. `const {status} = await k2.activity.snapshot({workspace})` */
     snapshot(args: { workspace: string }): Promise<AppActivity>
-    /** Live room events: agent working (every session in the room, activity:room since 0.46.3), heartbeats, tickets, rooms_changed, room_members_changed, app_deployed; resync then close 4008 when behind. cap activity:room · WS /cli/activity/events?workspace=. e.g. `const off = k2.activity.events({workspace}, (f) => f.kind === 'resync' ? reload() : apply(f))` */
+    /** Live room events: agent working, heartbeats, tickets, rooms_changed, room_members_changed, app_deployed; resync then close 4008 when behind. cap activity:read · WS /cli/activity/events?workspace=. e.g. `const off = k2.activity.events({workspace}, (f) => f.kind === 'resync' ? reload() : apply(f))` */
     events(args: { workspace: string }, onFrame: (frame: AppActivityFrame) => void, onError?: (error: K2Error) => void): () => void
   }
   readonly agentIdentity: {

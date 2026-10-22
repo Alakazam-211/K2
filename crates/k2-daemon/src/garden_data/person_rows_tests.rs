@@ -19,7 +19,7 @@ const APP: &str = "POST /cli/zen/call HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: tau
 
 const PAGE: &str = "schema = 1\n\n[layout]\nkind = \"columns\"\n[[layout.column]]\nsize = 100\nmin-width = 200\n\n[[widget]]\nid = \"b1\"\nkind = \"custom\"\nwidget = \"board\"\ncolumn = 0\n";
 
-const ALL: [&str; 5] = ["thread:read", "tickets:read", "tickets:post", "files:read", "activity:room"];
+const ALL: [&str; 5] = ["thread:read", "tickets:read", "tickets:post", "files:read", "activity:read"];
 
 struct Door {
     _env: Env,
@@ -151,10 +151,6 @@ fn each_row_needs_its_cap_and_bad_arguments_are_refused() {
     ] {
         assert_eq!(d.refuse(verb, args), "cap_not_granted", "{verb}");
     }
-    // 0.46.3: the room-wide snapshot is activity:room; other caps don't
-    // open it.
-    d.set(&["thread:read", "files:read"], MadeBy::Owner);
-    assert_eq!(d.refuse("activity.snapshot", json!([{ "workspace": "board-keeper" }])), "cap_not_granted");
     d.set(&ALL, MadeBy::Owner);
     assert_eq!(d.refuse("files.list", json!([{ "workspace": "garden-files", "relPath": ".", "path": "/" }])), "bad_request");
     assert_eq!(d.refuse("files.read", json!([{ "workspace": "garden-files" }])), "bad_request", "relPath is required");

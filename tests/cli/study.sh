@@ -339,7 +339,7 @@ assert_contains "apps keeps k2skn_" "$apps_out" "k2skn_"
 assert_contains "apps keeps /cli/skin/login" "$apps_out" "/cli/skin/login"
 
 echo "== k2 study apps: agent working (prd-daemon-activity-and-thread-working-v1 AP4) =="
-assert_contains "activity section" "$apps_out" "AGENT WORKING (activity:room"
+assert_contains "activity section" "$apps_out" "AGENT WORKING (activity:read)"
 assert_contains "thread ear section" "$apps_out" "THREAD EAR (thread:read + activity:read"
 assert_contains "guest snapshot path" "$apps_out" "GET      /cli/activity/snapshot?workspace=<handle>"
 assert_contains "activity socket path" "$apps_out" "WS GET   /cli/activity/events?workspace=<handle>"

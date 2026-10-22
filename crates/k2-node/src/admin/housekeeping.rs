@@ -173,7 +173,13 @@ pub async fn gc(node: &Node, args: &Value) -> Result<Value, AdminRefusal> {
         None => false,
         Some(v) => v.as_bool().ok_or_else(|| bad("toolchains must be true or false"))?,
     };
-    let cutoff = node.now() - days * 86400;
+    gc_run(node, days, toolchains).await
+}
+
+/// The `gc` work. `days` 0 (only the owner's own `k2-node gc
+/// --older-days 0`) takes every ended job's tree and every idle warm slot.
+pub async fn gc_run(node: &Node, days: i64, toolchains: bool) -> Result<Value, AdminRefusal> {
+    let cutoff = node.now() - days.max(0) * 86400;
     let (mut freed, mut job_dirs, mut slots, mut caches) = (0u64, 0u32, 0u32, 0u32);
     // Job trees: ended (terminal) before the cutoff, every tenant's.
     let running_by = node.running_by_tenant();
@@ -213,9 +219,164 @@ pub async fn gc(node: &Node, args: &Value) -> Result<Value, AdminRefusal> {
     Ok(json!({"older_days": days, "freed_bytes": freed, "job_dirs": job_dirs, "slots": slots, "caches": caches}))
 }
 
+/// `k2-node gc` on the machine: the owner (a `k2nodectl` member, or
+/// root) writes this into the config dir; the running node picks it up
+/// within seconds, runs `gc` and answers in `run/gc-result.json`. Each
+/// request id runs once.
+pub const GC_REQUEST_FILE: &str = "gc-request.json";
+pub const GC_RESULT_FILE: &str = "gc-result.json";
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GcRequest {
+    pub id: String,
+    /// Ended jobs and idle warm slots older than this many days; 0 = all.
+    pub older_days: i64,
+    #[serde(default)]
+    pub toolchains: bool,
+    #[serde(default)]
+    pub requested_by: Option<String>,
+    #[serde(default)]
+    pub requested_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct GcOutcome {
+    pub id: String,
+    pub ok: bool,
+    #[serde(default)]
+    pub result: Option<Value>,
+    #[serde(default)]
+    pub message: Option<String>,
+    pub at: i64,
+}
+
+pub fn gc_request_path(layout: &crate::paths::Layout) -> std::path::PathBuf {
+    layout.config.join(GC_REQUEST_FILE)
+}
+
+pub fn gc_result_path(layout: &crate::paths::Layout) -> std::path::PathBuf {
+    layout.run().join(GC_RESULT_FILE)
+}
+
+pub fn read_gc_result(layout: &crate::paths::Layout) -> Option<GcOutcome> {
+    serde_json::from_str(&std::fs::read_to_string(gc_result_path(layout)).ok()?).ok()
+}
+
+/// `k2-node gc …`: write the request (the config dir is the owner's).
+pub fn write_gc_request(layout: &crate::paths::Layout, r: &GcRequest) -> Result<(), String> {
+    if r.older_days < 0 {
+        return Err("--older-days must be 0 or more".into());
+    }
+    let body = serde_json::to_vec_pretty(r).map_err(|e| e.to_string())?;
+    crate::util::atomic_write(&gc_request_path(layout), &body, 0o660)
+        .map_err(|e| format!("{e}\n{} is the machine owner's: run this as root (sudo) or as a member of the k2nodectl group", layout.config.display()))
+}
+
+/// Run the waiting `k2-node gc` request once (the config poll calls
+/// this). True when one ran (or a bad one was answered).
+pub async fn process_gc_request(node: &Node) -> bool {
+    let layout = node.layout().clone();
+    let Ok(text) = std::fs::read_to_string(gc_request_path(&layout)) else { return false };
+    let at = node.now();
+    let last = read_gc_result(&layout).map(|o| o.id);
+    let (id, outcome) = match serde_json::from_str::<GcRequest>(&text) {
+        Ok(r) if last.as_deref() == Some(r.id.as_str()) => return false,
+        Ok(r) if r.older_days < 0 => (r.id.clone(), Err("older_days must be 0 or more".to_string())),
+        Ok(r) => {
+            crate::nlog!("gc request {} from {}: older than {} day(s){}", r.id, r.requested_by.clone().unwrap_or_default(), r.older_days, if r.toolchains { ", toolchains" } else { "" });
+            (r.id.clone(), gc_run(node, r.older_days, r.toolchains).await.map_err(|e| e.message))
+        }
+        Err(e) => {
+            let id = format!("bad-{}", &k2_node_proto::crypto::sha256_hex(text.as_bytes())[..16]);
+            if last.as_deref() == Some(id.as_str()) {
+                return false;
+            }
+            (id, Err(format!("{GC_REQUEST_FILE}: {e}")))
+        }
+    };
+    let o = match outcome {
+        Ok(v) => GcOutcome { id, ok: true, result: Some(v), message: None, at },
+        Err(m) => GcOutcome { id, ok: false, result: None, message: Some(m), at },
+    };
+    match serde_json::to_vec_pretty(&o) {
+        Ok(b) => {
+            if let Err(e) = crate::util::atomic_write(&gc_result_path(&layout), &b, 0o644) {
+                crate::nlog!("gc result: {e}");
+            }
+        }
+        Err(e) => crate::nlog!("gc result: {e}"),
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// (e) The owner's `k2-node gc --older-days 0`: the running node takes
+    /// every ended job's tree and idle warm slot, answers once per id, and
+    /// leaves a running job alone.
+    #[tokio::test]
+    async fn the_owners_gc_request_runs_once_and_spares_running_work() {
+        let d = crate::util::temp_dir("gc-req");
+        let layout = crate::paths::Layout::new(d.join("home"), d.join("cfg"));
+        layout.ensure().unwrap();
+        std::fs::create_dir_all(&layout.config).unwrap();
+        std::fs::write(layout.policy(), "availability = \"always\"\nforeign_locks = []\nwrite_smoke_lock = \"\"\ndisk_floor_gb = 0\nmax_parallel = 4\n").unwrap();
+        crate::identity::write_pin(&layout.pin(), &crate::identity::Pin::for_test("n")).unwrap();
+        let mut o = crate::node::NodeOptions::new(layout.clone());
+        o.dev = true;
+        o.health = false;
+        o.keep_awake = false;
+        o.use_cgroups = false;
+        o.cancel_grace = std::time::Duration::from_millis(200);
+        o.wall = Some(crate::wall::Wall::None { why: "t".into() });
+        o.facts = Some(crate::config::MachineFacts { cores: 8, mem_bytes: 32 << 30, disk_total_bytes: 1 << 40, has_battery: false, is_macos: cfg!(target_os = "macos") });
+        let n = Node::open(o).await.unwrap();
+        // An ended job's tree, an idle warm slot, and a running job.
+        let old = layout.job_dir("old", 1);
+        std::fs::create_dir_all(old.join("home")).unwrap();
+        std::fs::write(old.join("log"), "x").unwrap();
+        {
+            let owner = n.owner();
+            let l = owner.ledger.lock().unwrap();
+            l.insert(&crate::ledger::tests::assign("old", 1), &*n.opts.clock).unwrap();
+            l.finish("old", 1, k2_node_proto::frames::JobState::Done, None, None, None, 0, n.now()).unwrap();
+        }
+        let slot = layout.project_cache("pk1").join("target-1");
+        std::fs::create_dir_all(slot.join("debug")).unwrap();
+        std::fs::write(slot.join("debug/app"), vec![0u8; 4096]).unwrap();
+        let mut a = crate::ledger::tests::assign("live", 1);
+        a.plan.argv = vec!["/bin/sleep".into(), "30".into()];
+        a.fence.plan_digest = a.plan.digest().unwrap();
+        assert_eq!(n.on_assign(&n.owner(), a), Some(("live".into(), 1)));
+        let t0 = std::time::Instant::now();
+        while !layout.job_dir("live", 1).join("home").exists() {
+            assert!(t0.elapsed() < std::time::Duration::from_secs(20), "the live job never started");
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(!process_gc_request(&n).await, "no request: nothing runs");
+        let req = GcRequest { id: "cli-0001".into(), older_days: 0, toolchains: false, requested_by: Some("owner".into()), requested_at: Some(1) };
+        write_gc_request(&layout, &req).unwrap();
+        assert!(process_gc_request(&n).await);
+        let out = read_gc_result(&layout).unwrap();
+        assert!(out.ok, "{out:?}");
+        assert_eq!(out.id, "cli-0001");
+        let r = out.result.unwrap();
+        assert_eq!((r["job_dirs"].as_u64(), r["slots"].as_u64()), (Some(1), Some(1)), "{r}");
+        assert!(!old.exists() && !slot.exists());
+        assert!(layout.job_dir("live", 1).exists(), "a running job's tree stays");
+        assert!(!process_gc_request(&n).await, "the same id runs once");
+        // A bad request is answered (once), not run.
+        std::fs::write(gc_request_path(&layout), "{\"id\":\"x\",\"older_days\":-1}").unwrap();
+        assert!(process_gc_request(&n).await);
+        let out = read_gc_result(&layout).unwrap();
+        assert!(!out.ok && out.message.unwrap().contains("0 or more"));
+        assert!(!process_gc_request(&n).await, "answered once");
+        assert!(write_gc_request(&layout, &GcRequest { older_days: -1, ..req }).is_err());
+        n.stop_all(k2_node_proto::frames::JobState::Cancelled, "test_over");
+    }
 
     #[test]
     fn cpu_times_parse() {

@@ -42,6 +42,24 @@ pub struct Pin {
 }
 
 impl Pin {
+    /// A confirmed pin naming `node_id` (unit tests that run jobs).
+    #[cfg(test)]
+    pub fn for_test(node_id: &str) -> Self {
+        Pin {
+            controller_fp: "c".repeat(64),
+            controller_public_key_pem: String::new(),
+            routes: vec![],
+            node_id: node_id.into(),
+            name: "n".into(),
+            enrolled_at: 1,
+            sas: String::new(),
+            revoked: false,
+            revoked_reason: None,
+            labels: Default::default(),
+            confirmed: true,
+        }
+    }
+
     pub fn controller_spki(&self) -> Result<Vec<u8>, String> {
         let der = crypto::pem_decode("PUBLIC KEY", &self.controller_public_key_pem)?;
         crypto::p256_point_from_spki(&der)?;

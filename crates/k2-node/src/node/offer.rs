@@ -36,7 +36,7 @@ impl Node {
         let l = self.local.lock().unwrap().clone();
         let (cap_cpu, cap_mem, par) = self.caps(t, &l);
         let (used_cpu, used_mem, running, excl) = self.used(cap_cpu, cap_mem, par);
-        let (disk_free, _) = crate::sysinfo::disk(&self.layout().home);
+        let disk_free = self.disk_free_bytes();
         let mut free_mem = cap_mem.saturating_sub(used_mem);
         if let Some(avail) = crate::sysinfo::mem_available() {
             free_mem = free_mem.min(avail);

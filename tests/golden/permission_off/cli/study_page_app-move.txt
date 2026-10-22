@@ -11,8 +11,11 @@ move it yourself: you need "Build and run Apps" on your workspace (your
 owner turns it on). No terminal on the box, no sudo: the box is prepared
 by K2 (k2 app doctor says whether it is ready).
 
-THE OLD SERVICE KEEPS RUNNING until you stop it, and its URL keeps serving
-it until you move the label. Nothing below is one-way.
+THE OLD SERVICE KEEPS RUNNING until YOU stop it (step 7): installing,
+deploying and taking its label never stop it. Its URL serves it until step
+6 moves the label; after that it runs on with no public URL. Nothing below
+is one-way. Done = the URL serves the App AND the old service is stopped
+(steps 6 and 7).
 
   1. Write a manifest from your start command: manifest.json at the root
      of the folder you deploy (your code, not your data):
@@ -45,8 +48,10 @@ it until you move the label. Nothing below is one-way.
        k2 app inspect <app-id>                 the front port: curl it
   6. Take your hostname (the same URL; the App must be healthy):
        k2 app label take <app-id> <old-name>
-     The old service keeps running, without a public label.
-  7. Stop the old service once you're sure:
+     The URL serves the App now. label take does NOT stop the old service:
+     it keeps running on its own port with no public label (k2 publish
+     list shows it local), so moving back is instant.
+  7. Stop the old service once you're sure (the move is done after this):
        k2 publish stop <old-name>
   MOVE BACK (any time): start the old service (k2 publish start <old-name>)
      and k2 app label return <app-id> <old-name>.

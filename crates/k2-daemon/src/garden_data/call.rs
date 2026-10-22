@@ -25,6 +25,7 @@ use k2_core::garden_data::tx::{self, TxOwner};
 use k2_core::garden_data::{
     authors, keys, rights, Access, Actor, DataError, MadeBy, Space, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT,
 };
+use k2_core::garden_data::signer_gate;
 use k2_core::zen::widget_access::{effective_caps, WidgetOrigin};
 use k2_core::zen::ZenFiles;
 
@@ -150,6 +151,12 @@ pub(crate) struct Placed {
     pub(crate) reads: Vec<String>,
     /// The widgets placed on the same Garden (their space names), for `from`.
     pub(crate) neighbours: Vec<String>,
+    /// The manifest's effective caps before the signer gate (garden access,
+    /// switch on); equal to `caps` when the gate passes or the switch is off.
+    pub(crate) full_caps: Vec<String>,
+    /// Did the live version pass the signer gate (`garden_data::signer_gate`)?
+    /// Always `true` with the switch off.
+    pub(crate) signed: bool,
 }
 
 impl Placed {
@@ -193,9 +200,39 @@ pub(crate) fn resolve(b: &CallBody) -> Result<Placed, DataError> {
     if live != b.hash {
         return Err(stale("the widget changed since this frame loaded"));
     }
-    let caps = effective_caps(WidgetOrigin::of(&p.widget), &st.requested());
+    let full_caps = effective_caps(WidgetOrigin::of(&p.widget), &st.requested());
+    // Garden access (switch on, G15/G22): the signer gate. Off: unchanged.
+    let (caps, signed) = signer_gate::gate_caps(&g.id, &p.widget, live, full_caps.clone());
     let reads = st.manifest.as_ref().map(|m| m.reads.clone()).unwrap_or_default();
-    Ok(Placed { garden: g.id, placement: b.placement.clone(), widget: p.widget, hash: live.to_string(), caps, reads, neighbours })
+    Ok(Placed {
+        garden: g.id,
+        placement: b.placement.clone(),
+        widget: p.widget,
+        hash: live.to_string(),
+        caps,
+        reads,
+        neighbours,
+        full_caps,
+        signed,
+    })
+}
+
+/// 403 [`signer_gate::NEEDS_EDITOR`] for this placement (garden access).
+pub(crate) fn needs_editor(w: &Placed) -> DataError {
+    audit::line("zen.data.refused", &w.label(), &format!("code={}", signer_gate::NEEDS_EDITOR));
+    refused(signer_gate::NEEDS_EDITOR, 403, signer_gate::needs_editor_message(w.space_widget()))
+}
+
+/// The cap check with the signer gate: `cap_not_granted` for a cap the
+/// manifest doesn't ask for; `needs_editor` for one the gate took away.
+pub(crate) fn check_cap(w: &Placed, verb: &str, cap: &str) -> Result<(), DataError> {
+    if w.caps.iter().any(|x| x == cap) {
+        return Ok(());
+    }
+    if !w.signed && w.full_caps.iter().any(|x| x == cap) {
+        return Err(needs_editor(w));
+    }
+    Err(refused("cap_not_granted", 403, format!("{verb} needs {cap}; add it to the widget's manifest caps")))
 }
 
 fn run(b: &CallBody) -> Result<J, DataError> {
@@ -207,10 +244,13 @@ fn run(b: &CallBody) -> Result<J, DataError> {
     };
     let w = resolve(b)?;
     if let Some(cap) = row.cap.as_deref() {
-        if !w.caps.iter().any(|x| x == cap) {
-            let why = format!("{} needs {cap}; add it to the widget's manifest caps", b.verb);
-            return Err(refused("cap_not_granted", 403, why));
-        }
+        check_cap(&w, &b.verb, cap)?;
+    }
+    // Garden access (switch on, §1.6): a version that fails the signer gate
+    // keeps Always only: its own store and save keyspace and widget.self.
+    // Everything else that acts as the person answers `needs_editor`.
+    if !w.signed && !matches!(b.verb.as_str(), "widget.self") && !b.verb.starts_with("save.") && !b.verb.starts_with("store.") {
+        return Err(needs_editor(&w));
     }
     if row.effect == Effect::Write {
         if let Some(p) = crate::zen_routes::placement_pause(&w.garden, &w.placement) {
@@ -250,6 +290,26 @@ fn run(b: &CallBody) -> Result<J, DataError> {
                 Some(other) => read_space(&w, v, other)?,
                 None => data_space(&w.widget)?,
             };
+            if k2_core::zen::garden_access::enabled() {
+                // Garden access (G15): its own keyspace is Full for any good
+                // version; a neighbour's (`{from}`, manifest `reads` kept)
+                // only for a version that passes the signer gate.
+                if from.is_some() && !w.signed {
+                    return Err(needs_editor(&w));
+                }
+                let maker = {
+                    let db = k2_core::db::shared();
+                    let conn = db.lock();
+                    authors::maker_of(&conn, &w.widget, &w.hash)?
+                };
+                let made = made_by_label(&maker);
+                return store_verb(&w, &key, &space, &Access::Full, &made, v, args).map_err(|e| {
+                    if matches!(e, DataError::NotGranted { .. } | DataError::BadTx) {
+                        audit::line("zen.data.refused", &w.label(), &format!("{} code={}", space.as_str(), e.code()));
+                    }
+                    e
+                });
+            }
             // The maker's rights, read now (a revoke wins on the next call).
             let (maker, acc) = {
                 let db = k2_core::db::shared();
@@ -297,14 +357,32 @@ fn widget_self(w: &Placed) -> Result<J, DataError> {
     let space = data_space(&w.widget)?;
     let since = crate::garden_data::now() - WIDGET_USE_WINDOW_SECS;
     let (writes, changes) = store().writes_since(&space, &w.actor().stored(), since)?;
-    Ok(json!({
+    let mut out = json!({
         "widget": w.widget,
         "garden": w.garden,
         "placement": w.placement,
         "hash": w.hash,
         "author": author,
         "uses7d": { "writes": writes, "changes": changes },
-    }))
+    });
+    if k2_core::zen::garden_access::enabled() {
+        // Garden access (G23): `author` is "last signed by"; `editors` are the
+        // handles on this Garden's list; `signed` is the gate.
+        let editors: Vec<String> = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::zen::garden_access::list(&conn, &w.garden)
+                .map_err(|e| DataError::Unavailable(format!("garden access list: {e:?}")))?
+                .into_iter()
+                .map(|r| r.project_id)
+                .collect()
+        };
+        // `garden` stays the id (an existing field); the list is `editors`.
+        let handles: Vec<String> = editors.iter().map(|p| crate::compute_routes::ws_handle(p)).collect();
+        out["editors"] = json!(handles);
+        out["signed"] = json!(w.signed);
+    }
+    Ok(out)
 }
 
 fn author_unknown(w: &Placed) -> DataError {

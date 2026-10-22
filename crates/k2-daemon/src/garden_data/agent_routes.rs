@@ -60,6 +60,21 @@ pub(crate) fn access(who: &DataWho, space: &Space) -> Result<Access, DataError> 
     match who.project_id() {
         None if who.is_owner() => Ok(Access::Full),
         None => Err(DataError::NotGranted { key: None }),
+        Some(p) if k2_core::zen::garden_access::enabled() => {
+            // Garden access (G15, §1.7): listed on every Garden that places
+            // the widget → its data in full; else the grants as today. The
+            // maker's own reach (`maker_owns_widget_data`) is retired.
+            let acc = {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                grants::access_for_agent(&conn, space, p)?
+            };
+            if acc != Access::Full && crate::zen_access_routes::agent_edits_widget_data(space, p)? {
+                audit_listed_access(p, space);
+                return Ok(Access::Full);
+            }
+            Ok(acc)
+        }
         Some(p) => {
             let db = k2_core::db::shared();
             let conn = db.lock();
@@ -90,6 +105,25 @@ fn audit_maker_access(project_id: &str, space: &Space) {
             None => format!("agent:{project_id}"),
         };
         crate::gardens_manage::audit("zen-data-maker", &user, space.as_str(), None, None);
+    }
+}
+
+/// One Access Audit line the first time (per daemon run) an agent reaches a
+/// widget's data as an editor of every Garden that places it (garden access).
+fn audit_listed_access(project_id: &str, space: &Space) {
+    use std::collections::HashSet;
+    use std::sync::Mutex;
+    static SEEN: Mutex<Option<HashSet<(String, String)>>> = Mutex::new(None);
+    let first = {
+        let mut g = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+        g.get_or_insert_with(HashSet::new).insert((project_id.to_string(), space.as_str().to_string()))
+    };
+    if first {
+        let user = match crate::compute_routes::ws_by_id(project_id) {
+            Some(ws) => format!("agent:{}", ws.handle),
+            None => format!("agent:{project_id}"),
+        };
+        crate::gardens_manage::audit("zen-data-editor", &user, space.as_str(), None, None);
     }
 }
 

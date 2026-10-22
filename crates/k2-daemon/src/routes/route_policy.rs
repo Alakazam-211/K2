@@ -1502,9 +1502,16 @@ pub const ROUTES: &[Route] = &[
     post("/cli/zen/data/tx/begin", NoLogin),
     post("/cli/zen/data/tx/commit", NoLogin),
     get("/cli/zen/doctor", Member),
+    // Garden access (prd-garden-access-v1 G14), live only with the
+    // `gardenAccess` switch on (`live_row`): GET the list (the person; a
+    // passport learns whether it is listed), POST a change (the person);
+    // the ask (a live local passport); History (the person).
+    both("/cli/zen/garden/access", Member),
+    post("/cli/zen/garden/access/ask", Member),
     // A staged Garden page checked, never written (0.46.1 S3).
     post("/cli/zen/garden/check", Member),
     post("/cli/zen/garden/delete", Member),
+    get("/cli/zen/garden/history", Member),
     // Garden Lock (prd-garden-lock-and-sync-v1 §5.2): the person only; the
     // handler refuses every passport, login and app pass (403 owner_only).
     post("/cli/zen/garden/lock", Member),
@@ -1515,9 +1522,14 @@ pub const ROUTES: &[Route] = &[
     post("/cli/zen/garden/put", Member),
     post("/cli/zen/garden/rename", Member),
     post("/cli/zen/garden/reorder", Member),
+    // Garden access (live only with the switch on): Restore a deleted
+    // Garden (the person).
+    post("/cli/zen/garden/restore", Member),
     post("/cli/zen/garden/sync", Member),
     post("/cli/zen/garden/template", Member),
     get("/cli/zen/gardens", Member),
+    // Garden access (live only with the switch on): deleted Gardens.
+    get("/cli/zen/gardens/deleted", Member),
     get("/cli/zen/get", Member),
     get("/cli/zen/history", Member),
     // Static review of a received Garden bundle or folder (Rosson
@@ -1534,6 +1546,8 @@ pub const ROUTES: &[Route] = &[
     post("/cli/zen/reload", Member),
     post("/cli/zen/reset", Member),
     post("/cli/zen/setup", Member),
+    // Garden access (live only with the switch on): View this version.
+    get("/cli/zen/snapshot", Member),
     get("/cli/zen/status", Member),
     get("/cli/zen/sync", Member),
     get("/cli/zen/templates", Member),
@@ -1556,6 +1570,7 @@ pub const ROUTES: &[Route] = &[
     // (or proposed) whole, or previewed on K2's own preview Garden.
     post("/cli/zen/widget/folder/check", Member),
     post("/cli/zen/widget/folder/put", Member),
+    get("/cli/zen/widget/history", Member),
     post("/cli/zen/widget/new", Member),
     post("/cli/zen/widget/pause", Member),
     post("/cli/zen/widget/preview", Member),
@@ -1608,6 +1623,8 @@ pub fn lookup(path: &str) -> Option<&'static Route> {
 /// for a passport.
 pub fn live_row(path: &str) -> Option<&'static Route> {
     live_row_when(path, k2_core::permission::gate::server_on())
+        // Garden access (G0a): its routes exist only with the switch on.
+        .filter(|_| crate::zen_access_routes::route_live(path))
 }
 
 /// [`live_row`] with the global switch given (pure; tests).

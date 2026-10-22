@@ -2308,3 +2308,131 @@ pub fn garden_stub(id: &str, name: &str, template: &str) -> String {
          template = \"{template}\"\n"
     )
 }
+
+// ── Deleted Gardens, restore, and a snapshot's text (garden access, A2) ──
+
+/// What a restored Garden's `deleted.json` is renamed to, so it no longer
+/// lists as deleted (the record is kept).
+const RESTORED_RECORD_PREFIX: &str = "restored-";
+
+impl ZenFiles {
+    /// Gardens that live only in history (deleted with a `deleted.json`
+    /// record, not back on the list), newest deletion first:
+    /// `[{id, name, deletedAt (RFC 3339), snapshot}]`.
+    pub fn deleted_gardens(&self) -> Vec<J> {
+        let live: Vec<String> = self.gardens().into_iter().map(|g| g.id).collect();
+        let mut out: Vec<J> = fs::read_dir(self.history_root().join(GARDENS_DIR))
+            .map(|rd| {
+                rd.flatten()
+                    .filter_map(|e| {
+                        let name = e.file_name().to_string_lossy().to_string();
+                        let id = name.strip_suffix(".toml")?.to_string();
+                        if !valid_garden_id(&id) || live.contains(&id) {
+                            return None;
+                        }
+                        let rec: J = serde_json::from_str(&fs::read_to_string(e.path().join(DELETED_RECORD)).ok()?).ok()?;
+                        Some(json!({
+                            "id": id,
+                            "name": rec["name"],
+                            "deletedAt": rec["deletedAt"],
+                            "snapshot": rec["snapshot"],
+                        }))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        out.sort_by(|a, b| b["deletedAt"].as_str().unwrap_or("").cmp(a["deletedAt"].as_str().unwrap_or("")));
+        out
+    }
+
+    /// Put a deleted Garden back (the person's Restore): its list entry
+    /// from `deleted.json` (same id; a taken name gets " (restored)"), its
+    /// page from the snapshot taken at delete (or a stub), at the end of
+    /// the list. It comes back unlocked and with today's sync defaults.
+    /// The record is kept as `restored-<utc>.json`. 409 `garden_exists` when
+    /// it is already on the list; 404 when there's no deleted record.
+    pub fn restore_garden(&self, id: &str) -> Result<GardenEntry, ZenError> {
+        let _g = list_lock();
+        self.require()?;
+        let id = id.trim();
+        if !valid_garden_id(id) {
+            return Err(ZenError::BadRequest(format!("'{id}' is not a Garden id")));
+        }
+        let mut list = self.gardens();
+        if list.iter().any(|g| g.id == id) {
+            return Err(ZenError::GardenExists(format!("Garden {id} is already on your list")));
+        }
+        let f = ZenFile::Garden(id.to_string());
+        let dir = self.history_dir(&f);
+        let rec_path = dir.join(DELETED_RECORD);
+        let text =
+            fs::read_to_string(&rec_path).map_err(|_| ZenError::NotFound(format!("no deleted Garden {id} in history")))?;
+        let rec: J = serde_json::from_str(&text).map_err(|e| ZenError::Io(format!("{}: {e}", rec_path.display())))?;
+        let mut g: GardenEntry =
+            serde_json::from_value(rec.clone()).map_err(|e| ZenError::Io(format!("{}: {e}", rec_path.display())))?;
+        if g.id != id {
+            return Err(ZenError::Io(format!("{} names Garden {}, not {id}", rec_path.display(), g.id)));
+        }
+        let base = g.name.clone();
+        let mut n = 1;
+        while Self::name_taken(&list, &g.name, None) {
+            g.name = if n == 1 { format!("{base} (restored)") } else { format!("{base} (restored {n})") };
+            n += 1;
+        }
+        let path = self.path_of(&f);
+        if !path.exists() {
+            let snap = rec["snapshot"].as_str().filter(|s| valid_snapshot_name(s)).map(|s| dir.join(s));
+            match snap.filter(|p| p.is_file()) {
+                Some(p) => {
+                    let gd = self.gardens_dir();
+                    fs::create_dir_all(&gd).map_err(|e| io(e, &gd))?;
+                    let body = fs::read_to_string(&p).map_err(|e| io(e, &p))?;
+                    crate::fs_atomic::atomic_write_str(&path, &body).map_err(|e| io(e, &path))?;
+                }
+                None => self.write_stub_if_missing(&g)?,
+            }
+        }
+        list.push(g.clone());
+        self.write_list(&list)?;
+        let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%3fZ").to_string();
+        let kept = dir.join(format!("{RESTORED_RECORD_PREFIX}{stamp}.json"));
+        fs::rename(&rec_path, &kept).map_err(|e| io(e, &kept))?;
+        Ok(g)
+    }
+
+    /// One kept version's text, read only ("View this version"): `file` is
+    /// `zen.toml`, `gardens/<id>.toml`, `themes/<name>/theme.toml` (with
+    /// `name` a snapshot from `k2 zen history`) or `widgets/<name>` (with
+    /// `name` a code snapshot from `k2 zen history --widget`). A widget
+    /// answers `files: [{path, text}|{path, base64}]`, the others `text`.
+    pub fn snapshot_view(&self, file: &str, name: &str) -> Result<J, ZenError> {
+        self.require()?;
+        let file = file.trim();
+        let name = name.trim();
+        if let Some(widget) = file.strip_prefix("widgets/") {
+            let widget = widget.trim_end_matches('/');
+            if !super::valid_theme_name(widget) {
+                return Err(ZenError::BadRequest(format!("'{widget}' isn't a widget folder name")));
+            }
+            let files = self
+                .snapshot_files(widget, name)
+                .ok_or_else(|| ZenError::NotFound(format!("no snapshot '{name}' for widgets/{widget}")))?;
+            let list: Vec<J> = files
+                .into_iter()
+                .map(|(path, bytes)| match String::from_utf8(bytes) {
+                    Ok(text) => json!({ "path": path, "text": text }),
+                    Err(e) => {
+                        use base64::Engine as _;
+                        json!({ "path": path, "base64": base64::engine::general_purpose::STANDARD.encode(e.into_bytes()) })
+                    }
+                })
+                .collect();
+            return Ok(json!({ "ok": true, "file": format!("widgets/{widget}"), "name": name, "files": list }));
+        }
+        let f = ZenFile::parse(file)?;
+        let text = self
+            .snapshot_text(&f, name)
+            .ok_or_else(|| ZenError::NotFound(format!("no snapshot '{name}' for {}", f.label())))?;
+        Ok(json!({ "ok": true, "file": f.label(), "name": name, "text": text }))
+    }
+}

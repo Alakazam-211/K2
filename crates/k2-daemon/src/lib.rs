@@ -249,6 +249,10 @@ pub mod garden_access;
 pub mod gardens_manage;
 pub mod zen_agent_routes;
 pub mod zen_data_routes;
+// Garden access (prd-garden-access-v1): the list routes and gate (A2) and
+// K2's own garden.access / garden.delete cards (A4).
+pub mod zen_garden_cards;
+pub mod zen_access_routes;
 pub mod llm_accounts_routes;
 pub mod llm_accounts_runtime;
 pub mod person_wallet_routes;

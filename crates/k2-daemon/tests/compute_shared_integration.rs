@@ -678,71 +678,83 @@ async fn servers_add_is_held_one_at_a_time_and_hides_the_binding() {
 
     // The mirror: `servers` asks the node (servers.list) and keeps the list.
     let pending = tokio::spawn(get(d.port, "/cli/compute/nodes/servers", OWNER, "node=own-1&refresh=1"));
-    let n = tokio::task::spawn_blocking(move || {
-        let cmd_id = loop {
-            let f = n.frames().into_iter().find_map(|f| match f {
-                Frame::Admin(a) => Some(a),
-                _ => None,
-            });
-            if let Some(a) = f {
-                let body = k2_core::compute::proto::crypto::unb64(&a.cmd.body_b64).unwrap();
-                let c: k2_core::compute::proto::admin::Command = serde_json::from_slice(&body).unwrap();
-                assert_eq!(c.verb, "servers.list");
-                break c.cmd_id;
+    // The route asks, and so may the compute ticker (an add is open, so it
+    // mirrors the list too; on macOS it raced the route in r8): every
+    // `servers.list` gets the same pinned answer until the route replies.
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stop_seen = stop.clone();
+    let answerer = tokio::task::spawn_blocking(move || {
+        let mut answered = std::collections::HashSet::new();
+        while !stop_seen.load(std::sync::atomic::Ordering::SeqCst) {
+            let cmds: Vec<String> = n
+                .frames()
+                .into_iter()
+                .filter_map(|f| match f {
+                    Frame::Admin(a) => Some(a),
+                    _ => None,
+                })
+                .map(|a| {
+                    let body = k2_core::compute::proto::crypto::unb64(&a.cmd.body_b64).unwrap();
+                    let c: k2_core::compute::proto::admin::Command = serde_json::from_slice(&body).unwrap();
+                    assert_eq!(c.verb, "servers.list");
+                    c.cmd_id
+                })
+                .collect();
+            for cmd_id in cmds.into_iter().filter(|c| answered.insert(c.clone())) {
+                // The pinned `servers.list` answer (share::ServersList).
+                use k2_core::compute::proto::share::{ServerListing, ServersList};
+                let entry = |slot: u8, label: &str, state: ServerStatus, trust: Trust, limits: ShareLimits| ServerListing {
+                    slot,
+                    label: label.into(),
+                    state,
+                    trust,
+                    fp: None,
+                    fp_prefix: format!("{slot:0>16}"),
+                    limits,
+                    expires_at: None,
+                    expires_in_secs: None,
+                    added_at: 1,
+                    added_by: "local:rosson".into(),
+                    running: 0,
+                    queued: 0,
+                    cpu_secs_today: 0,
+                    sas: (state == ServerStatus::Pending).then(|| "482913".to_string()),
+                    refusal: (state == ServerStatus::Refused).then(|| "server_too_old".to_string()),
+                    online: slot == 0,
+                };
+                let result = serde_json::to_value(ServersList {
+                    max_servers: 3,
+                    solo: false,
+                    servers: vec![
+                        entry(0, "rosson.k2.dev", ServerStatus::Active, Trust::Own, ShareLimits::owner(2, 8, 16, 100, k2_core::compute::proto::share::Network::On)),
+                        entry(1, "baden.k2.dev", ServerStatus::Pending, Trust::Team, ShareLimits::new_server(Trust::Team, false)),
+                        entry(2, "old.k2.dev", ServerStatus::Refused, Trust::Own, ShareLimits::new_server(Trust::Own, false)),
+                    ],
+                })
+                .unwrap();
+                compute_ws::test_frame(
+                    "own-1",
+                    Frame::AdminResult(k2_core::compute::proto::admin::AdminResult {
+                        cmd_id,
+                        state: "done".into(),
+                        code: None,
+                        message: None,
+                        exit: None,
+                        stdout_tail: String::new(),
+                        stderr_tail: String::new(),
+                        audit_seq: None,
+                        digest: String::new(),
+                        result,
+                    }),
+                );
             }
             std::thread::sleep(Duration::from_millis(20));
-        };
-        // The pinned `servers.list` answer (share::ServersList).
-        use k2_core::compute::proto::share::{ServerListing, ServersList};
-        let entry = |slot: u8, label: &str, state: ServerStatus, trust: Trust, limits: ShareLimits| ServerListing {
-            slot,
-            label: label.into(),
-            state,
-            trust,
-            fp: None,
-            fp_prefix: format!("{slot:0>16}"),
-            limits,
-            expires_at: None,
-            expires_in_secs: None,
-            added_at: 1,
-            added_by: "local:rosson".into(),
-            running: 0,
-            queued: 0,
-            cpu_secs_today: 0,
-            sas: (state == ServerStatus::Pending).then(|| "482913".to_string()),
-            refusal: (state == ServerStatus::Refused).then(|| "server_too_old".to_string()),
-            online: slot == 0,
-        };
-        let result = serde_json::to_value(ServersList {
-            max_servers: 3,
-            solo: false,
-            servers: vec![
-                entry(0, "rosson.k2.dev", ServerStatus::Active, Trust::Own, ShareLimits::owner(2, 8, 16, 100, k2_core::compute::proto::share::Network::On)),
-                entry(1, "baden.k2.dev", ServerStatus::Pending, Trust::Team, ShareLimits::new_server(Trust::Team, false)),
-                entry(2, "old.k2.dev", ServerStatus::Refused, Trust::Own, ShareLimits::new_server(Trust::Own, false)),
-            ],
-        })
-        .unwrap();
-        compute_ws::test_frame(
-            "own-1",
-            Frame::AdminResult(k2_core::compute::proto::admin::AdminResult {
-                cmd_id,
-                state: "done".into(),
-                code: None,
-                message: None,
-                exit: None,
-                stdout_tail: String::new(),
-                stderr_tail: String::new(),
-                audit_seq: None,
-                digest: String::new(),
-                result,
-            }),
-        );
+        }
         n
-    })
-    .await
-    .unwrap();
+    });
     let r = pending.await.unwrap();
+    stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    let n = answerer.await.unwrap();
     assert_eq!(r.status, 200, "{}", r.body);
     let s = j(&r);
     let list = s["servers"].as_array().unwrap();
@@ -751,7 +763,13 @@ async fn servers_add_is_held_one_at_a_time_and_hides_the_binding() {
     assert_eq!((list[1]["state"].as_str(), list[1]["sas"].as_str()), (Some("pending"), Some("482 913")));
     assert_eq!((list[0]["weight"].as_u64(), list[1]["weight"].as_u64(), list[0]["sas"].is_null(), list[1]["refusal"].is_null()), (Some(1), Some(1), true, true), "--json carries weight, SAS and refusal");
     assert_eq!(s["requests"].as_array().unwrap().len(), 1, "the held add shows with the list");
-    assert_eq!((s["maxServers"].as_u64(), s["solo"].as_bool()), (Some(3), Some(false)));
+    assert_eq!((s["maxServers"].as_u64(), s["solo"].as_bool()), (Some(3), Some(false)), "{s}");
+    // Without asking the node again, the last list's facts still show (a
+    // refresh by the ticker counts as much as the route's own).
+    let r = get(d.port, "/cli/compute/nodes/servers", OWNER, "node=own-1").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let again = j(&r);
+    assert_eq!((again["maxServers"].as_u64(), again["solo"].as_bool()), (Some(3), Some(false)), "{again}");
     {
         let db = k2_core::db::shared();
         assert_eq!(store::node_servers(&db.lock(), "own-1").len(), 3);

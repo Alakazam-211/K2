@@ -436,7 +436,7 @@ pub const GARDEN_ACCESS_EDITS: &[(&str, &str)] = &[
     ),
     (
         "- `k2 zen garden delete <garden>`: the page moves into `.history/` (never lost); the last Garden can't be deleted.\n\n",
-        "- `k2 zen garden delete <garden>`: only the person deletes a Garden. From you it asks them\n  with a card (exit 3, \"Asked the person to delete <garden>\"); the page moves into\n  `.history/` (never lost); the last Garden can't be deleted.\n\n",
+        "- `k2 zen garden delete <garden>`: only the person deletes a Garden. From you it asks them\nwith a card (exit 3, \"Asked the person to delete <garden>\"); the page moves into\n`.history/` (never lost); the last Garden can't be deleted.\n\n",
     ),
     (
         "## Files (`~/.k2/zen/`, owned by this computer's K2)\n\n",
@@ -471,36 +471,36 @@ change, `k2 zen validate --widget <w> --sign`.**\n\n\
 ## Files (`~/.k2/zen/`, owned by this computer's K2)\n\n",
     ),
     (
-        "  widgets, and theme tables that restyle this Garden only. **This is the file you edit.**\n",
-        "  widgets, and theme tables that restyle this Garden only. **Change it with\n  `k2 zen garden put <id> --from page.toml`** (a raw edit runs without data until signed).\n",
+        "widgets, and theme tables that restyle this Garden only. **This is the file you edit.**\n",
+        "widgets, and theme tables that restyle this Garden only. **Change it with\n`k2 zen garden put <id> --from page.toml`** (a raw edit runs without data until signed).\n",
     ),
     (
         "- `widgets/<name>/`: your custom widgets (see Custom widgets). **You edit these too.**\n",
-        "- `widgets/<name>/`: your custom widgets (see Custom widgets). **Change them with\n  `k2 zen widget put <name> --dir <folder>`.**\n",
+        "- `widgets/<name>/`: your custom widgets (see Custom widgets). **Change them with\n`k2 zen widget put <name> --dir <folder>`.**\n",
     ),
     (
         "2. Edit `~/.k2/zen/gardens/<id>.toml`. Every Zen window reloads on save.\n",
-        "2. Stage the page in your workspace and write it with `k2 zen garden put <id> --from page.toml`\n   (you must be on the Garden's list). Every Zen window reloads on the write.\n",
+        "2. Stage the page in your workspace and write it with `k2 zen garden put <id> --from page.toml`\n(you must be on the Garden's list). Every Zen window reloads on the write.\n",
     ),
     (
-        "  export`). Every call needs a grant the person gave (Settings → Gardens → Local Data,\n  or `k2 zen data grant`), or one a grant admin gave.",
-        "  export`). On the list of every Garden that places the widget, you read and write its\n  data with no grant; otherwise every call needs a grant the person gave (Settings →\n  Widget data, or `k2 zen data grant`), or one a grant admin gave.",
+        "export`). Every call needs a grant the person gave (Settings → Gardens → Local Data,\nor `k2 zen data grant`), or one a grant admin gave.",
+        "export`). On the list of every Garden that places the widget, you read and write its\ndata with no grant; otherwise every call needs a grant the person gave (Settings →\nWidget data, or `k2 zen data grant`), or one a grant admin gave.",
     ),
     (
-        "- **After editing a widget, run `k2 zen validate --widget <w> --sign`: it signs the widget as\n  you, and the widget then reads and writes data with YOUR grants.** (`k2 zen widget sign\n  <w>` signs alone; a plain validate never signs.) An unsigned\n  version gets no data (`author_unknown`). Never sign with the owner token (never use\n  `~/.k2/daemon.token`), and never edit a widget the person made unless they ask.\n  When you change a widget the person made (with the switch), its new version isn't\n  theirs, so it runs without its data until they keep it: K2 puts a card on their Thread\n  with you (\"Keep as mine\" / \"Leave it as <you>'s\"; the answer says `keepAsMine` and\n  `keepCard`), or an inbox note when you have no Thread. Only they can tap it (your\n  passport is refused); Settings → Gardens → Local Data undoes it.\n",
-        "- **After a change, run `k2 zen validate --widget <w> --sign`.** A widget version runs\n  with the Garden's data only when the person, K2 or an agent on that Garden's list\n  signed it; any other version keeps its own `k2.store` keyspace, `agents:read` and\n  `presence:read`, and every other call answers `needs_editor` (\"Someone who edits this\n  Garden has to sign this version.\"). (`k2 zen widget sign <w>` signs alone; a plain\n  validate never signs.) Never sign with the owner token (never use\n  `~/.k2/daemon.token`), and never edit a widget the person made unless they ask.\n",
+        "- **After editing a widget, run `k2 zen validate --widget <w> --sign`: it signs the widget as\nyou, and the widget then reads and writes data with YOUR grants.** (`k2 zen widget sign\n<w>` signs alone; a plain validate never signs.) An unsigned\nversion gets no data (`author_unknown`). Never sign with the owner token (never use\n`~/.k2/daemon.token`), and never edit a widget the person made unless they ask.\nWhen you change a widget the person made (with the switch), its new version isn't\ntheirs, so it runs without its data until they keep it: K2 puts a card on their Thread\nwith you (\"Keep as mine\" / \"Leave it as <you>'s\"; the answer says `keepAsMine` and\n`keepCard`), or an inbox note when you have no Thread. Only they can tap it (your\npassport is refused); Settings → Gardens → Local Data undoes it.\n",
+        "- **After a change, run `k2 zen validate --widget <w> --sign`.** A widget version runs\nwith the Garden's data only when the person, K2 or an agent on that Garden's list\nsigned it; any other version keeps its own `k2.store` keyspace, `agents:read` and\n`presence:read`, and every other call answers `needs_editor` (\"Someone who edits this\nGarden has to sign this version.\"). (`k2 zen widget sign <w>` signs alone; a plain\nvalidate never signs.) Never sign with the owner token (never use\n`~/.k2/daemon.token`), and never edit a widget the person made unless they ask.\n",
     ),
     (
-        "- **Your own widget's data, no grant** (0.46.1): with the person's \"Manage Gardens and\n  data sources\" switch, the agent that signed a widget's newest version reads and\n  writes its data with `k2 store --widget <w>` (seed it), audited. Without the switch,\n  ask for a grant.\n",
-        "- **Your own widget's data, no grant**: on the list of every Garden that places it, you\n  read and write its data with `k2 store --widget <w>` (seed it). Otherwise ask for a\n  grant.\n",
+        "- **Your own widget's data, no grant** (0.46.1): with the person's \"Manage Gardens and\ndata sources\" switch, the agent that signed a widget's newest version reads and\nwrites its data with `k2 store --widget <w>` (seed it), audited. Without the switch,\nask for a grant.\n",
+        "- **Your own widget's data, no grant**: on the list of every Garden that places it, you\nread and write its data with `k2 store --widget <w>` (seed it). Otherwise ask for a\ngrant.\n",
     ),
     (
-        "  human's Gardens); `--clear` removes it. Person, or an agent with the switch.\n",
-        "  human's Gardens); `--clear` removes it. Any agent on this computer; an agent's\n  preview runs without data.\n",
+        "human's Gardens); `--clear` removes it. Person, or an agent with the switch.\n",
+        "human's Gardens); `--clear` removes it. Any agent on this computer; an agent's\npreview runs without data.\n",
     ),
     (
-        "- `k2 zen widget put board --dir ./board [--prune]` writes the whole folder in one\n  checked call (a folder with errors writes nothing). Without \"Manage Gardens and\n  data sources\" it becomes ONE proposal for the folder (its changed code files);\n  approving it writes them all at once, or nothing if a file moved since.\n",
-        "- `k2 zen widget put board --dir ./board [--prune]` writes the whole folder in one\n  checked call (a folder with errors writes nothing) and signs it as you. It needs you\n  on the list of every Garden that places the widget (a draft placed nowhere is open);\n  otherwise it answers `garden_access_needed` (exit 3) and K2 asks the person.\n",
+        "- `k2 zen widget put board --dir ./board [--prune]` writes the whole folder in one\nchecked call (a folder with errors writes nothing). Without \"Manage Gardens and\ndata sources\" it becomes ONE proposal for the folder (its changed code files);\napproving it writes them all at once, or nothing if a file moved since.\n",
+        "- `k2 zen widget put board --dir ./board [--prune]` writes the whole folder in one\nchecked call (a folder with errors writes nothing) and signs it as you. It needs you\non the list of every Garden that places the widget (a draft placed nowhere is open);\notherwise it answers `garden_access_needed` (exit 3) and K2 asks the person.\n",
     ),
     (
         "`duplicate_label`).\n\n### Rules\n\n",

@@ -565,6 +565,9 @@ mod tests {
                 "person_pass_required",
                 "wallet_off",
                 "duplicate_label",
+                // Garden access lists (prd-garden-access-v1 G22): the
+                // signer gate's refusal (switch on only).
+                "needs_editor",
             ]
         );
         let retry: Vec<&str> = catalog().errors.iter().filter(|e| e.retryable).map(|e| e.code.as_str()).collect();

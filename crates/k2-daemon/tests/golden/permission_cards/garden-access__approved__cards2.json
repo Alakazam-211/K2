@@ -1,0 +1,107 @@
+{
+  "body": "billing made Sales board and wants to keep editing it. Allow?",
+  "choice": {
+    "action": {
+      "dedupe": "garden.access:1e5023dd",
+      "id": "permission",
+      "params": {
+        "request": "pr_6a7d3e"
+      },
+      "result": {
+        "message": "Allowed. billing can edit Sales board now. Remove it in Settings → Gardens.",
+        "outcome": "approved"
+      },
+      "view": {
+        "action": "garden.access",
+        "answer": {
+          "at": 1761061200,
+          "by": "rosson",
+          "decision": "allow",
+          "reason": null,
+          "via": "phone"
+        },
+        "approvers": {
+          "floor": "owner",
+          "label": "owner",
+          "names": [
+            "rosson"
+          ]
+        },
+        "askedFor": null,
+        "askers": null,
+        "consequences": "billing can change Sales board's layout and widgets, and use their data. Remove billing in Settings → Gardens.",
+        "direction": "loosen",
+        "duration": "until you remove it",
+        "expiresAt": 1761319200,
+        "grant": "standing",
+        "kind": "permission",
+        "noteBox": {
+          "allowed": false,
+          "max": 500,
+          "mine": null
+        },
+        "notes": [],
+        "proof": {
+          "kind": "click"
+        },
+        "requestId": "pr_6a7d3e",
+        "scope": "the Sales board Garden",
+        "setting": "Edit Sales board",
+        "settingsPage": "zen-gardens",
+        "state": "approved",
+        "undo": {
+          "label": "Turn off again",
+          "until": 1761666000
+        },
+        "v": 1,
+        "values": [
+          {
+            "key": "workspace",
+            "value": "billing"
+          },
+          {
+            "key": "garden",
+            "value": "Sales board"
+          }
+        ],
+        "viewer": {
+          "canAnswer": true,
+          "isAsker": false,
+          "login": "rosson",
+          "mode": "approve",
+          "role": "owner",
+          "via": "login"
+        },
+        "whatChanges": "Let billing edit Sales board.",
+        "why": {
+          "by": "billing",
+          "text": "I made Sales board and want to keep editing it."
+        }
+      }
+    },
+    "allow_custom": false,
+    "answer": "Allow",
+    "answeredAt": 1761061200,
+    "answeredBy": {
+      "kind": "user",
+      "login": "rosson"
+    },
+    "expiresAt": 1761319200,
+    "options": [
+      {
+        "label": "Allow"
+      },
+      {
+        "label": "Deny"
+      }
+    ],
+    "prompt": "billing made Sales board and wants to keep editing it. Allow?",
+    "status": "answered"
+  },
+  "created_at": 1761060000,
+  "from": "billing",
+  "id": "3c0ffee5-1a2b-4c3d-8e4f-5a6b7c8d9e01",
+  "kind": "choice",
+  "to": "billing",
+  "via": "permission"
+}

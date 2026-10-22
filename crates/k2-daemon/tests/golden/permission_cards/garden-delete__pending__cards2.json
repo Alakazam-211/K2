@@ -1,0 +1,88 @@
+{
+  "body": "billing asks to delete Old board. It leaves your Gardens. K2 keeps a copy in history.",
+  "choice": {
+    "action": {
+      "dedupe": "garden.delete:f7496e74",
+      "id": "permission",
+      "params": {
+        "request": "pr_6d31e7"
+      },
+      "view": {
+        "action": "garden.delete",
+        "answer": null,
+        "approvers": {
+          "floor": "owner",
+          "label": "owner",
+          "names": [
+            "rosson"
+          ]
+        },
+        "askedFor": null,
+        "askers": null,
+        "consequences": "Old board leaves your Gardens. K2 keeps a copy in history.",
+        "direction": "loosen",
+        "duration": "once",
+        "expiresAt": 1761319200,
+        "grant": "one-time",
+        "kind": "permission",
+        "noteBox": {
+          "allowed": false,
+          "max": 500,
+          "mine": null
+        },
+        "notes": [],
+        "proof": {
+          "kind": "click"
+        },
+        "requestId": "pr_6d31e7",
+        "scope": "the Old board Garden",
+        "setting": "Delete Garden",
+        "settingsPage": "zen-gardens",
+        "state": "pending",
+        "undo": null,
+        "v": 1,
+        "values": [
+          {
+            "key": "workspace",
+            "value": "billing"
+          },
+          {
+            "key": "garden",
+            "value": "Old board"
+          }
+        ],
+        "viewer": {
+          "canAnswer": true,
+          "isAsker": false,
+          "login": "rosson",
+          "mode": "approve",
+          "role": "owner",
+          "via": "login"
+        },
+        "whatChanges": "Delete Old board.",
+        "why": {
+          "by": "billing",
+          "text": "I'd like Old board deleted."
+        }
+      }
+    },
+    "allow_custom": false,
+    "expiresAt": 1761319200,
+    "options": [
+      {
+        "label": "Allow"
+      },
+      {
+        "label": "Deny"
+      }
+    ],
+    "prompt": "billing asks to delete Old board. It leaves your Gardens. K2 keeps a copy in history.",
+    "status": "pending"
+  },
+  "created_at": 1761060000,
+  "from": "billing",
+  "id": "4d1e7e7e-2b3c-4d4e-9f50-6b7c8d9e0f12",
+  "kind": "choice",
+  "to": "billing",
+  "via": "permission"
+}

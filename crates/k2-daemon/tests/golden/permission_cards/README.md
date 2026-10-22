@@ -33,6 +33,10 @@ disagree, the sample is right.**
 | `approver-confirm` | rosson on the `apps.approve` card (Owner floor, confirm `app-approve`, held request `ar_22`) |
 | `admin-wait-confirm` | maya on that card: below the Owner floor, so `mode:"wait"` |
 | `batch-approver` / `batch-admin` | rosson / maya on a batch of three (`apps.build`, `apps.core`, `apps.approve` `ar_23`) |
+| `garden-access` | rosson on K2's own `garden.access` card (prd-garden-access-v1 G16–G17): "billing made Sales board and wants to keep editing it", GardenOwner floor (reads `owner`), click, standing with "Turn off again"; `pending`, `approved`, `denied` (= Not now) |
+| `garden-access-admin` | maya (Admin) on that card: below the floor, `mode:"wait"` |
+| `garden-access-agent` | the asking agent's passport on that card (fallback only) |
+| `garden-delete` | rosson on K2's own `garden.delete` card ("billing asks to delete Old board"), one time; `pending`, `approved` (deleted), `denied` (= Keep it) |
 | `guest` | an App guest: never receives a permission card |
 | `answer` | answer-route responses (`allow`, `deny`, `close`, `below-floor`, `confirm-required`, …) |
 
@@ -41,6 +45,14 @@ matches: `[Close]`), `already_done-closed` (after Close), `denied`, `expired`,
 `stale`, `failed`, `cancelled`, `closed` (the switch was turned off); batch
 `pending`, `partial` (click items allowed, the confirm item still waiting),
 `done`.
+
+The Garden cards are standard permission cards (`choice.action.id`
+`permission`, `view.v` 1, kind `permission`, Allow / Deny, click proof):
+the phone draws them with no new UI. K2 presents them itself while
+Garden access lists are on (Beta or not); Deny means "Not now" / "Keep it".
+Garden ids are K2-minted (`g-` + 8 hex), fixed here as `g-5a1e5b0a`
+(Sales board) and `g-0e1db0a7` (Old board); the words always show the
+Garden's current name.
 
 ## Fixed clock and ids
 

@@ -139,9 +139,10 @@ async fn failed_wakes_keep_the_thread(env: &Env, label: &str, expect_spawn_faile
     // The guest reads through the second line.
     ok_post(port, "/cli/thread/read", &pass, json!({ "addr": ws.handle, "seq": keys[1].1 })).await;
     let guest_before = unread_row(&ok_get(port, "/cli/thread/unread", &pass, "").await, &conv);
+    // Unread: the third line; the pending card counts as waiting.
     assert_eq!(
-        (guest_before["lastReadSeq"].as_i64(), guest_before["unread"].as_i64()),
-        (Some(keys[1].1), Some(2)),
+        (guest_before["lastReadSeq"].as_i64(), guest_before["unread"].as_i64(), guest_before["waiting"].as_i64()),
+        (Some(keys[1].1), Some(1), Some(1)),
         "{guest_before}"
     );
 

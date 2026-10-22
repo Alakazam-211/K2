@@ -176,7 +176,6 @@
     if (code === 'paused') return 'Saving is paused: too many changes in a row. Resume it on the widget.'
     if (code === 'conflict') return 'The board changed while you were saving. Try again.'
     if (code === 'gone') return 'That card was deleted meanwhile.'
-    if (code === 'needs_editor') return 'Someone who edits this Garden has to sign this version.'
     if (code === 'author_unknown' || code === 'not_granted') return 'K2 didn’t give this board its data (' + code + ').'
     return (err && err.message) || String(err)
   }

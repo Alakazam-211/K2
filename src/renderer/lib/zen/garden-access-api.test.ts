@@ -104,6 +104,22 @@ describe('history', () => {
     expect(() => parseGardenHistory({})).toThrow('no "items"')
   })
 
+  it('reads A1’s raw event rows too: actor labels, numeric ids and cursors, `workspace` in the detail', () => {
+    const p = parseGardenHistory({
+      items: [
+        { id: 12, gardenId: 'g-2', widget: null, at: AT, actor: 'migration', kind: 'access_added', detail: { workspace: 'ops-bot', via: 'migration' } },
+        { id: 11, gardenId: 'g-2', widget: null, at: AT, actor: 'shell:p-bill', kind: 'changed', detail: {} },
+      ],
+      next: 11,
+    })
+    expect(p.next).toBe('11')
+    expect(p.items[1].actor).toEqual({ kind: 'shell', id: 'p-bill', handle: null, name: null, color: null })
+    expect(gardenHistoryLine(p.items[0])).toBe('ops-bot was added automatically at upgrade')
+    expect(gardenHistoryLine(p.items[1])).toBe('A terminal in p-bill’s room changed the layout')
+    expect(() => parseGardenHistory({ items: [{ id: 1, at: 1, kind: 'k', actor: 'robot:x' }] })).toThrow('"robot:x" is not an actor')
+    expect(parseGardenAccessList({ garden: 'g', editors: [{ projectId: 'p-ana', addedBy: 'card', addedAt: AT }] }).editors[0].agent).toBe('p-ana')
+  })
+
   it('says who and what in the modal’s words', () => {
     expect(gardenActorWords({ kind: 'shell', id: 'p', handle: 'billing', name: 'Billing', color: null })).toBe(
       'A terminal in Billing’s room',

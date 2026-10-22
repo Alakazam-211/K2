@@ -156,7 +156,20 @@ export interface GardenActor {
 
 const ACTOR_KINDS: readonly GardenActorKind[] = ['owner', 'login', 'agent', 'shell', 'k2', 'disk', 'migration']
 
+/** A1's actor label (`owner` | `login:<u>` | `agent:<pid>` | `shell:<pid>` |
+ *  `k2` | `disk` | `migration`), as `zen_garden_events.actor` stores it. */
+function actorFromLabel(label: string, at: string): GardenActor {
+  const i = label.indexOf(':')
+  const kind = i < 0 ? label : label.slice(0, i)
+  const id = i < 0 ? null : label.slice(i + 1) || null
+  if (!(ACTOR_KINDS as readonly string[]).includes(kind)) {
+    throw new GardenAccessParseError(`${at} "${label}" is not an actor`)
+  }
+  return { kind: kind as GardenActorKind, id, handle: null, name: null, color: null }
+}
+
 export function parseGardenActor(raw: unknown, at: string): GardenActor {
+  if (typeof raw === 'string') return actorFromLabel(raw, at)
   const o = obj(raw)
   if (!o) throw new GardenAccessParseError(`${at} is not an actor`)
   const kind = str(o, 'kind')
@@ -257,7 +270,7 @@ export function parseGardenAccessList(raw: unknown): GardenAccessList {
   const editors = o.editors.map((e, i): GardenEditor => {
     const r = obj(e)
     if (!r) throw new GardenAccessParseError(`editors[${i}] is not an object`)
-    const agent = need(str(r, 'agent'), `editors[${i}].agent`)
+    const agent = need(str(r, 'agent') ?? str(r, 'projectId') ?? str(r, 'workspace'), `editors[${i}].agent`)
     const addedBy = str(r, 'addedBy')
     if (addedBy !== 'owner' && addedBy !== 'card' && addedBy !== 'migration') {
       throw new GardenAccessParseError(`editors[${i}].addedBy "${String(r.addedBy)}" is not owner, card or migration`)
@@ -435,7 +448,8 @@ export function parseGardenHistory(raw: unknown): GardenHistoryPage {
       })
     })
   }
-  return { items, next: typeof o.next === 'string' && o.next ? o.next : null, unsigned }
+  const next = typeof o.next === 'number' && Number.isFinite(o.next) ? String(o.next) : typeof o.next === 'string' && o.next ? o.next : null
+  return { items, next, unsigned }
 }
 
 function d(item: GardenHistoryItem, k: string): string | null {
@@ -447,7 +461,7 @@ function d(item: GardenHistoryItem, k: string): string | null {
 export function gardenEventWords(item: GardenHistoryItem): string {
   if (item.summary) return item.summary
   const w = item.widget ?? d(item, 'widget')
-  const agent = d(item, 'name') ?? d(item, 'handle') ?? d(item, 'agent')
+  const agent = d(item, 'name') ?? d(item, 'handle') ?? d(item, 'agent') ?? d(item, 'workspace')
   if (item.source === 'snapshot') return w ? `saved a version of ${w}` : 'saved a version'
   if (item.source === 'proposal') {
     const decision = d(item, 'decision') ?? d(item, 'state')
@@ -513,7 +527,7 @@ export function gardenEventWords(item: GardenHistoryItem): string {
 /** The "added automatically at upgrade" line reads as its own sentence. */
 export function gardenHistoryLine(item: GardenHistoryItem): string {
   if (item.kind === 'access_added' && item.actor.kind === 'migration' && !item.summary) {
-    const agent = d(item, 'name') ?? d(item, 'handle') ?? d(item, 'agent') ?? 'An agent'
+    const agent = d(item, 'name') ?? d(item, 'handle') ?? d(item, 'agent') ?? d(item, 'workspace') ?? 'An agent'
     return `${agent} was added automatically at upgrade`
   }
   return `${gardenActorWords(item.actor)} ${gardenEventWords(item)}`

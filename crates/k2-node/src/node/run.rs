@@ -913,6 +913,11 @@ impl Node {
         if landed {
             gone();
         }
+        if matches!(recorded, Ok(false)) {
+            // Another end stands (review B F2: a sweep that raced the
+            // runner); nothing was written and nothing more is sent.
+            crate::nlog!("job {job} gen {gen} had already ended; this {} end isn't recorded", state.as_str());
+        }
         // The big parts of the dir go now (module `disk`): before any
         // retry, since a full disk is the usual reason a write failed.
         if let Some(d) = dirs {
@@ -960,8 +965,9 @@ impl Node {
         }
     }
 
-    /// The terminal row and its receipt, under one ledger lock (the
-    /// shipper never sees a terminal row without its receipt).
+    /// The terminal row and its receipt, in one transaction (the shipper
+    /// never sees a terminal row without its receipt). `Ok(false)`: the
+    /// attempt had already ended; nothing was written.
     #[allow(clippy::too_many_arguments)]
     fn record_finish(
         &self,
@@ -977,24 +983,13 @@ impl Node {
         src: Option<&SrcRan>,
         outputs: Option<&Outputs>,
         signed: Option<&SignedReceipt>,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         #[cfg(test)]
         if job == tests::FINISH_FAILS_JOB && tests::FINISH_FAILS.load(Ordering::SeqCst) > 0 {
             tests::FINISH_FAILS.fetch_sub(1, Ordering::SeqCst);
             return Err("database or disk is full (test)".into());
         }
-        let l = t.ledger.lock().unwrap();
-        if let Some(s) = src {
-            l.set_src(job, gen, s)?;
-        }
-        if let Some(o) = outputs {
-            l.set_outputs(job, gen, o)?;
-        }
-        l.finish(job, gen, state, reason, detail, exit, log_seq, now)?;
-        if let Some(r) = signed {
-            l.set_receipt(job, gen, r)?;
-        }
-        Ok(())
+        t.ledger.lock().unwrap().end_attempt(job, gen, state, reason, detail, exit, log_seq, now, src, outputs, signed)
     }
 }
 

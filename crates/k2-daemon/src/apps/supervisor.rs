@@ -84,6 +84,10 @@ struct AppRt {
     /// The next instance to go live replaces the live one outright (no
     /// warm copy, no rollback to it).
     retire_on_live: bool,
+    /// The deployment whose pipeline thread is running (set once its row
+    /// exists, cleared after `busy`): [`wait_done`] returns only once it
+    /// is gone, so a caller's next verb never meets this one's lock.
+    in_flight: Option<String>,
 }
 
 fn state() -> &'static Mutex<HashMap<String, AppRt>> {
@@ -490,6 +494,7 @@ pub fn begin(app: &AppRow, seed: &str, kind: &str, actor: &str, reason: Option<&
         }
     };
     audit(&app.app_id, kind, actor, json!({ "deployment": dep, "from": app.live_seed, "to": seed, "commit": commit, "reason": reason }));
+    with_rt(&app.app_id, |rt| rt.in_flight = Some(dep.clone()));
     let app_id = app.app_id.clone();
     let seed = seed.to_string();
     let dep2 = dep.clone();
@@ -504,8 +509,15 @@ pub fn begin(app: &AppRow, seed: &str, kind: &str, actor: &str, reason: Option<&
         if kind == store::KIND_RESTART {
             restart_outcome(&app_id, &dep2);
         }
+        // Last: the deploy's lock is gone before a waiter hears "done".
+        with_rt(&app_id, |rt| {
+            if rt.in_flight.as_deref() == Some(dep2.as_str()) {
+                rt.in_flight = None;
+            }
+        });
     });
     if spawned.is_err() {
+        with_rt(&app.app_id, |rt| rt.in_flight = None);
         release();
         let _ = db(|c| store::set_result(c, &dep, store::RESULT_FAILED, Some("could not start the deploy thread")));
         return Err(fail(codes::ENGINE_UNAVAILABLE, 503, "could not start the deploy thread"));
@@ -1242,7 +1254,13 @@ pub fn wait_done(id: &str, secs: u64) -> Option<DeploymentRow> {
     let end = Instant::now() + Duration::from_secs(secs);
     loop {
         let row = db(|c| store::get_deployment(c, id)).ok().flatten()?;
-        if !matches!(row.result.as_str(), store::RESULT_PENDING | store::RESULT_STARTING) || Instant::now() >= end {
+        // Done = a final result AND its pipeline thread has let go of the
+        // App. The row goes live inside the pipeline, before `busy` clears:
+        // a deploy (or start/stop) right after the answer used to meet a
+        // false 409 deploy_in_progress (s7 flake, Linux).
+        let finished = !matches!(row.result.as_str(), store::RESULT_PENDING | store::RESULT_STARTING)
+            && !with_rt(&row.app_id, |rt| rt.in_flight.as_deref() == Some(id));
+        if finished || Instant::now() >= end {
             return Some(row);
         }
         std::thread::sleep(Duration::from_millis(100));

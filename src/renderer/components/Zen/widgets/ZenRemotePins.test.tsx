@@ -11,7 +11,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act } from 'react'
 import { cleanup, render } from '@testing-library/react'
 
-const h = vi.hoisted(() => ({ lists: {} as Record<string, unknown> }))
+const h = vi.hoisted(() => ({
+  lists: {} as Record<string, unknown>,
+  /** Set: `projects/list` answers only once it resolves (a read in flight). */
+  gate: null as Promise<void> | null,
+}))
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
 vi.mock('@tauri-apps/api/event', () => ({
@@ -22,6 +26,7 @@ vi.mock('@/lib/daemon-cli', () => ({
   daemonCliGet: vi.fn(async (scope: { hostKey: string }, route: string) => {
     if (route === 'projects/get-icon') return { found: false, dataUrl: null }
     if (route !== 'projects/list') throw new Error(`unexpected GET ${route}`)
+    if (h.gate) await h.gate
     const list = h.lists[scope.hostKey]
     if (list === undefined) throw new Error(`${scope.hostKey} is unreachable`)
     return list
@@ -150,6 +155,7 @@ beforeEach(() => {
   useProjectsStore.setState({ projects: list(['wp', 'pat', 'Pat', 1], ['ws', 'sam', 'Sam', 0]) as never })
   hostPool.store.setState({ entries: { [BOX1]: live(BOX1), [BOX2]: live(BOX2) } })
   h.lists = { [BOX1]: list(['wa', 'anna', 'Anna', 1]), [BOX2]: list(['wo', 'oaks', 'Oaks', 1]) }
+  h.gate = null
   __resetZenScopeForTests()
   __resetZenDataForTests()
 })
@@ -183,14 +189,21 @@ describe('Garden 1 pin grid: agents pinned on other servers', () => {
 
     // The preview poll re-reads both lists: no blink while in flight.
     cleanup()
-    await act(async () => {
-      requestZenServerRoster(BOX1, Date.now(), { refresh: true })
-      requestZenServerRoster(BOX2, Date.now(), { refresh: true })
-      await Promise.resolve()
+    let release: () => void = () => {
+      throw new Error('gate not set')
+    }
+    h.gate = new Promise<void>((resolve) => {
+      release = resolve
     })
+    requestZenServerRoster(BOX1, Date.now(), { refresh: true })
+    requestZenServerRoster(BOX2, Date.now(), { refresh: true })
+    await Promise.resolve()
     expect(useZenServerRosters.getState().rosters[BOX1]?.status).toBe('loading')
+    expect(useZenServerRosters.getState().rosters[BOX2]?.status).toBe('loading')
     mount()
     expect(pinCells()).toEqual([ANNA.address, PAT.address, OAKS.address])
+    h.gate = null
+    await act(async () => release())
     await rosterReady(BOX1)
     await rosterReady(BOX2)
     cleanup()

@@ -1623,13 +1623,16 @@ pub fn lookup(path: &str) -> Option<&'static Route> {
 /// for a passport.
 pub fn live_row(path: &str) -> Option<&'static Route> {
     live_row_when(path, k2_core::permission::gate::server_on())
-        // Garden access (G0a): its routes exist only with the switch on.
-        .filter(|_| crate::zen_access_routes::route_live(path))
 }
 
-/// [`live_row`] with the global switch given (pure; tests).
+/// [`live_row`] with the global switch given (tests). Garden access (G0a):
+/// its routes exist only with the `gardenAccess` switch on, for every
+/// reader of the rows, the POST allowlist included, so off they answer
+/// 0.46.3's 405 to a POST (A6, off-golden F1).
 fn live_row_when(path: &str, server_on: bool) -> Option<&'static Route> {
-    lookup(path).filter(|_| k2_core::permission::gate::route_live_when(path, server_on))
+    lookup(path)
+        .filter(|_| k2_core::permission::gate::route_live_when(path, server_on))
+        .filter(|_| crate::zen_access_routes::route_live(path))
 }
 
 /// The answer a `/cli/permission/*` handler gives an AGENT whose own "Can

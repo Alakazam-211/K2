@@ -15,7 +15,7 @@ Topics:
   what  source  map  identity  send  human  people  auth  errors
   context  db  mail  connect-boundary  apps  app-deploys  app-move  app-api  app-heartbeats  app-tickets
   app-identity  app-surfaces  skins  feedback-loop  ticket-brief  zen  sidecars  llm-tokens
-  llm-accounts  publish-framing  compute  vault  notifications  data-sources  projects  hooks
-  agent-hire  garden-data  changes  db-upgrade
+  llm-accounts  publish-framing  compute  compute-shared  vault  notifications  data-sources
+  projects  hooks  agent-hire  garden-data  changes  db-upgrade
 --- stderr
 --- requests

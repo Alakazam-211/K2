@@ -280,6 +280,14 @@ COMMON ERRORS
   owner_only             owner verb from an agent or a K2 terminal: use Settings
                          (or ask for "Allow managing compute nodes")
 
+SHARED NODES
+  A node may serve several K2 servers at once (k2 compute nodes says
+  "shared by …"). Its queue, what other servers see and the new codes:
+  k2 study compute-shared. Adding a server from K2 (k2 compute node
+  servers <node> add) needs the node's remote-admin level `full`; on a
+  node set to `policy`, servers are added at the machine
+  (sudo k2-node servers add).
+
 K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 --- stderr
 --- requests

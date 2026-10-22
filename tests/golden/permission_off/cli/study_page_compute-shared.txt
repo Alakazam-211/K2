@@ -1,0 +1,83 @@
+$ k2 study compute-shared
+exit: 0
+--- stdout
+k2 study compute-shared — a node many K2 servers share (0.46.3)
+
+WORDS
+  server   a K2 that sends jobs to nodes (yours, or someone else's)
+  owner    the server the node enrolled with first; only it sends admin
+           and updates, and adds or removes servers
+  tenant   any other server connected to the node; each has a share
+  share    one server's limits there: running, queued, CPU-hours a day
+           (soft), time/CPUs/memory per job, disk, network, end date
+  solo     a node with one server: everything works exactly as before
+
+WHAT YOU SEE
+  k2 compute nodes    "shared by rosson.k2.dev (3 servers) until Oct 27"
+                      and your share: running 1/1 · queued 2/10 · …
+  k2 compute queue <node>   the whole node queue. Other servers' jobs show
+                      as "another server", class, size and ETA only. No
+                      command, workspace, session, job id or logs. Ever.
+  k2 compute get <job>      "queued on k2n2-m1, position 2, ETA ~6m (fair
+                      share: another server's jobs run first)"
+  ETAs are durations, never clock times, and rounded for other servers.
+
+THE QUEUE (the node decides, one queue for every server)
+  1 gate first (only where the share allows it; one at a time; never kills)
+  2 servers within today's CPU-hours before servers over them
+  3 interactive before batch (you get interactive for an attached run or
+    --wait; --detach, more than 4 shards and soaks are batch). A batch job
+    waiting over 60 min counts as interactive.
+  4 fair share by recent use and weight (every server starts at 1, the
+    owner too; the node's owner raises a weight with servers limits)
+  Inside one server: workspaces take turns, then sessions, then first come.
+  Over your limits you WAIT, never fail. A job bigger than your share's
+  per-job limits is refused at submit (exit 3).
+
+YOUR JOBS
+  Same verbs as ever: run, --any, --shards, test, wait, logs, cancel.
+  Named runs go into the node's queue at once. --any waits up to 60 s on
+  this server for a node that can start it now, then goes to the node with
+  the lowest ETA. It may move later, but only after the node confirms the
+  job hadn't started (never more than twice). Your server's queued jobs
+  start only while it's connected; running ones carry on regardless.
+  cancel without --force on a queued job: it ends cancelled, or keeps
+  running (job_started) if it had just started. --force always stops it.
+
+CODES (exit 3 with a JSON code)
+  exceeds_share_caps     over your share's time/CPUs/memory per job
+  gate_not_allowed       --gate, but your share doesn't allow it
+  exclusive_not_allowed  --exclusive, but your share doesn't allow it
+  tenant_queue_full      your queue on the node is full: it waits here
+  share_paused           the node's owner paused your server's share
+  share_expired          your share's end date passed
+  share_revoked          the node's owner removed your server
+  not_node_owner         admin/update/servers verbs on a node you share
+  node_too_old           servers add on a pre-0.46.3 node: update it first
+  server_add_pending     one server is added at a time
+  server_too_old         a <K2_CLI_VERSION> server can't join: update it
+  tenant_needs_job_wall  the node needs its job wall before a second server
+  team_needs_tenant_wall other people's servers need the tenant wall
+                         (Linux nodes; Macs in 0.46.4)
+
+WHAT THE WALL DOES NOT STOP (say so before you share)
+  Each server's jobs get their own folders (and on Linux their own user).
+  They can't read each other's code, caches, results or logs. They still
+  share the kernel, CPU and disk, can reach the internet and any service
+  on the machine's loopback, and the node's owner (root) can read
+  everything. Don't send secrets to a node you don't own. On a Mac in
+  0.46.3 every server's jobs run as one user: share Macs only with your
+  own servers.
+
+FOR THE NODE'S OWNER
+  k2 compute node servers <node>                 list (slot, state, share)
+  k2 compute node servers <node> add --url … --code CODE.FP [--trust team]
+  k2 compute node servers <node> limits|pause|resume|revoke <server> …
+  Adds and widenings wait for your approval; narrowing, pause and revoke
+  apply at once. Updates on a shared node wait for running jobs (≤ 30 min).
+  An add from K2 needs the node's remote-admin level `full`; on a node set
+  to `policy`, add servers at the machine: sudo k2-node servers add …
+
+K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+--- stderr
+--- requests

@@ -165,8 +165,9 @@ export async function extractArchive(scope: ServerScope, path: string): Promise<
   }
 }
 
-/** Wire shape of `GET /cli/fs/read-range`. */
-interface ReadRangeResponse {
+/** Wire shape of `GET /cli/fs/read-range` (and of a Thread attachment's
+ *  `mode=download` chunk, which adds `name` and `mime`). */
+export interface ReadRangeResponse {
   base64: string
   /** Decoded byte count of THIS slice. */
   len: number
@@ -261,16 +262,33 @@ export async function saveBlobInBrowser(blob: Blob, filename: string): Promise<s
  * @returns a local path (desktop) or the saved filename (web), or null.
  */
 export async function downloadFile(scope: ServerScope, remotePath: string): Promise<string | null> {
+  return downloadChunks(baseName(remotePath), (offset, len) =>
+    daemonCliGet<ReadRangeResponse>(scope, 'fs/read-range', { path: remotePath, offset, len }),
+  )
+}
+
+/** Reads one slice of the file being downloaded, from `offset`. */
+export type DownloadSliceReader = (offset: number, len: number) => Promise<ReadRangeResponse>
+
+/**
+ * The download lifecycle (transfer card, Cancel, outcome toasts) over any
+ * chunked daemon read: `fs/read-range` for the Files drawer, a Thread
+ * attachment's `mode=download` for a Thread file. Desktop lands the file
+ * in `~/Downloads` (`local_download_chunk`); hosted web saves a Blob.
+ *
+ * @returns a local path (desktop) or the saved filename (web), or null
+ *   (failed or cancelled, already surfaced).
+ */
+export async function downloadChunks(label: string, read: DownloadSliceReader): Promise<string | null> {
   if (isWebClient()) {
-    return downloadFileInBrowser(scope, remotePath)
+    return downloadChunksInBrowser(label, read)
   }
-  return downloadFileDesktop(scope, remotePath)
+  return downloadChunksDesktop(label, read)
 }
 
 /** Desktop path: Tauri local_download_chunk → ~/Downloads. */
-async function downloadFileDesktop(scope: ServerScope, remotePath: string): Promise<string | null> {
+async function downloadChunksDesktop(label: string, read: DownloadSliceReader): Promise<string | null> {
   const toast = useToastStore.getState()
-  const label = baseName(remotePath)
   const tid = useTransferProgressStore.getState().begin('download', label)
   const downloadId = `dl-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
   try {
@@ -281,11 +299,7 @@ async function downloadFileDesktop(scope: ServerScope, remotePath: string): Prom
         toast.addToast('Download cancelled', 'info', 3000)
         return null
       }
-      const slice = await daemonCliGet<ReadRangeResponse>(scope, 'fs/read-range', {
-        path: remotePath,
-        offset,
-        len: DOWNLOAD_CHUNK_BYTES,
-      })
+      const slice = await read(offset, DOWNLOAD_CHUNK_BYTES)
       const finalPath = await invoke<string | null>('local_download_chunk', {
         downloadId,
         filename: label,
@@ -322,9 +336,8 @@ async function downloadFileDesktop(scope: ServerScope, remotePath: string): Prom
  * Hosted-web path: stream `fs/read-range` into memory, then browser save.
  * Same daemon wire as desktop; no Tauri invoke.
  */
-async function downloadFileInBrowser(scope: ServerScope, remotePath: string): Promise<string | null> {
+async function downloadChunksInBrowser(label: string, read: DownloadSliceReader): Promise<string | null> {
   const toast = useToastStore.getState()
-  const label = baseName(remotePath)
   const tid = useTransferProgressStore.getState().begin('download', label)
   const parts: Uint8Array[] = []
   try {
@@ -334,11 +347,7 @@ async function downloadFileInBrowser(scope: ServerScope, remotePath: string): Pr
         toast.addToast('Download cancelled', 'info', 3000)
         return null
       }
-      const slice = await daemonCliGet<ReadRangeResponse>(scope, 'fs/read-range', {
-        path: remotePath,
-        offset,
-        len: DOWNLOAD_CHUNK_BYTES,
-      })
+      const slice = await read(offset, DOWNLOAD_CHUNK_BYTES)
       if (slice.base64) {
         parts.push(base64ToUint8Array(slice.base64))
       }

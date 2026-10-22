@@ -95,6 +95,7 @@ export function coerceThreadFileObjects(raw: unknown): ThreadFileObject[] {
     if (typeof r.sha256 === 'string' || r.sha256 === null) f.sha256 = r.sha256 as string | null
     if (typeof r.line === 'number') f.line = r.line
     if (typeof r.lineEnd === 'number') f.lineEnd = r.lineEnd
+    if (typeof r.canDownload === 'boolean') f.canDownload = r.canDownload
     out.push(f)
   }
   return out
@@ -310,6 +311,11 @@ export interface ThreadFileObject {
   sha256?: string | null
   line?: number
   lineEnd?: number
+  /** The daemon's answer for THIS viewer (0.46.3): may they save the file
+   *  (`mode=download`)? People: true; an App guest only with
+   *  `files:download`. Absent (an older server, an agent's view): no
+   *  Download button. */
+  canDownload?: boolean
 }
 
 export interface OverlayThreadItem {

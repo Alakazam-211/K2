@@ -32,6 +32,15 @@
 // else the full-size viewer (`ThreadImageLightbox`). Without the feature
 // or without a `ThreadAttachmentSourceProvider` (a ticket, the project
 // chat): chips only.
+//
+// Download (0.46.3, Rosson 2026-10-22): every file tile (chip, list row,
+// image card) gets a Download button on its right when the daemon said
+// `canDownload` for this viewer (people: always; an App guest only with
+// `files:download`) and the message's attachments can be read (a
+// `ThreadAttachmentSourceProvider` and the doc id). A click saves the file
+// through `GET /cli/thread/attachment?mode=download`
+// (`lib/thread-attachment-download`); it never opens the file, and opening
+// is unchanged.
 
 import {
   createContext,
@@ -64,6 +73,7 @@ import {
   type ThreadImage,
   type ThreadImageRef,
 } from '@/lib/thread-image-thumbs'
+import { downloadThreadAttachment, threadFileDownloadable } from '@/lib/thread-attachment-download'
 import { chamferCutFor, chamferVars } from './chamfer'
 import { useThreadColumnNarrow } from './ThreadColumn'
 import {
@@ -187,6 +197,48 @@ function FindButton({ file, onFind }: { file: ThreadFileObject; onFind: (f: Thre
   )
 }
 
+/** The Download button on a file tile's right (0.46.3). Shown only when
+ *  the daemon said this viewer may save the file. */
+export function ThreadFileDownloadButton({ file, onDownload }: { file: ThreadFileObject; onDownload: () => void }): JSX.Element {
+  return (
+    <button
+      type="button"
+      data-thread-file-download=""
+      title={`Download ${file.name ?? 'file'}`}
+      aria-label={`Download ${file.name ?? 'file'}`}
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => {
+        e.preventDefault()
+        e.stopPropagation()
+        onDownload()
+      }}
+      className="inline-flex flex-shrink-0 cursor-pointer items-center justify-center"
+      style={{
+        marginLeft: 'auto',
+        width: 22,
+        height: 22,
+        padding: 0,
+        borderRadius: 999,
+        border: 'none',
+        background: 'transparent',
+        color: 'var(--zen-text-muted)',
+        font: 'inherit',
+      }}
+    >
+      <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden focusable="false">
+        <path
+          d="M8 2.5v7.5M4.75 6.75 8 10l3.25-3.25M3 13.25h10"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    </button>
+  )
+}
+
 const FILE_TOKENS = { '--thread-file-changed': 'var(--zen-needs-you)' } as CSSProperties
 
 /** The click handlers of an openable chip or row: a plain click opens and
@@ -207,8 +259,10 @@ function openHandlers(open: (opts?: FileOpenOptions) => void): {
   }
 }
 
-/** One file as a chip (one or two files on a message). */
-export function ThreadFileChip({ file }: { file: ThreadFileObject }): JSX.Element {
+/** One file as a chip (one or two files on a message). `onDownload`: the
+ *  save action, drawn as a button on the chip's right when the daemon said
+ *  this viewer may download the file. */
+export function ThreadFileChip({ file, onDownload }: { file: ThreadFileObject; onDownload?: () => void }): JSX.Element {
   const actions = useContext(ThreadFileActionsContext)
   const hidden = isHidden(file)
   const gone = file.state === 'gone'
@@ -235,6 +289,51 @@ export function ThreadFileChip({ file }: { file: ThreadFileObject }): JSX.Elemen
     'data-chamfer': '',
     ...ZEN_SOLID_PROPS,
   }
+  if (onDownload && threadFileDownloadable(file)) {
+    // The pill holds two buttons side by side: open (when this surface
+    // opens files) and Download on the right.
+    const isMac = isMacPlatform()
+    const bare: CSSProperties = {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 8,
+      minWidth: 0,
+      padding: 0,
+      border: 'none',
+      background: 'transparent',
+      color: 'inherit',
+      font: 'inherit',
+      textAlign: 'left',
+      cursor: canOpen ? 'pointer' : 'default',
+    }
+    return (
+      <span
+        {...common}
+        data-thread-file-tile=""
+        title={canOpen ? undefined : where}
+        className="inline-flex items-center gap-2"
+        style={{ ...style, cursor: 'default', paddingRight: 4 }}
+      >
+        {canOpen ? (
+          <button
+            type="button"
+            data-thread-file-open=""
+            title={fileOpenTooltip(where, isMac)}
+            aria-label={`Open ${file.name}${file.state === 'changed' ? ' (changed since sent)' : ''}. ${fileOpenAriaHint(isMac)}`}
+            {...openHandlers((opts) => actions!.open(file, opts))}
+            style={bare}
+          >
+            <FileRowContent file={file} />
+          </button>
+        ) : (
+          <span className="inline-flex min-w-0 items-center gap-2">
+            <FileRowContent file={file} />
+          </span>
+        )}
+        <ThreadFileDownloadButton file={file} onDownload={onDownload} />
+      </span>
+    )
+  }
   if (canOpen) {
     const isMac = isMacPlatform()
     return (
@@ -259,8 +358,15 @@ export function ThreadFileChip({ file }: { file: ThreadFileObject }): JSX.Elemen
   )
 }
 
-/** Three or more files: a list card. */
-export function ThreadFileListCard({ files }: { files: ThreadFileObject[] }): JSX.Element {
+/** Three or more files: a list card. `onDownload(i)`: save `files[i]`
+ *  (a Download button on each downloadable row's right). */
+export function ThreadFileListCard({
+  files,
+  onDownload,
+}: {
+  files: ThreadFileObject[]
+  onDownload?: (index: number) => void
+}): JSX.Element {
   const actions = useContext(ThreadFileActionsContext)
   const [all, setAll] = useState(false)
   const shown = all ? files : files.slice(0, FILE_LIST_CARD_ROWS)
@@ -303,6 +409,29 @@ export function ThreadFileListCard({ files }: { files: ThreadFileObject[] }): JS
         }
         const key = `${i}:${f.path ?? 'hidden'}`
         const attrs = { 'data-thread-file': hidden ? 'hidden' : f.path, 'data-state': hidden ? 'hidden' : f.state ?? 'ok' }
+        if (onDownload && threadFileDownloadable(f)) {
+          return (
+            <div key={key} {...attrs} data-thread-file-tile="" style={{ ...rowStyle, cursor: 'default' }}>
+              {canOpen ? (
+                <button
+                  type="button"
+                  data-thread-file-open=""
+                  title={fileOpenTooltip(`${f.path}${fileLineLabel(f)}`)}
+                  aria-label={`Open ${f.name}${f.state === 'changed' ? ' (changed since sent)' : ''}. ${fileOpenAriaHint()}`}
+                  {...openHandlers((opts) => actions!.open(f, opts))}
+                  style={{ ...rowStyle, padding: 0, borderTop: 'none', flex: 1 }}
+                >
+                  <FileRowContent file={f} />
+                </button>
+              ) : (
+                <span className="flex min-w-0 flex-1 items-center" style={{ gap: 8 }}>
+                  <FileRowContent file={f} />
+                </span>
+              )}
+              <ThreadFileDownloadButton file={f} onDownload={() => onDownload(i)} />
+            </div>
+          )
+        }
         return canOpen ? (
           <button
             key={key}
@@ -367,6 +496,7 @@ export function ThreadImageCard({
   docId,
   n,
   width,
+  onDownload,
 }: {
   file: ThreadFileObject
   source: ThreadAttachmentSource
@@ -374,6 +504,8 @@ export function ThreadImageCard({
   /** The attachment's index on the message (the daemon's `n`). */
   n: number
   width: number
+  /** Save it (a Download button in the caption's right). */
+  onDownload?: () => void
 }): JSX.Element {
   const actions = useContext(ThreadFileActionsContext)
   const imageRef = useMemo<ThreadImageRef>(
@@ -405,7 +537,7 @@ export function ThreadImageCard({
     }
   }, [img, failed, near, imageRef])
 
-  if (failed) return <ThreadFileChip file={file} />
+  if (failed) return <ThreadFileChip file={file} onDownload={onDownload} />
 
   const changed = file.state === 'changed'
   const name = file.name ?? ''
@@ -501,6 +633,7 @@ export function ThreadImageCard({
             {formatFileSize(file.size)}
           </span>
         )}
+        {onDownload && threadFileDownloadable(file) && <ThreadFileDownloadButton file={file} onDownload={onDownload} />}
       </span>
       {viewing && (
         <ThreadImageLightbox imageRef={imageRef} name={name} thumbUrl={img?.url ?? null} onClose={() => setViewing(false)} />
@@ -526,7 +659,17 @@ export function ThreadFileObjects({
   if (all.length === 0) return null
   const imagesOn = !!source && !!docId && source.scope.serverSupports('thread-images-v1')
   const images = imagesOn ? all.filter(({ f }) => threadImageDrawable(f)) : []
-  const rest = all.filter((x) => !images.includes(x)).map(({ f }) => f)
+  const restEntries = all.filter((x) => !images.includes(x))
+  const rest = restEntries.map(({ f }) => f)
+  // Save through the Thread's own server (the daemon's `canDownload` says
+  // whether each tile shows the button). Without a source (a ticket, the
+  // project chat) there is no attachment door to read: no button.
+  const download =
+    source && docId
+      ? (f: ThreadFileObject, n: number) => {
+          void downloadThreadAttachment({ scope: source.scope, addr: source.addr, docId, n }, f.name ?? 'file')
+        }
+      : null
   const side = mine ? 'flex-end' : 'flex-start'
   const width = images.length > 1 ? THREAD_IMAGE_GRID_PX : THREAD_IMAGE_CARD_PX
   return (
@@ -545,14 +688,24 @@ export function ThreadFileObjects({
               docId={docId}
               n={n}
               width={width}
+              onDownload={download ? () => download(f, n) : undefined}
             />
           ))}
         </div>
       )}
       {rest.length >= FILE_LIST_CARD_AT ? (
-        <ThreadFileListCard files={rest} />
+        <ThreadFileListCard
+          files={rest}
+          onDownload={download ? (i) => download(restEntries[i].f, restEntries[i].n) : undefined}
+        />
       ) : (
-        rest.map((f, i) => <ThreadFileChip key={`${i}:${f.path ?? 'hidden'}`} file={f} />)
+        restEntries.map(({ f, n }, i) => (
+          <ThreadFileChip
+            key={`${i}:${f.path ?? 'hidden'}`}
+            file={f}
+            onDownload={download ? () => download(f, n) : undefined}
+          />
+        ))
       )}
     </div>
   )

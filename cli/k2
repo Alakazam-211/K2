@@ -59378,6 +59378,12 @@ if err == "zen_not_set_up" or (verb in ("path", "garden-list") and d.get("setUp"
         print(json.dumps(d, separators=(",", ":")))
     print(d.get("message") or NOT_SET_UP, file=sys.stderr)
     sys.exit(3)
+if err in ("garden_access_needed", "garden_delete_person", "session_gone"):
+    # Garden access (G19): stop and let the person answer K2 card.
+    if as_json:
+        print(json.dumps(d, separators=(",", ":")))
+    print(d.get("message") or "Ask the person: k2 zen garden access <garden> ask", file=sys.stderr)
+    sys.exit(3)
 if err == "garden_locked" or (err == "owner_only" and verb == "garden-lock"):
     # prd-garden-lock-and-sync-v1 §6: forbidden, stop and ask the person.
     if as_json:
@@ -59561,6 +59567,8 @@ elif verb == "garden-new":
     g = d.get("garden") or {}
     print(g.get("id"))
     print(d.get("path"))
+    if d.get("made") and d.get("message"):
+        print(d["message"], file=sys.stderr)
 elif verb == "garden-rename":
     g = d.get("garden") or {}
     print("Garden %s is now “%s”%s" % (g.get("id"), g.get("name"), "" if d.get("changed") else " (unchanged)"))
@@ -59889,6 +59897,10 @@ cmd_zen_widget() {
         cmd_zen_widget_show "$@"
         return
     fi
+    if [ "$verb" = "history" ]; then
+        cmd_zen_access_history widget "$@"
+        return
+    fi
     local as_json=false from="" widget="" raw body
     local -a pos=()
     while [ $# -gt 0 ]; do
@@ -60082,6 +60094,227 @@ _zen_validate_only_flags() {
     fi
 }
 
+# ── Garden access (prd-garden-access-v1 G19; only with the gardenAccess
+# switch on). One list per Garden of the agents who may edit it; History
+# per Garden and per widget. Inside a K2 terminal these carry the session's
+# passport (an agent asks; the person changes the list from Settings or a
+# terminal outside K2).
+
+# Is Garden access on for this daemon? Its routes exist only then (off, a
+# probe is the Zen arm's 404 "unknown zen route").
+_zen_access_on() {
+    local raw
+    raw="$(cli_request "/cli/zen/garden/access" 2>/dev/null || true)"
+    case "$raw" in
+        *'"unknown zen route"'*|"") return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+# A Zen GET with the session's passport inside a K2 terminal (the owner
+# token outside), like _zen_session_post.
+_zen_session_get() {
+    local endpoint="$1" hook_sock="${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}"
+    shift
+    if [ -n "$hook_sock" ]; then
+        local saved="$TOKEN"
+        TOKEN="${SCOPED_TOKEN:-${K2_HOOK_TOKEN:-${K2SO_HOOK_TOKEN:-}}}"
+        cli_request "$endpoint" "$@"
+        TOKEN="$saved"
+    else
+        cli_request "$endpoint" "$@"
+    fi
+}
+
+_zen_access_print() {
+    ZEN_VIEW="$1" ZEN_JSON="$2" ZEN_RAW="$3" python3 -c '
+import json, os, sys, time
+view = os.environ["ZEN_VIEW"]
+raw = os.environ.get("ZEN_RAW") or ""
+if not raw.strip():
+    print("Error: no response from the K2 daemon on this computer", file=sys.stderr); sys.exit(1)
+try:
+    d = json.loads(raw)
+except Exception:
+    print("Error: the daemon answered something that is not JSON: %s" % raw[:200], file=sys.stderr); sys.exit(1)
+as_json = os.environ.get("ZEN_JSON") == "true"
+err = d.get("error") if isinstance(d, dict) else None
+if as_json:
+    print(json.dumps(d, indent=2))
+if err == "unknown zen route":
+    print("Error: Garden access lists are off on this computer (Settings → Gardens).", file=sys.stderr); sys.exit(1)
+if err:
+    if not as_json:
+        print("Error: %s" % (d.get("message") or err), file=sys.stderr)
+    if err in ("garden_access_needed", "garden_delete_person", "owner_only", "zen_local_only", "session_gone", "zen_not_set_up"):
+        sys.exit(3)
+    if err in ("unknown_garden", "unknown_agent", "not_found", "unknown_widget"):
+        sys.exit(4)
+    sys.exit(1)
+if as_json:
+    sys.exit(0)
+def when(t):
+    return time.strftime("%Y-%m-%d %H:%M", time.localtime(t)) if isinstance(t, int) else "-"
+if view == "list":
+    if "editors" not in d:
+        print("%s %s edit %s." % ("You", "can" if d.get("listed") else "can\x27t", d.get("name")))
+        if not d.get("listed"):
+            print("Ask the person: k2 zen garden access \"%s\" ask" % d.get("name"))
+        sys.exit(0)
+    m = d.get("made")
+    print("%s%s%s" % (d.get("name"), "  (locked)" if d.get("locked") else "", ("  made by %s" % m.get("handle")) if m else ""))
+    eds = d.get("editors") or []
+    if not eds:
+        print("No agent may edit it (only you).")
+    for e in eds:
+        how = {"owner": "added by you", "card": "allowed on a card", "migration": "added automatically at upgrade"}.get(e.get("addedBy"), e.get("addedBy"))
+        print("  %-24s %s · %s" % (e.get("handle"), how, when(e.get("addedAt"))))
+    print("Sees: everything you can see")
+elif view == "change":
+    a = (d.get("agent") or {}).get("handle")
+    g = (d.get("garden") or {}).get("name")
+    if d.get("listed"):
+        print("%s may edit %s%s." % (a, g, "" if d.get("changed") else " (already)"))
+    else:
+        print("%s no longer edits %s%s." % (a, g, "" if d.get("changed") else " (wasn\x27t on the list)"))
+elif view == "ask":
+    print(d.get("message") or "")
+elif view == "history":
+    items = d.get("items") or []
+    for u in d.get("unsigned") or []:
+        print("not signed: %s (version %s) runs without your data until you or an editor signs it (k2 zen widget sign %s)" % (u.get("widget"), u.get("hash"), u.get("widget")))
+    if not items:
+        print("No history yet.")
+    for i in items:
+        a = i.get("actor") or {}
+        who = a.get("name") or a.get("kind")
+        what = i.get("kind")
+        det = i.get("detail") or {}
+        extra = ""
+        if i.get("widget"):
+            extra = " " + i["widget"]
+        if det.get("to") is not None and what == "renamed":
+            extra += " → %s" % det["to"]
+        if det.get("workspace"):
+            extra += " %s" % det["workspace"]
+        print("%s  %-14s %s%s" % (when(i.get("at")), what, who, extra))
+    if d.get("next"):
+        print("More: --before %s" % d["next"])
+'
+}
+
+# k2 zen garden access <garden> [add|remove <agent>|ask [--reason "…"]] [--json]
+cmd_zen_garden_access() {
+    local as_json=false reason="" raw body
+    local -a pos=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --reason) [ -n "${2:-}" ] || { echo "Error: --reason needs words" >&2; exit 2; }; reason="$2"; shift 2 ;;
+            -h|--help) cmd_help_zen; exit 0 ;;
+            -*) echo "Error: unexpected '$1' (see k2 zen --help)" >&2; exit 2 ;;
+            *) pos+=("$1"); shift ;;
+        esac
+    done
+    local n=${#pos[@]}
+    [ "$n" -ge 1 ] || { echo "Error: k2 zen garden access <garden> [add|remove <agent> | ask]" >&2; exit 2; }
+    local garden="${pos[0]}" act="${pos[1]:-}"
+    case "$act" in
+        "")
+            [ "$n" -eq 1 ] || { echo "Error: k2 zen garden access <garden> [add|remove <agent> | ask]" >&2; exit 2; }
+            raw=$(_zen_session_get "/cli/zen/garden/access" "garden=$(urlencode "$garden")")
+            _zen_access_print list "$as_json" "$raw"
+            ;;
+        add|remove)
+            [ "$n" -eq 3 ] || { echo "Error: k2 zen garden access <garden> $act <agent>" >&2; exit 2; }
+            body=$(ZG="$garden" ZA="${pos[2]}" ZL="$act" python3 -c '
+import json, os
+print(json.dumps({"garden": os.environ["ZG"], "agent": os.environ["ZA"], "allow": os.environ["ZL"] == "add"}))')
+            raw=$(_zen_person_post "/cli/zen/garden/access" "$body")
+            _zen_access_print change "$as_json" "$raw"
+            ;;
+        ask)
+            [ "$n" -eq 2 ] || { echo "Error: k2 zen garden access <garden> ask [--reason \"…\"]" >&2; exit 2; }
+            body=$(ZG="$garden" ZR="$reason" python3 -c '
+import json, os
+b = {"garden": os.environ["ZG"]}
+if os.environ.get("ZR"): b["reason"] = os.environ["ZR"]
+print(json.dumps(b))')
+            raw=$(_zen_session_post "/cli/zen/garden/access/ask" "$body")
+            _zen_access_print ask "$as_json" "$raw"
+            ;;
+        *) echo "Error: unknown '$act': k2 zen garden access <garden> [add|remove <agent> | ask]" >&2; exit 2 ;;
+    esac
+}
+
+# k2 zen garden history <garden> / k2 zen widget history <widget>
+#   [--kind k1,k2|changes|access|asks] [--limit n] [--before <cursor>] [--json]
+cmd_zen_access_history() {
+    local what="$1"
+    shift
+    local as_json=false kind="" limit="" before=""
+    local -a pos=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --kind) [ -n "${2:-}" ] || { echo "Error: --kind needs kinds (changes, access, asks or event kinds)" >&2; exit 2; }; kind="$2"; shift 2 ;;
+            --limit) [[ "${2:-}" =~ ^[0-9]+$ ]] || { echo "Error: --limit needs a number (1-200)" >&2; exit 2; }; limit="$2"; shift 2 ;;
+            --before) [ -n "${2:-}" ] || { echo "Error: --before needs the cursor History printed" >&2; exit 2; }; before="$2"; shift 2 ;;
+            -h|--help) cmd_help_zen; exit 0 ;;
+            -*) echo "Error: unexpected '$1' (see k2 zen --help)" >&2; exit 2 ;;
+            *) pos+=("$1"); shift ;;
+        esac
+    done
+    [ "${#pos[@]}" -eq 1 ] || { echo "Error: k2 zen $what history <$what> [--kind …] [--limit n] [--before cursor] [--json]" >&2; exit 2; }
+    local -a q=("$what=$(urlencode "${pos[0]}")")
+    [ -n "$kind" ] && q+=("kind=$(urlencode "$kind")")
+    [ -n "$limit" ] && q+=("limit=$limit")
+    [ -n "$before" ] && q+=("before=$(urlencode "$before")")
+    local raw
+    raw=$(cli_request "/cli/zen/$what/history" "${q[@]}")
+    _zen_access_print history "$as_json" "$raw"
+}
+
+# k2 zen garden new <name> --from <page.toml> --widgets <dir>… (G13, switch
+# on): one call, page and widgets with it. Inside a K2 terminal with the
+# switch on it carries the session's passport, so the Garden is the agent's
+# and K2 asks the person in the same step.
+_zen_garden_new_v2() {
+    local name="$1" texting="$2" at="$3" from="$4"
+    shift 4
+    local tmp page="" rc=0
+    tmp="$(mktemp -d "${TMPDIR:-/tmp}/k2-zen-new.XXXXXX")" || { echo "Error: can't make a temp folder" >&2; exit 1; }
+    if [ -n "$from" ]; then
+        page="$tmp/page.toml"
+        _zen_read_text "$from" > "$page" || rc=$?
+    fi
+    local i=0
+    for dir in "$@"; do
+        i=$((i + 1))
+        _zen_dir_body "$dir" "$tmp/w$i.json" "" widget || { rc=$?; break; }
+    done
+    if [ "$rc" -ne 0 ]; then rm -rf "$tmp"; exit "$rc"; fi
+    ZN="$name" ZT="$texting" ZA="$at" ZP="$page" ZD="$tmp" ZC="$i" python3 -c '
+import json, os
+b = {"name": os.environ["ZN"]}
+if os.environ.get("ZT") == "true":
+    b["template"] = "texting"
+if os.environ.get("ZA"):
+    b["at"] = int(os.environ["ZA"])
+if os.environ.get("ZP"):
+    b["page"] = open(os.environ["ZP"]).read()
+ws = []
+for i in range(1, int(os.environ["ZC"]) + 1):
+    w = json.load(open(os.path.join(os.environ["ZD"], "w%d.json" % i)))
+    ws.append({"widget": w["widget"], "files": w["files"]})
+if ws:
+    b["widgets"] = ws
+json.dump(b, open(os.path.join(os.environ["ZD"], "body.json"), "w"))
+' || { rm -rf "$tmp"; exit 1; }
+    _zen_session_post_file "/cli/zen/garden/new" "$tmp/body.json"
+    rm -rf "$tmp"
+}
+
 # k2 zen garden <list|new|rename|delete|reorder> (G35). The daemon owns
 # gardens.json; this only calls its routes.
 cmd_zen_garden() {
@@ -60091,11 +60324,26 @@ cmd_zen_garden() {
         cmd_zen_garden_put "$@"
         return
     fi
-    local as_json=false texting=false force=false at="" raw body
-    local -a pos=()
+    if [ "$verb" = "access" ]; then
+        cmd_zen_garden_access "$@"
+        return
+    fi
+    if [ "$verb" = "history" ]; then
+        cmd_zen_access_history garden "$@"
+        return
+    fi
+    local as_json=false texting=false force=false at="" new_from="" raw body
+    local -a pos=() new_widgets=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) as_json=true; shift ;;
+            --from)
+                [ -n "${2:-}" ] || { echo "Error: --from needs the first page (a Garden .toml file, or - for stdin)" >&2; exit 2; }
+                new_from="$2"; shift 2 ;;
+            --widgets)
+                [ -n "${2:-}" ] || { echo "Error: --widgets needs a staged widget folder" >&2; exit 2; }
+                shift
+                while [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; do new_widgets+=("$1"); shift; done ;;
             --texting) texting=true; shift ;;
             --force) force=true; shift ;;
             --at)
@@ -60111,8 +60359,8 @@ cmd_zen_garden() {
         echo "Error: --at needs a whole number (1 is the first)" >&2
         exit 2
     fi
-    if [ "$verb" != "new" ] && { [ "$texting" = true ] || [ -n "$at" ]; }; then
-        echo "Error: --texting and --at are for k2 zen garden new" >&2
+    if [ "$verb" != "new" ] && { [ "$texting" = true ] || [ -n "$at" ] || [ -n "$new_from" ] || [ "${#new_widgets[@]}" -gt 0 ]; }; then
+        echo "Error: --texting, --at, --from and --widgets are for k2 zen garden new" >&2
         exit 2
     fi
     if [ "$verb" != "template" ] && [ "$force" = true ]; then
@@ -60130,6 +60378,18 @@ cmd_zen_garden() {
             ;;
         new)
             [ "$n" -ge 1 ] || { echo "Error: k2 zen garden new needs a name" >&2; exit 2; }
+            # Garden access (G13): with the switch on, one call carries the
+            # first page and new widgets, and inside a K2 terminal the
+            # session's passport (the agent's Garden; K2 asks the person).
+            if [ -n "$new_from" ] || [ "${#new_widgets[@]}" -gt 0 ] || { [ -n "${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}" ] && _zen_access_on; }; then
+                if ! _zen_access_on; then
+                    echo "Error: --from and --widgets need Garden access lists on (Settings → Gardens)" >&2
+                    exit 2
+                fi
+                raw=$(_zen_garden_new_v2 "${pos[*]}" "$texting" "$at" "$new_from" ${new_widgets[@]+"${new_widgets[@]}"})
+                _zen_print garden-new "$as_json" "$raw"
+                return
+            fi
             body=$(ZN="${pos[*]}" ZT="$texting" ZA="$at" python3 -c '
 import json, os
 b = {"name": os.environ["ZN"]}
@@ -60202,7 +60462,7 @@ print(json.dumps({"garden": os.environ["ZG"], "locked": os.environ["ZL"] == "loc
             cmd_help_zen
             ;;
         *)
-            echo "Unknown 'k2 zen garden' subcommand: $verb (list, new, rename, reorder, template, delete, lock, unlock)" >&2
+            echo "Unknown 'k2 zen garden' subcommand: $verb (list, new, rename, reorder, template, delete, lock, unlock, access, history)" >&2
             exit 2
             ;;
     esac
@@ -60556,7 +60816,7 @@ if os.environ.get("ZEN_JSON") == "true":
 if err:
     if os.environ.get("ZEN_JSON") != "true":
         print("Error: %s: %s" % (err, d.get("message") or ""), file=sys.stderr)
-    if err in ("person_only", "zen_local_only", "garden_locked", "owner_only", "zen_not_set_up"):
+    if err in ("person_only", "zen_local_only", "garden_locked", "owner_only", "zen_not_set_up", "garden_access_needed", "garden_delete_person", "session_gone"):
         sys.exit(3)
     if err in ("proposal_not_found", "unknown_garden", "unknown_widget", "not_found"):
         sys.exit(4)

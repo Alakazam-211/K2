@@ -7,8 +7,8 @@ An app with heartbeats:read / heartbeats:write on a room can see and
 change THAT room's heartbeats. Never another workspace's, never the
 machine's scheduler, wake settings, Keep awake or power routes.
 Grant: `k2 app role room <role> <room> --caps heartbeats:read,heartbeats:write`.
-heartbeats:write does not imply heartbeats:read. files:* and
-activity:read imply neither.
+heartbeats:write does not imply heartbeats:read. files:*,
+activity:read and activity:room imply neither.
 
 ROUTES (send workspace=<room handle>; never a path)
   heartbeats:read   GET  /cli/heartbeat/list?workspace=

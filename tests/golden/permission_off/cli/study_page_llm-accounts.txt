@@ -23,6 +23,10 @@ SERVER DEFAULT
   conversations stay where they are. K2 first saves the outgoing
   subscription back to its folder (the tool may have refreshed it),
   then puts the chosen one in place.
+  No default: when an API token is the server default, Admin or Owner can
+  clear it (k2 llm tokens clear-default <tool>, or "No default" in
+  Settings), or remove it with --clear-default. A subscription signed in
+  to the tool itself stays the default (switch to another token first).
   When a session hits its limit, "Use next token" is one click on
   Settings → Language Models → Subs / Tokens (k2 llm tokens next <tool>).
   K2 never rotates tokens on its own.

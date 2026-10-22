@@ -25,6 +25,12 @@ THE MOVE (one database at a time, by copy)
                                    k2v:// ref. Apps start again.
   Pause: about 10-30 s + size / 40 MB/s (1 GB ~ 30-60 s).
   Anything wrong before the switch: undone, the old copy keeps serving.
+  Postgres not running: every upgrade verb (--check too) exits 3 with
+  postgres_stopped (start it with `k2 db enable`), postgres_starting or
+  postgres_unhealthy (`k2 db doctor`); `k2 db status` says the same.
+  After a daemon restart mid-move, `recovering` lasts until K2 has
+  finished or undone that move (at most 30 minutes once Postgres runs;
+  then it becomes a failure for the owner: --acknowledge-failed).
 
 THE OLD COPY (14 days)
   Kept closed (no one connects) in the old cluster for 14 days.

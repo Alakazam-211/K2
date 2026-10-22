@@ -301,7 +301,12 @@ TICKETS
   Never inject it into your page DOM. List its links outside the frame.
   Never /cli/tickets. Never /cli/sessions/events. Never grid.
 
-AGENT WORKING (activity:read)
+AGENT WORKING (activity:room; was activity:read before K2 0.46.3)
+  Every session in the room, the owner's other tabs included. Since K2
+  0.46.3 these need activity:room (never a default; the owner grants it).
+  activity:read alone now gets 403 cap_not_granted (cap activity:room) on
+  the snapshot, and the socket opens but sends no session_activity_changed.
+  For the Thread's own turn, counts only, see THREAD EAR below.
   Exact paths on the official origin (cookie k2_skin_ui; never ?token=):
     GET      /cli/activity/snapshot?workspace=<handle>
     WS GET   /cli/activity/events?workspace=<handle>
@@ -348,9 +353,43 @@ AGENT WORKING (activity:read)
   and when a {"kind":"resync"} frame arrives (the socket fell behind and
   closes with 4008 right after). Frames sent while you were away are gone.
   Errors: 400 missing workspace | 403 skin_room (room not on the pass) |
-  403 missing capability activity:read. Never the host-wide snapshot.
-  Never /cli/thread/activity (the desktop's Thread strip; 403 / 404 for
-  apps). Never /cli/chat/transcript.
+  403 cap_not_granted (cap activity:room). Never the host-wide snapshot.
+  Never /cli/chat/transcript.
+
+THREAD EAR (thread:read + activity:read; K2 0.46.3+, thread-activity-ear-v1)
+  The room's pinned-Chat Thread turn while the agent works on a Thread
+  message (anyone's: a guest's or the owner's). Counts only. Never a turn
+  the owner typed straight into the agent's terminal. Exact paths:
+    GET      /cli/thread/activity?addr=<handle>      (k2.thread.activity)
+    WS GET   /cli/overlay/events?conversation=<id>&ear=1   frames collection "activity"
+    WS GET   /cli/thread/stream?rooms=all&ear=1            frames kind "thread_activity"
+  OPT-IN: the sockets send ear frames only when opened with ear=1. The
+  App SDK's thread.stream adds it; its thread.events never does (every
+  frame there stays a Thread item with a doc). Without ear=1 a socket
+  gets exactly the frames it got before 0.46.3. The GET needs no opt-in.
+  Catch-up: {"ok":true,"addr":"<handle>","conversation_id":"<id>",
+             "turn":{…}|null}
+  turn / activity (exactly these keys):
+    {"turnId":"<thread message id>","rev":3,"state":"working",
+     "phase":"tool","phaseSince":1781812201000,"startedAt":1781812199000,
+     "serverNow":1781812273000,
+     "tally":{"read":2,"search":1,"cmd":3,"edit":0},
+     "subagents":1,"subagentsDone":0,"background":0,"messages":1,
+     "waitingOn":"owner"|null,"end":{"reason":"done"}|null}
+  state    working, monitoring, needs-you, unverifiable, stopped, idle
+  phase    delivering, working, tool (no line: never which tool), thinking,
+           waiting, stale, children
+  waitingOn  "owner" while the agent waits on the owner; never which prompt
+  end      null while it runs; the last frame has reason done, stopped or
+           failed, then nothing (catch-up turn: null)
+  Times are ms since the epoch; correct your clock by serverNow. No tool
+  line, command, path, file, argument or text, ever. No Stop.
+  WHAT THE APP MUST DO: on every socket (re)open GET the catch-up and
+  replace the turn; the frames are not stored and never replayed. Ignore
+  frame collections and kinds you don't know.
+  Errors: 403 skin_room (not the room's pinned Chat, room not on the pass)
+  | 403 cap_not_granted (cap thread:read or activity:read) | 401 a revoked
+  pass. A pass revoked mid-turn gets no further frame (its sockets close).
 
 WIKI
   Exact paths on the official origin (cookie k2_skin_ui; never ?token=):

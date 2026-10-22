@@ -59,15 +59,21 @@ fn keep_widget(params: &J, answer: &str, by: &str) -> Result<J, String> {
     }
     match answer {
         KEEP_AS_MINE => {
-            let db = k2_core::db::shared();
-            let conn = db.lock();
-            k2_core::garden_data::authors::claim(&conn, widget, hash, chrono::Utc::now().timestamp())
-                .map_err(|e| format!("{widget} wasn't kept: {e:?}"))?;
-            drop(conn);
-            crate::gardens_manage::audit("zen-widget-keep", by, &format!("{widget} {}", &hash[..hash.len().min(12)]), None, None);
-            if let Err(e) = crate::zen_routes::refresh_and_emit() {
-                k2_core::log_debug!("[action-card] refresh after keep: {e}");
+            // Through the claim route's own entry (PRD §4.1, C15): the same
+            // GardenOwner check as Settings → It's mine, as the answering
+            // person, and only while the version the card names is still
+            // the live one (409 widget_changed otherwise: never keep
+            // something else than the card showed).
+            let caller = if by == "owner" {
+                crate::sidecar_routes::Caller::Owner
+            } else {
+                crate::sidecar_routes::Caller::Login { username: by.to_string() }
+            };
+            let r = crate::zen_routes::claim_entry(&caller, widget, Some(hash), "keep-card");
+            if !r.status.starts_with('2') {
+                return Err(format!("{widget} wasn't kept: {}", r.body));
             }
+            crate::gardens_manage::audit("zen-widget-keep", by, &format!("{widget} {}", &hash[..hash.len().min(12)]), None, None);
             Ok(json!({
                 "kept": true,
                 "widget": widget,
@@ -76,5 +82,31 @@ fn keep_widget(params: &J, answer: &str, by: &str) -> Result<J, String> {
             }))
         }
         other => Err(format!("'{other}' isn't an answer to this card")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The keep card applies through the claim route's GardenOwner check:
+    /// a login that isn't the server's Owner (an Admin, a Member, a name
+    /// K2 doesn't know) is refused and nothing is claimed, whatever the
+    /// card's floor let through.
+    #[test]
+    fn a_keep_card_answered_by_a_login_without_garden_owner_is_refused() {
+        let action = CardAction {
+            id: KEEP_WIDGET.into(),
+            params: json!({ "widget": "notes", "hash": "0123456789abcdef0123", "agent": "builder" }),
+            dedupe: String::new(),
+            result: None,
+            view: None,
+        };
+        let e = run(&action, KEEP_AS_MINE, "not-an-owner-login").expect_err("only the Garden's owner keeps a widget");
+        assert!(e.starts_with("notes wasn't kept:"), "{e}");
+        assert!(e.contains("Only you can claim a widget"), "the claim route's own owner-only refusal: {e}");
+        // Leave it as <agent>'s changes nothing and needs no rights.
+        let left = run(&action, &leave_label("builder"), "not-an-owner-login").expect("leave");
+        assert_eq!(left["kept"], false);
     }
 }

@@ -145,6 +145,8 @@ export const CATALOG_ERROR_CODES = [
   'person_pass_required',
   'wallet_off',
   'duplicate_label',
+  // Garden access lists (prd-garden-access-v1 G22): the signer gate.
+  'needs_editor',
 ] as const
 
 export type CatalogErrorCode = (typeof CATALOG_ERROR_CODES)[number]

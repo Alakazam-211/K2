@@ -1,5 +1,5 @@
 {
-  "catalogVersion": 19,
+  "catalogVersion": 20,
   "caps": [
     {
       "name": "agents:read",
@@ -574,6 +574,28 @@
       "errors": ["cap_not_granted", "verb_unavailable", "failed"],
       "doc": "Clear the widget's pick.",
       "example": "await k2.conversation.close()"
+    },
+    {
+      "verb": "agents.show",
+      "cap": "agents:read",
+      "exposure": ["widget"],
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "zen-widgets-v1",
+      "bindings": {"renderer": {"impl": "registered"}},
+      "request": [
+        {
+          "title": "addresses",
+          "type": ["array", "null"],
+          "items": {"type": "string"},
+          "description": "Up to 50 full row addresses from agents.list(), in order; null clears."
+        }
+      ],
+      "response": {"type": "null"},
+      "errors": ["cap_not_granted", "not_bound", "bad_args", "rate_limited", "verb_unavailable", "failed"],
+      "doc": "List mode: an Agents widget with list-from = this widget shows just these agents, in this order (rows agents.list() returns; never more reach). null clears.",
+      "example": "await k2.agents.show(rows.filter(onBoard).map((r) => r.address))"
     },
     {
       "verb": "thread.read",
@@ -1512,6 +1534,28 @@
       "example": "await k2.compose.draft(row.address, 'Ask for a status')"
     },
     {
+      "verb": "conversation.setContext",
+      "cap": "thread:post",
+      "exposure": ["widget"],
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "thread-context-v1",
+      "bindings": {"renderer": {"impl": "registered"}},
+      "request": [
+        {
+          "title": "text",
+          "type": ["string", "null"],
+          "maxLength": 120,
+          "description": "One line of plain text, at most 120 characters; null clears."
+        }
+      ],
+      "response": {"type": "null"},
+      "errors": ["cap_not_granted", "needs_editor", "not_bound", "bad_args", "rate_limited", "verb_unavailable", "failed"],
+      "doc": "A chip the person sees on the following Conversation's message box; it rides on their next send as K2's own quoted context line, never as their words. null clears.",
+      "example": "await k2.conversation.setContext('Board: ' + board.name)"
+    },
+    {
       "verb": "focusGroups.get",
       "cap": "agents:read",
       "reach": "local",
@@ -1966,6 +2010,143 @@
       "errors": ["failed"],
       "doc": "Start moving the window, from a mousedown in this widget (only while a button is down here).",
       "example": "grip.addEventListener('mousedown', () => k2.window.startDrag())"
+    },
+    {
+      "verb": "layout.get",
+      "cap": null,
+      "exposure": ["widget"],
+      "reach": "local",
+      "effect": "read",
+      "kind": "call",
+      "feature": "zen-widgets-v1",
+      "bindings": {"renderer": {"impl": "frame"}},
+      "request": [],
+      "response": {
+        "title": "LayoutInfo",
+        "type": "object",
+        "properties": {
+          "columns": {
+            "type": "array",
+            "items": {
+              "title": "LayoutColumn",
+              "type": "object",
+              "properties": {
+                "index": {"type": "integer", "minimum": 0},
+                "label": {"type": "string"},
+                "collapsible": {"type": "boolean"},
+                "collapsed": {"type": "boolean"}
+              },
+              "required": ["index", "label", "collapsible", "collapsed"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["columns"],
+        "additionalProperties": false
+      },
+      "errors": ["rate_limited", "verb_unavailable", "failed"],
+      "doc": "This page's columns: index, label, and whether each can fold and is folded now.",
+      "example": "const {columns} = await k2.layout.get()"
+    },
+    {
+      "verb": "layout.set",
+      "cap": null,
+      "exposure": ["widget"],
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "zen-widgets-v1",
+      "bindings": {"renderer": {"impl": "frame"}},
+      "request": [
+        {
+          "title": "change",
+          "type": "object",
+          "properties": {
+            "column": {"type": "integer", "minimum": 0},
+            "collapsed": {"type": "boolean"}
+          },
+          "required": ["column", "collapsed"],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "LayoutColumn",
+        "type": "object",
+        "properties": {
+          "index": {"type": "integer", "minimum": 0},
+          "label": {"type": "string"},
+          "collapsible": {"type": "boolean"},
+          "collapsed": {"type": "boolean"}
+        },
+        "required": ["index", "label", "collapsible", "collapsed"],
+        "additionalProperties": false
+      },
+      "errors": ["bad_args", "rate_limited", "verb_unavailable", "failed"],
+      "doc": "Fold or unfold a collapsible column on this page, within 5 s of a click in this widget (4 a second; never saved; the last open column can't fold).",
+      "example": "await k2.layout.set({column: 2, collapsed: false})"
+    },
+    {
+      "verb": "layout.toggle",
+      "cap": null,
+      "exposure": ["widget"],
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "zen-widgets-v1",
+      "bindings": {"renderer": {"impl": "frame"}},
+      "request": [{"title": "column", "type": "integer", "minimum": 0}],
+      "response": {
+        "title": "LayoutColumn",
+        "type": "object",
+        "properties": {
+          "index": {"type": "integer", "minimum": 0},
+          "label": {"type": "string"},
+          "collapsible": {"type": "boolean"},
+          "collapsed": {"type": "boolean"}
+        },
+        "required": ["index", "label", "collapsible", "collapsed"],
+        "additionalProperties": false
+      },
+      "errors": ["bad_args", "rate_limited", "verb_unavailable", "failed"],
+      "doc": "Fold an open collapsible column, or unfold a folded one; the same rules as layout.set.",
+      "example": "chat.addEventListener('click', () => k2.layout.toggle(2))"
+    },
+    {
+      "verb": "layout.subscribe",
+      "cap": null,
+      "exposure": ["widget"],
+      "reach": "local",
+      "effect": "read",
+      "kind": "subscribe",
+      "feature": "zen-widgets-v1",
+      "bindings": {"renderer": {"impl": "frame"}},
+      "request": [],
+      "response": {
+        "title": "LayoutInfo",
+        "type": "object",
+        "properties": {
+          "columns": {
+            "type": "array",
+            "items": {
+              "title": "LayoutColumn",
+              "type": "object",
+              "properties": {
+                "index": {"type": "integer", "minimum": 0},
+                "label": {"type": "string"},
+                "collapsible": {"type": "boolean"},
+                "collapsed": {"type": "boolean"}
+              },
+              "required": ["index", "label", "collapsible", "collapsed"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["columns"],
+        "additionalProperties": false
+      },
+      "errors": ["rate_limited", "verb_unavailable", "failed"],
+      "doc": "The same value as layout.get, pushed when a column folds or unfolds.",
+      "example": "k2.layout.subscribe(({columns}) => drawTabs(columns))"
     },
     {
       "verb": "sources.list",

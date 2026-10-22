@@ -83,16 +83,17 @@ describe('TUWA4 twin: generated files match the catalog', () => {
     }
   })
 
-  it('the frame script stays under 32 KB (UWA5, raised for Garden data, then the 0.46.1 SDK and its App rows)', () => {
-    expect(Buffer.byteLength(read('sdk/generated/k2-frame.js'), 'utf8')).toBeLessThanOrEqual(32 * 1024)
+  it('the frame script stays under 40 KB (UWA5, raised for Garden data, then the 0.46.1 SDK and its App rows, then catalog v20)', () => {
+    expect(Buffer.byteLength(read('sdk/generated/k2-frame.js'), 'utf8')).toBeLessThanOrEqual(40 * 1024)
   })
 })
 
 describe('TUWA5: the generated tables', () => {
   // 37 until catalog v16; Thread parity (0.46.3, Rosson 2026-10-20) adds
   // thread.attachment, thread.open, thread.links and thread.pickFiles.
-  // app-room-stream (0.46.3) adds thread.inbox.
-  it('ZEN_VERBS is today’s 42 entries, key for key and cap for cap', () => {
+  // app-room-stream (0.46.3) adds thread.inbox. Catalog v20 (0.46.3 r10)
+  // adds agents.show and conversation.setContext.
+  it('ZEN_VERBS is today’s 44 entries, key for key and cap for cap', () => {
     expect(ZEN_VERBS).toEqual({
       'agents.list': 'agents:read',
       'agents.subscribe': 'agents:read',
@@ -104,6 +105,10 @@ describe('TUWA5: the generated tables', () => {
       'presence.subscribe': 'presence:read',
       'conversation.open': 'agents:read',
       'conversation.close': 'agents:read',
+      // Catalog v20 (0.46.3 r10): the Agents widget's chosen list, and the
+      // Board's visible context chip.
+      'agents.show': 'agents:read',
+      'conversation.setContext': 'thread:post',
       'thread.read': 'thread:read',
       'thread.subscribe': 'thread:read',
       // app-room-stream (0.46.3): one socket for every agent's new messages.
@@ -138,7 +143,7 @@ describe('TUWA5: the generated tables', () => {
       'controls.bind': null,
       'theme.get': null,
     })
-    expect(Object.keys(ZEN_VERBS)).toHaveLength(42)
+    expect(Object.keys(ZEN_VERBS)).toHaveLength(44)
   })
 
   it('ZEN_CUSTOM_VERBS is the UW16 list as amended by UWB10, plus the whole canvas (0.45.3)', () => {
@@ -150,6 +155,11 @@ describe('TUWA5: the generated tables', () => {
       'theme.changed': { cap: null, reach: 'local', kind: 'event' },
       'canvas.setHitRegions': { cap: null, reach: 'local', kind: 'call' },
       'window.startDrag': { cap: null, reach: 'local', kind: 'call' },
+      // Catalog v20 (0.46.3 r10): collapsible columns, frame-only like the canvas.
+      'layout.get': { cap: null, reach: 'local', kind: 'call' },
+      'layout.set': { cap: null, reach: 'local', kind: 'call' },
+      'layout.toggle': { cap: null, reach: 'local', kind: 'call' },
+      'layout.subscribe': { cap: null, reach: 'local', kind: 'subscribe' },
       // Garden data (contract-garden-data-v1 §7.2): garden-local rows, the
       // daemon answers them through /cli/zen/call.
       'save.get': { cap: null, reach: 'local', kind: 'call' },
@@ -161,6 +171,8 @@ describe('TUWA5: the generated tables', () => {
       'agents.subscribe': { cap: 'agents:read', reach: 'portable', kind: 'subscribe' },
       'conversation.open': { cap: 'agents:read', reach: 'local', kind: 'call' },
       'conversation.close': { cap: 'agents:read', reach: 'local', kind: 'call' },
+      'agents.show': { cap: 'agents:read', reach: 'local', kind: 'call' },
+      'conversation.setContext': { cap: 'thread:post', reach: 'local', kind: 'call' },
       'presence.get': { cap: 'presence:read', reach: 'local', kind: 'call' },
       'presence.subscribe': { cap: 'presence:read', reach: 'local', kind: 'subscribe' },
       'thread.read': { cap: 'thread:read', reach: 'portable', kind: 'call' },

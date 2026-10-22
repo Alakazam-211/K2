@@ -1901,6 +1901,7 @@ mod tests {
             agent_color: String::new(),
             preview: "ZEBRA-logroute-preview-text".into(),
             msg: None,
+            budget: k2_core::push::ThreadBudget::Thread,
         });
         cloud
             .dispatch_in_mode(&event, "bk-logroute-0123", std::slice::from_ref(&device), k2_core::push::e2e::PushE2eMode::Off)

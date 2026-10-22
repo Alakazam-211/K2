@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use k2_node_proto::crypto;
-use k2_node_proto::frames::{Assign, ExitInfo, JobState, Receipt, ReceiptLog, SignedReceipt, SrcRan};
+use k2_node_proto::frames::{Assign, ExitInfo, Frame, JobState, Receipt, ReceiptLog, SignedReceipt, SrcRan};
 use k2_node_proto::refusal;
 use k2_node_proto::results::Outputs;
 use k2_node_proto::share::{codes, Network, Trust};
@@ -838,7 +838,7 @@ impl Node {
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn finish_job(
+    pub(super) async fn finish_job(
         self: &Arc<Self>,
         t: &Tenant,
         a: &Assign,
@@ -918,20 +918,39 @@ impl Node {
         if let Some(d) = dirs {
             self.strip_job_dir(t, &d.root, a.plan.src.as_ref().map(|s| s.project_key.as_str()), super::disk::JOB_END_KEEP).await;
         }
-        // A job never stays `running` because its finish didn't land: the
-        // job stays counted (nothing new takes its place) until it does.
+        // A job never stays `running` because its finish didn't land (k2n4,
+        // 2026-10-21: a full disk). Its server hears the end from memory at
+        // once; the row is retried, backing off, until it lands (then the
+        // shipper sends it again with its receipt). The job stays counted
+        // (nothing new takes its place) until then.
+        if let Err(e) = &recorded {
+            crate::nlog!("ledger finish {job}: {e}; telling the server from memory and retrying");
+            t.hub.send(Frame::State(k2_node_proto::frames::StateUpdate {
+                queue: None,
+                job_id: job.clone(),
+                generation: gen,
+                state,
+                reason: reason.map(str::to_string),
+                detail: detail.map(str::to_string),
+                at: now,
+                exit: exit.clone(),
+                src: src.clone(),
+                log_seq,
+                outputs: outputs.clone(),
+            }));
+        }
         let mut tries = 0u32;
         while let Err(e) = &recorded {
             tries += 1;
-            if tries == 1 || tries % 30 == 0 {
-                crate::nlog!("ledger finish {job}: {e} (retrying)");
+            if tries % 30 == 0 {
+                crate::nlog!("ledger finish {job}: still failing after {tries} tries: {e}");
             }
-            if tries > FINISH_RETRIES {
-                crate::nlog!("ledger finish {job}: gave up after {tries} tries: {e}");
-                break;
-            }
-            tokio::time::sleep(self.opts.disk_poll).await;
+            tokio::time::sleep(finish_backoff(self.opts.disk_poll, tries)).await;
             recorded = record();
+        }
+        if tries > 0 {
+            crate::nlog!("ledger finish {job}: landed after {tries} retries");
+            t.ship.notify_one();
         }
         if !landed {
             gone();
@@ -979,8 +998,11 @@ impl Node {
     }
 }
 
-/// Ledger finish retries (`disk_poll` apart: about an hour by default).
-const FINISH_RETRIES: u32 = 360;
+/// The wait before ledger finish retry `n` (from 1): `base` doubling,
+/// at most 5 minutes.
+pub(super) fn finish_backoff(base: Duration, n: u32) -> Duration {
+    base.saturating_mul(1u32 << (n.saturating_sub(1)).min(10)).min(Duration::from_secs(300))
+}
 
 /// Allocated bytes under `root` (V74), no link followed, at most
 /// 2 million entries and 256 levels.

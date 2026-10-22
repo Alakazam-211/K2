@@ -303,12 +303,9 @@ TICKETS
   Never inject it into your page DOM. List its links outside the frame.
   Never /cli/tickets. Never /cli/sessions/events. Never grid.
 
-AGENT WORKING (activity:room; was activity:read before K2 0.46.3)
-  Every session in the room, the owner's other tabs included. Since K2
-  0.46.3 these need activity:room (never a default; the owner grants it).
-  activity:read alone now gets 403 cap_not_granted (cap activity:room) on
-  the snapshot, and the socket opens but sends no session_activity_changed.
-  For the Thread's own turn, counts only, see THREAD EAR below.
+AGENT WORKING (activity:read)
+  Every session in the room. For the Thread's own turn, counts only, see
+  THREAD EAR below (the same cap).
   Exact paths on the official origin (cookie k2_skin_ui; never ?token=):
     GET      /cli/activity/snapshot?workspace=<handle>
     WS GET   /cli/activity/events?workspace=<handle>
@@ -355,10 +352,11 @@ AGENT WORKING (activity:room; was activity:read before K2 0.46.3)
   and when a {"kind":"resync"} frame arrives (the socket fell behind and
   closes with 4008 right after). Frames sent while you were away are gone.
   Errors: 400 missing workspace | 403 skin_room (room not on the pass) |
-  403 cap_not_granted (cap activity:room). Never the host-wide snapshot.
+  403 missing capability activity:read. Never the host-wide snapshot.
   Never /cli/chat/transcript.
 
 THREAD EAR (thread:read + activity:read; K2 0.46.3+, thread-activity-ear-v1)
+  activity:read gives both this ear and AGENT WORKING above; no new cap.
   The room's pinned-Chat Thread turn while the agent works on a Thread
   message (anyone's: a guest's or the owner's). Counts only. Never a turn
   the owner typed straight into the agent's terminal. Exact paths:

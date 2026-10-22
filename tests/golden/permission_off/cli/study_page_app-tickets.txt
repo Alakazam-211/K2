@@ -23,9 +23,9 @@ ROUTES (project= is the room handle or uuid; never a path)
                 ← {"kind":"ticket_changed","workspace":"<handle>","id":"<id>",
                    "change":"<change>","status":"<status after>",
                    "via":"<via>"|null,"hasBrief":true|false}
-  The same socket carries agent working (activity:room since K2 0.46.3;
-  frames and the snapshot: `k2 study apps`, AGENT WORKING) and heartbeats
-  (heartbeats:read). Any one of the socket caps opens it; each frame needs
+  The same socket carries agent working (activity:read; frames and the
+  snapshot: `k2 study apps`, AGENT WORKING) and heartbeats
+  (heartbeats:read). Any one of the three caps opens it; each frame needs
   its own cap in the room. A pass without tickets:read never gets a ticket
   frame.
 

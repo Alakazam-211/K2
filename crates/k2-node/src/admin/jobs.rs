@@ -757,6 +757,25 @@ pub fn check_reclaim(home: &Path, path: &Path, slot: Slot) -> Result<PathBuf, Ad
     Err(refuse(code::BAD_ARGS, format!("only job folders and caches of server slot {slot}, with no link on the way")))
 }
 
+/// The folders bound over a job's /tmp and /var/tmp (`BindPaths`) must be
+/// real directories in the checked job root, not links, made by the node
+/// (its uid, or root's): never another path bound read-write over the
+/// job's /tmp (security review C, L1).
+pub fn check_bind_sources(root: &Path, node_uid: u32) -> Result<(), AdminRefusal> {
+    use std::os::unix::fs::MetadataExt;
+    for name in [crate::runner::JOB_TMP, crate::runner::JOB_VAR_TMP] {
+        let p = root.join(name);
+        let m = std::fs::symlink_metadata(&p).map_err(|e| refuse(code::BAD_ARGS, format!("{}: {e}", p.display())))?;
+        if m.file_type().is_symlink() || !m.is_dir() {
+            return Err(refuse(code::BAD_ARGS, format!("{} must be a plain folder (not a link)", p.display())));
+        }
+        if m.uid() != node_uid && m.uid() != 0 {
+            return Err(refuse(code::BAD_ARGS, format!("{} must be the node's (uid {}, not {})", p.display(), node_uid, m.uid())));
+        }
+    }
+    Ok(())
+}
+
 /// Root: [`check_reclaim`], then the chown walk (fd based, never
 /// following a link, from the very path checked).
 pub fn reclaim_checked(home: &Path, path: &Path, slot: Slot, uid: u32, gid: u32) -> Result<crate::wall::WalkStats, AdminRefusal> {
@@ -1103,6 +1122,8 @@ impl Executor {
         }
         let unit = unit_name(&s.key).ok_or_else(|| refuse(code::BAD_ARGS, "job key is not a plain name"))?;
         let (root, rw) = check_paths(&self.paths.home, s.tenant, &s.root, &s.rw)?;
+        let node_uid = super::server::user_ids(&self.node_user()).map(|(u, _)| u).ok_or_else(|| refuse(code::NOT_CONFIGURED, "the node user is missing"))?;
+        check_bind_sources(&root, node_uid)?;
         let [out, err]: [OwnedFd; 2] = fds.try_into().map_err(|_| refuse(code::BAD_ARGS, "start needs exactly the job's stdout and stderr"))?;
         // The node's ask, narrowed by a tenant's share (V65): root never
         // widens what the node asked, and a tenant never gets more than
@@ -1542,6 +1563,37 @@ mod tests {
         // The real trees stay reclaimable by their own slot.
         assert!(check_reclaim(&home, &t1.jobs().join("k-g1/home"), 1).is_ok());
         assert!(check_reclaim(&home, &t2.jobs().join("k-g1"), 2).is_ok());
+    }
+
+    /// Review C L1: what root binds over a job's /tmp and /var/tmp must be
+    /// the job root's own plain folders, made by the node: a planted link
+    /// (to another tenant's tree, or anywhere) or a file is refused.
+    #[test]
+    fn the_tmp_bind_sources_are_plain_folders_of_the_node() {
+        use std::os::unix::fs::MetadataExt;
+        let base = std::fs::canonicalize(crate::util::temp_dir("bindsrc")).unwrap();
+        let me = std::fs::metadata(&base).unwrap().uid();
+        let ok = base.join("ok-g1");
+        let elsewhere = base.join("elsewhere");
+        for d in [ok.join("tmp"), ok.join("var-tmp"), elsewhere.clone()] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        check_bind_sources(&ok, me).unwrap();
+        let linked = base.join("linked-g1");
+        std::fs::create_dir_all(linked.join("tmp")).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, linked.join("var-tmp")).unwrap();
+        let e = check_bind_sources(&linked, me).unwrap_err();
+        assert!(e.message.contains("not a link"), "{e:?}");
+        let file = base.join("file-g1");
+        std::fs::create_dir_all(file.join("var-tmp")).unwrap();
+        std::fs::write(file.join("tmp"), "x").unwrap();
+        assert!(check_bind_sources(&file, me).is_err(), "a file isn't a folder");
+        let missing = base.join("missing-g1");
+        std::fs::create_dir_all(missing.join("tmp")).unwrap();
+        assert!(check_bind_sources(&missing, me).is_err(), "a missing folder fails the start");
+        if me != 0 {
+            assert!(check_bind_sources(&ok, me + 1).is_err(), "another user's folders are refused");
+        }
     }
 
     /// Review A-disk 1, as root (Linux container / CI root runs): a link

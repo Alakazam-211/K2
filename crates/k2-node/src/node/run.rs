@@ -184,6 +184,9 @@ impl Node {
             Ok(e) => {
                 // A walk that hit its caps counts as over (review B F1).
                 let (bytes, capped) = disk_usage_walk(&t.paths.root());
+                if capped {
+                    crate::nlog!("warning: server slot {}'s folder hit the disk walk's cap ({WALK_MAX_DEPTH} levels or {WALK_MAX_ENTRIES} entries, {} GB counted so far); it counts as over its share", t.slot, bytes >> 30);
+                }
                 capped || bytes > budget(e.disk_gb)
             }
             Err(_) => false,

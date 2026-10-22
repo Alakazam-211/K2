@@ -135,7 +135,7 @@ pub fn ps(node: &Node) -> Value {
 }
 
 /// `jobs.kill {job_id}`: stop a K2 job's process group (as a cancel).
-pub fn kill(node: &Node, args: &Value) -> Result<Value, AdminRefusal> {
+pub fn kill(node: &std::sync::Arc<Node>, args: &Value) -> Result<Value, AdminRefusal> {
     super::exec::only_keys(args, &["job_id"])?;
     let job = super::exec::str_arg(args, "job_id")?;
     let row = running_rows(node).into_iter().find(|(_, r, _)| r.job_id == job).map(|(t, r, _)| (t, r));

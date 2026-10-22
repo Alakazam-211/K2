@@ -371,6 +371,7 @@ impl Node {
             loop {
                 tokio::time::sleep(every).await;
                 let Some(n) = node.upgrade() else { return };
+                n.reap_orphans();
                 n.disk_guard_pass().await;
             }
         });
@@ -683,10 +684,96 @@ mod tests {
         let mut a = crate::ledger::tests::assign(id, 1);
         a.plan.argv = vec!["/bin/sh".into(), "-c".into(), "exit 0".into()];
         a.fence.plan_digest = a.plan.digest().unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+        n.owner().hub.attach(tx);
         assert_eq!(n.on_assign(&n.owner(), a), Some((id.into(), 1)));
+        // The server hears the end from memory while the row can't be
+        // written (k2n4: a full disk kept two jobs `running` for hours).
+        let t0 = std::time::Instant::now();
+        loop {
+            let f = tokio::time::timeout(Duration::from_secs(20), rx.recv()).await.expect("a frame").expect("the hub");
+            if let k2_node_proto::frames::Frame::State(s) = f {
+                if s.job_id == id && s.state == JobState::Done {
+                    let row = n.owner().ledger.lock().unwrap().get(id, 1).unwrap().unwrap();
+                    assert!(!row.state.is_terminal(), "told before the row landed: {row:?}");
+                    break;
+                }
+            }
+            assert!(t0.elapsed() < Duration::from_secs(20));
+        }
+        assert!(n.running_ids().contains(&id.to_string()), "it keeps its place until the row lands");
         let r = ended(&n, id).await;
         assert_eq!(r.state, JobState::Done, "{:?} {:?}", r.reason, r.detail);
         assert!(r.receipt.is_some(), "the receipt landed with it");
         assert_eq!(super::super::run::tests::FINISH_FAILS.load(Ordering::SeqCst), 0, "every injected failure was retried");
+    }
+
+    #[test]
+    fn finish_retries_back_off_to_five_minutes() {
+        let b = Duration::from_secs(10);
+        let waits: Vec<u64> = (1..=8).map(|n| super::super::run::finish_backoff(b, n).as_secs()).collect();
+        assert_eq!(waits, vec![10, 20, 40, 80, 160, 300, 300, 300]);
+        assert_eq!(super::super::run::finish_backoff(b, u32::MAX), Duration::from_secs(300));
+    }
+
+    /// A row a lost runner left `running` (a 0.46.2 full-disk finish, or a
+    /// task that died): no process, but it held a slot and showed
+    /// `running` for hours (k2n4, 2026-10-21). A cancel records its end
+    /// as cancelled, with a receipt, and frees its place.
+    #[tokio::test]
+    async fn a_cancel_ends_a_job_whose_runner_is_gone() {
+        let free = Arc::new(AtomicU64::new(500 * GIB));
+        let (n, layout) = node("disk-orphan", "disk_floor_gb = 0\n", free).await;
+        let owner = n.owner();
+        let mut j = crate::journal::JournalWriter::create(&owner.paths.journal("lost", 1), 1 << 20).unwrap_or_else(|_| {
+            std::fs::create_dir_all(layout.job_dir("lost", 1)).unwrap();
+            crate::journal::JournalWriter::create(&owner.paths.journal("lost", 1), 1 << 20).unwrap()
+        });
+        j.append(k2_node_proto::frames::LogStream::Out, b"half a build\n").unwrap();
+        drop(j);
+        {
+            let l = owner.ledger.lock().unwrap();
+            l.insert(&crate::ledger::tests::assign("lost", 1), &*n.opts.clock).unwrap();
+            l.set_running("lost", 1, 4242, None, n.now()).unwrap();
+        }
+        // Never a queued row or one only just taken off the queue.
+        {
+            let l = owner.ledger.lock().unwrap();
+            l.insert_queued(&crate::ledger::tests::assign("waiting", 1), &*n.opts.clock).unwrap();
+            l.insert(&crate::ledger::tests::assign("dequeued", 1), &*n.opts.clock).unwrap();
+        }
+        assert!(!n.finish_if_orphan(&owner, "waiting", 1, JobState::Cancelled, "x", "x"));
+        assert!(!n.finish_if_orphan(&owner, "dequeued", 1, JobState::Cancelled, "x", "x"));
+        n.cancel(&owner, "lost", 1, "cancelled");
+        let r = ended(&n, "lost").await;
+        assert_eq!((r.state, r.reason.as_deref()), (JobState::Cancelled, Some("cancelled")));
+        assert!(r.receipt.is_some(), "a receipt, as for any end");
+        assert!(r.log_seq >= 2, "the journal carried on: {}", r.log_seq);
+        assert!(n.running_ids().is_empty(), "its place is free");
+        let l = owner.ledger.lock().unwrap();
+        assert_eq!(l.get("waiting", 1).unwrap().unwrap().state, JobState::Queued);
+        assert!(!l.get("dequeued", 1).unwrap().unwrap().state.is_terminal());
+    }
+
+    /// The same without a cancel: the guard loop's sweep ends a lost
+    /// job `failed / node_lost_job`, once; a live job is never touched.
+    #[tokio::test]
+    async fn the_sweep_ends_a_lost_job_and_leaves_live_ones() {
+        let free = Arc::new(AtomicU64::new(500 * GIB));
+        let (n, _layout) = node("disk-sweep", "disk_floor_gb = 0\n", free).await;
+        let owner = n.owner();
+        {
+            let l = owner.ledger.lock().unwrap();
+            l.insert(&crate::ledger::tests::assign("lost", 1), &*n.opts.clock).unwrap();
+            l.set_running("lost", 1, 4242, None, n.now()).unwrap();
+        }
+        sleeper(&n, "live");
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(n.reap_orphans(), 1);
+        assert_eq!(n.reap_orphans(), 0, "once");
+        let r = ended(&n, "lost").await;
+        assert_eq!((r.state, r.reason.as_deref()), (JobState::Failed, Some(super::super::assign::NODE_LOST_JOB)));
+        assert!(!owner.ledger.lock().unwrap().get("live", 1).unwrap().unwrap().state.is_terminal(), "the live job runs on");
+        n.stop_all(JobState::Cancelled, "test_over");
     }
 }

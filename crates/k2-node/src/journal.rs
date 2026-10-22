@@ -51,6 +51,31 @@ impl JournalWriter {
         Ok(Self { file, seq: 0, bytes: 0, dropped: 0, cap, hash: Some(Sha256Stream::default()) })
     }
 
+    /// Open an existing journal to add to it: its sequence, kept bytes and
+    /// hash carry on from what's there (a job whose end is recorded later
+    /// by someone other than its runner).
+    pub fn reopen(path: &Path, cap: u64) -> Result<Self, String> {
+        let mut w = Self::create(path, cap)?;
+        let mut r = JournalReader::new(path.to_path_buf());
+        loop {
+            let recs = r.read_more(256)?;
+            if recs.is_empty() {
+                break;
+            }
+            for rec in recs {
+                w.seq = rec.seq;
+                w.bytes += rec.data.len() as u64;
+                if let Some(h) = w.hash.as_mut() {
+                    h.update(&rec.data);
+                }
+            }
+        }
+        // A torn last record (its writer died mid-write) goes, so what's
+        // added next is readable.
+        w.file.set_len(r.offset).map_err(|e| format!("trim journal {}: {e}", path.display()))?;
+        Ok(w)
+    }
+
     fn record(&mut self, stream: LogStream, data: &[u8]) -> Result<(), String> {
         self.seq += 1;
         let mut buf = Vec::with_capacity(HEADER + data.len());

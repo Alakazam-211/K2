@@ -440,8 +440,14 @@ impl Node {
     /// `cancel` from `t`'s server: only ever its own jobs. `withdraw` and
     /// `if_queued` end a job only while it's still queued; a started one is
     /// left alone and its real state is the answer (V57).
-    pub fn cancel(&self, t: &Tenant, job_id: &str, generation: u32, reason: &str) {
+    pub fn cancel(self: &Arc<Self>, t: &Arc<Tenant>, job_id: &str, generation: u32, reason: &str) {
         let only_queued = frames::cancel_only_if_not_started(reason);
+        if !only_queued {
+            let detail = "its process had already ended and its end was never recorded; recorded now";
+            if self.finish_if_orphan(t, job_id, generation, JobState::Cancelled, reason, detail) {
+                return;
+            }
+        }
         let jobs = self.jobs.lock().unwrap();
         if let Some(j) = jobs.get(&(t.slot, job_id.to_string())).filter(|j| j.generation == generation) {
             if only_queued {
@@ -480,4 +486,74 @@ impl Node {
             }
         }
     }
+
+    /// An attempt that started (`running`/`finishing`, or a start time)
+    /// whose row is still open but that no task runs: its runner ended
+    /// without its end landing (a full disk before 0.46.3, a give-up after
+    /// the finish retries). Such a row held a slot and showed `running`
+    /// forever (k2n4, 2026-10-21). If `job_id` is one, record its end now
+    /// (a placeholder holds its place so nothing else finishes it) and
+    /// return true. A queued or just-dequeued row is never one.
+    pub(crate) fn finish_if_orphan(self: &Arc<Self>, t: &Arc<Tenant>, job_id: &str, generation: u32, state: JobState, reason: &str, detail: &str) -> bool {
+        let row = match t.ledger.lock().unwrap().get(job_id, generation) {
+            Ok(Some(r)) => r,
+            _ => return false,
+        };
+        let started = row.started_at.is_some() || matches!(row.state, JobState::Running | JobState::Finishing);
+        if row.state.is_terminal() || row.state == JobState::Queued || !started {
+            return false;
+        }
+        {
+            let mut jobs = self.jobs.lock().unwrap();
+            if jobs.contains_key(&(t.slot, job_id.to_string())) {
+                return false;
+            }
+            let (stop, _) = watch::channel(None);
+            jobs.insert(
+                (t.slot, job_id.to_string()),
+                RunningJob {
+                    generation,
+                    cpu_millis: Some(0),
+                    mem_bytes: Some(0),
+                    exclusive: false,
+                    stop,
+                    seq: 0,
+                },
+            );
+        }
+        crate::nlog!("job {job_id} gen {generation}: no process runs it but its row is {}; recording its end ({reason})", row.state.as_str());
+        let (node, t, reason, detail) = (self.clone(), t.clone(), reason.to_string(), detail.to_string());
+        tokio::spawn(async move {
+            let a = Assign {
+                fence: Fence { job_id: row.job_id.clone(), attempt: row.attempt, generation: row.generation, plan_digest: row.plan_digest.clone() },
+                plan: row.plan.clone(),
+            };
+            let mut journal = crate::journal::JournalWriter::reopen(&t.paths.journal(&row.job_id, row.generation), row.plan.limits.log_cap_bytes).ok();
+            if let Some(j) = journal.as_mut() {
+                let _ = j.append(frames::LogStream::Sys, format!("[k2-node] {detail}\n").as_bytes());
+            }
+            let dirs = crate::runner::JobDirs::new(t.paths.job_dir(&row.job_id, row.generation));
+            node.finish_job(&t, &a, Some(&dirs), state, Some(&reason), Some(&detail), row.src.clone(), None, journal, None, row.outputs.clone()).await;
+        });
+        true
+    }
+
+    /// Record the end of every orphan (see [`Self::finish_if_orphan`]) as
+    /// `failed / node_lost_job`. Returns how many. The disk guard's loop
+    /// calls this, so a lost job frees its slot without a cancel.
+    pub fn reap_orphans(self: &Arc<Self>) -> usize {
+        let mut n = 0;
+        for t in self.tenants() {
+            let open = t.ledger.lock().unwrap().non_terminal().unwrap_or_default();
+            for r in open {
+                if self.finish_if_orphan(&t, &r.job_id, r.generation, JobState::Failed, NODE_LOST_JOB, "its process had ended and its end was never recorded; recorded now") {
+                    n += 1;
+                }
+            }
+        }
+        n
+    }
 }
+
+/// An attempt whose runner ended without recording its end.
+pub const NODE_LOST_JOB: &str = "node_lost_job";

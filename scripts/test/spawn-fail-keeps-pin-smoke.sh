@@ -18,7 +18,7 @@ PATH_CLEAN="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin"
 mkdir -p "$H/.k2" "$H/tmp" "$H/run" "$H/agent-shim-empty" "$H/beta"
 chmod 700 "$H/tmp" "$H/run"
 say() { printf '[smoke] %s\n' "$*" >&2; }
-die() { say "FAIL: $*"; say "log: $H/daemon.log"; exit 1; }
+die() { say "FAIL: $*"; say "daemon.log (last 40 lines):"; tail -40 "$H/daemon.log" >&2 || true; exit 1; }
 PID=""
 cleanup() { [[ -n "$PID" ]] && kill "$PID" 2>/dev/null || true; sleep 0.3; [[ -n "$PID" ]] && kill -9 "$PID" 2>/dev/null || true; [[ "${KEEP:-0}" == 1 ]] || rm -rf "$ROOT"; }
 trap cleanup EXIT

@@ -83,6 +83,12 @@ impl Node {
             t.hub.send(self.state_frame(&job, gen, JobState::Failed, Some("bad_job_id"), Some("a job id is 1-64 of A-Z a-z 0-9 _ -")));
             return None;
         }
+        // The project key names the mirror and warm caches (review B F5).
+        if !a.project_key_ok() {
+            crate::nlog!("assign refused: job {job}'s project key isn't 1-128 of A-Z a-z 0-9 _ -");
+            t.hub.send(self.state_frame(&job, gen, JobState::Failed, Some("bad_project_key"), Some("a project key is 1-128 of A-Z a-z 0-9 _ -")));
+            return None;
+        }
         if !a.consistent() {
             t.hub.send(self.state_frame(&job, gen, JobState::Failed, Some("plan_mismatch"), Some("plan digest or job id doesn't match the fence")));
             return None;

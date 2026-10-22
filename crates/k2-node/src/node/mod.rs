@@ -706,12 +706,18 @@ impl Node {
                     _ => continue,
                 };
                 let _ = ended;
+                // A row from before the arrival checks (review B F5) whose
+                // id or key isn't a plain name: its folders are left alone.
+                if !k2_node_proto::frames::valid_job_id(&r.job_id) {
+                    let _ = t.ledger.lock().unwrap().mark_cleaned(&r.job_id, r.generation);
+                    continue;
+                }
                 let dir = t.paths.job_dir(&r.job_id, r.generation);
                 if matches!(self.wall, Wall::JobUser { .. }) && dir.exists() {
                     // The job user's files come back to us before git and rm.
                     let _ = self.job_op(crate::admin::jobs::JobOp::Reclaim { path: dir.clone(), slot: t.slot }, vec![], Duration::from_secs(600)).await;
                 }
-                if let (Some(g), Some(src)) = (&git, &r.plan.src) {
+                if let (Some(g), Some(src)) = (&git, r.plan.src.as_ref().filter(|s| k2_node_proto::frames::valid_project_key(&s.project_key))) {
                     g.worktree_remove(&t.paths.mirror(&src.project_key), &dir.join("src")).await;
                 }
                 let _ = std::fs::remove_dir_all(&dir);

@@ -107,6 +107,9 @@ impl Node {
             }
         }
         let src = root.join("src");
+        // A row's key from before arrival checks may not be a plain name
+        // (review B F5): then no git on another folder, only the delete.
+        let project_key = project_key.filter(|k| k2_node_proto::frames::valid_project_key(k));
         if let (Some(pk), true) = (project_key, entries.iter().any(|(p, dir)| *dir && *p == src)) {
             if let Some(g) = Git::find(&self.layout().git_home(), &crate::util::base_path(&self.layout().home)) {
                 g.worktree_remove(&t.paths.mirror(pk), &src).await;
@@ -271,7 +274,7 @@ impl Node {
             let rows = t.ledger.lock().unwrap().all().unwrap_or_default();
             let mine = running.get(&t.slot).cloned().unwrap_or_default();
             for r in rows {
-                if !r.state.is_terminal() || r.cleaned || mine.contains(&r.job_id) {
+                if !r.state.is_terminal() || r.cleaned || mine.contains(&r.job_id) || !k2_node_proto::frames::valid_job_id(&r.job_id) {
                     continue;
                 }
                 let dir = t.paths.job_dir(&r.job_id, r.generation);
@@ -622,6 +625,30 @@ mod tests {
         // Nobody over (slot 1 has nothing running): the newest job.
         assert_eq!(n.disk_guard_pass_with(budget).await, vec![(2u8, "two".to_string())]);
         n.stop_all(JobState::Cancelled, "test_over");
+    }
+
+    /// Review B F5: a project key that isn't a safe folder name is refused
+    /// when it arrives, like a bad job id (it names the mirror and caches
+    /// the janitor and cleanup run git and deletes on).
+    #[tokio::test]
+    async fn a_project_key_that_isnt_folder_safe_is_refused_at_arrival() {
+        let free = Arc::new(AtomicU64::new(500 * GIB));
+        let (n, layout) = node("disk-keys", "disk_floor_gb = 0\n", free).await;
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        n.owner().hub.attach(tx);
+        for (i, key) in ["../other", "a/b", "", &"k".repeat(129)].into_iter().enumerate() {
+            let id = format!("pk{i}");
+            let mut a = crate::ledger::tests::assign(&id, 1);
+            a.plan.src = Some(k2_node_proto::frames::Src { project_key: key.to_string(), remote_url: None, commit: "a".repeat(40), dirty: None, slots: 1 });
+            a.fence.plan_digest = a.plan.digest().unwrap();
+            assert!(a.consistent() && a.job_id_ok(), "only the key is wrong");
+            assert_eq!(n.on_assign(&n.owner(), a), None, "{key:?}");
+            assert!(n.owner().ledger.lock().unwrap().get(&id, 1).unwrap().is_none(), "{key:?}: no row");
+            let f = rx.recv().await.unwrap();
+            assert!(matches!(&f, k2_node_proto::frames::Frame::State(s) if s.reason.as_deref() == Some("bad_project_key")), "{f:?}");
+        }
+        assert!(!layout.home.join("repos").join("..").join("other.git").exists());
+        assert_eq!(std::fs::read_dir(layout.home.join("jobs")).map(|d| d.count()).unwrap_or(0), 0, "no job folder at all");
     }
 
     /// (c) Under the floor the guard reclaims first (ended job dirs, idle

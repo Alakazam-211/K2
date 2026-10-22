@@ -433,14 +433,27 @@ pub fn valid_job_id(id: &str) -> bool {
     (1..=64).contains(&id.len()) && id.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
 }
 
+/// A project key the node may use as a folder name (`repos/<key>.git`,
+/// `cache/<key>/`): 1–128 of A-Z a-z 0-9 _ - (security review B, F5).
+/// K2 servers mint 16 hex.
+pub fn valid_project_key(key: &str) -> bool {
+    (1..=128).contains(&key.len()) && key.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
+}
+
 impl Assign {
-    /// True when `fence.plan_digest` is the digest of `plan` and the ids agree.
     /// The job id is one the node may use as a folder name
     /// ([`valid_job_id`]).
     pub fn job_id_ok(&self) -> bool {
         valid_job_id(&self.fence.job_id)
     }
 
+    /// No code, or code whose project key is a safe folder name
+    /// ([`valid_project_key`]).
+    pub fn project_key_ok(&self) -> bool {
+        self.plan.src.as_ref().is_none_or(|s| valid_project_key(&s.project_key))
+    }
+
+    /// True when `fence.plan_digest` is the digest of `plan` and the ids agree.
     pub fn consistent(&self) -> bool {
         self.fence.job_id == self.plan.job_id
             && self.plan.digest().is_ok_and(|d| crypto::ct_eq(d.as_bytes(), self.fence.plan_digest.as_bytes()))
@@ -1091,6 +1104,15 @@ mod tests {
         let long_bad = "a".repeat(65);
         for bad in ["", "../x", "a/b", "..", ".", "a b", "a\\b", "j\u{e9}", "x\0", long_bad.as_str()] {
             assert!(!valid_job_id(bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn project_keys_are_folder_safe() {
+        assert!(valid_project_key("7bc5eeaf323643cc") && valid_project_key("pk_1-x"));
+        let long_bad = "a".repeat(129);
+        for bad in ["", "../x", "a/b", "..", "a b", "x\0", long_bad.as_str()] {
+            assert!(!valid_project_key(bad), "{bad:?}");
         }
     }
 

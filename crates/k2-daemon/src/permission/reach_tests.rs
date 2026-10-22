@@ -555,6 +555,9 @@ fn waiting_on_you_lists_what_this_person_can_answer() {
 
 #[test]
 fn while_the_switch_is_off_the_card_routes_answer_as_unknown_thread_routes() {
+    // Garden access lists also open these two routes; hold the lock its
+    // tests flip that switch under.
+    let _env = k2_core::test_env::lock();
     assert!(!k2_core::permission::gate::server_on(), "lib tests never turn the switch on");
     let body = json!({ "addr": "nobody", "id": "x", "text": "hi" }).to_string();
     let today = crate::overlay_routes::dispatch_post_as("/cli/thread/not-a-card-route", &HashMap::new(), body.as_bytes(), "owner");

@@ -10,6 +10,12 @@
 //!   `garden.proposal.approve`, `sources.approve` (plain sources only) and
 //!   `compute.admin-approve` (cut if late).
 //!
+//! Garden access (prd-garden-access-v1 G16, 0.46.3 behind `gardenAccess`,
+//! default off) adds three rows in `actions/gardens.rs`: `garden.access`,
+//! its `garden.access-off` twin and `garden.delete`. While the switch is
+//! off they are listed and their checks answer `not_available`; while it
+//! is on, `garden.keep-mine` and `garden.proposal.approve` answer `retired`.
+//!
 //! The specs are static data. The daemon side pairs each with `check` and
 //! `apply`; `apply` calls the **route-level entry** with the answerer as the
 //! actor, so the route's own floor check runs again at the click (§6.4).
@@ -133,6 +139,11 @@ pub enum ParamKind {
     Widget,
     /// A widget version hash: `garden.keep-mine version=`.
     Version,
+    /// A Garden id (`garden-2`): `garden.access garden=`, `garden.delete
+    /// garden=` (prd-garden-access-v1 G16). The card's words show the
+    /// Garden's **current** name, never the id; a rename between the ask
+    /// and the click doesn't make the request stale.
+    Garden,
     /// One of a fixed set of words (`mail.send-mode mode=`,
     /// `db.agent-access level=`); see [`ParamSpec::choices`].
     Choice,
@@ -601,6 +612,14 @@ mod tests {
         }
         assert!(Proof::Click.batchable());
         assert!(!Proof::SettingsConfirm { action: ConfirmAction::NodeAdmin }.batchable());
+    }
+
+    #[test]
+    fn a_garden_value_is_its_own_kind() {
+        assert_eq!(serde_json::to_value(ParamKind::Garden).unwrap(), serde_json::json!("garden"));
+        let mut s = USE;
+        s.params = &[ParamSpec { key: "garden", kind: ParamKind::Garden, required: true, list: false, choices: &[] }];
+        validate(&s).expect("a Garden param");
     }
 
     #[test]

@@ -72,10 +72,20 @@ pub fn route_gated(path: &str) -> bool {
     path.starts_with(super::ROUTE_PREFIX) || path == super::NOTE_ROUTE || path == super::UNDO_ROUTE
 }
 
-/// [`route_live`] with the global switch given (pure, for tests and for
-/// callers that already read [`server_on`] once).
+/// [`route_live`] with the global switch given (for tests and for callers
+/// that already read [`server_on`] once). The two Thread routes K2's own
+/// permission cards use (the note and "Turn off again") are also live
+/// while Garden access lists are on (`zen::garden_access::enabled`,
+/// prd-garden-access-v1 G16): K2 presents its `garden.access` /
+/// `garden.delete` cards without the Beta. Both switches off: today.
 pub fn route_live_when(path: &str, server_on: bool) -> bool {
-    server_on || !route_gated(path)
+    server_on || !route_gated(path) || (k2_card_route(path) && crate::zen::garden_access::enabled())
+}
+
+/// The Thread routes of a card K2 presents itself (not `/cli/permission/*`,
+/// which stays the Beta's).
+pub fn k2_card_route(path: &str) -> bool {
+    path == super::NOTE_ROUTE || path == super::UNDO_ROUTE
 }
 
 /// Whether the route tables may answer `path` now: every route that isn't
@@ -118,6 +128,20 @@ mod tests {
     }
 
     #[test]
+    fn k2_cards_open_only_the_two_thread_card_routes() {
+        let _env = crate::test_env::lock();
+        assert!(!crate::zen::garden_access::enabled(), "Garden access lists default OFF");
+        crate::zen::garden_access::set_switch(true);
+        let note = route_live_when(super::super::NOTE_ROUTE, false);
+        let undo = route_live_when(super::super::UNDO_ROUTE, false);
+        let family = route_live_when("/cli/permission/request", false);
+        crate::zen::garden_access::set_switch(false);
+        assert!(note && undo, "note and Turn off again are live for K2's own cards");
+        assert!(!family, "/cli/permission/* stays the Beta's");
+        assert!(!route_live_when(super::super::UNDO_ROUTE, false), "off again");
+    }
+
+    #[test]
     fn per_agent_switch_defaults_off_and_needs_both() {
         let _env = crate::test_env::lock();
         let _unset = crate::test_env::EnvVar::remove(super::super::ENV_FORCE_ON);
@@ -150,6 +174,9 @@ mod tests {
 
     #[test]
     fn gated_routes_are_the_family_and_the_two_card_thread_routes() {
+        // Garden access lists also open the two Thread routes; hold the
+        // lock the switch's tests flip it under.
+        let _env = crate::test_env::lock();
         for p in [
             "/cli/permission/request",
             "/cli/permission/enabled",

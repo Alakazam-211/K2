@@ -2045,6 +2045,9 @@ mod tests {
 
     #[test]
     fn permission_rows_are_absent_on_the_wire_while_off_and_live_while_on() {
+        // Garden access lists (another switch) also open the two Thread card
+        // routes; hold the lock its tests flip it under.
+        let _env = k2_core::test_env::lock();
         let rows = permission_rows();
         assert!(!rows.is_empty());
         for r in rows {
@@ -2084,6 +2087,7 @@ mod tests {
     fn the_thread_card_routes_follow_the_switch_too() {
         // Their rows come with lane A2; the gate already covers them, so a
         // row added later is skipped while off with no other change.
+        let _env = k2_core::test_env::lock();
         for p in [k2_core::permission::NOTE_ROUTE, k2_core::permission::UNDO_ROUTE] {
             assert!(k2_core::permission::gate::route_gated(p));
             assert!(live_row_when(p, false).is_none());

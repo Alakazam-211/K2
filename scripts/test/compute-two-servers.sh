@@ -32,6 +32,11 @@ OLD_DIR="${K2X2_OLD_DIR:-$HOME/.cache/k2x2-v0.46.2}"
 # Short: the daemon's vault socket path must fit in 104 bytes on macOS.
 ROOT="$(mktemp -d /tmp/k2x2-XXXX)"
 PATH_CLEAN="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$HOME/.cargo/bin"
+# The cargo that runs this script (a compute node's toolchain lives outside
+# the usual places) goes first.
+if command -v cargo >/dev/null 2>&1; then
+    PATH_CLEAN="$(dirname "$(command -v cargo)"):$PATH_CLEAN"
+fi
 PIDS=()
 
 ALL_SCENARIOS=(solo old-node rollback share both fair reconnect lost restart withdraw revoke expiry skew old-owner old-tenant)
@@ -74,6 +79,7 @@ build() {
   [[ "${K2X2_NO_BUILD:-0}" == 1 ]] && return
   say "building k2-daemon and k2-node (debug, this worktree's target/)"
   (cd "$REPO" && clean "$HOME" CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}" RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}" \
+    ${RUSTUP_TOOLCHAIN:+RUSTUP_TOOLCHAIN="$RUSTUP_TOOLCHAIN"} ${CARGO_BUILD_JOBS:+CARGO_BUILD_JOBS="$CARGO_BUILD_JOBS"} \
     cargo build -q -p k2-daemon -p k2-node) || die "build"
 }
 

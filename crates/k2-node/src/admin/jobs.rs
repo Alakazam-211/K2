@@ -594,7 +594,6 @@ pub fn systemd_run_argv(p: &UnitPlan) -> Vec<String> {
         "NoNewPrivileges=yes",
         "ProtectSystem=strict",
         "ProtectHome=yes",
-        "PrivateTmp=yes",
         "PrivateDevices=yes",
         "ProtectKernelTunables=yes",
         "ProtectKernelModules=yes",
@@ -624,6 +623,17 @@ pub fn systemd_run_argv(p: &UnitPlan) -> Vec<String> {
         prop("PrivateIPC=yes".into());
     }
     prop(format!("TimeoutStopSec={}", p.stop_grace_secs.clamp(1, 600)));
+    // The job's /tmp and /var/tmp are its own folders in its job root (not
+    // PrivateTmp, whose /var/tmp/systemd-private-* sits outside the slot):
+    // what a job writes there is counted in its server's disk use and
+    // goes with the job (security review B, F1). Still the job's alone:
+    // no other job's unit binds them. No `-`: a missing folder fails the
+    // start instead of leaving the host's /tmp in place.
+    prop(format!(
+        "BindPaths={}:/tmp {}:/var/tmp",
+        p.root.join(crate::runner::JOB_TMP).display(),
+        p.root.join(crate::runner::JOB_VAR_TMP).display()
+    ));
     let mut rw = vec![p.root.display().to_string()];
     rw.extend(p.rw.iter().map(|x| x.display().to_string()));
     prop(format!("ReadWritePaths={}", rw.join(" ")));
@@ -1317,7 +1327,7 @@ mod tests {
             "ProtectHome=yes",
             "ProtectSystem=strict",
             "NoNewPrivileges=yes",
-            "PrivateTmp=yes",
+            "BindPaths=/var/lib/k2node/jobs/j1-g1/tmp:/tmp /var/lib/k2node/jobs/j1-g1/var-tmp:/var/tmp",
             "UMask=0002",
             "ProtectClock=yes",
             "MemoryMax=2147483648",
@@ -1329,6 +1339,7 @@ mod tests {
         ] {
             assert!(has(s), "{s} missing from {a:?}");
         }
+        assert!(!has("PrivateTmp=yes"), "tmp is the job's own folders (review B F1)");
         assert!(!has("PrivateNetwork=yes"), "network = full");
         assert!(has("--slice=k2-jobs.slice"), "the owner keeps today's slice");
         assert!(has("TemporaryFileSystem=/dev/shm:mode=1777") && has("RemoveIPC=yes"), "own /dev/shm, IPC gone with the user");

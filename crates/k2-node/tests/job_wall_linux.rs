@@ -255,6 +255,42 @@ async fn an_oom_kill_is_reported_as_mem_cap() {
     assert!(text(&logs_of(&fr, "oom1"), LogStream::Sys).contains("memory cap"), "the log says why");
 }
 
+/// Security review B, F1: a job's /tmp and /var/tmp are its own folders in
+/// its job root (no PrivateTmp outside the slot): what it writes there is
+/// in the slot's measured bytes, another job doesn't see it, and it goes
+/// with the job.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "root + systemd: run on a Linux box with --ignored"]
+async fn a_jobs_tmp_is_in_its_slot_and_its_own() {
+    let r = rig("tmp");
+    let mut fake = Fake::start().await;
+    let n = walled_node(&fake, &r, "max_parallel = 2\n").await;
+    let mut c = fake.next_conn().await;
+    ready(&mut c).await;
+    c.send(Frame::Assign(assign(
+        plan("t1", &["/bin/sh", "-c", "head -c 1048576 /dev/zero > /tmp/big && head -c 1048576 /dev/zero > /var/tmp/big2 && echo written && exec sleep 1000"]),
+        1,
+    )));
+    c.until(|f| matches!(f, Frame::Log(l) if l.job_id == "t1")).await;
+    let dir = n.layout.job_dir("t1", 1);
+    let size = |p: std::path::PathBuf| std::fs::metadata(&p).map(|m| m.len()).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+    assert_eq!(size(dir.join("tmp/big")), 1 << 20, "/tmp is the job's tmp folder");
+    assert_eq!(size(dir.join("var-tmp/big2")), 1 << 20, "/var/tmp is the job's var-tmp folder");
+    // Another job: its own, empty /tmp and /var/tmp.
+    c.send(Frame::Assign(assign(plan("t2", &["/bin/sh", "-c", "ls -A /tmp /var/tmp; echo listed"]), 1)));
+    let fr = run_to_receipt(&mut c, "t2").await;
+    let out = text(&logs_of(&fr, "t2"), LogStream::Out);
+    assert!(!out.contains("big"), "another job never sees it: {out}");
+    c.send(Frame::Cancel(Cancel { job_id: "t1".into(), generation: 1, reason: "test".into() }));
+    let fr = run_to_receipt(&mut c, "t1").await;
+    assert_eq!(last(&fr, "t1").state, JobState::Cancelled);
+    let t0 = std::time::Instant::now();
+    while dir.join("tmp").exists() || dir.join("var-tmp").exists() {
+        assert!(t0.elapsed() < std::time::Duration::from_secs(20), "its tmp goes with the job");
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
 /// Exit codes, both streams and a cancel go through the unit; the unit is
 /// gone afterwards, and the job's own dirs were writable.
 #[tokio::test(flavor = "multi_thread")]

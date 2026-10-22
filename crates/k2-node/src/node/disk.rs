@@ -299,14 +299,20 @@ impl Node {
         let running = self.running_by_tenant();
         let mut worst: Option<(k2_node_proto::share::Slot, u64)> = None;
         for t in self.tenants() {
+            // The owner is never ranked, by design: the box is theirs, and
+            // their own jobs filling it may cost a tenant its job. Real
+            // per-uid or project quotas (and ranking the owner) are 0.46.4
+            // (security review B, F1).
             if t.is_owner() || !running.get(&t.slot).is_some_and(|v| !v.is_empty()) {
                 continue;
             }
             let Ok(e) = crate::admin::jobs::tenant_entry(&self.layout().config, t.slot) else { continue };
             let share = budget(e.disk_gb);
             let root = t.paths.root();
-            let used = tokio::task::spawn_blocking(move || bytes_of(&root)).await.unwrap_or(0);
-            let over = used.saturating_sub(share);
+            let (used, capped) = tokio::task::spawn_blocking(move || super::run::disk_usage_walk(&root)).await.unwrap_or((0, false));
+            // A walk that hit its caps (data hidden past 256 levels or 2
+            // million entries) counts as furthest over (review B F1).
+            let over = if capped { u64::MAX } else { used.saturating_sub(share) };
             if over > 0 && worst.is_none_or(|(_, w)| over > w) {
                 worst = Some((t.slot, over));
             }
@@ -622,9 +628,34 @@ mod tests {
         }
         let r = tens[0].ledger.lock().unwrap().get("one", 1).unwrap().unwrap();
         assert_eq!((r.state, r.reason.as_deref()), (JobState::Failed, Some(refusal::DISK_LOW)));
-        // Nobody over (slot 1 has nothing running): the newest job.
+        // Nobody over (slot 1 has nothing running).
+        assert_eq!(n.furthest_over_share(budget).await, None);
+        // Review B F1: slot 2 hides data below the walk's depth cap: its
+        // few bytes count as furthest over.
+        let mut deep = layout.tenant(2).cache().join("hide");
+        for _ in 0..(super::super::run::WALK_MAX_DEPTH + 4) {
+            deep = deep.join("d");
+        }
+        put(&deep.join("blob"), 10);
+        assert_eq!(n.furthest_over_share(budget).await, Some((2u8, u64::MAX)), "a capped walk is over");
+        assert!(n.tenant_over_disk_with(&tens[1], budget), "the V74 scan agrees");
         assert_eq!(n.disk_guard_pass_with(budget).await, vec![(2u8, "two".to_string())]);
         n.stop_all(JobState::Cancelled, "test_over");
+    }
+
+    /// The walk's caps are reported, not hidden (review B F1).
+    #[test]
+    fn a_walk_says_when_it_hit_its_cap() {
+        let d = crate::util::temp_dir("walk-cap");
+        put(&d.join("a/b/c"), 4096);
+        let (bytes, capped) = super::super::run::disk_usage_walk(&d);
+        assert!(bytes >= 4096 && !capped);
+        let mut deep = d.join("x");
+        for _ in 0..(super::super::run::WALK_MAX_DEPTH + 1) {
+            deep = deep.join("d");
+        }
+        std::fs::create_dir_all(&deep).unwrap();
+        assert!(super::super::run::disk_usage_walk(&d).1, "past 256 levels");
     }
 
     /// Review B F5: a project key that isn't a safe folder name is refused

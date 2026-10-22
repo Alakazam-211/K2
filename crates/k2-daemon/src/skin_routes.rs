@@ -253,8 +253,27 @@ fn agent_config_refused() -> CliResponse {
     )
 }
 
-fn caps_have_agent_config(caps: Option<&[String]>) -> bool {
-    caps.is_some_and(|c| c.iter().any(|x| x == skin::CAP_FILES_AGENT_CONFIG))
+/// 0.46.3 Thread downloads: [`skin::CAP_FILES_DOWNLOAD`] is person-only
+/// the same way (Rosson 2026-10-22: Thread access doesn't mean file
+/// downloads; a person turns downloads on).
+fn files_download_refused() -> CliResponse {
+    owner_only_with_hint(
+        "files:download (app guests may save Thread files) is person-only — ask your human (Settings → User Access, or k2 app role room <role> <handle> --caps …,files:download)",
+    )
+}
+
+/// The refusal for an agent granting the person-only `cap`.
+fn person_only_refused(cap: &str) -> CliResponse {
+    if cap == skin::CAP_FILES_DOWNLOAD {
+        files_download_refused()
+    } else {
+        agent_config_refused()
+    }
+}
+
+/// The first person-only cap ([`skin::PERSON_ONLY_CAPS`]) in `caps`.
+fn person_only_cap(caps: Option<&[String]>) -> Option<&'static str> {
+    caps.and_then(|c| skin::person_only_cap_in(c))
 }
 
 /// Stored room policy of a role (`None` when no such role yet).
@@ -604,8 +623,10 @@ pub fn handle_tokens_post(body: &[u8], actor: &str) -> CliResponse {
         return CliResponse::bad_request("missing name");
     };
     let caps = caps_field(&v);
-    if actor_is_agent(actor) && caps_have_agent_config(caps.as_deref()) {
-        return agent_config_refused();
+    if actor_is_agent(actor) {
+        if let Some(cap) = person_only_cap(caps.as_deref()) {
+            return person_only_refused(cap);
+        }
     }
     let rooms = match rooms_field(&v) {
         None => {
@@ -662,14 +683,11 @@ pub fn handle_tokens_rooms(body: &[u8], actor: &str) -> CliResponse {
     };
     if actor_is_agent(actor) {
         // A platform pass is caps × rooms: new rooms on a pass that holds
-        // the `.k2/` opt-in would widen it.
+        // the `.k2/` opt-in (or files:download) would widen it.
         match skin::list_tokens() {
             Ok(tokens) => {
-                if tokens
-                    .iter()
-                    .any(|t| t.id == id && caps_have_agent_config(Some(&t.caps)))
-                {
-                    return agent_config_refused();
+                if let Some(cap) = tokens.iter().filter(|t| t.id == id).find_map(|t| person_only_cap(Some(&t.caps))) {
+                    return person_only_refused(cap);
                 }
             }
             Err(e) => return CliResponse::internal_error(e),
@@ -1312,8 +1330,10 @@ pub fn handle_roles_post(body: &[u8], actor: &str) -> CliResponse {
         Ok(None) => RoomPolicy::new(),
         Err(e) => return e,
     };
-    if actor_is_agent(actor) && skin::policy_has_agent_config(&policy) {
-        return agent_config_refused();
+    if actor_is_agent(actor) {
+        if let Some(cap) = skin::person_only_cap_in_policy(&policy) {
+            return person_only_refused(cap);
+        }
     }
     // `app` may be a service id or `<workspace>/<name>` (S24-15); `host`
     // means host-wide (NULL), the same as leaving it out.
@@ -1359,8 +1379,8 @@ pub fn handle_roles_update(body: &[u8], actor: &str) -> CliResponse {
                 Ok(o) => o,
                 Err(e) => return e,
             };
-            if !skin::agent_config_added(old.as_ref(), new).is_empty() {
-                return agent_config_refused();
+            if let Some(cap) = skin::person_only_cap_added(old.as_ref(), new) {
+                return person_only_refused(cap);
             }
         }
     }
@@ -1404,15 +1424,19 @@ pub fn handle_roles_room(body: &[u8], actor: &str) -> CliResponse {
         skin::clear_role_room(id_or_name, project_id)
     } else {
         let caps = caps_field(&v);
-        if actor_is_agent(actor) && caps_have_agent_config(caps.as_deref()) {
-            let had = match stored_role_policy(id_or_name) {
-                Ok(old) => old.as_ref().and_then(|p| p.get(project_id)).is_some_and(|c| {
-                    c.iter().any(|x| x == skin::CAP_FILES_AGENT_CONFIG)
-                }),
+        if actor_is_agent(actor) && person_only_cap(caps.as_deref()).is_some() {
+            let old = match stored_role_policy(id_or_name) {
+                Ok(old) => old,
                 Err(e) => return e,
             };
-            if !had {
-                return agent_config_refused();
+            let had = |p: &str| old.as_ref().and_then(|o| o.get(project_id)).is_some_and(|c| c.iter().any(|x| x == p));
+            let added = caps
+                .as_deref()
+                .into_iter()
+                .flatten()
+                .find_map(|c| skin::PERSON_ONLY_CAPS.iter().copied().find(|p| c == p && !had(p)));
+            if let Some(cap) = added {
+                return person_only_refused(cap);
             }
         }
         skin::set_role_room(id_or_name, project_id, caps.as_deref())
@@ -1538,7 +1562,11 @@ pub fn handle_roles_assign(body: &[u8], actor: &str) -> CliResponse {
     };
     if actor_is_agent(actor) {
         match stored_role_policy(role) {
-            Ok(Some(p)) if skin::policy_has_agent_config(&p) => return agent_config_refused(),
+            Ok(Some(p)) => {
+                if let Some(cap) = skin::person_only_cap_in_policy(&p) {
+                    return person_only_refused(cap);
+                }
+            }
             Ok(_) => {}
             Err(e) => return e,
         }

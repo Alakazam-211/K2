@@ -20,6 +20,14 @@
 //!   SVG), made by `k2_core::overlay::thumbs` and cached. An SVG is never
 //!   served raw: thumb and preview both answer the allowlist rewrite
 //!   (`sanitized: true`).
+//! - **Downloads** (0.46.3, Rosson 2026-10-22): `mode=download` is the
+//!   explicit save, the same chunks as `range` plus `name` and `mime`. A
+//!   person (owner token, Connect logins) may save whatever they may open;
+//!   an App guest also needs `files:download` in the room (403
+//!   `cap_not_granted`, `cap: files:download`). Each visible attachment
+//!   says `canDownload` for its viewer, so a client draws the Download
+//!   button from the daemon's answer. Opening (meta, preview, thumb,
+//!   range) is unchanged: `thread:read` plus the guest's own file rights.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -45,6 +53,9 @@ pub const PREVIEW_BINARY_MAX: u64 = 20 * 1024 * 1024;
 pub const RANGE_MAX: u64 = 16 * 1024 * 1024;
 /// `mode=range` with no `len`.
 pub const RANGE_DEFAULT: u64 = 4 * 1024 * 1024;
+/// The explicit save (0.46.3): `range` chunks plus `name` and `mime`; a
+/// guest also needs `files:download`.
+pub const MODE_DOWNLOAD: &str = "download";
 
 /// A workspace's folder as registered.
 pub(crate) fn project_root(project_id: &str) -> Option<PathBuf> {
@@ -57,9 +68,31 @@ pub(crate) fn project_root(project_id: &str) -> Option<PathBuf> {
 
 /// Who is looking. A guest is checked per attachment; everyone else
 /// (owner token, Connect logins, a same-workspace agent) sees them all.
+/// `Full` is a person: every visible attachment says `canDownload: true`.
+/// `Agent` (a passport) sees the same files with no `canDownload` (an agent
+/// reads files from disk; the attachment door refuses it), so an agent's
+/// reads are unchanged.
 pub(crate) enum Viewer<'a> {
     Full,
+    Agent,
     Guest { pass: &'a SkinPass, project_id: &'a str },
+}
+
+/// May this App guest save files from `project_id`'s Thread? Only with
+/// `files:download` in that room (never implied by `thread:read` or
+/// `files:read`).
+pub(crate) fn guest_may_download(pass: &SkinPass, project_id: &str) -> bool {
+    pass.has_room(project_id) && pass.has_cap_in_room(project_id, k2_core::skin::CAP_FILES_DOWNLOAD)
+}
+
+/// The viewer of a non-guest read: an agent passport on this request is
+/// `Agent`, anyone else (the owner token, a Connect login) `Full`.
+pub(crate) fn person_or_agent() -> Viewer<'static> {
+    if crate::caller_workspace::request_principal().is_some() {
+        Viewer::Agent
+    } else {
+        Viewer::Full
+    }
 }
 
 fn guest_sees(pass: &SkinPass, project_id: &str, root: &Path, a: &ThreadAttachment) -> bool {
@@ -95,6 +128,11 @@ pub(crate) fn guest_may_attach(
 /// `live`: stat each file (GET); else every visible one is `ok` (a frame
 /// sent at post time).
 pub(crate) fn view_list(root: Option<&Path>, atts: &[ThreadAttachment], viewer: &Viewer<'_>, live: bool) -> Vec<serde_json::Value> {
+    let can_download = match viewer {
+        Viewer::Full => Some(true),
+        Viewer::Agent => None,
+        Viewer::Guest { pass, project_id } => Some(guest_may_download(pass, project_id)),
+    };
     atts.iter()
         .map(|a| {
             if let Viewer::Guest { pass, project_id } = viewer {
@@ -108,7 +146,11 @@ pub(crate) fn view_list(root: Option<&Path>, atts: &[ThreadAttachment], viewer: 
                 (true, Some(r)) => att::live_state(r, a, false),
                 (true, None) => att::STATE_GONE,
             };
-            att::view_json(a, state)
+            let mut v = att::view_json(a, state);
+            if let (Some(flag), Some(o)) = (can_download, v.as_object_mut()) {
+                o.insert("canDownload".into(), serde_json::Value::Bool(flag));
+            }
+            v
         })
         .collect()
 }
@@ -140,7 +182,7 @@ pub(crate) fn rewrite_items(items: &mut serde_json::Value, project_id: &str, pas
     let root = project_root(project_id);
     let viewer = match pass {
         Some(p) => Viewer::Guest { pass: p, project_id },
-        None => Viewer::Full,
+        None => person_or_agent(),
     };
     for it in arr.iter_mut() {
         if let Some(doc) = it.get_mut("doc") {
@@ -188,7 +230,7 @@ pub(crate) struct ResolvedThread {
     pub project_id: String,
 }
 
-/// `GET /cli/thread/attachment?addr|conversationId=&id=&n=&mode=meta|preview|range[&offset=&len=]`.
+/// `GET /cli/thread/attachment?addr|conversationId=&id=&n=&mode=meta|preview|thumb|range|download[&offset=&len=]`.
 /// `resolved`: the Thread, already resolved for this caller with Thread
 /// read rights checked (a guest: room, pinned Chat, `thread:read`).
 /// `pass`: the guest's pass, `None` for the owner and Connect logins.
@@ -202,8 +244,8 @@ pub(crate) fn handle_get(params: &HashMap<String, String>, resolved: &ResolvedTh
         Err(_) => return error_json("400 Bad Request", "usage", "n must be the attachment's index (0-based)"),
     };
     let mode = opt_param(params, "mode").unwrap_or_else(|| "meta".into());
-    if !matches!(mode.as_str(), "meta" | "preview" | "range" | "thumb") {
-        return error_json("400 Bad Request", "usage", "mode is meta, preview, thumb or range");
+    if !matches!(mode.as_str(), "meta" | "preview" | "range" | "thumb" | MODE_DOWNLOAD) {
+        return error_json("400 Bad Request", "usage", "mode is meta, preview, thumb, range or download");
     }
     let px = match k2_core::overlay::thumbs::parse_px(opt_param(params, "px").as_deref()) {
         Ok(px) => px,
@@ -231,6 +273,18 @@ pub(crate) fn handle_get(params: &HashMap<String, String>, resolved: &ResolvedTh
                 );
             }
             return cap_refused(crate::skin_routes::FILES_READ);
+        }
+        // The explicit save is its own grant (Rosson 2026-10-22): a guest
+        // who may open the file may save it only with files:download in
+        // the room. Checked before the file is touched (no existence
+        // oracle beyond what opening already shows).
+        if mode == MODE_DOWNLOAD && !guest_may_download(p, &resolved.project_id) {
+            audit(
+                "thread.attachment.download_refused",
+                &format!("guest:{}", p.username.trim()),
+                format!("conversation={} doc={} n={n}", resolved.conversation_id, doc.id),
+            );
+            return cap_refused(k2_core::skin::CAP_FILES_DOWNLOAD);
         }
     }
     let Some(real) = att::resolve_now(&root, a) else {
@@ -275,8 +329,25 @@ pub(crate) fn handle_get(params: &HashMap<String, String>, resolved: &ResolvedTh
         }
         "preview" => preview(a, &real, size, att::live_state(&root, a, true)),
         "thumb" => thumb(&resolved.project_id, a, &real, &meta, px),
+        MODE_DOWNLOAD => download(params, a, &real),
         _ => range(params, &real),
     }
+}
+
+/// `mode=download`: a `range` chunk plus the file's `name` and `mime`, so
+/// a client can name the saved file from the first chunk.
+fn download(params: &HashMap<String, String>, a: &ThreadAttachment, real: &Path) -> CliResponse {
+    let r = range(params, real);
+    if r.status != "200 OK" {
+        return r;
+    }
+    let mut v: serde_json::Value = match serde_json::from_str(&r.body) {
+        Ok(v) => v,
+        Err(e) => return error_json("500 Internal Server Error", "io", e),
+    };
+    v["name"] = serde_json::json!(a.name);
+    v["mime"] = serde_json::json!(a.mime);
+    CliResponse::ok_json(v.to_string())
 }
 
 fn preview_kind(mime: &str) -> Option<&'static str> {
@@ -503,5 +574,26 @@ mod tests {
         assert_eq!(v[0]["line"], 3);
         let v = view_list(None, std::slice::from_ref(&a), &Viewer::Full, false);
         assert_eq!(v[0]["state"], "ok", "a post-time frame says ok");
+    }
+
+    #[test]
+    fn a_person_may_download_an_agent_view_has_no_flag() {
+        let a = ThreadAttachment {
+            kind: "file".into(),
+            path: "a.md".into(),
+            name: "a.md".into(),
+            size: 1,
+            mime: "text/markdown".into(),
+            modified_at: 1,
+            sha256: None,
+            line: None,
+            line_end: None,
+        };
+        let v = view_list(None, std::slice::from_ref(&a), &Viewer::Full, false);
+        assert_eq!(v[0]["canDownload"], serde_json::json!(true), "a person may save what they may open: {}", v[0]);
+        let v = view_list(None, std::slice::from_ref(&a), &Viewer::Agent, false);
+        assert!(v[0].get("canDownload").is_none(), "an agent's view is unchanged: {}", v[0]);
+        assert_eq!(v[0]["state"], "ok");
+        assert_eq!(v[0]["name"], "a.md");
     }
 }

@@ -2184,6 +2184,12 @@
     "section": "Run and manage"
    },
    {
+    "noun": "gc",
+    "usage": "k2-node gc [--older-days N] [--toolchains] [--no-wait] [--config-dir DIR] [--home DIR] (machine owner) free disk now: ended jobs' folders and idle warm build caches older than N days (default 0 = all); --toolchains also clears download caches when no job runs. Running jobs are never touched.",
+    "note": "",
+    "section": "Run and manage"
+   },
+   {
     "noun": "servers",
     "usage": "k2-node servers [list] [--json]",
     "note": "every server this node serves",

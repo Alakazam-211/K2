@@ -52,7 +52,7 @@ fn node_for(ws: &Ws) -> (String, String) {
 }
 
 fn call(path: &str, who: &Who, body: Value) -> Result<Value, (u16, String)> {
-    compute_admin::handle(path, who, body.to_string().as_bytes(), &HashMap::new()).map_err(|e| (e.status, e.code.to_string()))
+    compute_admin::handle(path, who, body.to_string().as_bytes(), &HashMap::new(), None).map_err(|e| (e.status, e.code.to_string()))
 }
 
 /// The agent proposes a privileged step: a held node admin request.

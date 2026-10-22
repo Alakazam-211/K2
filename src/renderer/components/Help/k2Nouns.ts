@@ -244,5 +244,6 @@ export const K2_NODE_BLURBS: Record<string, string> = {
   version: 'Node version.',
   admin: 'Remote admin level, audit chain and the root executor.',
   servers: 'The K2 servers this node serves: add, limits, pause, revoke (node sharing).',
+  gc: "Free disk now: ended jobs' folders and idle build caches (machine owner).",
   'wall-probe': 'Tests only: what a walled job on this node can reach.',
 }

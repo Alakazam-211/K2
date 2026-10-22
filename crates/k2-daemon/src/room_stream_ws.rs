@@ -715,7 +715,7 @@ pub async fn serve_room_stream_connection(stream: &mut TcpStream, params: HashMa
                     Err(broadcast::error::RecvError::Closed) => break,
                 };
                 // Never a guest's (its ear is the guest bus above).
-                if !ear || !matches!(viewer, Viewer::Login) || frame.collection != "activity" {
+                if !ear || !matches!(viewer, Viewer::Login { .. }) || frame.collection != "activity" {
                     continue;
                 }
                 let (Some(conv), Some(body)) = (frame.conversation_id.as_deref(), frame.activity.as_ref()) else { continue };

@@ -182,6 +182,28 @@ pub fn tail(n: usize) -> Result<Vec<serde_json::Value>, String> {
         .collect())
 }
 
+/// Every record still on disk (the rotated generation first, then the live
+/// file), oldest first, with no tail cap. Lines that fail to parse are
+/// skipped, as in [`tail`]. For one-off passes that must see everything the
+/// log still holds (the Garden access G4 pass); never on a request path.
+pub fn read_all() -> Result<Vec<serde_json::Value>, String> {
+    let _g = write_lock().lock().unwrap_or_else(|p| p.into_inner());
+    let mut out = Vec::new();
+    for file in [rotated_path(), path()] {
+        let raw = match std::fs::read_to_string(&file) {
+            Ok(r) => r,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(format!("read {}: {e}", file.display())),
+        };
+        out.extend(
+            raw.lines()
+                .filter(|l| !l.trim().is_empty())
+                .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok()),
+        );
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

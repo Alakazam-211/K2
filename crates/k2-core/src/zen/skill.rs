@@ -502,6 +502,10 @@ change, `k2 zen validate --widget <w> --sign`.**\n\n\
         "- `k2 zen widget put board --dir ./board [--prune]` writes the whole folder in one\n  checked call (a folder with errors writes nothing). Without \"Manage Gardens and\n  data sources\" it becomes ONE proposal for the folder (its changed code files);\n  approving it writes them all at once, or nothing if a file moved since.\n",
         "- `k2 zen widget put board --dir ./board [--prune]` writes the whole folder in one\n  checked call (a folder with errors writes nothing) and signs it as you. It needs you\n  on the list of every Garden that places the widget (a draft placed nowhere is open);\n  otherwise it answers `garden_access_needed` (exit 3) and K2 asks the person.\n",
     ),
+    (
+        "`duplicate_label`).\n\n### Rules\n\n",
+        "`duplicate_label`, `needs_editor`).\n\n### Rules\n\n",
+    ),
 ];
 
 /// 0.46.3's text with [`GARDEN_ACCESS_EDITS`] applied (the switch on).
@@ -726,7 +730,16 @@ k2.connected.then(() => {\n\
 Every call returns a Promise; every subscribe\n\
 returns its unsubscribe. A refused call rejects with a `K2Error` (`.code`: ",
     );
-    s.push_str(&c.errors.iter().map(|e| format!("`{}`", e.code)).collect::<Vec<_>>().join(", "));
+    // `needs_editor` exists only with Garden access lists on: the off text
+    // is 0.46.3's (GARDEN_ACCESS_EDITS names it for on).
+    s.push_str(
+        &c.errors
+            .iter()
+            .filter(|e| e.code != crate::garden_data::signer_gate::NEEDS_EDITOR)
+            .map(|e| format!("`{}`", e.code))
+            .collect::<Vec<_>>()
+            .join(", "),
+    );
     s.push_str(
         ").\n\n\
 ### Rules\n\n\

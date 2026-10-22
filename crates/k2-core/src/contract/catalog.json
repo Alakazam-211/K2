@@ -187,7 +187,8 @@
     {"code": "refresh_reused", "doc": "Device sign-in: a refresh token came back after it was used; that device is signed out (sign in again)."},
     {"code": "person_pass_required", "doc": "Wallet verbs need an App user's own login session pass. Connect logins, the owner token, agent passports and an App's own pass have no wallet."},
     {"code": "wallet_off", "doc": "This App doesn't use personal wallets; its owner turns them on."},
-    {"code": "duplicate_label", "doc": "The person already has an item with that label for that provider."}
+    {"code": "duplicate_label", "doc": "The person already has an item with that label for that provider."},
+    {"code": "needs_editor", "doc": "Garden access lists on: this widget version isn't signed by the person, K2 or an agent on this Garden's list, so only its own store and save keyspace and widget.self answer. Someone who edits this Garden has to sign this version."}
   ],
   "bannedFields": [
     "projectPath",
@@ -16291,6 +16292,7 @@
           "author": {
             "title": "WidgetAuthor",
             "type": "object",
+            "description": "Who last signed this version.",
             "properties": {
               "kind": {
                 "enum": [
@@ -16332,6 +16334,17 @@
               "changes"
             ],
             "additionalProperties": false
+          },
+          "editors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Garden access lists on: the handles of the agents on this Garden's list (who may edit it). Absent with them off."
+          },
+          "signed": {
+            "type": "boolean",
+            "description": "Garden access lists on: whether the person, K2 or an agent on this Garden's list signed this version (false: it runs without your data, needs_editor). Absent with them off."
           }
         },
         "required": [

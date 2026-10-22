@@ -27,6 +27,7 @@ pub mod export;
 pub mod grants;
 pub mod keys;
 pub mod rights;
+pub mod signer_gate;
 pub mod snapshots;
 pub mod sqlite;
 pub mod tx;

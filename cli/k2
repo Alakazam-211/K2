@@ -29519,7 +29519,7 @@ cmd_schema() {
     {
       "name": "mail attachments",
       "usage": "k2 mail attachments <message-id> [--get <n> --out <path>] [--json]",
-      "description": "List a message's attachments, or fetch ONE with --get (1-BASED, matching the numbered list 'read' prints) to a workspace-relative --out path. Bytes are written, never opened.",
+      "description": "List a message's attachments, or fetch ONE with --get (1-BASED, matching the numbered list 'read' prints) to a workspace-relative --out path; a folder --out (existing, or ending in /) gets <folder>/<attachment name> and never overwrites. Bytes are written, never opened.",
       "args": [{"name": "message-id", "required": true}],
       "flags": [
         {"name": "--get", "arg": "n", "description": "The 1-based attachment number to fetch."},
@@ -44090,10 +44090,12 @@ def request(method, route, params=None, body=None, timeout=30):
             return _timeout_error_body(timeout)
         return None
 
-def call(method, route, params=None, body=None, timeout=30):
+def call(method, route, params=None, body=None, timeout=30, timeout_hint=None):
     d = request(method, route, params, body, timeout)
     if d is None:
         die({"code": "daemon_unreachable", "hint": "no response from the K2 daemon (is it running?)"})
+    if timeout_hint and (d.get("error") or {}).get("code") == "timeout":
+        die({"code": "timeout", "hint": timeout_hint(d["error"].get("hint", ""))})
     if d.get("error"):
         die(d["error"])
     if not d.get("ok"):
@@ -44552,7 +44554,20 @@ elif verb == "attachments":
     if env("M_GET"):
         params["get"] = env("M_GET")
         params["out"] = env("M_OUT")
-    d = call("POST" if env("M_GET") else "GET", "/cli/mail/attachments", params=params)
+    if env("M_GET"):
+        # A big attachment from a linked inbox can take minutes; the
+        # daemon caps one at 100 MB. On a timeout the daemon is STILL
+        # downloading (it does not stop when we stop waiting) and will
+        # write the file — say so, so nobody retries in a loop.
+        def _attach_timeout_hint(_hint):
+            return ("the daemon did not finish attachment #%s within the wait and is still "
+                    "downloading it; it writes to '%s' (a folder gets '<folder>/<attachment "
+                    "name>') when done. Check for the file before retrying; a retry while it "
+                    "runs answers 'busy'" % (env("M_GET"), env("M_OUT")))
+        d = call("POST", "/cli/mail/attachments", params=params, timeout=300,
+                 timeout_hint=_attach_timeout_hint)
+    else:
+        d = call("GET", "/cli/mail/attachments", params=params)
     if as_json:
         print(dumps(d))
     elif env("M_GET"):
@@ -51857,12 +51872,16 @@ USAGE
 FLAGS
   --get <n>              The 1-based attachment number to fetch
   --out <path>           Where to write it (workspace-relative; escaping the
-                         workspace is refused)
+                         workspace is refused). A file path is written
+                         (and overwritten). A folder (existing, or ending
+                         in /, created if missing) gets <folder>/<name>,
+                         and an existing file there is never overwritten.
   --json                 JSON output
 
 EXAMPLES
   k2 mail attachments m_abc123
   k2 mail attachments m_abc123 --get 1 --out downloads/report.pdf
+  k2 mail attachments m_abc123 --get 1 --out downloads/
 EOF
 }
 

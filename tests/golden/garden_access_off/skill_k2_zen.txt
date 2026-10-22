@@ -1,0 +1,1125 @@
+---
+k2_skill: k2-zen
+skill_version: 29
+skill_checksum: 98e03ed82acc7ccc
+name: k2-zen
+description: Build Zen Gardens (~/.k2/zen): k2 zen garden, place K2's built-in widgets (a whole Home or one agent) or your own sealed custom widgets (k2 zen widget), themes, tokens, font, motion, validate, reset; agents request, never grant
+---
+
+<!-- K2:MANAGED:BEGIN -->
+# K2 Zen Gardens
+
+Zen Mode is a mode of a K2 desktop window. In Zen the window shows a **Garden**:
+a personal page that lives on THIS computer. The human can have as many Gardens
+as they like and switches between them with the Garden switcher (or Cmd+Option+1-9).
+Zen starts with two Gardens. **Garden 1** is the texting page: a Home's agents
+beside the conversation with the one picked. **Garden 2** is empty: it's there
+for the human to ask you to build it. Garden 2 and every new Garden start
+**empty**, with "Ask your agents to add things to this Garden", an Ask my
+agent button and **Start with the default** (which turns that Garden into the
+texting page). + New Garden opens one window: a name and the ready-made Gardens as
+cards (the Diary, the Kanban, start with the default, or start empty and ask you).
+
+When the human asks you to add something to a Garden, you edit that Garden's
+file. A message that starts **"In my Zen Garden ... (id g-...)"** means: edit
+`~/.k2/zen/gardens/<id>.toml`, then run `k2 zen validate --garden <id>`.
+
+## Gardens
+
+- `k2 zen garden list [--json]`: index, id, name, template; `*` marks a Garden with its own theme.
+- `k2 zen garden new <name> [--texting] [--at <n>]`: a new Garden (empty, or `--texting` for the
+texting page) at position n (default: the end). Prints its id and file.
+- `k2 zen garden rename <garden> <name>`: names are 1 to 60 characters and unique (case aside).
+- `k2 zen garden reorder <garden> <position>`: positions are 1-based.
+- `k2 zen garden template <garden> texting|blank [--force]`: turn a Garden into the texting
+page (the default) or an empty page; same id, name and place. The old file is kept in
+`.history/`. A file with its own layout, widgets or theme tables needs `--force`.
+- `k2 zen garden delete <garden>`: the page moves into `.history/` (never lost); the last Garden can't be deleted.
+
+`<garden>` is an id (`g-3f9a12c0`) or a name. Ids never change, so renaming or
+reordering never touches the file. Only the human turns Zen on (the Zen toggle in
+the app's top bar); until then every `k2 zen` verb exits 3.
+
+## Files (`~/.k2/zen/`, owned by this computer's K2)
+
+- `gardens/<id>.toml`: one Garden's page: its template, its layout of K2's built-in
+widgets, and theme tables that restyle this Garden only. **This is the file you edit.**
+- `zen.toml`: the human's theme changes for every Garden, on top of the active theme.
+- `themes/<name>/theme.toml`: a theme bundle (colours, font, terminal palette,
+optional background image next to it).
+- `gardens.json`: the Garden list. K2 writes it. **Never write gardens.json**; use `k2 zen garden`.
+- `active.json`: the active theme. K2 writes it. **Never write active.json**; use `k2 zen theme`.
+- `.history/`: the last 20 good versions of each file, and deleted Gardens. K2 writes it. **Never write .history/.**
+- `widgets/<name>/`: your custom widgets (see Custom widgets). **You edit these too.**
+- `sync.json`, `news.json`, `.defaults/`, `.locks/`: which Gardens sync with K2's
+defaults or are locked, which Garden news was seen, K2's defaults that own-copy
+Gardens sit on, and locked Gardens' frozen copies. K2 writes them. **Never write
+sync.json, news.json, .defaults/ or .locks/**; read them with `k2 zen sync`,
+`k2 zen garden list` and `k2 zen news`.
+- Widgets in your own Gardens need no permissions: a widget can talk to your agents
+right away. **Never write grants.json** or `pins.json` (K2 never reads them).
+
+## Synced with K2's defaults, or its own copy
+
+Each Garden's page (template, widget prop defaults, the frame) and theme (the
+built-in layers under its theme) either sync with K2's defaults, following K2's
+improvements, or are the Garden's own copy that no K2 update changes.
+Editing a Garden's file never changes whether it syncs. A synced Garden follows
+K2's improvements under your edits; to keep it exactly as it is, the person turns
+sync off in Settings → Gardens (you can't: `k2 zen sync <garden> on|off` answers an
+agent with 403 `zen_local_only`). Suggest it to the person when it matters.
+`k2 zen sync` lists each Garden's state; `k2 zen sync <garden> preview` prints it as
+if synced; `k2 zen news` lists new catalog Gardens. `k2 zen guide sync` has more.
+
+## Locked Gardens
+
+**A locked Garden: don't edit it. Ask the person.** The person locks a Garden in
+Settings → Gardens so agents can't change it (`k2 zen garden list` marks it
+`locked`). K2 puts back any edit to a locked Garden's file (the edit is kept in
+`.history/gardens/<id>.toml/refused/`), refuses `k2 zen garden rename|delete|template|reorder`,
+`k2 zen reset --garden` and `k2 zen theme set|next|prev --garden` with exit 3
+(`garden_locked`), and `k2 zen validate --garden <id>` exits 3. Only the person can
+unlock it (`k2 zen garden lock|unlock` refuses agents). Themes it uses still change it.
+
+## Workflow
+
+1. `k2 zen garden list` to find the Garden (or make one with `k2 zen garden new`).
+2. Edit `~/.k2/zen/gardens/<id>.toml`. Every Zen window reloads on save.
+3. Run `k2 zen validate --garden <id>` before you tell the human it's done. It prints
+`file:line:col: message` and exits 1 on any error. A file with errors is NOT
+shown: Zen keeps the last good version and shows the error line.
+4. Undo with `k2 zen history --garden <id>` then `k2 zen reset --garden <id> --to <snapshot>`,
+or `k2 zen reset --garden <id>` for the Garden's empty stub.
+5. `k2 zen reload` re-reads now; `k2 zen doctor` checks the setup; `k2 zen path`
+prints the folder.
+
+`k2 zen guide` is the user guide, and it needs no daemon: short pages (start with
+`k2 zen guide gardens`; then `files`, `widgets`, `bands`, `required`, `menus`, `themes`,
+`sync`, `examples`, `undo`, `safe-mode`) and whole Garden files you can pipe into a Garden:
+`k2 zen guide example --list`, then
+`k2 zen guide example <name> --toml > ~/.k2/zen/gardens/<id>.toml`.
+
+`k2 zen` talks only to the K2 on this computer (each person's Gardens live on
+their own computer), so only an agent on this computer can edit them.
+
+## A Garden page
+
+```toml
+schema = 1
+template = "k2.blank@1"   # or "k2.texting@1"
+
+[layout]
+kind = "columns"
+[[layout.column]]
+size = 40          # percent of the width; the sizes add up to 100
+min-width = 240    # px
+[[layout.column]]
+size = 60
+min-width = 360
+
+[[widget]]
+id = "work"
+kind = "agents"
+column = 0
+[widget.props]
+home = "Work"      # the whole Home
+
+[[widget]]
+id = "talk"
+kind = "conversation"
+column = 1
+[widget.props]
+agents = "work"    # shows the agent picked in the "work" widget
+
+[colors.light]     # theme tables restyle this Garden only
+accent = "#065f46"
+```
+
+Templates: `k2.texting@1` (the texting page: Agents beside Conversation) and
+`k2.blank@1` (empty). The template gives the page its layout, its widgets
+and its controls until the file declares its own.
+
+- `[layout]`: `kind` is `columns`; 1 to 3 `[[layout.column]]`, each with `size`
+(percent, the sizes add up to 100) and `min-width` (px, 0 to 800). `canvas = "full"`
+gives the page the whole window: the top band floats over the columns, which lose
+their margin and glass box, and the theme's background shows behind everything
+(the Diary); the default is `framed`.
+- `[[widget]]`: `id` (letters, digits, - and _; unique on the page), `kind`, `column` (0 is
+the first; it must exist in the layout), and optional `[widget.props]`. At most 12
+content widgets and 10 Zen controls.
+- Two groups, two replace rules: declaring any **content** widget (the built-in widgets
+below) replaces the template's content widgets; declaring any **Zen control** (see
+Controls, bands and menus) replaces ALL of the template's controls. A file with only
+content widgets keeps the template's controls, and the other way round.
+- `slot`: `column`, `top`, `bottom`, `menu` (default `column`). `slot = "top"` or `"bottom"` puts the widget in the
+page's top or bottom band instead of a column; `slot = "menu"` puts a Zen control in a menu.
+Content kinds that fit a band: `nav-rail`, at most 2 per band. A band or menu widget has
+no `column`, and its `id` may be left out (it is then the kind).
+- A page never names caps: built-in widgets get K2's caps (`caps` is an error).
+- `[[control]]` is warned and ignored: "[[control]] is ignored: place controls with [[widget]] kind = "zen-toggle" (see k2 zen guide bands)".
+- Unknown kinds, props and keys are errors at their line.
+
+### The nav rail in the top band
+
+To show the nav rail as a row of icons in the top band, right of the Garden
+switcher, instead of a strip down a column:
+
+```toml
+[[widget]]
+kind = "nav-rail"
+slot = "top"
+```
+
+The rail is a content widget, so it replaces the template's widgets (on the texting page
+list the others too: `agents` in column 0, `conversation` in column 1) and keeps the
+template's controls. A page with the rail in a band draws one rail: another `nav-rail`
+on the page is an error. Its `orientation` is `row` there (the only one that fits); in a
+column it is `column` unless you set `orientation = "row"` or an `edge`.
+
+### Controls, bands and menus
+
+Before moving controls, read `k2 zen guide bands` and `k2 zen guide required`.
+
+K2's controls are widgets too (**Zen controls**). Place them with `[[widget]]` like any
+widget. The two required ones are `zen-toggle`, `garden-switcher`: a file that places any Zen control replaces ALL of
+the template's and must place both, once each, somewhere the human can reach in one
+click. Everything else is optional; a control you don't place isn't shown.
+
+- **Where:** `slot = "top"` or `"bottom"` is the page's top or bottom band (full width).
+`slot = "column"` with `column = n` puts a control at that column's edge: `edge` is
+`top`, `bottom` (default `top`). `slot = "menu"` with `menu = "<menu id>"` puts it inside a `menu`.
+Note the difference: `slot = "top"` is the page's top band; `slot = "column"` with
+`edge = "top"` is the top of one column.
+- **`align`:** `start`, `center`, `end` (default `start`): the left end, the middle or the right end of a band
+or column edge. Inside each group items keep file order, and in an `end` group the
+LAST item in the file sits in the corner.
+- **Menus** hold only `zen-toggle`, `garden-switcher`, `theme-picker`, `usage`: no menu inside a menu, no content widget.
+A menu holds 1 to 6 items; at most 3 menus on a page. `slot = "menu"` always needs `menu`.
+- **Limits:** at most 8 items per band, 4 per column edge. Each Zen
+control goes on the page once, except `menu`.
+- `agents`, `conversation`, `custom` take no `edge` or `align`: they fill their column.
+- Never place `drag-region`: K2 makes the empty space in every band drag the window; there is nothing to place. With no top band K2 keeps an empty,
+draggable strip at the top.
+
+Zen control kinds:
+
+**`garden-switcher`**: the Garden switcher (required): the Garden's name; it opens the Garden list and + New Garden. In a menu: a Gardens section listing every Garden, then + New Garden. K2 grants it `gardens:manage`.
+
+**`zen-toggle`**: the Zen toggle (required): the way out of Zen. In a menu: the item Exit Zen Mode. K2 grants it no caps.
+
+**`usage`**: the subscription usage chip and its menu (optional). In a menu: the item Usage. K2 grants it no caps.
+
+**`theme-picker`**: the theme control (optional; Ctrl+Cmd+. still cycles themes without it). In a menu: the item Theme. K2 grants it no caps.
+
+**`menu`**: a menu button K2 draws (optional) that holds other Zen controls (`slot = "menu"`, `menu = "<this id>"`); it opens with a click, Enter, Space or Down. K2 grants it no caps.
+
+- `icon` (one of `dots`, `bars`, `zen`): the button's icon: `dots` (three dots), `bars` (three bars) or `zen` (the enso). Default `"dots"`.
+- `label` (text): up to 24 characters, shown next to the icon and used as the tooltip and the screen-reader name. Without one the name is "More".
+
+`bottom-bar`: the Garden switcher bottom left, the theme and the Zen toggle bottom
+right, usage not shown, no top band. The template's content widgets stay:
+
+```toml
+schema = 1
+
+[[widget]]
+kind = "garden-switcher"
+slot = "bottom"
+
+[[widget]]
+kind = "theme-picker"
+slot = "bottom"
+align = "end"
+
+[[widget]]
+kind = "zen-toggle"
+slot = "bottom"
+align = "end"
+```
+
+`menu-both`: both required controls and the theme in one menu, top right:
+
+```toml
+schema = 1
+
+[[widget]]
+id = "more"
+kind = "menu"
+slot = "top"
+align = "end"
+[widget.props]
+icon = "dots"
+label = "More"
+
+[[widget]]
+kind = "garden-switcher"
+slot = "menu"
+menu = "more"
+
+[[widget]]
+kind = "theme-picker"
+slot = "menu"
+menu = "more"
+
+[[widget]]
+kind = "zen-toggle"
+slot = "menu"
+menu = "more"
+```
+
+A file that places only a `garden-switcher` fails validate: it replaced the template's
+controls, so it must also place a `zen-toggle` (the way out).
+
+### Built-in widgets
+
+**`agents`**: a Home's agents with live status (working, idle, needs you) and their last message; the whole Home, or one agent filtered from it. K2 grants it `agents:read`, `agents:add`, `presence:read`.
+
+- `mode` (one of `home`, `agent`): `home` shows every agent of the Home (the whole Home surface); `agent` shows one agent filtered from that Home (set `agent`). Default: `agent` when `agent` is set, else `home`.
+- `home` (text): the Home to show, by name or id. Default: the Garden's starting Home, else the window's Home.
+- `agent` (text): one agent's name or address in that Home: the widget shows only that agent (`mode = "agent"`).
+- `home-picker` (true or false): a Home picker in the widget's header; the pick belongs to this Garden and never moves the Home page. Default `false`.
+- `order` (one of `home`): row order: the Home's own order. Default `"home"`.
+- `server-tag` (true or false): tag rows from another server with its name. Default `true`.
+- `preview` (true or false): show each agent's last message. Default `true`.
+- `unread` (true or false): your unread count and the cards waiting on you, on each row and on the pin grid's pictures (a grey count when you muted that Thread). Servers with thread-read-v1 (0.46.1). Default `true`.
+- `status` (a list from `working`, `idle`, `needs-you`): which live statuses to show (`monitoring` shows with `working`, `unverifiable` with `idle`). Default `["working", "idle", "needs-you"]`.
+- `pins` (true or false): pinned agents as a grid of pictures at the top, three across (more rows as you pin more, up to `pin-limit`); the list below leaves them out. Garden 1 turns it on. Default `false`.
+- `pin-limit` (a whole number from 1 to 99): with `pins`: the most pictures the grid holds; pinned agents past it head the list below. Unset: no limit. Garden 1 sets 9 (three rows of three, Rosson 2026-10-16).
+- `recent-first` (true or false): Recent agents first (below the pins, the agents you last messaged from a Garden on this computer, newest first) until the person picks in the Garden's settings; their pick is per computer and wins once made. Unset: off until picked. Garden 1 turns it on.
+- `settings` (true or false): a settings button in the widget's header: the Garden's own settings on this computer (its theme, the pin grid, Recent agents first). Garden 1 turns it on. Default `false`.
+
+**`conversation`**: one agent's Thread and a box to message it: the agent picked in an Agents widget, or one agent pinned by name. K2 grants it `agents:read`, `presence:read`, `thread:read`, `thread:post`.
+
+- `agents` (text): the id of the Agents widget whose picked agent this shows. Default: the page's first Agents widget.
+- `agent` (text): pin one agent's conversation by name or address (no Agents widget needed); not with `agents`.
+- `home` (text): with `agent`: the Home to look that agent up in, by name or id.
+- `compose` (true or false): show the box to message the agent. Default `true`.
+- `attachments` (true or false): allow attachments in the box. Default `true`.
+- `load-older` (true or false): load older messages on scroll. Default `true`.
+- `activity-drawer` (true or false): while the agent works on your message, a drawer above the box shows its step, tool counts and a clock (click it for the detail); off, three dots under the last message. Garden 1 turns it on. Default `false`.
+- `mute` (true or false): a bell in the header to mute or unmute this agent's Thread: no pushes, left out of your badge, its count goes grey. The conversation always marks the Thread read while you look at it and says how many cards wait on you. Garden 1 turns it on (0.46.1, thread-read-v1 servers). Default `false`.
+
+**`nav-rail`**: a thin icon rail: in a column, a strip drawn at the left edge of its column (it takes no share of the column's box); with `slot = "top"`, a row of icons in the top band, right of the Garden switcher. Its items: My Home (this Garden's own page), then Agents, Projects and Tickets, which switch the Garden's view in this window inside Zen (Agents: this server's agents, by focus group; Projects: coming soon; Tickets: the Tickets page, chat only); the view shown is the current item; Tickets carries the top bar's waiting badge. K2 grants it `app:navigate`.
+
+- `orientation` (one of `row`, `column`): `row` draws the icons side by side, `column` top to bottom. Default: `row` in a band (`slot = "top"` or `"bottom"`) and at a column `edge`, the only orientation that fits there; `column` in a column.
+
+`garden-empty` is the empty-Garden message with Ask my agent; shown until the Garden's file declares widgets. Only the template places it; a Garden file can't.
+
+### A whole Home, or one agent
+
+- **Whole Home:** `kind = "agents"` with `home = "<Home name or id>"`: every agent of that
+Home, with a Conversation beside it (`agents = "<that widget's id>"`). Add
+`home-picker = true` to let the human switch Homes inside the widget.
+- **One agent:** `kind = "agents"` with `agent = "<name or address>"` (and `home` to say
+which Home it is in): only that agent's row. Or skip the list and pin the
+conversation itself: `kind = "conversation"` with `agent = "<name>"` and `home`.
+- Picking a Home in a Garden never changes the Home page.
+
+## Themes, defaults and your changes
+
+K2's themes are built into the app and read-only. `~/.k2/zen/` holds only the
+human's changes, layered on top. App updates never touch those files. For one
+Garden the stack is: K2's `basic` theme, then K2's copy of the active theme,
+then `themes/<active>/theme.toml`, then `zen.toml`, then `gardens/<id>.toml`.
+A later file wins key by key; anything a file leaves out comes from below.
+
+One theme is active for the computer, and a Garden may pick its own. K2 keeps
+that pick; change it only with `k2 zen theme`.
+
+Built-in themes: `basic` (clean, smooth, simple: warm light, soft dark, follows the computer), `paper` (always light, serif type, ink-blue accent), `midnight` (always dark, cool blue, JetBrains Mono everywhere), `haunted` (always dark: a candlelit desk in a misty study, behind the whole Garden), `glass` (always dark: K2 Companion's black canvas, glassy dark cards, iMessage blue, round corners). Every other theme sits on top of `basic`.
+
+- `k2 zen theme list` lists the themes (built in, and the human's own).
+- `k2 zen theme next` / `k2 zen theme prev` cycle them; `k2 zen theme set <name>` picks one.
+Add `--garden <name|id>` for one Garden; `k2 zen theme set --garden <name> --clear` drops a Garden's pick.
+- `k2 zen theme new <name> [--from <theme>]` starts a theme bundle in
+`~/.k2/zen/themes/<name>/` from a copy of a theme (default: K2's theme of that
+name, else `basic`). Using a built-in's name makes an override of it.
+- `k2 zen reset --theme <name>` clears it: an override is removed (K2's theme
+shows again); a theme only the human has goes back to a copy of `basic`.
+
+To make a theme: `k2 zen theme new <name>`, edit `~/.k2/zen/themes/<name>/theme.toml`,
+add a background image next to it if asked, run `k2 zen validate`, then
+`k2 zen theme set <name>` (or `--garden <id>` for one Garden).
+
+## Rules every file follows
+
+- The first line is `schema = 1`. This K2 reads Zen schema 1 only.
+- Unknown keys are errors, with the line and a "did you mean".
+- No raw CSS, no selectors, no HTML, no fonts from the network.
+- `[layout]`, `[[widget]]` and `template` belong only in `gardens/<id>.toml`.
+- Agents never write grants.json, gardens.json, active.json, sync.json, news.json,
+.defaults/, .locks/ or .history/: K2 owns them.
+- A locked Garden: don't edit it. Ask the person.
+
+## Tokens
+
+### `[theme]`
+
+- `scheme`: `auto`, `light`, `dark` (auto follows the computer).
+
+### `[colors.light]` and `[colors.dark]`
+
+Each is a colour: `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`, `rgb(r, g, b)` or `rgba(r, g, b, a)`. Each token becomes `--zen-<token>`.
+
+- `canvas`
+- `surface`
+- `surface-raised`
+- `border`
+- `text`
+- `text-muted`
+- `accent`
+- `accent-text`
+- `bubble-me`
+- `bubble-me-text`
+- `bubble-agent`
+- `bubble-agent-text`
+- `working`
+- `idle`
+- `needs-you`
+- `ok`
+- `danger`
+
+`text` and `accent` must reach 3:1 contrast against `canvas` in each scheme, so a theme can't hide the Zen controls.
+
+### `[font]` (one font for Zen and its terminals)
+
+- `family`: one of these (system stacks and fonts K2 already bundles; never fonts from the network):
+  - `system`
+  - `rounded`
+  - `serif`
+  - `mono` (monospace)
+  - `meslo` (monospace)
+  - `jetbrains-mono` (monospace)
+  - `fira-code` (monospace)
+  - `lilex` (monospace)
+  The family applies to the whole Zen page and the agent terminals shown in it.
+  Terminals need fixed-width letters, so a proportional family uses `meslo` inside terminals.
+- `size`: 12 to 20
+- `line-height`: 1.2 to 1.8
+- `[type]` is the old name of `[font]` and is an error.
+
+### `[shape]` (px)
+
+- `radius`: 0 to 28
+- `bubble-radius`: 0 to 28
+- `gap`: 4 to 24
+- `list-width`: 240 to 420
+
+### `[terminal.light]` and `[terminal.dark]`
+
+The palette of the agent terminals shown in Zen. Each is a colour, like `[colors.*]`:
+
+- `foreground`
+- `background`
+- `cursor`
+- `cursor-text`
+- `selection`
+- `black`
+- `red`
+- `green`
+- `yellow`
+- `blue`
+- `magenta`
+- `cyan`
+- `white`
+- `bright-black`
+- `bright-red`
+- `bright-green`
+- `bright-yellow`
+- `bright-blue`
+- `bright-magenta`
+- `bright-cyan`
+- `bright-white`
+
+### `[background]` (theme bundles only)
+
+Only in `themes/<name>/theme.toml`; anywhere else it is an error.
+
+- `image`: a file name in the theme's own folder (no folders, not hidden), one of `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`. No SVG.
+  At most 2097152 bytes (2 MB); the bytes must match the extension; links are refused.
+- `fit`: `cover`, `contain`, `tile`, `center`
+- `opacity`: 0 to 1
+
+A bad image is reported with its file and line, and Zen keeps the theme's last good image.
+
+### `[chrome]` (the window itself)
+
+- `corners`: `system`, `square` (macOS window corners).
+- `stoplights`: `round`, `square`, `hidden` (the window buttons; `hidden` hides them while the theme shows: ⌃⌘Z or the page's Zen toggle leaves Zen, and ⌘W / ⌘M or the menu bar still close and minimize the window).
+- `stoplight-offset = [x, y]`: move the buttons right and down, 0 to 24 px each.
+
+What chrome can't do: K2 can't recolor, resize, reorder or move the window
+buttons to the right (only shape, nudge, or `hidden`).
+Corners are system or square only. The window is never transparent: no glass,
+no blur, no desktop showing through. Linux and Windows have no native chrome to
+theme; K2 draws their window controls and menu button in a corner Zen can't cover.
+
+## Motion (Hyprland style)
+
+### `[bezier]`
+
+`name = [x1, y1, x2, y2]`. x is 0 to 1; y is -2 to 3 (outside 0–1 overshoots). Names start with a letter. Built in: `linear` [0, 0, 1, 1], `ease` [0.25, 0.1, 0.25, 1], `glide` [0.22, 1, 0.36, 1], `soft` [0.45, 0, 0.55, 1], `overshot` [0.34, 1.56, 0.64, 1].
+
+### `[animation]`
+
+`name = [on, speed, curve, style]`. `on` is 1 or 0 (`[0]` alone turns it off). `speed` is tenths of a second, 0 to 100. `curve` is a builtin or a `[bezier]` name. `style` is optional: `fade`, `slide`, `slidefade`, `popin <n>%`, written like `"popin 92%"`. Each line becomes `--zen-anim-<name>-duration` and `--zen-anim-<name>-ease`.
+
+The tree (a child takes its parent's line until you set it):
+
+- `global` (the root)
+- `zen` (inherits `global`)
+- `zenIn` (inherits `zen`)
+- `zenOut` (inherits `zen`)
+- `rows` (inherits `global`)
+- `rowIn` (inherits `rows`)
+- `rowMove` (inherits `rows`)
+- `messages` (inherits `global`)
+- `messageIn` (inherits `messages`)
+- `conversation` (inherits `global`)
+- `conversationSwitch` (inherits `conversation`)
+- `working` (inherits `global`)
+- `workingPulse` (inherits `working`)
+
+A line you set in `zen.toml` beats K2's defaults for every child you didn't
+set, so `global = [1, 8, "glide"]` slows everything you haven't tuned.
+When the computer asks for reduced motion, every Zen animation is instant.
+
+## Controls
+
+Every Garden page carries the required controls, which K2 binds and checks itself: `zen-toggle`, `garden-switcher` (the Zen toggle and the Garden switcher). The template puts the switcher top
+left and the toggle top right. A Garden file may move them (Controls, bands and menus),
+but it can never drop one: a file that places any control must place both, and
+validate refuses it otherwise. If one is hidden, covered or unusable, Zen drops to
+safe mode, which draws the template's controls. The human can always leave with Exit
+Zen Mode (Ctrl+Cmd+Z on macOS, Ctrl+Alt+Z on Linux and Windows).
+
+## Bridge verbs and caps
+
+Every widget reaches K2 only through the Zen bridge; each verb needs a cap
+the widget has (a built-in's from K2, a custom widget's from its manifest).
+Caps: `agents:read`, `agents:add`, `presence:read`, `thread:read`, `thread:post`, `gardens:manage`, `gardens:template`, `app:navigate`.
+
+This list comes from K2's verb catalog (version 19). A verb marked
+**custom widgets** is one a custom widget may call too (see Custom widgets);
+the rest belong to K2's own widgets and controls.
+
+**`agents:read`**
+
+- `agents.list()`: The agents in the widget's scope, with live status. **custom widgets**
+- `agents.subscribe(cb)`: The same rows as agents.list, pushed on every change. **custom widgets**
+- `agents.home()`: The Agents widget's own Home id (view state).
+- `agents.setHome(id)`: Switch the Agents widget's own Home (never the window's).
+- `agents.local()`: The agents on this computer, for Ask my agent.
+- `conversation.open(address)`: Show this agent in the built-in Conversation that follows the widget. **custom widgets**
+- `conversation.close()`: Clear the widget's pick. **custom widgets**
+- `focusGroups.get()`: The app's focus groups, for the Agents view.
+- `focusGroups.set(id)`: Pick a focus group for the Agents view.
+- `focusGroups.subscribe(cb)`: The focus groups, pushed on change.
+- `homes.list()`: Every Home's id and name, for the Agents widget's Home picker.
+
+**`presence:read`**
+
+- `presence.get(address)`: Other people looking at one agent right now (never you). **custom widgets**
+- `presence.subscribe(address, cb)`: The same list as presence.get, pushed on change. **custom widgets**
+
+**`thread:read`**
+
+- `thread.read(address, {afterSeq, beforeSeq, limit})`: A page of a conversation (oldest first); beforeSeq pages back, afterSeq reads a delta (new items plus changed and removed). **custom widgets**
+- `thread.subscribe(address, cb)`: The live Thread with one agent and its working turn, pushed on every change. **custom widgets**
+- `thread.inbox(cb)`: Every new Thread message (and card change) on your agents on this server, on one socket with your own rights; merge by id. **custom widgets**
+- `thread.markRead(address, {seq})`: Mark the person's own read cursor in a conversation (forward only), as reading it in K2 does (Rosson 2026-10-20, replaces UW51). **custom widgets**
+- `thread.attachment(address, docId, n, {mode, px})`: One attachment of a message: its live meta, a preview, or an image thumbnail (thread-images-v1). **custom widgets**
+- `thread.open(address, {docId, line, n, rel})`: Open a message's attachment or a linked workspace file full size in K2 (a file tab, or a preview sheet in Zen). **custom widgets**
+- `thread.links(address, candidates)`: Which paths printed in messages lead to a file or folder inside the agent's workspace (the rest stay plain text). **custom widgets**
+
+**`thread:post`**
+
+- `thread.pickFiles(address)`: K2's own file picker for the person (files outside the workspace are copied into its .k2/downloads); empty when they cancel. **custom widgets**
+- `thread.post(address, text, {attachments})`: Send text to the agent as you, with files picked by the person riding it (thread.pickFiles). **custom widgets**
+- `thread.answer(address, cardId, choice)`: Answer a choice card in the Thread (never a secret card). **custom widgets**
+- `thread.void(address, cardId)`: Void a card in the Thread.
+- `compose.draft(address, text)`: Set K2's message box for that agent; never sends. **custom widgets**
+
+**`agents:add`**
+
+- `agents.add(opts?)`: Open K2's Add agent picker for the widget's Home; the human picks.
+
+**`gardens:manage`**
+
+- `gardens.create(name, template?, opts?)`: Make a Garden (the Garden switcher only).
+- `gardens.rename(id, name)`: Rename a Garden.
+- `gardens.delete(id)`: Delete a Garden (kept in .history).
+
+**`gardens:template`**
+
+- `gardens.empty()`: Whether the Garden on screen is the empty page.
+- `gardens.useTemplate(template, opts?)`: Turn the Garden on screen into a built-in template (Start with the default).
+
+**`app:navigate`**
+
+- `app.open(page)`: Switch the Garden's view in this window, inside Zen.
+- `app.current()`: The Garden's current view.
+- `app.subscribeCurrent(cb)`: The Garden's current view, pushed on change.
+- `app.badges()`: The top bar's Tickets badge.
+- `app.subscribe(cb)`: The top bar's badges, pushed on change.
+
+**no cap**
+
+- `gardens.list()`: Every Garden, in order. **custom widgets**
+- `gardens.current()`: The Garden on screen. **custom widgets**
+- `gardens.switch(id)`: Show another Garden (at most once every 2 s, never in the first 2 s). **custom widgets**
+- `zen.exit()`: Leave Zen in this window.
+- `controls.bind(kind, element, gardenId?)`: Bind a required control to an element K2 checks.
+- `theme.get()`: The page's theme: scheme and --zen-* values, the window's chrome table, and reduced motion. **custom widgets**
+
+Each `agents.list()` / `agents.subscribe(cb)` row has `activity`: what the agent's
+server says it is doing (the daemon decides; K2 never guesses). `working`;
+`monitoring` (the turn is done, only background work is left); `needs-you` (the
+daemon's `waiting`: a permission prompt or a question in the terminal);
+`unverifiable` (nothing heard for 30 minutes while the session is open; never
+treat it as done); `idle`; or `null` when that server can't say. The Agents
+widget's `status` prop keeps three values: `monitoring` shows with `working`, and
+`unverifiable` with `idle`. A custom widget's rows also say `unreachable` when
+that agent's server is offline.
+
+Rows also carry the agent's own look: `color` (`#rrggbb`, or `null` when its
+server hasn't said) and `image` (its picture as a PNG, JPEG, WebP or GIF `data:`
+URL of at most 256 KiB, else `null`; never SVG). Paint the initials on `color`
+when there is no `image`. Both change live when someone renames, recolors or
+re-pictures the agent.
+
+A Thread choice card (`thread.read` / `thread.subscribe`, `doc.choice`) also
+says `answeredBy`: who answered or dismissed it, `{kind, login, name}` with
+`kind` `owner`, `user` or `guest` and `name` the owner's display name (else
+`null`); `null` while pending or when the agent answered itself. And
+`expiresAt`: Unix seconds when a pending card expires (K2 closes it as
+`expired`), or `null` when it never does.
+
+Built-in widgets get their caps from K2. A custom widget asks for caps in its
+manifest and gets every one it asks for at once: widgets in your own Gardens
+need no permissions.
+
+## Custom widgets (your own HTML, CSS and JS)
+
+When the built-in widgets can't do what the human asks ("make my agents look like a
+game", "a diary", "a globe of my servers"), write a **custom widget**: a small web
+page in a folder, placed in a Garden. K2 runs it **sealed**: no network, no storage,
+no popups, no files, no K2 internals. It talks to K2 only through the `k2` object,
+with the caps its manifest asks for. **Widgets can talk to your agents right away:**
+no review, no permission dialog, nothing for the human to allow.
+
+### The folder
+
+`~/.k2/zen/widgets/<name>/`, one flat folder (`<name>`: lower-case letters, digits,
+`-` and `_`, up to 40; subfolders are ignored). K2 reads `manifest.json`, the entry
+HTML, `*.js`, `*.css`, and `*.png *.jpg *.jpeg *.webp *.gif *.woff2` (no SVG). K2
+inlines it all into one page; `k2.asset("cat.png")` gives a file as a `data:` URL.
+
+```json
+{
+  "schema": 1,
+  "name": "Agent Arcade",
+  "description": "Your agents as little characters.",
+  "entry": "index.html",
+  "caps": ["agents:read", "thread:read", "thread:post"],
+  "reasons": {"thread:post": "so you can talk to a character from the game"},
+  "requires": {"libs": ["three@0.170"]}
+}
+```
+
+- `schema` 1; `name` 1–40 characters (shown to the human as the widget's own words);
+`description` up to 200; `entry` defaults to `index.html`.
+- `caps`: only `agents:read`, `presence:read`, `thread:read`, `thread:post`, `sources:read`. Any other cap is an error. An empty list is fine (a clock).
+- `reasons`: one line (up to 140) per cap, in your words. K2 shows its own sentence too.
+- `requires.libs`: libraries from K2's standard library (see What's available),
+inlined before your scripts. `id` is optional and must equal the folder name.
+- `reads` (0.46.1): up to 8 other widgets on the same Garden whose data this one reads
+(`["fleet-ops-lists", "k2:kanban"]`; needs `store:read`; never itself). Read-only.
+- **Light and dark follow the Garden, never the computer** (0.46.3): K2 sets the frame's
+`color-scheme` to the Garden's (`!important`, kept in step on a theme switch), so a
+stylesheet's `color-scheme: light dark` can't paint a dark Garden's card white on a
+Mac in Light mode. Style with the `--zen-*` variables and `[data-zen-scheme=dark]`,
+never `@media (prefers-color-scheme)`. `"colorScheme": "own"` opts out (your CSS
+decides); `"garden"` is the default.
+- `version`, `license`, `bindings` are accepted and ignored for now. `net` and `secrets`
+are errors: outside data comes from **data sources** (`sources`, below).
+
+### Placing it
+
+```toml
+[[widget]]
+id = "arcade"
+kind = "custom"
+widget = "agent-arcade"   # the folder, or a built-in like "k2:diary@1"
+column = 0
+[widget.props]
+home = "Work"             # optional props your code reads (k2.widget, k2.config)
+```
+
+`custom` is a content widget that fills its column (never a band, edge or menu). At most
+10 custom widgets per page. Widgets stacked in one column share its height equally;
+`weight = 1..12` on a `[[widget]]` gives it that share instead (`weight = 3` next to
+`weight = 1` is three quarters of the column). `config` (a small table of strings, numbers and booleans)
+reaches the widget as `k2.config`. A conversation widget can follow it:
+`agents = "arcade"` on a `conversation` widget shows what it opens with
+`k2.conversation.open(address)`.
+
+### No permissions: it works right away
+
+A widget in your own Garden can use every cap its manifest asks for the moment it's
+placed: no review card, no grant, no scope to pick, no sending switch. It reaches the
+agents on this computer plus every agent on the human's Homes (the rooms and servers
+they connected in Home); any other address is `not_bound`, and every server still
+checks the human's role. Never write grants.json; there is nothing to grant. K2 keeps
+a few invisible rails: the sealed frame, an audit line per post, and a runaway guard:
+more than 120 posts in 10 minutes, or 20 identical texts to one agent, pauses posting
+(`sending_off`) with a small "Paused: too many posts. Resume" notice on the widget
+until the human clicks Resume. The widget keeps running meanwhile.
+
+### The `k2` object
+
+Run `k2 zen guide api` for every helper with an example and its errors. In short, by
+cap:
+
+**no cap**
+
+- `k2.gardens.list()` (local): Every Garden, in order.
+- `k2.gardens.current()` (local): The Garden on screen.
+- `k2.gardens.switch(id)` (local): Show another Garden (at most once every 2 s, never in the first 2 s).
+- `k2.theme.get()` (local): The page's theme: scheme and --zen-* values, the window's chrome table, and reduced motion.
+- `k2.theme.changed(cb)` (local): The same value as theme.get, pushed when the theme or motion changes.
+- `k2.canvas.setHitRegions(rects)` (local): Full-canvas Gardens: up to 32 rects (CSS px, this frame's viewport) where clicks reach you through K2's top drag strip; replaces the last list, [] clears. K2's own controls stay on top.
+- `k2.window.startDrag()` (local): Start moving the window, from a mousedown in this widget (only while a button is down here).
+- `k2.save.get(key)` (local): One of this widget's private saves, or null.
+- `k2.save.set(key, value)` (local): Keep a private value for this widget (agents never see saves).
+- `k2.save.remove(key)` (local): Forget one private save.
+- `k2.save.keys({prefix})` (local): The keys of this widget's private saves.
+- `k2.viewer.get()` (local): Who is looking: the person on this computer, by name.
+- `k2.app.self({app})` (portable): This App: its id, live Seed hash, health and when it was deployed (its own App only; the App pass, never a guest).
+- `k2.app.usage({app, hours})` (portable): This App's quotas, live use and per-call counts from its own audit (its own App only; the App pass, never a guest).
+- `k2.widget.self()` (local): This widget: its id, live hash, who made it and its last 7 days of use.
+
+**`agents:read`**: "See the agents in <scope>: their names, whether they're working, and whether they need you."
+
+- `k2.agents.list()` (portable): The agents in the widget's scope, with live status.
+- `k2.agents.subscribe(cb)` (portable): The same rows as agents.list, pushed on every change.
+- `k2.conversation.open(address)` (local): Show this agent in the built-in Conversation that follows the widget.
+- `k2.conversation.close()` (local): Clear the widget's pick.
+
+**`presence:read`**: "See who else is looking at those agents."
+
+- `k2.presence.get(address)` (local): Other people looking at one agent right now (never you).
+- `k2.presence.subscribe(address, cb)` (local): The same list as presence.get, pushed on change.
+
+**`thread:read`**: "Read your conversations with the agents in <scope>, including each one's last message."
+
+- `k2.thread.read(address, {afterSeq, beforeSeq, limit})` (portable): A page of a conversation (oldest first); beforeSeq pages back, afterSeq reads a delta (new items plus changed and removed).
+- `k2.thread.subscribe(address, cb)` (portable): The live Thread with one agent and its working turn, pushed on every change.
+- `k2.thread.inbox(cb)` (portable): Every new Thread message (and card change) on your agents on this server, on one socket with your own rights; merge by id.
+- `k2.thread.markRead(address, {seq})` (local): Mark the person's own read cursor in a conversation (forward only), as reading it in K2 does (Rosson 2026-10-20, replaces UW51).
+- `k2.thread.attachment(address, docId, n, {mode, px})` (local): One attachment of a message: its live meta, a preview, or an image thumbnail (thread-images-v1).
+- `k2.thread.open(address, {docId, line, n, rel})` (local): Open a message's attachment or a linked workspace file full size in K2 (a file tab, or a preview sheet in Zen).
+- `k2.thread.links(address, candidates)` (local): Which paths printed in messages lead to a file or folder inside the agent's workspace (the rest stay plain text).
+- `k2.thread.catchup({limit, threads})` (portable): Deltas (or newest pages) for many rooms in one round trip, each exactly what thread.page answers for it.
+- `k2.thread.unread()` (portable): The signed-in person's own unread counts: a guest's over the room Threads it may read, a Garden's over the person's Threads.
+- `k2.thread.mute({addr, muted, until})` (portable): Mute or unmute a room's Thread for the signed-in person (their own state, on every surface); an App's own pass has no mutes.
+
+**`thread:post`**: "Send messages to the agents in <scope> as you, with files you pick."
+
+- `k2.thread.pickFiles(address)` (local): K2's own file picker for the person (files outside the workspace are copied into its .k2/downloads); empty when they cancel.
+- `k2.thread.post(address, text, {attachments})` (portable): Send text to the agent as you, with files picked by the person riding it (thread.pickFiles).
+- `k2.thread.answer(address, cardId, choice)` (portable): Answer a choice card in the Thread (never a secret card).
+- `k2.compose.draft(address, text)` (local): Set K2's message box for that agent; never sends.
+
+**`sources:read`**: "Read the data sources this card names, on the servers you're signed in to. With thread:post or store:write too, what it shows can reach agents."
+
+- `k2.sources.list()` (portable): The sources this placement names, with their state and whether K2 can reach them.
+- `k2.sources.read(address)` (portable): One source's card view; ages come from serverNow minus updatedAt.
+- `k2.sources.history(address, field, {fromAt, toAt})` (portable): A field's trend points (gaps as null).
+- `k2.sources.subscribe(address, cb)` (portable): The card view, pushed on every change (counts toward the 16 subscriptions).
+- `k2.sources.refresh(address)` (portable): Ask the source's server to check now (at most once every 15 seconds).
+- `k2.sources.ask(address, itemKey?)` (local): Open K2's Ask an agent box about this source (K2 writes the draft; nothing is sent).
+
+**`files:read`**: "Read files in the agents' rooms on this computer (the room's files, never a path outside it)."
+
+- `k2.files.list({relPath, showHidden, workspace})` (portable): A folder's entries, folders first.
+- `k2.files.read({relPath, workspace})` (portable): A UTF-8 text file (at most 10 MiB).
+- `k2.files.readBinary({relPath, workspace})` (portable): A file as base64 (at most 50 MiB; read-range for more).
+
+**`tickets:read`**: "Read the tickets in the agents' rooms on this computer, with their comments."
+
+- `k2.tickets.list({all, project, status})` (portable): A room's tickets, newest first.
+- `k2.tickets.show({brief, id})` (portable): One ticket with its comments (and brief).
+
+**`tickets:post`**: "Open tickets for the agents on this computer, comment on them and set their status, as you."
+
+- `k2.tickets.create({agentName, assignees, body, briefHtml, kind, options, priority, project, title})` (portable): Open a ticket in a room for its agent.
+- `k2.tickets.comment({body, id, optionPick})` (portable): Comment on a ticket as the guest (free text moves it to needs_discussion).
+- `k2.tickets.resolve({id, status})` (portable): Set a ticket's status (Apps can't set answered).
+
+**`store:read`**: "Read this widget's own data on this computer."
+
+- `k2.store.get(key, {from})` (local): One key of this widget's data (or, with {from}, of a widget it reads), or null.
+- `k2.store.list({after, from, limit, prefix})` (local): Keys in order, a page at a time (at most 500 and 60 KiB).
+- `k2.store.changes({after, from, prefix, since})` (local): Changes after a cursor, whole revs at a time (subscribe uses this).
+
+**`store:write`**: "Save this widget's own data on this computer. Agents you allow can read and change it too."
+
+- `k2.store.put(key, value, {ifRev})` (local): Save one key; with ifRev, only if nobody changed it since.
+- `k2.store.delete(key, {ifRev})` (local): Delete one key (a missing key is not an error).
+- `k2.store.batch(ops)` (local): Up to 64 writes, all or nothing, as one rev.
+- `k2.store.txBegin()` (local): Open a transaction (k2.store.tx() wraps begin, add and commit).
+- `k2.store.txAdd(txId, ops)` (local): Stage up to 64 more writes (1,000 and 1 MiB in all); nothing is visible until commit.
+- `k2.store.txCommit(txId)` (local): Apply every staged write as one rev, or none of them.
+- `k2.store.txAbort(txId)` (local): Drop a transaction's staged writes.
+
+**`guests:rooms`**: "See and change which rooms an App's guests can reach on this computer. Every change asks you first, outside the widget."
+
+- `k2.guests.rooms({app, username})` (portable): One of this App's guests: its rooms on this App and its role (App: its own guests; Garden: any local App's).
+- `k2.guests.setRooms({app, rooms, username})` (portable): Set one guest's rooms on this App, within the rooms the App may hand out and never above the guest's role; idempotent, audited.
+
+**`activity:read`**: "See when the agents on this computer are working (no tool names, text or paths)."
+
+- `k2.activity.snapshot({workspace})` (portable): Whether the room's agent is working now, per session.
+
+**`room:members`**: "See who has access to the agents on this computer: the App guests and agent logins with a grant on each room, and their roles."
+
+- `k2.room.members({app, workspace})` (portable): Who holds a grant on the room: guests and agent logins with their roles (from grants, not presence); admins of this box are one line.
+
+Also: `k2.call(verb, ...args)`, `k2.subscribe(verb, ...args, cb)` (alias `k2.on`),
+`k2.connected`, `k2.can(verb)`, `k2.ready()` (call once you have drawn), `k2.config`,
+`k2.widget`, `k2.asset(name)`, `k2.motion.reduced`.
+
+**`await k2.connected` before `k2.can`, `k2.config`, `k2.widget` or `k2.motion`.** K2
+connects the frame after your top-level script runs; until then `k2.can()` is false and
+the others are empty, so a widget that checks them at startup draws as if it had no
+access. Calls and subscribes wait for the connection on their own. `k2.connected`
+rejects (K2Error `failed`, "not connected") when K2 never connects the frame:
+
+```js
+k2.connected.then(() => {
+if (k2.can('agents.subscribe')) k2.agents.subscribe(draw)
+k2.ready()
+}, () => showNote('K2 didn’t start this widget.'))
+```
+
+Every call returns a Promise; every subscribe
+returns its unsubscribe. A refused call rejects with a `K2Error` (`.code`: `cap_not_granted`, `not_bound`, `rate_limited`, `too_large`, `unknown_verb`, `verb_unavailable`, `verb_local`, `not_exposed`, `sending_off`, `server_not_saved`, `unreachable`, `removed`, `no_history`, `failed`, `conflict`, `space_full`, `value_too_large`, `bad_key`, `not_granted`, `resync`, `author_unknown`, `stale_widget`, `store_full`, `bad_tx`, `tx_expired`, `busy`, `paused`, `bad_args`, `bad_shape`, `pass_required`, `pass_invalid`, `pass_wrong_link`, `not_on_link`, `json_required`, `skin_room`, `usage`, `not_found`, `bad_login`, `locked`, `card_not_pending`, `guest_required`, `no_app_pass`, `no_app_key`, `no_chat_grant`, `chat_unavailable`, `app_pass_required`, `grant_required`, `outside_app_rooms`, `above_role`, `has_role`, `confirm_required`, `declined`, `refresh_invalid`, `refresh_reused`, `person_pass_required`, `wallet_off`, `duplicate_label`).
+
+### Rules
+
+- **`textContent` for anything an agent wrote, never `innerHTML`.** Agent text can hold markup.
+- No inline handlers (`onclick=`): they don't run. Use `addEventListener` in a script file.
+- No `fetch`, `XMLHttpRequest`, `WebSocket`, `localStorage`, `eval`, `new Function`,
+`<iframe>` or `import … from`: they're blocked, or validate refuses them.
+- Follow the Garden's look: the `--zen-*` CSS variables are set in the frame, and
+`k2.theme.changed(cb)` fires when they change. Respect `k2.motion.reduced`.
+
+### Using the whole canvas
+
+On a full-canvas Garden (`[layout] canvas = "full"`) your frame fills the window, and K2's
+top band (about 52 px: the window's drag strip, with K2's controls) floats over it, so clicks
+there don't reach you. `k2.canvas.setHitRegions(rects)` cuts holes in it: `rects` are
+`{x, y, width, height}` in CSS px of your frame's own viewport (pass
+`el.getBoundingClientRect()`); each call replaces the last list, `[]` clears, at most 32.
+Call it again when your layout changes (calling it every frame is fine: K2 coalesces).
+**K2's controls always win** where a rect covers them (the menu, the Garden switcher, the
+Zen toggle, usage), and if your rects cover the whole strip K2 keeps the gaps between its
+controls as drag space. To drag the window from an element of yours, call
+`k2.window.startDrag()` in its `mousedown` (it works only while a mouse button is down in
+your widget). Column Gardens ignore hit regions.
+
+```js
+const bar = document.querySelector('#toolbar')
+const share = () => k2.canvas.setHitRegions([bar.getBoundingClientRect()])
+k2.connected.then(share)
+addEventListener('resize', share)
+document.querySelector('#grip').addEventListener('mousedown', (e) => {
+if (e.button === 0) k2.window.startDrag().catch(() => {})
+})
+```
+
+### Workflow
+
+1. `k2 zen widget new <name> --from k2:diary` (or `--from hello`, `--from arcade`, `--from board-lite`, `--from source-trend`) copies a
+working example into `~/.k2/zen/widgets/<name>/`.
+2. Edit the folder; place it in a Garden (`kind = "custom"`, `widget = "<name>"`).
+3. `k2 zen validate --widget <name>` and `k2 zen validate --garden <id>` before you say
+it's done. A folder with errors keeps serving its last good version. A plain
+validate never signs; "pending" (placed, not run in a Zen window yet) exits 0
+(`--strict` exits 2). Runtime errors fail validate only for a placed widget's saved
+version from the last 24 h; an unplaced widget's or older ones are warnings, and
+`k2 zen widget errors <name> --clear` drops them once fixed (`--strict` exits 2
+while they are logged). A plain `k2 zen validate` lists each widget and where it is placed.
+4. Tell the human it's ready: it talks to their agents as soon as it's placed.
+
+**Keep the widget outside `~/.k2` (the dev loop).** Stage the folder in your
+workspace and go through K2; never copy files into `~/.k2` yourself:
+- `k2 zen validate --dir ./board` checks the staged folder like a widget folder and
+writes nothing (Zen needn't be set up).
+- `k2 zen widget preview --dir ./board [--config sources=fleet,deploys]` places it
+alone on K2's own "Widget preview" Garden as `preview-<name>` (never one of the
+human's Gardens); `--clear` removes it. Person, or an agent with the switch.
+- `k2 zen widget preview --dir ./board --shot board.png --theme dark [--width 420
+--height 360] [--data fixtures.json]` renders it headless to a PNG: K2's real frame
+on a Garden canvas, sample data from a stand-in bridge (or your `--data`: keys
+`"<verb> <address>"` or `"<verb>"`, and `"store"`). Writes nothing else; any agent.
+Look at the PNG in both themes before you say it's done; don't build your own
+headless render. Needs Node and Playwright's WebKit.
+- `k2 zen widget put board --dir ./board [--prune]` writes the whole folder in one
+checked call (a folder with errors writes nothing). Without "Manage Gardens and
+data sources" it becomes ONE proposal for the folder (its changed code files);
+approving it writes them all at once, or nothing if a file moved since.
+- `k2 zen validate --garden <id> --from page.toml` checks a staged Garden page;
+`k2 zen garden put <id> --from page.toml` writes it.
+5. `k2 zen widget list` shows each widget's state and placements; `k2 zen history --widget
+<name>` and `k2 zen reset --widget <name> --to <utc>` undo a bad edit. To stop a
+widget, take its `[[widget]]` out of the Garden file.
+
+**The Diary** (`k2:diary@1`, the Diary Garden in New Garden) is the canonical example:
+a haunted journal with one page per agent on this computer. The human turns the page
+(drags or clicks a corner, or uses the arrow keys) to write to another agent; their ink
+sinks in and the reply bleeds back in handwriting. It keeps to this computer's agents,
+and its Garden keeps only one ⋯ menu floating over the page (the Garden switcher and
+the Zen toggle) and hides the window's stoplights (`stoplights = "hidden"`).
+Copy it with `k2 zen widget new my-diary --from k2:diary`; a built-in widget itself
+never changes.
+
+Files K2 owns here too: **never write grants.json** or `pins.json`.
+
+### K2's widget kit (`k2-thread`, `k2-help`)
+
+Don't hand-build a Thread panel or help popovers: K2 ships both as libraries
+(`requires.libs`), in K2's look, following the Garden's light/dark.
+
+**A Thread panel** (`"k2-thread@1"`, caps `thread:read`, `thread:post`, `agents:read`):
+
+```js
+k2.connected.then(() => {
+const panel = K2Thread.mount(document.getElementById('thread'), {
+look: k2.config.look || 'chamfer',  // 'chamfer' (K2's Thread, cut corners, Garden colours)
+// or 'glass' (K2 Companion's round look and palette)
+address: k2.config.agent,           // 'handle::host'; or panel.open(address, label) later
+})
+})
+```
+
+It has K2's Thread behaviour: bubbles with author and time, choice cards, Enter sends
+(Shift+Enter is a new line; the text stays if K2 refuses), the working tab (state,
+counters, clock, "Sent"), stick-to-bottom scrolling with a "N new messages ↓" pill,
+a narrow layout under 480px, and attachments (file chips, `data:` images; pass
+`onOpenFile` or `renderAttachment`). Add `marked` and `dompurify` for markdown bodies.
+`panel.post(text)`, `panel.setLook(look)`, `panel.close(note)`, `panel.destroy()`.
+Give its element a height (it fills it). Choose the look per placement with
+`[widget.props.config] look = "glass"`.
+
+**Help** (`"k2-help@1"`, no caps): **put explanations behind an ⓘ, not on the canvas.**
+`el.appendChild(K2Help.tip('What this number means.', { label: 'Version spread' }))` adds
+an ⓘ: a tooltip on hover or focus, pinned by a click, tap, Enter or Space; text over 160
+characters opens a popover with a title and Close (`{title}`); Esc or a tap outside
+closes it. In markup: `<button class="k2h-btn" data-tip="…">ⓘ</button>`. Give rows
+you redraw a `key` so an open tip follows its new ⓘ.
+
+### Cards that read data sources
+
+A **data source** is a check a K2 server runs (an HTTP JSON URL polled on a schedule,
+rated ok / warn / crit / unknown, with a short history). A card never fetches; it reads
+the source's **card view** from the server that runs it. Make and inspect sources with
+`k2 sources` (`k2 study data-sources`); a person approves what you propose.
+
+- Ask for `sources:read` and say which sources in the manifest: `"sources": "config"`
+(the placement's `config.source`, `config.sources` as a comma-separated list, and
+`config.latest`) or a fixed list of names on this computer (`"sources": ["fleet"]`,
+at most 16). `sources` without the cap is an error (`sources_needs_cap`).
+- An address is `name` (this computer) or `name::host` (another server the human has
+**saved**; else `server_not_saved`). At most 8 other servers per Garden.
+- **A card that reads sources may also post and save** (0.46.1): with `thread:post`
+and/or `store:write` in its caps too, it keeps them. Validate notes the reach
+(`sources_reach_thread`, `sources_reach_store`) and `k2 zen widget show` says it:
+source values it shows can reach the agents it posts to, or agents granted its data.
+Post only what the person asked for. Without `thread:post`,
+`k2.sources.ask(address, itemKey?)` opens K2's Ask an agent box: K2 writes the
+question, the human sends it.
+- Its runtime errors reach you as class, code and line only, never message text
+(`k2 zen widget errors <name>`), so don't put values in thrown errors.
+- Draw from the view: `display` (pending / paused / stale / ok / warn / crit /
+unknown), `items[]` with `health`, `reason` and `list` (an `extract.lists` item, key
+`<list>/<key>`), `fields`, `counts`, `soft` (`{count, of, level}`: "soft crit 2/3"
+is a reading waiting to go hard), `gap`, `muted`, `simulated` (a TEST badge). Prefer
+the item's `health` (the source's rules: age, version vs target, thresholds) over
+re-deriving it in widget code. Ages are `serverNow - updatedAt`
+(seconds), never `Date.now()`. Unknown gets its own colour; never draw a blank card.
+- Refusals: `not_bound` (not in the placement's config), `server_not_saved`,
+`cap_not_granted` (the human's login there can't read it), `removed`, `no_history`,
+and `unreachable`, which carries `err.last`: the last view, phase `stale`. Draw it greyed.
+- **Subscribe with a handler object** (0.46.1) and K2 keeps the subscription alive: after a
+retryable refusal (`err.retryable`: `not_bound`, `unreachable`, `rate_limited`, `busy`) it
+calls `error(err)` with `err.retrying` and subscribes again (1, 2, 4, 8, 16, then every
+30 s). `data` gets a normalised view (`items` is always a list, `fields` an object); a
+value that isn't a view reaches `error` as `bad_shape`. Nothing runs after `stop()`. Don't
+write your own retry timer. Guards for other data: `k2.shape.view/list/obj/num/str`.
+Since 0.46.3 the old form `k2.sources.subscribe(address, cb, onError)` retries the same
+way (onError hears each refusal with `err.retrying`; `rate_limited` still ends it), and a
+new subscribe to the same source replaces a retry K2 has waiting, so old cards that
+re-subscribe in onError don't pile up.
+Arguments must be plain data (else `bad_args`, refused in the frame).
+
+```js
+k2.connected.then(() => {
+const stop = k2.sources.subscribe(k2.config.source, {
+data: (view) => draw(view),
+error: (err) => err.retrying ? drawGreyed(err.last) : note(err.code),
+})
+})
+```
+
+Charts: name a pinned library in `requires.libs` (`uplot@1.6.32` for sparklines and
+history lines; `chart.js`, `echarts`, `d3` too). They run offline; no CDN, no eval.
+
+**Built-in cards** (place them with `widget = "k2:<card>@2"`, `config.source` and, for
+several sources, `config.sources = "a, b"`):
+
+- `k2:fleet-grid@2` with `--preset k2-fleet` or `--preset k2-fleet-summary`
+- `k2:version-spread@2` with `--preset k2-fleet` or `--preset k2-fleet-summary` or `--preset github-latest-release`
+- `k2:relays-dns@2` with `--preset k2-fleet-summary` or `--preset gatus`
+- `k2:deploys@2` with `--preset vercel-deployments`
+- `k2:money-alerts@2` with `--preset stripe-past-due`
+
+`k2 sources propose --preset k2-fleet --preset-arg boxes=ohana,luzz --name fleet --label Fleet`
+makes the fleet source; `config.source = "fleet::<that server>"` shows it on a Mac's Garden.
+`k2-fleet-summary` (K2 Web's one route) gives the same item keys and fields, so a card
+keeps working when the source switches. `k2:version-spread@2` measures boxes against
+`config.latest` (a `github-latest-release` source), else a source's `target_version`, else
+`config.target`; `k2:money-alerts@2` shows states only by default and K2 Web's ops billing.
+`@2` (0.46.1) merges `config.source` + `config.sources` by item key (a box in two sources is
+one tile, the worst health wins), says "soft crit 2/3", keeps `extract.lists` items out of
+the main grid (`config.list = "certs"` shows one), and subscribes again by itself after a
+refusal (5 s, doubling to 60 s). `k2:<card>@1` still runs as shipped.
+
+### A widget's data (`k2.store`, this computer only)
+
+A custom widget that asks for `store:read` / `store:write` gets its own keyspace,
+`data:<widget>`, in a file K2 keeps on THIS computer (and `k2.save.*` for private
+saves). `k2 zen guide services` has every rule; `k2 study garden-data` is your side.
+
+- **Use `k2.store` for data; never inline data into the widget's code** (code is capped
+at 256 KB, and a code edit is a new version).
+- One key per object (`obj/<id>`, or `project/<pid>/board/<bid>/obj/<id>`), values JSON
+≤ 60 KiB. Write with `{ifRev}`; on `conflict` read again and re-apply only the fields
+you changed. `k2.store.subscribe(prefix, cb)` shows anyone's change live.
+- **Agents use `k2 store --widget <name>`** (`get put rm list changes batch grants
+export`). Every call needs a grant the person gave (Settings → Gardens → Local Data,
+or `k2 zen data grant`), or one a grant admin gave. `k2 store grants --widget <w>`
+says what you can touch and why.
+- **After editing a widget, run `k2 zen validate --widget <w> --sign`: it signs the widget as
+you, and the widget then reads and writes data with YOUR grants.** (`k2 zen widget sign
+<w>` signs alone; a plain validate never signs.) An unsigned
+version gets no data (`author_unknown`). Never sign with the owner token (never use
+`~/.k2/daemon.token`), and never edit a widget the person made unless they ask.
+When you change a widget the person made (with the switch), its new version isn't
+theirs, so it runs without its data until they keep it: K2 puts a card on their Thread
+with you ("Keep as mine" / "Leave it as <you>'s"; the answer says `keepAsMine` and
+`keepCard`), or an inbox note when you have no Thread. Only they can tap it (your
+passport is refused); Settings → Gardens → Local Data undoes it.
+- **Project grants are a convenience; any agent can join a project.** Don't add yourself
+to a project to get its data; ask the person. A grant admin grants only inside its
+own prefix, never above its own level, never to itself.
+- A widget's own script checks the data's shape: write Board data through `bin/board`
+(it validates); a raw `k2 store put` skips Board's schema. Widgets must tolerate bad
+values (an agent may write one).
+- **A locked Garden's data still changes**: Lock freezes how a Garden works, not
+what's in it. A widget that asks for `sources:read` may write data too when it asks
+for `store:write` (0.46.1); agents granted that data can read what it saves.
+- **Read another widget's data** (0.46.1): list it in the manifest's `"reads"`
+(`["fleet-ops-lists"]`, needs `store:read`), place both on the same Garden, then
+`k2.store.get(key, {from: "fleet-ops-lists"})`, `k2.store.list({prefix, from})`,
+`k2.store.subscribe({prefix, from}, cb)`. Read-only; anything else is `not_bound`. An
+agent-made reader needs its maker's read grant on that widget too.
+- **Your own widget's data, no grant** (0.46.1): with the person's "Manage Gardens and
+data sources" switch, the agent that signed a widget's newest version reads and
+writes its data with `k2 store --widget <w>` (seed it), audited. Without the switch,
+ask for a grant.
+- Big changes: `k2 store batch --widget <w> < ops.json` (≤ 1,000 ops, one rev, all or
+nothing). History: `k2 store export --widget <w> --at <YYYY-MM-DD>`.
+- The example: `k2 zen guide example board-lite` (a sticky-note board in its data, and
+the agent's `bin/board-lite` beside it).
+- **The Kanban Garden** (`k2:kanban@4`, New Garden → Kanban) keeps its board in
+`data:k2:kanban`, one board per Garden under `board/<garden id>/` (its **For agents**
+button shows the exact prefix `<p>`): `<p>col/<id>` = `{name, order}`, `<p>card/<id>` =
+`{title, note, col, order}` (`col` is a column's `<id>`, `note` is markdown, lower
+`order` first). With a grant, `k2 store list --widget k2:kanban --prefix <p>`, then:
+`k2 store put --widget k2:kanban <p>card/<new-id> --if-rev 0 --value '{"title":"…","col":"todo","order":4096}'`
+Change a card with `--if-rev <rev>`; never write `<p>meta`.
+Its **Thread** button opens a panel to talk to one agent beside the board, in K2's
+Thread look (your bubbles right, the agent's left, "author · time" under each,
+markdown, a round Send: Enter sends, Shift+Enter is a new line; the working tab with
+counters and a clock). It wears K2 Companion's colours in light and dark; to follow
+the Garden's theme instead, set `look = "garden"` under `[widget.props.config]`.
+A message never moves a person who scrolled up; a "new messages" pill counts it.
+It shows a message's files (chips, images as pictures; a click opens them full size),
+makes file paths in your workspace clickable, and takes files with its + button
+(they ride the message, workspace-relative, like K2's own Thread).
+A Kanban Garden that syncs with K2's default moves to `@4`; an own copy keeps its board
+(`@1`, `@2` or `@3`).
+
+## What's available to a custom widget
+
+### Libraries (inside K2, pinned, offline)
+
+Name them in the manifest's `requires.libs` as `"<id>@<version>"` (a version prefix
+that ends at a dot works: `"three@0.170"`). Each defines a global.
+
+- `three@0.186.0` (three.js, MIT): global `THREE`, bundled, 959 KB. THREE also carries common add-ons: OrbitControls, MapControls, TrackballControls, PointerLockControls, DragControls, TransformControls, GLTFLoader, OBJLoader, MTLLoader, STLLoader, SVGLoader, FontLoader, TextGeometry, RoundedBoxGeometry, ConvexGeometry, EffectComposer, RenderPass, ShaderPass, UnrealBloomPass, OutlinePass, FXAAPass, OutputPass, CSS2DRenderer, CSS3DRenderer, Sky, SimplexNoise, ImprovedNoise, BufferGeometryUtils, SkeletonUtils. Load models and textures from data: URLs (k2.asset), never http.
+- `globe.gl@2.46.2` (globe.gl, MIT): global `Globe`, bundled, 1.8 MB. Carries its own copy of three.js inside. Its example earth textures are web URLs, which a sealed widget cannot load: pass your own image as a data: URL (globeImageUrl(k2.asset("earth.jpg"))).
+- `cannon-es@0.20.0` (cannon-es, MIT): global `CANNON`, bundled, 122 KB.
+- `pixi.js@8.21.0` (PixiJS, MIT): global `PIXI`, bundled, 825 KB. Ships with PixiJS's no-eval add-on already loaded, so it runs under the widget security policy.
+- `phaser@4.2.1` (Phaser, MIT): global `Phaser`, bundled, 1.3 MB. Load images and audio from data: URLs (this.load.image("cat", k2.asset("cat.png"))).
+- `kaplay@3001.0.19` (KAPLAY, MIT): global `kaplay`, bundled, 185 KB.
+- `matter-js@0.20.0` (Matter.js, MIT): global `Matter`, bundled, 82 KB.
+- `d3@7.9.0` (D3, ISC): global `d3`, bundled, 274 KB. d3.json/d3.csv fetch over the network and are blocked; parse inline text instead. d3.csvParse and d3.tsvParse are K2 versions with the same results (upstream builds a function from text, which the widget security policy blocks); d3.dsvFormat(…).parse still needs eval, so use its parseRows.
+- `chart.js@4.5.1` (Chart.js, MIT): global `Chart`, bundled, 204 KB. If a responsive chart draws at 0×0 (seen in Chrome, not WebKit), set responsive: false and give the canvas a width and height.
+- `echarts@6.1.0` (Apache ECharts, Apache-2.0): global `echarts`, bundled, 1.1 MB.
+- `uplot@1.6.32` (uPlot, MIT): global `uPlot`, bundled, 52 KB. Small and fast time series (about 50 KB): sparklines and history lines for source trends. Give it a width and height; data is [xs, ...ys] with xs in seconds.
+- `animejs@4.5.0` (Anime.js, MIT): global `anime`, bundled, 116 KB.
+- `lottie-web@5.13.0` (Lottie, MIT): global `lottie`, bundled, 299 KB. Pass the animation as animationData (an object), not a path. Animations that use expressions need eval and do not run.
+- `perfect-freehand@1.2.3` (perfect-freehand, MIT): global `PerfectFreehand`, bundled, 6 KB. PerfectFreehand.getStroke(points, options) returns the outline polygon; draw it as an SVG path or on a canvas.
+- `roughjs@4.6.6` (Rough.js, MIT): global `rough`, bundled, 28 KB.
+- `howler@2.2.4` (howler.js, MIT): global `Howler`, bundled, 36 KB. Also defines Howl. Sounds play from data: URLs. Audio files are not widget assets in this version, so keep short sounds as base64 in a script, or synthesize them with Tone.js.
+- `tone@15.1.22` (Tone.js, MIT): global `Tone`, bundled, 338 KB. Limited: AudioWorklet modules can't load in a sealed widget (audioWorklet.addModule(blob:) is refused: worklets need blob: scripts, which the widget policy does not allow), so worklet-based nodes fail. Oscillators, synths, effects and the Transport work. Sound starts only after a click (browser autoplay rule).
+- `leaflet@1.9.4` (Leaflet, BSD-2-Clause): global `L`, bundled, 172 KB. Limited: no map tiles (they come from the network). Use local image overlays (L.imageOverlay with a data: URL), GeoJSON and vector layers.
+- `marked@18.0.14` (marked, MIT): global `marked`, bundled, 46 KB. marked does not sanitize: pass its HTML through DOMPurify.sanitize before showing agent text.
+- `dompurify@3.4.16` (DOMPurify, Apache-2.0): global `DOMPurify`, bundled, 29 KB. Dual-licensed MPL-2.0 OR Apache-2.0 upstream; K2 ships it under Apache-2.0.
+- `highlight.js@11.12.0` (highlight.js, BSD-3-Clause): global `hljs`, bundled, 130 KB. The common languages are built in. GitHub light and dark themes follow the Garden scheme.
+- `katex@0.18.9` (KaTeX, MIT): global `katex`, bundled, 631 KB. Fonts are inlined (woff2). Also defines renderMathInElement (auto-render).
+- `preact@10.29.8` (Preact + htm, MIT AND Apache-2.0): global `preact`, bundled, 17 KB. preact.html is htm bound to preact.h: preact.render(preact.html`<b>hi</b>`, root). Hooks are on preact too (useState, useEffect, …).
+- `lit@3.3.3` (Lit, BSD-3-Clause): global `Lit`, bundled, 23 KB. Lit.html, Lit.css, Lit.LitElement, Lit.render, and the classMap, styleMap, repeat, when, map, ifDefined, live and ref directives.
+- `font-caveat@5.3.0` (Caveat (handwriting font), OFL-1.1): global `K2Fonts`, bundled, 182 KB. Adds the font family 'Caveat' (weights 400 and 700, Latin). Use font-family: Caveat; K2Fonts.caveat holds the name.
+- `babylonjs@8.52.1` (Babylon.js, Apache-2.0): global `BABYLON`, downloaded on first use, blocked under air-gap, 7.5 MB. Downloaded once by K2 on first use (about 7.9 MB), then cached; refused on air-gapped computers. Babylon 9 (8.6 MB) is over the 8 MB per-widget library limit, so 8.52.1 is pinned. Leaves about 0.5 MB for other libraries in the same widget.
+- `plotly.js-dist-min@4.1.1` (Plotly, MIT): global `Plotly`, downloaded on first use, blocked under air-gap, 4.6 MB. Downloaded once by K2 on first use (about 4.8 MB), then cached; refused on air-gapped computers.
+- `k2-help@1.0.0` (K2 help button (widget kit), FSL-1.1-Apache-2.0): global `K2Help`, bundled, 15 KB. K2's own: the (i) help button. K2Help.tip(text, {label, key, title}) returns an (i) that shows a tooltip on hover or focus and pins it on click, tap, Enter or Space; text over 160 characters opens a popover with Close instead. Esc, a tap outside or the same (i) closes it; it stays inside the frame and follows the Garden's light/dark. Markup works too: class="k2h-btn" with data-tip, or data-help="<id>" for a popover. Put explanations behind an (i), not on the canvas.
+- `k2-thread@1.0.0` (K2 Thread panel (widget kit), FSL-1.1-Apache-2.0): global `K2Thread`, bundled, 54 KB. K2's own: a Thread panel to talk to one agent inside a widget. K2Thread.mount(el, {look: 'chamfer' or 'glass', address: 'handle::host'}) then panel.open(address, label), panel.post(text), panel.setLook(look), panel.destroy(). chamfer is K2's Thread with chamfered corners in the Garden theme's colours; glass is K2 Companion's round look and palette. Both: bubbles with author and time, choice cards, Enter sends (Shift+Enter a new line), the working tab with counters and clock, stick-to-bottom scrolling with a new-messages pill, a narrow layout, file chips and data: images for attachments. Needs thread:read and thread:post (agents:read for names and counters). Add marked and dompurify for markdown bodies.
+
+Anything else: put the file in the widget's folder (it counts toward the code limit),
+or name a pinned CDN file as `{"url": …, "integrity": "sha256-…"}` from cdnjs.cloudflare.com, cdn.jsdelivr.net, unpkg.com; K2's daemon
+fetches and checks it, the frame never touches the network, and air-gap blocks it.
+
+### Limits
+
+- Code (HTML + JS + CSS after inlining): 256 KB. Each asset 1 MB; all assets 2 MB; the
+bundled page 3 MB. Libraries: up to 8 MB per widget, outside those limits.
+- 10 custom widgets per page. Per widget: 60 calls a second, 16 live subscriptions,
+64 KB per message, 8 live servers.
+- WebGL, canvas, wasm and blob workers work. No network, storage, popups or dialogs.
+
+### Examples to copy
+
+- `k2:diary` (the Diary): a full widget with draggable page turns, handwriting and reduced motion.
+- `hello`: a clock and a greeting; the smallest widget.
+- `arcade`: agents as characters; click one to talk.
+- `board-lite`: sticky notes kept in the widget's data, live for you and your agents.
+- `source-trend`: one data source with the resilient handler-object subscription and a
+uPlot sparkline (`config.source`, `config.series`).
+- `k2:kanban` (the Kanban): columns and cards in the widget's data, pointer drag, agents too.
+<!-- K2:MANAGED:END -->
+
+<!-- Content below this line is yours — K2 will never modify it. -->

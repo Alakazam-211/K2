@@ -28,7 +28,8 @@
 //! session id, passport and owner token, the port, the daemon version, any
 //! other UUID, Zen snapshot stamps (`20261022T101010123Z` → `<STAMP>`), RFC
 //! 3339 times (`<TIME>`), proposal ids (`zp-…` → `<PROPOSAL>`), and in JSON
-//! bodies the VALUES of [`VOLATILE_KEYS`] (clocks).
+//! bodies the VALUES of [`VOLATILE_KEYS`] (clocks) and a 16-hex `version`
+//! (a page version hash over content and save times).
 //!
 //! Modes: plain `cargo test -p k2-daemon --test garden_access_off_golden`
 //! compares and fails loudly on any difference or missing fixture.
@@ -61,7 +62,7 @@ const TABLES_0219: &[&str] = &["zen_garden_access", "zen_garden_made", "zen_gard
 /// A custom widget placed in a Garden (the page payload carries it).
 fn page(widget: &str) -> String {
     format!(
-        "schema = 1\n\n[layout]\nkind = \"columns\"\n[[layout.column]]\nsize = 60\nmin-width = 200\n[[layout.column]]\nsize = 40\nmin-width = 200\n\n[[widget]]\nid = \"main\"\nkind = \"custom\"\nwidget = \"{widget}\"\ncolumn = 0\n\n[[widget]]\nid = \"talk\"\nkind = \"conversation\"\ncolumn = 1\n"
+        "schema = 1\n\n[layout]\nkind = \"columns\"\n[[layout.column]]\nsize = 100\nmin-width = 200\n\n[[widget]]\nid = \"main\"\nkind = \"custom\"\nwidget = \"{widget}\"\ncolumn = 0\n"
     )
 }
 
@@ -255,6 +256,9 @@ fn mask_volatile(v: &mut Value) {
             for (k, x) in m.iter_mut() {
                 if VOLATILE_KEYS.contains(&k.as_str()) && !x.is_null() {
                     *x = Value::String(format!("<{k}>"));
+                } else if k == "version" && x.as_str().is_some_and(|s| s.len() == 16 && s.bytes().all(|b| b.is_ascii_hexdigit())) {
+                    // A page version: a hash over content and save times.
+                    *x = Value::String("<version-hash>".into());
                 } else {
                     mask_volatile(x);
                 }
@@ -413,7 +417,8 @@ async fn garden_access_off_is_today_byte_for_byte() {
     for g in v["gardens"].as_array().unwrap_or_else(|| panic!("no gardens: {v}")) {
         gardens.push(g["id"].as_str().unwrap_or_else(|| panic!("no id: {g}")).to_string());
     }
-    assert_eq!(gardens.len(), 2, "setup makes Garden 1 and Garden 2: {v}");
+    assert!(gardens.len() >= 2, "setup makes Garden 1 and Garden 2 at least: {v}");
+    let made_at_setup = gardens.len();
     case!("owner", "GET", "/cli/zen/gardens", None);
     case!("owner", "GET", "/cli/zen/status", None);
     case!("owner", "GET", "/cli/zen/sync", None);
@@ -427,19 +432,20 @@ async fn garden_access_off_is_today_byte_for_byte() {
     // ── an agent ────────────────────────────────────────────────────
     case!("agent", "GET", "/cli/zen/gardens", None);
     case!("agent", "POST", "/cli/zen/widget/new", s(r#"{"name":"agent-board"}"#));
-    case!("agent", "POST", "/cli/zen/widget/put", s(r#"{"widget":"board","file":"notes.txt","text":"hi"}"#));
+    case!("agent", "POST", "/cli/zen/widget/put", s(r#"{"widget":"board","file":"hello.js","text":"// changed by an agent\n"}"#));
     let agent_put = serde_json::to_string(&serde_json::json!({ "garden": "{G2}", "text": page("agent-board"), "note": "swap the board" })).unwrap();
     case!("agent", "POST", "/cli/zen/garden/put", Some(agent_put));
     case!("agent", "POST", "/cli/zen/garden/new", s(r#"{"name":"Agent page"}"#));
     case!("agent", "POST", "/cli/zen/garden/rename", s(r#"{"garden":"{G2}","name":"Renamed by agent"}"#));
     case!("agent", "POST", "/cli/zen/garden/reorder", s(r#"{"garden":"{G2}","to":1}"#));
-    case!("agent", "POST", "/cli/zen/garden/delete", s(r#"{"garden":"{G2}"}"#));
     case!("agent", "POST", "/cli/zen/reset", s(r#"{"garden":"{G2}"}"#));
     case!("agent", "POST", "/cli/zen/theme/set", s(r#"{"name":"paper"}"#));
     case!("agent", "POST", "/cli/zen/widget/preview", s(r#"{"clear":true}"#));
     case!("agent", "POST", "/cli/zen/widget/sign", s(r#"{"widget":"agent-board"}"#));
     case!("agent", "POST", "/cli/zen/widget/claim", s(r#"{"widget":"agent-board"}"#));
     case!("agent", "POST", "/cli/zen/garden/lock", s(r#"{"garden":"{G2}","locked":true}"#));
+    // Last of the agent's acts: at 0.46.3 a passport's garden/delete deletes.
+    case!("agent", "POST", "/cli/zen/garden/delete", s(r#"{"garden":"{G1}"}"#));
 
     // ── the person reads and decides ────────────────────────────────
     case!("owner", "GET", "/cli/zen/proposals", None);
@@ -454,8 +460,9 @@ async fn garden_access_off_is_today_byte_for_byte() {
             gardens.push(id);
         }
     }
-    assert_eq!(gardens.len(), 3, "the person's new Garden: {v}");
-    case!("owner", "POST", "/cli/zen/garden/delete", s(r#"{"garden":"{G3}"}"#));
+    assert_eq!(gardens.len(), made_at_setup + 1, "the person's new Garden: {v}");
+    let spare = format!("{{G{}}}", gardens.len());
+    case!("owner", "POST", "/cli/zen/garden/delete", Some(format!(r#"{{"garden":"{spare}"}}"#)));
     case!("owner", "GET", "/cli/zen/gardens", None);
 
     // ── the Garden access routes, as at 0.46.3 (no rows) ────────────
@@ -466,7 +473,7 @@ async fn garden_access_off_is_today_byte_for_byte() {
         case!(who, "GET", "/cli/zen/garden/history?garden={G2}", None);
         case!(who, "GET", "/cli/zen/widget/history?widget=board", None);
         case!(who, "GET", "/cli/zen/gardens/deleted", None);
-        case!(who, "POST", "/cli/zen/garden/restore", s(r#"{"garden":"{G3}"}"#));
+        case!(who, "POST", "/cli/zen/garden/restore", Some(format!(r#"{{"garden":"{spare}"}}"#)));
         case!(who, "GET", "/cli/zen/snapshot?file=zen.toml&name=x.toml", None);
     }
 

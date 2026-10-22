@@ -1,0 +1,1644 @@
+## owner token
+> POST /cli/zen/setup
+> body: {}
+HTTP/1.1 200 OK
+content-type: application/json
+{
+  "changed": false,
+  "createdDefault": true,
+  "createdFolder": true,
+  "gardens": [
+    {
+      "createdAt": "<createdAt>",
+      "hasFile": true,
+      "id": "<G1>",
+      "index": 1,
+      "locked": false,
+      "name": "Garden 1",
+      "template": "k2.texting@1",
+      "theme": null
+    },
+    {
+      "createdAt": "<createdAt>",
+      "hasFile": true,
+      "id": "<G2>",
+      "index": 2,
+      "locked": false,
+      "name": "Garden 2",
+      "template": "k2.blank@1",
+      "theme": null
+    },
+    {
+      "createdAt": "<createdAt>",
+      "hasFile": true,
+      "id": "<G3>",
+      "index": 3,
+      "locked": false,
+      "name": "Diary",
+      "template": "k2.diary@2",
+      "theme": null
+    }
+  ],
+  "migrated": null,
+  "ok": true,
+  "path": "<HOME>/.k2/zen"
+}
+
+## owner token
+> GET /cli/zen/gardens
+> body: 
+HTTP/1.1 200 OK
+content-type: application/json
+{
+  "gardens": [
+    {
+      "createdAt": "<createdAt>",
+      "hasFile": true,
+      "id": "<G1>",
+      "index": 1,
+      "locked": false,
+      "name": "Garden 1",
+      "template": "k2.texting@1",
+      "theme": null
+    },
+    {
+      "createdAt": "<createdAt>",
+      "hasFile": true,
+      "id": "<G2>",
+      "index": 2,
+      "locked": false,
+      "name": "Garden 2",
+      "template": "k2.blank@1",
+      "theme": null
+    },
+    {
+      "createdAt": "<createdAt>",
+      "hasFile": true,
+      "id": "<G3>",
+      "index": 3,
+      "locked": false,
+      "name": "Diary",
+      "template": "k2.diary@2",
+      "theme": null
+    }
+  ],
+  "ok": true,
+  "setUp": true
+}
+
+## owner token
+> GET /cli/zen/status
+> body: 
+HTTP/1.1 200 OK
+content-type: application/json
+{
+  "gardens": [
+    {
+      "createdAt": "<createdAt>",
+      "hasFile": true,
+      "id": "<G1>",
+      "index": 1,
+      "locked": false,
+      "name": "Garden 1",
+      "template": "k2.texting@1",
+      "theme": null
+    },
+    {
+      "createdAt": "<createdAt>",
+      "hasFile": true,
+      "id": "<G2>",
+      "index": 2,
+      "locked": false,
+      "name": "Garden 2",
+      "template": "k2.blank@1",
+      "theme": null
+    },
+    {
+      "createdAt": "<createdAt>",
+      "hasFile": true,
+      "id": "<G3>",
+      "index": 3,
+      "locked": false,
+      "name": "Diary",
+      "template": "k2.diary@2",
+      "theme": null
+    }
+  ],
+  "message": null,
+  "ok": true,
+  "path": "<HOME>/.k2/zen",
+  "setUp": true,
+  "watching": true,
+  "widgets": []
+}
+
+## owner token
+> GET /cli/zen/sync
+> body: 
+HTTP/1.1 200 OK
+content-type: application/json
+{
+  "gardens": [
+    {
+      "damaged": [],
+      "gardenTheme": null,
+      "id": "<G1>",
+      "index": 1,
+      "keepPrevious": {
+        "page": false,
+        "theme": false
+      },
+      "locked": false,
+      "lockedAt": null,
+      "name": "Garden 1",
+      "ownChanges": [],
+      "ownChangesError": null,
+      "page": {
+        "mode": "synced",
+        "newerDefault": false
+      },
+      "theme": {
+        "mode": "synced",
+        "newerDefault": false
+      },
+      "themeBase": {
+        "label": "Glass",
+        "name": "glass"
+      },
+      "themeBuiltin": true,
+      "themeLabel": "Glass",
+      "themeName": "glass",
+      "undo": null
+    },
+    {
+      "damaged": [],
+      "gardenTheme": null,
+      "id": "<G2>",
+      "index": 2,
+      "keepPrevious": {
+        "page": false,
+        "theme": false
+      },
+      "locked": false,
+      "lockedAt": null,
+      "name": "Garden 2",
+      "ownChanges": [],
+      "ownChangesError": null,
+      "page": {
+        "mode": "synced",
+        "newerDefault": false
+      },
+      "theme": {
+        "mode": "synced",
+        "newerDefault": false
+      },
+      "themeBase": {
+        "label": "Basic",
+        "name": "basic"
+      },
+      "themeBuiltin": true,
+      "themeLabel": "Basic",
+      "themeName": "basic",
+      "undo": null
+    },
+    {
+      "damaged": [],
+      "gardenTheme": null,
+      "id": "<G3>",
+      "index": 3,
+      "keepPrevious": {
+        "page": false,
+        "theme": false
+      },
+      "locked": false,
+      "lockedAt": null,
+      "name": "Diary",
+      "ownChanges": [],
+      "ownChangesError": null,
+      "page": {
+        "mode": "synced",
+        "newerDefault": false
+      },
+      "theme": {
+        "mode": "synced",
+        "newerDefault": false
+      },
+      "themeBase": {
+        "label": "Haunted",
+        "name": "haunted"
+      },
+      "themeBuiltin": true,
+      "themeLabel": "Haunted",
+      "themeName": "haunted",
+      "undo": null
+    }
+  ],
+  "k2Version": "0.46.2",
+  "liveDefaults": "d-7d1bfd780a3c4733",
+  "migratedAt": "<TIME>",
+  "ok": true,
+  "previousDefaults": null
+}
+
+## owner token
+> POST /cli/zen/widget/new
+> body: {"name":"board"}
+HTTP/1.1 200 OK
+content-type: application/json
+{
+  "changed": true,
+  "errors": [],
+  "files": [
+    "hello.css",
+    "hello.js",
+    "index.html",
+    "manifest.json"
+  ],
+  "from": "hello",
+  "madeBy": {
+    "kind": "owner"
+  },
+  "name": "board",
+  "ok": true,
+  "path": "<HOME>/.k2/zen/widgets/board",
+  "stamped": true,
+  "state": "ok"
+}
+
+## owner token
+> POST /cli/zen/garden/put
+> body: {"garden":"<G2>","text":"schema = 1\n\n[layout]\nkind = \"columns\"\n[[layout.column]]\nsize = 100\nmin-width = 200\n\n[[widget]]\nid = \"main\"\nkind = \"custom\"\nwidget = \"board\"\ncolumn = 0\n"}
+HTTP/1.1 200 OK
+content-type: application/json
+{
+  "changed": true,
+  "file": "gardens/<G2>.toml",
+  "garden": "<G2>",
+  "hash": "7b872ff17882dac071a255ae82a8e2e22f2bfb18cb94ace7e48d36920d4f68cf",
+  "ok": true,
+  "snapshot": "<STAMP>-000.toml"
+}
+
+## owner token
+> GET /cli/zen/get?garden=<G2>
+> body: 
+HTTP/1.1 200 OK
+content-type: application/json
+{
+  "chrome": {
+    "corners": "system",
+    "stoplight-offset": [
+      0,
+      0
+    ],
+    "stoplights": "round"
+  },
+  "errors": [],
+  "frame": {
+    "bands": {
+      "bar-height-px": 44,
+      "group-gap-px": 12,
+      "inset-px": 14
+    },
+    "columns": {
+      "gap-token": "gap",
+      "radius-token": "radius"
+    },
+    "controls": {
+      "drag-min-height-px": 12,
+      "drag-min-width-px": 120,
+      "min-opacity": 0.3,
+      "target-px": 24
+    },
+    "format": 1,
+    "glass": {
+      "blur": "none",
+      "edge-border-mix": 55,
+      "edge-text-mix": 14,
+      "shadow": "0 10px 30px",
+      "shadow-black-mix": 8,
+      "sheen-white-mix": 22
+    },
+    "motion": {
+      "popin-from": 0.92,
+      "pulse-opacity": 0.35,
+      "slide-px": 8
+    },
+    "overflow": {
+      "column-min-width-share": true,
+      "order": [
+        "usage",
+        "theme-picker"
+      ],
+      "switcher-compact": "6rem"
+    },
+    "shield": {
+      "agent-selection-accent-mix": 30,
+      "box-radius-factor": 0.5,
+      "me-selection-text-mix": 35,
+      "scrim": 0.32
+    },
+    "widgets": {
+      "agents-avatar-px": 40,
+      "agents-focus-group-width-px": 240,
+      "nav-rail-row-px": 36,
+      "nav-rail-width-px": 44,
+      "rail-views": [
+        "home",
+        "agents",
+        "projects",
+        "tickets"
+      ]
+    }
+  },
+  "garden": {
+    "id": "<G2>",
+    "index": 2,
+    "name": "Garden 2"
+  },
+  "lastGoodAt": "<TIME>",
+  "motion": {
+    "animations": {
+      "conversation": {
+        "bezier": [
+          0.22,
+          1,
+          0.36,
+          1
+        ],
+        "curve": "glide",
+        "durationMs": 300,
+        "ease": "cubic-bezier(0.22, 1, 0.36, 1)",
+        "from": "global",
+        "on": true,
+        "speed": 3,
+        "style": null
+      },
+      "conversationSwitch": {
+        "bezier": [
+          0.22,
+          1,
+          0.36,
+          1
+        ],
+        "curve": "glide",
+        "durationMs": 200,
+        "ease": "cubic-bezier(0.22, 1, 0.36, 1)",
+        "from": "conversationSwitch",
+        "on": true,
+        "speed": 2,
+        "style": "fade"
+      },
+      "global": {
+        "bezier": [
+          0.22,
+          1,
+          0.36,
+          1
+        ],
+        "curve": "glide",
+        "durationMs": 300,
+        "ease": "cubic-bezier(0.22, 1, 0.36, 1)",
+        "from": "global",
+        "on": true,
+        "speed": 3,
+        "style": null
+      },
+      "messageIn": {
+        "bezier": [
+          0.22,
+          1,
+          0.36,
+          1
+        ],
+        "curve": "glide",
+        "durationMs": 300,
+        "ease": "cubic-bezier(0.22, 1, 0.36, 1)",
+        "from": "messageIn",
+        "on": true,
+        "speed": 3,
+        "style": "popin 92%"
+      },
+      "messages": {
+        "bezier": [
+          0.22,
+          1,
+          0.36,
+          1
+        ],
+        "curve": "glide",
+        "durationMs": 300,
+        "ease": "cubic-bezier(0.22, 1, 0.36, 1)",
+        "from": "global",
+        "on": true,
+        "speed": 3,
+        "style": null
+      },
+      "rowIn": {
+        "bezier": [
+          0.22,
+          1,
+          0.36,
+          1
+        ],
+        "curve": "glide",
+        "durationMs": 300,
+        "ease": "cubic-bezier(0.22, 1, 0.36, 1)",
+        "from": "rowIn",
+        "on": true,
+        "speed": 3,
+        "style": "slidefade"
+      },
+      "rowMove": {
+        "bezier": [
+          0.22,
+          1,
+          0.36,
+          1
+        ],
+        "curve": "glide",
+        "durationMs": 300,
+        "ease": "cubic-bezier(0.22, 1, 0.36, 1)",
+        "from": "rowMove",
+        "on": true,
+        "speed": 3,
+        "style": null
+      },
+      "rows": {
+        "bezier": [
+          0.22,
+          1,
+          0.36,
+          1
+        ],
+        "curve": "glide",
+        "durationMs": 300,
+        "ease": "cubic-bezier(0.22, 1, 0.36, 1)",
+        "from": "global",
+        "on": true,
+        "speed": 3,
+        "style": null
+      },
+      "working": {
+        "bezier": [
+          0.22,
+          1,
+          0.36,
+          1
+        ],
+        "curve": "glide",
+        "durationMs": 300,
+        "ease": "cubic-bezier(0.22, 1, 0.36, 1)",
+        "from": "global",
+        "on": true,
+        "speed": 3,
+        "style": null
+      },
+      "workingPulse": {
+        "bezier": [
+          0.45,
+          0,
+          0.55,
+          1
+        ],
+        "curve": "soft",
+        "durationMs": 1200,
+        "ease": "cubic-bezier(0.45, 0, 0.55, 1)",
+        "from": "workingPulse",
+        "on": true,
+        "speed": 12,
+        "style": null
+      },
+      "zen": {
+        "bezier": [
+          0.22,
+          1,
+          0.36,
+          1
+        ],
+        "curve": "glide",
+        "durationMs": 300,
+        "ease": "cubic-bezier(0.22, 1, 0.36, 1)",
+        "from": "global",
+        "on": true,
+        "speed": 3,
+        "style": null
+      },
+      "zenIn": {
+        "bezier": [
+          0.22,
+          1,
+          0.36,
+          1
+        ],
+        "curve": "glide",
+        "durationMs": 400,
+        "ease": "cubic-bezier(0.22, 1, 0.36, 1)",
+        "from": "zenIn",
+        "on": true,
+        "speed": 4,
+        "style": "fade"
+      },
+      "zenOut": {
+        "bezier": [
+          0.22,
+          1,
+          0.36,
+          1
+        ],
+        "curve": "glide",
+        "durationMs": 300,
+        "ease": "cubic-bezier(0.22, 1, 0.36, 1)",
+        "from": "zenOut",
+        "on": true,
+        "speed": 3,
+        "style": "fade"
+      }
+    },
+    "beziers": {
+      "ease": [
+        0.25,
+        0.1,
+        0.25,
+        1
+      ],
+      "glide": [
+        0.22,
+        1,
+        0.36,
+        1
+      ],
+      "linear": [
+        0,
+        0,
+        1,
+        1
+      ],
+      "overshot": [
+        0.34,
+        1.56,
+        0.64,
+        1
+      ],
+      "soft": [
+        0.45,
+        0,
+        0.55,
+        1
+      ]
+    },
+    "reducedMotion": "instant"
+  },
+  "ok": true,
+  "page": {
+    "bands": {
+      "bottom": null,
+      "top": {
+        "center": [],
+        "end": [
+          "usage",
+          "theme-picker",
+          "zen-toggle"
+        ],
+        "start": [
+          "garden-switcher"
+        ]
+      }
+    },
+    "chrome": {
+      "from": "template",
+      "items": [
+        {
+          "align": "start",
+          "caps": [
+            "gardens:manage"
+          ],
+          "id": "garden-switcher",
+          "kind": "garden-switcher",
+          "props": {},
+          "slot": "top"
+        },
+        {
+          "align": "end",
+          "caps": [],
+          "id": "usage",
+          "kind": "usage",
+          "props": {},
+          "slot": "top"
+        },
+        {
+          "align": "end",
+          "caps": [],
+          "id": "theme-picker",
+          "kind": "theme-picker",
+          "props": {},
+          "slot": "top"
+        },
+        {
+          "align": "end",
+          "caps": [],
+          "id": "zen-toggle",
+          "kind": "zen-toggle",
+          "props": {},
+          "slot": "top"
+        }
+      ]
+    },
+    "controls": [
+      {
+        "kind": "garden-switcher",
+        "placement": "top-left"
+      },
+      {
+        "kind": "drag-region",
+        "placement": "top"
+      },
+      {
+        "kind": "zen-toggle",
+        "placement": "top-right"
+      }
+    ],
+    "edges": [],
+    "layout": {
+      "canvas": "framed",
+      "columns": [
+        {
+          "min-width": 200,
+          "size": 100,
+          "widget": "main"
+        }
+      ],
+      "kind": "columns",
+      "minWidths": [
+        200
+      ],
+      "split": [
+        100
+      ]
+    },
+    "menus": {},
+    "template": "k2.blank@1",
+    "widgets": [
+      {
+        "caps": [
+          "agents:read"
+        ],
+        "colorScheme": "garden",
+        "column": 0,
+        "description": "A clock and a hello to your first agent.",
+        "errors": [],
+        "hash": "63bfa9493973632fb6d23541749ee72369636b1b1507bcb08eb96d753184324e",
+        "id": "main",
+        "kind": "custom",
+        "libs": [],
+        "name": "Hello",
+        "origin": "local",
+        "paused": null,
+        "props": {
+          "config": {}
+        },
+        "reasons": {
+          "agents:read": "to say hello to the first agent in this Home"
+        },
+        "requested": [
+          "agents:read"
+        ],
+        "source": "user",
+        "sourceAddresses": [],
+        "sources": null,
+        "state": "ok",
+        "warnings": [],
+        "widget": "board"
+      }
+    ]
+  },
+  "schema": 1,
+  "sources": {
+    "gardens/<G2>.toml": "file",
+    "themes/basic/theme.toml": "default",
+    "zen.toml": "file"
+  },
+  "sync": {
+    "page": {
+      "mode": "synced",
+      "newerDefault": false
+    },
+    "theme": {
+      "mode": "synced",
+      "newerDefault": false
+    }
+  },
+  "theme": {
+    "builtin": true,
+    "font": {
+      "family": "system",
+      "lineHeight": 1.45,
+      "monospace": false,
+      "size": 14,
+      "stack": "-apple-system, BlinkMacSystemFont, \"Segoe UI\", system-ui, sans-serif",
+      "terminal": {
+        "family": "meslo",
+        "monospace": true,
+        "stack": "\"MesloLGM Nerd Font\", \"MesloLGM Nerd Font Mono\", Menlo, Monaco, \"Courier New\", monospace"
+      }
+    },
+    "label": "Basic",
+    "name": "basic",
+    "scope": "global",
+    "terminal": {
+      "palette": {
+        "dark": {
+          "background": "#121316",
+          "black": "#262422",
+          "blue": "#7aa7d8",
+          "bright-black": "#7d766d",
+          "bright-blue": "#9cc2ec",
+          "bright-cyan": "#8fd6d2",
+          "bright-green": "#9ad694",
+          "bright-magenta": "#dcaadc",
+          "bright-red": "#ff8a80",
+          "bright-white": "#ffffff",
+          "bright-yellow": "#f2cc7a",
+          "cursor": "#60a5fa",
+          "cursor-text": "#0b1220",
+          "cyan": "#6fc1bd",
+          "foreground": "#e6e8ec",
+          "green": "#7fbf7a",
+          "magenta": "#c792c7",
+          "red": "#f07167",
+          "selection": "#263452",
+          "white": "#d8d0c4",
+          "yellow": "#e0b45a"
+        },
+        "light": {
+          "background": "#f7f8fa",
+          "black": "#2a2622",
+          "blue": "#2f5f9a",
+          "bright-black": "#6f675d",
+          "bright-blue": "#3f76b8",
+          "bright-cyan": "#3a9494",
+          "bright-green": "#4f944b",
+          "bright-magenta": "#a3549f",
+          "bright-red": "#d0473e",
+          "bright-white": "#ffffff",
+          "bright-yellow": "#b8841f",
+          "cursor": "#2563eb",
+          "cursor-text": "#ffffff",
+          "cyan": "#2a7a7a",
+          "foreground": "#1a1d23",
+          "green": "#3d7a3a",
+          "magenta": "#8a3f86",
+          "red": "#b8322a",
+          "selection": "#dbe6fb",
+          "white": "#d8d0c4",
+          "yellow": "#9a6a12"
+        }
+      }
+    },
+    "tokens": {
+      "colors": {
+        "dark": {
+          "accent": "#60a5fa",
+          "accent-text": "#0b1220",
+          "border": "#2e3036",
+          "bubble-agent": "#222328",
+          "bubble-agent-text": "#e6e8ec",
+          "bubble-me": "#1d4ed8",
+          "bubble-me-text": "#eff6ff",
+          "canvas": "#121316",
+          "danger": "#f07167",
+          "idle": "#7d766d",
+          "needs-you": "#e0a43a",
+          "ok": "#5cc08a",
+          "surface": "#1a1b1f",
+          "surface-raised": "#222328",
+          "text": "#e6e8ec",
+          "text-muted": "#9aa0ab",
+          "working": "#60a5fa"
+        },
+        "light": {
+          "accent": "#2563eb",
+          "accent-text": "#ffffff",
+          "border": "#e3e6ec",
+          "bubble-agent": "#eef1f5",
+          "bubble-agent-text": "#1a1d23",
+          "bubble-me": "#2563eb",
+          "bubble-me-text": "#ffffff",
+          "canvas": "#f7f8fa",
+          "danger": "#c53030",
+          "idle": "#a39b90",
+          "needs-you": "#c27c0e",
+          "ok": "#2f855a",
+          "surface": "#ffffff",
+          "surface-raised": "#ffffff",
+          "text": "#1a1d23",
+          "text-muted": "#5f6672",
+          "working": "#2563eb"
+        }
+      },
+      "scheme": "auto",
+      "shape": {
+        "bubble-radius": 18,
+        "gap": 12,
+        "list-width": 300,
+        "radius": 14
+      }
+    },
+    "user": false
+  },
+  "themes": [
+    {
+      "active": true,
+      "builtin": true,
+      "label": "Basic",
+      "name": "basic",
+      "summary": "clean, smooth, simple: warm light, soft dark, follows the computer",
+      "user": false
+    },
+    {
+      "active": false,
+      "builtin": true,
+      "label": "Paper",
+      "name": "paper",
+      "summary": "always light, serif type, ink-blue accent",
+      "user": false
+    },
+    {
+      "active": false,
+      "builtin": true,
+      "label": "Midnight",
+      "name": "midnight",
+      "summary": "always dark, cool blue, JetBrains Mono everywhere",
+      "user": false
+    },
+    {
+      "active": false,
+      "builtin": true,
+      "label": "Haunted",
+      "name": "haunted",
+      "summary": "always dark: a candlelit desk in a misty study, behind the whole Garden",
+      "user": false
+    },
+    {
+      "active": false,
+      "builtin": true,
+      "label": "Glass",
+      "name": "glass",
+      "summary": "always dark: K2 Companion's black canvas, glassy dark cards, iMessage blue, round corners",
+      "user": false
+    }
+  ],
+  "version": "<version-hash>",
+  "warnings": []
+}
+
+## owner token
+> GET /cli/zen/widgets
+> body: 
+HTTP/1.1 200 OK
+content-type: application/json
+{
+  "ok": true,
+  "widgets": [
+    {
+      "builtin": false,
+      "caps": [
+        "agents:read"
+      ],
+      "description": "A clock and a hello to your first agent.",
+      "errors": [],
+      "hash": "63bfa9493973632fb6d23541749ee72369636b1b1507bcb08eb96d753184324e",
+      "madeBy": {
+        "kind": "owner"
+      },
+      "name": "board",
+      "placements": [
+        {
+          "garden": "<G2>",
+          "gardenName": "Garden 2",
+          "paused": null,
+          "placement": "main"
+        }
+      ],
+      "state": "ok",
+      "title": "Hello",
+      "warnings": []
+    },
+    {
+      "builtin": true,
+      "caps": [
+        "agents:read",
+        "thread:read",
+        "thread:post"
+      ],
+      "description": "A haunted journal with one page per agent on this computer. Turn the page to write to another; the ink writes back.",
+      "errors": [],
+      "hash": "d1fd852aca7e323d0ea9736508001a7709abe2a5113559547e08a17e1cf49bfb",
+      "madeBy": {
+        "kind": "k2"
+      },
+      "name": "k2:diary@2",
+      "placements": [
+        {
+          "garden": "<G3>",
+          "gardenName": "Diary",
+          "paused": null,
+          "placement": "diary"
+        }
+      ],
+      "state": "ok",
+      "title": "Diary",
+      "warnings": []
+    }
+  ]
+}
+
+## owner token
+> GET /cli/zen/widget/show?widget=board
+> body: 
+HTTP/1.1 200 OK
+content-type: application/json
+{
+  "caps": [
+    "agents:read"
+  ],
+  "dropped": [],
+  "name": "Hello",
+  "ok": true,
+  "placements": [
+    {
+      "garden": "<G2>",
+      "gardenName": "Garden 2",
+      "locked": false,
+      "note": "running when a Zen window shows its Garden",
+      "paused": null,
+      "placement": "main",
+      "sources": [],
+      "state": "ok"
+    }
+  ],
+  "reach": null,
+  "reads": [],
+  "requested": [
+    "agents:read"
+  ],
+  "runtime": {
+    "errorsSinceSave": 0,
+    "hash": "63bfa9493973632fb6d23541749ee72369636b1b1507bcb08eb96d753184324e",
+    "ran": false
+  },
+  "sources": null,
+  "state": "ok",
+  "widget": "board"
+}
+
+## agent passport (tcp)
+> GET /cli/zen/gardens
+> body: 
+HTTP/1.1 403 Forbidden
+content-type: application/json
+{
+  "error": "zen_local_only",
+  "message": "Zen belongs to the person on this computer. Only this computer's own K2 can read or change it."
+}
+
+## agent passport (tcp)
+> POST /cli/zen/widget/new
+> body: {"name":"agent-board"}
+HTTP/1.1 200 OK
+content-type: application/json
+{
+  "changed": true,
+  "errors": [],
+  "files": [
+    "hello.css",
+    "hello.js",
+    "index.html",
+    "manifest.json"
+  ],
+  "from": "hello",
+  "madeBy": {
+    "handle": "gao-billing",
+    "kind": "agent",
+    "projectId": "<WS_ID>"
+  },
+  "name": "agent-board",
+  "ok": true,
+  "path": "<HOME>/.k2/zen/widgets/agent-board",
+  "stamped": true,
+  "state": "ok"
+}
+
+## agent passport (tcp)
+> POST /cli/zen/widget/put
+> body: {"widget":"board","file":"hello.js","text":"// changed by an agent\n"}
+HTTP/1.1 200 OK
+content-type: application/json
+{
+  "message": "Proposed <PROPOSAL>. A person approves it (Settings → Gardens, or k2 zen proposals approve <PROPOSAL> outside K2), or an agent with \"Manage Gardens and data sources\".",
+  "ok": true,
+  "proposal": {
+    "baseHash": "5adf6fa5048b756d0bce1760fc0d5360c08a4b5f30d25f19b49e465731a911f8",
+    "bytes": 23,
+    "createdAt": "<createdAt>",
+    "decidedAt": null,
+    "decidedBy": null,
+    "file": "hello.js",
+    "id": "<PROPOSAL>",
+    "kind": "widget",
+    "madeBy": "agent:<WS_ID>",
+    "madeByProject": "<WS_ID>",
+    "madeBySession": null,
+    "note": null,
+    "status": "pending",
+    "target": "board"
+  },
+  "proposed": true
+}
+
+## agent passport (tcp)
+> POST /cli/zen/garden/put
+> body: {"garden":"<G2>","note":"swap the board","text":"schema = 1\n\n[layout]\nkind = \"columns\"\n[[layout.column]]\nsize = 100\nmin-width = 200\n\n[[widget]]\nid = \"main\"\nkind = \"custom\"\nwidget = \"agent-board\"\ncolumn = 0\n"}
+HTTP/1.1 200 OK
+content-type: application/json
+{
+  "message": "Proposed <PROPOSAL>. A person approves it (Settings → Gardens, or k2 zen proposals approve <PROPOSAL> outside K2), or an agent with \"Manage Gardens and data sources\".",
+  "ok": true,
+  "proposal": {
+    "baseHash": "7b872ff17882dac071a255ae82a8e2e22f2bfb18cb94ace7e48d36920d4f68cf",
+    "bytes": 157,
+    "createdAt": "<createdAt>",
+    "decidedAt": null,
+    "decidedBy": null,
+    "file": null,
+    "id": "<PROPOSAL>",
+    "kind": "garden",
+    "madeBy": "agent:<WS_ID>",
+    "madeByProject": "<WS_ID>",
+    "madeBySession": null,
+    "note": "swap the board",
+    "status": "pending",
+    "target": "<G2>"
+  },
+  "proposed": true
+}
+
+## agent passport (tcp)
+> POST /cli/zen/garden/new
+> body: {"name":"Agent page"}
+HTTP/1.1 403 Forbidden
+content-type: application/json
+{
+  "error": "zen_local_only",
+  "message": "Zen belongs to the person on this computer. Only this computer's own K2 can read or change it."
+}
+
+## agent passport (tcp)
+> POST /cli/zen/garden/rename
+> body: {"garden":"<G2>","name":"Renamed by agent"}
+HTTP/1.1 200 OK
+content-type: application/json
+{
+  "changed": true,
+  "garden": {
+    "createdAt": "<createdAt>",
+    "hasFile": true,
+    "id": "<G2>",
+    "index": 2,
+    "locked": false,
+    "name": "Renamed by agent",
+    "template": "k2.blank@1",
+    "theme": null
+  },
+  "ok": true
+}
+
+## agent passport (tcp)
+> POST /cli/zen/garden/reorder
+> body: {"garden":"<G2>","to":1}
+HTTP/1.1 200 OK
+content-type: application/json
+{
+  "changed": true,
+  "gardens": [
+    {
+      "createdAt": "<createdAt>",
+      "hasFile": true,
+      "id": "<G2>",
+      "index": 1,
+      "locked": false,
+      "name": "Renamed by agent",
+      "template": "k2.blank@1",
+      "theme": null
+    },
+    {
+      "createdAt": "<createdAt>",
+      "hasFile": true,
+      "id": "<G1>",
+      "index": 2,
+      "locked": false,
+      "name": "Garden 1",
+      "template": "k2.texting@1",
+      "theme": null
+    },
+    {
+      "createdAt": "<createdAt>",
+      "hasFile": true,
+      "id": "<G3>",
+      "index": 3,
+      "locked": false,
+      "name": "Diary",
+      "template": "k2.diary@2",
+      "theme": null
+    }
+  ],
+  "ok": true
+}
+
+## agent passport (tcp)
+> POST /cli/zen/reset
+> body: {"garden":"<G2>"}
+HTTP/1.1 200 OK
+content-type: application/json
+{
+  "changed": true,
+  "file": "gardens/<G2>.toml",
+  "ok": true,
+  "restored": "default",
+  "snapshot": "<STAMP>-000.toml"
+}
+
+## agent passport (tcp)
+> POST /cli/zen/theme/set
+> body: {"name":"paper"}
+HTTP/1.1 200 OK
+content-type: application/json
+{
+  "changed": true,
+  "garden": null,
+  "ok": true,
+  "scope": "global",
+  "theme": "paper"
+}
+
+## agent passport (tcp)
+> POST /cli/zen/widget/preview
+> body: {"clear":true}
+HTTP/1.1 403 Forbidden
+content-type: application/json
+{
+  "error": "person_only",
+  "message": "A preview places the widget on a Garden where it runs. Ask a person, or an agent with \"Manage Gardens and data sources\". Meanwhile check it with k2 zen validate --dir <folder>.",
+  "ok": false
+}
+
+## agent passport (tcp)
+> POST /cli/zen/widget/sign
+> body: {"widget":"agent-board"}
+HTTP/1.1 200 OK
+content-type: application/json
+{
+  "hash": "63bfa9493973632fb6d23541749ee72369636b1b1507bcb08eb96d753184324e",
+  "madeBy": {
+    "handle": "gao-billing",
+    "kind": "agent",
+    "projectId": "<WS_ID>"
+  },
+  "ok": true,
+  "stamped": false,
+  "widget": "agent-board"
+}
+
+## agent passport (tcp)
+> POST /cli/zen/widget/claim
+> body: {"widget":"agent-board"}
+HTTP/1.1 403 Forbidden
+content-type: application/json
+{
+  "error": "owner_only",
+  "message": "Only you can claim a widget (It's mine), in Settings → Gardens → Local Data or from a terminal outside K2. Agents and K2 terminals can't.",
+  "ok": false
+}
+
+## agent passport (tcp)
+> POST /cli/zen/garden/lock
+> body: {"garden":"<G2>","locked":true}
+HTTP/1.1 403 Forbidden
+content-type: application/json
+{
+  "error": "owner_only",
+  "message": "Only the person can lock or unlock a Garden, in Settings → Gardens. Agents and K2 terminals can't, either way.",
+  "ok": false
+}
+
+## agent passport (tcp)
+> POST /cli/zen/garden/delete
+> body: {"garden":"<G1>"}
+HTTP/1.1 200 OK
+content-type: application/json
+{
+  "changed": true,
+  "deleted": "<G1>",
+  "gardens": [
+    {
+      "createdAt": "<createdAt>",
+      "hasFile": true,
+      "id": "<G2>",
+      "index": 1,
+      "locked": false,
+      "name": "Renamed by agent",
+      "template": "k2.blank@1",
+      "theme": null
+    },
+    {
+      "createdAt": "<createdAt>",
+      "hasFile": true,
+      "id": "<G3>",
+      "index": 2,
+      "locked": false,
+      "name": "Diary",
+      "template": "k2.diary@2",
+      "theme": null
+    }
+  ],
+  "name": "Garden 1",
+  "ok": true,
+  "snapshot": "<STAMP>-000.toml"
+}
+
+## owner token
+> GET /cli/zen/proposals
+> body: 
+HTTP/1.1 200 OK
+content-type: application/json
+{
+  "ok": true,
+  "proposals": [
+    {
+      "baseHash": "7b872ff17882dac071a255ae82a8e2e22f2bfb18cb94ace7e48d36920d4f68cf",
+      "bytes": 157,
+      "createdAt": "<createdAt>",
+      "decidedAt": null,
+      "decidedBy": null,
+      "file": null,
+      "id": "<PROPOSAL>",
+      "kind": "garden",
+      "madeBy": "agent:<WS_ID>",
+      "madeByProject": "<WS_ID>",
+      "madeBySession": null,
+      "note": "swap the board",
+      "status": "pending",
+      "target": "<G2>"
+    },
+    {
+      "baseHash": "5adf6fa5048b756d0bce1760fc0d5360c08a4b5f30d25f19b49e465731a911f8",
+      "bytes": 23,
+      "createdAt": "<createdAt>",
+      "decidedAt": null,
+      "decidedBy": null,
+      "file": "hello.js",
+      "id": "<PROPOSAL>",
+      "kind": "widget",
+      "madeBy": "agent:<WS_ID>",
+      "madeByProject": "<WS_ID>",
+      "madeBySession": null,
+      "note": null,
+      "status": "pending",
+      "target": "board"
+    }
+  ]
+}
+
+## owner token
+> POST /cli/zen/widget/sign
+> body: {"widget":"agent-board"}
+HTTP/1.1 200 OK
+content-type: application/json
+{
+  "hash": "63bfa9493973632fb6d23541749ee72369636b1b1507bcb08eb96d753184324e",
+  "madeBy": {
+    "handle": "gao-billing",
+    "kind": "agent",
+    "projectId": "<WS_ID>"
+  },
+  "ok": true,
+  "stamped": false,
+  "widget": "agent-board"
+}
+
+## owner token
+> GET /cli/zen/widgets
+> body: 
+HTTP/1.1 200 OK
+content-type: application/json
+{
+  "ok": true,
+  "widgets": [
+    {
+      "builtin": false,
+      "caps": [
+        "agents:read"
+      ],
+      "description": "A clock and a hello to your first agent.",
+      "errors": [],
+      "hash": "63bfa9493973632fb6d23541749ee72369636b1b1507bcb08eb96d753184324e",
+      "madeBy": {
+        "handle": "gao-billing",
+        "kind": "agent",
+        "projectId": "<WS_ID>"
+      },
+      "name": "agent-board",
+      "placements": [],
+      "state": "ok",
+      "title": "Hello",
+      "warnings": []
+    },
+    {
+      "builtin": false,
+      "caps": [
+        "agents:read"
+      ],
+      "description": "A clock and a hello to your first agent.",
+      "errors": [],
+      "hash": "63bfa9493973632fb6d23541749ee72369636b1b1507bcb08eb96d753184324e",
+      "madeBy": {
+        "kind": "owner"
+      },
+      "name": "board",
+      "placements": [],
+      "state": "ok",
+      "title": "Hello",
+      "warnings": []
+    },
+    {
+      "builtin": true,
+      "caps": [
+        "agents:read",
+        "thread:read",
+        "thread:post"
+      ],
+      "description": "A haunted journal with one page per agent on this computer. Turn the page to write to another; the ink writes back.",
+      "errors": [],
+      "hash": "d1fd852aca7e323d0ea9736508001a7709abe2a5113559547e08a17e1cf49bfb",
+      "madeBy": {
+        "kind": "k2"
+      },
+      "name": "k2:diary@2",
+      "placements": [
+        {
+          "garden": "<G3>",
+          "gardenName": "Diary",
+          "paused": null,
+          "placement": "diary"
+        }
+      ],
+      "state": "ok",
+      "title": "Diary",
+      "warnings": []
+    }
+  ]
+}
+
+## owner token
+> POST /cli/zen/garden/new
+> body: {"name":"Spare"}
+HTTP/1.1 200 OK
+content-type: application/json
+{
+  "changed": true,
+  "file": "gardens/<G4>.toml",
+  "garden": {
+    "createdAt": "<createdAt>",
+    "hasFile": true,
+    "id": "<G4>",
+    "index": 3,
+    "locked": false,
+    "name": "Spare",
+    "template": "k2.blank@1",
+    "theme": null
+  },
+  "ok": true,
+  "path": "<HOME>/.k2/zen/gardens/<G4>.toml"
+}
+
+## owner token
+> POST /cli/zen/garden/delete
+> body: {"garden":"<G4>"}
+HTTP/1.1 200 OK
+content-type: application/json
+{
+  "changed": true,
+  "deleted": "<G4>",
+  "gardens": [
+    {
+      "createdAt": "<createdAt>",
+      "hasFile": true,
+      "id": "<G2>",
+      "index": 1,
+      "locked": false,
+      "name": "Renamed by agent",
+      "template": "k2.blank@1",
+      "theme": null
+    },
+    {
+      "createdAt": "<createdAt>",
+      "hasFile": true,
+      "id": "<G3>",
+      "index": 2,
+      "locked": false,
+      "name": "Diary",
+      "template": "k2.diary@2",
+      "theme": null
+    }
+  ],
+  "name": "Spare",
+  "ok": true,
+  "snapshot": "<STAMP>-000.toml"
+}
+
+## owner token
+> GET /cli/zen/gardens
+> body: 
+HTTP/1.1 200 OK
+content-type: application/json
+{
+  "gardens": [
+    {
+      "createdAt": "<createdAt>",
+      "hasFile": true,
+      "id": "<G2>",
+      "index": 1,
+      "locked": false,
+      "name": "Renamed by agent",
+      "template": "k2.blank@1",
+      "theme": null
+    },
+    {
+      "createdAt": "<createdAt>",
+      "hasFile": true,
+      "id": "<G3>",
+      "index": 2,
+      "locked": false,
+      "name": "Diary",
+      "template": "k2.diary@2",
+      "theme": null
+    }
+  ],
+  "ok": true,
+  "setUp": true
+}
+
+## owner token
+> GET /cli/zen/garden/access?garden=<G2>
+> body: 
+HTTP/1.1 404 Not Found
+content-type: application/json
+{
+  "error": "unknown zen route",
+  "path": "/cli/zen/garden/access"
+}
+
+## owner token
+> POST /cli/zen/garden/access
+> body: {"garden":"<G2>","agent":"gao-billing","allow":true}
+HTTP/1.1 405 Method Not Allowed
+content-type: application/json
+{
+  "error": "method not allowed for this route"
+}
+
+## owner token
+> POST /cli/zen/garden/access/ask
+> body: {"garden":"<G2>"}
+HTTP/1.1 405 Method Not Allowed
+content-type: application/json
+{
+  "error": "method not allowed for this route"
+}
+
+## owner token
+> GET /cli/zen/garden/history?garden=<G2>
+> body: 
+HTTP/1.1 404 Not Found
+content-type: application/json
+{
+  "error": "unknown zen route",
+  "path": "/cli/zen/garden/history"
+}
+
+## owner token
+> GET /cli/zen/widget/history?widget=board
+> body: 
+HTTP/1.1 404 Not Found
+content-type: application/json
+{
+  "error": "unknown zen route",
+  "path": "/cli/zen/widget/history"
+}
+
+## owner token
+> GET /cli/zen/gardens/deleted
+> body: 
+HTTP/1.1 404 Not Found
+content-type: application/json
+{
+  "error": "unknown zen route",
+  "path": "/cli/zen/gardens/deleted"
+}
+
+## owner token
+> POST /cli/zen/garden/restore
+> body: {"garden":"<G4>"}
+HTTP/1.1 405 Method Not Allowed
+content-type: application/json
+{
+  "error": "method not allowed for this route"
+}
+
+## owner token
+> GET /cli/zen/snapshot?file=zen.toml&name=x.toml
+> body: 
+HTTP/1.1 404 Not Found
+content-type: application/json
+{
+  "error": "unknown zen route",
+  "path": "/cli/zen/snapshot"
+}
+
+## agent passport (tcp)
+> GET /cli/zen/garden/access?garden=<G2>
+> body: 
+HTTP/1.1 404 Not Found
+content-type: application/json
+{
+  "error": "unknown zen route",
+  "path": "/cli/zen/garden/access"
+}
+
+## agent passport (tcp)
+> POST /cli/zen/garden/access
+> body: {"garden":"<G2>","agent":"gao-billing","allow":true}
+HTTP/1.1 405 Method Not Allowed
+content-type: application/json
+{
+  "error": "method not allowed for this route"
+}
+
+## agent passport (tcp)
+> POST /cli/zen/garden/access/ask
+> body: {"garden":"<G2>"}
+HTTP/1.1 405 Method Not Allowed
+content-type: application/json
+{
+  "error": "method not allowed for this route"
+}
+
+## agent passport (tcp)
+> GET /cli/zen/garden/history?garden=<G2>
+> body: 
+HTTP/1.1 404 Not Found
+content-type: application/json
+{
+  "error": "unknown zen route",
+  "path": "/cli/zen/garden/history"
+}
+
+## agent passport (tcp)
+> GET /cli/zen/widget/history?widget=board
+> body: 
+HTTP/1.1 404 Not Found
+content-type: application/json
+{
+  "error": "unknown zen route",
+  "path": "/cli/zen/widget/history"
+}
+
+## agent passport (tcp)
+> GET /cli/zen/gardens/deleted
+> body: 
+HTTP/1.1 404 Not Found
+content-type: application/json
+{
+  "error": "unknown zen route",
+  "path": "/cli/zen/gardens/deleted"
+}
+
+## agent passport (tcp)
+> POST /cli/zen/garden/restore
+> body: {"garden":"<G4>"}
+HTTP/1.1 405 Method Not Allowed
+content-type: application/json
+{
+  "error": "method not allowed for this route"
+}
+
+## agent passport (tcp)
+> GET /cli/zen/snapshot?file=zen.toml&name=x.toml
+> body: 
+HTTP/1.1 404 Not Found
+content-type: application/json
+{
+  "error": "unknown zen route",
+  "path": "/cli/zen/snapshot"
+}
+

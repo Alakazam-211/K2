@@ -87,7 +87,11 @@ fn card_of(v: &Value) -> String {
     v["card"].as_str().unwrap_or_else(|| panic!("no card in {v}")).to_string()
 }
 
-fn login(name: &str, role: k2_core::connect_users::Role) -> String {
+/// A Connect login in `~/.k2/connect-users.json`, which `connect_users`
+/// resolves from `$HOME` at call time. The `TempHome` borrow makes every
+/// caller hold a temp `$HOME` (and the env lock) while it writes, so a
+/// caller can never reach the real `~/.k2` or race a test that moves HOME.
+fn login(_home: &crate::test_support::TempHome, name: &str, role: k2_core::connect_users::Role) -> String {
     let user = format!("{name}{}", &uuid::Uuid::new_v4().simple().to_string()[..6]);
     k2_core::connect_users::add_user(&user, "password123").expect("add_user");
     if role != k2_core::connect_users::Role::Member {
@@ -350,10 +354,10 @@ fn deny_with_a_reason_blocks_the_same_ask_for_a_day_and_update_reopens_once() {
 
 #[test]
 fn only_people_at_the_floor_answer() {
-    let _home = crate::test_support::TempHome::new();
+    let home = crate::test_support::TempHome::new();
     let ws = seed("pcfr");
-    let member = login("pcm", k2_core::connect_users::Role::Member);
-    let admin = login("pca", k2_core::connect_users::Role::Admin);
+    let member = login(&home, "pcm", k2_core::connect_users::Role::Member);
+    let admin = login(&home, "pca", k2_core::connect_users::Role::Admin);
 
     let v = ask_ok(&ws, "test.owner-switch", json!({}));
     let card = card_of(&v);
@@ -672,13 +676,13 @@ fn todays_bodies_match_the_off_goldens() {
 
 #[test]
 fn the_agents_route_lists_switches_and_recent_requests_for_owners_and_admins() {
-    let _home = crate::test_support::TempHome::new();
+    let home = crate::test_support::TempHome::new();
     let ws = seed("pcag");
     k2_core::workspace::settings::set_agents_can_request_permissions(&ws.id, true).expect("switch on");
     let v = ask_ok(&ws, "test.switch", json!({}));
     let id = v["id"].as_str().unwrap().to_string();
-    let admin = login("pcaga", k2_core::connect_users::Role::Admin);
-    let member = login("pcagm", k2_core::connect_users::Role::Member);
+    let admin = login(&home, "pcaga", k2_core::connect_users::Role::Admin);
+    let member = login(&home, "pcagm", k2_core::connect_users::Role::Member);
     let admin_who = Who::Login { username: admin.clone(), role: k2_core::connect_users::Role::Admin };
 
     // Every agent (server-wide), and this one with `workspace=` (id or handle).

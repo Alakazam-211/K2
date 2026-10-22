@@ -382,7 +382,7 @@ impl ZenFiles {
         out
     }
 
-    fn snapshot_files(&self, name: &str, snap: &str) -> Option<BTreeMap<String, Vec<u8>>> {
+    pub(crate) fn snapshot_files(&self, name: &str, snap: &str) -> Option<BTreeMap<String, Vec<u8>>> {
         if !valid_snapshot_dir(snap) {
             return None;
         }
@@ -736,7 +736,17 @@ impl ZenFiles {
             w["errors"] = json!(st.errors);
             w["warnings"] = json!(st.warnings);
             w["origin"] = json!(origin);
-            w["caps"] = json!(effective_caps(origin, &requested));
+            let caps = effective_caps(origin, &requested);
+            if super::garden_access::enabled() {
+                // Garden access (prd-garden-access-v1 §1.6): the signer gate.
+                // A version nobody listed signed runs with Always only.
+                let (caps, signed) =
+                    crate::garden_data::signer_gate::gate_caps(garden, &widget, st.hash(), caps);
+                w["caps"] = json!(caps);
+                w["signed"] = json!(signed);
+            } else {
+                w["caps"] = json!(caps);
+            }
             w["paused"] = json!(pauses.get(garden, &placement));
             // Garden v3 (contract-sources-v1 §6): the manifest's `sources`
             // and the addresses this placement binds (`not_bound` otherwise).

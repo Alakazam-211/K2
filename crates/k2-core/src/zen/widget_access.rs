@@ -136,6 +136,12 @@ pub const WIDGET_NOT_APPROVED: &str = "widget_not_approved";
 /// manifest, after the Sources taint) don't include the cap the call needs.
 pub const WIDGET_CAP_MISSING: &str = "widget_cap_missing";
 
+/// 403 code (garden access, switch on): the placement's live version isn't
+/// signed by the person, K2 or an agent on its Garden's list, so it keeps
+/// only its own store, `agents:read` and `presence:read`
+/// (`garden_data::signer_gate`).
+pub const WIDGET_NEEDS_EDITOR: &str = crate::garden_data::signer_gate::NEEDS_EDITOR;
+
 /// Why the daemon refused a widget's portable call (a Thread post or
 /// answer) on the placement it claimed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -188,8 +194,14 @@ pub fn check_placement_cap(
     if live != hash {
         return Err(not_approved(format!("'{widget}' changed since its frame loaded; K2 reloads the widget")));
     }
-    let caps = effective_caps(WidgetOrigin::of(&p.widget), &st.requested());
+    let full = effective_caps(WidgetOrigin::of(&p.widget), &st.requested());
+    // Garden access (switch on): the signer gate. Off: `full` unchanged.
+    let (caps, signed) = crate::garden_data::signer_gate::gate_caps(garden, &p.widget, live, full.clone());
     if !caps.iter().any(|c| c == cap) {
+        if !signed && full.iter().any(|c| c == cap) {
+            let message = crate::garden_data::signer_gate::needs_editor_message(widget);
+            return Err(PlacementRefusal { code: WIDGET_NEEDS_EDITOR, message });
+        }
         // A sources widget keeps the thread:post it asks for (0.46.1), so a
         // missing cap is always one its manifest didn't ask for.
         let why = format!("'{widget}' needs {cap} in its manifest caps");

@@ -229,9 +229,9 @@ mod tests {
 
     /// A live legacy App's routes (in production on a customer box): every
     /// one must stay admitted for a `k2skn_` pass on the main port, so a
-    /// later catalog edit can't silently close one. A cap change (such as
-    /// 0.46.3's `activity:room`) may change what a route answers, never
-    /// whether a pass reaches it. `WS` = a GET upgrade.
+    /// later catalog edit can't silently close one. A cap change may change
+    /// what a route answers, never whether a pass reaches it. `WS` = a GET
+    /// upgrade.
     const LIVE_LEGACY_APP_ROUTES: &[(&str, &str)] = &[
         ("POST", "/cli/skin/logout"),
         ("GET", "/cli/skin/agents"),

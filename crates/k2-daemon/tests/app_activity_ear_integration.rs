@@ -4,7 +4,7 @@
 //! /cli/thread/activity`), every gate (thread:read alone, activity:read
 //! alone, another room, a non-pinned conversation, a pass revoked
 //! mid-turn, an owner-typed terminal turn), and the room-wide counts
-//! moving to `activity:room`.
+//! staying on `activity:read` (one scope, Rosson 2026-10-21).
 //!
 //! ISOLATION: temp HOME, an `exec cat` shim as `claude` (no agent CLI ever
 //! starts), synthetic transcript lines and hook payloads only.
@@ -698,13 +698,12 @@ async fn the_counts_only_ear_reaches_gated_guests_on_every_route_and_never_a_too
     });
 }
 
-/// 0.46.3: the room-wide counts (every session in the room, the owner's
-/// other tabs too) moved off `activity:read` to `activity:room`. A pass
-/// with only `activity:read` gets a coded `cap_not_granted` naming
-/// activity:room on the snapshot, and its room socket (which still opens)
-/// carries no `session_activity_changed`; `activity:room` gets both.
+/// One scope (Rosson 2026-10-21): `activity:read` gives both the ear and
+/// the room-wide counts (every session in the room), exactly as the
+/// room-wide counts were gated before 0.46.3. A pass without it gets
+/// neither: no snapshot, no `session_activity_changed`, no ear.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn room_wide_counts_need_activity_room() {
+async fn activity_read_gives_the_room_counts_and_the_ear_and_nothing_without_it() {
     with_temp_home(|home| {
         let daemon = futures_block(test_harness::start(OWNER_TOKEN));
         let port = daemon.port;
@@ -712,40 +711,42 @@ async fn room_wide_counts_need_activity_room() {
         let room = seed_room(home, &format!("rwc{tag}"));
         let agent = warm_up(port, &room);
         let (ear, _) = mint(port, &format!("ear{tag}"), &["thread:read", "activity:read"], &[&room.handle]);
-        let (wide, _) = mint(port, &format!("wid{tag}"), &["activity:room"], &[&room.handle]);
-        let (nothing, _) = mint(port, &format!("not{tag}"), &["thread:read"], &[&room.handle]);
+        let (plain, _) = mint(port, &format!("pln{tag}"), &["thread:read", "heartbeats:read"], &[&room.handle]);
 
         let snap = |tok: &str| http(port, "GET", &format!("/cli/activity/snapshot?workspace={}&token={tok}", room.handle), None);
         let r = snap(&ear);
-        assert_eq!(r.status, 403, "activity:read no longer reads the room-wide counts: {}", r.body);
-        let v = r.json();
-        assert_eq!((v["error"]["code"].as_str(), v["error"]["cap"].as_str()), (Some("cap_not_granted"), Some("activity:room")), "{v}");
-        let r = snap(&wide);
-        assert_eq!(r.status, 200, "{}", r.body);
+        assert_eq!(r.status, 200, "activity:read reads the room-wide counts: {}", r.body);
         assert!(r.json()["sessions"].is_array(), "{}", r.body);
+        let r = snap(&plain);
+        assert_eq!(r.status, 403, "no activity:read, no room-wide counts: {}", r.body);
+        assert!(r.body.contains("missing capability activity:read"), "{}", r.body);
+        let r = catch_up(port, &plain, &room.handle);
+        assert_eq!(r.status, 403, "no activity:read, no ear: {}", r.body);
+        assert!(r.body.contains("cap_not_granted") && r.body.contains("activity:read"), "{}", r.body);
 
         futures_block(async {
-            let url = format!("ws://127.0.0.1:{port}/cli/activity/events?workspace={}&token={nothing}", room.handle);
-            assert_eq!(refused_ws(&url).await, 403, "no socket cap at all");
             let mut ear_ev = open_room_events(port, &room.handle, &ear).await;
-            let mut wide_ev = open_room_events(port, &room.handle, &wide).await;
+            let mut plain_ev = open_room_events(port, &room.handle, &plain).await;
+            let mut plain_ov = open_ear_ws(port, &agent.conv, &plain).await;
             tokio::time::sleep(Duration::from_millis(300)).await;
             hook(port, &agent.sid, agent.pid, serde_json::json!({
                 "hook_event_name": "UserPromptSubmit", "session_id": agent.conv,
                 "prompt_id": "w1", "prompt": "Synthetic prompt."
             }));
             tool(port, &agent, "toolu_w1", "Bash", serde_json::json!({"command": "ls"}));
-            let (wide_frames, _) = drain(&mut wide_ev, 3_000).await;
+            let (ear_frames, _) = drain(&mut ear_ev, 3_000).await;
             assert!(
-                wide_frames.iter().any(|f| f["kind"] == "session_activity_changed"),
-                "activity:room hears the room-wide counts: {wide_frames:?}"
+                ear_frames.iter().any(|f| f["kind"] == "session_activity_changed"),
+                "activity:read hears the room-wide counts: {ear_frames:?}"
             );
-            let (ear_frames, closed) = drain(&mut ear_ev, 500).await;
-            assert!(!closed, "activity:read still opens the socket");
+            let (plain_frames, closed) = drain(&mut plain_ev, 500).await;
+            assert!(!closed, "heartbeats:read opens the socket");
             assert!(
-                ear_frames.iter().all(|f| f["kind"] != "session_activity_changed"),
-                "activity:read alone never hears the room-wide counts: {ear_frames:?}"
+                plain_frames.iter().all(|f| f["kind"] != "session_activity_changed"),
+                "no activity:read, no room-wide counts: {plain_frames:?}"
             );
+            let (ov, _) = drain(&mut plain_ov, 300).await;
+            assert!(ov.iter().all(|f| f["collection"] != "activity"), "no activity:read, no ear even with ear=1: {ov:?}");
             owner_stop(port, &agent, "w1");
         });
     });

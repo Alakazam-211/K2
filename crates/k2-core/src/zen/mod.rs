@@ -286,10 +286,7 @@ pub const USER_WIDGET_CAPS: &[&str] = &[
     "store:read",
     "store:write",
     "guests:rooms",
-    // 0.46.3: the room-wide counts (`activity.snapshot`), split off
-    // `activity:read`, which is now the App guests' pinned-Chat ear only
-    // (no Garden row: a Garden acts as the owner and reads the owner strip).
-    "activity:room",
+    "activity:read",
     "room:members",
 ];
 

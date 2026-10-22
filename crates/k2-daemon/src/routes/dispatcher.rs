@@ -1786,8 +1786,8 @@ async fn handle_one_request(
         // row + workspace rollup + `seq`, pulled by a client on socket
         // (re)open, daemon restart and `seq` gap. A plain read: owner
         // token or a live Connect login (Member). An app pass gets the
-        // guest projection of one room with `activity:room` there (S8,
-        // AP3; `activity:read` until 0.46.3). GET-only.
+        // guest projection of one room with `activity:read` there (S8,
+        // AP3). GET-only.
         "/cli/activity/snapshot" => {
             if is_post {
                 let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
@@ -1804,8 +1804,8 @@ async fn handle_one_request(
             let skin_pass = if super::http::extract_token(&query).is_some_and(k2_core::skin::is_skin_token) {
                 let r = match super::http::extract_token(&query).and_then(crate::apps::gateway::resolve_pass) {
                     // Session passes defer the cap to the room (handler).
-                    Some(pass) if pass.dispatcher_admits_cap(crate::skin_routes::ACTIVITY_ROOM) => Ok(pass),
-                    Some(_) => Err(crate::skin_routes::activity_room_refused()),
+                    Some(pass) if pass.dispatcher_admits_cap(crate::skin_routes::ACTIVITY_READ) => Ok(pass),
+                    Some(_) => Err(crate::skin_routes::missing_cap_response(crate::skin_routes::ACTIVITY_READ)),
                     None => Err(crate::skin_routes::revoked_skin_response()),
                 };
                 match r {
@@ -2244,7 +2244,7 @@ async fn handle_one_request(
         }
         p if p == crate::activity_events_ws::ACTIVITY_EVENTS_WS_PATH => {
             // Agent-working socket. Not `/cli/sessions/events`. Skin: live
-            // `k2skn_` + one socket cap (activity:room since 0.46.3). Session tokens pass
+            // `k2skn_` + activity:read. Session tokens pass
             // `dispatcher_admits_cap`; the handler checks the room, then
             // `activity:read`, and 403s before upgrade. Owner/Connect
             // token_ok still requires workspace=.
@@ -2253,9 +2253,9 @@ async fn handle_one_request(
             {
                 match super::http::extract_token(&query).and_then(crate::apps::gateway::resolve_pass)
                 {
-                    // AH29: activity:room (0.46.3; was activity:read),
-                    // heartbeats:read, tickets:read or room:members opens
-                    // the socket; each frame checks its own cap.
+                    // AH29: activity:read, heartbeats:read or (0.43.3)
+                    // tickets:read opens the socket; each frame checks
+                    // its own cap.
                     Some(pass)
                         if pass.dispatcher_admits_any(
                             &crate::activity_events_ws::SOCKET_CAPS,
@@ -2265,7 +2265,9 @@ async fn handle_one_request(
                     }
                     Some(_) => {
                         let _ = stream.read(&mut buf).await;
-                        let r = crate::activity_events_ws::socket_caps_refused();
+                        let r = crate::skin_routes::missing_cap_response(
+                            crate::activity_events_ws::SOCKET_CAPS_TEXT,
+                        );
                         super::http::send_response(
                             &mut *stream,
                             r.status,

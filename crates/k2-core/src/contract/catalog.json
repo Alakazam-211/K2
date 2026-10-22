@@ -75,15 +75,9 @@
     },
     {
       "name": "activity:read",
-      "exposure": ["app"],
-      "label": "See when the agent is working on a Thread message (counts only)",
-      "sentence": "See when the agents on this computer are working on a message sent in their Thread, with counts only (no tool names, text or paths)."
-    },
-    {
-      "name": "activity:room",
       "exposure": ["app", "garden-local"],
-      "label": "See every session's working counts in the room (the owner's other tabs too)",
-      "sentence": "See when any session of the agents on this computer is working, the owner's other tabs included, with counts only (no tool names, text or paths)."
+      "label": "See when the agent is working",
+      "sentence": "See when the agents on this computer are working (no tool names, text or paths)."
     },
     {"name": "heartbeats:read", "exposure": ["app"], "label": "See heartbeats: schedule, next fire, history"},
     {
@@ -4424,12 +4418,7 @@
                       "type": "string"
                     },
                     "activity": {
-                      "type": "boolean",
-                      "description": "activity:read: the pinned-Chat ear (thread.activity), counts only."
-                    },
-                    "activityRoom": {
-                      "type": "boolean",
-                      "description": "activity:room: every session's counts in the room (activity.snapshot / activity.events)."
+                      "type": "boolean"
                     },
                     "members": {
                       "type": "boolean"
@@ -4453,7 +4442,6 @@
                     "files",
                     "tickets",
                     "activity",
-                    "activityRoom",
                     "members",
                     "heartbeats",
                     "wiki",
@@ -15209,7 +15197,7 @@
     },
     {
       "verb": "activity.snapshot",
-      "cap": "activity:room",
+      "cap": "activity:read",
       "exposure": [
         "app",
         "garden-local"
@@ -15341,12 +15329,12 @@
         "author_unknown",
         "failed"
       ],
-      "doc": "Whether the room's agent is working now, per session (every session in the room, the owner's other tabs too; needs activity:room since 0.46.3).",
+      "doc": "Whether the room's agent is working now, per session.",
       "example": "const {status} = await k2.activity.snapshot({workspace})"
     },
     {
       "verb": "activity.events",
-      "cap": "activity:room",
+      "cap": "activity:read",
       "exposure": [
         "app"
       ],
@@ -15482,7 +15470,7 @@
         "usage",
         "failed"
       ],
-      "doc": "Live room events: agent working (every session in the room, activity:room since 0.46.3), heartbeats, tickets, rooms_changed, room_members_changed, app_deployed; resync then close 4008 when behind.",
+      "doc": "Live room events: agent working, heartbeats, tickets, rooms_changed, room_members_changed, app_deployed; resync then close 4008 when behind.",
       "example": "const off = k2.activity.events({workspace}, (f) => f.kind === 'resync' ? reload() : apply(f))"
     },
     {

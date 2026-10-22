@@ -784,10 +784,10 @@ pub const FEATURE_THREAD_STREAM: &str = "thread-stream-v1";
 /// The counts-only activity ear for App guests (0.46.3, Rosson
 /// 2026-10-21): with `thread:read` AND `activity:read` in a room, the
 /// pinned-Chat Thread turn's guest projection on `WS /cli/overlay/events`
-/// (`collection: "activity"`), `WS /cli/thread/stream` (`kind:
-/// "thread_activity"`) and `GET /cli/thread/activity` (`thread.activity`).
-/// The room-wide counts (`activity.snapshot` / `activity.events`) moved to
-/// `activity:room` in the same release. No SQL migration.
+/// (`collection: "activity"`) and `WS /cli/thread/stream` (`kind:
+/// "thread_activity"`), both opted in with `?ear=1`, and `GET
+/// /cli/thread/activity` (`thread.activity`). `activity:read` still gives
+/// the room-wide counts too, as before. No SQL migration.
 pub const FEATURE_THREAD_ACTIVITY_EAR: &str = "thread-activity-ear-v1";
 
 /// True when the notify prefs tables exist in the daemon DB.

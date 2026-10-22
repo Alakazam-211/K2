@@ -75,13 +75,8 @@ export const K2_CAPS = {
     exposure: ['app', 'garden-local'],
   },
   'activity:read': {
-    label: 'See when the agent is working on a Thread message (counts only)',
-    sentence: 'See when the agents on this computer are working on a message sent in their Thread, with counts only (no tool names, text or paths).',
-    exposure: ['app'],
-  },
-  'activity:room': {
-    label: "See every session's working counts in the room (the owner's other tabs too)",
-    sentence: "See when any session of the agents on this computer is working, the owner's other tabs included, with counts only (no tool names, text or paths).",
+    label: 'See when the agent is working',
+    sentence: 'See when the agents on this computer are working (no tool names, text or paths).',
     exposure: ['app', 'garden-local'],
   },
   'heartbeats:read': { label: 'See heartbeats: schedule, next fire, history', exposure: ['app'] },
@@ -101,6 +96,6 @@ export const K2_CAPS = {
 export type K2Cap = keyof typeof K2_CAPS
 
 /** Caps a custom widget may ask for (= the Rust `USER_WIDGET_CAPS`). */
-export const USER_WIDGET_CAPS = ['agents:read', 'presence:read', 'thread:read', 'thread:post', 'sources:read', 'files:read', 'tickets:read', 'tickets:post', 'store:read', 'store:write', 'guests:rooms', 'activity:room', 'room:members'] as const
+export const USER_WIDGET_CAPS = ['agents:read', 'presence:read', 'thread:read', 'thread:post', 'sources:read', 'files:read', 'tickets:read', 'tickets:post', 'store:read', 'store:write', 'guests:rooms', 'activity:read', 'room:members'] as const
 
 export type UserWidgetCap = (typeof USER_WIDGET_CAPS)[number]

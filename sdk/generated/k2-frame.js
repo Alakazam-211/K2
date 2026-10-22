@@ -72,7 +72,7 @@
       'store.txAbort': Object.freeze({ cap: 'store:write', reach: 'local', kind: 'call', feature: 'garden-data-v1' }),
       'guests.rooms': Object.freeze({ cap: 'guests:rooms', reach: 'portable', kind: 'call', feature: 'guests-rooms-v1' }),
       'guests.setRooms': Object.freeze({ cap: 'guests:rooms', reach: 'portable', kind: 'call', feature: 'guests-rooms-v1' }),
-      'activity.snapshot': Object.freeze({ cap: 'activity:room', reach: 'portable', kind: 'call', feature: 'app-api-v1' }),
+      'activity.snapshot': Object.freeze({ cap: 'activity:read', reach: 'portable', kind: 'call', feature: 'app-api-v1' }),
       'room.members': Object.freeze({ cap: 'room:members', reach: 'portable', kind: 'call', feature: 'room-members-v1' }),
     }),
   })

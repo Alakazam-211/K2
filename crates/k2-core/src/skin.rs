@@ -20,7 +20,7 @@
 //!
 //! Caps: `thread:read`, `thread:post`, `files:read`, `files:write`,
 //! `tickets:read`, `tickets:post`, `wiki:read`, `store:read`, `store:write`,
-//! `activity:read`, `activity:room`, plus the opt-in `files:agentconfig` modifier (lets
+//! `activity:read`, plus the opt-in `files:agentconfig` modifier (lets
 //! `files:write` reach the agent's `.k2/` folder; off by default, owner
 //! only). Empty/missing caps stay Thread-only — never silent-add
 //! files, tickets, wiki, store, or activity. Never `pty:*`. `store:write`
@@ -134,20 +134,8 @@ pub const CAP_STORE_READ: &str = "store:read";
 /// Dump-table insert/update/delete (`POST /cli/db/rows|rows/update|rows/delete`).
 /// Does not imply `_k2_store` PUT/create/rm/drop.
 pub const CAP_STORE_WRITE: &str = "store:write";
-/// The room's pinned-Chat activity ear, counts only (0.46.3, Rosson
-/// 2026-10-21): with `thread:read` in the same room, the Thread turn's
-/// guest projection on `WS /cli/overlay/events`, `WS /cli/thread/stream`
-/// and `GET /cli/thread/activity` (no tool line, path, command or text).
-/// Not implied by files. Before 0.46.3 it also opened the room-wide counts,
-/// which are [`CAP_ACTIVITY_ROOM`] now.
+/// Agent working mark (`WS /cli/activity/events`). Not implied by files.
 pub const CAP_ACTIVITY_READ: &str = "activity:read";
-/// Room-wide agent counts (0.46.3, split off `activity:read`): every
-/// session in the room, the owner's other tabs included, on `WS
-/// /cli/activity/events` (`session_activity_changed`) and `GET
-/// /cli/activity/snapshot`. Never in the defaults, no migration grants
-/// it, in no App core (the person grants it). Not implied by
-/// `activity:read`, and does not imply it.
-pub const CAP_ACTIVITY_ROOM: &str = "activity:room";
 /// Room heartbeats read (`GET /cli/heartbeat/list|show|status|fires-list`,
 /// `heartbeat_changed` frames on `WS /cli/activity/events`). The WAKEUP.md
 /// body also needs `files:read` (prd-app-heartbeats-surface-v1 AH9).
@@ -201,7 +189,6 @@ const ACCEPTED_CAPS: &[&str] = &[
     CAP_STORE_READ,
     CAP_STORE_WRITE,
     CAP_ACTIVITY_READ,
-    CAP_ACTIVITY_ROOM,
     CAP_HEARTBEATS_READ,
     CAP_HEARTBEATS_WRITE,
     CAP_AGENT_IDENTITY,
@@ -6635,15 +6622,6 @@ mod tests {
         let err = parse_caps(Some(&["activity:write".into()])).unwrap_err();
         assert!(err.contains("unknown capability"), "{err}");
         assert!(err.contains("activity:write"), "{err}");
-
-        // 0.46.3: the room-wide counts are their own cap, never a default
-        // and never implied by the ear's cap (or the ear by it).
-        assert_eq!(activity, vec![CAP_ACTIVITY_READ], "activity:read must not imply activity:room");
-        let room = parse_caps(Some(&["activity:room".into()])).expect("activity:room");
-        assert_eq!(room, vec![CAP_ACTIVITY_ROOM], "activity:room must not imply activity:read");
-        assert!(!missing.iter().any(|c| c == CAP_ACTIVITY_ROOM), "{missing:?}");
-        let empty = parse_caps(None).expect("default");
-        assert!(!empty.iter().any(|c| c == CAP_ACTIVITY_ROOM), "never a default: {empty:?}");
     }
 
     /// 0.45.5 app identity surface: both caps parse, neither is a default,

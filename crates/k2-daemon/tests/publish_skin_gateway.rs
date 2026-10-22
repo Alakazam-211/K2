@@ -4002,10 +4002,8 @@ fn open_socket(port: u16, path_and_query: &str, extra_headers: &str) -> StdTcpSt
 ///   documented keys and nothing from the row (no path, id, reason, tool,
 ///   count); `permission`, `unknown`, `since`, change-only sends, and a
 ///   removed working session going `idle`.
-/// - T-S8c: `activity:room` in one room never reads another room
-///   (`skin_room`), and a room without the cap is `cap_not_granted`
-///   naming activity:room (0.46.3: `activity:read` alone no longer reads
-///   the room-wide counts).
+/// - T-S8c: `activity:read` in one room never reads another room
+///   (`skin_room`), and a room without the cap is `missing capability`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn publish_run_skin_gateway_activity_guest_projection() {
     let _g = lock();
@@ -4025,8 +4023,8 @@ async fn publish_run_skin_gateway_activity_guest_projection() {
         let created = http(dport, "POST", &format!("/cli/skin/roles?token={OWNER_TOKEN}"), Some(r#"{"name":"watcher"}"#));
         assert_eq!(created.status, 200, "role; {}", created.body);
         for (handle, caps) in [
-            (&docs, r#"["thread:read","thread:post","activity:read","activity:room"]"#),
-            (&anna, r#"["thread:read","activity:read"]"#),
+            (&docs, r#"["thread:read","thread:post","activity:read"]"#),
+            (&anna, r#"["thread:read"]"#),
         ] {
             let r = http(
                 dport,
@@ -4087,8 +4085,8 @@ async fn publish_run_skin_gateway_activity_guest_projection() {
 
         // ── T-S8c: room isolation and the cap ──
         let no_cap = http_ex(gport, "GET", &format!("/cli/activity/snapshot?workspace={anna}"), None, &cookie);
-        assert_eq!(no_cap.status, 403, "anna has activity:read but no activity:room; {}", no_cap.body);
-        assert!(no_cap.body.contains("cap_not_granted") && no_cap.body.contains("missing capability activity:room"), "{}", no_cap.body);
+        assert_eq!(no_cap.status, 403, "anna has no activity:read; {}", no_cap.body);
+        assert!(no_cap.body.contains("missing capability activity:read"), "{}", no_cap.body);
         let not_mine = http_ex(gport, "GET", &format!("/cli/activity/snapshot?workspace={other}"), None, &cookie);
         assert_eq!(not_mine.status, 403, "room not on the pass; {}", not_mine.body);
         assert!(not_mine.body.contains("skin_room"), "{}", not_mine.body);
@@ -4097,10 +4095,10 @@ async fn publish_run_skin_gateway_activity_guest_projection() {
         assert_eq!(no_ws.status, 400, "an app pass needs workspace=; {}", no_ws.body);
         let post = http_ex(gport, "POST", &format!("/cli/activity/snapshot?workspace={docs}"), Some("{}"), &cookie);
         assert_eq!(post.status, 404, "GET only on the helper; {}", post.body);
-        // A platform pass with activity:room in anna only (daemon door).
-        let anna_pass = mint(dport, &format!("act{tag}"), &["activity:room"], &[&anna]);
+        // A platform pass with activity:read in anna only (daemon door).
+        let anna_pass = mint(dport, &format!("act{tag}"), &["activity:read"], &[&anna]);
         let cross = http(dport, "GET", &format!("/cli/activity/snapshot?workspace={docs}&token={anna_pass}"), None);
-        assert_eq!(cross.status, 403, "activity:room in anna never reads docs; {}", cross.body);
+        assert_eq!(cross.status, 403, "activity:read in anna never reads docs; {}", cross.body);
         assert!(cross.body.contains("skin_room"), "{}", cross.body);
         let own = http(dport, "GET", &format!("/cli/activity/snapshot?workspace={anna}&token={anna_pass}"), None);
         assert_eq!(own.status, 200, "{}", own.body);
@@ -4109,10 +4107,10 @@ async fn publish_run_skin_gateway_activity_guest_projection() {
         assert_eq!(ov["sessions"][0]["agentName"], "tab-annawork", "{ov}");
         let all = http(dport, "GET", &format!("/cli/activity/snapshot?token={anna_pass}"), None);
         assert_eq!(all.status, 400, "never the host-wide snapshot; {}", all.body);
-        let thread_pass = mint(dport, &format!("thr{tag}"), &["thread:read", "activity:read"], &[&anna]);
+        let thread_pass = mint(dport, &format!("thr{tag}"), &["thread:read"], &[&anna]);
         let cap = http(dport, "GET", &format!("/cli/activity/snapshot?workspace={anna}&token={thread_pass}"), None);
         assert_eq!(cap.status, 403, "{}", cap.body);
-        assert!(cap.body.contains("cap_not_granted") && cap.body.contains("missing capability activity:room"), "{}", cap.body);
+        assert!(cap.body.contains("missing capability activity:read"), "{}", cap.body);
 
         // ── T-S8b: guest frames on the room socket ──
         let mut sock = open_room_socket(gport, &docs, &cookie);
@@ -4232,7 +4230,8 @@ async fn publish_run_skin_gateway_activity_guest_projection() {
         assert_eq!(gw.status, 200, "allowlisted for thread:read + activity:read; {}", gw.body);
         assert!(json(&gw.body)["turn"].is_null(), "no live turn: {}", gw.body);
         let gw_anna = http_ex(gport, "GET", &format!("/cli/thread/activity?addr={anna}"), None, &cookie);
-        assert_eq!(gw_anna.status, 200, "anna has thread:read + activity:read; {}", gw_anna.body);
+        assert_eq!(gw_anna.status, 403, "anna has thread:read but no activity:read; {}", gw_anna.body);
+        assert!(gw_anna.body.contains("cap_not_granted") && gw_anna.body.contains("activity:read"), "{}", gw_anna.body);
         let gw_ws = ws_upgrade(gport, &format!("/cli/thread/activity?addr={docs}"), &cookie);
         assert_eq!(gw_ws.status, 403, "{}", gw_ws.body);
         assert!(gw_ws.body.contains("not allowed"), "{}", gw_ws.body);

@@ -195,7 +195,10 @@ async fn a_second_server_enrols_by_sas_and_sees_only_its_own() {
     };
     let share = ob.share.clone().unwrap();
     assert_eq!((share.role, share.slot, share.state, share.shared, share.servers), (Role::Tenant, 1, ServerStatus::Active, true, 2));
-    assert_eq!(share.owner_label, Some(servers::label_of(&a.base)), "shared by the owner");
+    // The owner's line is labelled with its address (it enrolled over
+    // loopback), so B sees the owner's own name, from its Welcome.
+    assert!(servers::label_of(&a.base).starts_with("127.0.0.1-"));
+    assert_eq!(share.owner_label.as_deref(), Some("fake.k2.dev"), "shared by the owner, by its name");
     for f in [k2_node_proto::admin::FEATURE_ADMIN, k2_node_proto::admin::FEATURE_SELF_UPDATE, k2_node_proto::admin::FEATURE_HEALTH] {
         assert!(!has(&ob, f), "B is offered no {f} (V52): {:?}", ob.features);
     }

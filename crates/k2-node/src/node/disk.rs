@@ -54,12 +54,20 @@ pub fn warm_cap(policy: &crate::config::Policy) -> u64 {
     policy.disk_budget_bytes / 2
 }
 
-/// One idle warm slot: `(project cache, project key, n, dir)`.
+/// One idle warm slot: its server's slot, project cache, project key,
+/// number and dir.
 struct Idle {
+    slot: k2_node_proto::share::Slot,
     project: PathBuf,
     key: String,
     n: u32,
     dir: PathBuf,
+}
+
+/// A real directory, not a link to one (review A-disk 1: listings never
+/// follow a link a job planted).
+fn real_dir(e: &std::fs::DirEntry) -> bool {
+    e.file_type().is_ok_and(|f| f.is_dir())
 }
 
 /// Bytes on disk under `p` (allocated blocks, no link followed).
@@ -78,23 +86,28 @@ impl Node {
 
     /// Remove everything in an ended job's dir but `keep` (the job's code
     /// worktree through git). Linux wall: the job's trees come back to
-    /// the node first. Returns the entries removed.
+    /// the node first (only real dirs: a link is removed as a link, never
+    /// handed to root). Returns the entries removed.
     pub(crate) async fn strip_job_dir(&self, t: &Tenant, root: &Path, project_key: Option<&str>, keep: &[&str]) -> usize {
-        let Ok(rd) = std::fs::read_dir(root) else { return 0 };
-        let doomed: Vec<PathBuf> = rd.flatten().filter(|e| !keep.iter().any(|k| e.file_name() == *k)).map(|e| e.path()).collect();
-        if doomed.is_empty() {
+        if !std::fs::symlink_metadata(root).is_ok_and(|m| m.is_dir()) {
             return 0;
         }
+        let Ok(rd) = std::fs::read_dir(root) else { return 0 };
+        let entries: Vec<(PathBuf, bool)> = rd.flatten().filter(|e| !keep.iter().any(|k| e.file_name() == *k)).map(|e| (e.path(), real_dir(&e))).collect();
+        if entries.is_empty() {
+            return 0;
+        }
+        let doomed: Vec<PathBuf> = entries.iter().map(|(p, _)| p.clone()).collect();
         if matches!(self.wall, Wall::JobUser { .. }) {
-            for p in &doomed {
-                let op = crate::admin::jobs::JobOp::Reclaim { path: p.clone() };
+            for (p, _) in entries.iter().filter(|(_, dir)| *dir) {
+                let op = crate::admin::jobs::JobOp::Reclaim { path: p.clone(), slot: t.slot };
                 if let Err(e) = self.job_op(op, vec![], Duration::from_secs(600)).await {
                     crate::nlog!("reclaim {}: {e}", p.display());
                 }
             }
         }
         let src = root.join("src");
-        if let (Some(pk), true) = (project_key, doomed.contains(&src)) {
+        if let (Some(pk), true) = (project_key, entries.iter().any(|(p, dir)| *dir && *p == src)) {
             if let Some(g) = Git::find(&self.layout().git_home(), &crate::util::base_path(&self.layout().home)) {
                 g.worktree_remove(&t.paths.mirror(pk), &src).await;
             }
@@ -178,15 +191,18 @@ impl Node {
         for t in self.tenants() {
             let Ok(rd) = std::fs::read_dir(t.paths.cache()) else { continue };
             for project in rd.flatten() {
+                if !real_dir(&project) {
+                    continue;
+                }
                 let key = project.file_name().to_string_lossy().into_owned();
                 let Ok(inner) = std::fs::read_dir(project.path()) else { continue };
                 for e in inner.flatten() {
                     let name = e.file_name().to_string_lossy().into_owned();
                     let Some(n) = name.strip_prefix("target-").and_then(|n| n.parse::<u32>().ok()) else { continue };
-                    if slots.is_busy(&key, n) || !e.path().is_dir() {
+                    if slots.is_busy(&key, n) || !real_dir(&e) {
                         continue;
                     }
-                    out.push(Idle { project: project.path(), key: key.clone(), n, dir: e.path() });
+                    out.push(Idle { slot: t.slot, project: project.path(), key: key.clone(), n, dir: e.path() });
                 }
             }
         }
@@ -210,13 +226,13 @@ impl Node {
             to
         };
         self.slot_use.lock().unwrap().remove(&s.dir);
-        self.delete_evicted(gone).await;
+        self.delete_evicted(s.slot, gone).await;
         true
     }
 
-    async fn delete_evicted(&self, p: PathBuf) {
-        if matches!(self.wall, Wall::JobUser { .. }) {
-            let op = crate::admin::jobs::JobOp::Reclaim { path: p.clone() };
+    async fn delete_evicted(&self, slot: k2_node_proto::share::Slot, p: PathBuf) {
+        if matches!(self.wall, Wall::JobUser { .. }) && std::fs::symlink_metadata(&p).is_ok_and(|m| m.is_dir()) {
+            let op = crate::admin::jobs::JobOp::Reclaim { path: p.clone(), slot };
             if let Err(e) = self.job_op(op, vec![], Duration::from_secs(600)).await {
                 crate::nlog!("reclaim {}: {e}", p.display());
             }
@@ -232,17 +248,17 @@ impl Node {
         let mut found = Vec::new();
         for t in self.tenants() {
             let Ok(rd) = std::fs::read_dir(t.paths.cache()) else { continue };
-            for project in rd.flatten() {
+            for project in rd.flatten().filter(real_dir) {
                 let Ok(inner) = std::fs::read_dir(project.path()) else { continue };
                 for e in inner.flatten() {
                     if e.file_name().to_string_lossy().starts_with(EVICTED_PREFIX) {
-                        found.push(e.path());
+                        found.push((t.slot, e.path()));
                     }
                 }
             }
         }
-        for p in found {
-            self.delete_evicted(p).await;
+        for (slot, p) in found {
+            self.delete_evicted(slot, p).await;
         }
     }
 
@@ -259,7 +275,7 @@ impl Node {
                     continue;
                 }
                 let dir = t.paths.job_dir(&r.job_id, r.generation);
-                if dir.is_dir() && self.strip_job_dir(&t, &dir, r.plan.src.as_ref().map(|s| s.project_key.as_str()), PRESSURE_KEEP).await > 0 {
+                if self.strip_job_dir(&t, &dir, r.plan.src.as_ref().map(|s| s.project_key.as_str()), PRESSURE_KEEP).await > 0 {
                     n += 1;
                 }
             }
@@ -437,6 +453,36 @@ mod tests {
         assert!(leases.iter().any(|l| l.slot == Some(3)), "{leases:?}");
         assert!(n.trim_warm_slots().await.is_empty(), "held by a job");
         assert!(pc.join("target-3").exists());
+    }
+
+    /// Review A-disk 1: links a job planted are never followed. A slot or
+    /// project that is a link isn't a slot (nothing it points at is
+    /// evicted), and stripping a job dir removes a link as a link.
+    #[tokio::test]
+    async fn cleanup_never_follows_a_planted_link() {
+        let free = Arc::new(AtomicU64::new(40 * GIB));
+        let (n, layout) = node("disk-links", "disk_floor_gb = 50\n", free).await;
+        let elsewhere = layout.home.parent().unwrap().join("elsewhere");
+        put(&elsewhere.join("pk/target-1/keep"), 10);
+        put(&elsewhere.join("job/keep"), 10);
+        let pc = layout.project_cache("pk1");
+        std::fs::create_dir_all(&pc).unwrap();
+        std::os::unix::fs::symlink(elsewhere.join("pk/target-1"), pc.join("target-2")).unwrap();
+        std::os::unix::fs::symlink(elsewhere.join("pk"), layout.home.join("cache/pk2")).unwrap();
+        assert!(n.idle_slots().is_empty(), "links aren't slots");
+        assert!(n.disk_guard_pass().await.is_empty());
+        assert!(n.gc_slots(n.now() + 1).is_empty());
+        assert!(elsewhere.join("pk/target-1/keep").exists(), "nothing behind a link is evicted");
+        // A job dir whose `target` is a link: the link goes, not its target.
+        let dir = layout.job_dir("j", 1);
+        put(&dir.join("log"), 1);
+        std::os::unix::fs::symlink(elsewhere.join("job"), dir.join("target")).unwrap();
+        assert_eq!(n.strip_job_dir(&n.owner(), &dir, None, JOB_END_KEEP).await, 1);
+        assert!(std::fs::symlink_metadata(dir.join("target")).is_err() && elsewhere.join("job/keep").exists());
+        // A job dir that is itself a link is left alone.
+        std::os::unix::fs::symlink(elsewhere.join("job"), layout.job_dir("k", 1)).unwrap();
+        assert_eq!(n.strip_job_dir(&n.owner(), &layout.job_dir("k", 1), None, &[]).await, 0);
+        assert!(elsewhere.join("job/keep").exists());
     }
 
     /// (c) Under the floor the guard reclaims first (ended job dirs, idle

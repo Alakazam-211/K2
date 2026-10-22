@@ -393,10 +393,12 @@ impl Node {
     }
 
     /// Linux wall: have the executor give a job-written tree back to the
-    /// node user (blocking; admin `gc` and the slot sweep). No-op otherwise.
-    pub fn reclaim_blocking(&self, p: &Path) {
+    /// node user (blocking; admin `gc` and the slot sweep). Only a tree
+    /// of `slot`'s, never through a link (the executor checks). No-op
+    /// otherwise.
+    pub fn reclaim_blocking(&self, slot: Slot, p: &Path) {
         if matches!(self.wall, Wall::JobUser { .. }) && p.exists() {
-            let op = crate::admin::jobs::JobOp::Reclaim { path: p.to_path_buf() };
+            let op = crate::admin::jobs::JobOp::Reclaim { path: p.to_path_buf(), slot };
             if let Err(e) = crate::admin::server::job_request(&self.opts.admin_socket, &op, &[], Duration::from_secs(600)) {
                 crate::nlog!("reclaim {}: {}: {}", p.display(), e.code, e.message);
             }
@@ -553,12 +555,16 @@ impl Node {
         for t in self.tenants() {
             let Ok(rd) = std::fs::read_dir(t.paths.cache()) else { continue };
             for project in rd.flatten() {
+                // A link is never a project or a slot (review A-disk 1).
+                if !project.file_type().is_ok_and(|f| f.is_dir()) {
+                    continue;
+                }
                 let key = project.file_name().to_string_lossy().into_owned();
                 let Ok(inner) = std::fs::read_dir(project.path()) else { continue };
                 for e in inner.flatten() {
                     let name = e.file_name().to_string_lossy().into_owned();
                     let Some(n) = name.strip_prefix("target-").and_then(|n| n.parse::<u32>().ok()) else { continue };
-                    if slots.is_busy(&key, n) {
+                    if slots.is_busy(&key, n) || !e.file_type().is_ok_and(|f| f.is_dir()) {
                         continue;
                     }
                     let m = e.metadata().ok().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok());
@@ -566,7 +572,7 @@ impl Node {
                         continue;
                     }
                     let bytes = du(&e.path());
-                    self.reclaim_blocking(&e.path());
+                    self.reclaim_blocking(t.slot, &e.path());
                     if std::fs::remove_dir_all(e.path()).is_ok() {
                         slots.forget(&project.path(), n);
                         out.push((e.path(), bytes));
@@ -703,7 +709,7 @@ impl Node {
                 let dir = t.paths.job_dir(&r.job_id, r.generation);
                 if matches!(self.wall, Wall::JobUser { .. }) && dir.exists() {
                     // The job user's files come back to us before git and rm.
-                    let _ = self.job_op(crate::admin::jobs::JobOp::Reclaim { path: dir.clone() }, vec![], Duration::from_secs(600)).await;
+                    let _ = self.job_op(crate::admin::jobs::JobOp::Reclaim { path: dir.clone(), slot: t.slot }, vec![], Duration::from_secs(600)).await;
                 }
                 if let (Some(g), Some(src)) = (&git, &r.plan.src) {
                     g.worktree_remove(&t.paths.mirror(&src.project_key), &dir.join("src")).await;

@@ -235,8 +235,13 @@ pub enum JobOp {
     /// Stop (waits), forget the unit.
     Release { unit: String },
     /// Give a job tree back to the node user (chown, never following a
-    /// symlink) so it can delete or reuse it.
-    Reclaim { path: PathBuf },
+    /// symlink) so it can delete or reuse it. Only a tree of `slot` (a
+    /// 0.46.2 node sends none: the owner's, the only slot it has).
+    Reclaim {
+        path: PathBuf,
+        #[serde(default)]
+        slot: Slot,
+    },
     /// Can this executor wall tenants from each other, and which slots
     /// have a user? Asked before every tenant start: an older executor
     /// doesn't know this op (it refuses it), so a tenant's job never runs
@@ -719,18 +724,34 @@ pub fn check_paths(home: &Path, slot: Slot, root: &Path, rw: &[PathBuf]) -> Resu
     Ok((r, out))
 }
 
-/// A path `reclaim` may take back: a job root or anything under one, or
-/// anything under `cache/` (not `cache/` itself), of the owner or of a
-/// tenant. Returns it with its slot.
-pub fn check_reclaim(home: &Path, path: &Path) -> Result<(PathBuf, Slot), AdminRefusal> {
+/// A path `reclaim` may take back for `slot`: a job root or anything under
+/// one, or anything under `cache/` (not `cache/` itself), of that slot
+/// only, with no link anywhere below the slot's `jobs/` or `cache/`
+/// (security review A-disk 1: a link a job planted made root re-own what
+/// it pointed at, another server's live tree). Returns the path, link
+/// free (root then opens it one component at a time, never following).
+pub fn check_reclaim(home: &Path, path: &Path, slot: Slot) -> Result<PathBuf, AdminRefusal> {
+    let s = slot_roots(home, slot)?;
+    let t = crate::paths::Layout::new(home, "/nonexistent").tenant(slot);
     let c = canon(path)?;
-    for slot in 0..share::MAX_SLOTS {
-        let Ok(s) = slot_roots(home, slot) else { continue };
-        if inside(&c, &s.jobs) || inside(&c, &s.cache) {
-            return Ok((c, slot));
+    let no_link = [(t.jobs(), &s.jobs), (t.cache(), &s.cache)].iter().any(|(given, real)| {
+        let rel = path.strip_prefix(given).or_else(|_| path.strip_prefix(real));
+        match rel {
+            Ok(rel) if !rel.as_os_str().is_empty() && rel.components().all(|c| matches!(c, std::path::Component::Normal(_))) => c == real.join(rel),
+            _ => false,
         }
+    });
+    if no_link && (inside(&c, &s.jobs) || inside(&c, &s.cache)) {
+        return Ok(c);
     }
-    Err(refuse(code::BAD_ARGS, "only job folders and caches of this node's servers"))
+    Err(refuse(code::BAD_ARGS, format!("only job folders and caches of server slot {slot}, with no link on the way")))
+}
+
+/// Root: [`check_reclaim`], then the chown walk (fd based, never
+/// following a link, from the very path checked).
+pub fn reclaim_checked(home: &Path, path: &Path, slot: Slot, uid: u32, gid: u32) -> Result<crate::wall::WalkStats, AdminRefusal> {
+    let p = check_reclaim(home, path, slot)?;
+    crate::wall::reclaim(&p, uid, gid).map_err(|e| refuse(code::FAILED, e))
 }
 
 fn find_program(name: &str) -> Option<PathBuf> {
@@ -1001,7 +1022,7 @@ impl Executor {
                 let _ = systemctl(&["reset-failed", u]);
                 Ok(JobAnswer::Done { detail: json!({"released": u, "stop": stopped.err()}) })
             }),
-            JobOp::Reclaim { path } => self.reclaim_path(path),
+            JobOp::Reclaim { path, slot } => self.reclaim_path(path, *slot),
             JobOp::Tenants => Ok(JobAnswer::Tenants(self.tenant_wall())),
             JobOp::TenantPrepare(p) => self.tenant_prepare(p).map(|detail| JobAnswer::Done { detail }),
             JobOp::TenantWipe(w) => self.tenant_wipe(w).map(|detail| JobAnswer::Done { detail }),
@@ -1019,9 +1040,8 @@ impl Executor {
         f(unit).map_err(|e| refuse(code::FAILED, e))
     }
 
-    fn reclaim_path(&self, path: &Path) -> Result<JobAnswer, AdminRefusal> {
+    fn reclaim_path(&self, path: &Path, slot: Slot) -> Result<JobAnswer, AdminRefusal> {
         self.job_user()?;
-        let (p, slot) = check_reclaim(&self.paths.home, path)?;
         let (uid, node_gid) = super::server::user_ids(&self.node_user()).ok_or_else(|| refuse(code::NOT_CONFIGURED, "the node user is missing"))?;
         // A tenant's trees keep the tenant's group (its next job uses
         // them); the node gets them back as their owner.
@@ -1030,8 +1050,8 @@ impl Executor {
         } else {
             group_id(&tenant_group_name(slot)).ok_or_else(|| refuse(share::codes::TENANT_WALL_MISSING, "the tenant's group is missing"))?
         };
-        let s = crate::wall::reclaim(&p, uid, gid).map_err(|e| refuse(code::FAILED, e))?;
-        Ok(JobAnswer::Done { detail: json!({"reclaimed": p, "changed": s.changed, "skipped": s.skipped}) })
+        let s = reclaim_checked(&self.paths.home, path, slot, uid, gid)?;
+        Ok(JobAnswer::Done { detail: json!({"reclaimed": path, "changed": s.changed, "skipped": s.skipped}) })
     }
 
     /// What a slot's unit may not see beyond the node's own state: the
@@ -1427,10 +1447,10 @@ mod tests {
         assert!(check_paths(&home, 0, &home.join("jobs"), &[]).is_err(), "jobs/ itself isn't a job root");
         assert!(check_paths(&home, 0, &home.join("jobs/j1-g1/src"), &[]).is_err(), "one level under jobs/");
         assert!(check_paths(&home, 0, &home.join("state"), &[]).is_err());
-        assert_eq!(check_reclaim(&home, &home.join("jobs/j1-g1")).unwrap().1, 0);
-        assert_eq!(check_reclaim(&home, &home.join("cache/pk/target-1")).unwrap().1, 0);
-        for bad in [home.join("jobs"), home.join("cache"), home.join("state"), home.join("cache/pk/sneaky")] {
-            assert!(check_reclaim(&home, &bad).is_err(), "{}", bad.display());
+        assert_eq!(check_reclaim(&home, &home.join("jobs/j1-g1"), 0).unwrap(), home.join("jobs/j1-g1"));
+        assert_eq!(check_reclaim(&home, &home.join("cache/pk/target-1"), 0).unwrap(), home.join("cache/pk/target-1"));
+        for bad in [home.join("jobs"), home.join("cache"), home.join("state"), home.join("cache/pk/sneaky"), home.join("jobs/j1-g1/out"), home.join("jobs/j1-g1/../j1-g1")] {
+            assert!(check_reclaim(&home, &bad, 0).is_err(), "{}", bad.display());
         }
     }
 
@@ -1466,13 +1486,89 @@ mod tests {
             assert!(check_paths(&home, 1, &root, &rw).is_err(), "{} {rw:?}", root.display());
         }
         assert!(check_paths(&home, 0, &t1.jobs().join("k"), &[]).is_err(), "the owner's job never runs in a tenant root");
-        assert_eq!(check_reclaim(&home, &t1.jobs().join("k")).unwrap().1, 1);
-        assert_eq!(check_reclaim(&home, &t2.cache().join("pk/target-1")).unwrap().1, 2);
-        assert!(check_reclaim(&home, &t1.root()).is_err() && check_reclaim(&home, &t1.repos()).is_err());
+        assert_eq!(check_reclaim(&home, &t1.jobs().join("k"), 1).unwrap(), t1.jobs().join("k"));
+        assert_eq!(check_reclaim(&home, &t2.cache().join("pk/target-1"), 2).unwrap(), t2.cache().join("pk/target-1"));
+        assert!(check_reclaim(&home, &t1.root(), 1).is_err() && check_reclaim(&home, &t1.repos(), 1).is_err());
+        // Only the slot the caller names (review A-disk 1).
+        assert!(check_reclaim(&home, &t2.cache().join("pk/target-1"), 1).is_err(), "slot 2's cache isn't slot 1's");
+        assert!(check_reclaim(&home, &home.join("jobs/o-g1"), 1).is_err(), "nor the owner's");
+        assert!(check_reclaim(&home, &t1.jobs().join("k"), 0).is_err(), "the owner's reclaim stays in its own home");
         // Slot 3's root is a link to slot 1's: refused.
         std::os::unix::fs::symlink(t1.root(), l.tenant(3).root()).unwrap();
         assert!(check_paths(&home, 3, &l.tenant(3).jobs().join("k"), &[]).is_err());
         assert!(slot_roots(&home, 3).is_err() && slot_roots(&home, 8).is_err());
+    }
+
+    /// Review A-disk 1: a link a job planted in its own job dir or cache,
+    /// pointing at another server's live job dir, is refused (root would
+    /// re-own what it points at), wherever on the path it sits.
+    #[test]
+    fn a_planted_link_to_another_servers_tree_is_refused() {
+        let base = std::fs::canonicalize(crate::util::temp_dir("reclaimlink")).unwrap();
+        let home = base.join("home");
+        let l = crate::paths::Layout::new(&home, "/nonexistent");
+        std::fs::create_dir_all(home.join("jobs")).unwrap();
+        std::fs::create_dir_all(home.join("cache")).unwrap();
+        for slot in [1u8, 2] {
+            let t = l.tenant(slot);
+            for d in [t.jobs().join("k-g1/home"), t.cache().join("pk/target-1"), t.tmp()] {
+                std::fs::create_dir_all(d).unwrap();
+            }
+        }
+        let (t1, t2) = (l.tenant(1), l.tenant(2));
+        std::fs::write(t2.jobs().join("k-g1/home/secret"), "b").unwrap();
+        std::os::unix::fs::symlink(t2.jobs().join("k-g1"), t1.jobs().join("k-g1/target")).unwrap();
+        std::os::unix::fs::symlink(t2.cache().join("pk"), t1.cache().join("pk2")).unwrap();
+        std::os::unix::fs::symlink(t2.jobs().join("k-g1"), t1.jobs().join("evil-g1")).unwrap();
+        for bad in [t1.jobs().join("k-g1/target"), t1.jobs().join("k-g1/target/home"), t1.cache().join("pk2/target-1"), t1.jobs().join("evil-g1")] {
+            let e = check_reclaim(&home, &bad, 1).unwrap_err();
+            assert!(e.message.contains("no link"), "{}: {e:?}", bad.display());
+            // Through root's whole path, too: nothing is chowned (the
+            // walk is never reached; uid/gid are this user's own here).
+            let me = unsafe { (libc::geteuid(), libc::getegid()) };
+            assert!(reclaim_checked(&home, &bad, 1, me.0, me.1).is_err(), "{}", bad.display());
+        }
+        // The real trees stay reclaimable by their own slot.
+        assert!(check_reclaim(&home, &t1.jobs().join("k-g1/home"), 1).is_ok());
+        assert!(check_reclaim(&home, &t2.jobs().join("k-g1"), 2).is_ok());
+    }
+
+    /// Review A-disk 1, as root (Linux container / CI root runs): a link
+    /// planted in slot 1's job dir pointing at slot 2's job dir is
+    /// refused, and slot 2's files keep their owner.
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "root only: chowns"]
+    fn as_root_a_planted_link_leaves_the_other_servers_owner_alone() {
+        use std::os::unix::fs::chown;
+        assert_eq!(unsafe { libc::geteuid() }, 0, "run as root (--include-ignored in the root container)");
+        use std::os::unix::fs::MetadataExt;
+        let base = std::fs::canonicalize(crate::util::temp_dir("reclaimroot")).unwrap();
+        let home = base.join("home");
+        let l = crate::paths::Layout::new(&home, "/nonexistent");
+        std::fs::create_dir_all(home.join("jobs")).unwrap();
+        std::fs::create_dir_all(home.join("cache")).unwrap();
+        for slot in [1u8, 2] {
+            let t = l.tenant(slot);
+            for d in [t.jobs().join("k-g1/home"), t.cache(), t.tmp()] {
+                std::fs::create_dir_all(d).unwrap();
+            }
+        }
+        let (t1, t2) = (l.tenant(1), l.tenant(2));
+        let secret = t2.jobs().join("k-g1/home/secret");
+        std::fs::write(&secret, "b").unwrap();
+        chown(&secret, Some(4242), Some(4242)).unwrap();
+        chown(t2.jobs().join("k-g1/home"), Some(4242), Some(4242)).unwrap();
+        std::os::unix::fs::symlink(t2.jobs().join("k-g1"), t1.jobs().join("k-g1/target")).unwrap();
+        assert!(reclaim_checked(&home, &t1.jobs().join("k-g1/target"), 1, 4343, 4343).is_err());
+        assert!(reclaim_checked(&home, &t2.jobs().join("k-g1"), 1, 4343, 4343).is_err(), "named slot 1, slot 2's tree");
+        assert_eq!(std::fs::metadata(&secret).unwrap().uid(), 4242, "slot 2's file keeps its owner");
+        // Control: slot 1's own tree is reclaimed (the link itself, not
+        // what it points at).
+        chown(t1.jobs().join("k-g1/home"), Some(4242), Some(4242)).unwrap();
+        reclaim_checked(&home, &t1.jobs().join("k-g1"), 1, 4343, 4343).unwrap();
+        assert_eq!(std::fs::metadata(t1.jobs().join("k-g1/home")).unwrap().uid(), 4343);
+        assert_eq!(std::fs::metadata(&secret).unwrap().uid(), 4242, "still: the walk never follows the link");
     }
 
     #[test]
@@ -1516,12 +1612,14 @@ mod tests {
             JobOp::TenantPrepare(share::TenantPrepare { slot: 1, trust: share::Trust::Own, weight: 1, network: Network::On }),
             JobOp::TenantWipe(share::TenantWipe { slot: 1 }),
             JobOp::Status { unit: "k2job-j-g1.service".into() },
-            JobOp::Reclaim { path: "/r".into() },
+            JobOp::Reclaim { path: "/r".into(), slot: 2 },
         ];
         for op in ops {
             let s = serde_json::to_string(&op).unwrap();
             assert_eq!(serde_json::from_str::<JobOp>(&s).unwrap(), op);
         }
+        // A 0.46.2 node's reclaim (no slot) is the owner's.
+        assert_eq!(serde_json::from_str::<JobOp>(r#"{"do":"reclaim","path":"/r"}"#).unwrap(), JobOp::Reclaim { path: "/r".into(), slot: OWNER_SLOT });
         // A 0.46.2 node's start (no tenant, no no_lan) is the owner's.
         let old: JobOp = serde_json::from_str(r#"{"do":"start","key":"j-g1","root":"/r","rw":[],"network_none":false,"mem_bytes":null,"cpu_millis":null,"stop_grace_secs":10}"#).unwrap();
         let JobOp::Start(s) = old else { panic!() };

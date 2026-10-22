@@ -193,7 +193,7 @@ pub async fn gc_run(node: &Node, days: i64, toolchains: bool) -> Result<Value, A
             }
             let dir = t.paths.job_dir(&r.job_id, r.generation);
             if dir.exists() {
-                node.reclaim_blocking(&dir);
+                node.reclaim_blocking(t.slot, &dir);
                 remove(&dir, &mut freed, &mut job_dirs);
             }
             let _ = t.ledger.lock().unwrap().mark_cleaned(&r.job_id, r.generation);

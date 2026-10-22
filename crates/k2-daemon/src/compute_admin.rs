@@ -1687,6 +1687,16 @@ fn servers_ready(node: &store::NodeRow) -> R<()> {
 
 static SERVERS_REFRESHING: Mutex<Option<std::collections::HashSet<String>>> = Mutex::new(None);
 
+/// Each node's last `servers.list` facts (`max_servers`, `solo`), from
+/// whichever refresh landed last: the route's own, or the ticker's that
+/// raced it (macOS r8: the ticker's answer landed and the route's timed
+/// out, so the reply had no `maxServers`/`solo` though its rows were new).
+static SERVERS_META: Mutex<Option<HashMap<String, (u8, bool)>>> = Mutex::new(None);
+
+fn servers_meta(node_id: &str) -> Option<(u8, bool)> {
+    SERVERS_META.lock().unwrap_or_else(|p| p.into_inner()).as_ref().and_then(|m| m.get(node_id).copied())
+}
+
 /// Mirror the node's server list now (blocking, up to [`ANSWER_WAIT`]).
 /// Owner side only. Audits and notes the changes it sees.
 fn refresh_servers(node: &store::NodeRow) -> R<pshare::ServersList> {
@@ -1710,6 +1720,7 @@ fn refresh_servers(node: &store::NodeRow) -> R<pshare::ServersList> {
     for (key, text) in notes {
         share_note(&node.id, &key, &text);
     }
+    SERVERS_META.lock().unwrap_or_else(|p| p.into_inner()).get_or_insert_with(HashMap::new).insert(node.id.clone(), (meta.max_servers, meta.solo));
     Ok(meta)
 }
 
@@ -1915,10 +1926,12 @@ fn servers_list(who: &Who, params: &HashMap<String, String>, mgr: Option<&Manage
     .filter(|r| r.steps().is_ok_and(|s| s.iter().any(|st| st.verb.starts_with("servers."))))
     .map(|r| request_json(&r, Some(&node.name)))
     .collect::<Vec<_>>();
-    // From the node when it was just asked (else the last mirror's rows).
-    let (max_servers, solo) = match &meta {
-        Some(m) => (Some(m.max_servers), Some(m.solo)),
-        None => (None, None),
+    // From the node when it was just asked, else from the last mirror
+    // (this daemon's run), like the rows.
+    let (max_servers, solo) = match (&meta, servers_meta(&node.id)) {
+        (Some(m), _) => (Some(m.max_servers), Some(m.solo)),
+        (None, Some((m, s))) => (Some(m), Some(s)),
+        (None, None) => (None, None),
     };
     Ok(json!({"node": node.name, "role": "owner", "shared": node.shared, "maxServers": max_servers, "solo": solo,
         "servers": list, "requests": pending, "note": note}))

@@ -859,22 +859,76 @@ fn sanitize_mime_param(s: &str) -> String {
     s.replace(['\r', '\n', '"'], " ").trim().to_string()
 }
 
-/// Text/plain or multipart/mixed payload for a draft. No Message-ID
-/// (the user's client assigns one at send time). Boundary is injected
-/// so this stays a pure fn.
-fn emit_draft_payload(h: &mut String, body: &str, attachments: &[Rfc822Attachment], boundary: &str) {
-    if attachments.is_empty() {
-        h.push_str("MIME-Version: 1.0\r\n");
-        h.push_str("Content-Type: text/plain; charset=utf-8\r\n");
-        h.push_str("Content-Transfer-Encoding: base64\r\n");
-        h.push_str("\r\n");
-        h.push_str(&b64_body(body));
-        h.push_str("\r\n");
-        return;
+/// HTML twin of a plain-text draft body, for the draft's `text/html`
+/// alternative. Gmail's plain-text composer re-wraps a `text/plain`-only
+/// draft at ~72 columns the moment the human opens it; an HTML part is
+/// opened as-is. Pure and conservative: every blank-line-separated block
+/// is one `<p>`, a single newline inside it is `<br>`, every character
+/// is HTML-escaped (`& < > " '`), leading indentation and runs of spaces
+/// survive as `&nbsp;` (a tab = four), URLs stay plain text. No remote
+/// content, no scripts, no links, no styles.
+pub(crate) fn draft_html_from_text(text: &str) -> String {
+    let text = text.replace("\r\n", "\n").replace('\r', "\n");
+    let mut paragraphs: Vec<Vec<&str>> = Vec::new();
+    let mut current: Vec<&str> = Vec::new();
+    for line in text.split('\n') {
+        if line.trim().is_empty() {
+            if !current.is_empty() {
+                paragraphs.push(std::mem::take(&mut current));
+            }
+        } else {
+            current.push(line);
+        }
     }
-    h.push_str("MIME-Version: 1.0\r\n");
+    if !current.is_empty() {
+        paragraphs.push(current);
+    }
+    let mut out = String::with_capacity(text.len() * 2 + 160);
+    out.push_str(
+        "<!DOCTYPE html>\n<html><head><meta http-equiv=\"Content-Type\" \
+         content=\"text/html; charset=utf-8\"></head>\n<body>\n",
+    );
+    for paragraph in paragraphs {
+        out.push_str("<p>");
+        for (i, line) in paragraph.iter().enumerate() {
+            if i > 0 {
+                out.push_str("<br>\n");
+            }
+            push_html_line(&mut out, line);
+        }
+        out.push_str("</p>\n");
+    }
+    out.push_str("</body></html>\n");
+    out
+}
+
+/// One escaped line: `& < > " '` as entities; a space HTML would
+/// collapse (leading, or right after another space) as `&nbsp;`.
+fn push_html_line(out: &mut String, line: &str) {
+    let mut keep_next_space = true; // leading spaces never collapse
+    for ch in line.chars() {
+        match ch {
+            ' ' if keep_next_space => out.push_str("&nbsp;"),
+            ' ' => out.push(' '),
+            '\t' => out.push_str("&nbsp;&nbsp;&nbsp;&nbsp;"),
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            c => out.push(c),
+        }
+        keep_next_space = ch == ' ' || ch == '\t';
+    }
+}
+
+/// The draft's text as `multipart/alternative`: the `text/plain` part
+/// (headers and base64 unchanged from the plain-only drafts) and its
+/// [`draft_html_from_text`] twin. Both base64 — an ASCII wire form with
+/// 76-column lines.
+fn emit_draft_alternative(h: &mut String, body: &str, boundary: &str) {
     h.push_str(&format!(
-        "Content-Type: multipart/mixed; boundary=\"{}\"\r\n",
+        "Content-Type: multipart/alternative; boundary=\"{}\"\r\n",
         sanitize_mime_param(boundary)
     ));
     h.push_str("\r\n");
@@ -884,6 +938,33 @@ fn emit_draft_payload(h: &mut String, body: &str, attachments: &[Rfc822Attachmen
     h.push_str("\r\n");
     h.push_str(&b64_body(body));
     h.push_str("\r\n");
+    h.push_str(&format!("--{boundary}\r\n"));
+    h.push_str("Content-Type: text/html; charset=utf-8\r\n");
+    h.push_str("Content-Transfer-Encoding: base64\r\n");
+    h.push_str("\r\n");
+    h.push_str(&b64_body(&draft_html_from_text(body)));
+    h.push_str("\r\n");
+    h.push_str(&format!("--{boundary}--\r\n"));
+}
+
+/// The draft payload: `multipart/alternative` (text/plain + text/html),
+/// or `multipart/mixed` holding that alternative then the attachments.
+/// No Message-ID (the user's client assigns one at send time). The
+/// boundary is injected so this stays a pure fn; the inner alternative
+/// uses `alt-<boundary>` (neither delimiter is a prefix of the other).
+fn emit_draft_payload(h: &mut String, body: &str, attachments: &[Rfc822Attachment], boundary: &str) {
+    h.push_str("MIME-Version: 1.0\r\n");
+    if attachments.is_empty() {
+        emit_draft_alternative(h, body, boundary);
+        return;
+    }
+    h.push_str(&format!(
+        "Content-Type: multipart/mixed; boundary=\"{}\"\r\n",
+        sanitize_mime_param(boundary)
+    ));
+    h.push_str("\r\n");
+    h.push_str(&format!("--{boundary}\r\n"));
+    emit_draft_alternative(h, body, &format!("alt-{boundary}"));
     for a in attachments {
         let filename = sanitize_mime_param(&a.filename);
         let ct = sanitize_mime_param(&a.content_type);
@@ -909,8 +990,9 @@ fn emit_draft_payload(h: &mut String, body: &str, attachments: &[Rfc822Attachmen
 /// drafts are theirs to send), To = the source's Reply-To/From,
 /// threading headers per RFC 5322. No Message-ID — the user's mail
 /// client assigns one at send time. `date_rfc2822`/`boundary` are
-/// injected (no clock/RNG in a pure fn). Optional multipart/mixed
-/// when `attachments` is non-empty — never the SMTP/lettre wire form.
+/// injected (no clock/RNG in a pure fn). Body = text/plain + text/html
+/// alternative, inside multipart/mixed with `attachments` — never the
+/// SMTP/lettre wire form.
 pub fn compose_draft_rfc822(
     inbox: &MailExternalInbox,
     src: &DraftSource,
@@ -947,8 +1029,8 @@ pub fn compose_draft_rfc822(
 
 /// Compose a brand-new (non-reply) draft: From = the linked account,
 /// To/Subject/Cc from args, **no** In-Reply-To/References, **no**
-/// Message-ID. Optional multipart/mixed. Do not APPEND the SMTP/lettre
-/// wire form. `bcc` lands as a `Bcc:` header IN THE DRAFT — that is how
+/// Message-ID. Body = text/plain + text/html (+ attachments). Do not
+/// APPEND the SMTP/lettre wire form. `bcc` lands as a `Bcc:` header IN THE DRAFT — that is how
 /// mail clients store a draft's blind copies; the human's client strips
 /// it from the wire when they hit Send (a draft is never sent by K2).
 #[allow(clippy::too_many_arguments)]
@@ -2153,39 +2235,218 @@ pub(crate) mod tests {
         assert_eq!(decoded, body, "decoded text differs from the input byte for byte");
     }
 
+    // ── draft HTML twin (Gmail re-wraps a text/plain-only draft) ──
+    //
+    // Field report (0.46.2, Gmail link): the raw draft was right (one
+    // 288-char line) but Gmail's PLAIN-TEXT composer re-wrapped it at
+    // ~72 columns when the human opened it. Drafts now carry a
+    // text/html alternative, which Gmail opens as-is.
+
+    /// [`fidelity_body`] plus a paragraph that must come out as TEXT in
+    /// the HTML part: tags, entities, quotes, a URL with `&`, and runs of
+    /// spaces.
+    pub(crate) fn draft_fidelity_body() -> String {
+        format!(
+            "{}\n\n<script>alert(\"x\")</script> & 'q' <b>bold</b> &amp;\n\
+             See https://example.com/?a=1&b=2 now.\nTwo  spaces   and three.",
+            fidelity_body()
+        )
+    }
+
+    /// Undo [`draft_html_from_text`]'s escaping, for the round trip.
+    fn unescape_draft_html(s: &str) -> String {
+        s.replace("<br>\n", "\n")
+            .replace("&nbsp;", " ")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", "\"")
+            .replace("&#39;", "'")
+            .replace("&amp;", "&")
+    }
+
+    /// The draft is `multipart/alternative` (inside `multipart/mixed`
+    /// when `attachments` is non-empty): the text/plain part is today's
+    /// part byte for byte, and the one text/html part holds exactly the
+    /// input's paragraphs — escaped, every line kept, no tag but the
+    /// fixed skeleton + `<p>`/`<br>`, nothing remote. Each attachment is
+    /// still there, bytes intact.
+    pub(crate) fn assert_draft_html_twin(raw: &[u8], body: &str, attachments: &[Rfc822Attachment]) {
+        use mail_parser::MimeHeaders as _;
+        assert_body_fidelity(raw, body);
+        let wire = std::str::from_utf8(raw).expect("draft is pure ASCII on the wire");
+        let plain = format!(
+            "Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: base64\r\n\r\n{}\r\n--",
+            b64_body(body)
+        );
+        assert!(wire.contains(&plain), "text/plain part changed from today's\n{wire}");
+        assert_eq!(wire.matches("Content-Type: text/plain; charset=utf-8\r\n").count(), 1, "{wire}");
+        assert_eq!(wire.matches("Content-Type: text/html; charset=utf-8\r\n").count(), 1, "{wire}");
+        assert_eq!(wire.matches("Content-Type: multipart/alternative;").count(), 1, "{wire}");
+        if attachments.is_empty() {
+            assert!(!wire.contains("multipart/mixed"), "{wire}");
+            assert!(
+                wire.contains("MIME-Version: 1.0\r\nContent-Type: multipart/alternative;"),
+                "the alternative is the top-level body\n{wire}"
+            );
+        } else {
+            assert!(
+                wire.contains("MIME-Version: 1.0\r\nContent-Type: multipart/mixed;"),
+                "{wire}"
+            );
+            let alt_at = wire.find("Content-Type: multipart/alternative;").expect("alternative");
+            let first_att = wire.find("Content-Disposition: attachment").expect("attachment");
+            assert!(alt_at < first_att, "the alternative comes first in the mixed\n{wire}");
+        }
+
+        let parsed = MessageParser::default().parse(raw).expect("draft parses back");
+        let html_parts: Vec<String> = parsed
+            .parts
+            .iter()
+            .filter(|p| {
+                p.content_type()
+                    .is_some_and(|ct| ct.ctype() == "text" && ct.subtype() == Some("html"))
+            })
+            .map(|p| p.text_contents().expect("html part is text").to_string())
+            .collect();
+        assert_eq!(html_parts.len(), 1, "exactly one text/html part");
+        let html = &html_parts[0];
+        assert_eq!(parsed.body_html(0).as_deref(), Some(html.as_str()), "the HTML body is that part");
+
+        // Only the fixed skeleton and <p>/<br>: every '<' opens an allowed tag.
+        let allowed = [
+            "!DOCTYPE html",
+            "html",
+            "head",
+            "meta http-equiv=\"Content-Type\" content=\"text/html; charset=utf-8\"",
+            "/head",
+            "body",
+            "p",
+            "br",
+            "/p",
+            "/body",
+            "/html",
+        ];
+        for (at, _) in html.match_indices('<') {
+            let tag = &html[at + 1..at + html[at..].find('>').expect("tag closes")];
+            assert!(allowed.contains(&tag), "unexpected tag <{tag}> in\n{html}");
+        }
+        for banned in ["<script", "<a ", "<img", "src=", "href=", "style=", "url("] {
+            assert!(!html.contains(banned), "{banned} in\n{html}");
+        }
+
+        // Paragraph for paragraph, line for line (blank-line runs split).
+        let mut want: Vec<String> = Vec::new();
+        let mut cur: Vec<&str> = Vec::new();
+        for line in body.split('\n') {
+            if line.trim().is_empty() {
+                if !cur.is_empty() {
+                    want.push(cur.join("\n"));
+                    cur.clear();
+                }
+            } else {
+                cur.push(line);
+            }
+        }
+        if !cur.is_empty() {
+            want.push(cur.join("\n"));
+        }
+        let inner = html
+            .split_once("<body>\n")
+            .and_then(|(_, rest)| rest.split_once("</body>"))
+            .map(|(inner, _)| inner)
+            .expect("html has a body");
+        let got: Vec<String> = inner
+            .split_terminator("</p>\n")
+            .map(|p| unescape_draft_html(p.strip_prefix("<p>").expect("each block is a <p>")))
+            .collect();
+        assert_eq!(got, want, "HTML paragraphs differ from the input\n{html}");
+
+        // Attachments: still there, bytes intact.
+        assert_eq!(parsed.attachment_count(), attachments.len(), "{wire}");
+        for (i, a) in attachments.iter().enumerate() {
+            let got = parsed.attachment(i as u32).expect("attachment");
+            assert_eq!(got.attachment_name(), Some(a.filename.as_str()));
+            assert_eq!(got.contents(), a.bytes.as_slice());
+        }
+    }
+
+    fn fidelity_attachment() -> Rfc822Attachment {
+        Rfc822Attachment {
+            filename: "notes.txt".to_string(),
+            content_type: "text/plain".to_string(),
+            bytes: b"att <b>not html</b>\n".to_vec(),
+        }
+    }
+
     #[test]
     fn linked_compose_draft_keeps_paragraphs_exactly() {
         let inbox = test_inbox("X1", "p1", "rosson@example.com");
-        let body = fidelity_body();
+        let body = draft_fidelity_body();
         let to = vec![MailAddr { name: None, email: "pat@dest.example".to_string() }];
         let raw = compose_new_draft_rfc822(
             &inbox, &to, &[], &[], "Plan", &body, "Thu, 09 Jul 2026 08:00:00 +0000", &[], "b",
         )
         .expect("compose draft");
         assert_body_fidelity(&raw, &body);
+        assert_draft_html_twin(&raw, &body, &[]);
 
         // With an attachment the text part is still exact.
-        let att = Rfc822Attachment {
-            filename: "notes.txt".to_string(),
-            content_type: "text/plain".to_string(),
-            bytes: b"att".to_vec(),
-        };
+        let att = fidelity_attachment();
         let raw = compose_new_draft_rfc822(
-            &inbox, &to, &[], &[], "Plan", &body, "Thu, 09 Jul 2026 08:00:00 +0000", &[att],
-            "mix-bound",
+            &inbox, &to, &[], &[], "Plan", &body, "Thu, 09 Jul 2026 08:00:00 +0000",
+            &[att.clone()], "mix-bound",
         )
         .expect("compose draft + attachment");
         assert_body_fidelity(&raw, &body);
+        assert_draft_html_twin(&raw, &body, &[att]);
     }
 
     #[test]
     fn linked_reply_draft_keeps_paragraphs_exactly() {
         let inbox = test_inbox("X1", "p1", "rosson@example.com");
         let src = draft_source_from_raw(RAW_FIXTURE).expect("source");
-        let body = fidelity_body();
+        let body = draft_fidelity_body();
         let raw = compose_draft_rfc822(&inbox, &src, &body, "Thu, 09 Jul 2026 08:00:00 +0000", &[], "b")
             .expect("reply draft");
         assert_body_fidelity(&raw, &body);
+        assert_draft_html_twin(&raw, &body, &[]);
+
+        let att = fidelity_attachment();
+        let raw = compose_draft_rfc822(
+            &inbox, &src, &body, "Thu, 09 Jul 2026 08:00:00 +0000", &[att.clone()], "mix-bound",
+        )
+        .expect("reply draft + attachment");
+        assert_body_fidelity(&raw, &body);
+        assert_draft_html_twin(&raw, &body, &[att]);
+    }
+
+    /// The HTML twin, pinned: tags and entities come out as text, the
+    /// reply's quoted lines are in the HTML too, indentation, runs of
+    /// spaces, tabs, non-ASCII and emoji survive, URLs are not linked,
+    /// CRLF input and blank-line runs give the same paragraphs.
+    #[test]
+    fn draft_html_twin_escapes_and_keeps_layout() {
+        let html = draft_html_from_text(&draft_fidelity_body());
+        for want in [
+            "<p>Hi Pat,</p>\n",
+            "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; &amp; &#39;q&#39; \
+             &lt;b&gt;bold&lt;/b&gt; &amp;amp;<br>\n",
+            "See https://example.com/?a=1&amp;b=2 now.<br>\nTwo &nbsp;spaces &nbsp;&nbsp;and three.</p>",
+            "<p>&nbsp;&nbsp;indented line with trailing space <br>\n.<br>\nFrom here on, plain.</p>",
+            "<p>&gt; On Tue, Pat &lt;pat@dest.example&gt; wrote:<br>\n&gt; The quarterly",
+            "&gt;<br>\n&gt; &gt; nested quote — ünïcödé</p>",
+            "李雷和韩梅梅 🎉🚀",
+            "<p>— R</p>\n<p>&lt;script&gt;",
+            "and three.</p>\n</body></html>\n",
+        ] {
+            assert!(html.contains(want), "missing {want:?} in\n{html}");
+        }
+        assert_eq!(
+            draft_html_from_text("a  b\r\n\r\n\r\n\tc\r\n d\n\n\n"),
+            "<!DOCTYPE html>\n<html><head><meta http-equiv=\"Content-Type\" \
+             content=\"text/html; charset=utf-8\"></head>\n<body>\n\
+             <p>a &nbsp;b</p>\n<p>&nbsp;&nbsp;&nbsp;&nbsp;c<br>\n&nbsp;d</p>\n</body></html>\n"
+        );
     }
 
     #[test]

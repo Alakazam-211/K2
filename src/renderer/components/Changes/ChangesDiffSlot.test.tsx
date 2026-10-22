@@ -15,6 +15,13 @@ beforeAll(() => {
   Range.prototype.getClientRects = () => Object.assign([], { item: () => null }) as unknown as DOMRectList
 })
 
+// The viewer is a lazy chunk (@codemirror/merge). Load it once up front so
+// the test checks what the slot renders, not how long a cold transform of
+// that chunk takes (over findBy's 1 s on the Linux compute nodes).
+beforeAll(async () => {
+  await import('./viewer/ChangesDiffView')
+}, 60_000)
+
 afterEach(cleanup)
 
 const file: ChangesFile = { path: 'a.ts', oldPath: null, group: 'staged', status: 'M', additions: 1, deletions: 1, binary: false, dir: false }

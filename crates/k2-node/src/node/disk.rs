@@ -444,10 +444,17 @@ mod tests {
         let (n, layout) = node("disk-end", "disk_floor_gb = 0\n", free).await;
         let mut a = crate::ledger::tests::assign("big", 1);
         a.plan.argv = vec!["/bin/sh".into(), "-c".into(), "mkdir -p target/debug cache && head -c 65536 /dev/zero > target/debug/app && echo hi > cache/x && echo mine > \"$HOME/note\" && echo done".into()];
+        // A declared output in the folder the strip takes: it's collected
+        // (kept outside the job dir) before anything is removed.
+        a.plan.artifacts = vec!["cache/x".into()];
         a.fence.plan_digest = a.plan.digest().unwrap();
         assert_eq!(n.on_assign(&n.owner(), a), Some(("big".into(), 1)));
         let r = ended(&n, "big").await;
         assert_eq!(r.state, JobState::Done, "{r:?}");
+        let kept = r.outputs.as_ref().map(|o| o.artifacts.iter().map(|x| x.name.clone()).collect::<Vec<_>>()).unwrap_or_default();
+        assert_eq!(kept, vec!["cache/x".to_string()], "{:?}", r.outputs);
+        let copy = crate::artifacts::dir(&n.owner().paths.artifacts(), "big", 1);
+        assert_eq!(std::fs::read_to_string(copy.join("cache/x")).unwrap(), "hi\n", "the kept copy survives the strip");
         let dir = layout.job_dir("big", 1);
         let mut left: Vec<String> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
         left.sort();

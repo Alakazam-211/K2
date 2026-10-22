@@ -1084,6 +1084,7 @@ fn attempt_lines_and_ring_carry_no_content_or_tokens() {
             ThreadMsgKind::Text,
             "ZEBRA-PREVIEW-distinctive-text",
         )),
+        budget: ThreadBudget::Thread,
     }));
     let mut recs = Vec::new();
     for event in &events {

@@ -118,7 +118,7 @@ fn apply(ctx: &Ctx, who: &Answerer, token: Option<&str>) -> Applied {
     if let Some(t) = token {
         body["confirmToken"] = json!(t);
     }
-    match crate::compute_admin::handle(crate::compute_admin::APPROVE, &who_of(who), body.to_string().as_bytes(), &HashMap::new()) {
+    match crate::compute_admin::handle(crate::compute_admin::APPROVE, &who_of(who), body.to_string().as_bytes(), &HashMap::new(), None) {
         Ok(v) if v["sent"] == true => Applied::Done { message: "It is on its way to the node now.".into() },
         Ok(_) => Applied::Done { message: "It goes to the node when the node is online (within the hour).".into() },
         Err(r) => Applied::Refused { code: r.code.to_string(), message: r.hint },

@@ -456,12 +456,22 @@ function d(item: GardenHistoryItem, k: string): string | null {
   return str(item.detail, k)
 }
 
+const PROJECT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/** The agent a line is about (access, Not now, Keep it), in words: the
+ *  detail's `name` / `handle` when the daemon sends them. A bare workspace
+ *  (project) id never shows; it reads as "an agent". */
+function detailAgent(item: GardenHistoryItem): string | null {
+  const a = d(item, 'name') ?? d(item, 'handle') ?? d(item, 'agent') ?? d(item, 'workspace')
+  return a && PROJECT_ID.test(a) ? null : a
+}
+
 /** What happened, in the modal's words (after the actor): "changed the
  *  layout", "added ana", "asked to edit". A daemon `summary` wins. */
 export function gardenEventWords(item: GardenHistoryItem): string {
   if (item.summary) return item.summary
   const w = item.widget ?? d(item, 'widget')
-  const agent = d(item, 'name') ?? d(item, 'handle') ?? d(item, 'agent') ?? d(item, 'workspace')
+  const agent = detailAgent(item)
   if (item.source === 'snapshot') return w ? `saved a version of ${w}` : 'saved a version'
   if (item.source === 'proposal') {
     const decision = d(item, 'decision') ?? d(item, 'state')
@@ -477,7 +487,8 @@ export function gardenEventWords(item: GardenHistoryItem): string {
     case 'renamed': {
       const from = d(item, 'old') ?? d(item, 'from')
       const to = d(item, 'new') ?? d(item, 'to')
-      return from && to ? `renamed it from “${from}” to “${to}”` : 'renamed it'
+      if (from && to) return `renamed it from “${from}” to “${to}”`
+      return to ? `renamed it to “${to}”` : 'renamed it'
     }
     case 'reordered':
       return 'moved it in the Garden list'
@@ -527,7 +538,7 @@ export function gardenEventWords(item: GardenHistoryItem): string {
 /** The "added automatically at upgrade" line reads as its own sentence. */
 export function gardenHistoryLine(item: GardenHistoryItem): string {
   if (item.kind === 'access_added' && item.actor.kind === 'migration' && !item.summary) {
-    const agent = d(item, 'name') ?? d(item, 'handle') ?? d(item, 'agent') ?? d(item, 'workspace') ?? 'An agent'
+    const agent = detailAgent(item) ?? 'An agent'
     return `${agent} was added automatically at upgrade`
   }
   return `${gardenActorWords(item.actor)} ${gardenEventWords(item)}`

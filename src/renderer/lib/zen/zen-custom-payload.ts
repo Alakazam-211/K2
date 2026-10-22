@@ -147,5 +147,8 @@ export function parseZenCustomWidget(
     sources: parseManifestSources(raw.sources),
     sourceAddresses: parseSourceAddresses(raw.sourceAddresses),
     colorScheme: raw.colorScheme === 'own' ? 'own' : 'garden',
+    // prd-garden-access-v1 G26a: with Garden access on, whether the live
+    // version passes the signer gate in this Garden. Absent with it off.
+    ...(typeof raw.signed === 'boolean' ? { signed: raw.signed } : {}),
   }
 }

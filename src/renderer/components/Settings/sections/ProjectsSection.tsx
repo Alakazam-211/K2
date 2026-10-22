@@ -70,6 +70,7 @@ import { reorderedZoneIds } from '@/components/Sidebar/row-drag-reorder'
 import { AgentHandoffAcceptFrom } from './HandoffAcceptFrom'
 import { AgentAppsAccess } from './AgentAppsAccess'
 import { AgentPermissionCardsRow, AskedChip, PermissionAsksProvider } from './PermissionCardsSection'
+import { useGardenAccessSwitchStore } from '@/lib/zen/garden-access-api'
 
 /**
  * Plan B cross-window sync: the old Tauri `projects_update` /
@@ -2608,6 +2609,11 @@ export function AgentsManageProjectsToggle({
 // /cli/agent-access/set `{workspace, toggle: 'gardens_manage', value}`
 // (Owner/Admin; an agent can never flip it). Optimistic store patch; no
 // projects refetch here.
+//
+// prd-garden-access-v1 §2 (as proposed): with Garden access on (this
+// computer's switch, and the window on this computer), the row keeps its
+// data-source powers only and reads "Manage data sources"; who edits a
+// Garden is its list in Settings → Gardens. Off: as 0.46.3.
 export function AgentsManageGardensToggle({
   project,
 }: {
@@ -2615,6 +2621,8 @@ export function AgentsManageGardensToggle({
 }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
   const enabled = (project.agentsCanManageGardens ?? 0) === 1
+  const accessOn = useGardenAccessSwitchStore((s) => s.on) === true && !primaryScope().isRemote
+  const label = accessOn ? 'Manage data sources' : 'Manage Gardens and data sources'
 
   const toggle = async (): Promise<void> => {
     if (busy) return
@@ -2653,16 +2661,20 @@ export function AgentsManageGardensToggle({
           onClick={toggle}
           role="switch"
           aria-checked={enabled}
-          aria-label="Manage Gardens and data sources"
+          aria-label={label}
           disabled={busy}
           data-settings-id="projects.agents-can-manage-gardens"
           className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
             enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
           }`}
           title={
-            enabled
-              ? 'This workspace\'s agent approves data sources and edits Gardens itself (logged)'
-              : 'This workspace\'s agent proposes data sources and Garden changes; you approve'
+            accessOn
+              ? enabled
+                ? 'This workspace\'s agent approves data sources itself (logged)'
+                : 'This workspace\'s agent proposes data sources; you approve'
+              : enabled
+                ? 'This workspace\'s agent approves data sources and edits Gardens itself (logged)'
+                : 'This workspace\'s agent proposes data sources and Garden changes; you approve'
           }
         >
           <span
@@ -2673,9 +2685,19 @@ export function AgentsManageGardensToggle({
         </button>
         <div className="flex-1 min-w-0">
           <div className="text-xs font-medium text-[var(--color-text-primary)]">
-            Manage Gardens and data sources
+            {label}
             <AskedChip row="projects.agents-can-manage-gardens" />
           </div>
+          {accessOn ? (
+            <div className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed" data-garden-access-copy="">
+              Lets this workspace&rsquo;s agent approve data sources (its own and others&rsquo;), pause and
+              pin them and turn on triggers without asking you (k2 sources). It binds only a secret it can
+              already use: its own workspace&rsquo;s, or a server-wide one if &ldquo;Allow managing
+              server-wide secrets&rdquo; is on too, and only to that source&rsquo;s site. Every act is logged
+              in Access Audit. Off: it proposes and you approve. Who may edit a Garden is that Garden&rsquo;s
+              list in Settings &rarr; Gardens.
+            </div>
+          ) : (
           <div className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
             Lets this workspace&rsquo;s agent approve data sources (its own and others&rsquo;), pause and
             pin them, turn on triggers and edit your Gardens and widgets without asking you (k2 sources,
@@ -2684,6 +2706,7 @@ export function AgentsManageGardensToggle({
             source&rsquo;s site. Every act is logged in Access Audit. Off: it proposes and you approve.
             Locked Gardens stay yours.
           </div>
+          )}
         </div>
       </div>
     </div>

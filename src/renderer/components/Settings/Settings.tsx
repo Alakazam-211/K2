@@ -61,6 +61,7 @@ import { ZenGardensSection, ZEN_GARDENS_MANIFEST } from './sections/ZenGardensSe
 import { ZenWidgetDataSection, ZEN_WIDGET_DATA_MANIFEST } from './sections/ZenWidgetDataSection'
 import { zenAvailable } from '@/lib/zen/zen-platform'
 import { loadZenSettings, useZenGardensSettingsShown } from '@/lib/zen/zen-settings'
+import { loadGardenAccessSwitch, useGardenAccessSwitchStore } from '@/lib/zen/garden-access-api'
 import { AGENT_SKILLS_MANIFEST } from './sections/AgentSkillsSection'
 // HeartbeatsPanel is rendered inline inside ProjectsSection now; manifest
 // stays exported from HeartbeatsSection so searches still find it.
@@ -150,9 +151,12 @@ function thirdPartyBotLeaves(): NavLeaf[] {
 export function settingsNav({
   zenGardens,
   notifications = false,
+  gardenAccess = false,
 }: {
   zenGardens: boolean
   notifications?: boolean
+  /** prd-garden-access-v1 G28: Garden access on → "Widget data" (off: Local Data). */
+  gardenAccess?: boolean
 }): NavBlock[] {
   const hideTunnel = isAirgap()
   const blocks: NavBlock[] = [
@@ -202,7 +206,7 @@ export function settingsNav({
             title: 'Gardens',
             items: [
               { id: 'zen-gardens', label: 'Gardens' },
-              { id: 'zen-widget-data', label: 'Local Data' },
+              { id: 'zen-widget-data', label: gardenAccess ? 'Widget data' : 'Local Data' },
               { id: 'data-sources', label: 'External Data' },
             ],
           },
@@ -287,8 +291,14 @@ export default function Settings(): React.JSX.Element {
   const zenGardensShown = useZenGardensSettingsShown()
   // Thread push (0.45.5): only on a server that reports `thread-push-v1`.
   const notificationsShown = threadPushAvailable()
+  // prd-garden-access-v1 G28: the Gardens group's second page is "Widget
+  // data" with Garden access on (read with the Gardens list, once per open).
+  const gardenAccessOn = useGardenAccessSwitchStore((s) => s.on) === true
   useEffect(() => {
-    if (zenAvailable()) void loadZenSettings()
+    if (zenAvailable()) {
+      void loadZenSettings()
+      void loadGardenAccessSwitch()
+    }
   }, [])
 
   // Flat manifest across every section (agentic sections always included).
@@ -462,7 +472,7 @@ export default function Settings(): React.JSX.Element {
           </button>
         </div>
         <nav className="flex-1 py-1 overflow-y-auto">
-          {settingsNav({ zenGardens: zenGardensShown, notifications: notificationsShown }).map((block) => {
+          {settingsNav({ zenGardens: zenGardensShown, notifications: notificationsShown, gardenAccess: gardenAccessOn }).map((block) => {
             if (block.kind === 'item') {
               return (
                 <SettingsNavButton

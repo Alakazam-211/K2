@@ -31868,7 +31868,9 @@ _study_topic_ids_all() {
 
 _study_usage_all() {
     if _permission_cli_enabled; then
-        _study_usage | awk '{ print } /^  agent-hire  garden-data/ { print "  permissions" }'
+        # After the topics block's last line, wherever compute-shared's
+        # reflow put `agent-hire  garden-data` on it (0.46.3 r8).
+        _study_usage | awk '{ print } / agent-hire  garden-data/ { print "  permissions" }'
     else
         _study_usage
     fi

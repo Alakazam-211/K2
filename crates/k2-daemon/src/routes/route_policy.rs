@@ -1988,12 +1988,39 @@ mod tests {
         }
     }
 
+    /// Garden access (G0a, A6 off-golden F1): off, its rows are absent for
+    /// every reader, so a POST meets 0.46.3's 405 guard; on, the table.
+    #[test]
+    fn garden_access_rows_follow_their_switch_for_the_post_guard_too() {
+        let _env = k2_core::test_env::lock();
+        let was = k2_core::zen::garden_access::set_switch(false);
+        let rows: Vec<&Route> = ROUTES.iter().filter(|r| crate::zen_access_routes::is_route(r.path)).collect();
+        assert_eq!(rows.len(), crate::zen_access_routes::ROUTES.len(), "every Garden access route has a row");
+        for r in &rows {
+            assert!(live_row(r.path).is_none(), "{} is live while off", r.path);
+            assert!(!post_allowed(r.path), "{}: off, a POST meets the 405 guard", r.path);
+            assert_eq!(post_allowed(r.path), post_allowed("/cli/not-a-route"), "{}", r.path);
+        }
+        k2_core::zen::garden_access::set_switch(true);
+        let on: Vec<(&str, bool, bool)> = rows.iter().map(|r| (r.path, live_row(r.path).is_some(), post_allowed(r.path))).collect();
+        k2_core::zen::garden_access::set_switch(was);
+        for (r, (path, live, post)) in rows.iter().zip(on) {
+            assert!(live, "{path} is live while on");
+            assert_eq!(post, r.post.is_some(), "{path}: on, the table's POST");
+        }
+        assert!(rows.iter().any(|r| r.path == "/cli/zen/garden/access" && r.post.is_some() && r.get.is_some()), "garden/access is GET and POST");
+    }
+
     #[test]
     fn post_allowed_matches_the_table_and_the_v1_carve_out() {
         for r in ROUTES {
             // The permission-cards rows follow their switch (tested below,
             // without touching the process-wide switch).
             if k2_core::permission::gate::route_gated(r.path) {
+                continue;
+            }
+            // Garden access rows follow `gardenAccess` (asserted below).
+            if crate::zen_access_routes::is_route(r.path) {
                 continue;
             }
             assert_eq!(post_allowed(r.path), r.post.is_some(), "{}", r.path);

@@ -183,6 +183,44 @@ pub fn stamp(
     Ok(StampOutcome::Stamped)
 }
 
+/// A vouching sign (prd-garden-access-v1 G9, switch on): the person, or an
+/// agent listed on every Garden that places `widget`, signs `(widget,
+/// hash)` and overwrites a stamp by anyone else. The caller decides who may
+/// vouch; this only writes. Re-vouching by the same maker changes nothing
+/// (`Kept`). A built-in is K2's: nothing is written (`Kept { K2 }`).
+pub fn vouch(
+    conn: &Connection,
+    widget: &str,
+    hash: &str,
+    author: &MadeBy,
+    source: StampSource,
+    caller: CallerKind,
+    now: i64,
+) -> Result<StampOutcome, DataError> {
+    if is_builtin(widget) {
+        return Ok(StampOutcome::Kept { existing: MadeBy::K2 });
+    }
+    check_widget(widget)?;
+    check_hash(hash)?;
+    let existing = maker_of(conn, widget, hash)?;
+    if existing == *author {
+        return Ok(StampOutcome::Kept { existing });
+    }
+    write_row(conn, widget, hash, author, source, caller, now)?;
+    Ok(StampOutcome::Stamped)
+}
+
+/// When `(widget, hash)` was signed (Unix seconds), if it has a row.
+pub fn signed_at(conn: &Connection, widget: &str, hash: &str) -> Result<Option<i64>, DataError> {
+    Ok(conn
+        .query_row(
+            "SELECT signed_at FROM zen_widget_authors WHERE widget = ?1 AND hash = ?2",
+            params![widget, hash],
+            |r| r.get(0),
+        )
+        .optional()?)
+}
+
 /// The person's "It's mine": stamp `(widget, hash)` `owner`, overwriting.
 pub fn claim(conn: &Connection, widget: &str, hash: &str, now: i64) -> Result<(), DataError> {
     if is_builtin(widget) {
@@ -294,6 +332,27 @@ mod tests {
         // Claiming an unsigned hash stamps it too.
         claim(&conn, "board", &h('c'), 21).expect("claim unsigned");
         assert_eq!(maker_of(&conn, "board", &h('c')).expect("maker"), MadeBy::Owner);
+    }
+
+    /// G9 (garden access): a vouching sign overwrites anyone else's stamp;
+    /// the same maker again changes nothing; built-ins stay K2's.
+    #[test]
+    fn a_vouch_overwrites_another_signer_and_keeps_its_own() {
+        let conn = db();
+        stamp(&conn, "board", &h('a'), &agent("w-builder"), StampSource::Sign, CallerKind::Agent, 10).expect("stamp");
+        let got = vouch(&conn, "board", &h('a'), &agent("w-keeper"), StampSource::Sign, CallerKind::Agent, 11).expect("vouch");
+        assert_eq!(got, StampOutcome::Stamped);
+        assert_eq!(maker_of(&conn, "board", &h('a')).expect("maker"), agent("w-keeper"));
+        let again = vouch(&conn, "board", &h('a'), &agent("w-keeper"), StampSource::Sign, CallerKind::Agent, 12).expect("vouch");
+        assert_eq!(again, StampOutcome::Kept { existing: agent("w-keeper") });
+        let person = vouch(&conn, "board", &h('a'), &MadeBy::Owner, StampSource::Sign, CallerKind::Owner, 13).expect("vouch");
+        assert_eq!(person, StampOutcome::Stamped);
+        assert_eq!(maker_of(&conn, "board", &h('a')).expect("maker"), MadeBy::Owner);
+        let unsigned = vouch(&conn, "board", &h('b'), &agent("w-builder"), StampSource::Sign, CallerKind::Agent, 14).expect("vouch");
+        assert_eq!(unsigned, StampOutcome::Stamped);
+        let k2 = vouch(&conn, "k2:diary", &h('a'), &MadeBy::Owner, StampSource::Sign, CallerKind::Owner, 15).expect("builtin");
+        assert_eq!(k2, StampOutcome::Kept { existing: MadeBy::K2 });
+        assert_eq!(rows(&conn, "k2:diary"), 0);
     }
 
     #[test]

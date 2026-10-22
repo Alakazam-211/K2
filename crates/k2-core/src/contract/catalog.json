@@ -103,6 +103,11 @@
       "exposure": ["app"],
       "label": "Post in project chats (needs it in every member room)"
     },
+    {
+      "name": "files:download",
+      "exposure": ["app"],
+      "label": "Download Thread files (a save, not just a view; a person grants it)"
+    },
     {"name": "wallet:self", "exposure": ["app"], "label": "Use the person's own wallet (an owner setting per App, never a room cap)"}
   ],
   "errors": [
@@ -7254,6 +7259,10 @@
                           },
                           "lineEnd": {
                             "type": "integer"
+                          },
+                          "canDownload": {
+                            "type": "boolean",
+                            "description": "true when you may save this file (mode=download): people always; an App guest only with files:download in the room. Absent on a hidden file."
                           }
                         },
                         "required": [
@@ -7559,6 +7568,10 @@
                           },
                           "lineEnd": {
                             "type": "integer"
+                          },
+                          "canDownload": {
+                            "type": "boolean",
+                            "description": "true when you may save this file (mode=download): people always; an App guest only with files:download in the room. Absent on a hidden file."
                           }
                         },
                         "required": [
@@ -8665,6 +8678,10 @@
                     },
                     "lineEnd": {
                       "type": "integer"
+                    },
+                    "canDownload": {
+                      "type": "boolean",
+                      "description": "true when you may save this file (mode=download): people always; an App guest only with files:download in the room. Absent on a hidden file."
                     }
                   },
                   "required": [
@@ -9150,6 +9167,10 @@
                     },
                     "lineEnd": {
                       "type": "integer"
+                    },
+                    "canDownload": {
+                      "type": "boolean",
+                      "description": "true when you may save this file (mode=download): people always; an App guest only with files:download in the room. Absent on a hidden file."
                     }
                   },
                   "required": [
@@ -9280,9 +9301,10 @@
                 "meta",
                 "preview",
                 "thumb",
-                "range"
+                "range",
+                "download"
               ],
-              "description": "meta (a fresh stat), preview (text up to 512 KB; images and PDFs up to 20 MB) or thumb (an image's thumbnail: PNG, JPEG, GIF, WebP, HEIC, BMP, TIFF; SVG comes back sanitized). range: offset/len chunks up to 16 MB."
+              "description": "meta (a fresh stat), preview (text up to 512 KB; images and PDFs up to 20 MB) or thumb (an image's thumbnail: PNG, JPEG, GIF, WebP, HEIC, BMP, TIFF; SVG comes back sanitized). range: offset/len chunks up to 16 MB. download: the same chunks plus name and mime, for a save; a guest also needs files:download in the room (canDownload on the attachment says so)."
             },
             "px": {
               "type": "integer",
@@ -9392,7 +9414,7 @@
         "not_found",
         "failed"
       ],
-      "doc": "One attachment of a room's message: meta, preview, thumbnail or a byte range, only when your own file rights cover it.",
+      "doc": "One attachment of a room's message: meta, preview, thumbnail or a byte range, only when your own file rights cover it; a download (a save) also needs files:download.",
       "example": "const t = await k2.thread.attachmentGet({addr: 'sales', id: item.id, n: 0, mode: 'thumb'})"
     },
     {
@@ -9746,6 +9768,10 @@
                                 },
                                 "lineEnd": {
                                   "type": "integer"
+                                },
+                                "canDownload": {
+                                  "type": "boolean",
+                                  "description": "true when you may save this file (mode=download): people always; an App guest only with files:download in the room. Absent on a hidden file."
                                 }
                               },
                               "required": [
@@ -10039,6 +10065,10 @@
                                 },
                                 "lineEnd": {
                                   "type": "integer"
+                                },
+                                "canDownload": {
+                                  "type": "boolean",
+                                  "description": "true when you may save this file (mode=download): people always; an App guest only with files:download in the room. Absent on a hidden file."
                                 }
                               },
                               "required": [

@@ -7261,7 +7261,9 @@ thread:post (POST /cli/thread/post),
 files:read (GET /cli/fs/read-dir|read-file|read-binary|read-range + WS /cli/fs/events),
 files:write (POST /cli/fs/write-file|upload-binary|upload-chunk|create|copy|move|rename;
   never into the agent's .k2/ folder),
-files:agentconfig (opt-in, owner only: also lets files:write reach .k2/; not recommended).
+files:agentconfig (opt-in, owner only: also lets files:write reach .k2/; not recommended),
+files:download (opt-in, a person grants it: save Thread files, GET /cli/thread/attachment
+  mode=download; never implied by thread:read or files:read; opening files is unchanged).
 Rooms: workspace handles. Empty = Thread dark.
 Grid/PTY is never an app room. Capability check paths (full):
   GET /cli/sessions/grid  and  GET /cli/sessions/bytes

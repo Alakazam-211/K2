@@ -1506,11 +1506,17 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
                 push_agent_post(&resolved, &item, k2_core::push::ThreadMsgKind::Text, &text, n_files);
             }
             // thread-attachments-v1: the stored snapshots, so the sender
-            // sees what landed (state `ok` at post time).
+            // sees what landed (state `ok` at post time), with `canDownload`
+            // for THIS poster (an App guest's comes from its own grant).
+            let poster_pass = request_skin();
+            let poster = match poster_pass.as_ref() {
+                Some(p) => crate::thread_attachments::Viewer::Guest { pass: p, project_id: &resolved.project_id },
+                None => crate::thread_attachments::person_or_agent(),
+            };
             let attachments_json = crate::thread_attachments::view_list(
                 workspace_root.as_deref(),
                 &item.doc.attachments,
-                &crate::thread_attachments::Viewer::Full,
+                &poster,
                 false,
             );
             CliResponse::ok_json(with_moved_from(

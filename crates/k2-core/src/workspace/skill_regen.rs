@@ -785,6 +785,35 @@ pub fn ensure_zen_skill(dot: &Path, zen_set_up: bool) -> bool {
     path.exists()
 }
 
+/// prd-garden-access-v1 G0: the `gardenAccess` switch flipped, so rewrite
+/// `k2-zen` in every registered workspace that has it, with the body for
+/// the switch as it is now (same skill version; a hand-edited skill gets a
+/// `.proposed` sibling instead). Only where Zen is set up. Returns how many
+/// workspaces' skills were rewritten.
+pub fn refresh_zen_skill_everywhere() -> usize {
+    use crate::skills::version::{refresh_skill_body, SkillUpgradeOutcome, SKILL_VERSION_ZEN};
+    if !crate::zen::is_set_up() {
+        return 0;
+    }
+    let Ok(projects) = crate::projects_ops::projects_list() else {
+        return 0;
+    };
+    let body = crate::zen::skill::generate_k2_zen_skill();
+    let frontmatter = format!("name: k2-zen\ndescription: {}", crate::zen::skill::SKILL_DESCRIPTION);
+    projects
+        .iter()
+        // A workspace whose folder is gone gets no folder made for it.
+        .filter(|p| Path::new(&p.path).is_dir())
+        .filter(|p| {
+            let path = crate::workspace_dot_dir(&p.path).join("skills/k2-zen/SKILL.md");
+            matches!(
+                refresh_skill_body(&path, "k2-zen", SKILL_VERSION_ZEN, &body, Some(&frontmatter)),
+                SkillUpgradeOutcome::Upgraded | SkillUpgradeOutcome::Created | SkillUpgradeOutcome::MigratedLegacy
+            )
+        })
+        .count()
+}
+
 /// Z68: Zen was just set up on this computer, so seed `k2-zen` into every
 /// registered workspace now instead of waiting for the next compose.
 /// Returns how many workspaces have the skill afterwards.

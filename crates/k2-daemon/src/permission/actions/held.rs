@@ -500,6 +500,10 @@ pub(crate) static GARDEN_PROPOSAL_APPROVE: ActionSpec = ActionSpec {
 };
 
 fn check_proposal(ctx: &Ctx) -> Check {
+    // Garden access lists on: proposals give way to the list (G18).
+    if let Some(r) = super::gardens::retired() {
+        return r;
+    }
     let Some(id) = text_param(ctx, "proposal") else {
         return Check::Moved("name the Garden proposal: proposal=<its zp-… id> (k2 zen proposals)".into());
     };

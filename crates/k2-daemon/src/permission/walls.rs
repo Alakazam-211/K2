@@ -97,9 +97,12 @@ const IN_SETTINGS: &str = "a person with the owner role does this, in Settings o
 
 /// The v1 card-able actions (PRD §5.2): the 17 Agent-tab switches, the 5
 /// held-request actions, `garden.keep-mine` (K2-presented, no wall) and
-/// the `to=off` twins (asked only, no wall). Every [`Target::Ask`] names
-/// one of the first 22.
-pub(crate) const V1_ACTIONS: [&str; 23] = [
+/// the `to=off` twins (asked only, no wall), plus Garden access's three
+/// (prd-garden-access-v1 G16, listed in every switch state): `garden.access`
+/// and `garden.delete` (walled; K2 presents them too) and the
+/// `garden.access-off` twin (asked only, no wall). Every [`Target::Ask`]
+/// names one of them, never `garden.keep-mine` or a twin.
+pub(crate) const V1_ACTIONS: [&str; 26] = [
     "compute.use",
     "compute.operate",
     "compute.manage",
@@ -123,6 +126,9 @@ pub(crate) const V1_ACTIONS: [&str; 23] = [
     "sources.approve",
     "compute.admin-approve",
     "garden.keep-mine",
+    "garden.access",
+    "garden.access-off",
+    "garden.delete",
 ];
 
 /// The walls map (PRD §5.2 walls column, Appendix A, checked against the
@@ -193,6 +199,22 @@ pub(crate) const ROWS: &[Row] = &[
             "/cli/zen/proposals/approve",
             POST,
         )
+    },
+    // Garden access (prd-garden-access-v1 G11, G12, G16): an unlisted agent
+    // on a Garden or widget write names the Garden (`garden`; null for the
+    // computer-wide look, which any Garden's list opens). Deleting is the
+    // person's: a passport's `garden/delete` is `garden_delete_person`, not
+    // `person_only` (which teaches gardens.manage under /cli/zen/).
+    Row {
+        params: &[(
+            "garden",
+            &[ParamFrom::Response("/garden"), ParamFrom::Response("/error/garden"), ParamFrom::Body("/garden"), ParamFrom::Query("garden")],
+        )],
+        ..row(ask("garden.access", Floor::GardenOwner), code(403, "garden_access_needed"), "/cli/zen/", ANY)
+    },
+    Row {
+        params: &[("garden", &[ParamFrom::Body("/garden"), ParamFrom::Response("/garden"), ParamFrom::Query("garden")])],
+        ..row(ask("garden.delete", Floor::GardenOwner), code(403, "garden_delete_person"), "/cli/zen/garden/delete", POST)
     },
     // ── DNS, domains ───────────────────────────────────────────────────
     row(ask("dns.manage", Floor::Admin), code(403, "dns_manage_disabled"), "/cli/", ANY),
@@ -625,6 +647,10 @@ mod tests {
             (403, "POST", "/cli/db/create", vec![], None, json!({"error":{"code":"forbidden"},"ok":false}), "db.agent-access"),
             (403, "POST", "/cli/app/approve", vec![], Some(json!({"request":"ar_22"})), json!({"error":{"code":"owner_only"}}), "apps.approve"),
             (403, "POST", "/cli/compute/admin/approve", vec![], Some(json!({"request":"nar_1"})), json!({"error":{"code":"owner_only"}}), "compute.admin-approve"),
+            // Garden access (A2's refusals, prd-garden-access-v1 G11–G12).
+            (403, "POST", "/cli/zen/garden/put", vec![], Some(json!({"garden":"garden-2"})), json!({"ok":false,"error":"garden_access_needed","garden":"garden-2","card":null}), "garden.access"),
+            (403, "POST", "/cli/zen/widget/folder/put", vec![], None, json!({"ok":false,"error":"garden_access_needed","garden":"garden-3","card":null}), "garden.access"),
+            (403, "POST", "/cli/zen/garden/delete", vec![], Some(json!({"garden":"garden-2"})), json!({"ok":false,"error":"garden_delete_person","garden":"garden-2","card":null}), "garden.delete"),
         ];
         let mut asked: Vec<&str> = Vec::new();
         for (status, m, path, q, body, resp, want) in cases {
@@ -637,7 +663,7 @@ mod tests {
         // except the two whose holds attach to apps.approve, keep-mine
         // (K2-presented) — PRD §5.2 walls column.
         for a in V1_ACTIONS {
-            if matches!(a, "apps.manage-full" | "apps.core" | "garden.keep-mine") {
+            if matches!(a, "apps.manage-full" | "apps.core" | "garden.keep-mine" | "garden.access-off") {
                 continue;
             }
             assert!(asked.contains(&a), "{a}: no captured wall teaches it");
@@ -718,6 +744,32 @@ mod tests {
         assert_eq!(action_of(&p), "gardens.manage", "{p}");
     }
 
+    /// prd-garden-access-v1 G16: the two Garden walls teach their actions
+    /// with the Garden the refusal named; the computer-wide look (no
+    /// Garden) leaves `garden=` for the agent to fill in; `person_only`
+    /// under /cli/zen/ still teaches gardens.manage, and the delete wall
+    /// takes the delete route only.
+    #[test]
+    fn the_garden_walls_name_the_garden() {
+        let p = teach_of(403, "POST", "/cli/zen/garden/put", &[], Some(json!({"garden":"Sales board"})),
+            json!({"ok":false,"error":"garden_access_needed","garden":"garden-2","card":null})).unwrap();
+        assert_eq!((action_of(&p), &p["params"], p["approvers"].as_str()), ("garden.access", &json!({"garden":"garden-2"}), Some("owner")), "{p}");
+        assert_eq!(p["command"], "k2 permission request garden.access garden=garden-2 --why \"<what you need it for>\"");
+        let p = teach_of(403, "POST", "/cli/zen/theme/set", &[], Some(json!({"name":"dusk"})),
+            json!({"ok":false,"error":"garden_access_needed","garden":null,"card":null})).unwrap();
+        assert_eq!((action_of(&p), &p["params"]), ("garden.access", &json!({"garden":null})), "{p}");
+        assert_eq!(p["command"], "k2 permission request garden.access garden=<garden> --why \"<what you need it for>\"");
+        let p = teach_of(403, "POST", "/cli/zen/garden/delete", &[], Some(json!({"garden":"garden-4"})),
+            json!({"ok":false,"error":"garden_delete_person","garden":"garden-4"})).unwrap();
+        assert_eq!((action_of(&p), &p["params"]), ("garden.delete", &json!({"garden":"garden-4"})), "{p}");
+        // The delete code on another route is no wall of garden.delete's.
+        let p = teach_of(403, "POST", "/cli/zen/garden/rename", &[], None, json!({"ok":false,"error":"garden_delete_person"})).unwrap();
+        assert_eq!(p["requestable"], false, "{p}");
+        // person_only under /cli/zen/ is still the switch's.
+        let p = teach_of(403, "POST", "/cli/zen/widget/preview", &[], None, json!({"error":"person_only"})).unwrap();
+        assert_eq!(action_of(&p), "gardens.manage", "{p}");
+    }
+
     #[test]
     fn walls_no_switch_opens_say_it_cant_be_requested() {
         for (path, resp) in [
@@ -778,6 +830,7 @@ mod tests {
             if let Target::Ask { action, .. } = r.target {
                 assert!(V1_ACTIONS.contains(&action), "{action} is not a v1 action");
                 assert_ne!(action, "garden.keep-mine", "keep-mine is K2-presented; it has no wall");
+                assert!(!action.ends_with("-off"), "{action}: a twin is asked, never a wall");
             }
             if let WallMatch::Held { .. } = r.matches {
                 assert!(matches!(r.target, Target::Ask { .. }), "a hold always names its request");
@@ -790,7 +843,7 @@ mod tests {
                 "{code} is machine-only and can't also be a wall"
             );
         }
-        assert_eq!(V1_ACTIONS.len(), 23);
+        assert_eq!(V1_ACTIONS.len(), 26);
         // No two rows can claim the same refusal: the longest prefix must
         // decide alone.
         for (i, a) in ROWS.iter().enumerate() {

@@ -1501,6 +1501,13 @@ fn run_migrations_through(conn: &Connection, last: Option<&str>) -> Result<()> {
         // nothing reads them while the switches are off. 0214–0216 are
         // compute sharing; 0217 is free (the disk guard has no migration).
         ("0218_permission_cards", include_str!("../../drizzle_sql/0218_permission_cards.sql")),
+        // 0219 — Garden access, one list per Garden (prd-garden-access-v1
+        // slice A1; behind the default-off `gardenAccess` switch): the list
+        // (`zen_garden_access`, indexed by workspace), its grant/removal log,
+        // who made each Garden, and the asks store for K2's card. Additive;
+        // empty until the switch's first off→on runs the G4 pass. The store
+        // is `crate::zen::garden_access`.
+        ("0219_garden_access", include_str!("../../drizzle_sql/0219_garden_access.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2164,7 +2171,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0218_permission_cards",
+            last_name, "0219_garden_access",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2223,6 +2230,7 @@ mod tests {
                 "0215_compute_jobs_node_queue",
                 "0216_compute_node_servers",
                 "0218_permission_cards",
+                "0219_garden_access",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2286,6 +2294,8 @@ mod tests {
                 "0215_compute_jobs_node_queue",
                 "0216_compute_node_servers",
                 "0218_permission_cards",
+                // 0.46.3 (behind the default-off switch): Garden access.
+                "0219_garden_access",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -2341,6 +2351,44 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM _migrations WHERE name = '0218_permission_cards'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(once, 1, "0218 is recorded once");
+    }
+
+    /// 0219 (Garden access, prd-garden-access-v1 A1) on a 0.46.3 database
+    /// that stops at 0218: existing workspaces and Zen rows keep their data,
+    /// the four tables appear EMPTY (G0a: off = 0.46.3 plus empty tables),
+    /// `Project`'s JSON is byte-identical, and a second run is a no-op.
+    #[test]
+    fn a_pre_0219_database_upgrades_through_0219_garden_access() {
+        let conn = fresh_memory();
+        run_migrations_through(&conn, Some("0218_permission_cards")).unwrap();
+        let tables = ["zen_garden_access", "zen_garden_made", "zen_garden_access_asks", "zen_garden_events"];
+        for t in tables {
+            assert!(!table_names(&conn).iter().any(|n| n == t), "{t} must not exist before 0219");
+        }
+        conn.execute("INSERT INTO projects (id, name, path) VALUES ('p-old', 'old', '/tmp/p-old')", []).unwrap();
+        conn.execute(
+            "INSERT INTO zen_widget_authors (widget, hash, author_kind, author_project_id, source, caller_kind, signed_at)
+             VALUES ('board', printf('%064d', 1), 'agent', 'p-old', 'sign', 'agent', 1)",
+            [],
+        )
+        .unwrap();
+        let before = serde_json::to_value(crate::db::schema::Project::get(&conn, "p-old").unwrap()).unwrap();
+
+        run_migrations(&conn).unwrap();
+        for t in tables {
+            assert!(table_names(&conn).iter().any(|n| n == t), "{t} missing after 0219");
+            let n: i64 = conn.query_row(&format!("SELECT COUNT(*) FROM {t}"), [], |r| r.get(0)).unwrap();
+            assert_eq!(n, 0, "{t} starts empty: the switch is off and nothing fills it");
+        }
+        let stamps: i64 = conn.query_row("SELECT COUNT(*) FROM zen_widget_authors", [], |r| r.get(0)).unwrap();
+        assert_eq!(stamps, 1, "existing stamps are untouched");
+        let after = serde_json::to_value(crate::db::schema::Project::get(&conn, "p-old").unwrap()).unwrap();
+        assert_eq!(after, before, "Project JSON is byte-identical across 0219");
+        run_migrations(&conn).unwrap();
+        let once: i64 = conn
+            .query_row("SELECT COUNT(*) FROM _migrations WHERE name = '0219_garden_access'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(once, 1, "0219 is recorded once");
     }
 
     /// A 0.46.0 database (last migration 0181) with a registered phone
@@ -3055,7 +3103,10 @@ mod tests {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
             conn.execute("DELETE FROM _migrations WHERE name = '0164_garden_data'", []).unwrap();
-            // 0218 (permission cards, 0.46.3) is the newest: its record
+            // 0219 (Garden access) is the newest: its record goes (its
+            // tables and indexes are all IF NOT EXISTS).
+            conn.execute("DELETE FROM _migrations WHERE name = '0219_garden_access'", []).unwrap();
+            // 0218 (permission cards, 0.46.3) came before it: its record
             // goes (its projects column stays and re-adding it is skipped as
             // a duplicate column; its tables and indexes are IF NOT EXISTS).
             conn.execute("DELETE FROM _migrations WHERE name = '0218_permission_cards'", []).unwrap();

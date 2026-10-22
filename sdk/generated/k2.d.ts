@@ -343,6 +343,8 @@ export interface AppCatchupAsk {
 }
 
 export interface AppThreadFile {
+  /** true when you may save this file (mode=download): people always; an App guest only with files:download in the room. Absent on a hidden file. */
+  readonly canDownload?: boolean
   /** file. */
   readonly kind: string
   readonly line?: number

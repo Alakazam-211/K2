@@ -10,8 +10,8 @@
 //! runs `zen_routes::garden_owner_may`, the one resolver Settings' "It's
 //! mine" uses too, so card and Settings stay one door (§6.4, C15).
 //!
-//! `version=` is the hash's first 12+ hex characters (the short form K2
-//! shows; a full hash is refused as secret-shaped).
+//! `version=` is the hash, or its first 12+ hex characters (the short
+//! form K2 shows).
 //!
 //! The current state (§6.2): the live version must still be `version`
 //! (else `stale`: the widget changed since the ask); a version that is
@@ -58,9 +58,8 @@ pub(crate) static KEEP_MINE: ActionSpec = ActionSpec {
     machine_hints: &[],
 };
 
-/// A widget version on a card is its hash's first characters (at least
-/// this many hex digits): a full 64-hex hash is refused as secret-shaped by
-/// the request checks, and the short form is what K2 shows people.
+/// A widget version on a card is its hash or the hash's first characters
+/// (at least this many hex digits: the short form K2 shows people).
 pub(crate) const MIN_VERSION: usize = 12;
 
 fn version_ok(v: &str) -> bool {

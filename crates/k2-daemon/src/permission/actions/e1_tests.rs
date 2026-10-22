@@ -681,12 +681,12 @@ fn keep_mine_through_the_card_takes_the_gardens_owner() {
     let ws = Ws { id: "w-e1-keep".into(), handle: "w-e1-keep".into(), path: "/tmp/zen-e1/w-e1-keep".into() };
     let (s, v) = zen("/cli/zen/widget/folder/put", false, &mgr, json!({"widget": "board", "files": widget_folder("board", "agent")}));
     assert_eq!(s, "200 OK", "{v}");
-    let full = e.f.widget_status("board").bundle.expect("a good version").hash;
-    // The card names the version by its first 12 characters (a 64-hex hash
-    // is refused as secret-shaped, and the short form is what K2 shows).
-    let live = full[..12].to_string();
-    let (s, v) = ask(&ws, "garden.keep-mine", json!({ "widget": "board", "version": full }));
-    assert_eq!((s.as_str(), v["error"]["code"].as_str()), ("400 Bad Request", Some("bad_params")), "{v}");
+    // The card names the version by its full 64-hex hash (a content hash,
+    // never taken for a secret); its first 12+ characters work too (below).
+    let live = e.f.widget_status("board").bundle.expect("a good version").hash;
+    assert_eq!(live.len(), 64, "{live}");
+    let (s, v) = ask(&ws, "garden.keep-mine", json!({ "widget": "board", "version": &live[..8] }));
+    assert_eq!((s.as_str(), v["error"]["code"].as_str()), ("400 Bad Request", Some("bad_params")), "too short a version: {v}");
     assert_ne!(crate::zen_routes::widget_live_version("board").expect("live").1, k2_core::garden_data::MadeBy::Owner);
     // A version that isn't live: refused at the ask.
     let (s, v) = ask(&ws, "garden.keep-mine", json!({ "widget": "board", "version": "0".repeat(64) }));

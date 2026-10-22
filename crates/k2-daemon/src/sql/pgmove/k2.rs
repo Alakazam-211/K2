@@ -964,6 +964,8 @@ mod tests {
         k2_core::db::init_for_tests();
         let db = k2_core::db::shared();
         let conn = db.lock();
+        // Only this test's rows (the shared test DB keeps other tests' moves).
+        conn.execute("DELETE FROM sql_moves", []).unwrap();
         for (id, name, project) in [("d1", "ws_mine", "w-mine"), ("d2", "ws_theirs", "w-theirs")] {
             conn.execute(
                 "INSERT INTO sql_databases (id, project_id, name, status, created_at) VALUES (?1, ?2, ?3, 'active', 1)",
@@ -1171,6 +1173,8 @@ mod tests {
         assert!(!worker::recovering());
         assert!(worker::pending().is_empty());
         drop(worker::begin("ws_a").expect("gate open"));
+        let db = k2_core::db::shared();
+        db.lock().execute("DELETE FROM sql_moves WHERE id = 'mv_ws_a'", []).unwrap();
     }
 
     /// The sidecar row is gone (uninstalled): nothing can move; the gate

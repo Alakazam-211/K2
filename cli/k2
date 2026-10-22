@@ -31898,6 +31898,7 @@ _study_title() {
         changes) echo "Git changes: review, stage, discard, commit" ;;
         design) echo "Design notes: what a Design tab sends you" ;;
         permissions) echo "Permission cards (Beta)" ;;
+        garden-access) echo "Garden access: who may edit a Garden" ;;
         *) echo "" ;;
     esac
 }
@@ -31915,29 +31916,46 @@ _study_is_topic() {
 # Off, these print exactly `_STUDY_TOPIC_IDS` / `_study_usage` /
 # `_study_catalog`.
 _study_topic_ids_all() {
-    if _permission_cli_enabled; then
-        printf '%s permissions\n' "$_STUDY_TOPIC_IDS"
-    else
-        printf '%s\n' "$_STUDY_TOPIC_IDS"
-    fi
+    local ids="$_STUDY_TOPIC_IDS"
+    if _permission_cli_enabled; then ids="$ids permissions"; fi
+    # Garden access lists (prd-garden-access-v1 G24): a topic only while
+    # this daemon's gardenAccess switch is on.
+    if _garden_access_cli_enabled; then ids="$ids garden-access"; fi
+    printf '%s\n' "$ids"
 }
 
 _study_usage_all() {
-    if _permission_cli_enabled; then
-        # After the topics block's last line, wherever compute-shared's
-        # reflow put `agent-hire  garden-data` on it (0.46.3 r8).
-        _study_usage | awk '{ print } / agent-hire  garden-data/ { print "  permissions" }'
-    else
-        _study_usage
-    fi
+    # After the topics block's last line, wherever compute-shared's reflow
+    # put `agent-hire  garden-data` on it (0.46.3 r8).
+    _study_usage | {
+        if _permission_cli_enabled; then
+            awk '{ print } / agent-hire  garden-data/ { print "  permissions" }'
+        else
+            cat
+        fi
+    } | {
+        if _garden_access_cli_enabled; then
+            awk '{ print } / agent-hire  garden-data/ { print "  garden-access" }'
+        else
+            cat
+        fi
+    }
 }
 
 _study_catalog_all() {
-    if _permission_cli_enabled; then
-        _study_catalog | awk '{ print } /^  design   / { print "  permissions         Permission cards (Beta): ask a person to allow what K2 refused you" }'
-    else
-        _study_catalog
-    fi
+    _study_catalog | {
+        if _permission_cli_enabled; then
+            awk '{ print } /^  design   / { print "  permissions         Permission cards (Beta): ask a person to allow what K2 refused you" }'
+        else
+            cat
+        fi
+    } | {
+        if _garden_access_cli_enabled; then
+            awk '{ print } /^  garden-data   / { print "  garden-access       Who may edit a Garden: the list, asking, signing, History" }'
+        else
+            cat
+        fi
+    }
 }
 
 _study_catalog() {
@@ -32044,6 +32062,7 @@ _study_page() {
         agent-hire) _study_page_agent_hire ;;
         design) _study_page_design ;;
         permissions) _study_page_permissions ;;
+        garden-access) _study_page_garden_access ;;
         *) return 1 ;;
     esac
 }
@@ -35195,7 +35214,8 @@ print(json.dumps({"topics": topics}, separators=(",", ":")))
         exit 0
     fi
 
-    if ! _study_is_topic "$topic" && ! { [ "$topic" = permissions ] && _permission_cli_enabled; }; then
+    if ! _study_is_topic "$topic" && ! { [ "$topic" = permissions ] && _permission_cli_enabled; } \
+        && ! { [ "$topic" = garden-access ] && _garden_access_cli_enabled; }; then
         echo "Error: unknown study topic '$topic'" >&2
         _study_usage_all >&2
         exit 2
@@ -57515,6 +57535,85 @@ Unanswered cards expire after 3 days, and you get one turn. Still need it? Ask o
 EOF
 }
 
+# Garden access lists (prd-garden-access-v1 G24): shown only while this
+# daemon's gardenAccess switch is on (`_garden_access_cli_enabled`).
+_study_page_garden_access() {
+    cat <<'EOF'
+k2 study garden-access — who may edit a Garden, and how to ask
+
+THE ONE RULE
+  Each Garden has one list of the agents who may edit it. Edit a Garden
+  only when you're on its list (k2 zen garden access <g>); otherwise K2
+  asks the person. After a change, k2 zen validate --widget <w> --sign.
+  The person is never on a list: they always edit their own Gardens.
+
+MAKING A GARDEN (no card)
+  k2 zen garden new <name> [--from page.toml] [--widgets <dir>…]
+  One call: the page and its new widgets land together, or nothing does
+  (a widget name that exists is widget_exists). 5 a day per agent
+  (garden_budget, 429). You're its maker, NOT on its list: K2 puts a
+  garden.access card on your Thread with the person in the same step.
+  Until they Allow, your widgets there run without the Garden's data.
+
+EDITING (needs the list, the maker's too)
+  garden put, rename, reorder, template, reset --garden, theme
+  set|next|prev --garden, widget put / put --dir, reset --widget.
+  A widget write needs you on the list of EVERY Garden that places it; a
+  draft placed nowhere is open, and runs only in preview.
+  Unlisted: 403 garden_access_needed, exit 3, and K2 shows the card (one
+  waiting card per Garden). After Allow you edit until the person removes
+  you or locks the Garden (locked: 423 garden_locked, as before).
+  The computer-wide look (reset of zen.toml or a theme, theme set|next|prev
+  with no --garden) needs you on at least one Garden's list
+  (garden_access_needed with garden: null).
+
+ASKING
+  k2 zen garden access <g>                you: listed or not
+  k2 zen garden access <g> ask [--reason "…"]
+  One waiting card per Garden; after Not now, none for 24 hours. The
+  person answers on the card (Allow / Not now) or in Settings → Gardens.
+  Only the person adds or removes agents (k2 zen garden access <g>
+  add|remove <agent>, outside K2).
+
+DELETING (the person only)
+  k2 zen garden delete <g> from you asks them: 403 garden_delete_person,
+  a garden.delete card (Delete / Keep it), exit 3. Only an agent on the
+  list, or the maker, may ask. A deleted Garden keeps a copy in history
+  and can be restored from Settings → Gardens → Deleted Gardens.
+
+SIGNED VERSIONS (the data guard)
+  A widget version runs with the Garden's data and sight only when the
+  person, K2 or an agent on THAT Garden's list signed it. Any other
+  version keeps its own store keyspace, agents:read and presence:read;
+  every other call answers needs_editor ("Someone who edits this Garden
+  has to sign this version."). A raw edit of ~/.k2/zen lands but runs
+  that way until someone listed signs it (k2 zen widget sign <w>, or
+  validate --sign). Never sign with the owner token.
+
+USING IS NEVER GATED
+  Any agent shows in, is pinned in, and is talked to through any Garden.
+  The list is about editing only.
+
+WHAT A GARDEN SEES
+  Everything the person sees: all Threads and agents, files, tickets and
+  activity in every room, App guests (each change still needs the vault
+  confirm), room members, the bound sources. Listing an agent trusts it
+  with that; the Garden's History is the control.
+
+HISTORY (the person's)
+  Every change, signature, access change, ask and delete is in the
+  Garden's History (Settings → Gardens → the Garden → History…, or the
+  widget's ⋯ History… in Zen). Outside K2:
+  k2 zen garden history <g> [--kind changes|access|asks] [--json]
+  k2 zen widget history <w>
+  Kept 2 years.
+
+RETIRED
+  Keep as mine, "It's mine" (k2 zen widget claim), new proposals and
+  maker-based reach. Pending proposals drain (approve / reject still work).
+EOF
+}
+
 _study_page_garden_data() {
     cat <<'EOF'
 k2 study garden-data — a widget's data on this computer, and your part in it
@@ -59401,6 +59500,9 @@ if err in ("garden_access_needed", "garden_delete_person", "session_gone"):
     # Garden access (G19): stop and let the person answer K2 card.
     if as_json:
         print(json.dumps(d, separators=(",", ":")))
+    if err == "garden_delete_person" and isinstance(d.get("card"), dict) and d["card"].get("card"):
+        # G19: the delete ask is out (a garden.delete card on the Thread).
+        print("Asked the person to delete %s" % (d.get("name") or d.get("garden")), file=sys.stderr)
     print(d.get("message") or "Ask the person: k2 zen garden access <garden> ask", file=sys.stderr)
     sys.exit(3)
 if err == "garden_locked" or (err == "owner_only" and verb == "garden-lock"):
@@ -60014,6 +60116,11 @@ if err is not None:
         print(json.dumps(d, separators=(",", ":")))
     code = err.get("code") if isinstance(err, dict) else err
     msg = d.get("message") or (err.get("hint") if isinstance(err, dict) else None) or str(code)
+    if code == "retired" and verb == "claim":
+        # Garden access (G20, switch on): Keep as mine is retired.
+        if not as_json:
+            print("Gardens use access lists now: `k2 zen garden access`")
+        sys.exit(0)
     if code in ("owner_only", "zen_local_only"):
         print("Only the person can %s this widget: click It\x27s mine in Settings → Gardens → Local Data, or run k2 zen widget claim outside K2." % verb if verb == "claim" else "Error: %s" % msg, file=sys.stderr)
         sys.exit(3)
@@ -62914,6 +63021,35 @@ except Exception:
     sys.exit(1)
 sys.exit(0 if isinstance(v, dict) and v.get("enabled") is True else 1)
 ' 2>/dev/null
+}
+
+# Garden access lists (prd-garden-access-v1 G24): is this daemon's
+# gardenAccess switch on? Its routes exist only then: a GET of
+# /cli/zen/garden/access with no Garden answers 400 bad_request when on,
+# and 404 "unknown zen route" (or a refusal) when off or on an older
+# daemon. Cached per process; a daemon that doesn't answer in 1s is off.
+_garden_access_cli_enabled() {
+    if [ -z "${_K2_GARDEN_ACCESS_ON:-}" ]; then
+        _K2_GARDEN_ACCESS_ON=0
+        local tok sock out="" _K2_CFG=""
+        sock="$(_hook_sock)"
+        if [ -n "${SCOPED_TOKEN:-}" ] && [ -n "$sock" ] && [ -S "$sock" ] && ! _cli_skip_uds; then
+            _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
+            out="$(_k2_curl "$_K2_CFG" -s -G --unix-socket "$sock" "http://localhost/cli/zen/garden/access" \
+                --connect-timeout 1 --max-time 1 -w $'\n%{http_code}' 2>/dev/null)" || out=""
+        else
+            tok="${SCOPED_TOKEN:-${TOKEN:-}}"
+            if [ -n "$tok" ] && [ -n "${PORT:-}" ]; then
+                _k2_cfg_add data-urlencode "token=${tok}"
+                out="$(_k2_curl "$_K2_CFG" -s -G "http://${HOST}:${PORT}/cli/zen/garden/access" \
+                    --connect-timeout 1 --max-time 1 -w $'\n%{http_code}' 2>/dev/null)" || out=""
+            fi
+        fi
+        if [[ "$out" == *$'\n400' ]] && [[ "$out" == *'"bad_request"'* ]]; then
+            _K2_GARDEN_ACCESS_ON=1
+        fi
+    fi
+    [ "$_K2_GARDEN_ACCESS_ON" = 1 ]
 }
 
 # For `k2 help` / `k2 study`: inside a K2 cell only, cached per process.

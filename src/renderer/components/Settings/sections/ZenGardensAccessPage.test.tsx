@@ -131,6 +131,8 @@ function fakeGet(route: string, p: Record<string, unknown>): unknown {
           locked: h.locked[g.id] === true,
         })),
       }
+    case 'zen/news':
+      return { ok: true, items: [], copiesWithNewerDefault: 0 }
     case 'zen/garden/access': {
       const g = String(p.garden)
       return { ok: true, garden: g, name: h.gardens.find((x) => x.id === g)?.name ?? g, made: h.made[g] ?? null, editors: h.editors[g] ?? [] }
@@ -223,6 +225,8 @@ import { useConnectHostStore } from '@/stores/connect-host'
 import { ZenGardensSection } from './ZenGardensSection'
 import { ZenWidgetData } from './ZenWidgetData'
 import { GARDEN_NOT_SIGNED_TEXT } from '@/components/Zen/widgets/ZenGardenHistoryModal'
+import { settingsNav } from '../Settings'
+import { sectionLabel } from '../searchManifest'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -590,5 +594,18 @@ describe('Widget data (G28)', () => {
     expect(within(line).getByRole('button', { name: 'It\'s mine' })).toBeTruthy()
     expect(within(line).getByRole('button', { name: 'Let ana use this data' })).toBeTruthy()
     expect(within(line).getByRole('button', { name: 'Grants' })).toBeTruthy()
+  })
+})
+
+describe('the nav name (G28)', () => {
+  it('Garden access on: "Widget data"; off: Local Data, as 0.46.3', () => {
+    const leaf = (gardenAccess: boolean): string | undefined =>
+      settingsNav({ zenGardens: true, gardenAccess })
+        .flatMap((b) => (b.kind === 'group' ? b.items : []))
+        .find((it) => it.id === 'zen-widget-data')?.label
+    expect(leaf(true)).toBe('Widget data')
+    expect(leaf(false)).toBe('Local Data')
+    expect(sectionLabel('zen-widget-data', { gardenAccess: true })).toBe('Widget data')
+    expect(sectionLabel('zen-widget-data')).toBe('Local Data')
   })
 })

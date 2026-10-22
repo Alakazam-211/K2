@@ -28,7 +28,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { revealItemInDir } from '@tauri-apps/plugin-opener'
 import { SettingDropdown } from '../controls/SettingControls'
-import { ZenGardenSyncControls } from './ZenGardenSyncControls'
+import { ZenGardenSyncControls, useZenSyncLive } from './ZenGardenSyncControls'
 import { BTN, INPUT, InlineError, NewGarden, ZEN_TOKENS_IN_SETTINGS, attempt, revealLabel, themeOptions } from './zen-gardens-ui'
 import {
   checkZenGardenName,
@@ -939,6 +939,9 @@ function DeletedPane({
 
 export function ZenGardensAccessPage(): React.JSX.Element {
   const st = useZenSettingsStore()
+  // The sidebar's lock glyphs read the sync store; keep it live here too
+  // (the pane's checkboxes aren't mounted while Styles is open).
+  useZenSyncLive()
   const sync = useZenSyncStore((s) => s.list)
   const [sel, setSel] = useState<GardensSelection>({ kind: 'styles' })
   const [facts, setFacts] = useState<Map<string, GardenListFacts>>(new Map())

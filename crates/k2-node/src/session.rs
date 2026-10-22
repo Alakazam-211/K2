@@ -437,7 +437,9 @@ where
     let tracks: Tracks = Arc::new(Mutex::new(HashMap::new()));
     {
         let mut t = tracks.lock().unwrap();
-        for h in &start.welcome.resume {
+        // A hint's id names a journal path: only a folder-safe one (no row
+        // can have another, review A-disk 2).
+        for h in start.welcome.resume.iter().filter(|h| frames::valid_job_id(&h.job_id)) {
             t.insert((h.job_id.clone(), h.generation), track(&tenant, &h.job_id, h.generation, h.since_seq, true));
         }
         for r in tenant.ledger.lock().unwrap().non_terminal().unwrap_or_default() {

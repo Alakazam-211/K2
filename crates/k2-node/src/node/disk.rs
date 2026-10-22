@@ -485,6 +485,36 @@ mod tests {
         assert!(elsewhere.join("job/keep").exists());
     }
 
+    /// Review A-disk 2: a job id that isn't a safe folder name is refused
+    /// when it arrives: no ledger row, no folder, nothing for cleanup to
+    /// walk out of the slot with.
+    #[tokio::test]
+    async fn a_job_id_that_isnt_folder_safe_is_refused_at_arrival() {
+        let free = Arc::new(AtomicU64::new(500 * GIB));
+        let (n, layout) = node("disk-ids", "disk_floor_gb = 0\n", free).await;
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        n.owner().hub.attach(tx);
+        let long = "a".repeat(65);
+        for id in ["../x", "a/b", long.as_str()] {
+            let mut a = crate::ledger::tests::assign(id, 1);
+            a.plan.argv = vec!["/bin/sh".into(), "-c".into(), "exit 0".into()];
+            a.fence.plan_digest = a.plan.digest().unwrap();
+            assert!(a.consistent(), "only the id is wrong");
+            assert_eq!(n.on_assign(&n.owner(), a), None, "{id}");
+            assert!(n.owner().ledger.lock().unwrap().get(id, 1).unwrap().is_none(), "{id}: no row");
+            let f = rx.recv().await.unwrap();
+            assert!(matches!(&f, k2_node_proto::frames::Frame::State(s) if s.reason.as_deref() == Some("bad_job_id") && s.state == JobState::Failed), "{f:?}");
+        }
+        assert!(!layout.home.join("x-g1").exists() && !layout.job_dir("a", 1).exists());
+        assert_eq!(std::fs::read_dir(layout.home.join("jobs")).map(|d| d.count()).unwrap_or(0), 0, "no job folder at all");
+        // The longest safe id still runs.
+        let ok = "b".repeat(64);
+        let mut a = crate::ledger::tests::assign(&ok, 1);
+        a.plan.argv = vec!["/bin/sh".into(), "-c".into(), "exit 0".into()];
+        a.fence.plan_digest = a.plan.digest().unwrap();
+        assert_eq!(n.on_assign(&n.owner(), a), Some((ok.clone(), 1)));
+    }
+
     /// (c) Under the floor the guard reclaims first (ended job dirs, idle
     /// warm slots) and stops a running job (`failed / disk_low`) only when
     /// that wasn't enough: the newest first, one a pass. Above the floor

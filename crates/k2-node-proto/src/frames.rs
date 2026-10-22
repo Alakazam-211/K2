@@ -424,8 +424,23 @@ pub struct Assign {
     pub plan: Plan,
 }
 
+/// A job id the node may use as a folder name (`jobs/<id>-g<gen>`, the
+/// journal, artifacts): 1–64 of A-Z a-z 0-9 _ - (security review A-disk
+/// 2: cleanup, the disk guard and the janitor run on those folders with
+/// the node's rights, so `/` or `..` would leave the server's slot).
+/// K2 servers mint 32 hex.
+pub fn valid_job_id(id: &str) -> bool {
+    (1..=64).contains(&id.len()) && id.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
+}
+
 impl Assign {
     /// True when `fence.plan_digest` is the digest of `plan` and the ids agree.
+    /// The job id is one the node may use as a folder name
+    /// ([`valid_job_id`]).
+    pub fn job_id_ok(&self) -> bool {
+        valid_job_id(&self.fence.job_id)
+    }
+
     pub fn consistent(&self) -> bool {
         self.fence.job_id == self.plan.job_id
             && self.plan.digest().is_ok_and(|d| crypto::ct_eq(d.as_bytes(), self.fence.plan_digest.as_bytes()))
@@ -1066,6 +1081,18 @@ impl Refusal {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn job_ids_are_folder_safe() {
+        let long_ok = "a".repeat(64);
+        for ok in ["a", "0123456789abcdef0123456789abcdef", "job_1-x", long_ok.as_str()] {
+            assert!(valid_job_id(ok), "{ok}");
+        }
+        let long_bad = "a".repeat(65);
+        for bad in ["", "../x", "a/b", "..", ".", "a b", "a\\b", "j\u{e9}", "x\0", long_bad.as_str()] {
+            assert!(!valid_job_id(bad), "{bad:?}");
+        }
+    }
 
     fn plan() -> Plan {
         Plan {

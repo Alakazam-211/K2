@@ -76,6 +76,13 @@ impl Node {
     pub fn on_assign(self: &Arc<Self>, t: &Arc<Tenant>, a: Assign) -> Option<(String, u32)> {
         let job = a.fence.job_id.clone();
         let gen = a.fence.generation;
+        // Before anything else (no row, no folder): the id names folders
+        // the node cleans with its own rights (review A-disk 2).
+        if !a.job_id_ok() {
+            crate::nlog!("assign refused: job id {:?} isn't 1-64 of A-Z a-z 0-9 _ -", a.fence.job_id.chars().take(80).collect::<String>());
+            t.hub.send(self.state_frame(&job, gen, JobState::Failed, Some("bad_job_id"), Some("a job id is 1-64 of A-Z a-z 0-9 _ -")));
+            return None;
+        }
         if !a.consistent() {
             t.hub.send(self.state_frame(&job, gen, JobState::Failed, Some("plan_mismatch"), Some("plan digest or job id doesn't match the fence")));
             return None;

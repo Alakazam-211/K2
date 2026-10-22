@@ -188,7 +188,7 @@ pub async fn gc_run(node: &Node, days: i64, toolchains: bool) -> Result<Value, A
         let rows = t.ledger.lock().unwrap().all().unwrap_or_default();
         let mine = running_by.get(&t.slot).cloned().unwrap_or_default();
         for r in &rows {
-            if !r.state.is_terminal() || r.cleaned || mine.contains(&r.job_id) || r.ended_at.is_none_or(|e| e > cutoff) {
+            if !r.state.is_terminal() || r.cleaned || mine.contains(&r.job_id) || r.ended_at.is_none_or(|e| e > cutoff) || !k2_node_proto::frames::valid_job_id(&r.job_id) {
                 continue;
             }
             let dir = t.paths.job_dir(&r.job_id, r.generation);

@@ -106,7 +106,7 @@ impl Node {
         if !valid_sha(&src.commit) {
             return Err(fail("sync_failed", format!("commit {:?} is not a full sha", src.commit)));
         }
-        if src.project_key.is_empty() || !src.project_key.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        if !k2_node_proto::frames::valid_project_key(&src.project_key) {
             return Err(fail("sync_failed", "project key is not a plain name".into()));
         }
         let git = Git::find(&self.layout().git_home(), &crate::util::base_path(&self.layout().home))

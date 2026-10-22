@@ -2102,6 +2102,114 @@ pub(crate) mod tests {
         }
     }
 
+    // ── body fidelity (no hard wrap) ──
+    //
+    // Field report (0.46.2, Gmail link): a draft written one paragraph
+    // per line came back chopped every ~72 columns. These pin K2's side
+    // of the contract on every composer: the DECODED text part equals
+    // the input line for line, and no wire line exceeds RFC 5322's 998.
+
+    /// One 400-char ASCII line, a long non-ASCII paragraph (accents, CJK,
+    /// emoji), empty lines, quoted reply text, leading and trailing
+    /// spaces, a lone `.` and a `From ` line.
+    pub(crate) fn fidelity_body() -> String {
+        let long_ascii: String = "The quarterly numbers look right to me and I think we can ship "
+            .repeat(7)
+            .chars()
+            .take(400)
+            .collect();
+        assert_eq!(long_ascii.len(), 400);
+        let non_ascii = "Zoë's café résumé — naïve façade, Ünal’s “quotes” … 李雷和韩梅梅 🎉🚀 ".repeat(5);
+        format!(
+            "Hi Pat,\n\n{long_ascii}\n{non_ascii}\n\n\n  indented line with trailing space \n\
+             .\nFrom here on, plain.\n\n> On Tue, Pat <pat@dest.example> wrote:\n\
+             > {long_ascii}\n>\n> > nested quote — ünïcödé\n\n— R"
+        )
+    }
+
+    /// Parse `raw` back with mail-parser and assert the text part decodes
+    /// to `body` line for line (CRLF on the wire is the canonical line
+    /// end; the input uses LF), and that no wire line exceeds 998 octets.
+    pub(crate) fn assert_body_fidelity(raw: &[u8], body: &str) {
+        for (i, line) in raw.split(|b| *b == b'\n').enumerate() {
+            let line = line.strip_suffix(b"\r").unwrap_or(line);
+            assert!(
+                line.len() <= 998,
+                "wire line {i} is {} octets (> 998): {}",
+                line.len(),
+                String::from_utf8_lossy(line)
+            );
+        }
+        let parsed = MessageParser::default().parse(raw).expect("message parses back");
+        let decoded = parsed.body_text(0).expect("message has a text part").replace("\r\n", "\n");
+        let want: Vec<&str> = body.split('\n').collect();
+        let got: Vec<&str> = decoded.split('\n').collect();
+        assert_eq!(
+            got,
+            want,
+            "decoded text differs from the input (hard wrap?)\n--- wire ---\n{}",
+            String::from_utf8_lossy(raw)
+        );
+        assert_eq!(decoded, body, "decoded text differs from the input byte for byte");
+    }
+
+    #[test]
+    fn linked_compose_draft_keeps_paragraphs_exactly() {
+        let inbox = test_inbox("X1", "p1", "rosson@example.com");
+        let body = fidelity_body();
+        let to = vec![MailAddr { name: None, email: "pat@dest.example".to_string() }];
+        let raw = compose_new_draft_rfc822(
+            &inbox, &to, &[], &[], "Plan", &body, "Thu, 09 Jul 2026 08:00:00 +0000", &[], "b",
+        )
+        .expect("compose draft");
+        assert_body_fidelity(&raw, &body);
+
+        // With an attachment the text part is still exact.
+        let att = Rfc822Attachment {
+            filename: "notes.txt".to_string(),
+            content_type: "text/plain".to_string(),
+            bytes: b"att".to_vec(),
+        };
+        let raw = compose_new_draft_rfc822(
+            &inbox, &to, &[], &[], "Plan", &body, "Thu, 09 Jul 2026 08:00:00 +0000", &[att],
+            "mix-bound",
+        )
+        .expect("compose draft + attachment");
+        assert_body_fidelity(&raw, &body);
+    }
+
+    #[test]
+    fn linked_reply_draft_keeps_paragraphs_exactly() {
+        let inbox = test_inbox("X1", "p1", "rosson@example.com");
+        let src = draft_source_from_raw(RAW_FIXTURE).expect("source");
+        let body = fidelity_body();
+        let raw = compose_draft_rfc822(&inbox, &src, &body, "Thu, 09 Jul 2026 08:00:00 +0000", &[], "b")
+            .expect("reply draft");
+        assert_body_fidelity(&raw, &body);
+    }
+
+    #[test]
+    fn linked_send_and_reply_keep_paragraphs_exactly() {
+        let inbox = test_inbox("X1", "p1", "rosson@example.com");
+        let body = fidelity_body();
+        let to = vec![MailAddr { name: None, email: "pat@dest.example".to_string() }];
+        // send
+        let raw = compose_outgoing_rfc822(
+            &inbox, &to, &[], "Plan", &body, "Thu, 09 Jul 2026 08:00:00 +0000",
+            "<mid-1@example.com>", None, None,
+        )
+        .expect("send");
+        assert_body_fidelity(&raw, &body);
+        // reply (threading headers set)
+        let raw = compose_outgoing_rfc822(
+            &inbox, &to, &[], "Re: Plan", &body, "Thu, 09 Jul 2026 08:00:00 +0000",
+            "<mid-2@example.com>", Some("<src-123@mailer.example>"),
+            Some("<src-123@mailer.example>"),
+        )
+        .expect("reply");
+        assert_body_fidelity(&raw, &body);
+    }
+
     pub(crate) fn test_inbox(id: &str, project: &str, address: &str) -> MailExternalInbox {
         MailExternalInbox {
             id: id.to_string(),

@@ -1139,6 +1139,29 @@ mod tests {
         assert!(msg.contains("application/octet-stream"), "{msg}");
     }
 
+    /// Linked send/reply WITH attachments (lettre's multipart composer):
+    /// the text part decodes to the input line for line — no hard wrap —
+    /// and no wire line exceeds 998 octets.
+    #[test]
+    fn compose_multipart_send_and_reply_keep_paragraphs_exactly() {
+        let inbox = inbox_with("imap.example.com", None, None, None);
+        let body = external::tests::fidelity_body();
+        let to = [MailAddr { name: None, email: "pat@dest.example".into() }];
+        let date = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        let files = [att("a.dat", "application/octet-stream", &[0x00, 0xFF])];
+        let send = compose_outgoing_multipart(
+            &inbox, &to, &[], "Plan", &body, date, "<m1@example.com>", None, None, &files,
+        )
+        .expect("send multipart");
+        external::tests::assert_body_fidelity(&send, &body);
+        let reply = compose_outgoing_multipart(
+            &inbox, &to, &[], "Re: Plan", &body, date, "<m2@example.com>",
+            Some("orig@sender.example"), Some("<orig@sender.example>"), &files,
+        )
+        .expect("reply multipart");
+        external::tests::assert_body_fidelity(&reply, &body);
+    }
+
     /// The composed multipart survives an end-to-end SMTP DATA round-trip
     /// over the loopback mock (the attachment's base64 arrives intact).
     #[test]

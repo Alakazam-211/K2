@@ -185,6 +185,8 @@ say "agents: alpha=$WS_alpha bravo=$WS_bravo"
 say "step 0: the switch"
 call "$OWNER" GET /cli/settings/get
 want "settings/get carries gardenAccess=false (default off)" 200 '.gardenAccess == false'
+call "$OWNER" POST /cli/zen/widget/new '{"name":"early"}'
+want "off: the person makes widget 'early' (stamped as at 0.46.3)" 200
 call "$OWNER" GET /cli/zen/garden/access '' "garden=x"
 want "off: garden/access is an unknown route" 404
 call "$PASS_alpha" POST /cli/zen/garden/new '{"name":"Off garden"}'
@@ -267,7 +269,7 @@ call "$OWNER" GET /cli/zen/get '' "garden=$G"
 HASH="$(jq -r '[.. | objects | select(.id? == "t1" and .kind? == "custom")] | first | .hash // empty' <<<"$BODY")"
 [[ -n "$HASH" ]] || bad "no live hash for t1 in the page: $BODY"
 ORIGIN="$(jq -nc --arg g "$G" --arg h "$HASH" '{widget: "tally", garden: $g, placement: "t1", hash: $h}')"
-call "$OWNER" POST /cli/thread/post "$(jq -nc --arg o "$ORIGIN" '{addr: "bravo", text: "from the Sales tally", origin: $o}')"
+call "$OWNER" POST /cli/thread/post "$(jq -nc --arg o "$ORIGIN" '{addr: "bravo", text: "from the Sales tally", origin: $o, via: "compose"}')"
 want "use is never gated: the Garden's widget posts to unlisted bravo's Thread" 200
 call "$OWNER" GET /cli/thread '' "addr=bravo&limit=20"
 want "bravo's Thread has the widget's post" 200 '[.items[] | tostring | select(test("from the Sales tally"))] | length >= 1'
@@ -278,6 +280,11 @@ call "$OWNER" POST /cli/zen/garden/lock "{\"garden\":\"$G\",\"locked\":true}"
 want "the person locks it" 200 '.locked == true'
 call "$PASS_alpha" POST /cli/zen/garden/put "$(jq -nc --arg g "$G" --arg t "$(page 280)" '{garden: $g, text: $t}')"
 want "a locked Garden refuses listed alpha (423 first)" 423
+LOCKED_TEXT="$(cat "$H/.k2/zen/gardens/$G.toml")"
+printf '%s\n# a hand edit while locked\n' "$LOCKED_TEXT" >"$H/.k2/zen/gardens/$G.toml"
+sleep 1.5 # the watcher puts it back
+[[ "$(cat "$H/.k2/zen/gardens/$G.toml")" == "$LOCKED_TEXT" ]] && ok "a hand edit to a locked Garden is put back" ||
+  bad "the locked page was not put back: $(cat "$H/.k2/zen/gardens/$G.toml")"
 call "$OWNER" POST /cli/zen/garden/lock "{\"garden\":\"$G\",\"locked\":false}"
 want "the person unlocks it" 200 '.locked == false'
 call "$OWNER" POST /cli/zen/garden/sync "{\"garden\":\"$G\",\"part\":\"both\",\"sync\":false}"
@@ -344,17 +351,37 @@ say "step 8: History shows every step"
 call "$OWNER" GET /cli/zen/garden/history '' "garden=$G&limit=200"
 keep garden_history
 if [[ "$CODE" == 200 ]]; then
-  for k in made access_asked access_added renamed changed widget_changed locked unlocked sync delete_asked deleted restored disk_edit signed; do
+  for k in made access_asked access_added renamed changed widget_changed locked unlocked lock_put_back sync delete_asked deleted restored disk_edit signed; do
     if jq -e --arg k "$k" '[.items[].kind] | index($k) != null' >/dev/null <<<"$BODY"; then ok "History has '$k'"; else bad "History has no '$k': $(jq -c '[.items[] | [.kind, .actor.kind]]' <<<"$BODY")"; fi
   done
   jq -e '[.items[].at] as $a | $a == ($a | sort | reverse)' >/dev/null <<<"$BODY" && ok "History is newest first" || bad "History order: $(jq -c '[.items[].at]' <<<"$BODY")"
+  jq -e '[.items[].id] | all(test("^(event|snapshot|stamp|proposal):"))' >/dev/null <<<"$BODY" &&
+    ok "every History id names its source" || bad "History ids: $(jq -c '[.items[].id]' <<<"$BODY")"
   jq -e "[.items[] | select(.kind == \"access_added\") | .actor.kind] | index(\"owner\") != null or index(\"login\") != null" >/dev/null <<<"$BODY" &&
     ok "the card's Allow is the person's line" || bad "access_added actor: $(jq -c '[.items[] | select(.kind == "access_added")]' <<<"$BODY")"
   jq -e '[.items[] | select(.kind == "deleted") | .actor.kind] | first == "login"' >/dev/null <<<"$BODY" &&
     ok "the phone's delete is the login's line" || bad "deleted actor: $(jq -c '[.items[] | select(.kind == "deleted")]' <<<"$BODY")"
+  jq -e '[.items[] | select(.kind == "disk_edit") | .actor.kind] | first == "disk"' >/dev/null <<<"$BODY" &&
+    ok "the raw edit is an 'outside K2' line" || bad "disk_edit actor: $(jq -c '[.items[] | select(.kind == "disk_edit")]' <<<"$BODY")"
+  jq -e '[.items[] | select(.kind == "lock_put_back") | .actor.kind] | first == "disk"' >/dev/null <<<"$BODY" &&
+    ok "the put-back is an 'outside K2' line" || bad "lock_put_back actor: $(jq -c '[.items[] | select(.kind == "lock_put_back")]' <<<"$BODY")"
+  jq -e '[.items[] | select(.kind == "changed" and .snapshot != null) | .snapshot.file] | first | test("^gardens/")' >/dev/null <<<"$BODY" &&
+    ok "a page change links its kept version (View this version)" || bad "no changed line with a snapshot: $(jq -c '[.items[] | select(.kind == "changed")]' <<<"$BODY")"
 else
   bad "garden/history: HTTP $CODE: $BODY"
 fi
+# The merge's older sources: Garden 1 has kept versions from before the
+# switch (no event covers them), and 'early' was stamped while it was off.
+call "$OWNER" GET /cli/zen/gardens
+G1="$(jq -r '.gardens[0].id // empty' <<<"$BODY")"
+call "$OWNER" GET /cli/zen/garden/history '' "garden=$G1&limit=200"
+keep garden1_history
+want "Garden 1's History shows its kept versions (source snapshot)" 200 \
+  '[.items[] | select(.source == "snapshot")] | length >= 1 and (map(.snapshot.file) | all(type == "string"))'
+call "$OWNER" GET /cli/zen/widget/history '' "widget=early&limit=200"
+keep widget_history_stamp
+want "a stamp from before the switch is a 'signed' line (source stamp)" 200 \
+  '[.items[] | select(.source == "stamp" and .kind == "signed")] | length >= 1'
 call "$OWNER" GET /cli/zen/garden/history '' "garden=$G&kind=access"
 want "the Access filter keeps only access lines" 200 '[.items[].kind] | all(. == "access_added" or . == "access_removed")'
 call "$OWNER" GET /cli/zen/garden/history '' "garden=$G&limit=2"

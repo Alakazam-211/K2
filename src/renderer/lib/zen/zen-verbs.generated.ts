@@ -5,7 +5,7 @@
 import type { CatalogReach, CatalogVerbKind } from '../contract/catalog-types'
 
 /** The catalog version this table was generated from. */
-export const ZEN_CATALOG_VERSION = 19
+export const ZEN_CATALOG_VERSION = 20
 
 /**
  * Every catalog row with a `builtin` or `registered` renderer binding,
@@ -22,6 +22,7 @@ export const ZEN_VERBS = {
   'presence.subscribe': 'presence:read',
   'conversation.open': 'agents:read',
   'conversation.close': 'agents:read',
+  'agents.show': 'agents:read',
   'thread.read': 'thread:read',
   'thread.subscribe': 'thread:read',
   'thread.inbox': 'thread:read',
@@ -34,6 +35,7 @@ export const ZEN_VERBS = {
   'thread.answer': 'thread:post',
   'thread.void': 'thread:post',
   'compose.draft': 'thread:post',
+  'conversation.setContext': 'thread:post',
   'focusGroups.get': 'agents:read',
   'focusGroups.set': 'agents:read',
   'focusGroups.subscribe': 'agents:read',
@@ -76,6 +78,10 @@ export const ZEN_CUSTOM_VERBS = {
   'theme.changed': { cap: null, reach: 'local', kind: 'event' },
   'canvas.setHitRegions': { cap: null, reach: 'local', kind: 'call' },
   'window.startDrag': { cap: null, reach: 'local', kind: 'call' },
+  'layout.get': { cap: null, reach: 'local', kind: 'call' },
+  'layout.set': { cap: null, reach: 'local', kind: 'call' },
+  'layout.toggle': { cap: null, reach: 'local', kind: 'call' },
+  'layout.subscribe': { cap: null, reach: 'local', kind: 'subscribe' },
   'save.get': { cap: null, reach: 'local', kind: 'call' },
   'save.set': { cap: null, reach: 'local', kind: 'call' },
   'save.remove': { cap: null, reach: 'local', kind: 'call' },
@@ -88,6 +94,7 @@ export const ZEN_CUSTOM_VERBS = {
   'agents.subscribe': { cap: 'agents:read', reach: 'portable', kind: 'subscribe' },
   'conversation.open': { cap: 'agents:read', reach: 'local', kind: 'call' },
   'conversation.close': { cap: 'agents:read', reach: 'local', kind: 'call' },
+  'agents.show': { cap: 'agents:read', reach: 'local', kind: 'call' },
   'presence.get': { cap: 'presence:read', reach: 'local', kind: 'call' },
   'presence.subscribe': { cap: 'presence:read', reach: 'local', kind: 'subscribe' },
   'thread.read': { cap: 'thread:read', reach: 'portable', kind: 'call' },
@@ -104,6 +111,7 @@ export const ZEN_CUSTOM_VERBS = {
   'thread.post': { cap: 'thread:post', reach: 'portable', kind: 'call' },
   'thread.answer': { cap: 'thread:post', reach: 'portable', kind: 'call' },
   'compose.draft': { cap: 'thread:post', reach: 'local', kind: 'call' },
+  'conversation.setContext': { cap: 'thread:post', reach: 'local', kind: 'call' },
   'sources.list': { cap: 'sources:read', reach: 'portable', kind: 'call' },
   'sources.read': { cap: 'sources:read', reach: 'portable', kind: 'call' },
   'sources.history': { cap: 'sources:read', reach: 'portable', kind: 'call' },

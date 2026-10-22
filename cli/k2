@@ -32136,7 +32136,7 @@ the daemon's loopback port). Every call carries a pass: this App's own
 every hour, so read the file again on pass_invalid) or a guest's
 session pass from POST /cli/skin/login. Users and rooms use the App
 key ($K2_SECRETS_DIR/K2_APP_KEY) on /v1/apps/$K2_APP_ID/... instead.
-From K2's verb catalog, version 19.
+From K2's verb catalog, version 20.
 
 THE SERVER SDK (sdk/server, TypeScript, Node 22+, no dependencies)
   import { fromEnv } from '@k2/server'
@@ -58769,7 +58769,7 @@ k2 zen guide api — the k2 object in a custom widget
 A custom widget is a sealed page in a Garden: no network, no storage, no
 files. It reaches K2 only through window.k2. Each call needs a cap its
 manifest.json asks for; a widget in your own Garden gets every one it asks
-for at once (no review). From K2's verb catalog, version 19.
+for at once (no review). From K2's verb catalog, version 20.
 
 TEN EXAMPLES
   const off = k2.agents.subscribe((rows) => draw(rows))   // live, in scope
@@ -58793,6 +58793,10 @@ no cap
   k2.theme.changed(cb)                                                                                local    zen-widgets-v1         k2.theme.changed(({theme}) => paint(theme))
   k2.canvas.setHitRegions(rects)                                                                      local    zen-widgets-v1         await k2.canvas.setHitRegions([bar.getBoundingClientRect()])  [too_large]
   k2.window.startDrag()                                                                               local    zen-widgets-v1         grip.addEventListener('mousedown', () => k2.window.startDrag())
+  k2.layout.get()                                                                                     local    zen-widgets-v1         const {columns} = await k2.layout.get()  [rate_limited]
+  k2.layout.set({collapsed, column})                                                                  local    zen-widgets-v1         await k2.layout.set({column: 2, collapsed: false})  [bad_args rate_limited]
+  k2.layout.toggle(column)                                                                            local    zen-widgets-v1         chat.addEventListener('click', () => k2.layout.toggle(2))  [bad_args rate_limited]
+  k2.layout.subscribe(cb)                                                                             local    zen-widgets-v1         k2.layout.subscribe(({columns}) => drawTabs(columns))  [rate_limited]
   k2.save.get(key)                                                                                    local    garden-data-v1         const best = await k2.save.get('high-score')  [bad_key rate_limited]
   k2.save.set(key, value)                                                                             local    garden-data-v1         await k2.save.set('high-score', 42)  [bad_key value_too_large space_full store_full rate_limited]
   k2.save.remove(key)                                                                                 local    garden-data-v1         await k2.save.remove('high-score')  [bad_key rate_limited]
@@ -58806,6 +58810,7 @@ agents:read (See agents)
   k2.agents.subscribe(cb)                                                                             portable zen-v1                 const off = k2.agents.subscribe((rows) => draw(rows))
   k2.conversation.open(address)                                                                       local    zen-v1                 await k2.conversation.open(row.address)  [not_bound]
   k2.conversation.close()                                                                             local    zen-v1                 await k2.conversation.close()
+  k2.agents.show(addresses)                                                                           local    zen-widgets-v1         await k2.agents.show(rows.filter(onBoard).map((r) => r.address))  [not_bound bad_args rate_limited]
 presence:read (See who is looking)
   k2.presence.get(address)                                                                            local    zen-v1                 const people = await k2.presence.get(row.address)  [not_bound]
   k2.presence.subscribe(address, cb)                                                                  local    zen-v1                 const off = k2.presence.subscribe(row.address, (people) => draw(people))  [not_bound]
@@ -58825,6 +58830,7 @@ thread:post (Post to the Thread)
   k2.thread.post(address, text, {attachments})                                                        portable zen-v1                 await k2.thread.post(row.address, 'How is it going?')  [not_bound sending_off rate_limited too_large usage]
   k2.thread.answer(address, cardId, choice)                                                           portable zen-v1                 await k2.thread.answer(row.address, card.id, 'Yes')  [not_bound sending_off rate_limited]
   k2.compose.draft(address, text)                                                                     local    zen-v1                 await k2.compose.draft(row.address, 'Ask for a status')  [not_bound]
+  k2.conversation.setContext(text)                                                                    local    thread-context-v1      await k2.conversation.setContext('Board: ' + board.name)  [needs_editor not_bound bad_args rate_limited]
 sources:read (Read data sources)
   k2.sources.list()                                                                                   portable sources-v1             const rows = await k2.sources.list()
   k2.sources.read(address)                                                                            portable sources-v1             const v = await k2.sources.read(k2.config.source)  [not_bound server_not_saved unreachable removed]

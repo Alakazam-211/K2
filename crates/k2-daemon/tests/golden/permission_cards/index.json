@@ -767,6 +767,22 @@
       "state": "pending",
       "transport": "doc",
       "view": "owner-token"
+    },
+    {
+      "file": "push__permission__legacy.json",
+      "form": "legacy",
+      "sha256": "0c9c10ab76d07b9fa165941bb825119d36748c473eb2d3a7a6cce8930458a741",
+      "state": "permission",
+      "transport": "push",
+      "view": "push"
+    },
+    {
+      "file": "push__permission__sealed-plaintext.json",
+      "form": "sealed-plaintext",
+      "sha256": "48b9ac6a93c30026993413d1f90e89aceea84fb8585dd5bd226416edc76d6305",
+      "state": "permission",
+      "transport": "push",
+      "view": "push"
     }
   ],
   "view": {

@@ -112,6 +112,11 @@ fn take_confirm(token: &str, secret: &str) -> Result<(), CliResponse> {
 fn run(b: &CallBody) -> Result<J, CliResponse> {
     let row = catalog().verb(&b.verb).ok_or_else(|| no(400, "unknown_verb", format!("no verb {}", b.verb), None))?;
     let w = resolve(b).map_err(|e| crate::garden_data::response(&e))?;
+    if !w.signed && w.full_caps.iter().any(|c| c == gr::CAP) {
+        // Garden access (switch on, G15): only a version that passes the
+        // signer gate changes or reads guests as the person.
+        return Err(crate::garden_data::response(&crate::garden_data::call::needs_editor(&w)));
+    }
     if !w.caps.iter().any(|c| c == gr::CAP) {
         return Err(no(
             403,
@@ -138,6 +143,9 @@ fn run(b: &CallBody) -> Result<J, CliResponse> {
         authors::maker_of(&conn, &w.widget, &w.hash).map_err(|e| crate::garden_data::response(&e))?
     };
     let ceiling = match &maker {
+        // Garden access (G15, §1.6): a gate-passing version (checked above)
+        // acts as the owner: any App, any room, the vault confirm unchanged.
+        _ if k2_core::zen::garden_access::enabled() => Ceiling::AnyRoom,
         MadeBy::Owner | MadeBy::K2 => Ceiling::AnyRoom,
         MadeBy::Agent { project_id } => {
             if t.project_id != *project_id {

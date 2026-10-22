@@ -273,7 +273,10 @@ pub(crate) fn garden_access_flipped(on: bool, by: &str) {
         let closed = crate::zen_garden_cards::void_on_switch_on();
         k2_core::log_debug!("[garden-access] switch on: {closed} old card(s) and request(s) closed");
     }
-    // A6 hooks here: regenerate the k2-zen skill in every workspace (G0).
+    // G0 (A6): every workspace's k2-zen skill follows the switch now
+    // (headless; the next compose would keep the old body, same version).
+    let rewritten = k2_core::workspace::skill_regen::refresh_zen_skill_everywhere();
+    k2_core::log_debug!("[garden-access] k2-zen skill rewritten in {rewritten} workspace(s)");
     k2_core::agent_hooks::emit(
         k2_core::agent_hooks::HookEvent::SyncSettings,
         serde_json::json!({ "gardenAccess": on }),
@@ -947,6 +950,66 @@ mod tests {
             assert_eq!(r.status, "200 OK", "{}", r.body);
             assert!(!ga::enabled(), "reset turns it off");
             assert!(!k2_core::app_settings::load().garden_access);
+        });
+    }
+
+    /// Garden access G0 / G24 (A6): each flip rewrites every workspace's
+    /// k2-zen skill for the switch, headless: on says who may edit, off is
+    /// today's file again byte for byte; the person's tail stays, and a
+    /// hand-edited skill gets a `.proposed` sibling instead.
+    #[test]
+    fn garden_access_flip_rewrites_the_zen_skill_in_every_workspace() {
+        use k2_core::zen::garden_access as ga;
+        use k2_core::zen::skill::{generate_k2_zen_skill_for, SKILL_DESCRIPTION};
+        with_temp_home(|| {
+            let _db = k2_core::db::scoped_for_test();
+            ga::set_switch(false);
+            k2_core::zen::ZenFiles::local().setup().expect("zen setup");
+            let home = std::env::var("HOME").expect("HOME");
+            let ws_a = std::path::Path::new(&home).join("ws-a");
+            let ws_b = std::path::Path::new(&home).join("ws-b");
+            {
+                let h = k2_core::db::shared();
+                let conn = h.lock();
+                for (id, p) in [("w-a", &ws_a), ("w-b", &ws_b)] {
+                    std::fs::create_dir_all(p).expect("ws dir");
+                    conn.execute(
+                        "INSERT INTO projects (id, name, path) VALUES (?1, ?1, ?2)",
+                        rusqlite::params![id, p.to_str().expect("utf8")],
+                    )
+                    .expect("ws");
+                }
+            }
+            let skill = |p: &std::path::Path| p.join(".k2/skills/k2-zen/SKILL.md");
+            for p in [&ws_a, &ws_b] {
+                assert!(k2_core::workspace::skill_regen::ensure_zen_skill(&p.join(".k2"), true), "seeded");
+            }
+            // A's person added notes below the marker; B's person edited K2's part.
+            let a_off = format!("{}\nmy notes\n", std::fs::read_to_string(skill(&ws_a)).expect("a").trim_end());
+            std::fs::write(skill(&ws_a), &a_off).expect("a tail");
+            let b_edit = std::fs::read_to_string(skill(&ws_b)).expect("b").replacen("# K2 Zen Gardens", "# My Zen notes", 1);
+            std::fs::write(skill(&ws_b), &b_edit).expect("b edit");
+            let off_body = generate_k2_zen_skill_for(false);
+            let on_body = generate_k2_zen_skill_for(true);
+            assert!(a_off.contains(off_body.trim()), "seeded with today's text");
+            assert!(SKILL_DESCRIPTION.contains("k2 zen"));
+
+            let r = handle_settings_update(br#"{"gardenAccess":true}"#, SettingsActor::Owner);
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+            let a_on = std::fs::read_to_string(skill(&ws_a)).expect("a on");
+            assert!(a_on.contains(on_body.trim()), "on: the list text");
+            assert!(a_on.contains("Edit a Garden only when"), "on: who may edit");
+            assert!(!a_on.contains(off_body.trim()), "on: today's body is gone");
+            assert!(a_on.trim_end().ends_with("my notes"), "the person's tail stays: {a_on}");
+            assert_eq!(std::fs::read_to_string(skill(&ws_b)).expect("b on"), b_edit, "a hand-edited skill isn't overwritten");
+            let proposed = std::fs::read_to_string(skill(&ws_b).with_extension("md.proposed")).expect("b proposed");
+            assert!(proposed.contains("Edit a Garden only when"), "it gets the on text beside it");
+
+            let r = handle_settings_update(br#"{"gardenAccess":false}"#, SettingsActor::Owner);
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+            assert_eq!(std::fs::read_to_string(skill(&ws_a)).expect("a off"), a_off, "off: today's file, byte for byte");
+            assert_eq!(std::fs::read_to_string(skill(&ws_b)).expect("b off"), b_edit);
+            ga::set_switch(false);
         });
     }
 

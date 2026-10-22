@@ -481,6 +481,46 @@ pub fn ensure_skill_up_to_date(
     SkillUpgradeOutcome::UserModified
 }
 
+/// [`ensure_skill_up_to_date`] for a body that changes without a version
+/// bump (prd-garden-access-v1 G0: the `k2-zen` skill follows the
+/// `gardenAccess` switch). Same version and type, but the managed region
+/// isn't `fresh_body`: rewrite it when the person didn't edit it (the
+/// stamped checksum matches; their tail below the marker stays), else drop
+/// the `.proposed` sibling. Everything else is `ensure_skill_up_to_date`.
+pub fn refresh_skill_body(
+    skill_path: &Path,
+    skill_type: &str,
+    current_version: u32,
+    fresh_body: &str,
+    extra_frontmatter: Option<&str>,
+) -> SkillUpgradeOutcome {
+    let parsed = fs::read_to_string(skill_path).ok().map(|s| parse_skill(&s));
+    let same_contract = parsed.as_ref().is_some_and(|p| {
+        p.has_markers && p.k2_skill.as_deref() == Some(skill_type) && p.skill_version == Some(current_version)
+    });
+    let Some(parsed) = parsed.filter(|_| same_contract) else {
+        return ensure_skill_up_to_date(skill_path, skill_type, current_version, fresh_body, extra_frontmatter);
+    };
+    let region = parsed.managed_region.as_deref().unwrap_or("").trim();
+    if region == fresh_body.trim() {
+        return SkillUpgradeOutcome::UpToDate;
+    }
+    let wrapped = wrap_managed_skill(skill_type, current_version, fresh_body, extra_frontmatter);
+    if skill_checksum_hex(region.as_bytes()) != parsed.skill_checksum.as_deref().unwrap_or("") {
+        let proposed_path = skill_path.with_extension("md.proposed");
+        log_if_err("refresh_skill_body propose", &proposed_path, atomic_write_str(&proposed_path, &wrapped));
+        return SkillUpgradeOutcome::UserModified;
+    }
+    // The person's tail, without the "yours" line `wrap_managed_skill`
+    // writes again (a flip back and forth never grows the file).
+    const YOURS: &str = "<!-- Content below this line is yours — K2 will never modify it. -->";
+    let tail = parsed.after_end.trim();
+    let tail = tail.strip_prefix(YOURS).unwrap_or(tail).trim();
+    let final_content = if tail.is_empty() { wrapped } else { format!("{}\n{}\n", wrapped.trim_end(), tail) };
+    log_if_err("refresh_skill_body", skill_path, atomic_write_str(skill_path, &final_content));
+    SkillUpgradeOutcome::Upgraded
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

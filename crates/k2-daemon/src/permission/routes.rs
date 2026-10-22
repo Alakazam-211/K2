@@ -185,12 +185,20 @@ fn check_why(why: Option<&str>) -> Result<String, CliResponse> {
     Ok(w.to_string())
 }
 
+/// A content hash: exactly 64 lowercase hex characters (a sha256, as a
+/// widget version or a data-source spec carries). The one long-token shape
+/// a card value may hold: `secret_shaped` flags any 40+ character token, and
+/// these name daemon-known content, never a credential.
+pub(crate) fn is_content_hash(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
 fn check_value(key: &str, s: &str) -> Result<String, CliResponse> {
     let t = s.trim();
     if t.is_empty() || t.chars().count() > 200 || t.chars().any(char::is_control) {
         return Err(err(400, code::BAD_PARAMS, format!("{key}= takes one value of 1-200 characters")));
     }
-    if secret_shaped(t) {
+    if !is_content_hash(t) && secret_shaped(t) {
         return Err(err(400, code::BAD_PARAMS, format!("{key}= looks like a secret; never put one on a card")));
     }
     Ok(t.to_string())
@@ -713,4 +721,42 @@ fn list(workspace_id: &str, area: Option<&str>, search: Option<&str>) -> CliResp
     }
     let recent: Vec<Value> = store::for_workspace(workspace_id, 20).unwrap_or_default().iter().map(summary).collect();
     ok(json!({ "agent": ws, "actions": actions, "requests": recent }))
+}
+
+#[cfg(test)]
+mod value_tests {
+    use super::{check_value, is_content_hash};
+
+    fn refused(v: &str) -> bool {
+        match check_value("spec", v) {
+            Ok(_) => false,
+            Err(r) => {
+                assert_eq!(r.status, "400 Bad Request", "{}", r.body);
+                assert!(r.body.contains("looks like a secret"), "{}", r.body);
+                true
+            }
+        }
+    }
+
+    /// A 64-hex content hash passes the secret check (widget versions,
+    /// source specs); every other 40+ character token is still refused.
+    #[test]
+    fn only_a_64_hex_content_hash_skips_the_secret_check() {
+        let hash = "0123456789abcdef".repeat(4);
+        assert!(is_content_hash(&hash));
+        assert_eq!(check_value("version", &hash).unwrap_or_else(|r| panic!("{}", r.body)), hash);
+        for v in [
+            "0123456789ABCDEF".repeat(4),                         // uppercase hex
+            format!("{}0", &hash),                                // 65 hex
+            hash[..63].to_string() + "g",                         // 64, not all hex
+            "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8s9T0".to_string(), // 40 alphanumeric
+            "Zm9vYmFyYmF6cXV4cXV1eGNvcmdlZ3JhdWx0Z2FycGx5".to_string(),
+            format!("{}xyz", "0123456789abcdef".repeat(4)),       // 67, hex + tail
+        ] {
+            assert!(!is_content_hash(&v), "{v}");
+            assert!(refused(&v), "{v} must still be refused");
+        }
+        assert!(refused("k2sk_0123456789abcdef"), "a token prefix is refused whatever its length");
+        assert!(!refused("0123456789ab"), "a 12-hex short form was never secret-shaped");
+    }
 }

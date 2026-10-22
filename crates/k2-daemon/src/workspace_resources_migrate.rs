@@ -62,17 +62,12 @@ pub fn run_once() {
 }
 
 #[cfg(test)]
-pub(crate) fn reset_for_tests() {
-    let db = k2_core::db::shared();
-    let conn = db.lock();
-    let _ = conn.execute(
-        "DELETE FROM code_migrations WHERE id = ?1",
-        rusqlite::params![MIGRATION_ID],
-    );
-}
-
-#[cfg(test)]
 mod tests {
+    //! Each test runs on its own scoped DB (`k2_core::db::scoped_for_test`).
+    //! `run_once` is a whole-table sweep gated by ONE `code_migrations` row.
+    //! On the process-wide test DB, a parallel test could stamp that row
+    //! between this test's reset and its layout insert, so this test's
+    //! `run_once` returned early and its pinned file was never backfilled.
     use super::*;
 
     fn pinned_tab(path: &str) -> serde_json::Value {
@@ -91,7 +86,7 @@ mod tests {
 
     #[test]
     fn migration_inserts_pinned_file_viewer_and_unpin_does_not_delete() {
-        reset_for_tests();
+        let _db = k2_core::db::scoped_for_test();
         let project_id = uuid::Uuid::new_v4().to_string();
         let ws_id = uuid::Uuid::new_v4().to_string();
         let path = format!("/tmp/wsres-mig-{project_id}.csv");
@@ -171,7 +166,7 @@ mod tests {
 
     #[test]
     fn html_docs_after_migrate_returns_docs_not_empty() {
-        reset_for_tests();
+        let _db = k2_core::db::scoped_for_test();
         let project_id = uuid::Uuid::new_v4().to_string();
         let ws_id = uuid::Uuid::new_v4().to_string();
         let path = format!("/tmp/wsres-htmldocs-{project_id}.html");

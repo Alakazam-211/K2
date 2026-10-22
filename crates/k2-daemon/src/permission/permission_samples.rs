@@ -698,7 +698,7 @@ fn batch_samples(out: &mut Out) {
 /// sealing and padding). Fixed server stamp and seal context.
 fn push_samples(out: &mut Out) {
     let w = billing();
-    k2_core::push_devices::upsert_device("dev-rosson-phone", "ios", "apns-token-sample", ROSSON).expect("register rosson's phone");
+    k2_core::push_devices::upsert_device("dev-rosson-phone", "apns", "apns-token-sample", ROSSON).expect("register rosson's phone");
     let mark = crate::push_routes::test_push_capture::mark();
     let req = row(&w, REQ, "compute.use", json!({}), None, Some(DANA));
     let card = ask(&w, &req);

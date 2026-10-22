@@ -471,8 +471,7 @@ fn spec_hash() -> String {
     format!("{:064}", 7)
 }
 
-/// What an agent passes as `spec=`: the first 32 characters (a full 64-hex
-/// hash is refused as secret-shaped by the request's value check today).
+/// The prefix fallback for `spec=`: the first 32 characters of the hash.
 fn spec_arg() -> String {
     spec_hash()[..super::super::held::SPEC_PREFIX_MIN].to_string()
 }
@@ -504,7 +503,8 @@ fn sources_approve_activates_plain_sources_as_one_batch() {
     let _home = crate::test_support::TempHome::new();
     let ws = seed("e2sr");
     let (a, b) = (proposed_source(&ws, None, false), proposed_source(&ws, None, false));
-    let v = ask_ok(&ws, "sources.approve", json!({ "source": [a, b], "spec": [spec_arg(), spec_arg()] }));
+    // The full specHash (a 64-hex content hash passes the value check).
+    let v = ask_ok(&ws, "sources.approve", json!({ "source": [a, b], "spec": [spec_hash(), spec_hash()] }));
     let id = id_of(&v);
     let card = card_of(&v);
     let vw = view(&ws, &card);
@@ -550,8 +550,10 @@ fn sources_approve_takes_only_plain_unchanged_sources_of_ones_own() {
     assert!(ask_refused(&ws, "sources.approve", json!({ "source": plain, "spec": &spec_arg()[..16] })).contains("changed since it was asked"), "a short prefix is not enough");
     assert!(ask_refused(&ws, "sources.approve", json!({ "source": plain, "spec": [spec_arg(), spec_arg()] })).contains("one spec= per source="));
     assert!(ask_refused(&ws, "sources.approve", json!({ "source": plain, "spec": "1".repeat(32) })).contains("changed since it was asked"));
+    assert!(ask_refused(&ws, "sources.approve", json!({ "source": plain, "spec": "1".repeat(64) })).contains("changed since it was asked"), "a full hash of another spec");
 
-    // Edited after the ask → stale at the click; nothing is approved.
+    // The prefix fallback still asks (and binds the same way): edited
+    // after the ask → stale at the click; nothing is approved.
     let v = ask_ok(&ws, "sources.approve", json!({ "source": plain, "spec": spec_arg() }));
     let id = id_of(&v);
     {

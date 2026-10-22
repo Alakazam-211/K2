@@ -31,11 +31,11 @@
 //! **Sources.** Only a *plain* source is card-able: no secret to bind, no
 //! LAN or plain-http address (`approval_kind == "one_click"`). The card is
 //! bound to the spec the agent asked about (`spec=`, the `specHash` from
-//! `k2 sources pending`, or its first [`SPEC_PREFIX_MIN`] characters: the
-//! request's value check refuses 40+-character tokens as secret-shaped, so a
-//! full 64-hex hash can't pass it yet, e2-asks.md): a source edited after
-//! the ask is `stale`, and the route's own `spec_changed` check backs that
-//! up (the click sends the full hash it matched).
+//! `k2 sources pending`; its first [`SPEC_PREFIX_MIN`] characters are taken
+//! too, a fallback from before the value check let 64-hex content hashes
+//! through): a source edited after the ask is `stale`, and the route's own
+//! `spec_changed` check backs that up (the click sends the full hash it
+//! matched).
 
 use std::collections::HashMap;
 

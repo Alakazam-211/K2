@@ -60158,6 +60158,11 @@ who = "you" if kind == "owner" else ("K2" if kind == "k2" else (m.get("handle") 
 whose = "your" if kind in ("owner", "k2") else "its"
 if verb == "claim":
     print("It\x27s yours: this version of %s now reads and writes data with your rights." % d.get("widget"))
+elif "vouched" in d and kind != "k2":
+    # Garden access lists on (G9): a sign by the person or a listed agent
+    # vouches for this version; the signer gate checks the list per Garden.
+    where = "in every Garden" if kind == "owner" else "in each Garden whose list has %s" % who
+    print("%s %s: this version of %s runs with the Garden\x27s data %s." % ("Signed as" if d.get("stamped") else "Already signed by", who, d.get("widget"), where))
 elif kind == "k2":
     print("%s is a built-in: it is K2\x27s and needs no signing." % d.get("widget"))
 elif d.get("stamped"):

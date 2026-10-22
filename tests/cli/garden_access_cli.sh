@@ -152,6 +152,16 @@ if run 0 zen widget claim tally; then
     if [ "$OUT" = 'Gardens use access lists now: `k2 zen garden access`' ]; then ok "claim prints the G20 line"; else bad "claim: $OUT"; fi
 fi
 
+echo "== sign with the switch on (G9) =="
+routes "{$ACCESS_ON, \"/cli/zen/widget/sign\": [200, {\"ok\": true, \"widget\": \"tally\", \"hash\": \"abcdef012345\", \"madeBy\": {\"kind\": \"agent\", \"handle\": \"ana\"}, \"stamped\": true, \"vouched\": true}]}"
+if run 0 zen widget sign tally; then
+    if [ "$OUT" = "Signed as ana: this version of tally runs with the Garden's data in each Garden whose list has ana." ]; then ok "sign (on) words"; else bad "sign (on): $OUT"; fi
+fi
+routes "{$ACCESS_ON, \"/cli/zen/widget/sign\": [200, {\"ok\": true, \"widget\": \"tally\", \"hash\": \"abcdef012345\", \"madeBy\": {\"kind\": \"agent\", \"handle\": \"ana\"}, \"stamped\": false}]}"
+if run 0 zen widget sign tally; then
+    case "$OUT" in "Already signed by ana (the first signer"*) ok "sign (off answer) keeps today's words" ;; *) bad "sign (off answer): $OUT" ;; esac
+fi
+
 echo "== an agent's delete asks the person (G19) =="
 routes "{$ACCESS_ON, \"/cli/zen/garden/delete\": [403, {\"ok\": false, \"error\": \"garden_delete_person\", \"garden\": \"g-1a2b3c4d\", \"name\": \"Sales board\", \"card\": {\"card\": {\"id\": \"c1\"}, \"request\": \"r1\"}, \"message\": \"Only the person deletes a Garden. K2 asked them to delete Sales board (a card on their Thread with you).\"}]}"
 if run 3 zen garden delete "Sales board"; then

@@ -229,8 +229,10 @@ mod tests {
         assert_eq!(unsafe { libc::geteuid() }, 0, "run as root");
         let home = std::path::PathBuf::from(format!("/var/lib/k2-uds-test-{}", std::process::id()));
         std::fs::create_dir_all(&home).unwrap();
-        // The test runs alone (--test-threads=1): the daemon's home is $HOME.
-        std::env::set_var("HOME", &home);
+        // The daemon's home is $HOME: set under the one env lock, restored
+        // when the test ends (not TempHome: the point is a home under
+        // /var/lib, outside /home, /root and the temp dir).
+        let _home = k2_core::test_env::EnvVar::set("HOME", &home);
         let sid = k2_core::session::SessionId::new();
         let _l = crate::cell_uds::bind_cell_socket(&sid).unwrap();
         let sock = crate::cell_uds::cell_socket_path(&sid);

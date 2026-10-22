@@ -2510,7 +2510,7 @@ mod tests {
         assert_eq!(event.target_usernames(), Some(&["owner".to_string()][..]));
         let stamp = PushStamp { subdomain: "rosson".into(), instance_id: TEST_INSTANCE.into() };
         let p = K2Cloud::payload(&event, &stamp, TEST_KEY);
-        let plain = K2Cloud::payload(&PushEvent::ThreadPost(base), &stamp, TEST_KEY);
+        let plain = K2Cloud::payload(&PushEvent::ThreadPost(ThreadPush { agent_name: "billing".into(), ..base }), &stamp, TEST_KEY);
         let mut want = plain["data"].as_object().expect("data").clone();
         want.insert("requestId".into(), serde_json::json!("pr_7f3a2c"));
         want.insert("permission".into(), serde_json::json!("1"));

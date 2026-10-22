@@ -2897,12 +2897,18 @@ pub fn spawn_card_expiry() {
         return;
     }
     let r = std::thread::Builder::new().name("thread-card-expiry".into()).spawn(|| loop {
+        // Each pass in the daemon's runtime: an expired card's callback and
+        // a permission request's `expired` turn wake the agent, which spawns
+        // its session (`crate::rt`).
+        let rt = crate::rt::for_loop_pass();
+        let entered = rt.as_ref().map(|h| h.enter());
         let now = overlay::now_secs();
         sweep_expired_cards(now);
         // Permission cards (rev 3.1 §6.2): re-check open requests and
         // republish any that became "Already on" (a no-op while the server
         // switch is off).
         crate::permission::view::sweep_already_done(now);
+        drop(entered);
         std::thread::sleep(std::time::Duration::from_secs(60));
     });
     if let Err(e) = r {

@@ -1090,7 +1090,11 @@ pub fn finalize(job_id: &str) {
     };
     let session = job.session_id.clone();
     let id = job.id.clone();
-    std::thread::spawn(move || deliver_completion(&id, session.as_deref(), ws_path.as_deref(), &text));
+    // In the daemon's runtime: a wake spawns the agent's session (`crate::rt`).
+    let spawned = crate::rt::spawn("compute-done", move || deliver_completion(&id, session.as_deref(), ws_path.as_deref(), &text));
+    if let Err(e) = spawned {
+        k2_core::log_debug!("[compute] job {} completion not delivered: {e}", job.id);
+    }
 }
 
 /// Live message to the requesting session, else the workspace inbox.

@@ -1573,7 +1573,8 @@ fn deliver(ws_id: Option<&str>, session: Option<&str>, title: &str, text: &str) 
         let ws_path = ws_id.and_then(crate::compute_routes::ws_by_id).map(|w| w.path);
         let session = session.map(str::to_string);
         let (title, text) = (title.to_string(), text.to_string());
-        std::thread::spawn(move || {
+        // In the daemon's runtime: a wake spawns the agent's session (`crate::rt`).
+        let spawned = crate::rt::spawn("compute-admin-note", move || {
             if let Some(sid) = session.as_deref().filter(|s| !s.is_empty()) {
                 let r = crate::workspace_msg::deliver_live(sid, &text, "compute", "", true, crate::workspace_msg::DEFAULT_WAKE_TIMEOUT);
                 if r.success {
@@ -1589,6 +1590,9 @@ fn deliver(ws_id: Option<&str>, session: Option<&str>, title: &str, text: &str) 
                 }
             }
         });
+        if let Err(e) = spawned {
+            log_debug!("[compute] admin note not delivered: {e}");
+        }
     }
 }
 

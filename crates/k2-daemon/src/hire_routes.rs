@@ -221,54 +221,56 @@ fn run_launches(jobs: Vec<apply::LaunchJob>, caller: HireCaller, instance: Strin
     if jobs.is_empty() {
         return;
     }
-    std::thread::Builder::new()
-        .name("hire-launch".into())
-        .spawn(move || {
-            for job in jobs {
-                let launched = crate::canonical_session::ensure_canonical_session(&job.path);
-                let (result, reason) = match (&launched, job.brief.as_deref()) {
-                    (Err(e), _) => ("failed", Some(format!("launch {}: {e}", job.handle))),
-                    (Ok(_), None) => ("ok", None),
-                    (Ok(_), Some(brief)) => {
-                        let from = match &caller {
-                            HireCaller::ApiKey { label: Some(l), .. } => format!("app:{l}"),
-                            HireCaller::ApiKey { id, .. } => format!("app:{}", &id[..id.len().min(8)]),
-                            // 0.46.0 stamp rule: the linked username, else `owner`.
-                            _ => k2_core::person_name::sender_identity_now(k2_core::person_name::Sender::OwnerToken),
-                        };
-                        let r = deliver_recorded(
-                            &job.handle,
-                            brief,
-                            &from,
-                            "",
-                            true,
-                            crate::workspace_msg::DEFAULT_WAKE_TIMEOUT,
-                            "v1",
-                            &Sender::from_hire_caller(&caller, on_behalf_of.clone()),
-                        );
-                        if r.0.success {
-                            ("ok", None)
-                        } else {
-                            ("failed", Some(format!("brief {}: {}", job.handle, r.0.reason.clone().unwrap_or_default())))
-                        }
+    // In the daemon's runtime: starting a session needs one (`crate::rt`).
+    let instance_for_log = instance.clone();
+    let spawned = crate::rt::spawn("hire-launch", move || {
+        for job in jobs {
+            let launched = crate::canonical_session::ensure_canonical_session(&job.path);
+            let (result, reason) = match (&launched, job.brief.as_deref()) {
+                (Err(e), _) => ("failed", Some(format!("launch {}: {e}", job.handle))),
+                (Ok(_), None) => ("ok", None),
+                (Ok(_), Some(brief)) => {
+                    let from = match &caller {
+                        HireCaller::ApiKey { label: Some(l), .. } => format!("app:{l}"),
+                        HireCaller::ApiKey { id, .. } => format!("app:{}", &id[..id.len().min(8)]),
+                        // 0.46.0 stamp rule: the linked username, else `owner`.
+                        _ => k2_core::person_name::sender_identity_now(k2_core::person_name::Sender::OwnerToken),
+                    };
+                    let r = deliver_recorded(
+                        &job.handle,
+                        brief,
+                        &from,
+                        "",
+                        true,
+                        crate::workspace_msg::DEFAULT_WAKE_TIMEOUT,
+                        "v1",
+                        &Sender::from_hire_caller(&caller, on_behalf_of.clone()),
+                    );
+                    if r.0.success {
+                        ("ok", None)
+                    } else {
+                        ("failed", Some(format!("brief {}: {}", job.handle, r.0.reason.clone().unwrap_or_default())))
                     }
-                };
-                let db = k2_core::db::shared();
-                let conn = db.lock();
-                ledger::event(
-                    &conn,
-                    "agent-launch",
-                    &caller,
-                    Some(&instance),
-                    None,
-                    on_behalf_of.as_deref(),
-                    result,
-                    reason.as_deref(),
-                    Some(&serde_json::json!({ "handle": job.handle, "brief": job.brief.is_some() })),
-                );
-            }
-        })
-        .ok();
+                }
+            };
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            ledger::event(
+                &conn,
+                "agent-launch",
+                &caller,
+                Some(&instance),
+                None,
+                on_behalf_of.as_deref(),
+                result,
+                reason.as_deref(),
+                Some(&serde_json::json!({ "handle": job.handle, "brief": job.brief.is_some() })),
+            );
+        }
+    });
+    if let Err(e) = spawned {
+        k2_core::log_debug!("[hire] launches for {instance_for_log} not started: {e}");
+    }
 }
 
 // ── recorded delivery (S7) ───────────────────────────────────────────

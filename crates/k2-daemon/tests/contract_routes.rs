@@ -160,11 +160,11 @@ fn exposure_counts_are_pinned() {
         let row = c.verb(verb).unwrap_or_else(|| panic!("{verb} row"));
         assert!(row.exposed_to(Exposure::App) && !row.exposed_to(Exposure::GardenLocal), "{verb}: App only");
     }
-    assert_eq!(c.catalog_version, 19);
+    assert_eq!(c.catalog_version, 20);
     assert_eq!(
         c.verbs.len(),
-        171,
-        "today's 38 bridge verbs (thread.inbox joined in 0.46.3) plus the frame rows theme.changed, canvas.setHitRegions, window.startDrag, sources.*, the 15 Garden data rows, the 66 app rows (5 on both transports) and widget.self, plus Thread parity 0.46.3's 4 widget and 5 app rows, plus thread.mute, plus App project chat's 5 app rows, plus App mobile access's 7 app rows, plus app-room-stream's thread.stream app row, plus the nine wallet.* app rows (0.46.3), plus the counts-only ear's thread.activity app row (0.46.3), plus permission cards' 9 unexposed permission.* rows (7 + A2's note and undo person routes; 0.46.3, no catalog bump)"
+        177,
+        "today's 38 bridge verbs (thread.inbox joined in 0.46.3) plus the frame rows theme.changed, canvas.setHitRegions, window.startDrag, sources.*, the 15 Garden data rows, the 66 app rows (5 on both transports) and widget.self, plus Thread parity 0.46.3's 4 widget and 5 app rows, plus thread.mute, plus App project chat's 5 app rows, plus App mobile access's 7 app rows, plus app-room-stream's thread.stream app row, plus the nine wallet.* app rows (0.46.3), plus the counts-only ear's thread.activity app row (0.46.3), plus permission cards' 9 unexposed permission.* rows (7 + A2's note and undo person routes; 0.46.3, no catalog bump), plus catalog v20's Garden columns and agent list rows (layout.get/set/toggle/subscribe, agents.show, conversation.setContext; 0.46.3 r10)"
     );
     // Permission cards (0.46.3 Beta): K2's own verbs, never a widget's or
     // an App's (App guests never see a permission card).
@@ -199,6 +199,9 @@ fn every_feature_is_a_boot_status_key() {
     // Listed only while the "Permission cards" switch is on (lane B's
     // dynamic key); this test leaves the switch off.
     known.insert(k2_core::permission::FEATURE_KEY);
+    // Catalog v20 (0.46.3 r10): conversation.setContext's key; the context
+    // lane puts it in /boot-status (prd-garden-column-collapse-and-agent-list-v1 §7).
+    known.insert("thread-context-v1");
     for v in &catalog().verbs {
         assert!(known.contains(v.feature.as_str()), "{}: feature {} isn't a /boot-status key", v.verb, v.feature);
     }
@@ -298,8 +301,9 @@ fn generated_zen_verbs_holds_exactly_the_bridge_rows() {
         }
     }
     // Today's 37 plus Thread parity 0.46.3's thread.attachment, thread.open,
-    // thread.links and thread.pickFiles, plus app-room-stream's thread.inbox.
-    assert_eq!(generated.len(), 42);
+    // thread.links and thread.pickFiles, plus app-room-stream's thread.inbox,
+    // plus catalog v20's agents.show and conversation.setContext.
+    assert_eq!(generated.len(), 44);
 }
 
 // ── TUWA3: no GET side effects, headless ────────────────────────────────

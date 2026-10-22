@@ -51,15 +51,18 @@ pub const REGEN: &str = "run `cargo run -p k2-core --bin contract-gen`";
 /// and SDK helpers, contract-garden-data-v1 §7.2/§7.4, raised it to 24;
 /// 0.46.1's resilient subscriptions, typed errors and shape guards to 28;
 /// the same release's garden-local guests.*, room.members, app.* and
-/// widget.self rows in the verb table to 32).
-pub const FRAME_MAX_BYTES: usize = 32 * 1024;
+/// widget.self rows in the verb table to 32; Garden columns and the agent
+/// list's six rows, catalog v20 (0.46.3 r10, prd-garden-column-collapse-
+/// and-agent-list-v1 CA2), to 40).
+pub const FRAME_MAX_BYTES: usize = 40 * 1024;
 
 /// The guide page's line cap (FC33; 80 until Garden data's 15 rows and
 /// their two cap groups, contract-garden-data-v1 §7.2; 112 since Thread
 /// parity 0.46.3 added thread.attachment/open/links/pickFiles/markRead;
 /// 128 since the Garden person rows, catalog v17: 12 rows and the files,
-/// tickets and activity cap groups).
-pub const GUIDE_MAX_LINES: usize = 128;
+/// tickets and activity cap groups; 136 since catalog v20's layout.*,
+/// agents.show and conversation.setContext rows).
+pub const GUIDE_MAX_LINES: usize = 136;
 
 /// Error codes every call may answer; the guide states them once.
 pub const ALWAYS_ERRORS: &[&str] = &["cap_not_granted", "verb_unavailable", "failed"];
@@ -790,15 +793,18 @@ mod tests {
     #[test]
     fn zen_verbs_is_todays_37_plus_nothing_else() {
         let rows = bridge_rows(catalog());
-        assert_eq!(rows.len(), 42, "ZEN_VERBS: today's 37 plus Thread parity 0.46.3's thread.attachment, thread.open, thread.links, thread.pickFiles, plus app-room-stream's thread.inbox (0.46.3)");
+        assert_eq!(rows.len(), 44, "ZEN_VERBS: today's 37 plus Thread parity 0.46.3's thread.attachment, thread.open, thread.links, thread.pickFiles, plus app-room-stream's thread.inbox (0.46.3), plus catalog v20's agents.show and conversation.setContext");
+        for frame in ["layout.get", "layout.set", "layout.toggle", "layout.subscribe"] {
+            assert!(!rows.iter().any(|v| v.verb == frame), "{frame} is a frame row (no cap), never in ZEN_VERBS");
+        }
         assert!(!rows.iter().any(|v| v.verb == "theme.changed"), "a frame row is never in ZEN_VERBS");
         let widget: Vec<&str> = catalog().widget_callable_verbs().iter().map(|v| v.verb.as_str()).collect();
         assert_eq!(
             widget.len(),
-            63,
-            "UW16 + UWB10: 16 widget verbs, plus the whole canvas (canvas.setHitRegions, window.startDrag), plus Garden v3's six sources.* verbs, plus Garden data's 15 garden-local rows, plus RS-A15's guests.rooms / guests.setRooms (app + garden-local), plus room-scope 0.46.1's room.members, app.self, app.usage and widget.self, plus Thread parity 0.46.3's thread.attachment, thread.open, thread.links, thread.pickFiles and thread.markRead, plus the 12 Garden person rows (catalog v17), plus app-room-stream's thread.inbox (0.46.3)"
+            69,
+            "UW16 + UWB10: 16 widget verbs, plus the whole canvas (canvas.setHitRegions, window.startDrag), plus Garden v3's six sources.* verbs, plus Garden data's 15 garden-local rows, plus RS-A15's guests.rooms / guests.setRooms (app + garden-local), plus room-scope 0.46.1's room.members, app.self, app.usage and widget.self, plus Thread parity 0.46.3's thread.attachment, thread.open, thread.links, thread.pickFiles and thread.markRead, plus the 12 Garden person rows (catalog v17), plus app-room-stream's thread.inbox (0.46.3), plus catalog v20's layout.get/set/toggle/subscribe, agents.show and conversation.setContext"
         );
-        assert_eq!(catalog().verbs_exposed_to(Exposure::Widget).len(), 30, "the bridge's own rows (thread.inbox joined in 0.46.3)");
+        assert_eq!(catalog().verbs_exposed_to(Exposure::Widget).len(), 36, "the bridge's own rows (thread.inbox joined in 0.46.3; catalog v20's six rows)");
         for never in ["zen.exit", "controls.bind", "homes.list", "agents.local", "agents.add", "agents.home", "agents.setHome",
             "thread.void", "gardens.create", "gardens.rename", "gardens.delete", "app.open"]
         {

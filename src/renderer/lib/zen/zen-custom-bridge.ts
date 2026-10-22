@@ -627,6 +627,15 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
       inner('compose.draft', address, needText('compose.draft', args[1]))
       return null
     },
+    // ── Garden columns and the agent list (catalog v20, 0.46.3 r10) ────
+    // Day-0 stubs (prd-garden-column-collapse-and-agent-list-v1 §7): each
+    // lane fills its own body. layout.* (frame-only, lane A),
+    // agents.show (lane B), conversation.setContext (lane C).
+    'layout.get': () => refuse('verb_unavailable', 'layout.get isn’t available here.'),
+    'layout.set': () => refuse('verb_unavailable', 'layout.set isn’t available here.'),
+    'layout.toggle': () => refuse('verb_unavailable', 'layout.toggle isn’t available here.'),
+    'agents.show': () => refuse('verb_unavailable', 'agents.show isn’t available here.'),
+    'conversation.setContext': () => refuse('verb_unavailable', 'conversation.setContext isn’t available here.'),
     // ── Garden v3 data sources (contract-sources-v1 §6) ────────────────
     'sources.list': () => {
       if (!deps.sources) refuse('verb_unavailable', 'sources.list isn’t available here.')
@@ -702,6 +711,8 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
     (args: unknown[], push: (v: unknown) => void, fail: (error: CatalogWireError) => void) => () => void
   > = {
     'theme.changed': (_args, push) => deps.onThemeChange(() => push(deps.theme())),
+    // Day-0 stub (catalog v20): lane A fills it with deps.layout.
+    'layout.subscribe': () => refuse('verb_unavailable', 'layout.subscribe isn’t available here.'),
     'agents.subscribe': (_args, push) => {
       let last = ''
       return inner('agents.subscribe', (rows: ZenAgentRow[]) => {

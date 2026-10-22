@@ -56,6 +56,12 @@ describe('day-0: verb tables', () => {
         expect(verb in ZEN_VERBS, verb).toBe(false)
         continue
       }
+      // Catalog v20 (0.46.3 r10): collapsible columns, frame-only (no cap).
+      if (verb.startsWith('layout.')) {
+        expect(row).toEqual({ cap: null, reach: 'local', kind: verb === 'layout.subscribe' ? 'subscribe' : 'call' })
+        expect(verb in ZEN_VERBS, verb).toBe(false)
+        continue
+      }
       // Garden v3: the data sources verbs, answered by the custom layer only.
       if (verb.startsWith('sources.')) {
         expect(row.cap).toBe('sources:read')

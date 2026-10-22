@@ -50,7 +50,7 @@ import type { CatalogErrorCode } from '../contract/catalog-types'
 import { isZenTemplateShort } from './zen-templates'
 
 // UWA4: generated from the verb catalog (`contract-gen`), with the custom
-// widgets' own allowlist beside it. A pinned test keeps it today's 37.
+// widgets' own allowlist beside it. A pinned test keeps its count (44 at catalog v20).
 export { ZEN_VERBS }
 
 export type ZenVerb = keyof typeof ZEN_VERBS

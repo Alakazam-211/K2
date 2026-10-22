@@ -24,9 +24,10 @@ import { SEALED_FRAME_GUARD } from '../sealed-frame-guard'
 
 /** TUWA6: the runtime text the frame gets is at most this big (16 KB
  *  until Garden data's verbs and SDK helpers, contract-garden-data-v1 §7;
- *  32 KB with 0.46.1's SDK and its garden-local App rows; the Rust cap is
- *  `FRAME_MAX_BYTES`). */
-export const K2_FRAME_MAX_BYTES = 32 * 1024
+ *  32 KB with 0.46.1's SDK and its garden-local App rows; 40 KB with
+ *  catalog v20's Garden columns and agent list rows, 0.46.3 r10; the Rust
+ *  cap is `FRAME_MAX_BYTES`). */
+export const K2_FRAME_MAX_BYTES = 40 * 1024
 
 /** k2-frame.js: the table, then the runtime. */
 export function k2FrameScript(): string {

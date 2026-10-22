@@ -60039,7 +60039,9 @@ cmd_zen_widget() {
         cmd_zen_widget_show "$@"
         return
     fi
-    if [ "$verb" = "history" ]; then
+    # Garden access (G19): only with the switch on; off, 0.46.3's unknown
+    # subcommand (A6, off-golden F2).
+    if [ "$verb" = "history" ] && _zen_access_on; then
         cmd_zen_access_history widget "$@"
         return
     fi
@@ -60476,12 +60478,14 @@ cmd_zen_garden() {
         cmd_zen_garden_put "$@"
         return
     fi
-    if [ "$verb" = "access" ]; then
-        cmd_zen_garden_access "$@"
-        return
-    fi
-    if [ "$verb" = "history" ]; then
-        cmd_zen_access_history garden "$@"
+    # Garden access (G19): only with the switch on; off, 0.46.3's unknown
+    # subcommand (A6, off-golden F2).
+    if { [ "$verb" = "access" ] || [ "$verb" = "history" ]; } && _zen_access_on; then
+        if [ "$verb" = "access" ]; then
+            cmd_zen_garden_access "$@"
+        else
+            cmd_zen_access_history garden "$@"
+        fi
         return
     fi
     local as_json=false texting=false force=false at="" new_from="" raw body
@@ -60614,7 +60618,11 @@ print(json.dumps({"garden": os.environ["ZG"], "locked": os.environ["ZL"] == "loc
             cmd_help_zen
             ;;
         *)
-            echo "Unknown 'k2 zen garden' subcommand: $verb (list, new, rename, reorder, template, delete, lock, unlock, access, history)" >&2
+            if [ "$verb" != "access" ] && [ "$verb" != "history" ] && _zen_access_on; then
+                echo "Unknown 'k2 zen garden' subcommand: $verb (list, new, rename, reorder, template, delete, lock, unlock, access, history)" >&2
+            else
+                echo "Unknown 'k2 zen garden' subcommand: $verb (list, new, rename, reorder, template, delete, lock, unlock)" >&2
+            fi
             exit 2
             ;;
     esac

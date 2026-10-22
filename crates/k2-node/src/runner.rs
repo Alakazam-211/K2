@@ -207,11 +207,17 @@ pub fn default_sampler() -> Arc<dyn RssSampler> {
     Arc::new(PsSampler)
 }
 
+/// The job root's folders bound over the job's /tmp and /var/tmp under
+/// the Linux wall (its `TMPDIR` is the first).
+pub const JOB_TMP: &str = "tmp";
+pub const JOB_VAR_TMP: &str = "var-tmp";
+
 /// Job dir parts.
 pub struct JobDirs {
     pub root: PathBuf,
     pub home: PathBuf,
     pub tmp: PathBuf,
+    pub var_tmp: PathBuf,
     pub src: PathBuf,
     pub dirty: PathBuf,
     pub log: PathBuf,
@@ -222,7 +228,8 @@ impl JobDirs {
     pub fn new(root: PathBuf) -> Self {
         Self {
             home: root.join("home"),
-            tmp: root.join("tmp"),
+            tmp: root.join(JOB_TMP),
+            var_tmp: root.join(JOB_VAR_TMP),
             src: root.join("src"),
             dirty: root.join("dirty"),
             log: root.join("log"),
@@ -242,7 +249,7 @@ impl JobDirs {
     /// are group-rwx (0770; still closed to everyone else).
     pub fn create_for(&self, shared: bool) -> Result<(), String> {
         crate::util::mkdir_mode(&self.root, if shared { 0o1770 } else { 0o700 })?;
-        for d in [&self.home, &self.tmp] {
+        for d in [&self.home, &self.tmp, &self.var_tmp] {
             if shared {
                 crate::util::mkdir_mode(d, 0o770)?;
             } else {

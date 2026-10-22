@@ -176,12 +176,16 @@ impl Node {
         self.tenant_over_disk_with(t, |gb| u64::from(gb) << 30)
     }
 
-    fn tenant_over_disk_with(&self, t: &Tenant, budget: impl Fn(u32) -> u64) -> bool {
+    pub(super) fn tenant_over_disk_with(&self, t: &Tenant, budget: impl Fn(u32) -> u64) -> bool {
         if t.is_owner() {
             return false;
         }
         match crate::admin::jobs::tenant_entry(&self.layout().config, t.slot) {
-            Ok(e) => self.tenant_disk_bytes(t) > budget(e.disk_gb),
+            Ok(e) => {
+                // A walk that hit its caps counts as over (review B F1).
+                let (bytes, capped) = disk_usage_walk(&t.paths.root());
+                capped || bytes > budget(e.disk_gb)
+            }
             Err(_) => false,
         }
     }
@@ -1002,25 +1006,42 @@ pub(super) fn finish_backoff(base: Duration, n: u32) -> Duration {
 /// Allocated bytes under `root` (V74), no link followed, at most
 /// 2 million entries and 256 levels.
 pub fn disk_usage(root: &Path) -> u64 {
+    disk_usage_walk(root).0
+}
+
+/// [`disk_usage`], and whether the walk hit its caps (2 million entries
+/// or 256 levels): then the bytes are a floor, not the size, and a tenant
+/// whose root does that counts as over its share (security review B, F1:
+/// data hidden below the caps went uncounted).
+pub fn disk_usage_walk(root: &Path) -> (u64, bool) {
     use std::os::unix::fs::MetadataExt;
     let mut total = 0u64;
     let mut seen = 0u64;
+    let mut capped = false;
     let mut stack = vec![(root.to_path_buf(), 0u32)];
     while let Some((p, depth)) = stack.pop() {
         let Ok(m) = std::fs::symlink_metadata(&p) else { continue };
-        total += m.blocks() * 512;
+        total = total.saturating_add(m.blocks() * 512);
         seen += 1;
-        if seen > 2_000_000 {
+        if seen > WALK_MAX_ENTRIES {
+            capped = true;
             break;
         }
-        if m.is_dir() && depth < 256 {
+        if m.is_dir() {
+            if depth >= WALK_MAX_DEPTH {
+                capped = true;
+                continue;
+            }
             if let Ok(rd) = std::fs::read_dir(&p) {
                 stack.extend(rd.flatten().map(|e| (e.path(), depth + 1)));
             }
         }
     }
-    total
+    (total, capped)
 }
+
+const WALK_MAX_ENTRIES: u64 = 2_000_000;
+pub(super) const WALK_MAX_DEPTH: u32 = 256;
 
 #[cfg(test)]
 pub(super) mod tests {

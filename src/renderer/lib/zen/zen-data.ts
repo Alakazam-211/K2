@@ -132,7 +132,7 @@ import { exitZen, zenShownNow } from './zen-view'
 import type { ZenResolvedPage, ZenWidgetDecl } from './zen-page'
 import { useZenGardenHomesStore, zenGardenHomeKey } from './zen-garden-homes'
 import { ZEN_CUSTOM_KIND } from './zen-page'
-import { useZenServerRosters, zenWidgetReachRows } from './zen-custom-scope'
+import { requestZenServerRoster, useZenServerRosters, zenRosterWorkspaces, zenWidgetReachRows } from './zen-custom-scope'
 import { zenWidgetMayRun, type ZenCustomWidgetPayload } from './zen-custom-types'
 import { useZenGardensStore } from './zen-gardens'
 import { draftZenCompose } from './zen-compose-drafts'
@@ -923,13 +923,18 @@ function rowAvatar(row: HomeRow, onConnected: boolean): string | null {
 }
 
 /** Whether a row's workspace is pinned on its own server: the window
- *  server's project list, else its open room's (another server). */
-function rowPinned(row: HomeRow, onConnected: boolean, roomEntry: HomeRoomEntry | undefined): boolean {
-  const list = onConnected
-    ? useProjectsStore.getState().projects
-    : (roomEntry?.room?.projects.getState().projects ?? null)
-  if (!list) return false
-  return Boolean(findWorkspaceForRow(list, row)?.pinned)
+ *  server's project list; for another server, its open room's live list,
+ *  else that server's cached `projects/list` (`zenRosterWorkspaces`, read
+ *  on the preview poll's cadence). A closed or never-opened room keeps
+ *  its pin: Garden 1's pin grid no longer drops remote agents. */
+export function rowPinned(row: HomeRow, onConnected: boolean, roomEntry: HomeRoomEntry | undefined): boolean {
+  if (onConnected) return Boolean(findWorkspaceForRow(useProjectsStore.getState().projects, row)?.pinned)
+  const roomList = roomEntry?.room?.projects.getState().projects
+  const inRoom = roomList ? findWorkspaceForRow(roomList, row) : null
+  if (inRoom) return Boolean(inRoom.pinned)
+  const hostKey = parseHomeAddress(row.address)?.host
+  if (!hostKey) return false
+  return Boolean(findWorkspaceForRow([...zenRosterWorkspaces(hostKey)], row)?.pinned)
 }
 
 /** A row's color: its workspace on the window's server, else in its open
@@ -1056,6 +1061,9 @@ function rowFor(row: HomeRow, index: number, view: ZenView | null): ZenAgentRow 
   else if (state === 'sign-in') detail = detail ?? `Sign in to ${where} to message ${row.label}.`
   else if (state === 'not-found') detail = grokRow ? (status.detail ?? `${row.label} is not on ${where} any more.`) : `${row.label} is not on ${where} any more.`
   else if (state === 'ok') detail = null
+  // Another server's pins without an open room (`rowPinned`): its
+  // `projects/list`, read once here; the preview poll refreshes it.
+  if (!onConnected && state === 'ok' && !grokRow && hostKey) requestZenServerRoster(hostKey)
   const avatarUrl = rowAvatar(row, onConnected)
   return {
     address: row.address,
@@ -1230,6 +1238,14 @@ export async function refreshZenPreviews(): Promise<void> {
     const list = byHost.get(r.hostKey) ?? []
     list.push(r)
     byHost.set(r.hostKey, list)
+  }
+  // Pins on other servers follow this cadence (one `projects/list` per
+  // server; the old list stays until the new one lands, so no blink).
+  const now = Date.now()
+  for (const [hostKey, hostRows] of byHost) {
+    if (isConnectedHost(hostKey)) continue
+    if (hostRows.every((r) => grokBotIdFromAddress(r.address) !== null)) continue
+    requestZenServerRoster(hostKey, now, { refresh: true })
   }
   await Promise.all(
     [...byHost].map(async ([hostKey, hostRows]) => {

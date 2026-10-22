@@ -33,11 +33,26 @@ import {
 /** R7: at most this many servers live per widget. */
 export const ZEN_WIDGET_MAX_SERVERS = 8
 
-// ── Server rosters (this computer's agents when the window is elsewhere) ──
+// ── Server rosters (this computer's agents when the window is elsewhere;
+//    another server's pins) ──
+
+/** One workspace on a server as its `projects/list` gives it: enough to
+ *  match a Home row (`findWorkspaceForRow`) and read its pin. */
+export interface ZenRosterWorkspace {
+  id: string
+  name: string
+  handle: string | null
+  /** `projects.pinned` on that server (the Agents page's pin). */
+  pinned: boolean
+}
 
 interface Roster {
   status: 'loading' | 'ready' | 'failed'
   rows: HomeRow[]
+  /** The same list with pins: an agent on another server reads its pin
+   *  here when its room is not open (Garden 1's pin grid). Kept through a
+   *  refresh and a failed one, so a pin never blinks out. */
+  workspaces: ZenRosterWorkspace[]
   at: number
 }
 
@@ -54,13 +69,17 @@ function isObj(v: unknown): v is Record<string, unknown> {
   return v !== null && typeof v === 'object' && !Array.isArray(v)
 }
 
-/** `projects/list` → rows on `hostKey`. */
-export function rosterRowsFrom(raw: unknown, hostKey: string): HomeRow[] {
+function rosterList(raw: unknown): unknown[] {
   const list = Array.isArray(raw) ? raw : isObj(raw) && Array.isArray(raw.projects) ? raw.projects : null
   if (!list) throw new Error('projects/list: not a list')
+  return list
+}
+
+/** `projects/list` → rows on `hostKey`. */
+export function rosterRowsFrom(raw: unknown, hostKey: string): HomeRow[] {
   const out: HomeRow[] = []
   const seen = new Set<string>()
-  for (const w of list) {
+  for (const w of rosterList(raw)) {
     if (!isObj(w) || typeof w.id !== 'string' || typeof w.name !== 'string') continue
     const handle = workspaceHandle({ handle: typeof w.handle === 'string' ? w.handle : null, name: w.name })
     if (!handle) continue
@@ -72,26 +91,59 @@ export function rosterRowsFrom(raw: unknown, hostKey: string): HomeRow[] {
   return out
 }
 
+/** `projects/list` → workspaces with their pins. The daemon sends
+ *  `pinned` as 0/1 (a boolean is read too). */
+export function rosterWorkspacesFrom(raw: unknown): ZenRosterWorkspace[] {
+  const out: ZenRosterWorkspace[] = []
+  for (const w of rosterList(raw)) {
+    if (!isObj(w) || typeof w.id !== 'string' || typeof w.name !== 'string') continue
+    out.push({
+      id: w.id,
+      name: w.name,
+      handle: typeof w.handle === 'string' ? w.handle : null,
+      pinned: w.pinned === true || (typeof w.pinned === 'number' && w.pinned !== 0),
+    })
+  }
+  return out
+}
+
 /** Ask for `hostKey`'s workspaces once (no-op while loading, ready, or a
- *  recent failure). Not a render-path fetch of the window's projects. */
-export function requestZenServerRoster(hostKey: string, now: number = Date.now()): void {
+ *  recent failure). `refresh` re-reads a ready roster (the Zen preview
+ *  poll's cadence); never while one is in flight, nor inside a failed
+ *  one's retry window. Not a render-path fetch of the window's projects. */
+export function requestZenServerRoster(hostKey: string, now: number = Date.now(), opts: { refresh?: boolean } = {}): void {
   if (rosterAsked.has(hostKey)) return
   const cur = useZenServerRosters.getState().rosters[hostKey]
-  if (cur && (cur.status !== 'failed' || now - cur.at < ROSTER_RETRY_MS)) return
+  if (cur) {
+    if (cur.status === 'loading') return
+    if (cur.status === 'failed' && now - cur.at < ROSTER_RETRY_MS) return
+    if (cur.status === 'ready' && !opts.refresh) return
+  }
   rosterAsked.add(hostKey)
-  const set = (r: Roster): void =>
-    useZenServerRosters.setState((s) => ({ rosters: { ...s.rosters, [hostKey]: r } }))
+  // Rows and pins carry over until a read replaces them (no blink).
+  const set = (patch: Pick<Roster, 'status' | 'at'> & Partial<Pick<Roster, 'rows' | 'workspaces'>>): void =>
+    useZenServerRosters.setState((s) => {
+      const prev = s.rosters[hostKey]
+      return { rosters: { ...s.rosters, [hostKey]: { rows: prev?.rows ?? [], workspaces: prev?.workspaces ?? [], ...patch } } }
+    })
   // Never a store write during a render: everything happens next microtask.
   queueMicrotask(() => {
-    set({ status: 'loading', rows: cur?.rows ?? [], at: now })
+    set({ status: 'loading', at: now })
     rosterAsked.delete(hostKey)
     void daemonCliGet<unknown>(scopeForHost(hostKey), 'projects/list')
-      .then((raw) => set({ status: 'ready', rows: rosterRowsFrom(raw, hostKey), at: Date.now() }))
+      .then((raw) =>
+        set({ status: 'ready', rows: rosterRowsFrom(raw, hostKey), workspaces: rosterWorkspacesFrom(raw), at: Date.now() }),
+      )
       .catch((err: unknown) => {
         console.warn(`[zen] agents on ${hostKey} unavailable for a widget:`, err)
-        set({ status: 'failed', rows: cur?.rows ?? [], at: Date.now() })
+        set({ status: 'failed', at: Date.now() })
       })
   })
+}
+
+/** `hostKey`'s cached workspaces with pins (empty: never read). */
+export function zenRosterWorkspaces(hostKey: string): readonly ZenRosterWorkspace[] {
+  return useZenServerRosters.getState().rosters[hostKey]?.workspaces ?? []
 }
 
 // ── The Garden's reach ─────────────────────────────────────────────────

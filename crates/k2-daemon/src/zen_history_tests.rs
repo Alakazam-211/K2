@@ -348,6 +348,28 @@ fn merged_lines_page_with_the_events_once_each() {
 }
 
 #[test]
+fn access_lines_name_the_agent_and_a_gone_workspace_keeps_only_its_id() {
+    let e = env();
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let ch = ga::Change::new(ga::Via::Settings, &Actor::Owner, now());
+        assert!(ga::add(&conn, &e.g1, "w-ed", &ch).expect("add"), "listed");
+        ga::record_event(&conn, On::Garden(&e.g1), EventKind::AccessNotNow, &Actor::Owner, &json!({"workspace": "w-gone"}), now())
+            .expect("a line about a workspace that's gone");
+    }
+    let h = history(GARDEN_HISTORY_ROUTE, &[("garden", &e.g1), ("kind", "access_added,access_not_now")]);
+    let all = items(&h);
+    let added = all.iter().find(|i| i["kind"] == "access_added").unwrap_or_else(|| panic!("{h}"));
+    assert_eq!(added["detail"]["workspace"], "w-ed", "{h}");
+    assert_eq!(added["detail"]["handle"], "editor", "{h}");
+    let name = added["detail"]["name"].as_str().unwrap_or_else(|| panic!("named: {h}"));
+    assert!(!name.is_empty() && name != "w-ed", "a name, not the id: {h}");
+    let gone = all.iter().find(|i| i["kind"] == "access_not_now").unwrap_or_else(|| panic!("{h}"));
+    assert_eq!(gone["detail"], json!({"workspace": "w-gone"}), "nothing invented for a gone workspace: {h}");
+}
+
+#[test]
 fn the_computer_wide_look_merges_nothing() {
     let e = env();
     let (s, v) = zen("/cli/zen/theme/next", json!({}));

@@ -1234,9 +1234,25 @@ fn event_item(e: &ga::Event) -> J {
         "actor": actor_json(&e.actor),
         "garden": e.garden_id,
         "widget": e.widget,
-        "detail": e.detail,
+        "detail": named_detail(&e.detail),
         "snapshot": J::Null,
     })
+}
+
+/// A line's detail with the agent it names (`workspace`, a project id:
+/// access added/removed, asks, Not now, Keep it) named for the modals:
+/// `name` and `handle`, read now (A6). A workspace that's gone keeps only
+/// its id, and the modal says "an agent". The stored line is unchanged.
+fn named_detail(detail: &J) -> J {
+    let mut d = detail.clone();
+    let Some(p) = d["workspace"].as_str().map(str::to_string) else { return d };
+    if d.get("name").is_some() || !ga::workspace_exists(&k2_core::db::shared().lock(), &p).unwrap_or(false) {
+        return d;
+    }
+    let a = agent_view(&p);
+    d["name"] = a["name"].clone();
+    d["handle"] = a["handle"].clone();
+    d
 }
 
 /// Page through `fetch` (newest first) until `limit` lines match `kinds`.

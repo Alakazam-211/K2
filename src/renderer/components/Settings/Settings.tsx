@@ -206,7 +206,7 @@ export function settingsNav({
             title: 'Gardens',
             items: [
               { id: 'zen-gardens', label: 'Gardens' },
-              { id: 'zen-widget-data', label: gardenAccess ? 'Widget data' : 'Local Data' },
+              { id: 'zen-widget-data', label: 'Local Data' },
               { id: 'data-sources', label: 'External Data' },
             ],
           },
@@ -268,6 +268,13 @@ export function settingsNav({
       items: thirdPartyBotLeaves(),
     },
   ]
+  // prd-garden-access-v1 G28: Garden access on renames Local Data.
+  if (gardenAccess) {
+    for (const b of blocks) {
+      if (b.kind !== 'group') continue
+      b.items = b.items.map((it) => (it.id === 'zen-widget-data' ? { ...it, label: 'Widget data' } : it))
+    }
+  }
   return blocks
 }
 

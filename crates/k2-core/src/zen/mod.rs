@@ -323,8 +323,26 @@ pub fn chrome_caps(kind: &str) -> &'static [&'static str] {
 
 /// The renderer's layout shape (docs/zen-contract.md): `split` and
 /// `minWidths` per column; `columns` keeps the per-column detail.
+///
+/// prd-garden-column-collapse A1 (CA5): a column's `collapsible`,
+/// `collapsed` and `label` ride in `columns` only when the Garden file set
+/// them, so a page without them answers byte for byte as before. `collapsed`
+/// means nothing on a column that isn't collapsible, so it is dropped there
+/// (the validator refuses it anyway).
 pub fn layout_json(kind: &J, canvas: &J, columns: &[J]) -> J {
     let canvas = canvas.as_str().filter(|c| schema::CANVASES.contains(c)).unwrap_or(schema::DEFAULT_CANVAS);
+    let columns: Vec<J> = columns
+        .iter()
+        .map(|c| {
+            let mut c = c.clone();
+            if c.get("collapsible") != Some(&json!(true)) {
+                if let Some(o) = c.as_object_mut() {
+                    o.remove("collapsed");
+                }
+            }
+            c
+        })
+        .collect();
     json!({
         "kind": kind,
         "canvas": canvas,

@@ -1131,8 +1131,10 @@ fn ask_post(caller: &Caller, body: &[u8]) -> CliResponse {
             json!({ "ok": true, "garden": { "id": id, "name": name }, "listed": true, "asked": false, "card": J::Null, "message": format!("You already edit {name}.") }),
         );
     }
-    let _ = (shell, reason); // A4's card words take neither yet
-    let card = present(GardenAsk::Access, &id, &p, false, true);
+    let _ = shell;
+    // The agent's own words ride the card as its `why` (A4 keeps K2's words
+    // when they're too long or secret-shaped).
+    let card = cards::present_with_reason(GardenAsk::Access, &p, &id, false, true, reason);
     let message = if !has_card(&card) {
         format!("K2 didn't ask again: the person has a card waiting, or said Not now in the last 24 hours. Check later with k2 zen garden access \"{name}\".")
     } else {

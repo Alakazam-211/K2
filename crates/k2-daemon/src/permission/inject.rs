@@ -133,12 +133,13 @@ fn deliver(addr: &str, line: &str) {
 /// Inject + submit into the agent's live session (waking it when
 /// dormant), off the caller's thread: the answer route and the sweep
 /// never wait on a wake. `via=thread`: the card is already on the Thread,
-/// so no Chatter line.
+/// so no Chatter line. The thread runs in the daemon's runtime: waking a
+/// dormant agent spawns its session, which needs one (`crate::rt`).
 #[cfg(not(test))]
 fn deliver(addr: &str, line: &str) {
     let addr = addr.to_string();
     let line = line.to_string();
-    let spawned = std::thread::Builder::new().name("permission-turn".into()).spawn(move || {
+    let spawned = crate::rt::spawn("permission-turn", move || {
         let r = crate::workspace_msg::deliver_live_with_via(
             &addr,
             &line,

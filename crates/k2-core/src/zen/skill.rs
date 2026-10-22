@@ -40,8 +40,25 @@ fn prop_type(t: PropType) -> String {
     }
 }
 
-/// The skill body (markdown, no frontmatter).
+/// The skill body (markdown, no frontmatter), for this daemon's
+/// `gardenAccess` switch (prd-garden-access-v1 G24: off = 0.46.3's text,
+/// byte for byte).
 pub fn generate_k2_zen_skill() -> String {
+    generate_k2_zen_skill_for(super::garden_access::enabled())
+}
+
+/// The skill body with Garden access lists on or off.
+pub fn generate_k2_zen_skill_for(access_on: bool) -> String {
+    let s = generate_k2_zen_skill_off();
+    if access_on {
+        garden_access_skill(&s)
+    } else {
+        s
+    }
+}
+
+/// 0.46.3's skill body (the switch off).
+fn generate_k2_zen_skill_off() -> String {
     let mut s = String::new();
     s.push_str(
         "# K2 Zen Gardens\n\n\
@@ -405,6 +422,94 @@ need no permissions.\n\n",
     s.push_str(&custom_widgets_section());
     s.push_str(&garden_data_section());
     s.push_str(&whats_available_section());
+    s
+}
+
+/// prd-garden-access-v1 G24: the switch-on edits to 0.46.3's text, as
+/// (today's words, the new words). Each "today" is in the off text exactly
+/// once (a test checks), so the off text never changes and a reworded line
+/// can't silently skip its edit.
+pub const GARDEN_ACCESS_EDITS: &[(&str, &str)] = &[
+    (
+        "When the human asks you to add something to a Garden, you edit that Garden's\nfile. A message that starts **\"In my Zen Garden ... (id g-...)\"** means: edit\n`~/.k2/zen/gardens/<id>.toml`, then run `k2 zen validate --garden <id>`.\n\n",
+        "When the human asks you to add something to a Garden, you change that Garden's\npage through K2. A message that starts **\"In my Zen Garden ... (id g-...)\"** means:\nwrite the page with `k2 zen garden put <id> --from page.toml`, then run\n`k2 zen validate --garden <id>`.\n\n",
+    ),
+    (
+        "- `k2 zen garden delete <garden>`: the page moves into `.history/` (never lost); the last Garden can't be deleted.\n\n",
+        "- `k2 zen garden delete <garden>`: only the person deletes a Garden. From you it asks them\n  with a card (exit 3, \"Asked the person to delete <garden>\"); the page moves into\n  `.history/` (never lost); the last Garden can't be deleted.\n\n",
+    ),
+    (
+        "## Files (`~/.k2/zen/`, owned by this computer's K2)\n\n",
+        "## Garden access (who may edit a Garden)\n\n\
+Each Garden has one list of the agents who may edit it. **Edit a Garden only when\n\
+you're on its list (`k2 zen garden access <g>`); otherwise K2 asks the person. After a\n\
+change, `k2 zen validate --widget <w> --sign`.**\n\n\
+- **Make a Garden** with `k2 zen garden new <name> [--from page.toml] [--widgets <dir>…]`:\n\
+  no card, the page and its new widgets land in one call, 5 a day (`garden_budget`).\n\
+  You're its maker, not on its list: K2 puts a `garden.access` card on your Thread with\n\
+  the person in the same step.\n\
+- **Every change after that needs the list**, the maker's too: `garden put`, `rename`,\n\
+  `reorder`, `template`, `reset --garden`, `theme set|next|prev --garden`, and `widget put`\n\
+  (you must be on the list of every Garden that places the widget; a draft placed nowhere\n\
+  is open). Unlisted, they answer `garden_access_needed` (exit 3) and K2 shows the card.\n\
+  After Allow you edit until the person removes you or locks the Garden.\n\
+- **Ask** with `k2 zen garden access <g> ask [--reason \"…\"]`: one waiting card per\n\
+  Garden; after Not now, none for 24 hours.\n\
+- **The computer-wide look** (`k2 zen reset` of `zen.toml` or a theme, `k2 zen theme\n\
+  set|next|prev` with no `--garden`) needs you on at least one Garden's list.\n\
+- **Only the person deletes a Garden**; `k2 zen garden delete <g>` asks them\n\
+  (`garden_delete_person`, a `garden.delete` card, exit 3). You can't change a list,\n\
+  lock or unlock.\n\
+- **Using is never gated**: any agent shows in, and is talked to through, any Garden.\n\
+- **Signed versions**: a widget version runs with the Garden's data only when the person,\n\
+  K2 or an agent on that Garden's list signed it. A raw edit of a `~/.k2/zen` file lands\n\
+  but runs without that data (`needs_editor`) until someone listed signs it.\n\
+- **History**: every change, signature, access change, ask and delete is in the\n\
+  Garden's History (Settings → Gardens; `k2 zen garden history <g>` and\n\
+  `k2 zen widget history <w>` for the person). `k2 study garden-access` has more.\n\
+- Keep as mine, \"It's mine\" (`k2 zen widget claim`) and proposals are retired.\n\n\
+## Files (`~/.k2/zen/`, owned by this computer's K2)\n\n",
+    ),
+    (
+        "  widgets, and theme tables that restyle this Garden only. **This is the file you edit.**\n",
+        "  widgets, and theme tables that restyle this Garden only. **Change it with\n  `k2 zen garden put <id> --from page.toml`** (a raw edit runs without data until signed).\n",
+    ),
+    (
+        "- `widgets/<name>/`: your custom widgets (see Custom widgets). **You edit these too.**\n",
+        "- `widgets/<name>/`: your custom widgets (see Custom widgets). **Change them with\n  `k2 zen widget put <name> --dir <folder>`.**\n",
+    ),
+    (
+        "2. Edit `~/.k2/zen/gardens/<id>.toml`. Every Zen window reloads on save.\n",
+        "2. Stage the page in your workspace and write it with `k2 zen garden put <id> --from page.toml`\n   (you must be on the Garden's list). Every Zen window reloads on the write.\n",
+    ),
+    (
+        "  export`). Every call needs a grant the person gave (Settings → Gardens → Local Data,\n  or `k2 zen data grant`), or one a grant admin gave.",
+        "  export`). On the list of every Garden that places the widget, you read and write its\n  data with no grant; otherwise every call needs a grant the person gave (Settings →\n  Widget data, or `k2 zen data grant`), or one a grant admin gave.",
+    ),
+    (
+        "- **After editing a widget, run `k2 zen validate --widget <w> --sign`: it signs the widget as\n  you, and the widget then reads and writes data with YOUR grants.** (`k2 zen widget sign\n  <w>` signs alone; a plain validate never signs.) An unsigned\n  version gets no data (`author_unknown`). Never sign with the owner token (never use\n  `~/.k2/daemon.token`), and never edit a widget the person made unless they ask.\n  When you change a widget the person made (with the switch), its new version isn't\n  theirs, so it runs without its data until they keep it: K2 puts a card on their Thread\n  with you (\"Keep as mine\" / \"Leave it as <you>'s\"; the answer says `keepAsMine` and\n  `keepCard`), or an inbox note when you have no Thread. Only they can tap it (your\n  passport is refused); Settings → Gardens → Local Data undoes it.\n",
+        "- **After a change, run `k2 zen validate --widget <w> --sign`.** A widget version runs\n  with the Garden's data only when the person, K2 or an agent on that Garden's list\n  signed it; any other version keeps its own `k2.store` keyspace, `agents:read` and\n  `presence:read`, and every other call answers `needs_editor` (\"Someone who edits this\n  Garden has to sign this version.\"). (`k2 zen widget sign <w>` signs alone; a plain\n  validate never signs.) Never sign with the owner token (never use\n  `~/.k2/daemon.token`), and never edit a widget the person made unless they ask.\n",
+    ),
+    (
+        "- **Your own widget's data, no grant** (0.46.1): with the person's \"Manage Gardens and\n  data sources\" switch, the agent that signed a widget's newest version reads and\n  writes its data with `k2 store --widget <w>` (seed it), audited. Without the switch,\n  ask for a grant.\n",
+        "- **Your own widget's data, no grant**: on the list of every Garden that places it, you\n  read and write its data with `k2 store --widget <w>` (seed it). Otherwise ask for a\n  grant.\n",
+    ),
+    (
+        "  human's Gardens); `--clear` removes it. Person, or an agent with the switch.\n",
+        "  human's Gardens); `--clear` removes it. Any agent on this computer; an agent's\n  preview runs without data.\n",
+    ),
+    (
+        "- `k2 zen widget put board --dir ./board [--prune]` writes the whole folder in one\n  checked call (a folder with errors writes nothing). Without \"Manage Gardens and\n  data sources\" it becomes ONE proposal for the folder (its changed code files);\n  approving it writes them all at once, or nothing if a file moved since.\n",
+        "- `k2 zen widget put board --dir ./board [--prune]` writes the whole folder in one\n  checked call (a folder with errors writes nothing) and signs it as you. It needs you\n  on the list of every Garden that places the widget (a draft placed nowhere is open);\n  otherwise it answers `garden_access_needed` (exit 3) and K2 asks the person.\n",
+    ),
+];
+
+/// 0.46.3's text with [`GARDEN_ACCESS_EDITS`] applied (the switch on).
+fn garden_access_skill(off: &str) -> String {
+    let mut s = off.to_string();
+    for (today, on) in GARDEN_ACCESS_EDITS {
+        s = s.replacen(today, on, 1);
+    }
     s
 }
 
@@ -987,7 +1092,7 @@ mod tests {
     fn skill_documents_choice_card_answered_by_and_expires_at() {
         assert!(crate::skills::version::SKILL_VERSION_ZEN >= 17, "card fields need a new skill version");
         assert!(contract::catalog().catalog_version >= 7, "card fields need a new catalog version");
-        let body = generate_k2_zen_skill();
+        let body = generate_k2_zen_skill_for(false);
         for must in ["says `answeredBy`: who answered or dismissed it, `{kind, login, name}`", "`expiresAt`: Unix seconds when a pending card expires"] {
             assert!(body.contains(must), "skill must mention {must:?}");
         }
@@ -1007,7 +1112,7 @@ mod tests {
     #[test]
     fn skill_documents_agent_row_color_and_image() {
         assert!(crate::skills::version::SKILL_VERSION_ZEN >= 14, "agent look needs a new skill version");
-        let body = generate_k2_zen_skill();
+        let body = generate_k2_zen_skill_for(false);
         for must in ["`color` (`#rrggbb`, or `null`", "`image` (its picture as a PNG, JPEG, WebP or GIF `data:`", "never SVG"] {
             assert!(body.contains(must), "skill must mention {must:?}");
         }
@@ -1033,7 +1138,7 @@ mod tests {
     #[test]
     fn skill_documents_garden_data() {
         assert!(crate::skills::version::SKILL_VERSION_ZEN >= 18, "Garden data needs a new skill version");
-        let s = generate_k2_zen_skill();
+        let s = generate_k2_zen_skill_for(false);
         for needle in [
             "### A widget's data (`k2.store`, this computer only)",
             "never inline data into the widget's code",
@@ -1061,7 +1166,7 @@ mod tests {
     #[test]
     fn skill_documents_the_widget_dev_loop() {
         assert!(crate::skills::version::SKILL_VERSION_ZEN >= 21, "the dev loop needs a new skill version");
-        let s = generate_k2_zen_skill();
+        let s = generate_k2_zen_skill_for(false);
         for needle in [
             "**Keep the widget outside `~/.k2` (the dev loop).**",
             "`k2 zen validate --dir ./board` checks the staged folder",
@@ -1081,7 +1186,7 @@ mod tests {
     #[test]
     fn skill_documents_unread_and_mute_props() {
         assert!(crate::skills::version::SKILL_VERSION_ZEN >= 25, "the read-state props need a new skill version");
-        let s = generate_k2_zen_skill();
+        let s = generate_k2_zen_skill_for(false);
         for needle in ["`unread`", "your unread count and the cards waiting on you", "`mute`", "a bell in the header to mute or unmute this agent's Thread"] {
             assert!(s.contains(needle), "the k2-zen skill must say {needle:?}");
         }
@@ -1092,7 +1197,7 @@ mod tests {
     #[test]
     fn skill_documents_the_kanban_garden() {
         assert!(crate::skills::version::SKILL_VERSION_ZEN >= 20, "the Kanban needs a new skill version");
-        let s = generate_k2_zen_skill();
+        let s = generate_k2_zen_skill_for(false);
         for needle in [
             "cards (the Diary, the Kanban, start with the default, or start empty and ask you)",
             "**The Kanban Garden** (`k2:kanban@4`, New Garden → Kanban)",
@@ -1112,7 +1217,7 @@ mod tests {
     #[test]
     fn skill_documents_the_kanban_thread_panel() {
         assert!(crate::skills::version::SKILL_VERSION_ZEN >= 26, "k2:kanban@2 needs a new skill version");
-        let s = generate_k2_zen_skill();
+        let s = generate_k2_zen_skill_for(false);
         for old in ["k2:kanban@1`, New Garden", "k2:kanban@2`, New Garden", "k2:kanban@3`, New Garden"] {
             assert!(!s.contains(old), "New Garden makes @4, not {old}");
         }
@@ -1133,7 +1238,7 @@ mod tests {
     #[test]
     fn skill_documents_the_kanban_3_scrolling() {
         assert!(crate::skills::version::SKILL_VERSION_ZEN >= 27, "k2:kanban@3 needs a new skill version");
-        let s = generate_k2_zen_skill();
+        let s = generate_k2_zen_skill_for(false);
         for needle in ["A message never moves a person who scrolled up; a \"new messages\" pill counts it."] {
             assert!(s.contains(needle), "the k2-zen skill must say {needle:?}");
         }
@@ -1144,7 +1249,7 @@ mod tests {
     #[test]
     fn skill_documents_the_kanban_4_files_and_links() {
         assert!(crate::skills::version::SKILL_VERSION_ZEN >= 28, "k2:kanban@4 needs a new skill version");
-        let s = generate_k2_zen_skill();
+        let s = generate_k2_zen_skill_for(false);
         for needle in [
             "It shows a message's files (chips, images as pictures; a click opens them full size),",
             "makes file paths in your workspace clickable, and takes files with its + button",
@@ -1158,7 +1263,7 @@ mod tests {
     #[test]
     fn skill_documents_the_resilient_sdk_and_chart_libraries() {
         assert!(crate::skills::version::SKILL_VERSION_ZEN >= 23, "the 0.46.1 SDK needs a new skill version");
-        let s = generate_k2_zen_skill();
+        let s = generate_k2_zen_skill_for(false);
         for needle in ["handler object", "err.retrying", "bad_shape", "bad_args", "k2.shape.view", "write your own retry timer", "`uplot@1.6.32`", "data: (view) => draw(view)"] {
             assert!(s.contains(needle), "the k2-zen skill must say {needle:?}");
         }
@@ -1169,7 +1274,7 @@ mod tests {
     #[test]
     fn skill_documents_data_source_cards() {
         assert!(crate::skills::version::SKILL_VERSION_ZEN >= 16, "Garden v3 sources need a new skill version");
-        let s = generate_k2_zen_skill();
+        let s = generate_k2_zen_skill_for(false);
         assert!(crate::skills::version::SKILL_VERSION_ZEN >= 22, "0.46.1 caps, reads and weight need a new skill version");
         for needle in ["`\"reads\"`", "{from: \"fleet-ops-lists\"}", "weight = 1..12", "10 custom widgets per page", "Manage Gardens and"] {
             assert!(s.contains(needle), "the k2-zen skill lost {needle}");
@@ -1185,7 +1290,7 @@ mod tests {
     #[test]
     fn skill_documents_every_custom_verb_with_its_cap() {
         assert!(crate::skills::version::SKILL_VERSION_ZEN > 11, "custom widgets need a new skill version");
-        let body = generate_k2_zen_skill();
+        let body = generate_k2_zen_skill_for(false);
         let c = contract::catalog();
         for v in c.verbs_exposed_to(Exposure::Widget) {
             let line = format!("- `k2.{}`", gen::signature(v));
@@ -1232,7 +1337,7 @@ mod tests {
 
     #[test]
     fn the_widget_kit_is_taught_and_shipped() {
-        let body = generate_k2_zen_skill();
+        let body = generate_k2_zen_skill_for(false);
         for want in [
             "\"k2-thread@1\"",
             "\"k2-help@1\"",
@@ -1254,12 +1359,46 @@ mod tests {
 
     #[test]
     fn whats_available_lists_every_library() {
-        let body = generate_k2_zen_skill();
+        let body = generate_k2_zen_skill_for(false);
         for l in &stdlib::zen_lib_manifest().libs {
             assert!(body.contains(&format!("`{}`", l.key())), "what's available lists {}", l.key());
         }
         for host in &stdlib::zen_lib_manifest().cdn_hosts {
             assert!(body.contains(host.as_str()), "{host}");
+        }
+    }
+
+    /// prd-garden-access-v1 G24: off is 0.46.3's text byte for byte (each
+    /// edit's "today" is in it exactly once and its new words aren't); on
+    /// says who may edit, how to ask, `garden put` / `widget put --dir`, and
+    /// drops Keep as mine and proposals.
+    #[test]
+    fn garden_access_skill_is_today_off_and_the_list_on() {
+        let off = generate_k2_zen_skill_for(false);
+        let on = generate_k2_zen_skill_for(true);
+        for (today, new) in GARDEN_ACCESS_EDITS {
+            assert_eq!(off.matches(today).count(), 1, "the off skill must hold {today:?} exactly once");
+            assert!(!off.contains(new), "the off skill must not say {new:?}");
+            assert!(!on.contains(today), "the on skill still says {today:?}");
+            assert!(on.contains(new), "the on skill must say {new:?}");
+        }
+        for needle in [
+            "Edit a Garden only when\nyou're on its list (`k2 zen garden access <g>`); otherwise K2 asks the person. After a\nchange, `k2 zen validate --widget <w> --sign`.",
+            "k2 zen garden access <g> ask",
+            "garden_access_needed",
+            "garden_delete_person",
+            "needs_editor",
+            "k2 zen garden put <id> --from page.toml",
+            "k2 zen widget put <name> --dir <folder>",
+            "k2 zen garden history <g>",
+            "k2 study garden-access",
+        ] {
+            assert!(on.contains(needle), "the on skill must say {needle:?}");
+            assert!(!off.contains(needle), "the off skill must not say {needle:?}");
+        }
+        for gone in ["keepAsMine", "\"Keep as mine\" / \"Leave it as", "ONE proposal for the folder", "**This is the file you edit.**"] {
+            assert!(off.contains(gone), "today's skill says {gone:?}");
+            assert!(!on.contains(gone), "the on skill still says {gone:?}");
         }
     }
 }

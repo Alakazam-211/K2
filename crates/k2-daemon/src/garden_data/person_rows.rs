@@ -220,6 +220,12 @@ enum RoomReach {
 }
 
 fn room_reach(w: &Placed) -> Result<RoomReach, CliResponse> {
+    if k2_core::zen::garden_access::enabled() {
+        // Garden access (G15, §1.6): a version that passed the signer gate
+        // (checked in `run`) acts as the person in any room; maker-based
+        // reach is retired.
+        return Ok(RoomReach::Any);
+    }
     let maker = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -296,9 +302,12 @@ fn run(b: &CallBody) -> Result<J, CliResponse> {
     let row = catalog().verb(&b.verb).ok_or_else(|| no(400, "unknown_verb", format!("no verb {}", b.verb)))?;
     let w = resolve(b).map_err(|e| crate::garden_data::response(&e))?;
     if let Some(cap) = row.cap.as_deref() {
-        if !w.caps.iter().any(|c| c == cap) {
-            return Err(no(403, "cap_not_granted", format!("{} needs {cap}; add it to the widget's manifest caps", b.verb)));
-        }
+        crate::garden_data::call::check_cap(&w, &b.verb, cap).map_err(|e| crate::garden_data::response(&e))?;
+    }
+    // Garden access (switch on, G15): a person row acts as the person, so
+    // only a version that passes the signer gate makes one.
+    if !w.signed {
+        return Err(crate::garden_data::response(&crate::garden_data::call::needs_editor(&w)));
     }
     let write = row.effect == Effect::Write;
     if write && crate::zen_routes::placement_pause(&w.garden, &w.placement).is_some() {

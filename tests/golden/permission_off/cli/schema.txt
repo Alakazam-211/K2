@@ -923,7 +923,7 @@ exit: 0
     {
       "name": "mail attachments",
       "usage": "k2 mail attachments <message-id> [--get <n> --out <path>] [--json]",
-      "description": "List a message's attachments, or fetch ONE with --get (1-BASED, matching the numbered list 'read' prints) to a workspace-relative --out path. Bytes are written, never opened.",
+      "description": "List a message's attachments, or fetch ONE with --get (1-BASED, matching the numbered list 'read' prints) to a workspace-relative --out path; a folder --out (existing, or ending in /) gets <folder>/<attachment name> and never overwrites. Bytes are written, never opened.",
       "args": [{"name": "message-id", "required": true}],
       "flags": [
         {"name": "--get", "arg": "n", "description": "The 1-based attachment number to fetch."},

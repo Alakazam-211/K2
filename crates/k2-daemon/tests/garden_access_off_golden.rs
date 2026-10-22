@@ -29,7 +29,8 @@
 //! other UUID, Zen snapshot stamps (`20261022T101010123Z` → `<STAMP>`), RFC
 //! 3339 times (`<TIME>`), proposal ids (`zp-…` → `<PROPOSAL>`), and in JSON
 //! bodies the VALUES of [`VOLATILE_KEYS`] (clocks) and a 16-hex `version`
-//! (a page version hash over content and save times).
+//! (a page version hash over content and save times). A `proposals` list is
+//! sorted by (kind, target, file): same-second proposals tie on the clock.
 //!
 //! Modes: plain `cargo test -p k2-daemon --test garden_access_off_golden`
 //! compares and fails loudly on any difference or missing fixture.
@@ -326,9 +327,26 @@ async fn tcp(port: u16, method: &str, path_q: &str, token: &str, body: Option<&s
     tokio::task::spawn_blocking(move || tcp_blocking(port, &method, &pq, body)).await.unwrap()
 }
 
+/// A `proposals` list orders by `created_at` then the random id, so two
+/// proposals made in the same second come back in either order: sort them by
+/// (kind, target, file). Nothing is dropped.
+fn sort_proposals(v: &mut Value) {
+    if let Some(list) = v.get_mut("proposals").and_then(Value::as_array_mut) {
+        let key = |p: &Value| {
+            (
+                p["kind"].as_str().unwrap_or_default().to_string(),
+                p["target"].as_str().unwrap_or_default().to_string(),
+                p["file"].as_str().unwrap_or_default().to_string(),
+            )
+        };
+        list.sort_by_key(key);
+    }
+}
+
 fn json_text(body: &str) -> String {
     match serde_json::from_str::<Value>(body) {
         Ok(mut v) => {
+            sort_proposals(&mut v);
             mask_volatile(&mut v);
             serde_json::to_string_pretty(&v).unwrap()
         }

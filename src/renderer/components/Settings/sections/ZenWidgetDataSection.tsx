@@ -13,6 +13,9 @@
 //
 // Like the Gardens page, Settings shows this only where the Zen toggle shows
 // (`useZenGardensSettingsShown`); the web client never mounts it.
+//
+// prd-garden-access-v1 G28: with Garden access on the page is "Widget data"
+// (off: Local Data, as 0.46.3).
 
 import React, { useEffect } from 'react'
 import type { SettingEntry } from '../searchManifest'
@@ -20,6 +23,7 @@ import { ZenWidgetData } from './ZenWidgetData'
 import { watchLocalZenChanged } from '@/lib/zen/zen-api'
 import { loadZenSettings, useZenSettingsStore, zenSettingsErrorText } from '@/lib/zen/zen-settings'
 import { useSettingsStore } from '@/stores/settings'
+import { useGardenAccessSwitchStore, watchGardenAccessSwitch } from '@/lib/zen/garden-access-api'
 
 export const ZEN_WIDGET_DATA_MANIFEST: SettingEntry[] = [
   {
@@ -58,11 +62,13 @@ function DataSourcesLink(): React.JSX.Element {
 
 export function ZenWidgetDataSection(): React.JSX.Element {
   const st = useZenSettingsStore()
+  const accessOn = useGardenAccessSwitchStore((s) => s.on) === true
 
   useEffect(() => {
     void loadZenSettings()
     return watchLocalZenChanged(() => void loadZenSettings())
   }, [])
+  useEffect(() => watchGardenAccessSwitch(), [])
 
   // The Gardens page's rule: nothing but the error before the first answer.
   const hasData = st.path !== null || st.setUp || st.gardens.length > 0
@@ -73,7 +79,7 @@ export function ZenWidgetDataSection(): React.JSX.Element {
         <ZenWidgetData />
       ) : (
         <>
-          <h2 className="text-lg font-semibold text-[var(--color-text-primary)] mb-1">Local Data</h2>
+          <h2 className="text-lg font-semibold text-[var(--color-text-primary)] mb-1">{accessOn ? 'Widget data' : 'Local Data'}</h2>
           <p className={`${MUTED} mb-6`}>Each custom widget’s data on this computer.</p>
           {st.failure ? (
             <div className="mb-4">

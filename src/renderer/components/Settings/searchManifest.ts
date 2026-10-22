@@ -93,6 +93,13 @@ export function searchManifest(entries: SettingEntry[], query: string): SettingE
 }
 
 /** Section label lookup — duplicated from Settings.tsx SECTIONS so manifests don't import the router. */
+/** A section's name in search results. prd-garden-access-v1 G28: Garden
+ *  access on renames Local Data to "Widget data". */
+export function sectionLabel(section: SettingsSection, opts: { gardenAccess?: boolean } = {}): string {
+  if (section === 'zen-widget-data' && opts.gardenAccess) return 'Widget data'
+  return SECTION_LABELS[section] ?? section
+}
+
 export const SECTION_LABELS: Record<SettingsSection, string> = {
   general: 'General',
   notifications: 'Notifications',

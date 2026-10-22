@@ -15,6 +15,10 @@
 //     and disabled, with no tag.
 // After either change, an 8 s toast with Undo. A daemon without
 // `zen-sync-v1` draws nothing.
+//
+// prd-garden-access-v1 G26: the Garden pane of the master-detail page (the
+// switch on) uses `variant="pane"`: the same two boxes and routes, with
+// Lock's caption shown beside it and sync named "Get K2's design updates".
 
 import React, { useEffect, useRef, useState } from 'react'
 import { SquareCheckbox } from '@/components/ui'
@@ -44,6 +48,8 @@ export const ZEN_LOCK_TIP = 'Agents can’t change this Garden. You still can.'
 export const ZEN_SYNC_LABEL = 'Keep in sync with future template updates'
 export const ZEN_SYNC_TIP = 'Gets K2’s improvements to this Garden’s template and theme.'
 export const ZEN_SYNC_SCRATCH_TIP = 'Made from scratch, no template to follow'
+/** G26: the sync box's name on the Garden pane (Garden access on). */
+export const ZEN_DESIGN_UPDATES_LABEL = 'Get K2’s design updates'
 
 /** The blank start ("Start empty and ask my agent"): a Garden made from scratch. */
 const SCRATCH_TEMPLATE_ID = 'k2.blank@1'
@@ -88,6 +94,7 @@ function Check({
   disabled,
   dataAttr,
   tag,
+  caption,
   onChange,
 }: {
   checked: boolean | 'mixed'
@@ -97,6 +104,8 @@ function Check({
   dataAttr: Record<string, string>
   /** A small tag to the right of the label (the template synced with). */
   tag?: React.ReactNode
+  /** Muted words after the label (the pane shows Lock's caption). */
+  caption?: string
   onChange(next: boolean): void
 }): React.JSX.Element {
   const ref = useRef<HTMLInputElement>(null)
@@ -124,6 +133,7 @@ function Check({
         }}
       />
       <span>{label}</span>
+      {caption ? <span className="text-[11px] text-[var(--color-text-muted)]">{caption}</span> : null}
       {tag}
     </label>
   )
@@ -133,9 +143,12 @@ function Check({
  *  Garden sync, or before its first answer. */
 export function ZenGardenSyncControls({
   garden,
+  variant = 'row',
 }: {
   /** `template`: the Garden list's template id (where the Garden came from). */
   garden: { id: string; name: string; template?: string }
+  /** `pane`: the Garden pane (Garden access on, G26). */
+  variant?: 'row' | 'pane'
 }): React.JSX.Element | null {
   useZenSyncLive()
   // Re-render when the catalog arrives, so a catalog Garden's tag reads its label.
@@ -178,6 +191,7 @@ export function ZenGardenSyncControls({
           checked={row.locked}
           label={ZEN_LOCK_LABEL}
           tip={ZEN_LOCK_TIP}
+          caption={variant === 'pane' ? ZEN_LOCK_TIP : undefined}
           disabled={busy}
           dataAttr={{ 'data-zen-garden-lock': garden.id }}
           onChange={(next) =>
@@ -195,7 +209,7 @@ export function ZenGardenSyncControls({
       )}
       <Check
         checked={synced}
-        label={ZEN_SYNC_LABEL}
+        label={variant === 'pane' ? ZEN_DESIGN_UPDATES_LABEL : ZEN_SYNC_LABEL}
         tip={scratch ? ZEN_SYNC_SCRATCH_TIP : ZEN_SYNC_TIP}
         disabled={busy || scratch}
         dataAttr={{ 'data-zen-garden-sync': garden.id }}

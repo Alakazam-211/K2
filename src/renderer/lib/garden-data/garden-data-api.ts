@@ -85,7 +85,10 @@ export function importGardenData(body: GardenImportBody): Promise<GardenImportRe
   return daemonCliPost<GardenImportResponse>(zenLocalScope(), 'zen/data/import', body)
 }
 
-/** "It's mine": stamp the live version of a widget as the person's. */
+/** "It's mine": stamp the live version of a widget as the person's.
+ *  prd-garden-access-v1 §2: retired with Garden access on (the daemon
+ *  answers 410 `retired`; Widget data no longer offers it; Sign in a
+ *  history modal covers the case). */
 export function claimWidget(widget: string): Promise<{ widget: string; hash: string }> {
   return daemonCliPost<{ widget: string; hash: string }>(zenLocalScope(), 'zen/widget/claim', { widget })
 }

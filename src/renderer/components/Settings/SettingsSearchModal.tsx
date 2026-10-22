@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { SECTION_LABELS, searchManifest, type SettingEntry } from './searchManifest'
+import { searchManifest, sectionLabel, type SettingEntry } from './searchManifest'
+import { useGardenAccessSwitchStore } from '@/lib/zen/garden-access-api'
 
 interface SettingsSearchModalProps {
   entries: SettingEntry[]
@@ -18,6 +19,7 @@ interface SettingsSearchModalProps {
 export function SettingsSearchModal({ entries, onPick, onClose }: SettingsSearchModalProps): React.JSX.Element {
   const [query, setQuery] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
+  const gardenAccess = useGardenAccessSwitchStore((s) => s.on) === true
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
 
@@ -137,7 +139,7 @@ export function SettingsSearchModal({ entries, onPick, onClose }: SettingsSearch
                   }`}
                 >
                   <span className="text-[10px] text-[var(--color-text-muted)] uppercase tracking-wider w-28 flex-shrink-0 truncate">
-                    {SECTION_LABELS[entry.section] ?? entry.section}
+                    {sectionLabel(entry.section, { gardenAccess })}
                     {entry.group && <span className="mx-1 opacity-60">/</span>}
                     {entry.group && <span className="normal-case">{entry.group}</span>}
                   </span>

@@ -15,6 +15,12 @@
 // Delete. Every call goes to THIS computer's daemon (`garden-data-api.ts`,
 // owner token, local scope). Re-reads on a local `garden_data_changed` and
 // `zen_changed`.
+//
+// prd-garden-access-v1 G28 (Garden access ON only; off = exactly 0.46.3):
+// the page is "Widget data"; It's mine and "Let <maker> use this data" are
+// gone (a Garden's list is how an agent gets a widget's data now); the line
+// names who last signed the version, never "Nobody signed" (that lives in
+// the widget's history modal); the grants fold under Advanced.
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { daemonCliGet } from '@/lib/daemon-cli'
@@ -37,6 +43,7 @@ import type {
 } from '@/lib/garden-data/garden-data-types'
 import { watchLocalZenChanged, zenLocalScope } from '@/lib/zen/zen-api'
 import { onGardenDataChanged } from '@/stores/session-events'
+import { useGardenAccessSwitchStore } from '@/lib/zen/garden-access-api'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useToastStore } from '@/stores/toast'
 
@@ -89,6 +96,21 @@ export function makerText(m: GardenMadeBy | null): string | null {
       return `Made by ${m.handle}`
     case 'unclaimed':
       return 'Nobody signed this version'
+  }
+}
+
+/** Who last signed the live version (G28, Garden access on), or null. */
+export function signerText(m: GardenMadeBy | null): string | null {
+  if (!m) return null
+  switch (m.kind) {
+    case 'owner':
+      return 'Last signed by you'
+    case 'k2':
+      return 'Built into K2'
+    case 'agent':
+      return `Last signed by ${m.handle}`
+    case 'unclaimed':
+      return null
   }
 }
 
@@ -282,7 +304,16 @@ function GrantList({
   )
 }
 
-function DataLine({ line, reload }: { line: DataLineModel; reload: () => void }): React.JSX.Element {
+function DataLine({
+  line,
+  reload,
+  accessOn,
+}: {
+  line: DataLineModel
+  reload: () => void
+  /** Garden access on (G28): no claim controls, grants under Advanced. */
+  accessOn: boolean
+}): React.JSX.Element {
   const { widget, space, madeBy } = line
   const [open, setOpen] = useState(false)
   const [detail, setDetail] = useState<GardenShowResponse | null>(null)
@@ -305,9 +336,9 @@ function DataLine({ line, reload }: { line: DataLineModel; reload: () => void })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [widget, wantDetail, rev, grants])
 
-  const maker = makerText(madeBy)
-  const offerClaim = madeBy?.kind === 'agent' || madeBy?.kind === 'unclaimed'
-  const offerLet = madeBy?.kind === 'agent' && !makerHasGrant(madeBy.handle, detail, space)
+  const maker = accessOn ? signerText(madeBy) : makerText(madeBy)
+  const offerClaim = !accessOn && (madeBy?.kind === 'agent' || madeBy?.kind === 'unclaimed')
+  const offerLet = !accessOn && madeBy?.kind === 'agent' && !makerHasGrant(madeBy.handle, detail, space)
 
   return (
     <div className="py-2 border-b border-[var(--color-border)]" data-garden-data-line={widget}>
@@ -352,7 +383,7 @@ function DataLine({ line, reload }: { line: DataLineModel; reload: () => void })
           {space ? (
             <>
               <button type="button" className={BTN} onClick={() => setOpen((o) => !o)} aria-expanded={open}>
-                {open ? 'Hide grants' : 'Grants'}
+                {accessOn ? (open ? 'Hide advanced' : 'Advanced') : open ? 'Hide grants' : 'Grants'}
               </button>
               <button type="button" className={BTN} disabled={act.busy} onClick={() => void act.run(() => exportAndSave(widget))}>
                 Export
@@ -372,7 +403,19 @@ function DataLine({ line, reload }: { line: DataLineModel; reload: () => void })
           ) : null}
         </div>
       </div>
-      {open && detail ? <GrantList widget={widget} detail={detail} reload={reload} /> : null}
+      {open && detail && accessOn ? (
+        <div className="mt-2" data-garden-data-advanced={widget}>
+          <div className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">
+            Advanced · data grants
+          </div>
+          <p className={MUTED}>
+            Agents on a Garden&apos;s list already use the data of its widgets. These grants are for any other agent.
+          </p>
+          <GrantList widget={widget} detail={detail} reload={reload} />
+        </div>
+      ) : open && detail ? (
+        <GrantList widget={widget} detail={detail} reload={reload} />
+      ) : null}
       {act.error ? (
         <p className="text-[11px] text-[var(--color-status-error)] mt-1" data-testid="garden-data-line-error">
           {act.error}
@@ -415,6 +458,7 @@ export function ZenWidgetData(): React.JSX.Element {
   const [widgets, setWidgets] = useState<WidgetRow[]>([])
   const [error, setError] = useState<string | null>(null)
   const seq = useRef(0)
+  const accessOn = useGardenAccessSwitchStore((s) => s.on) === true
 
   const load = useCallback(async (): Promise<void> => {
     const mine = ++seq.current
@@ -457,11 +501,18 @@ export function ZenWidgetData(): React.JSX.Element {
 
   return (
     <section data-settings-id="zen-gardens.data" data-garden-data="">
-      <h2 className="text-lg font-semibold text-[var(--color-text-primary)] mb-1">Local Data</h2>
-      <p className="text-xs text-[var(--color-text-muted)] mb-6">
-        Each custom widget keeps its data on this computer. An agent reads or writes it only with a grant you give (or one a
-        grant admin you named gives).
-      </p>
+      <h2 className="text-lg font-semibold text-[var(--color-text-primary)] mb-1">{accessOn ? 'Widget data' : 'Local Data'}</h2>
+      {accessOn ? (
+        <p className="text-xs text-[var(--color-text-muted)] mb-6">
+          Each custom widget keeps its data on this computer. The agents on a Garden&apos;s list use the data of the widgets
+          in it; any other agent needs a grant (under Advanced).
+        </p>
+      ) : (
+        <p className="text-xs text-[var(--color-text-muted)] mb-6">
+          Each custom widget keeps its data on this computer. An agent reads or writes it only with a grant you give (or one a
+          grant admin you named gives).
+        </p>
+      )}
       {error ? (
         <div className="mb-2">
           <p className="text-[11px] text-[var(--color-status-error)]" data-testid="garden-data-load-error">
@@ -475,7 +526,7 @@ export function ZenWidgetData(): React.JSX.Element {
       {spaces === null && !error ? <p className={MUTED}>Loading…</p> : null}
       {spaces !== null && lines.length === 0 ? <p className={MUTED}>No custom widgets yet.</p> : null}
       {lines.map((l) => (
-        <DataLine key={l.widget} line={l} reload={reload} />
+        <DataLine key={l.widget} line={l} reload={reload} accessOn={accessOn} />
       ))}
       {orphans.length > 0 ? (
         <div className="mt-4" data-garden-data-orphans="">

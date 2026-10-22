@@ -16,6 +16,12 @@
 //
 // Settings only shows this where the Zen toggle shows
 // (`useZenGardensSettingsShown`); the web client never mounts it.
+//
+// prd-garden-access-v1 G0a/G27 (0.46.3, behind `gardenAccess`, default
+// off): with the switch ON (and Gardens set up) this page is the
+// master-detail page (`ZenGardensAccessPage`). With it off it is exactly
+// today's page plus one row, the switch ("Garden access lists"). A daemon
+// with no such switch shows today's page with no row.
 
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { revealItemInDir } from '@tauri-apps/plugin-opener'
@@ -23,10 +29,8 @@ import type { SettingEntry } from '../searchManifest'
 import { SettingDropdown } from '../controls/SettingControls'
 import { ZenGardenSyncControls } from './ZenGardenSyncControls'
 import { watchLocalZenChanged } from '@/lib/zen/zen-api'
-import { currentDesktopOs } from '@/lib/zen/zen-platform'
 import {
   checkZenGardenName,
-  createZenSettingsGarden,
   deleteZenSettingsGarden,
   loadZenSettings,
   reorderZenSettingsGarden,
@@ -35,11 +39,12 @@ import {
   setupZenGardens,
   useZenSettingsStore,
   zenSettingsErrorText,
-  type ZenNewGardenTemplate,
   type ZenSettingsGarden,
   type ZenSettingsTheme,
 } from '@/lib/zen/zen-settings'
-import { ZenNewGardenModal } from '@/components/Zen/widgets/ZenNewGardenModal'
+import { useGardenAccessSwitchStore, watchGardenAccessSwitch } from '@/lib/zen/garden-access-api'
+import { BTN, DANGER_BTN, INPUT, InlineError, NewGarden, attempt, revealLabel, themeOptions } from './zen-gardens-ui'
+import { GardenAccessSwitchRow, ZenGardensAccessPage } from './ZenGardensAccessPage'
 import { useToastStore } from '@/stores/toast'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 
@@ -62,8 +67,6 @@ export const ZEN_GARDENS_MANIFEST: SettingEntry[] = [
   },
 ]
 
-const BTN =
-  'px-2 py-1 text-xs border border-[var(--color-border)] text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] transition-colors no-drag cursor-pointer disabled:opacity-40 disabled:cursor-default'
 // The two columns are Settings → LLMs' (AgentsSection), class for class
 // (Rosson 2026-10-13): a full-height row, two equal columns that each
 // scroll on their own and carry their own padding, the right one with the
@@ -78,50 +81,6 @@ const ADVANCED_COLUMN =
 /** A Garden's name: reads as plain text, edits in place (border on hover/focus). */
 const NAME_INPUT =
   'w-full px-1 py-0.5 -ml-1 text-xs bg-transparent border border-transparent text-[var(--color-text-primary)] outline-none hover:border-[var(--color-border)] focus:border-[var(--color-accent)] focus:bg-[var(--color-bg)] no-drag cursor-text truncate'
-const DANGER_BTN =
-  'px-2 py-1 text-xs border border-[var(--color-status-error)] text-[var(--color-status-error)] hover:bg-[var(--color-bg-elevated)] transition-colors no-drag cursor-pointer disabled:opacity-40 disabled:cursor-default'
-const INPUT =
-  'px-2 py-1 text-xs bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag'
-
-function InlineError({ text, testId }: { text: string | null; testId?: string }): React.JSX.Element | null {
-  if (!text) return null
-  return (
-    <p role="alert" data-testid={testId} className="text-[11px] text-[var(--color-status-error)] mt-1">
-      {text}
-    </p>
-  )
-}
-
-function revealLabel(): string {
-  const os = currentDesktopOs()
-  if (os === 'mac') return 'Reveal in Finder'
-  if (os === 'windows') return 'Show in Explorer'
-  return 'Show in Files'
-}
-
-/** Run `fn`, keeping `busy` on meanwhile and putting a failure in `setError`. */
-async function attempt(
-  fn: () => Promise<void>,
-  setBusy: (b: boolean) => void,
-  setError: (e: string | null) => void,
-): Promise<boolean> {
-  setBusy(true)
-  setError(null)
-  try {
-    await fn()
-    return true
-  } catch (err) {
-    setError(zenSettingsErrorText(err))
-    return false
-  } finally {
-    setBusy(false)
-  }
-}
-
-function themeOptions(themes: readonly ZenSettingsTheme[]): { value: string; label: string }[] {
-  return themes.map((t) => ({ value: t.name, label: t.name }))
-}
-
 /** Where the drop line paints on a row: above it, below it, or nowhere. */
 type DropEdge = 'top' | 'bottom' | null
 
@@ -542,48 +501,6 @@ function GardenSearch({ value, onChange }: { value: string; onChange(v: string):
   )
 }
 
-/** Zen's own tokens mapped onto Settings' look, so the shared New Garden
- *  modal and cards (drawn with `--zen-*`) read as part of this page. */
-const ZEN_TOKENS_IN_SETTINGS = {
-  '--zen-text': 'var(--color-text-primary)',
-  '--zen-text-muted': 'var(--color-text-muted)',
-  '--zen-surface': 'var(--color-bg)',
-  '--zen-surface-raised': 'var(--color-bg-elevated)',
-  '--zen-border': 'var(--color-border)',
-  '--zen-accent': 'var(--color-accent)',
-  '--zen-danger': 'var(--color-status-error)',
-  '--zen-radius': '6px',
-  color: 'var(--color-text-primary)',
-} as React.CSSProperties
-
-/**
- * Settings' New Garden: the same modal as Zen's (Rosson 2026-10-08): a
- * name and the catalog's cards, the Diary first. Creates through the local
- * daemon; there is nothing to allow.
- */
-function NewGarden({ gardens }: { gardens: readonly ZenSettingsGarden[] }): React.JSX.Element {
-  const [open, setOpen] = useState(false)
-  return (
-    <>
-      <button type="button" data-zen-settings-new-garden="" onClick={() => setOpen(true)} className={`${BTN} mb-3`}>
-        + New Garden
-      </button>
-      {open && (
-        <ZenNewGardenModal
-          taken={gardens.map((g) => g.name)}
-          highlight={null}
-          vars={ZEN_TOKENS_IN_SETTINGS}
-          onClose={() => setOpen(false)}
-          onCreate={async (pick) => {
-            const clean = checkZenGardenName(pick.name, gardens)
-            await createZenSettingsGarden(clean, pick.entry.short as ZenNewGardenTemplate)
-          }}
-        />
-      )}
-    </>
-  )
-}
-
 /** Advanced, always shown (Rosson 2026-10-13): the global theme and the folder. */
 function Advanced({
   setUp,
@@ -664,14 +581,19 @@ export function ZenGardensSection(): React.JSX.Element {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
+  const accessOn = useGardenAccessSwitchStore((s) => s.on)
 
   useEffect(() => {
     void loadZenSettings()
     return watchLocalZenChanged(() => void loadZenSettings())
   }, [])
+  useEffect(() => watchGardenAccessSwitch(), [])
 
   // Before the first answer there is nothing to show but the error, if any.
   const hasData = st.path !== null || st.setUp || st.gardens.length > 0
+
+  // G27: the master-detail page only with the switch on.
+  if (accessOn === true && hasData && st.setUp) return <ZenGardensAccessPage />
 
   return (
     // Settings → LLMs' layout (AgentsSection): left = the title, New Garden,
@@ -681,6 +603,8 @@ export function ZenGardensSection(): React.JSX.Element {
         <div className={LIST_COLUMN} data-zen-gardens-list-column="">
           <h2 className="text-lg font-semibold text-[var(--color-text-primary)] mb-1">Gardens</h2>
           <p className="text-xs text-[var(--color-text-muted)] mb-6">Your Zen pages on this computer.</p>
+          {/* G0a item 1: the switch row (only on a daemon that has the switch). */}
+          {accessOn !== null ? <GardenAccessSwitchRow on={accessOn} className="mb-6" /> : null}
           {st.failure ? (
             <div className="mb-4">
               <InlineError text={zenSettingsErrorText(new Error(st.failure.message))} testId="zen-gardens-load-error" />

@@ -265,11 +265,23 @@ fn restrict_mode(_file: &Path) -> Result<(), String> {
 /// would orphan a live cert).
 pub fn load_or_generate_keypair() -> Result<KeyPair, String> {
     let path = key_path();
-    if path.exists() {
+    let load = || -> Result<KeyPair, String> {
         let pem = fs::read_to_string(&path)
             .map_err(|e| format!("read tunnel key {}: {e}", path.display()))?;
-        return KeyPair::from_pem(&pem)
-            .map_err(|e| format!("parse tunnel key {}: {e}", path.display()));
+        KeyPair::from_pem(&pem).map_err(|e| format!("parse tunnel key {}: {e}", path.display()))
+    };
+    if path.exists() {
+        return load();
+    }
+    // One first key, ever: two first uses at once (threads of one daemon
+    // share a pid, so a pid-named temp was shared too and one rename lost
+    // with ENOENT) must agree on the same key. Threads take a lock; across
+    // processes the key goes in with a hard link, which never replaces a
+    // key another writer put there first, and the loser loads that one.
+    static GEN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _g = GEN.lock().unwrap_or_else(|p| p.into_inner());
+    if path.exists() {
+        return load();
     }
 
     // Fresh keypair. rcgen's default algorithm for a plain `generate()` is
@@ -281,17 +293,24 @@ pub fn load_or_generate_keypair() -> Result<KeyPair, String> {
 
     let dir = k2_dir();
     fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
-    // tmp+rename so a crash mid-write never leaves a half key on disk.
-    let tmp = dir.join(format!("tunnel-key.pem.tmp.{}", std::process::id()));
+    // A whole temp file first (a crash mid-write never leaves a half key),
+    // named for this attempt alone.
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let tmp = dir.join(format!("tunnel-key.pem.tmp.{}.{nanos}", std::process::id()));
     fs::write(&tmp, key_pair.serialize_pem().as_bytes())
         .map_err(|e| format!("write {}: {e}", tmp.display()))?;
     restrict_mode(&tmp)?;
-    fs::rename(&tmp, &path).map_err(|e| {
-        let _ = fs::remove_file(&tmp);
-        format!("rename into place {}: {e}", path.display())
-    })?;
-    restrict_mode(&path)?;
-    Ok(key_pair)
+    let linked = fs::hard_link(&tmp, &path);
+    let _ = fs::remove_file(&tmp);
+    match linked {
+        Ok(()) => {
+            restrict_mode(&path)?;
+            Ok(key_pair)
+        }
+        // Another process put its key there first: that one is the key.
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => load(),
+        Err(e) => Err(format!("put the tunnel key in place {}: {e}", path.display())),
+    }
 }
 
 /// Build a PEM CSR for `subdomain`'s SANs, signed by `key_pair`. This is
@@ -661,6 +680,20 @@ mod tests {
                 kp2.serialize_pem(),
                 "second load must reuse the SAME persisted key, not regenerate"
             );
+        });
+    }
+
+    /// First uses at once (the daemon's threads share a pid) all succeed
+    /// and agree on one key; no temp file is left behind.
+    #[test]
+    fn concurrent_first_uses_agree_on_one_key() {
+        with_temp_home(|| {
+            let threads: Vec<_> = (0..8).map(|_| std::thread::spawn(|| load_or_generate_keypair().map(|k| k.serialize_pem()))).collect();
+            let pems: Vec<String> = threads.into_iter().map(|t| t.join().unwrap().expect("every first use succeeds")).collect();
+            assert!(pems.iter().all(|p| *p == pems[0]), "one key for everyone");
+            assert_eq!(fs::read_to_string(key_path()).unwrap(), pems[0]);
+            let left: Vec<_> = fs::read_dir(k2_dir()).unwrap().flatten().map(|e| e.file_name()).filter(|n| n.to_string_lossy().contains(".tmp.")).collect();
+            assert!(left.is_empty(), "{left:?}");
         });
     }
 

@@ -173,9 +173,17 @@ pub(crate) const ROWS: &[Row] = &[
     // ── Gardens and sources ────────────────────────────────────────────
     row(ask("gardens.manage", Floor::Admin), code(403, "person_only"), "/cli/sources/", ANY),
     row(ask("gardens.manage", Floor::Admin), code(403, "person_only"), "/cli/zen/", ANY),
+    // The approve body is `{name, specHash}`: the card is bound to the spec
+    // the agent saw (`spec=`, lane E2).
     Row {
-        params: &[("source", &[ParamFrom::Body("/id"), ParamFrom::Body("/source"), ParamFrom::Query("id")])],
+        params: &[("source", &[ParamFrom::Body("/name")]), ("spec", &[ParamFrom::Body("/specHash")])],
         ..row(ask("sources.approve", Floor::Admin), code(403, "person_only"), "/cli/sources/approve", POST)
+    },
+    // A batch (`{items: [{name, specHash}…]}`) is one ask with comma lists;
+    // the agent fills them in from `k2 sources pending`.
+    Row {
+        params: &[("source", &[]), ("spec", &[])],
+        ..row(ask("sources.approve", Floor::Admin), code(403, "person_only"), "/cli/sources/batch-approve", POST)
     },
     Row {
         params: &[("proposal", &[ParamFrom::Body("/id"), ParamFrom::Body("/proposal"), ParamFrom::Query("id")])],
@@ -602,7 +610,8 @@ mod tests {
             (403, "POST", "/cli/vault/set", vec![], None, json!({"error":{"code":"vault_manage_required"}}), "vault.manage"),
             (403, "POST", "/cli/sources/pin", vec![], None, json!({"error":{"code":"person_only"}}), "gardens.manage"),
             (403, "POST", "/cli/zen/widget/preview", vec![], None, json!({"error":"person_only","message":"m","ok":false}), "gardens.manage"),
-            (403, "POST", "/cli/sources/approve", vec![], Some(json!({"id":"src_1"})), json!({"error":{"code":"person_only"}}), "sources.approve"),
+            (403, "POST", "/cli/sources/approve", vec![], Some(json!({"name":"fleet","specHash":"a1b2"})), json!({"error":{"code":"person_only"}}), "sources.approve"),
+            (403, "POST", "/cli/sources/batch-approve", vec![], Some(json!({"items":[{"name":"fleet","specHash":"a1b2"}]})), json!({"error":{"code":"person_only"}}), "sources.approve"),
             (403, "POST", "/cli/zen/proposals/approve", vec![], Some(json!({"id":"zp_1"})), json!({"error":"person_only"}), "garden.proposal.approve"),
             (403, "GET", "/cli/dns/records", vec![], None, json!({"error":{"code":"dns_manage_disabled"},"ok":false}), "dns.manage"),
             (403, "POST", "/cli/relations/create", vec![], None, json!({"error":{"code":"agents_create_connections_disabled"}}), "connections.create"),
@@ -659,12 +668,54 @@ mod tests {
 
         // A value K2 can't find stays a placeholder the agent fills in.
         let p = teach_of(403, "POST", "/cli/sources/approve", &[], None, json!({"error":{"code":"person_only"}})).unwrap();
-        assert_eq!(p["params"], json!({"source": null}));
-        assert_eq!(p["command"], "k2 permission request sources.approve source=<source> --why \"<what you need it for>\"");
+        assert_eq!(p["params"], json!({"source": null, "spec": null}));
+        assert_eq!(p["command"], "k2 permission request sources.approve source=<source> spec=<spec> --why \"<what you need it for>\"");
 
         // Odd characters are single-quoted.
         let p = teach_of(403, "POST", "/cli/workspace/msg", &[("workspace", "a b'c")], None, json!({"error":{"code":"not_connected"}})).unwrap();
         assert_eq!(p["command"], "k2 permission request connections.add to='a b'\\''c' --why \"<what you need it for>\"");
+    }
+
+    /// `sources.approve` teaches the source the agent tried (`name`) and
+    /// the spec it reviewed (`specHash`); a batch teaches one ask with the
+    /// values left for the agent to fill in. The area's switch still
+    /// teaches the other sources routes.
+    #[test]
+    fn sources_approve_teaches_the_name_and_spec_it_was_refused_on() {
+        let hash = "9f".repeat(32);
+        let p = teach_of(
+            403,
+            "POST",
+            "/cli/sources/approve",
+            &[],
+            Some(json!({"name": "fleet", "specHash": hash})),
+            json!({"error":{"code":"person_only"}}),
+        )
+        .unwrap();
+        assert_eq!(action_of(&p), "sources.approve", "{p}");
+        assert_eq!(p["params"], json!({"source": "fleet", "spec": hash}));
+        assert_eq!(p["approvers"], "owner or admin");
+        assert_eq!(
+            p["command"],
+            format!("k2 permission request sources.approve source=fleet spec={hash} --why \"<what you need it for>\"")
+        );
+
+        let p = teach_of(
+            403,
+            "POST",
+            "/cli/sources/batch-approve",
+            &[],
+            Some(json!({"items": [{"name": "fleet", "specHash": hash}, {"name": "ci", "specHash": hash}]})),
+            json!({"error":{"code":"person_only"}}),
+        )
+        .unwrap();
+        assert_eq!(action_of(&p), "sources.approve", "{p}");
+        assert_eq!(p["params"], json!({"source": null, "spec": null}));
+        assert_eq!(p["command"], "k2 permission request sources.approve source=<source> spec=<spec> --why \"<what you need it for>\"");
+
+        // Another sources route still teaches the area's switch.
+        let p = teach_of(403, "POST", "/cli/sources/secret", &[], None, json!({"error":{"code":"person_only"}})).unwrap();
+        assert_eq!(action_of(&p), "gardens.manage", "{p}");
     }
 
     #[test]

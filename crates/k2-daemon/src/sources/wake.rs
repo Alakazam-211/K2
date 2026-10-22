@@ -260,6 +260,10 @@ fn pipe() -> Arc<Pipe> {
             let w = p.clone();
             let spawned = std::thread::Builder::new().name(format!("sources-wake-{n}")).spawn(move || loop {
                 let b = w.take_wait();
+                // In the daemon's runtime: a wake spawns the agent's
+                // session (`crate::rt`).
+                let rt = crate::rt::for_loop_pass();
+                let _entered = rt.as_ref().map(|h| h.enter());
                 w.deliver_batch(&b, now());
             });
             if let Err(e) = spawned {

@@ -209,10 +209,14 @@ pub(crate) mod notify {
         }
         let ws = project_id.to_string();
         let text = text.to_string();
-        let _ = std::thread::Builder::new().name("clone-proposal".into()).spawn(move || {
+        // In the daemon's runtime: a wake spawns the agent's session (`crate::rt`).
+        let spawned = crate::rt::spawn("clone-proposal", move || {
             let r = crate::workspace_msg::deliver_live(&ws, &text, "k2-clone", "", true, super::Duration::from_secs(60));
             k2_core::log_debug!("[clone-proposal] told {ws}: {}", serde_json::to_string(&r).unwrap_or_default());
         });
+        if let Err(e) = spawned {
+            k2_core::log_debug!("[clone-proposal] {project_id} not told: {e}");
+        }
     }
 }
 

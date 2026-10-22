@@ -47,8 +47,12 @@ pub fn notify(workspace_id: &str, text: &str) {
     }
     let ws = workspace_id.to_string();
     let text = text.to_string();
-    let _ = std::thread::Builder::new().name("app-alert".into()).spawn(move || {
+    // In the daemon's runtime: a wake spawns the agent's session (`crate::rt`).
+    let spawned = crate::rt::spawn("app-alert", move || {
         let r = crate::workspace_msg::deliver_live(&ws, &text, "k2-apps", "", true, Duration::from_secs(60));
         k2_core::log_debug!("[apps] alert to {ws}: {}", serde_json::to_string(&r).unwrap_or_default());
     });
+    if let Err(e) = spawned {
+        k2_core::log_debug!("[apps] alert to {workspace_id} not sent: {e}");
+    }
 }

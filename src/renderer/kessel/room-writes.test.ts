@@ -72,7 +72,11 @@ function routePolicy(): Map<string, { kind: string; floor: string }> {
 /** Room writes whose daemon floor is above Member. The room lists them, and
  *  the client sends them only for a login that clears the floor (0.43.2 Q3:
  *  Keep awake changes the host's power, so Admin and up). */
-const ABOVE_MEMBER_ROOM_WRITES = new Map([['power/keep-awake', 'Admin']])
+const ABOVE_MEMBER_ROOM_WRITES = new Map([
+  ['power/keep-awake', 'Admin'],
+  // Permission cards: Turn off again is at the card's floor (Admin and up).
+  ['thread/permission-undo', 'Admin'],
+])
 
 describe('the room write allowlist', () => {
   it('every route is a real daemon route; all but the listed Admin ones are open to a Member (route_policy.rs)', () => {
@@ -158,6 +162,29 @@ describe('the usable remote-room scope', () => {
       expect(url.port).toBe(String(B.port))
       expect(url.pathname).toBe('/cli/chat/rename')
       expect(url.searchParams.get('token')).toBe('tok-b')
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  })
+
+  it('a remote room reaches the permission card routes on its own server (note, Turn off again)', async () => {
+    const room = remoteRoomScope(scopeForHost(B))
+    const calls: string[] = []
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      calls.push(String(input))
+      return new Response(JSON.stringify({ ok: true }), { status: 200 })
+    })
+    try {
+      expect(scopeMayWrite(room, 'thread/permission-note')).toBe(true)
+      expect(scopeMayWrite(room, 'thread/permission-undo')).toBe(true)
+      await daemonCliPost(room, 'thread/permission-note', { addr: 'billing', id: 'c1', text: 'for payroll' })
+      await daemonCliPost(room, 'thread/permission-undo', { addr: 'billing', id: 'c1' })
+      expect(calls.map((c) => new URL(c).pathname)).toEqual(['/cli/thread/permission-note', '/cli/thread/permission-undo'])
+      for (const c of calls) {
+        const url = new URL(c)
+        expect(url.port).toBe(String(B.port))
+        expect(url.searchParams.get('token')).toBe('tok-b')
+      }
     } finally {
       fetchSpy.mockRestore()
     }

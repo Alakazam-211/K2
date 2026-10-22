@@ -312,6 +312,9 @@ impl Node {
             let (used, capped) = tokio::task::spawn_blocking(move || super::run::disk_usage_walk(&root)).await.unwrap_or((0, false));
             // A walk that hit its caps (data hidden past 256 levels or 2
             // million entries) counts as furthest over (review B F1).
+            if capped {
+                crate::nlog!("warning: server slot {}'s folder hit the disk walk's cap ({} GB counted so far); ranked furthest over its share", t.slot, used >> 30);
+            }
             let over = if capped { u64::MAX } else { used.saturating_sub(share) };
             if over > 0 && worst.is_none_or(|(_, w)| over > w) {
                 worst = Some((t.slot, over));

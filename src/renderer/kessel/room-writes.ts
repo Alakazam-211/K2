@@ -117,6 +117,12 @@ export const ROOM_WRITES: Readonly<Record<string, string>> = Object.freeze({
   'thread/post': 'post a Thread message to the agent on B',
   'thread/answer': 'answer a Thread ask on B',
   'thread/void': 'void a Thread message on B',
+  // Permission cards (Beta, prd-agent-settings-cards-v1 §4.3, §4.4): absent
+  // on B while its switch is off. A note is for a login below the card's
+  // floor; "Turn off again" is Admin and up (the card's own floor on B).
+  'thread/permission-note': 'leave a note for the owner or admin on a permission card waiting on B',
+  'thread/permission-undo':
+    'Turn off again on a permission card B approved; Admin floor on B, so a Member’s room never sends it',
   'thread/read':
     'reading the room’s Thread marks it read for your login on B (thread-read-v1), so B’s own clients and phone stop counting it',
 

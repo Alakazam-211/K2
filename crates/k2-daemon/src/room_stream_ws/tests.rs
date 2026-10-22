@@ -4,6 +4,30 @@ fn readable(pairs: &[(&str, &str)]) -> Readable {
     pairs.iter().map(|(r, c)| (r.to_string(), c.to_string())).collect()
 }
 
+/// Security review S2: only rooms where the pass holds `activity:read`
+/// are worth a per-frame ear check; a Thread-only pass caches none, so
+/// its ear frames cost no lookup. A login hears every readable room.
+#[test]
+fn the_ear_room_cache_is_only_rooms_with_activity_read() {
+    let pass = |caps: &[&str]| k2_core::skin::SkinPass {
+        id: "p".into(),
+        principal_id: None,
+        username: "guest".into(),
+        caps: caps.iter().map(|c| c.to_string()).collect(),
+        rooms: vec!["a".into(), "b".into()],
+        session: false,
+        room_policy: k2_core::skin::RoomPolicy::new(),
+        app: String::new(),
+        room_paths: Default::default(),
+    };
+    let r = readable(&[("a", "conv-a"), ("b", "conv-b")]);
+    assert!(ear_rooms_of(Some(&pass(&["thread:read"])), &r).is_empty(), "Thread-only: no ear rooms");
+    let ear = ear_rooms_of(Some(&pass(&["thread:read", "activity:read"])), &r);
+    assert_eq!(ear, ["a".to_string(), "b".to_string()].into_iter().collect());
+    assert_eq!(ear_rooms_of(None, &r).len(), 2, "a login");
+    assert!(ear_rooms_of(Some(&pass(&["thread:read", "activity:read"])), &Readable::new()).is_empty());
+}
+
 #[test]
 fn path_and_param_are_the_app_surface_rows() {
     assert_eq!(ROOM_STREAM_WS_PATH, "/cli/thread/stream");

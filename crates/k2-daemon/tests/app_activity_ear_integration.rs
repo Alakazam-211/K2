@@ -488,6 +488,9 @@ async fn the_counts_only_ear_reaches_gated_guests_on_every_route_and_never_a_too
         let file = transcript(home, &room, &agent);
         let (ear, _) = mint(port, &format!("ear{tag}"), &["thread:read", "thread:post", "activity:read"], &[&room.handle]);
         let (revokee, revokee_id) = mint(port, &format!("rev{tag}"), &["thread:read", "activity:read"], &[&room.handle]);
+        // S2: a pass whose ROOM is taken away mid-turn (its cached ear room
+        // goes stale until the 1 s recheck): the next frame must not reach it.
+        let (moved, moved_id) = mint(port, &format!("mov{tag}"), &["thread:read", "activity:read"], &[&room.handle]);
         let (thread_only, _) = mint(port, &format!("thr{tag}"), &["thread:read", "thread:post"], &[&room.handle]);
         let (act_only, _) = mint(port, &format!("act{tag}"), &["activity:read"], &[&room.handle]);
         let (elsewhere, _) = mint(port, &format!("els{tag}"), &["thread:read", "activity:read"], &[&other.handle]);
@@ -524,6 +527,7 @@ async fn the_counts_only_ear_reaches_gated_guests_on_every_route_and_never_a_too
             let mut owner_st = open_stream(port, OWNER_TOKEN).await;
             let mut ear_st = open_stream(port, &ear).await;
             let mut rev_st = open_stream(port, &revokee).await;
+            let mut moved_st = open_stream(port, &moved).await;
             let mut thr_st = open_stream(port, &thread_only).await;
             let mut els_st = open_stream(port, &elsewhere).await;
             tokio::time::sleep(Duration::from_millis(300)).await;
@@ -576,13 +580,24 @@ async fn the_counts_only_ear_reaches_gated_guests_on_every_route_and_never_a_too
             assert!(!overlay_ear(&before, &turn).is_empty(), "the revokee heard the turn while its pass lived: {before:?}");
             let (before_st, _) = drain(&mut rev_st, 300).await;
             let _ = before_st;
+            let (moved_before, _) = drain(&mut moved_st, 300).await;
+            assert!(!stream_ear(&moved_before, &turn).is_empty(), "the moved pass heard the turn while it held the room: {moved_before:?}");
             revoke(port, &revokee_id);
+            let r = http(
+                port,
+                "POST",
+                &format!("/cli/skin-tokens/rooms?token={OWNER_TOKEN}"),
+                Some(&serde_json::json!({ "id": moved_id, "rooms": [other.handle] }).to_string()),
+            );
+            assert_eq!(r.status, 200, "move the pass to another room: {}", r.body);
             tool_done(port, &agent, "toolu_e1");
             tool(port, &agent, "toolu_e2", "Read", serde_json::json!({"file_path": "/Users/z3thon/private/secret-XYZ.rs"}));
             activity_until(&mut owner_ov, &turn, "the read step", |a| a["tally"]["read"] == 1).await;
             let (after, closed) = drain(&mut rev_ov, 2_500).await;
             assert!(overlay_ear(&after, &turn).is_empty(), "a revoked pass gets no further ear frame: {after:?}");
             assert!(closed, "a revoked pass's overlay socket closes on the next ear frame");
+            let (moved_after, _) = drain(&mut moved_st, 2_500).await;
+            assert!(stream_ear(&moved_after, &turn).is_empty(), "a room taken away mid-turn: no further ear frame: {moved_after:?}");
             let (after_st, _) = drain(&mut rev_st, 2_500).await;
             assert!(stream_ear(&after_st, &turn).is_empty(), "a revoked pass gets no further stream frame: {after_st:?}");
             let r = catch_up(port, &revokee, &room.handle);

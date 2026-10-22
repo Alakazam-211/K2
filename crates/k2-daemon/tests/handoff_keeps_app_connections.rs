@@ -163,18 +163,33 @@ fn free_port() -> u16 {
     k2_core::test_env::loopback_test_port()
 }
 
+/// Whether any thread of `pid` still runs (a zombie, or a process that is
+/// gone, is not alive).
+///
+/// Linux: every thread counts, not just the leader. When a multithreaded
+/// process is killed, its leader can turn zombie (`/proc/<pid>/stat` says
+/// `Z`) while another thread is still exiting, and that thread still holds
+/// the shared fd table: its flocks are not released until it finishes. The
+/// daemon's `disk-scan` thread runs at nice 19, so on a busy box it can
+/// finish tens of ms after the leader. A thread that has reached `X` (or
+/// left `/proc/<pid>/task`) has closed its files.
 fn pid_alive(pid: i32) -> bool {
     if unsafe { libc::kill(pid, 0) } != 0 {
         return false;
     }
     #[cfg(target_os = "linux")]
     {
-        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
-        let state = stat
-            .rfind(')')
-            .and_then(|i| stat[i + 1..].split_whitespace().next())
-            .unwrap_or("Z");
-        state != "Z" && state != "X"
+        let Ok(tasks) = std::fs::read_dir(format!("/proc/{pid}/task")) else {
+            return false; // reaped since the kill(0)
+        };
+        tasks.filter_map(|e| e.ok()).any(|e| {
+            // A task that vanished mid-scan has exited.
+            let Ok(stat) = std::fs::read_to_string(e.path().join("stat")) else {
+                return false;
+            };
+            let state = stat.rfind(')').and_then(|i| stat[i + 1..].split_whitespace().next());
+            matches!(state, Some(s) if s != "Z" && s != "X")
+        })
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -696,6 +711,8 @@ async fn handoff_keeps_200_websockets_and_a_stream_and_adopts_frpc() {
     // process still holds the shared one. Behavioural, so it needs no
     // root: the daemon is non-dumpable (vault Q18), and its /proc/<pid>/fd
     // is unreadable to the same non-root user.
+    // "Gone" means every thread of it (see `pid_alive`): a still-exiting
+    // thread of the killed daemon holds the shared description too.
     unsafe { libc::kill(third_pid, libc::SIGKILL) };
     wait_for(20, "the killed third daemon to be gone", || !pid_alive(third_pid)).await;
     assert!(pid_alive(new_pid), "the second daemon must still be draining held_ws");
@@ -726,4 +743,76 @@ async fn handoff_keeps_200_websockets_and_a_stream_and_adopts_frpc() {
     // and the App.
     drop(reaper);
     let _ = std::fs::remove_dir_all(&home);
+}
+
+/// `pid_alive` (the hand-off test's "the killed successor is gone" check)
+/// must not call a process gone while one of its threads still holds its
+/// files. A Python child takes a flock, starts a thread that keeps running,
+/// then ends only its main thread (raw `SYS_exit`): the leader is a zombie
+/// while the process still holds the lock. Checking the leader alone (the
+/// old helper) said "gone" here, and the lock probe after it failed on
+/// every Linux node.
+#[cfg(target_os = "linux")]
+#[test]
+fn pid_alive_counts_a_zombie_leader_whose_thread_still_holds_a_flock() {
+    use std::io::BufRead;
+    use std::os::unix::io::AsRawFd;
+
+    let dir = std::env::temp_dir().join(format!("k2-rth-zl-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let lock = dir.join("held.lock");
+    let script = r#"
+import ctypes, fcntl, os, platform, sys, threading, time
+f = open(sys.argv[1], "a+")
+fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+def hold():
+    time.sleep(float(sys.argv[2]))
+    os._exit(0)
+threading.Thread(target=hold).start()
+print("locked", flush=True)
+# End the main thread only (SYS_exit, not exit_group): the leader becomes a
+# zombie while `hold` keeps the process, and its fd table, alive.
+ctypes.CDLL(None).syscall({"x86_64": 60, "aarch64": 93}[platform.machine()], 0)
+"#;
+    let mut child = Command::new("python3")
+        .args(["-c", script, lock.to_str().unwrap(), "3"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("python3 is required");
+    let pid = child.id() as i32;
+    let mut line = String::new();
+    std::io::BufReader::new(child.stdout.take().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    assert_eq!(line.trim(), "locked");
+
+    // Wait until the leader is a zombie (what the old check looked at).
+    let leader_state = || {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).expect("child stat");
+        stat[stat.rfind(')').unwrap() + 1..].split_whitespace().next().unwrap().to_string()
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while leader_state() != "Z" {
+        assert!(Instant::now() < deadline, "the leader never became a zombie");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    let probe = std::fs::OpenOptions::new().read(true).write(true).open(&lock).unwrap();
+    let try_lock = || unsafe { libc::flock(probe.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0;
+    assert!(!try_lock(), "the child's live thread must still hold the flock");
+    assert!(
+        pid_alive(pid),
+        "a zombie leader whose thread still holds the flock is not gone"
+    );
+
+    // Once every thread has exited, it is gone and the lock is free.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while pid_alive(pid) {
+        assert!(Instant::now() < deadline, "the child never exited");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(try_lock(), "gone, yet the flock is still held");
+    assert!(child.wait().unwrap().success());
+    let _ = std::fs::remove_dir_all(&dir);
 }

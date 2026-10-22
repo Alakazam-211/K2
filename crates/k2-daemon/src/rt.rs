@@ -46,16 +46,18 @@ pub fn for_loop_pass() -> Option<Handle> {
 
 /// Start a named std thread whose body runs inside the daemon's runtime
 /// context. Refused (an `Err`, nothing runs) when there is no runtime: the
-/// caller logs and gives up, it never panics.
+/// caller logs and gives up, it never panics. The lib's unit tests still
+/// get a plain thread then: their deliveries go to test sinks inside it.
 pub fn spawn<F>(name: &str, f: F) -> std::io::Result<std::thread::JoinHandle<()>>
 where
     F: FnOnce() + Send + 'static,
 {
-    let Some(handle) = handle() else {
+    let handle = handle();
+    if handle.is_none() && !cfg!(test) {
         return Err(std::io::Error::other(format!("no Tokio runtime for the {name} thread")));
-    };
+    }
     std::thread::Builder::new().name(name.to_string()).spawn(move || {
-        let _rt = handle.enter();
+        let _rt = handle.as_ref().map(|h| h.enter());
         f()
     })
 }

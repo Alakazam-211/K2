@@ -598,6 +598,13 @@ impl Node {
         let detail = match reason.as_deref() {
             Some("stalled") => Some(format!("no output for {}s", a.plan.stall_secs.unwrap_or(0))),
             Some("mem_cap") => Some(mem_cap_detail(mem_limit)),
+            Some(refusal::DISK_LOW) => {
+                let d = super::disk::disk_low_detail(self.disk_free_bytes(), self.local.lock().unwrap().policy.disk_floor_bytes);
+                if let Some(j) = journal.as_mut() {
+                    let _ = j.append(k2_node_proto::frames::LogStream::Sys, format!("[k2-node] {d}\n").as_bytes());
+                }
+                Some(d)
+            }
             _ => None,
         };
         self.finish_job(&t, &a, Some(&dirs), state, reason.as_deref(), detail.as_deref(), src_ran, exit, journal, lease, outputs).await;
@@ -832,10 +839,10 @@ impl Node {
 
     #[allow(clippy::too_many_arguments)]
     async fn finish_job(
-        &self,
+        self: &Arc<Self>,
         t: &Tenant,
         a: &Assign,
-        _dirs: Option<&JobDirs>,
+        dirs: Option<&JobDirs>,
         state: JobState,
         reason: Option<&str>,
         detail: Option<&str>,
@@ -890,34 +897,90 @@ impl Node {
             artifacts: outputs.as_ref().map(|o| o.artifacts.clone()).unwrap_or_default(),
         };
         let signed = SignedReceipt::sign(&self.key, &receipt);
-        {
-            // One lock: the shipper never sees a terminal row without its receipt.
-            let l = t.ledger.lock().unwrap();
-            if let Some(s) = &src {
-                let _ = l.set_src(job, gen, s);
-            }
-            if let Some(o) = &outputs {
-                if let Err(e) = l.set_outputs(job, gen, o) {
-                    crate::nlog!("ledger outputs {job}: {e}");
-                }
-            }
-            if let Err(e) = l.finish(job, gen, state, reason, detail, exit.as_ref(), log_seq, now) {
-                crate::nlog!("ledger finish {job}: {e}");
-            }
-            match &signed {
-                Ok(r) => {
-                    let _ = l.set_receipt(job, gen, r);
-                }
-                Err(e) => crate::nlog!("receipt for {job}: {e}"),
-            }
+        if let Err(e) = &signed {
+            crate::nlog!("receipt for {job}: {e}");
         }
-        self.jobs.lock().unwrap().remove(&(t.slot, job.clone()));
-        if self.jobs.lock().unwrap().is_empty() {
-            self.smoke.lock().unwrap().release();
+        let record = || self.record_finish(t, job, gen, state, reason, detail, exit.as_ref(), log_seq, now, src.as_ref(), outputs.as_ref(), signed.as_ref().ok());
+        let mut recorded = record();
+        let gone = || {
+            self.jobs.lock().unwrap().remove(&(t.slot, job.clone()));
+            if self.jobs.lock().unwrap().is_empty() {
+                self.smoke.lock().unwrap().release();
+            }
+            self.jobs_changed();
+        };
+        let landed = recorded.is_ok();
+        if landed {
+            gone();
         }
-        self.jobs_changed();
+        // The big parts of the dir go now (module `disk`): before any
+        // retry, since a full disk is the usual reason a write failed.
+        if let Some(d) = dirs {
+            self.strip_job_dir(t, &d.root, a.plan.src.as_ref().map(|s| s.project_key.as_str()), super::disk::JOB_END_KEEP).await;
+        }
+        // A job never stays `running` because its finish didn't land: the
+        // job stays counted (nothing new takes its place) until it does.
+        let mut tries = 0u32;
+        while let Err(e) = &recorded {
+            tries += 1;
+            if tries == 1 || tries % 30 == 0 {
+                crate::nlog!("ledger finish {job}: {e} (retrying)");
+            }
+            if tries > FINISH_RETRIES {
+                crate::nlog!("ledger finish {job}: gave up after {tries} tries: {e}");
+                break;
+            }
+            tokio::time::sleep(self.opts.disk_poll).await;
+            recorded = record();
+        }
+        if !landed {
+            gone();
+        }
+        if let Some(l) = lease.as_ref().filter(|l| l.slot.is_some()) {
+            self.after_slot_use(&l.dir).await;
+        }
+    }
+
+    /// The terminal row and its receipt, under one ledger lock (the
+    /// shipper never sees a terminal row without its receipt).
+    #[allow(clippy::too_many_arguments)]
+    fn record_finish(
+        &self,
+        t: &Tenant,
+        job: &str,
+        gen: u32,
+        state: JobState,
+        reason: Option<&str>,
+        detail: Option<&str>,
+        exit: Option<&ExitInfo>,
+        log_seq: u64,
+        now: i64,
+        src: Option<&SrcRan>,
+        outputs: Option<&Outputs>,
+        signed: Option<&SignedReceipt>,
+    ) -> Result<(), String> {
+        #[cfg(test)]
+        if job == tests::FINISH_FAILS_JOB && tests::FINISH_FAILS.load(Ordering::SeqCst) > 0 {
+            tests::FINISH_FAILS.fetch_sub(1, Ordering::SeqCst);
+            return Err("database or disk is full (test)".into());
+        }
+        let l = t.ledger.lock().unwrap();
+        if let Some(s) = src {
+            l.set_src(job, gen, s)?;
+        }
+        if let Some(o) = outputs {
+            l.set_outputs(job, gen, o)?;
+        }
+        l.finish(job, gen, state, reason, detail, exit, log_seq, now)?;
+        if let Some(r) = signed {
+            l.set_receipt(job, gen, r)?;
+        }
+        Ok(())
     }
 }
+
+/// Ledger finish retries (`disk_poll` apart: about an hour by default).
+const FINISH_RETRIES: u32 = 360;
 
 /// Allocated bytes under `root` (V74), no link followed, at most
 /// 2 million entries and 256 levels.
@@ -943,9 +1006,13 @@ pub fn disk_usage(root: &Path) -> u64 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::cgroup::Cgroups;
+
+    /// The job whose ledger finish fails [`FINISH_FAILS`] more times.
+    pub const FINISH_FAILS_JOB: &str = "finish-fails";
+    pub static FINISH_FAILS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
     /// V74: a `team` tenant over its disk budget has its running job
     /// stopped as a result (`failed / tenant_disk_full`); an `own` tenant

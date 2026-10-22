@@ -35,6 +35,10 @@ Install (root, once; the installers are inside this binary):
   k2-node resume [--by NAME] [--config-dir DIR]
   k2-node policy show [--config-dir DIR] [--home DIR]
   k2-node policy set key=value... [--config-dir DIR] [--home DIR]
+  k2-node gc [--older-days N] [--toolchains] [--no-wait] [--config-dir DIR] [--home DIR]
+                 (machine owner) free disk now: ended jobs' folders and idle warm build
+                 caches older than N days (default 0 = all); --toolchains also clears
+                 download caches when no job runs. Running jobs are never touched.
 
 More than one K2 server (0.46.3; the machine owner, at this machine):
   k2-node servers [list] [--json]                        every server this node serves
@@ -92,6 +96,8 @@ const SWITCHES: &[&str] = &[
     "--exclusive",
     "--wipe",
     "--allow-fake-clock",
+    "--toolchains",
+    "--no-wait",
 ];
 
 fn parse(args: &[String]) -> Result<Args, String> {
@@ -610,6 +616,46 @@ fn cmd_control(a: &Args, c: Control) -> Result<(), String> {
     Ok(())
 }
 
+/// `gc`: ask the running node to free disk (it knows which jobs run and
+/// which warm slots are busy), then wait for its answer.
+async fn cmd_gc(a: &Args) -> Result<(), String> {
+    use k2_node::admin::housekeeping as hk;
+    let layout = a.layout();
+    let older_days = match a.get("older-days") {
+        Some(v) => v.parse::<i64>().ok().filter(|d| *d >= 0).ok_or_else(|| format!("--older-days {v:?}: a whole number, 0 or more"))?,
+        None => 0,
+    };
+    let r = hk::GcRequest {
+        id: format!("cli-{}", k2_node_proto::crypto::random_id()?),
+        older_days,
+        toolchains: a.has("--toolchains"),
+        requested_by: Some(who(a)),
+        requested_at: Some(k2_node::util::now()),
+    };
+    hk::write_gc_request(&layout, &r)?;
+    if a.has("--no-wait") {
+        println!("Asked the node to free disk (request {}). Result: {}", r.id, hk::gc_result_path(&layout).display());
+        return Ok(());
+    }
+    println!("Asked the node to free disk (request {}); waiting for it…", r.id);
+    let t0 = std::time::Instant::now();
+    loop {
+        if let Some(o) = hk::read_gc_result(&layout).filter(|o| o.id == r.id) {
+            if !o.ok {
+                return Err(format!("gc: {}", o.message.unwrap_or_default()));
+            }
+            let v = o.result.unwrap_or_default();
+            let n = |k: &str| v.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
+            println!("freed {:.1} GB: {} job folder(s), {} warm cache(s), {} download cache(s)", n("freed_bytes") as f64 / (1u64 << 30) as f64, n("job_dirs"), n("slots"), n("caches"));
+            return Ok(());
+        }
+        if t0.elapsed() > std::time::Duration::from_secs(1800) {
+            return Err(format!("no answer in 30 minutes: is k2-node running? (k2-node status). The result lands in {}", hk::gc_result_path(&layout).display()));
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+}
+
 fn cmd_policy(a: &Args) -> Result<(), String> {
     let layout = a.layout();
     let facts = k2_node::node::machine_facts(&layout);
@@ -923,6 +969,7 @@ async fn main() -> ExitCode {
         Some("drain") => cmd_control(&a, Control::Draining),
         Some("resume") => cmd_control(&a, Control::Active),
         Some("policy") => cmd_policy(&a),
+        Some("gc") => cmd_gc(&a).await,
         Some("servers") => cmd_servers(&a),
         Some("install-files") => cmd_install_files(&a),
         Some("request") => cmd_request(&a),

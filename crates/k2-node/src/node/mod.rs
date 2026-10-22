@@ -44,6 +44,7 @@ use crate::sync::Git;
 use crate::wall::Wall;
 
 mod assign;
+mod disk;
 mod offer;
 mod run;
 mod sync_src;
@@ -83,6 +84,10 @@ pub struct NodeOptions {
     pub wall: Option<Wall>,
     /// How often a job unit's state is read (Linux wall).
     pub unit_poll: Duration,
+    /// How often the disk guard looks at free disk (module `disk`).
+    pub disk_poll: Duration,
+    /// Free bytes on the node's disk (tests fake it); `None` = statvfs.
+    pub disk_free: Option<Arc<dyn Fn() -> u64 + Send + Sync>>,
 }
 
 impl NodeOptions {
@@ -108,6 +113,8 @@ impl NodeOptions {
             health: true,
             wall: None,
             unit_poll: Duration::from_millis(300),
+            disk_poll: Duration::from_secs(10),
+            disk_free: None,
         }
     }
 }
@@ -186,6 +193,8 @@ struct RunningJob {
     mem_bytes: Option<u64>,
     exclusive: bool,
     stop: watch::Sender<Option<StopReason>>,
+    /// Start order (the disk guard stops the newest first).
+    seq: u64,
 }
 
 /// The machine owner's side, refreshed every poll.
@@ -239,6 +248,10 @@ pub struct Node {
     /// (`controller`): what other servers see when the owner's line has
     /// only an address for a label (a loopback enrol).
     pub owner_name: Mutex<Option<String>>,
+    /// Start order of running jobs ([`RunningJob::seq`]).
+    job_seq: std::sync::atomic::AtomicU64,
+    /// Warm target slots' last measured size and use (module `disk`).
+    slot_use: Mutex<HashMap<PathBuf, disk::SlotUse>>,
 }
 
 /// What this node understands beyond protocol 1 (the offer says it).
@@ -306,6 +319,8 @@ impl Node {
             fairq: crate::fairq::FairQ::open(&layout)?,
             stopping: std::sync::atomic::AtomicBool::new(false),
             owner_name: Mutex::new(None),
+            job_seq: Default::default(),
+            slot_use: Mutex::new(HashMap::new()),
             opts,
         });
         node.refresh_local(true);
@@ -704,6 +719,7 @@ impl Node {
     /// Background loops: config poll, power, tools, janitor, the queue.
     pub fn spawn_background(self: &Arc<Self>) {
         crate::fairq::spawn(self);
+        self.spawn_disk_guard();
         // Another server's queue waits while its wall isn't there (or it's
         // over its disk budget); the `team` disk scan (V74).
         self.spawn_tenant_wall_watch(Duration::from_secs(60));
@@ -724,6 +740,7 @@ impl Node {
                 if n % 5 == 0 {
                     node.write_status();
                 }
+                crate::admin::housekeeping::process_gc_request(&node).await;
             }
         });
     }

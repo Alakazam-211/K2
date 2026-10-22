@@ -147,6 +147,7 @@ impl Node {
                 mem_bytes: a.plan.limits.mem_bytes,
                 exclusive: a.plan.exclusive,
                 stop: stop_tx,
+                seq: self.job_seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             },
         );
         let caps = self.queue_caps();
@@ -156,11 +157,11 @@ impl Node {
         tokio::spawn(async move { node.run_job(tenant, a, stop_rx).await });
     }
 
-    fn assign_refusal(&self, t: &Tenant, a: &Assign) -> Option<k2_node_proto::frames::Refusal> {
+    pub(super) fn assign_refusal(&self, t: &Tenant, a: &Assign) -> Option<k2_node_proto::frames::Refusal> {
         let l = self.local.lock().unwrap().clone();
         let (cap_cpu, cap_mem, par) = self.caps(t, &l);
         let (used_cpu, used_mem, running, excl) = self.used(cap_cpu, cap_mem, par);
-        let (disk_free, _) = crate::sysinfo::disk(&self.layout().home);
+        let disk_free = self.disk_free_bytes();
         let tools = self.tools.lock().unwrap().clone();
         let view = NodeView {
             control: self.effective_control(&l),
@@ -215,7 +216,7 @@ impl Node {
         if let Some(p) = persisted.max_parallel {
             par = par.min(p.max(1));
         }
-        let (disk_free, _) = crate::sysinfo::disk(&self.layout().home);
+        let disk_free = self.disk_free_bytes();
         let tools = self.tools.lock().unwrap().clone();
         let none: [String; 0] = [];
         let view = NodeView {

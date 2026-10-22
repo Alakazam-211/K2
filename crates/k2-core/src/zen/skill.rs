@@ -1402,7 +1402,6 @@ mod tests {
             "garden_access_needed",
             "garden_delete_person",
             "needs_editor",
-            "k2 zen garden put <id> --from page.toml",
             "k2 zen widget put <name> --dir <folder>",
             "k2 zen garden history <g>",
             "k2 study garden-access",

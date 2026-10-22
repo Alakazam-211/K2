@@ -1392,7 +1392,8 @@ mod tests {
         for (today, new) in GARDEN_ACCESS_EDITS {
             assert_eq!(off.matches(today).count(), 1, "the off skill must hold {today:?} exactly once");
             assert!(!off.contains(new), "the off skill must not say {new:?}");
-            assert!(!on.contains(today), "the on skill still says {today:?}");
+            // An insertion keeps today's words after the new ones.
+            assert_eq!(on.matches(today).count(), usize::from(new.contains(today)), "the on skill still says {today:?}");
             assert!(on.contains(new), "the on skill must say {new:?}");
         }
         for needle in [

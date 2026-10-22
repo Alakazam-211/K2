@@ -1013,14 +1013,18 @@ mod tests {
             t.hub.attach(tx);
             sessions.push(rx);
         }
-        // Slots 1 (team) and 2 (own) hold 64 KiB; slot 3 (team) almost nothing.
+        // Slots 1 (team) and 2 (own) hold 4 MiB; slot 3 (team) only its
+        // folders. The test budget is 1 MiB a "GB": far above a job's
+        // folders (Linux counts 4 KiB per directory, APFS nothing; at 4 KiB
+        // a GB slot 3's started job alone was over on Linux), far below
+        // the 4 MiB.
         for s in [1u8, 2] {
             let p = layout.tenant(s).cache().join("big");
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-            std::fs::write(&p, vec![7u8; 64 << 10]).unwrap();
+            std::fs::write(&p, vec![7u8; 4 << 20]).unwrap();
         }
-        let budget = |gb: u32| u64::from(gb) * 4096;
-        assert!(n.tenant_disk_bytes(&tens[0]) >= 64 << 10);
+        let budget = |gb: u32| u64::from(gb) << 20;
+        assert!(n.tenant_disk_bytes(&tens[0]) >= 4 << 20);
         assert!(n.tenant_over_disk_with(&tens[0], budget) && n.tenant_over_disk_with(&tens[1], budget));
         assert!(!n.tenant_over_disk_with(&tens[2], budget), "slot 3 is under");
         assert!(!n.tenant_over_disk(&tens[0]), "40 real GB is far away");

@@ -74,11 +74,16 @@ trap cleanup EXIT
 # ── processes ────────────────────────────────────────────────────────
 
 clean() { env -i HOME="$1" PATH="$PATH_CLEAN" USER="$(id -un)" LANG=C.UTF-8 SHELL=/bin/sh "${@:2}"; }
+# The builds keep the caller's PATH (a compute node's toolchains, e.g. the
+# cmake that prost-build runs, live only there); nothing else of the
+# caller's environment reaches them. What runs under test stays on
+# PATH_CLEAN.
+build_env() { env -i HOME="$1" PATH="$PATH:$PATH_CLEAN" USER="$(id -un)" LANG=C.UTF-8 SHELL=/bin/sh "${@:2}"; }
 
 build() {
   [[ "${K2X2_NO_BUILD:-0}" == 1 ]] && return
   say "building k2-daemon and k2-node (debug, this worktree's target/)"
-  (cd "$REPO" && clean "$HOME" CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}" RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}" \
+  (cd "$REPO" && build_env "$HOME" CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}" RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}" \
     ${RUSTUP_TOOLCHAIN:+RUSTUP_TOOLCHAIN="$RUSTUP_TOOLCHAIN"} ${CARGO_BUILD_JOBS:+CARGO_BUILD_JOBS="$CARGO_BUILD_JOBS"} \
     cargo build -q -p k2-daemon -p k2-node) || die "build"
 }
@@ -236,8 +241,8 @@ old_build() {
   say "building v0.46.2 k2-daemon and k2-node into $OLD_DIR (once)"
   mkdir -p "$OLD_DIR/src"
   (cd "$REPO" && git archive --format=tar v0.46.2) | tar -x -C "$OLD_DIR/src"
-  (cd "$OLD_DIR/src" && clean "$HOME" CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}" RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}" \
-    CARGO_TARGET_DIR="$OLD_DIR/target" cargo build -q -p k2-daemon -p k2-node) || die "v0.46.2 build"
+  (cd "$OLD_DIR/src" && build_env "$HOME" CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}" RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}" \
+    ${RUSTUP_TOOLCHAIN:+RUSTUP_TOOLCHAIN="$RUSTUP_TOOLCHAIN"} ${CARGO_BUILD_JOBS:+CARGO_BUILD_JOBS="$CARGO_BUILD_JOBS"} CARGO_TARGET_DIR="$OLD_DIR/target" cargo build -q -p k2-daemon -p k2-node) || die "v0.46.2 build"
 }
 
 # ── sharing steps (S1 + S4a; the PRD §9 verbs) ───────────────────────

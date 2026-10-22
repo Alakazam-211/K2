@@ -3862,12 +3862,19 @@ mod tests {
     /// nothing is kept. The person's tap keeps the widget, once.
     #[test]
     fn an_action_card_is_answered_by_the_person_never_the_agent() {
+        // The keep applies through the claim entry with the card's version,
+        // which must be the widget's live one: a real Zen folder and widget.
+        let _home = crate::test_support::TempHome::new();
+        let f = k2_core::zen::ZenFiles::local();
+        f.setup().expect("zen setup");
         let handle = format!("ovlact{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let (project_id, _) = seed(&handle);
         let conv = uuid::Uuid::new_v4().to_string();
         pin(&project_id, &conv);
         let widget = format!("kw{}", &uuid::Uuid::new_v4().simple().to_string()[..10]);
-        let hash = "a".repeat(64);
+        f.new_widget(&widget, Some("hello")).expect("widget folder");
+        let hash = f.widget_status(&widget).bundle.expect("a good version").hash;
+        assert_eq!(hash.len(), 64, "{hash}");
         let id = match present_keep(&project_id, "builder changed it. Keep it?", &KEEP_OPTIONS, keep_action(&widget, &hash), true)
             .expect("present")
         {

@@ -19,7 +19,7 @@ use k2_core::permission::card::{
     Approvers, BatchState, BatchView, ItemView, KeyValue, Mode, NoteBox, PermissionView, ViewProof, Viewer, ViewerView,
     Why, AnswerView, UndoView, VIEW_VERSION,
 };
-use k2_core::permission::catalog::{ActionSpec, Direction, Floor, Grant, NotCardableSpec, Proof, Undo};
+use k2_core::permission::catalog::{ActionSpec, Direction, Floor, Grant, NotCardableSpec, ParamKind, Proof, Undo};
 use k2_core::permission::request::{limits, PermissionRequest, RequestState};
 use k2_core::permission::{label, CARD_ACTION_BATCH, CARD_ACTION_PERMISSION};
 use serde_json::{json, Map, Value};
@@ -116,13 +116,43 @@ fn sentence(s: &str) -> String {
     }
 }
 
+/// The words a person reads: [`words_raw`] with every Garden value
+/// (`ParamKind::Garden`) shown by the Garden's **current** name (an id
+/// whose Garden is gone stays the id), prd-garden-access-v1 §1.5a.
 pub(crate) fn words(spec: &ActionSpec, ctx: &Ctx) -> Words {
+    let gardens: Vec<&str> = spec.params.iter().filter(|p| p.kind == ParamKind::Garden).map(|p| p.key).collect();
+    if gardens.is_empty() {
+        return words_raw(spec, ctx);
+    }
+    let mut shown = ctx.clone();
+    for key in gardens {
+        if let Some(name) = shown.params.get(key).and_then(Value::as_str).and_then(crate::zen_garden_cards::shown_name) {
+            shown.params.insert(key.to_string(), Value::String(name));
+        }
+    }
+    words_raw(spec, &shown)
+}
+
+/// The card text hash fixed at request time and compared at the click
+/// (C35), over the words with values **as stored** (a Garden's id, not its
+/// name): a catalog wording change is `stale`, a Garden rename isn't.
+/// Byte-identical to `words_hash(&words(..))` for every action without a
+/// Garden value.
+pub(crate) fn text_hash_of(spec: &ActionSpec, ctx: &Ctx) -> String {
+    words_hash(&words_raw(spec, ctx))
+}
+
+/// The words with every value as stored.
+fn words_raw(spec: &ActionSpec, ctx: &Ctx) -> Words {
     let what = fill(spec.words.what_changes, ctx);
     let what_trim = what.trim().trim_end_matches('.').to_string();
+    // A setting label may name a value ("Edit {garden}"); none of the
+    // switch labels has braces, so theirs are unchanged.
+    let setting = fill(spec.words.setting, ctx);
     Words {
-        setting: spec.words.setting.to_string(),
+        prompt: format!("{} asks: {what_trim} ({setting}).", ctx.workspace_handle),
+        setting,
         what_changes: sentence(&what),
-        prompt: format!("{} asks: {what_trim} ({}).", ctx.workspace_handle, spec.words.setting),
         consequences: fill(spec.words.consequences, ctx),
         scope: fill(spec.words.scope, ctx),
         duration: spec.words.duration.to_string(),
@@ -264,7 +294,12 @@ pub(crate) fn item_view(req: &PermissionRequest, spec: &ActionSpec) -> ItemView 
     let mut values = vec![KeyValue { key: "workspace".into(), value: ctx.workspace_handle.clone() }];
     for p in spec.params {
         if let Some(v) = ctx.params.get(p.key) {
-            values.push(KeyValue { key: p.key.to_string(), value: value_text(v) });
+            // A Garden shows by its current name, as in the words.
+            let shown = match (p.kind, v.as_str()) {
+                (ParamKind::Garden, Some(id)) => crate::zen_garden_cards::shown_name(id).unwrap_or_else(|| id.to_string()),
+                _ => value_text(v),
+            };
+            values.push(KeyValue { key: p.key.to_string(), value: shown });
         }
     }
     let why_text = req.updated_why.clone().unwrap_or_else(|| req.why.clone());

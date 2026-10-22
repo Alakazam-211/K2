@@ -28,6 +28,8 @@ fi
 source "$PROJECT_DIR/scripts/require-mail-oauth-build-env.sh"
 # shellcheck source=scripts/macos-daemon-helper-app.sh
 source "$PROJECT_DIR/scripts/macos-daemon-helper-app.sh"
+# shellcheck source=scripts/lib/build-binaries.sh
+source "$PROJECT_DIR/scripts/lib/build-binaries.sh"
 # Gmail required OOTB; Microsoft only warns loudly unless K2_REQUIRE_MICROSOFT_OAUTH=1
 # (see the MCS-A3 TODO in require-mail-oauth-build-env.sh).
 require_mail_oauth_build_env
@@ -51,41 +53,15 @@ bash "$PROJECT_DIR/scripts/k2-home-gate.sh" || { echo "FATAL: k2-home gate faile
 echo ""; echo "Step 0: Linux build gate..."
 "$PROJECT_DIR/scripts/linux-build-gate.sh" || { echo "FATAL: Linux build gate failed" >&2; exit 1; }
 
-# ── Step 1: Build the Tauri app ──
-echo ""; echo "Step 1: tauri build..."
+# ── Steps 1–2: Build K2.app + every sidecar binary ──
+# One shared build step for dev-build.sh, build-app.sh and release.sh:
+# scripts/lib/build-binaries.sh (tauri build, then k2-daemon,
+# k2-power-helper, k2-ptyd, k2-node, k2-menubar, copied into the bundle).
+echo ""; echo "Step 1: building K2.app + sidecars..."
 export APPLE_SIGNING_IDENTITY="$SIGNING_IDENTITY"
 export APPLE_TEAM_ID="36B8R93HXV"
-bun run tauri build || { echo "FATAL: tauri build failed" >&2; exit 1; }
+k2_build_mac_binaries "$APP" || exit 1
 echo "  Build complete."
-
-# ── Step 2: Build + bundle the k2-daemon sidecar ──
-echo ""; echo "Step 2: bundling k2-daemon sidecar..."
-cargo build --release -p k2-daemon || { echo "FATAL: k2-daemon build failed" >&2; exit 1; }
-[ -x "target/release/k2-daemon" ] || { echo "FATAL: k2-daemon missing after build" >&2; exit 1; }
-assert_daemon_oauth_not_placeholder "target/release/k2-daemon"
-# k2-ptyd rides beside the daemon in K2 Daemon.app (prd-k2-ptyd-v1 §7.1).
-cargo build --release -p k2-ptyd --bin k2-ptyd || { echo "FATAL: k2-ptyd build failed" >&2; exit 1; }
-# macOS: the daemon lives in a nested background-only helper app so
-# Activity Monitor shows the K2 icon + "K2 Daemon".
-k2_daemon_helper_assemble "$APP" "target/release/k2-daemon" "target/release/k2-ptyd" || exit 1
-k2_daemon_helper_verify "$APP" || exit 1
-# Heartbeat S2 (D11): the wake helper, built by the same cargo build. The
-# daemon copies it to /Library/PrivilegedHelperTools only after the user
-# approves the one admin dialog.
-[ -x "target/release/k2-power-helper" ] || { echo "FATAL: k2-power-helper missing after build" >&2; exit 1; }
-cp "target/release/k2-power-helper" "$APP/Contents/MacOS/k2-power-helper"
-echo "  k2-power-helper copied into the bundle."
-# Compute nodes: k2-node inside K2.app (Settings → Compute installs it).
-cargo build --release -p k2-node --bin k2-node || { echo "FATAL: k2-node build failed" >&2; exit 1; }
-[ -x "target/release/k2-node" ] || { echo "FATAL: k2-node missing after build" >&2; exit 1; }
-cp "target/release/k2-node" "$APP/Contents/MacOS/k2-node"
-echo "  k2-node copied into the bundle."
-
-echo ""; echo "Step 2b: bundling k2-menubar helper..."
-cargo build --release -p k2-menubar || { echo "FATAL: k2-menubar build failed" >&2; exit 1; }
-[ -x "target/release/k2-menubar" ] || { echo "FATAL: k2-menubar missing after build" >&2; exit 1; }
-cp "target/release/k2-menubar" "$APP/Contents/MacOS/k2-menubar"
-echo "  k2-menubar copied into the bundle."
 
 # ── Step 3: Sign (inner binaries first, then the bundle) ──
 echo ""; echo "Step 3: signing with hardened runtime + entitlements..."

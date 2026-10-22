@@ -1,5 +1,5 @@
 {
-  "body": "shopdev asks: Run shopdev's held App request ar_22 on this server (App Approvals).",
+  "body": "shopdev asks: Approve shopdev's held App request ar_22 (App Approvals).",
   "choice": {
     "action": {
       "dedupe": "apps.approve:4f721c2f",
@@ -19,7 +19,7 @@
         },
         "askedFor": null,
         "askers": null,
-        "consequences": "The App's process runs as asked in ar_22 until someone stops it.",
+        "consequences": "The change K2 held for the owner runs now, exactly as listed in Settings → App Approvals; open it there to see what it does.",
         "direction": "loosen",
         "duration": "once",
         "expiresAt": 1761319200,
@@ -61,7 +61,7 @@
           "role": "admin",
           "via": "login"
         },
-        "whatChanges": "Run shopdev's held App request ar_22 on this server.",
+        "whatChanges": "Approve shopdev's held App request ar_22.",
         "why": {
           "by": "shopdev",
           "text": "Run the test suite on k2n2-m1; it takes 40 min here"
@@ -71,7 +71,7 @@
     "allow_custom": false,
     "expiresAt": 1761319200,
     "options": [],
-    "prompt": "shopdev asks: Run shopdev's held App request ar_22 on this server (App Approvals).",
+    "prompt": "shopdev asks: Approve shopdev's held App request ar_22 (App Approvals).",
     "status": "pending"
   },
   "created_at": 1761060000,

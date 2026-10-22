@@ -33,7 +33,7 @@
             },
             "askedFor": null,
             "askers": null,
-            "consequences": "It can build, deploy and restart its own Apps inside the default limits.",
+            "consequences": "Wider moves for its Apps (new caps, open services, budgets) still wait for the owner.",
             "direction": "loosen",
             "duration": "until someone turns it off",
             "expiresAt": 1761319200,
@@ -77,7 +77,7 @@
             },
             "askedFor": null,
             "askers": null,
-            "consequences": "Its Apps may use that core without asking each time.",
+            "consequences": "Every App billing looks after may use db without asking the owner first.",
             "direction": "loosen",
             "duration": "until someone turns it off",
             "expiresAt": 1761319200,
@@ -125,7 +125,7 @@
             },
             "askedFor": null,
             "askers": null,
-            "consequences": "The App's process runs as asked in ar_23 until someone stops it.",
+            "consequences": "The change K2 held for the owner runs now, exactly as listed in Settings → App Approvals; open it there to see what it does.",
             "direction": "loosen",
             "duration": "once",
             "expiresAt": 1761319200,
@@ -157,7 +157,7 @@
                 "value": "ar_23"
               }
             ],
-            "whatChanges": "Run billing's held App request ar_23 on this server.",
+            "whatChanges": "Approve billing's held App request ar_23.",
             "why": {
               "by": "billing",
               "text": "Run the test suite on k2n2-m1; it takes 40 min here"

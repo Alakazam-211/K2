@@ -33,7 +33,7 @@
           },
           "askedFor": "dana",
           "askers": null,
-          "consequences": "Every active machine; default limits; jobs see only the code billing sends.",
+          "consequences": "It may use every machine switched on here, with default limits, and machines added later. Jobs see only the code billing sends.",
           "direction": "loosen",
           "duration": "until someone turns it off",
           "expiresAt": 1761319200,

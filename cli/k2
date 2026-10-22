@@ -58098,6 +58098,27 @@ EXIT
   Garden is locked / only the person may do this: stop and ask · 4 no such
   proposal, Garden or widget.
 EOF
+    # Garden access lists (prd-garden-access-v1 G19/G20): only while this
+    # daemon's gardenAccess switch is on; off, the help is 0.46.3's.
+    if _garden_access_cli_enabled; then
+        cat <<'EOF'
+
+GARDEN ACCESS LISTS (on for this computer; k2 study garden-access)
+  Each Garden has one list of the agents who may edit it; it replaces the
+  switch above for Gardens. Edit a Garden only when you're on its list;
+  otherwise K2 asks the person. After a change, k2 zen validate --widget <w> --sign.
+  k2 zen garden access <garden> [--json]            the list (you: listed or not)
+  k2 zen garden access <garden> ask [--reason "…"]  ask the person (a card)
+  k2 zen garden access <garden> add|remove <agent>  the person, outside K2
+  k2 zen garden new <name> [--from <page.toml>] [--widgets <dir>…]   one call; K2 asks the person to let you keep editing
+  k2 zen garden history <garden> [--kind changes|access|asks] [--limit n] [--before <cursor>] [--json]
+  k2 zen widget history <widget> [--kind …] [--json]                  the person's
+  garden_access_needed and garden_delete_person exit 3 (K2 shows the card).
+  An agent's k2 zen garden delete asks the person. k2 zen widget claim is
+  retired (Gardens use access lists now), and k2 zen proposals lists only
+  the pending ones still draining.
+EOF
+    fi
 }
 
 # ── k2 zen guide (prd-zen-freeform-chrome FC33, FC34, FC59–FC66) ─────

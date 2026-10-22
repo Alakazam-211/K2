@@ -45,7 +45,7 @@
 //!   App's quota is cut and answered with `inbox_error
 //!   too_many_subscriptions`.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -392,6 +392,21 @@ fn readable_now(viewer: &Viewer, link: Option<&LinkCtx>) -> Option<(Readable, Op
     }
 }
 
+/// The rooms of `readable` whose ear this socket may hear: those where the
+/// pass also holds `activity:read` (security review S2). Cached at every
+/// set recompute (the 1 s recheck, a subscribe, a revoked Thread frame),
+/// so a Thread-only pass costs nothing per turn frame; a frame in a cached
+/// room is still re-checked against the pass as it is NOW, so a revoke
+/// stops the next frame at once. A login (`None`) hears every readable
+/// room.
+pub fn ear_rooms_of(pass: Option<&SkinPass>, readable: &Readable) -> HashSet<String> {
+    readable
+        .keys()
+        .filter(|room| pass.is_none_or(|p| p.has_cap_in_room(room, crate::skin_routes::ACTIVITY_READ)))
+        .cloned()
+        .collect()
+}
+
 /// One guest frame, re-checked against the pass as it is NOW: `Ok(None)`
 /// = the room is no longer readable (or the conversation no longer its
 /// pinned Chat); `Err(())` = the pass is gone.
@@ -439,7 +454,7 @@ pub async fn serve_room_stream_connection(stream: &mut TcpStream, params: HashMa
         }
     };
     let link: Option<Arc<LinkCtx>> = crate::apps::gateway::current();
-    let Some((readable, _)) = readable_now(&viewer, link.as_deref()) else {
+    let Some((readable, first_pass)) = readable_now(&viewer, link.as_deref()) else {
         let r = crate::skin_routes::revoked_skin_response();
         send_http(stream, r.status, &r.body).await;
         return;
@@ -497,6 +512,8 @@ pub async fn serve_room_stream_connection(stream: &mut TcpStream, params: HashMa
         }};
     }
 
+    // S2: the rooms whose ear this pass may hear, kept with the set.
+    let mut ear_set = ear_rooms_of(first_pass.as_ref(), &readable);
     if !apply!(readable, true) {
         return;
     }
@@ -511,7 +528,8 @@ pub async fn serve_room_stream_connection(stream: &mut TcpStream, params: HashMa
             }
             _ = recheck.tick() => {
                 match readable_now(&viewer, link.as_deref()) {
-                    Some((r, _)) => {
+                    Some((r, p)) => {
+                        ear_set = ear_rooms_of(p.as_ref(), &r);
                         if !apply!(r, false) {
                             break;
                         }
@@ -541,7 +559,8 @@ pub async fn serve_room_stream_connection(stream: &mut TcpStream, params: HashMa
                         Some(Ok(next)) => {
                             want = next;
                             match readable_now(&viewer, link.as_deref()) {
-                                Some((r, _)) => {
+                                Some((r, p)) => {
+                        ear_set = ear_rooms_of(p.as_ref(), &r);
                                     if !apply!(r, true) {
                                         break;
                                     }
@@ -602,7 +621,8 @@ pub async fn serve_room_stream_connection(stream: &mut TcpStream, params: HashMa
                                 // Revoked (or a new pinned Chat): never sent;
                                 // the set follows now, not at the next tick.
                                 match readable_now(&viewer, link.as_deref()) {
-                                    Some((r, _)) => {
+                                    Some((r, p)) => {
+                        ear_set = ear_rooms_of(p.as_ref(), &r);
                                         if !apply!(r, false) {
                                             break;
                                         }
@@ -649,6 +669,10 @@ pub async fn serve_room_stream_connection(stream: &mut TcpStream, params: HashMa
                 }
                 let Viewer::Guest { raw } = &viewer else { continue };
                 let Some(room) = view.room_of(&frame.conversation_id).map(str::to_string) else { continue };
+                // S2: a room this pass can't hear costs no lookup.
+                if !ear_set.contains(&room) {
+                    continue;
+                }
                 let (raw2, link2, r2, c2) = (raw.clone(), link.clone(), room.clone(), frame.conversation_id.clone());
                 let checked = tokio::task::spawn_blocking(move || overlay_ws::guest_ear_check(link2.as_deref(), &raw2, &r2, &c2)).await;
                 match checked {

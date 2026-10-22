@@ -26,6 +26,7 @@ import {
   DEFAULT_SKIN_CAPS,
   SKIN_ACTIVITY_CAPS,
   SKIN_CAP_CHOICES,
+  SKIN_DOWNLOAD_CAPS,
   SKIN_CAP_LABELS,
   SKIN_HEARTBEAT_CAPS,
   skinCapChoices,
@@ -374,6 +375,7 @@ describe('SkinAccessSection', () => {
       'heartbeats:write',
       'agent:identity',
       'agent:handle',
+      'files:download',
     ])
     expect(screen.getByText('Store this key now — it cannot be retrieved again')).not.toBeNull()
     expect(screen.getByText('k2skn_…ab12')).not.toBeNull()
@@ -991,7 +993,18 @@ describe('TUWA10: Settings → Apps reads the shared cap table', () => {
       'heartbeats:write': 'Add, edit, turn on or off, archive and fire heartbeats',
       'agent:identity': "Change the agent's name, color and picture",
       'agent:handle': "Change the agent's handle (its address)",
+      'files:download': 'Download Thread files (a save, not just a view; a person grants it)',
     })
+  })
+
+  it('files:download is its own group, never default, never a files cap, and gated by the server', () => {
+    expect(SKIN_DOWNLOAD_CAPS).toEqual(['files:download'])
+    expect(DEFAULT_SKIN_CAPS).not.toContain('files:download')
+    expect(SKIN_FILE_CAPS).not.toContain('files:download')
+    expect(skinCapChoices(true, true, true)).toContain('files:download')
+    const older = skinCapChoices(true, true, false)
+    expect(older).not.toContain('files:download')
+    expect(older.length).toBe(SKIN_CAP_CHOICES.length - 1)
   })
 
   it('agent identity caps are their own pair, never default, and gated by agent-identity', async () => {

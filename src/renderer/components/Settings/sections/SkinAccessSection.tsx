@@ -82,6 +82,11 @@ export const SKIN_HEARTBEAT_CAPS = ['heartbeats:read', 'heartbeats:write'] as co
 // grant because a handle change breaks links. Neither implies the other.
 // Offered only when the window's server supports `agent-identity`.
 export const SKIN_AGENT_IDENTITY_CAPS = ['agent:identity', 'agent:handle'] as const
+// Own group (0.46.3 Thread downloads, Rosson 2026-10-22): save Thread files.
+// Never implied by thread:read or files:read, never a default, and a
+// person's grant (an agent can't set it). Offered on servers with
+// `app-thread-parity-v1` (0.46.3, the release that also accepts the cap).
+export const SKIN_DOWNLOAD_CAPS = ['files:download'] as const
 // GH#72 (0.45.6): `files:write` stops at the agent's own `.k2/` folder.
 // This opt-in modifier lifts that for one room. Off by default, owner only
 // (an agent can't set it), and offered only beside a checked `files:write`
@@ -130,7 +135,7 @@ function AgentConfigOption({
   )
 }
 
-export const SKIN_CAP_CHOICES = [...DEFAULT_SKIN_CAPS, ...SKIN_FILE_CAPS, ...SKIN_TICKET_CAPS, ...SKIN_WIKI_CAPS, ...SKIN_STORE_CAPS, ...SKIN_ACTIVITY_CAPS, ...SKIN_HEARTBEAT_CAPS, ...SKIN_AGENT_IDENTITY_CAPS] as const
+export const SKIN_CAP_CHOICES = [...DEFAULT_SKIN_CAPS, ...SKIN_FILE_CAPS, ...SKIN_TICKET_CAPS, ...SKIN_WIKI_CAPS, ...SKIN_STORE_CAPS, ...SKIN_ACTIVITY_CAPS, ...SKIN_HEARTBEAT_CAPS, ...SKIN_AGENT_IDENTITY_CAPS, ...SKIN_DOWNLOAD_CAPS] as const
 export type SkinCap = (typeof SKIN_CAP_CHOICES)[number]
 
 /** What each cap lets an app do in a room — the checkbox tooltip. From the
@@ -141,13 +146,15 @@ export const SKIN_CAP_LABELS: Record<SkinCap, string> = Object.fromEntries(
 ) as Record<SkinCap, string>
 
 /** AH24: the heartbeat caps are offered only when the server ships them;
- *  the agent identity caps likewise (an older server refuses an unknown cap). */
-export function skinCapChoices(appHeartbeats: boolean, agentIdentity: boolean): readonly SkinCap[] {
-  if (appHeartbeats && agentIdentity) return SKIN_CAP_CHOICES
+ *  the agent identity and download caps likewise (an older server refuses
+ *  an unknown cap). */
+export function skinCapChoices(appHeartbeats: boolean, agentIdentity: boolean, fileDownload = true): readonly SkinCap[] {
+  if (appHeartbeats && agentIdentity && fileDownload) return SKIN_CAP_CHOICES
   return SKIN_CAP_CHOICES.filter(
     (c) =>
       (appHeartbeats || !(SKIN_HEARTBEAT_CAPS as readonly string[]).includes(c)) &&
-      (agentIdentity || !(SKIN_AGENT_IDENTITY_CAPS as readonly string[]).includes(c)),
+      (agentIdentity || !(SKIN_AGENT_IDENTITY_CAPS as readonly string[]).includes(c)) &&
+      (fileDownload || !(SKIN_DOWNLOAD_CAPS as readonly string[]).includes(c)),
   )
 }
 
@@ -601,9 +608,10 @@ export function SkinAccessSection(): React.JSX.Element {
   const appHeartbeats = useServerSupports('app-heartbeats')
   const agentIdentity = useServerSupports('agent-identity')
   const agentConfigOptIn = useServerSupports('agent-config-write')
+  const fileDownload = useServerSupports('app-thread-parity-v1')
   const capChoices = useMemo(
-    () => skinCapChoices(appHeartbeats, agentIdentity),
-    [appHeartbeats, agentIdentity],
+    () => skinCapChoices(appHeartbeats, agentIdentity, fileDownload),
+    [appHeartbeats, agentIdentity, fileDownload],
   )
   const [users, setUsers] = useState<SkinUser[]>([])
   const [roles, setRoles] = useState<SkinRole[]>([])

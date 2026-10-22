@@ -1102,10 +1102,13 @@ struct GardenBody {
     garden: String,
 }
 
-fn handle_garden_delete(body: &[u8]) -> Result<J, ZenError> {
+fn handle_garden_delete(owner: bool, caller: &Caller, body: &[u8]) -> Result<J, ZenError> {
     let b: GardenBody = parse_body(body, "garden/delete takes {garden}")?;
     let f = files();
     let out = f.delete_garden(&b.garden)?;
+    // Garden access G8: the list and made rows go to access.json (none
+    // while the switch was never on: nothing is written).
+    crate::garden_access::on_garden_deleted(owner, caller, &out.deleted.id, &out.deleted.name);
     let changed = refresh_and_emit()?;
     Ok(json!({
         "ok": true,
@@ -1460,7 +1463,7 @@ pub fn handle(
             r
         }
         "/cli/zen/garden/rename" => handle_garden_rename(body),
-        "/cli/zen/garden/delete" => handle_garden_delete(body),
+        "/cli/zen/garden/delete" => handle_garden_delete(owner, caller, body),
         "/cli/zen/garden/reorder" => handle_garden_reorder(body),
         "/cli/zen/garden/template" => handle_garden_template(body),
         LOCK_ROUTE => handle_garden_lock(body, caller, ingress),

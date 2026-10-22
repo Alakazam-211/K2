@@ -10,7 +10,9 @@ set -euo pipefail
 for t in curl jq cargo; do command -v "$t" >/dev/null || { echo "[smoke] FAIL: needs $t" >&2; exit 1; }; done
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 (cd "$REPO" && cargo build -q -p k2-daemon --bin k2-daemon) || { echo "[smoke] FAIL: build" >&2; exit 1; }
-BIN="$REPO/target/debug/k2-daemon"
+# The build's own target dir (CARGO_TARGET_DIR on a compute node).
+BIN="$(cd "$REPO" && cargo metadata -q --format-version 1 --no-deps | jq -r .target_directory)/debug/k2-daemon"
+[[ -x "$BIN" ]] || { echo "[smoke] FAIL: no daemon binary at $BIN" >&2; exit 1; }
 CLI="$REPO/cli/k2"
 ROOT="$(mktemp -d /tmp/k2sf-XXXX)"
 H="$ROOT/h"

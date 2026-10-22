@@ -60237,8 +60237,20 @@ _zen_validate_only_flags() {
 
 # Is Garden access on for this daemon? Its routes exist only then (off, a
 # probe is the Zen arm's 404 "unknown zen route").
+# Garden access (A6): the daemon keeps ~/.k2/garden-access-on only while
+# the switch is on. Against this computer's daemon, no file = off with no
+# request (0.46.3's behaviour, off-golden cli_zen.txt); another host is
+# asked.
+_garden_access_unmarked() {
+    case "${HOST:-127.0.0.1}" in
+        127.0.0.1|localhost|::1) [ ! -e "${K2_HOME}/garden-access-on" ] ;;
+        *) return 1 ;;
+    esac
+}
+
 _zen_access_on() {
     local raw
+    _garden_access_unmarked && return 1
     raw="$(cli_request "/cli/zen/garden/access" 2>/dev/null || true)"
     case "$raw" in
         *'"unknown zen route"'*|"") return 1 ;;
@@ -63044,6 +63056,9 @@ sys.exit(0 if isinstance(v, dict) and v.get("enabled") is True else 1)
 # and 404 "unknown zen route" (or a refusal) when off or on an older
 # daemon. Cached per process; a daemon that doesn't answer in 1s is off.
 _garden_access_cli_enabled() {
+    if [ -z "${_K2_GARDEN_ACCESS_ON:-}" ] && _garden_access_unmarked; then
+        _K2_GARDEN_ACCESS_ON=0
+    fi
     if [ -z "${_K2_GARDEN_ACCESS_ON:-}" ]; then
         _K2_GARDEN_ACCESS_ON=0
         local tok sock out="" _K2_CFG=""

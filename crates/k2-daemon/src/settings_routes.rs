@@ -227,6 +227,7 @@ pub(crate) fn sync_garden_access(on: bool, by: &str) -> bool {
     if before == on {
         return false;
     }
+    crate::garden_access::mark_switch(on);
     garden_access_flipped(on, by);
     true
 }

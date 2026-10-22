@@ -97,7 +97,15 @@ run() {
     return 0
 }
 
-routes() { printf '%s\n' "$1" > "$ROUTES"; }
+# A real daemon keeps ~/.k2/garden-access-on only while the switch is on,
+# and the CLI asks nothing without it; the stub's "on" carries the mark too.
+routes() {
+    printf '%s\n' "$1" > "$ROUTES"
+    case "$1" in
+        *'"/cli/zen/garden/access": [400'*) mkdir -p "$HOME/.k2" && : > "$HOME/.k2/garden-access-on" ;;
+        *) rm -f "$HOME/.k2/garden-access-on" ;;
+    esac
+}
 
 ACCESS_ON='"/cli/zen/garden/access": [400, {"ok": false, "error": "bad_request", "message": "garden/access needs garden=<id or name>"}]'
 

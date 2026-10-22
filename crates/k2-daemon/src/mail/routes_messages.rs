@@ -700,10 +700,23 @@ pub fn handle_attachments(params: &HashMap<String, String>) -> CliResponse {
         Err(resp) => return resp,
     };
     // Path shape is refused before the engine dials (cheap + testable).
+    // 0.46.3: a folder `--out` (existing, or ending in `/`) is resolved
+    // HERE too, so a bad one answers at once instead of after a download.
     let target = match get_n {
-        Some(_) => match messages::resolve_out_path(&path, out.as_deref().unwrap_or("")) {
+        Some(_) => match messages::resolve_out_target(&path, out.as_deref().unwrap_or("")) {
             Ok(t) => Some(t),
             Err(hint) => return error_response("400 Bad Request", "usage", &hint),
+        },
+        None => None,
+    };
+    // 0.46.3: one download per attachment at a time, and a small cap per
+    // workspace. The daemon keeps working after a CLI call times out (the
+    // blocking worker is not cancelled when the socket closes), so
+    // retries used to stack up full downloads against the same mailbox.
+    let _slot = match get_n {
+        Some(n) => match AttachmentFetchSlot::try_acquire(&project_id, token, n) {
+            Ok(slot) => Some(slot),
+            Err(resp) => return resp,
         },
         None => None,
     };
@@ -711,7 +724,82 @@ pub fn handle_attachments(params: &HashMap<String, String>) -> CliResponse {
         Ok(b) => b,
         Err(resp) => return resp,
     };
-    let full = match backend.fetch_full(&account_id, &email_id) {
+    let get = get_n.zip(target);
+    attachments_with_backend(backend.as_ref(), &account_id, &email_id, token, get)
+}
+
+/// Max attachment downloads running at once for one workspace.
+const MAX_CONCURRENT_ATTACHMENT_FETCHES: usize = 2;
+
+/// In-flight `attachments --get` downloads: (workspace, message token,
+/// 1-based index).
+fn active_attachment_fetches() -> &'static Mutex<Vec<(String, String, usize)>> {
+    static FETCHES: OnceLock<Mutex<Vec<(String, String, usize)>>> = OnceLock::new();
+    FETCHES.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// RAII slot for one attachment download. Held for the whole fetch +
+/// write, so it frees when the worker finishes, even if the caller has
+/// long since timed out and gone.
+struct AttachmentFetchSlot {
+    key: (String, String, usize),
+}
+
+impl AttachmentFetchSlot {
+    fn try_acquire(project_id: &str, token: &str, n: usize) -> Result<Self, CliResponse> {
+        let key = (project_id.to_string(), token.to_string(), n);
+        let mut active = active_attachment_fetches()
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        if active.contains(&key) {
+            return Err(error_response(
+                "409 Conflict",
+                "busy",
+                &format!(
+                    "attachment #{n} of {token} is still downloading from an earlier call (the \
+                     daemon keeps going after the CLI stops waiting) and writes to the --out \
+                     path that call gave. Wait, check for that file, and retry only if it is \
+                     not there once this answer stops being busy"
+                ),
+            ));
+        }
+        let running = active.iter().filter(|k| k.0 == key.0).count();
+        if running >= MAX_CONCURRENT_ATTACHMENT_FETCHES {
+            return Err(error_response(
+                "429 Too Many Requests",
+                "rate_limited",
+                &format!(
+                    "{running} attachment downloads are already running for this workspace \
+                     (max {MAX_CONCURRENT_ATTACHMENT_FETCHES}) — wait for them to finish, then retry"
+                ),
+            ));
+        }
+        active.push(key.clone());
+        Ok(Self { key })
+    }
+}
+
+impl Drop for AttachmentFetchSlot {
+    fn drop(&mut self) {
+        let mut active = active_attachment_fetches()
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        if let Some(i) = active.iter().position(|k| *k == self.key) {
+            active.swap_remove(i);
+        }
+    }
+}
+
+/// The engine half of [`handle_attachments`], over any backend (tests
+/// pass a fake). `get` = the 1-based index and the resolved target.
+fn attachments_with_backend(
+    backend: &dyn ReadBackend,
+    account_id: &str,
+    email_id: &str,
+    token: &str,
+    get: Option<(usize, messages::OutTarget)>,
+) -> CliResponse {
+    let full = match backend.fetch_full(account_id, email_id) {
         Ok(Some(f)) => f,
         Ok(None) => {
             return error_response(
@@ -722,7 +810,7 @@ pub fn handle_attachments(params: &HashMap<String, String>) -> CliResponse {
         }
         Err(hint) => return read_error_response(ReadError::Engine(hint)),
     };
-    let Some(n) = get_n else {
+    let Some((n, target)) = get else {
         let list: Vec<serde_json::Value> = full
             .attachments
             .iter()
@@ -754,13 +842,45 @@ pub fn handle_attachments(params: &HashMap<String, String>) -> CliResponse {
         );
     }
     let name = meta.filename.clone().unwrap_or_else(|| format!("attachment-{n}"));
-    let bytes = match backend.fetch_blob(&account_id, &meta.blob_id, &name, &meta.mime) {
+    // A folder target: the daemon names the file and never overwrites one
+    // that is already there (checked here, before the download, and again
+    // atomically at write time).
+    let (dest, daemon_named) = match target {
+        messages::OutTarget::File(p) => (p, false),
+        messages::OutTarget::Dir(dir) => {
+            let dest = dir.join(messages::safe_attachment_filename(meta.filename.as_deref(), n));
+            if std::fs::symlink_metadata(&dest).is_ok() {
+                return exists_response(n, &dest);
+            }
+            (dest, true)
+        }
+    };
+    let bytes = match backend.fetch_blob(account_id, &meta.blob_id, &name, &meta.mime) {
         Ok(b) => b,
         Err(hint) => return read_error_response(ReadError::Engine(hint)),
     };
-    let target = target.expect("resolved above when get is set");
-    if let Err(e) = std::fs::write(&target, &bytes) {
-        return error_response("502 Bad Gateway", "engine", &format!("write attachment: {e}"));
+    let written = if daemon_named {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&dest)
+            .and_then(|mut f| std::io::Write::write_all(&mut f, &bytes))
+    } else {
+        std::fs::write(&dest, &bytes)
+    };
+    if let Err(e) = written {
+        if daemon_named && e.kind() == std::io::ErrorKind::AlreadyExists {
+            return exists_response(n, &dest);
+        }
+        return error_response(
+            "500 Internal Server Error",
+            "write_failed",
+            &format!(
+                "downloaded attachment #{n} but could not write it to {}: {e} — nothing was \
+                 saved; pick another --out path",
+                dest.display()
+            ),
+        );
     }
     ok_json(serde_json::json!({
         "ok": true,
@@ -769,8 +889,20 @@ pub fn handle_attachments(params: &HashMap<String, String>) -> CliResponse {
         "filename": name,
         "mime": meta.mime,
         "bytes": bytes.len(),
-        "wrote": target.to_string_lossy(),
+        "wrote": dest.to_string_lossy(),
     }))
+}
+
+fn exists_response(n: usize, dest: &std::path::Path) -> CliResponse {
+    error_response(
+        "409 Conflict",
+        "exists",
+        &format!(
+            "{} already exists — attachment #{n} was not written. Pass a file path to --out \
+             to choose the name (a file path is overwritten)",
+            dest.display()
+        ),
+    )
 }
 
 // ── GET /cli/mail/wait ──────────────────────────────────────────────────
@@ -1777,6 +1909,210 @@ mod tests {
             ("get", "1"),
             ("out", "downloads/a.bin"),
         ]));
+        assert_eq!(resp.status, "503 Service Unavailable", "{}", resp.body);
+
+        cleanup_project(&project_id);
+        let _ = std::fs::remove_dir_all(&path);
+    }
+
+    /// One message with the given attachment names; counts blob fetches.
+    struct AttachFake {
+        names: Vec<Option<String>>,
+        blob_fetches: std::sync::atomic::AtomicUsize,
+    }
+
+    impl AttachFake {
+        fn new(names: &[Option<&str>]) -> Self {
+            Self {
+                names: names.iter().map(|n| n.map(str::to_string)).collect(),
+                blob_fetches: std::sync::atomic::AtomicUsize::new(0),
+            }
+        }
+        fn fetches(&self) -> usize {
+            self.blob_fetches.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    impl ReadBackend for AttachFake {
+        fn list_inbox(
+            &self,
+            _account_id: &str,
+            _filter: &messages::ListFilter,
+            _limit: usize,
+        ) -> Result<Vec<crate::mail::jmap::EmailSummary>, ListError> {
+            panic!("attachments never lists the inbox")
+        }
+        fn fetch_full(
+            &self,
+            _account_id: &str,
+            email_id: &str,
+        ) -> Result<Option<crate::mail::jmap::EmailFull>, String> {
+            let s = messages::tests::summary(email_id, ("", "a@b.example"), "call", "2026-10-22");
+            let mut full = messages::tests::full_from(&s);
+            full.attachments = self
+                .names
+                .iter()
+                .enumerate()
+                .map(|(i, n)| crate::mail::jmap::AttachmentMeta {
+                    blob_id: format!("B{}", i + 1),
+                    filename: n.clone(),
+                    mime: "audio/x-m4a".to_string(),
+                    size: 16,
+                })
+                .collect();
+            Ok(Some(full))
+        }
+        fn mark_seen(&self, _account_id: &str, _email_id: &str) -> Result<(), String> {
+            panic!("attachments never marks read")
+        }
+        fn fetch_blob(
+            &self,
+            _account_id: &str,
+            blob_id: &str,
+            _name: &str,
+            _mime: &str,
+        ) -> Result<Vec<u8>, String> {
+            self.blob_fetches.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(format!("bytes-of-{blob_id}").into_bytes())
+        }
+    }
+
+    fn temp_root(label: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "mail-attach-{label}-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&root).expect("temp root");
+        root.canonicalize().expect("canonical temp root")
+    }
+
+    fn get_into(
+        fake: &AttachFake,
+        root: &std::path::Path,
+        out: &str,
+        n: usize,
+    ) -> CliResponse {
+        let target = messages::resolve_out_target(&root.to_string_lossy(), out)
+            .unwrap_or_else(|e| panic!("resolve {out}: {e}"));
+        attachments_with_backend(fake, "acc-1", "M1", "tok", Some((n, target)))
+    }
+
+    #[test]
+    fn attachment_get_into_a_folder_writes_folder_slash_name() {
+        let root = temp_root("dir");
+        std::fs::create_dir_all(root.join("calls")).unwrap();
+        let fake = AttachFake::new(&[Some("call.m4a")]);
+        let resp = get_into(&fake, &root, "calls/", 1);
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let wrote = root.join("calls/call.m4a");
+        assert_eq!(body_json(&resp)["wrote"], wrote.to_string_lossy().as_ref());
+        assert_eq!(std::fs::read(&wrote).unwrap(), b"bytes-of-B1");
+        // Same folder without the slash: the file is there now, so the
+        // daemon refuses to overwrite it and does not download again.
+        let before = fake.fetches();
+        let resp = get_into(&fake, &root, "calls", 1);
+        assert_eq!(resp.status, "409 Conflict", "{}", resp.body);
+        assert_eq!(body_json(&resp)["error"]["code"], "exists");
+        assert_eq!(fake.fetches(), before, "a refused write must not download");
+        // A trailing-slash folder that does not exist is created.
+        let resp = get_into(&fake, &root, "fresh/inbox/", 1);
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        assert_eq!(std::fs::read(root.join("fresh/inbox/call.m4a")).unwrap(), b"bytes-of-B1");
+        // A file path still overwrites (unchanged behaviour).
+        std::fs::write(root.join("calls/keep.m4a"), b"old").unwrap();
+        let resp = get_into(&fake, &root, "calls/keep.m4a", 1);
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        assert_eq!(std::fs::read(root.join("calls/keep.m4a")).unwrap(), b"bytes-of-B1");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn attachment_names_with_separators_are_sanitised_in_folder_mode() {
+        let root = temp_root("names");
+        let fake = AttachFake::new(&[Some("../../evil/x.m4a"), None, Some("..")]);
+        let resp = get_into(&fake, &root, "in/", 1);
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        assert_eq!(std::fs::read(root.join("in/_.._evil_x.m4a")).unwrap(), b"bytes-of-B1");
+        assert!(!root.join("evil").exists(), "nothing may land outside the folder");
+        let resp = get_into(&fake, &root, "in/", 2);
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        assert_eq!(std::fs::read(root.join("in/attachment-2")).unwrap(), b"bytes-of-B2");
+        let resp = get_into(&fake, &root, "in/", 3);
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        assert_eq!(std::fs::read(root.join("in/attachment-3")).unwrap(), b"bytes-of-B3");
+        let entries = std::fs::read_dir(root.join("in")).unwrap().count();
+        assert_eq!(entries, 3);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn attachment_write_failure_is_an_error_not_a_hang() {
+        let root = temp_root("werr");
+        std::fs::create_dir_all(root.join("folder")).unwrap();
+        let fake = AttachFake::new(&[Some("call.m4a")]);
+        // The 0.46.0 shape: the write target is a folder. The resolver now
+        // turns that into folder mode, so force the raw file form here to
+        // prove a failed write answers with a real error.
+        let target = messages::OutTarget::File(root.join("folder"));
+        let resp = attachments_with_backend(&fake, "acc-1", "M1", "tok", Some((1, target)));
+        assert_eq!(resp.status, "500 Internal Server Error", "{}", resp.body);
+        let err = &body_json(&resp)["error"];
+        assert_eq!(err["code"], "write_failed");
+        let hint = err["hint"].as_str().unwrap();
+        assert!(hint.contains("could not write") && hint.contains("folder"), "{hint}");
+        // A missing parent (removed after resolving) is an error too.
+        let target = messages::OutTarget::File(root.join("gone/call.m4a"));
+        let resp = attachments_with_backend(&fake, "acc-1", "M1", "tok", Some((1, target)));
+        assert_eq!(resp.status, "500 Internal Server Error", "{}", resp.body);
+        assert_eq!(body_json(&resp)["error"]["code"], "write_failed");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn attachment_folder_refusals_answer_before_the_engine() {
+        let _g = crate::mail::mail_server_test_lock();
+        clear_mail_server();
+        let (name, path) = unique("attdir");
+        let project_id = insert_project(&name, &path);
+        std::fs::create_dir_all(&path).expect("workspace root");
+        std::fs::write(format!("{path}/note.txt"), b"x").unwrap();
+        let mine = format!("mine@{name}.example");
+        seed_address(&project_id, &mine, "active", Some("acc-1"));
+        let token = messages::encode_message_id(&mine, "M1");
+        let get = |n: &str, out: &str| {
+            handle_attachments(&params(&[
+                ("project", &path),
+                ("id", &token),
+                ("get", n),
+                ("out", out),
+            ]))
+        };
+        // A folder path over an existing file: 400 at once, no engine.
+        let resp = get("1", "note.txt/");
+        assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);
+        // A good folder path proceeds to the engine (503: no server).
+        let resp = get("1", "calls/");
+        assert_eq!(resp.status, "503 Service Unavailable", "{}", resp.body);
+
+        // A retry while the same download runs answers busy at once.
+        let held = AttachmentFetchSlot::try_acquire(&project_id, &token, 1)
+            .unwrap_or_else(|_| panic!("first slot"));
+        let resp = get("1", "calls/");
+        assert_eq!(resp.status, "409 Conflict", "{}", resp.body);
+        assert_eq!(body_json(&resp)["error"]["code"], "busy");
+        // A different attachment still runs (up to the per-workspace cap).
+        let resp = get("2", "calls/");
+        assert_eq!(resp.status, "503 Service Unavailable", "{}", resp.body);
+        let held2 = AttachmentFetchSlot::try_acquire(&project_id, &token, 2)
+            .unwrap_or_else(|_| panic!("second slot"));
+        let resp = get("3", "calls/");
+        assert_eq!(resp.status, "429 Too Many Requests", "{}", resp.body);
+        assert_eq!(body_json(&resp)["error"]["code"], "rate_limited");
+        // Slots free when the work ends.
+        drop(held);
+        drop(held2);
+        let resp = get("1", "calls/");
         assert_eq!(resp.status, "503 Service Unavailable", "{}", resp.body);
 
         cleanup_project(&project_id);

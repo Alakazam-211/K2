@@ -479,6 +479,15 @@ pub struct AppSettings {
     /// yet synced into the gate (lane B).
     #[serde(default)]
     pub permission_cards: bool,
+    /// Garden access lists, Settings → Gardens (prd-garden-access-v1 G0):
+    /// one list per Garden of the agents who may edit it, and each Garden's
+    /// History. Wire `gardenAccess`. Owner-only to change (an Owner login
+    /// may). **Default OFF in every build, the release included** (Rosson
+    /// Q5): with it off K2 behaves as 0.46.3. Synced into
+    /// `zen::garden_access::set_switch` at boot and on every settings write;
+    /// each off→on runs the G4 pass.
+    #[serde(default)]
+    pub garden_access: bool,
     /// The App runtime switch, Settings → Apps → This server → "Apps
     /// (beta)" (wire `apps`; 0.46.2 and older wrote `appsPreview`, which
     /// [`normalize_legacy_apps`] maps). Persisted mirror of `K2_APPS`
@@ -1169,6 +1178,7 @@ impl Default for AppSettings {
             federation_enabled: false,
             compute_preview: false,
             permission_cards: false,
+            garden_access: false,
             apps: true,
             apps_process_engine: false,
             apps_auto_prepare: crate::deploy::AUTO_PREPARE_DEFAULT,

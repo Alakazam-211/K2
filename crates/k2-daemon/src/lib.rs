@@ -243,6 +243,9 @@ pub mod wall_jump;
 // widget keyspaces, grants, the widget door `/cli/zen/call` and the agent
 // door `/cli/zen/data/*`.
 pub mod garden_data;
+// Garden access (prd-garden-access-v1 A1): caller → History actor, the G8
+// delete hook and the daily History sweep. The store is k2-core's.
+pub mod garden_access;
 pub mod gardens_manage;
 pub mod zen_agent_routes;
 pub mod zen_data_routes;

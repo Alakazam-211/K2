@@ -316,6 +316,22 @@ pub(crate) fn after_write(path: &str, caller: &Caller, body: &[u8], v: &J) {
                 record(On::Widget(w.trim()), EventKind::Made, caller, json!({ "from": b["from"] }));
             }
         }
+        // A6 (G29): Lock and design updates are the person's (owner token);
+        // `changed: false` (already so) wrote nothing above.
+        crate::zen_routes::LOCK_ROUTE => {
+            let g = v["garden"]["id"].as_str().map(str::to_string).or_else(|| resolve_id(b["garden"].as_str()));
+            if let Some(g) = g {
+                let kind = if v["locked"] == J::Bool(true) { EventKind::Locked } else { EventKind::Unlocked };
+                record(On::Garden(&g), kind, caller, json!({ "widgets": v["widgets"] }));
+            }
+        }
+        "/cli/zen/garden/sync" => {
+            let g = v["garden"]["id"].as_str().map(str::to_string).or_else(|| resolve_id(b["garden"].as_str()));
+            if let Some(g) = g {
+                let detail = json!({ "sync": b["sync"], "part": b["part"], "undo": b["undo"], "keep": b["keep"] });
+                record(On::Garden(&g), EventKind::Sync, caller, detail);
+            }
+        }
         _ => {}
     }
 }
@@ -1183,7 +1199,7 @@ fn kind_filter(raw: Option<&str>) -> Result<Option<BTreeSet<&'static str>>, CliR
 /// Who an actor label is, for the modals (a5-asks.md #7): `{kind, id?,
 /// handle?, name?, color?}`. `name` is plain words ("you", "a terminal in
 /// billing's room", "K2", "outside K2").
-fn actor_json(label: &str) -> J {
+pub(crate) fn actor_json(label: &str) -> J {
     match Actor::parse(label) {
         Some(Actor::Owner) => json!({ "kind": "owner", "name": "you" }),
         Some(Actor::Login(u)) => json!({ "kind": "login", "id": u, "name": u }),
@@ -1207,8 +1223,8 @@ fn actor_json(label: &str) -> J {
     }
 }
 
-/// One History item from a `zen_garden_events` line. A6 merges the other
-/// sources (snapshots, stamps, decided proposals) into the same list.
+/// One History item from a `zen_garden_events` line; [`crate::zen_history::merge`]
+/// adds the other sources (snapshots, stamps, decided proposals).
 fn event_item(e: &ga::Event) -> J {
     json!({
         "id": format!("event:{}", e.id),
@@ -1334,15 +1350,22 @@ fn garden_history(params: &HashMap<String, String>) -> CliResponse {
         ga::events_for_garden(&conn, &id, &refs, n, b)
     });
     let unsigned = if name.is_some() { unsigned_in(&f, &id, &placed) } else { Vec::new() };
+    let got = got.and_then(|(events, next)| {
+        let items = events.iter().map(event_item).collect::<Vec<_>>();
+        let scope = crate::zen_history::Scope::Garden { id: &id, placed: &placed };
+        crate::zen_history::merge(&f, scope, &events, items, before, next, &kinds)
+            .map(|items| (items, next))
+            .map_err(|e| refuse("503 Service Unavailable", "store_unavailable", format!("history merge: {e}")))
+    });
     match got {
-        Ok((events, next)) => resp(
+        Ok((items, next)) => resp(
             "200 OK",
             json!({
                 "ok": true,
                 "garden": id,
                 "name": name,
                 "widgets": placed,
-                "items": events.iter().map(event_item).collect::<Vec<_>>(),
+                "items": items,
                 "next": cursor(next),
                 "unsigned": unsigned,
             }),
@@ -1384,14 +1407,20 @@ fn widget_history(params: &HashMap<String, String>) -> CliResponse {
         let conn = db.lock();
         ga::events_for_widget(&conn, widget, n, b)
     });
+    let got = got.and_then(|(events, next)| {
+        let items = events.iter().map(event_item).collect::<Vec<_>>();
+        crate::zen_history::merge(&f, crate::zen_history::Scope::Widget(widget), &events, items, before, next, &kinds)
+            .map(|items| (items, next))
+            .map_err(|e| refuse("503 Service Unavailable", "store_unavailable", format!("history merge: {e}")))
+    });
     match got {
-        Ok((events, next)) => resp(
+        Ok((items, next)) => resp(
             "200 OK",
             json!({
                 "ok": true,
                 "widget": widget,
                 "gardens": gardens,
-                "items": events.iter().map(event_item).collect::<Vec<_>>(),
+                "items": items,
                 "next": cursor(next),
                 "unsigned": unsigned,
             }),

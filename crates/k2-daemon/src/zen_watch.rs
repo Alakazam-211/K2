@@ -71,7 +71,7 @@ pub fn start() {
             RUNNING.store(true, Ordering::Relaxed);
             let stop = Arc::new(AtomicBool::new(false));
             let r = watch_loop(&root, &stop, || {
-                if let Err(e) = crate::zen_routes::refresh_and_emit() {
+                if let Err(e) = crate::zen_routes::refresh_from_watcher() {
                     log_debug!("[daemon/zen-watch] refresh: {e}");
                 }
             });

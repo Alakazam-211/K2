@@ -266,10 +266,32 @@ pub fn pause_for_writes(garden: &str, placement: &str) {
 /// announced once whoever sees it first. Returns whether it moved. The
 /// fingerprint covers widget folders and runaway pauses (UW12).
 pub fn refresh_and_emit() -> Result<bool, ZenError> {
+    refresh_and_emit_from(false)
+}
+
+/// [`refresh_and_emit`] from the folder watcher: with Garden access on, a
+/// Garden page or widget folder that changed with no route write gets a
+/// `disk_edit` History line (G29, [`crate::zen_history`]).
+pub fn refresh_from_watcher() -> Result<bool, ZenError> {
+    refresh_and_emit_from(true)
+}
+
+/// A route wrote to the Zen folder: K2 saw this state (Garden access on),
+/// so the watcher's next refresh doesn't call it an edit outside K2.
+pub(crate) fn note_route_write() {
+    let _last = LAST_FINGERPRINT.lock().unwrap_or_else(|e| e.into_inner());
+    let f = files();
+    if f.is_set_up() {
+        crate::zen_history::after_refresh(&f, false, chrono::Utc::now().timestamp());
+    }
+}
+
+fn refresh_and_emit_from(from_disk: bool) -> Result<bool, ZenError> {
     let mut last = LAST_FINGERPRINT.lock().unwrap_or_else(|e| e.into_inner());
     let f = files();
     let (fp, refused) = f.refresh_with_report(&pauses())?;
     audit_lock_refusals(&refused);
+    crate::zen_history::after_refresh(&f, from_disk, chrono::Utc::now().timestamp());
     let changed = last.as_deref() != Some(fp.as_str());
     if changed {
         let first = last.is_none();
@@ -291,6 +313,7 @@ pub fn prime() {
         let f = files();
         if let Ok((fp, refused)) = f.refresh_with_report(&pauses()) {
             audit_lock_refusals(&refused);
+            crate::zen_history::after_refresh(&f, false, chrono::Utc::now().timestamp());
             *last = Some(fp);
         }
     }
@@ -300,6 +323,8 @@ pub fn prime() {
 /// back (prd-garden-lock-and-sync-v1 §5.4). The daemon can't tell who
 /// saved the file, so the actor is `file_edit`.
 fn audit_lock_refusals(refused: &[k2_core::zen::lock::LockRefusal]) {
+    // Garden access on (G29): one `lock_put_back` History line each, too.
+    crate::zen_history::lock_put_back(refused, chrono::Utc::now().timestamp());
     for r in refused {
         k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
             "zen.garden.lock_refused",
@@ -1521,6 +1546,10 @@ pub fn handle(
         if let Ok(v) = &r {
             // G9 + G29: the History line, and a widget reset's stamp.
             crate::zen_access_routes::after_write(path, caller, body, v);
+            if POST_ROUTES.contains(&path) {
+                // K2 made this change: not an edit outside K2 (disk_edit).
+                note_route_write();
+            }
         }
     }
     match r {

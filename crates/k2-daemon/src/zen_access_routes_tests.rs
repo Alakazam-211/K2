@@ -587,8 +587,18 @@ fn history_pages_filters_and_answers_only_the_person() {
     assert_eq!(acc["items"].as_array().expect("items").len(), 1, "{acc}");
     // The widget's History has its own lines only.
     let (_, w) = access(WIDGET_HISTORY_ROUTE, false, true, &Caller::Owner, &[("widget", "board")], json!({}));
-    let wk: Vec<&str> = w["items"].as_array().expect("items").iter().filter_map(|i| i["kind"].as_str()).collect();
+    let witems = w["items"].as_array().expect("items");
+    let wk: Vec<&str> = witems.iter().filter(|i| i["source"] == "event").filter_map(|i| i["kind"].as_str()).collect();
     assert_eq!(wk, vec!["signed"], "{w}");
+    // A6's merge (G29): the setup version no line covers is its own
+    // "version saved" line, and nothing else is merged.
+    let merged: Vec<(&str, &str)> = witems
+        .iter()
+        .filter(|i| i["source"] != "event")
+        .map(|i| (i["source"].as_str().expect("source"), i["kind"].as_str().expect("kind")))
+        .collect();
+    assert_eq!(merged, vec![("snapshot", "widget_changed")], "{w}");
+    assert!(witems.iter().all(|i| i["widget"] == "board"), "{w}");
     assert_eq!(w["unsigned"], json!([]), "signed by the person: {w}");
     // Agents can't read History; a bad kind is 400.
     for p in [GARDEN_HISTORY_ROUTE, WIDGET_HISTORY_ROUTE] {

@@ -682,6 +682,30 @@ mod tests {
         assert_eq!(std::fs::read_dir(layout.home.join("jobs")).map(|d| d.count()).unwrap_or(0), 0, "no job folder at all");
     }
 
+    /// Review C L2: a row queued before the arrival checks (an older hold
+    /// build) is checked again when the queue starts it: it ends
+    /// cancelled with the reason, never reaching a folder.
+    #[tokio::test]
+    async fn a_queued_row_with_a_bad_id_or_key_is_refused_when_it_starts() {
+        let free = Arc::new(AtomicU64::new(500 * GIB));
+        let (n, layout) = node("disk-queued", "disk_floor_gb = 0\n", free).await;
+        let owner = n.owner();
+        let mut bad_key = crate::ledger::tests::assign("okid", 1);
+        bad_key.plan.src = Some(k2_node_proto::frames::Src { project_key: "../other".into(), remote_url: None, commit: "a".repeat(40), dirty: None, slots: 1 });
+        bad_key.fence.plan_digest = bad_key.plan.digest().unwrap();
+        for (a, why) in [(crate::ledger::tests::assign("../x", 1), "bad_job_id"), (bad_key, "bad_project_key")] {
+            let id = a.fence.job_id.clone();
+            owner.ledger.lock().unwrap().insert_queued(&a, &*n.opts.clock).unwrap();
+            let row = owner.ledger.lock().unwrap().get(&id, 1).unwrap().unwrap();
+            assert!(!n.start_queued(&owner, &row), "{id}");
+            let r = owner.ledger.lock().unwrap().get(&id, 1).unwrap().unwrap();
+            assert_eq!((r.state, r.reason.as_deref()), (JobState::Cancelled, Some(why)), "{id}");
+            assert!(r.receipt.is_some(), "an unrun receipt, as for any queued end");
+        }
+        assert!(n.running_ids().is_empty());
+        assert_eq!(std::fs::read_dir(layout.home.join("jobs")).map(|d| d.count()).unwrap_or(0), 0, "no job folder at all");
+    }
+
     /// (c) Under the floor the guard reclaims first (ended job dirs, idle
     /// warm slots) and stops a running job (`failed / disk_low`) only when
     /// that wasn't enough: the newest first, one a pass. Above the floor

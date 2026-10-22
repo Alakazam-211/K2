@@ -104,7 +104,9 @@ pub struct Ledger {
 const COLS: &str = "job_id, generation, attempt, plan_digest, plan_json, state, reason, detail, created_at, \
     started_at, ended_at, exit_code, signal, log_seq, boot_id, src_json, receipt_json, cleaned, outputs_json, enqueued_at, rowid";
 
-/// Terminal states, for SQL.
+/// The ended states, as SQL: one list for every guard (finish, set_state,
+/// the open-row queries); a test keeps it equal to
+/// [`JobState::is_terminal`].
 const TERMINAL: &str = "('done','failed','cancelled','timeout','interrupted','unknown')";
 
 fn row_of(r: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
@@ -323,11 +325,15 @@ impl Ledger {
             .map_err(sqlerr)
     }
 
+    /// Move an attempt that hasn't ended (an ended row stays as it is:
+    /// security review C, L3).
     pub fn set_state(&self, job_id: &str, generation: u32, state: JobState, reason: Option<&str>, detail: Option<&str>) -> Result<(), String> {
         self.conn
             .execute(
-                "UPDATE jobs SET state = ?3, reason = COALESCE(?4, reason), detail = COALESCE(?5, detail)
-                 WHERE job_id = ?1 AND generation = ?2",
+                &format!(
+                    "UPDATE jobs SET state = ?3, reason = COALESCE(?4, reason), detail = COALESCE(?5, detail)
+                     WHERE job_id = ?1 AND generation = ?2 AND state NOT IN {TERMINAL}"
+                ),
                 params![job_id, generation, state.as_str(), reason, detail],
             )
             .map_err(sqlerr)?;
@@ -384,10 +390,11 @@ impl Ledger {
         let n = self
             .conn
             .execute(
-                "UPDATE jobs SET state = ?3, reason = ?4, detail = ?5, exit_code = ?6, signal = ?7, log_seq = ?8,
-                   ended_at = ?9, pid = NULL
-                 WHERE job_id = ?1 AND generation = ?2
-                   AND state NOT IN ('done', 'failed', 'cancelled', 'timeout', 'interrupted', 'unknown')",
+                &format!(
+                    "UPDATE jobs SET state = ?3, reason = ?4, detail = ?5, exit_code = ?6, signal = ?7, log_seq = ?8,
+                       ended_at = ?9, pid = NULL
+                     WHERE job_id = ?1 AND generation = ?2 AND state NOT IN {TERMINAL}"
+                ),
                 params![
                     job_id,
                     generation,
@@ -590,6 +597,10 @@ pub mod tests {
             l.set_state(&id, 1, s, None, None).unwrap();
             assert_eq!(l.finish(&id, 1, JobState::Done, None, None, None, 0, 14).unwrap(), !s.is_terminal(), "{s:?}");
         }
+        // Review C L3: set_state never reopens an ended row either.
+        l.set_state("j", 1, JobState::Finishing, Some("late"), None).unwrap();
+        let r = l.get("j", 1).unwrap().unwrap();
+        assert_eq!((r.state, r.reason), (JobState::Done, None), "an ended row stays ended");
     }
 
     #[test]

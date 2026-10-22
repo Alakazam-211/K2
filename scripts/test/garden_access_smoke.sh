@@ -5,8 +5,8 @@
 # (every K2_*/K2SO_* dropped; never the real ~/.k2, the keychain, the
 # running daemon or the tunnel) and drives it with curl only.
 #
-# The agents are FAKES: a script named `claude` (so the daemon classes the
-# session as an agent) that writes its session passport ($K2_HOOK_TOKEN) to
+# The agents are FAKES: a `claude` shim (so the daemon classes the session
+# as an agent) that writes its session passport ($K2_HOOK_TOKEN) to
 # a file and sleeps. Two workspaces: alpha (makes a Garden, gets listed)
 # and bravo (never listed). The person is the owner token; the phone is an
 # Owner login (`/cli/auth/login`).
@@ -49,7 +49,7 @@ ROOT="$(mktemp -d /tmp/k2ga-XXXX)"
 H="$ROOT/h"
 FIX="$ROOT/fixtures"
 PATH_CLEAN="/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin"
-mkdir -p "$H/.k2" "$H/tmp" "$H/run" "$H/agent-shim-empty" "$H/alpha" "$H/bravo" "$ROOT/fake" "$FIX"
+mkdir -p "$H/.k2" "$H/tmp" "$H/run" "$H/agent-shim" "$H/alpha" "$H/bravo" "$FIX"
 chmod 700 "$H/tmp" "$H/run"
 PID=""
 pass=0
@@ -67,7 +67,7 @@ cleanup() {
   [[ -n "$PID" ]] && kill "$PID" 2>/dev/null
   sleep 0.3
   [[ -n "$PID" ]] && kill -9 "$PID" 2>/dev/null
-  pkill -9 -f "$ROOT/fake/claude" 2>/dev/null
+  pkill -9 -f "$H/agent-shim/claude" 2>/dev/null
   if [[ "${KEEP:-0}" == 1 ]]; then say "kept $ROOT"; else rm -rf "$ROOT"; fi
 }
 trap cleanup EXIT
@@ -75,7 +75,7 @@ trap cleanup EXIT
 # ── the daemon ───────────────────────────────────────────────────────
 
 env -i HOME="$H" PATH="$PATH_CLEAN" USER="$(id -un)" LANG=C.UTF-8 SHELL=/bin/sh TMPDIR="$H/tmp" XDG_RUNTIME_DIR="$H/run" \
-  K2_TEST_AGENT_SHIM_DIR="$H/agent-shim-empty" K2SO_WATCHDOG_DISABLED=1 K2_HEARTBEAT_NO_SELF_HEAL=1 \
+  K2_TEST_AGENT_SHIM_DIR="$H/agent-shim" K2SO_WATCHDOG_DISABLED=1 K2_HEARTBEAT_NO_SELF_HEAL=1 \
   K2_SUBSCRIPTION_PROBE=deny K2_AIRGAP=1 K2_TUNNEL_LEASE=off K2_HOOK_INSTALL=0 \
   K2_LLM_ACCOUNTS_KEYCHAIN=0 K2_LLM_ACCOUNTS_LOOP=0 K2_USAGE_PRICES_FETCH=0 \
   "$BIN" >>"$H/daemon.log" 2>&1 &
@@ -153,18 +153,10 @@ seed_ws() {
   [[ "$(jq -r '.conversation_id // empty' <<<"$BODY")" != "" ]] || die "no pinned Chat for $name: $BODY"
 }
 
-# The fake harness: `claude` by name, so the session is an agent's.
-cat >"$ROOT/fake/claude" <<'EOF'
-#!/bin/sh
-printf '%s' "$K2_HOOK_TOKEN" > "$K2_GA_SMOKE_TOKEN_FILE.tmp" && mv "$K2_GA_SMOKE_TOKEN_FILE.tmp" "$K2_GA_SMOKE_TOKEN_FILE"
-exec sleep 3600
-EOF
-chmod +x "$ROOT/fake/claude"
-
 # A live agent session in workspace NAME; sets PASS_<NAME> (its passport).
 agent_session() {
   local name="$1" dir="DIR_$1" tf="$ROOT/token-$1"
-  must "$OWNER" POST /cli/sessions/v2/spawn "$(jq -nc --arg n "tab-ga-smoke-$name" --arg c "${!dir}" --arg cmd "$ROOT/fake/claude" --arg tf "$tf" \
+  must "$OWNER" POST /cli/sessions/v2/spawn "$(jq -nc --arg n "tab-ga-smoke-$name" --arg c "${!dir}" --arg cmd claude --arg tf "$tf" \
     '{agent_name: $n, cwd: $c, command: $cmd, args: [], env: {K2_GA_SMOKE_TOKEN_FILE: $tf}}')"
   for _ in $(seq 1 100); do [[ -s "$tf" ]] && break; sleep 0.1; done
   [[ -s "$tf" ]] || die "the fake agent in $name never wrote its passport (spawn: $BODY)"
@@ -173,6 +165,18 @@ agent_session() {
 
 seed_ws alpha
 seed_ws bravo
+# The fake harness: the daemon resolves every `claude` through
+# K2_TEST_AGENT_SHIM_DIR, so it goes there AFTER the wakes above pinned the
+# Chats (with no shim, a wake fails and pins one). It writes its passport
+# when asked to (our sessions), else just sleeps (a later wake).
+cat >"$H/agent-shim/claude" <<'EOF'
+#!/bin/sh
+if [ -n "${K2_GA_SMOKE_TOKEN_FILE:-}" ]; then
+  printf '%s' "$K2_HOOK_TOKEN" > "$K2_GA_SMOKE_TOKEN_FILE.tmp" && mv "$K2_GA_SMOKE_TOKEN_FILE.tmp" "$K2_GA_SMOKE_TOKEN_FILE"
+fi
+exec sleep 3600
+EOF
+chmod +x "$H/agent-shim/claude"
 agent_session alpha
 agent_session bravo
 say "agents: alpha=$WS_alpha bravo=$WS_bravo"

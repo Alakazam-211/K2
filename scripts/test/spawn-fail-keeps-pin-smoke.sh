@@ -46,6 +46,9 @@ api() { curl -sS -X "$1" "$U$2?token=$TOK${4:+&$4}" -H 'content-type: applicatio
 WS="$(cd "$H/beta" && pwd -P)"
 api POST /cli/projects/add-without-git "{\"path\":\"$WS\",\"seedWiki\":false,\"seedAgentsMd\":false}" >/dev/null
 say "workspace $WS"
+# An added folder is not an agent yet: make it one (`k2 settings --mode`).
+r="$(api POST /cli/mode '' "project=$(jq -rn --arg v "$WS" '$v|@uri')&set=custom")"
+[[ "$(jq -r '.success // .ok // empty' <<<"$r")" == true ]] || die "set agent mode: $r"
 HANDLE="beta"
 
 msg() { api POST /cli/workspace/msg '' "workspace=$HANDLE&text=$(jq -rn --arg v "$1" '$v|@uri')&from=smoke&wake=true&wake_timeout=2"; }

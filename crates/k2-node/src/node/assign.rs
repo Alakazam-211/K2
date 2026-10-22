@@ -342,6 +342,25 @@ impl Node {
     /// Start a queued row now (the queue chose it). False when it left
     /// the queue meanwhile (withdrawn, cancelled): then nothing starts.
     pub(crate) fn start_queued(self: &Arc<Self>, t: &Arc<Tenant>, r: &crate::ledger::Row) -> bool {
+        let a = Assign {
+            fence: Fence { job_id: r.job_id.clone(), attempt: r.attempt, generation: r.generation, plan_digest: r.plan_digest.clone() },
+            plan: r.plan.clone(),
+        };
+        // A row queued before the arrival checks (an older hold build) is
+        // checked again before it starts (security review C, L2): it ends
+        // cancelled instead of reaching folder names.
+        let refused = if !a.job_id_ok() {
+            Some(("bad_job_id", "a job id is 1-64 of A-Z a-z 0-9 _ -"))
+        } else if !a.project_key_ok() {
+            Some(("bad_project_key", "a project key is 1-128 of A-Z a-z 0-9 _ -"))
+        } else {
+            None
+        };
+        if let Some((code, detail)) = refused {
+            crate::nlog!("queued job refused at start: {code}");
+            self.cancel_queued_row(t, &r.job_id, r.generation, code, Some(detail));
+            return false;
+        }
         match t.ledger.lock().unwrap().dequeue(&r.job_id, r.generation, self.opts.clock.as_ref()) {
             Ok(true) => {}
             Ok(false) => return false,
@@ -350,10 +369,6 @@ impl Node {
                 return false;
             }
         }
-        let a = Assign {
-            fence: Fence { job_id: r.job_id.clone(), attempt: r.attempt, generation: r.generation, plan_digest: r.plan_digest.clone() },
-            plan: r.plan.clone(),
-        };
         self.launch(t, a);
         true
     }

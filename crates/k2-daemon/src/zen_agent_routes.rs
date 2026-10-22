@@ -93,11 +93,20 @@ enum Role {
     Manager,
     /// Any other local passport.
     Agent,
+    /// Garden access on (prd-garden-access-v1 G11/G12): a local passport the
+    /// gate (`zen_access_routes::passport_gate`) let through, so it is on the
+    /// list of every Garden the write touches (or the widget is a draft).
+    /// It writes; nothing is proposed, nothing is kept as mine.
+    Editor,
 }
 
 fn role(owner_token: bool, caller: &Caller) -> Role {
     if owner_token {
         Role::Person
+    } else if k2_core::zen::garden_access::enabled() {
+        // "Manage Gardens and data sources" no longer reaches Gardens; the
+        // list does (checked before this module runs).
+        Role::Editor
     } else if crate::gardens_manage::caller_may(caller) {
         Role::Manager
     } else {
@@ -252,6 +261,10 @@ fn widget_place(widget: &str) -> String {
 /// `{card, addr}` or `{note: true}`.
 fn keep_as_mine(widget: &str, before: Option<(String, k2_core::garden_data::MadeBy)>, agent_project: Option<&str>) -> J {
     use k2_core::garden_data::MadeBy;
+    if k2_core::zen::garden_access::enabled() {
+        // Retired with garden access (G20): `keepAsMine: false`.
+        return J::Null;
+    }
     let Some((old_hash, MadeBy::Owner)) = before else { return J::Null };
     let Some((new_hash, maker)) = live_maker(widget) else { return J::Null };
     if new_hash == old_hash || maker == MadeBy::Owner {
@@ -383,11 +396,21 @@ fn garden_put(r: Role, caller: &Caller, body: &[u8]) -> CliResponse {
     };
     let f = files();
     match r {
-        Role::Person | Role::Manager => match f.put_garden(&b.garden, &b.text, r == Role::Person) {
+        Role::Person | Role::Manager | Role::Editor => match f.put_garden(&b.garden, &b.text, r == Role::Person) {
             Ok(v) => {
                 after_write();
-                if r == Role::Manager {
+                if matches!(r, Role::Manager | Role::Editor) {
                     audit("zen-garden-put", caller, v["file"].as_str().unwrap_or(&b.garden));
+                }
+                if v["changed"] == J::Bool(true) {
+                    if let Some(g) = v["garden"].as_str() {
+                        crate::zen_access_routes::record(
+                            k2_core::zen::garden_access::On::Garden(g),
+                            k2_core::zen::garden_access::EventKind::Changed,
+                            caller,
+                            json!({ "file": v["file"], "hash": v["hash"].as_str().map(short), "snapshot": v["snapshot"], "note": note }),
+                        );
+                    }
                 }
                 resp("200 OK", v)
             }
@@ -418,15 +441,16 @@ fn widget_put(r: Role, caller: &Caller, body: &[u8]) -> CliResponse {
     };
     let f = files();
     match r {
-        Role::Person | Role::Manager => {
+        Role::Person | Role::Manager | Role::Editor => {
             let before = live_maker(&b.widget);
             match f.put_widget_file(&b.widget, &b.file, &b.text) {
                 Ok(mut v) => {
                     after_write();
-                    if r == Role::Manager {
+                    if matches!(r, Role::Manager | Role::Editor) {
                         audit("zen-widget-put", caller, v["file"].as_str().unwrap_or(&b.widget));
                         with_keep(&mut v, keep_as_mine(&b.widget, before, project_of(caller)));
                     }
+                    widget_written(&f, &mut v, caller, note.as_deref());
                     resp("200 OK", v)
                 }
                 Err(e) => zen_err(e),
@@ -554,15 +578,16 @@ fn folder_put(r: Role, caller: &Caller, body: &[u8]) -> CliResponse {
     };
     let f = files();
     match r {
-        Role::Person | Role::Manager => {
+        Role::Person | Role::Manager | Role::Editor => {
             let before = live_maker(&b.widget);
             match f.put_widget_folder(&b.widget, &staged, b.prune) {
                 Ok(mut v) => {
                     after_write();
-                    if r == Role::Manager {
+                    if matches!(r, Role::Manager | Role::Editor) {
                         audit("zen-widget-folder-put", caller, v["file"].as_str().unwrap_or(&b.widget));
                         with_keep(&mut v, keep_as_mine(&b.widget, before, project_of(caller)));
                     }
+                    widget_written(&f, &mut v, caller, note.as_deref());
                     resp("200 OK", v)
                 }
                 Err(e) => zen_err(e),
@@ -626,6 +651,9 @@ fn folder_put(r: Role, caller: &Caller, body: &[u8]) -> CliResponse {
 /// (never one of the person's Gardens), or `clear`. A preview places code
 /// where it runs, so it is the person's or an agent with the switch's.
 fn preview(r: Role, caller: &Caller, body: &[u8]) -> CliResponse {
+    // Garden access (§1.7): any local passport previews; an agent's preview
+    // runs with Always only (nobody is listed on K2's preview Garden), the
+    // person's with everything (their stamp, below).
     if r == Role::Agent {
         return refuse(
             "403 Forbidden",
@@ -645,7 +673,7 @@ fn preview(r: Role, caller: &Caller, body: &[u8]) -> CliResponse {
         return match f.clear_widget_previews() {
             Ok(v) => {
                 after_write();
-                if r == Role::Manager {
+                if matches!(r, Role::Manager | Role::Editor) {
                     audit("zen-widget-preview-clear", caller, widget_folder::PREVIEW_GARDEN);
                 }
                 resp("200 OK", v)
@@ -658,10 +686,18 @@ fn preview(r: Role, caller: &Caller, body: &[u8]) -> CliResponse {
         Err(e) => return zen_err(e),
     };
     match f.preview_widget_folder(b.widget.as_deref(), b.fallback.as_deref(), &staged, &b.config, r == Role::Person) {
-        Ok(v) => {
+        Ok(mut v) => {
             after_write();
-            if r == Role::Manager {
+            if matches!(r, Role::Manager | Role::Editor) {
                 audit("zen-widget-preview", caller, v["preview"].as_str().unwrap_or("-"));
+            }
+            if r == Role::Person {
+                if let Some(folder) = v["preview"].as_str().map(str::to_string) {
+                    let s = crate::zen_access_routes::stamp_after_write(&f, &folder, caller, k2_core::garden_data::authors::StampSource::Sign);
+                    if !s.is_null() {
+                        v["signed"] = s;
+                    }
+                }
             }
             resp("200 OK", v)
         }
@@ -851,7 +887,7 @@ pub(crate) fn approve_entry(caller: &Caller, id: &str) -> CliResponse {
 }
 
 fn approve(r: Role, caller: &Caller, body: &[u8]) -> CliResponse {
-    if r == Role::Agent {
+    if matches!(r, Role::Agent | Role::Editor) {
         return refuse(
             "403 Forbidden",
             "person_only",
@@ -927,7 +963,65 @@ fn approve(r: Role, caller: &Caller, body: &[u8]) -> CliResponse {
     let keep = if p.kind == ProposalKind::Garden { J::Null } else { keep_as_mine(&p.target, before, Some(p.made_by_project.as_str())) };
     let mut out = json!({ "ok": true, "id": p.id, "status": "approved", "applied": v, "target": p.target });
     with_keep(&mut out, keep);
+    if k2_core::zen::garden_access::enabled() {
+        out["access"] = approved_with_access(&f, &p, caller);
+    }
     resp("200 OK", out)
+}
+
+/// Garden access on (G21): a person's approve of a pending proposal also
+/// stamps the person on the new widget version, lists the proposer on the
+/// Garden it changed (or every Garden that places the widget), and writes
+/// the History lines. Answers what it did.
+fn approved_with_access(f: &ZenFiles, p: &Proposal, caller: &Caller) -> J {
+    use k2_core::zen::garden_access::{self as ga, Change, EventKind, On, Via};
+    let gardens: Vec<String> = match p.kind {
+        ProposalKind::Garden => vec![p.target.clone()],
+        _ => crate::zen_access_routes::placing_gardens(f, &p.target).into_iter().map(|(g, _)| g).collect(),
+    };
+    let stamp = match p.kind {
+        ProposalKind::Garden => J::Null,
+        _ => crate::zen_access_routes::stamp_after_write(f, &p.target, caller, k2_core::garden_data::authors::StampSource::Sign),
+    };
+    let Some(actor) = crate::zen_access_routes::actor_of(caller) else { return J::Null };
+    let mut listed = Vec::new();
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let change = Change::new(Via::ProposalApprove, &actor, now());
+        for g in &gardens {
+            match ga::add(&conn, g, &p.made_by_project, &change) {
+                Ok(true) => listed.push(g.clone()),
+                Ok(false) => {}
+                Err(e) => k2_core::log_debug!("[zen/agent] list proposer {} on {g}: {e:?}", p.made_by_project),
+            }
+        }
+    }
+    let detail = json!({ "proposal": p.id, "proposer": p.made_by_project });
+    match p.kind {
+        ProposalKind::Garden => crate::zen_access_routes::record(On::Garden(&p.target), EventKind::Changed, caller, detail),
+        _ => crate::zen_access_routes::record(On::Widget(&p.target), EventKind::WidgetChanged, caller, detail),
+    }
+    json!({ "listed": listed, "stamp": stamp })
+}
+
+/// Garden access on (G9, G29): a widget write stamps its writer (the
+/// person or a listed agent vouches) and logs one widget History line.
+fn widget_written(f: &ZenFiles, v: &mut J, caller: &Caller, note: Option<&str>) {
+    if !k2_core::zen::garden_access::enabled() || v["changed"] == J::Bool(false) {
+        return;
+    }
+    let Some(widget) = v["widget"].as_str().map(str::to_string) else { return };
+    let stamp = crate::zen_access_routes::stamp_after_write(f, &widget, caller, k2_core::garden_data::authors::StampSource::Sign);
+    crate::zen_access_routes::record(
+        k2_core::zen::garden_access::On::Widget(&widget),
+        k2_core::zen::garden_access::EventKind::WidgetChanged,
+        caller,
+        json!({ "file": v["file"], "written": v["written"], "hash": stamp["hash"], "note": note }),
+    );
+    if !stamp.is_null() {
+        v["signed"] = stamp;
+    }
 }
 
 fn reject(r: Role, caller: &Caller, body: &[u8]) -> CliResponse {
@@ -941,8 +1035,8 @@ fn reject(r: Role, caller: &Caller, body: &[u8]) -> CliResponse {
     };
     let status = match r {
         Role::Person | Role::Manager => "rejected",
-        Role::Agent if project_of(caller) == Some(p.made_by_project.as_str()) => "withdrawn",
-        Role::Agent => {
+        Role::Agent | Role::Editor if project_of(caller) == Some(p.made_by_project.as_str()) => "withdrawn",
+        Role::Agent | Role::Editor => {
             return refuse("403 Forbidden", "not_own", "an agent can only withdraw its own proposals");
         }
     };

@@ -290,6 +290,6 @@ async fn exit_logs_cancel_and_the_jobs_own_dirs() {
     assert!(!unit_loaded("k2job-ex3-g1.service"), "released");
     // The executor takes a job tree back for the node (here: root anyway,
     // so this checks the verb works end to end on a real tree).
-    n.node.reclaim_blocking(&n.layout.job_dir("ex1", 1));
+    n.node.reclaim_blocking(0, &n.layout.job_dir("ex1", 1));
     assert!(std::fs::read_to_string(n.layout.job_dir("ex1", 1).join("home/f")).is_ok());
 }

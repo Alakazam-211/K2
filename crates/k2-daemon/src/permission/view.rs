@@ -247,7 +247,7 @@ fn current_state(stored: RequestState, request_id: &str, choice_status: &str, an
         Some(Check::AlreadyDone) => RequestState::AlreadyDone,
         Some(Check::Needed) => RequestState::Pending,
         // Values that moved are `stale` only at the click (A1); drawn as stored.
-        Some(Check::Moved(_)) | None => stored,
+        Some(Check::Moved(_)) | Some(Check::Unavailable { .. }) | None => stored,
     }
 }
 
@@ -602,7 +602,7 @@ fn sweep_open_requests(workspace_id: Option<&str>, now: i64) -> usize {
         let to = match (action.check)(&present::ctx_of(req)) {
             Check::AlreadyDone => RequestState::AlreadyDone,
             Check::Needed => RequestState::Pending,
-            Check::Moved(_) => continue,
+            Check::Moved(_) | Check::Unavailable { .. } => continue,
         };
         if to == req.state {
             continue;

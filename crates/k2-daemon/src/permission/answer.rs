@@ -283,7 +283,11 @@ fn decide_one(
             Some(r) => format!("Denied: {r}"),
             None => "Denied.".to_string(),
         };
-        return record(RequestState::Denied, Some(&msg), reason);
+        let denied = record(RequestState::Denied, Some(&msg), reason)?;
+        // A Garden card's Deny is "Not now" / "Keep it" (prd-garden-access-v1
+        // §1.5): stored in its asks table; a no-op for every other action.
+        crate::zen_garden_cards::on_denied(&denied);
+        return Ok(denied);
     }
 
     // A confirm action needs its Settings confirm before anything moves.
@@ -312,7 +316,7 @@ fn decide_one(
 
     // 2. The current state, on the stored values and the stored text.
     let ctx = present::ctx_of(req);
-    if present::words_hash(&present::words(registered.spec, &ctx)) != req.text_hash {
+    if present::text_hash_of(registered.spec, &ctx) != req.text_hash {
         return record(RequestState::Stale, Some("the card's wording changed after it was asked"), None);
     }
     match (registered.check)(&ctx) {
@@ -322,7 +326,7 @@ fn decide_one(
             let msg = msg[..1].to_uppercase() + &msg[1..];
             return record(RequestState::AlreadyDone, Some(&msg), None);
         }
-        Check::Moved(why) => return record(RequestState::Stale, Some(&why), None),
+        Check::Moved(why) | Check::Unavailable { why, .. } => return record(RequestState::Stale, Some(&why), None),
         Check::Needed => {}
     }
     if d == Decision::Close {

@@ -2460,7 +2460,9 @@ fn answer_permission_card(
 /// a K2 terminal, a Garden widget and an App guest get 403
 /// `action_card_person_only`, before anything is read.
 fn handle_permission_card_route(path: &str, params: &HashMap<String, String>, session_author: &str) -> CliResponse {
-    if !k2_core::permission::gate::server_on() {
+    // K2's own Garden cards (prd-garden-access-v1 G16) take the note and
+    // "Turn off again" too, Beta or not, while Garden access lists are on.
+    if !k2_core::permission::gate::server_on() && !crate::zen_garden_cards::garden_access_on() {
         return CliResponse::not_found();
     }
     let note = path == k2_core::permission::NOTE_ROUTE;

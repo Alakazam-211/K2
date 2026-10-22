@@ -10,7 +10,7 @@
 //! |---|---|---|
 //! | `switches.rs` | E1 | the Agent tab's switches (vault, DNS and mail included) + `to=off` |
 //! | `connections.rs` | E1 | `connections.create`, `connections.add` |
-//! | `gardens.rs` | E1 | `garden.keep-mine` |
+//! | `gardens.rs` | E1, Garden access A4 | `garden.keep-mine`; `garden.access` (+ `-off`), `garden.delete` |
 //! | `held.rs` | E2 | `apps.approve`, `mail.approve`, `garden.proposal.approve`, `sources.approve` |
 //! | `compute.rs` | E2 | `compute.admin-approve` (cut if late) |
 //!
@@ -69,6 +69,11 @@ pub(crate) enum Check {
     /// Values that moved: widget version, held request decided elsewhere,
     /// workspace gone (`bad_params` at request time; `stale` at the click).
     Moved(String),
+    /// The action isn't offered on this server right now, whatever the
+    /// values: `not_available` (Garden access lists are off) or `retired`
+    /// (Gardens use access lists now). 409 with `code` at request time;
+    /// `stale` with `why` at the click; drawn as stored at render.
+    Unavailable { code: &'static str, why: String },
 }
 
 /// The result of `apply`.

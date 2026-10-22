@@ -369,6 +369,7 @@ fn request(workspace_id: &str, session_id: &str, body: &Map<String, Value>) -> C
             }))
         }
         super::actions::Check::Moved(why) => return err(400, code::BAD_PARAMS, why),
+        super::actions::Check::Unavailable { code: c, why } => return err(409, c, why),
         super::actions::Check::Needed => {}
     }
     let hash = params_hash(&values);
@@ -426,7 +427,7 @@ fn request(workspace_id: &str, session_id: &str, body: &Map<String, Value>) -> C
         action: spec.id.to_string(),
         params: Value::Object(values),
         params_hash: hash.clone(),
-        text_hash: present::words_hash(&w),
+        text_hash: present::text_hash_of(spec, &ctx),
         why,
         state: RequestState::Pending,
         floor: present::floor_str(floor).to_string(),
@@ -706,6 +707,7 @@ fn list(workspace_id: &str, area: Option<&str>, search: Option<&str>) -> CliResp
         } else {
             json!(match (r.check)(&ctx) {
                 super::actions::Check::AlreadyDone => present::on_word(s.direction),
+                super::actions::Check::Unavailable { code: c, .. } => c,
                 _ => "needed",
             })
         };

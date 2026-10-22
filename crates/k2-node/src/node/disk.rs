@@ -755,6 +755,40 @@ mod tests {
         assert!(!l.get("dequeued", 1).unwrap().unwrap().state.is_terminal());
     }
 
+    /// Review B F2: a sweep that loses the race with the runner (it read
+    /// the row before the runner's end landed) never rewrites that end:
+    /// the orphan check backs out, and a second end that slips through
+    /// writes nothing (the runner's state and its one receipt stand) and
+    /// tells the server nothing.
+    #[tokio::test]
+    async fn a_sweep_that_races_a_real_finish_leaves_the_runners_end() {
+        let free = Arc::new(AtomicU64::new(500 * GIB));
+        let (n, _layout) = node("disk-race", "disk_floor_gb = 0\n", free).await;
+        let owner = n.owner();
+        let mut a = crate::ledger::tests::assign("r", 1);
+        a.plan.argv = vec!["/bin/sh".into(), "-c".into(), "exit 0".into()];
+        a.fence.plan_digest = a.plan.digest().unwrap();
+        assert_eq!(n.on_assign(&owner, a.clone()), Some(("r".into(), 1)));
+        let first = ended(&n, "r").await;
+        assert_eq!(first.state, JobState::Done);
+        let receipt = serde_json::to_string(first.receipt.as_ref().expect("the runner's receipt")).unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        owner.hub.attach(tx);
+        // The orphan check, after the runner's end landed: backs out.
+        assert!(!n.finish_if_orphan(&owner, "r", 1, JobState::Failed, super::super::assign::NODE_LOST_JOB, "x"));
+        assert!(n.running_ids().is_empty(), "no placeholder left behind");
+        // A second end that got past the checks anyway.
+        n.finish_job(&owner, &a, None, JobState::Failed, Some(super::super::assign::NODE_LOST_JOB), Some("x"), None, None, None, None, None).await;
+        let r = owner.ledger.lock().unwrap().get("r", 1).unwrap().unwrap();
+        assert_eq!((r.state, r.reason.as_deref(), r.ended_at), (JobState::Done, None, first.ended_at), "the runner's end stands");
+        assert_eq!(serde_json::to_string(r.receipt.as_ref().unwrap()).unwrap(), receipt, "one receipt: the runner's");
+        while let Ok(f) = rx.try_recv() {
+            let about_r = matches!(&f, k2_node_proto::frames::Frame::State(s) if s.job_id == "r") || matches!(&f, k2_node_proto::frames::Frame::Receipt(x) if x.job_id == "r");
+            assert!(!about_r, "nothing sent for the losing end: {f:?}");
+        }
+        assert!(n.running_ids().is_empty());
+    }
+
     /// The same without a cancel: the guard loop's sweep ends a lost
     /// job `failed / node_lost_job`, once; a live job is never touched.
     #[tokio::test]

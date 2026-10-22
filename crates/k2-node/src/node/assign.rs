@@ -521,6 +521,15 @@ impl Node {
                 },
             );
         }
+        // Review B F2: the runner may have landed its end and left the map
+        // between the read above and the check. Read again with the place
+        // held: an end that landed stands (no second end, receipt or
+        // journal line).
+        let ended = t.ledger.lock().unwrap().get(job_id, generation).ok().flatten().is_none_or(|r| r.state.is_terminal());
+        if ended {
+            self.jobs.lock().unwrap().remove(&(t.slot, job_id.to_string()));
+            return false;
+        }
         crate::nlog!("job {job_id} gen {generation}: no process runs it but its row is {}; recording its end ({reason})", row.state.as_str());
         let (node, t, reason, detail) = (self.clone(), t.clone(), reason.to_string(), detail.to_string());
         tokio::spawn(async move {

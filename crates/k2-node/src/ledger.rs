@@ -378,12 +378,16 @@ impl Ledger {
         exit: Option<&ExitInfo>,
         log_seq: u64,
         at: i64,
-    ) -> Result<(), String> {
-        self.conn
+    ) -> Result<bool, String> {
+        // An attempt ends once (security review B, F2): a row that has
+        // already ended is never rewritten. `false` = it had ended.
+        let n = self
+            .conn
             .execute(
                 "UPDATE jobs SET state = ?3, reason = ?4, detail = ?5, exit_code = ?6, signal = ?7, log_seq = ?8,
                    ended_at = ?9, pid = NULL
-                 WHERE job_id = ?1 AND generation = ?2",
+                 WHERE job_id = ?1 AND generation = ?2
+                   AND state NOT IN ('done', 'failed', 'cancelled', 'timeout', 'interrupted', 'unknown')",
                 params![
                     job_id,
                     generation,
@@ -397,7 +401,44 @@ impl Ledger {
                 ],
             )
             .map_err(sqlerr)?;
-        Ok(())
+        Ok(n == 1)
+    }
+
+    /// An attempt's whole end in one transaction: the terminal state, then
+    /// (only if it hadn't ended) its src, outputs and receipt. All or
+    /// nothing, so a retry after a failed write (a full disk) never finds
+    /// a half-written end. `Ok(false)`: it had already ended (someone
+    /// else's end stands; nothing was written).
+    #[allow(clippy::too_many_arguments)]
+    pub fn end_attempt(
+        &self,
+        job_id: &str,
+        generation: u32,
+        state: JobState,
+        reason: Option<&str>,
+        detail: Option<&str>,
+        exit: Option<&ExitInfo>,
+        log_seq: u64,
+        at: i64,
+        src: Option<&SrcRan>,
+        outputs: Option<&Outputs>,
+        receipt: Option<&SignedReceipt>,
+    ) -> Result<bool, String> {
+        let tx = self.conn.unchecked_transaction().map_err(sqlerr)?;
+        if !self.finish(job_id, generation, state, reason, detail, exit, log_seq, at)? {
+            return Ok(false); // dropping `tx` rolls back (nothing written)
+        }
+        if let Some(s) = src {
+            self.set_src(job_id, generation, s)?;
+        }
+        if let Some(o) = outputs {
+            self.set_outputs(job_id, generation, o)?;
+        }
+        if let Some(r) = receipt {
+            self.set_receipt(job_id, generation, r)?;
+        }
+        tx.commit().map_err(sqlerr)?;
+        Ok(true)
     }
 
     pub fn set_receipt(&self, job_id: &str, generation: u32, r: &SignedReceipt) -> Result<(), String> {
@@ -526,6 +567,29 @@ pub mod tests {
             stall_secs: None,
         };
         Assign { fence: Fence { job_id: job.into(), attempt: generation, generation, plan_digest: plan.digest().unwrap() }, plan }
+    }
+
+    /// Review B F2: an attempt ends once. A second finish (a racing
+    /// sweep) leaves the first end as it was and says so; the SQL's list
+    /// is exactly the terminal states.
+    #[test]
+    fn an_ended_row_is_never_rewritten() {
+        let clock = FakeClock { t: Mutex::new(10), boot: Mutex::new("b1".into()) };
+        let l = Ledger::open_in_memory().unwrap();
+        l.insert(&assign("j", 1), &clock).unwrap();
+        assert!(l.finish("j", 1, JobState::Done, None, None, Some(&ExitInfo { code: Some(0), signal: None }), 3, 12).unwrap());
+        assert!(!l.finish("j", 1, JobState::Failed, Some("node_lost_job"), None, None, 0, 13).unwrap(), "already ended");
+        let r = l.get("j", 1).unwrap().unwrap();
+        assert_eq!((r.state, r.reason, r.ended_at, r.log_seq), (JobState::Done, None, Some(12), 3));
+        for s in [
+            JobState::Queued, JobState::Assigned, JobState::Preparing, JobState::Running, JobState::Finishing, JobState::Done,
+            JobState::Failed, JobState::Cancelled, JobState::Timeout, JobState::Interrupted, JobState::Unknown,
+        ] {
+            let id = format!("s-{}", s.as_str());
+            l.insert(&assign(&id, 1), &clock).unwrap();
+            l.set_state(&id, 1, s, None, None).unwrap();
+            assert_eq!(l.finish(&id, 1, JobState::Done, None, None, None, 0, 14).unwrap(), !s.is_terminal(), "{s:?}");
+        }
     }
 
     #[test]

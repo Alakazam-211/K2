@@ -1430,20 +1430,29 @@ mod tests {
         let daemon_port = install_test_ingress_state();
 
         // Stand-in for the daemon's main listener: dual-stack, so the v4
-        // aliases arrive as `::ffff:127.0.0.1`. Counts accepted sockets and
-        // sockets that delivered any byte.
+        // aliases arrive as `::ffff:127.0.0.1`. Counts accepted sockets,
+        // sockets whose first read has returned (settled), and sockets that
+        // delivered any byte.
+        //
+        // The counts are watch channels, not plain atomics: the kernel
+        // completes the dial's handshake from the listen backlog, so the
+        // belt can drop the upstream and the visitor can read its 502
+        // BEFORE this accept task has run. The checks below wait (bounded)
+        // for the accept instead of sampling a counter at that moment.
         let main = TcpListener::bind("[::]:0")
             .await
             .expect("bind [::]:0 (this test needs dual-stack loopback)");
         let main_port = main.local_addr().unwrap().port();
-        let accepted = Arc::new(AtomicUsize::new(0));
+        let (accepted_tx, accepted) = tokio::sync::watch::channel(0usize);
+        let (settled_tx, settled) = tokio::sync::watch::channel(0usize);
+        let settled_tx = Arc::new(settled_tx);
         let got_bytes = Arc::new(AtomicUsize::new(0));
         {
-            let (accepted, got_bytes) = (accepted.clone(), got_bytes.clone());
+            let got_bytes = got_bytes.clone();
             tokio::spawn(async move {
                 while let Ok((mut s, _)) = main.accept().await {
-                    accepted.fetch_add(1, Ordering::SeqCst);
-                    let got_bytes = got_bytes.clone();
+                    accepted_tx.send_modify(|n| *n += 1);
+                    let (got_bytes, settled_tx) = (got_bytes.clone(), settled_tx.clone());
                     tokio::spawn(async move {
                         let mut b = [0u8; 256];
                         if matches!(s.read(&mut b).await, Ok(n) if n > 0) {
@@ -1452,6 +1461,7 @@ mod tests {
                                 .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nMAIN")
                                 .await;
                         }
+                        settled_tx.send_modify(|n| *n += 1);
                     });
                 }
             });
@@ -1485,7 +1495,7 @@ mod tests {
         });
 
         for (label, target, must_connect) in &aliases {
-            let before = accepted.load(Ordering::SeqCst);
+            let before = *accepted.borrow();
             let sni = format!("{label}.example.k2.dev");
             let resp = tls_client_get(&cert_pem, https_port, &sni, "/cli/auth/login").await;
             assert!(
@@ -1493,14 +1503,32 @@ mod tests {
                 "{target}: a target on the daemon port must be 502, got:\n{resp}"
             );
             if *must_connect {
+                // A dial the belt refused has connected, so its accept comes
+                // (bounded wait). A refused dial never arrives: this fails.
+                let mut rx = accepted.clone();
+                let reached =
+                    tokio::time::timeout(Duration::from_secs(5), rx.wait_for(|n| *n > before))
+                        .await
+                        .map(|r| r.is_ok()); // drop the watch borrow at once
                 assert!(
-                    accepted.load(Ordering::SeqCst) > before,
+                    matches!(reached, Ok(true)),
                     "{target}: the dial reached the daemon port (the belt, not a refused dial, answered)"
                 );
             }
         }
-        // Give any (wrongly) forwarded bytes time to land.
+        // Give any (wrongly) forwarded bytes time to land, then wait until
+        // every accepted socket's first read has returned before counting.
         tokio::time::sleep(Duration::from_millis(200)).await;
+        let total = *accepted.borrow();
+        let mut rx = settled.clone();
+        let all_settled =
+            tokio::time::timeout(Duration::from_secs(5), rx.wait_for(|n| *n >= total))
+                .await
+                .map(|r| r.is_ok());
+        assert!(
+            matches!(all_settled, Ok(true)),
+            "every socket the daemon port accepted ({total}) must finish its first read"
+        );
         assert_eq!(got_bytes.load(Ordering::SeqCst), 0, "no request byte reached the daemon port");
 
         let ok = tls_client_get(&cert_pem, https_port, "app.example.k2.dev", "/").await;

@@ -172,6 +172,19 @@ pub const CAP_ROOM_MEMBERS: &str = "room:members";
 /// defaults; owner/role-granted. In no App core (the person approves it)
 /// until a Projects core exists.
 pub const CAP_PROJECT_WRITE: &str = "project:write";
+/// Save a Thread attachment as a download (0.46.3, Rosson 2026-10-22: "if
+/// they have threads available that doesn't mean they can download files
+/// unless they have file downloads turned on"). Held per room. It gates
+/// only the explicit save, `GET /cli/thread/attachment?mode=download`, and
+/// the `canDownload` flag each attachment carries for the viewer; opening a
+/// file (meta, preview, thumb, range) stays `thread:read` plus the guest's
+/// own `files:read`, as before. Never in the defaults, never implied by
+/// `thread:read` or `files:read`, in no App core, and person-only to grant:
+/// an agent with "manage Apps" can't add it (`skin_routes` answers 403
+/// `owner_only`), the same rule as [`CAP_FILES_AGENT_CONFIG`].
+pub const CAP_FILES_DOWNLOAD: &str = "files:download";
+/// Caps only a person may grant ([`person_only_cap_in`]).
+pub const PERSON_ONLY_CAPS: &[&str] = &[CAP_FILES_AGENT_CONFIG, CAP_FILES_DOWNLOAD];
 
 const KEY_BODY_LEN: usize = 43;
 const BASE62: &[u8; 62] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -196,6 +209,7 @@ const ACCEPTED_CAPS: &[&str] = &[
     CAP_FILES_AGENT_CONFIG,
     CAP_ROOM_MEMBERS,
     CAP_PROJECT_WRITE,
+    CAP_FILES_DOWNLOAD,
 ];
 
 /// Connect / Server Access names — never a skin role. `viewer` stays
@@ -423,6 +437,29 @@ pub fn parse_caps(raw: Option<&[String]>) -> Result<Vec<String>, String> {
         }
     }
     Ok(out)
+}
+
+/// The first person-only cap ([`PERSON_ONLY_CAPS`], in that order) in
+/// `caps`, if any: what an agent may never grant.
+pub fn person_only_cap_in<'a>(caps: impl IntoIterator<Item = &'a String>) -> Option<&'static str> {
+    let caps: Vec<&String> = caps.into_iter().collect();
+    PERSON_ONLY_CAPS.iter().copied().find(|p| caps.iter().any(|c| c.as_str() == *p))
+}
+
+/// The first person-only cap on any room line of `policy`.
+pub fn person_only_cap_in_policy(policy: &RoomPolicy) -> Option<&'static str> {
+    person_only_cap_in(policy.values().flatten())
+}
+
+/// The first person-only cap `new` adds on a room line where `old` (the
+/// stored policy, `None` = nothing stored) doesn't hold it. `None` = no
+/// widening.
+pub fn person_only_cap_added(old: Option<&RoomPolicy>, new: &RoomPolicy) -> Option<&'static str> {
+    PERSON_ONLY_CAPS.iter().copied().find(|p| {
+        new.iter().any(|(room, caps)| {
+            caps.iter().any(|c| c == p) && !old.and_then(|o| o.get(room)).is_some_and(|caps| caps.iter().any(|c| c == p))
+        })
+    })
 }
 
 /// `true` when any room line of `policy` carries [`CAP_FILES_AGENT_CONFIG`].
@@ -6694,6 +6731,36 @@ mod tests {
         tightened.insert("a".into(), vec![CAP_FILES_WRITE.into()]);
         assert!(agent_config_added(Some(&old), &tightened).is_empty());
         assert!(!policy_has_agent_config(&tightened));
+    }
+
+    /// 0.46.3 Thread downloads: `files:download` parses on its own, is never
+    /// a default, is implied by neither `thread:read` nor `files:read`, and
+    /// is person-only (an agent may never add it).
+    #[test]
+    fn files_download_is_explicit_never_implied_and_person_only() {
+        assert_eq!(CAP_FILES_DOWNLOAD, "files:download");
+        let empty = parse_caps(None).expect("empty default");
+        assert!(!empty.iter().any(|c| c == CAP_FILES_DOWNLOAD), "never a default");
+        let read = parse_caps(Some(&["thread:read".into(), "files:read".into()])).expect("read caps");
+        assert!(!read.iter().any(|c| c == CAP_FILES_DOWNLOAD), "thread:read + files:read must not imply it");
+        let dl = parse_caps(Some(&["thread:read".into(), "files:download".into()])).expect("files:download parses");
+        assert_eq!(dl, vec![CAP_THREAD_READ, CAP_FILES_DOWNLOAD]);
+        assert!(PERSON_ONLY_CAPS.contains(&CAP_FILES_DOWNLOAD));
+        assert!(PERSON_ONLY_CAPS.contains(&CAP_FILES_AGENT_CONFIG));
+
+        let mut old = RoomPolicy::new();
+        old.insert("a".into(), vec![CAP_THREAD_READ.into(), CAP_FILES_DOWNLOAD.into()]);
+        old.insert("b".into(), vec![CAP_THREAD_READ.into()]);
+        assert_eq!(person_only_cap_in_policy(&old), Some(CAP_FILES_DOWNLOAD));
+        assert_eq!(person_only_cap_added(Some(&old), &old), None, "keeping it is not adding it");
+        let mut widened = old.clone();
+        widened.insert("b".into(), vec![CAP_THREAD_READ.into(), CAP_FILES_DOWNLOAD.into()]);
+        assert_eq!(person_only_cap_added(Some(&old), &widened), Some(CAP_FILES_DOWNLOAD));
+        assert_eq!(person_only_cap_added(None, &old), Some(CAP_FILES_DOWNLOAD));
+        let caps: Vec<String> = vec![CAP_FILES_WRITE.into(), CAP_FILES_AGENT_CONFIG.into(), CAP_FILES_DOWNLOAD.into()];
+        assert_eq!(person_only_cap_in(&caps), Some(CAP_FILES_AGENT_CONFIG), "agentconfig is named first");
+        let plain: Vec<String> = vec![CAP_THREAD_READ.into(), CAP_FILES_READ.into()];
+        assert_eq!(person_only_cap_in(&plain), None);
     }
 
     #[test]

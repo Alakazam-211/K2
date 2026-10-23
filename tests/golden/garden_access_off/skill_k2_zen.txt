@@ -1,7 +1,7 @@
 ---
 k2_skill: k2-zen
 skill_version: 30
-skill_checksum: 94ff287140f4c3b1
+skill_checksum: 61eb81f7378e8574
 name: k2-zen
 description: Build Zen Gardens (~/.k2/zen): k2 zen garden, place K2's built-in widgets (a whole Home or one agent) or your own sealed custom widgets (k2 zen widget), themes, tokens, font, motion, validate, reset; agents request, never grant
 ---
@@ -887,9 +887,9 @@ person sees ("Board: K2 Boards") on the box of every Conversation that follows y
 answers `not_bound`. It rides only on the person's own send, as K2's quoted line before their
 `[from]` stamp, never as their words, and they can remove it. One line, at most 120
 characters, plain text, no `[thread:`, `[from ` or `[context`, at most 2 calls a second.
-`null`, your widget stopping or unloading, or a Garden switch clears it. With Garden access
-lists on, an unsigned version answers `needs_editor`. An older server doesn't get it (the chip
-says so). A message that carried one has `doc.context` (`{text, widget, placement}`).
+`null`, your widget stopping or unloading, or a Garden switch clears it. An older server
+doesn't get it (the chip says so). A message that carried one has `doc.context`
+(`{text, widget, placement}`).
 
 ```js
 const rows = await k2.agents.list()

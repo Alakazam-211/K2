@@ -73,5 +73,6 @@ HISTORY (the person's)
 RETIRED
   Keep as mine, "It's mine" (k2 zen widget claim), new proposals and
   maker-based reach. Pending proposals drain (approve / reject still work).
+  What to update before 0.47.0: k2 study garden-changes.
 --- stderr
 --- requests

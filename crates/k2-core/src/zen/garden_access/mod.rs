@@ -6,14 +6,15 @@
 //! (A2 routes and resolver, A3 data doors, A4 cards, A5 Settings, A6 copy).
 //! It owns no HTTP and no wording.
 //!
-//! - **The switch (G0)**, [`enabled`]: the server setting `gardenAccess`
-//!   (`AppSettings::garden_access`), owner only, **default off in every
-//!   build**. The daemon syncs it with [`set_switch`] at boot and on every
-//!   settings write, and runs the G4 pass ([`pass::run`]) on each off→on
-//!   flip. **While it is off nothing may write these tables** (G0a: they
-//!   exist and stay empty); every caller outside the pass checks
-//!   [`enabled`] first. The store functions don't, so tests and the pass can
-//!   use them.
+//! - **Always on (Rosson 2026-10-23: "it shouldn't be an on/off thing").**
+//!   Garden access is how Gardens work from 0.46.3; no person, agent,
+//!   route or card can turn it off. The daemon calls [`set_switch`]`(true)`
+//!   at every boot and runs the G4 pass ([`pass::run`]) once per install
+//!   (`k2_daemon::garden_access::boot`). The flag below survives only so
+//!   unit tests can still drive the retired 0.46.2 path (`set_switch(false)`)
+//!   until that code goes in 0.47.0 (retirement ledger); production never
+//!   sets it false. The store functions don't check it, so tests and the
+//!   pass can use them.
 //! - **The list (G1)**, `zen_garden_access`: `(garden, workspace)` rows.
 //!   [`add`] and [`remove`] are the only writers; each change also writes an
 //!   `access_added` / `access_removed` event (who, how, which card or
@@ -95,18 +96,19 @@ pub const MAX_DETAIL_BYTES: usize = 2048;
 
 // ── the switch (G0) ──────────────────────────────────────────────────
 
+/// Starts false so a unit test that never boots the daemon exercises the
+/// retired path unless it opts in; the daemon sets it true at boot and
+/// nothing in production sets it false again (see the module docs).
 static SWITCH: AtomicBool = AtomicBool::new(false);
 
-/// Sync the persisted `gardenAccess` setting into this process. Returns the
-/// previous value. The daemon's `settings_routes::sync_garden_access` is the
-/// one caller outside tests (boot, settings update and reset); it runs the
-/// G4 pass on an off→on flip.
+/// Set the flag in this process. Returns the previous value. Callers:
+/// daemon boot (always `true`) and tests (either way, restoring after).
 pub fn set_switch(on: bool) -> bool {
     SWITCH.swap(on, Ordering::SeqCst)
 }
 
-/// Garden access lists on? **Default off.** There is no env force-on: the
-/// switch is the person's, per server.
+/// Garden access on? Always true in a running daemon (0.46.3, no switch);
+/// false only inside a unit test that asked for the retired path.
 pub fn enabled() -> bool {
     SWITCH.load(Ordering::SeqCst)
 }

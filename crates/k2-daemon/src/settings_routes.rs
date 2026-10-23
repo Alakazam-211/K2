@@ -105,8 +105,8 @@ const OWNER_ONLY_KEYS: &[&str] = &[
     // Permission cards (Beta, prd-agent-settings-cards-v1 §2.1): the global
     // switch that lets agents ask people for setting changes.
     "permissionCards",
-    // Garden access lists (prd-garden-access-v1 G0): who may edit each
-    // Garden. Owner only; an Owner login may toggle it.
+    // Garden access lists (prd-garden-access-v1 G0): always on from 0.46.3
+    // (`app_settings::update` refuses false); still Owner-only to send.
     "gardenAccess",
     // Apps (beta) (prd-k2-app-runtime-v1 AR28): the App runtime switch.
     // `appsPreview` is its 0.46.2-and-older name (an old client may still
@@ -214,12 +214,11 @@ pub(crate) fn permission_cards_flipped(on: bool, by: &str) {
     });
 }
 
-/// Sync the persisted `gardenAccess` setting into the switch
-/// (prd-garden-access-v1 G0). The one sync point for every writer:
-/// settings update and reset. On an **off→on** flip it runs the G4 pass
-/// (add-only, every time) before answering, so a client that reads the
-/// lists right after turning it on sees them; a flip either way writes one
-/// Access Audit line and a `sync:settings` frame (`gardenAccess`), headless.
+/// Sync `gardenAccess` into the process (prd-garden-access-v1 G0). From
+/// 0.46.3 the setting is always true (`app_settings` refuses `false`), so
+/// on a running daemon this never flips: boot already turned it on
+/// (`garden_access::boot`). It stays for settings update/reset and for the
+/// tests that drive the retired path; a flip runs [`garden_access_flipped`].
 /// Returns whether it flipped.
 pub(crate) fn sync_garden_access(on: bool, by: &str) -> bool {
     use k2_core::zen::garden_access as ga;
@@ -232,9 +231,10 @@ pub(crate) fn sync_garden_access(on: bool, by: &str) -> bool {
     true
 }
 
-/// The `gardenAccess` switch flipped. Off→on runs the G4 pass now; a pass
-/// error is logged and audited (the setting stays on; the next off→on
-/// retries, the pass being add-only).
+/// Garden access turned on in this process: an install's first boot
+/// (`garden_access::boot`), or a test. On runs the G4 pass now; a pass
+/// error is logged and audited (the pass is add-only, so a later run is
+/// safe). Off happens only in tests of the retired path.
 pub(crate) fn garden_access_flipped(on: bool, by: &str) {
     use k2_core::zen::garden_access as ga;
     k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
@@ -851,120 +851,60 @@ mod tests {
         });
     }
 
-    /// Garden access G0 (prd-garden-access-v1): default off, owner only (an
-    /// Admin or Member write is an atomic 403), `/cli/settings/get` carries
-    /// `gardenAccess` (G0a item 3), and each off→on runs the add-only G4
-    /// pass: an agent that built a placed widget is listed once, with one
-    /// "added automatically at upgrade" History line; on→off removes
-    /// nothing; reset turns it off.
+    /// Garden access has no off switch (0.46.3, Rosson 2026-10-23):
+    /// `/cli/settings/get` says `gardenAccess: true`; the Owner's write of
+    /// `false` is a 400 with nothing half-applied and the flow still on; an
+    /// Admin or Member sending the key at all is a 403; reset keeps it on;
+    /// no settings write records a flip.
     #[test]
-    fn garden_access_switch_is_owner_only_defaults_off_and_runs_the_pass_on_each_off_to_on() {
+    fn garden_access_is_always_on_and_no_settings_write_turns_it_off() {
         use k2_core::zen::garden_access as ga;
         with_temp_home(|| {
             let _db = k2_core::db::scoped_for_test();
-            ga::set_switch(false);
-            let s = k2_core::app_settings::load();
-            assert!(!s.garden_access, "gardenAccess defaults off");
+            let was = ga::set_switch(true);
             let got: serde_json::Value = serde_json::from_str(&handle_settings_get().body).expect("settings json");
-            assert_eq!(got["gardenAccess"], serde_json::Value::Bool(false), "settings/get carries the key");
+            assert_eq!(got["gardenAccess"], serde_json::Value::Bool(true), "settings/get carries true");
+            let r = handle_settings_update(br#"{"gardenAccess":false,"defaultAgent":"codex"}"#, SettingsActor::Owner);
+            assert!(r.status.starts_with("400"), "{} {}", r.status, r.body);
+            assert!(r.body.contains("can't be turned off"), "{}", r.body);
+            let s = k2_core::app_settings::load();
+            assert!(s.garden_access, "still on");
+            assert_eq!(s.default_agent, "claude", "nothing half-applied");
+            assert!(ga::enabled(), "the flow stays on");
             for actor in [
                 session_actor("admingaccess", connect_users::Role::Admin),
                 session_actor("membergaccess", connect_users::Role::Member),
             ] {
-                let r = handle_settings_update(br#"{"gardenAccess":true,"defaultAgent":"codex"}"#, actor);
+                let r = handle_settings_update(br#"{"gardenAccess":false}"#, actor);
                 assert_eq!(r.status, "403 Forbidden", "{actor:?}: {}", r.body);
-                assert!(r.body.contains("requires the Owner role"), "{actor:?}: {}", r.body);
             }
-            assert!(!k2_core::app_settings::load().garden_access, "403 leaves it off");
-            assert!(!ga::enabled(), "a refused write never turns it on");
-
-            // A Garden with a widget an agent built (stamped by it).
-            let f = k2_core::zen::ZenFiles::local();
-            f.setup().expect("zen setup");
-            let g = f.find_garden("Garden 1").expect("Garden 1").1.id;
-            f.new_widget("tally", None).expect("widget");
-            std::fs::write(
-                f.path_of(&k2_core::zen::ZenFile::Garden(g.clone())),
-                "schema = 1\n\n[layout]\nkind = \"columns\"\n[[layout.column]]\nsize = 60\nmin-width = 200\n[[layout.column]]\nsize = 40\nmin-width = 200\n\n[[widget]]\nid = \"w1\"\nkind = \"custom\"\nwidget = \"tally\"\ncolumn = 0\n[widget.props]\nhome = \"Work\"\n\n[[widget]]\nid = \"talk\"\nkind = \"conversation\"\ncolumn = 1\n[widget.props]\nagents = \"w1\"\n",
-            )
-            .expect("page");
-            let hash = f.widget_status("tally").hash().to_string();
-            assert_eq!(hash.len(), 64, "tally bundles clean");
-            {
-                let h = k2_core::db::shared();
-                let conn = h.lock();
-                conn.execute("INSERT INTO projects (id, name, path) VALUES ('w-builder', 'b', '/tmp/w-b')", [])
-                    .expect("ws");
-                k2_core::garden_data::authors::stamp(
-                    &conn,
-                    "tally",
-                    &hash,
-                    &k2_core::garden_data::MadeBy::Agent { project_id: "w-builder".into() },
-                    k2_core::garden_data::authors::StampSource::Sign,
-                    k2_core::garden_data::authors::CallerKind::Agent,
-                    1,
-                )
-                .expect("stamp");
-                let n: i64 = conn.query_row("SELECT COUNT(*) FROM zen_garden_access", [], |r| r.get(0)).expect("count");
-                assert_eq!(n, 0, "off: the list is empty");
-            }
-            let listed = || {
-                let h = k2_core::db::shared();
-                let conn = h.lock();
-                ga::list(&conn, &g).expect("list").into_iter().map(|r| r.project_id).collect::<Vec<_>>()
-            };
-
             let r = handle_settings_update(br#"{"gardenAccess":true}"#, SettingsActor::Owner);
+            assert_eq!(r.status, "200 OK", "true is a no-op: {}", r.body);
+            let r = handle_settings_reset(SettingsActor::Owner);
             assert_eq!(r.status, "200 OK", "{}", r.body);
-            assert!(ga::enabled(), "the owner turns it on");
-            assert_eq!(listed(), vec!["w-builder"], "the pass ran on off→on");
-            {
-                let h = k2_core::db::shared();
-                let conn = h.lock();
-                let hist = ga::events_for_garden(&conn, &g, &["tally"], 10, None).expect("history");
-                assert_eq!(hist.len(), 1, "{hist:?}");
-                assert_eq!(hist[0].detail["note"], ga::pass::AUTO_NOTE);
-            }
-            // Writing it on again is no flip: nothing runs.
-            let r = handle_settings_update(br#"{"gardenAccess":true}"#, SettingsActor::Owner);
-            assert_eq!(r.status, "200 OK", "{}", r.body);
-            let r = handle_settings_update(br#"{"gardenAccess":false}"#, SettingsActor::Owner);
-            assert_eq!(r.status, "200 OK", "{}", r.body);
-            assert!(!ga::enabled());
-            assert_eq!(listed(), vec!["w-builder"], "off never removes rows");
-            let r = handle_settings_update(br#"{"gardenAccess":true}"#, SettingsActor::Owner);
-            assert_eq!(r.status, "200 OK", "{}", r.body);
-            {
-                let h = k2_core::db::shared();
-                let conn = h.lock();
-                let n: i64 = conn.query_row("SELECT COUNT(*) FROM zen_garden_events", [], |r| r.get(0)).expect("count");
-                assert_eq!(n, 1, "a second off→on adds nothing");
-            }
-            let flips: Vec<String> = k2_core::auth_audit::read_all()
+            assert!(ga::enabled(), "reset keeps it on");
+            assert!(k2_core::app_settings::load().garden_access);
+            let flips = k2_core::auth_audit::read_all()
                 .expect("audit")
                 .into_iter()
                 .filter(|e| e["event"] == ga::AUDIT_SWITCH_EVENT)
-                .map(|e| e["outcome"].as_str().expect("outcome").to_string())
-                .collect();
-            assert_eq!(flips, vec!["ok on", "ok off", "ok on"], "one Access Audit line per flip");
-            let r = handle_settings_reset(SettingsActor::Owner);
-            assert_eq!(r.status, "200 OK", "{}", r.body);
-            assert!(!ga::enabled(), "reset turns it off");
-            assert!(!k2_core::app_settings::load().garden_access);
+                .count();
+            assert_eq!(flips, 0, "no settings write flips anything");
+            ga::set_switch(was);
         });
     }
 
-    /// Garden access G0 / G24 (A6): each flip rewrites every workspace's
-    /// k2-zen skill for the switch, headless: on says who may edit, off is
-    /// today's file again byte for byte; the person's tail stays, and a
-    /// hand-edited skill gets a `.proposed` sibling instead.
+    /// Garden access G24 (A6) at the upgrade boot: the one-time pass
+    /// rewrites every workspace's k2-zen skill to the editor-list text,
+    /// headless; the person's tail stays, and a hand-edited skill gets a
+    /// `.proposed` sibling instead.
     #[test]
-    fn garden_access_flip_rewrites_the_zen_skill_in_every_workspace() {
+    fn the_upgrade_boot_rewrites_the_zen_skill_in_every_workspace() {
         use k2_core::zen::garden_access as ga;
         use k2_core::zen::skill::{generate_k2_zen_skill_for, SKILL_DESCRIPTION};
         with_temp_home(|| {
             let _db = k2_core::db::scoped_for_test();
-            ga::set_switch(false);
+            let was = ga::set_switch(false);
             k2_core::zen::ZenFiles::local().setup().expect("zen setup");
             let home = std::env::var("HOME").expect("HOME");
             let ws_a = std::path::Path::new(&home).join("ws-a");
@@ -982,35 +922,30 @@ mod tests {
                 }
             }
             let skill = |p: &std::path::Path| p.join(".k2/skills/k2-zen/SKILL.md");
+            // Seeded by 0.46.2 (the old text).
             for p in [&ws_a, &ws_b] {
                 assert!(k2_core::workspace::skill_regen::ensure_zen_skill(&p.join(".k2"), true), "seeded");
             }
-            // A's person added notes below the marker; B's person edited K2's part.
-            let a_off = format!("{}\nmy notes\n", std::fs::read_to_string(skill(&ws_a)).expect("a").trim_end());
-            std::fs::write(skill(&ws_a), &a_off).expect("a tail");
+            let a_old = format!("{}\nmy notes\n", std::fs::read_to_string(skill(&ws_a)).expect("a").trim_end());
+            std::fs::write(skill(&ws_a), &a_old).expect("a tail");
             let b_edit = std::fs::read_to_string(skill(&ws_b)).expect("b").replacen("# K2 Zen Gardens", "# My Zen notes", 1);
             std::fs::write(skill(&ws_b), &b_edit).expect("b edit");
-            let off_body = generate_k2_zen_skill_for(false);
+            let old_body = generate_k2_zen_skill_for(false);
             let on_body = generate_k2_zen_skill_for(true);
-            assert!(a_off.contains(off_body.trim()), "seeded with today's text");
+            assert!(a_old.contains(old_body.trim()), "seeded with 0.46.2's text");
             assert!(SKILL_DESCRIPTION.contains("k2 zen"));
 
-            let r = handle_settings_update(br#"{"gardenAccess":true}"#, SettingsActor::Owner);
-            assert_eq!(r.status, "200 OK", "{}", r.body);
+            assert!(crate::garden_access::boot(), "the upgrade boot runs the pass");
+            assert!(ga::enabled());
             let a_on = std::fs::read_to_string(skill(&ws_a)).expect("a on");
-            assert!(a_on.contains(on_body.trim()), "on: the list text");
-            assert!(a_on.contains("Edit a Garden only when"), "on: who may edit");
-            assert!(!a_on.contains(off_body.trim()), "on: today's body is gone");
+            assert!(a_on.contains(on_body.trim()), "the list text");
+            assert!(a_on.contains("Edit a Garden only when"), "who may edit");
+            assert!(!a_on.contains(old_body.trim()), "0.46.2's body is gone");
             assert!(a_on.trim_end().ends_with("my notes"), "the person's tail stays: {a_on}");
             assert_eq!(std::fs::read_to_string(skill(&ws_b)).expect("b on"), b_edit, "a hand-edited skill isn't overwritten");
             let proposed = std::fs::read_to_string(skill(&ws_b).with_extension("md.proposed")).expect("b proposed");
-            assert!(proposed.contains("Edit a Garden only when"), "it gets the on text beside it");
-
-            let r = handle_settings_update(br#"{"gardenAccess":false}"#, SettingsActor::Owner);
-            assert_eq!(r.status, "200 OK", "{}", r.body);
-            assert_eq!(std::fs::read_to_string(skill(&ws_a)).expect("a off"), a_off, "off: today's file, byte for byte");
-            assert_eq!(std::fs::read_to_string(skill(&ws_b)).expect("b off"), b_edit);
-            ga::set_switch(false);
+            assert!(proposed.contains("Edit a Garden only when"), "it gets the new text beside it");
+            ga::set_switch(was);
         });
     }
 

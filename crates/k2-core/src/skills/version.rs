@@ -167,7 +167,11 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// `[[layout.column]]` `collapsible` / `collapsed` / `label`, the Agents
 /// widget's `list-from` (mode `list`) with `k2.agents.show`, `k2.layout.*`
 /// and the visible context chip (`k2.conversation.setContext`).
-pub const SKILL_VERSION_ZEN: u32 = 30;
+/// v31 = Garden access is how Gardens work (0.46.3 r11, Rosson 2026-10-23:
+/// no switch): the retired verbs answer with a notice until 0.47.0 and
+/// `k2 study garden-changes` says what to update; a widget's data lives
+/// under its Garden in Settings → Gardens.
+pub const SKILL_VERSION_ZEN: u32 = 31;
 /// Bumped to 5 in 0.39.0: same Phase 2.1 A25 verb refresh applied to
 /// the workspace-root template body (Cli tools section, workflow
 /// docs). Was 4 since 0.32.7 (SOURCE sub-regions adoption).

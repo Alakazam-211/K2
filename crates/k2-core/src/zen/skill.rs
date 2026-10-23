@@ -40,9 +40,9 @@ fn prop_type(t: PropType) -> String {
     }
 }
 
-/// The skill body (markdown, no frontmatter), for this daemon's
-/// `gardenAccess` switch (prd-garden-access-v1 G24: off = 0.46.3's text,
-/// byte for byte).
+/// The skill body (markdown, no frontmatter). Garden access is always on
+/// in a running daemon from 0.46.3 (Rosson 2026-10-23), so this is the
+/// editor-list text; the old text is reachable only from tests.
 pub fn generate_k2_zen_skill() -> String {
     generate_k2_zen_skill_for(super::garden_access::enabled())
 }
@@ -482,7 +482,9 @@ change, `k2 zen validate --widget <w> --sign`.**\n\n\
 - **History**: every change, signature, access change, ask and delete is in the\n\
   Garden's History (Settings → Gardens; `k2 zen garden history <g>` and\n\
   `k2 zen widget history <w>` for the person). `k2 study garden-access` has more.\n\
-- Keep as mine, \"It's mine\" (`k2 zen widget claim`) and proposals are retired.\n\n\
+- Keep as mine, \"It's mine\" (`k2 zen widget claim`) and proposals are retired: they\n\
+  answer with a notice through 0.46.x and are removed in 0.47.0. `k2 study garden-changes`\n\
+  lists what to update in your workspace before then.\n\n\
 ## Files (`~/.k2/zen/`, owned by this computer's K2)\n\n",
     ),
     (
@@ -499,7 +501,7 @@ change, `k2 zen validate --widget <w> --sign`.**\n\n\
     ),
     (
         "export`). Every call needs a grant the person gave (Settings → Gardens → Local Data,\nor `k2 zen data grant`), or one a grant admin gave.",
-        "export`). On the list of every Garden that places the widget, you read and write its\ndata with no grant; otherwise every call needs a grant the person gave (Settings →\nWidget data, or `k2 zen data grant`), or one a grant admin gave.",
+        "export`). On the list of every Garden that places the widget, you read and write its\ndata with no grant; otherwise every call needs a grant the person gave (Settings →\nGardens, a Garden's Local Data, or `k2 zen data grant`), or one a grant admin gave.",
     ),
     (
         "- **After editing a widget, run `k2 zen validate --widget <w> --sign`: it signs the widget as\nyou, and the widget then reads and writes data with YOUR grants.** (`k2 zen widget sign\n<w>` signs alone; a plain validate never signs.) An unsigned\nversion gets no data (`author_unknown`). Never sign with the owner token (never use\n`~/.k2/daemon.token`), and never edit a widget the person made unless they ask.\nWhen you change a widget the person made (with the switch), its new version isn't\ntheirs, so it runs without its data until they keep it: K2 puts a card on their Thread\nwith you (\"Keep as mine\" / \"Leave it as <you>'s\"; the answer says `keepAsMine` and\n`keepCard`), or an inbox note when you have no Thread. Only they can tap it (your\npassport is refused); Settings → Gardens → Local Data undoes it.\n",

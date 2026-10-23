@@ -481,12 +481,11 @@ pub struct AppSettings {
     pub permission_cards: bool,
     /// Garden access lists, Settings → Gardens (prd-garden-access-v1 G0):
     /// one list per Garden of the agents who may edit it, and each Garden's
-    /// History. Wire `gardenAccess`. Owner-only to change (an Owner login
-    /// may). **Default OFF in every build, the release included** (Rosson
-    /// Q5): with it off K2 behaves as 0.46.3. Synced into
-    /// `zen::garden_access::set_switch` at boot and on every settings write;
-    /// each off→on runs the G4 pass.
-    #[serde(default)]
+    /// History. Wire `gardenAccess`. **Always true from 0.46.3** (Rosson
+    /// 2026-10-23: no on/off switch): [`load`] reports true whatever an
+    /// older file stored, and [`update`] refuses `false`. Kept on the wire
+    /// so a client can tell a 0.46.3+ daemon from an older one.
+    #[serde(default = "default_true")]
     pub garden_access: bool,
     /// The App runtime switch, Settings → Apps → This server → "Apps
     /// (beta)" (wire `apps`; 0.46.2 and older wrote `appsPreview`, which
@@ -1178,7 +1177,7 @@ impl Default for AppSettings {
             federation_enabled: false,
             compute_preview: false,
             permission_cards: false,
-            garden_access: false,
+            garden_access: true,
             apps: true,
             apps_process_engine: false,
             apps_auto_prepare: crate::deploy::AUTO_PREPARE_DEFAULT,
@@ -1393,6 +1392,10 @@ pub fn migrate_legacy_apps_switch() -> Result<bool, String> {
     Ok(true)
 }
 
+/// The refusal for `gardenAccess: false` (or anything but `true`).
+pub const GARDEN_ACCESS_ALWAYS_ON: &str =
+    "gardenAccess can't be turned off: Garden access is how Gardens work from 0.46.3 (see `k2 study garden-changes`)";
+
 /// Read `~/.k2so/settings.json` and parse into `AppSettings`. Missing
 /// or malformed files yield `AppSettings::default()`. Always
 /// deep-merges with defaults so freshly-added keys are present in
@@ -1422,6 +1425,9 @@ pub fn load() -> AppSettings {
             }
         }
         normalize_legacy_apps(obj, env_truthy("K2_APPS"));
+        // 0.46.3: Garden access is always on; an older file's `false`
+        // (the retired switch) no longer counts.
+        obj.remove("gardenAccess");
     }
     let mut defaults = serde_json::to_value(AppSettings::default()).unwrap_or_default();
     deep_merge(&mut defaults, &parsed);
@@ -1476,6 +1482,12 @@ pub fn update(mut partial: serde_json::Value) -> Result<AppSettings, String> {
                 "pushE2E must be one of {} (got {v})",
                 crate::push::e2e::PUSH_E2E_MODES.join("|")
             ));
+        }
+    }
+    // 0.46.3 (Rosson 2026-10-23): Garden access has no off switch.
+    if let Some(v) = partial.get("gardenAccess") {
+        if v != &serde_json::Value::Bool(true) {
+            return Err(GARDEN_ACCESS_ALWAYS_ON.to_string());
         }
     }
     if let Some(v) = partial.get("completionSound") {
@@ -1605,6 +1617,29 @@ mod tests {
         let loaded = load();
         assert_eq!(loaded.default_agent, "codex");
         assert_eq!(loaded.companion.username, "rosson");
+    }
+
+    /// Garden access has no off switch (0.46.3, Rosson 2026-10-23): a new
+    /// install reads true, a file that stored the retired `false` reads
+    /// true, and a write of `false` is refused with nothing written.
+    #[test]
+    fn garden_access_is_always_on_and_cannot_be_written_off() {
+        let _g = TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+        assert!(load().garden_access, "new install: on");
+        ensure_dir();
+        fs::write(settings_file(), r#"{"gardenAccess": false, "defaultAgent": "codex"}"#).expect("old file");
+        let s = load();
+        assert!(s.garden_access, "an older file's false no longer counts");
+        assert_eq!(s.default_agent, "codex", "the rest of the file is read");
+        for bad in [serde_json::json!(false), serde_json::json!("off"), serde_json::Value::Null] {
+            let err = update(serde_json::json!({ "gardenAccess": bad, "defaultAgent": "grok" })).expect_err("refused");
+            assert_eq!(err, GARDEN_ACCESS_ALWAYS_ON);
+        }
+        assert_eq!(load().default_agent, "codex", "a refused write writes nothing");
+        let merged = update(serde_json::json!({ "gardenAccess": true })).expect("true is a no-op");
+        assert!(merged.garden_access);
+        assert!(reset().expect("reset").garden_access, "reset keeps it on");
     }
 
     /// Settings → Tickets (0.45.4): both rules default to warn and no

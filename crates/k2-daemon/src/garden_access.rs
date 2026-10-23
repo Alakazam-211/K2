@@ -18,16 +18,15 @@ use k2_core::zen::garden_access::{self as ga, Actor, EventKind, On};
 
 use crate::sidecar_routes::Caller;
 
-/// `~/.k2/garden-access-on`: present only while the switch is on (A6). The
-/// `k2` CLI reads it before treating `k2 zen garden access|history` and
-/// `k2 zen widget history` as verbs, so with the switch off it asks this
-/// daemon nothing and answers exactly as 0.46.3 did (off-golden
-/// `cli_zen.txt`). The daemon stays the authority: with the file but the
-/// switch off, those routes still answer as unknown.
+/// `~/.k2/garden-access-on`: written at boot (Garden access is always on
+/// from 0.46.3). It also records that this install's one-time upgrade pass
+/// ran: [`boot`] runs the pass only while the file is missing. The `k2`
+/// CLI reads it before treating `k2 zen garden access|history` and `k2 zen
+/// widget history` as verbs against this computer's daemon (no file: an
+/// older daemon, so it asks nothing).
 pub const SWITCH_MARK: &str = "garden-access-on";
 
-/// Make [`SWITCH_MARK`] match the switch (boot, and every flip). Off and
-/// never on: one stat, nothing written.
+/// Write (or, in tests of the retired path, remove) [`SWITCH_MARK`].
 pub fn mark_switch(on: bool) {
     let path = k2_core::paths::k2_home().join(SWITCH_MARK);
     let r = if on {
@@ -41,6 +40,27 @@ pub fn mark_switch(on: bool) {
     if let Err(e) = r {
         k2_core::log_debug!("[garden-access] switch mark {}: {e}", path.display());
     }
+}
+
+/// Daemon boot (0.46.3, Rosson 2026-10-23: no on/off switch). Garden access
+/// is on in this process, always. The first boot of an install that hasn't
+/// run the upgrade pass yet (no [`SWITCH_MARK`]: a 0.46.2 install, a fresh
+/// one, or one whose switch was off in an earlier 0.46.3 build) runs it
+/// now, the same work an off→on flip did: the G4 pass (with
+/// `pass::GRANDFATHER`, each agent that built or edited in a Garden is
+/// listed with an "added automatically at upgrade" History line), the old
+/// Keep-as-mine/proposal cards close, every workspace's k2-zen skill is
+/// rewritten, and one Access Audit line. Then the mark is written, so a
+/// later boot runs nothing. Returns whether the pass ran.
+pub fn boot() -> bool {
+    ga::set_switch(true);
+    let mark = k2_core::paths::k2_home().join(SWITCH_MARK);
+    if mark.exists() {
+        return false;
+    }
+    crate::settings_routes::garden_access_flipped(true, "k2");
+    mark_switch(true);
+    true
 }
 
 /// How often the History sweep runs.
@@ -157,22 +177,116 @@ mod tests {
         assert_eq!(SWEEP_EVERY, Duration::from_secs(86_400), "daily");
     }
 
-    /// The CLI's switch mark follows every flip, and an off switch that was
-    /// never on writes nothing under `~/.k2`.
+    /// Upgrade from 0.46.2 (Rosson 2026-10-23: Garden access is always on,
+    /// no switch). A 0.46.2-shaped install: a settings file with no
+    /// `gardenAccess`, a database whose Garden access tables are empty (0219
+    /// just ran), a Garden placing a widget an agent built, and an Access
+    /// Audit edit by another agent. The first boot turns the flow on and
+    /// runs the pass once: both agents are listed (`added_by = migration`)
+    /// with an "added automatically at upgrade" History line each, the old
+    /// audit line is imported, and the mark is written. A second boot runs
+    /// nothing and adds nothing.
     #[test]
-    fn the_switch_mark_exists_only_while_the_switch_is_on() {
+    fn an_upgrade_from_0462_grandfathers_editors_once_at_boot() {
         let home = crate::test_support::TempHome::new();
         let _db = k2_core::db::scoped_for_test();
-        let mark = home.path().join(".k2").join(SWITCH_MARK);
+        let _env = k2_core::test_env::lock();
         let was = ga::set_switch(false);
-        mark_switch(false);
-        assert!(!mark.exists(), "off, never on: nothing written");
-        assert!(crate::settings_routes::sync_garden_access(true, "test"), "flipped on");
-        assert_eq!(std::fs::read_to_string(&mark).expect("the mark while on"), "on\n");
-        assert!(!crate::settings_routes::sync_garden_access(true, "test"), "already on");
-        assert!(mark.exists());
-        assert!(crate::settings_routes::sync_garden_access(false, "test"), "flipped off");
-        assert!(!mark.exists(), "off removes the mark");
+        let mark = home.path().join(".k2").join(SWITCH_MARK);
+        assert!(!mark.exists(), "0.46.2 had no mark");
+        std::fs::create_dir_all(home.path().join(".k2")).expect("k2 home");
+        let f = k2_core::zen::ZenFiles::local();
+        f.setup().expect("zen setup");
+        let g = f.find_garden("Garden 1").expect("Garden 1").1.id;
+        f.new_widget("tally", None).expect("widget");
+        std::fs::write(
+            f.path_of(&k2_core::zen::ZenFile::Garden(g.clone())),
+            "schema = 1\n\n[layout]\nkind = \"columns\"\n[[layout.column]]\nsize = 60\nmin-width = 200\n[[layout.column]]\nsize = 40\nmin-width = 200\n\n[[widget]]\nid = \"w1\"\nkind = \"custom\"\nwidget = \"tally\"\ncolumn = 0\n[widget.props]\nhome = \"Work\"\n\n[[widget]]\nid = \"talk\"\nkind = \"conversation\"\ncolumn = 1\n[widget.props]\nagents = \"w1\"\n",
+        )
+        .expect("page");
+        let hash = f.widget_status("tally").hash().to_string();
+        assert_eq!(hash.len(), 64, "tally bundles clean");
+        {
+            let h = k2_core::db::shared();
+            let conn = h.lock();
+            for id in ["w-builder", "w-editor"] {
+                conn.execute(
+                    "INSERT INTO projects (id, name, path) VALUES (?1, ?1, '/tmp/' || ?1)",
+                    rusqlite::params![id],
+                )
+                .expect("ws");
+            }
+            k2_core::garden_data::authors::stamp(
+                &conn,
+                "tally",
+                &hash,
+                &k2_core::garden_data::MadeBy::Agent { project_id: "w-builder".into() },
+                k2_core::garden_data::authors::StampSource::Sign,
+                k2_core::garden_data::authors::CallerKind::Agent,
+                1,
+            )
+            .expect("stamp");
+            for t in ["zen_garden_access", "zen_garden_events", "zen_garden_made"] {
+                let n: i64 = conn.query_row(&format!("SELECT COUNT(*) FROM {t}"), [], |r| r.get(0)).expect("count");
+                assert_eq!(n, 0, "{t}: empty after the 0219 migration");
+            }
+        }
+        // 0.46.2's Manage-Gardens edit by another agent, in the Access Audit.
+        k2_core::auth_audit::try_record(&k2_core::auth_audit::AuditEvent::new(
+            "zen-garden-put",
+            "agent:w-editor",
+            format!("ok target=gardens/{g}.toml"),
+            "-",
+            "-",
+            "cli",
+        ))
+        .expect("audit line");
+        std::fs::write(home.path().join(".k2").join("settings.json"), r#"{"defaultAgent":"codex"}"#)
+            .expect("0.46.2 settings file");
+        assert!(k2_core::app_settings::load().garden_access, "a 0.46.2 file reads on");
+
+        assert!(boot(), "the first boot runs the upgrade pass");
+        assert!(ga::enabled(), "on in this process");
+        assert_eq!(std::fs::read_to_string(&mark).expect("mark"), "on\n");
+        let (rows, events) = {
+            let h = k2_core::db::shared();
+            let conn = h.lock();
+            let rows = ga::list(&conn, &g).expect("list");
+            let events = ga::events_for_garden(&conn, &g, &["tally"], 50, None).expect("history");
+            (rows, events)
+        };
+        let mut listed: Vec<(String, &str)> = rows.iter().map(|r| (r.project_id.clone(), r.added_by.as_str())).collect();
+        listed.sort();
+        assert_eq!(
+            listed,
+            vec![("w-builder".to_string(), "migration"), ("w-editor".to_string(), "migration")],
+            "the builder and the editor are grandfathered"
+        );
+        let added: Vec<&ga::Event> = events.iter().filter(|e| e.kind == EventKind::AccessAdded).collect();
+        assert_eq!(added.len(), 2, "{events:?}");
+        for e in &added {
+            assert_eq!(e.actor, "migration", "{e:?}");
+            assert_eq!(e.detail["note"], ga::pass::AUTO_NOTE, "{e:?}");
+        }
+        assert_eq!(events.iter().filter(|e| e.kind == EventKind::Imported).count(), 1, "{events:?}");
+        let switch_lines = || {
+            k2_core::auth_audit::read_all()
+                .expect("audit")
+                .into_iter()
+                .filter(|e| e["event"] == ga::AUDIT_SWITCH_EVENT)
+                .count()
+        };
+        assert_eq!(switch_lines(), 1, "one Access Audit line for the upgrade");
+
+        // A later boot: nothing runs, nothing is added.
+        assert!(!boot(), "the mark is there: no second pass");
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM zen_garden_events", [], |r| r.get(0)).expect("count");
+        assert_eq!(n as usize, events.len(), "a second boot adds no History");
+        assert_eq!(ga::list(&conn, &g).expect("list").len(), 2);
+        drop(conn);
+        assert_eq!(switch_lines(), 1);
         ga::set_switch(was);
     }
 

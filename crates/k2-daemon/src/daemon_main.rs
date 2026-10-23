@@ -382,12 +382,10 @@ async fn async_main() {
     // boots with it on serves the family at once (K2_PERMISSION_CARDS=1
     // still forces it on).
     k2_core::permission::gate::set_server_switch(k2_core::app_settings::load().permission_cards);
-    // Garden access lists (prd-garden-access-v1 G0, default off): the
-    // persisted switch. No G4 pass here: the pass runs only on an off→on
-    // flip (settings update), never at boot.
-    let garden_access_on = k2_core::app_settings::load().garden_access;
-    k2_core::zen::garden_access::set_switch(garden_access_on);
-    crate::garden_access::mark_switch(garden_access_on);
+    // Garden access lists (prd-garden-access-v1; always on from 0.46.3,
+    // Rosson 2026-10-23: no switch). On in this process from here; the
+    // one-time upgrade pass runs after the database is up (below).
+    k2_core::zen::garden_access::set_switch(true);
     // Garden History: the daily 2-year sweep (G29a), headless.
     crate::garden_access::spawn_sweep();
     // Machines you can use (Settings → Compute): a node machine tells K2
@@ -1349,6 +1347,12 @@ async fn async_main() {
     // thread-read-v1: every known person starts fully read (the owner was
     // seen by migration 0190; Connect users are seen here, once).
     crate::read_routes::boot();
+    // Garden access (0.46.3): an install's first boot runs the upgrade pass
+    // (grandfathered editors with "added automatically at upgrade" History
+    // lines) before any route answers, so nobody sees empty lists first.
+    if crate::garden_access::boot() {
+        log_debug!("[daemon] Garden access: the one-time upgrade pass ran");
+    }
 
     boot_status::set_ready();
     log_debug!("[daemon] boot complete — phase=ready");

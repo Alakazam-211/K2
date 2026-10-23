@@ -7,8 +7,13 @@
 #     docs), whatever the daemon answers.
 #   * Against a K2 older than 0.46.3 (no access routes) `garden new --from`
 #     says that K2 is older and needs an update (exit 2).
-#   * `k2 zen widget claim` on a daemon that answers 410 `retired` prints
-#     "Gardens use access lists now: `k2 zen garden access`" and exits 0.
+#   * Retired verbs (k2 study garden-changes): `k2 zen widget claim` on a
+#     daemon that answers 410 `retired` signs the version instead (exit 0)
+#     with one notice line on stderr; with --json, stdout is only the sign
+#     answer plus a "retired" object. `k2 zen proposals approve` answered
+#     `retired` does nothing: the notice on stderr (text) or only
+#     {"error":"retired",…} on stdout (--json), exit 1. A draining
+#     `k2 zen proposals` list prints the notice and the list.
 #   * `k2 zen garden delete` refused with `garden_delete_person` and a card
 #     prints "Asked the person to delete <name>" and exits 3.
 #
@@ -83,6 +88,22 @@ fail=0
 ok() { pass=$((pass + 1)); echo "  ok: $1"; }
 bad() { fail=$((fail + 1)); echo "  FAIL: $1" >&2; }
 
+# run2 <expected rc> <args…>: like run, stdout in $SOUT and stderr in $SERR.
+run2() {
+    local want="$1" rc
+    shift
+    set +e
+    SOUT="$(K2_PORT="$PORT" K2_HOOK_TOKEN=garden-access-cli "$K2" "$@" </dev/null 2>"$SANDBOX/stderr")"
+    rc=$?
+    set -e
+    SERR="$(cat "$SANDBOX/stderr")"
+    if [ "$rc" != "$want" ]; then
+        bad "k2 $* exited $rc, want $want: $SOUT / $SERR"
+        return 1
+    fi
+    return 0
+}
+
 # run <expected rc> <args…>: K2 against the stub; stdout+stderr in $OUT.
 run() {
     local want="$1" rc
@@ -150,10 +171,59 @@ if run 0 study garden-access --json; then
     fi
 fi
 
-echo "== claim retired (G20) =="
-routes "{$ACCESS_ON, \"/cli/zen/widget/claim\": [410, {\"ok\": false, \"error\": \"retired\", \"message\": \"Keep as mine (It's mine) is retired: Gardens use access lists now.\"}]}"
-if run 0 zen widget claim tally; then
-    if [ "$OUT" = 'Gardens use access lists now: `k2 zen garden access`' ]; then ok "claim prints the G20 line"; else bad "claim: $OUT"; fi
+echo "== retired: claim signs instead, with a notice (G20, k2 study garden-changes) =="
+RETIRED_CLAIM='"/cli/zen/widget/claim": [410, {"ok": false, "error": "retired", "message": "Keep as mine (It'"'"'s mine) is retired: Gardens use access lists now."}]'
+SIGNED='"/cli/zen/widget/sign": [200, {"ok": true, "widget": "tally", "hash": "abcdef012345", "madeBy": {"kind": "owner"}, "stamped": true, "vouched": true}]'
+routes "{$ACCESS_ON, $RETIRED_CLAIM, $SIGNED}"
+CLAIM_NOTICE='Notice: `k2 zen widget claim` is retired (Gardens use access lists since 0.46.3) and is removed in 0.47.0. Use: k2 zen widget sign tally. See `k2 study garden-changes`.'
+if run2 0 zen widget claim tally; then
+    if [ "$SERR" = "$CLAIM_NOTICE" ]; then ok "claim: one notice line on stderr"; else bad "claim stderr: $SERR"; fi
+    if [ "$SOUT" = "Signed as you: this version of tally runs with the Garden's data in every Garden." ]; then ok "claim: signed instead"; else bad "claim stdout: $SOUT"; fi
+fi
+if run2 0 zen widget claim tally --json; then
+    if [ -z "$SERR" ]; then ok "claim --json: nothing on stderr"; else bad "claim --json stderr: $SERR"; fi
+    if printf '%s' "$SOUT" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+assert d["stamped"] is True and d["widget"] == "tally", d
+assert d["retired"] == {"verb": "k2 zen widget claim", "replacement": "k2 zen widget sign tally", "removedIn": "0.47.0", "see": "k2 study garden-changes"}, d
+'; then ok "claim --json: the sign answer with a retired object, nothing else"; else bad "claim --json stdout: $SOUT"; fi
+fi
+
+echo "== retired: an agent's proposals approve does nothing (exit 1) =="
+RETIRED_APPROVE='"/cli/zen/proposals/approve": [410, {"ok": false, "error": "retired", "message": "Approving Garden proposals from an agent is retired: Gardens use access lists now."}]'
+routes "{$ACCESS_ON, $RETIRED_APPROVE}"
+APPROVE_NOTICE="Notice: \`k2 zen proposals approve\` is retired (Gardens use access lists since 0.46.3) and is removed in 0.47.0. Use: k2 zen garden access <garden> (edit when you're on its list, else ask). See \`k2 study garden-changes\`."
+if run2 1 zen proposals approve zp-1; then
+    if [ "$SERR" = "$APPROVE_NOTICE" ]; then ok "approve: the notice on stderr"; else bad "approve stderr: $SERR"; fi
+    if [ -z "$SOUT" ]; then ok "approve: nothing on stdout"; else bad "approve stdout: $SOUT"; fi
+fi
+if run2 1 zen proposals approve zp-1 --json; then
+    if [ -z "$SERR" ]; then ok "approve --json: nothing on stderr"; else bad "approve --json stderr: $SERR"; fi
+    if [ "$SOUT" = '{"error":"retired","verb":"k2 zen proposals approve","replacement":"k2 zen garden access <garden> (edit when you'"'"'re on its list, else ask)","removedIn":"0.47.0","see":"k2 study garden-changes"}' ]; then
+        ok "approve --json: only the retired object"
+    else
+        bad "approve --json stdout: $SOUT"
+    fi
+fi
+
+echo "== retired: proposals still drain, with the notice =="
+routes "{$ACCESS_ON, \"/cli/zen/proposals\": [200, {\"ok\": true, \"proposals\": []}]}"
+if run2 0 zen proposals; then
+    case "$SERR" in 'Notice: `k2 zen proposals` is retired'*'removed in 0.47.0'*'k2 study garden-changes'*) ok "list: the notice" ;; *) bad "list stderr: $SERR" ;; esac
+    if [ "$SOUT" = "No Garden proposals waiting." ]; then ok "list: still lists"; else bad "list stdout: $SOUT"; fi
+fi
+if run2 0 zen proposals --json; then
+    if [ -z "$SERR" ] && printf '%s' "$SOUT" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["proposals"] == [] and d["retired"]["removedIn"] == "0.47.0", d'; then
+        ok "list --json: the list with a retired object"
+    else
+        bad "list --json: $SOUT / $SERR"
+    fi
+fi
+echo "== an older K2 (no access lists): proposals as before, no notice =="
+routes '{"/cli/zen/proposals": [200, {"ok": true, "proposals": []}]}'
+if run2 0 zen proposals; then
+    if [ -z "$SERR" ] && [ "$SOUT" = "No Garden proposals waiting." ]; then ok "older K2: no notice"; else bad "older K2: $SOUT / $SERR"; fi
 fi
 
 echo "== sign with the switch on (G9) =="

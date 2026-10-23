@@ -60168,6 +60168,21 @@ print(json.dumps(b))
                 raw=$(_zen_session_post "/cli/zen/widget/sign" "$body")
             else
                 raw=$(_zen_person_post "/cli/zen/widget/claim" "$body")
+                # Garden access (G20): a K2 with access lists answers
+                # `retired`. Keep as mine maps onto signing this version
+                # (the person outside K2, or an agent on the list), so
+                # claim does that, with the notice (removed in 0.47.0).
+                if _zen_is_retired "$raw"; then
+                    local repl="k2 zen widget sign ${pos[0]}"
+                    raw=$(_zen_session_post "/cli/zen/widget/sign" "$body")
+                    if [ "$as_json" = true ]; then
+                        raw=$(_zen_retired_tag "$raw" "k2 zen widget claim" "$repl")
+                    else
+                        _zen_retired_notice "k2 zen widget claim" "$repl"
+                    fi
+                    _zen_sign_print sign "$as_json" "$raw"
+                    return
+                fi
             fi
             _zen_sign_print "$verb" "$as_json" "$raw"
             ;;
@@ -60212,11 +60227,6 @@ if err is not None:
         print(json.dumps(d, separators=(",", ":")))
     code = err.get("code") if isinstance(err, dict) else err
     msg = d.get("message") or (err.get("hint") if isinstance(err, dict) else None) or str(code)
-    if code == "retired" and verb == "claim":
-        # Garden access (G20): Keep as mine is retired.
-        if not as_json:
-            print("Gardens use access lists now: `k2 zen garden access`")
-        sys.exit(0)
     if code in ("owner_only", "zen_local_only"):
         print("Only the person can %s this widget: click It\x27s mine in Settings → Gardens → the Garden → Local Data, or run k2 zen widget claim outside K2." % verb if verb == "claim" else "Error: %s" % msg, file=sys.stderr)
         sys.exit(3)
@@ -61648,7 +61658,70 @@ print(json.dumps(b))' ${cfg[@]+"${cfg[@]}"}) || exit $?
     _zen_agent_print preview "$as_json" "$raw"
 }
 
+# ── Retired by Garden access (0.46.3; k2 study garden-changes) ─────────
+# A retired verb answers with a notice through 0.46.x and is removed in
+# 0.47.0. Text mode: one line on stderr. --json: on stdout, either the
+# answer of what it now does with a "retired" object added (exit as that
+# answer), or, when it no longer does anything, only
+# {"error":"retired","verb","replacement","removedIn","see"} (exit 1).
+_ZEN_RETIRED_IN="0.47.0"
+_ZEN_RETIRED_SEE="k2 study garden-changes"
+
+# Is this daemon answer the 410 `retired` refusal?
+_zen_is_retired() {
+    ZEN_RAW="$1" python3 -c '
+import json, os, sys
+try:
+    d = json.loads(os.environ.get("ZEN_RAW") or "")
+except Exception:
+    sys.exit(1)
+e = d.get("error") if isinstance(d, dict) else None
+code = e.get("code") if isinstance(e, dict) else e
+sys.exit(0 if code == "retired" else 1)'
+}
+
+# _zen_retired_notice <verb> <replacement>: the text-mode line, on stderr.
+_zen_retired_notice() {
+    echo "Notice: \`$1\` is retired (Gardens use access lists since 0.46.3) and is removed in ${_ZEN_RETIRED_IN}. Use: $2. See \`${_ZEN_RETIRED_SEE}\`." >&2
+}
+
+# _zen_retired_tag <raw> <verb> <replacement>: the answer (a JSON object)
+# with "retired": {verb, replacement, removedIn, see}; anything else as is.
+_zen_retired_tag() {
+    ZEN_RAW="$1" ZV="$2" ZR="$3" ZI="$_ZEN_RETIRED_IN" ZS="$_ZEN_RETIRED_SEE" python3 -c '
+import json, os
+raw = os.environ.get("ZEN_RAW") or ""
+try:
+    d = json.loads(raw)
+except Exception:
+    d = None
+if isinstance(d, dict):
+    d["retired"] = {"verb": os.environ["ZV"], "replacement": os.environ["ZR"], "removedIn": os.environ["ZI"], "see": os.environ["ZS"]}
+    print(json.dumps(d))
+else:
+    print(raw)'
+}
+
+# _zen_retired_refuse <as_json> <verb> <replacement>: the verb no longer
+# does anything. --json: the retired object alone on stdout; text: the
+# notice on stderr. Exit 1.
+_zen_retired_refuse() {
+    if [ "$1" = true ]; then
+        ZV="$2" ZR="$3" ZI="$_ZEN_RETIRED_IN" ZS="$_ZEN_RETIRED_SEE" python3 -c '
+import json, os
+print(json.dumps({"error": "retired", "verb": os.environ["ZV"], "replacement": os.environ["ZR"], "removedIn": os.environ["ZI"], "see": os.environ["ZS"]}, separators=(",", ":")))'
+    else
+        _zen_retired_notice "$2" "$3"
+    fi
+    exit 1
+}
+
 # k2 zen proposals [--all] | show <id> | approve <id> | reject <id>
+# Retired by Garden access (0.46.3): nothing new is proposed. On a K2 with
+# access lists the pending rows drain through 0.46.x (list, show, the
+# person's approve, anyone's reject of their own) with the notice; an
+# agent's approve answers `retired` and does nothing. A K2 older than
+# 0.46.3 keeps proposals as they were (no notice).
 cmd_zen_proposals() {
     local as_json=false all=false
     local -a pos=()
@@ -61661,24 +61734,40 @@ cmd_zen_proposals() {
             *) pos+=("$1"); shift ;;
         esac
     done
-    local verb="${pos[0]:-list}" raw body
+    local verb="${pos[0]:-list}" raw body view
+    case "$verb" in
+        list|show|approve|reject) ;;
+        *) echo "Error: unknown 'k2 zen proposals' command '$verb' (show, approve, reject)" >&2; exit 2 ;;
+    esac
     case "$verb" in
         list)
-            if [ "$all" = true ]; then raw=$(cli_request "/cli/zen/proposals" "all=1"); else raw=$(cli_request "/cli/zen/proposals"); fi
-            _zen_agent_print list "$as_json" "$raw" ;;
+            view=list
+            if [ "$all" = true ]; then raw=$(cli_request "/cli/zen/proposals" "all=1"); else raw=$(cli_request "/cli/zen/proposals"); fi ;;
         show)
             [ -n "${pos[1]:-}" ] || { echo "Error: k2 zen proposals show <id>" >&2; exit 2; }
-            raw=$(cli_request "/cli/zen/proposals/show" "id=$(urlencode "${pos[1]}")")
-            _zen_agent_print show "$as_json" "$raw" ;;
+            view=show
+            raw=$(cli_request "/cli/zen/proposals/show" "id=$(urlencode "${pos[1]}")") ;;
         approve|reject)
             [ -n "${pos[1]:-}" ] || { echo "Error: k2 zen proposals $verb <id>" >&2; exit 2; }
+            view=decide
             body=$(ZI="${pos[1]}" python3 -c 'import json, os; print(json.dumps({"id": os.environ["ZI"]}))')
             # Inside K2: the passport (an agent may withdraw its own with
             # reject; approve is the person's). Outside: the person.
-            raw=$(_zen_session_post "/cli/zen/proposals/$verb" "$body")
-            _zen_agent_print decide "$as_json" "$raw" ;;
-        *) echo "Error: unknown 'k2 zen proposals' command '$verb' (show, approve, reject)" >&2; exit 2 ;;
+            raw=$(_zen_session_post "/cli/zen/proposals/$verb" "$body") ;;
     esac
+    local name="k2 zen proposals" repl="k2 zen garden access <garden> (edit when you're on its list, else ask)"
+    [ "$verb" = list ] || name="k2 zen proposals $verb"
+    if _zen_is_retired "$raw"; then
+        _zen_retired_refuse "$as_json" "$name" "$repl"
+    fi
+    if _zen_access_on; then
+        if [ "$as_json" = true ]; then
+            raw=$(_zen_retired_tag "$raw" "$name" "$repl")
+        else
+            _zen_retired_notice "$name" "$repl"
+        fi
+    fi
+    _zen_agent_print "$view" "$as_json" "$raw"
 }
 
 cmd_zen() {

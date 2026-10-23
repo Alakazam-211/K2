@@ -13,7 +13,8 @@
 #   2. Outside K2: `k2 sources access on|off --workspace W` posts
 #      agent-access/set {toggle: gardens_manage} with the owner token; a 403
 #      exits 3; usage errors exit 2.
-#   3. Help and study pages say what agents may do with and without it.
+#   3. Help and study pages: sources keep the switch; Gardens use access
+#      lists since 0.46.3 (proposals retired, k2 study garden-changes).
 
 set -euo pipefail
 
@@ -250,12 +251,15 @@ assert_contains "sources help names the switch" "$help" "MANAGE GARDENS AND DATA
 assert_contains "sources help: one confirm for many" "$help" "ONE confirm"
 zh="$(outside zen --help)"
 assert_contains "zen help: put" "$zh" "k2 zen garden put <garden> --from"
-assert_contains "zen help: proposals" "$zh" "k2 zen proposals"
+assert_contains "zen help: the access list" "$zh" "k2 zen garden access <garden>"
+assert_contains "zen help: proposals are retired" "$zh" "Keep as mine (widget claim) and proposals are retired"
+assert_absent "zen help: no proposals verb" "$zh" "k2 zen proposals ["
 st="$(outside study data-sources)"
 assert_contains "study data-sources: the switch" "$st" "THE AGENT SWITCH"
 assert_contains "study data-sources: without it" "$st" "Without the switch below"
 sz="$(outside study zen)"
-assert_contains "study zen: propose" "$sz" "WRITE THROUGH K2, OR PROPOSE"
+assert_contains "study zen: the list" "$sz" "WRITE THROUGH K2 (WHEN YOU'RE ON THE GARDEN'S LIST)"
+assert_absent "study zen: no proposals" "$sz" "PROPOSAL"
 
 echo ""
 echo "Results: $pass passed, $fail failed"

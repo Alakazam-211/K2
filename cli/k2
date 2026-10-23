@@ -19057,7 +19057,7 @@ except Exception:
                 if [ "$code" = "secret_not_usable" ]; then
                     echo "Bind a secret from your own workspace, or ask your human for \"Allow managing server-wide secrets\"." >&2
                 else
-                    echo "This needs a person (run it outside K2, or Settings → Gardens → External Data), or the agent switch \"Manage Gardens and data sources\" (k2 sources --help)." >&2
+                    echo "This needs a person (run it outside K2, or Settings → Gardens → a Garden → External Data), or the agent switch \"Manage Gardens and data sources\" (k2 sources --help)." >&2
                 fi
             fi
             exit 3 ;;
@@ -19643,7 +19643,7 @@ _sources_create() {
     printf '%s' "$_SRC_BODY" | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
-how = {"one_click": "one click in Settings → Gardens → External Data (or k2 sources approve)",
+how = {"one_click": "one click in Settings → Gardens → a Garden → External Data (or k2 sources approve)",
        "needs_confirm": "a person binds the secret with a confirm (Settings, or k2 sources approve --secret)",
        "owner_only": "the server owner approves it"}.get(d.get("approval"), "")
 print("%s: %s" % (d["name"], d["status"]))
@@ -19935,7 +19935,7 @@ for t in trg:
     print("trigger %s  %s on %s → %s (by %s)" % (t["id"][:8], t["source"], on, t["agent"].get("handle"), t.get("madeBy")))
 print()
 if own:
-    print("A person approves them in Settings → Gardens → External Data (or k2 sources approve outside K2).")
+    print("A person approves them in Settings → Gardens → a Garden → External Data (or k2 sources approve outside K2).")
 else:
     print("Approve: k2 sources approve <name>… · k2 sources trigger approve <id>")
 '
@@ -20343,7 +20343,7 @@ import json, sys
 v = json.load(sys.stdin)
 print("trigger %s: %s" % (v["id"], v["status"]))
 if v["status"] == "proposed":
-    print("A person approves it in Settings → Gardens → External Data (or k2 sources trigger approve %s)." % v["id"][:8])'
+    print("A person approves it in Settings → Gardens → a Garden → External Data (or k2 sources trigger approve %s)." % v["id"][:8])'
             fi ;;
         edit)
             local set
@@ -20387,7 +20387,7 @@ THE LOOP
      Fetch once, see the shape (pointer · type · sample). Nothing is saved.
   2. k2 sources propose --name fleet --label "Fleet" --target a=https://… …
      (or --preset k2-fleet --preset-arg boxes=a,b). It waits as "proposed".
-  3. A person approves it: one click in Settings → Gardens → External Data
+  3. A person approves it: one click in Settings → Gardens → a Garden → External Data
      for a secretless public source; a vault confirm when it uses a secret
      (one confirm for many: k2 sources approve a b c --secret NAME). An
      agent with "Manage Gardens and data sources" approves it itself.
@@ -31604,7 +31604,7 @@ cmd_schema() {
     {
       "name": "zen garden",
       "usage": "k2 zen garden <list|new <name> [--texting] [--at <n>]|rename <garden> <name>|delete <garden>|reorder <garden> <position>|template <garden> texting|blank [--force]|lock <garden>|unlock <garden>> [--json]",
-      "description": "The Gardens on this computer. list prints index, id, name and template (* = its own theme); new makes an empty Garden (--texting: the texting page) and prints its id and file; rename and reorder keep the id; template turns a Garden into the texting page (the default) or an empty one, same id, name and place, keeping the old file in .history/; delete moves the page into .history/ and exits 1 with \"That's your last Garden.\" on the last one; lock and unlock are for the person only (agents exit 3), and a locked Garden refuses agent changes with exit 3 (garden_locked). <garden> is an id or a name.",
+      "description": "The Gardens on this computer. list prints index, id, name and template (* = its own theme); new makes an empty Garden (--texting: the texting page) and prints its id and file; rename and reorder keep the id; template turns a Garden into the texting page (the default) or an empty one, same id, name and place, keeping the old file in .history/; delete moves the page into .history/ and exits 1 with \"That's your last Garden.\" on the last one; lock and unlock are for the person only (agents exit 3), and a locked Garden refuses agent changes with exit 3 (garden_locked). access <garden> shows the Garden's list of agents who may edit it (or whether you may), ask asks the person, add|remove <agent> are the person's; history <garden> is its History (k2 study garden-access). <garden> is an id or a name.",
       "args": [{"name": "garden", "required": false}, {"name": "name|position", "required": false}],
       "flags": [
         {"name": "--texting", "arg": null, "description": "new: start from the texting template (k2.texting@1) instead of the empty one (k2.blank@1)."},
@@ -31653,7 +31653,7 @@ cmd_schema() {
     {
       "name": "zen widget put",
       "usage": "k2 zen widget put <name> <file> --from <path>|- [--note \"…\"] [--json] | k2 zen widget put [<name>] --dir <folder> [--prune] [--note \"…\"] [--json]",
-      "description": "Change a custom widget through K2 from anywhere on disk (never edit ~/.k2 yourself). One code file (.html .js .css .json; written even if the widget then has errors, the last good version keeps running), or with --dir the whole staged folder (code, images, .woff2 fonts) in one checked write: a folder with errors is refused and nothing is written; files the folder lacks are left alone unless --prune. The person or an agent with Manage Gardens and data sources writes (audited); any other agent's put becomes a proposal, and a --dir put ONE proposal for the whole folder (its changed code files; images, fonts and --prune need a writer) that approving writes at once or not at all. K2's built-in widgets are never written. k2 zen widget apply --from <folder> is the same as put --dir. Exit 0 written or proposed, 1 refused, 2 usage, 3 needs a person / Zen not set up, 4 no such widget.",
+      "description": "Change a custom widget through K2 from anywhere on disk (never edit ~/.k2 yourself). One code file (.html .js .css .json; written even if the widget then has errors, the last good version keeps running), or with --dir the whole staged folder (code, images, .woff2 fonts) in one checked write: a folder with errors is refused and nothing is written; files the folder lacks are left alone unless --prune. The person, or an agent on the list of every Garden that places the widget, writes (in the Garden's History); any other agent is refused with garden_access_needed (exit 3) and K2 asks the person with a garden.access card. Nothing is proposed (proposals are retired: k2 study garden-changes). K2's built-in widgets are never written. k2 zen widget apply --from <folder> is the same as put --dir. Exit 0 written, 1 refused, 2 usage, 3 not on the Garden's list / locked / Zen not set up, 4 no such widget.",
       "args": [{"name": "name", "required": false}, {"name": "file", "required": false}],
       "flags": [
         {"name": "--from", "arg": "path|-", "description": "One code file's new text (- reads stdin)."},
@@ -31666,7 +31666,7 @@ cmd_schema() {
     {
       "name": "zen widget preview",
       "usage": "k2 zen widget preview --dir <folder> [<name>] [--config key=value]... [--json] | k2 zen widget preview --dir <folder> [<name>] --shot <png> [--theme dark|light] [--width N] [--height N] [--zen-theme <name>] [--data <file.json>] [--libs <dir>] [--wait-ms N] [--config key=value]... [--json] | k2 zen widget preview --clear [--json]",
-      "description": "Try a staged widget folder in Zen without touching the person's Gardens: K2 writes it as widgets/preview-<name>/ (manifest id renamed) and places it alone on K2's own \"Widget preview\" Garden (made the first time; each preview replaces the last). --config sets the placement's config (a card that reads data sources takes sources=a,b). It has its own empty store; its runtime errors are k2 zen widget errors preview-<name>. --clear removes the preview Garden and every preview-* widget. The person, or an agent with Manage Gardens and data sources (exit 3 otherwise). --shot <png> (0.46.3) renders the folder headless instead, with nobody at a Zen window: checked and bundled as Zen would, in K2's real widget frame on a Garden canvas, its calls answered by a stand-in bridge with sample data (or --data fixtures), drawn in WebKit at 2x; it writes only the PNG, any local agent may shoot, and Zen needn't be set up. Needs Node.js and Playwright's WebKit (npm install -g playwright && npx playwright install webkit). Exit 0 previewed, cleared or shot (the widget said ready), 1 refused (errors) or the shot widget threw / never said ready (PNG still written), 2 usage, 3 needs a person / Zen not set up / no Node or Playwright WebKit.",
+      "description": "Try a staged widget folder in Zen without touching the person's Gardens: K2 writes it as widgets/preview-<name>/ (manifest id renamed) and places it alone on K2's own \"Widget preview\" Garden (made the first time; each preview replaces the last). --config sets the placement's config (a card that reads data sources takes sources=a,b). It has its own empty store; its runtime errors are k2 zen widget errors preview-<name>. --clear removes the preview Garden and every preview-* widget. The person, or any agent in a K2 terminal (it never touches the person's Gardens). --shot <png> (0.46.3) renders the folder headless instead, with nobody at a Zen window: checked and bundled as Zen would, in K2's real widget frame on a Garden canvas, its calls answered by a stand-in bridge with sample data (or --data fixtures), drawn in WebKit at 2x; it writes only the PNG, any local agent may shoot, and Zen needn't be set up. Needs Node.js and Playwright's WebKit (npm install -g playwright && npx playwright install webkit). Exit 0 previewed, cleared or shot (the widget said ready), 1 refused (errors) or the shot widget threw / never said ready (PNG still written), 2 usage, 3 needs a person / Zen not set up / no Node or Playwright WebKit.",
       "args": [{"name": "name", "required": false}],
       "flags": [
         {"name": "--dir", "arg": "folder", "description": "The staged folder (checked first)."},
@@ -34551,18 +34551,18 @@ FULL CANVAS AND LOCKS
   k2.window.startDrag() (k2 zen guide api). A locked Garden: don't edit it;
   K2 refuses (exit 3, garden_locked) and only the person unlocks it.
 
-WRITE THROUGH K2, OR PROPOSE
+WRITE THROUGH K2 (WHEN YOU'RE ON THE GARDEN'S LIST)
   k2 zen garden put <id> --from page.toml · k2 zen widget put <name> <file> --from <file>
-  Without "Manage Gardens and data sources" a put is a PROPOSAL (k2 zen
-  proposals; a person approves). With it a put writes now, audited. Never
-  K2's built-ins (k2:<name>): copy one with k2 zen widget new --from.
-  Changing the person's widget: they get a "Keep as mine" card on your Thread.
+  You edit a Garden when you're on its list (k2 zen garden access <id>);
+  otherwise K2 asks the person (exit 3, a garden.access card). Never K2's
+  built-ins (k2:<name>): copy one with k2 zen widget new --from. Then sign
+  it: k2 zen validate --widget <name> --sign. k2 study garden-access.
 
 THE WIDGET DEV LOOP (keep your widget outside ~/.k2)
   k2 zen validate --dir ./board              check; writes nothing
   k2 zen widget preview --dir ./board        on K2's own Garden, never one of the person's
   k2 zen widget preview --dir ./board --shot board.png --theme dark   headless PNG
-  k2 zen widget put board --dir ./board      one checked write (ONE proposal without the switch)
+  k2 zen widget put board --dir ./board      one checked write (you need the Garden's list)
   k2 zen widget errors board [--clear]       runtime errors; --clear drops stale ones
   validate never signs (--widget --sign does); "pending" exits 0, --strict keeps exit 2.
   Runtime errors fail only a placed widget's saved version in the last 24 h.
@@ -56849,7 +56849,7 @@ except Exception:
     fi
     case "$code" in
         person_only|owner_only)
-            echo "This needs a person. Run it outside K2, or use Settings → Gardens → Local Data." >&2
+            echo "This needs a person. Run it outside K2, or use Settings → Gardens → the Garden → Local Data." >&2
             exit 3 ;;
         not_granted|self_grant|level_too_high|not_own|author_unknown) exit 3 ;;
         space_not_found|agent_not_found|project_not_found|grant_not_found|widget_not_found|no_snapshot) exit 4 ;;
@@ -56953,8 +56953,8 @@ k2 zen data — a widget's data on this computer (the person only)
 Each custom widget has its own keyspace (data:<widget>) that it reads and
 writes with k2.store, and that agents you allow read and write with
 `k2 store --widget`. These commands are for you, the person: inside a K2
-terminal they're refused (run them outside K2, or use Settings → Gardens →
-Local Data).
+terminal they're refused (run them outside K2, or use a Garden's Local
+Data in Settings → Gardens).
 
 USAGE
   k2 zen data list [--json]
@@ -57637,11 +57637,11 @@ GRANTS (you need one; the person gives it)
 
 WIDGETS YOU MAKE
   After editing a widget, run `k2 zen validate --widget <w> --sign` (or
-  k2 zen widget sign <w>): when clean it signs that version as you, and the
-  widget then reads and writes data with YOUR grants. A plain validate is a
-  check only and never signs (0.46.1). An unsigned version gets no data (author_unknown) until
-  someone signs it or the person clicks It's mine. Never edit a widget the
-  person made unless asked; an edit is a new version signed by its editor.
+  k2 zen widget sign <w>): when clean it signs that version as you. Signed by
+  the person, K2 or an agent on the Garden's list, it runs with the Garden's
+  data. A plain validate is a check only and never signs. Any other version
+  keeps only its own keyspace (needs_editor) until someone listed signs it.
+  Never edit a widget the person made unless asked; an edit is a new version.
 
 BIG WRITES
   k2 store batch --widget <w> < ops.json   ≤ 64 ops in one call, or up to
@@ -57661,11 +57661,10 @@ LOCK AND SOURCES
   data when it asks for store:write (0.46.1); agents granted that data can
   then read what it saves, so don't save values from sources that hide them.
 
-YOUR OWN WIDGET (0.46.1)
-  With the person's "Manage Gardens and data sources" switch, the agent that
-  signed a widget's newest version reads and writes its data with no grant
-  (seed what you built). One Access Audit line per widget. Without the
-  switch, ask for a grant as before.
+A GARDEN YOU'RE LISTED ON (0.46.3)
+  On the list of every Garden that places a widget, you read and write its
+  data with no grant (seed what you built), one Access Audit line per
+  widget. Otherwise ask the person for a grant. k2 study garden-access.
 
 READING ANOTHER WIDGET (0.46.1)
   A widget lists the widgets it reads in manifest.json: "reads": ["lists"]
@@ -57939,6 +57938,8 @@ USAGE
   k2 zen garden delete <garden> [--json]
   k2 zen garden lock | unlock <garden> [--json]
   k2 zen garden put <garden> --from <file>|- [--note "…"] [--json]
+  k2 zen garden access <garden> [add|remove <agent> | ask [--reason "…"]] [--json]
+  k2 zen garden history <garden> [--kind changes|access|asks] [--limit n] [--before <cursor>] [--json]
   k2 zen theme list [--garden <name|id>] [--json]
   k2 zen theme next | prev [--garden <name|id>] [--json]
   k2 zen theme set <name> [--garden <name|id>] [--json]
@@ -57946,15 +57947,13 @@ USAGE
   k2 zen theme new <name> [--from <theme>] [--json]
   k2 zen widget new <name> [--from k2:diary|hello|arcade] [--json]
   k2 zen widget list [--json]
-  k2 zen widget sign <name> [--json]      # stamp this version as made by you (or this agent)
-  k2 zen widget claim <name> [--json]     # It's mine: the person only, outside K2
+  k2 zen widget sign <name> [--json]      # sign this version as you (or this agent)
+  k2 zen widget history <name> [--kind …] [--limit n] [--before <cursor>] [--json]
   k2 zen widget put <name> <file> --from <path>|- [--note "…"] [--json]
   k2 zen widget put [<name>] --dir <folder> [--prune] [--note "…"] [--json]   # the whole folder
   k2 zen widget apply --from <folder> [<name>] [--prune] [--json]            # = put --dir
   k2 zen widget preview --dir <folder> [<name>] [--config k=v]... | --clear [--json]
   k2 zen widget preview --dir <folder> --shot <png> [--theme dark|light] [--width N] [--height N] [--data f.json]   # headless PNG
-  k2 zen proposals [--all] [--json]       # Garden/widget changes waiting for approval
-  k2 zen proposals show|approve|reject <id> [--json]
   k2 zen validate [--garden <name|id> [--from <file>|-] | --theme <name> | --widget <name> [--sign] [--types[=all]] | --dir <folder> [--as <name>] | --file <file>] [--strict] [--json]
   k2 zen inspect <file.k2garden | folder> [--json]   review a Garden you received (static; never runs it)
   k2 zen widget errors <name> [--since <seq>] [--follow] [--json]
@@ -58043,27 +58042,27 @@ COMMANDS
   preview   widget preview --dir places a staged folder, as
             preview-<name>, alone on K2's own "Widget preview" Garden
             (never one of yours), with --config key=value for its placement
-            (e.g. sources=fleet). --clear removes it. The person, or an
-            agent with the switch. --shot <png> [--theme dark|light]
+            (e.g. sources=fleet). --clear removes it. The person, or any
+            agent in a K2 terminal. --shot <png> [--theme dark|light]
             [--width N] [--height N] [--data f.json] renders it headless
             instead (stand-in data, WebKit; writes only the PNG; any local
             agent). Needs Node + Playwright WebKit.
-  proposals Garden and widget changes waiting for approval. show prints the
-            content; approve applies it (only if the file is unchanged since,
-            else proposal_stale); reject drops it (an agent may withdraw its
-            own).
+  access    garden access <g>: who may edit the Garden (the person) or
+            whether you may (an agent); ask asks the person for you (one
+            garden.access card); add and remove are the person's, outside
+            K2. garden history <g> and widget history <w>: every change,
+            signature, access change, ask and delete, kept 2 years (the
+            person's).
 
-AGENTS AND "MANAGE GARDENS AND DATA SOURCES"
-  A per-agent switch (Settings → Workspaces → <ws> → Agent; owner/admin:
-  k2 sources access on|off --workspace <ws>). Inside a K2 terminal put and
-  proposals carry your session's passport.
-  Off (the default): garden put / widget put become a proposal that a person
-  approves (nothing is written until then; put --dir proposes each changed
-  code file); you can withdraw your own. preview needs the switch.
-  On: put writes right away, garden new makes a Garden, and you may approve
-  or reject proposals. Each act is logged with the agent and session
-  (Settings → Logs → Access Audit). Only the owner or an admin flips it.
-  Either way: never edit a locked Garden, and never write K2's built-ins.
+AGENTS AND GARDEN ACCESS (0.46.3)
+  Each Garden has a list of the agents who may edit it. Inside a K2
+  terminal put, rename, reorder, template, reset and theme carry your
+  session's passport: on the list you edit; off it K2 asks the person
+  (garden_access_needed, exit 3, a garden.access card). Making a Garden
+  needs no card. Only the person deletes one (an agent's delete asks:
+  garden_delete_person). k2 study garden-access has the whole flow.
+  Keep as mine (widget claim) and proposals are retired: k2 study
+  garden-changes. Never edit a locked Garden; never write K2's built-ins.
 
 RULES
   New to Gardens? k2 zen guide. Moving controls? k2 zen guide bands, then
@@ -58931,14 +58930,14 @@ BIG CHANGES
   putChunked/getChunked carry text up to 1 MiB (images as data URLs).
 
 WHO MAY TOUCH IT
-  The widget uses its MAKER's rights: made by you (or It's mine) = all of
-  its data; made by an agent = that agent's grants; nobody signed this
-  version = no data (author_unknown). `k2 zen validate --widget <w> --sign`
-  (or k2 zen widget sign <w>) signs a clean version as whoever runs it; a
-  plain validate never signs. Agents need a grant from the person
-  (Settings → Gardens → Local Data, or k2 zen data grant): per agent (a
-  wall), per K2 project (a convenience: any agent can join a project) or
-  per key prefix. A grant admin grants inside its own prefix.
+  A version signed by you, K2 or an agent on the Garden's list runs with
+  the Garden's data; any other keeps only its own keyspace (needs_editor).
+  `k2 zen validate --widget <w> --sign` (or k2 zen widget sign <w>) signs a
+  clean version as whoever runs it; a plain validate never signs. An agent
+  on the list of every Garden that places the widget reaches its data; any
+  other needs a grant from the person (Settings → Gardens → the Garden →
+  Local Data, or k2 zen data grant): per agent (a wall), per K2 project (a
+  convenience) or per key prefix. A grant admin grants inside its prefix.
 
 LOCK AND SOURCES
   Lock freezes how a Garden works, not what's in it: data still changes.
@@ -59010,9 +59009,9 @@ fields), a batch id per gesture, and subscribe for live changes.
    The Agents column shows just the agents the board lists ("Nothing
    listed yet" until it does); k2 zen guide api has k2.layout.*.
 
-If the widget says nobody signed it: k2 zen widget sign board-lite,
-or It's mine in Settings → Gardens → Local Data. Data and grants: k2 zen
-guide services.
+If the widget says it needs an editor (needs_editor): k2 zen widget sign
+board-lite, by you or an agent on the Garden's list. Data and grants:
+k2 zen guide services.
 EOF
 }
 
@@ -60153,7 +60152,7 @@ if err is not None:
             print("Gardens use access lists now: `k2 zen garden access`")
         sys.exit(0)
     if code in ("owner_only", "zen_local_only"):
-        print("Only the person can %s this widget: click It\x27s mine in Settings → Gardens → Local Data, or run k2 zen widget claim outside K2." % verb if verb == "claim" else "Error: %s" % msg, file=sys.stderr)
+        print("Only the person can %s this widget: click It\x27s mine in Settings → Gardens → the Garden → Local Data, or run k2 zen widget claim outside K2." % verb if verb == "claim" else "Error: %s" % msg, file=sys.stderr)
         sys.exit(3)
     print("Error: %s" % msg, file=sys.stderr)
     sys.exit(4 if code in ("unknown_widget", "not_found") else 1)
@@ -60972,9 +60971,10 @@ print("=== END UNTRUSTED INSPECT REPORT ===")
 # k2 zen garden put / widget put write a user Garden page or one widget code
 # file THROUGH the daemon (checked first; a bad page is refused, not saved;
 # K2's built-in widgets and defaults are never written). Inside a K2
-# terminal they carry the session passport: an agent with "Manage Gardens
-# and data sources" writes; any other agent's put becomes a proposal a
-# person approves (k2 zen proposals). Outside K2, the owner writes.
+# terminal they carry the session passport: an agent on the Garden's list
+# writes; any other is refused and K2 asks the person (Garden access,
+# 0.46.3; a K2 older than 0.46.3 made it a proposal). Outside K2, the
+# owner writes.
 
 # Print a put / proposals answer. $1 view, $2 "true" for JSON, $3 raw.
 # Exit: 0 ok · 1 refused/conflict · 3 needs a person or locked · 4 not found.
@@ -61011,7 +61011,7 @@ if view == "put":
         print("Wrote %s%s" % (d.get("file"), "" if d.get("changed", True) else " (no change)"))
         if d.get("keepAsMine"):
             kc = d.get("keepCard") or {}
-            print("This widget was your person’s; its new version is not theirs yet, so it runs without its data until they keep it. " + ("K2 put a Keep as mine card on their Thread with you." if kc.get("card") else "K2 sent them an inbox note (Settings → Gardens → Local Data → It’s mine)."))
+            print("This widget was your person’s; its new version is not theirs yet, so it runs without its data until they keep it. " + ("K2 put a Keep as mine card on their Thread with you." if kc.get("card") else "K2 sent them an inbox note (Settings → Gardens → the Garden → Local Data → It’s mine)."))
         if d.get("snapshot"):
             print("Previous version kept: %s (k2 zen reset --to %s)" % (d["snapshot"], d["snapshot"]))
         v = d.get("validate") or {}
@@ -61032,7 +61032,7 @@ elif view == "folder":
         print("Wrote %s: %s" % (d.get("file"), ", ".join(w) if w else "no change"))
         if d.get("keepAsMine"):
             kc = d.get("keepCard") or {}
-            print("This widget was your person’s; its new version is not theirs yet, so it runs without its data until they keep it. " + ("K2 put a Keep as mine card on their Thread with you." if kc.get("card") else "K2 sent them an inbox note (Settings → Gardens → Local Data → It’s mine)."))
+            print("This widget was your person’s; its new version is not theirs yet, so it runs without its data until they keep it. " + ("K2 put a Keep as mine card on their Thread with you." if kc.get("card") else "K2 sent them an inbox note (Settings → Gardens → the Garden → Local Data → It’s mine)."))
         if d.get("removed"):
             print("Removed: %s" % ", ".join(d["removed"]))
         if d.get("kept"):
@@ -61091,7 +61091,7 @@ elif view == "decide":
         if kc.get("card"):
             print("The widget’s new version is not signed as yours yet: tap Keep as mine on the card in your Thread with %s." % (kc.get("addr") or "the agent"))
         else:
-            print("The widget’s new version is not signed as yours, so it runs without its data. Keep it: Settings → Gardens → Local Data → %s → It’s mine (or k2 zen widget claim %s outside K2)." % (d.get("target"), d.get("target")))
+            print("The widget’s new version is not signed as yours, so it runs without its data. Keep it: Settings → Gardens → the Garden → Local Data → %s → It’s mine (or k2 zen widget claim %s outside K2)." % (d.get("target"), d.get("target")))
 '
 }
 
@@ -61265,7 +61265,7 @@ The dev loop for a widget kept outside ~/.k2:
   k2 zen widget preview --dir ./board        try it on K2's preview Garden
   k2 zen widget preview --dir ./board --shot board.png --theme dark
                                              a headless PNG (writes nothing else)
-  k2 zen widget put board --dir ./board      write it (or propose it)
+  k2 zen widget put board --dir ./board      write it (you need the Garden's list)
   k2 zen widget errors board                 its runtime errors in Zen
   k2 zen widget errors board --clear         drop old ones validate ignores
 
@@ -61297,21 +61297,21 @@ on disk. You never edit ~/.k2 yourself.
                          Files the folder doesn't have are left alone.
   --prune                with --dir: also remove code files, images and fonts
                          the folder doesn't have (never README or dotfiles).
-  --note "…"             one paragraph for the person reviewing a proposal.
+  --note "…"             one paragraph for the Garden's History.
   apply --from <folder>  the same as put --dir.
 
-Who may write: the person (outside K2), or an agent with "Manage Gardens and
-data sources". Any other agent's put becomes a proposal: one file, or with
---dir ONE proposal for the whole folder (its changed code files; images,
-fonts and --prune need a writer), approved with k2 zen proposals approve
-<id>, which writes every file at once or nothing. K2's built-in widgets
-(k2:<name>) are never written.
+Who may write: the person (outside K2), or an agent on the list of every
+Garden that places the widget (a draft placed nowhere is open). Any other
+agent is refused (garden_access_needed, exit 3) and K2 asks the person (a
+garden.access card); nothing is proposed. Sign what you wrote: k2 zen
+validate --widget <name> --sign. K2's built-in widgets (k2:<name>) are never
+written. k2 study garden-access.
 
 Check first, write nothing:  k2 zen validate --dir <folder>
 Try it on K2's preview page: k2 zen widget preview --dir <folder>
 
-Exit: 0 written or proposed · 1 refused (errors, a bad file name) · 2 usage ·
-3 Zen isn't set up / needs a person · 4 no such widget.
+Exit: 0 written · 1 refused (errors, a bad file name) · 2 usage ·
+3 Zen isn't set up / not on the Garden's list / locked · 4 no such widget.
 EOF
 }
 
@@ -61398,15 +61398,15 @@ replaces the last. Open Zen and switch to "Widget preview" to see it.
 
 The preview runs as its own widget (preview-<name>): it has its own empty
 store, and its runtime errors are k2 zen widget errors preview-<name>.
-Who may preview: the person, or an agent with "Manage Gardens and data
-sources" (exit 3 otherwise). Check without writing: k2 zen validate --dir.
+Who may preview: the person, or any agent in a K2 terminal (it never
+touches the person's Gardens). Check without writing: k2 zen validate --dir.
 
 --shot <png>: a picture instead, with nobody at a Zen window. K2 checks and
 bundles the folder exactly as Zen would, puts it in K2's real widget frame
 on a Garden canvas, answers its calls from a stand-in bridge with sample
 data, and renders it headless in WebKit (the engine of K2's desktop app).
 It writes only the PNG: no Garden, no widget folder, no store. Any local
-agent may shoot (no switch needed), and Zen needn't be set up.
+agent may shoot, and Zen needn't be set up.
   --theme dark|light     the Garden's scheme (default: the theme's own, else
                          light). The card follows the Garden, never the OS.
   --zen-theme <name>     a built-in Zen theme: basic (default), paper,
@@ -61607,8 +61607,8 @@ cmd_zen_proposals() {
         approve|reject)
             [ -n "${pos[1]:-}" ] || { echo "Error: k2 zen proposals $verb <id>" >&2; exit 2; }
             body=$(ZI="${pos[1]}" python3 -c 'import json, os; print(json.dumps({"id": os.environ["ZI"]}))')
-            # Inside K2: the passport (an agent with the switch approves; any
-            # agent may withdraw its own with reject). Outside: the person.
+            # Inside K2: the passport (an agent may withdraw its own with
+            # reject; approve is the person's). Outside: the person.
             raw=$(_zen_session_post "/cli/zen/proposals/$verb" "$body")
             _zen_agent_print decide "$as_json" "$raw" ;;
         *) echo "Error: unknown 'k2 zen proposals' command '$verb' (show, approve, reject)" >&2; exit 2 ;;

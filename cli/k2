@@ -61716,6 +61716,30 @@ print(json.dumps({"error": "retired", "verb": os.environ["ZV"], "replacement": o
     exit 1
 }
 
+# Garden access (0.46.3): once per workspace, the first `k2 zen …` prints
+# one line on stderr pointing at k2 study garden-changes. Text mode only
+# (never with --json, never on stdout). The marker is that workspace's own
+# .k2/.garden-changes-hint (like .thread-md-nudge), never ~/.k2. Only in
+# the workspace K2 names (K2_PROJECT_PATH, set in every K2 terminal) when
+# it has its .k2 folder: a plain shell, ~ and a test sandbox without one
+# never see it. Best effort: no marker written, no line.
+_zen_garden_changes_hint() {
+    local a root dot
+    for a in "$@"; do
+        case "$a" in --json|--json=*) return 0 ;; esac
+    done
+    root="${K2_PROJECT_PATH:-${K2SO_PROJECT_PATH:-}}"
+    [ -n "$root" ] && [ "$root" != "$HOME" ] || return 0
+    dot="$(_ws_dot_dir "$root")"
+    [ -d "$dot" ] || return 0
+    if [ -d "$K2_HOME" ] && [ "$(cd "$dot" && pwd -P)" = "$(cd "$K2_HOME" && pwd -P)" ]; then
+        return 0
+    fi
+    [ ! -e "$dot/.garden-changes-hint" ] || return 0
+    printf '0.46.3\n' > "$dot/.garden-changes-hint" 2>/dev/null || return 0
+    echo 'Gardens changed in 0.46.3: see `k2 study garden-changes` (update before 0.47.0)' >&2
+}
+
 # k2 zen proposals [--all] | show <id> | approve <id> | reject <id>
 # Retired by Garden access (0.46.3): nothing new is proposed. On a K2 with
 # access lists the pending rows drain through 0.46.x (list, show, the
@@ -64357,6 +64381,7 @@ EOF
         # Zen Mode (prd-zen-mode-v1 Z17): this computer's ~/.k2/zen via the
         # local daemon's owner-only /cli/zen/* routes. No grant verb: widgets
         # need no permissions (2026-10-08).
+        _zen_garden_changes_hint "${@:2}"
         # `k2 zen guide` is static and handles its own --help; so does
         # `k2 zen data` (Garden data, contract-garden-data-v1 §8).
         if [ "${2:-}" = "data" ] && _wants_help "${@:2}"; then

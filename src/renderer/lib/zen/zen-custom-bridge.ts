@@ -78,6 +78,7 @@ import { ZEN_STORE_VERBS, ZenStoreError, type ZenCustomStore } from './zen-custo
 import { ZEN_GUEST_VERBS, ZenGuestsError, type ZenCustomGuests } from './zen-custom-guests'
 import { ZenWidgetError } from './zen-widget-routes'
 import type { ZenColumnFoldRefusal, ZenLayoutColumn } from './zen-columns'
+import { ZEN_THREAD_CONTEXT_PER_SECOND, clearZenThreadContextFor, zenThreadContextProblem } from './zen-thread-context'
 
 /** UW29 budgets. */
 export const ZEN_WIDGET_BUDGET = {
@@ -382,6 +383,10 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
   }
 
   let picking = false
+  /** `conversation.setContext` calls in the last second, and whether this
+   *  widget holds a context now (cleared when it stops or unloads). */
+  const contextCalls: number[] = []
+  let contextSet = false
 
   const needText = (verb: string, v: unknown): string => {
     if (typeof v !== 'string') refuse('failed', `${verb} needs text`)
@@ -708,7 +713,29 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
     // lane fills its own body (layout.* is lane A's, above):
     // agents.show (lane B), conversation.setContext (lane C).
     'agents.show': () => refuse('verb_unavailable', 'agents.show isn’t available here.'),
-    'conversation.setContext': () => refuse('verb_unavailable', 'conversation.setContext isn’t available here.'),
+    // §4 (lane C): the Board context chip. Visible and removable in every
+    // Conversation that follows this widget; it rides only the person's own
+    // send, as K2's quoted line (the daemon checks it again).
+    'conversation.setContext': (args) => {
+      const now = deps.now()
+      while (contextCalls.length > 0 && now - contextCalls[0] >= 1000) contextCalls.shift()
+      if (contextCalls.length >= ZEN_THREAD_CONTEXT_PER_SECOND) {
+        refuse('rate_limited', `conversation.setContext: at most ${ZEN_THREAD_CONTEXT_PER_SECOND} calls a second.`)
+      }
+      contextCalls.push(now)
+      const text = args[0]
+      if (text === null || text === undefined) {
+        if (contextSet) inner('conversation.setContext', null)
+        contextSet = false
+        return null
+      }
+      if (typeof text !== 'string') refuse('bad_args', 'conversation.setContext takes one line of text, or null')
+      const problem = zenThreadContextProblem(text as string)
+      if (problem) refuse('bad_args', problem)
+      inner('conversation.setContext', text, origin())
+      contextSet = true
+      return null
+    },
     // ── Garden v3 data sources (contract-sources-v1 §6) ────────────────
     'sources.list': () => {
       if (!deps.sources) refuse('verb_unavailable', 'sources.list isn’t available here.')
@@ -868,12 +895,24 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
       refuse('unknown_verb', `No verb ${v}.`)
     }
     if (row!.cap !== null && !caps().has(row!.cap)) {
+      // CA14 (Garden access on): an unsigned version that asked for
+      // thread:post lost it to the signer gate; only an editor's signature
+      // gives it back. Off, `signed` is absent: today's cap check.
+      const w = deps.widget()
+      if (v === 'conversation.setContext' && w.signed === false && (w.requested as readonly string[]).includes(row!.cap)) {
+        refuse('needs_editor', `${v} needs ${row!.cap}, which this unsigned version can’t use until an editor signs it.`, { cap: row!.cap })
+      }
       refuse('cap_not_granted', `${v} needs ${row!.cap}.`, { cap: row!.cap })
     }
     return { verb: v, row: row! }
   }
 
   function dispose(): void {
+    // §4: a widget that stops or unloads takes its Board context with it.
+    if (contextSet) {
+      contextSet = false
+      clearZenThreadContextFor(deps.gardenId(), deps.widget().id)
+    }
     for (const sub of [...held.keys()]) dropHeld(sub)
     for (const s of subs.values()) {
       try {

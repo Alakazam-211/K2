@@ -22,7 +22,9 @@
 //     workspace path or hash (UWA6); a `hidden` one is `{kind, state}` (no
 //     name, type or size); a `secret` card keeps only
 //     `{id, kind}` (widgets can't answer secrets); any other kind is left
-//     out. `conversation_id` never crosses (it can be the pinned session id);
+//     out. `conversation_id` never crosses (it can be the pinned session id).
+//     A post with a Board context (thread-context-v1, 0.46.3 r10) adds
+//     `context: {text, widget, placement}` (never the Garden or the hash);
 //   - a Thread view: `{address, phase, note, items, hasMore, turn}`.
 
 import type { OverlayChoice, OverlayThreadItem, ThreadFileObject } from '@/components/SessionView/overlayThread'
@@ -213,8 +215,26 @@ export interface ZenWidgetThreadItem {
         via: string | null
         choice: ZenWidgetChoice | null
         attachments?: ZenWidgetThreadFile[]
+        /** thread-context-v1: the Board context that rode the person's post
+         *  (a widget's line, never theirs). Absent on every other item. */
+        context?: ZenWidgetThreadContext
       }
     | { id: string; kind: 'secret' }
+}
+
+/** A post's Board context as a widget sees it: the text and which widget
+ *  set it (its folder name and placement), key by key. */
+export interface ZenWidgetThreadContext {
+  text: string
+  widget: string
+  placement: string
+}
+
+function projectContext(c: unknown): ZenWidgetThreadContext | null {
+  if (!c || typeof c !== 'object' || Array.isArray(c)) return null
+  const r = c as Record<string, unknown>
+  if (typeof r.text !== 'string' || typeof r.widget !== 'string' || typeof r.placement !== 'string') return null
+  return { text: r.text, widget: r.widget, placement: r.placement }
 }
 
 function projectChoice(c: OverlayChoice | null | undefined, from = ''): ZenWidgetChoice | null {
@@ -249,6 +269,7 @@ export function projectZenThreadItem(item: OverlayThreadItem): ZenWidgetThreadIt
   const d = item.doc
   if (d.kind === 'secret') return { seq: item.seq, id: item.id, doc: { id: d.id, kind: 'secret' } }
   if (d.kind !== 'text' && d.kind !== 'choice') return null
+  const context = d.kind === 'text' ? projectContext(d.context) : null
   return {
     seq: item.seq,
     id: item.id,
@@ -264,6 +285,7 @@ export function projectZenThreadItem(item: OverlayThreadItem): ZenWidgetThreadIt
       ...(Array.isArray(d.attachments) && d.attachments.length > 0
         ? { attachments: d.attachments.map(projectZenThreadFile) }
         : {}),
+      ...(context ? { context } : {}),
     },
   }
 }

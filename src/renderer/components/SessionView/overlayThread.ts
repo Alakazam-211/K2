@@ -47,7 +47,7 @@ export const OVERLAY_PAGE_SIZE = 25
  *  field, so a field left out here vanishes on load (0.46.1 RC: file chips
  *  never drew from a loaded Thread, and a files-only post was an empty
  *  bubble). */
-type DocExtras = Pick<OverlayDoc, 'widget' | 'author' | 'design' | 'attachments'>
+type DocExtras = Pick<OverlayDoc, 'widget' | 'author' | 'design' | 'attachments' | 'context'>
 function docExtras(src: Record<string, unknown>): DocExtras {
   const out: DocExtras = {}
   const w = src.widget
@@ -63,7 +63,19 @@ function docExtras(src: Record<string, unknown>): DocExtras {
   if (design) out.design = design
   const attachments = coerceThreadFileObjects(src.attachments)
   if (attachments.length > 0) out.attachments = attachments
+  const context = coerceThreadContext(src.context)
+  if (context) out.context = context
   return out
+}
+
+/** The doc's `context` (thread-context-v1): all four strings, else none. */
+export function coerceThreadContext(raw: unknown): ThreadContextDoc | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const c = raw as Record<string, unknown>
+  if (typeof c.text !== 'string' || !c.text || typeof c.widget !== 'string' || typeof c.garden !== 'string' || typeof c.placement !== 'string') {
+    return null
+  }
+  return { text: c.text, widget: c.widget, garden: c.garden, placement: c.placement }
 }
 
 function coerceDesign(raw: unknown): OverlayDoc['design'] {
@@ -291,6 +303,26 @@ export interface OverlayDoc {
    *  `thread-attachments-v1`): pointers to files in the Thread's workspace,
    *  set only by the daemon. Absent on older docs and servers. */
   attachments?: ThreadFileObject[] | null
+  /** The Board context that rode the person's post (0.46.3 r10, daemon
+   *  feature `thread-context-v1`): a Garden widget's line, shown as a chip,
+   *  never the person's words. Absent on every other doc. */
+  context?: ThreadContextDoc | null
+}
+
+/** A doc's `context` (`k2_core::overlay::doc::ThreadContext`). */
+export interface ThreadContextDoc {
+  text: string
+  /** The widget's folder name (author-chosen). */
+  widget: string
+  garden: string
+  placement: string
+}
+
+/** The `context` a compose post sends (thread-context-v1): the text and
+ *  where it came from. `origin.hash` only to this computer's daemon. */
+export interface ThreadContextBody {
+  text: string
+  origin: { widget: string; garden: string; placement: string; hash?: string }
 }
 
 /** Live state of a Thread file object, computed by the daemon on each read
@@ -468,7 +500,9 @@ export function overlayItemFromThreadPost(
 /** What `postThreadCompose` did: the server took it (`item` is the new row,
  *  already pushed to every live Thread list), or it answered `ok: false`. */
 export type ThreadComposeResult =
-  | { ok: true; item: OverlayThreadItem | null }
+  /** `contextRefused`: the server took the message but not its Board
+   *  context (thread-context-v1), and says why. */
+  | { ok: true; item: OverlayThreadItem | null; contextRefused?: { code: string; message: string } }
   /** `code`: the daemon's refusal code when it sent one (`attachment_*`). */
   | { ok: false; error: string; code?: string }
 
@@ -507,6 +541,9 @@ export async function postThreadCompose(
      *  Thread's server inside its workspace. `text` may then be empty. The
      *  daemon refuses the whole post on a bad one (`attachment_*`). */
     attachments?: ThreadPostAttachment[]
+    /** thread-context-v1: the Board context chip the person saw. Only to a
+     *  server that reports the feature (the caller checks). */
+    context?: ThreadContextBody
   },
 ): Promise<ThreadComposeResult> {
   const body: {
@@ -516,6 +553,7 @@ export async function postThreadCompose(
     command?: string
     origin?: ThreadWidgetOrigin
     attachments?: ThreadPostAttachment[]
+    context?: ThreadContextBody
   } = {
     addr,
     text,
@@ -523,6 +561,13 @@ export async function postThreadCompose(
   }
   if (command) body.command = command
   if (extra?.origin) body.origin = threadWidgetOriginBody(extra.origin)
+  if (extra?.context) {
+    const o = extra.context.origin
+    body.context = {
+      text: extra.context.text,
+      origin: { widget: o.widget, garden: o.garden, placement: o.placement, ...(o.hash !== undefined ? { hash: o.hash } : {}) },
+    }
+  }
   if (extra?.attachments && extra.attachments.length > 0) {
     body.attachments = extra.attachments.map((a) => ({
       path: a.path,
@@ -555,6 +600,18 @@ export async function postThreadCompose(
   }
   const item = overlayItemFromThreadPost(resp, text)
   if (item) ingestOverlayThreadItem(item)
+  const refused = resp?.contextRefused
+  if (refused && typeof refused === 'object' && !Array.isArray(refused)) {
+    const r = refused as Record<string, unknown>
+    return {
+      ok: true,
+      item,
+      contextRefused: {
+        code: typeof r.code === 'string' ? r.code : 'failed',
+        message: typeof r.message === 'string' && r.message ? r.message : 'The server didn’t take the Board context.',
+      },
+    }
+  }
   return { ok: true, item }
 }
 

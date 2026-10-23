@@ -5,7 +5,7 @@
 //
 //   Sidebar (G25):  Gardens / Your Zen pages on this computer.
 //                   Styles                 ← the computer-wide look, first
-//                   each Garden            ← lock glyph, "N editors", "made by X"; drag to reorder
+//                   each Garden            ← lock glyph, "N editors", "made by X"; drag the row (Alt+↑/↓)
 //                   + New Garden           ← the existing modal
 //                   ▸ Deleted Gardens (n)  ← Restore and read-only History
 //   Garden pane (G26): History… · Rename · ⋯ (Delete); "Made by X · date";
@@ -89,6 +89,11 @@ const SIDE_ROW = 'w-full text-left px-3 py-2 text-xs no-drag cursor-pointer'
 const SIDE_ON = 'bg-[var(--color-accent)]/15'
 const SIDE_OFF = 'hover:bg-white/[0.03]'
 
+/** Press-and-move distance before a Garden row starts dragging; less is a click. */
+export const DRAG_THRESHOLD_PX = 4
+const GARDEN_REORDER_HELP_ID = 'gardens-side-reorder-help'
+export const GARDEN_REORDER_HELP = 'Drag a Garden to reorder it, or press Alt+Up Arrow or Alt+Down Arrow to move it.'
+
 /** "Sees" (G26, Rosson Q1): a Garden sees everything the person sees. */
 export const GARDEN_SEES_TEXT = 'Everything you can see'
 
@@ -109,19 +114,6 @@ function LockGlyph(): React.JSX.Element {
     <svg width="9" height="10" viewBox="0 0 9 10" aria-label="Locked" role="img" fill="currentColor">
       <rect x="0.5" y="4.5" width="8" height="5" rx="1" />
       <path d="M2.2 4.5V3a2.3 2.3 0 0 1 4.6 0v1.5" fill="none" stroke="currentColor" strokeWidth="1.1" />
-    </svg>
-  )
-}
-
-function GripIcon(): React.JSX.Element {
-  return (
-    <svg width="8" height="12" viewBox="0 0 8 12" aria-hidden="true" fill="currentColor">
-      <circle cx="2" cy="2" r="1" />
-      <circle cx="6" cy="2" r="1" />
-      <circle cx="2" cy="6" r="1" />
-      <circle cx="6" cy="6" r="1" />
-      <circle cx="2" cy="10" r="1" />
-      <circle cx="6" cy="10" r="1" />
     </svg>
   )
 }
@@ -170,21 +162,38 @@ function Sidebar({
       })
   }
 
-  // Today's grip drag (ZenGardensSection): a 3px threshold, the accent drop
-  // line, one `garden/reorder` with the final spot.
-  const onGripMouseDown = (e: React.MouseEvent, from: number): void => {
+  // The whole Garden row drags (Rosson 2026-10-23: no handle). A plain click
+  // selects; only a press that moves past DRAG_THRESHOLD_PX starts a drag,
+  // and the click that follows that drag is swallowed. Same accent drop line
+  // and one `garden/reorder` with the final spot, as the old grip.
+  const justDragged = useRef(false)
+  const refocusId = useRef<string | null>(null)
+  useEffect(() => {
+    const id = refocusId.current
+    if (id === null || !listRef.current) return
+    refocusId.current = null
+    Array.from(listRef.current.querySelectorAll<HTMLElement>('[data-gardens-side="garden"]'))
+      .find((el) => el.dataset.gardensSideId === id)
+      ?.focus()
+  }, [gardens])
+
+  const onRowMouseDown = (e: React.MouseEvent, from: number): void => {
     if (e.button !== 0) return
-    e.preventDefault()
     const g = gardens[from]
+    const startX = e.clientX
     const startY = e.clientY
     let started = false
     let slot: number | null = null
+    const prevCursor = document.body.style.cursor
     const onMoveEv = (ev: MouseEvent): void => {
-      if (!started && Math.abs(ev.clientY - startY) > 3) {
+      if (!started) {
+        if (Math.hypot(ev.clientX - startX, ev.clientY - startY) <= DRAG_THRESHOLD_PX) return
         started = true
         setDragId(g.id)
+        document.body.style.cursor = 'grabbing'
       }
-      if (!started || !listRef.current) return
+      ev.preventDefault()
+      if (!listRef.current) return
       const rows = listRef.current.querySelectorAll('[data-garden-side-row]')
       let idx = 0
       for (let i = 0; i < rows.length; i++) {
@@ -198,6 +207,13 @@ function Sidebar({
       document.removeEventListener('mousemove', onMoveEv)
       document.removeEventListener('mouseup', onUp)
       if (!started) return
+      document.body.style.cursor = prevCursor
+      // Swallow the click this release may fire on the row; a release off
+      // the row fires none, so the flag clears on the next tick either way.
+      justDragged.current = true
+      setTimeout(() => {
+        justDragged.current = false
+      }, 0)
       setDragId(null)
       setDropSlot(null)
       if (slot === null || slot === from || slot === from + 1) return
@@ -205,6 +221,18 @@ function Sidebar({
     }
     document.addEventListener('mousemove', onMoveEv)
     document.addEventListener('mouseup', onUp)
+  }
+
+  // Keyboard reorder on the focused row: Alt+↑ / Alt+↓ (plain arrows stay
+  // free for the rest of the page). Focus follows the moved row.
+  const onRowKeyDown = (e: React.KeyboardEvent, i: number): void => {
+    if (!e.altKey || e.metaKey || e.ctrlKey || e.shiftKey) return
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return
+    e.preventDefault()
+    const to = i + 1 + (e.key === 'ArrowUp' ? -1 : 1)
+    if (to < 1 || to > gardens.length) return
+    refocusId.current = gardens[i].id
+    move(gardens[i], to)
   }
 
   return (
@@ -225,6 +253,9 @@ function Sidebar({
           <span className="block text-[var(--color-text-primary)]">Styles</span>
           <span className="block text-[10px] text-[var(--color-text-muted)]">The look of every Garden</span>
         </button>
+        <p id={GARDEN_REORDER_HELP_ID} className="sr-only">
+          {GARDEN_REORDER_HELP}
+        </p>
         <div ref={listRef} data-gardens-side-list="">
           {gardens.map((g, i) => {
             const on = sel.kind === 'garden' && sel.id === g.id
@@ -236,35 +267,32 @@ function Sidebar({
                 className={`relative flex items-stretch ${dragId === g.id ? 'opacity-30' : ''}`}
               >
                 {dropSlot === i && dragId !== null && (
-                  <div className="absolute left-0 right-0 -top-px h-[2px] bg-[var(--color-accent)] z-10" />
+                  <div data-garden-side-drop="top" className="absolute left-0 right-0 -top-px h-[2px] bg-[var(--color-accent)] z-10" />
                 )}
                 {dropSlot === gardens.length && i === gardens.length - 1 && dragId !== null && (
-                  <div className="absolute left-0 right-0 -bottom-px h-[2px] bg-[var(--color-accent)] z-10" />
+                  <div data-garden-side-drop="bottom" className="absolute left-0 right-0 -bottom-px h-[2px] bg-[var(--color-accent)] z-10" />
                 )}
-                <button
-                  type="button"
-                  aria-label={`Reorder ${g.name}`}
-                  aria-roledescription="drag handle"
-                  title="Drag to reorder"
-                  data-garden-side-grip={g.id}
-                  onMouseDown={(e) => onGripMouseDown(e, i)}
-                  onKeyDown={(e) => {
-                    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return
-                    e.preventDefault()
-                    move(g, i + 1 + (e.key === 'ArrowUp' ? -1 : 1))
-                  }}
-                  className="w-5 flex-shrink-0 flex items-center justify-center no-drag cursor-grab text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
-                >
-                  <GripIcon />
-                </button>
                 <button
                   type="button"
                   data-gardens-side="garden"
                   data-gardens-side-id={g.id}
+                  data-garden-draggable=""
                   aria-label={`Open ${g.name}`}
                   aria-current={on ? 'page' : undefined}
-                  className={`flex-1 min-w-0 text-left pr-3 py-2 no-drag cursor-pointer ${on ? SIDE_ON : SIDE_OFF}`}
-                  onClick={() => onSelect({ kind: 'garden', id: g.id })}
+                  aria-describedby={GARDEN_REORDER_HELP_ID}
+                  aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"
+                  onMouseDown={(e) => onRowMouseDown(e, i)}
+                  onKeyDown={(e) => onRowKeyDown(e, i)}
+                  className={`flex-1 min-w-0 text-left px-3 py-2 no-drag select-none ${
+                    dragId === g.id ? 'cursor-grabbing' : 'cursor-pointer'
+                  } ${on ? SIDE_ON : SIDE_OFF}`}
+                  onClick={() => {
+                    if (justDragged.current) {
+                      justDragged.current = false
+                      return
+                    }
+                    onSelect({ kind: 'garden', id: g.id })
+                  }}
                 >
                   <span className="flex items-center gap-1.5 text-xs text-[var(--color-text-primary)]">
                     <span className="truncate">{g.name}</span>

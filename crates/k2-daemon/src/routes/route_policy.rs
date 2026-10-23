@@ -137,16 +137,19 @@ pub const ROUTES: &[Route] = &[
     post("/cli/agents-create-connections", Admin),
     post("/cli/agents-manage-skin", Owner),
     post("/cli/agents/archive-orphans", Member),
-    // 0.46.4 thin-client mirrors (the desktop app forwards these Tauri
-    // commands instead of running k2-core in process): build-launch,
-    // editor-context, teardown-workspace, heartbeat show-sessions /
-    // preview-schedule, inbox count, skills list, workspace session-get.
-    post("/cli/agents/build-launch", Member),
+    // 0.46.4 desktop mirrors (`desktop_mirror_routes`: the desktop app
+    // forwards its former in-process k2-core commands): this computer
+    // only, so NoLogin here and owner-token-only in the handler, like the
+    // Home avatar cache. Rows: agents build-launch / editor-context /
+    // teardown-workspace, heartbeat preview-schedule / show-sessions,
+    // skills list, workspace session-get. (`/cli/inbox/count` mirrors
+    // `/cli/inbox/list` and keeps its Member floor.)
+    post("/cli/agents/build-launch", NoLogin),
     post("/cli/agents/create", Member),
     post("/cli/agents/delegate", Member),
     post("/cli/agents/delete", Member),
     post("/cli/agents/disable-workspace-claude-md", Member),
-    post("/cli/agents/editor-context", Member),
+    post("/cli/agents/editor-context", NoLogin),
     post("/cli/agents/ensure-cli", Member),
     post("/cli/agents/generate-claude-md", Member),
     get("/cli/agents/heartbeat", Member),
@@ -166,7 +169,7 @@ pub const ROUTES: &[Route] = &[
     get("/cli/agents/running", Member),
     post("/cli/agents/save-agent-md", Member),
     post("/cli/agents/save-session-id", Member),
-    post("/cli/agents/teardown-workspace", Member),
+    post("/cli/agents/teardown-workspace", NoLogin),
     get("/cli/agents/triage", Member),
     post("/cli/agents/unlock", Member),
     get("/cli/agents/work", Member),
@@ -668,7 +671,7 @@ pub const ROUTES: &[Route] = &[
     get("/cli/heartbeat/list", Member),
     get("/cli/heartbeat/list-all", Member),
     get("/cli/heartbeat/list-archived", Member),
-    post("/cli/heartbeat/preview-schedule", Member),
+    post("/cli/heartbeat/preview-schedule", NoLogin),
     post("/cli/heartbeat/remove", Owner),
     post("/cli/heartbeat/rename", Member),
     both("/cli/heartbeat/schedule", Member),
@@ -677,7 +680,7 @@ pub const ROUTES: &[Route] = &[
     post("/cli/heartbeat/set-show-sessions", Member),
     post("/cli/heartbeat/set-use-workspace-session", Member),
     get("/cli/heartbeat/show", Member),
-    post("/cli/heartbeat/show-sessions", Member),
+    post("/cli/heartbeat/show-sessions", NoLogin),
     get("/cli/heartbeat/status", Member),
     post("/cli/heartbeat/unarchive", Member),
     post("/cli/heartbeat/uninstall-launchd", Member),
@@ -1147,7 +1150,7 @@ pub const ROUTES: &[Route] = &[
     get("/cli/skill-layers/get-content", Member),
     get("/cli/skill-layers/list", Member),
     post("/cli/skills/create", Member),
-    post("/cli/skills/list", Member),
+    post("/cli/skills/list", NoLogin),
     post("/cli/skills/regenerate", Member),
     post("/cli/skills/remove", Member),
     post("/cli/skills/write-opt-in", Member),
@@ -1467,7 +1470,7 @@ pub const ROUTES: &[Route] = &[
     post("/cli/workspace/resources/add", Member),
     post("/cli/workspace/resources/remove", Member),
     get("/cli/workspace/resume-chat-args", Member),
-    post("/cli/workspace/session-get", Member),
+    post("/cli/workspace/session-get", NoLogin),
     post("/cli/workspace/set", Member),
     post("/cli/workspace/set-agent-display-name", Member),
     post("/cli/workspace/set-chat-session", Member),
@@ -2727,6 +2730,38 @@ mod tests {
                 assert!(role_gate("POST", p, &format!("token={OWNER}"), OWNER).is_none(), "{p}: owner token passes");
             }
             assert!(role_gate("GET", "/cli/llm/accounts/list", &format!("token={member}"), OWNER).is_none());
+        });
+    }
+
+    #[test]
+    fn desktop_mirrors_refuse_every_connect_login() {
+        // 0.46.4 review: the desktop mirrors replace Tauri commands only
+        // this computer's app could call; no Connect login of any role may
+        // reach them over the tunnel (the handler then refuses passports).
+        for p in crate::desktop_mirror_routes::ROUTES {
+            let row = lookup(p).unwrap_or_else(|| panic!("{p} is not classified"));
+            assert!(row.get.is_none(), "{p} is POST-only");
+            assert_eq!(row.post.expect("POST floor").as_wire(), "owner-token", "{p}");
+            assert!(post_allowed(p), "{p} must stay on the POST allowlist");
+            assert!(get_refused(p, ""), "{p}: GET must be refused");
+        }
+        crate::test_support::with_temp_home(|| {
+            let member = session("mirror_member", Role::Member);
+            let admin = session("mirror_admin", Role::Admin);
+            let owner = session("mirror_owner", Role::Owner);
+            for p in crate::desktop_mirror_routes::ROUTES {
+                for (who, tok) in [("member", &member), ("admin", &admin), ("owner login", &owner)] {
+                    let r = role_gate("POST", p, &format!("token={tok}"), OWNER)
+                        .unwrap_or_else(|| panic!("{p}: a {who} login must be refused"));
+                    assert_eq!(r.status, "403 Forbidden", "{p} {who}: {}", r.body);
+                }
+                assert!(role_gate("POST", p, &format!("token={OWNER}"), OWNER).is_none(), "{p}: owner token passes");
+            }
+            // inbox/count keeps inbox/list's floor.
+            assert_eq!(
+                lookup("/cli/inbox/count").expect("classified").get.expect("GET").as_wire(),
+                lookup("/cli/inbox/list").expect("classified").get.expect("GET").as_wire(),
+            );
         });
     }
 

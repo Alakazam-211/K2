@@ -5764,6 +5764,44 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
                 .await;
         }
+        // Desktop mirrors (0.46.4): the routes this computer's K2 app
+        // forwards its former in-process k2-core commands to. This
+        // computer only, built like the Home avatar arm: NoLogin policy
+        // rows turn every Connect login away at role_gate, and the handler
+        // refuses anything but the LOCAL owner token (agent passports, App
+        // passes, API keys) with 403 `desktop_local_only`. POST-only (405
+        // on GET); capped body (413 + close). Ahead of the connect-gap arm
+        // below, whose `/cli/skills/` prefix would otherwise take
+        // `/cli/skills/list`.
+        p if crate::desktop_mirror_routes::is_route(p) => {
+            if !is_post {
+                let _ = super::http::require_post(&mut *stream, &mut buf, is_post).await;
+                return DispatchOutcome::KeepAlive;
+            }
+            let body_bytes = match super::http::read_post_body_capped(
+                &mut *stream,
+                &mut buf,
+                crate::desktop_mirror_routes::MAX_BODY,
+            )
+            .await
+            {
+                Ok(b) => b,
+                Err(refused) => {
+                    let r = crate::desktop_mirror_routes::too_large();
+                    super::http::refuse_body_too_large(&mut *stream, &refused, r.status, r.content_type, &r.body)
+                        .await;
+                    return DispatchOutcome::Done;
+                }
+            };
+            let owner = super::http::token_is_owner(&query, state.token.as_str());
+            let p_owned = p.to_string();
+            let r = tokio::task::spawn_blocking(move || {
+                crate::desktop_mirror_routes::handle(&p_owned, owner, &body_bytes)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         p if is_post
             && post_allowed
             && (p.starts_with("/cli/skills/")
@@ -5779,12 +5817,6 @@ async fn handle_one_request(
                 || p == "/cli/agents/save-session-id"
                 || p == "/cli/session/set-surfaced"
                 || p == "/cli/heartbeat/set-show-sessions"
-                || p == "/cli/heartbeat/show-sessions"
-                || p == "/cli/heartbeat/preview-schedule"
-                || p == "/cli/agents/teardown-workspace"
-                || p == "/cli/agents/build-launch"
-                || p == "/cli/agents/editor-context"
-                || p == "/cli/workspace/session-get"
                 || p == "/cli/relations/create"
                 || p == "/cli/relations/delete") =>
         {
@@ -13131,7 +13163,6 @@ fn dispatch_connect_gap_post(
 ) -> crate::cli::CliResponse {
     match path {
         // Workspace skill CRUD + canonical opt-in + harness-fanout marker.
-        "/cli/skills/list" => crate::skills_routes::handle_list(body),
         "/cli/skills/create" => crate::skills_routes::handle_create(body),
         "/cli/skills/remove" => crate::skills_routes::handle_remove(body),
         "/cli/skills/write-opt-in" => crate::skills_routes::handle_write_opt_in(body),
@@ -13173,16 +13204,6 @@ fn dispatch_connect_gap_post(
         "/cli/heartbeat/set-show-sessions" => {
             crate::heartbeat_routes::handle_set_show_heartbeat_sessions(body)
         }
-        // Thin-client mirrors (0.46.4): Tauri commands that ran k2-core in
-        // the desktop process now forward here.
-        "/cli/heartbeat/show-sessions" => {
-            crate::heartbeat_routes::handle_show_heartbeat_sessions(body)
-        }
-        "/cli/heartbeat/preview-schedule" => crate::heartbeat_routes::handle_preview_schedule(body),
-        "/cli/agents/teardown-workspace" => crate::agents_routes::handle_teardown_workspace(body),
-        "/cli/agents/build-launch" => crate::agents_routes::handle_build_launch(body),
-        "/cli/agents/editor-context" => crate::agents_routes::handle_editor_context(body),
-        "/cli/workspace/session-get" => crate::agents_routes::handle_workspace_session_get(body),
         // Workspace relations (id-based — mirrors the renderer's
         // workspace_relations_* Tauri commands 1:1). C1: gated for
         // non-privileged actors by agents_can_create_connections.

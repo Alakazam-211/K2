@@ -32,8 +32,18 @@
 //
 // Every column box is a shared Zen glass tile (`data-zen-glass`,
 // `lib/zen/zen-glass.ts`; Rosson 2026-10-04).
+//
+// prd-garden-column-collapse A1: a `collapsible` column has a chevron in its
+// top outer corner; folded, it is an edge tab (`ZenColumnEdgeTab`) and its
+// widgets stay mounted but hidden, so a custom frame keeps running. Where
+// each column is comes from `zen-columns` (this computer, per Garden: the
+// person's click, a widget's unsaved `k2.layout.*` fold, the narrow-window
+// fold). Folding moves the focus to the tab, the person's unfold to the
+// column's first control, and a polite live region says which. The page
+// hands its custom frames its own controller (`ZenColumnsContext`) and no
+// other page's.
 
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useHomesStore } from '@/stores/homes'
 import { useWindowFocusStore } from '@/stores/window-focus'
 import {
@@ -72,7 +82,9 @@ import {
   type ZenResolvedPage,
   type ZenWidgetDecl,
 } from '@/lib/zen/zen-page'
-import { zenColumnMinWidthCss } from '@/lib/zen/zen-overflow'
+import { ZEN_COLUMN_TAB_PX, zenColumnMinWidthCss } from '@/lib/zen/zen-overflow'
+import { useZenColumnFolds, zenColumnLabel, ZenColumnsContext } from '@/lib/zen/zen-columns'
+import { ZenColumnChevron, ZenColumnEdgeTab, zenColumnBadgeSources, zenColumnSide } from './ZenColumnEdgeTab'
 import { exitZen, registerZenRowSelect, registerZenViewSwitch } from '@/lib/zen/zen-view'
 import { ZEN_RAIL_KINDS, ZEN_TEMPLATE_CONTROL_CAPS, ZEN_UNBOXED_KINDS, zenWidgetFor } from './zen-registry'
 import { zenConversationRow } from './widgets/ZenConversationWidget'
@@ -86,6 +98,23 @@ import { ZenSourceAskHost, ZEN_SOURCE_ASK_CAPS, ZEN_SOURCE_ASK_ID } from './widg
 import { ZenSourcesPending } from './widgets/ZenSourcesPending'
 
 type ControlFailure = Extract<ZenControlCheck, { ok: false }>
+
+/** What can take the focus when a column opens (its first control). */
+const ZEN_FOCUSABLE =
+  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), iframe, [tabindex]:not([tabindex="-1"])'
+
+/** The live region's box: read aloud, never seen. */
+const ZEN_VISUALLY_HIDDEN: React.CSSProperties = {
+  position: 'absolute',
+  width: 1,
+  height: 1,
+  padding: 0,
+  margin: -1,
+  overflow: 'hidden',
+  clip: 'rect(0, 0, 0, 0)',
+  whiteSpace: 'nowrap',
+  border: 0,
+}
 
 /** How long the window must stop resizing before the check runs (ms). */
 export const ZEN_RESIZE_SETTLE_MS = 300
@@ -302,6 +331,47 @@ export function ZenPage({
   }, [safe, focused, runCheck])
 
   const { layout, placement } = page
+  // prd-garden-column-collapse A1: where each column is (this computer, per
+  // Garden), the narrow-window fold, and the page's `k2.layout.*` controller.
+  const layoutRef = useRef<HTMLDivElement | null>(null)
+  const foldGarden = garden.garden?.id ?? currentZenGardenId() ?? ''
+  const cols = useZenColumnFolds(foldGarden, layout, layoutRef)
+  const foldIds = useId()
+  const tabRefs = useRef(new Map<number, HTMLButtonElement>())
+  const slotRefs = useRef(new Map<number, HTMLDivElement>())
+  const pendingFocus = useRef<{ index: number; to: 'tab' | 'body' } | null>(null)
+  const [announce, setAnnounce] = useState('')
+  const foldsRef = useRef(layout.folds)
+  foldsRef.current = layout.folds
+  const onMove = cols.onMove
+  useEffect(() => {
+    onMove((index, collapsed, by) => {
+      const label = zenColumnLabel(foldsRef.current, index)
+      setAnnounce(collapsed ? `${label} collapsed` : `${label} expanded`)
+      const slot = slotRefs.current.get(index)
+      const inside = !!slot && typeof document !== 'undefined' && slot.contains(document.activeElement)
+      // Folding moves the focus from inside the column to its tab; the
+      // person's unfold moves it to the column's first control.
+      if (collapsed && inside) pendingFocus.current = { index, to: 'tab' }
+      else if (!collapsed && by === 'person') pendingFocus.current = { index, to: 'body' }
+    })
+    return () => onMove(null)
+  }, [onMove])
+  useEffect(() => {
+    const p = pendingFocus.current
+    if (!p) return
+    if (p.to === 'tab' && !cols.collapsed[p.index]) return
+    if (p.to === 'body' && cols.collapsed[p.index]) return
+    pendingFocus.current = null
+    if (p.to === 'tab') {
+      tabRefs.current.get(p.index)?.focus()
+      return
+    }
+    const body = document.getElementById(`${foldIds}-col-${p.index}`)
+    const first = body?.querySelector<HTMLElement>(ZEN_FOCUSABLE)
+    const target = first ?? slotRefs.current.get(p.index)?.querySelector<HTMLElement>('[data-zen-column-chevron]')
+    target?.focus()
+  })
   const draw = (w: ZenWidgetDecl): React.JSX.Element => {
     const Widget = zenWidgetFor(w.kind)
     const bridge = widgetBridges.get(w.id)
@@ -327,100 +397,192 @@ export function ZenPage({
   const bodyWidgets = zenBodyWidgets(page)
   // `[layout] canvas = "full"` (the Diary): the page is the whole window.
   const full = layout.canvas === 'full'
+  // The rows a folded column's tab counts (memoized: a new list resubscribes).
+  const badgeSources = useMemo(
+    () =>
+      layout.split.map((_, col) =>
+        layout.folds?.[col]?.collapsible ? zenColumnBadgeSources(page.widgets.filter((w) => w.column === col), widgetBridges) : [],
+      ),
+    [layout, page.widgets, widgetBridges],
+  )
   // A custom widget that fills a full canvas: its Reload goes in the
   // Garden's menu, not a floating ⋯ (0.45.2; `zen-fill-reload`).
   const fillReload = zenFillReload(page)
   return (
     <ZenFillReloadContext.Provider value={fillReload}>
-      <div
-        ref={rootRef}
-        className="relative flex h-full min-h-0 w-full flex-col"
-        data-zen-page={page.template}
-        data-zen-view={view}
-        data-zen-chrome-from={placement.from}
-        data-zen-canvas={full ? 'full' : undefined}
-      >
-        <ZenWidgetStyles />
-        <style data-zen-chrome-styles="">{ZEN_CHROME_CSS}</style>
-        <ZenTopBand groups={placement.bands.top} src={src} float={full} />
-        {banner}
+      <ZenColumnsContext.Provider value={cols.controller}>
         <div
-          className="flex min-h-0 min-w-0 flex-1"
-          data-zen-layout={layout.kind}
-          style={{
-            gap: full ? 0 : 'var(--zen-gap)',
-            padding: full ? 0 : placement.bands.bottom ? '0 var(--zen-gap)' : '0 var(--zen-gap) var(--zen-gap)',
-          }}
+          ref={rootRef}
+          className="relative flex h-full min-h-0 w-full flex-col"
+          data-zen-page={page.template}
+          data-zen-view={view}
+          data-zen-chrome-from={placement.from}
+          data-zen-canvas={full ? 'full' : undefined}
         >
-          {layout.split.map((pct, col) => {
-            const inCol = bodyWidgets.filter((w) => w.column === col)
-            const rails = inCol.filter((w) => ZEN_RAIL_KINDS.has(w.kind))
-            const boxed = inCol.filter((w) => !ZEN_RAIL_KINDS.has(w.kind))
-            const boxedFlex = zenColumnFlex(boxed)
-            // K2 views that draw their own panels (Tickets' glass) get no box;
-            // nor does anything on a full canvas (it draws its own surface).
-            const bare = full || (boxed.length > 0 && boxed.every((w) => ZEN_UNBOXED_KINDS.has(w.kind)))
-            // FC9: a column's edges (a row rail, a Zen control) run across its
-            // top and bottom, outside its box.
-            const top = placement.edges.find((e) => e.column === col && e.edge === 'top')
-            const bottom = placement.edges.find((e) => e.column === col && e.edge === 'bottom')
-            const body = (
-              <>
-                {rails.map(draw)}
-                {(boxed.length > 0 || rails.length === 0) && (
+          <ZenWidgetStyles />
+          <style data-zen-chrome-styles="">{ZEN_CHROME_CSS}</style>
+          <ZenTopBand groups={placement.bands.top} src={src} float={full} />
+          {banner}
+          <div
+            ref={layoutRef}
+            className="flex min-h-0 min-w-0 flex-1"
+            data-zen-layout={layout.kind}
+            style={{
+              gap: full ? 0 : 'var(--zen-gap)',
+              padding: full ? 0 : placement.bands.bottom ? '0 var(--zen-gap)' : '0 var(--zen-gap) var(--zen-gap)',
+            }}
+          >
+            {layout.split.map((pct, col) => {
+              const inCol = bodyWidgets.filter((w) => w.column === col)
+              const rails = inCol.filter((w) => ZEN_RAIL_KINDS.has(w.kind))
+              const boxed = inCol.filter((w) => !ZEN_RAIL_KINDS.has(w.kind))
+              const boxedFlex = zenColumnFlex(boxed)
+              // K2 views that draw their own panels (Tickets' glass) get no box;
+              // nor does anything on a full canvas (it draws its own surface).
+              const bare = full || (boxed.length > 0 && boxed.every((w) => ZEN_UNBOXED_KINDS.has(w.kind)))
+              // FC9: a column's edges (a row rail, a Zen control) run across its
+              // top and bottom, outside its box.
+              const top = placement.edges.find((e) => e.column === col && e.edge === 'top')
+              const bottom = placement.edges.find((e) => e.column === col && e.edge === 'bottom')
+              const body = (
+                <>
+                  {rails.map(draw)}
+                  {(boxed.length > 0 || rails.length === 0) && (
+                    <div
+                      data-zen-column={col}
+                      className="flex min-h-0 min-w-0 flex-col"
+                      data-zen-column-bare={bare ? '' : undefined}
+                      {...(bare ? {} : ZEN_GLASS_PROPS)}
+                      style={
+                        bare
+                          ? { flex: '1 1 0%' }
+                          : { flex: '1 1 0%', borderRadius: 'var(--zen-radius)', overflow: 'hidden' }
+                      }
+                    >
+                      {boxedFlex === null
+                        ? boxed.map(draw)
+                        : boxed.map((w) => (
+                            // 0.46.1 (gap 6): `weight` shares the column's height.
+                            <div
+                              key={w.id}
+                              data-zen-weight={w.weight ?? 1}
+                              className="flex min-h-0 min-w-0 flex-col"
+                              style={{ flex: boxedFlex.get(w.id) }}
+                            >
+                              {draw(w)}
+                            </div>
+                          ))}
+                    </div>
+                  )}
+                </>
+              )
+              // FC27: min widths scale down when they don't all fit (A1: a
+              // folded column takes no share and reserves its tab).
+              const slotStyle = {
+                flex: `${pct} 1 0%`,
+                minWidth: zenColumnMinWidthCss(layout.minWidths, col, cols.collapsed),
+                gap: 'var(--zen-gap)',
+              }
+              if (layout.folds?.[col]?.collapsible) {
+                // A1: one stable tree whether folded or open, so folding never
+                // remounts the column's widgets (a custom frame keeps running).
+                const folded = cols.collapsed[col] === true
+                const label = zenColumnLabel(layout.folds, col)
+                const side = zenColumnSide(col, layout.split.length)
+                const bodyId = `${foldIds}-col-${col}`
+                return (
                   <div
-                    data-zen-column={col}
-                    className="flex min-h-0 min-w-0 flex-col"
-                    data-zen-column-bare={bare ? '' : undefined}
-                    {...(bare ? {} : ZEN_GLASS_PROPS)}
+                    key={col}
+                    ref={(el) => {
+                      if (el) slotRefs.current.set(col, el)
+                      else slotRefs.current.delete(col)
+                    }}
+                    data-zen-column-slot={col}
+                    data-zen-column-collapsible=""
+                    data-zen-column-folded={folded ? (cols.auto[col] ? 'auto' : '') : undefined}
+                    className="relative flex min-h-0 min-w-0 flex-row"
                     style={
-                      bare
-                        ? { flex: '1 1 0%' }
-                        : { flex: '1 1 0%', borderRadius: 'var(--zen-radius)', overflow: 'hidden' }
+                      folded
+                        ? { flex: `0 0 ${ZEN_COLUMN_TAB_PX}px`, width: ZEN_COLUMN_TAB_PX, minWidth: ZEN_COLUMN_TAB_PX }
+                        : slotStyle
                     }
                   >
-                    {boxedFlex === null
-                      ? boxed.map(draw)
-                      : boxed.map((w) => (
-                          // 0.46.1 (gap 6): `weight` shares the column's height.
-                          <div
-                            key={w.id}
-                            data-zen-weight={w.weight ?? 1}
-                            className="flex min-h-0 min-w-0 flex-col"
-                            style={{ flex: boxedFlex.get(w.id) }}
-                          >
-                            {draw(w)}
-                          </div>
-                        ))}
+                    {folded ? (
+                      <ZenColumnEdgeTab
+                        index={col}
+                        label={label}
+                        side={side}
+                        controls={bodyId}
+                        sources={badgeSources[col]}
+                        full={full}
+                        onExpand={() => cols.personExpand(col)}
+                        buttonRef={(el) => {
+                          if (el) tabRefs.current.set(col, el)
+                          else tabRefs.current.delete(col)
+                        }}
+                      />
+                    ) : null}
+                    <div
+                      id={bodyId}
+                      data-zen-column-region={col}
+                      aria-label={label}
+                      role="region"
+                      className={`min-h-0 min-w-0 flex-1 ${top || bottom ? 'flex-col' : 'flex-row'}`}
+                      style={{ display: folded ? 'none' : 'flex', gap: 'var(--zen-gap)' }}
+                    >
+                      {top && <ZenEdgeRow edge={top} src={src} />}
+                      {top || bottom ? (
+                        <div data-zen-column-body={col} className="flex min-h-0 min-w-0 flex-1 flex-row" style={{ gap: 'var(--zen-gap)' }}>
+                          {body}
+                        </div>
+                      ) : (
+                        body
+                      )}
+                      {bottom && <ZenEdgeRow edge={bottom} src={src} />}
+                    </div>
+                    {folded ? null : (
+                      <ZenColumnChevron
+                        index={col}
+                        label={label}
+                        side={side}
+                        controls={bodyId}
+                        disabled={!cols.canFold(col)}
+                        full={full}
+                        onFold={() => cols.personFold(col)}
+                      />
+                    )}
                   </div>
-                )}
-              </>
-            )
-            // FC27: min widths scale down when they don't all fit.
-            const slotStyle = { flex: `${pct} 1 0%`, minWidth: zenColumnMinWidthCss(layout.minWidths, col), gap: 'var(--zen-gap)' }
-            if (!top && !bottom) {
+                )
+              }
+              if (!top && !bottom) {
+                return (
+                  <div key={col} data-zen-column-slot={col} className="flex min-h-0 min-w-0 flex-row" style={slotStyle}>
+                    {body}
+                  </div>
+                )
+              }
               return (
-                <div key={col} data-zen-column-slot={col} className="flex min-h-0 min-w-0 flex-row" style={slotStyle}>
-                  {body}
+                <div key={col} data-zen-column-slot={col} className="flex min-h-0 min-w-0 flex-col" style={slotStyle}>
+                  {top && <ZenEdgeRow edge={top} src={src} />}
+                  <div data-zen-column-body={col} className="flex min-h-0 min-w-0 flex-1 flex-row" style={{ gap: 'var(--zen-gap)' }}>
+                    {body}
+                  </div>
+                  {bottom && <ZenEdgeRow edge={bottom} src={src} />}
                 </div>
               )
-            }
-            return (
-              <div key={col} data-zen-column-slot={col} className="flex min-h-0 min-w-0 flex-col" style={slotStyle}>
-                {top && <ZenEdgeRow edge={top} src={src} />}
-                <div data-zen-column-body={col} className="flex min-h-0 min-w-0 flex-1 flex-row" style={{ gap: 'var(--zen-gap)' }}>
-                  {body}
-                </div>
-                {bottom && <ZenEdgeRow edge={bottom} src={src} />}
-              </div>
-            )
-          })}
+            })}
+          </div>
+          {placement.bands.bottom && <ZenBottomBand groups={placement.bands.bottom} src={src} />}
+          <ZenNewGardenHost bridge={controlsBridge} />
+          <ZenSourceAskHost bridge={sourceAskBridge} />
+          <ZenSourcesPending gardenName={garden.garden?.name ?? 'this Garden'} widgets={page.widgets} />
+          {layout.folds && (
+            <div data-zen-column-announce="" aria-live="polite" role="status" style={ZEN_VISUALLY_HIDDEN}>
+              {announce}
+            </div>
+          )}
         </div>
-        {placement.bands.bottom && <ZenBottomBand groups={placement.bands.bottom} src={src} />}
-        <ZenNewGardenHost bridge={controlsBridge} />
-        <ZenSourceAskHost bridge={sourceAskBridge} />
-        <ZenSourcesPending gardenName={garden.garden?.name ?? 'this Garden'} widgets={page.widgets} />
-      </div>
+      </ZenColumnsContext.Provider>
     </ZenFillReloadContext.Provider>
   )
 }

@@ -59,22 +59,50 @@ export function zenRowOverflow(input: ZenRowOverflowInput): ZenRowOverflow {
   return { hide, compactSwitcher: need > input.available }
 }
 
+/** prd-garden-column-collapse A1: a folded column is an edge tab this many
+ *  px wide (a renderer constant, not `frame.toml`, CA5). */
+export const ZEN_COLUMN_TAB_PX = 28
+/** The tab is one button at least this tall (its hit target, 28 × 44). */
+export const ZEN_COLUMN_TAB_MIN_HEIGHT_PX = 44
+
 /** Column `col`'s CSS `min-width` (FC27): its own px, or its share of the
- *  row when the columns' min widths don't all fit. */
-export function zenColumnMinWidthCss(minWidths: readonly number[], col: number): string | number {
+ *  row when the columns' min widths don't all fit.
+ *
+ *  A1 (CA15): `folded[i]` columns are edge tabs. They take no share; each
+ *  reserves `ZEN_COLUMN_TAB_PX` from the row, and a folded column's own min
+ *  width is the tab's. The width it frees goes to the open columns in
+ *  proportion to their `size` (their flex grow). */
+export function zenColumnMinWidthCss(
+  minWidths: readonly number[],
+  col: number,
+  folded: readonly boolean[] = [],
+): string | number {
+  if (folded[col]) return ZEN_COLUMN_TAB_PX
   const own = minWidths[col] ?? 0
   if (own <= 0) return 0
-  const sum = minWidths.reduce((a, b) => a + Math.max(0, b), 0)
+  const sum = minWidths.reduce((a, b, i) => a + (folded[i] ? 0 : Math.max(0, b)), 0)
   const share = Math.round((own / sum) * 1e6) / 1e6
   const gaps = Math.max(0, minWidths.length - 1)
-  return `min(${own}px, calc((100% - ${gaps} * var(--zen-gap)) * ${share}))`
+  const tabs = minWidths.filter((_, i) => folded[i]).length
+  const reserved = tabs > 0 ? ` - ${tabs * ZEN_COLUMN_TAB_PX}px` : ''
+  return `min(${own}px, calc((100% - ${gaps} * var(--zen-gap)${reserved}) * ${share}))`
 }
 
 /** The min widths the CSS above resolves to in a row `width` px wide with
- *  `gap` px between columns (pure; what the browser computes). */
-export function zenClampedMinWidths(minWidths: readonly number[], width: number, gap: number): number[] {
-  const sum = minWidths.reduce((a, b) => a + Math.max(0, b), 0)
-  if (sum <= 0) return minWidths.map(() => 0)
-  const room = Math.max(0, width - Math.max(0, minWidths.length - 1) * gap)
-  return minWidths.map((m) => (m <= 0 ? 0 : Math.min(m, room * (m / sum))))
+ *  `gap` px between columns (pure; what the browser computes). A folded
+ *  column resolves to its tab. */
+export function zenClampedMinWidths(
+  minWidths: readonly number[],
+  width: number,
+  gap: number,
+  folded: readonly boolean[] = [],
+): number[] {
+  const sum = minWidths.reduce((a, b, i) => a + (folded[i] ? 0 : Math.max(0, b)), 0)
+  const tabs = minWidths.filter((_, i) => folded[i]).length
+  const room = Math.max(0, width - Math.max(0, minWidths.length - 1) * gap - tabs * ZEN_COLUMN_TAB_PX)
+  return minWidths.map((m, i) => {
+    if (folded[i]) return ZEN_COLUMN_TAB_PX
+    if (sum <= 0 || m <= 0) return 0
+    return Math.min(m, room * (m / sum))
+  })
 }

@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Garden access lists (prd-garden-access-v1 G19, G20, G24; slice A6): the
-# CLI's switch-on copy, against a stub daemon.
+# CLI's copy, against a stub daemon. Garden access is the flow since 0.46.3
+# (no switch); the CLI only checks that the server's K2 has its routes.
 #
-#   * `k2 study` lists `garden-access` and prints its page only while the
-#     daemon's gardenAccess switch is on (its routes answer); off (the
-#     route is "unknown zen route") the topic doesn't exist, exactly as
-#     0.46.3 (the byte-for-byte half is tests/cli/permission_off_golden.sh).
+#   * `k2 study` always lists `garden-access` and prints its page (static
+#     docs), whatever the daemon answers.
+#   * Against a K2 older than 0.46.3 (no access routes) `garden new --from`
+#     says that K2 is older and needs an update (exit 2).
 #   * `k2 zen widget claim` on a daemon that answers 410 `retired` prints
 #     "Gardens use access lists now: `k2 zen garden access`" and exits 0.
 #   * `k2 zen garden delete` refused with `garden_delete_person` and a card
@@ -97,8 +98,9 @@ run() {
     return 0
 }
 
-# A real daemon keeps ~/.k2/garden-access-on only while the switch is on,
-# and the CLI asks nothing without it; the stub's "on" carries the mark too.
+# A daemon with Garden access writes ~/.k2/garden-access-on at boot, and
+# the CLI asks nothing without it (an older K2); the stub's "on" carries
+# the mark too.
 routes() {
     printf '%s\n' "$1" > "$ROUTES"
     case "$1" in
@@ -109,29 +111,30 @@ routes() {
 
 ACCESS_ON='"/cli/zen/garden/access": [400, {"ok": false, "error": "bad_request", "message": "garden/access needs garden=<id or name>"}]'
 
-echo "== switch off: no garden-access topic =="
+echo "== an older K2 (no access routes): the topic is still listed =="
 routes '{}'
 if run 0 study; then
-    if printf '%s' "$OUT" | grep -q 'garden-access'; then bad "study lists garden-access with the switch off"; else ok "study (off) has no garden-access"; fi
+    if printf '%s' "$OUT" | grep -q '^  garden-access       Who may edit a Garden'; then ok "study lists garden-access (older K2)"; else bad "study (older K2): $OUT"; fi
 fi
-if run 0 study --json; then
-    if printf '%s' "$OUT" | grep -q 'garden-access'; then bad "study --json lists garden-access off"; else ok "study --json (off)"; fi
+if run 0 study garden-access; then
+    if printf '%s' "$OUT" | grep -q '^k2 study garden-access'; then ok "study garden-access (older K2) prints the page"; else bad "older K2 page: $OUT"; fi
 fi
-if run 2 study garden-access; then
-    if printf '%s' "$OUT" | grep -q "unknown study topic 'garden-access'"; then ok "study garden-access (off) is an unknown topic"; else bad "off: $OUT"; fi
+printf 'schema = 1\n' > "$SANDBOX/page.toml"
+if run 2 zen garden new Plans --from "$SANDBOX/page.toml"; then
+    if [ "$OUT" = "Error: --from and --widgets need K2 0.46.3 or newer on this server; this server's K2 is older. Update K2 on that server." ]; then ok "garden new --from on an older K2"; else bad "garden new --from (older K2): $OUT"; fi
 fi
 
-echo "== switch on: the topic and its page =="
+echo "== Garden access: the topic and its page =="
 routes "{$ACCESS_ON}"
 if run 0 study; then
-    if printf '%s' "$OUT" | grep -q '^  garden-access       Who may edit a Garden'; then ok "study lists garden-access (on)"; else bad "study (on): $OUT"; fi
+    if printf '%s' "$OUT" | grep -q '^  garden-access       Who may edit a Garden'; then ok "study lists garden-access"; else bad "study: $OUT"; fi
     if printf '%s' "$OUT" | grep -A1 '^  garden-data ' | grep -q '^  garden-access '; then ok "right after garden-data"; else bad "order: $OUT"; fi
 fi
 if run 0 study --json; then
-    if printf '%s' "$OUT" | python3 -c 'import json,sys; t=[x["id"] for x in json.load(sys.stdin)["topics"]]; sys.exit(0 if t[-1]=="garden-access" else 1)'; then
-        ok "study --json (on) ends with garden-access"
+    if printf '%s' "$OUT" | python3 -c 'import json,sys; t=[x["id"] for x in json.load(sys.stdin)["topics"]]; sys.exit(0 if t[t.index("garden-data") + 1]=="garden-access" else 1)'; then
+        ok "study --json lists garden-access after garden-data"
     else
-        bad "study --json (on): $OUT"
+        bad "study --json: $OUT"
     fi
 fi
 if run 0 study garden-access; then

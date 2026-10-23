@@ -31837,7 +31837,7 @@ EOF
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-heartbeats app-tickets app-identity app-surfaces skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute compute-shared vault notifications data-sources projects hooks agent-hire garden-data changes design db-upgrade"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-heartbeats app-tickets app-identity app-surfaces skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute compute-shared vault notifications data-sources projects hooks agent-hire garden-data garden-access changes design db-upgrade"
 
 _study_usage() {
     cat <<'EOF'
@@ -31856,7 +31856,7 @@ Topics:
   context  db  mail  connect-boundary  apps  app-deploys  app-move  app-api  app-heartbeats  app-tickets
   app-identity  app-surfaces  skins  feedback-loop  ticket-brief  zen  sidecars  llm-tokens
   llm-accounts  publish-framing  compute  compute-shared  vault  notifications  data-sources
-  projects  hooks  agent-hire  garden-data  changes  db-upgrade
+  projects  hooks  agent-hire  garden-data  garden-access  changes  db-upgrade
 EOF
 }
 
@@ -31924,9 +31924,6 @@ _study_is_topic() {
 _study_topic_ids_all() {
     local ids="$_STUDY_TOPIC_IDS"
     if _permission_cli_enabled; then ids="$ids permissions"; fi
-    # Garden access lists (prd-garden-access-v1 G24): a topic only while
-    # this daemon's gardenAccess switch is on.
-    if _garden_access_cli_enabled; then ids="$ids garden-access"; fi
     printf '%s\n' "$ids"
 }
 
@@ -31939,12 +31936,6 @@ _study_usage_all() {
         else
             cat
         fi
-    } | {
-        if _garden_access_cli_enabled; then
-            awk '{ print } / agent-hire  garden-data/ { print "  garden-access" }'
-        else
-            cat
-        fi
     }
 }
 
@@ -31952,12 +31943,6 @@ _study_catalog_all() {
     _study_catalog | {
         if _permission_cli_enabled; then
             awk '{ print } /^  design   / { print "  permissions         Permission cards (Beta): ask a person to allow what K2 refused you" }'
-        else
-            cat
-        fi
-    } | {
-        if _garden_access_cli_enabled; then
-            awk '{ print } /^  garden-data   / { print "  garden-access       Who may edit a Garden: the list, asking, signing, History" }'
         else
             cat
         fi
@@ -32009,6 +31994,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   hooks               Custom (no-model) agents: their Thread; k2 hooks emit
   agent-hire          Apps hire agents/teams with a hire key; links; k2 msg who
   garden-data         A widget's data: k2 store --widget, grants, revs, export
+  garden-access       Who may edit a Garden: the list, asking, signing, History
   changes             Git changes (the Changes tab): your own workspace; discard = Trash
   design              Design notes from a page: the shape, k2 browser note, answer in Thread
 
@@ -35220,8 +35206,7 @@ print(json.dumps({"topics": topics}, separators=(",", ":")))
         exit 0
     fi
 
-    if ! _study_is_topic "$topic" && ! { [ "$topic" = permissions ] && _permission_cli_enabled; } \
-        && ! { [ "$topic" = garden-access ] && _garden_access_cli_enabled; }; then
+    if ! _study_is_topic "$topic" && ! { [ "$topic" = permissions ] && _permission_cli_enabled; }; then
         echo "Error: unknown study topic '$topic'" >&2
         _study_usage_all >&2
         exit 2
@@ -57541,8 +57526,8 @@ Unanswered cards expire after 3 days, and you get one turn. Still need it? Ask o
 EOF
 }
 
-# Garden access lists (prd-garden-access-v1 G24): shown only while this
-# daemon's gardenAccess switch is on (`_garden_access_cli_enabled`).
+# Garden access lists (prd-garden-access-v1 G24): how Gardens work since
+# 0.46.3. Static docs, always listed (no daemon asked).
 _study_page_garden_access() {
     cat <<'EOF'
 k2 study garden-access — who may edit a Garden, and how to ask
@@ -60062,8 +60047,8 @@ cmd_zen_widget() {
         cmd_zen_widget_show "$@"
         return
     fi
-    # Garden access (G19): only with the switch on; off, 0.46.3's unknown
-    # subcommand (A6, off-golden F2).
+    # Garden access (G19). A K2 older than 0.46.3 has no History route: there
+    # `history` stays the unknown subcommand it was.
     if [ "$verb" = "history" ] && _zen_access_on; then
         cmd_zen_access_history widget "$@"
         return
@@ -60163,7 +60148,7 @@ if err is not None:
     code = err.get("code") if isinstance(err, dict) else err
     msg = d.get("message") or (err.get("hint") if isinstance(err, dict) else None) or str(code)
     if code == "retired" and verb == "claim":
-        # Garden access (G20, switch on): Keep as mine is retired.
+        # Garden access (G20): Keep as mine is retired.
         if not as_json:
             print("Gardens use access lists now: `k2 zen garden access`")
         sys.exit(0)
@@ -60182,7 +60167,7 @@ whose = "your" if kind in ("owner", "k2") else "its"
 if verb == "claim":
     print("It\x27s yours: this version of %s now reads and writes data with your rights." % d.get("widget"))
 elif "vouched" in d and kind != "k2":
-    # Garden access lists on (G9): a sign by the person or a listed agent
+    # Garden access (G9): a sign by the person or a listed agent
     # vouches for this version; the signer gate checks the list per Garden.
     where = "in every Garden" if kind == "owner" else "in each Garden whose list has %s" % who
     print("%s %s: this version of %s runs with the Garden\x27s data %s." % ("Signed as" if d.get("stamped") else "Already signed by", who, d.get("widget"), where))
@@ -60271,18 +60256,16 @@ _zen_validate_only_flags() {
     fi
 }
 
-# ── Garden access (prd-garden-access-v1 G19; only with the gardenAccess
-# switch on). One list per Garden of the agents who may edit it; History
-# per Garden and per widget. Inside a K2 terminal these carry the session's
-# passport (an agent asks; the person changes the list from Settings or a
-# terminal outside K2).
+# ── Garden access (prd-garden-access-v1 G19). One list per Garden of the
+# agents who may edit it; History per Garden and per widget. Inside a K2
+# terminal these carry the session's passport (an agent asks; the person
+# changes the list from Settings or a terminal outside K2).
 
-# Is Garden access on for this daemon? Its routes exist only then (off, a
-# probe is the Zen arm's 404 "unknown zen route").
-# Garden access (A6): the daemon keeps ~/.k2/garden-access-on only while
-# the switch is on. Against this computer's daemon, no file = off with no
-# request (0.46.3's behaviour, off-golden cli_zen.txt); another host is
-# asked.
+# Does this server's K2 have Garden access (0.46.3 and newer)? An older K2
+# has none of its routes: a probe is the Zen arm's 404 "unknown zen route".
+# A daemon with Garden access writes ~/.k2/garden-access-on when it boots,
+# so against this computer's daemon no file means an older K2 (or none
+# running) and nothing is asked; another host is asked.
 _garden_access_unmarked() {
     case "${HOST:-127.0.0.1}" in
         127.0.0.1|localhost|::1) [ ! -e "${K2_HOME}/garden-access-on" ] ;;
@@ -60331,7 +60314,7 @@ err = d.get("error") if isinstance(d, dict) else None
 if as_json:
     print(json.dumps(d, indent=2))
 if err == "unknown zen route":
-    print("Error: Garden access lists are off on this computer (Settings → Gardens).", file=sys.stderr); sys.exit(1)
+    print("Error: this server\x27s K2 is older than 0.46.3, so it has no Garden access lists. Update K2 on that server.", file=sys.stderr); sys.exit(1)
 if err:
     if not as_json:
         print("Error: %s" % (d.get("message") or err), file=sys.stderr)
@@ -60464,10 +60447,10 @@ cmd_zen_access_history() {
     _zen_access_print history "$as_json" "$raw"
 }
 
-# k2 zen garden new <name> --from <page.toml> --widgets <dir>… (G13, switch
-# on): one call, page and widgets with it. Inside a K2 terminal with the
-# switch on it carries the session's passport, so the Garden is the agent's
-# and K2 asks the person in the same step.
+# k2 zen garden new <name> --from <page.toml> --widgets <dir>… (G13): one
+# call, page and widgets with it. Inside a K2 terminal it carries the
+# session's passport, so the Garden is the agent's and K2 asks the person
+# in the same step.
 _zen_garden_new_v2() {
     local name="$1" texting="$2" at="$3" from="$4"
     shift 4
@@ -60513,8 +60496,8 @@ cmd_zen_garden() {
         cmd_zen_garden_put "$@"
         return
     fi
-    # Garden access (G19): only with the switch on; off, 0.46.3's unknown
-    # subcommand (A6, off-golden F2).
+    # Garden access (G19). A K2 older than 0.46.3 has no access or History
+    # routes: there these stay the unknown subcommands they were.
     if { [ "$verb" = "access" ] || [ "$verb" = "history" ]; } && _zen_access_on; then
         if [ "$verb" = "access" ]; then
             cmd_zen_garden_access "$@"
@@ -60569,12 +60552,13 @@ cmd_zen_garden() {
             ;;
         new)
             [ "$n" -ge 1 ] || { echo "Error: k2 zen garden new needs a name" >&2; exit 2; }
-            # Garden access (G13): with the switch on, one call carries the
-            # first page and new widgets, and inside a K2 terminal the
-            # session's passport (the agent's Garden; K2 asks the person).
+            # Garden access (G13): one call carries the first page and new
+            # widgets, and inside a K2 terminal the session's passport (the
+            # agent's Garden; K2 asks the person). A K2 older than 0.46.3
+            # makes an empty Garden as before, and has no --from/--widgets.
             if [ -n "$new_from" ] || [ "${#new_widgets[@]}" -gt 0 ] || { [ -n "${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}" ] && _zen_access_on; }; then
                 if ! _zen_access_on; then
-                    echo "Error: --from and --widgets need Garden access lists on (Settings → Gardens)" >&2
+                    echo "Error: --from and --widgets need K2 0.46.3 or newer on this server; this server's K2 is older. Update K2 on that server." >&2
                     exit 2
                 fi
                 raw=$(_zen_garden_new_v2 "${pos[*]}" "$texting" "$at" "$new_from" ${new_widgets[@]+"${new_widgets[@]}"})
@@ -63090,38 +63074,6 @@ except Exception:
     sys.exit(1)
 sys.exit(0 if isinstance(v, dict) and v.get("enabled") is True else 1)
 ' 2>/dev/null
-}
-
-# Garden access lists (prd-garden-access-v1 G24): is this daemon's
-# gardenAccess switch on? Its routes exist only then: a GET of
-# /cli/zen/garden/access with no Garden answers 400 bad_request when on,
-# and 404 "unknown zen route" (or a refusal) when off or on an older
-# daemon. Cached per process; a daemon that doesn't answer in 1s is off.
-_garden_access_cli_enabled() {
-    if [ -z "${_K2_GARDEN_ACCESS_ON:-}" ] && _garden_access_unmarked; then
-        _K2_GARDEN_ACCESS_ON=0
-    fi
-    if [ -z "${_K2_GARDEN_ACCESS_ON:-}" ]; then
-        _K2_GARDEN_ACCESS_ON=0
-        local tok sock out="" _K2_CFG=""
-        sock="$(_hook_sock)"
-        if [ -n "${SCOPED_TOKEN:-}" ] && [ -n "$sock" ] && [ -S "$sock" ] && ! _cli_skip_uds; then
-            _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
-            out="$(_k2_curl "$_K2_CFG" -s -G --unix-socket "$sock" "http://localhost/cli/zen/garden/access" \
-                --connect-timeout 1 --max-time 1 -w $'\n%{http_code}' 2>/dev/null)" || out=""
-        else
-            tok="${SCOPED_TOKEN:-${TOKEN:-}}"
-            if [ -n "$tok" ] && [ -n "${PORT:-}" ]; then
-                _k2_cfg_add data-urlencode "token=${tok}"
-                out="$(_k2_curl "$_K2_CFG" -s -G "http://${HOST}:${PORT}/cli/zen/garden/access" \
-                    --connect-timeout 1 --max-time 1 -w $'\n%{http_code}' 2>/dev/null)" || out=""
-            fi
-        fi
-        if [[ "$out" == *$'\n400' ]] && [[ "$out" == *'"bad_request"'* ]]; then
-            _K2_GARDEN_ACCESS_ON=1
-        fi
-    fi
-    [ "$_K2_GARDEN_ACCESS_ON" = 1 ]
 }
 
 # For `k2 help` / `k2 study`: inside a K2 cell only, cached per process.

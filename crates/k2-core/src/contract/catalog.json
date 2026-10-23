@@ -658,6 +658,18 @@
                     },
                     "body": {"type": ["string", "null"]},
                     "via": {"type": ["string", "null"]},
+                    "context": {
+                      "title": "ThreadContext",
+                      "type": "object",
+                      "properties": {
+                        "text": {"type": "string", "maxLength": 120},
+                        "widget": {"type": "string", "description": "The Garden widget's folder name (chosen by its author)."},
+                        "placement": {"type": "string", "description": "The widget's id on its Garden page."}
+                      },
+                      "required": ["text", "widget", "placement"],
+                      "additionalProperties": false,
+                      "description": "The Board context that rode the person's post: a Garden widget's line, never their words. Absent on every other item."
+                    },
                     "choice": {
                       "title": "ChoiceCard",
                       "type": ["object", "null"],
@@ -771,6 +783,18 @@
                     },
                     "body": {"type": ["string", "null"]},
                     "via": {"type": ["string", "null"]},
+                    "context": {
+                      "title": "ThreadContext",
+                      "type": "object",
+                      "properties": {
+                        "text": {"type": "string", "maxLength": 120},
+                        "widget": {"type": "string", "description": "The Garden widget's folder name (chosen by its author)."},
+                        "placement": {"type": "string", "description": "The widget's id on its Garden page."}
+                      },
+                      "required": ["text", "widget", "placement"],
+                      "additionalProperties": false,
+                      "description": "The Board context that rode the person's post: a Garden widget's line, never their words. Absent on every other item."
+                    },
                     "choice": {
                       "title": "ChoiceCard",
                       "type": ["object", "null"],
@@ -918,6 +942,18 @@
                     },
                     "body": {"type": ["string", "null"]},
                     "via": {"type": ["string", "null"]},
+                    "context": {
+                      "title": "ThreadContext",
+                      "type": "object",
+                      "properties": {
+                        "text": {"type": "string", "maxLength": 120},
+                        "widget": {"type": "string", "description": "The Garden widget's folder name (chosen by its author)."},
+                        "placement": {"type": "string", "description": "The widget's id on its Garden page."}
+                      },
+                      "required": ["text", "widget", "placement"],
+                      "additionalProperties": false,
+                      "description": "The Board context that rode the person's post: a Garden widget's line, never their words. Absent on every other item."
+                    },
                     "choice": {
                       "title": "ChoiceCard",
                       "type": ["object", "null"],
@@ -1073,6 +1109,18 @@
               },
               "body": {"type": ["string", "null"]},
               "via": {"type": ["string", "null"]},
+              "context": {
+                "title": "ThreadContext",
+                "type": "object",
+                "properties": {
+                  "text": {"type": "string", "maxLength": 120},
+                  "widget": {"type": "string", "description": "The Garden widget's folder name (chosen by its author)."},
+                  "placement": {"type": "string", "description": "The widget's id on its Garden page."}
+                },
+                "required": ["text", "widget", "placement"],
+                "additionalProperties": false,
+                "description": "The Board context that rode the person's post: a Garden widget's line, never their words. Absent on every other item."
+              },
               "choice": {
                 "title": "ChoiceCard",
                 "type": ["object", "null"],

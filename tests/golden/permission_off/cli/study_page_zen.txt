@@ -31,18 +31,18 @@ FULL CANVAS AND LOCKS
   k2.window.startDrag() (k2 zen guide api). A locked Garden: don't edit it;
   K2 refuses (exit 3, garden_locked) and only the person unlocks it.
 
-WRITE THROUGH K2, OR PROPOSE
+WRITE THROUGH K2 (WHEN YOU'RE ON THE GARDEN'S LIST)
   k2 zen garden put <id> --from page.toml · k2 zen widget put <name> <file> --from <file>
-  Without "Manage Gardens and data sources" a put is a PROPOSAL (k2 zen
-  proposals; a person approves). With it a put writes now, audited. Never
-  K2's built-ins (k2:<name>): copy one with k2 zen widget new --from.
-  Changing the person's widget: they get a "Keep as mine" card on your Thread.
+  You edit a Garden when you're on its list (k2 zen garden access <id>);
+  otherwise K2 asks the person (exit 3, a garden.access card). Never K2's
+  built-ins (k2:<name>): copy one with k2 zen widget new --from. Then sign
+  it: k2 zen validate --widget <name> --sign. k2 study garden-access.
 
 THE WIDGET DEV LOOP (keep your widget outside ~/.k2)
   k2 zen validate --dir ./board              check; writes nothing
   k2 zen widget preview --dir ./board        on K2's own Garden, never one of the person's
   k2 zen widget preview --dir ./board --shot board.png --theme dark   headless PNG
-  k2 zen widget put board --dir ./board      one checked write (ONE proposal without the switch)
+  k2 zen widget put board --dir ./board      one checked write (you need the Garden's list)
   k2 zen widget errors board [--clear]       runtime errors; --clear drops stale ones
   validate never signs (--widget --sign does); "pending" exits 0, --strict keeps exit 2.
   Runtime errors fail only a placed widget's saved version in the last 24 h.

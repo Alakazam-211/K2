@@ -15,7 +15,7 @@ THE LOOP
      Fetch once, see the shape (pointer · type · sample). Nothing is saved.
   2. k2 sources propose --name fleet --label "Fleet" --target a=https://… …
      (or --preset k2-fleet --preset-arg boxes=a,b). It waits as "proposed".
-  3. A person approves it: one click in Settings → Gardens → External Data
+  3. A person approves it: one click in Settings → Gardens → a Garden → External Data
      for a secretless public source; a vault confirm when it uses a secret
      (one confirm for many: k2 sources approve a b c --secret NAME). An
      agent with "Manage Gardens and data sources" approves it itself.

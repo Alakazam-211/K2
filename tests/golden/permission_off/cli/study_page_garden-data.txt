@@ -31,11 +31,11 @@ GRANTS (you need one; the person gives it)
 
 WIDGETS YOU MAKE
   After editing a widget, run `k2 zen validate --widget <w> --sign` (or
-  k2 zen widget sign <w>): when clean it signs that version as you, and the
-  widget then reads and writes data with YOUR grants. A plain validate is a
-  check only and never signs (0.46.1). An unsigned version gets no data (author_unknown) until
-  someone signs it or the person clicks It's mine. Never edit a widget the
-  person made unless asked; an edit is a new version signed by its editor.
+  k2 zen widget sign <w>): when clean it signs that version as you. Signed by
+  the person, K2 or an agent on the Garden's list, it runs with the Garden's
+  data. A plain validate is a check only and never signs. Any other version
+  keeps only its own keyspace (needs_editor) until someone listed signs it.
+  Never edit a widget the person made unless asked; an edit is a new version.
 
 BIG WRITES
   k2 store batch --widget <w> < ops.json   ≤ 64 ops in one call, or up to
@@ -55,11 +55,10 @@ LOCK AND SOURCES
   data when it asks for store:write (0.46.1); agents granted that data can
   then read what it saves, so don't save values from sources that hide them.
 
-YOUR OWN WIDGET (0.46.1)
-  With the person's "Manage Gardens and data sources" switch, the agent that
-  signed a widget's newest version reads and writes its data with no grant
-  (seed what you built). One Access Audit line per widget. Without the
-  switch, ask for a grant as before.
+A GARDEN YOU'RE LISTED ON (0.46.3)
+  On the list of every Garden that places a widget, you read and write its
+  data with no grant (seed what you built), one Access Audit line per
+  widget. Otherwise ask the person for a grant. k2 study garden-access.
 
 READING ANOTHER WIDGET (0.46.1)
   A widget lists the widgets it reads in manifest.json: "reads": ["lists"]

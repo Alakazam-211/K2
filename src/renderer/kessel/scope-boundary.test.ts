@@ -159,6 +159,9 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   // 0.45.6 Garden v3: Settings → External Data lists this server's sources.
   'components/Settings/sections/DataSourcesSection.tsx',
   'components/Settings/sections/data-sources-ui.ts',
+  // 0.46.3: Settings → Gardens matches each Garden's source addresses to
+  // the sources of the window's server (the External Data list above).
+  'components/Settings/sections/ZenGardensAccessPage.tsx',
   'components/Settings/shared/AgentAccountsColumn.tsx',
   'components/Settings/sections/data-api.ts',
   'components/Settings/sections/email-api.ts',

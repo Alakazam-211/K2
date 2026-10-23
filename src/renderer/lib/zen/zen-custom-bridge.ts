@@ -55,7 +55,7 @@ import { ZenBridgeError, ZEN_VERBS, type ZenWidgetBridge } from './zen-bridge'
 import { ZEN_CUSTOM_VERBS } from './zen-verbs.generated'
 import { USER_WIDGET_CAPS, type UserWidgetCap } from '../k2-caps.generated'
 import type { CatalogErrorCode, CatalogWireError } from '../contract/catalog-types'
-import type { ZenCustomWidgetPayload, ZenFrameReply, ZenFrameRequest } from './zen-custom-types'
+import { ZEN_AGENTS_SHOW_MAX, type ZenCustomWidgetPayload, type ZenFrameReply, type ZenFrameRequest } from './zen-custom-types'
 import type { ZenAgentRow, ZenPerson, ZenThreadView } from './zen-data'
 import {
   projectZenPeople,
@@ -278,6 +278,8 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
   const posts: Array<{ at: number; key: string }> = []
   let lastSwitch = -Infinity
   let stopped = false
+  /** 0.46.3 r10: clears this widget's `agents.show` list (when it stops or unloads). */
+  let unshow: (() => void) | null = null
   const subs = new Map<number, { off: () => void; thread: boolean; budget: boolean }>()
   /** 0.46.1: `not_bound` source subscriptions held for a rebind (their
    *  `subs` entry stays, so they count toward the 16). */
@@ -712,7 +714,36 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
     // Day-0 stubs (prd-garden-column-collapse-and-agent-list-v1 §7): each
     // lane fills its own body (layout.* is lane A's, above):
     // agents.show (lane B), conversation.setContext (lane C).
-    'agents.show': () => refuse('verb_unavailable', 'agents.show isn’t available here.'),
+    // Lane B (CA11): full row addresses exactly as agents.list() gives them
+    // (a bare handle is refused), at most 50; null clears. K2 draws the
+    // rows in the Agents widget whose `list-from` names this widget.
+    'agents.show': (args) => {
+      const v = args[0]
+      let list: string[] | null = null
+      if (v !== null && v !== undefined) {
+        if (!Array.isArray(v)) refuse('bad_args', 'agents.show takes a list of addresses from agents.list(), or null.')
+        const arr = v as unknown[]
+        if (arr.length > ZEN_AGENTS_SHOW_MAX) refuse('bad_args', `agents.show takes at most ${ZEN_AGENTS_SHOW_MAX} addresses.`)
+        const reach = new Set(deps.boundRows().map((r) => r.address))
+        const seen = new Set<string>()
+        for (const a of arr) {
+          if (typeof a !== 'string') refuse('bad_args', 'agents.show takes addresses (text), from agents.list().')
+          const address = a as string
+          if (!reach.has(address)) {
+            refuse('not_bound', `${address} isn’t one of this widget’s agents (use a full address from agents.list()).`, {
+              room: handleOf(address),
+            })
+          }
+          if (seen.has(address)) refuse('bad_args', `${address} is listed twice.`)
+          seen.add(address)
+        }
+        list = arr as string[]
+      }
+      const release = inner('agents.show', list)
+      // Sending the same list again keeps the same list (K2 does nothing).
+      unshow = typeof release === 'function' ? (release as () => void) : null
+      return null
+    },
     // §4 (lane C): the Board context chip. Visible and removable in every
     // Conversation that follows this widget; it rides only the person's own
     // send, as K2's quoted line (the daemon checks it again).
@@ -912,6 +943,16 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
     if (contextSet) {
       contextSet = false
       clearZenThreadContextFor(deps.gardenId(), deps.widget().id)
+    }
+    // The list clears when the widget stops or unloads (CA11).
+    if (unshow) {
+      const release = unshow
+      unshow = null
+      try {
+        release()
+      } catch (err) {
+        console.warn('[zen] clearing the widget’s agents.show list failed:', err)
+      }
     }
     for (const sub of [...held.keys()]) dropHeld(sub)
     for (const s of subs.values()) {

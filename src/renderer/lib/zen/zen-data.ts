@@ -134,7 +134,7 @@ import type { ZenResolvedPage, ZenWidgetDecl } from './zen-page'
 import { useZenGardenHomesStore, zenGardenHomeKey } from './zen-garden-homes'
 import { ZEN_CUSTOM_KIND } from './zen-page'
 import { requestZenServerRoster, useZenServerRosters, zenRosterWorkspaces, zenWidgetReachRows } from './zen-custom-scope'
-import { zenWidgetMayRun, type ZenCustomWidgetPayload } from './zen-custom-types'
+import { ZEN_AGENTS_SHOW_MAX, zenWidgetMayRun, type ZenCustomWidgetPayload } from './zen-custom-types'
 import { useZenGardensStore } from './zen-gardens'
 import { draftZenCompose } from './zen-compose-drafts'
 import { zenAgentsSource } from './zen-rail-views'
@@ -295,6 +295,12 @@ export interface ZenAgentRow {
    *  draws pinned rows in its pin grid (`pins`). Never projected to a
    *  custom widget. Optional for older fixtures: absent reads as false. */
   pinned?: boolean
+  /** 0.46.3 r10 list mode (`list-from`): a reach row OFF the list that
+   *  needs you (a waiting card, or a permission prompt). Such rows come
+   *  after the list; the Agents widget never draws them and counts them in
+   *  its "N others need you" footer, so a list can't hide an agent that
+   *  needs you. Absent on every other row. */
+  offList?: true
 }
 
 export type ZenConversationPhase = 'opening' | 'ready' | 'unavailable' | 'failed'
@@ -477,11 +483,18 @@ export interface ZenView {
   /** `workspaces`: this server's workspaces (the Agents view), not a Home.
    *  `reach`: a custom widget's reach (this computer's agents plus your
    *  Homes' rows, `zenWidgetReachRows`; no permissions since 2026-10-08):
-   *  its rows now, never a loose or window-Home fallback. */
-  source?: 'home' | 'workspaces' | 'reach'
-  /** `source: 'reach'`: false for a widget that may not run (v4's
-   *  imported widgets): no rows at all. */
+   *  its rows now, never a loose or window-Home fallback.
+   *  `list` (0.46.3 r10): an Agents widget with `list-from`: the rows its
+   *  custom widget listed with `k2.agents.show`, in that order, that are in
+   *  the reach now (`listKey`). Its `key` is the custom widget's, so the
+   *  custom widget, the list and a following Conversation share one pick. */
+  source?: 'home' | 'workspaces' | 'reach' | 'list'
+  /** `source: 'reach'` or `'list'`: false for a widget that may not run
+   *  (v4's imported widgets), or a list whose custom widget isn't on the
+   *  page: no rows at all. */
   reach?: boolean
+  /** `source: 'list'`: the custom widget's view key its list is held under. */
+  listKey?: string
 }
 
 /** One focus group as the Agents view's dropdown shows it. */
@@ -526,6 +539,10 @@ const feedViews = new Map<string, ZenFeedView>()
 const feedHandlers = new Map<string, ZenFeedHandlers>()
 /** Agents on this computer that are on no Home (`agents.local`). */
 const looseRows = new Map<string, HomeRow>()
+/** 0.46.3 r10: a custom widget's view key → the addresses it listed with
+ *  `k2.agents.show` (renderer memory; cleared by `show(null)` and when the
+ *  widget stops or unloads). */
+const shownLists = new Map<string, readonly string[]>()
 interface RowListener {
   view(): ZenView | null
   cb(rows: ZenAgentRow[]): void
@@ -743,7 +760,9 @@ function homeView(gardenId: string, w: ZenWidgetDecl): ZenView {
   }
 }
 
-function agentsView(gardenId: string, w: ZenWidgetDecl): ZenView {
+function agentsView(page: ZenResolvedPage, gardenId: string, w: ZenWidgetDecl): ZenView {
+  // The Agents rail view forces `source: "workspaces"`: `list-from` is
+  // ignored there (CA13).
   if (zenAgentsSource(w.props) === 'workspaces') {
     return {
       key: zenGardenHomeKey(gardenId, w.id),
@@ -754,7 +773,33 @@ function agentsView(gardenId: string, w: ZenWidgetDecl): ZenView {
       source: 'workspaces',
     }
   }
+  const listFrom = zenAgentsListFrom(w.props)
+  if (listFrom) return listView(page, gardenId, w, listFrom)
   return homeView(gardenId, w)
+}
+
+/** 0.46.3 r10: the custom widget an Agents widget shows the list of
+ *  (`list-from`; the daemon sends it only when the file sets it). */
+export function zenAgentsListFrom(props: Record<string, unknown>): string | null {
+  return propString(props, 'list-from')
+}
+
+/** An Agents widget in list mode (`list-from`, prd-garden-column-collapse-
+ *  and-agent-list-v1 A2): keyed by its custom widget, so that widget, the
+ *  list and a Conversation following either share one pick. */
+function listView(page: ZenResolvedPage, gardenId: string, w: ZenWidgetDecl, listFrom: string): ZenView {
+  const source = page.widgets.find((x) => x.id === listFrom && followsCustom(x))
+  const key = zenGardenHomeKey(gardenId, listFrom)
+  return {
+    key,
+    gardenId,
+    widgetId: w.id,
+    homeId: null,
+    agent: null,
+    source: 'list',
+    listKey: key,
+    reach: source?.custom ? zenWidgetMayRun(source.custom) : false,
+  }
 }
 
 /** The app's focus groups, as the Agents view shows them. */
@@ -835,9 +880,9 @@ export function zenViewFor(page: ZenResolvedPage, gardenId: string, widgetId: st
   if (!w) {
     if (widgetId !== ZEN_TEMPLATE_CONTROLS_ID) return null
     const first = firstAgentsWidget(page)
-    return first ? agentsView(gardenId, first) : null
+    return first ? agentsView(page, gardenId, first) : null
   }
-  if (w.kind === 'agents') return agentsView(gardenId, w)
+  if (w.kind === 'agents') return agentsView(page, gardenId, w)
   if (w.kind === ZEN_CUSTOM_KIND) return customView(gardenId, w)
   if (w.kind === 'conversation') {
     if (propString(w.props, 'agent')) return homeView(gardenId, w)
@@ -847,7 +892,7 @@ export function zenViewFor(page: ZenResolvedPage, gardenId: string, widgetId: st
     if (custom) return customView(gardenId, custom)
     const follow =
       (named ? page.widgets.find((x) => x.id === named && x.kind === 'agents') : undefined) ?? firstAgentsWidget(page)
-    return follow ? agentsView(gardenId, follow) : looseView(gardenId, w.id)
+    return follow ? agentsView(page, gardenId, follow) : looseView(gardenId, w.id)
   }
   return looseView(gardenId, w.id)
 }
@@ -869,8 +914,9 @@ export function zenViewForCtx(ctx: ZenVerbCtx): ZenView | null {
 export function zenAddTargetForCtx(ctx: ZenVerbCtx): ZenView | null {
   const own = zenViewForCtx(ctx)
   if (own?.homeId) return own
-  const first = firstAgentsWidget(ctx.page())
-  return first ? agentsView(ctx.gardenId(), first) : null
+  const page = ctx.page()
+  const first = firstAgentsWidget(page)
+  return first ? agentsView(page, ctx.gardenId(), first) : null
 }
 
 /** The Home id the calling widget's view shows (null: a loose view). */
@@ -898,6 +944,7 @@ function anyRow(address: string): HomeRow | null {
 /** The view's rows, in Home order (the Agents view: the Agents page's). */
 function viewRows(view: ZenView): HomeRow[] {
   if (view.source === 'reach') return view.reach ? zenWidgetReachRows().rows : []
+  if (view.source === 'list') return listRows(view).listed
   if (view.source === 'workspaces') {
     const rows = workspaceRows()
     return view.agent ? rows.filter((r) => matchesAgent(r, view.agent as string)) : rows
@@ -910,6 +957,30 @@ function viewRows(view: ZenView): HomeRow[] {
   const home = useHomesStore.getState().homes.find((h) => h.id === view.homeId)
   if (!home) return []
   return view.agent ? home.rows.filter((r) => matchesAgent(r, view.agent as string)) : home.rows
+}
+
+/** A list view's rows (CA11): the stored list ∩ the reach NOW, in list
+ *  order (a row whose server drops out of the reach comes back with it),
+ *  and the reach rows off the list. Nothing listed (before the first
+ *  `show`, or after `show(null)`): no listed rows, never the whole reach. */
+function listRows(view: ZenView): { listed: HomeRow[]; others: HomeRow[] } {
+  if (!view.reach || !view.listKey) return { listed: [], others: [] }
+  const reach = zenWidgetReachRows().rows
+  const list = shownLists.get(view.listKey) ?? []
+  const byAddress = new Map(reach.map((r) => [r.address, r]))
+  const listed: HomeRow[] = []
+  for (const a of list) {
+    const r = byAddress.get(a)
+    if (r) listed.push(r)
+  }
+  const on = new Set(list)
+  return { listed, others: reach.filter((r) => !on.has(r.address)) }
+}
+
+/** CA12: an off-list row the footer counts: it needs you (a card waits on
+ *  you, or the agent asks for permission). */
+function needsYouOffList(row: ZenAgentRow): boolean {
+  return row.state === 'ok' && (row.needsYou || (row.unread?.waiting ?? 0) > 0)
 }
 
 // ── Rows ───────────────────────────────────────────────────────────────────
@@ -1120,7 +1191,56 @@ function rowFor(row: HomeRow, index: number, view: ZenView | null): ZenAgentRow 
 /** `agents.list()`: the view's rows, in Home order. */
 export function zenAgentRows(view: ZenView | null): ZenAgentRow[] {
   if (!view) return []
+  if (view.source === 'list') {
+    // List mode: the listed rows in list order, then (flagged `offList`)
+    // the reach rows off the list that need you, for the footer (CA12).
+    const { listed, others } = listRows(view)
+    const rows = listed.map((r, i) => rowFor(r, i, view))
+    for (const r of others) {
+      const row = rowFor(r, rows.length, view)
+      // Never `selected`: a Conversation following the list shows a listed
+      // agent only (the custom widget's own Conversation may show any).
+      if (needsYouOffList(row)) rows.push({ ...row, selected: false, offList: true })
+    }
+    return rows
+  }
   return viewRows(view).map((r, i) => rowFor(r, i, view))
+}
+
+/** `k2.agents.show(addresses | null)` (0.46.3 r10, catalog v20): the list
+ *  an Agents widget with `list-from` = the calling custom widget draws.
+ *  The custom layer checked each address against `agents.list()` (full row
+ *  addresses only); this keeps the list in renderer memory under the
+ *  widget's view key, never more reach. Sending the same list again does
+ *  nothing. Returns the release (clear this list if it is still the
+ *  current one) the custom layer runs when the widget stops or unloads;
+ *  null for `show(null)`. */
+export function zenAgentsShow(ctx: ZenVerbCtx, addresses: unknown): (() => void) | null {
+  const view = zenViewForCtx(ctx)
+  if (!view || view.source !== 'reach') throw new Error('agents.show is for custom widgets')
+  const key = view.key
+  if (addresses === null || addresses === undefined) {
+    if (shownLists.delete(key)) emitRows()
+    return null
+  }
+  if (!Array.isArray(addresses) || addresses.length > ZEN_AGENTS_SHOW_MAX || !addresses.every((a) => typeof a === 'string')) {
+    throw new Error(`agents.show takes a list of at most ${ZEN_AGENTS_SHOW_MAX} addresses, or null`)
+  }
+  const next = addresses as string[]
+  const prev = shownLists.get(key)
+  let held: readonly string[]
+  if (prev && prev.length === next.length && prev.every((a, i) => a === next[i])) {
+    held = prev
+  } else {
+    held = Object.freeze([...next])
+    shownLists.set(key, held)
+    emitRows()
+  }
+  return () => {
+    if (shownLists.get(key) !== held) return
+    shownLists.delete(key)
+    emitRows()
+  }
 }
 
 function syncViewHomes(): void {
@@ -1129,8 +1249,9 @@ function syncViewHomes(): void {
   for (const l of rowListeners) {
     const v = l.view()
     if (v?.homeId) ids.add(v.homeId)
-    // A custom widget reaches every Home's rows: they get Home's row-status poll too.
-    if (v?.source === 'reach' && v.reach) for (const id of allHomes()) ids.add(id)
+    // A custom widget reaches every Home's rows (so does a list, which is
+    // drawn from that reach): they get Home's row-status poll too.
+    if ((v?.source === 'reach' || v?.source === 'list') && v.reach) for (const id of allHomes()) ids.add(id)
   }
   const next = [...ids].sort()
   const prev = zenViewHomes.getState().homeIds
@@ -1333,7 +1454,7 @@ function findRow(view: ZenView, address: string): { row: HomeRow; index: number 
   const rows = viewRows(view)
   const index = rows.findIndex((r) => r.address === address)
   if (index >= 0) return { row: rows[index], index }
-  if (view.homeId === null && view.source !== 'workspaces' && view.source !== 'reach') {
+  if (view.homeId === null && view.source !== 'workspaces' && view.source !== 'reach' && view.source !== 'list') {
     const loose = anyRow(address)
     if (loose) return { row: loose, index: 0 }
   }
@@ -1528,7 +1649,8 @@ function closeZenConversation(view: ZenView): void {
 export function selectZenRowOnPage(page: ZenResolvedPage, gardenId: string, index: number): void {
   const first = firstAgentsWidget(page)
   if (!first) return
-  const view = agentsView(gardenId, first)
+  // List mode: row N of the list, in its order (CA13).
+  const view = agentsView(page, gardenId, first)
   const row = viewRows(view)[index]
   if (!row) return
   void openZenConversation(view, row.address).catch((err: unknown) => console.warn('[zen] open failed:', err))
@@ -1919,6 +2041,8 @@ export function installZenDataVerbs(): () => void {
       emitRows()
     }),
     registerZenVerb('agents.local', (ctx) => zenLocalAgents(zenViewFor(ctx.page(), ctx.gardenId(), ctx.widgetId))),
+    // 0.46.3 r10: a custom widget's list for an Agents widget's `list-from`.
+    registerZenVerb('agents.show', (ctx, addresses) => zenAgentsShow(ctx, addresses)),
     // The Agents view's focus-group dropdown: the app's own focus groups.
     registerZenVerb('focusGroups.get', () => zenFocusGroups()),
     registerZenVerb('focusGroups.set', (ctx, id) => {
@@ -2128,6 +2252,7 @@ export function installZenDataVerbs(): () => void {
 
 /** Tests only. */
 export function __resetZenDataForTests(): void {
+  shownLists.clear()
   stopLive?.()
   previews.clear()
   selection.clear()

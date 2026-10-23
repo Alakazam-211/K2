@@ -213,6 +213,13 @@ function fakePost(route: string, body: Record<string, unknown>): unknown {
       }
       return { ok: true, garden: g, agent, listed: body.allow === true, changed: true }
     }
+    case 'zen/garden/reorder': {
+      const from = h.gardens.findIndex((g) => g.id === body.garden)
+      if (from < 0) throw new Error(`reorder: no Garden ${String(body.garden)}`)
+      const [moved] = h.gardens.splice(from, 1)
+      h.gardens.splice(Number(body.to) - 1, 0, moved)
+      return { ok: true }
+    }
     case 'zen/widget/sign':
       return { ok: true, widget: body.widget, hash: 'h-signed' }
     case 'zen/garden/restore':
@@ -448,6 +455,137 @@ describe('the sidebar (G25)', () => {
     expect(q('[data-zen-gardens-path]', pane).textContent).toBe('/Users/r/.k2/zen')
     await waitFor(() => expect(q('[data-gardens-look-line="e-t"]', pane).textContent).toContain('You changed the theme to paper'))
     expect(gets('zen/garden/history')).toContainEqual({ garden: '*', limit: 20 })
+  })
+})
+
+describe('the sidebar reorders by dragging the row, no handle (Rosson 2026-10-23)', () => {
+  const ROW_H = 40
+
+  /** jsdom has no layout: give Garden row i the band [i*40, i*40+40). */
+  function layOutRows(): void {
+    const rows = [...document.querySelectorAll<HTMLElement>('[data-garden-side-row]')]
+    rows.forEach((r, i) => {
+      r.getBoundingClientRect = () =>
+        ({ top: i * ROW_H, bottom: i * ROW_H + ROW_H, height: ROW_H, left: 0, right: 240, width: 240, x: 0, y: i * ROW_H, toJSON: () => ({}) }) as DOMRect
+    })
+  }
+
+  function row(id: string): HTMLElement {
+    return q(`[data-gardens-side="garden"][data-gardens-side-id="${id}"]`)
+  }
+
+  function sideOrder(): Array<string | null> {
+    return [...document.querySelectorAll('[data-garden-side-row]')].map((r) => r.getAttribute('data-garden-side-row'))
+  }
+
+  async function mountWithRows(): Promise<void> {
+    await mountPage()
+    await waitFor(() => expect(document.querySelectorAll('[data-garden-side-row]').length).toBe(2))
+    layOutRows()
+  }
+
+  it('renders no handle: no grip, no drag-handle role, no "Reorder" button; the row itself carries the hint', async () => {
+    await mountWithRows()
+    const side = q('[data-gardens-sidebar]')
+    expect(side.querySelector('[data-garden-side-grip]')).toBeNull()
+    expect(side.querySelector('[aria-roledescription="drag handle"]')).toBeNull()
+    expect(within(side).queryAllByRole('button', { name: /^Reorder / })).toEqual([])
+    for (const id of ['g-1', 'g-2']) {
+      const r = q(`[data-garden-side-row="${id}"]`)
+      expect(r.querySelectorAll('button').length).toBe(1)
+      expect(row(id).className).toContain('cursor-pointer')
+    }
+  })
+
+  it('a plain click (or a wobble under 4 px) selects the Garden and does not reorder', async () => {
+    await mountWithRows()
+    const r = row('g-2')
+    fireEvent.mouseDown(r, { button: 0, clientX: 10, clientY: 60 })
+    fireEvent.mouseMove(document, { clientX: 12, clientY: 62 })
+    expect(document.querySelector('[data-garden-side-drop]')).toBeNull()
+    fireEvent.mouseUp(document, { clientX: 12, clientY: 62 })
+    fireEvent.click(r)
+    await waitFor(() => expect(document.querySelector('[data-garden-pane="g-2"]')).not.toBeNull())
+    expect(row('g-2').getAttribute('aria-current')).toBe('page')
+    expect(posts('zen/garden/reorder')).toEqual([])
+    expect(sideOrder()).toEqual(['g-1', 'g-2'])
+  })
+
+  it('dragging a row past the next one shows the drop line, posts the same zen/garden/reorder and does not select', async () => {
+    await mountWithRows()
+    const r = row('g-1')
+    fireEvent.mouseDown(r, { button: 0, clientX: 10, clientY: 20 })
+    fireEvent.mouseMove(document, { clientX: 10, clientY: 75 })
+    await waitFor(() => expect(q('[data-garden-side-drop="bottom"]', q('[data-garden-side-row="g-2"]'))).not.toBeNull())
+    expect(q('[data-garden-side-row="g-1"]').className).toContain('opacity-30')
+    expect(row('g-1').className).toContain('cursor-grabbing')
+    expect(document.body.style.cursor).toBe('grabbing')
+    fireEvent.mouseUp(document, { clientX: 10, clientY: 75 })
+    fireEvent.click(r)
+    expect(posts('zen/garden/reorder')).toEqual([{ garden: 'g-1', to: 2 }])
+    await waitFor(() => expect(sideOrder()).toEqual(['g-2', 'g-1']))
+    expect(document.querySelector('[data-garden-side-drop]')).toBeNull()
+    expect(document.body.style.cursor).toBe('')
+    expect(q('[data-gardens-side="styles"]').getAttribute('aria-current')).toBe('page')
+    expect(document.querySelector('[data-garden-pane="g-1"]')).toBeNull()
+    expect(useToastStore.getState().toasts).toEqual([])
+  })
+
+  it('the fixed entries (Styles, + New Garden, Deleted Gardens, Not in a Garden) are not draggable', async () => {
+    await mountWithRows()
+    await waitFor(() => expect(document.querySelector('[data-gardens-deleted-toggle]')).not.toBeNull())
+    const side = q('[data-gardens-sidebar]')
+    expect([...side.querySelectorAll('[data-garden-draggable]')].map((el) => el.getAttribute('data-gardens-side-id'))).toEqual(['g-1', 'g-2'])
+    const fixed = [
+      q('[data-gardens-side="styles"]'),
+      q('[data-zen-settings-new-garden]'),
+      q('[data-gardens-deleted-toggle]'),
+      q('[data-gardens-side="unplaced"]'),
+    ]
+    for (const el of fixed) {
+      expect(el.hasAttribute('data-garden-draggable')).toBe(false)
+      expect(el.closest('[data-garden-side-row]')).toBeNull()
+      fireEvent.mouseDown(el, { button: 0, clientX: 10, clientY: 0 })
+      fireEvent.mouseMove(document, { clientX: 10, clientY: 75 })
+      expect(document.querySelector('[data-garden-side-drop]')).toBeNull()
+      fireEvent.mouseUp(document, { clientX: 10, clientY: 75 })
+    }
+    expect(posts('zen/garden/reorder')).toEqual([])
+    expect(sideOrder()).toEqual(['g-1', 'g-2'])
+  })
+
+  it('Alt+↑ / Alt+↓ on the focused row moves it (described for screen readers); plain arrows and the ends do nothing', async () => {
+    await mountWithRows()
+    const r2 = row('g-2')
+    expect(r2.getAttribute('aria-keyshortcuts')).toBe('Alt+ArrowUp Alt+ArrowDown')
+    const help = q(`#${r2.getAttribute('aria-describedby')}`)
+    expect(help.textContent).toBe('Drag a Garden to reorder it, or press Alt+Up Arrow or Alt+Down Arrow to move it.')
+    expect(help.className).toContain('sr-only')
+
+    r2.focus()
+    fireEvent.keyDown(r2, { key: 'ArrowUp' })
+    fireEvent.keyDown(r2, { key: 'ArrowDown', altKey: true })
+    fireEvent.keyDown(row('g-1'), { key: 'ArrowUp', altKey: true })
+    expect(posts('zen/garden/reorder')).toEqual([])
+
+    fireEvent.keyDown(r2, { key: 'ArrowUp', altKey: true })
+    expect(posts('zen/garden/reorder')).toEqual([{ garden: 'g-2', to: 1 }])
+    await waitFor(() => expect(sideOrder()).toEqual(['g-2', 'g-1']))
+    await waitFor(() => expect(document.activeElement).toBe(row('g-2')))
+
+    await waitFor(() => expect(h.gardens.map((g) => g.id)).toEqual(['g-2', 'g-1']))
+    // Let the first move's promise settle (one move in flight at a time).
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    fireEvent.keyDown(row('g-2'), { key: 'ArrowDown', altKey: true })
+    expect(posts('zen/garden/reorder')).toEqual([
+      { garden: 'g-2', to: 1 },
+      { garden: 'g-2', to: 2 },
+    ])
+    await waitFor(() => expect(sideOrder()).toEqual(['g-1', 'g-2']))
+    expect(q('[data-gardens-side="styles"]').getAttribute('aria-current')).toBe('page')
+    expect(useToastStore.getState().toasts).toEqual([])
   })
 })
 

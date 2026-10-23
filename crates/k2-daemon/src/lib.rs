@@ -75,6 +75,9 @@ pub mod heartbeat_routes;
 pub mod hire_routes;
 pub mod heartbeat_wait;
 pub mod home_avatar_routes;
+// Desktop mirrors (0.46.4): this computer's app forwards its former
+// in-process k2-core commands here; owner token only.
+pub mod desktop_mirror_routes;
 // Local Grok Bots (0.45.7): `/cli/grokbots/*` + the change poller.
 pub mod grokbots_routes;
 pub mod grokbots_watch;

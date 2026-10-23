@@ -266,7 +266,10 @@ const FROZEN: &[(&str, &str)] = &[
     ("theme:midnight", "f0ecc58c374f1766"),
     ("theme:paper", "a9f7198592fa9474"),
     // 0.46.1: `agents.unread` (on) and `conversation.mute` (off).
-    ("widget-props", "9003638b0181aa01"),
+    // 0.46.3 r10 (GS45, prd-garden-column-collapse-and-agent-list-v1 A2):
+    // `agents.list-from`, with no default (null), and `list` among the
+    // modes: a synced Garden's page doesn't change.
+    ("widget-props", "51e3c98b13c4d20d"),
 ];
 
 fn frozen_hashes() -> BTreeMap<String, String> {

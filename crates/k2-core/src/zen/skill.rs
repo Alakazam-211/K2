@@ -181,6 +181,15 @@ and its controls until the file declares its own.\n\n\
   gives the page the whole window: the top band floats over the columns, which lose\n\
   their margin and glass box, and the theme's background shows behind everything\n\
   (the Diary); the default is `framed`.\n\
+- A `[[layout.column]]` may also set `collapsible = true` (the person folds it to a thin\n\
+  tab on its edge, with its label and unread badge; the fold is kept per Garden on this\n\
+  computer), `collapsed = true` (it starts folded) and `label = \"Chat\"` (1 to 24\n\
+  characters; default `Column N`). Refused: `collapsed` without `collapsible`, every column\n\
+  collapsed, a collapsible column on a one-column page, and a collapsible column that holds\n\
+  the `zen-toggle` or `garden-switcher` (at its edge, in a menu at its edge, or from the\n\
+  template's controls) or a `nav-rail`. The last open column never folds. There is no\n\
+  shortcut: Tab to the chevron or the tab, then Enter. A widget folds one only with\n\
+  `k2.layout.*`, right after the person clicks in it, and those folds are never saved.\n\
 - `[[widget]]`: `id` (letters, digits, - and _; unique on the page), `kind`, `column` (0 is\n\
   the first; it must exist in the layout), and optional `[widget.props]`. At most {MAX_WIDGETS}\n\
   content widgets and {MAX_CHROME_WIDGETS} Zen controls.\n\
@@ -237,6 +246,12 @@ column it is `column` unless you set `orientation = \"row\"` or an `edge`.\n\n"
 - **One agent:** `kind = \"agents\"` with `agent = \"<name or address>\"` (and `home` to say\n\
   which Home it is in): only that agent's row. Or skip the list and pin the\n\
   conversation itself: `kind = \"conversation\"` with `agent = \"<name>\"` and `home`.\n\
+- **A chosen list:** `kind = \"agents\"` with `list-from = \"<custom widget id>\"` (mode `list`):\n\
+  the agents that custom widget lists with `k2.agents.show([...])`, in its order, from this\n\
+  computer and the person's Homes on other servers. \"Nothing listed yet\" until it lists some;\n\
+  a footer counts the others that need the person. The custom widget must ask for\n\
+  `agents:read`. A Conversation following either widget shows the same pick. Not with\n\
+  `agent`, `home` or `home-picker`; the Agents view of a nav rail ignores it.\n\
 - Picking a Home in a Garden never changes the Home page.\n\n",
     );
 
@@ -770,6 +785,33 @@ document.querySelector('#grip').addEventListener('mousedown', (e) => {\n\
   if (e.button === 0) k2.window.startDrag().catch(() => {})\n\
 })\n\
 ```\n\n\
+### Columns, a chosen list and a context chip\n\n\
+A Board-style widget can sit beside K2's own Agents and Conversation widgets and steer\n\
+them, so you never rebuild a chat panel:\n\n\
+- **Columns:** `k2.layout.get()` answers `{columns: [{index, label, collapsible, collapsed}]}`\n\
+  for this page; `k2.layout.subscribe(cb)` pushes the same on every fold. `k2.layout.set({column,\n\
+  collapsed})` and `k2.layout.toggle(column)` fold or unfold a `collapsible` column, but only\n\
+  within 5 s of the person's click in your widget (else `failed` \"needs a click\"), at most 4\n\
+  calls a second each (`rate_limited`). Your folds are never saved (only the person's own click\n\
+  is); a fixed column or the last open one answers `failed`, a bad index `bad_args`.\n\
+- **A chosen list:** an Agents widget with `list-from = \"<your widget's id>\"` shows just the\n\
+  agents you list with `k2.agents.show([...addresses])` (needs `agents:read`), in your order:\n\
+  full addresses exactly as `k2.agents.list()` gives them (`handle::host`; a bare handle is\n\
+  `not_bound`), at most 50. `k2.agents.show(null)` clears it; until you call it the widget says\n\
+  \"Nothing listed yet\". The list never adds reach (an agent on a server you can't reach isn't\n\
+  drawn until it's back), clears when your widget stops or unloads, and a footer counts the\n\
+  agents off your list that need the person. Map from `agents.list()`: never guess addresses.\n\
+- **A context chip:** `k2.conversation.setContext(text)` (needs `thread:post`) puts a chip the\n\
+  person sees on the following Conversation's box (\"Board: K2 Boards\"). It rides on their next\n\
+  send as K2's own quoted line before their message, never as their words, and they can remove\n\
+  it. One line, at most 120 characters, plain text, no `[thread:`, `[from ` or `[context`, at\n\
+  most 2 calls a second; `null` clears. An older server doesn't get it (the chip says so).\n\n\
+```js\n\
+const rows = await k2.agents.list()\n\
+await k2.agents.show(rows.filter((r) => board.has(r.label)).map((r) => r.address))\n\
+await k2.conversation.setContext('Board: ' + board.name)\n\
+chatButton.addEventListener('click', () => k2.layout.toggle(2))\n\
+```\n\n\
 ### Workflow\n\n\
 1. `k2 zen widget new <name> --from k2:diary` (or `--from hello`, `--from arcade`, `--from board-lite`, `--from source-trend`) copies a\n\
    working example into `~/.k2/zen/widgets/<name>/`.\n\
@@ -1171,6 +1213,33 @@ mod tests {
             "- `board-lite`: sticky notes",
         ] {
             assert!(s.contains(needle), "the k2-zen skill must say {needle:?}");
+        }
+    }
+
+    /// v30 (0.46.3 r10, prd-garden-column-collapse-and-agent-list-v1 §7):
+    /// collapsible columns, the chosen list and the context chip.
+    #[test]
+    fn skill_documents_columns_the_chosen_list_and_the_context_chip() {
+        assert!(crate::skills::version::SKILL_VERSION_ZEN >= 30, "Garden columns and the agent list need a new skill version");
+        let s = generate_k2_zen_skill_for(false);
+        for needle in [
+            "`collapsible = true`",
+            "`collapsed = true`",
+            "`label = \"Chat\"`",
+            "The last open column never folds",
+            "**A chosen list:** `kind = \"agents\"` with `list-from = \"<custom widget id>\"`",
+            "\"Nothing listed yet\"",
+            "a bare handle is\n`not_bound`",
+            "### Columns, a chosen list and a context chip",
+            "within 5 s of the person's click",
+            "Your folds are never saved",
+            "never as their words",
+            "the id of a custom widget on this page that asks for agents:read",
+        ] {
+            assert!(s.contains(needle), "the k2-zen skill must say {needle:?}");
+        }
+        for v in ["layout.get", "layout.set", "layout.toggle", "layout.subscribe", "agents.show", "conversation.setContext"] {
+            assert!(s.contains(&format!("`k2.{v}")), "the k2-zen skill lists k2.{v}");
         }
     }
 

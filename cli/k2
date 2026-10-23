@@ -58296,7 +58296,11 @@ A GARDEN FILE
                                  keeps the template it was made with
   [layout]                       kind = "columns"
   [[layout.column]]              1 to 3: size (percent, adds up to 100)
-                                 and min-width (px)
+                                 and min-width (px); collapsible = true
+                                 folds it to a tab (collapsed = true
+                                 starts folded, label = "Chat"); never a
+                                 column with zen-toggle, garden-switcher
+                                 or nav-rail, and one stays open
   [[widget]]                     see k2 zen guide widgets and bands
   [colors.light]  [font]  ...    see k2 zen guide themes
 
@@ -58338,7 +58342,9 @@ CONTENT WIDGETS (in a column they need id, kind and column = n)
                 home = "<Home>" for the whole Home, or agent = "<name>"
                 for one agent (mode follows); home-picker, order,
                 server-tag, preview, status, pins,
-                pin-limit, settings, recent-first, unread
+                pin-limit, settings, recent-first, unread;
+                or list-from = "<custom widget id>" (mode list): just
+                the agents that widget lists with k2.agents.show([...])
   conversation  one agent's Thread and a message box: agents = "<id of
                 an Agents widget>" to follow it, or agent = "<name>"
                 (with home) to pin one; compose, attachments, load-older,
@@ -58986,6 +58992,28 @@ fields), a batch id per gesture, and subscribe for live changes.
      bin/board-lite move <id> 200 40       # field-level, retries a conflict
      bin/board-lite watch 0                # k2 store changes --follow
    The widget shows each change at once, labelled with the agent's handle.
+5. Board + K2 chat: K2's own Agents and Conversation beside the board (its
+   files, cards, unread counts and pushes), never a chat panel of yours.
+   Add "agents:read" and "thread:post" to the widget's manifest caps, then
+   in board-lite.js:
+     const rows = await k2.agents.list()      // full addresses, handle::host
+     await k2.agents.show(rows.filter(onBoard).map((r) => r.address))
+     await k2.conversation.setContext('Board: ' + name)  // a chip they see
+   and give the Garden two more columns the person can fold:
+     [[layout.column]]                [[widget]]
+     size = 55                        id = "crew"
+     [[layout.column]]                kind = "agents"
+     size = 15                        column = 1
+     label = "Agents"                 [widget.props]
+     collapsible = true               list-from = "board"
+     [[layout.column]]                [[widget]]
+     size = 30                        id = "talk"
+     label = "Chat"                   kind = "conversation"
+     collapsible = true               column = 2
+                                      [widget.props]
+                                      agents = "crew"
+   The Agents column shows just the agents the board lists ("Nothing
+   listed yet" until it does); k2 zen guide api has k2.layout.*.
 
 If the widget says nobody signed it: k2 zen widget sign board-lite,
 or It's mine in Settings → Gardens → Local Data. Data and grants: k2 zen

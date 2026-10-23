@@ -14134,6 +14134,10 @@ for it in items:
     frm=doc.get("from") or ""
     seq=it.get("seq")
     print("[%s] from %s: %s" % (seq, frm, body))
+    ctx=doc.get("context")
+    if isinstance(ctx, dict) and isinstance(ctx.get("text"), str):
+        # thread-context-v1: a line a Garden widget set, never words the person typed.
+        print("  [context from Garden widget %s, not typed by %s] %s" % (ctx.get("placement",""), frm, json.dumps(ctx["text"])))
     for a in doc.get("attachments") or []:
         st=a.get("state") or "ok"
         if st == "hidden":

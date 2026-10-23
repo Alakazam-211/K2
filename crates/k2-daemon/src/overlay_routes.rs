@@ -1206,35 +1206,8 @@ fn widget_post_gate(
     from: &str,
     addr: &str,
 ) -> Result<(), CliResponse> {
-    let refusal = match claim {
-        Some(c) => {
-            let f = k2_core::zen::ZenFiles::local();
-            match k2_core::zen::widget_access::check_placement_cap(
-                &f,
-                &origin.garden,
-                &c.placement,
-                &origin.widget,
-                &c.hash,
-                WIDGET_THREAD_POST_CAP,
-            ) {
-                Ok(_) => return Ok(()),
-                Err(r) => r,
-            }
-        }
-        None => {
-            // Read-only (no real-home guard needed, like `zen::is_set_up`).
-            let f = k2_core::zen::ZenFiles::new(k2_core::zen::zen_root());
-            if !k2_core::zen::widget_access::holds_garden(&f, &origin.garden) {
-                return Ok(());
-            }
-            k2_core::zen::widget_access::PlacementRefusal {
-                code: k2_core::zen::widget_access::WIDGET_NOT_APPROVED,
-                message: format!(
-                    "a widget in Garden '{}' must name its placement and hash; K2 reloads the widget",
-                    origin.garden
-                ),
-            }
-        }
+    let Some(refusal) = widget_post_refusal(origin, claim) else {
+        return Ok(());
     };
     k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
         "zen.widget.post_refused",
@@ -1251,6 +1224,140 @@ fn widget_post_gate(
         "cli",
     ));
     Err(error_json("403 Forbidden", refusal.code, refusal.message))
+}
+
+/// [`widget_post_gate`]'s check without the audit line or the response:
+/// None when the widget may post (`thread:post` approved on its placement
+/// and live hash, or a label for a Garden this computer doesn't hold).
+fn widget_post_refusal(
+    origin: &overlay::WidgetOrigin,
+    claim: Option<&overlay::WidgetPlacementClaim>,
+) -> Option<k2_core::zen::widget_access::PlacementRefusal> {
+    match claim {
+        Some(c) => {
+            let f = k2_core::zen::ZenFiles::local();
+            k2_core::zen::widget_access::check_placement_cap(
+                &f,
+                &origin.garden,
+                &c.placement,
+                &origin.widget,
+                &c.hash,
+                WIDGET_THREAD_POST_CAP,
+            )
+            .err()
+        }
+        None => {
+            // Read-only (no real-home guard needed, like `zen::is_set_up`).
+            let f = k2_core::zen::ZenFiles::new(k2_core::zen::zen_root());
+            if !k2_core::zen::widget_access::holds_garden(&f, &origin.garden) {
+                return None;
+            }
+            Some(k2_core::zen::widget_access::PlacementRefusal {
+                code: k2_core::zen::widget_access::WIDGET_NOT_APPROVED,
+                message: format!(
+                    "a widget in Garden '{}' must name its placement and hash; K2 reloads the widget",
+                    origin.garden
+                ),
+            })
+        }
+    }
+}
+
+/// A Board context the daemon didn't use (thread-context-v1): the post is
+/// stored and delivered without it (the person's message is never lost)
+/// and the response says why (`contextRefused`), so the chip clears with
+/// the reason.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ContextRefused {
+    code: String,
+    message: String,
+}
+
+/// `context_refused` (a caller that isn't the person's own compose bar).
+const CONTEXT_NOT_ALLOWED: &str = "context_not_allowed";
+
+/// thread-context-v1 (prd-garden-column-collapse-and-agent-list-v1 §4,
+/// CA6): the post's `context` = `{text, origin}`.
+/// - Absent: `Ok(None)`.
+/// - Malformed (not JSON, not `{text, origin}`, a text that isn't one line
+///   of ≤ 120 plain characters or holds `[from` / `[thread:` / `[context`,
+///   a bad origin): 400 `bad_args`, nothing stored. The app checks the same
+///   rule first, so only a forged body gets here.
+/// - Well formed but not usable here: `Ok(Some(Err(_)))`, and the post goes
+///   without it. Only the person's own post carries one (unbound
+///   `via=compose`, never an App pass, never a widget's own post with
+///   `origin`), and its widget must pass [`widget_post_refusal`]
+///   (`thread:post` approved on that placement and live hash; a widget on
+///   another computer was checked there, `zen/widget/check`).
+fn thread_context_param(
+    params: &HashMap<String, String>,
+    allowed: bool,
+    widget_post: bool,
+    from: &str,
+    addr: &str,
+) -> Result<Option<Result<overlay::ThreadContext, ContextRefused>>, CliResponse> {
+    let Some(raw) = params.get("context").map(|s| s.trim()).filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
+    let bad = |m: String| error_json("400 Bad Request", "bad_args", m);
+    let v: serde_json::Value = serde_json::from_str(raw).map_err(|_| bad("context must be {text, origin}".into()))?;
+    let (ctx, label, claim) = overlay::ThreadContext::parse(&v).map_err(bad)?;
+    let refused = if !allowed {
+        Some(ContextRefused {
+            code: CONTEXT_NOT_ALLOWED.to_string(),
+            message: "a Board context rides only on the person's own message from the compose bar".to_string(),
+        })
+    } else if widget_post {
+        Some(ContextRefused {
+            code: CONTEXT_NOT_ALLOWED.to_string(),
+            message: "a widget's own post never carries a Board context".to_string(),
+        })
+    } else {
+        widget_post_refusal(&label, claim.as_ref())
+            .map(|r| ContextRefused { code: r.code.to_string(), message: r.message })
+    };
+    let Some(r) = refused else {
+        return Ok(Some(Ok(ctx)));
+    };
+    k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+        "zen.widget.context_refused",
+        from,
+        format!(
+            "widget={:?} garden={} placement={} to={addr} code={}",
+            ctx.widget, ctx.garden, ctx.placement, r.code
+        ),
+        "-",
+        "-",
+        "cli",
+    ));
+    Ok(Some(Err(r)))
+}
+
+/// A context label (placement, folder, user) as K2's own line shows it:
+/// letters, digits and `-_.@:` only, anything else `_`, so an author-chosen
+/// name can't close the bracket or start a stamp.
+fn context_label(s: &str) -> String {
+    let out: String = s
+        .trim()
+        .chars()
+        .map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | '@' | ':') { c } else { '_' })
+        .collect();
+    if out.is_empty() { "_".to_string() } else { out }
+}
+
+/// thread-context-v1 (CA7): K2's own line for a Board context, in fixed
+/// words, written BEFORE the person's `[from <user>] [thread:<addr>]`
+/// stamp line and never inside it. The widget's text is always a quoted,
+/// JSON-escaped string; the placement and the (author-chosen) folder are
+/// labelled as such.
+fn thread_context_line(ctx: &overlay::ThreadContext, from: &str) -> String {
+    let quoted = serde_json::to_string(&ctx.text).unwrap_or_else(|_| "\"\"".to_string());
+    format!(
+        "[context from Garden widget {} · folder {}, not typed by {}] {quoted}",
+        context_label(&ctx.placement),
+        context_label(&ctx.widget),
+        context_label(&crate::workspace_msg::humanize_from(from)),
+    )
 }
 
 /// One daemon-written line on a workspace's main Thread, for its human
@@ -1378,6 +1485,21 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
         }
         Err(e) => return e,
     };
+    // thread-context-v1: the Board context line riding the person's own
+    // compose send. Malformed → 400 before anything is stored; refused →
+    // the message goes without it and the response says why.
+    let (context, context_refused) = match thread_context_param(
+        params,
+        request_skin().is_none() && !bound && via == "compose",
+        origin.is_some(),
+        &from,
+        &resolved.addr,
+    ) {
+        Ok(None) => (None, None),
+        Ok(Some(Ok(c))) => (Some(c), None),
+        Ok(Some(Err(r))) => (None, Some(r)),
+        Err(e) => return e,
+    };
     // Check and snapshot the files before anything is stored: inside the
     // Thread's own workspace (realpath), a regular file, not a secret. Any
     // refusal refuses the whole post.
@@ -1465,6 +1587,7 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
         origin.clone(),
         author,
         attachments,
+        context.clone(),
     ) {
         Ok((item, links)) => {
             // thread-read-v1: a person's own post advances their own
@@ -1481,7 +1604,7 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
                 // discuss it first and answer by tapping later. Only a tap,
                 // a dismiss / `k2 thread void`, or the card's expiry close it.
                 let turn = ThreadTurn::new(&resolved, &item.id, received_at);
-                inject_thread_compose(&resolved, &from, &inject_text, &command, turn);
+                inject_thread_compose(&resolved, &from, &inject_text, &command, context.as_ref(), turn);
                 // A widget's posts never fill the person's compose history
                 // (UWB12a: a busy widget would flood the last 50). Each
                 // one writes an audit line instead: widgets need no
@@ -1519,27 +1642,35 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
                 &poster,
                 false,
             );
-            CliResponse::ok_json(with_moved_from(
-                serde_json::json!({
-                    "ok": true,
-                    "id": item.id,
-                    "seq": item.seq,
-                    "from": item.doc.from,
-                    "to": item.doc.to,
-                    "kind": item.doc.kind,
-                    "body": item.doc.body,
-                    "via": item.doc.via,
-                    "widget": item.doc.widget,
-                    "author": item.doc.author,
-                    "attachments": attachments_json,
-                    // The client stamps its own post with the server's time
-                    // ("You · just now"), falling back to its send time.
-                    "created_at": item.doc.created_at,
-                    "conversation_id": resolved.conversation_id,
-                    "addr": resolved.addr,
-                }),
-                &resolved,
-            ))
+            let mut body = serde_json::json!({
+                "ok": true,
+                "id": item.id,
+                "seq": item.seq,
+                "from": item.doc.from,
+                "to": item.doc.to,
+                "kind": item.doc.kind,
+                "body": item.doc.body,
+                "via": item.doc.via,
+                "widget": item.doc.widget,
+                "author": item.doc.author,
+                "attachments": attachments_json,
+                // The client stamps its own post with the server's time
+                // ("You · just now"), falling back to its send time.
+                "created_at": item.doc.created_at,
+                "conversation_id": resolved.conversation_id,
+                "addr": resolved.addr,
+            });
+            // thread-context-v1: only when a context was sent, so every
+            // other post's answer is byte for byte what it was.
+            if let Some(map) = body.as_object_mut() {
+                if let Some(c) = &item.doc.context {
+                    map.insert("context".into(), serde_json::json!(c));
+                }
+                if let Some(r) = &context_refused {
+                    map.insert("contextRefused".into(), serde_json::json!({"code": r.code, "message": r.message}));
+                }
+            }
+            CliResponse::ok_json(with_moved_from(body, &resolved))
         }
         Err(e) => error_json("500 Internal Server Error", "store", e),
     }
@@ -2779,14 +2910,31 @@ impl<'a> ThreadTurn<'a> {
     }
 }
 
-fn inject_thread_compose(resolved: &ResolvedOverlay, from: &str, text: &str, command: &str, turn: ThreadTurn<'_>) {
+fn inject_thread_compose(
+    resolved: &ResolvedOverlay,
+    from: &str,
+    text: &str,
+    command: &str,
+    context: Option<&overlay::ThreadContext>,
+    turn: ThreadTurn<'_>,
+) {
     let payload = format!("[thread:{}] {text}", resolved.addr);
-    let line = format_thread_compose_pty_line_with_command(from, &resolved.addr, text, command)
-        .unwrap_or_else(|_| format_thread_compose_pty_line(from, &resolved.addr, text));
+    // thread-context-v1 (CA7): K2's quoted context line goes on its own
+    // line before the stamp (`format_message` splits it out of `command`).
+    let command = match context {
+        Some(c) => crate::workspace_msg::command_with_lead_line(command, &thread_context_line(c, from)),
+        None => command.to_string(),
+    };
+    let line = if context.is_some() {
+        crate::workspace_msg::format_message(from, &payload, &command)
+    } else {
+        format_thread_compose_pty_line_with_command(from, &resolved.addr, text, &command)
+            .unwrap_or_else(|_| format_thread_compose_pty_line(from, &resolved.addr, text))
+    };
     record_test_inject(&line);
     // Same throat as k2 talk / Projects Chat / Feedback: wake a dormant
     // session, then inject+submit. `via=compose` skips Chatter (already on Thread).
-    deliver_thread_to_pty(&resolved.addr, &payload, from, "compose", command, Some(turn));
+    deliver_thread_to_pty(&resolved.addr, &payload, from, "compose", &command, Some(turn));
 }
 
 /// Skin Thread post (default `via=thread`): same `[from user] [thread:addr]`
@@ -7385,4 +7533,8 @@ mod tests {
     // Thread card hygiene (permission cards lane B, §6.9, §6.10).
     #[path = "card_hygiene_tests.rs"]
     mod card_hygiene;
+
+    // The Board context chip (thread-context-v1, 0.46.3 r10).
+    #[path = "thread_context_tests.rs"]
+    mod thread_context;
 }

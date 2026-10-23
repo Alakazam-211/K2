@@ -465,12 +465,33 @@ fn session_exists_live_or_durable(session_id: &str) -> bool {
 ///   `k2 talk` never inject `[from <uuid>]` into a chat.
 pub fn format_message(from: &str, text: &str, command: &str) -> String {
     let sender = humanize_chat_from(from, "external");
+    // thread-context-v1: K2's own line rides on its own line BEFORE the
+    // stamp, never inside it (see [`command_with_lead_line`]).
+    if let Some((cmd, lead)) = command.split_once(LEAD_LINE_SEP) {
+        let (cmd, lead) = (cmd.trim(), lead.trim());
+        let head = if cmd.is_empty() { lead.to_string() } else { format!("{cmd} {lead}") };
+        return format!("{head}\n[from {sender}] {text}");
+    }
     let command = command.trim();
     if command.is_empty() {
         format!("[from {sender}] {text}")
     } else {
         format!("{command} [from {sender}] {text}")
     }
+}
+
+/// Separates a composer slash-command from K2's own lead line inside the
+/// `command` a delivery carries (thread-context-v1, the Board context
+/// line). A control character: no composer command and no checked context
+/// line can hold one, so only [`command_with_lead_line`] makes it.
+pub const LEAD_LINE_SEP: char = '\u{1e}';
+
+/// The `command` for a delivery whose PTY line starts with K2's own `lead`
+/// line (thread-context-v1): [`format_message`] writes `<command> <lead>`
+/// (the slash-command stays at the very front) and the `[from <name>]`
+/// stamp line under it, so the lead is never inside the person's stamp.
+pub fn command_with_lead_line(command: &str, lead: &str) -> String {
+    format!("{}{LEAD_LINE_SEP}{}", command.trim(), lead.trim())
 }
 
 /// Composer slash-commands the GUI picker may send. `k2 msg --command`

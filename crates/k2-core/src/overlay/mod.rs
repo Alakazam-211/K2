@@ -18,7 +18,7 @@ pub mod vault;
 use parking_lot::Mutex;
 use rusqlite::Connection;
 
-pub use doc::{CardAction, ChoiceBody, ChoiceOption, CollectedMeta, DesignOrigin, HandoffCardBody, ImportedMeta, OverlayDoc, OverlayItem, OverlayLink, PostAuthor, SecretBody, SecretProposal, WidgetOrigin, WidgetPlacementClaim};
+pub use doc::{CardAction, ChoiceBody, ChoiceOption, CollectedMeta, DesignOrigin, HandoffCardBody, ImportedMeta, OverlayDoc, OverlayItem, OverlayLink, PostAuthor, SecretBody, SecretProposal, ThreadContext, WidgetOrigin, WidgetPlacementClaim};
 pub use attachments::ThreadAttachment;
 pub use options::{check_ask_caps, parse_options_value, split_options_csv};
 pub use store::{ExtTxn, OverlayPage, SeqRemap, ThreadDelta};
@@ -229,13 +229,15 @@ pub fn post_thread_with_origin(
     widget: Option<WidgetOrigin>,
     author: Option<PostAuthor>,
 ) -> Result<(OverlayItem, Vec<OverlayLink>), String> {
-    post_thread_with_attachments(conn, conversation_id, project_id, from, to, body, via, widget, author, Vec::new())
+    post_thread_with_attachments(conn, conversation_id, project_id, from, to, body, via, widget, author, Vec::new(), None)
 }
 
 /// [`post_thread_with_origin`] with file objects (0.46.1,
 /// `thread-attachments-v1`). `attachments` must come from
 /// [`attachments::snapshot_all`] (the daemon's checks); this only stores
-/// them.
+/// them. `context` (thread-context-v1) is the Board context line the daemon
+/// already checked (origin, gate, text); stored as its own field, never in
+/// the body, its text redacted like the body.
 #[allow(clippy::too_many_arguments)]
 pub fn post_thread_with_attachments(
     conn: &Connection,
@@ -248,6 +250,7 @@ pub fn post_thread_with_attachments(
     widget: Option<WidgetOrigin>,
     author: Option<PostAuthor>,
     attachments: Vec<ThreadAttachment>,
+    context: Option<ThreadContext>,
 ) -> Result<(OverlayItem, Vec<OverlayLink>), String> {
     let _guard = WRITE.lock();
     let seq = catalog::next_thread_seq(conn, conversation_id, project_id)?;
@@ -262,6 +265,10 @@ pub fn post_thread_with_attachments(
     doc.widget = widget;
     doc.author = author;
     doc.attachments = attachments;
+    doc.context = context.map(|mut c| {
+        c.text = crate::redaction::redact(&c.text);
+        c
+    });
     store::commit_write(&doc, Some((conversation_id, seq)), &[], None)?;
     let item = OverlayItem {
         collection: "thread".to_string(),

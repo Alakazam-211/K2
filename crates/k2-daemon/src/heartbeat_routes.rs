@@ -298,6 +298,24 @@ mod gap_route_tests {
     }
 
     #[test]
+    fn preview_schedule_is_bounded_for_one_second_steps_and_a_huge_count() {
+        // 0.46.4 review: every_seconds=1 with count=u32::MAX grew the list
+        // without bound (daemon OOM). Now a quick, capped answer.
+        let started = std::time::Instant::now();
+        let body = serde_json::json!({
+            "mode": "hourly",
+            "schedule_json": r#"{"start":"00:00","end":"23:59","every_seconds":1}"#,
+            "count": u32::MAX,
+        })
+        .to_string();
+        let r = handle_preview_schedule(body.as_bytes());
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let times: Vec<String> = serde_json::from_str(&r.body).expect("a JSON array");
+        assert!(times.len() <= k2_core::scheduler::PREVIEW_MAX_COUNT, "{} times", times.len());
+        assert!(started.elapsed() < std::time::Duration::from_secs(30), "took {:?}", started.elapsed());
+    }
+
+    #[test]
     fn set_show_heartbeat_sessions_rejects_missing_project_path() {
         let r = handle_set_show_heartbeat_sessions(b"{}");
         assert_eq!(r.status, "400 Bad Request");

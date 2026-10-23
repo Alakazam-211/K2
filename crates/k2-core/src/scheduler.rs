@@ -272,15 +272,24 @@ pub fn matches_ordinal_day(date: NaiveDate, ordinal: &str, day_type: &str) -> bo
 /// it was, including that `should_project_fire` reads the wall clock while
 /// the cursor is only passed as `last_fire`; changing what the preview
 /// shows is a separate decision.
+///
+/// Bounded now that it is a daemon route (0.46.4 review): at most
+/// [`PREVIEW_MAX_COUNT`] times, an "hourly" step of at least 60 s and at
+/// most a year (a smaller `every_seconds` never advanced the loop's step
+/// counter, and a future cursor always reads as "fire", so the list grew
+/// without bound), and at most [`PREVIEW_MAX_ITERATIONS`] loop turns.
 pub fn preview_fire_times(mode: &str, schedule_json: &str, count: u32) -> Vec<String> {
+    let count = (count as usize).min(PREVIEW_MAX_COUNT);
     let mut results = Vec::new();
     let mut cursor = chrono::Local::now();
 
     // Step forward in 1-minute increments, checking up to 366 days ahead
     let max_steps = 366 * 24 * 60; // 1 year of minutes
     let mut steps = 0u64;
+    let mut iterations = 0usize;
 
-    while results.len() < count as usize && steps < max_steps {
+    while results.len() < count && steps < max_steps && iterations < PREVIEW_MAX_ITERATIONS {
+        iterations += 1;
         if should_project_fire(mode, Some(schedule_json), Some(&cursor.to_rfc3339())) {
             // This would fire — but we need to check if it's a NEW fire, not a repeat
             // For scheduled mode, each matching day/time is one fire
@@ -288,7 +297,11 @@ pub fn preview_fire_times(mode: &str, schedule_json: &str, count: u32) -> Vec<St
             // Skip ahead past this fire window
             if mode == "hourly" {
                 let v: serde_json::Value = serde_json::from_str(schedule_json).unwrap_or_default();
-                let every = v.get("every_seconds").and_then(|s| s.as_u64()).unwrap_or(300);
+                let every = v
+                    .get("every_seconds")
+                    .and_then(|s| s.as_u64())
+                    .unwrap_or(300)
+                    .clamp(PREVIEW_MIN_STEP_SECS, PREVIEW_MAX_STEP_SECS);
                 cursor = cursor + chrono::Duration::seconds(every as i64);
                 steps += every / 60;
                 continue;
@@ -314,6 +327,16 @@ pub fn preview_fire_times(mode: &str, schedule_json: &str, count: u32) -> Vec<St
     results
 }
 
+/// Most fire times one preview returns (the Settings preview asks for a
+/// handful).
+pub const PREVIEW_MAX_COUNT: usize = 500;
+/// Smallest "hourly" preview step: one minute, the loop's own resolution.
+pub const PREVIEW_MIN_STEP_SECS: u64 = 60;
+/// Largest "hourly" preview step: the 366-day look-ahead.
+pub const PREVIEW_MAX_STEP_SECS: u64 = 366 * 24 * 60 * 60;
+/// Hard cap on loop turns: one per minute of the 366-day look-ahead.
+pub const PREVIEW_MAX_ITERATIONS: usize = 366 * 24 * 60;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -323,6 +346,33 @@ mod tests {
     fn preview_fire_times_honours_count_zero() {
         assert!(preview_fire_times("hourly", r#"{"every_seconds":3600}"#, 0).is_empty());
         assert!(preview_fire_times("scheduled", "{}", 0).is_empty());
+    }
+
+    #[test]
+    fn preview_fire_times_is_bounded_for_a_tiny_step_and_a_huge_count() {
+        // 0.46.4 review: every_seconds below 60 never advanced the step
+        // counter, and a future cursor always reads as "fire", so this
+        // grew without bound. Now: at most PREVIEW_MAX_COUNT, quickly.
+        let started = std::time::Instant::now();
+        for every in ["0", "1", "59"] {
+            let spec = format!(r#"{{"start":"00:00","end":"23:59","every_seconds":{every}}}"#);
+            let times = preview_fire_times("hourly", &spec, u32::MAX);
+            assert!(times.len() <= PREVIEW_MAX_COUNT, "every_seconds={every}: {} times", times.len());
+            // Consecutive times are at least a minute apart.
+            let mut sorted = times.clone();
+            sorted.dedup();
+            assert_eq!(sorted.len(), times.len(), "every_seconds={every}: repeated minutes");
+        }
+        // A huge step neither panics (Duration overflow) nor loops.
+        let huge = preview_fire_times("hourly", &format!(r#"{{"every_seconds":{}}}"#, u64::MAX), u32::MAX);
+        assert!(huge.len() <= PREVIEW_MAX_COUNT);
+        assert!(started.elapsed() < std::time::Duration::from_secs(30), "took {:?}", started.elapsed());
+    }
+
+    #[test]
+    fn preview_fire_times_caps_count_for_scheduled_too() {
+        let times = preview_fire_times("scheduled", r#"{"frequency":"daily","time":"09:00"}"#, u32::MAX);
+        assert!(times.len() <= PREVIEW_MAX_COUNT, "{} times", times.len());
     }
 
     fn mk_now(year: i32, month: u32, day: u32, h: u32, m: u32) -> DateTime<Local> {

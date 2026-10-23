@@ -3,6 +3,139 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.46.3 — Apps on for everyone
+
+### When you update
+- **The root helper on Linux servers updates itself.** This release's root helper speaks a new protocol. A server whose helper can update itself installs this version's helper a few minutes after K2 updates, so most servers need nothing. If `k2 root-helper status` says it needs one root step (a very old helper, or a server with no internet), run `k2 root-helper update` (`--from <folder>` with the signed files on an offline server), or `k2 root-helper install-command` on a server without a helper. Until then, `k2 db upgrade`, a second Postgres version, Sew 0.3.0, `k2 hostchat media uninstall` and keeping `/usr/local/bin/k2` current stop and say so. Everything else works as before.
+- **`--cmd` services keep working.** Nothing old stops in 0.46.3. In **0.46.4** new `--cmd` services are turned off and their inherited environment ends, so move them to Apps before then. `k2 app list` labels them "move it to an App before 0.46.4", and `k2 study app-move` shows the steps.
+- **Gardens work a new way.** Each Garden now has a list of the agents that may change it. Agents that already built or edited a Garden are added to its list automatically when you update, and each addition shows in that Garden's History. See **Gardens** below.
+
+### Apps (beta), on for every server
+- **Apps are on by default.** Every server now has Apps (beta) turned on. Settings → Apps → **This server** sets one up from the desktop app with no terminal on the box: the **Apps (beta)** switch (owner), the box check with a fix for each line, **Prepare this box** (a dry run first that lists every package it would install, then Apply), **Install App engine** and **Undo box setup**. **Prepare this box automatically** (owner, off by default) redoes the setup after each K2 update. The owner can do all of it over K2 Connect.
+- **New Apps run in a container.** The unwalled process engine is now an owner-only opt-in for development machines. Servers that already ran Apps before this update keep it.
+- **Two switches per agent.** On the Agent tab, **Build and run Apps** lets an agent build, deploy and run its own Apps within a default budget; **Manage its Apps end to end** also lets it widen its own Apps (permissions, hosts, box services, keys, quotas). Both are off for new agents. An agent that had "Allow this agent to manage Apps" gets the first switch, and you get a note to review it. Loosening an App's wall always asks you, whoever asks. Owners turn switches on, Admins can turn them off, and Members can see Apps but not change them.
+- **What its Apps may use.** Tick the K2 cores an agent's Apps may use without asking: Database, Files and rooms, and Thread. Mail and Sew are shown, not yet tickable.
+- **Budgets, and room for everyone.** A new App gets 512 MiB of memory unless you set more, and K2 checks there is room on the server first. Past an agent's default budget, its request waits for you. `k2 app list --box` shows every App on the server and the agent that keeps it, and a name clash tells you whose App it is.
+- **Apps don't get orphaned.** A workspace that still has Apps can't be removed until they are handed over, parked or uninstalled (Settings → Apps), and purging an App needs the owner plus a vault confirm.
+- **Agents hear when their App breaks.** An App's agent is woken on its first crash in an hour, a failed health check, a failed build and a deploy that couldn't start. `k2 app errors <app>` shows the history (`--since`, `--kind`).
+- **Agents move their own `--cmd` services.** No adopt step: `k2 app label take <app> <label>` moves the public address from the old service to the App (`return` moves it back), and `k2 app data put` copies data into the App without a terminal.
+- **For App makers.** Each App gets a seal key in `$K2_SECRETS_DIR/K2_APP_SEAL_KEY` (`k2 app seal rotate`), and a manifest can say what it `requires` (Sew, voice); a deploy without it stops and says what the owner must turn on.
+
+### Apps: phones, streams and people
+- **Apps on phones.** People stay signed in to an App on their device (30 days, renewed as they use it, up to 90) and can sign out one device. An App can list the agents a person can reach, and Settings → Apps → *your App* → People (or `k2 app people`) shows who reaches what. `k2 app roles suggest` offers starter roles you can copy; nothing is granted until you add one. Each App decides whether it can be discovered (off by default). An App pass now reaches only what the App API lists.
+- **One live stream for all of a person's agents.** An App can follow every room its user holds over one connection, and a Garden gets an inbox of new messages from every agent.
+- **Project chat in Apps.** An App can show a project's chat when its user can read every member agent's room. Posting needs the new `project:write` permission, which you grant per room.
+- **Each person has their own read state** in Apps, the same across the desktop, K2 Companion, Gardens and Apps. Gardens can also show a person's tickets, activity and files.
+- **App guests see that the agent is working.** With `thread:read` and `activity:read` in a room, a guest's App can show the room's agent at work on their Chat: counts only (steps, subagents, time, and whether it's waiting on the owner), never a tool line, a path or a command, and no Stop. An App turns it on per connection, so Apps you already run see no change. `activity:read` still gives the room-wide counts, as before.
+- **Personal AI logins for App users.** When the owner turns it on for an App (`k2 app wallet settings <app> --on`, by the App's name), its users can bring their own AI subscription or API key for their own agents. Only an Admin or the Owner can change the server's default AI login.
+- **Apps can see the real visitor address.** An App gets a trusted `X-K2-Client-IP` and a clean `X-Forwarded-For` when K2 Connect passes the visitor's address on, and copies sent by the visitor are always dropped. A manifest can opt out, and nested services opt in with `k2 publish client-ip <label> on`.
+- **The Thread's files and links reach Apps and Gardens:** attachments, file links (inside the guest's own rooms), read cursors and unread counts. The Kanban's Thread panel shows them too.
+- **Download files from a Thread.** Thread files get a Download button. App guests see it only when you turn on the new **Download Thread files** permission (`files:download`) for their room.
+
+### Gardens
+- **Garden access: one way to work on Gardens.** Each Garden has a list of the agents that may change it. Any agent can make a new Garden; to change one it isn't listed on, it asks you once with a card. Only a person can delete a Garden. Using a Garden never needs permission.
+- **History for every Garden and widget.** Every change, access change, ask and Lock is recorded, and versions edited outside K2 can be signed. History is kept for two years.
+- **One Settings page.** Settings → Gardens shows each Garden with its editors, Lock, History, and its own Local Data and External Data. Data and sources no Garden uses sit under **Not in a Garden**. Drag a Garden's row to reorder the list (Alt+↑/↓ from the keyboard).
+- **Keep as mine and proposals are retired.** `k2 zen widget claim` and `k2 zen proposals` answer with a notice naming their replacement until 0.47.0. Agents run `k2 study garden-changes` to see what to update in their workspace before then.
+- **Columns fold away.** A Garden whose layout marks a column `collapsible` can fold it to a slim tab at its edge, with its unread counts, and open it again with one click. Each computer remembers which columns you folded.
+- **An Agents widget can show just the agents your Board lists,** with a footer when someone off the list needs you.
+- **Context chip.** A Board or other widget can put one line of context as a chip in your message box. You see it, you can remove it, and your agent gets it marked as the widget's words, never yours.
+- **Widgets follow the Garden's light or dark** (a widget can opt out), and data subscriptions retry by themselves.
+- **K2's widget kit:** `k2-thread@1` and `k2-help@1` (ⓘ help popovers) as standard parts; `k2 zen widget preview --shot` takes a picture of a widget; validate checks what actually runs.
+- **Light blur.** Garden settings → Appearance → **Light blur** draws two blur layers instead of four, easier on slower graphics. Off by default, this computer only.
+- Agents pinned from other servers stay in Garden 1's pinned grid after a reload or when you come back to Zen, and the Kanban's Thread panel no longer moves you when you've scrolled up.
+
+### Permission cards (Beta)
+- **Agents ask, you click.** When an agent needs something only an owner or admin can allow, it asks with a card in its Thread instead of sending you to Settings: a switch (a compute node, Apps, Sew, the vault, Gardens, DNS, mail, a database or a connection), or approving a held App change, a held email, a new data source or a node admin step. The card says what it does in K2's own words, with the agent's reason under it. Click **Allow** (plus the same confirm Settings would ask for, if any) or **Deny** with a note; K2 applies it as you, through the same control as Settings. A step that must be done at the machine itself gets a card with the exact command and **Done, try again**.
+- **Only people answer.** The people who can answer get a phone push and a **Waiting on you** list in Settings. Anyone else can leave them a note. An approved switch can be turned off again from the card for 7 days. Agents, Garden widgets and App guests can't answer a card, and App guests never see one. Every card expires and every answer is audited. Cards show on the desktop, in Gardens and in K2 Companion 4.1.0.
+- **Off until you turn it on.** The owner turns it on in Settings → Access → **Permission Cards** (or `k2 permission beta on` from a terminal outside K2), then per agent with **Can ask for permission cards** on its Agent tab (or **Turn on for all agents**). With either switch off, K2 behaves exactly as before.
+
+### Compute
+- **One compute machine, several K2 servers.** A node can now run jobs for up to three servers. Each gets its own walled space on the node, the queue lives on the node, and every server starts with an equal share, owner included. The node's owner adds a server with `k2 compute node servers <node> add`, and can pause, resume, revoke or change its weight (`limits <server> --weight N`). `k2 compute queue <node>` shows where your jobs are and when they should start. On a Mac, a node takes only your own servers in this update; other people's servers need a Linux node. Nodes that serve one server work as before, and old and new versions mix.
+- **Tighter jobs.** On Linux, jobs run as a separate user and each other server's jobs as their own user; on a Mac, jobs run in a sandbox. `network = none` is enforced, a job killed for memory says so, and build caches are kept per project.
+- **Results come back.** `k2 compute run --artifact <glob>` keeps the files a job makes (`k2 compute fetch` copies them here), and test results in JUnit form are read for you: `k2 compute get --json` shows passed, failed and the failing tests.
+- **Split a test suite across nodes.** `k2 compute run --any --shards N` runs one job per shard and gives one combined result and one message. `k2 compute test --shards N` does it for a cargo-nextest suite.
+- **Jobs never get stuck.** A queued job that can't start in time ends with the reason it waited (`--queue-timeout`), a job that prints nothing for 30 minutes ends (`--stall-timeout`), an `--any` job moves off a node that went away or is busy, and a job lost to a machine problem is retried once (`--retries N`). A failing test or a timeout is never retried.
+- **Know before you run.** `k2 compute run … --plan` shows the node it would pick, the queue ahead, how long earlier runs took and what's left of your grant, without running anything.
+- **Nodes don't fill their disks.** A node clears a finished job's build files at once, caps its warm build caches, and stops the newest job if the disk still runs too low.
+- **Fixes from two security reviews,** including: a server whose share has ended sees only its own jobs, the node log never shows a pairing code, and a server offers a node update matching its own version.
+
+### Notifications
+- **End-to-end encrypted push.** A Thread notification can now be sealed for one phone, so the push relay, Apple and Google carry only an encrypted blob, and the background "something changed" nudge carries no chat ids. K2 Companion 4.1.0 shows the message before it fetches anything. `k2 push e2e` sets it: off, sealed when the phone supports it (the default) or sealed only. Older phones keep getting plain notifications until they update.
+- **Signing out stops a phone's pushes.** Signing out, revoking a session or letting it expire removes that phone's push registration.
+- **`k2 push log`.** The owner can see the last 200 push attempts (which phone, sealed or plain, whether the relay took it). It never holds message text, names or ids, and lives in memory only.
+- **Faster catch-up.** A phone that asks what's new gets a quick "nothing changed" when nothing did, and catch-up no longer misses a changed card or an imported Thread.
+
+### Postgres 17
+- **New servers start on PostgreSQL 17, side by side with 16.** Existing servers stay on 16 until the owner runs `k2 db default-major 17`. `k2 db create --major 16|17` picks one, and `k2 db clusters` lists them.
+- **`k2 db upgrade` moves a database to a newer version** by copy, with a check first (`--check`), progress, `--rollback` and recovery after a restart. The old copy is kept closed for 14 days. Agents can run it with the new switch **Allow this agent to manage Postgres versions**. A stopped Postgres now says so instead of "recovering" forever.
+
+### Secrets
+- **A simpler secret card.** The agent chooses where the secret goes, and the card says it in one sentence ("Sales will get this as a file it can read, for this workspace"). Paste it and click **Save** once. If it's wrong, tell the agent in the chat and it asks again; the old options are under **Advanced**. A key that looks like it belongs to another site still asks you to check first.
+- **Fixed: a card that let the agent read the value could never be saved** (Save asked to confirm forever). The same fix brings back the confirm step for API-token vault confirms and secret handoffs.
+- **A clone never carries the vault,** even when you choose to carry secrets. Secrets move between servers only as signed vault handoffs.
+
+### Disk and resources
+- **`k2 app resources`** shows what uses the server's disk and memory, by App, service, database, workspace and K2 itself, with owners.
+- **Disk guard.** As a disk fills, K2 warns (owners and admins get a ticket, the biggest agents a note), refuses new large writes when it's nearly full, and clears unused App Seeds daily. It's on for Linux servers and warn-only on a Mac; change it with `k2 app resources settings --mode on|warn|off`. A restart no longer files a second ticket for the same disk.
+
+### Thread and chat
+- **Pictures in the Thread.** Image attachments show as pictures (PNG, JPEG, GIF, WebP, BMP, TIFF, HEIC where the server can convert, and safe SVG), and you can attach files from the message box.
+- **A failed agent start no longer loses your Chat.** When an agent can't start (for example, its CLI isn't installed), its Chat, Thread, cards and read state stay where they were instead of looking empty.
+- **The AI sign-in link is never cut off.** **Show full link** and **Copy link** when you add an AI login, however long the link is.
+- **Clickable workspace paths** in ticket chat, project chat and the Garden Thread; Option-click (Alt-click) in Files opens in the background.
+- **`k2 msg --summary`** adds a one-line summary to a long message, shown in tray items and the inbox list.
+
+### Mail
+- **Gmail drafts keep their paragraphs.** Drafts that agents save to Gmail now include an HTML version, so Gmail no longer re-wraps lines when you open them.
+- **Attachments into a folder.** `k2 mail attachments <id> --get <n> --out <folder>/` saves the attachment into that folder under its own name, and retrying after a timeout no longer stacks up downloads.
+- **`k2 mail send --from-name`** sets the sender's display name on hosted mail.
+- Microsoft personal accounts: a refused sign-in says how to allow it.
+
+### Sew chat and calls
+- **Sew 0.3.0** with its media, transcriber and recorder parts; upgrades and rollbacks clear systemd's start limits first.
+- **Chat and calls check themselves.** K2 fixes a drifted sign-in key address, flags a failed outside call check, shows call capacity in the voice check, and keeps Sew's database on PostgreSQL 16.
+- `k2 hostchat purge` can clean up a Sew install K2 doesn't recognise, without running it. `k2 hostchat media uninstall` asks first and takes `--yes`, so it works over SSH and in scripts.
+
+### K2 Connect
+- **A relay blip no longer takes your server offline.** The tunnel only moves to the backup relay when your public address can follow it, returns in about a minute when the main relay is back, and waits quietly when your own internet is down instead of bouncing between relays.
+- **Your server says less to strangers.** `/boot-status` and `/ping` show the full picture only to this machine or a signed-in caller; others get a short view that older apps still understand. `k2 tunnel boot-status` sets it, and a status key (`k2 api-key create --status`) lets a monitor read the full view and nothing else.
+- **No more false "refresh failed" in `k2 tunnel status`.** When k2.dev has no relay list for your token, it says so and keeps your saved list.
+
+### Updates
+- **See when an update is out without checking each time.** K2 remembers the newest version it has seen, checks at most once a day, and any signed-in user can read it. A remote update carries that version's What's New.
+- Package installs (like the Arch package) point you to the package manager instead of offering an update that fails. Remote updates start only when K2 is really open on that Mac, and a Linux remote update no longer reports failure when it worked.
+- **`k2` on the server stays current.** The root helper keeps `/usr/local/bin/k2` at the daemon's version, and `k2 doctor` shows a line for it.
+
+### Desktop
+- **Opening other servers' agents in Home is no longer Experimental.** It's in Settings → General → Workspaces, on by default; computers that turned it off while it was experimental get it back on once. The Experimental tab is gone.
+- **The Settings cog** sits at the far right of the page tabs, after Wiki.
+- **The View menu no longer repeats unread or waiting counts;** they live in the main nav.
+
+### Security
+- **Fixed: an agent with a K2 database could gain database superuser rights** (since 0.45.5). K2's own database work now always runs with a fixed search path and no inherited role.
+- **A published address can't point at K2's own port,** and agents can point subdomains only at this machine. Before, internet traffic through such an address was treated as local.
+- **Apps can't reach any of K2's Postgres ports directly,** now that a server can run more than one Postgres version.
+- **Updated trusted certificates.** K2 no longer trusts a certificate authority that was recently compromised, and its TLS library has the latest security fixes.
+- **Word documents can't hide code in links.** K2's Word viewer cleans each document before showing it, and links open in your browser.
+- **Cursor's setup command** in Settings now uses Cursor's official installer, not an unrelated package with a similar name.
+- **Zip files K2 unpacks no longer keep special run-as-owner permissions.**
+
+### Fixes
+- Unwalled (process) Apps keep running through a K2 restart: they write their logs to their own file, K2 checks them straight away, and one that didn't survive starts again within seconds without counting as a crash.
+- No false "deploy in progress": deploying, starting or stopping an App right after another deploy finishes now works.
+- `k2 app wallet settings` takes an App's name as well as its id, so App users actually get their wallet, and refuses an App that doesn't exist. `k2 publish client-ip` refuses a label that doesn't exist.
+- `k2 app doctor` and `k2 app resources` on a Mac show only what applies there, and `k2 app box prepare --dry-run` lists the exact packages it installs.
+- `k2 llm tokens clear-default <tool>` (or **No default** in Settings) clears the server's default token, and `remove --clear-default` removes the default API token after a confirm.
+- Members no longer see K2's own disk and Apps tickets; they go to the Owner and Admins.
+- Agents see their own tickets and activity from any folder. People and agents without owner or admin rights get "owner/admin only" instead of "invalid or missing token".
+- The root helper installer checks for minisign first, with your distro's install hint, and reads the server's version correctly; `k2 root-helper status` no longer shows a stale "needs root" line.
+- Grant hooks status shows the last pass that changed something. Cloned files keep their permissions (scripts stay executable). `heartbeat schedule add` never overwrites a non-empty WAKEUP.md. The tunnel never restarts after you stop it.
+
+### Under the hood
+- **A thinner desktop app.** The desktop app no longer builds K2's core into itself: the few commands that ran it inside the app now ask the daemon. Clean builds from source are about 24% faster.
+- **Agents that survive a daemon restart, coming soon.** K2 now ships a small helper that will keep agent terminals alive while the daemon restarts. It's off in this update and turns on in a later one.
+
 ## 0.46.2 — The tunnel stays up
 
 ### K2 Connect

@@ -330,10 +330,16 @@ async fn every_e1_switch_applies_the_same_through_the_card_and_settings() {
     assert_eq!(r.status, 200, "{}", r.body);
     assert!(k2_core::connections::are_local_peers(&a.id, &peer.id) && k2_core::connections::are_local_peers(&b.id, &peer.id));
 
-    // ── the Garden's owner from the phone: Settings' claim widens ────
-    let r = post(port, "/cli/zen/widget/claim", &admin, Some(json!({ "widget": "board" }))).await;
+    // ── the Garden's owner from the phone ───────────────────────────
+    // Keep as mine is retired (0.46.3: Garden access is always on), for
+    // every caller; widget resume keeps the Owner-login gate it shared.
+    for who in [&admin, &owner] {
+        let r = post(port, "/cli/zen/widget/claim", who, Some(json!({ "widget": "board" }))).await;
+        assert_eq!((r.status, json_of(&r)["error"].as_str()), (410, Some("retired")), "{}", r.body);
+    }
+    let r = post(port, "/cli/zen/widget/resume", &admin, Some(json!({ "widget": "board" }))).await;
     assert_eq!((r.status, json_of(&r)["error"].as_str()), (403, Some("owner_only")), "{}", r.body);
-    let r = post(port, "/cli/zen/widget/claim", &owner, Some(json!({ "widget": "board" }))).await;
+    let r = post(port, "/cli/zen/widget/resume", &owner, Some(json!({ "widget": "board" }))).await;
     assert_ne!(json_of(&r)["error"].as_str(), Some("owner_only"), "an Owner login is past the gate: {}", r.body);
     assert_ne!(json_of(&r)["error"].as_str(), Some("zen_local_only"), "{}", r.body);
     let r = post(port, "/cli/zen/garden/lock", &owner, Some(json!({ "garden": "g", "locked": true }))).await;

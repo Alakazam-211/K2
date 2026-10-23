@@ -58895,6 +58895,10 @@ WHOLE CANVAS ([layout] canvas = "full"): K2's top band (about 52 px)
   px rects of your viewport, el.getBoundingClientRect(); [] clears; 32 at
   most; K2's controls win). k2.window.startDrag() in a mousedown drags it.
 
+COLUMNS AND LISTS: k2.layout.set/toggle fold a collapsible column only
+  within 5 s of a click in your widget (never saved). An Agents widget
+  with list-from = "<your id>" draws what k2.agents.show([...]) lists.
+
 RULES: textContent for anything an agent wrote, never innerHTML; no
   onclick= (addEventListener in a script file). Check with k2 zen validate
   --widget <name>. Posting pauses after 120 posts (or 20 identical ones to

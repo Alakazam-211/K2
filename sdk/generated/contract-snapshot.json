@@ -5,7 +5,7 @@
   "catalogSha256": "b0a05c27c2970d69769d90632243646843bc21ac92add6cf829b0f6c004b1f23",
   "runtimeSha256": "6fa6da429f20400d163a736c88cf76d86799dba2d346889381aeec954098a230",
   "files": {
-    "cli/k2": "05779effc835de9ec64d3a1a3dd79678664f5690df9cce3d90ce19d2e7d42dee",
+    "cli/k2": "0dd44f7454c8f2fc6b222bd6a28e677a03de99c528b8a2cbc5d3fc2c42dabb86",
     "cli/k2#study app-api": "cdbacfaf8273fd6a7389be95f6e6ec14b63b6ef176318b691a1dead62f8410b8",
     "crates/k2-core/src/app_surface.rs": "f8ce207690652fbf150595f38aaa98ecdf61f43ea2cf5767c2d4167dcb6ff9af",
     "sdk/generated/k2-frame.js": "118370928342b3d990d0207e13ac7e00ebc904553f25bd7e2a2c5222be0fa6fb",

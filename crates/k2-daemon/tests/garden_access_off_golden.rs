@@ -549,6 +549,22 @@ async fn garden_access_off_is_today_byte_for_byte() {
         for needle in ["Settings → Gardens", "0219", "gardenAccess", "garden.access", "garden.access-off", "garden.delete", "not_available"] {
             assert!(ex.contains(needle), "exceptions.txt must name {needle:?}");
         }
+        // Garden columns and the agent list (0.46.3 r10, CA5): items 5 to 8,
+        // each moved line named, and the new keys absent from zen/get unless set.
+        for needle in [
+            "\"thread-context-v1\"",
+            "skill_version 30",
+            "verb catalog (version 20)",
+            "d-7d1bfd780a3c4733 -> d-9171929ecf4c35ea",
+            "list-from",
+            "study_page_app-api.txt",
+        ] {
+            assert!(ex.contains(needle), "exceptions.txt must name {needle:?}");
+        }
+        let bodies = std::fs::read_to_string(golden_root().join("zen_bodies.txt")).expect("zen_bodies.txt");
+        for absent in ["\"collapsible\"", "\"collapsed\"", "\"list-from\""] {
+            assert!(!bodies.contains(absent), "zen/get carries {absent} only when a file sets it (CA5)");
+        }
     }
     goldens.finish();
 }

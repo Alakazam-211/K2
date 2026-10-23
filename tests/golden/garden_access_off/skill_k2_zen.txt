@@ -1,7 +1,7 @@
 ---
 k2_skill: k2-zen
-skill_version: 29
-skill_checksum: 98e03ed82acc7ccc
+skill_version: 30
+skill_checksum: fc77bd66ae98bb31
 name: k2-zen
 description: Build Zen Gardens (~/.k2/zen): k2 zen garden, place K2's built-in widgets (a whole Home or one agent) or your own sealed custom widgets (k2 zen widget), themes, tokens, font, motion, validate, reset; agents request, never grant
 ---
@@ -144,6 +144,15 @@ and its controls until the file declares its own.
 gives the page the whole window: the top band floats over the columns, which lose
 their margin and glass box, and the theme's background shows behind everything
 (the Diary); the default is `framed`.
+- A `[[layout.column]]` may also set `collapsible = true` (the person folds it to a thin
+tab on its edge, with its label and unread badge; the fold is kept per Garden on this
+computer), `collapsed = true` (it starts folded) and `label = "Chat"` (1 to 24
+characters; default `Column N`). Refused: `collapsed` without `collapsible`, every column
+collapsed, a collapsible column on a one-column page, and a collapsible column that holds
+the `zen-toggle` or `garden-switcher` (at its edge, in a menu at its edge, or from the
+template's controls) or a `nav-rail`. The last open column never folds. There is no
+shortcut: Tab to the chevron or the tab, then Enter. A widget folds one only with
+`k2.layout.*`, right after the person clicks in it, and those folds are never saved.
 - `[[widget]]`: `id` (letters, digits, - and _; unique on the page), `kind`, `column` (0 is
 the first; it must exist in the layout), and optional `[widget.props]`. At most 12
 content widgets and 10 Zen controls.
@@ -274,7 +283,8 @@ controls, so it must also place a `zen-toggle` (the way out).
 
 **`agents`**: a Home's agents with live status (working, idle, needs you) and their last message; the whole Home, or one agent filtered from it. K2 grants it `agents:read`, `agents:add`, `presence:read`.
 
-- `mode` (one of `home`, `agent`): `home` shows every agent of the Home (the whole Home surface); `agent` shows one agent filtered from that Home (set `agent`). Default: `agent` when `agent` is set, else `home`.
+- `mode` (one of `home`, `agent`, `list`): `home` shows every agent of the Home (the whole Home surface); `agent` shows one agent filtered from that Home (set `agent`); `list` shows the agents a custom widget chose with k2.agents.show (set `list-from`). Default: `list` when `list-from` is set, `agent` when `agent` is set, else `home`.
+- `list-from` (text): the id of a custom widget on this page that asks for agents:read: the widget shows just the agents that widget lists with k2.agents.show([...addresses]), in its order ("Nothing listed yet" until it does), and a footer counts the others that need you. Not with `agent`, `home` or `home-picker`.
 - `home` (text): the Home to show, by name or id. Default: the Garden's starting Home, else the window's Home.
 - `agent` (text): one agent's name or address in that Home: the widget shows only that agent (`mode = "agent"`).
 - `home-picker` (true or false): a Home picker in the widget's header; the pick belongs to this Garden and never moves the Home page. Default `false`.
@@ -313,6 +323,12 @@ Home, with a Conversation beside it (`agents = "<that widget's id>"`). Add
 - **One agent:** `kind = "agents"` with `agent = "<name or address>"` (and `home` to say
 which Home it is in): only that agent's row. Or skip the list and pin the
 conversation itself: `kind = "conversation"` with `agent = "<name>"` and `home`.
+- **A chosen list:** `kind = "agents"` with `list-from = "<custom widget id>"` (mode `list`):
+the agents that custom widget lists with `k2.agents.show([...])`, in its order, from this
+computer and the person's Homes on other servers. "Nothing listed yet" until it lists some;
+a footer counts the others that need the person. The custom widget must ask for
+`agents:read`. A Conversation following either widget shows the same pick. Not with
+`agent`, `home` or `home-picker`; the Agents view of a nav rail ignores it.
 - Picking a Home in a Garden never changes the Home page.
 
 ## Themes, defaults and your changes
@@ -499,7 +515,7 @@ Every widget reaches K2 only through the Zen bridge; each verb needs a cap
 the widget has (a built-in's from K2, a custom widget's from its manifest).
 Caps: `agents:read`, `agents:add`, `presence:read`, `thread:read`, `thread:post`, `gardens:manage`, `gardens:template`, `app:navigate`.
 
-This list comes from K2's verb catalog (version 19). A verb marked
+This list comes from K2's verb catalog (version 20). A verb marked
 **custom widgets** is one a custom widget may call too (see Custom widgets);
 the rest belong to K2's own widgets and controls.
 
@@ -512,6 +528,7 @@ the rest belong to K2's own widgets and controls.
 - `agents.local()`: The agents on this computer, for Ask my agent.
 - `conversation.open(address)`: Show this agent in the built-in Conversation that follows the widget. **custom widgets**
 - `conversation.close()`: Clear the widget's pick. **custom widgets**
+- `agents.show(addresses)`: List mode: an Agents widget with list-from = this widget shows just these agents, in this order (rows agents.list() returns; never more reach). null clears. **custom widgets**
 - `focusGroups.get()`: The app's focus groups, for the Agents view.
 - `focusGroups.set(id)`: Pick a focus group for the Agents view.
 - `focusGroups.subscribe(cb)`: The focus groups, pushed on change.
@@ -539,6 +556,7 @@ the rest belong to K2's own widgets and controls.
 - `thread.answer(address, cardId, choice)`: Answer a choice card in the Thread (never a secret card). **custom widgets**
 - `thread.void(address, cardId)`: Void a card in the Thread.
 - `compose.draft(address, text)`: Set K2's message box for that agent; never sends. **custom widgets**
+- `conversation.setContext(text)`: A chip the person sees on the following Conversation's message box; it rides on their next send as K2's own quoted context line, never as their words. null clears. **custom widgets**
 
 **`agents:add`**
 
@@ -690,6 +708,10 @@ cap:
 - `k2.theme.changed(cb)` (local): The same value as theme.get, pushed when the theme or motion changes.
 - `k2.canvas.setHitRegions(rects)` (local): Full-canvas Gardens: up to 32 rects (CSS px, this frame's viewport) where clicks reach you through K2's top drag strip; replaces the last list, [] clears. K2's own controls stay on top.
 - `k2.window.startDrag()` (local): Start moving the window, from a mousedown in this widget (only while a button is down here).
+- `k2.layout.get()` (local): This page's columns: index, label, and whether each can fold and is folded now.
+- `k2.layout.set({collapsed, column})` (local): Fold or unfold a collapsible column on this page, within 5 s of a click in this widget (4 a second; never saved; the last open column can't fold).
+- `k2.layout.toggle(column)` (local): Fold an open collapsible column, or unfold a folded one; the same rules as layout.set.
+- `k2.layout.subscribe(cb)` (local): The same value as layout.get, pushed when a column folds or unfolds.
 - `k2.save.get(key)` (local): One of this widget's private saves, or null.
 - `k2.save.set(key, value)` (local): Keep a private value for this widget (agents never see saves).
 - `k2.save.remove(key)` (local): Forget one private save.
@@ -705,6 +727,7 @@ cap:
 - `k2.agents.subscribe(cb)` (portable): The same rows as agents.list, pushed on every change.
 - `k2.conversation.open(address)` (local): Show this agent in the built-in Conversation that follows the widget.
 - `k2.conversation.close()` (local): Clear the widget's pick.
+- `k2.agents.show(addresses)` (local): List mode: an Agents widget with list-from = this widget shows just these agents, in this order (rows agents.list() returns; never more reach). null clears.
 
 **`presence:read`**: "See who else is looking at those agents."
 
@@ -730,6 +753,7 @@ cap:
 - `k2.thread.post(address, text, {attachments})` (portable): Send text to the agent as you, with files picked by the person riding it (thread.pickFiles).
 - `k2.thread.answer(address, cardId, choice)` (portable): Answer a choice card in the Thread (never a secret card).
 - `k2.compose.draft(address, text)` (local): Set K2's message box for that agent; never sends.
+- `k2.conversation.setContext(text)` (local): A chip the person sees on the following Conversation's message box; it rides on their next send as K2's own quoted context line, never as their words. null clears.
 
 **`sources:read`**: "Read the data sources this card names, on the servers you're signed in to. With thread:post or store:write too, what it shows can reach agents."
 
@@ -837,6 +861,37 @@ addEventListener('resize', share)
 document.querySelector('#grip').addEventListener('mousedown', (e) => {
 if (e.button === 0) k2.window.startDrag().catch(() => {})
 })
+```
+
+### Columns, a chosen list and a context chip
+
+A Board-style widget can sit beside K2's own Agents and Conversation widgets and steer
+them, so you never rebuild a chat panel:
+
+- **Columns:** `k2.layout.get()` answers `{columns: [{index, label, collapsible, collapsed}]}`
+for this page; `k2.layout.subscribe(cb)` pushes the same on every fold. `k2.layout.set({column,
+collapsed})` and `k2.layout.toggle(column)` fold or unfold a `collapsible` column, but only
+within 5 s of the person's click in your widget (else `failed` "needs a click"), at most 4
+calls a second each (`rate_limited`). Your folds are never saved (only the person's own click
+is); a fixed column or the last open one answers `failed`, a bad index `bad_args`.
+- **A chosen list:** an Agents widget with `list-from = "<your widget's id>"` shows just the
+agents you list with `k2.agents.show([...addresses])` (needs `agents:read`), in your order:
+full addresses exactly as `k2.agents.list()` gives them (`handle::host`; a bare handle is
+`not_bound`), at most 50. `k2.agents.show(null)` clears it; until you call it the widget says
+"Nothing listed yet". The list never adds reach (an agent on a server you can't reach isn't
+drawn until it's back), clears when your widget stops or unloads, and a footer counts the
+agents off your list that need the person. Map from `agents.list()`: never guess addresses.
+- **A context chip:** `k2.conversation.setContext(text)` (needs `thread:post`) puts a chip the
+person sees on the following Conversation's box ("Board: K2 Boards"). It rides on their next
+send as K2's own quoted line before their message, never as their words, and they can remove
+it. One line, at most 120 characters, plain text, no `[thread:`, `[from ` or `[context`, at
+most 2 calls a second; `null` clears. An older server doesn't get it (the chip says so).
+
+```js
+const rows = await k2.agents.list()
+await k2.agents.show(rows.filter((r) => board.has(r.label)).map((r) => r.address))
+await k2.conversation.setContext('Board: ' + board.name)
+chatButton.addEventListener('click', () => k2.layout.toggle(2))
 ```
 
 ### Workflow

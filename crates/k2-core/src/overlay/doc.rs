@@ -189,6 +189,102 @@ pub struct WidgetPlacementClaim {
     pub hash: String,
 }
 
+/// The Board context chip (thread-context-v1, prd-garden-column-collapse-
+/// and-agent-list-v1 §4): one line a Garden widget set
+/// (`k2.conversation.setContext`) that rode the person's own compose send,
+/// shown to the person as a removable chip before they sent. It is the
+/// widget's words, never the person's: it is stored as its own field (the
+/// body stays exactly what the person typed) and the agent gets it on K2's
+/// own quoted line BEFORE the `[from <user>]` stamp, never inside it.
+///
+/// Wire in: `context: {text, origin: {widget, garden, placement, hash?}}` on
+/// `POST /cli/thread/post` (unbound `via=compose` only). Stored: the text and
+/// where it came from; never the hash.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ThreadContext {
+    /// One line, at most [`THREAD_CONTEXT_MAX_CHARS`], plain text.
+    pub text: String,
+    /// The widget's folder (manifest) name: author-chosen.
+    pub widget: String,
+    /// The Garden it sits in (a Garden id).
+    pub garden: String,
+    /// The placement (the widget's id on the page).
+    pub placement: String,
+}
+
+/// Longest context line, in characters.
+pub const THREAD_CONTEXT_MAX_CHARS: usize = 120;
+
+/// Text a context line may never hold (ASCII case-insensitive): the
+/// markers of K2's own stamps, so a widget can't forge one.
+pub const THREAD_CONTEXT_FORBIDDEN: &[&str] = &["[thread:", "[from", "[context"];
+
+/// Unicode that breaks a line or reorders what the person sees: line and
+/// paragraph separators, bidi embeddings, overrides and isolates.
+fn context_breaks_line(c: char) -> bool {
+    matches!(c, '\u{2028}' | '\u{2029}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+}
+
+/// Check a context line (the renderer runs the same rule first): trimmed,
+/// 1–120 characters, one line, no control or bidi characters, none of
+/// [`THREAD_CONTEXT_FORBIDDEN`]. Returns the trimmed text.
+pub fn check_context_text(text: &str) -> Result<String, String> {
+    let t = text.trim();
+    if t.is_empty() {
+        return Err("context.text is empty".into());
+    }
+    if t.chars().count() > THREAD_CONTEXT_MAX_CHARS {
+        return Err(format!("context.text is one line of at most {THREAD_CONTEXT_MAX_CHARS} characters"));
+    }
+    if t.chars().any(|c| c.is_control() || context_breaks_line(c)) {
+        return Err("context.text is one line of plain text (no line breaks or control characters)".into());
+    }
+    let lower = t.to_ascii_lowercase();
+    if let Some(m) = THREAD_CONTEXT_FORBIDDEN.iter().find(|m| lower.contains(*m)) {
+        return Err(format!("context.text may not contain '{m}'"));
+    }
+    Ok(t.to_string())
+}
+
+impl ThreadContext {
+    /// Parse a post's `context` (`{text, origin}`): the text checked
+    /// ([`check_context_text`]), the origin's label and placement claim as
+    /// [`WidgetOrigin::parse_claim`] takes them. `origin.placement` is
+    /// required; `origin.hash` rides only to this computer's daemon (a post
+    /// to another server carries the label and placement, its Garden's own
+    /// daemon checked it first).
+    pub fn parse(v: &serde_json::Value) -> Result<(Self, WidgetOrigin, Option<WidgetPlacementClaim>), String> {
+        let Some(obj) = v.as_object() else {
+            return Err("context must be {text, origin}".into());
+        };
+        if let Some(k) = obj.keys().find(|k| k.as_str() != "text" && k.as_str() != "origin") {
+            return Err(format!("context has no field '{k}' (it is {{text, origin}})"));
+        }
+        let text = check_context_text(obj.get("text").and_then(|t| t.as_str()).ok_or("context.text is a string")?)?;
+        let Some(raw) = obj.get("origin").and_then(|o| o.as_object()) else {
+            return Err("context.origin must be {widget, garden, placement, hash?}".into());
+        };
+        let mut origin = raw.clone();
+        let placement = match (origin.get("placement"), origin.contains_key("hash")) {
+            (Some(p), true) => p.as_str().map(str::trim).unwrap_or_default().to_string(),
+            (Some(p), false) => {
+                let p = p.as_str().map(str::trim).unwrap_or_default().to_string();
+                origin.remove("placement");
+                p
+            }
+            (None, _) => return Err("context.origin.placement is required".into()),
+        };
+        if placement.is_empty() || placement.chars().count() > WIDGET_ORIGIN_MAX_CHARS || placement.chars().any(char::is_control) {
+            return Err(format!(
+                "context.origin.placement must be 1-{WIDGET_ORIGIN_MAX_CHARS} characters with no control characters"
+            ));
+        }
+        let (label, claim) = WidgetOrigin::parse_claim(&serde_json::Value::Object(origin)).map_err(|e| format!("context.{e}"))?;
+        let ctx = ThreadContext { text, widget: label.widget.clone(), garden: label.garden.clone(), placement };
+        Ok((ctx, label, claim))
+    }
+}
+
 /// A Thread post a Design tab sent for the person (prd-browser-design-mode-v1
 /// D-A10): the batched page notes from one Send. Still the person's own
 /// message (`via: "compose"`), but set only by `POST /cli/browser/notes`,
@@ -303,6 +399,11 @@ pub struct OverlayDoc {
     /// Set when a Design tab (or `k2 browser note`) sent this post (D-A10).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub design: Option<DesignOrigin>,
+    /// thread-context-v1: the Board context line that rode the person's
+    /// compose send (shown to them as a chip). Never part of `body`. None
+    /// on every other doc and on docs from before this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<ThreadContext>,
     /// Set on a person's post (the compose bar, a Garden widget, an app
     /// guest): who sent it, from the credential. None on agent posts and
     /// on docs written before this field.
@@ -498,6 +599,7 @@ impl OverlayDoc {
             secret: None,
             widget: None,
             design: None,
+            context: None,
             author: None,
             external: None,
             imported: None,
@@ -543,6 +645,7 @@ impl OverlayDoc {
             secret: None,
             widget: None,
             design: None,
+            context: None,
             author: None,
             external: None,
             imported: None,
@@ -587,6 +690,7 @@ impl OverlayDoc {
             }),
             widget: None,
             design: None,
+            context: None,
             author: None,
             external: None,
             imported: None,
@@ -619,6 +723,7 @@ impl OverlayDoc {
             secret: None,
             widget: None,
             design: None,
+            context: None,
             author: None,
             external: None,
             imported: None,
@@ -645,6 +750,7 @@ impl OverlayDoc {
             secret: None,
             widget: None,
             design: None,
+            context: None,
             author: None,
             external: None,
             imported: None,

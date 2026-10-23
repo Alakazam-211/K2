@@ -648,6 +648,15 @@ pub const FEATURE_FILES_PATH_SCOPE: &str = "files-path-scope-v1";
 /// (items at or below N rewritten in place since: card answers, voids,
 /// expiries, handoffs) and `removed` (items that left the Thread).
 pub const FEATURE_THREAD_DELTA: &str = "thread-delta-v1";
+/// The Board context chip (thread-context-v1, 0.46.3 r10,
+/// prd-garden-column-collapse-and-agent-list-v1 §4): `POST /cli/thread/post`
+/// (unbound `via=compose`) takes `context: {text, origin}`, checks the
+/// origin (the widget's `thread:post`, live hash) and the text (one line,
+/// ≤ 120 characters, no stamp markers), stores it as the doc's own `context`
+/// field and gives the agent K2's own quoted context line before the
+/// `[from <user>]` stamp. A client sends a context only to a server with
+/// this key; an older one gets the message without it.
+pub const FEATURE_THREAD_CONTEXT: &str = "thread-context-v1";
 /// Older pages of a project chat (project-chat-paging-v1, 0.46.2):
 /// `GET /cli/project-group/messages?before_seq=N&limit=L` returns the newest
 /// `L` messages with `seq < N` OLDEST first, `has_more` when older ones
@@ -875,6 +884,7 @@ pub fn features() -> Vec<&'static str> {
     }
     out.push(FEATURE_THREAD_STREAM);
     out.push(FEATURE_THREAD_ACTIVITY_EAR);
+    out.push(FEATURE_THREAD_CONTEXT);
     // Permission cards (Beta, prd-agent-settings-cards-v1 §2.1, §10):
     // listed only while the global switch is on (setting or env). Its flip
     // publishes a settings frame (`settings_routes::permission_cards_flipped`)
@@ -959,6 +969,7 @@ mod tests {
                 "garden-person-rows-v1",
                 "thread-stream-v1",
                 "thread-activity-ear-v1",
+                "thread-context-v1",
                 "boot-status-views-v1"
             ]
         );

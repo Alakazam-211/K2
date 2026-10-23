@@ -426,6 +426,9 @@ fn clean_for_export(mut doc: OverlayDoc) -> OverlayDoc {
     if let Some(s) = doc.secret.as_mut() {
         s.prompt = crate::redaction::redact_opt(s.prompt.as_deref());
     }
+    if let Some(c) = doc.context.as_mut() {
+        c.text = crate::redaction::redact(&c.text);
+    }
     doc
 }
 
@@ -882,6 +885,7 @@ impl Rewrite<'_> {
             secret: None,
             widget: None,
             design: None,
+            context: None,
             author: None,
             external: None,
             imported: Some(meta),

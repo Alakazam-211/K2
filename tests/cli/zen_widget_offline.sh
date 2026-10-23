@@ -6,7 +6,8 @@
 #     need no permissions, Rosson 2026-10-08) and never reach a daemon;
 #   - usage errors exit 2 before any request;
 #   - help and the --schema manifest list the widget family and --widget;
-#   - `k2 zen guide api` is generated, at most 128 lines (GUIDE_MAX_LINES), and --json parses.
+#   - `k2 zen guide api` is generated, at most GUIDE_MAX_LINES lines (read from
+#     crates/k2-core/src/contract/gen.rs, the one limit), and --json parses.
 # The daemon half (new/list/revoke/validate --widget, exit 3 before setup)
 # is tests/cli/zen_widget_cli.sh.
 
@@ -90,7 +91,11 @@ echo "== k2 zen guide api =="
 run zen guide api
 assert_eq "guide api exits 0 with no daemon" "$rc" "0"
 lines="$(printf '%s\n' "$out" | wc -l | tr -d ' ')"
-[ "$lines" -le 128 ] && ok "guide api is $lines lines (max 128)" || bad "guide api is $lines lines (max 128)"
+# The limit is k2-core's GUIDE_MAX_LINES (contract_routes and zen_core assert
+# the same constant); read it so this check can't drift from it.
+max_lines="$(sed -nE 's/^pub const GUIDE_MAX_LINES: usize = ([0-9]+);$/\1/p' "$PROJECT_ROOT/crates/k2-core/src/contract/gen.rs")"
+case "$max_lines" in ''|*[!0-9]*) bad "GUIDE_MAX_LINES not found in crates/k2-core/src/contract/gen.rs (got $(printf %q "$max_lines"))"; max_lines=0 ;; esac
+[ "$lines" -le "$max_lines" ] && ok "guide api is $lines lines (max $max_lines)" || bad "guide api is $lines lines (max $max_lines)"
 for v in agents.list agents.subscribe conversation.open thread.read thread.subscribe thread.post thread.answer compose.draft gardens.switch theme.changed presence.get store.get store.put store.txCommit save.set viewer.get; do
     assert_contains "guide api names k2.$v" "$out" "k2.$v("
 done

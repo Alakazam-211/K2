@@ -163,7 +163,11 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// frames follow the Garden's light/dark (manifest `colorScheme: "own"`
 /// opts out); an agent's change to the person's widget sends a "Keep as
 /// mine" card on the person's Thread with that agent (inbox note without one).
-pub const SKILL_VERSION_ZEN: u32 = 29;
+/// v30 = Garden columns and the agent list (0.46.3 r10, catalog v20):
+/// `[[layout.column]]` `collapsible` / `collapsed` / `label`, the Agents
+/// widget's `list-from` (mode `list`) with `k2.agents.show`, `k2.layout.*`
+/// and the visible context chip (`k2.conversation.setContext`).
+pub const SKILL_VERSION_ZEN: u32 = 30;
 /// Bumped to 5 in 0.39.0: same Phase 2.1 A25 verb refresh applied to
 /// the workspace-root template body (Cli tools section, workflow
 /// docs). Was 4 since 0.32.7 (SOURCE sub-regions adoption).

@@ -802,10 +802,14 @@ them, so you never rebuild a chat panel:\n\n\
   drawn until it's back), clears when your widget stops or unloads, and a footer counts the\n\
   agents off your list that need the person. Map from `agents.list()`: never guess addresses.\n\
 - **A context chip:** `k2.conversation.setContext(text)` (needs `thread:post`) puts a chip the\n\
-  person sees on the following Conversation's box (\"Board: K2 Boards\"). It rides on their next\n\
-  send as K2's own quoted line before their message, never as their words, and they can remove\n\
-  it. One line, at most 120 characters, plain text, no `[thread:`, `[from ` or `[context`, at\n\
-  most 2 calls a second; `null` clears. An older server doesn't get it (the chip says so).\n\n\
+  person sees (\"Board: K2 Boards\") on the box of every Conversation that follows your widget\n\
+  (`agents = \"<your id>\"`, or through an Agents widget's `list-from`); with none following it\n\
+  answers `not_bound`. It rides only on the person's own send, as K2's quoted line before their\n\
+  `[from]` stamp, never as their words, and they can remove it. One line, at most 120\n\
+  characters, plain text, no `[thread:`, `[from ` or `[context`, at most 2 calls a second.\n\
+  `null`, your widget stopping or unloading, or a Garden switch clears it. With Garden access\n\
+  lists on, an unsigned version answers `needs_editor`. An older server doesn't get it (the chip\n\
+  says so). A message that carried one has `doc.context` (`{text, widget, placement}`).\n\n\
 ```js\n\
 const rows = await k2.agents.list()\n\
 await k2.agents.show(rows.filter((r) => board.has(r.label)).map((r) => r.address))\n\

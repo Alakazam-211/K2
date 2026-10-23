@@ -130,8 +130,11 @@ fn exposure_counts_are_pinned() {
     // loginInput, loginCancel, use and remove.
     // The counts-only ear (0.46.3, thread-activity-ear-v1): + thread.activity
     // (app only).
+    // Garden columns and the agent list (catalog v20, 0.46.3 r10): + six
+    // widget rows, layout.get/set/toggle/subscribe, agents.show and
+    // conversation.setContext.
     let garden_local = c.verbs_exposed_to(Exposure::GardenLocal).len();
-    assert_eq!((widget, app, garden_local), (30, 95, 33), "per-exposure verb counts (widget, app, garden-local)");
+    assert_eq!((widget, app, garden_local), (36, 95, 33), "per-exposure verb counts (widget, app, garden-local)");
     let both: Vec<&str> = c
         .verbs
         .iter()

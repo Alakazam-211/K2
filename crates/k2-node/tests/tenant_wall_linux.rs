@@ -62,7 +62,6 @@ fn node_test_user() -> (String, u32) {
 struct Rig {
     base: PathBuf,
     socket: PathBuf,
-    bin: PathBuf,
     config: PathBuf,
     exec: Arc<Executor>,
     slots: Vec<(Slot, Trust, Network)>,
@@ -163,7 +162,7 @@ fn rig(tag: &str, slots: &[(Slot, Trust, Network)]) -> Rig {
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
     let socket = PathBuf::from(format!("/run/k2na-tw-{}.sock", &id[..10]));
     let exec = Arc::new(Executor::new(
-        ExecPaths { config_dir: config.clone(), state_dir: state, home: base.join("home"), binary: bin.clone() },
+        ExecPaths { config_dir: config.clone(), state_dir: state, home: base.join("home"), binary: bin },
         Arc::new(SystemPlatform),
     ));
     let l = server::bind(&socket, None).unwrap();
@@ -171,7 +170,7 @@ fn rig(tag: &str, slots: &[(Slot, Trust, Network)]) -> Rig {
     std::thread::spawn(move || {
         let _ = server::serve(&e2, &PeerRule { allowed_uids: vec![0] }, l, &|| false);
     });
-    let r = Rig { base, socket, bin, config, exec, slots: slots.to_vec(), owner_fp: std::sync::Mutex::new("a".repeat(64)) };
+    let r = Rig { base, socket, config, exec, slots: slots.to_vec(), owner_fp: std::sync::Mutex::new("a".repeat(64)) };
     r.write_servers(&[]);
     for (slot, ..) in slots {
         let d = r.prepare(*slot);

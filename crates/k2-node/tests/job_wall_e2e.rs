@@ -12,68 +12,12 @@
 
 mod common;
 
-use std::path::{Path, PathBuf};
-
 use common::*;
 use k2_node::wall::Wall;
-use k2_node_proto::frames::{self, Frame, JobState, LogStream};
+use k2_node_proto::frames::{self, Frame, JobState};
 
 fn last_state(fr: &[Frame], job: &str) -> frames::StateUpdate {
     states_of(fr, job).into_iter().last().expect("a state for the job")
-}
-
-/// The k2-node binary, copied out of the build tree (which may sit under
-/// `/Users`, which the wall closes) into a temp dir.
-fn probe_bin() -> PathBuf {
-    let d = k2_node::util::temp_dir("probe-bin");
-    let p = d.join("k2-node");
-    std::fs::copy(env!("CARGO_BIN_EXE_k2-node"), &p).expect("copy the k2-node binary");
-    p
-}
-
-fn probe_argv(bin: &Path, reads: &[PathBuf], lists: &[PathBuf], connects: &[String]) -> Vec<String> {
-    let mut v = vec![bin.display().to_string(), "wall-probe".to_string()];
-    for r in reads {
-        v.push("--read".into());
-        v.push(r.display().to_string());
-    }
-    for l in lists {
-        v.push("--list".into());
-        v.push(l.display().to_string());
-    }
-    for c in connects {
-        v.push("--connect".into());
-        v.push(c.clone());
-    }
-    v
-}
-
-/// The probe run directly (no wall), as the control.
-fn probe_direct(argv: &[String]) -> serde_json::Value {
-    let out = std::process::Command::new(&argv[0]).args(&argv[1..]).output().expect("run the probe");
-    assert!(out.status.success(), "probe: {}", String::from_utf8_lossy(&out.stderr));
-    serde_json::from_slice(&out.stdout).expect("probe JSON")
-}
-
-fn probe_json(fr: &[Frame], job: &str) -> serde_json::Value {
-    let out = text(&logs_of(fr, job), LogStream::Out);
-    let err = text(&logs_of(fr, job), LogStream::Err);
-    serde_json::from_str(out.trim()).unwrap_or_else(|e| panic!("probe output isn't JSON ({e}): out={out:?} err={err:?}"))
-}
-
-fn ok(v: &serde_json::Value, kind: &str, key: &str) -> bool {
-    let s = v[kind][key].as_str().unwrap_or_else(|| panic!("{kind} {key} missing in {v}"));
-    s == "ok" || s.starts_with("ok:")
-}
-
-/// This machine's address on its default route (not loopback). No packet
-/// is sent: a UDP connect only picks the route.
-fn lan_ip() -> std::net::IpAddr {
-    let s = std::net::UdpSocket::bind("0.0.0.0:0").expect("udp bind");
-    s.connect("192.0.2.1:9").expect("this test needs a default route (a LAN address to listen on)");
-    let ip = s.local_addr().unwrap().ip();
-    assert!(!ip.is_loopback() && !ip.is_unspecified(), "no LAN address: {ip}");
-    ip
 }
 
 /// Mixed fleet: a node without the wall (an older setup, or the wall not
@@ -100,6 +44,66 @@ async fn an_unwalled_node_refuses_network_none_jobs_and_offers_no_wall() {
 #[cfg(target_os = "macos")]
 mod seatbelt {
     use super::*;
+    use std::path::{Path, PathBuf};
+
+    use k2_node_proto::frames::LogStream;
+
+    // The probe helpers: only the Seatbelt tests below run the probe, so
+    // they live under the same cfg (on Linux they were dead code).
+
+    /// The k2-node binary, copied out of the build tree (which may sit under
+    /// `/Users`, which the wall closes) into a temp dir.
+    fn probe_bin() -> PathBuf {
+        let d = k2_node::util::temp_dir("probe-bin");
+        let p = d.join("k2-node");
+        std::fs::copy(env!("CARGO_BIN_EXE_k2-node"), &p).expect("copy the k2-node binary");
+        p
+    }
+
+    fn probe_argv(bin: &Path, reads: &[PathBuf], lists: &[PathBuf], connects: &[String]) -> Vec<String> {
+        let mut v = vec![bin.display().to_string(), "wall-probe".to_string()];
+        for r in reads {
+            v.push("--read".into());
+            v.push(r.display().to_string());
+        }
+        for l in lists {
+            v.push("--list".into());
+            v.push(l.display().to_string());
+        }
+        for c in connects {
+            v.push("--connect".into());
+            v.push(c.clone());
+        }
+        v
+    }
+
+    /// The probe run directly (no wall), as the control.
+    fn probe_direct(argv: &[String]) -> serde_json::Value {
+        let out = std::process::Command::new(&argv[0]).args(&argv[1..]).output().expect("run the probe");
+        assert!(out.status.success(), "probe: {}", String::from_utf8_lossy(&out.stderr));
+        serde_json::from_slice(&out.stdout).expect("probe JSON")
+    }
+
+    fn probe_json(fr: &[Frame], job: &str) -> serde_json::Value {
+        let out = text(&logs_of(fr, job), LogStream::Out);
+        let err = text(&logs_of(fr, job), LogStream::Err);
+        serde_json::from_str(out.trim()).unwrap_or_else(|e| panic!("probe output isn't JSON ({e}): out={out:?} err={err:?}"))
+    }
+
+    fn ok(v: &serde_json::Value, kind: &str, key: &str) -> bool {
+        let s = v[kind][key].as_str().unwrap_or_else(|| panic!("{kind} {key} missing in {v}"));
+        s == "ok" || s.starts_with("ok:")
+    }
+
+    /// This machine's address on its default route (not loopback). No packet
+    /// is sent: a UDP connect only picks the route.
+    fn lan_ip() -> std::net::IpAddr {
+        let s = std::net::UdpSocket::bind("0.0.0.0:0").expect("udp bind");
+        s.connect("192.0.2.1:9").expect("this test needs a default route (a LAN address to listen on)");
+        let ip = s.local_addr().unwrap().ip();
+        assert!(!ip.is_loopback() && !ip.is_unspecified(), "no LAN address: {ip}");
+        ip
+    }
 
     /// V15/V16: under Seatbelt a job reads neither the node's key, ledger
     /// or config nor anything under /Users; the same probe without the

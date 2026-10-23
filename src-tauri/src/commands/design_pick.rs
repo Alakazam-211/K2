@@ -4,7 +4,7 @@
 //! No Tauri types here so it unit-tests without a window.
 //!
 //! The page is untrusted. Its drain result is capped before parsing, every
-//! pick element goes through `k2_core::browser_notes::clamp_element`, the
+//! pick element goes through `k2_client::browser_notes::clamp_element`, the
 //! URL through `clean_page_url` (non-http(s) picks are dropped), and picks
 //! from an older page load or another URL than the view shows now are
 //! dropped (navigation cancels a pick).
@@ -13,7 +13,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use k2_core::browser_notes::{clamp_element, clamp_line, clean_page_url, NoteElement, MAX_TITLE_CHARS};
+use k2_client::browser_notes::{clamp_element, clamp_line, clean_page_url, NoteElement, MAX_TITLE_CHARS};
 use serde::Serialize;
 
 /// The guest picker: a function expression the host calls with the page
@@ -58,7 +58,7 @@ pub fn badges_script(nav: u64, badges: &[Badge]) -> String {
     let clamped: Vec<Badge> = badges
         .iter()
         .take(50)
-        .map(|b| Badge { n: b.n, selector: clamp_line(&b.selector, k2_core::browser_notes::MAX_SELECTOR_CHARS) })
+        .map(|b| Badge { n: b.n, selector: clamp_line(&b.selector, k2_client::browser_notes::MAX_SELECTOR_CHARS) })
         .collect();
     format!(
         "{};\nwindow.__k2DesignPicker.setBadges({});",

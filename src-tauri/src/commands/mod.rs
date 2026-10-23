@@ -41,16 +41,15 @@ pub mod daemon;
 pub mod linux_desktop;
 pub mod permissions;
 pub mod memory_watcher;
-// Phase 2.1c Item 2 — workspace inbox primitive Tauri shims. Thin
-// wrappers around `k2_core::inbox::*` that mirror the daemon-side
-// `/cli/inbox/*` HTTP routes so the renderer + CLI see the same data.
+// Phase 2.1c Item 2 — workspace inbox badge count; forwards to the
+// daemon's `/cli/inbox/count` (0.46.4).
 pub mod inbox;
 // Phase 2.1 wrap-up — generic worktree filesystem readers. Powers the
 // worktree detail pane's Task tab (renders the worktree's CLAUDE.md);
 // reusable for any future "show a file from inside a worktree" surface.
 pub mod worktree;
-// Phase 2.5b follow-up — Tauri verbs for the workspace settings
-// "Skills" panel. Thin forwards to `k2_core::skills::crud::*`.
+// Phase 2.5b follow-up — the workspace settings "Skills" panel list;
+// forwards to the daemon's `/cli/skills/list` (0.46.4).
 pub mod skills;
 // K2 Connect — cross-platform OS keychain bridge for remembered
 // remote-host tokens (`k2_secret_{set,get,delete}`). macOS Keychain /

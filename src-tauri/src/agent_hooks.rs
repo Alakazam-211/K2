@@ -11,15 +11,8 @@
 //!     the per-CLI hook configs itself (prd-daemon-activity-and-thread-
 //!     working-v1 DA7, `k2_core::agent_hooks::install`), so a headless
 //!     daemon has hooks and an older app bundle can't fight it.
-//!   - A small set of DB-direct helpers (`cli_*`) flagged for migration
-//!     to daemon API calls in a follow-up release (see deletion
-//!     manifest Family 3).
 //!
 //! See `src-tauri/src/lib.rs` for the broader Tauri-vs-daemon split.
-
-// Port + token moved to k2_core::hook_config so the terminal backend
-// (also in k2so-core) can read them without a circular dep.
-use k2_core::hook_config;
 
 // Ring buffer + canonical event mapping + URL query parsing now live
 // in k2so-core so the daemon can share them. The Tauri-side HTTP
@@ -127,50 +120,9 @@ pub fn k2so_sessions_list_for_workspace(path: String) -> Result<String, String> 
     client.cli_get("/cli/sessions/list-for-workspace", &[("path", &path)])
 }
 
-// The helpers below (`get_port`, `get_token`, `generate_token`,
-// `shell_escape`) were callers' entry points into the deleted Tauri
-// HTTP dispatcher (`start_server`). The dispatcher itself moved to
-// the daemon in 0.39.0 (see deletion manifest "Family 6"), so these
-// helpers no longer have intra-crate callers — but they remain on
-// the kept-list because external code paths may need to read the
-// daemon's hook config or escape shell args for future hook scripts.
-// `#[allow(dead_code)]` keeps the release build warning-clean
-// without obscuring the orphan status for future readers.
-
-/// Get the port the notification server is listening on. Thin
-/// re-export kept for existing callers (`crate::agent_hooks::get_port`);
-/// the real static lives in `k2_core::hook_config`.
-#[allow(dead_code)]
-pub fn get_port() -> u16 {
-    hook_config::get_port()
-}
-
-/// Get the auth token for hook requests.
-#[allow(dead_code)]
-pub fn get_token() -> &'static str {
-    hook_config::get_token()
-}
-
-/// Generate a cryptographically secure random hex token.
-#[allow(dead_code)]
-fn generate_token() -> String {
-    let mut buf = [0u8; 16];
-    getrandom::getrandom(&mut buf).expect("failed to generate random token");
-    buf.iter().map(|b| format!("{:02x}", b)).collect()
-}
-
-/// Canonical agent lifecycle event types.
-// AgentLifecycleEvent / map_event_type / parse_query_params / urldecode
-// all moved to k2_core::agent_hooks (imported at the top of this
-// file). The daemon's future HTTP handlers share the same helpers so
-// the canonical event bucket list can't drift between host and daemon.
-
-/// Shell-escape a string for safe interpolation into shell commands.
-/// Uses single-quote wrapping with escaped internal single quotes.
-#[allow(dead_code)]
-fn shell_escape(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
-}
+// 0.46.4: the orphaned `get_port` / `get_token` (k2-core `hook_config`),
+// `generate_token` and `shell_escape` helpers were removed with the
+// k2-core link; nothing called them since the 0.39.0 dispatcher move.
 
 
 // ── CLI DB Helpers (retired 0.39.0e) ────────────────────────────────────

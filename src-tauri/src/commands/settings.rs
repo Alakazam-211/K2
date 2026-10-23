@@ -317,7 +317,7 @@ pub(crate) fn cli_symlink_needs_heal() -> bool {
     let Some(bundled) = find_cli_script() else {
         return false;
     };
-    if k2_core::daemon_lifecycle::is_transient_exe_location(&bundled) {
+    if k2_client::daemon_lifecycle::is_transient_exe_location(&bundled) {
         return false;
     }
     #[cfg(windows)]

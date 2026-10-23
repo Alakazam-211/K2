@@ -18,8 +18,8 @@
 //! notes table.
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use k2_lib::terminal::grid_types::{CompactLine, GridUpdate, StyleSpan};
-use k2_lib::terminal::reflow;
+use k2_core::terminal::grid_types::{CompactLine, GridUpdate, StyleSpan};
+use k2_core::terminal::reflow;
 use std::hash::{Hash, Hasher};
 
 // ── Fixtures ──────────────────────────────────────────────────────────────

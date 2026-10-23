@@ -159,6 +159,39 @@ impl DaemonClient {
 
     /// Scheme + authority this client talks to (`http://127.0.0.1:<port>`
     /// for [`DaemonClient::try_connect`]).
+    /// GET a thin-client mirror route and return its JSON reply. Mirrors
+    /// are the `/cli/*` routes that run the k2-core fn a Tauri command used
+    /// to run in this process (0.46.4); see [`mirror_result`] for errors.
+    pub fn mirror_get(&self, path: &str, params: &[(&str, &str)]) -> Result<serde_json::Value, String> {
+        let mut url = format!("{}{}?token={}", self.base, path, self.token);
+        for (k, v) in params {
+            url.push('&');
+            url.push_str(&pct_encode(k));
+            url.push('=');
+            url.push_str(&pct_encode(v));
+        }
+        let response = self.http.get(&url).send().map_err(|e| format!("daemon {path}: {e}"))?;
+        let status = response.status().as_u16();
+        let body = response.text().unwrap_or_default();
+        mirror_result(path, status, &body)
+    }
+
+    /// POST a JSON body to a thin-client mirror route and return its JSON
+    /// reply (see [`mirror_get`]).
+    pub fn mirror_post(&self, path: &str, body: &serde_json::Value) -> Result<serde_json::Value, String> {
+        let url = format!("{}{}?token={}", self.base, path, self.token);
+        let response = self
+            .http
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .body(body.to_string())
+            .send()
+            .map_err(|e| format!("daemon {path}: {e}"))?;
+        let status = response.status().as_u16();
+        let resp_body = response.text().unwrap_or_default();
+        mirror_result(path, status, &resp_body)
+    }
+
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub fn base(&self) -> &str {
         &self.base
@@ -184,6 +217,25 @@ impl DaemonClient {
 /// Percent-encode a query-string component without pulling a new
 /// crate. RFC 3986 unreserved set is letters, digits, `-`, `_`, `.`,
 /// `~`. Everything else gets `%HH`-encoded.
+/// A mirror route's reply → the command's result. 2xx: the parsed JSON
+/// value. Non-2xx with the daemon's `{"error": "<text>"}` body: `<text>`,
+/// which is the same string the k2-core fn returned when the command ran it
+/// in process, so the renderer sees the message it always saw. Anything
+/// else: `daemon <path> <status>: <body>` (transport-level failures).
+fn mirror_result(path: &str, status: u16, body: &str) -> Result<serde_json::Value, String> {
+    if (200..300).contains(&status) {
+        return serde_json::from_str(body).map_err(|e| format!("decode {path}: {e}: body={body}"));
+    }
+    if status == 400 {
+        if let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(body) {
+            if let Some(serde_json::Value::String(msg)) = map.get("error") {
+                return Err(msg.clone());
+            }
+        }
+    }
+    Err(format!("daemon {path} {status}: {body}"))
+}
+
 fn pct_encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
@@ -245,6 +297,19 @@ mod tests {
         assert_eq!(s.uptime_secs, 42);
         assert_eq!(s.pid, 12345);
         assert_eq!(s.port, 58211);
+    }
+
+    #[test]
+    fn mirror_result_passes_values_and_unwraps_route_errors() {
+        assert_eq!(mirror_result("/x", 200, "[1,2]").unwrap(), serde_json::json!([1, 2]));
+        assert_eq!(mirror_result("/x", 200, "null").unwrap(), serde_json::Value::Null);
+        assert_eq!(mirror_result("/x", 200, "7").unwrap(), serde_json::json!(7));
+        // A k2-core Err(e) comes back as 400 {"error": e} → the bare e.
+        assert_eq!(mirror_result("/x", 400, r#"{"error":"no such agent"}"#).unwrap_err(), "no such agent");
+        // Other failures keep the status and the body.
+        assert_eq!(mirror_result("/x", 403, r#"{"error":"nope"}"#).unwrap_err(), r#"daemon /x 403: {"error":"nope"}"#);
+        assert_eq!(mirror_result("/x", 400, "plain").unwrap_err(), "daemon /x 400: plain");
+        assert!(mirror_result("/x", 200, "not json").unwrap_err().starts_with("decode /x:"));
     }
 
     #[test]

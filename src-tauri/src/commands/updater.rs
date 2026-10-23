@@ -232,13 +232,13 @@ fn fetch_latest_manifest() -> Result<String, String> {
 
 #[tauri::command]
 pub async fn check_for_update() -> Result<UpdateInfo, String> {
-    if k2_core::airgap::enabled() {
-        return Err(k2_core::airgap::TEACHING.to_string());
+    if k2_client::airgap::enabled_for_client() {
+        return Err(k2_client::airgap::TEACHING.to_string());
     }
     // Run the blocking HTTP call on a background thread to avoid freezing the UI
     tokio::task::spawn_blocking(|| {
-        if k2_core::airgap::enabled() {
-            return Err(k2_core::airgap::TEACHING.to_string());
+        if k2_client::airgap::enabled_for_client() {
+            return Err(k2_client::airgap::TEACHING.to_string());
         }
         let client = update_http_client()?;
 

@@ -18,6 +18,20 @@
 set -u
 cd "$(dirname "$0")/.."
 
+# The same build env as dev-build.sh, build-app.sh and release.sh
+# (scripts/lib/build-binaries.sh): on macOS an unset SDKROOT is filled from
+# `xcrun --sdk macosx --show-sdk-path` (a bare shell on z3mbpZ left it unset
+# and llama-cpp-sys's cmake configure failed); a caller's SDKROOT wins.
+# CMAKE_POLICY_VERSION_MINIMUM comes from .cargo/config.toml [env] for every
+# cargo call; it is exported here too for any cmake run outside cargo.
+# shellcheck source=scripts/lib/build-binaries.sh
+source scripts/lib/build-binaries.sh
+k2_mac_build_env
+export CMAKE_POLICY_VERSION_MINIMUM="${CMAKE_POLICY_VERSION_MINIMUM:-3.5}"
+# Half-configured cmake dirs (a cache but no generated build file) in the
+# repo's own target/ only, as the other build scripts do; good caches stay.
+k2_clear_failed_cmake_dirs
+
 T="$PWD/.bs-clean-target"
 rm -rf "$T"; mkdir -p "$T"
 export CARGO_TARGET_DIR="$T"

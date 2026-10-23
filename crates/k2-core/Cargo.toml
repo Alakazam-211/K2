@@ -14,7 +14,7 @@ path = "src/lib.rs"
 # active when k2so-core's own tests run — src-tauri's test binary would
 # panic with "db::init_database must run before db::shared()".
 # Enable in src-tauri's [dev-dependencies] entry; NOT a runtime feature.
-test-util = []
+test-util = ["k2-client/test-util"]
 
 # Session-sandboxing P2a/P2b — gates the libkrun microVM backend body in
 # `terminal::sandbox`. Default OFF: the seam scaffolding (SandboxBackend,
@@ -48,6 +48,11 @@ k2-core = { path = ".", features = ["test-util"] }
 time = { version = "0.3", features = ["std"] }
 
 [dependencies]
+# The thin client's half (paths, process bootstrap, launchd + bundle
+# layout, keychain account session, perf, …). Re-exported at the old
+# `k2_core::<module>` paths; see crates/k2-client/src/lib.rs.
+k2-client = { path = "../k2-client" }
+
 # Shared primitive deps.
 parking_lot = "0.12"
 

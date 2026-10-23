@@ -17,11 +17,10 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// Teaching copy for CLI/HTTP refuse. Names the env; does not dump internals.
-pub const TEACHING: &str = "Air-gap is on (K2_AIRGAP=1). This daemon will not start a tunnel or phone Connect, cert, GitHub, or other hosted services.";
-
-/// Env name. Images set this on the unit **before first start**.
-pub const ENV_VAR: &str = "K2_AIRGAP";
+// The env switch and teaching copy live in k2-client (the thin client's
+// updater refuses with the same text).
+pub use k2_client::airgap::{ENV_VAR, TEACHING};
+use k2_client::airgap::parse_env;
 
 /// Runtime mirror of the persisted `airgap` setting. Env still wins.
 static SETTING_ENABLED: AtomicBool = AtomicBool::new(false);
@@ -63,15 +62,6 @@ pub fn refuse() -> Result<(), String> {
 /// JSON `{error}` body for a 403 refuse.
 pub fn error_json() -> String {
     serde_json::json!({ "error": TEACHING }).to_string()
-}
-
-/// Parse `K2_AIRGAP`. Garbage (including empty) → on.
-fn parse_env(raw: &str) -> bool {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "1" | "true" | "on" | "yes" => true,
-        "0" | "false" | "off" | "no" => false,
-        _ => true,
-    }
 }
 
 #[cfg(test)]

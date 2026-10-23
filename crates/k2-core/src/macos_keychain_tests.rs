@@ -17,9 +17,12 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::io::Write as _;
+use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use super::*;
+use k2_client::macos_keychain::*;
+use security_framework_sys::base::{SecKeychainItemRef, SecKeychainRef};
 
 const MARKER: &str = "K2TEST_KEYCHAIN_SECRET";
 const ACCT: &str = "k2-test-user";
@@ -384,7 +387,7 @@ fn no_source_file_writes_keychain_item_data_in_process() {
     // tests may call these, plus the vault's own key (KV5, above).
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
     let root = root.canonicalize().unwrap_or(root);
-    let hits = in_process_write_hits(&root, &["crates/k2-core/src", "crates/k2-daemon/src"]);
+    let hits = in_process_write_hits(&root, &["crates/k2-core/src", "crates/k2-client/src", "crates/k2-daemon/src"]);
     assert!(hits.is_empty(), "in-process keychain data writes: {hits:#?}");
     // The exemption is live: the vault key write is still where it was.
     let vault = std::fs::read_to_string(root.join(VAULT_KEY_WRITE.0)).expect("the vault keychain file");

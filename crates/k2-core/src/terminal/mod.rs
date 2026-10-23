@@ -26,12 +26,14 @@ pub mod sandbox;
 // untouched.
 pub mod ptyd;
 // Portable PATH split/join/prepend/merge (host separator: `:` / `;`).
-pub mod path_env;
+// Lives in k2-client (the thin client enriches its PATH too).
+pub use k2_client::path_env;
 // PATH enrichment for daemon-spawned children (issue #15). Computes
 // an augmented PATH (login-shell PATH ++ known install dirs ++
 // inherited launchd PATH) so agent CLIs in ~/.local/bin, homebrew,
-// nvm shims, etc. resolve by bare name instead of ENOENT.
-pub mod login_path;
+// nvm shims, etc. resolve by bare name instead of ENOENT. Lives in
+// k2-client (shared with the thin client's login-shell PATH probe).
+pub use k2_client::login_path;
 // Install one of claude / codex / grok / gemini when a launcher asks
 // and the basename is missing from the spawn PATH. The HTTP handler
 // passes the fixed command table; tests pass a local script.
@@ -120,19 +122,9 @@ pub fn shared() -> Arc<Mutex<TerminalManager>> {
 
 // ── Shared utilities ───────────────────────────────────────────────────────
 
-/// Ignore SIGPIPE at process startup so writing to a dead PTY returns EPIPE
-/// instead of killing the entire Tauri process.
-///
-/// This is intentionally global: child processes spawned via Command::new()
-/// inherit their own signal mask, so git/external tools are unaffected.
-/// DB writes target local files (no pipe), and reqwest uses MSG_NOSIGNAL.
-/// Zed uses the same approach.
+/// Ignore SIGPIPE at process startup (body in `k2_client::process`).
 #[cfg(unix)]
-pub fn ignore_sigpipe() {
-    unsafe {
-        libc::signal(libc::SIGPIPE, libc::SIG_IGN);
-    }
-}
+pub use k2_client::process::ignore_sigpipe;
 
 /// Expand tilde in a path and ensure the directory exists.
 pub fn resolve_cwd(cwd: &str) -> String {

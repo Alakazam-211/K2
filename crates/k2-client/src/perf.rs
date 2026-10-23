@@ -203,7 +203,7 @@ macro_rules! perf_timer {
             let __start = std::time::Instant::now();
             let __result = $body;
             let __elapsed = __start.elapsed();
-            log_debug!("[perf] {} — {}µs", $name, __elapsed.as_micros());
+            $crate::log_debug!("[perf] {} — {}µs", $name, __elapsed.as_micros());
             __result
         } else {
             $body

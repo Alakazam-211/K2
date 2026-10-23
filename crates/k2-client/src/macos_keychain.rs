@@ -76,7 +76,8 @@ use security_framework_sys::keychain::{
     SecKeychainSetUserInteractionAllowed,
 };
 
-const SECURITY: &str = "/usr/bin/security";
+#[doc(hidden)] // pub for k2-core's keychain tests (macos_keychain_tests.rs)
+pub const SECURITY: &str = "/usr/bin/security";
 
 /// `security -i` splits input lines longer than its ~4096-byte buffer.
 /// Claude Code uses 4,032 as its own cut-off; stay under it.
@@ -162,7 +163,8 @@ pub fn status_for_exit(exit: i32) -> Option<i32> {
     KNOWN.iter().find(|k| k.1 == exit).map(|k| k.0)
 }
 
-fn known(status: i32) -> Option<(&'static str, bool)> {
+#[doc(hidden)] // pub for k2-core's keychain tests
+pub fn known(status: i32) -> Option<(&'static str, bool)> {
     KNOWN.iter().find(|k| k.0 == status).map(|k| (k.2, k.3))
 }
 
@@ -175,10 +177,12 @@ impl KeychainError {
     pub fn is_not_found(&self) -> bool {
         matches!(self, KeychainError::Status { status: Some(-25300), .. })
     }
-    fn status(op: &'static str, status: i32) -> KeychainError {
+    #[doc(hidden)]
+    pub fn status(op: &'static str, status: i32) -> KeychainError {
         KeychainError::Status { op, status: Some(status), exit: None, detail: String::new() }
     }
-    fn cli(op: &'static str, exit: Option<i32>, stderr: &[u8], secret: Option<&[u8]>) -> KeychainError {
+    #[doc(hidden)]
+    pub fn cli(op: &'static str, exit: Option<i32>, stderr: &[u8], secret: Option<&[u8]>) -> KeychainError {
         KeychainError::Status {
             op,
             status: exit.and_then(status_for_exit),
@@ -330,7 +334,8 @@ fn check_keychain(kc: Option<&Path>) -> Result<(), KeychainError> {
 
 /// Serializes K2's Security.framework calls and turns keychain user
 /// interaction off for their duration (restoring the previous setting).
-struct NoUi {
+#[doc(hidden)] // pub for k2-core's keychain tests
+pub struct NoUi {
     prev: u8,
     _g: std::sync::MutexGuard<'static, ()>,
 }
@@ -338,7 +343,7 @@ struct NoUi {
 static FW_LOCK: Mutex<()> = Mutex::new(());
 
 impl NoUi {
-    fn enter() -> NoUi {
+    pub fn enter() -> NoUi {
         let g = FW_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let mut prev: u8 = 1;
         unsafe {
@@ -360,7 +365,8 @@ impl Drop for NoUi {
 }
 
 /// An owned CF reference released on drop.
-struct Owned(CFTypeRef);
+#[doc(hidden)] // pub for k2-core's keychain tests
+pub struct Owned(pub CFTypeRef);
 impl Drop for Owned {
     fn drop(&mut self) {
         if !self.0.is_null() {
@@ -369,7 +375,8 @@ impl Drop for Owned {
     }
 }
 
-fn open_keychain(path: &Path) -> Result<Owned, KeychainError> {
+#[doc(hidden)] // pub for k2-core's keychain tests
+pub fn open_keychain(path: &Path) -> Result<Owned, KeychainError> {
     use std::os::unix::ffi::OsStrExt;
     let c = std::ffi::CString::new(path.as_os_str().as_bytes()).map_err(|_| KeychainError::BadField("path"))?;
     let mut kc: SecKeychainRef = ptr::null_mut();
@@ -382,7 +389,8 @@ fn open_keychain(path: &Path) -> Result<Owned, KeychainError> {
 
 /// Find an item's reference WITHOUT reading its data (reading the data
 /// would need the item's decrypt ACL, i.e. a prompt for `k2-daemon`).
-fn find_item(kc: Option<&Owned>, service: &str, account: &str) -> Result<Option<Owned>, KeychainError> {
+#[doc(hidden)] // pub for k2-core's keychain tests
+pub fn find_item(kc: Option<&Owned>, service: &str, account: &str) -> Result<Option<Owned>, KeychainError> {
     let arr;
     let search: CFTypeRef = match kc {
         Some(k) => {
@@ -427,7 +435,8 @@ fn keychain_unlocked(kref: SecKeychainRef) -> Result<(), KeychainError> {
 /// Refuse before `security` would raise an unlock dialog: a locked
 /// keychain fails here with errSecInteractionNotAllowed. `kc = None` =
 /// the default keychain (where `security add-generic-password` creates).
-fn ensure_unlocked(kc: Option<&Owned>) -> Result<(), KeychainError> {
+#[doc(hidden)] // pub for k2-core's keychain tests
+pub fn ensure_unlocked(kc: Option<&Owned>) -> Result<(), KeychainError> {
     match kc {
         Some(k) => keychain_unlocked(k.0 as SecKeychainRef),
         None => {
@@ -464,7 +473,8 @@ fn decode_hex(s: &str) -> Option<Vec<u8>> {
 /// Parse a `partition_id` ACL entry's description. securityd stores a
 /// hex-encoded property list `{Partitions = ("apple-tool:", …)}`; a plain
 /// `a, b` list (what `security dump-keychain` prints) is accepted too.
-pub(crate) fn parse_partition_description(desc: &str) -> Option<Vec<String>> {
+#[doc(hidden)] // pub for k2-core's keychain tests
+pub fn parse_partition_description(desc: &str) -> Option<Vec<String>> {
     let d = desc.trim();
     if !d.is_empty() && d.len() % 2 == 0 && d.bytes().all(|b| b.is_ascii_hexdigit()) {
         let bytes = decode_hex(d)?;
@@ -616,7 +626,8 @@ pub fn exists(service: &str, account: &str, keychain: Option<&Path>) -> Result<b
 
 // ── `security` CLI ──────────────────────────────────────────────────
 
-fn hex(bytes: &[u8]) -> String {
+#[doc(hidden)] // pub for k2-core's keychain tests
+pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
@@ -653,7 +664,8 @@ fn quote_text(secret: &[u8]) -> Option<String> {
 /// `-U` updates an existing item in place (ACL kept; the data change
 /// gives it `security`'s `apple-tool:` partition, as when Claude writes
 /// it). `pub(crate)` so tests can assert on argv and stdin.
-pub(crate) fn add_command(
+#[doc(hidden)] // pub for k2-core's keychain tests
+pub fn add_command(
     service: &str,
     account: &str,
     secret: &[u8],
@@ -849,7 +861,8 @@ pub fn read_k2_owned(service: &str, account: &str, opts: &WriteOptions) -> Resul
 }
 
 /// Parse `security find-generic-password -g`'s `password:` line.
-pub(crate) fn parse_g_password(stderr: &[u8]) -> Option<Vec<u8>> {
+#[doc(hidden)] // pub for k2-core's keychain tests
+pub fn parse_g_password(stderr: &[u8]) -> Option<Vec<u8>> {
     // The first line that starts with "password: " (a quoted, printable
     // password never contains a newline). Work on bytes: the quoted form
     // carries the raw printable bytes.
@@ -868,7 +881,8 @@ pub(crate) fn parse_g_password(stderr: &[u8]) -> Option<Vec<u8>> {
 }
 
 /// The read command (argv carries only names, never data).
-pub(crate) fn read_command(service: &str, account: &str, keychain: Option<&Path>) -> Command {
+#[doc(hidden)] // pub for k2-core's keychain tests
+pub fn read_command(service: &str, account: &str, keychain: Option<&Path>) -> Command {
     let mut cmd = Command::new(SECURITY);
     cmd.args(["find-generic-password", "-a", account, "-s", service, "-g"]);
     if let Some(kc) = keychain {
@@ -977,6 +991,5 @@ pub fn write(service: &str, account: &str, secret: &[u8], opts: &WriteOptions) -
     })
 }
 
-#[cfg(test)]
-#[path = "macos_keychain_tests.rs"]
-mod tests;
+// Tests: crates/k2-core/src/macos_keychain_tests.rs. They need k2-core's
+// companion / llm_accounts item options and walk k2-core's sources.

@@ -4100,6 +4100,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "k2-client"
+version = "0.46.2"
+dependencies = [
+ "chrono",
+ "core-foundation 0.10.1",
+ "dirs 5.0.1",
+ "libc",
+ "parking_lot",
+ "security-framework 3.7.0",
+ "security-framework-sys",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "k2-core"
 version = "0.46.2"
 dependencies = [
@@ -4125,6 +4143,7 @@ dependencies = [
  "idna",
  "ignore",
  "image",
+ "k2-client",
  "k2-core",
  "k2-node-proto",
  "k2-ptyd",

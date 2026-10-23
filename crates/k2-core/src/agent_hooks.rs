@@ -188,7 +188,7 @@ impl HookEvent {
             Self::CliAiCommit => "cli:ai-commit",
             Self::SessionSurfaced => "session:surfaced",
             Self::SessionUnsurfaced => "session:unsurfaced",
-            Self::ChatRefreshed => "chat:refreshed",
+            Self::ChatRefreshed => k2_client::events::CHAT_REFRESHED,
             Self::SyncChatHistory => "sync:chat-history",
             Self::FeedbackCreated => "feedback:created",
             Self::FeedbackAnswered => "feedback:answered",

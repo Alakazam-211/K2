@@ -24,12 +24,12 @@
 //! Capture is memoized in a `OnceLock` because spawning a login shell
 //! (or PowerShell) is relatively expensive and the answer is
 //! process-stable. Path splitting/joining is delegated to
-//! [`super::path_env`] so Unix `:` and Windows `;` stay correct.
+//! [`crate::path_env`] so Unix `:` and Windows `;` stay correct.
 
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use super::path_env;
+use crate::path_env;
 
 /// De-duplicated, order-preserving union of three PATH sources, in
 /// priority order: login-shell entries, then known fallback dirs,

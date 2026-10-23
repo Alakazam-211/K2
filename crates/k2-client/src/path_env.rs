@@ -146,7 +146,7 @@ pub fn merge(sources: &[&str]) -> String {
 
 /// De-duplicated union of login-shell PATH, known install dirs, and the
 /// process's inherited PATH — first occurrence wins, empty segments
-/// dropped. Shared by [`super::login_path::merge_path`].
+/// dropped. Shared by [`crate::login_path::merge_path`].
 pub fn merge_login_known_inherited(
     login_path: Option<&str>,
     known_dirs: &[PathBuf],

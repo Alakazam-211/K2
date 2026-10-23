@@ -1584,6 +1584,49 @@ mod tests {
     // reliably; centralizing on one lock closes it.
     use crate::themes::HOME_LOCK as TEST_LOCK;
 
+    /// The thin client reads three fields through
+    /// `k2_client::app_settings_view` instead of linking this module. Pin
+    /// that view to `load()` for every file shape the view claims to match
+    /// (missing, empty, garbage, set values, partial wake block, a wrong
+    /// type on a viewed field).
+    #[test]
+    fn client_settings_view_matches_load() {
+        let _g = TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+        let file = settings_file();
+        std::fs::create_dir_all(file.parent().expect("settings dir")).expect("mkdir ~/.k2");
+        let cases: [Option<&str>; 7] = [
+            None,
+            Some("{}"),
+            Some("not json"),
+            Some(r#"{"keepDaemonOnQuit": false, "airgap": true, "wakeScheduler": {"mode": "heartbeat", "intervalMinutes": 15, "wakeSystem": true}}"#),
+            Some(r#"{"wakeScheduler": {"intervalMinutes": 7}}"#),
+            Some(r#"{"keepDaemonOnQuit": "no", "airgap": true}"#),
+            Some(r#"{"keepDaemonOnQuit": null}"#),
+        ];
+        for raw in cases {
+            match raw {
+                Some(r) => std::fs::write(&file, r).expect("write settings.json"),
+                None => {
+                    if file.exists() {
+                        std::fs::remove_file(&file).expect("remove settings.json");
+                    }
+                }
+            }
+            assert_eq!(k2_client::app_settings_view::settings_file(), file, "same file");
+            let full = load();
+            let view = k2_client::app_settings_view::load();
+            assert_eq!(view.keep_daemon_on_quit, full.keep_daemon_on_quit, "keepDaemonOnQuit for {raw:?}");
+            assert_eq!(view.airgap, full.airgap, "airgap for {raw:?}");
+            assert_eq!(view.wake_scheduler.mode, full.wake_scheduler.mode, "wake mode for {raw:?}");
+            assert_eq!(
+                view.wake_scheduler.interval_minutes, full.wake_scheduler.interval_minutes,
+                "wake interval for {raw:?}"
+            );
+            assert_eq!(view.wake_scheduler.wake_system, full.wake_scheduler.wake_system, "wakeSystem for {raw:?}");
+        }
+    }
+
     #[test]
     fn load_returns_defaults_when_file_missing() {
         let _g = TEST_LOCK.lock();

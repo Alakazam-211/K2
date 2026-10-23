@@ -298,6 +298,7 @@ import { useHomesStore } from '@/stores/homes'
 import { useToastStore } from '@/stores/toast'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import ConfirmDialog from '@/components/ConfirmDialog/ConfirmDialog'
+import { useGardensLandingStore } from '../gardens-landing'
 
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -470,44 +471,27 @@ afterEach(() => {
 })
 
 describe('Settings → Gardens: where it shows', () => {
-  it('0.45.7: a Gardens group (Gardens, Local Data, External Data), right after Access', () => {
+  it('0.46.3 (Rosson 2026-10-23): Gardens is one page beneath Tickets, no Gardens group, no data leaves', () => {
     const nav = settingsNav({ zenGardens: true })
-    const groups = nav.flatMap((b) => (b.kind === 'group' ? [b.title] : []))
-    // Language Models, Access, then Gardens (Rosson 2026-10-15), then Network.
-    expect(groups.slice(0, 4)).toEqual(['Language Models', 'Access', 'Gardens', 'Network'])
-    const at = nav.findIndex((b) => b.kind === 'group' && b.title === 'Gardens')
-    expect(nav[at - 1]).toMatchObject({ kind: 'group', title: 'Access' })
-    expect(nav[at + 1]).toMatchObject({ kind: 'group', title: 'Network' })
-    expect(nav[at]).toEqual({
-      kind: 'group',
-      title: 'Gardens',
-      items: [
-        { id: 'zen-gardens', label: 'Gardens' },
-        { id: 'zen-widget-data', label: 'Local Data' },
-        { id: 'data-sources', label: 'External Data' },
-      ],
-    })
-    // Gardens is no longer a top-level page; Tickets → Context Catalog close up.
+    expect(nav.some((b) => b.kind === 'group' && b.title === 'Gardens')).toBe(false)
     const items = nav.flatMap((b) => (b.kind === 'item' ? [b.id] : []))
-    expect(items).not.toContain('zen-gardens')
-    expect(items[items.indexOf('tickets') + 1]).toBe('context-catalog')
-    // Where Gardens don't show, neither does the group or either page.
+    const at = items.indexOf('zen-gardens')
+    expect(items[at - 1]).toBe('tickets')
+    expect(items[at + 1]).toBe('context-catalog')
+    const ids = nav.flatMap((b) => (b.kind === 'item' ? [b.id] : b.items.map((i) => i.id)))
+    expect(ids).not.toContain('zen-widget-data')
+    expect(ids).not.toContain('data-sources')
+    // Where Gardens don't show, neither does the page; External Data stays
+    // reachable as Network's last leaf.
     const off = settingsNav({ zenGardens: false })
-    expect(off.some((b) => b.kind === 'group' && b.title === 'Gardens')).toBe(false)
     const offIds = off.flatMap((b) => (b.kind === 'item' ? [b.id] : b.items.map((i) => i.id)))
     expect(offIds).not.toContain('zen-gardens')
     expect(offIds).not.toContain('zen-widget-data')
-    // External Data is in Gardens, once; without Gardens it stays reachable,
-    // as Network's last leaf.
-    const where = (n: typeof nav) =>
-      n.flatMap((b) => (b.kind === 'group' && b.items.some((i) => i.id === 'data-sources') ? [b.title] : []))
-    expect(where(nav)).toEqual(['Gardens'])
-    expect(where(off)).toEqual(['Network'])
     const network = off.find((b) => b.kind === 'group' && b.title === 'Network')
     expect(network?.kind === 'group' && network.items.at(-1)).toEqual({ id: 'data-sources', label: 'External Data' })
   })
 
-  it('desktop Mac: the rendered sidebar shows the Gardens group (header, Gardens, Local Data, External Data) after Access, and the Zen toggle shows too', async () => {
+  it('desktop Mac: the rendered sidebar shows Gardens between Tickets and Context Catalog, and the Zen toggle shows too', async () => {
     render(
       <>
         <Settings />
@@ -517,20 +501,14 @@ describe('Settings → Gardens: where it shows', () => {
     await settle()
     const ids = navIds()
     const at = ids.indexOf('zen-gardens')
-    // Access ends with Permission Cards (Beta, 0.46.3), then Gardens.
-    expect(ids[at - 1]).toBe('permission-cards')
-    expect(ids[at + 1]).toBe('zen-widget-data')
-    expect(ids[at + 2]).toBe('data-sources')
-    expect(ids[at + 3]).toBe('k2-connect')
-    expect(ids.filter((id) => id === 'data-sources').length).toBe(1)
-    expect(ids[ids.indexOf('tickets') + 1]).toBe('context-catalog')
-    // The group header sits right above its first leaf, which is indented.
+    expect(ids[at - 1]).toBe('tickets')
+    expect(ids[at + 1]).toBe('context-catalog')
+    expect(ids).not.toContain('zen-widget-data')
+    expect(ids).not.toContain('data-sources')
     const leaf = document.querySelector('[data-settings-nav="zen-gardens"]') as HTMLElement
-    expect(leaf.previousElementSibling?.textContent).toBe('Gardens')
-    expect(leaf.className).toContain('pl-7')
-    expect((document.querySelector('[data-settings-nav="zen-widget-data"]') as HTMLElement).className).toContain('pl-7')
+    expect(leaf.className).not.toContain('pl-7')
     expect(screen.getByRole('button', { name: 'Gardens' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Local Data' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Local Data' })).toBeNull()
     // The same window shows the Zen toggle.
     expect(document.querySelectorAll('[data-zen-enter]').length).toBeGreaterThan(0)
     // The probe went to this computer's daemon only.
@@ -1374,47 +1352,36 @@ describe('Settings → Gardens: the Garden catalog, and no widget permissions (p
   })
 })
 
-describe('Settings → Gardens → Local Data: its own page (0.45.7)', () => {
-  it('clicking Local Data opens it: the same Local Data block, in the plain scrolling content area', async () => {
+describe('Settings → Gardens → Local Data (0.45.7 page; 0.46.3: inside each Garden)', () => {
+  it('0.46.3: there is no Local Data nav row to click any more', async () => {
     render(<Settings />)
     await settle()
-    fireEvent.click(screen.getByRole('button', { name: 'Local Data' }))
-    await settle()
-    expect(useSettingsStore.getState().activeSection).toBe('zen-widget-data')
-    await waitFor(() => expect(document.querySelector('[data-garden-data-stub]')).not.toBeNull())
-    // Not on the Gardens page any more.
-    expect(document.querySelector('[data-zen-gardens-section]')).toBeNull()
-    const page = document.querySelector('[data-zen-widget-data-section]') as HTMLElement
-    const area = page.closest('.flex-1.min-h-0.relative') as HTMLElement
-    expect(area.className.split(/\s+/)).toEqual(expect.arrayContaining(['overflow-y-auto', 'p-6']))
-    // Its nav row is the active one.
-    expect((document.querySelector('[data-settings-nav="zen-widget-data"]') as HTMLElement).className).toContain(
-      'bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)]',
-    )
+    expect(screen.queryByRole('button', { name: 'Local Data' })).toBeNull()
+    expect(document.querySelector('[data-settings-nav="zen-widget-data"]')).toBeNull()
   })
 
-  it('the search entry moved with it: zen-gardens.data opens Local Data and lands on the block', async () => {
+  it('0.46.3: the Local Data link and search entry land on Settings → Gardens (Not in a Garden), not a page of their own', async () => {
     expect(ZEN_WIDGET_DATA_MANIFEST).toHaveLength(1)
     const entry = ZEN_WIDGET_DATA_MANIFEST[0]
     expect(entry.id).toBe('zen-gardens.data')
     expect(entry.section).toBe('zen-widget-data')
+    useGardensLandingStore.setState({ landing: null })
     useSettingsStore.setState({ activeSection: entry.section })
     render(<Settings />)
-    await waitFor(() => expect(document.querySelector(`[data-settings-id="${entry.id}"]`)).not.toBeNull())
+    await waitFor(() => expect(useSettingsStore.getState().activeSection).toBe('zen-gardens'))
+    expect(useGardensLandingStore.getState().landing).toEqual({ garden: null, part: 'data' })
+    expect(document.querySelector('[data-zen-widget-data-section]')).toBeNull()
   })
 
-  it('not set up: no Local Data block, a pointer to Gardens (where setup is), and nothing posted', async () => {
+  it('not set up: a Local Data link lands on Gardens, where setup is, and nothing is posted', async () => {
     h.setUp = false
     h.gardens = []
     useSettingsStore.setState({ activeSection: 'zen-widget-data' })
     render(<Settings />)
-    await waitFor(() => expect(document.querySelector('[data-zen-widget-data-setup]')).not.toBeNull())
+    await waitFor(() => expect(document.querySelector('[data-zen-gardens-setup]')).not.toBeNull())
+    expect(useSettingsStore.getState().activeSection).toBe('zen-gardens')
     expect(document.querySelector('[data-garden-data-stub]')).toBeNull()
     expect(zenPosts()).toEqual([])
-    fireEvent.click(screen.getByRole('button', { name: 'Open Gardens' }))
-    await settle()
-    expect(useSettingsStore.getState().activeSection).toBe('zen-gardens')
-    expect(document.querySelector('[data-zen-gardens-setup]')).not.toBeNull()
   })
 
   it('links to External Data, the next page in the Gardens group', async () => {

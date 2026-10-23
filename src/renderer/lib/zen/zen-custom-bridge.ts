@@ -35,7 +35,9 @@
 //      live servers (`zen-custom-scope`), `gardens.switch` once every 2 s
 //      and never in the first 2 s after mount; `canvas.setHitRegions` at
 //      most 32 finite rects (`zen-canvas`), `window.startDrag` only during
-//      a press in that frame.
+//      a press in that frame; `layout.*` (Garden columns, 0.46.3 r10) on
+//      the caller's own page only, 4 a second per verb, a fold or unfold
+//      only within 5 s of a press in that frame, and never saved.
 // 0.46.3 Thread parity (Rosson 2026-10-20): `thread.read` takes `afterSeq`
 // (a delta: items, hasMore, changed, removed), and `thread.markRead`,
 // `thread.attachment`, `thread.open`, `thread.links` and `thread.pickFiles`
@@ -75,6 +77,7 @@ import { canonicalSourceAddress, ZenSourceError, type ZenSourcesReader } from '.
 import { ZEN_STORE_VERBS, ZenStoreError, type ZenCustomStore } from './zen-custom-store'
 import { ZEN_GUEST_VERBS, ZenGuestsError, type ZenCustomGuests } from './zen-custom-guests'
 import { ZenWidgetError } from './zen-widget-routes'
+import type { ZenColumnFoldRefusal, ZenLayoutColumn } from './zen-columns'
 
 /** UW29 budgets. */
 export const ZEN_WIDGET_BUDGET = {
@@ -174,8 +177,26 @@ export interface ZenCustomLayerDeps {
     /** Throws `ZenCanvasError` when the press checks fail. */
     startDrag(): void
   }
+  /** prd-garden-column-collapse A1 (CA10): the columns of the page this
+   *  frame is drawn on, and no other (`ZenColumnsContext`). Without it the
+   *  `layout.*` verbs answer `verb_unavailable`. */
+  layout?: ZenCustomLayout
   now(): number
 }
+
+/** What the layer needs for `k2.layout.*` (frame-only verbs, no cap). */
+export interface ZenCustomLayout {
+  columns(): ZenLayoutColumn[]
+  /** A widget's fold: never saved. Null when done or nothing changed. */
+  setByWidget(index: number, collapsed: boolean): ZenColumnFoldRefusal | null
+  subscribe(fn: (columns: ZenLayoutColumn[]) => void): () => void
+  /** Did the person press in this frame within the last 5 s? (A press
+   *  only; the frame having the focus is not enough.) */
+  pressed(): boolean
+}
+
+/** CA10: each `layout.*` verb at most this many times a second. */
+export const ZEN_LAYOUT_PER_SECOND = 4
 
 /** What the custom layer needs for the `sources.*` verbs. */
 export interface ZenCustomSources {
@@ -406,6 +427,45 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
     return { widget: w.widget, garden: deps.gardenId(), placement: w.id, hash: deps.frameHash?.() || w.hash }
   }
 
+  // ── k2.layout.* (prd-garden-column-collapse A1, CA10) ───────────────────
+  // Frame-only, no cap: the caller's own page only, each verb at most 4 a
+  // second (a refusal counts toward UW29), and a fold or unfold only within
+  // 5 s of the person's press in this frame. A widget's fold is never saved.
+
+  const layoutCalls = new Map<string, number[]>()
+
+  const needLayout = (verb: string): ZenCustomLayout => {
+    if (!deps.layout) refuse('verb_unavailable', `${verb} isn’t available here.`)
+    const now = deps.now()
+    const recent = (layoutCalls.get(verb) ?? []).filter((t) => now - t < 1_000)
+    if (recent.length >= ZEN_LAYOUT_PER_SECOND) {
+      layoutCalls.set(verb, recent)
+      refuse('rate_limited', `${verb}: at most ${ZEN_LAYOUT_PER_SECOND} a second.`)
+    }
+    recent.push(now)
+    layoutCalls.set(verb, recent)
+    return deps.layout!
+  }
+
+  const needColumn = (verb: string, layout: ZenCustomLayout, v: unknown): ZenLayoutColumn => {
+    const columns = layout.columns()
+    if (typeof v !== 'number' || !Number.isInteger(v) || v < 0 || v >= columns.length) {
+      refuse('bad_args', `${verb}: column is a column number, 0 to ${Math.max(0, columns.length - 1)}`)
+    }
+    return columns[v as number]
+  }
+
+  /** set / toggle answer the column as it is now (the catalog's LayoutColumn). */
+  const layoutFold = (verb: string, layout: ZenCustomLayout, col: ZenLayoutColumn, collapsed: boolean): ZenLayoutColumn => {
+    if (!layout.pressed()) refuse('failed', `${verb} needs a click: it works only just after the person presses in the widget.`)
+    const refusal = layout.setByWidget(col.index, collapsed)
+    if (refusal === 'bad_index') refuse('bad_args', `${verb}: no column ${col.index}`)
+    if (refusal === 'fixed') refuse('failed', `${col.label} can’t fold: it isn’t collapsible.`)
+    if (refusal === 'last_open') refuse('failed', `${col.label} is the only open column: it can’t fold.`)
+    // The page redraws on its next render; the answer is where it goes.
+    return { ...col, collapsed }
+  }
+
   const inner = (verb: string, ...args: unknown[]): unknown => {
     try {
       return deps.inner.call(verb as never, ...args)
@@ -442,6 +502,22 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
       if (!deps.canvas) refuse('verb_unavailable', 'window.startDrag isn’t available here.')
       deps.canvas!.startDrag()
       return null
+    },
+    // A1: the page's columns: [{index, label, collapsible, collapsed}].
+    'layout.get': () => ({ columns: needLayout('layout.get').columns() }),
+    'layout.set': (args) => {
+      const layout = needLayout('layout.set')
+      const o = args[0]
+      if (!isObj(o) || Object.keys(o).some((k) => k !== 'column' && k !== 'collapsed') || typeof o.collapsed !== 'boolean') {
+        refuse('bad_args', 'layout.set takes {column, collapsed}')
+      }
+      const r = o as { column: unknown; collapsed: boolean }
+      return layoutFold('layout.set', layout, needColumn('layout.set', layout, r.column), r.collapsed)
+    },
+    'layout.toggle': (args) => {
+      const layout = needLayout('layout.toggle')
+      const col = needColumn('layout.toggle', layout, args[0])
+      return layoutFold('layout.toggle', layout, col, !col.collapsed)
     },
     'agents.list': () => projectZenRows(inner('agents.list') as ZenAgentRow[], caps()),
     'conversation.open': async (args) => {
@@ -629,11 +705,8 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
     },
     // ── Garden columns and the agent list (catalog v20, 0.46.3 r10) ────
     // Day-0 stubs (prd-garden-column-collapse-and-agent-list-v1 §7): each
-    // lane fills its own body. layout.* (frame-only, lane A),
+    // lane fills its own body (layout.* is lane A's, above):
     // agents.show (lane B), conversation.setContext (lane C).
-    'layout.get': () => refuse('verb_unavailable', 'layout.get isn’t available here.'),
-    'layout.set': () => refuse('verb_unavailable', 'layout.set isn’t available here.'),
-    'layout.toggle': () => refuse('verb_unavailable', 'layout.toggle isn’t available here.'),
     'agents.show': () => refuse('verb_unavailable', 'agents.show isn’t available here.'),
     'conversation.setContext': () => refuse('verb_unavailable', 'conversation.setContext isn’t available here.'),
     // ── Garden v3 data sources (contract-sources-v1 §6) ────────────────
@@ -711,8 +784,14 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
     (args: unknown[], push: (v: unknown) => void, fail: (error: CatalogWireError) => void) => () => void
   > = {
     'theme.changed': (_args, push) => deps.onThemeChange(() => push(deps.theme())),
-    // Day-0 stub (catalog v20): lane A fills it with deps.layout.
-    'layout.subscribe': () => refuse('verb_unavailable', 'layout.subscribe isn’t available here.'),
+    // A1: the columns now, then again whenever one folds or opens (any
+    // cause). Counts toward the 16 live subscriptions.
+    'layout.subscribe': (_args, push) => {
+      const layout = needLayout('layout.subscribe')
+      const off = layout.subscribe((columns) => push({ columns }))
+      push({ columns: layout.columns() })
+      return off
+    },
     'agents.subscribe': (_args, push) => {
       let last = ''
       return inner('agents.subscribe', (rows: ZenAgentRow[]) => {

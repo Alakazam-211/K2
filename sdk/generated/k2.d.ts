@@ -42,6 +42,17 @@ export interface HitRegion {
   readonly y: number
 }
 
+export interface LayoutColumn {
+  readonly collapsed: boolean
+  readonly collapsible: boolean
+  readonly index: number
+  readonly label: string
+}
+
+export interface LayoutInfo {
+  readonly columns: LayoutColumn[]
+}
+
 export interface Viewer {
   readonly kind: 'owner'
   /** Settings' name for you, else You. */
@@ -230,11 +241,21 @@ export interface ChoiceCard {
   readonly status: string
 }
 
+export interface ThreadContext {
+  /** The widget's id on its Garden page. */
+  readonly placement: string
+  readonly text: string
+  /** The Garden widget's folder name (chosen by its author). */
+  readonly widget: string
+}
+
 export interface ThreadDoc {
   /** Files that ride the message (thread-attachments-v1). Open one with thread.attachment / thread.open by its index. */
   readonly attachments?: ThreadFile[] | null
   readonly body?: string | null
   readonly choice?: ChoiceCard | null
+  /** The Board context that rode the person's post: a Garden widget's line, never their words. Absent on every other item. */
+  readonly context?: ThreadContext
   /** Seconds since the epoch (not milliseconds: multiply by 1000 for new Date). */
   readonly created_at?: number
   readonly from?: string
@@ -1074,6 +1095,10 @@ export interface K2Verbs {
   'theme.changed': { args: []; value: ThemeInfo }
   'canvas.setHitRegions': { args: [rects: HitRegion[]]; value: null }
   'window.startDrag': { args: []; value: null }
+  'layout.get': { args: []; value: LayoutInfo }
+  'layout.set': { args: [change: { collapsed: boolean; column: number }]; value: LayoutColumn }
+  'layout.toggle': { args: [column: number]; value: LayoutColumn }
+  'layout.subscribe': { args: []; value: LayoutInfo }
   'save.get': { args: [key: string]; value: unknown }
   'save.set': { args: [key: string, value: unknown]; value: null }
   'save.remove': { args: [key: string]; value: null }
@@ -1086,6 +1111,7 @@ export interface K2Verbs {
   'agents.subscribe': { args: []; value: AgentRow[] }
   'conversation.open': { args: [address: string]; value: null }
   'conversation.close': { args: []; value: null }
+  'agents.show': { args: [addresses: string[] | null]; value: null }
   'presence.get': { args: [address: string]; value: Person[] }
   'presence.subscribe': { args: [address: string]; value: Person[] }
   'thread.read': { args: [address: string, opts?: { afterSeq?: number; beforeSeq?: number; limit?: number }]; value: ThreadPage }
@@ -1102,6 +1128,7 @@ export interface K2Verbs {
   'thread.post': { args: [address: string, text: string, opts?: { attachments?: ThreadAttach[] }]; value: Posted }
   'thread.answer': { args: [address: string, cardId: string, choice: string]; value: null }
   'compose.draft': { args: [address: string, text: string]; value: null }
+  'conversation.setContext': { args: [text: string | null]; value: null }
   'sources.list': { args: []; value: SourceListRow[] }
   'sources.read': { args: [address: string]; value: SourceView }
   'sources.history': { args: [address: string, field: string, opts?: { fromAt?: number; toAt?: number }]; value: SourceHistory }
@@ -1133,8 +1160,8 @@ export interface K2Verbs {
 }
 
 export type K2Verb = keyof K2Verbs
-export type K2CallVerb = 'gardens.list' | 'gardens.current' | 'gardens.switch' | 'theme.get' | 'canvas.setHitRegions' | 'window.startDrag' | 'save.get' | 'save.set' | 'save.remove' | 'save.keys' | 'viewer.get' | 'app.self' | 'app.usage' | 'widget.self' | 'agents.list' | 'conversation.open' | 'conversation.close' | 'presence.get' | 'thread.read' | 'thread.markRead' | 'thread.attachment' | 'thread.open' | 'thread.links' | 'thread.catchup' | 'thread.unread' | 'thread.mute' | 'thread.pickFiles' | 'thread.post' | 'thread.answer' | 'compose.draft' | 'sources.list' | 'sources.read' | 'sources.history' | 'sources.refresh' | 'sources.ask' | 'files.list' | 'files.read' | 'files.readBinary' | 'tickets.list' | 'tickets.show' | 'tickets.create' | 'tickets.comment' | 'tickets.resolve' | 'store.get' | 'store.list' | 'store.changes' | 'store.put' | 'store.delete' | 'store.batch' | 'store.txBegin' | 'store.txAdd' | 'store.txCommit' | 'store.txAbort' | 'guests.rooms' | 'guests.setRooms' | 'activity.snapshot' | 'room.members'
-export type K2SubscribeVerb = 'theme.changed' | 'agents.subscribe' | 'presence.subscribe' | 'thread.subscribe' | 'thread.inbox' | 'sources.subscribe'
+export type K2CallVerb = 'gardens.list' | 'gardens.current' | 'gardens.switch' | 'theme.get' | 'canvas.setHitRegions' | 'window.startDrag' | 'layout.get' | 'layout.set' | 'layout.toggle' | 'save.get' | 'save.set' | 'save.remove' | 'save.keys' | 'viewer.get' | 'app.self' | 'app.usage' | 'widget.self' | 'agents.list' | 'conversation.open' | 'conversation.close' | 'agents.show' | 'presence.get' | 'thread.read' | 'thread.markRead' | 'thread.attachment' | 'thread.open' | 'thread.links' | 'thread.catchup' | 'thread.unread' | 'thread.mute' | 'thread.pickFiles' | 'thread.post' | 'thread.answer' | 'compose.draft' | 'conversation.setContext' | 'sources.list' | 'sources.read' | 'sources.history' | 'sources.refresh' | 'sources.ask' | 'files.list' | 'files.read' | 'files.readBinary' | 'tickets.list' | 'tickets.show' | 'tickets.create' | 'tickets.comment' | 'tickets.resolve' | 'store.get' | 'store.list' | 'store.changes' | 'store.put' | 'store.delete' | 'store.batch' | 'store.txBegin' | 'store.txAdd' | 'store.txCommit' | 'store.txAbort' | 'guests.rooms' | 'guests.setRooms' | 'activity.snapshot' | 'room.members'
+export type K2SubscribeVerb = 'theme.changed' | 'layout.subscribe' | 'agents.subscribe' | 'presence.subscribe' | 'thread.subscribe' | 'thread.inbox' | 'sources.subscribe'
 
 export interface K2 {
   readonly gardens: {
@@ -1160,6 +1187,18 @@ export interface K2 {
   readonly window: {
     /** Start moving the window, from a mousedown in this widget (only while a button is down here). no cap · local · zen-widgets-v1. e.g. `grip.addEventListener('mousedown', () => k2.window.startDrag())` */
     startDrag(): Promise<null>
+  }
+  readonly layout: {
+    /** This page's columns: index, label, and whether each can fold and is folded now. no cap · local · zen-widgets-v1. e.g. `const {columns} = await k2.layout.get()` */
+    get(): Promise<LayoutInfo>
+    /** Fold or unfold a collapsible column on this page, within 5 s of a click in this widget (4 a second; never saved; the last open column can't fold). no cap · local · zen-widgets-v1. e.g. `await k2.layout.set({column: 2, collapsed: false})` */
+    set(change: { collapsed: boolean; column: number }): Promise<LayoutColumn>
+    /** Fold an open collapsible column, or unfold a folded one; the same rules as layout.set. no cap · local · zen-widgets-v1. e.g. `chat.addEventListener('click', () => k2.layout.toggle(2))` */
+    toggle(column: number): Promise<LayoutColumn>
+    /** The same value as layout.get, pushed when a column folds or unfolds. no cap · local · zen-widgets-v1. e.g. `k2.layout.subscribe(({columns}) => drawTabs(columns))` */
+    subscribe(cb: (value: LayoutInfo) => void, onError?: (error: K2Error) => void): () => void
+    /** Handler object: re-subscribes on its own after a retryable refusal (capped backoff). */
+    subscribe(handlers: K2Handlers<LayoutInfo>): () => void
   }
   readonly save: {
     /** One of this widget's private saves, or null. This computer only. no cap · local · garden-data-v1. e.g. `const best = await k2.save.get('high-score')` */
@@ -1198,12 +1237,16 @@ export interface K2 {
     subscribe(cb: (value: AgentRow[]) => void, onError?: (error: K2Error) => void): () => void
     /** Handler object: re-subscribes on its own after a retryable refusal (capped backoff). */
     subscribe(handlers: K2Handlers<AgentRow[]>): () => void
+    /** List mode: an Agents widget with list-from = this widget shows just these agents, in this order (rows agents.list() returns; never more reach). null clears. cap agents:read · local · zen-widgets-v1. e.g. `await k2.agents.show(rows.filter(onBoard).map((r) => r.address))` */
+    show(addresses: string[] | null): Promise<null>
   }
   readonly conversation: {
     /** Show this agent in the built-in Conversation that follows the widget. cap agents:read · local · zen-v1. e.g. `await k2.conversation.open(row.address)` */
     open(address: string): Promise<null>
     /** Clear the widget's pick. cap agents:read · local · zen-v1. e.g. `await k2.conversation.close()` */
     close(): Promise<null>
+    /** A chip the person sees on the following Conversation's message box; it rides on their next send as K2's own quoted context line, never as their words. null clears. cap thread:post · local · thread-context-v1. e.g. `await k2.conversation.setContext('Board: ' + board.name)` */
+    setContext(text: string | null): Promise<null>
   }
   readonly presence: {
     /** Other people looking at one agent right now (never you). cap presence:read · local · zen-v1. e.g. `const people = await k2.presence.get(row.address)` */

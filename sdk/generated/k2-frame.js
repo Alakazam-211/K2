@@ -7,7 +7,7 @@
 (function () {
   'use strict'
   var K2_CONTRACT = Object.freeze({
-    catalogVersion: 19,
+    catalogVersion: 20,
     errors: Object.freeze(['cap_not_granted', 'not_bound', 'rate_limited', 'too_large', 'unknown_verb', 'verb_unavailable', 'verb_local', 'not_exposed', 'sending_off', 'server_not_saved', 'unreachable', 'removed', 'no_history', 'failed', 'conflict', 'space_full', 'value_too_large', 'bad_key', 'not_granted', 'resync', 'author_unknown', 'stale_widget', 'store_full', 'bad_tx', 'tx_expired', 'busy', 'paused', 'bad_args', 'bad_shape', 'pass_required', 'pass_invalid', 'pass_wrong_link', 'not_on_link', 'json_required', 'skin_room', 'usage', 'not_found', 'bad_login', 'locked', 'card_not_pending', 'guest_required', 'no_app_pass', 'no_app_key', 'no_chat_grant', 'chat_unavailable', 'app_pass_required', 'grant_required', 'outside_app_rooms', 'above_role', 'has_role', 'confirm_required', 'declined', 'refresh_invalid', 'refresh_reused', 'person_pass_required', 'wallet_off', 'duplicate_label', 'needs_editor']),
     retryable: Object.freeze(['not_bound', 'rate_limited', 'unreachable', 'busy']),
     verbs: Object.freeze({
@@ -18,6 +18,10 @@
       'theme.changed': Object.freeze({ cap: null, reach: 'local', kind: 'event', feature: 'zen-widgets-v1' }),
       'canvas.setHitRegions': Object.freeze({ cap: null, reach: 'local', kind: 'call', feature: 'zen-widgets-v1' }),
       'window.startDrag': Object.freeze({ cap: null, reach: 'local', kind: 'call', feature: 'zen-widgets-v1' }),
+      'layout.get': Object.freeze({ cap: null, reach: 'local', kind: 'call', feature: 'zen-widgets-v1' }),
+      'layout.set': Object.freeze({ cap: null, reach: 'local', kind: 'call', feature: 'zen-widgets-v1' }),
+      'layout.toggle': Object.freeze({ cap: null, reach: 'local', kind: 'call', feature: 'zen-widgets-v1' }),
+      'layout.subscribe': Object.freeze({ cap: null, reach: 'local', kind: 'subscribe', feature: 'zen-widgets-v1' }),
       'save.get': Object.freeze({ cap: null, reach: 'local', kind: 'call', feature: 'garden-data-v1' }),
       'save.set': Object.freeze({ cap: null, reach: 'local', kind: 'call', feature: 'garden-data-v1' }),
       'save.remove': Object.freeze({ cap: null, reach: 'local', kind: 'call', feature: 'garden-data-v1' }),
@@ -30,6 +34,7 @@
       'agents.subscribe': Object.freeze({ cap: 'agents:read', reach: 'portable', kind: 'subscribe', feature: 'zen-v1' }),
       'conversation.open': Object.freeze({ cap: 'agents:read', reach: 'local', kind: 'call', feature: 'zen-v1' }),
       'conversation.close': Object.freeze({ cap: 'agents:read', reach: 'local', kind: 'call', feature: 'zen-v1' }),
+      'agents.show': Object.freeze({ cap: 'agents:read', reach: 'local', kind: 'call', feature: 'zen-widgets-v1' }),
       'presence.get': Object.freeze({ cap: 'presence:read', reach: 'local', kind: 'call', feature: 'zen-v1' }),
       'presence.subscribe': Object.freeze({ cap: 'presence:read', reach: 'local', kind: 'subscribe', feature: 'zen-v1' }),
       'thread.read': Object.freeze({ cap: 'thread:read', reach: 'portable', kind: 'call', feature: 'zen-v1' }),
@@ -46,6 +51,7 @@
       'thread.post': Object.freeze({ cap: 'thread:post', reach: 'portable', kind: 'call', feature: 'zen-v1' }),
       'thread.answer': Object.freeze({ cap: 'thread:post', reach: 'portable', kind: 'call', feature: 'zen-v1' }),
       'compose.draft': Object.freeze({ cap: 'thread:post', reach: 'local', kind: 'call', feature: 'zen-v1' }),
+      'conversation.setContext': Object.freeze({ cap: 'thread:post', reach: 'local', kind: 'call', feature: 'thread-context-v1' }),
       'sources.list': Object.freeze({ cap: 'sources:read', reach: 'portable', kind: 'call', feature: 'sources-v1' }),
       'sources.read': Object.freeze({ cap: 'sources:read', reach: 'portable', kind: 'call', feature: 'sources-v1' }),
       'sources.history': Object.freeze({ cap: 'sources:read', reach: 'portable', kind: 'call', feature: 'sources-v1' }),

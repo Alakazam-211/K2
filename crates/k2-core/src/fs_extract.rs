@@ -224,7 +224,9 @@ fn symlink_target_is_safe(target: &str) -> bool {
 #[cfg(unix)]
 fn set_unix_mode(path: &Path, mode: u32) {
     use std::os::unix::fs::PermissionsExt;
-    let _ = fs::set_permissions(path, fs::Permissions::from_mode(mode & 0o7777));
+    // Permission bits only: a member's setuid/setgid/sticky bits are never
+    // carried onto disk (an archive must not mint a setuid binary).
+    let _ = fs::set_permissions(path, fs::Permissions::from_mode(mode & 0o777));
 }
 
 /// Extract the zip at `src` into a sibling folder named after the
@@ -765,5 +767,57 @@ mod tests {
         let result = list_zip_entries(zip_path.to_str().unwrap()).expect("list succeeds");
         assert!(result.truncated);
         assert_eq!(result.entries.len(), MAX_LIST_ENTRIES);
+    }
+
+    /// The zip writer masks `unix_permissions` to 0o777, so a setuid member
+    /// has to be crafted by rewriting the central directory's external
+    /// attributes (high 16 bits = st_mode, made-by system = Unix).
+    #[cfg(unix)]
+    fn write_zip_with_raw_mode(zip_path: &Path, name: &str, data: &[u8], st_mode: u32) {
+        {
+            let f = fs::File::create(zip_path).unwrap();
+            let mut zip = zip::ZipWriter::new(f);
+            let opts = SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored)
+                .unix_permissions(0o755);
+            zip.start_file(name, opts).unwrap();
+            zip.write_all(data).unwrap();
+            zip.finish().unwrap();
+        }
+        let mut bytes = fs::read(zip_path).unwrap();
+        let sig = [0x50u8, 0x4b, 0x01, 0x02];
+        let cd = bytes
+            .windows(4)
+            .position(|w| w == sig)
+            .expect("central directory header present");
+        bytes[cd + 5] = 3; // version made by: Unix
+        bytes[cd + 38..cd + 42].copy_from_slice(&(st_mode << 16).to_le_bytes());
+        fs::write(zip_path, bytes).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn extract_strips_setuid_bit() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = TempDir::new("setuid");
+        let zip_path = tmp.path().join("tool.zip");
+        write_zip_with_raw_mode(&zip_path, "tool", b"#!/bin/sh\n", 0o100000 | 0o4755);
+
+        // The archive really carries setuid (else this test proves nothing).
+        {
+            let mut archive =
+                zip::ZipArchive::new(fs::File::open(&zip_path).unwrap()).unwrap();
+            let entry = archive.by_index(0).unwrap();
+            assert_eq!(entry.unix_mode().expect("unix mode") & 0o7777, 0o4755);
+        }
+
+        let dest = extract_from_zip(
+            zip_path.to_str().unwrap(),
+            &no_progress(),
+            &AtomicBool::new(false),
+        )
+        .expect("extract succeeds");
+        let mode = fs::metadata(dest.join("tool")).unwrap().permissions().mode();
+        assert_eq!(mode & 0o7777, 0o755, "got {:o}", mode & 0o7777);
     }
 }

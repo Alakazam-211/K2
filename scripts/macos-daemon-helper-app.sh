@@ -13,7 +13,7 @@
 # Sourced (not executed) by scripts/build-app.sh, scripts/dev-build.sh,
 # scripts/release.sh and scripts/build-local.sh. Requires PROJECT_DIR.
 #
-# The Rust side resolves the same layout: crates/k2-core/src/daemon_lifecycle.rs
+# The Rust side resolves the same layout: crates/k2-client/src/daemon_lifecycle.rs
 # (DAEMON_HELPER_APP_NAME / DAEMON_HELPER_BUNDLE_ID — a k2-daemon test fails
 # if the two names below drift). Sidecars (frpc, k2-power-helper, k2-menubar)
 # stay in K2.app/Contents/MacOS; the daemon finds them via bundle_sidecar_dir.

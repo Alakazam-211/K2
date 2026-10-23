@@ -9,7 +9,7 @@
 #   /usr/lib/systemd/user/k2-daemon-home.service — creates ~/.k2 first
 #
 # The unit mirrors the macOS launchd agent (dev.k2.daemon, see
-# crates/k2-core/src/wake.rs `DaemonPlist::canonical`): plain
+# crates/k2-client/src/wake.rs `DaemonPlist::canonical`): plain
 # `k2-daemon` with no args, start on login (WantedBy=default.target ≙
 # RunAtLoad), restart on crash (Restart=always ≙ KeepAlive), stdout /
 # stderr appended to ~/.k2/daemon.stdout.log / daemon.stderr.log.

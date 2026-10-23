@@ -5,7 +5,7 @@
 
 # Migration code names the past by definition — it moves/symlinks the old
 # home and its tests build .k2so fixtures on purpose.
-crates/k2-core/src/migration_home.rs :: *
+crates/k2-client/src/migration_home.rs :: *
 
 # Legacy frpc probe candidate (endgame B-L4 deletes this when field-clean).
 # Hit line is home.join(".k2so/bin").join(name) — name is frpc/frpc.exe, not a

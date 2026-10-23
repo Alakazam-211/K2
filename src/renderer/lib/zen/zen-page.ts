@@ -48,6 +48,21 @@ export interface ZenLayout {
    *  is the whole window: the top band floats over the columns, which lose
    *  their margin and glass box. Absent = `framed`. */
   canvas?: 'full'
+  /** prd-garden-column-collapse A1: one entry per column, present only when
+   *  a column of the Garden file is `collapsible` (the daemon sends the keys
+   *  only when set, CA5). Single-view pages (Projects, Tickets) never carry
+   *  it, so they never fold. Where each column is NOW lives in
+   *  `zen-columns` (this computer, per Garden), not here. */
+  folds?: ZenColumnFold[]
+}
+
+/** A column's fold settings from the Garden file (A1). */
+export interface ZenColumnFold {
+  collapsible: boolean
+  /** Where it starts (the file's `collapsed`); the person's click wins. */
+  collapsed: boolean
+  /** The file's `label`, else null ("Column N" on screen). */
+  label: string | null
 }
 
 /** Where a widget sits (Rosson 2026-10-06; prd-zen-freeform-chrome FC7):
@@ -371,7 +386,42 @@ function columnsLayout(raw: unknown[]): ZenLayout | null {
   return split.length > 0 ? { kind: 'columns', split, minWidths: mins } : null
 }
 
+/** `[[layout.column]] label`'s limit (the daemon's `COLUMN_LABEL_MAX`). */
+export const ZEN_COLUMN_LABEL_MAX = 24
+
+/** A1: each column's `collapsible` / `collapsed` / `label` from the
+ *  daemon's `layout.columns`, or undefined when no column is collapsible
+ *  (or the list doesn't match the split). A label the daemon would refuse
+ *  is dropped (the tab then says "Column N"). */
+function parseFolds(raw: unknown, ncols: number): ZenColumnFold[] | undefined {
+  if (!Array.isArray(raw) || raw.length !== ncols) return undefined
+  const folds = raw.map((c): ZenColumnFold => {
+    const o = isObj(c) ? c : {}
+    const collapsible = o.collapsible === true
+    const label =
+      typeof o.label === 'string' &&
+      o.label.trim().length > 0 &&
+      [...o.label].length <= ZEN_COLUMN_LABEL_MAX &&
+      // eslint-disable-next-line no-control-regex
+      !/[\u0000-\u001f\u007f-\u009f]/.test(o.label)
+        ? o.label
+        : null
+    return { collapsible, collapsed: collapsible && o.collapsed === true, label }
+  })
+  if (ncols < 2 || !folds.some((f) => f.collapsible)) return undefined
+  return folds
+}
+
+function withFolds(layout: ZenLayout, rawColumns: unknown): ZenLayout {
+  const folds = parseFolds(rawColumns, layout.split.length)
+  return folds ? { ...layout, folds } : layout
+}
+
 function parseLayout(raw: unknown, builtin: ZenResolvedPage): ZenLayout {
+  return isObj(raw) ? withFolds(parseLayoutShape(raw, builtin), raw.columns) : parseLayoutShape(raw, builtin)
+}
+
+function parseLayoutShape(raw: unknown, builtin: ZenResolvedPage): ZenLayout {
   const fallback = builtin.layout
   if (!isObj(raw)) return { ...fallback, split: [...fallback.split], minWidths: [...fallback.minWidths] }
   const full = raw.canvas === 'full' ? ({ canvas: 'full' } as const) : {}

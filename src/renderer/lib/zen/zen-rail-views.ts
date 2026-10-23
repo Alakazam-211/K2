@@ -105,10 +105,14 @@ export function zenPlacementInOneColumn(placement: ZenPlacement): ZenPlacement {
   return { ...placement, items, edges }
 }
 
-function singleViewPage(page: ZenResolvedPage, view: ZenWidgetDecl): ZenResolvedPage {
+/** A one-column K2 view (Projects, Tickets). Its layout carries no `folds`
+ *  (prd-garden-column-collapse CA15): a single-view page never folds, and
+ *  the Garden's own folds come back with My Home. */
+export function singleViewPage(page: ZenResolvedPage, view: ZenWidgetDecl): ZenResolvedPage {
   const rails = page.widgets.filter((w) => w.kind === ZEN_NAV_RAIL_KIND).map((w) => ({ ...w, column: 0 }))
   return {
     ...page,
+    // Built fresh, never spread from the Garden's: no `folds`, no `canvas`.
     layout: { kind: 'columns', split: [100], minWidths: [0] },
     widgets: [...rails, view],
     placement: zenPlacementInOneColumn(page.placement),

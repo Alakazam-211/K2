@@ -16,6 +16,6 @@ Topics:
   context  db  mail  connect-boundary  apps  app-deploys  app-move  app-api  app-heartbeats  app-tickets
   app-identity  app-surfaces  skins  feedback-loop  ticket-brief  zen  sidecars  llm-tokens
   llm-accounts  publish-framing  compute  compute-shared  vault  notifications  data-sources
-  projects  hooks  agent-hire  garden-data  changes  db-upgrade
+  projects  hooks  agent-hire  garden-data  garden-access  changes  db-upgrade
 --- stderr
 --- requests

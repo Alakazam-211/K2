@@ -557,9 +557,11 @@ if kill -0 "$SMOKE_PID" 2>/dev/null; then
     # never exits on its own, so SIGKILL it + its children and do NOT `wait` —
     # waiting on a SIGTERM-ignoring GUI hangs the release until the harness
     # timeout (the 0.40.6 re-release failure). kill -9 is uncatchable.
+    # disown first so bash does not print "<pid> Killed: 9" for our own kill.
+    disown "$SMOKE_PID" 2>/dev/null || true
     pkill -9 -P "$SMOKE_PID" 2>/dev/null || true
     kill -9 "$SMOKE_PID" 2>/dev/null || true
-    echo "  ✓ App survived exec (not AMFI-killed) — launchable."
+    echo "  ✓ App survived exec (not AMFI-killed) — launchable. Smoke check stopped (expected)."
 else
     SMOKE_RC=0; wait "$SMOKE_PID" 2>/dev/null || SMOKE_RC=$?
     if [ "$SMOKE_RC" -eq 137 ]; then

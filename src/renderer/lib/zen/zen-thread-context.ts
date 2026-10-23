@@ -36,8 +36,7 @@ export const ZEN_THREAD_CONTEXT_PER_SECOND = 2
 const FORBIDDEN = ['[thread:', '[from', '[context'] as const
 
 /** Line breaks and bidi controls: they change what the person sees. */
-// eslint-disable-next-line no-control-regex
-const BREAKS = /[\u0000-\u001f\u007f-\u009f  ‎‏‪-‮⁦-⁩]/
+const BREAKS = new RegExp('[' + '\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029\\u200e\\u200f\\u202a-\\u202e\\u2066-\\u2069' + ']')
 
 /** Why `text` isn't a context line (the daemon's rule), or null. */
 export function zenThreadContextProblem(text: string): string | null {

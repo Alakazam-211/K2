@@ -349,6 +349,18 @@ describe('collapsible columns on the page (A1)', () => {
     off()
   })
 
+  it('two quick widget folds in one tick can’t fold every column', () => {
+    show(page({ columns: [{ size: 60, collapsible: true }, { size: 40, collapsible: true }] }))
+    const results: unknown[] = []
+    act(() => {
+      results.push(controller!.setByWidget(0, true))
+      results.push(controller!.setByWidget(1, true))
+    })
+    expect(results).toEqual([null, 'last_open'])
+    q('[data-zen-column-tab="0"]')
+    expect(document.querySelector('[data-zen-column-tab="1"]')).toBeNull()
+  })
+
   it('the narrow window folds right to left and saves nothing; wide again, it opens', () => {
     let fire: ((width: number) => void) | null = null
     // Other parts of the page observe too (the bands); only the layout

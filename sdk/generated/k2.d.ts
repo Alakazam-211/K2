@@ -241,11 +241,21 @@ export interface ChoiceCard {
   readonly status: string
 }
 
+export interface ThreadContext {
+  /** The widget's id on its Garden page. */
+  readonly placement: string
+  readonly text: string
+  /** The Garden widget's folder name (chosen by its author). */
+  readonly widget: string
+}
+
 export interface ThreadDoc {
   /** Files that ride the message (thread-attachments-v1). Open one with thread.attachment / thread.open by its index. */
   readonly attachments?: ThreadFile[] | null
   readonly body?: string | null
   readonly choice?: ChoiceCard | null
+  /** The Board context that rode the person's post: a Garden widget's line, never their words. Absent on every other item. */
+  readonly context?: ThreadContext
   /** Seconds since the epoch (not milliseconds: multiply by 1000 for new Date). */
   readonly created_at?: number
   readonly from?: string

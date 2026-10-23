@@ -4015,8 +4015,6 @@ name = "k2"
 version = "0.46.2"
 dependencies = [
  "ahash",
- "alacritty_terminal",
- "argon2",
  "base64 0.22.1",
  "block2",
  "cairo-rs",
@@ -4024,22 +4022,14 @@ dependencies = [
  "cocoa",
  "criterion",
  "dirs 5.0.1",
- "fontdue",
- "futures",
- "futures-util",
- "getrandom 0.2.17",
- "git2",
- "glob",
  "ignore",
  "image",
+ "k2-client",
  "k2-core",
  "keyring",
  "libc",
  "log",
- "mio",
- "ngrok",
  "notify",
- "notify-debouncer-mini",
  "objc",
  "objc2",
  "objc2-app-kit",
@@ -4048,18 +4038,11 @@ dependencies = [
  "objc2-quartz-core",
  "objc2-web-kit",
  "parking_lot",
- "polling",
- "portable-pty",
- "qoi",
  "reqwest 0.12.28",
  "rusqlite",
- "rustix 1.1.4",
  "rustls 0.23.46",
  "serde",
  "serde_json",
- "signal-hook 0.3.18",
- "signal-hook-mio",
- "subtle",
  "tao",
  "tauri",
  "tauri-build",
@@ -4075,12 +4058,9 @@ dependencies = [
  "tauri-plugin-updater",
  "tempfile",
  "tokio",
- "tokio-tungstenite",
- "trash",
  "tungstenite 0.24.0",
  "url",
  "uuid",
- "vte",
  "webkit2gtk",
  "webview2-com",
  "windows 0.62.2",
@@ -5027,18 +5007,6 @@ dependencies = [
  "notify-types",
  "walkdir",
  "windows-sys 0.52.0",
-]
-
-[[package]]
-name = "notify-debouncer-mini"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aaa5a66d07ed97dce782be94dcf5ab4d1b457f4243f7566c7557f15cabc8c799"
-dependencies = [
- "log",
- "notify",
- "notify-types",
- "tempfile",
 ]
 
 [[package]]

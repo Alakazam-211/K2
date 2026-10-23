@@ -116,7 +116,7 @@ pub fn k2_account_session_set(refresh_token: String, email: String) -> Result<()
     {
         // Best-effort inside the daemon-shared writer (logs + swallows a
         // keychain failure); the caller keeps the in-memory session regardless.
-        k2_core::tunnel::lease::write_account_session(&k2_core::tunnel::lease::AccountSession {
+        k2_client::account_session::write_account_session(&k2_client::account_session::AccountSession {
             refresh_token,
             email: Some(email),
         });
@@ -162,7 +162,7 @@ pub fn k2_account_session_set(refresh_token: String, email: String) -> Result<()
 pub fn k2_account_session_get() -> Result<Option<String>, String> {
     #[cfg(target_os = "macos")]
     {
-        Ok(k2_core::tunnel::lease::read_account_session().map(|sess| {
+        Ok(k2_client::account_session::read_account_session().map(|sess| {
             serde_json::json!({
                 "refreshToken": sess.refresh_token,
                 "email": sess.email.unwrap_or_default(),
@@ -195,7 +195,7 @@ pub fn k2_account_session_get() -> Result<Option<String>, String> {
 pub fn k2_account_session_clear() -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        k2_core::tunnel::lease::clear_account_session();
+        k2_client::account_session::clear_account_session();
         log_debug!("[secrets] cleared K2 Connect account session");
         Ok(())
     }

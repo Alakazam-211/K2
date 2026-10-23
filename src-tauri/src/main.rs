@@ -9,7 +9,7 @@ fn main() {
     // No-op if already at the hard limit. Must run before anything
     // else opens fds.
     #[cfg(unix)]
-    k2_core::raise_nofile_limit();
+    k2_client::process::raise_nofile_limit();
 
     // Phase 2 Unit 2 — `--llm-worker` arm moved to k2so-daemon. The
     // daemon now spawns itself as `k2so-daemon --llm-worker <payload>`

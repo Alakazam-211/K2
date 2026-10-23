@@ -22,7 +22,7 @@ use tauri::{AppHandle, Emitter};
 use tungstenite::client::IntoClientRequest;
 use tungstenite::{client::client, Message};
 
-use k2_core::log_debug;
+use k2_client::log_debug;
 
 /// Wire shape matches `crates/k2so-daemon/src/events.rs::WireEvent`.
 #[derive(Debug, Clone, Deserialize)]
@@ -183,8 +183,8 @@ fn connect_once(app_handle: &AppHandle) -> ConnectOutcome {
 /// `daemon_client` only because the client's blocking reqwest semantics
 /// don't fit this thread's shape; the file paths stay in lockstep.
 fn read_daemon_credentials() -> Option<(u16, String)> {
-    let port_path = k2_core::paths::k2_home().join("daemon.port");
-    let token_path = k2_core::paths::k2_home().join("daemon.token");
+    let port_path = k2_client::paths::k2_home().join("daemon.port");
+    let token_path = k2_client::paths::k2_home().join("daemon.token");
     let port = std::fs::read_to_string(&port_path).ok()?.trim().parse().ok()?;
     let token = std::fs::read_to_string(&token_path).ok()?.trim().to_string();
     if token.is_empty() {

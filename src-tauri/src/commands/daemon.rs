@@ -7,7 +7,7 @@
 //! authenticated. Wraps `crate::daemon_client::DaemonClient`.
 //!
 //! **Lifecycle commands** (`daemon_install` / `daemon_uninstall` /
-//! `daemon_restart`) wrap `k2_core::wake` so the Settings pane can
+//! `daemon_restart`) wrap `k2_client::wake` so the Settings pane can
 //! install or remove the launch agent without the frontend knowing
 //! `launchctl` exists. They all delegate to the same `DaemonPlist`
 //! shape used by the first-launch migration in `lib.rs::setup()`, so
@@ -78,13 +78,13 @@ pub fn daemon_status() -> DaemonStatusResponse {
 /// bundled (common in dev) or if we can't read the current exe path.
 ///
 /// Pure path resolution + the `exists()` check live in
-/// `k2_core::daemon_lifecycle::bundled_daemon_path`; this wrapper
+/// `k2_client::daemon_lifecycle::bundled_daemon_path`; this wrapper
 /// adds the actual filesystem touch (Tauri context only) so a K2
 /// Connect host can compute the same hypothetical path without
 /// performing the FS probe.
 fn locate_bundled_daemon() -> Result<PathBuf, String> {
     let exe = std::env::current_exe().map_err(|e| format!("locate Tauri binary: {e}"))?;
-    let candidate = k2_core::daemon_lifecycle::bundled_daemon_path(&exe)
+    let candidate = k2_client::daemon_lifecycle::bundled_daemon_path(&exe)
         .ok_or_else(|| "Tauri binary has no parent dir".to_string())?;
     if !candidate.exists() {
         return Err(format!(
@@ -105,8 +105,8 @@ fn locate_bundled_daemon() -> Result<PathBuf, String> {
 #[tauri::command]
 pub fn daemon_install() -> Result<String, String> {
     let daemon_bin = locate_bundled_daemon()?;
-    let plist = k2_core::wake::DaemonPlist::canonical(daemon_bin);
-    let path = k2_core::wake::install(&plist)?;
+    let plist = k2_client::wake::DaemonPlist::canonical(daemon_bin);
+    let path = k2_client::wake::install(&plist)?;
     // Same GUI moment as the daemon plist. Not `k2 daemon install`.
     #[cfg(target_os = "macos")]
     crate::install_menu_bar_helper();
@@ -129,8 +129,8 @@ pub fn daemon_uninstall() -> Result<(), String> {
     // canonical plist builder only uses `program` for `write()`,
     // and `uninstall()` only cares about `label` + `plist_path()`.
     // Pass a placeholder so we don't fail on missing binary in dev.
-    let plist = k2_core::wake::DaemonPlist::canonical(PathBuf::from("/nonexistent-uninstall"));
-    k2_core::wake::uninstall(&plist)?;
+    let plist = k2_client::wake::DaemonPlist::canonical(PathBuf::from("/nonexistent-uninstall"));
+    k2_client::wake::uninstall(&plist)?;
 
     // Best-effort cleanup of the port/token/log files. Missing files
     // are fine.
@@ -153,7 +153,7 @@ pub fn daemon_uninstall() -> Result<(), String> {
 /// `#[tauri::command]` wrapper just delegates to this.
 ///
 /// Arg vector construction lives in
-/// `k2_core::daemon_lifecycle::launchctl_kickstart_args` so K2
+/// `k2_client::daemon_lifecycle::launchctl_kickstart_args` so K2
 /// Connect (which runs the same kickstart via SSH on a remote host)
 /// produces the same exact arg shape.
 ///
@@ -163,7 +163,7 @@ pub fn daemon_uninstall() -> Result<(), String> {
 #[cfg(target_os = "macos")]
 pub fn kickstart_daemon() -> Result<(), String> {
     let uid = unsafe { libc::getuid() };
-    let args = k2_core::daemon_lifecycle::launchctl_kickstart_args(uid);
+    let args = k2_client::daemon_lifecycle::launchctl_kickstart_args(uid);
     let out = Command::new("launchctl")
         .args(&args)
         .output()

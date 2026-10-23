@@ -2,11 +2,11 @@
 #[macro_use]
 extern crate objc;
 
-// Bring k2so-core's `log_debug!` + `perf_timer!` + `perf_hist!` into scope
-// across every child module, matching the previous behavior of having
-// them defined inline in this file.
+// `log_debug!` + `perf_timer!` + `perf_hist!` in scope across every child
+// module. They live in k2-client (0.46.4: this crate no longer links
+// k2-core; see Cargo.toml).
 #[macro_use]
-extern crate k2_core;
+extern crate k2_client;
 
 /// Flag to skip _exit(0) during relaunch (set by the frontend before process::relaunch)
 static RELAUNCH_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -15,37 +15,17 @@ static RELAUNCH_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicB
 mod agent_hooks;
 mod commands;
 mod tray;
-// `companion` now lives in k2so-core. Re-exported so existing
-// `crate::companion::*` paths (commands/companion.rs, agent_hooks.rs,
-// commands/settings.rs) keep working.
-pub use k2_core::companion;
-// Modules opened for the benches at src-tauri/benches/perf.rs — the k2_lib
-// crate is not published, so this is a no-op for real consumers. Revert to
-// `mod` once the perf pass is over if we decide the benches' existence
-// doesn't justify open modules.
-// `db` now lives in k2so-core. Re-exported so callers can keep using
-// `crate::db::shared()` etc. unchanged. Migrations are bundled into the
-// k2so-core binary via include_str! from crates/k2so-core/drizzle_sql/.
-pub use k2_core::db;
-// `editors`, `fs_abstract`, `fs_atomic`, `project_config` now live in
-// k2so-core (pure std + serde; no Tauri dep). Re-exported so existing
-// `crate::editors::*` / `crate::fs_abstract::*` / etc. call sites keep
-// working unchanged.
-pub use k2_core::{editors, fs_abstract, fs_atomic, project_config};
-// `git` module (libgit2 wrappers, worktree/branch/diff/merge) moved to
-// k2so-core so k2so_agents_delegate + the daemon's future supervised-
-// launch path can share the same code. Re-exported at the historical
-// `crate::git::*` path so all existing call sites resolve unchanged.
-pub use k2_core::git;
+// Editor discovery ("Open in …") lives in k2-client. Re-exported so
+// `crate::editors::*` call sites keep working.
+pub use k2_client::editors;
 // Phase 2 Unit 2 — `llm` re-export removed. LLM inference + model
 // management moved entirely to k2so-daemon; Tauri no longer touches
 // llama.cpp or the model lifecycle. The renderer calls /cli/llm/* on
 // the daemon directly.
 mod menu;
-// `perf` now lives in the k2so-core crate. Re-exported so existing
-// `crate::perf_timer!` / `crate::perf_hist!` / `crate::perf::*` call sites
-// keep working unchanged. See crates/k2so-core/src/perf.rs.
-pub use k2_core::{perf, perf_hist, perf_timer};
+// `perf` lives in k2-client. Re-exported so `crate::perf_timer!` /
+// `crate::perf_hist!` / `crate::perf::*` call sites keep working.
+pub use k2_client::{perf, perf_hist, perf_timer};
 // Phase 2 close-out (2026-05-23): `mod state` deleted. After Units 1-4
 // reduced `AppState` to a single `watchers` field, the struct + the
 // `.manage()` registration were pure ceremony around one
@@ -54,35 +34,19 @@ pub use k2_core::{perf, perf_hist, perf_timer};
 // lives next to the only consumer.
 // Tauri-side HTTP client for the k2so-daemon. Routes state-mutating
 // commands through the daemon's loopback HTTP instead of running them
-// in-process. Small for now (ping + status); grows as daemon handlers
-// land.
+// in-process.
 mod daemon_client;
 // Linux: restart the local k2-daemon user service when its version differs
 // from the app's (the launchctl kickstart twin), with the gate's state.
 mod linux_daemon;
-// Phase 2 Unit 1 — companion bridges (settings + terminal + event
-// sink + app event source) moved to k2so-daemon. The daemon now
-// owns the ngrok tunnel and registers its own providers against
-// k2so-core's companion ambient slots. Tauri no longer needs these
-// shims because the renderer talks to `/cli/companion/*` directly.
-// Tauri-backed AgentHookEventSink impl registered in setup() — routes
-// agent-hook events (agent:lifecycle, agent:reply, sync:projects, …)
-// back onto Tauri's event bus.
-mod agent_hook_sink;
-// Phase 2 Unit 7c — `workspace_regen_provider` module retired. The
-// SKILL scaffolding moved to k2so-core in Unit 7b; build_launch now
-// calls `workspace::write_workspace_skill_file` directly so the
-// daemon-side and Tauri-side regen paths are identical.
+// 0.46.4: the `agent_hook_sink` module (a Tauri AgentHookEventSink for
+// k2-core's in-process `agent_hooks::emit`) is gone with the k2-core link.
+// Every hook event the renderer listens to comes from the daemon's /events
+// bus through `daemon_events.rs`; the one event this process raised itself
+// (`k2so_chat_refresh_broadcast`) is emitted directly.
 // Background subscriber for the daemon's /events WebSocket. Spawned in
 // setup() once; reconnects forever so we survive daemon restarts.
 mod daemon_events;
-// `terminal` now lives in k2so-core. Re-exported so existing
-// `crate::terminal::*` paths keep working.
-pub use k2_core::terminal;
-// Phase 2 Unit 3 — `terminal_event_sink` module removed. The
-// daemon owns the TerminalEventSink now (broadcasts events over
-// /events WS). Tauri's `daemon_events.rs` re-emits them via
-// AppHandle::emit so the renderer's listeners are unchanged.
 mod k2_app_window;
 mod watcher;
 mod window;
@@ -93,49 +57,10 @@ mod event_faults;
 
 use tauri::Manager;
 
-/// H7: sync `k2_core::hook_config` with the daemon's port + token so
-/// in-process Alacritty children emit `/hook/complete` requests at the
-/// daemon (the sole HTTP server post-H7). Reads `~/.k2/daemon.port`
-/// + `~/.k2/daemon.token` — written by the daemon on startup. Runs
-/// off-thread with a small retry loop for the cold-start case where
-/// Tauri wins the race against launchd's daemon spawn.
-///
-/// Best-effort: if the daemon files stay missing for the 5 retries,
-/// Tauri boots without hook-config wired. New sessions will still
-/// reach the daemon's `/cli/*` routes via CLI tools that read the
-/// files dynamically; only the in-process Alacritty hook-script path
-/// would be deaf, which is a degraded-but-usable state.
-fn prime_hook_config_from_daemon() {
-    std::thread::spawn(|| {
-        use std::time::Duration;
-        let port_path = k2_core::paths::k2_home().join("daemon.port");
-        let token_path = k2_core::paths::k2_home().join("daemon.token");
-        for attempt in 0..5 {
-            let port_ok = std::fs::read_to_string(&port_path)
-                .ok()
-                .and_then(|s| s.trim().parse::<u16>().ok());
-            let token_ok = std::fs::read_to_string(&token_path)
-                .ok()
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty());
-            if let (Some(port), Some(token)) = (port_ok, token_ok) {
-                k2_core::hook_config::set_port(port);
-                k2_core::hook_config::set_token(token);
-                log_debug!(
-                    "[h7/hook-config] primed from daemon (port={}, attempt={})",
-                    port,
-                    attempt
-                );
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(500));
-        }
-        log_debug!(
-            "[h7/hook-config] daemon port/token files unavailable after 5 retries; \
-             Alacritty children will boot with empty hook_config"
-        );
-    });
-}
+// 0.46.4: `prime_hook_config_from_daemon` removed. It copied the daemon's
+// port + token into k2-core's `hook_config` for in-process Alacritty
+// terminals; those moved to the daemon in Phase 2 Unit 3 and nothing in
+// this process read `hook_config` since.
 
 /// Detect a stale launchd-managed daemon on app startup and bounce it.
 ///
@@ -154,8 +79,7 @@ fn prime_hook_config_from_daemon() {
 ///    you keep shipping `@` attribution / old federation bugs from the
 ///    live process.
 ///
-/// Runs on a background thread (mirrors `prime_hook_config_from_daemon`)
-/// because we must wait for the daemon to be reachable + we don't want
+/// Runs on a background thread because we must wait for the daemon to be reachable + we don't want
 /// to block Tauri's setup hook on a synchronous HTTP round-trip. Polls
 /// up to 10× at 500ms intervals; if the daemon stays unreachable we
 /// log and bow out — bigger problem than version skew at that point.
@@ -304,7 +228,7 @@ fn ensure_local_daemon_process() {
 
     let Some(daemon_bin) = std::env::current_exe()
         .ok()
-        .and_then(|p| k2_core::daemon_lifecycle::bundled_daemon_path(&p))
+        .and_then(|p| k2_client::daemon_lifecycle::bundled_daemon_path(&p))
         .filter(|p| p.exists())
     else {
         log_debug!(
@@ -382,7 +306,7 @@ pub fn stop_bundled_daemon_processes() {
 fn local_daemon_boot_ready() -> bool {
     use std::time::Duration;
 
-    let home = k2_core::paths::k2_home();
+    let home = k2_client::paths::k2_home();
     let port_path = home.join("daemon.port");
     let Ok(raw) = std::fs::read_to_string(&port_path) else {
         return false;
@@ -424,14 +348,14 @@ fn bundled_daemon_newer_than_running(uptime_secs: u64) -> bool {
 
     let Some(daemon_bin) = std::env::current_exe()
         .ok()
-        .and_then(|p| k2_core::daemon_lifecycle::bundled_daemon_path(&p))
+        .and_then(|p| k2_client::daemon_lifecycle::bundled_daemon_path(&p))
         .filter(|p| p.exists())
     else {
         return false;
     };
     // Never treat a DMG / AppTranslocation path as authoritative — same
     // guard as the plist install path (#14).
-    if k2_core::daemon_lifecycle::is_transient_exe_location(&daemon_bin) {
+    if k2_client::daemon_lifecycle::is_transient_exe_location(&daemon_bin) {
         return false;
     }
     let Ok(mtime) = std::fs::metadata(&daemon_bin).and_then(|m| m.modified()) else {
@@ -497,7 +421,7 @@ mod daemon_stale_binary_tests {
 /// CURRENT Tauri exe and reload the agent so it converges.
 ///
 /// Thin IO shell over the pure decision logic in
-/// `k2_core::daemon_lifecycle`:
+/// `k2_client::daemon_lifecycle`:
 ///   - classify current exe / recorded path (`is_transient_exe_location`)
 ///   - decide whether to rewrite (`should_rewrite_plist`)
 ///   - parse the recorded program out of the plist XML (`parse_plist_program`)
@@ -523,7 +447,7 @@ mod daemon_stale_binary_tests {
 /// (Linux daemons are systemd-user-unit-owned). Every caller is gated.
 #[cfg(target_os = "macos")]
 fn heal_daemon_plist_program() -> bool {
-    use k2_core::daemon_lifecycle as dl;
+    use k2_client::daemon_lifecycle as dl;
 
     let Ok(current_exe) = std::env::current_exe() else {
         log_debug!("[plist-heal] current_exe() failed; skipping");
@@ -544,7 +468,7 @@ fn heal_daemon_plist_program() -> bool {
     };
 
     // Locate the plist on disk.
-    let plist = k2_core::wake::DaemonPlist::canonical(std::path::PathBuf::from("/unused"));
+    let plist = k2_client::wake::DaemonPlist::canonical(std::path::PathBuf::from("/unused"));
     let Some(plist_path) = plist.plist_path() else {
         log_debug!("[plist-heal] cannot locate ~/Library/LaunchAgents; skipping");
         return false;
@@ -597,7 +521,7 @@ fn heal_daemon_plist_program() -> bool {
     );
 
     // Rewrite the plist to point at the desired (stable, bundled) binary.
-    let new_plist = k2_core::wake::DaemonPlist::canonical(desired.clone());
+    let new_plist = k2_client::wake::DaemonPlist::canonical(desired.clone());
     if let Err(e) = new_plist.write() {
         log_debug!("[plist-heal] write plist failed: {e}");
         return false;
@@ -939,7 +863,7 @@ fn stage_bundled_frpc() {
 
     // Stage with the platform-native name so resolve_frpc + CreateProcess agree.
     let dest_name = if cfg!(windows) { "frpc.exe" } else { "frpc" };
-    let dest = k2_core::paths::k2_bin().join(dest_name);
+    let dest = k2_client::paths::k2_bin().join(dest_name);
 
     // Skip the copy when the staged bytes already match the sidecar.
     if dest.exists() {
@@ -988,7 +912,7 @@ fn stage_bundled_frpc() {
     // legacy extensionless path is missing — older resolve probes used it.
     #[cfg(windows)]
     {
-        let bare = k2_core::paths::k2_bin().join("frpc");
+        let bare = k2_client::paths::k2_bin().join("frpc");
         if !bare.exists() {
             let _ = std::fs::copy(&dest, &bare);
         }
@@ -1012,16 +936,16 @@ fn stage_bundled_menubar() -> Option<MenubarStage> {
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.to_path_buf()))?;
-    let sidecar = exe_dir.join(k2_core::wake::MENU_BAR_HELPER_BIN);
+    let sidecar = exe_dir.join(k2_client::wake::MENU_BAR_HELPER_BIN);
     if !sidecar.exists() {
         log_debug!(
             "[menubar] {} not next to {} — skipping stage",
-            k2_core::wake::MENU_BAR_HELPER_BIN,
+            k2_client::wake::MENU_BAR_HELPER_BIN,
             exe_dir.display()
         );
         return None;
     }
-    let dest = k2_core::paths::k2_bin().join(k2_core::wake::MENU_BAR_HELPER_BIN);
+    let dest = k2_client::paths::k2_bin().join(k2_client::wake::MENU_BAR_HELPER_BIN);
     let mut replaced = !dest.exists();
     if dest.exists() {
         match (std::fs::read(&sidecar), std::fs::read(&dest)) {
@@ -1086,7 +1010,7 @@ pub(crate) fn install_menu_bar_helper() {
             return;
         }
     };
-    if k2_core::daemon_lifecycle::is_transient_exe_location(&exe) {
+    if k2_client::daemon_lifecycle::is_transient_exe_location(&exe) {
         log_debug!(
             "[menubar] transient launch ({}); skipping helper install",
             exe.display()
@@ -1096,19 +1020,19 @@ pub(crate) fn install_menu_bar_helper() {
     let Some(staged) = stage_bundled_menubar() else {
         return;
     };
-    let plist = k2_core::wake::DaemonPlist::menu_bar_helper(staged.path.clone());
-    let outcome = match k2_core::wake::ensure_loaded(&plist) {
+    let plist = k2_client::wake::DaemonPlist::menu_bar_helper(staged.path.clone());
+    let outcome = match k2_client::wake::ensure_loaded(&plist) {
         Ok(outcome) => outcome,
         Err(e) => {
             log_debug!("[menubar] ensure_loaded failed: {e}");
             return;
         }
     };
-    if !staged.replaced && outcome != k2_core::wake::LoadOutcome::NotInstalled {
+    if !staged.replaced && outcome != k2_client::wake::LoadOutcome::NotInstalled {
         log_debug!("[menubar] helper launch agent {outcome:?}");
         return;
     }
-    match k2_core::wake::install(&plist) {
+    match k2_client::wake::install(&plist) {
         Ok(path) => log_debug!(
             "[menubar] installed helper plist at {} -> {}",
             path.display(),
@@ -1136,24 +1060,22 @@ pub fn run() {
     // Ignore SIGPIPE so writing to a dead PTY returns EPIPE instead of
     // killing the entire process.
     #[cfg(unix)]
-    terminal::ignore_sigpipe();
+    k2_client::process::ignore_sigpipe();
 
     // launchd-launched .app processes inherit a sparse PATH that lacks
     // ~/.local/bin, /opt/homebrew/bin, and other user-installed prefixes.
     // Source the user's login shell once and adopt its PATH so legacy
     // alacritty spawns + every Command::new call site can resolve user
-    // tools. See docs in k2_core::enrich_path_from_login_shell.
+    // tools. See docs in k2_client::process::enrich_path_from_login_shell.
     #[cfg(unix)]
-    k2_core::enrich_path_from_login_shell();
+    k2_client::process::enrich_path_from_login_shell();
 
     // 0.40.0 rebrand — one-time ~/.k2so → ~/.k2 home migration. MUST run
-    // before db::init_database() below: the DB lives under ~/.k2/ (k2.db if
-    // present, else legacy k2so.db — endgame Stage A dual-read).
-    // and opening it first would create a fresh empty ~/.k2 (abandoning
-    // the user's data in ~/.k2so and forcing the migration's Conflict
-    // branch — caught by the convergence rig, 2026-06-10). The daemon
-    // boot runs the same idempotent call; first process wins.
-    match k2_core::migration_home::migrate_home_dir() {
+    // before anything creates ~/.k2 (a fresh empty ~/.k2 would abandon the
+    // user's data in ~/.k2so and force the migration's Conflict branch —
+    // caught by the convergence rig, 2026-06-10). The daemon boot runs
+    // the same idempotent call; first process wins.
+    match k2_client::migration_home::migrate_home_dir() {
         Ok(o) => eprintln!("[boot] home migration: {o:?}"),
         Err(e) => eprintln!("[boot] home migration failed: {e} — continuing on legacy layout"),
     }
@@ -1170,16 +1092,9 @@ pub fn run() {
     // tunnel via `/cli/companion/*` on the daemon, so this process
     // doesn't need one.
 
-    let _ = perf_timer!("startup_db_init", {
-        match db::init_database() {
-            Ok(c) => c,
-            Err(e) => {
-                log_debug!("[k2so] FATAL: Failed to initialize database: {}", e);
-                log_debug!("[k2so] The app will now exit. Check disk permissions and space at ~/.k2/");
-                std::process::exit(1);
-            }
-        }
-    });
+    // 0.46.4: this process no longer opens (or migrates) ~/.k2/k2.db.
+    // The daemon is the only DB owner and runs the migrations on its own
+    // boot; every renderer read and write reaches it over /cli/*.
 
     // Phase 2 close-out (2026-05-23): `AppState` deleted entirely.
     // Units 1-4 had already moved every other field (companion, LLM,
@@ -1241,7 +1156,7 @@ pub fn run() {
             // 0.40.0 — retire com.k2so.* LaunchAgents (the daemon plist
             // re-installs below under dev.k2.daemon; heartbeat +
             // claude-auth re-ensure from the daemon's own boot).
-            let swept = k2_core::migration_launchd::migrate_launchd_labels();
+            let swept = k2_client::migration_launchd::migrate_launchd_labels();
             if !swept.is_empty() {
                 eprintln!("[boot] launchd labels migrated: {swept:?}");
             }
@@ -1268,12 +1183,8 @@ pub fn run() {
             // tunnel + WS clients now live there. Tauri no longer
             // wires these bridges.
 
-            // Agent-hook event sink: routes k2_core::agent_hooks::emit
-            // onto AppHandle::emit. Registered before any hook HTTP
-            // request can land.
-            k2_core::agent_hooks::set_sink(Box::new(
-                agent_hook_sink::TauriAgentHookEventSink::new(app.handle().clone()),
-            ));
+            // 0.46.4: no in-process agent-hook sink. Hook events reach
+            // the renderer from the daemon's /events bus (daemon_events).
 
             // Phase 2 Unit 7c — workspace regen bridge retired.
             // `k2_core::workspace::agent_launch` now calls
@@ -1301,7 +1212,7 @@ pub fn run() {
 
             // Create skill layer template directories if they don't exist
             {
-                let templates = k2_core::paths::k2_home().join("templates");
+                let templates = k2_client::paths::k2_home().join("templates");
                 let _ = std::fs::create_dir_all(templates.join("manager"));
                 let _ = std::fs::create_dir_all(templates.join("agent-template"));
                 let _ = std::fs::create_dir_all(templates.join("custom-agent"));
@@ -1330,12 +1241,6 @@ pub fn run() {
             // `crates/k2so-daemon/src/main.rs`). Headless / remote
             // daemons now pick it up without Tauri being present.
 
-            // Install the k2so-daemon launchd agent if it isn't already
-            // installed AND the daemon binary is bundled next to us.
-            // Gated via `code_migrations` so this runs exactly once per
-            // upgrade. In debug builds we opt out by default — the
-            // `target/debug/k2so-daemon` path is volatile, and a dev
-            // with `K2SO_INSTALL_DAEMON=1` can override.
             // Linux/other platforms: no launchd. Linux package owns a
             // systemd user unit; Windows has neither yet — spawn the
             // bundled k2-daemon next to this exe if nothing answers
@@ -1351,96 +1256,17 @@ pub fn run() {
                 }
             }
 
-            #[cfg(target_os = "macos")]
-            perf_timer!("startup_install_daemon_plist", {
-                // v2 bump: v1 was burned during 0.33.0 RC testing when
-                // dev launches with `K2SO_INSTALL_DAEMON=1` marked it
-                // applied against an earlier k2so-daemon binary path.
-                // Bumping the ID forces a re-install against the current
-                // bundled daemon binary on the first 0.33.0 launch for
-                // anyone carrying a stale v1 row. Safe for fresh users
-                // (neither row present → runs as usual).
-                const MIGRATION_ID: &str = "install_daemon_plist_v2";
-                let needs_run = {
-                    let db_arc = crate::db::shared();
-                    let db = db_arc.lock();
-                    !db::has_code_migration_applied(&db, MIGRATION_ID)
-                };
-                let opted_in = !zen_spike_build()
-                    && (!cfg!(debug_assertions) || std::env::var("K2SO_INSTALL_DAEMON").is_ok());
-                if needs_run && opted_in {
-                    // Locate k2so-daemon next to the current Tauri binary
-                    // (macOS: K2.app/Contents/Helpers/K2 Daemon.app/…). Skip install if
-                    // it isn't bundled yet — earlier 0.33.x dev builds
-                    // may ship without it.
-                    let maybe_daemon = std::env::current_exe()
-                        .ok()
-                        .and_then(|p| k2_core::daemon_lifecycle::bundled_daemon_path(&p))
-                        .filter(|p| p.exists());
-                    match maybe_daemon {
-                        Some(daemon_bin)
-                            if k2_core::daemon_lifecycle::is_transient_exe_location(
-                                &daemon_bin,
-                            ) =>
-                        {
-                            // #14: first run straight from the mounted DMG
-                            // (or a Gatekeeper-translocated copy) resolves a
-                            // TRANSIENT daemon path. Baking that into a
-                            // KeepAlive/RunAtLoad plist makes launchd respawn
-                            // a binary that vanishes the moment the DMG is
-                            // ejected — the "stuck Connecting / version
-                            // mismatch / won't pair" trap. Do NOT register
-                            // the plist; leave the migration unapplied so a
-                            // later /Applications launch installs it for
-                            // real. Never block startup.
-                            log_debug!(
-                                "[k2so] daemon binary is in a transient location ({}); \
-                                 skipping plist install — move K2SO to /Applications and \
-                                 relaunch to enable the background daemon",
-                                daemon_bin.display()
-                            );
-                        }
-                        Some(daemon_bin) => {
-                            let plist = k2_core::wake::DaemonPlist::canonical(daemon_bin.clone());
-                            match k2_core::wake::install(&plist) {
-                                Ok(path) => {
-                                    log_debug!(
-                                        "[k2so] installed daemon plist at {} pointing at {}",
-                                        path.display(),
-                                        daemon_bin.display()
-                                    );
-                                    let db_arc = crate::db::shared();
-                                    let db = db_arc.lock();
-                                    db::mark_code_migration_applied(
-                                        &db,
-                                        MIGRATION_ID,
-                                        Some(&format!("installed from {}", daemon_bin.display())),
-                                    );
-                                }
-                                Err(e) => {
-                                    // Don't mark applied — next launch will
-                                    // retry. Common failure: launchctl
-                                    // complaining about "Load failed: 5:
-                                    // Input/output error" which usually
-                                    // means a stale plist is already
-                                    // loaded. User can resolve via
-                                    // `launchctl unload ~/Library/LaunchAgents/dev.k2.daemon.plist`.
-                                    log_debug!("[k2so] daemon plist install failed: {e}");
-                                }
-                            }
-                        }
-                        None => {
-                            // Bundled daemon missing — common in pre-0.33
-                            // dev builds. Leave the migration unapplied
-                            // so a later launch (with the daemon bundled)
-                            // completes it.
-                            log_debug!(
-                                "[k2so] daemon binary not found next to current exe; skipping plist install"
-                            );
-                        }
-                    }
-                }
-            });
+            // 0.46.4: the one-time `install_daemon_plist_v2` install that
+            // used to run here was gated on a `code_migrations` row in
+            // ~/.k2/k2.db, and this process no longer opens the DB. Every
+            // machine since 0.33 already has that row (so the block was a
+            // no-op there), and a fresh install is covered by the
+            // every-boot heal below: `ensure_loaded` → NotInstalled →
+            // install + load from the bundled daemon, with the same
+            // transient-location (#14) guard. The one case that differs:
+            // a plist that exists while the DB row is missing (DB wiped,
+            // LaunchAgent kept) is no longer force-rewritten once; the
+            // heal below still fixes a stale program path and loads it.
 
             // #14 self-heal at startup: if a previous bad DMG / translocated
             // launch baked a transient ProgramArguments[0] into the plist,
@@ -1468,17 +1294,17 @@ pub fn run() {
               if zen_spike_build() {
                 log_debug!("[zen-spike] S0 spike build: daemon autostart skipped");
               } else {
-                let plist = k2_core::wake::DaemonPlist::canonical(
+                let plist = k2_client::wake::DaemonPlist::canonical(
                     std::path::PathBuf::from("/unused"),
                 );
-                match k2_core::wake::ensure_loaded(&plist) {
-                    Ok(k2_core::wake::LoadOutcome::AlreadyLoaded) => {
+                match k2_client::wake::ensure_loaded(&plist) {
+                    Ok(k2_client::wake::LoadOutcome::AlreadyLoaded) => {
                         log_debug!("[k2so] daemon already loaded in launchctl");
                     }
-                    Ok(k2_core::wake::LoadOutcome::Loaded) => {
+                    Ok(k2_client::wake::LoadOutcome::Loaded) => {
                         log_debug!("[k2so] daemon plist loaded (was unloaded)");
                     }
-                    Ok(k2_core::wake::LoadOutcome::NotInstalled) => {
+                    Ok(k2_client::wake::LoadOutcome::NotInstalled) => {
                         // Self-heal EVERY boot, not just first install: the
                         // 0.40 launchd sweep retires com.k2so.k2so-daemon,
                         // and on updated machines install_daemon_plist_v1 is
@@ -1490,15 +1316,15 @@ pub fn run() {
                         // guard as the migration path (#14).
                         let healed = std::env::current_exe()
                             .ok()
-                            .and_then(|p| k2_core::daemon_lifecycle::bundled_daemon_path(&p))
+                            .and_then(|p| k2_client::daemon_lifecycle::bundled_daemon_path(&p))
                             .filter(|p| p.exists())
-                            .filter(|p| !k2_core::daemon_lifecycle::is_transient_exe_location(p));
+                            .filter(|p| !k2_client::daemon_lifecycle::is_transient_exe_location(p));
                         match healed {
                             Some(daemon_bin) => {
                                 let plist =
-                                    k2_core::wake::DaemonPlist::canonical(daemon_bin.clone());
-                                match k2_core::wake::install(&plist)
-                                    .and_then(|_| k2_core::wake::ensure_loaded(&plist))
+                                    k2_client::wake::DaemonPlist::canonical(daemon_bin.clone());
+                                match k2_client::wake::install(&plist)
+                                    .and_then(|_| k2_client::wake::ensure_loaded(&plist))
                                 {
                                     Ok(_) => log_debug!(
                                         "[k2so] daemon plist healed + loaded (was missing) → {}",
@@ -1589,14 +1415,12 @@ pub fn run() {
                         // Cmd+Q is not this path. It lands in
                         // RunEvent::ExitRequested, which exits the app
                         // and does not unload the daemon.
-                        // Phase 2 Unit 7c — read directly from
-                        // k2so-core to drop the last Tauri-side
-                        // `read_settings()` call site. Daemon-owned
-                        // writes still synchronize because both
-                        // sides read the same `~/.k2so/settings.json`
-                        // through `k2_core::app_settings::load`.
+                        // Read from the daemon-owned `~/.k2/settings.json`
+                        // (k2-client's read-only view; same field, same
+                        // default as `k2_core::app_settings::load`), so it
+                        // works even while the daemon is down.
                         let keep_running =
-                            k2_core::app_settings::load().keep_daemon_on_quit;
+                            k2_client::app_settings_view::load().keep_daemon_on_quit;
                         if keep_running {
                             window::save_window_state(&app_handle);
                             api.prevent_close();
@@ -1611,12 +1435,12 @@ pub fn run() {
                         // destroy path below.
                         #[cfg(target_os = "macos")]
                         {
-                            let plist = k2_core::wake::DaemonPlist::canonical(
+                            let plist = k2_client::wake::DaemonPlist::canonical(
                                 std::path::PathBuf::from("/unused"),
                             );
                             if let Some(path) = plist.plist_path() {
                                 if path.exists() {
-                                    let _ = k2_core::wake::launchctl_unload(&path);
+                                    let _ = k2_client::wake::launchctl_unload(&path);
                                 }
                             }
                         }
@@ -1675,10 +1499,8 @@ pub fn run() {
             // and this app never rewrites the script. Install problems
             // reach the renderer as the daemon's `hooks_install_failed`.
             //
-            // What Tauri still does here: sync hook_config so in-process
-            // children inject the daemon's port + token into child envs
-            // (`prime_hook_config_from_daemon` below).
-            prime_hook_config_from_daemon();
+            // (0.46.4: the hook_config sync that used to run here fed
+            // in-process terminals this app no longer has; removed.)
             if !zen_spike_build() {
                 check_daemon_version_and_restart();
             }
@@ -1961,7 +1783,6 @@ pub fn run() {
             commands::projects::projects_pick_folder,
             commands::projects::pick_local_files,
             commands::projects::projects_open_in_finder,
-            commands::projects::projects_upload_icon,
             commands::projects::projects_open_in_editor,
             commands::projects::projects_open_in_terminal,
             commands::projects::projects_get_editors,
@@ -2063,77 +1884,41 @@ pub fn run() {
             // directly; no Tauri command surface remains.
             // K2SO Agents
             commands::k2so_agents::k2so_agents_list,
-            commands::k2so_agents::k2so_agents_create,
-            commands::k2so_agents::k2so_agents_delete,
-            commands::k2so_agents::k2so_agents_scheduler_tick,
-            commands::k2so_agents::k2so_agents_save_session_id,
-            commands::k2so_agents::k2so_session_set_surfaced,
             commands::k2so_agents::k2so_chat_refresh_broadcast,
-            commands::k2so_agents::k2so_agents_clear_session_id,
             // Plan B cleanup — `states_*` command surface deleted. Routed
             // daemon data; the renderer reaches it host-aware via
             // `/cli/states/*` on the active daemon.
             // Phase 2.1c Item 2 — workspace inbox primitive (replaces
             // the legacy `k2so_agents_work_*` + `k2so_agents_workspace_inbox_list`
-            // calls). Thin wrappers around `k2_core::inbox::*` that
-            // mirror the daemon-side `/cli/inbox/*` routes.
-            commands::inbox::k2so_inbox_list,
+            // calls). The badge count forwards to `/cli/inbox/count`
+            // (0.46.4; the other inbox shims had no renderer caller).
             commands::inbox::k2so_inbox_count,
-            commands::inbox::k2so_inbox_folders,
-            commands::inbox::k2so_inbox_read,
-            commands::inbox::k2so_inbox_search,
-            commands::inbox::k2so_inbox_compose,
-            commands::inbox::k2so_inbox_move,
-            commands::inbox::k2so_inbox_archive,
-            commands::inbox::k2so_inbox_delete,
-            commands::inbox::k2so_inbox_respond,
             // Phase 2.1 wrap-up — generic worktree fs reader (powers
             // WorktreeDetailPane's Task tab; renders the worktree's
             // CLAUDE.md as Markdown). Path-canonicalized + traversal-
             // rejecting so it's safe to expose to the renderer.
             commands::worktree::read_worktree_file,
-            // Phase 2.5b follow-up — Skills CRUD Tauri verbs. The
-            // workspace settings "Skills" panel uses these to read /
-            // write `.k2so/skills/<name>/SKILL.md` directly without
-            // routing through the daemon HTTP surface. Thin forwards
-            // to `k2_core::skills::crud::*`.
+            // Phase 2.5b follow-up — Skills panel list; forwards to
+            // `/cli/skills/list` (0.46.4).
             commands::skills::k2so_skills_list,
-            commands::skills::k2so_skills_profile,
-            commands::skills::k2so_skills_create,
-            commands::skills::k2so_skills_remove,
             // Legacy `k2so_agents_work_list` removed — its renderer
             // callers now use `k2so_inbox_list` above. The per-agent
             // work-queue surface is itself being retired with the
             // Phase 2.1 1:1 (workspace==agent) refactor.
-            commands::k2so_agents::k2so_agents_delegate,
             // `k2so_agents_work_create` and `k2so_agents_work_move`
             // had zero frontend callers (confirmed via Phase 2.1c
             // audit) and are removed here.
-            commands::k2so_agents::k2so_agents_get_profile,
-            commands::k2so_agents::k2so_agents_regenerate_workspace_skill,
-            commands::k2so_agents::k2so_onboarding_scan,
             // `k2so_onboarding_adopt` / `k2so_onboarding_skip` removed with
             // the canonical-agents PRD (§7): consent gate is gone now that
             // harness fan-out is off by default.
-            commands::k2so_agents::k2so_onboarding_start_fresh,
             // Canonical Agent Flow (canonical-agents PRD §4 / §5.2 / §8.1).
-            commands::k2so_agents::k2so_harness_fanout_enabled,
-            commands::k2so_agents::k2so_set_harness_fanout_enabled,
             commands::k2so_agents::k2so_detect_canonical_state,
-            commands::k2so_agents::k2so_write_opt_in_skill,
             // Back-compat aliases — retained during the 0.33.0 rename window so
             // stale React `invoke()` names keep working until every call site
             // has migrated to the canonical new names above.
             commands::k2so_agents::k2so_agents_teardown_workspace,
-            commands::k2so_agents::k2so_agents_preview_workspace_ingest,
-            commands::k2so_agents::k2so_agents_run_workspace_ingest,
-            commands::k2so_agents::k2so_agents_generate_workspace_claude_md,
-            commands::k2so_agents::k2so_agents_disable_workspace_claude_md,
             commands::k2so_agents::k2so_agents_build_launch,
             commands::k2so_agents::k2so_agents_review_queue,
-            commands::k2so_agents::k2so_agents_review_approve,
-            commands::k2so_agents::k2so_agents_review_reject,
-            commands::k2so_agents::k2so_agents_review_request_changes,
             // `k2so_agents_workspace_inbox_list` and
             // `k2so_agents_workspace_inbox_create` removed (Phase 2.1c
             // Item 2) — renderer migrated to `k2so_inbox_*` above.
@@ -2142,29 +1927,17 @@ pub fn run() {
             // `workspace_msg::deliver_to_inbox` — the inbox-delivery
             // path is now `k2_core::inbox::compose` end-to-end.
             commands::k2so_agents::k2so_agents_lock,
-            commands::k2so_agents::k2so_agents_triage_decide,
             commands::k2so_agents::k2so_agents_install_heartbeat,
             commands::k2so_agents::k2so_agents_uninstall_heartbeat,
             commands::k2so_agents::k2so_agents_apply_wake_scheduler,
             commands::k2so_agents::k2so_agents_update_heartbeat_projects,
             commands::k2so_agents::k2so_agents_preview_schedule,
             // Multi-heartbeat (agent_heartbeats table)
-            commands::k2so_agents::k2so_heartbeat_add,
             commands::k2so_agents::k2so_heartbeat_list,
             commands::k2so_agents::k2so_heartbeat_list_all,
             commands::k2so_agents::k2so_heartbeat_fires_list_all,
-            commands::k2so_agents::k2so_heartbeat_list_archived,
-            commands::k2so_agents::k2so_heartbeat_archive,
-            commands::k2so_agents::k2so_heartbeat_unarchive,
-            commands::k2so_agents::k2so_heartbeat_remove,
             commands::k2so_agents::k2so_workspace_get_show_heartbeat_sessions,
-            commands::k2so_agents::k2so_workspace_set_show_heartbeat_sessions,
-            commands::k2so_agents::k2so_heartbeat_set_enabled,
-            commands::k2so_agents::k2so_heartbeat_set_use_workspace_session,
             commands::k2so_agents::k2so_heartbeat_set_session,
-            commands::k2so_agents::k2so_heartbeat_edit,
-            commands::k2so_agents::k2so_heartbeat_rename,
-            commands::k2so_agents::k2so_heartbeat_fires_list,
             agent_hooks::k2so_heartbeat_force_fire,
             agent_hooks::k2so_heartbeat_smart_launch,
             agent_hooks::k2so_heartbeat_active_session,
@@ -2174,15 +1947,9 @@ pub fn run() {
             commands::k2so_agents::workspace_session_get,
             commands::k2so_agents::workspace_session_set_session_id,
             // Workspace Relations
-            commands::k2so_agents::workspace_relations_list,
-            commands::k2so_agents::workspace_relations_list_incoming,
-            commands::k2so_agents::workspace_relations_create,
-            commands::k2so_agents::workspace_relations_delete,
             // Agent Skills
-            commands::k2so_agents::k2so_agents_regenerate_skills,
             // Agent Editor
             commands::k2so_agents::k2so_agents_get_editor_context,
-            commands::k2so_agents::k2so_agents_save_agent_md,
             // Phase 2 Unit 6 — `commands::review_checklist::*` shims
             // deleted. Renderer hits `/cli/review-checklist/*` on the
             // daemon.

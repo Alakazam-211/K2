@@ -157,13 +157,30 @@ pub fn install(app: &AppHandle<Wry>) -> Result<(), String> {
     Ok(())
 }
 
+/// The companion status as this app process sees it: always "not running".
+///
+/// The tray used to call `k2_core::companion::companion_status()`. The
+/// companion (ngrok tunnel + WS) moved to the daemon in Phase 2 Unit 1 and
+/// is never started in this process, so in here that call always returned
+/// exactly this value. Kept byte-for-byte when the app stopped linking
+/// k2-core (0.46.4). Follow-up: read the daemon's `/cli/companion/status`
+/// so the tray shows the real tunnel URL and connected parties.
+fn in_app_companion_status() -> serde_json::Value {
+    serde_json::json!({
+        "running": false,
+        "tunnelUrl": null,
+        "connectedClients": 0,
+        "sessions": [],
+    })
+}
+
 /// Update live menu items in place — no menu replacement, no
 /// auto-dismiss of a currently-open menu. Recomputes the three
 /// dynamic labels (status, Ngrok URL, parties header) and calls
 /// `set_text` on each cached handle. Full menu rebuild fires only
 /// when the parties count has changed since the last refresh.
 fn refresh_in_place(app: &AppHandle<Wry>) {
-    let companion = k2_core::companion::companion_status();
+    let companion = in_app_companion_status();
     let party_count = companion
         .get("connectedClients")
         .and_then(|v| v.as_u64())
@@ -252,7 +269,7 @@ fn build_menu(app: &AppHandle<Wry>) -> Result<Menu<Wry>, String> {
     // 2. Ngrok URL — clickable, click copies to clipboard. Label reads
     // "Ngrok URL: <url>" if tunnel is up, otherwise "Ngrok URL: Offline"
     // (disabled). The URL lives in companion_status's `tunnelUrl`.
-    let companion_status = k2_core::companion::companion_status();
+    let companion_status = in_app_companion_status();
     let tunnel_url = companion_status
         .get("tunnelUrl")
         .and_then(|v| v.as_str())
@@ -363,7 +380,7 @@ fn compose_status_label() -> (String, StatusState) {
 
     // 2. Fallback: Tauri's in-process companion. No uptime reliably
     // available here — just report running.
-    let companion = k2_core::companion::companion_status();
+    let companion = in_app_companion_status();
     let in_app_running = companion
         .get("running")
         .and_then(|v| v.as_bool())
@@ -393,7 +410,7 @@ fn compose_status_label() -> (String, StatusState) {
 /// is a valid status the user wants to see. Items only render when
 /// sessions exist.
 ///
-/// Reads from `k2_core::companion::companion_status()` which
+/// Reads from `in_app_companion_status()` (see its note) which
 /// returns the same `connectedClients` count the Settings pane's
 /// companion row displays. Per-session detail (device name, last
 /// activity) is surfaced from `sessions` in that response when the

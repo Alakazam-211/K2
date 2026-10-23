@@ -4,7 +4,7 @@
 //! Tauri updater path; headless servers keep `k2 update`.
 //!
 //! OS integration (a package install), so it lives in src-tauri. The SUMS
-//! parsing and verification is `k2_core::release_sums`.
+//! parsing and verification is `k2_client::release_sums`.
 //!
 //! Flow (`install_linux_package_update`):
 //!   1. Only for an install this package manager owns: the running exe is
@@ -31,7 +31,7 @@
 
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
-use k2_core::release_sums::{self, LINUX_SUMS_ASSET};
+use k2_client::release_sums::{self, LINUX_SUMS_ASSET};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -469,8 +469,8 @@ pub fn run_install(kind: PackageKind, version: &str) -> Result<LinuxInstallOutco
 /// packaged install). `Ok(manual)` = verified file ready, run the command.
 #[tauri::command]
 pub async fn install_linux_package_update(version: String) -> Result<LinuxInstallOutcome, String> {
-    if k2_core::airgap::enabled() {
-        return Err(k2_core::airgap::TEACHING.to_string());
+    if k2_client::airgap::enabled_for_client() {
+        return Err(k2_client::airgap::TEACHING.to_string());
     }
     let kind = this_install()?;
     #[cfg(unix)]
@@ -588,7 +588,7 @@ mod tests {
             "https://github.com/Alakazam-211/K2/releases/download/v0.46.1/SHA256SUMS-linux-x86_64.txt"
         );
         for k in [PackageKind::Arch, PackageKind::Deb, PackageKind::Rpm] {
-            assert!(k2_core::release_sums::is_plain_file_name(&k.asset_name("0.46.1")));
+            assert!(k2_client::release_sums::is_plain_file_name(&k.asset_name("0.46.1")));
         }
     }
 

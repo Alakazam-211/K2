@@ -13,3 +13,18 @@ Every other answer, page, skill and CLI output under tests/golden/garden_access_
 4. The permission catalog lists garden.access, its twin garden.access-off and garden.delete; while off their
    checks answer not_available ("Garden access lists are off on this server; ..."), and V1_ACTIONS grows by
    three. Asserted by catalog_rows.txt (crates/k2-daemon/src/garden_access_off_golden_tests.rs).
+
+Garden columns and the agent list (prd-garden-column-collapse-and-agent-list-v1 rev 3, CA5; 0.46.3 r10,
+catalog v20). With Garden access off these lines move too; each is named here and nothing else may:
+5. boot_status_features.txt and tests/golden/permission_off/daemon/boot_status.txt: the feature line
+   "thread-context-v1" (the visible context chip, conversation.setContext), last in the list.
+6. skill_k2_zen.txt: skill_version 30 and its skill_checksum; "verb catalog (version 20)"; the
+   [[layout.column]] collapsible / collapsed / label paragraph; the agents mode line (mode list) and the
+   new list-from prop line; the "A chosen list" bullet; the bridge lines for agents.show and
+   conversation.setContext; the widget verb lines k2.layout.get / set / toggle / subscribe,
+   k2.agents.show and k2.conversation.setContext; the section "Columns, a chosen list and a context chip".
+7. zen_bodies.txt: liveDefaults d-7d1bfd780a3c4733 -> d-9171929ecf4c35ea (WIDGET_PROPS gains
+   agents.list-from, which has no default). The zen/get layout body is unchanged: collapsible, collapsed,
+   label and list-from are sent only when a file sets them.
+8. tests/golden/permission_off/cli/study_page_app-api.txt and study_page_app-api_json.txt: "From K2's
+   verb catalog, version 20." (the generated App API page names the catalog version).

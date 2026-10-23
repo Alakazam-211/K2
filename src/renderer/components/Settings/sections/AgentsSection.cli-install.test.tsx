@@ -66,6 +66,9 @@ describe('CLI Tools Setup install rows', () => {
 
     expand(/Cursor Agent/)
     expect(screen.queryByRole('button', { name: 'Install' })).toBeNull()
+    // Cursor's own installer; the npm `cursor-agent` package is a third party's.
+    expect(screen.getByText('curl https://cursor.com/install -fsS | bash')).toBeTruthy()
+    expect(document.body.textContent).not.toContain('npm install -g cursor-agent')
   })
 
   it('shows Installing Grok… on that row only while Grok is installing', () => {

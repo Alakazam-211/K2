@@ -797,8 +797,10 @@ const CLI_INSTALL_ENTRIES: {
   {
     name: 'Cursor Agent',
     command: 'cursor-agent',
-    installCommand: 'npm install -g cursor-agent',
-    docs: 'https://docs.cursor.com',
+    // Cursor's official installer (cursor.com/docs/cli/installation). The
+    // npm package named `cursor-agent` is a third party's, not Cursor's.
+    installCommand: 'curl https://cursor.com/install -fsS | bash',
+    docs: 'https://cursor.com/docs/cli/installation',
     notes: 'The standalone CLI agent from Cursor. Requires a Cursor subscription.',
   },
   {

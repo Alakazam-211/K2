@@ -47,9 +47,20 @@ fn helper_bundle_id_matches_build_script() {
 /// k2-ptyd is nested beside k2-daemon under the name the daemon looks
 /// for (`shipped_binary`), and every macOS build path passes it to
 /// `k2_daemon_helper_assemble` (which requires it).
+///
+/// Since build-once, release.sh, build-app.sh and dev-build.sh build
+/// through one shared step, `k2_build_mac_binaries` in
+/// scripts/lib/build-binaries.sh: that function must build k2-ptyd and
+/// assemble with it unconditionally (at its top level: inside no
+/// `if`/`case`/loop and after no early `return`), and each of the three
+/// must both source the file and call the function. build-local.sh still
+/// builds inline and is checked as before.
 #[cfg(unix)]
 #[test]
 fn ptyd_is_nested_beside_the_daemon_by_every_build_script() {
+    const PTYD_BUILD: &str = "cargo build --release -p k2-ptyd --bin k2-ptyd";
+    const SHARED: &str = "scripts/lib/build-binaries.sh";
+    const SHARED_FN: &str = "k2_build_mac_binaries";
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let read = |rel: &str| std::fs::read_to_string(root.join(rel)).unwrap_or_else(|e| panic!("read {rel}: {e}"));
     let helper = read("scripts/macos-daemon-helper-app.sh");
@@ -58,15 +69,66 @@ fn ptyd_is_nested_beside_the_daemon_by_every_build_script() {
         helper.contains(&format!("K2_DAEMON_HELPER_PTYD=\"{name}\"")),
         "scripts/macos-daemon-helper-app.sh ptyd name drifted from PTYD_BINARY_NAME"
     );
-    for script in ["scripts/release.sh", "scripts/build-app.sh", "scripts/dev-build.sh", "scripts/build-local.sh"] {
-        let body = read(script);
-        assert!(body.contains("cargo build --release -p k2-ptyd --bin k2-ptyd"), "{script} does not build k2-ptyd");
-        let call = body
-            .lines()
-            .find(|l| l.trim_start().starts_with("k2_daemon_helper_assemble "))
-            .unwrap_or_else(|| panic!("{script} does not assemble K2 Daemon.app"));
-        assert!(call.contains("target/release/k2-ptyd") || call.contains("$PTYD_SRC"), "{script} assembles without k2-ptyd: {call}");
+
+    // The shared step: the body of `k2_build_mac_binaries() {` up to its
+    // closing `}` at column 0.
+    let shared = read(SHARED);
+    let start = shared
+        .lines()
+        .position(|l| l.trim_end() == format!("{SHARED_FN}() {{"))
+        .unwrap_or_else(|| panic!("{SHARED} does not define {SHARED_FN}()"));
+    let body: Vec<&str> = shared.lines().skip(start + 1).take_while(|l| *l != "}").collect();
+    assert!(body.iter().any(|l| l.trim() == "local out=\"target/release\""), "{SHARED_FN} no longer builds into target/release");
+    // Block depth before each line: an `if`/`case`/loop the line sits in, or
+    // an early `return` before it, would let a caller skip it.
+    let unconditional = |needle: &dyn Fn(&str) -> bool, what: &str| -> String {
+        let mut depth: i32 = 0;
+        for l in &body {
+            let t = l.trim();
+            if t.starts_with('#') {
+                continue;
+            }
+            if needle(t) {
+                assert_eq!(depth, 0, "{SHARED_FN}: {what} sits inside a conditional block: {t}");
+                return t.to_string();
+            }
+            assert!(t != "return" && t != "return 0", "{SHARED_FN}: an early `{t}` comes before {what}");
+            if t.starts_with("if ") || t.starts_with("case ") || t.ends_with("; do") || t == "do" {
+                depth += 1;
+            }
+            if t == "fi" || t == "esac" || t == "done" || t.starts_with("fi ") || t.starts_with("done ") {
+                depth -= 1;
+            }
+        }
+        panic!("{SHARED_FN} does not {what}");
+    };
+    unconditional(&|t| t.starts_with(PTYD_BUILD), "build k2-ptyd");
+    let call = unconditional(&|t| t.starts_with("k2_daemon_helper_assemble "), "assemble K2 Daemon.app");
+    assert!(call.contains("\"$out/k2-ptyd\""), "{SHARED_FN} assembles without k2-ptyd: {call}");
+
+    // The three callers source the shared file and call the function.
+    for script in ["scripts/release.sh", "scripts/build-app.sh", "scripts/dev-build.sh"] {
+        let src = read(script);
+        let code: Vec<&str> = src.lines().map(str::trim).filter(|t| !t.starts_with('#')).collect();
+        assert!(
+            code.iter().any(|t| (t.starts_with("source ") || t.starts_with(". ")) && t.contains(SHARED)),
+            "{script} does not source {SHARED}"
+        );
+        assert!(
+            code.iter().any(|t| t.starts_with(&format!("{SHARED_FN} "))),
+            "{script} sources {SHARED} but never calls {SHARED_FN}"
+        );
     }
+
+    // build-local.sh builds inline, as before.
+    let script = "scripts/build-local.sh";
+    let body = read(script);
+    assert!(body.contains(PTYD_BUILD), "{script} does not build k2-ptyd");
+    let call = body
+        .lines()
+        .find(|l| l.trim_start().starts_with("k2_daemon_helper_assemble "))
+        .unwrap_or_else(|| panic!("{script} does not assemble K2 Daemon.app"));
+    assert!(call.contains("target/release/k2-ptyd") || call.contains("$PTYD_SRC"), "{script} assembles without k2-ptyd: {call}");
 }
 
 #[cfg(target_os = "macos")]

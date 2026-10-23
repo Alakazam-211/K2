@@ -1,7 +1,7 @@
 ---
 k2_skill: k2-zen
 skill_version: 30
-skill_checksum: fc77bd66ae98bb31
+skill_checksum: 94ff287140f4c3b1
 name: k2-zen
 description: Build Zen Gardens (~/.k2/zen): k2 zen garden, place K2's built-in widgets (a whole Home or one agent) or your own sealed custom widgets (k2 zen widget), themes, tokens, font, motion, validate, reset; agents request, never grant
 ---
@@ -882,10 +882,14 @@ full addresses exactly as `k2.agents.list()` gives them (`handle::host`; a bare 
 drawn until it's back), clears when your widget stops or unloads, and a footer counts the
 agents off your list that need the person. Map from `agents.list()`: never guess addresses.
 - **A context chip:** `k2.conversation.setContext(text)` (needs `thread:post`) puts a chip the
-person sees on the following Conversation's box ("Board: K2 Boards"). It rides on their next
-send as K2's own quoted line before their message, never as their words, and they can remove
-it. One line, at most 120 characters, plain text, no `[thread:`, `[from ` or `[context`, at
-most 2 calls a second; `null` clears. An older server doesn't get it (the chip says so).
+person sees ("Board: K2 Boards") on the box of every Conversation that follows your widget
+(`agents = "<your id>"`, or through an Agents widget's `list-from`); with none following it
+answers `not_bound`. It rides only on the person's own send, as K2's quoted line before their
+`[from]` stamp, never as their words, and they can remove it. One line, at most 120
+characters, plain text, no `[thread:`, `[from ` or `[context`, at most 2 calls a second.
+`null`, your widget stopping or unloading, or a Garden switch clears it. With Garden access
+lists on, an unsigned version answers `needs_editor`. An older server doesn't get it (the chip
+says so). A message that carried one has `doc.context` (`{text, widget, placement}`).
 
 ```js
 const rows = await k2.agents.list()

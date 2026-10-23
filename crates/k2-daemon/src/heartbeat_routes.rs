@@ -221,9 +221,81 @@ pub fn handle_set_show_heartbeat_sessions(body: &[u8]) -> CliResponse {
     }
 }
 
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
+struct ShowHeartbeatSessionsBody {
+    project_path: String,
+}
+
+/// Handler for `POST /cli/heartbeat/show-sessions` `{project_path}` → `true`
+/// / `false`. The READ twin of `set-show-sessions`: wraps
+/// `k2_core::heartbeats::k2so_workspace_get_show_heartbeat_sessions`, the
+/// body of the `k2so_workspace_get_show_heartbeat_sessions` Tauri command
+/// (which the desktop app now forwards here instead of linking k2-core).
+pub fn handle_show_heartbeat_sessions(body: &[u8]) -> CliResponse {
+    let parsed: ShowHeartbeatSessionsBody = if body.is_empty() {
+        ShowHeartbeatSessionsBody::default()
+    } else {
+        match serde_json::from_slice(body) {
+            Ok(b) => b,
+            Err(e) => return CliResponse::bad_request(format!("invalid body: {e}")),
+        }
+    };
+    if parsed.project_path.is_empty() {
+        return CliResponse::bad_request("missing project_path");
+    }
+    crate::cli::respond(hb::k2so_workspace_get_show_heartbeat_sessions(parsed.project_path))
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
+struct PreviewScheduleBody {
+    mode: String,
+    schedule_json: String,
+    count: u32,
+}
+
+/// Handler for `POST /cli/heartbeat/preview-schedule`
+/// `{mode, schedule_json, count}` → the next fire times as
+/// `"YYYY-MM-DD HH:MM"` strings (`k2_core::scheduler::preview_fire_times`,
+/// formerly the `k2so_agents_preview_schedule` Tauri command's body).
+/// Pure computation; no project, no DB.
+pub fn handle_preview_schedule(body: &[u8]) -> CliResponse {
+    let parsed: PreviewScheduleBody = if body.is_empty() {
+        PreviewScheduleBody::default()
+    } else {
+        match serde_json::from_slice(body) {
+            Ok(b) => b,
+            Err(e) => return CliResponse::bad_request(format!("invalid body: {e}")),
+        }
+    };
+    let times =
+        k2_core::scheduler::preview_fire_times(&parsed.mode, &parsed.schedule_json, parsed.count);
+    crate::cli::respond::<Vec<String>>(Ok(times))
+}
+
 #[cfg(test)]
 mod gap_route_tests {
     use super::*;
+
+    #[test]
+    fn show_heartbeat_sessions_rejects_missing_project_path_and_garbage() {
+        let r = handle_show_heartbeat_sessions(b"{}");
+        assert_eq!(r.status, "400 Bad Request");
+        assert!(r.body.contains("project_path"), "body={}", r.body);
+        let r = handle_show_heartbeat_sessions(b"not json");
+        assert_eq!(r.status, "400 Bad Request");
+        assert!(r.body.contains("invalid body"), "body={}", r.body);
+    }
+
+    #[test]
+    fn preview_schedule_returns_a_json_array() {
+        let r = handle_preview_schedule(br#"{"mode":"hourly","schedule_json":"{}","count":0}"#);
+        assert_eq!(r.status, "200 OK");
+        assert_eq!(r.body, "[]");
+        let r = handle_preview_schedule(b"not json");
+        assert_eq!(r.status, "400 Bad Request");
+    }
 
     #[test]
     fn set_show_heartbeat_sessions_rejects_missing_project_path() {

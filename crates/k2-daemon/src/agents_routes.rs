@@ -1418,6 +1418,135 @@ pub fn handle_relations_list_incoming(project_id: String) -> CliResponse {
     }
 }
 
+// ── Thin-client mirrors (0.46.4 build-speed lane) ────────────────────
+//
+// These four Tauri commands ran k2-core in the desktop app process (DB +
+// workspace files). The app no longer links k2-core: each command now
+// forwards here, and each handler calls the SAME k2-core fn with the same
+// arguments and returns its value as JSON unchanged.
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
+struct TeardownBody {
+    project_path: String,
+    mode: String,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
+struct BuildLaunchBody {
+    project_path: String,
+    agent_name: String,
+    agent_cli_command: Option<String>,
+    wakeup_override: Option<String>,
+    skip_fork_session: Option<bool>,
+    heartbeat_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
+struct ProjectAgentBody {
+    project_path: String,
+    agent_name: String,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
+struct ProjectIdBody {
+    project_id: String,
+}
+
+/// `POST /cli/agents/teardown-workspace` `{project_path, mode}` → the
+/// `TeardownResult[]` of `workspace::teardown::k2so_agents_teardown_workspace`
+/// (was the `k2so_agents_teardown_workspace` Tauri command's body).
+pub fn handle_teardown_workspace(body: &[u8]) -> CliResponse {
+    let b: TeardownBody = match parse_body(body) {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    if b.project_path.is_empty() {
+        return CliResponse::bad_request("missing project_path");
+    }
+    crate::cli::respond(k2_core::workspace::teardown::k2so_agents_teardown_workspace(
+        b.project_path,
+        b.mode,
+    ))
+}
+
+/// `POST /cli/agents/build-launch` → the launch object of
+/// `workspace::agent_launch::k2so_agents_build_launch` (the desktop Launch
+/// button / Chat tab). Builds only; `/cli/agents/launch` is the
+/// build-and-spawn route.
+pub fn handle_build_launch(body: &[u8]) -> CliResponse {
+    let b: BuildLaunchBody = match parse_body(body) {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    if b.project_path.is_empty() {
+        return CliResponse::bad_request("missing project_path");
+    }
+    crate::cli::respond(k2_core::workspace::agent_launch::k2so_agents_build_launch(
+        b.project_path,
+        b.agent_name,
+        b.agent_cli_command,
+        b.wakeup_override,
+        b.skip_fork_session,
+        b.heartbeat_name,
+    ))
+}
+
+/// `POST /cli/agents/editor-context` `{project_path, agent_name}` → the
+/// AIFileEditor context object of
+/// `workspace::agent_editor::k2so_agents_get_editor_context`.
+pub fn handle_editor_context(body: &[u8]) -> CliResponse {
+    let b: ProjectAgentBody = match parse_body(body) {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    if b.project_path.is_empty() {
+        return CliResponse::bad_request("missing project_path");
+    }
+    crate::cli::respond(k2_core::workspace::agent_editor::k2so_agents_get_editor_context(
+        b.project_path,
+        b.agent_name,
+    ))
+}
+
+/// `POST /cli/workspace/session-get` `{project_id}` → the workspace's
+/// `WorkspaceSession` row, or `null` (`workspace::relations::workspace_session_get`).
+pub fn handle_workspace_session_get(body: &[u8]) -> CliResponse {
+    let b: ProjectIdBody = match parse_body(body) {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    if b.project_id.is_empty() {
+        return CliResponse::bad_request("missing project_id");
+    }
+    crate::cli::respond(k2_core::workspace::relations::workspace_session_get(b.project_id))
+}
+
+#[cfg(test)]
+mod thin_client_mirror_tests {
+    use super::*;
+
+    fn status(r: &CliResponse) -> &'static str {
+        r.status
+    }
+
+    #[test]
+    fn mirrors_refuse_a_missing_key_and_a_garbage_body() {
+        for (name, h) in [
+            ("teardown", handle_teardown_workspace as fn(&[u8]) -> CliResponse),
+            ("build-launch", handle_build_launch),
+            ("editor-context", handle_editor_context),
+            ("session-get", handle_workspace_session_get),
+        ] {
+            assert_eq!(status(&h(b"{}")), "400 Bad Request", "{name}: empty body");
+            assert_eq!(status(&h(b"not json")), "400 Bad Request", "{name}: garbage body");
+        }
+    }
+}
+
 #[cfg(test)]
 mod gap_route_tests {
     use super::*;

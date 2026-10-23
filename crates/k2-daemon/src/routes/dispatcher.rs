@@ -5779,6 +5779,12 @@ async fn handle_one_request(
                 || p == "/cli/agents/save-session-id"
                 || p == "/cli/session/set-surfaced"
                 || p == "/cli/heartbeat/set-show-sessions"
+                || p == "/cli/heartbeat/show-sessions"
+                || p == "/cli/heartbeat/preview-schedule"
+                || p == "/cli/agents/teardown-workspace"
+                || p == "/cli/agents/build-launch"
+                || p == "/cli/agents/editor-context"
+                || p == "/cli/workspace/session-get"
                 || p == "/cli/relations/create"
                 || p == "/cli/relations/delete") =>
         {
@@ -13125,6 +13131,7 @@ fn dispatch_connect_gap_post(
 ) -> crate::cli::CliResponse {
     match path {
         // Workspace skill CRUD + canonical opt-in + harness-fanout marker.
+        "/cli/skills/list" => crate::skills_routes::handle_list(body),
         "/cli/skills/create" => crate::skills_routes::handle_create(body),
         "/cli/skills/remove" => crate::skills_routes::handle_remove(body),
         "/cli/skills/write-opt-in" => crate::skills_routes::handle_write_opt_in(body),
@@ -13166,6 +13173,16 @@ fn dispatch_connect_gap_post(
         "/cli/heartbeat/set-show-sessions" => {
             crate::heartbeat_routes::handle_set_show_heartbeat_sessions(body)
         }
+        // Thin-client mirrors (0.46.4): Tauri commands that ran k2-core in
+        // the desktop process now forward here.
+        "/cli/heartbeat/show-sessions" => {
+            crate::heartbeat_routes::handle_show_heartbeat_sessions(body)
+        }
+        "/cli/heartbeat/preview-schedule" => crate::heartbeat_routes::handle_preview_schedule(body),
+        "/cli/agents/teardown-workspace" => crate::agents_routes::handle_teardown_workspace(body),
+        "/cli/agents/build-launch" => crate::agents_routes::handle_build_launch(body),
+        "/cli/agents/editor-context" => crate::agents_routes::handle_editor_context(body),
+        "/cli/workspace/session-get" => crate::agents_routes::handle_workspace_session_get(body),
         // Workspace relations (id-based — mirrors the renderer's
         // workspace_relations_* Tauri commands 1:1). C1: gated for
         // non-privileged actors by agents_can_create_connections.

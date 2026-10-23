@@ -165,6 +165,18 @@ fn deliver_federated_files(
 
 // ── GET handlers (query-string) ────────────────────────────────────────
 
+/// GET /cli/inbox/count?project=<path> → the number of items at the inbox
+/// ROOT (`k2_core::inbox::list_root`, not subfolders) as a bare JSON
+/// number. The desktop badge's `k2so_inbox_count` Tauri command forwards
+/// here (0.46.4: the app no longer links k2-core).
+pub fn handle_count(params: &HashMap<String, String>) -> CliResponse {
+    let workspace = match need_project_path(params) {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
+    CliResponse::ok_json(k2_core::inbox::list_root(&workspace).len().to_string())
+}
+
 /// GET /cli/inbox/list?project=<path>&folder=<name>
 /// Missing `folder` → all items (root + every existing subfolder).
 /// Present `folder` (including empty string) → that folder only.
@@ -877,6 +889,22 @@ mod tests {
     use super::*;
     use crate::session_token::HookPrincipal;
     use std::collections::HashMap;
+
+    #[test]
+    fn count_is_root_items_only_and_needs_a_project() {
+        let r = handle_count(&HashMap::new());
+        assert_eq!(r.status, "400 Bad Request");
+        let ws = std::env::temp_dir().join(format!("k2-inbox-count-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&ws);
+        std::fs::create_dir_all(&ws).expect("mkdir ws");
+        let mut p = HashMap::new();
+        p.insert("project".to_string(), ws.to_string_lossy().to_string());
+        let r = handle_count(&p);
+        assert_eq!(r.status, "200 OK", "body={}", r.body);
+        assert_eq!(r.body, k2_core::inbox::list_root(&ws).len().to_string());
+        assert_eq!(r.body, "0", "an empty workspace has no inbox items");
+        let _ = std::fs::remove_dir_all(&ws);
+    }
 
     /// #36: stamp rewrites project= to the caller; `workspace=` (recipient
     /// key, same as live msg) must still be the compose target.

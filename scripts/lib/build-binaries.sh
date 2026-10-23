@@ -35,11 +35,56 @@
 # shellcheck source=scripts/macos-daemon-helper-app.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/macos-daemon-helper-app.sh"
 
+# One build env for dev-build.sh, build-app.sh and release.sh, so a dev
+# build leaves target/release warm for the release build (and the other way
+# round). Everything else that reaches rustc / cc / cmake already comes from
+# the same places: .cargo/config.toml [env] (CMAKE_POLICY_VERSION_MINIMUM,
+# MACOSX_DEPLOYMENT_TARGET), the release profile in Cargo.toml, and .env.
+# SDKROOT was the one that differed: some launchers exported it and the
+# scripts did not, and an unset SDKROOT let a vendored cmake configure pick
+# the Command Line Tools' newer SDK (`libSystem.tbd: unknown architecture`).
+# An explicit SDKROOT from the caller still wins.
+k2_mac_build_env() {
+    if [ -z "${SDKROOT:-}" ] && command -v xcrun >/dev/null 2>&1; then
+        SDKROOT="$(xcrun --sdk macosx --show-sdk-path 2>/dev/null || true)"
+        [ -n "$SDKROOT" ] && export SDKROOT
+    fi
+    if [ -n "${SDKROOT:-}" ]; then
+        echo "  build env: SDKROOT=$SDKROOT"
+    fi
+}
+
+# Why `target/release/build/llama-cpp-sys-2-*` (and prost-build's) had to be
+# deleted by hand: the `cmake` crate (0.1.58) runs `cmake` configure ONLY
+# when `<OUT_DIR>/build/CMakeCache.txt` does not exist yet. A configure that
+# fails (wrong SDK above, a CMake 4 policy error, Ctrl-C) still writes
+# CMakeCache.txt but no Makefile / build.ninja, so every later run skips
+# configure and dies with "No rule to make target Makefile". Remove exactly
+# those half-configured build dirs (cache present, no generated build file);
+# a good cache is never touched, so nothing rebuilds that didn't need to.
+k2_clear_failed_cmake_dirs() {
+    local profile_dir cache dir
+    for profile_dir in target/release/build target/debug/build; do
+        [ -d "$profile_dir" ] || continue
+        for cache in "$profile_dir"/*/out/build/CMakeCache.txt; do
+            [ -f "$cache" ] || continue
+            dir="$(dirname "$cache")"
+            if [ ! -f "$dir/Makefile" ] && [ ! -f "$dir/build.ninja" ]; then
+                echo "  removing half-configured cmake dir (failed configure): $dir"
+                rm -rf "$dir"
+            fi
+        done
+    done
+}
+
 # k2_build_mac_binaries <app-path>   e.g. target/release/bundle/macos/K2.app
 # Returns non-zero (after a FATAL line) on any failure.
 k2_build_mac_binaries() {
     local app="$1"
     local out="target/release"
+
+    k2_mac_build_env
+    k2_clear_failed_cmake_dirs
 
     echo ""; echo "  Build 1/2: tauri build (frontend + k2 + bundle)..."
     bun run tauri build || { echo "FATAL: tauri build failed" >&2; return 1; }

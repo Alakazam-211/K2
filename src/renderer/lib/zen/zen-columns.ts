@@ -356,6 +356,12 @@ export function useZenColumnFolds(
   const live = useRef({ state, folds, scope, gardenId, ncols })
   live.current = { state, folds, scope, gardenId, ncols }
   const mover = useRef<((index: number, collapsed: boolean, by: ZenColumnMover) => void) | null>(null)
+  /** Until the next render, later calls in the same tick see this move (two
+   *  quick folds can't both pass the last-open check). */
+  const moved = useCallback((i: number, c: boolean): void => {
+    const cur = live.current
+    live.current = { ...cur, state: { ...cur.state, collapsed: cur.state.collapsed.map((x, j) => (j === i ? c : x)) } }
+  }, [])
 
   const keep = useCallback((i: number, on: boolean) => {
     const sc = live.current.scope
@@ -391,9 +397,10 @@ export function useZenColumnFolds(
       useZenColumnsStore.getState().save(zenColumnKey(cur.gardenId, cur.ncols, i), true)
       setWidget(i, null)
       keep(i, false)
+      moved(i, true)
       mover.current?.(i, true, 'person')
     },
-    [keep, setWidget],
+    [keep, setWidget, moved],
   )
   const personExpand = useCallback(
     (i: number) => {
@@ -402,9 +409,10 @@ export function useZenColumnFolds(
       useZenColumnsStore.getState().save(zenColumnKey(cur.gardenId, cur.ncols, i), false)
       setWidget(i, null)
       if (cur.state.auto[i]) keep(i, true)
+      moved(i, false)
       mover.current?.(i, false, 'person')
     },
-    [keep, setWidget],
+    [keep, setWidget, moved],
   )
 
   const subscribers = useRef(new Set<(columns: ZenLayoutColumn[]) => void>())
@@ -419,6 +427,7 @@ export function useZenColumnFolds(
         setWidget(i, c)
         // A widget opening a column the narrow window folded keeps it open.
         if (!c && cur.state.auto[i]) keep(i, true)
+        moved(i, c)
         mover.current?.(i, c, 'widget')
         return null
       },
@@ -429,7 +438,7 @@ export function useZenColumnFolds(
         }
       },
     }),
-    [keep, setWidget],
+    [keep, setWidget, moved],
   )
   // Tell `layout.subscribe` widgets whenever a column moves (any cause).
   const lastSent = useRef<boolean[] | null>(null)

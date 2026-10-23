@@ -28,7 +28,7 @@ jobs:
     name: typecheck:web + vitest + vite:build:web
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Arch/Omarchy packaging lock (O14–O27 files)
         run: bash tests/packaging/arch-omarchy-bundle.sh
@@ -54,7 +54,7 @@ jobs:
       - name: Release lock (temp paths, stub k2-node)
         run: bash tests/packaging/release-lock.sh
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -90,13 +90,13 @@ jobs:
     name: cargo check -D warnings (k2-core, k2-daemon)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable (branch head 2026-10-22)
 
       - name: Cache cargo + target
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: checks-x86_64
 

@@ -13,7 +13,7 @@
 // be served) goes to the parent, which draws K2's card instead. The frame
 // is remounted (keyed by the parent) on a new hash or a Reload.
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { HtmlFrame } from '@/components/HtmlFrame/HtmlFrame'
 import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import type { ZenCustomWidgetPayload, ZenFrameHello } from '@/lib/zen/zen-custom-types'
@@ -38,6 +38,7 @@ import { gardenCall } from '@/lib/garden-data/garden-data-api'
 import type { GardenCallBody } from '@/lib/garden-data/garden-data-types'
 import { onGardenDataChanged } from '@/stores/session-events'
 import { startZenFrameHost } from '@/lib/zen/zen-custom-host'
+import { ZenColumnsContext } from '@/lib/zen/zen-columns'
 import {
   isZenWidgetPostingPaused,
   pauseZenWidgetPosting,
@@ -156,6 +157,10 @@ export function ZenCustomFrame({
   const layerRef = useRef<ZenCustomLayer | null>(null)
   const widgetRef = useRef(widget)
   widgetRef.current = widget
+  // `k2.layout.*`: the columns of the Garden page this frame is drawn on.
+  const columns = useContext(ZenColumnsContext)
+  const columnsRef = useRef(columns)
+  columnsRef.current = columns
   // 0.46.1: the placement's source addresses changed (a config edit, an
   // approval): start any `not_bound` subscription the layer is holding.
   const sourcesSig = (widget.sourceAddresses ?? []).join('\n')
@@ -317,6 +322,17 @@ export function ZenCustomFrame({
             setHitRegions: (rects) => setZenCanvasRegions(key, rects),
             startDrag: () => startZenCanvasDrag(key),
           },
+          // Garden columns (A1, CA10): the page this frame is on, read live
+          // (the controller is the page's for its whole life). A fold needs
+          // the person's press in this frame within 5 s; focus alone isn't one.
+          layout: columnsRef.current
+            ? {
+                columns: () => columnsRef.current?.columns() ?? [],
+                setByWidget: (index, collapsed) => columnsRef.current?.setByWidget(index, collapsed) ?? 'bad_index',
+                subscribe: (fn) => columnsRef.current?.subscribe(fn) ?? (() => undefined),
+                pressed: () => zenCanvasPressedWithin(key, ZEN_PICK_GESTURE_MS),
+              }
+            : undefined,
           setTimer: (fn, ms) => window.setTimeout(fn, ms),
           clearTimer: (t) => window.clearTimeout(t as number),
           now: () => Date.now(),

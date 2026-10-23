@@ -52,7 +52,14 @@ const WORK: Home = {
     { address: 'dave::box.example.test', workspaceId: 'r1', label: 'Dave' },
   ],
 }
-const PLAY: Home = { id: 'home-play', name: 'Play', rows: [{ address: 'carol::local', workspaceId: 'p3', label: 'Carol' }] }
+const PLAY: Home = {
+  id: 'home-play',
+  name: 'Play',
+  rows: [
+    { address: 'carol::local', workspaceId: 'p3', label: 'Carol' },
+    { address: 'frank::box2.example.test', workspaceId: 'r2', label: 'Frank' },
+  ],
+}
 
 const BOARD = {
   id: 'board',
@@ -176,12 +183,13 @@ describe('zen-data: the list view', () => {
 
   it('the stored list ∩ the reach now: a row whose Home drops out comes back with it', () => {
     const p = page()
-    zenAgentsShow(ctx(p, 'board'), ['carol::local', 'alice::local'])
+    zenAgentsShow(ctx(p, 'board'), ['frank::box2.example.test', 'alice::local'])
     const crew = zenViewFor(p, G, 'crew')
+    // Frank's server is on no Home now: out of the reach, so not drawn.
     useHomesStore.setState({ homes: [WORK] })
     expect(addrs(zenAgentRows(crew))).toEqual(['alice::local'])
     useHomesStore.setState({ homes: [WORK, PLAY] })
-    expect(addrs(zenAgentRows(crew))).toEqual(['carol::local', 'alice::local'])
+    expect(addrs(zenAgentRows(crew))).toEqual(['frank::box2.example.test', 'alice::local'])
   })
 
   it('an identical list keeps the list held (no change); a new list replaces it; a stale release clears nothing', () => {

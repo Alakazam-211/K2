@@ -40,6 +40,14 @@ fn setup() -> std::sync::MutexGuard<'static, ()> {
         for k in std::env::vars().map(|(k, _)| k).filter(|k| k.starts_with("K2_") || k.starts_with("K2SO_")).collect::<Vec<_>>() {
             std::env::remove_var(k);
         }
+        // This test process is not the daemon's systemd unit. Under a CI
+        // runner service (GitHub Actions: INVOCATION_ID set, the runner's
+        // unit is KillMode=control-group) `current_killmode()` would read the
+        // RUNNER's unit and rightly keep survive sessions in-process
+        // (`killmode_control-group`). That gate is unit-tested in
+        // terminal::ptyd (select_backend); here it must see "not under
+        // systemd", as on a dev machine, so the ptyd backend is what's tested.
+        std::env::remove_var("INVOCATION_ID");
         std::env::set_var("HOME", &home);
         std::env::set_var("K2_PTYD", "1");
         std::env::set_var("K2_PTYD_BIN", &bin);

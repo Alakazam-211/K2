@@ -104,6 +104,21 @@ fn parse<T: serde::de::DeserializeOwned + Default>(body: &[u8]) -> Result<T, Cli
 // Handlers
 // ──────────────────────────────────────────────────────────────────────
 
+/// Handler for `POST /cli/skills/list` `{project_path}` → the workspace's
+/// `SkillSummary[]` (`k2_core::skills::crud::list`). The desktop Skills
+/// panel's `k2so_skills_list` Tauri command forwards here (0.46.4: the app
+/// no longer links k2-core).
+pub fn handle_list(body: &[u8]) -> CliResponse {
+    let b: ProjectPathBody = match parse(body) {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    if b.project_path.is_empty() {
+        return CliResponse::bad_request("missing project_path");
+    }
+    crate::cli::respond(skills::crud::list(&b.project_path))
+}
+
 /// Handler for `POST /cli/skills/create`.
 ///
 /// Wraps `k2_core::skills::crud::create`. Returns the created
@@ -313,6 +328,15 @@ pub fn handle_detect_canonical_state(body: &[u8]) -> CliResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn list_rejects_missing_project_path_and_garbage() {
+        let r = handle_list(b"{}");
+        assert_eq!(r.status, "400 Bad Request");
+        assert!(r.body.contains("project_path"), "body={}", r.body);
+        let r = handle_list(b"not json");
+        assert_eq!(r.status, "400 Bad Request");
+    }
 
     #[test]
     fn create_rejects_missing_project_path() {

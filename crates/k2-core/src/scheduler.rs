@@ -263,10 +263,67 @@ pub fn matches_ordinal_day(date: NaiveDate, ordinal: &str, day_type: &str) -> bo
     }
 }
 
+/// The next `count` fire times of a schedule, as `"%Y-%m-%d %H:%M"` local
+/// strings, for the Settings schedule preview (`POST
+/// /cli/heartbeat/preview-schedule`).
+///
+/// Moved verbatim from the desktop app's `k2so_agents_preview_schedule`
+/// Tauri command (0.46.4: the app no longer links k2-core). Kept exactly as
+/// it was, including that `should_project_fire` reads the wall clock while
+/// the cursor is only passed as `last_fire`; changing what the preview
+/// shows is a separate decision.
+pub fn preview_fire_times(mode: &str, schedule_json: &str, count: u32) -> Vec<String> {
+    let mut results = Vec::new();
+    let mut cursor = chrono::Local::now();
+
+    // Step forward in 1-minute increments, checking up to 366 days ahead
+    let max_steps = 366 * 24 * 60; // 1 year of minutes
+    let mut steps = 0u64;
+
+    while results.len() < count as usize && steps < max_steps {
+        if should_project_fire(mode, Some(schedule_json), Some(&cursor.to_rfc3339())) {
+            // This would fire — but we need to check if it's a NEW fire, not a repeat
+            // For scheduled mode, each matching day/time is one fire
+            results.push(cursor.format("%Y-%m-%d %H:%M").to_string());
+            // Skip ahead past this fire window
+            if mode == "hourly" {
+                let v: serde_json::Value = serde_json::from_str(schedule_json).unwrap_or_default();
+                let every = v.get("every_seconds").and_then(|s| s.as_u64()).unwrap_or(300);
+                cursor = cursor + chrono::Duration::seconds(every as i64);
+                steps += every / 60;
+                continue;
+            } else {
+                // Skip to next day for scheduled mode
+                cursor = cursor + chrono::Duration::days(1);
+                // Reset to start of day
+                let next_date = cursor.date_naive();
+                if let Some(dt) = next_date.and_hms_opt(0, 0, 0) {
+                    use chrono::TimeZone;
+                    if let Some(local_dt) = chrono::Local.from_local_datetime(&dt).single() {
+                        cursor = local_dt;
+                    }
+                }
+                steps += 24 * 60;
+                continue;
+            }
+        }
+        cursor = cursor + chrono::Duration::minutes(1);
+        steps += 1;
+    }
+
+    results
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use chrono::TimeZone;
+
+    #[test]
+    fn preview_fire_times_honours_count_zero() {
+        assert!(preview_fire_times("hourly", r#"{"every_seconds":3600}"#, 0).is_empty());
+        assert!(preview_fire_times("scheduled", "{}", 0).is_empty());
+    }
 
     fn mk_now(year: i32, month: u32, day: u32, h: u32, m: u32) -> DateTime<Local> {
         // Build directly in Local so `now.hour()` returns the

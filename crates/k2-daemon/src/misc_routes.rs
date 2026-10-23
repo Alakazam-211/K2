@@ -1506,6 +1506,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // mock has `inbox` as the default verb that's equivalent to
         // `inbox list`. Empty `folder` param means top-level.
         "/cli/inbox" | "/cli/inbox/list" => crate::inbox_routes::handle_list(params),
+        "/cli/inbox/count" => crate::inbox_routes::handle_count(params),
         "/cli/inbox/read" => crate::inbox_routes::handle_read(params),
         "/cli/inbox/folders" => crate::inbox_routes::handle_folders(params),
         "/cli/inbox/search" => crate::inbox_routes::handle_search(params),

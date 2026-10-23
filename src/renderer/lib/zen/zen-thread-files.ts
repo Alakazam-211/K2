@@ -45,6 +45,7 @@ import {
   threadCardsParams,
   threadItemsFromSnapshot,
   type OverlayThreadItem,
+  type ThreadContextBody,
   type ThreadFileObject,
   type ThreadWidgetOrigin,
 } from '@/components/SessionView/overlayThread'
@@ -611,6 +612,9 @@ export async function zenThreadPostAttachments(
   text: string,
   attachments: readonly ZenThreadAttach[],
   origin?: ThreadWidgetOrigin,
+  /** thread-context-v1: the person's Board context chip, and where a
+   *  refusal of it goes (the message is sent either way). */
+  context?: { body: ThreadContextBody; refused(r: { code: string; message: string }): void },
 ): Promise<OverlayThreadItem | null> {
   needFeature(t.scope, 'thread-attachments-v1', 'thread.post attachments')
   if (attachments.length > ZEN_THREAD_ATTACH_MAX) throw new ZenThreadVerbError('bad_args', 'Up to 10 attachments a message')
@@ -618,6 +622,7 @@ export async function zenThreadPostAttachments(
   // workspace-relative `path` against the Thread's workspace and checks it.
   const result = await postThreadCompose(t.scope, t.threadAddr, text, null, {
     ...(origin ? { origin } : {}),
+    ...(context ? { context: context.body } : {}),
     attachments: attachments.map((a) => ({
       path: a.relPath,
       ...(a.line !== undefined ? { line: a.line } : {}),
@@ -625,5 +630,6 @@ export async function zenThreadPostAttachments(
     })),
   })
   if (!result.ok) throw new Error(result.error)
+  if (result.contextRefused) context?.refused(result.contextRefused)
   return result.item
 }

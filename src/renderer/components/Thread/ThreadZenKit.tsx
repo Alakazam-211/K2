@@ -29,6 +29,7 @@ import { sameThreadItem, type OverlayThreadItem, type ThreadAnswerPayload } from
 import { cardAnswererLabel, type ThreadViewer } from '@/lib/thread-viewer'
 import { zenBubbleShield } from '@/lib/zen/zen-style-shield'
 import { ZEN_SOLID_PROPS, ZEN_TILE_RAISED_PROPS } from '@/lib/zen/zen-materials'
+import { ThreadContextLine } from './ThreadContextChip'
 import { ThreadFileObjects } from './ThreadFileObjects'
 import { useThreadAttachmentSource } from './ThreadImageObjects'
 import {
@@ -494,6 +495,8 @@ export const ThreadBubble = memo(function ThreadBubble({
         )}
       </div>}
       <ThreadFileObjects files={files} mine={mine} docId={item.id} />
+      {/* thread-context-v1: a Garden widget's line that rode this post, marked as the widget's. */}
+      {item.doc.context && <ThreadContextLine context={item.doc.context} mine={mine} />}
       <span
         data-zen-message-meta=""
         style={{

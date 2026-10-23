@@ -123,6 +123,7 @@ import {
   type OverlayDoc,
   type OverlayThreadItem,
   type ThreadAnswerPayload,
+  type ThreadContextBody,
   type ThreadTurn,
   type ThreadWidgetOrigin,
 } from '@/components/SessionView/overlayThread'
@@ -162,6 +163,17 @@ import {
   type ZenThreadTarget,
 } from './zen-thread-files'
 import { showZenFilePreview } from './zen-file-preview'
+import {
+  ZenContextRefusedError,
+  noteZenThreadContext,
+  setZenThreadContext,
+  zenContextForSend,
+  zenConversationsFollowing,
+  zenThreadContextKey,
+  zenThreadContextForServer,
+  zenThreadContextProblem,
+  type ZenThreadContext,
+} from './zen-thread-context'
 import { openThreadAttachment, openThreadFileLink } from '@/lib/thread-file-link-open'
 import type { Room } from '@/stores/room'
 import {
@@ -346,6 +358,17 @@ export interface ZenPostOptions {
   /** Files in the agent's workspace that ride the message
    *  (thread-attachments-v1; a widget's picks from `thread.pickFiles`). */
   attachments?: ZenThreadAttach[]
+  /** thread-context-v1: the Board context chip the person saw in this
+   *  message box (`ZenCompose` only; never a widget's own post). */
+  context?: ZenThreadContext
+}
+
+/** What a send did. `contextNote`: its Board context didn't go, in the
+ *  words the chip's place shows ("Not sent: dtl is older"). */
+export interface ZenPostResult {
+  id: string | null
+  seq: number | null
+  contextNote?: string
 }
 
 /** Read a bridge-passed origin (`{widget, garden, placement?, hash?}`). */
@@ -1663,6 +1686,12 @@ export function clearZenFeed(address: string): void {
   feedHandlers.delete(address)
 }
 
+/** The Board context a Conversation's send may carry: the chip it shows
+ *  now, still reading `text`, from the widget the page says it follows. */
+function sendableContext(ctx: ZenVerbCtx, text: string): { key: string; ctx: ZenThreadContext } | null {
+  return zenContextForSend(ctx.page(), ctx.gardenId(), ctx.widgetId, text)
+}
+
 function readyConversation(address: string): Conversation & { scope: ServerScope; threadAddr: string } {
   const c = conversations.get(address)
   if (!c || c.phase !== 'ready' || !c.scope || !c.threadAddr) {
@@ -1678,9 +1707,27 @@ export async function postZenThread(
   address: string,
   text: string,
   opts: ZenPostOptions = {},
-): Promise<{ id: string | null; seq: number | null }> {
+): Promise<ZenPostResult> {
   const c = readyConversation(address)
   let body = text.trim()
+  // thread-context-v1 (§4): the Board context rides only the person's own
+  // send, as its own field, and only to a server that takes it (CA8: an
+  // older one gets the message without it, never folded into the body).
+  let context: ThreadContextBody | undefined
+  let contextNote: string | undefined
+  if (opts.context) {
+    if (opts.origin) throw new ZenThreadVerbError('bad_args', 'A widget’s own post never carries a Board context.')
+    const problem = zenThreadContextProblem(opts.context.text)
+    if (problem) throw new ZenThreadVerbError('bad_args', problem)
+    const server = serverLabel(c.hostKey, useConnectHostStore.getState().hosts) ?? 'this computer'
+    const r = await zenThreadContextForServer(c.scope, server, opts.context)
+    context = r.body
+    contextNote = r.note
+  }
+  const refusedNote = (r: { message: string }): void => {
+    contextNote = `Not sent: ${r.message}`
+  }
+  const done = (id: string | null, seq: number | null): ZenPostResult => ({ id, seq, ...(contextNote ? { contextNote } : {}) })
   const hasFiles = (opts.paths?.length ?? 0) > 0 || (opts.files?.length ?? 0) > 0
   const given = opts.attachments ?? []
   // 0.46.3: files ride the message as attachments on a server that has
@@ -1694,9 +1741,9 @@ export async function postZenThread(
     if (!body && all.length === 0) throw new Error('Nothing to send.')
     if (!isConnectedHost(c.hostKey)) homeRooms.input(address)
     const origin = opts.origin ? await zenWidgetPostOrigin(c.scope, opts.origin) : undefined
-    const item = await zenThreadPostAttachments(t, body, all, origin)
+    const item = await zenThreadPostAttachments(t, body, all, origin, context ? { body: context, refused: refusedNote } : undefined)
     if (item && setPreview(address, previewFromItem(item, viewerOf(address)))) emitRows()
-    return { id: item?.id ?? null, seq: item?.seq ?? null }
+    return done(item?.id ?? null, item?.seq ?? null)
   }
   if (hasFiles) {
     const payload = await composeAttachPayload(c.scope, {
@@ -1717,12 +1764,15 @@ export async function postZenThread(
   const origin = opts.origin ? await zenWidgetPostOrigin(c.scope, opts.origin) : undefined
   const result = origin
     ? await postThreadCompose(c.scope, c.threadAddr, body, null, { origin })
-    : await postThreadCompose(c.scope, c.threadAddr, body)
+    : context
+      ? await postThreadCompose(c.scope, c.threadAddr, body, null, { context })
+      : await postThreadCompose(c.scope, c.threadAddr, body)
   if (!result.ok) throw new Error(result.error)
+  if (result.contextRefused) refusedNote(result.contextRefused)
   if (result.item) {
     if (setPreview(address, previewFromItem(result.item, viewerOf(address)))) emitRows()
   }
-  return { id: result.item?.id ?? null, seq: result.item?.seq ?? null }
+  return done(result.item?.id ?? null, result.item?.seq ?? null)
 }
 
 /** The open conversation as `zen-thread-files` takes it. */
@@ -1950,7 +2000,7 @@ export function installZenDataVerbs(): () => void {
         hasMore: snap.has_more,
       }
     }),
-    registerZenVerb('thread.post', (_ctx, address, text, opts) => {
+    registerZenVerb('thread.post', async (ctx, address, text, opts) => {
       const o = isObj(opts) ? opts : {}
       const paths = Array.isArray(o.paths) ? o.paths.filter((p): p is string => typeof p === 'string') : undefined
       const files =
@@ -1959,12 +2009,52 @@ export function installZenDataVerbs(): () => void {
           : undefined
       const origin = originArg(o.origin)
       const attachments = o.attachments !== undefined ? zenThreadAttachments(o.attachments) : undefined
-      return postZenThread(str(address, 'address'), typeof text === 'string' ? text : '', {
-        paths,
-        files,
-        origin,
-        ...(attachments ? { attachments } : {}),
-      })
+      // thread-context-v1: `context` is the chip text this box showed
+      // (ZenCompose). It goes only if this Conversation still follows the
+      // widget that set it and the chip still reads exactly that.
+      const shown = typeof o.context === 'string' && !origin ? sendableContext(ctx, o.context) : null
+      try {
+        const r = await postZenThread(str(address, 'address'), typeof text === 'string' ? text : '', {
+          paths,
+          files,
+          origin,
+          ...(attachments ? { attachments } : {}),
+          ...(shown ? { context: shown.ctx } : {}),
+        })
+        if (shown && r.contextNote) noteZenThreadContext(shown.key, r.contextNote)
+        return r
+      } catch (err) {
+        if (shown && err instanceof ZenContextRefusedError) noteZenThreadContext(shown.key, `Not sent: ${err.reason}`)
+        throw err
+      }
+    }),
+    // §4: a custom widget's Board context, for the Conversations that
+    // follow it. The custom layer checked the cap, the rate and the text,
+    // and builds `origin` from the widget's port.
+    registerZenVerb('conversation.setContext', (ctx, text, origin) => {
+      const garden = ctx.gardenId()
+      const key = zenThreadContextKey(garden, ctx.widgetId)
+      if (text === null) {
+        setZenThreadContext(key, null)
+        return null
+      }
+      if (typeof text !== 'string') throw new ZenThreadVerbError('bad_args', 'conversation.setContext takes one line of text, or null')
+      const problem = zenThreadContextProblem(text)
+      if (problem) throw new ZenThreadVerbError('bad_args', problem)
+      const o = isObj(origin) ? origin : {}
+      if (o.placement !== ctx.widgetId || o.garden !== garden || typeof o.widget !== 'string' || typeof o.hash !== 'string') {
+        throw new ZenThreadVerbError('failed', 'conversation.setContext: the widget’s origin doesn’t match its placement')
+      }
+      const followers = zenConversationsFollowing(ctx.page(), ctx.widgetId)
+      if (followers.length === 0) {
+        throw new ZenThreadVerbError('not_bound', 'No Conversation on this page follows this widget (agents = "<id>" or list-from).')
+      }
+      setZenThreadContext(
+        key,
+        { text: text.trim(), origin: { widget: o.widget, garden, placement: ctx.widgetId, hash: o.hash } },
+        followers,
+      )
+      return null
     }),
     // 0.46.3 Thread parity (zen-thread-files): read state, files, links.
     registerZenVerb('thread.markRead', (_ctx, address, opts) => {

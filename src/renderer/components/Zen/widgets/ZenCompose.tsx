@@ -32,6 +32,12 @@ import {
 import { takeZenComposeFocus, useZenComposeFocusStore } from '@/lib/zen/zen-compose-focus'
 import { useZenRecentFirstStore } from '@/lib/zen/zen-recent-first'
 import {
+  clearZenThreadContextNote,
+  removeZenThreadContext,
+  useZenConversationContext,
+} from '@/lib/zen/zen-thread-context'
+import { ThreadContextComposeChip, ThreadContextNote } from '@/components/Thread/ThreadContextChip'
+import {
   ThreadAttachmentChip,
   ThreadAttachmentChips,
   ThreadComposeBox,
@@ -99,6 +105,10 @@ export function ZenCompose({
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const ref = useRef<HTMLTextAreaElement | null>(null)
+  // thread-context-v1 (§4): the Board context a followed widget set, shown
+  // as a removable chip; exactly what the chip reads rides the next send.
+  const gardenId = bridge.gardens?.current?.()?.id ?? ''
+  const boardContext = useZenConversationContext(gardenId, bridge.widgetId)
 
   const setDraft = useCallback(
     (next: string | ((cur: string) => string)) => {
@@ -183,6 +193,7 @@ export function ZenCompose({
     const paths = attachments.flatMap((a) => (a.kind === 'path' ? [a.path] : []))
     const files = attachments.flatMap((a) => (a.kind === 'file' ? [a.file] : []))
     const held = attachments
+    const contextText = boardContext.context?.text
     // "Recent agents first" (Gardens): this computer spoke to this agent
     // now. Recorded whether the setting is on or not.
     useZenRecentFirstStore.getState().markSent(address)
@@ -195,6 +206,7 @@ export function ZenCompose({
       await (bridge.call('thread.post', address, text, {
         ...(paths.length > 0 ? { paths } : {}),
         ...(files.length > 0 ? { files } : {}),
+        ...(contextText ? { context: contextText } : {}),
       }) as Promise<unknown>)
     } catch (err) {
       setDraft((cur) => (cur.length === 0 ? text : cur))
@@ -203,7 +215,7 @@ export function ZenCompose({
     } finally {
       setSending(false)
     }
-  }, [address, attachments, bridge, disabled, draft, onSend, sending, setDraft])
+  }, [address, attachments, boardContext.context, bridge, disabled, draft, onSend, sending, setDraft])
 
   const pick = useCallback(() => {
     void pickLocalComposeFiles()
@@ -245,16 +257,30 @@ export function ZenCompose({
       <ThreadComposeBox
         stacked={stacked}
         chips={
-          attachments.length > 0 ? (
-            <ThreadAttachmentChips>
-              {attachments.map((a, i) => (
-                <ThreadAttachmentChip
-                  key={`${a.name}-${i}`}
-                  name={a.name}
-                  onRemove={() => setAttachments((cur) => cur.filter((_, j) => j !== i))}
+          boardContext.context || boardContext.note || attachments.length > 0 ? (
+            <>
+              {boardContext.key && boardContext.context && (
+                <ThreadContextComposeChip
+                  text={boardContext.context.text}
+                  widget={boardContext.context.origin.widget}
+                  onRemove={() => removeZenThreadContext(boardContext.key!)}
                 />
-              ))}
-            </ThreadAttachmentChips>
+              )}
+              {boardContext.key && !boardContext.context && boardContext.note && (
+                <ThreadContextNote note={boardContext.note} onDismiss={() => clearZenThreadContextNote(boardContext.key!)} />
+              )}
+              {attachments.length > 0 && (
+                <ThreadAttachmentChips>
+                  {attachments.map((a, i) => (
+                    <ThreadAttachmentChip
+                      key={`${a.name}-${i}`}
+                      name={a.name}
+                      onRemove={() => setAttachments((cur) => cur.filter((_, j) => j !== i))}
+                    />
+                  ))}
+                </ThreadAttachmentChips>
+              )}
+            </>
           ) : undefined
         }
         drawer={drawer}

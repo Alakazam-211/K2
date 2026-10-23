@@ -93,6 +93,13 @@ export const REPORTED_FEATURES = {
    *  and draws PermissionCard; without it nothing is asked and a permission
    *  card is the daemon's fallback (an ordinary card or line). */
   'permission-cards-v1': 'permission-cards-v1',
+  /** thread-context-v1 (0.46.3 r10): `POST /cli/thread/post` takes the
+   *  Board context chip (`context: {text, origin}`) on the person's own
+   *  compose post, stores it as the doc's own `context` and gives the agent
+   *  K2's quoted line before the `[from]` stamp. Without it the message goes
+   *  without the context ("Not sent: <server> is older"), never folded into
+   *  the body. */
+  'thread-context-v1': 'thread-context-v1',
 } as const
 
 export type ReportedFeatureKey = keyof typeof REPORTED_FEATURES

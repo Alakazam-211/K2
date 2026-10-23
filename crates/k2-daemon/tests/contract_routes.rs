@@ -202,9 +202,6 @@ fn every_feature_is_a_boot_status_key() {
     // Listed only while the "Permission cards" switch is on (lane B's
     // dynamic key); this test leaves the switch off.
     known.insert(k2_core::permission::FEATURE_KEY);
-    // Catalog v20 (0.46.3 r10): conversation.setContext's key; the context
-    // lane puts it in /boot-status (prd-garden-column-collapse-and-agent-list-v1 §7).
-    known.insert("thread-context-v1");
     for v in &catalog().verbs {
         assert!(known.contains(v.feature.as_str()), "{}: feature {} isn't a /boot-status key", v.verb, v.feature);
     }

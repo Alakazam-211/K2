@@ -3631,9 +3631,10 @@ fn merge_body(params: &mut HashMap<String, String>, body: &[u8]) {
                     params.insert(k.clone(), s.to_string());
                 } else if val.is_number() || val.is_boolean() {
                     params.insert(k.clone(), val.to_string());
-                } else if val.is_array() || (val.is_object() && k == "origin") {
-                    // `origin` (UWB12a) is the one object field a Thread
-                    // post takes; it rides as its JSON text.
+                } else if val.is_array() || (val.is_object() && (k == "origin" || k == "context")) {
+                    // `origin` (UWB12a) and `context` (thread-context-v1)
+                    // are the object fields a Thread post takes; each
+                    // rides as its JSON text.
                     params.insert(k.clone(), val.to_string());
                 }
             }

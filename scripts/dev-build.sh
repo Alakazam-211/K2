@@ -86,9 +86,12 @@ echo ""; echo "Step 4: launch smoke-test (AMFI exec check)..."
 SMOKE_PID=$!
 sleep 2
 if kill -0 "$SMOKE_PID" 2>/dev/null; then
+    # Drop the job from bash's table first so stopping it does not print
+    # "line N: <pid> Killed: 9" (that kill is ours, not AMFI's).
+    disown "$SMOKE_PID" 2>/dev/null || true
     pkill -9 -P "$SMOKE_PID" 2>/dev/null || true
     kill -9 "$SMOKE_PID" 2>/dev/null || true
-    echo "  ✓ App survived exec (not AMFI-killed) — launchable."
+    echo "  ✓ App survived exec (not AMFI-killed) — launchable. Smoke check stopped (expected)."
 else
     SMOKE_RC=0; wait "$SMOKE_PID" 2>/dev/null || SMOKE_RC=$?
     if [ "$SMOKE_RC" -eq 137 ]; then

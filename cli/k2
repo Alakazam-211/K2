@@ -31837,7 +31837,7 @@ EOF
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-heartbeats app-tickets app-identity app-surfaces skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute compute-shared vault notifications data-sources projects hooks agent-hire garden-data garden-access changes design db-upgrade"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-heartbeats app-tickets app-identity app-surfaces skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute compute-shared vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes design db-upgrade"
 
 _study_usage() {
     cat <<'EOF'
@@ -31856,7 +31856,7 @@ Topics:
   context  db  mail  connect-boundary  apps  app-deploys  app-move  app-api  app-heartbeats  app-tickets
   app-identity  app-surfaces  skins  feedback-loop  ticket-brief  zen  sidecars  llm-tokens
   llm-accounts  publish-framing  compute  compute-shared  vault  notifications  data-sources
-  projects  hooks  agent-hire  garden-data  garden-access  changes  db-upgrade
+  projects  hooks  agent-hire  garden-data  garden-access  garden-changes  changes  db-upgrade
 EOF
 }
 
@@ -31905,6 +31905,7 @@ _study_title() {
         design) echo "Design notes: what a Design tab sends you" ;;
         permissions) echo "Permission cards (Beta)" ;;
         garden-access) echo "Garden access: who may edit a Garden" ;;
+        garden-changes) echo "What changed for Gardens in 0.46.3" ;;
         *) echo "" ;;
     esac
 }
@@ -31995,6 +31996,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   agent-hire          Apps hire agents/teams with a hire key; links; k2 msg who
   garden-data         A widget's data: k2 store --widget, grants, revs, export
   garden-access       Who may edit a Garden: the list, asking, signing, History
+  garden-changes      Gardens in 0.46.3: what's retired, what to update before 0.47.0
   changes             Git changes (the Changes tab): your own workspace; discard = Trash
   design              Design notes from a page: the shape, k2 browser note, answer in Thread
 
@@ -32055,6 +32057,7 @@ _study_page() {
         design) _study_page_design ;;
         permissions) _study_page_permissions ;;
         garden-access) _study_page_garden_access ;;
+        garden-changes) _study_page_garden_changes ;;
         *) return 1 ;;
     esac
 }
@@ -57602,6 +57605,69 @@ HISTORY (the person's)
 RETIRED
   Keep as mine, "It's mine" (k2 zen widget claim), new proposals and
   maker-based reach. Pending proposals drain (approve / reject still work).
+  What to update before 0.47.0: k2 study garden-changes.
+EOF
+}
+
+# Garden access (prd-garden-access-v1), 0.46.3: what changed, what's
+# retired (with the real verbs and cards) and what an agent updates in its
+# workspace before 0.47.0 removes the retired verbs. Static docs.
+_study_page_garden_changes() {
+    cat <<'EOF'
+k2 study garden-changes — what changed for Gardens in 0.46.3, and what to update
+
+WHAT CHANGED IN 0.46.3
+  - Each Garden has an editor list. An agent on it may edit that Garden.
+  - Editing needs the garden.access card once (k2 zen garden access <g>
+    ask); making a Garden doesn't (k2 zen garden new).
+  - Only the person deletes a Garden. An agent's delete asks them (a
+    garden.delete card).
+  - Lock freezes a Garden: no agent edits it, listed or not (garden_locked),
+    until the person unlocks it. Its data still changes.
+  - History keeps every change, signature, access change, ask and delete
+    for 2 years (k2 zen garden history <g>, the person's).
+  - An unsigned widget version runs without the person's data until an
+    agent on the list, or the person, signs it (k2 zen widget sign <w>).
+  - Computer-wide look changes (k2 zen reset of zen.toml or a theme,
+    theme set|next|prev with no --garden) need you on at least one
+    Garden's list.
+  - Using or chatting through any Garden is never gated.
+
+WHAT'S RETIRED
+  k2 zen widget claim <w>        Keep as mine / "It's mine". Now: k2 zen
+                                 widget sign <w> (claim runs sign for you
+                                 until 0.47.0).
+  k2 zen proposals [--all]       Proposals. Nothing new is proposed; the
+  k2 zen proposals show|approve|reject <id>
+                                 pending ones drain (the person approves,
+                                 anyone withdraws their own). Changes are
+                                 in k2 zen garden history <g>.
+  A put that became a proposal   An unlisted agent's put is refused now
+                                 (garden_access_needed, exit 3) and K2 asks
+                                 the person with a garden.access card.
+  "Manage Gardens and data       Reaches data sources only; for Gardens,
+  sources" for Gardens           the Garden's list decides.
+  Cards: garden.keep-mine, garden.proposal.approve and the Thread's
+  "Keep as mine" card. Open ones closed: "No longer needed".
+  Maker-based reach: signing a widget no longer opens its data to you;
+  being on the list of every Garden that places it does.
+
+UPDATE YOUR WORKSPACE BEFORE 0.47.0
+  [ ] Scripts and heartbeats: k2 zen widget claim → k2 zen widget sign;
+      k2 zen proposals … → nothing to wait for: edit when you're on the
+      list, else k2 zen garden access <g> ask (the person reads changes
+      in k2 zen garden history <g>).
+  [ ] Deploy scripts: k2 zen validate --widget <w> without --sign leaves
+      the version unsigned (no data). Add --sign.
+  [ ] Skills, AGENTS.md and notes that describe claim, Keep as mine,
+      proposals or the switch for Gardens: point them at the list.
+  [ ] Check your lists: k2 zen garden list, then k2 zen garden access <g>
+      for each ("You can edit …" or "You can't edit …").
+
+DEADLINE
+  The retired verbs answer with a notice through 0.46.x (on stderr; with
+  --json, a "retired" object in the JSON) and are removed in 0.47.0.
+  More: k2 study garden-access.
 EOF
 }
 

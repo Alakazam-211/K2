@@ -54,7 +54,7 @@ trap 'rm -rf "$SANDBOX"' EXIT
 export HOME="$SANDBOX"
 unset K2_PORT K2_HOOK_TOKEN K2SO_PORT K2SO_HOOK_TOKEN K2_HOST || true
 
-TOPICS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-heartbeats app-tickets app-identity app-surfaces skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute notifications projects hooks agent-hire garden-data design"
+TOPICS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-heartbeats app-tickets app-identity app-surfaces skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute notifications projects hooks agent-hire garden-data garden-access garden-changes design"
 
 echo "== k2 study source (no daemon) =="
 set +e
@@ -655,6 +655,31 @@ gd_json="$("$K2" study garden-data --json)"
 python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["id"]=="garden-data" and "data:<widget>" in d["body"], d["id"]' "$gd_json"
 echo "  PASS: garden-data --json id+body"
 pass=$((pass + 1))
+
+echo "== k2 study garden-changes (Garden access, 0.46.3; retired before 0.47.0) =="
+gc_out="$("$K2" study garden-changes)"
+assert_contains "title" "$gc_out" "k2 study garden-changes — what changed for Gardens in 0.46.3"
+for needle in "WHAT CHANGED IN 0.46.3" "WHAT'S RETIRED" "UPDATE YOUR WORKSPACE BEFORE 0.47.0" "DEADLINE" \
+    "Each Garden has an editor list" "garden.access card once" "making a Garden doesn't" \
+    "garden.delete card" "Lock freezes a Garden" "for 2 years" "signs it (k2 zen widget sign <w>)" \
+    "need you on at least one" "never gated" \
+    "k2 zen widget claim <w>" "k2 zen proposals [--all]" "k2 zen proposals show|approve|reject <id>" \
+    "garden_access_needed" "\"Manage Gardens and data" "garden.keep-mine" "garden.proposal.approve" \
+    "k2 zen widget claim → k2 zen widget sign" "without --sign leaves" "AGENTS.md" \
+    "k2 zen garden access <g>" "removed in 0.47.0"; do
+    assert_contains "garden-changes names $needle" "$gc_out" "$needle"
+done
+gc_lines="$(printf '%s\n' "$gc_out" | wc -l | tr -d ' ')"
+if [ "$gc_lines" -le 80 ]; then echo "  PASS: garden-changes is bounded ($gc_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: garden-changes is $gc_lines lines (max 80)" >&2; fail=$((fail + 1)); fi
+gc_json="$("$K2" study garden-changes --json)"
+python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["id"]=="garden-changes" and "removed in 0.47.0" in d["body"], d["id"]' "$gc_json"
+echo "  PASS: garden-changes --json id+body"
+pass=$((pass + 1))
+ga_out="$("$K2" study garden-access)"
+assert_contains "garden-access points at garden-changes" "$ga_out" "k2 study garden-changes"
+cat_out="$("$K2" study)"
+assert_contains "catalog: garden-changes row" "$cat_out" "  garden-changes      Gardens in 0.46.3: what's retired, what to update before 0.47.0"
+assert_contains "usage lists garden-changes" "$("$K2" study --help)" "garden-access  garden-changes"
 
 echo "== k2 study app-surfaces (room-scope R9/R16, 0.46.1) =="
 as_out="$("$K2" study app-surfaces)"

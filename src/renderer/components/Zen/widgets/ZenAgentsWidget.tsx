@@ -60,6 +60,18 @@
 //     the person picks on this computer (Garden 1: on).
 //   The cog's settings also pick this Garden's theme.
 // Only Gardens read any of this; the app's Agents page doesn't change.
+//
+// 0.46.3 r10 list mode (prd-garden-column-collapse-and-agent-list-v1 A2,
+// Baden's Board): with `list-from = "<custom widget id>"` the widget shows
+// just the agents that custom widget lists with `k2.agents.show([...])`, in
+// its order: rows from the Garden's reach (this computer and the person's
+// Homes on up to 8 servers, remote agents included, each with its own
+// "Sign in" / "Offline" state). Before the first `show` (and after
+// `show(null)`) it says "Nothing listed yet", never the whole reach. The pin
+// grid shows pinned agents on the list; ⌘1–9 and ⌘↑ / ⌘↓ follow the list
+// order; Recent agents first is off; no Home picker and no Add agent. A
+// footer counts the agents off the list that need you ("2 others need
+// you"), so a list can never hide one. The Agents rail view ignores it.
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
@@ -92,6 +104,9 @@ import { ZenGardenSettingsButton } from './ZenGardenSettings'
 export const ZEN_EMPTY_HOME = 'This Home has no agents yet. Use Add agent to add some.'
 export const ZEN_EMPTY_SERVER = 'No agents on this server yet.'
 export const ZEN_EMPTY_FOCUS_GROUP = 'No agents in this focus group.'
+export const ZEN_EMPTY_LIST = 'Nothing listed yet'
+/** CA12: the list mode footer. */
+export const zenOthersNeedYou = (n: number): string => (n === 1 ? '1 other needs you' : `${n} others need you`)
 export const zenAgentNotOnHome = (agent: string, home: string): string => `${agent} isn’t on ${home}.`
 
 function propString(props: Record<string, unknown>, name: string): string | null {
@@ -705,14 +720,20 @@ function AddAgentRow({ bridge }: { bridge: ZenWidgetBridge }): React.JSX.Element
 }
 
 export function ZenAgentsWidget({ bridge, decl }: ZenWidgetProps): React.JSX.Element {
-  const rows = useZenRows(bridge)
+  const all = useZenRows(bridge)
   const nowSec = useNowSec()
-  const [homeId, pickHome] = useWidgetHome(bridge, rows)
   const workspaces = zenAgentsSource(decl.props) === 'workspaces'
+  // 0.46.3 r10: list mode (`list-from`; ignored in the Agents rail view).
+  const listMode = !workspaces && propString(decl.props, 'list-from') !== null
+  // List mode's rows off the list that need you come flagged `offList`:
+  // counted in the footer, never drawn.
+  const rows = listMode ? all.filter((r) => !r.offList) : all
+  const othersNeedYou = listMode ? all.length - rows.length : 0
+  const [homeId, pickHome] = useWidgetHome(bridge, rows)
   const groups = useFocusGroups(bridge, workspaces)
-  const picker = !workspaces && homePickerOn(decl.props)
+  const picker = !workspaces && !listMode && homePickerOn(decl.props)
   // `mode: "home"` shows the whole Home even when `agent` is set.
-  const agent = decl.props.mode === 'home' ? null : propString(decl.props, 'agent')
+  const agent = decl.props.mode === 'home' || listMode ? null : propString(decl.props, 'agent')
   // Home names only when they show (the picker, or the single-agent note).
   const homes = picker || (agent && rows.length === 0) ? bridge.homes.list() : []
   const home = homes.find((h) => h.id === homeId) ?? null
@@ -722,7 +743,8 @@ export function ZenAgentsWidget({ bridge, decl }: ZenWidgetProps): React.JSX.Ele
   // choice on this computer wins); `pin-limit` caps the grid. Both unset on
   // an older daemon: today's behaviour.
   const recentFirstDefault = zenRecentFirstProp(decl.props)
-  const recentFirst = useZenRecentFirst(recentFirstDefault)
+  // Recent agents first is off in list mode: the list's order wins (CA13).
+  const recentFirst = useZenRecentFirst(recentFirstDefault) && !listMode
   const sent = useZenRecentFirstStore((s) => s.sent)
   const pinsOn = decl.props.pins === true && !agent
   const pinLimit = zenPinLimit(decl.props)
@@ -778,7 +800,7 @@ export function ZenAgentsWidget({ bridge, decl }: ZenWidgetProps): React.JSX.Ele
       className="flex h-full min-h-0 w-full flex-col"
       data-zen-widget="agents"
       data-zen-widget-id={decl.id}
-      data-zen-agents-mode={agent ? 'agent' : 'home'}
+      data-zen-agents-mode={listMode ? 'list' : agent ? 'agent' : 'home'}
       data-zen-agents-source={workspaces ? 'workspaces' : 'home'}
       data-zen-agents-home={homeId ?? undefined}
     >
@@ -816,9 +838,11 @@ export function ZenAgentsWidget({ bridge, decl }: ZenWidgetProps): React.JSX.Ele
             ? groups?.enabled
               ? ZEN_EMPTY_FOCUS_GROUP
               : ZEN_EMPTY_SERVER
-            : agent
-              ? zenAgentNotOnHome(agent, home?.name ?? 'this Home')
-              : ZEN_EMPTY_HOME}
+            : listMode
+              ? ZEN_EMPTY_LIST
+              : agent
+                ? zenAgentNotOnHome(agent, home?.name ?? 'this Home')
+                : ZEN_EMPTY_HOME}
         </div>
       ) : (
         // One scroller: the pin grid scrolls away with the list.
@@ -837,7 +861,18 @@ export function ZenAgentsWidget({ bridge, decl }: ZenWidgetProps): React.JSX.Ele
           </ul>
         </div>
       )}
-      {!agent && !workspaces && bridge.caps.has('agents:add') && <AddAgentRow bridge={bridge} />}
+      {listMode && othersNeedYou > 0 && (
+        <div
+          className="flex flex-shrink-0 items-center"
+          data-zen-agents-others-need-you={othersNeedYou}
+          role="status"
+          aria-live="polite"
+          style={{ padding: '4px 18px 12px', fontSize: '0.82em', fontWeight: 600, color: 'var(--zen-needs-you)' }}
+        >
+          {zenOthersNeedYou(othersNeedYou)}
+        </div>
+      )}
+      {!agent && !workspaces && !listMode && bridge.caps.has('agents:add') && <AddAgentRow bridge={bridge} />}
     </div>
   )
 }

@@ -131,6 +131,10 @@ export interface ZenTemplateInfo {
   newUsers: boolean
 }
 
+/** `k2.agents.show` (catalog v20, 0.46.3 r10): at most this many addresses
+ *  (the custom layer refuses more with `bad_args`; `zen-data` holds them). */
+export const ZEN_AGENTS_SHOW_MAX = 50
+
 /** The fallback when the daemon has no templates route (older daemon). */
 export const ZEN_TEMPLATES_FALLBACK: readonly ZenTemplateInfo[] = [
   {

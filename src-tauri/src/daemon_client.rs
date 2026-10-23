@@ -217,6 +217,22 @@ impl DaemonClient {
 /// Percent-encode a query-string component without pulling a new
 /// crate. RFC 3986 unreserved set is letters, digits, `-`, `_`, `.`,
 /// `~`. Everything else gets `%HH`-encoded.
+/// Run a blocking daemon call (reqwest::blocking, 10 s timeout) on Tauri's
+/// blocking pool so an `async` command never holds the main thread while
+/// the daemon is slow. A sync Tauri command runs ON the main thread, and
+/// reqwest::blocking must not run on the async runtime's own workers
+/// either ("Cannot drop a runtime in a context where blocking is not
+/// allowed"), so daemon-calling commands are `async` + this.
+pub async fn off_main<T, F>(f: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(f)
+        .await
+        .map_err(|e| format!("daemon call task failed: {e}"))?
+}
+
 /// A mirror route's reply → the command's result. 2xx: the parsed JSON
 /// value. Non-2xx with the daemon's `{"error": "<text>"}` body: `<text>`,
 /// which is the same string the k2-core fn returned when the command ran it
@@ -310,6 +326,20 @@ mod tests {
         assert_eq!(mirror_result("/x", 403, r#"{"error":"nope"}"#).unwrap_err(), r#"daemon /x 403: {"error":"nope"}"#);
         assert_eq!(mirror_result("/x", 400, "plain").unwrap_err(), "daemon /x 400: plain");
         assert!(mirror_result("/x", 200, "not json").unwrap_err().starts_with("decode /x:"));
+    }
+
+    #[test]
+    fn off_main_runs_the_call_off_the_calling_thread_and_returns_its_result() {
+        let caller = std::thread::current().id();
+        let (ok, ran_on): (Result<u8, String>, std::thread::ThreadId) = tauri::async_runtime::block_on(async move {
+            let ran_on = off_main(|| Ok(std::thread::current().id())).await.expect("ran");
+            (off_main(|| Ok(7u8)).await, ran_on)
+        });
+        assert_eq!(ok, Ok(7));
+        assert_ne!(ran_on, caller, "the blocking call must not run on the calling thread");
+        let err: Result<u8, String> =
+            tauri::async_runtime::block_on(off_main(|| Err("daemon /x 500: boom".to_string())));
+        assert_eq!(err, Err("daemon /x 500: boom".to_string()));
     }
 
     #[test]

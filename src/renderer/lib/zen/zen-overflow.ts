@@ -84,8 +84,8 @@ export function zenColumnMinWidthCss(
   const share = Math.round((own / sum) * 1e6) / 1e6
   const gaps = Math.max(0, minWidths.length - 1)
   const tabs = minWidths.filter((_, i) => folded[i]).length
-  const reserved = tabs > 0 ? ` - ${tabs * ZEN_COLUMN_TAB_PX}px` : ''
-  return `min(${own}px, calc((100% - ${gaps} * var(--zen-gap)${reserved}) * ${share}))`
+  if (tabs > 0) return `min(${own}px, calc((100% - ${gaps} * var(--zen-gap) - ${tabs * ZEN_COLUMN_TAB_PX}px) * ${share}))`
+  return `min(${own}px, calc((100% - ${gaps} * var(--zen-gap)) * ${share}))`
 }
 
 /** The min widths the CSS above resolves to in a row `width` px wide with

@@ -1,9 +1,0 @@
-# Garden rows of the permission catalog, Garden access lists OFF
-# 0.46.3 (captured from integ/0.46.3-r9)
-garden.keep-mine {"version":"abababababababababababababababababababababababababababababababab","widget":"board"}: Moved("no widget folder 'board'")
-garden.proposal.approve {"proposal":"zp-none"}: Moved("no Garden proposal zp-none of golden-billing's (k2 zen proposals)")
-garden.proposal.approve {}: Moved("name the Garden proposal: proposal=<its zp-… id> (k2 zen proposals)")
-# G0a item 4 (named exception, not in 0.46.3): listed; every check answers not_available
-garden.access {"garden":"<GARDEN>"}: Unavailable { code: "not_available", why: "Garden access lists are off on this server; a person turns them on in Settings → Gardens." }
-garden.access-off {"garden":"<GARDEN>"}: Unavailable { code: "not_available", why: "Garden access lists are off on this server; a person turns them on in Settings → Gardens." }
-garden.delete {"garden":"<GARDEN>"}: Unavailable { code: "not_available", why: "Garden access lists are off on this server; a person turns them on in Settings → Gardens." }

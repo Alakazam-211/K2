@@ -860,6 +860,37 @@ impl ZenFiles {
                 });
             }
         }
+        // 0.46.3 r10 (prd-garden-column-collapse-and-agent-list-v1 A2): an
+        // Agents widget's `list-from` widget calls k2.agents.show, which
+        // needs agents:read (the page check already made it a custom widget).
+        for w in &widgets {
+            if w["kind"] != "agents" {
+                continue;
+            }
+            let Some(target) = w["props"][schema::LIST_FROM_PROP].as_str() else { continue };
+            let Some(custom) = widgets.iter().find(|x| x["id"] == target && x["kind"] == schema::CUSTOM_KIND) else {
+                continue;
+            };
+            let cw = custom["widget"].as_str().unwrap_or_default();
+            let st = match garden {
+                Some(g) => self.garden_widget_status(g, cw),
+                None => self.widget_status(cw),
+            };
+            let id = w["id"].as_str().unwrap_or_default();
+            let Some(i) = index_of(id) else { continue };
+            if st.manifest.is_some() && !st.requested().iter().any(|c| c == "agents:read") {
+                let (line, col) = at(format!("page.widget.{i}.props.{}", schema::LIST_FROM_PROP));
+                out.push(Diagnostic {
+                    suggestion: Some(format!("add \"agents:read\" to {cw}'s manifest.json caps")),
+                    file: file.to_string(),
+                    line,
+                    col,
+                    message: format!(
+                        "agents '{id}' lists from custom widget '{target}', which doesn't ask for agents:read (k2.agents.show needs it); add it to the widget's manifest.json caps"
+                    ),
+                });
+            }
+        }
         out
     }
 

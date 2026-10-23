@@ -410,8 +410,13 @@ pub const TEMPLATE_WIDGET_KINDS: &[(&str, &str)] = &[(
 
 /// The Agents widget's live statuses (decision 9: no unread tracking).
 pub const AGENT_STATUSES: &[&str] = &["working", "idle", "needs-you"];
-/// The Agents widget's modes (Rosson 2026-10-04, answer 5).
-pub const AGENTS_MODES: &[&str] = &["home", "agent"];
+/// The Agents widget's modes (Rosson 2026-10-04, answer 5); `list` shows
+/// the agents a custom widget chose (`list-from`, 0.46.3 r10,
+/// prd-garden-column-collapse-and-agent-list-v1 A2).
+pub const AGENTS_MODES: &[&str] = &["home", "agent", "list"];
+/// The prop that names the custom widget whose `k2.agents.show` list an
+/// Agents widget shows (mode `list`).
+pub const LIST_FROM_PROP: &str = "list-from";
 /// The Agents widget's row orders.
 pub const AGENTS_ORDERS: &[&str] = &["home"];
 
@@ -445,7 +450,14 @@ pub const WIDGET_PROPS: &[WidgetProp] = &[
         name: "mode",
         ty: PropType::OneOf(AGENTS_MODES),
         default: None,
-        doc: "`home` shows every agent of the Home (the whole Home surface); `agent` shows one agent filtered from that Home (set `agent`). Default: `agent` when `agent` is set, else `home`",
+        doc: "`home` shows every agent of the Home (the whole Home surface); `agent` shows one agent filtered from that Home (set `agent`); `list` shows the agents a custom widget chose with k2.agents.show (set `list-from`). Default: `list` when `list-from` is set, `agent` when `agent` is set, else `home`",
+    },
+    WidgetProp {
+        kind: "agents",
+        name: LIST_FROM_PROP,
+        ty: PropType::Text,
+        default: None,
+        doc: "the id of a custom widget on this page that asks for agents:read: the widget shows just the agents that widget lists with k2.agents.show([...addresses]), in its order (\"Nothing listed yet\" until it does), and a footer counts the others that need you. Not with `agent`, `home` or `home-picker`",
     },
     WidgetProp {
         kind: "agents",
@@ -651,7 +663,13 @@ pub fn normalize_props_in(d: &super::Defaults, kind: &str, props: &mut Map<Strin
         }
     }
     if kind == "agents" && !props.contains_key("mode") {
-        let mode = if props.contains_key("agent") { "agent" } else { "home" };
+        let mode = if props.contains_key(LIST_FROM_PROP) {
+            "list"
+        } else if props.contains_key("agent") {
+            "agent"
+        } else {
+            "home"
+        };
         props.insert("mode".into(), json!(mode));
     }
 }
@@ -2090,6 +2108,44 @@ fn check_widgets(ctx: &mut Ctx, item: &Item, at: (usize, usize)) {
                 }
                 _ => {}
             }
+            // 0.46.3 r10: a chosen list (`list-from`) is its own mode.
+            let list_from = props.contains_key(LIST_FROM_PROP);
+            match props.get("mode").and_then(J::as_str) {
+                Some("list") if !list_from => {
+                    let p = prop_at(ctx, "mode");
+                    ctx.error(
+                        p,
+                        "mode = \"list\" needs list-from = \"<custom widget id>\": the widget on this page that picks the agents (k2.agents.show)",
+                    );
+                    ok = false;
+                }
+                Some(m @ ("home" | "agent")) if list_from => {
+                    let p = prop_at(ctx, "mode");
+                    ctx.error(
+                        p,
+                        format!("list-from shows the agents a custom widget lists, so mode is \"list\"; drop mode = \"{m}\" (or drop list-from)"),
+                    );
+                    ok = false;
+                }
+                _ => {}
+            }
+            if list_from {
+                for other in ["agent", "home", "home-picker"] {
+                    let set = match props.get(other) {
+                        Some(J::Bool(b)) => *b,
+                        Some(_) => true,
+                        None => false,
+                    };
+                    if set {
+                        let p = prop_at(ctx, other);
+                        ctx.error(
+                            p,
+                            format!("{other} picks a Home or an agent, but list-from shows the list its custom widget picks; drop one of them"),
+                        );
+                        ok = false;
+                    }
+                }
+            }
         }
         if kind == "conversation" {
             if props.contains_key("agents") && props.contains_key("agent") {
@@ -2376,6 +2432,7 @@ fn cross_check_page(ctx: &mut Ctx, at: (usize, usize)) {
             }
         }
     }
+    check_list_from(ctx, &widgets, at);
     // Chrome at a column edge needs that column (FC24 rule 10).
     for (i, w) in &file_chrome {
         if w["slot"].as_str().unwrap_or(DEFAULT_SLOT) != DEFAULT_SLOT {
@@ -2406,6 +2463,34 @@ fn cross_check_page(ctx: &mut Ctx, at: (usize, usize)) {
                 }
             }
         }
+    }
+}
+
+/// 0.46.3 r10 (prd-garden-column-collapse-and-agent-list-v1 A2): an Agents
+/// widget's `list-from` names a custom widget on the same page. Whether
+/// that widget asks for `agents:read` needs its manifest, so the store
+/// checks it (`placement_diagnostics`).
+fn check_list_from(ctx: &mut Ctx, widgets: &[(Option<usize>, J)], at: (usize, usize)) {
+    let customs: Vec<&str> =
+        widgets.iter().filter(|(_, x)| x["kind"] == CUSTOM_KIND).filter_map(|(_, x)| x["id"].as_str()).collect();
+    for (idx, w) in widgets {
+        let Some(i) = idx else { continue };
+        if w["kind"] != "agents" {
+            continue;
+        }
+        let Some(target) = w["props"][LIST_FROM_PROP].as_str() else { continue };
+        if customs.contains(&target) {
+            continue;
+        }
+        let id = w["id"].as_str().unwrap_or("?");
+        let p = ctx.pos.get(&format!("page.widget.{i}.props.{LIST_FROM_PROP}")).copied().unwrap_or(at);
+        let known = if customs.is_empty() { " (this page has none)".to_string() } else { format!(" ({})", customs.join(", ")) };
+        ctx.error(
+            p,
+            format!(
+                "agents '{id}' lists from '{target}', which is not a custom widget on this page{known}; name the widget that calls k2.agents.show"
+            ),
+        );
     }
 }
 

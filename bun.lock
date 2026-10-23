@@ -47,6 +47,7 @@
         "codemirror-lang-elixir": "^4.0.1",
         "codemirror-lang-hcl": "^0.1.0",
         "codemirror-lang-zig": "^0.1.0",
+        "dompurify": "^3.4.12",
         "dxf-parser": "1.1.2",
         "mammoth": "^1.12.0",
         "mermaid": "^11.16.0",

@@ -1,7 +1,10 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
+import { openUrl } from '@tauri-apps/plugin-opener'
 import { daemonCliGet } from '@/lib/daemon-cli'
+import { openOffOriginHttp } from '@/lib/open-off-origin-http'
 import { useRoom } from '@/components/Room/RoomContext'
 import mammoth from 'mammoth'
+import { sanitizeDocxHtml } from './docxSanitize'
 
 interface DocxViewerProps {
   filePath: string
@@ -37,7 +40,8 @@ export function DocxViewer({ filePath }: DocxViewerProps): React.JSX.Element {
 
         if (cancelled) return
 
-        setHtml(result.value)
+        // mammoth does not sanitize (a .docx link can be `javascript:`).
+        setHtml(sanitizeDocxHtml(result.value))
 
         // Log any warnings from mammoth for debugging
         if (result.messages.length > 0) {
@@ -61,6 +65,33 @@ export function DocxViewer({ filePath }: DocxViewerProps): React.JSX.Element {
     }
   }, [filePath])
 
+  // Links in a document never navigate the K2 webview: http(s) opens the
+  // way every other off-origin link does, mailto goes to the OS, and a
+  // `#fragment` scrolls inside the document.
+  const onClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    // The app-wide link handler (capture phase) may already have opened it.
+    if (e.defaultPrevented) return
+    const link = (e.target as HTMLElement | null)?.closest?.('a')
+    if (!link || !e.currentTarget.contains(link)) return
+    const href = link.getAttribute('href')
+    if (!href) return
+    e.preventDefault()
+    if (href.startsWith('#')) {
+      const id = href.slice(1)
+      const el = Array.from(e.currentTarget.querySelectorAll('[id]')).find((n) => n.id === id)
+      el?.scrollIntoView({ block: 'start' })
+      return
+    }
+    const scheme = href.slice(0, Math.max(0, href.indexOf(':'))).toLowerCase()
+    if (scheme === 'http' || scheme === 'https') {
+      openOffOriginHttp(href)
+    } else if (scheme === 'mailto') {
+      void openUrl(href).catch((err) => {
+        console.warn('[docx-viewer] failed to open', href, err)
+      })
+    }
+  }, [])
+
   if (loading) {
     return (
       <div className="flex h-full w-full items-center justify-center bg-[var(--color-bg)] text-[var(--color-text-muted)] text-sm">
@@ -83,6 +114,7 @@ export function DocxViewer({ filePath }: DocxViewerProps): React.JSX.Element {
   return (
     <div
       className="docx-body p-6 overflow-y-auto h-full bg-[var(--color-bg)]"
+      onClick={onClick}
       dangerouslySetInnerHTML={{ __html: html }}
     />
   )

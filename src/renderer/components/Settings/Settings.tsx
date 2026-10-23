@@ -61,7 +61,8 @@ import { ZenGardensSection, ZEN_GARDENS_MANIFEST } from './sections/ZenGardensSe
 import { ZenWidgetDataSection, ZEN_WIDGET_DATA_MANIFEST } from './sections/ZenWidgetDataSection'
 import { zenAvailable } from '@/lib/zen/zen-platform'
 import { loadZenSettings, useZenGardensSettingsShown } from '@/lib/zen/zen-settings'
-import { loadGardenAccessSwitch, useGardenAccessSwitchStore } from '@/lib/zen/garden-access-api'
+import { loadGardenAccessSwitch } from '@/lib/zen/garden-access-api'
+import { GARDEN_DATA_SECTIONS, gardensLandingFor, requestGardensLanding, useGardensLandingStore } from './gardens-landing'
 import { AGENT_SKILLS_MANIFEST } from './sections/AgentSkillsSection'
 // HeartbeatsPanel is rendered inline inside ProjectsSection now; manifest
 // stays exported from HeartbeatsSection so searches still find it.
@@ -144,19 +145,20 @@ function thirdPartyBotLeaves(): NavLeaf[] {
  *  `useZenGardensSettingsShown()` (where the Zen toggle shows, prd-zen-gardens-v1
  *  item 17). Gardens is its own group from 0.45.7 (Rosson: "give Gardens
  *  their own section … like K2 Server and Logs"): Gardens (list, lock,
- *  sync, theme, folder), Local Data, then External Data (0.45.7, Rosson: was Widget data and Data Sources). Tickets sits directly beneath Projects
+ *  sync, theme, folder), Local Data, then External Data (0.45.7, Rosson: was Widget data and Data Sources).
+ *  0.46.3 (Rosson 2026-10-23): no Gardens group any more. Gardens is ONE
+ *  page beneath Tickets (master-detail like Apps); each Garden's pane shows
+ *  its Local Data and External Data, and "Not in a Garden" the rest; the
+ *  old section ids land there (gardens-landing.ts). Tickets sits directly beneath Projects
  *  (0.45.4, Rosson). `notifications`: the window's
  *  server reports `thread-push-v1`; Notifications sits directly after General
  *  (prd-thread-push-notifications-v1 §9). */
 export function settingsNav({
   zenGardens,
   notifications = false,
-  gardenAccess = false,
 }: {
   zenGardens: boolean
   notifications?: boolean
-  /** prd-garden-access-v1 G28: Garden access on → "Widget data" (off: Local Data). */
-  gardenAccess?: boolean
 }): NavBlock[] {
   const hideTunnel = isAirgap()
   const blocks: NavBlock[] = [
@@ -168,6 +170,10 @@ export function settingsNav({
     { kind: 'item', id: 'projects', label: 'Workspaces / Agents' },
     { kind: 'item', id: 'project-groups', label: 'Projects' },
     { kind: 'item', id: 'tickets', label: 'Tickets' },
+    // 0.46.3 (Rosson 2026-10-23): Gardens is one page, beneath Tickets; each
+    // Garden's pane holds its Local Data and External Data, and "Not in a
+    // Garden" the rest (see gardens-landing.ts).
+    ...(zenGardens ? ([{ kind: 'item', id: 'zen-gardens' as const, label: 'Gardens' }] satisfies NavBlock[]) : []),
     { kind: 'item', id: 'context-catalog', label: 'Context Catalog' },
     { kind: 'item', id: 'email-link', label: 'Email Link' },
     ...(webFeatures.permissions
@@ -199,19 +205,6 @@ export function settingsNav({
         { id: 'permission-cards', label: 'Permission Cards', beta: true },
       ],
     },
-    ...(zenGardens
-      ? ([
-          {
-            kind: 'group',
-            title: 'Gardens',
-            items: [
-              { id: 'zen-gardens', label: 'Gardens' },
-              { id: 'zen-widget-data', label: 'Local Data' },
-              { id: 'data-sources', label: 'External Data' },
-            ],
-          },
-        ] satisfies NavBlock[])
-      : []),
     {
       kind: 'group',
       title: 'Network',
@@ -223,7 +216,7 @@ export function settingsNav({
         // homes-sync-v1 (0.46.1): your Homes between this computer and your
         // phone; the devices syncing from this server, with Remove.
         { id: 'homes-sync', label: 'Homes Sync' },
-        // No Gardens group here (web, Windows): External Data stays reachable.
+        // No Gardens page here (web, Windows): External Data stays reachable.
         ...(zenGardens ? [] : [{ id: 'data-sources' as const, label: 'External Data' }]),
       ],
     },
@@ -268,13 +261,6 @@ export function settingsNav({
       items: thirdPartyBotLeaves(),
     },
   ]
-  // prd-garden-access-v1 G28: Garden access on renames Local Data.
-  if (gardenAccess) {
-    for (const b of blocks) {
-      if (b.kind !== 'group') continue
-      b.items = b.items.map((it) => (it.id === 'zen-widget-data' ? { ...it, label: 'Widget data' } : it))
-    }
-  }
   return blocks
 }
 
@@ -298,9 +284,8 @@ export default function Settings(): React.JSX.Element {
   const zenGardensShown = useZenGardensSettingsShown()
   // Thread push (0.45.5): only on a server that reports `thread-push-v1`.
   const notificationsShown = threadPushAvailable()
-  // prd-garden-access-v1 G28: the Gardens group's second page is "Widget
-  // data" with Garden access on (read with the Gardens list, once per open).
-  const gardenAccessOn = useGardenAccessSwitchStore((s) => s.on) === true
+  // Garden access (always on from 0.46.3): pages read the daemon's answer
+  // from this store; read it with the Gardens list, once per open.
   useEffect(() => {
     if (zenAvailable()) {
       void loadZenSettings()
@@ -376,7 +361,15 @@ export default function Settings(): React.JSX.Element {
     if (!notificationsShown && activeSection === 'notifications') {
       setSection('general')
     }
-  }, [activeSection, setSection, notificationsShown])
+    // 0.46.3: Local Data and External Data live in Settings → Gardens on a
+    // client with Gardens; an old deep link lands there ("Not in a Garden"
+    // unless a search result already asked for a Garden).
+    if (zenGardensShown && GARDEN_DATA_SECTIONS.has(activeSection)) {
+      const { section, landing } = gardensLandingFor(activeSection, null, true)
+      if (landing && !useGardensLandingStore.getState().landing) requestGardensLanding(landing)
+      setSection(section)
+    }
+  }, [activeSection, setSection, notificationsShown, zenGardensShown])
 
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
@@ -415,7 +408,11 @@ export default function Settings(): React.JSX.Element {
       const sub = subByGroup[entry.group]
       if (sub) useSettingsStore.setState({ generalSubTab: sub })
     }
-    setSection(entry.section)
+    // Local Data / External Data results land on Settings → Gardens (with
+    // their Garden when they know it) on a client with Gardens.
+    const { section, landing } = gardensLandingFor(entry.section, entry.garden, zenGardensShown)
+    if (landing) requestGardensLanding(landing)
+    setSection(section)
     // Defer so the section mounts, renders, and gets a chance to lay out
     // before we query for the row. Two rAFs is usually enough even for
     // heavier sections (Projects, Code Editor).
@@ -430,7 +427,7 @@ export default function Settings(): React.JSX.Element {
         }, 1500)
       })
     })
-  }, [setSection])
+  }, [setSection, zenGardensShown])
 
   return (
     <div className="flex flex-col h-full w-full min-h-0 bg-[var(--color-bg)]">
@@ -479,7 +476,7 @@ export default function Settings(): React.JSX.Element {
           </button>
         </div>
         <nav className="flex-1 py-1 overflow-y-auto">
-          {settingsNav({ zenGardens: zenGardensShown, notifications: notificationsShown, gardenAccess: gardenAccessOn }).map((block) => {
+          {settingsNav({ zenGardens: zenGardensShown, notifications: notificationsShown }).map((block) => {
             if (block.kind === 'item') {
               return (
                 <SettingsNavButton
@@ -776,6 +773,7 @@ export default function Settings(): React.JSX.Element {
           entries={allEntries}
           onPick={handlePick}
           onClose={() => setSearchOpen(false)}
+          gardensPage={zenGardensShown}
         />
       )}
     </div>

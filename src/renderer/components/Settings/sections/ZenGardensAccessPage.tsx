@@ -11,7 +11,13 @@
 //   Garden pane (G26): History… · Rename · ⋯ (Delete); "Made by X · date";
 //                   Agents who can edit (Remove with an 8 s Undo, + Add agent
 //                   through the A–Z picker); "Sees: Everything you can see";
-//                   Lock; Get K2's design updates; Widgets (last signer, History…).
+//                   Lock; Get K2's design updates; Widgets (last signer, History…);
+//                   then (Rosson 2026-10-23) the Garden's Local Data (its
+//                   placed widgets' data) and External Data (the sources its
+//                   cards read): the old pages' lists, filtered, same actions.
+//   Last rail entry, "Not in a Garden": data and sources no Garden uses, so
+//   nothing is unreachable now that Local Data and External Data aren't
+//   Settings pages of their own (`gardens-landing.ts` routes their links).
 //   History lives only in modals (G26a, `ZenGardenHistoryModal`); "not
 //   signed" and Sign live only there too, never on this page.
 //
@@ -21,9 +27,9 @@
 // (`zen_changed` re-reads the Garden list, and this page follows it), after
 // each gesture and on window focus. No polling, no `fetchProjects()`.
 //
-// Shown only with the switch on (`ZenGardensSection` decides). With it off
-// Settings → Gardens is today's page plus the switch row
-// (`GardenAccessSwitchRow`, also at the top of Styles here).
+// Garden access is always on from 0.46.3 (Rosson 2026-10-23: no switch);
+// `ZenGardensSection` shows this page once Gardens are set up. The old page
+// stays only for tests of the retired path until 0.47.0.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { revealItemInDir } from '@tauri-apps/plugin-opener'
@@ -57,7 +63,6 @@ import {
   gardenWhen,
   gardenWidgetSignerWords,
   restoreDeletedGarden,
-  setGardenAccessSwitch,
   setGardenEditor,
   gardenActorWords,
   type DeletedGarden,
@@ -72,6 +77,11 @@ import { SearchableAgentList, tokenAndMatch, type AgentListSection } from '@/com
 import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
 import { useToastStore } from '@/stores/toast'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
+import { primaryScope } from '@/kessel/server-scope'
+import { buildGardenMembership, fetchGardenUses, type GardenMembership } from '@/lib/zen/garden-membership'
+import { ZenWidgetData } from './ZenWidgetData'
+import { DataSourcesSection } from './DataSourcesSection'
+import { gardensLandingSelection, takeGardensLanding, useGardensLandingStore } from '../gardens-landing'
 
 const MUTED = 'text-[11px] text-[var(--color-text-muted)]'
 const H3 = 'text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider'
@@ -81,56 +91,18 @@ const SIDE_OFF = 'hover:bg-white/[0.03]'
 
 /** "Sees" (G26, Rosson Q1): a Garden sees everything the person sees. */
 export const GARDEN_SEES_TEXT = 'Everything you can see'
-export const GARDEN_ACCESS_SWITCH_LABEL = 'Garden access lists'
-export const GARDEN_ACCESS_SWITCH_HELP =
-  'Each Garden gets one list of agents who may edit it, and a History of every change. Off: Gardens work as they do today.'
 
-// ── The switch row (G0a item 1) ─────────────────────────────────────
-
-/** The owner's "Garden access lists" switch. Shown on today's page (switch
- *  off) and at the top of Styles here (switch on). */
-export function GardenAccessSwitchRow({ on, className = '' }: { on: boolean; className?: string }): React.JSX.Element {
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const flip = (): void => {
-    setBusy(true)
-    setError(null)
-    setGardenAccessSwitch(!on)
-      .catch((err: unknown) => setError(gardenAccessErrorText(err)))
-      .finally(() => setBusy(false))
-  }
-  return (
-    <div className={`border border-[var(--color-border)] p-3 ${className}`} data-garden-access-switch-row="">
-      <div className="flex items-start gap-3">
-        <button
-          type="button"
-          role="switch"
-          aria-checked={on}
-          aria-label={GARDEN_ACCESS_SWITCH_LABEL}
-          disabled={busy}
-          onClick={flip}
-          data-settings-id="zen-gardens.access"
-          className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
-            on ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-          }`}
-        >
-          <span
-            className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${on ? 'translate-x-3.5' : 'translate-x-0.5'}`}
-          />
-        </button>
-        <div className="flex-1 min-w-0">
-          <div className="text-xs font-medium text-[var(--color-text-primary)]">{GARDEN_ACCESS_SWITCH_LABEL}</div>
-          <div className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">{GARDEN_ACCESS_SWITCH_HELP}</div>
-        </div>
-      </div>
-      <InlineError text={error} testId="garden-access-switch-error" />
-    </div>
-  )
-}
+/** The last rail entry: widget data and data sources no Garden uses
+ *  (Rosson 2026-10-23: nothing may become unreachable). */
+export const NOT_IN_A_GARDEN = 'Not in a Garden'
 
 // ── Selection ───────────────────────────────────────────────────────
 
-export type GardensSelection = { kind: 'styles' } | { kind: 'garden'; id: string } | { kind: 'deleted'; id: string }
+export type GardensSelection =
+  | { kind: 'styles' }
+  | { kind: 'garden'; id: string }
+  | { kind: 'deleted'; id: string }
+  | { kind: 'unplaced' }
 
 function LockGlyph(): React.JSX.Element {
   return (
@@ -345,7 +317,84 @@ function Sidebar({
               })}
           </div>
         ) : null}
+        <button
+          type="button"
+          data-gardens-side="unplaced"
+          aria-label={NOT_IN_A_GARDEN}
+          aria-current={sel.kind === 'unplaced' ? 'page' : undefined}
+          className={`${SIDE_ROW} border-t border-[var(--color-border)] ${sel.kind === 'unplaced' ? SIDE_ON : SIDE_OFF}`}
+          onClick={() => onSelect({ kind: 'unplaced' })}
+        >
+          <span className="block text-[var(--color-text-primary)]">{NOT_IN_A_GARDEN}</span>
+          <span className="block text-[10px] text-[var(--color-text-muted)]">Data and sources no Garden uses</span>
+        </button>
       </div>
+    </div>
+  )
+}
+
+// ── A Garden's data (Rosson 2026-10-23) ─────────────────────────────
+
+/** Local Data and External Data for one rail entry: a Garden (`garden`
+ *  set: its widgets' data, the sources its cards read) or "Not in a Garden"
+ *  (everything no Garden uses). The lists are the old pages' components,
+ *  filtered; their actions are unchanged. */
+function GardenDataSections({
+  garden,
+  membership,
+  error,
+  onRetry,
+}: {
+  garden: string | null
+  membership: GardenMembership | null
+  error: string | null
+  onRetry(): void
+}): React.JSX.Element {
+  const onlySources = useMemo(() => {
+    if (!membership) return null
+    if (garden) {
+      const mine = membership.sources.get(garden) ?? new Set<string>()
+      return (name: string) => mine.has(name)
+    }
+    return (name: string) => !membership.usedSources.has(name)
+  }, [membership, garden])
+  if (error) {
+    return (
+      <div data-garden-data-sections-error="">
+        <InlineError text={error} testId="garden-membership-error" />
+        <button type="button" className={`${BTN} mt-2`} onClick={onRetry}>
+          Try again
+        </button>
+      </div>
+    )
+  }
+  if (!membership || !onlySources) return <p className={MUTED}>Loading…</p>
+  return (
+    <>
+      <section data-garden-local-data={garden ?? 'unplaced'}>
+        {garden ? (
+          <ZenWidgetData embedded only={membership.widgets.get(garden) ?? new Set<string>()} />
+        ) : (
+          <ZenWidgetData embedded except={membership.placedWidgets} />
+        )}
+      </section>
+      <section data-garden-external-data={garden ?? 'unplaced'}>
+        <DataSourcesSection embedded only={onlySources} />
+      </section>
+    </>
+  )
+}
+
+function UnplacedPane(props: { membership: GardenMembership | null; error: string | null; onRetry(): void }): React.JSX.Element {
+  return (
+    <div className="max-w-2xl space-y-6" data-gardens-pane="unplaced">
+      <div>
+        <h2 className="text-lg font-semibold text-[var(--color-text-primary)] mb-1">{NOT_IN_A_GARDEN}</h2>
+        <p className="text-xs text-[var(--color-text-muted)]">
+          Widget data and data sources on no Garden&apos;s page. A widget or source a Garden uses is under that Garden.
+        </p>
+      </div>
+      <GardenDataSections garden={null} {...props} />
     </div>
   )
 }
@@ -386,7 +435,6 @@ function StylesPane({ onHistory }: { onHistory(t: GardenHistoryTarget): void }):
         <h2 className="text-lg font-semibold text-[var(--color-text-primary)] mb-1">Styles</h2>
         <p className="text-xs text-[var(--color-text-muted)]">The look every Garden uses on this computer.</p>
       </div>
-      <GardenAccessSwitchRow on={true} />
       <section data-settings-id="zen-gardens.theme">
         <h3 className={H3}>Theme</h3>
         <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]">
@@ -632,11 +680,17 @@ function GardenPane({
   gardens,
   onHistory,
   onDeleted,
+  membership,
+  membershipError,
+  onMembershipRetry,
 }: {
   garden: ZenSettingsGarden
   gardens: readonly ZenSettingsGarden[]
   onHistory(t: GardenHistoryTarget): void
   onDeleted(): void
+  membership: GardenMembership | null
+  membershipError: string | null
+  onMembershipRetry(): void
 }): React.JSX.Element {
   const [access, setAccess] = useState<GardenAccessList | null>(null)
   const [widgets, setWidgets] = useState<GardenWidgetLine[] | null>(null)
@@ -877,6 +931,8 @@ function GardenPane({
           ))}
         </ul>
       </section>
+
+      <GardenDataSections garden={id} membership={membership} error={membershipError} onRetry={onMembershipRetry} />
     </div>
   )
 }
@@ -976,6 +1032,42 @@ export function ZenGardensAccessPage(): React.JSX.Element {
 
   const locked = (id: string): boolean => sync?.gardens.find((g) => g.id === id)?.locked === true
 
+  // Which widgets and sources each Garden uses (one `zen/get` per Garden),
+  // re-read with the Garden list (every local `zen_changed`) and on focus.
+  const [membership, setMembership] = useState<GardenMembership | null>(null)
+  const [membershipError, setMembershipError] = useState<string | null>(null)
+  const memberSeq = useRef(0)
+  const loadMembership = useCallback(() => {
+    const mine = ++memberSeq.current
+    const ids = st.gardens.map((g) => g.id)
+    fetchGardenUses(ids)
+      .then((uses) => {
+        if (mine !== memberSeq.current) return
+        setMembership(buildGardenMembership(uses, primaryScope().hostKey))
+        setMembershipError(null)
+      })
+      .catch((err: unknown) => {
+        if (mine === memberSeq.current) setMembershipError(gardenAccessErrorText(err))
+      })
+  }, [st.gardens])
+  useEffect(loadMembership, [loadMembership])
+  useEffect(() => {
+    window.addEventListener('focus', loadMembership)
+    return () => window.removeEventListener('focus', loadMembership)
+  }, [loadMembership])
+
+  // A deep link or search result for Local Data / External Data (or one
+  // Garden): open its Garden, else "Not in a Garden" (gardens-landing.ts).
+  const landing = useGardensLandingStore((s) => s.landing)
+  const gardenIds = useMemo(() => st.gardens.map((g) => g.id), [st.gardens])
+  useEffect(() => {
+    if (!landing) return
+    if (landing.garden && !gardenIds.includes(landing.garden) && st.gardens.length === 0) return // list not read yet
+    const l = takeGardensLanding()
+    const to = l ? gardensLandingSelection(l, gardenIds) : null
+    if (to) setSel(to)
+  }, [landing, gardenIds, st.gardens.length])
+
   return (
     <div className="flex h-full min-h-0" data-zen-gardens-section="" data-gardens-master-detail="">
       <Sidebar
@@ -1000,7 +1092,13 @@ export function ZenGardensAccessPage(): React.JSX.Element {
             gardens={st.gardens}
             onHistory={setHistory}
             onDeleted={() => setSel({ kind: 'styles' })}
+            membership={membership}
+            membershipError={membershipError}
+            onMembershipRetry={loadMembership}
           />
+        ) : null}
+        {sel.kind === 'unplaced' ? (
+          <UnplacedPane membership={membership} error={membershipError} onRetry={loadMembership} />
         ) : null}
         {selectedDeleted ? (
           <DeletedPane

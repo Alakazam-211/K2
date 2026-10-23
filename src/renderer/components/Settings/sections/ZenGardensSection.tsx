@@ -17,11 +17,13 @@
 // Settings only shows this where the Zen toggle shows
 // (`useZenGardensSettingsShown`); the web client never mounts it.
 //
-// prd-garden-access-v1 G0a/G27 (0.46.3, behind `gardenAccess`, default
-// off): with the switch ON (and Gardens set up) this page is the
-// master-detail page (`ZenGardensAccessPage`). With it off it is exactly
-// today's page plus one row, the switch ("Garden access lists"). A daemon
-// with no such switch shows today's page with no row.
+// prd-garden-access-v1 G27: Garden access is always on from 0.46.3
+// (Rosson 2026-10-23: no switch, the daemon always answers
+// `gardenAccess: true`), so once Gardens are set up this page is the
+// master-detail page (`ZenGardensAccessPage`). Before set-up it is the
+// set-up prompt plus External Data. The old list page below is reached
+// only by a daemon that doesn't answer true (tests of the retired path);
+// it goes in 0.47.0.
 
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { revealItemInDir } from '@tauri-apps/plugin-opener'
@@ -44,7 +46,8 @@ import {
 } from '@/lib/zen/zen-settings'
 import { useGardenAccessSwitchStore, watchGardenAccessSwitch } from '@/lib/zen/garden-access-api'
 import { BTN, DANGER_BTN, INPUT, InlineError, NewGarden, attempt, revealLabel, themeOptions } from './zen-gardens-ui'
-import { GardenAccessSwitchRow, ZenGardensAccessPage } from './ZenGardensAccessPage'
+import { ZenGardensAccessPage } from './ZenGardensAccessPage'
+import { DataSourcesSection } from './DataSourcesSection'
 import { useToastStore } from '@/stores/toast'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 
@@ -592,7 +595,7 @@ export function ZenGardensSection(): React.JSX.Element {
   // Before the first answer there is nothing to show but the error, if any.
   const hasData = st.path !== null || st.setUp || st.gardens.length > 0
 
-  // G27: the master-detail page only with the switch on.
+  // G27: the master-detail page (always, on a 0.46.3+ daemon).
   if (accessOn === true && hasData && st.setUp) return <ZenGardensAccessPage />
 
   return (
@@ -603,8 +606,6 @@ export function ZenGardensSection(): React.JSX.Element {
         <div className={LIST_COLUMN} data-zen-gardens-list-column="">
           <h2 className="text-lg font-semibold text-[var(--color-text-primary)] mb-1">Gardens</h2>
           <p className="text-xs text-[var(--color-text-muted)] mb-6">Your Zen pages on this computer.</p>
-          {/* G0a item 1: the switch row (only on a daemon that has the switch). */}
-          {accessOn !== null ? <GardenAccessSwitchRow on={accessOn} className="mb-6" /> : null}
           {st.failure ? (
             <div className="mb-4">
               <InlineError text={zenSettingsErrorText(new Error(st.failure.message))} testId="zen-gardens-load-error" />
@@ -628,6 +629,13 @@ export function ZenGardensSection(): React.JSX.Element {
                 Set up Gardens
               </button>
               <InlineError text={error} testId="zen-gardens-setup-error" />
+              {/* 0.46.3: External Data has no page of its own on a client
+                  with Gardens; before Gardens are set up it lives here. */}
+              {accessOn === true ? (
+                <div className="mt-8" data-zen-gardens-setup-sources="">
+                  <DataSourcesSection embedded />
+                </div>
+              ) : null}
             </div>
           ) : (
             <section data-settings-id="zen-gardens.list">

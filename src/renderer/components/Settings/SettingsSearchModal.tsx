@@ -1,11 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { searchManifest, sectionLabel, type SettingEntry } from './searchManifest'
-import { useGardenAccessSwitchStore } from '@/lib/zen/garden-access-api'
 
 interface SettingsSearchModalProps {
   entries: SettingEntry[]
   onPick: (entry: SettingEntry) => void
   onClose: () => void
+  /** This client shows Settings → Gardens: Local Data and External Data
+   *  results are labelled (and land on) Gardens. */
+  gardensPage?: boolean
 }
 
 /**
@@ -16,10 +18,9 @@ interface SettingsSearchModalProps {
  *
  * Keyboard: up/down to navigate, enter to pick, escape to close.
  */
-export function SettingsSearchModal({ entries, onPick, onClose }: SettingsSearchModalProps): React.JSX.Element {
+export function SettingsSearchModal({ entries, onPick, onClose, gardensPage = false }: SettingsSearchModalProps): React.JSX.Element {
   const [query, setQuery] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
-  const gardenAccess = useGardenAccessSwitchStore((s) => s.on) === true
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
 
@@ -139,7 +140,7 @@ export function SettingsSearchModal({ entries, onPick, onClose }: SettingsSearch
                   }`}
                 >
                   <span className="text-[10px] text-[var(--color-text-muted)] uppercase tracking-wider w-28 flex-shrink-0 truncate">
-                    {sectionLabel(entry.section, { gardenAccess })}
+                    {sectionLabel(entry.section, { gardensPage })}
                     {entry.group && <span className="mx-1 opacity-60">/</span>}
                     {entry.group && <span className="normal-case">{entry.group}</span>}
                   </span>

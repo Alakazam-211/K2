@@ -453,7 +453,28 @@ function OrphanLine({ space, reload }: { space: GardenSpaceRow; reload: () => vo
   )
 }
 
-export function ZenWidgetData(): React.JSX.Element {
+export interface ZenWidgetDataProps {
+  /** A Garden's pane in Settings → Gardens: only these widgets' lines (the
+   *  custom widgets placed in that Garden). No "Data with no widget". */
+  only?: ReadonlySet<string> | null
+  /** "Not in a Garden": every line whose widget is NOT in this set (placed
+   *  nowhere), plus "Data with no widget". */
+  except?: ReadonlySet<string> | null
+  /** Inside a Settings → Gardens pane: a section header ("Local Data")
+   *  instead of the page title. Absent: the whole page, as before. */
+  embedded?: boolean
+}
+
+/** Which Data lines a pane shows (pure): `only` keeps those widgets,
+ *  `except` drops them. A widget in two Gardens is in both `only` sets. */
+export function filterDataLines(
+  lines: readonly DataLineModel[],
+  { only, except }: Pick<ZenWidgetDataProps, 'only' | 'except'>,
+): DataLineModel[] {
+  return lines.filter((l) => (!only || only.has(l.widget)) && (!except || !except.has(l.widget)))
+}
+
+export function ZenWidgetData({ only = null, except = null, embedded = false }: ZenWidgetDataProps = {}): React.JSX.Element {
   const [spaces, setSpaces] = useState<GardenSpacesResponse | null>(null)
   const [widgets, setWidgets] = useState<WidgetRow[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -495,14 +516,25 @@ export function ZenWidgetData(): React.JSX.Element {
     }
   }, [load])
 
-  const lines = spaces ? buildDataLines(widgets, spaces) : []
-  const orphans = spaces ? spaces.spaces.filter((s) => s.orphanedAt != null) : []
+  const lines = spaces ? filterDataLines(buildDataLines(widgets, spaces), { only, except }) : []
+  const orphans = spaces && !only ? spaces.spaces.filter((s) => s.orphanedAt != null) : []
   const reload = (): void => void load()
 
   return (
     <section data-settings-id="zen-gardens.data" data-garden-data="">
-      <h2 className="text-lg font-semibold text-[var(--color-text-primary)] mb-1">{accessOn ? 'Widget data' : 'Local Data'}</h2>
-      {accessOn ? (
+      {embedded ? (
+        <>
+          <h3 className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">Local Data</h3>
+          <p className={`${MUTED} mt-1 mb-2`}>
+            {only
+              ? 'The data each widget in this Garden keeps on this computer. Agents on its list use it; any other agent needs a grant (under Advanced).'
+              : 'Data of widgets no Garden places, and data whose widget is gone.'}
+          </p>
+        </>
+      ) : (
+        <h2 className="text-lg font-semibold text-[var(--color-text-primary)] mb-1">{accessOn ? 'Widget data' : 'Local Data'}</h2>
+      )}
+      {embedded ? null : accessOn ? (
         <p className="text-xs text-[var(--color-text-muted)] mb-6">
           Each custom widget keeps its data on this computer. The agents on a Garden&apos;s list use the data of the widgets
           in it; any other agent needs a grant (under Advanced).
@@ -524,7 +556,9 @@ export function ZenWidgetData(): React.JSX.Element {
         </div>
       ) : null}
       {spaces === null && !error ? <p className={MUTED}>Loading…</p> : null}
-      {spaces !== null && lines.length === 0 ? <p className={MUTED}>No custom widgets yet.</p> : null}
+      {spaces !== null && lines.length === 0 && (!embedded || orphans.length === 0) ? (
+        <p className={MUTED}>{embedded ? (only ? 'No widget data in this Garden.' : 'Nothing here.') : 'No custom widgets yet.'}</p>
+      ) : null}
       {lines.map((l) => (
         <DataLine key={l.widget} line={l} reload={reload} accessOn={accessOn} />
       ))}

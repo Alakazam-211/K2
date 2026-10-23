@@ -58,10 +58,16 @@ function need<T>(v: T | null, what: string): T {
   return v
 }
 
-// ── The switch ──────────────────────────────────────────────────────
+// ── Is this daemon on Garden access? ────────────────────────────────
+//
+// Read-only. From 0.46.3 there is no switch (Rosson 2026-10-23): a 0.46.3+
+// daemon always answers `gardenAccess: true` and refuses `false`. The
+// store stays so a page can tell that daemon from an older one (and so
+// tests can still drive the retired path until 0.47.0); nothing in the
+// app writes it to the daemon.
 
-/** `gardenAccess` from a `settings/get` (or `settings/update`) body: true /
- *  false, or null when the daemon has no such switch (before 0.46.3 r9). */
+/** `gardenAccess` from a `settings/get` body: true / false, or null when
+ *  the daemon has no such key (before 0.46.3 r9). */
 export function gardenAccessSetting(body: unknown): boolean | null {
   const o = obj(body)
   if (!o || !('gardenAccess' in o)) return null
@@ -93,16 +99,6 @@ export async function loadGardenAccessSwitch(): Promise<boolean | null> {
     if (seq === switchSeq) useGardenAccessSwitchStore.setState({ on: null, loaded: true })
     return null
   }
-}
-
-/** The owner's switch ("Garden access lists"). Returns what the daemon stored. */
-export async function setGardenAccessSwitch(on: boolean): Promise<boolean> {
-  const body = await daemonCliPost<unknown>(zenLocalScope(), 'settings/update', { gardenAccess: on })
-  const stored = gardenAccessSetting(body)
-  if (stored === null) throw new Error('settings/update: the daemon did not answer with "gardenAccess"')
-  switchSeq++
-  useGardenAccessSwitchStore.setState({ on: stored, loaded: true })
-  return stored
 }
 
 /** True for a `sync:settings` payload about the switch. */
@@ -760,7 +756,6 @@ export function gardenAccessErrorText(err: unknown): string {
   if (/owner_only|gardens_owner|person_only/.test(msg)) return 'Only the computer’s owner can change who edits a Garden.'
   if (/unknown_agent/.test(msg)) return 'That agent is gone. It may have been deleted.'
   if (/unknown_garden/.test(msg)) return 'That Garden is gone. It may have been deleted somewhere else.'
-  if (/not_available/.test(msg)) return 'Garden access lists are off on this computer.'
-  if (/unknown zen route/i.test(msg)) return 'K2 on this computer is older than this app. Update it to use Garden access.'
+  if (/not_available|unknown zen route/i.test(msg)) return 'K2 on this computer is older than this app. Update it to use Garden access.'
   return msg || 'Something went wrong.'
 }

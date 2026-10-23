@@ -64,7 +64,16 @@ function TryPanel({ name }: { name: string }): React.JSX.Element {
   )
 }
 
-export function DataSourcesSection(): React.JSX.Element {
+export interface DataSourcesSectionProps {
+  /** Settings → Gardens (0.46.3): show only the sources this keeps (a
+   *  Garden's, or those no Garden uses). Absent: every source, as before. */
+  only?: ((name: string) => boolean) | null
+  /** Inside a Settings → Gardens pane: a section header ("External Data")
+   *  instead of the page title. */
+  embedded?: boolean
+}
+
+export function DataSourcesSection({ only = null, embedded = false }: DataSourcesSectionProps = {}): React.JSX.Element {
   const scope = primaryScope()
   const [rows, setRows] = useState<SourceListRow[] | null>(null)
   const [status, setStatus] = useState<SourcesStatusResponse | null>(null)
@@ -122,15 +131,23 @@ export function DataSourcesSection(): React.JSX.Element {
   const connect = scope.connectHost()
   const legacy = connect != null && !connect.username
   const macHere = !scope.isRemote && isMacPlatform()
-  const pendingCount = pending.length + pendingTriggers
+  const shownRows = only && rows ? rows.filter((r) => only(r.name)) : rows
+  const shownPending = only ? pending.filter((p) => only(p.name)) : pending
+  const pendingCount = shownPending.length + (only ? 0 : pendingTriggers)
   const reviewRow = review ? pending.find((p) => p.name === review) : undefined
 
   return (
     <div className="max-w-4xl space-y-3" data-settings-id="data-sources.list" data-testid="sources-section">
       <div>
-        <h2 className="text-base font-medium text-[var(--color-text-primary)]">External Data</h2>
+        {embedded ? (
+          <h3 className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">External Data</h3>
+        ) : (
+          <h2 className="text-base font-medium text-[var(--color-text-primary)]">External Data</h2>
+        )}
         <p className={`text-[11px] ${muted} mt-1 max-w-2xl`}>
-          Checks this server runs for Garden cards and agents. They keep running when no window is open.
+          {embedded && only
+            ? 'Checks this server runs that cards here read. They keep running when no window is open.'
+            : 'Checks this server runs for Garden cards and agents. They keep running when no window is open.'}
         </p>
         <p className={`text-[11px] ${muted}`} data-testid="sources-runs-on">
           Runs on {scope.label}
@@ -161,6 +178,11 @@ export function DataSourcesSection(): React.JSX.Element {
         </div>
       )}
 
+      {shownRows && shownRows.length === 0 && rows && rows.length > 0 && (
+        <p className={`text-[11px] ${muted}`} data-testid="sources-none-here">
+          No sources on this server are used here.
+        </p>
+      )}
       {rows && rows.length === 0 && (
         <p className={`text-[11px] ${muted}`}>
           No sources yet. An agent can propose one: <code>k2 sources try</code> then <code>k2 sources propose</code> (see{' '}
@@ -169,7 +191,7 @@ export function DataSourcesSection(): React.JSX.Element {
       )}
 
       <div className="divide-y divide-[var(--color-border)]">
-        {(rows ?? []).map((row) => {
+        {(shownRows ?? []).map((row) => {
           const panel = open?.name === row.name ? open.panel : null
           return (
             <div key={row.name} className="py-0.5">

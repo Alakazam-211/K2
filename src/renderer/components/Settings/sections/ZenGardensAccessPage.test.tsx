@@ -6,12 +6,18 @@
 // daemon), the app socket, Tauri and the opener plugin.
 //
 // Asserted (fail loudly):
-//   - switch absent (an older daemon): today's page, no switch row;
-//   - switch off: today's page plus the switch row; the row posts
-//     `settings/update {gardenAccess: true}` to the LOCAL daemon;
-//   - switch on: the master-detail page; the sidebar is Styles first, then
-//     each Garden (lock glyph, "N editors · made by X"), + New Garden, then
-//     Deleted Gardens (n);
+//   - no switch anywhere (Rosson 2026-10-23): a 0.46.3+ daemon answers
+//     gardenAccess:true and the page is the master-detail page; an older
+//     daemon (no key) gets today's page, with no switch row either;
+//   - the sidebar is Styles first, then each Garden (lock glyph, "N
+//     editors · made by X"), + New Garden, Deleted Gardens (n), and last
+//     "Not in a Garden";
+//   - a Garden's pane shows its Local Data (its placed widgets' data) and
+//     External Data (the sources its cards read); a widget or source in two
+//     Gardens shows under both; what no Garden uses is under "Not in a
+//     Garden"; delete and remove work there as on the old pages;
+//   - the nav (Gardens one page between Tickets and Context Catalog) and
+//     search landing (Local/External Data results land on Gardens);
 //   - the Garden pane: Made by, the editors with "added automatically at
 //     upgrade", Sees "Everything you can see", Lock with its caption, Get
 //     K2's design updates, Widgets with their last signer; no "not signed"
@@ -48,6 +54,10 @@ const h = vi.hoisted(() => ({
   agents: [] as Array<Record<string, unknown>>,
   widgets: [] as Array<Record<string, unknown>>,
   spaces: [] as Array<Record<string, unknown>>,
+  /** Each Garden's resolved page (`zen/get`): custom placements. */
+  pages: {} as Record<string, Array<{ widget: string; sourceAddresses?: string[] }>>,
+  /** The window's server's sources (`sources/list`). */
+  sources: [] as Array<Record<string, unknown>>,
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
@@ -158,15 +168,37 @@ function fakeGet(route: string, p: Record<string, unknown>): unknown {
       return { ok: true, spaces: h.spaces }
     case 'zen/data/show':
       return { space: { widget: p.widget }, grants: [], delegations: [], madeBy: null, liveHash: null }
+    case 'zen/get': {
+      const g = String(p.garden)
+      return {
+        ok: true,
+        garden: g,
+        page: {
+          widgets: [
+            { id: 'talk', kind: 'conversation' },
+            ...(h.pages[g] ?? []).map((w, i) => ({ id: `c${i}`, kind: 'custom', widget: w.widget, sourceAddresses: w.sourceAddresses ?? [] })),
+          ],
+        },
+      }
+    }
+    case 'sources/list':
+      return { sources: h.sources, serverNow: NOW, rev: 1 }
+    case 'sources/status':
+      return { sources: h.sources.length, active: h.sources.length, targets: 1, inFlight: 0, behindSecs: 0, parkedOrigins: [], lastGap: null, airgap: false }
+    case 'sources/pending':
+      return { sources: [], triggers: [] }
   }
   throw new Error(`unexpected GET ${route}`)
 }
 
 function fakePost(route: string, body: Record<string, unknown>): unknown {
   switch (route) {
-    case 'settings/update':
-      h.gardenAccess = body.gardenAccess === true
-      return { gardenAccess: h.gardenAccess }
+    case 'zen/data/space/delete':
+      h.spaces = h.spaces.filter((s) => s.widget !== body.widget)
+      return { ok: true, widget: body.widget, snapshot: 's-1' }
+    case 'sources/remove':
+      h.sources = h.sources.filter((s) => s.name !== body.name)
+      return { name: body.name, removed: true }
     case 'zen/garden/access': {
       const g = String(body.garden)
       const agent = String(body.agent)
@@ -227,6 +259,9 @@ import { ZenWidgetData } from './ZenWidgetData'
 import { GARDEN_NOT_SIGNED_TEXT } from '@/components/Zen/widgets/ZenGardenHistoryModal'
 import { settingsNav } from '../Settings'
 import { sectionLabel } from '../searchManifest'
+import { useConfirmDialogStore } from '@/stores/confirm-dialog'
+import { gardensLandingFor, gardensLandingSelection, requestGardensLanding, useGardensLandingStore } from '../gardens-landing'
+import { buildGardenMembership, gardenPageUses, sourceNameOn } from '@/lib/zen/garden-membership'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -323,6 +358,9 @@ beforeEach(() => {
     },
   }
   h.spaces = []
+  h.pages = {}
+  h.sources = []
+  useGardensLandingStore.setState({ landing: null })
   Object.defineProperty(window.navigator, 'platform', { value: 'MacIntel', configurable: true })
   __resetZenAvailableForTests()
   __resetZenSettingsForTests()
@@ -349,8 +387,19 @@ async function openGarden(id: string): Promise<HTMLElement> {
   return pane
 }
 
-describe('the switch (G0a, G27)', () => {
-  it('a daemon without the switch: today’s page, no switch row, no master-detail', async () => {
+describe('no switch (Rosson 2026-10-23)', () => {
+  it('a 0.46.3+ daemon: the master-detail page, no switch row anywhere, nothing posts settings/update', async () => {
+    await mountPage()
+    expect(document.querySelector('[data-garden-access-switch-row]')).toBeNull()
+    expect(document.querySelector('[role="switch"]')).toBeNull()
+    expect(document.body.textContent).not.toContain('Garden access lists')
+    fireEvent.click(q('[data-gardens-side="unplaced"]'))
+    await waitFor(() => expect(document.querySelector('[data-gardens-pane="unplaced"]')).not.toBeNull())
+    expect(document.querySelector('[role="switch"]')).toBeNull()
+    expect(posts('settings/update')).toEqual([])
+  })
+
+  it('a daemon without the key (older than 0.46.3): today’s page, and no switch row either', async () => {
     h.gardenAccess = undefined
     render(<ZenGardensSection />)
     await waitFor(() => expect(document.querySelector('[data-zen-gardens-list]')).not.toBeNull())
@@ -359,34 +408,19 @@ describe('the switch (G0a, G27)', () => {
     expect(document.querySelector('[data-gardens-master-detail]')).toBeNull()
     expect(document.querySelector('[data-zen-gardens-columns]')).not.toBeNull()
   })
-
-  it('off: today’s page plus the switch row; flipping it posts gardenAccess:true to the local daemon and shows the new page', async () => {
-    h.gardenAccess = false
-    render(<ZenGardensSection />)
-    const row = await waitFor(() => q('[data-garden-access-switch-row]'))
-    expect(document.querySelector('[data-zen-gardens-list]')).not.toBeNull()
-    expect(document.querySelector('[data-gardens-master-detail]')).toBeNull()
-    // Today's per-row controls are still there, with today's words.
-    await waitFor(() => expect(document.querySelector('[data-zen-garden-sync="g-1"]')).not.toBeNull())
-    expect(q('[data-zen-garden-sync="g-1"]').textContent).toContain('Keep in sync with future template updates')
-    const sw = within(row).getByRole('switch', { name: 'Garden access lists' })
-    expect(sw.getAttribute('aria-checked')).toBe('false')
-    await act(async () => fireEvent.click(sw))
-    expect(posts('settings/update')).toEqual([{ gardenAccess: true }])
-    expect(h.calls.filter((c) => c.route === 'settings/update').map((c) => c.hostKey)).toEqual(['local'])
-    await waitFor(() => expect(document.querySelector('[data-gardens-master-detail]')).not.toBeNull())
-  })
 })
 
 describe('the sidebar (G25)', () => {
-  it('Styles first, then each Garden (lock, editors, made by), + New Garden, then Deleted Gardens (n)', async () => {
+  it('Styles first, then each Garden (lock, editors, made by), + New Garden, Deleted Gardens (n), and last Not in a Garden', async () => {
     await mountPage()
     const side = q('[data-gardens-sidebar]')
     await waitFor(() => expect(side.querySelectorAll('[data-garden-side-row]').length).toBe(2))
+    await waitFor(() => expect(side.querySelector('[data-gardens-deleted-toggle]')).not.toBeNull())
     const order = [...side.querySelectorAll('[data-gardens-side], [data-zen-settings-new-garden], [data-gardens-deleted-toggle]')].map(
       (el) => el.getAttribute('data-gardens-side') ?? (el.hasAttribute('data-zen-settings-new-garden') ? 'new' : 'deleted'),
     )
-    expect(order).toEqual(['styles', 'garden', 'garden', 'new', 'deleted'])
+    expect(order).toEqual(['styles', 'garden', 'garden', 'new', 'deleted', 'unplaced'])
+    expect(q('[data-gardens-side="unplaced"]').textContent).toBe('Not in a GardenData and sources no Garden uses')
     expect(q('[data-gardens-side="styles"]').getAttribute('aria-current')).toBe('page')
     const rows = [...side.querySelectorAll('[data-garden-side-row]')]
     expect(rows.map((r) => r.getAttribute('data-garden-side-row'))).toEqual(['g-1', 'g-2'])
@@ -405,10 +439,10 @@ describe('the sidebar (G25)', () => {
     expect(document.querySelector('[data-gardens-error]')).toBeNull()
   })
 
-  it('Styles holds the switch, the global theme, the theme list, the zen.toml reset, the folder and the last look changes', async () => {
+  it('Styles holds the global theme, the theme list, the zen.toml reset, the folder and the last look changes (no switch)', async () => {
     await mountPage()
     const pane = q('[data-gardens-pane="styles"]')
-    expect(within(pane).getByRole('switch', { name: 'Garden access lists' }).getAttribute('aria-checked')).toBe('true')
+    expect(within(pane).queryByRole('switch')).toBeNull()
     await waitFor(() => expect(pane.querySelectorAll('[data-gardens-theme-list] li').length).toBe(2))
     expect(q('[data-gardens-reset-zen]', pane).textContent).toBe('Reset')
     expect(q('[data-zen-gardens-path]', pane).textContent).toBe('/Users/r/.k2/zen')
@@ -597,15 +631,217 @@ describe('Widget data (G28)', () => {
   })
 })
 
-describe('the nav name (G28)', () => {
-  it('Garden access on: "Widget data"; off: Local Data, as 0.46.3', () => {
-    const leaf = (gardenAccess: boolean): string | undefined =>
-      settingsNav({ zenGardens: true, gardenAccess })
-        .flatMap((b) => (b.kind === 'group' ? b.items : []))
-        .find((it) => it.id === 'zen-widget-data')?.label
-    expect(leaf(true)).toBe('Widget data')
-    expect(leaf(false)).toBe('Local Data')
-    expect(sectionLabel('zen-widget-data', { gardenAccess: true })).toBe('Widget data')
+describe('the nav (Rosson 2026-10-23: Gardens is one page)', () => {
+  const top = (zenGardens: boolean): string[] =>
+    settingsNav({ zenGardens }).flatMap((b) => (b.kind === 'item' ? [b.id] : []))
+  const leaves = (zenGardens: boolean): string[] =>
+    settingsNav({ zenGardens }).flatMap((b) => (b.kind === 'group' ? b.items.flatMap((i) => (i.id ? [i.id] : [])) : []))
+
+  it('with Gardens: one "Gardens" item between Tickets and Context Catalog, no Gardens group, no data items', () => {
+    const items = top(true)
+    const at = items.indexOf('zen-gardens')
+    expect(items[at - 1]).toBe('tickets')
+    expect(items[at + 1]).toBe('context-catalog')
+    const nav = settingsNav({ zenGardens: true })
+    expect(nav.find((b) => b.kind === 'item' && b.id === 'zen-gardens')).toEqual({ kind: 'item', id: 'zen-gardens', label: 'Gardens' })
+    expect(nav.some((b) => b.kind === 'group' && b.title === 'Gardens')).toBe(false)
+    const all = [...items, ...leaves(true)]
+    expect(all).not.toContain('zen-widget-data')
+    expect(all).not.toContain('data-sources')
+    expect(all.filter((id) => id === 'zen-gardens')).toHaveLength(1)
+  })
+
+  it('without Gardens (web, Windows): no Gardens item, External Data stays in Network', () => {
+    expect(top(false)).not.toContain('zen-gardens')
+    const network = settingsNav({ zenGardens: false }).find((b) => b.kind === 'group' && b.title === 'Network')
+    if (!network || network.kind !== 'group') throw new Error('no Network group')
+    expect(network.items.map((i) => i.id).at(-1)).toBe('data-sources')
+  })
+})
+
+describe('search landing', () => {
+  it('Local Data and External Data results land on Gardens (with their Garden when they know it); without Gardens they stay', () => {
+    expect(gardensLandingFor('data-sources', undefined, true)).toEqual({
+      section: 'zen-gardens',
+      landing: { garden: null, part: 'sources' },
+    })
+    expect(gardensLandingFor('zen-widget-data', 'g-2', true)).toEqual({
+      section: 'zen-gardens',
+      landing: { garden: 'g-2', part: 'data' },
+    })
+    expect(gardensLandingFor('zen-gardens', 'g-1', true)).toEqual({ section: 'zen-gardens', landing: { garden: 'g-1', part: null } })
+    expect(gardensLandingFor('zen-gardens', undefined, true)).toEqual({ section: 'zen-gardens', landing: null })
+    expect(gardensLandingFor('data-sources', undefined, false)).toEqual({ section: 'data-sources', landing: null })
+    expect(gardensLandingFor('tickets', undefined, true)).toEqual({ section: 'tickets', landing: null })
+    expect(sectionLabel('data-sources', { gardensPage: true })).toBe('Gardens')
+    expect(sectionLabel('zen-widget-data', { gardensPage: true })).toBe('Gardens')
+    expect(sectionLabel('data-sources')).toBe('External Data')
     expect(sectionLabel('zen-widget-data')).toBe('Local Data')
+  })
+
+  it('a landing opens its Garden when it exists, else Not in a Garden; a plain Gardens landing changes nothing', () => {
+    const ids = ['g-1', 'g-2']
+    expect(gardensLandingSelection({ garden: 'g-2', part: 'sources' }, ids)).toEqual({ kind: 'garden', id: 'g-2' })
+    expect(gardensLandingSelection({ garden: 'g-gone', part: 'data' }, ids)).toEqual({ kind: 'unplaced' })
+    expect(gardensLandingSelection({ garden: null, part: 'sources' }, ids)).toEqual({ kind: 'unplaced' })
+    expect(gardensLandingSelection({ garden: null, part: null }, ids)).toBeNull()
+  })
+
+  it('the page takes a pending landing once: a Garden’s, then Not in a Garden', async () => {
+    requestGardensLanding({ garden: 'g-2', part: 'data' })
+    await mountPage()
+    await waitFor(() => expect(document.querySelector('[data-garden-pane="g-2"]')).not.toBeNull())
+    expect(useGardensLandingStore.getState().landing).toBeNull()
+    await act(async () => requestGardensLanding({ garden: null, part: 'sources' }))
+    await waitFor(() => expect(document.querySelector('[data-gardens-pane="unplaced"]')).not.toBeNull())
+    expect(q('[data-gardens-side="unplaced"]').getAttribute('aria-current')).toBe('page')
+  })
+})
+
+function sourceRow(name: string, label: string): Record<string, unknown> {
+  return {
+    name,
+    label,
+    status: 'active',
+    madeBy: 'agent:p-ana',
+    secret: null,
+    pinned: false,
+    keep: 'values',
+    viewers: 'member',
+    agentAccess: 'values',
+    everySecs: 60,
+    targets: 1,
+    triggers: 0,
+    view: {
+      name,
+      label,
+      kind: 'http-json',
+      status: 'active',
+      health: 'ok',
+      phase: 'live',
+      display: 'ok',
+      reason: null,
+      reasonText: null,
+      httpStatus: null,
+      soft: { count: 0, of: 3 },
+      serverNow: NOW,
+      updatedAt: NOW - 30,
+      checkedAt: NOW - 30,
+      nextAt: NOW + 30,
+      hardSince: null,
+      recoveredAt: null,
+      gap: null,
+      muted: null,
+      simulated: null,
+      pinned: false,
+      keep: 'values',
+      masked: false,
+      link: null,
+      fields: {},
+      items: [],
+      counts: { ok: 1, warn: 0, crit: 0, unknown: 0 },
+      rev: 1,
+    },
+  }
+}
+
+function space(widget: string): Record<string, unknown> {
+  return { widget, bytes: 900, keys: 2, rev: 1, grants: 0, admins: [], orphanedAt: null, madeBy: { kind: 'owner' } }
+}
+
+describe('a Garden’s Local Data and External Data (Rosson 2026-10-23)', () => {
+  beforeEach(() => {
+    // `board` is placed in both Gardens; `rollouts` only in Fleet Ops;
+    // `drafty` nowhere. Source `fleet` is read by both Gardens, `deploys`
+    // by Fleet Ops, `money` by nobody, `far` lives on another server.
+    h.pages = {
+      'g-1': [{ widget: 'board', sourceAddresses: ['fleet'] }],
+      'g-2': [
+        { widget: 'board', sourceAddresses: ['fleet'] },
+        { widget: 'rollouts', sourceAddresses: ['deploys', 'far::akzm.k2.dev'] },
+      ],
+    }
+    h.widgets = [
+      { name: 'board', builtin: false, title: 'Board', placements: [{ garden: 'g-1', placement: 'c0' }, { garden: 'g-2', placement: 'c0' }] },
+      { name: 'rollouts', builtin: false, title: 'Rollouts', placements: [{ garden: 'g-2', placement: 'c1' }] },
+      { name: 'drafty', builtin: false, title: null, placements: [] },
+    ]
+    h.spaces = [space('board'), space('rollouts'), space('drafty'), { ...space('gone-w'), orphanedAt: NOW - 60 }]
+    h.sources = [sourceRow('fleet', 'Fleet boxes'), sourceRow('deploys', 'Deploys'), sourceRow('money', 'Money')]
+  })
+
+  const dataLines = (root: ParentNode): string[] =>
+    [...root.querySelectorAll('[data-garden-data-line]')].map((el) => el.getAttribute('data-garden-data-line') ?? '')
+  const sourceNames = (root: ParentNode): string[] =>
+    [...root.querySelectorAll('[data-testid="sources-row"]')].map((el) => el.getAttribute('data-source') ?? '')
+
+  it('each Garden shows its widgets’ data and its sources; a widget or source in two Gardens shows in both', async () => {
+    await mountPage()
+    const ops = await openGarden('g-2')
+    const opsLocal = await waitFor(() => q('[data-garden-local-data="g-2"]', ops))
+    await waitFor(() => expect(dataLines(opsLocal)).toEqual(['board', 'rollouts']))
+    expect(q('h3', opsLocal).textContent).toBe('Local Data')
+    expect(opsLocal.querySelector('[data-garden-data-orphans]')).toBeNull()
+    const opsExt = q('[data-garden-external-data="g-2"]', ops)
+    await waitFor(() => expect(sourceNames(opsExt)).toEqual(['fleet', 'deploys']))
+    expect(q('h3', opsExt).textContent).toBe('External Data')
+
+    const g1 = await openGarden('g-1')
+    const g1Local = await waitFor(() => q('[data-garden-local-data="g-1"]', g1))
+    await waitFor(() => expect(dataLines(g1Local)).toEqual(['board']))
+    await waitFor(() => expect(sourceNames(q('[data-garden-external-data="g-1"]', g1))).toEqual(['fleet']))
+    // One zen/get per Garden, from this computer's daemon.
+    expect(h.calls.filter((c) => c.route === 'zen/get').every((c) => c.hostKey === 'local')).toBe(true)
+    expect(gets('zen/get')).toEqual(expect.arrayContaining([{ garden: 'g-1' }, { garden: 'g-2' }]))
+  })
+
+  it('Not in a Garden: the data of widgets no Garden places, data with no widget, and sources nobody reads', async () => {
+    await mountPage()
+    fireEvent.click(q('[data-gardens-side="unplaced"]'))
+    const pane = await waitFor(() => q('[data-gardens-pane="unplaced"]'))
+    expect(q('h2', pane).textContent).toBe('Not in a Garden')
+    await waitFor(() => expect(dataLines(pane)).toEqual(['drafty']))
+    await waitFor(() => expect(pane.querySelector('[data-garden-data-orphan="gone-w"]')).not.toBeNull())
+    await waitFor(() => expect(sourceNames(pane)).toEqual(['money']))
+  })
+
+  it('the old actions work in a pane: Delete data and Remove source post what the old pages posted', async () => {
+    useConfirmDialogStore.setState({ confirm: vi.fn(async () => true) } as never)
+    await mountPage()
+    const ops = await openGarden('g-2')
+    const local = await waitFor(() => q('[data-garden-local-data="g-2"]', ops))
+    const line = await waitFor(() => q('[data-garden-data-line="rollouts"]', local))
+    await act(async () => fireEvent.click(within(line).getByRole('button', { name: 'Delete' })))
+    expect(posts('zen/data/space/delete')).toEqual([{ widget: 'rollouts', confirm: 'rollouts' }])
+    const ext = q('[data-garden-external-data="g-2"]', ops)
+    const row = await waitFor(() => q('[data-source="deploys"]', ext))
+    await act(async () => fireEvent.click(within(row).getByTestId('sources-row-menu')))
+    await act(async () => fireEvent.click(within(row).getByTestId('sources-menu-remove')))
+    await waitFor(() => expect(posts('sources/remove')).toEqual([{ name: 'deploys' }]))
+  })
+
+  it('membership is pure: pages → per-Garden widgets and this server’s source names', () => {
+    expect(gardenPageUses({ page: { widgets: [{ kind: 'custom', widget: 'a', sourceAddresses: ['x', 'y::akzm.k2.dev'] }, { kind: 'clock' }] } })).toEqual({
+      widgets: ['a'],
+      sources: ['x', 'y::akzm.k2.dev'],
+    })
+    expect(gardenPageUses({ widgets: [{ kind: 'custom', widget: 'b' }] })).toEqual({ widgets: ['b'], sources: [] })
+    expect(sourceNameOn('fleet', 'local')).toBe('fleet')
+    expect(sourceNameOn('fleet', 'akzm.k2.dev')).toBeNull()
+    expect(sourceNameOn('fleet::akzm.k2.dev', 'akzm.k2.dev')).toBe('fleet')
+    expect(sourceNameOn('fleet::AKZM.k2.dev:443', 'akzm.k2.dev')).toBe('fleet')
+    expect(sourceNameOn('fleet::other.k2.dev', 'akzm.k2.dev')).toBeNull()
+    expect(sourceNameOn('fleet::not a host', 'local')).toBeNull()
+    const m = buildGardenMembership(
+      new Map([
+        ['g-1', { widgets: ['board'], sources: ['fleet'] }],
+        ['g-2', { widgets: ['board', 'rollouts'], sources: ['fleet', 'far::akzm.k2.dev'] }],
+      ]),
+      'local',
+    )
+    expect([...(m.widgets.get('g-1') ?? [])]).toEqual(['board'])
+    expect([...m.placedWidgets].sort()).toEqual(['board', 'rollouts'])
+    expect([...m.usedSources]).toEqual(['fleet'])
+    expect([...(m.sources.get('g-2') ?? [])]).toEqual(['fleet'])
   })
 })

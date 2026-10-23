@@ -26,9 +26,8 @@ describe('Settings nav Apps', () => {
     expect(accessStart).toBeGreaterThan(src.indexOf("title: 'Language Models'"))
     expect(networkStart).toBeGreaterThan(accessStart)
     expect(editors).toBeGreaterThan(networkStart)
-    // Gardens sits between Access and Network (Rosson 2026-10-15).
-    const access = src.slice(accessStart, src.indexOf("title: 'Gardens'"))
-    expect(src.indexOf("title: 'Gardens'")).toBeGreaterThan(accessStart)
+    // Gardens is a page beneath Tickets from 0.46.3, not a group.
+    const access = src.slice(accessStart, networkStart)
     const network = src.slice(networkStart, editors)
     expect(access).toContain(
       [
@@ -50,7 +49,7 @@ describe('Settings nav Apps', () => {
         "{ id: 'homes-sync', label: 'Homes Sync' },",
       ].join('\n        '),
     )
-    // External Data is in Network only where the Gardens group is hidden.
+    // External Data is in Network only where Gardens are hidden (web, Windows).
     expect(network).toContain("...(zenGardens ? [] : [{ id: 'data-sources' as const, label: 'External Data' }]),")
     expect(access).not.toContain("id: 'data-sources'")
     expect(access + network).not.toContain("id: 'local-grokbots'")
@@ -95,28 +94,21 @@ describe('Settings nav Apps', () => {
   })
 })
 
-describe('Settings nav Gardens group (0.45.7, Rosson: Gardens get their own section)', () => {
-  it('Gardens is a group like Access and Logs: Gardens, Local Data, External Data, beneath Access', () => {
-    const start = src.indexOf("title: 'Gardens'")
-    const access = src.indexOf("title: 'Access'")
-    const network = src.indexOf("title: 'Network'")
-    expect(start).toBeGreaterThan(access)
-    expect(network).toBeGreaterThan(start)
-    const gardens = src.slice(start, network)
-    expect(gardens).toContain(
-      [
-        "{ id: 'zen-gardens', label: 'Gardens' },",
-        "{ id: 'zen-widget-data', label: 'Local Data' },",
-        "{ id: 'data-sources', label: 'External Data' },",
-      ].join('\n              '),
-    )
-    // No longer a top-level page.
-    expect(src).not.toContain("{ kind: 'item', id: 'zen-gardens'")
-    // Both pages route, search and fall back like the rest.
+describe('Settings nav Gardens page (0.46.3, Rosson 2026-10-23: one page, like Apps and Workspaces)', () => {
+  it('Gardens is one top-level page beneath Tickets and above Context Catalog; no Gardens group, no data leaves', () => {
+    expect(src).not.toContain("title: 'Gardens'")
+    const tickets = src.indexOf("{ kind: 'item', id: 'tickets', label: 'Tickets' },")
+    const gardens = src.indexOf("...(zenGardens ? ([{ kind: 'item', id: 'zen-gardens' as const, label: 'Gardens' }] satisfies NavBlock[]) : []),")
+    const catalog = src.indexOf("{ kind: 'item', id: 'context-catalog', label: 'Context Catalog' },")
+    expect(tickets).toBeGreaterThan(0)
+    expect(gardens).toBeGreaterThan(tickets)
+    expect(catalog).toBeGreaterThan(gardens)
+    expect(src).not.toContain("{ id: 'zen-widget-data', label: 'Local Data' }")
+    expect(src).not.toContain("label: 'Widget data'")
+    // The old ids still route (deep links fold into Gardens) and search.
     expect(src).toContain("activeSection === 'zen-gardens'")
-    expect(src).toContain("activeSection === 'zen-widget-data'")
     expect(src).toContain('<ZenGardensSection />')
-    expect(src).toContain('<ZenWidgetDataSection />')
+    expect(src).toContain('GARDEN_DATA_SECTIONS.has(activeSection)')
     expect(src).toContain('...(zenAvailable() ? ZEN_GARDENS_MANIFEST : []),')
     expect(src).toContain('...(zenAvailable() ? ZEN_WIDGET_DATA_MANIFEST : []),')
     expect(src).toContain("(activeSection === 'zen-gardens' || activeSection === 'zen-widget-data')")
@@ -126,12 +118,10 @@ describe('Settings nav Gardens group (0.45.7, Rosson: Gardens get their own sect
 })
 
 describe('Settings nav Language Models group (0.46, Rosson: Subs / Tokens · Providers / Models · Usage)', () => {
-  it('Language Models is a group: Subs / Tokens, Providers / Models, Usage, before Access; Gardens follows Access', () => {
+  it('Language Models is a group: Subs / Tokens, Providers / Models, Usage, before Access', () => {
     const start = src.indexOf("title: 'Language Models'")
-    const gardens = src.indexOf("title: 'Gardens'")
     const server = src.indexOf("title: 'Access'")
     expect(server).toBeGreaterThan(start)
-    expect(gardens).toBeGreaterThan(server)
     expect(src.slice(start, server)).toContain(
       [
         "{ id: 'llm-tokens', label: 'Subs / Tokens' },",

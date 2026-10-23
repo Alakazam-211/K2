@@ -38,6 +38,11 @@ export interface SettingEntry {
    * can disambiguate similarly-named settings across groups.
    */
   group?: string
+  /**
+   * The Garden this entry is about, when it knows one (Settings → Gardens):
+   * picking it opens that Garden in the Gardens page's rail.
+   */
+  garden?: string
 }
 
 /** Haystack built once per entry at index time. */
@@ -93,10 +98,11 @@ export function searchManifest(entries: SettingEntry[], query: string): SettingE
 }
 
 /** Section label lookup — duplicated from Settings.tsx SECTIONS so manifests don't import the router. */
-/** A section's name in search results. prd-garden-access-v1 G28: Garden
- *  access on renames Local Data to "Widget data". */
-export function sectionLabel(section: SettingsSection, opts: { gardenAccess?: boolean } = {}): string {
-  if (section === 'zen-widget-data' && opts.gardenAccess) return 'Widget data'
+/** A section's name in search results. On a client with Settings →
+ *  Gardens (`gardensPage`, 0.46.3), Local Data and External Data live in
+ *  each Garden's pane, so their results say "Gardens" (and land there). */
+export function sectionLabel(section: SettingsSection, opts: { gardensPage?: boolean } = {}): string {
+  if (opts.gardensPage && (section === 'zen-widget-data' || section === 'data-sources')) return 'Gardens'
   return SECTION_LABELS[section] ?? section
 }
 

@@ -84,9 +84,9 @@ describe('Settings search: Language Models pages (was LLMs)', () => {
 })
 
 describe('Settings: K2 Server becomes Access and Network (0.45.7)', () => {
-  it('group order: Language Models, Access, Gardens, Network, Editors / Fonts, Logs, Cores, 3rd Party Bots', () => {
+  it('group order: Language Models, Access, Network, Editors / Fonts, Logs, Cores, 3rd Party Bots (Gardens is a page, 0.46.3)', () => {
     expect(titles(settingsNav({ zenGardens: true }))).toEqual([
-      'Language Models', 'Access', 'Gardens', 'Network', 'Editors / Fonts', 'Logs', 'Cores', '3rd Party Bots',
+      'Language Models', 'Access', 'Network', 'Editors / Fonts', 'Logs', 'Cores', '3rd Party Bots',
     ])
     expect(titles(settingsNav({ zenGardens: false }))).toEqual([
       'Language Models', 'Access', 'Network', 'Editors / Fonts', 'Logs', 'Cores', '3rd Party Bots',
@@ -106,10 +106,13 @@ describe('Settings: K2 Server becomes Access and Network (0.45.7)', () => {
       const ids = leafIds(nav)
       for (const id of [
         'k2-access', 'people', 'user-templates', 'domains', 'k2-connect', 'connections',
-        'api-tokens', 'vault', 'data-sources', 'local-grokbots', 'companion', 'access-audit',
+        'api-tokens', 'vault', 'local-grokbots', 'companion', 'access-audit',
       ] as const) {
         expect(ids.filter((x) => x === id).length, id).toBe(1)
       }
+      // External Data: its own leaf only without Gardens (web, Windows);
+      // with Gardens it lives in each Garden's pane (0.46.3).
+      expect(ids.filter((x) => x === 'data-sources').length).toBe(zenGardens ? 0 : 1)
     }
     // Access Audit stays in Logs.
     expect(group(settingsNav({ zenGardens: true }), 'Logs').items.map((i) => i.id)).toContain('access-audit')

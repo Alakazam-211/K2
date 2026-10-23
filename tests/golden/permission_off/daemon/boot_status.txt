@@ -44,4 +44,5 @@ features:
   garden-person-rows-v1
   thread-stream-v1
   thread-activity-ear-v1
+  thread-context-v1
   boot-status-views-v1

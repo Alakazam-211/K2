@@ -603,3 +603,104 @@ fn widget_versions_reach_the_deploy_audit() {
     assert_eq!(events[1], WidgetEvent::LastGood { widget: "s9-audit".into(), hash });
     assert!(matches!(&events[2], WidgetEvent::Reset { kept: Some(_), .. }), "{:?}", events[2]);
 }
+
+/// 0.46.3 r10 (prd-garden-column-collapse-and-agent-list-v1 A2, §8): an
+/// Agents widget beside a Board, showing the agents the Board lists.
+const LIST_PAGE: &str = "schema = 1\n\n[layout]\nkind = \"columns\"\n[[layout.column]]\nsize = 60\nmin-width = 200\n[[layout.column]]\nsize = 40\nmin-width = 200\n\n[[widget]]\nid = \"board\"\nkind = \"custom\"\nwidget = \"agent-arcade\"\ncolumn = 0\n\n[[widget]]\nid = \"crew\"\nkind = \"agents\"\ncolumn = 1\n[widget.props]\nlist-from = \"board\"\n";
+
+fn page_errors(f: &ZenFiles, g: &str, text: &str) -> Vec<J> {
+    write_garden(f, g, text);
+    let v = f.validate(Some(&ZenFile::Garden(g.into()))).expect("validate");
+    v["errors"].as_array().expect("errors").clone()
+}
+
+fn one_error(errs: &[J], line: u64, needle: &str, what: &str) {
+    assert_eq!(errs.len(), 1, "{what}: want exactly one error: {errs:?}");
+    assert_eq!(errs[0]["line"].as_u64(), Some(line), "{what}: {}", errs[0]);
+    let m = errs[0]["message"].as_str().expect("message");
+    assert!(m.contains(needle), "{what}: {m:?} must contain {needle:?}");
+}
+
+#[test]
+fn list_from_names_a_custom_widget_that_reads_agents() {
+    let (_t, f) = set_up("listfrom");
+    let g = gid(&f, "Garden 2");
+    f.new_widget("agent-arcade", Some("hello")).expect("new");
+
+    // Clean: the mode is derived as `list`, and list-from rides along.
+    assert_eq!(page_errors(&f, &g, LIST_PAGE), Vec::<J>::new());
+    let page = f.resolve(Some(&g)).expect("resolve");
+    let crew = &page["page"]["widgets"][1];
+    assert_eq!(crew["kind"], "agents", "{page}");
+    assert_eq!(crew["props"]["mode"], "list", "list-from makes it a list: {crew}");
+    assert_eq!(crew["props"]["list-from"], "board", "{crew}");
+    // mode = "list" said out loud is the same page.
+    let said = LIST_PAGE.replace("[widget.props]\n", "[widget.props]\nmode = \"list\"\n");
+    assert_eq!(page_errors(&f, &g, &said), Vec::<J>::new());
+
+    // A Board that doesn't ask for agents:read: one error at list-from.
+    let m = f.widget_dir("agent-arcade").join("manifest.json");
+    let text = fs::read_to_string(&m)
+        .expect("read")
+        .replace("\"caps\": [\"agents:read\"]", "\"caps\": []")
+        .replace(",\n  \"reasons\": {\n    \"agents:read\": \"to say hello to the first agent in this Home\"\n  }", "");
+    fs::write(&m, text).expect("write");
+    assert_eq!(f.widget_status("agent-arcade").state, WidgetState::Ok);
+    let errs = page_errors(&f, &g, LIST_PAGE);
+    one_error(&errs, 23, "lists from custom widget 'board', which doesn't ask for agents:read", "board without agents:read");
+    assert_eq!(errs[0]["col"].as_u64(), Some(13), "{}", errs[0]);
+}
+
+#[test]
+fn list_from_refusals_each_at_their_line() {
+    let (_t, f) = set_up("listfrom-bad");
+    let g = gid(&f, "Garden 2");
+    f.new_widget("agent-arcade", Some("hello")).expect("new");
+
+    let nope = LIST_PAGE.replace("list-from = \"board\"", "list-from = \"nope\"");
+    one_error(&page_errors(&f, &g, &nope), 23, "lists from 'nope', which is not a custom widget on this page (board)", "dangling list-from");
+    // An Agents widget is never a list's source (only a custom widget calls k2.agents.show).
+    let itself = LIST_PAGE.replace("list-from = \"board\"", "list-from = \"crew\"");
+    one_error(&page_errors(&f, &g, &itself), 23, "lists from 'crew', which is not a custom widget", "list-from an Agents widget");
+    // mode = "list" needs list-from.
+    let bare = LIST_PAGE.replace("list-from = \"board\"", "mode = \"list\"");
+    one_error(&page_errors(&f, &g, &bare), 23, "mode = \"list\" needs list-from", "list mode without list-from");
+    // list-from is its own mode: not home, not agent.
+    let home_mode = LIST_PAGE.replace("[widget.props]\n", "[widget.props]\nmode = \"home\"\n");
+    one_error(&page_errors(&f, &g, &home_mode), 23, "drop mode = \"home\"", "list-from with mode home");
+    let agent_mode = LIST_PAGE.replace("[widget.props]\n", "[widget.props]\nmode = \"agent\"\nagent = \"cortana\"\n");
+    let errs = page_errors(&f, &g, &agent_mode);
+    assert_eq!(errs.len(), 2, "mode and agent both clash with list-from: {errs:?}");
+    assert!(errs.iter().any(|e| e["message"].as_str().is_some_and(|m| m.contains("drop mode = \"agent\""))), "{errs:?}");
+    assert!(errs.iter().any(|e| e["message"].as_str().is_some_and(|m| m.starts_with("agent picks"))), "{errs:?}");
+    for prop in ["home = \"Work\"", "home-picker = true"] {
+        let clash = LIST_PAGE.replace("[widget.props]\n", &format!("[widget.props]\n{prop}\n"));
+        let name = prop.split(' ').next().expect("name");
+        one_error(&page_errors(&f, &g, &clash), 23, &format!("{name} picks a Home or an agent"), prop);
+    }
+    // home-picker = false says nothing new: no clash.
+    let off = LIST_PAGE.replace("[widget.props]\n", "[widget.props]\nhome-picker = false\n");
+    assert_eq!(page_errors(&f, &g, &off), Vec::<J>::new());
+    // list-from is a widget id (text), never a list.
+    let list = LIST_PAGE.replace("list-from = \"board\"", "list-from = [\"board\"]");
+    one_error(&page_errors(&f, &g, &list), 23, "list-from must be a name or id", "list-from as a list");
+}
+
+/// CA5: the key is absent unless the file sets it (zen/get stays the same
+/// for every page without a list).
+#[test]
+fn an_agents_widget_without_list_from_carries_no_list_key() {
+    let (_t, f) = set_up("listfrom-absent");
+    let g = gid(&f, "Garden 2");
+    let plain = "schema = 1\n[[widget]]\nid = \"a\"\nkind = \"agents\"\ncolumn = 0\n[widget.props]\nhome = \"Work\"\n";
+    assert_eq!(page_errors(&f, &g, plain), Vec::<J>::new());
+    let page = f.resolve(Some(&g)).expect("resolve");
+    let a = &page["page"]["widgets"][0];
+    assert_eq!(a["props"]["mode"], "home", "{a}");
+    assert!(a["props"].get("list-from").is_none(), "no list-from unless set: {a}");
+    let g1 = gid(&f, "Garden 1");
+    let page = f.resolve(Some(&g1)).expect("resolve Garden 1");
+    for w in page["page"]["widgets"].as_array().expect("widgets") {
+        assert!(w["props"].get("list-from").is_none(), "{w}");
+    }
+}

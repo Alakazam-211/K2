@@ -217,6 +217,9 @@ async fn note_undo_and_waiting_on_you_by_switch_state_and_caller() {
     let undo_body = json!({ "addr": "pri-billing", "id": card_id }).to_string();
 
     // ── switch off: today's answers, byte for byte ────────────────────
+    // (This in-process daemon hasn't turned Garden access on yet: no boot,
+    // no settings write. A real 0.46.3 daemon has it on from boot; see the
+    // last block.)
     assert!(!k2_core::permission::gate::server_on());
     let today_post = tcp(port, "POST", "/cli/thread/not-a-card-route", OWNER, Some(&note_body("hi"))).await;
     for route in [NOTE, UNDO] {
@@ -302,8 +305,13 @@ async fn note_undo_and_waiting_on_you_by_switch_state_and_caller() {
     }
     let r = tcp(port, "POST", "/cli/settings/update", OWNER, Some(r#"{"permissionCards":false}"#)).await;
     assert_eq!(r.status, 200, "{}", r.body);
+    // Garden access is always on from 0.46.3 (Rosson 2026-10-23; a real
+    // daemon turns it on at boot, this in-process one at its first settings
+    // write). K2's own Garden cards take the note and "Turn off again", so
+    // with the Beta switch off the note route still answers for itself.
+    assert!(k2_core::zen::garden_access::enabled(), "Garden access is on");
     let r = tcp(port, "POST", NOTE, &sessions["pri-member"], Some(&note_body("again"))).await;
-    let t = tcp(port, "POST", "/cli/thread/not-a-card-route", &sessions["pri-member"], Some(&note_body("again"))).await;
-    assert_eq!((r.status, r.body.as_str()), (t.status, t.body.as_str()));
+    assert_eq!(r.status, 409, "{}", r.body);
+    assert!(r.body.contains("request_not_pending"), "{}", r.body);
     drop(d);
 }

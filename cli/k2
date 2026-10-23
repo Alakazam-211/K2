@@ -59002,8 +59002,9 @@ WHO MAY TOUCH IT
   clean version as whoever runs it; a plain validate never signs. An agent
   on the list of every Garden that places the widget reaches its data; any
   other needs a grant from the person (Settings → Gardens → the Garden →
-  Local Data, or k2 zen data grant): per agent (a wall), per K2 project (a
-  convenience) or per key prefix. A grant admin grants inside its prefix.
+  Local Data, or k2 zen data grant): per agent (a wall), per K2 project
+  (a convenience: any agent can join a project) or per key prefix. A
+  grant admin grants inside its prefix.
 
 LOCK AND SOURCES
   Lock freezes how a Garden works, not what's in it: data still changes.

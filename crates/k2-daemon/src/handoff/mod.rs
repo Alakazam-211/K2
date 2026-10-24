@@ -39,7 +39,8 @@
 //!  open, the kernel queues new connections),
 //!  drain flag on (no PTY/frpc/service spawn),
 //!  agent PTYs killed, frpc detached,
-//!  DB query_only
+//!  DB query_only, Thread store (redb,
+//!  exclusive file lock) closed
 //!  TAKE {roles} + SCM_RIGHTS [lock, listeners] ──▶ adopts the singleton
 //!                                              lock + the listeners
 //!                                    ◀── ACK
@@ -735,9 +736,18 @@ fn quiesce() {
             log_debug!("[daemon/handoff] WARN: DB query_only: {e}");
         }
     }
+    // The Thread store: redb holds an exclusive file lock for as long as
+    // it is open, so close it before TAKE — the successor's first Thread
+    // call (its card sweep runs right after it takes over) must find the
+    // file free, not wait for this process to exit.
+    let threads = if k2_core::overlay::store::release_for_handoff() {
+        "Thread store closed"
+    } else {
+        "Thread store still closing (the successor retries)"
+    };
     log_debug!(
         "[daemon/handoff] quiesced: accept loops stopped, {n} agent PTY(s) killed, frpc {} left \
-         for the successor, DB read-only",
+         for the successor, DB read-only, {threads}",
         frpc.map(|p| format!("pid {p}")).unwrap_or_else(|| "(none)".into())
     );
 }

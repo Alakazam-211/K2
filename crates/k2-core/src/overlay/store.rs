@@ -15,7 +15,8 @@
 //! Never query by scanning `docs/`. Walk a collection prefix, then point-get.
 
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
+use std::time::{Duration, Instant};
 
 use redb::{Database, ReadableTable, TableDefinition};
 
@@ -66,7 +67,20 @@ const IMPORT_IDS: TableDefinition<&str, &str> = TableDefinition::new("import_ids
 const THREAD_CHANGES: TableDefinition<&str, &str> = TableDefinition::new("thread_changes");
 const CHANGE_REMOVED_PREFIX: &str = "removed:";
 
-static DB: OnceLock<Result<Database, String>> = OnceLock::new();
+/// The process's one handle on the store. Opened on first use; a failed
+/// open is NOT kept (see [`StoreSlot`]).
+static DB: StoreSlot = StoreSlot::new(RETRY_GAP, ALREADY_OPEN_WAIT);
+
+/// After a failed open, at most one new attempt per this long (calls in
+/// between get the last error back at once).
+const RETRY_GAP: Duration = Duration::from_millis(500);
+/// An open that finds the file locked by another process (a daemon
+/// hand-off: the old process is letting go of it) waits up to this long
+/// for the lock before failing.
+const ALREADY_OPEN_WAIT: Duration = Duration::from_millis(500);
+/// [`release_for_handoff`] waits up to this long for in-flight
+/// transactions to drop their handle (the file lock goes with the last).
+const RELEASE_WAIT: Duration = Duration::from_secs(2);
 
 fn store_path() -> PathBuf {
     if let Ok(p) = std::env::var("K2_THREADS_REDB") {
@@ -100,24 +114,162 @@ fn test_store_path() -> PathBuf {
     .clone()
 }
 
-fn db() -> Result<&'static Database, String> {
-    match DB.get_or_init(|| {
-        let path = store_path();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("overlay redb mkdir {}: {e}", parent.display()))?;
+fn db() -> Result<Arc<Database>, String> {
+    DB.get(store_path)
+}
+
+/// Daemon hand-off (the old daemon, at quiesce): close the store so the
+/// successor can open it. redb holds an exclusive `flock` on the file for
+/// as long as the `Database` lives, so without this the successor's first
+/// open fails until this process exits. One-way: every later call in this
+/// process gets [`RELEASED`] instead of reopening (the successor owns the
+/// file now). Waits up to [`RELEASE_WAIT`] for in-flight transactions;
+/// returns whether the file is closed.
+pub fn release_for_handoff() -> bool {
+    DB.release(RELEASE_WAIT)
+}
+
+/// The refusal after [`release_for_handoff`].
+pub const RELEASED: &str =
+    "overlay store released: this daemon handed off to its successor, which owns the Thread store";
+
+/// A lazily opened redb that never caches a failed open.
+///
+/// The read path is one uncontended `RwLock` read plus an `Arc` clone.
+/// A failed open is returned, logged, and retried on a later call (at
+/// most one attempt per `retry_gap`), so a transient lock (a daemon
+/// hand-off, where the old process still holds the file for a moment)
+/// heals without a restart. Once open, the handle is kept until
+/// [`StoreSlot::release`].
+pub(crate) struct StoreSlot {
+    db: RwLock<Option<Arc<Database>>>,
+    open: Mutex<OpenState>,
+    retry_gap: Duration,
+    already_open_wait: Duration,
+}
+
+struct OpenState {
+    last_attempt: Option<Instant>,
+    last_err: Option<String>,
+    released: bool,
+}
+
+impl StoreSlot {
+    pub(crate) const fn new(retry_gap: Duration, already_open_wait: Duration) -> StoreSlot {
+        StoreSlot {
+            db: RwLock::new(None),
+            open: Mutex::new(OpenState { last_attempt: None, last_err: None, released: false }),
+            retry_gap,
+            already_open_wait,
         }
-        let db = Database::create(&path)
-            .map_err(|e| format!("overlay redb create {}: {e}", path.display()))?;
-        // Thread message bodies: owner-only (redb is one file, no WAL).
-        if let Err(e) = crate::private_home::restrict_path(&path) {
-            crate::log_debug!("[overlay] WARN {e}");
-        }
-        Ok(db)
-    }) {
-        Ok(db) => Ok(db),
-        Err(e) => Err(e.clone()),
     }
+
+    fn current(&self) -> Option<Arc<Database>> {
+        self.db.read().unwrap_or_else(|p| p.into_inner()).clone()
+    }
+
+    pub(crate) fn get(&self, path: impl FnOnce() -> PathBuf) -> Result<Arc<Database>, String> {
+        if let Some(db) = self.current() {
+            return Ok(db);
+        }
+        let mut st = self.open.lock().unwrap_or_else(|p| p.into_inner());
+        // Another caller may have opened it while this one waited.
+        if let Some(db) = self.current() {
+            return Ok(db);
+        }
+        if st.released {
+            return Err(RELEASED.to_string());
+        }
+        if let (Some(at), Some(e)) = (st.last_attempt, st.last_err.as_ref()) {
+            if at.elapsed() < self.retry_gap {
+                return Err(e.clone());
+            }
+        }
+        st.last_attempt = Some(Instant::now());
+        let path = path();
+        match open_store(&path, self.already_open_wait) {
+            Ok(db) => {
+                let db = Arc::new(db);
+                *self.db.write().unwrap_or_else(|p| p.into_inner()) = Some(db.clone());
+                if st.last_err.take().is_some() {
+                    crate::log_debug!(
+                        "[overlay] Thread store {} opened after an earlier failure",
+                        path.display()
+                    );
+                }
+                Ok(db)
+            }
+            Err(e) => {
+                crate::log_debug!(
+                    "[overlay] WARN: Thread store {} did not open (retrying on a later call, at \
+                     most every {} ms): {e}",
+                    path.display(),
+                    self.retry_gap.as_millis()
+                );
+                st.last_err = Some(e.clone());
+                Err(e)
+            }
+        }
+    }
+
+    /// Close the handle and refuse further opens. Waits up to `wait` for
+    /// in-flight holders of the `Arc`; true when the file is closed.
+    pub(crate) fn release(&self, wait: Duration) -> bool {
+        let taken = {
+            let mut st = self.open.lock().unwrap_or_else(|p| p.into_inner());
+            st.released = true;
+            self.db.write().unwrap_or_else(|p| p.into_inner()).take()
+        };
+        let Some(db) = taken else {
+            return true;
+        };
+        let weak = Arc::downgrade(&db);
+        drop(db);
+        let deadline = Instant::now() + wait;
+        while weak.strong_count() > 0 {
+            if Instant::now() >= deadline {
+                crate::log_debug!(
+                    "[overlay] WARN: Thread store still in use {} ms into the hand-off; it closes \
+                     when the last transaction ends (the successor retries its open)",
+                    wait.as_millis()
+                );
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        true
+    }
+}
+
+/// Open (or create) the store at `path`. A file locked by another
+/// process (`DatabaseAlreadyOpen`) is retried for up to `already_open_wait`.
+fn open_store(path: &std::path::Path, already_open_wait: Duration) -> Result<Database, String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("overlay redb mkdir {}: {e}", parent.display()))?;
+    }
+    let deadline = Instant::now() + already_open_wait;
+    let db = loop {
+        match Database::create(path) {
+            Ok(db) => break db,
+            Err(redb::DatabaseError::DatabaseAlreadyOpen) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e @ redb::DatabaseError::DatabaseAlreadyOpen) => {
+                return Err(format!(
+                    "overlay redb create {}: {e} (another process holds the file: an old daemon \
+                     still draining after a hand-off, or a second daemon on the same K2 home)",
+                    path.display()
+                ));
+            }
+            Err(e) => return Err(format!("overlay redb create {}: {e}", path.display())),
+        }
+    };
+    // Thread message bodies: owner-only (redb is one file, no WAL).
+    if let Err(e) = crate::private_home::restrict_path(path) {
+        crate::log_debug!("[overlay] WARN {e}");
+    }
+    Ok(db)
 }
 
 fn seq_pad(seq: i64) -> String {
@@ -1616,3 +1768,7 @@ pub fn import_docs(
     txn.commit().map_err(|e| format!("overlay redb commit: {e}"))?;
     Ok(out)
 }
+
+#[cfg(test)]
+#[path = "store_open_tests.rs"]
+mod store_open_tests;

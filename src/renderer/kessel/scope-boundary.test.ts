@@ -129,6 +129,9 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   // 0.46.3 App mobile access: the App's access list, role templates and
   // device sign-in settings are about the window's own server (Settings).
   'components/Settings/sections/app-people-api.ts',
+  // 0.46.4 box usage (disk guard Slice B): Settings → Apps → This server's
+  // disk bars, trends and clean are about the window's own server.
+  'components/Settings/sections/app-resources-api.ts',
   'components/Settings/sections/CanonicalAgentButtons.tsx',
   'components/Settings/sections/CanonicalAgentModal.tsx',
   'components/Settings/sections/CompanionSection.tsx',

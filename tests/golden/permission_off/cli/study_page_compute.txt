@@ -86,8 +86,9 @@ RESULTS (one object, artifacts, test lists)
   ok = ran, exited 0, and no JUnit test failed.
   --artifact GLOB (repeatable): files kept after the command exits, relative
     to the job's working dir; target/… also reads the node's cargo target
-    dir. Kept 7 days on the node; 500 MB a file (100 MB over the relay).
-    k2 compute fetch <job> [NAME…] [--out DIR]   (sha256-checked)
+    dir. Kept 7 days on the node; 500 MB a file (100 MB over the relay
+    unless you fetch with --over-relay).
+    k2 compute fetch <job> [NAME…] [--out DIR] [--over-relay]   (sha256-checked)
   JUnit among the artifacts (nextest, vitest, pytest, surefire) becomes the
   test list: k2 compute logs <job> --failures prints the failing tests
   first, then the log lines that look like failures.
@@ -262,7 +263,7 @@ COMMON ERRORS
   node_lost              its node vanished mid-run; retried elsewhere if --retries left
   stalled                no output for --stall-timeout (a hung test): a result, not retried
   artifact_gone          the node keeps artifacts 7 days; run it again
-  relay_cap              an artifact over 100 MB through the relay: fetch over the LAN
+  relay_cap              an artifact over 100 MB through the relay: fetch --over-relay (≤ 500 MB)
   operate_off            ask your owner for "Allow this agent to operate compute nodes"
   node_lacks_admin       that k2-node predates node admin: someone re-runs setup there
   too_many_pending       10 requests already wait for the owner; withdraw some

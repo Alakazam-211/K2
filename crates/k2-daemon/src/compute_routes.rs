@@ -2724,7 +2724,13 @@ fn job_artifact(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Va
         no("artifact_not_found", 404, format!("job {short} kept no artifact named '{name}' (k2 compute fetch {short} lists them)"))
     })?;
     let timeout = Duration::from_secs(60 + info.bytes / (1 << 20));
-    let path = compute_ws::fetch_artifact(&j, info, timeout).map_err(|(code, hint)| {
+    // `over_relay=1`: the caller means to pull a file over the relay cap
+    // through the relay (up to the LAN cap). `wait=<s>`: don't hold the
+    // request for the whole transfer; answer `pending` after that long
+    // and let the caller ask again (old CLIs send neither and block).
+    let over_relay = params.get("over_relay").is_some_and(|v| v == "1" || v == "true");
+    let wait = params.get("wait").and_then(|w| w.parse::<u64>().ok()).map(|w| Duration::from_secs(w.min(25)));
+    let fail = |(code, hint): (String, String)| {
         let c = fetch_code(&code);
         let status = match c {
             "artifact_gone" | "artifact_not_found" => 410,
@@ -2732,7 +2738,23 @@ fn job_artifact(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Va
             _ => 409,
         };
         no(c, status, hint)
-    })?;
+    };
+    let path = match wait {
+        None => compute_ws::fetch_artifact(&j, info, over_relay, timeout).map_err(fail)?,
+        Some(w) => match compute_ws::fetch_artifact_wait(&j, info, over_relay, timeout, w).map_err(fail)? {
+            compute_ws::Fetched::Ready(p) => p,
+            compute_ws::Fetched::Pending { got } => {
+                return Ok(serde_json::json!({
+                    "job": j.id,
+                    "name": info.name,
+                    "sha256": info.sha256,
+                    "bytes": info.bytes,
+                    "pending": true,
+                    "got": got,
+                }));
+            }
+        },
+    };
     let offset = params.get("offset").and_then(|x| x.parse::<u64>().ok()).unwrap_or(0);
     let max = params.get("max").and_then(|x| x.parse::<usize>().ok()).unwrap_or(4 << 20).clamp(64 << 10, 8 << 20);
     let mut f = std::fs::File::open(&path).map_err(|e| no("local_write", 500, format!("cache: {e}")))?;

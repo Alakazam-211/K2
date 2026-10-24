@@ -1311,6 +1311,80 @@ pub fn artifact_cache_path(job_id: &str, generation: i64, sha256: &str) -> std::
     compute::compute_dir().join("artifacts").join(format!("{job_id}-g{generation}")).join(sha256)
 }
 
+/// The largest artifact this server pulls from a node on `route`.
+/// Over the relay the default stays [`results::RELAY_MAX_FILE_BYTES`]
+/// (it stops an accidental big pull through the Connect edge, PRD §12.4);
+/// `over_relay` is the caller saying "yes, through the relay": then the
+/// node's own collection cap ([`results::MAX_FILE_BYTES`]) is the limit,
+/// as on the LAN. Release builds need it: the Linux AppImage is over
+/// 100 MB and the release nodes reach z3mbpZ only through the relay.
+pub fn artifact_pull_cap(route: Option<&str>, over_relay: bool) -> u64 {
+    if route == Some("relay") && !over_relay {
+        results::RELAY_MAX_FILE_BYTES
+    } else {
+        results::MAX_FILE_BYTES
+    }
+}
+
+/// Why a file of `bytes` can't be pulled on `route`, if it can't.
+pub fn pull_cap_refusal(route: Option<&str>, over_relay: bool, bytes: u64) -> Option<(String, String)> {
+    let cap = artifact_pull_cap(route, over_relay);
+    if bytes <= cap {
+        return None;
+    }
+    let mb = bytes >> 20;
+    Some(if route == Some("relay") && !over_relay {
+        (
+            "relay_cap".into(),
+            format!(
+                "{mb} MB is over the relay cap of {} MB; fetch it again with --over-relay (up to {} MB through the relay), or over the LAN or a tailnet route",
+                cap >> 20,
+                results::MAX_FILE_BYTES >> 20
+            ),
+        )
+    } else {
+        ("relay_cap".into(), format!("{mb} MB is over the artifact cap of {} MB", cap >> 20))
+    })
+}
+
+/// Cache files already hashed once: `(bytes, mtime)` as seen then. A
+/// fetch reads a file in 4 MB slices, and re-hashing a 500 MB file for
+/// every slice would cost minutes; the file only changes through
+/// [`fetch_artifact`]'s rename, which records it again.
+static VERIFIED: Mutex<Option<HashMap<std::path::PathBuf, (u64, std::time::SystemTime)>>> = Mutex::new(None);
+
+fn cache_stamp(p: &std::path::Path) -> Option<(u64, std::time::SystemTime)> {
+    let m = std::fs::metadata(p).ok()?;
+    Some((m.len(), m.modified().ok()?))
+}
+
+fn note_verified(p: &std::path::Path) {
+    if let Some(st) = cache_stamp(p) {
+        let mut g = VERIFIED.lock().unwrap_or_else(|e| e.into_inner());
+        let m = g.get_or_insert_with(HashMap::new);
+        if m.len() > 4096 {
+            m.clear();
+        }
+        m.insert(p.to_path_buf(), st);
+    }
+}
+
+/// The cache already holds exactly `info` (hashed now, or hashed before
+/// and unchanged since).
+fn cache_holds(dst: &std::path::Path, info: &ArtifactInfo) -> bool {
+    let st = cache_stamp(dst);
+    if st.is_some_and(|s| s.0 == info.bytes)
+        && VERIFIED.lock().unwrap_or_else(|e| e.into_inner()).as_ref().and_then(|m| m.get(dst)).copied() == st
+    {
+        return true;
+    }
+    let ok = compute::sync::file_sha256(dst).is_ok_and(|(sha, n)| sha == info.sha256 && n == info.bytes);
+    if ok {
+        note_verified(dst);
+    }
+    ok
+}
+
 fn finish_pull(p: &mut Pull, r: Result<(), (String, String)>) {
     p.file = None;
     if r.is_err() {
@@ -1346,6 +1420,9 @@ fn on_artifact_chunk(node_id: &str, c: ArtifactChunk) {
             }
             p.file = None;
             let r = std::fs::rename(&p.tmp, &p.dst).map_err(|e| ("local_write".to_string(), format!("cache: {e}")));
+            if r.is_ok() {
+                note_verified(&p.dst);
+            }
             finish_pull(p, r);
         }
     });
@@ -1364,10 +1441,11 @@ fn on_artifact_failed(node_id: &str, f: ArtifactFailed) {
 }
 
 /// Make sure the controller has `info` for this attempt, pulling it from
-/// the node when needed (blocking, up to `timeout`). `Err((code, hint))`.
-pub fn fetch_artifact(job: &store::JobRow, info: &ArtifactInfo, timeout: Duration) -> Result<std::path::PathBuf, (String, String)> {
+/// the node when needed (blocking, up to `timeout`). `over_relay`: see
+/// [`artifact_pull_cap`]. `Err((code, hint))`.
+pub fn fetch_artifact(job: &store::JobRow, info: &ArtifactInfo, over_relay: bool, timeout: Duration) -> Result<std::path::PathBuf, (String, String)> {
     let dst = artifact_cache_path(&job.id, job.generation, &info.sha256);
-    if compute::sync::file_sha256(&dst).is_ok_and(|(sha, n)| sha == info.sha256 && n == info.bytes) {
+    if cache_holds(&dst, info) {
         return Ok(dst);
     }
     let (online, route, offer) = live_view(&job.node_id);
@@ -1377,11 +1455,8 @@ pub fn fetch_artifact(job: &store::JobRow, info: &ArtifactInfo, timeout: Duratio
     if !offer.is_some_and(|o| o.features.iter().any(|f| f == results::FEATURE_ARTIFACTS)) {
         return Err(("node_upgrade_required".into(), "that node's k2-node can't send artifacts; update it there (sudo k2-node setup)".into()));
     }
-    if route == Some("relay") && info.bytes > results::RELAY_MAX_FILE_BYTES {
-        return Err((
-            "relay_cap".into(),
-            format!("{} MB is over the relay cap of {} MB; fetch it over the LAN or a tailnet route", info.bytes >> 20, results::RELAY_MAX_FILE_BYTES >> 20),
-        ));
+    if let Some(e) = pull_cap_refusal(route, over_relay, info.bytes) {
+        return Err(e);
     }
     let dir = dst.parent().map(|d| d.to_path_buf()).unwrap_or_default();
     std::fs::create_dir_all(&dir).map_err(|e| ("local_write".to_string(), format!("cache dir: {e}")))?;
@@ -1428,6 +1503,89 @@ pub fn fetch_artifact(job: &store::JobRow, info: &ArtifactInfo, timeout: Duratio
     with_pulls(|m| m.remove(&request_id));
     let _ = std::fs::remove_file(&tmp);
     outcome.map(|_| dst)
+}
+
+/// A background pull one fetch started and later fetches poll
+/// ([`fetch_artifact_wait`]). Keyed by the cache path, so two fetches of
+/// one file share one transfer.
+struct BgPull {
+    done: Option<Result<std::path::PathBuf, (String, String)>>,
+    at: Instant,
+}
+
+static BG_PULLS: Mutex<Option<HashMap<std::path::PathBuf, BgPull>>> = Mutex::new(None);
+
+fn with_bg<T>(f: impl FnOnce(&mut HashMap<std::path::PathBuf, BgPull>) -> T) -> T {
+    let mut g = BG_PULLS.lock().unwrap_or_else(|p| p.into_inner());
+    f(g.get_or_insert_with(HashMap::new))
+}
+
+/// What [`fetch_artifact_wait`] has to say.
+#[derive(Debug)]
+pub enum Fetched {
+    /// The file is in the cache, checked.
+    Ready(std::path::PathBuf),
+    /// Still coming from the node: `got` of the file's bytes so far.
+    Pending { got: u64 },
+}
+
+/// Bytes received so far for the pull filling `dst`.
+fn pull_progress(dst: &std::path::Path) -> u64 {
+    with_pulls(|m| m.values().filter(|p| p.dst == dst).map(|p| p.got).max().unwrap_or(0))
+}
+
+/// Like [`fetch_artifact`], but the transfer runs on its own thread and
+/// this waits at most `wait` for it: a big file over a slow relay takes
+/// longer than one HTTP request should stay open (the CLI's GETs give up
+/// after 60 s), so the caller asks again until it's `Ready`, or gets the
+/// pull's error (once; the next ask starts a new pull).
+pub fn fetch_artifact_wait(
+    job: &store::JobRow,
+    info: &ArtifactInfo,
+    over_relay: bool,
+    timeout: Duration,
+    wait: Duration,
+) -> Result<Fetched, (String, String)> {
+    let dst = artifact_cache_path(&job.id, job.generation, &info.sha256);
+    let start = with_bg(|m| {
+        // A finished pull nobody came back for doesn't stay forever.
+        m.retain(|_, b| b.done.is_none() || b.at.elapsed() < Duration::from_secs(3600));
+        if m.contains_key(&dst) {
+            return false;
+        }
+        m.insert(dst.clone(), BgPull { done: None, at: Instant::now() });
+        true
+    });
+    if start {
+        // Even the cache check runs there: hashing 500 MB is slow too.
+        let (job, info, key) = (job.clone(), info.clone(), dst.clone());
+        std::thread::spawn(move || {
+            let r = fetch_artifact(&job, &info, over_relay, timeout);
+            with_bg(|m| {
+                if let Some(b) = m.get_mut(&key) {
+                    b.done = Some(r);
+                    b.at = Instant::now();
+                }
+            });
+            notify_change();
+        });
+    }
+    let deadline = Instant::now() + wait;
+    loop {
+        let seen = change_counter();
+        let done = with_bg(|m| match m.get(&dst).map(|b| b.done.is_some()) {
+            Some(true) => m.remove(&dst).and_then(|b| b.done),
+            _ => None,
+        });
+        if let Some(r) = done {
+            return r.map(Fetched::Ready);
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return Ok(Fetched::Pending { got: pull_progress(&dst) });
+        }
+        wait_change(seen, (deadline - now).min(Duration::from_millis(500)));
+    }
 }
 
 /// Drop fetched artifacts older than the node keeps them.
@@ -2150,5 +2308,58 @@ mod tests {
         apply_observation("n1", &other.id, other.generation as u32, JobState::Queued, Some("parallel_full"), None, None, None, None);
         let row = store::job_by_id(&db.lock(), &other.id).expect("row");
         assert_eq!((row.state.as_str(), row.reason.as_deref()), ("queued", Some("parallel_full")));
+    }
+
+    /// G1 (plan-ci-release-on-k2-compute-v1): the release nodes reach
+    /// z3mbpZ only through the relay and the Linux AppImage is 105 MB.
+    /// The relay keeps its 100 MB default; `over_relay` lifts it to the
+    /// node's own 500 MB collection cap, never past it. LAN, loopback and
+    /// unknown routes were never relay-capped.
+    #[test]
+    fn relay_pulls_keep_the_100_mb_cap_unless_the_caller_says_over_relay() {
+        let mb = 1u64 << 20;
+        let appimage = 105 * mb;
+        let (code, hint) = pull_cap_refusal(Some("relay"), false, appimage).expect("105 MB over the relay is refused by default");
+        assert_eq!(code, "relay_cap");
+        assert!(hint.contains("--over-relay") && hint.contains("105 MB") && hint.contains("100 MB"), "{hint}");
+        assert_eq!(pull_cap_refusal(Some("relay"), false, 100 * mb), None, "exactly the cap passes");
+        assert!(pull_cap_refusal(Some("relay"), false, 100 * mb + 1).is_some());
+        assert_eq!(pull_cap_refusal(Some("relay"), true, appimage), None, "--over-relay lets the AppImage through");
+        assert_eq!(pull_cap_refusal(Some("relay"), true, 500 * mb), None);
+        let (code, hint) = pull_cap_refusal(Some("relay"), true, 500 * mb + 1).expect("never past the LAN cap");
+        assert_eq!(code, "relay_cap");
+        assert!(!hint.contains("--over-relay"), "the flag can't help here: {hint}");
+        for route in [Some("lan"), Some("loopback"), None] {
+            for over in [false, true] {
+                assert_eq!(pull_cap_refusal(route, over, appimage), None, "{route:?}");
+                assert_eq!(pull_cap_refusal(route, over, 500 * mb), None, "{route:?}");
+                assert!(pull_cap_refusal(route, over, 500 * mb + 1).is_some(), "{route:?}");
+            }
+        }
+        assert_eq!(artifact_pull_cap(Some("relay"), false), results::RELAY_MAX_FILE_BYTES);
+        assert_eq!(artifact_pull_cap(Some("relay"), true), results::MAX_FILE_BYTES);
+    }
+
+    /// A background pull (`wait=`) hands its error to the next ask once,
+    /// keeps nothing behind, and a later ask starts a new pull.
+    #[test]
+    fn a_background_pull_reports_its_error_once_and_leaves_nothing_behind() {
+        let _db = k2_core::db::scoped_for_test();
+        let db = k2_core::db::shared();
+        let j = {
+            let conn = db.lock();
+            job_on(&conn, "abababab0123456789abcdef01234567", "n-gone")
+        };
+        let info = ArtifactInfo { name: "dist/k2.AppImage".into(), sha256: "c".repeat(64), bytes: 105 << 20 };
+        let key = artifact_cache_path(&j.id, j.generation, &info.sha256);
+        for round in 0..2 {
+            let r = fetch_artifact_wait(&j, &info, true, Duration::from_secs(5), Duration::from_secs(10));
+            match r {
+                Err((code, _)) => assert_eq!(code, "node_offline", "round {round}"),
+                Ok(other) => panic!("round {round}: an offline node can't send anything: {other:?}"),
+            }
+            assert!(with_bg(|m| !m.contains_key(&key)), "round {round}: the finished pull is gone once reported");
+            assert!(with_pulls(|m| m.values().all(|p| p.dst != key)), "round {round}: no transfer left open");
+        }
     }
 }

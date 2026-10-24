@@ -16427,8 +16427,10 @@ Agents:
                  that worktree; from anywhere else pass --workspace <handle>.
   k2 compute get <job> [--json]              --json: the result (exit, duration, node,
                                              artifacts + sha256, tests, receipt id)
-  k2 compute fetch <job> [NAME...] [--out DIR] [--json]
-                                             copy kept artifacts here (all, or NAMEs)
+  k2 compute fetch <job> [NAME...] [--out DIR] [--json] [--over-relay]
+                                             copy kept artifacts here (all, or NAMEs);
+                                             --over-relay: files over 100 MB through
+                                             the relay too (up to 500 MB)
   k2 compute wait <job>... [--failures] [--max-wait 9m] [--quiet] [--json]
                  block until the jobs end, no log text; exit = the job's exit
                  code (first failing job for several), 3 for cancelled/failed/
@@ -17405,22 +17407,26 @@ print("\n".join(lines))' "${targs[@]+"${targs[@]}"}")" || exit 2
     cmd_compute_run "${run_args[@]}" "${pass[@]+"${pass[@]}"}" -- sh -c "$script"
 }
 
-# k2 compute fetch <job> [NAME...] [--out DIR] [--json]: copy kept
-# artifacts from the node (through this server) into DIR (default .),
-# keeping their relative names; every file is checked against the
-# sha256 the node reported.
+# k2 compute fetch <job> [NAME...] [--out DIR] [--json] [--over-relay]:
+# copy kept artifacts from the node (through this server) into DIR
+# (default .), keeping their relative names; every file is checked
+# against the sha256 the node reported. --over-relay: pull files over
+# the 100 MB relay cap through the relay anyway (up to 500 MB). The
+# server pulls a big file in the background; this asks again every
+# 20 s until it's in.
 cmd_compute_fetch() {
-    local job="" out="." as_json=0
+    local job="" out="." as_json=0 over_relay=0
     local -a names=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --out|-o) out="${2:-}"; shift 2 ;;
             --json) as_json=1; shift ;;
-            -*) echo "usage: k2 compute fetch <job> [NAME...] [--out DIR] [--json]" >&2; exit 2 ;;
+            --over-relay) over_relay=1; shift ;;
+            -*) echo "usage: k2 compute fetch <job> [NAME...] [--out DIR] [--json] [--over-relay]" >&2; exit 2 ;;
             *) if [ -z "$job" ]; then job="$1"; else names+=("$1"); fi; shift ;;
         esac
     done
-    [ -n "$job" ] && [ -n "$out" ] || { echo "usage: k2 compute fetch <job> [NAME...] [--out DIR] [--json]" >&2; exit 2; }
+    [ -n "$job" ] && [ -n "$out" ] || { echo "usage: k2 compute fetch <job> [NAME...] [--out DIR] [--json] [--over-relay]" >&2; exit 2; }
     _compute_call GET /cli/compute/jobs/artifact "job=$(urlencode "$job")"
     local list
     list="$(printf '%s' "$_CP_BODY" | python3 -c '
@@ -17440,11 +17446,16 @@ for n in (want or sorted(have)):
         [ -n "$name" ] || continue
         local offset=0 eof=0 first=1
         while [ "$eof" != "1" ]; do
-            _compute_call GET /cli/compute/jobs/artifact "job=$(urlencode "$job")&name=$(urlencode "$name")&offset=$offset&max=4194304"
+            _compute_call GET /cli/compute/jobs/artifact "job=$(urlencode "$job")&name=$(urlencode "$name")&offset=$offset&max=4194304&wait=20&over_relay=$over_relay"
             local step
             step="$(printf '%s' "$_CP_BODY" | K2_CP_OUT="$out" K2_CP_FIRST="$first" python3 -c '
 import base64, json, os, sys
 v = json.load(sys.stdin)
+if v.get("pending"):
+    # Still on its way from the node: ask again.
+    sys.stderr.write("%s: %d of %d MB on the server so far\n" % (v["name"], v.get("got", 0) >> 20, v["bytes"] >> 20))
+    print("pending")
+    sys.exit(0)
 name = v["name"]
 parts = name.split("/")
 if name.startswith("/") or any(p in ("", ".", "..") for p in parts):
@@ -17455,6 +17466,7 @@ data = base64.b64decode(v["data"])
 with open(path, "wb" if os.environ.get("K2_CP_FIRST") == "1" else "ab") as f:
     f.write(data)
 print("%d %d %s %s %s" % (v["offset"] + len(data), 1 if v["eof"] else 0, v["sha256"], v["bytes"], path))')" || exit 3
+            [ "$step" = "pending" ] && continue
             local sha bytes path
             read -r offset eof sha bytes path <<<"$step"
             first=0
@@ -36456,8 +36468,9 @@ RESULTS (one object, artifacts, test lists)
   ok = ran, exited 0, and no JUnit test failed.
   --artifact GLOB (repeatable): files kept after the command exits, relative
     to the job's working dir; target/… also reads the node's cargo target
-    dir. Kept 7 days on the node; 500 MB a file (100 MB over the relay).
-    k2 compute fetch <job> [NAME…] [--out DIR]   (sha256-checked)
+    dir. Kept 7 days on the node; 500 MB a file (100 MB over the relay
+    unless you fetch with --over-relay).
+    k2 compute fetch <job> [NAME…] [--out DIR] [--over-relay]   (sha256-checked)
   JUnit among the artifacts (nextest, vitest, pytest, surefire) becomes the
   test list: k2 compute logs <job> --failures prints the failing tests
   first, then the log lines that look like failures.
@@ -36632,7 +36645,7 @@ COMMON ERRORS
   node_lost              its node vanished mid-run; retried elsewhere if --retries left
   stalled                no output for --stall-timeout (a hung test): a result, not retried
   artifact_gone          the node keeps artifacts 7 days; run it again
-  relay_cap              an artifact over 100 MB through the relay: fetch over the LAN
+  relay_cap              an artifact over 100 MB through the relay: fetch --over-relay (≤ 500 MB)
   operate_off            ask your owner for "Allow this agent to operate compute nodes"
   node_lacks_admin       that k2-node predates node admin: someone re-runs setup there
   too_many_pending       10 requests already wait for the owner; withdraw some

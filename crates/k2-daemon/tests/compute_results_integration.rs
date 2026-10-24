@@ -471,6 +471,37 @@ async fn results_come_back_as_artifacts_tests_and_one_result_object() {
     let data = k2_node_proto::crypto::unb64(v["data"].as_str().unwrap()).unwrap();
     assert_eq!(String::from_utf8(data).unwrap().trim_end(), &JUNIT[5..]);
     assert_eq!(v["eof"], true);
+    // `wait=` (the CLI since G1): the server answers `pending` instead of
+    // holding the request for the whole transfer, then the bytes. A fresh
+    // attempt's file isn't cached yet, so the first ask with wait=0 may be
+    // either; `over_relay=1` changes nothing on loopback.
+    let r = post(
+        port,
+        "/cli/compute/run",
+        &agent,
+        json!({"node": "r1", "argv": ["sh", "t.sh"], "clientJobId": "client-results-0002", "artifacts": ["out/**/*.bin"]}),
+    )
+    .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let id3 = j(&r)["job"]["id"].as_str().unwrap().to_string();
+    wait_state(port, &id3, 30, |v| v["state"] == "done").await;
+    let mut asks = 0;
+    let v = loop {
+        asks += 1;
+        assert!(asks < 200, "the pull never finished");
+        let r = get(port, "/cli/compute/jobs/artifact", &agent, &format!("job={id3}&name=out%2Fbin%2Ftool.bin&wait=0&over_relay=1")).await;
+        assert_eq!(r.status, 200, "{}", r.body);
+        let v = j(&r);
+        if v["pending"] == true {
+            assert_eq!(v["bytes"], 3, "{v}");
+            assert!(v.get("data").is_none(), "{v}");
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            continue;
+        }
+        break v;
+    };
+    assert_eq!(k2_node_proto::crypto::unb64(v["data"].as_str().unwrap()).unwrap(), b"BIN");
+    assert_eq!(v["eof"], true);
     let r = get(port, "/cli/compute/jobs/artifact", &agent, &format!("job={id2}&name=..%2F..%2Fstate%2Fnode-key.pem")).await;
     assert_eq!(r.status, 404, "{}", r.body);
     assert_eq!(code(&r), "artifact_not_found");

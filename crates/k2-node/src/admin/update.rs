@@ -743,7 +743,9 @@ fn read_owned_in(dir: &Path, name: &str, owner: u32, check_dir: bool) -> Option<
     let f = unsafe { std::fs::File::from_raw_fd(fd) };
     let m = f.metadata().ok()?;
     use std::os::unix::fs::MetadataExt;
-    if !m.file_type().is_file() || m.nlink() != 1 || m.uid() != owner || m.mode() & 0o022 != 0 || m.len() > crate::util::READ_REGULAR_MAX {
+    // nlink 0: root just renamed a new mark over the one we opened (still
+    // root's, still whole); 2+: a hard link someone else made.
+    if !m.file_type().is_file() || m.nlink() > 1 || m.uid() != owner || m.mode() & 0o022 != 0 || m.len() > crate::util::READ_REGULAR_MAX {
         crate::nlog!("ignoring {}/{name}: not uid {owner}'s own small regular file", dir.display());
         return None;
     }
@@ -1659,6 +1661,10 @@ mod drain_tests {
         let cfg = r.exec.paths.config_dir.clone();
         let now = r.exec.now();
         std::fs::write(cfg.join(UPDATE_MARK_FILE), format!(r#"{{"what":"node.update","at":{now}}}"#)).unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(cfg.join(UPDATE_MARK_FILE), std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
         let before = read_update_mark(&cfg).unwrap();
         assert!(before.v < MARK_V && before.names(777, None, now), "a v1 mark names any process");
         retire_update_mark(&r.exec);

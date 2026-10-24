@@ -198,7 +198,11 @@ ADDING A MACHINE (owner, or an agent with "Allow managing compute nodes")
   Over SSH: ONE sudo call, password on stdin, never in argv:
     ssh mini 'sudo -S -p "" /path/k2-node setup --no-private-home …' < pwfile
   The home question (chmod 700) is always asked; without a terminal pass
-  --private-home or --no-private-home. Then confirm the 6-digit code:
+  --private-home or --no-private-home. Remote admin is `policy` by default
+  (K2 keeps the node updated and healthy: updates, rollbacks, limits,
+  pause, the job wall); --remote-admin full also allows root actions, each
+  approved by the owner; off = K2 can't update it (k2 compute local
+  remote-admin policy turns it back on). Then confirm the 6-digit code:
     k2 compute node confirm mini-1 <code>   and   k2 compute grant mini-1 --workspace <ws>
   One-click (same k2.dev account, no code): the app asks connect.k2.dev
   for a ticket. Connect's CORS only allows the built app's origin
@@ -213,7 +217,13 @@ operate compute nodes", which your owner turns on — separate from
   Read:     k2 compute node health <node>   k2 compute node policy <node> show
   Operate (runs at once, no approval): lowering limits
             (k2 compute node policy <node> set mem_cap_gb=6), node update /
-            rollback to a newer signed build or the node's own previous one.
+            rollback to a newer signed build or the node's own previous one,
+            turning a Linux node's job wall on (k2 compute node wall <node>;
+            k2-node restarts to use it once its running jobs end, and never
+            kills a job: after 30 min it gives up). A node whose owner said
+            --no-job-wall holds it for the owner.
+            Nodes on <K2_CLI_VERSION> or older need one manual install of 0.46.4 at
+            the machine before an update works (sudo k2-node setup).
   Privileged (held for the owner EVERY time): raising limits, restarting
             k2-node as root (and, when nodes learn them: power settings,
             reboot, OS updates, packages, root scripts):
@@ -230,8 +240,10 @@ operate compute nodes", which your owner turns on — separate from
   a plan when the steps belong together (it stops at the first failure).
   Alerts (offline, disk, thermal, updates) go to the workspace your owner
   picked; they carry facts, never log text.
-  Needs a person at the machine: the first install, raising a node's
-  remote-admin level, macOS OS updates, FileVault unlock after a power cut.
+  Needs a person at the machine: the first install, macOS OS updates,
+  FileVault unlock after a power cut. Raising a node's remote-admin level
+  needs the machine's owner: at the machine, or the owner's own K2 on it
+  (Settings → Compute, also over K2 Connect). You can never raise it.
 
 MANAGING THE MACHINES (Agent switch "Allow managing compute nodes",
 which only your owner turns on: Settings → Workspaces → <you> → Agent,

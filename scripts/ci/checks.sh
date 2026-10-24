@@ -32,6 +32,7 @@ part_web() {
     step "Arch build gate script (stubbed)";       bash tests/packaging/arch-build-gate.sh
     step "Linux SHA256SUMS (stubbed)";             bash tests/packaging/linux-sums.sh
     step "Release lock (stub k2-node)";            bash tests/packaging/release-lock.sh
+    step "Release k2-ptyd checks (dry)";           bash tests/packaging/release-ptyd-checks.sh
     step "Linux builds on K2 Compute (stubbed)";   bash tests/packaging/compute-release.sh
     step "CI gate scripts (stubbed)";              bash tests/packaging/ci-gate.sh
     step "bun install";                            bun install --frozen-lockfile

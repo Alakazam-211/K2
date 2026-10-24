@@ -154,6 +154,37 @@ pub struct Host {
     /// no client IP. Absent = `true`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_ip: Option<bool>,
+    /// 0.46.4 (prd-app-runtime-update-continuity-v1 R31, R39): where the
+    /// App keeps its sign-in sessions. `memory` = a new instance signs
+    /// everyone out, so a K2-update re-host waits for the owner. **Needs K2
+    /// 0.46.4**: older daemons refuse a manifest carrying it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sessions: Option<Sessions>,
+    /// 0.46.4 (R14, R39): may two instances run at once (`allow`, the
+    /// default) or must the old one stop first (`handover`)? The owner's
+    /// per-App policy wins. Needs K2 0.46.4.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overlap: Option<Overlap>,
+}
+
+/// `host.sessions` (0.46.4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Sessions {
+    /// In the process: lost by any new instance.
+    Memory,
+    /// Sealed into `/data` (or a cookie): they carry over.
+    Sealed,
+    /// The App has no sign-in.
+    None,
+}
+
+/// `host.overlap` (0.46.4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Overlap {
+    Allow,
+    Handover,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -176,6 +207,10 @@ pub struct Health {
     /// moved onto the open path. `path` is ignored.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub tcp: bool,
+    /// 0.46.4 (R32, R39): a readiness path probed once after the health
+    /// gate and logged; never a gate. Needs K2 0.46.4.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ready_path: Option<String>,
 }
 
 impl Manifest {
@@ -201,6 +236,27 @@ impl Manifest {
     /// The health check is a TCP accept (K5's folder manifests).
     pub fn tcp_health(&self) -> bool {
         self.host.health.as_ref().is_some_and(|h| h.tcp)
+    }
+
+    /// `host.health.readyPath` (0.46.4), when set.
+    pub fn ready_path(&self) -> Option<String> {
+        self.host.health.as_ref().and_then(|h| h.ready_path.clone()).filter(|p| p.starts_with('/'))
+    }
+
+    /// The manifest keys a daemon before 0.46.4 refuses (R39): K2 warns
+    /// that a K2 rollback can't run this Seed.
+    pub fn keys_needing_0464(&self) -> Vec<&'static str> {
+        let mut v = Vec::new();
+        if self.host.sessions.is_some() {
+            v.push("host.sessions");
+        }
+        if self.host.overlap.is_some() {
+            v.push("host.overlap");
+        }
+        if self.host.health.as_ref().is_some_and(|h| h.ready_path.is_some()) {
+            v.push("host.health.readyPath");
+        }
+        v
     }
 }
 
@@ -334,6 +390,23 @@ mod tests {
         assert!(e.message.contains("bool"), "voice is a bool: {e:?}");
         let e = parse(&OK.replace("\"caps\"", "\"requires\": {\"sewVersion\": \">=0.3.0\"}, \"caps\"")).unwrap_err();
         assert!(e.message.contains("sewVersion"), "{e:?}");
+    }
+
+    /// 0.46.4 (R39): `host.sessions`, `host.overlap`, `host.health.readyPath`
+    /// parse, refuse unknown values, and are named as needing 0.46.4.
+    #[test]
+    fn the_0464_host_keys_parse_and_are_named() {
+        assert!(parse(OK).unwrap().keys_needing_0464().is_empty());
+        let m = parse(&OK.replace(
+            "\"health\": { \"path\": \"/healthz\" }",
+            "\"sessions\": \"memory\", \"overlap\": \"handover\", \"health\": { \"path\": \"/healthz\", \"readyPath\": \"/readyz\" }",
+        ))
+        .unwrap();
+        assert_eq!((m.host.sessions, m.host.overlap), (Some(Sessions::Memory), Some(Overlap::Handover)));
+        assert_eq!(m.ready_path().as_deref(), Some("/readyz"));
+        assert_eq!(m.keys_needing_0464(), vec!["host.sessions", "host.overlap", "host.health.readyPath"]);
+        assert!(parse(&OK.replace("\"mode\": \"cmd\",", "\"mode\": \"cmd\", \"sessions\": \"disk\",")).is_err());
+        assert!(parse(&OK.replace("\"mode\": \"cmd\",", "\"mode\": \"cmd\", \"overlap\": \"never\",")).is_err());
     }
 
     #[test]

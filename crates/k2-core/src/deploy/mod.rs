@@ -39,6 +39,8 @@ pub mod engine;
 pub mod framing;
 pub mod health;
 pub mod manifest;
+/// Re-host on a K2 update, the pure parts (update continuity S2, 0.46.4).
+pub mod rehost;
 pub mod seed;
 pub mod store;
 pub mod validate;

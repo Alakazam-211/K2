@@ -176,12 +176,14 @@ pub fn folder_manifest(label: &str, cmd: &str) -> super::manifest::Manifest {
         host: super::manifest::Host {
             mode: "cmd".into(),
             start: vec!["sh".into(), "-c".into(), cmd.into()],
-            health: Some(super::manifest::Health { path: Some("/".into()), timeout_secs: Some(300), as_test_guest: false, tcp: true }),
+            health: Some(super::manifest::Health { path: Some("/".into()), timeout_secs: Some(300), as_test_guest: false, tcp: true, ready_path: None }),
             drain_secs: None,
             // 0.46.3: a `--cmd` service may speak anything (TCP health), and
             // it was a raw nested splice before it moved onto the App path.
             // It stays raw; `k2 publish client-ip <name> on` opts it in.
             client_ip: Some(false),
+            sessions: None,
+            overlap: None,
         },
         entry: None,
         roles: Default::default(),

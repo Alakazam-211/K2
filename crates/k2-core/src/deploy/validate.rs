@@ -118,6 +118,16 @@ fn check_code(root: &Path, errors: &mut Vec<Issue>, warnings: &mut Vec<Issue>) {
 
 fn check_manifest(m: &Manifest, errors: &mut Vec<Issue>, warnings: &mut Vec<Issue>) {
     let at = |f: &str| Some(format!("{MANIFEST_FILE} {f}"));
+    // R39 (update continuity, 0.46.4): K2 up to 0.46.3 refuses a manifest
+    // with these keys, so a K2 rollback can't run this Seed, and a template
+    // meant for older boxes must not carry them.
+    for k in m.keys_needing_0464() {
+        warnings.push(issue(
+            "needs_k2_0464",
+            format!("{k} needs K2 0.46.4 or newer: K2 0.46.3 and older refuse this Seed (after a K2 rollback it won't start)"),
+            at(k),
+        ));
+    }
     if m.schema != manifest::SCHEMA {
         errors.push(issue("manifest_invalid", format!("schema {} is not supported; this K2 reads schema 1", m.schema), at("schema")));
     }
@@ -163,6 +173,11 @@ fn check_manifest(m: &Manifest, errors: &mut Vec<Issue>, warnings: &mut Vec<Issu
         }
         if h.timeout_secs.is_some_and(|t| t == 0 || t > 900) {
             errors.push(issue("manifest_invalid", "host.health.timeoutSecs: 1 to 900", at("host.health.timeoutSecs")));
+        }
+        if let Some(p) = &h.ready_path {
+            if !p.starts_with('/') || p.contains(char::is_whitespace) {
+                errors.push(issue("manifest_invalid", "host.health.readyPath must start with / and hold no spaces", at("host.health.readyPath")));
+            }
         }
         if h.as_test_guest {
             warnings.push(issue(

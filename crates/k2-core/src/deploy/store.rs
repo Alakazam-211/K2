@@ -329,11 +329,22 @@ pub struct AppRow {
     pub devices_json: String,
     /// Who approved the `process` exception, when and how (0168).
     pub exception_json: Option<String>,
+    /// 0221 (update continuity R14): `auto` | `handover` | `window` |
+    /// `manual` | `off`.
+    pub rehost_policy: String,
+    /// 0221: `HH:MM-HH:MM` box time, for policy `window`.
+    pub rehost_window: Option<String>,
+    /// 0221 (Rosson Q4 + Q16): `pause` (default) | `defer`.
+    pub rehost_when_no_overlap: String,
+    /// 0221 (R20, S3): the warm instance kept for rollback and its deadline.
+    pub warm_deployment: Option<String>,
+    pub warm_until: Option<i64>,
 }
 
 const APP_COLS: &str = "app_id, service_id, seed_id, owner_workspace, path, source, folder_path, live_seed, live_tree_hash, \
                         live_deployment, preview_seed, isolation, memory_limit_bytes, front_port, state, state_reason, \
-                        created_by, created_at, updated_at, io_max_json, devices_json, exception_json";
+                        created_by, created_at, updated_at, io_max_json, devices_json, exception_json, rehost_policy, \
+                        rehost_window, rehost_when_no_overlap, warm_deployment, warm_until";
 
 fn app_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<AppRow> {
     Ok(AppRow {
@@ -359,6 +370,11 @@ fn app_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<AppRow> {
         io_max_json: r.get(19)?,
         devices_json: r.get(20)?,
         exception_json: r.get(21)?,
+        rehost_policy: r.get(22)?,
+        rehost_window: r.get(23)?,
+        rehost_when_no_overlap: r.get(24)?,
+        warm_deployment: r.get(25)?,
+        warm_until: r.get(26)?,
     })
 }
 
@@ -510,6 +526,9 @@ pub const KIND_ROLLBACK: &str = "rollback";
 pub const KIND_AUTO_ROLLBACK: &str = "auto_rollback";
 pub const KIND_RESTART: &str = "restart";
 pub const KIND_START: &str = "start";
+/// 0.46.4 (update continuity D3): the same Seed on a fresh instance after
+/// a K2 update (no CHECK on `kind`).
+pub const KIND_REHOST: &str = "rehost";
 
 pub const RESULT_PENDING: &str = "pending";
 pub const RESULT_STARTING: &str = "starting";
@@ -648,6 +667,43 @@ pub fn bad_endings_since(conn: &Connection, app_id: &str, since: i64) -> rusqlit
     ))?;
     let v = st.query_map(params![app_id, since], dep_row)?.collect::<Result<_, _>>()?;
     Ok(v)
+}
+
+/// R14 / Q4 + Q16: an App's re-host settings (`None` keeps a field).
+pub fn set_rehost_settings(
+    conn: &Connection,
+    app_id: &str,
+    policy: Option<&str>,
+    window: Option<Option<&str>>,
+    when_no_overlap: Option<&str>,
+) -> rusqlite::Result<()> {
+    if let Some(p) = policy {
+        conn.execute("UPDATE apps SET rehost_policy = ?2, updated_at = ?3 WHERE app_id = ?1", params![app_id, p, super::now()])?;
+    }
+    if let Some(w) = window {
+        conn.execute("UPDATE apps SET rehost_window = ?2, updated_at = ?3 WHERE app_id = ?1", params![app_id, w, super::now()])?;
+    }
+    if let Some(n) = when_no_overlap {
+        conn.execute("UPDATE apps SET rehost_when_no_overlap = ?2, updated_at = ?3 WHERE app_id = ?1", params![app_id, n, super::now()])?;
+    }
+    Ok(())
+}
+
+/// R10: the runtime fingerprint of a deployment that went live.
+pub fn set_runtime_json(conn: &Connection, id: &str, runtime: &str) -> rusqlite::Result<()> {
+    conn.execute("UPDATE deployments SET runtime_json = ?2 WHERE id = ?1", params![id, runtime])?;
+    Ok(())
+}
+
+/// R10: a deployment's fingerprint (`None`: none written, = due).
+pub fn runtime_json(conn: &Connection, id: &str) -> rusqlite::Result<Option<String>> {
+    conn.query_row("SELECT runtime_json FROM deployments WHERE id = ?1", params![id], |r| r.get(0)).optional().map(Option::flatten)
+}
+
+/// R32: the readiness answer probed once after the gate.
+pub fn set_ready_json(conn: &Connection, id: &str, ready: &str) -> rusqlite::Result<()> {
+    conn.execute("UPDATE deployments SET ready_json = ?2 WHERE id = ?1", params![id, ready])?;
+    Ok(())
 }
 
 /// The App's newest deployment (R43: did its last attempt fail K2-side?).

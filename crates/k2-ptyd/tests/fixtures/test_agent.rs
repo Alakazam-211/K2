@@ -73,6 +73,7 @@ fn run() {
             out.flush().unwrap();
             sleep_forever();
         }
+        "survive" => survive(&args[1], args.get(2).and_then(|s| s.parse().ok()).unwrap_or(50)),
         "sleep" => {
             println!("READY");
             out.flush().unwrap();
@@ -88,6 +89,105 @@ fn run() {
             std::process::exit(2);
         }
     }
+}
+
+static SIGHUPS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+extern "C" fn on_hup(_: libc::c_int) {
+    SIGHUPS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Daemon survival harness agent (PRD §12, T1). In `<dir>`:
+/// - `pid`: this process's pid;
+/// - stdout: `seq=<n>` lines every `<ms>` ms, forever;
+/// - `hook.log`: one line per second, `<unix_ms> <http status|ERR:...>` for
+///   `GET /cli/whoami` over `$K2_HOOK_SOCK` with `$K2_HOOK_TOKEN`;
+/// - `stdin`: every byte received on stdin (raw mode, no echo) — the agent
+///   never sends a terminal query, so any byte here is unsolicited (P75)
+///   unless the test typed it;
+/// - `sighup`: the number of SIGHUPs received (written when non-zero).
+fn survive(dir: &str, every_ms: u64) {
+    let dir = std::path::PathBuf::from(dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    // SAFETY: plain libc calls on our own process / tty.
+    unsafe {
+        libc::signal(libc::SIGHUP, on_hup as extern "C" fn(libc::c_int) as libc::sighandler_t);
+        let mut t: libc::termios = std::mem::zeroed();
+        if libc::tcgetattr(0, &mut t) == 0 {
+            libc::cfmakeraw(&mut t);
+            libc::tcsetattr(0, libc::TCSANOW, &t);
+        }
+    }
+    std::fs::write(dir.join("pid"), std::process::id().to_string()).unwrap();
+    {
+        let dir = dir.clone();
+        std::thread::spawn(move || {
+            use std::io::Read;
+            let mut f = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("stdin")).unwrap();
+            let mut buf = [0u8; 256];
+            loop {
+                match std::io::stdin().read(&mut buf) {
+                    Ok(0) | Err(_) => return,
+                    Ok(n) => {
+                        f.write_all(&buf[..n]).unwrap();
+                        f.flush().unwrap();
+                    }
+                }
+            }
+        });
+    }
+    {
+        let dir = dir.clone();
+        std::thread::spawn(move || {
+            let mut log = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("hook.log")).unwrap();
+            loop {
+                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis();
+                let r = hook_call();
+                writeln!(log, "{now} {r}").unwrap();
+                log.flush().unwrap();
+                let hups = SIGHUPS.load(std::sync::atomic::Ordering::SeqCst);
+                if hups > 0 {
+                    std::fs::write(dir.join("sighup"), hups.to_string()).unwrap();
+                }
+                std::thread::sleep(std::time::Duration::from_secs(1));
+            }
+        });
+    }
+    let mut out = std::io::stdout();
+    let mut n = 0u64;
+    loop {
+        // CRLF: raw mode turned output post-processing off.
+        if write!(out, "seq={n}\r\n").and_then(|_| out.flush()).is_err() {
+            sleep_forever();
+        }
+        n += 1;
+        std::thread::sleep(std::time::Duration::from_millis(every_ms));
+    }
+}
+
+/// `GET /cli/whoami` over the per-cell socket; the status code or `ERR:…`.
+fn hook_call() -> String {
+    use std::io::Read;
+    let (Ok(sock), Ok(token)) = (std::env::var("K2_HOOK_SOCK"), std::env::var("K2_HOOK_TOKEN")) else {
+        return "ERR:no_passport".into();
+    };
+    let mut s = match std::os::unix::net::UnixStream::connect(&sock) {
+        Ok(s) => s,
+        Err(e) => return format!("ERR:connect:{}", e.kind()),
+    };
+    let _ = s.set_read_timeout(Some(std::time::Duration::from_secs(10)));
+    let _ = s.set_write_timeout(Some(std::time::Duration::from_secs(10)));
+    if let Err(e) = write!(s, "GET /cli/whoami HTTP/1.1\r\nHost: k2\r\nAuthorization: Bearer {token}\r\nConnection: close\r\n\r\n") {
+        return format!("ERR:write:{}", e.kind());
+    }
+    let mut raw = Vec::new();
+    if let Err(e) = s.read_to_end(&mut raw) {
+        if raw.is_empty() {
+            return format!("ERR:read:{}", e.kind());
+        }
+    }
+    let text = String::from_utf8_lossy(&raw);
+    text.split_whitespace().nth(1).unwrap_or("ERR:empty").to_string()
 }
 
 fn sleep_forever() -> ! {

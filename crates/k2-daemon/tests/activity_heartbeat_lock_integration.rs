@@ -140,6 +140,32 @@ fn boot_releases_stale_locks_and_active_terminals() {
     }
 }
 
+/// k2-ptyd S3 (P35): a session that survived the restart in k2-ptyd keeps
+/// its lock and its `active_terminal_id`; every other row is released as
+/// in T-S2f.
+#[test]
+fn boot_keeps_the_rows_of_sessions_that_survived_in_ptyd() {
+    let _g = lock();
+    let _db = k2_core::db::init_for_tests();
+    let kept = format!("act-keep-a-{}", uuid::Uuid::new_v4());
+    let gone = format!("act-keep-b-{}", uuid::Uuid::new_v4());
+    let survivor = uuid::Uuid::new_v4().to_string();
+    for (id, term) in [(&kept, survivor.as_str()), (&gone, "dead-pty")] {
+        let dir = tmp_dir("keep");
+        seed_project(id, &dir);
+        session_row(id, "agent-chat:x", Some(term), "running");
+    }
+    let keep: std::collections::HashSet<String> = [survivor.clone()].into_iter().collect();
+    let released = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        activity_store::boot_reset_status_keeping(&conn, &keep)
+    };
+    assert!(released >= 1, "released {released}");
+    assert_eq!(status_of(&kept), ("running".to_string(), Some(survivor.clone())), "the survivor's row is untouched");
+    assert_eq!(status_of(&gone), ("sleeping".to_string(), None));
+}
+
 /// T-S2g.
 #[test]
 fn idle_prompt_after_a_missed_stop_releases_the_lock() {

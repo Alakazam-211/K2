@@ -208,14 +208,18 @@ async fn summary_lists_busy_workspaces_from_activity_and_hooks() {
         let counts = |working: u64, waiting: u64, idle: u64| {
             serde_json::json!({ "working": working, "monitoring": 0, "waiting": waiting, "unverifiable": 0, "idle": idle })
         };
+        // agent-unread-tickets-v1 (0.46.4): the owner's inbox rides every
+        // entry; nothing is unread or waiting here.
         let beat = serde_json::json!({
             "workspaceId": "ws-idle-id", "status": "idle", "display": "idle",
             "heartbeat": true, "live": false, "busy": false, "counts": counts(0, 0, 0),
+            "unread": 0, "waiting": 0, "muted": false, "ticketsWaiting": 0, "ticketsWaitingMe": 0,
         });
         let busy_ws = |status: &str, display: &str, busy: bool, c: serde_json::Value| {
             serde_json::json!({
                 "workspaceId": "ws-busy-id", "status": status, "display": display,
                 "heartbeat": false, "live": true, "busy": busy, "counts": c,
+                "unread": 0, "waiting": 0, "muted": false, "ticketsWaiting": 0, "ticketsWaitingMe": 0,
             })
         };
 

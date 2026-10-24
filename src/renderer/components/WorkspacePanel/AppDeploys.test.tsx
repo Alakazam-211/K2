@@ -98,6 +98,8 @@ describe('PublishedServiceDetailsModal with an App row', () => {
     cleanup()
     render(<PublishedServiceDetailsModal service={svc('npm start')} hostLabel="This Mac" scope={primaryScope()} onClose={() => {}} />)
     expect(screen.queryByText('Deploys')).toBeNull()
-    expect(daemonCliGet).toHaveBeenCalledTimes(1)
+    // The App row reads its deploys and its update setting (0.46.4); a
+    // plain service row reads neither.
+    expect(daemonCliGet.mock.calls.map((c) => c[0]).sort()).toEqual(['app/history', 'app/rehost'])
   })
 })

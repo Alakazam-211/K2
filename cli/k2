@@ -7937,6 +7937,21 @@ The box (Linux):
                                        guarded engine, signed with the root-helper
                                        key) for this daemon's version; --from a
                                        folder holding the release asset + .sig.
+  k2 app rehost status [<app>] [--json]
+                                       The re-host wave after a K2 update: which
+                                       Apps moved to the new runtime, which wait
+                                       and why (read-only).
+  k2 app rehost <app> [--yes] [--pause] [--json]
+                                       Move an App to a fresh instance on this
+                                       K2 now (zero downtime when it can run two
+                                       copies). --yes: even if everyone must sign
+                                       in again; --pause: a short pause when it
+                                       can't run two copies.
+  k2 app rehost policy <app> [--policy auto|handover|window|manual|off]
+                       [--window HH:MM-HH:MM] [--when-no-overlap pause|defer]
+                                       How K2 updates move this App. pause (the
+                                       default): a short pause when it can't run
+                                       two copies; defer: skip it, you update it.
   k2 app engine status [--json]        The App engine: installed vs running vs
                                        this K2, linger, the boot heal, Apps
                                        waiting for the engine (read-only).
@@ -8088,6 +8103,111 @@ if w:
             ;;
         -h|--help|"") _app_rt_usage ;;
         *) echo "usage: k2 app engine install [--from DIR] [--json] | k2 app engine status [--json]" >&2; exit 2 ;;
+    esac
+}
+
+# k2 app rehost … (0.46.4, update continuity S2): the re-host wave, one
+# App now, and its update settings.
+cmd_app_rehost() {
+    local json_out=0
+    case "${1:-}" in
+        status)
+            shift
+            local app=""
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --json) json_out=1; shift ;;
+                    -h|--help) _app_rt_usage; return 0 ;;
+                    -*) echo "Unknown argument: $1" >&2; exit 2 ;;
+                    *) app="$1"; shift ;;
+                esac
+            done
+            local raw
+            if [ -n "$app" ]; then
+                raw="$(_compute_send GET /cli/app/rehost "app=$(urlencode "$app")")"
+            else
+                raw="$(_compute_send GET /cli/app/rehost "")"
+            fi
+            _compute_split "$raw"
+            [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+            if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+            printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+if "rehost" in v:
+    r = v["rehost"]; fp = r.get("fingerprint") or {}
+    print("%s: policy %s, when it can'"'"'t run two copies: %s" % (v["app"], r.get("policy"), r.get("whenNoOverlap")))
+    print("  runs on: K2 %s, engine %s" % (fp.get("k2Version", "?"), fp.get("engineVersion", "-")))
+    print("  due: %s; sessions: %s" % (r.get("due") or "no", r.get("sessions")))
+    w = r.get("wave") or {}
+    if w:
+        print("  wave: %s%s" % (w.get("state"), (" (" + w["code"] + ")") if w.get("code") else ""))
+        if w.get("detail"):
+            print("    " + w["detail"])
+    sys.exit(0)
+print("Re-host wave (K2 %s): %s%s" % (v.get("k2Version"), v.get("state"), (" — " + v["reason"]) if v.get("reason") else ""))
+for a, s in sorted((v.get("apps") or {}).items()):
+    print("  %-24s %-9s %s%s" % (a, s.get("state"), s.get("code") or "", (": " + s["detail"]) if s.get("detail") else ""))'
+            ;;
+        policy)
+            shift
+            local app="" policy="" window="" nooverlap=""
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --policy) policy="${2:-}"; shift 2 ;;
+                    --window) window="${2:-}"; shift 2 ;;
+                    --when-no-overlap) nooverlap="${2:-}"; shift 2 ;;
+                    --json) json_out=1; shift ;;
+                    -h|--help) _app_rt_usage; return 0 ;;
+                    -*) echo "Unknown argument: $1" >&2; exit 2 ;;
+                    *) app="$1"; shift ;;
+                esac
+            done
+            [ -n "$app" ] || { echo "usage: k2 app rehost policy <app> [--policy P] [--window HH:MM-HH:MM] [--when-no-overlap pause|defer]" >&2; exit 2; }
+            local raw
+            raw="$(_compute_send POST /cli/app/rehost/policy "$(_compute_json K2_CJ_app="$app" K2_CJ_policy="$policy" K2_CJ_window="$window" K2_CJ_whenNoOverlap="$nooverlap")")"
+            _compute_split "$raw"
+            [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+            if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; else
+                printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin); r = v["rehost"]
+print("%s: policy %s%s; when it can'"'"'t run two copies: %s" % (v["app"], r["policy"], (" " + r["window"]) if r.get("window") else "", r["whenNoOverlap"]))
+if v.get("warning"):
+    print("warning: " + v["warning"])'
+            fi
+            ;;
+        -h|--help|"") _app_rt_usage ;;
+        *)
+            local app="" yes="" pause=""
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --yes) yes=1; shift ;;
+                    --pause) pause=1; shift ;;
+                    --json) json_out=1; shift ;;
+                    -h|--help) _app_rt_usage; return 0 ;;
+                    -*) echo "Unknown argument: $1" >&2; exit 2 ;;
+                    *) app="$1"; shift ;;
+                esac
+            done
+            local raw
+            raw="$(K2_CP_MAX_TIME=1800 _compute_send POST /cli/app/rehost/run "$(_compute_json K2_CJ_app="$app" K2_CJ_yes_b="$yes" K2_CJ_pause_b="$pause")")"
+            _compute_split "$raw"
+            [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+            if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; else
+                printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+r = v.get("rehost")
+if r == "current":
+    print("%s already runs on this K2 (nothing to move)" % v.get("app"))
+elif r == "done":
+    print("%s moved to a fresh instance (%s)" % (v.get("app"), (v.get("deployment") or {}).get("id")))
+else:
+    print("%s: the re-host failed; it keeps running on its previous instance: %s" % (v.get("app"), v.get("why")))
+    sys.exit(1)'
+            fi
+            ;;
     esac
 }
 
@@ -11826,6 +11946,7 @@ cmd_app() {
         doctor) shift; cmd_app_doctor "$@" ;;
         box) shift; cmd_app_box "$@" ;;
         engine) shift; cmd_app_engine "$@" ;;
+        rehost) shift; cmd_app_rehost "$@" ;;
         data) shift; cmd_app_data "$@" ;;
         resources) shift; cmd_app_resources "$@" ;;
         label) shift; cmd_app_label "$@" ;;

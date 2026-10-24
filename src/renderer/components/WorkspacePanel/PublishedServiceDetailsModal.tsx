@@ -7,6 +7,7 @@ import { useEffect } from 'react'
 import { DialogFrame, DialogScrim } from '@/components/ui'
 import type { ServerScope } from '@/kessel/server-scope'
 import { AppDeploys, APP_CMD_SENTINEL } from './AppDeploys'
+import { AppUpdateSetting } from './AppUpdateSetting'
 import {
   isServiceHealthy,
   serviceKindLabel,
@@ -150,6 +151,7 @@ export function PublishedServiceDetailsModal({
           <Field label="Kind">{serviceKindLabel(service)}</Field>
           <Field label="Host">{dash(hostLabel)}</Field>
           {scope && service.cmd === APP_CMD_SENTINEL ? <AppDeploys scope={scope} app={service.name} /> : null}
+          {scope && service.cmd === APP_CMD_SENTINEL ? <AppUpdateSetting scope={scope} app={service.name} /> : null}
         </div>
       </DialogFrame>
     </>

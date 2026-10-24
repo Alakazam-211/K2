@@ -4027,6 +4027,46 @@ _daemon_sha256() {
     fi
 }
 
+# Linux: the binary an installed systemd unit runs — the last non-empty
+# ExecStart= of `systemctl cat` (drop-ins included; an empty ExecStart=
+# resets), its first word, without systemd's -@:+! prefixes, %h expanded.
+# Args: <scope> <unit>. Prints the path or nothing.
+_daemon_unit_exec_path() {
+    local scope="$1" unit="$2" line
+    line=$(_daemon_systemctl "$scope" cat "$unit" 2>/dev/null \
+        | sed -n 's/^[[:space:]]*ExecStart=[[:space:]]*//p' | sed '/^$/d' | tail -1)
+    [ -n "$line" ] || return 1
+    line="${line%% *}"
+    while :; do
+        case "$line" in
+            [-@:+!]*) line="${line#?}" ;;
+            *) break ;;
+        esac
+    done
+    line="${line//%h/$HOME}"
+    [ -n "$line" ] || return 1
+    printf '%s\n' "$line"
+}
+
+# Restart an installed daemon unit after its binary was replaced: a plain
+# restart (KillMode=process keeps the agents). A system unit needs root:
+# try systemctl, then `sudo -n` (never a password prompt).
+# Args: <scope> <unit>.
+_daemon_unit_restart() {
+    local scope="$1" unit="$2"
+    if [ "$scope" = "user" ]; then
+        systemctl --user restart "$unit"
+        return $?
+    fi
+    if systemctl restart "$unit" 2>/dev/null; then
+        return 0
+    fi
+    if [ "$(id -u)" != "0" ] && command -v sudo >/dev/null 2>&1; then
+        sudo -n systemctl restart "$unit" 2>/dev/null && return 0
+    fi
+    return 1
+}
+
 cmd_daemon_install() {
     local version="" bin_dir="" manifest_url="" no_service=0 dry_run=0
     # Help must still print when air-gap is on (no GitHub). Network is
@@ -4059,12 +4099,18 @@ cmd_daemon_install() {
                 echo "                  (supports file:// for local testing)."
                 echo "  --no-service    skip writing the systemd/launchd supervisor unit."
                 echo "  --dry-run       print resolved platform/artifact/commands; no download."
+                echo ""
+                echo "  Linux: when a K2 daemon systemd unit is already installed (a system"
+                echo "  unit from provisioning, or a user unit), the binary that unit runs"
+                echo "  is replaced in place and the unit restarted; no new unit is written."
                 return 0
                 ;;
             *) echo "k2 daemon install: unknown argument: $1" >&2; return 2 ;;
         esac
     done
 
+    local bin_dir_given=0
+    [ -n "$bin_dir" ] && bin_dir_given=1
     [ -n "$bin_dir" ] || bin_dir="$HOME/.local/bin"
 
     # Resolve manifest URL: explicit override > version tag > latest.
@@ -4117,7 +4163,7 @@ cmd_daemon_install() {
         return 1
     fi
 
-    local bin_path="$bin_dir/k2so-daemon"
+    local bin_path="$bin_dir/k2-daemon"
 
     # Service unit targets (computed for dry-run + real install).
     local svc_kind svc_path
@@ -4127,6 +4173,32 @@ cmd_daemon_install() {
     else
         svc_kind="systemd"
         svc_path="$HOME/.config/systemd/user/k2-daemon.service"
+    fi
+
+    # Linux with the daemon already installed under systemd (a SYSTEM unit
+    # from provisioning, or a user unit from an earlier install): update the
+    # binary THAT unit runs, in place, and restart that unit. Never write a
+    # second unit or a second binary beside it (akzm 2026-10-23: a stray
+    # user unit + binary next to the system k2-daemon.service).
+    local existing_scope="" existing_unit="" existing_bin="" existing_ctl=""
+    if [ "$svc_kind" = "systemd" ] && [ "$no_service" != "1" ]; then
+        local _found
+        if _found=$(_daemon_linux_unit 2>/dev/null) && [ -n "$_found" ]; then
+            existing_scope="${_found%% *}"
+            existing_unit="${_found#* }"
+            [ "$existing_scope" = "user" ] && existing_ctl="--user "
+            existing_bin=$(_daemon_unit_exec_path "$existing_scope" "$existing_unit") || existing_bin=""
+            if [ -z "$existing_bin" ]; then
+                echo "k2 daemon install: found the $existing_scope unit $existing_unit but could not read its ExecStart= binary." >&2
+                echo "  Check it with: systemctl ${existing_ctl}cat $existing_unit" >&2
+                return 1
+            fi
+            if [ "$bin_dir_given" = "1" ] && [ "$(dirname "$existing_bin")" != "$bin_dir" ]; then
+                echo "Note: --bin-dir $bin_dir is ignored — the installed $existing_scope unit $existing_unit runs $existing_bin, which is updated in place."
+            fi
+            bin_path="$existing_bin"
+            bin_dir="$(dirname "$existing_bin")"
+        fi
     fi
 
     if [ "$dry_run" = "1" ]; then
@@ -4142,6 +4214,9 @@ cmd_daemon_install() {
         echo "  minisign verify: minisign -Vm <downloaded-bin> -P <embedded-pubkey>"
         if [ "$no_service" = "1" ]; then
             echo "  service:        (skipped — --no-service)"
+        elif [ -n "$existing_unit" ]; then
+            echo "  service unit:   installed $existing_scope unit $existing_unit (kept; binary updated in place)"
+            echo "  restart cmd:    systemctl ${existing_ctl}restart $existing_unit"
         else
             echo "  service unit:   $svc_kind → $svc_path"
             if [ "$svc_kind" = "systemd" ]; then
@@ -4166,13 +4241,13 @@ cmd_daemon_install() {
     fi
 
     local tmp
-    tmp=$(mktemp -d "${TMPDIR:-/tmp}/k2so-daemon-install.XXXXXX") || {
+    tmp=$(mktemp -d "${TMPDIR:-/tmp}/k2-daemon-install.XXXXXX") || {
         echo "Failed to create temp dir." >&2; return 1
     }
     # shellcheck disable=SC2064
     trap "rm -rf '$tmp'" EXIT
 
-    local dl_bin="$tmp/k2so-daemon" dl_sig="$tmp/k2so-daemon.minisig"
+    local dl_bin="$tmp/k2-daemon" dl_sig="$tmp/k2-daemon.minisig"
 
     echo "Downloading daemon binary ($platform, manifest ver ${mver:-?})..."
     case "$url" in
@@ -4244,19 +4319,26 @@ cmd_daemon_install() {
     chmod +x "$bin_path.new"
     mv -f "$bin_path.new" "$bin_path"
 
-    if [ "$no_service" != "1" ]; then
+    if [ -n "$existing_unit" ]; then
+        # The installed unit keeps its own definition; only its binary
+        # changed. A plain restart picks the new binary up.
+        echo "Restarting the $existing_scope unit $existing_unit ..."
+        if _daemon_unit_restart "$existing_scope" "$existing_unit"; then
+            echo "Restarted $existing_unit (now running $bin_path)."
+        else
+            echo "Installed $bin_path, but could not restart the $existing_scope unit $existing_unit." >&2
+            if [ "$existing_scope" = "system" ]; then
+                echo "Restart it as root: sudo systemctl restart $existing_unit" >&2
+            else
+                echo "Restart it with: systemctl --user restart $existing_unit" >&2
+            fi
+            return 1
+        fi
+    elif [ "$no_service" != "1" ]; then
         if [ "$svc_kind" = "systemd" ]; then
             mkdir -p "$(dirname "$svc_path")"
             # P82: the unit is k2-daemon.service (what the enable hint and
-            # `k2 daemon stop|restart|status` use). A legacy
-            # k2so-daemon.service from an older install is disabled and
-            # removed so two units never run two daemons.
-            local legacy_unit="$HOME/.config/systemd/user/k2so-daemon.service"
-            if [ -f "$legacy_unit" ]; then
-                systemctl --user disable --now k2so-daemon.service >/dev/null 2>&1 || true
-                rm -f "$legacy_unit"
-                echo "Removed the legacy unit k2so-daemon.service (replaced by k2-daemon.service)."
-            fi
+            # `k2 daemon stop|restart|status` use).
             cat > "$svc_path" <<EOF
 [Unit]
 Description=K2 standalone daemon

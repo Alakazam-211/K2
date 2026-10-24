@@ -73,6 +73,7 @@ part_rust_test() {
     bash tests/cli/provision_mail_helper.sh
     bash tests/cli/daemon_unit_oompolicy.sh
     bash tests/cli/daemon_unit_runtime_dir.sh
+    bash tests/cli/daemon_install_systemd_unit.sh
 
     step "cargo test verb catalog + Zen"
     cargo test -p k2-core --lib -- contract:: zen:: app_surface::

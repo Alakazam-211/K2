@@ -589,7 +589,9 @@ k2_arch_gate_start
 # One shared build step for dev-build.sh, build-app.sh and release.sh:
 # scripts/lib/build-binaries.sh. It runs `tauri build` (frontend + the `k2`
 # Tauri crate + bundle), then builds k2-daemon + k2-power-helper, k2-ptyd,
-# k2-node and k2-menubar in release mode and copies them in: `tauri build`
+# k2-node and k2-menubar in release mode, in ONE cargo call
+# (K2_MAC_SIDECAR_CARGO_ARGS: one feature resolution, so the shared crates
+# compile once; Step 8.5 reuses them), and copies them in: `tauri build`
 # copies only its own primary bin into the bundle.
 #
 # k2-daemon is a peer binary to the main Tauri app that owns the

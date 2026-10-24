@@ -21,14 +21,31 @@ pub fn spawn_guard() -> std::sync::RwLockReadGuard<'static, ()> {
 }
 
 /// `Command::output`, with the spawn under [`spawn_guard`] and the wait
-/// outside it.
+/// outside it. stdin is `/dev/null` (every executor child takes no input).
+/// The child is always reaped, also when reading its output fails.
 pub fn spawn_output(cmd: &mut std::process::Command) -> std::io::Result<std::process::Output> {
-    cmd.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
-    let child = {
+    use std::io::Read;
+    cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
+    let mut child = {
         let _g = spawn_guard();
         cmd.spawn()?
     };
-    child.wait_with_output()
+    let mut out_pipe = child.stdout.take();
+    let err_pipe = child.stderr.take();
+    // stderr on its own thread: a child filling one pipe never blocks on the other.
+    let err_reader = std::thread::spawn(move || {
+        let mut b = Vec::new();
+        let r = err_pipe.map(|mut p| p.read_to_end(&mut b)).transpose();
+        r.map(|_| b)
+    });
+    let mut stdout = Vec::new();
+    let out_r = out_pipe.as_mut().map(|p| p.read_to_end(&mut stdout)).transpose();
+    let err_r = err_reader.join().unwrap_or_else(|_| Err(std::io::Error::other("stderr reader panicked")));
+    // Reaped whatever happened above.
+    let status = child.wait()?;
+    out_r?;
+    let stderr = err_r?;
+    Ok(std::process::Output { status, stdout, stderr })
 }
 
 /// Send one byte carrying `fds`.

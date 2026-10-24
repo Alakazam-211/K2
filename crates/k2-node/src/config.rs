@@ -194,7 +194,11 @@ pub struct ControlState {
 
 pub fn read_control(path: &Path) -> Result<ControlState, String> {
     let f: ControlFile = match crate::util::read_regular(path) {
-        Ok(s) => toml::from_str(&s).map_err(|e| format!("{}: {e}", path.display()))?,
+        // The parse error quotes the file: logged here, never returned.
+        Ok(s) => toml::from_str(&s).map_err(|e| {
+            crate::nlog!("{}: {e}", path.display());
+            format!("{} doesn't parse (see the k2-node log)", path.display())
+        })?,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => ControlFile::default(),
         Err(e) => return Err(format!("read {}: {e}", path.display())),
     };

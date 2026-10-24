@@ -28,6 +28,7 @@ const OWNER_ONLY_FEATURES: &[&str] = &[
     k2_node_proto::admin::FEATURE_ADMIN,
     k2_node_proto::admin::FEATURE_SELF_UPDATE,
     k2_node_proto::admin::FEATURE_HEALTH,
+    k2_node_proto::admin::FEATURE_WALL_RESTART,
 ];
 
 impl Node {

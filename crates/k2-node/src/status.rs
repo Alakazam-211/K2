@@ -92,8 +92,10 @@ pub fn write(path: &std::path::Path, s: &Status) -> Result<(), String> {
     crate::util::atomic_write(path, &body, 0o644)
 }
 
+/// The node's own word, read by root too (drains, `wall.enable`): never
+/// blocking, never a symlink, at most 4 MiB (A-N1).
 pub fn read(path: &std::path::Path) -> Result<Status, String> {
-    let s = std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let s = crate::util::read_regular_max(path, 4 << 20).map_err(|e| format!("read {}: {e}", path.display()))?;
     serde_json::from_str(&s).map_err(|e| format!("{}: {e}", path.display()))
 }
 

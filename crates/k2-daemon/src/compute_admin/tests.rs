@@ -722,27 +722,40 @@ fn the_job_wall_goes_at_once_and_an_older_node_holds_for_the_owner() {
     call(NODE_WALL, &agent(&f), json!({"node": f.node_name, "restart": false})).unwrap();
     assert_eq!(responder.join().unwrap().unwrap().args, json!({"restart": false}));
 
-    // A 0.46.3 executor classes it privileged: held for the owner as a plan.
-    let responder = answer_next(f.node.clone(), "refused", Some(wire::code::APPROVAL_REQUIRED));
-    let r = call(NODE_WALL, &agent(&f), json!({"node": f.node_name})).unwrap();
-    responder.join().unwrap().expect("tried at once first");
-    assert_eq!((r["held"].as_bool(), r["request"]["class"].as_str(), r["request"]["kind"].as_str()), (Some(true), Some("privileged"), Some("plan")), "{r}");
-    let steps = &r["request"]["body"]["steps"];
-    assert_eq!((steps[0]["verb"].as_str(), &steps[0]["args"]), (Some("wall.enable"), &json!({})), "{r}");
-    assert_eq!(steps[1]["verb"], "unit.restart");
-
-    // A 0.46.4+ node refuses only when its owner opted out (A-N4): the
-    // same command is held, no `unit.restart` (that needs `full`).
-    {
+    // Round 4 item 4: the hold branches on the node's `wall-restart`
+    // feature, never on a version string, and without it never plans a
+    // `unit.restart` (that would kill unwalled jobs).
+    let seen = |version: &str| {
         let h = k2_core::db::shared();
         let conn = h.lock();
-        store::touch_seen(&conn, &f.node, "lan", 3, "0.46.4", compute::now());
-    }
-    let responder = answer_next(f.node.clone(), "refused", Some(wire::code::APPROVAL_REQUIRED));
-    let r = call(NODE_WALL, &agent(&f), json!({"node": f.node_name})).unwrap();
-    responder.join().unwrap().expect("tried at once first");
-    assert_eq!((r["held"].as_bool(), r["request"]["kind"].as_str()), (Some(true), Some("command")), "{r}");
-    assert_eq!(r["request"]["body"]["verb"], "wall.enable", "{r}");
+        store::touch_seen(&conn, &f.node, "lan", 3, version, compute::now());
+    };
+    let held = |f: &Fx| {
+        let responder = answer_next(f.node.clone(), "refused", Some(wire::code::APPROVAL_REQUIRED));
+        let r = call(NODE_WALL, &agent(f), json!({"node": f.node_name})).unwrap();
+        responder.join().unwrap().expect("tried at once first");
+        assert_eq!((r["held"].as_bool(), r["request"]["class"].as_str(), r["request"]["kind"].as_str()), (Some(true), Some("privileged"), Some("command")), "{r}");
+        assert_eq!(r["request"]["body"]["verb"], "wall.enable", "{r}");
+        assert!(!r.to_string().contains("unit.restart"), "never a restart that kills jobs: {r}");
+        r
+    };
+    // An older node (no feature): the safe hold, its version named.
+    let r = held(&f);
+    assert_eq!(r["request"]["body"]["args"], json!({}), "{r}");
+    let why = r["request"]["reason"].as_str().unwrap_or("").to_string();
+    assert!(why.contains("k2-node 0.45.5") && why.contains("held without a restart"), "{why}");
+    // A 0.46.4 version without the feature: still the safe hold.
+    seen("0.46.4");
+    assert_eq!(held(&f)["request"]["body"]["args"], json!({}));
+    // No version at all: the reason says so, not "0.46.3 or older".
+    seen("");
+    let why = held(&f)["request"]["reason"].as_str().unwrap_or("").to_string();
+    assert!(why.contains("unknown version") && !why.contains("0.46.3"), "{why}");
+    // A dev build saying 0.46.3 but offering `wall-restart` (an owner
+    // opt-out): the same command is held, restart included.
+    seen("0.46.3");
+    test_seams::register(&f.node, true, &[wire::FEATURE_ADMIN, wire::FEATURE_HEALTH, wire::FEATURE_SELF_UPDATE, wire::FEATURE_WALL_RESTART]);
+    let r = held(&f);
     assert_eq!(r["request"]["body"]["args"], json!({"restart": true}), "{r}");
     assert!(r["request"]["reason"].as_str().unwrap_or("").contains("turned the job wall off"), "{r}");
 

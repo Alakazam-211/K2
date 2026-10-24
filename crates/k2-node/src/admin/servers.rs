@@ -228,7 +228,11 @@ pub fn read_file(config_dir: &Path) -> Result<Option<ServersFile>, String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(format!("read {}: {e}", p.display())),
     };
-    let f: ServersFile = toml::from_str(&text).map_err(|e| format!("{}: {e}", p.display()))?;
+    // The parse error quotes the file: logged here, never returned.
+    let f: ServersFile = toml::from_str(&text).map_err(|e| {
+        crate::nlog!("{}: {e}", p.display());
+        format!("{} doesn't parse (see the k2-node log)", p.display())
+    })?;
     f.validate().map_err(|e| format!("{}: {e}", p.display()))?;
     Ok(Some(f))
 }

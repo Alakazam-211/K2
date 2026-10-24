@@ -264,6 +264,7 @@ pub fn node_features() -> Vec<String> {
         k2_node_proto::admin::FEATURE_ADMIN.to_string(),
         k2_node_proto::admin::FEATURE_SELF_UPDATE.to_string(),
         k2_node_proto::admin::FEATURE_HEALTH.to_string(),
+        k2_node_proto::admin::FEATURE_WALL_RESTART.to_string(),
         results::FEATURE_ARTIFACTS.to_string(),
         k2_node_proto::frames::FEATURE_STALL.to_string(),
     ];

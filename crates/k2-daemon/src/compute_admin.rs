@@ -1502,11 +1502,14 @@ fn rollback(who: &Who, body: &[u8]) -> R<Value> {
 /// "Allow this agent to operate compute nodes") sends it at once: 0.46.4+
 /// executors class `wall.enable` operate at `policy`. `restart` (default
 /// true) restarts k2-node once its running jobs end. An older node answers
-/// `approval_required`: then it is held for the owner. A 0.46.4+ node
-/// answers that only when its owner opted out of the wall at setup (or set
-/// their own job user): the held command is the same `wall.enable
-/// {restart}`, which works at `policy`. An older node gets the plan it
-/// knows: `wall.enable {}` + `unit.restart k2-node` (A-N4).
+/// `approval_required`: then it is held for the owner. A node offering
+/// `wall-restart` answers that only when its owner opted out of the wall
+/// at setup (or set their own job user): the held command is the same
+/// `wall.enable {restart}`, which restarts through a drain that never
+/// kills a job. Any other node (older, or a build whose version says
+/// nothing reliable) gets the safe hold: `wall.enable {}` alone, the wall
+/// taking effect at k2-node's next restart. Never `unit.restart`, which
+/// would kill unwalled jobs (A-N4, round 4 item 4).
 fn wall(who: &Who, body: &[u8]) -> R<Value> {
     let op = operator(who)?;
     let v = json_body(body)?;
@@ -1520,29 +1523,23 @@ fn wall(who: &Who, body: &[u8]) -> R<Value> {
     let args = json!({"restart": restart});
     admin::validate_step("wall.enable", &args).map_err(|(code, hint)| no(code, 400, hint))?;
     node_admin_ready(&node, wire::FEATURE_ADMIN)?;
-    let new_node = {
-        use k2_root_proto::version::Semver;
-        let min = Semver::parse("0.46.4");
-        node.node_version.as_deref().and_then(|v| Semver::parse(v.split(['-', ' ']).next().unwrap_or(v))).zip(min).is_some_and(|(v, m)| v >= m)
-    };
-    let hold = |why: &str| {
-        let mut steps = if new_node { vec![json!({"verb": "wall.enable", "args": args.clone()})] } else { vec![json!({"verb": "wall.enable", "args": {}})] };
-        if restart && !new_node {
-            steps.push(json!({"verb": "unit.restart", "args": {"unit": "k2-node"}}));
-        }
-        let (kind, body_v) = if steps.len() == 1 { ("command", steps.remove(0)) } else { ("plan", json!({"steps": steps})) };
+    let wall_restart = features(&node.id).iter().any(|f| f == wire::FEATURE_WALL_RESTART);
+    let hold = |why: String| {
+        let body_v = if wall_restart { json!({"verb": "wall.enable", "args": args.clone()}) } else { json!({"verb": "wall.enable", "args": {}}) };
+        let kind = "command";
         let (_, summary) = classify_body(&node.name, kind, &body_v)?;
-        let reason = s(&v, "reason").map(str::to_string).unwrap_or_else(|| why.to_string());
+        let reason = s(&v, "reason").map(str::to_string).unwrap_or(why);
         file_request(&op, &node, kind, Class::Privileged, &body_v, &summary, Some(&reason))
     };
     let (cmd_id, result) = send_direct(who, &node, Class::Operate, "wall.enable", &args, Some(ANSWER_WAIT))?;
     crate::compute_routes::audit(who, "wall_enable", Some(&node.id), op.workspace.as_deref(), None, json!({"restart": restart, "cmdId": cmd_id}));
     match result {
         Some(r) if r.state == "refused" && r.code.as_deref() == Some(wire::code::APPROVAL_REQUIRED) => {
-            hold(if new_node {
-                "this machine's owner turned the job wall off at setup (or set their own job user), so turning it on needs their approval"
+            hold(if wall_restart {
+                "this machine's owner turned the job wall off at setup (or set their own job user), so turning it on needs their approval".to_string()
             } else {
-                "this node's k2-node is 0.46.3 or older, so turning the wall on needs the owner's approval there"
+                let v = node.node_version.as_deref().filter(|v| !v.trim().is_empty()).map(|v| format!("k2-node {v}")).unwrap_or_else(|| "k2-node of an unknown version".into());
+                format!("{v} doesn't offer safe wall restarts (wall-restart), so turning the wall on needs the owner's approval there, and it's held without a restart: the wall takes effect when k2-node next restarts")
             })
         }
         Some(r) if r.state != "done" => Err(no(

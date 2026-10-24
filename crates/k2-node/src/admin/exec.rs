@@ -393,6 +393,11 @@ pub struct Executor {
     /// flight finish (never `process::exit`, C5), and returns; the service
     /// manager starts the new binary on the next connection.
     pub reexec: Arc<std::sync::atomic::AtomicBool>,
+    /// A settling drain (`wall.enable`) waits this long with control at
+    /// `draining` after the count reaches 0, then counts again: one node
+    /// status write (10 s) plus a control poll (2 s), so a job the node
+    /// accepted just before it saw `draining` is in the count (round 4, 1).
+    pub drain_settle: std::time::Duration,
 }
 
 type Refused = (String, String, AdminRefusal);
@@ -416,6 +421,7 @@ impl Executor {
             draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             drain_gen: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             reexec: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            drain_settle: std::time::Duration::from_secs(super::update::DRAIN_SETTLE_SECS),
         }
     }
 
@@ -432,6 +438,7 @@ impl Executor {
             draining: self.draining.clone(),
             drain_gen: self.drain_gen.clone(),
             reexec: self.reexec.clone(),
+            drain_settle: self.drain_settle,
         }
     }
 

@@ -48,6 +48,10 @@ pub const MAX_PLAN_STEPS: usize = 32;
 /// closes the session on an unknown frame).
 pub const FEATURE_ADMIN: &str = "admin";
 pub const FEATURE_HEALTH: &str = "health";
+/// The executor takes `wall.enable {restart}` at `policy` and restarts
+/// k2-node only through a settling drain that never kills a job (0.46.4).
+/// The controller branches on this, never on a version string.
+pub const FEATURE_WALL_RESTART: &str = "wall-restart";
 pub const FEATURE_SELF_UPDATE: &str = "self-update";
 
 /// Stable refusal codes. Teaching JSON on the controller keys off these.

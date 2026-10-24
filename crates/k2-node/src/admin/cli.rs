@@ -47,6 +47,8 @@ pub fn serve(paths: ExecPaths, socket: &Path) -> Result<(), String> {
     // A drain the last executor left behind never keeps the owner's
     // control at `draining` (B-M2).
     super::update::recover_drain(&exec);
+    // TODO(0.46.5): drop with the legacy mark read.
+    super::update::remove_legacy_mark(&exec.paths.config_dir);
     crate::nlog!("admin executor {} serving (peers: root, {node_user})", crate::PRODUCT_VERSION);
     let reexec = exec.reexec.clone();
     server::serve(&exec, &rule, l, &|| reexec.load(Ordering::SeqCst))?;

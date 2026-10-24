@@ -1237,10 +1237,14 @@ impl Executor {
     /// installed without it: the job user (no login, no home, its own
     /// group), a traverse-only ACL on the node home, and `jobs.toml`.
     /// k2-node picks it up when it restarts. With `"restart": true` the
-    /// executor restarts it here, but only when this call changed the wall
-    /// files, only once every running job ended (any node, solo too), and
-    /// never past the drain limit: at the limit it gives up and says so.
-    /// Turning the wall on never kills a job (A-H1 / B-M1).
+    /// executor restarts it here, but only while a restart is owed (this
+    /// call changed the wall files, or an earlier one did and its restart
+    /// hasn't happened: the root-only [`WALL_RESTART_PENDING_FILE`]), and
+    /// always through a settling drain, even with nothing running: control
+    /// says `draining`, every running job ends, one node status write
+    /// passes, the count is still 0, then the restart. Never past the drain
+    /// limit: there it gives up and says so, and the restart stays owed.
+    /// Turning the wall on never kills a job (A-H1 / B-M1, round 4 item 1).
     ///
     /// The owner's own choice stands (A-L2 / B-L8): after `setup
     /// --no-job-wall`, or with a job user other than `k2job`, the executor
@@ -1256,15 +1260,17 @@ impl Executor {
         if self.platform.os() != "linux" {
             return Err(refuse(code::BAD_ARGS, "macOS walls jobs with Seatbelt on its own; nothing to enable"));
         }
-        // Count the running jobs before anything touches the wall files (a
-        // node that isn't walled yet runs them as its own children), and
-        // again after the setup, which takes a moment (A-N2 / B-R3).
-        let before = super::update::decide(self, false, true);
         let job_user = read_jobs_file(&self.paths.config_dir).ok().flatten().map(|f| f.job_user).unwrap_or_else(|| DEFAULT_JOB_USER.to_string());
         let setup = self.platform.enable_job_wall(&self.paths, &self.node_user(), &job_user)?;
         if approved {
             let _ = std::fs::remove_file(self.paths.state_dir.join(WALL_OPT_OUT_FILE));
         }
+        let pending_path = self.paths.state_dir.join(WALL_RESTART_PENDING_FILE);
+        if setup.changed() {
+            // Owed until a restart happens, across retries and executor restarts.
+            crate::util::atomic_write(&pending_path, cmd_id.as_bytes(), 0o600).map_err(|x| refuse(code::FAILED, format!("restart-pending flag: {x}")))?;
+        }
+        let pending = pending_path.exists();
         let mut out = json!({
             "job_user": job_user,
             "created": setup.created_user,
@@ -1277,38 +1283,44 @@ impl Executor {
         // restart is still needed, never whether the wall exists.
         let walled_now = crate::status::read(&self.paths.layout().status()).is_ok_and(|s| s.wall == "job_user");
         if walled_now {
+            let _ = std::fs::remove_file(&pending_path);
             out["restart_needed"] = Value::Null;
             out["note"] = "k2-node already runs jobs behind the wall".into();
             return Ok(out);
         }
+        out["restart_pending"] = pending.into();
         if !restart {
             return Ok(out);
         }
-        if !setup.changed() {
-            // A repeat call never restarts the node again (B-M1).
+        if !setup.changed() && !pending {
+            // Nothing owed: a repeat call never restarts the node again (B-M1).
             out["note"] = "the wall's files were already in place, so this call doesn't restart k2-node; it takes effect at the next update or an owner-approved restart".into();
             return Ok(out);
         }
-        let after = super::update::decide(self, false, true);
-        let decision = if after.1 >= before.1 { after } else { before };
+        // Always the settling drain, even with nothing running now.
+        let (_, running) = super::update::decide(self, false, true);
         let cmd_id = cmd_id.to_string();
-        let r = super::update::run_decided(self, decision, super::update::DrainOpts { give_up_at_limit: true }, "wall.enable", &cmd_id.clone(), move |e| {
-            // Last look right before the restart: a job that started since
-            // the count is never stopped to turn the wall on.
+        let opts = super::update::DrainOpts { give_up_at_limit: true, settle: true };
+        let r = super::update::run_decided(self, (super::update::Decision::Drain, running), opts, "wall.enable", &cmd_id.clone(), move |e| {
+            // Control has said `draining` since before the last count, so
+            // the node took nothing new; one more look all the same.
             let now_running = super::update::running_jobs(e);
             if now_running > 0 {
-                return Err(refuse(code::BUSY, format!("{now_running} job(s) started meanwhile; k2-node wasn't restarted (ask again, it waits for them)")));
+                return Err(refuse(code::BUSY, format!("{now_running} job(s) started meanwhile; k2-node wasn't restarted (ask again: the restart is still owed)")));
             }
             super::update::restart_marked(e, "wall.enable", &cmd_id, |e| e.platform.restart_unit("k2-node")).map_err(|x| refuse(code::FAILED, x))?;
+            let _ = std::fs::remove_file(e.paths.state_dir.join(WALL_RESTART_PENDING_FILE));
             Ok(json!({"restarted": "k2-node"}))
         })?;
-        if r.get("phase").and_then(Value::as_str) != Some("draining") {
-            out["restart_needed"] = Value::Null;
-        }
         out["restart"] = r;
         Ok(out)
     }
 }
+
+/// `<state>/wall-restart-pending`: `wall.enable` changed the wall's files
+/// and k2-node hasn't restarted on them yet. Root-only; cleared by the
+/// restart (or when the node already reports the wall).
+pub const WALL_RESTART_PENDING_FILE: &str = "wall-restart-pending";
 
 /// `<state>/job-wall-off`: the machine owner ran `setup --no-job-wall`.
 /// Root-only (the admin state dir), so neither the owner's group nor its

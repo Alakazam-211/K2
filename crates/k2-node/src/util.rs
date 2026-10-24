@@ -230,18 +230,42 @@ pub fn base_path(home: &Path) -> String {
     ))
 }
 
-/// Read a config file that someone other than root may write (the
-/// owner's `control.toml`): `O_NONBLOCK`, so a FIFO planted in its place
-/// never wedges the reader, and only a regular file is read (A-N1).
+/// The largest config file [`read_regular`] reads.
+pub const READ_REGULAR_MAX: u64 = 64 * 1024;
+
+/// Read a small file that someone other than root may write (the owner's
+/// `control.toml`, `servers.toml`): [`read_regular_max`] at 64 KiB.
 pub fn read_regular(p: &Path) -> std::io::Result<String> {
+    read_regular_max(p, READ_REGULAR_MAX)
+}
+
+/// Read a file root may be asked to read on someone else's behalf, safely:
+/// `O_NOFOLLOW` (a symlink to a secret is refused, never followed),
+/// `O_NONBLOCK` (a FIFO in its place never wedges the reader, A-N1),
+/// `O_CLOEXEC`; a regular file per `fstat` on the opened fd; at most `max`
+/// bytes. Errors name the path and the reason only, never content.
+pub fn read_regular_max(p: &Path, max: u64) -> std::io::Result<String> {
     use std::io::Read;
     use std::os::unix::fs::OpenOptionsExt;
-    let mut f = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC).open(p)?;
-    if !f.metadata()?.is_file() {
+    let f = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC).open(p).map_err(|e| {
+        if e.raw_os_error() == Some(libc::ELOOP) {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{} is a symlink; not read", p.display()))
+        } else {
+            e
+        }
+    })?;
+    let m = f.metadata()?;
+    if !m.is_file() {
         return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{} is not a regular file", p.display())));
     }
+    if m.len() > max {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{} is larger than {max} bytes; not read", p.display())));
+    }
     let mut s = String::new();
-    f.read_to_string(&mut s)?;
+    f.take(max + 1).read_to_string(&mut s)?;
+    if s.len() as u64 > max {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{} is larger than {max} bytes; not read", p.display())));
+    }
     Ok(s)
 }
 

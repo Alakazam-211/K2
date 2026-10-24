@@ -127,7 +127,8 @@ impl Rig {
             fail_preflight: Mutex::new(false),
             walls: Mutex::new(vec![]),
         });
-        let exec = Executor::new(paths, plat.clone());
+        let mut exec = Executor::new(paths, plat.clone());
+        exec.drain_settle = std::time::Duration::from_millis(60);
         Self { exec, plat, ctl, owner, node_fp: node_key.fingerprint(), dir }
     }
 

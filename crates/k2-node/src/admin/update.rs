@@ -143,8 +143,11 @@ pub fn mark_healthy(home: &Path, handshake: bool) {
     }
 }
 
+/// The gate's check. The node writes the mark; root reads it FIFO-safe
+/// and fails closed: anything but a small regular file is "not healthy",
+/// so the gate times out into a rollback instead of hanging (round 4, 3).
 fn mark_ok(e: &Executor, to: &str, since: i64) -> bool {
-    let Some(m) = std::fs::read(healthy_path(&e.paths.home)).ok().and_then(|b| serde_json::from_slice::<HealthyMark>(&b).ok()) else {
+    let Some(m) = crate::util::read_regular(&healthy_path(&e.paths.home)).ok().and_then(|b| serde_json::from_str::<HealthyMark>(&b).ok()) else {
         return false;
     };
     m.version == to && m.at >= since && m.handshake
@@ -462,10 +465,21 @@ pub fn shared_node(e: &Executor) -> bool {
 /// (security review A-H1 / B-M1).
 pub fn running_jobs(e: &Executor) -> usize {
     let mut units = 0;
-    if cfg!(target_os = "linux") && matches!(super::jobs::read_jobs_file(&e.paths.config_dir), Ok(Some(_))) {
+    // Root counts its units unless jobs.toml is certainly absent: a read
+    // error never zeroes the count (round 4, item 5).
+    if cfg!(target_os = "linux") && !matches!(super::jobs::read_jobs_file(&e.paths.config_dir), Ok(None)) {
         units = e.platform.running_job_units().unwrap_or(0);
     }
-    let reported = crate::status::read(&e.paths.layout().status()).map(|s| s.running.len()).unwrap_or(0);
+    // No status file: the node isn't running anything it reported. Any
+    // other failure (a FIFO, a symlink, garbage) fails closed: busy.
+    let status = e.paths.layout().status();
+    let reported = match std::fs::symlink_metadata(&status) {
+        Err(x) if x.kind() == std::io::ErrorKind::NotFound => 0,
+        _ => crate::status::read(&status).map(|s| s.running.len()).unwrap_or_else(|x| {
+            crate::nlog!("admin: {x}; counting the node as busy");
+            1
+        }),
+    };
     units.max(reported)
 }
 
@@ -624,27 +638,86 @@ pub fn mark_owner(config_dir: &Path) -> u32 {
     }
 }
 
-/// Read the mark only when [`mark_owner`] wrote it: in a directory only
-/// it can write, no symlink, a regular file with one link, owned by that
-/// uid, writable by nobody else. `O_NONBLOCK`: a FIFO never wedges the
-/// reader (the node at an owner's stop, the executor under its lock; A-N1).
-pub fn read_update_mark(config_dir: &Path) -> Option<UpdateMark> {
+/// Open `name` inside `dir` the safe way, as `owner` wrote it: the
+/// directory once (`O_DIRECTORY|O_NOFOLLOW`; with `check_dir`, `fstat`
+/// must show `owner` and no group/other write), then the file with
+/// `openat` (`O_NOFOLLOW|O_NONBLOCK`): a regular file with one link, owned
+/// by `owner`, writable by nobody else, at most 64 KiB. Nothing between the
+/// check and the read can swap the directory (macOS `/var/run` is group
+/// `daemon`-writable; review round 4, item 9).
+fn read_owned_in(dir: &Path, name: &str, owner: u32, check_dir: bool) -> Option<Vec<u8>> {
     use std::io::Read;
-    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
-    if !mark_dir_trusted(config_dir) {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    let dc = std::ffi::CString::new(dir.as_os_str().as_encoded_bytes()).ok()?;
+    let nc = std::ffi::CString::new(name).ok()?;
+    // SAFETY: valid C path; the fd is owned right below.
+    let dfd = unsafe { libc::open(dc.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC) };
+    if dfd < 0 {
         return None;
     }
-    let p = update_mark_path(config_dir);
-    let mut f = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC).open(&p).ok()?;
+    // SAFETY: a fresh fd we own.
+    let dfd = unsafe { OwnedFd::from_raw_fd(dfd) };
+    // SAFETY: zeroed out-struct; fstat on our fd.
+    let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstat(dfd.as_raw_fd(), &mut st) } != 0 {
+        return None;
+    }
+    if check_dir && (st.st_uid != owner || (st.st_mode as u32) & 0o022 != 0) {
+        crate::nlog!("ignoring {}: not a directory only uid {owner} writes", dir.display());
+        return None;
+    }
+    // SAFETY: openat relative to the directory fd we checked.
+    let fd = unsafe { libc::openat(dfd.as_raw_fd(), nc.as_ptr(), libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC) };
+    if fd < 0 {
+        return None;
+    }
+    // SAFETY: a fresh fd we own.
+    let f = unsafe { std::fs::File::from_raw_fd(fd) };
     let m = f.metadata().ok()?;
-    let owner = mark_owner(config_dir);
-    if !m.file_type().is_file() || m.nlink() != 1 || m.uid() != owner || m.mode() & 0o022 != 0 {
-        crate::nlog!("ignoring {}: not root's own file (uid {}, mode {:o}, links {})", p.display(), m.uid(), m.mode() & 0o7777, m.nlink());
+    use std::os::unix::fs::MetadataExt;
+    if !m.file_type().is_file() || m.nlink() != 1 || m.uid() != owner || m.mode() & 0o022 != 0 || m.len() > crate::util::READ_REGULAR_MAX {
+        crate::nlog!("ignoring {}/{name}: not uid {owner}'s own small regular file", dir.display());
         return None;
     }
     let mut b = Vec::new();
-    f.read_to_end(&mut b).ok()?;
-    serde_json::from_slice::<UpdateMark>(&b).ok()
+    f.take(crate::util::READ_REGULAR_MAX).read_to_end(&mut b).ok()?;
+    Some(b)
+}
+
+/// Read the mark only when [`mark_owner`] wrote it, in a directory only it
+/// can write ([`read_owned_in`]). `O_NONBLOCK`: a FIFO never wedges the
+/// reader (the node at an owner's stop, the executor under its lock; A-N1).
+///
+/// TODO(0.46.5): drop the legacy fallback. During the 0.46.3 → 0.46.4
+/// rollout only, a root-owned v1 mark in the config dir (where 0.46.3's
+/// executor wrote it) still counts, so jobs a 0.46.3 executor's restart
+/// stopped close `node_update`, not `node_shutdown` (round 4, item 7).
+pub fn read_update_mark(config_dir: &Path) -> Option<UpdateMark> {
+    let owner = mark_owner(config_dir);
+    if let Some(b) = read_owned_in(&mark_dir(config_dir), UPDATE_MARK_FILE, owner, true) {
+        return serde_json::from_slice::<UpdateMark>(&b).ok();
+    }
+    let b = read_owned_in(config_dir, UPDATE_MARK_FILE, owner, false)?;
+    serde_json::from_slice::<UpdateMark>(&b).ok().filter(|m| m.v < MARK_V)
+}
+
+/// On executor start: remove a mark left in the config dir by 0.46.3
+/// (`unlinkat` on the directory fd; never follows a link). TODO(0.46.5): drop.
+pub fn remove_legacy_mark(config_dir: &Path) {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    let (Ok(dc), Ok(nc)) = (std::ffi::CString::new(config_dir.as_os_str().as_encoded_bytes()), std::ffi::CString::new(UPDATE_MARK_FILE)) else { return };
+    // SAFETY: valid C path; the fd is owned right below.
+    let dfd = unsafe { libc::open(dc.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC) };
+    if dfd < 0 {
+        return;
+    }
+    // SAFETY: a fresh fd we own.
+    let dfd = unsafe { OwnedFd::from_raw_fd(dfd) };
+    // SAFETY: unlinkat a plain name in our directory fd (a symlink itself
+    // is removed, never followed).
+    if unsafe { libc::unlinkat(dfd.as_raw_fd(), nc.as_ptr(), 0) } == 0 {
+        crate::nlog!("admin: removed the 0.46.3 restart mark from {}", config_dir.display());
+    }
 }
 
 fn write_update_mark(e: &Executor, m: &UpdateMark) {
@@ -723,6 +796,9 @@ pub fn recent_update_mark(config_dir: &Path, now: i64) -> bool {
     read_update_mark(config_dir).is_some_and(|m| m.fresh(now))
 }
 
+/// See [`Executor::drain_settle`](super::exec::Executor::drain_settle).
+pub const DRAIN_SETTLE_SECS: u64 = 12;
+
 /// How a drain behaves at its limit.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DrainOpts {
@@ -730,6 +806,9 @@ pub struct DrainOpts {
     /// back, never act) instead of acting anyway. `wall.enable` never
     /// kills a job (A-H1 / B-M1); updates and owner restarts still go ahead.
     pub give_up_at_limit: bool,
+    /// Once the count reaches 0, keep control at `draining` for
+    /// `drain_settle` and count again before acting (round 4, item 1).
+    pub settle: bool,
 }
 
 /// `<state>/drain.json`: a drain waiting to act, so an executor that exits
@@ -848,8 +927,19 @@ where
     let resp = json!({"phase": "draining", "what": what, "running": running, "max_secs": e.drain_max.as_secs(), "gives_up_at_limit": opts.give_up_at_limit});
     std::thread::spawn(move || {
         let deadline = std::time::Instant::now() + ex.drain_max;
-        while running_jobs(&ex) > 0 && std::time::Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(if cfg!(test) { 20 } else { 2000 }));
+        loop {
+            while running_jobs(&ex) > 0 && std::time::Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(if cfg!(test) { 20 } else { 2000 }));
+            }
+            if !opts.settle || std::time::Instant::now() >= deadline {
+                break;
+            }
+            // Control has said `draining` all along; give the node one
+            // status write to report a job it accepted just before.
+            std::thread::sleep(ex.drain_settle);
+            if running_jobs(&ex) == 0 {
+                break;
+            }
         }
         let left = running_jobs(&ex);
         let r = {
@@ -1251,7 +1341,8 @@ mod drain_tests {
         let sp = crate::admin::servers::servers_path(&cfg);
         mkfifo(&sp);
         let c2 = cfg.clone();
-        assert!(within_5s("servers.toml", move || crate::admin::servers::read_file(&c2)).is_err());
+        let e = within_5s("servers.toml", move || crate::admin::servers::read_file(&c2)).unwrap_err();
+        assert!(e.contains("not a regular file"), "{e}");
         let cp = r.exec.paths.layout().control();
         let _ = std::fs::remove_file(&cp);
         mkfifo(&cp);
@@ -1275,9 +1366,150 @@ mod drain_tests {
         assert!(read_update_mark(&cfg).is_some());
         std::fs::set_permissions(mark_dir(&cfg), std::fs::Permissions::from_mode(0o775)).unwrap();
         assert!(read_update_mark(&cfg).is_none(), "a group-writable mark dir: ignored");
-        let err = restart_marked(&r.exec, "unit.restart", "c2", |_| Ok(())).map(|_| ());
-        assert!(err.is_ok(), "the restart itself still runs");
-        assert!(read_update_mark(&cfg).is_none(), "and no mark is written into an untrusted dir");
+        let raw_before = std::fs::read(update_mark_path(&cfg)).unwrap();
+        let ran = std::sync::atomic::AtomicBool::new(false);
+        restart_marked(&r.exec, "unit.restart", "c2", |_| {
+            ran.store(true, Ordering::SeqCst);
+            Ok(())
+        })
+        .unwrap();
+        assert!(ran.load(Ordering::SeqCst), "the restart itself still runs");
+        let raw_after = std::fs::read(update_mark_path(&cfg)).unwrap();
+        assert_eq!(raw_before, raw_after, "no mark is written into an untrusted dir");
+        let on_disk: UpdateMark = serde_json::from_slice(&raw_after).unwrap();
+        assert_ne!(on_disk.cmd_id.as_deref(), Some("c2"));
+    }
+
+    /// Round 4 item 7 (TODO(0.46.5): drop with the fallback): a v1 mark a
+    /// 0.46.3 executor left in the config dir still names the stop, only
+    /// when its owner wrote it and only as v1; the executor removes it.
+    #[test]
+    fn a_legacy_mark_counts_during_the_rollout_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let r = Rig::new("full");
+        let cfg = r.exec.paths.config_dir.clone();
+        let legacy = cfg.join(UPDATE_MARK_FILE);
+        let now = r.exec.now();
+        std::fs::write(&legacy, format!(r#"{{"what":"node.update","at":{now}}}"#)).unwrap();
+        std::fs::set_permissions(&legacy, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let m = read_update_mark(&cfg).expect("the 0.46.3 mark counts");
+        assert!(m.v < MARK_V && m.names(4321, None, now));
+        assert!(recent_update_mark(&cfg, now));
+        // A v2 mark there is never trusted (only root's own dir holds those).
+        std::fs::write(&legacy, format!(r#"{{"v":2,"what":"node.update","at":{now},"keep":true,"node_pid":1}}"#)).unwrap();
+        assert!(read_update_mark(&cfg).is_none());
+        // A group-writable one isn't either.
+        std::fs::write(&legacy, format!(r#"{{"what":"node.update","at":{now}}}"#)).unwrap();
+        std::fs::set_permissions(&legacy, std::fs::Permissions::from_mode(0o664)).unwrap();
+        assert!(read_update_mark(&cfg).is_none());
+        // The executor removes it at start.
+        remove_legacy_mark(&cfg);
+        assert!(std::fs::symlink_metadata(&legacy).is_err());
+    }
+
+    /// Round 4 item 2: root's reads of node- or owner-writable files never
+    /// follow a link (a secret's contents never reach an error), are
+    /// capped at 64 KiB, and a parse error never quotes the file.
+    #[test]
+    fn root_reads_refuse_links_and_big_files_and_never_echo_content() {
+        let r = Rig::new("full");
+        let cfg = r.exec.paths.config_dir.clone();
+        let secret = r.dir.join("secret.txt");
+        std::fs::write(&secret, "TOPSECRET-4f1c").unwrap();
+        let cp = r.exec.paths.layout().control();
+        let _ = std::fs::remove_file(&cp);
+        std::os::unix::fs::symlink(&secret, &cp).unwrap();
+        let e = crate::config::read_control(&cp).unwrap_err();
+        assert!(!e.contains("TOPSECRET"), "{e}");
+        let e = crate::util::read_regular(&cp).unwrap_err().to_string();
+        assert!(e.contains("symlink") && !e.contains("TOPSECRET"), "{e}");
+        std::fs::remove_file(&cp).unwrap();
+        // Too big.
+        std::fs::write(&cp, vec![b'#'; (crate::util::READ_REGULAR_MAX + 1) as usize]).unwrap();
+        let e = crate::util::read_regular(&cp).unwrap_err().to_string();
+        assert!(e.contains("larger than"), "{e}");
+        // A parse error names the file, not its content.
+        std::fs::write(&cp, "state = TOPSECRET-4f1c [[[").unwrap();
+        let e = crate::config::read_control(&cp).unwrap_err();
+        assert!(!e.contains("TOPSECRET"), "{e}");
+        std::fs::write(crate::admin::servers::servers_path(&cfg), "x = TOPSECRET-4f1c [[[").unwrap();
+        let e = crate::admin::servers::read_file(&cfg).unwrap_err();
+        assert!(!e.contains("TOPSECRET"), "{e}");
+    }
+
+    /// Round 4 item 3: a FIFO at the node's status file or its healthy
+    /// mark never wedges root: running jobs count as busy, the gate's
+    /// check fails closed (so it times out into a rollback).
+    #[test]
+    fn a_fifo_at_status_or_healthy_fails_closed() {
+        let r = Rig::new("full");
+        let sp = r.exec.paths.layout().status();
+        let _ = std::fs::remove_file(&sp);
+        mkfifo(&sp);
+        let ex = r.exec.bg_handle();
+        assert!(within_5s("running_jobs", move || running_jobs(&ex)) >= 1, "unreadable status = busy");
+        let hp = healthy_path(&r.exec.paths.home);
+        std::fs::create_dir_all(hp.parent().unwrap()).unwrap();
+        let _ = std::fs::remove_file(&hp);
+        mkfifo(&hp);
+        let ex = r.exec.bg_handle();
+        assert!(!within_5s("mark_ok", move || mark_ok(&ex, "99.0.0", 0)), "not healthy");
+        // No status file at all: nothing running.
+        std::fs::remove_file(&sp).unwrap();
+        assert_eq!(running_jobs(&r.exec), 0);
+    }
+
+    /// Round 4 item 1: a job the node takes between the count and the
+    /// restart (here: while the drain settles, nothing running before) is
+    /// never stopped; the restart comes once it ended.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_job_starting_during_the_settle_is_never_killed() {
+        let mut r = Rig::new("policy");
+        r.exec.drain_settle = Duration::from_millis(400);
+        let res = r.run(&r.sign(&r.cmd("wall.enable", json!({"restart": true}))));
+        assert_eq!(res.result["restart"]["phase"], "draining", "always through the drain, even with nothing running: {res:?}");
+        std::thread::sleep(Duration::from_millis(100));
+        running(&r, &["late-job"]);
+        std::thread::sleep(Duration::from_millis(900));
+        assert!(calls(&r).is_empty(), "the late job is never stopped");
+        assert_eq!(control(&r), Control::Draining, "and nothing new starts meanwhile");
+        running(&r, &[]);
+        wait("the restart", || calls(&r) == vec!["restart-unit k2-node".to_string()]);
+        wait("control back", || control(&r) == Control::Active);
+        assert!(!r.exec.paths.state_dir.join(crate::admin::jobs::WALL_RESTART_PENDING_FILE).exists(), "the restart clears the owed flag");
+    }
+
+    /// Round 4 item 1: a wall.enable that couldn't restart (here: it gave
+    /// up at the drain limit) leaves the restart owed, across an executor
+    /// restart; asking again finishes it even though the files are in place.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn asking_again_finishes_an_owed_wall_restart() {
+        let mut r = Rig::new("policy");
+        r.exec.drain_max = Duration::from_millis(300);
+        running(&r, &["stuck"]);
+        let res = r.run(&r.sign(&r.cmd("wall.enable", json!({"restart": true}))));
+        assert_eq!(res.result["changed"], true, "{res:?}");
+        wait("the give-up", || !r.exec.draining.load(Ordering::SeqCst));
+        assert!(calls(&r).is_empty());
+        let pending = r.exec.paths.state_dir.join(crate::admin::jobs::WALL_RESTART_PENDING_FILE);
+        assert!(pending.exists(), "the restart is still owed");
+        // A new executor over the same files (it re-exec'd meanwhile).
+        let mut next = Executor::new(r.exec.paths.clone(), r.plat.clone());
+        next.drain_settle = Duration::from_millis(60);
+        running(&r, &[]);
+        let again = next.handle_command(&r.sign(&r.cmd("wall.enable", json!({"restart": true}))));
+        assert_eq!(again.state, "done", "{again:?}");
+        assert_eq!((again.result["changed"].as_bool(), again.result["restart_pending"].as_bool()), (Some(false), Some(true)), "{again:?}");
+        assert_eq!(again.result["restart"]["phase"], "draining", "{again:?}");
+        wait("the restart", || calls(&r) == vec!["restart-unit k2-node".to_string()]);
+        wait("owed flag cleared", || !pending.exists());
+        // Nothing owed any more: a third call restarts nothing.
+        let third = next.handle_command(&r.sign(&r.cmd("wall.enable", json!({"restart": true}))));
+        assert!(third.result.get("restart").is_none(), "{third:?}");
+        std::thread::sleep(Duration::from_millis(150));
+        assert_eq!(calls(&r).len(), 1);
     }
 
     /// B-R2: a drain thread that gets the lock as the executor re-execs
@@ -1349,7 +1581,7 @@ mod drain_tests {
         running(&r, &["stuck"]);
         let d = decide(&r.exec, false, true);
         assert_eq!(d, (Decision::Drain, 1));
-        let res = run_decided(&r.exec, d, DrainOpts { give_up_at_limit: true }, "wall.enable", "c1", |e| {
+        let res = run_decided(&r.exec, d, DrainOpts { give_up_at_limit: true, settle: false }, "wall.enable", "c1", |e| {
             restart_marked(e, "wall.enable", "c1", |e| e.platform.restart_unit("k2-node")).map_err(fail)?;
             Ok(json!({"restarted": "k2-node"}))
         })

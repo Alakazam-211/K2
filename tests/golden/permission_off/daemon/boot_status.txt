@@ -47,4 +47,5 @@ features:
   thread-stream-v1
   thread-activity-ear-v1
   thread-context-v1
+  app-resources-v1
   boot-status-views-v1

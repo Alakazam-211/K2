@@ -325,14 +325,16 @@ fn agent_socket_records_are_macd() {
     assert_eq!(v.agent_socket_get("s2").expect("get"), None, "a tampered record is never used");
     assert_eq!(v.agent_sockets().expect("all"), vec![rec("s1")]);
     // The ptyd binding: once, after the spawn; a fresh put is unbound.
-    assert!(v.agent_socket_bind("s1", "boot-a", 100, 1_700_000_000).expect("bind"));
+    assert!(v.agent_socket_bind("s1", "boot-a", 100, 1_700_000_000, 55_555).expect("bind"));
     let b = v.agent_socket_get("s1").expect("get").expect("rec");
-    assert_eq!((b.ptyd_boot.as_str(), b.pid, b.started_at), ("boot-a", 100, 1_700_000_000));
-    assert!(!v.agent_socket_bind("s1", "boot-a", 101, 1_700_000_000).expect("again"), "bound once");
+    assert_eq!((b.ptyd_boot.as_str(), b.pid, b.started_at, b.proc_start), ("boot-a", 100, 1_700_000_000, 55_555));
+    assert!(!v.agent_socket_bind("s1", "boot-a", 101, 1_700_000_000, 55_555).expect("again"), "bound once");
+    assert!(v.agent_socket_bind("s1", "boot-a", 100, 1_700_000_000, 55_555).expect("same"), "the same binding is a no-op");
+    assert_eq!(v.agent_socket_bind("s3", "boot-a", 1, 1, 0).expect_err("no start key").code, "bad_agent_socket");
     assert_eq!(v.agent_socket_get("s1").expect("get").expect("rec").pid, 100);
-    assert!(!v.agent_socket_bind("nope", "boot-a", 1, 1).expect("no record"));
-    assert_eq!(v.agent_socket_bind("s1", "", 1, 1).expect_err("empty boot").code, "bad_agent_socket");
-    v.agent_socket_put(&k2_vault::vault::AgentSocket { ptyd_boot: "forged".into(), pid: 9, started_at: 9, ..rec("s1") }).expect("put");
+    assert!(!v.agent_socket_bind("nope", "boot-a", 1, 1, 1).expect("no record"));
+    assert_eq!(v.agent_socket_bind("s1", "", 1, 1, 1).expect_err("empty boot").code, "bad_agent_socket");
+    v.agent_socket_put(&k2_vault::vault::AgentSocket { ptyd_boot: "forged".into(), pid: 9, started_at: 9, proc_start: 9, ..rec("s1") }).expect("put");
     assert!(v.agent_socket_get("s1").expect("get").expect("rec").ptyd_boot.is_empty(), "a put never carries a binding");
     v.agent_socket_remove("s1").expect("rm");
     assert!(v.agent_sockets().expect("all").is_empty());
@@ -619,4 +621,94 @@ fn editing_an_audit_entry_in_place_cannot_revive_an_older_policy() {
     let p = v.agent_policy(&k.id).expect("policy");
     assert!(!p.allow_forwarded, "the looser row must not come back");
     assert_eq!((p.burst, p.per_minute), (1, 1), "strictest while the audit chain is broken");
+}
+
+/// The sign path's audit check is incremental: an old row edited in place
+/// (behind the last verified mark) is caught by the full walk at the next
+/// minute tick or open, not on every signature.
+#[test]
+fn an_old_audit_row_edited_in_place_is_caught_at_the_tick_and_at_open() {
+    let t = TestDir::new("agent-audit-old-row");
+    let ks = Arc::new(FakeKeyStore::new());
+    let v = open(&t, &ks);
+    let k = put_key(&v, "ws1", "KEY", &testkeys::ed25519(), Delivery::Agent, &Actor::Owner);
+    v.set_agent_policy(&Selector::Id(k.id.clone()), AgentPolicyPatch { allow_forwarded: Some(true), ..Default::default() }, &Actor::Owner)
+        .expect("allow");
+    assert!(v.agent_policy(&k.id).expect("policy").allow_forwarded, "set and verified");
+    let db = t.path().join("vault/vault.db");
+    let c = rusqlite::Connection::open(&db).expect("db");
+    assert_eq!(c.execute("UPDATE audit SET actor = 'someone-else' WHERE seq = 1", []).expect("edit"), 1);
+    drop(c);
+    // Behind the mark: the sign path doesn't re-walk it.
+    assert!(v.agent_policy(&k.id).expect("policy").allow_forwarded, "an old row is the tick's job");
+    v.tick().expect("tick");
+    let p = v.agent_policy(&k.id).expect("policy");
+    assert!(!p.allow_forwarded, "the tick's full walk caught the edit");
+    assert_eq!((p.burst, p.per_minute), (1, 1), "strictest after the tick");
+    drop(v);
+    let v = open(&t, &ks);
+    let p = v.agent_policy(&k.id).expect("policy");
+    assert!(!p.allow_forwarded && (p.burst, p.per_minute) == (1, 1), "the open-time walk catches it too");
+}
+
+/// A row in the tail (written since the last verified mark) edited in place
+/// is caught on the sign path itself; so is the marked row.
+#[test]
+fn a_tail_audit_row_edited_in_place_is_caught_on_the_sign_path() {
+    let t = TestDir::new("agent-audit-tail-row");
+    let ks = Arc::new(FakeKeyStore::new());
+    let v = open(&t, &ks);
+    let k = put_key(&v, "ws1", "KEY", &testkeys::ed25519(), Delivery::Agent, &Actor::Owner);
+    v.set_agent_policy(&Selector::Id(k.id.clone()), AgentPolicyPatch { allow_forwarded: Some(true), ..Default::default() }, &Actor::Owner)
+        .expect("allow");
+    assert!(v.agent_policy(&k.id).expect("policy").allow_forwarded, "mark set here");
+    // New rows after the mark, then the newest one edited.
+    put_key(&v, "ws1", "OTHER", &testkeys::ed25519(), Delivery::Agent, &Actor::Owner);
+    let db = t.path().join("vault/vault.db");
+    let c = rusqlite::Connection::open(&db).expect("db");
+    assert_eq!(c.execute("UPDATE audit SET actor = 'someone-else' WHERE seq = (SELECT MAX(seq) FROM audit)", []).expect("edit"), 1);
+    drop(c);
+    let p = v.agent_policy(&k.id).expect("policy");
+    assert!(!p.allow_forwarded, "the tail walk caught the edit");
+    assert_eq!((p.burst, p.per_minute), (1, 1), "strictest");
+
+    // The marked row itself edited (header unchanged) is caught too.
+    let t2 = TestDir::new("agent-audit-marked-row");
+    let v2 = open(&t2, &ks);
+    let k2 = put_key(&v2, "ws1", "KEY", &testkeys::ed25519(), Delivery::Agent, &Actor::Owner);
+    v2.set_agent_policy(&Selector::Id(k2.id.clone()), AgentPolicyPatch { allow_forwarded: Some(true), ..Default::default() }, &Actor::Owner)
+        .expect("allow");
+    assert!(v2.agent_policy(&k2.id).expect("policy").allow_forwarded);
+    let c = rusqlite::Connection::open(t2.path().join("vault/vault.db")).expect("db");
+    assert_eq!(c.execute("UPDATE audit SET actor = 'someone-else' WHERE seq = (SELECT MAX(seq) FROM audit)", []).expect("edit"), 1);
+    drop(c);
+    assert!(!v2.agent_policy(&k2.id).expect("policy").allow_forwarded, "the marked row is re-checked when the file changes");
+}
+
+/// After 10k audit rows, each policy check and signature verifies only the
+/// rows written since the last check (counted, not timed).
+#[test]
+fn signing_stays_cheap_after_ten_thousand_audit_rows() {
+    let t = TestDir::new("agent-audit-10k");
+    let ks = Arc::new(FakeKeyStore::new());
+    let v = open(&t, &ks);
+    let k = put_key(&v, "ws1", "KEY", &testkeys::ed25519(), Delivery::Agent, &Actor::Owner);
+    let pairs: Vec<(String, u32)> = (0..10_000).map(|i| (format!("carried-{i}"), 1)).collect();
+    v.audit_carry("carry", &Actor::Owner, "peer.example", &pairs);
+    drop(v);
+    let v = open(&t, &ks);
+    let at_open = v.audit_rows_verified_for_tests();
+    assert!(at_open >= 10_000, "the open-time walk covers every row: {at_open}");
+    let who = session("ws1", "s1");
+    let id = v.agent_identities(&who).expect("ids").into_iter().find(|i| i.secret_id == k.id).expect("identity");
+    let loose = v.agent_policy(&k.id).expect("policy");
+    for round in 0..5 {
+        put_key(&v, "ws1", &format!("MORE_{round}"), &testkeys::ed25519(), Delivery::Agent, &Actor::Owner);
+        let p = v.agent_policy(&k.id).expect("policy");
+        assert_eq!((p.burst, p.per_minute), (loose.burst, loose.per_minute), "the log stays whole");
+        v.agent_sign(&k.id, &who, &id.public_blob, b"challenge", 0, None).expect("sign");
+    }
+    assert!((loose.burst, loose.per_minute) != (1, 1), "defaults, not the strictest fallback");
+    let on_sign_path = v.audit_rows_verified_for_tests() - at_open;
+    assert!(on_sign_path < 100, "the sign path re-walked old rows: {on_sign_path} rows verified");
 }

@@ -642,9 +642,10 @@ mod tests {
         assert!(v.agent_socket_get(&live).expect("rec").is_some(), "the daemon recorded the socket");
         // k2-ptyd spawned `live`: its record is bound to that instance and
         // process (a real, live process: the OS is checked too).
-        let (mut child, cpid, cstart) = agent::live_child_for_tests();
-        assert!(v.agent_socket_bind(&live, "boot-1", cpid, cstart).expect("bind"));
-        assert!(!v.agent_socket_bind(&live, "boot-1", cpid + 1, cstart).expect("rebind"), "bound once, for the session's life");
+        let (mut child, cpid, cstart, ckey) = agent::live_child_for_tests();
+        assert!(v.agent_socket_bind(&live, "boot-1", cpid, cstart, ckey).expect("bind"));
+        assert!(!v.agent_socket_bind(&live, "boot-1", cpid + 1, cstart, ckey).expect("rebind"), "bound once, for the session's life");
+        assert!(!v.agent_socket_bind(&live, "boot-1", cpid, cstart, ckey + 1).expect("rebind"), "bound once, to one start key");
         let proc = agent::Adopted { boot_id: "boot-1", pid: cpid, started_at: cstart };
         // Planted FIFOs (a reader-less FIFO blocks a plain open for write).
         mkfifo(&dead_dir.join("a.sock.path"));
@@ -694,6 +695,7 @@ mod tests {
             ptyd_boot: "boot-1".into(),
             pid: 5151,
             started_at: 1_700_000_001,
+            proc_start: 4242,
         })
         .expect("forged record");
         let xp = agent::Adopted { boot_id: "boot-1", pid: 5151, started_at: 1_700_000_001 };
@@ -725,12 +727,17 @@ mod tests {
         let e = agent::resume_adopted(&v, &live, forged, Some(&ws), Some(&live_dir), Some(&live_dir)).expect_err("replayed record");
         assert_eq!(e, ResumeRefused::ProcessMismatch);
         // A record never bound to ptyd is never re-served.
-        v.agent_socket_put_unchecked_for_tests(&k2_vault::vault::AgentSocket { ptyd_boot: String::new(), pid: 0, started_at: 0, ..saved.clone() })
+        v.agent_socket_put_unchecked_for_tests(&k2_vault::vault::AgentSocket { ptyd_boot: String::new(), pid: 0, started_at: 0, proc_start: 0, ..saved.clone() })
             .expect("unbound record");
         let e = agent::resume_adopted(&v, &live, proc, Some(&ws), Some(&live_dir), Some(&live_dir)).expect_err("not ptyd");
         assert_eq!(e, ResumeRefused::NotPtyd);
+        // Bound to ptyd but without a kernel start key (a record from a
+        // build before the key): never re-served.
+        v.agent_socket_put_unchecked_for_tests(&k2_vault::vault::AgentSocket { proc_start: 0, ..saved.clone() }).expect("keyless record");
+        let e = agent::resume_adopted(&v, &live, proc, Some(&ws), Some(&live_dir), Some(&live_dir)).expect_err("no key");
+        assert_eq!(e, ResumeRefused::NotPtyd);
         // A fake ptyd repeating a replayed record's values: the OS says the
-        // pid is dead, or started at another time.
+        // pid is dead, or isn't the process bound at spawn.
         let mut dead = std::process::Command::new("true").spawn().expect("spawn true");
         let dead_pid = i64::from(dead.id());
         dead.wait().expect("reap");
@@ -739,11 +746,31 @@ mod tests {
         let fake = agent::Adopted { boot_id: "boot-1", pid: dead_pid, started_at: cstart };
         let e = agent::resume_adopted(&v, &live, fake, Some(&ws), Some(&live_dir), Some(&live_dir)).expect_err("dead pid");
         assert_eq!(e, ResumeRefused::ProcessGone);
-        v.agent_socket_put_unchecked_for_tests(&k2_vault::vault::AgentSocket { started_at: cstart - 100, ..saved.clone() })
-            .expect("wrong-start record");
-        let fake = agent::Adopted { boot_id: "boot-1", pid: cpid, started_at: cstart - 100 };
-        let e = agent::resume_adopted(&v, &live, fake, Some(&ws), Some(&live_dir), Some(&live_dir)).expect_err("wrong start time");
+        // The live pid with another start key (a reused pid).
+        v.agent_socket_put_unchecked_for_tests(&k2_vault::vault::AgentSocket { proc_start: ckey + 1, ..saved.clone() })
+            .expect("wrong-key record");
+        let e = agent::resume_adopted(&v, &live, proc, Some(&ws), Some(&live_dir), Some(&live_dir)).expect_err("wrong start key");
         assert_eq!(e, ResumeRefused::ProcessGone);
+        // A wall-clock step between spawn and adoption: ptyd's recorded
+        // start time no longer lines up with the wall clock, the kernel's
+        // tick count is the same. Linux re-serves (exact ticks, no wall
+        // time); macOS keeps its start-time check (its start timeval is
+        // stored at fork, so a step doesn't move it either).
+        let stepped = agent::Adopted { boot_id: "boot-1", pid: cpid, started_at: cstart - 100 };
+        v.agent_socket_put_unchecked_for_tests(&k2_vault::vault::AgentSocket { started_at: cstart - 100, ..saved.clone() })
+            .expect("stepped record");
+        // (The session's dir again: it went at the session's end above.)
+        std::os::unix::fs::DirBuilderExt::mode(&mut std::fs::DirBuilder::new(), 0o700).create(&live_dir).expect("dir again");
+        let r = agent::resume_adopted(&v, &live, stepped, Some(&ws), Some(&live_dir), Some(&live_dir));
+        #[cfg(target_os = "linux")]
+        {
+            assert_eq!(r.expect("a clock step still matches on Linux"), live_sock);
+            assert_eq!(list_ids(&live_sock), vec!["BOOT_KEY".to_string()], "re-served");
+            agent::stop_dir(&live_dir);
+        }
+        #[cfg(target_os = "macos")]
+        assert_eq!(r.expect_err("macOS compares ptyd's time with the kernel's"), ResumeRefused::ProcessGone);
+        std::fs::remove_dir_all(&live_dir).expect("rm dir");
         v.agent_socket_remove(&live).expect("cleanup");
         let _ = child.kill();
         let _ = child.wait();

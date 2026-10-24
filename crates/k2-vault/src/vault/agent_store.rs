@@ -42,19 +42,25 @@ pub const DEFAULT_PER_MINUTE: u32 = 240;
 pub const BURST_MAX: u32 = 600;
 pub const PER_MINUTE_MAX: u32 = 6000;
 
-/// Walk the whole audit chain: contiguous from 1, each row's MAC good and
-/// linked to the previous row's, ending at the header's seq and MAC.
-fn audit_chain_matches(conn: &Connection, keys: &Keys, h: &Header) -> rusqlite::Result<bool> {
+/// Walk audit rows with `seq >= from` in order: contiguous from `from`,
+/// each row's MAC good. With `prev` (the MAC row `from - 1` must link to),
+/// each row's `prev_mac` must chain; `None` checks `from`'s own MAC only
+/// against its stored `prev_mac`. Returns (rows walked, last seq, last
+/// MAC), or `None` on any break.
+fn walk_audit(conn: &Connection, keys: &Keys, from: i64, prev: Option<Vec<u8>>) -> rusqlite::Result<Option<(u64, i64, Vec<u8>)>> {
     let mut st = conn.prepare(
-        "SELECT seq, ts, secret_id, version, action, actor, consumer, target_host, outcome, count, prev_mac, row_mac FROM audit ORDER BY seq",
+        "SELECT seq, ts, secret_id, version, action, actor, consumer, target_host, outcome, count, prev_mac, row_mac
+         FROM audit WHERE seq >= ?1 ORDER BY seq",
     )?;
-    let mut rows = st.query([])?;
-    let mut prev = vec![0u8; 32];
-    let mut expect: i64 = 1;
+    let mut rows = st.query(params![from])?;
+    let mut prev = prev;
+    let mut expect = from;
+    let mut walked = 0u64;
+    let mut last = (from - 1, Vec::new());
     while let Some(r) = rows.next()? {
         let seq: i64 = r.get(0)?;
         if seq != expect {
-            return Ok(false);
+            return Ok(None);
         }
         let e = Entry {
             secret_id: r.get(2)?,
@@ -69,13 +75,15 @@ fn audit_chain_matches(conn: &Connection, keys: &Keys, h: &Header) -> rusqlite::
         let t: String = r.get(1)?;
         let p: Vec<u8> = r.get(10)?;
         let m: Vec<u8> = r.get(11)?;
-        if p != prev || audit::row_mac(&keys.audit, seq as u64, &t, &e, &p).as_slice() != m.as_slice() {
-            return Ok(false);
+        if prev.as_ref().is_some_and(|x| x != &p) || audit::row_mac(&keys.audit, seq as u64, &t, &e, &p).as_slice() != m.as_slice() {
+            return Ok(None);
         }
-        prev = m;
+        walked += 1;
+        prev = Some(m.clone());
+        last = (seq, m);
         expect += 1;
     }
-    Ok(expect - 1 == h.audit_seq as i64 && (h.audit_seq == 0 || prev == h.audit_mac))
+    Ok(Some((walked, last.0, last.1)))
 }
 
 /// The settings a secret falls back to when its row can't be trusted.
@@ -138,6 +146,11 @@ pub struct AgentSocket {
     pub ptyd_boot: String,
     pub pid: i64,
     pub started_at: i64,
+    /// The kernel's exact start key for `pid`, read by the daemon when
+    /// ptyd spawned it (Linux: `/proc/<pid>/stat` starttime ticks since
+    /// boot, which a wall-clock step doesn't move; macOS: the start
+    /// timeval in microseconds). 0: not bound.
+    pub proc_start: i64,
 }
 
 /// What would break if this vault were opened by 0.46.3 (`k2 vault
@@ -215,7 +228,8 @@ fn socket_mac_input(s: &AgentSocket) -> Vec<u8> {
         .str(&s.created_at)
         .str(&s.ptyd_boot)
         .i64(s.pid)
-        .i64(s.started_at);
+        .i64(s.started_at)
+        .i64(s.proc_start);
     e.finish().to_vec()
 }
 
@@ -232,12 +246,13 @@ fn read_socket(r: &Row<'_>) -> rusqlite::Result<(AgentSocket, Vec<u8>)> {
             ptyd_boot: r.get("ptyd_boot")?,
             pid: r.get("pid")?,
             started_at: r.get("started_at")?,
+            proc_start: r.get("proc_start")?,
         },
         r.get("row_mac")?,
     ))
 }
 
-fn socket_params(s: &AgentSocket, mac: &[u8]) -> [Box<dyn rusqlite::ToSql>; 11] {
+fn socket_params(s: &AgentSocket, mac: &[u8]) -> [Box<dyn rusqlite::ToSql>; 12] {
     [
         Box::new(s.tag.clone()),
         Box::new(s.kind.clone()),
@@ -249,13 +264,14 @@ fn socket_params(s: &AgentSocket, mac: &[u8]) -> [Box<dyn rusqlite::ToSql>; 11] 
         Box::new(s.ptyd_boot.clone()),
         Box::new(s.pid),
         Box::new(s.started_at),
+        Box::new(s.proc_start),
         Box::new(mac.to_vec()),
     ]
 }
 
 const SOCKET_UPSERT: &str = "INSERT OR REPLACE INTO agent_socket
-    (tag, kind, workspace_id, secrets_dir, sock_path, short_root, created_at, ptyd_boot, pid, started_at, row_mac)
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
+    (tag, kind, workspace_id, secrets_dir, sock_path, short_root, created_at, ptyd_boot, pid, started_at, proc_start, row_mac)
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
 
 
 /// Parsed public blobs by (secret id, version); `None` = not a key the
@@ -306,26 +322,99 @@ impl LocalVault {
         Ok(Some((seq, e.outcome)))
     }
 
-    /// Is the audit log whole and untouched: rows 1..=header.audit_seq with
-    /// no gap, every row's MAC good and linked to the previous one
-    /// (`prev_mac`), the last row's MAC equal to the MAC'd header's
-    /// `audit_mac`? A row deleted, added or edited in place (its action or
-    /// outcome rewritten) fails it. Cached per (header seq,
-    /// `PRAGMA data_version`): K2's own appends move the header, any other
-    /// write to the file moves the data version.
+    /// Walk the whole audit chain (open and the minute tick, never the sign
+    /// path): rows 1..=header seq, every MAC and `prev_mac` link, ending at
+    /// the MAC'd header's `audit_mac`. Sets the mark; a failure is tamper.
+    pub(super) fn verify_audit_full(&self) {
+        let keys = self.keys.read();
+        let conn = self.conn.lock();
+        let mark = (|| -> Option<AuditMark> {
+            let (h, mac) = load_header(&conn).ok()??;
+            if !hmac_verify(&keys.header, &h.mac_input(), &mac) {
+                return None;
+            }
+            let dv = conn.query_row("PRAGMA data_version", [], |r| r.get::<_, i64>(0)).ok()?;
+            let (walked, last, lmac) = walk_audit(&conn, &keys, 1, Some(vec![0u8; 32])).ok()??;
+            self.audit_rows_verified.fetch_add(walked, std::sync::atomic::Ordering::Relaxed);
+            let ok = last == h.audit_seq as i64 && (h.audit_seq == 0 || lmac == h.audit_mac);
+            ok.then_some(AuditMark::Good { seq: h.audit_seq, mac: lmac, dv })
+        })()
+        .unwrap_or(AuditMark::Bad);
+        if mark == AuditMark::Bad {
+            self.tamper_once("the audit log failed its full check; agent policies fall back to the strictest".into());
+        }
+        *self.audit_mark.lock() = mark;
+    }
+
+    /// Tests: how many audit rows the checks have MAC-verified.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn audit_rows_verified_for_tests(&self) -> u64 {
+        self.audit_rows_verified.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// The sign path's check that the audit log is whole: incremental from
+    /// the last good mark. When the header seq or `PRAGMA data_version`
+    /// moved, it checks the row count/min/max against the MAC'd header,
+    /// that the marked row is unchanged (its MAC), and every row after it
+    /// (MAC and `prev_mac` link) up to the header's seq and `audit_mac`.
+    /// Cost: the new rows only. An old row edited in place is caught by the
+    /// full walk at the next open or minute tick ([`Self::verify_audit_full`]).
     fn audit_log_whole(&self, conn: &Connection, keys: &Keys) -> bool {
         let Ok(Some((h, mac))) = load_header(conn) else { return false };
         if !hmac_verify(&keys.header, &h.mac_input(), &mac) {
             return false;
         }
         let Ok(dv) = conn.query_row("PRAGMA data_version", [], |r| r.get::<_, i64>(0)) else { return false };
-        if let Some((seq, v, ok)) = *self.audit_whole.lock() {
-            if seq == h.audit_seq && v == dv {
-                return ok;
+        let mark = self.audit_mark.lock().clone();
+        let next = match mark {
+            AuditMark::Bad => return false,
+            AuditMark::Good { seq, dv: d0, .. } if seq == h.audit_seq && d0 == dv => return true,
+            AuditMark::Good { seq, mac: mmac, .. } => {
+                let tail = (|| -> Option<AuditMark> {
+                    if h.audit_seq < seq {
+                        return None;
+                    }
+                    let (n, lo, hi): (i64, i64, i64) = conn
+                        .query_row("SELECT COUNT(*), COALESCE(MIN(seq), 1), COALESCE(MAX(seq), 0) FROM audit", [], |r| {
+                            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+                        })
+                        .ok()?;
+                    if lo != 1 || hi != h.audit_seq as i64 || n != hi {
+                        return None;
+                    }
+                    if h.audit_seq == 0 {
+                        return Some(AuditMark::Good { seq: 0, mac: vec![], dv });
+                    }
+                    // The marked row (its own MAC, unchanged) and the tail.
+                    let from = seq.max(1) as i64;
+                    let link = (seq == 0).then(|| vec![0u8; 32]);
+                    let (walked, last, lmac) = walk_audit(conn, keys, from, link).ok()??;
+                    self.audit_rows_verified.fetch_add(walked, std::sync::atomic::Ordering::Relaxed);
+                    let marked_ok = seq == 0 || {
+                        let m: Option<Vec<u8>> =
+                            conn.query_row("SELECT row_mac FROM audit WHERE seq = ?1", params![seq as i64], |r| r.get(0)).ok();
+                        m.as_deref() == Some(mmac.as_slice())
+                    };
+                    (marked_ok && last == h.audit_seq as i64 && lmac == h.audit_mac).then_some(AuditMark::Good { seq: h.audit_seq, mac: lmac, dv })
+                })();
+                tail.unwrap_or(AuditMark::Bad)
             }
-        }
-        let ok = audit_chain_matches(conn, keys, &h).unwrap_or(false);
-        *self.audit_whole.lock() = Some((h.audit_seq, dv, ok));
+            AuditMark::Unknown => {
+                // Only before the open-time walk (never in a daemon).
+                let (walked, last, lmac) = match walk_audit(conn, keys, 1, Some(vec![0u8; 32])) {
+                    Ok(Some(x)) => x,
+                    _ => return false,
+                };
+                self.audit_rows_verified.fetch_add(walked, std::sync::atomic::Ordering::Relaxed);
+                if last == h.audit_seq as i64 && (h.audit_seq == 0 || lmac == h.audit_mac) {
+                    AuditMark::Good { seq: h.audit_seq, mac: lmac, dv }
+                } else {
+                    AuditMark::Bad
+                }
+            }
+        };
+        let ok = next != AuditMark::Bad;
+        *self.audit_mark.lock() = next;
         ok
     }
 
@@ -518,7 +607,7 @@ impl LocalVault {
             return Err(VaultError::bad_request("bad_agent_socket", "agent socket record"));
         }
         // A new socket is never bound yet: the binding comes from ptyd.
-        let s2 = AgentSocket { ptyd_boot: String::new(), pid: 0, started_at: 0, ..s.clone() };
+        let s2 = AgentSocket { ptyd_boot: String::new(), pid: 0, started_at: 0, proc_start: 0, ..s.clone() };
         self.mutate(false, |tx, keys| {
             let mac = hmac(&keys.row, &socket_mac_input(&s2));
             tx.execute(SOCKET_UPSERT, rusqlite::params_from_iter(socket_params(&s2, &mac).iter().map(|b| b.as_ref())))?;
@@ -527,18 +616,19 @@ impl LocalVault {
     }
 
     /// k2-ptyd spawned session `tag`: bind its record (if it has one, and
-    /// it isn't bound yet) to that ptyd instance and process. A restarted
-    /// daemon re-serves the socket only to that same process.
-    pub fn agent_socket_bind(&self, tag: &str, ptyd_boot: &str, pid: i64, started_at: i64) -> Result<bool> {
-        if ptyd_boot.is_empty() || pid <= 0 || started_at <= 0 {
+    /// it isn't bound yet) to that ptyd instance and process (`proc_start`:
+    /// the kernel's start key for `pid`, see [`AgentSocket::proc_start`]).
+    /// A restarted daemon re-serves the socket only to that same process.
+    pub fn agent_socket_bind(&self, tag: &str, ptyd_boot: &str, pid: i64, started_at: i64, proc_start: i64) -> Result<bool> {
+        if ptyd_boot.is_empty() || pid <= 0 || started_at <= 0 || proc_start <= 0 {
             return Err(VaultError::bad_request("bad_agent_socket", "ptyd binding"));
         }
         let Some(rec) = self.agent_socket_get(tag)? else { return Ok(false) };
         if !rec.ptyd_boot.is_empty() {
             // Bound once, for the life of the session.
-            return Ok(rec.ptyd_boot == ptyd_boot && rec.pid == pid && rec.started_at == started_at);
+            return Ok(rec.ptyd_boot == ptyd_boot && rec.pid == pid && rec.started_at == started_at && rec.proc_start == proc_start);
         }
-        let s2 = AgentSocket { ptyd_boot: ptyd_boot.to_string(), pid, started_at, ..rec };
+        let s2 = AgentSocket { ptyd_boot: ptyd_boot.to_string(), pid, started_at, proc_start, ..rec };
         self.mutate(false, |tx, keys| {
             let mac = hmac(&keys.row, &socket_mac_input(&s2));
             tx.execute(SOCKET_UPSERT, rusqlite::params_from_iter(socket_params(&s2, &mac).iter().map(|b| b.as_ref())))?;

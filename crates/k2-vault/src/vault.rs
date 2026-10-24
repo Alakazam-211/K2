@@ -159,6 +159,18 @@ impl Keys {
     }
 }
 
+/// How far the audit chain is known good (item 3, agent-policy freshness).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AuditMark {
+    /// Not walked yet.
+    Unknown,
+    /// Rows 1..=`seq` verified; `mac` is row `seq`'s MAC; `dv` the
+    /// connection's `PRAGMA data_version` then.
+    Good { seq: u64, mac: Vec<u8>, dv: i64 },
+    /// A check failed: stays bad until a full walk passes.
+    Bad,
+}
+
 #[derive(Debug, Clone)]
 struct Header {
     format: String,
@@ -407,10 +419,13 @@ pub struct LocalVault {
     vid: [u8; 16],
     rollback: Mutex<bool>,
     tamper: Mutex<Vec<String>>,
-    /// Item 3: "the audit log is whole" for (header audit seq, the
-    /// connection's `PRAGMA data_version`): recomputed when K2 appends or
-    /// anything else writes the file.
-    audit_whole: Mutex<Option<(u64, i64, bool)>>,
+    /// Item 3: how far the audit chain is known good (see
+    /// `agent_store`): the full chain is walked at open and on the minute
+    /// tick, the sign path walks only the tail since this mark.
+    audit_mark: Mutex<AuditMark>,
+    /// Audit rows whose MAC the agent-policy checks verified (tests show
+    /// the sign path stays incremental).
+    audit_rows_verified: std::sync::atomic::AtomicU64,
     /// Things worth telling the owner that aren't tamper (doctor `info`).
     info: Mutex<Vec<String>>,
     rollups: Mutex<Rollups>,
@@ -532,7 +547,8 @@ impl LocalVault {
             vid,
             rollback: Mutex::new(false),
             tamper: Mutex::new(tamper_notes),
-            audit_whole: Mutex::new(None),
+            audit_mark: Mutex::new(AuditMark::Unknown),
+            audit_rows_verified: std::sync::atomic::AtomicU64::new(0),
             info: Mutex::new(Vec::new()),
             rollups: Mutex::new(Rollups::default()),
             confirm: Broker::default(),
@@ -543,6 +559,8 @@ impl LocalVault {
         };
         v.check_anchor(&header)?;
         v.verify_all();
+        // The full audit chain, once, off the sign path (item 3).
+        v.verify_audit_full();
         Ok(v)
     }
 
@@ -2284,6 +2302,9 @@ impl LocalVault {
         self.write_anchor(&h);
         self.checkpoint();
         *self.redactor.lock() = None;
+        // Every row MAC changed: re-mark the audit chain under the new key
+        // (the sign path's incremental check starts from the marked MAC).
+        self.verify_audit_full();
         Ok(())
     }
 
@@ -2347,6 +2368,10 @@ impl LocalVault {
     /// expired, so the daemon can close their Thread cards.
     pub fn tick(&self) -> Result<Vec<SecretRequest>> {
         self.flush_rollups_if_due();
+        // The full audit chain, first (no early return skips it): an old
+        // row edited in place is caught here; the sign path checks only
+        // the tail.
+        self.verify_audit_full();
         let cutoff = ts(now() - chrono::Duration::days(VERSION_RETENTION_DAYS));
         let req_cutoff = ts(now() - chrono::Duration::days(REQUEST_EXPIRY_DAYS));
         let nowt = ts(now());

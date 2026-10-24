@@ -295,7 +295,8 @@ pub fn start_with(vault: &LocalVault, who: Requester, tag: &str, dir: &Path, dea
 
 /// The k2-ptyd spawn hook: bind session `sid`'s agent socket record (if it
 /// has one) to this ptyd instance and the process ptyd just started, with
-/// the start time ptyd itself records (its session list).
+/// the start time ptyd itself records (its session list) and the kernel's
+/// exact start key for that pid ([`process_start_key`]).
 pub fn on_ptyd_spawned(sid: &str, pid: i32, boot_id: &str) {
     let Ok(v) = super::get() else { return };
     if !v.agent_sockets().is_ok_and(|all| all.iter().any(|r| r.tag == sid && r.kind == "session")) {
@@ -308,13 +309,14 @@ pub fn on_ptyd_spawned(sid: &str, pid: i32, boot_id: &str) {
             .ok()
             .and_then(|o| k2_core::terminal::ptyd::adopt::list(&o).running.into_iter().find(|s| s.sid == sid && s.pid == pid))
             .map(|s| s.started_at as i64);
-        match started {
-            Some(t) => match v.agent_socket_bind(sid, boot_id, i64::from(pid), t) {
+        let key = process_start_key(i64::from(pid));
+        match started.zip(key) {
+            Some((t, k)) => match v.agent_socket_bind(sid, boot_id, i64::from(pid), t, k) {
                 Ok(true) => {}
                 Ok(false) => k2_core::log_debug!("[vault] ssh-agent record for {sid} is bound to another process; left as is"),
                 Err(e) => k2_core::log_debug!("[vault] ssh-agent record for {sid} not bound: {}", e.code),
             },
-            None => k2_core::log_debug!("[vault] ssh-agent record for {sid} not bound: ptyd didn't list the session"),
+            None => k2_core::log_debug!("[vault] ssh-agent record for {sid} not bound: ptyd didn't list the session, or the OS has no start for it"),
         }
     }
 }
@@ -357,21 +359,25 @@ pub enum ResumeRefused {
     DirMismatch,
     /// The recorded socket path isn't one this session may use.
     BadSocketPath,
-    /// The OS says the bound pid isn't alive, or it started at another
-    /// time than recorded (a fake ptyd reporting a replayed record's values).
+    /// The OS says the bound pid isn't alive, or isn't the process the
+    /// record was bound to (its kernel start key differs: a reused pid, a
+    /// fake ptyd reporting a replayed record's values).
     ProcessGone,
     Io(String),
 }
 
-/// How far the kernel's start time may be from the time ptyd recorded at
-/// spawn (ptyd stamps it right after the fork).
+/// macOS: how far the kernel's start time may be from the time ptyd
+/// recorded at spawn (ptyd stamps it right after the fork).
 pub const START_TIME_SLACK_SECS: i64 = 2;
 
-/// The kernel's start time (Unix seconds) of a live process (`None`: not
-/// alive, a zombie, or unknown). Linux: `/proc/<pid>/stat` field 22 (clock
-/// ticks since boot) plus `btime`; macOS: `proc_pidinfo` `pbi_start_tvsec`.
+/// The kernel's exact start key of a live process (`None`: not alive, a
+/// zombie, or unknown), read at spawn and compared exactly at adoption.
+/// Linux: `/proc/<pid>/stat` field 22, the raw starttime in clock ticks
+/// since boot (no `btime` and no wall clock, so a clock step can't move
+/// it). macOS: `proc_pidinfo` start timeval in microseconds (stored at
+/// fork).
 #[cfg(target_os = "linux")]
-pub fn process_start_secs(pid: i64) -> Option<i64> {
+pub fn process_start_key(pid: i64) -> Option<i64> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     let rest = &stat[stat.rfind(')')? + 1..];
     let f: Vec<&str> = rest.split_whitespace().collect();
@@ -379,41 +385,54 @@ pub fn process_start_secs(pid: i64) -> Option<i64> {
     if matches!(*f.first()?, "Z" | "X" | "x") {
         return None;
     }
-    let ticks: u64 = f.get(19)?.parse().ok()?;
-    let btime: i64 = std::fs::read_to_string("/proc/stat")
-        .ok()?
-        .lines()
-        .find_map(|l| l.strip_prefix("btime ").and_then(|v| v.trim().parse().ok()))?;
-    // SAFETY: sysconf has no preconditions.
-    let hz = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
-    if hz <= 0 {
-        return None;
-    }
-    Some(btime + (ticks / hz as u64) as i64)
+    f.get(19)?.parse::<i64>().ok().filter(|t| *t > 0)
 }
 
 #[cfg(target_os = "macos")]
-pub fn process_start_secs(pid: i64) -> Option<i64> {
+fn bsd_info(pid: i64) -> Option<libc::proc_bsdinfo> {
     let pid = libc::c_int::try_from(pid).ok()?;
     // SAFETY: proc_pidinfo writes at most `size` bytes into `info`.
     let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
     let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
     let n = unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, &mut info as *mut _ as *mut libc::c_void, size) };
     // SZOMB = 5: a zombie isn't alive.
-    if n != size || info.pbi_status == 5 {
-        return None;
-    }
-    Some(info.pbi_start_tvsec as i64)
+    (n == size && info.pbi_status != 5).then_some(info)
+}
+
+#[cfg(target_os = "macos")]
+pub fn process_start_key(pid: i64) -> Option<i64> {
+    bsd_info(pid).map(|i| i.pbi_start_tvsec as i64 * 1_000_000 + i.pbi_start_tvusec as i64).filter(|k| *k > 0)
+}
+
+/// macOS: the kernel's start time (Unix seconds) of a live process.
+#[cfg(target_os = "macos")]
+pub fn process_start_secs(pid: i64) -> Option<i64> {
+    bsd_info(pid).map(|i| i.pbi_start_tvsec as i64)
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub fn process_start_secs(_pid: i64) -> Option<i64> {
+pub fn process_start_key(_pid: i64) -> Option<i64> {
     None
 }
 
-/// Is `pid` alive, and did it start within the slack of `started_at`?
-pub fn process_matches(pid: i64, started_at: i64) -> bool {
-    process_start_secs(pid).is_some_and(|t| (t - started_at).abs() <= START_TIME_SLACK_SECS)
+/// Is `pid` alive and the very process the record was bound to: its
+/// kernel start key equals `proc_start` exactly. macOS also keeps the
+/// check that ptyd's `started_at` is the kernel's start time (within the
+/// slack); Linux doesn't compare wall-clock times at all (a clock step
+/// would fail it closed), the tick count is exact.
+pub fn process_matches(pid: i64, started_at: i64, proc_start: i64) -> bool {
+    if process_start_key(pid) != Some(proc_start) {
+        return false;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        process_start_secs(pid).is_some_and(|t| (t - started_at).abs() <= START_TIME_SLACK_SECS)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = started_at;
+        true
+    }
 }
 
 /// What k2-ptyd says about the adopted session: its instance and process.
@@ -439,7 +458,7 @@ pub fn resume_adopted(
 ) -> Result<PathBuf, ResumeRefused> {
     let all = vault.agent_sockets().map_err(|e| ResumeRefused::Io(e.code.to_string()))?;
     let rec = all.iter().find(|r| r.tag == sid && r.kind == "session").cloned().ok_or(ResumeRefused::NoRecord)?;
-    if rec.ptyd_boot.is_empty() || rec.pid <= 0 || rec.started_at <= 0 {
+    if rec.ptyd_boot.is_empty() || rec.pid <= 0 || rec.started_at <= 0 || rec.proc_start <= 0 {
         return Err(ResumeRefused::NotPtyd);
     }
     if rec.ptyd_boot != proc.boot_id || rec.pid != proc.pid || rec.started_at != proc.started_at {
@@ -454,9 +473,9 @@ pub fn resume_adopted(
     }
     let (sock, fallback) = record_socket(&rec, &all, &namespace(vault)).ok_or(ResumeRefused::BadSocketPath)?;
     // What ptyd reported must also be what the OS says: the pid is alive
-    // and started when recorded (a fake ptyd can repeat a replayed
+    // and is the process bound at spawn (a fake ptyd can repeat a replayed
     // record's values, not the kernel's).
-    if !process_matches(rec.pid, rec.started_at) {
+    if !process_matches(rec.pid, rec.started_at, rec.proc_start) {
         return Err(ResumeRefused::ProcessGone);
     }
     rebind(&rec, &sock, fallback).map_err(|e| ResumeRefused::Io(e.to_string()))
@@ -594,22 +613,27 @@ pub fn boot_sweep(vault: &LocalVault, kept: &[(String, PathBuf)]) {
     }
 }
 
-/// Tests: a live child process and the start time the OS reports for it
-/// (what ptyd would have recorded). Kill it when done.
+/// Tests: a live child process, the start time ptyd would have recorded
+/// for it (macOS: the kernel's; Linux: now, never compared) and its kernel
+/// start key (what the spawn hook binds). Kill it when done.
 #[cfg(test)]
-pub fn live_child_for_tests() -> (std::process::Child, i64, i64) {
+pub fn live_child_for_tests() -> (std::process::Child, i64, i64, i64) {
     let child = std::process::Command::new("sleep").arg("120").spawn().expect("spawn sleep");
     let pid = i64::from(child.id());
-    let started = (0..50)
+    let key = (0..50)
         .find_map(|_| {
-            let t = process_start_secs(pid);
-            if t.is_none() {
+            let k = process_start_key(pid);
+            if k.is_none() {
                 std::thread::sleep(Duration::from_millis(20));
             }
-            t
+            k
         })
-        .expect("the OS reports the child's start time");
-    (child, pid, started)
+        .expect("the OS reports the child's start key");
+    #[cfg(target_os = "macos")]
+    let started = process_start_secs(pid).expect("the OS reports the child's start time");
+    #[cfg(not(target_os = "macos"))]
+    let started = chrono::Utc::now().timestamp();
+    (child, pid, started, key)
 }
 
 /// Tests: what a daemon crash leaves behind. The server stops, but its

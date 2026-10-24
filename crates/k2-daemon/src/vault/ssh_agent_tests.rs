@@ -383,8 +383,8 @@ fn the_socket_goes_at_session_end_and_is_re_served_after_a_restart() {
     assert_eq!(rec.sock_path, sock.to_string_lossy());
     assert!(rec.ptyd_boot.is_empty(), "not bound until ptyd spawns the session");
     // What the ptyd spawn hook does once ptyd has started the process.
-    let (mut child, cpid, cstart) = live_child_for_tests();
-    assert!(v.agent_socket_bind(&sid, "boot-life", cpid, cstart).expect("bind"));
+    let (mut child, cpid, cstart, ckey) = live_child_for_tests();
+    assert!(v.agent_socket_bind(&sid, "boot-life", cpid, cstart, ckey).expect("bind"));
     let proc = Adopted { boot_id: "boot-life", pid: cpid, started_at: cstart };
 
     // Restart: the server is gone but the session (and its dir) survive;

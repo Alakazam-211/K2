@@ -255,6 +255,7 @@ CREATE TABLE IF NOT EXISTS agent_socket (
     ptyd_boot TEXT NOT NULL DEFAULT '',
     pid INTEGER NOT NULL DEFAULT 0,
     started_at INTEGER NOT NULL DEFAULT 0,
+    proc_start INTEGER NOT NULL DEFAULT 0,
     row_mac BLOB NOT NULL
 );
 
@@ -272,8 +273,8 @@ fn columns(conn: &Connection, table: &str) -> Result<Vec<String>> {
 }
 
 /// Agent tables written by pre-release builds of item 3 (agent_policy
-/// without `audit_seq`, agent_socket without the short root and ptyd
-/// binding): their MACs don't cover the new fields, so they are rebuilt
+/// without `audit_seq`, agent_socket without the short root, ptyd
+/// binding or kernel start key): their MACs don't cover the new fields, so they are rebuilt
 /// empty. Policies then read as missing (strictest, until a person sets
 /// them again); socket records only cost one re-serve.
 fn rebuild_old_agent_tables(conn: &Connection) -> Result<()> {
@@ -289,7 +290,7 @@ fn rebuild_old_agent_tables(conn: &Connection) -> Result<()> {
         )?;
     }
     let s = columns(conn, "agent_socket")?;
-    if !s.is_empty() && !["short_root", "ptyd_boot", "pid", "started_at"].iter().all(|c| s.iter().any(|x| x == c)) {
+    if !s.is_empty() && !["short_root", "ptyd_boot", "pid", "started_at", "proc_start"].iter().all(|c| s.iter().any(|x| x == c)) {
         conn.execute_batch("DROP TABLE agent_socket")?;
     }
     Ok(())

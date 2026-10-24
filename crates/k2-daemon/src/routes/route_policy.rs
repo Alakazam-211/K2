@@ -2527,6 +2527,7 @@ mod tests {
     const GET_VERB_NAMED_READS: &[(&str, &str)] = &[
         ("/cli/agents/work/create", "410 Gone, no state"),
         ("/cli/agents/work/move", "410 Gone, no state"),
+        ("/cli/app/move-plan", "lists a move's steps (doctor, dry-run copy-host); the request is POST /cli/app/move-plan/request"),
         ("/cli/work/inbox/create", "410 Gone, no state"),
         ("/cli/daemon/update/latest", "reads the cached latest-known version; never fetches"),
         ("/cli/daemon/update/status", "reads the updater state"),

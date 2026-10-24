@@ -228,6 +228,9 @@ pub fn folder_ignore(folder: &Path) -> Result<Option<ignore::gitignore::Gitignor
         Err(e) => return Err(SeedError::new(codes::SEED_INVALID, format!("{IGNORE_FILE}: {e}"))),
     }
     let mut b = ignore::gitignore::GitignoreBuilder::new(folder);
+    // An unclosed `[` is an error here, never a literal: a typo must not
+    // silently pack what the line meant to leave out.
+    b.allow_unclosed_class(false);
     if let Some(e) = b.add(&file) {
         return Err(SeedError::new(codes::SEED_INVALID, format!("{IGNORE_FILE}: {e}")));
     }
@@ -612,7 +615,7 @@ mod tests {
         write(&f.join(".env.local"), "SECRET=1");
         write(&f.join(".env"), "SECRET=2");
         write(&f.join("node_modules/.cache/big"), &"x".repeat(8192));
-        write(&f.join("node_modules/next/index.js"), &"n".repeat(2048));
+        write(&f.join("node_modules/next/index.js"), &"n".repeat(512));
         write(&f.join("lib/keep.env.js"), "k");
         let plain = store_folder(&f, &build_excludes(&[])).expect("no ignore file");
         assert!(seed_path(&plain.hash).join("var/answers.json").exists(), "without the file everything is packed");

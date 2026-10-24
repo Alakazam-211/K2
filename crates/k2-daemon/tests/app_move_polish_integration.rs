@@ -827,6 +827,84 @@ async fn test_guests_are_one_apps_short_lived_and_sign_in_only_on_its_link() {
     k2_daemon::apps::alerts::set_sink(None);
 }
 
+/// The guest roster, for an agent with the skin-manage switch: it acts
+/// only on guests wholly inside its own workspace, and hands them only
+/// its own rooms and roles (security review, the older hole). Anything
+/// else is owner_only and touches nothing; the owner is unchanged.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_agent_manages_only_its_own_workspaces_guests() {
+    let env = setup(&[]);
+    let _seen = quiet_alerts();
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let a = seed_ws(&env, "scopea");
+    let b = seed_ws(&env, "scopeb");
+    let svc_a = app_row(&a, "scopeappa");
+    let svc_b = app_row(&b, "scopeappb");
+    let room = |ws: &Ws| {
+        let mut policy = k2_core::skin::RoomPolicy::new();
+        policy.insert(ws.id.clone(), vec!["thread:read".to_string()]);
+        policy
+    };
+    k2_core::skin::create_role_for_app("scope-ra", &room(&a), None).unwrap();
+    k2_core::skin::create_role_for_app("scope-rb", &room(&b), None).unwrap();
+    // The owner's guests: one of each workspace's App, a box guest in B's room.
+    k2_core::skin::add_principal_for_app("scope-ga", None, &svc_a, None, "owner").unwrap();
+    k2_core::skin::add_principal_for_app("scope-gb", None, &svc_b, None, "owner").unwrap();
+    k2_core::skin::add_principal("scope-boxb").unwrap();
+    k2_core::skin::assign_role("scope-boxb", "scope-rb").unwrap();
+    allow_manage(&a, true);
+    let agent = passport(&a);
+    let user = |name: &str| {
+        k2_core::skin::list_principals().unwrap().into_iter().find(|p| p.username == name).unwrap_or_else(|| panic!("no guest {name}"))
+    };
+
+    // Another workspace's guests: refused, nothing touched.
+    for (path, body) in [
+        ("/cli/skin/users/password", json!({"username": "scope-gb", "password": "agent-chosen-pw-1"})),
+        ("/cli/skin/users/email", json!({"username": "scope-gb", "email": "agent@example.com"})),
+        ("/cli/skin/users/unlock", json!({"username": "scope-gb"})),
+        ("/cli/skin/users/remove", json!({"username": "scope-gb"})),
+        ("/cli/skin/users/password", json!({"username": "scope-boxb", "password": "agent-chosen-pw-1"})),
+        ("/cli/skin/users/rooms", json!({"username": "scope-boxb", "rooms": [a.handle]})),
+        ("/cli/skin/roles/assign", json!({"username": "scope-boxb", "role": "scope-ra"})),
+        ("/cli/skin/roles/unassign", json!({"username": "scope-boxb"})),
+        ("/cli/skin/users/remove", json!({"username": "scope-boxb"})),
+    ] {
+        let r = post(d.port, path, &agent, body.clone()).await;
+        assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{path} {body}: {}", r.body);
+        assert!(r.json()["error"]["hint"].as_str().expect("hint").contains("reaches outside your workspace"), "{path}: {}", r.body);
+    }
+    let (gb, boxb) = (user("scope-gb"), user("scope-boxb"));
+    assert_eq!((gb.has_password, gb.email.clone()), (false, None), "{gb:?}");
+    assert_eq!((boxb.has_password, boxb.role_name.as_deref()), (false, Some("scope-rb")), "{boxb:?}");
+
+    // Its own App's guest: allowed.
+    let r = post(d.port, "/cli/skin/users/password", &agent, json!({"username": "scope-ga", "password": "agent-chosen-pw-2"})).await;
+    assert_eq!(r.status, 200, "its own App's guest: {}", r.body);
+    assert!(user("scope-ga").has_password);
+
+    // A box guest it adds: only its own rooms and roles.
+    let r = post(d.port, "/cli/skin/users", &agent, json!({"username": "scope-fresh"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(d.port, "/cli/skin/users/rooms", &agent, json!({"username": "scope-fresh", "rooms": [b.handle]})).await;
+    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "another workspace's room: {}", r.body);
+    let r = post(d.port, "/cli/skin/roles/assign", &agent, json!({"username": "scope-fresh", "role": "scope-rb"})).await;
+    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "another workspace's role: {}", r.body);
+    assert_eq!((user("scope-fresh").default_rooms, user("scope-fresh").role_id), (Vec::<String>::new(), None));
+    let r = post(d.port, "/cli/skin/users/rooms", &agent, json!({"username": "scope-fresh", "rooms": [a.handle]})).await;
+    assert_eq!(r.status, 200, "its own room: {}", r.body);
+    let r = post(d.port, "/cli/skin/roles/assign", &agent, json!({"username": "scope-fresh", "role": "scope-ra"})).await;
+    assert_eq!(r.status, 200, "its own role: {}", r.body);
+    assert_eq!(user("scope-fresh").role_name.as_deref(), Some("scope-ra"));
+
+    // The owner is unchanged.
+    let r = post(d.port, "/cli/skin/users/password", OWNER, json!({"username": "scope-gb", "password": "owner-chosen-pw-1"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(d.port, "/cli/skin/roles/assign", OWNER, json!({"username": "scope-fresh", "role": "scope-rb"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    k2_daemon::apps::alerts::set_sink(None);
+}
+
 /// C: first write verbs are one digest per App per window, and nothing at
 /// all for what one of the App's test guests did (someone testing it; the
 /// owner made the guest: agents make none).

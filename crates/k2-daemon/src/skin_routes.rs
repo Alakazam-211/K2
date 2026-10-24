@@ -274,6 +274,124 @@ fn principal_named(username: &str) -> Result<Option<skin::SkinPrincipal>, CliRes
     skin::list_principals().map(|ps| ps.into_iter().find(|p| p.username == u)).map_err(CliResponse::internal_error)
 }
 
+/// The routes [`agent_scoped`] guards: a guest's password, email, rooms,
+/// lockout, removal and role.
+pub const AGENT_SCOPED_ROUTES: &[&str] = &[
+    "/cli/skin/users/password",
+    "/cli/skin/users/email",
+    "/cli/skin/users/rooms",
+    "/cli/skin/users/unlock",
+    "/cli/skin/users/remove",
+    "/cli/skin/roles/assign",
+    "/cli/skin/roles/unassign",
+];
+
+/// 0.46.4 security review (the older hole): the skin-manage gate passes a
+/// switch-1 agent for every guest on the box, other workspaces' too. On
+/// [`AGENT_SCOPED_ROUTES`] an agent (`agent_ws` = its workspace, from the
+/// gate) acts only on a guest wholly inside its own workspace
+/// ([`principal_in_workspace`]), and hands it only rooms or a role inside
+/// that workspace; anything else is `owner_only` and touches nothing. The
+/// owner, Owner logins and shell tabs (`agent_ws` = `None`) are unchanged.
+/// An unknown guest falls through to the handler's own answer.
+pub fn agent_scoped(
+    agent_ws: Option<&str>,
+    path: &str,
+    body: &[u8],
+    actor: &str,
+    handler: fn(&[u8], &str) -> CliResponse,
+) -> CliResponse {
+    if let Some(ws) = agent_ws {
+        if let Err(r) = agent_may_touch(ws, path, body) {
+            k2_core::log_debug!("[skin] actor={actor} refused outside its workspace on {path}");
+            return r;
+        }
+    }
+    handler(body, actor)
+}
+
+fn outside_workspace(what: String) -> CliResponse {
+    owner_only_with_hint(&format!("{what}: only the owner changes guests and roles outside your workspace (ask your human)"))
+}
+
+fn agent_may_touch(ws: &str, path: &str, body: &[u8]) -> Result<(), CliResponse> {
+    // A body the handler can't read is its 400, not ours.
+    let Ok(v) = serde_json::from_slice::<serde_json::Value>(body) else { return Ok(()) };
+    let Some(username) = str_field(&v, &["username", "name"]) else { return Ok(()) };
+    let Some(p) = principal_named(username)? else { return Ok(()) };
+    let roles = skin::list_roles().map_err(CliResponse::internal_error)?;
+    let grants = skin::list_grants().map_err(CliResponse::internal_error)?;
+    if !principal_in_workspace(&p, &roles, &grants, ws) {
+        return Err(outside_workspace(format!(
+            "'{}' reaches outside your workspace (another workspace's App or room, or a box-wide grant)",
+            p.username
+        )));
+    }
+    match path {
+        "/cli/skin/roles/assign" => {
+            if let Some(token) = str_field(&v, &["role", "name", "id"]) {
+                if let Some(r) = roles.iter().find(|r| r.id == token || r.name.eq_ignore_ascii_case(token)) {
+                    if !role_in_workspace(r, ws) {
+                        return Err(outside_workspace(format!("role '{}' reaches outside your workspace", r.name)));
+                    }
+                }
+            }
+        }
+        "/cli/skin/users/rooms" => {
+            if let Some(list) = rooms_field(&v) {
+                if let Ok(ids) = skin::resolve_room_tokens(&list) {
+                    if ids.iter().any(|id| id != ws) {
+                        return Err(outside_workspace("those rooms are outside your workspace".to_string()));
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Every room in `rooms` is `ws`.
+fn rooms_in(rooms: &[String], ws: &str) -> bool {
+    rooms.iter().all(|r| r == ws)
+}
+
+/// A role whose rooms are all `ws`, and, for an App's role, an App of `ws`.
+fn role_in_workspace(r: &skin::SkinRole, ws: &str) -> bool {
+    rooms_in(&r.rooms, ws) && r.room_policy.keys().all(|k| k == ws) && r.app_id.as_deref().map_or(true, |app| app_of_workspace(app, ws))
+}
+
+/// The published service `id` belongs to workspace `ws`.
+fn app_of_workspace(id: &str, ws: &str) -> bool {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    matches!(k2_core::published_services::get_by_id(&conn, id), Ok(Some(svc)) if svc.project_id == ws)
+}
+
+/// Is guest `p` wholly inside workspace `ws`? Its rooms, its role, and
+/// every grant it holds: the box login (`app=host`) or an App of `ws`,
+/// each with rooms and a role inside `ws`. Any other grant (chat,
+/// mailbox, database, cli: box-wide) or an agent mark for another
+/// workspace puts it outside. A guest with no rooms, role or App yet
+/// (one the agent just added) is inside.
+pub(crate) fn principal_in_workspace(p: &skin::SkinPrincipal, roles: &[skin::SkinRole], grants: &[skin::SkinGrant], ws: &str) -> bool {
+    let role_ok = |id: &Option<String>| match id {
+        None => true,
+        Some(id) => roles.iter().find(|r| &r.id == id).is_some_and(|r| role_in_workspace(r, ws)),
+    };
+    if p.agent_workspace.as_deref().is_some_and(|a| a != ws) || !rooms_in(&p.default_rooms, ws) || !role_ok(&p.role_id) {
+        return false;
+    }
+    grants.iter().filter(|g| g.subject_kind == "principal" && g.subject_id == p.id).all(|g| {
+        let target_ok = g.kind == "app" && (g.target_id == skin::HOST_APP_ID || app_of_workspace(&g.target_id, ws));
+        let scope_ok = match g.scope.as_deref().map(str::trim) {
+            None | Some("") => true,
+            Some(raw) => serde_json::from_str::<Vec<String>>(raw).is_ok_and(|rooms| rooms_in(&rooms, ws)),
+        };
+        target_ok && scope_ok && role_ok(&g.role_id)
+    })
+}
+
 /// 0.46.4 security review: a test guest is the owner's while agent test
 /// guests are parked (`apps::test_guests::AGENTS_MAY_MANAGE`). An agent
 /// that passed the skin-manage gate may not reset its password, change

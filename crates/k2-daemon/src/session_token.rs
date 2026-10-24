@@ -1487,6 +1487,31 @@ pub fn activate_cell_uds(session_id: SessionId, per_session_uid: Option<u32>) {
     }
 }
 
+/// [`activate_cell_uds`] for a spawned bare-PTY session: a k2-ptyd session's
+/// listener is held by ptyd so it survives a daemon restart (PRD
+/// prd-k2-ptyd-v1 P44; see `cell_uds::bind_cell_socket_for`).
+#[cfg(unix)]
+pub fn activate_cell_uds_for(session: &k2_core::terminal::DaemonPtySession) {
+    if !scoped_hooks_enabled() {
+        return;
+    }
+    let session_id = session.session_id;
+    match crate::cell_uds::bind_cell_socket_for(session) {
+        Ok(listener) => {
+            crate::cell_server::serve_cell(session_id, listener, None);
+            log_debug!("[hook-scoped] bound + serving per-cell UDS for session={session_id}");
+        }
+        Err(e) => {
+            log_debug!(
+                "[hook-scoped] WARN bind cell sock failed for session={session_id}: {e}; degrading to TCP dual-accept"
+            );
+        }
+    }
+}
+
+#[cfg(not(unix))]
+pub fn activate_cell_uds_for(_session: &k2_core::terminal::DaemonPtySession) {}
+
 #[cfg(not(unix))]
 pub fn activate_cell_uds(_session_id: SessionId, _per_session_uid: Option<u32>) {
     // UDS is unix-only; scoped tokens still mint into env for TCP dual-accept

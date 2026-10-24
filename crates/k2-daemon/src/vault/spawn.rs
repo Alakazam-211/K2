@@ -199,6 +199,9 @@ pub fn materialize(env: &mut HashMap<String, String>, workspace_id: &str, sessio
     let who = Requester::Session { workspace_id: ws.to_string(), session_id: Some(session_id.to_string()) };
     deliver_items(&vault, env, &who, session_id, sandboxed, &mut out);
     if let Some(d) = &out.dir {
+        // The session registers only after its PTY is up (seconds when
+        // k2-ptyd launches); the 60 s sweep must not take the dir first.
+        crate::session_liveness::note_spawning(session_id);
         DIRS.lock().push((session_id.to_string(), d.clone()));
     }
     out
@@ -354,20 +357,71 @@ fn remove_dir(d: &Path) {
     let _ = std::fs::remove_dir(d);
 }
 
-/// Boot: nothing survives a daemon restart (no PTY does).
+/// Boot: remove every secrets dir except those of agent sessions that
+/// survived the restart in k2-ptyd (PRD prd-k2-ptyd-v1 P36: B0's running
+/// set, each with the `secrets_dir` its spawn recorded). Those are kept
+/// and re-registered in `DIRS`, so they go when their session ends.
+/// Without k2-ptyd (or with nothing running in it) nothing survives a
+/// restart and every dir goes, as before.
 pub fn sweep_at_boot() {
-    if let Some(root) = secrets_root() {
-        if let Ok(rd) = std::fs::read_dir(&root) {
-            for e in rd.flatten() {
-                if e.file_type().is_ok_and(|t| t.is_dir() && !t.is_symlink()) {
-                    remove_dir(&e.path());
+    let keep: Vec<(String, PathBuf)> = surviving_dirs();
+    sweep_at_boot_keeping(&keep);
+}
+
+/// The `(session id, secrets dir)` pairs B0 found running in ptyd.
+fn surviving_dirs() -> Vec<(String, PathBuf)> {
+    #[cfg(unix)]
+    {
+        k2_core::terminal::ptyd::adopt::running()
+            .into_iter()
+            .filter_map(|s| {
+                let dir = s.meta.get("secrets_dir")?.as_str()?.to_string();
+                Some((s.sid, PathBuf::from(dir)))
+            })
+            .collect()
+    }
+    #[cfg(not(unix))]
+    {
+        Vec::new()
+    }
+}
+
+/// [`sweep_at_boot`] with an explicit keep set. A kept dir must be a
+/// direct child of the secrets root named for its session (`<tag>-<8>`,
+/// [`make_session_dir`]); anything else in `keep` is ignored.
+pub fn sweep_at_boot_keeping(keep: &[(String, PathBuf)]) {
+    let Some(root) = secrets_root() else { return };
+    let kept: Vec<(String, PathBuf)> = keep
+        .iter()
+        .filter(|(sid, dir)| {
+            let tag: String = sid.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').take(40).collect();
+            dir.parent() == Some(root.as_path())
+                && dir.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with(&format!("{tag}-")))
+        })
+        .cloned()
+        .collect();
+    if let Ok(rd) = std::fs::read_dir(&root) {
+        for e in rd.flatten() {
+            if e.file_type().is_ok_and(|t| t.is_dir() && !t.is_symlink()) {
+                let p = e.path();
+                if kept.iter().any(|(_, d)| d == &p) {
+                    continue;
                 }
+                remove_dir(&p);
             }
+        }
+    }
+    let mut g = DIRS.lock();
+    for (sid, dir) in kept {
+        if dir.is_dir() && !g.iter().any(|(s, d)| s == &sid && d == &dir) {
+            g.push((sid, dir));
         }
     }
 }
 
-/// Periodic: drop dirs whose session is gone.
+/// Periodic: drop dirs whose session is gone. `live` is
+/// [`crate::session_liveness`]'s answer (registered, waiting for adoption,
+/// or still being spawned).
 pub fn sweep_dead(live: &dyn Fn(&str) -> bool) {
     let dead: Vec<String> = DIRS.lock().iter().filter(|(s, _)| !live(s)).map(|(s, _)| s.clone()).collect();
     for s in dead {

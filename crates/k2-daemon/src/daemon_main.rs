@@ -568,6 +568,13 @@ async fn async_main() {
         Err(e) => log_debug!("[daemon/users] ERROR: Connect account id backfill: {e}"),
     }
 
+    // k2-ptyd S3 B0 (prd-k2-ptyd-v1 §7.9): the agent sessions that
+    // survived the restart in k2-ptyd. Connects to an EXISTING ptyd only
+    // (never launches one) and lists; every boot sweep below that assumes
+    // "no terminal survives a restart" keeps these. No ptyd: one stat,
+    // nothing logged, today's boot.
+    crate::ptyd_adopt::b0();
+
     // K2 vault (prd-k2-vault-v1 §5.1, VS14): open ~/.k2/vault/vault.db
     // here — the serve path, after the single-instance lock, before any
     // route serves — and bind ~/.k2/vault.sock (the person channel, VS2).
@@ -646,15 +653,23 @@ async fn async_main() {
     // catches stragglers, but doing the sweep on boot keeps the column
     // honest from the start. Companion of `heartbeat-active-session`
     // PRD's PtyExited observer.
+    //
+    // k2-ptyd S3 (P79): except a terminal that survived in k2-ptyd (B0's
+    // running set) — B1 adopts it under the same session id, so its stamp
+    // stays and heartbeat smart-launch keeps branch 2a (no duplicate).
     {
+        let survived = crate::ptyd_adopt::running_sids();
         let db = k2_core::db::shared();
         let conn = db.lock();
         match k2_core::db::schema::AgentHeartbeat::list_with_active_terminal(&conn) {
             Ok(rows) => {
                 let mut cleared = 0usize;
                 for (_pid, _name, term_id) in &rows {
-                    // No PTYs exist yet at this point in boot, so every
-                    // row is stale — null it.
+                    if survived.contains(term_id) {
+                        continue;
+                    }
+                    // No other PTY exists yet at this point in boot, so
+                    // every other row is stale — null it.
                     if let Ok(n) = k2_core::db::schema::AgentHeartbeat::clear_active_terminal_id_by_terminal(&conn, term_id) {
                         cleared += n;
                     }
@@ -675,10 +690,12 @@ async fn async_main() {
     // Stop (or any `active_terminal_id`) points at a corpse. Release them
     // before any heartbeat tick or boot-sweep spawn; new rows start
     // unconfirmed and never write until real evidence arrives.
+    // k2-ptyd S3 (P35): sessions that survived in k2-ptyd keep theirs.
     {
+        let survived = crate::ptyd_adopt::running_sids();
         let db = k2_core::db::shared();
         let conn = db.lock();
-        let n = activity_store::boot_reset_status(&conn);
+        let n = activity_store::boot_reset_status_keeping(&conn, &survived);
         if n > 0 {
             log_debug!("[daemon] released {n} stale session lock(s) from prior daemon");
         }
@@ -734,7 +751,11 @@ async fn async_main() {
             reused: true,
         })
     });
+    // k2-ptyd P50: the previous daemon left its main listener with ptyd, so
+    // the port never closed and connections made during the restart wait
+    // in its backlog. Take it back before claiming a port.
     let claimed = match inherited_main
+        .or_else(crate::ptyd_adopt::take_main_listener)
         .or_else(|| k2_core::port_claim::claim_port_on(&daemon_port_path, bind_ip))
     {
         Some(c) => c,
@@ -763,6 +784,9 @@ async fn async_main() {
             "[daemon] WARN: sticky daemon.port was not reused — saved Add Server URLs may go stale"
         );
     }
+    // k2-ptyd P50: when ptyd is in play, it keeps a copy of the main
+    // listener so a restart never closes the port.
+    crate::ptyd_adopt::hold_main_listener(&claimed.listener);
     // The std listener has to be set non-blocking before tokio can adopt it.
     if let Err(e) = claimed.listener.set_nonblocking(true) {
         log_debug!("[daemon] FATAL: set_nonblocking on claimed listener: {e}");
@@ -1354,8 +1378,17 @@ async fn async_main() {
         log_debug!("[daemon] Garden access: the one-time upgrade pass ran");
     }
 
+    // k2-ptyd S3 B1 (prd-k2-ptyd-v1 §7.9, P29): adopt the agent sessions
+    // that survived the restart — after the event bus, the terminal sink
+    // and the activity store, before `ready`, so the heartbeat monitor's
+    // boot overdue fire and every reattaching client see them. Bounded to
+    // 10 s (the rest are retried in the background). No-op without ptyd.
+    crate::ptyd_adopt::b1();
+
     boot_status::set_ready();
     log_debug!("[daemon] boot complete — phase=ready");
+    // P44: adopted sessions' cell sockets accept only from here on.
+    crate::ptyd_adopt::serve_adopted_cells();
 
     // prd-daemon-activity-and-thread-working-v1 DA7: the daemon installs
     // the agent CLI hooks itself (headless boxes too): one pass on the
@@ -1684,6 +1717,12 @@ async fn async_main() {
     // Runtime stage H: after a hand-off (or a failed one past quiesce) frpc
     // and Caddy belong to the successor / the next daemon, which adopts
     // them — never stop them here.
+    // k2-ptyd S3 (§7.6): a stop ends the agents, a restart keeps them
+    // running in ptyd for the next daemon. No-op when ptyd was never used.
+    // After a hand-off, quiesce already detached them.
+    if !k2_core::handoff_state::draining() {
+        crate::daemon_stop::on_shutdown();
+    }
     if k2_core::handoff_state::draining() {
         log_debug!("[daemon] handed off: leaving frpc and Caddy to the successor");
         log_debug!("[daemon] async_main exiting");

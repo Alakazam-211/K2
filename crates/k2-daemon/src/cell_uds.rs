@@ -25,6 +25,8 @@
 
 #[cfg(unix)]
 pub use unix_impl::{bind_cell_socket, cell_socket_path};
+#[cfg(unix)]
+pub use unix_impl::{bind_cell_socket_for, take_held_cell_listener};
 
 // Sandbox B2 (microVM cell socket perms) — internal to the daemon crate.
 // P4-H6: `resolve_sandbox_cell_uid` is no longer the live path (the spawn door
@@ -89,6 +91,44 @@ mod unix_impl {
         // does, so it stays daemon-only — byte-identical to pre-B2.
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
         Ok(listener)
+    }
+
+    /// [`bind_cell_socket`] for a spawned session. A k2-ptyd session's
+    /// listener is created and HELD by ptyd (PRD prd-k2-ptyd-v1 P44,
+    /// `hold_unix_listener "cell:<sid>"`, 0600 in the same 0700 dir), so it
+    /// outlives this daemon: an agent's `k2` call during a restart queues
+    /// in the backlog, and the next daemon takes the same socket back
+    /// ([`take_held_cell_listener`]) instead of rebinding. Every other
+    /// session binds here as before.
+    pub fn bind_cell_socket_for(
+        session: &k2_core::terminal::DaemonPtySession,
+    ) -> std::io::Result<std::os::unix::net::UnixListener> {
+        if session.backend_name() == "ptyd" {
+            if let Some(owner) = k2_core::terminal::ptyd::client::global().current_owner() {
+                use std::os::unix::fs::PermissionsExt;
+                let dir = cells_dir();
+                std::fs::create_dir_all(&dir)?;
+                std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+                let sid = session.session_id.to_string();
+                return owner.hold_unix_listener(
+                    &k2_core::terminal::ptyd::cell_listener_name(&sid),
+                    &cell_socket_path(&session.session_id),
+                    0o600,
+                );
+            }
+        }
+        bind_cell_socket(&session.session_id)
+    }
+
+    /// Adoption (P44): the cell listener ptyd held across the restart, if
+    /// it holds one for `session_id`. `Ok(None)`: it doesn't (a session
+    /// spawned before ptyd held listeners); the caller rebinds.
+    pub fn take_held_cell_listener(
+        owner: &k2_core::terminal::ptyd::client::Owner,
+        session_id: &SessionId,
+    ) -> std::io::Result<Option<std::os::unix::net::UnixListener>> {
+        let name = k2_core::terminal::ptyd::cell_listener_name(&session_id.to_string());
+        Ok(owner.take_fd(&name)?.map(std::os::unix::net::UnixListener::from))
     }
 
     /// Resolve the dedicated sandbox-cell uid (`k2cell`) the SAME way the

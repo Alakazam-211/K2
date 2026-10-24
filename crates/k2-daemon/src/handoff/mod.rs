@@ -38,7 +38,9 @@
 //!  quiesce: accept loops stop (sockets stay
 //!  open, the kernel queues new connections),
 //!  drain flag on (no PTY/frpc/service spawn),
-//!  agent PTYs killed, frpc detached,
+//!  in-process agent PTYs killed, k2-ptyd
+//!  agents detached (they keep running;
+//!  N adopts them at B1), frpc detached,
 //!  DB query_only, Thread store (redb,
 //!  exclusive file lock) closed
 //!  TAKE {roles} + SCM_RIGHTS [lock, listeners] ──▶ adopts the singleton
@@ -48,7 +50,8 @@
 //!  main runtime shut down (every loop stops)
 //!  pump live splices on the splice runtime     serves new connections
 //!  until none left or the deadline → exit      adopts frpc + published
-//!                                              services, resumes agents
+//!                                              services and ptyd agents,
+//!                                              resumes in-process agents
 //! ```
 //!
 //! A failure before TAKE leaves O serving as if nothing happened (N is
@@ -715,16 +718,24 @@ fn run_blocking(exe: &std::path::Path) -> Result<u32, Failed> {
 fn quiesce() {
     let _ = quiesce_tx().send(true);
     k2_core::handoff_state::set_draining();
-    // Agent PTYs: the successor resumes them. Kill in parallel (each kill
-    // has a 100 ms SIGHUP grace).
+    // Agent PTYs. k2-ptyd sessions (PRD prd-k2-ptyd-v1 P30) are DETACHED:
+    // the agent keeps running in ptyd and the successor adopts it (B1). An
+    // in-process session dies with this daemon anyway, so it is killed and
+    // the successor resumes it, as before. Kills run in parallel (each has
+    // a 100 ms SIGHUP grace).
     let sessions = crate::v2_session_map::snapshot();
-    let n = sessions.len();
+    let detached = sessions.iter().filter(|(_, s)| s.detach()).count();
     let joins: Vec<_> = sessions
         .into_iter()
+        .filter(|(_, s)| !s.is_detached())
         .map(|(_, s)| std::thread::spawn(move || s.kill()))
         .collect();
+    let n = joins.len();
     for j in joins {
         let _ = j.join();
+    }
+    if detached > 0 {
+        log_debug!("[daemon/handoff] quiesce: {detached} ptyd session(s) detached for the successor, {n} in-process killed");
     }
     // frpc: the successor adopts it.
     let frpc = k2_core::tunnel::connector::detach_for_handoff();

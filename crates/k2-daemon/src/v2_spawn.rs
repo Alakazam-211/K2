@@ -1191,8 +1191,13 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
         // `/v1` host sessions (`api-*`) stay in-process (N8). Inert unless
         // the dev-only `K2_PTYD=1` switch is on.
         survive: !k2_core::workspace_session_handles::is_api_agent_name(&req.agent_name),
+        // k2-ptyd S3: filled in just before `DaemonPtySession::spawn`.
+        ptyd_meta: None,
     };
     let session_id_for_response = cfg.session_id;
+    // k2-ptyd S3 (PRD §7.5 meta): what a restarted daemon needs to adopt
+    // this session. Identity only (P72).
+    let mut ptyd_meta = serde_json::Map::new();
 
     // COMPAT-58 (#58 Phase 1 / PR-A) — per-cell scoped passport + UDS.
     // Default ON (`K2_HOOK_SCOPED`); opt out with `0`/`false`/`off`.
@@ -1266,12 +1271,16 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
         );
         // K2 vault (KV19): this session's file/env secrets (env only in a
         // sandboxed cell).
-        crate::vault::spawn::materialize(
+        let delivered = crate::vault::spawn::materialize(
             &mut cfg.env,
             &workspace_uuid,
             &session_id_for_response.to_string(),
             matches!(cfg.sandbox, k2_core::terminal::SandboxSpec::Microvm),
         );
+        ptyd_meta.insert("workspace_uuid".into(), workspace_uuid.clone().into());
+        if let Some(dir) = delivered.dir {
+            ptyd_meta.insert("secrets_dir".into(), dir.to_string_lossy().into_owned().into());
+        }
         if minted {
             log_debug!(
                 "[hook-scoped] injected scoped K2_HOOK_TOKEN + K2_HOOK_SOCK for session={}",
@@ -1452,6 +1461,18 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
             }
         }
     };
+    {
+        let args_for_id = cfg.durable_args.clone().unwrap_or_else(|| cfg.args.clone());
+        cfg.ptyd_meta = Some(crate::ptyd_adopt::spawn_meta(
+            ptyd_meta,
+            &req.agent_name,
+            "v2_spawn",
+            project_id.as_deref(),
+            cfg.program.as_deref(),
+            &args_for_id,
+            llm_login.as_ref().map(|g| g.ptyd_meta()),
+        ));
+    }
     k2_core::cli_folder_trust::maybe_trust_harness_spawn(
         cfg.program.as_deref(),
         cfg.cwd.as_deref(),
@@ -1506,7 +1527,9 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
     if crate::session_token::scoped_hooks_enabled() {
         // Keep the richer microVM chown logging inline; activate_cell_uds
         // covers the bare-PTY + common path used by spawn.rs.
-        match crate::cell_uds::bind_cell_socket(&session_id_for_response) {
+        // k2-ptyd P44: a ptyd session's listener is held by ptyd (survives
+        // a daemon restart); microVM cells are never ptyd sessions.
+        match crate::cell_uds::bind_cell_socket_for(&session) {
             Ok(listener) => {
                 // Sandbox B2 / P4-H6: per-session tier gating. A microVM-backed
                 // cell additionally allows EXACTLY its per-session peer uid (the

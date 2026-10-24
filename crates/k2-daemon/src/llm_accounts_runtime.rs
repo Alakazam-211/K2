@@ -1061,6 +1061,19 @@ pub struct SpawnGuard {
 }
 
 impl SpawnGuard {
+    /// k2-ptyd S3 (P80): what a restarted daemon needs to mark this
+    /// session's slot in use again when it adopts the session — the
+    /// pinned slot id and, for a person's wallet item, (item, workspace).
+    /// Ids only, never a token.
+    pub fn ptyd_meta(&self) -> serde_json::Value {
+        let slot = self.login.pinned_slot().map(|(_, id)| id.to_string());
+        let person = match (&self.person_project, &self.login.account_id) {
+            (Some(project), Some(id)) => json!({"item": id, "project": project}),
+            _ => Value::Null,
+        };
+        json!({"slot": slot, "person": person})
+    }
+
     pub fn spawned(self, pid: Option<i32>) {
         if let (Some((_, id)), Some(pid)) = (self.login.pinned_slot(), pid) {
             in_use_map()
@@ -1073,6 +1086,29 @@ impl SpawnGuard {
         if let (Some(project), Some(id), Some(pid)) = (&self.person_project, &self.login.account_id, pid) {
             crate::person_wallet_runtime::note_spawn(id, project, pid);
         }
+    }
+}
+
+/// k2-ptyd S3 (PRD §7.9, P80): an adopted session's agent still runs on
+/// its pinned slot, but `in_use_map` is memory-only and died with the old
+/// daemon. B1 re-marks it (before the keep-warm loop's first pass, which
+/// waits two minutes after boot) so keep-warm never refreshes a slot under
+/// a running CLI. `llm` is [`SpawnGuard::ptyd_meta`] as stored in the
+/// session's meta.
+pub fn reseed_after_adoption(llm: &Value, pid: i32) {
+    if let Some(id) = llm.get("slot").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+        let mut m = in_use_map().lock().unwrap_or_else(|p| p.into_inner());
+        let pids = m.entry(id.to_string()).or_default();
+        if !pids.contains(&pid) {
+            pids.push(pid);
+        }
+    }
+    let person = llm.get("person");
+    if let (Some(item), Some(project)) = (
+        person.and_then(|p| p.get("item")).and_then(Value::as_str),
+        person.and_then(|p| p.get("project")).and_then(Value::as_str),
+    ) {
+        crate::person_wallet_runtime::note_spawn(item, project, pid);
     }
 }
 

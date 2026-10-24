@@ -177,6 +177,10 @@ libc = "0.2"
 # import it without a re-export hop.
 parking_lot = "0.12"
 
+# k2-ptyd S3: boot adoption reads ptyd's session list (wire types only;
+# already linked through k2-core — no new crate).
+k2-ptyd = { path = "../k2-ptyd" }
+
 # base64 — Phase 2 Unit 6 `/cli/fs/read-binary` encodes file bytes
 # into the JSON response so the existing `/cli/*` dispatcher (JSON
 # only) can carry them. ~33% wire overhead, but stays within the

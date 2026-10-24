@@ -318,6 +318,9 @@ pub(crate) fn spawn_agent_session_v2_blocking_inner(
     let session_id = SessionId::new();
     let mut env = req.env.clone();
     let mut spawn_args = req.args.clone().unwrap_or_default();
+    // k2-ptyd S3 (PRD §7.5 meta): what a restarted daemon needs to adopt
+    // this session. Identity only (P72).
+    let mut ptyd_meta = serde_json::Map::new();
 
     // COMPAT-58 (#58 Phase 1 / PR-A) — real passport at every agent spawn
     // path (wake / heartbeat / canonical / agents launch). Same seam as
@@ -351,7 +354,11 @@ pub(crate) fn spawn_agent_session_v2_blocking_inner(
             owner,
         );
         // K2 vault (KV19): this session's file/env secrets.
-        crate::vault::spawn::materialize(&mut env, &workspace_uuid, &session_id.to_string(), false);
+        let delivered = crate::vault::spawn::materialize(&mut env, &workspace_uuid, &session_id.to_string(), false);
+        ptyd_meta.insert("workspace_uuid".into(), workspace_uuid.clone().into());
+        if let Some(dir) = delivered.dir {
+            ptyd_meta.insert("secrets_dir".into(), dir.to_string_lossy().into_owned().into());
+        }
         if minted {
             log_debug!(
                 "[hook-scoped] spawn.rs injected scoped K2_HOOK_TOKEN + K2_HOOK_SOCK for session={}",
@@ -457,6 +464,7 @@ pub(crate) fn spawn_agent_session_v2_blocking_inner(
         // routes, providers and remote sessions may be ptyd-hosted. Inert
         // unless the dev-only `K2_PTYD=1` switch is on.
         survive: true,
+        ptyd_meta: None,
     };
     let session_id = cfg.session_id;
     let mut cfg = cfg;
@@ -474,6 +482,18 @@ pub(crate) fn spawn_agent_session_v2_blocking_inner(
         )
         .map_err(|e| format!("LLM token: {e}"))?
     };
+    {
+        let args_for_id = cfg.durable_args.clone().unwrap_or_else(|| cfg.args.clone());
+        cfg.ptyd_meta = Some(crate::ptyd_adopt::spawn_meta(
+            ptyd_meta,
+            &canonical_key,
+            "spawn",
+            req.project_id.as_deref(),
+            cfg.program.as_deref(),
+            &args_for_id,
+            llm_login.as_ref().map(|g| g.ptyd_meta()),
+        ));
+    }
     k2_core::cli_folder_trust::maybe_trust_harness_spawn(
         cfg.program.as_deref(),
         cfg.cwd.as_deref(),
@@ -496,7 +516,7 @@ pub(crate) fn spawn_agent_session_v2_blocking_inner(
     }
 
     // COMPAT-58 — bind per-cell UDS after PTY open (bare-PTY → no chown).
-    crate::session_token::activate_cell_uds(session_id, None);
+    crate::session_token::activate_cell_uds_for(&session);
 
     v2_session_map::register(canonical_key.clone(), session.clone());
 

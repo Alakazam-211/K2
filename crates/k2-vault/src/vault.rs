@@ -2565,8 +2565,12 @@ impl LocalVault {
         self.drop_session_material(Some(session_id))
     }
 
-    /// Boot: no session survives a daemon restart, so every placeholder
-    /// and every session grant K2 itself made goes.
+    /// Drop every placeholder and every session grant K2 itself made.
+    ///
+    /// Never call this at daemon boot: with k2-ptyd, agent sessions survive
+    /// a daemon restart and keep using theirs (PRD prd-k2-ptyd-v1 P90). A
+    /// session's material goes with the session
+    /// ([`Self::placeholders_drop_session`]).
     pub fn placeholders_drop_all(&self) -> Result<()> {
         self.drop_session_material(None)
     }

@@ -245,9 +245,44 @@ fn pinned_project_for(conn: &rusqlite::Connection, agent_name: &str) -> Option<S
     .ok()
 }
 
-/// DA30: after a restart no PTY is live, so every `running` /
+/// DA30: after a restart no in-process PTY is live, so every `running` /
 /// `permission` lock and every `active_terminal_id` points at a corpse.
 /// Runs at boot before any heartbeat tick. Returns rows released.
+///
+/// k2-ptyd S3 (PRD prd-k2-ptyd-v1 P35): a session that survived the
+/// restart in k2-ptyd (`keep`: B0's running session ids) is adopted under
+/// the same id, so a row whose `active_terminal_id` is one of them keeps
+/// its status and its stamp. With an empty `keep` this is exactly
+/// [`boot_reset_status`].
+pub fn boot_reset_status_keeping(conn: &rusqlite::Connection, keep: &std::collections::HashSet<String>) -> usize {
+    if keep.is_empty() {
+        return boot_reset_status(conn);
+    }
+    let rows: Vec<(String, Option<String>, String)> = conn
+        .prepare("SELECT project_id, active_terminal_id, status FROM workspace_sessions")
+        .and_then(|mut st| {
+            st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, String>(2)?)))?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .unwrap_or_default();
+    let mut released = 0;
+    for (project_id, terminal, status) in rows {
+        if terminal.as_deref().is_some_and(|t| keep.contains(t)) {
+            continue;
+        }
+        if status == "running" || status == "permission" {
+            released += conn
+                .execute("UPDATE workspace_sessions SET status = 'sleeping' WHERE project_id = ?1", [&project_id])
+                .unwrap_or(0);
+        }
+        if terminal.is_some() {
+            let _ = conn.execute("UPDATE workspace_sessions SET active_terminal_id = NULL WHERE project_id = ?1", [&project_id]);
+        }
+    }
+    released
+}
+
+/// DA30, before k2-ptyd: no PTY survives, release every lock and stamp.
 pub fn boot_reset_status(conn: &rusqlite::Connection) -> usize {
     let released = conn
         .execute(

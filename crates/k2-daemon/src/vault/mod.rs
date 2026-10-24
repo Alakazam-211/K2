@@ -211,10 +211,10 @@ fn start_ticker(v: Arc<LocalVault>) {
                 }
                 // Secret handoffs: pending copies past 7 days, --ttl copies (H13).
                 crate::vault_handoff_routes::tick(&v2);
-                let live: std::collections::HashSet<String> = crate::v2_session_map::snapshot()
-                    .into_iter()
-                    .map(|(_, s)| s.session_id.to_string())
-                    .collect();
+                // One liveness answer for every per-session sweep: the map,
+                // sessions waiting for k2-ptyd adoption (this first tick
+                // fires before boot's B1), and sessions still spawning.
+                let live = crate::session_liveness::live_session_ids();
                 spawn::sweep_dead(&|s: &str| live.contains(s));
             })
             .await;

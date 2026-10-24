@@ -68,6 +68,25 @@
 #   their lines are up and match GitHub's asset digests, else the release
 #   ends with exit 1 and a re-run line. Escape: K2_SKIP_LINUX_SUMS_CHECK=1.
 #
+# Linux builds on K2 Compute (plan-ci-release-on-k2-compute-v1), switch
+#   K2_LINUX_BUILDS:
+#     github (default)  today's path: the tag starts the GitHub workflows.
+#     shadow            stage 0. Also builds the Linux x86 set on K2 Compute
+#                       BEFORE the tag (Step 1.6c, beside the Mac build),
+#                       fetches it and checks each job's signed receipt
+#                       against the release commit (Step 7.9c), then
+#                       compares the files with the GitHub-built assets
+#                       (Step 10.7, the shadow report). Publishes and signs
+#                       nothing from compute; a compute problem only warns.
+#                       Needs this Mac's K2 as a server on the nodes with a
+#                       grant (k2 compute nodes). Settings and node names:
+#                       scripts/lib/compute-release.sh. Audit:
+#                       ~/k2-release-audit/<v>/compute/.
+#     compute           stage 1 (compute files are the release, signed
+#                       here, one publish): not built yet, refused.
+#   aarch64 stays on GitHub until the ARM Linux VM node exists
+#   (K2_COMPUTE_ARM_NODE, plan G10).
+#
 # Usage:
 #   ./scripts/release.sh <version>
 #   Example: ./scripts/release.sh 0.25.0
@@ -173,6 +192,10 @@ source "$PROJECT_DIR/scripts/require-mail-oauth-build-env.sh"
 # Shared build step (also sources macos-daemon-helper-app.sh).
 # shellcheck source=scripts/lib/build-binaries.sh
 source "$PROJECT_DIR/scripts/lib/build-binaries.sh"
+# Linux builds on K2 Compute (K2_LINUX_BUILDS; see "Linux builds on K2
+# Compute" below).
+# shellcheck source=scripts/lib/compute-release.sh
+source "$PROJECT_DIR/scripts/lib/compute-release.sh"
 # Gmail is required OOTB (DTL invalid_client). MS is optional unless set above.
 require_mail_oauth_build_env
 
@@ -249,7 +272,97 @@ k2_release_preview_commit() {
     GIT_INDEX_FILE="$tmpd/index" git add -- "${RELEASE_COMMIT_FILES[@]}"
     tree="$(GIT_INDEX_FILE="$tmpd/index" git write-tree)"
     rm -rf "$tmpd"
-    git commit-tree "$tree" -p HEAD -m "release preview ${TAG} (Arch gate build only; never pushed to main)"
+    git commit-tree "$tree" -p HEAD -m "release preview ${TAG} (pre-tag builds only; never pushed to main)"
+}
+
+# ── Linux builds on K2 Compute (see the header; K2_LINUX_BUILDS) ──
+K2_LINUX_BUILDS="${K2_LINUX_BUILDS:-github}"
+case "$K2_LINUX_BUILDS" in
+    github|shadow) ;;
+    compute)
+        echo "ERROR: K2_LINUX_BUILDS=compute (stage 1) isn't built yet; use shadow or github" >&2
+        exit 1
+        ;;
+    *)
+        echo "ERROR: K2_LINUX_BUILDS must be github or shadow (got ${K2_LINUX_BUILDS})" >&2
+        exit 1
+        ;;
+esac
+K2_SHADOW_STATE=""
+K2_SHADOW_NOTE=""
+
+k2_shadow_warn() {
+    echo "  ⚠ shadow (K2 Compute): $*" >&2
+    K2_SHADOW_NOTE="${K2_SHADOW_NOTE:+$K2_SHADOW_NOTE; }$*"
+}
+
+# Step 1.6c. The release commit's tree must be final now, so the lock
+# file gets the bumped workspace versions here (Step 2 would write the
+# same lines). Never fatal.
+k2_shadow_start() {
+    [ "$K2_LINUX_BUILDS" = "shadow" ] || return 0
+    echo ""
+    echo "Step 1.6c: Linux builds on K2 Compute (SHADOW: GitHub stays the source of truth)..."
+    if ! cargo update --workspace --offline >/dev/null 2>"/tmp/k2-shadow-lock-${VERSION}.err"; then
+        k2_shadow_warn "cargo update --workspace --offline failed ($(head -c 200 "/tmp/k2-shadow-lock-${VERSION}.err")); the tagged tree may differ"
+    fi
+    local commit
+    if ! commit="$(k2_release_preview_commit)"; then
+        k2_shadow_warn "could not make the release preview commit; no compute builds"
+        return 0
+    fi
+    K2_SHADOW_STATE="${K2_RELEASE_AUDIT_DIR:-$HOME/k2-release-audit}/${VERSION}/compute"
+    if ! k2cr_init "$VERSION" "$commit" "$K2_SHADOW_STATE" "$PROJECT_DIR/target/compute-dist/${VERSION}"; then
+        k2_shadow_warn "could not set up $K2_SHADOW_STATE"
+        K2_SHADOW_STATE=""
+        return 0
+    fi
+    echo "  Release commit ${commit:0:12} (tree ${K2CR_TREE:0:12}); audit ${K2_SHADOW_STATE}"
+    k2cr_submit_release_set || k2_shadow_warn "not every compute job was submitted"
+}
+
+# Step 7.9c: wait, fetch, verify. Never fatal in shadow.
+k2_shadow_collect() {
+    [ "$K2_LINUX_BUILDS" = "shadow" ] || return 0
+    echo ""
+    echo "Step 7.9c: K2 Compute Linux builds: wait, fetch, verify (shadow)..."
+    if [ -z "$K2_SHADOW_STATE" ] || [ ! -s "$K2_SHADOW_STATE/jobs.tsv" ]; then
+        k2_shadow_warn "no compute jobs to collect (not submitted, or a K2_RELEASE_RESUME run)"
+        return 0
+    fi
+    local t0
+    t0=$(date +%s)
+    k2cr_wait "${K2_COMPUTE_WAIT_MIN:-60}" || k2_shadow_warn "jobs not done in ${K2_COMPUTE_WAIT_MIN:-60} min"
+    k2cr_collect || k2_shadow_warn "not every compute build verified (see ${K2_SHADOW_STATE}/summary.txt)"
+    echo "  waited $(( ($(date +%s) - t0) / 60 )) min after the Mac build."
+}
+
+# After Step 8.9: the tagged tree must be the tree compute built.
+k2_shadow_tree_check() {
+    [ "$K2_LINUX_BUILDS" = "shadow" ] && [ -n "$K2_SHADOW_STATE" ] || return 0
+    local tagged
+    tagged="$(git rev-parse 'HEAD^{tree}')"
+    if [ "$tagged" = "$K2CR_TREE" ]; then
+        echo "  ✓ shadow: the tagged tree is the tree K2 Compute built (${tagged:0:12})." | tee -a "$K2_SHADOW_STATE/summary.txt"
+    else
+        echo "  ✗ shadow: tagged tree ${tagged:0:12} != compute-built tree ${K2CR_TREE:0:12}" | tee -a "$K2_SHADOW_STATE/summary.txt"
+        k2_shadow_warn "the tagged tree differs from the one compute built"
+    fi
+}
+
+# Step 10.7: compare with the GitHub-built assets (they exist after 10.5/10.6).
+k2_shadow_report() {
+    [ "$K2_LINUX_BUILDS" = "shadow" ] || return 0
+    echo ""
+    echo "Step 10.7: Shadow report, K2 Compute vs GitHub Linux assets..."
+    if [ -z "$K2_SHADOW_STATE" ] || [ "${K2CR_COLLECTED:-0}" != "1" ]; then
+        k2_shadow_warn "nothing collected; no report"
+    else
+        k2cr_compare_github "$TAG" || k2_shadow_warn "shadow compare failed"
+        echo "  Audit: ${K2_SHADOW_STATE} (summary.txt, shadow-report.json)"
+    fi
+    [ -n "$K2_SHADOW_NOTE" ] && echo "  shadow notes: $K2_SHADOW_NOTE"
+    return 0
 }
 
 k2_arch_gate_start() {
@@ -328,6 +441,9 @@ k2_arch_gate_on_exit() {
         if [ -f "$ARCH_GATE_LOG" ]; then
             tail -n 8 "$ARCH_GATE_LOG" >&2
         fi
+    fi
+    if [ "$K2_LINUX_BUILDS" = "shadow" ]; then
+        k2cr_cancel_open || true
     fi
     k2_release_lock_release
     exit "$rc"
@@ -453,6 +569,9 @@ echo "  Found '## ${VERSION}' entry. OK to proceed."
 # published or tagged. See the header and scripts/arch-build-gate.sh.
 echo ""
 echo "Step 1.6: Arch build gate (k2-arch, background)..."
+# Shadow compute builds first: their Cargo.lock refresh is part of the
+# release preview commit the Arch gate builds too.
+k2_shadow_start
 k2_arch_gate_start
 
 # ── Step 2: Build K2.app + every sidecar binary ──
@@ -680,6 +799,7 @@ fi # SKIP_SMOKE
 echo ""
 echo "Step 7.9: Arch build gate result..."
 k2_arch_gate_wait
+k2_shadow_collect
 
 # ── Step 8: Generate latest.json ──
 echo ""
@@ -985,6 +1105,7 @@ git push origin HEAD:main
 git tag -fa "$TAG" -m "K2 ${TAG}"
 git push origin "refs/tags/${TAG}" --force
 echo "  Pushed main + tag ${TAG} at $(git rev-parse --short HEAD)."
+k2_shadow_tree_check
 
 # ── Step 9: Create the GitHub release (attaches to the tag pushed above) ──
 gh release create "$TAG" "${ASSETS[@]}" \
@@ -1135,6 +1256,8 @@ else
         echo "  ✗ Linux SHA256SUMS incomplete or wrong — re-run: bash scripts/linux-sums.sh check ${VERSION} --wait-min 60" >&2
     fi
 fi
+
+k2_shadow_report
 
 echo ""
 echo "═══════════════════════════════════════════════════"

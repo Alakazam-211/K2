@@ -2130,7 +2130,7 @@
         "additionalProperties": false
       },
       "errors": ["bad_args", "rate_limited", "verb_unavailable", "failed"],
-      "doc": "Fold or unfold a collapsible column on this page, within 5 s of a click in this widget (4 a second; never saved; the last open column can't fold).",
+      "doc": "Fold or unfold a collapsible column on this page, within 5 s of a click in this widget (4 a second; kept per Garden on this computer, like the person's own fold; the last open column can't fold).",
       "example": "await k2.layout.set({column: 2, collapsed: false})"
     },
     {

@@ -59,7 +59,6 @@ function input(over: Partial<ZenColumnFoldInput> = {}): ZenColumnFoldInput {
     folds: FOLDS,
     minWidths: [240, 360],
     saved: {},
-    transient: new Map(),
     keepOpen: new Set(),
     width: null,
     gap: 12,
@@ -158,15 +157,12 @@ describe('the saved folds: this computer, per Garden (A1)', () => {
 })
 
 describe('where each column is (A1, CA10)', () => {
-  it('the file starts it; the person’s saved click wins; a widget’s fold wins over both and is never saved', () => {
+  it('the file starts it; the saved fold (the person’s click or a widget’s) wins', () => {
     expect(zenColumnFolds(input()).collapsed).toEqual([false, false])
     const startsFolded = [FOLDS[0], { ...FOLDS[1], collapsed: true }]
     expect(zenColumnFolds(input({ folds: startsFolded })).collapsed).toEqual([false, true])
     expect(zenColumnFolds(input({ folds: startsFolded, saved: { [`${G}/2/1`]: false } })).collapsed).toEqual([false, false])
     expect(zenColumnFolds(input({ saved: { [`${G}/2/1`]: true } })).collapsed).toEqual([false, true])
-    expect(
-      zenColumnFolds(input({ saved: { [`${G}/2/1`]: true }, transient: new Map([[1, false]]) })).collapsed,
-    ).toEqual([false, false])
   })
 
   it('a new column count ignores the old keys', () => {

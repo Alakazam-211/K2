@@ -191,7 +191,7 @@ and its controls until the file declares its own.\n\n\
   the `zen-toggle` or `garden-switcher` (at its edge, in a menu at its edge, or from the\n\
   template's controls) or a `nav-rail`. The last open column never folds. There is no\n\
   shortcut: Tab to the chevron or the tab, then Enter. A widget folds one only with\n\
-  `k2.layout.*`, right after the person clicks in it, and those folds are never saved.\n\
+  `k2.layout.*`, right after the person clicks in it, and that fold is kept the same way.\n\
 - `[[widget]]`: `id` (letters, digits, - and _; unique on the page), `kind`, `column` (0 is\n\
   the first; it must exist in the layout), and optional `[widget.props]`. At most {MAX_WIDGETS}\n\
   content widgets and {MAX_CHROME_WIDGETS} Zen controls.\n\
@@ -804,8 +804,9 @@ them, so you never rebuild a chat panel:\n\n\
   for this page; `k2.layout.subscribe(cb)` pushes the same on every fold. `k2.layout.set({column,\n\
   collapsed})` and `k2.layout.toggle(column)` fold or unfold a `collapsible` column, but only\n\
   within 5 s of the person's click in your widget (else `failed` \"needs a click\"), at most 4\n\
-  calls a second each (`rate_limited`). Your folds are never saved (only the person's own click\n\
-  is); a fixed column or the last open one answers `failed`, a bad index `bad_args`.\n\
+  calls a second each (`rate_limited`). Your folds are kept per Garden on this computer, like\n\
+  the person's own click, and the page reopens that way; a fixed column or the last open one\n\
+  answers `failed`, a bad index `bad_args`.\n\
 - **A chosen list:** an Agents widget with `list-from = \"<your widget's id>\"` shows just the\n\
   agents you list with `k2.agents.show([...addresses])` (needs `agents:read`), in your order:\n\
   full addresses exactly as `k2.agents.list()` gives them (`handle::host`; a bare handle is\n\
@@ -1248,7 +1249,6 @@ mod tests {
             "a bare handle is\n`not_bound`",
             "### Columns, a chosen list and a context chip",
             "within 5 s of the person's click",
-            "Your folds are never saved",
             "never as their words",
             "the id of a custom widget on this page that asks for agents:read",
         ] {
@@ -1272,6 +1272,21 @@ mod tests {
         ] {
             assert!(s.contains(needle), "the k2-zen skill must say {needle:?}");
         }
+    }
+
+    /// v34: a widget's `k2.layout.*` fold is kept like the person's (0.46.4,
+    /// Rosson 2026-10-24), so the Kanban reopens with its Thread as left.
+    #[test]
+    fn skill_documents_widget_folds_are_kept() {
+        assert!(crate::skills::version::SKILL_VERSION_ZEN >= 34, "kept widget folds need a new skill version");
+        let s = generate_k2_zen_skill_for(false);
+        for needle in [
+            "Your folds are kept per Garden on this computer, like\nthe person's own click, and the page reopens that way",
+            "right after the person clicks in it, and that fold is kept the same way.",
+        ] {
+            assert!(s.contains(needle), "the k2-zen skill must say {needle:?}");
+        }
+        assert!(!s.contains("never saved"), "the k2-zen skill no longer says a widget's fold is never saved");
     }
 
     /// v33: `pick = "all"` (the Kanban's Thread, 0.46.4): any agent, with a

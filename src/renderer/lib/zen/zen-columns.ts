@@ -12,10 +12,12 @@
 // layout changes to another count ignores the old keys.
 //
 // What decides a column, strongest first:
-//   1. a widget's own fold (`k2.layout.set` / `toggle`) on this page: held
-//      in memory only, never saved (Q4: no unprompted folds);
-//   2. the person's click on K2's chevron or tab: saved here;
-//   3. the file's `collapsed`.
+//   1. the last fold saved here: the person's click on K2's chevron or tab,
+//      or a widget's `k2.layout.set` / `toggle` (0.46.4, Rosson 2026-10-24).
+//      A widget may fold only within 5 s of the person's press in it, 4 a
+//      second (`zen-custom-bridge`), so it is still the person asking (Q4:
+//      no unprompted folds) and it is saved the same way;
+//   2. the file's `collapsed`.
 // Then the narrow-window fold (a ResizeObserver measures the row): while the
 // open columns' min widths don't fit, the rightmost open collapsible column
 // folds, never the last open one. It is never saved. A column the person
@@ -74,9 +76,9 @@ export function parseZenColumnsDoc(raw: string | null): ZenColumnsDoc | null {
 }
 
 export interface ZenColumnsState {
-  /** The person's saved folds, by `zenColumnKey`. */
+  /** The saved folds (the person's clicks and widgets' folds), by `zenColumnKey`. */
   folds: Record<string, boolean>
-  /** The person's click: save it. */
+  /** The person's click, or a widget's fold just after one: save it. */
   save(key: string, collapsed: boolean): void
   /** Another window saved `raw` (the `storage` event). */
   applyExternal(raw: string | null): void
@@ -155,10 +157,8 @@ export interface ZenColumnFoldInput {
   /** The page's `layout.folds` (undefined: nothing folds). */
   folds: readonly ZenColumnFold[] | undefined
   minWidths: readonly number[]
-  /** The person's saved folds (`useZenColumnsStore`). */
+  /** The saved folds (`useZenColumnsStore`). */
   saved: Readonly<Record<string, boolean>>
-  /** Widget folds on this page (never saved), by column. */
-  transient: ReadonlyMap<number, boolean>
   /** Columns the person opened while the window was narrow. */
   keepOpen: ReadonlySet<number>
   /** The row's inner width in px (null: not measured yet, no narrow fold). */
@@ -174,14 +174,12 @@ export interface ZenColumnFoldState {
   auto: boolean[]
 }
 
-/** Folded before the narrow-window fold: widget > person > file. */
+/** Folded before the narrow-window fold: saved > file. */
 function chosen(input: ZenColumnFoldInput, ncols: number): boolean[] {
   const folds = input.folds
   return Array.from({ length: ncols }, (_, i) => {
     const f = folds?.[i]
     if (!f?.collapsible) return false
-    const t = input.transient.get(i)
-    if (t !== undefined) return t
     const s = input.saved[zenColumnKey(input.gardenId, ncols, i)]
     return s ?? f.collapsed
   })
@@ -262,10 +260,11 @@ export function zenLayoutColumns(folds: readonly ZenColumnFold[] | undefined, co
 }
 
 /** What a page hands its custom widgets for `k2.layout.*` (CA10): only that
- *  page's columns, and only a widget's own (unsaved) folds. */
+ *  page's columns. */
 export interface ZenColumnsController {
   columns(): ZenLayoutColumn[]
-  /** A widget's fold, never saved. Null when done (or nothing changed). */
+  /** A widget's fold (the bridge checked the press), saved like the
+   *  person's. Null when done (or nothing changed). */
   setByWidget(index: number, collapsed: boolean): ZenColumnFoldRefusal | null
   subscribe(fn: (columns: ZenLayoutColumn[]) => void): () => void
 }
@@ -293,7 +292,6 @@ export interface ZenColumnFoldsApi extends ZenColumnFoldState {
   onMove(fn: ((index: number, collapsed: boolean, by: ZenColumnMover) => void) | null): void
 }
 
-const NO_TRANSIENT: ReadonlyMap<number, boolean> = new Map()
 const NO_KEEP: ReadonlySet<number> = new Set()
 
 function sameFolds(a: readonly boolean[], b: readonly boolean[]): boolean {
@@ -325,8 +323,8 @@ function useRowWidth(host: RefObject<HTMLElement | null>, on: boolean): { width:
 
 /**
  * Where a page's columns are, and the ways to move them. `gardenId` and the
- * column count scope the saved folds; widget folds and the narrow window's
- * "keep open" reset when either changes (a Garden switch).
+ * column count scope the saved folds; the narrow window's "keep open" resets
+ * when either changes (a Garden switch).
  */
 export function useZenColumnFolds(
   gardenId: string,
@@ -337,14 +335,12 @@ export function useZenColumnFolds(
   const folds = layout.folds
   const scope = `${gardenId}/${ncols}`
   const saved = useZenColumnsStore((s) => s.folds)
-  const [transient, setTransient] = useState<{ scope: string; map: ReadonlyMap<number, boolean> }>({ scope, map: NO_TRANSIENT })
   const [keepOpen, setKeepOpen] = useState<{ scope: string; set: ReadonlySet<number> }>({ scope, set: NO_KEEP })
-  const t = transient.scope === scope ? transient.map : NO_TRANSIENT
   const k = keepOpen.scope === scope ? keepOpen.set : NO_KEEP
   const { width, gap } = useRowWidth(host, folds !== undefined)
   const state = useMemo(
-    () => zenColumnFolds({ gardenId, folds, minWidths: layout.minWidths, saved, transient: t, keepOpen: k, width, gap }),
-    [gardenId, folds, layout.minWidths, saved, t, k, width, gap],
+    () => zenColumnFolds({ gardenId, folds, minWidths: layout.minWidths, saved, keepOpen: k, width, gap }),
+    [gardenId, folds, layout.minWidths, saved, k, width, gap],
   )
   // Wide again: the person's "keep open" has done its job.
   useEffect(() => {
@@ -374,17 +370,22 @@ export function useZenColumnFolds(
       return { scope: sc, set: next }
     })
   }, [])
-  const setWidget = useCallback((i: number, c: boolean | null) => {
-    const sc = live.current.scope
-    setTransient((prev) => {
-      const cur = prev.scope === sc ? prev.map : NO_TRANSIENT
-      if (c === null ? !cur.has(i) : cur.get(i) === c) return prev
-      const next = new Map(cur)
-      if (c === null) next.delete(i)
-      else next.set(i, c)
-      return { scope: sc, map: next }
-    })
-  }, [])
+  /** Fold or open column `i` and save it (the person's or a widget's). The
+   *  caller checked the refusal and that it moves. Opening a column the
+   *  narrow window folded keeps it open until the window is wide again;
+   *  folding drops that. */
+  const move = useCallback(
+    (i: number, c: boolean, by: ZenColumnMover) => {
+      const cur = live.current
+      const wasAuto = cur.state.auto[i]
+      useZenColumnsStore.getState().save(zenColumnKey(cur.gardenId, cur.ncols, i), c)
+      if (c) keep(i, false)
+      else if (wasAuto) keep(i, true)
+      moved(i, c)
+      mover.current?.(i, c, by)
+    },
+    [keep, moved],
+  )
 
   const canFold = useCallback(
     (i: number) => zenColumnFoldRefusal(folds, state.collapsed, i, true) === null && !state.collapsed[i],
@@ -394,25 +395,17 @@ export function useZenColumnFolds(
     (i: number) => {
       const cur = live.current
       if (cur.state.collapsed[i] || zenColumnFoldRefusal(cur.folds, cur.state.collapsed, i, true) !== null) return
-      useZenColumnsStore.getState().save(zenColumnKey(cur.gardenId, cur.ncols, i), true)
-      setWidget(i, null)
-      keep(i, false)
-      moved(i, true)
-      mover.current?.(i, true, 'person')
+      move(i, true, 'person')
     },
-    [keep, setWidget, moved],
+    [move],
   )
   const personExpand = useCallback(
     (i: number) => {
       const cur = live.current
       if (!cur.state.collapsed[i] || zenColumnFoldRefusal(cur.folds, cur.state.collapsed, i, false) !== null) return
-      useZenColumnsStore.getState().save(zenColumnKey(cur.gardenId, cur.ncols, i), false)
-      setWidget(i, null)
-      if (cur.state.auto[i]) keep(i, true)
-      moved(i, false)
-      mover.current?.(i, false, 'person')
+      move(i, false, 'person')
     },
-    [keep, setWidget, moved],
+    [move],
   )
 
   const subscribers = useRef(new Set<(columns: ZenLayoutColumn[]) => void>())
@@ -424,11 +417,9 @@ export function useZenColumnFolds(
         const refusal = zenColumnFoldRefusal(cur.folds, cur.state.collapsed, i, c)
         if (refusal) return refusal
         if (cur.state.collapsed[i] === c) return null
-        setWidget(i, c)
-        // A widget opening a column the narrow window folded keeps it open.
-        if (!c && cur.state.auto[i]) keep(i, true)
-        moved(i, c)
-        mover.current?.(i, c, 'widget')
+        // Saved like the person's click (0.46.4): the bridge let it through
+        // only just after the person pressed in the widget.
+        move(i, c, 'widget')
         return null
       },
       subscribe: (fn) => {
@@ -438,7 +429,7 @@ export function useZenColumnFolds(
         }
       },
     }),
-    [keep, setWidget, moved],
+    [move],
   )
   // Tell `layout.subscribe` widgets whenever a column moves (any cause).
   const lastSent = useRef<boolean[] | null>(null)

@@ -1,8 +1,9 @@
 // prd-garden-column-collapse-and-agent-list-v1 A1 (CA10) — `k2.layout.*`
 // through the custom layer: frame-only and cap-free, the caller's own page
 // (the `deps.layout` the page hands its frames), each verb at most 4 a
-// second, a fold only within 5 s of the person's press in the frame, never
-// saved, and the subscription budget. K2's own verbs are faked behind the
+// second, a fold only within 5 s of the person's press in the frame (the
+// page then saves it like the person's click: zen-columns-page.test), and
+// the subscription budget. K2's own verbs are faked behind the
 // inner bridge. Fixtures are made up (g-test0001).
 import { describe, expect, it } from 'vitest'
 import type { ZenWidgetBridge } from './zen-bridge'
@@ -44,8 +45,6 @@ class FakePage implements ZenCustomLayout {
     { collapsible: true, collapsed: false, label: 'Chat' },
   ]
   collapsed = [false, false]
-  /** What the person saved (a widget's fold must never reach it). */
-  saved: Record<number, boolean> = {}
   widgetFolds: Array<[number, boolean]> = []
   press = false
   listeners = new Set<(c: ZenLayoutColumn[]) => void>()
@@ -142,7 +141,7 @@ describe('k2.layout.* through the custom layer (A1, CA10)', () => {
     })
   })
 
-  it('without a press: failed "needs a click"; after a press: folds, answers the column, never saved', async () => {
+  it('without a press: failed "needs a click" and the page is never asked; after a press: folds and answers the column', async () => {
     const page = new FakePage()
     const { layer, clock } = harness(page)
     const refused = await call(layer, 'layout.set', { column: 1, collapsed: true })
@@ -161,7 +160,6 @@ describe('k2.layout.* through the custom layer (A1, CA10)', () => {
     })
     expect(page.collapsed).toEqual([false, true])
     expect(page.widgetFolds).toEqual([[1, true]])
-    expect(page.saved, 'a widget’s fold is never the person’s').toEqual({})
 
     clock.t += 300
     expect(ok(await call(layer, 'layout.toggle', 1))).toMatchObject({ index: 1, collapsed: false })

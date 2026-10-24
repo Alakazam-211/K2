@@ -1191,7 +1191,7 @@ export interface K2 {
   readonly layout: {
     /** This page's columns: index, label, and whether each can fold and is folded now. no cap · local · zen-widgets-v1. e.g. `const {columns} = await k2.layout.get()` */
     get(): Promise<LayoutInfo>
-    /** Fold or unfold a collapsible column on this page, within 5 s of a click in this widget (4 a second; never saved; the last open column can't fold). no cap · local · zen-widgets-v1. e.g. `await k2.layout.set({column: 2, collapsed: false})` */
+    /** Fold or unfold a collapsible column on this page, within 5 s of a click in this widget (4 a second; kept per Garden on this computer, like the person's own fold; the last open column can't fold). no cap · local · zen-widgets-v1. e.g. `await k2.layout.set({column: 2, collapsed: false})` */
     set(change: { collapsed: boolean; column: number }): Promise<LayoutColumn>
     /** Fold an open collapsible column, or unfold a folded one; the same rules as layout.set. no cap · local · zen-widgets-v1. e.g. `chat.addEventListener('click', () => k2.layout.toggle(2))` */
     toggle(column: number): Promise<LayoutColumn>

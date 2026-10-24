@@ -7,7 +7,9 @@
 // counts of the widgets inside; folding moves the focus to the tab and the
 // person's unfold back into the column; the person's click is saved on this
 // computer per Garden and a second window follows; a widget's fold (the
-// page's controller) is never saved; the last open column can't fold; the
+// page's controller, reached through `k2.layout.*` only just after a press
+// in the widget) is saved the same way and comes back after a reload
+// (0.46.4); the last open column can't fold; the
 // narrow window folds right to left and isn't saved; single-view pages never
 // fold; widgets stay mounted while folded. Only the daemon and Tauri are
 // faked. Fixtures are made up (g-test0001).
@@ -38,7 +40,17 @@ import { useZenWindowStore } from '@/lib/zen/zen-window'
 import { __setZenGeometryForTests } from '@/lib/zen/zen-monitor'
 import { registerZenVerb } from '@/lib/zen/zen-bridge'
 import { parseZenGet, type ZenResolvedPage } from '@/lib/zen/zen-page'
-import { useZenColumnsStore, ZenColumnsContext, ZEN_COLUMNS_KEY, type ZenColumnsController, type ZenLayoutColumn } from '@/lib/zen/zen-columns'
+import {
+  createZenColumnsStore,
+  useZenColumnsStore,
+  ZenColumnsContext,
+  ZEN_COLUMNS_KEY,
+  type ZenColumnsController,
+  type ZenLayoutColumn,
+} from '@/lib/zen/zen-columns'
+import { createZenCustomLayer, type ZenCustomLayerDeps } from '@/lib/zen/zen-custom-bridge'
+import type { ZenCustomWidgetPayload, ZenFrameReply } from '@/lib/zen/zen-custom-types'
+import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import { ZEN_COLUMN_TAB_PX } from '@/lib/zen/zen-overflow'
 import type { ZenAgentRow } from '@/lib/zen/zen-data'
 import { registerZenWidget, type ZenWidgetProps } from './zen-registry'
@@ -313,7 +325,7 @@ describe('collapsible columns on the page (A1)', () => {
     expect(q('[data-zen-column-tab="0"]').getAttribute('data-zen-column-side')).toBe('left')
   })
 
-  it('a widget’s fold through the page’s controller is drawn but never saved; subscribers hear every move', () => {
+  it('a widget’s fold through the page’s controller is drawn and saved like the person’s; subscribers hear every move', () => {
     show(page({ columns: TWO }))
     expect(controller).not.toBeNull()
     const heard: ZenLayoutColumn[][] = []
@@ -328,8 +340,12 @@ describe('collapsible columns on the page (A1)', () => {
     })
     expect(r).toBeNull()
     q('[data-zen-column-tab="1"]')
-    expect(localStorage.getItem(ZEN_COLUMNS_KEY), 'a widget’s fold is never saved').toBeNull()
-    expect(useZenColumnsStore.getState().folds).toEqual({})
+    expect(JSON.parse(localStorage.getItem(ZEN_COLUMNS_KEY) ?? 'null'), 'a widget’s fold is saved').toEqual({
+      version: 1,
+      folds: { [`${G}/2/1`]: true },
+    })
+    expect(useZenColumnsStore.getState().folds).toEqual({ [`${G}/2/1`]: true })
+    expect(q('[data-zen-column-announce]').textContent).toBe('Chat collapsed')
     expect(heard).toEqual([
       [
         { index: 0, label: 'Column 1', collapsible: false, collapsed: false },
@@ -340,7 +356,8 @@ describe('collapsible columns on the page (A1)', () => {
       r = controller!.setByWidget(0, true)
     })
     expect(r).toBe('fixed')
-    // The person's click beats the widget's fold, and is saved.
+    expect(useZenColumnsStore.getState().folds, 'a refused fold saves nothing').toEqual({ [`${G}/2/1`]: true })
+    // The person's click after it wins (the last saved fold), and is saved.
     act(() => {
       fireEvent.click(q('[data-zen-column-tab="1"]'))
     })
@@ -423,5 +440,158 @@ describe('collapsible columns on the page (A1)', () => {
     expect(tab.style.zIndex).toBe('4')
     expect(tab.style.marginTop).not.toBe('')
     expect(tab.hasAttribute('data-tauri-drag-region')).toBe(false)
+  })
+})
+
+/** A custom frame's `k2.layout.*` on the real page: the layer the frame
+ *  talks to, with `deps.layout` built from the page's controller the way
+ *  ZenCustomFrame builds it. `press` stands for the person's press in the
+ *  frame within the last 5 s. */
+function frameOnPage(): {
+  call: (verb: string, ...args: unknown[]) => Promise<ZenFrameReply>
+  press: { on: boolean }
+  clock: { t: number }
+} {
+  const press = { on: false }
+  const clock = { t: 1_000_000 }
+  const deps: ZenCustomLayerDeps = {
+    widget: () =>
+      ({
+        id: 'board',
+        kind: 'custom',
+        widget: 'kanban-lite',
+        column: 0,
+        props: { config: {} },
+        caps: [],
+        requested: [],
+        source: 'user',
+        name: 'Board',
+        description: null,
+        reasons: {},
+        libs: [],
+        hash: 'h1',
+        state: 'ok',
+        errors: [],
+        warnings: [],
+        origin: 'local',
+        paused: null,
+      }) as ZenCustomWidgetPayload,
+    gardenId: () => G,
+    inner: { widgetId: 'board', caps: new Set<string>(), call: () => null } as unknown as ZenWidgetBridge,
+    boundRows: () => [],
+    ensureConversation: async () => undefined,
+    push: () => undefined,
+    stop: () => undefined,
+    paused: () => false,
+    pauseForRunaway: () => undefined,
+    theme: () => ({}),
+    onThemeChange: () => () => undefined,
+    now: () => clock.t,
+    // Read live: a remounted page hands its frames a new controller.
+    layout: {
+      columns: () => {
+        if (!controller) throw new Error('no page controller')
+        return controller.columns()
+      },
+      setByWidget: (index, collapsed) => {
+        if (!controller) throw new Error('no page controller')
+        return controller.setByWidget(index, collapsed)
+      },
+      subscribe: (fn) => {
+        if (!controller) throw new Error('no page controller')
+        return controller.subscribe(fn)
+      },
+      pressed: () => press.on,
+    },
+  }
+  const layer = createZenCustomLayer(deps)
+  let id = 0
+  const call = async (verb: string, ...args: unknown[]): Promise<ZenFrameReply> => {
+    const box: { reply: ZenFrameReply | null } = { reply: null }
+    clock.t += 300
+    await act(async () => {
+      box.reply = await layer.handle({ id: ++id, verb, args })
+    })
+    if (!box.reply) throw new Error(`no reply to ${verb}`)
+    return box.reply
+  }
+  return { call, press, clock }
+}
+
+function replyCode(r: ZenFrameReply): string {
+  if (!('ok' in r)) throw new Error('not a call reply')
+  if (r.ok) throw new Error(`ok: ${JSON.stringify(r.value)}`)
+  return r.error.code
+}
+
+function replyValue(r: ZenFrameReply): unknown {
+  if (!('ok' in r)) throw new Error('not a call reply')
+  if (!r.ok) throw new Error(`refused: ${JSON.stringify(r.error)}`)
+  return r.value
+}
+
+/** Close the page and open it again as a fresh window would: the saved
+ *  folds come back from localStorage, not from memory. */
+function reload(p: ZenResolvedPage): void {
+  cleanup()
+  controller = null
+  useZenColumnsStore.setState({ folds: createZenColumnsStore(localStorage).getState().folds })
+  show(p)
+}
+
+describe('a widget’s k2.layout.* fold is remembered (0.46.4)', () => {
+  it('without a press nothing folds and nothing is saved', async () => {
+    show(page({ columns: TWO }))
+    const { call } = frameOnPage()
+    expect(replyCode(await call('layout.toggle', 1))).toBe('failed')
+    expect(replyCode(await call('layout.set', { column: 1, collapsed: true }))).toBe('failed')
+    expect(document.querySelector('[data-zen-column-tab]')).toBeNull()
+    expect(localStorage.getItem(ZEN_COLUMNS_KEY), 'no press, no save').toBeNull()
+    expect(useZenColumnsStore.getState().folds).toEqual({})
+  })
+
+  it('a toggle just after a press folds and is saved; a reload opens it folded; unfolding is saved too', async () => {
+    const p = page({ columns: TWO })
+    show(p)
+    const frame = frameOnPage()
+    frame.press.on = true
+    expect(replyValue(await frame.call('layout.toggle', 1))).toEqual({ index: 1, label: 'Chat', collapsible: true, collapsed: true })
+    q('[data-zen-column-tab="1"]')
+    expect(JSON.parse(localStorage.getItem(ZEN_COLUMNS_KEY) ?? 'null')).toEqual({ version: 1, folds: { [`${G}/2/1`]: true } })
+
+    reload(p)
+    q('[data-zen-column-tab="1"]')
+    expect(q('[data-zen-column-slot="1"]').getAttribute('data-zen-column-folded')).toBe('')
+
+    // The widget unfolds it (a new press); that is kept as well.
+    expect(replyValue(await frame.call('layout.set', { column: 1, collapsed: false }))).toMatchObject({ index: 1, collapsed: false })
+    expect(document.querySelector('[data-zen-column-tab]')).toBeNull()
+    expect(JSON.parse(localStorage.getItem(ZEN_COLUMNS_KEY) ?? 'null')).toEqual({ version: 1, folds: { [`${G}/2/1`]: false } })
+    reload(p)
+    expect(document.querySelector('[data-zen-column-tab]')).toBeNull()
+  })
+
+  it('the saved widget fold beats the file’s collapsed = true after a reload', async () => {
+    const p = page({ columns: [{ size: 60 }, { size: 40, collapsible: true, collapsed: true, label: 'Thread' }] })
+    show(p)
+    q('[data-zen-column-tab="1"]')
+    const frame = frameOnPage()
+    frame.press.on = true
+    expect(replyValue(await frame.call('layout.toggle', 1))).toMatchObject({ index: 1, collapsed: false })
+    reload(p)
+    expect(document.querySelector('[data-zen-column-tab]'), 'the Thread stays open').toBeNull()
+  })
+
+  it('the last open column still never folds, and the refusal saves nothing', async () => {
+    show(page({ columns: [{ size: 60, collapsible: true, label: 'Board' }, { size: 40, collapsible: true, label: 'Chat' }] }))
+    const frame = frameOnPage()
+    frame.press.on = true
+    replyValue(await frame.call('layout.toggle', 1))
+    const refused = await frame.call('layout.toggle', 0)
+    expect(replyCode(refused)).toBe('failed')
+    expect('ok' in refused && !refused.ok && refused.error.message).toMatch(/only open column/)
+    expect(document.querySelector('[data-zen-column-tab="0"]')).toBeNull()
+    q('[data-zen-column-tab="1"]')
+    expect(JSON.parse(localStorage.getItem(ZEN_COLUMNS_KEY) ?? 'null')).toEqual({ version: 1, folds: { [`${G}/2/1`]: true } })
   })
 })

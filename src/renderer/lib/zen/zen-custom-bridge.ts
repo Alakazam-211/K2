@@ -37,7 +37,8 @@
 //      most 32 finite rects (`zen-canvas`), `window.startDrag` only during
 //      a press in that frame; `layout.*` (Garden columns, 0.46.3 r10) on
 //      the caller's own page only, 4 a second per verb, a fold or unfold
-//      only within 5 s of a press in that frame, and never saved.
+//      only within 5 s of a press in that frame, saved per Garden on this
+//      computer like the person's own click (0.46.4).
 // 0.46.3 Thread parity (Rosson 2026-10-20): `thread.read` takes `afterSeq`
 // (a delta: items, hasMore, changed, removed), and `thread.markRead`,
 // `thread.attachment`, `thread.open`, `thread.links` and `thread.pickFiles`
@@ -188,7 +189,8 @@ export interface ZenCustomLayerDeps {
 /** What the layer needs for `k2.layout.*` (frame-only verbs, no cap). */
 export interface ZenCustomLayout {
   columns(): ZenLayoutColumn[]
-  /** A widget's fold: never saved. Null when done or nothing changed. */
+  /** A widget's fold, saved like the person's click (the press is checked
+   *  here first). Null when done or nothing changed. */
   setByWidget(index: number, collapsed: boolean): ZenColumnFoldRefusal | null
   subscribe(fn: (columns: ZenLayoutColumn[]) => void): () => void
   /** Did the person press in this frame within the last 5 s? (A press
@@ -437,7 +439,8 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
   // ── k2.layout.* (prd-garden-column-collapse A1, CA10) ───────────────────
   // Frame-only, no cap: the caller's own page only, each verb at most 4 a
   // second (a refusal counts toward UW29), and a fold or unfold only within
-  // 5 s of the person's press in this frame. A widget's fold is never saved.
+  // 5 s of the person's press in this frame. That press is what lets the page
+  // save a widget's fold like the person's own click (0.46.4).
 
   const layoutCalls = new Map<string, number[]>()
 

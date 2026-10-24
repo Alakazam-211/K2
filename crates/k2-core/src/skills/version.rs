@@ -177,7 +177,11 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// they share one pick) and the Kanban on `k2:kanban@5`: K2's own
 /// Conversation in a folded "Thread" column, Send board to the agent it
 /// shows (Rosson 2026-10-24, for 0.46.4).
-pub const SKILL_VERSION_ZEN: u32 = 33;
+/// v34 = a widget's `k2.layout.*` fold (still only just after the person's
+/// click in it) is kept per Garden on this computer like the person's own,
+/// so the Kanban reopens with its Thread as the person left it (Rosson
+/// 2026-10-24, for 0.46.4).
+pub const SKILL_VERSION_ZEN: u32 = 34;
 /// Bumped to 5 in 0.39.0: same Phase 2.1 A25 verb refresh applied to
 /// the workspace-root template body (Cli tools section, workflow
 /// docs). Was 4 since 0.32.7 (SOURCE sub-regions adoption).

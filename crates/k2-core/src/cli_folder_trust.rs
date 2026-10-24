@@ -10,6 +10,9 @@ use std::path::{Path, PathBuf};
 
 use crate::fs_atomic;
 
+/// Risky per-project config scanner (SS8). Not wired into the grants yet.
+pub mod scan;
+
 const HARNESS_BASENAMES: &[&str] = &["claude", "codex", "grok", "gemini", "cursor-agent"];
 const LOGIN_SHELL_BASENAMES: &[&str] = &[
     "zsh",

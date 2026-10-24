@@ -589,3 +589,65 @@ async fn move_plan_lists_every_step_and_one_approval_runs_the_owner_steps() {
     assert_eq!(still.added, vec!["cy".to_string(), "dan".to_string()], "nothing copied");
     k2_daemon::apps::alerts::set_sink(None);
 }
+
+/// A: a refused gateway call is visible — its audit row carries K2's code
+/// (a handler's refusal included, not only the gate's), and the App's log
+/// gets one `[k2] refused …` line per call, rate-limited, never a pass.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn refused_gateway_calls_carry_their_code_and_reach_the_apps_log() {
+    let env = setup(&[]);
+    let _seen = quiet_alerts();
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let ws = seed_ws(&env, "logws");
+    let svc = app_row(&ws, "logapp");
+    let dep = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let dep = k2_core::deploy::store::insert_deployment(
+            &conn,
+            &k2_core::deploy::store::NewDeployment { app_id: "logapp", kind: "deploy", from_seed: None, to_seed: None, commit_ref: None, actor: "owner", reason: None },
+        )
+        .unwrap();
+        k2_core::deploy::store::set_live(&conn, "logapp", None, Some(&dep)).unwrap();
+        dep
+    };
+    let (pass, port) = open_link("logapp", &svc, &ws);
+    let p = pass.clone();
+    let (login, no_pass) = blocking(move || {
+        let a = on_link(port, &link_post("/cli/skin/login", Some(&p), &json!({"username": "nobody", "password": "wrong"})));
+        let b = on_link(port, &link_get("/cli/skin/agents", None));
+        (a, b)
+    })
+    .await;
+    assert!(login.0 >= 400, "a bad login is refused by its handler: {login:?}");
+    assert_eq!(no_pass.0, 401);
+    let a = audit_rows(d.port, "logapp", "&denied=1", 2).await;
+    let rows = a["calls"].as_array().unwrap();
+    let login_row = rows.iter().find(|c| c["verb"] == "POST /cli/skin/login").unwrap_or_else(|| panic!("{a}"));
+    let code = login_row["code"].as_str().unwrap_or_else(|| panic!("the handler's refusal has a code: {login_row}"));
+    assert!(!code.is_empty(), "{login_row}");
+    assert_eq!(rows.iter().find(|c| c["verb"] == "GET /cli/skin/agents").unwrap()["code"], "pass_required");
+
+    // The App's log: one line each, K2's words, no pass.
+    k2_daemon::apps::audit::flush();
+    let log_path = k2_core::deploy::deployment_log_path("logapp", &dep);
+    let log = std::fs::read_to_string(&log_path).unwrap_or_else(|e| panic!("{}: {e}", log_path.display()));
+    assert!(log.contains(&format!("[k2] refused POST /cli/skin/login: {code}")), "{log}");
+    assert!(log.contains("[k2] refused GET /cli/skin/agents: pass_required (every call on the gateway link carries"), "{log}");
+    assert!(!log.contains("k2skn_"), "never a pass in the App's log: {log}");
+
+    // A flood: at most REFUSED_LINES_PER_MIN lines a minute per App.
+    blocking(move || {
+        for _ in 0..30 {
+            on_link(port, &link_get("/cli/skin/agents", None));
+        }
+    })
+    .await;
+    audit_rows(d.port, "logapp", "&denied=1", 32).await;
+    k2_daemon::apps::audit::flush();
+    let log = std::fs::read_to_string(&log_path).unwrap();
+    let lines = log.lines().filter(|l| l.starts_with("[k2] refused ")).count();
+    assert_eq!(lines, k2_daemon::apps::audit::REFUSED_LINES_PER_MIN, "rate-limited: {log}");
+    gateway::close("logapp", None, true);
+    k2_daemon::apps::alerts::set_sink(None);
+}

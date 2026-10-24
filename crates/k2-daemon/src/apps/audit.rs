@@ -19,6 +19,14 @@
 //! Each kind is said at most once per App per 5 minutes (first use: once
 //! per verb, ever).
 //!
+//! **Refusals are visible** (0.46.4, NSI A): every refused call's row
+//! carries K2's error code, whether the gate refused it or the route's
+//! handler did (a login's `401` included), and the App's own log (the live
+//! deployment's, `k2 app logs`) gets one line per refused call:
+//! `[k2] refused <METHOD /path>: <code> (<hint>)`. K2's words only, a pass
+//! or key never (redacted), at most [`REFUSED_LINES_PER_MIN`] lines per App
+//! a minute (then one line saying how many were left out).
+//!
 //! ```text
 //! GET /cli/app/audit ?app=&since=1h|<epoch-ms>&verb=&denied=1&limit=&verify=1&oldest=1
 //! ```
@@ -55,6 +63,8 @@ pub const ALERT_EVERY: Duration = Duration::from_secs(300);
 /// The call a link connection is serving.
 struct Open {
     call: Call,
+    /// K2's hint on a refusal (for the App's log line, never stored).
+    hint: Option<String>,
     started: Instant,
     ended: Option<Instant>,
     workspace_id: String,
@@ -110,15 +120,17 @@ pub fn begin(ctx: &LinkCtx, b: Begin<'_>) {
         bytes_out: 0,
         latency_ms: 0,
     };
-    let open = Open { call, started: Instant::now(), ended: None, workspace_id: ctx.workspace_id.clone(), subscribed: b.subscribed };
+    let open = Open { call, hint: None, started: Instant::now(), ended: None, workspace_id: ctx.workspace_id.clone(), subscribed: b.subscribed };
     if CONN.try_with(|c| *c.borrow_mut() = Some(open)).is_err() {
         // Off a scoped connection (a unit test): record at once.
         k2_core::log_debug!("[apps/audit] call outside a link connection scope");
     }
 }
 
-/// The response for the open call (status line like `200 OK`).
-pub fn note_response(status: &str, bytes_out: usize) {
+/// The response for the open call (status line like `200 OK`, and the
+/// body sent). A refusal (4xx/5xx) records K2's error code from the body
+/// when the gate didn't already (a handler's own refusal, NSI A).
+pub fn note_response(status: &str, body: &str) {
     let code: u16 = status.split_whitespace().next().and_then(|c| c.parse().ok()).unwrap_or(0);
     let _ = CONN.try_with(|c| {
         if let Some(o) = c.borrow_mut().as_mut() {
@@ -126,11 +138,36 @@ pub fn note_response(status: &str, bytes_out: usize) {
                 if o.call.result == 0 || o.call.code.is_none() {
                     o.call.result = code;
                 }
-                o.call.bytes_out = o.call.bytes_out.saturating_add(bytes_out as u64);
+                if code >= 400 {
+                    let (k2_code, hint) = refusal_of(body);
+                    if o.call.code.is_none() {
+                        o.call.code = Some(k2_code.unwrap_or_else(|| format!("http_{code}")));
+                    }
+                    if o.hint.is_none() {
+                        o.hint = hint;
+                    }
+                }
+                o.call.bytes_out = o.call.bytes_out.saturating_add(body.len() as u64);
                 o.ended = Some(Instant::now());
             }
         }
     });
+}
+
+/// K2's error code and hint from a refusal body: `{error:{code,hint}}`,
+/// `{error:"code"}`, `{code, hint|message}` (the shapes K2's routes use).
+/// A code is a short `snake_case` word; anything else is a hint.
+pub fn refusal_of(body: &str) -> (Option<String>, Option<String>) {
+    let Ok(v) = serde_json::from_str::<J>(body) else { return (None, None) };
+    let is_code = |s: &str| !s.is_empty() && s.len() <= 64 && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
+    let text = |x: &J| x.as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    let (code, hint) = match &v["error"] {
+        J::Object(_) => (text(&v["error"]["code"]), text(&v["error"]["hint"]).or_else(|| text(&v["error"]["message"]))),
+        J::String(e) if is_code(e) => (Some(e.clone()), text(&v["hint"]).or_else(|| text(&v["message"]))),
+        J::String(e) => (text(&v["code"]), Some(e.clone())),
+        _ => (text(&v["code"]), text(&v["hint"]).or_else(|| text(&v["message"]))),
+    };
+    (code.filter(|c| is_code(c)), hint)
 }
 
 /// Is there an open call on this task (a link connection)?
@@ -151,7 +188,96 @@ pub fn finish() {
         }
     }
     observe(&o.workspace_id, &o.call);
+    if o.call.result >= 400 {
+        let line = Refused { app_id: o.call.app_id.clone(), verb: o.call.verb.clone(), code: o.call.code.clone().unwrap_or_default(), hint: o.hint.take() };
+        let _ = sender().lock().unwrap_or_else(|e| e.into_inner()).send(Msg::Refused(line));
+    }
     record(o.call);
+}
+
+// ── the App's log: one line per refused call (NSI A) ─────────────────
+
+/// Lines a minute one App's log gets about refused calls.
+pub const REFUSED_LINES_PER_MIN: usize = 20;
+/// The hint in a log line is cut to this many characters.
+const HINT_MAX: usize = 200;
+
+struct Refused {
+    app_id: String,
+    verb: String,
+    code: String,
+    hint: Option<String>,
+}
+
+/// K2's words for the App's log: one line, no control characters, no
+/// pass or key (a word shaped like `k2skn_…`, `k2sk_…`, `k2skr_…`, or a
+/// long opaque token is redacted), cut to [`HINT_MAX`].
+pub fn log_safe(raw: &str) -> String {
+    let flat: String = raw.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    let mut out: Vec<String> = Vec::new();
+    for w in flat.split_whitespace() {
+        let bare = w.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '_');
+        let secret = ["k2skn_", "k2sk_", "k2skr_", "k2hs_"].iter().any(|p| bare.starts_with(p))
+            || (bare.len() >= 32 && bare.chars().all(|c| c.is_ascii_alphanumeric()));
+        out.push(if secret { "[redacted]".to_string() } else { w.to_string() });
+    }
+    let mut s = out.join(" ");
+    if s.chars().count() > HINT_MAX {
+        s = s.chars().take(HINT_MAX).collect::<String>() + "…";
+    }
+    s
+}
+
+/// The line itself (pure: tests and the writer).
+pub fn refused_line(verb: &str, code: &str, hint: Option<&str>) -> String {
+    let code = if code.is_empty() { "refused" } else { code };
+    match hint.map(log_safe).filter(|h| !h.is_empty()) {
+        Some(h) => format!("[k2] refused {verb}: {code} ({h})"),
+        None => format!("[k2] refused {verb}: {code}"),
+    }
+}
+
+/// Per App: (minute started, lines written, lines left out).
+type RefusedBudget = HashMap<String, (Instant, usize, usize)>;
+
+/// The App's current log file: its live deployment's, else its newest.
+fn app_log_path(app_id: &str) -> Option<std::path::PathBuf> {
+    let h = k2_core::db::shared();
+    let conn = h.lock();
+    let app = k2_core::deploy::store::get_app(&conn, app_id).ok()??;
+    let dep = match app.live_deployment {
+        Some(d) => d,
+        None => k2_core::deploy::store::list_deployments(&conn, app_id, 1).ok()?.into_iter().next()?.id,
+    };
+    Some(k2_core::deploy::deployment_log_path(app_id, &dep))
+}
+
+fn append_log(app_id: &str, line: &str) {
+    use std::io::Write as _;
+    let Some(p) = app_log_path(app_id) else { return };
+    if let Some(dir) = p.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&p) {
+        let _ = writeln!(f, "{line}");
+    }
+}
+
+/// Write one refused call's line, inside the App's budget.
+fn log_refused(budget: &mut RefusedBudget, r: Refused) {
+    let e = budget.entry(r.app_id.clone()).or_insert((Instant::now(), 0, 0));
+    if e.0.elapsed() >= Duration::from_secs(60) {
+        if e.2 > 0 {
+            append_log(&r.app_id, &format!("[k2] {} more refused call(s) in the last minute not shown here (k2 app audit {} --denied)", e.2, r.app_id));
+        }
+        *e = (Instant::now(), 0, 0);
+    }
+    if e.1 >= REFUSED_LINES_PER_MIN {
+        e.2 += 1;
+        return;
+    }
+    e.1 += 1;
+    append_log(&r.app_id, &refused_line(&r.verb, &r.code, r.hint.as_deref()));
 }
 
 fn live_seed(app_id: &str) -> Option<String> {
@@ -175,6 +301,7 @@ fn live_seed(app_id: &str) -> Option<String> {
 
 enum Msg {
     Call(Call),
+    Refused(Refused),
     Flush(SyncSender<()>),
 }
 
@@ -203,6 +330,7 @@ pub fn flush() {
 fn writer(rx: Receiver<Msg>) {
     let mut conn: Option<(std::path::PathBuf, rusqlite::Connection)> = None;
     let mut last_prune = Instant::now() - Duration::from_secs(86_400);
+    let mut budget: RefusedBudget = HashMap::new();
     while let Ok(first) = rx.recv() {
         let mut batch = Vec::new();
         let mut flushes = Vec::new();
@@ -210,6 +338,7 @@ fn writer(rx: Receiver<Msg>) {
         while let Some(m) = next.take() {
             match m {
                 Msg::Call(c) => batch.push(c),
+                Msg::Refused(r) => log_refused(&mut budget, r),
                 Msg::Flush(t) => flushes.push(t),
             }
             if batch.len() < 500 {
@@ -424,6 +553,31 @@ pub(crate) fn handle(who: &Who, params: &HashMap<String, String>) -> R<J> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refusals_give_their_code_and_hint() {
+        assert_eq!(refusal_of(r#"{"error":{"code":"skin_room","hint":"not your room"}}"#), (Some("skin_room".into()), Some("not your room".into())));
+        assert_eq!(refusal_of(r#"{"error":"invalid_credentials"}"#), (Some("invalid_credentials".into()), None));
+        assert_eq!(refusal_of(r#"{"error":"Invalid username or password"}"#), (None, Some("Invalid username or password".into())));
+        assert_eq!(refusal_of(r#"{"ok":false,"code":"locked","message":"try later"}"#), (Some("locked".into()), Some("try later".into())));
+        assert_eq!(refusal_of("not json"), (None, None));
+        assert_eq!(refusal_of(r#"{"error":{"code":"Not A Code"}}"#).0, None, "only snake_case words are codes");
+    }
+
+    #[test]
+    fn the_log_line_names_the_route_and_code_and_never_a_pass() {
+        assert_eq!(
+            refused_line("POST /cli/skin/login", "pass_required", Some("send the App pass")),
+            "[k2] refused POST /cli/skin/login: pass_required (send the App pass)"
+        );
+        assert_eq!(refused_line("GET /cli/thread", "", None), "[k2] refused GET /cli/thread: refused");
+        let l = refused_line("GET /gw/me", "pass_invalid", Some("the pass k2skn_abcDEF123 is\nexpired; key k2sk_zz9 too"));
+        assert!(!l.contains("k2skn_") && !l.contains("k2sk_") && !l.contains('\n'), "{l}");
+        assert!(l.contains("[redacted]"), "{l}");
+        let long = "x ".repeat(400);
+        assert!(log_safe(&long).chars().count() <= HINT_MAX + 1);
+        assert!(log_safe(&"a".repeat(40)).contains("[redacted]"), "a long opaque token-like word is redacted");
+    }
 
     #[test]
     fn since_parses_relative_and_absolute() {

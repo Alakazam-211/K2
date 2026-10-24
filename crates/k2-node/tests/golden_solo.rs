@@ -15,8 +15,9 @@
 //!   and os/arch/vm labels, and the `system-packages` feature (present
 //!   only where a package installer is);
 //! - offer revisions after the first session (they count offers sent);
-//! - the two offer features the 0.46.3 base added before sharing
-//!   ([`BASE_0463_FEATURES`]; checked present, then removed).
+//! - the offer features added since 0.46.2 ([`BASE_0463_FEATURES`]:
+//!   two from the 0.46.3 base before sharing, and 0.46.4's owner-only
+//!   `wall-restart`; checked present, then removed).
 //!
 //! Re-record (only ever from the v0.46.2 sources, never from a newer tree):
 //! `GOLDEN_RECORD=/abs/path/solo-frames-v0.46.2.json cargo test -p k2-node --test golden_solo`.
@@ -59,11 +60,13 @@ const BOOT: &str = "golden-boot";
 const SERVER_PROTOCOL: u32 = 2;
 const GOLDEN: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden/solo-frames-v0.46.2.json");
 
-/// Offer features the 0.46.3 base added before node sharing (compute B /
-/// DX A: kept artifacts and the stall timeout). An old server ignores
-/// unknown features. Sharing must add nothing here for a protocol-2
-/// server: `servers`, `queue` and `tenant-wall` go only to protocol ≥ 3.
-const BASE_0463_FEATURES: &[&str] = &["artifacts", "stall"];
+/// Offer features added since 0.46.2: the 0.46.3 base before node sharing
+/// (compute B / DX A: kept artifacts and the stall timeout), and 0.46.4's
+/// `wall-restart` (owner-only; the controller branches on it for the
+/// held wall plan). An old server ignores unknown features. Sharing must
+/// add nothing here for a protocol-2 server: `servers`, `queue` and
+/// `tenant-wall` go only to protocol ≥ 3.
+const BASE_0463_FEATURES: &[&str] = &["artifacts", "stall", k2_node_proto::admin::FEATURE_WALL_RESTART];
 
 fn recording() -> bool {
     std::env::var_os("GOLDEN_RECORD").is_some()

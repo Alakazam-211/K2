@@ -61,6 +61,15 @@ esac
 exit 1
 EOF
 chmod +x "$stub/cargo" "$stub/bun" "$stub/codesign"
+# Off macOS there is no plutil: lint the generated Info.plist with plistlib.
+if ! command -v plutil >/dev/null 2>&1; then
+    cat > "$stub/plutil" <<'EOF'
+#!/usr/bin/env bash
+[ "$1" = -lint ] || { echo "stub plutil: only -lint" >&2; exit 1; }
+python3 -c 'import plistlib, sys; plistlib.load(open(sys.argv[1], "rb"))' "$2"
+EOF
+    chmod +x "$stub/plutil"
+fi
 
 echo "Step 2 (k2_build_mac_binaries):"
 (

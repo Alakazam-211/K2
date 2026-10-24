@@ -189,7 +189,81 @@ fn passports_and_old_clients_get_the_fallback() {
     assert!(c["body"].as_str().unwrap().ends_with("Approve on your desktop, or update K2 Companion."), "{c}");
     // Closed states are one text line.
     let ap = wire(&project(&doc(approver_approved()), &dana(), 0));
-    assert_eq!(ap["body"], "Allowed by rosson: Allow compute nodes for billing.");
+    assert_eq!(ap["body"], "Allowed by rosson: Let billing run jobs on this server's compute nodes.");
+}
+
+/// An answered card of either direction: `on` = the §17.11.2 compute card
+/// (loosen), `off` = `db.agent-access-off` (tighten), whose Settings label
+/// still reads "Allow this agent to create databases".
+fn answered(off: bool, deny: Option<Option<&str>>) -> Value {
+    let mut v = approver_approved();
+    if off {
+        v["from"] = json!("k2");
+        v["to"] = json!("k2");
+        let view = &mut v["choice"]["action"]["view"];
+        view["action"] = json!("db.agent-access-off");
+        view["setting"] = json!("Allow this agent to create databases");
+        view["whatChanges"] = json!("Stop k2 creating new databases.");
+        view["direction"] = json!("tighten");
+        view["scope"] = json!("k2");
+        view["why"] = json!({"by":"k2","text":"Lock it down for the audit"});
+        view["askedFor"] = Value::Null;
+        view["notes"] = json!([]);
+        view["undo"] = Value::Null;
+    }
+    if let Some(reason) = deny {
+        v["choice"]["answer"] = json!("Deny");
+        v["choice"]["action"]["result"] = json!({"message":"Denied.","outcome":"denied"});
+        let view = &mut v["choice"]["action"]["view"];
+        view["state"] = json!("denied");
+        view["answer"] = json!({"decision":"deny","by":"rosson","via":"phone","at":1761061200,"reason":reason});
+        view["undo"] = Value::Null;
+    }
+    v
+}
+
+/// Phone test 2026-10-24: the Thread text after an answer named the
+/// SETTING, so an `-off` card read "Allowed by z3thon: Allow this agent to
+/// create databases for k2." when databases were turned OFF. The done line
+/// now names the action (`whatChanges`), for both directions and both
+/// answers, for every fallback viewer (old build, agent passport).
+#[test]
+fn done_line_names_the_action_for_on_and_off_cards() {
+    let cases: [(bool, Option<Option<&str>>, &str); 6] = [
+        (false, None, "Allowed by rosson: Let billing run jobs on this server's compute nodes."),
+        (false, Some(None), "Denied by rosson: Let billing run jobs on this server's compute nodes."),
+        (
+            false,
+            Some(Some("Not this week")),
+            "Denied by rosson: Let billing run jobs on this server's compute nodes. Reason: Not this week",
+        ),
+        (true, None, "Allowed by rosson: Stop k2 creating new databases."),
+        (true, Some(None), "Denied by rosson: Stop k2 creating new databases."),
+        (true, Some(Some("Keep it on")), "Denied by rosson: Stop k2 creating new databases. Reason: Keep it on"),
+    ];
+    for (off, deny, want) in cases {
+        let stored = doc(answered(off, deny));
+        let passport = if off { Viewer::Passport { workspace_id: "ws-k2".into() } } else { billing_passport() };
+        for (who, viewer) in [("old build", dana()), ("old build approver", rosson()), ("passport", passport)] {
+            let got = wire(&project(&stored, &viewer, 0));
+            assert_eq!(got["kind"], "text", "off={off} deny={deny:?} {who}: {got}");
+            assert_eq!(got["body"], want, "off={off} deny={deny:?} {who}");
+        }
+        if off {
+            let body = wire(&project(&stored, &dana(), 0))["body"].as_str().expect("body").to_string();
+            assert!(!body.contains("Allow this agent"), "an -off card never names the on-setting: {body}");
+        }
+    }
+}
+
+/// A card whose stored view has no `whatChanges` sentence still gets a
+/// done line: the old setting-for-agent wording, with one stop.
+#[test]
+fn done_line_falls_back_to_the_setting_without_a_sentence() {
+    let mut v = approver_approved();
+    v["choice"]["action"]["view"]["whatChanges"] = json!("  ");
+    let got = wire(&project(&doc(v), &dana(), 0));
+    assert_eq!(got["body"], "Allowed by rosson: Allow compute nodes for billing.");
 }
 
 #[test]

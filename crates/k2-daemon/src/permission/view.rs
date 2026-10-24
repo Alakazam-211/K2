@@ -330,6 +330,22 @@ fn answered_by(item: &ItemView, doc: &OverlayDoc) -> String {
         .unwrap_or_else(|| "a person".to_string())
 }
 
+/// What an answer allowed or denied, as one sentence ending in its stop:
+/// the card's `whatChanges` ("Stop k2 creating new databases."), which says
+/// the ACTION in its own direction. The Settings label names only the
+/// setting ("Allow this agent to create databases"), so an `-off` card read
+/// backwards in the done line. Falls back to the label when a card carries
+/// no sentence.
+fn answered_what(item: &ItemView, agent: &str) -> String {
+    let what = item.what_changes.trim();
+    let what = if what.is_empty() { format!("{} for {agent}", item.setting) } else { what.to_string() };
+    if what.ends_with(['.', '!', '?']) {
+        what
+    } else {
+        format!("{what}.")
+    }
+}
+
 /// One line for a request in `state` (the §17.2.4 "Draw" column as text):
 /// the fallback body of a closed card, and a batch item's line.
 fn state_line(item: &ItemView, state: RequestState, agent: &str, doc: &OverlayDoc, result: Option<&str>) -> String {
@@ -338,12 +354,15 @@ fn state_line(item: &ItemView, state: RequestState, agent: &str, doc: &OverlayDo
         RequestState::Pending => format!("Waiting: {what}."),
         RequestState::AlreadyDone => format!("Already on: {what}."),
         RequestState::Applying => format!("Applying {what}…"),
-        RequestState::Approved => format!("Allowed by {}: {what}.", answered_by(item, doc)),
+        // The done line names the ACTION the person answered (whatChanges),
+        // not the setting: an `-off` card must not read "Allowed: Allow …".
+        RequestState::Approved => format!("Allowed by {}: {}", answered_by(item, doc), answered_what(item, agent)),
         RequestState::Denied => {
             let reason = item.answer.as_ref().and_then(|a| a.reason.clone()).filter(|r| !r.trim().is_empty());
+            let done = answered_what(item, agent);
             match reason {
-                Some(r) => format!("Denied by {}: {what}. Reason: {r}", answered_by(item, doc)),
-                None => format!("Denied by {}: {what}.", answered_by(item, doc)),
+                Some(r) => format!("Denied by {}: {done} Reason: {r}", answered_by(item, doc)),
+                None => format!("Denied by {}: {done}", answered_by(item, doc)),
             }
         }
         RequestState::Expired => format!("Expired unanswered: {what}."),

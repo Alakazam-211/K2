@@ -1,5 +1,5 @@
 {
-  "body": "billing asked an owner for 3 permissions:\n- Allowed by rosson: Build and run Apps for billing.\n- Allowed by rosson: App cores for billing.\n- App Approvals: waiting",
+  "body": "billing asked an owner for 3 permissions:\n- Allowed by rosson: Let billing build and run Apps.\n- Allowed by rosson: Let billing's Apps use the db core.\n- App Approvals: waiting",
   "created_at": 1761060000,
   "from": "billing",
   "id": "b4a1c0de-5e6f-4a7b-9c8d-0e1f2a3b4c5d",

@@ -81,12 +81,13 @@ k2cr_submit() {
         if [ "${K2_COMPUTE_OAUTH:-placeholder}" = "env" ]; then
             [ -n "${K2_GMAIL_CLIENT_ID:-}" ] && [ -n "${K2_GMAIL_CLIENT_SECRET:-}" ] \
                 || { echo "  ✗ $label: K2_COMPUTE_OAUTH=env but this Mac has no Gmail OAuth values" >&2; return 1; }
-            args+=(--env "K2_GMAIL_CLIENT_ID=$K2_GMAIL_CLIENT_ID" --env "K2_GMAIL_CLIENT_SECRET=$K2_GMAIL_CLIENT_SECRET")
-            [ -n "${K2_MICROSOFT_CLIENT_ID:-}" ] && args+=(--env "K2_MICROSOFT_CLIENT_ID=$K2_MICROSOFT_CLIENT_ID")
+            # K2_* names are refused in --env; the build script maps BUILD_*.
+            args+=(--env "BUILD_GMAIL_CLIENT_ID=$K2_GMAIL_CLIENT_ID" --env "BUILD_GMAIL_CLIENT_SECRET=$K2_GMAIL_CLIENT_SECRET")
+            [ -n "${K2_MICROSOFT_CLIENT_ID:-}" ] && args+=(--env "BUILD_MICROSOFT_CLIENT_ID=$K2_MICROSOFT_CLIENT_ID")
         else
-            args+=(--env K2_CI_OAUTH=placeholder)
+            args+=(--env BUILD_OAUTH=placeholder)
         fi
-        [ "$label" = "V1" ] && args+=(--env K2_CI_REMAP=1)
+        [ "$label" = "V1" ] && args+=(--env BUILD_REMAP=1)
     fi
     local out job argv_json
     out="$(k2cr_k2 "${args[@]}" -- "$@")" || { echo "  ✗ $label: submit to $node failed" >&2; return 1; }

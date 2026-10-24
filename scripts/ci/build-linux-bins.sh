@@ -21,10 +21,16 @@
 # Native only. aarch64 is built on an aarch64 machine (the ARM Linux VM
 # on a Mac mini, G10), never cross-compiled here: a mismatch is refused.
 #
+# Job inputs are plain env names: K2 Compute refuses any K2_* name in
+# --env (env_k2_reserved), so a node job passes BUILD_* and this script
+# maps them.
+#
 # Mail OAuth (the Gmail/Microsoft client values the daemon compiles in):
-#   K2_GMAIL_CLIENT_ID / K2_GMAIL_CLIENT_SECRET set → baked and checked in
-#     the binary (as daemon-binaries.yml does).
-#   K2_CI_OAUTH=placeholder → built WITHOUT them, recorded as
+#   K2_GMAIL_CLIENT_ID / K2_GMAIL_CLIENT_SECRET set (or, from a compute
+#     job, BUILD_GMAIL_CLIENT_ID / BUILD_GMAIL_CLIENT_SECRET /
+#     BUILD_MICROSOFT_CLIENT_ID) → baked and checked in the binary (as
+#     daemon-binaries.yml does).
+#   BUILD_OAUTH=placeholder → built WITHOUT them, recorded as
 #     "oauth": "placeholder" in build-info.json. Shadow builds only: such a
 #     daemon must never ship (release.sh refuses it), and its hash can't
 #     match the GitHub-built one. Whether the values may travel to nodes
@@ -32,7 +38,7 @@
 #   Neither → refused (the same FATAL as every release build).
 #
 # Optional:
-#   K2_CI_REMAP=1   --remap-path-prefix for the checkout and cargo home, so
+#   BUILD_REMAP=1   --remap-path-prefix for the checkout and cargo home, so
 #                   two nodes (different job dirs) can build the same bytes
 #                   (G12; needs the same pinned rustc on both).
 #
@@ -76,19 +82,26 @@ source "$ROOT/scripts/require-mail-oauth-build-env.sh"
 # shellcheck source=scripts/linux-ptyd-embed.sh
 source "$ROOT/scripts/linux-ptyd-embed.sh"
 
+# From a compute job: BUILD_* → the K2_* names option_env! reads.
+for v in GMAIL_CLIENT_ID GMAIL_CLIENT_SECRET MICROSOFT_CLIENT_ID; do
+    src="BUILD_$v" dst="K2_$v"
+    if [ -n "${!src:-}" ] && [ -z "${!dst:-}" ]; then
+        export "$dst=${!src}"
+    fi
+done
 OAUTH_MODE="baked"
-if [ "${K2_CI_OAUTH:-}" = "placeholder" ]; then
+if [ "${BUILD_OAUTH:-}" = "placeholder" ]; then
     if [ -n "${K2_GMAIL_CLIENT_ID:-}" ]; then
-        echo "FATAL: K2_CI_OAUTH=placeholder but K2_GMAIL_CLIENT_ID is set; pick one" >&2
+        echo "FATAL: BUILD_OAUTH=placeholder but a Gmail client id is set; pick one" >&2
         exit 1
     fi
     OAUTH_MODE="placeholder"
-    echo "  ⚠ Mail OAuth: PLACEHOLDER build (K2_CI_OAUTH=placeholder). Shadow only; never ship this daemon."
+    echo "  ⚠ Mail OAuth: PLACEHOLDER build (BUILD_OAUTH=placeholder). Shadow only; never ship this daemon."
 else
     require_mail_oauth_build_env
 fi
 
-if [ "${K2_CI_REMAP:-0}" = "1" ]; then
+if [ "${BUILD_REMAP:-0}" = "1" ]; then
     CARGO_HOME_DIR="${CARGO_HOME:-$HOME/.cargo}"
     export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$ROOT=/k2 --remap-path-prefix=$CARGO_HOME_DIR=/cargo"
     echo "  path remap on: $ROOT → /k2, $CARGO_HOME_DIR → /cargo"
@@ -149,7 +162,7 @@ K2_BI_COMMIT="$(git rev-parse HEAD 2>/dev/null || echo unknown)" \
 K2_BI_TREE="$(git rev-parse 'HEAD^{tree}' 2>/dev/null || echo unknown)" \
 K2_BI_RUSTC="$(rustc -vV)" K2_BI_CARGO="$(cargo -V)" \
 K2_BI_GLIBC="$(ldd --version 2>/dev/null | head -1 || echo unknown)" \
-K2_BI_REMAP="${K2_CI_REMAP:-0}" K2_BI_PTYD="$PTYD_SHA" \
+K2_BI_REMAP="${BUILD_REMAP:-0}" K2_BI_PTYD="$PTYD_SHA" \
 K2_BI_FILES="$DAEMON $NODE $HELPER $ENGINE" \
 python3 - <<'PY'
 import hashlib, json, os

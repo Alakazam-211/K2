@@ -225,9 +225,11 @@ rc="$(run_case ok)"
 [ "$(wc -l < "$tmp/ok/jobs.tsv" | tr -d ' ')" = 2 ] && pass "two jobs (L1 x86 bins, L3 app)" || fail "jobs.tsv" "$(cat "$tmp/ok/jobs.tsv")"
 grep -q 'L2 aarch64: no ARM node yet' "$tmp/ok.submit" && pass "aarch64 seam is named" || fail "aarch64 note" "$(cat "$tmp/ok.submit")"
 run_line="$(grep -m1 'k2 compute run k2n4-vin' "$tmp/calls-ok" || true)"
-for want in "--sha $COMMIT" "--gate" "--detach" "--artifact dist/**" "--env K2_CI_OAUTH=placeholder" "-- bash scripts/ci/build-linux-bins.sh x86_64"; do
+for want in "--sha $COMMIT" "--gate" "--detach" "--artifact dist/**" "--env BUILD_OAUTH=placeholder" "-- bash scripts/ci/build-linux-bins.sh x86_64"; do
     [[ "$run_line" == *"$want"* ]] && pass "L1 submit has $want" || fail "L1 submit lacks $want" "$run_line"
 done
+! grep -qE -- '--env (K2_|K2SO_)' "$tmp/calls-ok" && pass "no K2_* name in --env (nodes refuse them: env_k2_reserved)" \
+    || fail "K2_* env" "$(grep -- '--env K2' "$tmp/calls-ok")"
 grep -q 'k2 compute run k2n5-vin .*bun@1.2.*sys:libwebkit2gtk-4.1-dev.*-- bash scripts/ci/build-linux-app.sh' "$tmp/calls-ok" \
     && pass "L3 goes to k2n5-vin with bun + GTK packages" || fail "L3 submit" "$(cat "$tmp/calls-ok")"
 grep -q 'k2 compute fetch .* --over-relay --json' "$tmp/calls-ok" && pass "fetch passes --over-relay (AppImage > 100 MB)" || fail "fetch flags" "$(cat "$tmp/calls-ok")"

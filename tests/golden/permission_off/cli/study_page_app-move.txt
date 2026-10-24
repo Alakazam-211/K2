@@ -17,6 +17,16 @@ deploying and taking its label never stop it. Its URL serves it until step
 is one-way. Done = the URL serves the App AND the old service is stopped
 (steps 6 and 7).
 
+START WITH THE PLAN:
+  k2 app move-plan <old-name> [--app <app-id>]
+lists every step below for your service with what's already done (box
+prep, engine, "Build and run Apps", install, deploy, copy-host users, the
+guests-rooms grant, data, each hostname, the old service), and
+  k2 app move-plan <old-name> --app <app-id> --request
+asks your owner ONCE for all the owner's steps (one approval; K2 then runs
+them in order, each audited). Ask again after install if copy-host or the
+grant waited on it.
+
   1. Write a manifest from your start command: manifest.json at the root
      of the folder you deploy (your code, not your data):
        {"schema":1,"kind":"app","id":"jobs","name":"Jobs","version":"1.0.0",
@@ -24,8 +34,12 @@ is one-way. Done = the URL serves the App AND the old service is stopped
                 "health":{"path":"/healthz"}},
         "egress":{"hosts":["api.stripe.com"]}}
      - listen on $PORT (not a fixed port); health = a 2xx on that path
-     - no K2_OWNER_TOKEN, no ~/.k2 files: call K2 with an App key
-       (k2 app key mint <app-id> --scopes …) at $K2_GATEWAY_URL
+     - no K2_OWNER_TOKEN, no ~/.k2 files: call K2 at $K2_GATEWAY_URL.
+       EVERY gateway call carries the App pass as Authorization: Bearer
+       (read the file $K2_PASS_FILE names, per call: K2 rotates it), and
+       that includes POST /cli/skin/login: a login without it is 401
+       pass_required. A guest's own calls carry its session pass instead.
+       Users and rooms: an App key (k2 app key mint <app-id> --scopes …)
      - secrets from the vault by name, granted to the App: k2 publish secret
        add <app-id> NAME --as env (or ask your owner to grant them)
      - files that must last go in $K2_APP_DATA (/data); the code is read-only
@@ -39,6 +53,13 @@ is one-way. Done = the URL serves the App AND the old service is stopped
   3. Deploy:
        k2 app deploy <app-id> <folder>
      It starts walled; traffic goes to it only when the health check passes.
+     The folder is packed as an immutable Seed (it prints the size and the
+     heaviest paths): keep your data, .env files and caches out with a
+     .k2appignore at its root (gitignore syntax), e.g. var/ .env*
+     node_modules/.cache .next/cache.
+     NO EDITING LIVE: a change is a new deploy. Mockups and pages you edit
+     by hand stay static: k2 publish run <label> --skin <dir> --port N
+     serves a folder as it is (there's no App dev mode yet).
   4. Copy your data in (the App must be live):
        k2 app data put <app-id> <your-data-folder> [--to <dir>]
      Copies a file or folder of your workspace into $K2_APP_DATA. Copy
@@ -54,10 +75,25 @@ is one-way. Done = the URL serves the App AND the old service is stopped
      The URL serves the App now. label take does NOT stop the old service:
      it keeps running on its own port with no public label (k2 publish
      list shows it local), so moving back is instant.
+     Other subdomains you pointed at the old service's port (k2 publish
+     subdomain create … --target localhost:<port>) move with
+       k2 app domain add <app-id> <subdomain>
+     (routed to the App by its id; in K2_APP_ORIGINS from its next start;
+     k2 app domain rm points it back).
   7. Stop the old service once you're sure (the move is done after this):
        k2 publish stop <old-name>
   MOVE BACK (any time): start the old service (k2 publish start <old-name>)
      and k2 app label return <app-id> <old-name>.
+
+SIGN-INS. Your users sign in once after the move: sessions from the old
+service's box login don't carry over to the App, so each web and phone
+session asks for the password again (once).
+
+TESTING. Make your own test guests for the App (no owner needed):
+  k2 app user add <app-id> <name> --test [--role R] [--expires 24h]
+They sign in only through the App's link, take only a role the App
+defines, end on their own (at most 7 days), at most 5 per App; your owner
+gets a note. k2 app test-guests <app-id> lists them.
 
 Exit codes: 0 done, 2 held for your owner, 3 refused (JSON on stderr: the
 hint says why, e.g. app_not_healthy, label_owned_by_other_workspace).

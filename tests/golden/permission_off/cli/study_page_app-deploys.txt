@@ -20,7 +20,15 @@ THE LOOP
 
 WHAT A DEPLOY DOES
   1. The folder becomes a Seed: an immutable copy, named by its hash
-     (k2 app build prints it). Same folder → same Seed.
+     (k2 app build prints it). Same folder → same Seed. Build and deploy
+     print its size and heaviest paths. Leave out what the App doesn't
+     run with a .k2appignore at the folder root (gitignore syntax; the
+     file itself is packed), e.g.:
+       var/
+       .env*
+       node_modules/.cache
+       .next/cache
+     .git, .k2 and .DS_Store are always left out.
   2. The Seed starts on a fresh port with $PORT set. GET host.health.path
      (default /) must answer 2xx within the gate (default 120s).
   3. New connections switch to it. Old ones finish (drain).

@@ -9687,8 +9687,12 @@ is one-way. Done = the URL serves the App AND the old service is stopped
                 "health":{"path":"/healthz"}},
         "egress":{"hosts":["api.stripe.com"]}}
      - listen on $PORT (not a fixed port); health = a 2xx on that path
-     - no K2_OWNER_TOKEN, no ~/.k2 files: call K2 with an App key
-       (k2 app key mint <app-id> --scopes …) at $K2_GATEWAY_URL
+     - no K2_OWNER_TOKEN, no ~/.k2 files: call K2 at $K2_GATEWAY_URL.
+       EVERY gateway call carries the App pass as Authorization: Bearer
+       (read the file $K2_PASS_FILE names, per call: K2 rotates it), and
+       that includes POST /cli/skin/login: a login without it is 401
+       pass_required. A guest's own calls carry its session pass instead.
+       Users and rooms: an App key (k2 app key mint <app-id> --scopes …)
      - secrets from the vault by name, granted to the App: k2 publish secret
        add <app-id> NAME --as env (or ask your owner to grant them)
      - files that must last go in $K2_APP_DATA (/data); the code is read-only
@@ -9721,6 +9725,10 @@ is one-way. Done = the URL serves the App AND the old service is stopped
        k2 publish stop <old-name>
   MOVE BACK (any time): start the old service (k2 publish start <old-name>)
      and k2 app label return <app-id> <old-name>.
+
+SIGN-INS. Your users sign in once after the move: sessions from the old
+service's box login don't carry over to the App, so each web and phone
+session asks for the password again (once).
 
 Exit codes: 0 done, 2 held for your owner, 3 refused (JSON on stderr: the
 hint says why, e.g. app_not_healthy, label_owned_by_other_workspace).
@@ -11460,10 +11468,14 @@ k2 app — the App door (quotas, audit, suspend, remote passes)
                                        the App may (it only narrows).
   k2 app resume <app-id> [--start]     Owner only, from a terminal outside K2.
   k2 app audit <app-id> [--since 1h] [--verb V] [--denied] [--limit N]
-                 [--verify] [--json]   Every call the App made through its
-                                       gateway (who, verb, room, result, bytes,
-                                       latency), hash-chained per day.
-                                       --verify checks the chain.
+                 [--oldest-first] [--verify] [--json]
+                                       Every call the App made through its
+                                       gateway (who, verb, room, result, K2's
+                                       refusal code, bytes, latency), hash-
+                                       chained per day. The newest N (default
+                                       100), newest first; --oldest-first
+                                       reads them top to bottom. --verify
+                                       checks the chain.
   k2 app quota <app-id> [--rps N] [--burst N] [--sockets N] [--body 8M]
                  [--upload 100M] [--subscriptions N] [--reset] [--reason TEXT]
                                        Per-App gateway quotas. No flags: show.
@@ -11534,9 +11546,11 @@ elif v.get("hint") or v.get("note"):
 }
 
 cmd_app_audit() {
-    local app="" since="" verb="" denied=0 limit="" verify=0 json_out=0
+    local app="" since="" verb="" denied=0 limit="" verify=0 json_out=0 oldest=0
     while [ $# -gt 0 ]; do
         case "$1" in
+            --oldest-first) oldest=1; shift ;;
+            --newest-first) oldest=0; shift ;;
             --since) since="${2:-}"; shift 2 ;;
             --verb) verb="${2:-}"; shift 2 ;;
             --denied) denied=1; shift ;;
@@ -11548,8 +11562,9 @@ cmd_app_audit() {
             *) app="$1"; shift ;;
         esac
     done
-    [ -n "$app" ] || { echo "usage: k2 app audit <app-id> [--since 1h] [--verb V] [--denied] [--limit N] [--verify] [--json]" >&2; exit 2; }
+    [ -n "$app" ] || { echo "usage: k2 app audit <app-id> [--since 1h] [--verb V] [--denied] [--limit N] [--oldest-first] [--verify] [--json]" >&2; exit 2; }
     local q="app=$(urlencode "$app")"
+    [ "$oldest" = 1 ] && q="${q}&oldest=1"
     [ -n "$since" ] && q="${q}&since=$(urlencode "$since")"
     [ -n "$verb" ] && q="${q}&verb=$(urlencode "$verb")"
     [ -n "$limit" ] && q="${q}&limit=$(urlencode "$limit")"
@@ -11562,7 +11577,12 @@ import json, sys, time
 v = json.load(sys.stdin)
 t = v.get("totals") or {}
 print("%s: %s calls, %s refused, %s B in, %s B out" % (v["app"], t.get("calls"), t.get("denied"), t.get("bytesIn"), t.get("bytesOut")))
-for c in v.get("calls") or []:
+calls = v.get("calls") or []
+if calls:
+    order = v.get("order") or "newest first"
+    flip = "--newest-first" if order == "oldest first" else "--oldest-first"
+    print("%d call%s, %s (%s to flip):" % (len(calls), "" if len(calls) == 1 else "s", order, flip))
+for c in calls:
     at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(c["atMs"] / 1000))
     code = (" " + c["code"]) if c.get("code") else ""
     print("%s  %3s%s  %s  %s  in %s out %s  %s ms" % (at, c.get("result"), code, c.get("actor"), c.get("verb"), c.get("bytesIn"), c.get("bytesOut"), c.get("latencyMs")))

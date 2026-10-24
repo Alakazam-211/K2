@@ -6,6 +6,8 @@
 //!   is expected, never a break; App ids: a bare id works on the owner
 //!   verbs when it is unique on the box, an ambiguous one lists the
 //!   candidates, and `<workspace>/<app id>` works on the runtime verbs.
+//! - #5 quiet failures: `pass_required` names the App pass file and says
+//!   login needs it too; `k2 app audit` reads oldest first on request.
 //!
 //! ISOLATION: a temp `$HOME`, the in-memory test DB, alerts to a sink. No
 //! real agent CLI, no real `~/.k2`, no running daemon.
@@ -15,10 +17,99 @@
 #[path = "support/app_fixture.rs"]
 mod app_fixture;
 
+use std::io::{Read, Write};
+use std::net::TcpStream;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use app_fixture::*;
+use k2_daemon::apps::gateway::{self, LinkSpec};
 use serde_json::{json, Value};
+
+fn parse(text: &str) -> (u16, String) {
+    let status = text
+        .lines()
+        .next()
+        .and_then(|l| l.split_whitespace().nth(1))
+        .and_then(|x| x.parse().ok())
+        .unwrap_or_else(|| panic!("no status: {text:?}"));
+    (status, text.split_once("\r\n\r\n").map(|(_, b)| b.to_string()).unwrap_or_default())
+}
+
+/// One request on a fresh link connection (`Connection: close`).
+fn on_link(port: u16, req: &str) -> (u16, String) {
+    let mut s = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    s.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+    s.write_all(req.as_bytes()).unwrap();
+    let mut got = Vec::new();
+    let _ = s.read_to_end(&mut got);
+    parse(&String::from_utf8_lossy(&got))
+}
+
+fn link_get(path: &str, pass: Option<&str>) -> String {
+    let auth = pass.map(|p| format!("Authorization: Bearer {p}\r\n")).unwrap_or_default();
+    format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1:8730\r\n{auth}Connection: close\r\n\r\n")
+}
+
+fn link_post(path: &str, pass: Option<&str>, body: &Value) -> String {
+    let auth = pass.map(|p| format!("Authorization: Bearer {p}\r\n")).unwrap_or_default();
+    let b = body.to_string();
+    format!(
+        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:8730\r\n{auth}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{b}",
+        b.len()
+    )
+}
+
+fn err(body: &str) -> Value {
+    let v: Value = serde_json::from_str(body).unwrap_or_else(|e| panic!("JSON ({e}): {body}"));
+    v["error"].clone()
+}
+
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    tokio::task::spawn_blocking(f).await.unwrap()
+}
+
+/// Open `app`'s gateway link the way the guarded engine does; returns
+/// (App pass, link port).
+fn open_link(app: &str, svc: &str, ws: &Ws) -> (String, u16) {
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "UPDATE apps SET approved_caps_json = ?2 WHERE app_id = ?1",
+            rusqlite::params![app, serde_json::to_string(&["thread:read"]).unwrap()],
+        )
+        .unwrap();
+    }
+    let pass = gateway::open(
+        LinkSpec {
+            app_id: app.into(),
+            service_id: svc.into(),
+            workspace_id: ws.id.clone(),
+            port: 0,
+            caps: vec!["thread:read".into()],
+            rooms: vec![ws.id.clone()],
+        },
+        Some(Arc::new(|_: &str| Ok(()))),
+    )
+    .expect("open link");
+    (pass, gateway::port_of(app).expect("link port"))
+}
+
+/// Wait (bounded) until the App's audit holds at least `n` rows.
+async fn audit_rows(port: u16, app: &str, query: &str, n: usize) -> Value {
+    let mut a = Value::Null;
+    for _ in 0..60 {
+        let r = get(port, "/cli/app/audit", OWNER, &format!("app={app}&limit=50{query}")).await;
+        assert_eq!(r.status, 200, "{}", r.body);
+        a = r.json();
+        if a["calls"].as_array().map(Vec::len).unwrap_or(0) >= n {
+            return a;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("fewer than {n} audit rows for {app}: {a}");
+}
 
 type Seen = Arc<Mutex<Vec<(String, String)>>>;
 
@@ -152,5 +243,53 @@ async fn bare_app_ids_resolve_when_unique_and_ambiguous_ones_list_candidates() {
     assert_eq!((r.status, r.code()), (404, "app_not_found".to_string()), "{}", r.body);
     let r = get(d.port, "/cli/app/inspect", OWNER, "app=agentnsi").await;
     assert_eq!(r.status, 200, "{}", r.body);
+    k2_daemon::apps::alerts::set_sink(None);
+}
+
+/// #5: a call without the App pass (login included) is told where the pass
+/// is; the audit reads oldest first on request and says its order.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn pass_required_names_the_pass_file_and_audit_reads_oldest_first() {
+    let env = setup(&[]);
+    let _seen = quiet_alerts();
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let ws = seed_ws(&env, "passws");
+    let svc = app_row(&ws, "passapp");
+    let (pass, port) = open_link("passapp", &svc, &ws);
+
+    let (no_pass, login_no_pass, me) = blocking(move || {
+        let a = on_link(port, &link_get("/cli/skin/agents", None));
+        std::thread::sleep(Duration::from_millis(20));
+        let b = on_link(port, &link_post("/cli/skin/login", None, &json!({"username": "ada", "password": "x"})));
+        std::thread::sleep(Duration::from_millis(20));
+        let c = on_link(port, &link_get("/gw/me", Some(&pass)));
+        (a, b, c)
+    })
+    .await;
+    for (what, (st, body)) in [("a read", &no_pass), ("the guest login", &login_no_pass)] {
+        assert_eq!(*st, 401, "{what}: {body}");
+        let e = err(body);
+        assert_eq!(e["code"], "pass_required", "{what}: {e}");
+        let hint = e["hint"].as_str().unwrap();
+        for want in ["K2_PASS_FILE", "POST /cli/skin/login", "Authorization: Bearer"] {
+            assert!(hint.contains(want), "{what}: {want} missing from {hint}");
+        }
+    }
+    assert_eq!(me.0, 200, "{}", me.1);
+
+    let newest = audit_rows(d.port, "passapp", "", 3).await;
+    assert_eq!(newest["order"], "newest first", "{newest}");
+    let oldest = audit_rows(d.port, "passapp", "&oldest=1", 3).await;
+    assert_eq!(oldest["order"], "oldest first", "{oldest}");
+    let at = |v: &Value| -> Vec<i64> { v["calls"].as_array().unwrap().iter().map(|c| c["atMs"].as_i64().unwrap()).collect() };
+    let (n, o) = (at(&newest), at(&oldest));
+    assert!(n.windows(2).all(|w| w[0] >= w[1]), "newest first: {n:?}");
+    assert!(o.windows(2).all(|w| w[0] <= w[1]), "oldest first: {o:?}");
+    let mut back = o.clone();
+    back.reverse();
+    assert_eq!(back, n, "the same rows, flipped");
+    let first = &oldest["calls"][0];
+    assert_eq!((first["verb"].as_str(), first["code"].as_str()), (Some("GET /cli/skin/agents"), Some("pass_required")), "{first}");
+    gateway::close("passapp", None, true);
     k2_daemon::apps::alerts::set_sink(None);
 }

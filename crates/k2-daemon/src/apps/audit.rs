@@ -20,7 +20,12 @@
 //! per verb, ever).
 //!
 //! ```text
-//! GET /cli/app/audit ?app=&since=1h|<epoch-ms>&verb=&denied=1&limit=&verify=1
+//! GET /cli/app/audit ?app=&since=1h|<epoch-ms>&verb=&denied=1&limit=&verify=1&oldest=1
+//! ```
+//!
+//! `calls` are the newest `limit` rows, newest first; `oldest=1` gives the
+//! same rows oldest first (a log to read top to bottom). `order` says which.
+//! ```text
 //! ```
 
 use std::cell::RefCell;
@@ -385,12 +390,19 @@ pub(crate) fn handle(who: &Who, params: &HashMap<String, String>) -> R<J> {
     flush();
     let conn = store::open(&store::db_path()).map_err(|e| no("audit_unavailable", 503, format!("app-audit.db: {e}")))?;
     let q = store::Query { app_id: &app.app_id, since_ms, verb: params.get("verb").map(String::as_str).filter(|v| !v.is_empty()), denied_only: denied, limit };
-    let rows = store::list(&conn, &q).map_err(|e| no("audit_unavailable", 503, e.to_string()))?;
+    let mut rows = store::list(&conn, &q).map_err(|e| no("audit_unavailable", 503, e.to_string()))?;
+    // NSI 0.46.4 #5: the newest `limit` rows either way; `oldest=1` reads
+    // them top to bottom.
+    let oldest_first = params.get("oldest").is_some_and(|v| matches!(v.as_str(), "1" | "true" | "yes"));
+    if oldest_first {
+        rows.reverse();
+    }
     let (calls, refused, bin, bout) = store::totals(&conn, &app.app_id, since_ms.unwrap_or(0)).map_err(|e| no("audit_unavailable", 503, e.to_string()))?;
     let mut out = json!({
         "ok": true,
         "app": app.app_id,
         "calls": rows,
+        "order": if oldest_first { "oldest first" } else { "newest first" },
         "totals": { "calls": calls, "denied": refused, "bytesIn": bin, "bytesOut": bout },
         "summaries": store::summaries(&conn, &app.app_id, 60).unwrap_or_default(),
         "file": store::db_path(),

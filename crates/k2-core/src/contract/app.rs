@@ -636,11 +636,14 @@ pub fn study_page(c: &Catalog) -> String {
     for line in [
         "An App's server reaches K2 through ONE door: its gateway link,",
         "K2_GATEWAY_URL (in a wall http://127.0.0.1:8730; a --cmd service gets",
-        "the daemon's loopback port). Every call carries a pass: this App's own",
-        "(the file K2_PASS_FILE names, /run/k2/pass in a wall; K2 rotates it",
-        "every hour, so read the file again on pass_invalid) or a guest's",
-        "session pass from POST /cli/skin/login. Users and rooms use the App",
-        "key ($K2_SECRETS_DIR/K2_APP_KEY) on /v1/apps/$K2_APP_ID/... instead.",
+        "the daemon's loopback port). EVERY call on it carries a pass as",
+        "Authorization: Bearer <pass>, POST /cli/skin/login included: this",
+        "App's own (the contents of the file K2_PASS_FILE names, /run/k2/pass",
+        "in a wall; K2 rotates it every hour, so read the file per call, and",
+        "again on pass_invalid), or, on a guest's own calls, the session pass",
+        "that guest's login returned. A login sent without the App pass is",
+        "401 pass_required. Users and rooms use the App key",
+        "($K2_SECRETS_DIR/K2_APP_KEY) on /v1/apps/$K2_APP_ID/... instead.",
     ] {
         s.push_str(line);
         s.push('\n');
@@ -650,7 +653,7 @@ pub fn study_page(c: &Catalog) -> String {
         "THE SERVER SDK (sdk/server, TypeScript, Node 22+, no dependencies)",
         "  import { fromEnv } from '@k2/server'",
         "  const k2 = fromEnv()          // K2_GATEWAY_URL, K2_PASS_FILE, K2_APP_ID",
-        "  const s = await k2.login({ username, password })   // a guest: s.pass",
+        "  const s = await k2.login({ username, password })   // App pass on; a guest: s.pass",
         "  await k2.asGuest(s.pass).thread.send({ addr, text }) // as that guest",
         "  await k2.withGuest(s.pass, () => handler(req))  // calls in it act as the guest",
         "  await k2.asApp().files.list({ workspace })       // as the App: written out",
@@ -684,7 +687,8 @@ pub fn study_page(c: &Catalog) -> String {
     for line in [
         "",
         "REFUSALS are JSON {error:{code,hint}} (some routes: {ok:false,error}).",
-        "  401 pass_required / pass_invalid (read K2_PASS_FILE again) /",
+        "  401 pass_required (no pass: every call, login too) / pass_invalid",
+        "  (read K2_PASS_FILE again) /",
         "  wrong_credential; 403 pass_wrong_link, skin_room (a room you don't",
         "  hold: the same answer as one that doesn't exist), missing cap;",
         "  404 not_on_link (not an App route); 415 json_required (writes send",

@@ -75,6 +75,13 @@ use serde_json::{json, Value};
 
 use crate::routes::dispatcher::Ingress;
 
+/// `pass_required` on the link: every call carries the App pass, the
+/// guest login included (a BFF that logs a guest in without it got a bare
+/// 401, NSI 0.46.4 #5).
+pub const PASS_REQUIRED_HINT: &str = "every call on the gateway link carries this App's pass, POST /cli/skin/login included: \
+     send the contents of the file $K2_PASS_FILE names (/run/k2/pass in a wall; K2 rotates it hourly, so read it per call) \
+     as Authorization: Bearer <pass>. A guest's own calls carry the session pass its login returned instead.";
+
 /// Connections a link serves at once by default (§5.4: 64 sockets per
 /// App; the owner's override is `super::quotas`).
 pub const MAX_CONNECTIONS: usize = super::quotas::DEFAULTS.sockets as usize;
@@ -787,7 +794,8 @@ fn gate_on(c: &LinkCtx, head: &str, method: &str, path_and_query: &str, bytes_in
         };
     }
     let Some(raw) = presented else {
-        return deny(Some(c), 401, "pass_required", "send this App's pass (the file K2_PASS_FILE names) as Authorization: Bearer");
+        // NSI 0.46.4 #5: say where the pass is, and that login needs it too.
+        return deny(Some(c), 401, "pass_required", PASS_REQUIRED_HINT);
     };
     if !k2_core::skin::is_skin_token(raw) || k2_core::skin::is_api_key_prefix(raw) {
         return deny(Some(c), 401, "wrong_credential", "only this App's pass (or a guest session of this App) works on its gateway link");

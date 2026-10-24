@@ -16659,11 +16659,19 @@ Node admin (agents need "Allow this agent to operate compute nodes"):
   k2 compute node update <node> [--canary] [--now]   offer the signed k2-node build
   k2 compute node rollback <node> [--now]      back to the node's own previous build
                    a shared node first waits for running jobs (up to 30 min);
-                   --now skips the wait. Solo nodes never wait.
+                   --now skips the wait. Solo nodes never wait. Nodes on 0.46.3
+                   or older need one manual install of 0.46.4 first (their
+                   updater can't run the new build): sudo k2-node setup
+  k2 compute node wall <node> [--no-restart] [--reason "…"]
+                   Linux: turn the job wall on (jobs run as k2job, walled off
+                   from the node's key, /home and /root). At once on 0.46.4+
+                   nodes at remote admin policy; k2-node restarts to use it once
+                   its running jobs end (--no-restart: at the next restart).
+                   An older node holds it for the owner (exit 2)
   k2 compute node admin propose <node> <verb> [key=value…] --reason "…"
                    verbs today: unit.restart unit=k2-node [now=true], policy.set key=value,
                    control.pause|drain|resume, gc, jobs.kill job_id=…,
-                   wall.enable (Linux: jobs run as k2job; then unit.restart unit=k2-node),
+                   wall.enable [restart=true] (Linux: jobs run as k2job; or k2 compute node wall),
                    homes.private (chmod 700 the homes others can read)
   k2 compute node admin propose <node> --plan plan.json --reason "…"
                    held for the owner: exit 2 with the request id
@@ -16686,6 +16694,11 @@ This computer (its owner):
   k2 compute local policy key=value...    (cpu_cap_percent, mem_cap_gb, availability, …)
   k2 compute local enable [--controller URL --enroll CODE.FP --name NAME]
                           [--private-home | --no-private-home]
+                          [--remote-admin off|policy|full]   (default policy:
+                          K2 keeps this node updated and healthy; full also
+                          lets it run root actions, each approved by you)
+  k2 compute local remote-admin off|policy|full   change it later (root: one
+                          sudo or admin prompt; off = K2 can't update the node)
   k2 compute local disable
 
 Never stuck: a job that can't start within --queue-timeout (default 30m
@@ -18065,6 +18078,26 @@ else:
 v=json.load(sys.stdin); u=v.get("update") or {}
 print("%s: %s%s. %s" % (v["node"], u.get("state"), (" " + u["version"]) if u.get("version") else "", v.get("note","")))'
             ;;
+        wall)
+            # Q5 (0.46.4): turn the Linux job wall on; operate on 0.46.4+ nodes.
+            local node="" restart=1 reason=""
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --no-restart) restart=0; shift ;;
+                    --reason) reason="${2:-}"; shift 2 ;;
+                    -*) echo "usage: k2 compute node wall <node> [--no-restart] [--reason \"…\"]" >&2; exit 2 ;;
+                    *) node="$1"; shift ;;
+                esac
+            done
+            [ -n "$node" ] || { echo "usage: k2 compute node wall <node> [--no-restart] [--reason \"…\"]" >&2; exit 2; }
+            local restart_j=true
+            [ "$restart" = "0" ] && restart_j=false
+            _compute_call POST /cli/compute/nodes/wall "$(_compute_json K2_CJ_node="$node" K2_CJ_restart_j="$restart_j" K2_CJ_reason="$reason")"
+            if printf '%s' "$_CP_BODY" | grep -q '"held": *true'; then
+                _compute_admin_held_or_approve
+            fi
+            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("%s: %s" % (v["node"], v.get("note","ok")))'
+            ;;
         alerts)
             local node="" after="" to="" have_to=0
             while [ $# -gt 0 ]; do
@@ -18094,7 +18127,7 @@ if "node" in v:
     print("%s: %s" % (v["node"], ("offline alert after %dm" % (a // 60)) if a else "no offline alert"))'
             ;;
         *)
-            echo "usage: k2 compute node add|confirm|remove|rename|pause|drain|resume|route|health|policy|update|rollback|alerts|admin|servers …" >&2
+            echo "usage: k2 compute node add|confirm|remove|rename|pause|drain|resume|route|health|policy|update|rollback|wall|alerts|admin|servers …" >&2
             exit 2
             ;;
     esac
@@ -18489,7 +18522,7 @@ if not v.get("installed"):
     print("  root: %s" % {"helper": "the root helper installs it (no password)", "prompt": "an admin prompt or one sudo command", "command": "one sudo command (or passwordless sudo, tried on enable)"}.get(v.get("elevation"), "one sudo command"))
     if hc:
         print("  home: %s is %s (mode %s)" % (hc.get("home"), "private" if hc.get("private") else "readable by other users", hc.get("mode")))
-    print("Enable: k2 compute local enable [--controller URL --enroll CODE.FP --name NAME] [--private-home|--no-private-home]")
+    print("Enable: k2 compute local enable [--controller URL --enroll CODE.FP --name NAME] [--private-home|--no-private-home] [--remote-admin off|policy|full]")
     sys.exit(0)
 n = v.get("node") or {}
 c = v.get("control") or {}
@@ -18503,6 +18536,9 @@ if r and not r.get("ok"): print("last enroll request failed: " + str(r.get("mess
 p = v.get("packages") or {}
 if p.get("approved"): print("approved packages: " + " ".join(p["approved"]))
 if hc and not hc.get("private"): print("note: %s is readable by other users (mode %s); jobs can read files there that are readable by everyone" % (hc.get("home"), hc.get("mode")))
+ra = v.get("remoteAdmin")
+print("remote admin: %s" % (ra or "not set up"))
+if v.get("remoteAdminCommand"): print("  K2 can\x27t update this node. Turn it on: k2 compute local remote-admin policy (or: %s)" % v["remoteAdminCommand"])
 '
             ;;
         pause)
@@ -18534,7 +18570,7 @@ print(json.dumps({"set": s}))' "$@")" || exit 2
             printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["policy"], indent=2))'
             ;;
         enable)
-            local controller="" enroll="" ticket="" name="" private=""
+            local controller="" enroll="" ticket="" name="" private="" remote_admin=""
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --controller) controller="${2:-}"; shift 2 ;;
@@ -18543,10 +18579,14 @@ print(json.dumps({"set": s}))' "$@")" || exit 2
                     --name) name="${2:-}"; shift 2 ;;
                     --private-home) private=1; shift ;;
                     --no-private-home) private=0; shift ;;
-                    *) echo "usage: k2 compute local enable [--controller URL --enroll CODE.FP --name NAME] [--private-home|--no-private-home]" >&2; exit 2 ;;
+                    --remote-admin)
+                        remote_admin="${2:-}"; shift 2
+                        case "$remote_admin" in off|policy|full) ;; *) echo "--remote-admin is off, policy or full" >&2; exit 2 ;; esac
+                        ;;
+                    *) echo "usage: k2 compute local enable [--controller URL --enroll CODE.FP --name NAME] [--private-home|--no-private-home] [--remote-admin off|policy|full]" >&2; exit 2 ;;
                 esac
             done
-            body="$(_compute_json K2_CJ_controller="$controller" K2_CJ_enroll="$enroll" K2_CJ_ticket="$ticket" K2_CJ_name="$name" K2_CJ_privateHome_b="$private")"
+            body="$(_compute_json K2_CJ_controller="$controller" K2_CJ_enroll="$enroll" K2_CJ_ticket="$ticket" K2_CJ_name="$name" K2_CJ_privateHome_b="$private" K2_CJ_remoteAdmin="$remote_admin")"
             _compute_call POST /cli/compute/local/enable "$body" tcp
             printf '%s' "$_CP_BODY" | python3 -c '
 import json, sys
@@ -18556,6 +18596,20 @@ if v.get("command"):
     print("  " + v["command"])
 if v.get("sas"):
     print("Code: %s — confirm it on the controller: k2 compute node confirm <name> <code>" % v["sas"])
+'
+            ;;
+        remote-admin)
+            case "${1:-}" in
+                off|policy|full) ;;
+                *) echo "usage: k2 compute local remote-admin off|policy|full" >&2; exit 2 ;;
+            esac
+            _compute_call POST /cli/compute/local/remote-admin "$(_compute_json K2_CJ_level="$1")" tcp
+            printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+print(v.get("message", ""))
+if v.get("command"):
+    print("  " + v["command"])
 '
             ;;
         disable)
@@ -18569,7 +18623,7 @@ if v.get("command"):
 '
             ;;
         *)
-            echo "usage: k2 compute local status|pause [--now]|drain|resume|policy|enable|disable" >&2
+            echo "usage: k2 compute local status|pause [--now]|drain|resume|policy|enable|remote-admin|disable" >&2
             exit 2
             ;;
     esac
@@ -36757,7 +36811,11 @@ ADDING A MACHINE (owner, or an agent with "Allow managing compute nodes")
   Over SSH: ONE sudo call, password on stdin, never in argv:
     ssh mini 'sudo -S -p "" /path/k2-node setup --no-private-home …' < pwfile
   The home question (chmod 700) is always asked; without a terminal pass
-  --private-home or --no-private-home. Then confirm the 6-digit code:
+  --private-home or --no-private-home. Remote admin is `policy` by default
+  (K2 keeps the node updated and healthy: updates, rollbacks, limits,
+  pause, the job wall); --remote-admin full also allows root actions, each
+  approved by the owner; off = K2 can't update it (k2 compute local
+  remote-admin policy turns it back on). Then confirm the 6-digit code:
     k2 compute node confirm mini-1 <code>   and   k2 compute grant mini-1 --workspace <ws>
   One-click (same k2.dev account, no code): the app asks connect.k2.dev
   for a ticket. Connect's CORS only allows the built app's origin
@@ -36772,7 +36830,11 @@ operate compute nodes", which your owner turns on — separate from
   Read:     k2 compute node health <node>   k2 compute node policy <node> show
   Operate (runs at once, no approval): lowering limits
             (k2 compute node policy <node> set mem_cap_gb=6), node update /
-            rollback to a newer signed build or the node's own previous one.
+            rollback to a newer signed build or the node's own previous one,
+            turning a Linux node's job wall on (k2 compute node wall <node>;
+            k2-node restarts to use it once its running jobs end).
+            Nodes on 0.46.3 or older need one manual install of 0.46.4 at
+            the machine before an update works (sudo k2-node setup).
   Privileged (held for the owner EVERY time): raising limits, restarting
             k2-node as root (and, when nodes learn them: power settings,
             reboot, OS updates, packages, root scripts):

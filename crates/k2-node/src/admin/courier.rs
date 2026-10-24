@@ -158,6 +158,7 @@ fn update_state(node: &Node, o: &UpdateOffer, phase: UpdatePhase, code_s: Option
         code: code_s.map(str::to_string),
         message,
         at: node.now(),
+        steps: Vec::new(),
     })
 }
 
@@ -230,29 +231,72 @@ pub fn update_chunk(node: &Arc<Node>, tx: &mpsc::Sender<Frame>, c: UpdateChunk) 
     });
 }
 
+/// While the executor's gate still says `swapped`, ask again this often…
+pub const GATE_POLL_SECS: u64 = 2;
+/// …for at most this long (the gate is 120 s; C12).
+pub const GATE_POLL_MAX_SECS: u64 = 150;
+
 /// After an attach: report how the last self-update ended (healthy or
-/// rolled back), from the executor's record. The controller dedups.
+/// rolled back), from the executor's record, with its steps. The owner
+/// attach writes the healthy mark just before this, and the gate checks it
+/// once a second, so the record usually still says `swapped`: poll until
+/// the gate ends (C12), so `healthy` reaches the controller now and not
+/// on a later attach. The controller dedups.
 pub async fn report_last_update(node: Arc<Node>, tx: mpsc::Sender<Frame>) {
-    let Ok(LocalResponse::Status(s)) = ask(&node, LocalRequest::Status, None, Duration::from_secs(5)).await else { return };
-    let Some(v) = s.last_update else { return };
+    let t0 = std::time::Instant::now();
+    let v = loop {
+        let Ok(LocalResponse::Status(s)) = ask(&node, LocalRequest::Status, None, Duration::from_secs(5)).await else { return };
+        let Some(v) = s.last_update else { return };
+        if v.get("phase").and_then(|p| p.as_str()) != Some("swapped") || t0.elapsed() >= Duration::from_secs(GATE_POLL_MAX_SECS) {
+            break v;
+        }
+        tokio::time::sleep(Duration::from_secs(GATE_POLL_SECS)).await;
+    };
+    let Some(f) = last_update_frame(&v) else { return };
+    let _ = tx.send(f).await;
+}
+
+/// The `update_state` frame for an executor record that ended (`healthy`
+/// or `rolled_back`), steps included; `None` for any other phase.
+pub fn last_update_frame(v: &serde_json::Value) -> Option<Frame> {
     let phase = match v.get("phase").and_then(|p| p.as_str()) {
         Some("healthy") => UpdatePhase::Healthy,
         Some("rolled_back") => UpdatePhase::RolledBack,
-        _ => return,
+        _ => return None,
     };
     let s_of = |k: &str| v.get(k).and_then(|x| x.as_str()).map(str::to_string);
-    let _ = tx
-        .send(Frame::UpdateState(UpdateState {
-            transfer_id: None,
-            cmd_id: s_of("cmd_id"),
-            phase,
-            version: s_of("to").unwrap_or_default(),
-            from: s_of("from"),
-            code: None,
-            message: s_of("reason"),
-            at: v.get("at").and_then(|x| x.as_i64()).unwrap_or(0),
-        }))
-        .await;
+    let steps = v.get("steps").cloned().and_then(|s| serde_json::from_value(s).ok()).unwrap_or_default();
+    Some(Frame::UpdateState(UpdateState {
+        transfer_id: None,
+        cmd_id: s_of("cmd_id"),
+        phase,
+        version: s_of("to").unwrap_or_default(),
+        from: s_of("from"),
+        code: None,
+        message: s_of("reason"),
+        at: v.get("at").and_then(|x| x.as_i64()).unwrap_or(0),
+        steps,
+    }))
+}
+
+#[cfg(test)]
+mod last_update_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn an_ended_gate_reports_its_steps_and_a_running_one_nothing() {
+        let rec = json!({"phase": "healthy", "from": "0.46.4", "to": "0.46.5", "at": 7, "cmd_id": "c1",
+            "steps": [{"step": "received", "ok": true, "at": 1}, {"step": "healthy", "ok": true, "at": 7}]});
+        let Some(Frame::UpdateState(u)) = last_update_frame(&rec) else { panic!("no frame for a healthy record") };
+        assert_eq!((u.phase, u.version.as_str(), u.cmd_id.as_deref()), (UpdatePhase::Healthy, "0.46.5", Some("c1")));
+        assert_eq!(u.steps.iter().map(|s| s.step.as_str()).collect::<Vec<_>>(), vec!["received", "healthy"]);
+        let old = json!({"phase": "rolled_back", "from": "0.46.3", "to": "0.46.2", "at": 9, "reason": "health_gate"});
+        let Some(Frame::UpdateState(u)) = last_update_frame(&old) else { panic!("no frame for a rolled-back record") };
+        assert!(u.steps.is_empty(), "a 0.46.3 executor's record has no steps");
+        assert!(serde_json::to_value(&u).unwrap().get("steps").is_none(), "empty steps stay off the wire");
+        assert!(last_update_frame(&json!({"phase": "swapped"})).is_none());
+    }
 }
 
 /// `admin_keys` → the executor.

@@ -54,9 +54,11 @@ import {
   removeComputeNode,
   renameComputeNode,
   resumeLocalNode,
+  remoteAdminLevel,
   revokeComputeGrant,
   setComputeGrant,
   setLocalPolicy,
+  setLocalRemoteAdmin,
   validNodeName,
   type ComputeEvent,
   type ComputeGrant,
@@ -67,7 +69,9 @@ import {
   type GrantLimits,
   type LocalDisableResult,
   type LocalEnableResult,
+  type LocalRemoteAdminResult,
   type LocalStatus,
+  type RemoteAdminLevel,
   type NodeDot,
   type PolicyKey,
 } from './compute-api'
@@ -817,6 +821,11 @@ function ThisComputerPart({
   // A one-click pairing installs the node service first, which turns the
   // node "on" before pairing finishes: keep the sheet up until it's done.
   const [flowActive, setFlowActive] = useState(false)
+  // The remote-admin toggles under the main one (Rosson 2026-10-24): K2
+  // keeps the node updated and healthy unless the owner says no; root
+  // actions only when asked. Sent with the enable, in the same root step.
+  const [keepUpdated, setKeepUpdated] = useState(true)
+  const [allowRoot, setAllowRoot] = useState(false)
   // On = enrolled (or enrolling). An installed but unenrolled node service
   // (the one-click path installs first) still needs the sheet.
   const isOn = !!status && (status.node ? status.node.state !== 'unenrolled' : status.installed)
@@ -854,9 +863,21 @@ function ThisComputerPart({
                 </p>
               </div>
             </div>
+            <RemoteAdminToggles
+              keepUpdated={keepUpdated}
+              allowRoot={allowRoot}
+              onKeepUpdated={(on) => {
+                setKeepUpdated(on)
+                // Off clears the root opt-in: turning policy back on never
+                // brings `full` back by itself.
+                if (!on) setAllowRoot(false)
+              }}
+              onAllowRoot={setAllowRoot}
+            />
             {sheetOpen ? (
               <EnableSheet
                 status={status}
+                remoteAdmin={remoteAdminLevel(keepUpdated, allowRoot)}
                 onResult={setEnableResult}
                 onFlowActive={setFlowActive}
                 onChanged={onChanged}
@@ -873,6 +894,95 @@ function ThisComputerPart({
         ) : null}
       </div>
     </SettingsGroup>
+  )
+}
+
+/** The two remote-admin toggles (prd-compute-update-continuity-v1 Q4/Q5):
+ *  policy (on by default) and, only while it's on, full (an explicit
+ *  opt-in). Presentation only: the daemon applies the level through root. */
+export function RemoteAdminToggles({
+  keepUpdated,
+  allowRoot,
+  onKeepUpdated,
+  onAllowRoot,
+  disabled = false,
+}: {
+  keepUpdated: boolean
+  allowRoot: boolean
+  onKeepUpdated: (on: boolean) => void
+  onAllowRoot: (on: boolean) => void
+  disabled?: boolean
+}): React.JSX.Element {
+  return (
+    <div className="space-y-2 pl-1" data-testid="compute-remote-admin">
+      <div className="flex items-start gap-3">
+        <Toggle
+          checked={keepUpdated}
+          disabled={disabled}
+          onChange={onKeepUpdated}
+          aria-label="Let K2 keep this node updated and healthy (remote admin: policy)"
+        />
+        <div className="flex-1 min-w-0">
+          <div className="text-xs text-[var(--color-text-primary)]">Let K2 keep this node updated and healthy (remote admin: policy)</div>
+          <p className="text-[11px] text-[var(--color-text-muted)] mt-0.5">
+            Signed k2-node updates and rollbacks, limits (raising them waits for you), pause, and the job wall.
+          </p>
+        </div>
+      </div>
+      {keepUpdated ? (
+        <div className="flex items-start gap-3">
+          <Toggle
+            checked={allowRoot}
+            disabled={disabled}
+            onChange={onAllowRoot}
+            aria-label="Also let K2 run admin scripts as root (remote admin: full)"
+          />
+          <div className="flex-1 min-w-0">
+            <div className="text-xs text-[var(--color-text-primary)]">Also let K2 run admin scripts as root (remote admin: full)</div>
+            <p className="text-[11px] text-[var(--color-text-muted)] mt-0.5">
+              Each root action still waits for your approval (Touch ID or your password).
+            </p>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+/** The toggles once the node is on: they show the node's level and change
+ *  it through the daemon (the same root path as the install). */
+function RemoteAdminPart({ status, onChanged }: { status: LocalStatus; onChanged: () => Promise<void> }): React.JSX.Element {
+  const { busy, error, run } = useAction(onChanged)
+  const [result, setResult] = useState<LocalRemoteAdminResult | null>(null)
+  const level = status.remoteAdmin ?? null
+  const keepUpdated = level === 'policy' || level === 'full'
+  const change = async (to: RemoteAdminLevel): Promise<void> => {
+    if (to === level) return
+    const out = await run(() => setLocalRemoteAdmin(to))
+    if (out) setResult(out)
+  }
+  return (
+    <div className="space-y-2" data-testid="compute-local-remote-admin">
+      <div className="text-[10px] uppercase tracking-wider text-[var(--color-text-muted)]">Remote admin (now: {level ?? 'not set up'})</div>
+      <RemoteAdminToggles
+        keepUpdated={keepUpdated}
+        allowRoot={level === 'full'}
+        disabled={busy}
+        onKeepUpdated={(on) => void change(on ? 'policy' : 'off')}
+        onAllowRoot={(on) => {
+          if (keepUpdated) void change(on ? 'full' : 'policy')
+        }}
+      />
+      {!keepUpdated ? (
+        <div className="space-y-1" data-testid="compute-cant-update">
+          <Callout tone="warn">K2 can&apos;t update this node. Turn the first switch on, or run this once as an admin:</Callout>
+          {status.remoteAdminCommand ? <CopyBox label="Admin command" text={status.remoteAdminCommand} /> : null}
+        </div>
+      ) : null}
+      {result?.rootNeeded && result.command ? <CopyBox label="Admin command" text={result.command} /> : null}
+      {result?.message ? <p className="text-[11px] text-[var(--color-text-secondary)]">{result.message}</p> : null}
+      {error ? <Callout tone="error">{error}</Callout> : null}
+    </div>
   )
 }
 
@@ -928,11 +1038,13 @@ type AccountPhase =
 
 function EnableSheet({
   status,
+  remoteAdmin,
   onResult,
   onFlowActive,
   onChanged,
 }: {
   status: LocalStatus
+  remoteAdmin: RemoteAdminLevel
   onResult: (r: LocalEnableResult) => void
   onFlowActive: (active: boolean) => void
   onChanged: () => Promise<void>
@@ -963,7 +1075,7 @@ function EnableSheet({
       if (!/^https?:\/\//.test(c)) throw new Error('The server address starts with https://, e.g. https://rosson.k2.dev')
       if (!e) throw new Error('Paste the enroll code from the server (Settings → Compute → Add a node)')
       if (!validNodeName(n)) throw new Error('Node names are 1–32 of a-z, 0-9 and -')
-      return enableLocalNode({ controller: c, enroll: e, name: n, privateHome })
+      return enableLocalNode({ controller: c, enroll: e, name: n, privateHome, remoteAdmin })
     })
     if (out) onResult(out)
   }
@@ -1017,7 +1129,7 @@ function EnableSheet({
           return
         }
         const out = await run(() =>
-          enableLocalNode({ controller: `https://${sub}.k2.dev`, ticket: ticket.ticket, name: n, privateHome }),
+          enableLocalNode({ controller: `https://${sub}.k2.dev`, ticket: ticket.ticket, name: n, privateHome, remoteAdmin }),
         )
         if (out) onResult(out)
         setPhase({ kind: 'idle' })
@@ -1025,7 +1137,7 @@ function EnableSheet({
         finishing.current = false
       }
     },
-    [name, privateHome, run, onResult, setError, fallBackToCode],
+    [name, privateHome, remoteAdmin, run, onResult, setError, fallBackToCode],
   )
 
   const pickServer = async (sub: string): Promise<void> => {
@@ -1043,7 +1155,7 @@ function EnableSheet({
     // after `needs_root` the polled status brings it once the admin ran the
     // command.
     setPhase({ kind: 'installing', sub })
-    const out = await run(() => enableLocalNode({ name: n, privateHome }))
+    const out = await run(() => enableLocalNode({ name: n, privateHome, remoteAdmin }))
     if (!out) {
       setPhase({ kind: 'idle' })
       return
@@ -1291,6 +1403,8 @@ function LocalNodePanel({
           </Button>
         </div>
       </div>
+
+      <RemoteAdminPart status={status} onChanged={onChanged} />
 
       <PolicyEditor policy={status.policy} onChanged={onChanged} />
 

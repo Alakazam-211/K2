@@ -11,6 +11,10 @@ Type=simple
 ExecStart=/usr/local/libexec/k2-node admin serve --config-dir /etc/k2-node --state-dir /var/lib/k2-node-admin --home /var/lib/k2node --binary /usr/local/libexec/k2-node
 Restart=on-failure
 RestartSec=2
+# The executor's systemd-run --wait helpers (one per walled job) outlive it:
+# an exit to re-exec after an update, or a crash, never takes them (or the
+# jobs they hold) with it. prd-compute-update-continuity-v1 C5.
+KillMode=process
 UMask=0077
 WorkingDirectory=/
 

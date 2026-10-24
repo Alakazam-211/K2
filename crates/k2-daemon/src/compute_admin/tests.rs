@@ -579,10 +579,15 @@ fn update_offers_a_signed_build_and_records_rollback() {
         code: None,
         message: Some("no hello in 120 s".into()),
         at: compute::now(),
+        steps: vec![
+            wire::UpdateStep { step: "swap".into(), ok: true, at: compute::now(), detail: None },
+            wire::UpdateStep { step: "rollback".into(), ok: true, at: compute::now(), detail: Some("why=health_gate".into()) },
+        ],
     };
     on_update_state(&f.node, rolled.clone());
     let h = get(NODE_HEALTH, &Who::Owner, &[("node", &f.node_name)]).unwrap();
     assert_eq!(h["update"]["state"], "rolled_back");
+    assert_eq!(h["update"]["steps"][1]["step"], "rollback", "the node's update steps are kept: {h}");
     assert_eq!(h["updateRing"], "canary");
     let m = test_seams::take_messages(&f.ws);
     assert!(m.iter().any(|x| x.contains("rolled back")), "{m:?}");
@@ -678,6 +683,65 @@ fn route_tables_guard_every_admin_route() {
     }
     assert!(!crate::session_token::is_agent_verb(APPROVE));
     assert!(!crate::session_token::is_agent_verb(DENY));
+}
+
+/// A fake node answering the next admin command with `state`/`code`.
+/// Returns the command it saw.
+fn answer_next(node: String, state: &'static str, code: Option<&'static str>) -> std::thread::JoinHandle<Option<wire::Command>> {
+    std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            if let Some(c) = admin_cmds(test_seams::take_sent(&node)).into_iter().next() {
+                let body = crypto::unb64(&c.body_b64).unwrap();
+                let cmd: wire::Command = serde_json::from_slice(&body).unwrap();
+                let out = if state == "done" { json!({"job_user": "k2job"}) } else { Value::Null };
+                assert!(super::wait_deliver(&result(&cmd.cmd_id, state, code, None, out)), "a route waits for {}", cmd.verb);
+                return Some(cmd);
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        None
+    })
+}
+
+/// Q5 (0.46.4): an operator turns the job wall on at once (operate, the
+/// controller signature only, `restart` on by default); a node older than
+/// 0.46.4 asks for the owner, so it becomes a held plan with the args that
+/// node knows (wall.enable {} + unit.restart k2-node).
+#[test]
+fn the_job_wall_goes_at_once_and_an_older_node_holds_for_the_owner() {
+    let f = fx("wall", true);
+    let responder = answer_next(f.node.clone(), "done", None);
+    let r = call(NODE_WALL, &agent(&f), json!({"node": f.node_name})).unwrap();
+    let cmd = responder.join().unwrap().expect("wall.enable went out");
+    assert_eq!((cmd.verb.as_str(), cmd.class, &cmd.args), ("wall.enable", wire::Class::Operate, &json!({"restart": true})));
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(r["note"].as_str().unwrap().contains("once its running jobs end"), "{r}");
+
+    let responder = answer_next(f.node.clone(), "done", None);
+    call(NODE_WALL, &agent(&f), json!({"node": f.node_name, "restart": false})).unwrap();
+    assert_eq!(responder.join().unwrap().unwrap().args, json!({"restart": false}));
+
+    // A 0.46.3 executor classes it privileged: held for the owner as a plan.
+    let responder = answer_next(f.node.clone(), "refused", Some(wire::code::APPROVAL_REQUIRED));
+    let r = call(NODE_WALL, &agent(&f), json!({"node": f.node_name})).unwrap();
+    responder.join().unwrap().expect("tried at once first");
+    assert_eq!((r["held"].as_bool(), r["request"]["class"].as_str(), r["request"]["kind"].as_str()), (Some(true), Some("privileged"), Some("plan")), "{r}");
+    let steps = &r["request"]["body"]["steps"];
+    assert_eq!((steps[0]["verb"].as_str(), &steps[0]["args"]), (Some("wall.enable"), &json!({})), "{r}");
+    assert_eq!(steps[1]["verb"], "unit.restart");
+
+    // Any other refusal is an error, not a hold.
+    let responder = answer_next(f.node.clone(), "refused", Some(wire::code::BAD_ARGS));
+    let e = call(NODE_WALL, &agent(&f), json!({"node": f.node_name})).unwrap_err();
+    responder.join().unwrap();
+    assert_eq!(e, (409, "node_refused".to_string()));
+
+    // Agents need the operate switch; bad args never leave.
+    let ws = other_ws("wall-off", false);
+    assert_eq!(call(NODE_WALL, &agent_of(&ws), json!({"node": f.node_name})).unwrap_err().1, cadmin::codes::OPERATE_OFF);
+    assert_eq!(call(NODE_WALL, &agent(&f), json!({"node": f.node_name, "restart": "yes"})).unwrap_err().0, 400);
+    assert!(test_seams::take_sent(&f.node).is_empty());
 }
 
 // ── node sharing: the servers verbs (prd-compute-shared-queue-v1 §9) ──

@@ -93,6 +93,9 @@ ok "node + admin.toml (level full, controller + approval key pinned by root)"
 # ── the executor: socket, restart loop (re-exec after an update) ─────
 install -d -m 0700 "$STATE"
 (
+    # The unit's UMask=0077 (0.46.3 staged 0700 builds under it; the update
+    # below must still come up: prd-compute-update-continuity-v1 Bug 1).
+    umask 077
     while true; do
         K2_NODE_ADMIN_TEST_HOOK=/root/hook.sh "$BIN" admin serve --config-dir "$CFG" --state-dir "$STATE" \
             --home "$HOME_DIR" --binary "$BIN" --socket "$SOCK" >>/root/executor.log 2>&1 || true

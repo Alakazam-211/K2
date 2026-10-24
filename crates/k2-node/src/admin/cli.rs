@@ -1,7 +1,7 @@
 //! `k2-node admin …` (prd-k2-node-admin-v1 §13.2, "at the node machine").
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -19,10 +19,6 @@ fn need_root(what: &str) -> Result<(), String> {
     }
     Ok(())
 }
-
-/// Set once an update's health gate passed: the executor exits after the
-/// current connection so the service manager starts the new binary.
-pub static REEXEC: AtomicBool = AtomicBool::new(false);
 
 fn platform() -> Arc<dyn Platform> {
     #[cfg(feature = "test-keys")]
@@ -49,7 +45,8 @@ pub fn serve(paths: ExecPaths, socket: &Path) -> Result<(), String> {
     // A health gate that was running when the executor died resumes.
     super::update::resume_pending(&exec);
     crate::nlog!("admin executor {} serving (peers: root, {node_user})", crate::PRODUCT_VERSION);
-    server::serve(&exec, &rule, l, &|| REEXEC.load(Ordering::SeqCst))?;
+    let reexec = exec.reexec.clone();
+    server::serve(&exec, &rule, l, &|| reexec.load(Ordering::SeqCst))?;
     crate::nlog!("admin executor: exiting so the service manager starts the updated binary");
     Ok(())
 }

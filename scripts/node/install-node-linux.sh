@@ -3,7 +3,7 @@
 #
 #   sudo k2-node setup [--private-home | --no-private-home] [--human USER]
 #        [--allow-packages "libssl-dev pkg-config"] [--tools "node@22 rust@stable"]
-#        [--remote-admin off|policy|full]
+#        [--remote-admin off|policy|full] [--no-job-wall]
 #        [--controller https://you.k2.dev --enroll ABCDE-FGHJK.0123456789abcdef --name NAME]
 #   (or: sudo scripts/node/install-node-linux.sh --binary ./k2-node …)
 #
@@ -47,6 +47,7 @@ ALLOW_PACKAGES=""
 PACKAGE_RULE=1
 TOOLS=""
 REMOTE_ADMIN=""
+NO_JOB_WALL=0
 ADMIN_STATE="/var/lib/k2-node-admin"
 ADMIN_SOCKET="/run/k2-node-admin.sock"
 ADMIN_SOCKET_UNIT="/etc/systemd/system/k2-node-admin.socket"
@@ -71,6 +72,7 @@ while [ $# -gt 0 ]; do
         --no-package-installs) PACKAGE_RULE=0; shift ;;
         --tools) TOOLS="${2:-}"; shift 2 ;;
         --remote-admin) REMOTE_ADMIN="${2:-}"; shift 2 ;;
+        --no-job-wall) NO_JOB_WALL=1; shift ;;
         -h|--help) usage ;;
         *) die "unknown argument: $1 (see --help)" ;;
     esac
@@ -189,14 +191,33 @@ install -m 0644 -o root -g root "$tmp/k2-node.service" "$UNIT"
 # The job user enters the node home (traverse only, an ACL; the home stays
 # 0750 to everyone else) and jobs.toml turns the wall on. The executor
 # checks systemd (≥ 245) itself; without it jobs run as $NODE_USER.
-if command -v setfacl >/dev/null && setfacl -m "u:$JOB_USER:x" "$HOME_DIR"; then
+# On by default (Rosson 2026-10-24, Q5): setfacl comes from the acl
+# package, installed here when missing; --no-job-wall is the explicit way out.
+install_acl() {
+    if command -v apt-get >/dev/null; then
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -q acl >/dev/null 2>&1 \
+            || { apt-get update -q >/dev/null 2>&1 && DEBIAN_FRONTEND=noninteractive apt-get install -y -q acl >/dev/null 2>&1; }
+    elif command -v dnf >/dev/null; then dnf install -y -q acl >/dev/null 2>&1
+    elif command -v yum >/dev/null; then yum install -y -q acl >/dev/null 2>&1
+    elif command -v pacman >/dev/null; then pacman -S --noconfirm --needed acl >/dev/null 2>&1
+    elif command -v zypper >/dev/null; then zypper --non-interactive install acl >/dev/null 2>&1
+    elif command -v apk >/dev/null; then apk add -q acl >/dev/null 2>&1
+    fi
+}
+if [ "$NO_JOB_WALL" = "1" ]; then
+    rm -f "$CONFIG_DIR/jobs.toml"
+    WALL_STATUS="OFF (--no-job-wall): jobs run as $NODE_USER and can read its key; turn it on later: sudo k2-node setup, or k2 compute node wall <node> from your K2"
+else
+    if ! command -v setfacl >/dev/null; then
+        echo "== installing the acl package (setfacl) for the job wall"
+        install_acl || true
+    fi
+    command -v setfacl >/dev/null || die "the job wall needs setfacl (the acl package), and it couldn't be installed here. Install it and rerun, or pass --no-job-wall (jobs then run as $NODE_USER and can read its key)"
+    setfacl -m "u:$JOB_USER:x" "$HOME_DIR" || die "setfacl on $HOME_DIR failed (does this filesystem support ACLs?). Fix it and rerun, or pass --no-job-wall"
     "$BIN" admin job-user "$JOB_USER" --config-dir "$CONFIG_DIR" >/dev/null
     chown root:root "$CONFIG_DIR/jobs.toml"
     chmod 0644 "$CONFIG_DIR/jobs.toml"
     WALL_STATUS="on: jobs run as $JOB_USER in a sandboxed systemd unit (no node key or state, no /home or /root; network = none works)"
-else
-    rm -f "$CONFIG_DIR/jobs.toml"
-    WALL_STATUS="OFF: setfacl is missing (install the acl package, then rerun setup); jobs run as $NODE_USER and can read its key"
 fi
 
 # The human's K2 must reach the node now, not after a new login (group
@@ -260,24 +281,37 @@ fi
 
 # ── remote admin: the root executor (prd-k2-node-admin-v1) ───────────
 # Your K2 server's agents can then look after this machine without SSH:
-#   off    = today: they can only narrow limits (and read health)
-#   policy = also change limits (widening needs your approval), pause,
-#            update k2-node to newer signed builds, roll back
+#   policy = (default) K2 keeps it updated and healthy: newer signed
+#            k2-node builds, roll back, limits (widening needs your
+#            approval), pause, the job wall
+#   off    = they can only narrow limits (and read health)
 #   full   = also owner-approved root actions, each one approved by you
 # Raising the level is only possible here, at the machine.
-if [ -z "$REMOTE_ADMIN" ] && [ ! -f "$CONFIG_DIR/admin.toml" ]; then
-    if [ -t 0 ]; then
-        echo "== remote admin for this node"
-        echo "   off    = agents can only narrow limits and read health (today's behaviour)"
-        echo "   policy = also change limits (widening needs your approval), pause, update k2-node"
-        echo "   full   = also root actions, each approved by you (Touch ID / password) on your K2"
-        printf "   Remote admin level? [off/policy/full] (off) "
-        read -r answer
-        case "$answer" in policy|full) REMOTE_ADMIN="$answer" ;; *) REMOTE_ADMIN="off" ;; esac
-    else
-        # Not a terminal and no flag: off grants nothing new.
-        REMOTE_ADMIN="off"
-    fi
+CURRENT_ADMIN=""
+if [ -f "$CONFIG_DIR/admin.toml" ]; then
+    CURRENT_ADMIN="$(sed -n 's/^remote_admin *= *"\(.*\)"/\1/p' "$CONFIG_DIR/admin.toml" | head -n 1)"
+fi
+if [ -z "$REMOTE_ADMIN" ]; then
+    case "$CURRENT_ADMIN" in
+        policy|full) ;; # the owner's earlier choice stands
+        *)
+            # New, or `off` today: ask, with `policy` preselected (Q4).
+            if [ -t 0 ]; then
+                echo "== remote admin for this node"
+                echo "   policy = K2 keeps this node updated and healthy: signed k2-node updates and"
+                echo "            rollbacks, limits (widening needs your approval), pause, the job wall"
+                echo "   off    = K2 can only narrow limits and read health; you update k2-node by hand"
+                echo "   full   = also root actions, each approved by you (Touch ID / password) on your K2"
+                printf "   Remote admin level? [policy/off/full] (policy) "
+                read -r answer
+                case "$answer" in off|full) REMOTE_ADMIN="$answer" ;; *) REMOTE_ADMIN="policy" ;; esac
+            elif [ -z "$CURRENT_ADMIN" ]; then
+                # Not a terminal, no flag, a first install: policy (Rosson
+                # 2026-10-24). --remote-admin off opts out.
+                REMOTE_ADMIN="policy"
+            fi
+            ;;
+    esac
 fi
 install -d -m 0700 -o root -g root "$ADMIN_STATE"
 level_args=()

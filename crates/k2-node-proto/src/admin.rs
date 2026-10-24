@@ -202,8 +202,12 @@ pub const VERBS: &[VerbSpec] = &[
     // on the human's files, so always the owner's own approval (0.46.3).
     VerbSpec { name: "homes.private", base: Class::Privileged, min_level: Level::Full, runs: Runs::Executor },
     // Linux: create the `k2job` user and turn the job wall on (what setup
-    // does at the machine), for nodes updated remotely (0.46.3).
-    VerbSpec { name: "wall.enable", base: Class::Privileged, min_level: Level::Full, runs: Runs::Executor },
+    // does at the machine), for nodes updated remotely (0.46.3). Operate at
+    // `policy` since 0.46.4 (Rosson, Q5): it only walls jobs in further (a
+    // fixed user, no argument but `restart`), so an operator turns it on
+    // without a per-node approval. A 0.46.3 executor still classes it
+    // privileged and answers `approval_required`; the controller holds it.
+    VerbSpec { name: "wall.enable", base: Class::Operate, min_level: Level::Policy, runs: Runs::Executor },
     // Node sharing (protocol 3, prd-compute-shared-queue-v1 §10.2;
     // arguments: `crate::share::check_verb_args`). The node lists its
     // servers itself; the rest write root-owned `servers.toml`.
@@ -676,6 +680,19 @@ pub enum UpdatePhase {
     RolledBack,
     Refused,
     Failed,
+}
+
+/// One step of a self-update as the executor ran it (received, verify,
+/// stage, preflight, decide, mark, swap, restart, health wait, healthy or
+/// rollback, re-exec). Kept in the executor's `update.json` and reported
+/// in [`crate::frames::UpdateState::steps`] (0.46.4; optional on the wire).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpdateStep {
+    pub step: String,
+    pub ok: bool,
+    pub at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 #[cfg(test)]

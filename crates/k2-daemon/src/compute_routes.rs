@@ -66,6 +66,7 @@ pub const ROUTES: &[&str] = &[
     "/cli/compute/local/enable",
     "/cli/compute/local/pause",
     "/cli/compute/local/policy",
+    "/cli/compute/local/remote-admin",
     "/cli/compute/local/resume",
     "/cli/compute/local/status",
     "/cli/compute/nodes",
@@ -88,6 +89,7 @@ pub const ROUTES: &[&str] = &[
     "/cli/compute/nodes/servers/pause",
     "/cli/compute/nodes/servers/revoke",
     "/cli/compute/nodes/update",
+    "/cli/compute/nodes/wall",
     "/cli/compute/queue",
     "/cli/compute/run",
     "/cli/compute/usage",
@@ -109,6 +111,7 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/compute/local/enable",
     "/cli/compute/local/pause",
     "/cli/compute/local/policy",
+    "/cli/compute/local/remote-admin",
     "/cli/compute/local/resume",
     "/cli/compute/nodes/alerts",
     "/cli/compute/nodes/confirm",
@@ -125,6 +128,7 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/compute/nodes/servers/pause",
     "/cli/compute/nodes/servers/revoke",
     "/cli/compute/nodes/update",
+    "/cli/compute/nodes/wall",
     "/cli/compute/run",
 ];
 
@@ -550,6 +554,7 @@ pub fn handle_from(path: &str, who: Who, body: &[u8], params: &HashMap<String, S
         "/cli/compute/local/policy" => local_policy(&who, body),
         "/cli/compute/local/enable" => local_enable(&who, body),
         "/cli/compute/local/disable" => local_disable(&who, body),
+        "/cli/compute/local/remote-admin" => local_remote_admin(&who, body),
         // Node sharing (prd-compute-shared-queue-v1 §9).
         "/cli/compute/queue" => queue(&who, params),
         // Node admin (prd-k2-node-admin-v1): approvals, policy, update,
@@ -3158,8 +3163,21 @@ fn local_enable(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         name: s(&v, "name").map(str::to_string),
         private_home: b(&v, "privateHome"),
         allow_prompt: b(&v, "elevate") == Some(true),
+        // "Let K2 keep this node updated and healthy": on unless asked off.
+        remote_admin: crate::compute_local::remote_admin_arg(v.get("remoteAdmin"), Some(crate::compute_local::DEFAULT_REMOTE_ADMIN))
+            .map_err(|(code, status, hint)| no(code, status, hint))?,
     };
     crate::compute_local::enable(&req, &who.label()).map_err(|(code, status, hint)| no(code, status, hint))
+}
+
+/// The remote-admin toggles under "Make this computer a compute node",
+/// changed later: `{level: off|policy|full, elevate?}`. Owner only; the
+/// daemon runs root (never the renderer).
+fn local_remote_admin(who: &Who, body: &[u8]) -> R<serde_json::Value> {
+    need_owner(who)?;
+    let v = json_body(body)?;
+    let level = crate::compute_local::remote_admin_arg(v.get("level"), None).map_err(|(code, status, hint)| no(code, status, hint))?;
+    crate::compute_local::set_remote_admin(&level, &who.label(), b(&v, "elevate") == Some(true)).map_err(|(code, status, hint)| no(code, status, hint))
 }
 
 fn local_disable(who: &Who, body: &[u8]) -> R<serde_json::Value> {

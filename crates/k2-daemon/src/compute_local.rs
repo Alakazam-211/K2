@@ -20,6 +20,13 @@
 //!
 //! The private-home choice is never silent: when the human's home is
 //! readable by others the request must say `privateHome` true or false.
+//!
+//! Remote admin (prd-compute-update-continuity-v1 Q4, Rosson 2026-10-24):
+//! the same setup run sets the node's remote-admin level, `policy` unless
+//! the request says otherwise ("Let K2 keep this node updated and healthy"
+//! in Settings), so there is no second password prompt. `full` is an
+//! explicit opt-in. Changing it later (`local/remote-admin`) goes through
+//! the same root path: `k2-node admin level <off|policy|full>`.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -269,7 +276,13 @@ fn sudo_allows(bin: &Path, verb: &str, args: &[String]) -> bool {
 }
 
 pub fn elevation(bin: &Path, verb: &str, args: &[String], allow_prompt: bool) -> Elevation {
-    if cfg!(target_os = "linux") && root_helper_node()["node"] == true {
+    elevation_with(bin, verb, args, allow_prompt, true)
+}
+
+/// `helper_ok`: the root helper's `node` namespace knows only install and
+/// uninstall; anything else goes through sudo, the prompt or a command.
+pub fn elevation_with(bin: &Path, verb: &str, args: &[String], allow_prompt: bool, helper_ok: bool) -> Elevation {
+    if helper_ok && cfg!(target_os = "linux") && root_helper_node()["node"] == true {
         return Elevation::Helper;
     }
     if sudo_allows(bin, verb, args) {
@@ -301,14 +314,32 @@ pub fn applescript_for(shell_cmd: &str) -> String {
     format!("do shell script \"{esc}\" with administrator privileges")
 }
 
+/// Remote admin levels (`k2-node admin level`).
+pub const REMOTE_ADMIN_LEVELS: &[&str] = &["off", "policy", "full"];
+/// What "Make this computer a compute node" sets unless asked otherwise:
+/// K2 keeps the node updated and healthy (Rosson 2026-10-24).
+pub const DEFAULT_REMOTE_ADMIN: &str = "policy";
+
+/// A request's `remoteAdmin`: absent or null = `default` (when there is
+/// one), else one of [`REMOTE_ADMIN_LEVELS`].
+pub fn remote_admin_arg(v: Option<&serde_json::Value>, default: Option<&str>) -> Result<String, Refused> {
+    let bad = || ("bad_request", 400, "remoteAdmin is off, policy or full".to_string());
+    match v {
+        None | Some(serde_json::Value::Null) => default.map(str::to_string).ok_or_else(bad),
+        Some(serde_json::Value::String(s)) if REMOTE_ADMIN_LEVELS.contains(&s.as_str()) => Ok(s.clone()),
+        Some(_) => Err(bad()),
+    }
+}
+
 /// The installer argv (`k2-node setup …`).
-pub fn setup_args(human: &str, private_home: Option<bool>, enroll: Option<(&str, &str, &str)>) -> Vec<String> {
+pub fn setup_args(human: &str, private_home: Option<bool>, enroll: Option<(&str, &str, &str)>, remote_admin: &str) -> Vec<String> {
     let mut a = vec!["--human".to_string(), human.to_string()];
     match private_home {
         Some(true) => a.push("--private-home".into()),
         Some(false) => a.push("--no-private-home".into()),
         None => {}
     }
+    a.extend(["--remote-admin".to_string(), remote_admin.to_string()]);
     if let Some((controller, code, name)) = enroll {
         a.extend(["--controller".into(), controller.into(), "--enroll".into(), code.into(), "--name".into(), name.into()]);
     }
@@ -323,9 +354,14 @@ fn run_root(el: Elevation, bin: &Path, verb: &str, args: &[String]) -> Result<St
             // Designed verb (see the notes): the helper takes the binary on
             // stdin, checks its release signature itself and runs the
             // embedded installer; only fixed tokens on argv.
+            let hverb = match verb {
+                "setup" => "install",
+                "uninstall" => "uninstall",
+                v => return Err(format!("the root helper has no node verb for {v}")),
+            };
             let bytes = std::fs::read(bin).map_err(|e| format!("read {}: {e}", bin.display()))?;
             let mut c = Command::new("/usr/bin/sudo");
-            c.arg("-n").arg(ROOT_HELPER).arg("node").arg(if verb == "setup" { "install" } else { "uninstall" }).args(args);
+            c.arg("-n").arg(ROOT_HELPER).arg("node").arg(hverb).args(args);
             run_limited(c, Some(bytes), limit)?
         }
         Elevation::Sudo => {
@@ -405,6 +441,11 @@ pub fn status() -> serde_json::Value {
     v["rootHelper"] = rh;
     v["homeCheck"] = local::home_check(&home).unwrap_or(serde_json::Value::Null);
     v["packages"] = approved_packages();
+    // Remote admin off (or unset): K2 can't update this node. One command
+    // turns it on (the toggle in Settings runs the same through root).
+    if v["installed"] == true && !matches!(v["remoteAdmin"].as_str(), Some("policy") | Some("full")) {
+        v["remoteAdminCommand"] = command_line(&installed_binary_path(), "admin", &["level".into(), DEFAULT_REMOTE_ADMIN.into()]).into();
+    }
     v["ticketSupported"] = compute::ticket::supported().into();
     v
 }
@@ -413,7 +454,7 @@ pub fn status() -> serde_json::Value {
 pub type Refused = (&'static str, u16, String);
 
 /// What `local/enable` was asked for.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct EnableReq {
     pub controller: Option<String>,
     pub enroll: Option<String>,
@@ -422,6 +463,22 @@ pub struct EnableReq {
     pub private_home: Option<bool>,
     /// Settings may pop the macOS admin prompt; the CLI never does.
     pub allow_prompt: bool,
+    /// `off` | `policy` | `full`, set by the same setup run.
+    pub remote_admin: String,
+}
+
+impl Default for EnableReq {
+    fn default() -> Self {
+        Self {
+            controller: None,
+            enroll: None,
+            ticket: None,
+            name: None,
+            private_home: None,
+            allow_prompt: false,
+            remote_admin: DEFAULT_REMOTE_ADMIN.to_string(),
+        }
+    }
 }
 
 fn node_installed() -> bool {
@@ -450,6 +507,9 @@ fn node_sas() -> Option<String> {
 /// `POST /cli/compute/local/enable`.
 pub fn enable(req: &EnableReq, by: &str) -> Result<serde_json::Value, Refused> {
     let bad = |m: &str| -> Refused { ("bad_request", 400, m.to_string()) };
+    if !REMOTE_ADMIN_LEVELS.contains(&req.remote_admin.as_str()) {
+        return Err(bad("remoteAdmin is off, policy or full"));
+    }
     if req.enroll.is_some() && req.ticket.is_some() {
         return Err(bad("pass an enroll code or a ticket, not both"));
     }
@@ -500,7 +560,7 @@ pub fn enable(req: &EnableReq, by: &str) -> Result<serde_json::Value, Refused> {
             (Some(c), Some(e), Some(n)) => Some((c.as_str(), e.as_str(), n.as_str())),
             _ => None,
         };
-        let args = setup_args(&human, req.private_home, code_enroll);
+        let args = setup_args(&human, req.private_home, code_enroll, &req.remote_admin);
         let el = elevation(&found.path, "setup", &args, req.allow_prompt);
         if el == Elevation::Command {
             return Ok(serde_json::json!({
@@ -517,7 +577,7 @@ pub fn enable(req: &EnableReq, by: &str) -> Result<serde_json::Value, Refused> {
         log_debug!("[compute] k2-node setup via {}: {}", el.as_str(), out.lines().last().unwrap_or(""));
         installed_now = true;
         enrolled_by_setup = code_enroll.is_some();
-        audit(by, "local_install", serde_json::json!({"via": el.as_str(), "binary": found.source}));
+        audit(by, "local_install", serde_json::json!({"via": el.as_str(), "binary": found.source, "remoteAdmin": req.remote_admin}));
     }
     if enrolled_by_setup {
         let sas = wait_for(Duration::from_secs(10), node_sas);
@@ -569,6 +629,40 @@ pub fn enable(req: &EnableReq, by: &str) -> Result<serde_json::Value, Refused> {
     }
 }
 
+/// `POST /cli/compute/local/remote-admin {level}`: the toggles under
+/// "Make this computer a compute node", later. Root runs
+/// `k2-node admin level <level>` the same way setup ran (passwordless
+/// sudo, the macOS prompt from Settings, or one command to copy). Raising
+/// is only possible at the machine, and this is the machine.
+pub fn set_remote_admin(level: &str, by: &str, allow_prompt: bool) -> Result<serde_json::Value, Refused> {
+    if !REMOTE_ADMIN_LEVELS.contains(&level) {
+        return Err(("bad_request", 400, "level is off, policy or full".into()));
+    }
+    let bin = installed_binary_path();
+    if !local::config_dir().is_dir() || !bin.is_file() {
+        return Err(("not_a_node", 409, "this computer isn't a compute node yet (k2 compute local enable)".into()));
+    }
+    let args = vec!["level".to_string(), level.to_string()];
+    let el = elevation_with(&bin, "admin", &args, allow_prompt, false);
+    if el == Elevation::Command {
+        return Ok(serde_json::json!({
+            "ok": true, "done": false, "rootNeeded": true, "mode": "command",
+            "command": command_line(&bin, "admin", &args),
+            "message": "Run this once as an admin; this page updates by itself.",
+        }));
+    }
+    run_root(el, &bin, "admin", &args).map_err(|e| ("remote_admin_failed", 409, format!("k2-node admin level ({}) failed: {e}", el.as_str())))?;
+    audit(by, "local_remote_admin", serde_json::json!({"level": level, "via": el.as_str()}));
+    Ok(serde_json::json!({
+        "ok": true, "done": true, "mode": el.as_str(), "remoteAdmin": level,
+        "message": match level {
+            "off" => "Remote admin is off: K2 can't update this node or keep it healthy.",
+            "policy" => "K2 keeps this node updated and healthy (remote admin: policy).",
+            _ => "K2 may also run admin actions as root here, each one approved by you (remote admin: full).",
+        },
+    }))
+}
+
 /// `POST /cli/compute/local/disable`.
 pub fn disable(by: &str, allow_prompt: bool) -> Result<serde_json::Value, Refused> {
     if !node_installed() && !local::config_dir().is_dir() {
@@ -612,10 +706,33 @@ mod tests {
 
     #[test]
     fn setup_args_carry_the_choice_and_the_code() {
-        assert_eq!(setup_args("rosson", Some(true), None), vec!["--human", "rosson", "--private-home"]);
-        assert_eq!(setup_args("rosson", Some(false), None), vec!["--human", "rosson", "--no-private-home"]);
-        let a = setup_args("r", None, Some(("https://rosson.k2.dev", "ABCDE-FGHJK.0123456789abcdef", "mini-1")));
-        assert_eq!(a, vec!["--human", "r", "--controller", "https://rosson.k2.dev", "--enroll", "ABCDE-FGHJK.0123456789abcdef", "--name", "mini-1"]);
+        assert_eq!(setup_args("rosson", Some(true), None, "policy"), vec!["--human", "rosson", "--private-home", "--remote-admin", "policy"]);
+        assert_eq!(setup_args("rosson", Some(false), None, "off"), vec!["--human", "rosson", "--no-private-home", "--remote-admin", "off"]);
+        let a = setup_args("r", None, Some(("https://rosson.k2.dev", "ABCDE-FGHJK.0123456789abcdef", "mini-1")), "full");
+        assert_eq!(
+            a,
+            vec!["--human", "r", "--remote-admin", "full", "--controller", "https://rosson.k2.dev", "--enroll", "ABCDE-FGHJK.0123456789abcdef", "--name", "mini-1"]
+        );
+    }
+
+    /// Rosson 2026-10-24: "Let K2 keep this node updated and healthy" is on
+    /// unless the request says otherwise; `full` only when asked; anything
+    /// else is refused before root runs.
+    #[test]
+    fn remote_admin_defaults_to_policy_and_takes_only_the_three_levels() {
+        use serde_json::json;
+        assert_eq!(remote_admin_arg(None, Some(DEFAULT_REMOTE_ADMIN)).unwrap(), "policy");
+        assert_eq!(remote_admin_arg(Some(&json!(null)), Some(DEFAULT_REMOTE_ADMIN)).unwrap(), "policy");
+        for l in ["off", "policy", "full"] {
+            assert_eq!(remote_admin_arg(Some(&json!(l)), Some(DEFAULT_REMOTE_ADMIN)).unwrap(), l);
+        }
+        for bad in [json!("root"), json!(true), json!(2)] {
+            assert_eq!(remote_admin_arg(Some(&bad), Some(DEFAULT_REMOTE_ADMIN)).unwrap_err().1, 400, "{bad}");
+        }
+        assert_eq!(remote_admin_arg(None, None).unwrap_err().0, "bad_request", "the later change names a level");
+        assert_eq!(set_remote_admin("root", "test", false).unwrap_err().1, 400);
+        let r = EnableReq { remote_admin: "sudo".into(), ..Default::default() };
+        assert_eq!(enable(&r, "test").unwrap_err().0, "bad_request", "checked first, before any install step");
     }
 
     #[test]

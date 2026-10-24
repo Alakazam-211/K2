@@ -51,6 +51,10 @@ Type=simple\n\
 ExecStart={binary} admin serve --config-dir {config} --state-dir {state} --home {home} --binary {binary}\n\
 Restart=on-failure\n\
 RestartSec=2\n\
+# The executor's systemd-run --wait helpers (one per walled job) outlive it:\n\
+# an exit to re-exec after an update, or a crash, never takes them (or the\n\
+# jobs they hold) with it. prd-compute-update-continuity-v1 C5.\n\
+KillMode=process\n\
 UMask=0077\n\
 WorkingDirectory=/\n\
 \n\
@@ -151,5 +155,8 @@ mod tests {
         };
         assert_eq!(render_plist(&m), golden("macos-dev.k2.node-admin.plist"));
         assert!(!render_service_unit(&l).contains("User="), "the executor is root by design; jobs never are");
+        // C5: unconditional, so the 0.46.4 manual install carries it (units
+        // are written only by installers; it can't arrive by a remote update).
+        assert_eq!(render_service_unit(&l).lines().filter(|x| *x == "KillMode=process").count(), 1);
     }
 }

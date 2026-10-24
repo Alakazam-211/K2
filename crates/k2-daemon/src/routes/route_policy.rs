@@ -456,6 +456,8 @@ pub const ROUTES: &[Route] = &[
     post("/cli/compute/local/enable", Owner),
     post("/cli/compute/local/pause", Owner),
     post("/cli/compute/local/policy", Owner),
+    // The remote-admin toggles (prd-compute-update-continuity-v1 Q4).
+    post("/cli/compute/local/remote-admin", Owner),
     post("/cli/compute/local/resume", Owner),
     get("/cli/compute/local/status", Member),
     get("/cli/compute/nodes", Member),
@@ -481,6 +483,8 @@ pub const ROUTES: &[Route] = &[
     post("/cli/compute/nodes/servers/pause", Admin),
     post("/cli/compute/nodes/servers/revoke", Owner),
     post("/cli/compute/nodes/update", Admin),
+    // Q5 (0.46.4): an operator turns the Linux job wall on (handler: operator()).
+    post("/cli/compute/nodes/wall", Admin),
     // A node's queue, redacted per §7 (an agent verb: its own workspace).
     get("/cli/compute/queue", Member),
     post("/cli/compute/run", Member),

@@ -20,6 +20,9 @@
 //! - `nodes/update` / `nodes/rollback`: a signed `k2-node` build (root
 //!   helper key, §8.1) offered over the session; the node reports
 //!   `update_state` (staged / swapped / healthy / rolled_back / refused).
+//! - `nodes/wall`: turn the Linux job wall on (`wall.enable`, operate at
+//!   `policy` on 0.46.4+ nodes, Q5): sent at once; an older node asks for
+//!   the owner, so it becomes a held plan (wall.enable + unit.restart).
 //! - `nodes/health` / `nodes/alerts`: the latest health facts, offline and
 //!   threshold alerts to the "alerts go to" workspace (daemon-owned, runs
 //!   headless: [`spawn_watch`]).
@@ -62,6 +65,8 @@ pub const NODE_POLICY: &str = "/cli/compute/nodes/policy";
 pub const NODE_POLICY_SET: &str = "/cli/compute/nodes/policy/set";
 pub const NODE_ROLLBACK: &str = "/cli/compute/nodes/rollback";
 pub const NODE_UPDATE: &str = "/cli/compute/nodes/update";
+/// Turn the Linux job wall on (prd-compute-update-continuity-v1 Q5).
+pub const NODE_WALL: &str = "/cli/compute/nodes/wall";
 /// Node sharing (prd-compute-shared-queue-v1 §9): the servers on a node
 /// this server owns (`k2 compute node servers <node> …`).
 pub const SERVERS: &str = "/cli/compute/nodes/servers";
@@ -84,6 +89,7 @@ pub const ROUTES: &[&str] = &[
     NODE_POLICY_SET,
     NODE_ROLLBACK,
     NODE_UPDATE,
+    NODE_WALL,
     SERVERS,
     SERVERS_ADD,
     SERVERS_LIMITS,
@@ -93,11 +99,11 @@ pub const ROUTES: &[&str] = &[
 
 /// POST-only (also in `compute_routes::POST_ROUTES`).
 pub const POST_ROUTES: &[&str] =
-    &[APPROVE, DENY, PROPOSE, WITHDRAW, NODE_ALERTS, NODE_POLICY_SET, NODE_ROLLBACK, NODE_UPDATE, SERVERS_ADD, SERVERS_LIMITS, SERVERS_PAUSE, SERVERS_REVOKE];
+    &[APPROVE, DENY, PROPOSE, WITHDRAW, NODE_ALERTS, NODE_POLICY_SET, NODE_ROLLBACK, NODE_UPDATE, NODE_WALL, SERVERS_ADD, SERVERS_LIMITS, SERVERS_PAUSE, SERVERS_REVOKE];
 
 /// Passport-reachable (also in `session_token::is_agent_verb`). approve,
 /// deny, alerts and approval-key are NOT here.
-pub const AGENT_VERBS: &[&str] = &[PROPOSE, REQUESTS, WITHDRAW, NODE_HEALTH, NODE_POLICY, NODE_POLICY_SET, NODE_ROLLBACK, NODE_UPDATE];
+pub const AGENT_VERBS: &[&str] = &[PROPOSE, REQUESTS, WITHDRAW, NODE_HEALTH, NODE_POLICY, NODE_POLICY_SET, NODE_ROLLBACK, NODE_UPDATE, NODE_WALL];
 
 pub fn is_route(p: &str) -> bool {
     ROUTES.contains(&p)
@@ -119,6 +125,7 @@ pub(crate) fn handle(path: &str, who: &Who, body: &[u8], params: &HashMap<String
         NODE_ALERTS => alerts(who, body),
         NODE_UPDATE => update(who, body),
         NODE_ROLLBACK => rollback(who, body),
+        NODE_WALL => wall(who, body),
         SERVERS => servers_list(who, params, mgr),
         SERVERS_ADD => servers_add(who, body, mgr),
         SERVERS_LIMITS => servers_limits(who, body, mgr),
@@ -1490,6 +1497,56 @@ fn rollback(who: &Who, body: &[u8]) -> R<Value> {
     Ok(json!({"ok": true, "node": node.name, "update": state, "note": "only to the node's own .prev build, never a download of an older one"}))
 }
 
+/// `POST /cli/compute/nodes/wall {node, restart?, reason?}` (Q5): turn the
+/// Linux job wall on. An operator (owner, Admin login, or an agent with
+/// "Allow this agent to operate compute nodes") sends it at once: 0.46.4+
+/// executors class `wall.enable` operate at `policy`. `restart` (default
+/// true) restarts k2-node once its running jobs end. An older node answers
+/// `approval_required`: then it becomes a held plan for the owner
+/// (`wall.enable` + `unit.restart k2-node`, the args that node knows).
+fn wall(who: &Who, body: &[u8]) -> R<Value> {
+    let op = operator(who)?;
+    let v = json_body(body)?;
+    let node = node_or_404(s(&v, "node"))?;
+    not_tenant(&node)?;
+    let restart = match v.get("restart") {
+        None | Some(Value::Null) => true,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => return Err(no(acodes::BAD_ARGS, 400, "restart is true or false")),
+    };
+    let args = json!({"restart": restart});
+    admin::validate_step("wall.enable", &args).map_err(|(code, hint)| no(code, 400, hint))?;
+    node_admin_ready(&node, wire::FEATURE_ADMIN)?;
+    let hold = |why: &str| {
+        let mut steps = vec![json!({"verb": "wall.enable", "args": {}})];
+        if restart {
+            steps.push(json!({"verb": "unit.restart", "args": {"unit": "k2-node"}}));
+        }
+        let (kind, body_v) = if steps.len() == 1 { ("command", steps.remove(0)) } else { ("plan", json!({"steps": steps})) };
+        let (_, summary) = classify_body(&node.name, kind, &body_v)?;
+        let reason = s(&v, "reason").map(str::to_string).unwrap_or_else(|| why.to_string());
+        file_request(&op, &node, kind, Class::Privileged, &body_v, &summary, Some(&reason))
+    };
+    let (cmd_id, result) = send_direct(who, &node, Class::Operate, "wall.enable", &args, Some(ANSWER_WAIT))?;
+    crate::compute_routes::audit(who, "wall_enable", Some(&node.id), op.workspace.as_deref(), None, json!({"restart": restart, "cmdId": cmd_id}));
+    match result {
+        Some(r) if r.state == "refused" && r.code.as_deref() == Some(wire::code::APPROVAL_REQUIRED) => {
+            hold("this node's k2-node is older than 0.46.4, so turning the wall on needs the owner's approval there")
+        }
+        Some(r) if r.state != "done" => Err(no(
+            "node_refused",
+            409,
+            format!("{} refused wall.enable: {}", node.name, r.message.as_deref().or(r.code.as_deref()).unwrap_or("?")),
+        )),
+        Some(r) => Ok(json!({"ok": true, "node": node.name, "cmdId": cmd_id, "result": r.result, "note": if restart {
+            "the wall is set up; k2-node restarts to use it once its running jobs end"
+        } else {
+            "the wall is set up; it takes effect when k2-node restarts"
+        }})),
+        None => Ok(json!({"ok": true, "node": node.name, "cmdId": cmd_id, "note": "sent; the node hasn't answered yet (k2 compute node health)"})),
+    }
+}
+
 fn phase_str(p: wire::UpdatePhase) -> String {
     serde_json::to_value(p).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_else(|| "unknown".into())
 }
@@ -1509,10 +1566,14 @@ pub fn on_update_state(node_id: &str, u: frames::UpdateState) {
                 && p.get("version").and_then(Value::as_str) == Some(u.version.as_str())
         });
         if !dup {
-            let state = json!({
+            let mut state = json!({
                 "state": phase, "version": u.version, "from": u.from, "code": u.code, "reason": u.message,
                 "transferId": u.transfer_id, "cmdId": u.cmd_id, "at": u.at,
             });
+            // The executor's step log (0.46.4 nodes; prd-compute-update-continuity-v1 §5.9).
+            if !u.steps.is_empty() {
+                state["steps"] = serde_json::to_value(&u.steps).unwrap_or_default();
+            }
             admin::set_update(&conn, node_id, &state);
             store::record_event(&conn, "node", &format!("update_{phase}"), Some(node_id), None, None, state);
         }

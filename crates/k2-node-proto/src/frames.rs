@@ -1010,6 +1010,10 @@ pub struct UpdateState {
     #[serde(default)]
     pub message: Option<String>,
     pub at: i64,
+    /// The executor's update steps (0.46.4). Empty from older nodes, and
+    /// left off the wire when empty so older controllers see the same frame.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub steps: Vec<crate::admin::UpdateStep>,
 }
 
 // ── receipts (§11.6) ─────────────────────────────────────────────────

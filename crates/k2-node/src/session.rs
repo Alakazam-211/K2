@@ -758,6 +758,7 @@ fn not_owner_answer(node: &Node, f: &Frame) -> Option<Option<Frame>> {
             code: Some(NOT_NODE_OWNER.into()),
             message: Some(why.into()),
             at: node.now(),
+            steps: Vec::new(),
         }))),
         Frame::UpdateChunk(_) => Some(None),
         _ => None,

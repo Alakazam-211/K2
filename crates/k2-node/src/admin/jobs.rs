@@ -1227,16 +1227,48 @@ impl Executor {
         started
     }
 
-    /// `wall.enable` (owner-approved, Linux): what `sudo k2-node setup`
-    /// does for the wall, for a node updated remotely: the `k2job` system
-    /// user (no login, no home, its own group), a traverse-only ACL on the
-    /// node home, and `jobs.toml`. k2-node picks it up when it restarts
-    /// (propose `unit.restart unit=k2-node` after it, in the same plan).
-    pub fn wall_enable(&self, args: &Value) -> Result<Value, AdminRefusal> {
-        super::exec::no_args(args)?;
+    /// `wall.enable` (Linux; operate at `policy` since 0.46.4, owner-approved
+    /// before): what `sudo k2-node setup` does for the wall, for a node
+    /// installed without it: the `k2job` system user (no login, no home,
+    /// its own group), a traverse-only ACL on the node home, and
+    /// `jobs.toml`. k2-node picks it up when it restarts: with
+    /// `"restart": true` the executor restarts it here once running jobs
+    /// end (any node, solo too: turning the wall on never kills a job; up
+    /// to the drain limit), unless the node already reports the wall.
+    pub fn wall_enable(&self, args: &Value, cmd_id: &str) -> Result<Value, AdminRefusal> {
+        super::exec::only_keys(args, &["restart"])?;
+        let restart = match args.get("restart") {
+            None => false,
+            Some(Value::Bool(b)) => *b,
+            Some(_) => return Err(refuse(code::BAD_ARGS, "restart is true or false")),
+        };
         if !cfg!(target_os = "linux") {
             return Err(refuse(code::BAD_ARGS, "macOS walls jobs with Seatbelt on its own; nothing to enable"));
         }
+        let mut out = self.wall_enable_files()?;
+        // The node's own word (its status file) only decides whether a
+        // restart is still needed, never whether the wall exists.
+        let walled_now = crate::status::read(&self.paths.layout().status()).is_ok_and(|s| s.wall == "job_user");
+        if walled_now {
+            out["restart_needed"] = Value::Null;
+            out["note"] = "k2-node already runs jobs behind the wall".into();
+            return Ok(out);
+        }
+        if !restart {
+            return Ok(out);
+        }
+        let cmd_id = cmd_id.to_string();
+        let r = super::update::drain_always_then(self, "wall.enable", &cmd_id.clone(), move |e| {
+            super::update::restart_marked(e, "wall.enable", &cmd_id, |e| e.platform.restart_unit("k2-node")).map_err(|x| refuse(code::FAILED, x))?;
+            Ok(json!({"restarted": "k2-node"}))
+        })?;
+        out["restart_needed"] = Value::Null;
+        out["restart"] = r;
+        Ok(out)
+    }
+
+    /// The root half of `wall.enable`: the job user, the home ACL, jobs.toml.
+    fn wall_enable_files(&self) -> Result<Value, AdminRefusal> {
         let fail = |e: String| refuse(code::FAILED, e);
         let user = DEFAULT_JOB_USER;
         let mut created = false;

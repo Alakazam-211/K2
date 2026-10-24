@@ -71,6 +71,95 @@ pub trait Platform: Send + Sync {
     fn restart_node(&self) -> Result<(), String>;
     /// Restart a K2-owned unit by its short name (`k2-node`, `k2-node-packages`).
     fn restart_unit(&self, unit: &str) -> Result<(), String>;
+    /// The running node service's main pid, read before a restart so the
+    /// update mark names the process it is about (C3). `None` = not running
+    /// or unknown.
+    fn node_pid(&self) -> Option<u32>;
+    /// Run a staged build's `version` as the node user before the swap (a
+    /// build the node user can't exec never goes in). Returns its output.
+    fn preflight(&self, staged: &Path, node_user: &str) -> Result<String, String>;
+}
+
+/// How long a staged build's `version` may take in the preflight.
+pub const PREFLIGHT_SECS: u64 = 10;
+
+/// Run `<staged> version` with a clean env from `/`, as `as_user` (uid,
+/// gid) when given, killed after `limit`. Setting the uid as root also
+/// drops every supplementary group (std calls `setgroups(0)` before
+/// `setuid` when no groups are named), so the build runs exactly as the
+/// node user would run it after the swap.
+pub fn preflight_exec(staged: &Path, as_user: Option<(u32, u32)>, limit: std::time::Duration) -> Result<String, String> {
+    use std::io::Read;
+    use std::os::unix::process::CommandExt;
+    let mut c = std::process::Command::new(staged);
+    c.arg("version")
+        .env_clear()
+        .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
+        .current_dir("/")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    if let Some((uid, gid)) = as_user {
+        c.gid(gid).uid(uid);
+    }
+    let mut child = c.spawn().map_err(|e| format!("exec {}: {e}", staged.display()))?;
+    let t0 = std::time::Instant::now();
+    let st = loop {
+        match child.try_wait() {
+            Ok(Some(st)) => break st,
+            Ok(None) if t0.elapsed() >= limit => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("{} version didn't answer within {} s", staged.display(), limit.as_secs()));
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(20)),
+            Err(e) => return Err(format!("wait: {e}")),
+        }
+    };
+    let mut out = String::new();
+    let mut err = String::new();
+    if let Some(mut o) = child.stdout.take() {
+        let _ = o.read_to_string(&mut out);
+    }
+    if let Some(mut o) = child.stderr.take() {
+        let _ = o.read_to_string(&mut err);
+    }
+    if !st.success() {
+        return Err(format!("{} version: {st}: {}", staged.display(), err.trim()));
+    }
+    Ok(out.trim().to_string())
+}
+
+/// The node user's (uid, gid) when this process can switch to it (root),
+/// else `None` (unit tests run unprivileged and exec as themselves).
+pub fn preflight_user(node_user: &str) -> Result<Option<(u32, u32)>, String> {
+    if unsafe { libc::geteuid() } != 0 {
+        return Ok(None);
+    }
+    super::server::user_ids(node_user).map(Some).ok_or_else(|| format!("the node user {node_user} is missing"))
+}
+
+/// A program's stdout (absolute path, clean env), or `None` on failure.
+fn output_fixed(program: &str, args: &[&str]) -> Option<String> {
+    let out = std::process::Command::new(program)
+        .args(args)
+        .env_clear()
+        .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
+        .current_dir("/")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// `systemctl show -p MainPID --value` → pid (0 = not running).
+pub fn parse_main_pid(s: &str) -> Option<u32> {
+    s.trim().parse::<u32>().ok().filter(|p| *p > 1)
+}
+
+/// `launchctl print system/<label>` → the `pid = N` line.
+pub fn parse_launchctl_pid(s: &str) -> Option<u32> {
+    s.lines().find_map(|l| l.trim().strip_prefix("pid = ").and_then(|p| p.trim().parse::<u32>().ok())).filter(|p| *p > 1)
 }
 
 /// systemd on Linux, launchd on macOS. Absolute program paths, clean env.
@@ -125,6 +214,17 @@ impl Platform for SystemPlatform {
             run_fixed("/usr/bin/systemctl", &["restart", u]).or_else(|_| run_fixed("/bin/systemctl", &["restart", u]))
         }
     }
+    fn node_pid(&self) -> Option<u32> {
+        if cfg!(target_os = "macos") {
+            output_fixed("/bin/launchctl", &["print", "system/dev.k2.node"]).as_deref().and_then(parse_launchctl_pid)
+        } else {
+            let args = ["show", "-p", "MainPID", "--value", "k2-node.service"];
+            output_fixed("/usr/bin/systemctl", &args).or_else(|| output_fixed("/bin/systemctl", &args)).as_deref().and_then(parse_main_pid)
+        }
+    }
+    fn preflight(&self, staged: &Path, node_user: &str) -> Result<String, String> {
+        preflight_exec(staged, preflight_user(node_user)?, std::time::Duration::from_secs(PREFLIGHT_SECS))
+    }
 }
 
 /// Test-keys builds only: a hook program replaces the service manager
@@ -150,6 +250,13 @@ impl Platform for HookPlatform {
     }
     fn restart_unit(&self, unit: &str) -> Result<(), String> {
         run_fixed(&self.0.display().to_string(), &["restart-unit", unit])
+    }
+    fn node_pid(&self) -> Option<u32> {
+        output_fixed(&self.0.display().to_string(), &["node-pid"]).as_deref().and_then(parse_main_pid)
+    }
+    fn preflight(&self, staged: &Path, node_user: &str) -> Result<String, String> {
+        // The container end-to-end stages real test-keys builds: exec them.
+        preflight_exec(staged, preflight_user(node_user)?, std::time::Duration::from_secs(PREFLIGHT_SECS))
     }
 }
 
@@ -233,6 +340,11 @@ pub struct Executor {
     /// Bumped by every update or rollback: a drain started under an older
     /// value never acts (a later `now` or rollback cancelled it, review A L7).
     pub drain_gen: Arc<std::sync::atomic::AtomicU64>,
+    /// Set once a healthy update or a rollback wants the executor on the
+    /// binary now on disk: `serve` stops accepting, lets the connections in
+    /// flight finish (never `process::exit`, C5), and returns; the service
+    /// manager starts the new binary on the next connection.
+    pub reexec: Arc<std::sync::atomic::AtomicBool>,
 }
 
 type Refused = (String, String, AdminRefusal);
@@ -255,6 +367,23 @@ impl Executor {
             drain_max: std::time::Duration::from_secs(super::update::DRAIN_MAX_SECS as u64),
             draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             drain_gen: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            reexec: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    /// Another handle on the same executor (shared locks and flags) for a
+    /// background thread (the health gate, a drain).
+    pub fn handle(&self) -> Executor {
+        Executor {
+            paths: self.paths.clone(),
+            platform: self.platform.clone(),
+            test_keys: self.test_keys,
+            busy: self.busy.clone(),
+            exit_after_update: self.exit_after_update,
+            drain_max: self.drain_max,
+            draining: self.draining.clone(),
+            drain_gen: self.drain_gen.clone(),
+            reexec: self.reexec.clone(),
         }
     }
 
@@ -488,8 +617,11 @@ impl Executor {
                 if unit == "k2-node" {
                     // A shared node waits for running jobs first (V55).
                     let now = super::update::now_arg(args)?;
+                    let cmd_id = c.opened.cmd.cmd_id.clone();
                     return super::update::drain_then(self, now, "unit.restart", &c.opened.cmd.cmd_id, move |e| {
-                        e.platform.restart_unit("k2-node").map_err(|x| AdminRefusal::new(code::FAILED, x))?;
+                        // Every K2-made node restart is marked (C3).
+                        super::update::restart_marked(e, "unit.restart", &cmd_id, |e| e.platform.restart_unit("k2-node"))
+                            .map_err(|x| AdminRefusal::new(code::FAILED, x))?;
                         Ok(json!({"restarted": "k2-node"}))
                     });
                 }
@@ -497,7 +629,7 @@ impl Executor {
                 Ok(json!({"restarted": unit}))
             }
             "homes.private" => self.homes_private(args),
-            "wall.enable" => self.wall_enable(args),
+            "wall.enable" => self.wall_enable(args, &c.opened.cmd.cmd_id),
             "policy.set" => super::policy::apply_set(&self.paths.layout(), args),
             "policy.narrow" => super::policy::apply_narrow(&self.paths.config_dir, args),
             "node.update" => {

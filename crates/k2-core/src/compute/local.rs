@@ -66,7 +66,11 @@ pub fn status() -> serde_json::Value {
         .and_then(|s| serde_json::from_str(&s).ok());
     let control = read_toml(&cfg.join("control.toml"));
     let policy = read_toml(&cfg.join("policy.toml"));
+    // The machine owner's remote-admin consent (admin.toml, root's, 0644):
+    // `off` | `policy` | `full`; null when the executor was never set up.
+    let remote_admin = read_toml(&cfg.join("admin.toml")).and_then(|t| t.get("remote_admin").and_then(|v| v.as_str()).map(str::to_string));
     serde_json::json!({
+        "remoteAdmin": remote_admin,
         "installed": cfg.is_dir(),
         "home": home.display().to_string(),
         "configDir": cfg.display().to_string(),

@@ -693,7 +693,14 @@ pub fn validate_step(verb: &str, args: &Value) -> Result<Class, (&'static str, S
                 return Err(bad("unit is k2-node or k2-node-packages".into()));
             }
         }
-        "wall.enable" => only_keys(a, &[]).map_err(bad)?,
+        "wall.enable" => {
+            // `restart`: restart k2-node once its running jobs end (0.46.4
+            // nodes; an older node takes no args and holds for the owner).
+            only_keys(a, &["restart"]).map_err(bad)?;
+            if a.get("restart").is_some_and(|r| !r.is_boolean()) {
+                return Err(bad("restart is true or false".into()));
+            }
+        }
         // Node sharing (protocol 3): one checker on both ends.
         v if v.starts_with("servers.") => super::proto::share::check_verb_args(v, args).map_err(|e| (codes::BAD_ARGS, e))?,
         "homes.private" => {
@@ -739,7 +746,12 @@ pub fn summarize(node: &str, verb: &str, args: &Value) -> String {
         "jobs.kill" => format!("kill job {} on {node}", s("job_id")),
         "unit.restart" => format!("restart {} on {node} (as root)", s("unit")),
         "wall.enable" => format!(
-            "turn on the job wall on {node} (as root): create the k2job user, let it into the node home, run jobs as k2job; takes effect when k2-node restarts"
+            "turn on the job wall on {node} (as root): create the k2job user, let it into the node home, run jobs as k2job; {}",
+            if a.get("restart").and_then(Value::as_bool) == Some(true) {
+                "k2-node restarts to use it once its running jobs end"
+            } else {
+                "takes effect when k2-node restarts"
+            }
         ),
         "homes.private" => match a.get("homes").and_then(Value::as_array) {
             Some(h) => format!(
@@ -1223,8 +1235,12 @@ mod tests {
         for bad in [json!({"homes": []}), json!({"homes": ["rel"]}), json!({"homes": "/Users/x"}), json!({"evil": 1})] {
             assert_eq!(validate_step("homes.private", &bad).unwrap_err().0, codes::BAD_ARGS, "{bad}");
         }
-        assert_eq!(validate_step("wall.enable", &json!({})).unwrap(), Class::Privileged);
+        // Q5 (0.46.4): operate; an operator turns the wall on without a per-node approval.
+        assert_eq!(validate_step("wall.enable", &json!({})).unwrap(), Class::Operate);
+        assert_eq!(validate_step("wall.enable", &json!({"restart": true})).unwrap(), Class::Operate);
+        assert_eq!(validate_step("wall.enable", &json!({"restart": "yes"})).unwrap_err().0, codes::BAD_ARGS);
         assert_eq!(validate_step("wall.enable", &json!({"user": "root"})).unwrap_err().0, codes::BAD_ARGS, "the job user isn't the caller's to pick");
+        assert!(summarize("k2n2-m1", "wall.enable", &json!({"restart": true})).contains("once its running jobs end"));
         assert!(summarize("k2n2-m1", "wall.enable", &json!({})).contains("k2job"));
         assert!(summarize("k2n2-m1", "homes.private", &json!({})).contains("private"));
         assert_eq!(validate_step("control.pause", &json!({})).unwrap(), Class::Operate);

@@ -16,6 +16,12 @@ Install (root, once; the installers are inside this binary):
   sudo k2-node setup [--private-home | --no-private-home] [--human USER]
                      [--allow-packages "libssl-dev pkg-config"]
                      [--controller URL --enroll CODE.FP --name NAME]
+                     [--remote-admin off|policy|full] [--no-job-wall]
+  Remote admin defaults to policy (asked, policy preselected; a first install
+  without a terminal takes policy): K2 keeps the node updated and healthy.
+  Linux turns the job wall on (installs the acl package if missing);
+  --no-job-wall is the explicit way out. Nodes on 0.46.3 or older need this
+  0.46.4 install once by hand before remote updates work.
   sudo k2-node uninstall
   Over SSH: one sudo call, password on stdin (never in argv):
     ssh host 'sudo -S -p "" /path/to/k2-node setup --no-private-home …' < password-file
@@ -68,7 +74,9 @@ Remote admin (prd-k2-node-admin-v1; root, at this machine):
 
 The job wall (0.46.3): Linux jobs run as k2job in a sandboxed systemd unit; macOS
 jobs run under a Seatbelt profile. Neither can read the node's key or state or
-people's home folders, and network = "none" keeps them off the network.
+people's home folders, and network = "none" keeps them off the network. On by
+default (0.46.4); a node without it: sudo k2-node setup, or from K2
+`k2 compute node wall <node>` (remote admin policy).
   k2-node wall-probe [--read P]... [--list D]... [--connect IP:PORT]...   (tests: what this process can reach)
 
 Agents never run this: they use `k2 compute` on their K2 server."#;
@@ -215,9 +223,16 @@ async fn cmd_run(a: &Args) -> Result<(), String> {
         _ = runner => {}
     }
     k2_node::nlog!("shutting down: stopping running jobs");
-    // A shared node's update or restart (the executor marked it): the jobs
-    // it couldn't drain end `node_update`, infra without a strike (V55).
-    let why = if k2_node::admin::update::recent_update_mark(&node.layout().config, k2_node::util::now()) {
+    // A restart the executor made (update, rollback, unit.restart: it marks
+    // every one, naming this process's pid, C3): the jobs it stops end
+    // `node_update`, infra without a strike (V55). An owner's stop, or any
+    // stop of a later process, is a shutdown (Q2). U3: the detach decision
+    // (`UpdateMark::keeps_jobs_of`) goes here, per job.
+    let mark = k2_node::admin::update::update_mark_for(&node.layout().config, std::process::id(), k2_node::util::now());
+    if let Some(m) = &mark {
+        k2_node::nlog!("stopped by k2-node-admin ({}, cmd {})", m.what, m.cmd_id.as_deref().unwrap_or("-"));
+    }
+    let why = if mark.is_some() {
         k2_node_proto::share::codes::NODE_UPDATE
     } else {
         "node_shutdown"

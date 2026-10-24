@@ -16,7 +16,14 @@ pub struct RecPlatform {
     pub now: AtomicI64,
     pub calls: Mutex<Vec<String>>,
     pub fail_restart: Mutex<bool>,
+    /// Staged builds the preflight ran (paths).
+    pub preflights: Mutex<Vec<String>>,
+    /// Make the preflight fail (a build the node user can't exec).
+    pub fail_preflight: Mutex<bool>,
 }
+
+/// The node pid [`RecPlatform`] reports.
+pub const NODE_PID: u32 = 4242;
 
 impl Platform for RecPlatform {
     fn now(&self) -> i64 {
@@ -38,6 +45,18 @@ impl Platform for RecPlatform {
     fn restart_unit(&self, unit: &str) -> Result<(), String> {
         self.calls.lock().unwrap().push(format!("restart-unit {unit}"));
         Ok(())
+    }
+    fn node_pid(&self) -> Option<u32> {
+        Some(NODE_PID)
+    }
+    /// Fake builds aren't executable: answer what the staged build's marker says.
+    fn preflight(&self, staged: &std::path::Path, _node_user: &str) -> Result<String, String> {
+        self.preflights.lock().unwrap().push(staged.display().to_string());
+        if *self.fail_preflight.lock().unwrap() {
+            return Err(format!("exec {}: Permission denied (os error 13)", staged.display()));
+        }
+        let v = super::update::installed_version(staged).ok_or("no marker")?;
+        Ok(format!("k2-node {v} (protocol {})", k2_node_proto::PROTOCOL))
     }
 }
 
@@ -78,7 +97,13 @@ impl Rig {
             },
         )
         .unwrap();
-        let plat = Arc::new(RecPlatform { now: AtomicI64::new(NOW), calls: Mutex::new(vec![]), fail_restart: Mutex::new(false) });
+        let plat = Arc::new(RecPlatform {
+            now: AtomicI64::new(NOW),
+            calls: Mutex::new(vec![]),
+            fail_restart: Mutex::new(false),
+            preflights: Mutex::new(vec![]),
+            fail_preflight: Mutex::new(false),
+        });
         let exec = Executor::new(paths, plat.clone());
         Self { exec, plat, ctl, owner, node_fp: node_key.fingerprint(), dir }
     }
@@ -423,9 +448,31 @@ fn good_update_swaps_restarts_and_passes_the_health_gate() {
     assert_eq!(std::fs::read(&r.exec.paths.binary).unwrap(), new);
     assert_eq!(std::fs::read(format!("{}.prev", r.exec.paths.binary.display())).unwrap(), old);
     assert_eq!(*r.plat.calls.lock().unwrap(), vec!["restart-node".to_string()]);
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let m = std::fs::metadata(&r.exec.paths.binary).unwrap();
+        assert_eq!(m.permissions().mode() & 0o7777, 0o755, "the swapped-in build is 0755 (Bug 1)");
+        assert_eq!(m.uid(), unsafe { libc::geteuid() });
+    }
+    assert_eq!(r.plat.preflights.lock().unwrap().len(), 1, "the staged build ran once as the node user before the swap");
+    let mark = super::update::read_update_mark(&r.exec.paths.config_dir).expect("an update restart is marked");
+    assert_eq!((mark.what.as_str(), mark.node_pid, mark.keep), ("node.update", Some(NODE_PID), false));
     write_mark(&r, "99.0.0", NOW + 1);
     let rec = wait_phase(&r, "healthy");
     assert_eq!((rec.from.as_str(), rec.to.as_str()), (crate::PRODUCT_VERSION, "99.0.0"));
+    // T3: one step per stage, in order, every one ok, in update.json.
+    let names: Vec<&str> = rec.steps.iter().map(|s| s.step.as_str()).collect();
+    assert_eq!(names, vec!["received", "verify_sig", "stage", "preflight", "decide", "swap", "mark", "restart", "health_wait", "healthy"]);
+    assert!(rec.steps.iter().all(|s| s.ok), "{:?}", rec.steps);
+    assert_eq!(rec.steps[4].detail.as_deref(), Some("restart running=0"), "a solo node restarts");
+    for _ in 0..250 {
+        if super::update::read_update_mark(&r.exec.paths.config_dir).unwrap().ended {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(super::update::read_update_mark(&r.exec.paths.config_dir).unwrap().ended, "the gate's end retires the mark (it keeps nothing)");
+    assert!(!r.exec.reexec.load(Ordering::SeqCst), "tests don't re-exec");
     // Manual rollback goes to the local .prev only.
     let res = r.run(&r.sign(&r.cmd("node.rollback", json!({}))));
     assert_eq!(res.state, "done", "{res:?}");
@@ -488,6 +535,11 @@ fn unhealthy_update_rolls_back_and_the_version_is_refused_after() {
     assert_eq!(std::fs::read(&r.exec.paths.binary).unwrap(), old);
     assert_eq!(std::fs::read(format!("{}.bad", r.exec.paths.binary.display())).unwrap(), new);
     assert_eq!(*r.plat.calls.lock().unwrap(), vec!["restart-node".to_string(), "restart-node".to_string()]);
+    // T3: the rollback's steps follow the update's, in one record.
+    let rec = super::update::load(&r.exec);
+    let names: Vec<&str> = rec.steps.iter().map(|s| s.step.as_str()).collect();
+    assert_eq!(names, vec!["received", "verify_sig", "stage", "preflight", "decide", "swap", "mark", "restart", "health_wait", "rollback", "mark", "restart"]);
+    assert_eq!(rec.steps[9].detail.as_deref(), Some("why=health_gate"));
     let res = r.exec.handle_update(&update_cmd(&r, &new, "99.0.0", "explicit"), &sig, &new);
     assert_eq!(code_of(&res), code::ROLLED_BACK_VERSION);
     // A healthy mark from another version never passes a gate.
@@ -504,6 +556,49 @@ fn unhealthy_update_rolls_back_and_the_version_is_refused_after() {
     assert!(rec.refused.contains(&"99.0.1".to_string()));
     let lines = r.exec.audit().verify().unwrap();
     assert!(lines.iter().filter(|l| l.event == "update").count() >= 2);
+}
+
+/// Bug 1 / T2 (no root): a staged build the node user can't run never
+/// goes in: refused before the swap, `.new` removed, nothing restarted.
+#[test]
+fn a_build_that_fails_the_preflight_is_never_swapped_in() {
+    let (r, old) = update_rig();
+    *r.plat.fail_preflight.lock().unwrap() = true;
+    let new = fake_build("99.0.0");
+    let res = r.exec.handle_update(&update_cmd(&r, &new, "99.0.0", "explicit"), &build_sig(&new, "99.0.0"), &new);
+    assert_eq!(code_of(&res), code::BAD_BUILD, "{res:?}");
+    assert!(res.message.as_deref().unwrap_or("").contains("doesn't run as"), "{res:?}");
+    assert_eq!(std::fs::read(&r.exec.paths.binary).unwrap(), old, "the running build stays");
+    assert!(!std::path::Path::new(&format!("{}.new", r.exec.paths.binary.display())).exists(), ".new is removed");
+    assert!(r.plat.calls.lock().unwrap().is_empty(), "nothing restarted");
+    assert!(super::update::read_update_mark(&r.exec.paths.config_dir).is_none());
+    assert_eq!(super::update::load(&r.exec).phase, "", "no gate started");
+    // The next offer of the same build (now runnable) goes through.
+    *r.plat.fail_preflight.lock().unwrap() = false;
+    assert_eq!(r.exec.handle_update(&update_cmd(&r, &new, "99.0.0", "explicit"), &build_sig(&new, "99.0.0"), &new).state, "done");
+}
+
+/// C5: after a healthy gate a serving executor sets `reexec` and returns
+/// (`serve` then drains its connections); it never exits mid-request.
+#[test]
+fn a_healthy_gate_asks_serve_to_reexec_instead_of_exiting() {
+    let (mut r, _) = update_rig();
+    r.exec.exit_after_update = true;
+    let new = fake_build("99.0.0");
+    assert_eq!(r.exec.handle_update(&update_cmd(&r, &new, "99.0.0", "explicit"), &build_sig(&new, "99.0.0"), &new).state, "done");
+    assert!(!r.exec.reexec.load(Ordering::SeqCst), "not before the gate passes");
+    write_mark(&r, "99.0.0", NOW + 1);
+    let rec = wait_phase(&r, "healthy");
+    for _ in 0..250 {
+        if r.exec.reexec.load(Ordering::SeqCst) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(r.exec.reexec.load(Ordering::SeqCst), "serve is told to re-exec");
+    let rec2 = super::update::load(&r.exec);
+    assert_eq!(rec2.steps.last().map(|s| s.step.as_str()), Some("reexec"), "{:?} / {:?}", rec.steps, rec2.steps);
+    // This test process is still here: no process::exit.
 }
 
 #[test]

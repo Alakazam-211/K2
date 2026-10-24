@@ -37,6 +37,7 @@ vi.mock('./compute-api', async (importOriginal) => {
     setLocalPolicy: vi.fn(),
     enableLocalNode: vi.fn(),
     disableLocalNode: vi.fn(),
+    setLocalRemoteAdmin: vi.fn(),
     retireComputeNode: vi.fn(),
   }
 })
@@ -376,6 +377,7 @@ describe('this computer', () => {
         enroll: 'ABCDE-FGHJK.0123456789abcdef',
         name: 'mac-1',
         privateHome: true,
+        remoteAdmin: 'policy',
       }),
     )
   })
@@ -471,6 +473,7 @@ describe('this computer', () => {
         ticket: 'tkt-1',
         name: 'mac-1',
         privateHome: true,
+        remoteAdmin: 'policy',
       }),
     )
   })
@@ -488,7 +491,7 @@ describe('this computer', () => {
     fireEvent.click(within(sheet).getByRole('button', { name: 'Pick one of your servers' }))
     fireEvent.click(await within(sheet).findByRole('button', { name: 'rosson.k2.dev' }))
     await waitFor(() => expect(m.enableLocalNode).toHaveBeenCalledTimes(2))
-    expect(m.enableLocalNode.mock.calls[0][0]).toEqual({ name: 'mac-1', privateHome: true })
+    expect(m.enableLocalNode.mock.calls[0][0]).toEqual({ name: 'mac-1', privateHome: true, remoteAdmin: 'policy' })
     expect(requestEnrollTicket).toHaveBeenCalledTimes(1)
     expect(requestEnrollTicket).toHaveBeenCalledWith('acc-tok', { controllerSub: 'rosson', nodeFp: 'fp-new', nodeName: 'mac-1' })
     expect(m.enableLocalNode.mock.calls[1][0]).toEqual({
@@ -496,7 +499,95 @@ describe('this computer', () => {
       ticket: 'tkt-2',
       name: 'mac-1',
       privateHome: true,
+      remoteAdmin: 'policy',
     })
+  })
+
+  // Rosson 2026-10-24 (ticket fd47ac33): two toggles right below the main
+  // one; policy on by default and sent with the enable (one root step);
+  // full only when asked, and only while policy is on.
+  it('remote admin: policy is on by default and rides the enable; full is hidden until policy is on', async () => {
+    m.enableLocalNode.mockResolvedValue({ ok: true, step: 'waiting' })
+    render(<ComputeSection />)
+    const part = await screen.findByTestId('compute-this-computer')
+    const policy = await within(part).findByRole('switch', { name: 'Let K2 keep this node updated and healthy (remote admin: policy)' })
+    expect(policy.getAttribute('aria-checked')).toBe('true')
+    const full = within(part).getByRole('switch', { name: 'Also let K2 run admin scripts as root (remote admin: full)' })
+    expect(full.getAttribute('aria-checked')).toBe('false')
+    // Below the main switch, in that order.
+    const switches = within(part).getAllByRole('switch').map((s) => s.getAttribute('aria-label'))
+    expect(switches.slice(0, 3)).toEqual([
+      'Make this computer a compute node',
+      'Let K2 keep this node updated and healthy (remote admin: policy)',
+      'Also let K2 run admin scripts as root (remote admin: full)',
+    ])
+    const sheet = await openSheet()
+    fillCodeForm(sheet)
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Make this computer a node' }))
+    await waitFor(() => expect(m.enableLocalNode).toHaveBeenCalledTimes(1))
+    expect(m.enableLocalNode.mock.calls[0][0].remoteAdmin).toBe('policy')
+  })
+
+  it('remote admin: full is an opt-in; policy off sends off and clears full', async () => {
+    m.enableLocalNode.mockResolvedValue({ ok: true, step: 'waiting' })
+    render(<ComputeSection />)
+    const part = await screen.findByTestId('compute-this-computer')
+    const sheet = await openSheet()
+    fillCodeForm(sheet)
+    fireEvent.click(within(part).getByRole('switch', { name: 'Also let K2 run admin scripts as root (remote admin: full)' }))
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Make this computer a node' }))
+    await waitFor(() => expect(m.enableLocalNode).toHaveBeenCalledTimes(1))
+    expect(m.enableLocalNode.mock.calls[0][0].remoteAdmin).toBe('full')
+
+    const policy = within(part).getByRole('switch', { name: 'Let K2 keep this node updated and healthy (remote admin: policy)' })
+    fireEvent.click(policy)
+    expect(within(part).queryByRole('switch', { name: 'Also let K2 run admin scripts as root (remote admin: full)' })).toBeNull()
+    await waitFor(() => expect((within(sheet).getByRole('button', { name: 'Make this computer a node' }) as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Make this computer a node' }))
+    await waitFor(() => expect(m.enableLocalNode).toHaveBeenCalledTimes(2))
+    expect(m.enableLocalNode.mock.calls[1][0].remoteAdmin).toBe('off')
+
+    // Policy back on never brings full back by itself.
+    fireEvent.click(policy)
+    const full = within(part).getByRole('switch', { name: 'Also let K2 run admin scripts as root (remote admin: full)' })
+    expect(full.getAttribute('aria-checked')).toBe('false')
+  })
+
+  it("on state, remote admin off: \"K2 can't update this node\" with the command; the switch asks the daemon", async () => {
+    m.fetchLocalStatus.mockResolvedValue({
+      ...LOCAL_OFF,
+      installed: true,
+      node: { state: 'online', name: 'mac-1', controller: 'https://other.k2.dev', control: 'active', running: [] },
+      remoteAdmin: 'off',
+      remoteAdminCommand: "sudo '/Library/Application Support/K2/node/k2-node' admin level policy",
+    })
+    m.setLocalRemoteAdmin.mockResolvedValue({ ok: true, done: true, remoteAdmin: 'policy', message: 'K2 keeps this node updated and healthy (remote admin: policy).' })
+    render(<ComputeSection />)
+    const ra = await screen.findByTestId('compute-local-remote-admin')
+    const warn = within(ra).getByTestId('compute-cant-update')
+    expect(warn.textContent).toContain("K2 can't update this node")
+    expect(warn.textContent).toContain('admin level policy')
+    expect(within(ra).queryByRole('switch', { name: 'Also let K2 run admin scripts as root (remote admin: full)' })).toBeNull()
+    fireEvent.click(within(ra).getByRole('switch', { name: 'Let K2 keep this node updated and healthy (remote admin: policy)' }))
+    await waitFor(() => expect(m.setLocalRemoteAdmin).toHaveBeenCalledWith('policy'))
+    expect(await within(ra).findByText('K2 keeps this node updated and healthy (remote admin: policy).')).toBeTruthy()
+  })
+
+  it('on state, remote admin policy: full asks the daemon; a command to copy when root needs the owner', async () => {
+    m.fetchLocalStatus.mockResolvedValue({
+      ...LOCAL_OFF,
+      installed: true,
+      node: { state: 'online', name: 'mac-1', controller: 'https://other.k2.dev', control: 'active', running: [] },
+      remoteAdmin: 'policy',
+    })
+    m.setLocalRemoteAdmin.mockResolvedValue({ ok: true, done: false, rootNeeded: true, command: 'sudo /usr/local/libexec/k2-node admin level full' })
+    render(<ComputeSection />)
+    const ra = await screen.findByTestId('compute-local-remote-admin')
+    expect(within(ra).queryByTestId('compute-cant-update')).toBeNull()
+    expect(within(ra).getByRole('switch', { name: 'Let K2 keep this node updated and healthy (remote admin: policy)' }).getAttribute('aria-checked')).toBe('true')
+    fireEvent.click(within(ra).getByRole('switch', { name: 'Also let K2 run admin scripts as root (remote admin: full)' }))
+    await waitFor(() => expect(m.setLocalRemoteAdmin).toHaveBeenCalledWith('full'))
+    expect((await within(ra).findByText('sudo /usr/local/libexec/k2-node admin level full')).textContent).toContain('admin level full')
   })
 
   it('shows a pending enroll request and a failed enroll', async () => {

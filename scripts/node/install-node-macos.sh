@@ -270,18 +270,31 @@ fi
 # A LaunchDaemon with a launchd socket (0660 root:$NODE_USER), started on
 # demand. It runs only commands signed by your K2 server, and root ones
 # only with your own approval (Touch ID / password) for each.
-if [ -z "$REMOTE_ADMIN" ] && [ ! -f "$CONFIG_DIR/admin.toml" ]; then
-    if [ -t 0 ]; then
-        echo "== remote admin for this Mac"
-        echo "   off    = agents can only narrow limits and read health (today's behaviour)"
-        echo "   policy = also change limits (widening needs your approval), pause, update k2-node"
-        echo "   full   = also root actions, each approved by you (Touch ID / password) on your K2"
-        printf "   Remote admin level? [off/policy/full] (off) "
-        read -r answer
-        case "$answer" in policy|full) REMOTE_ADMIN="$answer" ;; *) REMOTE_ADMIN="off" ;; esac
-    else
-        REMOTE_ADMIN="off"
-    fi
+CURRENT_ADMIN=""
+if [ -f "$CONFIG_DIR/admin.toml" ]; then
+    CURRENT_ADMIN="$(sed -n 's/^remote_admin *= *"\(.*\)"/\1/p' "$CONFIG_DIR/admin.toml" | head -n 1)"
+fi
+if [ -z "$REMOTE_ADMIN" ]; then
+    case "$CURRENT_ADMIN" in
+        policy|full) ;; # the owner's earlier choice stands
+        *)
+            # New, or `off` today: ask, with `policy` preselected (Q4).
+            if [ -t 0 ]; then
+                echo "== remote admin for this Mac"
+                echo "   policy = K2 keeps this node updated and healthy: signed k2-node updates and"
+                echo "            rollbacks, limits (widening needs your approval), pause, the job wall"
+                echo "   off    = K2 can only narrow limits and read health; you update k2-node by hand"
+                echo "   full   = also root actions, each approved by you (Touch ID / password) on your K2"
+                printf "   Remote admin level? [policy/off/full] (policy) "
+                read -r answer
+                case "$answer" in off|full) REMOTE_ADMIN="$answer" ;; *) REMOTE_ADMIN="policy" ;; esac
+            elif [ -z "$CURRENT_ADMIN" ]; then
+                # Not a terminal, no flag, a first install: policy (Rosson
+                # 2026-10-24). --remote-admin off opts out.
+                REMOTE_ADMIN="policy"
+            fi
+            ;;
+    esac
 fi
 install -d -m 0700 -o root -g wheel "$ADMIN_STATE"
 level_args=()

@@ -209,7 +209,16 @@ export interface LocalStatus {
   ticketSupported?: boolean
   enrollResult?: LocalEnrollResult | null
   enrollRequestPending?: boolean
+  /** The node's remote-admin level (admin.toml); null = never set up. */
+  remoteAdmin?: RemoteAdminLevel | null
+  /** Present when K2 can't update this node (level off or unset): the one
+   *  command that turns it on at the machine. */
+  remoteAdminCommand?: string
 }
+
+/** `k2-node admin level`: off = K2 can't update the node; policy = K2 keeps
+ *  it updated and healthy; full = also root actions, each owner-approved. */
+export type RemoteAdminLevel = 'off' | 'policy' | 'full'
 
 /** Without `controller` + (`enroll` | `ticket`) the daemon only installs. */
 export interface LocalEnableBody {
@@ -219,6 +228,8 @@ export interface LocalEnableBody {
   name?: string
   /** Always sent from Settings: an open home with no choice is refused. */
   privateHome: boolean
+  /** Set by the same root step as the install (no second prompt). */
+  remoteAdmin?: RemoteAdminLevel
 }
 
 export interface LocalEnableResult {
@@ -448,6 +459,29 @@ export async function setLocalPolicy(
  *  prompt for the one-time setup (the CLI never does). */
 export async function enableLocalNode(body: LocalEnableBody): Promise<LocalEnableResult> {
   return daemonCliPost(computeLocalScope(), 'compute/local/enable', { ...body, elevate: true })
+}
+
+export interface LocalRemoteAdminResult {
+  ok?: boolean
+  done?: boolean
+  rootNeeded?: boolean
+  mode?: string
+  command?: string
+  message?: string
+  remoteAdmin?: RemoteAdminLevel
+}
+
+/** The remote-admin toggles, changed after the node is on: the daemon runs
+ *  `k2-node admin level` through root (the OS admin prompt from Settings,
+ *  or a command to copy). */
+export async function setLocalRemoteAdmin(level: RemoteAdminLevel): Promise<LocalRemoteAdminResult> {
+  return daemonCliPost(computeLocalScope(), 'compute/local/remote-admin', { level, elevate: true })
+}
+
+/** The two toggles → one level. Full needs policy on. */
+export function remoteAdminLevel(keepUpdated: boolean, allowRoot: boolean): RemoteAdminLevel {
+  if (!keepUpdated) return 'off'
+  return allowRoot ? 'full' : 'policy'
 }
 
 export async function disableLocalNode(): Promise<LocalDisableResult> {

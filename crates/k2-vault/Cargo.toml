@@ -32,7 +32,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
-aho-corasick = "1"
+# Exact-value redaction, shared with k2-node (compute secret-env SE24b).
+k2-redact = { path = "../k2-redact" }
 idna = "1"
 url = "2"
 argon2 = "0.5"

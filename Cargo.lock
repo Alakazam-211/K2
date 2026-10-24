@@ -4299,6 +4299,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "k2-redact"
+version = "0.1.0"
+dependencies = [
+ "aho-corasick",
+ "base64 0.22.1",
+ "serde_json",
+]
+
+[[package]]
 name = "k2-root-helper"
 version = "0.1.0"
 dependencies = [
@@ -4334,7 +4343,6 @@ name = "k2-vault"
 version = "0.45.0"
 dependencies = [
  "age",
- "aho-corasick",
  "argon2",
  "base64 0.22.1",
  "bech32",
@@ -4345,6 +4353,7 @@ dependencies = [
  "hkdf",
  "hmac",
  "idna",
+ "k2-redact",
  "k2-vault",
  "libc",
  "parking_lot",

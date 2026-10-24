@@ -1,0 +1,12 @@
+[package]
+name = "k2-redact"
+# Not the product version: release.sh doesn't bump this crate.
+version = "0.1.0"
+edition = "2021"
+license = "FSL-1.1-Apache-2.0"
+description = "K2 exact-value redaction: one redactor shared by the vault (daemon) and k2-node (compute secret-env). No K2 dependencies."
+
+[dependencies]
+aho-corasick = "1"
+base64 = "0.22"
+serde_json = "1"

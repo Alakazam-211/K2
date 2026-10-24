@@ -105,6 +105,9 @@ the app's top bar); until then every `k2 zen` verb exits 3.\n\n\
   Gardens sit on, and locked Gardens' frozen copies. K2 writes them. **Never write\n\
   sync.json, news.json, .defaults/ or .locks/**; read them with `k2 zen sync`,\n\
   `k2 zen garden list` and `k2 zen news`.\n\
+- `links.json`: the sites each Garden opens in the person's browser without asking\n\
+  (`k2.open`; the person chose Always on K2's card). K2 writes it. **Never write links.json**;\n\
+  read it with `k2 zen links`.\n\
 - `agents-order.json`: the person's order and pins in each Garden's Agents widget, on this\n\
   computer. K2 writes it. **Never write agents-order.json**; read it with `k2 zen agents-order`.\n\
 - Widgets in your own Gardens need no permissions: a widget can talk to your agents\n\

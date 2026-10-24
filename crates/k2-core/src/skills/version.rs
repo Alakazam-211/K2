@@ -195,7 +195,11 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// v39 = the data-source cards are `@3` (no "Ask an agent") and
 /// `k2.sources.ask` answers `retired` until 0.47.0 (Rosson 2026-10-23, for
 /// 0.46.4).
-pub const SKILL_VERSION_ZEN: u32 = 39;
+/// v40 = the Agents widget's order and pins: the person drags and pins per
+/// Garden on this computer (`agents-order.json`); agents read them with
+/// `k2 zen agents-order` and never set them (Baden via Appa 2026-10-22, for
+/// 0.46.4).
+pub const SKILL_VERSION_ZEN: u32 = 40;
 /// Bumped to 5 in 0.39.0: same Phase 2.1 A25 verb refresh applied to
 /// the workspace-root template body (Cli tools section, workflow
 /// docs). Was 4 since 0.32.7 (SOURCE sub-regions adoption).

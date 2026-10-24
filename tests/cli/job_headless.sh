@@ -77,8 +77,8 @@ start_run() { k2 job run "$1" --workspace "$WS" --json | python3 -c 'import json
 log_of() { k2 job logs "$1" --workspace "$WS" --run "$2" --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["log"])'; }
 
 echo "== a job reads only what is granted to it =="
-out="$(k2 job add reader --workspace "$WS" --every 1h --timeout 20s -- \
-    sh -c 'printf "len=%s\n" "${#JOB_SECRET}"; echo "echo:$JOB_SECRET"; echo "path:$PATH"; echo "pwd:$(pwd -P)"; echo "job:$K2_JOB"' --json)"
+out="$(k2 job add reader --workspace "$WS" --every 1h --timeout 20s --json -- \
+    sh -c 'printf "len=%s\n" "${#JOB_SECRET}"; echo "echo:$JOB_SECRET"; echo "path:$PATH"; echo "pwd:$(pwd -P)"; echo "job:$K2_JOB"')"
 [ "$(jget "$out" "j['threadNote']")" = "True" ] || fail "add posts a Thread line: $out"
 ok "add (Thread line posted)"
 run="$(start_run reader)"
@@ -193,6 +193,11 @@ sandbox_daemon_restart daemon2.log
 st="$(jget "$(k2 job show sleeper --workspace "$WS" --json)" "[x for x in j['job']['runs'] if x['id']=='$run'][0]['outcome']")"
 [ "$st" = "interrupted" ] || fail "after restart: $st"
 ok "a run the old daemon left is interrupted"
+child="$(sed -n 's/^child=\([0-9]*\).*/\1/p' "$(find "$SANDBOX_HOME/.k2/jobs" -name "$run.log")")"
+[ -n "$child" ] || fail "no child pid in the interrupted run's log"
+for i in $(seq 1 25); do kill -0 "$child" 2>/dev/null || break; sleep 0.2; done
+if kill -0 "$child" 2>/dev/null; then fail "the interrupted run's processes survived the restart ($child)"; fi
+ok "boot stopped the interrupted run's leftover processes"
 
 echo "== rm drops the job and its grants =="
 o="$(k2 job rm reader --workspace "$WS" --json)"

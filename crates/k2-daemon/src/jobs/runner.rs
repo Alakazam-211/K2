@@ -382,22 +382,32 @@ fn finish(live: &Live, code: Option<i64>, outcome: &str, _note: Option<&str>, by
 }
 
 /// Boot: stop a group a previous daemon's run left behind, only when its
-/// leader is provably that run (Linux: its environ carries
-/// `K2_JOB_RUN=<run id>`). Elsewhere the group is left alone: its
-/// passport is already revoked, so it can't use K2.
+/// leader is provably that run: its environment carries
+/// `K2_JOB_RUN=<run id>` (Linux `/proc/<pid>/environ`; macOS `ps -E`,
+/// which shows the environment of the user's own processes). Otherwise
+/// the group is left alone; its passport is already revoked.
 pub fn stop_leftover_group(pid: i64, run_id: &str) {
-    #[cfg(target_os = "linux")]
-    {
-        let Ok(environ) = std::fs::read(format!("/proc/{pid}/environ")) else { return };
-        let want = format!("K2_JOB_RUN={run_id}");
-        if environ.split(|b| *b == 0).any(|kv| kv == want.as_bytes()) {
-            unsafe { libc::killpg(pid as i32, libc::SIGKILL) };
-            log_debug!("[jobs] boot: stopped run {run_id}'s leftover processes");
-        }
+    if pid <= 1 {
+        return;
     }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = (pid, run_id);
+    let want = format!("K2_JOB_RUN={run_id}");
+    #[cfg(target_os = "linux")]
+    let ours = std::fs::read(format!("/proc/{pid}/environ"))
+        .map(|env| env.split(|b| *b == 0).any(|kv| kv == want.as_bytes()))
+        .unwrap_or(false);
+    #[cfg(target_os = "macos")]
+    let ours = Command::new("/bin/ps")
+        .args(["-E", "-ww", "-o", "command=", "-p", &pid.to_string()])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).split_whitespace().any(|w| w == want))
+        .unwrap_or(false);
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    let ours = false;
+    if ours {
+        unsafe { libc::killpg(pid as i32, libc::SIGKILL) };
+        log_debug!("[jobs] boot: stopped run {run_id}'s leftover processes");
     }
 }
 

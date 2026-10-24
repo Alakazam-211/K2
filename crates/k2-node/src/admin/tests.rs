@@ -535,8 +535,16 @@ fn unhealthy_update_rolls_back_and_the_version_is_refused_after() {
     assert_eq!(std::fs::read(&r.exec.paths.binary).unwrap(), old);
     assert_eq!(std::fs::read(format!("{}.bad", r.exec.paths.binary.display())).unwrap(), new);
     assert_eq!(*r.plat.calls.lock().unwrap(), vec!["restart-node".to_string(), "restart-node".to_string()]);
-    // T3: the rollback's steps follow the update's, in one record.
-    let rec = super::update::load(&r.exec);
+    // T3: the rollback's steps follow the update's, in one record (the
+    // restart step is saved just after the platform call returns).
+    let mut rec = super::update::load(&r.exec);
+    for _ in 0..250 {
+        if rec.steps.len() >= 12 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        rec = super::update::load(&r.exec);
+    }
     let names: Vec<&str> = rec.steps.iter().map(|s| s.step.as_str()).collect();
     assert_eq!(names, vec!["received", "verify_sig", "stage", "preflight", "decide", "swap", "mark", "restart", "health_wait", "rollback", "mark", "restart"]);
     assert_eq!(rec.steps[9].detail.as_deref(), Some("why=health_gate"));

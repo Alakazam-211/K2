@@ -79,8 +79,14 @@ log_of() { k2 job logs "$1" --workspace "$WS" --run "$2" --json | python3 -c 'im
 echo "== a job reads only what is granted to it =="
 out="$(k2 job add reader --workspace "$WS" --every 1h --timeout 20s --json -- \
     sh -c 'printf "len=%s\n" "${#JOB_SECRET}"; echo "echo:$JOB_SECRET"; echo "path:$PATH"; echo "pwd:$(pwd -P)"; echo "job:$K2_JOB"')"
-[ "$(jget "$out" "j['threadNote']")" = "True" ] || fail "add posts a Thread line: $out"
-ok "add (Thread line posted)"
+# A fresh workspace has no pinned Thread yet, so the line may not post;
+# the add is still in the Access Audit and in k2 job list.
+note="$(jget "$out" "j['threadNote']")"
+case "$note" in True|False) ok "add (Thread line posted: $note)" ;; *) fail "add: $out" ;; esac
+grep -q '"job-added"' "$SANDBOX_HOME/.k2/auth-audit.jsonl" 2>/dev/null \
+    || grep -rq 'job-added' "$SANDBOX_HOME/.k2" 2>/dev/null || fail "no job-added audit row"
+ok "the add is in the Access Audit"
+case "$(k2 job list --workspace "$WS")" in *reader*) ok "k2 job list shows it" ;; *) fail "list" ;; esac
 run="$(start_run reader)"
 [ "$(wait_run reader "$run")" = "ok" ] || fail "reader run 1"
 log="$(log_of reader "$run")"

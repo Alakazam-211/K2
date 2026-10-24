@@ -283,8 +283,16 @@ fn job_json(job: &Job, runs: usize) -> Value {
     v
 }
 
-/// The Thread line for an add / edit / removal (Q14).
+/// The Thread line for an add / edit / removal (Q14), plus an Access
+/// Audit row (Settings → Logs) that is written even when the workspace has
+/// no pinned Thread yet.
 fn note(job: &Job, w: &Who, verb: &str) -> bool {
+    crate::vault::auth_audit(
+        &format!("job-{verb}"),
+        w.stamp(),
+        &format!("ok {}/{} {}", crate::vault::workspace_label(&job.workspace_id), job.name, job.schedule.describe()),
+        "-",
+    );
     let Some(path) = crate::vault::workspace_path(&job.workspace_id) else { return false };
     let body = match verb {
         "removed" => format!("K2: job **{}** removed by {}.", job.name, w.label()),

@@ -354,6 +354,83 @@ impl LocalVault {
         self.audit_only(vec![Entry::new(action, actor, outcome).consumer(consumer)]);
     }
 
+    // ── rekey ───────────────────────────────────────────────────────
+
+    /// Rekey: verify every handoff, handoff value, accept-from and peer
+    /// vault row under the old row key, re-MAC it under the new one, and
+    /// re-seal each pending value under the new data key. Any failure stops
+    /// the rekey.
+    pub(super) fn rekey_handoff_tables(&self, tx: &Transaction<'_>, old: &Keys, new: &Keys) -> Result<()> {
+        let recs: Vec<(HandoffRecord, String, Vec<u8>)> = {
+            let mut st = tx.prepare("SELECT * FROM handoff")?;
+            let it = st.query_map([], |r| Ok(read_record_raw(r)))?;
+            let mut v = vec![];
+            for r in it {
+                v.push(r??);
+            }
+            v
+        };
+        for (rec, ij, mac) in recs {
+            if !hmac_verify(&old.row, &record_mac_input(&rec, &ij), &mac) {
+                return Err(VaultError::tamper(format!("handoff {} failed its integrity check; rekey stopped", rec.delivery_id)));
+            }
+            let m2 = hmac(&new.row, &record_mac_input(&rec, &ij));
+            tx.execute(
+                "UPDATE handoff SET row_mac = ?3 WHERE delivery_id = ?1 AND direction = ?2",
+                params![rec.delivery_id, rec.direction, m2.to_vec()],
+            )?;
+        }
+        let values: Vec<(String, Vec<u8>, Vec<u8>, Vec<u8>)> = {
+            let mut st = tx.prepare("SELECT delivery_id, nonce, ciphertext, row_mac FROM handoff_value")?;
+            let it = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+            it.collect::<std::result::Result<_, _>>()?
+        };
+        for (id, nonce, ct, mac) in values {
+            if !hmac_verify(&old.row, &value_row_mac_input(&id, &nonce, &ct), &mac) {
+                return Err(VaultError::tamper(format!("handoff value {id} failed its integrity check; rekey stopped")));
+            }
+            let pt = SecretBytes::new(xopen(&old.vdk, &nonce, &self.handoff_value_aad(&id), &ct)?);
+            let (n2, c2) = xseal(&new.vdk, &self.handoff_value_aad(&id), pt.expose());
+            let m2 = hmac(&new.row, &value_row_mac_input(&id, &n2, &c2));
+            tx.execute(
+                "UPDATE handoff_value SET nonce = ?2, ciphertext = ?3, row_mac = ?4 WHERE delivery_id = ?1",
+                params![id, n2.to_vec(), c2, m2.to_vec()],
+            )?;
+        }
+        let accepts: Vec<(AcceptEntry, Vec<u8>)> = {
+            let mut st = tx.prepare("SELECT workspace_id, sender, added_by, added_at, row_mac FROM handoff_accept")?;
+            let it = st.query_map([], |r| {
+                Ok((AcceptEntry { workspace_id: r.get(0)?, sender: r.get(1)?, added_by: r.get(2)?, added_at: r.get(3)? }, r.get::<_, Vec<u8>>(4)?))
+            })?;
+            it.collect::<std::result::Result<_, _>>()?
+        };
+        for (a, mac) in accepts {
+            if !hmac_verify(&old.row, &accept_mac_input(&a), &mac) {
+                return Err(VaultError::tamper(format!("accept-from {}/{} failed its integrity check; rekey stopped", a.workspace_id, a.sender)));
+            }
+            let m2 = hmac(&new.row, &accept_mac_input(&a));
+            tx.execute(
+                "UPDATE handoff_accept SET row_mac = ?3 WHERE workspace_id = ?1 AND sender = ?2",
+                params![a.workspace_id, a.sender, m2.to_vec()],
+            )?;
+        }
+        let peers: Vec<(String, String, String, String, String, Vec<u8>)> = {
+            let mut st = tx.prepare("SELECT peer_fp, vault_id, recipient, features, fetched_at, row_mac FROM peer_vault")?;
+            let it = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))?;
+            it.collect::<std::result::Result<_, _>>()?
+        };
+        for (peer_fp, vault_id, recipient, features_json, fetched_at, mac) in peers {
+            let features: Vec<String> = serde_json::from_str(&features_json).map_err(|_| VaultError::tamper("bad peer vault features"))?;
+            let p = PeerVault { peer_fp: peer_fp.clone(), vault_id, recipient, features, fetched_at };
+            if !hmac_verify(&old.row, &peer_vault_mac_input(&p, &features_json), &mac) {
+                return Err(VaultError::tamper(format!("peer vault {peer_fp} failed its integrity check; rekey stopped")));
+            }
+            let m2 = hmac(&new.row, &peer_vault_mac_input(&p, &features_json));
+            tx.execute("UPDATE peer_vault SET row_mac = ?2 WHERE peer_fp = ?1", params![peer_fp, m2.to_vec()])?;
+        }
+        Ok(())
+    }
+
     // ── pending values ──────────────────────────────────────────────
 
     fn handoff_value_aad(&self, id: &str) -> Vec<u8> {

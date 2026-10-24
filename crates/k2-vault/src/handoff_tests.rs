@@ -536,3 +536,122 @@ fn unsend_disables_the_copy_it_wrote_and_leaves_a_replacement_alone() {
     assert!(!v.handoff_has_value(&p.record.delivery_id));
     assert_eq!(v.handoff_unsend(&p.record.delivery_id, None, "x").expect_err("twice").code, "not_unsendable");
 }
+
+// ── rekey covers every MAC'd table ──────────────────────────────────
+
+/// A rekey verifies and re-MACs every MAC'd table (secrets, versions,
+/// grants, cards, placements, handoffs, pending handoff values (re-sealed),
+/// accept-from, peer vaults, agent settings and agent socket records), so
+/// everything still reads after it; a tampered grant stops the rekey
+/// instead of coming out valid under the new key.
+#[test]
+fn rekey_keeps_every_table_and_stops_on_a_tampered_row() {
+    let t = open("ho-rekey");
+    let v = &t.v;
+    let owner = Actor::Owner;
+    let proof = crate::policy::HumanProof::Confirmed { method: "t".into() };
+    // A secret with two versions, a grant, a card, a placement.
+    let a = put(v, "ws-ops", "STRIPE_KEY", "k2test-rekey-value-1", &owner);
+    v.rotate(&Selector::Id(a.id.clone()), SecretBytes::from_slice(b"k2test-rekey-value-2"), &owner).expect("rotate");
+    v.grant(
+        crate::store::GrantRequest {
+            selector: Selector::Id(a.id.clone()),
+            consumer: crate::model::Consumer::workspace("ws-sales"),
+            delivery: Delivery::Fetch,
+            env_name: None,
+            file_name: None,
+            hosts_narrowed: None,
+            expires_at: None,
+            version: None,
+        },
+        &owner,
+    )
+    .expect("grant");
+    v.request_create(crate::vault::SecretRequest {
+        card_id: "card-rekey-0123456789".into(),
+        conversation: "conv-1".into(),
+        session_id: Some("sess-1".into()),
+        workspace_id: "ws-ops".into(),
+        requested_by: "agent:ws-ops/sess-1".into(),
+        name: "CARD_KEY".into(),
+        kind: Kind::ApiKey,
+        proposed_scope: "workspace".into(),
+        proposed_hosts: vec!["api.stripe.com".into()],
+        proposed_delivery: Delivery::Fetch,
+        prompt: "Paste it".into(),
+        ttl_secs: None,
+        status: String::new(),
+        answered_by: None,
+        secret_id: None,
+        created_at: String::new(),
+        answered_at: None,
+    })
+    .expect("card");
+    v.placement_add(
+        crate::vault::NewPlacement {
+            secret_id: a.id.clone(),
+            target: crate::vault::PlacementTarget::Manual,
+            unit: None,
+            cred_name: None,
+            where_text: Some("box1:/etc/x".into()),
+            note: String::new(),
+            restart: false,
+        },
+        "owner",
+    )
+    .expect("placement");
+    // A pending handoff (row + sealed value), an accept-from row, a peer vault.
+    let pend = v.handoff_receive(incoming("ws-ops", item("PENDING_KEY"), "sales", false), SecretBytes::from_slice(SENTINEL.as_bytes())).expect("pend");
+    assert_eq!(pend.record.status, "pending");
+    v.accept_from_add("ws-ops", "Sales::Rosson.K2.dev", &owner).expect("accept-from");
+    let other = open("ho-rekey-peer");
+    let peer = PeerVault {
+        peer_fp: "fp-rekey".into(),
+        vault_id: "v-peer".into(),
+        recipient: other.v.carry_recipient().expect("r").encode(),
+        features: vec![FEATURE.into(), FEATURE_AGENT.into()],
+        fetched_at: "2026-10-24T00:00:00Z".into(),
+    };
+    v.peer_vault_put(&peer).expect("peer");
+    // Agent settings and an agent socket record.
+    let mut r = PutRequest::new(Namespace::User, Scope::workspace("ws-ops"), "DEPLOY", Kind::SshKey);
+    r.default_delivery = Some(Delivery::Agent);
+    let k = v.put(r, SecretBytes::from_slice(crate::ssh_agent::testkeys::ed25519().as_bytes()), &owner).expect("ssh").meta;
+    v.set_agent_policy(&Selector::Id(k.id.clone()), crate::vault::AgentPolicyPatch { burst: Some(7), ..Default::default() }, &owner).expect("policy");
+    let sock = crate::vault::AgentSocket {
+        tag: "sess-rekey".into(),
+        kind: "session".into(),
+        workspace_id: "ws-ops".into(),
+        secrets_dir: "/run/k2/secrets/sess-rekey-abcdefgh".into(),
+        sock_path: "/run/k2/secrets/sess-rekey-abcdefgh/a.sock".into(),
+        created_at: "2026-10-24T00:00:00Z".into(),
+    };
+    v.agent_socket_put(&sock).expect("socket record");
+
+    v.rekey(&owner, &proof).expect("rekey");
+
+    assert_eq!(v.status().tamper, "ok", "nothing reads as tampered after a rekey");
+    assert_eq!(value(v, "ws-ops", "STRIPE_KEY"), b"k2test-rekey-value-2");
+    assert_eq!(v.grants(&Selector::Id(a.id.clone()), &owner).expect("grants").len(), 1);
+    assert!(v.requests(Some("ws-ops")).expect("cards").iter().any(|c| c.card_id == "card-rekey-0123456789"));
+    assert_eq!(v.placements(Some(&a.id)).expect("placements").rows.len(), 1);
+    assert_eq!(v.accept_from(Some("ws-ops")).expect("accept").len(), 1);
+    assert_eq!(v.peer_vault("fp-rekey").expect("peer survives"), peer);
+    assert_eq!(v.agent_policy(&k.id).expect("policy").burst, 7);
+    assert_eq!(v.agent_socket_get("sess-rekey").expect("rec"), Some(sock));
+    assert_eq!(v.status().tamper, "ok");
+    // The pending value was re-sealed under the new data key: accepting
+    // it lands the original value.
+    v.handoff_decide(&pend.record.delivery_id, &Decision { action: "accept".into(), ..Default::default() }, &owner).expect("accept");
+    assert_eq!(value(v, "ws-ops", "PENDING_KEY"), SENTINEL.as_bytes());
+
+    // A tampered grant stops the next rekey (and nothing changes).
+    let db = t._d.path().join("vault/vault.db");
+    let c = rusqlite::Connection::open(&db).expect("db");
+    let n = c.execute("UPDATE grants SET granted_by = 'someone-else'", []).expect("tamper");
+    assert!(n >= 1);
+    drop(c);
+    let e = v.rekey(&owner, &proof).expect_err("a tampered grant stops the rekey");
+    assert_eq!(e.code, "vault_tamper", "{e:?}");
+    assert_eq!(value(v, "ws-ops", "STRIPE_KEY"), b"k2test-rekey-value-2", "the vault still opens under the old key");
+}

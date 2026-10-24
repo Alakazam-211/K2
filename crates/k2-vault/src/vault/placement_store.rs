@@ -179,6 +179,24 @@ impl LocalVault {
         Ok(out)
     }
 
+    /// Rekey: verify every placement row under the old row key and re-MAC
+    /// it under the new one; any failure stops the rekey.
+    pub(super) fn rekey_placements(&self, tx: &Transaction<'_>, old: &Keys, new: &Keys) -> Result<()> {
+        let rows: Vec<RawPlacement> = {
+            let mut st = tx.prepare("SELECT * FROM placement")?;
+            let it = st.query_map([], read_raw)?;
+            it.collect::<std::result::Result<_, _>>()?
+        };
+        for (_, target, mac, raw) in rows {
+            if !hmac_verify(&old.row, &mac_input(&raw, &target), &mac) {
+                return Err(VaultError::tamper(format!("placement {} failed its integrity check; rekey stopped", raw.id)));
+            }
+            let m2 = hmac(&new.row, &mac_input(&raw, &target));
+            tx.execute("UPDATE placement SET row_mac = ?2 WHERE id = ?1", params![raw.id, m2.to_vec()])?;
+        }
+        Ok(())
+    }
+
     /// Every placement (or one secret's), oldest first.
     pub fn placements(&self, secret_id: Option<&str>) -> Result<Placements> {
         let keys = self.keys.read();

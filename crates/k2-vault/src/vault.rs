@@ -2131,12 +2131,20 @@ impl LocalVault {
                 return Err(VaultError::tamper(format!("secret {} failed its integrity check; rekey stopped", row.meta.id)));
             }
             let m = &row.meta;
-            let versions: Vec<(u32, Vec<u8>, Vec<u8>, String, String, String, Option<String>)> = {
-                let mut st = tx.prepare("SELECT version, nonce, ciphertext, created_at, created_by, state, revoked_at FROM secret_version WHERE secret_id = ?1")?;
-                let it = st.query_map(params![m.id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)))?;
+            #[allow(clippy::type_complexity)]
+            let versions: Vec<(u32, Vec<u8>, Vec<u8>, String, String, String, Option<String>, String, Vec<u8>)> = {
+                let mut st = tx.prepare(
+                    "SELECT version, nonce, ciphertext, created_at, created_by, state, revoked_at, fingerprint, row_mac FROM secret_version WHERE secret_id = ?1",
+                )?;
+                let it = st.query_map(params![m.id], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?))
+                })?;
                 it.collect::<std::result::Result<_, _>>()?
             };
-            for (v, nonce, ct, cat, cby, state, rev) in versions {
+            for (v, nonce, ct, cat, cby, state, rev, old_fp, vmac_old) in versions {
+                if !hmac_verify(&keys.row, &version_mac_input(&m.id, v, &nonce, &ct, &old_fp, &cat, &cby, &state, rev.as_deref()), &vmac_old) {
+                    return Err(VaultError::tamper(format!("secret {} v{v} failed its integrity check; rekey stopped", m.id)));
+                }
                 let pt = SecretBytes::new(xopen(&keys.vdk, &nonce, &value_aad(&self.vid, m, v), &ct)?);
                 let (n2, c2) = xseal(&new_keys.vdk, &value_aad(&self.vid, m, v), pt.expose());
                 let fp = hex(&hmac(&new_keys.fp, pt.expose()));
@@ -2149,34 +2157,44 @@ impl LocalVault {
             let smac = hmac(&new_keys.row, &secret_mac_input(m, &row.external_ref));
             tx.execute("UPDATE secret SET row_mac = ?2 WHERE id = ?1", params![m.id, smac.to_vec()])?;
         }
-        // Grants and requests.
-        let grants: Vec<Grant> = {
+        // Grants and requests: verified under the old key first (a tampered
+        // row must stop the rekey, never come out valid under the new key).
+        let grants: Vec<(Grant, Vec<u8>)> = {
             let mut st = tx.prepare("SELECT * FROM grants")?;
             let it = st.query_map([], |r| Ok(read_grant_raw(r)))?;
             let mut v = vec![];
             for r in it {
-                v.push(r??.0);
+                v.push(r??);
             }
             v
         };
-        for g in grants {
+        for (g, old_mac) in grants {
+            if !hmac_verify(&keys.row, &grant_mac_input(&g), &old_mac) {
+                return Err(VaultError::tamper(format!("grant {} failed its integrity check; rekey stopped", g.id)));
+            }
             let mac = hmac(&new_keys.row, &grant_mac_input(&g));
             tx.execute("UPDATE grants SET row_mac = ?2 WHERE id = ?1", params![g.id, mac.to_vec()])?;
         }
-        let reqs: Vec<SecretRequest> = {
+        let reqs: Vec<(SecretRequest, Vec<u8>)> = {
             let mut st = tx.prepare("SELECT * FROM secret_request")?;
             let it = st.query_map([], |r| Ok(read_request_raw(r)))?;
             let mut v = vec![];
             for r in it {
-                v.push(r??.0);
+                v.push(r??);
             }
             v
         };
-        for r in reqs {
+        for (r, old_mac) in reqs {
+            if !hmac_verify(&keys.row, &request_mac_input(&r), &old_mac) {
+                return Err(VaultError::tamper(format!("secret card {} failed its integrity check; rekey stopped", r.card_id)));
+            }
             let mac = hmac(&new_keys.row, &request_mac_input(&r));
             tx.execute("UPDATE secret_request SET row_mac = ?2 WHERE card_id = ?1", params![r.card_id, mac.to_vec()])?;
         }
-        // Agent settings (item 3) are MAC'd under the row key too.
+        // Every other MAC'd table, the same way (verify old, re-MAC new);
+        // pending handoff values are re-sealed under the new data key.
+        self.rekey_placements(&tx, &keys, &new_keys)?;
+        self.rekey_handoff_tables(&tx, &keys, &new_keys)?;
         self.rekey_agent_tables(&tx, &keys, &new_keys)?;
         // Placeholders hash under the old key: drop them (sessions re-mint).
         tx.execute("DELETE FROM placeholder", [])?;

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The K2 Compute CI gate's poller on z3mbpZ (docs/ci-on-k2-compute.md).
+     Install (as the GUI user, not root):
+       sed -e "s|__CHECKOUT__|$HOME/k2-ci/K2|g" -e "s|__HOME__|$HOME|g" \
+         scripts/ci/dev.k2.ci-poll.plist > ~/Library/LaunchAgents/dev.k2.ci-poll.plist
+       launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.k2.ci-poll.plist
+     Stop: launchctl bootout gui/$(id -u)/dev.k2.ci-poll
+     launchd never starts a second copy while one runs, so a long check
+     run simply delays the next poll. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>dev.k2.ci-poll</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__CHECKOUT__/scripts/ci/k2-ci-poll.sh</string>
+        <string>--once</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>__CHECKOUT__</string>
+    <key>StartInterval</key>
+    <integer>60</integer>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>__HOME__/.k2/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>K2_CI_STATE</key>
+        <string>__HOME__/.local/state/k2-ci</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>__HOME__/.local/state/k2-ci/poll.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/.local/state/k2-ci/poll.log</string>
+</dict>
+</plist>

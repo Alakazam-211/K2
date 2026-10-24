@@ -63,6 +63,11 @@ jobs:
       - name: Linux builds on K2 Compute (stubbed)
         run: bash tests/packaging/compute-release.sh
 
+      # The K2 Compute CI gate (scripts/ci/checks.sh mirrors this file;
+      # the test fails on drift), run-checks, statuses, poller; stub k2.
+      - name: CI gate on K2 Compute (stubbed)
+        run: bash tests/packaging/ci-gate.sh
+
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
       - name: Install dependencies

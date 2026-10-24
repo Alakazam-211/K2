@@ -179,6 +179,8 @@ install -d -m 0755 -o root -g wheel "$BIN_DIR"
 install_binary "$BINARY" "$BIN_DIR/k2-node"
 # A hand install starts the update history over (A-M2 / B-L4).
 rm -f "$BIN_DIR/k2-node.prev" "$BIN_DIR/k2-node.bad" "$BIN_DIR/k2-node.new" "$ADMIN_STATE/update.json"
+# The restart mark moved to /var/run/k2-node-admin (root's).
+rm -f "$CONFIG_DIR/node-update.json"
 xattr -d com.apple.quarantine "$BIN_DIR/k2-node" 2>/dev/null || true
 BIN="$BIN_DIR/k2-node"
 install -d -m 2775 -o root -g k2nodectl "$CONFIG_DIR"

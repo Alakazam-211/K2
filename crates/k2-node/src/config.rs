@@ -193,7 +193,7 @@ pub struct ControlState {
 }
 
 pub fn read_control(path: &Path) -> Result<ControlState, String> {
-    let f: ControlFile = match std::fs::read_to_string(path) {
+    let f: ControlFile = match crate::util::read_regular(path) {
         Ok(s) => toml::from_str(&s).map_err(|e| format!("{}: {e}", path.display()))?,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => ControlFile::default(),
         Err(e) => return Err(format!("read {}: {e}", path.display())),

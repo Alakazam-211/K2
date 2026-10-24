@@ -731,6 +731,21 @@ fn the_job_wall_goes_at_once_and_an_older_node_holds_for_the_owner() {
     assert_eq!((steps[0]["verb"].as_str(), &steps[0]["args"]), (Some("wall.enable"), &json!({})), "{r}");
     assert_eq!(steps[1]["verb"], "unit.restart");
 
+    // A 0.46.4+ node refuses only when its owner opted out (A-N4): the
+    // same command is held, no `unit.restart` (that needs `full`).
+    {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        store::touch_seen(&conn, &f.node, "lan", 3, "0.46.4", compute::now());
+    }
+    let responder = answer_next(f.node.clone(), "refused", Some(wire::code::APPROVAL_REQUIRED));
+    let r = call(NODE_WALL, &agent(&f), json!({"node": f.node_name})).unwrap();
+    responder.join().unwrap().expect("tried at once first");
+    assert_eq!((r["held"].as_bool(), r["request"]["kind"].as_str()), (Some(true), Some("command")), "{r}");
+    assert_eq!(r["request"]["body"]["verb"], "wall.enable", "{r}");
+    assert_eq!(r["request"]["body"]["args"], json!({"restart": true}), "{r}");
+    assert!(r["request"]["reason"].as_str().unwrap_or("").contains("turned the job wall off"), "{r}");
+
     // Any other refusal is an error, not a hold.
     let responder = answer_next(f.node.clone(), "refused", Some(wire::code::BAD_ARGS));
     let e = call(NODE_WALL, &agent(&f), json!({"node": f.node_name})).unwrap_err();

@@ -182,6 +182,9 @@ BIN="$LIBEXEC/k2-node"
 # remote rollback could go back to, no refused versions, no gate in
 # flight from before (security reviews A-M2 / B-L4).
 rm -f "$LIBEXEC/k2-node.prev" "$LIBEXEC/k2-node.bad" "$LIBEXEC/k2-node.new" "$ADMIN_STATE/update.json"
+# 0.46.3 kept the restart mark in the group-writable config dir; it lives
+# in /run/k2-node-admin now (root's).
+rm -f "$CONFIG_DIR/node-update.json"
 install -d -m 0700 -o root -g root "$ADMIN_STATE"
 install -d -m 2775 -o root -g k2nodectl "$CONFIG_DIR"
 tmp="$(mktemp -d)"

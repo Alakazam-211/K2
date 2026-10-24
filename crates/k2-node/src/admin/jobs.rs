@@ -104,10 +104,15 @@ pub fn read_jobs_file(config_dir: &Path) -> Result<Option<JobsFile>, String> {
 pub fn read_root_trusted(p: &Path) -> std::io::Result<String> {
     use std::io::Read;
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
-    let mut f = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC).open(p)?;
+    // O_NONBLOCK: a FIFO planted in the group-writable config dir must
+    // never wedge a reader (security review A-N1); a regular file ignores it.
+    let mut f = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK).open(p)?;
     let m = f.metadata()?;
+    if !m.is_file() {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{} is not a regular file", p.display())));
+    }
     // SAFETY: plain getter.
-    if unsafe { libc::geteuid() } == 0 && (!m.is_file() || m.uid() != 0 || m.mode() & 0o022 != 0) {
+    if unsafe { libc::geteuid() } == 0 && (m.uid() != 0 || m.mode() & 0o022 != 0) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
             format!("{} must be root's and writable by root only (uid {}, mode {:o})", p.display(), m.uid(), m.mode() & 0o7777),
@@ -1251,9 +1256,10 @@ impl Executor {
         if self.platform.os() != "linux" {
             return Err(refuse(code::BAD_ARGS, "macOS walls jobs with Seatbelt on its own; nothing to enable"));
         }
-        // Count the running jobs before anything touches the wall files: a
-        // node that isn't walled yet runs them as its own children.
-        let decision = super::update::decide(self, false, true);
+        // Count the running jobs before anything touches the wall files (a
+        // node that isn't walled yet runs them as its own children), and
+        // again after the setup, which takes a moment (A-N2 / B-R3).
+        let before = super::update::decide(self, false, true);
         let job_user = read_jobs_file(&self.paths.config_dir).ok().flatten().map(|f| f.job_user).unwrap_or_else(|| DEFAULT_JOB_USER.to_string());
         let setup = self.platform.enable_job_wall(&self.paths, &self.node_user(), &job_user)?;
         if approved {
@@ -1283,8 +1289,16 @@ impl Executor {
             out["note"] = "the wall's files were already in place, so this call doesn't restart k2-node; it takes effect at the next update or an owner-approved restart".into();
             return Ok(out);
         }
+        let after = super::update::decide(self, false, true);
+        let decision = if after.1 >= before.1 { after } else { before };
         let cmd_id = cmd_id.to_string();
         let r = super::update::run_decided(self, decision, super::update::DrainOpts { give_up_at_limit: true }, "wall.enable", &cmd_id.clone(), move |e| {
+            // Last look right before the restart: a job that started since
+            // the count is never stopped to turn the wall on.
+            let now_running = super::update::running_jobs(e);
+            if now_running > 0 {
+                return Err(refuse(code::BUSY, format!("{now_running} job(s) started meanwhile; k2-node wasn't restarted (ask again, it waits for them)")));
+            }
             super::update::restart_marked(e, "wall.enable", &cmd_id, |e| e.platform.restart_unit("k2-node")).map_err(|x| refuse(code::FAILED, x))?;
             Ok(json!({"restarted": "k2-node"}))
         })?;

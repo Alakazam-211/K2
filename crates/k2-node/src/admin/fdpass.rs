@@ -14,9 +14,21 @@ pub const MAX_FDS: usize = 4;
 /// inherit a job's pipe (A-L1 / B-L3). Linux gets the flag atomically.
 static SPAWN: std::sync::RwLock<()> = std::sync::RwLock::new(());
 
-/// Take before spawning a child from the executor.
+/// Take before spawning a child from the executor. Hold it only across
+/// the fork/exec (the spawn), never while the child runs (A L1).
 pub fn spawn_guard() -> std::sync::RwLockReadGuard<'static, ()> {
     SPAWN.read().unwrap_or_else(|p| p.into_inner())
+}
+
+/// `Command::output`, with the spawn under [`spawn_guard`] and the wait
+/// outside it.
+pub fn spawn_output(cmd: &mut std::process::Command) -> std::io::Result<std::process::Output> {
+    cmd.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
+    let child = {
+        let _g = spawn_guard();
+        cmd.spawn()?
+    };
+    child.wait_with_output()
 }
 
 /// Send one byte carrying `fds`.

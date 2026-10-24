@@ -42,7 +42,7 @@ pub const HEALTH_GATE_SECS: i64 = 120;
 /// running jobs before it goes ahead anyway (V55).
 pub const DRAIN_MAX_SECS: i64 = k2_node_proto::admin::DRAIN_MAX_SECS;
 
-/// `<config>/node-update.json`: written by the executor just before every
+/// `node-update.json` in [`mark_dir`]: written by the executor just before every
 /// node restart it makes (update, rollback, `unit.restart`, `wall.enable`),
 /// so the jobs that restart interrupts end `interrupted/node_update` (infra,
 /// no node-health strike on the server; V55) instead of `node_shutdown` /
@@ -153,13 +153,7 @@ fn mark_ok(e: &Executor, to: &str, since: i64) -> bool {
 /// macOS: the staged build must carry K2's Developer ID signature.
 fn verify_codesign(staged: &Path) -> Result<(), AdminRefusal> {
     let req = format!("=anchor apple generic and certificate leaf[subject.OU] = \"{APPLE_TEAM_ID}\"");
-    let _g = super::fdpass::spawn_guard();
-    let out = std::process::Command::new("/usr/bin/codesign")
-        .args(["--verify", "--strict", "-R"])
-        .arg(&req)
-        .arg(staged)
-        .env_clear()
-        .output()
+    let out = super::fdpass::spawn_output(std::process::Command::new("/usr/bin/codesign").args(["--verify", "--strict", "-R"]).arg(&req).arg(staged).env_clear())
         .map_err(|x| AdminRefusal::new(code::BAD_BUILD, format!("codesign: {x}")))?;
     if !out.status.success() {
         return Err(AdminRefusal::new(code::BAD_BUILD, "the build is not signed by K2's Developer ID"));
@@ -580,10 +574,42 @@ impl UpdateMark {
     }
 }
 
-/// In the config dir (root's; the node reads it): root never writes into
-/// the node's home (review A, H1).
+/// Where the mark lives: a directory only root can write and the node can
+/// read (`/run/k2-node-admin`, `/var/run/k2-node-admin` on macOS), never the
+/// group-writable config dir, where `k2nodectl` members could stash a
+/// genuine mark and put it back later, or plant a FIFO (A-N1, A-N3 / B-R1).
+/// A dev or test node with its own config dir keeps it in `<config>/admin-run`.
+pub fn mark_dir(config_dir: &Path) -> PathBuf {
+    if config_dir == Path::new(crate::paths::DEFAULT_CONFIG_DIR) {
+        PathBuf::from(if cfg!(target_os = "macos") { "/var/run/k2-node-admin" } else { "/run/k2-node-admin" })
+    } else {
+        config_dir.join("admin-run")
+    }
+}
+
 pub fn update_mark_path(config_dir: &Path) -> PathBuf {
-    config_dir.join(UPDATE_MARK_FILE)
+    mark_dir(config_dir).join(UPDATE_MARK_FILE)
+}
+
+/// The mark's directory is [`mark_owner`]'s and writable by nobody else
+/// (not a symlink).
+fn mark_dir_trusted(config_dir: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::symlink_metadata(mark_dir(config_dir)).is_ok_and(|m| m.file_type().is_dir() && m.uid() == mark_owner(config_dir) && m.mode() & 0o022 == 0)
+}
+
+/// Root side: make the mark's directory (0755) when it's missing.
+fn ensure_mark_dir(config_dir: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    let d = mark_dir(config_dir);
+    if std::fs::symlink_metadata(&d).is_err() {
+        std::fs::create_dir(&d).map_err(|x| format!("create {}: {x}", d.display()))?;
+        std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o755)).map_err(|x| format!("chmod {}: {x}", d.display()))?;
+    }
+    if !mark_dir_trusted(config_dir) {
+        return Err(format!("{} isn't a directory only root can write", d.display()));
+    }
+    Ok(())
 }
 
 /// Who must own the mark: root for the installed node (`/etc/k2-node` is
@@ -598,13 +624,18 @@ pub fn mark_owner(config_dir: &Path) -> u32 {
     }
 }
 
-/// Read the mark only when [`mark_owner`] wrote it: no symlink, a regular
-/// file with one link, owned by that uid, writable by nobody else.
+/// Read the mark only when [`mark_owner`] wrote it: in a directory only
+/// it can write, no symlink, a regular file with one link, owned by that
+/// uid, writable by nobody else. `O_NONBLOCK`: a FIFO never wedges the
+/// reader (the node at an owner's stop, the executor under its lock; A-N1).
 pub fn read_update_mark(config_dir: &Path) -> Option<UpdateMark> {
     use std::io::Read;
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    if !mark_dir_trusted(config_dir) {
+        return None;
+    }
     let p = update_mark_path(config_dir);
-    let mut f = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW).open(&p).ok()?;
+    let mut f = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC).open(&p).ok()?;
     let m = f.metadata().ok()?;
     let owner = mark_owner(config_dir);
     if !m.file_type().is_file() || m.nlink() != 1 || m.uid() != owner || m.mode() & 0o022 != 0 {
@@ -617,6 +648,10 @@ pub fn read_update_mark(config_dir: &Path) -> Option<UpdateMark> {
 }
 
 fn write_update_mark(e: &Executor, m: &UpdateMark) {
+    if let Err(x) = ensure_mark_dir(&e.paths.config_dir) {
+        crate::nlog!("admin: update mark: {x}");
+        return;
+    }
     if let Ok(b) = serde_json::to_vec(m) {
         if let Err(x) = crate::util::atomic_write(&update_mark_path(&e.paths.config_dir), &b, 0o644) {
             crate::nlog!("admin: update mark: {x}");
@@ -648,11 +683,17 @@ fn mark_detail((pid, start): (Option<u32>, Option<u64>)) -> String {
 /// restarted node's tenants reconcile after the attach and still read it
 /// for the `node_update` reason until it goes stale.
 fn retire_update_mark(e: &Executor) {
-    if let Some(mut m) = read_update_mark(&e.paths.config_dir) {
-        m.keep = false;
-        m.ended = true;
-        write_update_mark(e, &m);
-    }
+    let m = match read_update_mark(&e.paths.config_dir) {
+        Some(mut m) => {
+            m.keep = false;
+            m.ended = true;
+            m
+        }
+        // Unreadable or gone: still leave an ended mark, which names no
+        // process and is stale (B-R1: retirement never depends on a read).
+        None => UpdateMark { v: MARK_V, what: "retired".into(), at: 0, keep: false, cmd_id: None, node_pid: None, node_start: None, ended: true },
+    };
+    write_update_mark(e, &m);
 }
 
 /// Restart the node service the K2 way: the mark first (every K2-made
@@ -813,7 +854,11 @@ where
         let left = running_jobs(&ex);
         let r = {
             let _g = ex.busy.lock().unwrap_or_else(|p| p.into_inner());
-            let r = if ex.drain_gen.load(Ordering::SeqCst) != gen {
+            let r = if ex.reexec.load(Ordering::SeqCst) {
+                // The executor is on its way out (re-exec after an update):
+                // never start an action it can't finish (B-R2).
+                Err(AdminRefusal::new("drain_abandoned", "the executor is restarting; nothing was done"))
+            } else if ex.drain_gen.load(Ordering::SeqCst) != gen {
                 // A later update or rollback (`now`) came first: this
                 // drained action is stale and never runs.
                 Err(AdminRefusal::new(code::BUSY, "superseded by a later update or rollback"))
@@ -1158,6 +1203,98 @@ mod drain_tests {
         std::os::unix::fs::symlink(&real, &p).unwrap();
         assert!(read_update_mark(&cfg).is_none(), "a symlink: ignored");
         assert_eq!(mark_owner(std::path::Path::new(crate::paths::DEFAULT_CONFIG_DIR)), 0, "the installed node trusts root's marks only");
+    }
+
+    fn mkfifo(p: &std::path::Path) {
+        let c = std::ffi::CString::new(p.as_os_str().as_encoded_bytes()).unwrap();
+        // SAFETY: valid C path.
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o644) }, 0, "mkfifo: {}", std::io::Error::last_os_error());
+    }
+
+    /// Run `f` on a thread; fail loudly if it doesn't return within 5 s.
+    fn within_5s<T: Send + 'static>(what: &str, f: impl FnOnce() -> T + Send + 'static) -> T {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(f());
+        });
+        rx.recv_timeout(Duration::from_secs(5)).unwrap_or_else(|_| panic!("{what} blocked (a FIFO wedged the reader)"))
+    }
+
+    /// A-N1: a FIFO planted as the mark, as jobs.toml, admin.toml, servers.toml
+    /// or control.toml never wedges a reader: it is refused at once.
+    #[test]
+    fn a_planted_fifo_never_blocks_a_reader() {
+        let r = Rig::new("full");
+        let cfg = r.exec.paths.config_dir.clone();
+        r.run(&r.approve(r.cmd("unit.restart", json!({"unit": "k2-node"}))));
+        let p = update_mark_path(&cfg);
+        std::fs::remove_file(&p).unwrap();
+        mkfifo(&p);
+        let c2 = cfg.clone();
+        assert!(within_5s("read_update_mark", move || read_update_mark(&c2)).is_none());
+        let c2 = cfg.clone();
+        assert!(within_5s("update_mark_for", move || update_mark_for(&c2, 1, None, 0)).is_none());
+        // The executor's retire never hangs under its lock either: it
+        // replaces the FIFO with an ended mark.
+        let ex = r.exec.bg_handle();
+        within_5s("retire_update_mark", move || retire_update_mark(&ex));
+        assert!(read_update_mark(&cfg).is_some_and(|m| m.ended && !m.names(1, None, 0)));
+        for f in [crate::admin::jobs::JOBS_FILE, crate::admin::config::ADMIN_FILE] {
+            let p = cfg.join(f);
+            let _ = std::fs::remove_file(&p);
+            mkfifo(&p);
+            let p2 = p.clone();
+            let e = within_5s(f, move || crate::admin::jobs::read_root_trusted(&p2)).unwrap_err();
+            assert!(e.to_string().contains("not a regular file"), "{f}: {e}");
+            std::fs::remove_file(&p).unwrap();
+        }
+        let sp = crate::admin::servers::servers_path(&cfg);
+        mkfifo(&sp);
+        let c2 = cfg.clone();
+        assert!(within_5s("servers.toml", move || crate::admin::servers::read_file(&c2)).is_err());
+        let cp = r.exec.paths.layout().control();
+        let _ = std::fs::remove_file(&cp);
+        mkfifo(&cp);
+        assert!(within_5s("control.toml", move || crate::config::read_control(&cp)).is_err());
+    }
+
+    /// A-N3 / B-R1: the mark lives in its own directory, which must be
+    /// writable by its owner only; a group-writable one is ignored.
+    #[test]
+    fn the_mark_lives_in_a_directory_only_root_writes() {
+        use std::os::unix::fs::PermissionsExt;
+        let r = Rig::new("full");
+        let cfg = r.exec.paths.config_dir.clone();
+        r.run(&r.approve(r.cmd("unit.restart", json!({"unit": "k2-node"}))));
+        assert_eq!(update_mark_path(&cfg).parent().unwrap(), mark_dir(&cfg));
+        assert_ne!(mark_dir(&cfg), cfg, "never the group-writable config dir");
+        assert_eq!(
+            mark_dir(std::path::Path::new(crate::paths::DEFAULT_CONFIG_DIR)),
+            std::path::PathBuf::from(if cfg!(target_os = "macos") { "/var/run/k2-node-admin" } else { "/run/k2-node-admin" })
+        );
+        assert!(read_update_mark(&cfg).is_some());
+        std::fs::set_permissions(mark_dir(&cfg), std::fs::Permissions::from_mode(0o775)).unwrap();
+        assert!(read_update_mark(&cfg).is_none(), "a group-writable mark dir: ignored");
+        let err = restart_marked(&r.exec, "unit.restart", "c2", |_| Ok(())).map(|_| ());
+        assert!(err.is_ok(), "the restart itself still runs");
+        assert!(read_update_mark(&cfg).is_none(), "and no mark is written into an untrusted dir");
+    }
+
+    /// B-R2: a drain thread that gets the lock as the executor re-execs
+    /// never starts its action; control goes back.
+    #[test]
+    fn a_drain_never_acts_once_the_executor_is_reexecing() {
+        let r = Rig::new("full");
+        share_node(&r, 2);
+        running(&r, &["j1", "t1-0123456789abcdef"]);
+        let res = r.run(&r.approve(r.cmd("unit.restart", json!({"unit": "k2-node"}))));
+        assert_eq!(res.result["phase"], "draining", "{res:?}");
+        r.exec.reexec.store(true, Ordering::SeqCst);
+        running(&r, &[]);
+        wait("the drain to end", || !r.exec.draining.load(Ordering::SeqCst));
+        assert!(calls(&r).is_empty(), "nothing restarted while the executor leaves");
+        assert_eq!(control(&r), Control::Active);
+        assert!(r.exec.audit().verify().unwrap().iter().any(|l| l.event == "drain" && l.code.as_deref() == Some("drain_abandoned")));
     }
 
     /// B-M4: a restart that fails leaves no live mark naming the running node.

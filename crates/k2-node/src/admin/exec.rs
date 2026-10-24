@@ -187,15 +187,15 @@ pub fn preflight_user(node_user: &str) -> Result<Option<(u32, u32)>, String> {
 
 /// A program's stdout (absolute path, clean env), or `None` on failure.
 fn output_fixed(program: &str, args: &[&str]) -> Option<String> {
-    let _g = super::fdpass::spawn_guard();
-    let out = std::process::Command::new(program)
-        .args(args)
-        .env_clear()
-        .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
-        .current_dir("/")
-        .stdin(std::process::Stdio::null())
-        .output()
-        .ok()?;
+    let out = super::fdpass::spawn_output(
+        std::process::Command::new(program)
+            .args(args)
+            .env_clear()
+            .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
+            .current_dir("/")
+            .stdin(std::process::Stdio::null()),
+    )
+    .ok()?;
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
@@ -213,15 +213,15 @@ pub fn parse_launchctl_pid(s: &str) -> Option<u32> {
 pub struct SystemPlatform;
 
 pub(crate) fn run_fixed(program: &str, args: &[&str]) -> Result<(), String> {
-    let _g = super::fdpass::spawn_guard();
-    let out = std::process::Command::new(program)
-        .args(args)
-        .env_clear()
-        .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
-        .current_dir("/")
-        .stdin(std::process::Stdio::null())
-        .output()
-        .map_err(|e| format!("{program}: {e}"))?;
+    let out = super::fdpass::spawn_output(
+        std::process::Command::new(program)
+            .args(args)
+            .env_clear()
+            .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
+            .current_dir("/")
+            .stdin(std::process::Stdio::null()),
+    )
+    .map_err(|e| format!("{program}: {e}"))?;
     if out.status.success() {
         Ok(())
     } else {

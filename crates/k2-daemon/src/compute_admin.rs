@@ -1502,8 +1502,11 @@ fn rollback(who: &Who, body: &[u8]) -> R<Value> {
 /// "Allow this agent to operate compute nodes") sends it at once: 0.46.4+
 /// executors class `wall.enable` operate at `policy`. `restart` (default
 /// true) restarts k2-node once its running jobs end. An older node answers
-/// `approval_required`: then it becomes a held plan for the owner
-/// (`wall.enable` + `unit.restart k2-node`, the args that node knows).
+/// `approval_required`: then it is held for the owner. A 0.46.4+ node
+/// answers that only when its owner opted out of the wall at setup (or set
+/// their own job user): the held command is the same `wall.enable
+/// {restart}`, which works at `policy`. An older node gets the plan it
+/// knows: `wall.enable {}` + `unit.restart k2-node` (A-N4).
 fn wall(who: &Who, body: &[u8]) -> R<Value> {
     let op = operator(who)?;
     let v = json_body(body)?;
@@ -1517,9 +1520,14 @@ fn wall(who: &Who, body: &[u8]) -> R<Value> {
     let args = json!({"restart": restart});
     admin::validate_step("wall.enable", &args).map_err(|(code, hint)| no(code, 400, hint))?;
     node_admin_ready(&node, wire::FEATURE_ADMIN)?;
+    let new_node = {
+        use k2_root_proto::version::Semver;
+        let min = Semver::parse("0.46.4");
+        node.node_version.as_deref().and_then(|v| Semver::parse(v.split(['-', ' ']).next().unwrap_or(v))).zip(min).is_some_and(|(v, m)| v >= m)
+    };
     let hold = |why: &str| {
-        let mut steps = vec![json!({"verb": "wall.enable", "args": {}})];
-        if restart {
+        let mut steps = if new_node { vec![json!({"verb": "wall.enable", "args": args.clone()})] } else { vec![json!({"verb": "wall.enable", "args": {}})] };
+        if restart && !new_node {
             steps.push(json!({"verb": "unit.restart", "args": {"unit": "k2-node"}}));
         }
         let (kind, body_v) = if steps.len() == 1 { ("command", steps.remove(0)) } else { ("plan", json!({"steps": steps})) };
@@ -1531,7 +1539,11 @@ fn wall(who: &Who, body: &[u8]) -> R<Value> {
     crate::compute_routes::audit(who, "wall_enable", Some(&node.id), op.workspace.as_deref(), None, json!({"restart": restart, "cmdId": cmd_id}));
     match result {
         Some(r) if r.state == "refused" && r.code.as_deref() == Some(wire::code::APPROVAL_REQUIRED) => {
-            hold("this node's k2-node is older than 0.46.4, so turning the wall on needs the owner's approval there")
+            hold(if new_node {
+                "this machine's owner turned the job wall off at setup (or set their own job user), so turning it on needs their approval"
+            } else {
+                "this node's k2-node is 0.46.3 or older, so turning the wall on needs the owner's approval there"
+            })
         }
         Some(r) if r.state != "done" => Err(no(
             "node_refused",

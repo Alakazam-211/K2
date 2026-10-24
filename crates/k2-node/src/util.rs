@@ -195,7 +195,11 @@ pub async fn run_cmd(
 pub fn output_limited(mut cmd: std::process::Command, limit: Duration) -> Result<String, String> {
     use std::io::Read;
     cmd.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null());
-    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+    // The executor's health and housekeeping spawns too (macOS fd hygiene, A L1).
+    let mut child = {
+        let _g = crate::admin::fdpass::spawn_guard();
+        cmd.spawn().map_err(|e| e.to_string())?
+    };
     let mut out = child.stdout.take().ok_or("no stdout")?;
     let reader = std::thread::spawn(move || {
         let mut s = String::new();
@@ -224,6 +228,21 @@ pub fn base_path(home: &Path) -> String {
         "{}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
         home.join("toolchains/cargo/bin").display()
     ))
+}
+
+/// Read a config file that someone other than root may write (the
+/// owner's `control.toml`): `O_NONBLOCK`, so a FIFO planted in its place
+/// never wedges the reader, and only a regular file is read (A-N1).
+pub fn read_regular(p: &Path) -> std::io::Result<String> {
+    use std::io::Read;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut f = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC).open(p)?;
+    if !f.metadata()?.is_file() {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{} is not a regular file", p.display())));
+    }
+    let mut s = String::new();
+    f.read_to_string(&mut s)?;
+    Ok(s)
 }
 
 /// When process `pid` started, in the kernel's own units (Linux: clock

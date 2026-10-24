@@ -222,7 +222,8 @@ pub fn servers_path(config_dir: &Path) -> PathBuf {
 /// is an error (callers never treat it as solo: fail closed).
 pub fn read_file(config_dir: &Path) -> Result<Option<ServersFile>, String> {
     let p = servers_path(config_dir);
-    let text = match std::fs::read_to_string(&p) {
+    // Never blocking on a planted FIFO (A-N1).
+    let text = match crate::util::read_regular(&p) {
         Ok(s) => s,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(format!("read {}: {e}", p.display())),

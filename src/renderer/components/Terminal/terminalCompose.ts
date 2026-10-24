@@ -529,6 +529,8 @@ type ComposeAutosizeEl = {
   value: string
   readonly scrollHeight: number
   style: { height: string; overflowY: string }
+  /** The box around the field: held at its height while measuring. */
+  readonly parentElement?: { readonly offsetHeight: number; style: { minHeight: string } } | null
 }
 
 /**
@@ -537,6 +539,14 @@ type ComposeAutosizeEl = {
  * resting width (`height: auto` plus `overflow-y: auto` reserves a
  * scrollbar before `scrollHeight` is read). Empty drafts never read
  * `scrollHeight` — `composeTextareaHeight` ignores it on purpose.
+ *
+ * The field's parent is held at its height while the field is at 0
+ * (ZenCompose does the same). Without it, reading `scrollHeight` lays the
+ * page out with the box collapsed: a message list above it grows, the
+ * browser clamps that list's `scrollTop` to its new (smaller) maximum, and
+ * when the box grows back the list has lost the box's height off its
+ * bottom. On every keystroke: a ticket's discussion jumped up to the top
+ * of the last message while typing (Rosson 2026-10-24).
  */
 export function applyComposeTextareaAutosize(el: ComposeAutosizeEl, fontSize: number): void {
   if (!el.value) {
@@ -545,9 +555,13 @@ export function applyComposeTextareaAutosize(el: ComposeAutosizeEl, fontSize: nu
     el.style.overflowY = composeTextareaOverflowY(empty)
     return
   }
+  const box = el.parentElement ?? null
+  const held = box ? box.style.minHeight : ''
+  if (box) box.style.minHeight = `${box.offsetHeight}px`
   el.style.overflowY = 'hidden'
   el.style.height = '0px'
   const measured = { value: el.value, scrollHeight: el.scrollHeight, fontSize }
   el.style.height = `${composeTextareaHeight(measured)}px`
   el.style.overflowY = composeTextareaOverflowY(measured)
+  if (box) box.style.minHeight = held
 }

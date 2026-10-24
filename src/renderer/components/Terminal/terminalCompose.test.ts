@@ -655,6 +655,70 @@ describe('applyComposeTextareaAutosize', () => {
     expect(el.style.height).toBe(`${Math.round(12 * 1.4 + 8)}px`)
     expect(el.style.overflowY).toBe('hidden')
   })
+
+  // Rosson 2026-10-24: in a ticket's discussion every keystroke jumped the
+  // list up to the top of the last message. Reading `scrollHeight` with the
+  // field at 0 laid the page out with the box collapsed; the list above
+  // grew, the browser clamped its scrollTop, and the box growing back left
+  // the bottom of the list hidden by the box's height.
+  it('holds the box at its height while measuring, so a list above keeps its scroll', () => {
+    // A page 600 tall: the message list above takes what the box leaves.
+    const page = 600
+    const content = 2000
+    const list = { scrollTop: 0 }
+    let fieldHeight = 80
+    const box = {
+      style: { minHeight: '' },
+      get offsetHeight(): number {
+        return Math.max(fieldHeight, Number.parseFloat(box.style.minHeight) || 0)
+      },
+    }
+    // A layout pass: the browser clamps the list to its new maximum.
+    const layout = (): void => {
+      list.scrollTop = Math.min(list.scrollTop, content - (page - box.offsetHeight))
+    }
+    const style = {
+      overflowY: 'hidden',
+      get height(): string {
+        return `${fieldHeight}px`
+      },
+      set height(v: string) {
+        fieldHeight = Number.parseFloat(v)
+      },
+    }
+    const el = {
+      value: 'one\ntwo\nthree\nfour',
+      style,
+      parentElement: box,
+      get scrollHeight(): number {
+        layout()
+        return 80
+      },
+    }
+    const bottom = content - (page - 80)
+    list.scrollTop = bottom
+    for (let i = 0; i < 5; i++) applyComposeTextareaAutosize(el, 13)
+    expect(list.scrollTop).toBe(bottom)
+    expect(style.height).toBe('80px')
+    expect(box.style.minHeight).toBe('')
+  })
+
+  it('puts back a min-height the box already had', () => {
+    const box = { style: { minHeight: '40px' }, offsetHeight: 52 }
+    const seen: string[] = []
+    const el = {
+      value: 'hello',
+      style: { height: '28px', overflowY: 'hidden' },
+      parentElement: box,
+      get scrollHeight(): number {
+        seen.push(box.style.minHeight)
+        return 28
+      },
+    }
+    applyComposeTextareaAutosize(el, 12)
+    expect(seen).toEqual(['52px'])
+    expect(box.style.minHeight).toBe('40px')
+  })
 })
 
 describe('shouldShowTerminalComposeBar', () => {

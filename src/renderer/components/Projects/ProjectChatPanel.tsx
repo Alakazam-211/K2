@@ -75,6 +75,7 @@ import {
 import { THREAD_LIST_GAP, THREAD_LIST_PADDING, ThreadLoadOlder, ThreadWindowSpacer } from '@/components/Thread/ThreadZenKit'
 import { ThreadMessageColumn } from '@/components/Thread/ThreadColumn'
 import { useRenderWindow } from '@/components/Thread/useRenderWindow'
+import { useFollowOnResize } from '@/hooks/useStickToBottom'
 import { useChatSessionTurn, type ChatSessionTarget } from '@/components/Thread/sessionTurn'
 import { ZenActivityDrawer } from '@/components/Zen/widgets/ZenActivityDrawer'
 import { useIsYouAuthor } from '@/components/Settings/sections/useNotifyPrefs'
@@ -225,12 +226,29 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
     },
   })
   const toNewest = win.toNewest
+  // At the bottom, the list stays at its true bottom when the message box
+  // grows (a new line) or the rows change size; typing never moves it
+  // (Rosson 2026-10-24). Scrolled up, nothing moves.
+  const follow = useFollowOnResize({
+    scroller: () => scrollRef.current,
+    targets: () => [scrollRef.current?.querySelector('[data-thread-column]')],
+    following: () => followingRef.current,
+    key: `${show.id}:${messages === null ? 'loading' : messages.length > 0}`,
+  })
 
+  // Land on the newest on opening, after the person's own send, and when
+  // a message arrives while they're at the bottom. Scrolled up reading
+  // back, an arrival leaves them where they are.
+  const sentRef = useRef(false)
   const lastId = messages && messages.length > 0 ? messages[messages.length - 1].id : null
   const prevLastId = useRef<string | null>(null)
   useEffect(() => {
     if (lastId === null || lastId === prevLastId.current) return
+    const opening = prevLastId.current === null
     prevLastId.current = lastId
+    const sent = sentRef.current
+    sentRef.current = false
+    if (!opening && !sent && !followingRef.current) return
     if (hasSelectionWithin(scrollRef.current)) return
     followingRef.current = true
     // Rows below the window come back first (the newest is drawn, and the
@@ -275,6 +293,8 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
       .then((posted) => {
         draftApi.current?.set('')
         clearProjectChatDraft(show.id)
+        // The person's own message: the list lands on it when it shows.
+        sentRef.current = true
         setLastPost({
           messageId: posted.id,
           delivered: posted.delivered,
@@ -400,7 +420,10 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
           style={{ padding: THREAD_LIST_PADDING, overflowAnchor: 'none' }}
           onScroll={(e) => {
             const el = e.currentTarget
-            if (el.clientHeight > 0) followingRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 32
+            // A clamp from the box changing height is layout, not the person.
+            if (el.clientHeight > 0 && !follow.layoutScroll(el)) {
+              followingRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 32
+            }
             win.onScroll()
           }}
         >

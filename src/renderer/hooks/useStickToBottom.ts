@@ -160,3 +160,63 @@ export function useStickToBottom<T extends HTMLElement>({
 
   return { ref, onScroll, scrollToBottom, holdForPrepend, isAtBottom }
 }
+
+export interface FollowOnResizeOptions {
+  /** The scrolling element. */
+  scroller: () => HTMLElement | null
+  /** More elements whose size changes move the bottom (the rows' column). */
+  targets?: () => Array<Element | null | undefined>
+  /** The list follows its newest (the person is at the bottom). */
+  following: () => boolean
+  /** Re-attach when this changes (the list mounted, another chat). */
+  key: unknown
+}
+
+export interface FollowOnResize {
+  /** From the list's scroll handler, first: true when this scroll is a
+   *  resize's clamp (the box changed height since last seen), not the
+   *  person; it re-pinned if following, and must not unpin. */
+  layoutScroll: (el: HTMLElement) => boolean
+}
+
+/** The stick-to-bottom rule above for a list that keeps its own
+ *  "following" flag (the render-window chats: a ticket's discussion, the
+ *  project chat; the Thread overlay does the same inline). While following,
+ *  a size change (the message box growing as the person types, a split
+ *  resize, content growing) re-pins to the true bottom before paint;
+ *  scrolled up, nothing moves. */
+export function useFollowOnResize({ scroller, targets, following, key }: FollowOnResizeOptions): FollowOnResize {
+  const opts = useRef({ scroller, targets, following })
+  opts.current = { scroller, targets, following }
+  const lastClient = useRef(0)
+
+  const pin = useCallback((el: HTMLElement) => {
+    if (el.clientHeight === 0) return
+    lastClient.current = el.clientHeight
+    if (!opts.current.following()) return
+    const bottom = scrollBottomOf(el)
+    if (el.scrollTop !== bottom) el.scrollTop = bottom
+  }, [])
+
+  useEffect(() => {
+    const el = opts.current.scroller()
+    if (!el) return
+    lastClient.current = el.clientHeight
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => pin(el))
+    ro.observe(el)
+    for (const t of opts.current.targets?.() ?? []) if (t) ro.observe(t)
+    return () => ro.disconnect()
+  }, [key, pin])
+
+  const layoutScroll = useCallback(
+    (el: HTMLElement): boolean => {
+      if (el.clientHeight === 0 || el.clientHeight === lastClient.current) return false
+      pin(el)
+      return true
+    },
+    [pin],
+  )
+
+  return { layoutScroll }
+}

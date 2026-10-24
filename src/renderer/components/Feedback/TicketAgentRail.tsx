@@ -50,6 +50,7 @@ import {
 import { THREAD_LIST_GAP, THREAD_LIST_PADDING, ThreadWindowSpacer } from '@/components/Thread/ThreadZenKit'
 import { ThreadMessageColumn } from '@/components/Thread/ThreadColumn'
 import { useRenderWindow } from '@/components/Thread/useRenderWindow'
+import { useFollowOnResize } from '@/hooks/useStickToBottom'
 import { useChatSessionTurn, type ChatSessionTarget } from '@/components/Thread/sessionTurn'
 import { ZenActivityDrawer } from '@/components/Zen/widgets/ZenActivityDrawer'
 import { useIsYouAuthor } from '@/components/Settings/sections/useNotifyPrefs'
@@ -398,27 +399,46 @@ export function ThreadTab({
   const onWindowScroll = win.onScroll
   // The list (and its scroller) mounts once the ticket loads.
   const listShown = item !== null && !error
+  // At the bottom, the list stays at its true bottom when the message box
+  // grows (a new line) or the rows change size; typing never moves it
+  // (Rosson 2026-10-24). Scrolled up, nothing moves.
+  const follow = useFollowOnResize({
+    scroller,
+    targets: () => [scrollRef.current],
+    following: () => followingRef.current,
+    key: `${ticketId}:${listShown}`,
+  })
+  const layoutScroll = follow.layoutScroll
   useEffect(() => {
     const el = scrollRef.current?.parentElement
     if (!el) return
     const onScroll = (): void => {
-      if (el.clientHeight > 0) followingRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 32
+      // A clamp from the box changing height is layout, not the person.
+      if (el.clientHeight > 0 && !layoutScroll(el)) {
+        followingRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 32
+      }
       onWindowScroll()
     }
     el.addEventListener('scroll', onScroll, { passive: true })
     return () => el.removeEventListener('scroll', onScroll)
-  }, [onWindowScroll, listShown])
+  }, [onWindowScroll, layoutScroll, listShown])
 
-  // Keep the newest message in view when the thread grows (and on first
-  // load) — but not while the user is drag-selecting.
+  // Land on the newest on opening, after the person's own send, and when
+  // a message arrives while they're at the bottom. Scrolled up reading
+  // back, an arrival leaves them where they are. Never mid drag-selection.
   const commentCount = item?.comments.length ?? 0
-  const prevCommentCountRef = useRef(-1)
+  const prevCommentCountRef = useRef<{ ticket: string; count: number } | null>(null)
+  const sentRef = useRef(false)
   const toNewest = win.toNewest
   useEffect(() => {
     if (!item) return
-    const grew = commentCount > prevCommentCountRef.current
-    prevCommentCountRef.current = commentCount
-    if (!grew) return
+    const prev = prevCommentCountRef.current
+    const opening = prev === null || prev.ticket !== ticketId
+    prevCommentCountRef.current = { ticket: ticketId, count: commentCount }
+    if (prev && !opening && commentCount <= prev.count) return
+    const sent = sentRef.current
+    sentRef.current = false
+    if (!opening && !sent && !followingRef.current) return
     if (hasSelectionWithin(scrollRef.current)) return
     followingRef.current = true
     // Rows below the window come back first (the newest is drawn, and the
@@ -429,7 +449,7 @@ export function ThreadTab({
       const el = scrollRef.current?.parentElement
       if (el) el.scrollTop = el.scrollHeight
     })
-  }, [item, commentCount, toNewest])
+  }, [item, ticketId, commentCount, toNewest])
 
   const submit = useCallback(
     async (op: () => Promise<void>): Promise<void> => {
@@ -468,6 +488,8 @@ export function ThreadTab({
   // Keep delivered/deliveryReason (D8); a quiet miss is not a store error.
   const send = async (text: string, optionPick: boolean): Promise<void> => {
     const res = await commentFeedback(item.id, text, { optionPick })
+    // The person's own message: the list lands on it when it shows.
+    sentRef.current = true
     setDeliveryMiss(res.delivered === false ? res.deliveryReason ?? 'not delivered' : null)
   }
 

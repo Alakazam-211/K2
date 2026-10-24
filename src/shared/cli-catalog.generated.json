@@ -1200,7 +1200,7 @@
    },
    {
     "name": "daemon",
-    "usage": "k2 daemon <status|start|stop|restart|log|install|uninstall|companion> [...]",
+    "usage": "k2 daemon <status|start|stop|restart|survive|log|install|uninstall|companion> [...]",
     "description": "Manage the local (or, with --host, a remote) K2 daemon."
    },
    {

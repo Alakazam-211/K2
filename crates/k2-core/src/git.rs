@@ -1,7 +1,6 @@
 use git2::{DiffOptions, Repository, StatusOptions, BranchType};
 use serde::Serialize;
 use std::path::Path;
-use std::process::Command;
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -215,9 +214,8 @@ pub fn list_branches(path: &str) -> BranchList {
 
 pub fn list_worktrees(path: &str) -> Vec<WorktreeInfo> {
     // Use git CLI for worktree list since git2 worktree support is limited
-    let output = match Command::new("git")
+    let output = match crate::git_safe::git(path)
         .args(["worktree", "list", "--porcelain"])
-        .current_dir(path)
         .output()
     {
         Ok(o) => o,
@@ -325,9 +323,8 @@ pub fn create_worktree(
     let wt_path_str = worktree_path.to_string_lossy().to_string();
 
     // Always create a new branch from HEAD
-    let output = Command::new("git")
+    let output = crate::git_safe::git(project_path)
         .args(["worktree", "add", "-b", branch_name, &wt_path_str, "HEAD"])
-        .current_dir(project_path)
         .output()
         .map_err(|e| format!("Failed to run git worktree add: {}", e))?;
 
@@ -397,9 +394,8 @@ pub fn checkout_worktree(
     let wt_path_str = worktree_path.to_string_lossy().to_string();
 
     // Checkout existing branch (no -b flag)
-    let output = Command::new("git")
+    let output = crate::git_safe::git(project_path)
         .args(["worktree", "add", &wt_path_str, branch_name])
-        .current_dir(project_path)
         .output()
         .map_err(|e| format!("Failed to run git worktree add: {}", e))?;
 
@@ -436,9 +432,8 @@ pub fn remove_worktree(
 
         if std::fs::rename(wt, &temp_path).is_ok() {
             // Prune git metadata (detach the worktree ref)
-            let _ = Command::new("git")
+            let _ = crate::git_safe::git(project_path)
                 .args(["worktree", "prune"])
-                .current_dir(project_path)
                 .output();
 
             // Move to Trash in background thread (recoverable).
@@ -473,9 +468,8 @@ pub fn remove_worktree(
     // we surface the error and STOP — better to leave the worktree
     // in place and let the user investigate than to permanently
     // destroy their work.
-    let _ = Command::new("git")
+    let _ = crate::git_safe::git(project_path)
         .args(["worktree", "prune"])
-        .current_dir(project_path)
         .output();
     if Path::new(worktree_path).exists() {
         crate::safe_delete::trash(worktree_path).map_err(|e| {
@@ -1208,9 +1202,8 @@ pub fn gather_git_context(project_path: &str) -> serde_json::Value {
     use std::io::Read;
 
     let run = |args: &[&str]| -> String {
-        let mut child = match Command::new("git")
+        let mut child = match crate::git_safe::git(project_path)
             .args(args)
-            .current_dir(project_path)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .spawn()
@@ -1251,8 +1244,8 @@ pub fn gather_git_context(project_path: &str) -> serde_json::Value {
     serde_json::json!({
         "branch": run(&["rev-parse", "--abbrev-ref", "HEAD"]),
         "status": run(&["status", "--short"]),
-        "diffStat": run(&["diff", "--stat"]),
-        "stagedStat": run(&["diff", "--cached", "--stat"]),
+        "diffStat": run(&["diff", "--no-ext-diff", "--no-textconv", "--stat"]),
+        "stagedStat": run(&["diff", "--no-ext-diff", "--no-textconv", "--cached", "--stat"]),
         "recentLog": run(&["log", "--oneline", "-5"]),
     })
 }

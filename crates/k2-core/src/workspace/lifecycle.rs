@@ -17,9 +17,8 @@ use std::path::Path;
 use crate::agent_hooks::{emit, HookEvent};
 
 fn run_git(args: &[&str], cwd: &str) -> Option<String> {
-    std::process::Command::new("git")
+    crate::git_safe::git(cwd)
         .args(args)
-        .current_dir(cwd)
         .output()
         .ok()
         .and_then(|o| {

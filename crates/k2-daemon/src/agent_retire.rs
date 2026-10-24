@@ -120,7 +120,7 @@ impl GitGuard {
 }
 
 fn run_git(dir: &str, args: &[&str]) -> Option<String> {
-    std::process::Command::new("git")
+    k2_core::git_safe::command()
         .arg("-C")
         .arg(dir)
         .args(args)

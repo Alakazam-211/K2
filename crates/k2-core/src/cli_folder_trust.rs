@@ -242,9 +242,8 @@ fn git_root(path: &Path) -> Option<PathBuf> {
 
 /// Main checkout for a worktree: parent of `git rev-parse --git-common-dir`.
 fn git_common_workdir(path: &Path) -> Option<PathBuf> {
-    let out = std::process::Command::new("git")
+    let out = crate::git_safe::git(path)
         .args(["rev-parse", "--git-common-dir"])
-        .current_dir(path)
         .output()
         .ok()?;
     if !out.status.success() {

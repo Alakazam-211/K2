@@ -108,7 +108,7 @@ pub fn handle_git_info(params: &HashMap<String, String>) -> CliResponse {
 pub fn git_cli_present() -> bool {
     static PRESENT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *PRESENT.get_or_init(|| {
-        std::process::Command::new("git")
+        k2_core::git_safe::command()
             .arg("--version")
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -616,9 +616,8 @@ pub fn handle_git_prune_worktrees(body: &[u8]) -> CliResponse {
         Ok(v) => v,
         Err(r) => return r,
     };
-    let _ = std::process::Command::new("git")
+    let _ = k2_core::git_safe::git(&b.project_path)
         .args(["worktree", "prune"])
-        .current_dir(&b.project_path)
         .output();
 
     let db = db::shared();

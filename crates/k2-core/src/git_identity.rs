@@ -35,7 +35,7 @@ pub fn ensure_git_identity() -> Result<(), String> {
 }
 
 fn git_config_get(key: &str) -> Option<String> {
-    let out = Command::new("git")
+    let out = crate::git_safe::command()
         .args(["config", "--get", key])
         .output()
         .ok()?;
@@ -51,7 +51,7 @@ fn git_config_get(key: &str) -> Option<String> {
 }
 
 fn git_config_set_global(key: &str, value: &str) -> Result<(), String> {
-    let out = Command::new("git")
+    let out = crate::git_safe::command()
         .args(["config", "--global", key, value])
         .output()
         .map_err(|e| format!("git config --global {key}: {e}"))?;

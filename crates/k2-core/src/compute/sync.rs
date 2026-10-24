@@ -12,12 +12,11 @@ use std::process::{Command, Stdio};
 
 use super::proto::crypto::{self, Sha256Stream};
 
+/// Hardened (no hooks, no fsmonitor, no ext diff: [`crate::git_safe`]),
+/// with `-C` so a missing folder is git's own error message.
 fn git(dir: &Path) -> Command {
-    let mut c = Command::new("git");
+    let mut c = crate::git_safe::command();
     c.arg("-C").arg(dir);
-    c.env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .stdin(Stdio::null());
     c
 }
 
@@ -105,7 +104,7 @@ pub fn is_dirty(root: &Path) -> Result<bool, String> {
 /// untracked files not ignored). The same lists [`create_dirty_blob`] reads.
 pub fn dirty_counts(root: &Path) -> Result<(usize, usize), String> {
     let mut c = git(root);
-    c.args(["diff", "--name-only", "HEAD"]);
+    c.args(["diff", "--no-ext-diff", "--no-textconv", "--name-only", "HEAD"]);
     let changed = run(c, "list changed files")?.lines().filter(|l| !l.is_empty()).count();
     let mut c = git(root);
     c.args(["ls-files", "--others", "--exclude-standard"]);
@@ -192,12 +191,14 @@ pub fn create_bundle(root: &Path, commit: &str, have: &[String], job_id: &str, o
     let tmp = out.with_extension("tmp-repo");
     let _ = std::fs::remove_dir_all(&tmp);
     let result = (|| {
+        // git_safe: allow (a throwaway bare repo K2 just made; no work tree, own env)
         let mut c = Command::new("git");
         c.args(["init", "--bare", "-q"]).arg(&tmp).env("GIT_TERMINAL_PROMPT", "0").stdin(Stdio::null());
         run(c, "make the bundle repo")?;
         std::fs::write(tmp.join("objects/info/alternates"), format!("{}\n", objects.display()))
             .map_err(|e| format!("write alternates: {e}"))?;
         let gd = |args: &[&str]| {
+            // git_safe: allow (the same throwaway bare repo, by --git-dir)
             let mut c = Command::new("git");
             c.arg("--git-dir").arg(&tmp).args(args).env("GIT_TERMINAL_PROMPT", "0").stdin(Stdio::null());
             c
@@ -249,7 +250,7 @@ pub fn create_dirty_blob(root: &Path, out: &Path, cap: u64) -> Result<(String, u
         let base = staging.join("k2-dirty");
         std::fs::create_dir_all(base.join("untracked")).map_err(|e| format!("staging: {e}"))?;
         let mut c = git(root);
-        c.args(["diff", "--binary", "HEAD"]);
+        c.args(["diff", "--no-ext-diff", "--no-textconv", "--binary", "HEAD"]);
         let diff = c.output().map_err(|e| format!("git diff: {e}"))?;
         if !diff.status.success() {
             return Err(format!("git diff: {}", String::from_utf8_lossy(&diff.stderr).trim()));

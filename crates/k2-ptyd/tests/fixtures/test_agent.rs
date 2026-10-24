@@ -118,6 +118,8 @@ fn survive(dir: &str, every_ms: u64) {
             libc::tcsetattr(0, libc::TCSANOW, &t);
         }
     }
+    // The vault's per-session secrets dir this agent was handed (if any).
+    std::fs::write(dir.join("secrets_dir"), std::env::var("K2_SECRETS_DIR").unwrap_or_default()).unwrap();
     std::fs::write(dir.join("pid"), std::process::id().to_string()).unwrap();
     {
         let dir = dir.clone();
@@ -149,6 +151,17 @@ fn survive(dir: &str, every_ms: u64) {
                 if hups > 0 {
                     std::fs::write(dir.join("sighup"), hups.to_string()).unwrap();
                 }
+                // `thread-req` = "<addr>\n<text>": post it to that Thread as
+                // this agent (its passport), log `<text> <status>`.
+                if let Ok(req) = std::fs::read_to_string(dir.join("thread-req")) {
+                    let _ = std::fs::remove_file(dir.join("thread-req"));
+                    if let Some((addr, text)) = req.split_once('\n') {
+                        let form = format!("addr={}&text={}&via=thread", form_enc(addr.trim()), form_enc(text.trim()));
+                        let r = cell_request("POST", "/cli/thread/post", Some(&form));
+                        let mut tl = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("thread.log")).unwrap();
+                        writeln!(tl, "{} {r}", text.trim()).unwrap();
+                    }
+                }
                 std::thread::sleep(std::time::Duration::from_secs(1));
             }
         });
@@ -167,6 +180,12 @@ fn survive(dir: &str, every_ms: u64) {
 
 /// `GET /cli/whoami` over the per-cell socket; the status code or `ERR:…`.
 fn hook_call() -> String {
+    cell_request("GET", "/cli/whoami", None)
+}
+
+/// One request over `$K2_HOOK_SOCK` with `$K2_HOOK_TOKEN` (form body for a
+/// POST); the status code or `ERR:…`.
+fn cell_request(method: &str, path: &str, form: Option<&str>) -> String {
     use std::io::Read;
     let (Ok(sock), Ok(token)) = (std::env::var("K2_HOOK_SOCK"), std::env::var("K2_HOOK_TOKEN")) else {
         return "ERR:no_passport".into();
@@ -177,7 +196,12 @@ fn hook_call() -> String {
     };
     let _ = s.set_read_timeout(Some(std::time::Duration::from_secs(10)));
     let _ = s.set_write_timeout(Some(std::time::Duration::from_secs(10)));
-    if let Err(e) = write!(s, "GET /cli/whoami HTTP/1.1\r\nHost: k2\r\nAuthorization: Bearer {token}\r\nConnection: close\r\n\r\n") {
+    let body = form.unwrap_or("");
+    let head = format!(
+        "{method} {path} HTTP/1.1\r\nHost: k2\r\nAuthorization: Bearer {token}\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    if let Err(e) = s.write_all(head.as_bytes()) {
         return format!("ERR:write:{}", e.kind());
     }
     let mut raw = Vec::new();
@@ -187,7 +211,22 @@ fn hook_call() -> String {
         }
     }
     let text = String::from_utf8_lossy(&raw);
-    text.split_whitespace().nth(1).unwrap_or("ERR:empty").to_string()
+    let status = text.split_whitespace().nth(1).unwrap_or("ERR:empty").to_string();
+    if method == "POST" && !status.starts_with('2') {
+        // Failed writes carry the daemon's reason (one line) for the log.
+        let body: String = text.split_once("\r\n\r\n").map(|(_, b)| b).unwrap_or("").chars().take(200).collect();
+        return format!("{status} {}", body.replace('\n', " "));
+    }
+    status
+}
+
+fn form_enc(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (b as char).to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
 }
 
 fn sleep_forever() -> ! {

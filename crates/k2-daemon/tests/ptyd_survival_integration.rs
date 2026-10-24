@@ -277,6 +277,25 @@ fn served(r: &str) -> bool {
     r == "200" || r == "400"
 }
 
+/// The workspace the agent runs in (name = its Thread address).
+const WS: &str = "survive";
+
+/// Ask the agent to post `text` to its workspace's Thread with its own
+/// passport over its cell socket; wait for a 2xx and for the text to read
+/// back from the Thread.
+fn agent_thread_post(port: u16, token: &str, dir: &Path, text: &str) {
+    std::fs::write(dir.join("thread-req"), format!("{WS}\n{text}")).unwrap();
+    let status = wait_for(&format!("the agent's Thread post {text}"), Duration::from_secs(15), || {
+        let log = std::fs::read_to_string(dir.join("thread.log")).ok()?;
+        log.lines().find_map(|l| l.strip_prefix(&format!("{text} ")).map(str::to_string))
+    });
+    assert!(status.starts_with('2'), "the agent's Thread post {text} returned {status}");
+    wait_for(&format!("{text} in the Thread"), Duration::from_secs(10), || {
+        let (s, b) = http(port, "GET", &format!("/cli/thread?token={token}&addr={WS}&limit=50"), "");
+        (s == 200 && b.contains(text)).then_some(())
+    });
+}
+
 fn now_ms() -> u128 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()
 }
@@ -294,7 +313,32 @@ fn agents_survive_daemon_restarts_and_end_on_stop() {
     let port = h.start();
     let token = h.token();
     let dir = h.home.join("agent");
-    let ws = h.home.join("ws");
+    // Folder name = workspace name = its handle (the Thread address).
+    let ws = h.home.join(WS);
+    std::fs::create_dir_all(&ws).unwrap();
+
+    // A registered workspace with a file-delivered vault secret, so the
+    // agent gets a passport bound to it, a Thread, and a secrets dir.
+    let persona = k2_core::workspace::agent_identity::workspace_agent_md_path(&ws.to_string_lossy());
+    std::fs::create_dir_all(persona.parent().expect("persona dir")).unwrap();
+    std::fs::write(&persona, format!("---\nname: {WS}\n---\n# {WS}\n")).unwrap();
+    let (s, b) = http(port, "POST", &format!("/cli/projects/create?token={token}"), &serde_json::json!({"name": WS, "path": ws.to_string_lossy()}).to_string());
+    assert_eq!(s, 200, "projects/create: {b}");
+    let project_id = serde_json::from_str::<serde_json::Value>(&b).unwrap()["id"].as_str().unwrap_or_else(|| panic!("project id in {b}")).to_string();
+    // Its default agent is a custom preset (the fake agent): K2 owns such a
+    // workspace's Thread id (GL44), so its Thread works with no model CLI.
+    let preset = uuid::Uuid::new_v4().to_string();
+    let (s, b) = http(port, "POST", &format!("/cli/presets/create?token={token}"), &serde_json::json!({"id": preset, "label": "survive-agent", "command": "k2-ptyd-test-agent"}).to_string());
+    assert_eq!(s, 200, "presets/create: {b}");
+    let (s, b) = http(port, "POST", &format!("/cli/projects/update?token={token}"), &serde_json::json!({"id": project_id, "defaultAgent": preset}).to_string());
+    assert_eq!(s, 200, "projects/update: {b}");
+    let secret = {
+        use base64::Engine as _;
+        serde_json::json!({"name": "SURVIVE_FILE", "kind": "generic", "scope": "workspace", "workspace": WS, "delivery": "file",
+            "hosts": ["api.example.com"], "valueB64": base64::engine::general_purpose::STANDARD.encode("kept-across-restarts")})
+    };
+    let (s, b) = http(port, "POST", &format!("/cli/vault/set?token={token}"), &secret.to_string());
+    assert_eq!(s, 200, "vault/set: {b}");
 
     // Spawn the fake agent like the renderer opens a tab.
     let body = serde_json::json!({
@@ -316,6 +360,11 @@ fn agents_survive_daemon_restarts_and_end_on_stop() {
     assert_ne!(ptyd, h.daemon_pid());
     wait_for("the agent's first served hook call", Duration::from_secs(15), || hook_lines(&dir).iter().any(|(_, r)| served(r)).then_some(()));
     let mut past = assert_no_gap(port, &token, &sid, 0, "spawn");
+    let secrets = PathBuf::from(std::fs::read_to_string(dir.join("secrets_dir")).expect("secrets_dir record"));
+    assert!(!secrets.as_os_str().is_empty(), "the agent got no K2_SECRETS_DIR");
+    let secret_file = secrets.join("SURVIVE_FILE");
+    assert_eq!(std::fs::read_to_string(&secret_file).expect("secret file at spawn"), "kept-across-restarts");
+    agent_thread_post(port, &token, &dir, "before-restarts");
 
     let mut port = port;
     for (i, mode) in [Restart::Sigterm, Restart::Kill9, Restart::Route, Restart::Sigterm, Restart::Kill9].into_iter().enumerate() {
@@ -360,6 +409,18 @@ fn agents_survive_daemon_restarts_and_end_on_stop() {
         assert_eq!(v["reused"], true, "{what}: reattach spawned instead of reusing: {resp}");
         let log = std::fs::read_to_string(h.home.join(format!("daemon-{}.log", h.boots))).unwrap_or_default();
         assert!(log.contains(&format!("adopted session={sid}")), "{what}: the boot log has no adoption line");
+        // P36: the vault secrets dir survived (and wasn't swept by the
+        // vault's first tick before B1).
+        assert_eq!(
+            std::fs::read_to_string(&secret_file).unwrap_or_else(|e| panic!("{what}: secret file gone: {e}")),
+            "kept-across-restarts"
+        );
+        // DA2: the adopted session has an activity row.
+        let (s, b) = http(port, "GET", &format!("/cli/activity/snapshot?token={token}"), "");
+        assert_eq!(s, 200, "{what}: activity snapshot: {b}");
+        assert!(b.contains(&sid), "{what}: no activity row for the adopted session: {b}");
+        // The agent's own Thread write (its passport) lands after the restart.
+        agent_thread_post(port, &token, &dir, &format!("after-restart-{}", i + 1));
     }
 
     // L2: an explicit stop ends the agent (and ptyd, which then holds nothing).
@@ -369,6 +430,7 @@ fn agents_survive_daemon_restarts_and_end_on_stop() {
     h.wait_daemon_exit(Duration::from_secs(20));
     wait_for("the agent to end after a stop", Duration::from_secs(10), || (!alive(pid)).then_some(()));
     wait_for("ptyd to exit after a stop", Duration::from_secs(10), || (!alive(ptyd)).then_some(()));
+    assert!(!secrets.exists(), "a stop removes the ended session's secrets dir");
     h.agent_pid = None;
     h.ptyd_pid = None;
     let _ = std::fs::remove_dir_all(&h.home);

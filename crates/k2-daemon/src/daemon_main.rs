@@ -1397,6 +1397,13 @@ async fn async_main() {
     // Background, never blocks boot; K2_HANDOFF_DROPIN=off opts out.
     crate::handoff_setup::ensure_on_boot();
 
+    // akzm 2026-10-24: a runtime dir under /run/user/<uid> or /dev/shm
+    // with no linger is deleted by systemd-logind when the user's last
+    // login session ends (frpc.toml, agents' secret files). One WARN with
+    // the fix; the unit's RuntimeDirectory=k2 (above drop-in) avoids it
+    // from the next unit start.
+    crate::vault::spawn::warn_logind_risk_at_boot();
+
     // prd-dns-pending-and-cutover-safety-v1 P1: re-check `pending_ns`
     // custom domains with k2.dev by itself (one read-only GET per tick,
     // 1 min → daily by age), so a zone k2.dev flipped active opens record

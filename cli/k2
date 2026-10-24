@@ -4006,6 +4006,14 @@ RestartSec=2
 # OOM-killed agent into a stop + restart of the whole daemon; continue lets
 # only that process die. (The stage H drop-in carries the same line.)
 OOMPolicy=continue
+# The unit's own runtime dir (/run/k2; XDG_RUNTIME_DIR/k2 for a user unit)
+# holds frpc.toml and agents' secret files: systemd-logind deletes
+# /run/user/<uid> and the user's /dev/shm files when their last login
+# session ends. Preserve keeps it across restarts (frpc and agents outlive
+# the daemon process). (The stage H drop-in carries the same lines.)
+RuntimeDirectory=k2
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
 
 [Install]
 WantedBy=default.target
@@ -21403,9 +21411,11 @@ EOF
 k2 vault doctor [--json]
 
 Problems: no confirmed recovery key, tamper, rotations due, published
-services on the old inherited environment, and secret-looking values in
-plain .env files in your workspace (top level). The last line says which
-.env names it checks; other names aren't flagged. Exit 1 on an error.
+services on the old inherited environment, secret-looking values in
+plain .env files in your workspace (top level), and (Linux) a runtime
+dir systemd-logind can delete under the daemon (no linger; the warning
+names the fix). The last line says which .env names it checks; other
+names aren't flagged. Exit 1 on an error.
 
 Example: k2 vault doctor
 EOF

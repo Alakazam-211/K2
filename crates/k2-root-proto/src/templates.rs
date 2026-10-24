@@ -82,6 +82,14 @@ pub fn hardening_dropin() -> &'static str {
 ///   box). If the daemon itself is OOM-killed, its main process exits and
 ///   `Restart=always` still restarts it. Applies on `daemon-reload`, no
 ///   restart needed.
+/// - `RuntimeDirectory=k2` + `RuntimeDirectoryMode=0700` +
+///   `RuntimeDirectoryPreserve=yes` (0.46.4, akzm 2026-10-24): the
+///   daemon's private runtime dir (frpc.toml, agents' secret files) is the
+///   unit's own `/run/k2` (`$RUNTIME_DIRECTORY`), not `/run/user/<uid>` or
+///   `/dev/shm`, which systemd-logind deletes when the user's last login
+///   session ends (no linger, `RemoveIPC=yes`). `Preserve=yes`: frpc (and
+///   k2-ptyd agents) outlive a daemon stop under `KillMode=process`, so
+///   the dir must too. Takes effect at the unit's next start.
 ///
 /// Shared with the provisioning templates and the user-unit writer, so a
 /// new box, a migrated box and a user-scope daemon all carry the same lines.
@@ -94,7 +102,10 @@ pub fn handoff_dropin() -> &'static str {
      KillMode=process\n\
      NotifyAccess=main\n\
      ExecReload=/bin/kill -USR2 $MAINPID\n\
-     OOMPolicy=continue\n"
+     OOMPolicy=continue\n\
+     RuntimeDirectory=k2\n\
+     RuntimeDirectoryMode=0700\n\
+     RuntimeDirectoryPreserve=yes\n"
 }
 
 /// front443's socket unit (`/etc/systemd/system/k2-front-443.socket`,
@@ -245,9 +256,28 @@ mod tests {
                 "NotifyAccess=main",
                 "ExecReload=/bin/kill -USR2 $MAINPID",
                 "OOMPolicy=continue",
+                "RuntimeDirectory=k2",
+                "RuntimeDirectoryMode=0700",
+                "RuntimeDirectoryPreserve=yes",
             ]
         );
         assert!(d.ends_with('\n'));
+    }
+
+    /// The runtime dir systemd-logind can't delete (akzm 2026-10-24): the
+    /// unit's own `/run/k2`, private, kept across restarts (frpc and
+    /// k2-ptyd agents outlive a daemon stop under `KillMode=process`).
+    #[test]
+    fn handoff_dropin_gives_the_daemon_its_own_runtime_dir() {
+        let d = handoff_dropin();
+        let lines: Vec<&str> = d.lines().collect();
+        let at = |k: &str| lines.iter().position(|l| *l == k).unwrap_or_else(|| panic!("missing {k:?} in {d}"));
+        let service = at("[Service]");
+        for want in ["RuntimeDirectory=k2", "RuntimeDirectoryMode=0700", "RuntimeDirectoryPreserve=yes"] {
+            assert!(at(want) > service, "{want} must sit in [Service]: {d}");
+        }
+        assert_eq!(d.matches("RuntimeDirectory=").count(), 1, "{d}");
+        assert!(!d.contains("RuntimeDirectoryPreserve=no") && !d.contains("RuntimeDirectoryPreserve=restart"));
     }
 
     #[test]

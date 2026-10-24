@@ -534,6 +534,15 @@ fn doctor(vault: &LocalVault, c: &VaultCaller) -> Result<Value, VaultError> {
     if st.key_home == "file" {
         findings.push(json!({ "level": "info", "code": "key_is_a_file", "message": honest_line("file") }));
     }
+    if let Some(r) = crate::vault::spawn::runtime_logind_risk() {
+        findings.push(json!({
+            "level": "warning",
+            "code": "runtime_dir_logind",
+            "message": r.message(),
+            "user": r.user,
+            "dirs": r.dirs.iter().map(|d| d.display().to_string()).collect::<Vec<_>>(),
+        }));
+    }
     for m in vault.list(&ListFilter::default(), &c.actor)? {
         if let (Some(d), Ok(u)) = (m.rotate_every_days, chrono::DateTime::parse_from_rfc3339(&m.updated_at)) {
             if chrono::Utc::now().signed_duration_since(u.with_timezone(&chrono::Utc)) > chrono::Duration::days(i64::from(d)) {

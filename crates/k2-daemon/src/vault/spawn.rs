@@ -5,11 +5,15 @@
 //! minted. Only secrets whose delivery is `file` or `env` for this
 //! session arrive; fetch/proxy secrets never touch the environment.
 //!
-//! Files go to a memory-backed directory, never `/tmp` or the home folder:
-//! Linux `$XDG_RUNTIME_DIR/k2/secrets`, else `/run/k2/secrets`
-//! (`RuntimeDirectory=k2`), else `/dev/shm/k2-<uid>/secrets`; macOS the
-//! per-user `$TMPDIR/k2-secrets` (private, 0700). No memory filesystem →
-//! file delivery is skipped (`no_memory_fs`) and status says so.
+//! Files go to a memory-backed directory, never `/tmp` or the home folder.
+//! Linux, the same order as `k2_core::runtime_dir` ([`linux_secrets_candidates`]):
+//! `$K2_RUNTIME_DIR/secrets`, else the daemon unit's own dir
+//! (`RuntimeDirectory=k2` → `$RUNTIME_DIRECTORY/secrets`, `/run/k2/secrets`;
+//! systemd-logind never deletes it, akzm 2026-10-24), else
+//! `$XDG_RUNTIME_DIR/k2/secrets`, `/run/k2/secrets`,
+//! `/dev/shm/k2-<uid>/secrets`. macOS: the per-user `$TMPDIR/k2-secrets`
+//! (private, 0700). No memory filesystem → file delivery is skipped
+//! (`no_memory_fs`) and status says so.
 //! Directories are made 0700 and must not exist yet; files are created
 //! `O_CREAT|O_EXCL|O_NOFOLLOW` 0600. Removed when the session ends and
 //! swept at boot.
@@ -33,12 +37,14 @@ pub fn secrets_root() -> Option<PathBuf> {
     #[cfg(target_os = "linux")]
     {
         let uid = unsafe { libc::geteuid() };
-        let mut candidates: Vec<PathBuf> = vec![];
-        if let Some(x) = std::env::var_os("XDG_RUNTIME_DIR").filter(|x| !x.is_empty()) {
-            candidates.push(PathBuf::from(x).join("k2"));
-        }
-        candidates.push(PathBuf::from("/run/k2"));
-        candidates.push(PathBuf::from(format!("/dev/shm/k2-{uid}")));
+        let env = |k: &str| std::env::var_os(k).filter(|x| !x.is_empty()).map(PathBuf::from);
+        let candidates = linux_secrets_candidates(
+            env(k2_core::runtime_dir::RUNTIME_DIR_ENV).as_deref(),
+            k2_core::runtime_dir::systemd_runtime_directory().as_deref(),
+            env("XDG_RUNTIME_DIR").as_deref(),
+            uid,
+            k2_core::runtime_dir::looks_like_test_process(),
+        );
         for c in candidates {
             let parent_ok = c.parent().is_some_and(|p| p.is_dir());
             if !parent_ok {
@@ -60,6 +66,50 @@ pub fn secrets_root() -> Option<PathBuf> {
     {
         None
     }
+}
+
+/// Linux: the runtime dir and the secrets root's dir, when systemd-logind
+/// can delete them under the running daemon (no linger; see
+/// `k2_core::runtime_dir::logind_risk`). `k2 vault doctor` and the boot
+/// WARN read it.
+pub fn runtime_logind_risk() -> Option<k2_core::runtime_dir::LogindRisk> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    let extra: Vec<PathBuf> = secrets_root().and_then(|r| r.parent().map(Path::to_path_buf)).into_iter().collect();
+    k2_core::runtime_dir::logind_risk(&extra)
+}
+
+/// Boot: one WARN line when [`runtime_logind_risk`] finds a dir at risk.
+pub fn warn_logind_risk_at_boot() {
+    if let Some(r) = runtime_logind_risk() {
+        k2_core::log_debug!("[runtime] WARN: {}", r.message());
+    }
+}
+
+/// Pure Linux order for the dir that holds `secrets/`: the override alone,
+/// else the unit's `$RUNTIME_DIRECTORY` (never for a test process: an
+/// agent inherits it from the daemon unit), then the pre-0.46.4 chain.
+pub fn linux_secrets_candidates(
+    override_dir: Option<&Path>,
+    systemd_dir: Option<&Path>,
+    xdg_runtime_dir: Option<&Path>,
+    uid: u32,
+    is_test: bool,
+) -> Vec<PathBuf> {
+    if let Some(d) = override_dir {
+        return vec![d.to_path_buf()];
+    }
+    let mut v = Vec::new();
+    if let Some(s) = systemd_dir.filter(|_| !is_test) {
+        v.push(s.to_path_buf());
+    }
+    if let Some(x) = xdg_runtime_dir {
+        v.push(x.join("k2"));
+    }
+    v.push(PathBuf::from("/run/k2"));
+    v.push(PathBuf::from(format!("/dev/shm/k2-{uid}")));
+    v
 }
 
 /// Make `dir` 0700 owned by us (create if missing); refuse symlinks and
@@ -362,6 +412,57 @@ mod tests {
         let out3 = materialize(&mut env3, &ws, "s3", true);
         assert!(out3.dir.is_none());
         assert_eq!(env3.get("AS_ENV").map(String::as_str), Some("env-value-1"));
+    }
+
+    #[test]
+    fn secrets_root_order_matches_the_runtime_dir() {
+        let p = PathBuf::from;
+        let xdg = p("/run/user/1001");
+        let unit = p("/run/k2");
+        assert_eq!(
+            linux_secrets_candidates(Some(Path::new("/x/run")), Some(&unit), Some(&xdg), 1001, false),
+            vec![p("/x/run")],
+            "override wins alone"
+        );
+        assert_eq!(
+            linux_secrets_candidates(None, Some(&unit), Some(&xdg), 1001, false),
+            vec![p("/run/k2"), p("/run/user/1001/k2"), p("/run/k2"), p("/dev/shm/k2-1001")],
+            "the unit's dir first, then the old chain"
+        );
+        assert_eq!(
+            linux_secrets_candidates(None, Some(Path::new("/run/other")), Some(&xdg), 1001, true),
+            vec![p("/run/user/1001/k2"), p("/run/k2"), p("/dev/shm/k2-1001")],
+            "a test process never takes the inherited unit dir"
+        );
+        assert_eq!(
+            linux_secrets_candidates(None, None, None, 1001, false),
+            vec![p("/run/k2"), p("/dev/shm/k2-1001")],
+            "unset: the pre-0.46.4 fallbacks"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn secrets_root_follows_the_env() {
+        let t = k2_vault::fsutil::TestDir::new("spawn-root");
+        let over = t.path().join("over");
+        let _o = k2_core::test_env::EnvVar::set(k2_core::runtime_dir::RUNTIME_DIR_ENV, &over);
+        assert_eq!(secrets_root(), Some(over.join("secrets")), "K2_RUNTIME_DIR set");
+        assert!(over.is_dir());
+        assert_eq!(std::fs::metadata(&over).expect("m").permissions().mode() & 0o777, 0o700);
+        drop(_o);
+        let _u = k2_core::test_env::EnvVar::remove(k2_core::runtime_dir::RUNTIME_DIR_ENV);
+        let unit = t.path().join("unit");
+        let xdg = t.path().join("xdg");
+        std::fs::create_dir_all(&xdg).expect("mkdir xdg");
+        let _x = k2_core::test_env::EnvVar::set("XDG_RUNTIME_DIR", &xdg);
+        let _r = k2_core::test_env::EnvVar::set(k2_core::runtime_dir::SYSTEMD_RUNTIME_DIRECTORY_ENV, &unit);
+        let got = secrets_root();
+        if k2_core::runtime_dir::looks_like_test_process() {
+            assert_eq!(got, Some(xdg.join("k2").join("secrets")), "a test process skips the unit dir");
+        } else {
+            assert_eq!(got, Some(unit.join("secrets")), "RUNTIME_DIRECTORY set");
+        }
     }
 
     #[test]

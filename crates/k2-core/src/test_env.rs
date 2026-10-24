@@ -741,13 +741,14 @@ impl DaemonRuntime {
     }
 
     /// `TMPDIR`, `XDG_RUNTIME_DIR` under the root, and an empty
-    /// `K2_RUNTIME_DIR` (so an override inherited from this test process
-    /// cannot win).
+    /// `K2_RUNTIME_DIR` and `RUNTIME_DIRECTORY` (so an override, or the
+    /// daemon unit's `/run/k2` an agent inherits, cannot win).
     pub fn envs(&self) -> Vec<(&'static str, OsString)> {
         vec![
             ("TMPDIR", self.root.join("tmp").into_os_string()),
             ("XDG_RUNTIME_DIR", self.root.join("run").into_os_string()),
             (crate::runtime_dir::RUNTIME_DIR_ENV, OsString::new()),
+            (crate::runtime_dir::SYSTEMD_RUNTIME_DIRECTORY_ENV, OsString::new()),
         ]
     }
 

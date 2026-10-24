@@ -331,6 +331,14 @@ KillMode=control-group
 # OOM-killed agent into a stop + restart of the whole daemon; continue lets
 # only that process die. (The stage H drop-in carries the same line.)
 OOMPolicy=continue
+# The unit's own runtime dir (/run/k2; XDG_RUNTIME_DIR/k2 for a user unit)
+# holds frpc.toml and agents' secret files: systemd-logind deletes
+# /run/user/<uid> and the user's /dev/shm files when their last login
+# session ends. Preserve keeps it across restarts (frpc and agents outlive
+# the daemon process). (The stage H drop-in carries the same lines.)
+RuntimeDirectory=k2
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
 
 [Install]
 WantedBy=multi-user.target

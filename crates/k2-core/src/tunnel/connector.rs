@@ -185,8 +185,9 @@ fn is_executable(p: &Path) -> bool {
 /// the bearer token, so it is identity material too.
 ///
 /// K2 vault (§10.4): outside tests it lives in a private runtime
-/// directory (Linux `$XDG_RUNTIME_DIR/k2` or `/dev/shm/k2-<uid>`, macOS
-/// the per-user temp dir), not in `~/.k2`, so home backups and clones
+/// directory (Linux the daemon unit's `/run/k2`, else `$XDG_RUNTIME_DIR/k2`
+/// or `/dev/shm/k2-<uid>`; macOS the per-user temp dir; see
+/// [`crate::runtime_dir`]), not in `~/.k2`, so home backups and clones
 /// never carry the rendered token.
 pub(crate) fn frpc_config_path() -> PathBuf {
     #[cfg(not(test))]
@@ -196,6 +197,51 @@ pub(crate) fn frpc_config_path() -> PathBuf {
         }
     }
     legacy_frpc_config_path()
+}
+
+/// The tunnel's own files in a runtime dir.
+#[cfg(all(unix, not(test)))]
+const RUNTIME_DIR_FILES: &[&str] = &["frpc.toml", "frpc.pid"];
+
+/// 0.46.4 move onto the daemon unit's `RuntimeDirectory=` (akzm,
+/// 2026-10-24): an frpc the previous daemon left running from an older
+/// runtime dir (`/run/user/<uid>/k2`, `/dev/shm/k2-<uid>`) still holds the
+/// `k2so-<sub>` proxy, so it is reaped before the fresh spawn (else frps
+/// answers "proxy already exists"), and the tunnel's files there go
+/// ([`crate::runtime_dir::clean_superseded_dir`]: K2's names only, no
+/// symlinks). Idempotent, so "once" = the first start after the move.
+/// Never under `cfg(test)`, the `K2_RUNTIME_DIR` override or a test
+/// process ([`crate::runtime_dir::superseded_runtime_dirs`]), and not when
+/// the config is on the `~/.k2` fallback (no runtime dir at all).
+fn reap_superseded_runtime_dirs(current_cfg: &Path) {
+    #[cfg(all(unix, not(test)))]
+    {
+        if current_cfg == legacy_frpc_config_path() {
+            return;
+        }
+        let Some(current) = current_cfg.parent() else { return };
+        for dir in crate::runtime_dir::superseded_runtime_dirs(current) {
+            // By argv, not by file: logind may already have deleted the
+            // config a live frpc was started with.
+            let old_cfg = dir.join("frpc.toml");
+            let was_running = stray_frpc_alive(&old_cfg);
+            if was_running {
+                reap_stray_frpc(&old_cfg);
+            }
+            let removed = crate::runtime_dir::clean_superseded_dir(&dir, RUNTIME_DIR_FILES);
+            if was_running || !removed.is_empty() {
+                crate::log_debug!(
+                    "[tunnel] runtime dir is now {}: {} the frpc started from {}; removed {:?}",
+                    current.display(),
+                    if was_running { "reaped" } else { "no" },
+                    dir.display(),
+                    removed
+                );
+            }
+        }
+    }
+    #[cfg(any(test, not(unix)))]
+    let _ = current_cfg;
 }
 
 /// The pre-vault location (`~/.k2/frpc.toml`): reaped and removed.
@@ -1144,6 +1190,7 @@ pub fn start(
         reap_stray_frpc(&legacy);
         let _ = std::fs::remove_file(&legacy);
     }
+    reap_superseded_runtime_dirs(&frpc_config_path());
 
     // Spawn + supervise. The supervisor gets the config + render inputs so
     // it can rotate relays (re-render frpc.toml, respawn) on repeated

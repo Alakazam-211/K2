@@ -7,7 +7,9 @@
 //! `NotifyAccess=main` (a hand-off can move the unit's main pid),
 //! `ExecReload=` SIGUSR2 (`systemctl reload` = a no-downtime hand-off) and
 //! `OOMPolicy=continue` (an OOM-killed agent in the unit's cgroup no longer
-//! makes systemd stop and restart the whole daemon).
+//! makes systemd stop and restart the whole daemon) and, since 0.46.4,
+//! `RuntimeDirectory=k2` (0700, preserved): the runtime dir systemd-logind
+//! can't delete (`k2_core::runtime_dir`; from the unit's next start).
 //!
 //! - **System unit** (provisioned boxes): through the root helper's
 //!   `daemon handoff-dropin install` (protocol 5). The unit comes from the

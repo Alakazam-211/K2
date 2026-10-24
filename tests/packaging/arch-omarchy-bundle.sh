@@ -127,6 +127,8 @@ contains "unit ExecStart=/usr/bin/k2-daemon" "$ARCH/k2-daemon.service" "ExecStar
 contains "unit WantedBy=default.target" "$ARCH/k2-daemon.service" "WantedBy=default.target"
 contains "unit Restart=always" "$ARCH/k2-daemon.service" "Restart=always"
 matches "unit OOMPolicy=continue (an OOM-killed agent must not stop the daemon)" "$ARCH/k2-daemon.service" '^OOMPolicy=continue$'
+matches "unit RuntimeDirectory=k2 (the runtime dir is the unit's own)" "$ARCH/k2-daemon.service" '^RuntimeDirectory=k2$'
+matches "unit RuntimeDirectoryPreserve=yes (frpc outlives a daemon stop)" "$ARCH/k2-daemon.service" '^RuntimeDirectoryPreserve=yes$'
 contains "PKGBUILD installs user unit path" "$ARCH/PKGBUILD" '/usr/lib/systemd/user/k2-daemon.service'
 contains "PKGBUILD installs home unit" "$ARCH/PKGBUILD" '/usr/lib/systemd/user/k2-daemon-home.service'
 contains "unit requires home service" "$ARCH/k2-daemon.service" "Requires=k2-daemon-home.service"

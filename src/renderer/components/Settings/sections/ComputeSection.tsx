@@ -20,6 +20,9 @@
 //   E. Node admin (prd-k2-node-admin-v1 S10, `ComputeAdminParts`): the
 //      owner's Approvals above the nodes, and per node its health, pending
 //      approvals, k2-node update state and offline alert.
+//   F. Node sharing (prd-macos-tenant-compute-v1 §5, `ComputeServersParts`):
+//      per node, the servers on it (limits, add, pause, revoke, make owner)
+//      and its queue; on a node another server owns, "Shared by …".
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { SettingEntry } from '../searchManifest'
@@ -79,6 +82,7 @@ import { getAccountAccessToken } from './K2ConnectSection'
 import { listAccountServers, requestEnrollTicket } from '../lib/compute-account'
 import { MachinesPart } from './ComputeAccessParts'
 import { ApprovalsPanel, NodeAdminPanel } from './ComputeAdminParts'
+import { NodeSharingPanel } from './ComputeServersParts'
 
 export const COMPUTE_MANIFEST: SettingEntry[] = [
   { id: 'compute.preview', section: 'compute', label: 'Compute nodes (preview)', description: 'Let this server run jobs on your other machines', keywords: ['compute', 'node', 'nodes', 'preview', 'k2 compute', 'offload', 'build'] },
@@ -86,6 +90,7 @@ export const COMPUTE_MANIFEST: SettingEntry[] = [
   { id: 'compute.nodes', section: 'compute', label: 'Nodes of this server', description: 'Machines that run jobs for this server', keywords: ['compute', 'node', 'pause', 'drain', 'resume', 'confirm', 'rename', 'remove'] },
   { id: 'compute.add-node', section: 'compute', label: 'Add a machine with an enroll code', description: 'Make an enroll code for another machine', keywords: ['enroll', 'code', 'install', 'pair', 'add node'] },
   { id: 'compute.grants', section: 'compute', label: 'Compute grants', description: 'Which workspaces may use each node', keywords: ['grant', 'revoke', 'workspace', 'limits'] },
+  { id: 'compute.servers', section: 'compute', label: 'Servers on a node', description: 'Share a node with your other servers or other people’s; change its owner', keywords: ['servers', 'share', 'shared', 'tenant', 'owner', 'make owner', 'limits', 'queue', 'sas'] },
   { id: 'compute.jobs', section: 'compute', label: 'Recent compute jobs', description: 'Jobs and audit lines', keywords: ['jobs', 'events', 'audit', 'log'] },
   { id: 'compute.this-computer', section: 'compute', label: 'Make this computer a compute node', description: 'Let agents on one of your servers run programs here', keywords: ['this computer', 'k2node', 'node', 'enable', 'policy', 'cpu', 'memory'] },
 ]
@@ -646,7 +651,9 @@ function NodeCard({
             </p>
           ) : null}
           <GrantsBlock node={node} grants={grants} onChanged={onChanged} />
-          <NodeAdminPanel node={node.name} />
+          <NodeSharingPanel node={node} />
+          {/* Another server owns a tenant node: its admin is that server's (V52). */}
+          {node.role === 'tenant' ? null : <NodeAdminPanel node={node.name} />}
         </div>
       )}
       {error ? <Callout tone="error">{error}</Callout> : null}

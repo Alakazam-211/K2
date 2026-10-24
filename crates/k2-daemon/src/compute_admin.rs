@@ -2091,8 +2091,11 @@ fn servers_list(who: &Who, params: &HashMap<String, String>, mgr: Option<&Manage
         (None, Some((m, s))) => (Some(m), Some(s)),
         (None, None) => (None, None),
     };
+    // Who may do the owner-only acts here (revoke, change the owner; Q9):
+    // the server's owner in person, never an Admin login or an agent.
+    let owner_acts = who.is_owner() && who.passport().is_none() && mgr.is_none();
     Ok(json!({"node": node.name, "role": "owner", "shared": node.shared, "maxServers": max_servers, "solo": solo,
-        "servers": list, "requests": pending, "note": note}))
+        "servers": list, "requests": pending, "note": note, "ownerActs": owner_acts}))
 }
 
 fn limits_from(v: &Value) -> R<pshare::ShareOverrides> {

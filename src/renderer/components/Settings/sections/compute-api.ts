@@ -15,6 +15,7 @@
 
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { primaryScope, scopeForHost, type ServerScope } from '@/kessel/server-scope'
+import type { AdminRequest } from './compute-admin-api'
 
 // ── Types (camelCase from the daemon unless noted) ──────────────────────
 
@@ -64,6 +65,134 @@ export interface ComputeNode {
   sas?: string | null
   /** Switched off in Settings: draining, removed once its jobs end. */
   retiring?: boolean
+  /** Node sharing (0.46.3+): only on shared nodes and tenants. `tenant` =
+   *  another server owns the node (no admin from here). */
+  role?: 'owner' | 'tenant'
+  share?: NodeShareJson
+}
+
+/** One server's share (the wire's own snake_case names, `ShareLimits`). */
+export interface ShareLimitsJson {
+  weight: number
+  top_class: 'batch' | 'interactive' | 'gate'
+  gate: boolean
+  exclusive: boolean
+  max_running: number
+  max_queued: number
+  cpu_hours_day: number
+  max_job_secs: number
+  max_cpus: number
+  max_mem_gb: number
+  disk_gb: number
+  network: 'on' | 'no-lan' | 'none'
+}
+
+/** `share` in the nodes JSON (prd-compute-shared-queue-v1 §4.2): who shares
+ *  the node and this server's own share there. */
+export interface NodeShareJson {
+  shared: boolean
+  role: 'owner' | 'tenant'
+  ownerLabel: string | null
+  servers: number | null
+  state: string | null
+  expiresAt: number | null
+  expiresInSecs: number | null
+  limits: ShareLimitsJson | null
+  running: number | null
+  queued: number | null
+  cpuSecsToday: number | null
+  /** The daemon's one-line summary ("running 1/1 · queued 2/10 · …"). */
+  line: string | null
+}
+
+/** One server on a node this server owns (`GET compute/nodes/servers`). */
+export interface NodeServerRow {
+  slot: number
+  label: string
+  /** The full key fingerprint once enrolled, else the code's 16 hex. */
+  fp?: string | null
+  /** pending | active | paused | expired | revoked | refused */
+  state: string
+  trust: 'own' | 'team'
+  role: 'owner' | 'tenant'
+  limits?: ShareLimitsJson
+  /** The node's runtime facts (snake_case). */
+  usage?: { running?: number; queued?: number; cpu_secs_today?: number; online?: boolean } | null
+  expiresAt?: number | null
+  expiresInSecs?: number
+  weight?: number
+  /** "482 913" while pending: read it to that server's owner. */
+  sas?: string | null
+  /** Why its attach is refused (`server_too_old`), when `refused`. */
+  refusal?: string | null
+  addedAt?: number | null
+  addedBy?: string | null
+  /** A solo node: just this server. */
+  solo?: boolean
+}
+
+export interface NodeServersOwner {
+  node: string
+  role: 'owner'
+  shared: boolean
+  maxServers: number | null
+  solo: boolean | null
+  servers: NodeServerRow[]
+  /** Open `servers.*` requests (adds, widenings, owner changes) on this node. */
+  requests: AdminRequest[]
+  note: string | null
+  /** The caller may revoke and change the owner (the server's owner in person). */
+  ownerActs?: boolean
+}
+
+export interface NodeServersTenant {
+  node: string
+  role: 'tenant'
+  owner: string | null
+  shared: boolean
+  share: unknown
+  line: string | null
+}
+
+export type NodeServers = NodeServersOwner | NodeServersTenant
+
+/** What a `servers.*` change answered: held for approval, or done at once. */
+export interface ServersChangeResult {
+  ok?: boolean
+  held?: boolean
+  request?: AdminRequest
+  hint?: string
+  changed?: boolean
+  class?: string
+  note?: string
+  warning?: string
+}
+
+/** One row of a node's queue (`GET compute/queue`): other servers' jobs
+ *  carry only class, state, size and ETA. */
+export interface NodeQueueEntry {
+  pos: number
+  mine: boolean
+  class: string
+  state: string
+  cpuMillis?: number
+  memBytes?: number
+  etaSecs?: number | null
+  blockedBy?: string | null
+  /** The owner server sees other servers' labels. */
+  server?: string | null
+  short?: string
+  workspace?: string
+  argv?: string
+  otherWorkspace?: boolean
+}
+
+export interface NodeQueue {
+  node: string
+  shared: boolean
+  from: 'node' | 'server'
+  entries: NodeQueueEntry[]
+  totals?: { slot: number; label: string; running: number; queued: number; cpuSecsToday: number }[]
 }
 
 export interface WaitingCode {
@@ -428,6 +557,104 @@ export async function setWorkspaceComputeManage(
   value: boolean,
 ): Promise<ComputeManageSetResult> {
   return daemonCliPost(primaryScope(), 'agent-access/set', { toggle: 'compute_manage', value, workspace })
+}
+
+// ── Node sharing: the servers on a node (prd-compute-shared-queue-v1 §9,
+//    prd-macos-tenant-compute-v1 §5) ──────────────────────────────────────
+// The daemon decides everything (narrow vs widen, who may revoke, which
+// server may become the owner); these only send the gesture and read back.
+
+/** Every server on a node this server owns, or this server's own share on a
+ *  node another server owns. `refresh` asks the node now (else the mirror). */
+export async function fetchNodeServers(node: string, refresh = false): Promise<NodeServers> {
+  return daemonCliGet<NodeServers>(primaryScope(), 'compute/nodes/servers', refresh ? { node, refresh: 1 } : { node })
+}
+
+export interface AddServerBody {
+  url: string
+  /** `CODE.FP` as the new server's `k2 compute node add` printed it. */
+  code: string
+  trust: 'own' | 'team'
+  /** End date from now; omit for the default (7 days for team, none for own). */
+  forSecs?: number
+  set?: Partial<ShareLimitsJson>
+  reason?: string
+}
+
+/** Always held for the owner's approval (Approvals / the card). */
+export async function addNodeServer(node: string, body: AddServerBody): Promise<ServersChangeResult> {
+  return daemonCliPost(primaryScope(), 'compute/nodes/servers/add', { node, ...body })
+}
+
+/** A narrowing applies at once; a widening (or a later end date) is held. */
+export async function setServerLimits(
+  node: string,
+  server: string,
+  set: Partial<ShareLimitsJson>,
+  forSecs?: number,
+): Promise<ServersChangeResult> {
+  return daemonCliPost(primaryScope(), 'compute/nodes/servers/limits', forSecs === undefined ? { node, server, set } : { node, server, set, forSecs })
+}
+
+export async function pauseServer(node: string, server: string, action: 'pause' | 'resume'): Promise<ServersChangeResult> {
+  return daemonCliPost(primaryScope(), 'compute/nodes/servers/pause', { node, server, action })
+}
+
+/** The owner only. `now` stops its running jobs; `wipe` wipes its files now (else in 24 h). */
+export async function revokeServer(node: string, server: string, opts: { now: boolean; wipe: boolean }): Promise<ServersChangeResult> {
+  return daemonCliPost(primaryScope(), 'compute/nodes/servers/revoke', { node, server, ...opts })
+}
+
+export interface OwnerChangeOptions {
+  /** keep: this server stays on the node as one of yours; revoke: it leaves. */
+  old: 'keep' | 'revoke'
+  /** move: each server keeps its warm caches; wipe: cold builds once. */
+  caches: 'move' | 'wipe'
+  /** Stop running jobs instead of waiting for them. */
+  now: boolean
+  reason?: string
+}
+
+/** The owner only; held for the owner's approval, then the node drains and
+ *  swaps (prd-macos-tenant-compute-v1 §6). */
+export async function changeNodeOwner(node: string, server: string, opts: OwnerChangeOptions): Promise<ServersChangeResult> {
+  return daemonCliPost(primaryScope(), 'compute/nodes/servers/owner', { node, server, ...opts })
+}
+
+/** The node's whole queue as this server may see it (others redacted). */
+export async function fetchNodeQueue(node: string): Promise<NodeQueue> {
+  const res = await daemonCliGet<Partial<NodeQueue>>(primaryScope(), 'compute/queue', { node })
+  return {
+    node: typeof res?.node === 'string' ? res.node : node,
+    shared: res?.shared === true,
+    from: res?.from === 'node' ? 'node' : 'server',
+    entries: Array.isArray(res?.entries) ? res.entries : [],
+    totals: Array.isArray(res?.totals) ? res.totals : undefined,
+  }
+}
+
+/** Servers that may become this node's owner (MT28): one of your own, active,
+ *  enrolled (a full key) and online. The daemon checks again. */
+export function ownerTargets(rows: NodeServerRow[]): NodeServerRow[] {
+  return rows.filter(
+    (r) => r.slot !== 0 && r.trust === 'own' && r.state === 'active' && r.usage?.online === true && typeof r.fp === 'string' && /^[0-9a-f]{64}$/.test(r.fp),
+  )
+}
+
+/** Can this node take other people's servers (`team`)? From the node's own
+ *  offer: the `tenant-wall` feature, and why not when it's missing. */
+export function teamPossible(node: Pick<ComputeNode, 'os' | 'offer'>): { ok: boolean; why: string | null } {
+  const features = Array.isArray(node.offer?.features) ? node.offer.features : []
+  if (features.includes('tenant-wall')) return { ok: true, why: null }
+  const mac = node.os === 'macos' || node.os === 'darwin'
+  return { ok: false, why: mac ? 'a Mac without per-tenant users yet: your own servers only' : 'its tenant wall isn’t on: your own servers only' }
+}
+
+/** A share in one line (the daemon's wire fields). */
+export function limitsLine(l: ShareLimitsJson | undefined | null): string {
+  if (!l) return '—'
+  const hours = l.max_job_secs % 3600 === 0 ? `${l.max_job_secs / 3600}h` : `${Math.round(l.max_job_secs / 60)}m`
+  return `${l.max_running} running · ${l.max_queued} queued · ${l.cpu_hours_day} CPU-h/day · ${hours}/job · ${l.max_cpus} CPUs · ${l.max_mem_gb} GB · ${l.disk_gb} GB disk · network ${l.network} · weight ${l.weight}`
 }
 
 // ── This computer (local daemon) ────────────────────────────────────────

@@ -141,6 +141,9 @@ cp "$REL/k2-app-engine" "$OUT/$ENGINE"
 # The byte checks daemon-binaries.yml runs, before anything leaves the node.
 # release.sh runs them again on what it fetched (scripts/lib/compute-release.sh).
 assert_daemon_embeds_ptyd "$OUT/$DAEMON"
+# The marker scripts/sign-daemon.sh requires exactly once (version + arch).
+test "$(grep -a -o 'K2_DAEMON_BUILD v=[0-9.]* os=linux arch=[a-z0-9_]*;' "$OUT/$DAEMON" | wc -l)" = 1 \
+    || { echo "FATAL: $DAEMON has no single K2_DAEMON_BUILD marker" >&2; exit 1; }
 for pair in "$HELPER:K2_ROOT_HELPER_TEST_KEYS_ENABLED" "$NODE:K2_NODE_TEST_KEYS_ENABLED" "$ENGINE:K2_APP_ENGINE_TEST_KEYS_ENABLED"; do
     f="${pair%%:*}" marker="${pair#*:}"
     if grep -a -q "$marker" "$OUT/$f"; then

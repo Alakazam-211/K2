@@ -45,6 +45,19 @@
 // The whole daemon lives in the library (one module graph, one copy of
 // every static, each unit test compiled and run once). See
 // `k2_daemon::daemon_main`.
+// The marker the release signer needs exactly once in a Linux daemon asset
+// (scripts/sign-daemon.sh → scripts/lib/check-daemon-asset.py): it ties the
+// bytes to the release version before z3mbpZ signs them.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[used]
+static BUILD_MARKER: &str = concat!("K2_DAEMON_BUILD v=", env!("CARGO_PKG_VERSION"), " os=linux arch=x86_64;");
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+#[used]
+static BUILD_MARKER: &str = concat!("K2_DAEMON_BUILD v=", env!("CARGO_PKG_VERSION"), " os=linux arch=aarch64;");
+
 fn main() {
+    // Referenced so no linker drops it.
+    #[cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))]
+    std::hint::black_box(BUILD_MARKER);
     k2_daemon::daemon_main::run();
 }

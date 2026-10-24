@@ -46,6 +46,7 @@ part_web() {
     step "Release lock (stub k2-node)";            bash tests/packaging/release-lock.sh
     step "Release k2-ptyd checks (dry)";           bash tests/packaging/release-ptyd-checks.sh
     step "Linux builds on K2 Compute (stubbed)";   bash tests/packaging/compute-release.sh
+    step "Update signing on z3mbpZ (stubbed)";     bash tests/packaging/updater-signing.sh
     step "CI gate scripts (stubbed)";              bash tests/packaging/ci-gate.sh
     step "release.sh waits + Step 0.5 env (stubbed)"; bash tests/packaging/release-wait-and-preflight.sh
     step "macOS sidecars build once (stubbed)";    bash tests/packaging/build-once.sh

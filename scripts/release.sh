@@ -17,8 +17,11 @@
 # K2_RELEASE_REPO=Alakazam-211/K2SO for an old-repo (bridge) release.
 #
 # Prerequisites:
-#   - TAURI_SIGNING_PRIVATE_KEY env var (or ~/.tauri/k2-updater.key)
-#   - TAURI_SIGNING_PRIVATE_KEY_PASSWORD env var
+#   - The update-signing key in ~/.k2-updater/ and its password in the login
+#     keychain (one-time setup: scripts/lib/sign-updater.sh header). The key
+#     is read ONLY inside that helper, at each signing step; it is never
+#     exported, so no build script or package in this run can see it.
+#     TAURI_SIGNING_PRIVATE_KEY(_PASSWORD) must NOT be set (refused).
 #   - Apple signing identity in keychain (GUI login session — see above)
 #   - gh CLI authenticated (or GH_TOKEN / GITHUB_TOKEN)
 #
@@ -85,7 +88,9 @@
 #                       scripts/lib/compute-release.sh. Audit:
 #                       ~/k2-release-audit/<v>/compute/.
 #     compute           stage 1 (compute files are the release, signed
-#                       here, one publish): not built yet, refused.
+#                       here, one publish): not built yet, refused. The
+#                       daemon signing piece exists already:
+#                       scripts/sign-daemon.sh <v> --from-dir <compute dist>.
 #   aarch64 stays on GitHub until the ARM Linux VM node exists
 #   (K2_COMPUTE_ARM_NODE, plan G10).
 #
@@ -179,9 +184,10 @@ echo "════════════════════════�
 echo "  K2 Release: ${TAG}  →  ${RELEASE_REPO}"
 echo "═══════════════════════════════════════════════════"
 
-# Load .env file if present (contains TAURI_SIGNING_PRIVATE_KEY_PASSWORD
-# and K2_GMAIL_CLIENT_ID / K2_GMAIL_CLIENT_SECRET for option_env! into
-# k2-daemon mail OAuth defaults — required so Linux CI secrets match).
+# Load .env file if present (K2_GMAIL_CLIENT_ID / K2_GMAIL_CLIENT_SECRET
+# for option_env! into k2-daemon mail OAuth defaults — required so Linux CI
+# secrets match). It must NOT hold the signing key or its password: `set -a`
+# exports everything to every build below (k2u_env_guard refuses).
 if [ -f "$PROJECT_DIR/.env" ]; then
     set -a
     # shellcheck disable=SC1091
@@ -204,26 +210,13 @@ source "$PROJECT_DIR/scripts/lib/wait-progress.sh"
 # Gmail is required OOTB (DTL invalid_client). MS is optional unless set above.
 require_mail_oauth_build_env
 
-# Load signing key from file if env var not set. SAME key under either
-# name — k2-updater.key is the post-rebrand name, k2so-updater.key the
-# original; never rotate the key itself (updates would stop verifying).
-if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
-    KEY_FILE="$HOME/.tauri/k2-updater.key"
-    [ -f "$KEY_FILE" ] || KEY_FILE="$HOME/.tauri/k2so-updater.key"
-    if [ -f "$KEY_FILE" ]; then
-        export TAURI_SIGNING_PRIVATE_KEY="$(cat "$KEY_FILE")"
-        echo "Loaded signing key from $KEY_FILE"
-    else
-        echo "ERROR: TAURI_SIGNING_PRIVATE_KEY not set and $KEY_FILE not found" >&2
-        exit 1
-    fi
-fi
-
-if [ -z "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]; then
-    echo "Enter signing key password:"
-    read -s TAURI_SIGNING_PRIVATE_KEY_PASSWORD
-    export TAURI_SIGNING_PRIVATE_KEY_PASSWORD
-fi
+# The update-signing key is read only inside scripts/lib/sign-updater.sh,
+# at each signing step (prd-security-sweep-0464-v1 SS2/A7). Refuse to run
+# when it was exported (an old .env line or shell profile): every build
+# script, test and package in this run would inherit it.
+# shellcheck source=scripts/lib/sign-updater.sh
+source "$PROJECT_DIR/scripts/lib/sign-updater.sh"
+k2u_env_guard
 
 cd "$PROJECT_DIR"
 
@@ -456,6 +449,15 @@ k2_arch_gate_on_exit() {
 trap k2_arch_gate_on_exit EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+
+# ── Step 0.45: Update-signing preflight (SS1/SS2) ──
+# Before any build, and on resumed runs too (Step 8.5 and 10.5 still sign):
+# the key file (0600 in a 0700 dir), its keychain password, minisign, a
+# self-test signature that verifies with the source tree's public key, and
+# no TAURI_SIGNING_* secrets left on GitHub.
+echo ""
+echo "Step 0.45: Update-signing preflight..."
+bash "$PROJECT_DIR/scripts/sign-daemon.sh" --preflight "$VERSION"
 
 # ── Step 0.5: Pre-flight quality gates ──
 # Added at 0.40.31 when the tree first reached warning-zero / typecheck-zero.
@@ -735,10 +737,10 @@ COPYFILE_DISABLE=1 tar -czf "target/release/bundle/macos/K2.app.tar.gz" \
 # PTY host, or agents would stop surviving after the update.
 k2_daemon_helper_verify_tarball_ptyd "target/release/bundle/macos/K2.app.tar.gz"
 
-# Sign the update bundle with Tauri updater key
-# Key + password come from the exported TAURI_SIGNING_PRIVATE_KEY(_PASSWORD)
-# env, never argv (ps would show them).
-bunx @tauri-apps/cli@2 signer sign "target/release/bundle/macos/K2.app.tar.gz"
+# Sign the update bundle with the update key. The Tauri app updater reads
+# the signature base64-wrapped (b64), exactly as the tauri signer wrote it.
+k2u_sign u1 "target/release/bundle/macos/K2.app.tar.gz" K2.app.tar.gz "$VERSION" \
+    "target/release/bundle/macos/K2.app.tar.gz.sig" b64
 echo "  Update bundle signed."
 
 # ── Step 6: Create DMG from notarized app ──
@@ -859,15 +861,13 @@ echo "  latest.json generated (darwin-aarch64; windows-x86_64 added after NSIS i
 # and emits `daemon-latest.json` (schema below).
 #
 # Linux binaries are NOT cross-built here — clang/ggml cross-compilation on
-# macOS is the wrong tool. The `.github/workflows/daemon-binaries.yml`
-# workflow builds + signs the linux-x86_64 / linux-aarch64 artifacts on
-# native ubuntu runners and uploads them to this same release. If those CI
-# artifacts have already been fetched into target/release/daemon-dist/ (by
-# name: k2-daemon-linux-x86_64{,.sig}, k2-daemon-linux-aarch64{,.sig}),
-# this step merges them into the manifest; otherwise it emits a macos-only
-# manifest (documented — P2/P3 treat a missing artifact key as "no build
-# for that platform yet"). A `--features airgap` daemon is custom/enterprise
-# only (no GitHub update ping) and is never a GitHub Release asset.
+# macOS is the wrong tool. `.github/workflows/daemon-binaries.yml` builds
+# the linux-x86_64 / linux-aarch64 daemons UNSIGNED after the tag, and
+# Step 10.5 (scripts/sign-daemon.sh) signs them here and merges them into
+# daemon-latest.json. Until then the manifest is macos-only (P2/P3 treat a
+# missing artifact key as "no build for that platform yet"). A
+# `--features airgap` daemon is custom/enterprise only (no GitHub update
+# ping) and is never a GitHub Release asset.
 #
 # daemon-latest.json schema (P2/P3 consume this):
 #   {
@@ -897,22 +897,10 @@ mkdir -p "$DIST_DIR"
 MAC_ASSET="k2-daemon-macos-aarch64"
 k2_build_standalone_macos_daemon "$PROJECT_DIR/target/release/bundle/macos/K2.app" "$DIST_DIR/$MAC_ASSET" "$PROJECT_DIR"
 
-# Sign with the Tauri updater key (minisign-format .sig, identical
-# mechanism to Step 5's K2.app.tar.gz.sig).
-# Key + password come from the exported TAURI_SIGNING_PRIVATE_KEY(_PASSWORD)
-# env, never argv (ps would show them).
-bunx @tauri-apps/cli@2 signer sign "$DIST_DIR/$MAC_ASSET"
-# tauri signer writes the .sig as BASE64 of the minisig text; the daemon
-# self-updater and plain minisign need the RAW text — publish that.
-# (Shape B e2e finding, 2026-07-06. NOTE: K2.app.tar.gz.sig stays wrapped —
-# the Tauri APP updater expects that format; only the DAEMON sig is raw.)
-if ! head -c 17 "$DIST_DIR/$MAC_ASSET.sig" | grep -q "untrusted comment"; then
-    base64 -d < "$DIST_DIR/$MAC_ASSET.sig" > "$DIST_DIR/$MAC_ASSET.sig.raw" \
-        || base64 -D < "$DIST_DIR/$MAC_ASSET.sig" > "$DIST_DIR/$MAC_ASSET.sig.raw"
-    head -c 17 "$DIST_DIR/$MAC_ASSET.sig.raw" | grep -q "untrusted comment" \
-        || { echo "ERROR: daemon .sig decode produced non-minisig content" >&2; exit 1; }
-    mv "$DIST_DIR/$MAC_ASSET.sig.raw" "$DIST_DIR/$MAC_ASSET.sig"
-fi
+# Sign with the update key. The daemon self-updater and plain minisign
+# read the RAW minisig text (Shape B e2e finding, 2026-07-06; the app
+# bundle's .sig stays base64-wrapped for the Tauri updater).
+k2u_sign u1 "$DIST_DIR/$MAC_ASSET" "$MAC_ASSET" "$VERSION" "$DIST_DIR/$MAC_ASSET.sig" raw
 MAC_SHA256=$(shasum -a 256 "$DIST_DIR/$MAC_ASSET" | awk '{print $1}')
 echo "  macos-aarch64 daemon built, signed, hashed."
 
@@ -928,22 +916,8 @@ ARTIFACTS_JSON=$(cat <<JSON
 JSON
 )
 
-# Merge any CI-produced Linux artifacts present in $DIST_DIR.
-for LX in "linux-x86_64" "linux-aarch64"; do
-    LX_ASSET="k2-daemon-${LX}"
-    if [ -f "$DIST_DIR/$LX_ASSET" ] && [ -f "$DIST_DIR/${LX_ASSET}.sig" ]; then
-        LX_SHA256=$(shasum -a 256 "$DIST_DIR/$LX_ASSET" | awk '{print $1}')
-        ARTIFACTS_JSON="${ARTIFACTS_JSON},
-    \"${LX}\": {
-      \"url\": \"${DL_BASE}/${LX_ASSET}\",
-      \"sig\": \"${DL_BASE}/${LX_ASSET}.sig\",
-      \"sha256\": \"${LX_SHA256}\"
-    }"
-        echo "  Merged CI artifact: ${LX_ASSET}."
-    else
-        echo "  (no CI artifact for ${LX} — left out; CI workflow uploads it separately)"
-    fi
-done
+# The Linux entries are added at Step 10.5, by sign-daemon.sh after it has
+# signed them (SS1); a Linux daemon staged in $DIST_DIR is not merged here.
 
 # 0.46.3: the manifest also carries `notes` (this version's WHATS_NEW.md
 # section), so a phone or remote host can show what's new before it
@@ -1039,21 +1013,13 @@ ASSETS=(
 ASSETS+=("/tmp/latest.json")
 
 # Standalone daemon assets (remote-update P1): the native macos-aarch64
-# binary + its .sig, plus the daemon manifest. Any CI-fetched Linux
-# binaries in $DIST_DIR are uploaded too (the daemon-binaries.yml workflow
-# normally uploads those directly to the release on its own, but if they
-# were staged here first we attach them in the same `gh release create`).
+# binary + its .sig, plus the daemon manifest. The Linux daemons come from
+# daemon-binaries.yml (unsigned) and get their .sig at Step 10.5.
 ASSETS+=(
     "$DIST_DIR/${MAC_ASSET}"
     "$DIST_DIR/${MAC_ASSET}.sig"
     "$DIST_DIR/daemon-latest.json"
 )
-for LX in "linux-x86_64" "linux-aarch64"; do
-    LX_ASSET="k2-daemon-${LX}"
-    if [ -f "$DIST_DIR/$LX_ASSET" ] && [ -f "$DIST_DIR/${LX_ASSET}.sig" ]; then
-        ASSETS+=("$DIST_DIR/$LX_ASSET" "$DIST_DIR/${LX_ASSET}.sig")
-    fi
-done
 # Standalone macOS k2-node (Step 8.55): bare binary + .sha256. Its .sig
 # (root-helper key) is uploaded at Step 10.5.
 ASSETS+=(
@@ -1174,15 +1140,12 @@ if [ "$WIN_NSIS_RC" -eq 0 ] && [ "${K2_SKIP_WINDOWS_NSIS}" != "1" ]; then
         rm -f "$WIN_NOTES"
         # Sign setup for Tauri auto-updater and merge windows-x86_64 into
         # latest.json (otherwise Windows Check for Updates fails: no
-        # platforms.windows-x86_64 — 0.40.95).
-        if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] && [ -n "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]; then
-            if bash "$PROJECT_DIR/scripts/windows-patch-latest-json.sh" "$VERSION" "$WIN_SETUP"; then
-                echo "  Patched + re-uploaded latest.json with windows-x86_64."
-            else
-                echo "  WARNING: windows-patch-latest-json failed — Win setup is on the release, but auto-update may lack windows-x86_64 until re-run." >&2
-            fi
+        # platforms.windows-x86_64 — 0.40.95). The script signs through
+        # scripts/lib/sign-updater.sh, like every other signing step.
+        if bash "$PROJECT_DIR/scripts/windows-patch-latest-json.sh" "$VERSION" "$WIN_SETUP"; then
+            echo "  Patched + re-uploaded latest.json with windows-x86_64."
         else
-            echo "  WARNING: no TAURI signing key in env — skipped latest.json windows-x86_64 patch." >&2
+            echo "  WARNING: windows-patch-latest-json failed — Win setup is on the release, but auto-update may lack windows-x86_64 until re-run." >&2
         fi
     else
         echo "  WARNING: windows-nsis-build reported OK but ${WIN_SETUP} missing." >&2
@@ -1234,6 +1197,27 @@ verify_manifest() {
 }
 verify_manifest "app latest.json"    "${VERIFY_BASE}/latest.json"
 verify_manifest "daemon-latest.json" "${VERIFY_BASE}/daemon-latest.json"
+
+# ── Step 10.5: Sign the Linux daemons (prd-security-sweep-0464-v1 SS1) ──
+# daemon-binaries.yml uploads k2-daemon-linux-<arch> + .sha256 UNSIGNED;
+# this Mac checks and signs them with the update key, uploads the .sig and
+# then merges them into daemon-latest.json. Until it does, Linux daemons
+# see no update for their platform (harmless). Re-run by hand:
+#   bash scripts/sign-daemon.sh ${VERSION}
+# Escape (Linux daemons stay on the previous version): K2_SKIP_DAEMON_SIGN=1.
+DAEMON_SIGN_FAILED=""
+if [ "${K2_SKIP_DAEMON_SIGN:-0}" = "1" ]; then
+    echo ""
+    echo "  ⚠⚠ LINUX DAEMON SIGNING SKIPPED (K2_SKIP_DAEMON_SIGN=1) ⚠⚠" >&2
+    echo "  Linux daemons can't update to ${VERSION} until: bash scripts/sign-daemon.sh ${VERSION}" >&2
+else
+    echo ""
+    echo "Step 10.5: Signing the Linux k2-daemon builds (waits for daemon-binaries.yml)..."
+    if ! bash "$PROJECT_DIR/scripts/sign-daemon.sh" "${VERSION}"; then
+        DAEMON_SIGN_FAILED=1
+        echo "  ✗ Linux daemons NOT signed — re-run: bash scripts/sign-daemon.sh ${VERSION}" >&2
+    fi
+fi
 
 # ── Step 10.5: Sign the root helper (prd-k2-root-helper-v1 §9.1) ──
 # daemon-binaries.yml uploads k2-root-helper-linux-<arch> + .sha256
@@ -1300,9 +1284,10 @@ echo "════════════════════════�
 echo "  Release ${TAG} complete!"
 echo "  https://github.com/${RELEASE_REPO}/releases/tag/${TAG}"
 [ -n "$VERIFY_FAILED" ] && echo "  ⚠  UPDATER MANIFEST CHECK FAILED — see Step 10 above (updater may 'Could not fetch a valid release JSON' until it clears)"
+[ -n "$DAEMON_SIGN_FAILED" ] && echo "  ⚠  LINUX DAEMONS NOT SIGNED — bash scripts/sign-daemon.sh ${VERSION}"
 [ -n "$ROOT_HELPER_SIGN_FAILED" ] && echo "  ⚠  ROOT HELPER NOT SIGNED — bash scripts/sign-root-helper.sh ${VERSION}"
 [ -n "$K2_NODE_SIGN_FAILED" ] && echo "  ⚠  K2-NODE NOT SIGNED — bash scripts/sign-k2-node.sh ${VERSION}"
 [ -n "$APP_ENGINE_SIGN_FAILED" ] && echo "  ⚠  K2-APP-ENGINE NOT SIGNED — bash scripts/sign-app-engine.sh ${VERSION}"
 [ -n "$LINUX_SUMS_FAILED" ] && echo "  ⚠  LINUX SHA256SUMS INCOMPLETE — bash scripts/linux-sums.sh check ${VERSION} --wait-min 60"
 echo "═══════════════════════════════════════════════════"
-[ -z "$ROOT_HELPER_SIGN_FAILED" ] && [ -z "$K2_NODE_SIGN_FAILED" ] && [ -z "$APP_ENGINE_SIGN_FAILED" ] && [ -z "$LINUX_SUMS_FAILED" ] || exit 1
+[ -z "$DAEMON_SIGN_FAILED" ] && [ -z "$ROOT_HELPER_SIGN_FAILED" ] && [ -z "$K2_NODE_SIGN_FAILED" ] && [ -z "$APP_ENGINE_SIGN_FAILED" ] && [ -z "$LINUX_SUMS_FAILED" ] || exit 1

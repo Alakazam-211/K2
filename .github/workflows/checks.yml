@@ -63,6 +63,13 @@ jobs:
       - name: Linux builds on K2 Compute (stubbed)
         run: bash tests/packaging/compute-release.sh
 
+      # Update signing on z3mbpZ (prd-security-sweep-0464-v1 SS1/SS2):
+      # sign-updater.sh, sign-daemon.sh, the Windows patch and the
+      # release.sh/workflow wiring, with stub minisign/security/gh and
+      # throwaway keys (no real key, no keychain, no GitHub).
+      - name: Update signing on z3mbpZ (stubbed)
+        run: bash tests/packaging/updater-signing.sh
+
       # The K2 Compute CI gate (scripts/ci/checks.sh mirrors this file;
       # the test fails on drift), run-checks, statuses, poller; stub k2.
       - name: CI gate on K2 Compute (stubbed)

@@ -24,6 +24,9 @@ if [ -f "$PROJECT_DIR/.env" ]; then
     source "$PROJECT_DIR/.env"
     set +a
 fi
+# The update-signing key never reaches a build (prd-security-sweep-0464-v1
+# SS2): only scripts/lib/sign-updater.sh reads it, in release.sh.
+unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 # shellcheck source=scripts/require-mail-oauth-build-env.sh
 source "$PROJECT_DIR/scripts/require-mail-oauth-build-env.sh"
 # shellcheck source=scripts/macos-daemon-helper-app.sh

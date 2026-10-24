@@ -787,11 +787,15 @@ mod tests {
             dual,
             [
                 "activity.snapshot",
+                // Catalog v22 (prd-app-caps-0464-v1 AC1/AC2): the App's own
+                // ceiling and guest list, both doors.
+                "app.rooms",
                 "app.self",
                 "app.usage",
                 "files.list",
                 "files.read",
                 "files.readBinary",
+                "guests.list",
                 "guests.rooms",
                 "guests.setRooms",
                 "room.members",

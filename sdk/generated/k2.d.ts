@@ -59,6 +59,36 @@ export interface Viewer {
   readonly name: string
 }
 
+export interface AppRoomRef {
+  readonly displayName: string
+  readonly handle: string
+  /** The room's project id. */
+  readonly room: string
+}
+
+export interface AppOwnRoom {
+  readonly displayName: string
+  readonly handle: string
+  /** The room's project id. */
+  readonly room: string
+}
+
+export interface AppRooms {
+  /** The App's service id. */
+  readonly app: string
+  /** Project ids this App may hand its guests (the list guests.setRooms enforces); [] without the grant. */
+  readonly ceiling: string[]
+  /** The rooms the grant adds beyond the own room; [] without the grant. */
+  readonly grantRooms: AppRoomRef[]
+  /** Whether the owner granted this App guests-rooms (k2 app grant <app> --kind guests-rooms). */
+  readonly granted: boolean
+  /** When the owner granted it, seconds since the epoch; null without the grant. */
+  readonly grantedAt: number | null
+  readonly ok: boolean
+  /** The App's own workspace room; null when it no longer resolves. */
+  readonly ownRoom: AppOwnRoom | null
+}
+
 export interface AppSelf {
   /** The App id. */
   readonly app: string
@@ -1031,6 +1061,29 @@ export interface AppGuestRooms {
   readonly username: string
 }
 
+export interface AppGuestRow {
+  /** A marked agent login (k2 app user agent), not a person. */
+  readonly agent: boolean
+  /** Whether the guest's grant on this App is on. */
+  readonly enabled: boolean
+  /** The role on this App's grant; null = Thread-only rooms. */
+  readonly role: string | null
+  readonly roomHandles: string[]
+  /** Project ids on this App only. */
+  readonly rooms: string[]
+  readonly username: string
+}
+
+export interface AppGuestList {
+  /** The App's service id. */
+  readonly app: string
+  /** This App's own guests, by username. */
+  readonly guests: AppGuestRow[]
+  /** Pass it as cursor for the next page; null on the last page. */
+  readonly nextCursor: string | null
+  readonly ok: boolean
+}
+
 export interface AppActivityCounts {
   readonly commands: number
   readonly subagents: number
@@ -1099,7 +1152,7 @@ export interface StoreTxHandle {
 }
 
 /** The shared error codes (UWA10). */
-export type K2ErrorCode = 'cap_not_granted' | 'not_bound' | 'rate_limited' | 'too_large' | 'unknown_verb' | 'verb_unavailable' | 'verb_local' | 'not_exposed' | 'sending_off' | 'server_not_saved' | 'unreachable' | 'removed' | 'no_history' | 'failed' | 'conflict' | 'space_full' | 'value_too_large' | 'bad_key' | 'not_granted' | 'resync' | 'author_unknown' | 'stale_widget' | 'store_full' | 'bad_tx' | 'tx_expired' | 'busy' | 'paused' | 'bad_args' | 'bad_shape' | 'pass_required' | 'pass_invalid' | 'pass_wrong_link' | 'not_on_link' | 'json_required' | 'skin_room' | 'usage' | 'not_found' | 'bad_login' | 'locked' | 'card_not_pending' | 'guest_required' | 'no_app_pass' | 'no_app_key' | 'no_chat_grant' | 'chat_unavailable' | 'app_pass_required' | 'grant_required' | 'outside_app_rooms' | 'above_role' | 'has_role' | 'confirm_required' | 'declined' | 'refresh_invalid' | 'refresh_reused' | 'person_pass_required' | 'wallet_off' | 'duplicate_label' | 'needs_editor' | 'retired'
+export type K2ErrorCode = 'cap_not_granted' | 'not_bound' | 'rate_limited' | 'too_large' | 'unknown_verb' | 'verb_unavailable' | 'verb_local' | 'not_exposed' | 'sending_off' | 'server_not_saved' | 'unreachable' | 'removed' | 'no_history' | 'failed' | 'conflict' | 'space_full' | 'value_too_large' | 'bad_key' | 'not_granted' | 'resync' | 'author_unknown' | 'stale_widget' | 'store_full' | 'bad_tx' | 'tx_expired' | 'busy' | 'paused' | 'bad_args' | 'bad_shape' | 'pass_required' | 'pass_invalid' | 'pass_wrong_link' | 'not_on_link' | 'json_required' | 'skin_room' | 'usage' | 'not_found' | 'bad_login' | 'locked' | 'card_not_pending' | 'guest_required' | 'no_app_pass' | 'no_app_key' | 'no_chat_grant' | 'chat_unavailable' | 'app_pass_required' | 'grant_required' | 'outside_app_rooms' | 'above_role' | 'has_role' | 'confirm_required' | 'declined' | 'refresh_invalid' | 'refresh_reused' | 'person_pass_required' | 'wallet_off' | 'duplicate_label' | 'needs_editor' | 'retired' | 'card_person_only'
 
 /** Codes worth retrying unchanged (catalog `retryable`); handler-object subscriptions retry these on their own. */
 export type K2_RETRYABLE = 'not_bound' | 'rate_limited' | 'unreachable' | 'busy'
@@ -1188,6 +1241,7 @@ export interface K2Verbs {
   'save.remove': { args: [key: string]; value: null }
   'save.keys': { args: [opts?: { prefix?: string }]; value: string[] }
   'viewer.get': { args: []; value: Viewer }
+  'app.rooms': { args: [args?: { app?: string }]; value: AppRooms }
   'app.self': { args: [args?: { app?: string }]; value: AppSelf }
   'app.usage': { args: [args?: { app?: string; hours?: number }]; value: AppUsage }
   'widget.self': { args: []; value: WidgetSelf }
@@ -1242,12 +1296,13 @@ export interface K2Verbs {
   'store.txAbort': { args: [txId: string]; value: StoreTxAborted }
   'guests.rooms': { args: [args: { app?: string; username: string }]; value: AppGuestRooms }
   'guests.setRooms': { args: [args: { app?: string; rooms: string[]; username: string }]; value: AppGuestRooms }
+  'guests.list': { args: [args?: { app?: string; cursor?: string; limit?: number }]; value: AppGuestList }
   'activity.snapshot': { args: [args: { workspace: string }]; value: AppActivity }
   'room.members': { args: [args: { app?: string; workspace: string }]; value: RoomMembers }
 }
 
 export type K2Verb = keyof K2Verbs
-export type K2CallVerb = 'gardens.list' | 'gardens.current' | 'gardens.switch' | 'theme.get' | 'canvas.setHitRegions' | 'window.startDrag' | 'layout.get' | 'layout.set' | 'layout.toggle' | 'save.get' | 'save.set' | 'save.remove' | 'save.keys' | 'viewer.get' | 'app.self' | 'app.usage' | 'widget.self' | 'app.resources' | 'agents.list' | 'conversation.open' | 'conversation.close' | 'agents.show' | 'presence.get' | 'thread.read' | 'thread.markRead' | 'thread.attachment' | 'thread.open' | 'thread.links' | 'thread.catchup' | 'thread.unread' | 'thread.mute' | 'thread.pickFiles' | 'thread.post' | 'thread.answer' | 'compose.draft' | 'conversation.setContext' | 'sources.list' | 'sources.read' | 'sources.history' | 'sources.refresh' | 'sources.ask' | 'links.open' | 'files.list' | 'files.read' | 'files.readBinary' | 'tickets.list' | 'tickets.show' | 'tickets.create' | 'tickets.comment' | 'tickets.resolve' | 'store.get' | 'store.list' | 'store.changes' | 'store.put' | 'store.patch' | 'store.delete' | 'store.batch' | 'store.txBegin' | 'store.txAdd' | 'store.txCommit' | 'store.txAbort' | 'guests.rooms' | 'guests.setRooms' | 'activity.snapshot' | 'room.members'
+export type K2CallVerb = 'gardens.list' | 'gardens.current' | 'gardens.switch' | 'theme.get' | 'canvas.setHitRegions' | 'window.startDrag' | 'layout.get' | 'layout.set' | 'layout.toggle' | 'save.get' | 'save.set' | 'save.remove' | 'save.keys' | 'viewer.get' | 'app.rooms' | 'app.self' | 'app.usage' | 'widget.self' | 'app.resources' | 'agents.list' | 'conversation.open' | 'conversation.close' | 'agents.show' | 'presence.get' | 'thread.read' | 'thread.markRead' | 'thread.attachment' | 'thread.open' | 'thread.links' | 'thread.catchup' | 'thread.unread' | 'thread.mute' | 'thread.pickFiles' | 'thread.post' | 'thread.answer' | 'compose.draft' | 'conversation.setContext' | 'sources.list' | 'sources.read' | 'sources.history' | 'sources.refresh' | 'sources.ask' | 'links.open' | 'files.list' | 'files.read' | 'files.readBinary' | 'tickets.list' | 'tickets.show' | 'tickets.create' | 'tickets.comment' | 'tickets.resolve' | 'store.get' | 'store.list' | 'store.changes' | 'store.put' | 'store.patch' | 'store.delete' | 'store.batch' | 'store.txBegin' | 'store.txAdd' | 'store.txCommit' | 'store.txAbort' | 'guests.rooms' | 'guests.setRooms' | 'guests.list' | 'activity.snapshot' | 'room.members'
 export type K2SubscribeVerb = 'theme.changed' | 'layout.subscribe' | 'agents.subscribe' | 'presence.subscribe' | 'thread.subscribe' | 'thread.inbox' | 'sources.subscribe'
 
 export interface K2 {
@@ -1304,6 +1359,8 @@ export interface K2 {
     (): Promise<Viewer>
   }
   readonly app: {
+    /** This App's own room, the owner's guests-rooms grant and the rooms it may hand its guests (the App's own pass; no grant needed to read it). This computer only. no cap · portable · guests-rooms-v1. e.g. `const {ceiling, granted} = await k2.asApp().app.rooms()` */
+    rooms(args?: { app?: string }): Promise<AppRooms>
     /** This App: its id, live Seed hash, health and when it was deployed (its own App only; the App pass, never a guest). This computer only. no cap · portable · app-self-v1. e.g. `const me = await k2.asApp().app.self()` */
     self(args?: { app?: string }): Promise<AppSelf>
     /** This App's quotas, live use and per-call counts from its own audit (its own App only; the App pass, never a guest). This computer only. no cap · portable · app-self-v1. e.g. `const {verbs, quotas} = await k2.asApp().app.usage({hours: 24})` */
@@ -1460,6 +1517,8 @@ export interface K2 {
     rooms(args: { app?: string; username: string }): Promise<AppGuestRooms>
     /** Set one guest's rooms on this App, within the rooms the App may hand out and never above the guest's role; idempotent, audited. This computer only. cap guests:rooms · portable · guests-rooms-v1. e.g. `await k2.asApp().guests.setRooms({username: 'dana', rooms: ['acme']})` */
     setRooms(args: { app?: string; rooms: string[]; username: string }): Promise<AppGuestRooms>
+    /** This App's own guests with their rooms on this App, role, on/off and whether each is an agent login, a page at a time (never the owner, a Connect login or another App's guest). This computer only. cap guests:rooms · portable · guests-rooms-v1. e.g. `const {guests, nextCursor} = await k2.asApp().guests.list({limit: 200})` */
+    list(args?: { app?: string; cursor?: string; limit?: number }): Promise<AppGuestList>
   }
   readonly activity: {
     /** Whether the room's agent is working now, per session. This computer only. cap activity:read · portable · app-api-v1. e.g. `const {status} = await k2.activity.snapshot({workspace})` */

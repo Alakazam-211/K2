@@ -8,7 +8,7 @@
 import type { K2Error } from '../errors.ts'
 
 /** The catalog version this table was generated from. */
-export const CATALOG_VERSION = 21
+export const CATALOG_VERSION = 22
 
 /** A JSON Schema from the catalog's subset, reduced for projection. */
 export type Schema = { readonly [key: string]: unknown }
@@ -48,7 +48,7 @@ export const APP_VERBS = {
     http: { method: 'GET', route: '/cli/skin/me', params: {}, query: [] },
     socket: null,
     responseNames: {},
-    response: {"additionalProperties":false,"properties":{"agents":{"items":{"additionalProperties":false,"properties":{"can":{"additionalProperties":false,"properties":{"activity":{"type":"boolean"},"chat":{"type":"boolean"},"files":{"type":"string"},"heartbeats":{"type":"string"},"identity":{"type":"boolean"},"members":{"type":"boolean"},"send":{"type":"boolean"},"store":{"type":"string"},"tickets":{"type":"string"},"wiki":{"type":"boolean"}},"type":"object"},"caps":{"items":{"type":"string"},"type":"array"},"color":{"type":["string","null"]},"displayName":{"type":"string"},"folders":{"additionalProperties":false,"properties":{"read":{"items":{"type":"string"},"type":"array"},"uploadDir":{"type":"string"},"write":{"items":{"type":"string"},"type":"array"}},"type":"object"},"handle":{"type":"string"},"image":{"type":["string","null"]},"muted":{"type":"boolean"},"room":{"type":"string"},"ticketsWaiting":{"type":"integer"},"unread":{"type":"integer"},"waiting":{"type":"integer"}},"type":"object"},"type":"array"},"app":{"type":"string"},"catalogVersion":{"type":"integer"},"features":{"items":{"type":"string"},"type":"array"},"instanceId":{"type":"string"},"kind":{"enum":["guest","app","token"]},"ok":{"type":"boolean"},"principalId":{"type":["string","null"]},"publicHost":{"type":["string","null"]},"rooms":{"items":{"additionalProperties":false,"properties":{"caps":{"items":{"type":"string"},"type":"array"},"folders":{"additionalProperties":false,"properties":{"read":{"items":{"type":"string"},"type":"array"},"uploadDir":{"type":"string"},"write":{"items":{"type":"string"},"type":"array"}},"type":"object"},"handle":{"type":"string"},"room":{"type":"string"}},"type":"object"},"type":"array"},"serverId":{"type":["string","null"]},"username":{"type":"string"}},"type":"object"},
+    response: {"additionalProperties":false,"properties":{"agents":{"items":{"additionalProperties":false,"properties":{"can":{"additionalProperties":false,"properties":{"activity":{"type":"boolean"},"chat":{"type":"boolean"},"download":{"type":"boolean"},"files":{"type":"string"},"heartbeats":{"type":"string"},"identity":{"type":"boolean"},"members":{"type":"boolean"},"send":{"type":"boolean"},"store":{"type":"string"},"tickets":{"type":"string"},"upload":{"type":"boolean"},"wiki":{"type":"boolean"}},"type":"object"},"caps":{"items":{"type":"string"},"type":"array"},"color":{"type":["string","null"]},"displayName":{"type":"string"},"folders":{"additionalProperties":false,"properties":{"download":{"items":{"type":"string"},"type":"array"},"read":{"items":{"type":"string"},"type":"array"},"upload":{"items":{"type":"string"},"type":"array"},"uploadDir":{"type":"string"},"write":{"items":{"type":"string"},"type":"array"}},"type":"object"},"handle":{"type":"string"},"image":{"type":["string","null"]},"muted":{"type":"boolean"},"room":{"type":"string"},"ticketsWaiting":{"type":"integer"},"unread":{"type":"integer"},"waiting":{"type":"integer"}},"type":"object"},"type":"array"},"app":{"type":"string"},"catalogVersion":{"type":"integer"},"features":{"items":{"type":"string"},"type":"array"},"instanceId":{"type":"string"},"kind":{"enum":["guest","app","token"]},"ok":{"type":"boolean"},"principalId":{"type":["string","null"]},"publicHost":{"type":["string","null"]},"rooms":{"items":{"additionalProperties":false,"properties":{"caps":{"items":{"type":"string"},"type":"array"},"folders":{"additionalProperties":false,"properties":{"download":{"items":{"type":"string"},"type":"array"},"read":{"items":{"type":"string"},"type":"array"},"upload":{"items":{"type":"string"},"type":"array"},"uploadDir":{"type":"string"},"write":{"items":{"type":"string"},"type":"array"}},"type":"object"},"handle":{"type":"string"},"room":{"type":"string"}},"type":"object"},"type":"array"},"serverId":{"type":["string","null"]},"username":{"type":"string"}},"type":"object"},
   },
   'roomAgents.list': {
     cap: null,
@@ -93,6 +93,28 @@ export const APP_VERBS = {
     socket: null,
     responseNames: {},
     response: {"additionalProperties":false,"properties":{"app":{"type":"string"},"changed":{"type":"boolean"},"enabled":{"type":"boolean"},"ok":{"type":"boolean"},"role":{"type":["string","null"]},"roomHandles":{"items":{"type":"string"},"type":"array"},"rooms":{"items":{"type":"string"},"type":"array"},"username":{"type":"string"}},"type":"object"},
+  },
+  'app.rooms': {
+    cap: null,
+    effect: 'read',
+    kind: 'call',
+    feature: 'guests-rooms-v1',
+    door: 'link',
+    http: { method: 'GET', route: '/cli/skin/app-rooms', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"app":{"type":"string"},"ceiling":{"items":{"type":"string"},"type":"array"},"grantRooms":{"items":{"additionalProperties":false,"properties":{"displayName":{"type":"string"},"handle":{"type":"string"},"room":{"type":"string"}},"type":"object"},"type":"array"},"granted":{"type":"boolean"},"grantedAt":{"type":["integer","null"]},"ok":{"type":"boolean"},"ownRoom":{"additionalProperties":false,"properties":{"displayName":{"type":"string"},"handle":{"type":"string"},"room":{"type":"string"}},"type":["object","null"]}},"type":"object"},
+  },
+  'guests.list': {
+    cap: 'guests:rooms',
+    effect: 'read',
+    kind: 'call',
+    feature: 'guests-rooms-v1',
+    door: 'link',
+    http: { method: 'GET', route: '/cli/skin/guests/list', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"app":{"type":"string"},"guests":{"items":{"additionalProperties":false,"properties":{"agent":{"type":"boolean"},"enabled":{"type":"boolean"},"role":{"type":["string","null"]},"roomHandles":{"items":{"type":"string"},"type":"array"},"rooms":{"items":{"type":"string"},"type":"array"},"username":{"type":"string"}},"type":"object"},"type":"array"},"nextCursor":{"type":["string","null"]},"ok":{"type":"boolean"}},"type":"object"},
   },
   'password.change': {
     cap: null,
@@ -501,6 +523,28 @@ export const APP_VERBS = {
     responseNames: { 'relPath': 'path' },
     response: {"additionalProperties":false,"properties":{"ext":{"type":"string"},"kind":{"enum":["file","directory","other"]},"mime":{"type":"string"},"modifiedAt":{"type":"number"},"name":{"type":"string"},"relPath":{"type":"string"},"size":{"type":"integer"}},"type":"object"},
   },
+  'files.downloads': {
+    cap: 'files:download',
+    effect: 'read',
+    kind: 'call',
+    feature: 'files-download-v1',
+    door: 'both',
+    http: { method: 'GET', route: '/cli/fs/downloads', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"items":{"items":{"additionalProperties":false,"properties":{"mime":{"type":"string"},"modifiedAt":{"type":"integer"},"name":{"type":"string"},"relPath":{"type":"string"},"size":{"type":"integer"}},"type":"object"},"type":"array"},"ok":{"type":"boolean"},"truncated":{"type":"boolean"}},"type":"object"},
+  },
+  'files.download': {
+    cap: 'files:download',
+    effect: 'read',
+    kind: 'call',
+    feature: 'files-download-v1',
+    door: 'both',
+    http: { method: 'GET', route: '/cli/fs/download', params: { 'relPath': 'path' }, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"base64":{"type":"string"},"eof":{"type":"boolean"},"len":{"type":"integer"},"mime":{"type":"string"},"name":{"type":"string"},"offset":{"type":"integer"},"ok":{"type":"boolean"},"size":{"type":"integer"}},"type":"object"},
+  },
   'files.write': {
     cap: 'files:write',
     effect: 'write',
@@ -521,7 +565,7 @@ export const APP_VERBS = {
     http: { method: 'POST', route: '/cli/fs/upload-binary', params: {}, query: [] },
     socket: null,
     responseNames: { 'relPath': 'path' },
-    response: {"additionalProperties":false,"properties":{"relPath":{"type":"string"}},"type":"object"},
+    response: {"additionalProperties":false,"properties":{"relPath":{"type":"string"},"size":{"type":"integer"}},"type":"object"},
   },
   'files.uploadChunk': {
     cap: 'files:write',
@@ -532,7 +576,7 @@ export const APP_VERBS = {
     http: { method: 'POST', route: '/cli/fs/upload-chunk', params: { 'isLast': 'is_last', 'totalBytes': 'total_bytes', 'uploadId': 'upload_id' }, query: [] },
     socket: null,
     responseNames: { 'relPath': 'path' },
-    response: {"additionalProperties":false,"properties":{"done":{"type":"boolean"},"received":{"type":"integer"},"relPath":{"type":"string"}},"type":"object"},
+    response: {"additionalProperties":false,"properties":{"done":{"type":"boolean"},"received":{"type":"integer"},"relPath":{"type":"string"},"size":{"type":"integer"}},"type":"object"},
   },
   'files.create': {
     cap: 'files:write',
@@ -1091,6 +1135,8 @@ export type AppVerb = keyof typeof APP_VERBS
 export interface AppMeCan {
   readonly activity: boolean
   readonly chat: boolean
+  /** files:download in the room: it may save files (catalog v22+). */
+  readonly download?: boolean
   readonly files: string
   readonly heartbeats: string
   readonly identity: boolean
@@ -1098,12 +1144,18 @@ export interface AppMeCan {
   readonly send: boolean
   readonly store: string
   readonly tickets: string
+  /** files:upload in the room: it may drop files in the drop folders (catalog v22+). */
+  readonly upload?: boolean
   readonly wiki: boolean
 }
 
 export interface AppMeAgentFolders {
+  /** Folders or single files it may save with files:download, without files:read. */
+  readonly download?: string[]
   /** Room-relative folders it may list and read. */
   readonly read?: string[]
+  /** Drop folders: with files:upload it may add files there (in its own subfolder), never list or read them. */
+  readonly upload?: string[]
   /** Where an upload lands when it names no folder. */
   readonly uploadDir?: string
   /** Room-relative folders it may also write. */
@@ -1134,8 +1186,12 @@ export interface AppMeAgent {
 }
 
 export interface AppMeFolders {
+  /** Folders or single files it may save with files:download, without files:read. */
+  readonly download?: string[]
   /** Room-relative folders it may list and read. */
   readonly read?: string[]
+  /** Drop folders: with files:upload it may add files there (in its own subfolder), never list or read them. */
+  readonly upload?: string[]
   /** Where an upload lands when it names no folder. */
   readonly uploadDir?: string
   /** Room-relative folders it may also write. */
@@ -1248,6 +1304,59 @@ export interface AppGuestRooms {
   /** Project ids. */
   readonly rooms: string[]
   readonly username: string
+}
+
+export interface AppRoomRef {
+  readonly displayName: string
+  readonly handle: string
+  /** The room's project id. */
+  readonly room: string
+}
+
+export interface AppOwnRoom {
+  readonly displayName: string
+  readonly handle: string
+  /** The room's project id. */
+  readonly room: string
+}
+
+export interface AppRooms {
+  /** The App's service id. */
+  readonly app: string
+  /** Project ids this App may hand its guests (the list guests.setRooms enforces); [] without the grant. */
+  readonly ceiling: string[]
+  /** The rooms the grant adds beyond the own room; [] without the grant. */
+  readonly grantRooms: AppRoomRef[]
+  /** Whether the owner granted this App guests-rooms (k2 app grant <app> --kind guests-rooms). */
+  readonly granted: boolean
+  /** When the owner granted it, seconds since the epoch; null without the grant. */
+  readonly grantedAt: number | null
+  readonly ok: boolean
+  /** The App's own workspace room; null when it no longer resolves. */
+  readonly ownRoom: AppOwnRoom | null
+}
+
+export interface AppGuestRow {
+  /** A marked agent login (k2 app user agent), not a person. */
+  readonly agent: boolean
+  /** Whether the guest's grant on this App is on. */
+  readonly enabled: boolean
+  /** The role on this App's grant; null = Thread-only rooms. */
+  readonly role: string | null
+  readonly roomHandles: string[]
+  /** Project ids on this App only. */
+  readonly rooms: string[]
+  readonly username: string
+}
+
+export interface AppGuestList {
+  /** The App's service id. */
+  readonly app: string
+  /** This App's own guests, by username. */
+  readonly guests: AppGuestRow[]
+  /** Pass it as cursor for the next page; null on the last page. */
+  readonly nextCursor: string | null
+  readonly ok: boolean
 }
 
 export interface AppOk {
@@ -1866,13 +1975,51 @@ export interface AppFileStat {
   readonly size: number
 }
 
+export interface AppDownloadItem {
+  /** A content type from the extension (application/octet-stream when unknown). */
+  readonly mime: string
+  /** Milliseconds since the epoch. */
+  readonly modifiedAt: number
+  readonly name: string
+  /** Room-relative path (never a host path). */
+  readonly relPath: string
+  /** Bytes. */
+  readonly size: number
+}
+
+export interface AppDownloads {
+  /** Files the room's download entries expose to this login (a folder entry walks 8 levels); missing entries are left out. */
+  readonly items: AppDownloadItem[]
+  readonly ok: boolean
+  /** true past 500 files in all. */
+  readonly truncated: boolean
+}
+
+export interface AppFileDownload {
+  readonly base64: string
+  readonly eof: boolean
+  /** Bytes returned. */
+  readonly len: number
+  /** A content type from the extension (application/octet-stream when unknown). */
+  readonly mime: string
+  /** The file's name, for the saved file. */
+  readonly name: string
+  /** This chunk's byte offset. */
+  readonly offset: number
+  readonly ok: boolean
+  /** The file's size in bytes. */
+  readonly size: number
+}
+
 export interface AppFileDone {
   readonly success: boolean
 }
 
-export interface AppFileLanded {
+export interface AppFileUploaded {
   /** Room-relative path where it landed. */
   readonly relPath: string
+  /** Bytes written (catalog v22+). */
+  readonly size?: number
 }
 
 export interface AppFileChunk {
@@ -1881,6 +2028,13 @@ export interface AppFileChunk {
   readonly received?: number
   /** Where the file landed, when done. */
   readonly relPath?: string
+  /** The landed file's bytes, when done (catalog v22+). */
+  readonly size?: number
+}
+
+export interface AppFileLanded {
+  /** Room-relative path where it landed. */
+  readonly relPath: string
 }
 
 export interface AppFsFrame {
@@ -2535,7 +2689,7 @@ export interface AppProjectFrame {
 }
 
 /** The shared error codes (catalog `errors`). */
-export const APP_ERROR_CODES = ['cap_not_granted', 'not_bound', 'rate_limited', 'too_large', 'unknown_verb', 'verb_unavailable', 'verb_local', 'not_exposed', 'sending_off', 'server_not_saved', 'unreachable', 'removed', 'no_history', 'failed', 'conflict', 'space_full', 'value_too_large', 'bad_key', 'not_granted', 'resync', 'author_unknown', 'stale_widget', 'store_full', 'bad_tx', 'tx_expired', 'busy', 'paused', 'bad_args', 'bad_shape', 'pass_required', 'pass_invalid', 'pass_wrong_link', 'not_on_link', 'json_required', 'skin_room', 'usage', 'not_found', 'bad_login', 'locked', 'card_not_pending', 'guest_required', 'no_app_pass', 'no_app_key', 'no_chat_grant', 'chat_unavailable', 'app_pass_required', 'grant_required', 'outside_app_rooms', 'above_role', 'has_role', 'confirm_required', 'declined', 'refresh_invalid', 'refresh_reused', 'person_pass_required', 'wallet_off', 'duplicate_label', 'needs_editor', 'retired'] as const
+export const APP_ERROR_CODES = ['cap_not_granted', 'not_bound', 'rate_limited', 'too_large', 'unknown_verb', 'verb_unavailable', 'verb_local', 'not_exposed', 'sending_off', 'server_not_saved', 'unreachable', 'removed', 'no_history', 'failed', 'conflict', 'space_full', 'value_too_large', 'bad_key', 'not_granted', 'resync', 'author_unknown', 'stale_widget', 'store_full', 'bad_tx', 'tx_expired', 'busy', 'paused', 'bad_args', 'bad_shape', 'pass_required', 'pass_invalid', 'pass_wrong_link', 'not_on_link', 'json_required', 'skin_room', 'usage', 'not_found', 'bad_login', 'locked', 'card_not_pending', 'guest_required', 'no_app_pass', 'no_app_key', 'no_chat_grant', 'chat_unavailable', 'app_pass_required', 'grant_required', 'outside_app_rooms', 'above_role', 'has_role', 'confirm_required', 'declined', 'refresh_invalid', 'refresh_reused', 'person_pass_required', 'wallet_off', 'duplicate_label', 'needs_editor', 'retired', 'card_person_only'] as const
 
 export type AppErrorCode = (typeof APP_ERROR_CODES)[number]
 
@@ -2546,6 +2700,8 @@ export interface AppVerbs {
   'guests.login': { args: { app?: string; device?: AppDevice; password: string; username: string }; value: AppGuestLogin }
   'guests.rooms': { args: { app?: string; username: string }; value: AppGuestRooms }
   'guests.setRooms': { args: { app?: string; rooms: string[]; username: string }; value: AppGuestRooms }
+  'app.rooms': { args: { app?: string }; value: AppRooms }
+  'guests.list': { args: { app?: string; cursor?: string; limit?: number }; value: AppGuestList }
   'password.change': { args: { oldPassword: string; password: string }; value: AppOk }
   'wallet.list': { args: Record<string, never>; value: WalletList }
   'wallet.status': { args: { id: string }; value: WalletItemAnswer }
@@ -2583,8 +2739,10 @@ export interface AppVerbs {
   'files.readBinary': { args: { relPath: string; workspace: string }; value: AppFileBase64 }
   'files.readRange': { args: { len?: number; offset?: number; relPath: string; workspace: string }; value: AppFileRange }
   'files.stat': { args: { relPath: string; workspace: string }; value: AppFileStat }
+  'files.downloads': { args: { workspace: string }; value: AppDownloads }
+  'files.download': { args: { len?: number; offset?: number; relPath: string; workspace: string }; value: AppFileDownload }
   'files.write': { args: { content: string; relPath: string; workspace: string }; value: AppFileDone }
-  'files.uploadBinary': { args: { base64: string; dir: string; filename: string; workspace: string }; value: AppFileLanded }
+  'files.uploadBinary': { args: { base64: string; dir: string; filename: string; workspace: string }; value: AppFileUploaded }
   'files.uploadChunk': { args: { base64?: string; dir: string; filename: string; isLast?: boolean; offset?: number; status?: boolean; totalBytes?: number; uploadId: string; workspace: string }; value: AppFileChunk }
   'files.create': { args: { isDirectory?: boolean; relPath: string; workspace: string }; value: AppFileDone }
   'files.copy': { args: { destination: string; sources: string[]; workspace: string }; value: AppFileDone }
@@ -2638,7 +2796,7 @@ export interface AppVerbs {
   'project.events': { args: { group: string }; value: AppProjectFrame }
 }
 
-export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'guests.rooms' | 'guests.setRooms' | 'guests.logout' | 'guests.refresh' | 'guests.devices' | 'guests.revokeDevice' | 'app.info' | 'password.forgot' | 'password.reset' | 'thread.page' | 'thread.latest' | 'thread.activity' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.attachmentGet' | 'thread.catchup' | 'thread.setRead' | 'thread.unread' | 'thread.mute' | 'files.resolveLinks' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage' | 'chat.pass' | 'project.list' | 'project.read' | 'project.post' | 'project.markRead'
+export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'guests.rooms' | 'guests.setRooms' | 'app.rooms' | 'guests.list' | 'guests.logout' | 'guests.refresh' | 'guests.devices' | 'guests.revokeDevice' | 'app.info' | 'password.forgot' | 'password.reset' | 'thread.page' | 'thread.latest' | 'thread.activity' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.attachmentGet' | 'thread.catchup' | 'thread.setRead' | 'thread.unread' | 'thread.mute' | 'files.resolveLinks' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.downloads' | 'files.download' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage' | 'chat.pass' | 'project.list' | 'project.read' | 'project.post' | 'project.markRead'
 export type AppSubscribeVerb = 'thread.events' | 'thread.stream' | 'files.events' | 'activity.events' | 'project.events'
 
 /** The named helpers: one per App verb a server calls (browser-only rows have none), grouped by surface. */
@@ -2658,6 +2816,8 @@ export interface AppSurfaces {
     rooms(args: { app?: string; username: string }): Promise<AppGuestRooms>
     /** Set one guest's rooms on this App, within the rooms the App may hand out and never above the guest's role; idempotent, audited. cap guests:rooms · POST /cli/skin/guests/rooms. e.g. `await k2.asApp().guests.setRooms({username: 'dana', rooms: ['acme']})` */
     setRooms(args: { app?: string; rooms: string[]; username: string }): Promise<AppGuestRooms>
+    /** This App's own guests with their rooms on this App, role, on/off and whether each is an agent login, a page at a time (never the owner, a Connect login or another App's guest). cap guests:rooms · GET /cli/skin/guests/list. e.g. `const {guests, nextCursor} = await k2.asApp().guests.list({limit: 200})` */
+    list(args?: { app?: string; cursor?: string; limit?: number }): Promise<AppGuestList>
     /** Sign this guest's pass out; a device sign-in ends with it (its refresh token stops working). no cap · POST /cli/skin/logout. e.g. `await k2.asGuest(pass).guests.logout()` */
     logout(args?: {  }): Promise<AppOk>
     /** Trade a device's refresh token for a new pass and a new refresh token (one-time, rotating; a reused token ends the device's sign-in). no cap · POST /cli/skin/refresh. e.g. `const s = await k2.guests.refresh({refresh})` */
@@ -2668,6 +2828,8 @@ export interface AppSurfaces {
     revokeDevice(args: { id: string }): Promise<AppOk>
   }
   readonly app: {
+    /** This App's own room, the owner's guests-rooms grant and the rooms it may hand its guests (the App's own pass; no grant needed to read it). no cap · GET /cli/skin/app-rooms. e.g. `const {ceiling, granted} = await k2.asApp().app.rooms()` */
+    rooms(args?: { app?: string }): Promise<AppRooms>
     /** Public: this one App's name and how to sign in, only when the owner listed it; anything else answers like a route that doesn't exist. no cap · GET /cli/skin/app-info. e.g. `const info = await fetch(server + '/cli/skin/app-info?app=' + id)` */
     info(args: { app: string }): Promise<AppInfo>
     /** This App: its id, live Seed hash, health and when it was deployed (its own App only; the App pass, never a guest). no cap · GET /cli/skin/self. e.g. `const me = await k2.asApp().app.self()` */
@@ -2690,7 +2852,7 @@ export interface AppSurfaces {
     activity(args: { addr: string }): Promise<AppThreadActivity>
     /** Post text (and room files) to a room's Thread as the guest (or the App); the agent gets it at once. cap thread:post · POST /cli/thread/post. e.g. `await k2.thread.send({addr: 'sales', text: 'Hi'})` */
     send(args: { addr: string; attachments?: AppThreadAttach[]; text?: string; via?: string }): Promise<AppThreadPosted>
-    /** Answer a choice card (or set a secret card) in a room's Thread. cap thread:post · POST /cli/thread/answer. e.g. `await k2.thread.answerCard({addr, cardId, answer: 'Yes'})` */
+    /** Answer a choice card (or set a secret card) in a room's Thread, as a person: the guest's own pass (an App's own pass answers card_person_only). cap thread:post · POST /cli/thread/answer. e.g. `await k2.thread.answerCard({addr, cardId, answer: 'Yes'})` */
     answerCard(args: { addr: string; answer?: string; cardId: string; confirm?: boolean; delivery?: string; hosts?: string[]; scope?: string; secret?: string }): Promise<AppCardAnswered>
     /** Dismiss a pending card in a room's Thread. cap thread:post · POST /cli/thread/void. e.g. `await k2.thread.voidCard({addr, cardId})` */
     voidCard(args: { addr: string; cardId: string }): Promise<AppCardVoided>
@@ -2724,11 +2886,15 @@ export interface AppSurfaces {
     readRange(args: { len?: number; offset?: number; relPath: string; workspace: string }): Promise<AppFileRange>
     /** One file's or folder's kind, size, modified time and content type, under the room's folder scope. cap files:read · GET /cli/fs/stat. e.g. `const {kind, size, mime} = await k2.files.stat({workspace, relPath: 'jobs/J1/plans.pdf'})` */
     stat(args: { relPath: string; workspace: string }): Promise<AppFileStat>
+    /** The files this login may save from the room: its role's download entries, expanded (needs files:download; App only, a Garden is the owner and reads every file). cap files:download · GET /cli/fs/downloads. e.g. `const {items} = await k2.asGuest(pass).files.downloads({workspace})` */
+    downloads(args: { workspace: string }): Promise<AppDownloads>
+    /** Save a file, a chunk at a time: needs files:download, and the file inside a download entry or readable with files:read (App only, like files.downloads). cap files:download · GET /cli/fs/download. e.g. `const c = await k2.asGuest(pass).files.download({workspace, relPath: 'reports/2026-10.pdf'})` */
+    download(args: { len?: number; offset?: number; relPath: string; workspace: string }): Promise<AppFileDownload>
     /** Write (or overwrite) a text file; its folder must exist. cap files:write · POST /cli/fs/write-file. e.g. `await k2.files.write({workspace, relPath: 'a.txt', content})` */
     write(args: { content: string; relPath: string; workspace: string }): Promise<AppFileDone>
-    /** Upload a file in one request; a taken name becomes name (1).ext. cap files:write · POST /cli/fs/upload-binary. e.g. `const {relPath} = await k2.files.uploadBinary({workspace, dir: 'in', filename, base64})` */
-    uploadBinary(args: { base64: string; dir: string; filename: string; workspace: string }): Promise<AppFileLanded>
-    /** Resumable upload, one chunk per request (10 GiB in all); the last chunk lands the file. cap files:write · POST /cli/fs/upload-chunk. e.g. `await k2.files.uploadChunk({workspace, dir, filename, uploadId, offset, base64, isLast})` */
+    /** Upload a file in one request; a taken name becomes name (1).ext. files:write, or files:upload into a drop folder (it lands in your own subfolder). cap files:write · POST /cli/fs/upload-binary. e.g. `const {relPath} = await k2.files.uploadBinary({workspace, dir: 'in', filename, base64})` */
+    uploadBinary(args: { base64: string; dir: string; filename: string; workspace: string }): Promise<AppFileUploaded>
+    /** Resumable upload, one chunk per request (10 GiB in all); the last chunk lands the file. files:write, or files:upload into a drop folder. cap files:write · POST /cli/fs/upload-chunk. e.g. `await k2.files.uploadChunk({workspace, dir, filename, uploadId, offset, base64, isLast})` */
     uploadChunk(args: { base64?: string; dir: string; filename: string; isLast?: boolean; offset?: number; status?: boolean; totalBytes?: number; uploadId: string; workspace: string }): Promise<AppFileChunk>
     /** Create an empty file or a folder. cap files:write · POST /cli/fs/create. e.g. `await k2.files.create({workspace, relPath: 'in', isDirectory: true})` */
     create(args: { isDirectory?: boolean; relPath: string; workspace: string }): Promise<AppFileDone>

@@ -19,8 +19,9 @@
 import type { CatalogErrorCode, CatalogWireError } from '../contract/catalog-types'
 import { CATALOG_ERROR_CODES } from '../contract/catalog-types'
 
-/** The two verbs this file answers. */
-export const ZEN_GUEST_VERBS: ReadonlySet<string> = new Set(['guests.rooms', 'guests.setRooms'])
+/** The verbs this file answers: RS-A15's two, plus the App's ceiling and
+ *  guest list (prd-app-caps-0464-v1 AC3, catalog v22; reads, no sheet). */
+export const ZEN_GUEST_VERBS: ReadonlySet<string> = new Set(['guests.rooms', 'guests.setRooms', 'app.rooms', 'guests.list'])
 
 /** The vault confirm action the daemon binds a Garden guest-rooms write to. */
 export const ZEN_GUESTS_CONFIRM_ACTION = 'garden-guests' as const

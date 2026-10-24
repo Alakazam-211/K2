@@ -96,6 +96,11 @@ export const K2_CAPS = {
   },
   'project:write': { label: 'Post in project chats (needs it in every member room)', exposure: ['app'] },
   'files:download': { label: 'Download Thread files (a save, not just a view; a person grants it)', exposure: ['app'] },
+  'files:upload': {
+    label: 'Upload files',
+    sentence: "Put files in this agent's drop folders. You can't see or open what's there.",
+    exposure: ['app'],
+  },
   'wallet:self': { label: "Use the person's own wallet (an owner setting per App, never a room cap)", exposure: ['app'] },
 } as const satisfies Record<string, K2CapInfo>
 

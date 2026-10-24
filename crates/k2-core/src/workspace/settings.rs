@@ -1192,7 +1192,8 @@ pub const APP_CORES: &[&str] = &["db", "files", "thread", "mail", "sew"];
 /// cap in no core: `heartbeats:write` and `files:agentconfig` reach the
 /// agent itself (person-present, N3), `project:write` (0.46.3) is
 /// person-held until a Projects core exists, `files:download` (0.46.3) is
-/// a person's grant (never implied by a core), and unknown caps are never
+/// a person's grant (never implied by a core), `files:upload` (0.46.4) is
+/// per role only (never implied by a core), and unknown caps are never
 /// carried.
 /// Mail and Sew have no App caps yet (MCS11–12, the Sew App slice).
 pub fn app_core_of_cap(cap: &str) -> Option<&'static str> {
@@ -2557,6 +2558,8 @@ mod tests {
             ("project:write", None),
             // 0.46.3 Thread downloads: a person's grant, in no core.
             ("files:download", None),
+            // 0.46.4 drop folders: per role, in no core.
+            ("files:upload", None),
             ("bogus:cap", None),
         ] {
             assert_eq!(app_core_of_cap(cap), core, "{cap}");

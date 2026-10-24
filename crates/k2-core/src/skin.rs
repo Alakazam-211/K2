@@ -189,6 +189,14 @@ pub const CAP_PROJECT_WRITE: &str = "project:write";
 /// an agent with "manage Apps" can't add it (`skin_routes` answers 403
 /// `owner_only`), the same rule as [`CAP_FILES_AGENT_CONFIG`].
 pub const CAP_FILES_DOWNLOAD: &str = "files:download";
+/// Upload-only files (prd-app-caps-0464-v1 AC7, 0.46.4): put files in the
+/// room line's drop folders (`upload`, [`paths::RoomPathScope::upload`])
+/// through the two upload doors, each landing in the uploader's own
+/// subfolder. Held per room. It never implies `files:read` or
+/// `files:write`, neither implies it, and it is never a default and in no
+/// App core. Strictly narrower than `files:write`, so an agent with
+/// "manage Apps" may grant it (it is not in [`PERSON_ONLY_CAPS`]).
+pub const CAP_FILES_UPLOAD: &str = "files:upload";
 /// Caps only a person may grant ([`person_only_cap_in`]).
 pub const PERSON_ONLY_CAPS: &[&str] = &[CAP_FILES_AGENT_CONFIG, CAP_FILES_DOWNLOAD];
 
@@ -216,6 +224,7 @@ const ACCEPTED_CAPS: &[&str] = &[
     CAP_ROOM_MEMBERS,
     CAP_PROJECT_WRITE,
     CAP_FILES_DOWNLOAD,
+    CAP_FILES_UPLOAD,
 ];
 
 /// Connect / Server Access names — never a skin role. `viewer` stays

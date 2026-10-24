@@ -91,9 +91,11 @@ describe('day-0: verb tables', () => {
       }
       // RS-A15: guests.* rows ride both the App route and the Garden door
       // (portable), answered by this computer's daemon in a Garden.
-      if (verb === 'guests.rooms' || verb === 'guests.setRooms') {
+      if (verb === 'guests.rooms' || verb === 'guests.setRooms' || verb === 'guests.list' || verb === 'app.rooms') {
         expect(row.reach).toBe('portable')
-        expect(row.cap).toBe('guests:rooms')
+        // Catalog v22: app.rooms has no cap row (the App reads its own
+        // ceiling); in a Garden the daemon still asks for guests:rooms.
+        expect(row.cap).toBe(verb === 'app.rooms' ? null : 'guests:rooms')
         expect(verb in ZEN_VERBS, verb).toBe(false)
         continue
       }

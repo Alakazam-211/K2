@@ -5,7 +5,7 @@
 import type { CatalogReach, CatalogVerbKind } from '../contract/catalog-types'
 
 /** The catalog version this table was generated from. */
-export const ZEN_CATALOG_VERSION = 21
+export const ZEN_CATALOG_VERSION = 22
 
 /**
  * Every catalog row with a `builtin` or `registered` renderer binding,
@@ -87,6 +87,7 @@ export const ZEN_CUSTOM_VERBS = {
   'save.remove': { cap: null, reach: 'local', kind: 'call' },
   'save.keys': { cap: null, reach: 'local', kind: 'call' },
   'viewer.get': { cap: null, reach: 'local', kind: 'call' },
+  'app.rooms': { cap: null, reach: 'portable', kind: 'call' },
   'app.self': { cap: null, reach: 'portable', kind: 'call' },
   'app.usage': { cap: null, reach: 'portable', kind: 'call' },
   'widget.self': { cap: null, reach: 'local', kind: 'call' },
@@ -141,6 +142,7 @@ export const ZEN_CUSTOM_VERBS = {
   'store.txAbort': { cap: 'store:write', reach: 'local', kind: 'call' },
   'guests.rooms': { cap: 'guests:rooms', reach: 'portable', kind: 'call' },
   'guests.setRooms': { cap: 'guests:rooms', reach: 'portable', kind: 'call' },
+  'guests.list': { cap: 'guests:rooms', reach: 'portable', kind: 'call' },
   'activity.snapshot': { cap: 'activity:read', reach: 'portable', kind: 'call' },
   'room.members': { cap: 'room:members', reach: 'portable', kind: 'call' },
 } as const satisfies Record<string, ZenCustomVerbRow>

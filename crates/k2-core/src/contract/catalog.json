@@ -1,5 +1,5 @@
 {
-  "catalogVersion": 21,
+  "catalogVersion": 22,
   "caps": [
     {
       "name": "agents:read",
@@ -114,6 +114,12 @@
       "exposure": ["app"],
       "label": "Download Thread files (a save, not just a view; a person grants it)"
     },
+    {
+      "name": "files:upload",
+      "exposure": ["app"],
+      "label": "Upload files",
+      "sentence": "Put files in this agent's drop folders. You can't see or open what's there."
+    },
     {"name": "wallet:self", "exposure": ["app"], "label": "Use the person's own wallet (an owner setting per App, never a room cap)"}
   ],
   "errors": [
@@ -195,7 +201,8 @@
     {"code": "wallet_off", "doc": "This App doesn't use personal wallets; its owner turns them on."},
     {"code": "duplicate_label", "doc": "The person already has an item with that label for that provider."},
     {"code": "needs_editor", "doc": "Garden access lists on: this widget version isn't signed by the person, K2 or an agent on this Garden's list, so only its own store and save keyspace and widget.self answer. Someone who edits this Garden has to sign this version."},
-    {"code": "retired", "doc": "K2 retired this verb: it answers this until a later release removes it (the message says which)."}
+    {"code": "retired", "doc": "K2 retired this verb: it answers this until a later release removes it (the message says which)."},
+    {"code": "card_person_only", "doc": "Only a person answers a card (the Thread tab, the phone, an App's sign-in with the guest's own pass). An agent, a K2 terminal, an App's own pass or a platform pass never can; an agent closes its own card with k2 thread void."}
   ],
   "bannedFields": [
     "projectPath",
@@ -1546,7 +1553,7 @@
         {"title": "choice", "type": "string"}
       ],
       "response": {"type": "null"},
-      "errors": ["cap_not_granted", "not_bound", "verb_unavailable", "failed", "sending_off", "rate_limited"],
+      "errors": ["cap_not_granted", "not_bound", "verb_unavailable", "failed", "sending_off", "rate_limited", "card_person_only"],
       "doc": "Answer a choice card in the Thread (never a secret card).",
       "example": "await k2.thread.answer(row.address, card.id, 'Yes')"
     },
@@ -4694,6 +4701,20 @@
                     "uploadDir": {
                       "type": "string",
                       "description": "Where an upload lands when it names no folder."
+                    },
+                    "upload": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Drop folders: with files:upload it may add files there (in its own subfolder), never list or read them."
+                    },
+                    "download": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Folders or single files it may save with files:download, without files:read."
                     }
                   },
                   "required": [],
@@ -4788,6 +4809,14 @@
                     },
                     "identity": {
                       "type": "boolean"
+                    },
+                    "upload": {
+                      "type": "boolean",
+                      "description": "files:upload in the room: it may drop files in the drop folders (catalog v22+)."
+                    },
+                    "download": {
+                      "type": "boolean",
+                      "description": "files:download in the room: it may save files (catalog v22+)."
                     }
                   },
                   "required": [
@@ -4826,6 +4855,20 @@
                     "uploadDir": {
                       "type": "string",
                       "description": "Where an upload lands when it names no folder."
+                    },
+                    "upload": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Drop folders: with files:upload it may add files there (in its own subfolder), never list or read them."
+                    },
+                    "download": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Folders or single files it may save with files:download, without files:read."
                     }
                   },
                   "required": [],
@@ -5420,6 +5463,289 @@
       ],
       "doc": "Set one guest's rooms on this App, within the rooms the App may hand out and never above the guest's role; idempotent, audited.",
       "example": "await k2.asApp().guests.setRooms({username: 'dana', rooms: ['acme']})"
+    },
+    {
+      "verb": "app.rooms",
+      "cap": null,
+      "exposure": [
+        "app",
+        "garden-local"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "guests-rooms-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/skin/app-rooms",
+          "door": "link",
+          "head": false
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "app": {
+              "type": "string",
+              "description": "The App's service id. Garden: required (which local App). App: absent, or this App's own id.",
+              "default": ""
+            }
+          },
+          "required": [],
+          "additionalProperties": false,
+          "default": {}
+        }
+      ],
+      "response": {
+        "title": "AppRooms",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "app": {
+            "type": "string",
+            "description": "The App's service id."
+          },
+          "ownRoom": {
+            "title": "AppOwnRoom",
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "room": {
+                "type": "string",
+                "description": "The room's project id."
+              },
+              "handle": {
+                "type": "string"
+              },
+              "displayName": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "room",
+              "handle",
+              "displayName"
+            ],
+            "additionalProperties": false,
+            "description": "The App's own workspace room; null when it no longer resolves."
+          },
+          "granted": {
+            "type": "boolean",
+            "description": "Whether the owner granted this App guests-rooms (k2 app grant <app> --kind guests-rooms)."
+          },
+          "grantedAt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "When the owner granted it, seconds since the epoch; null without the grant."
+          },
+          "grantRooms": {
+            "type": "array",
+            "items": {
+              "title": "AppRoomRef",
+              "type": "object",
+              "properties": {
+                "room": {
+                  "type": "string",
+                  "description": "The room's project id."
+                },
+                "handle": {
+                  "type": "string"
+                },
+                "displayName": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "room",
+                "handle",
+                "displayName"
+              ],
+              "additionalProperties": false
+            },
+            "description": "The rooms the grant adds beyond the own room; [] without the grant."
+          },
+          "ceiling": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Project ids this App may hand its guests (the list guests.setRooms enforces); [] without the grant."
+          }
+        },
+        "required": [
+          "ok",
+          "app",
+          "ownRoom",
+          "granted",
+          "grantedAt",
+          "grantRooms",
+          "ceiling"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "app_pass_required",
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "usage",
+        "not_found",
+        "cap_not_granted",
+        "stale_widget",
+        "author_unknown",
+        "failed"
+      ],
+      "doc": "This App's own room, the owner's guests-rooms grant and the rooms it may hand its guests (the App's own pass; no grant needed to read it).",
+      "example": "const {ceiling, granted} = await k2.asApp().app.rooms()"
+    },
+    {
+      "verb": "guests.list",
+      "cap": "guests:rooms",
+      "exposure": [
+        "app",
+        "garden-local"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "guests-rooms-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/skin/guests/list",
+          "door": "link",
+          "head": false
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "app": {
+              "type": "string",
+              "description": "The App's service id. Garden: required (which local App). App: absent, or this App's own id.",
+              "default": ""
+            },
+            "cursor": {
+              "type": "string",
+              "description": "The last username of the previous page ('' = from the start).",
+              "default": ""
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "description": "Guests per page (default 100, at most 500)."
+            }
+          },
+          "required": [],
+          "additionalProperties": false,
+          "default": {}
+        }
+      ],
+      "response": {
+        "title": "AppGuestList",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "app": {
+            "type": "string",
+            "description": "The App's service id."
+          },
+          "guests": {
+            "type": "array",
+            "items": {
+              "title": "AppGuestRow",
+              "type": "object",
+              "properties": {
+                "username": {
+                  "type": "string"
+                },
+                "rooms": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Project ids on this App only."
+                },
+                "roomHandles": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "role": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The role on this App's grant; null = Thread-only rooms."
+                },
+                "enabled": {
+                  "type": "boolean",
+                  "description": "Whether the guest's grant on this App is on."
+                },
+                "agent": {
+                  "type": "boolean",
+                  "description": "A marked agent login (k2 app user agent), not a person."
+                }
+              },
+              "required": [
+                "username",
+                "rooms",
+                "roomHandles",
+                "role",
+                "enabled",
+                "agent"
+              ],
+              "additionalProperties": false
+            },
+            "description": "This App's own guests, by username."
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass it as cursor for the next page; null on the last page."
+          }
+        },
+        "required": [
+          "ok",
+          "app",
+          "guests",
+          "nextCursor"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "app_pass_required",
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "grant_required",
+        "usage",
+        "not_found",
+        "rate_limited",
+        "cap_not_granted",
+        "stale_widget",
+        "author_unknown",
+        "failed"
+      ],
+      "doc": "This App's own guests with their rooms on this App, role, on/off and whether each is an agent login, a page at a time (never the owner, a Connect login or another App's guest).",
+      "example": "const {guests, nextCursor} = await k2.asApp().guests.list({limit: 200})"
     },
     {
       "verb": "password.change",
@@ -8376,6 +8702,7 @@
         "cap_not_granted",
         "usage",
         "not_found",
+        "rate_limited",
         "failed"
       ],
       "doc": "The room's live pinned-Chat Thread turn, counts only (needs thread:read and activity:read); null when none. Live: kind thread_activity on thread.stream (the SDK opens it with ear=1); a raw overlay socket opened with ear=1 gets collection activity frames.",
@@ -8665,9 +8992,10 @@
         "cap_not_granted",
         "usage",
         "card_not_pending",
+        "card_person_only",
         "failed"
       ],
-      "doc": "Answer a choice card (or set a secret card) in a room's Thread.",
+      "doc": "Answer a choice card (or set a secret card) in a room's Thread, as a person: the guest's own pass (an App's own pass answers card_person_only).",
       "example": "await k2.thread.answerCard({addr, cardId, answer: 'Yes'})"
     },
     {
@@ -11490,6 +11818,215 @@
       "example": "const {kind, size, mime} = await k2.files.stat({workspace, relPath: 'jobs/J1/plans.pdf'})"
     },
     {
+      "verb": "files.downloads",
+      "cap": "files:download",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "files-download-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/fs/downloads"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            }
+          },
+          "required": [
+            "workspace"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppDownloads",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "title": "AppDownloadItem",
+              "type": "object",
+              "properties": {
+                "relPath": {
+                  "type": "string",
+                  "description": "Room-relative path (never a host path)."
+                },
+                "name": {
+                  "type": "string"
+                },
+                "size": {
+                  "type": "integer",
+                  "description": "Bytes."
+                },
+                "modifiedAt": {
+                  "type": "integer",
+                  "description": "Milliseconds since the epoch."
+                },
+                "mime": {
+                  "type": "string",
+                  "description": "A content type from the extension (application/octet-stream when unknown)."
+                }
+              },
+              "required": [
+                "relPath",
+                "name",
+                "size",
+                "modifiedAt",
+                "mime"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Files the room's download entries expose to this login (a folder entry walks 8 levels); missing entries are left out."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "true past 500 files in all."
+          }
+        },
+        "required": [
+          "ok",
+          "items",
+          "truncated"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "failed"
+      ],
+      "doc": "The files this login may save from the room: its role's download entries, expanded (needs files:download; App only, a Garden is the owner and reads every file).",
+      "example": "const {items} = await k2.asGuest(pass).files.downloads({workspace})"
+    },
+    {
+      "verb": "files.download",
+      "cap": "files:download",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "files-download-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/fs/download",
+          "params": {
+            "relPath": "path"
+          }
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            },
+            "relPath": {
+              "type": "string",
+              "description": "Room-relative path of one file (never a host path)."
+            },
+            "offset": {
+              "type": "integer",
+              "description": "Byte offset (default 0).",
+              "minimum": 0
+            },
+            "len": {
+              "type": "integer",
+              "description": "Bytes (default 8 MiB, at most 16 MiB).",
+              "minimum": 1,
+              "maximum": 16777216
+            }
+          },
+          "required": [
+            "workspace",
+            "relPath"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppFileDownload",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "base64": {
+            "type": "string"
+          },
+          "len": {
+            "type": "integer",
+            "description": "Bytes returned."
+          },
+          "offset": {
+            "type": "integer",
+            "description": "This chunk's byte offset."
+          },
+          "size": {
+            "type": "integer",
+            "description": "The file's size in bytes."
+          },
+          "eof": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string",
+            "description": "The file's name, for the saved file."
+          },
+          "mime": {
+            "type": "string",
+            "description": "A content type from the extension (application/octet-stream when unknown)."
+          }
+        },
+        "required": [
+          "ok",
+          "base64",
+          "len",
+          "offset",
+          "size",
+          "eof",
+          "name",
+          "mime"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "failed"
+      ],
+      "doc": "Save a file, a chunk at a time: needs files:download, and the file inside a download entry or readable with files:read (App only, like files.downloads).",
+      "example": "const c = await k2.asGuest(pass).files.download({workspace, relPath: 'reports/2026-10.pdf'})"
+    },
+    {
       "verb": "files.write",
       "cap": "files:write",
       "exposure": [
@@ -11608,12 +12145,16 @@
         }
       ],
       "response": {
-        "title": "AppFileLanded",
+        "title": "AppFileUploaded",
         "type": "object",
         "properties": {
           "relPath": {
             "type": "string",
             "description": "Room-relative path where it landed."
+          },
+          "size": {
+            "type": "integer",
+            "description": "Bytes written (catalog v22+)."
           }
         },
         "required": [
@@ -11631,7 +12172,7 @@
         "too_large",
         "failed"
       ],
-      "doc": "Upload a file in one request; a taken name becomes name (1).ext.",
+      "doc": "Upload a file in one request; a taken name becomes name (1).ext. files:write, or files:upload into a drop folder (it lands in your own subfolder).",
       "example": "const {relPath} = await k2.files.uploadBinary({workspace, dir: 'in', filename, base64})"
     },
     {
@@ -11722,6 +12263,10 @@
           "relPath": {
             "type": "string",
             "description": "Where the file landed, when done."
+          },
+          "size": {
+            "type": "integer",
+            "description": "The landed file's bytes, when done (catalog v22+)."
           }
         },
         "required": [
@@ -11740,7 +12285,7 @@
         "conflict",
         "failed"
       ],
-      "doc": "Resumable upload, one chunk per request (10 GiB in all); the last chunk lands the file.",
+      "doc": "Resumable upload, one chunk per request (10 GiB in all); the last chunk lands the file. files:write, or files:upload into a drop folder.",
       "example": "await k2.files.uploadChunk({workspace, dir, filename, uploadId, offset, base64, isLast})"
     },
     {

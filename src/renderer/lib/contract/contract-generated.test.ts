@@ -317,6 +317,8 @@ describe('TUWA10: one cap table', () => {
       'project:write': 'Post in project chats (needs it in every member room)',
       // 0.46.3 Thread downloads: per room, a person's grant, never implied.
       'files:download': 'Download Thread files (a save, not just a view; a person grants it)',
+      // 0.46.4 drop folders: per room, never implies read or write.
+      'files:upload': 'Upload files',
       // 0.46.3: an owner setting per App (its users' own wallets), never a pass's cap.
       'wallet:self': "Use the person's own wallet (an owner setting per App, never a room cap)",
     })

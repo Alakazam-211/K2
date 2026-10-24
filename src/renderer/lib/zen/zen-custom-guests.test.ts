@@ -28,11 +28,13 @@ function daemonError(code: string, extra: Record<string, unknown> = {}): Error {
 const confirmRequired = () => daemonError('confirm_required', { secretId: 'guests:abc', action: 'garden-guests', change })
 
 describe('zen custom guests', () => {
-  it('the catalog rows are the two verbs, under guests:rooms', () => {
-    expect([...ZEN_GUEST_VERBS].sort()).toEqual(['guests.rooms', 'guests.setRooms'])
+  it('the catalog rows are the four verbs; app.rooms has no cap (the daemon asks the manifest for guests:rooms)', () => {
+    expect([...ZEN_GUEST_VERBS].sort()).toEqual(['app.rooms', 'guests.list', 'guests.rooms', 'guests.setRooms'])
     const rows = ZEN_CUSTOM_VERBS as unknown as Record<string, { cap: string | null }>
     expect(rows['guests.rooms']?.cap).toBe('guests:rooms')
     expect(rows['guests.setRooms']?.cap).toBe('guests:rooms')
+    expect(rows['guests.list']?.cap).toBe('guests:rooms')
+    expect(rows['app.rooms']?.cap).toBe(null)
   })
 
   it('a read goes straight through, with no sheet', async () => {

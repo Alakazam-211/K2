@@ -417,8 +417,8 @@ mod tests {
         let local = c.verbs_exposed_to(Exposure::GardenLocal);
         assert_eq!(
             local.len(),
-            35,
-            "store.* ×11 (store.patch since catalog v21, 0.46.4), save.* ×4, viewer.get, guests.rooms, guests.setRooms, room.members, app.self, app.usage, widget.self, the 12 person rows, and box usage's app.resources (0.46.4)"
+            37,
+            "store.* ×11 (store.patch since catalog v21, 0.46.4), save.* ×4, viewer.get, guests.rooms, guests.setRooms, app.rooms, guests.list (catalog v22, 0.46.4), room.members, app.self, app.usage, widget.self, the 12 person rows, and box usage's app.resources (0.46.4)"
         );
         let both: Vec<&str> = local.iter().filter(|v| v.exposed_to(Exposure::App)).map(|v| v.verb.as_str()).collect();
         assert_eq!(
@@ -426,6 +426,10 @@ mod tests {
             [
                 "guests.rooms",
                 "guests.setRooms",
+                // prd-app-caps-0464-v1 AC1/AC2 (catalog v22): the App's own
+                // ceiling and guest list, under RS-A15's feature.
+                "app.rooms",
+                "guests.list",
                 "thread.catchup",
                 "thread.unread",
                 "thread.mute",
@@ -573,6 +577,9 @@ mod tests {
                 // 0.46.4: a verb K2 retired answers this until its removal
                 // (k2.sources.ask until 0.47.0).
                 "retired",
+                // 0.46.4 (prd-app-caps-0464-v1 AC24/AC28): only a person
+                // answers a card.
+                "card_person_only",
             ]
         );
         let retry: Vec<&str> = catalog().errors.iter().filter(|e| e.retryable).map(|e| e.code.as_str()).collect();

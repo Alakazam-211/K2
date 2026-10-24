@@ -17,7 +17,7 @@
 //! test fails a hand edit).
 
 /// The catalog version this table was generated from.
-pub const CATALOG_VERSION: u32 = 21;
+pub const CATALOG_VERSION: u32 = 22;
 
 /// Every `(method, path)` the browser helper forwards with a guest's
 /// pass (rows for both doors and helper-only rows; a GET row also opens
@@ -71,6 +71,10 @@ pub const HTTP_ALLOWLIST: &[(&str, &str)] = &[
     ("HEAD", "/cli/fs/read-range"),
     ("GET", "/cli/fs/stat"),
     ("HEAD", "/cli/fs/stat"),
+    ("GET", "/cli/fs/downloads"),
+    ("HEAD", "/cli/fs/downloads"),
+    ("GET", "/cli/fs/download"),
+    ("HEAD", "/cli/fs/download"),
     ("POST", "/cli/fs/write-file"),
     ("POST", "/cli/fs/upload-binary"),
     ("POST", "/cli/fs/upload-chunk"),
@@ -147,6 +151,8 @@ pub const LINK_HTTP: &[(&str, &str)] = &[
     ("POST", "/cli/skin/login"),
     ("GET", "/cli/skin/guests/rooms"),
     ("POST", "/cli/skin/guests/rooms"),
+    ("GET", "/cli/skin/app-rooms"),
+    ("GET", "/cli/skin/guests/list"),
     ("POST", "/cli/skin/logout"),
     ("POST", "/cli/skin/refresh"),
     ("GET", "/cli/skin/devices"),
@@ -184,6 +190,10 @@ pub const LINK_HTTP: &[(&str, &str)] = &[
     ("HEAD", "/cli/fs/read-range"),
     ("GET", "/cli/fs/stat"),
     ("HEAD", "/cli/fs/stat"),
+    ("GET", "/cli/fs/downloads"),
+    ("HEAD", "/cli/fs/downloads"),
+    ("GET", "/cli/fs/download"),
+    ("HEAD", "/cli/fs/download"),
     ("POST", "/cli/fs/write-file"),
     ("POST", "/cli/fs/upload-binary"),
     ("POST", "/cli/fs/upload-chunk"),
@@ -270,7 +280,7 @@ pub const WS_ALLOWLIST: &[(&str, &str)] = &[
 pub const HELPER_ONLY_HTTP: &[&str] = &["/cli/skin/password/change", "/cli/skin/wallet/list", "/cli/skin/wallet/status", "/cli/skin/wallet/add", "/cli/skin/wallet/login", "/cli/skin/wallet/login/status", "/cli/skin/wallet/login/input", "/cli/skin/wallet/login/cancel", "/cli/skin/wallet/use", "/cli/skin/wallet/remove"];
 
 /// Routes only an App's gateway link serves: a BFF's server-side calls.
-pub const LINK_ONLY_HTTP: &[&str] = &["/cli/skin/login", "/cli/skin/guests/rooms", "/cli/skin/logout", "/cli/skin/refresh", "/cli/skin/app-info", "/cli/skin/password/forgot", "/cli/skin/password/reset", "/cli/skin/self", "/cli/skin/usage", "/cli/sew/pass"];
+pub const LINK_ONLY_HTTP: &[&str] = &["/cli/skin/login", "/cli/skin/guests/rooms", "/cli/skin/app-rooms", "/cli/skin/guests/list", "/cli/skin/logout", "/cli/skin/refresh", "/cli/skin/app-info", "/cli/skin/password/forgot", "/cli/skin/password/reset", "/cli/skin/self", "/cli/skin/usage", "/cli/sew/pass"];
 
 /// The catalog verb behind each App-facing pair and socket
 /// (`(method, path, verb, door)`; sockets are `WS`), for refusals, the
@@ -281,6 +291,8 @@ pub const VERBS: &[(&str, &str, &str, &str)] = &[
     ("POST", "/cli/skin/login", "guests.login", "link"),
     ("GET", "/cli/skin/guests/rooms", "guests.rooms", "link"),
     ("POST", "/cli/skin/guests/rooms", "guests.setRooms", "link"),
+    ("GET", "/cli/skin/app-rooms", "app.rooms", "link"),
+    ("GET", "/cli/skin/guests/list", "guests.list", "link"),
     ("POST", "/cli/skin/password/change", "password.change", "helper"),
     ("GET", "/cli/skin/wallet/list", "wallet.list", "helper"),
     ("GET", "/cli/skin/wallet/status", "wallet.status", "helper"),
@@ -316,6 +328,8 @@ pub const VERBS: &[(&str, &str, &str, &str)] = &[
     ("GET", "/cli/fs/read-binary", "files.readBinary", "both"),
     ("GET", "/cli/fs/read-range", "files.readRange", "both"),
     ("GET", "/cli/fs/stat", "files.stat", "both"),
+    ("GET", "/cli/fs/downloads", "files.downloads", "both"),
+    ("GET", "/cli/fs/download", "files.download", "both"),
     ("POST", "/cli/fs/write-file", "files.write", "both"),
     ("POST", "/cli/fs/upload-binary", "files.uploadBinary", "both"),
     ("POST", "/cli/fs/upload-chunk", "files.uploadChunk", "both"),

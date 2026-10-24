@@ -35214,7 +35214,7 @@ again on pass_invalid), or, on a guest's own calls, the session pass
 that guest's login returned. A login sent without the App pass is
 401 pass_required. Users and rooms use the App key
 ($K2_SECRETS_DIR/K2_APP_KEY) on /v1/apps/$K2_APP_ID/... instead.
-From K2's verb catalog, version 21.
+From K2's verb catalog, version 22.
 
 THE SERVER SDK (sdk/server, TypeScript, Node 22+, no dependencies)
   import { fromEnv } from '@k2/server'
@@ -35234,6 +35234,7 @@ no cap (your own rooms)
   me.get                   GET  /cli/skin/me                                  Who this pass is: guest or App, its agents (identity, caps, what they allow, folders, unread and waiting tickets where the caps allow), this server's ids and features.
   roomAgents.list          GET  /cli/skin/agents                              The agents in the pass's rooms: handle, name, color and picture, plus unread and waiting (thread:read) and waiting tickets (tickets:read) where the caps allow.
   guests.login             POST /cli/skin/login (server only)                 Log a guest in through this App; the answer carries the guest's session pass.
+  app.rooms                GET  /cli/skin/app-rooms (server only)             This App's own room, the owner's guests-rooms grant and the rooms it may hand its guests (the App's own pass; no grant needed to read it).
   password.change          POST /cli/skin/password/change (browser only)      A guest changes their own password (browser only: it ends every session of theirs).
   guests.logout            POST /cli/skin/logout (server only)                Sign this guest's pass out; a device sign-in ends with it (its refresh token stops working).
   guests.refresh           POST /cli/skin/refresh (server only)               Trade a device's refresh token for a new pass and a new refresh token (one-time, rotating; a reused token ends the device's sign-in).
@@ -35263,7 +35264,7 @@ thread:read (Read the Thread)
   project.events           WS   /cli/skin/projects/events?group=              Live lines of one project chat, shaped like Thread frames (collection project), plus a guest's own read frames (collection read); after a gap, project.read with afterSeq.
 thread:post (Post to the Thread)
   thread.send              POST /cli/thread/post                              Post text (and room files) to a room's Thread as the guest (or the App); the agent gets it at once.
-  thread.answerCard        POST /cli/thread/answer                            Answer a choice card (or set a secret card) in a room's Thread.
+  thread.answerCard        POST /cli/thread/answer                            Answer a choice card (or set a secret card) in a room's Thread, as a person: the guest's own pass (an App's own pass answers card_person_only).
   thread.voidCard          POST /cli/thread/void                              Dismiss a pending card in a room's Thread.
 files:read (Read files (also shows heartbeat instructions))
   files.resolveLinks       POST /cli/fs/resolve-links                         Which paths printed in a room's messages lead to a file or folder your file rights cover (the rest stay plain text).
@@ -35276,8 +35277,8 @@ files:read (Read files (also shows heartbeat instructions))
   resources.list           GET  /cli/workspace/resources                      The room's pinned resources (its links drawer).
 files:write (Write files (not the agent's .k2 folder))
   files.write              POST /cli/fs/write-file                            Write (or overwrite) a text file; its folder must exist.
-  files.uploadBinary       POST /cli/fs/upload-binary                         Upload a file in one request; a taken name becomes name (1).ext.
-  files.uploadChunk        POST /cli/fs/upload-chunk                          Resumable upload, one chunk per request (10 GiB in all); the last chunk lands the file.
+  files.uploadBinary       POST /cli/fs/upload-binary                         Upload a file in one request; a taken name becomes name (1).ext. files:write, or files:upload into a drop folder (it lands in your own subfolder).
+  files.uploadChunk        POST /cli/fs/upload-chunk                          Resumable upload, one chunk per request (10 GiB in all); the last chunk lands the file. files:write, or files:upload into a drop folder.
   files.create             POST /cli/fs/create                                Create an empty file or a folder.
   files.copy               POST /cli/fs/copy                                  Copy files or folders (a taken name becomes 'name copy').
   files.move               POST /cli/fs/move                                  Move files or folders.
@@ -35310,6 +35311,7 @@ store:write (Change dump-table rows)
 guests:rooms (Set its own guests' rooms (an owner grant per App, never a guest's))
   guests.rooms             GET  /cli/skin/guests/rooms (server only)          One of this App's guests: its rooms on this App and its role (App: its own guests; Garden: any local App's).
   guests.setRooms          POST /cli/skin/guests/rooms (server only)          Set one guest's rooms on this App, within the rooms the App may hand out and never above the guest's role; idempotent, audited.
+  guests.list              GET  /cli/skin/guests/list (server only)           This App's own guests with their rooms on this App, role, on/off and whether each is an agent login, a page at a time (never the owner, a Connect login or another App's guest).
 activity:read (See when the agent is working)
   thread.activity          GET  /cli/thread/activity                          The room's live pinned-Chat Thread turn, counts only (needs thread:read and activity:read); null when none. Live: kind thread_activity on thread.stream (the SDK opens it with ear=1); a raw overlay socket opened with ear=1 gets collection activity frames.
   activity.snapshot        GET  /cli/activity/snapshot                        Whether the room's agent is working now, per session.
@@ -35334,6 +35336,9 @@ room:members (See who has access to the room)
   room.members             GET  /cli/skin/members                             Who holds a grant on the room: guests and agent logins with their roles (from grants, not presence); admins of this box are one line.
 project:write (Post in project chats (needs it in every member room))
   project.post             POST /cli/skin/projects/post                       Post in a project chat as the guest (guest:<username>); needs project:write in every member room.
+files:download (Download Thread files (a save, not just a view; a person grants it))
+  files.downloads          GET  /cli/fs/downloads                             The files this login may save from the room: its role's download entries, expanded (needs files:download; App only, a Garden is the owner and reads every file).
+  files.download           GET  /cli/fs/download                              Save a file, a chunk at a time: needs files:download, and the file inside a download entry or readable with files:read (App only, like files.downloads).
 wallet:self (Use the person's own wallet (an owner setting per App, never a room cap))
   wallet.list              GET  /cli/skin/wallet/list (browser only)          The person's own wallet (a guest's session pass; never anyone else's). LLM subscriptions and API keys first.
   wallet.status            GET  /cli/skin/wallet/status (browser only)        One of the person's own items.
@@ -62360,7 +62365,7 @@ k2 zen guide api — the k2 object in a custom widget
 A custom widget is a sealed page in a Garden: no network, no storage, no
 files. It reaches K2 only through window.k2. Each call needs a cap its
 manifest.json asks for; a widget in your own Garden gets every one it asks
-for at once (no review). From K2's verb catalog, version 21.
+for at once (no review). From K2's verb catalog, version 22.
 
 TEN EXAMPLES
   const off = k2.agents.subscribe((rows) => draw(rows))   // live, in scope
@@ -62393,6 +62398,7 @@ no cap
   k2.save.remove(key)                                                                                 local    garden-data-v1         await k2.save.remove('high-score')  [bad_key rate_limited]
   k2.save.keys({prefix})                                                                              local    garden-data-v1         const keys = await k2.save.keys()  [rate_limited]
   k2.viewer.get()                                                                                     local    garden-data-v1         const {name} = await k2.viewer()
+  k2.app.rooms({app})                                                                                 portable guests-rooms-v1        const {ceiling, granted} = await k2.asApp().app.rooms()  [app_pass_required pass_required pass_invalid pass_wrong_link usage not_found stale_widget author_unknown]
   k2.app.self({app})                                                                                  portable app-self-v1            const me = await k2.asApp().app.self()  [pass_required pass_invalid pass_wrong_link not_exposed not_found usage]
   k2.app.usage({app, hours})                                                                          portable app-self-v1            const {verbs, quotas} = await k2.asApp().app.usage({hours: 24})  [pass_required pass_invalid pass_wrong_link not_exposed not_found usage]
   k2.widget.self()                                                                                    local    app-self-v1            const me = await k2.widget.self()  [stale_widget rate_limited]
@@ -62420,7 +62426,7 @@ thread:read (Read the Thread)
 thread:post (Post to the Thread)
   k2.thread.pickFiles(address)                                                                        local    thread-attachments-v1  const {files} = await k2.thread.pickFiles(row.address)  [not_bound]
   k2.thread.post(address, text, {attachments})                                                        portable zen-v1                 await k2.thread.post(row.address, 'How is it going?')  [not_bound sending_off rate_limited too_large usage]
-  k2.thread.answer(address, cardId, choice)                                                           portable zen-v1                 await k2.thread.answer(row.address, card.id, 'Yes')  [not_bound sending_off rate_limited]
+  k2.thread.answer(address, cardId, choice)                                                           portable zen-v1                 await k2.thread.answer(row.address, card.id, 'Yes')  [not_bound sending_off rate_limited card_person_only]
   k2.compose.draft(address, text)                                                                     local    zen-v1                 await k2.compose.draft(row.address, 'Ask for a status')  [not_bound]
   k2.conversation.setContext(text)                                                                    local    thread-context-v1      await k2.conversation.setContext('Board: ' + board.name)  [needs_editor not_bound bad_args rate_limited]
 sources:read (Read data sources)
@@ -62459,6 +62465,7 @@ store:write (Change dump-table rows)
 guests:rooms (Set its own guests' rooms (an owner grant per App, never a guest's))
   k2.guests.rooms({app, username})                                                                    portable guests-rooms-v1        const g = await k2.asApp().guests.rooms({username: 'dana'})  [app_pass_required pass_required pass_invalid pass_wrong_link grant_required usage not_found rate_limited stale_widget author_unknown]
   k2.guests.setRooms({app, rooms, username})                                                          portable guests-rooms-v1        await k2.asApp().guests.setRooms({username: 'dana', rooms: ['acme']})  [app_pass_required pass_required pass_invalid pass_wrong_link grant_required usage not_found outside_app_rooms above_role has_role rate_limited stale_widget author_unknown confirm_required declined paused]
+  k2.guests.list({app, cursor, limit})                                                                portable guests-rooms-v1        const {guests, nextCursor} = await k2.asApp().guests.list({limit: 200})  [app_pass_required pass_required pass_invalid pass_wrong_link grant_required usage not_found rate_limited stale_widget author_unknown]
 activity:read (See when the agent is working)
   k2.activity.snapshot({workspace})                                                                   portable app-api-v1             const {status} = await k2.activity.snapshot({workspace})  [pass_required pass_invalid pass_wrong_link skin_room usage not_bound author_unknown]
 room:members (See who has access to the room)

@@ -1,17 +1,17 @@
 {
   "generatedBy": "contract-gen",
   "regen": "cargo run -p k2-core --bin contract-gen",
-  "catalogVersion": 21,
-  "catalogSha256": "d88725b40613772d45081c33cda9831044dd6b6c0235b40816daeac641df9791",
+  "catalogVersion": 22,
+  "catalogSha256": "a83482012e858ba0910ebe58423d117bf1d06179bb0c7c9de7e723632162938d",
   "runtimeSha256": "e22fa32d0189148dca17880241a4dfec415841b4e38db9711f891f1b9774262c",
   "files": {
-    "cli/k2": "2b50c1c841ca7914f10793bdf08bed4acf5962c1bffd32b5a5837588797c404a",
-    "cli/k2#study app-api": "9cb1e829eda0ba5666715e9d33f30af9cf3447eeed56ecda49dbf4218e32d4d2",
-    "crates/k2-core/src/app_surface.rs": "275d2304b2411ead4ef545b5e2e2489dc6df724720ae0c65671532aaafd91c07",
-    "sdk/generated/k2-frame.js": "b164327eb83466e7cead10ef67e1f900cc2503dd7d8263768bc3441dbb04aa64",
-    "sdk/generated/k2.d.ts": "3c73c378a761669ca4e905a92651ab26983b1fcf3bbc78ca3d1dc4d559ec75a9",
-    "sdk/server/src/generated/verbs.ts": "c4eb9eefc5158108e3181a5e59d02fc695c55a3ce0524f17f86b653d8a37faed",
-    "src/renderer/lib/k2-caps.generated.ts": "14291424e6f10154c8b3e9601b7fb850b1866d8f850e17d345a2092a64aecf97",
-    "src/renderer/lib/zen/zen-verbs.generated.ts": "2a3a3378701cfe0f3517d25399d91b12c6bab7fe688d62aa0ed56dada9511b84"
+    "cli/k2": "4d53c0f755c0b1b25609c56f94426f98026912667b4afceb3b2d8e35cc3264c2",
+    "cli/k2#study app-api": "d5a13bd1baf3002a14cce8eb4e6c581234159971fb59e4c7e27d44260c9f008e",
+    "crates/k2-core/src/app_surface.rs": "e8deaaaff9c81863e14c48d4fcf1f887b1f6b2328a02a0974890bddba27a6990",
+    "sdk/generated/k2-frame.js": "6841db85c0f45a15b0350bd891dd433edfc3465106bb2a0ca397ea3a1ea6d28d",
+    "sdk/generated/k2.d.ts": "c6336bca909062b950dab100ae0a992119a2337777f5d3212970c814acc8acda",
+    "sdk/server/src/generated/verbs.ts": "9cd407ff73d81a70cbb4d806ac64a5c4caefd875956983d5f323416a33e86be3",
+    "src/renderer/lib/k2-caps.generated.ts": "027a21cce2f4c99cd7d0cf9419ab1228d5d8766c160e25aaffffc52756006039",
+    "src/renderer/lib/zen/zen-verbs.generated.ts": "e38a765f9e6923af20f7b0a25bc7cf35788d89e0debfcd858af5f1552d69c869"
   }
 }

@@ -7,8 +7,8 @@
 (function () {
   'use strict'
   var K2_CONTRACT = Object.freeze({
-    catalogVersion: 21,
-    errors: Object.freeze(['cap_not_granted', 'not_bound', 'rate_limited', 'too_large', 'unknown_verb', 'verb_unavailable', 'verb_local', 'not_exposed', 'sending_off', 'server_not_saved', 'unreachable', 'removed', 'no_history', 'failed', 'conflict', 'space_full', 'value_too_large', 'bad_key', 'not_granted', 'resync', 'author_unknown', 'stale_widget', 'store_full', 'bad_tx', 'tx_expired', 'busy', 'paused', 'bad_args', 'bad_shape', 'pass_required', 'pass_invalid', 'pass_wrong_link', 'not_on_link', 'json_required', 'skin_room', 'usage', 'not_found', 'bad_login', 'locked', 'card_not_pending', 'guest_required', 'no_app_pass', 'no_app_key', 'no_chat_grant', 'chat_unavailable', 'app_pass_required', 'grant_required', 'outside_app_rooms', 'above_role', 'has_role', 'confirm_required', 'declined', 'refresh_invalid', 'refresh_reused', 'person_pass_required', 'wallet_off', 'duplicate_label', 'needs_editor', 'retired']),
+    catalogVersion: 22,
+    errors: Object.freeze(['cap_not_granted', 'not_bound', 'rate_limited', 'too_large', 'unknown_verb', 'verb_unavailable', 'verb_local', 'not_exposed', 'sending_off', 'server_not_saved', 'unreachable', 'removed', 'no_history', 'failed', 'conflict', 'space_full', 'value_too_large', 'bad_key', 'not_granted', 'resync', 'author_unknown', 'stale_widget', 'store_full', 'bad_tx', 'tx_expired', 'busy', 'paused', 'bad_args', 'bad_shape', 'pass_required', 'pass_invalid', 'pass_wrong_link', 'not_on_link', 'json_required', 'skin_room', 'usage', 'not_found', 'bad_login', 'locked', 'card_not_pending', 'guest_required', 'no_app_pass', 'no_app_key', 'no_chat_grant', 'chat_unavailable', 'app_pass_required', 'grant_required', 'outside_app_rooms', 'above_role', 'has_role', 'confirm_required', 'declined', 'refresh_invalid', 'refresh_reused', 'person_pass_required', 'wallet_off', 'duplicate_label', 'needs_editor', 'retired', 'card_person_only']),
     retryable: Object.freeze(['not_bound', 'rate_limited', 'unreachable', 'busy']),
     verbs: Object.freeze({
       'gardens.list': Object.freeze({ cap: null, reach: 'local', kind: 'call', feature: 'zen-gardens-v1' }),
@@ -27,6 +27,7 @@
       'save.remove': Object.freeze({ cap: null, reach: 'local', kind: 'call', feature: 'garden-data-v1' }),
       'save.keys': Object.freeze({ cap: null, reach: 'local', kind: 'call', feature: 'garden-data-v1' }),
       'viewer.get': Object.freeze({ cap: null, reach: 'local', kind: 'call', feature: 'garden-data-v1' }),
+      'app.rooms': Object.freeze({ cap: null, reach: 'portable', kind: 'call', feature: 'guests-rooms-v1' }),
       'app.self': Object.freeze({ cap: null, reach: 'portable', kind: 'call', feature: 'app-self-v1' }),
       'app.usage': Object.freeze({ cap: null, reach: 'portable', kind: 'call', feature: 'app-self-v1' }),
       'widget.self': Object.freeze({ cap: null, reach: 'local', kind: 'call', feature: 'app-self-v1' }),
@@ -81,6 +82,7 @@
       'store.txAbort': Object.freeze({ cap: 'store:write', reach: 'local', kind: 'call', feature: 'garden-data-v1' }),
       'guests.rooms': Object.freeze({ cap: 'guests:rooms', reach: 'portable', kind: 'call', feature: 'guests-rooms-v1' }),
       'guests.setRooms': Object.freeze({ cap: 'guests:rooms', reach: 'portable', kind: 'call', feature: 'guests-rooms-v1' }),
+      'guests.list': Object.freeze({ cap: 'guests:rooms', reach: 'portable', kind: 'call', feature: 'guests-rooms-v1' }),
       'activity.snapshot': Object.freeze({ cap: 'activity:read', reach: 'portable', kind: 'call', feature: 'app-api-v1' }),
       'room.members': Object.freeze({ cap: 'room:members', reach: 'portable', kind: 'call', feature: 'room-members-v1' }),
     }),

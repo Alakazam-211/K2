@@ -158,6 +158,10 @@ expect_has "deployment shows the state" "$out" "state   live"
 out="$(k2 app list)"
 expect_has "list shows the App" "$out" "smoke"
 expect_has "list shows the label" "$out" "Preview, unwalled (process)"
+# 0.46.4 (update continuity R16): the engine column, last on the App's line.
+expect_has "list shows the engine column" "$(printf '%s\n' "$out" | grep '^smoke ')" "engine unwalled, K2 "
+expect_eq "list --json carries the engine block" \
+    "$(k2 app list --json | python3 -c 'import json,sys; e=json.load(sys.stdin)["apps"][0]["engine"]; print(e["fingerprint"]["wall"], e["rehostDue"])')" "unwalled None"
 out="$(k2 app inspect smoke)"
 expect_has "inspect: audit verifies" "$out" "chain verifies"
 out="$(k2 app history smoke)"

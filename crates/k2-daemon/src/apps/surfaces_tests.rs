@@ -458,6 +458,26 @@ fn garden_room_members_binds_local_rooms_only() {
 
 // ── events ───────────────────────────────────────────────────────────
 
+/// R16 (0.46.4): `app_deployed` says what went live, so a client (and the
+/// App's agent) can tell K2's automatic re-host from a deploy.
+#[test]
+fn deployed_event_says_what_went_live() {
+    let f = fx("deploykind");
+    let mut rx = crate::session_events::subscribe();
+    surfaces::emit_deployed("jobs", store::KIND_REHOST);
+    surfaces::emit_deployed("jobs", store::KIND_DEPLOY);
+    surfaces::emit_deployed("jobs", store::KIND_AUTO_ROLLBACK);
+    let mut kinds = Vec::new();
+    while let Ok(e) = rx.try_recv() {
+        if let crate::session_events::SessionEvent::AppDeployed { app_id, project_id, deploy_kind, .. } = e {
+            if app_id == "jobs" && project_id == f.room {
+                kinds.push(deploy_kind);
+            }
+        }
+    }
+    assert_eq!(kinds, ["rehost", "deploy", "auto_rollback"]);
+}
+
 #[test]
 fn members_changes_emit_on_the_bus_and_map_per_room() {
     let f = fx("events");
@@ -489,7 +509,14 @@ fn members_changes_emit_on_the_bus_and_map_per_room() {
         project_id: f.room.clone(),
         seed: Some("abc".into()),
         deployment: Some("d-1".into()),
+        deploy_kind: "rehost".into(),
     };
+    // R16 (0.46.4): owner clients read what went live as `deployKind`; the
+    // event tag stays `kind`. The App's activity frame below is unchanged.
+    let wire: J = serde_json::to_value(&dep).unwrap();
+    assert_eq!(wire["kind"], "app_deployed", "the event tag: {wire}");
+    assert_eq!(wire["deployKind"], "rehost", "what went live: {wire}");
+    assert_eq!(wire["deployment"], "d-1", "{wire}");
     let link_pass = SkinPass { session: false, app: String::new(), ..guest("", &[(&f.room, &[])]) };
     let want = r#"{"app":"jobs","kind":"app_deployed","workspace":"sales"}"#;
     let frame = app_deployed_frame(&f.room, "sales", Some(&link_pass), Some("jobs"), &dep).expect("its own link pass");

@@ -13,7 +13,8 @@
 //!   version, or there is none (rows from before 0221).
 //! - **Pre-flights:** 0 the hand-off's predecessor has exited (R36's
 //!   re-binds done); 1 core upgrades (a root sequence, Sew, a Postgres
-//!   move) are idle, waited for up to 30 min (R29, Q11); per App:
+//!   move) are idle and no newer pinned Sew waits to install, waited for
+//!   up to 30 min (R29, Q11; a pending pin once per process); per App:
 //!   `requires` (R30), sessions in memory → defer and ask (R31, Q9), and
 //!   "can't run two copies" (extra ports, the process exception, policy or
 //!   manifest `handover`, or no measured memory headroom, R12/Q15) → the
@@ -149,6 +150,9 @@ pub trait WaveOps {
     fn predecessor_draining(&self) -> bool;
     /// R29: a core upgrade (and what) is running now.
     fn core_busy(&self) -> Option<String>;
+    /// R29 (Sew C): a core upgrade waits to run: a newer pinned Sew not yet
+    /// installed.
+    fn core_pending(&self) -> Option<String>;
     fn minute_of_day(&self) -> u32;
     fn rehost_off(&self) -> bool;
     fn sleep(&self, d: Duration);
@@ -374,20 +378,37 @@ pub fn run_wave(ops: &dyn WaveOps) -> Vec<(String, Turn)> {
         set_wave("waiting", Some("the App engine heal".into()));
         ops.sleep(Duration::from_secs(5));
     }
-    // Pre-flight 1 (R29, Q11): core upgrades first, at most 30 minutes.
-    let start = Instant::now();
+    // Pre-flight 1 (R29, Q11): core upgrades first, a running one or a
+    // newer pinned Sew waiting to install, at most 30 minutes. A pending
+    // pin the wave already waited out isn't waited for again in this
+    // process: nobody may install it, and the hourly retry would stall.
     let mut waited = Duration::ZERO;
-    while let Some(what) = ops.core_busy() {
+    loop {
+        let (what, pending) = match ops.core_busy() {
+            Some(w) => (w, false),
+            None => match ops.core_pending().filter(|p| !pending_waited_out(p)) {
+                Some(p) => (p, true),
+                None => break,
+            },
+        };
         if waited >= CORE_WAIT {
-            k2_core::log_debug!("[apps] rehost: {} still running after {} min; the wave starts ({})", what, CORE_WAIT.as_secs() / 60, defer::CORE_UPGRADE_WAIT);
-            ops.audit("-", "rehost_core_wait", json!({ "what": what, "waitedSecs": waited.as_secs() }));
+            k2_core::log_debug!(
+                "[apps] rehost: {} {} after {} min; the wave starts ({})",
+                what,
+                if pending { "still waits to install" } else { "still running" },
+                CORE_WAIT.as_secs() / 60,
+                defer::CORE_UPGRADE_WAIT
+            );
+            ops.audit("-", "rehost_core_wait", json!({ "what": what, "pending": pending, "waitedSecs": waited.as_secs() }));
+            if pending {
+                waited_out().lock().unwrap_or_else(|e| e.into_inner()).insert(what);
+            }
             break;
         }
         set_wave("waiting", Some(format!("{}: {what}", defer::CORE_UPGRADE_WAIT)));
         ops.sleep(Duration::from_secs(10));
         waited += Duration::from_secs(10);
     }
-    let _ = start;
     let mut apps: Vec<AppRow> = ops.apps().into_iter().filter(|a| due(ops, a).is_some()).collect();
     apps.sort_by_key(|a| (ops.active_connections(a), a.app_id.clone()));
     set_wave("running", None);
@@ -420,6 +441,16 @@ pub fn run_wave(ops: &dyn WaveOps) -> Vec<(String, Turn)> {
     }
     set_wave("done", None);
     out
+}
+
+/// Pending core upgrades (R29) a wave already waited 30 minutes for.
+fn waited_out() -> &'static Mutex<std::collections::HashSet<String>> {
+    static M: OnceLock<Mutex<std::collections::HashSet<String>>> = OnceLock::new();
+    M.get_or_init(|| Mutex::new(std::collections::HashSet::new()))
+}
+
+fn pending_waited_out(what: &str) -> bool {
+    waited_out().lock().unwrap_or_else(|e| e.into_inner()).contains(what)
 }
 
 fn breaker(ops: &dyn WaveOps) {
@@ -508,6 +539,9 @@ impl WaveOps for LiveOps {
             return Some("a Postgres enable or upgrade".into());
         }
         None
+    }
+    fn core_pending(&self) -> Option<String> {
+        crate::sew::supervisor::pin_pending()
     }
     fn minute_of_day(&self) -> u32 {
         use chrono::Timelike;
@@ -706,6 +740,39 @@ pub fn app_json(app: &AppRow) -> J {
         "sessions": ops.sessions(app),
         "heldFailed": ops.held_failed(app),
         "wave": with_status(|s| s.apps.get(&app.app_id).cloned()),
+    })
+}
+
+/// The engine column's words (`k2 app list`, R16): the engine version the
+/// live instance went live on; for an instance with no engine, its wall
+/// and the K2 version; `unknown` for an instance from before 0221 (no
+/// fingerprint); `-` with nothing live.
+pub fn engine_label(has_live: bool, fp: Option<&rh::Fingerprint>) -> String {
+    if !has_live {
+        return "-".into();
+    }
+    match fp {
+        None => "unknown".into(),
+        Some(f) => match f.engine_version.as_deref().filter(|v| !v.is_empty()) {
+            Some(v) => v.to_string(),
+            None => format!("{}, K2 {}", if f.wall.is_empty() { "no engine" } else { f.wall.as_str() }, f.k2_version),
+        },
+    }
+}
+
+/// `k2 app list`'s `engine` block (R16): what the live instance went live
+/// on (`label`, `fingerprint`), whether a re-host is due (`rehostDue`: why,
+/// else null) and the wave's word on the App (`rehost`: its state, else
+/// null).
+pub fn engine_json(app: &AppRow) -> J {
+    let ops = LiveOps;
+    let has_live = app.live_deployment.is_some();
+    let fp = if has_live { ops.live_fingerprint(app) } else { None };
+    json!({
+        "label": engine_label(has_live, fp.as_ref()),
+        "fingerprint": fp,
+        "rehostDue": due(&ops, app),
+        "rehost": with_status(|s| s.apps.get(&app.app_id).map(|a| a.state.clone())),
     })
 }
 

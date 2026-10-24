@@ -1823,7 +1823,15 @@ fn list(who: &Who, params: &HashMap<String, String>) -> R<J> {
         .collect();
     let mut out = json!({
         "ok": true,
-        "apps": apps.iter().map(app_summary).collect::<Vec<_>>(),
+        // 0.46.4 (update continuity R16): each App's engine column.
+        "apps": apps
+            .iter()
+            .map(|a| {
+                let mut v = app_summary(a);
+                v["engine"] = super::rehost::engine_json(a);
+                v
+            })
+            .collect::<Vec<_>>(),
         "legacy": legacy,
         "notices": if agent_ws(who).is_some() { vec![] } else { upgrade_notices() },
     });

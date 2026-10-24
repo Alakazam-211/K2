@@ -1,0 +1,76 @@
+$ k2 study app-runtime
+exit: 0
+--- stdout
+k2 study app-runtime — K2 updates and your App: the re-host
+
+WHAT A RE-HOST IS
+  After a K2 update, K2 moves each App to a fresh instance on the new
+  runtime: the same live Seed, a new instance, the health gate, the switch,
+  a drain, the old instance kept warm for the watch window (auto-rollback
+  to it). Nobody sees an outage when two copies fit. Its history row says
+  rehost, not deploy; owner clients get app_deployed with deployKind rehost.
+
+WHEN IT HAPPENS
+  Due: the live instance went live on another K2 or engine version
+  (k2 app list: engine <version> [re-host due]). After the engine heal,
+  once the old daemon let go of the App ports, and after core upgrades (a
+  running Sew, Postgres or mail upgrade, or a newer pinned Sew waiting to
+  install; at most 30 min). One App at a time, fewest connections first,
+  10 s apart; deferred Apps are tried again every hour. Stopped and
+  unwalled (process) Apps are never re-hosted.
+  Deferred, the old instance keeps serving: requires_unmet, busy,
+  sessions_in_memory (a new instance signs everyone out; the owner gets a
+  card), outside_window, policy_manual, policy_off (or K2_APPS_REHOST=off).
+
+THE PER-APP SETTING (an App that can't run two copies)
+  No memory or disk for two, extra ports, the process exception, or the
+  handover policy. The App panel asks what K2 does then:
+  pause   "Pause briefly and update": stop, then start (the default)
+  defer   "Skip it and let me update it myself": deferred as needs_handover
+          or no_headroom; the owner gets a card
+  k2 app rehost policy <app> --when-no-overlap pause|defer
+  k2 app rehost policy <app> --policy auto|handover|window|manual|off
+                             [--window 02:00-05:00]   (box time)
+  Changing it needs the owner, an Admin, or switch 2 for your own App.
+
+THE COMMANDS
+  k2 app rehost status [<app>] [--json]  the wave; one App's fingerprint,
+                                         due, sessions, the wave's word
+  k2 app rehost <app> [--yes] [--pause]  move it now (owner, or switch 1
+                                         for your own App); --yes even if
+                                         everyone signs in again
+  k2 app list [--json]                   the engine column (engine block)
+  GET /cli/app/rehost[?app=]             the same, a Member read
+
+REHOST_FAILED AND HOW TO CLEAR IT
+  A re-host whose health gate failed, or that rolled back in its watch
+  window, holds the App at rehost_failed: it keeps running on its previous
+  instance, and K2 won't try again on this K2 version. Read why
+  (k2 app history <app>, k2 app errors <app>), fix it, then
+  k2 app rehost <app>. The next K2 version clears it too.
+
+THE BREAKER
+  Two re-hosts in a row that fail or roll back stop the wave, and the
+  owner gets one notice. Every App keeps its current instance; the hourly
+  retry goes on with the Apps not held. Deferrals don't count.
+
+YOUR APP UNDER A RE-HOST (two copies run for a while)
+  sqlite in /data: WAL and busy_timeout, or writes fail SQLITE_BUSY.
+  Periodic work through App heartbeats, not a timer in each copy; queue
+  consumers idempotent. Keep sessions sealed in /data, not in memory.
+  Schema changes: expand first, contract in a later deploy.
+  0.46.4 manifest keys: host.sessions memory|sealed|none, host.overlap
+  handover, host.health.readyPath (probed once, logged, never a gate).
+  K2 <K2_CLI_VERSION> and older refuse a Seed that uses them.
+
+AFTER A K2 UPDATE (the App's agent)
+  1. k2 app rehost status <app>: done, or deferred/failed and why.
+  2. k2 app list: no [re-host due] left on your App.
+  3. k2 app engine status: the engine matches this K2.
+  4. k2 app history <app>: a rehost row went live; k2 app errors <app>.
+  5. Check the App answers as before; tell your owner what still waits.
+  K2 tells you of a deferral older than an hour and of a rehost_failed.
+
+K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+--- stderr
+--- requests

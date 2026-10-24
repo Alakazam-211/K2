@@ -479,15 +479,22 @@ pub fn install_listener() {
 }
 
 /// An App's live deployment changed (the supervisor, after the row says so).
-pub fn emit_deployed(app_id: &str) {
+/// `kind`: what went live (`store::KIND_*`: `rehost` vs `deploy`, …; R16).
+pub fn emit_deployed(app_id: &str, kind: &str) {
     let Some(app) = get_app(app_id) else { return };
-    let _ = crate::session_events::emit(crate::session_events::SessionEvent::AppDeployed {
+    let _ = crate::session_events::emit(deployed_event(app, kind));
+}
+
+/// The `app_deployed` session event for `app` (tests read it).
+pub fn deployed_event(app: AppRow, kind: &str) -> crate::session_events::SessionEvent {
+    crate::session_events::SessionEvent::AppDeployed {
         app_id: app.app_id,
         service_id: app.service_id,
         project_id: app.owner_workspace,
         seed: app.live_seed,
         deployment: app.live_deployment,
-    });
+        deploy_kind: kind.to_string(),
+    }
 }
 
 /// Does an `app_deployed` for (`app_id`, `service_id`) reach a socket with

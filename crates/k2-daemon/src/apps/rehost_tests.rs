@@ -60,6 +60,9 @@ struct Fake {
     minute: u32,
     draining: Cell<u32>,
     core: RefCell<Vec<Option<String>>>,
+    /// `core_pending` answers, one per call, then a fixed answer.
+    pending: RefCell<Vec<Option<String>>>,
+    pending_after: Option<String>,
     slept: RefCell<Vec<Duration>>,
     rehosted: RefCell<Vec<(String, bool)>>,
     audits: RefCell<Vec<(String, String, J)>>,
@@ -91,6 +94,14 @@ impl WaveOps for Fake {
         let mut c = self.core.borrow_mut();
         if c.is_empty() {
             None
+        } else {
+            c.remove(0)
+        }
+    }
+    fn core_pending(&self) -> Option<String> {
+        let mut c = self.pending.borrow_mut();
+        if c.is_empty() {
+            self.pending_after.clone()
         } else {
             c.remove(0)
         }
@@ -230,6 +241,85 @@ fn pre_flights_wait_and_defer() {
     let t = run_wave(&g);
     assert_eq!(g.slept.borrow().iter().map(|d| d.as_secs()).sum::<u64>(), CORE_WAIT.as_secs());
     assert!(matches!(t[0].1, Turn::Done(_)), "it starts after 30 minutes anyway");
+}
+
+/// R16: `k2 app list`'s engine column words.
+#[test]
+fn the_engine_column_names_what_the_app_went_live_on() {
+    assert_eq!(engine_label(false, None), "-", "nothing live");
+    assert_eq!(engine_label(true, None), "unknown", "a row from before 0221");
+    assert_eq!(engine_label(true, Some(&fp("0.46.3"))), "0.46.3");
+    let unwalled = rh::Fingerprint { k2_version: "0.46.4".into(), wall: "unwalled".into(), ..Default::default() };
+    assert_eq!(engine_label(true, Some(&unwalled)), "unwalled, K2 0.46.4");
+    let bare = rh::Fingerprint { k2_version: "0.46.4".into(), ..Default::default() };
+    assert_eq!(engine_label(true, Some(&bare)), "no engine, K2 0.46.4");
+}
+
+/// R29 (Sew C): the wave also waits for a newer pinned Sew that waits to
+/// install, not only for an upgrade that already runs; bounded at 30
+/// minutes, and a pending pin that was waited out once isn't waited for
+/// again by the next (hourly) wave.
+#[test]
+fn the_wave_waits_for_a_pending_sew_pin() {
+    let _g = serial();
+    // The pin installs after two checks: two 10 s waits, then the wave.
+    let f = Fake { apps: vec![row("w29-a")], ..Default::default() };
+    let pin = "a pending Sew upgrade (0.3.0 to the pinned 0.3.1) [w29-a]";
+    *f.pending.borrow_mut() = vec![Some(pin.into()), Some(pin.into())];
+    let t = run_wave(&f);
+    assert_eq!(*f.slept.borrow(), vec![Duration::from_secs(10), Duration::from_secs(10)], "waited for the pending pin");
+    assert!(matches!(t[0].1, Turn::Done(_)));
+    assert!(!f.audits.borrow().iter().any(|(_, e, _)| e == "rehost_core_wait"), "it installed in time");
+
+    // A running upgrade, then the pending pin of the same core: both waited.
+    let f = Fake { apps: vec![row("w29-b")], ..Default::default() };
+    *f.core.borrow_mut() = vec![Some("a Sew upgrade".into())];
+    *f.pending.borrow_mut() = vec![Some(format!("{pin} b"))];
+    run_wave(&f);
+    assert_eq!(f.slept.borrow().len(), 2, "one wait for the running upgrade, one for the pending pin");
+
+    // A pin nobody installs: 30 minutes, the wave starts and says why.
+    let never = "a pending Sew upgrade (0.3.0 to the pinned 0.3.1) [w29-never]";
+    let f = Fake { apps: vec![row("w29-c")], pending_after: Some(never.into()), ..Default::default() };
+    let t = run_wave(&f);
+    assert_eq!(f.slept.borrow().iter().map(|d| d.as_secs()).sum::<u64>(), CORE_WAIT.as_secs());
+    assert!(matches!(t[0].1, Turn::Done(_)), "it starts after 30 minutes anyway");
+    let audits = f.audits.borrow();
+    let (_, _, why) = audits.iter().find(|(_, e, _)| e == "rehost_core_wait").expect("the wait is audited");
+    assert_eq!(why["what"], never);
+    assert_eq!(why["pending"], true);
+    drop(audits);
+    // The next wave doesn't wait for the same pending pin again …
+    let f = Fake { apps: vec![row("w29-d")], pending_after: Some(never.into()), ..Default::default() };
+    run_wave(&f);
+    assert!(f.slept.borrow().is_empty(), "a pin waited out once isn't waited for again: {:?}", f.slept.borrow());
+    // … but a newer one is.
+    let f = Fake { apps: vec![row("w29-e")], ..Default::default() };
+    *f.pending.borrow_mut() = vec![Some(format!("{never} newer"))];
+    run_wave(&f);
+    assert_eq!(*f.slept.borrow(), vec![Duration::from_secs(10)]);
+}
+
+/// The live probe: a pending pin is a released pin newer than the installed
+/// Sew on a box where Sew is installed; nothing otherwise.
+#[test]
+fn a_pending_sew_pin_is_a_newer_pin_than_the_installed_sew() {
+    use crate::sew::store::Row;
+    use crate::sew::supervisor::pin_pending_for;
+    let row = |status: &str, installed: Option<&str>| Row { status: status.into(), installed_version: installed.map(Into::into), ..Default::default() };
+    assert_eq!(
+        pin_pending_for(Some(&row("running", Some("0.3.0"))), "0.3.1").as_deref(),
+        Some("a pending Sew upgrade (0.3.0 to the pinned 0.3.1)")
+    );
+    for status in ["degraded", "stopped", "upgrading"] {
+        assert!(pin_pending_for(Some(&row(status, Some("0.3.0"))), "0.3.1").is_some(), "{status}");
+    }
+    assert_eq!(pin_pending_for(Some(&row("running", Some("0.3.1"))), "0.3.1"), None, "current");
+    assert_eq!(pin_pending_for(Some(&row("running", Some("0.4.0"))), "0.3.1"), None, "newer than the pin");
+    assert_eq!(pin_pending_for(Some(&row("installing", Some("0.3.0"))), "0.3.1"), None, "enable owns it");
+    assert_eq!(pin_pending_for(Some(&row("removed", Some("0.3.0"))), "0.3.1"), None, "not installed");
+    assert_eq!(pin_pending_for(Some(&row("running", None)), "0.3.1"), None, "no installed version recorded");
+    assert_eq!(pin_pending_for(None, "0.3.1"), None, "no Sew on this box");
 }
 
 /// T6 + Rosson Q4/Q16: an App that can't run two copies (no measured room,

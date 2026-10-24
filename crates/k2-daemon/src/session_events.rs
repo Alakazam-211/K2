@@ -885,7 +885,14 @@ pub enum SessionEvent {
     /// that App's passes and guests only.
     ///
     /// Wire: `{ "kind": "app_deployed", "appId", "serviceId", "projectId",
-    /// "seed": string | null, "deployment": string | null }`.
+    /// "seed": string | null, "deployment": string | null, "deployKind" }`.
+    ///
+    /// `deployKind` (0.46.4, update continuity R16) says what went live:
+    /// `deploy`, `start`, `restart`, `rehost` (K2 moved the same Seed to a
+    /// fresh instance after a K2 update), `rollback` or `auto_rollback`. It
+    /// is not named `kind` because `kind` is the event tag. Older clients
+    /// ignore it. `deployment` is the live instance's row, whose own `kind`
+    /// can differ after a rollback (the warm instance's original deploy).
     AppDeployed {
         #[serde(rename = "appId")]
         app_id: String,
@@ -895,6 +902,8 @@ pub enum SessionEvent {
         project_id: String,
         seed: Option<String>,
         deployment: Option<String>,
+        #[serde(rename = "deployKind")]
+        deploy_kind: String,
     },
     /// thread-read-v1 (0.46.1): one person's read state of one Thread
     /// changed (they read or muted it on some device, someone else posted,

@@ -908,6 +908,7 @@ mod tests {
                 project_id: "p".into(),
                 seed: None,
                 deployment: None,
+                deploy_kind: "rehost".into(),
             },
             SessionEvent::ThreadRead(read_frame("owner")),
             SessionEvent::ProjectRead(read_frame("owner")),

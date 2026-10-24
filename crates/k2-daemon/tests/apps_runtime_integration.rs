@@ -595,6 +595,14 @@ async fn s8_history_audit_logs_errors_and_uninstall() {
     assert_eq!(apps.len(), 1, "an agent sees only its workspace's Apps: {apps:?}");
     assert_eq!(apps[0]["appId"], "s8app");
     assert_eq!(apps[0]["label"], "Preview, unwalled (process)");
+    // 0.46.4 (update continuity R16): the engine column, from the live
+    // instance's fingerprint; an unwalled App is never re-hosted.
+    let engine = &apps[0]["engine"];
+    let k2 = env!("CARGO_PKG_VERSION");
+    assert_eq!(engine["fingerprint"]["k2Version"], k2, "{engine}");
+    assert_eq!(engine["fingerprint"]["wall"], "unwalled", "{engine}");
+    assert_eq!(engine["label"], format!("unwalled, K2 {k2}"), "{engine}");
+    assert_eq!(engine["rehostDue"], serde_json::Value::Null, "{engine}");
     let r = get(d.port, "/cli/app/inspect", &pass, "app=s8app").await;
     assert_eq!(r.status, 200, "{}", r.body);
     let i = r.json();

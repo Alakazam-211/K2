@@ -677,6 +677,18 @@ export interface RoomMembersChangedEvent {
   room: string | null
 }
 
+/** What went live on an `app_deployed` event (0.46.4, update continuity
+ *  R16). `rehost` is K2 moving the same Seed to a fresh instance after a
+ *  K2 update, not a deploy. Open-ended: a newer daemon may send more. */
+export type AppDeployKind =
+  | 'deploy'
+  | 'start'
+  | 'restart'
+  | 'rehost'
+  | 'rollback'
+  | 'auto_rollback'
+  | (string & {})
+
 /** APP-LEVEL — room-scope R16 (0.46.1): an App's live deployment changed.
  *  Refetch `app.self`. */
 export interface AppDeployedEvent {
@@ -686,6 +698,9 @@ export interface AppDeployedEvent {
   projectId: string
   seed: string | null
   deployment: string | null
+  /** 0.46.4+: what went live. Absent from older daemons. Named so because
+   *  `kind` is the event tag. */
+  deployKind?: AppDeployKind
 }
 
 /** APP-LEVEL — Local Grok Bots (0.45.7): the roster or status changed

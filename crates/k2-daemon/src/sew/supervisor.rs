@@ -60,6 +60,30 @@ pub fn lifecycle_busy() -> bool {
     LATCH.load(std::sync::atomic::Ordering::SeqCst)
 }
 
+/// A newer pinned Sew waits to install on this box: this build pins a
+/// released Sew newer than the one installed (status `upgradeAvailable`).
+/// The App re-host wave waits for it as for a running upgrade (update
+/// continuity R29, Sew C). `None`: no Sew here, it is current, or this
+/// build pins no released Sew (nothing could install it).
+pub fn pin_pending() -> Option<String> {
+    if !k2_root_proto::sew::sew_release_pinned() {
+        return None;
+    }
+    k2_core::db::try_shared()?;
+    pin_pending_for(store::load().as_ref(), pinned().version)
+}
+
+/// [`pin_pending`] over a row and a pin (tests).
+pub fn pin_pending_for(row: Option<&Row>, pin_version: &str) -> Option<String> {
+    let row = row?;
+    if !matches!(row.status.as_str(), "running" | "degraded" | "stopped" | "upgrading") {
+        return None;
+    }
+    let have = row.installed_version.as_deref()?;
+    (version_cmp(have, pin_version) == Some(std::cmp::Ordering::Less))
+        .then(|| format!("a pending Sew upgrade ({have} to the pinned {pin_version})"))
+}
+
 /// Production: the real box, the open vault, the process-wide latch.
 pub fn live() -> Env<'static> {
     Env { ops: &REAL, secrets: &VAULT, latch: &LATCH, token: &TOKEN }

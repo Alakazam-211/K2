@@ -724,6 +724,23 @@ async fn test_guests_are_one_apps_short_lived_and_sign_in_only_on_its_link() {
         let r = post(d.port, "/cli/app/test-guest/rm", &who, json!({"username": "qa1"})).await;
         assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{label} rm: {}", r.body);
     }
+    // Nor through the guest roster (the skin-manage switch is on): the
+    // agent can't reset an owner-made test guest's password and sign in
+    // as it, or change its email, rooms or role, unlock or remove it.
+    let ws_handle = ws.handle.clone();
+    for (path, body) in [
+        ("/cli/skin/users/password", json!({"username": "qa1", "password": "agent-chosen-pw-1"})),
+        ("/cli/skin/users/email", json!({"username": "qa1", "email": "agent@example.com"})),
+        ("/cli/skin/users/rooms", json!({"username": "qa1", "rooms": [ws_handle]})),
+        ("/cli/skin/users/unlock", json!({"username": "qa1"})),
+        ("/cli/skin/roles/assign", json!({"username": "qa1", "role": "tester"})),
+        ("/cli/skin/roles/unassign", json!({"username": "qa1"})),
+        ("/cli/skin/users/remove", json!({"username": "qa1"})),
+    ] {
+        let r = post(d.port, path, &agent, body).await;
+        assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{path}: {}", r.body);
+        assert!(r.json()["error"]["hint"].as_str().expect("hint").contains("is a test guest"), "{path}: {}", r.body);
+    }
     // With permission cards on for the agent, the refusal says it can't be
     // requested (a person does it), and is otherwise the same.
     k2_core::permission::gate::set_server_switch(true);

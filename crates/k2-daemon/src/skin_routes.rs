@@ -268,6 +268,36 @@ pub fn actor_is_agent(actor: &str) -> bool {
     actor.starts_with("agent:")
 }
 
+/// The principal named `username` (normalized), if there is one.
+fn principal_named(username: &str) -> Result<Option<skin::SkinPrincipal>, CliResponse> {
+    let Ok(u) = skin::normalize_username(username) else { return Ok(None) };
+    skin::list_principals().map(|ps| ps.into_iter().find(|p| p.username == u)).map_err(CliResponse::internal_error)
+}
+
+/// 0.46.4 security review: a test guest is the owner's while agent test
+/// guests are parked (`apps::test_guests::AGENTS_MAY_MANAGE`). An agent
+/// that passed the skin-manage gate may not reset its password, change
+/// its email, rooms or role, unlock it or remove it: otherwise it could
+/// sign in as an owner-made test guest through the App's link and use
+/// that guest's role. `None` = go on.
+fn agent_test_guest_refused(actor: &str, username: &str) -> Option<CliResponse> {
+    if !actor_is_agent(actor) || crate::apps::test_guests::AGENTS_MAY_MANAGE {
+        return None;
+    }
+    match principal_named(username) {
+        Ok(Some(p)) => match skin::test_guests::get(&p.id) {
+            Ok(Some(_)) => Some(owner_only_with_hint(&format!(
+                "'{}' is a test guest: test guests are the owner's (ask your human: k2 app user … {} --test from a terminal outside K2)",
+                p.username, p.username
+            ))),
+            Ok(None) => None,
+            Err(e) => Some(CliResponse::internal_error(e)),
+        },
+        Ok(None) => None,
+        Err(r) => Some(r),
+    }
+}
+
 /// GH#72 (Rosson 2026-10-14): [`skin::CAP_FILES_AGENT_CONFIG`] — letting
 /// App guests write the agent's own `.k2/` folder — is owner tooling. An
 /// agent with "manage Apps" may not add it to a role's room, mint it on a
@@ -469,6 +499,9 @@ pub fn handle_users_email(body: &[u8], actor: &str) -> CliResponse {
     let Some(username) = str_field(&v, &["username", "name"]) else {
         return CliResponse::bad_request("missing username");
     };
+    if let Some(r) = agent_test_guest_refused(actor, username) {
+        return r;
+    }
     let email = match email_field(&v) {
         Ok(e) => e,
         Err(r) => return r,
@@ -594,6 +627,9 @@ pub fn handle_users_password(body: &[u8], actor: &str) -> CliResponse {
     let Some(username) = str_field(&v, &["username", "name"]) else {
         return CliResponse::bad_request("missing username");
     };
+    if let Some(r) = agent_test_guest_refused(actor, username) {
+        return r;
+    }
     let password = v
         .get("password")
         .and_then(|x| x.as_str())
@@ -621,6 +657,9 @@ pub fn handle_users_unlock(body: &[u8], actor: &str) -> CliResponse {
     let Some(username) = str_field(&v, &["username", "name"]) else {
         return CliResponse::bad_request("missing username");
     };
+    if let Some(r) = agent_test_guest_refused(actor, username) {
+        return r;
+    }
     match skin::clear_login_lockout(username) {
         Ok((key, cleared)) => {
             k2_core::log_debug!("[skin] actor={actor} unlock {key} cleared={cleared}");
@@ -645,6 +684,9 @@ pub fn handle_users_remove(body: &[u8], actor: &str) -> CliResponse {
     let Some(username) = str_field(&v, &["username", "name"]) else {
         return CliResponse::bad_request("missing username");
     };
+    if let Some(r) = agent_test_guest_refused(actor, username) {
+        return r;
+    }
     // app-read-state-v1: the guest's read state goes with them.
     let principal_id = skin::host_login_detail(username).ok().map(|d| d.principal_id);
     match skin::remove_principal_as(username, actor) {
@@ -1613,6 +1655,9 @@ pub fn handle_roles_assign(body: &[u8], actor: &str) -> CliResponse {
     let Some(username) = str_field(&v, &["username"]) else {
         return CliResponse::bad_request("missing username");
     };
+    if let Some(r) = agent_test_guest_refused(actor, username) {
+        return r;
+    }
     let Some(role) = str_field(&v, &["role", "name", "id"]) else {
         return CliResponse::bad_request("missing role");
     };
@@ -1648,6 +1693,9 @@ pub fn handle_roles_unassign(body: &[u8], actor: &str) -> CliResponse {
     let Some(username) = str_field(&v, &["username", "name"]) else {
         return CliResponse::bad_request("missing username");
     };
+    if let Some(r) = agent_test_guest_refused(actor, username) {
+        return r;
+    }
     match skin::unassign_role(username) {
         Ok(p) => {
             k2_core::log_debug!("[skin] actor={actor} unassigned role from {}", p.username);
@@ -1665,6 +1713,9 @@ pub fn handle_users_rooms(body: &[u8], actor: &str) -> CliResponse {
     let Some(username) = str_field(&v, &["username", "name"]) else {
         return CliResponse::bad_request("missing username");
     };
+    if let Some(r) = agent_test_guest_refused(actor, username) {
+        return r;
+    }
     let Some(list) = rooms_field(&v) else {
         return CliResponse::bad_request("missing rooms");
     };

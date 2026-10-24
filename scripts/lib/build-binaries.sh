@@ -5,29 +5,41 @@
 # k2_build_mac_binaries, so the three build the same binaries the same way:
 #
 #   1. `bun run tauri build`: the frontend, src-tauri (`k2`) and the bundle.
-#   2. k2-daemon + k2-power-helper, k2-ptyd, k2-node, k2-menubar.
+#   2. k2-daemon + k2-power-helper, k2-ptyd, k2-node, k2-menubar, in ONE
+#      cargo call (K2_MAC_SIDECAR_CARGO_ARGS in macos-daemon-helper-app.sh).
 #   3. Checks + copies the sidecars into K2.app (nested K2 Daemon.app for
 #      k2-daemon + k2-ptyd; Contents/MacOS for the rest).
 #
 # Signing, the AMFI launch check and notarizing stay in the callers.
 #
-# Why step 2 is not one `cargo build -p k2 -p k2-daemon -p …`: with
-# resolver 2 one cargo call unifies dependency features across every package
-# it builds. src-tauri and k2-daemon enable different features on 47 of the
-# 443 crates under k2-core (the app has objc2 `exception`, ahash
-# `runtime-rng`, hyper-util `client-proxy-system`; the daemon has the
-# aws-lc-rs rustls provider, hyper `http2`, …). Building them together would
-# change what the shipped app and daemon contain, so k2-core and the crates
-# under it compile once per binary, by design. The same holds for the four
-# sidecars: grouped, k2-node's rustls gains `ring` next to `aws-lc-rs` and
-# the daemon's tungstenite gains rustls. Each cargo call below keeps the
-# exact package set it had before, so every binary is byte-for-byte what the
-# separate calls produced (check: `cargo tree -e features -p <pkg>`).
+# Why step 2 is one cargo call (0.46.4): with resolver 2 a cargo call
+# unifies dependency features across the packages it builds, so 0.46.3
+# built the four sidecars in four calls to keep each binary's features
+# exactly as if built alone. That compiled ~40 shared crates twice or more
+# (syn, tokio, rustls, image, the RustCrypto stack…) and ran the four fat-LTO
+# links one after another, the small ones queued behind the daemon's.
+# Grouped, the union is (`cargo tree -e features`, aarch64-apple-darwin):
+#   k2-daemon   tungstenite/tokio-tungstenite gain rustls-tls-webpki-roots
+#               (k2-node's); objc2-foundation gains AppKit-side classes
+#               (k2-menubar's). The daemon opens only ws:// with tungstenite,
+#               and the Linux release daemon has shipped built together
+#               with k2-node (`--bin k2-daemon --bin k2-node`) all along.
+#   k2-node     rustls gains `ring` beside aws-lc-rs; k2-node installs the
+#               aws-lc-rs provider itself before its first TLS connection
+#               (crates/k2-node/src/session.rs), so the provider is the same.
+#   k2-ptyd,    additive API features only (serde rc, libc extra_traits,
+#   k2-menubar  syn full, image codecs…): no behaviour change.
+# src-tauri (`k2`) stays out: `tauri build` runs its own cargo call, and
+# the app no longer links k2-core (0.46.3 k2-client split), so the daemon
+# side is where the shared tree is.
 #
-# What this step does save: `-p k2-daemon` used to build every k2-daemon bin,
-# including k2-mail-helper, which K2.app does not ship (it is a Linux hostmail
-# helper; .github/workflows/daemon-binaries.yml builds it there). Each bin is
-# a full fat-LTO link of the daemon library, so `--bin` skips one of those.
+# The Step 8.5 standalone daemon (k2_build_standalone_macos_daemon) builds
+# with the same array, so it reuses every crate and only relinks k2-daemon.
+#
+# What this step also saves: `-p k2-daemon` alone used to build every
+# k2-daemon bin, including k2-mail-helper, which K2.app does not ship (a
+# Linux hostmail helper; daemon-binaries.yml builds it there). Each bin is a
+# full fat-LTO link of the daemon library, so `--bin` skips one of those.
 #
 # Needs (sourced by the caller): scripts/require-mail-oauth-build-env.sh
 # (assert_daemon_oauth_not_placeholder). Run from the repo root.
@@ -94,19 +106,12 @@ k2_build_mac_binaries() {
     bun run tauri build || { echo "FATAL: tauri build failed" >&2; return 1; }
     [ -d "$app" ] || { echo "FATAL: $app missing after tauri build" >&2; return 1; }
 
-    echo ""; echo "  Build 2/2: k2-daemon, k2-power-helper, k2-ptyd, k2-node, k2-menubar..."
-    # One cargo call per package (see the header): the package set of each
-    # call decides the features, so these are never merged.
-    cargo build --release -p k2-daemon --bin k2-daemon --bin k2-power-helper \
-        || { echo "FATAL: k2-daemon build failed" >&2; return 1; }
-    # k2-ptyd rides beside the daemon in K2 Daemon.app (prd-k2-ptyd-v1 §7.1).
-    cargo build --release -p k2-ptyd --bin k2-ptyd \
-        || { echo "FATAL: k2-ptyd build failed" >&2; return 1; }
-    # Compute nodes: separate crate, never links k2-core.
-    cargo build --release -p k2-node --bin k2-node \
-        || { echo "FATAL: k2-node build failed" >&2; return 1; }
-    cargo build --release -p k2-menubar --bin k2-menubar \
-        || { echo "FATAL: k2-menubar build failed" >&2; return 1; }
+    echo ""; echo "  Build 2/2: k2-daemon, k2-power-helper, k2-ptyd, k2-node, k2-menubar (one cargo call)..."
+    # k2-ptyd rides beside the daemon in K2 Daemon.app (prd-k2-ptyd-v1 §7.1);
+    # k2-node never links k2-core (CN26). One call, one feature resolution
+    # (see the header); k2_build_standalone_macos_daemon uses the same array.
+    cargo build --release "${K2_MAC_SIDECAR_CARGO_ARGS[@]}" \
+        || { echo "FATAL: sidecar build (k2-daemon, k2-ptyd, k2-node, k2-menubar) failed" >&2; return 1; }
 
     local bin
     for bin in k2-daemon k2-power-helper k2-ptyd k2-node k2-menubar; do

@@ -28,6 +28,23 @@ K2_DAEMON_HELPER_EXE="k2-daemon"
 K2_DAEMON_HELPER_ICON="K2.icns"
 K2_DAEMON_HELPER_PTYD="k2-ptyd"
 
+# The ONE cargo call that builds every Rust sidecar K2.app ships on macOS
+# (scripts/lib/build-binaries.sh, Step 2 of release.sh) and the standalone
+# daemon rebuild (k2_build_standalone_macos_daemon, Step 8.5). One package
+# set means one feature resolution: k2-core and the ~500 crates under it
+# compile once, and the Step 8.5 rebuild reuses all of them (only
+# k2-daemon relinks). A daemon built with a different package set (e.g.
+# `-p k2-daemon` alone) resolves objc2-foundation (under trash, so under
+# k2-core) and tungstenite differently and recompiles k2-core. Keep the two
+# callers on this array; tests/packaging/build-once.sh fails if either
+# grows its own list. Release profile and --release come from the callers.
+K2_MAC_SIDECAR_CARGO_ARGS=(
+    -p k2-daemon --bin k2-daemon --bin k2-power-helper
+    -p k2-ptyd --bin k2-ptyd
+    -p k2-node --bin k2-node
+    -p k2-menubar --bin k2-menubar
+)
+
 # Path of the nested helper app inside APP.
 k2_daemon_helper_dir() {
     printf '%s/Contents/Helpers/%s' "$1" "$K2_DAEMON_HELPER_APP"
@@ -235,13 +252,14 @@ k2_build_standalone_macos_daemon() {
         cd "$project" || exit 1
         # shellcheck source=linux-ptyd-embed.sh
         . "$project/scripts/linux-ptyd-embed.sh"
-        # The same environment and package set as Step 2's daemon build
-        # (scripts/lib/build-binaries.sh), so only the embed differs.
+        # The same environment and package set as Step 2's build
+        # (K2_MAC_SIDECAR_CARGO_ARGS), so only the embed differs: k2-core
+        # and every other crate are fresh, only k2-daemon relinks.
         if declare -F k2_mac_build_env >/dev/null; then k2_mac_build_env; fi
         K2_PTYD_EMBED="$ptyd"
         K2_REQUIRE_PTYD_EMBED=1
         export K2_PTYD_EMBED K2_REQUIRE_PTYD_EMBED
-        cargo build --release -p k2-daemon --bin k2-daemon --bin k2-power-helper \
+        cargo build --release "${K2_MAC_SIDECAR_CARGO_ARGS[@]}" \
             || { echo "FATAL: standalone k2-daemon build (embedding k2-ptyd) failed" >&2; exit 1; }
         assert_daemon_embeds_ptyd "${CARGO_TARGET_DIR:-target}/release/k2-daemon" || exit 1
         if declare -F assert_daemon_oauth_not_placeholder >/dev/null; then

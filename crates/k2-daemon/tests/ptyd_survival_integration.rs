@@ -104,6 +104,19 @@ struct Harness {
 
 impl Drop for Harness {
     fn drop(&mut self) {
+        if std::thread::panicking() {
+            // Fail loudly WITH the evidence: ptyd's log and the daemon logs.
+            let tail = |p: PathBuf| {
+                let s = std::fs::read_to_string(&p).unwrap_or_else(|e| format!("({e})"));
+                let lines: Vec<&str> = s.lines().collect();
+                let from = lines.len().saturating_sub(60);
+                eprintln!("──── {} (last {} lines) ────\n{}", p.display(), lines.len() - from, lines[from..].join("\n"));
+            };
+            tail(self.k2.join("logs/ptyd.log"));
+            for b in 1..=self.boots {
+                tail(self.home.join(format!("daemon-{b}.log")));
+            }
+        }
         if let Some(c) = self.daemon.as_mut() {
             let _ = c.kill();
             let _ = c.wait();

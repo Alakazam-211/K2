@@ -38,15 +38,18 @@ pub(crate) fn caller_entry(ctx: &Ctx, who: &Caller) -> HResult<DaemonEntry> {
 
 /// Write (`Some(bytes)`) or remove (`None`) one canned drop-in file
 /// `/etc/systemd/system/<unit>.d/<file>`. `unit` comes from `daemon.toml`
-/// (already validated by `unit_ok`: no `/`, no `..`, ends in `.service`);
-/// `file` is a fixed name from `k2_root_proto::paths`. No link is ever
+/// (already validated by `unit_ok`: no `/`, no `..`, ends in `.service`)
+/// or, for `creds bind`, from argv validated by
+/// `k2_root_proto::creds::unit_name_ok` (same alphabet, ends in
+/// `.service`); `file` is a fixed name from `k2_root_proto::paths` or
+/// `k2-cred-<validated cred>.conf`. No link is ever
 /// followed: a symlinked or non-directory `.d`, or a non-regular file,
 /// refuses with nothing written. `Ok(changed)`; never reloads systemd
 /// (the caller does, once).
 pub(crate) fn set_dropin(
     ctx: &Ctx,
     unit: &str,
-    file: &'static str,
+    file: &str,
     bytes: Option<&[u8]>,
     what: &str,
 ) -> HResult<bool> {
@@ -106,7 +109,7 @@ pub(crate) fn set_dropin(
 
 /// Read one drop-in for status: `Some(true)` = the canned bytes,
 /// `Some(false)` = something else, `None` = absent (or unreadable).
-pub(crate) fn dropin_matches(ctx: &Ctx, unit: &str, file: &'static str, want: &[u8]) -> Option<bool> {
+pub(crate) fn dropin_matches(ctx: &Ctx, unit: &str, file: &str, want: &[u8]) -> Option<bool> {
     let base = ctx.dir(SYSTEMD_SYSTEM_DIR).ok()?;
     let dname = format!("{unit}.d");
     let dir = base.sub(OsStr::new(&dname)).ok()?;

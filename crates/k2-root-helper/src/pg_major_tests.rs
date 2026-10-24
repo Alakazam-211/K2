@@ -1097,7 +1097,7 @@ fn psql_cluster_runs_that_majors_psql_on_its_port() {
 fn version_announces_pgmajor_on_protocol_9() {
     let t = box_root();
     let v = json(&t.call(&["helper", "version"]));
-    assert_eq!(v["protocol"], 9);
+    assert_eq!(v["protocol"], 10, "pgmajor came in 9; 10 is 0.46.4's one bump (additive)");
     assert_eq!(v["namespaces"]["pgmajor"], true);
     assert_eq!(v["namespaces"]["pg"], true, "protocols are additive");
     assert!(PROTOCOL >= k2_root_proto::version::PGMAJOR_MIN_PROTOCOL);

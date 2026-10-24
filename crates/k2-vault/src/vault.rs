@@ -38,6 +38,9 @@ use crate::secret::{Key32, SecretBytes};
 use crate::store::*;
 
 mod handoff_store;
+mod placement_store;
+
+pub use placement_store::{NewPlacement, Placement, PlacementTarget, Placements};
 
 pub const FORMAT: &str = "k2-vault/1";
 pub const VERSION_RETENTION_DAYS: i64 = 30;
@@ -964,7 +967,7 @@ impl LocalVault {
                 if req.mode == PutMode::Create {
                     return Err(VaultError::conflict("secret_exists", format!("{} already exists; use rotate", req.name)));
                 }
-                self.rotate_row(row, value, actor, req.idempotent, trimmed)
+                self.rotate_row(row, value, actor, req.idempotent, trimmed, None)
             }
             None => {
                 if req.mode == PutMode::Rotate {
@@ -1045,8 +1048,12 @@ impl LocalVault {
         }
     }
 
-    fn rotate_row(&self, row: SecretRow, value: SecretBytes, actor: &Actor, idempotent: bool, trimmed: bool) -> Result<PutOutcome> {
+    /// `version_by`: the new version's `created_by` when it isn't simply the
+    /// actor's stamp (a rollback of a version no person wrote keeps that
+    /// author, review A3-P3).
+    fn rotate_row(&self, row: SecretRow, value: SecretBytes, actor: &Actor, idempotent: bool, trimmed: bool, version_by: Option<String>) -> Result<PutOutcome> {
         let stamp = actor.stamp();
+        let version_stamp = version_by.unwrap_or_else(|| stamp.clone());
         let mut m = row.meta.clone();
         if m.status == SecretStatus::Destroyed {
             // K2's own refs are reused by name (a deleted mailbox's id can
@@ -1097,7 +1104,7 @@ impl LocalVault {
         let m2 = m.clone();
         let ext = row.external_ref.clone();
         self.mutate(true, |tx, keys| {
-            self.insert_version(tx, keys, &m2, new_v, &value, &stamp)?;
+            self.insert_version(tx, keys, &m2, new_v, &value, &version_stamp)?;
             self.revoke_older(tx, keys, &m2.id, new_v)?;
             self.write_secret(tx, keys, &m2, &ext, false)?;
             let outcome = if owner_notice { "ok:owner-notice" } else { "ok" };
@@ -1119,7 +1126,14 @@ impl LocalVault {
             let v = self.decrypt_version(&conn, &keys, &row.meta, version)?;
             (row, v)
         };
-        Ok(self.rotate_row(row, value, actor, false, false)?.meta)
+        // The restored value keeps who really wrote it when that wasn't a
+        // person: "<person> (rollback of vN by <stamp>)", which is not a
+        // person's stamp, so a later systemd-cred placement still warns and
+        // needs --accept-agent-value (review A3-P3).
+        let (orig, _) = self.version_author(&row.meta.id, version)?;
+        let person = orig == "owner" || (orig.starts_with("connect:") && !orig.contains(' '));
+        let by = (!person).then(|| format!("{} (rollback of v{version} by {orig})", actor.stamp()));
+        Ok(self.rotate_row(row, value, actor, false, false, by)?.meta)
     }
 
     // ── policy ──────────────────────────────────────────────────────
@@ -3092,7 +3106,7 @@ impl SecretStore for LocalVault {
         if row.meta.namespace == Namespace::User && *self.rollback.lock() {
             return Err(VaultError::new("vault_rollback", 409, "the vault looks rolled back; the owner must confirm in Settings → Vault"));
         }
-        self.rotate_row(row, value, actor, false, trimmed)
+        self.rotate_row(row, value, actor, false, trimmed, None)
     }
     fn meta(&self, sel: &Selector, actor: &Actor) -> Result<SecretMeta> {
         self.meta_inner(sel, actor)

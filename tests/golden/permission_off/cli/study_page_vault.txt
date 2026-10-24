@@ -15,9 +15,8 @@ START HERE
                               <host> --inject-dst …), then k2 vault fetch
   a CLI login (gh, vercel)    env delivery: CLI TOOLS below
   an SSH key                  --kind ssh_key: file delivery, see KINDS
-  a key a server service uses k2 publish service: k2 publish secret add;
-                              a plain/root systemd unit: SERVICES K2
-                              DOESN'T RUN below
+  a key a server service uses k2 publish secret add; a root systemd unit:
+                              SERVICES K2 DOESN'T RUN below
   handing a secret to an agent  k2 vault send NAME --to <agent>
   a script on a schedule (cron) k2 job add, then grant --to job:<name>:
                               SCHEDULED SCRIPTS below
@@ -25,14 +24,10 @@ START HERE
 
 ASKING: YOU MAKE THE CHOICES
   Pick them on the card yourself: --for (sites), --delivery fetch|file|env,
-  --scope workspace|server|session, --kind. The card tells the person in
-  one sentence ("K2 will add this to calls to api.stripe.com; you never see
-  it", or "you will get this as a file you can read") and they just paste
-  and Save. Prefer fetch with exact sites; ask for file/env only when a
-  tool must read the value itself. If the person says the setup is wrong,
-  void the card (k2 thread void <addr> <card-id>) and ask again with the
-  right choices. They can change things by hand under Advanced, but don't
-  count on it.
+  --scope workspace|server|session, --kind. The card tells the person what
+  happens in one sentence; they paste and Save. Prefer fetch with exact
+  sites; file/env only when a tool must read the value. If the setup is
+  wrong, void the card (k2 thread void <addr> <card-id>) and ask again.
 
 HOW YOU GET A SECRET (delivery)
   fetch   K2 makes the HTTPS call and adds the key. You never see it.
@@ -94,20 +89,16 @@ PEOPLE ONLY
   The recovery key, the vault password, reveal and key rotation are for
   your owner, from their own terminal or Settings. If doctor/status says
   "recovery: not confirmed", don't run it — tell your owner.
-  Backups (k2 vault backup) and restoring one (k2 vault restore) are
-  theirs too.
+  Backups (k2 vault backup), restoring one (k2 vault restore) and a root
+  unit's credential (k2 vault systemd-cred) are theirs too.
 
 MOVING TO ANOTHER BOX
-  With "Allow managing server-wide secrets" you may move secrets in a
-  migration: on the new box `k2 vault recipient`, on the old box
-  `k2 vault carry export --recipient … --target … --workspace <ws>
-  --out carry.age`, then on the new box `k2 vault carry import carry.age
-  --workspace <id>` with the workspace id on the new box (it lists first;
-  add --apply). Secrets go to a workspace by id, never by name. The file
-  opens only in that vault. The
-  recovery key is never used for this. Every export is logged with who
-  ran it, the secret names and the target key, and your owner sees it
-  (k2 vault audit, Settings → Access).
+  With "Allow managing server-wide secrets": on the new box `k2 vault
+  recipient`; on the old box `k2 vault carry export --recipient … --target …
+  --workspace <ws> --out carry.age`; on the new box `k2 vault carry import
+  carry.age --workspace <id>` (lists first; add --apply). Secrets land by
+  workspace id, never by name; the file opens only in that vault; the
+  recovery key is never used. Every export is logged (k2 vault audit).
 
 GIVING A SECRET TO ANOTHER AGENT
   Never paste it into k2 msg (K2 now redacts known values there anyway).
@@ -122,19 +113,14 @@ GIVING A SECRET TO ANOTHER AGENT
   another server. Server-wide secrets aren't sent (the owner shares them
   with k2 vault grant). The copy you get is fetch/file only, never api,
   and you can't widen it: use it with k2 vault fetch --secret NAME.
-  Exit 3 = a person must act (pending, held, not connected): don't retry.
-  Unlike k2 msg (exit 2 on a declined federated message), a handoff that
-  waits or is declined is exit 3. Exit 2 = the request or the other server
-  can't (peer_too_old: it needs K2 0.46.1 with federation on). Exit 4 = no
-  such secret or agent. Every send, receive, accept, decline, expiry and
-  refusal is logged (Settings → Logs → Access Audit), names only.
+  Exit 3 = a person must act (pending, held, declined): don't retry.
+  Exit 2 = the other server can't (peer_too_old). Exit 4 = no such secret
+  or agent. Every step is logged (Settings → Logs → Access Audit).
 
 PUBLISHED SERVICES
-  New services start clean (base env + granted secrets). Ones from before
-  0.45.4 show [legacy env (ends 0.46.0)] in k2 publish ps: they inherit the
-  daemon's whole environment until K2 0.46.0. Switch now with
-  `k2 publish env <name> clean`; grant what it needs with
-  `k2 publish secret add <name> NAME` (or k2v:// refs in its .env.k2).
+  New services start clean (base env + granted secrets). A [legacy env]
+  one inherits the daemon's environment; switch it with
+  `k2 publish env <name> clean`, then `k2 publish secret add <name> NAME`.
 
 CLI TOOLS (gh, vercel: tools that read a token from the environment)
   1. k2 vault set GITHUB_CLI --kind oauth_token < token
@@ -162,22 +148,21 @@ SCHEDULED SCRIPTS (k2 job, not cron)
   k2 job logs collect shows the redacted output; k2 job kill / disable
   stop it. More: k2 study jobs
 
-SERVICES K2 DOESN'T RUN
-  The vault reaches K2 sessions, k2 job runs and k2 publish services. A
-  plain systemd unit (a root service) can't use it; for a timer, use
-  k2 job (above). Use systemd's encrypted credentials (systemd 250+), from
-  a file delivery:
-    sudo systemd-creds encrypt --name=api_key "$K2_SECRETS_DIR/API_KEY" \
-      /etc/credstore.encrypted/api_key
-    unit: LoadCredentialEncrypted=api_key:/etc/credstore.encrypted/api_key
-    the service reads $CREDENTIALS_DIRECTORY/api_key
-  Rotate by hand: encrypt the new value again, restart the unit.
+SERVICES K2 DOESN'T RUN (a root systemd unit; Linux; for a timer: k2 job)
+  People only, with a confirm, on units the box's admin listed in
+  /etc/k2-root-helper/systemd-cred-units (agents: ask your owner):
+    k2 vault systemd-cred API_KEY --unit k2-watch.service --restart
+  The unit reads $CREDENTIALS_DIRECTORY/API_KEY; after a rotate it is stale
+  until a person runs --replace. EnvironmentFile= units: seal the file and
+  source %d/<cred> from an ExecStart= wrapper (k2 vault systemd-cred --help).
 
 NO K2 ON THE BOX
-  No K2 there means no vault there. Use systemd-creds on that box, the
-  value over SSH stdin (never argv):
+  Keep the source copy in a K2 vault (a reimage loses a sealed credential);
+  put it there over SSH stdin, then note it (k2 vault placement add API_KEY
+  --where box:<path>; the doctor lists it after a rotate):
     ssh box 'sudo systemd-creds encrypt --name=api_key - \
-      /etc/credstore.encrypted/api_key' < "$K2_SECRETS_DIR/API_KEY"
+      /etc/credstore.encrypted/api_key.cred' < "$K2_SECRETS_DIR/API_KEY"
+    unit: LoadCredentialEncrypted=api_key:/etc/credstore.encrypted/api_key.cred
   k2 vault send and carry need K2 on both ends.
 
 HONEST LIMITS
@@ -188,11 +173,9 @@ HONEST LIMITS
   logs every use.
 
 WHAT THE VAULT CAN'T DO YET (and the way around it today)
-  sign requests (AWS SigV4, Google service-account JWT)
-                                        env or file delivery to the tool
-  ssh-agent                             file delivery + ssh -i
-  plain systemd units                   systemd-creds (above)
-  boxes without K2                      systemd-creds over SSH (above)
+  sign requests (AWS SigV4, Google service-account JWT): env or file delivery
+  ssh-agent: file delivery + ssh -i
+  boxes without K2: systemd-creds over SSH + k2 vault placement add (above)
 
   k2 vault --help   k2 vault list   k2 vault doctor
 --- stderr

@@ -19,6 +19,7 @@
 pub mod apps;
 pub mod caller;
 pub mod core;
+pub mod creds;
 pub mod ctx;
 pub mod daemon_unit;
 pub mod front;
@@ -48,14 +49,14 @@ use ctx::{Ctx, Fail, HResult};
 pub static BUILD_MARKER: &str = concat!(
     "K2_ROOT_HELPER_BUILD v=",
     env!("K2_PRODUCT_VERSION"),
-    " proto=9 arch=x86_64;"
+    " proto=10 arch=x86_64;"
 );
 #[cfg(target_arch = "aarch64")]
 #[used]
 pub static BUILD_MARKER: &str = concat!(
     "K2_ROOT_HELPER_BUILD v=",
     env!("K2_PRODUCT_VERSION"),
-    " proto=9 arch=aarch64;"
+    " proto=10 arch=aarch64;"
 );
 
 /// Present only in a `test-keys` build; release signing refuses it.
@@ -250,6 +251,13 @@ fn dispatch(
         Verb::FrontStatus => Some(front::status(ctx)?),
         Verb::FrontInstall => Some(front::install(ctx, who)?),
         Verb::FrontRemove => Some(front::remove(ctx, who)?),
+
+        Verb::CredsStatus => Some(creds::status(ctx, who)?),
+        Verb::CredsPut(c) => Some(creds::put(ctx, who, c, stdin)?),
+        Verb::CredsBind { unit, cred } => Some(creds::bind(ctx, who, unit, cred)?),
+        Verb::CredsUnbind { unit, cred } => Some(creds::unbind(ctx, who, unit, cred)?),
+        Verb::CredsRestart(u) => Some(creds::restart(ctx, who, u)?),
+        Verb::CredsRemove(c) => Some(creds::remove(ctx, who, c)?),
     })
 }
 
@@ -323,6 +331,16 @@ fn audit(
     if let (Some(Verb::AppsPodmanUninstall), Some(x)) = (verb, extra) {
         if let Some(v) = x.get("removed") {
             line["removed"] = v.clone();
+        }
+    }
+    // A credential written: how systemd-creds sealed it (--with-key=auto,
+    // and whether the box has a TPM2). Never the value or its size class
+    // beyond the ciphertext length.
+    if let (Some(Verb::CredsPut(_)), Some(x)) = (verb, extra) {
+        for k in ["withKey", "tpm2"] {
+            if let Some(v) = x.get(k) {
+                line[k] = v.clone();
+            }
         }
     }
     if let Some(Verb::PgPsql { db, .. }) = verb {
@@ -405,7 +423,7 @@ pub fn run(ctx: &Ctx, args: &[&str], stdin: impl Read) -> Outcome {
     } else {
         None
     };
-    let input = match read_stdin(&verb, stdin) {
+    let mut input = match read_stdin(&verb, stdin) {
         Ok(b) => b,
         Err(f) => {
             audit(ctx, Some(&verb), Some(&who), f.code, None);
@@ -413,6 +431,8 @@ pub fn run(ctx: &Ctx, args: &[&str], stdin: impl Read) -> Outcome {
         }
     };
     let res = dispatch(ctx, &verb, &input, &who);
+    // A credential's plaintext (and any other stdin) is wiped once used.
+    creds::wipe(&mut input);
     let (code, json, err) = match res {
         Ok(j) => (exit::OK, j, String::new()),
         Err(f) => (f.code, None, f.msg),
@@ -435,6 +455,15 @@ pub fn run(ctx: &Ctx, args: &[&str], stdin: impl Read) -> Outcome {
 pub fn main_entry() -> i32 {
     // SAFETY: umask has no preconditions.
     unsafe { libc::umask(0o022) };
+    // No core dump and no ptrace by the caller's user: a crash during
+    // `creds put` (or any stdin verb) must not leave plaintext in a core.
+    #[cfg(target_os = "linux")]
+    // SAFETY: plain syscalls with constant arguments.
+    unsafe {
+        libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0);
+        let zero = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+        libc::setrlimit(libc::RLIMIT_CORE, &zero);
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     let ctx = Ctx::production();

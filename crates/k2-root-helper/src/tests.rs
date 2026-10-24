@@ -2124,3 +2124,7 @@ mod front_tests;
 // The several-majors verbs (protocol 9, `namespaces.pgmajor`), same fakes.
 #[path = "pg_major_tests.rs"]
 mod pg_major_tests;
+
+// The `creds` namespace (protocol 10, `k2 vault systemd-cred`), same fakes.
+#[path = "creds_tests.rs"]
+mod creds_tests;

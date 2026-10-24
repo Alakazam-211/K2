@@ -37,12 +37,14 @@ printf '%s' "$top" | grep -Fq -- "--inject-dst header:<Name>|query:<param>|basic
 ok "k2 vault --help: no daemon needed, names --inject-dst and per-verb help"
 
 for verb in status list show set rotate hosts delivery grant revoke disable enable destroy get audit requests presets \
-    doctor env-file import service reveal recovery confirm-password kek rekey rollback backup restore recipient carry fetch send sign; do
+    doctor env-file import service reveal recovery confirm-password kek rekey rollback backup restore recipient carry fetch send sign \
+    systemd-cred placement placements; do
     out="$(k2n vault "$verb" --help 2>&1)" || fail "vault $verb --help exited non-zero: $out"
     case "$verb" in
         enable) want="k2 vault disable NAME" ;;
         rekey) want="k2 vault kek rotate" ;;
         send) want="k2 vault send" ;;
+        placements) want="k2 vault placement add" ;;
         *) want="k2 vault $verb" ;;
     esac
     printf '%s\n' "$out" | head -1 | grep -Fq "$want" || fail "vault $verb --help starts with: $(printf '%s\n' "$out" | head -1)"
@@ -78,6 +80,32 @@ printf '%s' "$fetch_help" | grep -Fq -- "--json-out prints the daemon's answer" 
 printf '%s' "$fetch_help" | grep -Fq '"bodyB64"' || fail "fetch --help lacks bodyB64"
 ok "fetch --help: as-is in one place, signers, --json-out shape"
 
+# prd-vault-gaps-v1 item 4: systemd-cred and placements.
+sc_help="$(k2n vault systemd-cred --help)"
+for needle in "People only, on Linux" "LoadCredentialEncrypted=<cred>:/etc/k2/credstore.encrypted/<cred>.cred" "--replace" "/etc/k2-root-helper/systemd-cred-units" \
+    "\$CREDENTIALS_DIRECTORY/<cred>" "--restart" "--remove" "--dry-run" "%d/k2c.env" "ExecStart=" "single quotes"; do
+    printf '%s' "$sc_help" | grep -Fq -- "$needle" || fail "systemd-cred --help lacks '$needle'"
+done
+pl_help="$(k2n vault placement --help)"
+for needle in "k2 vault placement add NAME --where <host>:<path>" "k2 vault placement done ID" "k2 vault placements [NAME]"; do
+    printf '%s' "$pl_help" | grep -Fq -- "$needle" || fail "placement --help lacks '$needle'"
+done
+set +e
+err="$(env HOME="$WORK" K2_PORT=1 K2_HOOK_TOKEN=offline "$K2_CLI" vault systemd-cred X 2>&1)"; rc=$?
+set -e
+[ "$rc" = 2 ] || fail "systemd-cred without --unit: exit $rc ($err)"
+set +e
+err="$(env HOME="$WORK" K2_PORT=1 K2_HOOK_TOKEN=agent-token "$K2_CLI" vault systemd-cred X --unit a.service 2>&1)"; rc=$?
+set -e
+if [ "$(uname -s)" = "Linux" ]; then
+    [ "$rc" = 3 ] || fail "systemd-cred from a K2 terminal: exit $rc ($err)"
+    printf '%s' "$err" | grep -Fq "owner_only" || fail "systemd-cred from a K2 terminal: $err"
+else
+    [ "$rc" = 2 ] || fail "systemd-cred on $(uname -s): exit $rc ($err)"
+    printf '%s' "$err" | grep -Fq "linux_only" || fail "systemd-cred on $(uname -s): $err"
+fi
+ok "systemd-cred and placement help; people only; Linux only"
+
 # ── k2 study vault ────────────────────────────────────────────────────
 study="$(env HOME="$WORK" K2_PORT=1 K2_HOOK_TOKEN=offline "$K2_CLI" study vault)" || fail "study vault"
 for section in "START HERE" "KINDS AND DELIVERY" "CLI TOOLS" "SERVICES K2 DOESN'T RUN" "NO K2 ON THE BOX" "WHAT THE VAULT CAN'T DO YET"; do
@@ -86,7 +114,8 @@ done
 for needle in "k2 vault import .env" "k2 vault send NAME --to <agent>" "ssh -i \$K2_SECRETS_DIR/NAME" "-o IdentitiesOnly=yes" \
     "--env-name GH_TOKEN" "hosts.yml" "auth.json" "systemd-creds encrypt" "LoadCredentialEncrypted=" "\$CREDENTIALS_DIRECTORY/" \
     "send and carry need K2 on both ends" "sign requests (AWS SigV4, Google service-account JWT)" "ssh-agent" \
-    "Some secrets are signers" "--sign ovh --preset ovh-eu" "--json-out"; do
+    "Some secrets are signers" "--sign ovh --preset ovh-eu" "--json-out" \
+    "k2 vault systemd-cred API_KEY --unit" "k2 vault placement add" "Keep the source copy in a K2 vault" "%d/<cred>"; do
     printf '%s' "$study" | grep -Fq -- "$needle" || fail "study vault lacks '$needle'"
 done
 # The can't-do-yet block is the last section.
@@ -94,6 +123,7 @@ last="$(printf '%s\n' "$study" | grep -E '^[A-Z][A-Z ,()'"'"'-]+$|^[A-Z][A-Z '"'
 case "$last" in "WHAT THE VAULT CAN'T DO YET"*) ;; *) fail "the can't-do-yet block isn't last (last section: $last)" ;; esac
 lines="$(printf '%s\n' "$study" | wc -l | tr -d ' ')"
 [ "$lines" -le 180 ] || fail "study vault is $lines lines (max 180)"
+if printf '%s' "$study" | grep -Fq "plain systemd units"; then fail "study vault still lists plain systemd units as can't-do"; fi
 ok "k2 study vault: new sections present, can't-do-yet last, $lines lines"
 
 # ── against a stub daemon ─────────────────────────────────────────────

@@ -39,10 +39,15 @@
 //!   preview / layout majors, EOL dates, the Debian layout of a major and
 //!   K2's port band 5432–5449; and (protocol 9, `namespaces.pgmajor`)
 //!   the helper's canned apt and cluster files and shared parsers.
+//! - [`creds`]: systemd encrypted credentials for units K2 doesn't run
+//!   (protocol 10, `namespaces.creds`, `k2 vault systemd-cred`): the cred
+//!   and unit name rules, the exact deny list of K2's own units, the fixed
+//!   paths and the canned drop-in.
 
 pub mod apps;
 pub mod caller;
 pub mod cli;
+pub mod creds;
 pub mod engine;
 pub mod keys;
 pub mod node_build;

@@ -630,5 +630,24 @@ SCRIPT="$WRAPPER" run "$D7" --version 0.45.5
 [ ! -e "$D7/usr/local/libexec/k2-mail-helper" ] || fail "wrapper must not install the old helper"
 ok "old name installs k2-root-helper"
 
+echo "== --creds-unit appends to the systemd-cred allow list (prd-vault-gaps-v1 item 4) =="
+D8="$WORK/box8"
+run "$D8" --version 0.45.5 --creds-unit k2-watch.service --creds-unit k2-control-plane.service
+[ "$rc" -eq 0 ] || fail "--creds-unit: $out"
+ALLOWF="$D8/etc/k2-root-helper/systemd-cred-units"
+[ "$(cat "$ALLOWF")" = "$(printf 'k2-watch.service\nk2-control-plane.service')" ] || fail "allow list: $(cat "$ALLOWF")"
+[ "$(mode_of "$ALLOWF")" = 644 ] || fail "allow list mode $(mode_of "$ALLOWF")"
+run "$D8" --version 0.45.5 --creds-unit k2-watch.service --creds-unit k2-ops-push.service
+[ "$(cat "$ALLOWF")" = "$(printf 'k2-watch.service\nk2-control-plane.service\nk2-ops-push.service')" ] || fail "append without duplicates: $(cat "$ALLOWF")"
+for bad in 'foo@.service' 'foo@bar.service' 'k2-.service' 'x' '../x.service' '-x.service'; do
+	run "$WORK/box8b" --version 0.45.5 --creds-unit "$bad"
+	[ "$rc" -ne 0 ] || fail "--creds-unit '$bad' accepted"
+done
+[ ! -e "$WORK/box8b/etc/k2-root-helper/systemd-cred-units" ] || fail "a refused --creds-unit wrote the list"
+D9="$WORK/box9"
+run "$D9" --version 0.45.5
+[ ! -e "$D9/etc/k2-root-helper/systemd-cred-units" ] || fail "no --creds-unit must write no allow list (fail closed)"
+ok "--creds-unit: appends, no duplicates, 0644, plain names only, absent by default"
+
 echo ""
 echo "PASS: install-root-helper ($pass checks)"

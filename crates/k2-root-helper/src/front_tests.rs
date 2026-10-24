@@ -243,7 +243,7 @@ fn status_reports_files_and_the_socket_state() {
 fn version_announces_the_front_namespace_from_protocol_8() {
     let t = box_root();
     let v = json(&t.call(&["helper", "version"]));
-    assert_eq!(v["protocol"], 9, "front came in 8; 9 is 0.46.3's one bump");
+    assert_eq!(v["protocol"], 10, "front came in 8; 10 is 0.46.4's one bump");
     assert_eq!(v["protocol"], k2_root_proto::version::PROTOCOL);
     assert!(v["protocol"].as_u64().expect("number") >= u64::from(k2_root_proto::version::FRONT_MIN_PROTOCOL));
     assert_eq!(v["namespaces"]["front"], true);

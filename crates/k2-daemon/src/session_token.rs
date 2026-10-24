@@ -555,6 +555,9 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/vault/restore",
         "/cli/vault/backup",
         "/cli/vault/legacy-export",
+        // prd-vault-gaps-v1 item 4: systemd credentials (and their remove)
+        // are a person's, with a confirm (Q8: not a card in v1).
+        "/cli/vault/systemd-cred",
         // Secret handoff (prd-agent-secret-handoff-v1 §13): a person
         // accepts or declines; an `accept-from` POST is refused in the handler.
         "/cli/vault/incoming/decide",
@@ -692,6 +695,12 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/vault/env-file",
         "/cli/vault/import",
         "/cli/vault/service",
+        // Manual placement records (prd-vault-gaps-v1 item 4): bookkeeping
+        // for the agent's own workspace's secrets; the handler checks it.
+        "/cli/vault/placements",
+        "/cli/vault/placement/add",
+        "/cli/vault/placement/done",
+        "/cli/vault/placement/remove",
         // Migrations (VS2): an IT agent with "Allow managing server-wide
         // secrets" may run the carry; the handler checks the switch.
         "/cli/vault/recipient",

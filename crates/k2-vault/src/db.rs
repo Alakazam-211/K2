@@ -199,6 +199,31 @@ CREATE TABLE IF NOT EXISTS peer_vault (
 );
 "#;
 
+/// Where a secret's value has been placed outside the vault
+/// (`prd-vault-gaps-v1` item 4, 0.46.4): `systemd_cred` rows K2 wrote
+/// through the root helper (`k2 vault systemd-cred`), `manual` rows a person
+/// or agent noted by hand (`k2 vault placement add`). Names and places only,
+/// never a value. Additive (H22): `user_version` stays 1, and an older
+/// daemon never reads it. Rows carry a MAC under the row key.
+pub const PLACEMENT_TABLES: &str = r#"
+CREATE TABLE IF NOT EXISTS placement (
+    id TEXT PRIMARY KEY,
+    secret_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    target TEXT NOT NULL,
+    unit TEXT,
+    cred_name TEXT,
+    where_text TEXT,
+    note TEXT NOT NULL DEFAULT '',
+    restart INTEGER NOT NULL DEFAULT 0,
+    placed_by TEXT NOT NULL,
+    placed_at TEXT NOT NULL,
+    written_at TEXT,
+    row_mac BLOB NOT NULL
+);
+CREATE INDEX IF NOT EXISTS placement_secret ON placement (secret_id);
+"#;
+
 pub fn configure(conn: &Connection) -> Result<()> {
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "secure_delete", "ON")?;
@@ -222,5 +247,6 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     }
     // Additive tables (H22): no version bump.
     conn.execute_batch(HANDOFF_TABLES)?;
+    conn.execute_batch(PLACEMENT_TABLES)?;
     Ok(())
 }

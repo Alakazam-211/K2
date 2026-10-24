@@ -45,6 +45,16 @@
 //!   `ensure-cluster`, `start-conf`, `install-slice`, `psql --cluster`,
 //!   `copy-roles`, `move-dump`, `move-restore`, `move-file-remove`,
 //!   `allow-conn`, `drop-db`. Anything after a 9 build ships needs 10.
+//! - 10 = every root-helper change 0.46.4 makes, in one bump, shared by
+//!   every lane (the ONE place to add to it): the `creds` namespace
+//!   (`prd-vault-gaps-v1` item 4, `k2 vault systemd-cred`): `creds status`,
+//!   `creds put <cred>` (value on stdin), `creds bind|unbind <unit>
+//!   <cred>`, `creds restart <unit>`, `creds remove <cred>`
+//!   ([`crate::creds`]). The daemon gates it on this AND
+//!   `namespaces.creds == true` ([`CREDS_MIN_PROTOCOL`]). Another 0.46.4
+//!   lane that needs a helper change joins 10 here and adds its own
+//!   namespace flag; never 11 before 10 ships. Anything after a 10 build
+//!   ships needs 11.
 //!
 //! The first `k2-root-helper` build ships 3 and 4 together and answers 4.
 //! Protocols are additive: a newer helper serves an older daemon.
@@ -53,7 +63,7 @@ use std::cmp::Ordering;
 use std::fmt;
 
 /// What this build of the helper speaks.
-pub const PROTOCOL: u32 = 9;
+pub const PROTOCOL: u32 = 10;
 
 /// `k2 hostmail upgrade` through the root helper. 4, not 2: the daemon's
 /// table moves from 0.16.20 OR 0.16.10 (pin 0.16.25), so `install-bin`
@@ -94,6 +104,10 @@ pub const CLI_REFRESH_MIN_PROTOCOL: u32 = 9;
 /// <M>` and the move verbs. 0.46.3's one helper bump (8 → 9), shared by
 /// every lane. Gated on this AND `namespaces.pgmajor == true`.
 pub const PGMAJOR_MIN_PROTOCOL: u32 = 9;
+/// `k2 vault systemd-cred` (prd-vault-gaps-v1 item 4, 0.46.4): the `creds`
+/// namespace. 0.46.4's one helper bump (9 → 10), shared by every lane.
+/// Gated on this AND `namespaces.creds == true`.
+pub const CREDS_MIN_PROTOCOL: u32 = 10;
 
 pub const HELPER_NAME: &str = "k2-root-helper";
 
@@ -248,7 +262,10 @@ mod tests {
         assert_eq!(HANDOFF_MIN_PROTOCOL, 5);
         assert_eq!(APPS_MIN_PROTOCOL, 6);
         assert_eq!(SEW_MIN_PROTOCOL, 7);
-        assert_eq!(PROTOCOL, 9, "protocol 9 = 0.46.3's one bump (cli-refresh + Postgres majors); 8 = 0.46.1's helper changes");
+        assert_eq!(PROTOCOL, 10, "protocol 10 = 0.46.4's one bump (creds); 9 = 0.46.3's (cli-refresh + Postgres majors)");
+        assert_eq!(CREDS_MIN_PROTOCOL, 10, "creds joins 0.46.4's one bump; never 11 before 10 ships");
+        let creds: Vec<_> = crate::verbs::catalog().into_iter().filter(|v| v.namespace() == "creds").collect();
+        assert_eq!(creds.len(), 6, "creds status|put|bind|unbind|restart|remove: {creds:?}");
         assert_eq!(CLI_REFRESH_MIN_PROTOCOL, 9);
         assert_eq!(PGMAJOR_MIN_PROTOCOL, 9, "the majors verbs join 0.46.3's one bump; never 10");
         let pgmajor: Vec<_> = crate::verbs::catalog()

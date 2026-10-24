@@ -100,6 +100,10 @@ pub const PASSPORT_DENIED: &[&str] = &[
     REKEY,
     ROLLBACK,
     RESTORE,
+    // prd-vault-gaps-v1 item 4: a root unit's credential is a person's call
+    // (Q8: no permission card in v1).
+    crate::vault_systemd_routes::SYSTEMD_CRED,
+    crate::vault_systemd_routes::SYSTEMD_CRED_REMOVE,
 ];
 
 /// The only vault routes a `k2 job` run's passport may use (item 5).
@@ -114,10 +118,14 @@ pub fn is_route(path: &str) -> bool {
         || POST_ROUTES.contains(&path)
         || crate::vault_use_routes::is_route(path)
         || crate::vault_handoff_routes::is_route(path)
+        || crate::vault_systemd_routes::is_route(path)
 }
 
 pub fn is_post_route(path: &str) -> bool {
-    POST_ROUTES.contains(&path) || crate::vault_use_routes::is_post_route(path) || crate::vault_handoff_routes::is_post_route(path)
+    POST_ROUTES.contains(&path)
+        || crate::vault_use_routes::is_post_route(path)
+        || crate::vault_handoff_routes::is_post_route(path)
+        || crate::vault_systemd_routes::is_post_route(path)
 }
 
 // ── responses ───────────────────────────────────────────────────────
@@ -178,7 +186,7 @@ pub struct Sel {
     pub system: bool,
 }
 
-fn parse<T: for<'de> Deserialize<'de> + Default>(body: &[u8]) -> Result<T, VaultError> {
+pub(crate) fn parse<T: for<'de> Deserialize<'de> + Default>(body: &[u8]) -> Result<T, VaultError> {
     if body.iter().all(|b| b.is_ascii_whitespace()) {
         return Ok(T::default());
     }
@@ -428,6 +436,9 @@ pub fn handle_on(
     if crate::vault_handoff_routes::is_route(path) {
         return crate::vault_handoff_routes::handle(vault, path, &c, body, params, ingress);
     }
+    if crate::vault_systemd_routes::is_route(path) {
+        return crate::vault_systemd_routes::handle(vault, path, &c, body, params, ingress);
+    }
     let r = match path {
         STATUS => Ok(status_json(&vault.status())),
         LIST => list(vault, &c, params),
@@ -484,7 +495,7 @@ fn list(vault: &LocalVault, c: &VaultCaller, params: &HashMap<String, String>) -
 /// secrets.
 pub const SYSTEM_HIDDEN_WHY: &str = "K2's own secrets (mail and database passwords, login slots, signing keys) are used by the daemon only; agents never see them, not even their names, and can't use, grant or change them. The owner or an Admin can list the names from their own terminal (not a K2 terminal): k2 vault list --system";
 
-fn sel_from_params(params: &HashMap<String, String>) -> Sel {
+pub(crate) fn sel_from_params(params: &HashMap<String, String>) -> Sel {
     Sel {
         id: params.get("id").cloned(),
         name: params.get("name").cloned(),
@@ -513,7 +524,10 @@ fn show(vault: &LocalVault, c: &VaultCaller, params: &HashMap<String, String>) -
             v
         })
         .collect();
-    Ok(json!({ "secret": meta_json(&m), "grants": grants, "audit": audit }))
+    // Where the value lives outside the vault (systemd credentials K2
+    // wrote, places noted by hand): names and places only.
+    let placements = crate::vault_systemd_routes::placements_for(vault, &m);
+    Ok(json!({ "secret": meta_json(&m), "grants": grants, "audit": audit, "placements": placements }))
 }
 
 fn requests(vault: &LocalVault, c: &VaultCaller) -> Result<Value, VaultError> {
@@ -594,6 +608,7 @@ fn doctor(vault: &LocalVault, c: &VaultCaller) -> Result<Value, VaultError> {
             "message": format!("published service {name}: {notice}"),
         }));
     }
+    findings.extend(crate::vault_systemd_routes::doctor_findings(vault, c));
     let roots = doctor_workspace_roots(c);
     let scan = scan_env_files(&roots);
     for f in &scan.files {
@@ -1063,6 +1078,11 @@ fn set(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultE
     if out.owner_notice {
         owner_notice(&c.actor, &out.meta);
     }
+    let placed = if out.new_version && !out.created {
+        crate::vault_systemd_routes::after_new_version(vault, &out.meta, &c.actor, crate::vault_systemd_routes::Replacer::NotConfirmed)
+    } else {
+        vec![]
+    };
     let r = crate::vault::display_ref(&out.meta);
     Ok(json!({
         "ok": true,
@@ -1072,6 +1092,7 @@ fn set(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultE
         "ref": r,
         "secret": meta_json(&out.meta),
         "use": use_hint(&out.meta),
+        "replaced": placed,
     }))
 }
 
@@ -1115,7 +1136,11 @@ fn rotate(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, Vau
     if out.owner_notice {
         owner_notice(&c.actor, &out.meta);
     }
-    Ok(json!({ "ok": true, "version": out.meta.latest_version, "trimmed": out.trimmed, "secret": meta_json(&out.meta) }))
+    // A new version never reaches a root unit by itself (security review
+    // A-C1 / B-H1): systemd credentials go stale and the owner is told; a
+    // person re-places with a confirm (k2 vault systemd-cred NAME --replace).
+    let placed = crate::vault_systemd_routes::after_new_version(vault, &out.meta, &c.actor, crate::vault_systemd_routes::Replacer::NotConfirmed);
+    Ok(json!({ "ok": true, "version": out.meta.latest_version, "trimmed": out.trimmed, "secret": meta_json(&out.meta), "replaced": placed }))
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1370,6 +1395,15 @@ struct ConfirmBody {
     /// daemon rebuilds the plan from it, binds the token to its digest and
     /// writes the sheet's reason itself (CL14); `label` is ignored.
     clone_plan: Option<crate::clone_vault::CarryAsk>,
+    /// `systemd-cred` only: the plan the confirm is for (op, secret, unit,
+    /// cred, restart). The daemon binds the token to its digest and writes
+    /// the sheet's text itself (security review A-M2 / B-L1); `label` and
+    /// `secretId` are ignored.
+    systemd_cred: Option<crate::vault_systemd_routes::CredPlan>,
+    /// `rollback` only: the rollback (secret + target version). When root
+    /// units load the secret, the token binds to it and the text lists them
+    /// (review A2-N3 / B2-N2).
+    rollback_plan: Option<crate::vault_systemd_routes::RollbackPlan>,
     /// `clone-carry` with `clonePlan` only (0.46.1): the agent's clone
     /// proposal this clone runs. The one check then also mints its
     /// `clone-approve` token (`approveToken`), so approving and copying is
@@ -1438,6 +1472,9 @@ const CONFIRM_ACTIONS: &[&str] = &[
     // RS-A15 (0.46.1): a Garden widget's `guests.setRooms`, confirmed on
     // K2's sheet outside the frame (`secretId` = the change's hash).
     crate::garden_data::guest_rooms::CONFIRM_ACTION,
+    // prd-vault-gaps-v1 item 4: putting a secret into a root unit's
+    // systemd credential, or taking it off (`secretId` = the secret id).
+    crate::vault_systemd_routes::CONFIRM_ACTION,
 ];
 
 fn confirm_start(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {
@@ -1455,7 +1492,14 @@ fn confirm_start(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Val
             "set a vault password first (Settings → Vault, or k2 vault confirm-password set from a terminal outside K2)",
         ));
     }
-    Ok(json!({ "methods": m, "expiresIn": 60 }))
+    // The daemon's own words for what the person approves, shown before
+    // they type (systemd-cred plans, rollbacks of placed secrets).
+    let text = match (action, b.systemd_cred.as_ref(), b.rollback_plan.as_ref()) {
+        (crate::vault_systemd_routes::CONFIRM_ACTION, Some(plan), _) => Some(crate::vault_systemd_routes::confirm_binding(vault, c, plan)?.1),
+        ("rollback", _, Some(plan)) => crate::vault_systemd_routes::rollback_binding(vault, c, plan)?.map(|(_, t)| t),
+        _ => None,
+    };
+    Ok(json!({ "methods": m, "expiresIn": 60, "confirmText": text }))
 }
 
 fn confirm_finish(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &str) -> Result<Value, VaultError> {
@@ -1473,7 +1517,17 @@ fn confirm_finish(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &st
     }
     // CL14: a clone-carry confirm is bound to the plan the daemon builds
     // from the request, and the sheet says what the plan does.
-    let (secret_id, reason) = if action == crate::clone_vault::CONFIRM_ACTION {
+    let rollback_bound = match (action, b.rollback_plan.as_ref()) {
+        ("rollback", Some(plan)) => crate::vault_systemd_routes::rollback_binding(vault, c, plan)?,
+        _ => None,
+    };
+    let (secret_id, reason) = if let Some((digest, text)) = rollback_bound {
+        (Some(digest), text)
+    } else if action == crate::vault_systemd_routes::CONFIRM_ACTION {
+        let plan = b.systemd_cred.as_ref().ok_or_else(|| err("plan_required", 400, "a systemd-cred confirm needs its plan (systemdCred)"))?;
+        let (digest, reason) = crate::vault_systemd_routes::confirm_binding(vault, c, plan)?;
+        (Some(digest), reason)
+    } else if action == crate::clone_vault::CONFIRM_ACTION {
         let ask = b.clone_plan.as_ref().ok_or_else(|| err("clone_plan_required", 400, "a clone-carry confirm needs the clone request (clonePlan)"))?;
         let (sid, reason, _) = crate::clone_vault::confirm_binding(vault, c, ask)?;
         if b.secret_id.as_deref().is_some_and(|s| s != sid) {
@@ -1486,6 +1540,9 @@ fn confirm_finish(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &st
     };
     let t = confirm_check(vault, c, action, secret_id.as_deref(), b.method.as_deref().unwrap_or(""), b.password.as_deref(), &reason, ingress)?;
     let mut out = json!({ "token": t, "expiresIn": 60 });
+    if action == crate::vault_systemd_routes::CONFIRM_ACTION || b.rollback_plan.is_some() {
+        out["reason"] = json!(reason);
+    }
     if let Some(s) = secret_id.filter(|_| action == crate::clone_vault::CONFIRM_ACTION) {
         out["secretId"] = json!(s);
     }
@@ -1590,7 +1647,7 @@ pub mod test_hooks {
     }
 }
 
-fn take_proof(vault: &LocalVault, c: &VaultCaller, action: &str, secret: Option<&str>, token: Option<&str>) -> Result<HumanProof, VaultError> {
+pub(crate) fn take_proof(vault: &LocalVault, c: &VaultCaller, action: &str, secret: Option<&str>, token: Option<&str>) -> Result<HumanProof, VaultError> {
     let t = token.ok_or_else(|| err("vault_confirm_required", 403, "this needs a confirm first (k2 vault confirm)"))?;
     vault.confirm.take(t, action, secret, &c.actor.stamp())
 }
@@ -1814,6 +1871,9 @@ struct RollbackBody {
     sel: Sel,
     version: Option<u32>,
     confirm_token: Option<String>,
+    /// Rolling a secret root units load back to a version no person wrote.
+    #[serde(default)]
+    accept_agent_value: bool,
 }
 
 fn rollback(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &str) -> Result<Value, VaultError> {
@@ -1822,10 +1882,22 @@ fn rollback(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &str) -> 
     let sel = selector(c, &b.sel)?;
     let m = vault.meta(&sel, &c.actor)?;
     let v = b.version.ok_or_else(|| err("version_required", 400, "--to <version>"))?;
-    take_proof(vault, c, "rollback", Some(&m.id), b.confirm_token.as_deref())?;
+    // A secret root units load: the confirm must be the one bound to this
+    // target version and those units (A2-N3 / B2-N2).
+    let plan = crate::vault_systemd_routes::RollbackPlan {
+        sel: Sel { id: Some(m.id.clone()), ..Default::default() },
+        version: Some(v),
+        accept_agent_value: b.accept_agent_value,
+    };
+    let bound = crate::vault_systemd_routes::rollback_binding(vault, c, &plan)?.map(|(d, _)| d);
+    take_proof(vault, c, "rollback", Some(bound.as_deref().unwrap_or(&m.id)), b.confirm_token.as_deref())?;
     let m2 = vault.rollback_to(&Selector::Id(m.id.clone()), v, &c.actor)?;
     crate::vault::auth_audit("vault-rollback", &c.actor.stamp(), &format!("ok {} to v{v}", m.name), ingress);
-    Ok(json!({ "ok": true, "secret": meta_json(&m2) }))
+    // The undo reaches the box too: a person with a fresh confirm (this
+    // rollback's) re-places the restored value into its systemd
+    // credentials (security review A-C1).
+    let placed = crate::vault_systemd_routes::after_new_version(vault, &m2, &c.actor, crate::vault_systemd_routes::Replacer::ConfirmedPerson);
+    Ok(json!({ "ok": true, "secret": meta_json(&m2), "replaced": placed }))
 }
 
 #[derive(Debug, Default, Deserialize)]

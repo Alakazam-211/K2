@@ -108,12 +108,14 @@ FILE=""
 UNIT="k2-daemon.service"
 SCOPE="system"
 ALLOW_DOWNGRADE=0
+CREDS_UNITS=()
+CREDS_ALLOW="${DEST_ROOT}/etc/k2-root-helper/systemd-cred-units"
 
 usage() {
 	cat <<'EOF'
 Usage: install-root-helper.sh (--version <x.y.z> | --file <path>)
                               [--user <name>] [--unit <unit>] [--scope system|user]
-                              [--allow-downgrade]
+                              [--allow-downgrade] [--creds-unit <unit>]...
 
 Run as root (an admin SSH session, not a K2 terminal). Installs
 /usr/local/libexec/k2-root-helper (root:root 0755), /etc/k2-root-helper/
@@ -126,6 +128,10 @@ daemon.toml (0644) and /etc/sudoers.d/k2-root-helper (0440, visudo-checked).
   --scope system|user  system unit (provisioned boxes) or systemd --user
                        (self-hosted install-daemon.sh). Default: system
   --allow-downgrade    install a version older than the installed helper
+  --creds-unit <unit>  let K2 put systemd credentials on this unit
+                       (k2 vault systemd-cred); repeatable. Appends to
+                       /etc/k2-root-helper/systemd-cred-units (root 0644).
+                       Only units K2 doesn't run; K2's own are refused.
   --retire-legacy-mail accepted for old scripts; the legacy helpers are
                        always retired now (0.45.4)
 EOF
@@ -148,6 +154,8 @@ while [ $# -gt 0 ]; do
 		--scope) need_arg $# "$1"; SCOPE="$2"; shift 2 ;;
 		--scope=*) SCOPE="${1#--scope=}"; shift ;;
 		--allow-downgrade) ALLOW_DOWNGRADE=1; shift ;;
+		--creds-unit) need_arg $# "$1"; CREDS_UNITS+=("$2"); shift 2 ;;
+		--creds-unit=*) CREDS_UNITS+=("${1#--creds-unit=}"); shift ;;
 		--retire-legacy-mail) shift ;;
 		-h|--help) usage; exit 0 ;;
 		*) usage >&2; die "unknown argument: $1" ;;
@@ -166,6 +174,11 @@ fi
 case "$UNIT" in *.service) ;; *) UNIT="${UNIT}.service" ;; esac
 [[ "$UNIT" =~ ^[A-Za-z0-9@._-]{1,64}\.service$ ]] || die "--unit must be a systemd unit name (got '$UNIT')"
 case "$SCOPE" in system|user) ;; *) die "--scope must be system or user (got '$SCOPE')" ;; esac
+# Same rule as k2_root_proto::creds::unit_name_ok: no @, no stem ending in -.
+for u in "${CREDS_UNITS[@]+"${CREDS_UNITS[@]}"}"; do
+	[[ "$u" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,119}\.service$ ]] && [[ "$u" != *-.service ]] && [[ "$u" != *..service ]] \
+		|| die "--creds-unit must be a plain <name>.service (no templates or @ instances; got '$u')"
+done
 
 [ "$(id -u)" = "0" ] || die "run as root (sudo bash install-root-helper.sh ...)"
 [ "$(uname -s)" = "Linux" ] || die "the root helper is Linux-only; this is $(uname -s)"
@@ -448,6 +461,19 @@ if ! { [ -f "$TOML_DEST" ] && cmp -s "$TOML_CANDIDATE" "$TOML_DEST"; }; then
 	TOML_RESULT="written (user=$RUN_USER unit=$UNIT scope=$SCOPE)"
 fi
 
+# ── 4b. the systemd-cred allow list (root:root 0644), only when asked ──
+CREDS_RESULT="unchanged"
+if [ "${#CREDS_UNITS[@]}" -gt 0 ]; then
+	[ ! -L "$CREDS_ALLOW" ] || die "$CREDS_ALLOW is a symlink — refusing"
+	STAGE="$CONFIG_DEST/.systemd-cred-units.new.$$"
+	STAGED+=("$STAGE")
+	{ [ -f "$CREDS_ALLOW" ] && cat "$CREDS_ALLOW"; for u in "${CREDS_UNITS[@]}"; do grep -qxF "$u" "$CREDS_ALLOW" 2>/dev/null || echo "$u"; done; } >"$STAGE"
+	chown root:root "$STAGE" 2>/dev/null || [ -n "$DEST_ROOT" ]
+	chmod 0644 "$STAGE"
+	mv -f "$STAGE" "$CREDS_ALLOW"
+	CREDS_RESULT="systemd-cred units: ${CREDS_UNITS[*]}"
+fi
+
 # ── 5. /etc/sudoers.d/k2-root-helper (0440, visudo-checked) ─────────
 SUDOERS_RESULT="unchanged"
 if [ -f "$SUDOERS_DEST" ] && [ ! -L "$SUDOERS_DEST" ] \
@@ -643,6 +669,7 @@ echo "k2-root-helper:"
 echo "  source      : $PROVENANCE"
 echo "  helper      : $HELPER_PATH  $HELPER_RESULT  (root:root 0755, sha256 ${NEW_SHA:0:16}…, protocol $NEW_PROTOCOL)"
 echo "  daemon.toml : $DAEMON_TOML  $TOML_RESULT"
+echo "  creds units : /etc/k2-root-helper/systemd-cred-units  $CREDS_RESULT"
 echo "  sudoers     : $SUDOERS_PATH  $SUDOERS_RESULT  (0440, visudo ok)"
 echo "  check       : $CHECK"
 echo "  legacy pg   : $PG_RESULT"

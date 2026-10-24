@@ -689,6 +689,28 @@ pub enum Verb {
     /// `front remove` (daemon): stop the socket, remove both files,
     /// `daemon-reload`.
     FrontRemove,
+    // creds (protocol 10, 0.46.4; see `crate::creds`)
+    /// `creds status` (open, read-only): systemd version, TPM2, the
+    /// credentials and drop-ins K2 wrote.
+    CredsStatus,
+    /// `creds put <cred>` (daemon): stdin = the value (≤ 64 KiB) →
+    /// `systemd-creds encrypt --name=<cred> --with-key=auto - -` →
+    /// `/etc/credstore.encrypted/<cred>.cred` (0600, temp + fsync +
+    /// rename). Never over a `.cred` K2 didn't write.
+    CredsPut(String),
+    /// `creds bind <unit> <cred>` (daemon): the canned drop-in
+    /// `<unit>.d/k2-cred-<cred>.conf` (`LoadCredentialEncrypted=`), then
+    /// `daemon-reload`. The unit must exist and not be on the deny list.
+    CredsBind { unit: String, cred: String },
+    /// `creds unbind <unit> <cred>` (daemon): remove that drop-in (only
+    /// one K2 wrote), `daemon-reload`.
+    CredsUnbind { unit: String, cred: String },
+    /// `creds restart <unit>` (daemon): `systemctl try-restart <unit>`,
+    /// only for a unit K2 bound a credential to.
+    CredsRestart(String),
+    /// `creds remove <cred>` (daemon): delete a K2-owned `.cred` that no
+    /// K2 drop-in still loads.
+    CredsRemove(String),
 }
 
 use crate::apps::{bounded, AppId, IoMax, OciRuntime, PortRange, BUDGET_MEM_MIB, BUDGET_TASKS, CORES_MIN_MIB};
@@ -712,10 +734,11 @@ fn on_off_name(on: bool) -> &'static str {
     }
 }
 
-/// Bytes no token may contain. Tokens are enum names and ids only.
-fn token_ok(t: &str) -> bool {
+/// Bytes no token may contain. Tokens are enum names and ids only, at most
+/// `max` bytes (64; `creds` unit names: 128).
+fn token_ok_len(t: &str, max: usize) -> bool {
     !t.is_empty()
-        && t.len() <= 64
+        && t.len() <= max
         && t.bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'@' | b'='))
 }
@@ -761,6 +784,26 @@ fn db_name(t: &str) -> Result<DbName, &'static str> {
 
 fn tag_token(t: &str) -> Result<String, &'static str> {
     if tag_ok(t) {
+        Ok(t.to_string())
+    } else {
+        Err(REFUSED)
+    }
+}
+
+fn cred_token(t: &str) -> Result<String, &'static str> {
+    if crate::creds::cred_name_ok(t) {
+        Ok(t.to_string())
+    } else {
+        Err(REFUSED)
+    }
+}
+
+/// A unit name by its rule (no `@`, no stem ending in `-`). The allow and
+/// deny lists are the helper's check (it reads them at call time), so
+/// `unbind` can still remove a drop-in K2 wrote on a unit that left the
+/// allow list later.
+fn unit_token(t: &str) -> Result<String, &'static str> {
+    if crate::creds::unit_name_ok(t) {
         Ok(t.to_string())
     } else {
         Err(REFUSED)
@@ -839,7 +882,10 @@ impl Verb {
         } else {
             8
         };
-        if args.len() > max || !args.iter().all(|a| token_ok(a)) {
+        // `creds` unit names may be up to 128 bytes (their own rule then
+        // applies); every other token stays at 64.
+        let tok_max = if args[0] == "creds" { crate::creds::UNIT_MAX } else { 64 };
+        if args.len() > max || !args.iter().all(|a| token_ok_len(a, tok_max)) {
             return Err(REFUSED);
         }
         let v = match args {
@@ -1050,6 +1096,12 @@ impl Verb {
             ["front", "status"] => Verb::FrontStatus,
             ["front", "install"] => Verb::FrontInstall,
             ["front", "remove"] => Verb::FrontRemove,
+            ["creds", "status"] => Verb::CredsStatus,
+            ["creds", "put", c] => Verb::CredsPut(cred_token(c)?),
+            ["creds", "bind", u, c] => Verb::CredsBind { unit: unit_token(u)?, cred: cred_token(c)? },
+            ["creds", "unbind", u, c] => Verb::CredsUnbind { unit: unit_token(u)?, cred: cred_token(c)? },
+            ["creds", "restart", u] => Verb::CredsRestart(unit_token(u)?),
+            ["creds", "remove", c] => Verb::CredsRemove(cred_token(c)?),
             _ => return Err(REFUSED),
         };
         Ok(v)
@@ -1252,6 +1304,12 @@ impl Verb {
             Verb::FrontStatus => s(&["front", "status"]),
             Verb::FrontInstall => s(&["front", "install"]),
             Verb::FrontRemove => s(&["front", "remove"]),
+            Verb::CredsStatus => s(&["creds", "status"]),
+            Verb::CredsPut(c) => s(&["creds", "put", c]),
+            Verb::CredsBind { unit, cred } => s(&["creds", "bind", unit, cred]),
+            Verb::CredsUnbind { unit, cred } => s(&["creds", "unbind", unit, cred]),
+            Verb::CredsRestart(u) => s(&["creds", "restart", u]),
+            Verb::CredsRemove(c) => s(&["creds", "remove", c]),
         }
     }
 
@@ -1371,6 +1429,17 @@ impl Verb {
             // Moves who owns the box's :443 onto the daemon's own unit (and
             // back): only the daemon itself may ask.
             Verb::FrontInstall | Verb::FrontRemove => Daemon,
+            // Sets a credential a root unit reads, changes what a unit
+            // loads, restarts a unit, deletes one: the daemon's call only
+            // (owner/Admin + a vault confirm on the daemon side). Status
+            // too: which root units load K2 credentials is not for agents
+            // (review B-L4).
+            Verb::CredsStatus
+            | Verb::CredsPut(_)
+            | Verb::CredsBind { .. }
+            | Verb::CredsUnbind { .. }
+            | Verb::CredsRestart(_)
+            | Verb::CredsRemove(_) => Daemon,
             // Re-applying the canonical ranges is a tightening anyone may
             // ask for (boot, drift). Other ranges could open more loopback
             // ports to Apps: the daemon's call.
@@ -1399,6 +1468,8 @@ impl Verb {
             Verb::PgCopyRoles { .. } => Some(CAP_ROLES),
             // The database owner's login (review #1 H1): one small JSON object.
             Verb::PgMoveRestore { .. } => Some(CAP_MOVE_LOGIN),
+            // The plaintext value; never in argv or the audit line.
+            Verb::CredsPut(_) => Some(crate::creds::CAP_CRED),
             Verb::Sew(v) => v.stdin_cap(),
             _ => None,
         }
@@ -1434,6 +1505,7 @@ impl Verb {
                 | Verb::AppsStatus
                 | Verb::AppsLogs { .. }
                 | Verb::FrontStatus
+                | Verb::CredsStatus
         )
     }
 
@@ -1473,6 +1545,7 @@ impl Verb {
             "apps" => "apps",
             "engine" => "sew",
             "front" => "front",
+            "creds" => "creds",
             _ => "keep",
         }
     }
@@ -1621,6 +1694,14 @@ pub fn catalog() -> Vec<Verb> {
     ];
     v.extend(SewVerb::catalog().into_iter().map(Verb::Sew));
     v.extend([Verb::FrontStatus, Verb::FrontInstall, Verb::FrontRemove]);
+    v.extend([
+        Verb::CredsStatus,
+        Verb::CredsPut("ingest_key".into()),
+        Verb::CredsBind { unit: "k2-watch.service".into(), cred: "ingest_key".into() },
+        Verb::CredsUnbind { unit: "k2-watch.service".into(), cred: "ingest_key".into() },
+        Verb::CredsRestart("k2-watch.service".into()),
+        Verb::CredsRemove("ingest_key".into()),
+    ]);
     for on in [true, false] {
         v.push(Verb::AppsLinger(on));
         v.push(Verb::AppsDelegate(on));
@@ -1733,6 +1814,13 @@ mod tests {
             &["front", "remove"],
             // Root writes a file on every admin's PATH (protocol 9).
             &["helper", "cli-refresh"],
+            // A credential a root unit reads; what a unit loads (protocol 10).
+            &["creds", "put", "ingest_key"],
+            &["creds", "bind", "k2-watch.service", "ingest_key"],
+            &["creds", "unbind", "k2-watch.service", "ingest_key"],
+            &["creds", "restart", "k2-watch.service"],
+            &["creds", "remove", "ingest_key"],
+            &["creds", "status"],
         ];
         let open: &[&[&str]] = &[
             &["front", "status"],
@@ -2132,6 +2220,68 @@ mod tests {
         );
     }
 
+    /// `creds` (protocol 10): names by their own rule, never a path, a
+    /// flag or an extra token; units up to 128 bytes, cred names up to 64.
+    #[test]
+    fn creds_argv_rules() {
+        let long_unit = format!("{}.service", "a".repeat(120));
+        for ok in [
+            vec!["creds", "status"],
+            vec!["creds", "put", "ingest_key"],
+            vec!["creds", "put", "k2c.env"],
+            vec!["creds", "bind", "k2-control-plane.service", "k2c.env"],
+            vec!["creds", "bind", long_unit.as_str(), "x"],
+            vec!["creds", "unbind", "foo-bar.service", "x"],
+            vec!["creds", "restart", "k2-watch.service"],
+            vec!["creds", "remove", "x"],
+        ] {
+            let v = Verb::parse(&ok).unwrap_or_else(|e| panic!("{ok:?}: {e}"));
+            assert_eq!(v.namespace(), "creds");
+            assert_eq!(v.argv(), ok.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        }
+        let too_long_unit = format!("{}.service", "a".repeat(121));
+        let long_cred = "a".repeat(65);
+        for bad in [
+            vec!["creds"],
+            vec!["creds", "put"],
+            vec!["creds", "put", "/etc/shadow"],
+            vec!["creds", "put", "../x"],
+            vec!["creds", "put", ".."],
+            vec!["creds", "put", ".hidden"],
+            vec!["creds", "put", "-x"],
+            vec!["creds", "put", "a", "b"],
+            vec!["creds", "put", long_cred.as_str()],
+            vec!["creds", "put", "a@b"],
+            vec!["creds", "bind", "k2-watch", "x"],
+            vec!["creds", "bind", "k2-watch.socket", "x"],
+            vec!["creds", "bind", "-x.service", "x"],
+            vec!["creds", "bind", ".service", "x"],
+            vec!["creds", "bind", too_long_unit.as_str(), "x"],
+            vec!["creds", "bind", "k2-watch.service"],
+            vec!["creds", "bind", "k2-watch.service", "x", "extra"],
+            vec!["creds", "bind", "k2-watch.service", "ExecStart=/bin/sh"],
+            vec!["creds", "restart", "k2-watch.service", "--now"],
+            vec!["creds", "restart", "a b.service"],
+            vec!["creds", "status", "--all"],
+            vec!["creds", "bind", "foo@.service", "x"],
+            vec!["creds", "bind", "foo@bar.service", "x"],
+            vec!["creds", "bind", "k2-.service", "x"],
+            vec!["creds", "put", "tmpfiles.extra"],
+            vec!["creds", "put", "ssh.authorized_keys.root"],
+            vec!["creds", "Put", "x"],
+            vec!["creds", "put\n", "x"],
+        ] {
+            assert_eq!(Verb::parse(&bad), Err(REFUSED), "{bad:?}");
+        }
+        // The 128-byte allowance is for `creds` only.
+        let long = "a".repeat(65);
+        assert_eq!(Verb::parse(&["mail", "mkdir", long.as_str()]), Err(REFUSED));
+        assert_eq!(Verb::parse(&["creds", "put", "v"]).unwrap().stdin_cap(), Some(crate::creds::CAP_CRED));
+        assert_eq!(Verb::parse(&["creds", "bind", "a.service", "v"]).unwrap().stdin_cap(), None);
+        assert!(!Verb::parse(&["creds", "status"]).unwrap().takes_lock());
+        assert!(Verb::parse(&["creds", "put", "v"]).unwrap().takes_lock());
+    }
+
     #[test]
     fn stdin_caps_and_locks() {
         for v in catalog() {
@@ -2156,6 +2306,7 @@ mod tests {
                 }
                 Verb::Sew(SewVerb::RotateMaster) => assert_eq!(cap, Some(CAP_SEW_KEY)),
                 Verb::AppsPodmanInstall => assert_eq!(cap, Some(crate::podman::CAP_BUNDLE)),
+                Verb::CredsPut(_) => assert_eq!(cap, Some(crate::creds::CAP_CRED)),
                 _ => assert_eq!(cap, None, "{v:?} reads no stdin"),
             }
             if v.class() == Class::Daemon
@@ -2166,6 +2317,8 @@ mod tests {
                         | Verb::AppsLogs { .. }
                         | Verb::PgMoveDump { .. }
                         | Verb::PgMoveRestore { .. }
+                        // Daemon-class only to keep targets from agents; read-only.
+                        | Verb::CredsStatus
                 )
             {
                 assert!(v.takes_lock(), "{v:?}");

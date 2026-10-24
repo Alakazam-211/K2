@@ -126,11 +126,13 @@ impl Exec for RealExec {
                     .stdin
                     .take()
                     .ok_or_else(|| io::Error::other("stdin"))?;
-                let bytes = bytes.to_vec();
+                let mut bytes = bytes.to_vec();
                 // A child that exits early (psql on a syntax error) closes
-                // the pipe; that is its answer, not ours.
+                // the pipe; that is its answer, not ours. The copy is wiped
+                // after (a `creds put` value).
                 Some(std::thread::spawn(move || {
                     let _ = sin.write_all(&bytes);
+                    crate::creds::wipe(&mut bytes);
                 }))
             }
             None => None,

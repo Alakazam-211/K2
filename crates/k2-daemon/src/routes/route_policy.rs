@@ -1435,6 +1435,11 @@ pub const ROUTES: &[Route] = &[
     post("/cli/vault/incoming/decide", Member),
     post("/cli/vault/kek/rotate", Owner),
     get("/cli/vault/list", Member),
+    // prd-vault-gaps-v1 item 4: manual placement records.
+    post("/cli/vault/placement/add", Member),
+    post("/cli/vault/placement/done", Member),
+    post("/cli/vault/placement/remove", Member),
+    get("/cli/vault/placements", Member),
     post("/cli/vault/policy", Member),
     get("/cli/vault/presets", Member),
     get("/cli/vault/recipient", Admin),
@@ -1454,6 +1459,12 @@ pub const ROUTES: &[Route] = &[
     post("/cli/vault/set", Member),
     get("/cli/vault/show", Member),
     get("/cli/vault/status", Member),
+    // prd-vault-gaps-v1 item 4: a root unit's credential is Owner/Admin +
+    // a vault confirm (passports refused in the handler, KV14 DENY);
+    // (manual placement records, above, are bookkeeping: agents keep
+    // their own workspace's).
+    post("/cli/vault/systemd-cred", Admin),
+    post("/cli/vault/systemd-cred/remove", Admin),
     post("/cli/vault/unsend", Member),
     get("/cli/whats_new", Member),
     post("/cli/whats_new/mark_seen", Member),

@@ -21035,6 +21035,9 @@ k2 vault — secrets for agents, without showing them the value
   k2 vault doctor                          plaintext .env files, due rotations, problems
   k2 vault send NAME --to <agent>[::<host>] [--note …]   hand a secret to another agent by name
   k2 vault incoming | sent | accept-from   handoffs to and from this agent (k2 vault send --help)
+  k2 vault placement add NAME --where <host>:<path> [--note …] | done ID | rm ID
+                                           note a place the value lives that K2 doesn't write
+  k2 vault placements [NAME]               where values live outside the vault (due after a rotate)
 
   People only (from your own terminal or SSH, not a K2 terminal):
   k2 vault reveal NAME                     show a value (asks for a confirm)
@@ -21043,6 +21046,9 @@ k2 vault — secrets for agents, without showing them the value
   k2 vault confirm-password set            set the vault password used for confirms
   k2 vault kek rotate | rekey              rotate the box key / the data key (owner, confirm)
   k2 vault rollback NAME --to <version>    put an older version back (confirm)
+  k2 vault systemd-cred NAME --unit <unit.service> [--restart] [--dry-run] | --remove
+                                           seal it as a root unit's systemd credential (Linux, confirm)
+  k2 vault systemd-cred NAME --replace     re-place a new version into its root units (confirm)
   k2 vault backup <dir>                    a ciphertext snapshot of the vault (owner)
   k2 vault backup key <age1…>              also let this backup key open the vault (owner)
   k2 vault restore --from <dir> [--holder recovery|backup] [--dry-run] [--replace]
@@ -22077,10 +22083,13 @@ Example: k2 vault kek rotate
 EOF
             ;;
         rollback) cat <<'EOF'
-k2 vault rollback NAME --to <version> [--scope <s>]
+k2 vault rollback NAME --to <version> [--scope <s>] [--accept-agent-value]
 
 People only: put an older version's value back, as a new version (asks
-for a confirm). Undoes an agent's rotate.
+for a confirm). Undoes an agent's rotate. When root units load the secret
+(k2 vault systemd-cred), the confirm names them and the rollback re-places
+the value there; a version no person wrote then needs --accept-agent-value
+(and keeps its author, so it is never shown as yours).
 
 Example: k2 vault rollback STRIPE_KEY --to 3
 EOF
@@ -22113,6 +22122,92 @@ This vault's carry address (an age recipient) and vault id. Run it on the
 box secrets move TO, then k2 vault carry export on the old box.
 
 Example: k2 vault recipient
+EOF
+            ;;
+        systemd-cred) cat <<'EOF'
+k2 vault systemd-cred NAME --unit <unit.service> [--cred-name <id>] [--restart] [--dry-run]
+k2 vault systemd-cred NAME --unit <unit.service> [--cred-name <id>] --remove
+k2 vault systemd-cred NAME --replace [--dry-run]
+
+People only, on Linux (systemd 250+), from your own terminal or SSH (not a
+K2 terminal), with a confirm bound to exactly what you approve (the unit,
+the cred name, the restart flag; K2 prints it first). K2 seals the
+secret's current value as a systemd encrypted credential through the root
+helper and binds it to a unit K2 doesn't run (a root service, a timer):
+  /etc/k2/credstore.encrypted/<cred>.cred  (K2's own store; --with-key=auto)
+  /etc/systemd/system/<unit>.d/k2-cred-<cred>.conf
+      LoadCredentialEncrypted=<cred>:/etc/k2/credstore.encrypted/<cred>.cred
+The service reads $CREDENTIALS_DIRECTORY/<cred> (%d/<cred> in the unit).
+  --cred-name <id>  the credential's name (default: NAME; never a systemd
+                    namespace such as tmpfiles.*, sysusers.*, ssh.*)
+  --restart         queue systemctl try-restart after (at most every 30 s)
+  --dry-run         show what it would write and the confirm text
+  --remove          take it off: the drop-in, then the .cred
+  --replace         after a rotate: re-place the new version into every
+                    unit it is placed on (each keeps its own --restart)
+  --accept-agent-value   place a version no person wrote (an agent's
+                    rotate): review it first with k2 vault reveal NAME
+
+The confirm names the exact version and who wrote it ("v5, written by an
+agent of workspace ops, 3 min ago"); if the secret moves on before you
+confirm, nothing is placed. An Owner or Admin can place a value into any
+unit the box's admin listed. "Already loads" covers LoadCredential*,
+SetCredential* and ImportCredential= (with systemd 257's GLOB:RENAME); a
+credential source a later systemd adds is not checked.
+
+The box's admin chooses which units may get one, once, as root over SSH:
+  echo k2-watch.service >> /etc/k2-root-helper/systemd-cred-units
+(root:root 0644, one unit per line; or install-root-helper.sh --creds-unit
+k2-watch.service). Nothing else is allowed; K2's own units, core system
+units, templates (foo@.service) and aliases are always refused, as is a
+unit that already loads a credential with the same ID.
+
+A new version (rotate, set, an agent's rotate) never reaches the unit by
+itself: the placement goes stale, the owner is told, and a person runs
+--replace. A rollback re-places the restored value. The secret's ceiling
+must allow file delivery. k2 vault show, placements and doctor list it;
+destroying a secret doesn't take its credential off a box: remove it first.
+
+A unit that uses EnvironmentFile= with several variables: seal the whole
+file as one credential (k2 vault set CP_ENV --kind generic < file, every
+value in single quotes: KEY='value'), then a drop-in of your own:
+  [Service]
+  LoadCredentialEncrypted=k2c.env:/etc/k2/credstore.encrypted/k2c.env.cred
+  ExecStart=
+  ExecStart=/bin/sh -c 'set -a; . "%d/k2c.env"; set +a; exec /usr/local/bin/app'
+The file is shell code run by the unit: keep it a person-only secret.
+The ExecStart target must be on a filesystem mounted without noexec (on
+Ubuntu /run, and often /tmp, are noexec).
+Keep the old EnvironmentFile= until the unit runs on the credential (use
+a cred name that differs from the old file's), then remove both.
+
+Examples:
+  k2 vault systemd-cred INGEST_KEY --unit k2-watch.service --restart
+  k2 vault systemd-cred CP_ENV --unit k2-control-plane.service --cred-name k2c.env --dry-run
+  k2 vault systemd-cred INGEST_KEY --replace
+  k2 vault systemd-cred INGEST_KEY --unit k2-watch.service --remove
+EOF
+            ;;
+        placement|placements) cat <<'EOF'
+k2 vault placement add NAME --where <host>:<path> [--note <text>] [--scope <s>]
+k2 vault placement done ID
+k2 vault placement rm ID
+k2 vault placements [NAME] [--json]
+
+Where a secret's value lives outside the vault. K2 records the systemd
+credentials it writes itself (k2 vault systemd-cred); add the places it
+doesn't write: another box, Vercel prod, a box without K2. No value is
+stored, only the place (at most 200 characters) and a note (500).
+After a rotate the doctor lists each place as due until you put the new
+value there and mark it: k2 vault placement done ID. Agents may keep
+these for their own workspace's secrets; systemd credential rows are
+people-only (k2 vault systemd-cred --remove).
+
+Examples:
+  k2 vault placement add INGEST_KEY --where vercel:prod/k2-web --note "Vercel prod env"
+  k2 vault placement add INGEST_KEY --where box3:/etc/credstore.encrypted/ingest_key.cred
+  k2 vault placements INGEST_KEY
+  k2 vault placement done 3f2a…
 EOF
             ;;
         carry) cat <<'EOF'
@@ -22390,6 +22485,229 @@ else:
 ' "$sub"
 }
 
+# k2 vault systemd-cred NAME --unit U [--cred-name C] [--restart] [--dry-run] | --remove
+# People only (vault.sock + a confirm), Linux only. The value never passes
+# through here: the daemon resolves it and pipes it to the root helper.
+_vault_systemd_cred() {
+    local name="" unit="" cred="" scope="" restart=0 dry=0 remove=0 replace=0 as_json=0 accept=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --accept-agent-value) accept=1; shift ;;
+            --unit|--cred-name|--scope)
+                [ -n "${2:-}" ] || { echo "usage: $1 needs a value" >&2; exit 2; }
+                case "$1" in --unit) unit="$2" ;; --cred-name) cred="$2" ;; --scope) scope="$2" ;; esac
+                shift 2 ;;
+            --restart) restart=1; shift ;;
+            --dry-run) dry=1; shift ;;
+            --remove) remove=1; shift ;;
+            --replace) replace=1; shift ;;
+            --json) as_json=1; shift ;;
+            --value|--value=*|--secret-value*)
+                echo "value_on_argv: K2 takes the value from the vault, never an argument" >&2; exit 2 ;;
+            --*) echo "usage: unknown flag '$1' (k2 vault systemd-cred --help)" >&2; exit 2 ;;
+            *) [ -z "$name" ] || { echo "usage: k2 vault systemd-cred NAME --unit <unit.service> [--restart] [--dry-run] | --remove | --replace" >&2; exit 2; }
+               name="$1"; shift ;;
+        esac
+    done
+    local usage="usage: k2 vault systemd-cred NAME --unit <unit.service> [--cred-name <id>] [--restart] [--dry-run] | NAME --unit <unit> --remove | NAME --replace"
+    [ -n "$name" ] || { echo "$usage" >&2; exit 2; }
+    if [ "$replace" = 1 ]; then
+        [ -z "$unit" ] && [ "$remove" = 0 ] && [ "$restart" = 0 ] && [ -z "$cred" ] || { echo "usage: --replace takes no --unit, --cred-name, --restart or --remove (each placement keeps its own)" >&2; exit 2; }
+    else
+        [ -n "$unit" ] || { echo "$usage" >&2; exit 2; }
+    fi
+    if [ "$remove" = 1 ] && [ "$restart" = 1 ]; then
+        echo "usage: --remove takes no --restart (restart the unit yourself after)" >&2; exit 2
+    fi
+    if [ "$(uname -s)" != "Linux" ]; then
+        echo "linux_only: systemd credentials are Linux only (systemd 250+); on this machine use k2 vault fetch, file or env delivery" >&2
+        exit 2
+    fi
+    _vault_person_guard
+    local sj nj body op="place" route="systemd-cred"
+    [ "$remove" = 1 ] && { op="remove"; route="systemd-cred/remove"; }
+    [ "$replace" = 1 ] && op="replace"
+    sj="$(_vault_scope_json "$scope")" || exit 2
+    nj="$(python3 -c 'import json,sys; print(json.dumps({"name": sys.argv[1]}))' "$name")"
+    body="$(python3 -c 'import json,sys
+o = {"op": sys.argv[4]}
+if sys.argv[1]: o["unit"] = sys.argv[1]
+if sys.argv[2]: o["credName"] = sys.argv[2]
+if sys.argv[3] == "1": o["restart"] = True
+if sys.argv[4] == "replace": o["replace"] = True
+print(json.dumps(o))' "$unit" "$cred" "$restart" "$op")"
+    body="$(_vault_merge "$sj" "$nj" "$body")"
+    # Check everything first (unit, allow list, ceiling, helper), with no
+    # confirm; the daemon writes what the person is about to approve.
+    _vault_sock_call POST "$route" "$(_vault_merge "$body" '{"dryRun": true}')"
+    [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
+    if [ "$dry" = 1 ]; then
+        if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
+        printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin); p = v.get("plan") or {}
+print("would: %s" % v.get("confirmText"))
+if p:
+    print("file:      %s" % p.get("credPath"))
+    print("drop-in:   %s" % p.get("dropin"))
+    print("           %s" % p.get("dropinLine"))
+    print("reads it:  %s" % p.get("readAs"))
+if v.get("allowed") is False: print("the unit is not on this box allow list yet (k2 vault systemd-cred --help)")
+if v.get("helperReady") is False: print("the root helper must be updated first: k2 root-helper update")'
+        exit 0
+    fi
+    local text
+    text="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("confirmText") or "")')"
+    if [ "$op" != "remove" ]; then
+        # Bind the plan to what the dry run showed: this exact version (and,
+        # for --replace, these placements). A value no person wrote needs
+        # --accept-agent-value, after a look at it.
+        if ! printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); sys.exit(0 if v.get("authorIsPerson", True) or v.get("behind") == 0 else 1)' && [ "$accept" != 1 ]; then
+            echo "$text" >&2
+            echo "agent_written_value: no person wrote this value and it would run in a root unit. Review it first (k2 vault reveal $name), then add --accept-agent-value." >&2
+            exit 3
+        fi
+        body="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys
+d = json.load(sys.stdin); o = json.loads(sys.argv[1])
+o["version"] = d.get("version")
+if "rows" in d: o["rows"] = d["rows"]
+if sys.argv[2] == "1": o["acceptAgentValue"] = True
+print(json.dumps(o))' "$body" "$accept")"
+    fi
+    if [ "$op" = "replace" ] && printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("behind") == 0 else 1)'; then
+        echo "$text"; exit 0
+    fi
+    if [ "$op" != "remove" ] && ! printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("helperReady") else 1)'; then
+        _vault_sock_call POST "$route" "$body"
+        _vault_fail "$_SC_STATUS" "$_SC_BODY"
+    fi
+    local tok
+    tok="$(_vault_confirm_token_plan systemd-cred "$body" systemdCred)" || exit 3
+    _vault_sock_call POST "$route" "$(_vault_merge "$body" "$(python3 -c 'import json,sys; print(json.dumps({"confirmToken": sys.argv[1]}))' "$tok")")"
+    [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
+    if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
+    printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+if "credRemoved" in v:
+    print("took the credential %s off %s%s" % (v.get("credName"), v.get("unit"), "" if v.get("credRemoved") else " (the .cred stays: another unit loads it)"))
+elif "replaced" in v:
+    for r in v.get("replaced") or []:
+        if r.get("ok"):
+            print("re-placed v%s into %s%s" % (r.get("version"), r.get("unit"), (", restart queued" if r.get("restarted") else (" (restart refused: %s)" % r["restartError"] if r.get("restartError") else ""))))
+        else:
+            e = r.get("error") or {}
+            print("NOT re-placed into %s: %s: %s" % (r.get("unit"), e.get("code"), e.get("hint")))
+    if not v.get("replaced"): print("nothing was behind")
+else:
+    p = v.get("plan") or {}
+    print("sealed %s v%s into %s, bound to %s%s" % (p.get("secret"), v.get("version"), p.get("credPath"), p.get("unit"), ", restart queued" if v.get("restarted") else ""))
+    print("the service reads %s" % p.get("readAs"))
+if v.get("next"): print(v["next"])
+sys.exit(0 if v.get("ok", True) else 1)'
+}
+
+# Like _vault_confirm_token, but the token is bound to a plan the daemon
+# rebuilds and words itself (systemd-cred). $2 = the plan (route body).
+_vault_confirm_token_plan() {
+    # $1 = action, $2 = the plan, $3 = its key (systemdCred | rollbackPlan).
+    # confirm/start answers the daemon's own words for the plan; they are
+    # shown before the person types.
+    local action="$1" plan="$2" key="${3:-systemdCred}"
+    _vault_sock_call POST "confirm/start" "$(python3 -c 'import json,sys; print(json.dumps({"action": sys.argv[1], sys.argv[3]: json.loads(sys.argv[2])}))' "$action" "$plan" "$key")"
+    [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
+    local methods body text
+    methods="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print(" ".join(json.load(sys.stdin).get("methods") or []))')"
+    text="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("confirmText") or "")')"
+    [ -n "$text" ] && echo "You are approving: $text" >&2
+    local m=""
+    case " $methods " in
+        *" vault-password "*) m="vault-password"; printf 'Vault password: ' >&2 ;;
+        *" connect-password "*) m="connect-password"; printf 'Your K2 Connect password: ' >&2 ;;
+        *) echo "no_confirm_method: set a vault password first: k2 vault confirm-password set" >&2; exit 3 ;;
+    esac
+    local pw=""
+    IFS= read -rs pw || pw=""
+    echo >&2
+    body="$(printf '%s' "$pw" | python3 -c 'import json,sys; print(json.dumps({"action": sys.argv[1], "method": sys.argv[4], "password": sys.stdin.read(), sys.argv[3]: json.loads(sys.argv[2])}))' "$action" "$plan" "$key" "$m")"
+    pw=""
+    _vault_sock_call POST "confirm/finish" "$body"
+    body=""
+    [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
+    printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])'
+}
+
+# k2 vault placement add|done|rm …, k2 vault placements [NAME]
+_vault_placement() {
+    local sub="$1"; shift
+    local act=""
+    if [ "$sub" = "placements" ]; then
+        act="list"
+    else
+        act="${1:-list}"
+        [ $# -gt 0 ] && shift
+    fi
+    local name="" where="" note="" scope="" as_json=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --where|--note|--scope)
+                [ -n "${2:-}" ] || { echo "usage: $1 needs a value" >&2; exit 2; }
+                case "$1" in --where) where="$2" ;; --note) note="$2" ;; --scope) scope="$2" ;; esac
+                shift 2 ;;
+            --json) as_json=1; shift ;;
+            --*) echo "usage: unknown flag '$1' (k2 vault placement --help)" >&2; exit 2 ;;
+            *) [ -z "$name" ] || { echo "usage: k2 vault placement --help" >&2; exit 2; }
+               name="$1"; shift ;;
+        esac
+    done
+    local sj
+    sj="$(_vault_scope_json "$scope")" || exit 2
+    case "$act" in
+        add)
+            [ -n "$name" ] && [ -n "$where" ] || { echo "usage: k2 vault placement add NAME --where <host>:<path> [--note …]" >&2; exit 2; }
+            _vault_call POST placement/add "$(python3 -c 'import json,sys
+o = json.loads(sys.argv[1]); o["name"] = sys.argv[2]; o["where"] = sys.argv[3]
+if sys.argv[4]: o["note"] = sys.argv[4]
+print(json.dumps(o))' "$sj" "$name" "$where" "$note")"
+            if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
+            printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; p=json.load(sys.stdin)["placement"]; print("noted %s at %s (v%s): %s" % (p.get("name"), p.get("where"), p.get("version"), p.get("id")))'
+            ;;
+        done|rm|remove)
+            [ -n "$name" ] || { echo "usage: k2 vault placement $act ID (ids: k2 vault placements)" >&2; exit 2; }
+            local route="placement/done"
+            [ "$act" = "done" ] || route="placement/remove"
+            _vault_call POST "$route" "$(python3 -c 'import json,sys; print(json.dumps({"id": sys.argv[1]}))' "$name")"
+            if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
+            if [ "$act" = "done" ]; then
+                printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; p=json.load(sys.stdin)["placement"]; print("%s at %s now holds v%s" % (p.get("name"), p.get("where"), p.get("version")))'
+            else
+                echo "removed placement ${name} (the value at that place is yours to delete)"
+            fi
+            ;;
+        list)
+            local q=""
+            if [ -n "$name" ]; then
+                q="$(python3 -c '
+import json, sys, urllib.parse
+o = json.loads(sys.argv[1]); o["name"] = sys.argv[2]; print(urllib.parse.urlencode(o))' "$sj" "$name")"
+            fi
+            _vault_call GET placements "$q"
+            if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
+            printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+rows = v.get("placements") or []
+if not rows: print("no placements recorded (k2 vault placement add NAME --where <host>:<path>)")
+for p in rows:
+    where = ("systemd %s -> %s" % (p.get("credName"), p.get("unit"))) if p.get("target") == "systemd_cred" else (p.get("where") or "")
+    note = ("  # " + p["note"]) if p.get("note") else ""
+    print("%s  %-24s v%s/%s %-8s %s%s" % (p.get("id"), p.get("name"), p.get("version"), p.get("latestVersion"), p.get("state"), where, note))
+if v.get("needNewerK2"): print("%d more need a newer K2 to read" % v["needNewerK2"])'
+            ;;
+        *) _vault_sub_usage placement; exit 2 ;;
+    esac
+}
+
 cmd_vault() {
     local sub="${1:-}"
     case "$sub" in
@@ -22407,12 +22725,16 @@ cmd_vault() {
         _vault_sub_usage "$sub"
         return 0
     fi
+    case "$sub" in
+        systemd-cred) _vault_systemd_cred "$@"; return ;;
+        placement|placements) _vault_placement "$sub" "$@"; return ;;
+    esac
     local as_json=0 scope="" system=0 kind="" hosts="" preset="" delivery="" ceiling="" describe="" rotate_every="" ttl=""
     local inject_header="" inject_format="" inject_dst="" to="" from="" as_d="" env_name="" file_name="" grant_id="" yes=0 since="" to_version=""
     local sign_scheme="" sign_header="" sign_encoding="" sign_prefix="" sign_ts_header="" sign_template="" sign_value=""
     local sign_prefix_set=0 sign_template_set=0 sign_value_set=0
     local remove_original=0 env_file_opt="" done_path="" ttl_secs=""
-    local carry_recipient="" carry_target="" carry_target_ws="" own_box_move=0 out_file="" holder="" dry_run=0 replace=0 apply=0
+    local carry_recipient="" carry_target="" carry_target_ws="" own_box_move=0 out_file="" holder="" dry_run=0 replace=0 apply=0 accept_agent=0
     local add_hosts=() rm_hosts=() pos=() use_secrets=() carry_ws=() carry_server=()
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -22424,6 +22746,7 @@ cmd_vault() {
             --dry-run) dry_run=1; shift ;;
             --replace) replace=1; shift ;;
             --apply) apply=1; shift ;;
+            --accept-agent-value) accept_agent=1; shift ;;
             --recipient|--target|--target-workspace|--workspace|--server|--out|--holder)
                 [ -n "${2:-}" ] || { echo "usage: $1 needs a value" >&2; exit 2; }
                 case "$1" in
@@ -22520,6 +22843,13 @@ print("delivery:  %s (at most %s)%s" % (m.get("defaultDelivery"), m.get("deliver
 print("given by:  %s%s" % (m.get("createdBy"), " (a person)" if m.get("humanGiven") else ""))
 for g in v.get("grants") or []:
     print("shared:    %s as %s%s" % (g.get("consumerLabel"), g.get("delivery"), (" env " + g["envName"]) if g.get("envName") else ""))
+for p in v.get("placements") or []:
+    where = ("systemd credential %s on %s" % (p.get("credName"), p.get("unit"))) if p.get("target") == "systemd_cred" else (p.get("where") or "")
+    st = p.get("state")
+    tail = {"due": " — due: put v%s there, then k2 vault placement done %s" % (p.get("latestVersion"), p.get("id")),
+            "stale": " — stale: k2 vault systemd-cred %s --unit %s" % (m.get("name"), p.get("unit")),
+            "inactive": " — the secret is %s; take it off" % p.get("secretStatus")}.get(st, "")
+    print("placed:    %s (v%s)%s" % (where, p.get("version"), tail))
 for a in (v.get("audit") or [])[:10]:
     print("  %s %s %s %s%s" % (a.get("ts"), a.get("action"), a.get("outcome"), a.get("actor"), (" x%d" % a["count"]) if a.get("count",1) > 1 else ""))
 '
@@ -22572,7 +22902,16 @@ print("use: " + (v.get("use") or ""))'
             _vault_call POST rotate "$body"
             body=""
             if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
-            printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("%s is now v%s" % ((v.get("secret") or {}).get("name"), v.get("version")))'
+            printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+print("%s is now v%s" % ((v.get("secret") or {}).get("name"), v.get("version")))
+for r in v.get("replaced") or []:
+    if r.get("ok"):
+        print("re-placed into %s (systemd credential %s)%s" % (r.get("unit"), r.get("credName"), ", restart queued" if r.get("restarted") else ""))
+    else:
+        e = r.get("error") or {}
+        print("NOT re-placed into %s: %s" % (r.get("unit"), e.get("hint")))'
             ;;
         hosts)
             [ -n "$name" ] || { echo "usage: k2 vault hosts NAME --add <host> | --remove <host>" >&2; exit 2; }
@@ -22863,8 +23202,14 @@ o = json.loads(sys.argv[1]); o.update(json.loads(sys.argv[2])); print(urllib.par
             [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
             local sid tok
             sid="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["secret"]["id"])')"
-            tok="$(_vault_confirm_token rollback "$sid" "$name")" || exit 3
-            _vault_sock_call POST rollback "$(_vault_merge "$sj" "$nj" "$(python3 -c 'import json,sys; print(json.dumps({"confirmToken": sys.argv[1], "version": int(sys.argv[2])}))' "$tok" "$to_version")")"
+            if printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; sys.exit(0 if any(p.get("target") == "systemd_cred" and (p.get("version") or 0) > 0 for p in json.load(sys.stdin).get("placements") or []) else 1)'; then
+                # Root units load it: the confirm names the target version,
+                # who wrote it, and the units it re-places (bound to them).
+                tok="$(_vault_confirm_token_plan rollback "$(python3 -c 'import json,sys; print(json.dumps({"id": sys.argv[1], "version": int(sys.argv[2]), "acceptAgentValue": sys.argv[3] == "1"}))' "$sid" "$to_version" "$accept_agent")" rollbackPlan)" || exit 3
+            else
+                tok="$(_vault_confirm_token rollback "$sid" "$name")" || exit 3
+            fi
+            _vault_sock_call POST rollback "$(_vault_merge "$sj" "$nj" "$(python3 -c 'import json,sys; print(json.dumps({"confirmToken": sys.argv[1], "version": int(sys.argv[2]), "acceptAgentValue": sys.argv[3] == "1"}))' "$tok" "$to_version" "$accept_agent")")"
             [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
             echo "${name}: back to the value of v${to_version} (as a new version)"
             ;;
@@ -33800,9 +34145,8 @@ START HERE
                               <host> --inject-dst …), then k2 vault fetch
   a CLI login (gh, vercel)    env delivery: CLI TOOLS below
   an SSH key                  --kind ssh_key: file delivery, see KINDS
-  a key a server service uses k2 publish service: k2 publish secret add;
-                              a plain/root systemd unit: SERVICES K2
-                              DOESN'T RUN below
+  a key a server service uses k2 publish secret add; a root systemd unit:
+                              SERVICES K2 DOESN'T RUN below
   handing a secret to an agent  k2 vault send NAME --to <agent>
   a script on a schedule (cron) k2 job add, then grant --to job:<name>:
                               SCHEDULED SCRIPTS below
@@ -33810,14 +34154,10 @@ START HERE
 
 ASKING: YOU MAKE THE CHOICES
   Pick them on the card yourself: --for (sites), --delivery fetch|file|env,
-  --scope workspace|server|session, --kind. The card tells the person in
-  one sentence ("K2 will add this to calls to api.stripe.com; you never see
-  it", or "you will get this as a file you can read") and they just paste
-  and Save. Prefer fetch with exact sites; ask for file/env only when a
-  tool must read the value itself. If the person says the setup is wrong,
-  void the card (k2 thread void <addr> <card-id>) and ask again with the
-  right choices. They can change things by hand under Advanced, but don't
-  count on it.
+  --scope workspace|server|session, --kind. The card tells the person what
+  happens in one sentence; they paste and Save. Prefer fetch with exact
+  sites; file/env only when a tool must read the value. If the setup is
+  wrong, void the card (k2 thread void <addr> <card-id>) and ask again.
 
 HOW YOU GET A SECRET (delivery)
   fetch   K2 makes the HTTPS call and adds the key. You never see it.
@@ -33879,20 +34219,16 @@ PEOPLE ONLY
   The recovery key, the vault password, reveal and key rotation are for
   your owner, from their own terminal or Settings. If doctor/status says
   "recovery: not confirmed", don't run it — tell your owner.
-  Backups (k2 vault backup) and restoring one (k2 vault restore) are
-  theirs too.
+  Backups (k2 vault backup), restoring one (k2 vault restore) and a root
+  unit's credential (k2 vault systemd-cred) are theirs too.
 
 MOVING TO ANOTHER BOX
-  With "Allow managing server-wide secrets" you may move secrets in a
-  migration: on the new box `k2 vault recipient`, on the old box
-  `k2 vault carry export --recipient … --target … --workspace <ws>
-  --out carry.age`, then on the new box `k2 vault carry import carry.age
-  --workspace <id>` with the workspace id on the new box (it lists first;
-  add --apply). Secrets go to a workspace by id, never by name. The file
-  opens only in that vault. The
-  recovery key is never used for this. Every export is logged with who
-  ran it, the secret names and the target key, and your owner sees it
-  (k2 vault audit, Settings → Access).
+  With "Allow managing server-wide secrets": on the new box `k2 vault
+  recipient`; on the old box `k2 vault carry export --recipient … --target …
+  --workspace <ws> --out carry.age`; on the new box `k2 vault carry import
+  carry.age --workspace <id>` (lists first; add --apply). Secrets land by
+  workspace id, never by name; the file opens only in that vault; the
+  recovery key is never used. Every export is logged (k2 vault audit).
 
 GIVING A SECRET TO ANOTHER AGENT
   Never paste it into k2 msg (K2 now redacts known values there anyway).
@@ -33907,19 +34243,14 @@ GIVING A SECRET TO ANOTHER AGENT
   another server. Server-wide secrets aren't sent (the owner shares them
   with k2 vault grant). The copy you get is fetch/file only, never api,
   and you can't widen it: use it with k2 vault fetch --secret NAME.
-  Exit 3 = a person must act (pending, held, not connected): don't retry.
-  Unlike k2 msg (exit 2 on a declined federated message), a handoff that
-  waits or is declined is exit 3. Exit 2 = the request or the other server
-  can't (peer_too_old: it needs K2 0.46.1 with federation on). Exit 4 = no
-  such secret or agent. Every send, receive, accept, decline, expiry and
-  refusal is logged (Settings → Logs → Access Audit), names only.
+  Exit 3 = a person must act (pending, held, declined): don't retry.
+  Exit 2 = the other server can't (peer_too_old). Exit 4 = no such secret
+  or agent. Every step is logged (Settings → Logs → Access Audit).
 
 PUBLISHED SERVICES
-  New services start clean (base env + granted secrets). Ones from before
-  0.45.4 show [legacy env (ends 0.46.0)] in k2 publish ps: they inherit the
-  daemon's whole environment until K2 0.46.0. Switch now with
-  `k2 publish env <name> clean`; grant what it needs with
-  `k2 publish secret add <name> NAME` (or k2v:// refs in its .env.k2).
+  New services start clean (base env + granted secrets). A [legacy env]
+  one inherits the daemon's environment; switch it with
+  `k2 publish env <name> clean`, then `k2 publish secret add <name> NAME`.
 
 CLI TOOLS (gh, vercel: tools that read a token from the environment)
   1. k2 vault set GITHUB_CLI --kind oauth_token < token
@@ -33947,22 +34278,21 @@ SCHEDULED SCRIPTS (k2 job, not cron)
   k2 job logs collect shows the redacted output; k2 job kill / disable
   stop it. More: k2 study jobs
 
-SERVICES K2 DOESN'T RUN
-  The vault reaches K2 sessions, k2 job runs and k2 publish services. A
-  plain systemd unit (a root service) can't use it; for a timer, use
-  k2 job (above). Use systemd's encrypted credentials (systemd 250+), from
-  a file delivery:
-    sudo systemd-creds encrypt --name=api_key "$K2_SECRETS_DIR/API_KEY" \
-      /etc/credstore.encrypted/api_key
-    unit: LoadCredentialEncrypted=api_key:/etc/credstore.encrypted/api_key
-    the service reads $CREDENTIALS_DIRECTORY/api_key
-  Rotate by hand: encrypt the new value again, restart the unit.
+SERVICES K2 DOESN'T RUN (a root systemd unit; Linux; for a timer: k2 job)
+  People only, with a confirm, on units the box's admin listed in
+  /etc/k2-root-helper/systemd-cred-units (agents: ask your owner):
+    k2 vault systemd-cred API_KEY --unit k2-watch.service --restart
+  The unit reads $CREDENTIALS_DIRECTORY/API_KEY; after a rotate it is stale
+  until a person runs --replace. EnvironmentFile= units: seal the file and
+  source %d/<cred> from an ExecStart= wrapper (k2 vault systemd-cred --help).
 
 NO K2 ON THE BOX
-  No K2 there means no vault there. Use systemd-creds on that box, the
-  value over SSH stdin (never argv):
+  Keep the source copy in a K2 vault (a reimage loses a sealed credential);
+  put it there over SSH stdin, then note it (k2 vault placement add API_KEY
+  --where box:<path>; the doctor lists it after a rotate):
     ssh box 'sudo systemd-creds encrypt --name=api_key - \
-      /etc/credstore.encrypted/api_key' < "$K2_SECRETS_DIR/API_KEY"
+      /etc/credstore.encrypted/api_key.cred' < "$K2_SECRETS_DIR/API_KEY"
+    unit: LoadCredentialEncrypted=api_key:/etc/credstore.encrypted/api_key.cred
   k2 vault send and carry need K2 on both ends.
 
 HONEST LIMITS
@@ -33973,11 +34303,9 @@ HONEST LIMITS
   logs every use.
 
 WHAT THE VAULT CAN'T DO YET (and the way around it today)
-  sign requests (AWS SigV4, Google service-account JWT)
-                                        env or file delivery to the tool
-  ssh-agent                             file delivery + ssh -i
-  plain systemd units                   systemd-creds (above)
-  boxes without K2                      systemd-creds over SSH (above)
+  sign requests (AWS SigV4, Google service-account JWT): env or file delivery
+  ssh-agent: file delivery + ssh -i
+  boxes without K2: systemd-creds over SSH + k2 vault placement add (above)
 
   k2 vault --help   k2 vault list   k2 vault doctor
 EOF

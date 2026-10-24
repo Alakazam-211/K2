@@ -242,6 +242,7 @@ pub mod vault;
 pub mod vault_handoff_routes;
 pub mod vault_routes;
 pub mod vault_use_routes;
+pub mod vault_systemd_routes;
 // Garden v3 data sources (prd-garden-v3-external-data-cards-v1): the poller,
 // trigger wakes, `/cli/sources/*`, and the shared sleep/wake detector.
 pub mod sources;

@@ -887,8 +887,8 @@ fn host() -> String {
     super::coordination::this_host().unwrap_or_else(|| "this server".into())
 }
 
-/// Boot: the scanner and the watch (one call in `daemon_main`). Every
-/// platform; headless.
+/// Boot: the scanner, the trends sampler and the watch (one call in
+/// `daemon_main`). Every platform; headless.
 pub fn spawn() {
     if cfg!(test) {
         return;
@@ -898,6 +898,9 @@ pub fn spawn() {
         return;
     }
     super::disk_scan::spawn();
+    // 0.46.4 (Slice B): the CPU and memory trends sampler, beside the watch
+    // (its own thread and cadence; it runs whatever the guard's mode).
+    super::trends::spawn();
     let _ = std::thread::Builder::new().name("disk-watch".into()).spawn(|| {
         super::disk_scan::wait_for_db();
         let path = state_path();

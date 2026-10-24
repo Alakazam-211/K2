@@ -311,8 +311,12 @@ pub const ROUTES: &[Route] = &[
     // is owner/Admin/agents (agents never see folder paths, handler); rescan is
     // rate-limited; settings are the owner's (handler: owner token or Owner login).
     get("/cli/app/resources", Admin),
+    // 0.46.4 Slice B: clean (an agent only its own Apps', handler) and the
+    // CPU/memory trends, the view's readers.
+    post("/cli/app/resources/clean", Admin),
     post("/cli/app/resources/rescan", Admin),
     post("/cli/app/resources/settings", Owner),
+    get("/cli/app/resources/trends", Admin),
     post("/cli/app/restart", Admin),
     // S19: only the owner resumes a suspended App.
     post("/cli/app/resume", Owner),

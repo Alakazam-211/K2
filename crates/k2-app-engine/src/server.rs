@@ -333,6 +333,7 @@ impl Engine {
             Request::RemoveApp { app, data } => self.remove_app(&app, data),
             Request::DiskUsage => self.disk_usage(),
             Request::SeedsGc { remove } => self.seeds_gc(&remove),
+            Request::Clean { dry_run, keep_images } => self.clean(dry_run, &keep_images),
             Request::PassWrite { app, pass_hex } => {
                 let a = AppId::parse(&app).ok_or_else(|| bad("app id"))?;
                 self.write_pass(&a, &pass_hex)?;
@@ -816,7 +817,12 @@ impl Engine {
             return Ok(json!({ "memCurrent": null, "pids": null }));
         }
         let read = |f: &str| std::fs::read_to_string(format!("/sys/fs/cgroup{cg}/{f}")).ok().and_then(|s| s.trim().parse::<u64>().ok());
-        Ok(json!({ "memCurrent": read("memory.current"), "pids": read("pids.current"), "memMax": read("memory.max"), "cgroup": cg }))
+        // `cpuUsec` (0.46.4 trends): cumulative CPU time from `cpu.stat`.
+        // An added field, no protocol bump (an older daemon ignores it).
+        let cpu_usec = std::fs::read_to_string(format!("/sys/fs/cgroup{cg}/cpu.stat"))
+            .ok()
+            .and_then(|s| s.lines().find_map(|l| l.strip_prefix("usage_usec ")).and_then(|n| n.trim().parse::<u64>().ok()));
+        Ok(json!({ "memCurrent": read("memory.current"), "pids": read("pids.current"), "memMax": read("memory.max"), "cpuUsec": cpu_usec, "cgroup": cg }))
     }
 
     /// S28 one-shot exec: `podman exec` into the deployment's container
@@ -975,6 +981,7 @@ fn verb_name(r: &Request) -> &'static str {
         Request::Logs { .. } => "logs",
         Request::DiskUsage => wire::VERB_DISK_USAGE,
         Request::SeedsGc { .. } => wire::VERB_SEEDS_GC,
+        Request::Clean { .. } => wire::VERB_CLEAN,
     }
 }
 

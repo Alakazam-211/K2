@@ -188,6 +188,46 @@ echo "== rescan =="
 out="$(k2 app resources --rescan 2>&1 >/dev/null)"
 expect_has "rescan answers" "$out" "box usage scan"
 
+echo "== clean (0.46.4, Slice B) =="
+# A rotated log beside the App's log, and App data: clean takes the first,
+# never the second.
+mkdir -p "$DHOME/.k2/apps/usage/logs" "$DHOME/.k2/apps/usage/data"
+printf 'old\n' > "$DHOME/.k2/apps/usage/logs/d-old.log.1"
+printf 'keep\n' > "$DHOME/.k2/apps/usage/data/keep.db"
+out="$(k2 app resources clean --dry-run --json)"
+shape="$(printf '%s' "$out" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+ids = [i["id"] for i in v["items"]]
+print(v["ok"], v["dryRun"], v["scope"], "apps/usage/logs/d-old.log.1" in ids, any("data" in i for i in ids),
+      all(not i["removed"] for i in v["items"]), "App data" in v["never"])')"
+expect_eq "clean --dry-run --json shape" "$shape" "True True box True False True True"
+[ -f "$DHOME/.k2/apps/usage/logs/d-old.log.1" ] && ok "a dry run removes nothing" || bad "a dry run removed the log"
+out="$(k2 app resources clean --dry-run)"
+expect_has "human dry run" "$out" "Would free (this box)"
+expect_has "  the item" "$out" "rotated log"
+expect_has "  what it never touches" "$out" "Never touched: App data"
+out="$(k2 app resources clean)"
+expect_has "clean frees" "$out" "Cleaned (this box)"
+[ ! -e "$DHOME/.k2/apps/usage/logs/d-old.log.1" ] && ok "the rotated log is gone" || bad "the rotated log stayed"
+[ -f "$DHOME/.k2/apps/usage/data/keep.db" ] && ok "App data stays" || bad "clean touched App data"
+st="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/cli/app/resources/clean?token=$OWNER_TOKEN")"
+expect_eq "GET on clean is 405" "$st" "405"
+
+echo "== trends (0.46.4, Slice B) =="
+out="$(k2 app resources trends --window 1h --json)"
+shape="$(printf '%s' "$out" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+print(v["ok"], v["window"], v["resSecs"], isinstance(v["box"]["points"], list), v["budgets"]["enforced"], v["retention"]["minutesSecs"])')"
+expect_eq "trends --json shape" "$shape" "True 1h 60 True False 86400"
+out="$(k2 app resources trends)"
+expect_has "human trends" "$out" "CPU and memory, last 24h"
+set +e
+k2 app resources trends --window 2h > "$SANDBOX/out" 2>&1; rc=$?
+set -e
+expect_eq "a bad window exits 2" "$rc" "2"
+
 expect_has "uninstall" "$(k2 app uninstall usage)" "App usage uninstalled"
 
 echo

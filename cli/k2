@@ -10335,12 +10335,162 @@ if v.get("suggestion"):
 '
 }
 
+# k2 app resources clean [--dry-run] [--json] (0.46.4, disk guard Slice B):
+# free only what K2 made and can make again; print each item.
+cmd_app_resources_clean() {
+    local json_out=0 dry=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --dry-run) dry=1; shift ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_resources_usage; return 0 ;;
+            *) echo "usage: k2 app resources clean [--dry-run] [--json]" >&2; exit 2 ;;
+        esac
+    done
+    _app_rt_post /cli/app/resources/clean "$(_compute_json K2_CJ_dryRun_b="$dry")"
+    [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+def gb(b):
+    if b is None:
+        return "—"
+    f = float(b)
+    for unit, size in (("TB", 1e12), ("GB", 1e9), ("MB", 1e6), ("KB", 1e3)):
+        if f >= size:
+            return ("%.1f %s" % (f / size, unit)) if f < 10 * size else ("%.0f %s" % (f / size, unit))
+    return "%d B" % f
+WORDS = {
+    "seed": "unused Seed (K2 copy)",
+    "engineSeed": "unused Seed (walled copy)",
+    "image": "unused image",
+    "engineLeftover": "engine leftover",
+    "rotatedLog": "rotated log",
+    "deploymentLog": "old deployment log",
+    "buildTemp": "build temp",
+    "imageArchive": "old base image archive",
+}
+dry = v.get("dryRun")
+items = v.get("items") or []
+print("%s (%s)" % ("Would free" if dry else "Cleaned", "this box" if v.get("scope") == "box" else "your workspace\x27s Apps and services"))
+if items:
+    print()
+    print("%-26s %-9s %-14s %s" % ("KIND", "SIZE", "APP", "ITEM"))
+for i in items:
+    state = ""
+    if i.get("error"):
+        state = "  (kept: %s)" % i["error"]
+    elif not dry and not i.get("removed"):
+        state = "  (kept)"
+    print("%-26s %-9s %-14s %s%s" % (WORDS.get(i.get("kind"), i.get("kind")), gb(i.get("bytes")), i.get("app") or "—", i.get("id"), state))
+t = v.get("totals") or {}
+print()
+if dry:
+    print("Total: about %s" % gb(t.get("bytes")))
+else:
+    print("Freed: about %s" % gb(t.get("freedBytes")))
+e = v.get("engine") or {}
+if e.get("note"):
+    print("Note: " + e["note"])
+elif isinstance(e.get("status"), str) and e["status"].startswith("error"):
+    print("Note: the walled engine: " + e["status"])
+print(v.get("never") or "")
+if v.get("hint"):
+    print(v["hint"])
+'
+}
+
+# k2 app resources trends [--app A] [--window 1h|6h|24h|7d|30d] [--json]
+# (0.46.4, disk guard Slice B): CPU and memory over time, box and per App.
+cmd_app_resources_trends() {
+    local json_out=0 app="" window=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --app) app="${2:-}"; shift 2 ;;
+            --window) window="${2:-}"; shift 2 ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_resources_usage; return 0 ;;
+            *) echo "usage: k2 app resources trends [--app A] [--window 1h|6h|24h|7d|30d] [--json]" >&2; exit 2 ;;
+        esac
+    done
+    local q=""
+    [ -n "$app" ] && q="app=$(urlencode "$app")"
+    [ -n "$window" ] && q="${q:+$q&}window=$(urlencode "$window")"
+    _compute_call GET /cli/app/resources/trends "$q"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+BARS = "▁▂▃▄▅▆▇█"
+def gib(b):
+    if b is None:
+        return "—"
+    g = float(b) / (1 << 30)
+    return ("%.0f GiB" % g) if g >= 10 else ("%.1f GiB" % g)
+def cores(c):
+    return "—" if c is None else ("%.2f" % c)
+def spark(vals, top=None):
+    vals = [x for x in vals]
+    known = [x for x in vals if x is not None]
+    if not known:
+        return ""
+    hi = top or max(known) or 1
+    # 40 columns at most: average neighbours.
+    n = len(vals)
+    step = max(1, (n + 39) // 40)
+    out = ""
+    for i in range(0, n, step):
+        chunk = [x for x in vals[i:i + step] if x is not None]
+        if not chunk:
+            out += " "
+            continue
+        x = sum(chunk) / len(chunk)
+        out += BARS[min(len(BARS) - 1, int(x / hi * (len(BARS) - 1) + 0.5))]
+    return out
+def line(label, pts, summ, budget=None, total=None):
+    s = summ or {}
+    mem = "mem avg %s peak %s" % (gib(s.get("memAvgBytes")), gib(s.get("memPeakBytes")))
+    if budget:
+        mem += " of %s budget" % gib(budget)
+    print("%-24s cpu avg %s peak %s cores · %s" % (label, cores(s.get("cpuAvgCores")), cores(s.get("cpuPeakCores")), mem))
+    c = spark([p.get("cpuCores") for p in pts])
+    m = spark([p.get("memPeakBytes") if p.get("memPeakBytes") is not None else p.get("memBytes") for p in pts], budget or total)
+    if c:
+        print("    cpu %s" % c)
+    if m:
+        print("    mem %s" % m)
+b = v.get("box") or {}
+print("CPU and memory, last %s (one point every %s)" % (v.get("window"), "minute" if v.get("resSecs") == 60 else "hour"))
+print()
+line("box (%s cores)" % (b.get("cores") or "?"), b.get("points") or [], b.get("summary"), None, b.get("memTotalBytes"))
+apps = v.get("apps") or []
+svcs = v.get("services") or []
+if apps or svcs:
+    print()
+for a in apps:
+    o = (a.get("owner") or {}).get("handle") or "server"
+    line("%s (%s)" % (a.get("app"), o), a.get("points") or [], a.get("summary"), a.get("memBudgetBytes"))
+for s in svcs:
+    o = (s.get("owner") or {}).get("handle") or "server"
+    line("%s (--cmd, %s)" % (s.get("service"), o), s.get("points") or [], s.get("summary"))
+if not (b.get("points") or apps or svcs):
+    print("No samples yet: K2 samples once a minute and keeps 24 h of minutes and 30 days of hours.")
+print()
+print("RAM budgets are shown beside use; nothing here stops an App for using more. — is not measured on this OS.")
+'
+}
+
 # k2 app resources [--json] [--app A] [--owner AGENT] [--rescan [--wait]]
 # k2 app resources settings [--mode on|warn|off] [--warn 85] [--warn-free 20G]
 #     [--refuse 95] [--reserve 10G] [--critical 98] [--critical-free 2G] [--json]
+# k2 app resources clean [--dry-run] [--json]                       (0.46.4)
+# k2 app resources trends [--app A] [--window 24h] [--json]         (0.46.4)
 # Box usage and the disk guard (prd-app-resources-disk-guard-v1, 0.46.3).
 cmd_app_resources() {
     if [ "${1:-}" = settings ]; then shift; cmd_app_resources_settings "$@"; return; fi
+    if [ "${1:-}" = clean ]; then shift; cmd_app_resources_clean "$@"; return; fi
+    if [ "${1:-}" = trends ]; then shift; cmd_app_resources_trends "$@"; return; fi
     local json_out=0 app="" owner="" rescan=0 wait=0
     while [ $# -gt 0 ]; do
         case "$1" in

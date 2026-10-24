@@ -274,7 +274,10 @@ impl RuntimeEngine for ProcessException {
         let app = app_id(&h.app_id)?;
         let base = format!("{CGROUP_ROOT}/{APPS_SLICE}/{}", app.process_unit());
         let read = |f: &str| std::fs::read_to_string(Path::new(&base).join(f)).ok().and_then(|s| s.trim().parse::<u64>().ok());
-        Ok(CgroupStats { mem_current: read("memory.current"), pids: read("pids.current") })
+        let cpu_usec = std::fs::read_to_string(Path::new(&base).join("cpu.stat"))
+            .ok()
+            .and_then(|s| k2_core::deploy::engine::cpu_stat_usage_usec(&s));
+        Ok(CgroupStats { mem_current: read("memory.current"), pids: read("pids.current"), cpu_usec })
     }
 
     fn adopt(&self) -> Result<Vec<RunHandle>> {

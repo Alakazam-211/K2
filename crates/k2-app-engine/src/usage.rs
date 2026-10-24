@@ -12,15 +12,23 @@
 //!   what it doesn't reach is marked `partial`.
 //! - **`seeds-gc`**: remove exactly the engine Seed copies the daemon
 //!   names, and never one a run state or unit file still names (`skipped`).
+//! - **`clean`** (0.46.4, `k2 app resources clean`): images no container,
+//!   unit file or run state uses (minus the daemon's `keepImages`), and the
+//!   engine's own leftovers past an hour old (`engine/builds/.tar-*`,
+//!   `engine/images/.load-*`, `seeds/.tmp-*`). `dryRun` only lists.
 //!
-//! Measuring never writes; the sweep removes only `seeds/<hash>` folders.
+//! Measuring never writes; the sweep removes only `seeds/<hash>` folders;
+//! `clean` removes only images and the leftovers above, never an App
+//! folder, its data or logs, or a whole Seed.
 
 use std::collections::HashSet;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
 use k2_root_proto::apps::AppId;
-use k2_root_proto::engine::{self as wire, codes, seed_hash_ok, AppDisk, DiskUsage, ImagesDisk, SeedsGcAnswer};
+use k2_root_proto::engine::{
+    self as wire, codes, seed_hash_ok, AppDisk, CleanAnswer, CleanImage, CleanLeftover, DiskUsage, ImagesDisk, SeedsGcAnswer,
+};
 use serde_json::Value;
 
 use crate::server::{podman_bin, Engine};
@@ -128,7 +136,115 @@ pub fn parse_system_df(out: &str) -> Option<ImagesDisk> {
     Some(ImagesDisk { total_bytes: total, unused_bytes: unused.min(total) })
 }
 
+/// `podman images --format json` → the images `clean` may remove: no
+/// container (running or stopped) uses them, no name is in `keep`, and
+/// neither a name nor the id appears in a unit file or run state
+/// (`in_use`). Podman 4 and 5 give `[{"Id", "Names", "Size", "Containers"}]`
+/// (`Names` is null for a dangling image).
+pub fn unused_images(out: &str, keep: &[String], in_use: &[String]) -> Option<Vec<CleanImage>> {
+    let v: Value = serde_json::from_str(out.trim()).ok()?;
+    let mut picked = Vec::new();
+    for row in v.as_array()? {
+        let Some(id) = row["Id"].as_str().or_else(|| row["ID"].as_str()).filter(|i| !i.is_empty()) else { continue };
+        if row["Containers"].as_u64().unwrap_or(1) > 0 {
+            continue;
+        }
+        let names: Vec<String> = row["Names"]
+            .as_array()
+            .or_else(|| row["RepoTags"].as_array())
+            .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
+            .unwrap_or_default();
+        if names.iter().any(|n| keep.contains(n)) {
+            continue;
+        }
+        let short = &id[..id.len().min(12)];
+        if in_use.iter().any(|t| t.contains(short) || names.iter().any(|n| t.contains(n.as_str()))) {
+            continue;
+        }
+        let bytes = row["Size"].as_u64().or_else(|| row["VirtualSize"].as_u64()).unwrap_or(0);
+        picked.push(CleanImage { id: id.to_string(), names, bytes, removed: false, error: None });
+    }
+    picked.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.id.cmp(&b.id)));
+    Some(picked)
+}
+
+/// The engine's own leftovers under its home (`home` = k2app's home) older
+/// than `min_age`: a cut-off build's tar, a cut-off image load, a
+/// half-written or half-removed Seed. Names are relative to `home`.
+pub fn leftovers(home: &Path, min_age: Duration, now: std::time::SystemTime) -> Vec<(String, std::path::PathBuf, u64)> {
+    let mut out = Vec::new();
+    for (dir, prefix) in [("engine/builds", ".tar-"), ("engine/images", ".load-"), ("seeds", ".tmp-")] {
+        let Ok(rd) = std::fs::read_dir(home.join(dir)) else { continue };
+        for e in rd.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if !name.starts_with(prefix) {
+                continue;
+            }
+            let Ok(m) = std::fs::symlink_metadata(e.path()) else { continue };
+            if m.file_type().is_symlink() {
+                continue;
+            }
+            let old = m.modified().ok().and_then(|t| now.duration_since(t).ok()).is_some_and(|age| age >= min_age);
+            if !old {
+                continue;
+            }
+            let bytes = tree_bytes(&e.path(), Instant::now() + Duration::from_secs(30)).unwrap_or_else(|b| b);
+            out.push((format!("{dir}/{name}"), e.path(), bytes));
+        }
+    }
+    out.sort();
+    out
+}
+
 impl Engine {
+    /// The `clean` verb (0.46.4): unused images and the engine's own old
+    /// leftovers. `dry_run` lists and removes nothing.
+    pub(crate) fn clean(&self, dry_run: bool, keep: &[String]) -> R<Value> {
+        if keep.len() > wire::MAX_CLEAN_KEEP || keep.iter().any(|k| k.is_empty() || k.len() > 300) {
+            return Err((codes::BAD_REQUEST, format!("keepImages: at most {} names of up to 300 characters", wire::MAX_CLEAN_KEEP)));
+        }
+        let mut a = CleanAnswer { dry_run, ..CleanAnswer::default() };
+        for (name, path, bytes) in leftovers(&self.home, Duration::from_secs(wire::CLEAN_LEFTOVER_AGE_SECS), std::time::SystemTime::now()) {
+            let mut l = CleanLeftover { name, bytes, removed: false };
+            if !dry_run {
+                let gone = if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
+                if gone.is_ok() {
+                    l.removed = true;
+                    a.freed_bytes = a.freed_bytes.saturating_add(bytes);
+                }
+            }
+            a.leftovers.push(l);
+        }
+        let listed = self.run(podman_bin(), &["images", "--format", "json"], None, 60);
+        let images = match listed {
+            Ok(o) if o.ok() => unused_images(&String::from_utf8_lossy(&o.stdout), keep, &self.seeds_in_use())
+                .ok_or_else(|| "podman images gave no JSON list".to_string()),
+            Ok(o) => Err(format!("podman images: {}", o.why())),
+            Err((_, e)) => Err(e),
+        };
+        match images {
+            Err(e) => a.images_error = Some(e),
+            Ok(list) => {
+                for mut img in list {
+                    if !dry_run {
+                        // No -f: an image something started using since the
+                        // listing stays (Podman refuses), and says why.
+                        match self.run(podman_bin(), &["rmi", &img.id], None, 120) {
+                            Ok(o) if o.ok() => {
+                                img.removed = true;
+                                a.freed_bytes = a.freed_bytes.saturating_add(img.bytes);
+                            }
+                            Ok(o) => img.error = Some(o.why()),
+                            Err((_, e)) => img.error = Some(e),
+                        }
+                    }
+                    a.images.push(img);
+                }
+            }
+        }
+        serde_json::to_value(&a).map_err(|e| (codes::IO, e.to_string()))
+    }
+
     /// The `disk-usage` verb (§5.3).
     pub(crate) fn disk_usage(&self) -> R<Value> {
         let t0 = Instant::now();
@@ -381,7 +497,7 @@ mod tests {
         // The version answer announces both verbs (no protocol bump).
         let ver = e.handle(k2_root_proto::engine::Request::Version, &mut std::io::empty()).unwrap();
         assert_eq!(ver["protocol"], 3);
-        assert_eq!(ver["verbs"], serde_json::json!(["disk-usage", "seeds-gc"]));
+        assert_eq!(ver["verbs"], serde_json::json!(["disk-usage", "seeds-gc", "clean"]));
     }
 
     /// `seeds-gc` removes exactly what it is told, refuses a Seed a unit
@@ -417,6 +533,57 @@ mod tests {
         let too_many = vec![hash('c'); wire::MAX_SEEDS_GC + 1];
         assert_eq!(e.handle(k2_root_proto::engine::Request::SeedsGc { remove: too_many }, &mut std::io::empty()).unwrap_err().0, codes::TOO_LARGE);
         assert!(home.join("seeds").join(hash('c')).is_dir());
+    }
+
+    /// `clean` picks only images nothing uses: a container (running or
+    /// stopped), a unit file or run state naming it, or the daemon's keep
+    /// list each keep one; a dangling image with no container goes.
+    #[test]
+    fn clean_picks_only_unused_images() {
+        let out = r#"[
+          {"Id":"aaaaaaaaaaaa1111","Names":["localhost/k2-base/node24:old000000000"],"Size":900,"Containers":0},
+          {"Id":"bbbbbbbbbbbb2222","Names":["localhost/k2-base/node24:ec857ea6bb60"],"Size":800,"Containers":0},
+          {"Id":"cccccccccccc3333","Names":["localhost/k2-base/node24-full:7f7f17f77302"],"Size":700,"Containers":2},
+          {"Id":"dddddddddddd4444","Names":["localhost/k2-base/node22:unit00000000"],"Size":600,"Containers":0},
+          {"Id":"eeeeeeeeeeee5555","Names":null,"Size":100,"Containers":0},
+          {"Id":"ffffffffffff6666","Names":["x"],"Size":50}
+        ]"#;
+        let keep = vec!["localhost/k2-base/node24:ec857ea6bb60".to_string()];
+        let in_use = vec!["[Container]\nImage=localhost/k2-base/node22:unit00000000\n".to_string()];
+        let picked = unused_images(out, &keep, &in_use).expect("a list");
+        let ids: Vec<&str> = picked.iter().map(|i| i.id.as_str()).collect();
+        assert_eq!(ids, ["aaaaaaaaaaaa1111", "eeeeeeeeeeee5555"], "biggest first; kept, used and unknown-count images stay");
+        assert_eq!(picked[0].bytes, 900);
+        assert!(picked.iter().all(|i| !i.removed));
+        assert_eq!(unused_images("not json", &keep, &in_use), None);
+    }
+
+    /// `clean`'s leftovers: only the engine's own temp names, only once
+    /// they are old, never a whole Seed, an App folder or a symlink.
+    #[test]
+    fn clean_leftovers_are_old_engine_temps_only() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path();
+        let w = |p: &str| {
+            let f = home.join(p);
+            std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+            std::fs::write(&f, vec![1u8; 4096]).unwrap();
+        };
+        w("engine/builds/.tar-jobs-b1.tar");
+        w("engine/builds/jobs/b1.env");
+        w("engine/images/.load-1-ab.tar");
+        w("seeds/.tmp-gc-x/s.js");
+        w(&format!("seeds/{}/s.js", hash('a')));
+        w("apps/jobs/data/.tar-not-mine");
+        std::os::unix::fs::symlink("/etc", home.join("engine/builds/.tar-link")).unwrap();
+        let now = std::time::SystemTime::now();
+        assert!(leftovers(home, Duration::from_secs(3600), now).is_empty(), "nothing is an hour old yet");
+        let later = now + Duration::from_secs(7200);
+        let names: Vec<String> = leftovers(home, Duration::from_secs(3600), later).into_iter().map(|(n, _, b)| {
+            assert!(b >= 4096, "{n}: {b}");
+            n
+        }).collect();
+        assert_eq!(names, ["engine/builds/.tar-jobs-b1.tar", "engine/images/.load-1-ab.tar", "seeds/.tmp-gc-x"]);
     }
 
     /// A one-filesystem walk counts allocated blocks, a hard link once and

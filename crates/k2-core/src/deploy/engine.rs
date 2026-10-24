@@ -173,6 +173,14 @@ pub enum Liveness {
 pub struct CgroupStats {
     pub mem_current: Option<u64>,
     pub pids: Option<u64>,
+    /// Cumulative CPU time, `cpu.stat` `usage_usec` (0.46.4 trends; an
+    /// engine that doesn't report it gives `None`).
+    pub cpu_usec: Option<u64>,
+}
+
+/// `usage_usec` from a cgroup v2 `cpu.stat`.
+pub fn cpu_stat_usage_usec(cpu_stat: &str) -> Option<u64> {
+    cpu_stat.lines().find_map(|l| l.strip_prefix("usage_usec ")).and_then(|n| n.trim().parse().ok())
 }
 
 /// An interactive or one-shot exec into an instance (S28).

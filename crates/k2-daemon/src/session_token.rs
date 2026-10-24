@@ -855,8 +855,12 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         // rescan, and settings (listed so a passport gets the teaching
         // owner_only from the handler, like box/prepare).
         "/cli/app/resources",
+        // 0.46.4: clean (its own Apps' only; a real run needs switch 1)
+        // and the trends.
+        "/cli/app/resources/clean",
         "/cli/app/resources/rescan",
         "/cli/app/resources/settings",
+        "/cli/app/resources/trends",
         "/cli/app/restart",
         "/cli/app/rollback",
         "/cli/app/shell",

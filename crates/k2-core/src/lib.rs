@@ -153,6 +153,8 @@ pub mod handoff_state;
 pub mod deploy;
 /// The disk guard's shared contract (prd-app-resources-disk-guard-v1, 0.46.3).
 pub mod disk_guard;
+// 0.46.4 box usage trends (disk guard Slice B, migration 0217).
+pub mod resource_samples;
 pub use k2_client::migration_home;
 pub use k2_client::paths;
 /// Permission cards (prd-agent-settings-cards-v1, 0.46.3 Beta): catalog,

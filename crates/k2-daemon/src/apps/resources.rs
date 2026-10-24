@@ -6,6 +6,8 @@
 //! GET  /cli/app/resources           [app, owner]   owner, Admin login, any agent passport
 //! POST /cli/app/resources/rescan                   same; one at a time, rate-limited
 //! POST /cli/app/resources/settings  {mode?, lines?} the owner only (owner token or Owner login)
+//! POST /cli/app/resources/clean     {dryRun?}      same readers; an agent cleans its own (disk_clean.rs, 0.46.4)
+//! GET  /cli/app/resources/trends    [app, window]  same readers (trends.rs, 0.46.4)
 //! ```
 //!
 //! - **Who sees what.** The owner and Admin logins see absolute folders
@@ -35,8 +37,14 @@ use serde_json::{json, Value as J};
 
 use super::routes::{actor, db_err, json_body, need_credential, no, s, Refusal, Who, R};
 
-pub const ROUTES: &[&str] = &["/cli/app/resources", "/cli/app/resources/rescan", "/cli/app/resources/settings"];
-pub const POST_ROUTES: &[&str] = &["/cli/app/resources/rescan", "/cli/app/resources/settings"];
+pub const ROUTES: &[&str] = &[
+    "/cli/app/resources",
+    "/cli/app/resources/clean",
+    "/cli/app/resources/rescan",
+    "/cli/app/resources/settings",
+    "/cli/app/resources/trends",
+];
+pub const POST_ROUTES: &[&str] = &["/cli/app/resources/clean", "/cli/app/resources/rescan", "/cli/app/resources/settings"];
 
 /// The refusal code for new disk work past the lines.
 pub const DISK_LOW: &str = "disk_low";
@@ -51,6 +59,9 @@ pub(crate) fn handle(path: &str, who: &Who, body: &[u8], params: &HashMap<String
         "/cli/app/resources" => view(who, params),
         "/cli/app/resources/rescan" => rescan(who),
         "/cli/app/resources/settings" => settings(who, body),
+        // Slice B (0.46.4): clean what K2 made; CPU and memory trends.
+        "/cli/app/resources/clean" => super::disk_clean::route(who, body),
+        "/cli/app/resources/trends" => super::trends::route(who, params),
         _ => Err(no("not_found", 404, "no such App route")),
     }
 }
@@ -63,7 +74,7 @@ pub(crate) fn is_person(who: &Who) -> bool {
 }
 
 /// The view's floor: any credential but App passes, and no Member login.
-fn need_reader(who: &Who) -> R<()> {
+pub(crate) fn need_reader(who: &Who) -> R<()> {
     need_credential(who)?;
     if let Who::Login { role: Role::Member, .. } = who {
         return Err(no(ROLE_REQUIRED, 403, "box usage needs an admin login on this server"));

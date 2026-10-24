@@ -374,6 +374,22 @@ pub enum Request {
     /// `skipped`) any hash a run state or unit file still names. At most
     /// [`MAX_SEEDS_GC`] hashes. Answer: [`SeedsGcAnswer`].
     SeedsGc { remove: Vec<String> },
+    /// 0.46.4 `k2 app resources clean` (Slice B, no protocol bump, listed
+    /// in `verbs`): free only what the engine made and can make again.
+    /// Images no container, unit file or run state uses (and not in
+    /// `keepImages`: the daemon's current base images, which it would only
+    /// load again), and the engine's own leftovers older than
+    /// [`CLEAN_LEFTOVER_AGE_SECS`] (a cut-off build's tar, a cut-off image
+    /// load, a half-written Seed). Never App folders, data, logs or a
+    /// whole Seed (Seeds go through `seeds-gc`). `dryRun` lists, removes
+    /// nothing. Answer: [`CleanAnswer`].
+    #[serde(rename_all = "camelCase")]
+    Clean {
+        #[serde(default)]
+        dry_run: bool,
+        #[serde(default)]
+        keep_images: Vec<String>,
+    },
 }
 
 /// Verbs past the protocol number, announced in `version`'s `verbs`
@@ -382,7 +398,15 @@ pub enum Request {
 /// `guarded.rs` would turn into a refusal of every walled deploy).
 pub const VERB_DISK_USAGE: &str = "disk-usage";
 pub const VERB_SEEDS_GC: &str = "seeds-gc";
-pub const ENGINE_VERBS: &[&str] = &[VERB_DISK_USAGE, VERB_SEEDS_GC];
+/// 0.46.4 (disk guard Slice B): `k2 app resources clean`'s engine half.
+pub const VERB_CLEAN: &str = "clean";
+pub const ENGINE_VERBS: &[&str] = &[VERB_DISK_USAGE, VERB_SEEDS_GC, VERB_CLEAN];
+
+/// `clean` removes an engine leftover only once it is this old (a build or
+/// an image load still running is never touched).
+pub const CLEAN_LEFTOVER_AGE_SECS: u64 = 3600;
+/// Most image names one `clean` keeps.
+pub const MAX_CLEAN_KEEP: usize = 64;
 
 /// `disk-usage`'s whole time budget (seconds); past it the answer marks
 /// what wasn't reached `partial`.
@@ -442,6 +466,42 @@ pub struct SeedsGcAnswer {
     pub skipped: Vec<String>,
     /// Not on the engine.
     pub absent: Vec<String>,
+    pub freed_bytes: u64,
+}
+
+/// One image `clean` lists (bytes as Podman counts them: layers shared
+/// with another image count in both, so a total is "up to").
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CleanImage {
+    pub id: String,
+    pub names: Vec<String>,
+    pub bytes: u64,
+    pub removed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// One engine leftover `clean` lists (`name` relative to k2app's home).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CleanLeftover {
+    pub name: String,
+    pub bytes: u64,
+    pub removed: bool,
+}
+
+/// The `clean` answer.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CleanAnswer {
+    pub dry_run: bool,
+    pub images: Vec<CleanImage>,
+    /// Podman couldn't list the images (nothing removed there).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub images_error: Option<String>,
+    pub leftovers: Vec<CleanLeftover>,
+    /// What was removed (a dry run: 0).
     pub freed_bytes: u64,
 }
 
@@ -1474,7 +1534,7 @@ mod tests {
     #[test]
     fn disk_usage_and_seeds_gc_ride_protocol_3() {
         assert_eq!(ENGINE_PROTOCOL, 3, "no engine bump in 0.46.3 (a bump stops every walled deploy)");
-        assert_eq!(ENGINE_VERBS, &["disk-usage", "seeds-gc"]);
+        assert_eq!(ENGINE_VERBS, &["disk-usage", "seeds-gc", "clean"]);
         let line = serde_json::to_string(&Request::DiskUsage).unwrap();
         assert_eq!(line, "{\"verb\":\"disk-usage\"}");
         assert_eq!(serde_json::from_str::<Request>(&line).unwrap(), Request::DiskUsage);
@@ -1493,5 +1553,29 @@ mod tests {
         assert!(!a.partial);
         let back: DiskUsage = serde_json::from_str(&serde_json::to_string(&a).unwrap()).unwrap();
         assert_eq!(back, a);
+    }
+
+    /// 0.46.4 `clean` rides protocol 3 too; its wire shape is fixed and
+    /// both fields default (a bare `{"verb":"clean"}` is a real run that
+    /// keeps nothing extra).
+    #[test]
+    fn clean_rides_protocol_3() {
+        let r = Request::Clean { dry_run: true, keep_images: vec!["localhost/k2-base/node24:ec857ea6bb60".into()] };
+        let line = serde_json::to_string(&r).unwrap();
+        assert_eq!(line, "{\"verb\":\"clean\",\"dryRun\":true,\"keepImages\":[\"localhost/k2-base/node24:ec857ea6bb60\"]}");
+        assert_eq!(serde_json::from_str::<Request>(&line).unwrap(), r);
+        assert_eq!(
+            serde_json::from_str::<Request>("{\"verb\":\"clean\"}").unwrap(),
+            Request::Clean { dry_run: false, keep_images: vec![] }
+        );
+        assert!(serde_json::from_str::<Request>("{\"verb\":\"clean\",\"all\":true}").is_err(), "unknown fields refused");
+        let a: CleanAnswer = serde_json::from_str(
+            r#"{"dryRun":false,"images":[{"id":"abc","names":["x"],"bytes":10,"removed":true}],
+                "leftovers":[{"name":"engine/builds/.tar-jobs-b1.tar","bytes":5,"removed":true}],"freedBytes":15}"#,
+        )
+        .unwrap();
+        assert_eq!(a.freed_bytes, 15);
+        assert!(a.images_error.is_none());
+        assert_eq!(serde_json::from_str::<CleanAnswer>(&serde_json::to_string(&a).unwrap()).unwrap(), a);
     }
 }

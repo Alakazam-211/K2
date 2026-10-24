@@ -912,7 +912,9 @@ impl RuntimeEngine for GuardedEngine {
 
     fn stats(&self, h: &RunHandle) -> Result<CgroupStats> {
         let v = call(&Request::Stats { app: h.app_id.clone(), deployment: h.deployment_id.clone() }, None, Duration::from_secs(15))?;
-        Ok(CgroupStats { mem_current: v["memCurrent"].as_u64(), pids: v["pids"].as_u64() })
+        // `cpuUsec` (0.46.4 trends) is a field an older engine build leaves
+        // out: no CPU number, never a failure.
+        Ok(CgroupStats { mem_current: v["memCurrent"].as_u64(), pids: v["pids"].as_u64(), cpu_usec: v["cpuUsec"].as_u64() })
     }
 
     fn adopt(&self) -> Result<Vec<RunHandle>> {

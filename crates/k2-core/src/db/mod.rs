@@ -1519,6 +1519,14 @@ fn run_migrations_through(conn: &Connection, last: Option<&str>) -> Result<()> {
         // re-host policy, warm instance, fingerprint and readiness columns.
         // Additive; after 0220 (`k2 job`).
         ("0221_app_rehost", include_str!("../../drizzle_sql/0221_app_rehost.sql")),
+        // 0217 — CPU and memory trends for box usage
+        // (prd-app-resources-disk-guard-v1 Slice B; 0.46.4): one additive
+        // table, `app_resource_samples` (a minute row kept 24 h, an hourly
+        // average + peak kept 30 days, per box / App / --cmd service). The
+        // number was held for Slice B since 0.46.3; it runs after 0219 and
+        // 0220 because 0.46.3 databases already have 0218 and 0219. The store is
+        // `crate::resource_samples`.
+        ("0217_app_resource_samples", include_str!("../../drizzle_sql/0217_app_resource_samples.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2182,7 +2190,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0221_app_rehost",
+            last_name, "0217_app_resource_samples",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2244,6 +2252,8 @@ mod tests {
                 "0219_garden_access",
                 "0220_jobs",
                 "0221_app_rehost",
+                // 0.46.4: box usage trends (held for Slice B, after 0219).
+                "0217_app_resource_samples",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2313,6 +2323,8 @@ mod tests {
                 "0220_jobs",
                 // 0.46.4: App runtime update continuity.
                 "0221_app_rehost",
+                // 0.46.4: box usage trends (held for Slice B, after 0219).
+                "0217_app_resource_samples",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -2494,6 +2506,43 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM _migrations WHERE name = '0221_app_rehost'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(once, 1, "0221 is recorded once");
+    }
+
+    /// 0217 (box usage trends, prd-app-resources-disk-guard-v1 Slice B) on a
+    /// 0.46.3 database (last migration 0219): it applies after 0219 and 0220, adds one
+    /// empty table that refuses an unknown subject or resolution, keeps the
+    /// existing rows, and a second run is a no-op.
+    #[test]
+    fn a_046_3_database_upgrades_through_0217_app_resource_samples() {
+        let conn = fresh_memory();
+        run_migrations_through(&conn, Some("0219_garden_access")).unwrap();
+        assert!(!table_names(&conn).iter().any(|n| n == "app_resource_samples"), "0.46.3 has no trends table");
+        conn.execute("INSERT INTO projects (id, name, path) VALUES ('p-old', 'old', '/tmp/p-old')", []).unwrap();
+
+        run_migrations(&conn).unwrap();
+        let last: String = conn.query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).unwrap();
+        assert_eq!(last, "0217_app_resource_samples", "0217 runs last on a 0.46.3 database (after 0220)");
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM app_resource_samples", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 0, "the trends table starts empty");
+        let kept: i64 = conn.query_row("SELECT COUNT(*) FROM projects WHERE id = 'p-old'", [], |r| r.get(0)).unwrap();
+        assert_eq!(kept, 1, "existing rows are untouched");
+        conn.execute(
+            "INSERT INTO app_resource_samples (subject_kind, subject_id, res, at, cpu_cores, mem_bytes) VALUES ('app', 'jobs', 60, 100, 0.5, 1024)",
+            [],
+        )
+        .unwrap();
+        for (kind, res) in [("disk", 60), ("app", 30)] {
+            let bad = conn.execute(
+                "INSERT INTO app_resource_samples (subject_kind, subject_id, res, at) VALUES (?1, 'x', ?2, 100)",
+                params![kind, res],
+            );
+            assert!(bad.is_err(), "subject {kind} at res {res} must be refused");
+        }
+        run_migrations(&conn).unwrap();
+        let once: i64 = conn
+            .query_row("SELECT COUNT(*) FROM _migrations WHERE name = '0217_app_resource_samples'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(once, 1, "0217 is recorded once");
     }
 
     /// A 0.46.0 database (last migration 0181) with a registered phone
@@ -3208,7 +3257,10 @@ mod tests {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
             conn.execute("DELETE FROM _migrations WHERE name = '0164_garden_data'", []).unwrap();
-            // 0221 (App re-host, 0.46.4) is the newest: its record goes (its
+            // 0217 (box usage trends, 0.46.4) is the newest: its record goes
+            // (its table and index are IF NOT EXISTS).
+            conn.execute("DELETE FROM _migrations WHERE name = '0217_app_resource_samples'", []).unwrap();
+            // 0221 (App re-host, 0.46.4) came before it: its record goes (its
             // columns go with `apps` and `deployments`, dropped below and
             // made again by 0165, so it re-adds them).
             conn.execute("DELETE FROM _migrations WHERE name = '0221_app_rehost'", []).unwrap();

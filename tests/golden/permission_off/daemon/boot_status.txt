@@ -32,6 +32,7 @@ features:
   app-project-chat-v1
   app-mobile-access-v1
   app-wallet-v1
+  activity-live-busy
   thread-push-v1
   push-previews-v1
   push-e2e-v1
@@ -42,6 +43,7 @@ features:
   app-thread-parity-v1
   app-read-state-v1
   garden-person-rows-v1
+  agent-unread-tickets-v1
   thread-stream-v1
   thread-activity-ear-v1
   thread-context-v1

@@ -117,6 +117,8 @@ const OWNER_ONLY_KEYS: &[&str] = &[
     "appsProcessEngine",
     // The automatic App box prep through the root helper (0.46.3).
     "appsAutoPrepare",
+    // The App engine heal at boot through the root helper (0.46.4, R5).
+    "appsEngineHeal",
     // Clone permissions (prd-clone-carries-threads-and-vault-v1 CL22): the
     // master switch for cloning agents to people's personal computers.
     "allowClonePersonalComputers",
@@ -450,6 +452,7 @@ pub fn handle_settings_update(body: &[u8], actor: SettingsActor) -> CliResponse 
             k2_core::deploy::set_process_engine(merged.apps_process_engine);
             let auto_was = k2_core::deploy::auto_prepare_enabled();
             k2_core::deploy::set_auto_prepare(merged.apps_auto_prepare);
+            k2_core::deploy::set_engine_heal(merged.apps_engine_heal);
             // Turned on: the automatic box prep runs now, not tomorrow.
             if !auto_was && k2_core::deploy::auto_prepare_enabled() {
                 crate::apps::auto_prepare::wake();
@@ -509,6 +512,7 @@ pub fn handle_settings_reset(actor: SettingsActor) -> CliResponse {
             k2_core::deploy::set_enabled(defaults.apps);
             k2_core::deploy::set_process_engine(defaults.apps_process_engine);
             k2_core::deploy::set_auto_prepare(defaults.apps_auto_prepare);
+            k2_core::deploy::set_engine_heal(defaults.apps_engine_heal);
             crate::apps::supervisor::spawn_stop_unwalled_if_off("owner");
             // …and the /v1 API switch back to its default (OFF) too (1c).
             k2_core::app_settings::set_api_enabled(defaults.api_enabled);

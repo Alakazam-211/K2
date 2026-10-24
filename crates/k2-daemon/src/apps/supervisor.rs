@@ -15,8 +15,25 @@
 //! One background tick thread drives the watch, health and restarts. Every
 //! step writes `deployments` and the hash-chained `deploy_audit`. The
 //! leak-aware rollback (memory slope) joins in stage R (S18).
+//!
+//! Update continuity (prd-app-runtime-update-continuity-v1 S1, 0.46.4):
+//! - **Boot order (R40):** every App's front listener opens first; the
+//!   engine wait, adopt and restart scheduling then run on the
+//!   `apps-supervisor` thread when an engine is installed (boot and routes
+//!   never block on it).
+//! - **Adopt before any start (D12/A3/R33):** see `engine_gate`.
+//! - **K2's faults aren't crashes (A4/R6):** a restart that fails with a
+//!   K2-side code (`codes::is_k2_side`) never feeds the backoff or the
+//!   breaker; the App waits (`waiting_engine`), retried every 60 s and at
+//!   once on an engine change (R43).
+//! - **Desired state at boot (R35):** `running`, `restarting`,
+//!   `waiting_engine`, and `failed`/`crashlooping` whose every recent
+//!   failure was K2's (or came within 10 min before boot) start again.
+//! - **Loud (R44):** every failed attempt writes an ERROR line with its next
+//!   try; the owner hears once per failure run (`runtime_notes`).
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -30,6 +47,7 @@ use serde_json::json;
 
 use super::process_engine::ProcessEngine;
 use super::router;
+use super::runtime_notes::{self as notes, Attempt, Next};
 
 /// Health failures in a row that count as "unhealthy" (watch and after).
 const FAILS_TO_UNHEALTHY: u32 = 3;
@@ -41,6 +59,12 @@ const ADOPT_CHECK_SECS: u64 = 15;
 const WHY_DAEMON_RESTARTED: &str = "the K2 daemon restarted";
 const WHY_STALE_SINK: &str = "relaunch: its log pipe went with the old K2 daemon";
 const WHY_ADOPT_UNHEALTHY: &str = "relaunch: it didn't answer its health check after the K2 daemon restarted";
+/// A restart that waits on K2's App engine (A4): not a crash.
+const WHY_WAITING_ENGINE: &str = "waiting for K2's App engine";
+/// R43: the engine changed, so a pending restart runs now.
+const WHY_ENGINE_CHANGED: &str = "the App engine changed";
+/// R35: a failure this close before boot happened while the box went down.
+const SHUTDOWN_GRACE_SECS: i64 = 600;
 /// Deployments of an App kept for rollback targets and the sweep.
 pub const KEEP_DEPLOYMENTS: usize = 10;
 
@@ -88,6 +112,9 @@ struct AppRt {
     /// exists, cleared after `busy`): [`wait_done`] returns only once it
     /// is gone, so a caller's next verb never meets this one's lock.
     in_flight: Option<String>,
+    /// It waits for K2's App engine (`waiting_engine`, A4): the engine
+    /// watch polls `version` while any App does.
+    waiting_engine: bool,
 }
 
 fn state() -> &'static Mutex<HashMap<String, AppRt>> {
@@ -98,6 +125,50 @@ fn state() -> &'static Mutex<HashMap<String, AppRt>> {
 fn with_rt<R>(app_id: &str, f: impl FnOnce(&mut AppRt) -> R) -> R {
     let mut s = state().lock().unwrap_or_else(|e| e.into_inner());
     f(s.entry(app_id.to_string()).or_default())
+}
+
+/// Test-only: an App id may run on a test engine; the background tick and
+/// the process's own boot leave such Apps to the test that drives them.
+#[cfg(test)]
+pub(crate) mod test_hooks {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+
+    use k2_core::deploy::engine::RuntimeEngine;
+
+    fn engines() -> &'static Mutex<HashMap<String, &'static dyn RuntimeEngine>> {
+        static E: OnceLock<Mutex<HashMap<String, &'static dyn RuntimeEngine>>> = OnceLock::new();
+        E.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
+    pub fn install(app_id: &str, e: &'static dyn RuntimeEngine) {
+        engines().lock().unwrap_or_else(|e| e.into_inner()).insert(app_id.to_string(), e);
+    }
+
+    pub fn engine(app_id: &str) -> Option<&'static dyn RuntimeEngine> {
+        engines().lock().unwrap_or_else(|e| e.into_inner()).get(app_id).copied()
+    }
+}
+
+/// Is `app_id` this tick's (or boot's) business? `only` = a test driving
+/// its own Apps; `None` = the process's own loop (which, in test builds,
+/// leaves test-engine Apps alone).
+fn in_scope(app_id: &str, only: Option<&[String]>) -> bool {
+    match only {
+        Some(ids) => ids.iter().any(|i| i == app_id),
+        None => test_engine(app_id).is_none(),
+    }
+}
+
+/// The test engine an App runs on (test builds only).
+#[cfg(test)]
+fn test_engine(app_id: &str) -> Option<&'static dyn RuntimeEngine> {
+    test_hooks::engine(app_id)
+}
+
+#[cfg(not(test))]
+fn test_engine(_app_id: &str) -> Option<&'static dyn RuntimeEngine> {
+    None
 }
 
 /// The process engine (stage 1; the default isolation).
@@ -122,6 +193,9 @@ pub fn engine_for(iso: Isolation) -> Option<&'static dyn RuntimeEngine> {
 /// the open path's `process` exception (owner-approved, a sandboxed
 /// system unit as `k2appx`) is not stage 1's unwalled process engine.
 pub fn engine_for_app(app: &AppRow) -> Option<&'static dyn RuntimeEngine> {
+    if let Some(e) = test_engine(&app.app_id) {
+        return Some(e);
+    }
     if app.is_process_exception() {
         return cfg!(target_os = "linux").then(|| super::process_exception::engine() as &'static dyn RuntimeEngine);
     }
@@ -189,11 +263,14 @@ pub fn spawn_stop_unwalled_if_off(actor: &'static str) {
 }
 
 fn is_process_engine(h: &RunHandle) -> bool {
-    !super::open::owns(h) && !super::guarded::owns(h) && !super::process_exception::owns(h)
+    !super::open::owns(h) && !super::guarded::owns(h) && !super::process_exception::owns(h) && test_engine(&h.app_id).is_none()
 }
 
 /// The engine that runs an instance (by its handle).
 pub fn engine_of(h: &RunHandle) -> &'static dyn RuntimeEngine {
+    if let Some(e) = test_engine(&h.app_id) {
+        return e;
+    }
     if super::open::owns(h) {
         super::open::engine()
     } else if super::guarded::owns(h) {
@@ -257,70 +334,145 @@ fn audit(app_id: &str, event: &str, actor: &str, payload: serde_json::Value) {
 
 // ── start-up ─────────────────────────────────────────────────────────
 
-/// Start the supervisor once per process: re-adopt running instances,
-/// mark interrupted deploys stalled, open front listeners, start the tick.
-/// Called at daemon boot and lazily by the routes (a test daemon).
+/// Start the supervisor once per process: mark interrupted deploys
+/// stalled, open front listeners (R40: first, so the door exists), re-adopt
+/// running instances, schedule restarts, start the tick. Called at daemon
+/// boot and lazily by the routes (a test daemon).
+///
+/// With an App engine installed, the engine wait, adopt and restart
+/// scheduling run on the `apps-supervisor` thread (R40/A16): boot and the
+/// routes never block on an engine that doesn't answer (R33 waits as long
+/// as it takes). Without one nothing can be waited on: boot adopts in line,
+/// as before. The unwalled process engine's adopt is always in line (it is
+/// local and its children table must be filled before any route runs).
 pub fn ensure_started() {
     static STARTED: OnceLock<()> = OnceLock::new();
     if STARTED.set(()).is_err() {
         return;
     }
     deploy::seed::clean_tmp();
-    boot();
-    let _ = std::thread::Builder::new().name("apps-supervisor".into()).spawn(|| loop {
+    mark_interrupted();
+    open_fronts();
+    let unwalled_ok = deploy::process_engine_enabled();
+    let local = engine().adopt().unwrap_or_default();
+    let booted_at = now();
+    if !super::guarded::engine_installed() {
+        boot_with(&LiveBoot { start: Instant::now() }, unwalled_ok, local, booted_at, None);
+        let _ = std::thread::Builder::new().name("apps-supervisor".into()).spawn(tick_loop);
+        return;
+    }
+    let _ = std::thread::Builder::new().name("apps-supervisor".into()).spawn(move || {
+        boot_with(&LiveBoot { start: Instant::now() }, unwalled_ok, local, booted_at, None);
+        tick_loop();
+    });
+}
+
+fn tick_loop() {
+    loop {
         std::thread::sleep(Duration::from_millis(250));
         if deploy::enabled() {
             tick();
         }
-    });
+    }
 }
 
-/// Open (or re-open) an App's front listener and keep the DB in step.
-pub fn ensure_front(app: &AppRow) -> Result<u16, Fail> {
-    let h = runtime().ok_or_else(|| fail(codes::ENGINE_UNAVAILABLE, 503, "the App front runtime couldn't start"))?.handle();
-    let want = app.front_port.and_then(|p| u16::try_from(p).ok()).unwrap_or(0);
-    let port = router::ensure_front(h, &app.app_id, want).map_err(|e| fail(codes::ENGINE_UNAVAILABLE, 503, e))?;
-    if want != port {
-        db(|c| {
-            c.execute("UPDATE apps SET front_port = ?2 WHERE app_id = ?1", rusqlite::params![app.app_id, port as i64])?;
-            c.execute("UPDATE published_services SET port = ?2 WHERE id = ?1", rusqlite::params![app.service_id, port as i64])
-        })?;
-        if want != 0 {
-            k2_core::log_debug!("[apps] {}: front port {want} was taken; now {port} (repoint the URL)", app.app_id);
+/// R40: every App's front listener, before anything waits on the engine.
+/// (S3/R36 seam: after a hand-off this must keep each stored port and
+/// retry the bind while the predecessor drains, never fall back to a
+/// random one; `ensure_front` is where that rule goes.)
+fn open_fronts() {
+    for app in db(|c| store::list_apps(c, None)).unwrap_or_default() {
+        if in_scope(&app.app_id, None) {
+            let _ = ensure_front(&app);
         }
     }
-    Ok(port)
 }
 
-fn boot() {
-    let t = timings();
-    // Deploys a restart interrupted: stalled, and the agent hears (L3).
+/// Deploys a restart interrupted: stalled, and the agent hears (L3).
+fn mark_interrupted() {
     if let Ok(rows) = db(store::unfinished_deployments) {
-        for d in rows {
+        for d in rows.into_iter().filter(|d| in_scope(&d.app_id, None)) {
             let _ = db(|c| store::set_result(c, &d.id, store::RESULT_STALLED, Some("the K2 daemon restarted during this deploy")));
             stall_alert(&d, "the K2 daemon restarted during it");
         }
     }
-    let apps = db(|c| store::list_apps(c, None)).unwrap_or_default();
-    // Process-engine instances are adopted only while the owner has the
-    // unwalled engine on; otherwise they are orphans (stopped below) and
-    // their Apps are marked stopped, never restarted unwalled.
-    let unwalled_ok = deploy::process_engine_enabled();
-    let mut adopted = if unwalled_ok { engine().adopt().unwrap_or_default() } else { Vec::new() };
-    let unwalled_orphans = if unwalled_ok { Vec::new() } else { engine().adopt().unwrap_or_default() };
-    if let Some(g) = engine_for(Isolation::Container) {
-        match g.adopt() {
-            Ok(mut v) => adopted.append(&mut v),
-            Err(e) => k2_core::log_debug!("[apps] guarded engine adopt: {}", e.message),
-        }
+}
+
+/// What boot needs beyond the DB: the engine adopt wait (`WaitOps`) and
+/// the protocol check after it answered (R34). Tests pass a fake.
+pub(crate) trait BootEnv: super::engine_gate::WaitOps {
+    fn check_protocol(&self);
+}
+
+/// The live engines.
+struct LiveBoot {
+    start: Instant,
+}
+
+impl super::engine_gate::WaitOps for LiveBoot {
+    fn adopt(&self) -> Result<Vec<RunHandle>, String> {
+        let Some(g) = engine_for(Isolation::Container) else { return Ok(Vec::new()) };
+        // The guarded engine lists every container: any error is retried
+        // (no answer = no start, A3).
+        let mut v = g.adopt().map_err(|e| format!("{}: {}", e.code, e.message))?;
+        // The process exception reads its units one by one: only K2's own
+        // engine faults are retried; an App-specific answer is logged and
+        // the rest adopts.
         match super::process_exception::engine().adopt() {
-            Ok(mut v) => adopted.append(&mut v),
+            Ok(mut p) => v.append(&mut p),
+            Err(e) if codes::is_k2_side(e.code) => return Err(format!("{}: {}", e.code, e.message)),
             Err(e) => k2_core::log_debug!("[apps] process exception adopt: {}", e.message),
         }
+        Ok(v)
     }
-    let mut claimed = std::collections::BTreeSet::new();
+    fn elapsed(&self) -> Duration {
+        self.start.elapsed()
+    }
+    fn sleep(&self, d: Duration) {
+        std::thread::sleep(d);
+    }
+    fn not_answering(&self, waited: Duration, last_error: &str) {
+        super::engine_gate::report_not_answering(waited, last_error);
+    }
+}
+
+impl BootEnv for LiveBoot {
+    fn check_protocol(&self) {
+        if super::guarded::engine_installed() {
+            super::engine_gate::observe(&super::guarded::engine_version());
+        }
+    }
+}
+
+/// Boot after the fronts: wait for the engine to answer adopt (R33), check
+/// its protocol (R34), then claim survivors and schedule restarts (R35).
+/// `local` = the unwalled process engine's own adopt. `only`: a test's Apps.
+fn boot_with<E: BootEnv>(env: &E, unwalled_ok: bool, local: Vec<RunHandle>, booted_at: i64, only: Option<&[String]>) {
+    let (mut adopted, unwalled_orphans) = if unwalled_ok { (local, Vec::new()) } else { (Vec::new(), local) };
+    adopted.extend(super::engine_gate::wait_adopt(env));
+    env.check_protocol();
+    plan_boot(adopted, unwalled_orphans, unwalled_ok, booted_at, only);
+}
+
+fn plan_boot(adopted: Vec<RunHandle>, unwalled_orphans: Vec<RunHandle>, unwalled_ok: bool, booted_at: i64, only: Option<&[String]>) {
+    let t = timings();
+    let apps: Vec<AppRow> = db(|c| store::list_apps(c, None)).unwrap_or_default().into_iter().filter(|a| in_scope(&a.app_id, only)).collect();
+    // Instances this process already runs (a deploy that went live while
+    // the engine wait ran) are never orphans and never restarted again.
+    let mut claimed: std::collections::BTreeSet<String> = state()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .values()
+        .flat_map(|rt| {
+            [rt.live.as_ref().map(|i| i.handle.deployment_id.clone()), rt.warm.as_ref().map(|i| i.handle.deployment_id.clone()), rt.in_flight.clone()]
+        })
+        .flatten()
+        .collect();
     for app in &apps {
         let _ = ensure_front(app);
+        if with_rt(&app.app_id, |rt| rt.live.is_some() || rt.busy) {
+            continue;
+        }
         let live = app
             .live_deployment
             .as_deref()
@@ -343,24 +495,31 @@ fn boot() {
                     rt.adopt_check = Some(Instant::now() + Duration::from_secs(ADOPT_CHECK_SECS));
                 }
             });
+            // An adopted survivor is running whatever the row said.
+            if app.state != store::STATE_RUNNING {
+                let _ = db(|c| store::set_state(c, &app.app_id, store::STATE_RUNNING, None));
+            }
             audit(&app.app_id, "adopted", "system", json!({ "deployment": h.deployment_id, "port": h.port, "relaunch": stale }));
         } else if !unwalled_ok && runs_unwalled(app) && app.state != store::STATE_STOPPED {
             let _ = db(|c| store::set_state(c, &app.app_id, store::STATE_STOPPED, Some(UNWALLED_STOPPED)));
             audit(&app.app_id, "process_engine_off", "system", json!({ "stopped": true }));
-        } else if boot_restarts(&app.state) && app.live_seed.is_some() {
-            // Running (or waiting on a crash restart the old daemon had
-            // scheduled when it went down: smoke r6 sat at `restarting` for
-            // minutes) with no instance left: start it now, as the daemon's
-            // restart, not a crash.
+        } else if app.live_seed.is_some() && wants_running(app, booted_at) {
+            // The owner wants it running (R35) and no instance survived:
+            // start it now, as the daemon's restart, not a crash.
             with_rt(&app.app_id, |rt| {
                 rt.next_restart_at = Some(now());
                 rt.restart_why = Some(WHY_DAEMON_RESTARTED);
             });
+            audit(&app.app_id, "boot_restart", "system", json!({ "state": app.state }));
         }
     }
     // Orphans (warm instances from before the restart, uninstalled Apps,
     // and everything on the process engine while it is off).
-    let orphans: Vec<RunHandle> = adopted.into_iter().filter(|h| !claimed.contains(&h.deployment_id)).chain(unwalled_orphans).collect();
+    let orphans: Vec<RunHandle> = adopted
+        .into_iter()
+        .filter(|h| !claimed.contains(&h.deployment_id) && in_scope(&h.app_id, only))
+        .chain(unwalled_orphans)
+        .collect();
     for h in orphans {
         let grace = Duration::from_secs(t.stop_grace_secs);
         let _ = std::thread::Builder::new().name("app-orphan-stop".into()).spawn(move || {
@@ -369,9 +528,57 @@ fn boot() {
     }
 }
 
+/// R35: does the owner want this App running after a boot? `running`,
+/// `restarting` and `waiting_engine` do. `failed` and `crashlooping` do
+/// when every failure in the breaker window was K2's own, or came while the
+/// box went down (within 10 min before boot). Stopped, suspended, parked
+/// and App-caused crash loops stay down.
+pub(crate) fn wants_running(app: &AppRow, booted_at: i64) -> bool {
+    if boot_restarts(&app.state) {
+        return true;
+    }
+    if app.state != store::STATE_FAILED && app.state != store::STATE_CRASHLOOPING {
+        return false;
+    }
+    let since = booted_at - k2_core::deploy::backoff::BREAKER_WINDOW_SECS;
+    let rows = db(|c| store::bad_endings_since(c, &app.app_id, since)).unwrap_or_default();
+    !rows.is_empty() && rows.iter().all(|d| k2_side_row(d) || d.finished_at.unwrap_or(d.started_at) >= booted_at - SHUTDOWN_GRACE_SECS)
+}
+
+/// A deployment that failed for K2's own reason: its stored code (0221),
+/// or for rows from before 0221 the engine refusal texts K2 wrote then.
+fn k2_side_row(d: &DeploymentRow) -> bool {
+    if let Some(c) = d.error_code.as_deref() {
+        return codes::is_k2_side(c);
+    }
+    let e = d.error.as_deref().unwrap_or("");
+    e.contains("the App engine isn't answering at")
+        || e.contains("the App engine speaks protocol")
+        || e.contains("the App engine is another version")
+        || e.starts_with("engine_caller_refused:")
+        || e.starts_with("helper_needed:")
+}
+
+/// Open (or re-open) an App's front listener and keep the DB in step.
+pub fn ensure_front(app: &AppRow) -> Result<u16, Fail> {
+    let h = runtime().ok_or_else(|| fail(codes::ENGINE_UNAVAILABLE, 503, "the App front runtime couldn't start"))?.handle();
+    let want = app.front_port.and_then(|p| u16::try_from(p).ok()).unwrap_or(0);
+    let port = router::ensure_front(h, &app.app_id, want).map_err(|e| fail(codes::ENGINE_UNAVAILABLE, 503, e))?;
+    if want != port {
+        db(|c| {
+            c.execute("UPDATE apps SET front_port = ?2 WHERE app_id = ?1", rusqlite::params![app.app_id, port as i64])?;
+            c.execute("UPDATE published_services SET port = ?2 WHERE id = ?1", rusqlite::params![app.service_id, port as i64])
+        })?;
+        if want != 0 {
+            k2_core::log_debug!("[apps] {}: front port {want} was taken; now {port} (repoint the URL)", app.app_id);
+        }
+    }
+    Ok(port)
+}
+
 /// The App states a daemon boot restarts when no instance survived.
 pub(crate) fn boot_restarts(state: &str) -> bool {
-    state == store::STATE_RUNNING || state == STATE_RESTARTING
+    state == store::STATE_RUNNING || state == STATE_RESTARTING || state == store::STATE_WAITING_ENGINE
 }
 
 /// `crashed` waits on a restart in this state.
@@ -430,7 +637,7 @@ pub fn service_status(service_id: &str) -> Option<&'static str> {
     Some(match app.state.as_str() {
         store::STATE_CRASHLOOPING => "crashlooping",
         store::STATE_FAILED => "exited",
-        "restarting" => "starting",
+        "restarting" | store::STATE_WAITING_ENGINE => "starting",
         _ => "stopped",
     })
 }
@@ -549,7 +756,8 @@ fn pipeline_fail(app_id: &str, dep: &str, code: &str, msg: &str) {
 }
 
 fn pipeline_fail_exit(app_id: &str, dep: &str, code: &str, msg: &str, exit: Exit) {
-    let _ = db(|c| store::set_result(c, dep, store::RESULT_FAILED, Some(&format!("{code}: {msg}"))));
+    // A4: the code is stored structurally (`error` keeps `<code>: <msg>`).
+    let _ = db(|c| store::set_failed(c, dep, code, msg));
     audit(app_id, "failed", "system", json!({ "deployment": dep, "code": code, "error": msg }));
     let no_live = with_rt(app_id, |rt| rt.live.is_none());
     if no_live {
@@ -561,9 +769,21 @@ fn pipeline_fail_exit(app_id: &str, dep: &str, code: &str, msg: &str, exit: Exit
         return;
     }
     if let Ok(Some(d)) = db(|c| store::get_deployment(c, dep)) {
+        // A system restart's line, next try and notice are
+        // `restart_outcome`'s (it decides the next try).
         if d.kind == store::KIND_RESTART && d.actor == "system" {
             return;
         }
+        // R44: every failed attempt writes a line.
+        notes::failed_attempt(&Attempt {
+            app_id,
+            kind: &d.kind,
+            deployment: dep,
+            code,
+            message: msg,
+            system_restart: false,
+            next: Next::NotScheduled,
+        });
         super::failures::deploy_failed(&super::failures::DeployFail {
             app_id,
             deployment: dep,
@@ -673,7 +893,9 @@ fn pipeline(app_id: &str, dep: &str, seed: &str, kind: &str) {
     }
     // K-M3: the App's seal key exists and is granted before the engine
     // reads the vault grants (every start: deploy, restart, rollback).
-    super::seal::ensure_for_start(&app.app_id, &app.service_id);
+    if test_engine(&app.app_id).is_none() {
+        super::seal::ensure_for_start(&app.app_id, &app.service_id);
+    }
     let spec = spec_for(&app, &m, dep);
     let seed_ref = SeedRef { hash: seed.to_string(), path: deploy::seed::seed_path(seed) };
     let prepared = match eng.prepare(&seed_ref, &spec) {
@@ -753,8 +975,11 @@ fn go_live(app: &AppRow, dep: &str, inst: Instance, kind: &str, t: &Timings) {
         rt.adopt_check = None;
         rt.live_fails = 0;
         rt.last_probe = None;
+        rt.waiting_engine = false;
         (older, prev, replace)
     });
+    // R44: the failure run (if any) is over.
+    notes::went_live(&app.app_id);
     let _ = db(|c| {
         store::set_went_live(c, dep, now() + watch_secs as i64)?;
         store::set_live(c, &app.app_id, Some(&inst.seed), Some(dep))?;
@@ -813,13 +1038,98 @@ fn probe(inst: &Instance, t: &Timings) -> bool {
     health::probe_as(inst.probe_tcp, inst.handle.port, &inst.health_path, &headers, Duration::from_millis(t.probe_timeout_ms)).healthy()
 }
 
+/// The engine-change generation the process's own tick has acted on.
+static TICK_SEEN: AtomicU64 = AtomicU64::new(0);
+
 fn tick() {
+    tick_with(&TICK_SEEN, None);
+}
+
+/// One tick over the Apps in scope. `seen`: the last engine-change
+/// generation acted on (R43); `only`: a test's Apps.
+fn tick_with(seen: &AtomicU64, only: Option<&[String]>) {
     let t = timings();
-    let apps: Vec<String> = state().lock().unwrap_or_else(|e| e.into_inner()).keys().cloned().collect();
+    if only.is_none() {
+        engine_watch();
+    }
+    let gen = super::engine_gate::generation();
+    if seen.swap(gen, Ordering::SeqCst) != gen {
+        let why = super::engine_gate::snapshot().last_change.unwrap_or_else(|| "the App engine changed".into());
+        kick_pending(&why, only);
+    }
+    let apps: Vec<String> =
+        state().lock().unwrap_or_else(|e| e.into_inner()).keys().filter(|a| in_scope(a, only)).cloned().collect();
     for app_id in apps {
         tick_app(&app_id, &t);
     }
-    stall_check(&t);
+    if only.is_none() {
+        stall_check(&t);
+    }
+}
+
+/// While an App waits on the engine (or the engine was last seen
+/// mismatched or silent), poll its `version` every [`WATCH_EVERY`]: a
+/// protocol that starts matching kicks every pending restart (R43), a new
+/// mismatch is reported (R34). Quiet otherwise (each request is an engine
+/// journal line).
+///
+/// [`WATCH_EVERY`]: super::engine_gate::WATCH_EVERY
+fn engine_watch() {
+    static LAST: Mutex<Option<Instant>> = Mutex::new(None);
+    if !super::guarded::engine_installed() {
+        return;
+    }
+    let g = super::engine_gate::snapshot();
+    let waiting = state().lock().unwrap_or_else(|e| e.into_inner()).values().any(|rt| rt.waiting_engine);
+    if !(waiting || g.matching == Some(false) || g.not_answering) {
+        return;
+    }
+    // Fast while an App waits on it; once a minute while only the engine
+    // itself is off (each request is an engine journal line).
+    let every = if waiting { super::engine_gate::WATCH_EVERY } else { Duration::from_secs(60) };
+    {
+        let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+        if last.is_some_and(|l| l.elapsed() < every) {
+            return;
+        }
+        *last = Some(Instant::now());
+    }
+    super::engine_gate::observe(&super::guarded::engine_version());
+}
+
+/// R43: the engine changed. Every App with a pending K2-side restart
+/// (`waiting_engine`, `restarting`, or `failed` whose last attempt failed
+/// K2-side) restarts now with its backoff reset. Owner-stopped, suspended,
+/// parked and live Apps are untouched.
+fn kick_pending(why: &str, only: Option<&[String]>) {
+    let apps = db(|c| store::list_apps(c, None)).unwrap_or_default();
+    let mut kicked = Vec::new();
+    for app in apps.iter().filter(|a| in_scope(&a.app_id, only) && a.live_seed.is_some()) {
+        let eligible = match app.state.as_str() {
+            store::STATE_WAITING_ENGINE | STATE_RESTARTING => true,
+            store::STATE_FAILED => db(|c| store::last_deployment(c, &app.app_id)).ok().flatten().is_some_and(|d| k2_side_row(&d)),
+            _ => false,
+        };
+        if !eligible {
+            continue;
+        }
+        let did = with_rt(&app.app_id, |rt| {
+            if rt.live.is_some() || rt.busy {
+                return false;
+            }
+            rt.backoff.reset();
+            rt.next_restart_at = Some(now());
+            rt.restart_why = Some(WHY_ENGINE_CHANGED);
+            true
+        });
+        if did {
+            audit(&app.app_id, "engine_kick", "system", json!({ "why": why, "state": app.state }));
+            kicked.push(app.app_id.clone());
+        }
+    }
+    if !kicked.is_empty() {
+        k2_core::log_debug!("[apps] {why}: restarting now: {}", kicked.join(", "));
+    }
 }
 
 fn tick_app(app_id: &str, t: &Timings) {
@@ -1022,6 +1332,15 @@ fn crashed(app_id: &str, inst: Instance, why: &str, exit: Exit, t: &Timings) {
         let _ = engine_of(&h).stop(&h, grace);
     });
     let _ = db(|c| store::set_result(c, &inst.handle.deployment_id, store::RESULT_EXITED, Some(why)));
+    // R44: each backoff step writes the delay it chose.
+    notes::error(&format!(
+        "{app_id} {} {why}; {}",
+        inst.handle.deployment_id,
+        match decision {
+            Decision::Restart { after_secs } => Next::In(after_secs).words(),
+            Decision::Breaker => "crash-looping: next try not scheduled".into(),
+        }
+    ));
     match decision {
         Decision::Restart { after_secs } => {
             let _ = db(|c| store::set_state(c, app_id, STATE_RESTARTING, Some(why)));
@@ -1032,12 +1351,42 @@ fn crashed(app_id: &str, inst: Instance, why: &str, exit: Exit, t: &Timings) {
 }
 
 /// A crash restart that failed its gate counts as another crash (backoff
-/// and the breaker apply), so a broken Seed can't restart forever.
+/// and the breaker apply), so a broken Seed can't restart forever. A
+/// restart that failed for K2's own reason (A4: the engine isn't answering,
+/// speaks another protocol, refuses the caller; the helper is missing) is
+/// never a crash: the App waits for the engine (`waiting_engine`), retried
+/// every minute and at once when the engine changes (R43). Every failed
+/// attempt writes its line (R44).
 fn restart_outcome(app_id: &str, dep: &str) {
-    let failed = db(|c| store::get_deployment(c, dep)).ok().flatten().is_some_and(|d| d.result == store::RESULT_FAILED);
-    if !failed || with_rt(app_id, |rt| rt.live.is_some()) {
+    let Some(d) = db(|c| store::get_deployment(c, dep)).ok().flatten() else { return };
+    if d.result != store::RESULT_FAILED {
         return;
     }
+    let code = d.error_code.clone().unwrap_or_else(|| codes::ENGINE_UNAVAILABLE.to_string());
+    let error = d.error.clone().unwrap_or_default();
+    let msg = error.strip_prefix(&format!("{code}: ")).unwrap_or(&error).to_string();
+    let attempt = |system_restart: bool, next: Next| {
+        notes::failed_attempt(&Attempt { app_id, kind: &d.kind, deployment: dep, code: &code, message: &msg, system_restart, next });
+    };
+    if with_rt(app_id, |rt| rt.live.is_some()) {
+        // A relaunch beside a live instance: the live one keeps serving.
+        attempt(false, Next::NotScheduled);
+        return;
+    }
+    if k2_side_row(&d) {
+        let retry = super::engine_gate::WAITING_RETRY_SECS;
+        with_rt(app_id, |rt| {
+            rt.next_restart_at = Some(now() + retry);
+            rt.restart_why = Some(WHY_WAITING_ENGINE);
+            rt.waiting_engine = true;
+        });
+        let why = format!("waiting for K2's App engine ({code}); it starts when the engine answers");
+        let _ = db(|c| store::set_state(c, app_id, store::STATE_WAITING_ENGINE, Some(&why)));
+        audit(app_id, "waiting_engine", "system", json!({ "deployment": dep, "code": code, "retryInSecs": retry }));
+        attempt(true, Next::OnEngineChange { retry_secs: retry });
+        return;
+    }
+    with_rt(app_id, |rt| rt.waiting_engine = false);
     let (decision, restarts) = with_rt(app_id, |rt| {
         let d = rt.backoff.on_crash(now());
         if let Decision::Restart { after_secs } = d {
@@ -1056,6 +1405,13 @@ fn restart_outcome(app_id: &str, dep: &str) {
         what: Some("failed the health gate when K2 restarted it"),
         ..Default::default()
     });
+    attempt(
+        true,
+        match decision {
+            Decision::Restart { after_secs } => Next::In(after_secs),
+            Decision::Breaker => Next::NotScheduled,
+        },
+    );
     match decision {
         Decision::Restart { .. } => {
             let _ = db(|c| store::set_state(c, app_id, "restarting", Some("the restart failed its health gate")));
@@ -1218,6 +1574,7 @@ pub fn stop_app(app: &AppRow, actor: &str) -> Result<(), Fail> {
         }
         rt.watch = None;
         rt.next_restart_at = None;
+        rt.waiting_engine = false;
         Ok((rt.live.take(), rt.warm.take()))
     })?;
     if let Some(be) = router::clear(&app.app_id) {
@@ -1271,3 +1628,9 @@ pub fn wait_done(id: &str, secs: u64) -> Option<DeploymentRow> {
 pub fn live_port(app_id: &str) -> Option<u16> {
     router::live(app_id).map(|b| b.port)
 }
+
+/// prd-app-runtime-update-continuity-v1 S1: boot, adopt, K2-side failures,
+/// the engine-change kick and the loud failure lines (T25, T27, T31, T35, T36).
+#[cfg(test)]
+#[path = "supervisor_tests.rs"]
+mod tests;

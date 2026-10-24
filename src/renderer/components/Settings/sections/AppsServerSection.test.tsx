@@ -37,7 +37,7 @@ vi.mock('@/components/Presence/PresenceKickButton', () => ({ fetchViewerRole: vi
 import * as presence from '@/components/Presence/PresenceKickButton'
 import { useSettingsStore, appsSwitchFrom } from '@/stores/settings'
 import { AppsServerSection, APPS_SERVER_MANIFEST } from './AppsServerSection'
-import { changeLines, needsPodmanInstall, parseAutoPrepare, parseDoctor, parseDryRun, parseUnprepResult } from './apps-server-api'
+import { appEngineLine, changeLines, needsPodmanInstall, parseAppEngine, parseAutoPrepare, parseDoctor, parseDryRun, parseUnprepResult } from './apps-server-api'
 
 const role = vi.mocked(presence.fetchViewerRole)
 
@@ -262,6 +262,41 @@ describe('Install App engine', () => {
     const notice = await screen.findByTestId('apps-server-notice')
     expect(notice.textContent).toMatch(/0\.46\.3 is installed and answering/)
     expect(postsTo('app/engine/install')).toEqual([{}])
+  })
+})
+
+describe('the App engine vs this K2 (0.46.4, update continuity R9)', () => {
+  const engine = (state: string, over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    state,
+    want: { version: '0.46.4', protocol: 3 },
+    installed: { version: '0.46.4', protocol: 3 },
+    running: { version: '0.46.0', protocol: 2 },
+    linger: true,
+    apps: { onOldEngine: null, rehostPending: null, waitingEngine: 1 },
+    ...over,
+  })
+
+  it('a mismatch says which engine runs, how many Apps wait, and the fix is the Install button', async () => {
+    gets({ 'app/box': () => doctor({ appEngine: engine('mismatch') }) })
+    render(<AppsServerSection />)
+    const line = await screen.findByTestId('apps-engine-status')
+    expect(line.textContent).toBe(
+      'The App engine doesn’t match this K2: installed 0.46.4 (protocol 3), running 0.46.0 (protocol 2), this K2 0.46.4 (protocol 3). K2 updates it by itself; Install App engine does it now. 1 App(s) wait for it.'.replace('’', "'"),
+    )
+    expect(screen.getByTestId('apps-engine-install')).toBeTruthy()
+  })
+
+  it('all well (or an older daemon) shows no line', async () => {
+    gets({ 'app/box': () => doctor({ appEngine: engine('ok', { running: { version: '0.46.4', protocol: 3 } }) }) })
+    render(<AppsServerSection />)
+    await screen.findByTestId('apps-engine-install')
+    expect(screen.queryByTestId('apps-engine-status')).toBeNull()
+    expect(parseDoctor(doctor()).appEngine).toBeNull()
+  })
+
+  it('linger off and not answering say so', () => {
+    expect(appEngineLine(parseAppEngine(engine('needs_owner', { linger: false })))).toMatch(/Linger is off for the k2app user/)
+    expect(appEngineLine(parseAppEngine(engine('not_answering')))).toMatch(/isn't answering\. No App starts until it does/)
   })
 })
 

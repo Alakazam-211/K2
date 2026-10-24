@@ -7937,6 +7937,9 @@ The box (Linux):
                                        guarded engine, signed with the root-helper
                                        key) for this daemon's version; --from a
                                        folder holding the release asset + .sig.
+  k2 app engine status [--json]        The App engine: installed vs running vs
+                                       this K2, linger, the boot heal, Apps
+                                       waiting for the engine (read-only).
 
 Exit codes: 0 live/ok, 1 a failed check or health gate, 2 usage or still
 pending (loop on k2 app deployment), 3 infra or permission (JSON with a code).
@@ -8047,8 +8050,44 @@ e = v.get("engine", {})
 print("k2-app-engine %s installed and answering (protocol %s, runtime %s, %s)" % (e.get("version"), e.get("protocol"), e.get("runtime"), e.get("podman")))'
             fi
             ;;
+        status)
+            shift
+            local json_out=0
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --json) json_out=1; shift ;;
+                    -h|--help) _app_rt_usage; return 0 ;;
+                    *) echo "Unknown argument: $1" >&2; exit 2 ;;
+                esac
+            done
+            local raw
+            raw="$(_compute_send GET /cli/app/engine/status "")"
+            _compute_split "$raw"
+            [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+            if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; else
+                printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+def b(x):
+    return "v%s protocol %s" % (x.get("version"), x.get("protocol")) if x else "-"
+if v.get("state") == "absent":
+    print("App engine: not installed on this box")
+    sys.exit(0)
+print("App engine: %s" % v.get("state"))
+print("  this K2:   %s" % b(v.get("want")))
+print("  installed: %s" % b(v.get("installed")))
+print("  running:   %s" % b(v.get("running")))
+print("  linger:    %s" % ("on" if v.get("linger") else "OFF (Apps stop at the next k2app logout)"))
+h = v.get("heal") or {}
+if h:
+    print("  heal:      %s%s" % (h.get("state"), (": " + h["why"]) if h.get("why") else ""))
+w = (v.get("apps") or {}).get("waitingEngine") or 0
+if w:
+    print("  waiting:   %d App(s) wait for the engine" % w)'
+            fi
+            ;;
         -h|--help|"") _app_rt_usage ;;
-        *) echo "usage: k2 app engine install [--from DIR] [--json]" >&2; exit 2 ;;
+        *) echo "usage: k2 app engine install [--from DIR] [--json] | k2 app engine status [--json]" >&2; exit 2 ;;
     esac
 }
 

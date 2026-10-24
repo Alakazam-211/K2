@@ -49,6 +49,7 @@ pub const ROUTES: &[&str] = &[
     "/cli/app/deploy",
     "/cli/app/deployment",
     "/cli/app/engine/install",
+    "/cli/app/engine/status",
     "/cli/app/errors",
     "/cli/app/exception",
     "/cli/app/exec",
@@ -398,6 +399,9 @@ pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String
         "/cli/app/box/auto-prepare/retry" => json_body(body).and_then(|_| super::auto_prepare::retry_route(&who)),
         // The guarded engine (S11): the owner installs or updates it.
         "/cli/app/engine/install" => json_body(body).and_then(|v| super::engine_install::install_route(&who, &v)),
+        // 0.46.4 (update continuity R9): installed vs running vs this K2,
+        // linger, the heal; read-only.
+        "/cli/app/engine/status" => super::engine_heal::status_route(),
         "/cli/app/build" => build(&who, body),
         // 0.46.3: an agent moves its own --cmd service in: its data, then
         // its public label (legacy.rs, data_put.rs, labels.rs).

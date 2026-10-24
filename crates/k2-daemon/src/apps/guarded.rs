@@ -113,9 +113,11 @@ fn code_of(engine_code: Option<&str>) -> &'static str {
 #[cfg(unix)]
 pub fn call_at(socket: &Path, req: &Request, body: Option<(&mut dyn Read, u64)>, timeout: Duration) -> Result<Value> {
     use std::os::unix::net::UnixStream;
+    // A4: no socket / nothing listening is K2's fault, coded so the
+    // supervisor never counts it as the App's crash.
     let mut c = UnixStream::connect(socket).map_err(|e| {
         eng_err(
-            codes::ENGINE_UNAVAILABLE,
+            codes::ENGINE_NOT_ANSWERING,
             format!(
                 "the App engine isn't answering at {} ({e}); install it as the owner: k2 app engine install",
                 socket.display()
@@ -139,7 +141,7 @@ pub fn call_at(socket: &Path, req: &Request, body: Option<(&mut dyn Read, u64)>,
         .take(4 * wire::MAX_OUTPUT as u64)
         .read_line(&mut ans)
         .map_err(|e| eng_err(codes::ENGINE_UNAVAILABLE, format!("engine answer: {e}")))?;
-    let a: Answer = serde_json::from_str(ans.trim()).map_err(|_| eng_err(codes::ENGINE_UNAVAILABLE, "the App engine gave no answer"))?;
+    let a: Answer = serde_json::from_str(ans.trim()).map_err(|_| eng_err(codes::ENGINE_NOT_ANSWERING, "the App engine gave no answer"))?;
     if a.ok {
         Ok(a.data)
     } else {
@@ -161,7 +163,31 @@ pub fn call(req: &Request, body: Option<(&mut dyn Read, u64)>, timeout: Duration
 
 /// The engine's `version` answer (None when it isn't there).
 pub fn engine_version() -> std::result::Result<Value, String> {
-    call(&Request::Version, None, Duration::from_secs(10)).map_err(|e| e.message)
+    engine_version_e().map_err(|e| e.message)
+}
+
+/// [`engine_version`] with its code (A4: `engine_not_answering`,
+/// `engine_caller_refused`, …).
+pub fn engine_version_e() -> Result<Value> {
+    call(&Request::Version, None, Duration::from_secs(10))
+}
+
+/// A4/R34: the engine's `version` answer must carry this daemon's protocol;
+/// another one is `engine_protocol_mismatch` (K2's fault, not the App's).
+pub fn require_protocol() -> Result<Value> {
+    let v = engine_version_e()?;
+    if v["protocol"].as_u64() != Some(wire::ENGINE_PROTOCOL as u64) {
+        return Err(eng_err(
+            codes::ENGINE_PROTOCOL_MISMATCH,
+            format!("the App engine speaks protocol {} and this daemon {}: k2 app engine install", v["protocol"], wire::ENGINE_PROTOCOL),
+        ));
+    }
+    Ok(v)
+}
+
+/// Is `k2-app-engine` installed on this box (the root helper's file)?
+pub fn engine_installed() -> bool {
+    cfg!(target_os = "linux") && Path::new(k2_root_proto::apps::ENGINE_PATH).exists()
 }
 
 // ── env and secrets ──────────────────────────────────────────────────
@@ -624,13 +650,7 @@ impl GuardedEngine {
     /// image and the Seed on the engine, the App's slot and gateway port.
     pub(crate) fn prepare_with(&self, seed: &SeedRef, spec: &AppSpec, wall: Wall) -> Result<Prepared> {
         let app = app_id(&spec.app_id)?;
-        let v = engine_version().map_err(|e| eng_err(codes::ENGINE_UNAVAILABLE, e))?;
-        if v["protocol"].as_u64() != Some(wire::ENGINE_PROTOCOL as u64) {
-            return Err(eng_err(
-                codes::ENGINE_UNAVAILABLE,
-                format!("the App engine speaks protocol {} and this daemon {}: k2 app engine install", v["protocol"], wire::ENGINE_PROTOCOL),
-            ));
-        }
+        require_protocol()?;
         let image = match wall {
             Wall::Guarded => ensure_image()?,
             Wall::Relaxed => ensure_full_image()?,
@@ -879,8 +899,17 @@ impl RuntimeEngine for GuardedEngine {
     }
 
     fn adopt(&self) -> Result<Vec<RunHandle>> {
-        if !cfg!(target_os = "linux") || !Path::new(wire::SOCKET).exists() {
+        if !cfg!(target_os = "linux") {
             return Ok(Vec::new());
+        }
+        // G15/A3: no socket is "nothing running" only when no engine is
+        // installed; with one installed it is "not answering yet" and boot
+        // waits instead of starting a second instance beside a survivor.
+        if !Path::new(wire::SOCKET).exists() {
+            if !engine_installed() {
+                return Ok(Vec::new());
+            }
+            return Err(eng_err(codes::ENGINE_NOT_ANSWERING, format!("the App engine's socket {} isn't there yet", wire::SOCKET)));
         }
         let v = call(&Request::Adopt, None, Duration::from_secs(120))?;
         let mut out = Vec::new();
@@ -1195,7 +1224,7 @@ mod tests {
         assert!(e.message.contains("nope"));
         assert_eq!(t.join().unwrap(), vec![body.to_vec()]);
         let gone = call_at(&d.join("none.sock"), &Request::Version, None, Duration::from_secs(1)).unwrap_err();
-        assert_eq!(gone.code, codes::ENGINE_UNAVAILABLE);
+        assert_eq!(gone.code, codes::ENGINE_NOT_ANSWERING, "A4: no socket is K2's fault, coded so");
         assert!(gone.message.contains("k2 app engine install"));
         std::fs::remove_dir_all(&d).unwrap();
     }

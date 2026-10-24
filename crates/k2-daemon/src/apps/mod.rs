@@ -39,6 +39,15 @@ pub mod coordination;
 /// Pre-approved App cores, the Use layer (slice B, §3).
 pub mod cores;
 pub mod engine_install;
+/// The App engine as the supervisor sees it: adopt before any start, the
+/// protocol check, the engine-change kick (0.46.4, update continuity S1).
+pub mod engine_gate;
+/// The boot heal: the engine that matches this K2, through the helper (R4).
+pub mod engine_heal;
+/// The matching engine staged by the updater and the installer (R1, R3).
+pub mod engine_stage;
+/// Loud failures: ERROR lines and owner notices (R34, R44).
+pub mod runtime_notes;
 pub mod exception;
 pub mod exec;
 pub mod failures;

@@ -127,10 +127,8 @@ impl RuntimeEngine for ProcessException {
             return Err(err(codes::ENGINE_UNAVAILABLE, "the process exception runs on Linux boxes only"));
         }
         app_id(&spec.app_id)?;
-        let v = guarded::engine_version().map_err(|e| err(codes::ENGINE_UNAVAILABLE, e))?;
-        if v["protocol"].as_u64() != Some(wire::ENGINE_PROTOCOL as u64) {
-            return Err(err(codes::ENGINE_UNAVAILABLE, "the App engine is another version: k2 app engine install"));
-        }
+        // A4: K2's own engine faults carry their own codes (never a crash).
+        guarded::require_protocol()?;
         guarded::ensure_seed(seed)?;
         self.prepared.lock().unwrap_or_else(|e| e.into_inner()).insert(spec.deployment_id.clone(), seed.hash.clone());
         Ok(Prepared { workdir: seed.path.clone() })
@@ -280,8 +278,16 @@ impl RuntimeEngine for ProcessException {
     }
 
     fn adopt(&self) -> Result<Vec<RunHandle>> {
-        if !cfg!(target_os = "linux") || !Path::new(wire::SOCKET).exists() {
+        if !cfg!(target_os = "linux") {
             return Ok(Vec::new());
+        }
+        // A3: with an engine installed, a missing socket is "not answering
+        // yet" (boot waits), never "nothing running".
+        if !Path::new(wire::SOCKET).exists() {
+            if !guarded::engine_installed() {
+                return Ok(Vec::new());
+            }
+            return Err(err(codes::ENGINE_NOT_ANSWERING, format!("the App engine's socket {} isn't there yet", wire::SOCKET)));
         }
         let apps = {
             let db = k2_core::db::shared();

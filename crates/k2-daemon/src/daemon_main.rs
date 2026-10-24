@@ -406,6 +406,7 @@ async fn async_main() {
         k2_core::deploy::set_enabled(s.apps);
         k2_core::deploy::set_process_engine(s.apps_process_engine);
         k2_core::deploy::set_auto_prepare(s.apps_auto_prepare);
+        k2_core::deploy::set_engine_heal(s.apps_engine_heal);
     }
     // S17 / AR18: in a delegated unit (box prep's cores slice), agent
     // sessions get their own memory budget beside the daemon.
@@ -1423,6 +1424,15 @@ async fn async_main() {
     // offline; skips under air-gap and package-owned helpers. Shares the
     // hosted-mail busy latch. Never blocks boot.
     crate::root_helper::heal::spawn_auto_heal();
+
+    // prd-app-runtime-update-continuity-v1 R4: the App engine heal. Linux,
+    // engine installed, Apps on, `appsEngineHeal` (default on): installs the
+    // k2-app-engine that matches THIS daemon (staged by the updater or the
+    // installer, else the release) through the root helper's existing
+    // `apps install-engine` verb, at once (Apps wait on the engine; the
+    // supervisor kicks pending restarts when it lands, R43). Never blocks
+    // boot.
+    crate::apps::engine_heal::spawn();
 
     // Runtime stage H: converge the unit's hand-off drop-in (KillMode=
     // process, NotifyAccess=main, ExecReload=SIGUSR2, OOMPolicy=continue) —

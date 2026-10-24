@@ -243,6 +243,8 @@ pub const ROUTES: &[Route] = &[
     post("/cli/app/egress/rm", Admin),
     // The guarded engine's install/update through the root helper (S11).
     post("/cli/app/engine/install", Owner),
+    // 0.46.4 (update continuity R9): the engine's status, read-only.
+    get("/cli/app/engine/status", Member),
     get("/cli/app/errors", Member),
     // The process exception (§4.3): on = the owner in person with an owner
     // confirm (handler); off (back to the guarded container) = manage.
@@ -291,6 +293,10 @@ pub const ROUTES: &[Route] = &[
     // Q8: one way out for every App of a workspace before its removal
     // (uninstall / park: Admin; handover: the handler holds it to the owner).
     post("/cli/app/release", Admin),
+    // 0.46.4 (update continuity R8/R16): the re-host wave's status, a Member
+    // read. `/boot-status` and the update job point here from S1; the
+    // handler is S2's (`apps::rehost`).
+    get("/cli/app/rehost", Member),
     // AR10: remote App passes. Listing and revoking (narrows) are Member;
     // minting is a credential mint, the owner's (handler refuses passports).
     get("/cli/app/remote-pass", Member),

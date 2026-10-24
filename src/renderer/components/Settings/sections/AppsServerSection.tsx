@@ -35,6 +35,7 @@ import {
   changeLines,
   checkLabel,
   engineNeeded,
+  appEngineLine,
   fetchAppBox,
   installEngine,
   isAppsOff,
@@ -425,6 +426,11 @@ export function AppsServerSection(): React.JSX.Element {
                     and matches this server&apos;s K2 version.
                     {engineNeeded(doctor) ? '' : ' It is installed and answering.'}
                   </p>
+                  {appEngineLine(doctor.appEngine) ? (
+                    <p className="text-[11px] text-[var(--color-danger)]" data-testid="apps-engine-status">
+                      {appEngineLine(doctor.appEngine)}
+                    </p>
+                  ) : null}
                   <Button
                     onClick={() => void engine()}
                     disabled={!isOwner || busy !== null}

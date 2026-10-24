@@ -40,6 +40,26 @@ export interface BoxDoctor {
   checks: BoxCheck[]
   /** 0.46.3: the automatic box prep (`appsAutoPrepare`); null on older daemons. */
   autoPrepare: AutoPrepareStatus | null
+  /** 0.46.4: the App engine vs this K2 (the boot heal's view); null with no
+   *  engine installed or on older daemons. */
+  appEngine: AppEngineStatus | null
+}
+
+export interface EngineBuild {
+  version: string
+  protocol: number
+}
+
+/** `GET /cli/app/box` → `appEngine` (same block as `/boot-status`). */
+export interface AppEngineStatus {
+  /** ok | healing | mismatch | not_answering | needs_owner | failed */
+  state: string
+  want: EngineBuild | null
+  installed: EngineBuild | null
+  running: EngineBuild | null
+  linger: boolean
+  /** Apps waiting for the engine (K2's fault, not theirs). */
+  waitingEngine: number
 }
 
 export interface AutoPrepareStatus {
@@ -127,6 +147,46 @@ export function parseDoctor(raw: unknown): BoxDoctor {
     runtime: str(v.runtime),
     checks,
     autoPrepare: parseAutoPrepare(v.autoPrepare),
+    appEngine: parseAppEngine(v.appEngine),
+  }
+}
+
+function build(v: unknown): EngineBuild | null {
+  if (!isObj(v) || typeof v.version !== 'string' || typeof v.protocol !== 'number') return null
+  return { version: v.version, protocol: v.protocol }
+}
+
+export function parseAppEngine(raw: unknown): AppEngineStatus | null {
+  if (!isObj(raw) || typeof raw.state !== 'string') return null
+  const apps = isObj(raw.apps) ? raw.apps : {}
+  return {
+    state: raw.state,
+    want: build(raw.want),
+    installed: build(raw.installed),
+    running: build(raw.running),
+    linger: raw.linger === true,
+    waitingEngine: typeof apps.waitingEngine === 'number' ? apps.waitingEngine : 0,
+  }
+}
+
+/** One plain-words line for Settings; null when all is well. */
+export function appEngineLine(s: AppEngineStatus | null): string | null {
+  if (!s || s.state === 'ok') return null
+  const v = (b: EngineBuild | null): string => (b ? `${b.version} (protocol ${b.protocol})` : 'not answering')
+  const waiting = s.waitingEngine > 0 ? ` ${s.waitingEngine} App(s) wait for it.` : ''
+  switch (s.state) {
+    case 'healing':
+      return `K2 is installing the App engine that matches this K2 (${s.want?.version ?? ''}).${waiting}`
+    case 'not_answering':
+      return `The App engine isn't answering. No App starts until it does.${waiting}`
+    case 'needs_owner':
+      return s.linger
+        ? `The App engine needs the owner: it is ${v(s.running)} and this K2 needs ${v(s.want)}. Install App engine fixes it.${waiting}`
+        : 'Linger is off for the k2app user: every App stops at its next logout. Prepare this box turns it back on.'
+    case 'failed':
+      return `K2 couldn't update the App engine (installed ${v(s.installed)}, running ${v(s.running)}). Install App engine retries now.${waiting}`
+    default:
+      return `The App engine doesn't match this K2: installed ${v(s.installed)}, running ${v(s.running)}, this K2 ${v(s.want)}. K2 updates it by itself; Install App engine does it now.${waiting}`
   }
 }
 

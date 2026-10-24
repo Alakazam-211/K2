@@ -987,6 +987,10 @@ pub(crate) fn box_route(who: &Who) -> R<J> {
     out["legacyServices"] = json!(super::legacy::services(who));
     out["autoPrepare"] = super::auto_prepare::status_json();
     out["cutover"] = json!(k2_core::app_grace::CUTOVER_RELEASE);
+    // 0.46.4 (update continuity R9): the engine heal's view, for Settings.
+    if let Some(e) = super::engine_heal::app_engine_json() {
+        out["appEngine"] = e;
+    }
     Ok(out)
 }
 

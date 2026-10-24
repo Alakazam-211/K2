@@ -9,6 +9,12 @@
 //!   again as root with its own keys) so a bad download never costs a root
 //!   call.
 //! - Then it waits for the engine to answer on its socket.
+//! - prd-app-runtime-update-continuity-v1 A26: the bytes are read **once**,
+//!   checked (version + signature) and **those bytes** go to the helper;
+//!   no caller ever hands the helper a path (a staged folder under `~/.k2`
+//!   is agent-writable). R43: every install, by any path (the owner's
+//!   route, auto-prepare, the boot heal), signals the supervisor so pending
+//!   restarts run at once.
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -104,33 +110,85 @@ pub(crate) fn install_route(who: &Who, body: &J) -> R<J> {
     install_core(from)
 }
 
-/// The install itself (the owner's route, and the automatic box prep the
-/// owner's `appsAutoPrepare` allows): this daemon's signed build, checked,
-/// installed through the root helper, then waited on.
+/// Everything an install touches, so tests never call the helper.
+pub(crate) trait InstallOps {
+    /// `Err(text)` when the root helper can't run `apps install-engine`.
+    fn helper_usable(&self) -> Result<(), String>;
+    fn arch(&self) -> Option<&'static str>;
+    /// The binary and its signature (a folder, or the release).
+    fn obtain(&self, from: Option<&str>, arch: &str) -> Result<(Vec<u8>, String), String>;
+    fn keys(&self) -> Vec<k2_root_proto::keys::TrustedKey>;
+    fn daemon_version(&self) -> String;
+    /// The helper's `apps install-engine` with the signed **bytes** (A26:
+    /// there is no path argument to pass).
+    fn helper_install(&self, payload: &[u8]) -> Result<String, String>;
+    /// Wait for the restarted engine's `version` answer.
+    fn wait_answer(&self) -> Result<J, String>;
+}
+
+struct LiveInstall;
+
+impl InstallOps for LiveInstall {
+    fn helper_usable(&self) -> Result<(), String> {
+        let st = root_helper::state();
+        if st.usable(APPS_MIN_PROTOCOL) {
+            Ok(())
+        } else {
+            Err(root_helper::helper_needed("the App engine", APPS_MIN_PROTOCOL, &st))
+        }
+    }
+    fn arch(&self) -> Option<&'static str> {
+        arch()
+    }
+    fn obtain(&self, from: Option<&str>, arch: &str) -> Result<(Vec<u8>, String), String> {
+        obtain(from, arch)
+    }
+    fn keys(&self) -> Vec<k2_root_proto::keys::TrustedKey> {
+        keys()
+    }
+    fn daemon_version(&self) -> String {
+        env!("CARGO_PKG_VERSION").to_string()
+    }
+    fn helper_install(&self, payload: &[u8]) -> Result<String, String> {
+        let out = root_helper::call_text(&["apps".into(), "install-engine".into()], Some(payload));
+        root_helper::invalidate();
+        out
+    }
+    fn wait_answer(&self) -> Result<J, String> {
+        // The engine restarts under k2app's manager; wait for its answer.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            match super::guarded::engine_version() {
+                Ok(v) => return Ok(v),
+                Err(e) if Instant::now() >= deadline => return Err(e),
+                Err(_) => std::thread::sleep(Duration::from_millis(500)),
+            }
+        }
+    }
+}
+
+/// The install itself (the owner's route, the automatic box prep the
+/// owner's `appsAutoPrepare` allows, and the boot heal): this daemon's
+/// signed build, checked, installed through the root helper, then waited on.
 pub(crate) fn install_core(from: Option<&str>) -> R<J> {
     if !cfg!(target_os = "linux") {
         return Err(no("linux_only", 409, "the App engine runs on Linux boxes only"));
     }
-    let st = root_helper::state();
-    if !st.usable(APPS_MIN_PROTOCOL) {
-        return Err(no("helper_needed", 409, root_helper::helper_needed("the App engine", APPS_MIN_PROTOCOL, &st)));
-    }
-    let arch = arch().ok_or_else(|| no("unsupported", 409, "no k2-app-engine build for this CPU"))?;
-    let (bin, sig) = obtain(from, arch).map_err(|e| no("engine_download_failed", 409, e))?;
-    let checked = check(&bin, &sig, arch, env!("CARGO_PKG_VERSION"), &keys()).map_err(|e| no("engine_refused", 409, e))?;
-    let out = root_helper::call_text(&["apps".into(), "install-engine".into()], Some(&encode_payload(&sig, &bin)))
-        .map_err(|e| no("engine_install_failed", 409, e))?;
-    root_helper::invalidate();
+    install_with(&LiveInstall, from)
+}
+
+/// [`install_core`] over `ops`.
+pub(crate) fn install_with(ops: &dyn InstallOps, from: Option<&str>) -> R<J> {
+    ops.helper_usable().map_err(|e| no("helper_needed", 409, e))?;
+    let arch = ops.arch().ok_or_else(|| no("unsupported", 409, "no k2-app-engine build for this CPU"))?;
+    // A26: read once; check these bytes; send these bytes.
+    let (bin, sig) = ops.obtain(from, arch).map_err(|e| no("engine_download_failed", 409, e))?;
+    let checked = check(&bin, &sig, arch, &ops.daemon_version(), &ops.keys()).map_err(|e| no("engine_refused", 409, e))?;
+    let out = ops.helper_install(&encode_payload(&sig, &bin)).map_err(|e| no("engine_install_failed", 409, e))?;
     let installed: J = serde_json::from_str(&out).unwrap_or(J::String(out));
-    // The engine restarts under k2app's manager; wait for its answer.
-    let deadline = Instant::now() + Duration::from_secs(30);
-    let answer = loop {
-        match super::guarded::engine_version() {
-            Ok(v) => break Ok(v),
-            Err(e) if Instant::now() >= deadline => break Err(e),
-            Err(_) => std::thread::sleep(Duration::from_millis(500)),
-        }
-    };
+    // R43: the engine changed; pending K2-side restarts run now.
+    super::engine_gate::engine_changed(&format!("k2-app-engine {} installed", checked["version"].as_str().unwrap_or("?")));
+    let answer = ops.wait_answer();
     match answer {
         Ok(v) => Ok(json!({ "ok": true, "checked": checked, "installed": installed, "engine": v })),
         Err(e) => {
@@ -138,6 +196,18 @@ pub(crate) fn install_core(from: Option<&str>) -> R<J> {
             r.extra = Some(json!({ "installed": installed }));
             Err(r)
         }
+    }
+}
+
+/// The installed engine file's build marker (`/usr/local/libexec/
+/// k2-app-engine`): `(version, protocol)`. Scans the whole file: callers
+/// cache it (the heal, once per run; never `/boot-status`, A18).
+pub fn installed_marker(path: &Path) -> Result<(String, u32), String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let m = k2_root_proto::engine::find_markers(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+    match m.as_slice() {
+        [one] => Ok((one.version.to_string(), one.protocol)),
+        _ => Err(format!("{}: build marker missing or repeated", path.display())),
     }
 }
 
@@ -160,6 +230,87 @@ mod tests {
         assert!(check(&elf, &sig, "x86_64", "0.46.1", k2_root_proto::keys::RELEASE_KEYS).is_err(), "test-signed builds never pass release keys");
         let node = sign_with_test_key(&elf, &k2_root_proto::node_build::trusted_comment("linux", "x86_64", "0.46.1", 1));
         assert!(check(&elf, &node, "x86_64", "0.46.1", &keys).unwrap_err().contains("another file"));
+    }
+
+    use std::cell::{Cell, RefCell};
+
+    /// A fake helper and engine: records what the helper got.
+    struct Fake {
+        bin: Vec<u8>,
+        sig: String,
+        version: &'static str,
+        helper_payloads: RefCell<Vec<Vec<u8>>>,
+        answered: Cell<bool>,
+    }
+
+    impl InstallOps for Fake {
+        fn helper_usable(&self) -> Result<(), String> {
+            Ok(())
+        }
+        fn arch(&self) -> Option<&'static str> {
+            Some("x86_64")
+        }
+        fn obtain(&self, _from: Option<&str>, _arch: &str) -> Result<(Vec<u8>, String), String> {
+            Ok((self.bin.clone(), self.sig.clone()))
+        }
+        fn keys(&self) -> Vec<k2_root_proto::keys::TrustedKey> {
+            vec![k2_root_proto::keys::TEST_KEY]
+        }
+        fn daemon_version(&self) -> String {
+            self.version.into()
+        }
+        fn helper_install(&self, payload: &[u8]) -> Result<String, String> {
+            self.helper_payloads.borrow_mut().push(payload.to_vec());
+            Ok(r#"{"ok":true}"#.into())
+        }
+        fn wait_answer(&self) -> Result<J, String> {
+            self.answered.set(true);
+            Ok(json!({ "version": self.version, "protocol": 3 }))
+        }
+    }
+
+    fn signed(version: &str) -> (Vec<u8>, String) {
+        let elf = fake_elf("x86_64", &format_marker(version, 3, "x86_64"));
+        let sig = sign_with_test_key(&elf, &trusted_comment("x86_64", version, 3));
+        (elf, sig)
+    }
+
+    /// T34 (A26): a correctly signed engine of ANOTHER version is refused
+    /// before any root call; the matching one reaches the helper as exactly
+    /// the bytes that were checked, and the install bumps the R43 signal.
+    #[test]
+    fn a_signed_engine_of_another_version_never_reaches_the_helper() {
+        // The engine-change signal is process-wide: hold the env lock the
+        // supervisor's S1 tests hold, so this install never kicks theirs.
+        let _home = crate::test_support::TempHome::new();
+        let (bin, sig) = signed("0.46.2");
+        let f = Fake { bin, sig, version: "0.46.4", helper_payloads: RefCell::new(vec![]), answered: Cell::new(false) };
+        let e = install_with(&f, Some("/staged")).unwrap_err();
+        assert_eq!(e.code, "engine_refused", "{}", e.hint);
+        assert!(e.hint.contains("must match"), "{}", e.hint);
+        assert!(f.helper_payloads.borrow().is_empty(), "the helper was never called");
+        assert!(!f.answered.get());
+
+        let (bin, sig) = signed("0.46.4");
+        let f = Fake { bin: bin.clone(), sig: sig.clone(), version: "0.46.4", helper_payloads: RefCell::new(vec![]), answered: Cell::new(false) };
+        let gen = super::super::engine_gate::generation();
+        let ok = install_with(&f, Some("/staged")).unwrap();
+        assert_eq!(ok["checked"]["version"], "0.46.4");
+        assert_eq!(*f.helper_payloads.borrow(), vec![encode_payload(&sig, &bin)], "the checked bytes, once");
+        assert!(super::super::engine_gate::generation() > gen, "an install signals the supervisor (R43)");
+    }
+
+    #[test]
+    fn the_installed_marker_is_read_from_the_file() {
+        let d = std::env::temp_dir().join(format!("k2-engine-marker-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let p = d.join("k2-app-engine");
+        std::fs::write(&p, fake_elf("x86_64", &format_marker("0.46.0", 2, "x86_64"))).unwrap();
+        assert_eq!(installed_marker(&p).unwrap(), ("0.46.0".to_string(), 2));
+        std::fs::write(&p, b"no marker").unwrap();
+        assert!(installed_marker(&p).unwrap_err().contains("missing"));
+        std::fs::remove_dir_all(&d).unwrap();
     }
 
     #[test]

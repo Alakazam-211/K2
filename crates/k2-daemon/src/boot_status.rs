@@ -193,7 +193,10 @@ pub(crate) fn body_for(view: View, settings: &k2_core::app_settings::AppSettings
         .expect("serialize compat boot-status"),
         // k2-ptyd P27: `ptyd: on | off (<reason>)` rides the full view only,
         // and only with the dev switch on (default body byte-identical).
-        View::Full => crate::ptyd_status::decorate_boot_status(full_body(settings)).to_string(),
+        // 0.46.4 (update continuity R7/R8): `appEngine` (installed vs
+        // running vs this K2, linger) only when an App engine is installed.
+        View::Full => crate::apps::engine_heal::decorate_boot_status(crate::ptyd_status::decorate_boot_status(full_body(settings)))
+            .to_string(),
     }
 }
 

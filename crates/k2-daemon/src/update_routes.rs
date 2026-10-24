@@ -444,6 +444,12 @@ pub struct Job {
     /// False while `target_version` is only a placeholder: a Shape A
     /// (bundled-app) job learns its real target from the app's updater.
     pub target_known: bool,
+    /// 0.46.4 (prd-app-runtime-update-continuity-v1 R1): the target
+    /// version's App engine, staged beside the daemon when one is installed
+    /// here (`{staged, sig, note}`); `None` = no engine on this box (or not
+    /// done yet). Never blocks the daemon update.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub engine: Option<serde_json::Value>,
 }
 
 impl Job {
@@ -458,6 +464,7 @@ impl Job {
             staged_path: None,
             from_version: current_version().to_string(),
             target_known: true,
+            engine: None,
         }
     }
 }
@@ -725,6 +732,7 @@ pub fn reconcile_persisted_job(running_version: &str) {
         staged_path: None,
         from_version: rec.from_version.clone(),
         target_known: rec.target_known,
+        engine: None,
     };
     jobs()
         .lock()
@@ -920,6 +928,16 @@ pub fn handle_start(
     let job_id_for_worker = job_id.clone();
     std::thread::spawn(move || {
         run_download_stage(&job_id_for_worker, &artifact);
+    });
+    // R1: stage the target's App engine beside it (its own thread: the
+    // signature may not be published yet, A17; the daemon never waits).
+    let job_id_for_engine = job_id.clone();
+    let target_for_engine = target.clone();
+    std::thread::spawn(move || {
+        if let Some(st) = crate::apps::engine_stage::stage_for_update(&manifest, &target_for_engine) {
+            k2_core::log_debug!("[daemon] update job {job_id_for_engine}: App engine {}", st.json());
+            update_job(&job_id_for_engine, |j| j.engine = Some(st.json()));
+        }
     });
 
     CliResponse::ok_json(serde_json::json!({ "job_id": job_id }).to_string())
@@ -1177,6 +1195,12 @@ pub fn handle_status(job_id: &str) -> CliResponse {
                 // say "updated to X" or name the version it came back on.
                 "from_version": job.from_version,
                 "running_version": current_version(),
+                // 0.46.4 (update continuity R1/R8): the staged App engine,
+                // the App engine as this daemon sees it, and where the
+                // re-host wave reports (S2's route).
+                "engine": job.engine,
+                "appEngine": crate::apps::engine_heal::app_engine_json(),
+                "appRehost": crate::apps::guarded::engine_installed().then_some(crate::apps::engine_heal::REHOST_ROUTE),
             });
             CliResponse::ok_json(body.to_string())
         }
@@ -2268,6 +2292,28 @@ mod tests {
         assert_eq!(r.url.as_deref(), Some("https://x/bin"));
         assert_eq!(r.notes.as_deref(), Some("n"));
         assert_eq!(r.install_kind, "standalone");
+    }
+
+    /// A1 (prd-app-runtime-update-continuity-v1): a 0.46.4 manifest carries
+    /// the engine builds under their own `k2-app-engine-linux-<arch>` keys,
+    /// `Artifact`-shaped. This parser (and every older daemon's: no
+    /// `deny_unknown_fields`) reads it, and the platform artifact is still
+    /// the daemon's, never the engine's.
+    #[test]
+    fn a_manifest_with_engine_entries_still_gives_the_daemon_artifact() {
+        let m = DaemonManifest::parse(include_bytes!("../../../tests/packaging/fixtures/daemon-latest-with-engine.json")).unwrap();
+        for arch in ["x86_64", "aarch64"] {
+            let d = &m.artifacts[&format!("linux-{arch}")];
+            assert_eq!(d.url, format!("https://example.invalid/v9.9.9/k2-daemon-linux-{arch}"));
+            assert!(!d.url.contains("app-engine") && !d.sha256.starts_with("e"), "{d:?}");
+            let e = &m.artifacts[&crate::apps::engine_stage::manifest_key(arch)];
+            assert_eq!(e.url, format!("https://example.invalid/v9.9.9/k2-app-engine-linux-{arch}"));
+            assert_eq!(e.sig, format!("{}.sig", e.url));
+        }
+        if std::env::consts::OS == "linux" {
+            let mine = m.artifact_for_current_platform().expect("this platform's daemon");
+            assert!(mine.url.contains("/k2-daemon-linux-"), "{mine:?}");
+        }
     }
 
     #[test]

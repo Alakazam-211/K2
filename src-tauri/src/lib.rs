@@ -1429,18 +1429,31 @@ pub fn run() {
                             return;
                         }
                         // Toggle OFF — user wants red-dot to take
-                        // everything down. Unload the daemon plist (if
-                        // installed) so launchd stops respawning it,
-                        // then fall through to the normal cleanup +
-                        // destroy path below.
+                        // everything down: an explicit daemon STOP, which
+                        // ends its agents (k2-ptyd P83, Q9). Daemon-first:
+                        // `POST /cli/daemon/stop` (the daemon ends its
+                        // agents and unloads its own launchd job). Only
+                        // when the daemon is unreachable: write the stop
+                        // intent and unload the plist here, so launchd
+                        // stops respawning it. Then fall through to the
+                        // normal cleanup + destroy path below.
                         #[cfg(target_os = "macos")]
                         {
-                            let plist = k2_client::wake::DaemonPlist::canonical(
-                                std::path::PathBuf::from("/unused"),
-                            );
-                            if let Some(path) = plist.plist_path() {
-                                if path.exists() {
-                                    let _ = k2_client::wake::launchctl_unload(&path);
+                            let asked = crate::daemon_client::DaemonClient::try_connect()
+                                .and_then(|c| c.cli_post_query("/cli/daemon/stop", &[]))
+                                .is_ok();
+                            if !asked {
+                                let plist = k2_client::wake::DaemonPlist::canonical(
+                                    std::path::PathBuf::from("/unused"),
+                                );
+                                if let Some(path) = plist.plist_path() {
+                                    if path.exists() {
+                                        let _ = k2_client::wake::write_stop_intent(
+                                            &k2_client::paths::k2_home(),
+                                            "app",
+                                        );
+                                        let _ = k2_client::wake::launchctl_unload(&path);
+                                    }
                                 }
                             }
                         }

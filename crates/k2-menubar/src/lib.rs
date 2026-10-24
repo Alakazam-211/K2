@@ -219,12 +219,48 @@ pub fn interpret_quit(
 
 /// Unload `dev.k2.daemon`. Missing plist and already-stopped are `Ok`.
 /// Does not exit the process and does not unload `dev.k2.menubar`.
+///
+/// k2-ptyd (PRD prd-k2-ptyd-v1 L2, P53): "Quit daemon" ENDS the agents,
+/// unlike a restart. launchd's SIGTERM looks the same for both, so a stop
+/// intent is written first; the daemon reads it at shutdown. This helper
+/// has no token or HTTP client by design, hence the file.
 #[cfg(unix)]
 pub fn quit_daemon() -> Result<(), String> {
     let Some(path) = daemon_plist_path() else {
         return Err("home directory unavailable".to_string());
     };
+    if path.exists() {
+        if let Some(home) = home_dir() {
+            if let Err(e) = write_stop_intent(&home.join(".k2"), "menubar", unix_now()) {
+                eprintln!("[k2-menubar] stop intent not written ({e}); the daemon will keep its agents");
+            }
+        }
+    }
     quit_daemon_plist(&path)
+}
+
+/// `<k2_home>/run/stop-intent.json` (0600, temp + rename):
+/// `{"by":…,"at":<unix secs>,"nonce":…}`. Honoured by the daemon for
+/// 120 s and deleted on read.
+#[cfg(unix)]
+pub fn write_stop_intent(k2_home: &Path, by: &str, now: u64) -> std::io::Result<PathBuf> {
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+    let dir = k2_home.join("run");
+    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&dir)?;
+    let path = dir.join("stop-intent.json");
+    let tmp = dir.join(format!("stop-intent.json.tmp.{}", std::process::id()));
+    {
+        let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&tmp)?;
+        write!(f, "{{\"by\":\"{by}\",\"at\":{now},\"nonce\":\"{}-{now}\"}}", std::process::id())?;
+        f.sync_all()?;
+    }
+    std::fs::rename(&tmp, &path)?;
+    Ok(path)
+}
+
+#[cfg(unix)]
+fn unix_now() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
 #[cfg(unix)]
@@ -288,6 +324,23 @@ gui/501/dev.k2.daemon = {\n\
 \tpid = 86342\n\
 \tlast exit code = 0\n\
 }\n";
+
+    /// P53: the intent the daemon reads at shutdown (same shape as
+    /// `k2_daemon::daemon_stop::intent_fresh` parses).
+    #[cfg(unix)]
+    #[test]
+    fn stop_intent_is_private_and_well_formed() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = std::env::temp_dir().join(format!("k2-menubar-intent-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let p = write_stop_intent(&home, "menubar", 1_700_000_000).expect("write intent");
+        assert_eq!(p, home.join("run").join("stop-intent.json"));
+        assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o600);
+        let body = std::fs::read_to_string(&p).unwrap();
+        assert!(body.starts_with("{\"by\":\"menubar\",\"at\":1700000000,\"nonce\":\""), "{body}");
+        assert!(body.ends_with("\"}"), "{body}");
+        std::fs::remove_dir_all(&home).unwrap();
+    }
 
     #[test]
     fn running_requires_nonzero_pid_and_boot_status_2xx() {

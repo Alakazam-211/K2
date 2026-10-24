@@ -3289,6 +3289,12 @@ async fn handle_one_request(
             // (200 + would-restart) is asserted WITHOUT ever firing a real
             // restart — a test must NEVER kill the test process.
             if let Some(tx) = state.shutdown_tx.clone() {
+                // k2-ptyd P57: `?end_agents=1` restarts WITHOUT keeping the
+                // agent sessions (§7.6 EndAgents); a plain restart keeps
+                // ptyd-hosted agents running for the next daemon (L3).
+                if query.split('&').any(|kv| kv == "end_agents=1" || kv == "end_agents=true") {
+                    crate::daemon_stop::request_end_agents();
+                }
                 // Detached task: sleep briefly so the flushed 200 lands and
                 // the socket drains on the client side, THEN trigger the
                 // graceful teardown. We do NOT block this connection on it.
@@ -3298,6 +3304,35 @@ async fn handle_one_request(
                         "[daemon] #651 restart requested — triggering graceful shutdown"
                     );
                     let _ = tx.send(());
+                });
+            }
+            return DispatchOutcome::Done;
+        }
+        // k2-ptyd S3 (prd-k2-ptyd-v1 P52, L2) — POST /cli/daemon/stop: QUIT
+        // the daemon. Unlike /cli/daemon/restart this ends every agent
+        // session (§7.6 EndAgents) and keeps the supervisor from respawning
+        // the daemon (launchd `unload -w` from a detached helper; systemd
+        // `stop --no-block`; no supervisor: plain shutdown). Same gate as
+        // restart: POST only, owner or a Connect Owner/Admin.
+        "/cli/daemon/stop" => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            if !super::http::require_owner_or_admin(&mut *stream, &mut buf, &query, state.token.as_str()).await {
+                return DispatchOutcome::Done;
+            }
+            let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+            super::http::send_response(&mut *stream, "200 OK", "application/json", r#"{"ok":true,"stopping":true}"#)
+                .await;
+            let _ = stream.flush().await;
+            // SEAM (as #651): the harness has no shutdown_tx and must never
+            // stop the test process.
+            if let Some(tx) = state.shutdown_tx.clone() {
+                crate::daemon_stop::request_end_agents();
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                    k2_core::log_debug!("[daemon] stop requested — ending agents and stopping");
+                    crate::daemon_stop::stop_via_supervisor(tx);
                 });
             }
             return DispatchOutcome::Done;

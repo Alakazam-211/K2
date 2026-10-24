@@ -491,6 +491,8 @@ pub const ROUTES: &[Route] = &[
     get("/cli/daemon/handoff/status", Admin),
     post("/cli/daemon/hook-revoke-all", NoLogin),
     post("/cli/daemon/restart", Admin),
+    // k2-ptyd S3 (P52): quit the daemon and end its agents.
+    post("/cli/daemon/stop", Admin),
     post("/cli/daemon/update/apply", Admin),
     post("/cli/daemon/update/check", Admin),
     // 0.46.3: cached latest-known version, readable by every login.

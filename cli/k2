@@ -3447,9 +3447,88 @@ _daemon_port_file="$K2_HOME/daemon.port"
 _daemon_token_file="$K2_HOME/daemon.token"
 _daemon_stdout_log="$K2_HOME/daemon.stdout.log"
 
+# k2-ptyd S3 (prd-k2-ptyd-v1 §7.6, P54, P82): quitting the daemon ends its
+# agents; restarting keeps them. A stop leaves a short-lived stop intent the
+# daemon reads at shutdown (`$K2_HOME/run/stop-intent.json`, 0600, honoured
+# for 120 s, deleted on read), so a supervisor's SIGTERM is known to be a
+# stop and not a restart.
+_daemon_write_stop_intent() {
+    local by="${1:-cli}" dir="$K2_HOME/run" now tmp
+    now=$(date +%s)
+    mkdir -p "$dir" 2>/dev/null || return 1
+    chmod 700 "$dir" 2>/dev/null || true
+    tmp="$dir/stop-intent.json.tmp.$$"
+    ( umask 077; printf '{"by":"%s","at":%s,"nonce":"%s-%s"}\n' "$by" "$now" "$$" "$now" > "$tmp" ) || return 1
+    mv -f "$tmp" "$dir/stop-intent.json"
+}
+
+# OS family for the daemon lifecycle verbs: macos | linux | windows.
+_daemon_os() {
+    case "$(uname -s)" in
+        Darwin) echo macos ;;
+        Linux) echo linux ;;
+        MINGW*|MSYS*|CYGWIN*|Windows_NT) echo windows ;;
+        *) echo other ;;
+    esac
+}
+
+# Linux: "<scope> <unit>" of the K2 daemon's systemd unit (scope = user or
+# system), or nothing. The running daemon's own cgroup names it (any unit
+# name the provisioning used); otherwise the known names are tried, current
+# before legacy.
+_daemon_linux_unit() {
+    local pid="" cg="" unit="" scope="system" u
+    [ -f "$K2_HOME/daemon.lock" ] && pid=$(tr -dc '0-9' < "$K2_HOME/daemon.lock" 2>/dev/null)
+    if [ -n "$pid" ] && [ -r "/proc/$pid/cgroup" ]; then
+        cg=$(grep '^0::' "/proc/$pid/cgroup" 2>/dev/null | head -1)
+        unit=$(printf '%s\n' "${cg#0::}" | tr '/' '\n' | grep '\.service$' | grep -v '^user@' | tail -1)
+        case "$cg" in */user@*) scope=user ;; esac
+        if [ -n "$unit" ]; then
+            echo "$scope $unit"
+            return 0
+        fi
+    fi
+    command -v systemctl >/dev/null 2>&1 || return 1
+    for u in k2-daemon.service k2so-daemon.service; do
+        if systemctl --user cat "$u" >/dev/null 2>&1; then echo "user $u"; return 0; fi
+    done
+    for u in k2-daemon.service k2so-daemon.service; do
+        if systemctl cat "$u" >/dev/null 2>&1; then echo "system $u"; return 0; fi
+    done
+    return 1
+}
+
+# _daemon_systemctl <scope> <args…>
+_daemon_systemctl() {
+    local scope="$1"; shift
+    if [ "$scope" = "user" ]; then
+        systemctl --user "$@"
+    else
+        systemctl "$@"
+    fi
+}
+
+# POST a lifecycle route on the LOCAL daemon with the on-disk owner token
+# (query string, never argv). Prints the body; returns curl's status.
+_daemon_local_post() {
+    local path="$1" token="" _K2_CFG=""
+    [ -f "$_daemon_token_file" ] && token=$(tr -d '[:space:]' < "$_daemon_token_file" 2>/dev/null)
+    if [ -z "$token" ]; then
+        echo "no owner token at $_daemon_token_file" >&2
+        return 1
+    fi
+    case "$path" in *\?*) path="${path}&token=${token}" ;; *) path="${path}?token=${token}" ;; esac
+    _k2_cfg_add url "${BASE_URL}${path}"
+    _k2_curl "$_K2_CFG" -s -X POST --connect-timeout 5 --max-time 30
+}
+
 cmd_daemon_status() {
     local as_json=0
     [ "${1:-}" = "--json" ] && as_json=1
+    if [ "$(_daemon_os)" = "linux" ]; then
+        _daemon_status_linux "$as_json"
+        return $?
+    fi
 
     local installed="no"
     [ -f "$_daemon_plist" ] && installed="yes"
@@ -3497,6 +3576,35 @@ cmd_daemon_status() {
     fi
 }
 
+# P82: `k2 daemon status` on Linux (systemd user or system unit, or none).
+_daemon_status_linux() {
+    local as_json="$1" su="" scope="" unit="" active="unknown" pid="" port="" token_present="no"
+    su=$(_daemon_linux_unit) || su=""
+    if [ -n "$su" ]; then
+        scope=${su%% *}; unit=${su#* }
+        active=$(_daemon_systemctl "$scope" is-active "$unit" 2>/dev/null) || true
+        pid=$(_daemon_systemctl "$scope" show -p MainPID --value "$unit" 2>/dev/null) || true
+        [ "$pid" = "0" ] && pid=""
+    fi
+    [ -f "$_daemon_port_file" ] && port=$(tr -d '[:space:]' < "$_daemon_port_file" 2>/dev/null)
+    [ -f "$_daemon_token_file" ] && [ -s "$_daemon_token_file" ] && token_present="yes"
+    if [ "$as_json" = "1" ]; then
+        printf '{"installed":"%s","running":"%s","pid":"%s","port":"%s","token":"%s","unit":"%s","scope":"%s","log":"%s"}\n' \
+            "$([ -n "$unit" ] && echo yes || echo no)" "$([ "$active" = "active" ] && echo yes || echo no)" \
+            "${pid:-}" "${port:-}" "$token_present" "${unit:-}" "${scope:-}" "$_daemon_stdout_log"
+        return 0
+    fi
+    echo "K2 Daemon"
+    if [ -z "$unit" ]; then
+        echo "  Unit:          none found (k2-daemon.service, user or system)"
+    else
+        echo "  Unit:          $unit ($scope)"
+        echo "  State:         ${active:-unknown}$([ -n "$pid" ] && echo "  (PID $pid)")"
+    fi
+    [ -n "$port" ] && echo "  Port:          $port"
+    echo "  Auth token:    $([ "$token_present" = "yes" ] && echo "present" || echo "missing")"
+}
+
 cmd_daemon_start() {
     if [ ! -f "$_daemon_plist" ]; then
         echo "Daemon plist not installed at $_daemon_plist" >&2
@@ -3518,11 +3626,49 @@ cmd_daemon_start() {
     echo "Daemon started."
 }
 
+# Quitting the daemon ENDS its agent sessions (prd-k2-ptyd-v1 L2); use
+# `k2 daemon restart` to keep them running.
 cmd_daemon_stop() {
+    case "$(_daemon_os)" in
+        linux)
+            local su scope unit
+            su=$(_daemon_linux_unit) || su=""
+            _daemon_write_stop_intent cli || true
+            if [ -z "$su" ]; then
+                # No systemd unit (a supervisor-less box, dev): ask the daemon.
+                if _daemon_local_post /cli/daemon/stop 2>/dev/null | grep -q '"stopping":true'; then
+                    echo "Daemon stopped (its agents were ended)."
+                    return 0
+                fi
+                rm -f "$K2_HOME/run/stop-intent.json"
+                echo "Daemon was not running (no systemd unit, and nothing answered at $BASE_URL)."
+                return 0
+            fi
+            scope=${su%% *}; unit=${su#* }
+            if _daemon_systemctl "$scope" stop "$unit"; then
+                echo "Daemon stopped ($unit; its agents were ended)."
+                return 0
+            fi
+            rm -f "$K2_HOME/run/stop-intent.json"
+            if [ "$scope" = "system" ]; then
+                echo "Stopping a system unit needs root: sudo systemctl stop $unit" >&2
+            fi
+            exit 1
+            ;;
+        windows)
+            if _daemon_local_post /cli/daemon/stop 2>/dev/null | grep -q '"stopping":true'; then
+                echo "Daemon stopped (its agents were ended)."
+                return 0
+            fi
+            echo "daemon stop: the daemon did not answer at $BASE_URL" >&2
+            exit 1
+            ;;
+    esac
     if [ ! -f "$_daemon_plist" ]; then
         echo "Daemon plist not installed; nothing to stop."
         return 0
     fi
+    _daemon_write_stop_intent cli || true
     local err
     err=$(launchctl unload -w "$_daemon_plist" 2>&1) || true
     if echo "$err" | grep -qi "Could not find\|No such"; then
@@ -3585,9 +3731,12 @@ cmd_daemon_restart() {
     #                     no GUI required. The remote route is supervisor-
     #                     agnostic — it triggers graceful shutdown and the
     #                     remote supervisor (launchd/systemd) respawns it.
-    local host="" token="" wait=0
+    local host="" token="" wait=0 end_agents=0
     while [ $# -gt 0 ]; do
         case "$1" in
+            # k2-ptyd P57: a restart keeps agent sessions running; with
+            # --sessions they are ended and start fresh.
+            --sessions) end_agents=1; shift ;;
             --host)  host="${2:-}";  shift 2 ;;
             --host=*) host="${1#--host=}"; shift ;;
             --token) token="${2:-}"; shift 2 ;;
@@ -3615,7 +3764,9 @@ cmd_daemon_restart() {
         # OWNER-ONLY route: token rides the query string (the daemon's
         # require_owner reads it there), no body.
         local resp _K2_CFG=""
-        _k2_cfg_add url "${base}/cli/daemon/restart?token=${token}"
+        local q="token=${token}"
+        [ "$end_agents" = "1" ] && q="${q}&end_agents=1"
+        _k2_cfg_add url "${base}/cli/daemon/restart?${q}"
         resp=$(_k2_curl "$_K2_CFG" -s -X POST \
             --connect-timeout 5 --max-time 30 2>/dev/null) || true
         if [ -z "$resp" ]; then
@@ -3643,7 +3794,39 @@ cmd_daemon_restart() {
         esac
     fi
 
-    # ── LOCAL restart (unchanged behavior) ────────────────────────────
+    # ── LOCAL restart ─────────────────────────────────────────────────
+    # --sessions: the daemon's own route ends the agents, then the
+    # supervisor respawns it (every OS).
+    if [ "$end_agents" = "1" ]; then
+        if _daemon_local_post "/cli/daemon/restart?end_agents=1" 2>/dev/null | grep -q '"restarting":true'; then
+            echo "Daemon restarting; its agent sessions were ended."
+            [ "$wait" = "1" ] && { _daemon_wait_ready "$BASE_URL" || exit 1; }
+            return 0
+        fi
+        echo "daemon restart --sessions: the daemon did not answer at $BASE_URL" >&2
+        exit 1
+    fi
+    case "$(_daemon_os)" in
+        linux|windows)
+            local su="" scope unit
+            [ "$(_daemon_os)" = "linux" ] && { su=$(_daemon_linux_unit) || su=""; }
+            if [ -n "$su" ]; then
+                scope=${su%% *}; unit=${su#* }
+                if ! _daemon_systemctl "$scope" restart "$unit"; then
+                    [ "$scope" = "system" ] && echo "Restarting a system unit needs root: sudo systemctl restart $unit" >&2
+                    exit 1
+                fi
+                echo "Daemon restarted ($unit)."
+            elif _daemon_local_post /cli/daemon/restart 2>/dev/null | grep -q '"restarting":true'; then
+                echo "Daemon restarting."
+            else
+                echo "daemon restart: no systemd unit found and the daemon did not answer at $BASE_URL" >&2
+                exit 1
+            fi
+            [ "$wait" = "1" ] && { _daemon_wait_ready "$BASE_URL" || exit 1; }
+            return 0
+            ;;
+    esac
     local uid
     uid=$(id -u)
     # `launchctl kickstart -k` sends SIGTERM and respawns (thanks to
@@ -3881,7 +4064,7 @@ cmd_daemon_install() {
         svc_path="$HOME/Library/LaunchAgents/${_daemon_label}.plist"
     else
         svc_kind="systemd"
-        svc_path="$HOME/.config/systemd/user/k2so-daemon.service"
+        svc_path="$HOME/.config/systemd/user/k2-daemon.service"
     fi
 
     if [ "$dry_run" = "1" ]; then
@@ -3900,7 +4083,7 @@ cmd_daemon_install() {
         else
             echo "  service unit:   $svc_kind → $svc_path"
             if [ "$svc_kind" = "systemd" ]; then
-                echo "  enable cmds:    systemctl --user daemon-reload && systemctl --user enable --now k2so-daemon"
+                echo "  enable cmds:    systemctl --user daemon-reload && systemctl --user enable --now k2-daemon"
             else
                 echo "  enable cmds:    launchctl bootstrap gui/\$(id -u) $svc_path"
             fi
@@ -4002,6 +4185,16 @@ cmd_daemon_install() {
     if [ "$no_service" != "1" ]; then
         if [ "$svc_kind" = "systemd" ]; then
             mkdir -p "$(dirname "$svc_path")"
+            # P82: the unit is k2-daemon.service (what the enable hint and
+            # `k2 daemon stop|restart|status` use). A legacy
+            # k2so-daemon.service from an older install is disabled and
+            # removed so two units never run two daemons.
+            local legacy_unit="$HOME/.config/systemd/user/k2so-daemon.service"
+            if [ -f "$legacy_unit" ]; then
+                systemctl --user disable --now k2so-daemon.service >/dev/null 2>&1 || true
+                rm -f "$legacy_unit"
+                echo "Removed the legacy unit k2so-daemon.service (replaced by k2-daemon.service)."
+            fi
             cat > "$svc_path" <<EOF
 [Unit]
 Description=K2 standalone daemon
@@ -65053,8 +65246,14 @@ EOF
                 echo "    writes a systemd (Linux) / launchd (macOS) supervisor unit so a" >&2
                 echo "    crash respawns it. --dry-run prints the plan without downloading." >&2
                 echo "" >&2
-                echo "  restart [--host <base-url>] [--token <token>] [--wait]" >&2
-                echo "    Default: restart the LOCAL daemon (launchctl kickstart)." >&2
+                echo "  stop" >&2
+                echo "    Quit the daemon. This ENDS its agent sessions. macOS: launchctl unload;" >&2
+                echo "    Linux: systemctl [--user] stop <unit>; Windows: POST /cli/daemon/stop." >&2
+                echo "" >&2
+                echo "  restart [--sessions] [--host <base-url>] [--token <token>] [--wait]" >&2
+                echo "    Default: restart the LOCAL daemon (macOS launchctl kickstart, Linux" >&2
+                echo "    systemctl restart). Agent sessions hosted by k2-ptyd keep running." >&2
+                echo "    --sessions: end the agent sessions too (they start fresh)." >&2
                 echo "    --host:  restart a REMOTE daemon with no GUI by POSTing" >&2
                 echo "             <base-url>/cli/daemon/restart (e.g. --host https://<sub>.k2.dev)." >&2
                 echo "             Authorizes with the owner token OR an Owner/Admin connect-user" >&2

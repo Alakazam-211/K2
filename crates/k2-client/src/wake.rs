@@ -186,6 +186,40 @@ pub fn launchctl_load(plist_path: &PathBuf) -> Result<(), String> {
     Ok(())
 }
 
+/// k2-ptyd (PRD prd-k2-ptyd-v1 §7.6, L2): write the stop intent
+/// `<k2_home>/run/stop-intent.json` (0600, temp + rename) before stopping
+/// the daemon through launchd, so the daemon knows the SIGTERM is a STOP
+/// (end its agents), not a restart. Honoured for 120 s, deleted on read.
+#[cfg(unix)]
+pub fn write_stop_intent(k2_home: &std::path::Path, by: &str) -> Result<PathBuf, String> {
+    use std::io::Write;
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+    let dir = k2_home.join("run");
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&dir)
+        .map_err(|e| format!("create {}: {e}", dir.display()))?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let path = dir.join("stop-intent.json");
+    let tmp = dir.join(format!("stop-intent.json.tmp.{}", std::process::id()));
+    let body = format!("{{\"by\":\"{by}\",\"at\":{now},\"nonce\":\"{}-{now}\"}}", std::process::id());
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&tmp)
+        .map_err(|e| format!("open {}: {e}", tmp.display()))?;
+    f.write_all(body.as_bytes()).map_err(|e| format!("write intent: {e}"))?;
+    f.sync_all().map_err(|e| format!("sync intent: {e}"))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("rename intent: {e}"))?;
+    Ok(path)
+}
+
 /// `launchctl unload -w <plist>`. Safe to call on a non-loaded plist
 /// (launchctl returns 0 or a harmless "service not found" message).
 pub fn launchctl_unload(plist_path: &PathBuf) -> Result<(), String> {

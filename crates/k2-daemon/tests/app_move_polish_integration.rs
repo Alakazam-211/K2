@@ -991,6 +991,67 @@ async fn an_agent_manages_only_its_own_workspaces_guests() {
     k2_daemon::apps::alerts::set_sink(None);
 }
 
+/// Role writes, for an agent with the skin-manage switch: it makes or
+/// edits only roles whose rooms are all in its own workspace (security
+/// review). A room elsewhere, or a role that already reaches elsewhere, is
+/// owner_only and nothing changes; its own roles still work.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_agent_makes_and_edits_only_its_own_workspaces_roles() {
+    let env = setup(&[]);
+    let _seen = quiet_alerts();
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let a = seed_ws(&env, "rolea");
+    let b = seed_ws(&env, "roleb");
+    allow_manage(&a, true);
+    let agent = passport(&a);
+    let mut policy_b = k2_core::skin::RoomPolicy::new();
+    policy_b.insert(b.id.clone(), vec!["thread:read".to_string()]);
+    k2_core::skin::create_role_for_app("rw-owner-b", &policy_b, None).unwrap();
+    let role = |name: &str| k2_core::skin::list_roles().unwrap().into_iter().find(|r| r.name == name);
+    let refused = |r: &Resp, what: &str| {
+        assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{what}: {}", r.body);
+        assert!(r.json()["error"]["hint"].as_str().expect("hint").contains("outside your workspace"), "{what}: {}", r.body);
+    };
+    let line = |ws: &Ws| json!([{"handle": ws.handle, "caps": ["thread:read"]}]);
+
+    // Its own room: made and edited.
+    let r = post(d.port, "/cli/skin/roles", &agent, json!({"name": "rw-mine", "roomAccess": line(&a)})).await;
+    assert_eq!(r.status, 200, "its own room: {}", r.body);
+    let r = post(d.port, "/cli/skin/roles/update", &agent, json!({"name": "rw-mine", "roomAccess": [{"handle": a.handle, "caps": ["thread:read", "thread:post"]}]})).await;
+    assert_eq!(r.status, 200, "its own role's update: {}", r.body);
+    let r = post(d.port, "/cli/skin/roles/room", &agent, json!({"name": "rw-mine", "handle": a.handle, "caps": ["thread:read"]})).await;
+    assert_eq!(r.status, 200, "its own room line: {}", r.body);
+
+    // Another workspace's room: refused on every role write.
+    let r = post(d.port, "/cli/skin/roles", &agent, json!({"name": "rw-theirs", "roomAccess": line(&b)})).await;
+    refused(&r, "create with another workspace's room");
+    let r = post(d.port, "/cli/skin/roles", &agent, json!({"name": "rw-mix", "rooms": [a.handle, b.handle]})).await;
+    refused(&r, "create with a room list reaching elsewhere");
+    let r = post(d.port, "/cli/skin/roles/from-template", &agent, json!({"template": "owner", "app": "host", "name": "rw-tpl", "rooms": [b.handle]})).await;
+    refused(&r, "from-template with another workspace's room");
+    assert!(role("rw-theirs").is_none() && role("rw-mix").is_none() && role("rw-tpl").is_none(), "nothing made");
+    let r = post(d.port, "/cli/skin/roles/update", &agent, json!({"name": "rw-mine", "roomAccess": line(&b)})).await;
+    refused(&r, "update to another workspace's room");
+    let r = post(d.port, "/cli/skin/roles/room", &agent, json!({"name": "rw-mine", "handle": b.handle, "caps": ["thread:read"]})).await;
+    refused(&r, "a room line elsewhere");
+    assert_eq!(role("rw-mine").expect("rw-mine").rooms, vec![a.id.clone()], "its role still reaches only its room");
+    // A role that already reaches elsewhere: not the agent's to edit or remove.
+    let r = post(d.port, "/cli/skin/roles/update", &agent, json!({"name": "rw-owner-b", "roomAccess": line(&a)})).await;
+    refused(&r, "update another workspace's role");
+    let r = post(d.port, "/cli/skin/roles/room", &agent, json!({"name": "rw-owner-b", "handle": a.handle, "caps": ["thread:read"]})).await;
+    refused(&r, "add its room to another workspace's role");
+    let r = post(d.port, "/cli/skin/roles/paths", &agent, json!({"name": "rw-owner-b", "handle": b.handle, "read": ["docs"]})).await;
+    refused(&r, "folders on another workspace's role");
+    let r = post(d.port, "/cli/skin/roles/remove", &agent, json!({"name": "rw-owner-b"})).await;
+    refused(&r, "remove another workspace's role");
+    assert_eq!(role("rw-owner-b").expect("rw-owner-b").rooms, vec![b.id.clone()], "the owner's role is unchanged");
+
+    // The owner is unchanged.
+    let r = post(d.port, "/cli/skin/roles/room", OWNER, json!({"name": "rw-mine", "handle": b.handle, "caps": ["thread:read"]})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    k2_daemon::apps::alerts::set_sink(None);
+}
+
 /// C: first write verbs are one digest per App per window, and nothing at
 /// all for what one of the App's test guests did (someone testing it; the
 /// owner made the guest: agents make none).

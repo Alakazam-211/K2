@@ -9676,7 +9676,7 @@ async fn handle_one_request(
             if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                 return DispatchOutcome::Done;
             }
-            let actor = match owner_or_skin_manage_hook(&path, &query, bearer_token.as_deref(), state.token.as_str()) {
+            let (actor, agent_ws) = match owner_or_skin_manage_hook_scoped(&path, &query, bearer_token.as_deref(), state.token.as_str()) {
                 Ok(a) => a,
                 Err(f) => {
                     let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
@@ -9686,7 +9686,16 @@ async fn handle_one_request(
             };
             let body = super::http::read_post_body(&mut *stream, &mut buf).await;
             let r = tokio::task::spawn_blocking(move || {
-                crate::skin_routes::stamp_actor(crate::app_mobile_routes::handle_roles_from_template(&body, &actor), &actor)
+                crate::skin_routes::stamp_actor(
+                    crate::skin_routes::agent_scoped(
+                        agent_ws.as_deref(),
+                        crate::app_mobile_routes::ROLES_FROM_TEMPLATE,
+                        &body,
+                        &actor,
+                        crate::app_mobile_routes::handle_roles_from_template,
+                    ),
+                    &actor,
+                )
             })
             .await
             .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e));
@@ -10119,7 +10128,7 @@ async fn handle_one_request(
                     if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                         return DispatchOutcome::Done;
                     }
-                    let actor = match owner_or_skin_manage_hook(
+                    let (actor, agent_ws) = match owner_or_skin_manage_hook_scoped(
                         p,
                         &query,
                         bearer_token.as_deref(),
@@ -10141,7 +10150,7 @@ async fn handle_one_request(
                     let body = super::http::read_post_body(&mut *stream, &mut buf).await;
                     tokio::task::spawn_blocking(move || {
                         crate::skin_routes::stamp_actor(
-                            crate::skin_routes::handle_roles_post(&body, &actor),
+                            crate::skin_routes::agent_scoped(agent_ws.as_deref(), "/cli/skin/roles", &body, &actor, crate::skin_routes::handle_roles_post),
                             &actor,
                         )
                     })
@@ -10170,7 +10179,7 @@ async fn handle_one_request(
                     if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                         return DispatchOutcome::Done;
                     }
-                    let actor = match owner_or_skin_manage_hook(
+                    let (actor, agent_ws) = match owner_or_skin_manage_hook_scoped(
                         p,
                         &query,
                         bearer_token.as_deref(),
@@ -10192,7 +10201,7 @@ async fn handle_one_request(
                     let body = super::http::read_post_body(&mut *stream, &mut buf).await;
                     tokio::task::spawn_blocking(move || {
                         crate::skin_routes::stamp_actor(
-                            crate::skin_routes::handle_roles_update(&body, &actor),
+                            crate::skin_routes::agent_scoped(agent_ws.as_deref(), "/cli/skin/roles/update", &body, &actor, crate::skin_routes::handle_roles_update),
                             &actor,
                         )
                     })
@@ -10203,7 +10212,7 @@ async fn handle_one_request(
                     if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                         return DispatchOutcome::Done;
                     }
-                    let actor = match owner_or_skin_manage_hook(
+                    let (actor, agent_ws) = match owner_or_skin_manage_hook_scoped(
                         p,
                         &query,
                         bearer_token.as_deref(),
@@ -10225,7 +10234,7 @@ async fn handle_one_request(
                     let body = super::http::read_post_body(&mut *stream, &mut buf).await;
                     tokio::task::spawn_blocking(move || {
                         crate::skin_routes::stamp_actor(
-                            crate::skin_routes::handle_roles_remove(&body, &actor),
+                            crate::skin_routes::agent_scoped(agent_ws.as_deref(), "/cli/skin/roles/remove", &body, &actor, crate::skin_routes::handle_roles_remove),
                             &actor,
                         )
                     })
@@ -10302,7 +10311,7 @@ async fn handle_one_request(
                     if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                         return DispatchOutcome::Done;
                     }
-                    let actor = match owner_or_skin_manage_hook(
+                    let (actor, agent_ws) = match owner_or_skin_manage_hook_scoped(
                         p,
                         &query,
                         bearer_token.as_deref(),
@@ -10324,7 +10333,7 @@ async fn handle_one_request(
                     let body = super::http::read_post_body(&mut *stream, &mut buf).await;
                     tokio::task::spawn_blocking(move || {
                         crate::skin_routes::stamp_actor(
-                            crate::skin_routes::handle_roles_room(&body, &actor),
+                            crate::skin_routes::agent_scoped(agent_ws.as_deref(), "/cli/skin/roles/room", &body, &actor, crate::skin_routes::handle_roles_room),
                             &actor,
                         )
                     })
@@ -10336,7 +10345,7 @@ async fn handle_one_request(
                     if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                         return DispatchOutcome::Done;
                     }
-                    let actor = match owner_or_skin_manage_hook(
+                    let (actor, agent_ws) = match owner_or_skin_manage_hook_scoped(
                         p,
                         &query,
                         bearer_token.as_deref(),
@@ -10358,7 +10367,7 @@ async fn handle_one_request(
                     let body = super::http::read_post_body(&mut *stream, &mut buf).await;
                     tokio::task::spawn_blocking(move || {
                         crate::skin_routes::stamp_actor(
-                            crate::skin_routes::handle_roles_paths(&body, &actor),
+                            crate::skin_routes::agent_scoped(agent_ws.as_deref(), "/cli/skin/roles/paths", &body, &actor, crate::skin_routes::handle_roles_paths),
                             &actor,
                         )
                     })

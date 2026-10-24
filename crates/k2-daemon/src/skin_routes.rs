@@ -286,6 +286,17 @@ pub const AGENT_SCOPED_ROUTES: &[&str] = &[
     "/cli/skin/roles/unassign",
 ];
 
+/// The role writes [`agent_scoped`] guards: making, editing (its room
+/// lines and their folders) and removing a role.
+pub const AGENT_SCOPED_ROLE_ROUTES: &[&str] = &[
+    "/cli/skin/roles",
+    "/cli/skin/roles/update",
+    "/cli/skin/roles/room",
+    "/cli/skin/roles/paths",
+    "/cli/skin/roles/remove",
+    "/cli/skin/roles/from-template",
+];
+
 /// 0.46.4 security review (the older hole): the skin-manage gate passes a
 /// switch-1 agent for every guest on the box, other workspaces' too. On
 /// [`AGENT_SCOPED_ROUTES`] an agent (`agent_ws` = its workspace, from the
@@ -302,7 +313,8 @@ pub fn agent_scoped(
     handler: fn(&[u8], &str) -> CliResponse,
 ) -> CliResponse {
     if let Some(ws) = agent_ws {
-        if let Err(r) = agent_may_touch(ws, path, body) {
+        let checked = if AGENT_SCOPED_ROLE_ROUTES.contains(&path) { agent_may_write_role(ws, path, body) } else { agent_may_touch(ws, path, body) };
+        if let Err(r) = checked {
             k2_core::log_debug!("[skin] actor={actor} refused outside its workspace on {path}");
             return r;
         }
@@ -343,6 +355,86 @@ fn agent_may_touch(ws: &str, path: &str, body: &[u8]) -> Result<(), CliResponse>
                     if ids.iter().any(|id| id != ws) {
                         return Err(outside_workspace("those rooms are outside your workspace".to_string()));
                     }
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// The role writes (security review, 0.46.4): an agent makes or edits
+/// only roles whose rooms are all in its own workspace (and, for an App's
+/// role, an App of it). Making one with a room elsewhere, giving a role a
+/// room elsewhere, or editing or removing a role that already reaches
+/// elsewhere is `owner_only`. What the handler can't read is its own 400.
+fn agent_may_write_role(ws: &str, path: &str, body: &[u8]) -> Result<(), CliResponse> {
+    let Ok(v) = serde_json::from_slice::<serde_json::Value>(body) else { return Ok(()) };
+    let roles = skin::list_roles().map_err(CliResponse::internal_error)?;
+    let existing = |keys: &[&str]| -> Result<(), CliResponse> {
+        let Some(token) = str_field(&v, keys) else { return Ok(()) };
+        match roles.iter().find(|r| r.id == token || r.name.eq_ignore_ascii_case(token)) {
+            Some(r) if !role_in_workspace(r, ws) => {
+                Err(outside_workspace(format!("role '{}' reaches outside your workspace (another workspace's room or App)", r.name)))
+            }
+            _ => Ok(()),
+        }
+    };
+    let rooms_ok = |ids: &[String]| -> Result<(), CliResponse> {
+        if rooms_in(ids, ws) {
+            Ok(())
+        } else {
+            Err(outside_workspace("a role of yours may name only your workspace's room".to_string()))
+        }
+    };
+    let room_token_ok = |keys: &[&str]| -> Result<(), CliResponse> {
+        let Some(token) = str_field(&v, keys) else { return Ok(()) };
+        match skin::resolve_room_tokens(&[token.to_string()]) {
+            Ok(ids) => rooms_ok(&ids),
+            Err(_) => Ok(()),
+        }
+    };
+    let app_ok = |raw: Option<&str>| -> Result<(), CliResponse> {
+        match raw.map(resolve_app_target) {
+            Some(Ok(a)) if a != skin::HOST_APP_ID && !app_of_workspace(&a, ws) => {
+                Err(outside_workspace(format!("'{a}' isn't an App of your workspace")))
+            }
+            _ => Ok(()),
+        }
+    };
+    match path {
+        "/cli/skin/roles" => {
+            if let Ok(Some(p)) = role_policy_from_body(&v, false) {
+                rooms_ok(&p.keys().cloned().collect::<Vec<_>>())?;
+            }
+            app_ok(opt_text_field(&v, &["appId", "app_id", "app"]))?;
+        }
+        "/cli/skin/roles/update" => {
+            existing(&["id", "name", "role"])?;
+            if let Ok(Some(p)) = role_policy_from_body(&v, true) {
+                rooms_ok(&p.keys().cloned().collect::<Vec<_>>())?;
+            }
+        }
+        "/cli/skin/roles/room" => {
+            existing(&["id", "name", "role"])?;
+            room_token_ok(&["handle", "id"])?;
+        }
+        "/cli/skin/roles/paths" => {
+            existing(&["name", "role", "id"])?;
+            room_token_ok(&["handle", "room", "workspace"])?;
+        }
+        "/cli/skin/roles/remove" => existing(&["id", "name", "role"])?,
+        "/cli/skin/roles/from-template" => {
+            let app = str_field(&v, &["app", "appId"]);
+            app_ok(app)?;
+            let tokens: Vec<String> = v
+                .get("rooms")
+                .and_then(|x| x.as_array())
+                .map(|a| a.iter().filter_map(|x| x.as_str()).map(str::to_string).collect())
+                .unwrap_or_default();
+            if !tokens.is_empty() {
+                if let Ok(ids) = skin::resolve_room_tokens(&tokens) {
+                    rooms_ok(&ids)?;
                 }
             }
         }

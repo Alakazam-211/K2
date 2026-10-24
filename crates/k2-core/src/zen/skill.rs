@@ -37,7 +37,8 @@ fn prop_type(t: PropType) -> String {
         PropType::OneOf(xs) => format!("one of {}", ticks(xs)),
         PropType::SubsetOf(xs) => format!("a list from {}", ticks(xs)),
         PropType::Int { min, max } => format!("a whole number from {min} to {max}"),
-        PropType::Names { min, max } => format!("a list of {min} to {max} names or addresses"),
+        PropType::Names { min, max, all: false } => format!("a list of {min} to {max} names or addresses"),
+        PropType::Names { min, max, all: true } => format!("a list of {min} to {max} names or addresses, or `\"all\"`"),
     }
 }
 
@@ -251,6 +252,12 @@ column it is `column` unless you set `orientation = \"row\"` or an `edge`.\n\n"
   (2 to 8): no list beside it; its header is the drop-down. Each agent is looked up by name\n\
   or address on this computer and the person's Homes on other servers. Not with `agent`,\n\
   `agents` or `home`.\n\
+- **Any agent, one Conversation:** `pick = \"all\"`: the header's drop-down lists every agent,\n\
+  with a search field on top; nothing shows until the person picks. On its own it lists this\n\
+  computer's agents and the person's Homes. With `agents = \"<widget id>\"` it lists that\n\
+  widget's agents and shares its pick: beside a custom widget, the row `k2.agents.subscribe`\n\
+  marks `selected` is the agent the header shows, and `k2.conversation.open(address)` shows\n\
+  another (the Kanban's Send board works this way). Not with `agent` or `home`.\n\
 - **A chosen list:** `kind = \"agents\"` with `list-from = \"<custom widget id>\"` (mode `list`):\n\
   the agents that custom widget lists with `k2.agents.show([...])`, in its order, from this\n\
   computer and the person's Homes on other servers. \"Nothing listed yet\" until it lists some;\n\
@@ -589,24 +596,22 @@ saves). `k2 zen guide services` has every rule; `k2 study garden-data` is your s
   nothing). History: `k2 store export --widget <w> --at <YYYY-MM-DD>`.\n\
 - The example: `k2 zen guide example board-lite` (a sticky-note board in its data, and\n\
   the agent's `bin/board-lite` beside it).\n\
-- **The Kanban Garden** (`k2:kanban@4`, New Garden → Kanban) keeps its board in\n\
+- **The Kanban Garden** (`k2:kanban@5`, New Garden → Kanban) keeps its board in\n\
   `data:k2:kanban`, one board per Garden under `board/<garden id>/` (its **For agents**\n\
   button shows the exact prefix `<p>`): `<p>col/<id>` = `{name, order}`, `<p>card/<id>` =\n\
   `{title, note, col, order}` (`col` is a column's `<id>`, `note` is markdown, lower\n\
   `order` first). With a grant, `k2 store list --widget k2:kanban --prefix <p>`, then:\n\
   `k2 store put --widget k2:kanban <p>card/<new-id> --if-rev 0 --value '{\"title\":\"…\",\"col\":\"todo\",\"order\":4096}'`\n\
   Change a card with `--if-rev <rev>`; never write `<p>meta`.\n\
-  Its **Thread** button opens a panel to talk to one agent beside the board, in K2's\n\
-  Thread look (your bubbles right, the agent's left, \"author · time\" under each,\n\
-  markdown, a round Send: Enter sends, Shift+Enter is a new line; the working tab with\n\
-  counters and a clock). It wears K2 Companion's colours in light and dark; to follow\n\
-  the Garden's theme instead, set `look = \"garden\"` under `[widget.props.config]`.\n\
-  A message never moves a person who scrolled up; a \"new messages\" pill counts it.\n\
-  It shows a message's files (chips, images as pictures; a click opens them full size),\n\
-  makes file paths in your workspace clickable, and takes files with its + button\n\
-  (they ride the message, workspace-relative, like K2's own Thread).\n\
-  A Kanban Garden that syncs with K2's default moves to `@4`; an own copy keeps its board\n\
-  (`@1`, `@2` or `@3`).\n\n",
+  Its Thread is K2's own Conversation in a second column, \"Thread\", that starts folded:\n\
+  the board's **Thread** button folds and unfolds it (so do K2's tab and chevron). The\n\
+  Conversation follows the board with `pick = \"all\"`, so its header picks any of your\n\
+  agents, and the board's **Send board** posts the board, as markdown, to the agent it\n\
+  shows. New Kanban Gardens show the Glass theme (K2 Companion's look). The board wears\n\
+  K2 Companion's colours in light and dark; to follow the Garden's theme instead, set\n\
+  `look = \"garden\"` under `[widget.props.config]`.\n\
+  A Kanban Garden that syncs with K2's default moves to `@5` and keeps its theme; an own\n\
+  copy keeps its board (`@1` to `@4`, which draw a Thread panel of their own).\n\n",
     )
 }
 
@@ -1261,9 +1266,25 @@ mod tests {
         assert!(crate::skills::version::SKILL_VERSION_ZEN >= 32, "pick needs a new skill version");
         let s = generate_k2_zen_skill_for(false);
         for needle in [
-            "- `pick` (a list of 2 to 8 names or addresses): the header is a drop-down that switches between these agents",
+            "- `pick` (a list of 2 to 8 names or addresses, or `\"all\"`): the header is a drop-down that switches between these agents",
             "not with `agent`, `agents` or `home`",
             "**A few agents, one Conversation:** `kind = \"conversation\"` with `pick = [\"sales\", \"ops\"]`",
+        ] {
+            assert!(s.contains(needle), "the k2-zen skill must say {needle:?}");
+        }
+    }
+
+    /// v33: `pick = "all"` (the Kanban's Thread, 0.46.4): any agent, with a
+    /// search field; beside a custom widget the two share one pick.
+    #[test]
+    fn skill_documents_pick_all() {
+        assert!(crate::skills::version::SKILL_VERSION_ZEN >= 33, "pick = \"all\" needs a new skill version");
+        let s = generate_k2_zen_skill_for(false);
+        for needle in [
+            "`pick = \"all\"`: any agent, with a search field at the top of the menu",
+            "**Any agent, one Conversation:** `pick = \"all\"`",
+            "the row `k2.agents.subscribe`\nmarks `selected` is the agent the header shows",
+            "Not with `agent` or `home`.",
         ] {
             assert!(s.contains(needle), "the k2-zen skill must say {needle:?}");
         }
@@ -1308,7 +1329,7 @@ mod tests {
         let s = generate_k2_zen_skill_for(false);
         for needle in [
             "cards (the Diary, the Kanban, start with the default, or start empty and ask you)",
-            "**The Kanban Garden** (`k2:kanban@4`, New Garden → Kanban)",
+            "**The Kanban Garden** (`k2:kanban@5`, New Garden → Kanban)",
             "`data:k2:kanban`, one board per Garden under `board/<garden id>/`",
             "`<p>card/<id>` =\n`{title, note, col, order}`",
             "k2 store put --widget k2:kanban <p>card/<new-id>",
@@ -1319,49 +1340,32 @@ mod tests {
         }
     }
 
-    /// v26: the Kanban's Thread panel (k2:kanban@2, 0.46.1, Rosson
-    /// 2026-10-18): K2's Thread look in K2 Companion's colours, and the
-    /// `look = "garden"` switch back to the Garden theme.
+    /// v26–v28 described the Kanban's own Thread panel (k2:kanban@2 to @4:
+    /// K2's Thread look, the scrolling, the files). v33 (0.46.4, Rosson
+    /// 2026-10-24): New Garden makes @5, whose Thread is K2's own
+    /// Conversation in a folded "Thread" column (`pick = "all"`, following
+    /// the board), and Send board posts to the agent it shows; the board
+    /// keeps K2 Companion's colours and `look = "garden"`. The old panel's
+    /// words are gone.
     #[test]
-    fn skill_documents_the_kanban_thread_panel() {
-        assert!(crate::skills::version::SKILL_VERSION_ZEN >= 26, "k2:kanban@2 needs a new skill version");
+    fn skill_documents_the_kanban_thread_column() {
+        assert!(crate::skills::version::SKILL_VERSION_ZEN >= 33, "k2:kanban@5 needs a new skill version");
         let s = generate_k2_zen_skill_for(false);
-        for old in ["k2:kanban@1`, New Garden", "k2:kanban@2`, New Garden", "k2:kanban@3`, New Garden"] {
-            assert!(!s.contains(old), "New Garden makes @4, not {old}");
+        for old in ["k2:kanban@1`, New Garden", "k2:kanban@2`, New Garden", "k2:kanban@3`, New Garden", "k2:kanban@4`, New Garden"] {
+            assert!(!s.contains(old), "New Garden makes @5, not {old}");
+        }
+        for gone in ["Its **Thread** button opens a panel", "your bubbles right, the agent's left", "a \"new messages\" pill counts it", "takes files with its + button"] {
+            assert!(!s.contains(gone), "the old panel is gone from the skill: {gone:?}");
         }
         for needle in [
-            "Its **Thread** button opens a panel to talk to one agent beside the board",
-            "your bubbles right, the agent's left",
-            "Enter sends, Shift+Enter is a new line",
+            "Its Thread is K2's own Conversation in a second column, \"Thread\", that starts folded:",
+            "the board's **Thread** button folds and unfolds it",
+            "Conversation follows the board with `pick = \"all\"`",
+            "the board's **Send board** posts the board, as markdown, to the agent it\nshows",
+            "New Kanban Gardens show the Glass theme (K2 Companion's look)",
             "K2 Companion's colours in light and dark",
-            "set `look = \"garden\"` under `[widget.props.config]`",
-            "an own copy keeps its board\n(`@1`, `@2` or `@3`)",
-        ] {
-            assert!(s.contains(needle), "the k2-zen skill must say {needle:?}");
-        }
-    }
-
-    /// v27: k2:kanban@3 (0.46.3, Rosson 2026-10-20): New Garden makes @3,
-    /// whose Thread panel never moves a reader who scrolled up.
-    #[test]
-    fn skill_documents_the_kanban_3_scrolling() {
-        assert!(crate::skills::version::SKILL_VERSION_ZEN >= 27, "k2:kanban@3 needs a new skill version");
-        let s = generate_k2_zen_skill_for(false);
-        for needle in ["A message never moves a person who scrolled up; a \"new messages\" pill counts it."] {
-            assert!(s.contains(needle), "the k2-zen skill must say {needle:?}");
-        }
-    }
-
-    /// v28: k2:kanban@4 (Thread parity, Rosson 2026-10-20, for 0.46.3): New
-    /// Garden makes @4, whose Thread panel has the Thread's files and links.
-    #[test]
-    fn skill_documents_the_kanban_4_files_and_links() {
-        assert!(crate::skills::version::SKILL_VERSION_ZEN >= 28, "k2:kanban@4 needs a new skill version");
-        let s = generate_k2_zen_skill_for(false);
-        for needle in [
-            "It shows a message's files (chips, images as pictures; a click opens them full size),",
-            "makes file paths in your workspace clickable, and takes files with its + button",
-            "moves to `@4`",
+            "`look = \"garden\"` under `[widget.props.config]`",
+            "moves to `@5` and keeps its theme; an own\ncopy keeps its board (`@1` to `@4`",
         ] {
             assert!(s.contains(needle), "the k2-zen skill must say {needle:?}");
         }

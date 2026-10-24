@@ -23,3 +23,9 @@ parity) is the same page on the Kanban whose Thread panel has the Thread's
 files (chips, pictures), workspace file links, picked files on a post,
 mark-read, catch-up and paging back; a synced Kanban Garden moves to it, an
 own copy keeps its board.
+kanban-5.toml (template k2.kanban@5, widget k2:kanban@5, 0.46.4) is the
+board beside K2's own Conversation widget in a second, collapsible
+"Thread" column (pick = "all": its header picks any agent; it follows the
+board, so the board's Send board posts to the agent it shows). New Kanban
+Gardens show the Glass theme (K2 Companion's look); a synced Kanban Garden
+moves to this page and keeps its theme, an own copy keeps its board.

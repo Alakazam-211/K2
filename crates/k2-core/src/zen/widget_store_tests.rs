@@ -355,15 +355,21 @@ fn a_kanban_garden_from_the_catalog_is_the_board_with_its_caps() {
     let page = f.resolve(Some(&g.id)).expect("resolve kanban");
     assert_eq!(page["page"]["layout"]["canvas"], "full", "{page}");
     let widgets = page["page"]["widgets"].as_array().expect("widgets");
-    assert_eq!(widgets.len(), 1, "the board alone: {page}");
+    // 0.46.4 (k2.kanban@5): the board, and K2's own Thread beside it.
+    assert_eq!(widgets.len(), 2, "the board and its Thread: {page}");
     let w = &widgets[0];
     assert_eq!((w["kind"].as_str(), w["widget"].as_str()), (Some("custom"), Some(crate::zen::builtin_widgets::KANBAN_WIDGET_LATEST)), "{page}");
     assert_eq!(w["origin"], "local");
     assert_eq!(
         w["caps"],
-        json!(["agents:read", "thread:read", "thread:post", "store:read", "store:write"]),
+        json!(["agents:read", "thread:post", "store:read", "store:write"]),
         "the board works with zero clicks: {w}"
     );
+    let t = &widgets[1];
+    assert_eq!((t["id"].as_str(), t["kind"].as_str(), t["column"].as_u64()), (Some("thread"), Some("conversation"), Some(1)), "{page}");
+    assert_eq!((t["props"]["agents"].as_str(), t["props"]["pick"].as_str()), (Some("board"), Some("all")), "it follows the board: {t}");
+    let col = &page["page"]["layout"]["columns"][1];
+    assert_eq!((col["collapsible"].as_bool(), col["collapsed"].as_bool(), col["label"].as_str()), (Some(true), Some(true), Some("Thread")), "{col}");
     let items = page["page"]["chrome"]["items"].as_array().expect("chrome items");
     let kinds: Vec<&str> = items.iter().filter_map(|i| i["kind"].as_str()).collect();
     assert_eq!(kinds, vec!["menu", "garden-switcher", "theme-picker", "zen-toggle"], "{page}");
@@ -774,4 +780,68 @@ fn pick_refusals_each_at_their_line() {
         let bad = with_crew.replace("[\"k2-dev-web\", \" k2 \"]", value);
         one_error(&page_errors(&f, &g, &bad), 8, "conversation.pick must be a list of 2 to 8 agent names or addresses", what);
     }
+}
+
+/// The Kanban's Thread (Rosson 2026-10-24, for 0.46.4): `pick = "all"`, a
+/// header drop-down over any agent. On its own it needs no Agents widget;
+/// with `agents` it follows that widget (a custom one too) and shares its
+/// pick. Any case reads, and is stored as "all".
+#[test]
+fn pick_all_needs_no_list_and_may_follow_a_widget() {
+    let (_t, f) = set_up("pick-all");
+    let g = gid(&f, "Garden 2");
+    let alone = PICK_PAGE.replace("[\"k2-dev-web\", \" k2 \"]", "\" All \"");
+    assert_eq!(page_errors(&f, &g, &alone), Vec::<J>::new());
+    let page = f.resolve(Some(&g)).expect("resolve");
+    let talk = &page["page"]["widgets"][0];
+    assert_eq!(talk["props"]["pick"], json!("all"), "stored as \"all\": {talk}");
+    assert!(talk["props"].get("agents").is_none(), "on its own it follows nothing: {talk}");
+
+    // Following the Board (a custom widget that reads agents): clean, and
+    // the Conversation keeps `agents` as written.
+    f.new_widget("agent-arcade", Some("hello")).expect("new");
+    let board_part = LIST_PAGE.split("\n[[widget]]\nid = \"crew\"").next().expect("the board part");
+    let follow = format!(
+        "{board_part}\n[[widget]]\nid = \"talk\"\nkind = \"conversation\"\ncolumn = 1\n[widget.props]\nagents = \"board\"\npick = \"all\"\n"
+    );
+    assert_eq!(page_errors(&f, &g, &follow), Vec::<J>::new());
+    let page = f.resolve(Some(&g)).expect("resolve follow");
+    let widgets = page["page"]["widgets"].as_array().expect("widgets");
+    let talk = widgets.iter().find(|w| w["id"] == "talk").expect("talk");
+    assert_eq!((talk["props"]["agents"].as_str(), talk["props"]["pick"].as_str()), (Some("board"), Some("all")), "{talk}");
+
+    // Following an Agents widget is clean too.
+    let crew = format!(
+        "{}\n[[widget]]\nid = \"crew\"\nkind = \"agents\"\ncolumn = 0\n[widget.props]\nhome = \"Work\"\n",
+        alone.replace("[widget.props]\n", "[widget.props]\nagents = \"crew\"\n")
+    );
+    assert_eq!(page_errors(&f, &g, &crew), Vec::<J>::new());
+}
+
+#[test]
+fn pick_all_refusals_each_at_their_line() {
+    let (_t, f) = set_up("pick-all-bad");
+    let g = gid(&f, "Garden 2");
+    let alone = PICK_PAGE.replace("[\"k2-dev-web\", \" k2 \"]", "\"all\"");
+    // Not with agent or home (line 8, the clashing prop).
+    for (prop, needle) in [
+        ("agent = \"k2\"", "agent pins one agent, but pick lists the agents"),
+        ("home = \"Work\"", "home picks a Home to look `agent` up in, but pick lists the agents"),
+    ] {
+        let clash = alone.replace("[widget.props]\n", &format!("[widget.props]\n{prop}\n"));
+        one_error(&page_errors(&f, &g, &clash), 8, needle, prop);
+    }
+    // Any other string is refused at the value, and the message names "all".
+    for (value, what) in [("\"everyone\"", "another word"), ("\"all, k2\"", "all in a list string"), ("\"\"", "an empty string")] {
+        let bad = PICK_PAGE.replace("[\"k2-dev-web\", \" k2 \"]", value);
+        let errs = page_errors(&f, &g, &bad);
+        let first = errs.first().unwrap_or_else(|| panic!("{what}: refused"));
+        assert_eq!(first["line"].as_u64(), Some(8), "{what}: {first}");
+        let m = first["message"].as_str().expect("message");
+        assert!(m.contains("conversation.pick must be a list of 2 to 8 agent names or addresses"), "{what}: {m}");
+        assert!(m.ends_with("or \"all\" for any agent"), "{what}: {m}");
+    }
+    // A list that holds the word is still a list (two agents).
+    let listed = PICK_PAGE.replace("[\"k2-dev-web\", \" k2 \"]", "[\"all\", \"k2\"]");
+    assert_eq!(page_errors(&f, &g, &listed), Vec::<J>::new());
 }

@@ -173,7 +173,11 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// under its Garden in Settings → Gardens.
 /// v32 = the Conversation's `pick` (Fleet Ops 2, Rosson 2026-10-24): 2 to 8
 /// agents, and the header is the drop-down that switches between them.
-pub const SKILL_VERSION_ZEN: u32 = 32;
+/// v33 = `pick = "all"` (any agent, a search field; beside a custom widget
+/// they share one pick) and the Kanban on `k2:kanban@5`: K2's own
+/// Conversation in a folded "Thread" column, Send board to the agent it
+/// shows (Rosson 2026-10-24, for 0.46.4).
+pub const SKILL_VERSION_ZEN: u32 = 33;
 /// Bumped to 5 in 0.39.0: same Phase 2.1 A25 verb refresh applied to
 /// the workspace-root template body (Cli tools section, workflow
 /// docs). Was 4 since 0.32.7 (SOURCE sub-regions adoption).

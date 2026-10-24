@@ -34,6 +34,15 @@
 // (`ZenConversationHead`). ↑/↓ move, Enter picks, Esc / a click outside
 // closes. An agent nothing answers to is a disabled card. Which one shows
 // is per Garden and widget on this computer (`zen-conversation-pick.ts`).
+//
+// The Kanban's Thread (Rosson 2026-10-24, for 0.46.4): `pick = "all"` lists
+// every agent the conversation can show (what it follows with `agents`, a
+// custom widget too, else the Garden's reach), with a search field on top
+// of the menu and no badge. The shown agent is the view's selection, so a
+// custom widget it follows reads it as its `selected` row (the Kanban's
+// Send board) and moves it with `conversation.open`; the saved pick follows
+// it and reopens it after a reload. Before anyone is picked the header is
+// "Pick an agent" with the same menu.
 
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from 'zustand'
@@ -58,7 +67,7 @@ import { WorkspaceFileLinks } from '@/components/common/WorkspaceFileLinks'
 import { useZenMaterials } from '@/lib/zen/zen-materials'
 import type { ZenAgentRow } from '@/lib/zen/zen-data'
 import { ZEN_TILE_RAISED_PROPS } from '@/lib/zen/zen-materials'
-import { useZenConversationPicksStore, zenConversationPick, zenFindPickRow } from '@/lib/zen/zen-conversation-pick'
+import { useZenConversationPicksStore, zenConversationPick, zenConversationPickAll, zenFindPickRow } from '@/lib/zen/zen-conversation-pick'
 import { zenGardenHomeKey } from '@/lib/zen/zen-garden-homes'
 import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import type { ZenWidgetProps } from '../zen-registry'
@@ -260,10 +269,28 @@ export interface ZenConversationPicker {
   /** Set by a pick: the next conversation (a new mount) focuses its header,
    *  so the keyboard stays where it was. */
   refocus?: { current: boolean }
+  /** `pick = "all"`: a search field tops the menu (it may list every agent). */
+  search?: boolean
+  /** The header's badge of the other agents' unread and waiting (default
+   *  on; off for `pick = "all"`, where "the others" is everyone). */
+  badge?: boolean
 }
 
 /** The second line of a card for an agent that isn't found. */
 export const zenPickMissingText = (name: string): string => `${name} isn’t on this Home.`
+
+/** `pick = "all"` before anyone is picked: the header and the body. */
+export const ZEN_PICK_NONE_LABEL = 'Pick an agent'
+export const ZEN_PICK_NONE_TEXT = 'Pick an agent above to talk to them here.'
+/** The search field's empty answer. */
+export const zenPickNoMatchText = (q: string): string => (q ? `No agent matches “${q}”.` : 'No agents here yet.')
+
+/** Does the card for `row` match the search `q` (lower case)? Its name, its
+ *  address or its server. */
+export function zenPickMatches(row: ZenAgentRow, q: string): boolean {
+  if (!q) return true
+  return [row.label, row.address, row.server ?? 'this computer'].some((s) => s.toLocaleLowerCase().includes(q))
+}
 
 /** The other agents' unread and waiting, summed for the header's badge. A
  *  muted Thread's unread is left out (it never nags); its waiting cards
@@ -297,9 +324,25 @@ function Chevron({ open }: { open: boolean }): React.JSX.Element {
 /** A card's box: the header row's padding, so each card sits like it. */
 const CARD_STYLE: React.CSSProperties = { padding: '12px 18px', cursor: 'pointer' }
 
+/** The header's drop-down button: the header row's look, a hover wash. */
+const PICK_BUTTON_STYLE: React.CSSProperties = {
+  margin: '-4px -6px',
+  padding: '4px 6px',
+  border: 'none',
+  borderRadius: 'var(--zen-radius)',
+  background: 'transparent',
+  color: 'inherit',
+  font: 'inherit',
+  textAlign: 'left',
+  cursor: 'pointer',
+}
+
 /** The `pick` menu: a panel over the Thread from the header's top edge
  *  down, one card per agent; a listbox (↑/↓ move, Home/End, Enter or Space
- *  pick, Esc or Tab close). */
+ *  pick, Esc or Tab close). With `search` (`pick = "all"`) a search field
+ *  sits on top and keeps the focus (a combobox: the same keys, but Space
+ *  types and Home/End move in the field); it filters by name, address or
+ *  server. */
 function ZenPickMenu({
   id,
   picker,
@@ -313,17 +356,32 @@ function ZenPickMenu({
   buttonRef: React.RefObject<HTMLButtonElement | null>
   onClose(focusButton: boolean): void
 }): React.JSX.Element {
-  const { entries, onPick } = picker
-  const enabled = entries.flatMap((e, i) => (e.row ? [i] : []))
+  const { onPick, search } = picker
+  const [query, setQuery] = useState('')
+  const q = query.trim().toLocaleLowerCase()
+  // Each card keeps its index in `picker.entries` (the option ids), so the
+  // search only hides cards.
+  const visible = picker.entries.flatMap((e, i) => (!search || (e.row && zenPickMatches(e.row, q)) ? [{ e, i }] : []))
+  const enabled = visible.flatMap(({ e, i }) => (e.row ? [i] : []))
+  const entries = picker.entries
   const [active, setActive] = useState(() => {
     const cur = entries.findIndex((e) => e.row?.address === shown)
     return cur >= 0 ? cur : (enabled[0] ?? -1)
   })
+  // A new search: the first match is the keyboard's.
+  const onQuery = (next: string): void => {
+    setQuery(next)
+    const nq = next.trim().toLocaleLowerCase()
+    const first = entries.findIndex((e) => e.row !== null && zenPickMatches(e.row, nq))
+    setActive(first)
+  }
   const panelRef = useRef<HTMLDivElement | null>(null)
   const listRef = useRef<HTMLDivElement | null>(null)
+  const searchRef = useRef<HTMLInputElement | null>(null)
   useEffect(() => {
-    listRef.current?.focus()
-  }, [])
+    if (search) searchRef.current?.focus()
+    else listRef.current?.focus()
+  }, [search])
   // A click outside the panel and the header's button closes it.
   useEffect(() => {
     const onDown = (e: MouseEvent): void => {
@@ -340,7 +398,7 @@ function ZenPickMenu({
   }, [active])
   const pick = (i: number): void => {
     const row = entries[i]?.row
-    if (!row) return
+    if (!row || !enabled.includes(i)) return
     onClose(true)
     if (row.address !== shown) onPick(row.address)
   }
@@ -357,36 +415,78 @@ function ZenPickMenu({
     }
     if (e.key === 'ArrowDown') move(1)
     else if (e.key === 'ArrowUp') move(-1)
-    else if (e.key === 'Home') setActive(enabled[0] ?? -1)
-    else if (e.key === 'End') setActive(enabled[enabled.length - 1] ?? -1)
-    else if (e.key === 'Enter' || e.key === ' ') pick(active)
+    // In the search field Home, End and Space are the field's.
+    else if (!search && e.key === 'Home') setActive(enabled[0] ?? -1)
+    else if (!search && e.key === 'End') setActive(enabled[enabled.length - 1] ?? -1)
+    else if (e.key === 'Enter' || (!search && e.key === ' ')) pick(active)
     else if (e.key === 'Escape') onClose(true)
     else return
     e.preventDefault()
     e.stopPropagation()
   }
+  const activeId = enabled.includes(active) ? `${id}-${active}` : undefined
   return (
     <div
       ref={panelRef}
       data-zen-pick-menu=""
+      data-zen-pick-search={search ? '' : undefined}
       {...ZEN_TILE_RAISED_PROPS}
       className="absolute overflow-y-auto"
       // Zen's drop-down look (the Garden switcher's), edge to edge.
       style={{ ...ZEN_DROPDOWN_STYLE, padding: 0, top: 0, left: 0, right: 0, maxHeight: '100%', zIndex: 4 }}
     >
+      {search && (
+        <div
+          className="sticky top-0"
+          style={{ zIndex: 1, padding: '10px 12px', background: 'var(--zen-surface-raised)', borderBottom: '1px solid var(--zen-border)' }}
+        >
+          <input
+            ref={searchRef}
+            type="text"
+            role="combobox"
+            aria-expanded="true"
+            aria-controls={id}
+            aria-autocomplete="list"
+            aria-activedescendant={activeId}
+            aria-label="Search agents"
+            placeholder="Search agents…"
+            autoComplete="off"
+            spellCheck={false}
+            data-zen-pick-search-input=""
+            value={query}
+            onChange={(e) => onQuery(e.target.value)}
+            onKeyDown={onKeyDown}
+            className="w-full"
+            style={{
+              padding: '6px 10px',
+              border: '1px solid var(--zen-border)',
+              borderRadius: 'var(--zen-radius)',
+              background: 'var(--zen-surface)',
+              color: 'var(--zen-text)',
+              font: 'inherit',
+              outline: 'none',
+            }}
+          />
+        </div>
+      )}
       <div
         ref={listRef}
         id={id}
         role="listbox"
         aria-label="Switch agent"
         tabIndex={-1}
-        aria-activedescendant={active >= 0 ? `${id}-${active}` : undefined}
-        onKeyDown={onKeyDown}
+        aria-activedescendant={search ? undefined : activeId}
+        onKeyDown={search ? undefined : onKeyDown}
         className="flex flex-col"
         style={{ outline: 'none' }}
       >
-        {entries.map((e, i) => {
-          const sep = i > 0 ? { borderTop: '1px solid var(--zen-border)' } : null
+        {search && visible.length === 0 && (
+          <div data-zen-pick-empty="" style={{ ...CARD_STYLE, cursor: 'default', color: 'var(--zen-text-muted)', textAlign: 'center' }}>
+            {zenPickNoMatchText(query.trim())}
+          </div>
+        )}
+        {visible.map(({ e, i }, at) => {
+          const sep = at > 0 ? { borderTop: '1px solid var(--zen-border)' } : null
           if (!e.row) {
             return (
               <div
@@ -564,7 +664,7 @@ export function ZenConversation({
     setMenuOpen(false)
     if (focusButton) pickButtonRef.current?.focus()
   }, [])
-  const badge = picker ? zenPickBadge(picker.entries, row.address) : null
+  const badge = picker && picker.badge !== false ? zenPickBadge(picker.entries, row.address) : null
   const refocus = picker?.refocus
   useEffect(() => {
     if (!refocus?.current) return
@@ -600,17 +700,7 @@ export function ZenConversation({
             aria-controls={menuOpen ? menuId : undefined}
             title="Switch agent"
             className="flex min-w-0 items-center gap-3"
-            style={{
-              margin: '-4px -6px',
-              padding: '4px 6px',
-              border: 'none',
-              borderRadius: 'var(--zen-radius)',
-              background: 'transparent',
-              color: 'inherit',
-              font: 'inherit',
-              textAlign: 'left',
-              cursor: 'pointer',
-            }}
+            style={PICK_BUTTON_STYLE}
             onClick={() => setMenuOpen((o) => !o)}
             onKeyDown={(e) => {
               if (e.key === 'ArrowDown' && !menuOpen) {
@@ -776,6 +866,56 @@ export function ZenConversation({
   )
 }
 
+/** `pick = "all"` with no one shown yet: the header is the drop-down
+ *  ("Pick an agent"), the same menu as a shown agent's header. */
+function ZenConversationPickNone({ picker }: { picker: ZenConversationPicker }): React.JSX.Element {
+  const menuId = useId()
+  const buttonRef = useRef<HTMLButtonElement | null>(null)
+  const [open, setOpen] = useState(false)
+  const close = useCallback((focusButton: boolean) => {
+    setOpen(false)
+    if (focusButton) buttonRef.current?.focus()
+  }, [])
+  return (
+    <div className="relative flex h-full min-h-0 w-full flex-col" data-zen-pick-none="" style={CARD_TOKENS}>
+      <div className="flex flex-shrink-0 items-center gap-3" style={{ padding: '12px 18px', borderBottom: '1px solid var(--zen-border)' }}>
+        <button
+          ref={buttonRef}
+          type="button"
+          data-zen-pick-button=""
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          aria-controls={open ? menuId : undefined}
+          title="Pick an agent"
+          className="flex min-w-0 items-center gap-3"
+          style={PICK_BUTTON_STYLE}
+          onClick={() => setOpen((o) => !o)}
+          onKeyDown={(e) => {
+            if (e.key === 'ArrowDown' && !open) {
+              e.preventDefault()
+              setOpen(true)
+            }
+          }}
+        >
+          <ZenAgentAvatar label="?" url={null} size={34} background="var(--zen-surface)" color="var(--zen-text-muted)" fontSize="0.9em" />
+          <span className="truncate" style={{ fontWeight: 600 }} data-zen-conversation-title="">
+            {ZEN_PICK_NONE_LABEL}
+          </span>
+          <Chevron open={open} />
+        </button>
+      </div>
+      <div
+        className="flex flex-1 items-center justify-center text-center"
+        data-zen-conversation-none=""
+        style={{ padding: 24, color: 'var(--zen-text-muted)' }}
+      >
+        {ZEN_PICK_NONE_TEXT}
+      </div>
+      {open && <ZenPickMenu id={menuId} picker={picker} shown="" buttonRef={buttonRef} onClose={close} />}
+    </div>
+  )
+}
+
 /** Is this conversation pinned to one agent (the `agent` prop)? */
 function zenConversationPinned(props: Record<string, unknown>): boolean {
   return typeof props.agent === 'string' && props.agent.trim() !== ''
@@ -800,25 +940,62 @@ export function zenPickState(
   return { entries, shown: found.find((r) => r.address === saved) ?? found[0] ?? null }
 }
 
+/** `pick = "all"`: every agent the view lists (not a list's off-list
+ *  extras) is a card, and the one shown is the view's selection, else the
+ *  saved pick while it is listed (it is opened, so it becomes the
+ *  selection), else no one. */
+export function zenPickAllState(
+  rows: readonly ZenAgentRow[],
+  saved: string | null,
+): { entries: ZenPickEntry[]; shown: ZenAgentRow | null } {
+  const listed = rows.filter((r) => !r.offList)
+  const entries = listed.map((r) => ({ name: r.label, row: r }))
+  const shown = listed.find((r) => r.selected) ?? listed.find((r) => r.address === saved) ?? null
+  return { entries, shown }
+}
+
 export function ZenConversationWidget({ bridge, decl }: ZenWidgetProps): React.JSX.Element {
   const rows = useZenRows(bridge)
   const pick = zenConversationPick(decl.props)
-  const pinned = !pick && zenConversationPinned(decl.props)
+  // `pick = "all"` (0.46.4): any agent; the view's selection is the pick, so
+  // a custom widget this follows sees it (`selected`) and can change it.
+  const all = zenConversationPickAll(decl.props)
+  const pinned = !pick && !all && zenConversationPinned(decl.props)
   // `pick`: the shown agent is per Garden and widget, on this computer.
   const pickKey = zenGardenHomeKey(bridge.gardens?.current?.()?.id ?? '', decl.id)
   const saved = useZenConversationPicksStore((s) => s.picks[pickKey] ?? null)
   const setPick = useZenConversationPicksStore((s) => s.setPick)
   const refocus = useRef(false)
+  // The last agent this widget opened (a pinned or picked one opens itself).
+  const opened = useRef<string | null>(null)
   const onPick = useCallback(
     (address: string) => {
       refocus.current = true
       setPick(pickKey, address)
+      if (!all) return
+      // The shared selection: the conversation, and a widget it follows.
+      // Opened here, once (not again by the effect below).
+      opened.current = address
+      void Promise.resolve()
+        .then(() => bridge.call('conversation.open', address))
+        .catch((err: unknown) => console.warn('[zen] pick conversation failed:', err))
     },
-    [setPick, pickKey],
+    [setPick, pickKey, all, bridge],
   )
-  const picked = pick ? zenPickState(rows, pick, saved) : null
-  const picker: ZenConversationPicker | undefined = picked ? { entries: picked.entries, onPick, refocus } : undefined
+  const picked = pick ? zenPickState(rows, pick, saved) : all ? zenPickAllState(rows, saved) : null
+  const picker: ZenConversationPicker | undefined = picked
+    ? { entries: picked.entries, onPick, refocus, ...(all ? { search: true, badge: false } : {}) }
+    : undefined
   const row = picked ? picked.shown : zenConversationRow(rows, decl.props)
+  // `pick = "all"`: a pick made elsewhere (the widget it follows) is saved
+  // too, so it comes back after a reload.
+  const selectedAddress = all ? (rows.find((r) => r.selected && !r.offList)?.address ?? null) : null
+  const lastSelected = useRef<string | null>(null)
+  useEffect(() => {
+    if (!all || selectedAddress === lastSelected.current) return
+    lastSelected.current = selectedAddress
+    if (selectedAddress) setPick(pickKey, selectedAddress)
+  }, [all, selectedAddress, pickKey, setPick])
   const options: ZenConversationOptions = {
     compose: decl.props.compose !== false,
     attachments: decl.props.attachments !== false,
@@ -826,9 +1003,9 @@ export function ZenConversationWidget({ bridge, decl }: ZenWidgetProps): React.J
     activityDrawer: decl.props['activity-drawer'] === true,
     mute: decl.props.mute === true,
   }
-  // A pinned conversation opens itself; so does a `pick` one's shown agent.
-  const opens = pinned || pick !== null
-  const opened = useRef<string | null>(null)
+  // A pinned conversation opens itself; so does a `pick` one's shown agent
+  // (with `pick = "all"`, the saved pick after a reload).
+  const opens = pinned || pick !== null || all
   useEffect(() => {
     if (!opens || !row || row.selected || opened.current === row.address) return
     opened.current = row.address
@@ -843,6 +1020,8 @@ export function ZenConversationWidget({ bridge, decl }: ZenWidgetProps): React.J
         <ZenFileLinks address={row.address}>
           <ZenConversation key={row.address} bridge={bridge} row={row} options={options} picker={picker} />
         </ZenFileLinks>
+      ) : all && picker ? (
+        <ZenConversationPickNone picker={picker} />
       ) : (
         <div
           className="flex flex-1 items-center justify-center text-center"

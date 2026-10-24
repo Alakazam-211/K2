@@ -84,7 +84,7 @@ import {
 } from '@/lib/zen/zen-page'
 import { ZEN_COLUMN_TAB_PX, zenColumnMinWidthCss } from '@/lib/zen/zen-overflow'
 import { useZenColumnFolds, zenColumnLabel, ZenColumnsContext } from '@/lib/zen/zen-columns'
-import { ZenColumnChevron, ZenColumnEdgeTab, zenColumnBadgeSources, zenColumnSide } from './ZenColumnEdgeTab'
+import { ZEN_FULL_CANVAS_BAND_CSS, ZenColumnChevron, ZenColumnEdgeTab, zenColumnBadgeSources, zenColumnSide } from './ZenColumnEdgeTab'
 import { exitZen, registerZenRowSelect, registerZenViewSwitch } from '@/lib/zen/zen-view'
 import { ZEN_RAIL_KINDS, ZEN_TEMPLATE_CONTROL_CAPS, ZEN_UNBOXED_KINDS, zenWidgetFor } from './zen-registry'
 import { zenConversationRow } from './widgets/ZenConversationWidget'
@@ -440,6 +440,11 @@ export function ZenPage({
               // K2 views that draw their own panels (Tickets' glass) get no box;
               // nor does anything on a full canvas (it draws its own surface).
               const bare = full || (boxed.length > 0 && boxed.every((w) => ZEN_UNBOXED_KINDS.has(w.kind)))
+              // On a full canvas the top band floats over every column. A
+              // custom widget makes room for it itself (and cuts holes in
+              // it); K2's own widgets (the Kanban's Thread, 0.46.4) start
+              // below it, as the column tabs do.
+              const underBand = full && boxed.length > 0 && !boxed.some((w) => w.kind === ZEN_CUSTOM_KIND)
               // FC9: a column's edges (a row rail, a Zen control) run across its
               // top and bottom, outside its box.
               const top = placement.edges.find((e) => e.column === col && e.edge === 'top')
@@ -452,10 +457,11 @@ export function ZenPage({
                       data-zen-column={col}
                       className="flex min-h-0 min-w-0 flex-col"
                       data-zen-column-bare={bare ? '' : undefined}
+                      data-zen-column-under-band={underBand ? '' : undefined}
                       {...(bare ? {} : ZEN_GLASS_PROPS)}
                       style={
                         bare
-                          ? { flex: '1 1 0%' }
+                          ? { flex: '1 1 0%', ...(underBand ? { paddingTop: ZEN_FULL_CANVAS_BAND_CSS } : {}) }
                           : { flex: '1 1 0%', borderRadius: 'var(--zen-radius)', overflow: 'hidden' }
                       }
                     >

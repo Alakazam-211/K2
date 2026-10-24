@@ -46,11 +46,19 @@ let DIR = resolve(WIDGETS, 'kanban-1')
 const read = (p: string): string =>
   readFileSync(existsSync(resolve(DIR, p)) ? resolve(DIR, p) : resolve(WIDGETS, 'kanban-2', p), 'utf8')
 let HTML = read('index.html')
-let SCRIPTS = ['md.js', 'kanban.js', 'picker.js', 'dock.js'].map(read)
-function useVersion(dir: 'kanban-1' | 'kanban-2' | 'kanban-3' | 'kanban-4'): void {
+// @1–@4 draw their own Thread panel (picker.js, dock.js); @5 (0.46.4) is
+// the board beside K2's own Conversation (thread.js only folds its column
+// and sends the board).
+type KanbanDir = 'kanban-1' | 'kanban-2' | 'kanban-3' | 'kanban-4' | 'kanban-5'
+const scriptNames = (dir: KanbanDir): string[] =>
+  dir === 'kanban-5' ? ['md.js', 'kanban.js', 'thread.js'] : ['md.js', 'kanban.js', 'picker.js', 'dock.js']
+let SCRIPT_NAMES = scriptNames('kanban-1')
+let SCRIPTS = SCRIPT_NAMES.map(read)
+function useVersion(dir: KanbanDir): void {
   DIR = resolve(WIDGETS, dir)
   HTML = read('index.html')
-  SCRIPTS = ['md.js', 'kanban.js', 'picker.js', 'dock.js'].map(read)
+  SCRIPT_NAMES = scriptNames(dir)
+  SCRIPTS = SCRIPT_NAMES.map(read)
 }
 const MARKED = readFileSync(resolve(LIB, 'marked@18.0.14/marked.umd.js'), 'utf8')
 const PURIFY = readFileSync(resolve(LIB, 'dompurify@3.4.16/purify.min.js'), 'utf8')
@@ -68,6 +76,13 @@ interface Op {
   ifRev?: number
 }
 type Delivery = Array<{ key: string; rev: number; value: Json | null; by: string }> | { resync: true; items: unknown[] }
+
+interface LayoutColumn {
+  index: number
+  label: string
+  collapsible: boolean
+  collapsed: boolean
+}
 
 class K2Error extends Error {
   code: string
@@ -97,6 +112,13 @@ const ALL_CAPS = [
   'thread.open',
   'thread.links',
   'thread.pickFiles',
+  // @5 (0.46.4): its Thread column and the Conversation's shared pick;
+  // @1–@4 never ask.
+  'layout.get',
+  'layout.toggle',
+  'layout.subscribe',
+  'conversation.open',
+  'save.remove',
 ]
 /** What K2 before Thread parity answers `k2.can` for (no files, links, read). */
 const PRE_PARITY_CAPS = ALL_CAPS.filter((v) => !/^thread\.(read|markRead|attachment|open|links|pickFiles)$/.test(v))
@@ -119,6 +141,8 @@ function fakeK2(
     picks?: Array<{ files: Array<{ relPath: string; name: string }> }>
     /** thread.read answers for afterSeq / beforeSeq reads. */
     reads?: (opts: Record<string, unknown>) => unknown
+    /** @5: the page's columns, as k2.layout.get answers. */
+    columns?: LayoutColumn[]
   } = {},
 ) {
   const data = opts.data ?? new Map<string, Stored>()
@@ -140,6 +164,13 @@ function fakeK2(
   const answers: Array<[string, string, string]> = []
   const threadSubs: Array<{ address: string; cb: (view: unknown) => void }> = []
   let nextSeq = 100
+  // @5: the page's columns (k2.layout), the Conversation's shared pick
+  // (k2.conversation.open) and the save it carries over.
+  let columns: LayoutColumn[] = (opts.columns ?? []).map((c) => ({ ...c }))
+  const layoutSubs: Array<(info: { columns: LayoutColumn[] }) => void> = []
+  const toggles: number[] = []
+  const convOpens: string[] = []
+  const saveRemoves: string[] = []
   const hitRegions: unknown[] = []
   let ready = 0
   const push = (changes: Array<{ key: string; rev: number; value: Json | null; by: string }>): void => {
@@ -172,6 +203,33 @@ function fakeK2(
       set: async (key: string, value: Json) => {
         saves.set(key, value)
         saveSets.push([key, value])
+        return null
+      },
+      remove: async (key: string) => {
+        saves.delete(key)
+        saveRemoves.push(key)
+        return null
+      },
+    },
+    layout: {
+      get: async () => ({ columns: columns.map((c) => ({ ...c })) }),
+      toggle: async (index: number) => {
+        toggles.push(index)
+        const col = columns.find((c) => c.index === index)
+        if (!col || !col.collapsible) throw new K2Error('failed')
+        columns = columns.map((c) => (c.index === index ? { ...c, collapsed: !c.collapsed } : c))
+        const now = columns.find((c) => c.index === index)!
+        for (const cb of layoutSubs) cb({ columns: columns.map((c) => ({ ...c })) })
+        return { ...now }
+      },
+      subscribe: (cb: (info: { columns: LayoutColumn[] }) => void) => {
+        layoutSubs.push(cb)
+        return () => undefined
+      },
+    },
+    conversation: {
+      open: async (address: string) => {
+        convOpens.push(address)
         return null
       },
     },
@@ -299,6 +357,15 @@ function fakeK2(
     markReads,
     reads,
     hitRegions,
+    layoutSubs,
+    toggles,
+    convOpens,
+    saveRemoves,
+    /** The person folds or unfolds a column with K2's own tab or chevron. */
+    fold: (index: number, collapsed: boolean) => {
+      columns = columns.map((c) => (c.index === index ? { ...c, collapsed } : c))
+      for (const cb of layoutSubs) cb({ columns: columns.map((c) => ({ ...c })) })
+    },
     ready: () => ready,
     /** An agent (or another window) writes; the widget hears it live. */
     agentWrite: (key: string, value: Json | null, by = 'agent:board-keeper') => {
@@ -330,6 +397,7 @@ function mount(f: Fake) {
       eval: (s: string) => unknown
       k2: unknown
       KanbanDock: { look(): string; address(): string; chosen(): string; isOpen(): boolean }
+      KanbanThread: { look(): string; column(): number; shown(): string }
     }
   win.k2 = f.k2
   win.eval(MARKED)
@@ -404,7 +472,7 @@ async function started(f: Fake) {
   return m
 }
 
-describe.each(['kanban-1', 'kanban-2', 'kanban-3', 'kanban-4'] as const)('k2:kanban (%s)', (dir) => {
+describe.each(['kanban-1', 'kanban-2', 'kanban-3', 'kanban-4', 'kanban-5'] as const)('k2:kanban (%s)', (dir) => {
   beforeAll(() => useVersion(dir))
 
   it('is sealed-frame clean: no innerHTML, inline handlers, network or browser storage', () => {
@@ -413,11 +481,16 @@ describe.each(['kanban-1', 'kanban-2', 'kanban-3', 'kanban-4'] as const)('k2:kan
         .split('\n')
         .filter((l) => !l.trim().startsWith('//'))
         .join('\n')
-      expect(code, ['md.js', 'kanban.js', 'picker.js', 'dock.js'][i]).not.toMatch(/innerHTML|outerHTML|insertAdjacentHTML|fetch\(|XMLHttpRequest|localStorage|sessionStorage|indexedDB|eval\(|new Function/)
+      expect(code, SCRIPT_NAMES[i]).not.toMatch(/innerHTML|outerHTML|insertAdjacentHTML|fetch\(|XMLHttpRequest|localStorage|sessionStorage|indexedDB|eval\(|new Function/)
     }
     expect(HTML).not.toMatch(/ on[a-z]+=/)
     const m = JSON.parse(read('manifest.json'))
-    expect(m.caps).toEqual(['agents:read', 'thread:read', 'thread:post', 'store:read', 'store:write'])
+    // @5 reads no Thread itself: K2's Conversation beside it does.
+    expect(m.caps).toEqual(
+      dir === 'kanban-5'
+        ? ['agents:read', 'thread:post', 'store:read', 'store:write']
+        : ['agents:read', 'thread:read', 'thread:post', 'store:read', 'store:write'],
+    )
     expect(m.requires.libs).toEqual(['marked@18', 'dompurify@3'])
   })
 
@@ -772,6 +845,19 @@ describe.each(['kanban-1', 'kanban-2', 'kanban-3', 'kanban-4'] as const)('k2:kan
     expect(ro.batches).toEqual([])
   })
 
+  it('makes its toolbar buttons holes in K2’s top band', async () => {
+    const f = fakeK2({ data: THREE() })
+    await started(f)
+    expect(f.hitRegions.length).toBeGreaterThan(0)
+    expect(Array.isArray(f.hitRegions[0])).toBe(true)
+  })
+})
+
+// ── @1–@4: the board's own Thread panel, behind its Thread button ────────
+
+describe.each(['kanban-1', 'kanban-2', 'kanban-3', 'kanban-4'] as const)('k2:kanban own Thread panel (%s)', (dir) => {
+  beforeAll(() => useVersion(dir))
+
   it('the Thread panel is optional: closed, nobody picked, agents read only once opened; saved per Garden', async () => {
     const f = fakeK2({ data: THREE() })
     const m = await started(f)
@@ -804,12 +890,153 @@ describe.each(['kanban-1', 'kanban-2', 'kanban-3', 'kanban-4'] as const)('k2:kan
     await tick()
     expect(n.$('#btnThread').hidden).toBe(true)
   })
+})
 
-  it('makes its toolbar buttons holes in K2’s top band', async () => {
-    const f = fakeK2({ data: THREE() })
+// ── k2:kanban@5: the board beside K2's own Thread ───────────────────────
+
+/** kanban-5.toml's page: the board, then the folded "Thread" column. */
+const PAGE_COLUMNS = (): LayoutColumn[] => [
+  { index: 0, label: 'Column 1', collapsible: false, collapsed: false },
+  { index: 1, label: 'Thread', collapsible: true, collapsed: true },
+]
+
+/** agents.subscribe rows from the board's view (the Garden's reach), the
+ *  one K2's Conversation shows marked `selected`. */
+const reachRows = (selected: string | null): Array<Record<string, unknown>> =>
+  ['cortana::local', 'scout::local', 'ops::box.k2.dev'].map((address) => ({
+    address,
+    label: address.split('::')[0],
+    state: 'ok',
+    selected: address === selected,
+  }))
+
+describe('k2:kanban@5: the Thread is K2’s own Conversation in its column', () => {
+  beforeAll(() => useVersion('kanban-5'))
+
+  it('redraws no Thread: no panel, no Thread reads, the old panel’s look gone', async () => {
+    const f = fakeK2({ data: THREE(), columns: PAGE_COLUMNS() })
+    const m = await started(f)
+    await until('agents read', () => f.agentSubs.length === 1)
+    f.agentSubs[0](reachRows('cortana::local'))
+    expect(f.threadSubs).toEqual([])
+    expect(m.doc.querySelector('#threadDock, #dockBody, .ap-trigger, .dock-compose, .bubble')).toBeNull()
+    for (const gone of ['picker.js', 'dock.js']) expect(HTML).not.toContain(gone)
+    expect(read('kanban.css')).not.toMatch(/\.thread-dock|\.bubble|\.dock-|\.ap-|--kb-bubble/)
+    expect(m.win.KanbanThread.look()).toBe('companion')
+    // look = "garden" still follows the Garden theme's colours.
+    const g = fakeK2({ data: THREE(), columns: PAGE_COLUMNS(), config: { look: 'garden' } })
+    const n = await started(g)
+    expect(n.win.KanbanThread.look()).toBe('garden')
+  })
+
+  it('Thread folds and unfolds the "Thread" column, and shows its state', async () => {
+    const f = fakeK2({ data: THREE(), columns: PAGE_COLUMNS() })
+    const m = await started(f)
+    const btn = m.$<HTMLButtonElement>('#btnThread')
+    await until('Thread button', () => !btn.hidden)
+    expect(m.win.KanbanThread.column()).toBe(1)
+    expect(btn.getAttribute('aria-pressed')).toBe('false')
+    btn.click()
+    await until('unfolded', () => btn.getAttribute('aria-pressed') === 'true')
+    expect(f.toggles).toEqual([1])
+    btn.click()
+    await until('folded', () => btn.getAttribute('aria-pressed') === 'false')
+    expect(f.toggles).toEqual([1, 1])
+    // K2's own tab opens it: the button follows.
+    f.fold(1, false)
+    expect(btn.getAttribute('aria-pressed')).toBe('true')
+
+    // The label wins over order; any collapsible column is the fallback.
+    const named = fakeK2({
+      data: THREE(),
+      columns: [
+        { index: 0, label: 'Notes', collapsible: true, collapsed: false },
+        { index: 1, label: 'Column 2', collapsible: false, collapsed: false },
+        { index: 2, label: 'Thread', collapsible: true, collapsed: true },
+      ],
+    })
+    const n = await started(named)
+    await until('Thread button', () => !n.$('#btnThread').hidden)
+    expect(n.win.KanbanThread.column()).toBe(2)
+
+    // A page with no collapsible column (the board alone): no Thread button.
+    const alone = fakeK2({ data: THREE(), columns: [{ index: 0, label: 'Column 1', collapsible: false, collapsed: false }] })
+    const a = await started(alone)
+    await until('layout read', () => a.win.KanbanThread.column() === -1 && alone.layoutSubs.length === 1)
+    expect(a.$('#btnThread').hidden).toBe(true)
+  })
+
+  it('Send board posts the board to the agent the Thread’s header shows, and follows a new pick', async () => {
+    const f = fakeK2({ data: THREE(), columns: PAGE_COLUMNS() })
+    const m = await started(f)
+    const send = m.$<HTMLButtonElement>('#btnSend')
+    await until('agents read', () => f.agentSubs.length === 1)
+    // Nobody shown yet: Send board waits for a pick in the header.
+    f.agentSubs[0](reachRows(null))
+    expect(send.hidden).toBe(false)
+    expect(send.disabled).toBe(true)
+    expect(send.title).toBe('Pick an agent in the Thread first')
+
+    // The header picks Cortana (the shared selection): Send board posts to her.
+    f.agentSubs[0](reachRows('cortana::local'))
+    expect(send.disabled).toBe(false)
+    expect(send.title).toBe('Post the board, as markdown, to cortana in the Thread')
+    send.click()
+    await until('posted', () => f.posts.length === 1)
+    expect(f.posts[0][0]).toBe('cortana::local')
+    expect(f.posts[0][1]).toContain('## To do')
+    expect(f.posts[0][1]).toContain('Alpha')
+    await until('toast', () => m.$('#toast').textContent === 'Sent the board to cortana')
+
+    // The header switches to another server's agent: the next send goes there.
+    f.agentSubs[0](reachRows('ops::box.k2.dev'))
+    expect(m.win.KanbanThread.shown()).toBe('ops::box.k2.dev')
+    send.click()
+    await until('posted again', () => f.posts.length === 2)
+    expect(f.posts[1][0]).toBe('ops::box.k2.dev')
+    // The board never picks for the header.
+    expect(f.convOpens).toEqual([])
+
+    // A refused post says so.
+    const bad = fakeK2({ data: THREE(), columns: PAGE_COLUMNS(), postError: 'sending_off' })
+    const b = await started(bad)
+    await until('agents read', () => bad.agentSubs.length === 1)
+    bad.agentSubs[0](reachRows('scout::local'))
+    b.$('#btnSend').click()
+    await until('refused', () => (b.$('#toast').textContent ?? '').startsWith('Send failed: posting is paused'))
+
+    // Without thread.post there is no Send board.
+    const ro = fakeK2({ data: THREE(), columns: PAGE_COLUMNS(), caps: ALL_CAPS.filter((c) => c !== 'thread.post') })
+    const r = await started(ro)
+    await until('agents read', () => ro.agentSubs.length === 1)
+    ro.agentSubs[0](reachRows('scout::local'))
+    expect(r.$('#btnSend').hidden).toBe(true)
+  })
+
+  it('carries @4’s picked agent over once, only while the Thread shows no one', async () => {
+    const saves = new Map<string, Json>([['dock/g-test0001', { open: true, agent: 'scout::local' }]])
+    const f = fakeK2({ data: THREE(), columns: PAGE_COLUMNS(), saves })
     await started(f)
-    expect(f.hitRegions.length).toBeGreaterThan(0)
-    expect(Array.isArray(f.hitRegions[0])).toBe(true)
+    await until('agents read', () => f.agentSubs.length === 1)
+    f.agentSubs[0](reachRows(null))
+    await until('removed', () => f.saveRemoves.length === 1)
+    expect(f.convOpens).toEqual(['scout::local'])
+    expect(f.saveRemoves).toEqual(['dock/g-test0001'])
+    // Never again, even if the Thread shows no one later.
+    f.agentSubs[0](reachRows(null))
+    await tick()
+    expect(f.convOpens).toEqual(['scout::local'])
+
+    // The Thread already shows someone (the header's own pick): nothing
+    // moves, and the old save waits.
+    const kept = new Map<string, Json>([['dock/g-test0001', { open: false, agent: 'scout::local' }]])
+    const g = fakeK2({ data: THREE(), columns: PAGE_COLUMNS(), saves: kept })
+    await started(g)
+    await until('agents read', () => g.agentSubs.length === 1)
+    g.agentSubs[0](reachRows('cortana::local'))
+    await tick()
+    expect(g.convOpens).toEqual([])
+    expect(g.saveRemoves).toEqual([])
   })
 })
 

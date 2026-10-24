@@ -1,0 +1,120 @@
+# Garden catalog entry `k2.kanban@5` (Rosson 2026-10-15, for 0.45.7: "we'll
+# include the new kanban garden as a template (we'll offer a default that
+# can be manipulated after being added)").
+#
+# A Kanban board: columns of cards you add, edit, drag and delete, kept in
+# this Garden's data (k2.store), so agents you allow can add and move cards
+# too (`k2 store … --widget k2:kanban`). It starts with To do / Doing / Done
+# and three cards that explain the board; everything is yours to change. Its
+# toolbar sits in K2's top band; K2's own controls (the Garden switcher, the
+# theme picker and the Zen toggle) sit in one small ⋯ menu at the top left,
+# and Ctrl+Cmd+Z still leaves Zen. No usage chip (the catalog's norm, as the
+# Diary).
+#
+# @5 (Rosson 2026-10-24, for 0.46.4: "the Kanban should get the same
+# update"): the Thread beside the board is K2's own Conversation widget, not
+# a panel the board draws. It sits in a second column, "Thread", that starts
+# folded to a tab on the right edge (its unread badge counts the agent it
+# shows); the board's Thread button (k2:kanban@5) folds and unfolds it, and
+# so do K2's own tab and chevron. The Conversation follows the board
+# (`agents = "board"`) with `pick = "all"`: its header is the drop-down that
+# picks any of your agents, with a search field, and the board's Send board
+# posts to the agent it shows. Secret and permission cards, files, mute,
+# earlier messages and the activity drawer are K2's own. The Garden shows
+# K2 Companion's look (the Glass theme, [catalog] theme) until the person
+# picks a theme for it, so the board and the Thread wear the same colours.
+# A synced Kanban Garden (template k2.kanban@1 to @4) shows this page and
+# keeps the theme it had; an own copy keeps the board it has. The board's
+# data is the same (`data:k2:kanban`), so nothing moves.
+#
+# Released files never change (a better page is kanban-6.toml). The
+# [catalog] table is metadata, not part of the page.
+id = "k2.kanban@5"
+schema = 1
+
+[catalog]
+short = "kanban"
+label = "Kanban"
+description = "A board of cards in columns. Starts with To do, Doing and Done; drag, edit and add your own. Your agents can add and move cards too, and the Thread beside it talks to any of them."
+order = 20
+# Offered in New Garden, never seeded: a new computer starts with Gardens
+# 1 and 2 and the Diary.
+new_users = false
+theme = "glass"
+
+# The whole window is the board and its Thread: the ⋯ menu floats over the
+# top band.
+[layout]
+kind = "columns"
+canvas = "full"
+
+[[layout.column]]
+widget = "board"
+size = 70
+min-width = 360
+
+[[layout.column]]
+widget = "thread"
+size = 30
+min-width = 320
+collapsible = true
+collapsed = true
+label = "Thread"
+
+[[widget]]
+id = "board"
+kind = "custom"
+widget = "k2:kanban@5"
+column = 0
+
+# K2's Thread: any agent from its header, the board's pick.
+[[widget]]
+id = "thread"
+kind = "conversation"
+column = 1
+[widget.props]
+agents = "board"
+pick = "all"
+activity-drawer = true
+mute = true
+
+# Chrome (prd-zen-freeform-chrome FC25): one small ⋯ menu, top left,
+# holding the Garden switcher, the theme picker and the Zen toggle.
+[[widget]]
+id = "more"
+kind = "menu"
+slot = "top"
+align = "start"
+[widget.props]
+icon = "dots"
+label = "Kanban"
+
+[[widget]]
+kind = "garden-switcher"
+slot = "menu"
+menu = "more"
+
+[[widget]]
+kind = "theme-picker"
+slot = "menu"
+menu = "more"
+
+[[widget]]
+kind = "zen-toggle"
+slot = "menu"
+menu = "more"
+
+# Controls (Z27, G24), as every template declares them for `page.controls`:
+# the two required ones sit in the ⋯ menu, so K2 checks the menu's button
+# (FC25); the empty band still drags the window.
+[[control]]
+kind = "garden-switcher"
+placement = "menu:more"
+
+[[control]]
+kind = "drag-region"
+placement = "top"
+
+[[control]]
+kind = "zen-toggle"
+placement = "menu:more"

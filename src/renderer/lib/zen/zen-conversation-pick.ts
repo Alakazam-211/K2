@@ -18,6 +18,13 @@
 //
 // Storage can throw: reads and writes go through try/catch and fall back to
 // memory. A stored value that isn't ours is not overwritten until a pick.
+//
+// `pick = "all"` (the Kanban's Thread, Rosson 2026-10-24, for 0.46.4): any
+// agent the Conversation can show, with a search field. The shown agent is
+// the view's selection (`conversation.open`), so a custom widget it follows
+// sees it as its `selected` row and can switch it; the saved pick here
+// brings it back after a reload, and follows the selection wherever it was
+// made.
 
 import { create, type StoreApi, type UseBoundStore } from 'zustand'
 import { parseHomeAddress } from '@/lib/home-address'
@@ -27,10 +34,23 @@ export const ZEN_CONVERSATION_PICKS_KEY = 'k2.zen.conversationPicks.v1'
 export const ZEN_PICK_MIN = 2
 export const ZEN_PICK_MAX = 8
 
+/** `pick = "all"` (the Kanban's Thread, Rosson 2026-10-24, for 0.46.4). */
+export const ZEN_PICK_ALL = 'all'
+
+/** `pick = "all"`: the header switches between every agent the
+ *  Conversation can show: the widget it follows (`agents`, a custom one
+ *  too: they share one pick), else the Garden's reach. A search field tops
+ *  the menu; nothing shows until the person (or the followed widget) picks. */
+export function zenConversationPickAll(props: Record<string, unknown>): boolean {
+  return typeof props.pick === 'string' && props.pick.trim().toLowerCase() === ZEN_PICK_ALL
+}
+
 /** The widget's `pick` prop: the names in file order (trimmed, blanks
- *  dropped), or null when unset or empty. */
+ *  dropped), or null when unset or empty, or `"all"`
+ *  (`zenConversationPickAll`). */
 export function zenConversationPick(props: Record<string, unknown>): string[] | null {
   const v = props.pick
+  if (zenConversationPickAll(props)) return null
   const raw = Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : typeof v === 'string' ? v.split(',') : []
   const names = raw.map((s) => s.trim()).filter((s) => s !== '')
   return names.length > 0 ? names : null

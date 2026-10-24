@@ -61,8 +61,10 @@ pub const DIARY_TEMPLATE_ID: &str = "k2.diary@2";
 
 /// The Kanban New Garden makes: `kanban-<n>.toml` (k2.kanban@1 was the
 /// first, 0.45.7; @2 moved to `k2:kanban@2`, 0.46.1; @3 moved to
-/// `k2:kanban@3` and @4 moves to `k2:kanban@4` (Thread parity), both 0.46.3).
-pub const KANBAN_TEMPLATE_ID: &str = "k2.kanban@4";
+/// `k2:kanban@3` and @4 moved to `k2:kanban@4` (Thread parity), both 0.46.3;
+/// @5 is `k2:kanban@5` beside K2's own Conversation in a collapsible
+/// "Thread" column, 0.46.4).
+pub const KANBAN_TEMPLATE_ID: &str = "k2.kanban@5";
 
 include!(concat!(env!("OUT_DIR"), "/zen_garden_catalog.rs"));
 
@@ -324,35 +326,42 @@ kind = "columns"
 
     /// Rosson 2026-10-15 (0.45.7): the Kanban Garden is new catalog data,
     /// offered in New Garden after the Diary, never seeded on a new
-    /// computer, with no theme of its own. 0.46.1 (Rosson 2026-10-18):
-    /// `kanban-2.toml` is the newest, on `k2:kanban@2` (the Thread look in
-    /// K2 Companion's colours); `kanban-1.toml` still ships for own copies.
-    /// 0.46.3 (Rosson 2026-10-20): `kanban-3.toml` is the newest, on
-    /// `k2:kanban@3` (the panel keeps a scrolled-up reader in place);
-    /// `kanban-2.toml` still ships for own copies. Thread parity (Rosson
-    /// 2026-10-20, 0.46.3): `kanban-4.toml` is the newest, on `k2:kanban@4`
-    /// (the Thread's files and links); `kanban-3.toml` still ships.
+    /// computer. 0.46.1 (Rosson 2026-10-18): `kanban-2.toml` on
+    /// `k2:kanban@2` (the Thread look in K2 Companion's colours). 0.46.3
+    /// (Rosson 2026-10-20): `kanban-3.toml` on `k2:kanban@3` (the panel keeps
+    /// a scrolled-up reader in place), then `kanban-4.toml` on `k2:kanban@4`
+    /// (Thread parity: the Thread's files and links). @1–@4 are one page on
+    /// four boards, and all still ship for own copies.
+    /// 0.46.4 (Rosson 2026-10-24, "the Kanban should get the same update"):
+    /// `kanban-5.toml` is the newest: the board (`k2:kanban@5`) and, in a
+    /// second collapsible "Thread" column that starts folded, K2's own
+    /// Conversation following the board with `pick = "all"`. The Garden
+    /// shows K2 Companion's look (`theme = "glass"`, metadata) until the
+    /// person picks one; a Garden made from @1–@4 names no theme.
     #[test]
     fn the_kanban_is_offered_after_the_diary_and_not_preinstalled() {
-        let one = garden_catalog().iter().find(|e| e.template_id == "k2.kanban@1").expect("kanban-1.toml still ships");
-        assert_eq!((one.file, one.version), ("kanban-1.toml", 1));
-        assert!(super::super::schema::is_template_id("k2.kanban@1"));
-        let two = garden_catalog().iter().find(|e| e.template_id == "k2.kanban@2").expect("kanban-2.toml still ships");
-        assert_eq!((two.file, two.version), ("kanban-2.toml", 2));
-        assert!(super::super::schema::is_template_id("k2.kanban@2"));
-        let three = garden_catalog().iter().find(|e| e.template_id == "k2.kanban@3").expect("kanban-3.toml still ships");
-        assert_eq!((three.file, three.version), ("kanban-3.toml", 3));
-        assert!(super::super::schema::is_template_id("k2.kanban@3"));
-        let e = garden_catalog().iter().find(|e| e.template_id == KANBAN_TEMPLATE_ID).expect("kanban-4.toml ships");
-        assert_eq!((e.file, e.version), ("kanban-4.toml", 4));
+        let older: Vec<&GardenCatalogEntry> = (1..=4)
+            .map(|n| {
+                let id = format!("k2.kanban@{n}");
+                let e = garden_catalog().iter().find(|e| e.template_id == id).unwrap_or_else(|| panic!("kanban-{n}.toml still ships"));
+                assert_eq!((e.file.to_string(), e.version), (format!("kanban-{n}.toml"), n));
+                assert!(super::super::schema::is_template_id(&id));
+                assert_eq!(e.meta.theme, None, "{id} names no theme: a Garden made from it keeps the person's");
+                assert_eq!(template_theme(&id), None);
+                e
+            })
+            .collect();
+        let one = older[0];
+        let e = garden_catalog().iter().find(|e| e.template_id == KANBAN_TEMPLATE_ID).expect("kanban-5.toml ships");
+        assert_eq!((e.file, e.version), ("kanban-5.toml", 5));
         assert_eq!(e.meta.label, one.meta.label, "the same Garden, a newer page");
-        assert_eq!(e.meta.description, one.meta.description);
         assert_eq!(e.meta.order, one.meta.order);
         assert_eq!(e.meta.label, "Kanban");
         assert!(e.meta.description.contains("To do, Doing and Done"), "{}", e.meta.description);
+        assert!(e.meta.description.contains("the Thread beside it talks to any of them"), "{}", e.meta.description);
         assert!(!e.meta.new_users, "offered, not preinstalled");
-        assert_eq!(e.meta.theme, None, "the board follows the person's theme");
-        assert_eq!(template_theme(KANBAN_TEMPLATE_ID), None);
+        assert_eq!(e.meta.theme.as_deref(), Some("glass"), "K2 Companion's look, so the board and K2's Thread match");
+        assert_eq!(template_theme(KANBAN_TEMPLATE_ID), Some("glass"));
         assert!(super::super::schema::is_template_id(KANBAN_TEMPLATE_ID));
         let list = template_list();
         let rows: Vec<(&str, TemplateSection)> = list.iter().map(|t| (t.short.as_str(), t.section)).collect();
@@ -370,45 +379,56 @@ kind = "columns"
         let wire = serde_json::to_value(row).expect("serializes");
         assert_eq!(wire["section"], "catalog");
         assert!(wire.get("needsGrant").is_none(), "{wire}");
-        // The page: one full-canvas custom widget, the built-in board.
+
+        // @5's page: the board, and K2's Thread in a folded "Thread" column.
         let v: toml::Value = toml::from_str(e.toml).expect("parses");
         assert_eq!(v["layout"]["canvas"].as_str(), Some("full"));
-        let custom: Vec<&str> = v["widget"]
-            .as_array()
-            .expect("widgets")
+        let cols = v["layout"]["column"].as_array().expect("columns");
+        assert_eq!(cols.len(), 2, "board + Thread");
+        assert_eq!(cols[0].get("collapsible"), None, "the board never folds");
+        assert_eq!(cols[1]["collapsible"].as_bool(), Some(true));
+        assert_eq!(cols[1]["collapsed"].as_bool(), Some(true), "closed until you press Thread, as @1–@4's panel");
+        assert_eq!(cols[1]["label"].as_str(), Some("Thread"), "the label the board's Thread button looks for");
+        let widgets = v["widget"].as_array().expect("widgets");
+        let content: Vec<(&str, &str, i64)> = widgets
             .iter()
-            .filter(|w| w.get("kind").and_then(toml::Value::as_str) == Some("custom"))
-            .filter_map(|w| w.get("widget").and_then(toml::Value::as_str))
+            .filter(|w| w.get("column").is_some())
+            .map(|w| (w["id"].as_str().expect("id"), w["kind"].as_str().expect("kind"), w["column"].as_integer().expect("column")))
             .collect();
-        assert_eq!(custom, [crate::zen::builtin_widgets::KANBAN_WIDGET_LATEST]);
-        // @1's page is the same page on @1's widget, nothing else.
-        let v1: toml::Value = toml::from_str(one.toml).expect("parses");
-        let (mut a, mut b) = (v1.clone(), v.clone());
-        for t in [&mut a, &mut b] {
-            let t = t.as_table_mut().expect("table");
+        assert_eq!(content, [("board", "custom", 0), ("thread", "conversation", 1)]);
+        let board = widgets.iter().find(|w| w["id"].as_str() == Some("board")).expect("board");
+        assert_eq!(board["widget"].as_str(), Some(crate::zen::builtin_widgets::KANBAN_WIDGET_LATEST));
+        let thread = widgets.iter().find(|w| w["id"].as_str() == Some("thread")).expect("thread");
+        let props = thread["props"].as_table().expect("props");
+        assert_eq!(props.get("agents").and_then(toml::Value::as_str), Some("board"), "it follows the board: one pick for both");
+        assert_eq!(props.get("pick").and_then(toml::Value::as_str), Some("all"), "any agent from its header");
+        for on in ["activity-drawer", "mute"] {
+            assert_eq!(props.get(on).and_then(toml::Value::as_bool), Some(true), "{on}: K2's full Thread");
+        }
+
+        // @1–@4 are one page on four boards (only the widget and the id
+        // differ); @5 keeps their chrome and controls.
+        let page_of = |src: &str, widget: &str| -> toml::Value {
+            let mut c: toml::Value = toml::from_str(src).expect("parses");
+            let t = c.as_table_mut().expect("table");
             t.remove("id");
             for w in t.get_mut("widget").and_then(toml::Value::as_array_mut).expect("widgets") {
                 if w.get("kind").and_then(toml::Value::as_str) == Some("custom") {
+                    assert_eq!(w.get("widget").and_then(toml::Value::as_str), Some(widget));
                     w.as_table_mut().expect("widget").remove("widget");
                 }
             }
+            c
+        };
+        let base = page_of(one.toml, "k2:kanban@1");
+        for (n, older) in older.iter().enumerate().skip(1) {
+            assert_eq!(page_of(older.toml, &format!("k2:kanban@{}", n + 1)), base, "{} is kanban-1.toml on its board", older.file);
         }
-        assert_eq!(a, b, "kanban-4.toml is kanban-1.toml on k2:kanban@4");
-        // And @2's and @3's pages are the same page on their own widgets.
-        for (older, widget) in [(two, "k2:kanban@2"), (three, "k2:kanban@3")] {
-            let mut c: toml::Value = toml::from_str(older.toml).expect("parses");
-            {
-                let t = c.as_table_mut().expect("table");
-                t.remove("id");
-                for w in t.get_mut("widget").and_then(toml::Value::as_array_mut).expect("widgets") {
-                    if w.get("kind").and_then(toml::Value::as_str) == Some("custom") {
-                        assert_eq!(w.get("widget").and_then(toml::Value::as_str), Some(widget));
-                        w.as_table_mut().expect("widget").remove("widget");
-                    }
-                }
-            }
-            assert_eq!(c, b, "kanban-4.toml is {} on k2:kanban@4", older.file);
-        }
+        let chrome = |v: &toml::Value| -> Vec<toml::Value> {
+            v["widget"].as_array().expect("widgets").iter().filter(|w| w.get("column").is_none()).cloned().collect()
+        };
+        assert_eq!(chrome(&v), chrome(&base), "the same ⋯ menu and its controls");
+        assert_eq!(v["control"], base["control"], "the same template controls");
     }
 
     /// Integration (Zen v2, B1 × B2): every catalog template, every shipped

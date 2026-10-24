@@ -50,7 +50,13 @@ pub const KANBAN_WIDGET: &str = "k2:kanban@1";
 /// drawn from K2's thumbnails, workspace file links, picked files riding a
 /// post, mark-read, delta catch-up and paging back. `kanban-4.toml` moves
 /// the template; an own copy keeps the board it has.
-pub const KANBAN_WIDGET_LATEST: &str = "k2:kanban@4";
+/// @5 (Rosson 2026-10-24, for 0.46.4: "the Kanban should get the same
+/// update"): the board alone. Its Thread is K2's own Conversation widget in
+/// a collapsible "Thread" column beside it (`pick = "all"`, following the
+/// board), so nothing of the Thread is redrawn; the board's Thread button
+/// folds that column and Send board posts to the agent its header shows.
+/// `kanban-5.toml` moves the template; an own copy keeps the board it has.
+pub const KANBAN_WIDGET_LATEST: &str = "k2:kanban@5";
 
 /// The prefix every built-in widget name starts with.
 pub const BUILTIN_PREFIX: &str = "k2:";
@@ -224,6 +230,24 @@ pub const BUILTIN_WIDGETS: &[BuiltinWidget] = &[
             ("dock.js", include_str!("kanban-4/dock.js")),
         ],
     },
+    // The Kanban's fifth version (0.46.4, Rosson 2026-10-24): the board
+    // alone. The Thread is K2's built-in Conversation in its own column of
+    // the Garden page (`kanban-5.toml`), so dock.js and picker.js are gone;
+    // thread.js folds that column and sends the board to the agent it
+    // shows. md.js and kanban.js are @2's, byte for byte; `kanban-4/` stays
+    // as shipped, and @1–@4 stay for own copies (retirement ledger).
+    BuiltinWidget {
+        name: "kanban",
+        version: 5,
+        files: &[
+            ("manifest.json", include_str!("kanban-5/manifest.json")),
+            ("index.html", include_str!("kanban-5/index.html")),
+            ("kanban.css", include_str!("kanban-5/kanban.css")),
+            ("md.js", include_str!("kanban-2/md.js")),
+            ("kanban.js", include_str!("kanban-2/kanban.js")),
+            ("thread.js", include_str!("kanban-5/thread.js")),
+        ],
+    },
     // The data-source cards' second version (0.46.1): several sources per
     // card (config.source + config.sources, merged by item key), "soft crit
     // 2/3", named lists, K2 Web's ops shapes, and a refused subscription
@@ -317,6 +341,7 @@ pub const BUILTIN_WIDGET_HASHES: &[(&str, &str)] = &[
     ("k2:kanban@2", "8ac36405d18351d0bb52a8f71426dffb32ad99831bcfd9b7c87e4b017d0c7884"),
     ("k2:kanban@3", "e9aae003a07e3d4e17e39738b376aab6ab7556250cd3a6e662211521e8425682"),
     ("k2:kanban@4", "81cff0f7ee199170f8531b0dcfcbdf4f39387810bcfc91ac0492f5d7fba2a3bf"),
+    ("k2:kanban@5", "d591d4b1a8872fc9b67e1a303f5bc873a990cc3fcf292127558833a9f38896ca"),
 ];
 
 /// The hash [`BUILTIN_WIDGET_HASHES`] pins.
@@ -785,12 +810,11 @@ mod tests {
     /// hidden file has no name), images drawn only through an <img> with a
     /// data: URL from K2's thumbnail, workspace file links, picked files
     /// riding a post, mark-read, a delta catch-up and paging back, each
-    /// behind `k2.can`. The bare `k2:kanban` is @4.
+    /// behind `k2.can`. @4 still resolves for own copies (the bare
+    /// `k2:kanban` is @5 since 0.46.4).
     #[test]
     fn the_kanban_4_has_the_threads_files_and_links() {
-        assert_eq!(KANBAN_WIDGET_LATEST, "k2:kanban@4");
-        assert_eq!(builtin_widget(&parse_widget_ref("k2:kanban").expect("parses")).map(|w| w.id()).as_deref(), Some(KANBAN_WIDGET_LATEST));
-        let w = builtin_widget(&parse_widget_ref(KANBAN_WIDGET_LATEST).expect("parses")).expect("k2:kanban@4 ships");
+        let w = builtin_widget(&parse_widget_ref("k2:kanban@4").expect("parses")).expect("k2:kanban@4 ships");
         clean_kanban(w);
         let three = builtin_widget(&parse_widget_ref("k2:kanban@3").expect("parses")).expect("k2:kanban@3 ships");
         // The board, the manifest (no new cap) and the page are @3's (@2's).
@@ -844,6 +868,75 @@ mod tests {
         }
     }
 
+    /// k2:kanban@5 (Rosson 2026-10-24, for 0.46.4: "the Kanban should get
+    /// the same update"): the board alone. The Thread is K2's built-in
+    /// Conversation in the page's "Thread" column, so no Thread is redrawn
+    /// here: no dock.js, no picker.js, no bubbles, no message box, and no
+    /// thread:read. thread.js folds that column (`k2.layout.toggle`) and
+    /// Send board posts to the agent the Conversation's header shows (the
+    /// `selected` row they share). The board and its Companion look are
+    /// @4's. The bare `k2:kanban` is @5.
+    #[test]
+    fn the_kanban_5_is_the_board_beside_k2s_own_thread() {
+        assert_eq!(KANBAN_WIDGET_LATEST, "k2:kanban@5");
+        assert_eq!(builtin_widget(&parse_widget_ref("k2:kanban").expect("parses")).map(|w| w.id()).as_deref(), Some(KANBAN_WIDGET_LATEST));
+        let w = builtin_widget(&parse_widget_ref(KANBAN_WIDGET_LATEST).expect("parses")).expect("k2:kanban@5 ships");
+        clean_kanban(w);
+        let four = builtin_widget(&parse_widget_ref("k2:kanban@4").expect("parses")).expect("k2:kanban@4 still ships");
+        // The board is @4's (@2's), byte for byte.
+        for f in ["md.js", "kanban.js"] {
+            assert_eq!(file(w, f), file(four, f), "{f} is @4's");
+        }
+        let names: Vec<&str> = w.files.iter().map(|(n, _)| *n).collect();
+        assert_eq!(names, ["manifest.json", "index.html", "kanban.css", "md.js", "kanban.js", "thread.js"], "no dock.js or picker.js");
+        // No redrawn Thread anywhere.
+        let html = file(w, "index.html");
+        for gone in ["threadDock", "dockBody", "dockPost", "send-round", "compose-box", "thread-ear", "picker.js", "dock.js"] {
+            assert!(!html.contains(gone), "index.html still has {gone}");
+        }
+        for needle in [
+            "id=\"btnThread\" type=\"button\" aria-pressed=\"false\"",
+            "id=\"btnSend\" type=\"button\"",
+            ">Send board</button>",
+            "<script src=\"thread.js\"></script>",
+        ] {
+            assert!(html.contains(needle), "index.html lost {needle}");
+        }
+        let css = file(w, "kanban.css");
+        for gone in [".thread-dock", ".bubble", ".dock-", ".ap-", ".thread-ear", ".file-chip", "--kb-bubble"] {
+            assert!(!css.contains(gone), "kanban.css still styles the old panel ({gone})");
+        }
+        // The board's look is @4's: Companion light and dark, the Garden look.
+        for line in file(four, "kanban.css").lines().skip(12).take_while(|l| !l.starts_with("/* ── Thread panel")) {
+            if line.contains("--kb-dock") || line.contains("--kb-field") || line.contains("--kb-ear") || line.contains("--kb-bubble") {
+                continue;
+            }
+            let line = line.replace("in card notes and Thread messages.", "in card notes.");
+            assert!(css.contains(&line), "kanban.css lost @4's {line}");
+        }
+        let js = file(w, "thread.js");
+        for needle in [
+            "c.collapsible && c.label === 'Thread'",
+            "k2.layout.toggle(column)",
+            "k2.layout.subscribe(drawLayout)",
+            "rows.find(function (r) { return r.selected })",
+            "k2.thread.post(to.address, board.exportMarkdown())",
+            "'Sent the board to ' + to.label",
+            "k2.agents.subscribe(onRows",
+            "k2.conversation.open(want)",
+            "k2.save.remove(saveKey())",
+            "k2.config.look === 'garden'",
+            "if (!carry || shown) return",
+        ] {
+            assert!(js.contains(needle), "thread.js lost {needle}");
+        }
+        for gone in ["k2.thread.subscribe", "k2.thread.answer", "k2.thread.read", "bubble", "textContent = doc"] {
+            assert!(!js.contains(gone), "thread.js redraws the Thread ({gone})");
+        }
+        let m: serde_json::Value = serde_json::from_str(file(w, "manifest.json")).expect("manifest is JSON");
+        assert_eq!(m["caps"], serde_json::json!(["agents:read", "thread:post", "store:read", "store:write"]), "no thread:read: K2's Conversation reads the Thread");
+    }
+
     /// What every Kanban version keeps: a clean custom widget that keeps its
     /// board in Garden data, renders notes with the bundled marked +
     /// DOMPurify, drags with pointer events, and ships none of the Roadmap
@@ -856,7 +949,12 @@ mod tests {
         assert!(c.errors.is_empty(), "{id}: {:?}", c.errors);
         assert!(c.bundle.is_some(), "{id} bundles");
         let m = c.manifest.as_ref().expect("a manifest");
-        assert_eq!(m.caps, ["agents:read", "thread:read", "thread:post", "store:read", "store:write"]);
+        // @5 reads no Thread itself: K2's Conversation beside it does.
+        if w.version >= 5 {
+            assert_eq!(m.caps, ["agents:read", "thread:post", "store:read", "store:write"]);
+        } else {
+            assert_eq!(m.caps, ["agents:read", "thread:read", "thread:post", "store:read", "store:write"]);
+        }
         for cap in &m.caps {
             assert!(crate::zen::USER_WIDGET_CAPS.contains(&cap.as_str()), "{cap}");
         }
@@ -867,7 +965,10 @@ mod tests {
         for bad in [" onclick=", " onload=", " onerror=", "<iframe", "<object", "<embed", "<base", "http-equiv", "src=\"http", "href=\"http", "//cdn"] {
             assert!(!html.contains(bad), "index.html has {bad}");
         }
-        for s in ["md.js", "kanban.js", "picker.js", "dock.js"] {
+        // Every script it ships is loaded (@1–@4: picker.js + dock.js; @5: thread.js).
+        let scripts: Vec<&str> = w.files.iter().map(|(n, _)| *n).filter(|n| n.ends_with(".js")).collect();
+        assert!(scripts.starts_with(&["md.js", "kanban.js"]), "{id}: {scripts:?}");
+        for s in &scripts {
             assert!(html.contains(&format!("<script src=\"{s}\"></script>")), "index.html loads {s}");
         }
         // Widget verbs, and the Garden data verbs widgets reach through
@@ -879,7 +980,7 @@ mod tests {
             .chain(cat.verbs_exposed_to(crate::contract::Exposure::GardenLocal).iter())
             .map(|v| v.verb.clone())
             .collect();
-        for name in ["md.js", "kanban.js", "picker.js", "dock.js"] {
+        for name in scripts {
             let js = file(w, name);
             for bad in ["innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "fetch(", "XMLHttpRequest", "WebSocket", "EventSource", "localStorage", "sessionStorage", "indexedDB", "eval(", "new Function", "import "] {
                 assert!(!js.contains(bad), "{name} uses {bad}");

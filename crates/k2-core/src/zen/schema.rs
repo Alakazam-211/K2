@@ -256,6 +256,11 @@ pub const MAX_PROP_TEXT: usize = 200;
 /// A Conversation's `pick` (Fleet Ops 2, Rosson 2026-10-24): 2 to 8 agents.
 pub const PICK_MIN: usize = 2;
 pub const PICK_MAX: usize = 8;
+/// `pick = "all"` (the Kanban's Thread, Rosson 2026-10-24, for 0.46.4): the
+/// header switches between every agent the Conversation can show (the
+/// widget it follows with `agents`, else the Garden's reach), with a search
+/// field on top of the menu.
+pub const PICK_ALL: &str = "all";
 
 /// Built-in widget kinds a Garden file may place, with what they show.
 pub const WIDGET_KINDS: &[(&str, &str)] = &[
@@ -441,8 +446,9 @@ pub enum PropType {
     /// A whole number from `min` to `max` (inclusive).
     Int { min: i64, max: i64 },
     /// A list of `min` to `max` agent names or addresses (each like
-    /// [`PropType::Text`]), no repeats (case aside).
-    Names { min: usize, max: usize },
+    /// [`PropType::Text`]), no repeats (case aside). With `all`, the string
+    /// [`PICK_ALL`] too (any case; stored as `"all"`).
+    Names { min: usize, max: usize, all: bool },
 }
 
 /// One prop of a built-in widget kind. `default` is JSON; `None` means
@@ -572,9 +578,9 @@ pub const WIDGET_PROPS: &[WidgetProp] = &[
     WidgetProp {
         kind: "conversation",
         name: "pick",
-        ty: PropType::Names { min: PICK_MIN, max: PICK_MAX },
+        ty: PropType::Names { min: PICK_MIN, max: PICK_MAX, all: true },
         default: None,
-        doc: "the header is a drop-down that switches between these agents, by name or address, from this computer and your Homes on other servers (no Agents widget needed); it badges the others' unread and waiting counts, the first one shows until the person picks (per computer), and one that isn't found is a disabled card; not with `agent`, `agents` or `home`",
+        doc: "the header is a drop-down that switches between these agents, by name or address, from this computer and your Homes on other servers (no Agents widget needed); it badges the others' unread and waiting counts, the first one shows until the person picks (per computer), and one that isn't found is a disabled card; not with `agent`, `agents` or `home`. `pick = \"all\"`: any agent, with a search field at the top of the menu: every agent of the widget it follows (`agents`, which may name a custom widget: the two share one pick), else every agent on this computer and your Homes; nothing shows until the person picks one; not with `agent` or `home`",
     },
     WidgetProp {
         kind: "conversation",
@@ -1683,7 +1689,10 @@ fn check_prop(ctx: &mut Ctx, p: &WidgetProp, v: &Item, pos: (usize, usize)) -> O
                 None
             }
         },
-        PropType::Names { min, max } => {
+        PropType::Names { min, max, all } => {
+            if all && v.as_value().and_then(Value::as_str).is_some_and(|s| s.trim().eq_ignore_ascii_case(PICK_ALL)) {
+                return Some(json!(PICK_ALL));
+            }
             let items: Option<Vec<&str>> = v
                 .as_value()
                 .and_then(Value::as_array)
@@ -1700,7 +1709,7 @@ fn check_prop(ctx: &mut Ctx, p: &WidgetProp, v: &Item, pos: (usize, usize)) -> O
                 _ => {
                     ctx.error(
                         vp,
-                        format!("{what} must be a list of {min} to {max} agent names or addresses (text, 1 to {MAX_PROP_TEXT} characters each, no repeats), like [\"sales\", \"ops\"]"),
+                        format!("{what} must be a list of {min} to {max} agent names or addresses (text, 1 to {MAX_PROP_TEXT} characters each, no repeats), like [\"sales\", \"ops\"]{}", if all { ", or \"all\" for any agent" } else { "" }),
                     );
                     None
                 }
@@ -2255,12 +2264,18 @@ fn check_widgets(ctx: &mut Ctx, item: &Item, at: (usize, usize)) {
                 ok = false;
             }
             // Fleet Ops 2: `pick` is its own list; nothing else chooses the agent.
+            // `pick = "all"` (0.46.4) may follow a widget (`agents`): its menu
+            // is that widget's agents, and the two share one pick.
             if props.contains_key("pick") {
+                let all = props.get("pick").and_then(J::as_str) == Some(PICK_ALL);
                 for (other, why) in [
                     ("agent", "pins one agent"),
                     ("agents", "follows an Agents widget"),
                     ("home", "picks a Home to look `agent` up in"),
                 ] {
+                    if all && other == "agents" {
+                        continue;
+                    }
                     if props.contains_key(other) {
                         let p = prop_at(ctx, other);
                         ctx.error(
@@ -2530,7 +2545,9 @@ fn cross_check_page(ctx: &mut Ctx, at: (usize, usize)) {
         }
         if w["kind"] == "conversation" {
             if let Some(i) = idx {
-                let pinned = w["props"]["agent"].is_string() || w["props"]["pick"].is_array();
+                // `pick` (a list, or "all" on its own: the Garden's reach)
+                // needs no Agents widget.
+                let pinned = w["props"]["agent"].is_string() || w["props"]["pick"].is_array() || w["props"]["pick"] == PICK_ALL;
                 match w["props"]["agents"].as_str() {
                     Some(target) if !followable.iter().any(|a| a == target) => {
                         let p = ctx.pos.get(&format!("page.widget.{i}.props.agents")).copied().unwrap_or(at);

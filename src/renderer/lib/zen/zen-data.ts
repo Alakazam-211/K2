@@ -26,7 +26,9 @@
 // `<gardenId>/<widgetId>`. A Conversation with `pick` (Fleet Ops 2, Rosson
 // 2026-10-24) shows exactly its listed agents, from the Garden's reach
 // (this computer and every Home, any server), in `pick` order
-// (`zen-conversation-pick.ts`); its header switches between them.
+// (`zen-conversation-pick.ts`); its header switches between them. With
+// `pick = "all"` (0.46.4) it shows what it follows (or, following nothing,
+// the Garden's reach as its own `reach` view) and its header picks any row.
 //
 // Rows (`agents.list` / `agents.subscribe`): the view's rows in Home order
 // (so ⌘1–9 stays meaningful), multi-server, from the stores Home already
@@ -135,7 +137,7 @@ import { checkZenWidgetCap } from './zen-widget-routes'
 import { exitZen, zenShownNow } from './zen-view'
 import type { ZenResolvedPage, ZenWidgetDecl } from './zen-page'
 import { useZenGardenHomesStore, zenGardenHomeKey } from './zen-garden-homes'
-import { zenConversationPick, zenFindPickRow, zenMatchesAgent } from './zen-conversation-pick'
+import { zenConversationPick, zenConversationPickAll, zenFindPickRow, zenMatchesAgent } from './zen-conversation-pick'
 import { ZEN_CUSTOM_KIND } from './zen-page'
 import { requestZenServerRoster, useZenServerRosters, zenRosterWorkspaces, zenWidgetReachRows } from './zen-custom-scope'
 import { ZEN_AGENTS_SHOW_MAX, zenWidgetMayRun, type ZenCustomWidgetPayload } from './zen-custom-types'
@@ -899,6 +901,11 @@ export function zenViewFor(page: ZenResolvedPage, gardenId: string, widgetId: st
     }
     if (propString(w.props, 'agent')) return homeView(gardenId, w)
     const named = propString(w.props, 'agents')
+    // `pick = "all"` (0.46.4) with nothing to follow: the Garden's reach,
+    // its own pick. With `agents` it follows that widget as below.
+    if (!named && zenConversationPickAll(w.props)) {
+      return { key: zenGardenHomeKey(gardenId, w.id), gardenId, widgetId: w.id, homeId: null, agent: null, source: 'reach', reach: true }
+    }
     // UW40: it may follow a custom widget that reads agents (always named).
     const custom = named ? page.widgets.find((x) => x.id === named && followsCustom(x)) : undefined
     if (custom) return customView(gardenId, custom)

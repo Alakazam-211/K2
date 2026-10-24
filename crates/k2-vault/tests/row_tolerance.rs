@@ -10,6 +10,12 @@ use k2_vault::keystore::fake::FakeKeyStore;
 use k2_vault::keystore::KeyStore;
 use k2_vault::*;
 
+/// Made-up enum text standing in for values a newer K2 adds.
+const NEWER_KIND: &str = "zz_newer_kind";
+const NEWER_DELIVERY: &str = "zz_newer_delivery";
+const NEWER_CONSUMER: &str = "zz_newer_consumer";
+const NEWER_DST: &str = "zz-newer-dst:a";
+
 fn open(t: &TestDir, ks: &Arc<FakeKeyStore>) -> LocalVault {
     LocalVault::open(t.path().join("vault"), ks.clone() as Arc<dyn KeyStore>, OpenOptions { kdf: KdfCost::Floor }).expect("open vault")
 }
@@ -60,12 +66,24 @@ fn newer_rows_are_skipped_and_counted_not_fatal() {
         .expect("grant");
     drop(v);
 
-    // What a newer K2 would write: values this build has no enum for.
+    // What a newer K2 would write: values this build has no enum for. They
+    // must stay unknown as K2 grows (a real future value like `job` or
+    // `agent` becomes known, its forged row then parses and fails the MAC
+    // as tamper), so they are made up and checked here.
+    for (k, known) in [
+        (NEWER_KIND, Kind::parse(NEWER_KIND).is_ok()),
+        (NEWER_DELIVERY, Delivery::parse(NEWER_DELIVERY).is_ok()),
+        (NEWER_CONSUMER, ConsumerKind::parse(NEWER_CONSUMER).is_ok()),
+        (NEWER_DST, k2_vault::inject::Dst::parse(NEWER_DST).is_ok()),
+    ] {
+        assert!(!known, "{k} must be a value this build doesn't know");
+    }
     let c = db(&t);
-    c.execute("UPDATE secret SET kind = 'bundle_v9' WHERE id = ?1", [&kind_row.id]).expect("kind");
-    c.execute("UPDATE secret SET default_delivery = 'agent', delivery_ceiling = 'agent' WHERE id = ?1", [&del_row.id]).expect("delivery");
-    c.execute("UPDATE secret SET inject = '{\"dst\":\"socket:a\",\"fmt\":\"{}\"}' WHERE id = ?1", [&inj_row.id]).expect("inject");
-    c.execute("UPDATE grants SET consumer_kind = 'job', consumer_id = 'collector' WHERE id = ?1", [&g.id]).expect("grant");
+    c.execute("UPDATE secret SET kind = ?2 WHERE id = ?1", [&kind_row.id, NEWER_KIND]).expect("kind");
+    c.execute("UPDATE secret SET default_delivery = ?2, delivery_ceiling = ?2 WHERE id = ?1", [&del_row.id, NEWER_DELIVERY]).expect("delivery");
+    let inj = format!("{{\"dst\":\"{NEWER_DST}\",\"fmt\":\"{{}}\"}}");
+    c.execute("UPDATE secret SET inject = ?2 WHERE id = ?1", [&inj_row.id, &inj]).expect("inject");
+    c.execute("UPDATE grants SET consumer_kind = ?2, consumer_id = 'collector' WHERE id = ?1", [&g.id, NEWER_CONSUMER]).expect("grant");
     drop(c);
 
     let v = open(&t, &ks);

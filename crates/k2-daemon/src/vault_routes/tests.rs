@@ -946,7 +946,7 @@ fn rows_from_a_newer_k2_are_skipped_and_reported_in_status_and_doctor() {
     set_server(&t, "NEW_KEY", "k2test-new-value-123456");
     drop(t);
     let c = rusqlite::Connection::open(dir.path().join("vault/vault.db")).expect("db");
-    c.execute("UPDATE secret SET default_delivery = 'agent' WHERE name = 'NEW_KEY'", []).expect("edit");
+    c.execute("UPDATE secret SET default_delivery = 'zz_newer_delivery' WHERE name = 'NEW_KEY'", []).expect("edit");
     drop(c);
     let t = T { _dir: TestDir::new("routes-r2-b"), v: open() };
 

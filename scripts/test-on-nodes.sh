@@ -51,7 +51,10 @@ K2="${K2_CLI:-k2}"
 common=(
     compute test --any --shards "$shards"
     --profile ci
-    --needs rust@stable,cargo-nextest,cmake@3,ninja,protoc,sys:pkg-config,sys:zlib1g-dev
+    # No sys: packages: --any also picks k2-arch, where the Debian names
+    # (zlib1g-dev, pkg-config) are package_not_approved. The Linux nodes
+    # have the C build deps installed; K2_TEST_NEEDS overrides the list.
+    --needs "${K2_TEST_NEEDS:-rust@stable,cargo-nextest,cmake@3,ninja,protoc}"
     --mem 16G --env CARGO_BUILD_JOBS=4
     # A cold node builds the whole workspace first.
     --timeout 2h --stall-timeout 30m --queue-timeout 2h --retries 1

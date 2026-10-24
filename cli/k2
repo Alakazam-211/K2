@@ -32959,11 +32959,14 @@ CLI TOOLS (gh, vercel: tools that read a token from the environment)
   1. k2 vault set GITHUB_CLI --kind oauth_token < token
      (or ask: k2 thread secret <addr> --name GITHUB_CLI --delivery env)
   2. k2 vault grant GITHUB_CLI --to ws:<you> --env-name GH_TOKEN
-     (vercel: --env-name VERCEL_TOKEN, run vercel --token "$VERCEL_TOKEN")
+     (vercel: --env-name VERCEL_TOKEN, then plain vercel …; both CLIs
+     read the env. Never --token "$VAR": ps shows argv to your user.)
   3. Restart the session: env arrives in new sessions only.
-  4. Delete the tool's own login file, so the token isn't on disk too:
-     gh ~/.config/gh/hosts.yml; vercel auth.json (its com.vercel.cli
-     data folder).
+  4. Delete the tool's own login file, or it may keep using it:
+     gh ~/.config/gh/hosts.yml; vercel com.vercel.cli/auth.json
+     (Linux ~/.local/share, macOS ~/Library/Application Support).
+  5. vercel link and vercel env pull write a .env.local of real values:
+     delete it right after (k2 vault doctor flags it).
 
 SERVICES K2 DOESN'T RUN
   The vault reaches K2 sessions and k2 publish services only. A plain

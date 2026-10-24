@@ -58,6 +58,13 @@ pub const KANBAN_WIDGET: &str = "k2:kanban@1";
 /// `kanban-5.toml` moves the template; an own copy keeps the board it has.
 pub const KANBAN_WIDGET_LATEST: &str = "k2:kanban@5";
 
+/// Box usage's Garden card (prd-app-resources-disk-guard-v1 Slice B, for
+/// 0.46.4): this computer's disks against the disk guard's lines, the
+/// biggest users and their agents, what K2 clears on its own. Read only (no
+/// caps, no buttons): it reads the garden-local `app.resources` once a
+/// minute. Place it with `widget = "k2:box-disk@1"`.
+pub const BOX_DISK_WIDGET: &str = "k2:box-disk@1";
+
 /// The prefix every built-in widget name starts with.
 pub const BUILTIN_PREFIX: &str = "k2:";
 
@@ -367,6 +374,16 @@ pub const BUILTIN_WIDGETS: &[BuiltinWidget] = &[
             ("card.js", include_str!("money-alerts-3/card.js")),
         ],
     },
+    BuiltinWidget {
+        name: "box-disk",
+        version: 1,
+        files: &[
+            ("manifest.json", include_str!("box-disk-1/manifest.json")),
+            ("index.html", include_str!("box-disk-1/index.html")),
+            ("card.css", include_str!("box-disk-1/card.css")),
+            ("card.js", include_str!("box-disk-1/card.js")),
+        ],
+    },
 ];
 
 /// The data-source cards and the presets each pairs with (contract
@@ -407,6 +424,7 @@ pub const BUILTIN_WIDGET_HASHES: &[(&str, &str)] = &[
     ("k2:relays-dns@3", "4cfc13971951b12442d9d40f05a2e7e4417af5094c4a016c7c182a332c584a0d"),
     ("k2:deploys@3", "6a9e85ef5a3ac11635533ef862ef426ff82d077ef70985a8650162c980481686"),
     ("k2:money-alerts@3", "07a5203fced5553be85ef51222ce86ab4646f9001cfdf5c029981470289a5bf5"),
+    ("k2:box-disk@1", "544d39934b526377777dc1ec832bf77096df1b4dee123f7d25727ef7864c19ce"),
 ];
 
 /// The hash [`BUILTIN_WIDGET_HASHES`] pins.
@@ -1173,6 +1191,48 @@ mod tests {
         assert!(three.iter().all(|l| two.contains(l)), "kit-3 adds no code");
         let dropped = two.iter().filter(|l| !three.contains(l)).count();
         assert!(dropped <= 25, "kit-3 keeps @2's code but the ask lines: {dropped} dropped");
+    }
+
+    /// Box usage's Garden card (0.46.4): a clean custom widget with no caps
+    /// that reads only the garden-local `app.resources`, writes nothing,
+    /// posts nothing, and has no buttons at all (no Ask button: Rosson
+    /// 2026-10-23 retired them from K2's cards).
+    #[test]
+    fn the_box_disk_card_is_read_only() {
+        let w = builtin_widget(&parse_widget_ref(BOX_DISK_WIDGET).expect("parses")).expect("k2:box-disk@1 ships");
+        let files: std::collections::BTreeMap<String, Vec<u8>> =
+            w.files.iter().map(|(n, b)| (n.to_string(), b.as_bytes().to_vec())).collect();
+        let c = crate::zen::widgets::check_files("k2", "box-disk-1", &files);
+        assert!(c.errors.is_empty(), "{:?}", c.errors);
+        assert!(c.bundle.is_some(), "it bundles");
+        let m = c.manifest.as_ref().expect("a manifest");
+        assert!(m.caps.is_empty(), "no caps: {:?}", m.caps);
+        let row = crate::contract::catalog().verb("app.resources").expect("the app.resources row");
+        assert!(row.exposed_to(crate::contract::Exposure::GardenLocal) && row.cap.is_none() && row.effect == crate::contract::Effect::Read);
+        let html = file(w, "index.html");
+        let js = file(w, "card.js");
+        for bad in [" onclick=", " onload=", "<button", "<form", "<iframe", "src=\"http", "href=\"http"] {
+            assert!(!html.contains(bad), "index.html has {bad}");
+        }
+        for bad in ["innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "fetch(", "XMLHttpRequest", "WebSocket", "localStorage",
+            "eval(", "new Function", "'button'", "\"button\"", "addEventListener('click'", "Ask", "sources.", "thread.", "store.", "save."]
+        {
+            assert!(!js.contains(bad), "card.js has {bad}");
+        }
+        let calls: Vec<String> = js
+            .match_indices("k2.")
+            .map(|(i, _)| js[i + 3..].chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '.').collect::<String>())
+            .map(|s| s.trim_end_matches('.').to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        for call in &calls {
+            let head = call.split('.').next().unwrap_or(call);
+            assert!(
+                call == "app.resources" || ["ready", "connected", "config"].contains(&head),
+                "card.js calls k2.{call}: only app.resources, ready, connected and config"
+            );
+        }
+        assert!(calls.iter().any(|c| c == "app.resources"), "it reads app.resources");
     }
 
     /// Integration (Zen v2, B1 × B3): every library a built-in widget asks

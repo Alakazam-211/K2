@@ -148,6 +148,79 @@ export interface WidgetSelf {
   readonly widget: string
 }
 
+export interface BoxDiskCpu {
+  readonly cores: number | null
+  readonly load5: number | null
+}
+
+export interface BoxDiskFs {
+  readonly freeBytes: number
+  /** What it holds: k2Home, workspaces, k2app, postgres, mail. */
+  readonly holds: string[]
+  readonly level: 'ok' | 'warn' | 'refuse' | 'critical'
+  readonly mount: string
+  readonly totalBytes: number
+  readonly usedBytes: number
+  readonly usedPct: number
+}
+
+export interface BoxDiskLines {
+  readonly criticalFreeBytes: number
+  readonly criticalPct: number
+  readonly refusePct: number
+  /** The free space the box keeps for Postgres, mail and K2. */
+  readonly reserveBytes: number
+  readonly warnFreeBytes: number
+  readonly warnPct: number
+}
+
+export interface BoxDiskGuard {
+  readonly lines: BoxDiskLines
+  /** on refuses new disk work past the lines; warn only warns; off is the guard switched off. */
+  readonly mode: 'on' | 'warn' | 'off'
+}
+
+export interface BoxDiskMem {
+  /** Null where the OS gives no honest number (macOS). */
+  readonly availableBytes: number | null
+  readonly totalBytes: number | null
+}
+
+export interface BoxDiskOwner {
+  /** What k2 msg takes. */
+  readonly address: string | null
+  readonly diskBytes: number
+  readonly handle: string | null
+}
+
+export interface BoxDiskRow {
+  readonly diskBytes: number
+  /** An App, service or database name, an agent's handle, or a shared part (mail, k2, postgres, k2appImages, agentTools). */
+  readonly id: string
+  readonly kind: 'app' | 'service' | 'database' | 'workspace' | 'shared'
+  /** The owning agent's handle; null for the server's own parts. */
+  readonly owner: string | null
+}
+
+export interface BoxDisk {
+  /** When the disks were read, seconds since the epoch. */
+  readonly checkedAt: number
+  readonly cpu: BoxDiskCpu
+  readonly disks: BoxDiskFs[]
+  readonly guard: BoxDiskGuard
+  /** This server's host name (null without a Connect host). */
+  readonly host: string | null
+  /** Old Seeds K2's next daily sweep clears. */
+  readonly k2WillClearBytes: number | null
+  readonly mem: BoxDiskMem
+  /** The agents using the most, biggest first (five at most). */
+  readonly owners: BoxDiskOwner[]
+  /** When the agent folders were last measured, seconds since the epoch (null before the first scan). */
+  readonly scannedAt: number | null
+  /** The biggest measured users, biggest first (six at most). */
+  readonly top: BoxDiskRow[]
+}
+
 export interface AgentCounts {
   /** The shell commands among them. */
   readonly commands: number
@@ -1118,6 +1191,7 @@ export interface K2Verbs {
   'app.self': { args: [args?: { app?: string }]; value: AppSelf }
   'app.usage': { args: [args?: { app?: string; hours?: number }]; value: AppUsage }
   'widget.self': { args: []; value: WidgetSelf }
+  'app.resources': { args: []; value: BoxDisk }
   'agents.list': { args: []; value: AgentRow[] }
   'agents.subscribe': { args: []; value: AgentRow[] }
   'conversation.open': { args: [address: string]; value: null }
@@ -1234,6 +1308,8 @@ export interface K2 {
     self(args?: { app?: string }): Promise<AppSelf>
     /** This App's quotas, live use and per-call counts from its own audit (its own App only; the App pass, never a guest). This computer only. no cap · portable · app-self-v1. e.g. `const {verbs, quotas} = await k2.asApp().app.usage({hours: 24})` */
     usage(args?: { app?: string; hours?: number }): Promise<AppUsage>
+    /** This computer's disk use for a box card: each disk's use and guard level, the guard's lines, the biggest users and agents (names, never paths). Read only. This computer only. no cap · local · app-resources-v1. e.g. `const {disks, top} = await k2.app.resources()` */
+    resources(): Promise<BoxDisk>
   }
   readonly widget: {
     /** This widget: its id, live hash, who made it and its last 7 days of use. This computer only. no cap · local · app-self-v1. e.g. `const me = await k2.widget.self()` */

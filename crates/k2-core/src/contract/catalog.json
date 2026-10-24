@@ -16740,6 +16740,297 @@
       "example": "const me = await k2.widget.self()"
     },
     {
+      "verb": "app.resources",
+      "cap": null,
+      "exposure": [
+        "garden-local"
+      ],
+      "reach": "local",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-resources-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/zen/call"
+        }
+      },
+      "request": [],
+      "response": {
+        "title": "BoxDisk",
+        "type": "object",
+        "properties": {
+          "host": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "This server's host name (null without a Connect host)."
+          },
+          "checkedAt": {
+            "type": "integer",
+            "description": "When the disks were read, seconds since the epoch."
+          },
+          "guard": {
+            "title": "BoxDiskGuard",
+            "type": "object",
+            "properties": {
+              "mode": {
+                "enum": [
+                  "on",
+                  "warn",
+                  "off"
+                ],
+                "description": "on refuses new disk work past the lines; warn only warns; off is the guard switched off."
+              },
+              "lines": {
+                "title": "BoxDiskLines",
+                "type": "object",
+                "properties": {
+                  "warnPct": {
+                    "type": "integer"
+                  },
+                  "warnFreeBytes": {
+                    "type": "integer"
+                  },
+                  "refusePct": {
+                    "type": "integer"
+                  },
+                  "reserveBytes": {
+                    "type": "integer",
+                    "description": "The free space the box keeps for Postgres, mail and K2."
+                  },
+                  "criticalPct": {
+                    "type": "integer"
+                  },
+                  "criticalFreeBytes": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "warnPct",
+                  "warnFreeBytes",
+                  "refusePct",
+                  "reserveBytes",
+                  "criticalPct",
+                  "criticalFreeBytes"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "mode",
+              "lines"
+            ],
+            "additionalProperties": false
+          },
+          "disks": {
+            "type": "array",
+            "items": {
+              "title": "BoxDiskFs",
+              "type": "object",
+              "properties": {
+                "mount": {
+                  "type": "string"
+                },
+                "usedBytes": {
+                  "type": "integer"
+                },
+                "totalBytes": {
+                  "type": "integer"
+                },
+                "freeBytes": {
+                  "type": "integer"
+                },
+                "usedPct": {
+                  "type": "number"
+                },
+                "level": {
+                  "enum": [
+                    "ok",
+                    "warn",
+                    "refuse",
+                    "critical"
+                  ]
+                },
+                "holds": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "What it holds: k2Home, workspaces, k2app, postgres, mail."
+                }
+              },
+              "required": [
+                "mount",
+                "usedBytes",
+                "totalBytes",
+                "freeBytes",
+                "usedPct",
+                "level",
+                "holds"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "mem": {
+            "title": "BoxDiskMem",
+            "type": "object",
+            "properties": {
+              "totalBytes": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "availableBytes": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "Null where the OS gives no honest number (macOS)."
+              }
+            },
+            "required": [
+              "totalBytes",
+              "availableBytes"
+            ],
+            "additionalProperties": false
+          },
+          "cpu": {
+            "title": "BoxDiskCpu",
+            "type": "object",
+            "properties": {
+              "cores": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "load5": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "cores",
+              "load5"
+            ],
+            "additionalProperties": false
+          },
+          "top": {
+            "type": "array",
+            "description": "The biggest measured users, biggest first (six at most).",
+            "items": {
+              "title": "BoxDiskRow",
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "app",
+                    "service",
+                    "database",
+                    "workspace",
+                    "shared"
+                  ]
+                },
+                "id": {
+                  "type": "string",
+                  "description": "An App, service or database name, an agent's handle, or a shared part (mail, k2, postgres, k2appImages, agentTools)."
+                },
+                "owner": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The owning agent's handle; null for the server's own parts."
+                },
+                "diskBytes": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "kind",
+                "id",
+                "owner",
+                "diskBytes"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "owners": {
+            "type": "array",
+            "description": "The agents using the most, biggest first (five at most).",
+            "items": {
+              "title": "BoxDiskOwner",
+              "type": "object",
+              "properties": {
+                "handle": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "address": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "What k2 msg takes."
+                },
+                "diskBytes": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "handle",
+                "address",
+                "diskBytes"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "k2WillClearBytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Old Seeds K2's next daily sweep clears."
+          },
+          "scannedAt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "When the agent folders were last measured, seconds since the epoch (null before the first scan)."
+          }
+        },
+        "required": [
+          "host",
+          "checkedAt",
+          "guard",
+          "disks",
+          "mem",
+          "cpu",
+          "top",
+          "owners",
+          "k2WillClearBytes",
+          "scannedAt"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "stale_widget",
+        "rate_limited",
+        "verb_unavailable",
+        "failed"
+      ],
+      "doc": "This computer's disk use for a box card: each disk's use and guard level, the guard's lines, the biggest users and agents (names, never paths). Read only.",
+      "example": "const {disks, top} = await k2.app.resources()"
+    },
+    {
       "verb": "chat.pass",
       "cap": null,
       "exposure": [

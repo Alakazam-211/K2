@@ -133,9 +133,11 @@ fn exposure_counts_are_pinned() {
     // Garden columns and the agent list (catalog v20, 0.46.3 r10): + six
     // widget rows, layout.get/set/toggle/subscribe, agents.show and
     // conversation.setContext.
+    // Box usage's Garden card (0.46.4, disk guard Slice B): + app.resources
+    // (garden-local only).
     let garden_local = c.verbs_exposed_to(Exposure::GardenLocal).len();
     // Catalog v21 (0.46.4): + store.patch (garden-local) and links.open (widget).
-    assert_eq!((widget, app, garden_local), (37, 95, 34), "per-exposure verb counts (widget, app, garden-local)");
+    assert_eq!((widget, app, garden_local), (37, 95, 35), "per-exposure verb counts (widget, app, garden-local)");
     let both: Vec<&str> = c
         .verbs
         .iter()
@@ -167,8 +169,8 @@ fn exposure_counts_are_pinned() {
     assert_eq!(c.catalog_version, 21);
     assert_eq!(
         c.verbs.len(),
-        179,
-        "today's 38 bridge verbs (thread.inbox joined in 0.46.3) plus the frame rows theme.changed, canvas.setHitRegions, window.startDrag, sources.*, the 15 Garden data rows, the 66 app rows (5 on both transports) and widget.self, plus Thread parity 0.46.3's 4 widget and 5 app rows, plus thread.mute, plus App project chat's 5 app rows, plus App mobile access's 7 app rows, plus app-room-stream's thread.stream app row, plus the nine wallet.* app rows (0.46.3), plus the counts-only ear's thread.activity app row (0.46.3), plus permission cards' 9 unexposed permission.* rows (7 + A2's note and undo person routes; 0.46.3, no catalog bump), plus catalog v20's Garden columns and agent list rows (layout.get/set/toggle/subscribe, agents.show, conversation.setContext; 0.46.3 r10), plus catalog v21's store.patch and links.open (0.46.4)"
+        180,
+        "today's 38 bridge verbs (thread.inbox joined in 0.46.3) plus the frame rows theme.changed, canvas.setHitRegions, window.startDrag, sources.*, the 15 Garden data rows, the 66 app rows (5 on both transports) and widget.self, plus Thread parity 0.46.3's 4 widget and 5 app rows, plus thread.mute, plus App project chat's 5 app rows, plus App mobile access's 7 app rows, plus app-room-stream's thread.stream app row, plus the nine wallet.* app rows (0.46.3), plus the counts-only ear's thread.activity app row (0.46.3), plus permission cards' 9 unexposed permission.* rows (7 + A2's note and undo person routes; 0.46.3, no catalog bump), plus catalog v20's Garden columns and agent list rows (layout.get/set/toggle/subscribe, agents.show, conversation.setContext; 0.46.3 r10), plus catalog v21's store.patch and links.open (0.46.4), plus box usage's garden-local app.resources (0.46.4, no catalog bump)"
     );
     // Permission cards (0.46.3 Beta): K2's own verbs, never a widget's or
     // an App's (App guests never see a permission card).

@@ -660,6 +660,9 @@ pub const FEATURE_THREAD_DELTA: &str = "thread-delta-v1";
 /// `[from <user>]` stamp. A client sends a context only to a server with
 /// this key; an older one gets the message without it.
 pub const FEATURE_THREAD_CONTEXT: &str = "thread-context-v1";
+/// 0.46.4 (prd-app-resources-disk-guard-v1 Slice B): the garden-local
+/// `app.resources` verb (box usage's Garden card, `k2:box-disk@1`).
+pub const FEATURE_APP_RESOURCES: &str = "app-resources-v1";
 /// Older pages of a project chat (project-chat-paging-v1, 0.46.2):
 /// `GET /cli/project-group/messages?before_seq=N&limit=L` returns the newest
 /// `L` messages with `seq < N` OLDEST first, `has_more` when older ones
@@ -910,6 +913,7 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_THREAD_STREAM);
     out.push(FEATURE_THREAD_ACTIVITY_EAR);
     out.push(FEATURE_THREAD_CONTEXT);
+    out.push(FEATURE_APP_RESOURCES);
     // Permission cards (Beta, prd-agent-settings-cards-v1 §2.1, §10):
     // listed only while the global switch is on (setting or env). Its flip
     // publishes a settings frame (`settings_routes::permission_cards_flipped`)
@@ -997,6 +1001,7 @@ mod tests {
                 "thread-stream-v1",
                 "thread-activity-ear-v1",
                 "thread-context-v1",
+                "app-resources-v1",
                 "boot-status-views-v1"
             ]
         );

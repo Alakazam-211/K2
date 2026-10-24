@@ -255,6 +255,64 @@ fn view(who: &Who, params: &HashMap<String, String>) -> R<J> {
     }))
 }
 
+/// How many consumers and owners the Garden card shows.
+pub const CARD_TOP: usize = 6;
+pub const CARD_OWNERS: usize = 5;
+
+/// The Garden's box disk card (`app.resources`, garden-local, 0.46.4
+/// Slice B): the disks with their level, the guard's lines, the biggest
+/// consumers and owners, what K2 will clear. Shaped as an agent sees the
+/// view (names and addresses, never a folder path or a workspace id): a
+/// widget's code is not the person. Read only.
+pub fn garden_card() -> J {
+    let g = dg::guard();
+    let groups = dg::group(&tracked_paths());
+    let disks: Vec<J> = groups
+        .iter()
+        .map(|(fs, holds)| {
+            json!({
+                "mount": fs.label(),
+                "usedBytes": fs.used_bytes,
+                "totalBytes": fs.total_bytes,
+                "freeBytes": fs.free_bytes,
+                "usedPct": fs.used_pct,
+                "level": fs.level(&g.lines),
+                "holds": holds,
+            })
+        })
+        .collect();
+    let snap = dg::latest_snapshot();
+    let mut rows: Vec<Consumer> = snap.as_ref().map(|s| s.consumers.iter().map(Consumer::for_agent).collect()).unwrap_or_default();
+    rows.retain(|c| c.disk_bytes.is_some() && !(c.kind == "workspace" && k2_core::db::AUDIT_SENTINEL_IDS.contains(&c.id.as_str())));
+    rows.sort_by(|a, b| b.disk_bytes.cmp(&a.disk_bytes).then_with(|| a.id.cmp(&b.id)));
+    let top: Vec<J> = rows
+        .iter()
+        .take(CARD_TOP)
+        .map(|c| json!({ "kind": c.kind, "id": c.id, "owner": c.owner.handle, "diskBytes": c.disk_bytes }))
+        .collect();
+    let owners: Vec<J> = snap
+        .as_ref()
+        .map(|s| s.by_owner())
+        .unwrap_or_default()
+        .into_iter()
+        .take(CARD_OWNERS)
+        .map(|t| json!({ "handle": t.owner.handle, "address": t.owner.address, "diskBytes": t.disk_bytes }))
+        .collect();
+    let (total, avail) = dg::box_mem();
+    json!({
+        "host": super::coordination::this_host(),
+        "checkedAt": now(),
+        "guard": { "mode": g.mode.as_str(), "lines": g.lines.to_json() },
+        "disks": disks,
+        "mem": { "totalBytes": total, "availableBytes": avail },
+        "cpu": { "cores": dg::cores(), "load5": dg::load5() },
+        "top": top,
+        "owners": owners,
+        "k2WillClearBytes": snap.as_ref().and_then(|s| s.k2_will_clear.as_ref()).map(|w| w.seeds_bytes),
+        "scannedAt": snap.as_ref().and_then(|s| s.scan.workspaces_at),
+    })
+}
+
 /// An App's measured disk from the latest snapshot (the box view's
 /// `disk.usedBytes`); `None` = not measured.
 pub fn app_disk_bytes(app_id: &str) -> Option<u64> {

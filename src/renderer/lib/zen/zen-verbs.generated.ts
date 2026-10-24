@@ -90,6 +90,7 @@ export const ZEN_CUSTOM_VERBS = {
   'app.self': { cap: null, reach: 'portable', kind: 'call' },
   'app.usage': { cap: null, reach: 'portable', kind: 'call' },
   'widget.self': { cap: null, reach: 'local', kind: 'call' },
+  'app.resources': { cap: null, reach: 'local', kind: 'call' },
   'agents.list': { cap: 'agents:read', reach: 'portable', kind: 'call' },
   'agents.subscribe': { cap: 'agents:read', reach: 'portable', kind: 'subscribe' },
   'conversation.open': { cap: 'agents:read', reach: 'local', kind: 'call' },

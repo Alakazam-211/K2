@@ -199,7 +199,9 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// Garden on this computer (`agents-order.json`); agents read them with
 /// `k2 zen agents-order` and never set them (Baden via Appa 2026-10-22, for
 /// 0.46.4).
-pub const SKILL_VERSION_ZEN: u32 = 40;
+/// v41 = box usage's Garden card `k2:box-disk@1` and the garden-local
+/// `app.resources` verb (disk guard Slice B, 0.46.4).
+pub const SKILL_VERSION_ZEN: u32 = 41;
 /// Bumped to 5 in 0.39.0: same Phase 2.1 A25 verb refresh applied to
 /// the workspace-root template body (Cli tools section, workflow
 /// docs). Was 4 since 0.32.7 (SOURCE sub-regions adoption).

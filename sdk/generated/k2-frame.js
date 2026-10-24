@@ -30,6 +30,7 @@
       'app.self': Object.freeze({ cap: null, reach: 'portable', kind: 'call', feature: 'app-self-v1' }),
       'app.usage': Object.freeze({ cap: null, reach: 'portable', kind: 'call', feature: 'app-self-v1' }),
       'widget.self': Object.freeze({ cap: null, reach: 'local', kind: 'call', feature: 'app-self-v1' }),
+      'app.resources': Object.freeze({ cap: null, reach: 'local', kind: 'call', feature: 'app-resources-v1' }),
       'agents.list': Object.freeze({ cap: 'agents:read', reach: 'portable', kind: 'call', feature: 'zen-v1' }),
       'agents.subscribe': Object.freeze({ cap: 'agents:read', reach: 'portable', kind: 'subscribe', feature: 'zen-v1' }),
       'conversation.open': Object.freeze({ cap: 'agents:read', reach: 'local', kind: 'call', feature: 'zen-v1' }),

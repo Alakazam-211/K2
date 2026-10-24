@@ -202,6 +202,9 @@ describe('TUWA5: the generated tables', () => {
       'app.self': { cap: null, reach: 'portable', kind: 'call' },
       'app.usage': { cap: null, reach: 'portable', kind: 'call' },
       'widget.self': { cap: null, reach: 'local', kind: 'call' },
+      // Box usage's Garden card (0.46.4, disk guard Slice B): garden-local,
+      // read only, no cap (names and sizes, never a path).
+      'app.resources': { cap: null, reach: 'local', kind: 'call' },
       'room.members': { cap: 'room:members', reach: 'portable', kind: 'call' },
       'store.get': { cap: 'store:read', reach: 'local', kind: 'call' },
       'store.list': { cap: 'store:read', reach: 'local', kind: 'call' },

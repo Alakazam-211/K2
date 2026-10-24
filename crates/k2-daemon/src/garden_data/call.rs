@@ -276,6 +276,12 @@ fn run(b: &CallBody) -> Result<J, DataError> {
             budget::spend(&key, Spend::Read)?;
             widget_self(&w)
         }
+        // Box usage's Garden card (0.46.4, disk guard Slice B): read only,
+        // as an agent sees the view (no folder paths).
+        "app.resources" => {
+            budget::spend(&key, Spend::Read)?;
+            Ok(crate::apps::resources::garden_card())
+        }
         v if v.starts_with("save.") => {
             let spend = if row.effect == Effect::Write { Spend::Save } else { Spend::Read };
             budget::spend(&key, spend)?;

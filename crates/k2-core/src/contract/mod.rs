@@ -417,8 +417,8 @@ mod tests {
         let local = c.verbs_exposed_to(Exposure::GardenLocal);
         assert_eq!(
             local.len(),
-            34,
-            "store.* ×11 (store.patch since catalog v21, 0.46.4), save.* ×4, viewer.get, guests.rooms, guests.setRooms, room.members, app.self, app.usage, widget.self, and the 12 person rows"
+            35,
+            "store.* ×11 (store.patch since catalog v21, 0.46.4), save.* ×4, viewer.get, guests.rooms, guests.setRooms, room.members, app.self, app.usage, widget.self, the 12 person rows, and box usage's app.resources (0.46.4)"
         );
         let both: Vec<&str> = local.iter().filter(|v| v.exposed_to(Exposure::App)).map(|v| v.verb.as_str()).collect();
         assert_eq!(
@@ -480,7 +480,9 @@ mod tests {
             }
             assert_eq!(v.reach, Reach::Local, "{}", v.verb);
             let room_scope = v.verb == "widget.self" && v.feature == "app-self-v1";
-            assert!(room_scope || v.feature == crate::garden_data::FEATURE, "{}", v.verb);
+            // 0.46.4: box usage's Garden card, its own feature key.
+            let box_card = v.verb == "app.resources" && v.feature == "app-resources-v1";
+            assert!(room_scope || box_card || v.feature == crate::garden_data::FEATURE, "{}", v.verb);
         }
         assert!(c.verb("theme.changed").is_some_and(|v| v.kind == VerbKind::Event));
         // Rosson 2026-10-20 (Thread parity, 0.46.3) replaces UW51: a widget

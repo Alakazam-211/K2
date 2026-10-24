@@ -61081,6 +61081,7 @@ no cap
   k2.app.self({app})                                                                                  portable app-self-v1            const me = await k2.asApp().app.self()  [pass_required pass_invalid pass_wrong_link not_exposed not_found usage]
   k2.app.usage({app, hours})                                                                          portable app-self-v1            const {verbs, quotas} = await k2.asApp().app.usage({hours: 24})  [pass_required pass_invalid pass_wrong_link not_exposed not_found usage]
   k2.widget.self()                                                                                    local    app-self-v1            const me = await k2.widget.self()  [stale_widget rate_limited]
+  k2.app.resources()                                                                                  local    app-resources-v1       const {disks, top} = await k2.app.resources()  [stale_widget rate_limited]
 agents:read (See agents)
   k2.agents.list()                                                                                    portable zen-v1                 const rows = await k2.agents.list()
   k2.agents.subscribe(cb)                                                                             portable zen-v1                 const off = k2.agents.subscribe((rows) => draw(rows))

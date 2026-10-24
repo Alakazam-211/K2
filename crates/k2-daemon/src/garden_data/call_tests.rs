@@ -403,6 +403,52 @@ fn room_scope_verbs_through_the_widget_door() {
     assert_eq!((code, v["error"]["code"].as_str()), (409, Some("stale_widget")));
 }
 
+/// Box usage's Garden card (0.46.4, disk guard Slice B): `app.resources`
+/// needs no cap, answers the disks, the guard and the biggest users, and
+/// never a folder path or a workspace id (a widget's code is not the person).
+#[test]
+fn the_box_disk_card_reads_app_resources_without_paths() {
+    use k2_core::disk_guard::{self as dg, Consumer, Owner, Snapshot};
+    let d = door(&[]);
+    d.stamp(builder());
+    dg::publish_snapshot(Snapshot {
+        consumers: vec![
+            Consumer {
+                kind: "workspace".into(),
+                id: "ws-secret-id".into(),
+                owner: Owner {
+                    kind: "agent".into(),
+                    agent: Some("Agent NSI".into()),
+                    handle: Some("agent-nsi".into()),
+                    address: Some("agent-nsi::box".into()),
+                    workspace_id: Some("ws-secret-id".into()),
+                },
+                disk_bytes: Some(38_400_000_000),
+                folder: Some("/home/k2/AI Projects/secret-folder".into()),
+                ..Consumer::default()
+            },
+            Consumer { kind: "shared".into(), id: "mail".into(), owner: Owner::server(), disk_bytes: Some(12_400_000_000), ..Consumer::default() },
+            Consumer { kind: "app".into(), id: "unmeasured".into(), owner: Owner::server(), disk_bytes: None, ..Consumer::default() },
+        ],
+        ..Snapshot::default()
+    });
+    let v = d.call("app.resources", json!([]));
+    dg::clear_snapshot();
+    assert!(["on", "warn", "off"].contains(&v["guard"]["mode"].as_str().unwrap_or("")), "{v}");
+    assert!(v["guard"]["lines"]["refusePct"].is_u64(), "{v}");
+    assert!(v["disks"].as_array().is_some_and(|d| !d.is_empty()), "the K2 home's disk at least: {v}");
+    assert!(["ok", "warn", "refuse", "critical"].contains(&v["disks"][0]["level"].as_str().unwrap_or("")), "{v}");
+    let top = v["top"].as_array().expect("top");
+    assert_eq!(top.len(), 2, "unmeasured rows are left out: {v}");
+    assert_eq!(top[0], json!({ "kind": "workspace", "id": "agent-nsi", "owner": "agent-nsi", "diskBytes": 38_400_000_000u64 }));
+    assert_eq!(top[1]["owner"], json!(null), "the server's own part");
+    assert_eq!(v["owners"][0], json!({ "handle": "agent-nsi", "address": "agent-nsi::box", "diskBytes": 38_400_000_000u64 }));
+    let all = v.to_string();
+    assert!(!all.contains("secret-folder") && !all.contains("ws-secret-id"), "no folder path or workspace id: {all}");
+    let (code, v) = d.raw(&"0".repeat(64), "app.resources", json!([]));
+    assert_eq!((code, v["error"]["code"].as_str()), (409, Some("stale_widget")));
+}
+
 /// Gap 5 (0.46.1): with `"reads": ["lists"]` in its manifest, `board` reads
 /// the `lists` widget's data on the same Garden through `{from}`, read-only;
 /// undeclared or unplaced neighbours answer `not_bound`, and an agent-made

@@ -627,7 +627,12 @@ saves). `k2 zen guide services` has every rule; `k2 study garden-data` is your s
   K2 Companion's colours in light and dark; to follow the Garden's theme instead, set\n\
   `look = \"garden\"` under `[widget.props.config]`.\n\
   A Kanban Garden that syncs with K2's default moves to `@5` and keeps its theme; an own\n\
-  copy keeps its board (`@1` to `@4`, which draw a Thread panel of their own).\n\n",
+  copy keeps its board (`@1` to `@4`, which draw a Thread panel of their own).\n\
+- **The box disk card** (`k2:box-disk@1`, 0.46.4): this computer's disks against the\n\
+  disk guard's lines, the biggest users and their agents, and what K2 clears on its own.\n\
+  Read only (no caps, no buttons); it reads `k2.app.resources()` once a minute. Place it\n\
+  with `widget = \"k2:box-disk@1\"`. The numbers are `k2 app resources`'s; to free space,\n\
+  `k2 app resources clean --dry-run` (only what K2 made and can make again).\n\n",
     )
 }
 
@@ -1377,6 +1382,16 @@ mod tests {
             "never write `<p>meta`",
             "- `k2:kanban` (the Kanban): columns and cards",
         ] {
+            assert!(s.contains(needle), "the k2-zen skill must say {needle:?}");
+        }
+    }
+
+    /// v35 (0.46.4, disk guard Slice B): the box disk card and its verb.
+    #[test]
+    fn skill_documents_the_box_disk_card() {
+        assert!(crate::skills::version::SKILL_VERSION_ZEN >= 35, "the box disk card needs a new skill version");
+        let s = generate_k2_zen_skill_for(false);
+        for needle in ["**The box disk card** (`k2:box-disk@1`, 0.46.4)", "`k2.app.resources()`", "k2 app resources clean --dry-run"] {
             assert!(s.contains(needle), "the k2-zen skill must say {needle:?}");
         }
     }

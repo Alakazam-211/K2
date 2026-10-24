@@ -76,8 +76,8 @@ describe('day-0: verb tables', () => {
       }
       // Room-scope surfaces (0.46.1): garden-local through this computer's
       // daemon; room.members / app.* are also App rows (portable).
-      if (verb === 'room.members' || verb === 'app.self' || verb === 'app.usage' || verb === 'widget.self') {
-        expect(row.reach).toBe(verb === 'widget.self' ? 'local' : 'portable')
+      if (verb === 'room.members' || verb === 'app.self' || verb === 'app.usage' || verb === 'widget.self' || verb === 'app.resources') {
+        expect(row.reach).toBe(verb === 'widget.self' || verb === 'app.resources' ? 'local' : 'portable')
         expect([null, 'room:members']).toContain(row.cap)
         expect(verb in ZEN_VERBS, verb).toBe(false)
         continue

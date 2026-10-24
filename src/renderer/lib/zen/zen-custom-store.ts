@@ -50,6 +50,8 @@ export const ZEN_STORE_VERBS: ReadonlySet<string> = new Set([
   'app.self',
   'app.usage',
   'widget.self',
+  // Box usage's Garden card (0.46.4, disk guard Slice B): read only.
+  'app.resources',
   // garden-person-rows-v1 (0.46.3): the App rows a Garden shares, answered
   // by the same daemon door as the person on this computer (no project
   // chat on the bridge, Rosson 2026-10-20).

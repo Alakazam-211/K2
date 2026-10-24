@@ -3168,7 +3168,7 @@ exit: 0
     {
       "name": "zen news",
       "usage": "k2 zen news [--json] | k2 zen news seen [<id>... | --all] [--json]",
-      "description": "Unseen Garden news (new catalog Gardens; K2 defaults a synced Garden picked up) and how many own copies have a newer default. seen marks ids, or every unseen item with --all, as read.",
+      "description": "Unseen Garden news (new catalog Gardens; K2 defaults a synced Garden picked up; notices of a one-time change K2 made, like 0.46.4 moving the data cards to @3 and listing the Gardens it left) and how many own copies have a newer default. seen marks ids, or every unseen item with --all, as read.",
       "args": [{"name": "seen", "required": false}, {"name": "id", "required": false}],
       "flags": [
         {"name": "--all", "arg": null, "description": "seen: every unseen item."},

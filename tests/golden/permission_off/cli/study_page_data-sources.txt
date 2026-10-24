@@ -114,7 +114,9 @@ CARDS
   @2 (0.46.1) says "soft crit 2/3", reads K2 Web's ops shapes (boxes with
   customer / needs_go, edge relays, billing), shows a named list with
   config.list, and subscribes again by itself after a refusal. @1 and @2
-  still run as shipped. A custom widget asks for cap sources:read. Its
-  errors: k2 zen widget errors <name>.
+  still run as shipped. On its first start 0.46.4 moved them to @3 once,
+  in each Garden file it safely could; a locked Garden or one with errors
+  was left as it was and is listed in k2 zen news. A custom widget asks
+  for cap sources:read. Its errors: k2 zen widget errors <name>.
 --- stderr
 --- requests

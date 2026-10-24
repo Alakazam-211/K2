@@ -74,6 +74,7 @@ fn run() {
             sleep_forever();
         }
         "survive" => survive(&args[1], args.get(2).and_then(|s| s.parse().ok()).unwrap_or(50)),
+        "vault-probe-child" => vault_probe_child(&args[1], &args[2]),
         "sleep" => {
             println!("READY");
             out.flush().unwrap();
@@ -151,6 +152,17 @@ fn survive(dir: &str, every_ms: u64) {
                 if hups > 0 {
                     std::fs::write(dir.join("sighup"), hups.to_string()).unwrap();
                 }
+                // `vault-probe` (P74): a child of this agent, its K2 env
+                // stripped (env cleared), asks vault.sock for a
+                // person-only step; its answer goes to `vault-probe.out`.
+                if std::fs::remove_file(dir.join("vault-probe")).is_ok() {
+                    let sock = std::path::Path::new(&std::env::var("HOME").unwrap_or_default()).join(".k2/vault.sock");
+                    let _ = std::process::Command::new(std::env::current_exe().unwrap())
+                        .args(["vault-probe-child", &sock.to_string_lossy(), &dir.join("vault-probe.out").to_string_lossy()])
+                        .env_clear()
+                        .env("PATH", "/usr/bin:/bin")
+                        .status();
+                }
                 // `thread-req` = "<addr>\n<text>": post it to that Thread as
                 // this agent (its passport), log `<text> <status>`.
                 if let Ok(req) = std::fs::read_to_string(dir.join("thread-req")) {
@@ -218,6 +230,29 @@ fn cell_request(method: &str, path: &str, form: Option<&str>) -> String {
         return format!("{status} {}", body.replace('\n', " "));
     }
     status
+}
+
+/// P74 probe: POST a person-only vault step over `sock` claiming a tty, as
+/// a process with no K2 env; write the raw answer to `out`.
+fn vault_probe_child(sock: &str, out: &str) {
+    use std::io::Read;
+    let answer = match std::os::unix::net::UnixStream::connect(sock) {
+        Err(e) => format!("ERR:connect:{e}"),
+        Ok(mut s) => {
+            let body = "{}";
+            let req = format!(
+                "POST /cli/vault/recovery/show-once HTTP/1.1\r\nHost: k2\r\nX-K2-Tty: 1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = s.set_read_timeout(Some(std::time::Duration::from_secs(10)));
+            let mut raw = Vec::new();
+            match s.write_all(req.as_bytes()).and_then(|_| s.read_to_end(&mut raw)) {
+                Ok(_) => String::from_utf8_lossy(&raw).into_owned(),
+                Err(e) => format!("ERR:io:{e}"),
+            }
+        }
+    };
+    std::fs::write(out, answer).unwrap();
 }
 
 fn form_enc(s: &str) -> String {

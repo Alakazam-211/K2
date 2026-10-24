@@ -423,6 +423,18 @@ fn agents_survive_daemon_restarts_and_end_on_stop() {
         agent_thread_post(port, &token, &dir, &format!("after-restart-{}", i + 1));
     }
 
+    // P74 (V2): the adopted agent's ancestry is agent → ptyd → init, no
+    // daemon pid. A child of it with every K2 variable stripped still
+    // isn't a person to the vault socket.
+    std::fs::write(dir.join("vault-probe"), "").unwrap();
+    let probe = wait_for("the vault person-check probe", Duration::from_secs(15), || {
+        std::fs::read_to_string(dir.join("vault-probe.out")).ok().filter(|s| !s.is_empty())
+    });
+    assert!(
+        probe.contains("person_required") && probe.contains("runs inside K2"),
+        "P74: an env-stripped process under ptyd must not pass as a person: {probe}"
+    );
+
     // L2: an explicit stop ends the agent (and ptyd, which then holds nothing).
     let (s, b) = http(port, "POST", &format!("/cli/daemon/stop?token={}", h.token()), "");
     assert_eq!(s, 200, "stop: {b}");

@@ -36,6 +36,9 @@ const h = vi.hoisted(() => ({
 
 vi.mock('@/lib/daemon-cli', () => ({
   daemonCliGet: vi.fn(async (_scope: unknown, route: string, params?: Record<string, unknown>) => {
+    // 0.46.4: the Agents widget reads the person's order and pins on mount
+    // (none set here); this file's GET checks are about the theme list.
+    if (route === 'zen/agents/order') return { ok: true, gardens: [] }
     h.gets.push({ route, params: params ?? {} })
     if (route !== 'zen/theme/list') throw new Error(`unexpected GET ${route}`)
     if (h.themeList === null) throw new Error('unknown zen route')

@@ -110,12 +110,22 @@ export function zenPinAvatarPx(
  * With "Recent agents first" on, the list puts pinned rows first (when they
  * aren't in a grid), then the rows sent to from a Garden on this computer,
  * newest first, then the rest in their own order. Off: the view's order.
+ *
+ * 0.46.4: `rows` already carry the person's order for this Garden
+ * (`orderZenAgentRows`), and `isPinned` is the Garden's own pins once the
+ * person set them (`zenRowPinned`); unset, a row's workspace pin.
  */
 export function zenAgentsDisplay<T extends { address: string; pinned?: boolean }>(
   rows: readonly T[],
-  opts: { grid: boolean; recentFirst: boolean; sent: Record<string, number>; limit?: number | null },
+  opts: {
+    grid: boolean
+    recentFirst: boolean
+    sent: Record<string, number>
+    limit?: number | null
+    isPinned?: (row: T) => boolean
+  },
 ): { pins: T[]; list: T[] } {
-  const isPinned = (r: T): boolean => r.pinned === true
+  const isPinned = opts.isPinned ?? ((r: T): boolean => r.pinned === true)
   const { pins, rest } = splitZenPins(rows, isPinned, opts.grid, opts.limit ?? null)
   const list = opts.recentFirst ? orderZenRecentFirst(rest, opts.sent, (r) => zenRecentKey(r.address), isPinned) : rest
   return { pins, list }

@@ -136,6 +136,9 @@ export const SESSION_EVENT_ROUTES = {
   // LOCAL daemon's bus matters (Zen config is local); not carried, a room's
   // socket never stands in for it.
   zen_changed: { class: 'app', app: true },
+  // 0.46.4: the person's order/pins in a Garden's Agents widget (this
+  // computer's agents-order.json). Local bus only, like zen_changed.
+  zen_agents_order_changed: { class: 'app', app: true },
   // Garden v3 data sources (contract-sources-v1 §5): the counter only.
   sources_changed: { class: 'app', app: true },
   // Garden data (contract-garden-data-v1 §6): the space and its rev only.

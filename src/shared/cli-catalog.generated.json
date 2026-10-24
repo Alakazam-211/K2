@@ -1824,6 +1824,11 @@
     "description": "Unseen Garden news (new catalog Gardens; K2 defaults a synced Garden picked up) and how many own copies have a newer default. seen marks ids, or every unseen item with --all, as read."
    },
    {
+    "name": "zen agents-order",
+    "usage": "k2 zen agents-order [<garden>] [--json]",
+    "description": "The person's order and pins in each Garden's Agents widget on this computer (they drag rows and pin agents in Zen; per Garden, never synced). Read only: agents can read it and never set it. order sits on top of the widget's own order; pins, once set, replace the agents' workspace pins in that Garden's pin grid."
+   },
+   {
     "name": "zen guide",
     "usage": "k2 zen guide [<topic>] [--json] | k2 zen guide example [<name> [--toml] | --list] [--json]",
     "description": "The Zen Gardens user guide: short static pages (gardens, files, widgets, bands, required, menus, themes, sync, examples, undo, safe-mode, api), each at most 80 lines, and whole example Garden files (rail-top, quiet-top, bottom-bar, menu-both, texting-chrome, menu-bottom-right, column-corner). Daemon-optional. An unknown topic or example exits 2."

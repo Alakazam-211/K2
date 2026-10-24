@@ -118,6 +118,8 @@ for verb in validate path history reload "garden list" "garden new Notes" "garde
     assert_eq "zen $verb before setup exits 3" "$rc" "3"
     assert_contains "zen $verb before setup says so" "$out" "$NOT_SET_UP"
 done
+capture zen agents-order
+assert_eq "zen agents-order before setup exits 3" "$rc" "3"
 [ ! -e "$ZEN" ] && ok "no CLI verb creates ~/.k2/zen" || bad "a CLI verb created ~/.k2/zen"
 
 echo "== set up (as the app does) =="
@@ -170,6 +172,50 @@ assert_eq "news seen needs ids or --all" "$rc" "2"
 capture zen news seen --all
 assert_eq "news seen --all exit" "$rc" "0"
 [ -f "$ZEN/sync.json" ] && ok "the daemon wrote sync.json" || bad "no sync.json"
+
+echo "== agents order and pins, per Garden on this computer (0.46.4) =="
+capture zen agents-order --help
+assert_eq "agents-order --help exit" "$rc" "0"
+assert_contains "agents-order --help says agents can't set it" "$out" "Agents can read it, never set it"
+capture zen --help
+assert_contains "zen --help names agents-order" "$out" "k2 zen agents-order [<garden>] [--json]"
+capture zen agents-order
+assert_eq "agents-order exit" "$rc" "0"
+assert_contains "agents-order lists Garden 1" "$out" "Garden 1 ($DEFAULT_ID)"
+assert_contains "no order yet" "$out" "order: the widget's own (never dragged)"
+assert_contains "workspace pins until the person pins here" "$out" "pins:  each agent's workspace pin (never pinned or unpinned here)"
+resp="$(curl -s -X POST "http://127.0.0.1:$PORT/cli/zen/agents/order/set?token=$TOKEN" -H 'Content-Type: application/json' \
+    --data-raw "{\"garden\":\"$DEFAULT_ID\",\"order\":[\"b::local\",\"a::local\"],\"pins\":[]}")"
+assert_contains "the person's set changed it" "$resp" '"changed":true'
+capture zen agents-order "Garden 1"
+assert_eq "agents-order <garden> exit" "$rc" "0"
+assert_contains "the order reads back" "$out" "order: b::local, a::local"
+assert_contains "an empty pin list is no pins here" "$out" "pins:  none in this Garden"
+case "$out" in *"Garden 2"*) bad "agents-order <garden> printed another Garden" ;; *) ok "agents-order <garden> prints only that Garden" ;; esac
+capture zen agents-order "Garden 1" --json
+assert_eq "agents-order --json exit" "$rc" "0"
+got="$(printf '%s' "$out" | python3 -c 'import json,sys; g = json.load(sys.stdin)["gardens"][0]; print(g["id"], ",".join(g["order"]), json.dumps(g["pins"]))')"
+assert_eq "agents-order --json" "$got" "$DEFAULT_ID b::local,a::local []"
+capture zen agents-order "No Such Garden"
+assert_eq "an unknown Garden exits 1" "$rc" "1"
+code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/cli/zen/agents/order/set?token=$TOKEN")"
+assert_eq "a GET on the set route is 405" "$code" "405"
+code="$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/cli/zen/agents/order/set?token=not-the-owner-token" \
+    -H 'Content-Type: application/json' --data-raw "{\"garden\":\"$DEFAULT_ID\",\"order\":[]}")"
+# Refused at the route gate (401, a token this daemon doesn't know) or by
+# the handler (403 owner_only, any credential but the owner token).
+case "$code" in
+    401|403) ok "a set without the owner token is refused ($code)" ;;
+    *) bad "a set without the owner token got $code" ;;
+esac
+capture zen agents-order "Garden 1"
+assert_contains "the refused set changed nothing" "$out" "order: b::local, a::local"
+[ -f "$ZEN/agents-order.json" ] && ok "the daemon wrote agents-order.json" || bad "no agents-order.json"
+if grep -q "b::local" "$ZEN/gardens/$DEFAULT_ID.toml" "$ZEN/sync.json" 2>/dev/null; then
+    bad "the person's order leaked into a Garden file or sync.json"
+else
+    ok "the order is in neither the Garden file nor sync.json"
+fi
 
 echo "== inside a K2 session the change goes out as the session (GS32) =="
 set +e

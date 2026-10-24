@@ -143,6 +143,7 @@ import { requestZenServerRoster, useZenServerRosters, zenRosterWorkspaces, zenWi
 import { ZEN_AGENTS_SHOW_MAX, zenWidgetMayRun, type ZenCustomWidgetPayload } from './zen-custom-types'
 import { useZenGardensStore } from './zen-gardens'
 import { draftZenCompose } from './zen-compose-drafts'
+import { orderZenAgentRows, useZenAgentsOrderStore } from './zen-agents-order'
 import { zenAgentsSource } from './zen-rail-views'
 import { threadInboxSubscribe, type ZenInboxMessage } from './zen-thread-inbox'
 import { initUnreadEvents, unreadKey, useUnreadStore } from '@/stores/unread'
@@ -1683,9 +1684,11 @@ function closeZenConversation(view: ZenView): void {
 export function selectZenRowOnPage(page: ZenResolvedPage, gardenId: string, index: number): void {
   const first = firstAgentsWidget(page)
   if (!first) return
-  // List mode: row N of the list, in its order (CA13).
+  // List mode: row N of the list, in its order (CA13). 0.46.4: the person's
+  // own order for this Garden, when they dragged, sits on top (Q3).
   const view = agentsView(page, gardenId, first)
-  const row = viewRows(view)[index]
+  const own = gardenId ? useZenAgentsOrderStore.getState().byGarden[gardenId]?.order ?? null : null
+  const row = orderZenAgentRows(viewRows(view), own)[index]
   if (!row) return
   void openZenConversation(view, row.address).catch((err: unknown) => console.warn('[zen] open failed:', err))
 }

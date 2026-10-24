@@ -70,6 +70,8 @@ pub const MAX_BODY: usize = 640 * 1024;
 /// The POST rows (G45, UW35). A GET on any of them is 405.
 /// `/cli/zen/lib/fetch` is `zen_lib_routes`'s (B3, UWB15).
 pub const POST_ROUTES: &[&str] = &[
+    // The person's order and pins in the Agents widget (0.46.4).
+    "/cli/zen/agents/order/set",
     "/cli/zen/garden/check",
     "/cli/zen/garden/delete",
     "/cli/zen/garden/lock",
@@ -109,6 +111,8 @@ pub const POST_ROUTES: &[&str] = &[
 
 /// The GET rows (G45, UW35, UWB23). `/cli/zen/lib/file` is B3's.
 pub const GET_ROUTES: &[&str] = &[
+    // Agents may read the person's order and pins (0.46.4).
+    "/cli/zen/agents/order",
     "/cli/zen/doctor",
     "/cli/zen/gardens",
     "/cli/zen/get",
@@ -167,7 +171,9 @@ pub fn too_large() -> CliResponse {
 /// The body cap for one `/cli/zen/*` path: [`MAX_BODY`], or a whole staged
 /// widget folder for the dev loop's folder routes (0.46.1 S3).
 pub fn max_body(path: &str) -> usize {
-    if crate::zen_agent_routes::FOLDER_ROUTES.contains(&path) {
+    if path == crate::zen_agents_order_routes::SET_ROUTE {
+        crate::zen_agents_order_routes::MAX_BODY
+    } else if crate::zen_agent_routes::FOLDER_ROUTES.contains(&path) {
         k2_core::zen::widget_folder::MAX_FOLDER_BODY
     } else {
         MAX_BODY
@@ -176,7 +182,9 @@ pub fn max_body(path: &str) -> usize {
 
 /// [`too_large`] for `path`'s own cap.
 pub fn too_large_for(path: &str) -> CliResponse {
-    if crate::zen_agent_routes::FOLDER_ROUTES.contains(&path) {
+    if path == crate::zen_agents_order_routes::SET_ROUTE {
+        crate::zen_agents_order_routes::too_large()
+    } else if crate::zen_agent_routes::FOLDER_ROUTES.contains(&path) {
         resp(
             "413 Payload Too Large",
             json!({ "error": "body_too_large", "message": "A staged widget folder must be under 6 MB (4 MB of files)." }),
@@ -1347,6 +1355,11 @@ pub fn handle(
         return resp("404 Not Found", json!({ "error": "unknown zen route", "path": path }));
     }
     let owner_token = owner && *caller == Caller::Owner;
+    // The person's order and pins in the Agents widget (0.46.4): agents
+    // read, only the owner token sets (its own module applies both rules).
+    if crate::zen_agents_order_routes::is_route(path) {
+        return crate::zen_agents_order_routes::handle(path, owner_token, caller, ingress, params, body);
+    }
     // Garden access (prd-garden-access-v1 §2, G20): Keep as mine is retired
     // with the switch on; a listed agent's or the person's sign covers it.
     let access_on = k2_core::zen::garden_access::enabled();

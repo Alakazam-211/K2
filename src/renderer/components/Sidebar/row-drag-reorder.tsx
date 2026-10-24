@@ -15,9 +15,11 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 export const ROW_DRAG_THRESHOLD = { x: 3, y: 5 } as const
 
 /** In-row controls that keep their own press (tag chips, worktree rows,
- *  the hide button). The row shell itself (`data-agent-row`) is a button
- *  too — it is the drag handle, so it is not exempt. */
-const DRAG_EXEMPT = '[role="button"], button:not([data-agent-row]), a, input, textarea, select'
+ *  the hide button). The row shell itself (`data-agent-row`, or any button
+ *  marked `data-row-drag-handle`, e.g. a Garden's Agents widget rows) is a
+ *  button too — it is the drag handle, so it is not exempt. */
+const DRAG_EXEMPT =
+  '[role="button"]:not([data-row-drag-handle]), button:not([data-agent-row]):not([data-row-drag-handle]), a, input, textarea, select'
 
 export function isRowDragExempt(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return true
@@ -81,6 +83,9 @@ export interface RowDragStart<Z extends string> {
   /** The list's element (holds the rows matched by `rowSelector`). */
   container: () => Element | null
   rowSelector: string
+  /** The gap under the pointer (default: by `clientY` only, a vertical list;
+   *  a grid passes its own reading-order rule). */
+  gapAt?: (container: Element, clientX: number, clientY: number) => number
   /** Called once on release after a real drag, with the gap it ended over. */
   onDrop: (from: number, gap: number) => void
 }
@@ -133,7 +138,7 @@ export function useRowDragReorder<Z extends string>(): RowDragReorder<Z> {
       if (!started) return
       const container = start.container()
       if (!container) return
-      gap = dropGapAt(container, start.rowSelector, ev.clientY)
+      gap = start.gapAt ? start.gapAt(container, ev.clientX, ev.clientY) : dropGapAt(container, start.rowSelector, ev.clientY)
       setDropGap(gap)
     }
     const onUp = (): void => {

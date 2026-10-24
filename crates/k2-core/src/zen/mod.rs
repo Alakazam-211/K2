@@ -20,7 +20,11 @@
 //! - `active.json` (daemon-written) names the active theme, globally and
 //!   per Garden (G16: one theme plus an optional per-Garden override);
 //! - `.history/` (the last 20 good versions of each file, and deleted
-//!   Gardens) is the daemon's own.
+//!   Gardens) is the daemon's own;
+//! - `agents-order.json` (daemon-written, 0.46.4) is the person's order and
+//!   pins in each Garden's Agents widget on this computer ([`agents_order`]):
+//!   never in a Garden file or Garden sync; agents read it, only the person
+//!   sets it.
 //!
 //! The stack for one Garden: built-in `basic` → built-in `<active>` →
 //! `themes/<active>/theme.toml` → `zen.toml` → `gardens/<id>.toml`.
@@ -43,6 +47,7 @@
 //! controls.
 
 pub mod agent_edit;
+pub mod agents_order;
 pub mod builtin_widgets;
 pub mod bundle;
 pub mod defaults;

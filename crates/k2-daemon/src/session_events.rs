@@ -604,6 +604,14 @@ pub enum SessionEvent {
     /// Wire: `{ "kind": "zen_changed" }`.
     ZenChanged {},
 
+    /// 0.46.4: the person's order or pins in a Garden's Agents widget
+    /// changed on this computer (`agents-order.json`,
+    /// `zen_agents_order_routes`). APP-LEVEL, payload-free: a desktop
+    /// re-reads `GET /cli/zen/agents/order` from its LOCAL daemon. Never a
+    /// `zen_changed` (that remounts the page).
+    /// Wire: `{ "kind": "zen_agents_order_changed" }`.
+    ZenAgentsOrderChanged {},
+
     /// Garden v3: a source's definition or state changed on this server.
     /// Wire: `{ "kind": "sources_changed", "rev": 4182 }`. App-level: reaches
     /// every subscriber, so it carries nothing but the counter
@@ -1028,6 +1036,7 @@ impl SessionEvent {
             SessionEvent::LlmAccountsChanged { .. } => "llm_accounts_changed",
             SessionEvent::SubscriptionUsageChanged { .. } => "subscription_usage_changed",
             SessionEvent::ZenChanged {} => "zen_changed",
+            SessionEvent::ZenAgentsOrderChanged {} => "zen_agents_order_changed",
             SessionEvent::SourcesChanged { .. } => "sources_changed",
             SessionEvent::GardenDataChanged { .. } => "garden_data_changed",
             SessionEvent::GrokbotsChanged { .. } => "grokbots_changed",

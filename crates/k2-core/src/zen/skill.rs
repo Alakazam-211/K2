@@ -105,6 +105,8 @@ the app's top bar); until then every `k2 zen` verb exits 3.\n\n\
   Gardens sit on, and locked Gardens' frozen copies. K2 writes them. **Never write\n\
   sync.json, news.json, .defaults/ or .locks/**; read them with `k2 zen sync`,\n\
   `k2 zen garden list` and `k2 zen news`.\n\
+- `agents-order.json`: the person's order and pins in each Garden's Agents widget, on this\n\
+  computer. K2 writes it. **Never write agents-order.json**; read it with `k2 zen agents-order`.\n\
 - Widgets in your own Gardens need no permissions: a widget can talk to your agents\n\
   right away. **Never write grants.json** or `pins.json` (K2 never reads them).\n\n\
 ## Synced with K2's defaults, or its own copy\n\n\
@@ -264,6 +266,12 @@ column it is `column` unless you set `orientation = \"row\"` or an `edge`.\n\n"
   a footer counts the others that need the person. The custom widget must ask for\n\
   `agents:read`. A Conversation following either widget shows the same pick. Not with\n\
   `agent`, `home` or `home-picker`; the Agents view of a nav rail ignores it.\n\
+- **The person's order and pins:** in any Agents widget the person can drag agents into their\n\
+  own order (or Alt+Up / Alt+Down) and pin or unpin an agent (the row's menu), per Garden, on\n\
+  this computer only (never in the Garden file or Garden sync). Their order beats the widget's\n\
+  (the Home's, or a `list-from` list's); once they pin or unpin in a Garden, that Garden's own\n\
+  pins replace the agents' workspace pins in its pin grid. You can read both with\n\
+  `k2 zen agents-order [<garden>] [--json]`; you can't set them (only the person can, in Zen).\n\
 - Picking a Home in a Garden never changes the Home page.\n\n",
     );
 
@@ -826,6 +834,8 @@ them, so you never rebuild a chat panel:\n\n\
   \"Nothing listed yet\". The list never adds reach (an agent on a server you can't reach isn't\n\
   drawn until it's back), clears when your widget stops or unloads, and a footer counts the\n\
   agents off your list that need the person. Map from `agents.list()`: never guess addresses.\n\
+  If the person drags rows in that Agents widget, their order wins over yours\n\
+  (`k2 zen agents-order` shows it).\n\
 - **A context chip:** `k2.conversation.setContext(text)` (needs `thread:post`) puts a chip the\n\
   person sees (\"Board: K2 Boards\") on the box of every Conversation that follows your widget\n\
   (`agents = \"<your id>\"`, or through an Agents widget's `list-from`); with none following it\n\

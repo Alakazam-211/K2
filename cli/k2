@@ -33569,6 +33569,15 @@ cmd_schema() {
       ]
     },
     {
+      "name": "zen agents-order",
+      "usage": "k2 zen agents-order [<garden>] [--json]",
+      "description": "The person's order and pins in each Garden's Agents widget on this computer (they drag rows and pin agents in Zen; per Garden, never synced). Read only: agents can read it and never set it. order sits on top of the widget's own order; pins, once set, replace the agents' workspace pins in that Garden's pin grid.",
+      "args": [{"name": "garden", "required": false}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "Daemon JSON: {ok, gardens: [{id, name, order, pins, updatedAt}]}."}
+      ]
+    },
+    {
       "name": "zen guide",
       "usage": "k2 zen guide [<topic>] [--json] | k2 zen guide example [<name> [--toml] | --list] [--json]",
       "description": "The Zen Gardens user guide: short static pages (gardens, files, widgets, bands, required, menus, themes, sync, examples, undo, safe-mode, api), each at most 80 lines, and whole example Garden files (rail-top, quiet-top, bottom-bar, menu-both, texting-chrome, menu-bottom-right, column-corner). Daemon-optional. An unknown topic or example exits 2.",
@@ -59985,6 +59994,7 @@ USAGE
   k2 zen news seen [<id>... | --all] [--json]
   k2 zen links [<garden>] [--json]          sites a Garden opens without asking (k2.open)
   k2 zen links forget <garden> <site>       the person only: ask again next time
+  k2 zen agents-order [<garden>] [--json]
   k2 zen guide [<topic>] [--json]
   k2 zen data <list|show|grant|revoke|admin|unadmin|delete|move|export|import> …
   k2 zen guide example [<name> [--toml] | --list]
@@ -60043,6 +60053,10 @@ COMMANDS
             and writes nothing. Default part: both.
   news      Unseen Garden news: new catalog Gardens and K2 defaults a
             synced Garden picked up. seen marks ids (or --all) as read.
+  agents-order
+            The person's order and pins in each Garden's Agents widget on
+            this computer (they drag and pin in Zen). Read only: agents
+            can read it, never set it.
   guide     The user guide: short pages (gardens, files, widgets, bands,
             required, menus, themes, sync, examples, undo, safe-mode, api)
             and whole example files to pipe into a Garden. Needs no daemon.
@@ -60347,7 +60361,11 @@ CONTENT WIDGETS (in a column they need id, kind and column = n)
                 server-tag, preview, status, pins,
                 pin-limit, settings, recent-first, unread;
                 or list-from = "<custom widget id>" (mode list): just
-                the agents that widget lists with k2.agents.show([...])
+                the agents that widget lists with k2.agents.show([...]).
+                The person drags rows (or Alt+Up/Down) and pins or
+                unpins agents in it, per Garden on this computer; their
+                order beats the widget's. Agents can read it with
+                k2 zen agents-order, never set it.
   conversation  one agent's Thread and a message box: agents = "<id of
                 an Agents widget>" to follow it, or agent = "<name>"
                 (with home) to pin one, or pick = ["sales", "ops"] (2 to
@@ -62904,6 +62922,105 @@ else:
     _zen_print news-seen "$as_json" "$raw"
 }
 
+# `k2 zen agents-order [<garden>] [--json]` (0.46.4; Baden via Appa
+# 2026-10-22): the person's order and pins in each Garden's Agents widget on
+# this computer. Read only, on purpose: agents may read it and never set it;
+# the person drags and pins in Zen (POST /cli/zen/agents/order/set takes the
+# owner token only). Inside a K2 terminal it reads with the session's
+# passport, outside with the owner token.
+cmd_zen_agents_order() {
+    local as_json=false garden="" raw
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -h|--help)
+                cat <<'EOF'
+k2 zen agents-order — the person's order and pins in each Garden's Agents widget
+
+USAGE
+  k2 zen agents-order [<garden>] [--json]
+
+In any Garden's Agents widget the person can drag agents into their own
+order (or move a row with Alt+Up / Alt+Down) and pin or unpin an agent
+(right-click a row, or Shift+F10). That is the person's view, per Garden,
+on this computer only: it is not in the Garden's file, Garden sync or any
+other computer. This prints it for every Garden, or the one named (an id
+or a name):
+
+  order   the person's order (full row addresses, first first), on top of
+          the widget's own order (the Home's, or a list-from list's);
+          "the widget's own" until they drag.
+  pins    the Garden's own pins once they pinned or unpinned there ("none"
+          = they unpinned all); until then each agent's workspace pin.
+
+Agents can read it, never set it: only the person changes it, in Zen.
+Addresses the widget doesn't show are ignored, so it never adds reach.
+
+--json   the daemon's answer: {ok, gardens: [{id, name, order, pins,
+         updatedAt}]}, null where the person never set one.
+EOF
+                return 0 ;;
+            -*) echo "Error: unexpected '$1' (see k2 zen agents-order --help)" >&2; exit 2 ;;
+            *)
+                [ -z "$garden" ] || { echo "Error: k2 zen agents-order takes one Garden (see --help)" >&2; exit 2; }
+                garden="$1"; shift ;;
+        esac
+    done
+    if [ -n "$garden" ]; then
+        raw=$(_zen_session_get "/cli/zen/agents/order" "garden=$(urlencode "$garden")")
+    else
+        raw=$(_zen_session_get "/cli/zen/agents/order")
+    fi
+    ZEN_JSON="$as_json" ZEN_RAW="$raw" python3 -c '
+import json, os, sys
+as_json = os.environ.get("ZEN_JSON") == "true"
+raw = os.environ.get("ZEN_RAW") or ""
+if not raw.strip():
+    print("Error: no response from the K2 daemon on this computer", file=sys.stderr)
+    sys.exit(1)
+try:
+    d = json.loads(raw)
+except Exception:
+    print("Error: the daemon answered something that is not JSON: %s" % raw[:200], file=sys.stderr)
+    sys.exit(1)
+err = d.get("error") if isinstance(d, dict) else "not an object"
+if err is not None:
+    if as_json:
+        print(json.dumps(d, separators=(",", ":")))
+    if err == "zen_not_set_up":
+        print(d.get("message") or "Zen isn\x27t set up on this computer.", file=sys.stderr)
+        sys.exit(3)
+    if err == "unknown zen route":
+        print("Error: this computer\x27s K2 is older than 0.46.4 and keeps no Agents order or pins. Update K2.", file=sys.stderr)
+        sys.exit(1)
+    if err == "zen_local_only":
+        print("Error: k2 zen talks only to the K2 on this computer, and this token is not its owner or a session on it.", file=sys.stderr)
+        sys.exit(3)
+    print("Error: %s" % (d.get("message") or err), file=sys.stderr)
+    sys.exit(1)
+if as_json:
+    print(json.dumps(d, indent=2))
+    sys.exit(0)
+rows = d.get("gardens") or []
+for i, g in enumerate(rows):
+    if i:
+        print()
+    print("%s (%s)" % (g.get("name"), g.get("id")))
+    order = g.get("order")
+    pins = g.get("pins")
+    print("  order: %s" % (", ".join(order) if order else "the widget\x27s own (never dragged)"))
+    if pins is None:
+        print("  pins:  each agent\x27s workspace pin (never pinned or unpinned here)")
+    else:
+        print("  pins:  %s" % (", ".join(pins) if pins else "none in this Garden"))
+    if g.get("updatedAt"):
+        print("  set:   %s" % g["updatedAt"])
+if rows:
+    print()
+print("Only the person changes these, in Zen. Agents can read them, never set them.")
+'
+}
+
 # `k2 zen links [<garden>] [--json]` and `k2 zen links forget <garden>
 # <site>` (0.46.4): the sites a Garden's widgets open in the person's
 # browser without asking (k2.open). Agents read; forget is the person's
@@ -63968,6 +64085,9 @@ print(json.dumps(b))
             ;;
         links)
             cmd_zen_links "$@"
+            ;;
+        agents-order)
+            cmd_zen_agents_order "$@"
             ;;
         proposals|proposal)
             cmd_zen_proposals "$@"
@@ -66445,6 +66565,11 @@ EOF
         fi
         if [ "${2:-}" = "validate" ] && _wants_help "${@:2}"; then
             _zen_help_validate
+            exit 0
+        fi
+        # 0.46.4: agents-order has its own page.
+        if [ "${2:-}" = "agents-order" ] && _wants_help "${@:3}"; then
+            cmd_zen_agents_order --help
             exit 0
         fi
         if [ "${2:-}" != "guide" ] && _wants_help "${@:2}"; then

@@ -42,6 +42,7 @@
   "thread_read": "app",
   "project_read": "app",
   "zen_changed": "app",
+  "zen_agents_order_changed": "app",
   "sources_changed": "app",
   "garden_data_changed": "app",
   "grokbots_changed": "app",

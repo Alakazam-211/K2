@@ -423,6 +423,8 @@ pub(crate) fn event_scope_path(event: &SessionEvent) -> Option<&str> {
         SessionEvent::SubscriptionUsageChanged { .. } => None,
         // Zen v1 — `~/.k2/zen` changed: app-level, payload-free refetch.
         SessionEvent::ZenChanged {} => None,
+        // 0.46.4 — the Agents widget's order/pins: app-level, payload-free.
+        SessionEvent::ZenAgentsOrderChanged {} => None,
         // Garden v3 — a source changed: app-level, payload-free but `rev`.
         SessionEvent::SourcesChanged { .. } => None,
         // Garden data — a widget keyspace changed: app-level, space + rev only.
@@ -853,6 +855,7 @@ mod tests {
             SessionEvent::LlmAccountsChanged { tool: Some("claude".into()) },
             SessionEvent::SubscriptionUsageChanged { tool: Some("claude".into()), account_id: None, source: "probe".into() },
             SessionEvent::ZenChanged {},
+            SessionEvent::ZenAgentsOrderChanged {},
             SessionEvent::SourcesChanged { rev: 1 },
             SessionEvent::GardenDataChanged { space: "data:board".into(), rev: 1 },
             SessionEvent::GrokbotsChanged { rev: 1, roster: true, agents: vec!["a".into()] },

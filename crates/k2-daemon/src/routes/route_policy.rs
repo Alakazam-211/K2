@@ -1535,6 +1535,11 @@ pub const ROUTES: &[Route] = &[
     // Zen v2 (prd-zen-user-widgets-v2 UW35, UWB6, UWB15, UWB23): the widget
     // and grant rows are Member too; the grant-giving ones take the owner
     // token only (403 `owner_only`, UWB3). `lib/*` is B3's zen_lib_routes.
+    // The person's order and pins in a Garden's Agents widget (0.46.4):
+    // the read takes the owner token or a local passport (agents read it),
+    // the set the owner token only (zen_agents_order_routes).
+    get("/cli/zen/agents/order", Member),
+    post("/cli/zen/agents/order/set", Member),
     // Garden data (prd-gardens-local-services-v1 1A, contract-garden-data-v1
     // §4.4): this computer only, so no Connect login ever (NoLogin). The
     // owner token and agent passports reach the handlers, which apply

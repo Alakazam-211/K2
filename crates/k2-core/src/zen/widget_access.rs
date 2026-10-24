@@ -39,8 +39,9 @@ use super::USER_WIDGET_CAPS;
 /// Files agents must never write (UWB26, as amended by
 /// prd-zen-garden-sync-defaults-v1 SD8/GT1): the sync state, its news and
 /// saved defaults sets, and locked Gardens' frozen copies (prd-garden-lock-
-/// and-sync-v1 §5.1). Paths under `~/.k2/zen/`.
-pub const NEVER_WRITE: &[&str] = &["sync.json", "news.json", ".defaults/", ".locks/"];
+/// and-sync-v1 §5.1), and the person's order and pins in each Garden's
+/// Agents widget (0.46.4, [`super::agents_order`]). Paths under `~/.k2/zen/`.
+pub const NEVER_WRITE: &[&str] = &["sync.json", "news.json", ".defaults/", ".locks/", "agents-order.json"];
 
 /// Where a widget came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -387,6 +388,6 @@ mod tests {
 
     #[test]
     fn never_write_lists_the_daemon_owned_files() {
-        assert_eq!(NEVER_WRITE, &["sync.json", "news.json", ".defaults/", ".locks/"]);
+        assert_eq!(NEVER_WRITE, &["sync.json", "news.json", ".defaults/", ".locks/", "agents-order.json"]);
     }
 }

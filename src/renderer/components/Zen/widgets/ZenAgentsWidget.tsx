@@ -72,8 +72,23 @@
 // order; Recent agents first is off; no Home picker and no Add agent. A
 // footer counts the agents off the list that need you ("2 others need
 // you"), so a list can never hide one. The Agents rail view ignores it.
+//
+// 0.46.4 (Baden via Appa 2026-10-22; the PRD's §3 and Q3): the person's own
+// order and pins, per Garden, on this computer (`zen-agents-order.ts`; the
+// daemon keeps them, agents can read them and never set them).
+//   - Drag a row (or a pin) to move it, or focus it and press Alt+Up /
+//     Alt+Down (Alt+Left / Alt+Right in the grid too). Their order sits on
+//     top of the widget's own (the Home's, the Agents view's or the list's),
+//     and ⌘1–9 / ⌘↑ / ⌘↓ follow it. With Recent agents first on, the list
+//     is ordered by recency, so only the pin grid moves.
+//   - The row's menu (right-click, Shift+F10 or the context-menu key):
+//     Pin / Unpin in this Garden, Move up / down, Reset order, Use workspace
+//     pins. Before the person pins or unpins in a Garden its grid shows the
+//     agents' workspace pins; after, that Garden's own pins only.
+//   - Neither adds a row; one-agent mode has neither. An older daemon (no
+//     route) shows no drag and no menu.
 
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
 import type { ZenAgentRow } from '@/lib/zen/zen-data'
 import { zenCountsText } from '@/lib/zen/zen-counts'
@@ -100,6 +115,20 @@ import {
   zenPinGridColumns,
 } from '@/lib/zen/zen-pin-grid'
 import { ZenGardenSettingsButton } from './ZenGardenSettings'
+import { dropTargetIndex, useRowDragReorder } from '@/components/Sidebar/row-drag-reorder'
+import {
+  ZEN_AGENTS_VIEW_UNSET,
+  mergeZenAgentsOrder,
+  moveZenAddress,
+  orderZenAgentRows,
+  retainZenAgentsOrderLive,
+  setZenAgentsView,
+  toggleZenPin,
+  useZenAgentsOrderStore,
+  zenGridGapAt,
+  zenRowPinned,
+  type ZenAgentsMoveTarget,
+} from '@/lib/zen/zen-agents-order'
 
 export const ZEN_EMPTY_HOME = 'This Home has no agents yet. Use Add agent to add some.'
 export const ZEN_EMPTY_SERVER = 'No agents on this server yet.'
@@ -444,14 +473,41 @@ export function ZenUnreadPills({ unread }: { unread: NonNullable<ZenAgentRow['un
   )
 }
 
+/** 0.46.4: what a row or pin does for the person's order and pins (absent:
+ *  nothing, as before). */
+interface ZenRowGestures {
+  /** Press to drag (the shared row drag); absent when this zone can't move. */
+  onMouseDown?(e: React.MouseEvent): void
+  onClickCapture?(e: React.MouseEvent): void
+  /** Alt+arrows move; Shift+F10 / the context-menu key open the menu. */
+  onKeyDown(e: React.KeyboardEvent<HTMLButtonElement>): void
+  onContextMenu(e: React.MouseEvent<HTMLButtonElement>): void
+  /** The row being dragged (drawn as a ghost). */
+  dragging: boolean
+  /** Grid only: the drop mark on this cell's leading or trailing edge. */
+  dropMark: 'before' | 'after' | null
+  keyshortcuts: string
+}
+
+/** The 2px accent line in the gap a dragged row will land in (Zen tokens). */
+function ZenDropLine(): React.JSX.Element {
+  return (
+    <li role="presentation" data-zen-agents-drop-line="" style={{ listStyle: 'none' }}>
+      <div style={{ height: 2, margin: '0 12px', background: 'var(--zen-accent)', borderRadius: 1 }} />
+    </li>
+  )
+}
+
 function AgentRow({
   row,
   nowSec,
   onOpen,
+  gestures,
 }: {
   row: ZenAgentRow
   nowSec: number
   onOpen(address: string): void
+  gestures?: ZenRowGestures
 }): React.JSX.Element {
   const second = row.state !== 'ok'
     ? row.stateLabel
@@ -464,24 +520,29 @@ function AgentRow({
   const busy = row.activity === 'working' || row.activity === 'monitoring' || row.activity === 'needs-you'
   const countsText = row.state === 'ok' && busy ? zenCountsText(row.counts) : null
   return (
-    <li role="presentation">
+    <li role="presentation" onMouseDown={gestures?.onMouseDown} onClickCapture={gestures?.onClickCapture}>
       <button
         type="button"
         role="option"
         aria-selected={row.selected}
+        aria-keyshortcuts={gestures?.keyshortcuts}
         title={row.detail ?? (row.server ? `${row.label} on ${row.server}` : row.label)}
         data-zen-agent-row={row.address}
         data-selected={row.selected ? '' : undefined}
         data-activity={row.activity ?? 'unknown'}
         data-state={row.state}
+        data-row-drag-handle={gestures?.onMouseDown ? '' : undefined}
+        data-zen-dragging={gestures?.dragging ? '' : undefined}
         onClick={() => onOpen(row.address)}
+        onKeyDown={gestures?.onKeyDown}
+        onContextMenu={gestures?.onContextMenu}
         className="flex w-full items-center gap-3 text-left"
         style={{
           padding: '10px 12px',
           borderRadius: 'var(--zen-radius)',
           color: 'var(--zen-text)',
           background: 'transparent',
-          opacity: muted ? 0.72 : 1,
+          opacity: gestures?.dragging ? 0.4 : muted ? 0.72 : 1,
           cursor: 'default',
         }}
       >
@@ -572,27 +633,59 @@ function AgentRow({
 
 /** One pinned agent in the grid: its picture with the status mark, its
  *  name, and while it's busy the status word under it. */
-function PinCell({ row, avatarPx, onOpen }: { row: ZenAgentRow; avatarPx: number; onOpen(address: string): void }): React.JSX.Element {
+function PinCell({
+  row,
+  avatarPx,
+  onOpen,
+  gestures,
+}: {
+  row: ZenAgentRow
+  avatarPx: number
+  onOpen(address: string): void
+  gestures?: ZenRowGestures
+}): React.JSX.Element {
   const busy = row.state === 'ok' && (row.activity === 'working' || row.activity === 'monitoring' || row.activity === 'needs-you')
   const tone =
     row.activity === 'working' ? 'var(--zen-working)' : row.activity === 'needs-you' ? 'var(--zen-needs-you)' : 'var(--zen-accent)'
   const dotPx = Math.max(10, Math.round(avatarPx * 0.24))
   const spoken = `Pinned ${row.label}${busy && row.activity ? `, ${ACTIVITY_TEXT[row.activity]}` : row.state !== 'ok' && row.stateLabel ? `, ${row.stateLabel}` : ''}`
+  const mark = gestures?.dropMark ?? null
   return (
-    <li role="presentation" className="min-w-0">
+    <li
+      role="presentation"
+      className="min-w-0"
+      data-zen-pin-drop={mark ?? undefined}
+      onMouseDown={gestures?.onMouseDown}
+      onClickCapture={gestures?.onClickCapture}
+      style={
+        mark
+          ? { boxShadow: mark === 'before' ? '-10px 0 0 -8px var(--zen-accent)' : '10px 0 0 -8px var(--zen-accent)' }
+          : undefined
+      }
+    >
       <button
         type="button"
         role="option"
         aria-selected={row.selected}
         aria-label={spoken}
+        aria-keyshortcuts={gestures?.keyshortcuts}
         title={row.detail ?? (row.server ? `${row.label} on ${row.server}` : row.label)}
         data-zen-pin={row.address}
         data-selected={row.selected ? '' : undefined}
         data-activity={row.activity ?? 'unknown'}
         data-state={row.state}
+        data-row-drag-handle={gestures?.onMouseDown ? '' : undefined}
+        data-zen-dragging={gestures?.dragging ? '' : undefined}
         onClick={() => onOpen(row.address)}
+        onKeyDown={gestures?.onKeyDown}
+        onContextMenu={gestures?.onContextMenu}
         className="flex w-full min-w-0 flex-col items-center text-center cursor-pointer"
-        style={{ padding: 0, background: 'transparent', color: 'var(--zen-text)', opacity: row.state !== 'ok' ? 0.72 : 1 }}
+        style={{
+          padding: 0,
+          background: 'transparent',
+          color: 'var(--zen-text)',
+          opacity: gestures?.dragging ? 0.4 : row.state !== 'ok' ? 0.72 : 1,
+        }}
       >
         <span
           className="relative inline-flex"
@@ -637,7 +730,15 @@ function PinCell({ row, avatarPx, onOpen }: { row: ZenAgentRow; avatarPx: number
 
 /** Garden 1's pin grid (`pins`): three across, more rows as you pin more;
  *  one or two pins centred, a partial last row left-aligned. */
-function PinGrid({ rows, onOpen }: { rows: ZenAgentRow[]; onOpen(address: string): void }): React.JSX.Element {
+function PinGrid({
+  rows,
+  onOpen,
+  gestureFor,
+}: {
+  rows: ZenAgentRow[]
+  onOpen(address: string): void
+  gestureFor?: (index: number, row: ZenAgentRow) => ZenRowGestures | undefined
+}): React.JSX.Element {
   const ref = useRef<HTMLUListElement | null>(null)
   const [width, setWidth] = useState(0)
   useLayoutEffect(() => {
@@ -671,10 +772,111 @@ function PinGrid({ rows, onOpen }: { rows: ZenAgentRow[]; onOpen(address: string
         margin: 0,
       }}
     >
-      {rows.map((row) => (
-        <PinCell key={row.address} row={row} avatarPx={avatarPx} onOpen={onOpen} />
+      {rows.map((row, i) => (
+        <PinCell key={row.address} row={row} avatarPx={avatarPx} onOpen={onOpen} gestures={gestureFor?.(i, row)} />
       ))}
     </ul>
+  )
+}
+
+/** One item of a row's menu (0.46.4). */
+interface ZenRowMenuItem {
+  id: 'pin' | 'unpin' | 'up' | 'down' | 'reset-order' | 'workspace-pins'
+  label: string
+  disabled?: string | null
+  run(): void
+}
+
+/** A row's menu: right-click, Shift+F10 or the context-menu key. Focus goes
+ *  to its first item; ↑ / ↓ move and wrap; Esc closes and puts focus back on
+ *  the row; Tab or a click outside closes it. */
+function ZenRowMenu({
+  anchor,
+  label,
+  items,
+  onClose,
+}: {
+  anchor: HTMLElement
+  label: string
+  items: ZenRowMenuItem[]
+  onClose(refocus: boolean): void
+}): React.ReactPortal | null {
+  const menu = useAnchoredMenu<HTMLElement>({ open: true, onClose: () => onClose(false), gap: 4, width: 'min', minWidth: 200 })
+  menu.anchorRef.current = anchor
+  const listRef = useRef<HTMLDivElement | null>(null)
+  const enabled = (): HTMLButtonElement[] =>
+    Array.from(listRef.current?.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]:not([disabled])') ?? [])
+  useEffect(() => {
+    enabled()[0]?.focus()
+  }, [])
+  const onKeyDown = (e: React.KeyboardEvent): void => {
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      e.stopPropagation()
+      onClose(true)
+      return
+    }
+    if (e.key === 'Tab') {
+      onClose(false)
+      return
+    }
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
+    e.preventDefault()
+    const list = enabled()
+    if (list.length === 0) return
+    const at = list.findIndex((b) => b === document.activeElement)
+    const next = e.key === 'ArrowDown' ? (at + 1) % list.length : (at <= 0 ? list.length : at) - 1
+    list[next].focus()
+  }
+  return menu.portal(
+    <div
+      ref={(el) => {
+        listRef.current = el
+        menu.menuRef(el)
+      }}
+      role="menu"
+      aria-label={`${label}: order and pins in this Garden`}
+      data-zen-agent-menu=""
+      {...ZEN_TILE_RAISED_PROPS}
+      data-placement={menu.placement}
+      className="no-drag flex flex-col"
+      onKeyDown={onKeyDown}
+      style={{
+        ...menu.style,
+        padding: 4,
+        gap: 2,
+        background: 'var(--zen-surface-raised)',
+        border: '1px solid var(--zen-border)',
+        borderRadius: 'var(--zen-radius)',
+        boxShadow: '0 10px 30px rgba(0, 0, 0, 0.14)',
+        color: 'var(--zen-text)',
+      }}
+    >
+      {items.map((it) => (
+        <button
+          key={it.id}
+          type="button"
+          role="menuitem"
+          data-zen-agent-menu-item={it.id}
+          disabled={Boolean(it.disabled)}
+          title={it.disabled ?? undefined}
+          onClick={() => {
+            onClose(true)
+            it.run()
+          }}
+          className="flex w-full items-center text-left cursor-pointer"
+          style={{
+            minHeight: 28,
+            padding: '4px 10px',
+            borderRadius: 'calc(var(--zen-radius) - 4px)',
+            color: it.disabled ? 'var(--zen-text-muted)' : 'var(--zen-text)',
+            background: 'transparent',
+          }}
+        >
+          {it.label}
+        </button>
+      ))}
+    </div>,
   )
 }
 
@@ -748,7 +950,18 @@ export function ZenAgentsWidget({ bridge, decl }: ZenWidgetProps): React.JSX.Ele
   const sent = useZenRecentFirstStore((s) => s.sent)
   const pinsOn = decl.props.pins === true && !agent
   const pinLimit = zenPinLimit(decl.props)
-  const { pins, list } = zenAgentsDisplay(rows, { grid: pinsOn, recentFirst, sent, limit: pinLimit })
+  // 0.46.4: the person's order and pins for this Garden, on this computer
+  // (the daemon's; agents read, never set). Not in one-agent mode.
+  const gardenId = bridge.gardens.current()?.id ?? ''
+  const personal = !agent && gardenId !== ''
+  useEffect(() => (personal ? retainZenAgentsOrderLive() : undefined), [personal])
+  const orderStatus = useZenAgentsOrderStore((s) => s.status)
+  const storedView = useZenAgentsOrderStore((s) => s.byGarden[gardenId])
+  const view = personal ? (storedView ?? ZEN_AGENTS_VIEW_UNSET) : ZEN_AGENTS_VIEW_UNSET
+  const editable = personal && orderStatus === 'ready'
+  const ordered = orderZenAgentRows(rows, view.order)
+  const isPinned = (r: ZenAgentRow): boolean => zenRowPinned(r, view.pins)
+  const { pins, list } = zenAgentsDisplay(ordered, { grid: pinsOn, recentFirst, sent, limit: pinLimit, isPinned })
   const settingsOn = decl.props.settings === true
   // ⌘↑ / ⌘↓ walk what's drawn: the grid, then the list.
   const rowsRef = useRef(rows)
@@ -767,7 +980,6 @@ export function ZenAgentsWidget({ bridge, decl }: ZenWidgetProps): React.JSX.Ele
   }
 
   // An agent added through this widget's Add agent: open it the same way.
-  const gardenId = bridge.gardens.current()?.id ?? ''
   const added = useZenAddAgentStore((s) => s.added)
   const handledAdd = useRef(added?.seq ?? 0)
   useEffect(() => {
@@ -795,14 +1007,178 @@ export function ZenAgentsWidget({ bridge, decl }: ZenWidgetProps): React.JSX.Ele
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
+  // ── 0.46.4: the person's order and pins (drag, Alt+arrows, the row menu) ──
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const rowDrag = useRowDragReorder<'pins' | 'list'>()
+  const [menuFor, setMenuFor] = useState<{ address: string; el: HTMLElement } | null>(null)
+  const [spoken, setSpoken] = useState('')
+  // With Recent agents first on, the list is ordered by recency: only the
+  // pin grid moves.
+  const listMovable = editable && !recentFirst
+  const zoneRows = (zone: 'pins' | 'list'): ZenAgentRow[] => (zone === 'pins' ? pins : list)
+  const zoneMovable = (zone: 'pins' | 'list'): boolean => (zone === 'pins' ? editable : listMovable) && zoneRows(zone).length > 1
+  const labelOf = (address: string): string => rows.find((r) => r.address === address)?.label ?? address
+  const focusRow = (address: string): void => {
+    const root = rootRef.current
+    if (!root) return
+    const el = Array.from(root.querySelectorAll<HTMLElement>('[data-zen-agent-row], [data-zen-pin]')).find(
+      (e) => (e.getAttribute('data-zen-agent-row') ?? e.getAttribute('data-zen-pin')) === address,
+    )
+    el?.focus()
+  }
+  const moveRow = (address: string, target: ZenAgentsMoveTarget, refocus: boolean): void => {
+    const next = moveZenAddress(
+      ordered.map((r) => r.address),
+      address,
+      target,
+    )
+    if (!next) return
+    void setZenAgentsView(gardenId, { order: mergeZenAgentsOrder(view.order, next) })
+    if (refocus) requestAnimationFrame(() => focusRow(address))
+  }
+  const moveBy = (zone: 'pins' | 'list', address: string, delta: -1 | 1): boolean => {
+    const zr = zoneRows(zone)
+    const i = zr.findIndex((r) => r.address === address)
+    const j = i + delta
+    if (i < 0 || j < 0 || j >= zr.length) return false
+    moveRow(address, delta < 0 ? { before: zr[j].address } : { after: zr[j].address }, true)
+    setSpoken(`${labelOf(address)} moved ${delta < 0 ? 'up' : 'down'}`)
+    return true
+  }
+  const dropIn = (zone: 'pins' | 'list', from: number, gap: number): void => {
+    const zr = zoneRows(zone)
+    if (dropTargetIndex(from, gap) === null || !zr[from] || zr.length === 0) return
+    const target = gap >= zr.length ? { after: zr[zr.length - 1].address } : { before: zr[gap].address }
+    moveRow(zr[from].address, target, false)
+  }
+  const togglePin = (address: string): void => {
+    const was = zenRowPinned(rows.find((r) => r.address === address) ?? { address }, view.pins)
+    void setZenAgentsView(gardenId, { pins: toggleZenPin(view.pins, rows, address) })
+    setSpoken(`${labelOf(address)} ${was ? 'unpinned' : 'pinned'} in this Garden`)
+  }
+  const menuItems = (address: string): ZenRowMenuItem[] => {
+    if (!editable) return []
+    const items: ZenRowMenuItem[] = []
+    const row = rows.find((r) => r.address === address)
+    if (!row) return items
+    if (pinsOn) {
+      const pinned = isPinned(row)
+      items.push({
+        id: pinned ? 'unpin' : 'pin',
+        label: pinned ? 'Unpin in this Garden' : 'Pin in this Garden',
+        run: () => togglePin(address),
+      })
+    }
+    const zone: 'pins' | 'list' = pins.some((r) => r.address === address) ? 'pins' : 'list'
+    const zr = zoneRows(zone)
+    const i = zr.findIndex((r) => r.address === address)
+    const why = zone === 'list' && recentFirst ? 'Recent agents first orders this list' : null
+    items.push({
+      id: 'up',
+      label: 'Move up',
+      disabled: why ?? (i <= 0 ? 'Already first' : null),
+      run: () => moveBy(zone, address, -1),
+    })
+    items.push({
+      id: 'down',
+      label: 'Move down',
+      disabled: why ?? (i < 0 || i >= zr.length - 1 ? 'Already last' : null),
+      run: () => moveBy(zone, address, 1),
+    })
+    if (view.order !== null) {
+      items.push({
+        id: 'reset-order',
+        label: listMode ? 'Reset to the list’s order' : workspaces ? 'Reset order' : 'Reset to the Home’s order',
+        run: () => {
+          void setZenAgentsView(gardenId, { order: null })
+          setSpoken('Order reset')
+        },
+      })
+    }
+    if (pinsOn && view.pins !== null) {
+      items.push({
+        id: 'workspace-pins',
+        label: 'Use the agents’ own pins',
+        run: () => {
+          void setZenAgentsView(gardenId, { pins: null })
+          setSpoken('This Garden shows the agents’ own pins again')
+        },
+      })
+    }
+    return items
+  }
+  const openMenu = (address: string, el: HTMLElement): boolean => {
+    if (menuItems(address).length === 0) return false
+    setMenuFor({ address, el })
+    return true
+  }
+  const gesturesFor = (zone: 'pins' | 'list', index: number, row: ZenAgentRow): ZenRowGestures | undefined => {
+    if (!editable) return undefined
+    const movable = zoneMovable(zone)
+    const zr = zoneRows(zone)
+    return {
+      onMouseDown: movable
+        ? (e) =>
+            rowDrag.onRowMouseDown(e, {
+              zone,
+              index,
+              container: () => rootRef.current?.querySelector(zone === 'pins' ? '[data-zen-pins]' : '[data-zen-agents-list]') ?? null,
+              rowSelector: zone === 'pins' ? '[data-zen-pin]' : '[data-zen-agent-row]',
+              gapAt:
+                zone === 'pins'
+                  ? (container, x, y) =>
+                      zenGridGapAt(
+                        Array.from(container.querySelectorAll('[data-zen-pin]')).map((el) => el.getBoundingClientRect()),
+                        x,
+                        y,
+                      )
+                  : undefined,
+              onDrop: (from, gap) => dropIn(zone, from, gap),
+            })
+        : undefined,
+      onClickCapture: movable ? rowDrag.onRowClickCapture : undefined,
+      onKeyDown: (e) => {
+        if ((e.shiftKey && e.key === 'F10') || e.key === 'ContextMenu') {
+          if (openMenu(row.address, e.currentTarget)) e.preventDefault()
+          return
+        }
+        if (!e.altKey || e.metaKey || e.ctrlKey || e.shiftKey || !movable) return
+        const delta = e.key === 'ArrowUp' || e.key === 'ArrowLeft' ? -1 : e.key === 'ArrowDown' || e.key === 'ArrowRight' ? 1 : 0
+        if (delta === 0) return
+        e.preventDefault()
+        e.stopPropagation()
+        moveBy(zone, row.address, delta)
+      },
+      onContextMenu: (e) => {
+        if (openMenu(row.address, e.currentTarget)) e.preventDefault()
+      },
+      dragging: rowDrag.isDragging(zone, index),
+      dropMark:
+        zone !== 'pins'
+          ? null
+          : rowDrag.showsDropLineAt('pins', index)
+            ? 'before'
+            : index === zr.length - 1 && rowDrag.showsDropLineAt('pins', zr.length)
+              ? 'after'
+              : null,
+      keyshortcuts: movable ? 'Alt+ArrowUp Alt+ArrowDown Shift+F10' : 'Shift+F10',
+    }
+  }
+  const menuRow = menuFor ? rows.find((r) => r.address === menuFor.address) : undefined
+  const openItems = menuFor && menuRow ? menuItems(menuFor.address) : []
+
   return (
     <div
+      ref={rootRef}
       className="flex h-full min-h-0 w-full flex-col"
       data-zen-widget="agents"
       data-zen-widget-id={decl.id}
       data-zen-agents-mode={listMode ? 'list' : agent ? 'agent' : 'home'}
       data-zen-agents-source={workspaces ? 'workspaces' : 'home'}
       data-zen-agents-home={homeId ?? undefined}
+      data-zen-agents-own-order={view.order !== null ? '' : undefined}
+      data-zen-agents-garden-pins={view.pins !== null ? '' : undefined}
+      data-zen-agents-editable={editable ? '' : undefined}
     >
       <ZenWidgetStyles />
       <div
@@ -847,18 +1223,56 @@ export function ZenAgentsWidget({ bridge, decl }: ZenWidgetProps): React.JSX.Ele
       ) : (
         // One scroller: the pin grid scrolls away with the list.
         <div data-zen-agents-scroll="" className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-          {pins.length > 0 && <PinGrid rows={pins.map((row) => displayRow(row, decl.props))} onOpen={pick} />}
+          {pins.length > 0 && (
+            <PinGrid
+              rows={pins.map((row) => displayRow(row, decl.props))}
+              onOpen={pick}
+              gestureFor={(i, row) => gesturesFor('pins', i, row)}
+            />
+          )}
           <ul
             role="listbox"
             aria-label="Agents"
+            data-zen-agents-list=""
             data-zen-agents-order={recentFirst ? 'recent-first' : 'home'}
             className="flex flex-shrink-0 flex-col"
             style={{ padding: '2px 8px 10px', gap: 2, margin: 0 }}
           >
-            {list.map((row) => (
-              <AgentRow key={row.address} row={displayRow(row, decl.props)} nowSec={nowSec} onOpen={pick} />
+            {list.map((row, i) => (
+              <Fragment key={row.address}>
+                {rowDrag.showsDropLineAt('list', i) && <ZenDropLine />}
+                <AgentRow
+                  row={displayRow(row, decl.props)}
+                  nowSec={nowSec}
+                  onOpen={pick}
+                  gestures={gesturesFor('list', i, row)}
+                />
+              </Fragment>
             ))}
+            {rowDrag.showsDropLineAt('list', list.length) && <ZenDropLine />}
           </ul>
+        </div>
+      )}
+      {menuFor && menuRow && openItems.length > 0 && (
+        <ZenRowMenu
+          anchor={menuFor.el}
+          label={menuRow.label}
+          items={openItems}
+          onClose={(refocus) => {
+            const el = menuFor.el
+            setMenuFor(null)
+            if (refocus && el.isConnected) el.focus()
+          }}
+        />
+      )}
+      {editable && (
+        <div
+          role="status"
+          aria-live="polite"
+          data-zen-agents-spoken=""
+          style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap' }}
+        >
+          {spoken}
         </div>
       )}
       {listMode && othersNeedYou > 0 && (

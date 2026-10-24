@@ -853,6 +853,8 @@ impl ZenFiles {
         record["snapshot"] = json!(snapshot);
         self.sync_on_delete(&g.id, &mut record)?;
         self.lock_on_delete(&g.id)?;
+        // The person's order and pins in this Garden (0.46.4) go with it.
+        self.agents_order_on_delete(&g.id)?;
         let rec = dir.join(DELETED_RECORD);
         let body = serde_json::to_string_pretty(&record).map_err(|e| ZenError::Io(e.to_string()))?;
         crate::fs_atomic::atomic_write_str(&rec, &(body + "\n")).map_err(|e| io(e, &rec))?;

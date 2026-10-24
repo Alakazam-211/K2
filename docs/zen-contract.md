@@ -962,6 +962,35 @@ template updates" (prd-garden-lock-and-sync-v1 §4): checked = page and
 theme synced, unchecked = both own copies, a dash when they differ; a click
 posts `garden/sync` with `part: "both"`.
 
+## The person's order and pins in the Agents widget (0.46.4)
+
+Baden via Appa 2026-10-22; prd-garden-column-collapse-and-agent-list-v1 §3,
+Q3. The person drags rows in a Garden's Agents widget (or moves them with
+⌥↑ / ⌥↓) and pins or unpins an agent there (the row's menu: right-click,
+Shift+F10 or the context-menu key). That is the person's view state, per
+Garden, on this computer: `agents-order.json` under `~/.k2/zen/`
+(daemon-written; never in a Garden file, Garden sync, the refresh
+fingerprint or `zen_changed`). Agents may read it and never set it.
+
+| Call | Who | Body or query | Answer |
+|---|---|---|---|
+| `GET /cli/zen/agents/order[?garden=<id or name>]` | the app; agents (`k2 zen agents-order`): the owner token or a local session passport | none | `{ok, gardens: [{id, name, order: [address] \| null, pins: [address] \| null, updatedAt \| null}]}`, every Garden in list order (or the one named) |
+| `POST /cli/zen/agents/order/set` | the person only: the owner token (the app). A passport (agent or K2 terminal), a Connect login or an app pass gets 403 `owner_only` (audited) | `{garden, order?: [address] \| null, pins?: [address] \| null}`: an absent key is kept, `null` clears it | `{ok, garden: Row, changed}`. A change emits ONE payload-free `zen_agents_order_changed` (app event); every window re-reads. GET → 405 |
+
+- Addresses are full row addresses exactly as `agents.list()` gives them
+  (`handle::local`, `host:port`). Each list holds at most 200, each one
+  line and at most 256 bytes (400 `bad_request` otherwise); duplicates
+  (case aside) are dropped. Bodies are capped like every Zen body.
+- `order` sits on top of the widget's own order (the Home's, the Agents
+  view's, or a `list-from` list's): listed rows first, in that order, then
+  the rest in the widget's order. ⌘1–9 and ⌘↑ / ⌘↓ follow it.
+- `pins: null` (never pinned or unpinned in this Garden) = each agent's
+  workspace pin, as before. Once the person pins or unpins in a Garden, the
+  Garden's own list alone decides its pin grid (`[]` = no pins there).
+- Neither list widens reach: an address the widget doesn't draw is ignored.
+- A deleted Garden's entry goes with it. An older daemon answers 404
+  `unknown zen route`: the app then shows no drag or pin controls.
+
 ## Garden Lock (zen-garden-lock-v1)
 
 prd-garden-lock-and-sync-v1 with Rosson's rulings of 2026-10-13. A locked

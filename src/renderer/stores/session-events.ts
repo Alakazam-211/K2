@@ -645,6 +645,13 @@ export interface ZenChangedEvent {
   kind: 'zen_changed'
 }
 
+/** APP-LEVEL — 0.46.4: the person's order or pins in a Garden's Agents
+ *  widget changed on this computer. Payload-free: the Agents widget re-reads
+ *  `GET /cli/zen/agents/order` from the LOCAL daemon (never a page reload). */
+export interface ZenAgentsOrderChangedEvent {
+  kind: 'zen_agents_order_changed'
+}
+
 /** APP-LEVEL — Garden v3: a data source's definition or state changed on
  *  this server (contract-sources-v1 §5). Carries only the change counter;
  *  readers re-read `GET /cli/sources/changes?since=<rev>`. */
@@ -822,6 +829,7 @@ export type SessionEventMessage =
   | GitNotesChangedEvent
   | OpenChangesEvent
   | ZenChangedEvent
+  | ZenAgentsOrderChangedEvent
   | SourcesChangedEvent
   | GardenDataChangedEvent
   | GrokbotsChangedEvent
@@ -1303,6 +1311,7 @@ type LlmAccountsChangedHandler = (tool: string | null) => void
 /** Usage v2: limits were written (`source`: probe · live_statusline · live_rollout). */
 export type SubscriptionUsageChangedHandler = (ev: SubscriptionUsageChangedEvent) => void
 type ZenChangedHandler = () => void
+type ZenAgentsOrderChangedHandler = () => void
 type SourcesChangedHandler = (rev: number) => void
 type GardenDataChangedHandler = (space: string, rev: number) => void
 type GrokbotsChangedHandler = (e: GrokbotsChangedEvent) => void
@@ -1380,6 +1389,7 @@ interface AppBusHandlers {
   homesDeviceRemoved: Set<HomesDeviceRemovedHandler>
   activeChanged: Set<ActiveChangedHandler>
   zenChanged: Set<ZenChangedHandler>
+  zenAgentsOrderChanged: Set<ZenAgentsOrderChangedHandler>
   sourcesChanged: Set<SourcesChangedHandler>
   gardenDataChanged: Set<GardenDataChangedHandler>
   grokbotsChanged: Set<GrokbotsChangedHandler>
@@ -1433,6 +1443,7 @@ function createBusState(scopeId: string): BusState {
       homesDeviceRemoved: new Set(),
       activeChanged: new Set(),
       zenChanged: new Set(),
+      zenAgentsOrderChanged: new Set(),
       sourcesChanged: new Set(),
       gardenDataChanged: new Set(),
       grokbotsChanged: new Set(),
@@ -1654,6 +1665,13 @@ export function onSubscriptionUsageChanged(
  *  (`lib/zen/zen-api.ts`). */
 export function onZenChanged(scope: ServerScope, fn: ZenChangedHandler): UnsubscribeFn {
   return addHandler(busFor(scope).handlers.zenChanged, fn)
+}
+
+/** 0.46.4 — subscribe to APP-LEVEL `zen_agents_order_changed` (the person's
+ *  order or pins in a Garden's Agents widget, on this computer). Payload-free
+ *  refetch signal; Zen listens on the LOCAL daemon's bus only. */
+export function onZenAgentsOrderChanged(scope: ServerScope, fn: ZenAgentsOrderChangedHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.zenAgentsOrderChanged, fn)
 }
 
 /** Garden v3 — subscribe to APP-LEVEL `sources_changed` on `scope`'s server
@@ -1947,6 +1965,9 @@ const APP_SOCKET_DISPATCH: DispatchTable<'app', AppBusHandlers> = {
   },
   zen_changed: (h) => {
     for (const fn of h.zenChanged) fn()
+  },
+  zen_agents_order_changed: (h) => {
+    for (const fn of h.zenAgentsOrderChanged) fn()
   },
   sources_changed: (h, m) => {
     for (const fn of h.sourcesChanged) fn(m.rev)

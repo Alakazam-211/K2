@@ -2399,6 +2399,38 @@ mod tests {
         assert_eq!(once, 1, "0219 is recorded once");
     }
 
+    /// 0220 (`k2 job`, prd-vault-gaps-v1 item 5) on a database that stops
+    /// at 0219: workspaces keep their rows and `Project` JSON, the three
+    /// tables appear empty (nothing runs until a job is added), the
+    /// one-row `job_settings` refuses a second row, and a re-run is a no-op.
+    #[test]
+    fn a_pre_0220_database_upgrades_through_0220_jobs() {
+        let conn = fresh_memory();
+        run_migrations_through(&conn, Some("0219_garden_access")).unwrap();
+        let tables = ["jobs", "job_runs", "job_settings"];
+        for t in tables {
+            assert!(!table_names(&conn).iter().any(|n| n == t), "{t} must not exist before 0220");
+        }
+        conn.execute("INSERT INTO projects (id, name, path) VALUES ('p-old', 'old', '/tmp/p-old')", []).unwrap();
+        let before = serde_json::to_value(crate::db::schema::Project::get(&conn, "p-old").unwrap()).unwrap();
+        run_migrations(&conn).unwrap();
+        for t in tables {
+            assert!(table_names(&conn).iter().any(|n| n == t), "{t} missing after 0220");
+            let n: i64 = conn.query_row(&format!("SELECT COUNT(*) FROM {t}"), [], |r| r.get(0)).unwrap();
+            assert_eq!(n, 0, "{t} starts empty");
+        }
+        let after = serde_json::to_value(crate::db::schema::Project::get(&conn, "p-old").unwrap()).unwrap();
+        assert_eq!(after, before, "Project JSON is byte-identical across 0220");
+        assert!(
+            conn.execute("INSERT INTO job_settings (id, paused) VALUES (2, 1)", []).is_err(),
+            "job_settings holds one row (id = 1)"
+        );
+        run_migrations(&conn).unwrap();
+        let once: i64 =
+            conn.query_row("SELECT COUNT(*) FROM _migrations WHERE name = '0220_jobs'", [], |r| r.get(0)).unwrap();
+        assert_eq!(once, 1, "0220 is recorded once");
+    }
+
     /// A 0.46.0 database (last migration 0181) with a registered phone
     /// upgrades through 0189: the device row keeps its data, its new
     /// `previews` column is NULL (= on), and a second run is a no-op.
@@ -3111,7 +3143,10 @@ mod tests {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
             conn.execute("DELETE FROM _migrations WHERE name = '0164_garden_data'", []).unwrap();
-            // 0219 (Garden access) is the newest: its record goes (its
+            // 0220 (`k2 job`) is the newest: its record goes (its tables
+            // and index are all IF NOT EXISTS).
+            conn.execute("DELETE FROM _migrations WHERE name = '0220_jobs'", []).unwrap();
+            // 0219 (Garden access) came before it: its record goes (its
             // tables and indexes are all IF NOT EXISTS).
             conn.execute("DELETE FROM _migrations WHERE name = '0219_garden_access'", []).unwrap();
             // 0218 (permission cards, 0.46.3) came before it: its record

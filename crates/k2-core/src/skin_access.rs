@@ -20,10 +20,9 @@ use serde_json::{json, Value};
 
 use super::{
     create_role_for_app, grant_login_policy, map_grant_row, normalize_app_target, normalize_username, paths,
-    with_conn, RoomPathScope, RoomPolicy, SkinRole, CAP_ACTIVITY_READ, CAP_AGENT_IDENTITY, CAP_FILES_READ,
-    CAP_FILES_UPLOAD, CAP_FILES_WRITE, CAP_HEARTBEATS_READ, CAP_HEARTBEATS_WRITE, CAP_ROOM_MEMBERS, CAP_STORE_READ,
-    CAP_STORE_WRITE,
-    CAP_THREAD_POST, CAP_THREAD_READ, CAP_TICKETS_POST, CAP_TICKETS_READ, CAP_WIKI_READ, GRANT_SELECT,
+    with_conn, RoomPathScope, RoomPolicy, SkinRole, CAP_ACTIVITY_READ, CAP_AGENT_IDENTITY, CAP_FILES_DOWNLOAD,
+    CAP_FILES_READ, CAP_FILES_UPLOAD, CAP_FILES_WRITE, CAP_HEARTBEATS_READ, CAP_HEARTBEATS_WRITE, CAP_ROOM_MEMBERS,
+    CAP_STORE_READ, CAP_STORE_WRITE, CAP_THREAD_POST, CAP_THREAD_READ, CAP_TICKETS_POST, CAP_TICKETS_READ, CAP_WIKI_READ, GRANT_SELECT,
 };
 
 // ── can ──────────────────────────────────────────────────────────────
@@ -41,8 +40,8 @@ fn level(caps: &BTreeSet<&str>, read: &str, write: &str) -> &'static str {
 /// What one room's caps let a person do (`me.get` → `agents[].can`).
 /// `files`, `tickets`, `heartbeats` and `store` are `none` / `read` /
 /// `write` (tickets `write` = may post); the rest are booleans. `upload`
-/// (0.46.4, additive) is `files:upload`: drop files, never see them; it
-/// never changes `files`.
+/// (0.46.4, additive) is `files:upload`: drop files, never see them;
+/// `download` is `files:download`: save files. Neither changes `files`.
 pub fn can_of(caps: &[String]) -> Value {
     let c: BTreeSet<&str> = caps.iter().map(String::as_str).collect();
     json!({
@@ -57,6 +56,7 @@ pub fn can_of(caps: &[String]) -> Value {
         "store": level(&c, CAP_STORE_READ, CAP_STORE_WRITE),
         "identity": c.contains(CAP_AGENT_IDENTITY),
         "upload": c.contains(CAP_FILES_UPLOAD),
+        "download": c.contains(CAP_FILES_DOWNLOAD),
     })
 }
 
@@ -298,6 +298,7 @@ pub fn create_from_template(
             write: f.write.iter().map(|s| (*s).to_string()).collect(),
             upload_dir: f.upload_dir.map(str::to_string),
             upload: f.upload.iter().map(|s| (*s).to_string()).collect(),
+            ..Default::default()
         };
         let rooms: Vec<String> = role.room_policy.keys().cloned().collect();
         for room in rooms {

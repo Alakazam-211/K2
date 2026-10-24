@@ -646,6 +646,10 @@ pub const ROUTES: &[Route] = &[
     post("/cli/fs/copy", Member),
     post("/cli/fs/create", Member),
     post("/cli/fs/delete", Member),
+    // prd-app-caps-0464-v1 AC34 (0.46.4): App guests save exposed files;
+    // the handlers check the pass (a login gets a usage 400).
+    get("/cli/fs/download", Member),
+    get("/cli/fs/downloads", Member),
     post("/cli/fs/duplicate", Member),
     get("/cli/fs/events", Member),
     post("/cli/fs/extract", Member),

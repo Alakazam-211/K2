@@ -59,6 +59,8 @@ pub mod federation_rosters;
 pub mod federation_routes;
 pub mod federation_vault;
 pub mod fs_routes;
+/// prd-app-caps-0464-v1 AC16/AC17 (0.46.4): `files.downloads` / `files.download`.
+pub mod fs_download;
 pub mod fs_live;
 pub mod charter_compose_watch;
 pub mod notify_bound;

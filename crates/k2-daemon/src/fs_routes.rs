@@ -420,7 +420,7 @@ pub fn resolve_owner_workspace(token: &str) -> Result<SkinWorkspace, CliResponse
     })
 }
 
-fn need_workspace(params: &HashMap<String, String>) -> Result<String, CliResponse> {
+pub(crate) fn need_workspace(params: &HashMap<String, String>) -> Result<String, CliResponse> {
     params
         .get("workspace")
         .map(|s| s.trim().to_string())
@@ -428,7 +428,7 @@ fn need_workspace(params: &HashMap<String, String>) -> Result<String, CliRespons
         .ok_or_else(|| CliResponse::bad_request("missing workspace query parameter"))
 }
 
-fn need_rel_path(params: &HashMap<String, String>) -> Result<String, CliResponse> {
+pub(crate) fn need_rel_path(params: &HashMap<String, String>) -> Result<String, CliResponse> {
     params
         .get("path")
         .map(|s| s.trim().to_string())
@@ -892,7 +892,7 @@ fn scope_gate(
 
 /// The room-relative form of an already resolved absolute path, or `None`
 /// when it isn't under the room.
-fn rel_in_room(room_root: &str, full: &Path) -> Option<String> {
+pub(crate) fn rel_in_room(room_root: &str, full: &Path) -> Option<String> {
     let root = Path::new(room_root).canonicalize().ok()?;
     let rest = full.strip_prefix(&root).ok()?;
     let s = rest.to_string_lossy().replace('\\', "/");
@@ -902,7 +902,7 @@ fn rel_in_room(room_root: &str, full: &Path) -> Option<String> {
 /// After the jail: the landed path (symlinks followed; for a new name the
 /// leaf is kept as written) must still be inside the scope. Unscoped lines
 /// pass. Anything that can't be resolved fails closed.
-fn scope_gate_landed(
+pub(crate) fn scope_gate_landed(
     scope: &RoomPathScope,
     resolved: &SkinWorkspace,
     abs: &Path,

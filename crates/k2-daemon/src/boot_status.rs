@@ -663,6 +663,11 @@ pub const FEATURE_THREAD_CONTEXT: &str = "thread-context-v1";
 /// 0.46.4 (prd-app-resources-disk-guard-v1 Slice B): the garden-local
 /// `app.resources` verb (box usage's Garden card, `k2:box-disk@1`).
 pub const FEATURE_APP_RESOURCES: &str = "app-resources-v1";
+/// 0.46.4 (prd-app-caps-0464-v1 AC15–AC17): an App guest saves the files its
+/// role line exposes (`download` entries) with `files:download`, through
+/// `GET /cli/fs/downloads` (`files.downloads`) and `GET /cli/fs/download`
+/// (`files.download`).
+pub const FEATURE_FILES_DOWNLOAD: &str = "files-download-v1";
 /// Older pages of a project chat (project-chat-paging-v1, 0.46.2):
 /// `GET /cli/project-group/messages?before_seq=N&limit=L` returns the newest
 /// `L` messages with `seq < N` OLDEST first, `has_more` when older ones
@@ -933,6 +938,7 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_APP_RESOURCES);
     out.push(FEATURE_LLM_ACCOUNT_FOR);
     out.push(FEATURE_COMPANION_PAIRING);
+    out.push(FEATURE_FILES_DOWNLOAD);
     // Permission cards (Beta, prd-agent-settings-cards-v1 §2.1, §10):
     // listed only while the global switch is on (setting or env). Its flip
     // publishes a settings frame (`settings_routes::permission_cards_flipped`)
@@ -1023,6 +1029,7 @@ mod tests {
                 "app-resources-v1",
                 "llm-account-for-v1",
                 "companion-pairing-v1",
+                "files-download-v1",
                 "boot-status-views-v1"
             ]
         );

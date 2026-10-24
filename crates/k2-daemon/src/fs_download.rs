@@ -1,0 +1,296 @@
+//! Downloading exposed files (prd-app-caps-0464-v1 §4, AC15–AC23, 0.46.4).
+//!
+//! ```text
+//! GET /cli/fs/downloads ?workspace=<room>                              files.downloads
+//!   → {ok, items: [{relPath, name, size, modifiedAt, mime}], truncated}
+//! GET /cli/fs/download  ?workspace=<room>&path=<rel>[&offset=&len=]    files.download
+//!   → {ok, base64, len, offset, size, eof, name, mime}
+//! ```
+//!
+//! An App guest's pass only (the browser helper or the App's link, App
+//! rows with no Garden door: a Garden is the owner and already reads every
+//! file, AC23). Both need `files:download` in the room (person-only to
+//! grant, unchanged). A file may be saved when **both** hold (AC17):
+//!
+//! 1. `files:download` in the room; and
+//! 2. the path, as written **and** where it lands (symlinks followed), is
+//!    inside one of the role line's download entries (never `.k2/`, never
+//!    a secret-named file), **or** the login holds `files:read` there and
+//!    the path passes today's `PathNeed::Read` scope (the bytes it could
+//!    already read through `files.readBinary`, now save-shaped).
+//!
+//! Anything else is the plain missing-cap 403 naming `files:download`,
+//! decided before the disk is touched (no existence oracle). An empty
+//! download list exposes nothing, so a `files:download` holder without
+//! entries and without `files:read` gets nothing new (AC37). Each saved
+//! chunk leaves one audit line (`files.download`). Adding or widening
+//! entries is person-only (`skin_routes::handle_roles_paths`).
+
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+
+use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+use k2_core::fs_commands as fsc;
+use k2_core::skin::paths::{self as sp, PathNeed};
+use k2_core::skin::{RoomPathScope, SkinPass, CAP_FILES_DOWNLOAD};
+
+use crate::cli_response::CliResponse;
+use crate::fs_routes::{
+    abs_in_agent_config, jail_rel_path, lexically_in_agent_config, need_rel_path, need_workspace, rel_in_room,
+    resolve_skin_workspace, room_scope, scope_gate_landed, SkinWorkspace,
+};
+
+pub const ROUTE_LIST: &str = "/cli/fs/downloads";
+pub const ROUTE_GET: &str = "/cli/fs/download";
+
+/// `files.downloads`: a folder entry walks at most this many levels…
+pub const MAX_DEPTH: usize = 8;
+/// …and the answer holds at most this many files in all.
+pub const MAX_ITEMS: usize = 500;
+/// `files.download` chunk sizes (the same as `files.readRange`).
+pub const LEN_DEFAULT: u64 = 8 * 1024 * 1024;
+pub const LEN_MAX: u64 = 16 * 1024 * 1024;
+
+fn refused() -> CliResponse {
+    crate::skin_routes::missing_cap_response(CAP_FILES_DOWNLOAD)
+}
+
+/// The owner token and Connect logins have no download entries: these are
+/// an App guest's doors (the owner reads files with `/cli/fs/read-range`).
+pub fn not_a_guest() -> CliResponse {
+    CliResponse {
+        status: "400 Bad Request",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "error": "usage",
+            "message": "files.download and files.downloads are an App guest's doors (its own pass); the owner reads files with /cli/fs/read-range",
+        })
+        .to_string(),
+    }
+}
+
+/// The room, `files:download` in it and the line's scope; else the
+/// refusal (the room's own `skin_room`, or the missing-cap 403; a scope
+/// that can't be read fails closed with the same 403).
+fn gate(params: &HashMap<String, String>, pass: &SkinPass) -> Result<(SkinWorkspace, RoomPathScope), CliResponse> {
+    let ws = need_workspace(params)?;
+    let resolved = resolve_skin_workspace(pass, &ws)?;
+    if !pass.has_cap_in_room(&resolved.project_id, CAP_FILES_DOWNLOAD) {
+        return Err(refused());
+    }
+    let scope = room_scope(pass, &resolved, PathNeed::Read).map_err(|_| refused())?;
+    Ok((resolved, scope))
+}
+
+/// May a download entry serve the room-relative `rel` (as written)?
+fn entry_allows_rel(scope: &RoomPathScope, rel: &str) -> bool {
+    match sp::rel_segments(rel) {
+        Ok(segs) => {
+            !segs.is_empty()
+                && sp::download_allows(scope, &segs)
+                && !lexically_in_agent_config(rel, false)
+                && !k2_core::secret_paths::is_secret_rel(rel)
+        }
+        Err(_) => false,
+    }
+}
+
+/// The landed check for the entry arm: the resolved path is still inside a
+/// download entry, never in `.k2/`, never secret-named.
+fn entry_allows_landed(scope: &RoomPathScope, resolved: &SkinWorkspace, real: &Path) -> bool {
+    let Some(landed) = rel_in_room(&resolved.path, real) else { return false };
+    entry_allows_rel(scope, &landed) && !abs_in_agent_config(&resolved.path, real, false)
+}
+
+/// `GET /cli/fs/downloads` for an App guest.
+pub fn handle_list(params: &HashMap<String, String>, pass: &SkinPass) -> CliResponse {
+    let (resolved, scope) = match gate(params, pass) {
+        Ok(g) => g,
+        Err(r) => return r,
+    };
+    let mut items: Vec<serde_json::Value> = Vec::new();
+    let mut seen_files: HashSet<PathBuf> = HashSet::new();
+    let mut truncated = false;
+    for entry in &scope.download {
+        if truncated {
+            break;
+        }
+        if !entry_allows_rel(&scope, entry) {
+            continue;
+        }
+        // Missing or escaping entries are left out.
+        let Ok(real) = jail_rel_path(&resolved.path, entry, false) else { continue };
+        if !entry_allows_landed(&scope, &resolved, &real) {
+            continue;
+        }
+        let mut visited: HashSet<PathBuf> = HashSet::new();
+        truncated = walk(&scope, &resolved, &real, 0, &mut visited, &mut seen_files, &mut items);
+    }
+    CliResponse::ok_json(serde_json::json!({ "ok": true, "items": items, "truncated": truncated }).to_string())
+}
+
+/// Add `real` (a file, or a folder walked to [`MAX_DEPTH`]) to `items`.
+/// Returns `true` once [`MAX_ITEMS`] is passed (the walk stops).
+fn walk(
+    scope: &RoomPathScope,
+    resolved: &SkinWorkspace,
+    real: &Path,
+    depth: usize,
+    visited: &mut HashSet<PathBuf>,
+    seen_files: &mut HashSet<PathBuf>,
+    items: &mut Vec<serde_json::Value>,
+) -> bool {
+    let Ok(meta) = std::fs::metadata(real) else { return false };
+    if meta.is_file() {
+        if !seen_files.insert(real.to_path_buf()) {
+            return false;
+        }
+        if items.len() >= MAX_ITEMS {
+            return true;
+        }
+        if let Some(row) = item(resolved, real, &meta) {
+            items.push(row);
+        }
+        return false;
+    }
+    if !meta.is_dir() || depth >= MAX_DEPTH || !visited.insert(real.to_path_buf()) {
+        return false;
+    }
+    let Ok(rd) = std::fs::read_dir(real) else { return false };
+    let mut children: Vec<PathBuf> = rd.filter_map(|e| e.ok().map(|e| e.path())).collect();
+    children.sort();
+    for child in children {
+        // Symlinks are followed only when they land inside a download
+        // entry (and inside the room): the same landed rule as a save.
+        let Ok(canon) = child.canonicalize() else { continue };
+        if !entry_allows_landed(scope, resolved, &canon) {
+            continue;
+        }
+        if walk(scope, resolved, &canon, depth + 1, visited, seen_files, items) {
+            return true;
+        }
+    }
+    false
+}
+
+fn item(resolved: &SkinWorkspace, real: &Path, meta: &std::fs::Metadata) -> Option<serde_json::Value> {
+    let rel = rel_in_room(&resolved.path, real)?;
+    let name = real.file_name()?.to_string_lossy().to_string();
+    let modified_at = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    Some(serde_json::json!({
+        "relPath": rel,
+        "mime": fsc::mime_for_name(&name),
+        "name": name,
+        "size": meta.len(),
+        "modifiedAt": modified_at,
+    }))
+}
+
+/// `GET /cli/fs/download` for an App guest.
+pub fn handle_get(params: &HashMap<String, String>, pass: &SkinPass) -> CliResponse {
+    let (resolved, scope) = match gate(params, pass) {
+        Ok(g) => g,
+        Err(r) => return r,
+    };
+    let rel = match need_rel_path(params) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    // A malformed path is the jail's own 400, as on every files door.
+    if let Err(e) = sp::rel_segments(&rel) {
+        return CliResponse::bad_request(e);
+    }
+    let offset: u64 = match params.get("offset").map(|v| v.trim().parse()) {
+        Some(Ok(v)) => v,
+        Some(Err(_)) => return CliResponse::bad_request("invalid 'offset' parameter"),
+        None => 0,
+    };
+    let len: u64 = match params.get("len").map(|v| v.trim().parse()) {
+        Some(Ok(v)) => v,
+        Some(Err(_)) => return CliResponse::bad_request("invalid 'len' parameter"),
+        None => LEN_DEFAULT,
+    };
+    if len == 0 || len > LEN_MAX {
+        return CliResponse::bad_request(format!("len is 1..={LEN_MAX}"));
+    }
+    // Rule 2, as written, before the disk is touched.
+    let by_entry = entry_allows_rel(&scope, &rel);
+    let by_read = pass.has_cap_in_room(&resolved.project_id, crate::skin_routes::FILES_READ)
+        && sp::allows_rel(&scope, &rel, PathNeed::Read).unwrap_or(false);
+    if !by_entry && !by_read {
+        return refused();
+    }
+    let real = match jail_rel_path(&resolved.path, &rel, false) {
+        Ok(p) => p,
+        Err(e) => return CliResponse::bad_request(e),
+    };
+    // …and where it lands.
+    let landed_entry = by_entry && entry_allows_landed(&scope, &resolved, &real);
+    let landed_read = by_read && scope_gate_landed(&scope, &resolved, &real, PathNeed::Read, true).is_none();
+    if !landed_entry && !landed_read {
+        return refused();
+    }
+    match std::fs::metadata(&real) {
+        Ok(m) if m.is_file() => {}
+        Ok(_) => return CliResponse::bad_request("not a file: save files one at a time (files.downloads lists them)"),
+        Err(e) => return CliResponse::bad_request(format!("Invalid path: {e}")),
+    }
+    let name = real.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    match fsc::read_file_range(&real.to_string_lossy(), offset, len) {
+        Ok((bytes, size)) => {
+            let eof = offset.saturating_add(bytes.len() as u64) >= size;
+            crate::thread_attachments::audit(
+                "files.download",
+                &format!("guest:{}", pass.username.trim()),
+                format!(
+                    "room={} rel={rel:?} offset={offset} len={} via={}",
+                    resolved.project_id,
+                    bytes.len(),
+                    if landed_entry { "entry" } else { "files:read" }
+                ),
+            );
+            CliResponse::ok_json(
+                serde_json::json!({
+                    "ok": true,
+                    "base64": B64.encode(&bytes),
+                    "len": bytes.len() as u64,
+                    "offset": offset,
+                    "size": size,
+                    "eof": eof,
+                    "mime": fsc::mime_for_name(&name),
+                    "name": name,
+                })
+                .to_string(),
+            )
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scope(download: &[&str]) -> RoomPathScope {
+        sp::normalize_scope(&RoomPathScope { download: download.iter().map(|s| s.to_string()).collect(), ..Default::default() })
+            .expect("scope")
+    }
+
+    #[test]
+    fn entries_never_serve_k2_secrets_or_malformed_paths() {
+        let s = scope(&["public", "reports/a.pdf"]);
+        assert!(entry_allows_rel(&s, "public/x.txt"));
+        assert!(entry_allows_rel(&s, "reports/a.pdf"));
+        assert!(!entry_allows_rel(&s, "reports/b.pdf"));
+        assert!(!entry_allows_rel(&s, "public/.env"), "secret-named files never through an entry");
+        assert!(!entry_allows_rel(&s, "public/id_rsa"));
+        assert!(!entry_allows_rel(&s, "public/../x"));
+        assert!(!entry_allows_rel(&s, "."), "the room root is never an entry");
+        assert!(!entry_allows_rel(&scope(&[]), "anything"), "no entries: nothing");
+    }
+}

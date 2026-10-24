@@ -12984,6 +12984,40 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
                 .await;
         }
+        // prd-app-caps-0464-v1 AC16/AC17 (0.46.4): `files.downloads` /
+        // `files.download`, an App guest's doors (`fs_download`). A pass
+        // needs `files:download` (a platform pass at the pass level, as the
+        // read arm checks files:read); the owner token and Connect logins
+        // get a usage 400 (they have no download entries); anyone else the
+        // usual 403.
+        p if p == "/cli/fs/downloads" || p == "/cli/fs/download" => {
+            let _ = stream.read(&mut buf).await;
+            let skin_presented = super::http::extract_token(&query).is_some_and(k2_core::skin::is_skin_token);
+            let resp = if skin_presented {
+                match super::http::extract_token(&query).and_then(crate::apps::gateway::resolve_pass) {
+                    Some(pass) if pass.dispatcher_admits_cap(k2_core::skin::CAP_FILES_DOWNLOAD) => {
+                        let params = super::http::parse_params(&path, &query);
+                        let list = p == crate::fs_download::ROUTE_LIST;
+                        tokio::task::spawn_blocking(move || {
+                            if list {
+                                crate::fs_download::handle_list(&params, &pass)
+                            } else {
+                                crate::fs_download::handle_get(&params, &pass)
+                            }
+                        })
+                        .await
+                        .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")))
+                    }
+                    Some(_) => crate::skin_routes::missing_cap_response(k2_core::skin::CAP_FILES_DOWNLOAD),
+                    None => crate::skin_routes::revoked_skin_response(),
+                }
+            } else if super::http::token_ok(&query, state.token.as_str()) {
+                crate::fs_download::not_a_guest()
+            } else {
+                crate::cli::CliResponse::forbidden()
+            };
+            super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body).await;
+        }
         // Skin files GET — dedicated arms before the catchall. Do not fall
         // through to host-wide `validate_path`. Owner/Connect unchanged
         // (no `workspace=` required).

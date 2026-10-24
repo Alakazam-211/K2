@@ -47,6 +47,9 @@ fn can_reads_the_caps() {
     assert_eq!(c["upload"], false);
     let up = can_of(&["files:upload".into()]);
     assert_eq!((up["upload"].as_bool(), up["files"].as_str()), (Some(true), Some("none")));
+    assert_eq!(c["download"], false);
+    let down = can_of(&["files:download".into()]);
+    assert_eq!((down["download"].as_bool(), down["upload"].as_bool(), down["files"].as_str()), (Some(true), Some(false), Some("none")));
 }
 
 #[test]

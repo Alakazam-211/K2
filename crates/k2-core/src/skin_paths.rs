@@ -14,7 +14,13 @@
 //! - `upload` (drop folders, prd-app-caps-0464-v1 AC8, 0.46.4): folders a
 //!   login with `files:upload` may put files in (each lands in the
 //!   uploader's own subfolder) and can never list or read through this
-//!   list (only through a `read` or `write` entry, if the line has one).
+//!   list (only through a `read` or `write` entry, if the line has one);
+//! - `download` (download entries, AC15, 0.46.4): folders **or single
+//!   files** a login with `files:download` may save without `files:read`
+//!   (`files.downloads` / `files.download`). An empty list exposes
+//!   nothing (never "the whole room"), and download entries never wall the
+//!   line's read/write access ([`RoomPathScope::is_scoped`] ignores them).
+//!   Adding or widening them is person-only (the daemon's paths route).
 //!
 //! **No folders listed = the whole room** (today's behaviour). Once a room
 //! line lists any folder (read, write or drop), everything else in that
@@ -73,6 +79,11 @@ pub struct RoomPathScope {
     /// unreadable and every file door fails closed for it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub upload: Vec<String>,
+    /// Download entries (AC15): folders or single files `files:download`
+    /// may save without `files:read`. Empty = nothing. Not part of
+    /// [`Self::is_scoped`]. An older K2 refuses this key too (fails closed).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub download: Vec<String>,
 }
 
 impl RoomPathScope {
@@ -81,9 +92,10 @@ impl RoomPathScope {
         !self.read.is_empty() || !self.write.is_empty() || !self.upload.is_empty()
     }
 
-    /// `true` when there is nothing to store (no folders, no upload dir).
+    /// `true` when there is nothing to store (no folders, no upload dir,
+    /// no download entries).
     pub fn is_empty(&self) -> bool {
-        !self.is_scoped() && self.upload_dir.is_none()
+        !self.is_scoped() && self.upload_dir.is_none() && self.download.is_empty()
     }
 }
 
@@ -202,6 +214,27 @@ pub fn allows(scope: &RoomPathScope, rel: &[String], need: PathNeed) -> bool {
     }
 }
 
+/// Is the room-relative `rel` (already split) inside one of the line's
+/// download entries (AC15)? A file entry matches itself exactly (the same
+/// segment rule as a folder: `reports/a.pdf` never matches
+/// `reports/a.pdf.bak`), a folder entry everything under it. An empty
+/// list is nothing.
+pub fn download_allows(scope: &RoomPathScope, rel: &[String]) -> bool {
+    scope.download.iter().any(|e| is_inside(e, rel))
+}
+
+/// The first entry of `new` that no entry of `old` covers (the entry or
+/// one of its parents is in `old`): what a widening adds. `None` = `new`
+/// only narrows or keeps (AC18, person-only widening).
+pub fn download_widening<'a>(old: &[String], new: &'a [String]) -> Option<&'a str> {
+    new.iter()
+        .find(|n| {
+            let segs: Vec<String> = folder_segments(n).into_iter().map(str::to_string).collect();
+            !old.iter().any(|o| is_inside(o, &segs))
+        })
+        .map(String::as_str)
+}
+
 /// [`allows`] on a raw room-relative path. `Err` = a malformed path (the
 /// jail's own 400 words).
 pub fn allows_rel(scope: &RoomPathScope, rel: &str, need: PathNeed) -> Result<bool, String> {
@@ -245,7 +278,13 @@ pub fn normalize_scope(scope: &RoomPathScope) -> Result<RoomPathScope, String> {
     if let Some(f) = upload.iter().find(|f| folder_in_agent_config(f)) {
         return Err(format!("upload folder {f:?} is the agent's .k2 folder or inside it; a drop folder never is"));
     }
-    let out = RoomPathScope { read, write, upload_dir, upload };
+    // Download entries: folders or files, normalized like folders; never
+    // the agent's .k2 (AC19).
+    let download = list(&scope.download, "download")?;
+    if let Some(f) = download.iter().find(|f| folder_in_agent_config(f)) {
+        return Err(format!("download entry {f:?} is the agent's .k2 folder or inside it; it can never be downloaded"));
+    }
+    let out = RoomPathScope { read, write, upload_dir, upload, download };
     if let (true, Some(dir)) = (out.is_scoped(), out.upload_dir.as_deref()) {
         let segs: Vec<String> = dir.split('/').map(str::to_string).collect();
         // AC8: inside a write folder or a drop folder.
@@ -324,6 +363,18 @@ pub(super) fn step5_room_paths_column(conn: &Connection) -> Result<(), String> {
             .map_err(|e| format!("skin.db step 5 roles: {e}"))?;
     }
     Ok(())
+}
+
+/// One room line's stored folders on a role (`RoomPathScope::default()`
+/// when the line has none). `Err` when the role is unknown or its stored
+/// scope can't be read.
+pub fn role_line_paths(id_or_name: &str, project_id: &str) -> Result<RoomPathScope, String> {
+    with_conn(|conn| {
+        let Some(role) = role_by_id_or_name(conn, id_or_name)? else {
+            return Err(format!("unknown skin role '{id_or_name}'"));
+        };
+        Ok(role_room_paths(conn, &role.id)?.get(project_id.trim()).cloned().unwrap_or_default())
+    })
 }
 
 /// Set one room line's folders on a role (`k2 app role paths`). The room
@@ -499,7 +550,60 @@ mod tests {
             write: write.iter().map(|s| s.to_string()).collect(),
             upload: upload.iter().map(|s| s.to_string()).collect(),
             upload_dir: dir.map(str::to_string),
+            ..Default::default()
         })
+    }
+
+    fn dl(read: &[&str], download: &[&str]) -> Result<RoomPathScope, String> {
+        normalize_scope(&RoomPathScope {
+            read: read.iter().map(|s| s.to_string()).collect(),
+            download: download.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        })
+    }
+
+    /// AC15: download entries hold folders or single files; an empty list
+    /// is nothing; they never wall read/write.
+    #[test]
+    fn download_entries_are_exact_and_never_wall_the_line() {
+        let none = dl(&[], &[]).unwrap();
+        assert!(!download_allows(&none, &segs("a.pdf")), "an empty list exposes nothing");
+        assert!(!download_allows(&none, &segs(".")));
+        let s = dl(&[], &["reports/2026-10.pdf", "public/"]).unwrap();
+        assert_eq!(s.download, ["reports/2026-10.pdf", "public"]);
+        assert!(download_allows(&s, &segs("reports/2026-10.pdf")));
+        assert!(!download_allows(&s, &segs("reports/2026-11.pdf")), "a sibling of a file entry");
+        assert!(!download_allows(&s, &segs("reports/2026-10.pdf.bak")));
+        assert!(!download_allows(&s, &segs("reports")), "the file's folder isn't the file");
+        assert!(download_allows(&s, &segs("public/a/b.txt")));
+        assert!(!download_allows(&s, &segs("publicity/x")));
+        // Never walls: no read/write folders = still the whole room.
+        assert!(!s.is_scoped());
+        assert!(!s.is_empty(), "there is something to store");
+        for need in [PathNeed::List, PathNeed::Read, PathNeed::Write] {
+            assert!(allows(&s, &segs("anything/else"), need), "{need:?}");
+        }
+        // With read folders the walls are the read folders' only.
+        let s = dl(&["jobs/J1"], &["reports/a.pdf"]).unwrap();
+        assert!(!allows(&s, &segs("reports/a.pdf"), PathNeed::Read), "a download entry is never a read");
+        assert!(allows(&s, &segs("jobs/J1/x"), PathNeed::Read));
+        // .k2 entries are refused when set (AC19).
+        for bad in [".k2", ".K2/config.toml", ".k2./x"] {
+            assert!(dl(&[], &[bad]).unwrap_err().contains(".k2"), "{bad:?}");
+        }
+        assert!(dl(&[], &["../x"]).is_err());
+        assert!(parse_room_paths(Some(r#"{"r1":{"download":["a/b.pdf"]}}"#)).unwrap()["r1"].download == ["a/b.pdf"]);
+    }
+
+    #[test]
+    fn download_widening_finds_the_first_uncovered_entry() {
+        let v = |x: &[&str]| x.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(download_widening(&v(&[]), &v(&[])), None);
+        assert_eq!(download_widening(&v(&["reports"]), &v(&["reports/a.pdf", "reports"])), None, "inside a stored folder");
+        assert_eq!(download_widening(&v(&["reports/a.pdf", "x"]), &v(&["reports/a.pdf"])), None, "narrowing");
+        assert_eq!(download_widening(&v(&["reports/a.pdf"]), &v(&["reports"])), Some("reports"), "a file to its folder widens");
+        assert_eq!(download_widening(&v(&["reports"]), &v(&["reports", "other.txt"])), Some("other.txt"));
+        assert_eq!(download_widening(&v(&[]), &v(&["a"])), Some("a"));
     }
 
     /// AC8/AC9: a drop folder takes uploads only. It is never listable or

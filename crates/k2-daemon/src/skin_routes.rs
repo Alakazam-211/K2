@@ -620,6 +620,15 @@ fn files_download_refused() -> CliResponse {
     )
 }
 
+/// prd-app-caps-0464-v1 AC18 (Q4): adding or widening a role line's
+/// download entries is person-only, like `files:download` itself; an agent
+/// with "manage Apps" may still narrow them.
+fn download_entries_refused(entry: &str) -> CliResponse {
+    owner_only_with_hint(&format!(
+        "adding download entries ({entry:?}: app guests may save it) is person-only — ask your human (k2 app role paths <role> <room> --download …); removing entries stays open to you"
+    ))
+}
+
 /// The refusal for an agent granting the person-only `cap`.
 fn person_only_refused(cap: &str) -> CliResponse {
     if cap == skin::CAP_FILES_DOWNLOAD {
@@ -1930,6 +1939,17 @@ fn folder_list(v: &serde_json::Value, key: &str) -> Result<Vec<String>, CliRespo
 /// puts the line back to the whole room. The room must already be on the
 /// role. `upload` (0.46.4, AC8) is the line's drop folders: narrower than
 /// `write`, so an agent with "manage Apps" may set them like any folder.
+///
+/// `download` (0.46.4, AC15/AC18a) is the line's download entries (folders
+/// or single files `files:download` may save without `files:read`):
+/// - an omitted `download` keeps the stored entries (`download: []`
+///   clears them), so editing read folders never drops what a person set;
+/// - a body that names only `download` changes only the entries, never
+///   the line's read/write/upload folders (so it can't unwall a line);
+/// - adding or widening an entry is person-only: an agent gets 403
+///   `owner_only` when the new list holds an entry the stored list doesn't
+///   cover; narrowing stays open (AC18, Q4);
+/// - `clear: true` still clears everything (narrowing).
 pub fn handle_roles_paths(body: &[u8], actor: &str) -> CliResponse {
     let v = match json_body(body) {
         Ok(v) => v,
@@ -1940,6 +1960,11 @@ pub fn handle_roles_paths(body: &[u8], actor: &str) -> CliResponse {
     };
     let Some(handle) = str_field(&v, &["handle", "room", "workspace"]) else {
         return CliResponse::bad_request("missing handle (the room)");
+    };
+    let ids = match skin::resolve_room_tokens(&[handle.to_string()]) {
+        Ok(ids) if ids.len() == 1 => ids,
+        Ok(_) => return CliResponse::bad_request(format!("unknown workspace handle {handle:?}")),
+        Err(e) => return CliResponse::bad_request(e),
     };
     let clear = v.get("clear").and_then(|x| x.as_bool()).unwrap_or(false);
     let scope = if clear {
@@ -1962,27 +1987,57 @@ pub fn handle_roles_paths(body: &[u8], actor: &str) -> CliResponse {
             Some(serde_json::Value::String(s)) => Some(s.clone()),
             Some(_) => return CliResponse::bad_request("uploadDir must be a folder string"),
         };
-        if read.is_empty() && write.is_empty() && upload.is_empty() && upload_dir.is_none() {
+        let download_sent = !matches!(v.get("download"), None | Some(serde_json::Value::Null));
+        let download = match folder_list(&v, "download") {
+            Ok(l) => l,
+            Err(r) => return r,
+        };
+        let folders_sent = !read.is_empty() || !write.is_empty() || !upload.is_empty() || upload_dir.is_some();
+        if !folders_sent && !download_sent {
             return CliResponse::bad_request(
-                "nothing to set: send read, write, upload or uploadDir folders, or clear:true for the whole room",
+                "nothing to set: send read, write, upload, uploadDir or download, or clear:true for the whole room",
             );
         }
-        skin::RoomPathScope { read, write, upload_dir, upload }
-    };
-    let ids = match skin::resolve_room_tokens(&[handle.to_string()]) {
-        Ok(ids) if ids.len() == 1 => ids,
-        Ok(_) => return CliResponse::bad_request(format!("unknown workspace handle {handle:?}")),
-        Err(e) => return CliResponse::bad_request(e),
+        // The stored line: kept download entries, the widening check, and
+        // a download-only body's other folders.
+        let stored = match skin::paths::role_line_paths(id_or_name, &ids[0]) {
+            Ok(s) => s,
+            Err(e) => return CliResponse::bad_request(e),
+        };
+        let download = if download_sent {
+            let mut n: Vec<String> = Vec::new();
+            for e in &download {
+                match skin::paths::normalize_folder(e) {
+                    Ok(f) if !n.contains(&f) => n.push(f),
+                    Ok(_) => {}
+                    Err(e) => return CliResponse::bad_request(format!("download: {e}")),
+                }
+            }
+            if actor_is_agent(actor) {
+                if let Some(entry) = skin::paths::download_widening(&stored.download, &n) {
+                    return download_entries_refused(entry);
+                }
+            }
+            n
+        } else {
+            stored.download.clone()
+        };
+        if folders_sent {
+            skin::RoomPathScope { read, write, upload_dir, upload, download }
+        } else {
+            skin::RoomPathScope { download, ..stored }
+        }
     };
     match skin::paths::set_role_room_paths(id_or_name, &ids[0], &scope) {
         Ok(role) => {
             k2_core::log_debug!(
-                "[skin] actor={actor} role paths {} handle={handle} clear={clear} read={:?} write={:?} upload={:?} uploadDir={:?}",
+                "[skin] actor={actor} role paths {} handle={handle} clear={clear} read={:?} write={:?} upload={:?} uploadDir={:?} download={:?}",
                 role.name,
                 scope.read,
                 scope.write,
                 scope.upload,
-                scope.upload_dir
+                scope.upload_dir,
+                scope.download
             );
             CliResponse::ok_json(serde_json::to_string(&role).unwrap_or_else(|_| "{}".into()))
         }

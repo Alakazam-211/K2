@@ -60,7 +60,6 @@ const NO_CLAIM_NEEDED: Record<string, string> = {
   'components/Projects/ProjectChatPanel.tsx': 'Projects page: the room is hidden',
   'components/Feedback/FeedbackPage.tsx': 'Feedback page: the room is hidden',
   'components/Feedback/TicketBoard.tsx': 'Feedback page: the room is hidden',
-  'components/Feedback/TicketCard.tsx': 'Feedback page: the room is hidden',
   'components/Feedback/TicketWindow.tsx': 'Feedback page: the room is hidden',
   'components/Feedback/BriefFrame.tsx': 'Feedback page: the room is hidden',
   'components/Feedback/FeedbackItemView.tsx': 'Feedback page: the room is hidden',
@@ -71,6 +70,7 @@ const NO_CLAIM_NEEDED: Record<string, string> = {
   'components/Zen/ZenRoot.tsx': 'Zen is shown: Browser tabs are hidden',
   'components/Zen/widgets/ZenOverlay.tsx': 'Zen is shown: Browser tabs are hidden',
   'components/Zen/widgets/ZenGardenEmptyWidget.tsx': 'Zen is shown: Browser tabs are hidden',
+  'components/Zen/widgets/ZenConversationWidget.tsx': 'Zen is shown: Browser tabs are hidden (the header\'s agent pick drop-down sits inside its own tile)',
   'components/Zen/widgets/ZenGuestRoomsSheet.tsx': 'Zen is shown: Browser tabs are hidden (a Garden widget\'s guests.setRooms confirm)',
   'components/Zen/widgets/ZenPermissionSheet.tsx': 'Zen is shown: Browser tabs are hidden (K2\'s sheet for a permission card a Garden widget shows)',
 }

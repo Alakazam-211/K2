@@ -185,6 +185,23 @@ pub fn require_protocol() -> Result<Value> {
     Ok(v)
 }
 
+fn checked() -> &'static Mutex<HashMap<String, Value>> {
+    static C: OnceLock<Mutex<HashMap<String, Value>>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// R10 (A8): the `version` answer `prepare` checked for a deployment, kept
+/// until it goes live (its fingerprint is written from it, never from a
+/// later answer).
+pub fn remember_checked(deployment: &str, version: Value) {
+    checked().lock().unwrap_or_else(|e| e.into_inner()).insert(deployment.to_string(), version);
+}
+
+/// Take what [`remember_checked`] kept for a deployment.
+pub fn take_checked(deployment: &str) -> Option<Value> {
+    checked().lock().unwrap_or_else(|e| e.into_inner()).remove(deployment)
+}
+
 /// Is `k2-app-engine` installed on this box (the root helper's file)?
 pub fn engine_installed() -> bool {
     cfg!(target_os = "linux") && Path::new(k2_root_proto::apps::ENGINE_PATH).exists()
@@ -650,7 +667,7 @@ impl GuardedEngine {
     /// image and the Seed on the engine, the App's slot and gateway port.
     pub(crate) fn prepare_with(&self, seed: &SeedRef, spec: &AppSpec, wall: Wall) -> Result<Prepared> {
         let app = app_id(&spec.app_id)?;
-        require_protocol()?;
+        remember_checked(&spec.deployment_id, require_protocol()?);
         let image = match wall {
             Wall::Guarded => ensure_image()?,
             Wall::Relaxed => ensure_full_image()?,

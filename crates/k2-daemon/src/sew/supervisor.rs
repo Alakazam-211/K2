@@ -54,6 +54,12 @@ static TOKEN: Mutex<Option<String>> = Mutex::new(None);
 static REAL: RealOps = RealOps;
 static VAULT: VaultSecrets = VaultSecrets;
 
+/// A Sew lifecycle step (enable, upgrade, rollback, restore, …) is running
+/// now. The App re-host wave waits for it (update continuity R29).
+pub fn lifecycle_busy() -> bool {
+    LATCH.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 /// Production: the real box, the open vault, the process-wide latch.
 pub fn live() -> Env<'static> {
     Env { ops: &REAL, secrets: &VAULT, latch: &LATCH, token: &TOKEN }

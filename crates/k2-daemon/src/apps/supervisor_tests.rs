@@ -65,7 +65,7 @@ impl RuntimeEngine for TestEngine {
     fn caps(&self) -> EngineCaps {
         EngineCaps::default()
     }
-    fn prepare(&self, s: &SeedRef, _: &AppSpec) -> k2_core::deploy::engine::Result<Prepared> {
+    fn prepare(&self, s: &SeedRef, spec: &AppSpec) -> k2_core::deploy::engine::Result<Prepared> {
         self.prepares.fetch_add(1, Ordering::SeqCst);
         match self.mode.load(Ordering::SeqCst) {
             PROTOCOL_2 => Err(EngineError::new(
@@ -76,7 +76,11 @@ impl RuntimeEngine for TestEngine {
                 codes::ENGINE_NOT_ANSWERING,
                 "the App engine isn't answering at /run/k2app/engine.sock (No such file or directory)",
             )),
-            _ => Ok(Prepared { workdir: s.path.clone() }),
+            _ => {
+                // As the guarded engine does (R10): the version prepare checked.
+                super::super::guarded::remember_checked(&spec.deployment_id, serde_json::json!({ "version": "9.9.9-test", "protocol": 3 }));
+                Ok(Prepared { workdir: s.path.clone() })
+            }
         }
     }
     fn start(&self, spec: &AppSpec, _: &Prepared, port: u16) -> k2_core::deploy::engine::Result<RunHandle> {
@@ -561,4 +565,117 @@ fn boot_restarts_what_the_owner_wants_running() {
     for id in ["s1t-r35-stopped", "s1t-r35-parked", "s1t-r35-suspended", "s1t-r35-appbad", "s1t-r35-mixed"] {
         assert!(!want(id), "{id} stays down");
     }
+}
+
+// ── S2: re-host through the pipeline ─────────────────────────────────
+
+/// Bring `id` live on the test engine (a first deploy) and return the
+/// deployment id.
+fn go_live_first(id: &str, seed: &str) -> String {
+    let app = app_row(id);
+    let dep = begin(&app, seed, store::KIND_DEPLOY, "owner", None).expect("deploy begins");
+    let row = wait_done(&dep, 30).expect("row");
+    assert_eq!(row.result, store::RESULT_LIVE, "{row:?}");
+    dep
+}
+
+fn audit_events(app: &str) -> Vec<String> {
+    let h = k2_core::db::shared();
+    let c = h.lock();
+    k2_core::deploy::audit::list_for(&c, k2_core::deploy::audit::SUBJECT_APP, app, 100).unwrap().into_iter().map(|r| r.event).collect()
+}
+
+/// R10 + A7 + R38: a re-host is the same Seed on a fresh instance; its
+/// fingerprint is the `version` prepare checked; the old instance stays
+/// warm; `k2 app rollback` with no `--to` goes back to that warm instance
+/// by deployment id (never an older Seed), and with no warm instance left
+/// it refuses `nothing_to_roll_back`.
+#[test]
+fn a_rehost_is_a_fresh_instance_with_a_fingerprint_and_rolls_back_to_warm() {
+    let f = fx();
+    let eng = TestEngine::leak(OK);
+    let id = "s2t-rehost";
+    app(id, &f.seed, store::STATE_INSTALLING, eng);
+    let first = go_live_first(id, &f.seed);
+    let fp1 = live_fingerprint(&app_row(id)).expect("a deploy writes a fingerprint too");
+    assert_eq!((fp1.k2_version.as_str(), fp1.engine_version.as_deref()), (env!("CARGO_PKG_VERSION"), Some("9.9.9-test")));
+    let dep = begin(&app_row(id), &f.seed, store::KIND_REHOST, "system", Some("K2 updated to 9.9.9")).unwrap();
+    let row = wait_done(&dep, 30).unwrap();
+    assert_eq!((row.result.as_str(), row.kind.as_str(), row.to_seed.as_deref()), (store::RESULT_LIVE, store::KIND_REHOST, Some(f.seed.as_str())));
+    let a = app_row(id);
+    assert_eq!(a.live_deployment.as_deref(), Some(dep.as_str()));
+    assert!(live_fingerprint(&a).is_some());
+    assert_eq!(with_rt(id, |rt| rt.warm.as_ref().map(|w| w.handle.deployment_id.clone())), Some(first.clone()), "the old instance is warm");
+    // A7: back to the warm instance, by deployment id.
+    let rb = rollback_to_same_seed_warm(&a, "owner").unwrap().expect("instant rollback");
+    let a = app_row(id);
+    assert_eq!(a.live_deployment.as_deref(), Some(first.as_str()), "the warm instance is live again");
+    let rbrow = db(|c| store::get_deployment(c, &rb)).unwrap().unwrap();
+    assert_eq!((rbrow.kind.as_str(), rbrow.to_seed.as_deref()), (store::KIND_ROLLBACK, Some(f.seed.as_str())));
+    // Re-host again, let the watch window pass (no warm), then the route
+    // refuses instead of reaching for an older Seed.
+    let dep2 = begin(&a, &f.seed, store::KIND_REHOST, "system", None).unwrap();
+    assert_eq!(wait_done(&dep2, 30).unwrap().result, store::RESULT_LIVE);
+    let warm = with_rt(id, |rt| {
+        rt.watch = None;
+        rt.warm.take()
+    });
+    assert!(warm.is_some());
+    k2_core::deploy::set_enabled(true);
+    let r = super::super::routes::handle("/cli/app/rollback", super::super::routes::Who::Owner, format!(r#"{{"app":"{id}"}}"#).as_bytes(), &Default::default());
+    assert!(r.status.starts_with("409"), "{} {}", r.status, r.body);
+    assert!(r.body.contains("nothing_to_roll_back") && r.body.contains("re-hosted on K2"), "{}", r.body);
+    assert_eq!(app_row(id).live_deployment.as_deref(), Some(dep2.as_str()), "nothing moved");
+}
+
+/// A13: a failed re-host wakes nobody (no deploy_failed wake), writes its
+/// R44 line, and the old instance keeps serving.
+#[test]
+fn a_failed_rehost_is_quiet_and_keeps_the_old_instance() {
+    let f = fx();
+    let woke: std::sync::Arc<Mutex<Vec<String>>> = Default::default();
+    let w2 = woke.clone();
+    super::super::alerts::set_sink(Some(Box::new(move |ws: &str, text: &str| w2.lock().unwrap().push(format!("{ws}: {text}")))));
+    let eng = TestEngine::leak(OK);
+    let id = "s2t-quiet";
+    app(id, &f.seed, store::STATE_INSTALLING, eng);
+    let first = go_live_first(id, &f.seed);
+    eng.set(APP_BROKEN);
+    let dep = begin(&app_row(id), &f.seed, store::KIND_REHOST, "system", None).unwrap();
+    let row = wait_done(&dep, 30).unwrap();
+    assert_eq!((row.result.as_str(), row.error_code.as_deref()), (store::RESULT_FAILED, Some(codes::HEALTH_FAILED)));
+    assert_eq!(app_row(id).live_deployment.as_deref(), Some(first.as_str()), "the old instance still serves");
+    assert!(live(id));
+    assert!(woke.lock().unwrap().iter().all(|m| !m.contains(id)), "no wake for a re-host: {:?}", woke.lock().unwrap());
+    assert!(lines_for(id).iter().any(|l| l.contains(&format!("{id} rehost {dep} failed"))), "{:?}", lines_for(id));
+}
+
+/// Rosson Q4 + Q16 "pause briefly and update": the old instance stops
+/// first, then the new one starts; when the new one fails, the live Seed
+/// starts again by itself (the App never stays down).
+#[test]
+fn a_paused_rehost_stops_first_and_comes_back_if_the_new_instance_fails() {
+    let f = fx();
+    let eng = TestEngine::leak(OK);
+    let id = "s2t-pause";
+    app(id, &f.seed, store::STATE_INSTALLING, eng);
+    let first = go_live_first(id, &f.seed);
+    set_stop_first(id);
+    let dep = begin(&app_row(id), &f.seed, store::KIND_REHOST, "system", None).unwrap();
+    assert_eq!(wait_done(&dep, 30).unwrap().result, store::RESULT_LIVE);
+    assert!(eng.stopped.lock().unwrap().contains(&first), "the old instance stopped first");
+    assert!(with_rt(id, |rt| rt.warm.is_none()), "nothing warm after a pause");
+    // Again, and the new instance is broken: the live Seed comes back.
+    eng.set(APP_BROKEN);
+    set_stop_first(id);
+    let dep2 = begin(&app_row(id), &f.seed, store::KIND_REHOST, "system", None).unwrap();
+    assert_eq!(wait_done(&dep2, 30).unwrap().result, store::RESULT_FAILED);
+    settle(id);
+    assert!(eng.stopped.lock().unwrap().contains(&dep), "it stopped the live one first");
+    assert!(with_rt(id, |rt| rt.next_restart_at.is_some()), "a restart of the live Seed is scheduled");
+    assert!(audit_events(id).iter().any(|e| e == "rehost_restore"));
+    eng.set(OK);
+    let only = ids(&[id]);
+    let seen = AtomicU64::new(super::super::engine_gate::generation());
+    tick_until(&only, &seen, 15, "the live Seed is back", || live(id));
 }

@@ -170,6 +170,82 @@ pub fn has_inherited(role: Role) -> bool {
         .contains_key(&role)
 }
 
+// ── App listeners (prd-app-runtime-update-continuity-v1 R19, R36, R37) ──
+
+/// A per-App listener a hand-off carries (0.46.4): the App's front port
+/// (Meet, Caddy names, local users) and its egress proxy. The gateway link
+/// closes at quiesce and re-opens on adopt, as before.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AppKind {
+    Front,
+    Egress,
+}
+
+/// One App listener in a TAKE's follow-up message.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct AppSock {
+    pub app: String,
+    pub kind: AppKind,
+}
+
+/// App fds per follow-up message (the receiver reads at most this many).
+pub const APP_FDS_PER_MSG: usize = 8;
+
+type AppKey = (String, AppKind);
+
+fn live_apps() -> &'static Mutex<HashMap<AppKey, Weak<tokio::net::TcpListener>>> {
+    static M: OnceLock<Mutex<HashMap<AppKey, Weak<tokio::net::TcpListener>>>> = OnceLock::new();
+    M.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Record an App's live listener (a re-bind replaces it).
+pub fn register_app(app: &str, kind: AppKind, l: &Arc<tokio::net::TcpListener>) {
+    live_apps().lock().unwrap_or_else(|p| p.into_inner()).insert((app.to_string(), kind), Arc::downgrade(l));
+}
+
+fn inherited_apps() -> &'static Mutex<HashMap<AppKey, std::net::TcpListener>> {
+    static M: OnceLock<Mutex<HashMap<AppKey, std::net::TcpListener>>> = OnceLock::new();
+    M.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// R19: take the listener the predecessor handed over for an App (once).
+/// `None` on a normal boot, from a predecessor that didn't carry it, or once
+/// taken.
+pub fn take_inherited_app(app: &str, kind: AppKind) -> Option<std::net::TcpListener> {
+    inherited_apps().lock().unwrap_or_else(|p| p.into_inner()).remove(&(app.to_string(), kind))
+}
+
+/// Tests: as if a predecessor had handed this listener over.
+#[cfg(test)]
+pub(crate) fn inherit_app_for_test(app: &str, kind: AppKind, l: std::net::TcpListener) {
+    inherited_apps().lock().unwrap_or_else(|p| p.into_inner()).insert((app.to_string(), kind), l);
+}
+
+static PREDECESSOR: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// The pid of the daemon this one took over from (its parent at hand-off
+/// time), when it booted from a hand-off.
+pub fn predecessor_pid() -> Option<u32> {
+    match PREDECESSOR.load(Ordering::SeqCst) {
+        0 | 1 => None,
+        p => Some(p),
+    }
+}
+
+/// R36: the predecessor still runs (and may hold App ports while it drains).
+pub fn predecessor_alive() -> bool {
+    #[cfg(unix)]
+    {
+        // SAFETY: kill with signal 0 only checks the pid.
+        predecessor_pid().is_some_and(|p| unsafe { libc::kill(p as i32, 0) } == 0)
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
 static WAS_HANDED_OFF: AtomicBool = AtomicBool::new(false);
 
 /// This daemon booted from a hand-off (it received the predecessor's
@@ -256,6 +332,28 @@ pub fn splice_guard() -> SpliceGuard {
 
 pub fn live_splices() -> usize {
     LIVE_SPLICES.load(Ordering::SeqCst)
+}
+
+static LIVE_APP_CONNS: AtomicUsize = AtomicUsize::new(0);
+
+/// R37 (update continuity, 0.46.4): held by a connection on an App's front
+/// port or egress proxy (their own runtimes outlive the main one); the old
+/// daemon drains these too before it exits.
+pub struct AppConnGuard(());
+
+impl Drop for AppConnGuard {
+    fn drop(&mut self) {
+        LIVE_APP_CONNS.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+pub fn app_conn_guard() -> AppConnGuard {
+    LIVE_APP_CONNS.fetch_add(1, Ordering::SeqCst);
+    AppConnGuard(())
+}
+
+pub fn live_app_conns() -> usize {
+    LIVE_APP_CONNS.load(Ordering::SeqCst)
 }
 
 // ── Supervisor glue: NOTIFY_SOCKET and the boot executable ──────────────
@@ -400,6 +498,11 @@ enum Msg {
         /// older successor: it gets [`Role::LEGACY`] only.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         roles: Option<Vec<Role>>,
+        /// 0.46.4 (R19): this successor takes per-App listeners after the
+        /// ACK. Absent from older successors: they get none (the
+        /// predecessor closes its copies at quiesce, R37).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        app_listeners: bool,
     },
     /// Followed in the same `sendmsg` by the fds: the singleton lock
     /// first, then one listener per role, in `roles` order.
@@ -410,8 +513,56 @@ enum Msg {
         /// front before its DB is open). Ignored by older successors.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         front_routes: Option<crate::front443::routes::RouteTable>,
+        /// 0.46.4 (R19): App listeners follow the ACK (`Apps` messages of
+        /// at most [`APP_FDS_PER_MSG`] fds, then `AppsDone`). Absent from an
+        /// older predecessor: the successor waits for nothing.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        apps_follow: bool,
     },
     Ack,
+    /// R19: these App listeners, one fd each, in order.
+    Apps { apps: Vec<AppSock> },
+    AppsDone,
+}
+
+/// R19, predecessor: send every App listener in messages of at most
+/// [`APP_FDS_PER_MSG`] fds, then `AppsDone`. Returns how many went.
+#[cfg(unix)]
+fn send_app_listeners(sock: &std::os::unix::net::UnixStream, held: &[(AppSock, Arc<tokio::net::TcpListener>)]) -> Result<usize, String> {
+    use std::os::fd::AsRawFd;
+    for chunk in held.chunks(APP_FDS_PER_MSG) {
+        let apps: Vec<AppSock> = chunk.iter().map(|(s, _)| s.clone()).collect();
+        let fds: Vec<i32> = chunk.iter().map(|(_, l)| l.as_raw_fd()).collect();
+        let body = serde_json::to_vec(&Msg::Apps { apps }).map_err(|e| e.to_string())?;
+        fdpass::send_msg(sock, &body, &fds).map_err(|e| format!("send Apps: {e}"))?;
+    }
+    fdpass::send_msg(sock, &serde_json::to_vec(&Msg::AppsDone).expect("apps done"), &[]).map_err(|e| format!("send AppsDone: {e}"))?;
+    Ok(held.len())
+}
+
+/// R19, successor: read `Apps` messages until `AppsDone` and keep each
+/// listener for [`take_inherited_app`]. Returns how many arrived.
+#[cfg(unix)]
+fn receive_app_listeners(sock: &std::os::unix::net::UnixStream) -> Result<usize, String> {
+    let mut n = 0usize;
+    loop {
+        let (body, fds) = fdpass::recv_msg(sock, APP_FDS_PER_MSG).map_err(|e| format!("receive Apps: {e}"))?;
+        match serde_json::from_slice::<Msg>(&body) {
+            Ok(Msg::Apps { apps }) => {
+                if apps.len() != fds.len() {
+                    return Err(format!("Apps named {} listeners and carried {} fds", apps.len(), fds.len()));
+                }
+                let mut m = inherited_apps().lock().unwrap_or_else(|p| p.into_inner());
+                for (s, fd) in apps.into_iter().zip(fds) {
+                    m.insert((s.app, s.kind), std::net::TcpListener::from(fd));
+                    n += 1;
+                }
+            }
+            Ok(Msg::AppsDone) => return Ok(n),
+            Ok(other) => return Err(format!("expected Apps, got {other:?}")),
+            Err(e) => return Err(format!("unreadable Apps: {e}")),
+        }
+    }
 }
 
 /// How long the predecessor waits for the successor's HELLO (it boots to
@@ -461,18 +612,19 @@ fn successor_receive_unix(fd_str: &str) -> Result<std::fs::File, String> {
             pid: std::process::id(),
             version: env!("CARGO_PKG_VERSION").to_string(),
             roles: Some(Role::ALL.to_vec()),
+            app_listeners: true,
         })
         .expect("serialize hello"),
         &[],
     )
     .map_err(|e| format!("send HELLO: {e}"))?;
     let (body, mut fds) = fdpass::recv_msg(&sock, 8).map_err(|e| format!("receive TAKE: {e}"))?;
-    let roles = match serde_json::from_slice::<Msg>(&body) {
-        Ok(Msg::Take { roles, front_routes }) => {
+    let (roles, apps_follow) = match serde_json::from_slice::<Msg>(&body) {
+        Ok(Msg::Take { roles, front_routes, apps_follow }) => {
             if let Some(t) = front_routes {
                 crate::front443::routes::set_handed(t);
             }
-            roles
+            (roles, apps_follow)
         }
         Ok(other) => return Err(format!("expected TAKE, got {other:?}")),
         Err(e) => return Err(format!("unreadable TAKE: {e}")),
@@ -498,9 +650,20 @@ fn successor_receive_unix(fd_str: &str) -> Result<std::fs::File, String> {
         }
     }
     WAS_HANDED_OFF.store(true, Ordering::SeqCst);
+    // R36: the predecessor is our parent until it exits (it spawned us).
+    // SAFETY: getppid has no preconditions.
+    PREDECESSOR.store(unsafe { libc::getppid() } as u32, Ordering::SeqCst);
     fdpass::send_msg(&sock, &serde_json::to_vec(&Msg::Ack).expect("ack"), &[])
         .map_err(|e| format!("send ACK: {e}"))?;
     log_debug!("[daemon/handoff] took over from the previous daemon ({} listeners)", roles.len());
+    // R19: the App listeners follow. Never fatal: without them each App
+    // keeps its stored port by retrying the bind (R36).
+    if apps_follow {
+        match receive_app_listeners(&sock) {
+            Ok(n) => log_debug!("[daemon/handoff] inherited {n} App listener(s)"),
+            Err(e) => log_debug!("[daemon/handoff] WARN: App listeners: {e} (each App re-binds its stored port)"),
+        }
+    }
     Ok(lock)
 }
 
@@ -620,10 +783,10 @@ fn run_blocking(exe: &std::path::Path) -> Result<u32, Failed> {
         return Err(abort(&mut child, format!("socket timeout: {e}")));
     }
     let hello = fdpass::recv_msg(&ours, 0).map_err(|e| format!("waiting for HELLO: {e}"));
-    let (version, accepts) = match hello.and_then(|(b, _)| {
+    let (version, accepts, takes_apps) = match hello.and_then(|(b, _)| {
         serde_json::from_slice::<Msg>(&b).map_err(|e| format!("unreadable HELLO: {e}"))
     }) {
-        Ok(Msg::Hello { pid: p, version, roles }) if p == pid => (version, roles),
+        Ok(Msg::Hello { pid: p, version, roles, app_listeners }) if p == pid => (version, roles, app_listeners),
         Ok(other) => return Err(abort(&mut child, format!("expected HELLO from {pid}, got {other:?}"))),
         Err(e) => return Err(abort(&mut child, e)),
     };
@@ -650,6 +813,17 @@ fn run_blocking(exe: &std::path::Path) -> Result<u32, Failed> {
     let Some(lock_fd) = crate::daemon_main::singleton_lock_fd() else {
         return Err(abort(&mut child, "this daemon holds no singleton lock".into()));
     };
+    // R19: the App listeners, strong refs before quiesce (their accept
+    // loops drop theirs when they stop, R37). An older successor gets none:
+    // the sockets close at quiesce and it binds them fresh.
+    let app_held: Vec<(AppSock, Arc<tokio::net::TcpListener>)> = if takes_apps {
+        let m = live_apps().lock().unwrap_or_else(|p| p.into_inner());
+        let mut v: Vec<_> = m.iter().filter_map(|((app, kind), w)| w.upgrade().map(|l| (AppSock { app: app.clone(), kind: *kind }, l))).collect();
+        v.sort_by(|a, b| (a.0.app.as_str(), a.0.kind as u8).cmp(&(b.0.app.as_str(), b.0.kind as u8)));
+        v
+    } else {
+        Vec::new()
+    };
 
     // QUIESCE — from here a failure means exit + plain restart.
     quiesce();
@@ -660,7 +834,7 @@ fn run_blocking(exe: &std::path::Path) -> Result<u32, Failed> {
     let front_routes = roles
         .contains(&Role::Front443)
         .then(|| (*crate::front443::routes::current()).clone());
-    let take = serde_json::to_vec(&Msg::Take { roles: roles.clone(), front_routes }).expect("serialize take");
+    let take = serde_json::to_vec(&Msg::Take { roles: roles.clone(), front_routes, apps_follow: takes_apps }).expect("serialize take");
     if let Err(e) = fdpass::send_msg(&ours, &take, &fds) {
         let _ = child.kill();
         let _ = child.wait();
@@ -683,6 +857,15 @@ fn run_blocking(exe: &std::path::Path) -> Result<u32, Failed> {
             return Err(Failed::Quiesced(format!("waiting for ACK: {e}")));
         }
     }
+    // R19: the App listeners after the ACK (never fatal: the successor
+    // re-binds the stored ports when they don't arrive, R36).
+    if takes_apps {
+        match send_app_listeners(&ours, &app_held) {
+            Ok(n) => log_debug!("[daemon/handoff] handed over {n} App listener(s)"),
+            Err(e) => log_debug!("[daemon/handoff] WARN: App listeners: {e}"),
+        }
+    }
+    drop(app_held);
     // Our copies of the sockets and of the lock go; the successor's keep
     // them open (and the lock held only by it).
     drop(held);
@@ -771,16 +954,17 @@ pub fn drain_then_exit() -> ! {
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(DEFAULT_DRAIN_SECS);
     let deadline = std::time::Instant::now() + Duration::from_secs(secs);
-    let start = live_splices();
+    let live = || live_splices() + live_app_conns();
+    let start = live();
     let mut last = start;
-    while live_splices() > 0 && std::time::Instant::now() < deadline {
+    while live() > 0 && std::time::Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(200));
-        let now = live_splices();
+        let now = live();
         if now != last {
             last = now;
         }
     }
-    let left = live_splices();
+    let left = live();
     log_debug!(
         "[daemon/handoff] drain done: {start} splice(s) at hand-off, {left} cut at the {secs}s \
          deadline — exiting"

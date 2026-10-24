@@ -294,6 +294,11 @@ pub const ROUTES: &[Route] = &[
     // read. `/boot-status` and the update job point here from S1; the
     // handler is S2's (`apps::rehost`).
     get("/cli/app/rehost", Member),
+    // Run one App's re-host now (restart-class: switch 1 for its own App,
+    // A20) and its update settings (policy, window, "can't run two copies":
+    // switch 2; Rosson Q4 + Q16).
+    post("/cli/app/rehost/policy", Admin),
+    post("/cli/app/rehost/run", Admin),
     // Q8: one way out for every App of a workspace before its removal
     // (uninstall / park: Admin; handover: the handler holds it to the owner).
     post("/cli/app/release", Admin),

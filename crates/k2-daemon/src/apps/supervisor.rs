@@ -63,6 +63,8 @@ const WHY_ADOPT_UNHEALTHY: &str = "relaunch: it didn't answer its health check a
 const WHY_WAITING_ENGINE: &str = "waiting for K2's App engine";
 /// R43: the engine changed, so a pending restart runs now.
 const WHY_ENGINE_CHANGED: &str = "the App engine changed";
+/// S2: a paused re-host's new instance failed; the old Seed starts again.
+const WHY_PAUSED_REHOST_FAILED: &str = "the re-host's new instance failed after a pause";
 /// R35: a failure this close before boot happened while the box went down.
 const SHUTDOWN_GRACE_SECS: i64 = 600;
 /// Deployments of an App kept for rollback targets and the sweep.
@@ -108,6 +110,12 @@ struct AppRt {
     /// The next instance to go live replaces the live one outright (no
     /// warm copy, no rollback to it).
     retire_on_live: bool,
+    /// S2 (Rosson Q4 + Q16, `pause`): the next pipeline stops the running
+    /// instance before it starts the new one (it can't run two copies).
+    stop_first: bool,
+    /// The running pipeline stopped the old instance first: if it fails,
+    /// the live Seed is restarted (the App must not stay down).
+    stopped_first: bool,
     /// The deployment whose pipeline thread is running (set once its row
     /// exists, cleared after `busy`): [`wait_done`] returns only once it
     /// is gone, so a caller's next verb never meets this one's lock.
@@ -352,17 +360,27 @@ pub fn ensure_started() {
     }
     deploy::seed::clean_tmp();
     mark_interrupted();
-    open_fronts();
+    // R40: fronts first on a plain boot (the door exists while the engine
+    // is waited on). After a hand-off the predecessor's sockets (R19)
+    // already queue every connection, so they open once the routes are set
+    // (`plan_boot`): a queued request waits a moment instead of meeting 503.
+    if !crate::handoff::booted_from_handoff() {
+        open_fronts();
+    }
     let unwalled_ok = deploy::process_engine_enabled();
     let local = engine().adopt().unwrap_or_default();
     let booted_at = now();
     if !super::guarded::engine_installed() {
         boot_with(&LiveBoot { start: Instant::now() }, unwalled_ok, local, booted_at, None);
+        // S2: the re-host wave (it waits for the heal and the predecessor).
+        super::rehost::spawn();
         let _ = std::thread::Builder::new().name("apps-supervisor".into()).spawn(tick_loop);
         return;
     }
     let _ = std::thread::Builder::new().name("apps-supervisor".into()).spawn(move || {
         boot_with(&LiveBoot { start: Instant::now() }, unwalled_ok, local, booted_at, None);
+        // S2: the re-host wave (it waits for the heal and the predecessor).
+        super::rehost::spawn();
         tick_loop();
     });
 }
@@ -393,7 +411,10 @@ fn mark_interrupted() {
     if let Ok(rows) = db(store::unfinished_deployments) {
         for d in rows.into_iter().filter(|d| in_scope(&d.app_id, None)) {
             let _ = db(|c| store::set_result(c, &d.id, store::RESULT_STALLED, Some("the K2 daemon restarted during this deploy")));
-            stall_alert(&d, "the K2 daemon restarted during it");
+            // A13: a re-host is K2's own move; `rehost.rs` owns its notices.
+            if d.kind != store::KIND_REHOST {
+                stall_alert(&d, "the K2 daemon restarted during it");
+            }
         }
     }
 }
@@ -469,7 +490,6 @@ fn plan_boot(adopted: Vec<RunHandle>, unwalled_orphans: Vec<RunHandle>, unwalled
         .flatten()
         .collect();
     for app in &apps {
-        let _ = ensure_front(app);
         if with_rt(&app.app_id, |rt| rt.live.is_some() || rt.busy) {
             continue;
         }
@@ -512,6 +532,12 @@ fn plan_boot(adopted: Vec<RunHandle>, unwalled_orphans: Vec<RunHandle>, unwalled
             });
             audit(&app.app_id, "boot_restart", "system", json!({ "state": app.state }));
         }
+    }
+    // Every front after the routes are set: after a hand-off the inherited
+    // sockets (R19) queue connections until here, so nobody meets a 503
+    // while the survivors are adopted.
+    for app in &apps {
+        let _ = ensure_front(app);
     }
     // Orphans (warm instances from before the restart, uninstalled Apps,
     // and everything on the process engine while it is off).
@@ -560,10 +586,64 @@ fn k2_side_row(d: &DeploymentRow) -> bool {
 }
 
 /// Open (or re-open) an App's front listener and keep the DB in step.
+///
+/// R36 (update continuity, 0.46.4): after a hand-off whose predecessor
+/// still holds the stored front port (an older daemon that can't pass it
+/// over, R19), the port is never moved: a background retry re-binds it
+/// every 250 ms until the predecessor lets go, and the DB keeps the stored
+/// port (Meet, Caddy names and local users keep working through the
+/// predecessor meanwhile). Only once the predecessor is gone and the port
+/// is still taken does it fall back to a free one, as on any other boot.
 pub fn ensure_front(app: &AppRow) -> Result<u16, Fail> {
     let h = runtime().ok_or_else(|| fail(codes::ENGINE_UNAVAILABLE, 503, "the App front runtime couldn't start"))?.handle();
     let want = app.front_port.and_then(|p| u16::try_from(p).ok()).unwrap_or(0);
-    let port = router::ensure_front(h, &app.app_id, want).map_err(|e| fail(codes::ENGINE_UNAVAILABLE, 503, e))?;
+    let keep = crate::handoff::booted_from_handoff() && crate::handoff::predecessor_alive();
+    let port = match router::ensure_front(h, &app.app_id, want, !keep) {
+        Ok(p) => p,
+        Err(e) if e.starts_with(router::FRONT_PORT_HELD) => {
+            retry_front_while_predecessor_drains(app.clone());
+            return Err(fail(codes::ENGINE_UNAVAILABLE, 503, e));
+        }
+        Err(e) => return Err(fail(codes::ENGINE_UNAVAILABLE, 503, e)),
+    };
+    record_front(app, want, port)?;
+    Ok(port)
+}
+
+/// R36: one retry thread per App while the predecessor drains.
+fn retry_front_while_predecessor_drains(app: AppRow) {
+    static RETRYING: OnceLock<Mutex<std::collections::BTreeSet<String>>> = OnceLock::new();
+    let set = RETRYING.get_or_init(|| Mutex::new(std::collections::BTreeSet::new()));
+    if !set.lock().unwrap_or_else(|e| e.into_inner()).insert(app.app_id.clone()) {
+        return;
+    }
+    let _ = std::thread::Builder::new().name("apps-front-rebind".into()).spawn(move || {
+        let want = app.front_port.and_then(|p| u16::try_from(p).ok()).unwrap_or(0);
+        loop {
+            std::thread::sleep(Duration::from_millis(250));
+            let Some(rt) = runtime() else { break };
+            let alive = crate::handoff::predecessor_alive();
+            match router::ensure_front(rt.handle(), &app.app_id, want, !alive) {
+                Ok(port) => {
+                    if let Err(e) = record_front(&app, want, port) {
+                        k2_core::log_debug!("[apps] {}: front port {port}: {}", app.app_id, e.message);
+                    }
+                    k2_core::log_debug!("[apps] {}: front port {port} re-bound after the hand-off", app.app_id);
+                    break;
+                }
+                Err(e) if !alive && !e.starts_with(router::FRONT_PORT_HELD) => {
+                    notes::error(&format!("{}: front port {want} after the hand-off: {e}", app.app_id));
+                    break;
+                }
+                Err(_) => {}
+            }
+        }
+        set.lock().unwrap_or_else(|e| e.into_inner()).remove(&app.app_id);
+    });
+}
+
+/// Keep the DB in step with the port the front listens on.
+fn record_front(app: &AppRow, want: u16, port: u16) -> Result<(), Fail> {
     if want != port {
         db(|c| {
             c.execute("UPDATE apps SET front_port = ?2 WHERE app_id = ?1", rusqlite::params![app.app_id, port as i64])?;
@@ -573,7 +653,7 @@ pub fn ensure_front(app: &AppRow) -> Result<u16, Fail> {
             k2_core::log_debug!("[apps] {}: front port {want} was taken; now {port} (repoint the URL)", app.app_id);
         }
     }
-    Ok(port)
+    Ok(())
 }
 
 /// The App states a daemon boot restarts when no instance survived.
@@ -672,7 +752,7 @@ pub fn begin(app: &AppRow, seed: &str, kind: &str, actor: &str, reason: Option<&
     // 0.46.3: a deploy checks the Seed's requires.sew / requires.voice
     // against this box's Sew (rollbacks and restarts don't: they keep or
     // put back what ran).
-    if kind == store::KIND_DEPLOY {
+    if kind == store::KIND_DEPLOY || kind == store::KIND_REHOST {
         let req = serde_json::from_value::<Manifest>(seed_row.manifest.clone()).ok().and_then(|m| m.requires);
         if let Err((msg, _)) = super::requires::check_live(&app.app_id, req.as_ref()) {
             release();
@@ -708,11 +788,15 @@ pub fn begin(app: &AppRow, seed: &str, kind: &str, actor: &str, reason: Option<&
     let kind = kind.to_string();
     let spawned = std::thread::Builder::new().name(format!("app-deploy-{app_id}")).spawn(move || {
         pipeline(&app_id, &dep2, &seed, &kind);
+        let stopped_first = with_rt(&app_id, |rt| std::mem::take(&mut rt.stopped_first));
         with_rt(&app_id, |rt| {
             rt.busy = false;
             // A relaunch that never went live leaves the live one in place.
             rt.retire_on_live = false;
         });
+        if stopped_first {
+            restart_after_stopped_first(&app_id, &dep2, &seed);
+        }
         if kind == store::KIND_RESTART {
             restart_outcome(&app_id, &dep2);
         }
@@ -784,6 +868,11 @@ fn pipeline_fail_exit(app_id: &str, dep: &str, code: &str, msg: &str, exit: Exit
             system_restart: false,
             next: Next::NotScheduled,
         });
+        // A13: a failed re-host wakes nobody; `rehost.rs` counts it for the
+        // breaker and owns the owner/agent notes (R17).
+        if d.kind == store::KIND_REHOST {
+            return;
+        }
         super::failures::deploy_failed(&super::failures::DeployFail {
             app_id,
             deployment: dep,
@@ -910,9 +999,17 @@ fn pipeline(app_id: &str, dep: &str, seed: &str, kind: &str) {
     // numbers: two instances can't hold them at once, so the running one
     // stops before the new one starts (no zero-downtime switch for an App
     // with extra ports; its front port answers 503 in between).
-    if !spec.wall.extra_ports.is_empty() {
+    //
+    // S2 (Rosson Q4 + Q16): a re-host of an App that can't run two copies
+    // (no room for both, `handover`) with "pause briefly and update" does
+    // the same: a short pause, then the new instance.
+    let pause = with_rt(app_id, |rt| std::mem::take(&mut rt.stop_first));
+    if !spec.wall.extra_ports.is_empty() || pause {
         let (live, warm) = with_rt(app_id, |rt| {
             rt.watch = None;
+            let had = rt.live.is_some();
+            // A failed start after this must bring the live Seed back.
+            rt.stopped_first = had && kind == store::KIND_REHOST;
             (rt.live.take(), rt.warm.take())
         });
         for inst in [live, warm].into_iter().flatten() {
@@ -945,6 +1042,14 @@ fn pipeline(app_id: &str, dep: &str, seed: &str, kind: &str) {
         let _ = eng.stop(&h, Duration::from_secs(2));
         return pipeline_fail_exit(app_id, dep, g.code, &g.message, exit);
     }
+    // R32: readiness once after the gate, logged, never a gate (Sew D/E).
+    if let Some(rp) = m.ready_path() {
+        let answer = health::probe_as(false, port, &rp, &headers, Duration::from_millis(t.probe_timeout_ms));
+        let ready = answer.healthy();
+        let v = json!({ "path": rp, "ready": ready, "at": now(), "answer": format!("{answer:?}") });
+        let _ = db(|c| store::set_ready_json(c, dep, &v.to_string()));
+        k2_core::log_debug!("[apps] {app_id} {dep}: readiness {rp}: {}", if ready { "ready" } else { "not ready (logged only)" });
+    }
     let inst = Instance {
         handle: h,
         seed: seed.to_string(),
@@ -954,12 +1059,16 @@ fn pipeline(app_id: &str, dep: &str, seed: &str, kind: &str) {
         drain_secs: m.host.drain_secs.unwrap_or(t.drain_secs),
         client_ip: m.wants_client_ip(),
     };
+    with_rt(app_id, |rt| rt.stopped_first = false);
     go_live(&app, dep, inst, kind, &t);
 }
 
 /// The switch: route new connections to `inst`, drain the old one, keep it
 /// warm for the watch window.
 fn go_live(app: &AppRow, dep: &str, inst: Instance, kind: &str, t: &Timings) {
+    // R10 (A8): the fingerprint, from the `version` prepare checked.
+    let fp = fingerprint(&inst.handle);
+    let _ = db(|c| store::set_runtime_json(c, dep, &serde_json::to_string(&fp).unwrap_or_default()));
     let (_, prev_be) = router::switch_with(&app.app_id, inst.handle.port, inst.client_ip);
     let watch_secs = t.watch_secs;
     let (older_warm, prev_live, replace) = with_rt(&app.app_id, |rt| {
@@ -1042,6 +1151,11 @@ fn probe(inst: &Instance, t: &Timings) -> bool {
 static TICK_SEEN: AtomicU64 = AtomicU64::new(0);
 
 fn tick() {
+    // R18 (update continuity): a daemon that handed off only drains; the
+    // successor owns the Apps now, so this one never acts on them.
+    if k2_core::handoff_state::draining() {
+        return;
+    }
     tick_with(&TICK_SEEN, None);
 }
 
@@ -1056,6 +1170,10 @@ fn tick_with(seen: &AtomicU64, only: Option<&[String]>) {
     if seen.swap(gen, Ordering::SeqCst) != gen {
         let why = super::engine_gate::snapshot().last_change.unwrap_or_else(|| "the App engine changed".into());
         kick_pending(&why, only);
+        if only.is_none() {
+            // S2: an engine change can make Apps due (or ready to move).
+            super::rehost::wake();
+        }
     }
     let apps: Vec<String> =
         state().lock().unwrap_or_else(|e| e.into_inner()).keys().filter(|a| in_scope(a, only)).cloned().collect();
@@ -1275,7 +1393,14 @@ fn auto_rollback(app_id: &str, w: &Watch, bad: Instance, prev: Instance, why: &s
         Ok(id)
     });
     audit(app_id, "auto_rollback", "system", json!({ "deployment": row.as_ref().ok(), "from": bad.seed, "to": prev.seed, "why": why }));
-    super::failures::rolled_back(app_id, &w.deployment_id, exit.exited, exit.code, exit.signal);
+    // A13: an auto-rollback of a re-host wakes nobody; the wave's breaker
+    // counts it and holds the App at `rehost_failed` (R17).
+    let rehost = db(|c| store::get_deployment(c, &w.deployment_id)).ok().flatten().is_some_and(|d| d.kind == store::KIND_REHOST);
+    if rehost {
+        super::rehost::on_auto_rollback(app_id, &w.deployment_id, why);
+    } else {
+        super::failures::rolled_back(app_id, &w.deployment_id, exit.exited, exit.code, exit.signal);
+    }
     super::surfaces::emit_deployed(app_id);
     if let Some(be) = bad_be {
         let d = bad.drain_secs;
@@ -1287,6 +1412,9 @@ fn auto_rollback(app_id: &str, w: &Watch, bad: Instance, prev: Instance, why: &s
     let _ = std::thread::Builder::new().name("app-rollback-stop".into()).spawn(move || {
         let _ = engine_of(&bad.handle).stop(&bad.handle, grace);
     });
+    if rehost {
+        return;
+    }
     if let Ok(Some(app)) = db(|c| store::get_app(c, app_id)) {
         super::alerts::notify(
             &app.owner_workspace,
@@ -1296,6 +1424,74 @@ fn auto_rollback(app_id: &str, w: &Watch, bad: Instance, prev: Instance, why: &s
             ),
         );
     }
+}
+
+/// R10: what an instance runs on, from the `version` its `prepare` checked
+/// (never a later answer; never on adopt).
+fn fingerprint(h: &RunHandle) -> k2_core::deploy::rehost::Fingerprint {
+    let checked = super::guarded::take_checked(&h.deployment_id);
+    let arch = std::env::consts::ARCH;
+    let (wall, image) = if super::open::owns(h) {
+        ("relaxed", super::guarded::full_image_for(arch).map(|b| b.digest.to_string()))
+    } else if super::guarded::owns(h) {
+        ("guarded", super::guarded::base_image_for(arch).map(|b| b.digest.to_string()))
+    } else if super::process_exception::owns(h) {
+        ("process", None)
+    } else {
+        ("unwalled", None)
+    };
+    k2_core::deploy::rehost::Fingerprint {
+        k2_version: env!("CARGO_PKG_VERSION").to_string(),
+        engine_version: checked.as_ref().and_then(|v| v["version"].as_str().map(str::to_string)),
+        engine_protocol: checked.as_ref().and_then(|v| v["protocol"].as_u64()),
+        image_digest: image,
+        wall: wall.to_string(),
+    }
+}
+
+/// S2 "pause" (and extra ports): the re-host stopped the running instance
+/// first and its new one never went live. The App must not stay down: its
+/// live Seed starts again now (the daemon's restart, not a crash).
+fn restart_after_stopped_first(app_id: &str, dep: &str, seed: &str) {
+    let failed = db(|c| store::get_deployment(c, dep)).ok().flatten().is_some_and(|d| d.result != store::RESULT_LIVE);
+    if !failed || with_rt(app_id, |rt| rt.live.is_some()) {
+        return;
+    }
+    with_rt(app_id, |rt| {
+        rt.next_restart_at = Some(now());
+        rt.restart_why = Some(WHY_PAUSED_REHOST_FAILED);
+    });
+    let _ = db(|c| store::set_state(c, app_id, STATE_RESTARTING, Some("the re-host's new instance failed; the previous one starts again")));
+    audit(app_id, "rehost_restore", "system", json!({ "deployment": dep, "seed": seed }));
+}
+
+/// R10/R11: the fingerprint of an App's live deployment (`None` = none
+/// written: due).
+pub fn live_fingerprint(app: &AppRow) -> Option<k2_core::deploy::rehost::Fingerprint> {
+    let dep = app.live_deployment.as_deref()?;
+    let s = db(|c| store::runtime_json(c, dep)).ok().flatten();
+    k2_core::deploy::rehost::Fingerprint::parse(s.as_deref())
+}
+
+/// S2: the next pipeline of this App stops the running one first.
+pub(crate) fn set_stop_first(app_id: &str) {
+    with_rt(app_id, |rt| rt.stop_first = true);
+}
+
+/// R12: the live instance's measured memory (engine `stats`).
+pub(crate) fn live_mem_current(app_id: &str) -> Option<u64> {
+    let live = live_instance(app_id)?;
+    engine_of(&live.handle).stats(&live.handle).ok().and_then(|s| s.mem_current)
+}
+
+/// The wave skips an App whose deploy is in flight.
+pub(crate) fn is_busy(app_id: &str) -> bool {
+    with_rt(app_id, |rt| rt.busy)
+}
+
+/// R11 order: connections spliced to the live backend right now.
+pub(crate) fn active_connections(app_id: &str) -> usize {
+    router::live(app_id).map(|b| b.active()).unwrap_or(0)
 }
 
 fn crashed(app_id: &str, inst: Instance, why: &str, exit: Exit, t: &Timings) {
@@ -1460,7 +1656,9 @@ fn stall_check(t: &Timings) {
     for d in rows {
         if now() - d.started_at >= t.stall_secs as i64 {
             let _ = db(|c| store::set_result(c, &d.id, store::RESULT_STALLED, Some(&format!("not live after {}s", t.stall_secs))));
-            stall_alert(&d, &format!("not live after {} minutes", t.stall_secs / 60));
+            if d.kind != store::KIND_REHOST {
+                stall_alert(&d, &format!("not live after {} minutes", t.stall_secs / 60));
+            }
         }
     }
 }
@@ -1511,13 +1709,36 @@ pub fn check_data_revision(app: &AppRow, target: &str) -> Result<(), Fail> {
 /// `Ok(Some(deployment))` when it switched; `Ok(None)` when there is no
 /// warm instance for that Seed (the caller runs the pipeline).
 pub fn rollback_to_warm(app: &AppRow, target: &str, actor: &str) -> Result<Option<String>, Fail> {
+    rollback_to_warm_where(app, actor, |w| w.seed == target)
+}
+
+/// A7 (update continuity): `k2 app rollback` with no `--to` after a
+/// re-host or a relaunch (the warm instance runs the live Seed): back to
+/// that warm instance by its deployment id. `Ok(None)` when there is none.
+pub fn rollback_to_same_seed_warm(app: &AppRow, actor: &str) -> Result<Option<String>, Fail> {
+    let Some(live) = app.live_seed.clone() else { return Ok(None) };
+    rollback_to_warm_where(app, actor, |w| w.seed == live)
+}
+
+/// The kind of the App's live deployment (`rehost`, `deploy`, …).
+pub fn live_kind(app: &AppRow) -> Option<String> {
+    let dep = app.live_deployment.as_deref()?;
+    db(|c| store::get_deployment(c, dep)).ok().flatten().map(|d| d.kind)
+}
+
+fn rollback_to_warm_where(app: &AppRow, actor: &str, pick: impl Fn(&Instance) -> bool) -> Result<Option<String>, Fail> {
     let t = timings();
     let warm = with_rt(&app.app_id, |rt| {
         if rt.busy {
             return Err(fail(codes::DEPLOY_IN_PROGRESS, 409, "a deploy is in progress"));
         }
-        Ok(rt.warm.clone().filter(|w| w.seed == target))
+        Ok(rt.warm.clone().filter(|w| pick(w)))
     })?;
+    let target = match &warm {
+        Some(w) => w.seed.clone(),
+        None => return Ok(None),
+    };
+    let target = target.as_str();
     let Some(warm) = warm else { return Ok(None) };
     if matches!(engine_of(&warm.handle).liveness(&warm.handle), Liveness::Exited(_)) || !probe(&warm, &t) {
         return Ok(None);

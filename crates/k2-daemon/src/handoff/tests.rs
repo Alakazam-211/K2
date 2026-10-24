@@ -18,6 +18,7 @@ fn listener_fd_round_trips_over_the_socketpair() {
     let body = serde_json::to_vec(&Msg::Take {
         roles: vec![Role::Main],
         front_routes: None,
+        apps_follow: false,
     })
     .expect("ser");
     fdpass::send_msg(&a, &body, &[lockfile.as_raw_fd(), listener.as_raw_fd()]).expect("send");
@@ -132,6 +133,61 @@ fn the_front_socket_goes_only_to_a_successor_that_names_it() {
     }
     // A 0.46.1 HELLO carries its roles, and an old parser would ignore the
     // extra field (no deny_unknown_fields on Msg).
-    let new = serde_json::to_string(&Msg::Hello { pid: 7, version: "0.46.1".into(), roles: Some(Role::ALL.to_vec()) }).unwrap();
+    let new = serde_json::to_string(&Msg::Hello { pid: 7, version: "0.46.1".into(), roles: Some(Role::ALL.to_vec()), app_listeners: false }).unwrap();
     assert!(new.contains(r#""roles":["main","tunnelIngress","tunnelTls","front443"]"#), "{new}");
+    assert!(!new.contains("app_listeners"), "a successor without App listeners says nothing new: {new}");
+}
+
+/// R19 (update continuity, 0.46.4), the wire: a 0.46.3 HELLO and TAKE parse
+/// with no App listeners (nobody waits for any); a 0.46.4 pair carries the
+/// flags.
+#[test]
+fn app_listener_flags_are_absent_for_old_peers() {
+    match serde_json::from_slice::<Msg>(br#"{"t":"hello","pid":7,"version":"0.46.3","roles":["main"]}"#).unwrap() {
+        Msg::Hello { app_listeners, .. } => assert!(!app_listeners),
+        other => panic!("{other:?}"),
+    }
+    match serde_json::from_slice::<Msg>(br#"{"t":"take","roles":["main"]}"#).unwrap() {
+        Msg::Take { apps_follow, .. } => assert!(!apps_follow, "an old predecessor sends no App listeners"),
+        other => panic!("{other:?}"),
+    }
+    let h = serde_json::to_string(&Msg::Hello { pid: 7, version: "0.46.4".into(), roles: None, app_listeners: true }).unwrap();
+    assert!(h.contains(r#""app_listeners":true"#), "{h}");
+    let t = serde_json::to_string(&Msg::Take { roles: vec![], front_routes: None, apps_follow: true }).unwrap();
+    assert!(t.contains(r#""apps_follow":true"#), "{t}");
+}
+
+/// R19 (T10): App listeners cross the socketpair in messages of at most 8
+/// fds (here 19 = 3 messages), each the SAME socket on the other side; a
+/// successor that receives none (a legacy predecessor) has nothing to take.
+#[cfg(unix)]
+#[test]
+fn app_listeners_cross_in_messages_of_eight() {
+    use std::os::unix::net::UnixStream;
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let (a, b) = UnixStream::pair().expect("socketpair");
+    let mut held = Vec::new();
+    let mut ports = Vec::new();
+    for i in 0..19 {
+        let std_l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        ports.push(std_l.local_addr().unwrap().port());
+        std_l.set_nonblocking(true).unwrap();
+        let l = {
+            let _g = rt.enter();
+            Arc::new(tokio::net::TcpListener::from_std(std_l).unwrap())
+        };
+        let kind = if i % 2 == 0 { AppKind::Front } else { AppKind::Egress };
+        held.push((AppSock { app: format!("r19-app-{i}"), kind }, l));
+    }
+    let t = std::thread::spawn(move || receive_app_listeners(&b));
+    assert_eq!(send_app_listeners(&a, &held).unwrap(), 19);
+    drop(held);
+    assert_eq!(t.join().unwrap().unwrap(), 19);
+    for (i, port) in ports.iter().enumerate() {
+        let kind = if i % 2 == 0 { AppKind::Front } else { AppKind::Egress };
+        let l = take_inherited_app(&format!("r19-app-{i}"), kind).expect("inherited");
+        assert_eq!(l.local_addr().unwrap().port(), *port, "the same socket, still bound after the sender closed its copy");
+        assert!(take_inherited_app(&format!("r19-app-{i}"), kind).is_none(), "taken once");
+    }
+    assert!(take_inherited_app("r19-never-sent", AppKind::Front).is_none());
 }

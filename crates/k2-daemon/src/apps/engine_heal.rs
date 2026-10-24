@@ -365,14 +365,20 @@ pub fn app_engine_json() -> Option<J> {
                 .unwrap_or(0) as usize
         })
         .unwrap_or(0);
-    Some(compose(
+    let mut v = compose(
         &load_status(),
         &super::engine_gate::snapshot(),
         Path::new(LINGER_FILE).exists(),
         waiting,
         env!("CARGO_PKG_VERSION"),
         HEALING.load(Ordering::SeqCst),
-    ))
+    );
+    // S2: Apps still on an older runtime, and the wave's pending ones.
+    if let Some((old, pending)) = super::rehost::counts() {
+        v["apps"]["onOldEngine"] = json!(old);
+        v["apps"]["rehostPending"] = json!(pending);
+    }
+    Some(v)
 }
 
 /// `/boot-status` full view: add `appEngine` only when an engine is

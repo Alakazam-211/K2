@@ -269,10 +269,22 @@ fn fronts() -> &'static Mutex<HashMap<String, Front>> {
     F.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// `ensure_front` couldn't bind the stored port (the hand-off's
+/// predecessor still holds it, R36): the caller retries, never moves it.
+pub const FRONT_PORT_HELD: &str = "front_port_held";
+
 /// Make sure `app_id`'s front listener runs on `want` (0 = any free
 /// port). Returns the port it listens on (a different one when `want` was
-/// taken; the caller records it). Needs a tokio runtime handle.
-pub fn ensure_front(handle: &tokio::runtime::Handle, app_id: &str, want: u16) -> Result<u16, String> {
+/// taken and `fallback` allows it; the caller records it). Needs a tokio
+/// runtime handle.
+///
+/// Update continuity (0.46.4): a listener the hand-off's predecessor
+/// passed over is taken first (R19); without `fallback` a taken port is
+/// [`FRONT_PORT_HELD`], never a random one (R36). The accept loop stops at
+/// a hand-off's quiesce (R37: the socket stays open and the successor takes
+/// it), and every front connection holds a splice guard so the old daemon
+/// drains it before exiting (`handoff::app_conn_guard`).
+pub fn ensure_front(handle: &tokio::runtime::Handle, app_id: &str, want: u16, fallback: bool) -> Result<u16, String> {
     let mut f = fronts().lock().unwrap_or_else(|e| e.into_inner());
     if let Some(cur) = f.get(app_id) {
         if !cur.task.is_finished() && (want == 0 || cur.port == want) {
@@ -281,19 +293,40 @@ pub fn ensure_front(handle: &tokio::runtime::Handle, app_id: &str, want: u16) ->
         cur.task.abort();
         f.remove(app_id);
     }
-    let std_l = std::net::TcpListener::bind(("127.0.0.1", want))
-        .or_else(|e| if want != 0 { std::net::TcpListener::bind(("127.0.0.1", 0)) } else { Err(e) })
-        .map_err(|e| format!("bind the App's front port: {e}"))?;
+    let std_l = match crate::handoff::take_inherited_app(app_id, crate::handoff::AppKind::Front) {
+        Some(l) => l,
+        None => {
+            let bound = match std::net::TcpListener::bind(("127.0.0.1", want)) {
+                Ok(l) => Ok(l),
+                Err(e) if want != 0 && e.kind() == std::io::ErrorKind::AddrInUse && !fallback => {
+                    return Err(format!("{FRONT_PORT_HELD}: 127.0.0.1:{want} ({e})"));
+                }
+                Err(e) if want != 0 => std::net::TcpListener::bind(("127.0.0.1", 0)).map_err(|_| e),
+                Err(e) => Err(e),
+            };
+            bound.map_err(|e| format!("bind the App's front port: {e}"))?
+        }
+    };
     let port = std_l.local_addr().map_err(|e| e.to_string())?.port();
     std_l.set_nonblocking(true).map_err(|e| e.to_string())?;
     let app = app_id.to_string();
     let _rt = handle.enter();
-    let l = tokio::net::TcpListener::from_std(std_l).map_err(|e| e.to_string())?;
+    let l = std::sync::Arc::new(tokio::net::TcpListener::from_std(std_l).map_err(|e| e.to_string())?);
+    crate::handoff::register_app(app_id, crate::handoff::AppKind::Front, &l);
     let task = handle.spawn(async move {
         loop {
-            let Ok((mut s, peer)) = l.accept().await else { continue };
-            let app = app.clone();
-            tokio::spawn(async move { serve_app_conn(&mut s, &app, Some(peer)).await });
+            tokio::select! {
+                a = l.accept() => {
+                    let Ok((mut s, peer)) = a else { continue };
+                    let app = app.clone();
+                    let guard = crate::handoff::app_conn_guard();
+                    tokio::spawn(async move {
+                        serve_app_conn(&mut s, &app, Some(peer)).await;
+                        drop(guard);
+                    });
+                }
+                _ = crate::handoff::quiesced() => break,
+            }
         }
     });
     f.insert(app_id.to_string(), Front { port, task });
@@ -372,7 +405,7 @@ mod tests {
             }
         });
         let app = "router-client-ip-app";
-        let front = ensure_front(&tokio::runtime::Handle::current(), app, 0).unwrap();
+        let front = ensure_front(&tokio::runtime::Handle::current(), app, 0, true).unwrap();
         let ask = |bytes: &'static [u8]| async move {
             let mut s = TcpStream::connect(("127.0.0.1", front)).await.unwrap();
             s.write_all(bytes).await.unwrap();
@@ -409,7 +442,7 @@ mod tests {
         let a = tagged_server("A", 0).await;
         let a_slow = tagged_server("A-slow", 800).await;
         let b = tagged_server("B", 0).await;
-        let front = ensure_front(&tokio::runtime::Handle::current(), app, 0).unwrap();
+        let front = ensure_front(&tokio::runtime::Handle::current(), app, 0, true).unwrap();
         assert!(get_via_front(front).await.contains("503"), "no live backend yet");
 
         let (_, prev) = switch(app, a);
@@ -446,5 +479,40 @@ mod tests {
         assert!(clear(app).is_some());
         assert!(get_via_front(front).await.contains("503"));
         close_front(app);
+    }
+}
+
+/// R36 + R19 (update continuity, 0.46.4): the front listener a hand-off
+/// passed over is taken first (same socket, same port); a stored port held
+/// by someone else is never moved without `fallback` (the predecessor still
+/// drains), and moves only with it (any other boot).
+#[cfg(test)]
+mod handoff_tests {
+    use super::*;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_held_front_port_is_kept_and_an_inherited_one_is_taken_first() {
+        let h = tokio::runtime::Handle::current();
+        let held = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = held.local_addr().unwrap().port();
+        let e = ensure_front(&h, "r36-held", port, false).unwrap_err();
+        assert!(e.starts_with(FRONT_PORT_HELD), "{e}");
+        let moved = ensure_front(&h, "r36-held", port, true).unwrap();
+        assert_ne!(moved, port, "outside a hand-off a taken port still falls back");
+        close_front("r36-held");
+
+        // The predecessor's own socket arrives over the hand-off: taken
+        // first, so the stored port is served with no bind at all (the
+        // `held` socket above is exactly such a socket, still bound).
+        crate::handoff::inherit_app_for_test("r19-front", crate::handoff::AppKind::Front, held);
+        let got = ensure_front(&h, "r19-front", port, false).unwrap();
+        assert_eq!(got, port, "the stored port, through the inherited socket");
+        let mut c = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        use tokio::io::AsyncReadExt;
+        let mut b = Vec::new();
+        let _ = c.write_all(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n").await;
+        let _ = tokio::time::timeout(Duration::from_secs(5), c.read_to_end(&mut b)).await;
+        assert!(String::from_utf8_lossy(&b).starts_with("HTTP/1.1 503"), "served by this daemon's router: {}", String::from_utf8_lossy(&b));
+        close_front("r19-front");
     }
 }

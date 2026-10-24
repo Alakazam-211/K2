@@ -490,13 +490,28 @@ pub fn ensure(app: &str, port: u16) -> Result<(), String> {
 
 fn start_listener(app: &str, port: u16) -> Result<(), String> {
     let rt = runtime().ok_or("the egress runtime couldn't start")?;
-    let std_l = std::net::TcpListener::bind(("127.0.0.1", port)).map_err(|e| format!("egress proxy for {app} on 127.0.0.1:{port}: {e}"))?;
+    // R19 (update continuity, 0.46.4): the listener a hand-off's
+    // predecessor passed over comes first. R36: while that predecessor
+    // still holds the port (an older daemon that can't pass it), retry in
+    // the background until it lets go; the App's egress is never lost.
+    let std_l = match crate::handoff::take_inherited_app(app, crate::handoff::AppKind::Egress) {
+        Some(l) => l,
+        None => match std::net::TcpListener::bind(("127.0.0.1", port)) {
+            Ok(l) => l,
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse && crate::handoff::predecessor_alive() => {
+                retry_while_predecessor_drains(app, port);
+                return Err(format!("egress proxy for {app} on 127.0.0.1:{port}: held by the previous K2 daemon while it drains; retrying"));
+            }
+            Err(e) => return Err(format!("egress proxy for {app} on 127.0.0.1:{port}: {e}")),
+        },
+    };
     std_l.set_nonblocking(true).map_err(|e| e.to_string())?;
     let bound = std_l.local_addr().map_err(|e| e.to_string())?.port();
     let l = {
         let _g = rt.enter();
-        tokio::net::TcpListener::from_std(std_l).map_err(|e| e.to_string())?
+        Arc::new(tokio::net::TcpListener::from_std(std_l).map_err(|e| e.to_string())?)
     };
+    crate::handoff::register_app(app, crate::handoff::AppKind::Egress, &l);
     let (stop, mut stop_rx) = watch::channel(false);
     let lis = Arc::new(Listener {
         port: bound,
@@ -519,7 +534,12 @@ fn start_listener(app: &str, port: u16) -> Result<(), String> {
                 a = l.accept() => match a {
                     Ok((c, _)) => {
                         let (app, lis, stop) = (app.clone(), lis.clone(), conn_stop);
-                        tokio::spawn(async move { serve(c, app, lis, stop).await });
+                        // R37: the old daemon drains these before it exits.
+                        let guard = crate::handoff::app_conn_guard();
+                        tokio::spawn(async move {
+                            serve(c, app, lis, stop).await;
+                            drop(guard);
+                        });
                     }
                     Err(e) => {
                         k2_core::log_debug!("[apps] egress accept {app}: {e}");
@@ -527,10 +547,43 @@ fn start_listener(app: &str, port: u16) -> Result<(), String> {
                     }
                 },
                 _ = stop_rx.changed() => break,
+                // R37: stop accepting at a hand-off's quiesce; the socket stays
+                // open for the successor (R19).
+                _ = crate::handoff::quiesced() => break,
             }
         }
     });
     Ok(())
+}
+
+/// R36: re-open `app`'s proxy on `port` once the hand-off's predecessor
+/// lets go of it (every 250 ms while it drains, one last try after it
+/// exits). One retry thread per App.
+fn retry_while_predecessor_drains(app: &str, port: u16) {
+    static RETRYING: OnceLock<Mutex<std::collections::HashSet<String>>> = OnceLock::new();
+    let set = RETRYING.get_or_init(|| Mutex::new(std::collections::HashSet::new()));
+    if !set.lock().unwrap_or_else(|e| e.into_inner()).insert(app.to_string()) {
+        return;
+    }
+    let app = app.to_string();
+    let _ = std::thread::Builder::new().name("apps-egress-rebind".into()).spawn(move || {
+        loop {
+            std::thread::sleep(Duration::from_millis(250));
+            let gone = !crate::handoff::predecessor_alive();
+            match ensure(&app, port) {
+                Ok(()) => {
+                    k2_core::log_debug!("[apps] {app}: egress proxy back on 127.0.0.1:{port} (the previous daemon let go)");
+                    break;
+                }
+                Err(e) if gone => {
+                    super::runtime_notes::error(&format!("{app}: egress proxy on 127.0.0.1:{port} after the hand-off: {e}"));
+                    break;
+                }
+                Err(_) => {}
+            }
+        }
+        set.lock().unwrap_or_else(|e| e.into_inner()).remove(&app);
+    });
 }
 
 /// Close `app`'s listener and every tunnel it holds (stop, uninstall).

@@ -103,6 +103,7 @@ pub fn is_route(p: &str) -> bool {
         || super::seal::ROUTES.contains(&p)
         || super::resources::ROUTES.contains(&p)
         || super::data_files::ROUTES.contains(&p)
+        || super::rehost::ROUTES.contains(&p)
 }
 
 pub fn is_post_route(p: &str) -> bool {
@@ -116,6 +117,8 @@ pub fn is_post_route(p: &str) -> bool {
         || super::resources::POST_ROUTES.contains(&p)
         // 0.46.4: rm and mv change an App's data; ls and get read it.
         || super::data_files::POST_ROUTES.contains(&p)
+        // 0.46.4 (update continuity S2): run one App now, its settings.
+        || super::rehost::POST_ROUTES.contains(&p)
 }
 
 /// The 0.46.1 door's routes (lane 2): audit, quotas, suspend/resume and
@@ -402,6 +405,11 @@ pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String
         // 0.46.4 (update continuity R9): installed vs running vs this K2,
         // linger, the heal; read-only.
         "/cli/app/engine/status" => super::engine_heal::status_route(),
+        // 0.46.4 (update continuity S2): the re-host wave, one App now, and
+        // its per-App update settings.
+        "/cli/app/rehost" => super::rehost::status_route(&who, params),
+        "/cli/app/rehost/run" => super::rehost::run_route(&who, body),
+        "/cli/app/rehost/policy" => super::rehost::policy_route(&who, body),
         "/cli/app/build" => build(&who, body),
         // 0.46.3: an agent moves its own --cmd service in: its data, then
         // its public label (legacy.rs, data_put.rs, labels.rs).
@@ -855,7 +863,7 @@ fn seed_for_deploy(who: &Who, app: &AppRow, v: &J) -> R<String> {
 }
 
 /// `{deployment, done}`; waits up to `wait` seconds (max 900).
-fn deployment_answer(id: &str, wait: u64) -> R<J> {
+pub(crate) fn deployment_answer(id: &str, wait: u64) -> R<J> {
     let row = if wait > 0 {
         super::supervisor::wait_done(id, wait.min(900))
     } else {
@@ -1096,6 +1104,30 @@ fn rollback(who: &Who, body: &[u8]) -> R<J> {
     let app = app_for(who, s(&v, "app"))?;
     super::suspend::refuse_if_suspended(&app.app_id)?;
     super::ownership::refuse_if_parked(&app)?;
+    // A7 (update continuity): after a re-host or a relaunch the warm
+    // instance runs the live Seed: no `--to` goes back to it by deployment
+    // id, and a re-host with no warm instance left refuses instead of
+    // falling through to an older Seed (for Hearth: a pre-TPL1 one).
+    if s(&v, "to").is_none() {
+        if let Some(id) = super::supervisor::rollback_to_same_seed_warm(&app, &actor(who))? {
+            let mut out = deployment_answer(&id, 0)?;
+            out["instant"] = json!(true);
+            out["warm"] = json!(true);
+            return Ok(out);
+        }
+        if super::supervisor::live_kind(&app).as_deref() == Some(store::KIND_REHOST) {
+            let on = super::supervisor::live_fingerprint(&app).map(|f| f.k2_version).unwrap_or_else(|| "this K2".into());
+            return Err(no(
+                codes::NOTHING_TO_ROLL_BACK,
+                409,
+                format!(
+                    "nothing_to_roll_back: {} was re-hosted on K2 {on} and its previous instance is gone (the watch window \
+                     passed); roll K2 back, or deploy the Seed you want (k2 app deploy {} <seed>)",
+                    app.app_id, app.app_id
+                ),
+            ));
+        }
+    }
     let target = super::supervisor::rollback_target(&app, s(&v, "to"))?;
     super::supervisor::check_data_revision(&app, &target)?;
     if let Some(id) = super::supervisor::rollback_to_warm(&app, &target, &actor(who))? {
@@ -1828,6 +1860,9 @@ fn inspect(who: &Who, params: &HashMap<String, String>) -> R<J> {
         "app": app_summary(&app),
         "row": app,
         "runtime": super::supervisor::runtime_json(&app.app_id),
+        // 0.46.4 (update continuity R16): fingerprint, policy, the "can't run
+        // two copies" setting, sessions, the wave's word on this App.
+        "rehost": super::rehost::app_json(&app),
         "liveSeed": seed,
         "lastDeployment": last,
         "boxServices": box_services,

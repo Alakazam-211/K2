@@ -128,7 +128,7 @@ impl RuntimeEngine for ProcessException {
         }
         app_id(&spec.app_id)?;
         // A4: K2's own engine faults carry their own codes (never a crash).
-        guarded::require_protocol()?;
+        guarded::remember_checked(&spec.deployment_id, guarded::require_protocol()?);
         guarded::ensure_seed(seed)?;
         self.prepared.lock().unwrap_or_else(|e| e.into_inner()).insert(spec.deployment_id.clone(), seed.hash.clone());
         Ok(Prepared { workdir: seed.path.clone() })

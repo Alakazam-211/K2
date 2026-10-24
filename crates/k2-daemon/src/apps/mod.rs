@@ -46,6 +46,8 @@ pub mod engine_gate;
 pub mod engine_heal;
 /// The matching engine staged by the updater and the installer (R1, R3).
 pub mod engine_stage;
+/// Re-host every App on a K2 update (update continuity S2).
+pub mod rehost;
 /// Loud failures: ERROR lines and owner notices (R34, R44).
 pub mod runtime_notes;
 pub mod exception;

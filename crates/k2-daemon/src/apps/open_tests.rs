@@ -25,6 +25,11 @@ fn row(path: &str, isolation: &str, source: &str) -> AppRow {
         io_max_json: None,
         devices_json: "[]".into(),
         exception_json: None,
+        rehost_policy: "auto".into(),
+        rehost_window: None,
+        rehost_when_no_overlap: "pause".into(),
+        warm_deployment: None,
+        warm_until: None,
     }
 }
 

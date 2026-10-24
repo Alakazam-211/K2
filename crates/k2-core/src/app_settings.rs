@@ -520,6 +520,12 @@ pub struct AppSettings {
     /// overrides). Owner-only. Default [`crate::deploy::AUTO_PREPARE_DEFAULT`].
     #[serde(default = "default_auto_prepare")]
     pub apps_auto_prepare: bool,
+    /// 0.46.4 (prd-app-runtime-update-continuity-v1 R5): at every boot K2
+    /// installs the `k2-app-engine` that matches its own version, through
+    /// the root helper, when an engine is installed (wire `appsEngineHeal`;
+    /// `K2_APP_ENGINE_HEAL=off` forces it off). Owner-only. Default ON.
+    #[serde(default = "default_true")]
+    pub apps_engine_heal: bool,
     /// 0.40.43 (1c) — public `/v1` API master switch (K2 Connect → Enable
     /// public API). Persisted app-level mirror of the `K2_API` env flag so
     /// the owner can flip the external `/v1` surface per-server from Settings
@@ -1189,6 +1195,7 @@ impl Default for AppSettings {
             apps: true,
             apps_process_engine: false,
             apps_auto_prepare: crate::deploy::AUTO_PREPARE_DEFAULT,
+            apps_engine_heal: true,
             api_enabled: false,
             airgap: false,
             listen_lan: false,

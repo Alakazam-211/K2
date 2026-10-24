@@ -112,6 +112,29 @@ pub fn auto_prepare_enabled() -> bool {
     }
 }
 
+/// The owner-only `appsEngineHeal` setting (prd-app-runtime-update-continuity-v1
+/// R5, default ON): at every daemon boot K2 installs the `k2-app-engine` that
+/// matches its own version, through the root helper, when an engine is
+/// installed. `K2_APP_ENGINE_HEAL=off` (or `0`) forces it off.
+static SETTING_ENGINE_HEAL: AtomicBool = AtomicBool::new(true);
+
+/// The env opt-out for the engine heal.
+pub const ENGINE_HEAL_ENV: &str = "K2_APP_ENGINE_HEAL";
+
+/// Sync the persisted `appsEngineHeal` setting into this process.
+pub fn set_engine_heal(on: bool) {
+    SETTING_ENGINE_HEAL.store(on, Ordering::Relaxed);
+}
+
+/// May K2 heal the App engine at boot? The env opt-out wins, else the
+/// owner's `appsEngineHeal` setting (default on).
+pub fn engine_heal_enabled() -> bool {
+    match std::env::var(ENGINE_HEAL_ENV).ok().map(|v| v.trim().to_ascii_lowercase()) {
+        Some(v) if matches!(v.as_str(), "0" | "off" | "false" | "no") => false,
+        _ => SETTING_ENGINE_HEAL.load(Ordering::Relaxed),
+    }
+}
+
 /// What a refusal says when an App needs the process engine and it is off.
 pub const PROCESS_ENGINE_OFF_HINT: &str = "the unwalled process engine is off on this box (it would run App code as \
      the daemon's user): deploy guarded (k2 app deploy <app> <folder|seed> --engine guarded, on Linux with the App \
@@ -183,6 +206,24 @@ pub mod codes {
     /// 0.46.3: the Seed's `requires.sew` / `requires.voice` isn't met by
     /// this box's Sew (install and deploy refuse; the hint names the fix).
     pub const REQUIRES_UNMET: &str = "requires_unmet";
+    /// prd-app-runtime-update-continuity-v1 A4: the App engine's socket is
+    /// missing or nothing answered on it (K2's fault, not the App's).
+    pub const ENGINE_NOT_ANSWERING: &str = "engine_not_answering";
+    /// A4/R34: the running App engine speaks another protocol than this
+    /// daemon (the 2026-10-23 Hearth outage: protocol 2 vs 3).
+    pub const ENGINE_PROTOCOL_MISMATCH: &str = "engine_protocol_mismatch";
+    /// A4: the engine refused this daemon as its caller (`caller_not_daemon`,
+    /// e.g. before a hand-off's MAINPID move).
+    pub const ENGINE_CALLER_REFUSED: &str = "engine_caller_refused";
+    /// A4: the root helper is missing or too old for a step K2 needs.
+    pub const HELPER_NEEDED: &str = "helper_needed";
+
+    /// A4/R6: a failure caused by K2 itself (its engine, its helper), never
+    /// by the App. Such a failure never feeds the crash backoff or the
+    /// breaker: the App waits for the engine (`waiting_engine`) instead.
+    pub fn is_k2_side(code: &str) -> bool {
+        matches!(code, ENGINE_NOT_ANSWERING | ENGINE_PROTOCOL_MISMATCH | ENGINE_CALLER_REFUSED | HELPER_NEEDED)
+    }
 }
 
 /// Deploy timings (§7.2, §6.3). Defaults per the PRD; `K2_APPS_*` env

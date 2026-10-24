@@ -268,6 +268,11 @@ pub const STATE_FAILED: &str = "failed";
 /// uninstalls it. A workspace removal's Apps (`--apps park`) and today's
 /// orphans (the boot sweep) land here.
 pub const STATE_PARKED: &str = "parked";
+/// prd-app-runtime-update-continuity-v1 A4/R6: the owner wants it running
+/// but K2's own engine (or helper) can't start it now. Never a crash: no
+/// backoff step, no breaker; retried every 60 s and at once when the engine
+/// changes (R43). No CHECK on `apps.state`, so no migration.
+pub const STATE_WAITING_ENGINE: &str = "waiting_engine";
 
 /// The Apps a workspace maintains (its `owner_workspace`), by id.
 pub fn owned_app_ids(conn: &Connection, workspace: &str) -> rusqlite::Result<Vec<String>> {
@@ -537,10 +542,13 @@ pub struct DeploymentRow {
     pub live_at: Option<i64>,
     pub finished_at: Option<i64>,
     pub watch_until: Option<i64>,
+    /// The structured failure code (0221, A4): `error` keeps the
+    /// `<code>: <message>` text for older readers.
+    pub error_code: Option<String>,
 }
 
 const DEP_COLS: &str = "id, app_id, kind, from_seed, to_seed, tree_hash, commit_ref, actor, reason, result, error, port, pid, \
-                        started_at, live_at, finished_at, watch_until";
+                        started_at, live_at, finished_at, watch_until, error_code";
 
 fn dep_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeploymentRow> {
     Ok(DeploymentRow {
@@ -561,6 +569,7 @@ fn dep_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeploymentRow> {
         live_at: r.get(14)?,
         finished_at: r.get(15)?,
         watch_until: r.get(16)?,
+        error_code: r.get(17)?,
     })
 }
 
@@ -619,6 +628,33 @@ pub fn set_result(conn: &Connection, id: &str, result: &str, error: Option<&str>
     Ok(())
 }
 
+/// A deployment failed with `code` (stored structurally, A4) and `message`
+/// (`error` = `<code>: <message>`, as before 0221).
+pub fn set_failed(conn: &Connection, id: &str, code: &str, message: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE deployments SET result = ?2, error = ?3, error_code = ?4, finished_at = ?5 WHERE id = ?1",
+        params![id, RESULT_FAILED, format!("{code}: {message}"), code, super::now()],
+    )?;
+    Ok(())
+}
+
+/// One App's deployments that ended badly (`failed`, `exited`) and finished
+/// at or after `since` (unix seconds), newest first: the desired-state boot
+/// rule (R35) reads their codes and times.
+pub fn bad_endings_since(conn: &Connection, app_id: &str, since: i64) -> rusqlite::Result<Vec<DeploymentRow>> {
+    let mut st = conn.prepare(&format!(
+        "SELECT {DEP_COLS} FROM deployments WHERE app_id = ?1 AND result IN ('failed','exited') \
+         AND COALESCE(finished_at, started_at) >= ?2 ORDER BY started_at DESC, rowid DESC"
+    ))?;
+    let v = st.query_map(params![app_id, since], dep_row)?.collect::<Result<_, _>>()?;
+    Ok(v)
+}
+
+/// The App's newest deployment (R43: did its last attempt fail K2-side?).
+pub fn last_deployment(conn: &Connection, app_id: &str) -> rusqlite::Result<Option<DeploymentRow>> {
+    Ok(list_deployments(conn, app_id, 1)?.into_iter().next())
+}
+
 pub fn set_started(conn: &Connection, id: &str, port: u16, pid: Option<i64>) -> rusqlite::Result<()> {
     conn.execute(
         "UPDATE deployments SET result = ?2, port = ?3, pid = ?4 WHERE id = ?1",
@@ -645,6 +681,8 @@ pub(crate) mod tests {
             .unwrap();
         c.execute_batch(include_str!("../../drizzle_sql/0170_app_walls_lite.sql").replace("--> statement-breakpoint", "").as_str())
             .unwrap();
+        // 0221: `deployments.error_code` (read by every deployment row).
+        c.execute_batch(include_str!("../../drizzle_sql/0221_app_rehost.sql")).unwrap();
         // The held-request table the Seed keep set reads (0168's
         // `app_widenings`; the rest of 0168 needs tables this fixture lacks).
         for stmt in include_str!("../../drizzle_sql/0168_app_grace.sql").split("--> statement-breakpoint") {
@@ -818,5 +856,51 @@ pub(crate) mod tests {
         assert!(referenced_seeds(&c, 10).unwrap().contains(&seed('b', 1).hash));
         assert_eq!(get_deployment(&c, &id).unwrap().unwrap().result, RESULT_PENDING);
         assert_eq!(unfinished_deployments(&c).unwrap().len(), 1);
+    }
+
+    /// 0221 (A4): a failure's code is stored beside its text; the R35
+    /// window reads failed and exited rows only, newest first.
+    #[test]
+    fn failures_keep_their_code_and_the_window_reads_bad_endings() {
+        let c = conn();
+        upsert_seed(&c, &seed('a', 1)).unwrap();
+        insert_app(
+            &c,
+            &NewApp {
+                app_id: "kim",
+                service_id: "svc-2",
+                seed_id: Some("kim"),
+                owner_workspace: "ws",
+                isolation: "container",
+                memory_limit_bytes: None,
+                front_port: 40001,
+                created_by: "owner",
+            },
+        )
+        .unwrap();
+        let new = |kind| {
+            insert_deployment(
+                &c,
+                &NewDeployment { app_id: "kim", kind, from_seed: None, to_seed: Some(&seed('a', 1).hash), commit_ref: None, actor: "system", reason: None },
+            )
+            .unwrap()
+        };
+        let a = new(KIND_RESTART);
+        set_failed(&c, &a, "engine_protocol_mismatch", "protocol 2 vs 3").unwrap();
+        let b = new(KIND_RESTART);
+        set_result(&c, &b, RESULT_EXITED, Some("exited")).unwrap();
+        let live = new(KIND_RESTART);
+        set_went_live(&c, &live, 0).unwrap();
+        let row = get_deployment(&c, &a).unwrap().unwrap();
+        assert_eq!(
+            (row.result.as_str(), row.error.as_deref(), row.error_code.as_deref()),
+            (RESULT_FAILED, Some("engine_protocol_mismatch: protocol 2 vs 3"), Some("engine_protocol_mismatch"))
+        );
+        assert!(row.finished_at.is_some());
+        let bad: Vec<String> = bad_endings_since(&c, "kim", 0).unwrap().into_iter().map(|d| d.id).collect();
+        assert_eq!(bad.len(), 2, "failed and exited, never live: {bad:?}");
+        assert!(bad.contains(&a) && bad.contains(&b));
+        assert!(bad_endings_since(&c, "kim", super::super::now() + 10).unwrap().is_empty(), "outside the window");
+        assert_eq!(last_deployment(&c, "kim").unwrap().map(|d| d.id), Some(live));
     }
 }

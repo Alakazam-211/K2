@@ -1513,6 +1513,12 @@ fn run_migrations_through(conn: &Connection, last: Option<&str>) -> Result<()> {
         // one-row `job_settings` (pause all). Additive; empty until a job is
         // added. The store is `crate::jobs`.
         ("0220_jobs", include_str!("../../drizzle_sql/0220_jobs.sql")),
+        // 0221 — App runtime update continuity
+        // (prd-app-runtime-update-continuity-v1 §7, 0.46.4): the structured
+        // failure code S1 reads (`deployments.error_code`) and S2/S3's
+        // re-host policy, warm instance, fingerprint and readiness columns.
+        // Additive; after 0220 (`k2 job`).
+        ("0221_app_rehost", include_str!("../../drizzle_sql/0221_app_rehost.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2176,7 +2182,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0220_jobs",
+            last_name, "0221_app_rehost",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2237,6 +2243,7 @@ mod tests {
                 "0218_permission_cards",
                 "0219_garden_access",
                 "0220_jobs",
+                "0221_app_rehost",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2304,6 +2311,8 @@ mod tests {
                 "0219_garden_access",
                 // 0.46.4: `k2 job` (daemon-run scheduled jobs).
                 "0220_jobs",
+                // 0.46.4: App runtime update continuity.
+                "0221_app_rehost",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -2429,6 +2438,62 @@ mod tests {
         let once: i64 =
             conn.query_row("SELECT COUNT(*) FROM _migrations WHERE name = '0220_jobs'", [], |r| r.get(0)).unwrap();
         assert_eq!(once, 1, "0220 is recorded once");
+    }
+
+    /// 0221 (prd-app-runtime-update-continuity-v1 §7, T12) on a database
+    /// that stops at 0220: an existing App keeps its row and gets
+    /// `rehost_policy = 'auto'`; an existing deployment keeps its data and
+    /// gets NULL `error_code` / `runtime_json` (NULL fingerprint = due, R10);
+    /// the policy CHECK refuses an unknown value; a second run is a no-op.
+    #[test]
+    fn a_pre_0221_database_upgrades_through_0221_app_rehost() {
+        let conn = fresh_memory();
+        run_migrations_through(&conn, Some("0220_jobs")).unwrap();
+        conn.execute(
+            "INSERT INTO apps (app_id, service_id, owner_workspace, isolation, front_port, state, created_by, created_at, updated_at) \
+             VALUES ('hearth', 'svc-hearth', 'p-1', 'container', 41000, 'running', 'owner', 1, 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO deployments (id, app_id, kind, actor, result, error, started_at) \
+             VALUES ('d-000000000001', 'hearth', 'restart', 'system', 'failed', 'engine_unavailable: protocol 2 vs 3', 5)",
+            [],
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+        let (policy, window, warm, until): (String, Option<String>, Option<String>, Option<i64>) = conn
+            .query_row(
+                "SELECT rehost_policy, rehost_window, warm_deployment, warm_until FROM apps WHERE app_id = 'hearth'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!((policy.as_str(), window, warm, until), ("auto", None, None, None));
+        let (err, code, fp, ready): (String, Option<String>, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT error, error_code, runtime_json, ready_json FROM deployments WHERE id = 'd-000000000001'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!((err.as_str(), code, fp, ready), ("engine_unavailable: protocol 2 vs 3", None, None, None));
+        let bad = conn.execute("UPDATE apps SET rehost_policy = 'sometimes' WHERE app_id = 'hearth'", []);
+        assert!(bad.is_err(), "the policy CHECK refuses an unknown value");
+        // Rosson Q4 + Q16: an App that can't run two copies pauses briefly
+        // and updates by default; `defer` is the per-App opt-out.
+        let no_overlap: String =
+            conn.query_row("SELECT rehost_when_no_overlap FROM apps WHERE app_id = 'hearth'", [], |r| r.get(0)).unwrap();
+        assert_eq!(no_overlap, "pause");
+        assert!(conn.execute("UPDATE apps SET rehost_when_no_overlap = 'later' WHERE app_id = 'hearth'", []).is_err());
+        conn.execute("UPDATE apps SET rehost_when_no_overlap = 'defer' WHERE app_id = 'hearth'", []).unwrap();
+        conn.execute("UPDATE apps SET rehost_policy = 'manual' WHERE app_id = 'hearth'", []).unwrap();
+        run_migrations(&conn).unwrap();
+        let once: i64 = conn
+            .query_row("SELECT COUNT(*) FROM _migrations WHERE name = '0221_app_rehost'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(once, 1, "0221 is recorded once");
     }
 
     /// A 0.46.0 database (last migration 0181) with a registered phone
@@ -3143,7 +3208,11 @@ mod tests {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
             conn.execute("DELETE FROM _migrations WHERE name = '0164_garden_data'", []).unwrap();
-            // 0220 (`k2 job`) is the newest: its record goes (its tables
+            // 0221 (App re-host, 0.46.4) is the newest: its record goes (its
+            // columns go with `apps` and `deployments`, dropped below and
+            // made again by 0165, so it re-adds them).
+            conn.execute("DELETE FROM _migrations WHERE name = '0221_app_rehost'", []).unwrap();
+            // 0220 (`k2 job`) came before it: its record goes (its tables
             // and index are all IF NOT EXISTS).
             conn.execute("DELETE FROM _migrations WHERE name = '0220_jobs'", []).unwrap();
             // 0219 (Garden access) came before it: its record goes (its

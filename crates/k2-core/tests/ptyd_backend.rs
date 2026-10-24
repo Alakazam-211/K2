@@ -231,48 +231,103 @@ fn resize_reaches_the_child() {
     s.kill();
 }
 
-/// 0.46.2 has no adoption: a new daemon's first owner connection ends the
-/// sessions a previous daemon left in ptyd (today's restart semantics).
+/// S3 (PRD §7.7, §7.9, P34, P75): a new daemon ADOPTS the session a
+/// previous daemon left in ptyd. B0 lists it without ending it; `adopt`
+/// rebuilds the Term from the ring with the same pid; the terminal query
+/// in the replayed bytes is NOT answered (zero bytes reach the child);
+/// live input works after the switch; `detach` lets go without ending it.
 #[test]
-fn first_owner_connection_ends_sessions_left_by_a_previous_daemon() {
+fn a_new_daemon_adopts_a_session_left_by_a_previous_daemon() {
     let _g = setup();
     use k2_ptyd::proto::{Reply, Request};
     let home2 = PathBuf::from(format!("/tmp/k2pb2-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&home2);
     std::fs::create_dir_all(&home2).unwrap();
+    let got = home2.join("stdin-bytes");
     k2_ptyd::launch::spawn_detached(&ptyd_bin(), &home2, &[]).expect("launch ptyd for home2");
     let paths = k2_ptyd::paths::Paths::from_home(&home2);
-    let mut old = k2_ptyd::client::Client::connect_owner(&paths, "previous-daemon", true).expect("old owner");
+    let t = Instant::now();
+    let mut old = loop {
+        match k2_ptyd::client::Client::connect_owner(&paths, "previous-daemon", true) {
+            Ok(c) => break c,
+            Err(e) => {
+                assert!(t.elapsed() < Duration::from_secs(5), "old owner: {e}");
+                std::thread::sleep(Duration::from_millis(25));
+            }
+        }
+    };
+    let sid = k2_core::session::SessionId::new().to_string();
+    // The child prints, asks for the cursor position (a query the previous
+    // daemon never answered: it had no Term), then records the first 6
+    // bytes it receives on stdin.
+    let script = format!("stty raw -echo; printf 'before-restart\\033[6n'; dd bs=1 count=6 of='{}' 2>/dev/null; sleep 60", got.display());
     let pid = match old
         .request(Request::Spawn {
-            sid: "left-behind".into(),
-            argv: vec!["/bin/sleep".into(), "60".into()],
+            sid: sid.clone(),
+            argv: vec!["/bin/sh".into(), "-c".into(), script],
             env: vec![("PATH".into(), "/usr/bin:/bin".into())],
             cwd: None,
             cols: 80,
             rows: 24,
             ring_bytes: None,
-            meta: serde_json::Value::Null,
+            meta: serde_json::json!({"session_id": sid, "key": "adopt-test", "program": "/bin/sh", "durable_args": ["-c", "x"], "label": "Adopted", "label_source": "Locked"}),
         })
         .unwrap()
     {
         Reply::Spawned { pid, .. } => pid,
         other => panic!("{other:?}"),
     };
-    drop(old); // the previous daemon exits; its agent keeps running in ptyd
-    assert!(alive(pid));
-    let fresh = k2_core::terminal::ptyd::client::Ptyd::for_home(&home2);
-    let owner = fresh.owner().expect("new daemon connects");
+    // Wait until the output is in ptyd's ring, then the old daemon exits.
     let t = Instant::now();
-    while alive(pid) {
-        assert!(t.elapsed() < Duration::from_secs(5), "leftover session not ended");
+    loop {
+        let Reply::Sessions { sessions } = old.request(Request::List).unwrap() else { panic!() };
+        if sessions.iter().any(|s| s.sid == sid && s.ring_end >= 18) {
+            break;
+        }
+        assert!(t.elapsed() < Duration::from_secs(5), "output never reached the ring");
         std::thread::sleep(Duration::from_millis(20));
     }
-    match owner.request(Request::List).unwrap() {
-        Reply::Sessions { sessions } => assert!(sessions.is_empty(), "{sessions:?}"),
-        other => panic!("{other:?}"),
-    }
+    drop(old);
+    assert!(alive(pid));
+
+    // B0: list, don't end.
+    let fresh = k2_core::terminal::ptyd::client::Ptyd::for_home(&home2);
+    let scan = k2_core::terminal::ptyd::adopt::scan_with(&fresh);
+    assert_eq!(scan.skipped, None);
+    let info = scan.running.iter().find(|s| s.sid == sid).expect("B0 lists the surviving session").clone();
+    assert_eq!(info.pid, pid);
+    assert_eq!(info.meta["key"], "adopt-test");
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(alive(pid), "B0 must never end a surviving session");
+
+    // B1: adopt.
+    let owner = fresh.current_owner().expect("B0 left an owner connection");
+    let s = k2_core::terminal::daemon_pty::DaemonPtySession::adopt(&info, owner, Duration::from_secs(5)).expect("adopt");
+    assert_eq!(s.child_pid(), Some(pid), "same agent process");
+    assert_eq!(s.session_id.to_string(), sid, "same SessionId");
+    assert_eq!(s.label(), "Adopted");
+    assert_eq!(s.backend_name(), "ptyd");
+    assert!(s.visible_text_rows().iter().any(|r| r.contains("before-restart")), "Term rebuilt by replay: {:?}", s.visible_text_rows());
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(std::fs::read(&got).unwrap_or_default(), Vec::<u8>::new(), "P75: the replayed query was not answered");
+    // Live input after the switch reaches the child (and nothing preceded it).
+    s.write(b"abcdef".to_vec());
+    assert_eq!(wait_file(&got, Duration::from_secs(5)), "abcdef");
+
+    // KeepAgents: detach lets go; kill/Drop leave the agent running.
+    assert!(s.detach());
+    s.kill();
+    drop(s);
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(alive(pid), "a detached session belongs to the next daemon");
+
+    let owner = fresh.current_owner().expect("owner");
     assert_eq!(owner.request(Request::Shutdown { end_sessions: true }).unwrap(), Reply::Ok);
+    let t = Instant::now();
+    while alive(pid) {
+        assert!(t.elapsed() < Duration::from_secs(5), "shutdown{{end_sessions}} ends it");
+        std::thread::sleep(Duration::from_millis(20));
+    }
     let _ = std::fs::remove_dir_all(&home2);
 }
 

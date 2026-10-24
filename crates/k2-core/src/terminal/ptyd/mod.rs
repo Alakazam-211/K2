@@ -1,9 +1,9 @@
 //! k2-ptyd backend for `DaemonPtySession` (PRD `prd-k2-ptyd-v1`, slice S2).
 //!
 //! Agent PTYs can be hosted by the separate `k2-ptyd` process instead of
-//! the daemon, so a later slice (S3) can adopt them across daemon restarts.
-//! In 0.46.2 this is **plumbing behind a dev-only switch**: `K2_PTYD=1`
-//! makes new `survive` sessions run under ptyd; they don't survive yet.
+//! the daemon, so a restarted daemon adopts them (S3, [`adopt`]): the
+//! agent keeps running and its screen is rebuilt by replay. `K2_PTYD=1`
+//! makes new `survive` sessions run under ptyd.
 //!
 //! With the switch off, [`select_backend`] returns `InProcess` before it
 //! evaluates anything else: ptyd is never contacted, launched or even
@@ -18,6 +18,8 @@
 pub mod shadow;
 
 #[cfg(unix)]
+pub mod adopt;
+#[cfg(unix)]
 pub mod client;
 #[cfg(unix)]
 pub mod env;
@@ -25,6 +27,16 @@ pub mod env;
 pub mod io;
 
 use std::sync::Mutex;
+
+/// The name ptyd holds a session's per-cell `K2_HOOK_SOCK` listener under
+/// (P44): the socket outlives the daemon, and a restarted daemon takes it
+/// back instead of rebinding.
+pub fn cell_listener_name(sid: &str) -> String {
+    format!("cell:{sid}")
+}
+
+/// The name ptyd holds the daemon's main TCP listener under (P50).
+pub const MAIN_LISTENER_NAME: &str = "main";
 
 /// The 0.46.2 switch (PRD P67). Dev-only: only the env var is honoured; the
 /// `terminal.ptyd` app setting arrives (hidden → opt-in) in 0.46.3.

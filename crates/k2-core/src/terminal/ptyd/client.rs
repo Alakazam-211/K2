@@ -9,6 +9,7 @@
 
 use std::collections::HashMap;
 use std::io;
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -33,11 +34,18 @@ pub enum SessionEvent {
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const CONNECT_WAIT: Duration = Duration::from_secs(5);
 
+/// A request waiting for its response. `wants_fd`: the reply carries an
+/// fd (SCM_RIGHTS) that the reader thread hands over with it.
+struct Pending {
+    tx: mpsc::SyncSender<(Reply, Option<OwnedFd>)>,
+    wants_fd: bool,
+}
+
 /// The live owner connection.
 pub struct Owner {
     writer: Mutex<UnixStream>,
     next_id: AtomicU64,
-    pending: Mutex<HashMap<u64, mpsc::SyncSender<Reply>>>,
+    pending: Mutex<HashMap<u64, Pending>>,
     watchers: Mutex<HashMap<String, mpsc::Sender<SessionEvent>>>,
     dead: AtomicBool,
     key: [u8; auth::KEY_LEN],
@@ -82,17 +90,37 @@ impl Owner {
 
     /// Send a request and wait for its response.
     pub fn request(&self, body: Request) -> io::Result<Reply> {
+        self.request_inner(body, None, false).map(|(r, _)| r)
+    }
+
+    /// Send a request whose reply carries an fd (`take_fd`,
+    /// `hold_unix_listener`). `Ok((reply, None))` when ptyd answered
+    /// without one (an error reply).
+    pub fn request_fd(&self, body: Request) -> io::Result<(Reply, Option<OwnedFd>)> {
+        self.request_inner(body, None, true)
+    }
+
+    /// Send a request with an fd attached (`hold_fd`).
+    pub fn request_with_fd(&self, body: Request, fd: &impl AsRawFd) -> io::Result<Reply> {
+        self.request_inner(body, Some(fd.as_raw_fd()), false).map(|(r, _)| r)
+    }
+
+    fn request_inner(&self, body: Request, pass: Option<std::os::fd::RawFd>, wants_fd: bool) -> io::Result<(Reply, Option<OwnedFd>)> {
         if self.is_dead() {
             return Err(io::Error::new(io::ErrorKind::NotConnected, "ptyd owner connection lost"));
         }
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = mpsc::sync_channel(1);
-        lock(&self.pending).insert(id, tx);
+        lock(&self.pending).insert(id, Pending { tx, wants_fd });
         let bytes = proto::encode(&Frame::new(Some(id), body))?;
         {
             use std::io::Write;
             let mut w = lock(&self.writer);
-            if let Err(e) = w.write_all(&bytes) {
+            let sent = match pass {
+                Some(fd) => k2_ptyd::sys::send_with_fd(w.as_raw_fd(), &bytes, Some(fd)).and_then(|n| w.write_all(&bytes[n..])),
+                None => w.write_all(&bytes),
+            };
+            if let Err(e) = sent {
                 lock(&self.pending).remove(&id);
                 return Err(e);
             }
@@ -104,6 +132,44 @@ impl Owner {
                 Err(io::Error::new(io::ErrorKind::TimedOut, "ptyd did not answer"))
             }
         }
+    }
+
+    /// `hold_unix_listener`: ptyd binds (or re-hands) a listening Unix
+    /// socket that outlives the daemon (P44). Returns our dup of it.
+    pub fn hold_unix_listener(&self, name: &str, path: &Path, mode: u32) -> io::Result<std::os::unix::net::UnixListener> {
+        let req = Request::HoldUnixListener { name: name.into(), path: path.to_string_lossy().into_owned(), mode, owner_uid: None };
+        match self.request_fd(req)? {
+            (Reply::Ok, Some(fd)) => Ok(std::os::unix::net::UnixListener::from(fd)),
+            (Reply::Ok, None) => Err(io::Error::other("hold_unix_listener: no fd in the reply")),
+            (Reply::Error { code, detail }, _) => Err(io::Error::other(format!("hold_unix_listener: {code} {detail}"))),
+            (other, _) => Err(io::Error::other(format!("hold_unix_listener: unexpected {other:?}"))),
+        }
+    }
+
+    /// `take_fd`: a dup of a held fd, `Ok(None)` when ptyd holds nothing
+    /// under `name`.
+    pub fn take_fd(&self, name: &str) -> io::Result<Option<OwnedFd>> {
+        match self.request_fd(Request::TakeFd { name: name.into() })? {
+            (Reply::Ok, Some(fd)) => Ok(Some(fd)),
+            (Reply::Ok, None) => Err(io::Error::other("take_fd: no fd in the reply")),
+            (Reply::Error { code, .. }, _) if code == "unknown" => Ok(None),
+            (Reply::Error { code, detail }, _) => Err(io::Error::other(format!("take_fd: {code} {detail}"))),
+            (other, _) => Err(io::Error::other(format!("take_fd: unexpected {other:?}"))),
+        }
+    }
+
+    /// `hold_fd`: ptyd keeps a copy of `fd` under `name` (replacing any).
+    pub fn hold_fd(&self, name: &str, fd: &impl AsRawFd) -> io::Result<()> {
+        match self.request_with_fd(Request::HoldFd { name: name.into() }, fd)? {
+            Reply::Ok => Ok(()),
+            other => Err(io::Error::other(format!("hold_fd: {other:?}"))),
+        }
+    }
+
+    /// `release_fd`: ptyd closes its copy (and unlinks a held listener's
+    /// path). Fire-and-forget: an unknown name is fine.
+    pub fn release_fd(&self, name: &str) {
+        self.send_nowait(Request::ReleaseFd { name: name.into() });
     }
 
     /// Fire-and-forget request (the response is discarded by the reader).
@@ -173,8 +239,11 @@ fn reader_loop(mut conn: Conn, owner: std::sync::Weak<Owner>) {
         };
         match (frame.id, frame.body) {
             (Some(id), body) => {
-                if let Some(tx) = lock(&o.pending).remove(&id) {
-                    let _ = tx.send(body);
+                if let Some(p) = lock(&o.pending).remove(&id) {
+                    // An fd rides the same sendmsg as its reply, so it is
+                    // queued by the time the reply decodes.
+                    let fd = if p.wants_fd && matches!(body, Reply::Ok) { conn.take_fd() } else { None };
+                    let _ = p.tx.send((body, fd));
                 }
             }
             (None, Reply::Exited { sid, code, signal, .. }) => {
@@ -217,22 +286,16 @@ pub struct Ptyd {
     swept: AtomicBool,
 }
 
-/// 0.46.2 has no adoption (that is S3), so sessions a PREVIOUS daemon left
-/// in ptyd can't be taken over: end them, keeping today's semantics (a
-/// restart ends agents) and avoiding a second `--resume` of the same
-/// conversation. Returns how many were ended.
-pub fn end_leftover_sessions(owner: &Owner) -> usize {
-    let sessions = match owner.request(Request::List) {
-        Ok(Reply::Sessions { sessions }) => sessions,
-        _ => return 0,
-    };
+/// Kill (and ack) every session in `sids`. For sessions that can't be
+/// adopted (S3: meta without a session key, e.g. spawned by 0.46.3, which
+/// had no adoption) and for an explicit end. Returns how many ran.
+pub fn end_sessions(owner: &Owner, sids: &[String]) -> usize {
     let mut ended = 0;
-    for s in sessions {
-        if matches!(s.state, proto::SessionState::Running) {
-            let _ = owner.request(Request::Kill { sid: s.sid.clone(), grace_ms: Some(100) });
+    for sid in sids {
+        if matches!(owner.request(Request::Kill { sid: sid.clone(), grace_ms: Some(100) }), Ok(Reply::Ok)) {
             ended += 1;
         }
-        let _ = owner.request(Request::AckExit { sid: s.sid });
+        let _ = owner.request(Request::AckExit { sid: sid.clone() });
     }
     ended
 }
@@ -271,6 +334,26 @@ impl Ptyd {
 
     /// A live owner connection, connecting (and launching ptyd) if needed.
     pub fn owner(&self) -> Result<Arc<Owner>, String> {
+        self.owner_inner(true)
+    }
+
+    /// B0 (PRD §7.9): connect to a ptyd that is ALREADY running, never
+    /// launch one. `Err("no_ptyd")` when no control socket exists (the
+    /// common case: switch off, or nothing survived) — that check is a
+    /// single `stat` and logs nothing.
+    pub fn connect_existing(&self) -> Result<Arc<Owner>, String> {
+        if !self.paths.client_sock().exists() {
+            return Err("no_ptyd".into());
+        }
+        self.owner_inner(false)
+    }
+
+    /// The current owner connection, if one is live (never connects).
+    pub fn current_owner(&self) -> Option<Arc<Owner>> {
+        lock(&self.owner).as_ref().filter(|o| !o.is_dead()).cloned()
+    }
+
+    fn owner_inner(&self, may_launch: bool) -> Result<Arc<Owner>, String> {
         let mut g = lock(&self.owner);
         if let Some(o) = g.as_ref() {
             if !o.is_dead() {
@@ -279,6 +362,7 @@ impl Ptyd {
         }
         let o = match Owner::connect(&self.paths, client_version()) {
             Ok(o) => o,
+            Err(first) if !may_launch => return Err(first),
             Err(first) => {
                 let exe = run_location(&self.paths.home)?;
                 k2_ptyd::launch::spawn_detached(&exe, &self.paths.home, &[]).map_err(|e| {
@@ -297,10 +381,8 @@ impl Ptyd {
         };
         crate::log_debug!("[ptyd] owner connected (ptyd v{}, boot {})", o.ptyd_version, &o.boot_id[..8.min(o.boot_id.len())]);
         if !self.swept.swap(true, Ordering::AcqRel) {
-            let n = end_leftover_sessions(&o);
-            if n > 0 {
-                crate::log_debug!("[ptyd] ended {} session(s) left by a previous daemon (no adoption before S3)", n);
-            }
+            // Sessions a previous daemon left in ptyd are NOT touched here:
+            // boot's B0/B1 (`terminal::ptyd::adopt`) lists and adopts them.
             // P3: prune old versioned copies, keeping the current one and
             // the running ptyd's image.
             let mut keep = Vec::new();

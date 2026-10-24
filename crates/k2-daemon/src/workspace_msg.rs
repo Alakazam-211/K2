@@ -3498,6 +3498,7 @@ mod tests {
             cell_uid: None,
             overlay: None,
             survive: false,
+            ptyd_meta: None,
         };
         let s = DaemonPtySession::spawn(cfg).expect("spawn cat");
         session_lookup::LiveSession(s)

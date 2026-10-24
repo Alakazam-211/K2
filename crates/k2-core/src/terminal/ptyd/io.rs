@@ -74,9 +74,23 @@ pub struct PtydIo {
     sender: IoSender,
     join: Mutex<Option<JoinHandle<IoEnd>>>,
     reader_pos: Arc<AtomicU64>,
+    /// Adoption: the live offset (`attached.end`); 0 for a fresh spawn.
+    replay_until: u64,
 }
 
 impl PtydIo {
+    /// The reader passed the adoption replay (or there was none, or the
+    /// loop already ended).
+    pub fn replayed(&self) -> bool {
+        if self.reader_pos() >= self.replay_until {
+            return true;
+        }
+        match self.join.lock() {
+            Ok(g) => g.as_ref().is_none_or(|h| h.is_finished()),
+            Err(p) => p.into_inner().as_ref().is_none_or(|h| h.is_finished()),
+        }
+    }
+
     pub fn sender(&self) -> IoSender {
         self.sender.clone()
     }
@@ -123,6 +137,15 @@ fn pipe() -> io::Result<(OwnedFd, OwnedFd)> {
     Ok(unsafe { (OwnedFd::from_raw_fd(p[0]), OwnedFd::from_raw_fd(p[1])) })
 }
 
+/// Adoption replay (PRD §7.7, P75): every stream byte below `until` was
+/// already answered by the previous daemon, so it goes through the Term
+/// with query replies muted. `on_live` runs exactly once, when the reader
+/// reaches `until` (before the first live byte is parsed); it unmutes.
+pub struct Replay {
+    pub until: u64,
+    pub on_live: Box<dyn FnOnce() + Send>,
+}
+
 /// Start the loop for one session. `install_sink` receives the input
 /// sender BEFORE the thread starts, so the terminal-query reply sink exists
 /// before the first byte is parsed (same guarantee as the in-process path).
@@ -138,12 +161,32 @@ pub fn start<L>(
 where
     L: EventListener + Send + 'static,
 {
+    start_with_replay(sid, stream, term, listener, owner, events, install_sink, None)
+}
+
+/// [`start`] for an adopted session: bytes below `replay.until` are a
+/// muted replay (P75).
+#[allow(clippy::too_many_arguments)]
+pub fn start_with_replay<L>(
+    sid: String,
+    stream: DataStream,
+    term: Arc<FairMutex<Term<L>>>,
+    listener: L,
+    owner: Arc<Owner>,
+    events: mpsc::Receiver<SessionEvent>,
+    install_sink: impl FnOnce(IoSender),
+    replay: Option<Replay>,
+) -> io::Result<PtydIo>
+where
+    L: EventListener + Send + 'static,
+{
     let (wake_r, wake_w) = pipe()?;
     let (tx, rx) = mpsc::channel();
     let sender = IoSender { tx, wake: Arc::new(wake_w) };
     install_sink(sender.clone());
     let reader_pos = Arc::new(AtomicU64::new(stream.start));
     let pos = Arc::clone(&reader_pos);
+    let replay_until = replay.as_ref().map(|r| r.until).unwrap_or(0);
     let join = std::thread::Builder::new().name(format!("ptyd-io {sid}")).spawn(move || {
         let mut l = Loop {
             sid,
@@ -157,10 +200,11 @@ where
             shadow: Shadow::at(stream.start),
             wq: VecDeque::new(),
             pos,
+            replay,
         };
         l.run(stream)
     })?;
-    Ok(PtydIo { sender, join: Mutex::new(Some(join)), reader_pos })
+    Ok(PtydIo { sender, join: Mutex::new(Some(join)), reader_pos, replay_until })
 }
 
 struct Loop<L: EventListener> {
@@ -175,6 +219,7 @@ struct Loop<L: EventListener> {
     shadow: Shadow,
     wq: VecDeque<u8>,
     pos: Arc<AtomicU64>,
+    replay: Option<Replay>,
 }
 
 enum Step {
@@ -191,6 +236,10 @@ impl<L: EventListener> Loop<L> {
         let (pending, mut sock) = stream.into_parts();
         if sock.set_nonblocking(true).is_err() {
             return self.finish_exit(SessionEvent::OwnerLost);
+        }
+        // Nothing to replay (empty backlog): live from the first byte.
+        if self.replay.as_ref().is_some_and(|r| r.until <= self.shadow.pos()) {
+            self.go_live();
         }
         if !pending.is_empty() {
             self.process(&pending);
@@ -323,12 +372,40 @@ impl<L: EventListener> Loop<L> {
     }
 
     fn feed(&mut self, bytes: &[u8]) {
+        if let Some(until) = self.replay.as_ref().map(|r| r.until) {
+            let pos = self.shadow.pos();
+            if pos.saturating_add(bytes.len() as u64) >= until {
+                // The replay ends inside (or exactly at the end of) this
+                // chunk: muted part, unmute, live part (P75: muting ends
+                // exactly at the live offset).
+                let cut = (until.saturating_sub(pos) as usize).min(bytes.len());
+                self.feed_raw(&bytes[..cut]);
+                self.go_live();
+                if cut < bytes.len() {
+                    self.feed_raw(&bytes[cut..]);
+                }
+                return;
+            }
+        }
+        self.feed_raw(bytes);
+    }
+
+    fn feed_raw(&mut self, bytes: &[u8]) {
+        if bytes.is_empty() {
+            return;
+        }
         {
             let mut t = self.term.lock();
             self.parser.advance(&mut *t, bytes);
         }
         self.shadow.feed(bytes);
         self.pos.store(self.shadow.pos(), Ordering::Release);
+    }
+
+    fn go_live(&mut self) {
+        if let Some(r) = self.replay.take() {
+            (r.on_live)();
+        }
     }
 
     fn process(&mut self, bytes: &[u8]) {
@@ -345,6 +422,7 @@ impl<L: EventListener> Loop<L> {
     }
 
     fn finish_stop(&mut self) -> IoEnd {
+        self.go_live();
         let mut t = self.term.lock();
         self.parser.stop_sync(&mut *t);
         drop(t);
@@ -353,6 +431,7 @@ impl<L: EventListener> Loop<L> {
 
     fn finish_exit(&mut self, ev: SessionEvent) -> IoEnd {
         use std::os::unix::process::ExitStatusExt;
+        self.go_live();
         let status = match ev {
             SessionEvent::Exited { code: Some(c), .. } => Some(std::process::ExitStatus::from_raw((c & 0xff) << 8)),
             SessionEvent::Exited { signal: Some(s), .. } => Some(std::process::ExitStatus::from_raw(s & 0x7f)),
@@ -369,9 +448,12 @@ impl<L: EventListener> Loop<L> {
         }
         self.term.lock().exit();
         self.listener.send_event(Event::Wakeup);
-        // The exit is consumed: drop ptyd's record (P25/P32).
+        // The exit is consumed: drop ptyd's record (P25/P32) and the cell
+        // listener ptyd held for it (P44; an unknown name is fine).
         let _ = self.owner.request(Request::AckExit { sid: self.sid.clone() });
+        self.owner.release_fd(&super::cell_listener_name(&self.sid));
         self.owner.unwatch(&self.sid);
+        super::adopt::release_conversations_of(&self.sid);
         IoEnd { reader_pos: self.shadow.pos(), safe_offset: self.shadow.partial_start(), exited: true }
     }
 }

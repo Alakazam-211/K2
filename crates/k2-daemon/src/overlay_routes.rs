@@ -5100,6 +5100,7 @@ mod tests {
             cell_uid: None,
             overlay: None,
             survive: false,
+            ptyd_meta: None,
         })
         .expect("spawn cat");
         crate::v2_session_map::register(agent_name.clone(), session.clone());

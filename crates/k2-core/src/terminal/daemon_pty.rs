@@ -403,6 +403,13 @@ pub struct DaemonPtyConfig {
     /// session stays in-process unless the switch is on (0.46.2: dev-only
     /// `K2_PTYD=1`) and ptyd is usable — see `terminal::ptyd`.
     pub survive: bool,
+    /// k2-ptyd S3 (PRD §7.5 meta, P28): identity a restarted daemon needs
+    /// to adopt this session — the `v2_session_map` key, workspace uuid,
+    /// conversation id, `canonical`, `hb_terminal`, `llm_slot`,
+    /// `secrets_dir`, `spawn_site`. Merged into the ptyd meta at spawn;
+    /// ignored for in-process sessions. Identity only: never env values,
+    /// tokens or keys (P72).
+    pub ptyd_meta: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 impl Default for DaemonPtyConfig {
@@ -423,9 +430,30 @@ impl Default for DaemonPtyConfig {
             cell_uid: None,
             overlay: None,
             survive: false,
+            ptyd_meta: None,
         }
     }
 }
+
+/// The identity half of a ptyd session (spawn or adoption).
+#[cfg(unix)]
+struct PtydParts {
+    session_id: SessionId,
+    sid: String,
+    pid: i32,
+    cwd: Option<PathBuf>,
+    program: Option<String>,
+    args: Vec<String>,
+    label: String,
+    label_source: LabelSource,
+    cols: u16,
+    rows: u16,
+    meta: serde_json::Value,
+}
+
+/// P33: the error code a spawn refused by the `--resume` chokepoint
+/// carries (the conversation is running in an adopted session).
+pub const DUP_RESUME_REFUSED: &str = "dup_resume_refused";
 
 /// How a session's PTY bytes move. `Alac` is alacritty's own `EventLoop`
 /// (every session before k2-ptyd, and every session with the switch off).
@@ -445,6 +473,10 @@ struct PtydSession {
     /// The meta last sent to ptyd (P28); label and pin fields are kept
     /// current, the rest is fixed at spawn.
     meta: Mutex<serde_json::Value>,
+    /// S3: this daemon let go of the session (§7.6 `KeepAgents`, hand-off
+    /// quiesce): the IO loop is stopped and the agent belongs to the next
+    /// daemon. `kill()` and `Drop` must never end it from here.
+    detached: std::sync::atomic::AtomicBool,
 }
 
 /// Trailing-debounce window for [`DaemonPtySession::request_resize`].
@@ -775,6 +807,25 @@ impl DaemonPtySession {
         // no PTY — the successor resumes the sessions (two would double-
         // resume one conversation on the same tree).
         crate::handoff_state::guard().map_err(io::Error::other)?;
+        // k2-ptyd P33 (V9): the ONE `--resume` duplicate chokepoint. A
+        // conversation an adopted (restart-surviving) session still runs
+        // must not be resumed a second time by any path — restart
+        // recovery, canonical resolve, refresh, ensure-pinned-chat,
+        // heartbeat fires. The map is empty unless sessions were adopted,
+        // so with the switch off this is a lookup in an empty map.
+        #[cfg(unix)]
+        if let Err(holder) = crate::terminal::ptyd::adopt::check_resume(cfg.program.as_deref(), &cfg.args) {
+            log_debug!(
+                "[daemon_pty] {} session={} — the conversation is held by adopted session {}",
+                DUP_RESUME_REFUSED,
+                cfg.session_id,
+                holder
+            );
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("{DUP_RESUME_REFUSED}: the conversation is running in live session {holder}"),
+            ));
+        }
         let cols = cfg.cols.max(1);
         let rows = cfg.rows.max(1);
 
@@ -1197,7 +1248,7 @@ impl DaemonPtySession {
     /// exactly as on the in-process path.
     #[cfg(unix)]
     fn spawn_ptyd(cfg: DaemonPtyConfig, req: SpawnRequest, store_args: Vec<String>) -> Result<Arc<Self>, io::Error> {
-        use crate::terminal::ptyd::{client, env as penv, io as pio};
+        use crate::terminal::ptyd::{client, env as penv};
         use k2_ptyd::proto::{Reply, Request};
 
         let owner = client::global().owner().map_err(io::Error::other)?;
@@ -1212,7 +1263,7 @@ impl DaemonPtySession {
         let cwd = req.cwd.as_ref().filter(|p| p.is_dir()).map(|p| p.to_string_lossy().into_owned());
         let sid = cfg.session_id.to_string();
         // P28/P72: identity only — never env values, tokens or keys.
-        let meta = serde_json::json!({
+        let mut meta = serde_json::json!({
             "session_id": sid,
             "cwd": cfg.cwd.as_ref().map(|p| p.to_string_lossy().into_owned()),
             "program": cfg.program,
@@ -1222,6 +1273,13 @@ impl DaemonPtySession {
             "sandbox": "passthrough",
             "spawned_at": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
         });
+        // S3: the daemon's identity fields (key, workspace, conversation…)
+        // so a restarted daemon can adopt the session. The fields above win.
+        if let (Some(extra), Some(obj)) = (cfg.ptyd_meta.as_ref(), meta.as_object_mut()) {
+            for (k, v) in extra {
+                obj.entry(k.clone()).or_insert_with(|| v.clone());
+            }
+        }
         let events = owner.watch(&sid);
         let pid = match owner.request(Request::Spawn {
             sid: sid.clone(),
@@ -1266,23 +1324,73 @@ impl DaemonPtySession {
             }
         };
 
+        log_debug!("[daemon_pty] ptyd session={} pid={}", cfg.session_id, pid);
+        Self::from_ptyd_stream(
+            PtydParts {
+                session_id: cfg.session_id,
+                sid,
+                pid,
+                cwd: cfg.cwd,
+                program: cfg.program,
+                args: store_args,
+                label: cfg.label,
+                label_source: cfg.label_source,
+                cols: cfg.cols,
+                rows: cfg.rows,
+                meta,
+            },
+            owner,
+            events,
+            stream,
+            false,
+        )
+    }
+
+    /// Build a ptyd-backed session around an attached data stream: the
+    /// Term, listener, broadcast channels and K2's IO loop. Shared by a
+    /// fresh spawn and an adoption (`replay`: bytes below `stream.end` are
+    /// muted, P75, and the listener starts muted).
+    #[cfg(unix)]
+    fn from_ptyd_stream(
+        parts: PtydParts,
+        owner: Arc<crate::terminal::ptyd::client::Owner>,
+        events: std::sync::mpsc::Receiver<crate::terminal::ptyd::client::SessionEvent>,
+        stream: k2_ptyd::client::DataStream,
+        replay: bool,
+    ) -> Result<Arc<Self>, io::Error> {
+        use crate::terminal::ptyd::io as pio;
         let (events_tx, _initial_rx) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
         drop(_initial_rx);
         let query_reply = Arc::new(std::sync::OnceLock::new());
         let listener = DaemonEventListener { tx: events_tx.clone(), reply_tx: Arc::clone(&query_reply), muted: Default::default() };
         let term_config = TermConfig { scrolling_history: SCROLLBACK_CAP, ..TermConfig::default() };
-        let term_size = TermSize { cols: cfg.cols.max(1) as usize, rows: cfg.rows.max(1) as usize };
+        let term_size = TermSize { cols: parts.cols.max(1) as usize, rows: parts.rows.max(1) as usize };
         let term = Arc::new(FairMutex::new(Term::new(term_config, &term_size, listener.clone())));
 
-        let io = pio::start(sid.clone(), stream, Arc::clone(&term), listener, Arc::clone(&owner), events, |sender| {
-            assert!(
-                query_reply
-                    .set(Box::new(move |text: String| sender.send(pio::IoMsg::Input(text.into_bytes().into()))) as QueryReplySink)
-                    .is_ok(),
-                "query-reply sink is set exactly once, here"
-            );
-        })?;
-        log_debug!("[daemon_pty] ptyd session={} pid={}", cfg.session_id, pid);
+        let replay = if replay {
+            listener.set_replies_muted(true);
+            let l = listener.clone();
+            Some(pio::Replay { until: stream.end, on_live: Box::new(move || l.set_replies_muted(false)) })
+        } else {
+            None
+        };
+        let io = pio::start_with_replay(
+            parts.sid.clone(),
+            stream,
+            Arc::clone(&term),
+            listener,
+            Arc::clone(&owner),
+            events,
+            |sender| {
+                assert!(
+                    query_reply
+                        .set(Box::new(move |text: String| sender.send(pio::IoMsg::Input(text.into_bytes().into()))) as QueryReplySink)
+                        .is_ok(),
+                    "query-reply sink is set exactly once, here"
+                );
+            },
+            replay,
+        )?;
 
         let (label_tx, _label_rx_drop) = broadcast::channel::<String>(16);
         drop(_label_rx_drop);
@@ -1290,15 +1398,21 @@ impl DaemonPtySession {
         drop(_pin_rx_drop);
 
         Ok(Arc::new(Self {
-            session_id: cfg.session_id,
-            cwd: cfg.cwd,
-            program: cfg.program,
-            sandbox: cfg.sandbox,
-            pid: Some(pid),
+            session_id: parts.session_id,
+            cwd: parts.cwd,
+            program: parts.program,
+            sandbox: SandboxSpec::Passthrough,
+            pid: Some(parts.pid),
             killed: std::sync::atomic::AtomicBool::new(false),
-            args: store_args,
+            args: parts.args,
             term,
-            pty_io: PtyIo::Ptyd(PtydSession { sid, io, owner, meta: Mutex::new(meta) }),
+            pty_io: PtyIo::Ptyd(PtydSession {
+                sid: parts.sid,
+                io,
+                owner,
+                meta: Mutex::new(parts.meta),
+                detached: std::sync::atomic::AtomicBool::new(false),
+            }),
             events_tx,
             child_exited: std::sync::atomic::AtomicBool::new(false),
             active_subscriber: std::sync::atomic::AtomicU64::new(0),
@@ -1321,10 +1435,126 @@ impl DaemonPtySession {
             }),
             resizes_applied: std::sync::atomic::AtomicU64::new(0),
             resize_generation: std::sync::atomic::AtomicU64::new(0),
-            label: std::sync::RwLock::new(cfg.label),
-            label_source: std::sync::RwLock::new(cfg.label_source),
+            label: std::sync::RwLock::new(parts.label),
+            label_source: std::sync::RwLock::new(parts.label_source),
             label_tx,
         }))
+    }
+
+    /// k2-ptyd S3 (PRD §7.7, §7.9 B1, P34, P42 replay-only, P75): rebuild
+    /// a session a previous daemon left running in ptyd. The agent process
+    /// is untouched: this attaches from the ring's start, rebuilds the Term
+    /// from the replayed bytes with terminal-query replies muted, and
+    /// returns once the replay reached the live offset (bounded by
+    /// `replay_wait`), so no subscriber ever sees replayed events. The
+    /// session keeps its original `SessionId`, pid and durable args; the
+    /// caller registers it under the key in `info.meta`.
+    ///
+    /// Full screen restore from a saved grid (S4) is not here: replay-only
+    /// is the first ship (R3).
+    #[cfg(unix)]
+    pub fn adopt(
+        info: &k2_ptyd::proto::SessionInfo,
+        owner: Arc<crate::terminal::ptyd::client::Owner>,
+        replay_wait: std::time::Duration,
+    ) -> Result<Arc<Self>, io::Error> {
+        let m = &info.meta;
+        let session_id = SessionId::parse(&info.sid)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, format!("adopt: sid {} is not a session id", info.sid)))?;
+        let str_of = |k: &str| m.get(k).and_then(|v| v.as_str()).map(str::to_string);
+        let args: Vec<String> = m
+            .get("durable_args")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+            .unwrap_or_default();
+        let label_source = match str_of("label_source").as_deref() {
+            Some("Locked") => LabelSource::Locked,
+            Some("Seed") => LabelSource::Seed,
+            _ => LabelSource::Pty,
+        };
+        let events = owner.watch(&info.sid);
+        let stream = match owner.attach(&info.sid, 0) {
+            Ok(s) => s,
+            Err(e) => {
+                owner.unwatch(&info.sid);
+                return Err(e);
+            }
+        };
+        let session = Self::from_ptyd_stream(
+            PtydParts {
+                session_id,
+                sid: info.sid.clone(),
+                pid: info.pid,
+                cwd: str_of("cwd").map(PathBuf::from),
+                program: str_of("program"),
+                args,
+                label: str_of("label").unwrap_or_default(),
+                label_source,
+                cols: info.cols,
+                rows: info.rows,
+                meta: m.clone(),
+            },
+            owner,
+            events,
+            stream,
+            true,
+        )?;
+        // P38: the grid-size pin comes back from meta.
+        if let Some(pin) = m.get("pin").filter(|p| !p.is_null()) {
+            let c = pin.get("cols").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
+            let r = pin.get("rows").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
+            if c > 0 && r > 0 {
+                let by = pin.get("set_by").and_then(|v| v.as_str()).map(str::to_string);
+                Self::set_pinned(&session, Some((c, r)), by);
+            }
+        }
+        // Wait for the replay to reach the live offset (P75: replay runs
+        // before `register`). A session still replaying after the bound is
+        // registered anyway; its replies stay muted until the offset.
+        if let PtyIo::Ptyd(p) = &session.pty_io {
+            let t = Instant::now();
+            while !p.io.replayed() && t.elapsed() < replay_wait {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
+        log_debug!("[ptyd] adopted session={} pid={} ring={}..{}", info.sid, info.pid, info.ring_start, info.ring_end);
+        Ok(session)
+    }
+
+    /// k2-ptyd S3 (§7.6 `KeepAgents`, P30 hand-off quiesce): let go of a
+    /// ptyd session WITHOUT ending it — stop K2's IO loop (joined) and stop
+    /// hearing its events. The agent keeps running in ptyd for the next
+    /// daemon to adopt; after this `kill()` and `Drop` leave it alone.
+    /// Returns `false` (and does nothing) for an in-process session.
+    pub fn detach(&self) -> bool {
+        #[cfg(unix)]
+        if let PtyIo::Ptyd(p) = &self.pty_io {
+            if p.detached.swap(true, std::sync::atomic::Ordering::AcqRel) {
+                return true;
+            }
+            p.owner.unwatch(&p.sid);
+            p.io.stop();
+            return true;
+        }
+        false
+    }
+
+    /// S3: whether [`Self::detach`] ran.
+    pub fn is_detached(&self) -> bool {
+        #[cfg(unix)]
+        if let PtyIo::Ptyd(p) = &self.pty_io {
+            return p.detached.load(std::sync::atomic::Ordering::Acquire);
+        }
+        false
+    }
+
+    /// The meta this session last sent to ptyd (`None` in-process).
+    pub fn ptyd_meta(&self) -> Option<serde_json::Value> {
+        #[cfg(unix)]
+        if let PtyIo::Ptyd(p) = &self.pty_io {
+            return Some(p.meta.lock().clone());
+        }
+        None
     }
 
     /// Subscribe to out-of-band label change events. Receivers see
@@ -2185,13 +2415,22 @@ impl DaemonPtySession {
         // wins and the IO thread exits without a ChildExit.
         #[cfg(unix)]
         if let PtyIo::Ptyd(p) = &self.pty_io {
+            // S3: a detached session belongs to the next daemon now (a
+            // restart or hand-off); ending it here would kill the agent
+            // the restart exists to keep.
+            if p.detached.load(Ordering::Acquire) {
+                log_debug!("[v2-kill] session={} is detached for the next daemon; left running", self.session_id);
+                return;
+            }
             p.io.stop();
             match p.owner.request(k2_ptyd::proto::Request::Kill { sid: p.sid.clone(), grace_ms: Some(100) }) {
                 Ok(k2_ptyd::proto::Reply::Ok) => {}
                 other => log_debug!("[ptyd] kill session={} -> {:?}", self.session_id, other),
             }
             let _ = p.owner.request(k2_ptyd::proto::Request::AckExit { sid: p.sid.clone() });
+            p.owner.release_fd(&crate::terminal::ptyd::cell_listener_name(&p.sid));
             p.owner.unwatch(&p.sid);
+            crate::terminal::ptyd::adopt::release_conversations_of(&p.sid);
             log_debug!("[v2-kill] session={} ptyd reaped child pid={:?}", self.session_id, self.pid);
             return;
         }
@@ -2585,6 +2824,7 @@ mod tests {
         env.insert("PATH".to_string(), format!("{junk}:/usr/bin:/bin"));
         let cfg = DaemonPtyConfig {
             survive: false,
+            ptyd_meta: None,
             session_id: SessionId::new(),
             cols: 80,
             rows: 24,
@@ -2730,6 +2970,7 @@ mod tests {
         use std::path::PathBuf;
         let cfg = DaemonPtyConfig {
             survive: false,
+            ptyd_meta: None,
             session_id: SessionId::new(),
             cols: 80,
             rows: 24,
@@ -2756,6 +2997,7 @@ mod tests {
         use std::path::PathBuf;
         let cfg = DaemonPtyConfig {
             survive: false,
+            ptyd_meta: None,
             session_id: SessionId::new(),
             cols: 80,
             rows: 24,
@@ -2784,6 +3026,7 @@ mod tests {
         use std::path::PathBuf;
         let cfg = DaemonPtyConfig {
             survive: false,
+            ptyd_meta: None,
             session_id: SessionId::new(),
             cols: 80,
             rows: 24,
@@ -2844,6 +3087,7 @@ mod tests {
         use std::path::PathBuf;
         let cfg = DaemonPtyConfig {
             survive: false,
+            ptyd_meta: None,
             session_id: SessionId::new(),
             cols: 80,
             rows: 24,
@@ -2882,6 +3126,7 @@ mod tests {
 
         let cfg = DaemonPtyConfig {
             survive: false,
+            ptyd_meta: None,
             session_id: SessionId::new(),
             cols: 80,
             rows: 24,
@@ -4013,6 +4258,7 @@ mod tests {
 
         let cfg = DaemonPtyConfig {
             survive: false,
+            ptyd_meta: None,
             session_id: SessionId::new(),
             cols: 80,
             rows: 24,

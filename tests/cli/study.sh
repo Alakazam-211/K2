@@ -54,7 +54,7 @@ trap 'rm -rf "$SANDBOX"' EXIT
 export HOME="$SANDBOX"
 unset K2_PORT K2_HOOK_TOKEN K2SO_PORT K2SO_HOOK_TOKEN K2_HOST || true
 
-TOPICS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-heartbeats app-tickets app-identity app-surfaces skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute notifications projects hooks agent-hire garden-data garden-access garden-changes design"
+TOPICS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-heartbeats app-tickets app-identity app-surfaces app-runtime skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute notifications projects hooks agent-hire garden-data garden-access garden-changes design"
 
 echo "== k2 study source (no daemon) =="
 set +e
@@ -706,6 +706,30 @@ done
 ar_lines="$(printf '%s\n' "$ar_out" | wc -l | tr -d ' ')"
 if [ "$ar_lines" -le 80 ]; then echo "  PASS: app-resources is bounded ($ar_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: app-resources is $ar_lines lines (max 80)" >&2; fail=$((fail + 1)); fi
 assert_contains "catalog: app-resources row" "$("$K2" study)" "  app-resources       Box usage: the disk guard's lines, clean, CPU and memory trends"
+
+echo "== k2 study app-runtime (update continuity R26, 0.46.4) =="
+ar_out="$("$K2" study app-runtime)"
+assert_contains "title" "$ar_out" "k2 study app-runtime — K2 updates and your App: the re-host"
+for needle in "WHAT A RE-HOST IS" "WHEN IT HAPPENS" "deployKind rehost" "[re-host due]" \
+    "a newer pinned Sew waiting to" "sessions_in_memory" "requires_unmet" "K2_APPS_REHOST=off" \
+    "\"Pause briefly and update\"" "\"Skip it and let me update it myself\"" "needs_handover" "no_headroom" \
+    "k2 app rehost policy <app> --when-no-overlap pause|defer" \
+    "k2 app rehost policy <app> --policy auto|handover|window|manual|off" \
+    "k2 app rehost status [<app>] [--json]" "k2 app rehost <app> [--yes] [--pause]" \
+    "REHOST_FAILED AND HOW TO CLEAR IT" "K2 won't try again on this K2 version" "The next K2 version clears it too" \
+    "THE BREAKER" "Two re-hosts in a row" "Deferrals don't count" \
+    "busy_timeout" "host.health.readyPath" "AFTER A K2 UPDATE (the App's agent)" "k2 app engine status"; do
+    assert_contains "app-runtime: $needle" "$ar_out" "$needle"
+done
+ar_lines="$(printf '%s\n' "$ar_out" | wc -l | tr -d ' ')"
+if [ "$ar_lines" -le 80 ]; then echo "  PASS: app-runtime is bounded ($ar_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: app-runtime is $ar_lines lines (max 80)" >&2; fail=$((fail + 1)); fi
+ar_json="$("$K2" study app-runtime --json)"
+python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["id"]=="app-runtime" and "rehost_failed" in d["body"], d["id"]' "$ar_json"
+echo "  PASS: app-runtime --json id+body"
+pass=$((pass + 1))
+assert_contains "catalog: app-runtime row" "$("$K2" study)" "  app-runtime         K2 updates move your App to the new runtime"
+assert_contains "usage lists app-runtime" "$("$K2" study --help)" "app-resources  app-runtime"
+assert_contains "k2 app help points at the page" "$(grep -F 'Re-hosts explained: k2 study app-runtime.' "$K2_CLI" || true)" "k2 study app-runtime"
 
 echo "== --help exit 0; bad flag exit 2 =="
 set +e

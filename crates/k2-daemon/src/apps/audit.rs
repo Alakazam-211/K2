@@ -211,6 +211,8 @@ pub fn finish() {
 pub const REFUSED_LINES_PER_MIN: usize = 20;
 /// The hint in a log line is cut to this many characters.
 const HINT_MAX: usize = 200;
+/// The verb (method and path) in a log line is cut to this many characters.
+const VERB_MAX: usize = 120;
 
 struct Refused {
     app_id: String,
@@ -220,20 +222,33 @@ struct Refused {
 }
 
 /// K2's words for the App's log: one line, no control characters, no
-/// pass or key (a word shaped like `k2skn_…`, `k2sk_…`, `k2skr_…`, or a
-/// long opaque token is redacted), cut to [`HINT_MAX`].
+/// pass or key, cut to [`HINT_MAX`]. A word is redacted when it, or any
+/// part of it after `=`, `:` or `?` (`token=…`), is shaped like a K2 pass or
+/// key (`k2skn_…`, `k2sk_…`, `k2skr_…`, `k2hs_…`), a JWT (`eyJ…`), or a
+/// long opaque token: 32+ characters of letters, digits, `_`, `-` or `.`
+/// (security review, 0.46.4: JWT-shaped tokens carry `.` and `-`).
 pub fn log_safe(raw: &str) -> String {
+    log_safe_cut(raw, HINT_MAX)
+}
+
+fn secret_shaped(part: &str) -> bool {
+    let bare = part.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '_');
+    ["k2skn_", "k2sk_", "k2skr_", "k2hs_"].iter().any(|p| bare.starts_with(p))
+        || (bare.starts_with("eyJ") && bare.len() >= 16)
+        || (bare.len() >= 32 && bare.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.')))
+}
+
+/// [`log_safe`], cut to `max` characters.
+fn log_safe_cut(raw: &str, max: usize) -> String {
     let flat: String = raw.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
     let mut out: Vec<String> = Vec::new();
     for w in flat.split_whitespace() {
-        let bare = w.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '_');
-        let secret = ["k2skn_", "k2sk_", "k2skr_", "k2hs_"].iter().any(|p| bare.starts_with(p))
-            || (bare.len() >= 32 && bare.chars().all(|c| c.is_ascii_alphanumeric()));
+        let secret = secret_shaped(w) || w.split(['=', ':', '?', '&']).any(secret_shaped);
         out.push(if secret { "[redacted]".to_string() } else { w.to_string() });
     }
     let mut s = out.join(" ");
-    if s.chars().count() > HINT_MAX {
-        s = s.chars().take(HINT_MAX).collect::<String>() + "…";
+    if s.chars().count() > max {
+        s = s.chars().take(max).collect::<String>() + "…";
     }
     s
 }
@@ -241,6 +256,8 @@ pub fn log_safe(raw: &str) -> String {
 /// The line itself (pure: tests and the writer).
 pub fn refused_line(verb: &str, code: &str, hint: Option<&str>) -> String {
     let code = if code.is_empty() { "refused" } else { code };
+    // The verb is the caller's path: the same cleaning as the hint.
+    let verb = log_safe_cut(verb, VERB_MAX);
     match hint.map(log_safe).filter(|h| !h.is_empty()) {
         Some(h) => format!("[k2] refused {verb}: {code} ({h})"),
         None => format!("[k2] refused {verb}: {code}"),
@@ -668,6 +685,17 @@ mod tests {
         let long = "x ".repeat(400);
         assert!(log_safe(&long).chars().count() <= HINT_MAX + 1);
         assert!(log_safe(&"a".repeat(40)).contains("[redacted]"), "a long opaque token-like word is redacted");
+        // JWT-shaped and query-borne tokens; the verb is cleaned and cut too.
+        let jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJxYTEifQ.c2lnbmF0dXJlLXBhcnQtLXdpdGgtZGFzaGVz";
+        assert_eq!(log_safe(&format!("bad {jwt}")), "bad [redacted]");
+        assert_eq!(log_safe("dash-and-dot.token-0123456789abcdef.0123456789"), "[redacted]");
+        assert_eq!(log_safe("token=0123456789abcdef0123456789abcdef"), "[redacted]");
+        assert_eq!(log_safe("see k2 app logs myapp"), "see k2 app logs myapp", "plain words stay");
+        let l = refused_line(&format!("GET /gw/x?token={jwt}\nSPOOF"), "pass_invalid", None);
+        assert!(!l.contains("eyJ") && !l.contains('\n'), "{l}");
+        assert!(l.starts_with("[k2] refused [redacted] SPOOF: pass_invalid") || l.starts_with("[k2] refused GET [redacted] SPOOF: pass_invalid"), "{l}");
+        let l = refused_line(&format!("GET /{}", "p/".repeat(200)), "not_found", None);
+        assert!(l.chars().count() <= "[k2] refused : not_found".len() + VERB_MAX + 1, "{l}");
     }
 
     #[test]

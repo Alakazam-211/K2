@@ -53,6 +53,9 @@ export interface TerminalSettingsBackend {
   cursorStyle: 'bar' | 'block' | 'underline'
   scrollback: number
   naturalTextEditing: boolean
+  /** k2-ptyd (P67): `on` = agents keep running through daemon updates and
+   *  restarts. Absent/`off`/`auto` = off (0.46.4 opt-in). */
+  ptyd?: 'on' | 'off' | 'auto'
 }
 
 export interface TimerSettingsBackend {

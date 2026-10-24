@@ -3850,6 +3850,68 @@ cmd_daemon_restart() {
     fi
 }
 
+# k2-ptyd (prd-k2-ptyd-v1 P67, 0.46.4 Beta opt-in): `k2 daemon survive
+# [on|off|status]`. With it on, NEW agent sessions run under k2-ptyd and
+# keep running through daemon updates, restarts and crashes; quitting the
+# daemon still ends them. The switch is the daemon's own `terminal.ptyd`
+# setting (Settings → General → Server shows the same toggle).
+cmd_daemon_survive() {
+    local sub="${1:-status}" resp
+    case "$sub" in
+        on|off)
+            resp=$(cli_post_json "/cli/settings/update" "{\"terminal\":{\"ptyd\":\"$sub\"}}")
+            printf '%s' "$resp" | SV_WANT="$sub" python3 -c '
+import json, os, sys
+try:
+    d = json.loads(sys.stdin.read() or "null")
+except Exception:
+    print("Error: the K2 daemon gave no usable answer", file=sys.stderr); sys.exit(1)
+if not isinstance(d, dict) or d.get("error"):
+    print("Error: %s" % (d.get("error") if isinstance(d, dict) else d), file=sys.stderr); sys.exit(3)
+got = ((d.get("terminal") or {}).get("ptyd") or "off")
+if got != os.environ["SV_WANT"]:
+    print("Error: the daemon kept terminal.ptyd=%s" % got, file=sys.stderr); sys.exit(1)
+if got == "on":
+    print("Agents keep running through updates and restarts: on (Beta).")
+    print("New agent sessions run under k2-ptyd; sessions already running stop at the next restart.")
+else:
+    print("Agents keep running through updates and restarts: off. New sessions stop with the daemon.")
+' || exit $?
+            ;;
+        status)
+            resp=$(cli_request "/cli/settings/get")
+            local boot
+            boot=$(_k2_curl "" -s --connect-timeout 3 --max-time 5 "${BASE_URL}/boot-status?token=${TOKEN}" 2>/dev/null || true)
+            printf '%s\n%s' "$resp" "$boot" | python3 -c '
+import json, sys
+lines = sys.stdin.read().split("\n", 1)
+try:
+    s = json.loads(lines[0])
+except Exception:
+    print("Error: the K2 daemon gave no usable answer", file=sys.stderr); sys.exit(1)
+setting = ((s.get("terminal") or {}).get("ptyd") or "off")
+print("Setting:  terminal.ptyd = %s" % setting)
+try:
+    b = json.loads(lines[1]) if len(lines) > 1 and lines[1].strip() else {}
+except Exception:
+    b = {}
+if "ptyd" in b:
+    print("Backend:  %s" % b["ptyd"])
+    print("Adopted at the last boot: %s" % b.get("adopted", 0))
+'
+            ;;
+        -h|--help|help)
+            echo "Usage: k2 daemon survive [on|off|status]"
+            echo "  Beta: agents keep running through K2 updates, restarts and crashes"
+            echo "  (macOS and Linux). Quitting the daemon still ends them."
+            ;;
+        *)
+            echo "Usage: k2 daemon survive [on|off|status]" >&2
+            exit 2
+            ;;
+    esac
+}
+
 cmd_daemon_log() {
     local tail_n="200"
     local follow=0
@@ -31819,7 +31881,7 @@ cmd_schema() {
     },
     {
       "name": "daemon",
-      "usage": "k2 daemon <status|start|stop|restart|log|install|uninstall|companion> [...]",
+      "usage": "k2 daemon <status|start|stop|restart|survive|log|install|uninstall|companion> [...]",
       "description": "Manage the local (or, with --host, a remote) K2 daemon.",
       "args": [],
       "flags": []
@@ -65457,12 +65519,17 @@ EOF
             start)     shift 2; cmd_daemon_start "$@" ;;
             stop)      shift 2; cmd_daemon_stop "$@" ;;
             restart)   shift 2; cmd_daemon_restart "$@" ;;
+            survive)   shift 2; cmd_daemon_survive "$@" ;;
             log|logs)  shift 2; cmd_daemon_log "$@" ;;
             install)   shift 2; cmd_daemon_install "$@" ;;
             uninstall) shift 2; cmd_daemon_uninstall "$@" ;;
             companion) shift 2; cmd_daemon_companion "$@" ;;
             *)
-                echo "Usage: k2 daemon <status|start|stop|restart|log|install|uninstall|companion>" >&2
+                echo "Usage: k2 daemon <status|start|stop|restart|survive|log|install|uninstall|companion>" >&2
+                echo "" >&2
+                echo "  survive [on|off|status]" >&2
+                echo "    Beta: agents keep running through K2 updates, restarts and crashes" >&2
+                echo "    (the daemon's terminal.ptyd setting; same as Settings → General → Server)." >&2
                 echo "" >&2
                 echo "  install [--version <x.y.z>] [--bin-dir <dir>] [--manifest-url <url>]" >&2
                 echo "          [--no-service] [--dry-run]" >&2

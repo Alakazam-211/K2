@@ -564,6 +564,29 @@ fn store_verb(
                 Err(e) => Err(conflict_counted(space, &label, made, e)),
             }
         }
+        "store.patch" => {
+            // 0.46.4: a field-level merge that keeps the fields it doesn't
+            // name (`garden_data::patch`, RFC 7396; null removes a field).
+            budget::spend(key, Spend::Write)?;
+            let k = arg_str(args, 0, verb, "a key")?;
+            let partial = args.get(1).cloned().ok_or_else(|| DataError::BadRequest(format!("{verb} needs an object of fields")))?;
+            let rev_if = if_rev(arg_obj(args, 2, verb)?, verb)?;
+            write_check(acc, k)?;
+            // The runaway guard sees the partial: the same patch, over and
+            // over, pauses the widget like the same put does.
+            runaway_check(w, &[Op::Put { key: k.to_string(), value: partial.clone(), if_rev: rev_if }])?;
+            match k2_core::garden_data::patch::patch(s, space, k, &partial, rev_if, &w.actor()) {
+                Ok(p) => {
+                    if p.changed {
+                        crate::garden_data::notify_changed(space.as_str(), p.rev);
+                        let bytes = serde_json::to_string(&p.value).map(|t| t.len()).unwrap_or(0);
+                        audit::count(space.as_str(), &label, Some(made), Counted::Write { ops: 1, bytes });
+                    }
+                    Ok(json!({ "rev": p.rev, "value": p.value }))
+                }
+                Err(e) => Err(conflict_counted(space, &label, made, e)),
+            }
+        }
         "store.delete" => {
             budget::spend(key, Spend::Write)?;
             let k = arg_str(args, 0, verb, "a key")?;

@@ -30608,7 +30608,7 @@ cmd_schema() {
     {"name": "changes notes add", "usage": "k2 changes notes add <path> --line <n>[-<m>] [--old] -m \"comment\"  ·  edit <id> -m \"...\"  ·  delete <id>...  ·  reopen <id>...  ·  send [<id>...] [--no-wake]", "description": "People only (owner token or a Connect login; an agent passport gets forbidden). add = a note on lines of a changed file (--old: the text before the change); edit/delete = the author or an Admin; send = the open unsent notes, batched into one message to this workspace's agent through the k2 msg path (wakes it unless --no-wake), then marked sent (nothing_to_send, not_delivered and send_in_progress exit 3).", "args": [{"name": "path", "required": true}], "flags": [{"name": "--line", "arg": "n[-m]", "description": "1-based line or range."}, {"name": "--old", "arg": null, "description": "Note the old side."}, {"name": "-m", "arg": "comment", "description": "The note (repeat for paragraphs)."}, {"name": "--no-wake", "arg": null, "description": "send: do not wake a sleeping agent (fails with not_delivered instead)."}]},
     {"name": "changes open", "usage": "k2 changes open [--workspace <path>] [--json]", "description": "Ask a K2 window that shows this workspace to open (or focus) its Changes tab (daemon event open_changes). Agents: their own workspace. 200 means asked; a window opens it only while it shows that workspace.", "args": [], "flags": [{"name": "--json", "arg": null, "description": "{success, workspacePath}."}]},
     {"name": "changes init", "usage": "k2 changes init [--workspace <path>] [--json]", "description": "Make the workspace root a git repository (git init, no commit), like the Changes tab's Initialize repository. Only a workspace root; refused inside an existing repository (already_a_repo) or for a folder that is not a workspace root (bad_path / not_found). Agents: their own workspace.", "args": [], "flags": [{"name": "--json", "arg": null, "description": "{success, repoRoot, rev}."}]},
-    {"name": "store --widget", "usage": "k2 store get|put|rm|list|changes|batch|grants|grant|revoke|export --widget <name> ...", "description": "A Garden widget's own data on this computer. Agents read and write only the keys they were granted; grant/revoke are for a grant admin. Exit 3 not granted, 4 not found, 5 conflict.", "args": [{"name": "verb", "required": true}], "flags": [{"name": "--widget", "arg": "name", "description": "The widget whose data this is."}, {"name": "--if-rev", "arg": "n", "description": "Write only if the key's rev is n (0 = only if missing)."}, {"name": "--prefix", "arg": "prefix", "description": "Only keys under this prefix."}, {"name": "--since", "arg": "rev", "description": "changes: after this rev."}, {"name": "--wait", "arg": "secs", "description": "changes: wait up to 30 s for a change."}, {"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
+    {"name": "store --widget", "usage": "k2 store get|put|patch|rm|list|changes|batch|grants|grant|revoke|export --widget <name> ...", "description": "A Garden widget's own data on this computer. Agents read and write only the keys they were granted; grant/revoke are for a grant admin. patch changes only the fields it names and keeps the rest (null removes a field). Exit 3 not granted, 4 not found, 5 conflict.", "args": [{"name": "verb", "required": true}], "flags": [{"name": "--widget", "arg": "name", "description": "The widget whose data this is."}, {"name": "--if-rev", "arg": "n", "description": "Write only if the key's rev is n (0 = only if missing)."}, {"name": "--prefix", "arg": "prefix", "description": "Only keys under this prefix."}, {"name": "--since", "arg": "rev", "description": "changes: after this rev."}, {"name": "--wait", "arg": "secs", "description": "changes: wait up to 30 s for a change."}, {"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
     {"name": "zen data", "usage": "k2 zen data list|show|grant|revoke|admin|unadmin|delete|move|export|import ...", "description": "The person's admin for widget data: grants (agent = a wall; project = a convenience), grant admins, delete, move, export, import. Refused inside a K2 terminal (exit 3).", "args": [{"name": "verb", "required": true}], "flags": [{"name": "--agent", "arg": "handle", "description": "The agent."}, {"name": "--project", "arg": "name", "description": "A K2 project (any agent can join it)."}, {"name": "--level", "arg": "read|write", "description": "The grant level."}, {"name": "--prefix", "arg": "prefix", "description": "Only keys under this prefix (default: all)."}, {"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
     {
       "name": "llm tokens list",
@@ -33922,7 +33922,7 @@ the daemon's loopback port). Every call carries a pass: this App's own
 every hour, so read the file again on pass_invalid) or a guest's
 session pass from POST /cli/skin/login. Users and rooms use the App
 key ($K2_SECRETS_DIR/K2_APP_KEY) on /v1/apps/$K2_APP_ID/... instead.
-From K2's verb catalog, version 20.
+From K2's verb catalog, version 21.
 
 THE SERVER SDK (sdk/server, TypeScript, Node 22+, no dependencies)
   import { fromEnv } from '@k2/server'
@@ -58379,6 +58379,9 @@ GARDEN DATA (--widget): a Garden widget's own data on THIS computer.
 Agents see only the keys the person (or a grant admin) granted them.
   get     --widget <w> <key> [--json]
   put     --widget <w> <key> --value '{…}' | --file f.json [--if-rev N]
+  patch   --widget <w> <key> --value '{"done":true}' [--if-rev N]
+                                       (change only these fields, keep the rest;
+                                        null removes a field)
   rm      --widget <w> <key> [--if-rev N]
   list    --widget <w> [--prefix p/] [--after <key>] [--limit N] [--all]
   changes --widget <w> --since N [--prefix p/] [--wait 30] [--follow]
@@ -58826,6 +58829,7 @@ cmd_store_widget() {
     case "$sub" in
         get) cmd_store_widget_get "$@" ;;
         put) cmd_store_widget_put "$@" ;;
+        patch) cmd_store_widget_patch "$@" ;;
         rm|delete) cmd_store_widget_rm "$@" ;;
         list|ls) cmd_store_widget_list "$@" ;;
         changes) cmd_store_widget_changes "$@" ;;
@@ -58930,7 +58934,7 @@ _gd_args() {
     esac
 }
 
-# A JSON body from the parsed flags. $1 = kind (put|rm|grant|revoke|admin|unadmin).
+# A JSON body from the parsed flags. $1 = kind (put|patch|rm|grant|revoke|admin|unadmin).
 _gd_body() {
     K2_GD_KIND="$1" K2_GD_WIDGET="${_GD_WIDGET:-}" K2_GD_KEY="$_GD_POS" K2_GD_VALUE="$_GD_VALUE" \
     K2_GD_HAS_VALUE="$_GD_HAS_VALUE" K2_GD_FILE="$_GD_FILE" K2_GD_IFREV="$_GD_IFREV" K2_GD_AGENT="$_GD_AGENT" \
@@ -58942,23 +58946,25 @@ b = {"widget": e("K2_GD_WIDGET")}
 def die(m):
     sys.stderr.write("Error: %s\n" % m)
     sys.exit(2)
-if kind in ("put", "rm"):
+if kind in ("put", "patch", "rm"):
     if not e("K2_GD_KEY"):
         die("a key is required (k2 store %s --widget <w> <key>)" % kind)
     b["key"] = e("K2_GD_KEY")
     if e("K2_GD_IFREV"):
         b["ifRev"] = int(e("K2_GD_IFREV"))
-if kind == "put":
+if kind in ("put", "patch"):
     if e("K2_GD_FILE"):
         text = open(e("K2_GD_FILE")).read()
     elif e("K2_GD_HAS_VALUE") == "1":
         text = e("K2_GD_VALUE")
     else:
-        die("put takes --value <json> or --file <path>")
+        die("%s takes --value <json> or --file <path>" % kind)
     try:
         b["value"] = json.loads(text)
     except Exception as x:
         die("the value is not JSON: %s" % x)
+    if kind == "patch" and not isinstance(b["value"], dict):
+        die("patch takes a JSON object of the fields to change (null removes a field)")
 if kind in ("grant", "revoke", "admin", "unadmin"):
     if kind in ("admin", "unadmin") and e("K2_GD_PROJECT"):
         die("a grant admin is one agent (--agent)")
@@ -59017,6 +59023,19 @@ cmd_store_widget_put() {
     local body; body="$(_gd_body put)" || exit 2
     _gd_call POST /cli/zen/data/put "$body"
     _gd_out 'import json, sys; print("rev %s" % json.loads(sys.stdin.read())["rev"])'
+}
+
+# 0.46.4: change some fields of one key and keep the rest (JSON Merge
+# Patch: null removes a field). Prints the new rev and the merged document.
+cmd_store_widget_patch() {
+    _gd_args "$@"
+    local body; body="$(_gd_body patch)" || exit 2
+    _gd_call POST /cli/zen/data/patch "$body"
+    _gd_out '
+import json, sys
+v = json.loads(sys.stdin.read())
+print(json.dumps(v["value"], indent=2, ensure_ascii=False))
+sys.stderr.write(("rev %s\n" % v["rev"]) if v["changed"] else ("rev %s (nothing changed)\n" % v["rev"]))'
 }
 
 cmd_store_widget_rm() {
@@ -59607,7 +59626,10 @@ KEYS AND REVS
   project: project/<pid>/board/<bid>/obj/<id>. A value is JSON, ≤ 60 KiB.
   Every write moves the space's rev. --if-rev <n> writes only if the key is
   still at rev n (0 = only if missing); a miss is `conflict`, exit 5: read
-  it again and retry. `k2 store changes --since <rev> --wait 30` waits for
+  it again and retry. `k2 store patch --widget <w> <key> --value '{…}'`
+  changes only the fields it names and keeps the rest (null removes one),
+  so you never drop a field the widget added.
+  `k2 store changes --since <rev> --wait 30` waits for
   the next change; --follow keeps printing (on `resync`, list again).
 
 GRANTS (you need one; the person gives it)
@@ -60752,7 +60774,7 @@ k2 zen guide api — the k2 object in a custom widget
 A custom widget is a sealed page in a Garden: no network, no storage, no
 files. It reaches K2 only through window.k2. Each call needs a cap its
 manifest.json asks for; a widget in your own Garden gets every one it asks
-for at once (no review). From K2's verb catalog, version 20.
+for at once (no review). From K2's verb catalog, version 21.
 
 TEN EXAMPLES
   const off = k2.agents.subscribe((rows) => draw(rows))   // live, in scope
@@ -60838,6 +60860,7 @@ store:read (Read the workspace store)
   k2.store.changes({after, from, prefix, since})                                                      local    garden-data-v1         const page = await k2.store.changes({since: 41})  [not_bound not_granted author_unknown stale_widget rate_limited resync bad_key]
 store:write (Change dump-table rows)
   k2.store.put(key, value, {ifRev})                                                                   local    garden-data-v1         const {rev} = await k2.store.put('obj/7', note, {ifRev: e.rev})  [not_granted author_unknown stale_widget rate_limited bad_key conflict value_too_large space_full store_full paused]
+  k2.store.patch(key, partial, {ifRev})                                                               local    garden-data-v1         const {rev} = await k2.store.patch('obj/7', {done: true}, {ifRev: e.rev})  [not_granted author_unknown stale_widget rate_limited bad_key conflict value_too_large space_full store_full paused]
   k2.store.delete(key, {ifRev})                                                                       local    garden-data-v1         await k2.store.delete('obj/7')  [not_granted author_unknown stale_widget rate_limited bad_key conflict paused]
   k2.store.batch(ops)                                                                                 local    garden-data-v1         await k2.store.batch([{op: 'put', key: 'obj/1', value: a}, {op: 'delete', key: 'obj/2'}])  [not_granted author_unknown stale_widget rate_limited bad_key conflict value_too_large too_large space_full store_full paused]
   k2.store.txBegin()                                                                                  local    garden-data-v1         const tx = k2.store.tx()  [not_granted author_unknown stale_widget rate_limited busy]
@@ -60905,6 +60928,9 @@ KEYS, REVS, CONFLICTS
   if the key is still at rev n (0 = only if missing); else `conflict`:
   read it again and re-apply just the fields you changed.
     const r = await k2.store.put('obj/7', note, {ifRev: seen.rev})
+  patch(key, partial, {ifRev}) changes only the fields it names and keeps
+  the rest (null removes one; an object merges into an object field):
+    const {rev, value} = await k2.store.patch('obj/7', {done: true})
 
 LIVE
   k2.store.subscribe(prefix, cb, onError) calls cb with

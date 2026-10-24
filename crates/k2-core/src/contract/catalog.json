@@ -1,5 +1,5 @@
 {
-  "catalogVersion": 20,
+  "catalogVersion": 21,
   "caps": [
     {
       "name": "agents:read",
@@ -3637,6 +3637,85 @@
       ],
       "doc": "Save one key; with ifRev, only if nobody changed it since.",
       "example": "const {rev} = await k2.store.put('obj/7', note, {ifRev: e.rev})"
+    },
+    {
+      "verb": "store.patch",
+      "cap": "store:write",
+      "exposure": [
+        "garden-local"
+      ],
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "garden-data-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/zen/call"
+        }
+      },
+      "request": [
+        {
+          "title": "key",
+          "type": "string",
+          "description": "A key in this widget's data, like obj/7."
+        },
+        {
+          "title": "partial",
+          "type": "json",
+          "description": "An object of only the fields to change; null removes a field and an object merges into an object field (JSON Merge Patch). Every field it doesn't name is kept."
+        },
+        {
+          "title": "opts",
+          "type": "object",
+          "properties": {
+            "ifRev": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Patch only if the key's rev is this (0 = only if it doesn't exist)."
+            }
+          },
+          "required": [],
+          "additionalProperties": false,
+          "default": {}
+        }
+      ],
+      "response": {
+        "title": "StorePatched",
+        "type": "object",
+        "properties": {
+          "rev": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "value": {
+            "type": "json",
+            "description": "The whole document after the merge."
+          }
+        },
+        "required": [
+          "rev",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "cap_not_granted",
+        "not_granted",
+        "author_unknown",
+        "stale_widget",
+        "rate_limited",
+        "verb_unavailable",
+        "failed",
+        "bad_key",
+        "conflict",
+        "value_too_large",
+        "space_full",
+        "store_full",
+        "paused"
+      ],
+      "doc": "Change some fields of one key and keep the rest (null removes a field); with ifRev, only if nobody changed it since. A missing key starts from {}.",
+      "example": "const {rev} = await k2.store.patch('obj/7', {done: true}, {ifRev: e.rev})"
     },
     {
       "verb": "store.delete",

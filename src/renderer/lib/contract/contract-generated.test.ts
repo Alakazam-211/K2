@@ -205,6 +205,7 @@ describe('TUWA5: the generated tables', () => {
       'store.list': { cap: 'store:read', reach: 'local', kind: 'call' },
       'store.changes': { cap: 'store:read', reach: 'local', kind: 'call' },
       'store.put': { cap: 'store:write', reach: 'local', kind: 'call' },
+      'store.patch': { cap: 'store:write', reach: 'local', kind: 'call' },
       'store.delete': { cap: 'store:write', reach: 'local', kind: 'call' },
       'store.batch': { cap: 'store:write', reach: 'local', kind: 'call' },
       'store.txBegin': { cap: 'store:write', reach: 'local', kind: 'call' },

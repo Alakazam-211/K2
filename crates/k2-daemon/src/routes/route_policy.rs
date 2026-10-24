@@ -1551,6 +1551,7 @@ pub const ROUTES: &[Route] = &[
     get("/cli/zen/data/grants", NoLogin),
     post("/cli/zen/data/import", NoLogin),
     get("/cli/zen/data/list", NoLogin),
+    post("/cli/zen/data/patch", NoLogin),
     post("/cli/zen/data/put", NoLogin),
     post("/cli/zen/data/revoke", NoLogin),
     get("/cli/zen/data/show", NoLogin),

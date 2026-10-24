@@ -96,6 +96,36 @@ fn owner_reads_and_writes_everything_and_by_is_wire_shaped() {
     assert_eq!((code, c.as_str()), (400, "bad_request"));
 }
 
+/// 0.46.4: `k2 store patch --widget` merges fields and keeps the rest.
+#[test]
+fn patch_merges_fields_keeps_the_rest_and_checks_if_rev() {
+    let _e = env();
+    let o = DataWho::Owner;
+    let rev = ok(&o, "POST", "/cli/zen/data/put", json!({"widget": "board", "key": "project/7/obj/1", "value": {"t": "hi", "col": "todo", "boardOnly": [1]}}), &[])["rev"]
+        .as_i64()
+        .expect("rev");
+    let keeper = agent("w-keeper");
+    let (code, c) = err(&keeper, "POST", "/cli/zen/data/patch", json!({"widget": "board", "key": "project/7/obj/1", "value": {"col": "done"}}), &[]);
+    assert_eq!((code, c.as_str()), (403, "not_granted"), "no grant, no patch");
+    person_grant("board", "w-keeper", "write", "project/7/");
+    let v = ok(&keeper, "POST", "/cli/zen/data/patch", json!({"widget": "board", "key": "project/7/obj/1", "value": {"col": "done", "t": null}, "ifRev": rev}), &[]);
+    assert_eq!(v["value"], json!({"col": "done", "boardOnly": [1]}), "fields the patch doesn't name are kept: {v}");
+    assert_eq!(v["changed"], true);
+    let new_rev = v["rev"].as_i64().expect("rev");
+    assert!(new_rev > rev);
+    let g = ok(&o, "GET", "/cli/zen/data/get", json!({}), &[("widget", "board"), ("key", "project/7/obj/1")]);
+    assert_eq!((g["entry"]["value"].clone(), g["entry"]["by"].as_str()), (json!({"col": "done", "boardOnly": [1]}), Some("agent:board-keeper")));
+    let (code, c) = err(&keeper, "POST", "/cli/zen/data/patch", json!({"widget": "board", "key": "project/7/obj/1", "value": {"col": "x"}, "ifRev": rev}), &[]);
+    assert_eq!((code, c.as_str()), (409, "conflict"), "a stale ifRev");
+    let (code, c) = err(&keeper, "POST", "/cli/zen/data/patch", json!({"widget": "board", "key": "project/7/obj/1", "value": [1]}), &[]);
+    assert_eq!((code, c.as_str()), (400, "bad_request"), "a partial is an object");
+    let (code, c) = err(&keeper, "POST", "/cli/zen/data/patch", json!({"widget": "board", "key": "project/8/obj/1", "value": {"a": 1}}), &[]);
+    assert_eq!((code, c.as_str()), (403, "not_granted"), "outside the grant");
+    let same = ok(&keeper, "POST", "/cli/zen/data/patch", json!({"widget": "board", "key": "project/7/obj/1", "value": {"col": "done"}}), &[]);
+    assert_eq!((same["rev"].as_i64(), same["changed"].as_bool()), (Some(new_rev), Some(false)), "a no-op writes nothing");
+    assert!(crate::zen_data_routes::is_post_route("/cli/zen/data/patch"), "POST only (the transport answers 405)");
+}
+
 #[test]
 fn agents_see_and_change_only_granted_prefixes() {
     let _e = env();

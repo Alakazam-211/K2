@@ -7,7 +7,7 @@
 (function () {
   'use strict'
   var K2_CONTRACT = Object.freeze({
-    catalogVersion: 20,
+    catalogVersion: 21,
     errors: Object.freeze(['cap_not_granted', 'not_bound', 'rate_limited', 'too_large', 'unknown_verb', 'verb_unavailable', 'verb_local', 'not_exposed', 'sending_off', 'server_not_saved', 'unreachable', 'removed', 'no_history', 'failed', 'conflict', 'space_full', 'value_too_large', 'bad_key', 'not_granted', 'resync', 'author_unknown', 'stale_widget', 'store_full', 'bad_tx', 'tx_expired', 'busy', 'paused', 'bad_args', 'bad_shape', 'pass_required', 'pass_invalid', 'pass_wrong_link', 'not_on_link', 'json_required', 'skin_room', 'usage', 'not_found', 'bad_login', 'locked', 'card_not_pending', 'guest_required', 'no_app_pass', 'no_app_key', 'no_chat_grant', 'chat_unavailable', 'app_pass_required', 'grant_required', 'outside_app_rooms', 'above_role', 'has_role', 'confirm_required', 'declined', 'refresh_invalid', 'refresh_reused', 'person_pass_required', 'wallet_off', 'duplicate_label', 'needs_editor']),
     retryable: Object.freeze(['not_bound', 'rate_limited', 'unreachable', 'busy']),
     verbs: Object.freeze({
@@ -70,6 +70,7 @@
       'store.list': Object.freeze({ cap: 'store:read', reach: 'local', kind: 'call', feature: 'garden-data-v1' }),
       'store.changes': Object.freeze({ cap: 'store:read', reach: 'local', kind: 'call', feature: 'garden-data-v1' }),
       'store.put': Object.freeze({ cap: 'store:write', reach: 'local', kind: 'call', feature: 'garden-data-v1' }),
+      'store.patch': Object.freeze({ cap: 'store:write', reach: 'local', kind: 'call', feature: 'garden-data-v1' }),
       'store.delete': Object.freeze({ cap: 'store:write', reach: 'local', kind: 'call', feature: 'garden-data-v1' }),
       'store.batch': Object.freeze({ cap: 'store:write', reach: 'local', kind: 'call', feature: 'garden-data-v1' }),
       'store.txBegin': Object.freeze({ cap: 'store:write', reach: 'local', kind: 'call', feature: 'garden-data-v1' }),

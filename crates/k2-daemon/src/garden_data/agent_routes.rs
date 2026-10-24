@@ -202,6 +202,18 @@ struct PutBody {
     if_rev: Option<i64>,
 }
 
+/// `/cli/zen/data/patch` (0.46.4): `value` is the partial, merged field
+/// by field (`garden_data::patch`).
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PatchBody {
+    widget: String,
+    key: String,
+    value: Value,
+    #[serde(default, rename = "ifRev")]
+    if_rev: Option<i64>,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DeleteBody {
@@ -229,6 +241,7 @@ pub fn handle(
     match path {
         "/cli/zen/data/get" => get(who, params),
         "/cli/zen/data/put" => put(who, body),
+        "/cli/zen/data/patch" => patch(who, body),
         "/cli/zen/data/delete" => delete(who, body),
         "/cli/zen/data/list" => list(who, params),
         "/cli/zen/data/changes" => changes(who, params),
@@ -265,6 +278,25 @@ fn put(who: &DataWho, body: &[u8]) -> Result<Value, DataError> {
     notify_changed(space.as_str(), rev);
     audit::count(space.as_str(), &who.audit_label(), None, Counted::Write { ops: 1, bytes });
     Ok(json!({ "rev": rev }))
+}
+
+/// A field-level merge that keeps the fields it doesn't name (0.46.4).
+/// Answers the new rev and the whole merged document.
+fn patch(who: &DataWho, body: &[u8]) -> Result<Value, DataError> {
+    let b: PatchBody = parse(body)?;
+    let space = data_space(&b.widget)?;
+    keys::validate_key(&b.key)?;
+    let acc = access(who, &space)?;
+    counted(&space, who, need_write(&acc, &b.key))?;
+    spend(who, &space, Spend::Write)?;
+    let actor = who.actor().ok_or(DataError::NotGranted { key: None })?;
+    let p = counted(&space, who, k2_core::garden_data::patch::patch(store(), &space, &b.key, &b.value, b.if_rev, &actor))?;
+    if p.changed {
+        notify_changed(space.as_str(), p.rev);
+        let bytes = serde_json::to_string(&p.value).map(|s| s.len()).unwrap_or(0);
+        audit::count(space.as_str(), &who.audit_label(), None, Counted::Write { ops: 1, bytes });
+    }
+    Ok(json!({ "rev": p.rev, "value": p.value, "changed": p.changed }))
 }
 
 fn delete(who: &DataWho, body: &[u8]) -> Result<Value, DataError> {

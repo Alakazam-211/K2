@@ -26,6 +26,7 @@ pub mod backend;
 pub mod export;
 pub mod grants;
 pub mod keys;
+pub mod patch;
 pub mod rights;
 pub mod signer_gate;
 pub mod snapshots;

@@ -183,7 +183,10 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// 2026-10-24, for 0.46.4).
 /// v35 = a custom widget's code may be 512 KB raw (was 256 KB; the bundle
 /// stays 3 MB) (Baden's Board via Appa 2026-10-23, for 0.46.4).
-pub const SKILL_VERSION_ZEN: u32 = 35;
+/// v36 = `k2.store.patch` / `k2 store patch --widget`: a field-level merge
+/// that keeps the fields it doesn't name, with `ifRev` (catalog v21; Appa
+/// 2026-10-23, for 0.46.4).
+pub const SKILL_VERSION_ZEN: u32 = 36;
 /// Bumped to 5 in 0.39.0: same Phase 2.1 A25 verb refresh applied to
 /// the workspace-root template body (Cli tools section, workflow
 /// docs). Was 4 since 0.32.7 (SOURCE sub-regions adoption).

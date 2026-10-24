@@ -805,8 +805,8 @@ mod tests {
         let widget: Vec<&str> = catalog().widget_callable_verbs().iter().map(|v| v.verb.as_str()).collect();
         assert_eq!(
             widget.len(),
-            69,
-            "UW16 + UWB10: 16 widget verbs, plus the whole canvas (canvas.setHitRegions, window.startDrag), plus Garden v3's six sources.* verbs, plus Garden data's 15 garden-local rows, plus RS-A15's guests.rooms / guests.setRooms (app + garden-local), plus room-scope 0.46.1's room.members, app.self, app.usage and widget.self, plus Thread parity 0.46.3's thread.attachment, thread.open, thread.links, thread.pickFiles and thread.markRead, plus the 12 Garden person rows (catalog v17), plus app-room-stream's thread.inbox (0.46.3), plus catalog v20's layout.get/set/toggle/subscribe, agents.show and conversation.setContext"
+            70,
+            "UW16 + UWB10: 16 widget verbs, plus the whole canvas (canvas.setHitRegions, window.startDrag), plus Garden v3's six sources.* verbs, plus Garden data's 15 garden-local rows, plus RS-A15's guests.rooms / guests.setRooms (app + garden-local), plus room-scope 0.46.1's room.members, app.self, app.usage and widget.self, plus Thread parity 0.46.3's thread.attachment, thread.open, thread.links, thread.pickFiles and thread.markRead, plus the 12 Garden person rows (catalog v17), plus app-room-stream's thread.inbox (0.46.3), plus catalog v20's layout.get/set/toggle/subscribe, agents.show and conversation.setContext, plus catalog v21's store.patch (0.46.4)"
         );
         assert_eq!(catalog().verbs_exposed_to(Exposure::Widget).len(), 36, "the bridge's own rows (thread.inbox joined in 0.46.3; catalog v20's six rows)");
         for never in ["zen.exit", "controls.bind", "homes.list", "agents.local", "agents.add", "agents.home", "agents.setHome",

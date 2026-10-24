@@ -46,6 +46,7 @@ pub const ROUTES: &[&str] = &[
     "/cli/zen/data/grants",
     "/cli/zen/data/import",
     "/cli/zen/data/list",
+    "/cli/zen/data/patch",
     "/cli/zen/data/put",
     "/cli/zen/data/revoke",
     "/cli/zen/data/show",
@@ -67,6 +68,7 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/zen/data/delete",
     "/cli/zen/data/grant",
     "/cli/zen/data/import",
+    "/cli/zen/data/patch",
     "/cli/zen/data/put",
     "/cli/zen/data/revoke",
     "/cli/zen/data/space/delete",
@@ -226,6 +228,7 @@ pub fn handle(path: &str, who: DataWho, body: &[u8], params: &HashMap<String, St
         // B1: data and grants.
         "/cli/zen/data/get"
         | "/cli/zen/data/put"
+        | "/cli/zen/data/patch"
         | "/cli/zen/data/delete"
         | "/cli/zen/data/list"
         | "/cli/zen/data/changes"

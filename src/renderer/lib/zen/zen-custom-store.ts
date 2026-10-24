@@ -29,6 +29,8 @@ import { CATALOG_ERROR_CODES } from '../contract/catalog-types'
 export const ZEN_STORE_VERBS: ReadonlySet<string> = new Set([
   'store.get',
   'store.put',
+  // 0.46.4: a field-level merge that keeps fields it doesn't name.
+  'store.patch',
   'store.delete',
   'store.list',
   'store.changes',

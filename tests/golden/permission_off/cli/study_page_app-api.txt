@@ -10,7 +10,7 @@ the daemon's loopback port). Every call carries a pass: this App's own
 every hour, so read the file again on pass_invalid) or a guest's
 session pass from POST /cli/skin/login. Users and rooms use the App
 key ($K2_SECRETS_DIR/K2_APP_KEY) on /v1/apps/$K2_APP_ID/... instead.
-From K2's verb catalog, version 20.
+From K2's verb catalog, version 21.
 
 THE SERVER SDK (sdk/server, TypeScript, Node 22+, no dependencies)
   import { fromEnv } from '@k2/server'

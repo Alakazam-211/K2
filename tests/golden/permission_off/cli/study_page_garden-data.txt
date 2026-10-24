@@ -16,7 +16,10 @@ KEYS AND REVS
   project: project/<pid>/board/<bid>/obj/<id>. A value is JSON, ≤ 60 KiB.
   Every write moves the space's rev. --if-rev <n> writes only if the key is
   still at rev n (0 = only if missing); a miss is `conflict`, exit 5: read
-  it again and retry. `k2 store changes --since <rev> --wait 30` waits for
+  it again and retry. `k2 store patch --widget <w> <key> --value '{…}'`
+  changes only the fields it names and keeps the rest (null removes one),
+  so you never drop a field the widget added.
+  `k2 store changes --since <rev> --wait 30` waits for
   the next change; --follow keeps printing (on `resync`, list again).
 
 GRANTS (you need one; the person gives it)

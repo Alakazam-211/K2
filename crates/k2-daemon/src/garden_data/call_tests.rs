@@ -183,6 +183,16 @@ fn an_owner_made_widget_reads_and_writes_its_whole_keyspace() {
     // person granted nothing, so the agent sees nothing).
     let (_, code) = err(&agent("w-keeper"), "GET", "/cli/zen/data/get", Value::Null, &[("widget", "board"), ("key", "obj/1")]);
     assert_eq!(code, "not_granted");
+    // 0.46.4: store.patch keeps the fields it doesn't name.
+    d.call("store.put", json!(["obj/1", {"t": "hi", "fromAgent": 7}]));
+    let p = d.call("store.patch", json!(["obj/1", {"t": "bye", "done": true}]));
+    assert_eq!(p["value"], json!({"t": "bye", "fromAgent": 7, "done": true}), "{p}");
+    let prev = p["rev"].as_i64().expect("rev");
+    assert_eq!(d.refuse("store.patch", json!(["obj/1", {"t": 1}, {"ifRev": prev + 3}])), "conflict");
+    assert_eq!(d.refuse("store.patch", json!(["obj/1", {"t": 1}, {"ifRev": prev, "extra": 1}])), "bad_request", "unknown option");
+    let p = d.call("store.patch", json!(["obj/1", {"done": null}, {"ifRev": prev}]));
+    assert_eq!(p["value"], json!({"t": "bye", "fromAgent": 7}));
+    assert_eq!(d.call("store.get", json!(["obj/1"]))["value"], json!({"t": "bye", "fromAgent": 7}));
     let del = d.call("store.delete", json!(["obj/1"]));
     assert_eq!(del["deleted"], true);
     assert_eq!(d.call("store.delete", json!(["obj/1"])), json!({"rev": 0, "deleted": false}));

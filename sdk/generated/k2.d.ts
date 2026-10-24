@@ -897,6 +897,12 @@ export interface StoreRev {
   readonly rev: number
 }
 
+export interface StorePatched {
+  readonly rev: number
+  /** The whole document after the merge. */
+  readonly value: unknown
+}
+
 export interface StoreDeleted {
   readonly deleted: boolean
   readonly rev: number
@@ -1147,6 +1153,7 @@ export interface K2Verbs {
   'store.list': { args: [opts?: { after?: string; from?: string; limit?: number; prefix?: string }]; value: StorePage }
   'store.changes': { args: [opts: { after?: string; from?: string; prefix?: string; since: number }]; value: StoreChanges }
   'store.put': { args: [key: string, value: unknown, opts?: { ifRev?: number }]; value: StoreRev }
+  'store.patch': { args: [key: string, partial: unknown, opts?: { ifRev?: number }]; value: StorePatched }
   'store.delete': { args: [key: string, opts?: { ifRev?: number }]; value: StoreDeleted }
   'store.batch': { args: [ops: StoreOp[]]; value: StoreCommit }
   'store.txBegin': { args: []; value: StoreTx }
@@ -1160,7 +1167,7 @@ export interface K2Verbs {
 }
 
 export type K2Verb = keyof K2Verbs
-export type K2CallVerb = 'gardens.list' | 'gardens.current' | 'gardens.switch' | 'theme.get' | 'canvas.setHitRegions' | 'window.startDrag' | 'layout.get' | 'layout.set' | 'layout.toggle' | 'save.get' | 'save.set' | 'save.remove' | 'save.keys' | 'viewer.get' | 'app.self' | 'app.usage' | 'widget.self' | 'agents.list' | 'conversation.open' | 'conversation.close' | 'agents.show' | 'presence.get' | 'thread.read' | 'thread.markRead' | 'thread.attachment' | 'thread.open' | 'thread.links' | 'thread.catchup' | 'thread.unread' | 'thread.mute' | 'thread.pickFiles' | 'thread.post' | 'thread.answer' | 'compose.draft' | 'conversation.setContext' | 'sources.list' | 'sources.read' | 'sources.history' | 'sources.refresh' | 'sources.ask' | 'files.list' | 'files.read' | 'files.readBinary' | 'tickets.list' | 'tickets.show' | 'tickets.create' | 'tickets.comment' | 'tickets.resolve' | 'store.get' | 'store.list' | 'store.changes' | 'store.put' | 'store.delete' | 'store.batch' | 'store.txBegin' | 'store.txAdd' | 'store.txCommit' | 'store.txAbort' | 'guests.rooms' | 'guests.setRooms' | 'activity.snapshot' | 'room.members'
+export type K2CallVerb = 'gardens.list' | 'gardens.current' | 'gardens.switch' | 'theme.get' | 'canvas.setHitRegions' | 'window.startDrag' | 'layout.get' | 'layout.set' | 'layout.toggle' | 'save.get' | 'save.set' | 'save.remove' | 'save.keys' | 'viewer.get' | 'app.self' | 'app.usage' | 'widget.self' | 'agents.list' | 'conversation.open' | 'conversation.close' | 'agents.show' | 'presence.get' | 'thread.read' | 'thread.markRead' | 'thread.attachment' | 'thread.open' | 'thread.links' | 'thread.catchup' | 'thread.unread' | 'thread.mute' | 'thread.pickFiles' | 'thread.post' | 'thread.answer' | 'compose.draft' | 'conversation.setContext' | 'sources.list' | 'sources.read' | 'sources.history' | 'sources.refresh' | 'sources.ask' | 'files.list' | 'files.read' | 'files.readBinary' | 'tickets.list' | 'tickets.show' | 'tickets.create' | 'tickets.comment' | 'tickets.resolve' | 'store.get' | 'store.list' | 'store.changes' | 'store.put' | 'store.patch' | 'store.delete' | 'store.batch' | 'store.txBegin' | 'store.txAdd' | 'store.txCommit' | 'store.txAbort' | 'guests.rooms' | 'guests.setRooms' | 'activity.snapshot' | 'room.members'
 export type K2SubscribeVerb = 'theme.changed' | 'layout.subscribe' | 'agents.subscribe' | 'presence.subscribe' | 'thread.subscribe' | 'thread.inbox' | 'sources.subscribe'
 
 export interface K2 {
@@ -1337,6 +1344,8 @@ export interface K2 {
     changes(opts: { after?: string; from?: string; prefix?: string; since: number }): Promise<StoreChanges>
     /** Save one key; with ifRev, only if nobody changed it since. This computer only. cap store:write · local · garden-data-v1. e.g. `const {rev} = await k2.store.put('obj/7', note, {ifRev: e.rev})` */
     put(key: string, value: unknown, opts?: { ifRev?: number }): Promise<StoreRev>
+    /** Change some fields of one key and keep the rest (null removes a field); with ifRev, only if nobody changed it since. A missing key starts from {}. This computer only. cap store:write · local · garden-data-v1. e.g. `const {rev} = await k2.store.patch('obj/7', {done: true}, {ifRev: e.rev})` */
+    patch(key: string, partial: unknown, opts?: { ifRev?: number }): Promise<StorePatched>
     /** Delete one key (a missing key is not an error). This computer only. cap store:write · local · garden-data-v1. e.g. `await k2.store.delete('obj/7')` */
     delete(key: string, opts?: { ifRev?: number }): Promise<StoreDeleted>
     /** Up to 64 writes, all or nothing, as one rev. This computer only. cap store:write · local · garden-data-v1. e.g. `await k2.store.batch([{op: 'put', key: 'obj/1', value: a}, {op: 'delete', key: 'obj/2'}])` */

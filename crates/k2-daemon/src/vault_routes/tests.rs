@@ -793,3 +793,145 @@ fn proxy_delivery_is_refused_while_the_proxy_is_held() {
     }
     assert!(request_delivery("nonsense").is_err());
 }
+
+/// The doctor's own name rule is wider than `is_sensitive_name` (which
+/// stays strict: it gates publish bindings and App installs).
+#[test]
+fn the_doctor_flags_secret_looking_names_and_skips_public_ones() {
+    for n in [
+        "STRIPE_SECRET_KEY",
+        "SUPABASE_SERVICE_ROLE_KEY",
+        "NPM_TOKEN_ALAKAZAMLABS",
+        "OPENAI_API_KEY",
+        "API_KEY",
+        "GITHUB_TOKEN",
+        "WEBHOOK_SECRET",
+        "CLIENT_SECRET_ID",
+        "DB_PASSWORD",
+        "PASSWORD",
+        "SSH_PRIVATE_KEY",
+        "JWT_KEY",
+        "DATABASE_URL",
+        "PG_DSN",
+        "sentry_dsn",
+        "stripe_secret_key",
+    ] {
+        assert!(doctor_flags_name(n), "the doctor must flag {n}");
+    }
+    for n in [
+        "NEXT_PUBLIC_SUPABASE_URL",
+        "NEXT_PUBLIC_API_KEY",
+        "NEXT_PUBLIC_STRIPE_TOKEN",
+        "STRIPE_PUBLISHABLE_KEY",
+        "SUPABASE_ANON_KEY",
+        "PORT",
+        "NODE_ENV",
+        "LOG_LEVEL",
+        "PUBLIC_URL",
+        "KEYBOARD_LAYOUT",
+        "MONKEY",
+    ] {
+        assert!(!doctor_flags_name(n), "the doctor must not flag {n}");
+    }
+    // The strict rule is unchanged: these three still don't match it, so
+    // publish bindings and App installs that use them keep working.
+    for n in ["STRIPE_SECRET_KEY", "SUPABASE_SERVICE_ROLE_KEY", "NPM_TOKEN_ALAKAZAMLABS"] {
+        assert!(!k2_vault::delivery::is_sensitive_name(n), "is_sensitive_name must stay strict for {n}");
+    }
+}
+
+#[test]
+fn the_doctor_reads_env_text_and_skips_references_and_empty_values() {
+    let text = "\
+# comment
+export STRIPE_SECRET_KEY=\"k2test_live_value\"
+SUPABASE_SERVICE_ROLE_KEY='k2test-role'
+NPM_TOKEN_ALAKAZAMLABS=k2test-npm
+NEXT_PUBLIC_SUPABASE_ANON_KEY=k2test-public
+SUPABASE_ANON_KEY=k2test-anon
+OPENAI_API_KEY=k2v://ws/demo/OPENAI_API_KEY
+EMPTY_TOKEN=
+PORT=3000
+";
+    assert_eq!(plaintext_env_names(text), vec!["STRIPE_SECRET_KEY", "SUPABASE_SERVICE_ROLE_KEY", "NPM_TOKEN_ALAKAZAMLABS"]);
+}
+
+#[test]
+fn the_doctor_says_which_names_it_checks() {
+    let t = vault();
+    for c in [owner(), agent("ws1", false)] {
+        let (s, v) = call(&t, DOCTOR, &c, Value::Null);
+        assert_eq!(s, 200, "{v}");
+        assert_eq!(v["checkedNames"].as_str().expect("checkedNames"), DOCTOR_CHECKED_NAMES, "{v}");
+    }
+    for part in ["*SECRET*", "*TOKEN*", "*PASSWORD*", "*_KEY", "DATABASE_URL", "*_DSN", "NEXT_PUBLIC_*", "*_PUBLISHABLE_KEY", "*_ANON_KEY"] {
+        assert!(DOCTOR_CHECKED_NAMES.contains(part), "the line names {part}");
+    }
+}
+
+fn put_system(t: &T, name: &str) {
+    let mut req = PutRequest::new(Namespace::System, Scope::server(), name, Kind::Password);
+    req.default_delivery = Some(Delivery::None);
+    t.v.put(req, SecretBytes::from_slice(b"k2test-system-value"), &Actor::System("test".into())).expect("put system");
+}
+
+/// `k2 vault list --system` from an agent: K2's own secrets stay hidden
+/// (names too), and the answer says how many and why instead of an empty
+/// list that contradicts `status`.
+#[test]
+fn list_system_tells_an_agent_how_many_are_hidden_and_why() {
+    let t = vault();
+    put_system(&t, "mail-k2test-1");
+    put_system(&t, "pg-k2test-2");
+    let mut sys = HashMap::new();
+    sys.insert("system".to_string(), "1".to_string());
+    let (s, v) = call_p(&t, LIST, &agent("ws1", false), Value::Null, sys.clone());
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(v["secrets"].as_array().expect("secrets").len(), 0, "{v}");
+    assert_eq!(v["systemHidden"]["count"].as_u64().expect("count"), 2, "{v}");
+    assert_eq!(v["systemHidden"]["why"].as_str().expect("why"), SYSTEM_HIDDEN_WHY);
+    assert!(!v.to_string().contains("mail-k2test-1"), "no names for an agent: {v}");
+    // Without --system nothing about them is said.
+    let (s, v) = call(&t, LIST, &agent("ws1", false), Value::Null);
+    assert_eq!(s, 200, "{v}");
+    assert!(v.get("systemHidden").is_none(), "{v}");
+    // The owner and an Admin see the names; nothing is hidden from them.
+    for c in [owner(), login(Role::Admin)] {
+        let (s, v) = call_p(&t, LIST, &c, Value::Null, sys.clone());
+        assert_eq!(s, 200, "{v}");
+        let names: Vec<&str> = v["secrets"].as_array().expect("secrets").iter().map(|m| m["name"].as_str().expect("name")).collect();
+        assert_eq!(names, vec!["mail-k2test-1", "pg-k2test-2"], "{v}");
+        assert!(v.get("systemHidden").is_none(), "{v}");
+        assert!(!v.to_string().contains("k2test-system-value"), "never a value: {v}");
+    }
+    // A Member is hidden from like an agent.
+    let (s, v) = call_p(&t, LIST, &login(Role::Member), Value::Null, sys);
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(v["systemHidden"]["count"].as_u64().expect("count"), 2, "{v}");
+}
+
+/// `k2 vault grant NAME --env-name X` without `--as` is an env grant (and
+/// `--file-name` a file grant), not a fetch grant with an unused name.
+#[test]
+fn a_grant_with_an_env_or_file_name_delivers_that_way() {
+    let t = vault();
+    let a = agent("ws1", false);
+    let (s, v) = call(&t, SET, &a, json!({ "name": "GITHUB_CLI", "kind": "oauth_token", "valueB64": b64("k2test-gh-token") }));
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(v["secret"]["defaultDelivery"], "fetch", "{v}");
+    let grant = |body: Value| {
+        let (s, v) = call(&t, GRANT, &a, body);
+        assert_eq!(s, 200, "{v}");
+        v["grant"].clone()
+    };
+    let g = grant(json!({ "name": "GITHUB_CLI", "to": "session:sess-9", "envName": "GH_TOKEN" }));
+    assert_eq!(g["delivery"], "env", "{g}");
+    assert_eq!(g["envName"], "GH_TOKEN", "{g}");
+    let g = grant(json!({ "name": "GITHUB_CLI", "to": "session:sess-9", "fileName": "gh.token" }));
+    assert_eq!(g["delivery"], "file", "{g}");
+    // An explicit --as still wins; no name keeps the secret's default.
+    let g = grant(json!({ "name": "GITHUB_CLI", "to": "session:sess-9", "as": "file", "envName": "GH_TOKEN" }));
+    assert_eq!(g["delivery"], "file", "{g}");
+    let g = grant(json!({ "name": "GITHUB_CLI", "to": "session:sess-9" }));
+    assert_eq!(g["delivery"], "fetch", "{g}");
+}

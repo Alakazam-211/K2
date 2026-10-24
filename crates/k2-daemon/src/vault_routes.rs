@@ -433,8 +433,19 @@ fn list(vault: &LocalVault, c: &VaultCaller, params: &HashMap<String, String>) -
     };
     let f = ListFilter { include_system, scope, include_destroyed: params.get("destroyed").is_some_and(|v| v == "1") };
     let items = vault.list(&f, &c.actor)?;
-    Ok(json!({ "secrets": items.iter().map(meta_json).collect::<Vec<_>>() }))
+    let mut out = json!({ "secrets": items.iter().map(meta_json).collect::<Vec<_>>() });
+    // K2's own secrets are visible to the owner and Admins only
+    // (`policy::can_see`); an agent asking for them got an empty list
+    // while `status` counted them. Say how many are hidden and why.
+    if include_system && !(c.actor.is_admin_human() || c.actor.is_system()) {
+        out["systemHidden"] = json!({ "count": vault.status().counts.system, "why": SYSTEM_HIDDEN_WHY });
+    }
+    Ok(out)
 }
+
+/// Why `k2 vault list --system` shows an agent (or a Member) no K2 system
+/// secrets.
+pub const SYSTEM_HIDDEN_WHY: &str = "K2's own secrets (mail and database passwords, login slots, signing keys) are used by the daemon only; agents never see them, not even their names, and can't use, grant or change them. The owner or an Admin can list the names from their own terminal (not a K2 terminal): k2 vault list --system";
 
 fn sel_from_params(params: &HashMap<String, String>) -> Sel {
     Sel {
@@ -545,7 +556,46 @@ fn doctor(vault: &LocalVault, c: &VaultCaller) -> Result<Value, VaultError> {
             "message": format!("{} holds {} in plain text; move it in with: k2 vault import {}", f.0, f.1.join(", "), f.0),
         }));
     }
-    Ok(json!({ "ok": findings.iter().all(|f| f["level"] != "error"), "findings": findings }))
+    Ok(json!({
+        "ok": findings.iter().all(|f| f["level"] != "error"),
+        "findings": findings,
+        "checkedNames": DOCTOR_CHECKED_NAMES,
+    }))
+}
+
+/// Which `.env` names the doctor flags, in one line (JSON and CLI text).
+pub const DOCTOR_CHECKED_NAMES: &str = "checked names: *SECRET*, *TOKEN*, *PASSWORD*, *_KEY, DATABASE_URL, *_DSN (not NEXT_PUBLIC_*, *_PUBLISHABLE_KEY, *_ANON_KEY). Other names aren't flagged; check them yourself.";
+
+/// The doctor's name rule: does this `.env` name look like a secret?
+/// Wider than [`k2_vault::delivery::is_sensitive_name`], which stays strict
+/// because it also gates publish bindings and App installs (widening it
+/// would refuse things already installed). This one only decides what the
+/// doctor reports. Names meant to be public (`NEXT_PUBLIC_*`, publishable
+/// and anon keys) are never flagged.
+pub fn doctor_flags_name(key: &str) -> bool {
+    let k = key.trim().to_ascii_uppercase();
+    if k.starts_with("NEXT_PUBLIC_") || k.ends_with("_PUBLISHABLE_KEY") || k.ends_with("_ANON_KEY") {
+        return false;
+    }
+    k2_vault::delivery::is_sensitive_name(&k)
+        || k.contains("SECRET")
+        || k.contains("TOKEN")
+        || k.contains("PASSWORD")
+        || k.ends_with("_KEY")
+}
+
+/// The names in one `.env` text the doctor flags: a flagged name holding a
+/// value that isn't a `k2v://` reference.
+pub fn plaintext_env_names(text: &str) -> Vec<String> {
+    text.lines()
+        .filter_map(|l| {
+            let l = l.trim().trim_start_matches("export ");
+            let (k, v) = l.split_once('=')?;
+            let k = k.trim();
+            let v = v.trim().trim_matches('"').trim_matches('\'');
+            (doctor_flags_name(k) && !v.is_empty() && !k2_vault::refs::VaultRef::is_ref(v)).then(|| k.to_string())
+        })
+        .collect()
 }
 
 /// Published services still on the inherited environment (deprecated,
@@ -589,8 +639,8 @@ fn legacy_env_services(c: &VaultCaller) -> Vec<(String, String)> {
     out
 }
 
-/// Workspace `.env` files (top level) with sensitive names holding values
-/// that aren't `k2v://` references.
+/// Workspace `.env` files (top level) with names the doctor flags
+/// ([`doctor_flags_name`]) holding values that aren't `k2v://` references.
 fn plaintext_env_files(c: &VaultCaller) -> Vec<(String, Vec<String>)> {
     let paths: Vec<String> = match c.workspace_id() {
         Some(ws) => crate::vault::workspace_path(ws).into_iter().collect(),
@@ -622,17 +672,7 @@ fn plaintext_env_files(c: &VaultCaller) -> Vec<(String, Vec<String>)> {
                 continue;
             }
             let Ok(text) = std::fs::read_to_string(e.path()) else { continue };
-            let keys: Vec<String> = text
-                .lines()
-                .filter_map(|l| {
-                    let l = l.trim().trim_start_matches("export ");
-                    let (k, v) = l.split_once('=')?;
-                    let k = k.trim();
-                    let v = v.trim().trim_matches('"').trim_matches('\'');
-                    (k2_vault::delivery::is_sensitive_name(k) && !v.is_empty() && !k2_vault::refs::VaultRef::is_ref(v))
-                        .then(|| k.to_string())
-                })
-                .collect();
+            let keys = plaintext_env_names(&text);
             if !keys.is_empty() {
                 out.push((e.path().display().to_string(), keys));
             }
@@ -888,9 +928,13 @@ fn grant(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, Vaul
     let sel = selector(c, &b.sel)?;
     let to = b.to.as_deref().ok_or_else(|| err("consumer_required", 400, "who gets it? --to ws:<name>"))?;
     let consumer = consumer_for(c, to)?;
-    let delivery = match b.delivery.as_deref() {
-        Some(d) => request_delivery(d)?,
-        None => vault.meta(&sel, &c.actor)?.default_delivery,
+    // `--env-name X` alone means env delivery (and `--file-name` file): a
+    // name on a fetch grant would be stored and never used.
+    let delivery = match (b.delivery.as_deref(), &b.env_name, &b.file_name) {
+        (Some(d), _, _) => request_delivery(d)?,
+        (None, Some(_), None) => Delivery::Env,
+        (None, None, Some(_)) => Delivery::File,
+        (None, _, _) => vault.meta(&sel, &c.actor)?.default_delivery,
     };
     let g = vault.grant(
         GrantRequest {

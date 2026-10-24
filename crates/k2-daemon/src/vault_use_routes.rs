@@ -349,7 +349,9 @@ fn import(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Value
         };
         let k = k.trim();
         let v = v.trim().trim_matches('"').trim_matches('\'');
-        if t.starts_with('#') || v.is_empty() || k2_vault::refs::VaultRef::is_ref(v) || !k2_vault::delivery::is_sensitive_name(k) {
+        // The doctor's name rule, so `k2 vault import` moves every name
+        // `k2 vault doctor` tells you to import with it.
+        if t.starts_with('#') || v.is_empty() || k2_vault::refs::VaultRef::is_ref(v) || !crate::vault_routes::doctor_flags_name(k) {
             out_lines.push(line.to_string());
             if !t.starts_with('#') && !v.is_empty() {
                 kept.push(k.to_string());

@@ -311,6 +311,7 @@ fn agent_socket_records_are_macd() {
         secrets_dir: format!("/run/k2/secrets/{tag}-abcdefgh"),
         sock_path: format!("/run/k2/secrets/{tag}-abcdefgh/a.sock"),
         created_at: "2026-10-24T00:00:00Z".into(),
+        ..Default::default()
     };
     v.agent_socket_put(&rec("s1")).expect("put");
     v.agent_socket_put(&rec("s2")).expect("put");
@@ -323,8 +324,119 @@ fn agent_socket_records_are_macd() {
     let v = open(&t, &ks);
     assert_eq!(v.agent_socket_get("s2").expect("get"), None, "a tampered record is never used");
     assert_eq!(v.agent_sockets().expect("all"), vec![rec("s1")]);
+    // The ptyd binding: once, after the spawn; a fresh put is unbound.
+    assert!(v.agent_socket_bind("s1", "boot-a", 100, 1_700_000_000).expect("bind"));
+    let b = v.agent_socket_get("s1").expect("get").expect("rec");
+    assert_eq!((b.ptyd_boot.as_str(), b.pid, b.started_at), ("boot-a", 100, 1_700_000_000));
+    assert!(!v.agent_socket_bind("s1", "boot-a", 101, 1_700_000_000).expect("again"), "bound once");
+    assert_eq!(v.agent_socket_get("s1").expect("get").expect("rec").pid, 100);
+    assert!(!v.agent_socket_bind("nope", "boot-a", 1, 1).expect("no record"));
+    assert_eq!(v.agent_socket_bind("s1", "", 1, 1).expect_err("empty boot").code, "bad_agent_socket");
+    v.agent_socket_put(&k2_vault::vault::AgentSocket { ptyd_boot: "forged".into(), pid: 9, started_at: 9, ..rec("s1") }).expect("put");
+    assert!(v.agent_socket_get("s1").expect("get").expect("rec").ptyd_boot.is_empty(), "a put never carries a binding");
     v.agent_socket_remove("s1").expect("rm");
     assert!(v.agent_sockets().expect("all").is_empty());
+}
+
+/// Round 3 (4): a vault made by the 8939f4853 build has agent_policy
+/// without `audit_seq` (and an older agent_socket). It opens; the tables
+/// are rebuilt; a policy that had been set reads as missing (strictest)
+/// until a person sets it again, an unset one keeps the defaults.
+#[test]
+fn a_vault_with_the_pre_release_agent_tables_opens() {
+    let t = TestDir::new("agent-old-schema");
+    let ks = Arc::new(FakeKeyStore::new());
+    let v = open(&t, &ks);
+    let k = put_key(&v, "ws1", "OLD", &testkeys::ed25519(), Delivery::Agent, &Actor::Owner);
+    let k2 = put_key(&v, "ws1", "NEVER_SET", &testkeys::ed25519(), Delivery::Agent, &Actor::Owner);
+    v.set_agent_policy(&Selector::Id(k.id.clone()), AgentPolicyPatch { burst: Some(9), ..Default::default() }, &Actor::Owner).expect("set");
+    drop(v);
+    let c = rusqlite::Connection::open(t.path().join("vault/vault.db")).expect("db");
+    c.execute_batch(
+        "DROP TABLE agent_policy;
+         CREATE TABLE agent_policy (secret_id TEXT PRIMARY KEY, burst INTEGER NOT NULL, per_minute INTEGER NOT NULL,
+            allow_forwarded INTEGER NOT NULL DEFAULT 0, updated_by TEXT NOT NULL, updated_at TEXT NOT NULL, row_mac BLOB NOT NULL);
+         DROP TABLE agent_socket;
+         CREATE TABLE agent_socket (tag TEXT PRIMARY KEY, kind TEXT NOT NULL, workspace_id TEXT NOT NULL, secrets_dir TEXT NOT NULL,
+            sock_path TEXT NOT NULL, created_at TEXT NOT NULL, row_mac BLOB NOT NULL);",
+    )
+    .expect("old schema");
+    c.execute("INSERT INTO agent_policy VALUES (?1, 600, 6000, 1, 'owner', 't', x'00')", [&k.id]).expect("old row");
+    c.execute("INSERT INTO agent_socket VALUES ('s1', 'session', 'ws1', '/d', '/d/a.sock', 't', x'00')", []).expect("old sock");
+    drop(c);
+    let v = open(&t, &ks);
+    let p = v.agent_policy(&k.id).expect("policy");
+    assert_eq!((p.burst, p.per_minute, p.allow_forwarded), (1, 1, false), "a policy that was set reads as missing: strictest");
+    let d = v.agent_policy(&k2.id).expect("defaults");
+    assert_eq!((d.burst, d.per_minute, d.allow_forwarded), (60, 240, false), "never set: the defaults");
+    assert!(v.agent_sockets().expect("socks").is_empty(), "old socket records are dropped");
+    let (_, p) = v.set_agent_policy(&Selector::Id(k.id.clone()), AgentPolicyPatch { burst: Some(9), ..Default::default() }, &Actor::Owner).expect("set again");
+    assert_eq!(v.agent_policy(&k.id).expect("policy"), p);
+    v.agent_socket_put(&k2_vault::vault::AgentSocket {
+        tag: "s2".into(),
+        kind: "session".into(),
+        workspace_id: "ws1".into(),
+        secrets_dir: "/d2".into(),
+        sock_path: "/d2/a.sock".into(),
+        created_at: "t".into(),
+        ..Default::default()
+    })
+    .expect("new socket record");
+}
+
+/// Round 3 (7): deleting the newer audit entry (a tightening) and putting
+/// the older, looser row back can't revive it: the log has a gap against
+/// its MAC'd header.
+#[test]
+fn deleting_an_audit_entry_cannot_revive_an_older_policy() {
+    let t = TestDir::new("agent-audit-gap");
+    let ks = Arc::new(FakeKeyStore::new());
+    let v = open(&t, &ks);
+    let k = put_key(&v, "ws1", "KEY", &testkeys::ed25519(), Delivery::Agent, &Actor::Owner);
+    let sel = Selector::Id(k.id.clone());
+    v.set_agent_policy(&sel, AgentPolicyPatch { allow_forwarded: Some(true), ..Default::default() }, &Actor::Owner).expect("allow");
+    let db = t.path().join("vault/vault.db");
+    let old: (i64, i64, i64, String, String, i64, Vec<u8>) = rusqlite::Connection::open(&db)
+        .expect("db")
+        .query_row(
+            "SELECT burst, per_minute, allow_forwarded, updated_by, updated_at, audit_seq, row_mac FROM agent_policy WHERE secret_id = ?1",
+            [&k.id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)),
+        )
+        .expect("row");
+    v.set_agent_policy(&sel, AgentPolicyPatch { allow_forwarded: Some(false), ..Default::default() }, &Actor::Owner).expect("tighten");
+    drop(v);
+    let c = rusqlite::Connection::open(&db).expect("db");
+    let newest: i64 = c
+        .query_row("SELECT MAX(seq) FROM audit WHERE secret_id = ?1 AND action = 'policy' AND outcome LIKE 'ok:agent %'", [&k.id], |r| r.get(0))
+        .expect("newest");
+    c.execute("DELETE FROM audit WHERE seq = ?1", [newest]).expect("delete newest");
+    c.execute(
+        "UPDATE agent_policy SET burst = ?2, per_minute = ?3, allow_forwarded = ?4, updated_by = ?5, updated_at = ?6, audit_seq = ?7, row_mac = ?8 WHERE secret_id = ?1",
+        rusqlite::params![k.id, old.0, old.1, old.2, old.3, old.4, old.5, old.6],
+    )
+    .expect("replay");
+    drop(c);
+    let v = open(&t, &ks);
+    let p = v.agent_policy(&k.id).expect("policy");
+    assert!(!p.allow_forwarded, "the looser row must not come back");
+    assert_eq!((p.burst, p.per_minute), (1, 1), "strictest while the log has a gap");
+}
+
+/// Round 3 (3): an ssh_key value must read as a key whatever the delivery;
+/// one pasted into a one-line field (line breaks gone) is refused.
+#[test]
+fn a_flattened_ssh_key_is_refused_on_put_and_rotate() {
+    let (_t, v) = vault();
+    let key = testkeys::ed25519();
+    let flat = key.replace('\n', " ");
+    let mut r = PutRequest::new(Namespace::User, Scope::workspace("ws1"), "FLAT", Kind::SshKey);
+    r.default_delivery = Some(Delivery::File);
+    assert_eq!(v.put(r, SecretBytes::from_slice(flat.as_bytes()), &Actor::Owner).expect_err("flat").code, "bad_value");
+    let m = put_key(&v, "ws1", "GOOD", &key, Delivery::File, &Actor::Owner);
+    let e = v.rotate(&Selector::Id(m.id.clone()), SecretBytes::from_slice(flat.as_bytes()), &Actor::Owner).expect_err("flat rotate");
+    assert_eq!(e.code, "bad_value");
+    v.rotate(&Selector::Id(m.id), SecretBytes::from_slice(testkeys::ed25519().as_bytes()), &Actor::Owner).expect("a real key rotates");
 }
 
 /// Round 2 (14): what a downgrade to 0.46.3 would break.

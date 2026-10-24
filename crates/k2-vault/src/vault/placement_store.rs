@@ -168,7 +168,7 @@ impl LocalVault {
         for row in it {
             let (known, target, mac, raw) = row?;
             if !hmac_verify(&keys.row, &mac_input(&raw, &target), &mac) {
-                self.tamper.lock().push(format!("placement {} failed its integrity check", raw.id));
+                self.tamper_once(format!("placement {} failed its integrity check", raw.id));
                 continue;
             }
             match known {
@@ -375,7 +375,7 @@ impl LocalVault {
             .optional()?;
         let (nonce, ct, fp, cat, cby, state, rev, mac) = row.ok_or_else(|| VaultError::not_found("that version doesn't exist"))?;
         if !hmac_verify(&keys.row, &version_mac_input(secret_id, version, &nonce, &ct, &fp, &cat, &cby, &state, rev.as_deref()), &mac) {
-            self.tamper.lock().push(format!("secret {secret_id} v{version} failed its integrity check"));
+            self.tamper_once(format!("secret {secret_id} v{version} failed its integrity check"));
             return Err(VaultError::tamper("this version failed its integrity check"));
         }
         Ok((cby, cat))

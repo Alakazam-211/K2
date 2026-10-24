@@ -97,9 +97,10 @@ export function deliveryReadable(d: string): boolean {
   return d === 'file' || d === 'env' || d === 'api'
 }
 
-/** The delivery choices for a kind: `agent` only for SSH keys. */
+/** The delivery choices for a kind: `agent` only for SSH keys, and never
+ * `fetch` for them (an SSH key is never put in a request). */
 export function deliveryChoices(kind: string): string[] {
-  return kind === 'ssh_key' ? ['fetch', 'agent', 'file', 'env'] : ['fetch', 'file', 'env']
+  return kind === 'ssh_key' ? ['agent', 'file', 'env'] : ['fetch', 'file', 'env']
 }
 
 /** The ceiling choices for a kind. */
@@ -213,18 +214,61 @@ function CopyButton({ text, label = 'Copy' }: { text: string; label?: string }):
 }
 
 /** A password field whose text never enters React state. */
+/** Kinds whose value is several lines (a PEM or OpenSSH key): a one-line
+ * field would drop the line breaks and store a broken key. */
+export function isMultilineKind(kind: string): boolean {
+  return kind === 'ssh_key' || kind === 'tls_key'
+}
+
+type ValueRef = React.RefObject<HTMLInputElement | HTMLTextAreaElement | null>
+
 function ValueField({
   fieldRef,
   label,
   onPresence,
+  multiline = false,
 }: {
-  fieldRef: React.RefObject<HTMLInputElement | null>
+  fieldRef: ValueRef
   label: string
   onPresence: (has: boolean) => void
+  multiline?: boolean
 }): React.JSX.Element {
+  if (multiline) {
+    // A key keeps its line breaks: a textarea (masked) plus a file picker.
+    return (
+      <div className="space-y-1">
+        <textarea
+          ref={fieldRef as React.RefObject<HTMLTextAreaElement | null>}
+          autoComplete="off"
+          spellCheck={false}
+          aria-label={label}
+          placeholder="Paste the whole key, BEGIN and END lines included"
+          rows={4}
+          onChange={(e) => onPresence(e.currentTarget.value !== '')}
+          className={`${input} font-mono`}
+          style={{ WebkitTextSecurity: 'disc' } as React.CSSProperties}
+          data-testid="vault-value-multiline"
+        />
+        <input
+          type="file"
+          aria-label={`${label} from a file`}
+          className={`text-[11px] ${muted}`}
+          onChange={async (e) => {
+            const f = e.currentTarget.files?.[0]
+            const ta = fieldRef.current
+            if (f && ta) {
+              ta.value = await f.text()
+              onPresence(ta.value !== '')
+            }
+            e.currentTarget.value = ''
+          }}
+        />
+      </div>
+    )
+  }
   return (
     <input
-      ref={fieldRef}
+      ref={fieldRef as React.RefObject<HTMLInputElement | null>}
       type="password"
       autoComplete="off"
       spellCheck={false}
@@ -815,7 +859,7 @@ function SharePanel({ secret, onDone }: { secret: VaultSecret; onDone: () => voi
 }
 
 function RotatePanel({ secret, onDone }: { secret: VaultSecret; onDone: () => void }): React.JSX.Element {
-  const fieldRef = useRef<HTMLInputElement>(null)
+  const fieldRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null)
   const [has, setHas] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -839,7 +883,7 @@ function RotatePanel({ secret, onDone }: { secret: VaultSecret; onDone: () => vo
   return (
     <div className="space-y-1.5 max-w-md" data-testid="vault-rotate-panel">
       <p className={`text-[11px] ${muted}`}>Paste the new value from {secret.provider || 'the provider'}. Agents use it from their next call.</p>
-      <ValueField fieldRef={fieldRef} label={`New value for ${secret.name}`} onPresence={setHas} />
+      <ValueField fieldRef={fieldRef} label={`New value for ${secret.name}`} onPresence={setHas} multiline={isMultilineKind(secret.kind)} />
       <button type="button" className={btn} disabled={busy || !has} onClick={() => void rotate()}>
         Rotate
       </button>
@@ -1047,7 +1091,7 @@ function AddSecretForm({ presets, onDone, onCancel }: { presets: VaultPreset[]; 
   const [sites, setSites] = useState('')
   const [delivery, setDelivery] = useState('fetch')
   const [kind, setKind] = useState('api_key')
-  const fieldRef = useRef<HTMLInputElement>(null)
+  const fieldRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null)
   const [has, setHas] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -1125,6 +1169,8 @@ function AddSecretForm({ presets, onDone, onCancel }: { presets: VaultPreset[]; 
           onChange={(e) => {
             const k = e.target.value
             setKind(k)
+            // The value field may change shape (one line vs a key): start empty.
+            setHas(false)
             // agent is for SSH keys only; an SSH key starts as a file (the daemon's default).
             if (k === 'ssh_key') setDelivery('file')
             else if (delivery === 'agent') setDelivery('fetch')
@@ -1184,7 +1230,7 @@ function AddSecretForm({ presets, onDone, onCancel }: { presets: VaultPreset[]; 
       </label>
       {deliveryReadable(delivery) && <p className={`text-[11px] ${muted}`}>Agents can see this value.</p>}
       {needsSite && <p className={`text-[11px] ${danger}`}>Add a site, or let agents read it.</p>}
-      <ValueField fieldRef={fieldRef} label="Value" onPresence={setHas} />
+      <ValueField fieldRef={fieldRef} label="Value" onPresence={setHas} multiline={isMultilineKind(kind)} />
       <p className={`text-[10px] ${muted}`}>
         A key can still do anything its service allows it to. Use a restricted key if you can.
       </p>

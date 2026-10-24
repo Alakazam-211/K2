@@ -156,7 +156,7 @@ impl LocalVault {
         let Some(row) = row else { return Ok(None) };
         let (rec, ij, mac) = row?;
         if !hmac_verify(&keys.row, &record_mac_input(&rec, &ij), &mac) {
-            self.tamper.lock().push(format!("handoff {id} failed its integrity check"));
+            self.tamper_once(format!("handoff {id} failed its integrity check"));
             return Err(VaultError::tamper("this handoff's record failed its integrity check"));
         }
         Ok(Some(rec))
@@ -183,7 +183,7 @@ impl LocalVault {
                 Err(_) => continue,
             };
             if !hmac_verify(&keys.row, &record_mac_input(&rec, &ij), &mac) {
-                self.tamper.lock().push(format!("handoff {} failed its integrity check", rec.delivery_id));
+                self.tamper_once(format!("handoff {} failed its integrity check", rec.delivery_id));
                 continue;
             }
             if workspace.is_some_and(|w| w != rec.local_workspace_id) || direction.is_some_and(|d| d != rec.direction) {
@@ -459,7 +459,7 @@ impl LocalVault {
             .optional()?;
         let (nonce, ct, mac) = row.ok_or_else(|| VaultError::not_found("the pending value is gone"))?;
         if !hmac_verify(&keys.row, &value_row_mac_input(id, &nonce, &ct), &mac) {
-            self.tamper.lock().push(format!("handoff value {id} failed its integrity check"));
+            self.tamper_once(format!("handoff value {id} failed its integrity check"));
             return Err(VaultError::tamper("the pending value failed its integrity check"));
         }
         Ok(SecretBytes::new(xopen(&keys.vdk, &nonce, &self.handoff_value_aad(id), &ct)?))
@@ -855,7 +855,7 @@ impl LocalVault {
         for row in it {
             let (a, mac) = row?;
             if !hmac_verify(&keys.row, &accept_mac_input(&a), &mac) {
-                self.tamper.lock().push(format!("accept-from {}/{} failed its integrity check", a.workspace_id, a.sender));
+                self.tamper_once(format!("accept-from {}/{} failed its integrity check", a.workspace_id, a.sender));
                 continue;
             }
             if workspace.is_some_and(|w| w != a.workspace_id) {
@@ -931,7 +931,7 @@ impl LocalVault {
         let features: Vec<String> = serde_json::from_str(&features_json).ok()?;
         let p = PeerVault { peer_fp: fp.to_string(), vault_id, recipient, features, fetched_at };
         if !hmac_verify(&keys.row, &peer_vault_mac_input(&p, &features_json), &mac) {
-            self.tamper.lock().push(format!("peer vault {fp} failed its integrity check"));
+            self.tamper_once(format!("peer vault {fp} failed its integrity check"));
             return None;
         }
         Some(p)

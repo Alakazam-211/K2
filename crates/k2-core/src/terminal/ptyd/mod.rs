@@ -28,6 +28,26 @@ pub mod io;
 
 use std::sync::Mutex;
 
+/// Called once a session is spawned under k2-ptyd: `(sid, pid, ptyd boot
+/// id)`. The daemon binds the session's agent socket record to that ptyd
+/// instance and process (prd-vault-gaps-v1 item 3), so a restarted daemon
+/// re-serves the socket only to the same process.
+pub type SpawnedHook = fn(&str, i32, &str);
+
+static SPAWNED_HOOK: std::sync::OnceLock<SpawnedHook> = std::sync::OnceLock::new();
+
+/// Install the spawn hook (the daemon, once at boot).
+pub fn set_spawned_hook(h: SpawnedHook) {
+    let _ = SPAWNED_HOOK.set(h);
+}
+
+/// A session was spawned under ptyd (`daemon_pty`, after `Spawned`).
+pub fn note_spawned(sid: &str, pid: i32, boot_id: &str) {
+    if let Some(h) = SPAWNED_HOOK.get() {
+        h(sid, pid, boot_id);
+    }
+}
+
 /// The name ptyd holds a session's per-cell `K2_HOOK_SOCK` listener under
 /// (P44): the socket outlives the daemon, and a restarted daemon takes it
 /// back instead of rebinding.

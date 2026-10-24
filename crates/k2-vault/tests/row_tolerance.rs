@@ -46,7 +46,7 @@ fn newer_rows_are_skipped_and_counted_not_fatal() {
     let v = open(&t, &ks);
     put(&v, "KEEP_ENV", Kind::Password, Delivery::Env);
     let kind_row = put(&v, "NEW_KIND", Kind::Generic, Delivery::Env);
-    let del_row = put(&v, "NEW_DELIVERY", Kind::SshKey, Delivery::File);
+    let del_row = put(&v, "NEW_DELIVERY", Kind::TlsKey, Delivery::File);
     let inj_row = put(&v, "NEW_DST", Kind::ApiKey, Delivery::Fetch);
     let shared = put(&v, "SHARED", Kind::Password, Delivery::Env);
     let g = v

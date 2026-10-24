@@ -5,17 +5,20 @@
 //!
 //! - **Where.** `<secrets dir>/a.sock` (the session's memory-backed 0700 dir,
 //!   [`super::spawn`]). A path over [`MAX_SOCK_PATH`] bytes (macOS
-//!   `$TMPDIR`) uses `<fallback root>/<8 base62>/a.sock`: `$TMPDIR/k2a`
-//!   (per user), else `/tmp/k2a-<uid>`; 0700 dirs, a socket holds no
-//!   secret bytes.
+//!   `$TMPDIR`) uses `<short root>/<8 base62>/a.sock`: `$TMPDIR/k2a-<ns>`
+//!   (per user), else `/tmp/k2a-<uid>-<ns>`, where `<ns>` is 8 hex chars of
+//!   the vault id (one root per K2 home); 0700 dirs, a socket holds no
+//!   secret bytes. The record keeps the root it used.
 //! - **The daemon's record.** Every socket is recorded in vault.db
 //!   (`agent_socket`, MAC'd: tag, workspace, secrets dir, socket path)
 //!   when it starts and dropped when it stops. A restarted daemon re-serves
 //!   a socket ([`on_adopted`]) and the boot sweep removes one
 //!   ([`boot_sweep`]) only from that record, never from files in the
 //!   secrets dir or the ptyd meta (both writable by any same-user process).
-//!   Re-serving also waits for k2-ptyd to have adopted the session, and the
-//!   ptyd meta must agree with the record.
+//!   Once k2-ptyd spawns the session, the record is bound to that ptyd
+//!   instance and process (boot id, pid, start time). Re-serving waits for
+//!   ptyd adoption, needs that same process, and needs the ptyd meta to
+//!   agree with the record; a record never bound to ptyd is never re-served.
 //! - **Who may connect.** The peer's uid must be the daemon's euid
 //!   (`SO_PEERCRED` / `getpeereid`); anything else is closed at accept.
 //!   At most [`MAX_CONNS`] connections per socket; a frame must arrive
@@ -121,14 +124,27 @@ fn euid() -> u32 {
     unsafe { libc::geteuid() }
 }
 
+/// This vault's short-path namespace: 8 hex chars of its id. Every K2 home
+/// (production, a worktree smoke daemon, a test) has its own vault and so
+/// its own short-path root: one never sweeps another's sockets.
+pub fn namespace(vault: &LocalVault) -> String {
+    vault.vault_id().chars().filter(|c| c.is_ascii_hexdigit()).take(8).collect::<String>().to_ascii_lowercase()
+}
+
+/// Is `name` a short-path root's name for namespace `ns`
+/// (`k2a-<ns>` or `k2a-<uid>-<ns>`)?
+fn root_name_ok(name: &str, ns: &str) -> bool {
+    ns.len() == 8 && (name == format!("k2a-{ns}") || name == format!("k2a-{}-{ns}", euid()))
+}
+
 /// Short roots for sockets whose dir path is too long, in order:
-/// `$TMPDIR/k2a` (per user on macOS), then `/tmp/k2a-<uid>`.
-pub fn fallback_roots() -> Vec<PathBuf> {
+/// `$TMPDIR/k2a-<ns>` (per user on macOS), then `/tmp/k2a-<uid>-<ns>`.
+pub fn fallback_roots(ns: &str) -> Vec<PathBuf> {
     let mut v = vec![];
     if let Some(t) = std::env::var_os("TMPDIR").filter(|t| !t.is_empty()) {
-        v.push(PathBuf::from(t).join("k2a"));
+        v.push(PathBuf::from(t).join(format!("k2a-{ns}")));
     }
-    v.push(PathBuf::from(format!("/tmp/k2a-{}", euid())));
+    v.push(PathBuf::from(format!("/tmp/k2a-{}-{ns}", euid())));
     v
 }
 
@@ -150,14 +166,20 @@ fn ensure_private(dir: &Path) -> std::io::Result<()> {
     }
 }
 
-/// Where a new socket for `dir` goes: `(socket path, fallback dir)`.
-pub fn sock_path_for(dir: &Path) -> std::io::Result<(PathBuf, Option<PathBuf>)> {
+/// Where a new socket for `dir` goes: the socket path, and (for a short
+/// path) its own dir and the root it was made under.
+pub struct SockPath {
+    pub sock: PathBuf,
+    pub short: Option<(PathBuf, PathBuf)>,
+}
+
+pub fn sock_path_for(ns: &str, dir: &Path) -> std::io::Result<SockPath> {
     let direct = dir.join(SOCK_NAME);
     if direct.as_os_str().len() <= MAX_SOCK_PATH {
-        return Ok((direct, None));
+        return Ok(SockPath { sock: direct, short: None });
     }
     let mut last = std::io::Error::new(std::io::ErrorKind::InvalidInput, "agent socket path too long");
-    for root in fallback_roots() {
+    for root in fallback_roots(ns) {
         // `<root>/<8>/a.sock` must fit.
         if root.as_os_str().len() + 1 + 8 + 1 + SOCK_NAME.len() > MAX_SOCK_PATH {
             continue;
@@ -177,33 +199,38 @@ pub fn sock_path_for(dir: &Path) -> std::io::Result<(PathBuf, Option<PathBuf>)> 
         if m.file_type().is_symlink() || m.uid() != euid() || m.permissions().mode() & 0o077 != 0 {
             return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "agent socket dir check failed"));
         }
-        return Ok((sub.join(SOCK_NAME), Some(sub)));
+        return Ok(SockPath { sock: sub.join(SOCK_NAME), short: Some((sub, root)) });
     }
     Err(last)
 }
 
-/// A short path must be exactly `<a fallback root>/<8 base62>/a.sock`;
-/// returns its dir.
-fn valid_fallback(p: &Path) -> Option<PathBuf> {
+/// A short path must be exactly `<root>/<8 base62>/a.sock` for the given
+/// root; returns its dir.
+fn short_dir_under(p: &Path, root: &Path) -> Option<PathBuf> {
     let parent = p.parent()?;
     let name = parent.file_name()?.to_str()?;
-    let root = parent.parent()?;
     let ok = p.file_name()? == SOCK_NAME
-        && fallback_roots().iter().any(|r| r.as_path() == root)
+        && parent.parent()? == root
         && name.len() == 8
         && name.bytes().all(|b| b.is_ascii_alphanumeric());
     ok.then(|| parent.to_path_buf())
 }
 
 /// The socket a record may name: `<its secrets dir>/a.sock`, or a short
-/// path no other record names. Anything else is ignored (a record that
-/// points at another session's socket never re-serves or removes it).
-fn record_socket(rec: &AgentSocket, all: &[AgentSocket]) -> Option<(PathBuf, Option<PathBuf>)> {
+/// path under the root the record itself names (a root of this vault's
+/// namespace, wherever `$TMPDIR` points now) that no other record names.
+/// Anything else is ignored: a record that points at another session's
+/// socket never re-serves or removes it.
+fn record_socket(rec: &AgentSocket, all: &[AgentSocket], ns: &str) -> Option<(PathBuf, Option<PathBuf>)> {
     let sock = PathBuf::from(&rec.sock_path);
-    if sock == Path::new(&rec.secrets_dir).join(SOCK_NAME) {
-        return Some((sock, None));
+    if rec.short_root.is_empty() {
+        return (sock == Path::new(&rec.secrets_dir).join(SOCK_NAME)).then_some((sock, None));
     }
-    let parent = valid_fallback(&sock)?;
+    let root = Path::new(&rec.short_root);
+    if !root.is_absolute() || !root.file_name().and_then(|n| n.to_str()).is_some_and(|n| root_name_ok(n, ns)) {
+        return None;
+    }
+    let parent = short_dir_under(&sock, root)?;
     let shared = all.iter().any(|o| o.tag != rec.tag && Path::new(&o.sock_path) == sock);
     (!shared).then_some((sock, Some(parent)))
 }
@@ -231,7 +258,8 @@ pub fn start(vault: &LocalVault, who: Requester, tag: &str, dir: &Path) -> std::
 
 pub fn start_with(vault: &LocalVault, who: Requester, tag: &str, dir: &Path, deadlines: Deadlines) -> std::io::Result<PathBuf> {
     let (kind, ws) = record_owner(&who).ok_or_else(|| std::io::Error::other("no agent socket for this requester"))?;
-    let (sock, fallback) = sock_path_for(dir)?;
+    let SockPath { sock, short } = sock_path_for(&namespace(vault), dir)?;
+    let fallback = short.as_ref().map(|(d, _)| d.clone());
     let cleanup = |sock: &Path| {
         let _ = std::fs::remove_file(sock);
         if let Some(f) = &fallback {
@@ -253,14 +281,42 @@ pub fn start_with(vault: &LocalVault, who: Requester, tag: &str, dir: &Path, dea
         workspace_id: ws,
         secrets_dir: dir.to_string_lossy().into_owned(),
         sock_path: sock.to_string_lossy().into_owned(),
+        short_root: short.as_ref().map(|(_, r)| r.to_string_lossy().into_owned()).unwrap_or_default(),
         created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        ..Default::default()
     };
     if let Err(e) = vault.agent_socket_put(&rec) {
         cleanup(&sock);
         return Err(std::io::Error::other(format!("record: {}", e.code)));
     }
-    run(l, who, tag, dir, &sock, fallback, deadlines);
+    run(l, who, tag, dir, &sock, fallback.clone(), deadlines);
     Ok(sock)
+}
+
+/// The k2-ptyd spawn hook: bind session `sid`'s agent socket record (if it
+/// has one) to this ptyd instance and the process ptyd just started, with
+/// the start time ptyd itself records (its session list).
+pub fn on_ptyd_spawned(sid: &str, pid: i32, boot_id: &str) {
+    let Ok(v) = super::get() else { return };
+    if !v.agent_sockets().is_ok_and(|all| all.iter().any(|r| r.tag == sid && r.kind == "session")) {
+        return;
+    }
+    #[cfg(unix)]
+    {
+        let started = k2_core::terminal::ptyd::client::global()
+            .owner()
+            .ok()
+            .and_then(|o| k2_core::terminal::ptyd::adopt::list(&o).running.into_iter().find(|s| s.sid == sid && s.pid == pid))
+            .map(|s| s.started_at as i64);
+        match started {
+            Some(t) => match v.agent_socket_bind(sid, boot_id, i64::from(pid), t) {
+                Ok(true) => {}
+                Ok(false) => k2_core::log_debug!("[vault] ssh-agent record for {sid} is bound to another process; left as is"),
+                Err(e) => k2_core::log_debug!("[vault] ssh-agent record for {sid} not bound: {}", e.code),
+            },
+            None => k2_core::log_debug!("[vault] ssh-agent record for {sid} not bound: ptyd didn't list the session"),
+        }
+    }
 }
 
 /// Re-bind `sock` (left by the previous daemon) and serve it.
@@ -289,6 +345,12 @@ fn rebind(rec: &AgentSocket, sock: &Path, fallback: Option<PathBuf>) -> std::io:
 pub enum ResumeRefused {
     /// No record, or one that isn't a session's.
     NoRecord,
+    /// The session wasn't spawned under k2-ptyd (its record was never
+    /// bound to a ptyd process).
+    NotPtyd,
+    /// The adopted process isn't the one the record was bound to (another
+    /// ptyd instance, pid or start time: a replayed record, a forged spawn).
+    ProcessMismatch,
     /// The ptyd meta's workspace isn't the recorded one.
     WorkspaceMismatch,
     /// The kept secrets dir (or the meta's) isn't the recorded one.
@@ -298,19 +360,35 @@ pub enum ResumeRefused {
     Io(String),
 }
 
+/// What k2-ptyd says about the adopted session: its instance and process.
+#[derive(Debug, Clone, Copy)]
+pub struct Adopted<'a> {
+    pub boot_id: &'a str,
+    pub pid: i64,
+    pub started_at: i64,
+}
+
 /// k2-ptyd adopted session `sid` after a restart: re-serve its agent
-/// socket from the daemon's record, if it had one. `meta_ws` and
-/// `meta_dir` are what the ptyd meta says; `kept_dir` is the secrets dir
-/// the boot sweep kept for it. All three must match the record.
+/// socket from the daemon's record, if it had one. The record must be bound
+/// to this same ptyd instance and process (`proc`), and the ptyd meta's
+/// workspace and secrets dir and the dir the boot sweep kept must all
+/// match it.
 pub fn resume_adopted(
     vault: &LocalVault,
     sid: &str,
+    proc: Adopted<'_>,
     meta_ws: Option<&str>,
     meta_dir: Option<&Path>,
     kept_dir: Option<&Path>,
 ) -> Result<PathBuf, ResumeRefused> {
     let all = vault.agent_sockets().map_err(|e| ResumeRefused::Io(e.code.to_string()))?;
     let rec = all.iter().find(|r| r.tag == sid && r.kind == "session").cloned().ok_or(ResumeRefused::NoRecord)?;
+    if rec.ptyd_boot.is_empty() || rec.pid <= 0 || rec.started_at <= 0 {
+        return Err(ResumeRefused::NotPtyd);
+    }
+    if rec.ptyd_boot != proc.boot_id || rec.pid != proc.pid || rec.started_at != proc.started_at {
+        return Err(ResumeRefused::ProcessMismatch);
+    }
     if meta_ws != Some(rec.workspace_id.as_str()) {
         return Err(ResumeRefused::WorkspaceMismatch);
     }
@@ -318,20 +396,27 @@ pub fn resume_adopted(
     if meta_dir != Some(recorded) || kept_dir != Some(recorded) {
         return Err(ResumeRefused::DirMismatch);
     }
-    let (sock, fallback) = record_socket(&rec, &all).ok_or(ResumeRefused::BadSocketPath)?;
+    let (sock, fallback) = record_socket(&rec, &all, &namespace(vault)).ok_or(ResumeRefused::BadSocketPath)?;
     rebind(&rec, &sock, fallback).map_err(|e| ResumeRefused::Io(e.to_string()))
 }
 
-/// The hook ptyd adoption calls (after the session is registered).
-pub fn on_adopted(sid: &str, meta: &serde_json::Value) {
+/// The hook ptyd adoption calls (after the session is registered). A
+/// record that is refused is dropped: nothing will re-serve it later.
+#[cfg(unix)]
+pub fn on_adopted(info: &k2_ptyd::proto::SessionInfo, boot_id: &str) {
     let Ok(vault) = super::get() else { return };
-    let meta_ws = meta.get("workspace_uuid").and_then(|v| v.as_str());
-    let meta_dir = meta.get("secrets_dir").and_then(|v| v.as_str()).map(Path::new);
+    let sid = info.sid.as_str();
+    let meta_ws = info.meta.get("workspace_uuid").and_then(|v| v.as_str());
+    let meta_dir = info.meta.get("secrets_dir").and_then(|v| v.as_str()).map(Path::new);
     let kept = super::spawn::kept_dir(sid);
-    match resume_adopted(&vault, sid, meta_ws, meta_dir, kept.as_deref()) {
+    let proc = Adopted { boot_id, pid: i64::from(info.pid), started_at: info.started_at as i64 };
+    match resume_adopted(&vault, sid, proc, meta_ws, meta_dir, kept.as_deref()) {
         Ok(sock) => k2_core::log_debug!("[vault] ssh-agent re-served for adopted session {sid} at {}", sock.display()),
         Err(ResumeRefused::NoRecord) => {}
-        Err(why) => k2_core::log_debug!("[vault] ssh-agent for adopted session {sid} NOT re-served: {why:?}"),
+        Err(why) => {
+            k2_core::log_debug!("[vault] ssh-agent for adopted session {sid} NOT re-served: {why:?}");
+            let _ = vault.agent_socket_remove(sid);
+        }
     }
 }
 
@@ -388,8 +473,9 @@ pub fn stop_dir(dir: &Path) {
     // A dir from before a restart: follow the daemon's record, not files.
     let Ok(v) = super::get() else { return };
     let Ok(all) = v.agent_sockets() else { return };
+    let ns = namespace(&v);
     for rec in all.iter().filter(|r| Path::new(&r.secrets_dir) == dir) {
-        if let Some((sock, fallback)) = record_socket(rec, &all) {
+        if let Some((sock, fallback)) = record_socket(rec, &all, &ns) {
             unlink_socket(&sock);
             if let Some(f) = fallback {
                 remove_fallback(&f);
@@ -399,17 +485,24 @@ pub fn stop_dir(dir: &Path) {
     }
 }
 
+/// Does something answer on this socket (a live agent of any daemon)?
+fn answers(sock: &Path) -> bool {
+    UnixStream::connect(sock).is_ok()
+}
+
 /// Boot (after the secrets-dir sweep): drop the record (and socket) of
-/// every tag that didn't survive, then remove short-path dirs no record
-/// names (left by a crash).
+/// every tag that didn't survive, then remove short-path dirs of this
+/// vault's namespace that no record names and that nothing answers on
+/// (left by a crash).
 pub fn boot_sweep(vault: &LocalVault, kept: &[(String, PathBuf)]) {
     let Ok(all) = vault.agent_sockets() else { return };
+    let ns = namespace(vault);
     for rec in &all {
         let survived = kept.iter().any(|(sid, d)| sid == &rec.tag && d == Path::new(&rec.secrets_dir)) && rec.kind == "session";
         if survived {
             continue;
         }
-        if let Some((sock, fallback)) = record_socket(rec, &all) {
+        if let Some((sock, fallback)) = record_socket(rec, &all, &ns) {
             unlink_socket(&sock);
             if let Some(f) = fallback {
                 remove_fallback(&f);
@@ -417,22 +510,30 @@ pub fn boot_sweep(vault: &LocalVault, kept: &[(String, PathBuf)]) {
         }
         let _ = vault.agent_socket_remove(&rec.tag);
     }
-    let named: Vec<PathBuf> = vault
-        .agent_sockets()
-        .unwrap_or_default()
-        .iter()
-        .filter_map(|r| valid_fallback(Path::new(&r.sock_path)))
-        .collect();
-    for root in fallback_roots() {
+    let left = vault.agent_sockets().unwrap_or_default();
+    let named: Vec<PathBuf> = left.iter().filter_map(|r| record_socket(r, &left, &ns).and_then(|(_, f)| f)).collect();
+    let mut roots = fallback_roots(&ns);
+    for r in &left {
+        let root = PathBuf::from(&r.short_root);
+        if !r.short_root.is_empty() && root.file_name().and_then(|n| n.to_str()).is_some_and(|n| root_name_ok(n, &ns)) && !roots.contains(&root) {
+            roots.push(root);
+        }
+    }
+    for root in roots {
         let ok = std::fs::symlink_metadata(&root).is_ok_and(|m| m.is_dir() && !m.file_type().is_symlink() && m.uid() == euid());
         if !ok {
             continue;
         }
         for e in std::fs::read_dir(&root).into_iter().flatten().flatten() {
             let p = e.path();
-            if valid_fallback(&p.join(SOCK_NAME)).is_some() && !named.contains(&p) {
-                remove_fallback(&p);
+            if short_dir_under(&p.join(SOCK_NAME), &root).is_none() || named.contains(&p) {
+                continue;
             }
+            if answers(&p.join(SOCK_NAME)) {
+                // Something serves it: never ours to remove.
+                continue;
+            }
+            remove_fallback(&p);
         }
     }
 }

@@ -19,10 +19,16 @@
 //!   entry must be the latest agent-policy entry for the secret: deleting
 //!   or replaying a row (to undo a tightening) fails closed.
 //! - `agent_socket`: one MAC'd row per live agent socket, written by the
-//!   daemon when it starts one (tag, workspace, secrets dir, socket path).
-//!   A restarted daemon re-serves a socket, and the boot sweep removes one,
+//!   daemon when it starts one (tag, workspace, secrets dir, socket path,
+//!   short-path root) and bound, once k2-ptyd has spawned the session, to
+//!   that ptyd instance and process (ptyd boot id, pid, start time). A
+//!   restarted daemon re-serves a socket, and the boot sweep removes one,
 //!   only from this record; nothing in the (same-user writable) secrets
-//!   dir or the ptyd meta is trusted for that.
+//!   dir or the ptyd meta is trusted for that, and a replayed record can't
+//!   match a different process.
+//! - Policy freshness also checks the audit log's tail against the MAC'd
+//!   header (no gap, nothing missing), so deleting a newer audit entry
+//!   can't revive an older row.
 
 use std::collections::HashMap;
 
@@ -78,7 +84,7 @@ pub struct AgentIdentity {
 }
 
 /// The daemon's record of one agent socket.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct AgentSocket {
     /// The session id (or `k2 job` run id) the socket serves.
     pub tag: String,
@@ -87,7 +93,15 @@ pub struct AgentSocket {
     pub workspace_id: String,
     pub secrets_dir: String,
     pub sock_path: String,
+    /// The short-path root the socket was made under (empty: the socket is
+    /// in `secrets_dir`). Validation uses this, never the current env.
+    pub short_root: String,
     pub created_at: String,
+    /// The k2-ptyd instance and process the session runs in (empty / 0:
+    /// not spawned under ptyd, never re-served).
+    pub ptyd_boot: String,
+    pub pid: i64,
+    pub started_at: i64,
 }
 
 /// What would break if this vault were opened by 0.46.3 (`k2 vault
@@ -156,7 +170,16 @@ fn read_policy(r: &Row<'_>) -> rusqlite::Result<(AgentPolicy, i64, Vec<u8>)> {
 
 fn socket_mac_input(s: &AgentSocket) -> Vec<u8> {
     let mut e = Enc::new("agent_socket");
-    e.str(&s.tag).str(&s.kind).str(&s.workspace_id).str(&s.secrets_dir).str(&s.sock_path).str(&s.created_at);
+    e.str(&s.tag)
+        .str(&s.kind)
+        .str(&s.workspace_id)
+        .str(&s.secrets_dir)
+        .str(&s.sock_path)
+        .str(&s.short_root)
+        .str(&s.created_at)
+        .str(&s.ptyd_boot)
+        .i64(s.pid)
+        .i64(s.started_at);
     e.finish().to_vec()
 }
 
@@ -168,11 +191,36 @@ fn read_socket(r: &Row<'_>) -> rusqlite::Result<(AgentSocket, Vec<u8>)> {
             workspace_id: r.get("workspace_id")?,
             secrets_dir: r.get("secrets_dir")?,
             sock_path: r.get("sock_path")?,
+            short_root: r.get("short_root")?,
             created_at: r.get("created_at")?,
+            ptyd_boot: r.get("ptyd_boot")?,
+            pid: r.get("pid")?,
+            started_at: r.get("started_at")?,
         },
         r.get("row_mac")?,
     ))
 }
+
+fn socket_params(s: &AgentSocket, mac: &[u8]) -> [Box<dyn rusqlite::ToSql>; 11] {
+    [
+        Box::new(s.tag.clone()),
+        Box::new(s.kind.clone()),
+        Box::new(s.workspace_id.clone()),
+        Box::new(s.secrets_dir.clone()),
+        Box::new(s.sock_path.clone()),
+        Box::new(s.short_root.clone()),
+        Box::new(s.created_at.clone()),
+        Box::new(s.ptyd_boot.clone()),
+        Box::new(s.pid),
+        Box::new(s.started_at),
+        Box::new(mac.to_vec()),
+    ]
+}
+
+const SOCKET_UPSERT: &str = "INSERT OR REPLACE INTO agent_socket
+    (tag, kind, workspace_id, secrets_dir, sock_path, short_root, created_at, ptyd_boot, pid, started_at, row_mac)
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
+
 
 /// Parsed public blobs by (secret id, version); `None` = not a key the
 /// agent serves. A version's value never changes, so entries never go
@@ -186,14 +234,6 @@ fn blobs() -> &'static BlobCache {
 }
 
 impl LocalVault {
-    /// A tamper note, once (a hot path must not grow the list).
-    fn tamper_once(&self, note: String) {
-        let mut t = self.tamper.lock();
-        if !t.contains(&note) {
-            t.push(note);
-        }
-    }
-
     /// The latest agent-policy audit entry for `secret_id`, MAC-checked:
     /// `Some((seq, outcome))`, `None` when there is none. An entry whose
     /// MAC fails is `Err` (tamper).
@@ -230,7 +270,36 @@ impl LocalVault {
         Ok(Some((seq, e.outcome)))
     }
 
+    /// Is the audit log whole: rows 1..=header.audit_seq, no gap, the
+    /// header's MAC good? Cached per (header seq, `PRAGMA data_version`):
+    /// K2's own appends move the header, any other write to the file moves
+    /// the data version, so an entry deleted behind K2's back is seen on
+    /// the next check.
+    fn audit_log_whole(&self, conn: &Connection, keys: &Keys) -> bool {
+        let Ok(Some((h, mac))) = load_header(conn) else { return false };
+        if !hmac_verify(&keys.header, &h.mac_input(), &mac) {
+            return false;
+        }
+        let Ok(dv) = conn.query_row("PRAGMA data_version", [], |r| r.get::<_, i64>(0)) else { return false };
+        if let Some((seq, v, ok)) = *self.audit_whole.lock() {
+            if seq == h.audit_seq && v == dv {
+                return ok;
+            }
+        }
+        let counted: rusqlite::Result<(i64, i64, i64)> =
+            conn.query_row("SELECT COUNT(*), COALESCE(MIN(seq), 1), COALESCE(MAX(seq), 0) FROM audit", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)));
+        let ok = counted.is_ok_and(|(n, lo, hi)| lo == 1 && hi == h.audit_seq as i64 && n == hi);
+        *self.audit_whole.lock() = Some((h.audit_seq, dv, ok));
+        ok
+    }
+
     fn agent_policy_in(&self, conn: &Connection, keys: &Keys, secret_id: &str) -> Result<AgentPolicy> {
+        if !self.audit_log_whole(conn, keys) {
+            // An audit entry is missing (or added) outside K2: no row's
+            // freshness can be shown, so no row (and no "no row") is trusted.
+            self.tamper_once("the audit log has a gap or doesn't match its header; agent policies fall back to the strictest".into());
+            return Ok(strictest());
+        }
         let row = conn
             .query_row("SELECT * FROM agent_policy WHERE secret_id = ?1", params![secret_id], read_policy)
             .optional()?;
@@ -244,8 +313,12 @@ impl LocalVault {
         match (row, latest) {
             (None, None) => Ok(AgentPolicy::default()),
             (None, Some(_)) => {
-                // The audit log says a policy was set; the row is gone.
-                self.tamper_once(format!("the agent policy of {secret_id} was removed outside K2"));
+                // The audit log says a policy was set; the row is gone
+                // (removed outside K2, or reset by an upgrade from a
+                // pre-release build). A person sets it again.
+                self.tamper_once(format!(
+                    "the agent policy of {secret_id} is missing (removed outside K2, or reset by an upgrade); set it again with k2 vault agent-limit"
+                ));
                 Ok(strictest())
             }
             (Some((p, seq, mac)), latest) => {
@@ -397,18 +470,34 @@ impl LocalVault {
         if !matches!(s.kind.as_str(), "session" | "job") || s.tag.is_empty() || s.secrets_dir.is_empty() || s.sock_path.is_empty() {
             return Err(VaultError::bad_request("bad_agent_socket", "agent socket record"));
         }
-        let s2 = s.clone();
+        // A new socket is never bound yet: the binding comes from ptyd.
+        let s2 = AgentSocket { ptyd_boot: String::new(), pid: 0, started_at: 0, ..s.clone() };
         self.mutate(false, |tx, keys| {
             let mac = hmac(&keys.row, &socket_mac_input(&s2));
-            tx.execute(
-                "INSERT INTO agent_socket (tag, kind, workspace_id, secrets_dir, sock_path, created_at, row_mac)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-                 ON CONFLICT(tag) DO UPDATE SET kind = ?2, workspace_id = ?3, secrets_dir = ?4, sock_path = ?5,
-                    created_at = ?6, row_mac = ?7",
-                params![s2.tag, s2.kind, s2.workspace_id, s2.secrets_dir, s2.sock_path, s2.created_at, mac.to_vec()],
-            )?;
+            tx.execute(SOCKET_UPSERT, rusqlite::params_from_iter(socket_params(&s2, &mac).iter().map(|b| b.as_ref())))?;
             Ok(((), vec![]))
         })
+    }
+
+    /// k2-ptyd spawned session `tag`: bind its record (if it has one, and
+    /// it isn't bound yet) to that ptyd instance and process. A restarted
+    /// daemon re-serves the socket only to that same process.
+    pub fn agent_socket_bind(&self, tag: &str, ptyd_boot: &str, pid: i64, started_at: i64) -> Result<bool> {
+        if ptyd_boot.is_empty() || pid <= 0 || started_at <= 0 {
+            return Err(VaultError::bad_request("bad_agent_socket", "ptyd binding"));
+        }
+        let Some(rec) = self.agent_socket_get(tag)? else { return Ok(false) };
+        if !rec.ptyd_boot.is_empty() {
+            // Bound once, for the life of the session.
+            return Ok(rec.ptyd_boot == ptyd_boot && rec.pid == pid && rec.started_at == started_at);
+        }
+        let s2 = AgentSocket { ptyd_boot: ptyd_boot.to_string(), pid, started_at, ..rec };
+        self.mutate(false, |tx, keys| {
+            let mac = hmac(&keys.row, &socket_mac_input(&s2));
+            tx.execute(SOCKET_UPSERT, rusqlite::params_from_iter(socket_params(&s2, &mac).iter().map(|b| b.as_ref())))?;
+            Ok(((), vec![]))
+        })?;
+        Ok(true)
     }
 
     /// Every agent socket record whose MAC holds. A row that fails is left
@@ -450,11 +539,7 @@ impl LocalVault {
         let s2 = s.clone();
         self.mutate(false, |tx, keys| {
             let mac = hmac(&keys.row, &socket_mac_input(&s2));
-            tx.execute(
-                "INSERT OR REPLACE INTO agent_socket (tag, kind, workspace_id, secrets_dir, sock_path, created_at, row_mac)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                params![s2.tag, s2.kind, s2.workspace_id, s2.secrets_dir, s2.sock_path, s2.created_at, mac.to_vec()],
-            )?;
+            tx.execute(SOCKET_UPSERT, rusqlite::params_from_iter(socket_params(&s2, &mac).iter().map(|b| b.as_ref())))?;
             Ok(((), vec![]))
         })
     }
@@ -464,7 +549,8 @@ impl LocalVault {
         let conn = self.conn.lock();
         let count = |sql: &str| -> Result<u64> { Ok(conn.query_row(sql, [], |r| r.get::<_, i64>(0))?.max(0) as u64) };
         Ok(DowngradeBlockers {
-            agent: count("SELECT COUNT(*) FROM secret WHERE status != 'destroyed' AND (default_delivery = 'agent' OR delivery_ceiling = 'agent')")?
+            // Destroyed rows still carry the text 0.46.3 can't parse.
+            agent: count("SELECT COUNT(*) FROM secret WHERE default_delivery = 'agent' OR delivery_ceiling = 'agent'")?
                 + count("SELECT COUNT(*) FROM grants WHERE delivery = 'agent'")?,
             job_grants: count("SELECT COUNT(*) FROM grants WHERE consumer_kind = 'job'")?,
             signed: count("SELECT COUNT(*) FROM secret WHERE status != 'destroyed' AND inject LIKE '%\"sign\"%'")?,

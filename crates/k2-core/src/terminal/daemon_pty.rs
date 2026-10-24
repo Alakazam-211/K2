@@ -1316,6 +1316,9 @@ impl DaemonPtySession {
         if let Ok(p) = u32::try_from(pid) {
             crate::agents_leaf::join(p);
         }
+        // The vault binds this session's agent socket record to this ptyd
+        // instance and process.
+        crate::terminal::ptyd::note_spawned(&sid, pid, &owner.boot_id);
         let stream = match owner.attach(&sid, 0) {
             Ok(s) => s,
             Err(e) => {

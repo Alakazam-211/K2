@@ -45,6 +45,8 @@ pub use agent_store::{AgentIdentity, AgentPolicy, AgentPolicyPatch, AgentSocket,
 pub use placement_store::{NewPlacement, Placement, PlacementTarget, Placements};
 
 pub const FORMAT: &str = "k2-vault/1";
+/// Distinct tamper notes kept (status and doctor show them).
+const TAMPER_NOTES_MAX: usize = 256;
 pub const VERSION_RETENTION_DAYS: i64 = 30;
 pub const REQUEST_EXPIRY_DAYS: i64 = 7;
 pub const GUEST_TTL_MAX_SECS: i64 = 24 * 3600;
@@ -405,6 +407,10 @@ pub struct LocalVault {
     vid: [u8; 16],
     rollback: Mutex<bool>,
     tamper: Mutex<Vec<String>>,
+    /// Item 3: "the audit log is whole" for (header audit seq, the
+    /// connection's `PRAGMA data_version`): recomputed when K2 appends or
+    /// anything else writes the file.
+    audit_whole: Mutex<Option<(u64, i64, bool)>>,
     rollups: Mutex<Rollups>,
     pub confirm: Broker,
     pub throttle: Throttle,
@@ -524,6 +530,7 @@ impl LocalVault {
             vid,
             rollback: Mutex::new(false),
             tamper: Mutex::new(tamper_notes),
+            audit_whole: Mutex::new(None),
             rollups: Mutex::new(Rollups::default()),
             confirm: Broker::default(),
             throttle: Throttle::default(),
@@ -559,7 +566,7 @@ impl LocalVault {
         }
         if h.gen < a.gen {
             *self.rollback.lock() = true;
-            self.tamper.lock().push(format!("vault.db is older than expected (gen {} < {})", h.gen, a.gen));
+            self.tamper_once(format!("vault.db is older than expected (gen {} < {})", h.gen, a.gen));
             return Ok(());
         }
         if let (Some(seq), Some(mac)) = (a.audit_seq, a.audit_mac.as_deref()) {
@@ -570,9 +577,9 @@ impl LocalVault {
                     .optional()?;
                 drop(conn);
                 if row.as_deref().map(hex).as_deref() != Some(mac) && seq <= h.audit_seq {
-                    self.tamper.lock().push(format!("audit row {seq} doesn't match the anchored copy"));
+                    self.tamper_once(format!("audit row {seq} doesn't match the anchored copy"));
                 } else if seq > h.audit_seq {
-                    self.tamper.lock().push("audit log is missing its newest rows".to_string());
+                    self.tamper_once("audit log is missing its newest rows".to_string());
                 }
             }
         }
@@ -593,7 +600,7 @@ impl LocalVault {
         if let Err(e) = self.ks.set_anchor(&a) {
             // The next open accepts gen+1 and repairs (VS8).
             self.tamper.lock().retain(|t| !t.starts_with("anchor write failed"));
-            self.tamper.lock().push(format!("anchor write failed: {}", e.code));
+            self.tamper_once(format!("anchor write failed: {}", e.code));
         } else {
             self.tamper.lock().retain(|t| !t.starts_with("anchor write failed"));
         }
@@ -657,6 +664,15 @@ impl LocalVault {
         self.tamper.lock().clone()
     }
 
+    /// Record a tamper note once: a repeated read of the same bad row (a
+    /// sign loop, every spawn) never grows the list; it is also capped.
+    fn tamper_once(&self, note: String) {
+        let mut t = self.tamper.lock();
+        if t.len() < TAMPER_NOTES_MAX && !t.contains(&note) {
+            t.push(note);
+        }
+    }
+
     // ── internal: transactions, header, audit ───────────────────────
 
     /// Run a mutation: body + audit rows + gen bump + header MAC in one
@@ -693,7 +709,7 @@ impl LocalVault {
         }
         let r = self.mutate(false, |_, _| Ok(((), entries)));
         if let Err(e) = r {
-            self.tamper.lock().push(format!("audit write failed: {}", e.code));
+            self.tamper_once(format!("audit write failed: {}", e.code));
         }
     }
 
@@ -758,7 +774,7 @@ impl LocalVault {
                     self.write_anchor(&h);
                 }
             }
-            Err(e) => self.tamper.lock().push(format!("audit roll-up write failed: {}", e.code)),
+            Err(e) => self.tamper_once(format!("audit roll-up write failed: {}", e.code)),
         }
     }
 
@@ -779,7 +795,7 @@ impl LocalVault {
         };
         let (row, mac) = r.ok_or_else(|| VaultError::not_found("no such secret"))??;
         if !row_mac_ok(&keys.row, &row, &mac) {
-            self.tamper.lock().push(format!("secret {} failed its integrity check", row.meta.id));
+            self.tamper_once(format!("secret {} failed its integrity check", row.meta.id));
             return Err(VaultError::tamper("this secret's record failed its integrity check"));
         }
         Ok(row)
@@ -792,7 +808,7 @@ impl LocalVault {
         for row in rows {
             let Some((g, mac)) = tolerate(row)? else { continue };
             if !hmac_verify(&keys.row, &grant_mac_input(&g), &mac) {
-                self.tamper.lock().push(format!("grant {} failed its integrity check", g.id));
+                self.tamper_once(format!("grant {} failed its integrity check", g.id));
                 continue;
             }
             out.push(g);
@@ -839,7 +855,7 @@ impl LocalVault {
             .optional()?;
         let (nonce, ct, fp, cat, cby, state, rev, mac) = row.ok_or_else(|| VaultError::not_found("that version doesn't exist"))?;
         if !hmac_verify(&keys.row, &version_mac_input(&m.id, version, &nonce, &ct, &fp, &cat, &cby, &state, rev.as_deref()), &mac) {
-            self.tamper.lock().push(format!("secret {} v{} failed its integrity check", m.id, version));
+            self.tamper_once(format!("secret {} v{} failed its integrity check", m.id, version));
             return Err(VaultError::tamper("this value failed its integrity check"));
         }
         if state == "destroyed" {
@@ -1010,6 +1026,9 @@ impl LocalVault {
                     return Err(VaultError::bad_request("delivery_above_ceiling", "the delivery is looser than the ceiling"));
                 }
                 agent_store::check_agent_delivery(req.kind, &[default_delivery, ceiling], Some(value.expose()))?;
+                if req.kind == Kind::SshKey {
+                    crate::ssh_agent::check_ssh_key_value(value.expose())?;
+                }
                 if req.scope.kind == ScopeKind::Session && req.expires_at.is_none() {
                     return Err(VaultError::bad_request("expiry_required", "chat secrets need an expiry"));
                 }
@@ -1071,6 +1090,9 @@ impl LocalVault {
             s.check_value(value.expose())?;
         }
         agent_store::check_agent_delivery(m.kind, &[m.default_delivery, m.delivery_ceiling], Some(value.expose()))?;
+        if m.kind == Kind::SshKey {
+            crate::ssh_agent::check_ssh_key_value(value.expose())?;
+        }
         {
             let keys = self.keys.read();
             let conn = self.conn.lock();

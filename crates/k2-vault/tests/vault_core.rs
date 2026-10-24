@@ -59,7 +59,8 @@ fn round_trip_every_kind_and_value_is_ciphertext_on_disk() {
     let v = open(&t, &ks);
     for (i, k) in Kind::ALL.iter().enumerate() {
         let name = format!("K{i}");
-        let val = format!("{SENTINEL}-{i}");
+        // An ssh_key value must read as a key (vault-gaps item 3).
+        let val = if *k == Kind::SshKey { k2_vault::ssh_agent::testkeys::ed25519() } else { format!("{SENTINEL}-{i}") };
         let mut r = PutRequest::new(Namespace::User, Scope::workspace("ws1"), &name, *k);
         r.default_delivery = Some(Delivery::Env);
         v.put(r, SecretBytes::from_slice(val.as_bytes()), &Actor::Owner).unwrap_or_else(|e| panic!("{k}: {e}"));

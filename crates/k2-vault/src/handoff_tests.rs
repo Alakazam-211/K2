@@ -242,7 +242,8 @@ fn pending_by_default_and_allow_listed_lands_never_api() {
     let mut it = item("SSH_DEPLOY");
     it.hosts.clear();
     it.kind = "ssh_key".into();
-    let r = v.handoff_receive(incoming("ws-ops", it, "sales", true), SecretBytes::from_slice(b"-----BEGIN KEY----- abc")).expect("file");
+    let key = crate::ssh_agent::testkeys::ed25519();
+    let r = v.handoff_receive(incoming("ws-ops", it, "sales", true), SecretBytes::from_slice(key.as_bytes())).expect("file");
     assert_eq!(r.meta.expect("meta").default_delivery, Delivery::File);
 
     // Item 3: an ssh key the sender served only through the agent lands as
@@ -625,6 +626,7 @@ fn rekey_keeps_every_table_and_stops_on_a_tampered_row() {
         secrets_dir: "/run/k2/secrets/sess-rekey-abcdefgh".into(),
         sock_path: "/run/k2/secrets/sess-rekey-abcdefgh/a.sock".into(),
         created_at: "2026-10-24T00:00:00Z".into(),
+        ..Default::default()
     };
     v.agent_socket_put(&sock).expect("socket record");
 
@@ -654,4 +656,111 @@ fn rekey_keeps_every_table_and_stops_on_a_tampered_row() {
     let e = v.rekey(&owner, &proof).expect_err("a tampered grant stops the rekey");
     assert_eq!(e.code, "vault_tamper", "{e:?}");
     assert_eq!(value(v, "ws-ops", "STRIPE_KEY"), b"k2test-rekey-value-2", "the vault still opens under the old key");
+}
+
+/// One row in every MAC'd table (the rekey tests).
+fn fill_every_table(v: &LocalVault, other: &LocalVault) {
+    let owner = Actor::Owner;
+    let a = put(v, "ws-ops", "STRIPE_KEY", "k2test-rekey-value-1", &owner);
+    v.rotate(&Selector::Id(a.id.clone()), SecretBytes::from_slice(b"k2test-rekey-value-2"), &owner).expect("rotate");
+    v.grant(
+        crate::store::GrantRequest {
+            selector: Selector::Id(a.id.clone()),
+            consumer: crate::model::Consumer::workspace("ws-sales"),
+            delivery: Delivery::Fetch,
+            env_name: None,
+            file_name: None,
+            hosts_narrowed: None,
+            expires_at: None,
+            version: None,
+        },
+        &owner,
+    )
+    .expect("grant");
+    v.request_create(crate::vault::SecretRequest {
+        card_id: "card-rekey-0123456789".into(),
+        conversation: "conv-1".into(),
+        session_id: Some("sess-1".into()),
+        workspace_id: "ws-ops".into(),
+        requested_by: "agent:ws-ops/sess-1".into(),
+        name: "CARD_KEY".into(),
+        kind: Kind::ApiKey,
+        proposed_scope: "workspace".into(),
+        proposed_hosts: vec!["api.stripe.com".into()],
+        proposed_delivery: Delivery::Fetch,
+        prompt: "Paste it".into(),
+        ttl_secs: None,
+        status: String::new(),
+        answered_by: None,
+        secret_id: None,
+        created_at: String::new(),
+        answered_at: None,
+    })
+    .expect("card");
+    v.placement_add(
+        crate::vault::NewPlacement {
+            secret_id: a.id.clone(),
+            target: crate::vault::PlacementTarget::Manual,
+            unit: None,
+            cred_name: None,
+            where_text: Some("box1:/etc/x".into()),
+            note: String::new(),
+            restart: false,
+        },
+        "owner",
+    )
+    .expect("placement");
+    v.handoff_receive(incoming("ws-ops", item("PENDING_KEY"), "sales", false), SecretBytes::from_slice(SENTINEL.as_bytes())).expect("pend");
+    v.accept_from_add("ws-ops", "Sales::Rosson.K2.dev", &owner).expect("accept-from");
+    v.peer_vault_put(&PeerVault {
+        peer_fp: "fp-rekey".into(),
+        vault_id: "v-peer".into(),
+        recipient: other.carry_recipient().expect("r").encode(),
+        features: vec![FEATURE.into()],
+        fetched_at: "2026-10-24T00:00:00Z".into(),
+    })
+    .expect("peer");
+    let mut r = PutRequest::new(Namespace::User, Scope::workspace("ws-ops"), "DEPLOY", Kind::SshKey);
+    r.default_delivery = Some(Delivery::Agent);
+    let k = v.put(r, SecretBytes::from_slice(crate::ssh_agent::testkeys::ed25519().as_bytes()), &owner).expect("ssh").meta;
+    v.set_agent_policy(&Selector::Id(k.id.clone()), crate::vault::AgentPolicyPatch { burst: Some(7), ..Default::default() }, &owner).expect("policy");
+    v.agent_socket_put(&crate::vault::AgentSocket {
+        tag: "sess-rekey".into(),
+        kind: "session".into(),
+        workspace_id: "ws-ops".into(),
+        secrets_dir: "/run/k2/secrets/sess-rekey-abcdefgh".into(),
+        sock_path: "/run/k2/secrets/sess-rekey-abcdefgh/a.sock".into(),
+        created_at: "2026-10-24T00:00:00Z".into(),
+        ..Default::default()
+    })
+    .expect("socket record");
+}
+
+/// Round 3 (8): one tampered row in any MAC'd table stops the rekey
+/// (vault_tamper), table by table.
+#[test]
+fn rekey_stops_on_a_tampered_row_in_every_macd_table() {
+    let other = open("ho-rekey-loop-peer");
+    for (table, sql) in [
+        ("secret", "UPDATE secret SET description = 'tampered' WHERE name = 'STRIPE_KEY'"),
+        ("secret_version", "UPDATE secret_version SET created_by = 'tampered' WHERE version = 1"),
+        ("grants", "UPDATE grants SET granted_by = 'tampered'"),
+        ("secret_request", "UPDATE secret_request SET prompt = 'tampered'"),
+        ("placement", "UPDATE placement SET note = 'tampered'"),
+        ("handoff", "UPDATE handoff SET note = 'tampered'"),
+        ("handoff_value", "UPDATE handoff_value SET ciphertext = x'00'"),
+        ("handoff_accept", "UPDATE handoff_accept SET added_by = 'tampered'"),
+        ("peer_vault", "UPDATE peer_vault SET fetched_at = 'tampered'"),
+        ("agent_policy", "UPDATE agent_policy SET updated_by = 'tampered'"),
+        ("agent_socket", "UPDATE agent_socket SET workspace_id = 'tampered'"),
+    ] {
+        let t = open(&format!("ho-rekey-{table}"));
+        fill_every_table(&t.v, &other.v);
+        let c = rusqlite::Connection::open(t._d.path().join("vault/vault.db")).expect("db");
+        let n = c.execute(sql, []).unwrap_or_else(|e| panic!("{table}: {e}"));
+        assert!(n >= 1, "{table}: no row tampered");
+        drop(c);
+        let e = t.v.rekey(&Actor::Owner, &crate::policy::HumanProof::Confirmed { method: "t".into() }).expect_err(table);
+        assert_eq!(e.code, "vault_tamper", "{table}: {e:?}");
+    }
 }

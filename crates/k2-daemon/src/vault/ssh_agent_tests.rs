@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use k2_vault::ssh_agent::{self as proto, client, testkeys, AgentKey, SessionBind};
-use k2_vault::vault::AgentPolicyPatch;
+use k2_vault::vault::{AgentPolicyPatch, AgentSocket};
 use k2_vault::{
     Actor, AuditQuery, Consumer, Delivery, GrantRequest, Kind, LocalVault, Namespace, PutRequest, Requester, Scope, SecretBytes,
     SecretMeta, SecretStore, Selector,
@@ -296,40 +296,63 @@ fn a_forwarded_agent_is_refused_unless_the_secret_allows_it() {
 }
 
 #[test]
-fn a_long_dir_uses_the_short_socket_path() {
+fn a_long_dir_uses_the_short_socket_path_of_this_vaults_namespace() {
     let _env = k2_core::test_env::lock();
+    let v = super::super::ensure_test_vault();
+    let ns = namespace(&v);
+    assert_eq!(ns.len(), 8);
+    assert!(ns.bytes().all(|b| b.is_ascii_hexdigit()));
     let t = k2_vault::fsutil::TestDir::new("agent-path");
     let long = t.path().join("x".repeat(120));
     std::fs::create_dir_all(&long).expect("long dir");
-    let (sock, fb) = sock_path_for(&long).expect("path");
-    let fb = fb.expect("a fallback dir for a long path");
-    let root = fb.parent().expect("root").to_path_buf();
-    assert!(sock.as_os_str().len() <= MAX_SOCK_PATH, "{}", sock.display());
-    assert!(fallback_roots().contains(&root), "{}", sock.display());
+    let sp = sock_path_for(&ns, &long).expect("path");
+    let (fb, root) = sp.short.expect("a short path for a long dir");
+    assert!(sp.sock.as_os_str().len() <= MAX_SOCK_PATH, "{}", sp.sock.display());
+    assert!(fallback_roots(&ns).contains(&root), "{}", sp.sock.display());
+    assert!(root_name_ok(root.file_name().and_then(|n| n.to_str()).expect("name"), &ns));
     assert_eq!(std::fs::metadata(&fb).expect("fb").permissions().mode() & 0o777, 0o700);
     assert_eq!(std::fs::metadata(&root).expect("root").permissions().mode() & 0o777, 0o700);
     std::fs::remove_dir(&fb).expect("cleanup");
-    // $TMPDIR/k2a first (per user), /tmp/k2a-<uid> after it.
-    let roots = fallback_roots();
-    assert_eq!(roots.last().expect("last"), &PathBuf::from(format!("/tmp/k2a-{}", unsafe { libc::geteuid() })));
+    // $TMPDIR/k2a-<ns> first (per user), /tmp/k2a-<uid>-<ns> after it.
+    let roots = fallback_roots(&ns);
+    assert_eq!(roots.last().expect("last"), &PathBuf::from(format!("/tmp/k2a-{}-{ns}", unsafe { libc::geteuid() })));
     if let Some(t) = std::env::var_os("TMPDIR").filter(|t| !t.is_empty()) {
-        assert_eq!(roots[0], PathBuf::from(t).join("k2a"));
+        assert_eq!(roots[0], PathBuf::from(t).join(format!("k2a-{ns}")));
     }
     let short = t.path().join("s");
     std::fs::create_dir_all(&short).expect("short dir");
     if short.join(SOCK_NAME).as_os_str().len() <= MAX_SOCK_PATH {
-        assert_eq!(sock_path_for(&short).expect("path"), (short.join(SOCK_NAME), None));
+        let sp = sock_path_for(&ns, &short).expect("path");
+        assert_eq!(sp.sock, short.join(SOCK_NAME));
+        assert!(sp.short.is_none());
     }
-    // A short path must be exactly <root>/<8 base62>/a.sock.
-    assert!(valid_fallback(&root.join("Ab3dE6gH").join(SOCK_NAME)).is_some());
+    // A record is checked against the root it names (not today's env),
+    // which must be this namespace's; the path is exactly <root>/<8>/a.sock.
+    let rec = |root: &Path, sock: PathBuf| AgentSocket {
+        tag: "t1".into(),
+        kind: "session".into(),
+        secrets_dir: "/run/k2/secrets/t1-abcdefgh".into(),
+        sock_path: sock.to_string_lossy().into_owned(),
+        short_root: root.to_string_lossy().into_owned(),
+        ..Default::default()
+    };
+    let moved_root = PathBuf::from(format!("/var/folders/zz/old-tmpdir/T/k2a-{ns}"));
+    let ok = rec(&moved_root, moved_root.join("Ab3dE6gH").join(SOCK_NAME));
+    assert!(record_socket(&ok, std::slice::from_ref(&ok), &ns).is_some(), "a root $TMPDIR no longer names still validates");
+    let foreign = PathBuf::from("/tmp/k2a-0badc0de");
+    let r = rec(&foreign, foreign.join("Ab3dE6gH").join(SOCK_NAME));
+    assert!(record_socket(&r, std::slice::from_ref(&r), &ns).is_none(), "another namespace's root");
     for bad in [
-        root.join("..").join("x").join(SOCK_NAME),
-        root.join("short").join(SOCK_NAME),
+        moved_root.join("..").join("x").join(SOCK_NAME),
+        moved_root.join("short").join(SOCK_NAME),
         PathBuf::from("/etc/Ab3dE6gH/a.sock"),
-        root.join("Ab3dE6gH").join("other.sock"),
+        moved_root.join("Ab3dE6gH").join("other.sock"),
     ] {
-        assert!(valid_fallback(&bad).is_none(), "{}", bad.display());
+        let r = rec(&moved_root, bad.clone());
+        assert!(record_socket(&r, std::slice::from_ref(&r), &ns).is_none(), "{}", bad.display());
     }
+    let relative = rec(Path::new("k2a-x"), PathBuf::from("k2a-x/Ab3dE6gH/a.sock"));
+    assert!(record_socket(&relative, std::slice::from_ref(&relative), &ns).is_none());
 }
 
 /// A session's socket goes when the session ends; a daemon restart (k2-ptyd
@@ -358,22 +381,26 @@ fn the_socket_goes_at_session_end_and_is_re_served_after_a_restart() {
     let rec = v.agent_socket_get(&sid).expect("record").expect("the daemon recorded it");
     assert_eq!((rec.kind.as_str(), rec.workspace_id.as_str()), ("session", w.as_str()));
     assert_eq!(rec.sock_path, sock.to_string_lossy());
+    assert!(rec.ptyd_boot.is_empty(), "not bound until ptyd spawns the session");
+    // What the ptyd spawn hook does once ptyd has started the process.
+    assert!(v.agent_socket_bind(&sid, "boot-life", 3131, 1_700_000_100).expect("bind"));
+    let proc = Adopted { boot_id: "boot-life", pid: 3131, started_at: 1_700_000_100 };
 
     // Restart: the server is gone but the session (and its dir) survive;
     // after adoption it is re-served from the record.
     abandon_for_tests(&dir);
     std::thread::sleep(Duration::from_millis(700));
     assert!(UnixStream::connect(&sock).is_err(), "nobody serves the old socket");
-    let again = resume_adopted(&v, &sid, Some(&w), Some(&dir), Some(&dir)).expect("resume");
+    let again = resume_adopted(&v, &sid, proc, Some(&w), Some(&dir), Some(&dir)).expect("resume");
     assert_eq!(again, sock, "same path: SSH_AUTH_SOCK in the session stays valid");
     assert_eq!(Client::connect(&sock).identities().len(), 1, "re-served");
     // A session without a socket record: nothing to resume.
     let t = k2_vault::fsutil::TestDir::new("agent-noresume");
     let empty = session_dir(&t, "s-empty");
-    assert_eq!(resume_adopted(&v, "s-empty", Some(&w), Some(&empty), Some(&empty)).expect_err("none"), ResumeRefused::NoRecord);
+    assert_eq!(resume_adopted(&v, "s-empty", proc, Some(&w), Some(&empty), Some(&empty)).expect_err("none"), ResumeRefused::NoRecord);
 
     // Session end: socket, server, short-path dir and record go.
-    let fallback = sock.parent().filter(|p| fallback_roots().iter().any(|r| p.starts_with(r))).map(Path::to_path_buf);
+    let fallback = (!rec.short_root.is_empty()).then(|| sock.parent().expect("dir").to_path_buf());
     super::super::spawn::session_ended(&sid);
     assert!(!sock.exists(), "socket removed at session end");
     assert!(!dir.exists(), "dir removed at session end");

@@ -250,10 +250,38 @@ CREATE TABLE IF NOT EXISTS agent_socket (
     workspace_id TEXT NOT NULL,
     secrets_dir TEXT NOT NULL,
     sock_path TEXT NOT NULL,
+    short_root TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
+    ptyd_boot TEXT NOT NULL DEFAULT '',
+    pid INTEGER NOT NULL DEFAULT 0,
+    started_at INTEGER NOT NULL DEFAULT 0,
     row_mac BLOB NOT NULL
 );
 "#;
+
+/// The columns a table has (empty when it doesn't exist).
+fn columns(conn: &Connection, table: &str) -> Result<Vec<String>> {
+    let mut st = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let it = st.query_map([], |r| r.get::<_, String>(1))?;
+    Ok(it.collect::<std::result::Result<_, _>>()?)
+}
+
+/// Agent tables written by pre-release builds of item 3 (agent_policy
+/// without `audit_seq`, agent_socket without the short root and ptyd
+/// binding): their MACs don't cover the new fields, so they are rebuilt
+/// empty. Policies then read as missing (strictest, until a person sets
+/// them again); socket records only cost one re-serve.
+fn rebuild_old_agent_tables(conn: &Connection) -> Result<()> {
+    let p = columns(conn, "agent_policy")?;
+    if !p.is_empty() && !p.iter().any(|c| c == "audit_seq") {
+        conn.execute_batch("DROP TABLE agent_policy")?;
+    }
+    let s = columns(conn, "agent_socket")?;
+    if !s.is_empty() && !["short_root", "ptyd_boot", "pid", "started_at"].iter().all(|c| s.iter().any(|x| x == c)) {
+        conn.execute_batch("DROP TABLE agent_socket")?;
+    }
+    Ok(())
+}
 
 pub fn configure(conn: &Connection) -> Result<()> {
     conn.pragma_update(None, "journal_mode", "WAL")?;
@@ -279,6 +307,7 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     // Additive tables (H22): no version bump.
     conn.execute_batch(HANDOFF_TABLES)?;
     conn.execute_batch(PLACEMENT_TABLES)?;
+    rebuild_old_agent_tables(conn)?;
     conn.execute_batch(AGENT_TABLES)?;
     Ok(())
 }

@@ -207,6 +207,29 @@ pub fn check_value(value: &[u8]) -> Result<()> {
     AgentKey::parse(value).map(|_| ())
 }
 
+/// Does a value stored as `kind=ssh_key` read as an ssh private key, for
+/// any delivery? An OpenSSH key (with or without a passphrase), an RSA PEM
+/// key, or a well-formed passphrase PEM block (its BEGIN and END lines on
+/// lines of their own). Catches a key pasted into a one-line field, whose
+/// line breaks are gone (`bad_value`).
+pub fn check_ssh_key_value(value: &[u8]) -> Result<()> {
+    if public_of(value, "").is_ok() {
+        return Ok(());
+    }
+    let text = std::str::from_utf8(value).unwrap_or("");
+    let lines: Vec<&str> = text.trim().lines().map(str::trim).collect();
+    let enc_pem = lines.len() >= 3
+        && lines.first().is_some_and(|l| l.starts_with("-----BEGIN ") && l.ends_with("PRIVATE KEY-----"))
+        && lines.last().is_some_and(|l| l.starts_with("-----END ") && l.ends_with("PRIVATE KEY-----"))
+        && text.contains("ENCRYPTED");
+    if enc_pem {
+        return Ok(());
+    }
+    Err(bad_value(
+        "this doesn't read as an ssh private key (OpenSSH or PEM); if it was pasted into a one-line field, its line breaks were lost: paste it again in full",
+    ))
+}
+
 /// The `.pub` line (with `comment`) and `SHA256:` fingerprint of a stored
 /// ssh private key: any key the agent serves, and any OpenSSH key at all
 /// (a passphrase key's public half is in the clear).
@@ -596,6 +619,20 @@ mod tests {
             check_value(b"-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n-----END OPENSSH PRIVATE KEY-----\n").expect_err("junk").code,
             "bad_value"
         );
+    }
+
+    #[test]
+    fn an_ssh_key_value_must_keep_its_line_breaks() {
+        let k = testkeys::ed25519();
+        check_ssh_key_value(k.as_bytes()).expect("a real key");
+        check_ssh_key_value(testkeys::rsa2048_pem().as_bytes()).expect("PEM RSA");
+        check_ssh_key_value(testkeys::p256().as_bytes()).expect("any OpenSSH key, even one agent doesn't serve");
+        check_ssh_key_value(b"-----BEGIN ENCRYPTED PRIVATE KEY-----\nAAAA\n-----END ENCRYPTED PRIVATE KEY-----\n").expect("passphrase PEM");
+        let flat = k.replace('\n', "");
+        assert_eq!(check_ssh_key_value(flat.as_bytes()).expect_err("flattened").code, "bad_value");
+        let spaced = k.replace('\n', " ");
+        assert_eq!(check_ssh_key_value(spaced.as_bytes()).expect_err("one line").code, "bad_value");
+        assert_eq!(check_ssh_key_value(b"k2test-not-a-key").expect_err("text").code, "bad_value");
     }
 
     #[test]

@@ -150,6 +150,10 @@ pub fn boot(home: &Path) {
             let _ = k2_core::redaction::install(Box::new(|s: &str| redact_str(s)));
             record_adoption(mainrefs::adopt(v));
             spawn::sweep_at_boot();
+            // prd-vault-gaps-v1 item 3: bind agent socket records to the
+            // ptyd process each session is spawned in.
+            #[cfg(unix)]
+            k2_core::terminal::ptyd::set_spawned_hook(ssh_agent::on_ptyd_spawned);
             publish_env::seed_existing();
             start_ticker(v.clone());
             let nd = k2_vault::secret::set_non_dumpable();

@@ -356,7 +356,7 @@ describe('VaultSection', () => {
     const panel = within(row('DEPLOY_KEY')).getByTestId('vault-delivery-panel')
     const select = within(panel).getByTestId('vault-delivery-select') as HTMLSelectElement
     expect(select.value).toBe('agent')
-    expect(Array.from(select.options).map((o) => o.value)).toEqual(['fetch', 'agent', 'file', 'env'])
+    expect(Array.from(select.options).map((o) => o.value)).toEqual(['agent', 'file', 'env'])
     expect(panel.textContent).not.toContain('Agents can see this value')
     fireEvent.change(select, { target: { value: 'file' } })
     expect(panel.textContent).toContain('Agents can see this value')
@@ -378,6 +378,39 @@ describe('VaultSection', () => {
     fireEvent.click(within(panel).getByRole('button', { name: 'Share' }))
     await waitFor(() => expect(posts.some((p) => p.route === 'vault/grant')).toBe(true))
     expect(posts.find((p) => p.route === 'vault/grant')!.body).toMatchObject({ id: 'id-API_KEY_X', as: 'api' })
+  })
+
+  it('an SSH key keeps its line breaks: add and rotate use a multi-line field', async () => {
+    const KEY = '-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\nk2testline2\n-----END OPENSSH PRIVATE KEY-----\n'
+    userRows = [secret({ name: 'DEPLOY_KEY', kind: 'ssh_key', hosts: [], hostsDisplay: [], defaultDelivery: 'agent', deliveryCeiling: 'env' }), ...userRows]
+    const { container } = await renderPage()
+    // Add.
+    fireEvent.click(screen.getByTestId('vault-add'))
+    const form = screen.getByTestId('vault-add-form')
+    fireEvent.change(within(form).getByPlaceholderText('STRIPE_KEY'), { target: { value: 'NEW_SSH' } })
+    fireEvent.change(within(form).getByTestId('vault-add-kind'), { target: { value: 'ssh_key' } })
+    const area = within(form).getByTestId('vault-value-multiline') as HTMLTextAreaElement
+    expect(area.tagName).toBe('TEXTAREA')
+    fireEvent.change(area, { target: { value: KEY } })
+    fireEvent.click(within(form).getByTestId('vault-add-save'))
+    await waitFor(() => expect(posts.some((p) => p.route === 'vault/set')).toBe(true))
+    const set = posts.find((p) => p.route === 'vault/set')!.body
+    expect(set.valueB64).toBe(toBase64(KEY))
+    expect(set.kind).toBe('ssh_key')
+    expect(set.delivery).toBe('file')
+    // Rotate.
+    fireEvent.click(within(row('DEPLOY_KEY')).getByRole('button', { name: 'Rotate' }))
+    const panel = within(row('DEPLOY_KEY')).getByTestId('vault-rotate-panel')
+    const area2 = within(panel).getByTestId('vault-value-multiline') as HTMLTextAreaElement
+    fireEvent.change(area2, { target: { value: KEY } })
+    fireEvent.click(within(panel).getByRole('button', { name: 'Rotate' }))
+    await waitFor(() => expect(posts.some((p) => p.route === 'vault/rotate')).toBe(true))
+    expect(posts.find((p) => p.route === 'vault/rotate')!.body.valueB64).toBe(toBase64(KEY))
+    expect(container.textContent).not.toContain('k2testline2')
+    // An API key still uses a one-line password field.
+    fireEvent.click(within(row('STRIPE_KEY')).getByRole('button', { name: 'Rotate' }))
+    const p3 = within(row('STRIPE_KEY')).getByTestId('vault-rotate-panel')
+    expect(within(p3).queryByTestId('vault-value-multiline')).toBeNull()
   })
 
   it('add secret: picking SSH key offers agent delivery', async () => {

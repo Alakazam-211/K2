@@ -225,7 +225,7 @@ rc="$(run_case ok)"
 [ "$(wc -l < "$tmp/ok/jobs.tsv" | tr -d ' ')" = 2 ] && pass "two jobs (L1 x86 bins, L3 app)" || fail "jobs.tsv" "$(cat "$tmp/ok/jobs.tsv")"
 grep -q 'L2 aarch64: no ARM node yet' "$tmp/ok.submit" && pass "aarch64 seam is named" || fail "aarch64 note" "$(cat "$tmp/ok.submit")"
 run_line="$(grep -m1 'k2 compute run k2n4-vin' "$tmp/calls-ok" || true)"
-for want in "--sha $COMMIT" "--gate" "--detach" "--artifact dist/**" "--env BUILD_OAUTH=placeholder" "-- bash scripts/ci/build-linux-bins.sh x86_64"; do
+for want in "--sha $COMMIT" "--gate" "--detach" "--artifact dist/*" "--env BUILD_COMMIT=$COMMIT" "--env BUILD_OAUTH=placeholder" "-- bash scripts/ci/build-linux-bins.sh x86_64"; do
     [[ "$run_line" == *"$want"* ]] && pass "L1 submit has $want" || fail "L1 submit lacks $want" "$run_line"
 done
 ! grep -qE -- '--env (K2_|K2SO_)' "$tmp/calls-ok" && pass "no K2_* name in --env (nodes refuse them: env_k2_reserved)" \

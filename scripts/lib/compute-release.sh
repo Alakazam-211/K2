@@ -68,14 +68,16 @@ k2cr_release_nodes() {
 }
 
 # k2cr_submit <label> <node> <kind> <arch> <needs> -- <argv…>
-# Detached, --gate, at exactly K2CR_COMMIT, keeping dist/**. Appends
+# Detached, --gate, at exactly K2CR_COMMIT, keeping dist/* (the node's
+# walker matches no file with a trailing `**`). Appends
 # "label<TAB>job<TAB>node<TAB>kind<TAB>arch<TAB>argv-json" to jobs.tsv.
 k2cr_submit() {
     local label="$1" node="$2" kind="$3" arch="$4" needs="$5"
     shift 5
     [ "${1:-}" = "--" ] && shift
     local -a args=(compute run "$node" --sha "$K2CR_COMMIT" --detach --gate --json
-        --artifact 'dist/**' --needs "$needs" --mem 16G --queue-timeout 45m --retries 1)
+        --artifact 'dist/*' --needs "$needs" --mem 16G --queue-timeout 45m --retries 1
+        --env "BUILD_COMMIT=$K2CR_COMMIT" --env "BUILD_TREE=$K2CR_TREE")
     [ -n "${K2_COMPUTE_WORKSPACE:-}" ] && args+=(--workspace "$K2_COMPUTE_WORKSPACE")
     if [ "$kind" = "linux-bins" ]; then
         if [ "${K2_COMPUTE_OAUTH:-placeholder}" = "env" ]; then

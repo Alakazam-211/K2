@@ -74,7 +74,7 @@ What shadow mode does:
 
 - **Step 1.6c:** refreshes Cargo.lock's workspace versions, makes the
   release commit C (the same preview commit the Arch gate builds), and
-  submits two jobs with `--sha C --gate --detach --artifact 'dist/**'`:
+  submits two jobs with `--sha C --gate --detach --artifact 'dist/*'`:
   - L1 `scripts/ci/build-linux-bins.sh x86_64` on k2n4-vin;
   - L3 `scripts/ci/build-linux-app.sh` on k2n5-vin.
 

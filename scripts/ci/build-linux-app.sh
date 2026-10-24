@@ -28,6 +28,14 @@ done
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
+
+# The checkout's commit/tree. A compute job's checkout belongs to the node
+# user, so plain git refuses it ("dubious ownership"); safe.directory for
+# this one call. No git at all → what the submitter said (BUILD_COMMIT /
+# BUILD_TREE); the signed receipt stays the authority either way.
+k2_ci_rev() {
+    git -c safe.directory='*' rev-parse "$1" 2>/dev/null || printf '%s\n' "$2"
+}
 if [ "$(uname -s)" != "Linux" ] || [ "$(uname -m)" != "x86_64" ]; then
     echo "FATAL: the Linux app bundles build on x86_64 Linux (this is $(uname -s) $(uname -m))" >&2
     exit 1
@@ -61,8 +69,8 @@ done
 test "$(grep -c . "$OUT/app-linux.sums")" = 3
 
 K2_BI_OUT="$OUT" K2_BI_VERSION="$VERSION" \
-K2_BI_COMMIT="$(git rev-parse HEAD 2>/dev/null || echo unknown)" \
-K2_BI_TREE="$(git rev-parse 'HEAD^{tree}' 2>/dev/null || echo unknown)" \
+K2_BI_COMMIT="$(k2_ci_rev HEAD "${BUILD_COMMIT:-unknown}")" \
+K2_BI_TREE="$(k2_ci_rev 'HEAD^{tree}' "${BUILD_TREE:-unknown}")" \
 K2_BI_RUSTC="$(rustc -vV)" K2_BI_BUN="$(bun --version)" \
 K2_BI_FILES="${FILES[*]}" \
 python3 - <<'PY'

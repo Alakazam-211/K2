@@ -65,6 +65,14 @@ esac
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
+# The checkout's commit/tree. A compute job's checkout belongs to the node
+# user, so plain git refuses it ("dubious ownership"); safe.directory for
+# this one call. No git at all → what the submitter said (BUILD_COMMIT /
+# BUILD_TREE); the signed receipt stays the authority either way.
+k2_ci_rev() {
+    git -c safe.directory='*' rev-parse "$1" 2>/dev/null || printf '%s\n' "$2"
+}
+
 if [ "$(uname -s)" != "Linux" ]; then
     echo "FATAL: build-linux-bins.sh builds Linux binaries on Linux (this is $(uname -s))" >&2
     exit 1
@@ -158,8 +166,8 @@ done
 VERSION="$(grep -m1 '^version = ' crates/k2-daemon/Cargo.toml | sed 's/version = "\(.*\)"/\1/')"
 PTYD_SHA="$(_k2_sha256_of "$K2_PTYD_EMBED")"
 K2_BI_OUT="$OUT" K2_BI_ARCH="$ARCH" K2_BI_VERSION="$VERSION" K2_BI_OAUTH="$OAUTH_MODE" \
-K2_BI_COMMIT="$(git rev-parse HEAD 2>/dev/null || echo unknown)" \
-K2_BI_TREE="$(git rev-parse 'HEAD^{tree}' 2>/dev/null || echo unknown)" \
+K2_BI_COMMIT="$(k2_ci_rev HEAD "${BUILD_COMMIT:-unknown}")" \
+K2_BI_TREE="$(k2_ci_rev 'HEAD^{tree}' "${BUILD_TREE:-unknown}")" \
 K2_BI_RUSTC="$(rustc -vV)" K2_BI_CARGO="$(cargo -V)" \
 K2_BI_GLIBC="$(ldd --version 2>/dev/null | head -1 || echo unknown)" \
 K2_BI_REMAP="${BUILD_REMAP:-0}" K2_BI_PTYD="$PTYD_SHA" \

@@ -49,6 +49,21 @@ push to main / integ/*
   runs `k2 compute test --shards 3 --profile ci --os linux` per crate
   (one nextest partition per Linux node, one combined result).
 
+### Why there is no shared sccache (measured 2026-10-24)
+
+Nodes already keep a warm target dir per project slot, so a job at a
+nearby commit recompiles only what changed. sccache only helps when that
+dir is cold. On k2n4-vin, a cold `cargo build -p k2-daemon` (dev) took
+643 s without sccache, 696 s while filling an empty local cache and 549 s
+from a warm one in a different checkout path (jobs get a fresh path each
+time): 80% of Rust units and 27% of C/C++ units hit, and the long poles
+(k2-core, k2-daemon, the links, cmake builds) never do. So: about 15% off
+a cold build, 8% on to fill, nothing on a warm slot. A cache shared across
+jobs would also be shared across the K2 servers that use a node, and a
+`--gate` release build must never read objects another tenant could have
+written. Not added; revisit only as a per-workspace, node-managed cache
+dir that `--gate` jobs never mount.
+
 ### Setting it up on z3mbpZ (Rosson approves first; see the open questions)
 
 1. **A CI checkout** (not the release checkout):

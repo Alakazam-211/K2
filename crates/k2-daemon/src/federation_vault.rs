@@ -112,7 +112,7 @@ pub fn handle_vault_recipient(body: &[u8]) -> CliResponse {
         to_fingerprint: ingested.peer_fingerprint.clone(),
         vault_id: vault.vault_id().to_string(),
         recipient,
-        features: vec![handoff::FEATURE.to_string(), handoff::FEATURE_SIGN.to_string()],
+        features: vec![handoff::FEATURE.to_string(), handoff::FEATURE_SIGN.to_string(), handoff::FEATURE_AGENT.to_string()],
         issued_at: chrono::Utc::now().to_rfc3339(),
     };
     match vr::sign(&statement, &key) {
@@ -499,18 +499,13 @@ pub(crate) fn send_remote(
     // Can it take a handoff at all? An old or federation-off peer 404s
     // here: peer_too_old, before anything else is asked of anyone.
     let mut pv = peer_vault(vault, &peer, host, false)?;
-    // Item 2: a signed secret goes only to a server that keeps the signer
-    // (an older one would paste the value). The cached statement may
-    // predate the peer's update, so ask again once before refusing.
-    if item.inject.as_ref().is_some_and(|i| i.sign.is_some()) && !pv.features.iter().any(|f| f == handoff::FEATURE_SIGN) {
+    // Items 2 and 3: a signed secret, or an agent-delivery ssh key, goes
+    // only to a server that advertises it. The cached statement may predate
+    // the peer's update, so ask again once before refusing.
+    if peer_missing_feature(&item, &pv.features, host).is_some() {
         pv = peer_vault(vault, &peer, host, true)?;
-        if !pv.features.iter().any(|f| f == handoff::FEATURE_SIGN) {
-            return Err(VaultError::new(
-                "peer_too_old_for_signed",
-                422,
-                format!("{host} can't take a signed secret yet (it needs K2 0.46.4 or later); nothing was sent"),
-            )
-            .into());
+        if let Some(e) = peer_missing_feature(&item, &pv.features, host) {
+            return Err(e.into());
         }
     }
     // R3: a person-given secret needs a person to send it, with the vault
@@ -802,6 +797,29 @@ pub(crate) fn unsend_remote(out: &HandoffRecord) -> Result<(bool, bool), VaultEr
         )),
         Answer::Refused(status, code, hint) => Err(refused_error(status, &code, &hint, &host)),
     }
+}
+
+/// Why a peer advertising `features` can't take `item`, if it can't:
+/// a signed secret needs `sign-v1` (an older peer would paste the value:
+/// `peer_too_old_for_signed`); an agent-delivery ssh key needs `agent-v1`
+/// (an older peer can't parse `agent`: `peer_too_old`).
+pub(crate) fn peer_missing_feature(item: &handoff::HandoffItem, features: &[String], host: &str) -> Option<VaultError> {
+    let has = |f: &str| features.iter().any(|x| x == f);
+    if item.inject.as_ref().is_some_and(|i| i.sign.is_some()) && !has(handoff::FEATURE_SIGN) {
+        return Some(VaultError::new(
+            "peer_too_old_for_signed",
+            422,
+            format!("{host} can't take a signed secret yet (it needs K2 0.46.4 or later); nothing was sent"),
+        ));
+    }
+    if item.uses_agent() && !has(handoff::FEATURE_AGENT) {
+        return Some(VaultError::new(
+            "peer_too_old",
+            422,
+            format!("{host} can't take an agent-delivery ssh key yet (it needs K2 0.46.4 or later); nothing was sent"),
+        ));
+    }
+    None
 }
 
 #[cfg(test)]

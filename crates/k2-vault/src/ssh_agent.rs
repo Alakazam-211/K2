@@ -149,14 +149,21 @@ impl AgentKey {
                 ("ssh-ed25519", s.as_bytes().to_vec())
             }
             KeypairData::Rsa(k) => {
+                // Blinded private-key operation (`try_sign_with_rng`): the
+                // RNG only blinds the exponentiation (RUSTSEC-2023-0071,
+                // Q7); the PKCS#1 v1.5 signature itself stays deterministic.
+                use rsa::signature::RandomizedSigner;
                 let r = to_rsa(k)?;
+                let mut rng = ssh_key::rand_core::OsRng;
                 if flags & RSA_SHA2_256 != 0 {
                     let sk = rsa::pkcs1v15::SigningKey::<sha2::Sha256>::new(r);
-                    let s: rsa::pkcs1v15::Signature = sk.try_sign(data).map_err(|_| VaultError::internal("rsa signing failed"))?;
+                    let s: rsa::pkcs1v15::Signature =
+                        sk.try_sign_with_rng(&mut rng, data).map_err(|_| VaultError::internal("rsa signing failed"))?;
                     ("rsa-sha2-256", rsa::signature::SignatureEncoding::to_vec(&s))
                 } else if flags & RSA_SHA2_512 != 0 {
                     let sk = rsa::pkcs1v15::SigningKey::<sha2::Sha512>::new(r);
-                    let s: rsa::pkcs1v15::Signature = sk.try_sign(data).map_err(|_| VaultError::internal("rsa signing failed"))?;
+                    let s: rsa::pkcs1v15::Signature =
+                        sk.try_sign_with_rng(&mut rng, data).map_err(|_| VaultError::internal("rsa signing failed"))?;
                     ("rsa-sha2-512", rsa::signature::SignatureEncoding::to_vec(&s))
                 } else {
                     return Err(VaultError::bad_request("ssh_rsa_sha1", "ssh-rsa (SHA-1) signatures aren't served; use rsa-sha2-256/512"));
@@ -304,22 +311,33 @@ pub struct SessionBind {
     pub forwarding: bool,
 }
 
-/// What a bind's signature check found.
+/// What a bind's signature check found. The fingerprint is advisory (audit
+/// only): it is the key the client says it bound to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BindCheck {
     /// The host key signed the session id; its `SHA256:` fingerprint.
     Verified(String),
-    /// Well formed, but a host key type this build can't verify (ECDSA
-    /// P-384/P-521, …): `is_forwarding` is still honoured.
+    /// A host key this build can't verify: one that doesn't parse (host
+    /// certificates, key types ssh-key doesn't know) or ECDSA P-384/P-521.
+    /// The fingerprint is over the raw blob. `is_forwarding` still counts
+    /// and the connection keeps serving.
     Unverifiable(String),
     /// A host key type this build verifies, and the signature is wrong
-    /// (or the key/signature don't parse): the connection closes.
+    /// (or doesn't parse): the connection closes.
     Bad,
+}
+
+/// `SHA256:<base64, no padding>` of a raw key blob (what `ssh-keygen -l`
+/// prints for a parsed key).
+fn blob_fingerprint(blob: &[u8]) -> String {
+    use base64::Engine as _;
+    use sha2::Digest as _;
+    format!("SHA256:{}", base64::engine::general_purpose::STANDARD_NO_PAD.encode(sha2::Sha256::digest(blob)))
 }
 
 impl SessionBind {
     pub fn check(&self) -> BindCheck {
-        let Ok(pk) = PublicKey::from_bytes(&self.host_key) else { return BindCheck::Bad };
+        let Ok(pk) = PublicKey::from_bytes(&self.host_key) else { return BindCheck::Unverifiable(blob_fingerprint(&self.host_key)) };
         let fp = pk.fingerprint(HashAlg::Sha256).to_string();
         let verifiable = matches!(
             pk.algorithm(),
@@ -630,9 +648,27 @@ mod tests {
         let mut junk = good.clone();
         junk.signature = b"junk".to_vec();
         assert_eq!(junk.check(), BindCheck::Bad);
-        let mut nokey = good;
+        // A host key that doesn't parse (a host certificate, an unknown
+        // type) can't be verified: unverifiable, never a close.
+        let mut nokey = good.clone();
         nokey.host_key = b"junk".to_vec();
-        assert_eq!(nokey.check(), BindCheck::Bad);
+        assert!(matches!(nokey.check(), BindCheck::Unverifiable(ref fp) if fp.starts_with("SHA256:")), "{:?}", nokey.check());
+        let mut cert = Vec::new();
+        put_string(&mut cert, b"ssh-ed25519-cert-v01@openssh.com");
+        put_string(&mut cert, &[7u8; 32]);
+        put_string(&mut cert, &host.public_blob());
+        let certb = SessionBind { host_key: cert, ..good.clone() };
+        assert!(matches!(certb.check(), BindCheck::Unverifiable(_)), "a host-cert bind: {:?}", certb.check());
+        // A P-256 host key verifies.
+        let p256 = PrivateKey::from_openssh(testkeys::p256()).expect("p256");
+        let s: ssh_key::Signature = Signer::try_sign(&p256, &sid).expect("p256 sign");
+        let mut sigb = Vec::new();
+        put_string(&mut sigb, s.algorithm().as_str().as_bytes());
+        put_string(&mut sigb, s.as_bytes());
+        let pb = SessionBind { host_key: p256.public_key().to_bytes().expect("blob"), session_id: sid.clone(), signature: sigb.clone(), forwarding: false };
+        assert!(matches!(pb.check(), BindCheck::Verified(_)), "a P-256 bind: {:?}", pb.check());
+        let pbad = SessionBind { session_id: b"other".to_vec(), ..pb };
+        assert_eq!(pbad.check(), BindCheck::Bad);
         // An RSA host key signs with rsa-sha2-256.
         let rh = AgentKey::parse(testkeys::rsa2048().as_bytes()).expect("rsa host");
         let rb = SessionBind { host_key: rh.public_blob(), session_id: sid.clone(), signature: client::host_sign(&rh, &sid), forwarding: false };

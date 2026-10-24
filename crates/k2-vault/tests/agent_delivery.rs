@@ -228,6 +228,120 @@ fn a_tampered_agent_setting_fails_closed() {
     assert_ne!(v.status().tamper, "ok", "status says so");
 }
 
+/// Round 2 (7): a policy row is bound to the audit entry that wrote it.
+/// Deleting the row, or putting an older (validly MAC'd) row back to undo
+/// a tightening, fails closed.
+#[test]
+fn deleting_or_replaying_an_agent_setting_fails_closed() {
+    let t = TestDir::new("agent-replay");
+    let ks = Arc::new(FakeKeyStore::new());
+    let v = open(&t, &ks);
+    let k = put_key(&v, "ws1", "KEY", &testkeys::ed25519(), Delivery::Agent, &Actor::Owner);
+    let sel = Selector::Id(k.id.clone());
+    v.set_agent_policy(&sel, AgentPolicyPatch { allow_forwarded: Some(true), ..Default::default() }, &Actor::Owner).expect("allow");
+    let old: (i64, i64, i64, String, String, i64, Vec<u8>) = rusqlite::Connection::open(t.path().join("vault/vault.db"))
+        .expect("db")
+        .query_row(
+            "SELECT burst, per_minute, allow_forwarded, updated_by, updated_at, audit_seq, row_mac FROM agent_policy WHERE secret_id = ?1",
+            [&k.id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)),
+        )
+        .expect("row");
+    // Tighten: no forwarding, burst 5.
+    v.set_agent_policy(&sel, AgentPolicyPatch { burst: Some(5), allow_forwarded: Some(false), ..Default::default() }, &Actor::Owner)
+        .expect("tighten");
+    let p = v.agent_policy(&k.id).expect("policy");
+    assert_eq!((p.burst, p.allow_forwarded), (5, false), "the fresh row is trusted");
+    drop(v);
+    // Replay the older row (its own MAC is valid).
+    let c = rusqlite::Connection::open(t.path().join("vault/vault.db")).expect("db");
+    c.execute(
+        "UPDATE agent_policy SET burst = ?2, per_minute = ?3, allow_forwarded = ?4, updated_by = ?5, updated_at = ?6, audit_seq = ?7, row_mac = ?8 WHERE secret_id = ?1",
+        rusqlite::params![k.id, old.0, old.1, old.2, old.3, old.4, old.5, old.6],
+    )
+    .expect("replay");
+    drop(c);
+    let v = open(&t, &ks);
+    let p = v.agent_policy(&k.id).expect("policy");
+    assert_eq!((p.burst, p.per_minute, p.allow_forwarded), (1, 1, false), "a replayed row isn't the latest: strictest");
+    drop(v);
+    // Delete it: the audit log says one was set.
+    let c = rusqlite::Connection::open(t.path().join("vault/vault.db")).expect("db");
+    c.execute("DELETE FROM agent_policy WHERE secret_id = ?1", [&k.id]).expect("delete");
+    drop(c);
+    let v = open(&t, &ks);
+    let p = v.agent_policy(&k.id).expect("policy");
+    assert_eq!((p.burst, p.per_minute, p.allow_forwarded), (1, 1, false), "a deleted row is not the defaults: strictest");
+    assert_ne!(v.status().tamper, "ok");
+    // A person setting it again repairs it.
+    let (_, p) = v.set_agent_policy(&sel, AgentPolicyPatch { burst: Some(10), per_minute: Some(100), ..Default::default() }, &Actor::Owner).expect("repair");
+    assert_eq!(v.agent_policy(&k.id).expect("policy"), p);
+    // A secret with no policy at all keeps the defaults.
+    let k2 = put_key(&v, "ws1", "KEY2", &testkeys::ed25519(), Delivery::Agent, &Actor::Owner);
+    let d = v.agent_policy(&k2.id).expect("defaults");
+    assert_eq!((d.burst, d.per_minute, d.allow_forwarded), (60, 240, false));
+}
+
+/// Round 2 (6): an ssh private key never goes into an outbound request.
+#[test]
+fn an_ssh_key_is_never_fetched() {
+    let (_t, v) = vault();
+    let mut r = PutRequest::new(Namespace::User, Scope::workspace("ws1"), "FETCHY", Kind::SshKey);
+    r.default_delivery = Some(Delivery::Fetch);
+    r.hosts = vec!["api.example.com".into()];
+    let m = v.put(r, SecretBytes::from_slice(testkeys::ed25519().as_bytes()), &Actor::Owner).expect("put").meta;
+    let o = k2_vault::hosts::Origin::parse_url("https://api.example.com/x").expect("origin").1;
+    let Err(e) = v.resolve(&Selector::Id(m.id), Use::Fetch(&o), &session("ws1", "s1")) else {
+        panic!("an ssh key was resolved for fetch");
+    };
+    assert_eq!(e.code, "ssh_key_not_sent");
+}
+
+/// Round 2 (2): the daemon's socket records are MAC'd; a tampered row is
+/// never returned.
+#[test]
+fn agent_socket_records_are_macd() {
+    let t = TestDir::new("agent-sock-rec");
+    let ks = Arc::new(FakeKeyStore::new());
+    let v = open(&t, &ks);
+    let rec = |tag: &str| k2_vault::vault::AgentSocket {
+        tag: tag.into(),
+        kind: "session".into(),
+        workspace_id: "ws1".into(),
+        secrets_dir: format!("/run/k2/secrets/{tag}-abcdefgh"),
+        sock_path: format!("/run/k2/secrets/{tag}-abcdefgh/a.sock"),
+        created_at: "2026-10-24T00:00:00Z".into(),
+    };
+    v.agent_socket_put(&rec("s1")).expect("put");
+    v.agent_socket_put(&rec("s2")).expect("put");
+    assert_eq!(v.agent_socket_get("s1").expect("get"), Some(rec("s1")));
+    assert_eq!(v.agent_socket_put(&k2_vault::vault::AgentSocket { kind: "other".into(), ..rec("s3") }).expect_err("kind").code, "bad_agent_socket");
+    drop(v);
+    let c = rusqlite::Connection::open(t.path().join("vault/vault.db")).expect("db");
+    c.execute("UPDATE agent_socket SET workspace_id = 'ws-other' WHERE tag = 's2'", []).expect("tamper");
+    drop(c);
+    let v = open(&t, &ks);
+    assert_eq!(v.agent_socket_get("s2").expect("get"), None, "a tampered record is never used");
+    assert_eq!(v.agent_sockets().expect("all"), vec![rec("s1")]);
+    v.agent_socket_remove("s1").expect("rm");
+    assert!(v.agent_sockets().expect("all").is_empty());
+}
+
+/// Round 2 (14): what a downgrade to 0.46.3 would break.
+#[test]
+fn downgrade_blockers_count_agent_job_and_signed_rows() {
+    let (_t, v) = vault();
+    assert!(!v.downgrade_blockers().expect("none").any());
+    let k = put_key(&v, "ws1", "AG", &testkeys::ed25519(), Delivery::Agent, &Actor::Owner);
+    let f = put_key(&v, "ws1", "FI", &testkeys::ed25519(), Delivery::File, &Actor::Owner);
+    grant(&v, &f.id, Consumer::job("ws1", "j1"), Delivery::File).expect("job grant");
+    grant(&v, &f.id, Consumer::workspace("ws2"), Delivery::Agent).expect("agent grant");
+    let b = v.downgrade_blockers().expect("blockers");
+    assert_eq!((b.agent, b.job_grants, b.signed), (2, 1, 0), "{b:?}");
+    assert!(b.any());
+    let _ = k;
+}
+
 #[test]
 fn the_public_key_of_an_ssh_key() {
     let (_t, v) = vault();
@@ -244,11 +358,13 @@ fn the_public_key_of_an_ssh_key() {
     assert_eq!(v.agent_public_key(&Selector::Id(tok.id), &Actor::Owner).expect_err("kind").code, "not_an_ssh_key");
 }
 
-/// R2/R3: an `agent` row is text a 0.46.3 daemon has no enum for (its
-/// deliveries were fetch, proxy, file, env, api, none) and its code is
-/// last, so older codes and MACs are unchanged. With R2 (0.46.4) an older
-/// daemon skips such rows: the same skip this build applies to delivery
-/// text it doesn't know, shown here with made-up text in an agent row.
+/// R3, and this build's own R2 skip. Checks that `agent` is appended last
+/// (older codes, and so older MACs, unchanged), that the stored text is
+/// exactly `agent`, and that this build skips delivery text it doesn't
+/// know without failing list/spawn (made-up text written into an agent
+/// row). It proves nothing about 0.46.3, which has no R2 and fails every
+/// list on such a row; that is why `k2 vault doctor` warns once agent rows
+/// exist (downgrade_blockers).
 #[test]
 fn agent_rows_stay_readable_by_r2_tolerant_daemons() {
     const OLDER_DELIVERIES: &[&str] = &["fetch", "proxy", "file", "env", "api", "none"];

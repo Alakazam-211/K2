@@ -1,6 +1,10 @@
 //! prd-vault-gaps-v1 item 3: the per-session ssh-agent socket, driven
-//! over the wire from the test (the live `ssh-add` / `ssh-keygen -Y` /
-//! `ssh` run is `ssh_agent_live_tests.rs`, `--ignored`).
+//! over the wire from the test (`ssh-add` / `ssh-keygen -Y` against the
+//! socket, and the `--ignored` sshd run, are in `ssh_agent_live_tests.rs`).
+//!
+//! Every test that starts a socket holds the env lock: the secrets root and
+//! the short-path roots follow env, and the boot test sweeps the short-path
+//! roots.
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -48,13 +52,21 @@ impl Client {
         Client { s }
     }
 
-    /// Send one request; `None` = the agent closed the connection.
+    /// Send one request; `None` = the agent closed the connection (EOF or
+    /// a reset). A timeout or any other error fails the test: a hung agent
+    /// must never read as "closed".
     fn call(&mut self, payload: &[u8]) -> Option<Vec<u8>> {
-        self.s.write_all(&proto::frame(payload)).ok()?;
+        if let Err(e) = self.s.write_all(&proto::frame(payload)) {
+            assert!(closed_kind(&e), "write failed with {e:?}, not a close");
+            return None;
+        }
         let mut len = [0u8; 4];
-        self.s.read_exact(&mut len).ok()?;
+        if let Err(e) = self.s.read_exact(&mut len) {
+            assert!(closed_kind(&e), "read failed with {e:?}, not a close");
+            return None;
+        }
         let mut buf = vec![0u8; u32::from_be_bytes(len) as usize];
-        self.s.read_exact(&mut buf).ok()?;
+        self.s.read_exact(&mut buf).expect("a whole reply");
         Some(buf)
     }
 
@@ -68,10 +80,21 @@ impl Client {
         client::parse_sign(&r).expect("well-formed sign answer")
     }
 
+    /// The agent closed the connection: `Ok(0)` or a reset, never a timeout.
     fn closed(&mut self) -> bool {
         let mut b = [0u8; 1];
-        matches!(self.s.read(&mut b), Ok(0) | Err(_))
+        match self.s.read(&mut b) {
+            Ok(0) => true,
+            Ok(_) => false,
+            Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => true,
+            Err(e) => panic!("read failed with {e:?} (a timeout is not a close)"),
+        }
     }
+}
+
+/// EOF, a reset or a broken pipe: the peer closed.
+fn closed_kind(e: &std::io::Error) -> bool {
+    matches!(e.kind(), std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::BrokenPipe)
 }
 
 fn blob_of(ids: &[(Vec<u8>, String)], name: &str) -> Vec<u8> {
@@ -90,6 +113,7 @@ fn audit_outcomes(v: &LocalVault, secret_id: &str) -> Vec<(String, String, Optio
 
 #[test]
 fn the_socket_lists_only_granted_keys_and_signatures_verify() {
+    let _env = k2_core::test_env::lock();
     let v = super::super::ensure_test_vault();
     let t = k2_vault::fsutil::TestDir::new("agent-list");
     let w = ws();
@@ -104,7 +128,7 @@ fn the_socket_lists_only_granted_keys_and_signatures_verify() {
     .public_blob();
     let sid = uuid::Uuid::new_v4().to_string();
     let dir = session_dir(&t, &sid);
-    let sock = start(sess(&w, &sid), &sid, &dir).expect("start");
+    let sock = start(&v, sess(&w, &sid), &sid, &dir).expect("start");
     assert!(sock.as_os_str().len() <= MAX_SOCK_PATH, "{}", sock.display());
     assert_eq!(std::fs::symlink_metadata(&sock).expect("sock").permissions().mode() & 0o777, 0o600);
 
@@ -157,6 +181,7 @@ fn the_socket_lists_only_granted_keys_and_signatures_verify() {
 
 #[test]
 fn signatures_are_rate_limited_per_session_and_secret() {
+    let _env = k2_core::test_env::lock();
     let v = super::super::ensure_test_vault();
     let t = k2_vault::fsutil::TestDir::new("agent-rate");
     let w = ws();
@@ -166,7 +191,7 @@ fn signatures_are_rate_limited_per_session_and_secret() {
         .expect("burst 5");
     let sid = uuid::Uuid::new_v4().to_string();
     let dir = session_dir(&t, &sid);
-    let sock = start(sess(&w, &sid), &sid, &dir).expect("start");
+    let sock = start(&v, sess(&w, &sid), &sid, &dir).expect("start");
     let mut c = Client::connect(&sock);
     let ids = c.identities();
     let (blob_a, blob_b) = (blob_of(&ids, "KEY_A"), blob_of(&ids, "KEY_B"));
@@ -181,7 +206,7 @@ fn signatures_are_rate_limited_per_session_and_secret() {
     // Another session with the same key has its own budget too.
     let sid2 = uuid::Uuid::new_v4().to_string();
     let dir2 = session_dir(&t, &sid2);
-    let sock2 = start(sess(&w, &sid2), &sid2, &dir2).expect("start 2");
+    let sock2 = start(&v, sess(&w, &sid2), &sid2, &dir2).expect("start 2");
     assert!(Client::connect(&sock2).sign(&blob_a, b"s2", 0).is_some());
     assert!(audit_outcomes(&v, &a.id).iter().any(|r| r.1 == "deny:rate_limited"));
     stop_dir(&dir);
@@ -217,13 +242,14 @@ fn the_default_limits_are_60_a_second_and_240_a_minute() {
 
 #[test]
 fn a_forwarded_agent_is_refused_unless_the_secret_allows_it() {
+    let _env = k2_core::test_env::lock();
     let v = super::super::ensure_test_vault();
     let t = k2_vault::fsutil::TestDir::new("agent-fwd");
     let w = ws();
     let k = put_key(&v, &w, "FWD_KEY", &testkeys::ed25519(), Delivery::Agent);
     let sid = uuid::Uuid::new_v4().to_string();
     let dir = session_dir(&t, &sid);
-    let sock = start(sess(&w, &sid), &sid, &dir).expect("start");
+    let sock = start(&v, sess(&w, &sid), &sid, &dir).expect("start");
     let host = AgentKey::parse(testkeys::ed25519().as_bytes()).expect("host key");
     let bind = |forwarding: bool, sid_bytes: &[u8]| SessionBind {
         host_key: host.public_blob(),
@@ -271,28 +297,36 @@ fn a_forwarded_agent_is_refused_unless_the_secret_allows_it() {
 
 #[test]
 fn a_long_dir_uses_the_short_socket_path() {
+    let _env = k2_core::test_env::lock();
     let t = k2_vault::fsutil::TestDir::new("agent-path");
     let long = t.path().join("x".repeat(120));
     std::fs::create_dir_all(&long).expect("long dir");
     let (sock, fb) = sock_path_for(&long).expect("path");
     let fb = fb.expect("a fallback dir for a long path");
+    let root = fb.parent().expect("root").to_path_buf();
     assert!(sock.as_os_str().len() <= MAX_SOCK_PATH, "{}", sock.display());
-    assert!(sock.starts_with(fallback_root()), "{}", sock.display());
+    assert!(fallback_roots().contains(&root), "{}", sock.display());
     assert_eq!(std::fs::metadata(&fb).expect("fb").permissions().mode() & 0o777, 0o700);
-    assert_eq!(std::fs::metadata(fallback_root()).expect("root").permissions().mode() & 0o777, 0o700);
+    assert_eq!(std::fs::metadata(&root).expect("root").permissions().mode() & 0o777, 0o700);
     std::fs::remove_dir(&fb).expect("cleanup");
+    // $TMPDIR/k2a first (per user), /tmp/k2a-<uid> after it.
+    let roots = fallback_roots();
+    assert_eq!(roots.last().expect("last"), &PathBuf::from(format!("/tmp/k2a-{}", unsafe { libc::geteuid() })));
+    if let Some(t) = std::env::var_os("TMPDIR").filter(|t| !t.is_empty()) {
+        assert_eq!(roots[0], PathBuf::from(t).join("k2a"));
+    }
     let short = t.path().join("s");
     std::fs::create_dir_all(&short).expect("short dir");
     if short.join(SOCK_NAME).as_os_str().len() <= MAX_SOCK_PATH {
         assert_eq!(sock_path_for(&short).expect("path"), (short.join(SOCK_NAME), None));
     }
-    // A recorded path must be exactly <root>/<8 base62>/a.sock.
-    assert!(valid_fallback(&fallback_root().join("Ab3dE6gH").join(SOCK_NAME)).is_some());
+    // A short path must be exactly <root>/<8 base62>/a.sock.
+    assert!(valid_fallback(&root.join("Ab3dE6gH").join(SOCK_NAME)).is_some());
     for bad in [
-        fallback_root().join("..").join("x").join(SOCK_NAME),
-        fallback_root().join("short").join(SOCK_NAME),
+        root.join("..").join("x").join(SOCK_NAME),
+        root.join("short").join(SOCK_NAME),
         PathBuf::from("/etc/Ab3dE6gH/a.sock"),
-        fallback_root().join("Ab3dE6gH").join("other.sock"),
+        root.join("Ab3dE6gH").join("other.sock"),
     ] {
         assert!(valid_fallback(&bad).is_none(), "{}", bad.display());
     }
@@ -321,20 +355,25 @@ fn the_socket_goes_at_session_end_and_is_re_served_after_a_restart() {
     assert!(sock.as_os_str().len() <= MAX_SOCK_PATH);
     assert_eq!(Client::connect(&sock).identities().len(), 1);
 
-    // Restart: the server is gone but the session (and its dir) survive.
+    let rec = v.agent_socket_get(&sid).expect("record").expect("the daemon recorded it");
+    assert_eq!((rec.kind.as_str(), rec.workspace_id.as_str()), ("session", w.as_str()));
+    assert_eq!(rec.sock_path, sock.to_string_lossy());
+
+    // Restart: the server is gone but the session (and its dir) survive;
+    // after adoption it is re-served from the record.
     abandon_for_tests(&dir);
     std::thread::sleep(Duration::from_millis(700));
     assert!(UnixStream::connect(&sock).is_err(), "nobody serves the old socket");
-    let again = resume(sess(&w, &sid), &sid, &dir).expect("resume").expect("had a socket");
+    let again = resume_adopted(&v, &sid, Some(&w), Some(&dir), Some(&dir)).expect("resume");
     assert_eq!(again, sock, "same path: SSH_AUTH_SOCK in the session stays valid");
     assert_eq!(Client::connect(&sock).identities().len(), 1, "re-served");
-    // A dir without a socket: nothing to resume.
+    // A session without a socket record: nothing to resume.
     let t = k2_vault::fsutil::TestDir::new("agent-noresume");
     let empty = session_dir(&t, "s-empty");
-    assert_eq!(resume(sess(&w, "s-empty"), "s-empty", &empty).expect("none"), None);
+    assert_eq!(resume_adopted(&v, "s-empty", Some(&w), Some(&empty), Some(&empty)).expect_err("none"), ResumeRefused::NoRecord);
 
-    // Session end: socket, server and fallback dir go.
-    let fallback = sock.parent().filter(|p| p.starts_with(fallback_root())).map(Path::to_path_buf);
+    // Session end: socket, server, short-path dir and record go.
+    let fallback = sock.parent().filter(|p| fallback_roots().iter().any(|r| p.starts_with(r))).map(Path::to_path_buf);
     super::super::spawn::session_ended(&sid);
     assert!(!sock.exists(), "socket removed at session end");
     assert!(!dir.exists(), "dir removed at session end");
@@ -343,6 +382,7 @@ fn the_socket_goes_at_session_end_and_is_re_served_after_a_restart() {
         assert!(!f.exists(), "fallback dir removed");
     }
     assert!(UnixStream::connect(&sock).is_err());
+    assert!(v.agent_socket_get(&sid).expect("record").is_none(), "record dropped at session end");
 
     // A sandboxed cell gets no socket.
     let mut env3 = HashMap::new();
@@ -397,4 +437,102 @@ fn a_job_run_gets_an_agent_socket_removed_at_run_end() {
     super::super::spawn::job_ended(&out);
     assert!(!sock.exists() && !dir.exists(), "removed at run end");
     assert!(UnixStream::connect(&sock).is_err());
+}
+
+
+/// Round 2 (4): a bind whose host key doesn't parse (a host certificate)
+/// can't be verified: FAILURE, the forwarding flag still counts, and the
+/// connection keeps serving. A P-256 bind verifies.
+#[test]
+fn an_unparseable_host_key_bind_keeps_the_connection() {
+    let _env = k2_core::test_env::lock();
+    let v = super::super::ensure_test_vault();
+    let t = k2_vault::fsutil::TestDir::new("agent-cert");
+    let w = ws();
+    put_key(&v, &w, "CERT_KEY", &testkeys::ed25519(), Delivery::Agent);
+    let sid = uuid::Uuid::new_v4().to_string();
+    let dir = session_dir(&t, &sid);
+    let sock = start(&v, sess(&w, &sid), &sid, &dir).expect("start");
+    let host = AgentKey::parse(testkeys::ed25519().as_bytes()).expect("host");
+    let mut cert = Vec::new();
+    for part in [&b"ssh-ed25519-cert-v01@openssh.com"[..], &[7u8; 32][..], &host.public_blob()[..]] {
+        cert.extend_from_slice(&(part.len() as u32).to_be_bytes());
+        cert.extend_from_slice(part);
+    }
+    let mut c = Client::connect(&sock);
+    let b = SessionBind { host_key: cert, session_id: b"sid".to_vec(), signature: client::host_sign(&host, b"sid"), forwarding: true };
+    assert_eq!(c.call(&client::session_bind(&b)).expect("still open"), vec![proto::FAILURE]);
+    let blob = blob_of(&c.identities(), "CERT_KEY");
+    assert_eq!(c.sign(&blob, b"x", 0), None, "the forwarding flag of an unverifiable bind still counts");
+    // Not forwarded: served.
+    let mut c2 = Client::connect(&sock);
+    let b2 = SessionBind { forwarding: false, ..b };
+    assert_eq!(c2.call(&client::session_bind(&b2)).expect("still open"), vec![proto::FAILURE]);
+    assert!(c2.sign(&blob, b"x", 0).is_some());
+    stop_dir(&dir);
+}
+
+/// Round 2 (9): a frame that stalls part-way, and a connection that sends
+/// nothing, are closed at their deadlines (so idle peers can't hold slots).
+#[test]
+fn stalled_and_idle_connections_are_closed() {
+    let _env = k2_core::test_env::lock();
+    let v = super::super::ensure_test_vault();
+    let t = k2_vault::fsutil::TestDir::new("agent-deadline");
+    let w = ws();
+    put_key(&v, &w, "DL_KEY", &testkeys::ed25519(), Delivery::Agent);
+    let sid = uuid::Uuid::new_v4().to_string();
+    let dir = session_dir(&t, &sid);
+    let d = Deadlines { frame: Duration::from_millis(600), idle: Duration::from_millis(1500) };
+    let sock = start_with(&v, sess(&w, &sid), &sid, &dir, d).expect("start");
+    // Half a header, then nothing: closed after the frame deadline.
+    let mut stalled = Client::connect(&sock);
+    stalled.s.write_all(&[0, 0]).expect("write");
+    let t0 = Instant::now();
+    assert!(stalled.closed(), "a stalled frame is closed");
+    assert!(t0.elapsed() < Duration::from_secs(5));
+    // Nothing at all: closed after the idle deadline, not before.
+    let mut idle = Client::connect(&sock);
+    let t0 = Instant::now();
+    assert!(idle.closed(), "an idle connection is closed");
+    assert!(t0.elapsed() >= Duration::from_millis(1200), "not before the idle deadline: {:?}", t0.elapsed());
+    // A live client keeps working.
+    assert_eq!(Client::connect(&sock).identities().len(), 1);
+    stop_dir(&dir);
+}
+
+/// Round 2 (5): listings and refused signs are throttled per session
+/// before any vault work; a session that keeps getting refused is refused
+/// even a good signature until its window passes.
+#[test]
+fn listings_and_refusals_are_throttled_per_session() {
+    let _env = k2_core::test_env::lock();
+    let v = super::super::ensure_test_vault();
+    let t = k2_vault::fsutil::TestDir::new("agent-throttle");
+    let w = ws();
+    put_key(&v, &w, "TH_KEY", &testkeys::ed25519(), Delivery::Agent);
+    let sid = uuid::Uuid::new_v4().to_string();
+    let dir = session_dir(&t, &sid);
+    let sock = start(&v, sess(&w, &sid), &sid, &dir).expect("start");
+    let mut c = Client::connect(&sock);
+    let blob = blob_of(&c.identities(), "TH_KEY");
+    let mut failed = 0;
+    for _ in 0..30 {
+        let r = c.call(&client::identities()).expect("answer");
+        if r == vec![proto::FAILURE] {
+            failed += 1;
+        }
+    }
+    assert!(failed >= 10, "listings past {IDS_PER_SECOND}/s are refused ({failed} of 30)");
+    // Ten refused signs (an unknown key), then a good one is refused too.
+    let t0 = Instant::now();
+    for i in 0..REFUSALS_PER_SECOND {
+        assert_eq!(c.sign(b"not-a-key", format!("r{i}").as_bytes(), 0), None);
+    }
+    assert_eq!(c.sign(&blob, b"good", 0), None, "refusal budget spent");
+    assert!(t0.elapsed() < Duration::from_millis(900), "too slow to mean anything");
+    std::thread::sleep(Duration::from_millis(1100));
+    let mut c2 = Client::connect(&sock);
+    assert!(c2.sign(&blob, b"good", 0).is_some(), "the next second it signs again");
+    stop_dir(&dir);
 }

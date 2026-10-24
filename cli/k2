@@ -22700,16 +22700,17 @@ The ssh-agent settings of an ssh key with agent delivery. With no option,
 prints them. Per session: at most --burst signatures a second (1-600,
 default 60) and --per-minute (1-6000, default 240); over that, the
 agent says no and the audit says rate_limited.
---allow-forwarded lets a forwarded agent (ssh -A, then ssh from the other
-box) sign; by default that is refused (deny forwarded in the audit).
-Raising a limit or allowing forwarding is widening: a secret a person
-gave you needs the owner.
+By default K2 won't sign when the ssh client says the connection is a
+forwarded agent (ssh -A, then ssh from the other box): deny forwarded in
+the audit. --allow-forwarded turns that off. Raising a limit or allowing
+forwarding is widening: a secret a person gave you needs the owner.
 
-Agent delivery stops the key being copied out. While the session runs,
-anything in it, or any same-user process that finds the socket, can still
-sign with it. Signing over a forwarded agent (ssh -A) is refused unless
-the secret allows it; clients that don't announce forwarding can't be
-told apart.
+Advisory, not a security control: agent delivery stops the key being
+copied out, but while the session runs anything in it, or any same-user
+process that finds the socket, can still sign with it. The forwarding
+refusal and the host key in the audit come from what the ssh client
+says; a client that says nothing, or a process that speaks the agent
+protocol itself, can't be told apart.
 
 Example: k2 vault agent-limit DEPLOY_KEY --burst 10 --per-minute 60
 EOF
@@ -34951,8 +34952,8 @@ HONEST LIMITS
   chats, logs, git and copies, sends them only where they belong, and
   logs every use. Agent delivery stops an ssh key being copied out, but
   anything in the session (or a same-user process that finds the socket)
-  can sign while it runs. ssh -A forwarding is refused unless the secret
-  allows it (k2 vault agent-limit); clients that don't say can't be told.
+  can sign while it runs. The ssh -A refusal and audit host key are
+  advisory: they trust what the ssh client says (k2 vault agent-limit).
 
 WHAT THE VAULT CAN'T DO YET (and the way around it today)
   sign requests (AWS SigV4, Google service-account JWT): env or file delivery

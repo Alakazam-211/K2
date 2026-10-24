@@ -384,7 +384,7 @@ fn deliver_agent(
         }
     }
     let d = dir.as_ref().expect("dir set above");
-    match super::ssh_agent::start(who.clone(), tag, d) {
+    match super::ssh_agent::start(vault, who.clone(), tag, d) {
         Ok(sock) => {
             env.insert(SSH_AUTH_SOCK_ENV.to_string(), sock.display().to_string());
             out.agent_sock = Some(sock);
@@ -428,10 +428,37 @@ fn remove_dir(d: &Path) {
     super::ssh_agent::stop_dir(d);
     if let Ok(rd) = std::fs::read_dir(d) {
         for e in rd.flatten() {
-            let _ = super::adopt::remove_old_copy(&e.path());
+            wipe_entry(&e.path());
         }
     }
     let _ = std::fs::remove_dir(d);
+}
+
+/// Remove one entry of a secrets dir; a regular file we own is zeroed
+/// first. Never blocks and never follows a link: the dir is writable by
+/// any same-user process, so a FIFO, socket or link planted there (even
+/// swapped in after the stat) is only unlinked. The open is
+/// `O_WRONLY|O_NOFOLLOW|O_NONBLOCK` and the zeroing re-checks the open
+/// file (`fstat`): a regular file, ours, at most 16 MiB.
+pub(crate) fn wipe_entry(p: &Path) {
+    let me = unsafe { libc::geteuid() };
+    if std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_file()) {
+        if let Ok(mut f) = OpenOptions::new().write(true).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK).open(p) {
+            if let Ok(m) = f.metadata() {
+                if m.is_file() && m.uid() == me && m.len() <= 16 * 1024 * 1024 {
+                    let _ = f.write_all(&vec![0u8; m.len() as usize]);
+                    let _ = f.sync_all();
+                }
+            }
+        }
+    }
+    let _ = std::fs::remove_file(p);
+}
+
+/// The secrets dir the boot sweep kept for a surviving session (item 3:
+/// its agent socket is re-served only into this dir).
+pub fn kept_dir(session_id: &str) -> Option<PathBuf> {
+    DIRS.lock().iter().find(|(s, _)| s == session_id).map(|(_, d)| d.clone())
 }
 
 /// Boot: remove every secrets dir except those of agent sessions that
@@ -441,47 +468,34 @@ fn remove_dir(d: &Path) {
 /// Without k2-ptyd (or with nothing running in it) nothing survives a
 /// restart and every dir goes, as before.
 ///
-/// Item 3: a kept dir with an ssh-agent socket gets it re-served at the
-/// same path (the session's `SSH_AUTH_SOCK` stays valid), for the
-/// workspace its spawn recorded in the ptyd meta.
+/// Item 3: agent socket records of sessions that didn't survive are
+/// dropped (with their sockets), and orphaned short-path socket dirs go
+/// ([`super::ssh_agent::boot_sweep`]). A survivor's socket is re-served
+/// only once k2-ptyd adoption has registered the session
+/// ([`super::ssh_agent::on_adopted`]), from the daemon's own record.
 pub fn sweep_at_boot() {
-    let survivors = surviving_dirs();
-    let keep: Vec<(String, PathBuf)> = survivors.iter().map(|(s, d, _)| (s.clone(), d.clone())).collect();
+    let keep: Vec<(String, PathBuf)> = surviving_dirs();
     let kept = sweep_at_boot_keeping(&keep);
-    resume_agents(&kept, &survivors);
+    if let Ok(v) = super::get() {
+        super::ssh_agent::boot_sweep(&v, &kept);
+    }
 }
 
-/// The `(session id, secrets dir, workspace id)` B0 found running in ptyd.
-fn surviving_dirs() -> Vec<(String, PathBuf, Option<String>)> {
+/// The `(session id, secrets dir)` pairs B0 found running in ptyd.
+fn surviving_dirs() -> Vec<(String, PathBuf)> {
     #[cfg(unix)]
     {
         k2_core::terminal::ptyd::adopt::running()
             .into_iter()
             .filter_map(|s| {
                 let dir = s.meta.get("secrets_dir")?.as_str()?.to_string();
-                let ws = s.meta.get("workspace_uuid").and_then(|w| w.as_str()).map(str::to_string).filter(|w| !w.trim().is_empty());
-                Some((s.sid, PathBuf::from(dir), ws))
+                Some((s.sid, PathBuf::from(dir)))
             })
             .collect()
     }
     #[cfg(not(unix))]
     {
         Vec::new()
-    }
-}
-
-/// Re-serve the agent socket of every kept dir that had one.
-fn resume_agents(kept: &[(String, PathBuf)], survivors: &[(String, PathBuf, Option<String>)]) {
-    for (sid, dir) in kept {
-        let Some(ws) = survivors.iter().find(|(s, d, _)| s == sid && d == dir).and_then(|(_, _, w)| w.clone()) else {
-            continue;
-        };
-        let who = Requester::Session { workspace_id: ws, session_id: Some(sid.clone()) };
-        match super::ssh_agent::resume(who, sid, dir) {
-            Ok(Some(sock)) => k2_core::log_debug!("[vault] ssh-agent re-served for adopted session {sid} at {}", sock.display()),
-            Ok(None) => {}
-            Err(e) => k2_core::log_debug!("[vault] ssh-agent for adopted session {sid} not re-served: {e}"),
-        }
     }
 }
 
@@ -573,12 +587,35 @@ mod tests {
         std::fs::remove_dir_all(&outside).unwrap();
     }
 
+    fn mkfifo(p: &Path) {
+        let c = std::ffi::CString::new(p.as_os_str().as_encoded_bytes()).expect("path");
+        // SAFETY: a valid C path.
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0, "mkfifo {}", p.display());
+    }
+
+    fn list_ids(sock: &Path) -> Vec<String> {
+        use std::io::{Read, Write};
+        let mut s = std::os::unix::net::UnixStream::connect(sock).expect("connect");
+        s.set_read_timeout(Some(std::time::Duration::from_secs(10))).expect("timeout");
+        s.write_all(&k2_vault::ssh_agent::frame(&k2_vault::ssh_agent::client::identities())).expect("write");
+        let mut len = [0u8; 4];
+        s.read_exact(&mut len).expect("len");
+        let mut buf = vec![0u8; u32::from_be_bytes(len) as usize];
+        s.read_exact(&mut buf).expect("body");
+        k2_vault::ssh_agent::client::parse_identities(&buf).expect("identities").into_iter().map(|(_, n)| n).collect()
+    }
+
     /// Item 3 + k2-ptyd: after a restart, a surviving session's dir is kept
-    /// and its ssh-agent socket re-served at the same path; a dead
-    /// session's dir (socket included) goes.
+    /// but its agent socket is re-served only after adoption, only from
+    /// the daemon's own record, and only when the ptyd meta agrees with
+    /// it. A dead session's dir, socket and record go; a record that points
+    /// at another session's socket is never followed; a FIFO planted in a
+    /// secrets dir never hangs the sweep.
     #[test]
-    fn boot_re_serves_a_surviving_sessions_agent_socket() {
+    fn boot_re_serves_an_agent_socket_only_from_the_daemons_record() {
+        use super::super::ssh_agent::{self as agent, ResumeRefused};
         use k2_vault::{Actor, Kind, Namespace, PutRequest, Scope, SecretBytes};
+        let _env = k2_core::test_env::lock();
         let v = super::super::ensure_test_vault();
         let ws = uuid::Uuid::new_v4().to_string();
         let mut r = PutRequest::new(Namespace::User, Scope::workspace(ws.clone()), "BOOT_KEY", Kind::SshKey);
@@ -591,27 +628,95 @@ mod tests {
         let who = |s: &str| Requester::Session { workspace_id: ws.clone(), session_id: Some(s.to_string()) };
         let live_dir = make_session_dir(&root, &live).expect("dir");
         let dead_dir = make_session_dir(&root, &dead).expect("dir");
-        let live_sock = super::super::ssh_agent::start(who(&live), &live, &live_dir).expect("start");
-        let dead_sock = super::super::ssh_agent::start(who(&dead), &dead, &dead_dir).expect("start");
+        let live_sock = agent::start(&v, who(&live), &live, &live_dir).expect("start");
+        let dead_sock = agent::start(&v, who(&dead), &dead, &dead_dir).expect("start");
+        assert!(v.agent_socket_get(&live).expect("rec").is_some(), "the daemon recorded the socket");
+        // Planted FIFOs (a reader-less FIFO blocks a plain open for write).
+        mkfifo(&dead_dir.join("a.sock.path"));
+        mkfifo(&dead_dir.join("token"));
+        mkfifo(&live_dir.join("a.sock.path"));
         // The daemon goes away; k2-ptyd keeps `live` running.
-        super::super::ssh_agent::abandon_for_tests(&live_dir);
-        super::super::ssh_agent::abandon_for_tests(&dead_dir);
+        agent::abandon_for_tests(&live_dir);
+        agent::abandon_for_tests(&dead_dir);
         std::thread::sleep(std::time::Duration::from_millis(700));
+        let t0 = std::time::Instant::now();
         let kept = sweep_root_keeping(&root, &[(live.clone(), live_dir.clone())]);
-        resume_agents(&kept, &[(live.clone(), live_dir.clone(), Some(ws.clone()))]);
-        assert_eq!(super::super::ssh_agent::socket_for(&live_dir), Some(live_sock.clone()), "re-served at the same path");
-        let mut s = std::os::unix::net::UnixStream::connect(&live_sock).expect("connect");
-        use std::io::{Read, Write};
-        s.write_all(&k2_vault::ssh_agent::frame(&k2_vault::ssh_agent::client::identities())).expect("write");
-        let mut len = [0u8; 4];
-        s.read_exact(&mut len).expect("len");
-        let mut buf = vec![0u8; u32::from_be_bytes(len) as usize];
-        s.read_exact(&mut buf).expect("body");
-        let ids = k2_vault::ssh_agent::client::parse_identities(&buf).expect("identities");
-        assert_eq!(ids.iter().map(|(_, n)| n.as_str()).collect::<Vec<_>>(), vec!["BOOT_KEY"]);
+        agent::boot_sweep(&v, &kept);
+        assert!(t0.elapsed() < std::time::Duration::from_secs(5), "the boot sweep must not block on a FIFO");
         assert!(!dead_dir.exists() && !dead_sock.exists(), "a dead session's dir and socket go");
+        assert!(v.agent_socket_get(&dead).expect("rec").is_none(), "and its record");
+        assert!(agent::socket_for(&live_dir).is_none(), "nothing is served before adoption");
+        assert_eq!(kept_dir(&live).as_deref(), Some(live_dir.as_path()));
+
+        // Adoption with a ptyd meta whose workspace was rewritten: refused.
+        let other_ws = uuid::Uuid::new_v4().to_string();
+        let e = agent::resume_adopted(&v, &live, Some(&other_ws), Some(&live_dir), Some(&live_dir)).expect_err("rewritten meta");
+        assert_eq!(e, ResumeRefused::WorkspaceMismatch);
+        let e = agent::resume_adopted(&v, &live, Some(&ws), Some(&dead_dir), Some(&live_dir)).expect_err("rewritten dir");
+        assert_eq!(e, ResumeRefused::DirMismatch);
+        assert!(agent::socket_for(&live_dir).is_none());
+
+        // A record that points at the live session's socket from another
+        // session's dir is ignored: not served, and its stop leaves the
+        // live socket alone.
+        let x = uuid::Uuid::new_v4().to_string();
+        let x_dir = make_session_dir(&root, &x).expect("dir");
+        v.agent_socket_put_unchecked_for_tests(&k2_vault::vault::AgentSocket {
+            tag: x.clone(),
+            kind: "session".into(),
+            workspace_id: ws.clone(),
+            secrets_dir: x_dir.to_string_lossy().into_owned(),
+            sock_path: live_sock.to_string_lossy().into_owned(),
+            created_at: "2026-10-24T00:00:00Z".into(),
+        })
+        .expect("forged record");
+        let e = agent::resume_adopted(&v, &x, Some(&ws), Some(&x_dir), Some(&x_dir)).expect_err("points elsewhere");
+        assert_eq!(e, ResumeRefused::BadSocketPath);
+        agent::stop_dir(&x_dir);
+        assert!(std::fs::symlink_metadata(&live_sock).is_ok(), "another record never removes this socket");
+        assert!(v.agent_socket_get(&x).expect("rec").is_none());
+
+        // The real adoption: same workspace, same dir: re-served at the same path.
+        let t0 = std::time::Instant::now();
+        let sock = agent::resume_adopted(&v, &live, Some(&ws), Some(&live_dir), Some(&live_dir)).expect("re-served");
+        assert!(t0.elapsed() < std::time::Duration::from_secs(5));
+        assert_eq!(sock, live_sock, "SSH_AUTH_SOCK in the session stays valid");
+        assert_eq!(agent::socket_for(&live_dir), Some(live_sock.clone()));
+        assert_eq!(list_ids(&live_sock), vec!["BOOT_KEY".to_string()]);
+        let t0 = std::time::Instant::now();
         session_ended(&live);
-        assert!(!live_sock.exists() && !live_dir.exists(), "and the survivor's go at its end");
+        assert!(t0.elapsed() < std::time::Duration::from_secs(5), "session end must not block on a FIFO");
+        assert!(!live_dir.exists() && std::fs::symlink_metadata(&live_sock).is_err(), "and the survivor's go at its end");
+        assert!(v.agent_socket_get(&live).expect("rec").is_none());
+    }
+
+    /// Item 3: short-path socket dirs no record names (a crash) go at boot;
+    /// named ones stay.
+    #[test]
+    fn boot_removes_orphaned_short_path_socket_dirs() {
+        use super::super::ssh_agent as agent;
+        let _env = k2_core::test_env::lock();
+        let v = super::super::ensure_test_vault();
+        let root = agent::fallback_roots().into_iter().next().expect("a root");
+        std::fs::create_dir_all(&root).expect("root");
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).expect("chmod");
+        let orphan = root.join(k2_vault::crypto::base62(8));
+        std::fs::create_dir(&orphan).expect("orphan");
+        let l = std::os::unix::net::UnixListener::bind(orphan.join("a.sock")).expect("bind");
+        drop(l);
+        // A long secrets dir: the live socket uses a short path and is recorded.
+        let t = k2_vault::fsutil::TestDir::new("boot-orphan");
+        let long = t.path().join("x".repeat(110));
+        std::fs::create_dir_all(&long).expect("long");
+        let tag = uuid::Uuid::new_v4().to_string();
+        let ws = uuid::Uuid::new_v4().to_string();
+        let sock = agent::start(&v, Requester::Session { workspace_id: ws, session_id: Some(tag.clone()) }, &tag, &long).expect("start");
+        assert!(sock.as_os_str().len() <= agent::MAX_SOCK_PATH, "{}", sock.display());
+        agent::boot_sweep(&v, &[(tag.clone(), long.clone())]);
+        assert!(!orphan.exists(), "an orphaned short-path dir goes");
+        assert!(sock.exists(), "a recorded one stays");
+        agent::stop_dir(&long);
+        assert!(!sock.exists() && !sock.parent().expect("dir").exists());
     }
 
     /// KV19: every production spawn path that mints a passport also

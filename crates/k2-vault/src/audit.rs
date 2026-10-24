@@ -98,9 +98,14 @@ fn current_hour() -> i64 {
     chrono::Utc::now().timestamp() / 3600
 }
 
+/// Distinct roll-up keys held in one window. Past it, a new key folds into
+/// one coarse row per (action, outcome) with no secret, actor, consumer or
+/// host, so a caller inventing hosts or consumers can't grow memory.
+pub const ROLLUP_MAX_KEYS: usize = 4096;
+
 impl Rollups {
     pub fn add(&mut self, e: &Entry) {
-        let k = RollKey {
+        let mut k = RollKey {
             secret_id: e.secret_id.clone().unwrap_or_default(),
             version: e.version,
             action: e.action.clone(),
@@ -109,6 +114,17 @@ impl Rollups {
             host: e.target_host.clone(),
             outcome: e.outcome.clone(),
         };
+        if self.counts.len() >= ROLLUP_MAX_KEYS && !self.counts.contains_key(&k) {
+            k = RollKey {
+                secret_id: String::new(),
+                version: None,
+                action: e.action.clone(),
+                actor: "rollup-overflow".into(),
+                consumer: None,
+                host: None,
+                outcome: e.outcome.clone(),
+            };
+        }
         *self.counts.entry(k).or_insert(0) += e.count;
     }
 
@@ -159,6 +175,18 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows.iter().find(|x| x.secret_id.as_deref() == Some("s1")).expect("s1").count, 2);
         assert!(r.is_empty());
+    }
+
+    #[test]
+    fn rollup_keys_are_capped() {
+        let mut r = Rollups::default();
+        for i in 0..(ROLLUP_MAX_KEYS + 500) {
+            r.add(&Entry::new("sign", "s", "deny:forwarded").secret("s1", Some(1)).host(format!("ssh:SHA256:{i}")));
+        }
+        assert!(r.counts.len() <= ROLLUP_MAX_KEYS + 1, "{}", r.counts.len());
+        let rows = r.drain();
+        assert_eq!(rows.iter().map(|x| x.count).sum::<u64>(), (ROLLUP_MAX_KEYS + 500) as u64, "every hit still counted");
+        assert!(rows.iter().any(|x| x.actor == "rollup-overflow" && x.count == 500));
     }
 
     #[test]

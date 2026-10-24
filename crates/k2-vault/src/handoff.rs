@@ -44,6 +44,10 @@ pub const FEATURE: &str = "vault-handoff/1";
 /// secrets (`inject.sign`, PRD vault-gaps item 2). An older server would
 /// drop the signer and paste the value, so a signed secret isn't sent to it.
 pub const FEATURE_SIGN: &str = "sign-v1";
+/// Advertised by a server that understands `agent` delivery (item 3). An
+/// older one can't parse it (`bad_Delivery`), so an agent key isn't sent to
+/// it: the sender answers `peer_too_old` instead.
+pub const FEATURE_AGENT: &str = "agent-v1";
 /// A sealed handoff opens for ten minutes after it was made (§5.3).
 pub const TRANSPORT_TTL_SECS: i64 = 600;
 /// Values a handoff carries: SSH and TLS keys, kubeconfigs, service-account
@@ -258,6 +262,11 @@ impl HandoffItem {
 
     pub fn kind(&self) -> Result<Kind> {
         Kind::parse(&self.kind)
+    }
+
+    /// Does this item carry `agent` delivery (a peer must know it)?
+    pub fn uses_agent(&self) -> bool {
+        self.delivery == Delivery::Agent.as_str() || self.ceiling == Delivery::Agent.as_str()
     }
 
     /// The name it lands under.

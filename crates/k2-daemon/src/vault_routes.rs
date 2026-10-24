@@ -610,6 +610,34 @@ fn audit(vault: &LocalVault, c: &VaultCaller, params: &HashMap<String, String>) 
 
 /// `k2 vault doctor`: key home, recovery, tamper, rotations due, and
 /// plaintext `.env` files with sensitive names in workspaces.
+/// `k2 vault doctor`: once rows 0.46.3 can't read exist (agent delivery,
+/// job grants) or would misread (signed fetch), going back to 0.46.3
+/// breaks the vault for every session.
+pub fn downgrade_finding(b: &k2_vault::vault::DowngradeBlockers) -> Option<Value> {
+    if !b.any() {
+        return None;
+    }
+    let mut parts = vec![];
+    if b.agent > 0 {
+        parts.push(format!("{} with agent delivery", b.agent));
+    }
+    if b.job_grants > 0 {
+        parts.push(format!("{} job grant(s)", b.job_grants));
+    }
+    if b.signed > 0 {
+        parts.push(format!("{} signed secret(s)", b.signed));
+    }
+    Some(json!({
+        "level": "warning",
+        "code": "downgrade_breaks_0463",
+        "message": format!(
+            "Don't go back to K2 0.46.3: this vault has {}. 0.46.3 can't read agent delivery or job grants, so every list and every session's secrets fail there, and it would send a signed secret's value as a Bearer token. Stay on 0.46.4 or later.",
+            parts.join(", ")
+        ),
+        "counts": b,
+    }))
+}
+
 fn doctor(vault: &LocalVault, c: &VaultCaller) -> Result<Value, VaultError> {
     let st = vault.status();
     let mut findings: Vec<Value> = vec![];
@@ -632,6 +660,9 @@ fn doctor(vault: &LocalVault, c: &VaultCaller) -> Result<Value, VaultError> {
     }
     if st.key_home == "file" {
         findings.push(json!({ "level": "info", "code": "key_is_a_file", "message": honest_line("file") }));
+    }
+    if let Some(f) = downgrade_finding(&vault.downgrade_blockers()?) {
+        findings.push(f);
     }
     if let Some(r) = crate::vault::spawn::runtime_logind_risk() {
         findings.push(json!({

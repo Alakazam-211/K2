@@ -80,6 +80,7 @@ export const REVEAL_SHOW_MS = 30_000
 const DELIVERY_LABEL: Record<string, string> = {
   fetch: 'K2 adds it to calls',
   proxy: 'K2 adds it to calls',
+  agent: 'ssh signs through K2; nobody sees the key',
   file: 'a file the agent can read',
   env: 'an environment variable the agent can read',
   api: 'the agent can print it',
@@ -88,6 +89,28 @@ const DELIVERY_LABEL: Record<string, string> = {
 
 export function deliveryLabel(d: string): string {
   return DELIVERY_LABEL[d] ?? d
+}
+
+/** Can an agent read the value with this delivery? (file, env, api; the
+ * daemon's `Delivery::readable`). fetch, proxy and agent never show it. */
+export function deliveryReadable(d: string): boolean {
+  return d === 'file' || d === 'env' || d === 'api'
+}
+
+/** The delivery choices for a kind: `agent` only for SSH keys. */
+export function deliveryChoices(kind: string): string[] {
+  return kind === 'ssh_key' ? ['fetch', 'agent', 'file', 'env'] : ['fetch', 'file', 'env']
+}
+
+/** The ceiling choices for a kind. */
+export function ceilingChoices(kind: string): string[] {
+  return [...deliveryChoices(kind), 'api']
+}
+
+/** `choices`, plus `current` when it isn't one of them, so a select always
+ * shows the value it will send. */
+export function withCurrent(choices: string[], current: string): string[] {
+  return choices.includes(current) ? choices : [...choices, current]
 }
 
 const KIND_LABEL: Record<string, string> = {
@@ -693,9 +716,6 @@ function SitesPanel({ secret, onDone }: { secret: VaultSecret; onDone: () => voi
   )
 }
 
-const DELIVERY_CHOICES = ['fetch', 'file', 'env'] as const
-const CEILING_CHOICES = ['fetch', 'file', 'env', 'api'] as const
-
 function DeliveryPanel({ secret, onDone }: { secret: VaultSecret; onDone: () => void }): React.JSX.Element {
   const [delivery, setDelivery] = useState(secret.defaultDelivery === 'proxy' ? 'fetch' : secret.defaultDelivery)
   const [ceiling, setCeiling] = useState(secret.deliveryCeiling === 'proxy' ? 'fetch' : secret.deliveryCeiling)
@@ -717,8 +737,8 @@ function DeliveryPanel({ secret, onDone }: { secret: VaultSecret; onDone: () => 
     <div className="space-y-1.5 max-w-md" data-testid="vault-delivery-panel">
       <label className={`block text-[11px] ${muted}`}>
         How agents get it
-        <select value={delivery} onChange={(e) => setDelivery(e.target.value)} className={`${input} mt-1`}>
-          {DELIVERY_CHOICES.map((d) => (
+        <select value={delivery} onChange={(e) => setDelivery(e.target.value)} className={`${input} mt-1`} data-testid="vault-delivery-select">
+          {withCurrent(deliveryChoices(secret.kind), delivery).map((d) => (
             <option key={d} value={d}>
               {deliveryLabel(d)}
             </option>
@@ -728,14 +748,14 @@ function DeliveryPanel({ secret, onDone }: { secret: VaultSecret; onDone: () => 
       <label className={`block text-[11px] ${muted}`}>
         The most an agent may ever get
         <select value={ceiling} onChange={(e) => setCeiling(e.target.value)} className={`${input} mt-1`}>
-          {CEILING_CHOICES.map((d) => (
+          {withCurrent(ceilingChoices(secret.kind), ceiling).map((d) => (
             <option key={d} value={d}>
               {deliveryLabel(d)}
             </option>
           ))}
         </select>
       </label>
-      {delivery !== 'fetch' && <p className={`text-[11px] ${muted}`}>Agents can see this value.</p>}
+      {deliveryReadable(delivery) && <p className={`text-[11px] ${muted}`}>Agents can see this value.</p>}
       <button type="button" className={btn} disabled={busy} onClick={() => void save()}>
         Save
       </button>
@@ -777,14 +797,15 @@ function SharePanel({ secret, onDone }: { secret: VaultSecret; onDone: () => voi
       </label>
       <label className={`block text-[11px] ${muted}`}>
         How they get it
-        <select value={as} onChange={(e) => setAs(e.target.value)} className={`${input} mt-1`}>
-          {DELIVERY_CHOICES.map((d) => (
+        <select value={as} onChange={(e) => setAs(e.target.value)} className={`${input} mt-1`} data-testid="vault-share-as">
+          {withCurrent(deliveryChoices(secret.kind), as).map((d) => (
             <option key={d} value={d}>
               {deliveryLabel(d)}
             </option>
           ))}
         </select>
       </label>
+      {deliveryReadable(as) && <p className={`text-[11px] ${muted}`}>They can see this value.</p>}
       <button type="button" className={btn} disabled={busy} onClick={() => void share()}>
         Share
       </button>
@@ -1024,7 +1045,7 @@ function AddSecretForm({ presets, onDone, onCancel }: { presets: VaultPreset[]; 
   const [workspace, setWorkspace] = useState(projects[0]?.id ?? '')
   const [preset, setPreset] = useState('')
   const [sites, setSites] = useState('')
-  const [delivery, setDelivery] = useState<(typeof DELIVERY_CHOICES)[number]>('fetch')
+  const [delivery, setDelivery] = useState('fetch')
   const [kind, setKind] = useState('api_key')
   const fieldRef = useRef<HTMLInputElement>(null)
   const [has, setHas] = useState(false)
@@ -1099,10 +1120,22 @@ function AddSecretForm({ presets, onDone, onCancel }: { presets: VaultPreset[]; 
       </fieldset>
       <label className={`block text-[11px] ${muted}`}>
         Kind
-        <select value={kind} onChange={(e) => setKind(e.target.value)} className={`${input} mt-1`}>
+        <select
+          value={kind}
+          onChange={(e) => {
+            const k = e.target.value
+            setKind(k)
+            // agent is for SSH keys only; an SSH key starts as a file (the daemon's default).
+            if (k === 'ssh_key') setDelivery('file')
+            else if (delivery === 'agent') setDelivery('fetch')
+          }}
+          className={`${input} mt-1`}
+          data-testid="vault-add-kind"
+        >
           <option value="api_key">API key</option>
           <option value="password">password</option>
           <option value="oauth_token">sign-in token</option>
+          <option value="ssh_key">SSH key</option>
           <option value="generic">other</option>
         </select>
       </label>
@@ -1141,19 +1174,15 @@ function AddSecretForm({ presets, onDone, onCancel }: { presets: VaultPreset[]; 
       </label>
       <label className={`block text-[11px] ${muted}`}>
         How agents get it
-        <select
-          value={delivery}
-          onChange={(e) => setDelivery(e.target.value as (typeof DELIVERY_CHOICES)[number])}
-          className={`${input} mt-1`}
-        >
-          {DELIVERY_CHOICES.map((d) => (
+        <select value={delivery} onChange={(e) => setDelivery(e.target.value)} className={`${input} mt-1`} data-testid="vault-add-delivery">
+          {deliveryChoices(kind).map((d) => (
             <option key={d} value={d}>
               {deliveryLabel(d)}
             </option>
           ))}
         </select>
       </label>
-      {delivery !== 'fetch' && <p className={`text-[11px] ${muted}`}>Agents can see this value.</p>}
+      {deliveryReadable(delivery) && <p className={`text-[11px] ${muted}`}>Agents can see this value.</p>}
       {needsSite && <p className={`text-[11px] ${danger}`}>Add a site, or let agents read it.</p>}
       <ValueField fieldRef={fieldRef} label="Value" onPresence={setHas} />
       <p className={`text-[10px] ${muted}`}>

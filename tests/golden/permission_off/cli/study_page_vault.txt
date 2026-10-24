@@ -172,8 +172,8 @@ HONEST LIMITS
   chats, logs, git and copies, sends them only where they belong, and
   logs every use. Agent delivery stops an ssh key being copied out, but
   anything in the session (or a same-user process that finds the socket)
-  can sign while it runs. ssh -A forwarding is refused unless the secret
-  allows it (k2 vault agent-limit); clients that don't say can't be told.
+  can sign while it runs. The ssh -A refusal and audit host key are
+  advisory: they trust what the ssh client says (k2 vault agent-limit).
 
 WHAT THE VAULT CAN'T DO YET (and the way around it today)
   sign requests (AWS SigV4, Google service-account JWT): env or file delivery

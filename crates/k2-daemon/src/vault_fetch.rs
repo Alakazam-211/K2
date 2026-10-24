@@ -641,6 +641,17 @@ impl RateLimiter {
         Ok(())
     }
 
+    /// [`Self::allow_at`] without counting: would one more be allowed?
+    pub fn peek_at(&self, key: &str, per_second: usize, per_minute: usize, now: Instant) -> bool {
+        let minute = Duration::from_secs(60);
+        let second = Duration::from_secs(1);
+        let map = self.hits.lock();
+        let Some(q) = map.get(key) else { return per_second > 0 && per_minute > 0 };
+        let in_minute = q.iter().filter(|t| now.saturating_duration_since(**t) < minute).count();
+        let last_second = q.iter().rev().take_while(|t| now.saturating_duration_since(**t) < second).count();
+        in_minute < per_minute && last_second < per_second
+    }
+
     /// The same window with the limits chosen per call (the ssh agent's
     /// per-secret limits, prd-vault-gaps-v1 item 3). `true` = allowed and
     /// counted; a refusal isn't counted.

@@ -76,7 +76,7 @@ printf '%s' "$(k2n vault delivery --help)" | grep -Fq 'agent (ssh keys): $SSH_AU
 printf '%s' "$(k2n vault grant --help)" | grep -Fq -- "--as fetch|agent|file|env|api" || fail "grant --help lacks --as agent"
 al_help="$(k2n vault agent-limit --help)"
 for needle in "--burst N" "--per-minute M" "--allow-forwarded" "default 60" "default 240" "rate_limited" \
-    "can still" "sign with it. Signing over a forwarded agent (ssh -A) is refused unless" "told apart."; do
+    "Advisory, not a security control" "can still sign with it" "come from what the ssh client" "can't be told apart."; do
     printf '%s' "$al_help" | grep -Fq -- "$needle" || fail "agent-limit --help lacks '$needle'"
 done
 printf '%s' "$(k2n vault public-key --help)" | grep -Fq "Never the" || fail "public-key --help"
@@ -137,7 +137,7 @@ done
 for needle in "k2 vault import .env" "k2 vault send NAME --to <agent>" "ssh -i \$K2_SECRETS_DIR/NAME" "-o IdentitiesOnly=yes" \
     "--env-name GH_TOKEN" "hosts.yml" "auth.json" "systemd-creds encrypt" "LoadCredentialEncrypted=" "\$CREDENTIALS_DIRECTORY/" \
     "send and carry need K2 on both ends" "sign requests (AWS SigV4, Google service-account JWT)" "\$SSH_AUTH_SOCK" \
-    "--kind ssh_key --delivery agent" "k2 vault public-key NAME" "ssh -A forwarding is refused" \
+    "--kind ssh_key --delivery agent" "k2 vault public-key NAME" "The ssh -A refusal and audit host key are" "advisory: they trust what the ssh client says" \
     "Some secrets are signers" "--sign ovh --preset ovh-eu" "--json-out" \
     "k2 vault systemd-cred API_KEY --unit" "k2 vault placement add" "Keep the source copy in a K2 vault" "%d/<cred>"; do
     printf '%s' "$study" | grep -Fq -- "$needle" || fail "study vault lacks '$needle'"

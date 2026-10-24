@@ -224,10 +224,14 @@ CREATE TABLE IF NOT EXISTS placement (
 CREATE INDEX IF NOT EXISTS placement_secret ON placement (secret_id);
 "#;
 
-/// Per-secret `agent` delivery settings (`prd-vault-gaps-v1` item 3, R4):
-/// rate limits and forwarded signing. No row = the defaults (burst 60/s,
-/// 240/min, forwarded refused). Additive (H22): `user_version` stays 1,
-/// and an older daemon never reads it. Rows carry a MAC under the row key.
+/// `agent` delivery (`prd-vault-gaps-v1` item 3). Additive (H22):
+/// `user_version` stays 1, and an older daemon never reads them. Rows carry
+/// a MAC under the row key.
+/// - `agent_policy` (R4): per-secret rate limits and forwarded signing. No
+///   row = the defaults (burst 60/s, 240/min, forwarded refused).
+///   `audit_seq` binds a row to the audit entry that wrote it (freshness).
+/// - `agent_socket`: the daemon's record of each live agent socket; the
+///   only thing a restarted daemon re-serves or removes a socket from.
 pub const AGENT_TABLES: &str = r#"
 CREATE TABLE IF NOT EXISTS agent_policy (
     secret_id TEXT PRIMARY KEY,
@@ -236,6 +240,17 @@ CREATE TABLE IF NOT EXISTS agent_policy (
     allow_forwarded INTEGER NOT NULL DEFAULT 0,
     updated_by TEXT NOT NULL,
     updated_at TEXT NOT NULL,
+    audit_seq INTEGER NOT NULL,
+    row_mac BLOB NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS agent_socket (
+    tag TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    secrets_dir TEXT NOT NULL,
+    sock_path TEXT NOT NULL,
+    created_at TEXT NOT NULL,
     row_mac BLOB NOT NULL
 );
 "#;

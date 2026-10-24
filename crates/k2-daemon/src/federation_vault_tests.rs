@@ -625,3 +625,36 @@ async fn a_cross_server_ask_travels_as_a_message_and_its_reply_lands_straight_in
     let got = v.resolve(&Selector::user(Scope::workspace(&ws), "K_ASKED"), Use::System, &Requester::System("t".into())).unwrap();
     assert_eq!(got.value.expose(), secret.as_bytes());
 }
+
+/// Items 2 and 3: what an older peer (no `sign-v1` / `agent-v1` in its
+/// vault statement) is refused, before anything is sent.
+#[test]
+fn an_old_peer_is_refused_signed_and_agent_items_by_feature() {
+    let item = |kind: &str, delivery: &str, ceiling: &str, signed: bool| HandoffItem {
+        name: "K".into(),
+        as_name: None,
+        kind: kind.into(),
+        hosts: vec![],
+        inject: signed.then(|| k2_vault::inject::Inject { sign: Some(k2_vault::inject::Sign::Ovh), ..Default::default() }),
+        description: String::new(),
+        delivery: delivery.into(),
+        ceiling: ceiling.into(),
+        human_given: false,
+        ttl_secs: None,
+    };
+    let old = vec![k2_vault::handoff::FEATURE.to_string()];
+    let new = vec![
+        k2_vault::handoff::FEATURE.to_string(),
+        k2_vault::handoff::FEATURE_SIGN.to_string(),
+        k2_vault::handoff::FEATURE_AGENT.to_string(),
+    ];
+    let agent = item("ssh_key", "agent", "env", false);
+    assert_eq!(peer_missing_feature(&agent, &old, "old.example").expect("refused").code, "peer_too_old");
+    assert!(peer_missing_feature(&agent, &new, "new.example").is_none());
+    let ceiling_only = item("ssh_key", "file", "agent", false);
+    assert_eq!(peer_missing_feature(&ceiling_only, &old, "old.example").expect("refused").code, "peer_too_old");
+    let signed = item("generic", "fetch", "fetch", true);
+    assert_eq!(peer_missing_feature(&signed, &old, "old.example").expect("refused").code, "peer_too_old_for_signed");
+    assert!(peer_missing_feature(&signed, &new, "new.example").is_none());
+    assert!(peer_missing_feature(&item("ssh_key", "file", "env", false), &old, "old.example").is_none(), "a plain file key goes anywhere");
+}

@@ -348,6 +348,51 @@ describe('VaultSection', () => {
     })
     expect(container.textContent).not.toContain(VALUE)
   })
+
+  it('agent delivery: offered only for SSH keys, and never warns that agents can see the value', async () => {
+    userRows = [secret({ name: 'DEPLOY_KEY', kind: 'ssh_key', hosts: [], hostsDisplay: [], defaultDelivery: 'agent', deliveryCeiling: 'env' }), ...userRows]
+    await renderPage()
+    fireEvent.click(within(row('DEPLOY_KEY')).getByRole('button', { name: 'Change delivery' }))
+    const panel = within(row('DEPLOY_KEY')).getByTestId('vault-delivery-panel')
+    const select = within(panel).getByTestId('vault-delivery-select') as HTMLSelectElement
+    expect(select.value).toBe('agent')
+    expect(Array.from(select.options).map((o) => o.value)).toEqual(['fetch', 'agent', 'file', 'env'])
+    expect(panel.textContent).not.toContain('Agents can see this value')
+    fireEvent.change(select, { target: { value: 'file' } })
+    expect(panel.textContent).toContain('Agents can see this value')
+    // An API key has no agent choice.
+    fireEvent.click(within(row('STRIPE_KEY')).getByRole('button', { name: 'Change delivery' }))
+    const p2 = within(row('STRIPE_KEY')).getByTestId('vault-delivery-panel')
+    expect(Array.from((within(p2).getByTestId('vault-delivery-select') as HTMLSelectElement).options).map((o) => o.value)).not.toContain('agent')
+  })
+
+  it('the Share panel shows the delivery it will send, even one outside the usual choices', async () => {
+    userRows = [secret({ name: 'API_KEY_X', defaultDelivery: 'api', deliveryCeiling: 'api' }), ...userRows]
+    await renderPage()
+    fireEvent.click(within(row('API_KEY_X')).getByRole('button', { name: 'Share' }))
+    const panel = within(row('API_KEY_X')).getByTestId('vault-share-panel')
+    const as = within(panel).getByTestId('vault-share-as') as HTMLSelectElement
+    expect(as.value).toBe('api')
+    expect(as.options[as.selectedIndex].textContent).toBe('the agent can print it')
+    expect(panel.textContent).toContain('They can see this value')
+    fireEvent.click(within(panel).getByRole('button', { name: 'Share' }))
+    await waitFor(() => expect(posts.some((p) => p.route === 'vault/grant')).toBe(true))
+    expect(posts.find((p) => p.route === 'vault/grant')!.body).toMatchObject({ id: 'id-API_KEY_X', as: 'api' })
+  })
+
+  it('add secret: picking SSH key offers agent delivery', async () => {
+    await renderPage()
+    fireEvent.click(screen.getByTestId('vault-add'))
+    const form = screen.getByTestId('vault-add-form')
+    const delivery = () => within(form).getByTestId('vault-add-delivery') as HTMLSelectElement
+    expect(Array.from(delivery().options).map((o) => o.value)).not.toContain('agent')
+    fireEvent.change(within(form).getByTestId('vault-add-kind'), { target: { value: 'ssh_key' } })
+    expect(Array.from(delivery().options).map((o) => o.value)).toContain('agent')
+    fireEvent.change(delivery(), { target: { value: 'agent' } })
+    expect(form.textContent).not.toContain('Agents can see this value')
+    fireEvent.change(within(form).getByTestId('vault-add-kind'), { target: { value: 'api_key' } })
+    expect(delivery().value).toBe('fetch')
+  })
 })
 
 describe('groupSecrets', () => {

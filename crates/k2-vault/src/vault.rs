@@ -41,7 +41,7 @@ mod agent_store;
 mod handoff_store;
 mod placement_store;
 
-pub use agent_store::{AgentIdentity, AgentPolicy, AgentPolicyPatch};
+pub use agent_store::{AgentIdentity, AgentPolicy, AgentPolicyPatch, AgentSocket, DowngradeBlockers};
 pub use placement_store::{NewPlacement, Placement, PlacementTarget, Placements};
 
 pub const FORMAT: &str = "k2-vault/1";
@@ -1549,6 +1549,15 @@ impl LocalVault {
                 return Err(self.deny(deny_entry, VaultError::forbidden("secret_expired", "that secret has expired")));
             }
         }
+        // Item 3: an ssh private key never goes into an outbound request.
+        if m.kind == Kind::SshKey && matches!(use_, Use::Fetch(_) | Use::Proxy(_)) {
+            drop(conn);
+            drop(keys);
+            return Err(self.deny(
+                deny_entry,
+                VaultError::forbidden("ssh_key_not_sent", "an ssh key is never put in a request; use agent (or file) delivery"),
+            ));
+        }
         // System namespace: daemon subsystems and engines only.
         if m.namespace == Namespace::System {
             let ok = match who {
@@ -2168,7 +2177,7 @@ impl LocalVault {
             tx.execute("UPDATE secret_request SET row_mac = ?2 WHERE card_id = ?1", params![r.card_id, mac.to_vec()])?;
         }
         // Agent settings (item 3) are MAC'd under the row key too.
-        self.rekey_agent_policies(&tx, &keys, &new_keys)?;
+        self.rekey_agent_tables(&tx, &keys, &new_keys)?;
         // Placeholders hash under the old key: drop them (sessions re-mint).
         tx.execute("DELETE FROM placeholder", [])?;
         // Audit chain under the new key.

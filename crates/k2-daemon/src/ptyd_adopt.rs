@@ -303,6 +303,9 @@ fn adopt_one(owner: &std::sync::Arc<k2_core::terminal::ptyd::client::Owner>, inf
     }
     // P34: register under the original key and SessionId.
     crate::v2_session_map::register(key.clone(), std::sync::Arc::clone(&session));
+    // prd-vault-gaps-v1 item 3: its ssh-agent socket, from the daemon's own
+    // record (never from the meta alone), now that it is adopted.
+    crate::vault::ssh_agent::on_adopted(&sid, meta);
     crate::v2_spawn::spawn_child_exit_observer(key.clone(), std::sync::Arc::clone(&session), None, None, None, None);
     // P80: the slot is in use by this (same) agent process.
     if let Some(llm) = meta.get("llm_slot").filter(|v| !v.is_null()) {

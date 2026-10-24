@@ -69,19 +69,29 @@ fn sign_audit(v: &LocalVault, secret_id: &str) -> Vec<(String, Option<String>)> 
         .collect()
 }
 
-/// `ssh-add -l` lists exactly the granted keys; `ssh-keygen -Y sign`
-/// through `SSH_AUTH_SOCK` makes signatures `ssh-keygen -Y verify`
-/// accepts (ed25519 and RSA); a key that isn't granted can't sign; add and
-/// remove-all are refused; `ssh` logs in to a local sshd with the agent
-/// (the audit names the sshd's host key); over `ssh -A` the forwarded
-/// agent lists the key but can't sign with it.
-#[test]
-#[ignore = "live: needs OpenSSH >= 8.9 (ssh, ssh-add, ssh-keygen, sshd); run with --ignored"]
-fn live_openssh_tools_use_the_agent_socket() {
+struct Setup {
+    t: k2_vault::fsutil::TestDir,
+    v: std::sync::Arc<LocalVault>,
+    ed: PathBuf,
+    ed_fp: String,
+    rsa: PathBuf,
+    rsa_fp: String,
+    stranger: PathBuf,
+    ed_m: SecretMeta,
+    dir: PathBuf,
+    sock: PathBuf,
+    sock_s: String,
+    version: String,
+}
+
+/// Real keys from ssh-keygen in the vault (agent delivery), their private
+/// files deleted (so ssh-keygen can only sign through the agent: it falls
+/// back to a key file next to the .pub otherwise), and a socket serving them.
+fn setup(tag: &str, min: (u32, u32)) -> Setup {
     let (major, minor, version) = openssh_version();
-    assert!((major, minor) >= (8, 9), "the live test needs OpenSSH >= 8.9 (session-bind): {version}");
+    assert!((major, minor) >= min, "this test needs OpenSSH >= {}.{}: {version}", min.0, min.1);
     let v = super::super::ensure_test_vault();
-    let t = k2_vault::fsutil::TestDir::new("agent-live");
+    let t = k2_vault::fsutil::TestDir::new(tag);
     let keys = t.path().join("keys");
     std::fs::create_dir_all(&keys).expect("keys dir");
     std::fs::set_permissions(&keys, std::fs::Permissions::from_mode(0o700)).expect("chmod");
@@ -91,15 +101,24 @@ fn live_openssh_tools_use_the_agent_socket() {
     let w = uuid::Uuid::new_v4().to_string();
     let ed_m = put_key(&v, &w, "LIVE_ED", &std::fs::read_to_string(&ed).expect("key"));
     put_key(&v, &w, "LIVE_RSA", &std::fs::read_to_string(&rsa).expect("key"));
-    // The keys live in the vault now: without the private files, ssh-keygen
-    // can only sign through the agent (it falls back to a key file next to
-    // the .pub otherwise).
     std::fs::remove_file(&ed).expect("rm ed");
     std::fs::remove_file(&rsa).expect("rm rsa");
     let sid = uuid::Uuid::new_v4().to_string();
     let dir = super::super::spawn::make_session_dir(&t.path().join("secrets"), &sid).expect("dir");
-    let sock = start(Requester::Session { workspace_id: w.clone(), session_id: Some(sid.clone()) }, &sid, &dir).expect("start");
+    let sock = start(&v, Requester::Session { workspace_id: w.clone(), session_id: Some(sid.clone()) }, &sid, &dir).expect("start");
     let sock_s = sock.to_str().expect("utf8").to_string();
+    Setup { t, v, ed, ed_fp, rsa, rsa_fp, stranger, ed_m, dir, sock, sock_s, version }
+}
+
+/// `ssh-add -l` lists exactly the granted keys; `ssh-keygen -Y sign`
+/// through `SSH_AUTH_SOCK` makes signatures `ssh-keygen -Y verify` accepts
+/// (ed25519 and RSA); a key that isn't granted can't sign; add and
+/// remove-all are refused. Runs in the default test run: it needs only the
+/// OpenSSH client tools (>= 8.2 for `-Y`) and fails loudly without them.
+#[test]
+fn openssh_client_tools_use_the_agent_socket() {
+    let _env = k2_core::test_env::lock();
+    let Setup { t, v: _, ed, ed_fp, rsa, rsa_fp, stranger, ed_m: _, dir, sock, sock_s, version: _ } = setup("agent-tools", (8, 2));
     let env = [("SSH_AUTH_SOCK", sock_s.as_str())];
 
     // ssh-add -l: exactly the two granted keys, by fingerprint and name.
@@ -138,6 +157,19 @@ fn live_openssh_tools_use_the_agent_socket() {
     // A key the agent doesn't hold can't sign.
     let o = tool("ssh-keygen", &["-Y", "sign", "-f", &format!("{}.pub", stranger.display()), "-n", "file", &data_s], &env);
     assert!(!o.status.success(), "an ungranted key must not sign");
+    stop_dir(&dir);
+    assert!(!sock.exists());
+}
+
+/// `ssh` logs in to a local sshd with the agent (the audit names the
+/// sshd's host key, advisory); over `ssh -A` the forwarded agent lists the
+/// key but signing is refused. Needs sshd: `--ignored`.
+#[test]
+#[ignore = "live: needs OpenSSH >= 8.9 with sshd (session-bind); run with --ignored on a Linux node and on macOS"]
+fn live_openssh_tools_use_the_agent_socket() {
+    let _env = k2_core::test_env::lock();
+    let Setup { t, v, ed, ed_fp: _, rsa: _, rsa_fp: _, stranger: _, ed_m, dir, sock, sock_s, version } = setup("agent-live", (8, 9));
+    let env = [("SSH_AUTH_SOCK", sock_s.as_str())];
 
     // A local sshd as this user. Its sessions run `internal-sftp` (no login
     // shell needed: the compute users are service accounts with nologin).
@@ -283,14 +315,14 @@ fn live_openssh_tools_use_the_agent_socket() {
                 rows.iter().any(|r| r.0 == "deny:forwarded" && r.1.as_deref() == Some(host.as_str())),
                 "the forwarded refusal is audited: {rows:?}"
             );
-            println!("live: ssh-add, ssh-keygen -Y, ssh login and the ssh -A refusal checked ({version})");
+            println!("live: ssh login and the ssh -A refusal checked ({version})");
         }
         // Apple's sshd run as a non-root service account never creates the
         // forwarded agent socket (checked on k2n3-m1, OpenSSH_10.2p1). The
         // ssh -A refusal is required on Linux; on macOS the wire-level test
         // (a real host-signed bind with is_forwarding) covers it.
         None if cfg!(target_os = "macos") => {
-            println!("live: ssh-add, ssh-keygen -Y and ssh login checked; ssh -A not reproducible with this sshd ({version})")
+            println!("live: ssh login checked; ssh -A not reproducible with this sshd ({version})")
         }
         None => panic!("sshd's forwarded agent socket never appeared ({version}): {log}"),
     }

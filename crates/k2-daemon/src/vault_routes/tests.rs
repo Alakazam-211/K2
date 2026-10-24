@@ -1064,3 +1064,17 @@ fn the_doctor_lists_cli_credential_files() {
         assert!(f.message.contains("k2 "), "names a recipe: {}", f.message);
     }
 }
+
+/// Round 2 (14): the doctor warns before a downgrade to 0.46.3 once agent
+/// delivery, job grants or signed secrets exist.
+#[test]
+fn the_doctor_warns_against_a_downgrade_once_newer_rows_exist() {
+    use k2_vault::vault::DowngradeBlockers;
+    assert!(downgrade_finding(&DowngradeBlockers::default()).is_none());
+    let f = downgrade_finding(&DowngradeBlockers { agent: 2, job_grants: 1, signed: 0 }).expect("finding");
+    assert_eq!(f["code"], "downgrade_breaks_0463");
+    assert_eq!(f["level"], "warning");
+    let m = f["message"].as_str().expect("message");
+    assert!(m.contains("0.46.3") && m.contains("2 with agent delivery") && m.contains("1 job grant(s)"), "{m}");
+    assert!(!m.contains("signed secret"), "{m}");
+}

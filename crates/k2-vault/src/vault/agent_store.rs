@@ -1,18 +1,30 @@
 //! vault.db side of `agent` delivery (prd-vault-gaps-v1 item 3): which
-//! ssh keys a requester's agent socket lists, signing with one, and the
-//! per-secret agent settings (rate limits, forwarded signing).
+//! ssh keys a requester's agent socket lists, signing with one, the
+//! per-secret agent settings (rate limits, forwarded signing), and the
+//! daemon's own record of each agent socket.
 //!
 //! - [`LocalVault::agent_identities`]: the requester's `agent` items (the
-//!   same grant rules as spawn delivery), each as a public key. No value
-//!   leaves the crate and nothing is audited (a listing isn't a use).
+//!   same grant rules as spawn delivery), each as a public key. Public
+//!   blobs are cached by (secret, version) and parsed outside the vault
+//!   locks. No value leaves the crate and nothing is audited (a listing
+//!   isn't a use).
 //! - [`LocalVault::agent_sign`]: resolve the secret for `Use::Agent` (grant,
 //!   status, expiry checked again on every signature), check that its
 //!   current key is the one asked for, sign, and roll up one `sign` audit
-//!   entry per signature (with the bind's host-key fingerprint when the
-//!   client sent one). The private key never leaves this crate.
+//!   entry per signature. The private key never leaves this crate.
 //! - `agent_policy` (R4): an additive, MAC'd table (H22: `user_version`
 //!   stays 1). No row = the defaults. Raising a limit or allowing
-//!   forwarded signing is loosening (`can_loosen`, as `set_policy`).
+//!   forwarded signing is loosening (`can_loosen`, as `set_policy`). A row
+//!   is bound to the audit entry that wrote it (its `audit_seq`), and that
+//!   entry must be the latest agent-policy entry for the secret: deleting
+//!   or replaying a row (to undo a tightening) fails closed.
+//! - `agent_socket`: one MAC'd row per live agent socket, written by the
+//!   daemon when it starts one (tag, workspace, secrets dir, socket path).
+//!   A restarted daemon re-serves a socket, and the boot sweep removes one,
+//!   only from this record; nothing in the (same-user writable) secrets
+//!   dir or the ptyd meta is trusted for that.
+
+use std::collections::HashMap;
 
 use super::*;
 use crate::ssh_agent::AgentKey;
@@ -23,6 +35,11 @@ pub const DEFAULT_BURST: u32 = 60;
 pub const DEFAULT_PER_MINUTE: u32 = 240;
 pub const BURST_MAX: u32 = 600;
 pub const PER_MINUTE_MAX: u32 = 6000;
+
+/// The settings a secret falls back to when its row can't be trusted.
+fn strictest() -> AgentPolicy {
+    AgentPolicy { burst: 1, per_minute: 1, allow_forwarded: false, updated_by: None, updated_at: None }
+}
 
 /// A secret's agent settings.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -60,6 +77,39 @@ pub struct AgentIdentity {
     pub public_blob: Vec<u8>,
 }
 
+/// The daemon's record of one agent socket.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentSocket {
+    /// The session id (or `k2 job` run id) the socket serves.
+    pub tag: String,
+    /// `session` or `job`.
+    pub kind: String,
+    pub workspace_id: String,
+    pub secrets_dir: String,
+    pub sock_path: String,
+    pub created_at: String,
+}
+
+/// What would break if this vault were opened by 0.46.3 (`k2 vault
+/// doctor`): rows whose enum text that daemon doesn't know (and so fails
+/// every list and spawn on), or whose meaning it ignores.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DowngradeBlockers {
+    /// Secrets or grants with `agent` delivery.
+    pub agent: u64,
+    /// Grants to a `k2 job`.
+    pub job_grants: u64,
+    /// Signed-fetch secrets (0.46.3 would send the value as Bearer).
+    pub signed: u64,
+}
+
+impl DowngradeBlockers {
+    pub fn any(&self) -> bool {
+        self.agent + self.job_grants + self.signed > 0
+    }
+}
+
 /// `agent` delivery is for ssh keys, and the value must be a key the agent
 /// can serve (`delivery_not_for_kind`, `bad_value`, `ssh_key_encrypted`).
 /// Only checks when one of `deliveries` is `agent`.
@@ -76,18 +126,24 @@ pub(super) fn check_agent_delivery(kind: Kind, deliveries: &[Delivery], value: O
     }
 }
 
-fn policy_mac_input(secret_id: &str, p: &AgentPolicy) -> Vec<u8> {
+fn policy_mac_input(secret_id: &str, p: &AgentPolicy, audit_seq: i64) -> Vec<u8> {
     let mut e = Enc::new("agent_policy");
     e.str(secret_id)
         .i64(i64::from(p.burst))
         .i64(i64::from(p.per_minute))
         .i64(i64::from(p.allow_forwarded))
         .opt_str(p.updated_by.as_deref())
-        .opt_str(p.updated_at.as_deref());
+        .opt_str(p.updated_at.as_deref())
+        .i64(audit_seq);
     e.finish().to_vec()
 }
 
-fn read_policy(r: &Row<'_>) -> rusqlite::Result<(AgentPolicy, Vec<u8>)> {
+/// The audit outcome a policy write records (without `:widened`).
+fn policy_outcome(p: &AgentPolicy) -> String {
+    format!("ok:agent burst={} per_minute={} forwarded={}", p.burst, p.per_minute, if p.allow_forwarded { "allow" } else { "refuse" })
+}
+
+fn read_policy(r: &Row<'_>) -> rusqlite::Result<(AgentPolicy, i64, Vec<u8>)> {
     let p = AgentPolicy {
         burst: r.get::<_, i64>("burst")?.clamp(1, i64::from(BURST_MAX)) as u32,
         per_minute: r.get::<_, i64>("per_minute")?.clamp(1, i64::from(PER_MINUTE_MAX)) as u32,
@@ -95,24 +151,122 @@ fn read_policy(r: &Row<'_>) -> rusqlite::Result<(AgentPolicy, Vec<u8>)> {
         updated_by: Some(r.get("updated_by")?),
         updated_at: Some(r.get("updated_at")?),
     };
-    Ok((p, r.get("row_mac")?))
+    Ok((p, r.get("audit_seq")?, r.get("row_mac")?))
+}
+
+fn socket_mac_input(s: &AgentSocket) -> Vec<u8> {
+    let mut e = Enc::new("agent_socket");
+    e.str(&s.tag).str(&s.kind).str(&s.workspace_id).str(&s.secrets_dir).str(&s.sock_path).str(&s.created_at);
+    e.finish().to_vec()
+}
+
+fn read_socket(r: &Row<'_>) -> rusqlite::Result<(AgentSocket, Vec<u8>)> {
+    Ok((
+        AgentSocket {
+            tag: r.get("tag")?,
+            kind: r.get("kind")?,
+            workspace_id: r.get("workspace_id")?,
+            secrets_dir: r.get("secrets_dir")?,
+            sock_path: r.get("sock_path")?,
+            created_at: r.get("created_at")?,
+        },
+        r.get("row_mac")?,
+    ))
+}
+
+/// Parsed public blobs by (secret id, version); `None` = not a key the
+/// agent serves. A version's value never changes, so entries never go
+/// stale. Public data only.
+type BlobCache = parking_lot::Mutex<HashMap<(String, u32), Option<Vec<u8>>>>;
+static BLOBS: std::sync::OnceLock<BlobCache> = std::sync::OnceLock::new();
+const BLOB_CACHE_MAX: usize = 1024;
+
+fn blobs() -> &'static BlobCache {
+    BLOBS.get_or_init(|| parking_lot::Mutex::new(HashMap::new()))
 }
 
 impl LocalVault {
+    /// A tamper note, once (a hot path must not grow the list).
+    fn tamper_once(&self, note: String) {
+        let mut t = self.tamper.lock();
+        if !t.contains(&note) {
+            t.push(note);
+        }
+    }
+
+    /// The latest agent-policy audit entry for `secret_id`, MAC-checked:
+    /// `Some((seq, outcome))`, `None` when there is none. An entry whose
+    /// MAC fails is `Err` (tamper).
+    fn latest_policy_audit(&self, conn: &Connection, keys: &Keys, secret_id: &str) -> Result<Option<(i64, String)>> {
+        let row = conn
+            .query_row(
+                "SELECT seq, ts, secret_id, version, action, actor, consumer, target_host, outcome, count, prev_mac, row_mac
+                 FROM audit WHERE secret_id = ?1 AND action = 'policy' AND outcome LIKE 'ok:agent %' ORDER BY seq DESC LIMIT 1",
+                params![secret_id],
+                |r| {
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, String>(1)?,
+                        Entry {
+                            secret_id: r.get(2)?,
+                            version: r.get(3)?,
+                            action: r.get(4)?,
+                            actor: r.get(5)?,
+                            consumer: r.get(6)?,
+                            target_host: r.get(7)?,
+                            outcome: r.get(8)?,
+                            count: r.get::<_, i64>(9)? as u64,
+                        },
+                        r.get::<_, Vec<u8>>(10)?,
+                        r.get::<_, Vec<u8>>(11)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((seq, t, e, prev, mac)) = row else { return Ok(None) };
+        if audit::row_mac(&keys.audit, seq as u64, &t, &e, &prev).as_slice() != mac.as_slice() {
+            return Err(VaultError::tamper("agent policy audit entry"));
+        }
+        Ok(Some((seq, e.outcome)))
+    }
+
     fn agent_policy_in(&self, conn: &Connection, keys: &Keys, secret_id: &str) -> Result<AgentPolicy> {
         let row = conn
             .query_row("SELECT * FROM agent_policy WHERE secret_id = ?1", params![secret_id], read_policy)
             .optional()?;
-        let Some((p, mac)) = row else { return Ok(AgentPolicy::default()) };
-        if !hmac_verify(&keys.row, &policy_mac_input(secret_id, &p), &mac) {
-            // Fail closed: the strictest settings, and status says tamper.
-            self.tamper.lock().push(format!("agent policy of {secret_id} failed its integrity check"));
-            return Ok(AgentPolicy { burst: 1, per_minute: 1, allow_forwarded: false, updated_by: None, updated_at: None });
+        let latest = match self.latest_policy_audit(conn, keys, secret_id) {
+            Ok(l) => l,
+            Err(_) => {
+                self.tamper_once(format!("the audit entry for the agent policy of {secret_id} failed its integrity check"));
+                return Ok(strictest());
+            }
+        };
+        match (row, latest) {
+            (None, None) => Ok(AgentPolicy::default()),
+            (None, Some(_)) => {
+                // The audit log says a policy was set; the row is gone.
+                self.tamper_once(format!("the agent policy of {secret_id} was removed outside K2"));
+                Ok(strictest())
+            }
+            (Some((p, seq, mac)), latest) => {
+                if !hmac_verify(&keys.row, &policy_mac_input(secret_id, &p, seq), &mac) {
+                    self.tamper_once(format!("agent policy of {secret_id} failed its integrity check"));
+                    return Ok(strictest());
+                }
+                let want = policy_outcome(&p);
+                let fresh = latest.is_some_and(|(s, out)| s == seq && (out == want || out == format!("{want}:widened")));
+                if !fresh {
+                    // An older row put back, or one with no audit entry.
+                    self.tamper_once(format!("agent policy of {secret_id} isn't the latest one K2 wrote"));
+                    return Ok(strictest());
+                }
+                Ok(p)
+            }
         }
-        Ok(p)
     }
 
-    /// The agent settings of one secret (the defaults when none are set).
+    /// The agent settings of one secret (the defaults when none are set;
+    /// the strictest when its row can't be trusted).
     pub fn agent_policy(&self, secret_id: &str) -> Result<AgentPolicy> {
         let keys = self.keys.read();
         let conn = self.conn.lock();
@@ -169,26 +323,23 @@ impl LocalVault {
             Ok(x) => x,
             Err(e) => return Err(self.deny(Entry::new("policy", &stamp, "deny").secret(&m.id, None), e)),
         };
-        if new.burst == old.burst && new.per_minute == old.per_minute && new.allow_forwarded == old.allow_forwarded {
+        if new.burst == old.burst && new.per_minute == old.per_minute && new.allow_forwarded == old.allow_forwarded && old.updated_by.is_some() {
             return Ok((m, old));
         }
         new.updated_by = Some(stamp.clone());
         new.updated_at = Some(ts(now()));
-        let outcome = format!(
-            "ok:agent burst={} per_minute={} forwarded={}{}",
-            new.burst,
-            new.per_minute,
-            if new.allow_forwarded { "allow" } else { "refuse" },
-            if loosens { ":widened" } else { "" }
-        );
+        let outcome = format!("{}{}", policy_outcome(&new), if loosens { ":widened" } else { "" });
         let (id, p2) = (m.id.clone(), new.clone());
         self.mutate(true, |tx, keys| {
-            let mac = hmac(&keys.row, &policy_mac_input(&id, &p2));
+            // The one entry this mutation appends gets the next sequence
+            // number: the row is bound to it.
+            let seq = load_header(tx)?.ok_or_else(|| VaultError::internal("header missing"))?.0.audit_seq as i64 + 1;
+            let mac = hmac(&keys.row, &policy_mac_input(&id, &p2, seq));
             tx.execute(
-                "INSERT INTO agent_policy (secret_id, burst, per_minute, allow_forwarded, updated_by, updated_at, row_mac)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                "INSERT INTO agent_policy (secret_id, burst, per_minute, allow_forwarded, updated_by, updated_at, audit_seq, row_mac)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
                  ON CONFLICT(secret_id) DO UPDATE SET burst = ?2, per_minute = ?3, allow_forwarded = ?4,
-                    updated_by = ?5, updated_at = ?6, row_mac = ?7",
+                    updated_by = ?5, updated_at = ?6, audit_seq = ?7, row_mac = ?8",
                 params![
                     id,
                     i64::from(p2.burst),
@@ -196,6 +347,7 @@ impl LocalVault {
                     i64::from(p2.allow_forwarded),
                     p2.updated_by,
                     p2.updated_at,
+                    seq,
                     mac.to_vec()
                 ],
             )?;
@@ -204,56 +356,173 @@ impl LocalVault {
         Ok((m, new))
     }
 
-    /// Rekey: re-MAC every agent policy row under the new row key.
-    pub(super) fn rekey_agent_policies(&self, tx: &Transaction<'_>, old: &Keys, new: &Keys) -> Result<()> {
-        let rows: Vec<(String, AgentPolicy, Vec<u8>)> = {
+    /// Rekey: verify, then re-MAC, every agent policy and agent socket row
+    /// under the new row key. Any row that fails stops the rekey.
+    pub(super) fn rekey_agent_tables(&self, tx: &Transaction<'_>, old: &Keys, new: &Keys) -> Result<()> {
+        let rows: Vec<(String, AgentPolicy, i64, Vec<u8>)> = {
             let mut st = tx.prepare("SELECT * FROM agent_policy")?;
             let it = st.query_map([], |r| {
                 let id: String = r.get("secret_id")?;
-                let (p, mac) = read_policy(r)?;
-                Ok((id, p, mac))
+                let (p, seq, mac) = read_policy(r)?;
+                Ok((id, p, seq, mac))
             })?;
             it.collect::<std::result::Result<_, _>>()?
         };
-        for (id, p, mac) in rows {
-            if !hmac_verify(&old.row, &policy_mac_input(&id, &p), &mac) {
+        for (id, p, seq, mac) in rows {
+            if !hmac_verify(&old.row, &policy_mac_input(&id, &p, seq), &mac) {
                 return Err(VaultError::tamper(format!("agent policy of {id} failed its integrity check; rekey stopped")));
             }
-            let m2 = hmac(&new.row, &policy_mac_input(&id, &p));
+            let m2 = hmac(&new.row, &policy_mac_input(&id, &p, seq));
             tx.execute("UPDATE agent_policy SET row_mac = ?2 WHERE secret_id = ?1", params![id, m2.to_vec()])?;
+        }
+        let socks: Vec<(AgentSocket, Vec<u8>)> = {
+            let mut st = tx.prepare("SELECT * FROM agent_socket")?;
+            let it = st.query_map([], read_socket)?;
+            it.collect::<std::result::Result<_, _>>()?
+        };
+        for (s, mac) in socks {
+            if !hmac_verify(&old.row, &socket_mac_input(&s), &mac) {
+                return Err(VaultError::tamper(format!("agent socket record {} failed its integrity check; rekey stopped", s.tag)));
+            }
+            let m2 = hmac(&new.row, &socket_mac_input(&s));
+            tx.execute("UPDATE agent_socket SET row_mac = ?2 WHERE tag = ?1", params![s.tag, m2.to_vec()])?;
         }
         Ok(())
     }
 
+    // ── the daemon's agent socket records ──────────────────────────────
+
+    /// Record (or replace) the socket the daemon just started for `s.tag`.
+    pub fn agent_socket_put(&self, s: &AgentSocket) -> Result<()> {
+        if !matches!(s.kind.as_str(), "session" | "job") || s.tag.is_empty() || s.secrets_dir.is_empty() || s.sock_path.is_empty() {
+            return Err(VaultError::bad_request("bad_agent_socket", "agent socket record"));
+        }
+        let s2 = s.clone();
+        self.mutate(false, |tx, keys| {
+            let mac = hmac(&keys.row, &socket_mac_input(&s2));
+            tx.execute(
+                "INSERT INTO agent_socket (tag, kind, workspace_id, secrets_dir, sock_path, created_at, row_mac)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                 ON CONFLICT(tag) DO UPDATE SET kind = ?2, workspace_id = ?3, secrets_dir = ?4, sock_path = ?5,
+                    created_at = ?6, row_mac = ?7",
+                params![s2.tag, s2.kind, s2.workspace_id, s2.secrets_dir, s2.sock_path, s2.created_at, mac.to_vec()],
+            )?;
+            Ok(((), vec![]))
+        })
+    }
+
+    /// Every agent socket record whose MAC holds. A row that fails is left
+    /// out (and noted once): it is never re-served or followed.
+    pub fn agent_sockets(&self) -> Result<Vec<AgentSocket>> {
+        let keys = self.keys.read();
+        let conn = self.conn.lock();
+        let mut st = conn.prepare("SELECT * FROM agent_socket ORDER BY tag LIMIT 10000")?;
+        let it = st.query_map([], read_socket)?;
+        let mut out = vec![];
+        for r in it {
+            let (s, mac) = r?;
+            if hmac_verify(&keys.row, &socket_mac_input(&s), &mac) {
+                out.push(s);
+            } else {
+                self.tamper_once(format!("agent socket record {} failed its integrity check", s.tag));
+            }
+        }
+        Ok(out)
+    }
+
+    /// One record by tag (MAC-checked).
+    pub fn agent_socket_get(&self, tag: &str) -> Result<Option<AgentSocket>> {
+        Ok(self.agent_sockets()?.into_iter().find(|s| s.tag == tag))
+    }
+
+    /// Drop a record (the socket is gone).
+    pub fn agent_socket_remove(&self, tag: &str) -> Result<()> {
+        let t = tag.to_string();
+        self.mutate(false, |tx, _| {
+            tx.execute("DELETE FROM agent_socket WHERE tag = ?1", params![t])?;
+            Ok(((), vec![]))
+        })
+    }
+
+    /// Tests: write a record row as-is (forged or inconsistent), MAC'd.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn agent_socket_put_unchecked_for_tests(&self, s: &AgentSocket) -> Result<()> {
+        let s2 = s.clone();
+        self.mutate(false, |tx, keys| {
+            let mac = hmac(&keys.row, &socket_mac_input(&s2));
+            tx.execute(
+                "INSERT OR REPLACE INTO agent_socket (tag, kind, workspace_id, secrets_dir, sock_path, created_at, row_mac)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![s2.tag, s2.kind, s2.workspace_id, s2.secrets_dir, s2.sock_path, s2.created_at, mac.to_vec()],
+            )?;
+            Ok(((), vec![]))
+        })
+    }
+
+    /// `k2 vault doctor`: rows a 0.46.3 daemon would choke on or misread.
+    pub fn downgrade_blockers(&self) -> Result<DowngradeBlockers> {
+        let conn = self.conn.lock();
+        let count = |sql: &str| -> Result<u64> { Ok(conn.query_row(sql, [], |r| r.get::<_, i64>(0))?.max(0) as u64) };
+        Ok(DowngradeBlockers {
+            agent: count("SELECT COUNT(*) FROM secret WHERE status != 'destroyed' AND (default_delivery = 'agent' OR delivery_ceiling = 'agent')")?
+                + count("SELECT COUNT(*) FROM grants WHERE delivery = 'agent'")?,
+            job_grants: count("SELECT COUNT(*) FROM grants WHERE consumer_kind = 'job'")?,
+            signed: count("SELECT COUNT(*) FROM secret WHERE status != 'destroyed' AND inject LIKE '%\"sign\"%'")?,
+        })
+    }
+
     /// The keys `who`'s agent socket lists: its `agent` items (highest
-    /// delivery wins, as at spawn), each parsed to its public key. A value
-    /// that no longer parses (rotated to something the agent can't serve)
-    /// is left out.
+    /// delivery wins, as at spawn), each as its public key. Values are
+    /// decrypted only for (secret, version) pairs not seen before, and
+    /// parsed after the vault locks are released. A value that isn't a key
+    /// the agent serves is left out.
     pub fn agent_identities(&self, who: &Requester) -> Result<Vec<AgentIdentity>> {
         let items: Vec<SpawnItem> = self.spawn_items(who)?.into_iter().filter(|i| i.delivery == Delivery::Agent).collect();
         if items.is_empty() {
             return Ok(vec![]);
         }
-        let keys = self.keys.read();
-        let conn = self.conn.lock();
-        let mut out = vec![];
-        for it in items {
-            let Ok(row) = self.find_row(&conn, &keys, &Selector::Id(it.secret_id.clone())) else { continue };
-            if row.meta.kind != Kind::SshKey {
-                continue;
+        let mut known: Vec<(SpawnItem, u32, Option<Option<Vec<u8>>>)> = vec![];
+        let mut fresh: Vec<(usize, SecretBytes)> = vec![];
+        {
+            let keys = self.keys.read();
+            let conn = self.conn.lock();
+            for it in items {
+                let Ok(row) = self.find_row(&conn, &keys, &Selector::Id(it.secret_id.clone())) else { continue };
+                if row.meta.kind != Kind::SshKey {
+                    continue;
+                }
+                let version = row.meta.latest_version;
+                let cached = blobs().lock().get(&(it.secret_id.clone(), version)).cloned();
+                if cached.is_none() {
+                    let Ok(v) = self.decrypt_version(&conn, &keys, &row.meta, version) else { continue };
+                    fresh.push((known.len(), v));
+                }
+                known.push((it, version, cached));
             }
-            let Ok(v) = self.decrypt_version(&conn, &keys, &row.meta, row.meta.latest_version) else { continue };
-            let Ok(k) = AgentKey::parse(v.expose()) else { continue };
-            out.push(AgentIdentity { secret_id: it.secret_id, name: it.name, public_blob: k.public_blob() });
         }
-        Ok(out)
+        for (i, v) in fresh {
+            let blob = AgentKey::parse(v.expose()).ok().map(|k| k.public_blob());
+            drop(v);
+            let (it, version, slot) = &mut known[i];
+            let mut c = blobs().lock();
+            if c.len() >= BLOB_CACHE_MAX {
+                c.clear();
+            }
+            c.insert((it.secret_id.clone(), *version), blob.clone());
+            *slot = Some(blob);
+        }
+        Ok(known
+            .into_iter()
+            .filter_map(|(it, _, b)| b.flatten().map(|public_blob| AgentIdentity { secret_id: it.secret_id, name: it.name, public_blob }))
+            .collect())
     }
 
     /// Sign `data` with secret `secret_id` for `who`. The grant, status and
     /// expiry are checked again (`Use::Agent`), and the current key must be
     /// the one asked for (`key_changed` after a rotation). One `sign`
     /// audit entry per signature, rolled up, with `ssh:<host-key fp>` when
-    /// the connection sent a session bind.
+    /// the connection sent a session bind (advisory: the fingerprint is
+    /// what the client says it bound to).
     pub fn agent_sign(&self, secret_id: &str, who: &Requester, key_blob: &[u8], data: &[u8], flags: u32, host_fp: Option<&str>) -> Result<Vec<u8>> {
         let r = self.resolve_inner(&Selector::Id(secret_id.to_string()), Use::Agent(host_fp), who)?;
         let v = Some(r.version);
@@ -290,9 +559,10 @@ impl LocalVault {
     }
 
     /// One agent audit entry, rolled up (so a client hammering a refusal
-    /// can't flood the audit chain): action `sign`, outcome `ok` or
-    /// `deny:<code>` (`forwarded`, `rate_limited`, `not_granted`, …), the
-    /// session as consumer, `ssh:<host-key fp>` as host when known.
+    /// can't flood the audit chain; the roll-up itself caps its distinct
+    /// keys): action `sign`, outcome `ok` or `deny:<code>` (`forwarded`,
+    /// `rate_limited`, `not_granted`, …), the session as consumer,
+    /// `ssh:<host-key fp>` as host when known.
     pub fn agent_note(&self, secret_id: Option<&str>, version: Option<u32>, who: &Requester, outcome: &str, host_fp: Option<&str>) {
         let label = who.label();
         let mut e = Entry::new("sign", &label, outcome).consumer(label.clone());

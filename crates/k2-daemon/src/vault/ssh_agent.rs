@@ -5,32 +5,42 @@
 //!
 //! - **Where.** `<secrets dir>/a.sock` (the session's memory-backed 0700 dir,
 //!   [`super::spawn`]). A path over [`MAX_SOCK_PATH`] bytes (macOS
-//!   `$TMPDIR`) uses `/tmp/k2a-<uid>/<8 base62>/a.sock` (0700 dirs; a socket
-//!   holds no secret bytes) and records it in `<secrets dir>/a.sock.path`.
+//!   `$TMPDIR`) uses `<fallback root>/<8 base62>/a.sock`: `$TMPDIR/k2a`
+//!   (per user), else `/tmp/k2a-<uid>`; 0700 dirs, a socket holds no
+//!   secret bytes.
+//! - **The daemon's record.** Every socket is recorded in vault.db
+//!   (`agent_socket`, MAC'd: tag, workspace, secrets dir, socket path)
+//!   when it starts and dropped when it stops. A restarted daemon re-serves
+//!   a socket ([`on_adopted`]) and the boot sweep removes one
+//!   ([`boot_sweep`]) only from that record, never from files in the
+//!   secrets dir or the ptyd meta (both writable by any same-user process).
+//!   Re-serving also waits for k2-ptyd to have adopted the session, and the
+//!   ptyd meta must agree with the record.
 //! - **Who may connect.** The peer's uid must be the daemon's euid
 //!   (`SO_PEERCRED` / `getpeereid`); anything else is closed at accept.
-//!   At most [`MAX_CONNS`] connections per socket.
+//!   At most [`MAX_CONNS`] connections per socket; a frame must arrive
+//!   within [`FRAME_DEADLINE`] once started, and a connection with no
+//!   request for [`IDLE_DEADLINE`] is closed.
 //! - **What it answers.** k2-vault's `ssh_agent` subset: identities, sign
 //!   (ed25519; RSA SHA-2 only), `session-bind@openssh.com`; everything else
 //!   is `FAILURE`; a bad frame, an oversized frame or a bind whose host
 //!   signature fails closes the connection.
 //! - **Every signature** re-checks the grant in the vault (revocation,
 //!   disable, expiry, rotation take effect at once), the per-secret
-//!   settings (forwarded signing is refused unless the secret allows it),
-//!   and the per-(session, secret) rate limit (default burst 60/s,
-//!   240/min). One rolled-up `sign` audit entry per signature or refusal.
-//! - **Lifecycle.** Stopped and unlinked with the secrets dir (session end,
-//!   job run end, the 60 s sweep). At boot, sessions that survived in
-//!   k2-ptyd keep their dir ([`super::spawn::sweep_at_boot`]); their socket
-//!   is re-bound at the same path ([`resume`]), so `SSH_AUTH_SOCK` in the
-//!   running session stays valid.
+//!   settings, and the per-(session, secret) rate limit (default burst
+//!   60/s, 240/min). Listings and refused signs are throttled per session
+//!   before any vault work. One rolled-up `sign` audit entry per signature
+//!   or refusal.
 //!
 //! Honest line: anything in the session, or any same-user process that
-//! finds the socket, can sign while the session runs. Clients that don't
-//! announce forwarding (no session bind) can't be told apart.
+//! finds the socket, can sign while the session runs. The forwarding
+//! refusal and the audit's host key are advisory: they come from what the
+//! ssh client says in its session bind; a client that sends no bind (or a
+//! process speaking the protocol itself) can't be told apart.
 
+use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::io::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -39,41 +49,68 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use k2_vault::ssh_agent::{self as proto, BindCheck, Request};
-use k2_vault::Requester;
+use k2_vault::vault::AgentSocket;
+use k2_vault::{LocalVault, Requester};
 use parking_lot::Mutex;
 
-/// The socket's name inside the secrets dir.
+/// The socket's name.
 pub const SOCK_NAME: &str = "a.sock";
-/// When the socket lives under `/tmp/k2a-<uid>/…`, its path is recorded here
-/// (inside the secrets dir) so a restarted daemon re-binds the same path.
-pub const SOCK_PATH_FILE: &str = "a.sock.path";
 /// `sun_path` is 104 bytes on macOS, 108 on Linux; keep a margin.
 pub const MAX_SOCK_PATH: usize = 100;
 /// Connections one socket serves at once.
 pub const MAX_CONNS: usize = 32;
 /// Session binds one connection may send (OpenSSH's own agent: 16).
 pub const MAX_BINDS: usize = 16;
+/// Once a frame's first byte arrives, the rest must within this.
+pub const FRAME_DEADLINE: Duration = Duration::from_secs(10);
+/// A connection that sends no request for this long is closed (ssh opens
+/// one per use; nothing legitimate idles this long).
+pub const IDLE_DEADLINE: Duration = Duration::from_secs(300);
+/// Listings per session: a second and a minute.
+const IDS_PER_SECOND: usize = 20;
+const IDS_PER_MINUTE: usize = 600;
+/// Refused signs per session before further signs are refused without
+/// touching the vault.
+const REFUSALS_PER_SECOND: usize = 10;
+const REFUSALS_PER_MINUTE: usize = 120;
+
+/// Read deadlines of one socket (tests shorten them).
+#[derive(Debug, Clone, Copy)]
+pub struct Deadlines {
+    pub frame: Duration,
+    pub idle: Duration,
+}
+
+impl Default for Deadlines {
+    fn default() -> Self {
+        Deadlines { frame: FRAME_DEADLINE, idle: IDLE_DEADLINE }
+    }
+}
 
 struct Ctx {
     who: Requester,
-    /// Session id (or job run id): the rate-limit key's first half.
+    /// Session id (or job run id): the rate-limit keys' first half.
     tag: String,
     stop: AtomicBool,
     conns: AtomicUsize,
+    deadlines: Deadlines,
+    /// The last limits read per secret, so the rate check runs before the
+    /// policy read (the fresh policy then decides).
+    limits: Mutex<HashMap<String, (usize, usize)>>,
 }
 
 struct Server {
     dir: PathBuf,
     sock: PathBuf,
-    /// `/tmp/k2a-<uid>/<8>` when the short path was used.
+    /// The short-path dir when the socket isn't in `dir`.
     fallback: Option<PathBuf>,
     ctx: Arc<Ctx>,
 }
 
 static SERVERS: Mutex<Vec<Server>> = Mutex::new(Vec::new());
 
-/// Per-(session, secret) signature limits; each call passes the secret's
-/// own burst and per-minute limit.
+/// Per-(session, secret) signature limits, per-session listing and
+/// refusal budgets; each call passes its own limits.
 fn limiter() -> &'static crate::vault_fetch::RateLimiter {
     static L: OnceLock<crate::vault_fetch::RateLimiter> = OnceLock::new();
     let d = k2_vault::vault::AgentPolicy::default();
@@ -84,9 +121,15 @@ fn euid() -> u32 {
     unsafe { libc::geteuid() }
 }
 
-/// `/tmp/k2a-<uid>`: the short root for sockets whose dir path is too long.
-pub fn fallback_root() -> PathBuf {
-    PathBuf::from(format!("/tmp/k2a-{}", euid()))
+/// Short roots for sockets whose dir path is too long, in order:
+/// `$TMPDIR/k2a` (per user on macOS), then `/tmp/k2a-<uid>`.
+pub fn fallback_roots() -> Vec<PathBuf> {
+    let mut v = vec![];
+    if let Some(t) = std::env::var_os("TMPDIR").filter(|t| !t.is_empty()) {
+        v.push(PathBuf::from(t).join("k2a"));
+    }
+    v.push(PathBuf::from(format!("/tmp/k2a-{}", euid())));
+    v
 }
 
 /// Make `dir` 0700 and ours (create if missing); refuse symlinks and other
@@ -113,30 +156,56 @@ pub fn sock_path_for(dir: &Path) -> std::io::Result<(PathBuf, Option<PathBuf>)> 
     if direct.as_os_str().len() <= MAX_SOCK_PATH {
         return Ok((direct, None));
     }
-    let root = fallback_root();
-    ensure_private(&root)?;
-    let sub = root.join(k2_vault::crypto::base62(8));
-    std::fs::DirBuilder::new().mode(0o700).create(&sub)?;
-    let m = std::fs::symlink_metadata(&sub)?;
-    if m.file_type().is_symlink() || m.uid() != euid() || m.permissions().mode() & 0o077 != 0 {
-        return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "agent socket dir check failed"));
+    let mut last = std::io::Error::new(std::io::ErrorKind::InvalidInput, "agent socket path too long");
+    for root in fallback_roots() {
+        // `<root>/<8>/a.sock` must fit.
+        if root.as_os_str().len() + 1 + 8 + 1 + SOCK_NAME.len() > MAX_SOCK_PATH {
+            continue;
+        }
+        if let Some(parent) = root.parent() {
+            if !parent.is_dir() {
+                continue;
+            }
+        }
+        if let Err(e) = ensure_private(&root) {
+            last = e;
+            continue;
+        }
+        let sub = root.join(k2_vault::crypto::base62(8));
+        std::fs::DirBuilder::new().mode(0o700).create(&sub)?;
+        let m = std::fs::symlink_metadata(&sub)?;
+        if m.file_type().is_symlink() || m.uid() != euid() || m.permissions().mode() & 0o077 != 0 {
+            return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "agent socket dir check failed"));
+        }
+        return Ok((sub.join(SOCK_NAME), Some(sub)));
     }
-    let sock = sub.join(SOCK_NAME);
-    if sock.as_os_str().len() > MAX_SOCK_PATH {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "agent socket path too long"));
-    }
-    Ok((sock, Some(sub)))
+    Err(last)
 }
 
-/// A recorded fallback path must be exactly `<fallback root>/<8 base62>/a.sock`.
+/// A short path must be exactly `<a fallback root>/<8 base62>/a.sock`;
+/// returns its dir.
 fn valid_fallback(p: &Path) -> Option<PathBuf> {
     let parent = p.parent()?;
     let name = parent.file_name()?.to_str()?;
+    let root = parent.parent()?;
     let ok = p.file_name()? == SOCK_NAME
-        && parent.parent()? == fallback_root().as_path()
+        && fallback_roots().iter().any(|r| r.as_path() == root)
         && name.len() == 8
         && name.bytes().all(|b| b.is_ascii_alphanumeric());
     ok.then(|| parent.to_path_buf())
+}
+
+/// The socket a record may name: `<its secrets dir>/a.sock`, or a short
+/// path no other record names. Anything else is ignored (a record that
+/// points at another session's socket never re-serves or removes it).
+fn record_socket(rec: &AgentSocket, all: &[AgentSocket]) -> Option<(PathBuf, Option<PathBuf>)> {
+    let sock = PathBuf::from(&rec.sock_path);
+    if sock == Path::new(&rec.secrets_dir).join(SOCK_NAME) {
+        return Some((sock, None));
+    }
+    let parent = valid_fallback(&sock)?;
+    let shared = all.iter().any(|o| o.tag != rec.tag && Path::new(&o.sock_path) == sock);
+    (!shared).then_some((sock, Some(parent)))
 }
 
 fn bind(sock: &Path) -> std::io::Result<UnixListener> {
@@ -145,10 +214,30 @@ fn bind(sock: &Path) -> std::io::Result<UnixListener> {
     Ok(l)
 }
 
-/// Start serving `who`'s agent keys on a new socket for secrets dir `dir`.
-/// Returns the socket path (the session's `SSH_AUTH_SOCK`).
-pub fn start(who: Requester, tag: &str, dir: &Path) -> std::io::Result<PathBuf> {
+/// `(kind, workspace)` of a requester that may hold an agent socket.
+fn record_owner(who: &Requester) -> Option<(&'static str, String)> {
+    match who {
+        Requester::Session { workspace_id, session_id: Some(_) } => Some(("session", workspace_id.clone())),
+        Requester::Job { workspace_id, .. } => Some(("job", workspace_id.clone())),
+        _ => None,
+    }
+}
+
+/// Start serving `who`'s agent keys on a new socket for secrets dir `dir`,
+/// and record it. Returns the socket path (the session's `SSH_AUTH_SOCK`).
+pub fn start(vault: &LocalVault, who: Requester, tag: &str, dir: &Path) -> std::io::Result<PathBuf> {
+    start_with(vault, who, tag, dir, Deadlines::default())
+}
+
+pub fn start_with(vault: &LocalVault, who: Requester, tag: &str, dir: &Path, deadlines: Deadlines) -> std::io::Result<PathBuf> {
+    let (kind, ws) = record_owner(&who).ok_or_else(|| std::io::Error::other("no agent socket for this requester"))?;
     let (sock, fallback) = sock_path_for(dir)?;
+    let cleanup = |sock: &Path| {
+        let _ = std::fs::remove_file(sock);
+        if let Some(f) = &fallback {
+            let _ = std::fs::remove_dir(f);
+        }
+    };
     let l = match bind(&sock) {
         Ok(l) => l,
         Err(e) => {
@@ -158,64 +247,103 @@ pub fn start(who: Requester, tag: &str, dir: &Path) -> std::io::Result<PathBuf> 
             return Err(e);
         }
     };
-    if fallback.is_some() {
-        let rec = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(dir.join(SOCK_PATH_FILE))
-            .and_then(|mut f| f.write_all(sock.to_string_lossy().as_bytes()));
-        if let Err(e) = rec {
-            let _ = std::fs::remove_file(&sock);
-            if let Some(f) = &fallback {
-                let _ = std::fs::remove_dir(f);
-            }
-            return Err(e);
-        }
+    let rec = AgentSocket {
+        tag: tag.to_string(),
+        kind: kind.to_string(),
+        workspace_id: ws,
+        secrets_dir: dir.to_string_lossy().into_owned(),
+        sock_path: sock.to_string_lossy().into_owned(),
+        created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+    };
+    if let Err(e) = vault.agent_socket_put(&rec) {
+        cleanup(&sock);
+        return Err(std::io::Error::other(format!("record: {}", e.code)));
     }
-    run(l, who, tag, dir, &sock, fallback);
+    run(l, who, tag, dir, &sock, fallback, deadlines);
     Ok(sock)
 }
 
-/// Boot: re-serve the socket of a session that survived a daemon restart
-/// in k2-ptyd, at the path its `SSH_AUTH_SOCK` already names. `Ok(None)`
-/// when `dir` had no agent socket.
-pub fn resume(who: Requester, tag: &str, dir: &Path) -> std::io::Result<Option<PathBuf>> {
-    let rec = dir.join(SOCK_PATH_FILE);
-    let (sock, fallback) = match std::fs::symlink_metadata(&rec) {
-        Ok(m) if m.is_file() && m.uid() == euid() => {
-            let raw = std::fs::read(&rec)?;
-            let p = PathBuf::from(String::from_utf8(raw).map_err(|_| std::io::Error::other("bad socket record"))?);
-            let parent = valid_fallback(&p).ok_or_else(|| std::io::Error::other("socket record outside the agent root"))?;
-            ensure_private(&fallback_root())?;
-            ensure_private(&parent)?;
-            (p, Some(parent))
+/// Re-bind `sock` (left by the previous daemon) and serve it.
+fn rebind(rec: &AgentSocket, sock: &Path, fallback: Option<PathBuf>) -> std::io::Result<PathBuf> {
+    if let Some(f) = &fallback {
+        if let Some(root) = f.parent() {
+            ensure_private(root)?;
         }
-        Ok(_) => return Err(std::io::Error::other("bad socket record")),
-        Err(_) => {
-            let p = dir.join(SOCK_NAME);
-            if std::fs::symlink_metadata(&p).is_err() {
-                return Ok(None);
-            }
-            (p, None)
-        }
-    };
-    // The old daemon's socket file is still there: only ever replace our
-    // own socket, never a file, link or someone else's.
-    if let Ok(m) = std::fs::symlink_metadata(&sock) {
+        ensure_private(f)?;
+    }
+    // Only ever replace our own socket, never a file, link or someone else's.
+    if let Ok(m) = std::fs::symlink_metadata(sock) {
         if !m.file_type().is_socket() || m.uid() != euid() {
             return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "not our agent socket"));
         }
-        std::fs::remove_file(&sock)?;
+        std::fs::remove_file(sock)?;
     }
-    let l = bind(&sock)?;
-    run(l, who, tag, dir, &sock, fallback);
-    Ok(Some(sock))
+    let l = bind(sock)?;
+    let who = Requester::Session { workspace_id: rec.workspace_id.clone(), session_id: Some(rec.tag.clone()) };
+    run(l, who, &rec.tag, Path::new(&rec.secrets_dir), sock, fallback, Deadlines::default());
+    Ok(sock.to_path_buf())
 }
 
-fn run(l: UnixListener, who: Requester, tag: &str, dir: &Path, sock: &Path, fallback: Option<PathBuf>) {
-    let ctx = Arc::new(Ctx { who, tag: tag.to_string(), stop: AtomicBool::new(false), conns: AtomicUsize::new(0) });
+/// Why a restarted daemon won't re-serve a session's socket.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResumeRefused {
+    /// No record, or one that isn't a session's.
+    NoRecord,
+    /// The ptyd meta's workspace isn't the recorded one.
+    WorkspaceMismatch,
+    /// The kept secrets dir (or the meta's) isn't the recorded one.
+    DirMismatch,
+    /// The recorded socket path isn't one this session may use.
+    BadSocketPath,
+    Io(String),
+}
+
+/// k2-ptyd adopted session `sid` after a restart: re-serve its agent
+/// socket from the daemon's record, if it had one. `meta_ws` and
+/// `meta_dir` are what the ptyd meta says; `kept_dir` is the secrets dir
+/// the boot sweep kept for it. All three must match the record.
+pub fn resume_adopted(
+    vault: &LocalVault,
+    sid: &str,
+    meta_ws: Option<&str>,
+    meta_dir: Option<&Path>,
+    kept_dir: Option<&Path>,
+) -> Result<PathBuf, ResumeRefused> {
+    let all = vault.agent_sockets().map_err(|e| ResumeRefused::Io(e.code.to_string()))?;
+    let rec = all.iter().find(|r| r.tag == sid && r.kind == "session").cloned().ok_or(ResumeRefused::NoRecord)?;
+    if meta_ws != Some(rec.workspace_id.as_str()) {
+        return Err(ResumeRefused::WorkspaceMismatch);
+    }
+    let recorded = Path::new(&rec.secrets_dir);
+    if meta_dir != Some(recorded) || kept_dir != Some(recorded) {
+        return Err(ResumeRefused::DirMismatch);
+    }
+    let (sock, fallback) = record_socket(&rec, &all).ok_or(ResumeRefused::BadSocketPath)?;
+    rebind(&rec, &sock, fallback).map_err(|e| ResumeRefused::Io(e.to_string()))
+}
+
+/// The hook ptyd adoption calls (after the session is registered).
+pub fn on_adopted(sid: &str, meta: &serde_json::Value) {
+    let Ok(vault) = super::get() else { return };
+    let meta_ws = meta.get("workspace_uuid").and_then(|v| v.as_str());
+    let meta_dir = meta.get("secrets_dir").and_then(|v| v.as_str()).map(Path::new);
+    let kept = super::spawn::kept_dir(sid);
+    match resume_adopted(&vault, sid, meta_ws, meta_dir, kept.as_deref()) {
+        Ok(sock) => k2_core::log_debug!("[vault] ssh-agent re-served for adopted session {sid} at {}", sock.display()),
+        Err(ResumeRefused::NoRecord) => {}
+        Err(why) => k2_core::log_debug!("[vault] ssh-agent for adopted session {sid} NOT re-served: {why:?}"),
+    }
+}
+
+fn run(l: UnixListener, who: Requester, tag: &str, dir: &Path, sock: &Path, fallback: Option<PathBuf>, deadlines: Deadlines) {
+    let ctx = Arc::new(Ctx {
+        who,
+        tag: tag.to_string(),
+        stop: AtomicBool::new(false),
+        conns: AtomicUsize::new(0),
+        deadlines,
+        limits: Mutex::new(HashMap::new()),
+    });
     SERVERS.lock().push(Server { dir: dir.to_path_buf(), sock: sock.to_path_buf(), fallback, ctx: ctx.clone() });
     let c2 = ctx.clone();
     let spawned = std::thread::Builder::new().name("k2-ssh-agent".into()).spawn(move || accept_loop(l, c2));
@@ -225,8 +353,23 @@ fn run(l: UnixListener, who: Requester, tag: &str, dir: &Path, sock: &Path, fall
     k2_core::log_debug!("[vault] ssh-agent for {} at {}", ctx.who.label(), sock.display());
 }
 
+/// Unlink a socket we own (never a file, a link or another user's).
+fn unlink_socket(p: &Path) {
+    if std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_socket() && m.uid() == euid()) {
+        let _ = std::fs::remove_file(p);
+    }
+}
+
+/// Remove a short-path dir: its socket, then the (empty) dir.
+fn remove_fallback(dir: &Path) {
+    if std::fs::symlink_metadata(dir).is_ok_and(|m| m.is_dir() && !m.file_type().is_symlink() && m.uid() == euid()) {
+        unlink_socket(&dir.join(SOCK_NAME));
+        let _ = std::fs::remove_dir(dir);
+    }
+}
+
 /// The secrets dir `dir` is going: stop its agent, unlink the socket and
-/// the fallback dir. Safe to call for a dir with no agent.
+/// the short-path dir, and drop the record. Safe for a dir with no agent.
 pub fn stop_dir(dir: &Path) {
     let gone: Vec<Server> = {
         let mut g = SERVERS.lock();
@@ -236,29 +379,67 @@ pub fn stop_dir(dir: &Path) {
     };
     for s in gone {
         s.ctx.stop.store(true, Ordering::SeqCst);
-        let _ = std::fs::remove_file(&s.sock);
+        unlink_socket(&s.sock);
         if let Some(f) = &s.fallback {
-            let _ = std::fs::remove_dir(f);
+            remove_fallback(f);
         }
         k2_core::log_debug!("[vault] ssh-agent for {} stopped", s.ctx.who.label());
     }
-    // A dir from before a restart (the boot sweep): its short-path socket
-    // isn't registered, so follow the record.
-    if let Ok(raw) = std::fs::read(dir.join(SOCK_PATH_FILE)) {
-        if let Some(parent) = String::from_utf8(raw).ok().map(PathBuf::from).as_deref().and_then(valid_fallback) {
-            if std::fs::symlink_metadata(&parent).is_ok_and(|m| m.is_dir() && !m.file_type().is_symlink() && m.uid() == euid()) {
-                let sock = parent.join(SOCK_NAME);
-                if std::fs::symlink_metadata(&sock).is_ok_and(|m| m.file_type().is_socket()) {
-                    let _ = std::fs::remove_file(&sock);
-                }
-                let _ = std::fs::remove_dir(&parent);
+    // A dir from before a restart: follow the daemon's record, not files.
+    let Ok(v) = super::get() else { return };
+    let Ok(all) = v.agent_sockets() else { return };
+    for rec in all.iter().filter(|r| Path::new(&r.secrets_dir) == dir) {
+        if let Some((sock, fallback)) = record_socket(rec, &all) {
+            unlink_socket(&sock);
+            if let Some(f) = fallback {
+                remove_fallback(&f);
+            }
+        }
+        let _ = v.agent_socket_remove(&rec.tag);
+    }
+}
+
+/// Boot (after the secrets-dir sweep): drop the record (and socket) of
+/// every tag that didn't survive, then remove short-path dirs no record
+/// names (left by a crash).
+pub fn boot_sweep(vault: &LocalVault, kept: &[(String, PathBuf)]) {
+    let Ok(all) = vault.agent_sockets() else { return };
+    for rec in &all {
+        let survived = kept.iter().any(|(sid, d)| sid == &rec.tag && d == Path::new(&rec.secrets_dir)) && rec.kind == "session";
+        if survived {
+            continue;
+        }
+        if let Some((sock, fallback)) = record_socket(rec, &all) {
+            unlink_socket(&sock);
+            if let Some(f) = fallback {
+                remove_fallback(&f);
+            }
+        }
+        let _ = vault.agent_socket_remove(&rec.tag);
+    }
+    let named: Vec<PathBuf> = vault
+        .agent_sockets()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|r| valid_fallback(Path::new(&r.sock_path)))
+        .collect();
+    for root in fallback_roots() {
+        let ok = std::fs::symlink_metadata(&root).is_ok_and(|m| m.is_dir() && !m.file_type().is_symlink() && m.uid() == euid());
+        if !ok {
+            continue;
+        }
+        for e in std::fs::read_dir(&root).into_iter().flatten().flatten() {
+            let p = e.path();
+            if valid_fallback(&p.join(SOCK_NAME)).is_some() && !named.contains(&p) {
+                remove_fallback(&p);
             }
         }
     }
 }
 
 /// Tests: what a daemon crash leaves behind. The server stops, but its
-/// socket file and fallback dir stay (as after a restart under k2-ptyd).
+/// socket file, short-path dir and record stay (as after a restart under
+/// k2-ptyd).
 #[cfg(test)]
 pub fn abandon_for_tests(dir: &Path) {
     let mut g = SERVERS.lock();
@@ -304,7 +485,7 @@ fn accept_loop(l: UnixListener, ctx: Arc<Ctx>) {
         }
         // macOS: an accepted socket inherits the listener's O_NONBLOCK.
         let ok = s.set_nonblocking(false).is_ok()
-            && s.set_read_timeout(Some(Duration::from_secs(1))).is_ok()
+            && s.set_read_timeout(Some(Duration::from_millis(250))).is_ok()
             && s.set_write_timeout(Some(Duration::from_secs(10))).is_ok();
         if !ok {
             ctx.conns.fetch_sub(1, Ordering::SeqCst);
@@ -341,11 +522,12 @@ fn peer_uid(s: &UnixStream) -> Option<u32> {
     (rc == 0).then_some(uid)
 }
 
-/// Read exactly `buf.len()` bytes; `false` on EOF, error or stop.
-fn read_full(s: &mut UnixStream, buf: &mut [u8], stop: &AtomicBool) -> bool {
+/// Read exactly `buf.len()` bytes before `deadline`; `false` on EOF,
+/// error, stop or the deadline.
+fn read_full(s: &mut UnixStream, buf: &mut [u8], stop: &AtomicBool, deadline: Instant) -> bool {
     let mut got = 0;
     while got < buf.len() {
-        if stop.load(Ordering::SeqCst) {
+        if stop.load(Ordering::SeqCst) || Instant::now() >= deadline {
             return false;
         }
         match s.read(&mut buf[got..]) {
@@ -358,11 +540,15 @@ fn read_full(s: &mut UnixStream, buf: &mut [u8], stop: &AtomicBool) -> bool {
     true
 }
 
-/// One frame's payload; `None` closes the connection (EOF, stop, a zero
-/// or oversized length).
-fn read_frame(s: &mut UnixStream, stop: &AtomicBool) -> Option<Vec<u8>> {
+/// One frame's payload; `None` closes the connection (EOF, stop, idle or
+/// frame deadline, a zero or oversized length).
+fn read_frame(s: &mut UnixStream, ctx: &Ctx) -> Option<Vec<u8>> {
     let mut len = [0u8; 4];
-    if !read_full(s, &mut len, stop) {
+    if !read_full(s, &mut len[..1], &ctx.stop, Instant::now() + ctx.deadlines.idle) {
+        return None;
+    }
+    let deadline = Instant::now() + ctx.deadlines.frame;
+    if !read_full(s, &mut len[1..], &ctx.stop, deadline) {
         return None;
     }
     let n = u32::from_be_bytes(len) as usize;
@@ -370,7 +556,7 @@ fn read_frame(s: &mut UnixStream, stop: &AtomicBool) -> Option<Vec<u8>> {
         return None;
     }
     let mut buf = vec![0u8; n];
-    read_full(s, &mut buf, stop).then_some(buf)
+    read_full(s, &mut buf, &ctx.stop, deadline).then_some(buf)
 }
 
 /// Per-connection state from session binds.
@@ -385,7 +571,7 @@ struct Conn {
 
 fn serve_conn(mut s: UnixStream, ctx: &Ctx) {
     let mut conn = Conn::default();
-    while let Some(payload) = read_frame(&mut s, &ctx.stop) {
+    while let Some(payload) = read_frame(&mut s, ctx) {
         let reply = match proto::parse_request(&payload) {
             Err(_) => return,
             Ok(req) => match answer(ctx, &mut conn, req) {
@@ -404,6 +590,10 @@ fn answer(ctx: &Ctx, conn: &mut Conn, req: Request) -> Option<Vec<u8>> {
     let failure = || Some(vec![proto::FAILURE]);
     match req {
         Request::Identities => {
+            // Throttled before any vault work.
+            if !limiter().allow_at(&format!("ids:{}", ctx.tag), IDS_PER_SECOND, IDS_PER_MINUTE, Instant::now()) {
+                return failure();
+            }
             let Ok(v) = super::get() else { return failure() };
             match v.agent_identities(&ctx.who) {
                 Ok(ids) => Some(proto::identities_answer(&ids.into_iter().map(|i| (i.public_blob, i.name)).collect::<Vec<_>>())),
@@ -423,7 +613,9 @@ fn answer(ctx: &Ctx, conn: &mut Conn, req: Request) -> Option<Vec<u8>> {
                     Some(vec![proto::SUCCESS])
                 }
                 BindCheck::Unverifiable(fp) => {
-                    // Fail closed: the forwarding flag still counts.
+                    // A host key we can't check (a host certificate, an
+                    // unknown type): the forwarding flag still counts, and
+                    // the connection keeps serving.
                     conn.forwarded |= b.forwarding;
                     conn.host_fp = Some(format!("{fp}?"));
                     failure()
@@ -443,33 +635,53 @@ fn rsa_sha1(key_blob: &[u8], flags: u32) -> bool {
 
 fn sign(ctx: &Ctx, conn: &Conn, key_blob: &[u8], data: &[u8], flags: u32) -> Vec<u8> {
     let failure = vec![proto::FAILURE];
+    let now = Instant::now();
+    let refused_key = format!("refused:{}", ctx.tag);
+    // A session that keeps getting refused is refused without vault work.
+    if !limiter().peek_at(&refused_key, REFUSALS_PER_SECOND, REFUSALS_PER_MINUTE, now) {
+        return failure;
+    }
     let Ok(v) = super::get() else { return failure };
     let host = conn.host_fp.as_deref();
+    let refuse = |secret: Option<&str>, code: &str| {
+        limiter().allow_at(&refused_key, REFUSALS_PER_SECOND, REFUSALS_PER_MINUTE, Instant::now());
+        v.agent_note(secret, None, &ctx.who, &format!("deny:{code}"), host);
+        vec![proto::FAILURE]
+    };
     let ids = match v.agent_identities(&ctx.who) {
         Ok(i) => i,
         Err(_) => return failure,
     };
     let Some(id) = ids.into_iter().find(|i| i.public_blob == key_blob) else {
-        v.agent_note(None, None, &ctx.who, "deny:not_granted", host);
-        return failure;
+        return refuse(None, "not_granted");
     };
     if rsa_sha1(key_blob, flags) {
-        v.agent_note(Some(&id.secret_id), None, &ctx.who, "deny:ssh_rsa_sha1", host);
-        return failure;
+        return refuse(Some(&id.secret_id), "ssh_rsa_sha1");
+    }
+    // The rate check comes before the policy read, with the limits last
+    // read for this secret (the defaults the first time).
+    let key = format!("{}/{}", ctx.tag, id.secret_id);
+    let d = k2_vault::vault::AgentPolicy::default();
+    let (b0, m0) = ctx.limits.lock().get(&id.secret_id).copied().unwrap_or((d.burst as usize, d.per_minute as usize));
+    if !limiter().peek_at(&key, b0, m0, now) {
+        return refuse(Some(&id.secret_id), "rate_limited");
     }
     let Ok(policy) = v.agent_policy(&id.secret_id) else { return failure };
+    let (burst, per_minute) = (policy.burst as usize, policy.per_minute as usize);
+    ctx.limits.lock().insert(id.secret_id.clone(), (burst, per_minute));
     if conn.forwarded && !policy.allow_forwarded {
-        v.agent_note(Some(&id.secret_id), None, &ctx.who, "deny:forwarded", host);
-        return failure;
+        return refuse(Some(&id.secret_id), "forwarded");
     }
-    let key = format!("{}/{}", ctx.tag, id.secret_id);
-    if !limiter().allow_at(&key, policy.burst as usize, policy.per_minute as usize, Instant::now()) {
-        v.agent_note(Some(&id.secret_id), None, &ctx.who, "deny:rate_limited", host);
-        return failure;
+    if !limiter().allow_at(&key, burst, per_minute, now) {
+        return refuse(Some(&id.secret_id), "rate_limited");
     }
     match v.agent_sign(&id.secret_id, &ctx.who, key_blob, data, flags, host) {
         Ok(sig) => proto::sign_response(&sig),
-        Err(_) => failure,
+        Err(_) => {
+            // agent_sign audited the refusal itself.
+            limiter().allow_at(&refused_key, REFUSALS_PER_SECOND, REFUSALS_PER_MINUTE, Instant::now());
+            failure
+        }
     }
 }
 

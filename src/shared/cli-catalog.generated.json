@@ -645,7 +645,7 @@
    },
    {
     "name": "mail reply",
-    "usage": "k2 mail reply <message-id> (--body <text> | --body-file <f>) [--attach <path>] [--wait [--timeout <secs>]] [--json]",
+    "usage": "k2 mail reply <message-id> (--body <text> | --body-file <f>) [--from-name <name>] [--attach <path>] [--wait [--timeout <secs>]] [--json]",
     "description": "Guardrailed reply to a received message: recipient locked to the original sender, From locked to the receiving address, loop caps (max 4 replies/thread/hour). On HOSTED addresses this uses the same send gating and --wait semantics as 'mail send'; on a LINKED inbox where you hold the 'send' level AND Sending=on it submits the reply immediately over SMTP. Attachments (--attach) are supported on LINKED replies only (not hosted yet). For a linked message you'd rather NOT send, save a draft with 'k2 mail draft'."
    },
    {

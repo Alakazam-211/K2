@@ -896,13 +896,7 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
         // SMTP or Microsoft Graph (§17.5 / E4; MCS2 approval hand-off) ──
         Source::Linked => {
             if from_name_explicit.is_some() {
-                return error_response(
-                    "400 Bad Request",
-                    "usage",
-                    "--from-name works on hosted K2 mailboxes only — a linked inbox is your \
-                     human's own account and sends under the display name set on that \
-                     account",
-                );
+                return linked_from_name_refused();
             }
             if schedule_requested {
                 return error_response(
@@ -1007,6 +1001,18 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
     }
 }
 
+/// `--from-name` on a LINKED sender (send or reply) — a usage refusal:
+/// the human's own account sends under its own display name.
+fn linked_from_name_refused() -> CliResponse {
+    error_response(
+        "400 Bad Request",
+        "usage",
+        "--from-name works on hosted K2 mailboxes only — a linked inbox is your \
+         human's own account and sends under the display name set on that \
+         account",
+    )
+}
+
 /// The optional `fromName` body field: absent/null → `None`; a string →
 /// validated ([`send::validate_from_name`]); anything else → usage.
 fn from_name_param(v: &serde_json::Value) -> Result<Option<String>, CliResponse> {
@@ -1025,11 +1031,14 @@ fn from_name_param(v: &serde_json::Value) -> Result<Option<String>, CliResponse>
 
 // ── POST /cli/mail/reply ────────────────────────────────────────────────
 
-/// S5: guardrailed reply (§8.4). Body: `{project, id, body, wait?,
-/// timeout?}`. Recipient LOCKED to the original sender, From LOCKED to
-/// the receiving address, In-Reply-To/References stamped, loop caps
+/// S5: guardrailed reply (§8.4). Body: `{project, id, body, fromName?,
+/// wait?, timeout?}`. Recipient LOCKED to the original sender, From LOCKED
+/// to the receiving address, In-Reply-To/References stamped, loop caps
 /// (no self-chains, ≤100 References, ≤4 replies/thread/hour),
-/// DMARC-fail gated outside approval mode.
+/// DMARC-fail gated outside approval mode. `fromName` is the same
+/// optional display name as on `handle_send` (`k2 mail reply
+/// --from-name`): cosmetic only, HOSTED senders only; without it the
+/// workspace's agent name is used.
 pub fn handle_reply(body: &[u8]) -> CliResponse {
     let v: serde_json::Value = match serde_json::from_slice(body) {
         Ok(v) => v,
@@ -1064,6 +1073,13 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
     // now, before any identity/engine work.
     let attach_specs = match parse_attachment_specs(&v) {
         Ok(s) => s,
+        Err(resp) => return resp,
+    };
+    // Optional From DISPLAY NAME (`--from-name`) — cosmetic only; the
+    // address stays LOCKED to the receiving one. Validated before any
+    // identity work, exactly like `handle_send`.
+    let from_name_explicit = match from_name_param(&v) {
+        Ok(n) => n,
         Err(resp) => return resp,
     };
     let (path, project_id) = match resolve_caller(project) {
@@ -1134,6 +1150,9 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
         // provider threads and locks the recipient (SMTP re-reads the
         // source over IMAP; Graph uses createReply) (E4; MCS2) ──
         Source::Linked => {
+            if from_name_explicit.is_some() {
+                return linked_from_name_refused();
+            }
             let gate = match linked_send_gate(&path) {
                 Ok(g) => g,
                 Err(resp) => return resp,
@@ -1252,7 +1271,7 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
 
             let agent_name = k2_core::workspace::display::agent_display_name(&path);
             let mut msg = OutboundMessage {
-                from_name: Some(agent_name.clone()),
+                from_name: Some(from_name_explicit.clone().unwrap_or_else(|| agent_name.clone())),
                 from: from_address.clone(),
                 to: vec![recipient],
                 cc: Vec::new(),
@@ -2464,6 +2483,130 @@ mod tests {
         cleanup(&project2, None);
     }
 
+    // ── fromName on replies (`k2 mail reply --from-name`, 0.46.4) ──
+
+    fn reply_body(path: &str, token: &str, extra: serde_json::Value) -> Vec<u8> {
+        let mut v = serde_json::json!({ "project": path, "id": token, "body": "thanks!" });
+        if let (Some(base), Some(add)) = (v.as_object_mut(), extra.as_object()) {
+            for (k, val) in add {
+                base.insert(k.clone(), val.clone());
+            }
+        }
+        serde_json::to_vec(&v).expect("body")
+    }
+
+    /// A bad `fromName` on a reply is the same usage refusal as on send,
+    /// BEFORE any identity work (the project here doesn't exist).
+    #[test]
+    fn reply_from_name_refusals_come_before_identity_work() {
+        for (from_name, needle) in [
+            (serde_json::json!("Laura\r\nBcc: evil@example.com"), "control or invisible"),
+            (serde_json::json!("ceo@bank.com"), "can't contain '@'"),
+            (serde_json::json!("   "), "fromName is empty"),
+            (serde_json::json!(7), "must be a string"),
+        ] {
+            let resp = handle_reply(&reply_body(
+                "/tmp/no-such-workspace-for-reply-from-name",
+                "garbage-token",
+                serde_json::json!({ "fromName": from_name.clone() }),
+            ));
+            assert_eq!(resp.status, "400 Bad Request", "{from_name} → {}", resp.body);
+            let v = body_json(&resp);
+            assert_eq!(v["error"]["code"], "usage", "{from_name} → {v}");
+            let hint = v["error"]["hint"].as_str().expect("hint");
+            assert!(hint.contains(needle), "{from_name} → {hint}");
+        }
+    }
+
+    /// Oaks' report (0.46.3): a reply from laura@ showed the workspace name.
+    /// `fromName` now reaches the stored (= sent) HOSTED reply; the From
+    /// ADDRESS stays locked to the receiving one and the recipient to the
+    /// original sender. Without it the agent name is used, as before.
+    #[test]
+    fn hosted_reply_from_name_reaches_the_stored_message() {
+        use crate::mail::jmap::tests::{spawn_mock_server, NORMAL_SESSION_FIXTURE};
+        // Env lock first (the guard), then the mail lock.
+        let _key = k2_core::test_env::EnvVar::set("K2_TEST_MAIL_API_KEY", "k2-test-key");
+        let _mail = crate::mail::mail_server_test_lock();
+        let (name, path) = unique("rfname");
+        let project_id = insert_project(&name, &path);
+        let domain = format!("{name}.example");
+        let laura = format!("laura@{domain}");
+        seed_domain(&domain, "direct");
+        seed_address(&project_id, &laura, Some("acc-1"));
+        set_gating(&path, "approval");
+        let store = DbOutboundStore::default();
+
+        // One Email/get reply per handle_reply call (each builds a fresh
+        // client: session + Email/get). Distinct threads so the per-thread
+        // reply cap never interferes.
+        let email_get = |id: &str, thread: &str| {
+            serde_json::json!({
+                "methodResponses": [["Email/get", {
+                    "accountId": "acc-1",
+                    "list": [{
+                        "id": id,
+                        "threadId": thread,
+                        "from": [{ "name": "Customer", "email": "cust@dest.example" }],
+                        "subject": "Quote",
+                        "header:Message-ID:asText": format!("<{id}@dest.example>"),
+                        "header:References:asText": null,
+                        "header:Authentication-Results:asText:all": [],
+                    }],
+                    "notFound": [],
+                }, "0"]]
+            })
+            .to_string()
+        };
+        let (port, _rx) = spawn_mock_server(vec![
+            NORMAL_SESSION_FIXTURE.to_string(),
+            email_get("M1", "T1"),
+            NORMAL_SESSION_FIXTURE.to_string(),
+            email_get("M2", "T2"),
+        ]);
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let _ = conn.execute("DELETE FROM mail_server WHERE id = 1", []);
+            conn.execute(
+                "INSERT INTO mail_server (id, status, pinned_version, api_url, api_key_ref, updated_at) \
+                 VALUES (1, 'running', '0.16.10', ?1, 'env:K2_TEST_MAIL_API_KEY', 1)",
+                rusqlite::params![format!("http://127.0.0.1:{port}")],
+            )
+            .expect("mail_server");
+        }
+
+        let resp = handle_reply(&reply_body(
+            &path,
+            &messages::encode_message_id(&laura, "M1"),
+            serde_json::json!({ "fromName": "  Laura  " }),
+        ));
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let id = body_json(&resp)["id"].as_str().expect("id").to_string();
+        let stored = store.load_message(&id).expect("stored reply");
+        assert_eq!(stored.from_name.as_deref(), Some("Laura"));
+        assert_eq!(stored.from, laura, "the address stays locked to the receiving one");
+        assert_eq!(stored.to, vec!["cust@dest.example".to_string()], "recipient locked");
+        assert_eq!(stored.in_reply_to.as_deref(), Some("<M1@dest.example>"));
+
+        // No fromName → the workspace's agent name (unchanged default).
+        let resp = handle_reply(&reply_body(
+            &path,
+            &messages::encode_message_id(&laura, "M2"),
+            serde_json::json!({}),
+        ));
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let id2 = body_json(&resp)["id"].as_str().expect("id").to_string();
+        let stored2 = store.load_message(&id2).expect("stored reply");
+        assert_eq!(
+            stored2.from_name,
+            Some(k2_core::workspace::display::agent_display_name(&path))
+        );
+
+        clear_mail_server();
+        cleanup(&project_id, Some(&domain));
+    }
+
     /// The always-on hourly cap through the real store: the 21st send
     /// inside an hour answers 429 with the distinct window marker.
     #[test]
@@ -2745,6 +2888,29 @@ mod tests {
             "{v}"
         );
         assert_eq!(outbound_count(&project_id), 0, "a refused linked send never audits");
+        cleanup_linked(&project_id);
+    }
+
+    /// `--from-name` on a LINKED reply is refused like on a linked send:
+    /// the human's own account keeps its own display name. Refused before
+    /// the gate, so nothing is audited or sent.
+    #[test]
+    fn linked_reply_refuses_from_name() {
+        let (name, path) = unique("lrfname");
+        let project_id = insert_project(&name, &path);
+        let linked = format!("me-{}@linked.example", &project_id[..8]);
+        seed_linked(&project_id, &linked, "send");
+        set_gating(&path, "on");
+        let token = messages::encode_message_id(&linked, "uid:1:42");
+        let resp = handle_reply(&reply_body(&path, &token, serde_json::json!({ "fromName": "Laura" })));
+        assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);
+        let v = body_json(&resp);
+        assert_eq!(v["error"]["code"], "usage");
+        assert!(
+            v["error"]["hint"].as_str().unwrap().contains("hosted K2 mailboxes only"),
+            "{v}"
+        );
+        assert_eq!(outbound_count(&project_id), 0, "a refused linked reply never audits");
         cleanup_linked(&project_id);
     }
 

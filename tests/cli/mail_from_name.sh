@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Loud harness for `k2 mail send --from-name <name>` (0.46.3): the CLI sends
-# the display name as `fromName` in the POST /cli/mail/send body, sends no
+# Loud harness for `k2 mail send --from-name <name>` (0.46.3) and
+# `k2 mail reply --from-name <name>` (0.46.4): the CLI sends the display name
+# as `fromName` in the POST /cli/mail/send (or /cli/mail/reply) body, sends no
 # fromName key without the flag, and refuses a missing/blank value (exit 2,
 # nothing POSTed). The daemon validates the name itself (CR/LF, '@', length;
 # cargo tests in mail::send / mail::routes_send). cargo does not cover
@@ -155,6 +156,69 @@ printf '%s' "$help" | grep -q -- "--from-name <name>" && ok "help lists --from-n
 schema="$("${K2[@]}" "$K2_CLI" --schema json 2>/dev/null)"
 assert_json "schema lists --from-name" "$schema" \
     "any(f['name'] == '--from-name' for c in (d['commands'] if isinstance(d, dict) else d) if c['name'] == 'mail send' for f in c['flags'])"
+
+REPLY_POST="$WORKDIR/post_cli_mail_reply.json"
+
+echo "== mail reply --from-name reaches fromName =="
+rm -f "$REPLY_POST"
+set +e
+"${K2[@]}" "$K2_CLI" mail reply msg_fake01 --body "thanks" --from-name "Laura" --json >/dev/null 2>&1
+rc=$?
+set -e
+assert_exit "reply --from-name" 0 "$rc"
+post="$(cat "$REPLY_POST" 2>/dev/null || echo '{}')"
+assert_json "reply POST fromName" "$post" "d.get('fromName') == 'Laura'"
+assert_json "reply POST id" "$post" "d.get('id') == 'msg_fake01'"
+assert_json "reply POST body" "$post" "d.get('body') == 'thanks'"
+assert_json "reply POST has no from (address stays locked)" "$post" "'from' not in d"
+
+echo "== mail reply --from-name passes specials through verbatim =="
+rm -f "$REPLY_POST"
+set +e
+"${K2[@]}" "$K2_CLI" mail reply msg_fake01 --body "thanks" --from-name 'Smith, "LJ" <Zoë>' --json >/dev/null 2>&1
+rc=$?
+set -e
+assert_exit "reply --from-name specials" 0 "$rc"
+post="$(cat "$REPLY_POST" 2>/dev/null || echo '{}')"
+assert_json "reply POST fromName verbatim" "$post" "d.get('fromName') == 'Smith, \"LJ\" <Zoë>'"
+
+echo "== mail reply without --from-name sends no fromName key =="
+rm -f "$REPLY_POST"
+set +e
+"${K2[@]}" "$K2_CLI" mail reply msg_fake01 --body "thanks" --json >/dev/null 2>&1
+rc=$?
+set -e
+assert_exit "reply (no from-name)" 0 "$rc"
+post="$(cat "$REPLY_POST" 2>/dev/null || echo '{}')"
+assert_json "reply POST has no fromName" "$post" "'fromName' not in d and d.get('id') == 'msg_fake01'"
+
+echo "== mail reply --from-name needs a value =="
+rm -f "$REPLY_POST"
+set +e
+out="$("${K2[@]}" "$K2_CLI" mail reply msg_fake01 --body b --from-name 2>&1)"
+rc=$?
+set -e
+assert_exit "reply --from-name without value" 2 "$rc"
+printf '%s' "$out" | grep -q -- "--from-name requires a display name" && ok "reply missing-value hint" || bad "reply missing-value hint missing in: $out"
+[ ! -f "$REPLY_POST" ] && ok "reply: nothing POSTed (missing value)" || bad "a reply POST went out without a --from-name value"
+
+echo "== mail reply --from-name '' / blank is refused =="
+for blank in "" "   "; do
+    rm -f "$REPLY_POST"
+    set +e
+    out="$("${K2[@]}" "$K2_CLI" mail reply msg_fake01 --body b --from-name "$blank" 2>&1)"
+    rc=$?
+    set -e
+    assert_exit "reply --from-name '$blank'" 2 "$rc"
+    printf '%s' "$out" | grep -q "non-empty display name" && ok "reply blank hint ('$blank')" || bad "reply blank hint missing in: $out"
+    [ ! -f "$REPLY_POST" ] && ok "reply: nothing POSTed ('$blank')" || bad "a reply POST went out for a blank --from-name"
+done
+
+echo "== reply help and schema document the flag =="
+help="$("${K2[@]}" "$K2_CLI" mail reply --help 2>&1)"
+printf '%s' "$help" | grep -q -- "--from-name <name>" && ok "reply help lists --from-name" || bad "reply help lacks --from-name: $help"
+assert_json "schema lists reply --from-name" "$schema" \
+    "any(f['name'] == '--from-name' for c in (d['commands'] if isinstance(d, dict) else d) if c['name'] == 'mail reply' for f in c['flags'])"
 
 echo ""
 echo "Results: $pass passed, $fail failed"

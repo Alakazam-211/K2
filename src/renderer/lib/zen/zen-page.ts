@@ -54,6 +54,10 @@ export interface ZenLayout {
    *  it, so they never fold. Where each column is NOW lives in
    *  `zen-columns` (this computer, per Garden), not here. */
   folds?: ZenColumnFold[]
+  /** 0.46.4: widgets stacked in a column are separate glass tiles; a column
+   *  whose file says `joined = true` keeps them in one panel. One entry per
+   *  column, present only when some column sets `joined = true`. */
+  joined?: boolean[]
 }
 
 /** A column's fold settings from the Garden file (A1). */
@@ -412,9 +416,19 @@ function parseFolds(raw: unknown, ncols: number): ZenColumnFold[] | undefined {
   return folds
 }
 
+/** 0.46.4: each column's `joined` (one panel for its stack), or undefined
+ *  when no column sets it (or the list doesn't match the split). */
+function parseJoined(raw: unknown, ncols: number): boolean[] | undefined {
+  if (!Array.isArray(raw) || raw.length !== ncols) return undefined
+  const joined = raw.map((c) => isObj(c) && c.joined === true)
+  return joined.some(Boolean) ? joined : undefined
+}
+
 function withFolds(layout: ZenLayout, rawColumns: unknown): ZenLayout {
   const folds = parseFolds(rawColumns, layout.split.length)
-  return folds ? { ...layout, folds } : layout
+  const joined = parseJoined(rawColumns, layout.split.length)
+  if (!folds && !joined) return layout
+  return { ...layout, ...(folds ? { folds } : {}), ...(joined ? { joined } : {}) }
 }
 
 function parseLayout(raw: unknown, builtin: ZenResolvedPage): ZenLayout {

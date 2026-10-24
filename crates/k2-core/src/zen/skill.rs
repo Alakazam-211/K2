@@ -705,9 +705,10 @@ column = 0\n\
 home = \"Work\"             # optional props your code reads (k2.widget, k2.config)\n\
 ```\n\n\
 `custom` is a content widget that fills its column (never a band, edge or menu). At most\n\
-10 custom widgets per page. Widgets stacked in one column share its height equally;\n\
-`weight = 1..12` on a `[[widget]]` gives it that share instead (`weight = 3` next to\n\
-`weight = 1` is three quarters of the column). `config` (a small table of strings, numbers and booleans)\n\
+10 custom widgets per page. Widgets stacked in one column are separate tiles (the theme's\n\
+gap between) and share its height equally; `weight = 1..12` on a `[[widget]]` gives it that\n\
+share instead (`weight = 3` next to `weight = 1` is three quarters of the column).\n\
+`joined = true` on a `[[layout.column]]` keeps its stack in one panel, as before 0.46.4. `config` (a small table of strings, numbers and booleans)\n\
 reaches the widget as `k2.config`. A conversation widget can follow it:\n\
 `agents = \"arcade\"` on a `conversation` widget shows what it opens with\n\
 `k2.conversation.open(address)`.\n\n\

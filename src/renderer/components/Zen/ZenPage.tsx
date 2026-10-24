@@ -441,6 +441,11 @@ export function ZenPage({
               // K2 views that draw their own panels (Tickets' glass) get no box;
               // nor does anything on a full canvas (it draws its own surface).
               const bare = full || (boxed.length > 0 && boxed.every((w) => ZEN_UNBOXED_KINDS.has(w.kind)))
+              // 0.46.4 (Rosson 2026-10-23): widgets stacked in a column are
+              // separate glass tiles with the theme's gap between (`weight`
+              // still shares the height); `joined = true` keeps one panel.
+              // One widget, a bare column or a full canvas: as before.
+              const tiles = !bare && boxed.length > 1 && layout.joined?.[col] !== true
               // On a full canvas the top band floats over every column. A
               // custom widget makes room for it itself (and cuts holes in
               // it); K2's own widgets (the Kanban's Thread, 0.46.4) start
@@ -453,7 +458,28 @@ export function ZenPage({
               const body = (
                 <>
                   {rails.map(draw)}
-                  {(boxed.length > 0 || rails.length === 0) && (
+                  {tiles && (
+                    <div
+                      data-zen-column={col}
+                      data-zen-column-tiles=""
+                      className="flex min-h-0 min-w-0 flex-col"
+                      style={{ flex: '1 1 0%', gap: 'var(--zen-gap)' }}
+                    >
+                      {boxed.map((w) => (
+                        <div
+                          key={w.id}
+                          data-zen-tile={w.id}
+                          data-zen-weight={boxedFlex === null ? undefined : (w.weight ?? 1)}
+                          {...ZEN_GLASS_PROPS}
+                          className="flex min-h-0 min-w-0 flex-col"
+                          style={{ flex: boxedFlex?.get(w.id) ?? '1 1 0%', borderRadius: 'var(--zen-radius)', overflow: 'hidden' }}
+                        >
+                          {draw(w)}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {!tiles && (boxed.length > 0 || rails.length === 0) && (
                     <div
                       data-zen-column={col}
                       className="flex min-h-0 min-w-0 flex-col"

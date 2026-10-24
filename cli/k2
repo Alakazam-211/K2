@@ -60300,7 +60300,9 @@ A GARDEN FILE
                                  folds it to a tab (collapsed = true
                                  starts folded, label = "Chat"); never a
                                  column with zen-toggle, garden-switcher
-                                 or nav-rail, and one stays open
+                                 or nav-rail, and one stays open.
+                                 Widgets stacked in a column are separate
+                                 tiles; joined = true keeps one panel
   [[widget]]                     see k2 zen guide widgets and bands
   [colors.light]  [font]  ...    see k2 zen guide themes
 

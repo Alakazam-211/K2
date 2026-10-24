@@ -50,9 +50,13 @@ bar-height-px = 44
 inset-px = 14
 
 # `components/Zen/ZenPage.tsx`: columns use the theme's gap and radius.
+# 0.46.4 (GS45, Rosson 2026-10-23): widgets stacked in a column are separate
+# glass tiles with that gap between ("tiles"; `joined = true` on a column
+# keeps one panel). It was one panel per column ("joined").
 [columns]
 gap-token = "gap"
 radius-token = "radius"
+stack = "tiles"
 
 # `ZenAgentsWidget.tsx`, `ZenNavRailWidget.tsx`, `lib/zen/zen-window.ts`.
 [widgets]

@@ -240,7 +240,11 @@ fn guide(args: &[&str]) -> String {
 /// default after the freeze (GS45): edit the data, update this table, add
 /// one WHATS_NEW line ("Gardens that sync with K2's default get X").
 const FROZEN: &[(&str, &str)] = &[
-    ("frame", "5964f47ab2376b7f"),
+    // 0.46.4 (GS45, Rosson 2026-10-23): `[columns] stack = "tiles"`: widgets
+    // stacked in a column are separate glass tiles (a column's `joined =
+    // true` keeps one panel). WHATS_NEW: "Stacked Garden cards are separate
+    // tiles".
+    ("frame", "d09075560b416cf4"),
     ("template:k2.blank@1", "3243f8b8edef13c3"),
     // 0.45.6 (GS45, Rosson 2026-10-15): Garden 1 gets K2 Companion's pin
     // grid, settings cog and activity drawer (`pins`, `settings`,

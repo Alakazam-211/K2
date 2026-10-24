@@ -245,7 +245,7 @@ pub const COLUMN_MIN_WIDTH_MAX: f64 = 800.0;
 /// characters. The renderer shows "Column N" when a file sets none.
 pub const COLUMN_LABEL_MAX: usize = 24;
 /// The keys a `[[layout.column]]` takes.
-pub const COLUMN_KEYS: &[&str] = &["size", "min-width", "widget", "collapsible", "collapsed", "label"];
+pub const COLUMN_KEYS: &[&str] = &["size", "min-width", "widget", "collapsible", "collapsed", "label", "joined"];
 /// At most this many content widgets (`WIDGET_KINDS`) on one page. Counted
 /// after each table's kind is known (FC47): chrome has its own limit.
 pub const MAX_WIDGETS: usize = 12;
@@ -1483,6 +1483,10 @@ fn table_pos(ctx: &Ctx, t: &dyn TableLike, fallback: (usize, usize)) -> (usize, 
 /// `collapsed` without `collapsible`, a collapsible one-column page, and
 /// every column starting collapsed. What the column holds is checked with
 /// the whole page ([`check_collapsible`]).
+///
+/// 0.46.4 (Rosson 2026-10-23): widgets stacked in a column are separate
+/// glass tiles with the theme's gap between; `joined = true` keeps one panel
+/// for the column, as before. Sent only when set (like `collapsible`).
 fn check_layout(ctx: &mut Ctx, item: &Item, at: (usize, usize)) {
     let Some(t) = require_table(ctx, item, at, "layout") else { return };
     let mut kind: Option<String> = None;
@@ -1557,7 +1561,8 @@ fn check_layout(ctx: &mut Ctx, item: &Item, at: (usize, usize)) {
                                 }
                             },
                             // prd-garden-column-collapse A1 (CA5): sent only when set.
-                            "collapsible" | "collapsed" => match cv.as_value().and_then(Value::as_bool) {
+                            // `joined` (0.46.4): one panel for the column's stack.
+                            "collapsible" | "collapsed" | "joined" => match cv.as_value().and_then(Value::as_bool) {
                                 Some(b) => {
                                     let p = item_pos(ctx, cv, kp);
                                     ctx.pos.insert(format!("page.layout.column.{i}.{ck}"), p);

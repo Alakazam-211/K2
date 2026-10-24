@@ -105,6 +105,26 @@ fn a1_keys_reach_the_layout_only_when_set() {
     assert!(both["columns"][0].get("collapsed").is_none(), "{both}");
 }
 
+/// 0.46.4 (Rosson 2026-10-23): stacked widgets are separate tiles; a column
+/// that wants one panel says `joined = true`. Sent only when set, a boolean.
+#[test]
+fn joined_reaches_the_layout_only_when_set() {
+    let plain = layout_of(&two_columns(&[], &[]));
+    for c in plain["columns"].as_array().expect("columns") {
+        assert!(c.get("joined").is_none(), "no joined unless set: {plain}");
+    }
+    let joined = layout_of(&two_columns(&[], &["joined = true"]));
+    assert_eq!(joined["columns"][1]["joined"], json!(true), "{joined}");
+    assert!(joined["columns"][0].get("joined").is_none(), "{joined}");
+    let off = layout_of(&two_columns(&["joined = false"], &[]));
+    assert_eq!(off["columns"][0]["joined"], json!(false), "{off}");
+    // It works beside the fold keys.
+    let both = layout_of(&two_columns(&[], &["collapsible = true", "joined = true"]));
+    assert_eq!((both["columns"][1]["collapsible"].clone(), both["columns"][1]["joined"].clone()), (json!(true), json!(true)), "{both}");
+    let c = check_page(&two_columns(&[], &["joined = \"yes\""]));
+    assert_one_error(&c, 8, "column joined is true or false", "string flag");
+}
+
 #[test]
 fn a1_layout_json_drops_collapsed_on_a_fixed_column() {
     let cols = vec![

@@ -171,6 +171,8 @@ interface Example {
   bands: { top: Groups | null; bottom: Groups | null }
   edges?: unknown[]
   menus?: Record<string, string[]>
+  /** The page's `layout` when not the texting split (0.46.4 `joined`). */
+  layout?: Record<string, unknown>
 }
 
 /** The FC34 guide examples, as `GET /cli/zen/get` answers them. */
@@ -222,6 +224,29 @@ const EXAMPLES: Record<string, Example> = {
     items: TEMPLATE_ITEMS,
     bands: { top: g(['garden-switcher'], [], ['usage', 'theme-picker', 'zen-toggle']), bottom: null },
   },
+  // 0.46.4: two widgets stacked in column 1, no weights: two tiles.
+  stacked: {
+    widgets: [AGENTS, CONVERSATION, { ...AGENTS, id: 'agents-2', column: 1 }, STRIP_RAIL],
+    from: 'template',
+    items: TEMPLATE_ITEMS,
+    bands: { top: g(['garden-switcher'], [], ['usage', 'theme-picker', 'zen-toggle']), bottom: null },
+  },
+  // 0.46.4: the same stack in a column that says `joined = true`: one panel.
+  'stacked-joined': {
+    widgets: [AGENTS, CONVERSATION, { ...AGENTS, id: 'agents-2', column: 1 }, STRIP_RAIL],
+    from: 'template',
+    items: TEMPLATE_ITEMS,
+    bands: { top: g(['garden-switcher'], [], ['usage', 'theme-picker', 'zen-toggle']), bottom: null },
+    layout: {
+      kind: 'columns',
+      split: [34, 66],
+      minWidths: [240, 360],
+      columns: [
+        { size: 34, 'min-width': 240 },
+        { size: 66, 'min-width': 360, joined: true },
+      ],
+    },
+  },
   'column-corner': {
     widgets: [AGENTS, CONVERSATION, STRIP_RAIL],
     from: 'garden',
@@ -234,7 +259,7 @@ const EXAMPLES: Record<string, Example> = {
 function answer(ex: Example, opts: { chrome?: boolean } = {}): Record<string, unknown> {
   const page: Record<string, unknown> = {
     template: 'k2.texting@1',
-    layout: { kind: 'columns', split: [34, 66], minWidths: [240, 360] },
+    layout: ex.layout ?? { kind: 'columns', split: [34, 66], minWidths: [240, 360] },
     widgets: ex.widgets,
     controls: TEMPLATE_CONTROLS,
   }
@@ -440,10 +465,47 @@ describe('each guide example draws its layout from the page answer (FC34, S2)', 
       ['3', '3 1 0%'],
       ['1', '1 1 0%'],
     ])
-    // Column 0 has no weights: its widgets draw straight into the box, as before.
-    expect(el('[data-zen-column="0"]').querySelector('[data-zen-weight]')).toBeNull()
+    // 0.46.4: each weighted widget is its own glass tile, the gap between.
+    expect(col1.hasAttribute('data-zen-column-tiles')).toBe(true)
+    expect(col1.hasAttribute('data-zen-glass')).toBe(false)
+    for (const c of Array.from(col1.children)) expect(c.hasAttribute('data-zen-glass')).toBe(true)
+    // Column 0 holds one widget: one glass box, drawn straight in, as before.
+    const col0 = el('[data-zen-column="0"]')
+    expect(col0.querySelector('[data-zen-weight]')).toBeNull()
+    expect(col0.hasAttribute('data-zen-glass')).toBe(true)
+    expect(col0.hasAttribute('data-zen-column-tiles')).toBe(false)
     twoChecks()
     expectNoSafeMode('weighted')
+  })
+
+  it('stacked (0.46.4): widgets stacked in a column are separate tiles with the theme’s gap', async () => {
+    await show('stacked')
+    const col1 = el('[data-zen-column="1"]')
+    expect(col1.hasAttribute('data-zen-column-tiles')).toBe(true)
+    expect(col1.hasAttribute('data-zen-glass')).toBe(false)
+    expect(col1.style.gap).toBe('var(--zen-gap)')
+    const tiles = Array.from(col1.children) as HTMLElement[]
+    expect(tiles.map((c) => c.getAttribute('data-zen-tile'))).toEqual(['conversation', 'agents-2'])
+    for (const c of tiles) {
+      expect(c.hasAttribute('data-zen-glass')).toBe(true)
+      expect(c.style.borderRadius).toBe('var(--zen-radius)')
+      expect(c.style.flex).toBe('1 1 0%')
+      // No weights in the file: no weight marks (the height splits evenly, as before).
+      expect(c.hasAttribute('data-zen-weight')).toBe(false)
+      expect(c.querySelector('[data-zen-widget]')).not.toBeNull()
+    }
+    twoChecks()
+    expectNoSafeMode('stacked')
+  })
+
+  it('stacked-joined (0.46.4): a column with joined = true keeps its stack in one glass panel', async () => {
+    await show('stacked-joined')
+    const joined = el('[data-zen-column="1"]')
+    expect(joined.hasAttribute('data-zen-column-tiles')).toBe(false)
+    expect(joined.hasAttribute('data-zen-glass')).toBe(true)
+    expect(joined.querySelectorAll('[data-zen-tile]').length).toBe(0)
+    expect(joined.querySelectorAll('[data-zen-widget]').length).toBeGreaterThanOrEqual(2)
+    expectNoSafeMode('stacked-joined')
   })
 
   it('column-corner: the toggle at the bottom-right edge of the conversation column, outside its box', async () => {

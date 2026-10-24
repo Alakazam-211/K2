@@ -109,6 +109,11 @@ describe('frame.toml pins the renderer frame (GF1)', () => {
     const t = src('src/renderer/components/Zen/ZenPage.tsx')
     has(t, `gap: 'var(--zen-${f('columns', 'gap-token')})'`, 'column gap')
     has(t, `borderRadius: 'var(--zen-${f('columns', 'radius-token')})'`, 'column radius')
+    // 0.46.4: a column's stacked widgets are separate tiles (a column's
+    // `joined = true` keeps one panel).
+    expect(f('columns', 'stack')).toBe('tiles')
+    has(t, 'data-zen-column-tiles=""', 'stacked widgets as separate tiles')
+    has(t, "gap: 'var(--zen-gap)' }}", 'the gap between tiles')
   })
 
   it('[widgets] = the Agents and nav-rail widgets and the rail views', () => {
@@ -144,7 +149,7 @@ describe('frame.toml pins the renderer frame (GF1)', () => {
         'shield.box-radius-factor', 'shield.scrim', 'shield.agent-selection-accent-mix', 'shield.me-selection-text-mix',
         'overflow.order', 'overflow.switcher-compact', 'overflow.column-min-width-share',
         'bands.group-gap-px', 'bands.bar-height-px', 'bands.inset-px',
-        'columns.gap-token', 'columns.radius-token',
+        'columns.gap-token', 'columns.radius-token', 'columns.stack',
         'widgets.agents-avatar-px', 'widgets.agents-focus-group-width-px', 'widgets.nav-rail-width-px', 'widgets.nav-rail-row-px', 'widgets.rail-views',
         'controls.target-px', 'controls.drag-min-width-px', 'controls.drag-min-height-px', 'controls.min-opacity',
       ].sort(),

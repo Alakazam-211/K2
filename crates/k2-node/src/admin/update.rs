@@ -475,12 +475,25 @@ pub fn running_jobs(e: &Executor) -> usize {
     let status = e.paths.layout().status();
     let reported = match std::fs::symlink_metadata(&status) {
         Err(x) if x.kind() == std::io::ErrorKind::NotFound => 0,
-        _ => crate::status::read(&status).map(|s| s.running.len()).unwrap_or_else(|x| {
+        _ => running_in_status(&status).unwrap_or_else(|x| {
             crate::nlog!("admin: {x}; counting the node as busy");
             1
         }),
     };
     units.max(reported)
+}
+
+/// The node's running count from its status file, reading only that
+/// field: a new required field in `Status` never makes the node look busy
+/// forever (round 5, item 4).
+fn running_in_status(p: &Path) -> Result<usize, String> {
+    #[derive(Deserialize)]
+    struct RunningOnly {
+        #[serde(default)]
+        running: Vec<String>,
+    }
+    let s = crate::util::read_regular_max(p, 4 << 20).map_err(|x| format!("read {}: {x}", p.display()))?;
+    serde_json::from_str::<RunningOnly>(&s).map(|r| r.running.len()).map_err(|x| format!("{}: {x}", p.display()))
 }
 
 /// How a node restart goes (§5.5). U4 adds `Adopt` (keep running jobs and
@@ -605,14 +618,9 @@ pub fn update_mark_path(config_dir: &Path) -> PathBuf {
     mark_dir(config_dir).join(UPDATE_MARK_FILE)
 }
 
-/// The mark's directory is [`mark_owner`]'s and writable by nobody else
-/// (not a symlink).
-fn mark_dir_trusted(config_dir: &Path) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    std::fs::symlink_metadata(mark_dir(config_dir)).is_ok_and(|m| m.file_type().is_dir() && m.uid() == mark_owner(config_dir) && m.mode() & 0o022 == 0)
-}
-
-/// Root side: make the mark's directory (0755) when it's missing.
+/// Root side: make the mark's directory (0755) when it's missing. Only
+/// creates it; every check and write goes through the directory fd
+/// ([`write_owned_in`]).
 fn ensure_mark_dir(config_dir: &Path) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
     let d = mark_dir(config_dir);
@@ -620,9 +628,69 @@ fn ensure_mark_dir(config_dir: &Path) -> Result<(), String> {
         std::fs::create_dir(&d).map_err(|x| format!("create {}: {x}", d.display()))?;
         std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o755)).map_err(|x| format!("chmod {}: {x}", d.display()))?;
     }
-    if !mark_dir_trusted(config_dir) {
-        return Err(format!("{} isn't a directory only root can write", d.display()));
+    Ok(())
+}
+
+/// Write `name` in `dir` the way [`read_owned_in`] reads it: open the
+/// directory once (`O_DIRECTORY|O_NOFOLLOW`), check on that fd that
+/// `owner` owns it and nobody else may write it, then create a temp file
+/// with `openat` (`O_CREAT|O_EXCL|O_NOFOLLOW`), write, `fchmod`, fsync,
+/// `renameat` it over `name` in the same directory fd, fsync the
+/// directory. Nothing can swap the directory between the check and the
+/// write (round 5, item 2).
+fn write_owned_in(dir: &Path, name: &str, bytes: &[u8], mode: u32, owner: u32) -> Result<(), String> {
+    use std::io::Write;
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::os::unix::fs::PermissionsExt;
+    let cs = |s: &[u8]| std::ffi::CString::new(s).map_err(|x| x.to_string());
+    let dc = cs(dir.as_os_str().as_encoded_bytes())?;
+    // SAFETY: valid C path; the fd is owned right below.
+    let dfd = unsafe { libc::open(dc.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC) };
+    if dfd < 0 {
+        return Err(format!("open {}: {}", dir.display(), std::io::Error::last_os_error()));
     }
+    // SAFETY: a fresh fd we own.
+    let dfd = unsafe { OwnedFd::from_raw_fd(dfd) };
+    // SAFETY: zeroed out-struct; fstat on our fd.
+    let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstat(dfd.as_raw_fd(), &mut st) } != 0 {
+        return Err(format!("fstat {}: {}", dir.display(), std::io::Error::last_os_error()));
+    }
+    if st.st_uid != owner || (st.st_mode as u32) & 0o022 != 0 {
+        return Err(format!("{} isn't a directory only uid {owner} writes", dir.display()));
+    }
+    let id = k2_node_proto::crypto::random_id().map_err(|x| x.to_string())?;
+    let tmp = format!(".{name}.{id}");
+    let tc = cs(tmp.as_bytes())?;
+    let nc = cs(name.as_bytes())?;
+    // SAFETY: openat relative to the checked directory fd.
+    let fd = unsafe { libc::openat(dfd.as_raw_fd(), tc.as_ptr(), libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC, 0o600 as libc::c_uint) };
+    if fd < 0 {
+        return Err(format!("create {}/{tmp}: {}", dir.display(), std::io::Error::last_os_error()));
+    }
+    // SAFETY: a fresh fd we own.
+    let mut f = unsafe { std::fs::File::from_raw_fd(fd) };
+    let written = (|| -> std::io::Result<()> {
+        f.write_all(bytes)?;
+        f.set_permissions(std::fs::Permissions::from_mode(mode))?;
+        f.sync_all()
+    })();
+    let unlink_tmp = || {
+        // SAFETY: unlinkat our own temp name in our directory fd.
+        unsafe { libc::unlinkat(dfd.as_raw_fd(), tc.as_ptr(), 0) };
+    };
+    if let Err(x) = written {
+        unlink_tmp();
+        return Err(format!("write {}/{tmp}: {x}", dir.display()));
+    }
+    // SAFETY: rename within the same checked directory fd.
+    if unsafe { libc::renameat(dfd.as_raw_fd(), tc.as_ptr(), dfd.as_raw_fd(), nc.as_ptr()) } != 0 {
+        let x = std::io::Error::last_os_error();
+        unlink_tmp();
+        return Err(format!("rename into {}/{name}: {x}", dir.display()));
+    }
+    // SAFETY: fsync on the directory fd.
+    unsafe { libc::fsync(dfd.as_raw_fd()) };
     Ok(())
 }
 
@@ -726,7 +794,8 @@ fn write_update_mark(e: &Executor, m: &UpdateMark) {
         return;
     }
     if let Ok(b) = serde_json::to_vec(m) {
-        if let Err(x) = crate::util::atomic_write(&update_mark_path(&e.paths.config_dir), &b, 0o644) {
+        let cfg = &e.paths.config_dir;
+        if let Err(x) = write_owned_in(&mark_dir(cfg), UPDATE_MARK_FILE, &b, 0o644, mark_owner(cfg)) {
             crate::nlog!("admin: update mark: {x}");
         }
     }
@@ -757,6 +826,9 @@ fn mark_detail((pid, start): (Option<u32>, Option<u64>)) -> String {
 /// for the `node_update` reason until it goes stale.
 fn retire_update_mark(e: &Executor) {
     let m = match read_update_mark(&e.paths.config_dir) {
+        // An old-format mark names every process while fresh: its retired
+        // form is a v2 mark naming none, same time (round 5, item 3).
+        Some(m) if m.v < MARK_V => UpdateMark { v: MARK_V, what: m.what, at: m.at, keep: false, cmd_id: m.cmd_id, node_pid: None, node_start: None, ended: true },
         Some(mut m) => {
             m.keep = false;
             m.ended = true;
@@ -1466,12 +1538,14 @@ mod drain_tests {
     #[test]
     fn a_job_starting_during_the_settle_is_never_killed() {
         let mut r = Rig::new("policy");
-        r.exec.drain_settle = Duration::from_millis(400);
+        // A 2 s settle: the late job lands 300 ms in, well inside it.
+        r.exec.drain_settle = Duration::from_secs(2);
         let res = r.run(&r.sign(&r.cmd("wall.enable", json!({"restart": true}))));
         assert_eq!(res.result["restart"]["phase"], "draining", "always through the drain, even with nothing running: {res:?}");
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(Duration::from_millis(300));
         running(&r, &["late-job"]);
-        std::thread::sleep(Duration::from_millis(900));
+        // Past the settle's recount (2 s), which saw the late job.
+        std::thread::sleep(Duration::from_millis(2600));
         assert!(calls(&r).is_empty(), "the late job is never stopped");
         assert_eq!(control(&r), Control::Draining, "and nothing new starts meanwhile");
         running(&r, &[]);
@@ -1527,6 +1601,105 @@ mod drain_tests {
         assert!(calls(&r).is_empty(), "nothing restarted while the executor leaves");
         assert_eq!(control(&r), Control::Active);
         assert!(r.exec.audit().verify().unwrap().iter().any(|l| l.event == "drain" && l.code.as_deref() == Some("drain_abandoned")));
+    }
+
+    /// Round 5 item 1 (Linux): the node's word (status.json says walled)
+    /// never clears root's owed-restart flag, and restarts nothing.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_status_saying_walled_never_clears_the_owed_restart() {
+        let r = Rig::new("policy");
+        let pending = r.exec.paths.state_dir.join(crate::admin::jobs::WALL_RESTART_PENDING_FILE);
+        std::fs::write(&pending, b"c0").unwrap();
+        let st = crate::status::Status { wall: "job_user".into(), ..Default::default() };
+        crate::status::write(&r.exec.paths.layout().status(), &st).unwrap();
+        let res = r.run(&r.sign(&r.cmd("wall.enable", json!({"restart": true}))));
+        assert_eq!(res.state, "done", "{res:?}");
+        assert!(pending.exists(), "only a restart the executor made clears it");
+        assert_eq!(res.result["restart_pending"], true, "{:?}", res.result);
+        assert!(res.result.get("restart").is_none());
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(calls(&r).is_empty());
+    }
+
+    /// Round 5 item 2: the writer checks the mark directory on the fd it
+    /// writes through: a group-writable directory or a symlinked one gets
+    /// no mark, a good one gets it atomically (no temp file left).
+    #[test]
+    fn the_mark_writer_checks_the_directory_it_writes_through() {
+        use std::os::unix::fs::PermissionsExt;
+        let r = Rig::new("full");
+        let me = unsafe { libc::geteuid() };
+        let good = r.dir.join("good");
+        std::fs::create_dir(&good).unwrap();
+        std::fs::set_permissions(&good, std::fs::Permissions::from_mode(0o755)).unwrap();
+        write_owned_in(&good, "m.json", b"{}", 0o644, me).unwrap();
+        let names: Vec<String> = std::fs::read_dir(&good).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(names, vec!["m.json".to_string()], "no temp file left");
+        use std::os::unix::fs::MetadataExt;
+        assert_eq!(std::fs::metadata(good.join("m.json")).unwrap().mode() & 0o7777, 0o644);
+        let open = r.dir.join("open");
+        std::fs::create_dir(&open).unwrap();
+        std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o777)).unwrap();
+        let e = write_owned_in(&open, "m.json", b"{}", 0o644, me).unwrap_err();
+        assert!(e.contains("only uid"), "{e}");
+        assert!(!open.join("m.json").exists());
+        let link = r.dir.join("link");
+        std::os::unix::fs::symlink(&good, &link).unwrap();
+        assert!(write_owned_in(&link, "n.json", b"{}", 0o644, me).is_err(), "a symlinked directory is never written through");
+        assert!(!good.join("n.json").exists());
+        assert!(write_owned_in(&good, "m.json", b"{}", 0o644, me + 1).is_err(), "another owner's directory");
+    }
+
+    /// Round 5 item 3: retiring an old-format mark writes a v2 mark that
+    /// names no process, keeping its time (reasons still read it).
+    #[test]
+    fn retiring_a_v1_mark_writes_v2_naming_nobody() {
+        let r = Rig::new("full");
+        let cfg = r.exec.paths.config_dir.clone();
+        let now = r.exec.now();
+        std::fs::write(cfg.join(UPDATE_MARK_FILE), format!(r#"{{"what":"node.update","at":{now}}}"#)).unwrap();
+        let before = read_update_mark(&cfg).unwrap();
+        assert!(before.v < MARK_V && before.names(777, None, now), "a v1 mark names any process");
+        retire_update_mark(&r.exec);
+        let after = read_update_mark(&cfg).unwrap();
+        assert_eq!((after.v, after.ended, after.at, after.node_pid), (MARK_V, true, now, None), "{after:?}");
+        assert!(!after.names(777, None, now), "retired: names nobody");
+        assert!(recent_update_mark(&cfg, now + 1), "its time still gives the reason");
+    }
+
+    /// Round 5 item 4: the running count reads only `running` from the
+    /// status file, so a file without the other fields (a future shape)
+    /// still counts right and never reads as busy forever.
+    #[test]
+    fn the_running_count_reads_only_running() {
+        let r = Rig::new("full");
+        let sp = r.exec.paths.layout().status();
+        std::fs::write(&sp, r#"{"running":["a","b"],"some_future_field":{"x":1}}"#).unwrap();
+        assert!(crate::status::read(&sp).is_err(), "the full Status doesn't parse this");
+        assert_eq!(running_jobs(&r.exec), 2);
+        std::fs::write(&sp, r#"{"version":"9.9.9"}"#).unwrap();
+        assert_eq!(running_jobs(&r.exec), 0, "no `running` field: nothing running");
+        std::fs::write(&sp, "not json").unwrap();
+        assert_eq!(running_jobs(&r.exec), 1, "garbage: busy");
+    }
+
+    /// Round 5 item 7: the executor reports root's owed-restart flag, and
+    /// the health note then says the restart is owed, not "run setup".
+    #[test]
+    fn health_reports_an_owed_wall_restart() {
+        let r = Rig::new("full");
+        assert!(!r.exec.status().wall_restart_pending);
+        std::fs::write(r.exec.paths.state_dir.join(crate::admin::jobs::WALL_RESTART_PENDING_FILE), b"c0").unwrap();
+        assert!(r.exec.status().wall_restart_pending);
+        use crate::wall::Wall;
+        let owed = crate::admin::health::security_fact_with(&Wall::None { why: "not restarted yet".into() }, "k2node", vec![], true);
+        let note = owed.notes.join(" ");
+        assert!(note.contains(crate::admin::health::WALL_RESTART_OWED) && !note.contains("k2-node setup"), "{note}");
+        let fact = k2_node_proto::health::ExecutorFact { reachable: true, wall_restart_pending: true, ..Default::default() };
+        assert_eq!(serde_json::to_value(&fact).unwrap()["wall_restart_pending"], true);
+        let quiet = k2_node_proto::health::ExecutorFact { reachable: true, ..Default::default() };
+        assert!(serde_json::to_value(&quiet).unwrap().get("wall_restart_pending").is_none(), "off the wire when false");
     }
 
     /// B-M4: a restart that fails leaves no live mark naming the running node.

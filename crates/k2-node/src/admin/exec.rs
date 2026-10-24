@@ -358,6 +358,9 @@ pub struct ExecStatus {
     pub configured: bool,
     pub config_error: Option<String>,
     pub last_update: Option<Value>,
+    /// Root's `wall-restart-pending` flag (0.46.4; absent from older executors).
+    #[serde(default)]
+    pub wall_restart_pending: bool,
 }
 
 /// A checked command, ready to run.
@@ -796,6 +799,7 @@ impl Executor {
             configured: cfg.as_ref().is_some_and(|c| c.controller.is_some()),
             config_error: err,
             last_update,
+            wall_restart_pending: self.paths.state_dir.join(super::jobs::WALL_RESTART_PENDING_FILE).exists(),
         }
     }
 

@@ -143,6 +143,10 @@ pub struct ExecutorFact {
     pub auto_update: Option<String>,
     /// Last self-update outcome the executor recorded.
     pub last_update: Option<String>,
+    /// `wall.enable` changed the wall's files and k2-node hasn't restarted
+    /// onto them yet (root's flag; 0.46.4). Off the wire when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub wall_restart_pending: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

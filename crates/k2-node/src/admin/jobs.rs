@@ -1283,9 +1283,12 @@ impl Executor {
         // restart is still needed, never whether the wall exists.
         let walled_now = crate::status::read(&self.paths.layout().status()).is_ok_and(|s| s.wall == "job_user");
         if walled_now {
-            let _ = std::fs::remove_file(&pending_path);
+            // The node's word (status.json is the node user's) never clears
+            // root's owed-restart flag: only a restart this executor made
+            // does (round 5, item 1). No restart from here.
             out["restart_needed"] = Value::Null;
-            out["note"] = "k2-node already runs jobs behind the wall".into();
+            out["restart_pending"] = pending.into();
+            out["note"] = "k2-node says it already runs jobs behind the wall".into();
             return Ok(out);
         }
         out["restart_pending"] = pending.into();

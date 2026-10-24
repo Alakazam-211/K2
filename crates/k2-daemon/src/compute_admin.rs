@@ -1564,7 +1564,7 @@ fn wall_note(result: &Value, restart: bool) -> String {
         return "the wall is set up; k2-node restarted to use it (no job was running)".into();
     }
     if restart {
-        return "the wall is set up; k2-node restarts to use it once its running jobs end (if any still run after 30 min it gives up and restarts nothing)".into();
+        return "the wall is set up; k2-node restarts to use it once its running jobs end (if any still run after 30 min it gives up and restarts nothing; asking again, k2 compute node wall <node>, finishes it)".into();
     }
     "the wall is set up; it takes effect when k2-node restarts".into()
 }

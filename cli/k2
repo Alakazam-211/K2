@@ -18487,6 +18487,7 @@ else:
     if up.get("reboot_required"): print("  reboot        required")
     ex = f.get("executor") or {}
     if ex and not ex.get("reachable"): print("  executor      not answering")
+    if ex.get("wall_restart_pending"): print("  wall restart  owed: a restart onto the job wall is owed; run wall.enable again (or approve the held restart): k2 compute node wall %s" % v["node"])
     for s in f.get("stuck_jobs") or []: print("  stuck job     %s (quiet %dm)" % (s["job_id"][:8], s.get("quiet_secs", 0) // 60))
     sec = f.get("security")
     if sec:

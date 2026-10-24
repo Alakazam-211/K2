@@ -26,10 +26,22 @@ pub fn spawn_guard() -> std::sync::RwLockReadGuard<'static, ()> {
 pub fn spawn_output(cmd: &mut std::process::Command) -> std::io::Result<std::process::Output> {
     use std::io::Read;
     cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
-    let mut child = {
+    let child = {
         let _g = spawn_guard();
         cmd.spawn()?
     };
+    collect_output(child, |p, b| p.read_to_end(b))
+}
+
+/// Read a spawned child's output and reap it. `read_out` reads stdout (a
+/// seam for tests). The stdout pipe is closed before the wait, so a child
+/// still writing after a read error gets EPIPE instead of blocking the
+/// wait forever (round 5, item 5).
+fn collect_output(
+    mut child: std::process::Child,
+    read_out: impl FnOnce(&mut std::process::ChildStdout, &mut Vec<u8>) -> std::io::Result<usize>,
+) -> std::io::Result<std::process::Output> {
+    use std::io::Read;
     let mut out_pipe = child.stdout.take();
     let err_pipe = child.stderr.take();
     // stderr on its own thread: a child filling one pipe never blocks on the other.
@@ -39,7 +51,8 @@ pub fn spawn_output(cmd: &mut std::process::Command) -> std::io::Result<std::pro
         r.map(|_| b)
     });
     let mut stdout = Vec::new();
-    let out_r = out_pipe.as_mut().map(|p| p.read_to_end(&mut stdout)).transpose();
+    let out_r = out_pipe.as_mut().map(|p| read_out(p, &mut stdout)).transpose();
+    drop(out_pipe);
     let err_r = err_reader.join().unwrap_or_else(|_| Err(std::io::Error::other("stderr reader panicked")));
     // Reaped whatever happened above.
     let status = child.wait()?;
@@ -148,6 +161,30 @@ pub fn recv_fds(s: &UnixStream) -> std::io::Result<Vec<OwnedFd>> {
 mod tests {
     use super::*;
     use std::io::{Read, Write};
+
+    /// Round 5 item 5: a stdout read error closes the pipe before the
+    /// wait, so a child still writing (10 MB here) gets EPIPE and is
+    /// reaped; the call never blocks.
+    #[test]
+    fn a_read_error_never_blocks_the_wait() {
+        let child = std::process::Command::new("/bin/sh")
+            .args(["-c", "head -c 10000000 /dev/zero"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let r = collect_output(child, |_, _| Err(std::io::Error::other("injected read error")));
+            let _ = tx.send(r.map(|_| ()).map_err(|e| e.to_string()));
+        });
+        let r = rx.recv_timeout(std::time::Duration::from_secs(5)).expect("the wait blocked on a child still writing");
+        assert_eq!(r.unwrap_err(), "injected read error");
+        // The ordinary path still returns everything.
+        let out = spawn_output(std::process::Command::new("/bin/sh").args(["-c", "printf out; printf err >&2"])).unwrap();
+        assert_eq!((out.stdout.as_slice(), out.stderr.as_slice(), out.status.success()), (b"out".as_slice(), b"err".as_slice(), true));
+    }
 
     #[test]
     fn a_pipe_end_crosses_the_socket() {

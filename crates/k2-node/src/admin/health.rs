@@ -269,6 +269,7 @@ async fn executor_fact(node: &Node) -> ExecutorFact {
             approval_key_fps: s.approval_key_fps,
             auto_update: Some(s.auto_update),
             last_update: s.last_update.and_then(|v| v.get("phase").and_then(|p| p.as_str()).map(|p| format!("{p} {}", v.get("to").and_then(|t| t.as_str()).unwrap_or("")))),
+            wall_restart_pending: s.wall_restart_pending,
         },
         _ => ExecutorFact { reachable: false, remote_admin: Some(super::courier::local_level(node).as_str().into()), ..Default::default() },
     }
@@ -301,6 +302,7 @@ pub async fn collect(node: &std::sync::Arc<Node>, refresh_updates: bool) -> Heal
     if sleep.is_none() {
         errors.insert("sleep".into(), "unreadable".into());
     }
+    let executor = executor_fact(node).await;
     let mut h = Health {
         at: now,
         boot_id: node.opts.clock.boot_id(),
@@ -318,9 +320,9 @@ pub async fn collect(node: &std::sync::Arc<Node>, refresh_updates: bool) -> Heal
         thermal,
         disk_encryption: enc,
         os,
-        executor: executor_fact(node).await,
+        security: Some(security_fact(node, executor.wall_restart_pending)),
+        executor,
         stuck_jobs: node.stuck_jobs(),
-        security: Some(security_fact(node)),
         errors,
     };
     if !h.fits() {
@@ -332,12 +334,17 @@ pub async fn collect(node: &std::sync::Arc<Node>, refresh_updates: bool) -> Heal
 
 /// The job wall and the open home folders (0.46.3, V15/V16): the node
 /// doctor's warnings. Readable without root (homes are listed, never read).
-pub fn security_fact(node: &Node) -> SecurityFact {
+pub fn security_fact(node: &Node, wall_restart_owed: bool) -> SecurityFact {
     let open: Vec<String> = crate::wall::open_homes_in(crate::wall::homes_root()).into_iter().map(|(p, m)| format!("{} ({m:o})", p.display())).collect();
-    security_fact_with(&node.wall, &node.opts.user, open)
+    security_fact_with(&node.wall, &node.opts.user, open, wall_restart_owed)
 }
 
-pub fn security_fact_with(wall: &crate::wall::Wall, node_user: &str, open_homes: Vec<String>) -> SecurityFact {
+/// What the owner reads when root's owed-restart flag is set (round 5, item 7).
+pub const WALL_RESTART_OWED: &str = "a restart onto the job wall is owed; run wall.enable again (or approve the held restart)";
+
+/// `wall_restart_owed`: root's flag (the executor's status): the wall's
+/// files are in place, so the advice is the restart, not a setup run.
+pub fn security_fact_with(wall: &crate::wall::Wall, node_user: &str, open_homes: Vec<String>, wall_restart_owed: bool) -> SecurityFact {
     use crate::wall::Wall;
     let mut notes = Vec::new();
     let job_user = match wall {
@@ -345,6 +352,7 @@ pub fn security_fact_with(wall: &crate::wall::Wall, node_user: &str, open_homes:
         _ => Some(node_user.to_string()),
     };
     match wall {
+        Wall::None { why } if wall_restart_owed => notes.push(format!("no job wall yet ({why}): jobs run as {node_user} until then; {WALL_RESTART_OWED}")),
         Wall::None { why } => notes.push(format!(
             "no job wall ({why}): jobs run as {node_user} and can read the node's key and state; run sudo k2-node setup (k2-node 0.46.3+) to add it"
         )),
@@ -388,14 +396,14 @@ mod tests {
     #[test]
     fn security_fact_warns_about_no_wall_and_open_homes() {
         use crate::wall::Wall;
-        let none = security_fact_with(&Wall::None { why: "no k2job".into() }, "k2node", vec!["/home/a (755)".into()]);
+        let none = security_fact_with(&Wall::None { why: "no k2job".into() }, "k2node", vec!["/home/a (755)".into()], false);
         assert_eq!((none.wall.as_str(), none.network_none), ("none", false));
         assert!(none.notes.iter().any(|n| n.contains("can read the node's key") && n.contains("no k2job")), "{:?}", none.notes);
         assert!(none.notes.iter().any(|n| n.contains("admin homes --fix") && n.contains("jobs can read them")), "{:?}", none.notes);
-        let walled = security_fact_with(&Wall::JobUser { user: "k2job".into() }, "k2node", vec![]);
+        let walled = security_fact_with(&Wall::JobUser { user: "k2job".into() }, "k2node", vec![], false);
         assert_eq!((walled.wall.as_str(), walled.job_user.as_deref(), walled.network_none), ("job_user", Some("k2job"), true));
         assert!(walled.notes.is_empty(), "{:?}", walled.notes);
-        let sb = security_fact_with(&Wall::Seatbelt, "_k2node", vec!["/Users/rosson (755)".into()]);
+        let sb = security_fact_with(&Wall::Seatbelt, "_k2node", vec!["/Users/rosson (755)".into()], false);
         assert!(sb.notes.iter().any(|n| n.contains("the wall keeps jobs out")), "{:?}", sb.notes);
     }
 

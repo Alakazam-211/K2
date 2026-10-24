@@ -202,3 +202,89 @@ fn a_regrant_replaces_rooms_and_reports_before() {
     assert_eq!(b.unwrap().rooms, vec![f.room_b.clone()]);
     assert_eq!((a.rooms, a.granted_by.as_str(), a.kind.as_str()), (vec![f.room_c.clone()], "owner:rosson", GRANT_KIND));
 }
+
+// ── app.rooms / guests.list (prd-app-caps-0464-v1 AC1/AC2) ───────────
+
+#[test]
+fn app_rooms_reads_without_the_grant_and_its_ceiling_is_the_enforced_one() {
+    let f = fx("approoms");
+    let none = app_rooms(&f.app).unwrap();
+    assert!(!none.granted, "{none:?}");
+    assert_eq!((none.granted_at, none.grant_rooms.len(), none.ceiling.len()), (None, 0, 0), "no grant: an empty ceiling (V1)");
+    let own = none.own_room.clone().expect("the own room resolves");
+    assert_eq!((own.room.as_str(), own.handle.as_str()), (f.own_room.as_str(), f.own_room.as_str()));
+    grant(&f.app, &[f.room_b.clone(), "gone-room".to_string()], "owner").unwrap();
+    let r = app_rooms(&f.app).unwrap();
+    assert!(r.granted && r.granted_at.is_some_and(|t| t > 0), "{r:?}");
+    assert_eq!(r.grant_rooms.iter().map(|x| x.room.clone()).collect::<Vec<_>>(), vec![f.room_b.clone()], "a gone room is left out");
+    assert_eq!(sorted(r.ceiling.clone()), sorted(vec![f.room_b.clone(), f.own_room.clone()]));
+    // The ceiling set() enforces is app_ceiling's (live rooms the same).
+    let enforced = app_ceiling(&f.app).unwrap().expect("granted");
+    for room in &r.ceiling {
+        assert!(enforced.contains(room), "{room}");
+    }
+    let wire = serde_json::to_value(&r).unwrap();
+    let mut keys: Vec<&str> = wire.as_object().unwrap().keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["app", "ceiling", "grantRooms", "granted", "grantedAt", "ok", "ownRoom"]);
+    let mut own_keys: Vec<&str> = wire["ownRoom"].as_object().unwrap().keys().map(String::as_str).collect();
+    own_keys.sort_unstable();
+    assert_eq!(own_keys, ["displayName", "handle", "room"]);
+}
+
+#[test]
+fn guests_list_pages_by_username_and_lists_only_this_apps_guests() {
+    let f = fx("glist");
+    for i in 0..250 {
+        add_principal_for_app(&format!("g{i:03}-{}", f.tag), None, &f.app, None, "test").unwrap();
+    }
+    add_principal_for_app("erin", None, &f.other_app, None, "test").unwrap();
+    add_principal("boxy").unwrap();
+    // A Connect login sharing a guest's name is never listed.
+    add_principal_for_app("ownr", None, &f.app, None, "test").unwrap();
+    crate::connect_users::add_user("ownr", "correct horse battery 9").unwrap();
+    // A marked agent login is listed with agent: true.
+    add_principal_for_app("deskbot", None, &f.app, None, "test").unwrap();
+    crate::skin::set_principal_agent("deskbot", Some(&f.own_room)).unwrap();
+
+    let mut seen: Vec<String> = Vec::new();
+    let mut cursor = String::new();
+    let mut pages = 0;
+    loop {
+        let p = list(&f.app, &cursor, Some(100)).unwrap();
+        pages += 1;
+        assert!(p.guests.len() <= 100);
+        seen.extend(p.guests.iter().map(|g| g.username.clone()));
+        match p.next_cursor {
+            Some(c) => cursor = c,
+            None => break,
+        }
+    }
+    assert_eq!(pages, 3);
+    assert_eq!(seen.len(), 251, "250 guests + deskbot; never erin, boxy or the Connect login");
+    let mut want = seen.clone();
+    want.sort();
+    assert_eq!(seen, want, "stable order by username");
+    assert!(!seen.iter().any(|u| u == "erin" || u == "boxy" || u == "ownr"));
+    let all = list(&f.app, "", Some(500)).unwrap();
+    assert_eq!(all.guests.len(), 251);
+    assert_eq!(all.next_cursor, None);
+    let bot = all.guests.iter().find(|g| g.username == "deskbot").expect("deskbot listed");
+    assert!(bot.agent);
+    assert!(all.guests.iter().filter(|g| g.username != "deskbot").all(|g| !g.agent));
+    assert!(all.guests.iter().all(|g| g.enabled && g.role.is_none()));
+    // Bad limits are usage; host is never an App.
+    assert!(matches!(list(&f.app, "", Some(0)), Err(Refusal::Usage(_))));
+    assert!(matches!(list(&f.app, "", Some(501)), Err(Refusal::Usage(_))));
+    assert_eq!(list("host", "", None).unwrap_err(), Refusal::NotFound);
+}
+
+#[test]
+fn a_guests_list_page_is_one_call_against_the_rate() {
+    let f = fx("glrate");
+    add_principal_for_app("dana", None, &f.app, None, "test").unwrap();
+    for i in 0..RATE_PER_MIN {
+        list(&f.app, "", None).unwrap_or_else(|e| panic!("page {i}: {e:?}"));
+    }
+    assert!(matches!(list(&f.app, "", None), Err(Refusal::RateLimited { .. })));
+}

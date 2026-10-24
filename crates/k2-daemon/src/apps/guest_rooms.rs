@@ -8,6 +8,8 @@
 //! POST /cli/app/grant/revoke   {app, kind}                 narrows: the owner, or an agent for its own App
 //! GET  /cli/app/guest/rooms    ?app=&username=             one guest's rooms on that App
 //! POST /cli/app/guest/rooms    {app, username, rooms}      set them
+//! GET  /cli/app/guest/ceiling  ?app=                       the App's own room, grant and ceiling (app.rooms)
+//! GET  /cli/app/guest/list     ?app=&cursor=&limit=        the App's guests with their rooms (guests.list)
 //! ```
 //!
 //! Who may do what:
@@ -21,6 +23,11 @@
 //!   owner's grant stands, and only within it (`k2 app guest rooms <app>
 //!   <user> [set …]`, end to end). Admin and Member logins: never.
 //! - The rules themselves are `k2_core::skin::guest_rooms`.
+//! - **Ceiling and list** (prd-app-caps-0464-v1 AC4, 0.46.4): reads. The
+//!   owner reads any App; an agent reads its own workspace's App's ceiling
+//!   (with or without the grant, as the App itself can) and lists its
+//!   guests only while the owner's grant stands. Admin and Member logins:
+//!   never (`owner_only`). Nothing is written.
 
 use std::collections::HashMap;
 
@@ -33,10 +40,15 @@ use super::grace::{target, Target};
 use super::routes::{actor, json_body, need_credential, no, s, ws_handle, Refusal, Who, R};
 use crate::cli_response::CliResponse;
 
-pub const ROUTES: &[&str] = &["/cli/app/grants", "/cli/app/grant", "/cli/app/grant/revoke", "/cli/app/guest/rooms"];
+pub const ROUTES: &[&str] =
+    &["/cli/app/grants", "/cli/app/grant", "/cli/app/grant/revoke", "/cli/app/guest/rooms", GUEST_CEILING, GUEST_LIST];
 pub const POST_ROUTES: &[&str] = &["/cli/app/grant", "/cli/app/grant/revoke"];
 /// `/cli/app/guest/rooms` takes GET (read) and POST (set).
 pub const GUEST_ROOMS: &str = "/cli/app/guest/rooms";
+/// `k2 app guest ceiling <app>` (GET only).
+pub const GUEST_CEILING: &str = "/cli/app/guest/ceiling";
+/// `k2 app guest list <app>` (GET only).
+pub const GUEST_LIST: &str = "/cli/app/guest/list";
 
 pub fn handle(path: &str, who: &Who, is_post: bool, body: &[u8], params: &HashMap<String, String>) -> CliResponse {
     let r = match (path, is_post) {
@@ -45,6 +57,9 @@ pub fn handle(path: &str, who: &Who, is_post: bool, body: &[u8], params: &HashMa
         ("/cli/app/grant/revoke", _) => take_back(who, body),
         (GUEST_ROOMS, false) => guest_read(who, params),
         (GUEST_ROOMS, true) => guest_set(who, body),
+        (GUEST_CEILING, false) => guest_ceiling(who, params),
+        (GUEST_LIST, false) => guest_list(who, params),
+        (GUEST_CEILING | GUEST_LIST, true) => Err(no("method_not_allowed", 405, format!("{path} is a GET"))),
         _ => Err(no("not_found", 404, "no such App route")),
     };
     match r {
@@ -187,6 +202,34 @@ fn guest_read(who: &Who, params: &HashMap<String, String>) -> R<J> {
     let user = user.ok_or_else(|| no(codes::BAD_REQUEST, 400, "name the guest (username)"))?;
     let view = gr::read(&t.service_id, user).map_err(core_refusal)?;
     serde_json::to_value(view).map_err(|e| store(e.to_string()))
+}
+
+/// GET `/cli/app/guest/ceiling?app=`: what `app.rooms` answers that App.
+fn guest_ceiling(who: &Who, params: &HashMap<String, String>) -> R<J> {
+    need_credential(who)?;
+    let t = target(who, params.get("app").map(String::as_str))?;
+    if !owner_rights(who) && !matches!(who, Who::Agent { .. }) {
+        return Err(owner_only("reads an App's guest ceiling over a login"));
+    }
+    let v = gr::app_rooms(&t.service_id).map_err(store)?;
+    let mut j = serde_json::to_value(v).map_err(|e| store(e.to_string()))?;
+    j["appInfo"] = app_json(&t);
+    Ok(j)
+}
+
+/// GET `/cli/app/guest/list?app=&cursor=&limit=`: what `guests.list`
+/// answers that App (an agent: only under the owner's grant).
+fn guest_list(who: &Who, params: &HashMap<String, String>) -> R<J> {
+    need_credential(who)?;
+    let t = target(who, params.get("app").map(String::as_str))?;
+    ceiling_for(who, &t)?;
+    let limit = match params.get("limit").map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        None => None,
+        Some(n) => Some(n.parse::<usize>().map_err(|_| no(codes::BAD_REQUEST, 400, format!("limit is a number, 1..={}", gr::LIST_MAX)))?),
+    };
+    let cursor = params.get("cursor").map(String::as_str).unwrap_or("");
+    let page = gr::list(&t.service_id, cursor, limit).map_err(core_refusal)?;
+    serde_json::to_value(page).map_err(|e| store(e.to_string()))
 }
 
 /// POST `/cli/app/guest/rooms {app, username, rooms}`.

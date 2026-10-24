@@ -264,6 +264,10 @@ pub const ROUTES: &[Route] = &[
     post("/cli/app/grant", Owner),
     post("/cli/app/grant/revoke", Admin),
     get("/cli/app/grants", Member),
+    // prd-app-caps-0464-v1 AC4 (0.46.4): reads (the owner, or a passport
+    // on its own App; the handler refuses logins). GET only.
+    get("/cli/app/guest/ceiling", Member),
+    get("/cli/app/guest/list", Member),
     split("/cli/app/guest/rooms", Member, Admin),
     // Q8 (prd-agent-app-permissions-v1 §6): the owner hands an App to
     // another workspace (handler: owner token or Owner login only).
@@ -1237,6 +1241,8 @@ pub const ROUTES: &[Route] = &[
     post("/cli/skin/access/settings", Owner),
     get("/cli/skin/agents", NoLogin),
     get("/cli/skin/app-info", Public),
+    // prd-app-caps-0464-v1 AC5 (0.46.4): app.rooms, an App's own pass only.
+    get("/cli/skin/app-rooms", NoLogin),
     get("/cli/skin/devices", NoLogin),
     post("/cli/skin/devices/revoke", NoLogin),
     both("/cli/skin/front-door", Owner),
@@ -1254,6 +1260,9 @@ pub const ROUTES: &[Route] = &[
     post("/cli/skin/grants/enabled", Owner),
     post("/cli/skin/grants/host", Owner),
     post("/cli/skin/grants/update", Owner),
+    // prd-app-caps-0464-v1 AC5 (0.46.4): guests.list, an App's own pass
+    // only (the handler refuses the rest).
+    get("/cli/skin/guests/list", NoLogin),
     // RS-A15 (0.46.1): an App's own pass reads/sets its guests' rooms
     // under the owner's grant; no login (or owner token) uses it.
     both("/cli/skin/guests/rooms", NoLogin),

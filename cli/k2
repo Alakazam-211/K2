@@ -7606,6 +7606,8 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
   k2 app guest rooms <app> <user> [set <room,...>]
                                         Read/set one guest's rooms on <app> (owner; an agent within the grant).
                                         k2 app guest --help.
+  k2 app guest ceiling <app> | list <app> [--json]
+                                        What <app> may hand its guests; its guests with their rooms (0.46.4).
   k2 app hydra [on|off] [--json]       OIDC issuer sidecar (Linux; leftover)
   k2 app token create --name vercel --agent sales [--caps thread:read,thread:post,files:read]
                                         Mint platform k2skn_ pass (secret once; ≥1 --agent; no user)
@@ -9792,6 +9794,13 @@ TESTING. A guest to test the App with is your owner's to make, as every
 guest: ask them for a test guest (k2 app user add <app-id> <name> --test,
 from a terminal outside K2). It signs in only through the App's link and
 ends on its own; k2 app test-guests <app-id> lists them.
+
+GUESTS WITHOUT THE OWNER TOKEN (0.46.4). Your App calls with its own pass:
+  1. Your owner, once: k2 app grant <app> --kind guests-rooms [--room …]
+  2. At boot: k2.asApp().app.rooms() (GET /cli/skin/app-rooms: its own room,
+     granted, the ceiling), then k2.asApp().guests.list() to reconcile.
+  3. At login: guests.login, then guests.setRooms if their rooms change.
+  4. The guest's own pass reads me.get. Check: k2 app guest ceiling|list <app>.
 
 Exit codes: 0 done, 2 held for your owner, 3 refused (JSON on stderr: the
 hint says why, e.g. app_not_healthy, label_owned_by_other_workspace).
@@ -12287,9 +12296,70 @@ without the owner token.
                                        workspace's App, within the owner's
                                        grant. Idempotent; 60 calls a minute per
                                        App; every change audited (k2 app history).
+  k2 app guest ceiling <app> [--json]  The App's own room, whether the owner
+                                       granted guests-rooms and the rooms it may
+                                       hand out (its server: GET /cli/skin/app-rooms,
+                                       k2.asApp().app.rooms(); no grant needed).
+  k2 app guest list <app> [--limit N] [--cursor <user>] [--json]
+                                       Its own guests with their rooms, role and
+                                       agent mark, by username (its server: GET
+                                       /cli/skin/guests/list, k2.asApp().guests.list();
+                                       needs the grant). An agent: its own App only.
 
   <app> = an App id, a published service id, <workspace>/<name> or a name.
 EOF
+}
+
+# prd-app-caps-0464-v1 AC4 (0.46.4): `k2 app guest ceiling` / `list`.
+cmd_app_guest_reads() {
+    local what="$1"; shift
+    local app="" json_out=0 limit="" cursor=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            --limit) limit="${2:-}"; shift 2 ;;
+            --cursor) cursor="${2:-}"; shift 2 ;;
+            -h|--help) _app_guest_rooms_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    [ -n "$app" ] || { echo "usage: k2 app guest $what <app> [--json]" >&2; exit 2; }
+    if [ "$what" = ceiling ]; then
+        _compute_call GET /cli/app/guest/ceiling "app=$(urlencode "$app")"
+        if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+        printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+a = v.get("appInfo") or {}
+own = v.get("ownRoom") or {}
+print("%s: own room %s" % (a.get("handle") or v.get("app"), own.get("handle") or "(gone)"))
+if not v.get("granted"):
+    print("  no guests-rooms grant: it may hand out nothing (the owner: k2 app grant %s --kind guests-rooms)" % (a.get("name") or v.get("app")))
+else:
+    rooms = [r.get("handle") for r in (v.get("grantRooms") or [])]
+    print("  granted; hands out: %s" % (", ".join([own.get("handle")] * bool(own) + rooms) or "nothing"))'
+        return 0
+    fi
+    local q="app=$(urlencode "$app")"
+    [ -n "$limit" ] && q="$q&limit=$(urlencode "$limit")"
+    [ -n "$cursor" ] && q="$q&cursor=$(urlencode "$cursor")"
+    _compute_call GET /cli/app/guest/list "$q"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+gs = v.get("guests") or []
+if not gs:
+    print("%s: no guests" % v.get("app"))
+for g in gs:
+    rooms = ", ".join(g.get("roomHandles") or []) or "no rooms"
+    tags = (" role " + g["role"]) if g.get("role") else ""
+    tags += "" if g.get("enabled", True) else "  [disabled]"
+    tags += "  [agent login]" if g.get("agent") else ""
+    print("%-24s %s%s" % (g.get("username"), rooms, tags))
+if v.get("nextCursor"):
+    print("more: --cursor %s" % v["nextCursor"])'
 }
 
 _app_guest_rooms_print() {
@@ -12378,8 +12448,9 @@ cmd_app_guest() {
     local what="${1:-}"
     case "$what" in
         rooms) shift ;;
+        ceiling|list) shift; cmd_app_guest_reads "$what" "$@"; return $? ;;
         -h|--help|"") _app_guest_rooms_usage; return 0 ;;
-        *) echo "usage: k2 app guest rooms <app> <user> [set <room,...>]" >&2; exit 2 ;;
+        *) echo "usage: k2 app guest rooms|ceiling|list <app> …" >&2; exit 2 ;;
     esac
     local app="" user="" set_mode=0 rooms_csv="" json_out=0 have_rooms=0
     while [ $# -gt 0 ]; do
@@ -34174,6 +34245,26 @@ cmd_schema() {
       ]
     },
     {
+      "name": "app guest ceiling",
+      "usage": "k2 app guest ceiling <app> [--json]",
+      "description": "What <app> may hand its guests (app.rooms, 0.46.4): its own room, whether the owner granted guests-rooms, the grant's rooms and the ceiling guests.setRooms enforces (empty without the grant). The owner: any App; an agent: its own workspace's App. Reads only.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "Print AppRooms {ok,app,ownRoom,granted,grantedAt,grantRooms,ceiling} plus appInfo."}
+      ]
+    },
+    {
+      "name": "app guest list",
+      "usage": "k2 app guest list <app> [--limit N] [--cursor <user>] [--json]",
+      "description": "<app>'s own guests by username with their rooms on it, role, on/off and agent mark (guests.list, 0.46.4). Never the owner, a Connect login or another App's guest. The owner: any App; an agent: its own workspace's App while the owner's guests-rooms grant stands. One page counts against the App's 60 calls a minute.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--limit", "arg": "N", "description": "Guests per page (default 100, at most 500)."},
+        {"name": "--cursor", "arg": "user", "description": "The previous page's nextCursor."},
+        {"name": "--json", "arg": null, "description": "Print AppGuestList {ok,app,guests,nextCursor}."}
+      ]
+    },
+    {
       "name": "app wallet",
       "usage": "k2 app wallet settings <app> [--on|--off] [--fallback on|off] | people [<app>] | remove <item-id> | personal-agent <app> <user> <workspace> | personal-agent --clear <workspace> | personal-agents [--json]",
       "description": "App users' personal wallets (0.46.3): each App user keeps their own LLM subscriptions and API keys from the App (wallet.* verbs); their subscription runs only their own personal agent. The owner (or an Admin) turns an App's wallet on, sets its fallback to the company plan, sees each item's existence, label and status (never a secret, link or code), force-removes (deleted, not Trash) and marks personal agents. An agent of the App's own workspace with switch 2 may set the fallback only. Each person's subscription runs only their own agent; check that your plan's terms allow the way your App uses it.",
@@ -37109,6 +37200,13 @@ AN APP'S OWN SELF AND USAGE (app.self, app.usage; no cap, own App only)
   Agents  k2 app self <app>, k2 app usage <app> [--hours N] (an agent: its
           own workspace's Apps).
 
+AN APP'S ROOMS AND GUESTS (0.46.4; the App's own pass, never a guest's)
+  App     GET /cli/skin/app-rooms   app.rooms: own room, granted, ceiling (no grant needed)
+          GET /cli/skin/guests/list?cursor=&limit=   guests.list (needs guests-rooms)
+  Garden  k2.app.rooms({app}), k2.guests.list({app}) (cap guests:rooms)
+  Login without the owner token: grant once, app.rooms + guests.list at
+  boot, guests.login, guests.setRooms (k2 study app-move).
+
 PROJECT CHAT (0.46.3, App only; never on the Garden bridge)
   A pass sees a project only when EVERY member agent is a room it holds
   with thread:read; one it can't reach and the project is skin_room, the
@@ -37386,6 +37484,10 @@ GUESTS' ROOMS FROM THE APP (RS-A15, 0.46.1; no owner token)
   Gardens: k2.guests.rooms / k2.guests.setRooms({app, username, rooms}) for
   any local App (cap guests:rooms); every write asks you on K2's own sheet.
   This replaces POST /cli/skin/users/rooms with the owner token.
+  0.46.4: GET /cli/skin/app-rooms (app.rooms: own room, granted, ceiling;
+  no grant needed) and GET /cli/skin/guests/list?cursor=&limit= (guests.list:
+  its own guests with rooms, role, agent mark; needs the grant; 60/min).
+  Agents: k2 app guest ceiling|list <app>.
 
 BYO BFF (not --skin)
   Same permission system as official --skin. Same Apps roster,

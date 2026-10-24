@@ -24,6 +24,29 @@
 //!
 //! The catalog rows are `guests.rooms` / `guests.setRooms` (door `link`,
 //! also `garden-local`: the Garden transport is `garden_data::guest_rooms`).
+//!
+//! Two reads beside them (prd-app-caps-0464-v1 AC1/AC2, catalog v22, 0.46.4),
+//! so an App on its own pass never needs the owner token to reconcile:
+//!
+//! ```text
+//! GET /cli/skin/app-rooms   [?app=<own id>]                            app.rooms
+//!   → 200 AppRooms {ok, app, ownRoom, granted, grantedAt, grantRooms, ceiling}
+//! GET /cli/skin/guests/list [?app=<own id>&cursor=<username>&limit=N]  guests.list
+//!   → 200 AppGuestList {ok, app, guests: [{username, rooms, roomHandles, role, enabled, agent}], nextCursor}
+//! ```
+//!
+//! Threat note. Both take only the App's own pass ([`app_of`]: a guest's
+//! session pass, a platform pass, the owner token, an API key and a login
+//! get `app_pass_required`), and `app`, when sent, must be the App's own id
+//! (`not_found` otherwise, the same answer as a stranger). `app.rooms` needs
+//! no grant: it shows only the App's own room, whether the owner granted it
+//! and the rooms it may hand out (nothing about other Apps or workspaces; a
+//! room that no longer resolves is left out). `guests.list` needs the
+//! owner's `guests-rooms` grant (403 `grant_required`) and lists only
+//! principals holding this App's `kind=app` grant, through the same rule as
+//! `guests.rooms` (never the owner, a Connect login, or another App's
+//! guest; a guest of two Apps shows only this App's rooms). Neither writes
+//! anything, and a page counts against the same 60/min budget.
 
 use std::collections::HashMap;
 
@@ -34,6 +57,10 @@ use serde_json::{json, Value as J};
 use crate::cli_response::CliResponse;
 
 pub const ROUTE: &str = "/cli/skin/guests/rooms";
+/// `app.rooms` (AC1).
+pub const APP_ROOMS_ROUTE: &str = "/cli/skin/app-rooms";
+/// `guests.list` (AC2).
+pub const LIST_ROUTE: &str = "/cli/skin/guests/list";
 
 fn status_line(code: u16) -> &'static str {
     match code {
@@ -42,6 +69,7 @@ fn status_line(code: u16) -> &'static str {
         401 => "401 Unauthorized",
         403 => "403 Forbidden",
         404 => "404 Not Found",
+        405 => "405 Method Not Allowed",
         409 => "409 Conflict",
         429 => "429 Too Many Requests",
         _ => "500 Internal Server Error",
@@ -178,6 +206,52 @@ pub fn handle(pass: Option<SkinPass>, link: Option<&OnLink>, is_post: bool, body
     match r {
         Ok(view) => ok(&view),
         Err(e) => refusal(&e),
+    }
+}
+
+fn grant_required() -> CliResponse {
+    error(
+        403,
+        "grant_required",
+        "the owner hasn't granted this App guests:rooms (k2 app grant <app> --kind guests-rooms)",
+        None,
+    )
+}
+
+/// `app.rooms` / `guests.list` with an already-resolved pass (`None` = a
+/// `k2skn_` that didn't resolve). GET only. Blocking: run on a blocking task.
+pub fn handle_read(route: &str, pass: Option<SkinPass>, link: Option<&OnLink>, is_post: bool, params: &HashMap<String, String>) -> CliResponse {
+    if is_post {
+        return error(405, "usage", format!("{route} is a GET"), None);
+    }
+    let Some(pass) = pass else { return pass_invalid() };
+    let Some(app) = app_of(&pass, link) else { return app_pass_required() };
+    let field = |k: &str| params.get(k).map(|s| s.trim()).filter(|s| !s.is_empty());
+    if field("app").is_some_and(|a| a != app) {
+        return refusal(&Refusal::NotFound);
+    }
+    match route {
+        APP_ROOMS_ROUTE => match gr::app_rooms(&app) {
+            Ok(v) => CliResponse::ok_json(serde_json::to_string(&v).unwrap_or_else(|_| "{}".into())),
+            Err(e) => refusal(&Refusal::Store(e)),
+        },
+        LIST_ROUTE => {
+            match gr::get_grant(&app) {
+                Ok(Some(_)) => {}
+                Ok(None) => return grant_required(),
+                Err(e) => return refusal(&Refusal::Store(e)),
+            }
+            let limit = match field("limit").map(str::parse::<usize>) {
+                None => None,
+                Some(Ok(n)) => Some(n),
+                Some(Err(_)) => return error(400, "usage", format!("limit is a number, 1..={}", gr::LIST_MAX), None),
+            };
+            match gr::list(&app, field("cursor").unwrap_or(""), limit) {
+                Ok(page) => CliResponse::ok_json(serde_json::to_string(&page).unwrap_or_else(|_| "{}".into())),
+                Err(e) => refusal(&e),
+            }
+        }
+        _ => error(404, "not_found", "no such route", None),
     }
 }
 

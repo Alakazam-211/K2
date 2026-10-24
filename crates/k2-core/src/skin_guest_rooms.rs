@@ -28,6 +28,12 @@
 //!   (`guest_rooms`: who, which App, before, after);
 //! - at most [`RATE_PER_MIN`] calls a minute per App ([`Refusal::RateLimited`]).
 //!
+//! Two reads beside them (prd-app-caps-0464-v1 AC1/AC2, catalog v22,
+//! 0.46.4): [`app_rooms`] (`app.rooms`: the App's own room, its grant and
+//! the ceiling [`set`] enforces, no grant needed to read it) and [`list`]
+//! (`guests.list`: this App's own guests a page at a time, the same "guest
+//! of this App" rule as [`read`], one page = one call against the rate).
+//!
 //! The per-App grant lives in skin.db (`app_owner_grants`, created at open:
 //! additive, no numbered step, so an older K2 ignores it).
 
@@ -278,6 +284,7 @@ pub struct SetOutcome {
 
 /// The guest as this App sees it: principal id, role name, rooms, enabled.
 struct Guest {
+    principal_id: String,
     username: String,
     role: Option<(String, Vec<String>)>,
     rooms: Vec<String>,
@@ -309,7 +316,7 @@ fn guest_of(app: &str, username: &str) -> Result<Guest, Refusal> {
             Some((_, rooms)) => rooms.clone(),
             None => parse_rooms_json(g.scope.as_deref()),
         };
-        Ok(Some(Guest { username: p.username, role, rooms, enabled: g.enabled }))
+        Ok(Some(Guest { principal_id: p.id, username: p.username, role, rooms, enabled: g.enabled }))
     })?
     .ok_or(Refusal::NotFound)
 }
@@ -373,6 +380,165 @@ pub fn read(app: &str, username: &str) -> Result<GuestRooms, Refusal> {
     let g = guest_of(app, username)?;
     let rooms = g.rooms.clone();
     Ok(view(app, &g, rooms, false))
+}
+
+// ── app.rooms / guests.list (prd-app-caps-0464-v1 AC1/AC2) ───────────
+
+/// `guests.list`: default and largest page.
+pub const LIST_DEFAULT: usize = 100;
+pub const LIST_MAX: usize = 500;
+
+/// One room as the catalog's `AppRoomRef` / `AppOwnRoom`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoomRef {
+    pub room: String,
+    pub handle: String,
+    pub display_name: String,
+}
+
+/// `app.rooms` (the catalog's `AppRooms`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppRooms {
+    pub ok: bool,
+    pub app: String,
+    /// The App's own workspace room; `None` when it no longer resolves.
+    pub own_room: Option<RoomRef>,
+    pub granted: bool,
+    /// Seconds since the epoch; `None` without the grant.
+    pub granted_at: Option<i64>,
+    /// The rooms the grant adds (live ones only); `[]` without the grant.
+    pub grant_rooms: Vec<RoomRef>,
+    /// [`app_ceiling`], live rooms only; `[]` without the grant.
+    pub ceiling: Vec<String>,
+}
+
+fn room_refs(ids: &[String]) -> Vec<RoomRef> {
+    super::live_agents(ids)
+        .into_iter()
+        .map(|a| RoomRef { room: a.project_id, handle: a.handle, display_name: a.display_name })
+        .collect()
+}
+
+/// `app.rooms`: what this App may hand its guests. Rooms that no longer
+/// resolve are left out (never an error, never an oracle). `ceiling` is
+/// [`app_ceiling`]'s list, so it is the one [`set`] enforces.
+pub fn app_rooms(service_id: &str) -> Result<AppRooms, String> {
+    let svc = service_id.trim();
+    let own = {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        crate::published_services::get_by_id(&conn, svc).map_err(|e| format!("app lookup: {e}"))?.map(|r| r.project_id)
+    };
+    let own_room = own.as_ref().and_then(|id| room_refs(std::slice::from_ref(id)).into_iter().next());
+    let grant = get_grant(svc)?;
+    let (granted_at, grant_rooms, ceiling) = match &grant {
+        Some(g) => {
+            let ceiling: Vec<String> = app_ceiling(svc)?.unwrap_or_default();
+            let live: Vec<String> = room_refs(&ceiling).into_iter().map(|r| r.room).collect();
+            let extra: Vec<String> = g.rooms.iter().filter(|r| own.as_deref() != Some(r.as_str())).cloned().collect();
+            (Some(g.granted_at), room_refs(&extra), ceiling.into_iter().filter(|r| live.contains(r)).collect())
+        }
+        None => (None, Vec::new(), Vec::new()),
+    };
+    Ok(AppRooms { ok: true, app: svc.to_string(), own_room, granted: grant.is_some(), granted_at, grant_rooms, ceiling })
+}
+
+/// One row of `guests.list` (the catalog's `AppGuestRow`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuestRow {
+    pub username: String,
+    /// Project ids on this App only.
+    pub rooms: Vec<String>,
+    pub room_handles: Vec<String>,
+    pub role: Option<String>,
+    pub enabled: bool,
+    /// A marked agent login (`k2 app user agent`), not a person.
+    pub agent: bool,
+}
+
+/// One page of `guests.list` (the catalog's `AppGuestList`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuestPage {
+    pub ok: bool,
+    pub app: String,
+    pub guests: Vec<GuestRow>,
+    /// The last username of this page when more may follow; `None` on the
+    /// last page.
+    pub next_cursor: Option<String>,
+}
+
+/// Usernames of principals holding a `kind=app` grant on `app`, after
+/// `after`, by username (the candidates; [`guest_of`] decides).
+fn candidates(app: &str, after: &str, n: usize) -> Result<Vec<String>, String> {
+    with_conn(|conn| {
+        let mut st = conn
+            .prepare(
+                "SELECT p.username FROM grants g JOIN principals p ON p.id = g.subject_id
+                 WHERE g.subject_kind = 'principal' AND g.kind = 'app' AND g.target_id = ?1 AND p.username > ?2
+                 ORDER BY p.username LIMIT ?3",
+            )
+            .map_err(|e| format!("guest list: {e}"))?;
+        let rows = st
+            .query_map(params![app, after, n as i64], |r| r.get::<_, String>(0))
+            .map_err(|e| format!("guest list: {e}"))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| format!("guest list: {e}"))
+    })
+}
+
+/// `guests.list`: this App's own guests by username, `limit` a page
+/// (default [`LIST_DEFAULT`], at most [`LIST_MAX`]), after `cursor` (the
+/// previous page's last username). The owner, Connect logins (even when a
+/// guest shares the name) and other Apps' guests are never listed: every
+/// row passes [`guest_of`], the rule [`read`] uses. Counts one call against
+/// the rate.
+pub fn list(app: &str, cursor: &str, limit: Option<usize>) -> Result<GuestPage, Refusal> {
+    let app = app.trim();
+    if app.is_empty() || app == HOST_APP_ID {
+        return Err(Refusal::NotFound);
+    }
+    let limit = match limit {
+        None => LIST_DEFAULT,
+        Some(n) if (1..=LIST_MAX).contains(&n) => n,
+        Some(_) => return Err(Refusal::Usage(format!("limit is 1..={LIST_MAX}"))),
+    };
+    rate_take(app)?;
+    let mut guests: Vec<GuestRow> = Vec::new();
+    let mut after = cursor.trim().to_string();
+    let mut more = false;
+    'pages: loop {
+        let batch = candidates(app, &after, limit + 1)?;
+        let full = batch.len() == limit + 1;
+        for u in batch {
+            if guests.len() == limit {
+                more = true;
+                break 'pages;
+            }
+            after = u.clone();
+            let g = match guest_of(app, &u) {
+                Ok(g) => g,
+                Err(Refusal::NotFound) => continue,
+                Err(e) => return Err(e),
+            };
+            let agent = super::principal_agent_workspace(&g.principal_id)?.is_some();
+            guests.push(GuestRow {
+                room_handles: super::handles_for_project_ids(&g.rooms),
+                rooms: g.rooms,
+                role: g.role.map(|(n, _)| n),
+                enabled: g.enabled,
+                agent,
+                username: g.username,
+            });
+        }
+        if !full {
+            break;
+        }
+    }
+    let next_cursor = if more { guests.last().map(|g| g.username.clone()) } else { None };
+    Ok(GuestPage { ok: true, app: app.to_string(), guests, next_cursor })
 }
 
 /// Check a set without writing: the rooms resolved, the outcome it would

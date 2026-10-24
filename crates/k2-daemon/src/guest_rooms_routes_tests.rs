@@ -223,3 +223,116 @@ fn the_rows_are_one_reveal_on_the_link_never_the_helper() {
         assert_eq!(k2_core::app_surface::verb_for(method, ROUTE), Some(verb));
     }
 }
+
+// ── app.rooms / guests.list (prd-app-caps-0464-v1 AC1/AC2) ───────────
+
+fn read(raw: &str, route: &str, q: &[(&str, &str)]) -> (u16, J) {
+    let pass = crate::apps::gateway::resolve_pass(raw);
+    let params: HashMap<String, String> = q.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+    let r = handle_read(route, pass, None, false, &params);
+    let n: u16 = r.status.split_whitespace().next().unwrap().parse().unwrap();
+    (n, serde_json::from_str(&r.body).unwrap_or_else(|e| panic!("not JSON ({e}): {}", r.body)))
+}
+
+fn conforms(verb: &str, v: &J) {
+    // Every key the answer carries is in the catalog row's closed schema,
+    // and every required key is there.
+    let row = k2_core::contract::catalog().verb(verb).unwrap_or_else(|| panic!("{verb} row"));
+    let props = row.response["properties"].as_object().expect("properties");
+    for k in v.as_object().expect("an object").keys() {
+        assert!(props.contains_key(k), "{verb}: {k} isn't in the catalog row");
+    }
+    for k in row.response["required"].as_array().expect("required") {
+        assert!(v.get(k.as_str().unwrap()).is_some(), "{verb}: missing {k}");
+    }
+}
+
+#[test]
+fn app_rooms_answers_the_own_pass_with_or_without_the_grant() {
+    let f = fx("approoms");
+    let (st, v) = read(&f.pass, APP_ROOMS_ROUTE, &[]);
+    assert_eq!(st, 200, "{v}");
+    conforms("app.rooms", &v);
+    assert_eq!((v["granted"].clone(), v["grantedAt"].clone(), v["grantRooms"].clone(), v["ceiling"].clone()), (json!(false), J::Null, json!([]), json!([])));
+    assert_eq!(v["ownRoom"]["room"], json!(f.own));
+    assert_eq!(v["app"], json!(f.jobs));
+    gr::grant(&f.jobs, &[f.acme.clone()], "owner").unwrap();
+    let (st, v) = read(&f.pass, APP_ROOMS_ROUTE, &[("app", &f.jobs)]);
+    assert_eq!(st, 200, "{v}");
+    conforms("app.rooms", &v);
+    assert_eq!(v["granted"], json!(true));
+    let mut ceiling: Vec<String> = v["ceiling"].as_array().unwrap().iter().map(|x| x.as_str().unwrap().to_string()).collect();
+    ceiling.sort();
+    let mut want = vec![f.acme.clone(), f.own.clone()];
+    want.sort();
+    assert_eq!(ceiling, want, "own room plus the grant's rooms");
+    assert_eq!(v["grantRooms"][0]["room"], json!(f.acme));
+    // Naming another App: not_found, like guests.rooms.
+    let (st, v) = read(&f.pass, APP_ROOMS_ROUTE, &[("app", &f.other)]);
+    assert_eq!((st, code(&v)), (404, "not_found"), "{v}");
+}
+
+#[test]
+fn guests_list_needs_the_grant_and_lists_only_this_apps_guests() {
+    let f = fx("glist");
+    skin::add_principal_for_app("dana", None, &f.jobs, None, "test").unwrap();
+    skin::add_principal_for_app("erin", None, &f.other, None, "test").unwrap();
+    let (st, v) = read(&f.pass, LIST_ROUTE, &[]);
+    assert_eq!((st, code(&v)), (403, "grant_required"), "{v}");
+    gr::grant(&f.jobs, &[], "owner").unwrap();
+    let (st, v) = read(&f.pass, LIST_ROUTE, &[("limit", "50")]);
+    assert_eq!(st, 200, "{v}");
+    conforms("guests.list", &v);
+    let names: Vec<J> = v["guests"].as_array().unwrap().iter().map(|g| g["username"].clone()).collect();
+    assert_eq!(names, vec![json!("dana")], "never another App's guest: {v}");
+    assert_eq!(v["guests"][0]["agent"], json!(false));
+    assert_eq!(v["nextCursor"], J::Null);
+    let (st, v) = read(&f.pass, LIST_ROUTE, &[("limit", "nope")]);
+    assert_eq!((st, code(&v)), (400, "usage"), "{v}");
+    let (st, v) = read(&f.pass, LIST_ROUTE, &[("app", &f.other)]);
+    assert_eq!((st, code(&v)), (404, "not_found"), "{v}");
+}
+
+#[test]
+fn the_reads_refuse_every_pass_but_the_apps_own_and_are_get_only() {
+    let f = fx("readwho");
+    gr::grant(&f.jobs, &[], "owner").unwrap();
+    skin::add_principal_for_app("dana", None, &f.jobs, None, "test").unwrap();
+    let guest = skin::create_app_session_token("dana", &f.jobs).unwrap().raw;
+    let (_, plat) = skin::create_token("deck", None, &[f.own.clone()]).unwrap();
+    for route in [APP_ROOMS_ROUTE, LIST_ROUTE] {
+        for raw in [&guest, &plat] {
+            let (st, v) = read(raw, route, &[]);
+            assert_eq!((st, code(&v)), (403, "app_pass_required"), "{route}: {v}");
+        }
+        let (st, v) = read("k2skn_nope", route, &[]);
+        assert_eq!((st, code(&v)), (401, "pass_invalid"), "{route}: {v}");
+        let r = handle_read(route, crate::apps::gateway::resolve_pass(&f.pass), None, true, &HashMap::new());
+        assert!(r.status.starts_with("405"), "{route}: {}", r.body);
+    }
+}
+
+#[test]
+fn the_list_shares_the_sixty_a_minute_budget() {
+    let f = fx("glrate");
+    gr::grant(&f.jobs, &[], "owner").unwrap();
+    for i in 0..gr::RATE_PER_MIN {
+        let (st, v) = read(&f.pass, LIST_ROUTE, &[]);
+        assert_eq!(st, 200, "page {i}: {v}");
+    }
+    let (st, v) = read(&f.pass, LIST_ROUTE, &[]);
+    assert_eq!((st, code(&v)), (429, "rate_limited"), "{v}");
+}
+
+#[test]
+fn the_read_rows_are_on_the_link_and_the_garden() {
+    let c = k2_core::contract::catalog();
+    for (verb, route) in [("app.rooms", APP_ROOMS_ROUTE), ("guests.list", LIST_ROUTE)] {
+        let row = c.verb(verb).unwrap_or_else(|| panic!("{verb} row"));
+        assert!(row.exposed_to(k2_core::contract::Exposure::App) && row.exposed_to(k2_core::contract::Exposure::GardenLocal), "{verb}");
+        assert_eq!(row.bindings.http.as_ref().map(|h| h.route.as_str()), Some(route));
+        assert!(k2_core::app_surface::link_allows_http("GET", route), "{verb} on the link");
+        assert!(!k2_core::app_surface::helper_allows_http("GET", route), "{verb}: a guest's browser never forwards it");
+        assert_eq!(k2_core::app_surface::verb_for("GET", route), Some(verb));
+    }
+}

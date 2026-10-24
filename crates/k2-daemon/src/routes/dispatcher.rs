@@ -10087,6 +10087,26 @@ async fn handle_one_request(
                         crate::guest_rooms_routes::app_pass_required()
                     }
                 }
+                // prd-app-caps-0464-v1 AC1/AC2 (0.46.4): app.rooms and
+                // guests.list, the App's own pass only (floor NoLogin; the
+                // handler refuses everything else). GET only.
+                crate::guest_rooms_routes::APP_ROOMS_ROUTE | crate::guest_rooms_routes::LIST_ROUTE => {
+                    let _ = stream.read(&mut buf).await;
+                    let presented = super::http::extract_token(&query);
+                    if presented.is_some_and(|t| k2_core::skin::is_skin_token(t) && !k2_core::skin::is_api_key_prefix(t)) {
+                        let pass = presented.and_then(crate::apps::gateway::resolve_pass);
+                        let params = super::http::parse_params(&path, &query);
+                        let link = crate::guest_rooms_routes::OnLink::current();
+                        let route = p.to_string();
+                        tokio::task::spawn_blocking(move || {
+                            crate::guest_rooms_routes::handle_read(&route, pass, link.as_ref(), is_post, &params)
+                        })
+                        .await
+                        .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                    } else {
+                        crate::guest_rooms_routes::app_pass_required()
+                    }
+                }
                 // Room-scope R9/R16 (0.46.1): room.members, app.self and
                 // app.usage for a pass (the handler checks rooms, caps and
                 // the link); anything else is `skin_token`.

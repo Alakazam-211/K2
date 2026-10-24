@@ -939,6 +939,10 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/app/grants",
         "/cli/app/grant/revoke",
         "/cli/app/guest/rooms",
+        // prd-app-caps-0464-v1 AC4 (0.46.4): its own App's ceiling, and its
+        // guests under the grant (reads).
+        "/cli/app/guest/ceiling",
+        "/cli/app/guest/list",
         // Room-scope R9/R16 (0.46.1): read who holds a grant on the agent's
         // own room, and its own Apps' self and usage. `/cli/app/room-names`
         // is NOT here: hiding guests' names is the owner's.

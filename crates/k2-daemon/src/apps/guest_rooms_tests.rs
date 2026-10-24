@@ -140,3 +140,52 @@ fn agents_set_within_the_grant_and_the_owner_with_owner_rights() {
     assert_eq!(changes[1].actor, "owner");
     assert_eq!(changes[0].payload["via"], json!("cli"));
 }
+
+/// prd-app-caps-0464-v1 AC4: `k2 app guest ceiling` / `list`. The owner
+/// reads any App; an agent reads its own App's ceiling with or without the
+/// grant and lists its guests only under the grant; logins never.
+#[test]
+fn ceiling_and_list_for_the_owner_and_the_apps_own_agent() {
+    let f = fx("ceil");
+    let q = [("app", f.jobs.as_str())];
+    // No grant: the ceiling reads (granted false, empty), the list is the
+    // owner's only.
+    let (st, v) = get(GUEST_CEILING, &agent(&f.ws_a), &q);
+    assert_eq!(st, 200, "{v}");
+    assert_eq!((v["granted"].clone(), v["ceiling"].clone()), (json!(false), json!([])));
+    assert_eq!(v["ownRoom"]["room"], json!(f.ws_a));
+    assert_eq!(v["appInfo"]["serviceId"], json!(f.jobs));
+    let (st, v) = get(GUEST_LIST, &agent(&f.ws_a), &q);
+    assert_eq!((st, code(&v)), (403, "grant_required"), "{v}");
+    let (st, v) = get(GUEST_LIST, &Who::Owner, &q);
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(v["guests"].as_array().unwrap().iter().map(|g| g["username"].clone()).collect::<Vec<_>>(), vec![json!("dana")]);
+    assert_eq!(v["guests"][0]["agent"], json!(false));
+    assert_eq!(v["nextCursor"], J::Null);
+    // With the grant the agent lists too.
+    gr::grant(&f.jobs, &[f.acme.clone()], "owner").unwrap();
+    let (st, v) = get(GUEST_LIST, &agent(&f.ws_a), &q);
+    assert_eq!(st, 200, "{v}");
+    let (st, v) = get(GUEST_CEILING, &agent(&f.ws_a), &q);
+    assert_eq!(st, 200, "{v}");
+    let mut ceiling: Vec<String> = v["ceiling"].as_array().unwrap().iter().map(|x| x.as_str().unwrap().to_string()).collect();
+    ceiling.sort();
+    let mut want = vec![f.acme.clone(), f.ws_a.clone()];
+    want.sort();
+    assert_eq!(ceiling, want);
+    // Another workspace's agent and logins: never.
+    for route in [GUEST_CEILING, GUEST_LIST] {
+        let (st, v) = get(route, &agent(&f.ws_b), &q);
+        assert!(st == 403 || st == 404, "{route} another workspace's agent: {st} {v}");
+        for who in [login(Role::Admin), login(Role::Member)] {
+            let (st, v) = get(route, &who, &q);
+            assert_eq!(st, 403, "{route} {who:?}: {v}");
+        }
+        // GET only.
+        let (st, v) = post(route, &Who::Owner, json!({ "app": f.jobs }));
+        assert_eq!(st, 405, "{route}: {v}");
+    }
+    // A bad limit is usage.
+    let (st, v) = get(GUEST_LIST, &Who::Owner, &[("app", f.jobs.as_str()), ("limit", "x")]);
+    assert_eq!(st, 400, "{v}");
+}

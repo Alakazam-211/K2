@@ -210,3 +210,61 @@ fn an_unsigned_widget_and_a_paused_placement_are_refused() {
     let (st, _) = d.raw("guests.rooms", json!({ "app": d.jobs, "username": "dana" }), None);
     assert_eq!(st, 200, "reads still work while paused");
 }
+
+/// prd-app-caps-0464-v1 AC3: `app.rooms` / `guests.list` through the widget
+/// door. Reads (no confirm), the manifest's guests:rooms, owner rights for
+/// an owner-made widget, creator rights for an agent-made one, and an
+/// unsigned version is author_unknown.
+#[test]
+fn app_rooms_and_guests_list_in_a_garden() {
+    let d = desk(&["guests:rooms"], "gr-reads");
+    // Unsigned: author_unknown for both.
+    for verb in ["app.rooms", "guests.list"] {
+        let (st, v) = d.raw(verb, json!({ "app": d.jobs }), None);
+        assert_eq!((st, code(&v)), (403, "author_unknown"), "{verb}: {v}");
+    }
+    d.stamp(MadeBy::Owner);
+    // Owner rights: any local App, no grant needed, no confirm.
+    let (st, v) = d.raw("app.rooms", json!({ "app": d.other }), None);
+    assert_eq!(st, 200, "{v}");
+    assert_eq!((v["result"]["granted"].clone(), v["result"]["ceiling"].clone()), (json!(false), json!([])));
+    assert_eq!(v["result"]["ownRoom"]["room"], json!("w-keeper"));
+    let (st, v) = d.raw("guests.list", json!({ "app": d.jobs }), None);
+    assert_eq!(st, 200, "{v}");
+    let names: Vec<Value> = v["result"]["guests"].as_array().unwrap().iter().map(|g| g["username"].clone()).collect();
+    assert_eq!(names, vec![json!("dana")], "only this App's guests: {v}");
+    let (st, v) = d.raw("guests.list", json!({}), None);
+    assert_eq!((st, code(&v)), (400, "usage"), "a Garden names the App: {v}");
+    let (st, v) = d.raw("guests.list", json!({ "app": d.jobs, "limit": 0 }), None);
+    assert_eq!((st, code(&v)), (400, "usage"), "{v}");
+}
+
+#[test]
+fn app_rooms_and_guests_list_need_the_cap_and_an_agent_widget_its_own_app() {
+    let d = desk(&["store:read"], "gr-reads-cap");
+    d.stamp(MadeBy::Owner);
+    for verb in ["app.rooms", "guests.list"] {
+        let (st, v) = d.raw(verb, json!({ "app": d.jobs }), None);
+        assert_eq!((st, code(&v)), (403, "cap_not_granted"), "{verb}: {v}");
+    }
+    drop(d);
+    let d = desk(&["guests:rooms"], "gr-reads-agent");
+    d.stamp(MadeBy::Agent { project_id: "w-builder".into() });
+    // Another workspace's App: not reachable for either.
+    for verb in ["app.rooms", "guests.list"] {
+        let (st, v) = d.raw(verb, json!({ "app": d.other }), None);
+        assert_eq!((st, code(&v)), (404, "not_found"), "{verb}: {v}");
+    }
+    // Its own App: app.rooms reads without the grant; guests.list needs it.
+    let (st, v) = d.raw("app.rooms", json!({ "app": d.jobs }), None);
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(v["result"]["granted"], json!(false));
+    let (st, v) = d.raw("guests.list", json!({ "app": d.jobs }), None);
+    assert_eq!((st, code(&v)), (403, "grant_required"), "{v}");
+    gr::grant(&d.jobs, &[], "owner").unwrap();
+    let (st, v) = d.raw("guests.list", json!({ "app": d.jobs }), None);
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(v["result"]["guests"][0]["username"], json!("dana"));
+    let (st, v) = d.raw("app.rooms", json!({ "app": d.jobs }), None);
+    assert_eq!((st, v["result"]["granted"].clone()), (200, json!(true)), "{v}");
+}

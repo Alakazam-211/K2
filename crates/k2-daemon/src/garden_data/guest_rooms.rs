@@ -22,6 +22,12 @@
 //!   confirm (nothing changes).
 //! - The rules are `k2_core::skin::guest_rooms` (own guests, never above
 //!   the role, idempotent, audited with `via: garden`, 60/min per App).
+//! - `app.rooms` / `guests.list` (prd-app-caps-0464-v1 AC3, catalog v22):
+//!   reads, so no confirm sheet; each spends the placement's read budget.
+//!   The manifest must ask for `guests:rooms` (`app.rooms` has no cap row,
+//!   the check is here). Owner rights: any local App. An agent-made widget:
+//!   only its own workspace's Apps; `app.rooms` reads without the grant
+//!   (as the App itself can), `guests.list` needs the owner's grant.
 
 use serde_json::{json, Value as J};
 use sha2::{Digest, Sha256};
@@ -30,6 +36,7 @@ use k2_core::contract::{catalog, Effect};
 use k2_core::garden_data::{authors, MadeBy};
 use k2_core::skin::guest_rooms::{self as gr, Ceiling};
 
+use super::budget::{self, BudgetKey, Spend};
 use super::call::{made_by_label, resolve, CallBody, Placed};
 use crate::cli_response::CliResponse;
 
@@ -38,7 +45,7 @@ use crate::cli_response::CliResponse;
 pub const CONFIRM_ACTION: &str = "garden-guests";
 
 pub fn is_verb(verb: &str) -> bool {
-    matches!(verb, "guests.rooms" | "guests.setRooms")
+    matches!(verb, "guests.rooms" | "guests.setRooms" | "app.rooms" | "guests.list")
 }
 
 fn status_line(code: u16) -> &'static str {
@@ -134,13 +141,32 @@ fn run(b: &CallBody) -> Result<J, CliResponse> {
     let app = field("app").ok_or_else(|| {
         no(400, "usage", format!("{}: in a Garden, name the App: {{app: <service id or workspace/name>, username}}", b.verb), None)
     })?;
-    let username = field("username").ok_or_else(|| no(400, "usage", format!("{} needs username", b.verb), None))?;
     let t = crate::apps::grace::target(&crate::compute_routes::Who::Owner, Some(&app))
         .map_err(|_| no(404, "not_found", format!("no App '{app}' on this computer"), None))?;
     let maker = {
         let db = k2_core::db::shared();
         let conn = db.lock();
         authors::maker_of(&conn, &w.widget, &w.hash).map_err(|e| crate::garden_data::response(&e))?
+    };
+    // app.rooms (AC3): what the App itself may read, no grant needed; an
+    // agent-made widget only for its own workspace's Apps.
+    if b.verb == "app.rooms" {
+        if !k2_core::zen::garden_access::enabled() {
+            match &maker {
+                MadeBy::Owner | MadeBy::K2 => {}
+                MadeBy::Agent { project_id } if t.project_id == *project_id => {}
+                MadeBy::Agent { .. } => return Err(no(404, "not_found", format!("no App '{app}' this widget's maker can reach"), None)),
+                MadeBy::Unclaimed => return Err(author_unknown(&w)),
+            }
+        }
+        spend_read(&w)?;
+        let view = gr::app_rooms(&t.service_id).map_err(|e| no(500, "failed", e, None))?;
+        return serde_json::to_value(view).map_err(|e| no(500, "failed", e.to_string(), None));
+    }
+    let username = if b.verb == "guests.list" {
+        String::new()
+    } else {
+        field("username").ok_or_else(|| no(400, "usage", format!("{} needs username", b.verb), None))?
     };
     let ceiling = match &maker {
         // Garden access (G15, §1.6): a gate-passing version (checked above)
@@ -163,15 +189,25 @@ fn run(b: &CallBody) -> Result<J, CliResponse> {
                 }
             }
         }
-        MadeBy::Unclaimed => {
-            return Err(no(
-                403,
-                "author_unknown",
-                format!("nobody signed this version of {0}. Run `k2 zen validate --widget {0}`, or click It's mine", w.widget),
-                None,
-            ))
-        }
+        MadeBy::Unclaimed => return Err(author_unknown(&w)),
     };
+    // guests.list (AC3): a read under the same ceiling rules as guests.rooms.
+    // (The ceiling match above already refused an agent-made widget
+    // without the owner's grant.)
+    if b.verb == "guests.list" {
+        spend_read(&w)?;
+        let limit = match args.get("limit") {
+            None | Some(J::Null) => None,
+            Some(J::Number(n)) => match n.as_u64() {
+                Some(n) => Some(n as usize),
+                None => return Err(no(400, "usage", format!("limit is 1..={}", gr::LIST_MAX), None)),
+            },
+            Some(_) => return Err(no(400, "usage", format!("limit is 1..={}", gr::LIST_MAX), None)),
+        };
+        let cursor = field("cursor").unwrap_or_default();
+        let page = gr::list(&t.service_id, &cursor, limit).map_err(core)?;
+        return serde_json::to_value(page).map_err(|e| no(500, "failed", e.to_string(), None));
+    }
     if !write {
         let view = gr::read(&t.service_id, &username).map_err(core)?;
         return serde_json::to_value(view).map_err(|e| no(500, "failed", e.to_string(), None));
@@ -214,6 +250,21 @@ fn run(b: &CallBody) -> Result<J, CliResponse> {
     take_confirm(token, &secret)?;
     let out = gr::set(&t.service_id, &username, &rooms, &ceiling, &actor(&w, &maker), "garden").map_err(core)?;
     serde_json::to_value(out.view).map_err(|e| no(500, "failed", e.to_string(), None))
+}
+
+fn author_unknown(w: &Placed) -> CliResponse {
+    no(
+        403,
+        "author_unknown",
+        format!("nobody signed this version of {0}. Run `k2 zen validate --widget {0}`, or click It's mine", w.widget),
+        None,
+    )
+}
+
+/// One read from this placement's budget (the reads AC3 adds).
+fn spend_read(w: &Placed) -> Result<(), CliResponse> {
+    let key = BudgetKey::Placement { garden: w.garden.clone(), placement: w.placement.clone() };
+    budget::spend(&key, Spend::Read).map_err(|e| crate::garden_data::response(&e))
 }
 
 #[cfg(test)]

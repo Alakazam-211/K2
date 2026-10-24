@@ -38,6 +38,8 @@ HOW YOU GET A SECRET (delivery)
           Only to the secret's sites. Where the key goes in the request
           (header and format) was fixed by whoever created the secret —
           you just name it. Echoes of the key come back as [k2v:NAME].
+          Some secrets are signers: K2 signs the request (OVH, HMAC, HMAC
+          with a timestamp). Same command.
   file    $K2_SECRETS_DIR/<NAME>, memory-backed, removed at session end.
           You CAN read it — so can anything you run. Opt-in.
   env     $NAME in new sessions. You can read it. Needs a respawn.
@@ -58,6 +60,15 @@ KINDS AND DELIVERY (--kind on set; the default delivery follows it)
   k2 vault delivery NAME file|env. Fetch needs sites (--for) and puts the
   value in one place: --inject-dst header:<Name> (default Authorization:
   Bearer), query:<param>, basic, or body ({{secret}}; a person only).
+
+SIGNED REQUESTS AND SCRIPTS
+  A person (or your workspace, for its own secrets) makes a secret a
+  signer once: k2 vault set OVH_EU --sign ovh --preset ovh-eu < keys.json
+  (presets ovh-eu|ovh-ca|ovh-us; the value is the three OVH keys as JSON),
+  or --sign hmac-sha256 / hmac-sha256-ts --sign-header … (k2 vault set
+  --help). Then k2 vault fetch --secret OVH_EU URL signs every call.
+  Scripts: k2 vault fetch --json-out prints {status, headers, truncated,
+  redirected, body|bodyB64} (k2 vault fetch --help); 8 in parallel is fine.
 
 REFERENCES, NOT COPIES
   k2v://ws/<workspace>/<NAME>   k2v://server/<NAME>
@@ -161,7 +172,8 @@ HONEST LIMITS
   logs every use.
 
 WHAT THE VAULT CAN'T DO YET (and the way around it today)
-  sign requests (HMAC, AWS SigV4, OVH)  env or file delivery to the tool
+  sign requests (AWS SigV4, Google service-account JWT)
+                                        env or file delivery to the tool
   ssh-agent                             file delivery + ssh -i
   plain systemd units                   systemd-creds (above)
   boxes without K2                      systemd-creds over SSH (above)

@@ -253,7 +253,7 @@ fn wildcard_body_inject_person_given_and_remote_off_always_pend() {
     let mut wild = item("WILD");
     wild.hosts = vec!["https://*.stripe.com".into()];
     let mut body = item("BODY");
-    body.inject = Some(crate::inject::Inject { dst: crate::inject::Dst::Body, fmt: "{}".into(), allowed_dst: vec![], allowed_fmt: vec![] });
+    body.inject = Some(crate::inject::Inject { dst: crate::inject::Dst::Body, fmt: "{}".into(), allowed_dst: vec![], allowed_fmt: vec![], sign: None });
     let mut person = item("PERSON");
     person.human_given = true;
     for (it, reason) in [(wild, "needs_person"), (body, "needs_person"), (person, "person_given")] {

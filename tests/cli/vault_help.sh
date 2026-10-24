@@ -3,14 +3,17 @@
 # from an ops agent's six questions):
 #   * every `k2 vault <verb> --help` prints that verb's own help (not the
 #     whole top-level page), with no daemon at all;
-#   * `set --help` lists the inject forms and each --kind's delivery;
-#     `grant --help` shows --env-name with a CLI-tool example; `fetch --help`
-#     says it can't sign requests;
+#   * `set --help` lists the inject forms, each --kind's delivery and the
+#     --sign options; `grant --help` shows --env-name with a CLI-tool
+#     example; `fetch --help` says some secrets are signers and documents
+#     --json-out;
 #   * `k2 study vault` has the start-here, kinds, CLI-tools, systemd-creds
 #     and can't-do-yet sections and stays bounded;
 #   * against a stub daemon: `list --system` prints the hidden count and
 #     why, `doctor` prints the names it checks, and `set --inject-dst` sends
-#     that dst (query/basic/body; --inject-header still works, both refused).
+#     that dst (query/basic/body; --inject-header still works, both refused);
+#     `set --sign …` sends inject.sign and `k2 vault sign NAME …|none` posts
+#     the signer to policy (PRD vault-gaps item 2).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -34,7 +37,7 @@ printf '%s' "$top" | grep -Fq -- "--inject-dst header:<Name>|query:<param>|basic
 ok "k2 vault --help: no daemon needed, names --inject-dst and per-verb help"
 
 for verb in status list show set rotate hosts delivery grant revoke disable enable destroy get audit requests presets \
-    doctor env-file import service reveal recovery confirm-password kek rekey rollback backup restore recipient carry fetch send; do
+    doctor env-file import service reveal recovery confirm-password kek rekey rollback backup restore recipient carry fetch send sign; do
     out="$(k2n vault "$verb" --help 2>&1)" || fail "vault $verb --help exited non-zero: $out"
     case "$verb" in
         enable) want="k2 vault disable NAME" ;;
@@ -55,7 +58,9 @@ ok "--help anywhere in the args prints the verb's help"
 set_help="$(k2n vault set --help)"
 for needle in "--inject-header <Name>" "--inject-format '<fmt>'" "--inject-dst <d>" "header:<Name>" "query:<param>" \
     "basic " "body " "{{secret}}" "api_key, oauth_token, generic   fetch" "password, dsn, url              env" \
-    "ssh_key, tls_key                file" "Every kind allows fetch, file and env"; do
+    "ssh_key, tls_key                file" "Every kind allows fetch, file and env" "--sign ovh" "--sign hmac-sha256 " \
+    "--sign hmac-sha256-ts" "--sign-header <Name>" "--sign-ts-header <Name>" "--sign-template '<t>'" "--sign-value '<v>'" \
+    "ovh-eu|ovh-ca|ovh-us"; do
     printf '%s' "$set_help" | grep -Fq -- "$needle" || fail "set --help lacks '$needle'"
 done
 ok "set --help: inject options, the four dst forms, delivery per kind"
@@ -67,9 +72,11 @@ ok "grant --help: --env-name with a CLI-tool example"
 
 fetch_help="$(k2n vault fetch --help)"
 printf '%s' "$fetch_help" | grep -Fq "fetch adds the secret as-is, in one place: a header, a query parameter," || fail "fetch --help lacks the one-place line"
-printf '%s' "$fetch_help" | grep -Fq "It can't sign" || fail "fetch --help lacks the signing line"
-printf '%s' "$fetch_help" | grep -Fq "requests (HMAC, AWS SigV4, OVH)" || fail "fetch --help lacks the signing examples"
-ok "fetch --help: as-is in one place, can't sign (HMAC, SigV4, OVH)"
+printf '%s' "$fetch_help" | grep -Fq "Some secrets are signers: K2 signs the request (OVH, HMAC, HMAC with a" || fail "fetch --help lacks the signer line"
+if printf '%s' "$fetch_help" | grep -Fq "It can't sign"; then fail "fetch --help still says it can't sign"; fi
+printf '%s' "$fetch_help" | grep -Fq -- "--json-out prints the daemon's answer" || fail "fetch --help lacks the --json-out shape"
+printf '%s' "$fetch_help" | grep -Fq '"bodyB64"' || fail "fetch --help lacks bodyB64"
+ok "fetch --help: as-is in one place, signers, --json-out shape"
 
 # ── k2 study vault ────────────────────────────────────────────────────
 study="$(env HOME="$WORK" K2_PORT=1 K2_HOOK_TOKEN=offline "$K2_CLI" study vault)" || fail "study vault"
@@ -78,7 +85,8 @@ for section in "START HERE" "KINDS AND DELIVERY" "CLI TOOLS" "SERVICES K2 DOESN'
 done
 for needle in "k2 vault import .env" "k2 vault send NAME --to <agent>" "ssh -i \$K2_SECRETS_DIR/NAME" "-o IdentitiesOnly=yes" \
     "--env-name GH_TOKEN" "hosts.yml" "auth.json" "systemd-creds encrypt" "LoadCredentialEncrypted=" "\$CREDENTIALS_DIRECTORY/" \
-    "send and carry need K2 on both ends" "sign requests (HMAC, AWS SigV4, OVH)" "ssh-agent"; do
+    "send and carry need K2 on both ends" "sign requests (AWS SigV4, Google service-account JWT)" "ssh-agent" \
+    "Some secrets are signers" "--sign ovh --preset ovh-eu" "--json-out"; do
     printf '%s' "$study" | grep -Fq -- "$needle" || fail "study vault lacks '$needle'"
 done
 # The can't-do-yet block is the last section.
@@ -158,5 +166,34 @@ set -e
 [ "$rc" = 2 ] || fail "--inject-header with --inject-dst: exit $rc ($err)"
 printf '%s' "$err" | grep -Fq "give one of them" || fail "--inject-header with --inject-dst: $err"
 ok "set --inject-dst sends query/basic dst; --inject-header still works; both at once is refused"
+
+: >"$WORK/posts.log"
+printf '{}' | k2s vault set OVH_EU --sign ovh --preset ovh-eu >/dev/null || fail "set --sign ovh"
+printf 'k2test-value' | k2s vault set HOOK --for hooks.example.com --sign hmac-sha256 --sign-header X-Hub-Signature-256 --sign-prefix 'sha256=' >/dev/null || fail "set --sign hmac-sha256"
+printf 'k2test-value' | k2s vault set OPS --for ingest.example.com --sign hmac-sha256-ts --sign-header X-K2-Ops-Signature \
+    --sign-ts-header X-K2-Ops-Ts --sign-value 'sha256={sig}' --sign-encoding base64 >/dev/null || fail "set --sign hmac-sha256-ts"
+k2s vault sign HOOK none >/dev/null || fail "sign none"
+k2s vault sign HOOK hmac-sha256 --sign-header X-Sig --sign-prefix '' >/dev/null || fail "sign hmac-sha256"
+python3 - "$WORK/posts.log" <<'PY2' || fail "signer bodies: $(cat "$WORK/posts.log")"
+import json, sys
+rows = [(p, json.loads(b)) for p, b in (l.split(" ", 1) for l in open(sys.argv[1]).read().splitlines())]
+sets = {b["name"]: b for p, b in rows if p == "/cli/vault/set"}
+assert sets["OVH_EU"]["inject"] == {"sign": {"scheme": "ovh"}} and sets["OVH_EU"]["preset"] == "ovh-eu", sets["OVH_EU"]
+assert sets["HOOK"]["inject"] == {"sign": {"scheme": "hmac-sha256", "header": "X-Hub-Signature-256", "prefix": "sha256="}}, sets["HOOK"]
+assert sets["OPS"]["inject"] == {"sign": {"scheme": "hmac-sha256-ts", "header": "X-K2-Ops-Signature", "encoding": "base64",
+                                          "tsHeader": "X-K2-Ops-Ts", "valueFmt": "sha256={sig}"}}, sets["OPS"]
+pol = [b for p, b in rows if p == "/cli/vault/policy"]
+assert pol[0]["name"] == "HOOK" and pol[0]["sign"] == "none", pol
+assert pol[1]["sign"] == {"scheme": "hmac-sha256", "header": "X-Sig", "prefix": ""}, pol
+PY2
+set +e
+err="$(printf 'k2test-value' | k2s vault set B --sign ovh --inject-header X 2>&1)"; rc1=$?
+err2="$(printf 'k2test-value' | k2s vault set B --sign-header X 2>&1)"; rc2=$?
+err3="$(k2s vault sign HOOK none --sign-header X 2>&1)"; rc3=$?
+set -e
+[ "$rc1" = 2 ] && printf '%s' "$err" | grep -Fq "no --inject-*" || fail "--sign with --inject-*: exit $rc1 ($err)"
+[ "$rc2" = 2 ] && printf '%s' "$err2" | grep -Fq "need --sign" || fail "--sign-header alone: exit $rc2 ($err2)"
+[ "$rc3" = 2 ] || fail "sign none with options: exit $rc3 ($err3)"
+ok "set --sign sends inject.sign; k2 vault sign posts the signer or none; mixed flags refused"
 
 echo "PASS: vault help ($pass checks)"

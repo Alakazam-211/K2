@@ -40,6 +40,10 @@ pub const FORMAT: &str = "k2-vault-handoff/1";
 /// The feature a receiving server advertises in its signed vault-recipient
 /// statement (H3).
 pub const FEATURE: &str = "vault-handoff/1";
+/// Advertised beside [`FEATURE`] by a server that understands signed
+/// secrets (`inject.sign`, PRD vault-gaps item 2). An older server would
+/// drop the signer and paste the value, so a signed secret isn't sent to it.
+pub const FEATURE_SIGN: &str = "sign-v1";
 /// A sealed handoff opens for ten minutes after it was made (§5.3).
 pub const TRANSPORT_TTL_SECS: i64 = 600;
 /// Values a handoff carries: SSH and TLS keys, kubeconfigs, service-account

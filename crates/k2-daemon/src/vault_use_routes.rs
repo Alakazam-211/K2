@@ -164,7 +164,7 @@ fn fetch(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Value,
         let r = vault.resolve(&sel, Use::Fetch(&origin), &who)?;
         let (dst, fmt) = r.inject.choose(w.dst.as_deref(), w.fmt.as_deref())?;
         let allowed: Vec<OriginPattern> = k2_vault::hosts::parse_stored(&r.meta.hosts);
-        injections.push(crate::vault_fetch::Injection { name: r.meta.name.clone(), value: r.value, dst, fmt, allowed });
+        injections.push(crate::vault_fetch::Injection { name: r.meta.name.clone(), value: r.value, dst, fmt, allowed, sign: r.inject.sign.clone() });
     }
     let ws_root = crate::vault::workspace_path(&a.workspace_id).map(PathBuf::from);
     let req_body = match (&b.body_b64, &b.body_file) {
@@ -207,27 +207,36 @@ fn fetch(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Value,
         let root = ws_root.as_ref().ok_or_else(|| VaultError::not_found("workspace folder not found"))?;
         let p = jailed_path(root, out)?;
         write_no_follow(&p, &res.body)?;
-        return Ok(json!({
+        let mut v = json!({
             "status": res.status,
             "headers": headers,
             "truncated": res.truncated,
             "redirected": res.redirected,
             "out": p.display().to_string(),
             "bytes": res.body.len(),
-        }));
+        });
+        if let Some(c) = res.clock {
+            v["clock"] = json!(c);
+        }
+        return Ok(v);
     }
     let (text, b64) = match String::from_utf8(res.body.clone()) {
         Ok(t) => (Some(t), None),
         Err(_) => (None, Some(base64::engine::general_purpose::STANDARD.encode(&res.body))),
     };
-    Ok(json!({
+    let mut v = json!({
         "status": res.status,
         "headers": headers,
         "truncated": res.truncated,
         "redirected": res.redirected,
         "body": text,
         "bodyB64": b64,
-    }))
+    });
+    // OVH signing: whose clock signed it (server = /1.0/auth/time).
+    if let Some(c) = res.clock {
+        v["clock"] = json!(c);
+    }
+    Ok(v)
 }
 
 fn write_no_follow(p: &Path, bytes: &[u8]) -> Result<(), VaultError> {

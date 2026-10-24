@@ -112,7 +112,7 @@ pub fn handle_vault_recipient(body: &[u8]) -> CliResponse {
         to_fingerprint: ingested.peer_fingerprint.clone(),
         vault_id: vault.vault_id().to_string(),
         recipient,
-        features: vec![handoff::FEATURE.to_string()],
+        features: vec![handoff::FEATURE.to_string(), handoff::FEATURE_SIGN.to_string()],
         issued_at: chrono::Utc::now().to_rfc3339(),
     };
     match vr::sign(&statement, &key) {
@@ -499,6 +499,20 @@ pub(crate) fn send_remote(
     // Can it take a handoff at all? An old or federation-off peer 404s
     // here: peer_too_old, before anything else is asked of anyone.
     let mut pv = peer_vault(vault, &peer, host, false)?;
+    // Item 2: a signed secret goes only to a server that keeps the signer
+    // (an older one would paste the value). The cached statement may
+    // predate the peer's update, so ask again once before refusing.
+    if item.inject.as_ref().is_some_and(|i| i.sign.is_some()) && !pv.features.iter().any(|f| f == handoff::FEATURE_SIGN) {
+        pv = peer_vault(vault, &peer, host, true)?;
+        if !pv.features.iter().any(|f| f == handoff::FEATURE_SIGN) {
+            return Err(VaultError::new(
+                "peer_too_old_for_signed",
+                422,
+                format!("{host} can't take a signed secret yet (it needs K2 0.46.4 or later); nothing was sent"),
+            )
+            .into());
+        }
+    }
     // R3: a person-given secret needs a person to send it, with the vault
     // (checked after the peer proved it can take a handoff, so nobody
     // confirms a send that can't happen)

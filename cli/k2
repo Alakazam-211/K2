@@ -20525,6 +20525,8 @@ k2 vault — secrets for agents, without showing them the value
   k2 vault hosts NAME --add <host> | --remove <host>
   k2 vault delivery NAME fetch|file|env|api [--ceiling <d>]
                                            (no --env-name here: names live on grants)
+  k2 vault sign NAME ovh|hmac-sha256|hmac-sha256-ts|none [--sign-header …]
+                                           K2 signs fetch requests with the secret
   k2 vault grant NAME --to ws:<name>|ws:*|session:<id>|service:<label> [--as <d>] [--env-name X]
   k2 vault revoke NAME --from <who>        (or --grant <id>)
   k2 vault disable|enable NAME             destroy NAME --yes
@@ -20566,8 +20568,10 @@ Scope (--scope): ws:<workspace> (default inside a workspace), server, session.
 set options:
   --kind api_key|password|oauth_token|ssh_key|tls_key|dsn|url|generic   (default api_key)
   --for <host>[,<host>]       sites this secret may be sent to (exact hosts)
-  --preset stripe|openai|anthropic|xai|gemini|github|slack|supabase
+  --preset stripe|openai|anthropic|xai|gemini|github|slack|supabase|ovh-eu|ovh-ca|ovh-us
                               fills the sites and where the key goes in a request
+  --sign ovh|hmac-sha256|hmac-sha256-ts [--sign-header <Name> …]
+                              K2 signs each request instead (k2 vault set --help)
   --inject-dst header:<Name>|query:<param>|basic|body   where fetch puts the key
   --inject-header <Name>      same as --inject-dst header:<Name>
   --inject-format '<fmt>'     how it's written, one {} (e.g. 'Bearer {}'; default {})
@@ -20726,10 +20730,33 @@ for m in items:
     see = " (agent can see it)" if m.get("agentCanSee") else ""
     ns = " [system]" if m.get("namespace") == "system" else ""
     st = "" if m.get("status") == "active" else " [" + m.get("status","") + "]"
+    sg = (m.get("inject") or {}).get("sign")
+    st += (" [signs: " + sg.get("scheme", "") + "]") if sg else ""
     print("%-28s %-18s %-10s %-8s v%-3s %s%s%s%s" % (m.get("name"), where, m.get("kind"), m.get("defaultDelivery"), m.get("latestVersion"), hosts, see, ns, st))
 if hidden:
     print("%s K2 system secrets hidden from you: %s" % (hidden.get("count"), hidden.get("why")))
 '
+}
+
+# The signer JSON for set/sign (PRD vault-gaps item 2), or "" for none.
+# Args: scheme header encoding prefix prefix_set ts_header template
+# template_set value value_set.
+_vault_sign_json() {
+    python3 -c '
+import json, sys
+scheme, header, enc, prefix, prefix_set, tsh, tpl, tpl_set, val, val_set = sys.argv[1:11]
+if not scheme:
+    if header or enc or tsh or prefix_set == "1" or tpl_set == "1" or val_set == "1":
+        print("usage: --sign-* options need --sign ovh|hmac-sha256|hmac-sha256-ts", file=sys.stderr); sys.exit(2)
+    print(""); sys.exit(0)
+o = {"scheme": scheme}
+if header: o["header"] = header
+if enc: o["encoding"] = enc
+if prefix_set == "1": o["prefix"] = prefix
+if tsh: o["tsHeader"] = tsh
+if tpl_set == "1": o["template"] = tpl
+if val_set == "1": o["valueFmt"] = val
+print(json.dumps(o))' "$@"
 }
 
 _vault_render_status() {
@@ -20828,18 +20855,31 @@ _vault_fetch() {
             --help|-h)
                 cat <<'EOF'
 k2 vault fetch --secret NAME [-X METHOD] [-H 'Name: value']... [-d 'text' | -d @file | --json @file]
-               [--max-bytes N] [--timeout S] [--include-headers] [-o file] URL
+               [--max-bytes N] [--timeout S] [--include-headers] [-o file] [--json-out] URL
 
 K2 makes the call and adds the secret (header and format fixed by whoever
 created it); only to the secret's sites. Bodies over 64 KiB and -o output
 are files inside your workspace. Echoes of the value come back as [k2v:NAME].
 
 fetch adds the secret as-is, in one place: a header, a query parameter,
-basic auth or the body (k2 vault set --help: --inject-dst). It can't sign
-requests (HMAC, AWS SigV4, OVH): give those tools the secret with env or
-file delivery (k2 vault grant NAME --to ws:<you> --as env).
+basic auth or the body (k2 vault set --help: --inject-dst).
+Some secrets are signers: K2 signs the request (OVH, HMAC, HMAC with a
+timestamp). Same command. --dst and --fmt are refused for them, and so is
+a -H naming one of the signer's headers. (Not yet: AWS SigV4, Google
+service-account JWT; give those tools env or file delivery.)
+
+Scripts: --json-out prints the daemon's answer as one JSON object:
+  {"status": 200, "headers": [["content-type", "…"], …], "truncated": false,
+   "redirected": false, "body": "…"}   (or "bodyB64" for a non-text body;
+   with -o: "out" and "bytes" instead of the body; OVH: "clock": "server"
+   or "local")
+Headers are the short allowlist (content-type, date, etag, location,
+retry-after, request ids, rate limits) unless --include-headers. A refusal
+exits non-zero with {"error": {"code", "hint"}}. Running 8 at once is fine
+(the limit is 30 a second and 600 a minute per session).
 
 Example: k2 vault fetch --secret STRIPE_KEY https://api.stripe.com/v1/balance
+         k2 vault fetch --secret OVH_EU --json-out https://eu.api.ovh.com/1.0/me
 EOF
                 return 0 ;;
             -*) echo "usage: unknown fetch flag '$1' (k2 vault fetch --help)" >&2; exit 2 ;;
@@ -21260,7 +21300,8 @@ apply when NAME is created.
   --scope ws:<name>|server|session   (default: your workspace)
   --for <host>[,<host>]   the sites fetch may send it to (exact hosts)
   --preset <id>    stripe|openai|anthropic|xai|gemini|github|slack|supabase:
-                   fills --for and where the key goes (k2 vault presets)
+                   fills --for and where the key goes (k2 vault presets);
+                   ovh-eu|ovh-ca|ovh-us: fills --for and --sign ovh
 
   Where fetch puts the value (agents just name the secret):
   --inject-dst <d>         header:<Name>   a request header (default
@@ -21275,6 +21316,25 @@ apply when NAME is created.
   (or, for api_key/oauth_token/generic, a known provider's format when the
   value's prefix matches one).
 
+  Signers (K2 signs each request with the secret instead of pasting it;
+  default delivery and ceiling fetch; agents can't change it):
+  --sign ovh               OVH API v1. The value is one JSON object:
+                           {"applicationKey":…,"applicationSecret":…,
+                            "consumerKey":…}; kind defaults to generic.
+                           Uses OVH's clock (/1.0/auth/time, cached 15 min).
+  --sign hmac-sha256       --sign-header <Name>: prefix + HMAC of the body
+  --sign hmac-sha256-ts    --sign-header <Name>: HMAC of a template with a
+                           Unix timestamp; kind defaults to hmac_key
+  --sign-header <Name>     the signature header (HMAC schemes)
+  --sign-encoding hex|base64   (default hex)
+  --sign-prefix '<p>'      hmac-sha256 only, e.g. 'sha256=' (≤ 32 chars)
+  --sign-ts-header <Name>  hmac-sha256-ts: also send the timestamp here
+  --sign-template '<t>'    hmac-sha256-ts: what's signed, one {ts} and one
+                           {body} (default '{ts}.{body}')
+  --sign-value '<v>'       hmac-sha256-ts: the header value, one {sig},
+                           at most one {ts} (default '{sig}')
+  Change it later with k2 vault sign (k2 vault sign --help).
+
   --describe <text>  --rotate-every <days>  --ttl <secs> (session scope)
 
 Examples:
@@ -21282,6 +21342,9 @@ Examples:
   k2 vault set WEATHER_KEY --for api.weather.example --inject-dst query:appid < key.txt
   k2 vault set MAILGUN_KEY --for api.mailgun.net --inject-dst basic --inject-format 'api:{}' < key.txt
   k2 vault set DEPLOY_KEY --kind ssh_key < deploy_ed25519
+  k2 vault set OVH_EU --sign ovh --preset ovh-eu < ovh-keys.json
+  k2 vault set HOOK_KEY --sign hmac-sha256 --sign-header X-Hub-Signature-256 --sign-prefix 'sha256=' --for hooks.example.com < key
+  k2 vault set OPS_INGEST --sign hmac-sha256-ts --sign-header X-K2-Ops-Sig --sign-ts-header X-K2-Ops-Ts --for ingest.example.com < key
 Better than set: ask a person, so the value never passes through you:
   k2 thread secret <addr> --name STRIPE_KEY --for api.stripe.com
 EOF
@@ -21305,6 +21368,23 @@ people). --add and --remove repeat. Adding a site widens the secret: an
 agent may do it only for secrets its own workspace created.
 
 Example: k2 vault hosts STRIPE_KEY --add files.stripe.com
+EOF
+            ;;
+        sign) cat <<'EOF'
+k2 vault sign NAME ovh | hmac-sha256 --sign-header <Name> [--sign-encoding hex|base64] [--sign-prefix '<p>']
+k2 vault sign NAME hmac-sha256-ts --sign-header <Name> [--sign-ts-header <Name>] [--sign-template '<t>'] [--sign-value '<v>']
+k2 vault sign NAME none
+
+Set or remove how K2 signs requests made with NAME (k2 vault set --help:
+Signers). k2 vault fetch then adds the signer's headers on every request,
+redirects included; --dst/--fmt are refused. Changing the signer of a
+secret a person gave you is the owner's call. ovh checks that the stored
+value is the OVH JSON. none goes back to pasting the value as set.
+
+Examples:
+  k2 vault sign OVH_EU ovh
+  k2 vault sign HOOK_KEY hmac-sha256 --sign-header X-Hub-Signature-256 --sign-prefix 'sha256='
+  k2 vault sign STRIPE_HOOK hmac-sha256-ts --sign-header Stripe-Signature --sign-value 't={ts},v1={sig}'
 EOF
             ;;
         delivery) cat <<'EOF'
@@ -21412,11 +21492,18 @@ EOF
         doctor) cat <<'EOF'
 k2 vault doctor [--json]
 
-Problems: no confirmed recovery key, tamper, rotations due, published
-services on the old inherited environment, secret-looking values in
-plain .env files in your workspace (top level), and (Linux) a runtime
-dir systemd-logind can delete under the daemon (no linger; the warning
-names the fix). The last line says which .env names it checks; other
+Problems: no confirmed recovery key, tamper, rotations due, secrets a
+newer K2 wrote (this one skips them), published services on the old
+inherited environment, (Linux) a runtime dir systemd-logind can delete
+under the daemon (no linger; the warning names the fix), and
+secret-looking values in plain .env files in your workspace and one
+level of subfolders (clones, worktrees; not node_modules, .git or
+target; at most 200 files and 4 MiB a run). A value that looks like a
+known provider's key (sk_live_, sk-ant-, ghp_, …) is flagged under any
+name, by provider, never the value. It also lists CLI login files that
+hold a credential: gh hosts.yml, vercel auth.json, ~/.npmrc with a
+literal _authToken, ovh.conf, ~/.ssh/id_* keys, each with the vault
+recipe. The last line says which .env names it checks; other
 names aren't flagged. Exit 1 on an error.
 
 Example: k2 vault doctor
@@ -21573,6 +21660,8 @@ cmd_vault() {
     fi
     local as_json=0 scope="" system=0 kind="" hosts="" preset="" delivery="" ceiling="" describe="" rotate_every="" ttl=""
     local inject_header="" inject_format="" inject_dst="" to="" from="" as_d="" env_name="" file_name="" grant_id="" yes=0 since="" to_version=""
+    local sign_scheme="" sign_header="" sign_encoding="" sign_prefix="" sign_ts_header="" sign_template="" sign_value=""
+    local sign_prefix_set=0 sign_template_set=0 sign_value_set=0
     local remove_original=0 env_file_opt="" done_path="" ttl_secs=""
     local carry_recipient="" carry_target="" carry_target_ws="" own_box_move=0 out_file="" holder="" dry_run=0 replace=0 apply=0
     local add_hosts=() rm_hosts=() pos=() use_secrets=() carry_ws=() carry_server=()
@@ -21595,6 +21684,22 @@ cmd_vault() {
                 esac
                 shift 2 ;;
             --secret) [ -n "${2:-}" ] || { echo "usage: --secret NAME" >&2; exit 2; }; use_secrets+=("$2"); shift 2 ;;
+            --sign|--sign-header|--sign-encoding|--sign-ts-header)
+                [ -n "${2:-}" ] || { echo "usage: $1 needs a value" >&2; exit 2; }
+                case "$1" in
+                    --sign) sign_scheme="$2" ;; --sign-header) sign_header="$2" ;;
+                    --sign-encoding) sign_encoding="$2" ;; --sign-ts-header) sign_ts_header="$2" ;;
+                esac
+                shift 2 ;;
+            --sign-prefix|--sign-template|--sign-value)
+                # May be empty (--sign-prefix ''), so only the count is checked.
+                [ $# -ge 2 ] || { echo "usage: $1 needs a value" >&2; exit 2; }
+                case "$1" in
+                    --sign-prefix) sign_prefix="$2"; sign_prefix_set=1 ;;
+                    --sign-template) sign_template="$2"; sign_template_set=1 ;;
+                    --sign-value) sign_value="$2"; sign_value_set=1 ;;
+                esac
+                shift 2 ;;
             --env-file) [ -n "${2:-}" ] || { echo "usage: --env-file <file>" >&2; exit 2; }; env_file_opt="$2"; shift 2 ;;
             --done) [ -n "${2:-}" ] || { echo "usage: --done <path>" >&2; exit 2; }; done_path="$2"; shift 2 ;;
             --scope|--kind|--for|--preset|--delivery|--ceiling|--describe|--rotate-every|--ttl|--inject-header|--inject-format|--inject-dst|--to|--from|--as|--env-name|--file-name|--grant|--add|--remove|--since)
@@ -21652,7 +21757,16 @@ v = json.load(sys.stdin); m = v.get("secret") or {}
 print("%s  (%s, %s, v%s, %s)" % (m.get("name"), m.get("kind"), m.get("status"), m.get("latestVersion"), m.get("ref") or "system"))
 print("sites:     %s" % (", ".join(m.get("hosts") or []) or "none (fetch is refused until a site is added)"))
 inj = m.get("inject") or {}
-if inj: print("goes in:   %s as %s" % (inj.get("dst"), inj.get("fmt")))
+sg = inj.get("sign")
+if sg:
+    sch = sg.get("scheme")
+    if sch == "ovh":
+        print("signs:     ovh (X-Ovh-Application, X-Ovh-Consumer, X-Ovh-Timestamp, X-Ovh-Signature; OVH clock)")
+    elif sch == "hmac-sha256":
+        print("signs:     hmac-sha256 over the body → %s: %s<%s>" % (sg.get("header"), sg.get("prefix",""), sg.get("encoding","hex")))
+    else:
+        print("signs:     hmac-sha256-ts over %s → %s: %s (%s)%s" % (sg.get("template"), sg.get("header"), sg.get("valueFmt"), sg.get("encoding","hex"), (", " + sg["tsHeader"] + ": {ts}") if sg.get("tsHeader") else ""))
+elif inj: print("goes in:   %s as %s" % (inj.get("dst"), inj.get("fmt")))
 print("delivery:  %s (at most %s)%s" % (m.get("defaultDelivery"), m.get("deliveryCeiling"), " — agents can see it" if m.get("agentCanSee") else ""))
 print("given by:  %s%s" % (m.get("createdBy"), " (a person)" if m.get("humanGiven") else ""))
 for g in v.get("grants") or []:
@@ -21664,10 +21778,13 @@ for a in (v.get("audit") or [])[:10]:
         set)
             [ -n "$name" ] || { echo "usage: k2 vault set NAME [options] < value" >&2; exit 2; }
             [ "${#pos[@]}" -eq 1 ] || { echo "value_on_argv: values are read from stdin, never an argument (k2 vault set NAME < file)" >&2; exit 2; }
-            local opts
+            local opts sjson
+            sjson="$(_vault_sign_json "$sign_scheme" "$sign_header" "$sign_encoding" "$sign_prefix" "$sign_prefix_set" "$sign_ts_header" "$sign_template" "$sign_template_set" "$sign_value" "$sign_value_set")" || exit 2
             opts="$(python3 -c '
 import json, sys
-kind, hosts, preset, delivery, ceiling, describe, rot, ttl, ih, iformat, idst = sys.argv[1:12]
+kind, hosts, preset, delivery, ceiling, describe, rot, ttl, ih, iformat, idst, sign = sys.argv[1:13]
+if sign and (ih or iformat or idst):
+    print("usage: a signed secret has no --inject-*: K2 sets the signer'"'"'s own headers", file=sys.stderr); sys.exit(2)
 if ih and idst:
     print("usage: --inject-header X is --inject-dst header:X; give one of them", file=sys.stderr); sys.exit(2)
 o = {}
@@ -21681,7 +21798,9 @@ if rot: o["rotateEveryDays"] = int(rot)
 if ttl: o["ttlSecs"] = int(ttl)
 if ih or iformat or idst:
     o["inject"] = {"dst": idst or ("header:" + (ih or "Authorization")), "fmt": iformat or "{}"}
-print(json.dumps(o))' "$kind" "$hosts" "$preset" "$delivery" "$ceiling" "$describe" "$rotate_every" "$ttl" "$inject_header" "$inject_format" "$inject_dst")" || exit 2
+if sign:
+    o["inject"] = {"sign": json.loads(sign)}
+print(json.dumps(o))' "$kind" "$hosts" "$preset" "$delivery" "$ceiling" "$describe" "$rotate_every" "$ttl" "$inject_header" "$inject_format" "$inject_dst" "$sjson")" || exit 2
             local body
             body="$(_vault_body_with_value "$(_vault_merge "$sj" "$nj" "$opts")")" || exit 2
             _vault_call POST set "$body"
@@ -21691,6 +21810,8 @@ print(json.dumps(o))' "$kind" "$hosts" "$preset" "$delivery" "$ceiling" "$descri
 import json, sys
 v = json.load(sys.stdin); m = v.get("secret") or {}
 print("%s %s → %s (v%s)" % ("saved" if v.get("created") else "new version of", m.get("name"), v.get("ref"), m.get("latestVersion")))
+sg = (m.get("inject") or {}).get("sign")
+if sg: print("signs requests: %s (k2 vault show %s)" % (sg.get("scheme"), m.get("name")))
 if v.get("trimmed"): print("(trimmed spaces/newlines around the value)")
 print("use: " + (v.get("use") or ""))'
             ;;
@@ -21712,6 +21833,23 @@ print("use: " + (v.get("use") or ""))'
             _vault_call POST policy "$(_vault_merge "$sj" "$nj" "$hj")"
             if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
             printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; m=json.load(sys.stdin).get("secret") or {}; print("%s sites: %s" % (m.get("name"), ", ".join(m.get("hosts") or []) or "none"))'
+            ;;
+        sign)
+            [ -n "$name" ] && [ -n "${pos[1]:-}" ] || { echo "usage: k2 vault sign NAME ovh|hmac-sha256|hmac-sha256-ts|none [--sign-header …] (k2 vault sign --help)" >&2; exit 2; }
+            [ -z "$sign_scheme" ] || { echo "usage: the scheme is the second word: k2 vault sign NAME ${sign_scheme}" >&2; exit 2; }
+            local gj
+            if [ "${pos[1]}" = "none" ]; then
+                if [ -n "$sign_header$sign_encoding$sign_ts_header" ] || [ "$sign_prefix_set$sign_template_set$sign_value_set" != "000" ]; then
+                    echo "usage: k2 vault sign NAME none takes no --sign-* options" >&2; exit 2
+                fi
+                gj='{"sign": "none"}'
+            else
+                gj="$(_vault_sign_json "${pos[1]}" "$sign_header" "$sign_encoding" "$sign_prefix" "$sign_prefix_set" "$sign_ts_header" "$sign_template" "$sign_template_set" "$sign_value" "$sign_value_set")" || exit 2
+                gj="$(python3 -c 'import json,sys; print(json.dumps({"sign": json.loads(sys.argv[1])}))' "$gj")"
+            fi
+            _vault_call POST policy "$(_vault_merge "$sj" "$nj" "$gj")"
+            if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
+            printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; m=json.load(sys.stdin).get("secret") or {}; sg=(m.get("inject") or {}).get("sign"); print("%s: %s" % (m.get("name"), ("signs requests: " + sg.get("scheme")) if sg else "no signer (fetch adds the value as set)"))'
             ;;
         delivery)
             [ -n "$name" ] && [ -n "${pos[1]:-}" ] || { echo "usage: k2 vault delivery NAME fetch|file|env|api [--ceiling <d>]" >&2; exit 2; }
@@ -21802,7 +21940,8 @@ for x in r:
             printf '%s' "$_SC_BODY" | python3 -c '
 import json, sys
 for p in json.load(sys.stdin).get("presets") or []:
-    print("%-10s %-14s %-48s %s %s" % (p["id"], p["label"], ",".join(p["hosts"]) or "(your project host)", p["dst"], p["fmt"]))'
+    how = ("signs: " + p["sign"]) if p.get("sign") else (p["dst"] + " " + p["fmt"])
+    print("%-10s %-16s %-48s %s" % (p["id"], p["label"], ",".join(p["hosts"]) or "(your project host)", how))'
             ;;
         doctor)
             _vault_call GET doctor
@@ -32882,6 +33021,8 @@ HOW YOU GET A SECRET (delivery)
           Only to the secret's sites. Where the key goes in the request
           (header and format) was fixed by whoever created the secret —
           you just name it. Echoes of the key come back as [k2v:NAME].
+          Some secrets are signers: K2 signs the request (OVH, HMAC, HMAC
+          with a timestamp). Same command.
   file    $K2_SECRETS_DIR/<NAME>, memory-backed, removed at session end.
           You CAN read it — so can anything you run. Opt-in.
   env     $NAME in new sessions. You can read it. Needs a respawn.
@@ -32902,6 +33043,15 @@ KINDS AND DELIVERY (--kind on set; the default delivery follows it)
   k2 vault delivery NAME file|env. Fetch needs sites (--for) and puts the
   value in one place: --inject-dst header:<Name> (default Authorization:
   Bearer), query:<param>, basic, or body ({{secret}}; a person only).
+
+SIGNED REQUESTS AND SCRIPTS
+  A person (or your workspace, for its own secrets) makes a secret a
+  signer once: k2 vault set OVH_EU --sign ovh --preset ovh-eu < keys.json
+  (presets ovh-eu|ovh-ca|ovh-us; the value is the three OVH keys as JSON),
+  or --sign hmac-sha256 / hmac-sha256-ts --sign-header … (k2 vault set
+  --help). Then k2 vault fetch --secret OVH_EU URL signs every call.
+  Scripts: k2 vault fetch --json-out prints {status, headers, truncated,
+  redirected, body|bodyB64} (k2 vault fetch --help); 8 in parallel is fine.
 
 REFERENCES, NOT COPIES
   k2v://ws/<workspace>/<NAME>   k2v://server/<NAME>
@@ -33005,7 +33155,8 @@ HONEST LIMITS
   logs every use.
 
 WHAT THE VAULT CAN'T DO YET (and the way around it today)
-  sign requests (HMAC, AWS SigV4, OVH)  env or file delivery to the tool
+  sign requests (AWS SigV4, Google service-account JWT)
+                                        env or file delivery to the tool
   ssh-agent                             file delivery + ssh -i
   plain systemd units                   systemd-creds (above)
   boxes without K2                      systemd-creds over SSH (above)

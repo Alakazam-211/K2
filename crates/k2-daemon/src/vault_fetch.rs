@@ -26,11 +26,11 @@ use std::io::Read;
 use std::time::{Duration, Instant};
 
 use k2_vault::fetch::{
-    check_host, inject_body, inject_edit, redirect_allowed, upstream_error, validate_agent_header, validate_method,
-    InjectEdit, DEFAULT_MAX_RESPONSE, MAX_REDIRECTS, MAX_RESPONSE, RESPONSE_HEADER_ALLOWLIST,
+    check_host, inject_body, inject_edit, redirect_allowed, sign_edit, upstream_error, validate_agent_header,
+    validate_method, InjectEdit, DEFAULT_MAX_RESPONSE, MAX_REDIRECTS, MAX_RESPONSE, RESPONSE_HEADER_ALLOWLIST,
 };
 use k2_vault::hosts::{HostKind, Origin, OriginPattern};
-use k2_vault::inject::Dst;
+use k2_vault::inject::{Dst, Sign};
 use k2_vault::redact::{Redactor, StreamRedactor};
 use k2_vault::{SecretBytes, VaultError};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
@@ -131,6 +131,9 @@ pub struct Injection {
     pub fmt: String,
     /// The secret's allowed sites, already narrowed by the grant.
     pub allowed: Vec<OriginPattern>,
+    /// A sealed signer (PRD vault-gaps item 2): K2 signs each hop with the
+    /// value instead of pasting it; `dst`/`fmt` aren't used.
+    pub sign: Option<Sign>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,6 +146,9 @@ pub struct FetchResult {
     pub truncated: bool,
     /// At least one same-origin redirect was followed.
     pub redirected: bool,
+    /// OVH signing only: `server` (the origin's `/1.0/auth/time`) or
+    /// `local` (that failed; the local clock was used).
+    pub clock: Option<&'static str>,
 }
 
 /// Run one fetch. Every refusal happens before the first connection.
@@ -183,10 +189,32 @@ pub fn execute(
     let mut query_edits: Vec<(String, SecretBytes)> = Vec::new();
     let mut wire: Vec<(usize, SecretBytes)> = Vec::new();
     let mut body = spec.body.map(SecretBytes::new);
+    // Signers set their own headers on every hop; their names are owned
+    // like an injected header's.
+    let mut signer_headers: Vec<String> = Vec::new();
+    for inj in injections.iter() {
+        if let Some(sg) = &inj.sign {
+            if let Sign::Ovh = sg {
+                // Check the value's shape before any connection.
+                Sign::ovh_keys(inj.value.expose())?;
+            }
+            for h in sg.header_names() {
+                if signer_headers.iter().any(|x| x.eq_ignore_ascii_case(&h)) {
+                    return Err(VaultError::bad_request("inject_conflict", format!("two secrets go into {h}")));
+                }
+                signer_headers.push(h);
+            }
+        }
+    }
     for (i, inj) in injections.iter().enumerate() {
+        if inj.sign.is_some() {
+            continue;
+        }
         match inject_edit(&inj.dst, &inj.fmt, &inj.value)? {
             InjectEdit::Header { name, value } => {
-                if header_edits.iter().any(|(n, _)| n.eq_ignore_ascii_case(&name)) {
+                if header_edits.iter().any(|(n, _)| n.eq_ignore_ascii_case(&name))
+                    || signer_headers.iter().any(|n| n.eq_ignore_ascii_case(&name))
+                {
                     return Err(VaultError::bad_request("inject_conflict", format!("two secrets go into {name}")));
                 }
                 wire.push((i, value.duplicate()));
@@ -216,7 +244,7 @@ pub fn execute(
     let mut agent_headers: Vec<(HeaderName, HeaderValue)> = Vec::new();
     for (n, v) in &spec.headers {
         validate_agent_header(n, v)?;
-        if header_edits.iter().any(|(h, _)| h.eq_ignore_ascii_case(n)) {
+        if header_edits.iter().any(|(h, _)| h.eq_ignore_ascii_case(n)) || signer_headers.iter().any(|h| h.eq_ignore_ascii_case(n)) {
             return Err(VaultError::bad_request(
                 "header_not_allowed",
                 format!("{n} is set from the secret; remove it"),
@@ -247,7 +275,22 @@ pub fn execute(
     for (i, v) in &wire {
         entries.push((injections[*i].name.as_str(), v.expose()));
     }
+    // An OVH value's three fields, each on its own (item 2).
+    let ovh_parts: Vec<(usize, SecretBytes)> = injections
+        .iter()
+        .enumerate()
+        .filter(|(_, inj)| matches!(inj.sign, Some(Sign::Ovh)))
+        .filter_map(|(i, inj)| Sign::ovh_keys(inj.value.expose()).ok().map(|k| (i, k)))
+        .flat_map(|(i, k)| {
+            [k.application_key, k.application_secret, k.consumer_key].into_iter().map(move |p| (i, SecretBytes::from_string(p)))
+        })
+        .collect();
+    for (i, v) in &ovh_parts {
+        entries.push((injections[*i].name.as_str(), v.expose()));
+    }
     let own = Redactor::new(entries);
+    let ovh = injections.iter().any(|inj| matches!(inj.sign, Some(Sign::Ovh)));
+    let mut clock: Option<&'static str> = None;
 
     let exact_ip = allow.exact_ip(&origin);
     let mut redirected = false;
@@ -266,6 +309,31 @@ pub fn execute(
         }
         for (n, v) in &injected_headers {
             headers.insert(n.clone(), v.clone());
+        }
+        // Signers: computed per hop from the exact URL, method and body
+        // sent, with a fresh timestamp (a redirect is re-signed).
+        if injections.iter().any(|inj| inj.sign.is_some()) {
+            let local = chrono::Utc::now().timestamp();
+            let ovh_now = if ovh {
+                let (t, c) = ovh_time(&url, &origin, allow, exact_ip, spec.purpose, deadline);
+                clock = Some(c);
+                t
+            } else {
+                local
+            };
+            let body_bytes: &[u8] = body.as_ref().map(|b| b.expose()).unwrap_or(&[]);
+            for inj in &injections {
+                let Some(sg) = &inj.sign else { continue };
+                let now = if matches!(sg, Sign::Ovh) { ovh_now } else { local };
+                for (n, v) in sign_edit(sg, &inj.value, method.as_str(), url.as_str(), body_bytes, now)? {
+                    let name = HeaderName::from_bytes(n.as_bytes())
+                        .map_err(|_| VaultError::bad_request("bad_inject", format!("bad header name: {n}")))?;
+                    let mut value = HeaderValue::from_bytes(v.expose())
+                        .map_err(|_| VaultError::bad_request("value_not_header_safe", "this value has a control character"))?;
+                    value.set_sensitive(true);
+                    headers.insert(name, value);
+                }
+            }
         }
         headers.insert(reqwest::header::ACCEPT_ENCODING, HeaderValue::from_static("identity"));
 
@@ -297,10 +365,69 @@ pub fn execute(
 
         let mut result = read_response(resp, &method, max_bytes, deadline, &own, redactor, &origin)?;
         result.redirected = redirected;
+        result.clock = clock;
         if !spec.include_headers {
             result.headers.retain(|(n, _)| RESPONSE_HEADER_ALLOWLIST.contains(&n.as_str()));
         }
         return Ok(result);
+    }
+}
+
+/// How long an origin's OVH clock offset is kept.
+pub const OVH_CLOCK_TTL: Duration = Duration::from_secs(15 * 60);
+/// How long a failed `/1.0/auth/time` keeps the local clock before trying again.
+const OVH_CLOCK_RETRY: Duration = Duration::from_secs(60);
+
+#[allow(clippy::type_complexity)]
+fn ovh_clocks() -> &'static parking_lot::Mutex<HashMap<String, (Instant, Option<i64>)>> {
+    static C: std::sync::OnceLock<parking_lot::Mutex<HashMap<String, (Instant, Option<i64>)>>> = std::sync::OnceLock::new();
+    C.get_or_init(|| parking_lot::Mutex::new(HashMap::new()))
+}
+
+/// OVH time for this origin (item 2, Q3): `GET /1.0/auth/time`
+/// (unauthenticated, no secret sent) on the same origin, through the same
+/// allowlist and egress vetting, cached per origin for 15 minutes as an
+/// offset from the local clock. On any failure: the local clock, `local`.
+fn ovh_time(url: &url::Url, origin: &Origin, allow: &Allowlist, exact_ip: bool, purpose: Purpose, deadline: Instant) -> (i64, &'static str) {
+    let key = origin.render();
+    let local = chrono::Utc::now().timestamp();
+    if let Some((at, off)) = ovh_clocks().lock().get(&key).copied() {
+        match off {
+            Some(o) if at.elapsed() < OVH_CLOCK_TTL => return (local + o, "server"),
+            None if at.elapsed() < OVH_CLOCK_RETRY => return (local, "local"),
+            _ => {}
+        }
+    }
+    let fetched = (|| -> Option<i64> {
+        let mut t = url.clone();
+        t.set_path("/1.0/auth/time");
+        t.set_query(None);
+        t.set_fragment(None);
+        allow.check(&Origin::from_url(&t).ok()?).ok()?;
+        let dest = Destination::vet(&t, exact_ip).ok()?;
+        let remaining = deadline.saturating_duration_since(Instant::now()).min(Duration::from_secs(5));
+        if remaining.is_zero() {
+            return None;
+        }
+        let client = egress::client(purpose, &dest, remaining).ok()?;
+        let resp = client.get(t).header(reqwest::header::ACCEPT_ENCODING, "identity").send().ok()?;
+        if !resp.status().is_success() {
+            return None;
+        }
+        let mut text = String::new();
+        resp.take(64).read_to_string(&mut text).ok()?;
+        text.trim().parse::<i64>().ok()
+    })();
+    let now = chrono::Utc::now().timestamp();
+    match fetched {
+        Some(server) => {
+            ovh_clocks().lock().insert(key, (Instant::now(), Some(server - now)));
+            (server, "server")
+        }
+        None => {
+            ovh_clocks().lock().insert(key, (Instant::now(), None));
+            (now, "local")
+        }
     }
 }
 
@@ -471,7 +598,7 @@ fn read_response(
     if !no_body {
         headers.push(("content-length".to_string(), body.len().to_string()));
     }
-    Ok(FetchResult { status: status.as_u16(), headers, body, truncated, redirected: false })
+    Ok(FetchResult { status: status.as_u16(), headers, body, truncated, redirected: false, clock: None })
 }
 
 fn read_kind(e: &std::io::Error, coding: Coding) -> &'static str {
@@ -677,6 +804,7 @@ mod tests {
             dst: Dst::Header("Authorization".into()),
             fmt: "Bearer {}".into(),
             allowed,
+            sign: None,
         }
     }
 
@@ -783,6 +911,7 @@ mod tests {
             dst: Dst::Header("X-Other".into()),
             fmt: "{}".into(),
             allowed: vec![OriginPattern::parse("http://127.0.0.1:1", false).expect("pattern")],
+            sign: None,
         };
         let e = run(spec(&format!("{}/", up.base())), vec![bearer(vec![up.pattern()]), other], &Redactor::empty())
             .expect_err("second secret not allowed");
@@ -907,6 +1036,7 @@ mod tests {
             dst: Dst::Header("X-Api-Key".into()),
             fmt: "{}".into(),
             allowed: vec![up.pattern()],
+            sign: None,
         };
         let caller = Redactor::new([("OTHER", b"hunter2-other-value".as_slice())]);
         let mut s = spec(&format!("{}/", up.base()));
@@ -1079,6 +1209,177 @@ mod tests {
         let e = rl.check_at("s1", t0 + Duration::from_secs(20)).expect_err("minute over");
         assert_eq!(e.code, "rate_limited");
         rl.check_at("s1", t0 + Duration::from_secs(61)).expect("window moved on");
+    }
+
+    // ── signed fetch (PRD vault-gaps item 2) ─────────────────────────
+
+    const OVH_JSON: &str = r#"{"applicationKey":"k2testAppKey0001","applicationSecret":"k2testAppSecret00000000000000001","consumerKey":"k2testConsumerKey000000000000001"}"#;
+
+    fn header_of(head: &str, name: &str) -> Option<String> {
+        head.lines().find_map(|l| {
+            let (k, v) = l.split_once(':')?;
+            k.trim().eq_ignore_ascii_case(name).then(|| v.trim().to_string())
+        })
+    }
+
+    fn signer(sign: Sign, value: &str, allowed: Vec<OriginPattern>) -> Injection {
+        Injection { name: "SIGNED".into(), value: SecretBytes::from_slice(value.as_bytes()), sign: Some(sign), ..bearer(allowed) }
+    }
+
+    /// An upstream that answers `/1.0/auth/time` with `server_time` (or 404
+    /// when `None`) and echoes everything else.
+    fn ovh_upstream(server_time: Option<i64>) -> Upstream {
+        Upstream::start(move |r| {
+            if r.head.starts_with("GET /1.0/auth/time ") {
+                return match server_time {
+                    Some(t) => vec![resp("200 OK", &[("Content-Type", "application/json")], t.to_string().as_bytes())],
+                    None => vec![resp("404 Not Found", &[], b"")],
+                };
+            }
+            vec![resp("200 OK", &[("Content-Type", "text/plain")], r.head.as_bytes())]
+        })
+    }
+
+    #[test]
+    fn ovh_signs_with_the_server_clock_and_the_exact_request() {
+        let _a = AirgapEnv::set(false);
+        let server_time = 1_700_000_123;
+        let up = ovh_upstream(Some(server_time));
+        let url = format!("{}/1.0/me?x=1&y=two", up.base());
+        let mut s = spec(&url);
+        s.method = "POST".into();
+        s.body = Some(br#"{"a":"b"}"#.to_vec());
+        let r = run(s, vec![signer(Sign::Ovh, OVH_JSON, vec![up.pattern()])], &Redactor::empty()).expect("fetch");
+        assert_eq!(r.clock, Some("server"));
+        let seen = up.seen();
+        assert!(seen[0].head.starts_with("GET /1.0/auth/time "), "time first: {}", seen[0].head);
+        assert_eq!(header_of(&seen[0].head, "X-Ovh-Application"), None, "the time call sends no key");
+        let head = &seen[1].head;
+        let ts: i64 = header_of(head, "X-Ovh-Timestamp").expect("ts").parse().expect("int");
+        assert!((ts - server_time).abs() <= 2, "server clock used: {ts}");
+        let want = sign_edit(&Sign::Ovh, &SecretBytes::from_slice(OVH_JSON.as_bytes()), "POST", &url, br#"{"a":"b"}"#, ts).expect("sign");
+        let want_sig = want.iter().find(|(n, _)| n == "X-Ovh-Signature").expect("sig").1.expose_str().expect("text").to_string();
+        assert_eq!(header_of(head, "X-Ovh-Signature").as_deref(), Some(want_sig.as_str()));
+        assert_eq!(header_of(head, "X-Ovh-Application").as_deref(), Some("k2testAppKey0001"));
+        assert_eq!(header_of(head, "X-Ovh-Consumer").as_deref(), Some("k2testConsumerKey000000000000001"));
+        assert!(!head.contains("k2testAppSecret"), "the application secret never goes on the wire");
+        assert_eq!(header_of(head, "Authorization"), None, "a signer doesn't paste the value");
+        // The echoed request comes back redacted: no field value.
+        let body = String::from_utf8_lossy(&r.body);
+        for v in ["k2testAppKey0001", "k2testConsumerKey000000000000001"] {
+            assert!(!body.contains(v), "{v} must be redacted: {body}");
+        }
+        assert!(body.contains("[k2v:SIGNED]"), "{body}");
+        // A second fetch within 15 minutes reuses the cached clock.
+        let s = spec(&url);
+        run(s, vec![signer(Sign::Ovh, OVH_JSON, vec![up.pattern()])], &Redactor::empty()).expect("fetch 2");
+        assert_eq!(up.seen().iter().filter(|x| x.head.starts_with("GET /1.0/auth/time ")).count(), 1);
+    }
+
+    #[test]
+    fn ovh_falls_back_to_the_local_clock() {
+        let _a = AirgapEnv::set(false);
+        let up = ovh_upstream(None);
+        let r = run(spec(&format!("{}/1.0/me", up.base())), vec![signer(Sign::Ovh, OVH_JSON, vec![up.pattern()])], &Redactor::empty())
+            .expect("fetch");
+        assert_eq!(r.clock, Some("local"));
+        let seen = up.seen();
+        let head = &seen.last().expect("request").head;
+        let ts: i64 = header_of(head, "X-Ovh-Timestamp").expect("ts").parse().expect("int");
+        assert!((ts - chrono::Utc::now().timestamp()).abs() <= 5);
+    }
+
+    #[test]
+    fn ovh_value_without_consumer_key_is_refused_before_connecting() {
+        let _a = AirgapEnv::set(false);
+        let up = ovh_upstream(Some(1));
+        let bad = r#"{"applicationKey":"a","applicationSecret":"b"}"#;
+        let e = run(spec(&format!("{}/1.0/me", up.base())), vec![signer(Sign::Ovh, bad, vec![up.pattern()])], &Redactor::empty())
+            .expect_err("bad value");
+        assert_eq!(e.code, "bad_value");
+        assert_eq!(up.conns(), 0);
+    }
+
+    #[test]
+    fn hmac_signs_the_body_and_the_agent_cannot_set_the_signer_header() {
+        let _a = AirgapEnv::set(false);
+        let up = Upstream::start(|_| ok("fine"));
+        let sign = Sign::HmacSha256 { header: "X-Hub-Signature-256".into(), encoding: k2_vault::inject::Enc::Hex, prefix: "sha256=".into() };
+        let mut s = spec(&format!("{}/hook", up.base()));
+        s.method = "POST".into();
+        s.body = Some(b"what do ya want for nothing?".to_vec());
+        run(s, vec![signer(sign.clone(), "Jefe", vec![up.pattern()])], &Redactor::empty()).expect("fetch");
+        // RFC 4231 test case 2.
+        assert_eq!(
+            header_of(&up.seen()[0].head, "X-Hub-Signature-256").as_deref(),
+            Some("sha256=5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843")
+        );
+        let mut s = spec(&format!("{}/hook", up.base()));
+        s.headers = vec![("x-hub-signature-256".into(), "sha256=agent".into())];
+        let e = run(s, vec![signer(sign, "Jefe", vec![up.pattern()])], &Redactor::empty()).expect_err("agent signer header");
+        assert_eq!(e.code, "header_not_allowed");
+        assert_eq!(up.seen().len(), 1, "no request for the refused call");
+    }
+
+    #[test]
+    fn a_signed_secret_outside_its_sites_never_connects() {
+        let _a = AirgapEnv::set(false);
+        let up = Upstream::start(|_| ok("fine"));
+        let other = OriginPattern::parse("http://127.0.0.1:1", false).expect("pattern");
+        let inj = signer(Sign::Ovh, OVH_JSON, vec![other.clone()]);
+        let allow = Allowlist { patterns: vec![up.pattern(), other] };
+        let e = execute(spec(&format!("{}/1.0/me", up.base())), &allow, vec![inj], &Redactor::empty()).expect_err("host");
+        assert_eq!(e.code, "host_not_allowed");
+        assert_eq!(up.conns(), 0);
+    }
+
+    #[test]
+    fn a_same_origin_redirect_is_re_signed_for_the_new_url() {
+        let _a = AirgapEnv::set(false);
+        let up = Upstream::start(|r| {
+            if r.head.starts_with("GET /a ") {
+                vec![resp("302 Found", &[("Location", "/b?z=1")], b"")]
+            } else {
+                ok("done")
+            }
+        });
+        let sign = Sign::HmacSha256Ts {
+            header: "X-Sig".into(),
+            ts_header: Some("X-Ts".into()),
+            template: "{ts}.{body}".into(),
+            value_fmt: "{sig}".into(),
+            encoding: k2_vault::inject::Enc::Hex,
+        };
+        let r = run(spec(&format!("{}/a", up.base())), vec![signer(sign, "k2test-hook-key", vec![up.pattern()])], &Redactor::empty())
+            .expect("fetch");
+        assert!(r.redirected);
+        let seen = up.seen();
+        assert_eq!(seen.len(), 2);
+        for x in &seen {
+            assert!(header_of(&x.head, "X-Sig").is_some_and(|v| v.len() == 64), "every hop signed: {}", x.head);
+            assert!(header_of(&x.head, "X-Ts").is_some(), "{}", x.head);
+        }
+    }
+
+    #[test]
+    fn eight_parallel_signed_fetches_all_succeed() {
+        let _a = AirgapEnv::set(false);
+        let up = ovh_upstream(Some(1_700_000_000));
+        let base = up.base();
+        let pat = up.pattern();
+        let handles: Vec<_> = (0..8)
+            .map(|i| {
+                let (base, pat) = (base.clone(), pat.clone());
+                std::thread::spawn(move || {
+                    run(spec(&format!("{base}/1.0/item/{i}")), vec![signer(Sign::Ovh, OVH_JSON, vec![pat])], &Redactor::empty())
+                })
+            })
+            .collect();
+        for h in handles {
+            let r = h.join().expect("thread").expect("fetch");
+            assert_eq!(r.status, 200);
+        }
+        assert_eq!(up.seen().iter().filter(|x| x.head.contains("X-Ovh-Signature") || x.head.contains("x-ovh-signature")).count(), 8);
     }
 }
 

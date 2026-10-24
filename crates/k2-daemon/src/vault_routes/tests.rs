@@ -983,3 +983,84 @@ fn the_newer_rows_line_counts_secrets_and_shares() {
     let l = newer_rows_line(&c).expect("line");
     assert!(l.starts_with("2 secrets and 1 share need a newer K2"), "{l}");
 }
+
+fn write(p: &std::path::Path, text: &str) {
+    std::fs::create_dir_all(p.parent().expect("parent")).expect("mkdir");
+    std::fs::write(p, text).expect("write");
+}
+
+#[test]
+fn the_doctor_reads_one_level_of_subfolders_and_skips_build_folders() {
+    let t = TestDir::new("doctor-tree");
+    let ws = t.path().join("ws");
+    write(&ws.join(".env"), "STRIPE_SECRET_KEY=k2test-top\n");
+    write(&ws.join("clone/.env.local"), "SUPABASE_SERVICE_ROLE_KEY=k2test-role\n");
+    write(&ws.join("node_modules/x/.env"), "API_KEY=k2test-nm\n");
+    write(&ws.join("node_modules/.env"), "API_KEY=k2test-nm\n");
+    write(&ws.join(".git/.env"), "API_KEY=k2test-git\n");
+    write(&ws.join("target/.env"), "API_KEY=k2test-target\n");
+    write(&ws.join("clone/deeper/.env"), "API_KEY=k2test-deep\n");
+    write(&ws.join("clone/.env.example"), "API_KEY=k2test-example\n");
+    write(&ws.join("clone/.env.k2"), "API_KEY=k2test-k2\n");
+    std::os::unix::fs::symlink(ws.join("clone"), ws.join("linked")).expect("symlink");
+    let scan = scan_env_files(&[ws.clone()]);
+    assert_eq!(scan.stopped_after, None);
+    let mut paths: Vec<String> = scan.files.iter().map(|f| f.path.trim_start_matches(&ws.display().to_string()).to_string()).collect();
+    paths.sort();
+    assert_eq!(paths, vec!["/.env".to_string(), "/clone/.env.local".to_string()], "{scan:?}");
+}
+
+#[test]
+fn the_doctor_stops_at_its_file_cap() {
+    let t = TestDir::new("doctor-cap");
+    let ws = t.path().join("ws");
+    for i in 0..(ENV_SCAN_MAX_FILES + 1) {
+        write(&ws.join(format!("c{i:03}/.env")), "PORT=1\n");
+    }
+    write(&ws.join("zzz/.env"), "API_KEY=k2test-after-cap\n");
+    let scan = scan_env_files(&[ws.clone()]);
+    assert_eq!(scan.stopped_after, Some(ENV_SCAN_MAX_FILES), "the 201st file stops the scan");
+    assert!(scan.files.is_empty(), "nothing after the cap is read: {scan:?}");
+}
+
+#[test]
+fn the_doctor_flags_a_provider_key_under_a_harmless_name_by_provider() {
+    let stripe = k2_vault::inject::preset("stripe").expect("stripe").prefixes[0];
+    let value = format!("{stripe}k2testvalue");
+    let text = format!("HARMLESS={value}\nPORT=3000\nNEXT_PUBLIC_X={value}\nREF=k2v://ws/demo/X\n");
+    let (names, by_value) = plaintext_env_findings(&text);
+    assert!(names.is_empty(), "{names:?}");
+    assert_eq!(by_value, vec![("HARMLESS".to_string(), "Stripe".to_string()), ("NEXT_PUBLIC_X".to_string(), "Stripe".to_string())]);
+    // The doctor's message names the provider and the name, never the value.
+    let t = TestDir::new("doctor-value");
+    let ws = t.path().join("ws");
+    write(&ws.join(".env"), &text);
+    let scan = scan_env_files(&[ws]);
+    assert_eq!(scan.files.len(), 1);
+    assert!(!format!("{:?}", scan.files[0]).contains("k2testvalue"));
+}
+
+#[test]
+fn the_doctor_lists_cli_credential_files() {
+    let t = TestDir::new("doctor-home");
+    let home = t.path().join("home");
+    let ws = t.path().join("ws");
+    std::fs::create_dir_all(&ws).expect("ws");
+    // Nothing there: nothing listed.
+    assert!(cli_credential_files(&home, &[ws.clone()]).is_empty());
+    write(&home.join(".npmrc"), "//registry.npmjs.org/:_authToken=${NPM_TOKEN}\n");
+    assert!(cli_credential_files(&home, &[ws.clone()]).is_empty(), "a ${{…}} reference isn't flagged");
+    write(&home.join(".npmrc"), "//registry.npmjs.org/:_authToken=k2test-npm-literal\n");
+    write(&home.join(".config/gh/hosts.yml"), "github.com:\n    oauth_token: k2test-gh\n    user: x\n");
+    write(&home.join(".local/share/com.vercel.cli/auth.json"), "{\"token\":\"k2test-vercel\"}");
+    write(&ws.join("ovh.conf"), "[ovh-eu]\napplication_key=a\napplication_secret=k2test-ovh\nconsumer_key=c\n");
+    write(&home.join(".ssh/id_ed25519"), "-----BEGIN OPENSSH PRIVATE KEY-----\nk2test\n-----END OPENSSH PRIVATE KEY-----\n");
+    write(&home.join(".ssh/id_ed25519.pub"), "ssh-ed25519 AAAA k2test\n");
+    let found = cli_credential_files(&home, &[ws.clone()]);
+    let ends: Vec<String> = found.iter().map(|f| f.path.rsplit('/').take(2).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("/")).collect();
+    assert_eq!(ends, vec!["gh/hosts.yml", "com.vercel.cli/auth.json", "home/.npmrc", "ws/ovh.conf", ".ssh/id_ed25519"], "{found:?}");
+    for f in &found {
+        assert!(!f.message.contains("k2test"), "never the value: {}", f.message);
+        assert!(f.message.contains("k2 "), "names a recipe: {}", f.message);
+    }
+}

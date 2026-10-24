@@ -981,14 +981,26 @@ impl LocalVault {
                     (None, Kind::ApiKey | Kind::OauthToken | Kind::Generic) => Some(preset.map(|p| p.inject()).unwrap_or_default()),
                     (None, _) => None,
                 };
+                let signed = inject.as_ref().and_then(|i| i.sign.as_ref());
                 if let Some(i) = &inject {
                     i.validate()?;
                     if i.uses_body() && !actor.may_set_body_inject() {
                         return Err(VaultError::forbidden("inject_body_needs_person", "only a person can let K2 put a secret in a request body"));
                     }
+                    if let Some(s) = &i.sign {
+                        s.check_value(value.expose())?;
+                    }
                 }
-                let default_delivery = req.default_delivery.unwrap_or_else(|| req.kind.default_delivery());
-                let ceiling = req.delivery_ceiling.unwrap_or(if default_delivery.level() >= Delivery::Env.level() { default_delivery } else { Delivery::Env });
+                // A signer's default and ceiling are fetch (item 2); a person
+                // may raise the ceiling.
+                let default_delivery = req.default_delivery.unwrap_or_else(|| if signed.is_some() { Delivery::Fetch } else { req.kind.default_delivery() });
+                let ceiling = req.delivery_ceiling.unwrap_or(if signed.is_some() {
+                    if default_delivery.level() > Delivery::Fetch.level() { default_delivery } else { Delivery::Fetch }
+                } else if default_delivery.level() >= Delivery::Env.level() {
+                    default_delivery
+                } else {
+                    Delivery::Env
+                });
                 if default_delivery.level() > ceiling.level() {
                     return Err(VaultError::bad_request("delivery_above_ceiling", "the delivery is looser than the ceiling"));
                 }
@@ -1045,6 +1057,9 @@ impl LocalVault {
             m.status = SecretStatus::Active;
         }
         let mut owner_notice = false;
+        if let Some(s) = m.inject.as_ref().and_then(|i| i.sign.as_ref()) {
+            s.check_value(value.expose())?;
+        }
         {
             let keys = self.keys.read();
             let conn = self.conn.lock();
@@ -1111,11 +1126,19 @@ impl LocalVault {
 
     fn set_policy_inner(&self, sel: &Selector, p: PolicyPatch, actor: &Actor) -> Result<SecretMeta> {
         let stamp = actor.stamp();
+        let new_sign = p.inject.as_ref().and_then(|i| i.sign.clone());
         let (row, f_own_grant) = {
             let keys = self.keys.read();
             let conn = self.conn.lock();
             let row = self.find_row(&conn, &keys, sel)?;
             let f = self.facts_for(&conn, &keys, &row.meta, actor)?;
+            // A new signer must fit the value already stored (OVH's JSON).
+            if let Some(s) = new_sign.as_ref().filter(|s| row.meta.inject.as_ref().and_then(|i| i.sign.as_ref()) != Some(*s)) {
+                if row.meta.status != SecretStatus::Destroyed {
+                    let v = self.decrypt_version(&conn, &keys, &row.meta, row.meta.latest_version)?;
+                    s.check_value(v.expose())?;
+                }
+            }
             (row.clone(), f.own_ws_has_grant)
         };
         let old = row.meta.clone();
@@ -1601,7 +1624,12 @@ impl LocalVault {
         };
         drop(conn);
         drop(keys);
-        let mut e = Entry::new(use_.action(), &actor_label, "ok").secret(&m.id, Some(m.latest_version)).consumer(actor_label.clone());
+        // Item 2: a signed fetch says which scheme signed it.
+        let outcome = match (&use_, m.inject.as_ref().and_then(|i| i.sign.as_ref())) {
+            (Use::Fetch(_), Some(s)) => format!("ok:sign={}", s.scheme()),
+            _ => "ok".to_string(),
+        };
+        let mut e = Entry::new(use_.action(), &actor_label, &outcome).secret(&m.id, Some(m.latest_version)).consumer(actor_label.clone());
         if let Use::Fetch(o) | Use::Proxy(o) = use_ {
             e = e.host(o.render());
         }

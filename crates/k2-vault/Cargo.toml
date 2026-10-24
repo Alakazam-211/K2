@@ -19,6 +19,8 @@ chacha20poly1305 = { version = "0.10", default-features = false, features = ["al
 hkdf = "0.12"
 hmac = "0.12"
 sha2 = "0.10"
+# OVH API v1 request signatures ($1$ SHA-1; PRD vault-gaps item 2).
+sha1 = "0.10"
 zeroize = "1"
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 # Engine signing keys (asymmetric engine tokens) and signed clone carries (VS20).

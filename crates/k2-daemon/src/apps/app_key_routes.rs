@@ -444,7 +444,7 @@ fn fetch(c: &Ctx, v: &J) -> R {
         let r = vault.resolve(&Selector::Id(g.secret_id.clone()), Use::Fetch(&origin), &who).map_err(|e| err(e.status, &e.code, e.hint))?;
         let (dst, fmt) = r.inject.choose(None, None).map_err(|e| err(e.status, &e.code, e.hint))?;
         let allowed: Vec<OriginPattern> = k2_vault::hosts::parse_stored(&r.meta.hosts);
-        injections.push(crate::vault_fetch::Injection { name: r.meta.name.clone(), value: r.value, dst, fmt, allowed });
+        injections.push(crate::vault_fetch::Injection { name: r.meta.name.clone(), value: r.value, dst, fmt, allowed, sign: r.inject.sign.clone() });
     }
     let req_body = match b.body_b64.as_deref() {
         Some(s) => Some(base64::engine::general_purpose::STANDARD.decode(s.trim()).map_err(|_| err(400, "bad_body", "bodyB64 isn't base64"))?),

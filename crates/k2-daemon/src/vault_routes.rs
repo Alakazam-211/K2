@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use base64::Engine as _;
-use k2_vault::inject::{self, Inject};
+use k2_vault::inject::{self, Enc as SignEnc, Inject, Sign};
 use k2_vault::vault::VaultStatus;
 use k2_vault::{
     Actor, AuditQuery, Consumer, ConsumerKind, Delivery, GrantRequest, HumanProof, Kind, ListFilter, LocalVault,
@@ -585,12 +585,31 @@ fn doctor(vault: &LocalVault, c: &VaultCaller) -> Result<Value, VaultError> {
             "message": format!("published service {name}: {notice}"),
         }));
     }
-    for f in plaintext_env_files(c) {
+    let roots = doctor_workspace_roots(c);
+    let scan = scan_env_files(&roots);
+    for f in &scan.files {
+        let mut what: Vec<String> = f.names.clone();
+        for (name, provider) in &f.by_value {
+            what.push(format!("a {provider} key in {name}"));
+        }
         findings.push(json!({
             "level": "warning",
             "code": "plaintext_env",
-            "message": format!("{} holds {} in plain text; move it in with: k2 vault import {}", f.0, f.1.join(", "), f.0),
+            "path": f.path,
+            "message": format!("{} holds {} in plain text; move it in with: k2 vault import {}", f.path, what.join(", "), f.path),
         }));
+    }
+    if let Some(n) = scan.stopped_after {
+        findings.push(json!({
+            "level": "info",
+            "code": "env_scan_capped",
+            "message": format!("stopped after {n} files (the doctor reads at most {ENV_SCAN_MAX_FILES} .env files and {} MiB per run); check the rest yourself", ENV_SCAN_MAX_BYTES / (1024 * 1024)),
+        }));
+    }
+    if let Some(home) = dirs::home_dir() {
+        for f in cli_credential_files(&home, &roots) {
+            findings.push(json!({ "level": "info", "code": "cli_credential_file", "path": f.path, "message": f.message }));
+        }
     }
     Ok(json!({
         "ok": findings.iter().all(|f| f["level"] != "error"),
@@ -600,7 +619,7 @@ fn doctor(vault: &LocalVault, c: &VaultCaller) -> Result<Value, VaultError> {
 }
 
 /// Which `.env` names the doctor flags, in one line (JSON and CLI text).
-pub const DOCTOR_CHECKED_NAMES: &str = "checked names: *SECRET*, *TOKEN*, *PASSWORD*, *_KEY, DATABASE_URL, *_DSN (not NEXT_PUBLIC_*, *_PUBLISHABLE_KEY, *_ANON_KEY). Other names aren't flagged; check them yourself.";
+pub const DOCTOR_CHECKED_NAMES: &str = "checked names: *SECRET*, *TOKEN*, *PASSWORD*, *_KEY, DATABASE_URL, *_DSN (not NEXT_PUBLIC_*, *_PUBLISHABLE_KEY, *_ANON_KEY), plus any value that looks like a known provider's key (sk_live_, sk-ant-, ghp_, …, see k2 vault presets) under any name. It reads .env files in each workspace folder and one level of subfolders (not node_modules, .git, target), and lists CLI login files (gh, vercel, npm, ovh.conf, ~/.ssh/id_*). Other names aren't flagged; check them yourself.";
 
 /// The doctor's name rule: does this `.env` name look like a secret?
 /// Wider than [`k2_vault::delivery::is_sensitive_name`], which stays strict
@@ -623,15 +642,170 @@ pub fn doctor_flags_name(key: &str) -> bool {
 /// The names in one `.env` text the doctor flags: a flagged name holding a
 /// value that isn't a `k2v://` reference.
 pub fn plaintext_env_names(text: &str) -> Vec<String> {
-    text.lines()
-        .filter_map(|l| {
-            let l = l.trim().trim_start_matches("export ");
-            let (k, v) = l.split_once('=')?;
-            let k = k.trim();
-            let v = v.trim().trim_matches('"').trim_matches('\'');
-            (doctor_flags_name(k) && !v.is_empty() && !k2_vault::refs::VaultRef::is_ref(v)).then(|| k.to_string())
+    plaintext_env_findings(text).0
+}
+
+/// [`plaintext_env_names`], plus (name, provider) for values under other
+/// names that look like a known provider's key (slice 1b, by prefix,
+/// `inject::detect`). Never the value.
+pub fn plaintext_env_findings(text: &str) -> (Vec<String>, Vec<(String, String)>) {
+    let mut names = vec![];
+    let mut by_value = vec![];
+    for l in text.lines() {
+        let l = l.trim().trim_start_matches("export ");
+        let Some((k, v)) = l.split_once('=') else { continue };
+        let k = k.trim();
+        let v = v.trim().trim_matches('"').trim_matches('\'');
+        if v.is_empty() || k2_vault::refs::VaultRef::is_ref(v) {
+            continue;
+        }
+        if doctor_flags_name(k) {
+            names.push(k.to_string());
+        } else if let Some(p) = inject::detect(v.as_bytes()) {
+            by_value.push((k.to_string(), p.label.to_string()));
+        }
+    }
+    (names, by_value)
+}
+
+/// Slice 1b caps per doctor run.
+pub const ENV_SCAN_MAX_FILES: usize = 200;
+pub const ENV_SCAN_MAX_BYTES: u64 = 4 * 1024 * 1024;
+const ENV_FILE_MAX_BYTES: u64 = 256 * 1024;
+const ENV_SCAN_SKIP_DIRS: &[&str] = &["node_modules", ".git", "target"];
+
+#[derive(Debug, Default)]
+pub struct EnvFileFinding {
+    pub path: String,
+    pub names: Vec<String>,
+    pub by_value: Vec<(String, String)>,
+}
+
+#[derive(Debug, Default)]
+pub struct EnvScan {
+    pub files: Vec<EnvFileFinding>,
+    /// Set when a cap stopped the scan: how many files were read.
+    pub stopped_after: Option<usize>,
+}
+
+fn is_env_candidate(name: &str) -> bool {
+    (name == ".env" || name.starts_with(".env.")) && name != ".env.k2" && !name.ends_with(".example") && !name.ends_with(".sample")
+}
+
+/// `.env` files in each root and one level of subfolders (clones,
+/// worktrees), skipping `node_modules`, `.git`, `target` and symlinked
+/// folders; at most [`ENV_SCAN_MAX_FILES`] files and
+/// [`ENV_SCAN_MAX_BYTES`] read per run. Files over 256 KiB are skipped.
+pub fn scan_env_files(roots: &[std::path::PathBuf]) -> EnvScan {
+    let mut out = EnvScan::default();
+    let mut files = 0usize;
+    let mut bytes = 0u64;
+    let mut dirs: Vec<std::path::PathBuf> = vec![];
+    for r in roots {
+        dirs.push(r.clone());
+        let Ok(rd) = std::fs::read_dir(r) else { continue };
+        let mut subs: Vec<std::path::PathBuf> = rd
+            .flatten()
+            .filter(|e| e.file_type().is_ok_and(|t| t.is_dir() && !t.is_symlink()))
+            .filter(|e| !ENV_SCAN_SKIP_DIRS.contains(&e.file_name().to_string_lossy().as_ref()))
+            .map(|e| e.path())
+            .collect();
+        subs.sort();
+        dirs.extend(subs);
+    }
+    for d in dirs {
+        let Ok(rd) = std::fs::read_dir(&d) else { continue };
+        let mut entries: Vec<std::fs::DirEntry> = rd.flatten().filter(|e| is_env_candidate(&e.file_name().to_string_lossy())).collect();
+        entries.sort_by_key(|e| e.file_name());
+        for e in entries {
+            let Ok(meta) = e.metadata() else { continue };
+            if !meta.is_file() || meta.len() > ENV_FILE_MAX_BYTES {
+                continue;
+            }
+            if files >= ENV_SCAN_MAX_FILES || bytes + meta.len() > ENV_SCAN_MAX_BYTES {
+                out.stopped_after = Some(files);
+                return out;
+            }
+            files += 1;
+            bytes += meta.len();
+            let Ok(text) = std::fs::read_to_string(e.path()) else { continue };
+            let (names, by_value) = plaintext_env_findings(&text);
+            if !names.is_empty() || !by_value.is_empty() {
+                out.files.push(EnvFileFinding { path: e.path().display().to_string(), names, by_value });
+            }
+        }
+    }
+    out
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct CliCredFinding {
+    pub path: String,
+    pub message: String,
+}
+
+/// Slice 1b: CLI login files in the daemon user's home (and `ovh.conf` in
+/// a workspace) that hold a credential in plain text. Each names the vault
+/// recipe. Reads only what it must to tell a token from a reference.
+pub fn cli_credential_files(home: &std::path::Path, roots: &[std::path::PathBuf]) -> Vec<CliCredFinding> {
+    let mut out = vec![];
+    let read_small = |p: &std::path::Path| -> Option<String> {
+        let m = std::fs::metadata(p).ok()?;
+        if !m.is_file() || m.len() > ENV_FILE_MAX_BYTES {
+            return None;
+        }
+        std::fs::read_to_string(p).ok()
+    };
+    let mut push = |p: std::path::PathBuf, what: &str, recipe: &str| {
+        out.push(CliCredFinding { path: p.display().to_string(), message: format!("{} {what}; {recipe}", p.display()) });
+    };
+    let gh = home.join(".config/gh/hosts.yml");
+    if read_small(&gh).is_some_and(|t| t.lines().any(|l| l.trim_start().starts_with("oauth_token:"))) {
+        push(gh, "holds a gh login token", "use env delivery instead (GH_TOKEN): k2 study vault, CLI TOOLS");
+    }
+    for v in [
+        home.join(".local/share/com.vercel.cli/auth.json"),
+        home.join("Library/Application Support/com.vercel.cli/auth.json"),
+    ] {
+        if read_small(&v).is_some_and(|t| t.contains("\"token\"")) {
+            push(v, "holds a vercel login token", "use env delivery instead (VERCEL_TOKEN): k2 study vault, CLI TOOLS");
+        }
+    }
+    let npmrc = home.join(".npmrc");
+    if read_small(&npmrc).is_some_and(|t| {
+        t.lines().any(|l| {
+            let l = l.trim();
+            !l.starts_with('#') && !l.starts_with(';') && l.split_once("_authToken=").is_some_and(|(_, v)| {
+                let v = v.trim();
+                !v.is_empty() && !v.starts_with("${")
+            })
         })
-        .collect()
+    }) {
+        push(npmrc, "holds an npm token in plain text", "write _authToken=${NPM_TOKEN} and give NPM_TOKEN env delivery: k2 study vault, CLI TOOLS");
+    }
+    let mut ovh = vec![home.join(".ovh.conf")];
+    ovh.extend(roots.iter().map(|r| r.join("ovh.conf")));
+    for o in ovh {
+        if read_small(&o).is_some_and(|t| t.lines().any(|l| l.trim_start().starts_with("application_secret"))) {
+            push(o, "holds OVH API keys", "store them as one signed secret: k2 vault set NAME --sign ovh --preset ovh-eu < keys.json (k2 vault set --help)");
+        }
+    }
+    if let Ok(rd) = std::fs::read_dir(home.join(".ssh")) {
+        let mut keys: Vec<std::path::PathBuf> = rd
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                let n = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                n.starts_with("id_") && !n.ends_with(".pub")
+            })
+            .filter(|p| read_small(p).is_some_and(|t| t.contains("PRIVATE KEY")))
+            .collect();
+        keys.sort();
+        for k in keys {
+            push(k, "is an SSH private key", "k2 vault set NAME --kind ssh_key < key (file delivery), then delete the file");
+        }
+    }
+    out
 }
 
 /// Published services still on the inherited environment (deprecated,
@@ -675,9 +849,9 @@ fn legacy_env_services(c: &VaultCaller) -> Vec<(String, String)> {
     out
 }
 
-/// Workspace `.env` files (top level) with names the doctor flags
-/// ([`doctor_flags_name`]) holding values that aren't `k2v://` references.
-fn plaintext_env_files(c: &VaultCaller) -> Vec<(String, Vec<String>)> {
+/// The workspace folders the doctor reads: the caller's, or every
+/// workspace for a person.
+fn doctor_workspace_roots(c: &VaultCaller) -> Vec<std::path::PathBuf> {
     let paths: Vec<String> = match c.workspace_id() {
         Some(ws) => crate::vault::workspace_path(ws).into_iter().collect(),
         None => {
@@ -694,27 +868,7 @@ fn plaintext_env_files(c: &VaultCaller) -> Vec<(String, Vec<String>)> {
             }
         }
     };
-    let mut out = vec![];
-    for p in paths {
-        let dir = std::path::Path::new(&p);
-        let Ok(rd) = std::fs::read_dir(dir) else { continue };
-        for e in rd.flatten() {
-            let name = e.file_name().to_string_lossy().to_string();
-            if !(name == ".env" || name.starts_with(".env.")) || name == ".env.k2" || name.ends_with(".example") || name.ends_with(".sample") {
-                continue;
-            }
-            let Ok(meta) = e.metadata() else { continue };
-            if !meta.is_file() || meta.len() > 256 * 1024 {
-                continue;
-            }
-            let Ok(text) = std::fs::read_to_string(e.path()) else { continue };
-            let keys = plaintext_env_names(&text);
-            if !keys.is_empty() {
-                out.push((e.path().display().to_string(), keys));
-            }
-        }
-    }
-    out
+    paths.into_iter().map(std::path::PathBuf::from).collect()
 }
 
 // ── writes ──────────────────────────────────────────────────────────
@@ -728,19 +882,81 @@ struct InjectBody {
     allowed_dst: Vec<String>,
     #[serde(default)]
     allowed_fmt: Vec<String>,
+    /// A signer (PRD vault-gaps item 2).
+    sign: Option<SignBody>,
+}
+
+/// `inject.sign` on set/policy: `{scheme: ovh}`,
+/// `{scheme: hmac-sha256, header, encoding?, prefix?}` or
+/// `{scheme: hmac-sha256-ts, header, tsHeader?, template?, valueFmt?, encoding?}`.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SignBody {
+    scheme: String,
+    header: Option<String>,
+    encoding: Option<String>,
+    prefix: Option<String>,
+    ts_header: Option<String>,
+    template: Option<String>,
+    value_fmt: Option<String>,
+}
+
+impl SignBody {
+    pub fn build(&self) -> Result<Sign, VaultError> {
+        let enc = self.encoding.as_deref().map(SignEnc::parse).transpose()?.unwrap_or_default();
+        let header = || {
+            self.header.clone().filter(|h| !h.is_empty()).ok_or_else(|| err("bad_inject", 400, "this signer needs a header (--sign-header)"))
+        };
+        let unused = |what: &str, set: bool| -> Result<(), VaultError> {
+            if set {
+                Err(err("bad_inject", 400, format!("{what} doesn't apply to the {} signer", self.scheme)))
+            } else {
+                Ok(())
+            }
+        };
+        let s = match self.scheme.as_str() {
+            "ovh" => {
+                unused("a header", self.header.is_some())?;
+                unused("an encoding", self.encoding.is_some())?;
+                unused("a prefix", self.prefix.is_some())?;
+                unused("a timestamp header", self.ts_header.is_some())?;
+                unused("a template", self.template.is_some() || self.value_fmt.is_some())?;
+                Sign::Ovh
+            }
+            "hmac-sha256" => {
+                unused("a timestamp header", self.ts_header.is_some())?;
+                unused("a template", self.template.is_some() || self.value_fmt.is_some())?;
+                Sign::HmacSha256 { header: header()?, encoding: enc, prefix: self.prefix.clone().unwrap_or_default() }
+            }
+            "hmac-sha256-ts" => {
+                unused("a prefix (use --sign-value)", self.prefix.is_some())?;
+                Sign::HmacSha256Ts {
+                    header: header()?,
+                    ts_header: self.ts_header.clone().filter(|h| !h.is_empty()),
+                    template: self.template.clone().unwrap_or_else(|| k2_vault::inject::DEFAULT_TS_TEMPLATE.into()),
+                    value_fmt: self.value_fmt.clone().unwrap_or_else(|| k2_vault::inject::DEFAULT_SIG_VALUE.into()),
+                    encoding: enc,
+                }
+            }
+            other => return Err(err("bad_inject", 400, format!("no signer {other}; use ovh, hmac-sha256 or hmac-sha256-ts"))),
+        };
+        s.normalised()
+    }
 }
 
 impl InjectBody {
     fn build(&self) -> Result<Option<Inject>, VaultError> {
-        if self.dst.is_none() && self.fmt.is_none() {
+        if self.dst.is_none() && self.fmt.is_none() && self.sign.is_none() {
             return Ok(None);
         }
         let dst = k2_vault::inject::Dst::parse(self.dst.as_deref().unwrap_or("header:Authorization"))?;
+        let default_fmt = if self.dst.is_none() && self.fmt.is_none() { "Bearer {}" } else { "{}" };
         let mut i = Inject {
             dst,
-            fmt: self.fmt.clone().unwrap_or_else(|| "{}".into()),
+            fmt: self.fmt.clone().unwrap_or_else(|| default_fmt.into()),
             allowed_dst: vec![],
             allowed_fmt: self.allowed_fmt.clone(),
+            sign: self.sign.as_ref().map(SignBody::build).transpose()?,
         };
         for d in &self.allowed_dst {
             i.allowed_dst.push(k2_vault::inject::Dst::parse(d)?);
@@ -807,11 +1023,18 @@ fn set(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultE
     let value = decode_value(b.value_b64.as_deref())?;
     let name = b.sel.name.clone().ok_or_else(|| err("name_required", 400, "name the secret"))?;
     let scope = scope_for(c, b.sel.scope.as_deref(), b.sel.workspace.as_deref(), b.sel.session.as_deref())?;
-    let kind = b.kind.as_deref().map(Kind::parse).transpose()?.unwrap_or(Kind::ApiKey);
-    let mut req = PutRequest::new(Namespace::User, scope.clone(), name, kind);
     let mut hosts = b.hosts.clone();
     let mut inj = b.inject.as_ref().map(InjectBody::build).transpose()?.flatten();
     apply_preset(b.preset.as_deref(), &mut hosts, &mut inj)?;
+    // Item 2: a signer's kind defaults to what it holds: OVH's JSON is
+    // generic (api_key would trim), an HMAC key is hmac_key.
+    let default_kind = match inj.as_ref().and_then(|i| i.sign.as_ref()) {
+        Some(Sign::Ovh) => Kind::Generic,
+        Some(_) => Kind::HmacKey,
+        None => Kind::ApiKey,
+    };
+    let kind = b.kind.as_deref().map(Kind::parse).transpose()?.unwrap_or(default_kind);
+    let mut req = PutRequest::new(Namespace::User, scope.clone(), name, kind);
     req.hosts = hosts;
     req.inject = inj;
     req.default_delivery = delivery_opt(b.delivery.as_deref())?;
@@ -902,12 +1125,33 @@ struct PolicyBody {
     preset: Option<String>,
     description: Option<String>,
     rotate_every_days: Option<u32>,
+    /// `k2 vault sign`: a signer object, or `"none"` to remove it. Keeps the
+    /// secret's other inject settings.
+    sign: Option<Value>,
 }
 
 fn policy(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {
     let b: PolicyBody = parse(body)?;
     let sel = selector(c, &b.sel)?;
     let mut inject = b.inject.as_ref().map(InjectBody::build).transpose()?.flatten();
+    if let Some(sv) = &b.sign {
+        if inject.is_some() || b.preset.is_some() {
+            return Err(err("bad_inject", 400, "change the signer on its own (k2 vault sign), not with --inject-* or --preset"));
+        }
+        let sign = match sv {
+            Value::String(s) if s == "none" => None,
+            Value::Object(_) => Some(
+                serde_json::from_value::<SignBody>(sv.clone())
+                    .map_err(|_| err("bad_inject", 400, "sign is {scheme, header, …} or \"none\""))?
+                    .build()?,
+            ),
+            _ => return Err(err("bad_inject", 400, "sign is {scheme, header, …} or \"none\"")),
+        };
+        let current = vault.meta(&sel, &c.actor)?;
+        let mut i = current.inject.unwrap_or_default();
+        i.sign = sign;
+        inject = Some(i);
+    }
     let mut preset_hosts = vec![];
     apply_preset(b.preset.as_deref(), &mut preset_hosts, &mut inject)?;
     let mut add = b.add_hosts.clone();

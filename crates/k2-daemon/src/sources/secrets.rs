@@ -139,7 +139,7 @@ pub fn resolve_plan(plan: &FetchPlan) -> Result<Resolved, Reason> {
             .map_err(|e| denial_reason(&e))?;
         let (dst, fmt) = r.inject.choose(None, None).map_err(|_| Reason::SecretDisabled)?;
         let allowed = vec![OriginPattern::parse(&pinned.render(), false).map_err(|_| Reason::BlockedAddress)?];
-        injections.push(Injection { name: r.meta.name.clone(), value: r.value, dst, fmt, allowed });
+        injections.push(Injection { name: r.meta.name.clone(), value: r.value, dst, fmt, allowed, sign: r.inject.sign.clone() });
     }
     Ok(Resolved { injections, redactor: v.redactor(), url, extra_redact: extra })
 }

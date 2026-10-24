@@ -126,6 +126,7 @@ fn redirect_to_loopback_refused() {
         dst: k2_vault::inject::Dst::Header("Authorization".into()),
         fmt: "Bearer {}".into(),
         allowed: vec![OriginPattern::parse(&o, false).unwrap()],
+        sign: None,
     };
     let r = execute(src(&format!("{o}/start")), &for_source(&o, false), vec![inj], &Redactor::empty()).expect("3xx back");
     assert_eq!(r.status, 302);
@@ -167,6 +168,7 @@ fn allowlist_checked_before_injections() {
         dst: k2_vault::inject::Dst::Header("Authorization".into()),
         fmt: "Bearer {}".into(),
         allowed: both,
+        sign: None,
     };
     let e = execute(src("https://b.example/"), &for_source("https://a.example:443", false), vec![inj], &Redactor::empty())
         .expect_err("not on the source's list");

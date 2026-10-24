@@ -10,6 +10,10 @@
 //!   inside the tree; sockets, FIFOs and devices are refused.
 //! - Every read for a deploy re-hashes the tree: a mismatch refuses the
 //!   Seed (`seed_corrupt`), so a tampered Seed never starts.
+//! - A `.k2appignore` at the folder's root (gitignore syntax, 0.46.4) keeps
+//!   matching paths out when a folder is packed ([`store_folder`]): local
+//!   state (`var/`), `.env*`, build caches (`node_modules/.cache`). The file
+//!   itself is packed, so a wall build's output honours it too.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -26,6 +30,10 @@ pub const MAX_ENTRIES: usize = 200_000;
 pub const MAX_BYTES: u64 = 4 << 30;
 /// Always left out of a build, at the top of the folder.
 pub const ALWAYS_EXCLUDED: &[&str] = &[".git", ".k2", ".DS_Store"];
+/// Paths a folder keeps out of its Seed (gitignore syntax, at its root).
+pub const IGNORE_FILE: &str = ".k2appignore";
+/// How many of the largest paths a pack reports ([`measure`]).
+pub const LARGEST_SHOWN: usize = 5;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SeedError {
@@ -173,6 +181,18 @@ pub fn hash_tree(root: &Path, exclude: &BTreeSet<String>) -> Result<TreeHash, Se
 type Visit<'a> = dyn FnMut(&Path, &fs::Metadata, &Path) -> Result<(), SeedError> + 'a;
 
 fn walk(root: &Path, dir: &Path, exclude: &BTreeSet<String>, f: &mut Visit<'_>) -> Result<(), SeedError> {
+    walk_ignoring(root, dir, exclude, None, f)
+}
+
+/// [`walk`], skipping what `ignore` (a `.k2appignore`) matches: an ignored
+/// folder is never entered.
+fn walk_ignoring(
+    root: &Path,
+    dir: &Path,
+    exclude: &BTreeSet<String>,
+    ignore: Option<&ignore::gitignore::Gitignore>,
+    f: &mut Visit<'_>,
+) -> Result<(), SeedError> {
     for e in sorted_children(dir)? {
         let path = e.path();
         let rel = path.strip_prefix(root).expect("child of root").to_path_buf();
@@ -183,12 +203,35 @@ fn walk(root: &Path, dir: &Path, exclude: &BTreeSet<String>, f: &mut Visit<'_>) 
             }
         }
         let meta = fs::symlink_metadata(&path).map_err(|er| SeedError::new(codes::SEED_INVALID, format!("stat {}: {er}", path.display())))?;
+        if let Some(gi) = ignore {
+            if gi.matched(&rel, meta.file_type().is_dir()).is_ignore() {
+                continue;
+            }
+        }
         f(&rel, &meta, &path)?;
         if meta.file_type().is_dir() {
-            walk(root, &path, exclude, f)?;
+            walk_ignoring(root, &path, exclude, ignore, f)?;
         }
     }
     Ok(())
+}
+
+/// The folder's `.k2appignore` as a matcher (`None` when it has none). A
+/// line the gitignore syntax can't read refuses the build (`seed_invalid`,
+/// naming it), never silently packs what it meant to leave out.
+pub fn folder_ignore(folder: &Path) -> Result<Option<ignore::gitignore::Gitignore>, SeedError> {
+    let file = folder.join(IGNORE_FILE);
+    match fs::symlink_metadata(&file) {
+        Ok(m) if m.file_type().is_file() => {}
+        Ok(_) => return Err(SeedError::new(codes::SEED_INVALID, format!("{IGNORE_FILE} must be a plain file"))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(SeedError::new(codes::SEED_INVALID, format!("{IGNORE_FILE}: {e}"))),
+    }
+    let mut b = ignore::gitignore::GitignoreBuilder::new(folder);
+    if let Some(e) = b.add(&file) {
+        return Err(SeedError::new(codes::SEED_INVALID, format!("{IGNORE_FILE}: {e}")));
+    }
+    b.build().map(Some).map_err(|e| SeedError::new(codes::SEED_INVALID, format!("{IGNORE_FILE}: {e}")))
 }
 
 /// The top-level names a build leaves out: [`ALWAYS_EXCLUDED`] plus the
@@ -204,9 +247,9 @@ pub fn build_excludes(manifest_exclude: &[String]) -> BTreeSet<String> {
     s
 }
 
-fn copy_tree(src: &Path, dst: &Path, exclude: &BTreeSet<String>) -> Result<(), SeedError> {
+fn copy_tree(src: &Path, dst: &Path, exclude: &BTreeSet<String>, ignore: Option<&ignore::gitignore::Gitignore>) -> Result<(), SeedError> {
     fs::create_dir_all(dst).map_err(|e| SeedError::new(codes::SEED_INVALID, format!("mkdir {}: {e}", dst.display())))?;
-    walk(src, src, exclude, &mut |rel, meta, path| {
+    walk_ignoring(src, src, exclude, ignore, &mut |rel, meta, path| {
         let to = dst.join(rel);
         let ft = meta.file_type();
         let err = |e: std::io::Error| SeedError::new(codes::SEED_INVALID, format!("copy {}: {e}", rel.display()));
@@ -344,14 +387,16 @@ pub struct Stored {
     pub reused: bool,
 }
 
-/// Copy `folder` (minus `exclude`) into the store and return its hash.
-/// Idempotent: an unchanged folder gets the hash it had before.
+/// Copy `folder` (minus `exclude` and what its `.k2appignore` matches)
+/// into the store and return its hash. Idempotent: an unchanged folder gets
+/// the hash it had before.
 pub fn store_folder(folder: &Path, exclude: &BTreeSet<String>) -> Result<Stored, SeedError> {
+    let ignore = folder_ignore(folder)?;
     let root = super::seeds_dir();
     fs::create_dir_all(&root).map_err(|e| SeedError::new(codes::SEED_INVALID, format!("mkdir {}: {e}", root.display())))?;
     let tmp = root.join(format!(".tmp-{}", uuid::Uuid::new_v4().simple()));
     let res = (|| {
-        copy_tree(folder, &tmp, exclude)?;
+        copy_tree(folder, &tmp, exclude, ignore.as_ref())?;
         let th = hash_tree(&tmp, &BTreeSet::new())?;
         let dest = root.join(&th.hash);
         if dest.is_dir() {
@@ -370,6 +415,80 @@ pub fn store_folder(folder: &Path, exclude: &BTreeSet<String>) -> Result<Stored,
         let _ = fs::remove_dir_all(&tmp);
     }
     res
+}
+
+/// What a stored Seed weighs, for the build and deploy answers (NSI
+/// 0.46.4 #3: a pack with `var/` and `.next/cache` in it was 10× the code).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SeedSize {
+    pub bytes: u64,
+    pub files: usize,
+    /// The heaviest folders and files at depth 1 and 2 (`node_modules`,
+    /// `.next/cache`), largest first, at most [`LARGEST_SHOWN`].
+    pub largest: Vec<PathSize>,
+    /// The folder had a `.k2appignore` when it was packed (the file is in
+    /// the Seed).
+    pub ignore_file: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct PathSize {
+    pub path: String,
+    pub bytes: u64,
+}
+
+/// Measure a stored Seed (sizes only; nothing is hashed).
+pub fn measure(hash: &str) -> Result<SeedSize, SeedError> {
+    if !valid_hash(hash) {
+        return Err(SeedError::new(codes::SEED_NOT_FOUND, format!("'{hash}' is not a Seed hash")));
+    }
+    let root = seed_path(hash);
+    let mut sizes: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
+    let (mut bytes, mut files) = (0u64, 0usize);
+    walk(&root, &root, &BTreeSet::new(), &mut |rel, meta, _path| {
+        if !meta.file_type().is_file() {
+            return Ok(());
+        }
+        files += 1;
+        bytes += meta.len();
+        let parts: Vec<String> = rel.components().map(|c| c.as_os_str().to_string_lossy().to_string()).collect();
+        for depth in 1..=parts.len().min(2) {
+            *sizes.entry(parts[..depth].join("/")).or_default() += meta.len();
+        }
+        Ok(())
+    })?;
+    Ok(SeedSize { bytes, files, largest: largest_of(sizes), ignore_file: root.join(IGNORE_FILE).is_file() })
+}
+
+/// The [`LARGEST_SHOWN`] heaviest paths; a folder whose weight is almost
+/// all one child is shown as that child (`.next/cache`, not `.next`).
+fn largest_of(sizes: std::collections::BTreeMap<String, u64>) -> Vec<PathSize> {
+    let mut all: Vec<PathSize> = sizes.into_iter().map(|(path, bytes)| PathSize { path, bytes }).collect();
+    all.sort_by(|a, b| b.bytes.cmp(&a.bytes).then(a.path.cmp(&b.path)));
+    let mut out: Vec<PathSize> = Vec::new();
+    // Every path ever shown, a folder its child replaced included.
+    let mut shown: Vec<String> = Vec::new();
+    for p in all {
+        if out.len() >= LARGEST_SHOWN {
+            break;
+        }
+        let under = |o: &str| p.path.starts_with(&format!("{o}/"));
+        // A child carrying at least 90% of a folder still shown replaces it.
+        if let Some(i) = out.iter().position(|o| under(&o.path) && p.bytes * 10 >= o.bytes * 9) {
+            shown.push(p.path.clone());
+            out[i] = p;
+            continue;
+        }
+        // Any other child of a shown folder (or a parent of a shown child)
+        // adds nothing.
+        if shown.iter().any(|o| under(o) || o.starts_with(&format!("{}/", p.path))) {
+            continue;
+        }
+        shown.push(p.path.clone());
+        out.push(p);
+    }
+    out
 }
 
 /// Re-hash a stored Seed. `seed_corrupt` on any mismatch (§7.1).
@@ -481,6 +600,82 @@ mod tests {
             .filter(|e| e.file_name().to_string_lossy().starts_with(".tmp-"))
             .collect();
         assert!(leftovers.is_empty(), "a failed build leaves no temp tree");
+    }
+
+    /// 0.46.4 #3: a `.k2appignore` (gitignore syntax) keeps local state,
+    /// env files and caches out of the Seed; a bad line refuses the build.
+    #[test]
+    fn k2appignore_keeps_matching_paths_out_of_the_seed() {
+        let home = TempHome::new();
+        let f = folder(home.path());
+        write(&f.join("var/answers.json"), "{}");
+        write(&f.join(".env.local"), "SECRET=1");
+        write(&f.join(".env"), "SECRET=2");
+        write(&f.join("node_modules/.cache/big"), &"x".repeat(8192));
+        write(&f.join("node_modules/next/index.js"), &"n".repeat(2048));
+        write(&f.join("lib/keep.env.js"), "k");
+        let plain = store_folder(&f, &build_excludes(&[])).expect("no ignore file");
+        assert!(seed_path(&plain.hash).join("var/answers.json").exists(), "without the file everything is packed");
+        write(&f.join(IGNORE_FILE), "# local state\nvar/\n.env*\nnode_modules/.cache\n!.env.example\n");
+        write(&f.join(".env.example"), "SECRET=");
+        let s = store_folder(&f, &build_excludes(&[])).expect("store");
+        let p = seed_path(&s.hash);
+        for gone in ["var", ".env", ".env.local", "node_modules/.cache"] {
+            assert!(!p.join(gone).exists(), "{gone} is ignored");
+        }
+        for kept in ["server.js", "lib/a.js", "lib/keep.env.js", "node_modules/next/index.js", ".env.example", IGNORE_FILE] {
+            assert!(p.join(kept).exists(), "{kept} is packed");
+        }
+        assert_ne!(s.hash, plain.hash);
+        verify(&s.hash).expect("verifies");
+        // Stable: the same folder and file, the same Seed.
+        assert_eq!(store_folder(&f, &build_excludes(&[])).unwrap().hash, s.hash);
+        // The size report: what's in it, heaviest first.
+        let m = measure(&s.hash).unwrap();
+        assert!(m.ignore_file);
+        assert_eq!(m.files, s.entries - count_dirs(&p), "files only");
+        assert_eq!(m.bytes, s.size_bytes);
+        assert_eq!(m.largest[0].path, "node_modules/next", "{:?}", m.largest);
+        let big = measure(&plain.hash).unwrap();
+        assert_eq!(big.largest[0].path, "node_modules/.cache", "the cache dominates node_modules: {:?}", big.largest);
+        assert_eq!(big.largest[0].bytes, 8192);
+        assert!(!big.ignore_file);
+        assert!(big.largest.len() <= LARGEST_SHOWN);
+        // A line the syntax can't read refuses the build.
+        write(&f.join(IGNORE_FILE), "var/\n[unclosed\n");
+        let e = store_folder(&f, &build_excludes(&[])).unwrap_err();
+        assert_eq!(e.code, codes::SEED_INVALID, "{e}");
+        assert!(e.message.contains(IGNORE_FILE), "{e}");
+    }
+
+    fn count_dirs(root: &Path) -> usize {
+        let mut n = 0;
+        walk(root, root, &BTreeSet::new(), &mut |_r, m, _p| {
+            if m.file_type().is_dir() {
+                n += 1;
+            }
+            Ok(())
+        })
+        .unwrap();
+        n
+    }
+
+    #[test]
+    fn largest_paths_prefer_the_child_that_carries_its_folder() {
+        let m: std::collections::BTreeMap<String, u64> = [
+            (".next", 100u64),
+            (".next/cache", 95),
+            (".next/server", 5),
+            ("node_modules", 60),
+            ("node_modules/a", 30),
+            ("node_modules/b", 30),
+            ("server.js", 1),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        let got: Vec<String> = largest_of(m).into_iter().map(|p| p.path).collect();
+        assert_eq!(got, vec![".next/cache", "node_modules", "server.js"]);
     }
 
     #[test]

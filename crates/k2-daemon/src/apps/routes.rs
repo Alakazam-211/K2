@@ -476,7 +476,8 @@ fn build(who: &Who, body: &[u8]) -> R<J> {
         super::resources::Gate::Held(h) => return Ok(h),
     };
     let (built, wall) = build_seed(who, &folder, &v, super::wall_build::BUILD_SLOT, false)?;
-    let mut out = json!({ "ok": true, "seed": built.seed, "reused": built.reused, "entries": built.entries, "build": wall });
+    let size = seed_size(&built.seed.hash);
+    let mut out = json!({ "ok": true, "seed": built.seed, "reused": built.reused, "entries": built.entries, "build": wall, "seedSize": size });
     super::resources::decorate(&mut out, extra);
     Ok(out)
 }
@@ -902,6 +903,18 @@ fn seed_for_deploy(who: &Who, app: &AppRow, v: &J) -> R<String> {
     Ok(row.hash)
 }
 
+/// A Seed's size, file count and heaviest paths (`seed::measure`), for the
+/// build and deploy answers; `null` when it can't be read.
+fn seed_size(hash: &str) -> J {
+    match deploy::seed::measure(hash) {
+        Ok(m) => json!(m),
+        Err(e) => {
+            k2_core::log_debug!("[apps] measure Seed {hash}: {e}");
+            J::Null
+        }
+    }
+}
+
 /// `{deployment, done}`; waits up to `wait` seconds (max 900).
 pub(crate) fn deployment_answer(id: &str, wait: u64) -> R<J> {
     let row = if wait > 0 {
@@ -1018,6 +1031,8 @@ fn deploy_inner(who: &Who, v: &J) -> R<J> {
     // owner approves.
     let egress = super::egress_routes::request_manifest_hosts(who, &app.app_id, &seed, &dep);
     let mut out = deployment_answer(&dep, wait_secs(v))?;
+    // 0.46.4 (NSI #3): what was packed, and its heaviest paths.
+    out["seedSize"] = seed_size(&seed);
     if let Some(e) = egress {
         out["egress"] = e;
     }

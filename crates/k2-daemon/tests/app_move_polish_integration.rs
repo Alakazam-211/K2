@@ -124,7 +124,7 @@ fn quiet_alerts() -> Seen {
 
 /// A published service row (never started): `cmd` for a `--cmd` service,
 /// the App sentinel for an App's own row.
-fn service(ws: &Ws, name: &str, cmd: &str, folder: &std::path::Path, port: i64) -> String {
+fn service(ws: &Ws, name: &str, cmd: &str, folder: &std::path::Path, port: u16) -> String {
     let db = k2_core::db::shared();
     let conn = db.lock();
     k2_core::published_services::insert(&conn, &ws.id, name, cmd, &folder.to_string_lossy(), port, "local", "stopped", "cmd", "")
@@ -291,5 +291,52 @@ async fn pass_required_names_the_pass_file_and_audit_reads_oldest_first() {
     let first = &oldest["calls"][0];
     assert_eq!((first["verb"].as_str(), first["code"].as_str()), (Some("GET /cli/skin/agents"), Some("pass_required")), "{first}");
     gateway::close("passapp", None, true);
+    k2_daemon::apps::alerts::set_sink(None);
+}
+
+/// #3: a `.k2appignore` keeps local state, env files and caches out of the
+/// Seed a build packs; the answer says the size and the heaviest paths.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn k2appignore_keeps_state_out_and_build_reports_the_seed_size() {
+    let env = setup(&[]);
+    let _seen = quiet_alerts();
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let ws = seed_ws(&env, "sizews");
+    let f = app_folder(&ws.path.join("bff"), "sizeapp", "1.0.0", "v1");
+    std::fs::create_dir_all(f.join("var")).unwrap();
+    std::fs::write(f.join("var/answers.json"), "x".repeat(300_000)).unwrap();
+    std::fs::write(f.join(".env.local"), "SECRET=1").unwrap();
+    std::fs::create_dir_all(f.join("node_modules/.cache")).unwrap();
+    std::fs::write(f.join("node_modules/.cache/big"), "c".repeat(200_000)).unwrap();
+
+    let r = post(d.port, "/cli/app/build", OWNER, json!({"folder": f.to_string_lossy()})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let all = r.json();
+    let m = &all["seedSize"];
+    assert_eq!(m["ignoreFile"], false, "{m}");
+    assert_eq!(m["largest"][0]["path"], "var/answers.json", "the heaviest path first: {m}");
+    assert!(m["bytes"].as_u64().unwrap() > 500_000, "{m}");
+
+    std::fs::write(f.join(".k2appignore"), "var/\n.env*\nnode_modules/.cache\n").unwrap();
+    let r = post(d.port, "/cli/app/build", OWNER, json!({"folder": f.to_string_lossy()})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let v = r.json();
+    let m = &v["seedSize"];
+    assert_eq!(m["ignoreFile"], true, "{m}");
+    assert!(m["bytes"].as_u64().unwrap() < 100_000, "state and cache left out: {m}");
+    let hash = v["seed"]["hash"].as_str().unwrap().to_string();
+    assert_ne!(hash, all["seed"]["hash"].as_str().unwrap());
+    let tree = k2_core::deploy::seed::seed_path(&hash);
+    for gone in ["var", ".env.local", "node_modules/.cache"] {
+        assert!(!tree.join(gone).exists(), "{gone} is not in the Seed");
+    }
+    for kept in ["manifest.json", "server.py", ".k2appignore"] {
+        assert!(tree.join(kept).exists(), "{kept} is in the Seed");
+    }
+    // A broken pattern refuses the build, naming the file.
+    std::fs::write(f.join(".k2appignore"), "var/\n[oops\n").unwrap();
+    let r = post(d.port, "/cli/app/build", OWNER, json!({"folder": f.to_string_lossy()})).await;
+    assert_eq!(r.status, 422, "{}", r.body);
+    assert!(r.body.contains(".k2appignore"), "{}", r.body);
     k2_daemon::apps::alerts::set_sink(None);
 }

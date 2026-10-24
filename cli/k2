@@ -8647,8 +8647,9 @@ if s.get("sourceRef"):
     print("  commit %s" % s["sourceRef"])
 for w in (s.get("report") or {}).get("warnings", []):
     print("  warning %s: %s" % (w.get("code", ""), w.get("message", "")))
-print("Deploy it: k2 app deploy <app-id> %s" % s["hash"][:12])
 '
+    _app_seed_size_note
+    printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print("Deploy it: k2 app deploy <app-id> %s" % json.load(sys.stdin)["seed"]["hash"][:12])'
 }
 
 # Print one deployment answer ({deployment, done}) and exit by its result:
@@ -8742,6 +8743,7 @@ if d:
 else:
     print("Deploy it: k2 app deploy %s <folder|seed>" % a["appId"])
 '
+    _app_seed_size_note
 }
 
 # k2 app deploy <app-id> <folder|seed> [--reason TEXT] [--no-wait] [--types] [--json]
@@ -8779,7 +8781,34 @@ cmd_app_deploy() {
     # exit 2 with the request, never exit 3 with an empty error.
     _app_grace_done "$json_out"
     [ "$json_out" = 1 ] || _app_disk_notes
+    [ "$json_out" = 1 ] || _app_seed_size_note
     _app_rt_deployment_exit "$json_out"
+}
+
+# 0.46.4 (NSI #3): what a build or deploy packed — size, files, the
+# heaviest paths — and the .k2appignore tip when the folder had none.
+_app_seed_size_note() {
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+try:
+    v = json.load(sys.stdin)
+except ValueError:
+    sys.exit(0)
+m = v.get("seedSize") or (v.get("deploy") or {}).get("seedSize")
+if not isinstance(m, dict):
+    sys.exit(0)
+def h(n):
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return ("%d %s" % (n, unit)) if unit == "B" else ("%.1f %s" % (n, unit))
+        n = n / 1024.0
+print("Seed: %s, %d files%s" % (h(m.get("bytes", 0)), m.get("files", 0), ", .k2appignore applied" if m.get("ignoreFile") else ""))
+if m.get("largest"):
+    print("  largest: " + ", ".join("%s %s" % (p["path"], h(p["bytes"])) for p in m["largest"]))
+if not m.get("ignoreFile") and m.get("bytes", 0) > (20 << 20):
+    print("  Leave out what the App does not run: a .k2appignore at the folder root (gitignore syntax),")
+    print("  e.g. var/  .env*  node_modules/.cache  .next/cache  (k2 study app-deploys)")
+'
 }
 
 # k2 app rollback <app-id> [--to SEED] [--no-wait] [--json]
@@ -9706,6 +9735,13 @@ is one-way. Done = the URL serves the App AND the old service is stopped
   3. Deploy:
        k2 app deploy <app-id> <folder>
      It starts walled; traffic goes to it only when the health check passes.
+     The folder is packed as an immutable Seed (it prints the size and the
+     heaviest paths): keep your data, .env files and caches out with a
+     .k2appignore at its root (gitignore syntax), e.g. var/ .env*
+     node_modules/.cache .next/cache.
+     NO EDITING LIVE: a change is a new deploy. Mockups and pages you edit
+     by hand stay static: k2 publish run <label> --skin <dir> --port N
+     serves a folder as it is (there's no App dev mode yet).
   4. Copy your data in (the App must be live):
        k2 app data put <app-id> <your-data-folder> [--to <dir>]
      Copies a file or folder of your workspace into $K2_APP_DATA. Copy
@@ -9756,7 +9792,15 @@ THE LOOP
 
 WHAT A DEPLOY DOES
   1. The folder becomes a Seed: an immutable copy, named by its hash
-     (k2 app build prints it). Same folder → same Seed.
+     (k2 app build prints it). Same folder → same Seed. Build and deploy
+     print its size and heaviest paths. Leave out what the App doesn't
+     run with a .k2appignore at the folder root (gitignore syntax; the
+     file itself is packed), e.g.:
+       var/
+       .env*
+       node_modules/.cache
+       .next/cache
+     .git, .k2 and .DS_Store are always left out.
   2. The Seed starts on a fresh port with $PORT set. GET host.health.path
      (default /) must answer 2xx within the gate (default 120s).
   3. New connections switch to it. Old ones finish (drain).

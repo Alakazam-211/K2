@@ -316,6 +316,15 @@ pub(crate) fn hold(who: &Who, kind: &str, t: Option<&Target>, label: &str, works
 
 // ── warnings ─────────────────────────────────────────────────────────
 
+/// Variables K2 sets only for a runtime App (every engine: `process_engine`
+/// and `guarded` build the same set), on top of the names a
+/// `--cmd` service already gets ([`provided_names`]). Reading them is the
+/// App's own business, never a cut-over break.
+pub const APP_ONLY_ENV: &[&str] = &["K2_PASS_FILE", "K2_APP_DATA", "K2_APP_CACHE", "K2_APP_DEPLOYMENT"];
+
+/// A warning that is fine inside an App (never counted in `breaks`).
+pub const SEVERITY_EXPECTED: &str = "expected";
+
 fn warning(code: &str, severity: &str, message: String, fix: String) -> J {
     json!({ "code": code, "severity": severity, "message": message, "fix": fix })
 }
@@ -364,7 +373,7 @@ pub(crate) fn report(t: &Target) -> J {
         warnings.push(warning(
             "legacy_env",
             "breaks",
-            format!("{name} inherits the K2 daemon's whole environment ({} variables); that ends in K2 {cut}.", inherited.len()),
+            format!("{name} inherits the K2 daemon's whole environment ({} variables); that ends {}.", inherited.len(), app_grace::cutover_phrase()),
             format!("k2 publish env {name} clean (and grant what it needs: k2 publish secret add {name} NAME)"),
         ));
     }
@@ -375,7 +384,17 @@ pub(crate) fn report(t: &Target) -> J {
         }
         let at = format!("{}:{}", r.file, r.line);
         let n = &r.name;
-        if (n.starts_with("K2_") || n.starts_with("K2SO_")) && !provided.contains(n) {
+        if APP_ONLY_ENV.contains(&n.as_str()) && !provided.contains(n) {
+            // The App's own environment (NSI 0.46.4 #4): code written for
+            // the App runtime reads these, and they are exactly what an App
+            // gets. Expected, never a break.
+            warnings.push(warning(
+                "app_env",
+                SEVERITY_EXPECTED,
+                format!("{at} reads {n}: K2 sets it for every App (the App runtime's own environment), so this is App-mode code. Expected inside an App; a --cmd service doesn't get it."),
+                "nothing to change once it runs as an App (k2 study app-move)".to_string(),
+            ));
+        } else if (n.starts_with("K2_") || n.starts_with("K2SO_")) && !provided.contains(n) {
             warnings.push(warning(
                 "k2_internal_env",
                 "breaks",

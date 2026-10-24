@@ -294,8 +294,10 @@ fn agent_app_refused() -> CliResponse {
 }
 
 /// An App target from an owner/agent body or CLI: `host`, a published
-/// service id, or `<workspace>/<publish name>` (workspace handle, alias or
-/// id). Returns the service id (or `host`). Unknown → Err (400). This is
+/// service id, `<workspace>/<publish name>` (workspace handle, alias or
+/// id), or (0.46.4) a bare App id / publish name that names one App on the
+/// box. Returns the service id (or `host`). Unknown or ambiguous → Err
+/// (400; ambiguous lists the `<workspace>/<name>` candidates). This is
 /// owner tooling; the public login route never reports which Apps exist.
 pub fn resolve_app_target(raw: &str) -> Result<String, String> {
     let t = raw.trim();
@@ -323,11 +325,39 @@ pub fn resolve_app_target(raw: &str) -> Result<String, String> {
     }
     let conn = db.lock();
     match k2_core::published_services::get_by_id(&conn, t) {
-        Ok(Some(row)) => Ok(row.id),
-        Ok(None) => Err(format!(
-            "unknown app {t:?} (use host, a published service id, or <workspace>/<name>)"
+        Ok(Some(row)) => return Ok(row.id),
+        Ok(None) => {}
+        Err(e) => return Err(format!("app lookup: {e}")),
+    }
+    // NSI 0.46.4 #4: the bare App id (what `k2 app list` shows and an
+    // agent types) or a bare publish name, when it names ONE App on the
+    // box. Two with that name: say so and list them, never guess.
+    match k2_core::deploy::store::get_app(&conn, &t.to_ascii_lowercase()) {
+        Ok(Some(app)) => return Ok(app.service_id),
+        Ok(None) => {}
+        Err(e) => return Err(format!("app lookup: {e}")),
+    }
+    let named: Vec<k2_core::published_services::PublishedService> = match k2_core::published_services::list_all(&conn) {
+        Ok(rows) => rows.into_iter().filter(|r| r.name == t).collect(),
+        Err(e) => return Err(format!("app lookup: {e}")),
+    };
+    drop(conn);
+    match named.as_slice() {
+        [one] => Ok(one.id.clone()),
+        [] => Err(format!(
+            "unknown app {t:?} (use host, an App id, a published service id, or <workspace>/<name>)"
         )),
-        Err(e) => Err(format!("app lookup: {e}")),
+        many => {
+            let names: Vec<String> = many
+                .iter()
+                .map(|r| format!("{}/{}", crate::apps::routes::ws_handle(&r.project_id), r.name))
+                .collect();
+            Err(format!(
+                "app {t:?} is ambiguous: {} services on this box have that name; name one as <workspace>/<name>: {}",
+                many.len(),
+                names.join(", ")
+            ))
+        }
     }
 }
 

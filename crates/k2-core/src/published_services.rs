@@ -230,6 +230,11 @@ pub struct ServiceJson {
     /// service; null otherwise. `env_deprecation` keeps the full notice.
     #[serde(default)]
     pub env_removed_in: Option<String>,
+    /// This daemon IS that release (or later): say "ends now", never "ends
+    /// 0.46.4" on a box running 0.46.4 ([`crate::app_grace::cutover_now`]).
+    /// Only sent when true.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cutover_now: bool,
     /// `--skin` Apps (S24-15): true while the running helper is an older one
     /// that still signs guests in as `host` (not bound to this App). Only
     /// sent when true.
@@ -324,6 +329,7 @@ impl ServiceJson {
             env_deprecation: None,
             env_mode: None,
             env_removed_in: None,
+            cutover_now: false,
             helper_needs_restart: false,
             clean_mode: false,
             reserved_label: crate::skin::is_reserved_nested_label(&row.name),

@@ -464,7 +464,10 @@ async fn the_cutover_is_046_4_and_a_legacy_service_runs_untouched_in_046_3() {
     assert!(envs.lines().any(|l| l == "SELFMOVE_TEST_INHERITED"), "it keeps the daemon's environment: {envs}");
     assert_eq!(aget(svc.port, "/call").await, "200", "its owner-token calls still work in 0.46.3");
     assert_eq!(aget(svc.port, "/").await, "legacy o1", "unwalled: a plain process, not an App");
-    let label = "legacy (--cmd) — move it to an App before 0.46.4";
+    // "before 0.46.4" until the build is 0.46.4, then "now" (NSI #4).
+    let label = k2_core::app_grace::legacy_label();
+    assert!(label.starts_with("legacy (--cmd) — ") && label.contains("0.46.4"), "{label}");
+    let label = label.as_str();
     let s = listed(d.port, &ws, "oldbff").await;
     assert_eq!(
         (s["envMode"].clone(), s["envRemovedIn"].clone(), s["legacyLabel"].clone(), s["legacyHint"].clone(), s["status"].clone()),

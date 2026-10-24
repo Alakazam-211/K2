@@ -24,6 +24,8 @@ NOTICE="This service still inherits the K2 daemon's whole environment because it
 cat >"$WORK/stub.py" <<'PY2'
 import http.server, json, sys
 NOTICE = sys.argv[2]
+# "now": the daemon IS the cut-over release (cutoverNow, NSI 0.46.4 #4).
+NOW = len(sys.argv) > 3 and sys.argv[3] == "now"
 def svc(name, mode):
     legacy = mode == "legacy"
     return {"id": name + "-id", "projectId": "p", "name": name, "cmd": "node s.js", "cwd": ".",
@@ -32,7 +34,8 @@ def svc(name, mode):
             "lastExitCode": None, "kind": "cmd", "skinRoot": "", "frameAncestors": "",
             "framePolicy": None, "frameWarning": None,
             "envDeprecation": NOTICE if legacy else None,
-            "envMode": mode, "envRemovedIn": "0.46.0" if legacy else None}
+            "envMode": mode, "envRemovedIn": "0.46.0" if legacy else None,
+            "cutoverNow": bool(legacy and NOW)}
 MODES = {"shop": "legacy", "fresh": "clean"}
 class H(http.server.BaseHTTPRequestHandler):
     def reply(self, out):
@@ -44,7 +47,10 @@ class H(http.server.BaseHTTPRequestHandler):
         self.wfile.write(data)
     def do_GET(self):
         if "/cli/vault/service" in self.path:
-            self.reply({"service": "shop", "id": "shop-id", "mode": "legacy", "inheritedNames": ["AWS_SECRET"], "secrets": []})
+            v = {"service": "shop", "id": "shop-id", "mode": "legacy", "inheritedNames": ["AWS_SECRET"], "secrets": []}
+            if NOW:
+                v.update({"envRemovedIn": "0.46.0", "cutoverNow": True})
+            self.reply(v)
         else:
             self.reply({"services": [svc("shop", "legacy"), svc("fresh", "clean")]})
     def do_POST(self):
@@ -113,5 +119,23 @@ out="$(k2s study vault 2>&1)" || fail "study vault: $out"
 printf '%s' "$out" | grep -q "^PUBLISHED SERVICES" || fail "study vault lacks the section: $out"
 printf '%s' "$out" | grep -Fq "k2 publish env <name> clean" || fail "study vault lacks the switch: $out"
 ok "k2 study vault explains the switch"
+
+# NSI 0.46.4 #4: a daemon that IS the cut-over release never says "ends in
+# K2 <its own version>": it says the end is now.
+kill "$STUB_PID" 2>/dev/null || true
+wait "$STUB_PID" 2>/dev/null || true
+python3 "$WORK/stub.py" "$PORT" "$NOTICE" now &
+STUB_PID=$!
+for _ in $(seq 1 100); do curl -s "http://127.0.0.1:$PORT/" >/dev/null 2>&1 && break; sleep 0.05; done
+k2s publish ps >"$WORK/out" 2>"$WORK/err" || fail "ps (now): $(cat "$WORK/out" "$WORK/err")"
+out="$(cat "$WORK/out")"
+printf '%s\n' "$out" | grep -E '^shop ' | grep -Fq "[legacy env (ends now, 0.46.0)]" || fail "now: shop row tag: $out"
+printf '%s\n' "$out" | grep -Fq "this ends with this release (K2 0.46.0)." || fail "now: summary line: $out"
+if printf '%s\n' "$out" | grep -Fq "ends in K2 0.46.0"; then fail "now: still says 'ends in K2 <this release>': $out"; fi
+k2s publish start shop >"$WORK/out" 2>"$WORK/err" || fail "start shop (now): $(cat "$WORK/out" "$WORK/err")"
+grep -Fq "this ends with this release (K2 0.46.0)." "$WORK/err" || fail "now: start warning: $(cat "$WORK/err")"
+out="$(k2s publish env shop 2>&1)" || fail "publish env (now): $out"
+printf '%s' "$out" | grep -Fq "ends with this release (K2 0.46.0) — switch with: k2 publish env shop clean" || fail "now: publish env: $out"
+ok "on the cut-over release itself the notices say the end is now"
 
 echo "PASS: publish env deprecation ($pass checks)"

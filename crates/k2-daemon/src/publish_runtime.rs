@@ -748,6 +748,7 @@ pub fn to_json(row: &ps::PublishedService) -> ServiceJson {
         if crate::vault::publish_env::is_legacy(&row.id) {
             json.env_mode = Some("legacy".into());
             json.env_removed_in = Some(crate::vault::publish_env::LEGACY_ENV_REMOVED_IN.into());
+            json.cutover_now = k2_core::app_grace::cutover_now();
             json.env_deprecation = Some(crate::vault::publish_env::legacy_env_notice(&row.name));
         } else {
             json.env_mode = Some("clean".into());

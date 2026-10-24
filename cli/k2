@@ -11103,9 +11103,10 @@ for r in reports:
     status = "ready for %s" % r.get("cutover") if r.get("readyForCutover") else "%d thing(s) break in %s" % (r.get("breaks", 0), r.get("cutover"))
     print("%s  [%s]  %s" % (a.get("handle") or a.get("name"), mode, status))
     for w in r.get("warnings", []):
-        print("  %-6s %s" % ("BREAKS" if w.get("severity") == "breaks" else "check", w.get("message")))
+        sev = w.get("severity")
+        print("  %-8s %s" % ({"breaks": "BREAKS", "expected": "expected"}.get(sev, "check"), w.get("message")))
         if w.get("fix"):
-            print("         fix: %s" % w["fix"])
+            print("           fix: %s" % w["fix"])
     sc = r.get("scan") or {}
     if sc.get("truncated"):
         print("  (the code scan stopped early: %s files)" % sc.get("filesScanned"))
@@ -23771,7 +23772,9 @@ for s in v.get("secrets") or []:
 if v.get("inheritedNames"):
     print("  inherits the daemon environment: %s" % ", ".join(v["inheritedNames"]))
 if v.get("mode") == "legacy":
-    print("  deprecated: inheriting the daemon environment ends in K2 %s — switch with: k2 publish env %s clean" % (v.get("envRemovedIn") or "0.46.4", v.get("service")))
+    ends = v.get("envRemovedIn") or "0.46.4"
+    when = ("with this release (K2 %s)" if v.get("cutoverNow") else "in K2 %s") % ends
+    print("  deprecated: inheriting the daemon environment ends %s — switch with: k2 publish env %s clean" % (when, v.get("service")))
 if v.get("restart"): print(v["restart"])'
             ;;
         reveal)
@@ -25504,8 +25507,9 @@ rm
   <name> on run is the subdomain label. It cannot differ.
 
 ps     hosted processes for THIS workspace (running/stopped, port, URL if any)
-       [legacy env (ends 0.46.0)] = a service from before 0.45.4 that still
-       inherits the daemon's whole environment. Switch: k2 publish env <name> clean
+       [legacy env (ends <release>)] = a service from before 0.45.4 that still
+       inherits the daemon's whole environment until the --cmd cut-over (the
+       tag names that release). Switch: k2 publish env <name> clean
 logs   that process's log file (--tail follows)
 status Connect plan + primary host. Not "is my app up" — use ps.
 
@@ -25669,10 +25673,18 @@ def env_legacy(s):
 def env_ends(s):
     return str((s.get("envRemovedIn") if isinstance(s, dict) else None) or "0.46.4")
 
+# NSI 0.46.4 #4: a daemon that IS the cut-over release says so (cutoverNow),
+# never "ends in K2 0.46.4" on a box running 0.46.4.
+def env_now(s):
+    return bool(isinstance(s, dict) and s.get("cutoverNow"))
+
+def env_when(s):
+    return ("with this release (K2 %s)" if env_now(s) else "in K2 %s") % env_ends(s)
+
 def env_warning(n, s):
-    return ("warning: %s still inherits the daemon environment; this ends in K2 %s. "
+    return ("warning: %s still inherits the daemon environment; this ends %s. "
             "Switch with: k2 publish env %s clean (grant secrets with k2 publish secret add)."
-            % (n, env_ends(s), n))
+            % (n, env_when(s), n))
 
 # 0.46.3: held for the owner (a new --cmd service from an agent, or a disk
 # override that waits for the owner): print the request and exit 2.
@@ -25773,7 +25785,7 @@ if mode == "list":
     legacy = []
     unwalled = []
     hint = "k2 study app-move"
-    ends = "0.46.4"
+    ends = "in K2 0.46.4"
     for s in services:
         if not isinstance(s, dict):
             continue
@@ -25782,8 +25794,8 @@ if mode == "list":
         u = url_or_target(s)
         if env_legacy(s):
             legacy.append(str(s.get("name") or "?"))
-            ends = env_ends(s)
-            u += "  [legacy env (ends %s)]" % ends
+            ends = env_when(s)
+            u += "  [legacy env (ends %s)]" % (("now, " + env_ends(s)) if env_now(s) else env_ends(s))
         # 0.46.3: --cmd services no wall runs, and where a moved label went.
         if s.get("legacyLabel"):
             unwalled.append(str(s.get("name") or "?"))
@@ -25814,7 +25826,7 @@ if mode == "list":
     for n, w in warnings:
         print("warning: %s: %s" % (n, w))
     if legacy:
-        print("warning: %d service%s still inherit%s the daemon environment (%s); this ends in K2 %s. "
+        print("warning: %d service%s still inherit%s the daemon environment (%s); this ends %s. "
               "Switch each with: k2 publish env <service> clean (grant secrets with k2 publish secret add <service> NAME)."
               % (len(legacy), "" if len(legacy) == 1 else "s", "s" if len(legacy) == 1 else "",
                  ", ".join(legacy), ends))
@@ -25851,7 +25863,7 @@ if isinstance(svc, dict) and svc.get("error"):
     print("  error: %s" % svc.get("error"))
 if isinstance(svc, dict) and env_legacy(svc) and verb not in ("run", "start"):
     # run/start already warned on stderr; stop/rm still name the end.
-    print("  deprecated: inherits the daemon environment; ends in K2 %s (k2 publish env %s clean)" % (env_ends(svc), name))
+    print("  deprecated: inherits the daemon environment; ends %s (k2 publish env %s clean)" % (env_when(svc), name))
 sys.exit(0)
 PY
 }

@@ -116,12 +116,14 @@ pub const LEGACY_ENV_REMOVED_IN: &str = k2_core::app_grace::CUTOVER_RELEASE;
 pub fn legacy_env_notice(name: &str) -> String {
     format!(
         "This service still inherits the K2 daemon's whole environment because it existed \
-         before 0.45.4. That ends in K2 {LEGACY_ENV_REMOVED_IN}: it will then start with a \
+         before 0.45.4. That ends {ends}: it will then start with a \
          clean environment plus only the secrets granted to it. Switch now with \
          `k2 publish env {name} clean` (grant what it needs with `k2 publish secret add {name} …`), \
          see what would break with `k2 app warnings {name}`, or try the whole \
          {LEGACY_ENV_REMOVED_IN} behaviour first with `k2 app clean-mode {name} on`. \
-         Move it to an App before then: `k2 study app-move`."
+         Move it to an App {when}: `k2 study app-move`.",
+        ends = k2_core::app_grace::cutover_phrase(),
+        when = if k2_core::app_grace::cutover_now() { "now" } else { "before then" },
     )
 }
 

@@ -557,13 +557,22 @@ fn validate(who: &Who, body: &[u8]) -> R<J> {
 /// The App a call names. A passport sees only its own workspace's Apps (a
 /// foreign App is `app_not_found`, never "forbidden": no existence leak).
 pub(crate) fn app_for(who: &Who, app_id: Option<&str>) -> R<AppRow> {
-    let id = app_id.ok_or_else(|| no(codes::BAD_REQUEST, 400, "name the App (its App id)"))?.to_ascii_lowercase();
+    let raw = app_id.ok_or_else(|| no(codes::BAD_REQUEST, 400, "name the App (its App id)"))?.trim().to_ascii_lowercase();
+    // 0.46.4 (NSI #4): `<workspace>/<app id>`, the form the guest and grant
+    // verbs print, names the same App here (its workspace must match).
+    let (ws_part, id) = match raw.split_once('/') {
+        Some((w, i)) if !w.is_empty() && !i.is_empty() && !i.contains('/') => (Some(w.to_string()), i.to_string()),
+        _ => (None, raw.clone()),
+    };
     let row = {
         let db = k2_core::db::shared();
         let conn = db.lock();
         store::get_app(&conn, &id).map_err(db_err)?
     };
-    let row = row.ok_or_else(|| no(codes::APP_NOT_FOUND, 404, format!("no App '{id}' on this box (k2 app list)")))?;
+    let row = row
+        .filter(|r| ws_part.as_deref().is_none_or(|w| ws_by_token(w).is_some_and(|ws| ws.id == r.owner_workspace)))
+        .ok_or_else(|| no(codes::APP_NOT_FOUND, 404, format!("no App '{raw}' on this box (k2 app list)")))?;
+    let id = raw;
     if let Some(ws) = agent_ws(who) {
         if row.owner_workspace != ws {
             return Err(no(codes::APP_NOT_FOUND, 404, format!("no App '{id}' in your workspace (k2 app list)")));

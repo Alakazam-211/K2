@@ -15,7 +15,7 @@
 use serde_json::json;
 use tauri::Manager;
 
-use crate::daemon_client::DaemonClient;
+use crate::daemon_client::{off_main, DaemonClient};
 use crate::editors::EditorInfo;
 
 /// The two `/cli/projects/list` row fields the focus window needs (the
@@ -77,9 +77,18 @@ pub async fn pick_local_files(app: tauri::AppHandle) -> Result<Option<Vec<String
     rx.recv().map_err(|e| e.to_string())
 }
 
+// The daemon-calling commands below are `async` and run the call on the
+// blocking pool (`off_main`): a sync Tauri command runs ON the main thread,
+// so a slow or wedged daemon (10 s reqwest timeout) froze the window. Each
+// sends the same request as before; the `*_with` fns hold it for the tests.
+
 #[tauri::command]
-pub fn projects_open_in_finder(path: String) -> Result<(), String> {
-    daemon()?
+pub async fn projects_open_in_finder(path: String) -> Result<(), String> {
+    off_main(move || open_in_finder_with(&daemon()?, &path)).await
+}
+
+fn open_in_finder_with(client: &DaemonClient, path: &str) -> Result<(), String> {
+    client
         .cli_post_json("/cli/projects/open-in-finder", &json!({ "path": path }))
         .map(|_| ())
 }
@@ -119,8 +128,12 @@ fn folder_to_open(path: &str) -> Result<std::path::PathBuf, String> {
 }
 
 #[tauri::command]
-pub fn projects_open_in_editor(editor_id: String, path: String) -> Result<(), String> {
-    daemon()?
+pub async fn projects_open_in_editor(editor_id: String, path: String) -> Result<(), String> {
+    off_main(move || open_in_editor_with(&daemon()?, &editor_id, &path)).await
+}
+
+fn open_in_editor_with(client: &DaemonClient, editor_id: &str, path: &str) -> Result<(), String> {
+    client
         .cli_post_json(
             "/cli/projects/open-in-editor",
             &json!({ "editorId": editor_id, "path": path }),
@@ -129,13 +142,21 @@ pub fn projects_open_in_editor(editor_id: String, path: String) -> Result<(), St
 }
 
 #[tauri::command]
-pub fn projects_get_editors() -> Result<Vec<EditorInfo>, String> {
-    daemon()?.cli_get_json("/cli/projects/get-editors", &[])
+pub async fn projects_get_editors() -> Result<Vec<EditorInfo>, String> {
+    off_main(|| get_editors_with(&daemon()?)).await
+}
+
+fn get_editors_with(client: &DaemonClient) -> Result<Vec<EditorInfo>, String> {
+    client.cli_get_json("/cli/projects/get-editors", &[])
 }
 
 #[tauri::command]
-pub fn projects_open_in_terminal(terminal_app: String, path: String) -> Result<(), String> {
-    daemon()?
+pub async fn projects_open_in_terminal(terminal_app: String, path: String) -> Result<(), String> {
+    off_main(move || open_in_terminal_with(&daemon()?, &terminal_app, &path)).await
+}
+
+fn open_in_terminal_with(client: &DaemonClient, terminal_app: &str, path: &str) -> Result<(), String> {
+    client
         .cli_post_json(
             "/cli/projects/open-in-terminal",
             &json!({ "terminalApp": terminal_app, "path": path }),
@@ -144,36 +165,42 @@ pub fn projects_open_in_terminal(terminal_app: String, path: String) -> Result<(
 }
 
 #[tauri::command]
-pub fn projects_get_all_editors() -> Result<Vec<EditorInfo>, String> {
-    daemon()?.cli_get_json("/cli/projects/get-all-editors", &[])
+pub async fn projects_get_all_editors() -> Result<Vec<EditorInfo>, String> {
+    off_main(|| get_all_editors_with(&daemon()?)).await
+}
+
+fn get_all_editors_with(client: &DaemonClient) -> Result<Vec<EditorInfo>, String> {
+    client.cli_get_json("/cli/projects/get-all-editors", &[])
 }
 
 #[tauri::command]
-pub fn projects_refresh_editors() -> Result<Vec<EditorInfo>, String> {
-    daemon()?.cli_post_json_decode("/cli/projects/refresh-editors", &json!({}))
+pub async fn projects_refresh_editors() -> Result<Vec<EditorInfo>, String> {
+    off_main(|| refresh_editors_with(&daemon()?)).await
+}
+
+fn refresh_editors_with(client: &DaemonClient) -> Result<Vec<EditorInfo>, String> {
+    client.cli_post_json_decode("/cli/projects/refresh-editors", &json!({}))
 }
 
 /// HOST: opens a new Tauri WebviewWindow. Window create + management
 /// is a Tauri-only API; the daemon has nothing equivalent.
 ///
-/// **Sync** (same as `window_new` / `open_new_window`). This handler
-/// uses `reqwest::blocking` (`daemon().cli_get_json`) and
-/// `WebviewWindowBuilder::build()`. Running those on the async
-/// command runtime panics: "Cannot drop a runtime in a context where
-/// blocking is not allowed" — menu/hotkey then look like no-ops
-/// (renderer only `console.warn`s the invoke error).
+/// `async`: the project-name lookup (`reqwest::blocking`) runs on the
+/// blocking pool via `off_main`, so it neither holds the main thread nor
+/// runs reqwest::blocking on an async worker ("Cannot drop a runtime in a
+/// context where blocking is not allowed", which made menu/hotkey look
+/// like no-ops when this command was first made async without it). The
+/// window build then runs here, which Tauri v2 supports from async
+/// commands (and recommends on Windows, where a sync command that creates a
+/// window can deadlock).
 #[tauri::command]
-pub fn projects_open_focus_window(
+pub async fn projects_open_focus_window(
     app: tauri::AppHandle,
     project_id: String,
 ) -> Result<serde_json::Value, String> {
     // Look up the project name via the daemon (the only DB reader now).
-    let projects: Vec<ProjectRow> = daemon()?.cli_get_json("/cli/projects/list", &[])?;
-    let project_name = projects
-        .into_iter()
-        .find(|p| p.id == project_id)
-        .map(|p| p.name)
-        .ok_or_else(|| format!("Project not found: {}", project_id))?;
+    let lookup_id = project_id.clone();
+    let project_name = off_main(move || project_name_with(&daemon()?, &lookup_id)).await?;
 
     let label = format!("focus-{}", project_id);
     if let Some(existing) = app.get_webview_window(&label) {
@@ -201,9 +228,95 @@ pub fn projects_open_focus_window(
     Ok(serde_json::json!({ "opened": true }))
 }
 
+fn project_name_with(client: &DaemonClient, project_id: &str) -> Result<String, String> {
+    let projects: Vec<ProjectRow> = client.cli_get_json("/cli/projects/list", &[])?;
+    projects
+        .into_iter()
+        .find(|p| p.id == project_id)
+        .map(|p| p.name)
+        .ok_or_else(|| format!("Project not found: {}", project_id))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::folder_to_open;
+    use super::*;
+    use crate::daemon_client::test_support::{pairs, FakeDaemon};
+
+    fn run<T: Send + 'static>(f: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
+        tauri::async_runtime::block_on(off_main(f))
+    }
+
+    #[test]
+    fn open_in_verbs_post_the_same_json_bodies() {
+        let fake = FakeDaemon::serve(vec![(200, "{}"), (200, "{}"), (200, "{}")]);
+        let client = DaemonClient::for_test(&fake.base, "tok");
+        run(move || {
+            open_in_finder_with(&client, "/w/a b")?;
+            open_in_editor_with(&client, "cursor", "/w/a b")?;
+            open_in_terminal_with(&client, "iTerm", "/w/a b")
+        })
+        .expect("all three succeed");
+        let finder = fake.next();
+        assert_eq!((finder.method.as_str(), finder.path.as_str()), ("POST", "/cli/projects/open-in-finder"));
+        assert_eq!(finder.query, pairs(&[("token", "tok")]));
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&finder.body).expect("json"), json!({ "path": "/w/a b" }));
+        let editor = fake.next();
+        assert_eq!(editor.path, "/cli/projects/open-in-editor");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&editor.body).expect("json"),
+            json!({ "editorId": "cursor", "path": "/w/a b" })
+        );
+        let terminal = fake.next();
+        assert_eq!(terminal.path, "/cli/projects/open-in-terminal");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&terminal.body).expect("json"),
+            json!({ "terminalApp": "iTerm", "path": "/w/a b" })
+        );
+    }
+
+    #[test]
+    fn open_in_finder_surfaces_a_daemon_error() {
+        let fake = FakeDaemon::serve(vec![(500, "boom")]);
+        let client = DaemonClient::for_test(&fake.base, "tok");
+        assert_eq!(
+            run(move || open_in_finder_with(&client, "/w")),
+            Err("daemon /cli/projects/open-in-finder 500: boom".to_string())
+        );
+    }
+
+    #[test]
+    fn editor_lists_decode_from_their_routes() {
+        let row = r#"[{"id":"cursor","label":"Cursor","mac_app":"Cursor","cli_command":"cursor","installed":true,"type":"editor"}]"#;
+        let fake = FakeDaemon::serve(vec![(200, row), (200, row), (200, row)]);
+        let client = DaemonClient::for_test(&fake.base, "tok");
+        let (a, b, c) = run(move || Ok((get_editors_with(&client)?, get_all_editors_with(&client)?, refresh_editors_with(&client)?)))
+            .expect("all three decode");
+        for list in [&a, &b, &c] {
+            assert_eq!(serde_json::to_value(list).expect("serialize"), serde_json::from_str::<serde_json::Value>(row).expect("json"));
+        }
+        let get = fake.next();
+        assert_eq!((get.method.as_str(), get.path.as_str()), ("GET", "/cli/projects/get-editors"));
+        let all = fake.next();
+        assert_eq!((all.method.as_str(), all.path.as_str()), ("GET", "/cli/projects/get-all-editors"));
+        let refresh = fake.next();
+        assert_eq!((refresh.method.as_str(), refresh.path.as_str()), ("POST", "/cli/projects/refresh-editors"));
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&refresh.body).expect("json"), json!({}));
+    }
+
+    #[test]
+    fn focus_window_looks_the_project_name_up_by_id() {
+        let list = r#"[{"id":"p1","name":"One","path":"/w/1"},{"id":"p2","name":"Two","path":"/w/2"}]"#;
+        let fake = FakeDaemon::serve(vec![(200, list), (200, list)]);
+        let client = DaemonClient::for_test(&fake.base, "tok");
+        let (found, missing) = run(move || Ok((project_name_with(&client, "p2"), project_name_with(&client, "nope"))))
+            .expect("ran");
+        assert_eq!(found, Ok("Two".to_string()));
+        assert_eq!(missing, Err("Project not found: nope".to_string()));
+        let seen = fake.next();
+        assert_eq!((seen.method.as_str(), seen.path.as_str()), ("GET", "/cli/projects/list"));
+    }
+
+    // ── open_folder (SS16): only an existing absolute directory ──
 
     #[test]
     fn open_folder_takes_only_an_existing_absolute_directory() {

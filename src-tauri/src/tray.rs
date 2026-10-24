@@ -370,7 +370,7 @@ fn compose_status_label() -> (String, StatusState) {
     //    uptime; PID + "daemon" prefix were noisy in the tray menu.
     if let crate::commands::daemon::DaemonStatusResponse::Running {
         uptime_secs, ..
-    } = crate::commands::daemon::daemon_status()
+    } = crate::commands::daemon::daemon_status_blocking()
     {
         return (
             format!("Server Status: Running  (up {})", format_uptime(uptime_secs)),
@@ -392,7 +392,7 @@ fn compose_status_label() -> (String, StatusState) {
         // 3. Nothing hosting the companion. Orange for "unreachable"
         // (plist loaded but not answering — crash/launching), red for
         // "not running at all" (no plist, no in-app).
-        match crate::commands::daemon::daemon_status() {
+        match crate::commands::daemon::daemon_status_blocking() {
             crate::commands::daemon::DaemonStatusResponse::Unreachable { .. } => (
                 "Server Status: Unreachable".to_string(),
                 StatusState::Unreachable,

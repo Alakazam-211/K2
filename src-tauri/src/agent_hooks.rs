@@ -28,34 +28,31 @@ use k2_core::agent_hooks::{
 #[cfg(test)]
 const RECENT_EVENTS_CAP: usize = 50;
 
+use crate::daemon_client::{off_main, DaemonClient};
+
+// Every command below is `async` and runs its daemon call on the blocking
+// pool (`off_main`): a sync Tauri command runs ON the main thread, so a
+// slow or wedged daemon (10 s reqwest timeout) froze the window. The
+// request each one sends is unchanged; the `*_with` fns hold it so the
+// tests can aim them at a fake daemon.
+
 /// Force-fire a specific heartbeat by name, bypassing its schedule. The
 /// frontend uses this for per-row Launch buttons in the workspace drawer
 /// so the user can manually kick off a scheduled workflow without waiting
-/// for the cron window. Path is identical to a scheduled fire: resolve
-/// the row → read its wakeup.md → spawn_wake_pty → stamp last_fired →
-/// write a heartbeat_fires audit row (decision='fired', reason='forced').
-///
-/// Force-fire a specific heartbeat by name. Thin proxy to the daemon's
-/// `/cli/heartbeat/launch` route which runs the smart-launch decision
-/// tree (fresh-fire / inject-into-live-session / resume-and-fire) —
-/// the same path the cron tick and `k2so heartbeat launch <name>`
-/// CLI verb take. All real logic lives in
-/// `crates/k2so-daemon/src/heartbeat_launch.rs`; this Tauri command
-/// exists only so the React Launch button can trigger it via invoke
-/// without a separate HTTP client. Kept under the legacy
-/// `k2so_heartbeat_force_fire` name since the renderer still
-/// references it from the WorkspacePanel header path; the new
-/// `k2so_heartbeat_smart_launch` is the canonical name going forward.
+/// for the cron window. Thin proxy to the daemon's `/cli/heartbeat/launch`
+/// route, which runs the smart-launch decision tree (fresh-fire /
+/// inject-into-live-session / resume-and-fire) — the same path the cron
+/// tick and `k2 heartbeat launch <name>` take. All real logic lives in
+/// `crates/k2-daemon/src/heartbeat_launch.rs`. Kept under the legacy
+/// `k2so_heartbeat_force_fire` name since the renderer still references
+/// it from the WorkspacePanel header path; `k2so_heartbeat_smart_launch`
+/// is the canonical name going forward.
 #[tauri::command]
-pub fn k2so_heartbeat_force_fire(
+pub async fn k2so_heartbeat_force_fire(
     project_path: String,
     name: String,
 ) -> Result<String, String> {
-    let client = crate::daemon_client::DaemonClient::try_connect()?;
-    client.cli_post_query(
-        "/cli/heartbeat/launch",
-        &[("project", &project_path), ("name", &name)],
-    )
+    off_main(move || heartbeat_launch_with(&DaemonClient::try_connect()?, &project_path, &name)).await
 }
 
 /// Smart-launch a heartbeat — invoked by the React Launch button.
@@ -63,14 +60,17 @@ pub fn k2so_heartbeat_force_fire(
 /// signal that this is the daemon-first path going forward and that
 /// callers shouldn't expect Tauri-side spawn behaviour.
 #[tauri::command]
-pub fn k2so_heartbeat_smart_launch(
+pub async fn k2so_heartbeat_smart_launch(
     project_path: String,
     name: String,
 ) -> Result<String, String> {
-    let client = crate::daemon_client::DaemonClient::try_connect()?;
+    off_main(move || heartbeat_launch_with(&DaemonClient::try_connect()?, &project_path, &name)).await
+}
+
+fn heartbeat_launch_with(client: &DaemonClient, project_path: &str, name: &str) -> Result<String, String> {
     client.cli_post_query(
         "/cli/heartbeat/launch",
-        &[("project", &project_path), ("name", &name)],
+        &[("project", project_path), ("name", name)],
     )
 }
 
@@ -83,14 +83,17 @@ pub fn k2so_heartbeat_smart_launch(
 /// performs lazy-cleanup of stale columns inside the same call.
 /// See `.k2so/prds/heartbeat-active-session-tracking.md`.
 #[tauri::command]
-pub fn k2so_heartbeat_active_session(
+pub async fn k2so_heartbeat_active_session(
     project_path: String,
     name: String,
 ) -> Result<String, String> {
-    let client = crate::daemon_client::DaemonClient::try_connect()?;
+    off_main(move || heartbeat_active_session_with(&DaemonClient::try_connect()?, &project_path, &name)).await
+}
+
+fn heartbeat_active_session_with(client: &DaemonClient, project_path: &str, name: &str) -> Result<String, String> {
     client.cli_get(
         "/cli/heartbeat/active-session",
-        &[("project", &project_path), ("name", &name)],
+        &[("project", project_path), ("name", name)],
     )
 }
 
@@ -101,9 +104,12 @@ pub fn k2so_heartbeat_active_session(
 ///   `{ agentName, sessionId, sessionAlive, isV2 }`.
 /// `sessionId` is non-null only when a live session exists.
 #[tauri::command]
-pub fn k2so_session_lookup_by_agent(agent: String) -> Result<String, String> {
-    let client = crate::daemon_client::DaemonClient::try_connect()?;
-    client.cli_get("/cli/sessions/lookup-by-agent", &[("agent", &agent)])
+pub async fn k2so_session_lookup_by_agent(agent: String) -> Result<String, String> {
+    off_main(move || session_lookup_by_agent_with(&DaemonClient::try_connect()?, &agent)).await
+}
+
+fn session_lookup_by_agent_with(client: &DaemonClient, agent: &str) -> Result<String, String> {
+    client.cli_get("/cli/sessions/lookup-by-agent", &[("agent", agent)])
 }
 
 /// 0.37.11 A9 phase 4a — list live daemon sessions for a workspace.
@@ -115,9 +121,12 @@ pub fn k2so_session_lookup_by_agent(agent: String) -> Result<String, String> {
 /// falling back to `launchDefaultAgent`, so opening a workspace in a
 /// second window adopts existing PTYs rather than spawning duplicates.
 #[tauri::command]
-pub fn k2so_sessions_list_for_workspace(path: String) -> Result<String, String> {
-    let client = crate::daemon_client::DaemonClient::try_connect()?;
-    client.cli_get("/cli/sessions/list-for-workspace", &[("path", &path)])
+pub async fn k2so_sessions_list_for_workspace(path: String) -> Result<String, String> {
+    off_main(move || sessions_list_for_workspace_with(&DaemonClient::try_connect()?, &path)).await
+}
+
+fn sessions_list_for_workspace_with(client: &DaemonClient, path: &str) -> Result<String, String> {
+    client.cli_get("/cli/sessions/list-for-workspace", &[("path", path)])
 }
 
 // 0.46.4: the orphaned `get_port` / `get_token` (k2-core `hook_config`),
@@ -227,5 +236,78 @@ mod tests {
         assert_eq!(map_event_type("beforeShellExecution"), Some("permission"));
         // Unknown events must return None
         assert_eq!(map_event_type("NoSuchEvent"), None);
+    }
+
+    // ── The forwarders (off the main thread, same request as before) ──
+
+    use crate::daemon_client::test_support::{pairs, FakeDaemon};
+
+    #[test]
+    fn heartbeat_launch_posts_project_and_name() {
+        let fake = FakeDaemon::serve(vec![(200, r#"{"launched":true}"#)]);
+        let client = DaemonClient::for_test(&fake.base, "tok");
+        let out = tauri::async_runtime::block_on(off_main(move || {
+            heartbeat_launch_with(&client, "/w/my proj", "daily & more")
+        }));
+        assert_eq!(out, Ok(r#"{"launched":true}"#.to_string()));
+        let seen = fake.next();
+        assert_eq!(seen.method, "POST");
+        assert_eq!(seen.path, "/cli/heartbeat/launch");
+        assert_eq!(seen.query, pairs(&[("token", "tok"), ("project", "/w/my proj"), ("name", "daily & more")]));
+        assert_eq!(seen.body, "");
+    }
+
+    #[test]
+    fn heartbeat_launch_surfaces_a_daemon_error() {
+        let fake = FakeDaemon::serve(vec![(404, "no such heartbeat")]);
+        let client = DaemonClient::for_test(&fake.base, "tok");
+        let out = tauri::async_runtime::block_on(off_main(move || heartbeat_launch_with(&client, "/w", "x")));
+        assert_eq!(out, Err("daemon /cli/heartbeat/launch 404: no such heartbeat".to_string()));
+    }
+
+    #[test]
+    fn heartbeat_active_session_gets_project_and_name() {
+        let fake = FakeDaemon::serve(vec![(200, r#"{"sessionAlive":false}"#)]);
+        let client = DaemonClient::for_test(&fake.base, "tok");
+        let out = tauri::async_runtime::block_on(off_main(move || heartbeat_active_session_with(&client, "/w", "hb")));
+        assert_eq!(out, Ok(r#"{"sessionAlive":false}"#.to_string()));
+        let seen = fake.next();
+        assert_eq!(seen.method, "GET");
+        assert_eq!(seen.path, "/cli/heartbeat/active-session");
+        assert_eq!(seen.query, pairs(&[("token", "tok"), ("project", "/w"), ("name", "hb")]));
+    }
+
+    #[test]
+    fn session_lookups_get_their_routes() {
+        let fake = FakeDaemon::serve(vec![(200, r#"{"sessionId":null}"#), (200, "[]")]);
+        let client = DaemonClient::for_test(&fake.base, "tok");
+        let (a, b) = tauri::async_runtime::block_on(off_main(move || {
+            Ok((
+                session_lookup_by_agent_with(&client, "sales/reviewer"),
+                sessions_list_for_workspace_with(&client, "/w/tree"),
+            ))
+        }))
+        .expect("ran");
+        assert_eq!(a, Ok(r#"{"sessionId":null}"#.to_string()));
+        assert_eq!(b, Ok("[]".to_string()));
+        let first = fake.next();
+        assert_eq!((first.method.as_str(), first.path.as_str()), ("GET", "/cli/sessions/lookup-by-agent"));
+        assert_eq!(first.query, pairs(&[("token", "tok"), ("agent", "sales/reviewer")]));
+        let second = fake.next();
+        assert_eq!((second.method.as_str(), second.path.as_str()), ("GET", "/cli/sessions/list-for-workspace"));
+        assert_eq!(second.query, pairs(&[("token", "tok"), ("path", "/w/tree")]));
+    }
+
+    #[test]
+    fn commands_report_a_missing_daemon_without_blocking() {
+        // A `.k2` dir with no daemon.port: the same Err the sync command
+        // returned, now from the blocking pool.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let k2 = dir.path().to_path_buf();
+        let out = tauri::async_runtime::block_on(off_main(move || {
+            session_lookup_by_agent_with(&DaemonClient::try_connect_in(&k2)?, "a")
+        }));
+        let err = out.expect_err("no daemon.port must be an error");
+        assert!(err.starts_with("read ") && err.contains("daemon.port"), "got: {err}");
     }
 }

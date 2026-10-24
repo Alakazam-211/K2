@@ -208,6 +208,13 @@ tempfile = "3"
 ahash = "0.8"
 ignore = "0.4"
 
+# commands::secrets tests: a throwaway file keychain per test (open, unlock,
+# item ops), so they pass on compute nodes, whose job user has no default
+# keychain, and never write the login keychain. The same security-framework
+# 3 keyring's apple-native backend links: no new crate.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+security-framework = "3"
+
 [[bench]]
 name = "perf"
 harness = false

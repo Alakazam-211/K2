@@ -57,16 +57,30 @@ impl DaemonClient {
     /// file is missing or malformed — caller's responsibility to trigger
     /// `launchctl load` and retry.
     pub fn try_connect() -> Result<Self, String> {
+        Self::try_connect_in(&k2_home_dir()?)
+    }
+
+    /// [`Self::try_connect`] against an explicit `.k2` dir (tests point it
+    /// at a temp dir, never the live `~/.k2`).
+    pub fn try_connect_in(k2_dir: &std::path::Path) -> Result<Self, String> {
+        // Local bundled daemon: discover port + token from disk.
+        let port = read_port(&k2_dir.join("daemon.port"))?;
+        let token = read_token(&k2_dir.join("daemon.token"))?;
+        Self::at(format!("http://127.0.0.1:{port}"), token)
+    }
+
+    fn at(base: String, token: String) -> Result<Self, String> {
         let http = reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(10))
             .build()
             .map_err(|e| format!("build http client: {e}"))?;
-        // Local bundled daemon: discover port + token from disk.
-        let k2so_dir = k2_home_dir()?;
-        let port = read_port(&k2so_dir.join("daemon.port"))?;
-        let token = read_token(&k2so_dir.join("daemon.token"))?;
-        let base = format!("http://127.0.0.1:{port}");
         Ok(Self { base, token, http })
+    }
+
+    /// A client for a fake daemon in tests ([`test_support::FakeDaemon`]).
+    #[cfg(test)]
+    pub(crate) fn for_test(base: &str, token: &str) -> Self {
+        Self::at(base.to_string(), token.to_string()).expect("build test client")
     }
 
 
@@ -271,7 +285,7 @@ fn k2_home_dir() -> Result<PathBuf, String> {
         .join(".k2"))
 }
 
-fn read_port(path: &PathBuf) -> Result<u16, String> {
+fn read_port(path: &std::path::Path) -> Result<u16, String> {
     let raw = fs::read_to_string(path)
         .map_err(|e| format!("read {}: {e}", path.display()))?;
     raw.trim()
@@ -279,7 +293,7 @@ fn read_port(path: &PathBuf) -> Result<u16, String> {
         .map_err(|e| format!("parse port from {}: {e}", path.display()))
 }
 
-fn read_token(path: &PathBuf) -> Result<String, String> {
+fn read_token(path: &std::path::Path) -> Result<String, String> {
     let raw = fs::read_to_string(path)
         .map_err(|e| format!("read {}: {e}", path.display()))?;
     let trimmed = raw.trim();
@@ -287,6 +301,124 @@ fn read_token(path: &PathBuf) -> Result<String, String> {
         return Err(format!("empty token file at {}", path.display()));
     }
     Ok(trimmed.to_string())
+}
+
+/// A one-shot fake daemon for the forwarder tests: a loopback HTTP listener
+/// that answers each request with a canned status + body and records what
+/// it received, so a test can check the exact method, path, query and body
+/// a Tauri command sends. Never touches `~/.k2` or a real daemon.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::net::TcpListener;
+    use std::sync::mpsc;
+
+    /// One request as the fake daemon saw it.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct Seen {
+        pub method: String,
+        /// Path without the query string.
+        pub path: String,
+        /// Decoded query pairs, in order (the token included).
+        pub query: Vec<(String, String)>,
+        pub body: String,
+    }
+
+    pub struct FakeDaemon {
+        pub base: String,
+        seen: mpsc::Receiver<Seen>,
+    }
+
+    impl FakeDaemon {
+        /// Serve `replies.len()` requests, the n-th answered with
+        /// `replies[n]` = (status, body), then stop listening.
+        pub fn serve(replies: Vec<(u16, &'static str)>) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake daemon");
+            let base = format!("http://{}", listener.local_addr().expect("fake daemon addr"));
+            let (tx, seen) = mpsc::channel();
+            std::thread::spawn(move || {
+                for (status, body) in replies {
+                    let (stream, _) = listener.accept().expect("accept");
+                    let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+                    let mut request_line = String::new();
+                    reader.read_line(&mut request_line).expect("request line");
+                    let mut content_length = 0usize;
+                    loop {
+                        let mut header = String::new();
+                        reader.read_line(&mut header).expect("header");
+                        if header == "\r\n" || header.is_empty() {
+                            break;
+                        }
+                        let lower = header.to_ascii_lowercase();
+                        if let Some(v) = lower.strip_prefix("content-length:") {
+                            content_length = v.trim().parse().expect("content-length");
+                        }
+                    }
+                    let mut req_body = vec![0u8; content_length];
+                    reader.read_exact(&mut req_body).expect("request body");
+                    let mut parts = request_line.split_whitespace();
+                    let method = parts.next().expect("method").to_string();
+                    let target = parts.next().expect("target").to_string();
+                    let (path, query) = match target.split_once('?') {
+                        Some((p, q)) => (p.to_string(), q.to_string()),
+                        None => (target.clone(), String::new()),
+                    };
+                    let query = query
+                        .split('&')
+                        .filter(|kv| !kv.is_empty())
+                        .map(|kv| {
+                            let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
+                            (pct_decode(k), pct_decode(v))
+                        })
+                        .collect();
+                    tx.send(Seen {
+                        method,
+                        path,
+                        query,
+                        body: String::from_utf8(req_body).expect("utf-8 body"),
+                    })
+                    .expect("record request");
+                    let mut out = stream;
+                    write!(
+                        out,
+                        "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .expect("write reply");
+                }
+            });
+            Self { base, seen }
+        }
+
+        /// The next request the fake daemon answered (waits up to 10 s).
+        pub fn next(&self) -> Seen {
+            self.seen
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .expect("the command never reached the fake daemon")
+        }
+    }
+
+    fn pct_decode(s: &str) -> String {
+        let bytes = s.as_bytes();
+        let mut out = Vec::with_capacity(bytes.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'%' && i + 2 < bytes.len() {
+                let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).expect("hex");
+                out.push(u8::from_str_radix(hex, 16).expect("percent escape"));
+                i += 3;
+            } else {
+                out.push(bytes[i]);
+                i += 1;
+            }
+        }
+        String::from_utf8(out).expect("utf-8 query")
+    }
+
+    /// `(k, v)` pairs as owned strings, for comparing with [`Seen::query`].
+    pub fn pairs(kv: &[(&str, &str)]) -> Vec<(String, String)> {
+        kv.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
 }
 
 #[cfg(test)]

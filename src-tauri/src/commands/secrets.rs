@@ -219,88 +219,210 @@ pub fn k2_account_session_clear() -> Result<(), String> {
     }
 }
 
-// Every test below exercises the REAL macOS keychain, so the whole module
-// is mac-gated — a bare #[cfg(test)] leaves `use super::*` + the helper
-// dead on Linux, which the release Linux build gate rejects (-D warnings).
+// Every test below exercises the real macOS Security framework, so the
+// whole module is mac-gated (a bare #[cfg(test)] leaves `use super::*` and
+// the helpers dead on Linux, which the release Linux build gate rejects
+// with -D warnings).
+//
+// Each test gets its OWN throwaway file keychain (`security create-keychain`
+// in a temp dir, deleted at the end) instead of the login keychain:
+//   - on a K2 Compute node the job user has no default keychain (its search
+//     list is only System.keychain, which a job can't write), so the old
+//     login-keychain tests failed there on every run;
+//   - on a developer Mac they wrote real items into the login keychain.
+// `entry()` still builds a `keyring::Entry`. The tests install a keyring
+// credential builder that makes the same Security-framework calls as
+// keyring's own macOS credential (set_generic_password,
+// find_generic_password, item delete, and keyring's decode_error, so a
+// missing item is still `keyring::Error::NoEntry`), against the temp
+// keychain file instead of the user's default keychain. Never skipped.
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
 
-    // A unique service name per test process so parallel CI runs (and
-    // re-runs) never collide on a real OS keychain entry. The macOS
-    // Keychain on a dev box is a shared resource — namespace by pid + a
-    // nanosecond stamp.
-    fn unique_service() -> String {
-        format!(
-            "k2so-connect-test-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        )
+    use keyring::credential::{Credential, CredentialApi, CredentialBuilderApi};
+    use security_framework::os::macos::keychain::SecKeychain;
+    use security_framework::os::macos::passwords::find_generic_password;
+
+    const KEYCHAIN_PASSWORD: &str = "k2-secrets-test";
+    const SERVICE: &str = "k2-connect-test";
+
+    thread_local! {
+        // libtest runs each test on its own thread (nextest: its own
+        // process), so a test's keychain is per thread.
+        static TEST_KEYCHAIN: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
     }
 
-    // These tests touch the REAL OS keychain. On a headless Linux CI
-    // box with no Secret Service provider running, `Entry::new` /
-    // set/get will error — which is itself a valid signal (keychain
-    // unavailable), but would fail the assertions. Gate on macOS where
-    // the login keychain is always present in this project's CI.
-    #[cfg(target_os = "macos")]
+    #[derive(Debug)]
+    struct FileKeychainCredential {
+        keychain: PathBuf,
+        service: String,
+        account: String,
+    }
+
+    impl FileKeychainCredential {
+        fn keychain(&self) -> keyring::Result<SecKeychain> {
+            SecKeychain::open(&self.keychain).map_err(keyring::macos::decode_error)
+        }
+    }
+
+    impl CredentialApi for FileKeychainCredential {
+        fn set_secret(&self, secret: &[u8]) -> keyring::Result<()> {
+            self.keychain()?
+                .set_generic_password(&self.service, &self.account, secret)
+                .map_err(keyring::macos::decode_error)
+        }
+
+        fn get_secret(&self) -> keyring::Result<Vec<u8>> {
+            let (bytes, _) = find_generic_password(Some(&[self.keychain()?]), &self.service, &self.account)
+                .map_err(keyring::macos::decode_error)?;
+            Ok(bytes.to_owned())
+        }
+
+        fn delete_credential(&self) -> keyring::Result<()> {
+            let (_, item) = find_generic_password(Some(&[self.keychain()?]), &self.service, &self.account)
+                .map_err(keyring::macos::decode_error)?;
+            item.delete();
+            Ok(())
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    struct FileKeychainBuilder;
+
+    impl CredentialBuilderApi for FileKeychainBuilder {
+        fn build(&self, _target: Option<&str>, service: &str, user: &str) -> keyring::Result<Box<Credential>> {
+            let keychain = TEST_KEYCHAIN
+                .with(|k| k.borrow().clone())
+                .expect("a secrets test called entry() without a TempKeychain");
+            Ok(Box::new(FileKeychainCredential {
+                keychain,
+                service: service.to_string(),
+                account: user.to_string(),
+            }))
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    /// A fresh, unlocked keychain file for one test: `entry()` resolves to
+    /// it until the guard drops, which deletes it (`security
+    /// delete-keychain` also takes it off any search list it joined).
+    struct TempKeychain {
+        _dir: tempfile::TempDir,
+        path: PathBuf,
+    }
+
+    impl TempKeychain {
+        fn new() -> Self {
+            static BUILDER: std::sync::Once = std::sync::Once::new();
+            BUILDER.call_once(|| keyring::set_default_credential_builder(Box::new(FileKeychainBuilder)));
+            let dir = tempfile::tempdir().expect("tempdir");
+            let path = dir.path().join("k2-secrets-test.keychain-db");
+            let out = Command::new("/usr/bin/security")
+                .args(["create-keychain", "-p", KEYCHAIN_PASSWORD])
+                .arg(&path)
+                .output()
+                .expect("run /usr/bin/security create-keychain");
+            assert!(
+                out.status.success(),
+                "security create-keychain {} failed: {}",
+                path.display(),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            SecKeychain::open(&path)
+                .expect("open the temp keychain")
+                .unlock(Some(KEYCHAIN_PASSWORD))
+                .expect("unlock the temp keychain");
+            TEST_KEYCHAIN.with(|k| *k.borrow_mut() = Some(path.clone()));
+            Self { _dir: dir, path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TempKeychain {
+        fn drop(&mut self) {
+            TEST_KEYCHAIN.with(|k| *k.borrow_mut() = None);
+            let out = Command::new("/usr/bin/security")
+                .arg("delete-keychain")
+                .arg(&self.path)
+                .output()
+                .expect("run /usr/bin/security delete-keychain");
+            // A failing test is already unwinding: don't turn that into an
+            // abort. Otherwise a keychain that won't delete is a failure.
+            if !std::thread::panicking() {
+                assert!(
+                    out.status.success(),
+                    "security delete-keychain {} failed: {}",
+                    self.path.display(),
+                    String::from_utf8_lossy(&out.stderr)
+                );
+            }
+        }
+    }
+
     #[test]
     fn set_get_delete_round_trips() {
-        let service = unique_service();
+        let kc = TempKeychain::new();
         let account = "host-abc123";
         let secret = "bearer-token-xyz";
 
-        // Clean slate.
-        let _ = k2_secret_delete(service.clone(), account.to_string());
-
         // Missing → None (never an error).
         assert_eq!(
-            k2_secret_get(service.clone(), account.to_string()).unwrap(),
-            None,
+            k2_secret_get(SERVICE.to_string(), account.to_string()),
+            Ok(None),
             "absent secret must resolve to None, not error"
         );
 
         // Set then read back the exact value.
-        k2_secret_set(service.clone(), account.to_string(), secret.to_string()).unwrap();
+        k2_secret_set(SERVICE.to_string(), account.to_string(), secret.to_string()).expect("set");
         assert_eq!(
-            k2_secret_get(service.clone(), account.to_string()).unwrap(),
-            Some(secret.to_string()),
+            k2_secret_get(SERVICE.to_string(), account.to_string()),
+            Ok(Some(secret.to_string())),
             "stored secret must round-trip byte-for-byte"
         );
+        // It is in this test's keychain file, not some other keychain.
+        let file = SecKeychain::open(kc.path()).expect("open the temp keychain");
+        let (bytes, _) = find_generic_password(Some(&[file]), SERVICE, account).expect("item in the temp keychain");
+        assert_eq!(bytes.to_owned(), secret.as_bytes().to_vec());
 
         // Delete then it's gone again.
-        k2_secret_delete(service.clone(), account.to_string()).unwrap();
+        k2_secret_delete(SERVICE.to_string(), account.to_string()).expect("delete");
         assert_eq!(
-            k2_secret_get(service.clone(), account.to_string()).unwrap(),
-            None,
+            k2_secret_get(SERVICE.to_string(), account.to_string()),
+            Ok(None),
             "deleted secret must resolve to None"
         );
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn delete_is_idempotent_on_missing_entry() {
-        let service = unique_service();
+        let _kc = TempKeychain::new();
         // Deleting a never-set entry must NOT error (toggle-off path).
-        k2_secret_delete(service, "host-never-set".to_string()).unwrap();
+        assert_eq!(k2_secret_delete(SERVICE.to_string(), "host-never-set".to_string()), Ok(()));
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn overwrite_updates_value() {
-        let service = unique_service();
+        let _kc = TempKeychain::new();
         let account = "host-overwrite";
-        let _ = k2_secret_delete(service.clone(), account.to_string());
-        k2_secret_set(service.clone(), account.to_string(), "first".to_string()).unwrap();
-        k2_secret_set(service.clone(), account.to_string(), "second".to_string()).unwrap();
+        k2_secret_set(SERVICE.to_string(), account.to_string(), "first".to_string()).expect("first set");
+        k2_secret_set(SERVICE.to_string(), account.to_string(), "second".to_string()).expect("second set");
         assert_eq!(
-            k2_secret_get(service.clone(), account.to_string()).unwrap(),
-            Some("second".to_string()),
+            k2_secret_get(SERVICE.to_string(), account.to_string()),
+            Ok(Some("second".to_string())),
             "set must overwrite the prior value"
         );
-        let _ = k2_secret_delete(service, account.to_string());
     }
 }

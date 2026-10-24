@@ -19,7 +19,7 @@ use std::process::Command;
 
 use serde::Serialize;
 
-use crate::daemon_client::{DaemonClient, DaemonStatus};
+use crate::daemon_client::{off_main, DaemonClient, DaemonStatus};
 
 /// Shape returned to the frontend. Distinct variants rather than
 /// Option<DaemonStatus> so the renderer can distinguish "daemon not
@@ -49,9 +49,33 @@ pub enum DaemonStatusResponse {
 /// Never returns `Err` — instead encodes each failure mode in the
 /// response variant so the frontend can render the right UI without
 /// splitting try/catch.
+///
+/// `async` + `off_main` (0.46.4): the `/status` call (10 s reqwest
+/// timeout) used to run on the main thread and froze the window while the
+/// daemon was slow. The answer is the same; a blocking-pool failure (it
+/// panicked) reads as Unreachable rather than an Err.
 #[tauri::command]
-pub fn daemon_status() -> DaemonStatusResponse {
-    let client = match DaemonClient::try_connect() {
+pub async fn daemon_status() -> DaemonStatusResponse {
+    match off_main(|| Ok(daemon_status_blocking())).await {
+        Ok(status) => status,
+        Err(reason) => DaemonStatusResponse::Unreachable { reason },
+    }
+}
+
+/// [`daemon_status`] on the calling thread, for callers that already run
+/// off the main thread (the tray's refresh loop).
+pub fn daemon_status_blocking() -> DaemonStatusResponse {
+    status_from(DaemonClient::try_connect())
+}
+
+/// The status for a `.k2` dir (tests use a temp dir, never `~/.k2`).
+#[cfg(test)]
+fn daemon_status_in(k2_dir: &std::path::Path) -> DaemonStatusResponse {
+    status_from(DaemonClient::try_connect_in(k2_dir))
+}
+
+fn status_from(client: Result<DaemonClient, String>) -> DaemonStatusResponse {
+    let client = match client {
         Ok(c) => c,
         Err(e) => return DaemonStatusResponse::NotInstalled { reason: e },
     };
@@ -102,8 +126,15 @@ fn locate_bundled_daemon() -> Result<PathBuf, String> {
 ///
 /// Returns the plist path on success so the UI can show it in a
 /// "View plist" affordance.
+///
+/// `async`: launchctl and the plist write run on the blocking pool, not
+/// the main thread.
 #[tauri::command]
-pub fn daemon_install() -> Result<String, String> {
+pub async fn daemon_install() -> Result<String, String> {
+    off_main(daemon_install_blocking).await
+}
+
+fn daemon_install_blocking() -> Result<String, String> {
     let daemon_bin = locate_bundled_daemon()?;
     let plist = k2_client::wake::DaemonPlist::canonical(daemon_bin);
     let path = k2_client::wake::install(&plist)?;
@@ -119,7 +150,11 @@ pub fn daemon_install() -> Result<String, String> {
 /// files so the frontend's `daemon_status` immediately reports
 /// `NotInstalled` instead of `Unreachable`.
 #[tauri::command]
-pub fn daemon_uninstall() -> Result<(), String> {
+pub async fn daemon_uninstall() -> Result<(), String> {
+    off_main(daemon_uninstall_blocking).await
+}
+
+fn daemon_uninstall_blocking() -> Result<(), String> {
     // Uninstall is always safe — the plist might already be gone,
     // the daemon might never have been installed, etc. Any of those
     // paths are success. The only real failure is "can't locate
@@ -190,9 +225,11 @@ pub fn kickstart_daemon() -> Result<(), String> {
     Ok(())
 }
 
+/// `async`: `launchctl kickstart -k` waits for the old daemon to stop, so
+/// it runs on the blocking pool, not the main thread.
 #[tauri::command]
-pub fn daemon_restart() -> Result<(), String> {
-    kickstart_daemon()
+pub async fn daemon_restart() -> Result<(), String> {
+    off_main(kickstart_daemon).await
 }
 
 /// Return the path to the daemon's stdout log file, regardless of
@@ -208,15 +245,19 @@ pub fn daemon_log_path() -> Result<String, String> {
 
 /// Return the last N lines of the daemon's stdout log. Defaults to
 /// the tail of the file if it's shorter than `lines`.
+///
+/// `async`: the log can be large; it is read on the blocking pool.
 #[tauri::command]
-pub fn daemon_log_tail(lines: Option<u32>) -> Result<String, String> {
+pub async fn daemon_log_tail(lines: Option<u32>) -> Result<String, String> {
+    off_main(move || log_tail_of(&PathBuf::from(daemon_log_path()?), lines)).await
+}
+
+fn log_tail_of(path: &std::path::Path, lines: Option<u32>) -> Result<String, String> {
     let lines = lines.unwrap_or(200).clamp(1, 5000) as usize;
-    let path_str = daemon_log_path()?;
-    let path = PathBuf::from(&path_str);
     if !path.exists() {
         return Ok(String::new());
     }
-    let content = std::fs::read_to_string(&path)
+    let content = std::fs::read_to_string(path)
         .map_err(|e| format!("read {}: {e}", path.display()))?;
     let collected: Vec<&str> = content.lines().collect();
     let start = collected.len().saturating_sub(lines);
@@ -386,21 +427,74 @@ mod tests {
 
     #[test]
     fn daemon_status_with_no_files_returns_not_installed() {
-        // `daemon_status()` reads ~/.k2so/daemon.port. If it's not
-        // there (common in dev — nobody's installed the plist), the
-        // command should quietly return NotInstalled instead of
-        // panicking or returning an Err.
-        let k2so_dir = dirs::home_dir().unwrap().join(".k2");
-        let port_file = k2so_dir.join("daemon.port");
-        let token_file = k2so_dir.join("daemon.token");
-        // Only run if neither file happens to exist in the dev env.
-        if port_file.exists() || token_file.exists() {
-            eprintln!("[test] daemon files present; skipping NotInstalled assertion");
-            return;
-        }
-        match daemon_status() {
-            DaemonStatusResponse::NotInstalled { .. } => {}
+        // A temp `.k2` with no daemon.port / daemon.token (never the live
+        // ~/.k2, which a running daemon owns): NotInstalled, not a panic
+        // or an Err.
+        let dir = tempfile::tempdir().expect("tempdir");
+        match daemon_status_in(dir.path()) {
+            DaemonStatusResponse::NotInstalled { reason } => {
+                assert!(reason.contains("daemon.port"), "got: {reason}")
+            }
             other => panic!("expected NotInstalled, got {other:?}"),
         }
+    }
+
+    fn write_port_token(dir: &std::path::Path, port: u16) {
+        std::fs::write(dir.join("daemon.port"), format!("{port}\n")).expect("port");
+        std::fs::write(dir.join("daemon.token"), "tok\n").expect("token");
+    }
+
+    #[test]
+    fn daemon_status_reports_running_from_the_status_route() {
+        use crate::daemon_client::test_support::{pairs, FakeDaemon};
+        let fake = FakeDaemon::serve(vec![(
+            200,
+            r#"{"version":"0.46.4","uptime_secs":7,"pid":42,"port":5}"#,
+        )]);
+        let port: u16 = fake.base.rsplit(':').next().expect("port").parse().expect("u16");
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_port_token(dir.path(), port);
+        let k2 = dir.path().to_path_buf();
+        // Through off_main, as the command runs it.
+        let got = tauri::async_runtime::block_on(off_main(move || Ok(daemon_status_in(&k2)))).expect("ran");
+        match got {
+            DaemonStatusResponse::Running { version, uptime_secs, pid, port: p } => {
+                assert_eq!((version.as_str(), uptime_secs, pid, p), ("0.46.4", 7, 42, 5));
+            }
+            other => panic!("expected Running, got {other:?}"),
+        }
+        let seen = fake.next();
+        assert_eq!((seen.method.as_str(), seen.path.as_str()), ("GET", "/status"));
+        assert_eq!(seen.query, pairs(&[("token", "tok")]));
+    }
+
+    #[test]
+    fn daemon_status_reports_unreachable_when_nothing_answers() {
+        // Bind then drop a listener: the port is (almost surely) closed.
+        let port = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+            l.local_addr().expect("addr").port()
+        };
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_port_token(dir.path(), port);
+        match daemon_status_in(dir.path()) {
+            DaemonStatusResponse::Unreachable { reason } => {
+                assert!(reason.starts_with("daemon /status"), "got: {reason}")
+            }
+            other => panic!("expected Unreachable, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn log_tail_returns_the_last_lines_and_empty_for_no_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let log = dir.path().join("daemon.stdout.log");
+        assert_eq!(log_tail_of(&log, None), Ok(String::new()));
+        std::fs::write(&log, "a\nb\nc\nd\n").expect("write log");
+        let p = log.clone();
+        let got = tauri::async_runtime::block_on(off_main(move || log_tail_of(&p, Some(2))));
+        assert_eq!(got, Ok("c\nd".to_string()));
+        // 0 clamps to 1 line.
+        assert_eq!(log_tail_of(&log, Some(0)), Ok("d".to_string()));
     }
 }

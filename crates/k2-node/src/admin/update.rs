@@ -959,11 +959,11 @@ mod drain_tests {
     #[test]
     fn wall_enable_is_operate_at_policy() {
         let r = Rig::new("policy");
-        let res = r.run(&r.sign(r.cmd("wall.enable", json!({"restart": "yes"}))));
+        let res = r.run(&r.sign(&r.cmd("wall.enable", json!({"restart": "yes"}))));
         assert_eq!(res.code.as_deref(), Some(code::BAD_ARGS), "{res:?}");
-        let res = r.run(&r.sign(r.cmd("wall.enable", json!({"user": "root"}))));
+        let res = r.run(&r.sign(&r.cmd("wall.enable", json!({"user": "root"}))));
         assert_eq!(res.code.as_deref(), Some(code::BAD_ARGS), "{res:?}");
-        let res = r.run(&r.sign(r.cmd("wall.enable", json!({}))));
+        let res = r.run(&r.sign(&r.cmd("wall.enable", json!({}))));
         for refused in [code::APPROVAL_REQUIRED, code::REMOTE_ADMIN_OFF, code::VERB_NOT_ALLOWED] {
             assert_ne!(res.code.as_deref(), Some(refused), "{res:?}");
         }
@@ -971,7 +971,7 @@ mod drain_tests {
             assert_eq!(res.code.as_deref(), Some(code::BAD_ARGS), "macOS has Seatbelt, nothing to enable: {res:?}");
         }
         let off = Rig::new("off");
-        let res = off.run(&off.sign(off.cmd("wall.enable", json!({}))));
+        let res = off.run(&off.sign(&off.cmd("wall.enable", json!({}))));
         assert_eq!(res.code.as_deref(), Some(code::REMOTE_ADMIN_OFF), "{res:?}");
     }
 

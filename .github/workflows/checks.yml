@@ -229,3 +229,38 @@ jobs:
         env:
           RUSTFLAGS: -D warnings
         run: cargo check -p k2-core -p k2-daemon --features airgap --all-targets
+
+  # prd-security-sweep-0464-v1 SS14: a new advisory in Cargo.lock or
+  # bun.lock fails checks. Allowed ones are listed, each with a reason and
+  # a review-by date at most 90 days out, in osv-scanner.toml (and, by ID,
+  # in .cargo/audit.toml); an expired entry fails. Same steps as
+  # `scripts/ci/checks.sh audit`. Needs the internet (crates.io, the
+  # osv-scanner release, the RustSec database, osv.dev).
+  # cargo audit denies unmaintained and unsound too, but not yanked
+  # versions (no advisory ID to allow-list; they still print).
+  audit:
+    name: cargo audit + osv-scanner
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable (branch head 2026-10-22)
+
+      - name: Advisory allow-list rules (reason, review date, expiry)
+        run: python3 scripts/ci/audit-ignores.py check
+
+      - name: Install cargo-audit (pinned)
+        run: cargo install cargo-audit --locked --version =0.22.2 --root target/audit-tools
+
+      - name: Install osv-scanner (pinned, sha256-checked)
+        run: bash scripts/ci/install-osv-scanner.sh target/audit-tools
+
+      - name: Scanners still catch a known advisory (canary)
+        run: bash tests/packaging/audit-canary.sh target/audit-tools
+
+      - name: cargo audit
+        run: target/audit-tools/bin/cargo-audit audit --deny unmaintained --deny unsound --file Cargo.lock
+
+      - name: osv-scanner (bun.lock + Cargo.lock)
+        run: target/audit-tools/osv-scanner scan source --lockfile bun.lock --lockfile Cargo.lock --config osv-scanner.toml

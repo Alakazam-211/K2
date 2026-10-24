@@ -4,7 +4,7 @@
 # §3). The CI poller (k2-ci-poll.sh) calls it for each new push; run it by
 # hand for any commit; release.sh Step 0.6 can call it on the release commit.
 #
-#   scripts/ci/run-checks.sh <sha> [--parts web,rust-check,rust-test] [--wait-min N]
+#   scripts/ci/run-checks.sh <sha> [--parts web,rust-check,rust-test,audit] [--wait-min N]
 #
 # Run from a checkout that is a K2 workspace with compute grants on the
 # nodes (z3mbpZ's CI checkout). The commit need not be pushed: K2 Compute
@@ -14,7 +14,13 @@
 #   k2-compute/web         scripts/ci/checks.sh web          K2_CI_NODE_WEB        (k2n4-vin)
 #   k2-compute/rust-check  scripts/ci/checks.sh rust-check   K2_CI_NODE_RUST_CHECK (k2n5-vin)
 #   k2-compute/rust-test   scripts/ci/checks.sh rust-test    K2_CI_NODE_RUST_TEST  (k2n6-hil)
+#   k2-compute/audit       scripts/ci/checks.sh audit        K2_CI_NODE_AUDIT      (k2n5-vin)
 # A node name of "any" means --any --os linux --arch x86_64.
+#
+# web (bun install) and audit (advisory databases, tool downloads) need
+# the internet. The share default on a Linux node, `no-lan`, allows it, so
+# no network flag is passed; keep both on Linux nodes (on macOS a team
+# tenant's `no-lan` is `none`).
 #
 # Statuses: pending at submit, then success / failure (the checks failed)
 # / error (infra: not submitted, cancelled, node lost, timed out), each
@@ -27,7 +33,7 @@ set -euo pipefail
 SHA="${1:-}"
 [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "usage: run-checks.sh <40-hex sha> [--parts a,b] [--wait-min N]" >&2; exit 2; }
 shift
-PARTS="web,rust-check,rust-test"
+PARTS="web,rust-check,rust-test,audit"
 WAIT_MIN="${K2_CI_WAIT_MIN:-150}"
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -50,12 +56,14 @@ git -C "$ROOT" cat-file -e "${SHA}^{commit}" 2>/dev/null || git -C "$ROOT" fetch
 
 RUST_NEEDS="${K2_CI_RUST_NEEDS:-rust@stable,cmake@3,sys:pkg-config,sys:zlib1g-dev}"
 WEB_NEEDS="${K2_CI_WEB_NEEDS:-bun@1.2,node@22,python@3.12}"
+AUDIT_NEEDS="${K2_CI_AUDIT_NEEDS:-rust@stable,python@3.12,sys:pkg-config}"
 
 node_for() {
     case "$1" in
         web) echo "${K2_CI_NODE_WEB:-k2n4-vin}" ;;
         rust-check) echo "${K2_CI_NODE_RUST_CHECK:-k2n5-vin}" ;;
         rust-test) echo "${K2_CI_NODE_RUST_TEST:-k2n6-hil}" ;;
+        audit) echo "${K2_CI_NODE_AUDIT:-k2n5-vin}" ;;
     esac
 }
 
@@ -63,14 +71,14 @@ status() { bash "$CI/post-status.sh" "$SHA" "$1" "k2-compute/$2" "$3" || echo " 
 
 IFS=',' read -r -a parts <<< "$PARTS"
 for p in "${parts[@]}"; do
-    case "$p" in web|rust-check|rust-test) ;; *) echo "unknown part $p" >&2; exit 2 ;; esac
+    case "$p" in web|rust-check|rust-test|audit) ;; *) echo "unknown part $p" >&2; exit 2 ;; esac
 done
 
 # Submit every part, pending first.
 : > "$WORK/jobs"
 for p in "${parts[@]}"; do
     node="$(node_for "$p")"
-    needs="$RUST_NEEDS"; [ "$p" = web ] && needs="$WEB_NEEDS"
+    needs="$RUST_NEEDS"; [ "$p" = web ] && needs="$WEB_NEEDS"; [ "$p" = audit ] && needs="$AUDIT_NEEDS"
     status pending "$p" "submitting to $node"
     args=(compute run)
     if [ "$node" = any ]; then args+=(--any --os linux --arch x86_64); else args+=("$node"); fi

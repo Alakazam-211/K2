@@ -142,14 +142,15 @@ final() { grep "context\": \"k2-compute/$2\"" "$tmp/o-$1" | tail -1; }
 
 rc="$(run_checks ok)"
 [ "$rc" = 0 ] && pass "all parts pass → exit 0" || fail "ok rc=$rc" "$(cat "$tmp/o-ok")"
-for p in web rust-check rust-test; do
+for p in web rust-check rust-test audit; do
     [[ "$(final ok "$p")" == *'"state": "success"'* ]] && pass "$p: success status" || fail "$p success" "$(final ok "$p")"
 done
 grep -q "k2 compute run k2n4-vin --sha $SHA .*-- bash scripts/ci/checks.sh web" "$tmp/c-ok" \
     && grep -q "k2 compute run k2n6-hil --sha $SHA .*-- bash scripts/ci/checks.sh rust-test" "$tmp/c-ok" \
+    && grep -q "k2 compute run k2n5-vin --sha $SHA .*--needs rust@stable,python@3.12,sys:pkg-config .*-- bash scripts/ci/checks.sh audit" "$tmp/c-ok" \
     && pass "parts go to their nodes at the exact sha" || fail "submit lines" "$(cat "$tmp/c-ok")"
-[ "$(grep -c '"state": "pending"' "$tmp/o-ok")" -ge 3 ] && pass "pending posted before the results" || fail "pending" "$(cat "$tmp/o-ok")"
-python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["ok"] and len(v["parts"])==3, v' "$tmp/state-ok/runs/$SHA.json" \
+[ "$(grep -c '"state": "pending"' "$tmp/o-ok")" -ge 4 ] && pass "pending posted before the results" || fail "pending" "$(cat "$tmp/o-ok")"
+python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["ok"] and len(v["parts"])==4, v' "$tmp/state-ok/runs/$SHA.json" \
     && pass "run record written" || fail "record" "$(cat "$tmp/state-ok/runs/$SHA.json")"
 ! grep -q 'target_url' "$tmp/o-ok" && pass "no target_url (logs stay in K2)" || fail "target_url" "$(cat "$tmp/o-ok")"
 

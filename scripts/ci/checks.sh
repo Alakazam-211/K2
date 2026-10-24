@@ -3,13 +3,23 @@
 # the K2 Compute CI gate (scripts/ci/run-checks.sh) runs exactly what
 # GitHub runs (plan-ci-release-on-k2-compute-v1 §3).
 #
-#   scripts/ci/checks.sh web|rust-check|rust-test|all
+#   scripts/ci/checks.sh web|rust-check|rust-test|audit|all
 #
 #   web         packaging tests, bun install, gates, typecheck, vitest,
 #               SDK typecheck, zen widget CLI, vite build   (checks.yml web)
 #   rust-check  cargo check -D warnings, all targets + the airgap feature
 #   rust-test   the cargo test subsets of checks.yml's rust job
-#   all         the three, in that order
+#   audit       cargo audit + osv-scanner over Cargo.lock and bun.lock,
+#               pinned tools, the allow-list rules and a canary (checks.yml
+#               audit; prd-security-sweep-0464-v1 SS14)
+#   all         the four, in that order
+#
+# Network: web (bun install) and audit (crates.io for cargo-audit, the
+# osv-scanner release download, the RustSec database and osv.dev) need
+# the internet. A compute job gets it on a Linux node under the default
+# share network (`no-lan`: internet yes, LAN no). On a macOS node a team
+# tenant's `no-lan` becomes `none` (no internet at all), so these two
+# parts stay on Linux nodes.
 #
 # KEEP IN STEP with checks.yml until checks.yml calls this script (stage 1:
 # checks.yml → dispatch-only, these statuses are the gate). A step added
@@ -52,6 +62,24 @@ part_rust_check() {
         -p k2-root-proto -p k2-root-helper -p k2-app-engine -p k2-ptyd --all-targets
     step "cargo check airgap feature"
     RUSTFLAGS="-D warnings" cargo check -p k2-core -p k2-daemon --features airgap --all-targets
+}
+
+# Advisories K2 lets through are listed with a reason and a review-by date
+# (ignoreUntil, at most 90 days out) in osv-scanner.toml; .cargo/audit.toml
+# repeats the RustSec IDs for cargo audit. audit-ignores.py enforces the
+# rules, and an expired entry fails the part. Its header says how to renew
+# or drop an entry.
+# cargo audit fails on vulnerabilities, unmaintained and unsound crates, not
+# on yanked versions: a yanked version has no advisory ID to allow-list. It
+# still prints them (2026-10-24: chacha20 0.10.0 via ngrok, clipboard-win
+# 5.4.1 via arboard on Windows); bump those with the dependency PRD.
+part_audit() {
+    step "advisory allow-list rules";              python3 scripts/ci/audit-ignores.py check
+    step "install cargo-audit (pinned)";           cargo install cargo-audit --locked --version =0.22.2 --root target/audit-tools
+    step "install osv-scanner (pinned, sha256)";   bash scripts/ci/install-osv-scanner.sh target/audit-tools
+    step "scanners catch a known advisory";        bash tests/packaging/audit-canary.sh target/audit-tools
+    step "cargo audit";                            target/audit-tools/bin/cargo-audit audit --deny unmaintained --deny unsound --file Cargo.lock
+    step "osv-scanner";                            target/audit-tools/osv-scanner scan source --lockfile bun.lock --lockfile Cargo.lock --config osv-scanner.toml
 }
 
 part_rust_test() {
@@ -108,8 +136,9 @@ case "${1:-}" in
     web) part_web ;;
     rust-check) part_rust_check ;;
     rust-test) part_rust_test ;;
-    all) part_web; part_rust_check; part_rust_test ;;
-    *) echo "usage: scripts/ci/checks.sh web|rust-check|rust-test|all" >&2; exit 2 ;;
+    audit) part_audit ;;
+    all) part_web; part_rust_check; part_rust_test; part_audit ;;
+    *) echo "usage: scripts/ci/checks.sh web|rust-check|rust-test|audit|all" >&2; exit 2 ;;
 esac
 echo ""
 echo "checks: ${1} passed"

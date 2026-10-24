@@ -286,6 +286,9 @@ pub const AGENT_SCOPED_ROUTES: &[&str] = &[
     "/cli/skin/roles/unassign",
 ];
 
+/// The platform-pass writes [`agent_scoped`] guards: mint, rooms, revoke.
+pub const AGENT_SCOPED_PASS_ROUTES: &[&str] = &["/cli/skin-tokens", "/cli/skin-tokens/rooms", "/cli/skin-tokens/revoke"];
+
 /// The role writes [`agent_scoped`] guards: making, editing (its room
 /// lines and their folders) and removing a role.
 pub const AGENT_SCOPED_ROLE_ROUTES: &[&str] = &[
@@ -313,7 +316,13 @@ pub fn agent_scoped(
     handler: fn(&[u8], &str) -> CliResponse,
 ) -> CliResponse {
     if let Some(ws) = agent_ws {
-        let checked = if AGENT_SCOPED_ROLE_ROUTES.contains(&path) { agent_may_write_role(ws, path, body) } else { agent_may_touch(ws, path, body) };
+        let checked = if AGENT_SCOPED_ROLE_ROUTES.contains(&path) {
+            agent_may_write_role(ws, path, body)
+        } else if AGENT_SCOPED_PASS_ROUTES.contains(&path) {
+            agent_may_write_pass(ws, path, body)
+        } else {
+            agent_may_touch(ws, path, body)
+        };
         if let Err(r) = checked {
             k2_core::log_debug!("[skin] actor={actor} refused outside its workspace on {path}");
             return r;
@@ -439,6 +448,59 @@ fn agent_may_write_role(ws: &str, path: &str, body: &[u8]) -> Result<(), CliResp
             }
         }
         _ => {}
+    }
+    Ok(())
+}
+
+/// The platform-pass writes (security review, 0.46.4): an agent mints a
+/// pass only for its own workspace's rooms, and changes the rooms of, or
+/// revokes, only a pass whose rooms (and App) are all its workspace's. A
+/// guest's sign-in session is not a platform pass: an agent never changes
+/// its rooms (they come from the guest's grants) and revokes it only for a
+/// guest wholly inside its workspace. Anything else is `owner_only`,
+/// nothing written. An unknown id is the handler's own answer.
+fn agent_may_write_pass(ws: &str, path: &str, body: &[u8]) -> Result<(), CliResponse> {
+    let Ok(v) = serde_json::from_slice::<serde_json::Value>(body) else { return Ok(()) };
+    let new_rooms_ok = || -> Result<(), CliResponse> {
+        match rooms_field(&v).map(|list| skin::resolve_room_tokens(&list)) {
+            Some(Ok(ids)) if !rooms_in(&ids, ws) => {
+                Err(outside_workspace("a platform pass of yours may name only your workspace's room".to_string()))
+            }
+            _ => Ok(()),
+        }
+    };
+    if path == "/cli/skin-tokens" {
+        return new_rooms_ok();
+    }
+    let Some(id) = str_field(&v, &["id", "tokenId", "token_id"]) else { return Ok(()) };
+    let Some(t) = skin::token_scope(id).map_err(CliResponse::internal_error)? else { return Ok(()) };
+    if t.session {
+        if path == "/cli/skin-tokens/rooms" {
+            return Err(outside_workspace("that is a guest's sign-in, not a platform pass (its rooms come from the guest's grants)".to_string()));
+        }
+        let inside = match t.principal_id.as_deref() {
+            Some(pid) => {
+                let roles = skin::list_roles().map_err(CliResponse::internal_error)?;
+                let grants = skin::list_grants().map_err(CliResponse::internal_error)?;
+                skin::list_principals()
+                    .map_err(CliResponse::internal_error)?
+                    .into_iter()
+                    .find(|p| p.id == pid)
+                    .is_some_and(|p| principal_in_workspace(&p, &roles, &grants, ws))
+            }
+            None => false,
+        };
+        if !inside {
+            return Err(outside_workspace("that sign-in belongs to a guest outside your workspace".to_string()));
+        }
+    }
+    if t.app_service_id.as_deref().is_some_and(|app| !app_of_workspace(app, ws)) || !rooms_in(&t.rooms, ws) {
+        return Err(outside_workspace("that pass reaches outside your workspace (another workspace's room or App)".to_string()));
+    }
+    // A pass holding a person-only cap: the handler refuses any change of
+    // its rooms itself, naming the cap.
+    if path == "/cli/skin-tokens/rooms" && person_only_cap(Some(&t.caps)).is_none() {
+        new_rooms_ok()?;
     }
     Ok(())
 }

@@ -3620,6 +3620,47 @@ pub fn set_token_rooms(id: &str, rooms: &[String]) -> Result<SkinTokenMeta, Stri
     .map(attach_token_handles)
 }
 
+/// What a `tokens` row is, for a caller deciding who may change it
+/// (`None` from [`token_scope`]: no such row).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TokenScope {
+    /// A guest's sign-in session (`session = 1`), not a platform pass.
+    pub session: bool,
+    /// The session's guest (sessions only).
+    pub principal_id: Option<String>,
+    /// The App it is bound to (an App session or an App's gateway pass).
+    pub app_service_id: Option<String>,
+    /// An App gateway link's pass (`link_id` set).
+    pub linked: bool,
+    pub caps: Vec<String>,
+    pub rooms: Vec<String>,
+}
+
+/// [`TokenScope`] of the token `id` (any kind, live or revoked).
+pub fn token_scope(id: &str) -> Result<Option<TokenScope>, String> {
+    let id = id.trim().to_string();
+    with_conn(|conn| {
+        conn.query_row(
+            "SELECT session, principal_id, app_service_id, link_id, caps, rooms FROM tokens WHERE id = ?1",
+            params![id],
+            |r| {
+                let caps_raw: String = r.get(4)?;
+                let rooms_raw: String = r.get(5)?;
+                Ok(TokenScope {
+                    session: r.get::<_, i64>(0)? != 0,
+                    principal_id: r.get(1)?,
+                    app_service_id: blank_to_none(r.get(2)?),
+                    linked: r.get::<_, Option<String>>(3)?.is_some_and(|l| !l.trim().is_empty()),
+                    caps: caps_from_json(&caps_raw),
+                    rooms: rooms_from_json(&rooms_raw),
+                })
+            },
+        )
+        .optional()
+        .map_err(|e| format!("skin token lookup: {e}"))
+    })
+}
+
 /// Set principal default rooms. `apply_tokens` copies onto live **sessions**
 /// only — never platform tokens. Without it, live sessions still lose any
 /// room that is no longer in `rooms` (removal is never deferred).

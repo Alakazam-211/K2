@@ -1052,6 +1052,84 @@ async fn an_agent_makes_and_edits_only_its_own_workspaces_roles() {
     k2_daemon::apps::alerts::set_sink(None);
 }
 
+/// Platform passes, for an agent with the skin-manage switch: it mints a
+/// pass only for its own workspace's rooms, and changes the rooms of, or
+/// revokes, only a pass wholly inside its workspace; a guest's sign-in
+/// session outside it is never its to revoke or re-room (security review).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_agent_mints_and_edits_only_its_own_workspaces_platform_passes() {
+    let env = setup(&[]);
+    let _seen = quiet_alerts();
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let a = seed_ws(&env, "passa");
+    let b = seed_ws(&env, "passb");
+    allow_manage(&a, true);
+    let agent = passport(&a);
+    let refused = |r: &Resp, what: &str| {
+        assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{what}: {}", r.body);
+        assert!(r.json()["error"]["hint"].as_str().expect("hint").contains("outside your workspace"), "{what}: {}", r.body);
+    };
+    let pass = |id: &str| {
+        k2_core::skin::list_tokens().unwrap().into_iter().find(|t| t.id == id).unwrap_or_else(|| panic!("no pass {id}"))
+    };
+    let names = || k2_core::skin::list_tokens().unwrap().into_iter().map(|t| t.name).collect::<Vec<_>>();
+
+    // Its own room: minted, re-roomed within it, revoked.
+    let r = post(d.port, "/cli/skin-tokens", &agent, json!({"name": "pt-mine", "caps": ["thread:read"], "rooms": [a.handle]})).await;
+    assert_eq!(r.status, 200, "its own room: {}", r.body);
+    let mine = r.json()["id"].as_str().expect("id").to_string();
+    let r = post(d.port, "/cli/skin-tokens/rooms", &agent, json!({"id": mine, "rooms": [a.handle]})).await;
+    assert_eq!(r.status, 200, "its own pass, its own room: {}", r.body);
+
+    // Another workspace's room: never minted, never added.
+    let r = post(d.port, "/cli/skin-tokens", &agent, json!({"name": "pt-theirs", "caps": ["thread:read"], "rooms": [b.handle]})).await;
+    refused(&r, "mint for another workspace's room");
+    let r = post(d.port, "/cli/skin-tokens", &agent, json!({"name": "pt-mix", "caps": ["thread:read"], "rooms": [a.handle, b.handle]})).await;
+    refused(&r, "mint reaching elsewhere");
+    assert!(!names().iter().any(|n| n == "pt-theirs" || n == "pt-mix"), "nothing minted: {:?}", names());
+    let r = post(d.port, "/cli/skin-tokens/rooms", &agent, json!({"id": mine, "rooms": [a.handle, b.handle]})).await;
+    refused(&r, "widen its pass elsewhere");
+    assert_eq!(pass(&mine).rooms, vec![a.id.clone()], "its pass is unchanged");
+
+    // The owner's pass for another workspace: not the agent's to change or revoke.
+    let r = post(d.port, "/cli/skin-tokens", OWNER, json!({"name": "pt-owner-b", "caps": ["thread:read"], "rooms": [b.handle]})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let theirs = r.json()["id"].as_str().expect("id").to_string();
+    let r = post(d.port, "/cli/skin-tokens/rooms", &agent, json!({"id": theirs, "rooms": [a.handle]})).await;
+    refused(&r, "re-room another workspace's pass");
+    let r = post(d.port, "/cli/skin-tokens/revoke", &agent, json!({"id": theirs})).await;
+    refused(&r, "revoke another workspace's pass");
+    let t = pass(&theirs);
+    assert_eq!((t.rooms, t.revoked_at), (vec![b.id.clone()], None), "the owner's pass is unchanged");
+
+    // A guest's sign-in outside its workspace: never re-roomed, never revoked.
+    let mut policy_b = k2_core::skin::RoomPolicy::new();
+    policy_b.insert(b.id.clone(), vec!["thread:read".to_string()]);
+    k2_core::skin::create_role_for_app("pt-rb", &policy_b, None).unwrap();
+    box_login_user("pt-boxb");
+    k2_core::skin::assign_role("pt-boxb", "pt-rb").unwrap();
+    let (session, _raw) = k2_core::skin::create_session_token("pt-boxb").unwrap();
+    let before = k2_core::skin::token_scope(&session.id).unwrap().expect("the session row");
+    assert!(before.session, "{before:?}");
+    for (path, body) in [
+        ("/cli/skin-tokens/rooms", json!({"id": session.id, "rooms": [a.handle]})),
+        ("/cli/skin-tokens/revoke", json!({"id": session.id})),
+    ] {
+        let r = post(d.port, path, &agent, body).await;
+        refused(&r, path);
+    }
+    assert_eq!(k2_core::skin::token_scope(&session.id).unwrap().expect("the session row"), before, "the sign-in is unchanged");
+    let r = post(d.port, "/cli/skin-tokens/revoke", OWNER, json!({"id": session.id})).await;
+    assert_eq!((r.status, r.json()["success"].clone()), (200, json!(true)), "still live until the owner revokes it: {}", r.body);
+
+    // Its own pass: revoked. The owner is unchanged.
+    let r = post(d.port, "/cli/skin-tokens/revoke", &agent, json!({"id": mine})).await;
+    assert_eq!((r.status, r.json()["success"].clone()), (200, json!(true)), "{}", r.body);
+    let r = post(d.port, "/cli/skin-tokens/rooms", OWNER, json!({"id": theirs, "rooms": [a.handle, b.handle]})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    k2_daemon::apps::alerts::set_sink(None);
+}
+
 /// C: first write verbs are one digest per App per window, and nothing at
 /// all for what one of the App's test guests did (someone testing it; the
 /// owner made the guest: agents make none).

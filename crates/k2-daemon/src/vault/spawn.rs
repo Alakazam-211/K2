@@ -763,6 +763,8 @@ mod tests {
     #[test]
     fn env_and_file_secrets_reach_a_spawn_and_fetch_ones_do_not() {
         use k2_vault::{Actor, Kind, Namespace, PutRequest, Scope, SecretBytes};
+        // The secrets root follows env: see secrets_root_follows_the_env.
+        let _env = k2_core::test_env::lock();
         let v = super::super::ensure_test_vault();
         let ws = uuid::Uuid::new_v4().to_string();
         let put = |name: &str, d: Delivery, val: &str| {
@@ -805,6 +807,8 @@ mod tests {
     #[test]
     fn a_job_run_gets_its_own_grants_and_the_session_sweep_leaves_it_alone() {
         use k2_vault::{Actor, Consumer, GrantRequest, Kind, Namespace, PutRequest, Scope, SecretBytes};
+        // The secrets root follows env: see secrets_root_follows_the_env.
+        let _env = k2_core::test_env::lock();
         let v = super::super::ensure_test_vault();
         let ws = uuid::Uuid::new_v4().to_string();
         let job_id = uuid::Uuid::new_v4().to_string();
@@ -890,6 +894,11 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn secrets_root_follows_the_env() {
+        // This test points the secrets root at a temp dir it deletes. The
+        // env lock is taken first, so it is released only after `t` is
+        // gone: no test that takes the lock (every test that makes secrets
+        // dirs) can create one under the temp root, or see the root move.
+        let _env = k2_core::test_env::lock();
         let t = k2_vault::fsutil::TestDir::new("spawn-root");
         let over = t.path().join("over");
         let _o = k2_core::test_env::EnvVar::set(k2_core::runtime_dir::RUNTIME_DIR_ENV, &over);

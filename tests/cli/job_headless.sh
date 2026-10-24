@@ -111,8 +111,8 @@ cat > "$WS/scripts/passport.sh" <<EOF
 #!/bin/sh
 printf '%s' "\$K2_HOOK_TOKEN" > "$WS/passport.txt"
 bash "$K2CLI" vault env-file --secret JOB_SECRET > "$WS/envfile.txt" 2>&1; echo "envfile_rc=\$?"
-f="\$(sed -n 's/.*\(\/[^ ]*\.env\).*/\1/p' "$WS/envfile.txt" | head -1)"
-[ -n "\$f" ] && echo "envfile_len=\$(wc -c < "\$f" | tr -d ' ')"
+f="\$(head -1 "$WS/envfile.txt")"
+[ -f "\$f" ] && echo "envfile_len=\$(wc -c < "\$f" | tr -d ' ')"
 bash "$K2CLI" vault status >/dev/null 2>&1; echo "status_rc=\$?"
 bash "$K2CLI" vault list > "$WS/list.txt" 2>&1; echo "list_rc=\$?"
 bash "$K2CLI" job list > "$WS/joblist.txt" 2>&1; echo "joblist_rc=\$?"
@@ -124,7 +124,8 @@ run="$(start_run passport)"
 [ "$(wait_run passport "$run")" = "ok" ] || fail "passport run: $(log_of passport "$run")"
 log="$(log_of passport "$run")"
 echo "$log" | sed 's/^/    | /'
-case "$log" in *"envfile_rc=0"*"envfile_len="*) ok "k2 vault env-file works with the job's passport and grant" ;; *) fail "env-file: $log / $(cat "$WS/envfile.txt")" ;; esac
+# JOB_SECRET=<value>\n
+case "$log" in *"envfile_rc=0"*"envfile_len=$(( ${#SECRET} + 12 ))"*) ok "k2 vault env-file works with the job's passport and grant" ;; *) fail "env-file: $log / $(cat "$WS/envfile.txt")" ;; esac
 case "$log" in *"status_rc=0"*) ok "k2 vault status works" ;; *) fail "status: $log" ;; esac
 case "$log" in *"list_rc=3"*) ok "k2 vault list is refused for a job (use only)" ;; *) fail "list: $log / $(cat "$WS/list.txt")" ;; esac
 grep -q "job_use_only" "$WS/list.txt" || fail "list refusal code: $(cat "$WS/list.txt")"

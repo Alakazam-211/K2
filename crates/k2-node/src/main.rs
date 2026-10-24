@@ -51,7 +51,10 @@ More than one K2 server (0.46.3; the machine owner, at this machine):
   sudo k2-node servers add --url URL --code CODE.FP [--trust own|team] [--for 7d|none]
                  [--weight N] [--max-running N] [--max-queued N] [--cpu-hours N] [--max-time 2h]
                  [--cpus N] [--mem 8G] [--disk 40G] [--network on|no-lan|none] [--gate] [--exclusive]
-  k2-node servers limits <server> [key=value...] [--weight N] [--for 7d|none]   (keys as the add flags)
+  k2-node servers limits <server> [--cpus N] [--mem 8G] [--disk 40G] [--cpu-hours N] [--max-time 2h]
+                 [--weight N] [--max-running N] [--max-queued N] [--network on|no-lan|none]
+                 [--gate] [--exclusive] [--for 7d|none]
+                 (the add flags; key=value works too: cpus=8 mem=32G cpu-hours=48)
   k2-node servers pause|resume <server>
   sudo k2-node servers revoke <server> [--now] [--wipe]
   sudo k2-node servers prune                             promote confirmed adds, drop stale ones, wipe due slots now
@@ -429,6 +432,42 @@ fn share_overrides(pairs: &[(String, String)], gate: bool, exclusive: bool) -> R
     Ok(o)
 }
 
+/// The share-limit flags `servers add` and `servers limits` take
+/// (`--cpus 8`), and the keys `servers limits` also takes as `key=value`.
+const LIMIT_FLAGS: &[&str] = &["weight", "max-running", "max-queued", "cpu-hours", "max-time", "cpus", "mem", "disk", "network"];
+
+/// Flags `servers limits` takes besides [`LIMIT_FLAGS`].
+const LIMITS_OTHER_FLAGS: &[&str] = &["for", "home", "config-dir", "state-dir", "by"];
+
+/// `servers limits` arguments → (key, value) pairs: the `--flag value`
+/// forms `servers add` uses and `key=value` positionals (the stored names
+/// like `max_running` too), in that order. An unknown `--flag` or key is
+/// refused, naming the valid ones; never silently ignored.
+fn limits_pairs(a: &Args) -> Result<Vec<(String, String)>, String> {
+    const KEY_ALIASES: &[&str] = &["cpu-hours-day", "max-job-secs", "max-cpus", "max-mem-gb", "disk-gb", "top-class", "gate", "exclusive"];
+    let valid = || LIMIT_FLAGS.iter().map(|k| format!("--{k}")).collect::<Vec<_>>().join(", ");
+    for k in a.flags.keys() {
+        if !LIMIT_FLAGS.contains(&k.as_str()) && !LIMITS_OTHER_FLAGS.contains(&k.as_str()) {
+            return Err(format!("servers limits: unknown flag --{k}; the limits are {} (or key=value, e.g. cpus=8)", valid()));
+        }
+    }
+    let mut pairs = Vec::new();
+    for k in LIMIT_FLAGS {
+        if let Some(v) = a.get(k) {
+            pairs.push((k.to_string(), v.to_string()));
+        }
+    }
+    for kv in a.positional.iter().skip(3) {
+        let (k, v) = kv.split_once('=').ok_or_else(|| format!("{kv:?}: use --key value or key=value (e.g. --cpus 8 or cpus=8)"))?;
+        let norm = k.trim().replace('_', "-");
+        if !LIMIT_FLAGS.contains(&norm.as_str()) && !KEY_ALIASES.contains(&norm.as_str()) {
+            return Err(format!("servers limits: unknown limit {k:?}; the limits are {} (or key=value, e.g. cpus=8)", valid()));
+        }
+        pairs.push((k.trim().to_string(), v.to_string()));
+    }
+    Ok(pairs)
+}
+
 /// `k2-node servers …`: the machine owner's own `servers.*` (§9).
 fn cmd_servers(a: &Args) -> Result<(), String> {
     use k2_node::admin::{config as acfg, servers};
@@ -499,7 +538,7 @@ fn cmd_servers(a: &Args) -> Result<(), String> {
                 .ok_or("--code must look like ABCDE-FGHJK.0123456789abcdef (from `k2 compute node add` on the new server)")?;
             let trust = share::Trust::parse(a.get("trust").unwrap_or("own")).ok_or("--trust own|team")?;
             let mut pairs = Vec::new();
-            for k in ["weight", "max-running", "max-queued", "cpu-hours", "max-time", "cpus", "mem", "disk", "network"] {
+            for k in LIMIT_FLAGS {
                 if let Some(v) = a.get(k) {
                     pairs.push((k.to_string(), v.to_string()));
                 }
@@ -530,19 +569,17 @@ fn cmd_servers(a: &Args) -> Result<(), String> {
             servers::run(&ctx, share::VERB_ADD, &serde_json::to_value(&args).map_err(|e| e.to_string())?)
         }
         Some("limits") => {
-            let mut pairs = Vec::new();
-            for kv in a.positional.iter().skip(3) {
-                let (k, v) = kv.split_once('=').ok_or_else(|| format!("{kv:?}: use key=value"))?;
-                pairs.push((k.to_string(), v.to_string()));
-            }
+            // The add flags (`--cpus 8`) and `key=value` (`cpus=8`) both work.
+            let pairs = limits_pairs(a)?;
             let for_secs = match a.get("for") {
                 Some(v) => Some(parse_for(v)?.unwrap_or(0)),
                 None => None,
             };
-            if let Some(w) = a.get("weight") {
-                pairs.push(("weight".to_string(), w.to_string()));
-            }
-            let args = share::LimitsArgs { server: server()?, set: share_overrides(&pairs, false, false)?, for_secs };
+            let args = share::LimitsArgs {
+                server: server()?,
+                set: share_overrides(&pairs, a.has("--gate"), a.has("--exclusive"))?,
+                for_secs,
+            };
             servers::run(&ctx, share::VERB_LIMITS, &serde_json::to_value(&args).map_err(|e| e.to_string())?)
         }
         Some(v @ ("pause" | "resume")) => {
@@ -1073,6 +1110,17 @@ mod tests {
         assert!(parse_for("soon").is_err());
         assert_eq!(parse_gb("8G"), Ok(8));
         let o = share_overrides(&[("weight".into(), "3".into()), ("max-running".into(), "2".into())], true, false).unwrap();
+        // `servers limits`: the add flags and key=value give the same overrides.
+        let args = |v: &[&str]| parse(&v.iter().map(|s| s.to_string()).collect::<Vec<_>>()).unwrap();
+        let flags = limits_pairs(&args(&["servers", "limits", "slot:1", "--cpus", "8", "--mem", "32G", "--disk", "120G", "--cpu-hours", "48"])).unwrap();
+        let kv = limits_pairs(&args(&["servers", "limits", "slot:1", "cpus=8", "mem=32G", "disk=120G", "cpu-hours=48"])).unwrap();
+        let (fo, ko) = (share_overrides(&flags, false, false).unwrap(), share_overrides(&kv, false, false).unwrap());
+        assert_eq!((fo.max_cpus, fo.max_mem_gb, fo.disk_gb, fo.cpu_hours_day), (Some(8), Some(32), Some(120), Some(48)), "{flags:?}");
+        assert_eq!(fo, ko, "both forms set the same limits");
+        let typo = limits_pairs(&args(&["servers", "limits", "slot:1", "--cpu", "8"])).unwrap_err();
+        assert!(typo.contains("unknown flag --cpu") && typo.contains("--cpus"), "{typo}");
+        let typo = limits_pairs(&args(&["servers", "limits", "slot:1", "cpu=8"])).unwrap_err();
+        assert!(typo.contains("unknown limit \"cpu\"") && typo.contains("--cpus"), "{typo}");
         assert_eq!((o.weight, o.max_running, o.gate), (Some(3), Some(2), Some(true)));
         assert!(share_overrides(&[("weight".into(), "x".into())], false, false).is_err());
     }

@@ -2245,8 +2245,8 @@
    },
    {
     "noun": "servers",
-    "usage": "k2-node servers limits <server> [key=value...] [--weight N] [--for 7d|none]",
-    "note": "keys as the add flags",
+    "usage": "k2-node servers limits <server> [--cpus N] [--mem 8G] [--disk 40G] [--cpu-hours N] [--max-time 2h] [--weight N] [--max-running N] [--max-queued N] [--network on|no-lan|none] [--gate] [--exclusive] [--for 7d|none]",
+    "note": "the add flags; key=value works too: cpus=8 mem=32G cpu-hours=48",
     "section": "More than one K2 server"
    },
    {

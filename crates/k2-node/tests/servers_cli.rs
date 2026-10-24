@@ -63,6 +63,42 @@ fn servers_list_pause_resume_and_root_only_verbs() {
     let (ok, _, err) = run(&["servers", "limits", "z3thon.k2.dev", "surprise=1", "--home", h, "--config-dir", c]);
     assert!(!ok && err.contains("surprise"), "{err}");
 
+    // 0.46.4: the add flags work on limits too ("keys as the add flags"),
+    // and key=value keeps working; both reach servers.toml.
+    let (ok, out, err) = run(&[
+        "servers", "limits", "z3thon.k2.dev", "--cpus", "8", "--mem", "32G", "--disk", "120G", "--cpu-hours", "48", "--home", h, "--config-dir", c, "--json",
+    ]);
+    assert!(ok, "--flag value form: {err}");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let l = &v["limits"];
+    assert_eq!(
+        (l["max_cpus"].as_u64(), l["max_mem_gb"].as_u64(), l["disk_gb"].as_u64(), l["cpu_hours_day"].as_u64()),
+        (Some(8), Some(32), Some(120), Some(48)),
+        "{v}"
+    );
+    let stored = servers::read_file(&cfg).unwrap().unwrap().entry(1).unwrap().clone();
+    let (ok, out, err) = run(&["servers", "limits", "z3thon.k2.dev", "cpus=4", "mem=16G", "disk=60G", "cpu-hours=24", "--home", h, "--config-dir", c, "--json"]);
+    assert!(ok, "key=value form: {err}");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let l = &v["limits"];
+    assert_eq!(
+        (l["max_cpus"].as_u64(), l["max_mem_gb"].as_u64(), l["disk_gb"].as_u64(), l["cpu_hours_day"].as_u64()),
+        (Some(4), Some(16), Some(60), Some(24)),
+        "{v}"
+    );
+    assert_ne!(servers::read_file(&cfg).unwrap().unwrap().entry(1).unwrap(), &stored, "the key=value change was written");
+    // A typo'd flag or key is refused, naming the right ones; nothing changes.
+    let before = servers::read_file(&cfg).unwrap().unwrap();
+    let (ok, _, err) = run(&["servers", "limits", "z3thon.k2.dev", "--cpu", "8", "--home", h, "--config-dir", c]);
+    assert!(!ok && err.contains("unknown flag --cpu") && err.contains("--cpus"), "{err}");
+    let (ok, _, err) = run(&["servers", "limits", "z3thon.k2.dev", "memory=8G", "--home", h, "--config-dir", c]);
+    assert!(!ok && err.contains("unknown limit \"memory\"") && err.contains("--mem"), "{err}");
+    assert_eq!(servers::read_file(&cfg).unwrap().unwrap(), before, "a refused typo changes nothing");
+    // The help shows the flag form.
+    let (_, out, err) = run(&["--help"]);
+    let help = format!("{out}{err}");
+    assert!(help.contains("servers limits <server> [--cpus N]") && help.contains("key=value works too"), "{help}");
+
     // add and revoke change root's records: sudo only.
     let (ok, _, err) = run(&["servers", "add", "--url", "https://b.k2.dev", "--code", "ABCDE-FGHJK.0123456789abcdef", "--home", h, "--config-dir", c]);
     assert!(!ok && err.contains("sudo"), "{err}");

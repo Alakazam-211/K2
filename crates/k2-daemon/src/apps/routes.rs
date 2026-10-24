@@ -427,7 +427,7 @@ pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String
         p if super::domains::ROUTES.contains(&p) => super::domains::handle(p, &who, body, params),
         // 0.46.4: every step of a move, one owner approval (move_plan.rs).
         p if super::move_plan::ROUTES.contains(&p) => super::move_plan::handle(p, &who, body, params),
-        // 0.46.4: test guests the App's own agent makes (test_guests.rs).
+        // 0.46.4: test guests of one App, a person's (test_guests.rs).
         p if super::test_guests::ROUTES.contains(&p) => super::test_guests::handle(p, &who, body, params),
         p if super::labels::ROUTES.contains(&p) => super::labels::handle(p, &who, body),
         "/cli/app/validate" => validate(&who, body),

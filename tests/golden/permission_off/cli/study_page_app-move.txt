@@ -89,11 +89,10 @@ SIGN-INS. Your users sign in once after the move: sessions from the old
 service's box login don't carry over to the App, so each web and phone
 session asks for the password again (once).
 
-TESTING. Make your own test guests for the App (no owner needed):
-  k2 app user add <app-id> <name> --test [--role R] [--expires 24h]
-They sign in only through the App's link, take only a role the App
-defines, end on their own (at most 7 days), at most 5 per App; your owner
-gets a note. k2 app test-guests <app-id> lists them.
+TESTING. A guest to test the App with is your owner's to make, as every
+guest: ask them for a test guest (k2 app user add <app-id> <name> --test,
+from a terminal outside K2). It signs in only through the App's link and
+ends on its own; k2 app test-guests <app-id> lists them.
 
 Exit codes: 0 done, 2 held for your owner, 3 refused (JSON on stderr: the
 hint says why, e.g. app_not_healthy, label_owned_by_other_workspace).

@@ -851,7 +851,9 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         // 0.46.4: the move's steps; one owner request for the owner's.
         "/cli/app/move-plan",
         "/cli/app/move-plan/request",
-        // 0.46.4: test guests of its own App (switch 1; the handler).
+        // 0.46.4: test guests. Here so the handler answers: the list is
+        // the App's own agent's (switch 1); add and rm refuse a passport
+        // `owner_only` while agent test guests are parked.
         "/cli/app/test-guest/add",
         "/cli/app/test-guest/rm",
         "/cli/app/test-guests",

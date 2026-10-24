@@ -14,8 +14,8 @@
 //! - a denial spike: more than 20 refused calls in 5 minutes;
 //! - the first successful use of each write verb, gathered into one wake
 //!   per App per [`DIGEST_WINDOW`] (0.46.4, NSI C: a test run's login,
-//!   logout and upload were three wakes), and none at all for what the
-//!   App's own agent did as one of its test guests;
+//!   logout and upload were three wakes), and none at all for what one of
+//!   the App's own test guests did (someone testing the App);
 //! - any `pass_wrong_link`;
 //! - a quota hit (`rate_limited`, `too_many_sockets`, `too_large`,
 //!   `too_many_subscriptions`).
@@ -496,9 +496,9 @@ fn first_uses(conn: &rusqlite::Connection, batch: &[Call]) {
         if seen {
             continue;
         }
-        // NSI C: the App's own agent testing it (as one of its test
-        // guests) needs no wake about what it just did.
-        if agents_own(c) {
+        // NSI C: a call as one of the App's own test guests is someone
+        // testing the App: no wake about it.
+        if by_own_test_guest(c) {
             continue;
         }
         if let Some(ws) = ws {
@@ -560,9 +560,9 @@ fn flush_digests(force: bool) {
     }
 }
 
-/// A call the App's own workspace agent made: as one of the App's test
-/// guests (the actor, or the guest a login signed in).
-fn agents_own(c: &Call) -> bool {
+/// A call made as one of the App's own test guests (the actor, or the
+/// guest a login signed in): someone testing the App, not a user.
+fn by_own_test_guest(c: &Call) -> bool {
     let principal = [c.actor.as_str(), c.on_behalf_of.as_deref().unwrap_or("")].into_iter().find_map(|a| a.strip_prefix("guest:")).map(str::to_string);
     let Some(p) = principal else { return false };
     let Ok(Some(t)) = k2_core::skin::test_guests::get(&p) else { return false };

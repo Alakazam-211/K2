@@ -7534,9 +7534,9 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
   k2 app user add <username> --app <app> [--role R] [--email e] [--password-stdin]
                                         Owner only. A guest of ONE App: that App's grant, no box login
   k2 app user add <app-id> <name> --test [--role R] [--expires 24h]
-                                        A test guest of ONE App (its own agent may): signs in only
-                                        through that App's link, a role the App defines, ends on its
-                                        own (24 h, at most 7 d), at most 5 per App (k2 app test-guests)
+                                        Owner only. A test guest of ONE App: signs in only through
+                                        that App's link, a role the App defines, ends on its own
+                                        (24 h, at most 7 d), at most 5 per App (k2 app test-guests)
   k2 app user email <username> [--email e]
                                         Set/clear guest email (omit/empty clears)
   k2 app user full-name <username> [--name <text>]
@@ -9785,11 +9785,10 @@ SIGN-INS. Your users sign in once after the move: sessions from the old
 service's box login don't carry over to the App, so each web and phone
 session asks for the password again (once).
 
-TESTING. Make your own test guests for the App (no owner needed):
-  k2 app user add <app-id> <name> --test [--role R] [--expires 24h]
-They sign in only through the App's link, take only a role the App
-defines, end on their own (at most 7 days), at most 5 per App; your owner
-gets a note. k2 app test-guests <app-id> lists them.
+TESTING. A guest to test the App with is your owner's to make, as every
+guest: ask them for a test guest (k2 app user add <app-id> <name> --test,
+from a terminal outside K2). It signs in only through the App's link and
+ends on its own; k2 app test-guests <app-id> lists them.
 
 Exit codes: 0 done, 2 held for your owner, 3 refused (JSON on stderr: the
 hint says why, e.g. app_not_healthy, label_owned_by_other_workspace).
@@ -11160,7 +11159,9 @@ else:
 
 # Test guests (0.46.4): k2 app user add <app> <name> --test [--role R]
 # [--expires 24h] [--json]; k2 app user remove <name> --test; k2 app
-# test-guests <app>. The App's own workspace agent (switch 1) or a human.
+# test-guests <app>. A person adds and removes (an agent passport is
+# refused owner_only while agent test guests are parked); the App's own
+# agent may list.
 _app_test_guest() {
     local action="$1"
     shift
@@ -11184,9 +11185,8 @@ k2 app test-guests <app-id> [--json]
   App's gateway link (POST /cli/skin/login with the App pass), never the
   box login or another App. A role only when the App already defines it.
   It ends on its own: 24 h by default, at most 7 days. At most 5 per App.
-  The App's own agent (with "Build and run Apps") or a person makes them;
-  each is audited and your owner gets a note on your Thread. K2 makes the
-  password and shows it once.
+  Owner only, as every guest. Each is audited and noted on the
+  workspace's Thread. K2 makes the password and shows it once.
 EOF
                 return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;

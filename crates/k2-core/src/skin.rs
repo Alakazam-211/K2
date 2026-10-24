@@ -88,7 +88,7 @@ pub mod paths;
 /// (app-mobile-access-v1, 0.46.3).
 #[path = "skin_app_login.rs"]
 pub mod app_login;
-/// Test guests an App's own workspace agent makes (0.46.4).
+/// Test guests of one App, short-lived (0.46.4).
 #[path = "skin_test_guests.rs"]
 pub mod test_guests;
 /// The agent access list, the owner's person × agent grid and the
@@ -1435,7 +1435,7 @@ fn open_db(path: &Path) -> Result<Connection, String> {
     // app-mobile-access-v1 (0.46.3): device sign-ins, per-App sign-in
     // settings. Additive, no numbered step.
     app_login::ensure_schema(&conn)?;
-    // 0.46.4: test guests an App's own agent makes. Additive, no step.
+    // 0.46.4: test guests of one App. Additive, no step.
     test_guests::ensure_schema(&conn)?;
     // Copy existing guests once. A deleted host row stays deleted.
     ensure_host_grant_backfill(&mut conn)?;

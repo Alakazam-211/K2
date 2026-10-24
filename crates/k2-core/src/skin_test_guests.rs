@@ -1,6 +1,7 @@
-//! Test guests (0.46.4, NSI B): an App's own workspace agent makes guests
-//! to test its App with, without the owner each time. A test guest is an
-//! App-only guest (one `kind=app` grant on that App, no box login) plus a
+//! Test guests (0.46.4, NSI B): short-lived guests to test one App with.
+//! A person makes them, as every guest (whether an App's own agent may is
+//! parked for its own arc; the daemon route refuses agents). A test guest
+//! is an App-only guest (one `kind=app` grant on that App, no box login) plus a
 //! row here, and K2 holds it to the narrowest shape:
 //!
 //! - **one App, one door:** a session is minted for it only for its App
@@ -13,8 +14,8 @@
 //! - **few:** at most [`MAX_PER_APP`] live ones per App;
 //! - **visible:** `k2 app user list` shows the `test` flag.
 //!
-//! The roles it may get, the audit and the owner's Thread note are the
-//! daemon route's (`apps::test_guests`). The table is additive in skin.db
+//! Who may make one, the roles it may get, the audit and the Thread note
+//! are the daemon route's (`apps::test_guests`). The table is additive in skin.db
 //! (created at open, no numbered step), like `app_login_settings`.
 
 use std::cell::RefCell;

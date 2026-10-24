@@ -659,9 +659,11 @@ async fn refused_gateway_calls_carry_their_code_and_reach_the_apps_log() {
     k2_daemon::apps::alerts::set_sink(None);
 }
 
-/// B: the App's own agent makes test guests of that App only: its own
-/// roles, a short life, at most 5, shown as test, audited; they sign in
-/// only through that App's link.
+/// B: test guests are a person's to make (agent test guests are parked,
+/// Rosson 2026-10-24): one App's only, its own roles, a short life, at
+/// most 5, shown as test, audited; they sign in only through that App's
+/// link. An agent passport is refused `owner_only` on add and remove,
+/// with the not-requestable teaching line while permission cards are on.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_guests_are_one_apps_short_lived_and_sign_in_only_on_its_link() {
     let env = setup(&[]);
@@ -684,46 +686,79 @@ async fn test_guests_are_one_apps_short_lived_and_sign_in_only_on_its_link() {
     };
 
     let before = k2_core::deploy::now();
-    let r = add(agent.clone(), json!({"app": "tgapp", "username": "qa1", "role": "tester", "expires": "2h"})).await;
+    let r = add(OWNER.to_string(), json!({"app": "tgapp", "username": "qa1", "role": "tester", "expires": "2h"})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let v = r.json();
     let pw = v["password"].as_str().expect("K2 makes the password and shows it once").to_string();
-    assert_eq!((v["app"].clone(), v["role"].clone(), v["createdBy"].clone()), (json!("tgapp"), json!("tester"), json!("agent:tgws")), "{v}");
-    let ends = v["expiresAt"].as_i64().unwrap();
+    assert_eq!((v["app"].clone(), v["role"].clone(), v["createdBy"].clone()), (json!("tgapp"), json!("tester"), json!("owner")), "{v}");
+    let ends = v["expiresAt"].as_i64().expect("expiresAt");
     assert!((before + 7200..=before + 7210).contains(&ends), "{v}");
     assert!(v.get("ownerNote").is_some(), "{v}");
     // Roles: only the App's own.
     for (role, why) in [("boxwide", "a box-wide role"), ("theirs", "another App's role"), ("admin", "a role nobody defined")] {
-        let r = add(agent.clone(), json!({"app": "tgapp", "username": "qa-x", "role": role})).await;
+        let r = add(OWNER.to_string(), json!({"app": "tgapp", "username": "qa-x", "role": role})).await;
         assert_eq!((r.status, r.code()), (400, "role_not_this_apps".to_string()), "{why}: {}", r.body);
     }
     // At most 7 days.
-    let r = add(agent.clone(), json!({"app": "tgapp", "username": "qa-x", "expires": "8d"})).await;
+    let r = add(OWNER.to_string(), json!({"app": "tgapp", "username": "qa-x", "expires": "8d"})).await;
     assert_eq!(r.status, 400, "{}", r.body);
     // At most 5 live per App.
     for n in 2..=5 {
-        let r = add(agent.clone(), json!({"app": "tgapp", "username": format!("qa{n}")})).await;
+        let r = add(OWNER.to_string(), json!({"app": "tgapp", "username": format!("qa{n}")})).await;
         assert_eq!(r.status, 200, "qa{n}: {}", r.body);
     }
-    let r = add(agent.clone(), json!({"app": "tgapp", "username": "qa6"})).await;
+    let r = add(OWNER.to_string(), json!({"app": "tgapp", "username": "qa6"})).await;
     assert_eq!((r.status, r.code()), (409, "too_many_test_guests".to_string()), "{}", r.body);
-    // Another workspace's agent never sees the App; no switch, no guests.
+
+    // Agents make no guests (parked): not the App's own agent with "Build
+    // and run Apps" on, not another workspace's; the same code either way
+    // (nothing said about whose App it is). Below the cap first, so the
+    // refusal is the agent's, not the cap's.
+    let r = post(d.port, "/cli/app/test-guest/rm", OWNER, json!({"username": "qa5"})).await;
+    assert_eq!((r.status, r.json()["removed"].clone()), (200, json!(true)), "{}", r.body);
     allow_manage(&other, true);
-    let r = add(passport(&other), json!({"app": "tgapp", "username": "qa-z"})).await;
+    for (who, label) in [(agent.clone(), "the App's own agent"), (passport(&other), "another workspace's agent")] {
+        let r = add(who.clone(), json!({"app": "tgapp", "username": "qa-agent"})).await;
+        assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{label} add: {}", r.body);
+        assert!(r.json()["error"]["hint"].as_str().expect("hint").contains("only a person makes or removes guests"), "{label}: {}", r.body);
+        let r = post(d.port, "/cli/app/test-guest/rm", &who, json!({"username": "qa1"})).await;
+        assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{label} rm: {}", r.body);
+    }
+    // With permission cards on for the agent, the refusal says it can't be
+    // requested (a person does it), and is otherwise the same.
+    k2_core::permission::gate::set_server_switch(true);
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let n = conn.execute("UPDATE projects SET agents_can_request_permissions = 1 WHERE id = ?1", [&ws.id]).expect("agent switch");
+        assert_eq!(n, 1);
+    }
+    let r = add(agent.clone(), json!({"app": "tgapp", "username": "qa-agent"})).await;
+    k2_core::permission::gate::set_server_switch(false);
+    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{}", r.body);
+    assert_eq!(r.json()["permission"]["requestable"], json!(false), "not requestable: {}", r.body);
+    assert!(r.json()["permission"].get("command").is_none(), "no Ask-with command: {}", r.body);
+    // Nothing was made by any of it.
+    let r = get(d.port, "/cli/app/test-guests", OWNER, "app=tgapp").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let names: Vec<String> =
+        r.json()["testGuests"].as_array().expect("testGuests").iter().map(|t| t["username"].as_str().expect("username").to_string()).collect();
+    assert_eq!(names, ["qa1", "qa2", "qa3", "qa4"], "{}", r.body);
+    assert!(k2_core::skin::list_principals().unwrap().iter().all(|p| p.username != "qa-agent"), "no guest from an agent");
+    // The App's own agent may read the list; another workspace's agent
+    // never sees the App.
+    let r = get(d.port, "/cli/app/test-guests", &agent, "app=tgapp").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.json()["testGuests"].as_array().expect("testGuests").len(), 4, "{}", r.body);
+    let r = get(d.port, "/cli/app/test-guests", &passport(&other), "app=tgapp").await;
     assert_eq!((r.status, r.code()), (404, "app_not_found".to_string()), "{}", r.body);
-    allow_manage(&ws, false);
-    let r = add(agent.clone(), json!({"app": "tgapp", "username": "qa-z"})).await;
-    assert_eq!((r.status, r.code()), (403, "apps_manage_off".to_string()), "{}", r.body);
-    allow_manage(&ws, true);
 
     // The roster says test.
     let r = get(d.port, "/cli/skin/users", OWNER, "").await;
     assert_eq!(r.status, 200, "{}", r.body);
-    let users = r.json()["users"].as_array().unwrap().clone();
+    let users = r.json()["users"].as_array().expect("users").clone();
     let qa1 = users.iter().find(|u| u["username"] == "qa1").unwrap_or_else(|| panic!("{users:?}"));
     assert_eq!((qa1["test"]["app"].clone(), qa1["test"]["expiresAt"].clone()), (json!("tgapp"), json!(ends)), "{qa1}");
-    let r = get(d.port, "/cli/app/test-guests", &agent, "app=tgapp").await;
-    assert_eq!(r.json()["testGuests"].as_array().unwrap().len(), 5, "{}", r.body);
 
     // Sign-in: only through tgapp's link.
     let (pass, port) = open_link("tgapp", &svc, &ws);
@@ -737,7 +772,7 @@ async fn test_guests_are_one_apps_short_lived_and_sign_in_only_on_its_link() {
     .await;
     assert_eq!(own_link.0, 200, "its own App link: {own_link:?}");
     let session: Value = serde_json::from_str(&own_link.1).unwrap();
-    assert!(session["token"].as_str().unwrap().starts_with("k2skn_"), "{session}");
+    assert!(session["token"].as_str().expect("token").starts_with("k2skn_"), "{session}");
     assert_eq!(other_link.0, 401, "another App link: {other_link:?}");
     let main_port = |body: Value| {
         let port = d.port;
@@ -748,13 +783,11 @@ async fn test_guests_are_one_apps_short_lived_and_sign_in_only_on_its_link() {
     let r = main_port(json!({"username": "qa1", "password": pw})).await;
     assert_eq!(r.status, 401, "never the box login: {}", r.body);
 
-    // Remove: another workspace's agent can't; its own agent can.
-    let r = post(d.port, "/cli/app/test-guest/rm", &passport(&other), json!({"username": "qa5"})).await;
-    assert_eq!((r.status, r.code()), (404, "not_a_test_guest".to_string()), "{}", r.body);
-    let r = post(d.port, "/cli/app/test-guest/rm", &agent, json!({"username": "qa5"})).await;
+    // Remove: the owner can.
+    let r = post(d.port, "/cli/app/test-guest/rm", OWNER, json!({"username": "qa4"})).await;
     assert_eq!((r.status, r.json()["removed"].clone()), (200, json!(true)), "{}", r.body);
-    let r = get(d.port, "/cli/app/test-guests", &agent, "app=tgapp").await;
-    assert_eq!(r.json()["testGuests"].as_array().unwrap().len(), 4, "{}", r.body);
+    let r = get(d.port, "/cli/app/test-guests", OWNER, "app=tgapp").await;
+    assert_eq!(r.json()["testGuests"].as_array().expect("testGuests").len(), 3, "{}", r.body);
     // A real guest is never "removed" as a test guest.
     k2_core::skin::add_principal_for_app("realguest", None, &svc, None, "owner").unwrap();
     let r = post(d.port, "/cli/app/test-guest/rm", OWNER, json!({"username": "realguest"})).await;
@@ -776,7 +809,8 @@ async fn test_guests_are_one_apps_short_lived_and_sign_in_only_on_its_link() {
 }
 
 /// C: first write verbs are one digest per App per window, and nothing at
-/// all for what the App's own agent did as its test guest.
+/// all for what one of the App's test guests did (someone testing it; the
+/// owner made the guest: agents make none).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn first_write_verbs_fold_into_one_digest_and_skip_the_agents_own_tests() {
     let env = setup(&[("K2_APPS_FIRST_USE_DIGEST_SECS", "1")]);
@@ -812,19 +846,21 @@ async fn first_write_verbs_fold_into_one_digest_and_skip_the_agents_own_tests() 
         assert!(got[0].contains(want), "{want} missing: {}", got[0]);
     }
 
-    // The App's own agent, testing as its test guest: no wake.
-    allow_manage(&ws, true);
-    let r = post(d.port, "/cli/app/test-guest/add", &passport(&ws), json!({"app": "digapp2", "username": "qa-dig"})).await;
+    // Testing as one of the App's test guests (the owner's): no wake.
+    let r = post(d.port, "/cli/app/test-guest/add", OWNER, json!({"app": "digapp2", "username": "qa-dig"})).await;
     assert_eq!(r.status, 200, "{}", r.body);
-    let pw = r.json()["password"].as_str().unwrap().to_string();
+    let pw = r.json()["password"].as_str().expect("password").to_string();
     let (pass2, port2) = open_link("digapp2", &svc2, &ws);
     let login = blocking(move || on_link(port2, &link_post("/cli/skin/login", Some(&pass2), &json!({"username": "qa-dig", "password": pw})))).await;
     assert_eq!(login.0, 200, "{login:?}");
     let a = audit_rows(d.port, "digapp2", "", 1).await;
-    assert!(a["calls"][0]["onBehalfOf"].as_str().unwrap_or("").starts_with("guest:"), "the login names who signed in: {a}");
+    assert!(
+        a["calls"][0]["onBehalfOf"].as_str().unwrap_or_else(|| panic!("no onBehalfOf: {a}")).starts_with("guest:"),
+        "the login names who signed in: {a}"
+    );
     tokio::time::sleep(Duration::from_millis(3500)).await;
     let theirs = digests("digapp2")();
-    assert!(theirs.is_empty(), "no wake for the agent's own test: {theirs:?}");
+    assert!(theirs.is_empty(), "no wake for a test guest's calls: {theirs:?}");
     gateway::close("digapp", None, true);
     gateway::close("digapp2", None, true);
     k2_daemon::apps::alerts::set_sink(None);

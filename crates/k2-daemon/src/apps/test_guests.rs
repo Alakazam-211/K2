@@ -1,6 +1,5 @@
 //! Test guests for an App (0.46.4, NSI B: "test guests need the owner
-//! each time"). The App's own workspace agent makes guests scoped to that
-//! App only, to test it with.
+//! each time"): short-lived guests scoped to one App, to test it with.
 //!
 //! ```text
 //! POST /cli/app/test-guest/add  {app, username, role?, expires?, password?}
@@ -8,24 +7,27 @@
 //! GET  /cli/app/test-guests     ?app=
 //! ```
 //!
-//! **Who:** the agent of the App's own workspace with "Build and run Apps"
-//! (switch 1), or a human (the owner, an Admin, a K2 shell tab). Another
-//! workspace's agent never sees the App (`app_not_found`); a Member changes
-//! nothing.
+//! **Who:** a person only, as for every guest: the owner token, an Owner
+//! login, or a human in a K2 shell tab (route floor Owner, like
+//! `/cli/skin/users`). Whether an App's own agent may make test guests is
+//! parked (Rosson 2026-10-24) for its own arc: until then an agent
+//! passport is refused `owner_only` on add and rm ([`AGENTS_MAY_MANAGE`]
+//! is off). The App's own agent (switch 1) may read the list; another
+//! workspace's agent never sees the App (`app_not_found`); a Member
+//! changes nothing.
 //!
 //! **What K2 holds it to** (with `k2_core::skin::test_guests`):
 //! - an App-only guest of THIS App (one `kind=app` grant, no box login);
 //!   it signs in only through this App's gateway link, never the box login,
 //!   another App, the browser helper or a device sign-in;
 //! - a role only when the App already defines it (`roles.app_id` = this
-//!   App), never a box-wide role and never a new one; a role holding
-//!   `files:agentconfig` stays the owner's (as for every agent);
+//!   App), never a box-wide role and never a new one;
 //! - 24 h by default, at most 7 days; its sessions end with it; expired
 //!   ones are removed at the next add or list;
 //! - at most 5 live per App;
 //! - shown as `test` in `k2 app user list`; every add and remove is in the
-//!   App's audit and the Access Audit, and an add leaves the owner a note
-//!   on the workspace's Thread.
+//!   App's audit and the Access Audit, and an add leaves a note on the
+//!   workspace's Thread.
 
 use std::collections::HashMap;
 
@@ -41,6 +43,31 @@ pub const POST_ROUTES: &[&str] = &["/cli/app/test-guest/add", "/cli/app/test-gue
 pub const TOO_MANY: &str = "too_many_test_guests";
 pub const ROLE_NOT_THIS_APPS: &str = "role_not_this_apps";
 pub const NOT_A_TEST_GUEST: &str = "not_a_test_guest";
+
+/// May an agent passport add or remove test guests? **Off**: parked
+/// (Rosson 2026-10-24) until the agent-test-guest arc decides it; only a
+/// person makes guests, as before 0.46.4. The agent-only checks below
+/// stay for that arc and are unreachable while this is off.
+pub const AGENTS_MAY_MANAGE: bool = false;
+
+/// Add and remove: a person (or, once [`AGENTS_MAY_MANAGE`] is on, the
+/// App's own agent with switch 1). An agent passport is refused
+/// `owner_only` before the App is looked up, so it learns nothing about
+/// other workspaces' Apps.
+fn need_person(who: &Who, verb: &str) -> R<()> {
+    need_credential(who)?;
+    if agent_ws(who).is_some() && !AGENTS_MAY_MANAGE {
+        return Err(no(
+            codes::OWNER_ONLY,
+            403,
+            format!(
+                "only a person makes or removes guests, test guests too: ask your owner to run k2 app user {verb} … --test \
+                 from a terminal outside K2"
+            ),
+        ));
+    }
+    need_build(who)
+}
 
 pub(crate) fn handle(path: &str, who: &Who, body: &[u8], params: &HashMap<String, String>) -> R<J> {
     match path {
@@ -110,7 +137,7 @@ fn guest_json(app: &AppRow, username: &str, t: &tg::TestGuest) -> J {
 
 /// POST `/cli/app/test-guest/add`.
 fn add(who: &Who, body: &[u8]) -> R<J> {
-    need_build(who)?;
+    need_person(who, "add")?;
     let v = json_body(body)?;
     let app = app_for(who, s(&v, "app"))?;
     let by = actor(who);
@@ -168,7 +195,7 @@ fn add(who: &Who, body: &[u8]) -> R<J> {
     let role_name = role.as_deref().and_then(|id| skin::list_roles().ok()?.into_iter().find(|r| r.id == id).map(|r| r.name));
     app_audit(&app, "test_guest_add", &by, json!({ "username": p.username, "role": role_name, "expiresAt": expires_at }));
     access_audit("app-test-guest", &by, format!("added {} to {} (role {}, until {expires_at})", p.username, app.app_id, role_name.as_deref().unwrap_or("none")));
-    // The owner hears it on the workspace's Thread (no wake).
+    // A note on the workspace's Thread (no wake).
     let owner_note = ws_by_id(&app.owner_workspace)
         .map(|w| {
             let text = format!(
@@ -205,10 +232,11 @@ fn add(who: &Who, body: &[u8]) -> R<J> {
     Ok(out)
 }
 
-/// POST `/cli/app/test-guest/rm {username}`: a human removes any test
-/// guest; an agent only its own workspace's Apps'.
+/// POST `/cli/app/test-guest/rm {username}`: a person removes any test
+/// guest (an agent, once [`AGENTS_MAY_MANAGE`] is on, only its own
+/// workspace's Apps').
 fn rm(who: &Who, body: &[u8]) -> R<J> {
-    need_build(who)?;
+    need_person(who, "remove")?;
     let v = json_body(body)?;
     let username = s(&v, "username").ok_or_else(|| no(codes::BAD_REQUEST, 400, "username is required"))?;
     let missing = || no(NOT_A_TEST_GUEST, 404, format!("'{username}' isn't a test guest you can remove (k2 app test-guests <app>)"));
@@ -235,7 +263,8 @@ fn rm(who: &Who, body: &[u8]) -> R<J> {
 fn list(who: &Who, params: &HashMap<String, String>) -> R<J> {
     need_credential(who)?;
     let app = app_for(who, params.get("app").map(String::as_str))?;
-    if need_build(who).is_ok() {
+    // The sweep removes guests: only for a caller that may remove them.
+    if need_person(who, "remove").is_ok() {
         sweep(&app, &actor(who));
     }
     let by_id: HashMap<String, String> = skin::list_principals().map_err(store_err)?.into_iter().map(|p| (p.id, p.username)).collect();

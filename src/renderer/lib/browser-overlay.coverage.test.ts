@@ -73,6 +73,7 @@ const NO_CLAIM_NEEDED: Record<string, string> = {
   'components/Zen/widgets/ZenConversationWidget.tsx': 'Zen is shown: Browser tabs are hidden (the header\'s agent pick drop-down sits inside its own tile)',
   'components/Zen/widgets/ZenGuestRoomsSheet.tsx': 'Zen is shown: Browser tabs are hidden (a Garden widget\'s guests.setRooms confirm)',
   'components/Zen/widgets/ZenPermissionSheet.tsx': 'Zen is shown: Browser tabs are hidden (K2\'s sheet for a permission card a Garden widget shows)',
+  'components/Zen/widgets/ZenLinkSheet.tsx': 'Zen is shown: Browser tabs are hidden (K2\'s card the first time a Garden widget opens a site with k2.open)',
 }
 
 function walk(dir: string, out: string[]): void {

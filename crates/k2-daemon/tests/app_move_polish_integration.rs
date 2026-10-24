@@ -177,7 +177,7 @@ async fn warnings_mark_the_apps_own_env_expected_not_breaking() {
         "const pass = readFileSync(process.env.K2_PASS_FILE);\nconst data = process.env.K2_APP_DATA;\nconst tok = process.env.K2_OWNER_TOKEN;\n",
     )
     .unwrap();
-    let svc = service(&ws, "warnagents", "node server.mjs", &code, 47_101);
+    let svc = service(&ws, "warnagents", "python3 -m http.server", &code, 47_101);
     k2_daemon::vault::publish_env::set(&svc, Some("clean"), None).unwrap();
 
     let r = get(d.port, "/cli/app/warnings", OWNER, "app=warnagents").await;
@@ -191,7 +191,12 @@ async fn warnings_mark_the_apps_own_env_expected_not_breaking() {
     for n in ["K2_PASS_FILE", "K2_APP_DATA"] {
         let m = msgs.iter().find(|m| m.contains(n)).unwrap_or_else(|| panic!("{n} not named: {msgs:?}"));
         assert!(m.contains("Expected inside an App"), "{m}");
-        assert!(!got.iter().any(|(c, s)| c == "k2_internal_env" && s == "breaks" && m.contains(n)), "{n} is not a break");
+        let breaks_on_it = v["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w["severity"] == "breaks" && w["message"].as_str().unwrap().contains(&format!("reads {n}")));
+        assert!(!breaks_on_it, "{n} is not a break: {v}");
     }
     // The owner token read still breaks; only it counts.
     assert!(got.contains(&("k2_internal_env".to_string(), "breaks".to_string())), "{got:?}");
@@ -476,6 +481,8 @@ async fn move_plan_lists_every_step_and_one_approval_runs_the_owner_steps() {
     let env = setup(&[]);
     let seen = quiet_alerts();
     let d = k2_daemon::test_harness::start(OWNER).await;
+    // A vault on a file key under the temp home (the approvals' confirms).
+    k2_daemon::vault::boot(&k2_core::paths::k2_home());
     let nsi = seed_ws(&env, "mpnsi");
     let rooms = seed_ws(&env, "mpsales");
     let stranger = seed_ws(&env, "mpstranger");

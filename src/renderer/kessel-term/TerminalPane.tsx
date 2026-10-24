@@ -91,6 +91,10 @@ import {
 import { TerminalComposeBar } from '@/components/Terminal/TerminalComposeBar'
 import { shouldShowTerminalComposeBar } from '@/components/Terminal/terminalCompose'
 import { ThreadOverlayColumn } from '@/components/SessionView/ThreadOverlayColumn'
+// Chat view (retired from the UI in 0.46.4): the two `ChatOverlayColumn`
+// mounts below only render when the session chrome's view holds `chat`,
+// which only tests can set now. 0.46.5: delete this import, both mounts,
+// `showChat` and the `chat` split branch with the rest of the Chat view.
 import { ChatOverlayColumn } from '@/components/SessionView/ChatOverlayColumn'
 import { ChatterOverlayPane } from '@/components/SessionView/ChatterOverlayPane'
 import { SplitSessionColumns } from '@/components/SessionView/SplitSessionColumns'
@@ -5722,6 +5726,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
             />
           )
         }
+        // Chat view side: unreachable outside tests since 0.46.4. 0.46.5: delete.
         if (view === 'chat') {
           return (
             <ChatOverlayColumn
@@ -5761,6 +5766,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
               onStop={stopThreadTurn}
             />
           )}
+          {/* Chat view: unreachable outside tests since 0.46.4. 0.46.5: delete. */}
           {sessionChrome && showChat && (
             <ChatOverlayColumn
               view={viewTab}

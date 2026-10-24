@@ -1,3 +1,5 @@
+// RETIRED Chat view (0.46.4): reachable only from tests. 0.46.5: delete.
+// See wiki `Plan - Retirement ledger`.
 import type { SessionViewTab } from './sessionViewTab'
 import { chatHarnessName } from './chatHarness'
 

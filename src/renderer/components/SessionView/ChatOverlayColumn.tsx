@@ -1,3 +1,7 @@
+// RETIRED Chat view (0.46.4, Rosson 2026-10-23: Threads instead). No UI
+// entry point opens it; it renders only from tests. 0.46.5: delete this file,
+// ChatOverlayPane, useChatTranscript and chatTranscript (and their tests).
+// See wiki `Plan - Retirement ledger`.
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { ChatOverlayPane } from './ChatOverlayPane'
 import type { SessionViewTab } from './sessionViewTab'

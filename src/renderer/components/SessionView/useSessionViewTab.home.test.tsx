@@ -59,7 +59,7 @@ describe('session view memory follows the room server (Home)', () => {
     const direct = renderHook(() => useSessionViewTab(SESSION, primaryScope()))
     expect(direct.result.current.viewTab).toBe('terminal')
     act(() => direct.result.current.setViewTab('split'))
-    act(() => direct.result.current.setSplitLeft('chat'))
+    act(() => direct.result.current.setSplitLeft('chatter'))
     act(() => direct.result.current.setSplitRight('terminal'))
     direct.unmount()
     expect(localStorage.getItem(`x.k2.dev|k2:session-view-tab:${SESSION}`)).toBe('split')
@@ -67,7 +67,7 @@ describe('session view memory follows the room server (Home)', () => {
     windowOn('local')
     const home = renderHook(() => useSessionViewTab(SESSION, remoteRoomScope(scopeForHost(X))))
     expect(home.result.current.viewTab).toBe('split')
-    expect(home.result.current.splitLeft).toBe('chat')
+    expect(home.result.current.splitLeft).toBe('chatter')
     expect(home.result.current.splitRight).toBe('terminal')
     home.unmount()
     expect(localStorage.getItem(`local|k2:session-view-tab:${SESSION}`)).toBeNull()
@@ -76,14 +76,14 @@ describe('session view memory follows the room server (Home)', () => {
   it('a view chosen from Home shows when connecting to X directly', () => {
     windowOn('local')
     const home = renderHook(() => useSessionViewTab(SESSION, remoteRoomScope(scopeForHost(X))))
-    act(() => home.result.current.setViewTab('chat'))
+    act(() => home.result.current.setViewTab('chatter'))
     home.unmount()
-    expect(localStorage.getItem(`x.k2.dev|k2:session-view-tab:${SESSION}`)).toBe('chat')
+    expect(localStorage.getItem(`x.k2.dev|k2:session-view-tab:${SESSION}`)).toBe('chatter')
     expect(localStorage.getItem(`local|k2:session-view-tab:${SESSION}`)).toBeNull()
 
     windowOn(X)
     const direct = renderHook(() => useSessionViewTab(SESSION, primaryScope()))
-    expect(direct.result.current.viewTab).toBe('chat')
+    expect(direct.result.current.viewTab).toBe('chatter')
   })
 
   it('local server behaviour is unchanged', () => {

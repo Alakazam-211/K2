@@ -235,6 +235,9 @@ function ChatHeader({
   projectId,
 }: ChatHeaderProps): React.JSX.Element {
   const room = useRoom()
+  // The Chat view's no-chat-face fallback. Since 0.46.4 the view state can
+  // never hold `chat` (`retireChatTab` in sessionViewTab.ts), so this never
+  // fires. 0.46.5: delete it with the Chat view code.
   useEffect(() => {
     if (!harnessReady || chatProvider) return
     if (viewTab === 'chat') onViewTabChange('terminal')
@@ -329,7 +332,6 @@ function ChatHeader({
         value={viewTab}
         splitLeft={splitLeft}
         splitRight={splitRight}
-        chatEligible={Boolean(chatProvider)}
         onChange={onViewTabChange}
         onSplitLeft={onSplitLeft}
         onSplitRight={onSplitRight}
@@ -745,6 +747,9 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
   // Codex and Gemini mint the provider id after the first turn. Do not
   // open the transcript socket until that id exists. This poll reads the
   // list row; it does not spawn, close, or tail a file.
+  // Chat view retired from the UI in 0.46.4: `chatFaceOn` is always false
+  // now (the view state never holds `chat`), so this poll never runs.
+  // 0.46.5: delete it and `chatConversationId` with the Chat view code.
   const chatFaceOn =
     viewTab === 'chat' ||
     (viewTab === 'split' && (splitLeft === 'chat' || splitRight === 'chat'))

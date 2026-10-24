@@ -5,6 +5,11 @@ import type { ServerScope } from '@/kessel/server-scope'
 import { unreadSupported, useUnreadEntry } from '@/stores/unread'
 import { muteMenuState, toggleMute } from '@/components/common/UnreadBadge'
 
+// The Chat view is retired from the UI in 0.46.4 (Rosson 2026-10-23: Threads
+// instead). It has no row in either menu below, a picked `chat` id is
+// ignored, and live view state never holds `chat` (see `retireChatTab`).
+// The `chat` label stays only because the types still name `chat` until the
+// Chat view code goes in 0.46.5 (then delete it here too).
 const PANE_LABEL: Record<SplitPaneView, string> = {
   chat: 'Chat',
   terminal: 'Terminal',
@@ -25,14 +30,12 @@ const MUTE_THREAD_ID = 'mute-thread'
 
 /** No unread count, unread dot or waiting count on the button or its
  *  rows: those live in the main nav (Rosson 2026-10-21). The menu keeps
- *  only the Mute / Unmute Thread item. */
+ *  only the Mute / Unmute Thread item. No Chat row (retired 0.46.4). */
 export function viewMenuItems(
-  chatEligible: boolean,
   thread?: { muted: boolean; canMute: boolean },
 ): ContextMenuItemDef[] {
   const items: ContextMenuItemDef[] = [
     { id: 'terminal', label: VIEW_LABEL.terminal },
-    { id: 'chat', label: VIEW_LABEL.chat, badge: 'Beta', enabled: chatEligible },
     { id: 'thread', label: VIEW_LABEL.thread },
     { id: 'chatter', label: VIEW_LABEL.chatter },
     { id: 'split', label: VIEW_LABEL.split },
@@ -44,21 +47,23 @@ export function viewMenuItems(
   return items
 }
 
-function sideMenuItems(chatEligible: boolean): ContextMenuItemDef[] {
+/** A Split side's choices. No Chat row (retired 0.46.4). */
+export function sideMenuItems(): ContextMenuItemDef[] {
   return [
     { id: 'terminal', label: 'Terminal' },
-    { id: 'chat', label: 'Chat', enabled: chatEligible },
     { id: 'thread', label: 'Thread' },
     { id: 'chatter', label: 'Chatter' },
   ]
 }
 
+/** A menu pick the view button acts on. Not `chat` (retired 0.46.4). */
 function isSessionViewTab(id: string): id is SessionViewTab {
-  return id === 'chat' || id === 'terminal' || id === 'thread' || id === 'chatter' || id === 'split'
+  return id === 'terminal' || id === 'thread' || id === 'chatter' || id === 'split'
 }
 
+/** A Split side pick the choosers act on. Not `chat` (retired 0.46.4). */
 function isSplitPaneView(id: string): id is SplitPaneView {
-  return id === 'chat' || id === 'terminal' || id === 'thread' || id === 'chatter'
+  return id === 'terminal' || id === 'thread' || id === 'chatter'
 }
 
 const BUTTON_CLASS =
@@ -74,7 +79,6 @@ export function SessionViewMenu({
   value,
   splitLeft,
   splitRight,
-  chatEligible,
   onChange,
   onSplitLeft,
   onSplitRight,
@@ -84,7 +88,6 @@ export function SessionViewMenu({
   value: SessionViewTab
   splitLeft: SplitPaneView
   splitRight: SplitPaneView
-  chatEligible: boolean
   onChange: (tab: SessionViewTab) => void
   onSplitLeft: (view: SplitPaneView) => void
   onSplitRight: (view: SplitPaneView) => void
@@ -130,14 +133,13 @@ export function SessionViewMenu({
         aria-expanded={openKind === 'view'}
         className={BUTTON_CLASS}
         onClick={(event) => {
-          void openAt(event, 'view', viewMenuItems(chatEligible, { muted: threadEntry?.muted === true, canMute })).then((picked) => {
+          void openAt(event, 'view', viewMenuItems({ muted: threadEntry?.muted === true, canMute })).then((picked) => {
             if (picked === MUTE_THREAD_ID && threadConversationId) {
               const { next } = muteMenuState(threadEntry?.muted === true, 'Thread')
               void toggleMute('thread', threadConversationId, next, 'Thread')
               return
             }
             if (!picked || !isSessionViewTab(picked)) return
-            if (picked === 'chat' && !chatEligible) return
             onChange(picked)
           })
         }}
@@ -166,9 +168,8 @@ export function SessionViewMenu({
             ariaLabel={`Left side ${PANE_LABEL[splitLeft]}`}
             expanded={openKind === 'left'}
             onClick={(event) => {
-              void openAt(event, 'left', sideMenuItems(chatEligible)).then((picked) => {
+              void openAt(event, 'left', sideMenuItems()).then((picked) => {
                 if (!picked || !isSplitPaneView(picked)) return
-                if (picked === 'chat' && !chatEligible) return
                 onSplitLeft(picked)
               })
             }}
@@ -179,9 +180,8 @@ export function SessionViewMenu({
             ariaLabel={`Right side ${PANE_LABEL[splitRight]}`}
             expanded={openKind === 'right'}
             onClick={(event) => {
-              void openAt(event, 'right', sideMenuItems(chatEligible)).then((picked) => {
+              void openAt(event, 'right', sideMenuItems()).then((picked) => {
                 if (!picked || !isSplitPaneView(picked)) return
-                if (picked === 'chat' && !chatEligible) return
                 onSplitRight(picked)
               })
             }}

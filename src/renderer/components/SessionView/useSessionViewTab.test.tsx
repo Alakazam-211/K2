@@ -25,22 +25,22 @@ describe('useSessionViewTab', () => {
     expect(first.result.current.splitRight).toBe('thread')
 
     act(() => {
-      first.result.current.setSplitLeft('chat')
+      first.result.current.setSplitLeft('chatter')
     })
-    expect(first.result.current.splitLeft).toBe('chat')
+    expect(first.result.current.splitLeft).toBe('chatter')
     expect(first.result.current.splitRight).toBe('thread')
 
     act(() => {
-      first.result.current.setSplitRight('chat')
+      first.result.current.setSplitRight('chatter')
     })
-    expect(first.result.current.splitLeft).toBe('chat')
-    expect(first.result.current.splitRight).toBe('chat')
+    expect(first.result.current.splitLeft).toBe('chatter')
+    expect(first.result.current.splitRight).toBe('chatter')
 
     first.unmount()
     const again = renderHook(() => useSessionViewTab('conv-2', PRIMARY))
     expect(again.result.current.viewTab).toBe('split')
-    expect(again.result.current.splitLeft).toBe('chat')
-    expect(again.result.current.splitRight).toBe('chat')
+    expect(again.result.current.splitLeft).toBe('chatter')
+    expect(again.result.current.splitRight).toBe('chatter')
     expect(renderHook(() => useSessionViewTab('conv-other', PRIMARY)).result.current.viewTab).toBe('terminal')
   })
 })
@@ -87,13 +87,13 @@ describe('useSessionViewTab — New agents open in', () => {
   })
 
   it('the sides are kept for a later pick of Split even when the view is not Split', () => {
-    localStorage.setItem('k2.newAgentView', JSON.stringify({ view: 'terminal', left: 'chat', right: 'thread' }))
+    localStorage.setItem('k2.newAgentView', JSON.stringify({ view: 'terminal', left: 'chatter', right: 'thread' }))
     const hook = renderHook(() => useSessionViewTab('conv-term', PRIMARY))
     expect(hook.result.current.viewTab).toBe('terminal')
     act(() => {
       hook.result.current.setViewTab('split')
     })
-    expect(hook.result.current.splitLeft).toBe('chat')
+    expect(hook.result.current.splitLeft).toBe('chatter')
     expect(hook.result.current.splitRight).toBe('thread')
   })
 
@@ -103,10 +103,10 @@ describe('useSessionViewTab — New agents open in', () => {
     expect(renderHook(() => useSessionViewTab('conv-old', PRIMARY)).result.current.viewTab).toBe('terminal')
 
     localStorage.setItem('local|k2:session-view-tab:conv-old-split', 'split')
-    localStorage.setItem('local|k2:session-view-split:conv-old-split', JSON.stringify({ left: 'chat', right: 'terminal' }))
+    localStorage.setItem('local|k2:session-view-split:conv-old-split', JSON.stringify({ left: 'chatter', right: 'terminal' }))
     const kept = renderHook(() => useSessionViewTab('conv-old-split', PRIMARY))
     expect(kept.result.current.viewTab).toBe('split')
-    expect(kept.result.current.splitLeft).toBe('chat')
+    expect(kept.result.current.splitLeft).toBe('chatter')
     expect(kept.result.current.splitRight).toBe('terminal')
 
     // Old memory: Split with no side record keeps Terminal | Thread.
@@ -122,5 +122,60 @@ describe('useSessionViewTab — New agents open in', () => {
     expect(hook.result.current.viewTab).toBe('terminal')
     expect(hook.result.current.splitLeft).toBe('terminal')
     expect(hook.result.current.splitRight).toBe('thread')
+  })
+})
+
+describe('useSessionViewTab — saved Chat view (retired from the UI in 0.46.4)', () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
+  it('a pane saved in chat mode opens as the terminal and the saved view is rewritten', () => {
+    localStorage.setItem('local|k2:session-view-tab:conv-chat', 'chat')
+    const hook = renderHook(() => useSessionViewTab('conv-chat', PRIMARY))
+    expect(hook.result.current.viewTab).toBe('terminal')
+    expect(localStorage.getItem('local|k2:session-view-tab:conv-chat')).toBe('terminal')
+    expect(JSON.parse(localStorage.getItem('local|k2:session-view-split:conv-chat') ?? 'null')).toEqual({
+      left: 'terminal',
+      right: 'thread',
+    })
+  })
+
+  it('a split saved with a Chat side opens with the terminal (or Thread) there, rewritten', () => {
+    localStorage.setItem('local|k2:session-view-tab:conv-split-chat', 'split')
+    localStorage.setItem(
+      'local|k2:session-view-split:conv-split-chat',
+      JSON.stringify({ left: 'terminal', right: 'chat' }),
+    )
+    const hook = renderHook(() => useSessionViewTab('conv-split-chat', PRIMARY))
+    expect(hook.result.current.viewTab).toBe('split')
+    expect(hook.result.current.splitLeft).toBe('terminal')
+    expect(hook.result.current.splitRight).toBe('thread')
+    expect(localStorage.getItem('local|k2:session-view-tab:conv-split-chat')).toBe('split')
+    expect(JSON.parse(localStorage.getItem('local|k2:session-view-split:conv-split-chat') ?? 'null')).toEqual({
+      left: 'terminal',
+      right: 'thread',
+    })
+  })
+
+  it('a new agent whose "New agents open in" pick was Chat opens in Terminal', () => {
+    localStorage.setItem('k2.newAgentView', JSON.stringify({ view: 'chat', left: 'terminal', right: 'thread' }))
+    const hook = renderHook(() => useSessionViewTab('conv-new-chat', PRIMARY))
+    expect(hook.result.current.viewTab).toBe('terminal')
+    expect(localStorage.getItem('local|k2:session-view-tab:conv-new-chat')).toBe('terminal')
+  })
+
+  it('the setters never store chat: asked-for chat becomes the terminal / a fallback side', () => {
+    localStorage.setItem('local|k2:session-view-tab:conv-set', 'split')
+    const hook = renderHook(() => useSessionViewTab('conv-set', PRIMARY))
+    act(() => hook.result.current.setSplitLeft('chat'))
+    expect(hook.result.current.splitLeft).toBe('terminal')
+    expect(hook.result.current.splitRight).toBe('thread')
+    act(() => hook.result.current.setSplitRight('chat'))
+    expect(hook.result.current.splitRight).toBe('thread')
+    act(() => hook.result.current.setViewTab('chat'))
+    expect(hook.result.current.viewTab).toBe('terminal')
+    expect(localStorage.getItem('local|k2:session-view-tab:conv-set')).toBe('terminal')
+    expect(localStorage.getItem('local|k2:session-view-split:conv-set')).not.toContain('chat"')
   })
 })

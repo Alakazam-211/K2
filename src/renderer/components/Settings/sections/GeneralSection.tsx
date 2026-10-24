@@ -88,7 +88,7 @@ export const GENERAL_MANIFEST: SettingEntry[] = [
   { id: 'general.completion-sound-choice', section: 'general', group: 'Workspaces', label: 'Completion sound choice', description: 'Which sound plays when an agent finishes, with a Preview button', keywords: ['sound', 'chime', 'ping', 'ding', 'pop', 'tick', 'audio', 'preview', 'choose', 'notification'] },
   { id: 'general.completion-sound-volume', section: 'general', group: 'Workspaces', label: 'Completion sound volume', description: 'How loud the sound is when an agent finishes', keywords: ['sound', 'volume', 'loud', 'quiet', 'level', 'ping', 'chime', 'audio'] },
   { id: 'general.workspace-switch-focus', section: 'general', group: 'Workspaces', label: 'When moving between workspaces, auto-select', description: 'Switching workspaces or project panes (⌘1–⌘9) focuses the terminal or the agent message box so you can type immediately', keywords: ['workspace', 'switch', 'focus', 'terminal', 'composer', 'message', 'agent', 'auto-select', 'input', 'pane', 'project'] },
-  { id: 'general.new-agent-view', section: 'general', group: 'Workspaces', label: 'New agents open in', description: 'The view a new agent opens in: Terminal, Chat (beta), Thread, Chatter, or Split view with the two sides you choose. Agents you already set a view for keep it.', keywords: ['new', 'agent', 'default', 'view', 'open', 'terminal', 'chat', 'thread', 'chatter', 'split', 'split view', 'left', 'right', 'side', 'layout', 'workspace'] },
+  { id: 'general.new-agent-view', section: 'general', group: 'Workspaces', label: 'New agents open in', description: 'The view a new agent opens in: Terminal, Thread, Chatter, or Split view with the two sides you choose. Agents you already set a view for keep it.', keywords: ['new', 'agent', 'default', 'view', 'open', 'terminal', 'thread', 'chatter', 'split', 'split view', 'left', 'right', 'side', 'layout', 'workspace'] },
   // Graduated out of Experimental in 0.46.3 (Rosson 2026-10-21). Desktop
   // only: the hosted web client is single-server (MS56).
   ...(webFeatures.multiHost
@@ -702,13 +702,14 @@ function WorkspaceSwitchFocusRow(): React.JSX.Element {
 
 // ── New agents open in ─────────────────────────────────────────────────
 // The view a conversation opens in when this client has no remembered view
-// for it (Terminal / Chat / Thread / Chatter / Split view — the same choices
-// as the view button on an agent). Conversations with a remembered view keep
-// it. Thin-client only (`k2.newAgentView` in localStorage), like the
-// auto-select row above and the per-conversation view memory.
+// for it (Terminal / Thread / Chatter / Split view — the same choices as the
+// view button on an agent). Conversations with a remembered view keep it.
+// Thin-client only (`k2.newAgentView` in localStorage), like the auto-select
+// row above and the per-conversation view memory. No Chat choice: the Chat
+// view is retired from the UI in 0.46.4 (Threads instead); a saved Chat pick
+// reads back as Terminal (`normalizeNewAgentView`).
 const NEW_AGENT_VIEW_OPTIONS: { value: SessionViewTab; label: string }[] = [
   { value: 'terminal', label: 'Terminal' },
-  { value: 'chat', label: 'Chat (beta)' },
   { value: 'thread', label: 'Thread' },
   { value: 'chatter', label: 'Chatter' },
   { value: 'split', label: 'Split view' },
@@ -716,7 +717,6 @@ const NEW_AGENT_VIEW_OPTIONS: { value: SessionViewTab; label: string }[] = [
 
 const SPLIT_SIDE_OPTIONS: { value: SplitPaneView; label: string }[] = [
   { value: 'terminal', label: 'Terminal' },
-  { value: 'chat', label: 'Chat (beta)' },
   { value: 'thread', label: 'Thread' },
   { value: 'chatter', label: 'Chatter' },
 ]
@@ -735,8 +735,7 @@ function NewAgentViewRow(): React.JSX.Element {
           </span>
           <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
             The view an agent opens in the first time you see it here. Agents
-            you have already set a view for keep it. Chat needs a harness with
-            a chat view; others open in Terminal.
+            you have already set a view for keep it.
           </p>
         </div>
         <SettingDropdown

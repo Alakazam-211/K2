@@ -2,8 +2,14 @@
 import { describe, expect, it, beforeEach } from 'vitest'
 import {
   SESSION_VIEW_TAB_DEFAULT,
+  normalizeNewAgentView,
   overlayViewer,
+  parseSessionSplitSides,
   parseSessionViewTab,
+  resolveSessionView,
+  retireChatSides,
+  retireChatTab,
+  savedViewNamesChat,
   readSessionSplitSides,
   readSessionViewTab,
   sessionViewSplitStorageKey,
@@ -24,7 +30,8 @@ describe('session view tab (C3/C8)', () => {
     expect(parseSessionViewTab('thread')).toBe('thread')
     expect(parseSessionViewTab('chatter')).toBe('chatter')
     expect(parseSessionViewTab('split')).toBe('split')
-    expect(parseSessionViewTab('chat')).toBe('chat')
+    // Chat view retired from the UI (0.46.4): a saved `chat` opens as the terminal.
+    expect(parseSessionViewTab('chat')).toBe('terminal')
   })
 
   it('keys memory per host + conversation (this window)', () => {
@@ -45,7 +52,6 @@ describe('session view tab (C3/C8)', () => {
     localStorage.setItem(tabKey, 'split')
     expect(readSessionViewTab(tabKey)).toBe('split')
     expect(readSessionSplitSides(splitKey)).toEqual({ left: 'terminal', right: 'thread' })
-    expect(parseSessionViewTab('chat')).toBe('chat')
   })
 
   it('remembers each split side without resetting the other, including the same view twice', () => {
@@ -57,6 +63,103 @@ describe('session view tab (C3/C8)', () => {
   })
 })
 
+describe('saved Chat view migrates on read (Chat view retired from the UI in 0.46.4)', () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
+  it('a saved chat pane opens as the terminal', () => {
+    const tabKey = sessionViewTabStorageKey('local', 'conv-chat')
+    const splitKey = sessionViewSplitStorageKey('local', 'conv-chat')
+    localStorage.setItem(tabKey, 'chat')
+    expect(readSessionViewTab(tabKey)).toBe('terminal')
+    const resolved = resolveSessionView(tabKey, splitKey)
+    expect(resolved).toEqual({
+      tab: 'terminal',
+      sides: { left: 'terminal', right: 'thread' },
+      fresh: false,
+      migrated: true,
+    })
+    const viewer = overlayViewer(resolved.tab, resolved.sides)
+    expect(viewer.chat).toBe(false)
+    expect(viewer.hidePty).toBe(false)
+  })
+
+  it('a saved Chat split side becomes the terminal, or the Thread beside a terminal', () => {
+    expect(parseSessionSplitSides(JSON.stringify({ left: 'chat', right: 'thread' }))).toEqual({
+      left: 'terminal',
+      right: 'thread',
+    })
+    expect(parseSessionSplitSides(JSON.stringify({ left: 'chat', right: 'terminal' }))).toEqual({
+      left: 'thread',
+      right: 'terminal',
+    })
+    expect(parseSessionSplitSides(JSON.stringify({ left: 'chatter', right: 'chat' }))).toEqual({
+      left: 'chatter',
+      right: 'terminal',
+    })
+    expect(parseSessionSplitSides(JSON.stringify({ left: 'terminal', right: 'chat' }))).toEqual({
+      left: 'terminal',
+      right: 'thread',
+    })
+    expect(parseSessionSplitSides(JSON.stringify({ left: 'chat', right: 'chat' }))).toEqual({
+      left: 'terminal',
+      right: 'thread',
+    })
+
+    const tabKey = sessionViewTabStorageKey('local', 'conv-split-chat')
+    const splitKey = sessionViewSplitStorageKey('local', 'conv-split-chat')
+    localStorage.setItem(tabKey, 'split')
+    localStorage.setItem(splitKey, JSON.stringify({ left: 'chat', right: 'chatter' }))
+    const resolved = resolveSessionView(tabKey, splitKey)
+    expect(resolved.tab).toBe('split')
+    expect(resolved.sides).toEqual({ left: 'terminal', right: 'chatter' })
+    expect(resolved.migrated).toBe(true)
+    const viewer = overlayViewer(resolved.tab, resolved.sides)
+    expect(viewer).toEqual({ thread: false, chatter: true, chat: false, hidePty: false })
+  })
+
+  it('a view with no Chat in it is not flagged for a write-back', () => {
+    const tabKey = sessionViewTabStorageKey('local', 'conv-plain')
+    const splitKey = sessionViewSplitStorageKey('local', 'conv-plain')
+    localStorage.setItem(tabKey, 'split')
+    localStorage.setItem(splitKey, JSON.stringify({ left: 'chatter', right: 'thread' }))
+    expect(resolveSessionView(tabKey, splitKey).migrated).toBe(false)
+    expect(savedViewNamesChat('thread', null)).toBe(false)
+    expect(savedViewNamesChat('terminal', 'not json')).toBe(false)
+    expect(savedViewNamesChat('chat', null)).toBe(true)
+    expect(savedViewNamesChat('split', '{"right":"chat"}')).toBe(true)
+  })
+
+  it('a saved "New agents open in" Chat pick reads back as Terminal, Chat sides too', () => {
+    expect(normalizeNewAgentView({ view: 'chat', left: 'terminal', right: 'thread' })).toEqual({
+      view: 'terminal',
+      split: { left: 'terminal', right: 'thread' },
+    })
+    expect(normalizeNewAgentView({ view: 'split', left: 'chat', right: 'thread' })).toEqual({
+      view: 'split',
+      split: { left: 'terminal', right: 'thread' },
+    })
+    expect(normalizeNewAgentView({ view: 'split', left: 'thread', right: 'chat' })).toEqual({
+      view: 'split',
+      split: { left: 'thread', right: 'terminal' },
+    })
+  })
+
+  it('retireChatTab and retireChatSides leave every other view alone', () => {
+    for (const tab of ['terminal', 'thread', 'chatter', 'split'] as const) {
+      expect(retireChatTab(tab)).toBe(tab)
+    }
+    expect(retireChatTab('chat')).toBe('terminal')
+    const sides = { left: 'chatter', right: 'chatter' } as const
+    expect(retireChatSides(sides)).toBe(sides)
+  })
+})
+
+// `overlayViewer` is a pure function of the view it is handed. Its `chat`
+// flag is kept (with the retained Chat view code) until 0.46.5; since 0.46.4
+// no live view state can hand it `chat`, so the two `chat` cases below are
+// the only callers that do.
 describe('overlayViewer', () => {
   it('terminal mounts neither overlay and keeps the PTY visible', () => {
     expect(overlayViewer('terminal')).toEqual({

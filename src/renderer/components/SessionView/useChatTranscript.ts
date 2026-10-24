@@ -1,3 +1,7 @@
+// RETIRED Chat view (0.46.4): reachable only from tests, so the renderer no
+// longer opens the daemon's chat-overlay transcript socket. The daemon route
+// stays until 0.46.5. 0.46.5: delete this file. See wiki
+// `Plan - Retirement ledger`.
 import { useEffect, useState } from 'react'
 import { daemonWsBase, getDaemonWs } from '@/kessel/daemon-ws'
 import {

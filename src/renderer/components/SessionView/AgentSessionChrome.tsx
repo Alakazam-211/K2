@@ -78,6 +78,11 @@ export function AgentSessionChrome({
     setSplitLeft,
     setSplitRight,
   } = useSessionViewTab(sessionKey, room.scope)
+  // `chatProvider` also picks the Token control's provider below; that use
+  // stays. The effect after it is the Chat view's no-chat-face fallback:
+  // since 0.46.4 the view state can never hold `chat` (`retireChatTab`), so
+  // it never fires. 0.46.5: delete the effect and `harnessKnown` with the
+  // Chat view code.
   const chatProvider = chatHarnessName({ command, commandHint, provider })
   const harnessKnown = harnessFieldsKnown({ command, commandHint, provider })
   useEffect(() => {
@@ -162,7 +167,6 @@ export function AgentSessionChrome({
           onViewTabChange={setViewTab}
           onSplitLeft={setSplitLeft}
           onSplitRight={setSplitRight}
-          chatEligible={Boolean(chatProvider)}
           threadConversationId={conversationId}
           threadScope={room.scope}
           onRefresh={() => void handleRefresh()}
@@ -208,7 +212,6 @@ export function SidecarSessionHeader({
   onViewTabChange,
   onSplitLeft,
   onSplitRight,
-  chatEligible = false,
   onRefresh,
   refreshing,
   tokenPicker,
@@ -222,7 +225,6 @@ export function SidecarSessionHeader({
   onViewTabChange: (tab: SessionViewTab) => void
   onSplitLeft: (view: SplitPaneView) => void
   onSplitRight: (view: SplitPaneView) => void
-  chatEligible?: boolean
   onRefresh: () => void
   refreshing: boolean
   /** The chat's Token control, left of refresh (agent chat tabs). */
@@ -241,7 +243,6 @@ export function SidecarSessionHeader({
           value={viewTab}
           splitLeft={splitLeft}
           splitRight={splitRight}
-          chatEligible={chatEligible}
           onChange={onViewTabChange}
           onSplitLeft={onSplitLeft}
           onSplitRight={onSplitRight}

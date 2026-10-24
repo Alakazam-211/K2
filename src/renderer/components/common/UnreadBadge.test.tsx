@@ -181,7 +181,6 @@ describe('Thread view menu', () => {
         value="terminal"
         splitLeft="terminal"
         splitRight="thread"
-        chatEligible={false}
         onChange={() => {}}
         onSplitLeft={() => {}}
         onSplitRight={() => {}}
@@ -267,7 +266,6 @@ describe('Thread view menu', () => {
         value="terminal"
         splitLeft="terminal"
         splitRight="thread"
-        chatEligible={false}
         onChange={() => {}}
         onSplitLeft={() => {}}
         onSplitRight={() => {}}

@@ -61,12 +61,21 @@ describe('New agents open in', () => {
     )
   })
 
-  it('offers the five views and saves the choice', async () => {
+  it('the search text does not offer Chat as a view (Chat view retired 0.46.4)', () => {
+    const entry = GENERAL_MANIFEST.find((e) => e.id === 'general.new-agent-view')
+    if (!entry) throw new Error('general.new-agent-view is missing from GENERAL_MANIFEST')
+    expect(entry.description).not.toMatch(/\bchat\b/i)
+    expect(entry.keywords).not.toContain('chat')
+    render(<WorkspaceBehaviorRows />)
+    expect(row().textContent).not.toMatch(/\bchat\b/i)
+  })
+
+  it('offers the four views (no Chat: retired 0.46.4) and saves the choice', async () => {
     render(<WorkspaceBehaviorRows />)
     fireEvent.click(within(row()).getByRole('button', { name: 'New agents open in' }))
     const menu = screen.getByTestId('setting-dropdown-menu')
     const labels = within(menu).getAllByRole('button').map((b) => b.textContent?.trim())
-    expect(labels).toEqual(['Terminal', 'Chat (beta)', 'Thread', 'Chatter', 'Split view'])
+    expect(labels).toEqual(['Terminal', 'Thread', 'Chatter', 'Split view'])
     await act(async () => {
       fireEvent.click(within(menu).getByRole('button', { name: 'Thread' }))
     })
@@ -93,7 +102,7 @@ describe('New agents open in', () => {
     fireEvent.click(within(split).getByRole('button', { name: 'Split view left side' }))
     const menu = screen.getByTestId('setting-dropdown-menu')
     const labels = within(menu).getAllByRole('button').map((b) => b.textContent?.trim())
-    expect(labels).toEqual(['Terminal', 'Chat (beta)', 'Thread', 'Chatter'])
+    expect(labels).toEqual(['Terminal', 'Thread', 'Chatter'])
     const thread = within(menu).getByRole('button', { name: 'Thread' }) as HTMLButtonElement
     expect(thread.disabled).toBe(true)
     await act(async () => {

@@ -1,3 +1,5 @@
+// RETIRED Chat view (0.46.4): reachable only from tests. 0.46.5: delete.
+// See ChatOverlayColumn.tsx and wiki `Plan - Retirement ledger`.
 import { useLayoutEffect, useRef, type JSX } from 'react'
 import { ChatMessage } from '@/components/common/ChatMessage'
 import { formatRelativeTime } from '@/lib/format-relative-time'

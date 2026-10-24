@@ -7,6 +7,8 @@ import {
   type SessionViewTab,
   type SplitPaneView,
   resolveSessionView,
+  retireChatSides,
+  retireChatTab,
   sessionViewSplitStorageKey,
   sessionViewTabStorageKey,
   writeSessionSplitSides,
@@ -60,15 +62,21 @@ export function useSessionViewTab(
     setViewTabState(resolved.tab)
     setSides(resolved.sides)
     // Remember the first view so a later change to the setting does not
-    // move a conversation the user has already seen.
-    if (resolved.fresh && storageKey && splitKey) {
+    // move a conversation the user has already seen. A saved Chat view
+    // (retired from the UI in 0.46.4) was read as the terminal; write that
+    // back so the old value is gone. 0.46.5: drop `migrated`.
+    if ((resolved.fresh || resolved.migrated) && storageKey && splitKey) {
       writeSessionViewTab(storageKey, resolved.tab)
       writeSessionSplitSides(splitKey, resolved.sides)
     }
   }, [storageKey, splitKey])
 
+  // The setters never store the retired Chat view (0.46.4): a `chat` asked
+  // for in code becomes the terminal (or the Thread for a Split side). No
+  // UI asks for it any more. 0.46.5: drop the `retireChat*` calls.
   const setViewTab = useCallback(
-    (next: SessionViewTab) => {
+    (asked: SessionViewTab) => {
+      const next = retireChatTab(asked)
       setViewTabState(next)
       if (storageKey) writeSessionViewTab(storageKey, next)
     },
@@ -78,7 +86,7 @@ export function useSessionViewTab(
   const setSplitLeft = useCallback(
     (left: SplitPaneView) => {
       setSides((prev) => {
-        const next = { left, right: prev.right }
+        const next = retireChatSides({ left, right: prev.right })
         if (splitKey) writeSessionSplitSides(splitKey, next)
         return next
       })
@@ -89,7 +97,7 @@ export function useSessionViewTab(
   const setSplitRight = useCallback(
     (right: SplitPaneView) => {
       setSides((prev) => {
-        const next = { left: prev.left, right }
+        const next = retireChatSides({ left: prev.left, right })
         if (splitKey) writeSessionSplitSides(splitKey, next)
         return next
       })

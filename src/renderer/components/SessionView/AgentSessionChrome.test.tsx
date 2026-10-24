@@ -57,7 +57,7 @@ const room = testRoom({
   tabs: { room: { dropTabAfterFailedSidecarRefresh } },
 })
 import { useSessionViewChrome } from './sessionViewChrome'
-import { overlayViewer } from './sessionViewTab'
+import { overlayViewer, sessionViewSplitStorageKey, sessionViewTabStorageKey } from './sessionViewTab'
 
 function viewButtonLabel(): string {
   return (screen.getByTestId('session-view-button').textContent ?? '').replace(/\s+/g, ' ').trim()
@@ -101,6 +101,8 @@ function ProbeTerminal() {
     <div data-testid="terminal-pane">
       {chrome && viewer.thread ? <div data-testid="thread-overlay-pane" /> : null}
       {chrome && viewer.chatter ? <div data-testid="chatter-overlay-pane" /> : null}
+      {chrome && viewer.chat ? <div data-testid="chat-overlay-pane" /> : null}
+      {viewer.hidePty ? null : <div data-testid="pty-visible" />}
       {chrome?.viewTab === 'split' ? (
         <>
           <div data-testid="message-compose" data-compose-bar="" data-compose-destination="pty">
@@ -226,29 +228,58 @@ describe('sidecar chrome (C4/C6/C10)', () => {
     expect(viewButtonLabel()).not.toBe('View')
   })
 
-  it('disables Chat for a shell command and enables it for claude', async () => {
-    const shell = renderChrome('/bin/bash')
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('session-view-button'))
-    })
-    expect(menuRow('Chat').disabled).toBe(true)
-    await act(async () => {
-      fireEvent.click(menuRow('Chat'))
-    })
-    expect(screen.getByTestId('session-view-menu').getAttribute('data-view')).toBe('terminal')
-    shell.unmount()
+  it('has no Chat row for a shell or for claude (Chat view retired 0.46.4)', async () => {
+    for (const command of ['/bin/bash', '/opt/homebrew/bin/claude']) {
+      const view = renderChrome(command)
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('session-view-button'))
+      })
+      // The view rows, then this chat's Mute Thread item (it has a conversation).
+      expect(useContextMenuStore.getState().items.map((item) => item.id)).toEqual([
+        'terminal',
+        'thread',
+        'chatter',
+        'split',
+        'separator-mute',
+        'mute-thread',
+      ])
+      expect(() => menuRow('Chat')).toThrow('no menu row Chat')
+      await act(async () => {
+        useContextMenuStore.getState().close()
+      })
+      view.unmount()
+    }
+  })
 
+  it('a pane saved in chat mode opens as its terminal, not blank and not Chat', async () => {
+    const tabKey = sessionViewTabStorageKey('local', 'conv-r')
+    const splitKey = sessionViewSplitStorageKey('local', 'conv-r')
+    localStorage.setItem(tabKey, 'chat')
     renderChrome('/opt/homebrew/bin/claude')
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('session-view-button'))
-    })
-    expect(menuRow('Chat').disabled).toBe(false)
-    await act(async () => {
-      fireEvent.click(menuRow('Chat'))
-    })
-    expect(screen.getByTestId('session-view-menu').getAttribute('data-view')).toBe('chat')
-    expect(viewButtonLabel()).toBe('Chat')
-    expect(viewButtonLabel()).not.toBe('View')
+    expect(screen.getByTestId('session-view-menu').getAttribute('data-view')).toBe('terminal')
+    expect(viewButtonLabel()).toBe('Terminal')
+    expect(screen.getByTestId('terminal-pane')).not.toBeNull()
+    expect(screen.getByTestId('pty-visible')).not.toBeNull()
+    expect(screen.queryByTestId('chat-overlay-pane')).toBeNull()
+    expect(screen.queryByTestId('thread-overlay-pane')).toBeNull()
+    expect(screen.getByTestId('message-compose')).not.toBeNull()
+    // The saved view is rewritten, so the old value is gone.
+    await waitFor(() => expect(localStorage.getItem(tabKey)).toBe('terminal'))
+    expect(localStorage.getItem(splitKey)).not.toContain('"chat"')
+  })
+
+  it('a split saved with a Chat side opens with the terminal and Thread', () => {
+    localStorage.setItem(sessionViewTabStorageKey('local', 'conv-r'), 'split')
+    localStorage.setItem(
+      sessionViewSplitStorageKey('local', 'conv-r'),
+      JSON.stringify({ left: 'chat', right: 'thread' }),
+    )
+    renderChrome('/opt/homebrew/bin/claude')
+    expect(screen.getByTestId('session-view-menu').getAttribute('data-split-left')).toBe('terminal')
+    expect(screen.getByTestId('session-view-menu').getAttribute('data-split-right')).toBe('thread')
+    expect(screen.getByTestId('pty-visible')).not.toBeNull()
+    expect(screen.getByTestId('thread-overlay-pane')).not.toBeNull()
+    expect(screen.queryByTestId('chat-overlay-pane')).toBeNull()
   })
 })
 

@@ -4,7 +4,6 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { useState } from 'react'
 import ContextMenu from '@/components/ContextMenu/ContextMenu'
 import { useContextMenuStore } from '@/stores/context-menu'
-import { chatHarnessName } from './chatHarness'
 import { SessionViewMenu } from './SessionViewMenu'
 import type { SessionViewTab, SplitPaneView } from './sessionViewTab'
 
@@ -22,15 +21,20 @@ function menuRow(label: string): HTMLButtonElement {
   return row as HTMLButtonElement
 }
 
+/** Resolve the open menu with `id`, as if a row with that id were picked,
+ *  even when no row has it (the menu store would refuse an unknown id). */
+function answerMenu(id: string): void {
+  const { onSelect } = useContextMenuStore.getState()
+  if (!onSelect) throw new Error('no open menu to answer')
+  onSelect(id)
+  useContextMenuStore.setState({ isOpen: false, items: [], onSelect: null })
+}
+
 function Harness({
-  command,
-  commandHint,
   initial = 'terminal' as SessionViewTab,
   initialLeft = 'terminal' as SplitPaneView,
   initialRight = 'thread' as SplitPaneView,
 }: {
-  command?: string
-  commandHint?: string
   initial?: SessionViewTab
   initialLeft?: SplitPaneView
   initialRight?: SplitPaneView
@@ -44,7 +48,6 @@ function Harness({
         value={tab}
         splitLeft={left}
         splitRight={right}
-        chatEligible={Boolean(chatHarnessName({ command, commandHint }))}
         onChange={setTab}
         onSplitLeft={setLeft}
         onSplitRight={setRight}
@@ -62,7 +65,7 @@ describe('View menu', () => {
   })
 
   it('opens under the View button and does not change the view until a row is chosen', async () => {
-    render(<Harness command="bash" />)
+    render(<Harness />)
     const button = screen.getByTestId('session-view-button')
     button.getBoundingClientRect = () => ({
       x: 40,
@@ -86,14 +89,14 @@ describe('View menu', () => {
     expect(useContextMenuStore.getState().isOpen).toBe(true)
     expect(useContextMenuStore.getState().x).toBe(40)
     expect(useContextMenuStore.getState().y).toBe(36)
+    // No Chat row: the Chat view is retired from the UI (0.46.4).
     expect(useContextMenuStore.getState().items.map((item) => item.label)).toEqual([
       'Terminal',
-      'Chat',
       'Thread',
       'Chatter',
       'Split view',
     ])
-    expect(useContextMenuStore.getState().items[1]?.badge).toBe('Beta')
+    expect(useContextMenuStore.getState().items.some((item) => item.badge === 'Beta')).toBe(false)
 
     await act(async () => {
       fireEvent.keyDown(window, { key: 'Escape' })
@@ -124,12 +127,11 @@ describe('View menu', () => {
   })
 
   it('names the button after the active mode instead of View', async () => {
-    render(<Harness command="claude" />)
+    render(<Harness />)
     expect(viewButtonLabel()).toBe('Terminal')
     expect(viewButtonLabel()).not.toBe('View')
 
     const picks: Array<[string, string]> = [
-      ['Chat', 'Chat'],
       ['Thread', 'Thread'],
       ['Chatter', 'Chatter'],
       ['Split view', 'Split view'],
@@ -151,7 +153,6 @@ describe('View menu', () => {
   it('follows value when the mode changes without opening the menu', () => {
     const modes: Array<[SessionViewTab, string]> = [
       ['terminal', 'Terminal'],
-      ['chat', 'Chat'],
       ['thread', 'Thread'],
       ['chatter', 'Chatter'],
       ['split', 'Split view'],
@@ -161,7 +162,6 @@ describe('View menu', () => {
         value="terminal"
         splitLeft="terminal"
         splitRight="thread"
-        chatEligible
         onChange={() => {}}
         onSplitLeft={() => {}}
         onSplitRight={() => {}}
@@ -173,8 +173,7 @@ describe('View menu', () => {
           value={value}
           splitLeft="terminal"
           splitRight="thread"
-          chatEligible
-          onChange={() => {}}
+            onChange={() => {}}
           onSplitLeft={() => {}}
           onSplitRight={() => {}}
         />,
@@ -184,40 +183,23 @@ describe('View menu', () => {
     }
   })
 
-  it('greys Chat for a shell command and enables it for claude, including commandHint', async () => {
-    const shell = render(<Harness command="/bin/zsh" />)
+  it('has no Chat row and ignores a picked chat id (Chat view retired 0.46.4)', async () => {
+    render(<Harness />)
     await act(async () => {
       fireEvent.click(screen.getByTestId('session-view-button'))
     })
-    const shellChat = menuRow('Chat')
-    expect(shellChat.disabled).toBe(true)
+    const ids = useContextMenuStore.getState().items.map((item) => item.id)
+    expect(ids).not.toContain('chat')
+    expect(() => menuRow('Chat')).toThrow('no menu row Chat')
+    // A stray `chat` answer from the menu store (no row offers it) is ignored.
     await act(async () => {
-      fireEvent.click(shellChat)
+      answerMenu('chat')
     })
     expect(screen.getByTestId('current').textContent).toBe('terminal')
-    shell.unmount()
-
-    render(<Harness command="/usr/local/bin/claude" />)
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('session-view-button'))
-    })
-    const claudeChat = menuRow('Chat')
-    expect(claudeChat.disabled).toBe(false)
-    await act(async () => {
-      fireEvent.click(claudeChat)
-    })
-    expect(screen.getByTestId('current').textContent).toBe('chat')
-    cleanup()
-
-    render(<Harness commandHint="claude" />)
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('session-view-button'))
-    })
-    expect(menuRow('Chat').disabled).toBe(false)
   })
 
   it('shows Terminal and Thread choosers only while Split view is selected', async () => {
-    render(<Harness command="bash" />)
+    render(<Harness />)
     expect(screen.queryByTestId('session-view-split-left')).toBeNull()
     expect(screen.queryByTestId('session-view-split-right')).toBeNull()
 
@@ -238,10 +220,8 @@ describe('View menu', () => {
     await act(async () => {
       fireEvent.click(left)
     })
-    expect(menuRow('Chat').disabled).toBe(true)
     expect(useContextMenuStore.getState().items.map((item) => item.label)).toEqual([
       'Terminal',
-      'Chat',
       'Thread',
       'Chatter',
     ])
@@ -261,17 +241,23 @@ describe('View menu', () => {
     expect(screen.getByTestId('session-view-split-right').textContent).toContain('Chatter')
   })
 
-  it('enables Chat in a split chooser for claude', async () => {
-    render(<Harness command="claude" initial="split" />)
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('session-view-split-left'))
-    })
-    const chat = menuRow('Chat')
-    expect(chat.disabled).toBe(false)
-    await act(async () => {
-      fireEvent.click(chat)
-    })
-    expect(screen.getByTestId('session-view-menu').getAttribute('data-split-left')).toBe('chat')
+  it('a split chooser has no Chat row and ignores a picked chat id', async () => {
+    render(<Harness initial="split" />)
+    for (const side of ['session-view-split-left', 'session-view-split-right']) {
+      await act(async () => {
+        fireEvent.click(screen.getByTestId(side))
+      })
+      expect(useContextMenuStore.getState().items.map((item) => item.id)).toEqual([
+        'terminal',
+        'thread',
+        'chatter',
+      ])
+      expect(() => menuRow('Chat')).toThrow('no menu row Chat')
+      await act(async () => {
+        answerMenu('chat')
+      })
+    }
+    expect(screen.getByTestId('session-view-menu').getAttribute('data-split-left')).toBe('terminal')
     expect(screen.getByTestId('session-view-menu').getAttribute('data-split-right')).toBe('thread')
   })
 })

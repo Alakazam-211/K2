@@ -391,6 +391,11 @@ fn surviving_dirs() -> Vec<(String, PathBuf)> {
 /// [`make_session_dir`]); anything else in `keep` is ignored.
 pub fn sweep_at_boot_keeping(keep: &[(String, PathBuf)]) {
     let Some(root) = secrets_root() else { return };
+    sweep_root_keeping(&root, keep);
+}
+
+fn sweep_root_keeping(root: &Path, keep: &[(String, PathBuf)]) {
+    let root = root.to_path_buf();
     let kept: Vec<(String, PathBuf)> = keep
         .iter()
         .filter(|(sid, dir)| {
@@ -432,6 +437,36 @@ pub fn sweep_dead(live: &dyn Fn(&str) -> bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// k2-ptyd P36: boot keeps the secrets dir of a session that survived
+    /// in k2-ptyd (and re-registers it so it goes with the session); every
+    /// other dir goes; a keep entry outside the root, or not named for its
+    /// session, is ignored.
+    #[test]
+    fn boot_sweep_keeps_only_surviving_sessions_dirs() {
+        let root = std::env::temp_dir().join(format!("k2-secrets-keep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let sid = "4f6e9a1c-1111-4222-8333-944455556666";
+        let kept = make_session_dir(&root, sid).unwrap();
+        write_secret_file(&kept, "token", b"x").unwrap();
+        let gone = make_session_dir(&root, "0b4d1f7e-dead-4c66-9d11-3a3e8f6a7c21").unwrap();
+        let foreign = make_session_dir(&root, "other-session").unwrap();
+        let outside = std::env::temp_dir().join(format!("k2-secrets-outside-{}", std::process::id()));
+        std::fs::create_dir_all(&outside).unwrap();
+        sweep_root_keeping(
+            &root,
+            &[(sid.to_string(), kept.clone()), (sid.to_string(), foreign.clone()), (sid.to_string(), outside.clone())],
+        );
+        assert!(kept.join("token").is_file(), "the survivor's dir and file stay");
+        assert!(!gone.exists(), "a dead session's dir goes");
+        assert!(!foreign.exists(), "a dir not named for the kept session goes");
+        assert!(outside.exists(), "nothing outside the root is touched");
+        assert!(DIRS.lock().iter().any(|(s, d)| s == sid && d == &kept), "re-registered for session end");
+        session_ended(sid);
+        assert!(!kept.exists(), "goes when the session ends");
+        std::fs::remove_dir_all(&root).unwrap();
+        std::fs::remove_dir_all(&outside).unwrap();
+    }
 
     /// KV19: every production spawn path that mints a passport also
     /// delivers vault secrets. A new spawn entry point that skips

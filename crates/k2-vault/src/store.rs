@@ -220,6 +220,9 @@ pub enum Use<'a> {
     Env,
     Api,
     System,
+    /// One ssh-agent signature (item 3); the host-key fingerprint of the
+    /// connection's session bind, when the client sent one (audit only).
+    Agent(Option<&'a str>),
 }
 
 impl Use<'_> {
@@ -231,6 +234,7 @@ impl Use<'_> {
             Use::Env => Delivery::Env,
             Use::Api => Delivery::Api,
             Use::System => Delivery::None,
+            Use::Agent(_) => Delivery::Agent,
         }
     }
 
@@ -241,6 +245,7 @@ impl Use<'_> {
             Use::File | Use::Env => "inject",
             Use::Api => "resolve",
             Use::System => "resolve",
+            Use::Agent(_) => "sign",
         }
     }
 }

@@ -38,6 +38,15 @@ url = "2"
 argon2 = "0.5"
 libc = "0.2"
 parking_lot = "0.12"
+# `agent` delivery for ssh keys (prd-vault-gaps-v1 item 3): key parsing and
+# signatures from RustCrypto (Apache-2.0 OR MIT); the ssh-agent protocol
+# subset is written by hand in `ssh_agent.rs`. `rsa` ships with
+# RUSTSEC-2023-0071 (Marvin timing side channel) accepted on purpose (Q7):
+# SHA-2 only, rate-limited, same-uid peers only. `p256` verifies ECDSA
+# host keys in session binds; it is never served.
+ssh-key = { version = "0.6.7", default-features = false, features = ["std", "ed25519", "rsa", "p256", "getrandom"] }
+rsa = { version = "0.9.10", features = ["sha2"] }
+signature = "2"
 
 [features]
 # Test fakes (FakeKeyStore, fake root helper, cheap KDF). Never in release

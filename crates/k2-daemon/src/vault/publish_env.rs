@@ -404,6 +404,11 @@ pub fn granted(service_id: &str, workspace_id: &str, cwd: &Path) -> Granted {
     let who = Requester::PublishedService { id: service_id.to_string(), workspace_id: workspace_id.to_string() };
     let items = vault.spawn_items(&who).unwrap_or_default();
     for it in items {
+        // ssh-agent delivery (item 3) is for sessions and job runs only.
+        if it.delivery == Delivery::Agent {
+            k2_core::log_debug!("[vault] publish {service_id}: {} is agent delivery (sessions only); not delivered", it.name);
+            continue;
+        }
         let use_ = if it.delivery == Delivery::Env { Use::Env } else { Use::File };
         let Ok(r) = vault.resolve(&Selector::Id(it.secret_id.clone()), use_, &who) else { continue };
         if it.delivery == Delivery::Env {

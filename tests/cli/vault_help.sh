@@ -13,7 +13,11 @@
 #     why, `doctor` prints the names it checks, and `set --inject-dst` sends
 #     that dst (query/basic/body; --inject-header still works, both refused);
 #     `set --sign …` sends inject.sign and `k2 vault sign NAME …|none` posts
-#     the signer to policy (PRD vault-gaps item 2).
+#     the signer to policy (PRD vault-gaps item 2);
+#   * item 3 (agent delivery): set/delivery/grant help name agent, the
+#     agent-limit help carries the limits and the honest line, `k2 study
+#     vault` has the agent row and no "ssh-agent" can't-do line, and
+#     `agent-limit` / `public-key` call their routes.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -38,7 +42,7 @@ ok "k2 vault --help: no daemon needed, names --inject-dst and per-verb help"
 
 for verb in status list show set rotate hosts delivery grant revoke disable enable destroy get audit requests presets \
     doctor env-file import service reveal recovery confirm-password kek rekey rollback backup restore recipient carry fetch send sign \
-    systemd-cred placement placements; do
+    systemd-cred placement placements public-key agent-limit; do
     out="$(k2n vault "$verb" --help 2>&1)" || fail "vault $verb --help exited non-zero: $out"
     case "$verb" in
         enable) want="k2 vault disable NAME" ;;
@@ -62,10 +66,29 @@ for needle in "--inject-header <Name>" "--inject-format '<fmt>'" "--inject-dst <
     "basic " "body " "{{secret}}" "api_key, oauth_token, generic   fetch" "password, dsn, url              env" \
     "ssh_key, tls_key                file" "Every kind allows fetch, file and env" "--sign ovh" "--sign hmac-sha256 " \
     "--sign hmac-sha256-ts" "--sign-header <Name>" "--sign-ts-header <Name>" "--sign-template '<t>'" "--sign-value '<v>'" \
-    "ovh-eu|ovh-ca|ovh-us"; do
+    "ovh-eu|ovh-ca|ovh-us" "--delivery fetch|agent|file|env|api" "ssh_key also allows agent" "--kind ssh_key --delivery agent"; do
     printf '%s' "$set_help" | grep -Fq -- "$needle" || fail "set --help lacks '$needle'"
 done
 ok "set --help: inject options, the four dst forms, delivery per kind"
+
+# prd-vault-gaps-v1 item 3: agent delivery.
+printf '%s' "$(k2n vault delivery --help)" | grep -Fq 'agent (ssh keys): $SSH_AUTH_SOCK' || fail "delivery --help lacks agent"
+printf '%s' "$(k2n vault grant --help)" | grep -Fq -- "--as fetch|agent|file|env|api" || fail "grant --help lacks --as agent"
+al_help="$(k2n vault agent-limit --help)"
+for needle in "--burst N" "--per-minute M" "--allow-forwarded" "default 60" "default 240" "rate_limited" \
+    "can still" "sign with it. Signing over a forwarded agent (ssh -A) is refused unless" "told apart."; do
+    printf '%s' "$al_help" | grep -Fq -- "$needle" || fail "agent-limit --help lacks '$needle'"
+done
+printf '%s' "$(k2n vault public-key --help)" | grep -Fq "Never the" || fail "public-key --help"
+set +e
+err="$(env HOME="$WORK" K2_PORT=1 K2_HOOK_TOKEN=offline "$K2_CLI" vault agent-limit X --allow-forwarded --no-forwarded 2>&1)"; rc=$?
+set -e
+[ "$rc" = 2 ] || fail "agent-limit with both forwarding flags: exit $rc ($err)"
+set +e
+err="$(env HOME="$WORK" K2_PORT=1 K2_HOOK_TOKEN=offline "$K2_CLI" vault agent-limit X --burst ten 2>&1)"; rc=$?
+set -e
+[ "$rc" = 2 ] || fail "agent-limit --burst ten: exit $rc ($err)"
+ok "agent delivery: set/delivery/grant/agent-limit/public-key help, bad flags exit 2"
 
 grant_help="$(k2n vault grant --help)"
 printf '%s' "$grant_help" | grep -Fq -- "--env-name X" || fail "grant --help lacks --env-name"
@@ -113,7 +136,8 @@ for section in "START HERE" "KINDS AND DELIVERY" "CLI TOOLS" "SERVICES K2 DOESN'
 done
 for needle in "k2 vault import .env" "k2 vault send NAME --to <agent>" "ssh -i \$K2_SECRETS_DIR/NAME" "-o IdentitiesOnly=yes" \
     "--env-name GH_TOKEN" "hosts.yml" "auth.json" "systemd-creds encrypt" "LoadCredentialEncrypted=" "\$CREDENTIALS_DIRECTORY/" \
-    "send and carry need K2 on both ends" "sign requests (AWS SigV4, Google service-account JWT)" "ssh-agent" \
+    "send and carry need K2 on both ends" "sign requests (AWS SigV4, Google service-account JWT)" "\$SSH_AUTH_SOCK" \
+    "--kind ssh_key --delivery agent" "k2 vault public-key NAME" "ssh -A forwarding is refused" \
     "Some secrets are signers" "--sign ovh --preset ovh-eu" "--json-out" \
     "k2 vault systemd-cred API_KEY --unit" "k2 vault placement add" "Keep the source copy in a K2 vault" "%d/<cred>"; do
     printf '%s' "$study" | grep -Fq -- "$needle" || fail "study vault lacks '$needle'"
@@ -124,6 +148,7 @@ case "$last" in "WHAT THE VAULT CAN'T DO YET"*) ;; *) fail "the can't-do-yet blo
 lines="$(printf '%s\n' "$study" | wc -l | tr -d ' ')"
 [ "$lines" -le 180 ] || fail "study vault is $lines lines (max 180)"
 if printf '%s' "$study" | grep -Fq "plain systemd units"; then fail "study vault still lists plain systemd units as can't-do"; fi
+if printf '%s' "$study" | grep -Fq "ssh-agent: file delivery"; then fail "study vault still lists ssh-agent as can't-do"; fi
 ok "k2 study vault: new sections present, can't-do-yet last, $lines lines"
 
 # ── against a stub daemon ─────────────────────────────────────────────
@@ -149,6 +174,10 @@ class H(http.server.BaseHTTPRequestHandler):
             self.reply(out)
         elif self.path.startswith("/cli/vault/doctor"):
             self.reply({"ok": True, "findings": [], "checkedNames": CHECKED})
+        elif self.path.startswith("/cli/vault/public-key"):
+            with open(LOG, "a") as f:
+                f.write("GET " + self.path + "\n")
+            self.reply({"name": "DEPLOY_KEY", "publicKey": "ssh-ed25519 AAAAk2test DEPLOY_KEY", "fingerprint": "SHA256:k2test"})
         else:
             self.reply({})
     def do_POST(self):
@@ -225,5 +254,29 @@ set -e
 [ "$rc2" = 2 ] && printf '%s' "$err2" | grep -Fq "need --sign" || fail "--sign-header alone: exit $rc2 ($err2)"
 [ "$rc3" = 2 ] || fail "sign none with options: exit $rc3 ($err3)"
 ok "set --sign sends inject.sign; k2 vault sign posts the signer or none; mixed flags refused"
+
+# Item 3: agent-limit posts the settings; public-key prints the .pub line.
+: >"$WORK/posts.log"
+k2s vault agent-limit DEPLOY_KEY --burst 10 --per-minute 60 --no-forwarded >/dev/null || fail "agent-limit"
+k2s vault agent-limit DEPLOY_KEY --allow-forwarded >/dev/null || fail "agent-limit --allow-forwarded"
+printf 'k2test-value' | k2s vault set DEPLOY_KEY --kind ssh_key --delivery agent >/dev/null || fail "set --delivery agent"
+out="$(k2s vault public-key DEPLOY_KEY 2>/dev/null)" || fail "public-key"
+[ "$out" = "ssh-ed25519 AAAAk2test DEPLOY_KEY" ] || fail "public-key printed: $out"
+python3 - "$WORK/posts.log" <<'PY2' || fail "agent bodies: $(cat "$WORK/posts.log")"
+import json, sys
+lines = open(sys.argv[1]).read().splitlines()
+posts = [(p, json.loads(b)) for p, b in (l.split(" ", 1) for l in lines if not l.startswith("GET "))]
+ap = [b for p, b in posts if p == "/cli/vault/agent-policy"]
+assert ap[0] == {"name": "DEPLOY_KEY", "burst": 10, "perMinute": 60, "allowForwarded": False}, ap
+assert ap[1] == {"name": "DEPLOY_KEY", "allowForwarded": True}, ap
+st = [b for p, b in posts if p == "/cli/vault/set"]
+assert st[0]["kind"] == "ssh_key" and st[0]["delivery"] == "agent", st
+import urllib.parse
+gets = [urllib.parse.urlsplit(l[4:]) for l in lines if l.startswith("GET ")]
+assert [g.path for g in gets] == ["/cli/vault/public-key"], gets
+q = urllib.parse.parse_qs(gets[0].query)
+assert q.get("name") == ["DEPLOY_KEY"], q
+PY2
+ok "agent-limit posts burst/perMinute/allowForwarded; set --delivery agent; public-key prints the line"
 
 echo "PASS: vault help ($pass checks)"

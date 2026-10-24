@@ -679,6 +679,10 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/vault/list",
         "/cli/vault/show",
         "/cli/vault/presets",
+        // Item 3: an ssh key's public half, and its agent settings (the
+        // handler applies the loosening rule).
+        "/cli/vault/public-key",
+        "/cli/vault/agent-policy",
         "/cli/vault/set",
         "/cli/vault/rotate",
         "/cli/vault/policy",

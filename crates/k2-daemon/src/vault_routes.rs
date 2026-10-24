@@ -59,9 +59,13 @@ pub const KEK_ROTATE: &str = "/cli/vault/kek/rotate";
 pub const REKEY: &str = "/cli/vault/rekey";
 pub const ROLLBACK: &str = "/cli/vault/rollback";
 pub const RESTORE: &str = "/cli/vault/restore";
+/// prd-vault-gaps-v1 item 3: an ssh key's `.pub` line, and its agent
+/// settings (rate limits, forwarded signing).
+pub const PUBLIC_KEY: &str = "/cli/vault/public-key";
+pub const AGENT_POLICY: &str = "/cli/vault/agent-policy";
 
 /// Readable routes (passports allowed where marked in `is_agent_verb`).
-pub const READ_ROUTES: &[&str] = &[STATUS, LIST, SHOW, REQUESTS, DOCTOR, AUDIT, PRESETS];
+pub const READ_ROUTES: &[&str] = &[STATUS, LIST, SHOW, REQUESTS, DOCTOR, AUDIT, PRESETS, PUBLIC_KEY];
 
 /// POST-only routes.
 pub const POST_ROUTES: &[&str] = &[
@@ -85,6 +89,7 @@ pub const POST_ROUTES: &[&str] = &[
     REKEY,
     ROLLBACK,
     RESTORE,
+    AGENT_POLICY,
 ];
 
 /// Routes no passport (agent or K2 shell tab) may reach (KV14 DENY).
@@ -447,6 +452,8 @@ pub fn handle_on(
         DOCTOR => doctor(vault, &c),
         AUDIT => audit(vault, &c, params),
         PRESETS => Ok(json!({ "presets": inject::PRESETS })),
+        PUBLIC_KEY => public_key(vault, &c, params),
+        AGENT_POLICY => agent_policy(vault, &c, body),
         SET => set(vault, &c, body),
         ROTATE => rotate(vault, &c, body),
         POLICY => policy(vault, &c, body),
@@ -527,7 +534,49 @@ fn show(vault: &LocalVault, c: &VaultCaller, params: &HashMap<String, String>) -
     // Where the value lives outside the vault (systemd credentials K2
     // wrote, places noted by hand): names and places only.
     let placements = crate::vault_systemd_routes::placements_for(vault, &m);
-    Ok(json!({ "secret": meta_json(&m), "grants": grants, "audit": audit, "placements": placements }))
+    let mut out = json!({ "secret": meta_json(&m), "grants": grants, "audit": audit, "placements": placements });
+    // Item 3: an ssh key's agent settings (the defaults when none are set).
+    if m.kind == Kind::SshKey {
+        out["agentPolicy"] = json!(vault.agent_policy(&m.id)?);
+    }
+    Ok(out)
+}
+
+/// `GET /cli/vault/public-key?name=` (item 3): the `.pub` line of an ssh
+/// key the caller can see. Never the private key.
+fn public_key(vault: &LocalVault, c: &VaultCaller, params: &HashMap<String, String>) -> Result<Value, VaultError> {
+    let sel = selector(c, &sel_from_params(params))?;
+    let (m, line, fp) = vault.agent_public_key(&sel, &c.actor)?;
+    Ok(json!({ "name": m.name, "publicKey": line, "fingerprint": fp, "secret": meta_json(&m) }))
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentPolicyBody {
+    #[serde(flatten)]
+    sel: Sel,
+    burst: Option<u32>,
+    per_minute: Option<u32>,
+    allow_forwarded: Option<bool>,
+}
+
+/// `POST /cli/vault/agent-policy` (item 3, `k2 vault agent-limit`): a
+/// secret's burst and per-minute signature limits and forwarded signing.
+/// Raising a limit or allowing forwarded signing is loosening (an agent
+/// can't loosen a secret a person gave it).
+fn agent_policy(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {
+    let b: AgentPolicyBody = parse(body)?;
+    let sel = selector(c, &b.sel)?;
+    if b.burst.is_none() && b.per_minute.is_none() && b.allow_forwarded.is_none() {
+        let m = vault.meta(&sel, &c.actor)?;
+        if m.kind != Kind::SshKey {
+            return Err(err("agent_policy_not_for_kind", 400, "agent limits are for ssh keys"));
+        }
+        return Ok(json!({ "ok": true, "secret": meta_json(&m), "agentPolicy": vault.agent_policy(&m.id)? }));
+    }
+    let patch = k2_vault::vault::AgentPolicyPatch { burst: b.burst, per_minute: b.per_minute, allow_forwarded: b.allow_forwarded };
+    let (m, p) = vault.set_agent_policy(&sel, patch, &c.actor)?;
+    Ok(json!({ "ok": true, "secret": meta_json(&m), "agentPolicy": p }))
 }
 
 fn requests(vault: &LocalVault, c: &VaultCaller) -> Result<Value, VaultError> {
@@ -1103,6 +1152,7 @@ pub fn use_hint(m: &SecretMeta) -> String {
             format!("k2 vault fetch --secret {} https://{}/…", m.name, m.hosts[0].split("://").nth(1).and_then(|h| h.rsplit_once(':')).map(|h| h.0).unwrap_or(""))
         }
         Delivery::Fetch | Delivery::Proxy => "add a site first: ask the owner, or k2 vault hosts".into(),
+        Delivery::Agent => format!("$SSH_AUTH_SOCK in new sessions: ssh and git sign with {}; nobody sees the key", m.name),
         Delivery::File => format!("$K2_SECRETS_DIR/{} (new sessions; read the file)", m.name),
         Delivery::Env => format!("${} in new sessions", m.name),
         Delivery::Api => format!("k2 vault get {}", m.name),

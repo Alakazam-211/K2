@@ -274,7 +274,9 @@ impl HandoffItem {
 
     /// The landed copy's delivery and ceiling (H12): `fetch` with sites,
     /// else `file`; the ceiling is the lower of the sender's and `env`,
-    /// never `api`; and the delivery never exceeds the ceiling.
+    /// never `api`; and the delivery never exceeds the ceiling. An ssh key
+    /// the sender served only through the agent (item 3) lands as `agent`,
+    /// so a handoff never makes it readable.
     pub fn landing_delivery(&self) -> (Delivery, Delivery) {
         let sender_ceiling = Delivery::parse(&self.ceiling).unwrap_or(Delivery::Fetch);
         let mut ceiling = if sender_ceiling.level() > Delivery::Env.level() { Delivery::Env } else { sender_ceiling };
@@ -282,6 +284,9 @@ impl HandoffItem {
             ceiling = Delivery::Fetch;
         }
         let mut delivery = if self.hosts.is_empty() { Delivery::File } else { Delivery::Fetch };
+        if self.kind == Kind::SshKey.as_str() && Delivery::parse(&self.delivery).ok() == Some(Delivery::Agent) {
+            delivery = Delivery::Agent;
+        }
         if delivery.level() > ceiling.level() {
             delivery = ceiling;
         }

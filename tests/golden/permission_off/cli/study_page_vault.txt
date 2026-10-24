@@ -14,7 +14,7 @@ START HERE
   an API key for a web API    k2 vault set NAME --preset stripe (or --for
                               <host> --inject-dst …), then k2 vault fetch
   a CLI login (gh, vercel)    env delivery: CLI TOOLS below
-  an SSH key                  --kind ssh_key: file delivery, see KINDS
+  an SSH key                  --kind ssh_key --delivery agent: see KINDS
   a key a server service uses k2 publish secret add; a root systemd unit:
                               SERVICES K2 DOESN'T RUN below
   handing a secret to an agent  k2 vault send NAME --to <agent>
@@ -41,6 +41,8 @@ HOW YOU GET A SECRET (delivery)
           You CAN read it — so can anything you run. Opt-in.
   env     $NAME in new sessions. You can read it. Needs a respawn.
   api     k2 vault get NAME prints it into your transcript. Rare.
+  agent   ssh keys: $SSH_AUTH_SOCK in new sessions; ssh and git sign with
+          it, nobody sees the key. k2 vault public-key NAME: the .pub line.
   Default for keys is fetch. "Agent can see this" in k2 vault list means
   file/env/api.
 
@@ -50,6 +52,7 @@ KINDS AND DELIVERY (--kind on set; the default delivery follows it)
   dsn url                      env    psql "$DATABASE_URL", curl "$HOOK_URL"
   ssh_key                      file   ssh -i $K2_SECRETS_DIR/NAME
                                           -o IdentitiesOnly=yes host
+                               agent  plain ssh and git (--delivery agent)
   tls_key                      file   point the server at
                                           $K2_SECRETS_DIR/NAME
   Every kind allows fetch, file and env (up to its ceiling, default env);
@@ -93,12 +96,11 @@ PEOPLE ONLY
   unit's credential (k2 vault systemd-cred) are theirs too.
 
 MOVING TO ANOTHER BOX
-  With "Allow managing server-wide secrets": on the new box `k2 vault
-  recipient`; on the old box `k2 vault carry export --recipient … --target …
-  --workspace <ws> --out carry.age`; on the new box `k2 vault carry import
-  carry.age --workspace <id>` (lists first; add --apply). Secrets land by
-  workspace id, never by name; the file opens only in that vault; the
-  recovery key is never used. Every export is logged (k2 vault audit).
+  With "Allow managing server-wide secrets": new box `k2 vault recipient`;
+  old box `k2 vault carry export --recipient … --target … --workspace <ws>
+  --out carry.age`; new box `k2 vault carry import carry.age --workspace
+  <id>` (lists first; add --apply). By workspace id, never by name; only
+  that vault opens it; no recovery key. Every export is logged.
 
 GIVING A SECRET TO ANOTHER AGENT
   Never paste it into k2 msg (K2 now redacts known values there anyway).
@@ -111,16 +113,14 @@ GIVING A SECRET TO ANOTHER AGENT
   same-named secret is never overwritten; re-sending yours makes a new
   version. A secret a person gave you needs a person to send it to
   another server. Server-wide secrets aren't sent (the owner shares them
-  with k2 vault grant). The copy you get is fetch/file only, never api,
+  with k2 vault grant). The copy you get is fetch, agent or file, never api,
   and you can't widen it: use it with k2 vault fetch --secret NAME.
-  Exit 3 = a person must act (pending, held, declined): don't retry.
-  Exit 2 = the other server can't (peer_too_old). Exit 4 = no such secret
-  or agent. Every step is logged (Settings → Logs → Access Audit).
+  Exit 3 = a person must act (don't retry); 2 = the other server can't
+  (peer_too_old); 4 = no such secret or agent. Every step is logged.
 
 PUBLISHED SERVICES
-  New services start clean (base env + granted secrets). A [legacy env]
-  one inherits the daemon's environment; switch it with
-  `k2 publish env <name> clean`, then `k2 publish secret add <name> NAME`.
+  New services start clean (base env + granted secrets). [legacy env] ones
+  inherit the daemon's: k2 publish env <name> clean, then secret add.
 
 CLI TOOLS (gh, vercel: tools that read a token from the environment)
   1. k2 vault set GITHUB_CLI --kind oauth_token < token
@@ -170,11 +170,13 @@ HONEST LIMITS
   keys). On boxes where agents have admin rights, an agent that goes
   looking for the vault's key can find it; the vault keeps secrets out of
   chats, logs, git and copies, sends them only where they belong, and
-  logs every use.
+  logs every use. Agent delivery stops an ssh key being copied out, but
+  anything in the session (or a same-user process that finds the socket)
+  can sign while it runs. ssh -A forwarding is refused unless the secret
+  allows it (k2 vault agent-limit); clients that don't say can't be told.
 
 WHAT THE VAULT CAN'T DO YET (and the way around it today)
   sign requests (AWS SigV4, Google service-account JWT): env or file delivery
-  ssh-agent: file delivery + ssh -i
   boxes without K2: systemd-creds over SSH + k2 vault placement add (above)
 
   k2 vault --help   k2 vault list   k2 vault doctor

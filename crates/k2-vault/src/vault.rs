@@ -37,9 +37,11 @@ use crate::redact::{Redactor, SURFACE_MIN_LEN};
 use crate::secret::{Key32, SecretBytes};
 use crate::store::*;
 
+mod agent_store;
 mod handoff_store;
 mod placement_store;
 
+pub use agent_store::{AgentIdentity, AgentPolicy, AgentPolicyPatch};
 pub use placement_store::{NewPlacement, Placement, PlacementTarget, Placements};
 
 pub const FORMAT: &str = "k2-vault/1";
@@ -1007,6 +1009,7 @@ impl LocalVault {
                 if default_delivery.level() > ceiling.level() {
                     return Err(VaultError::bad_request("delivery_above_ceiling", "the delivery is looser than the ceiling"));
                 }
+                agent_store::check_agent_delivery(req.kind, &[default_delivery, ceiling], Some(value.expose()))?;
                 if req.scope.kind == ScopeKind::Session && req.expires_at.is_none() {
                     return Err(VaultError::bad_request("expiry_required", "chat secrets need an expiry"));
                 }
@@ -1067,6 +1070,7 @@ impl LocalVault {
         if let Some(s) = m.inject.as_ref().and_then(|i| i.sign.as_ref()) {
             s.check_value(value.expose())?;
         }
+        agent_store::check_agent_delivery(m.kind, &[m.default_delivery, m.delivery_ceiling], Some(value.expose()))?;
         {
             let keys = self.keys.read();
             let conn = self.conn.lock();
@@ -1152,6 +1156,12 @@ impl LocalVault {
                     let v = self.decrypt_version(&conn, &keys, &row.meta, row.meta.latest_version)?;
                     s.check_value(v.expose())?;
                 }
+            }
+            // Item 3: agent delivery needs an ssh key the agent can serve.
+            let to_agent: Vec<Delivery> = [p.default_delivery, p.delivery_ceiling].into_iter().flatten().filter(|d| *d == Delivery::Agent).collect();
+            if !to_agent.is_empty() && row.meta.status != SecretStatus::Destroyed {
+                let v = self.decrypt_version(&conn, &keys, &row.meta, row.meta.latest_version)?;
+                agent_store::check_agent_delivery(row.meta.kind, &to_agent, Some(v.expose()))?;
             }
             (row.clone(), f.own_ws_has_grant)
         };
@@ -1301,6 +1311,12 @@ impl LocalVault {
                 "delivery_above_ceiling",
                 format!("this secret can be delivered at most as {}", m.delivery_ceiling),
             ));
+        }
+        if g.delivery == Delivery::Agent {
+            let keys = self.keys.read();
+            let conn = self.conn.lock();
+            let v = self.decrypt_version(&conn, &keys, m, m.latest_version)?;
+            agent_store::check_agent_delivery(m.kind, &[Delivery::Agent], Some(v.expose()))?;
         }
         match g.consumer.kind {
             ConsumerKind::App | ConsumerKind::Widget => {
@@ -1654,6 +1670,8 @@ impl LocalVault {
         }
         match use_ {
             Use::Fetch(_) | Use::Proxy(_) | Use::File | Use::Env => self.rollups.lock().add(&e),
+            // Item 3: `agent_sign` audits once the signature exists.
+            Use::Agent(_) => {}
             _ => self.audit_only(vec![e]),
         }
         Ok(Resolved {
@@ -1667,7 +1685,9 @@ impl LocalVault {
         })
     }
 
-    /// Every env/file delivery a session (or service) gets at spawn.
+    /// Every env/file/agent delivery a session (or service) gets at spawn.
+    /// `agent` items (ssh keys, item 3) are served on the session's
+    /// ssh-agent socket; a published service skips them.
     pub fn spawn_items(&self, who: &Requester) -> Result<Vec<SpawnItem>> {
         let keys = self.keys.read();
         let conn = self.conn.lock();
@@ -1696,7 +1716,7 @@ impl LocalVault {
                 if explicit && rollback {
                     continue;
                 }
-                if !matches!(d, Delivery::Env | Delivery::File) {
+                if !matches!(d, Delivery::Env | Delivery::File | Delivery::Agent) {
                     continue;
                 }
                 // Highest delivery wins; on a tie, a grant that names the
@@ -2147,6 +2167,8 @@ impl LocalVault {
             let mac = hmac(&new_keys.row, &request_mac_input(&r));
             tx.execute("UPDATE secret_request SET row_mac = ?2 WHERE card_id = ?1", params![r.card_id, mac.to_vec()])?;
         }
+        // Agent settings (item 3) are MAC'd under the row key too.
+        self.rekey_agent_policies(&tx, &keys, &new_keys)?;
         // Placeholders hash under the old key: drop them (sessions re-mint).
         tx.execute("DELETE FROM placeholder", [])?;
         // Audit chain under the new key.

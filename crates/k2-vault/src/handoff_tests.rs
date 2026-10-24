@@ -244,6 +244,25 @@ fn pending_by_default_and_allow_listed_lands_never_api() {
     it.kind = "ssh_key".into();
     let r = v.handoff_receive(incoming("ws-ops", it, "sales", true), SecretBytes::from_slice(b"-----BEGIN KEY----- abc")).expect("file");
     assert_eq!(r.meta.expect("meta").default_delivery, Delivery::File);
+
+    // Item 3: an ssh key the sender served only through the agent lands as
+    // agent (never readable), and must be a key the agent can serve.
+    let mut it = item("SSH_AGENT_ONLY");
+    it.hosts.clear();
+    it.kind = "ssh_key".into();
+    it.delivery = "agent".into();
+    it.ceiling = "env".into();
+    assert_eq!(it.landing_delivery(), (Delivery::Agent, Delivery::Env));
+    let key = crate::ssh_agent::testkeys::ed25519();
+    let r = v.handoff_receive(incoming("ws-ops", it, "sales", true), SecretBytes::from_slice(key.as_bytes())).expect("agent");
+    let m = r.meta.expect("meta");
+    assert_eq!(m.default_delivery, Delivery::Agent);
+    assert!(!m.agent_can_see());
+    // An agent delivery on any other kind isn't kept.
+    let mut it = item("NOT_SSH");
+    it.hosts.clear();
+    it.delivery = "agent".into();
+    assert_eq!(it.landing_delivery().0, Delivery::File);
 }
 
 #[test]

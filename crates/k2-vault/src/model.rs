@@ -70,7 +70,9 @@ str_enum!(
 
 str_enum!(
     /// How a consumer receives a secret. `Fetch`/`Proxy` never show the
-    /// value; `File`/`Env` let the consumer read it; `Api` prints it.
+    /// value; `Agent` (ssh keys) signs on a per-session ssh-agent socket
+    /// without showing the key; `File`/`Env` let the consumer read it;
+    /// `Api` prints it.
     Delivery {
         Fetch = "fetch",
         Proxy = "proxy",
@@ -78,6 +80,9 @@ str_enum!(
         Env = "env",
         Api = "api",
         None = "none",
+        /// prd-vault-gaps-v1 item 3. Appended last (R3: `code()` is the
+        /// position in `ALL`); an older daemon skips its rows (R2).
+        Agent = "agent",
     }
 );
 
@@ -108,21 +113,24 @@ str_enum!(
 );
 
 impl Delivery {
-    /// Exposure level: fetch/proxy (0) < file (1) < env (2) < api (3).
-    /// `None` is below everything (the secret isn't delivered at all).
+    /// Exposure level: fetch/proxy (0) < agent (1) < file (2) < env (3) <
+    /// api (4). Agent never shows the key but signs for any server, so it
+    /// sits above fetch and below file. `None` is below everything (the
+    /// secret isn't delivered at all). Levels are only ever compared.
     pub fn level(&self) -> i8 {
         match self {
             Delivery::None => -1,
             Delivery::Fetch | Delivery::Proxy => 0,
-            Delivery::File => 1,
-            Delivery::Env => 2,
-            Delivery::Api => 3,
+            Delivery::Agent => 1,
+            Delivery::File => 2,
+            Delivery::Env => 3,
+            Delivery::Api => 4,
         }
     }
 
     /// Can the consumer read the value with this delivery?
     pub fn readable(&self) -> bool {
-        self.level() >= 1
+        self.level() >= Delivery::File.level()
     }
 }
 
@@ -275,6 +283,10 @@ mod tests {
         // R3: new enum values go last, so every older code stays put.
         assert_eq!(ConsumerKind::Job.code() as usize, ConsumerKind::ALL.len() - 1);
         assert_eq!(ConsumerKind::Widget.code(), 6);
+        // Item 3: agent is the last delivery; every older code stays put.
+        assert_eq!(Delivery::Agent.code() as usize, Delivery::ALL.len() - 1);
+        assert_eq!(Delivery::None.code(), 5);
+        assert_eq!(Delivery::parse("agent").expect("agent"), Delivery::Agent);
     }
 
     #[test]
@@ -307,6 +319,10 @@ mod tests {
         assert_eq!(Delivery::Proxy.level(), Delivery::Fetch.level());
         assert!(!Delivery::Fetch.readable());
         assert!(Delivery::File.readable());
+        // Item 3: fetch < agent < file, and agent can't read the key.
+        assert!(Delivery::Fetch.level() < Delivery::Agent.level());
+        assert!(Delivery::Agent.level() < Delivery::File.level());
+        assert!(!Delivery::Agent.readable());
     }
 
     #[test]

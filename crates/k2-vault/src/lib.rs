@@ -34,6 +34,7 @@ pub mod recovery;
 pub mod redact;
 pub mod refs;
 pub mod secret;
+pub mod ssh_agent;
 pub mod store;
 pub mod vault;
 

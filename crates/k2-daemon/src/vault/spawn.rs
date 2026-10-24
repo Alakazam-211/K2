@@ -1,9 +1,13 @@
-//! Env and file delivery at spawn (§9.4, KV19, VS10).
+//! Env, file and agent delivery at spawn (§9.4, KV19, VS10; agent:
+//! prd-vault-gaps-v1 item 3).
 //!
 //! Every agent spawn path (`spawn.rs`, `v2_spawn.rs`, the legacy
 //! terminal create) calls [`materialize`] right after the passport is
 //! minted. Only secrets whose delivery is `file` or `env` for this
 //! session arrive; fetch/proxy secrets never touch the environment.
+//! `agent` secrets (ssh keys) never arrive either: the session gets
+//! `SSH_AUTH_SOCK`, a socket in its secrets dir that lists and signs with
+//! them ([`super::ssh_agent`]).
 //!
 //! Files go to a memory-backed directory, never `/tmp` or the home folder.
 //! Linux, the same order as `k2_core::runtime_dir` ([`linux_secrets_candidates`]):
@@ -28,6 +32,9 @@ use k2_vault::{Delivery, Requester, SecretStore, Selector, Use};
 use parking_lot::Mutex;
 
 pub const SECRETS_DIR_ENV: &str = "K2_SECRETS_DIR";
+/// Set only for a session with `agent` items (a grant can never set it:
+/// `SSH_*` is on the protected list, `k2_vault::delivery`).
+pub const SSH_AUTH_SOCK_ENV: &str = "SSH_AUTH_SOCK";
 
 /// Live session → its secrets dir (removed at session end).
 static DIRS: Mutex<Vec<(String, PathBuf)>> = Mutex::new(Vec::new());
@@ -166,10 +173,15 @@ pub struct Materialized {
     pub files: Vec<String>,
     pub dir: Option<PathBuf>,
     pub skipped: Vec<String>,
+    /// Item 3: the session's ssh-agent socket (`SSH_AUTH_SOCK`), and the
+    /// names of the keys it serves at spawn.
+    pub agent_sock: Option<PathBuf>,
+    pub agent_keys: Vec<String>,
 }
 
-/// Add this session's env/file secrets to `env`. `sandboxed` cells get env
-/// delivery only (a host directory isn't visible inside the cell).
+/// Add this session's env/file secrets to `env`, and `SSH_AUTH_SOCK` when
+/// it has `agent` items. `sandboxed` cells get env delivery only (a host
+/// directory or socket isn't visible inside the cell).
 pub fn materialize(env: &mut HashMap<String, String>, workspace_id: &str, session_id: &str, sandboxed: bool) -> Materialized {
     let mut out = Materialized::default();
     let ws = workspace_id.trim();
@@ -216,10 +228,10 @@ pub fn materialize(env: &mut HashMap<String, String>, workspace_id: &str, sessio
 /// owns its lifecycle and calls [`job_ended`] when the run ends; a daemon
 /// restart sweeps it at boot like every other dir.
 ///
-/// Item 3 (`agent` delivery) hook: a socket made by [`deliver_items`] for
-/// an `agent` item lives inside `out.dir` (or is listed in `out` by the
-/// builder who adds it), so a job gets it at start and [`job_ended`]
-/// removes it with the dir.
+/// Item 3 (`agent` delivery): a run with `agent` grants gets its own
+/// ssh-agent socket (keyed by the run, so its rate limit is its own),
+/// registered with `out.dir`; [`job_ended`] stops it and removes it with
+/// the dir.
 pub fn materialize_job(env: &mut HashMap<String, String>, workspace_id: &str, job_id: &str, job_name: &str, run_sid: &str) -> Materialized {
     let mut out = Materialized::default();
     let Ok(vault) = super::get() else { return out };
@@ -228,7 +240,7 @@ pub fn materialize_job(env: &mut HashMap<String, String>, workspace_id: &str, jo
     out
 }
 
-/// A job run ended: its secrets dir (files, and any agent socket) goes.
+/// A job run ended: its secrets dir (files, and its agent socket) goes.
 pub fn job_ended(m: &Materialized) {
     if let Some(d) = &m.dir {
         remove_dir(d);
@@ -236,8 +248,8 @@ pub fn job_ended(m: &Materialized) {
 }
 
 /// The shared delivery loop: every env/file item `who` gets, into `env`
-/// and a fresh private dir tagged `tag`. Sessions and job runs both come
-/// through here.
+/// and a fresh private dir tagged `tag`, and an ssh-agent socket in that
+/// dir for its `agent` items. Sessions and job runs both come through here.
 fn deliver_items(
     vault: &k2_vault::LocalVault,
     env: &mut HashMap<String, String>,
@@ -258,7 +270,17 @@ fn deliver_items(
         return;
     }
     let mut dir: Option<PathBuf> = None;
+    let mut agent_items: Vec<String> = vec![];
     for it in items {
+        if it.delivery == Delivery::Agent {
+            // Never resolved here: the agent socket signs at use time.
+            if sandboxed {
+                out.skipped.push(format!("{}: agent delivery isn't available in a sandboxed cell", it.name));
+            } else {
+                agent_items.push(it.name.clone());
+            }
+            continue;
+        }
         let use_ = if it.delivery == Delivery::Env { Use::Env } else { Use::File };
         let r = match vault.resolve(&Selector::Id(it.secret_id.clone()), use_, who) {
             Ok(r) => r,
@@ -305,17 +327,70 @@ fn deliver_items(
             }
         }
     }
+    if !agent_items.is_empty() {
+        deliver_agent(vault, env, who, session_id, &agent_items, &mut dir, out);
+    }
     if let Some(d) = &dir {
         env.insert(SECRETS_DIR_ENV.to_string(), d.display().to_string());
         out.dir = Some(d.clone());
     }
-    if !out.env_names.is_empty() || !out.files.is_empty() || !out.skipped.is_empty() {
+    if !out.env_names.is_empty() || !out.files.is_empty() || !out.skipped.is_empty() || !out.agent_keys.is_empty() {
         k2_core::log_debug!(
-            "[vault] spawn {session_id}: env {:?} files {:?} skipped {:?}",
+            "[vault] spawn {session_id}: env {:?} files {:?} agent {:?} skipped {:?}",
             out.env_names,
             out.files,
+            out.agent_keys,
             out.skipped
         );
+    }
+}
+
+/// Item 3: one ssh-agent socket for `who`'s `agent` items, in the secrets
+/// dir (made here when no file made it yet). Keys the agent can't serve
+/// (a rotated value that isn't an ssh key any more) are skipped by name.
+fn deliver_agent(
+    vault: &k2_vault::LocalVault,
+    env: &mut HashMap<String, String>,
+    who: &Requester,
+    tag: &str,
+    names: &[String],
+    dir: &mut Option<PathBuf>,
+    out: &mut Materialized,
+) {
+    let served: Vec<String> = match vault.agent_identities(who) {
+        Ok(ids) => ids.into_iter().map(|i| i.name).collect(),
+        Err(e) => {
+            out.skipped.extend(names.iter().map(|n| format!("{n}: {}", e.code)));
+            return;
+        }
+    };
+    for n in names.iter().filter(|n| !served.contains(n)) {
+        out.skipped.push(format!("{n}: not an ssh key the agent can serve"));
+    }
+    if served.is_empty() {
+        return;
+    }
+    if dir.is_none() {
+        let Some(root) = secrets_root() else {
+            out.skipped.extend(served.iter().map(|n| format!("{n}: no_memory_fs")));
+            return;
+        };
+        match make_session_dir(&root, tag) {
+            Ok(d) => *dir = Some(d),
+            Err(e) => {
+                out.skipped.extend(served.iter().map(|n| format!("{n}: secrets dir ({})", e.kind())));
+                return;
+            }
+        }
+    }
+    let d = dir.as_ref().expect("dir set above");
+    match super::ssh_agent::start(who.clone(), tag, d) {
+        Ok(sock) => {
+            env.insert(SSH_AUTH_SOCK_ENV.to_string(), sock.display().to_string());
+            out.agent_sock = Some(sock);
+            out.agent_keys = served;
+        }
+        Err(e) => out.skipped.extend(served.iter().map(|n| format!("{n}: agent socket ({})", e.kind()))),
     }
 }
 
@@ -349,6 +424,8 @@ pub fn session_ended(session_id: &str) {
 }
 
 fn remove_dir(d: &Path) {
+    // Item 3: the agent stops before its socket and dir go.
+    super::ssh_agent::stop_dir(d);
     if let Ok(rd) = std::fs::read_dir(d) {
         for e in rd.flatten() {
             let _ = super::adopt::remove_old_copy(&e.path());
@@ -363,20 +440,27 @@ fn remove_dir(d: &Path) {
 /// and re-registered in `DIRS`, so they go when their session ends.
 /// Without k2-ptyd (or with nothing running in it) nothing survives a
 /// restart and every dir goes, as before.
+///
+/// Item 3: a kept dir with an ssh-agent socket gets it re-served at the
+/// same path (the session's `SSH_AUTH_SOCK` stays valid), for the
+/// workspace its spawn recorded in the ptyd meta.
 pub fn sweep_at_boot() {
-    let keep: Vec<(String, PathBuf)> = surviving_dirs();
-    sweep_at_boot_keeping(&keep);
+    let survivors = surviving_dirs();
+    let keep: Vec<(String, PathBuf)> = survivors.iter().map(|(s, d, _)| (s.clone(), d.clone())).collect();
+    let kept = sweep_at_boot_keeping(&keep);
+    resume_agents(&kept, &survivors);
 }
 
-/// The `(session id, secrets dir)` pairs B0 found running in ptyd.
-fn surviving_dirs() -> Vec<(String, PathBuf)> {
+/// The `(session id, secrets dir, workspace id)` B0 found running in ptyd.
+fn surviving_dirs() -> Vec<(String, PathBuf, Option<String>)> {
     #[cfg(unix)]
     {
         k2_core::terminal::ptyd::adopt::running()
             .into_iter()
             .filter_map(|s| {
                 let dir = s.meta.get("secrets_dir")?.as_str()?.to_string();
-                Some((s.sid, PathBuf::from(dir)))
+                let ws = s.meta.get("workspace_uuid").and_then(|w| w.as_str()).map(str::to_string).filter(|w| !w.trim().is_empty());
+                Some((s.sid, PathBuf::from(dir), ws))
             })
             .collect()
     }
@@ -386,15 +470,31 @@ fn surviving_dirs() -> Vec<(String, PathBuf)> {
     }
 }
 
-/// [`sweep_at_boot`] with an explicit keep set. A kept dir must be a
-/// direct child of the secrets root named for its session (`<tag>-<8>`,
-/// [`make_session_dir`]); anything else in `keep` is ignored.
-pub fn sweep_at_boot_keeping(keep: &[(String, PathBuf)]) {
-    let Some(root) = secrets_root() else { return };
-    sweep_root_keeping(&root, keep);
+/// Re-serve the agent socket of every kept dir that had one.
+fn resume_agents(kept: &[(String, PathBuf)], survivors: &[(String, PathBuf, Option<String>)]) {
+    for (sid, dir) in kept {
+        let Some(ws) = survivors.iter().find(|(s, d, _)| s == sid && d == dir).and_then(|(_, _, w)| w.clone()) else {
+            continue;
+        };
+        let who = Requester::Session { workspace_id: ws, session_id: Some(sid.clone()) };
+        match super::ssh_agent::resume(who, sid, dir) {
+            Ok(Some(sock)) => k2_core::log_debug!("[vault] ssh-agent re-served for adopted session {sid} at {}", sock.display()),
+            Ok(None) => {}
+            Err(e) => k2_core::log_debug!("[vault] ssh-agent for adopted session {sid} not re-served: {e}"),
+        }
+    }
 }
 
-fn sweep_root_keeping(root: &Path, keep: &[(String, PathBuf)]) {
+/// [`sweep_at_boot`] with an explicit keep set. A kept dir must be a
+/// direct child of the secrets root named for its session (`<tag>-<8>`,
+/// [`make_session_dir`]); anything else in `keep` is ignored. Returns the
+/// dirs kept.
+pub fn sweep_at_boot_keeping(keep: &[(String, PathBuf)]) -> Vec<(String, PathBuf)> {
+    let Some(root) = secrets_root() else { return vec![] };
+    sweep_root_keeping(&root, keep)
+}
+
+fn sweep_root_keeping(root: &Path, keep: &[(String, PathBuf)]) -> Vec<(String, PathBuf)> {
     let root = root.to_path_buf();
     let kept: Vec<(String, PathBuf)> = keep
         .iter()
@@ -417,11 +517,16 @@ fn sweep_root_keeping(root: &Path, keep: &[(String, PathBuf)]) {
         }
     }
     let mut g = DIRS.lock();
+    let mut out = vec![];
     for (sid, dir) in kept {
-        if dir.is_dir() && !g.iter().any(|(s, d)| s == &sid && d == &dir) {
-            g.push((sid, dir));
+        if dir.is_dir() {
+            if !g.iter().any(|(s, d)| s == &sid && d == &dir) {
+                g.push((sid.clone(), dir.clone()));
+            }
+            out.push((sid, dir));
         }
     }
+    out
 }
 
 /// Periodic: drop dirs whose session is gone. `live` is
@@ -466,6 +571,47 @@ mod tests {
         assert!(!kept.exists(), "goes when the session ends");
         std::fs::remove_dir_all(&root).unwrap();
         std::fs::remove_dir_all(&outside).unwrap();
+    }
+
+    /// Item 3 + k2-ptyd: after a restart, a surviving session's dir is kept
+    /// and its ssh-agent socket re-served at the same path; a dead
+    /// session's dir (socket included) goes.
+    #[test]
+    fn boot_re_serves_a_surviving_sessions_agent_socket() {
+        use k2_vault::{Actor, Kind, Namespace, PutRequest, Scope, SecretBytes};
+        let v = super::super::ensure_test_vault();
+        let ws = uuid::Uuid::new_v4().to_string();
+        let mut r = PutRequest::new(Namespace::User, Scope::workspace(ws.clone()), "BOOT_KEY", Kind::SshKey);
+        r.default_delivery = Some(Delivery::Agent);
+        v.put(r, SecretBytes::from_slice(k2_vault::ssh_agent::testkeys::ed25519().as_bytes()), &Actor::Owner).expect("put");
+        let t = k2_vault::fsutil::TestDir::new("boot-agent");
+        let root = t.path().join("secrets");
+        let live = uuid::Uuid::new_v4().to_string();
+        let dead = uuid::Uuid::new_v4().to_string();
+        let who = |s: &str| Requester::Session { workspace_id: ws.clone(), session_id: Some(s.to_string()) };
+        let live_dir = make_session_dir(&root, &live).expect("dir");
+        let dead_dir = make_session_dir(&root, &dead).expect("dir");
+        let live_sock = super::super::ssh_agent::start(who(&live), &live, &live_dir).expect("start");
+        let dead_sock = super::super::ssh_agent::start(who(&dead), &dead, &dead_dir).expect("start");
+        // The daemon goes away; k2-ptyd keeps `live` running.
+        super::super::ssh_agent::abandon_for_tests(&live_dir);
+        super::super::ssh_agent::abandon_for_tests(&dead_dir);
+        std::thread::sleep(std::time::Duration::from_millis(700));
+        let kept = sweep_root_keeping(&root, &[(live.clone(), live_dir.clone())]);
+        resume_agents(&kept, &[(live.clone(), live_dir.clone(), Some(ws.clone()))]);
+        assert_eq!(super::super::ssh_agent::socket_for(&live_dir), Some(live_sock.clone()), "re-served at the same path");
+        let mut s = std::os::unix::net::UnixStream::connect(&live_sock).expect("connect");
+        use std::io::{Read, Write};
+        s.write_all(&k2_vault::ssh_agent::frame(&k2_vault::ssh_agent::client::identities())).expect("write");
+        let mut len = [0u8; 4];
+        s.read_exact(&mut len).expect("len");
+        let mut buf = vec![0u8; u32::from_be_bytes(len) as usize];
+        s.read_exact(&mut buf).expect("body");
+        let ids = k2_vault::ssh_agent::client::parse_identities(&buf).expect("identities");
+        assert_eq!(ids.iter().map(|(_, n)| n.as_str()).collect::<Vec<_>>(), vec!["BOOT_KEY"]);
+        assert!(!dead_dir.exists() && !dead_sock.exists(), "a dead session's dir and socket go");
+        session_ended(&live);
+        assert!(!live_sock.exists() && !live_dir.exists(), "and the survivor's go at its end");
     }
 
     /// KV19: every production spawn path that mints a passport also
@@ -593,8 +739,10 @@ mod tests {
         match &out.dir {
             Some(dir) => {
                 assert_eq!(std::fs::read(dir.join("JOB_FILE")).expect("file"), b"job-file-value-2");
-                // The session sweep sees no live sessions at all: the job dir stays.
-                sweep_dead(&|_| false);
+                // The session sweep, told this run's id isn't a live session,
+                // leaves its dir: a run is never in the session list. (Only
+                // this id is "dead", so parallel tests' sessions stay.)
+                sweep_dead(&|s| s != run_sid);
                 assert!(dir.join("JOB_FILE").exists(), "the session sweep never removes a job run's dir");
                 job_ended(&out);
                 assert!(!dir.exists(), "removed at run end");

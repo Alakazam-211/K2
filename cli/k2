@@ -21566,10 +21566,13 @@ k2 vault — secrets for agents, without showing them the value
   k2 vault set NAME [options] < value      create, or a new version (value on stdin)
   k2 vault rotate NAME < value             a new version
   k2 vault hosts NAME --add <host> | --remove <host>
-  k2 vault delivery NAME fetch|file|env|api [--ceiling <d>]
+  k2 vault delivery NAME fetch|agent|file|env|api [--ceiling <d>]
                                            (no --env-name here: names live on grants)
   k2 vault sign NAME ovh|hmac-sha256|hmac-sha256-ts|none [--sign-header …]
                                            K2 signs fetch requests with the secret
+  k2 vault public-key NAME                 an ssh key's .pub line (never the private key)
+  k2 vault agent-limit NAME [--burst N] [--per-minute M] [--allow-forwarded|--no-forwarded]
+                                           an ssh key's agent signing limits (agent delivery)
   k2 vault grant NAME --to ws:<name>|ws:*|session:<id>|service:<label>|job:<name> [--as <d>] [--env-name X]
   k2 vault revoke NAME --from <who>        (or --grant <id>)
   k2 vault disable|enable NAME             destroy NAME --yes
@@ -21624,8 +21627,9 @@ set options:
   --inject-dst header:<Name>|query:<param>|basic|body   where fetch puts the key
   --inject-header <Name>      same as --inject-dst header:<Name>
   --inject-format '<fmt>'     how it's written, one {} (e.g. 'Bearer {}'; default {})
-  --delivery fetch|file|env|api   how agents get it (default fetch for keys)
-  --ceiling fetch|file|env|api    the loosest delivery allowed later
+  --delivery fetch|agent|file|env|api   how agents get it (default fetch for keys;
+                              agent: ssh keys sign on $SSH_AUTH_SOCK, never shown)
+  --ceiling fetch|agent|file|env|api    the loosest delivery allowed later
   --describe <text>  --rotate-every <days>  --ttl <secs> (session scope)
 
 Where the key goes is fixed by whoever creates the secret (header and
@@ -22343,8 +22347,11 @@ apply when NAME is created.
                      ssh_key, tls_key                file
                    Every kind allows fetch, file and env; api only when
                    --delivery or --ceiling says api. Fetch needs --for.
-  --delivery fetch|file|env|api   how agents get it (default: by kind)
-  --ceiling fetch|file|env|api    the loosest delivery allowed later
+                   ssh_key also allows agent: sessions get $SSH_AUTH_SOCK
+                   and ssh/git sign through K2; nobody sees the key
+                   (unencrypted ed25519 or RSA ≥ 2048 bits).
+  --delivery fetch|agent|file|env|api   how agents get it (default: by kind)
+  --ceiling fetch|agent|file|env|api    the loosest delivery allowed later
                                   (default env, or --delivery if looser)
   --scope ws:<name>|server|session   (default: your workspace)
   --for <host>[,<host>]   the sites fetch may send it to (exact hosts)
@@ -22390,7 +22397,7 @@ Examples:
   k2 vault set STRIPE_KEY --preset stripe < key.txt
   k2 vault set WEATHER_KEY --for api.weather.example --inject-dst query:appid < key.txt
   k2 vault set MAILGUN_KEY --for api.mailgun.net --inject-dst basic --inject-format 'api:{}' < key.txt
-  k2 vault set DEPLOY_KEY --kind ssh_key < deploy_ed25519
+  k2 vault set DEPLOY_KEY --kind ssh_key --delivery agent < deploy_ed25519
   k2 vault set OVH_EU --sign ovh --preset ovh-eu < ovh-keys.json
   k2 vault set HOOK_KEY --sign hmac-sha256 --sign-header X-Hub-Signature-256 --sign-prefix 'sha256=' --for hooks.example.com < key
   k2 vault set OPS_INGEST --sign hmac-sha256-ts --sign-header X-K2-Ops-Sig --sign-ts-header X-K2-Ops-Ts --for ingest.example.com < key
@@ -22437,15 +22444,16 @@ Examples:
 EOF
             ;;
         delivery) cat <<'EOF'
-k2 vault delivery NAME fetch|file|env|api [--ceiling <d>] [--scope <s>]
+k2 vault delivery NAME fetch|agent|file|env|api [--ceiling <d>] [--scope <s>]
 
 NAME's default delivery (what its own workspace gets without a grant) and,
 with --ceiling, the loosest delivery allowed. fetch: K2 makes the call;
-file: $K2_SECRETS_DIR/NAME; env: $NAME; api: k2 vault get NAME. File, env
-and api arrive in new sessions. No --env-name or --file-name here: names
-live on grants (k2 vault grant --help).
+agent (ssh keys): $SSH_AUTH_SOCK, ssh and git sign, nobody sees the key;
+file: $K2_SECRETS_DIR/NAME; env: $NAME; api: k2 vault get NAME. Agent,
+file, env and api arrive in new sessions. No --env-name or --file-name
+here: names live on grants (k2 vault grant --help).
 
-Example: k2 vault delivery DEPLOY_KEY file
+Example: k2 vault delivery DEPLOY_KEY agent
 EOF
             ;;
         grant) cat <<'EOF'
@@ -22456,7 +22464,7 @@ delivery; a new one replaces the old).
   --to ws:<name>     a workspace; ws:* = every workspace; session:<id>;
                      service:<label> (a k2 publish service);
                      job:<name> (a k2 job; its runs get only these)
-  --as fetch|file|env|api   default: the secret's delivery; --env-name alone
+  --as fetch|agent|file|env|api   default: the secret's delivery; --env-name alone
                      means env, --file-name alone means file. Never above
                      the secret's ceiling.
   --env-name X       the variable for env delivery (default: NAME in capitals,
@@ -22675,6 +22683,37 @@ box secrets move TO, then k2 vault carry export on the old box.
 Example: k2 vault recipient
 EOF
             ;;
+        public-key) cat <<'EOF'
+k2 vault public-key NAME [--scope <s>] [--json]
+
+Print an ssh key's public half (the .pub line, comment NAME) and its
+SHA256 fingerprint, for authorized_keys or a deploy key. Never the
+private key.
+
+Example: k2 vault public-key DEPLOY_KEY >> authorized_keys.new
+EOF
+            ;;
+        agent-limit) cat <<'EOF'
+k2 vault agent-limit NAME [--burst N] [--per-minute M] [--allow-forwarded | --no-forwarded] [--scope <s>]
+
+The ssh-agent settings of an ssh key with agent delivery. With no option,
+prints them. Per session: at most --burst signatures a second (1-600,
+default 60) and --per-minute (1-6000, default 240); over that, the
+agent says no and the audit says rate_limited.
+--allow-forwarded lets a forwarded agent (ssh -A, then ssh from the other
+box) sign; by default that is refused (deny forwarded in the audit).
+Raising a limit or allowing forwarding is widening: a secret a person
+gave you needs the owner.
+
+Agent delivery stops the key being copied out. While the session runs,
+anything in it, or any same-user process that finds the socket, can still
+sign with it. Signing over a forwarded agent (ssh -A) is refused unless
+the secret allows it; clients that don't announce forwarding can't be
+told apart.
+
+Example: k2 vault agent-limit DEPLOY_KEY --burst 10 --per-minute 60
+EOF
+            ;;
         systemd-cred) cat <<'EOF'
 k2 vault systemd-cred NAME --unit <unit.service> [--cred-name <id>] [--restart] [--dry-run]
 k2 vault systemd-cred NAME --unit <unit.service> [--cred-name <id>] --remove
@@ -22799,7 +22838,7 @@ k2 job — scheduled jobs the K2 daemon runs (no session, no LLM, no cron)
 
 Each run gets its own K2 identity (k2 vault fetch, k2 db dsn and k2 msg
 work as in a K2 tab), only the secrets granted to job:NAME
-(k2 vault grant KEY --to job:NAME --as env|file|fetch), the workspace
+(k2 vault grant KEY --to job:NAME --as env|file|agent|fetch), the workspace
 folder as its working folder, and a PATH with k2 on it. No shell unless
 you write one: -- sh -c '…'. Runs never overlap. The timeout (default
 10m, max 6h) stops the whole process group. Logs are redacted
@@ -23284,6 +23323,7 @@ cmd_vault() {
     local inject_header="" inject_format="" inject_dst="" to="" from="" as_d="" env_name="" file_name="" grant_id="" yes=0 since="" to_version=""
     local sign_scheme="" sign_header="" sign_encoding="" sign_prefix="" sign_ts_header="" sign_template="" sign_value=""
     local sign_prefix_set=0 sign_template_set=0 sign_value_set=0
+    local agent_burst="" agent_per_minute="" allow_fwd=0 no_fwd=0
     local remove_original=0 env_file_opt="" done_path="" ttl_secs=""
     local carry_recipient="" carry_target="" carry_target_ws="" own_box_move=0 out_file="" holder="" dry_run=0 replace=0 apply=0 accept_agent=0
     local add_hosts=() rm_hosts=() pos=() use_secrets=() carry_ws=() carry_server=()
@@ -23298,6 +23338,13 @@ cmd_vault() {
             --replace) replace=1; shift ;;
             --apply) apply=1; shift ;;
             --accept-agent-value) accept_agent=1; shift ;;
+            --allow-forwarded) allow_fwd=1; shift ;;
+            --no-forwarded) no_fwd=1; shift ;;
+            --burst|--per-minute)
+                [ -n "${2:-}" ] || { echo "usage: $1 needs a number" >&2; exit 2; }
+                case "$2" in *[!0-9]*) echo "usage: $1 needs a number" >&2; exit 2 ;; esac
+                if [ "$1" = "--burst" ]; then agent_burst="$2"; else agent_per_minute="$2"; fi
+                shift 2 ;;
             --recipient|--target|--target-workspace|--workspace|--server|--out|--holder)
                 [ -n "${2:-}" ] || { echo "usage: $1 needs a value" >&2; exit 2; }
                 case "$1" in
@@ -23392,6 +23439,9 @@ if sg:
 elif inj: print("goes in:   %s as %s" % (inj.get("dst"), inj.get("fmt")))
 print("delivery:  %s (at most %s)%s" % (m.get("defaultDelivery"), m.get("deliveryCeiling"), " — agents can see it" if m.get("agentCanSee") else ""))
 print("given by:  %s%s" % (m.get("createdBy"), " (a person)" if m.get("humanGiven") else ""))
+ap = v.get("agentPolicy")
+if ap:
+    print("agent:     at most %s signatures a second, %s a minute per session; forwarded agents %s" % (ap.get("burst"), ap.get("perMinute"), "allowed" if ap.get("allowForwarded") else "refused"))
 for g in v.get("grants") or []:
     print("shared:    %s as %s%s" % (g.get("consumerLabel"), g.get("delivery"), (" env " + g["envName"]) if g.get("envName") else ""))
 for p in v.get("placements") or []:
@@ -23490,8 +23540,31 @@ for r in v.get("replaced") or []:
             if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
             printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; m=json.load(sys.stdin).get("secret") or {}; sg=(m.get("inject") or {}).get("sign"); print("%s: %s" % (m.get("name"), ("signs requests: " + sg.get("scheme")) if sg else "no signer (fetch adds the value as set)"))'
             ;;
+        public-key)
+            [ -n "$name" ] || { echo "usage: k2 vault public-key NAME [--scope <s>]" >&2; exit 2; }
+            _vault_call GET public-key "$(python3 -c '
+import json, sys, urllib.parse
+o = json.loads(sys.argv[1]); o.update(json.loads(sys.argv[2])); print(urllib.parse.urlencode(o))' "$sj" "$nj")"
+            if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
+            printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print(v["publicKey"]); print("# %s" % v.get("fingerprint", ""), file=sys.stderr)'
+            ;;
+        agent-limit)
+            [ -n "$name" ] || { echo "usage: k2 vault agent-limit NAME [--burst N] [--per-minute M] [--allow-forwarded|--no-forwarded]" >&2; exit 2; }
+            [ "$allow_fwd$no_fwd" != "11" ] || { echo "usage: give --allow-forwarded or --no-forwarded, not both" >&2; exit 2; }
+            local aj
+            aj="$(python3 -c 'import json,sys; o={}
+if sys.argv[1]: o["burst"]=int(sys.argv[1])
+if sys.argv[2]: o["perMinute"]=int(sys.argv[2])
+if sys.argv[3]=="1": o["allowForwarded"]=True
+if sys.argv[4]=="1": o["allowForwarded"]=False
+print(json.dumps(o))' "$agent_burst" "$agent_per_minute" "$allow_fwd" "$no_fwd")"
+            _vault_call POST agent-policy "$(_vault_merge "$sj" "$nj" "$aj")"
+            if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
+            printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); m=v.get("secret") or {}; p=v.get("agentPolicy") or {}
+print("%s: at most %s signatures a second, %s a minute per session; forwarded agents (ssh -A) %s" % (m.get("name"), p.get("burst"), p.get("perMinute"), "allowed" if p.get("allowForwarded") else "refused"))'
+            ;;
         delivery)
-            [ -n "$name" ] && [ -n "${pos[1]:-}" ] || { echo "usage: k2 vault delivery NAME fetch|file|env|api [--ceiling <d>]" >&2; exit 2; }
+            [ -n "$name" ] && [ -n "${pos[1]:-}" ] || { echo "usage: k2 vault delivery NAME fetch|agent|file|env|api [--ceiling <d>]" >&2; exit 2; }
             # A secret has no env/file name of its own; only a grant does.
             # Refuse rather than drop the flag and print success.
             if [ -n "$env_name" ] || [ -n "$file_name" ]; then
@@ -34720,7 +34793,7 @@ START HERE
   an API key for a web API    k2 vault set NAME --preset stripe (or --for
                               <host> --inject-dst …), then k2 vault fetch
   a CLI login (gh, vercel)    env delivery: CLI TOOLS below
-  an SSH key                  --kind ssh_key: file delivery, see KINDS
+  an SSH key                  --kind ssh_key --delivery agent: see KINDS
   a key a server service uses k2 publish secret add; a root systemd unit:
                               SERVICES K2 DOESN'T RUN below
   handing a secret to an agent  k2 vault send NAME --to <agent>
@@ -34747,6 +34820,8 @@ HOW YOU GET A SECRET (delivery)
           You CAN read it — so can anything you run. Opt-in.
   env     $NAME in new sessions. You can read it. Needs a respawn.
   api     k2 vault get NAME prints it into your transcript. Rare.
+  agent   ssh keys: $SSH_AUTH_SOCK in new sessions; ssh and git sign with
+          it, nobody sees the key. k2 vault public-key NAME: the .pub line.
   Default for keys is fetch. "Agent can see this" in k2 vault list means
   file/env/api.
 
@@ -34756,6 +34831,7 @@ KINDS AND DELIVERY (--kind on set; the default delivery follows it)
   dsn url                      env    psql "$DATABASE_URL", curl "$HOOK_URL"
   ssh_key                      file   ssh -i $K2_SECRETS_DIR/NAME
                                           -o IdentitiesOnly=yes host
+                               agent  plain ssh and git (--delivery agent)
   tls_key                      file   point the server at
                                           $K2_SECRETS_DIR/NAME
   Every kind allows fetch, file and env (up to its ceiling, default env);
@@ -34799,12 +34875,11 @@ PEOPLE ONLY
   unit's credential (k2 vault systemd-cred) are theirs too.
 
 MOVING TO ANOTHER BOX
-  With "Allow managing server-wide secrets": on the new box `k2 vault
-  recipient`; on the old box `k2 vault carry export --recipient … --target …
-  --workspace <ws> --out carry.age`; on the new box `k2 vault carry import
-  carry.age --workspace <id>` (lists first; add --apply). Secrets land by
-  workspace id, never by name; the file opens only in that vault; the
-  recovery key is never used. Every export is logged (k2 vault audit).
+  With "Allow managing server-wide secrets": new box `k2 vault recipient`;
+  old box `k2 vault carry export --recipient … --target … --workspace <ws>
+  --out carry.age`; new box `k2 vault carry import carry.age --workspace
+  <id>` (lists first; add --apply). By workspace id, never by name; only
+  that vault opens it; no recovery key. Every export is logged.
 
 GIVING A SECRET TO ANOTHER AGENT
   Never paste it into k2 msg (K2 now redacts known values there anyway).
@@ -34817,16 +34892,14 @@ GIVING A SECRET TO ANOTHER AGENT
   same-named secret is never overwritten; re-sending yours makes a new
   version. A secret a person gave you needs a person to send it to
   another server. Server-wide secrets aren't sent (the owner shares them
-  with k2 vault grant). The copy you get is fetch/file only, never api,
+  with k2 vault grant). The copy you get is fetch, agent or file, never api,
   and you can't widen it: use it with k2 vault fetch --secret NAME.
-  Exit 3 = a person must act (pending, held, declined): don't retry.
-  Exit 2 = the other server can't (peer_too_old). Exit 4 = no such secret
-  or agent. Every step is logged (Settings → Logs → Access Audit).
+  Exit 3 = a person must act (don't retry); 2 = the other server can't
+  (peer_too_old); 4 = no such secret or agent. Every step is logged.
 
 PUBLISHED SERVICES
-  New services start clean (base env + granted secrets). A [legacy env]
-  one inherits the daemon's environment; switch it with
-  `k2 publish env <name> clean`, then `k2 publish secret add <name> NAME`.
+  New services start clean (base env + granted secrets). [legacy env] ones
+  inherit the daemon's: k2 publish env <name> clean, then secret add.
 
 CLI TOOLS (gh, vercel: tools that read a token from the environment)
   1. k2 vault set GITHUB_CLI --kind oauth_token < token
@@ -34876,11 +34949,13 @@ HONEST LIMITS
   keys). On boxes where agents have admin rights, an agent that goes
   looking for the vault's key can find it; the vault keeps secrets out of
   chats, logs, git and copies, sends them only where they belong, and
-  logs every use.
+  logs every use. Agent delivery stops an ssh key being copied out, but
+  anything in the session (or a same-user process that finds the socket)
+  can sign while it runs. ssh -A forwarding is refused unless the secret
+  allows it (k2 vault agent-limit); clients that don't say can't be told.
 
 WHAT THE VAULT CAN'T DO YET (and the way around it today)
   sign requests (AWS SigV4, Google service-account JWT): env or file delivery
-  ssh-agent: file delivery + ssh -i
   boxes without K2: systemd-creds over SSH + k2 vault placement add (above)
 
   k2 vault --help   k2 vault list   k2 vault doctor

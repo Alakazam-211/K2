@@ -635,6 +635,16 @@ impl RateLimiter {
     }
 
     pub fn check_at(&self, key: &str, now: Instant) -> Result<(), VaultError> {
+        if !self.allow_at(key, self.per_second, self.per_minute, now) {
+            return Err(VaultError::new("rate_limited", 429, "too many vault fetches; wait a moment and try again"));
+        }
+        Ok(())
+    }
+
+    /// The same window with the limits chosen per call (the ssh agent's
+    /// per-secret limits, prd-vault-gaps-v1 item 3). `true` = allowed and
+    /// counted; a refusal isn't counted.
+    pub fn allow_at(&self, key: &str, per_second: usize, per_minute: usize, now: Instant) -> bool {
         let minute = Duration::from_secs(60);
         let second = Duration::from_secs(1);
         let mut map = self.hits.lock();
@@ -646,11 +656,11 @@ impl RateLimiter {
             q.pop_front();
         }
         let last_second = q.iter().rev().take_while(|t| now.saturating_duration_since(**t) < second).count();
-        if q.len() >= self.per_minute || last_second >= self.per_second {
-            return Err(VaultError::new("rate_limited", 429, "too many vault fetches; wait a moment and try again"));
+        if q.len() >= per_minute || last_second >= per_second {
+            return false;
         }
         q.push_back(now);
-        Ok(())
+        true
     }
 }
 

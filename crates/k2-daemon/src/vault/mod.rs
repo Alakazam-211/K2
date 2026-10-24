@@ -22,6 +22,7 @@ pub mod mainrefs;
 pub mod publish_env;
 pub mod refstore;
 pub mod spawn;
+pub mod ssh_agent;
 pub mod systemd_creds;
 pub mod tunnel;
 

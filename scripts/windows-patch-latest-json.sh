@@ -11,7 +11,9 @@
 # Usage (after setup.exe is on the release or local):
 #   scripts/windows-patch-latest-json.sh <version> [path-to-setup.exe]
 #
-# Env: TAURI_SIGNING_PRIVATE_KEY (+ PASSWORD), optional K2_RELEASE_REPO
+# Signs through scripts/lib/sign-updater.sh (key file + keychain password,
+# read only for the signature; never exported, never on argv). Optional env:
+# K2_RELEASE_REPO.
 set -euo pipefail
 
 VERSION="${1:-}"
@@ -33,19 +35,9 @@ if [ ! -f "$SETUP" ]; then
     exit 1
 fi
 
-if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
-    if [ -f "$HOME/.tauri/k2-updater.key" ]; then
-        export TAURI_SIGNING_PRIVATE_KEY
-        TAURI_SIGNING_PRIVATE_KEY="$(cat "$HOME/.tauri/k2-updater.key")"
-    elif [ -f "$HOME/.tauri/k2so-updater.key" ]; then
-        export TAURI_SIGNING_PRIVATE_KEY
-        TAURI_SIGNING_PRIVATE_KEY="$(cat "$HOME/.tauri/k2so-updater.key")"
-    fi
-fi
-if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ] || [ -z "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]; then
-    echo "ERROR: TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD required" >&2
-    exit 1
-fi
+# shellcheck source=lib/sign-updater.sh
+source "$PROJECT_DIR/scripts/lib/sign-updater.sh"
+k2u_env_guard
 
 STAGE="$(mktemp -d -t k2-win-latest)"
 cleanup() { rm -rf "$STAGE"; }
@@ -53,14 +45,9 @@ trap cleanup EXIT
 
 cp "$SETUP" "$STAGE/setup.exe"
 echo "Signing $(basename "$SETUP") for updater..."
-# The signer reads the key and its password from these env vars; never
-# pass them as arguments (argv is visible to every process on the Mac).
-export TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
-(
-    cd "$STAGE"
-    bunx @tauri-apps/cli@2 signer sign setup.exe
-)
-# tauri signer writes setup.exe.sig as base64 of the minisig (same as Mac bundle)
+# Base64-wrapped minisig (b64), as the tauri signer wrote it and the Tauri
+# updater reads it; trusted comment file:setup.exe as before.
+k2u_sign u1 "$STAGE/setup.exe" setup.exe "$VERSION" "$STAGE/setup.exe.sig" b64
 if [ ! -f "$STAGE/setup.exe.sig" ]; then
     echo "ERROR: signer did not write setup.exe.sig" >&2
     ls -la "$STAGE" >&2

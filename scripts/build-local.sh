@@ -9,10 +9,9 @@
 # tag the commit. Safe to run multiple times against the same
 # version string — each run overwrites the previous DMG.
 #
-# Prerequisites (same as release.sh):
-#   - TAURI_SIGNING_PRIVATE_KEY env var (or ~/.tauri/k2-updater.key)
-#   - TAURI_SIGNING_PRIVATE_KEY_PASSWORD env var (or will prompt)
+# Prerequisites:
 #   - Apple signing identity in keychain ("K2SO-notarize" profile)
+#   (No update-signing key: this build makes no update bundle.)
 #
 # Usage:
 #   ./scripts/build-local.sh <version>
@@ -55,8 +54,8 @@ echo "  K2 Local Build: v${VERSION}"
 echo "  (no GitHub upload, no updater manifest)"
 echo "═══════════════════════════════════════════════════"
 
-# Load .env file if present (contains TAURI_SIGNING_PRIVATE_KEY_PASSWORD
-# + K2_GMAIL_CLIENT_* for option_env! into k2-daemon).
+# Load .env file if present (K2_GMAIL_CLIENT_* for option_env! into
+# k2-daemon).
 if [ -f "$PROJECT_DIR/.env" ]; then
     set -a
     # shellcheck disable=SC1091
@@ -70,26 +69,9 @@ source "$PROJECT_DIR/scripts/require-mail-oauth-build-env.sh"
 export K2_REQUIRE_MICROSOFT_OAUTH="${K2_REQUIRE_MICROSOFT_OAUTH:-0}"
 require_mail_oauth_build_env
 
-# Load signing key from file if env var not set. SAME key under either
-# name — k2-updater.key is the post-rebrand name, k2so-updater.key the
-# original; never rotate the key itself (updates would stop verifying).
-if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
-    KEY_FILE="$HOME/.tauri/k2-updater.key"
-    [ -f "$KEY_FILE" ] || KEY_FILE="$HOME/.tauri/k2so-updater.key"
-    if [ -f "$KEY_FILE" ]; then
-        export TAURI_SIGNING_PRIVATE_KEY="$(cat "$KEY_FILE")"
-        echo "Loaded signing key from $KEY_FILE"
-    else
-        echo "ERROR: TAURI_SIGNING_PRIVATE_KEY not set and $KEY_FILE not found" >&2
-        exit 1
-    fi
-fi
-
-if [ -z "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]; then
-    echo "Enter signing key password:"
-    read -s TAURI_SIGNING_PRIVATE_KEY_PASSWORD
-    export TAURI_SIGNING_PRIVATE_KEY_PASSWORD
-fi
+# The update-signing key never reaches a build (prd-security-sweep-0464-v1
+# SS2): only scripts/lib/sign-updater.sh reads it, in release.sh.
+unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 
 cd "$PROJECT_DIR"
 

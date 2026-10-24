@@ -9,13 +9,16 @@
 #
 # Trigger: a pushed release tag (v<x.y.z>). The matrix builds
 # x86_64-unknown-linux-gnu (native) and aarch64-unknown-linux-gnu (via the
-# gnu cross toolchain), minisign-signs each with the SAME updater key the
-# Tauri app uses (so P3 verifies against plugins.updater.pubkey), and
-# uploads k2-daemon-linux-<arch> + its .sig as release assets.
+# gnu cross toolchain) and uploads k2-daemon-linux-<arch> + its .sha256
+# UNSIGNED (prd-security-sweep-0464-v1 SS1, 0.46.4). The update key is not
+# a GitHub secret any more: z3mbpZ signs the daemons with
+# scripts/sign-daemon.sh (release.sh Step 10.5), uploads the .sig files and
+# then merges them into daemon-latest.json, so the manifest never lists a
+# .sig that isn't up yet. Daemons fetch only what the manifest lists.
 #
 # Asset names MUST match what daemon-latest.json references:
-#   k2-daemon-linux-x86_64{,.sig}
-#   k2-daemon-linux-aarch64{,.sig}
+#   k2-daemon-linux-x86_64{,.sha256}    (.sig added on z3mbpZ)
+#   k2-daemon-linux-aarch64{,.sha256}   (.sig added on z3mbpZ)
 #
 # The legacy k2-mail-helper (0.44.1–0.45.3) is no longer built or shipped
 # (0.45.4, Rosson 2026-10-10): install-root-helper.sh retires it. The
@@ -54,10 +57,9 @@
 # daemon-latest.json ping URL). Distribution is off-band / portal, not
 # `gh release upload`. Cloud Linux self-update stays on the untagged assets.
 #
-# Secrets (repo Settings → Secrets and variables → Actions):
-#   TAURI_SIGNING_PRIVATE_KEY           — the minisign private key STRING
-#                                         (same key as ~/.tauri/k2-updater.key)
-#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  — its password
+# Secrets (repo Settings → Secrets and variables → Actions). No update
+# signing key: those two secrets are deleted (SS1; sign-daemon.sh
+# --preflight refuses a release while they exist).
 #   K2_GMAIL_CLIENT_ID                  — pre-packaged Gmail OAuth client id
 #                                         (option_env! into mail/oauth/mod.rs)
 #   K2_GMAIL_CLIENT_SECRET              — matching desktop client secret
@@ -209,6 +211,8 @@ jobs:
           cp "$TARGET_DIR/${{ matrix.target }}/release/k2-daemon" \
              "${{ matrix.asset }}"
           assert_daemon_embeds_ptyd "${{ matrix.asset }}"
+          # The marker sign-daemon.sh requires exactly once (version + arch).
+          test "$(grep -a -o 'K2_DAEMON_BUILD v=[0-9.]* os=linux arch=[a-z0-9_]*;' "${{ matrix.asset }}" | wc -l)" = 1
           # The root helper (prd-k2-root-helper-v1): its own crate, no
           # features (never test-keys). Signed LATER on z3mbpZ with the
           # separate root-helper key (scripts/sign-root-helper.sh); CI
@@ -243,56 +247,22 @@ jobs:
           file "${{ matrix.asset }}" "${{ matrix.node_asset }}" "${{ matrix.root_asset }}" "${{ matrix.engine_asset }}"
           assert_daemon_oauth_not_placeholder "${{ matrix.asset }}"
 
-      # Sign with the Tauri updater key via the tauri CLI signer (produces a
-      # base64-wrapped minisign signature identical in format to the macOS
-      # K2SO.app.tar.gz.sig and the macos-aarch64 daemon .sig). P3 verifies
-      # this against plugins.updater.pubkey.
-      - name: Install tauri CLI
-        run: cargo install tauri-cli --version "=2.12.0" --locked
-
-      - name: Sign binaries (minisign via tauri signer)
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: |
-          set -euo pipefail
-          # The daemon only. k2-node and the root helper are signed on
-          # z3mbpZ with the root-helper key (sign-k2-node.sh /
-          # sign-root-helper.sh).
-          for f in "${{ matrix.asset }}"; do
-            cargo tauri signer sign \
-              --private-key "$TAURI_SIGNING_PRIVATE_KEY" \
-              --password "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" \
-              "$f"
-            test -f "$f.sig"
-            # tauri signer writes the .sig as BASE64 of the minisig text; the
-            # daemon self-updater (minisign_verify) and plain minisign need
-            # the RAW text — publish that. (Found by the first real Shape B
-            # two-version e2e, 2026-07-06.)
-            if ! head -c 17 "$f.sig" | grep -q "untrusted comment"; then
-              base64 -d < "$f.sig" > "$f.sig.raw"
-              head -c 17 "$f.sig.raw" | grep -q "untrusted comment"
-              mv "$f.sig.raw" "$f.sig"
-            fi
-          done
-
-      # Daemon: logs / manual manifest merge only. Root helper: published —
-      # sign-root-helper.sh checks it.
+      # Published for every asset: sign-daemon.sh, sign-root-helper.sh,
+      # sign-k2-node.sh and sign-app-engine.sh check the downloads on z3mbpZ.
       - name: Compute sha256
         run: |
           set -euo pipefail
           sha256sum "${{ matrix.asset }}" | tee "${{ matrix.asset }}.sha256"
-          # sign-root-helper.sh / sign-k2-node.sh / sign-app-engine.sh
-          # check the downloaded assets against these.
           sha256sum "${{ matrix.root_asset }}" | tee "${{ matrix.root_asset }}.sha256"
           sha256sum "${{ matrix.node_asset }}" | tee "${{ matrix.node_asset }}.sha256"
           sha256sum "${{ matrix.engine_asset }}" | tee "${{ matrix.engine_asset }}.sha256"
 
-      # Attach the binaries + .sig to the release for this tag. The daemon
-      # manifest (daemon-latest.json) is produced by release.sh; the daemon
-      # assets use the exact names that manifest references. The helper
-      # assets are never listed in that manifest (root-owned file; ops
-      # install it with install-mail-helper.sh).
+      # Attach the UNSIGNED binaries + .sha256 to the release for this tag.
+      # The daemon manifest (daemon-latest.json) is produced by release.sh
+      # and gets the Linux entries from sign-daemon.sh after signing; the
+      # daemon assets use the exact names that manifest references. The
+      # helper assets are never listed in that manifest (root-owned file;
+      # ops install it with install-mail-helper.sh).
       - name: Upload to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -300,7 +270,7 @@ jobs:
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
           gh release upload "$TAG" \
             "${{ matrix.asset }}" \
-            "${{ matrix.asset }}.sig" \
+            "${{ matrix.asset }}.sha256" \
             "${{ matrix.node_asset }}" \
             "${{ matrix.node_asset }}.sha256" \
             "${{ matrix.root_asset }}" \
@@ -332,49 +302,6 @@ jobs:
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
           gh release upload "$TAG" scripts/install-mail-helper.sh scripts/install-root-helper.sh --clobber
 
-  # release.sh generates daemon-latest.json BEFORE this workflow builds the
-  # Linux daemons, so the manifest it uploads only carries macos-aarch64 —
-  # and a Linux daemon checking for updates finds no artifact for its
-  # platform key. (0.40.29-era daemons fold that into "up to date", which is
-  # how cfed.k2.dev sat on 0.40.29 while 0.40.31 was out.) This job runs
-  # after both matrix legs, merges the linux-* entries into the released
-  # manifest, and re-uploads it. Idempotent: re-runs overwrite the same keys.
-  # 0.46.4 (prd-app-runtime-update-continuity-v1 A1/R2): it also lists the
-  # App engine builds under their OWN keys (`k2-app-engine-linux-<arch>`),
-  # never under a `linux-<arch>` key; the rules live in
-  # scripts/merge-daemon-manifest.py (tests/packaging/daemon-manifest.sh).
-  merge-daemon-manifest:
-    name: Merge linux artifacts into daemon-latest.json
-    needs: build-linux-daemon
-    runs-on: [self-hosted, linux, k2-linux]
-    steps:
-      - name: Checkout (at the release tag)
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
-      - name: Merge + re-upload manifest
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
-          BASE="https://github.com/$REPO/releases/download/$TAG"
-          # The manifest + binaries were uploaded to THIS tag's release
-          # (manifest by release.sh Step 8.5, binaries by the matrix job).
-          # Exact cloud-update names only. Never glob `k2-daemon-linux-*`
-          # in a way that could pick up a privately built `*-airgap` binary
-          # — that compile is custom/enterprise and is not a release asset.
-          gh release download "$TAG" --repo "$REPO" \
-            -p daemon-latest.json \
-            -p k2-daemon-linux-x86_64 \
-            -p k2-daemon-linux-x86_64.sig \
-            -p k2-daemon-linux-aarch64 \
-            -p k2-daemon-linux-aarch64.sig \
-            -p k2-app-engine-linux-x86_64 \
-            -p k2-app-engine-linux-aarch64 \
-            --skip-existing
-          # The engine .sig comes later (release.sh Step 10.5): its URL is
-          # listed now and may 404 for up to ~60 min (A17).
-          python3 scripts/merge-daemon-manifest.py daemon-latest.json "$BASE" .
-          gh release upload "$TAG" daemon-latest.json --repo "$REPO" --clobber
+  # No manifest merge here any more (SS1): z3mbpZ signs the Linux daemons
+  # and merges them into daemon-latest.json itself (scripts/sign-daemon.sh,
+  # using scripts/merge-daemon-manifest.py), after their .sig is up.

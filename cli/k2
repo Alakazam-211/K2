@@ -7799,6 +7799,16 @@ See and run it:
                                        --disk-override "<reason>" on those
                                        verbs: the owner's goes through once,
                                        anyone else's waits for the owner.
+  k2 app resources clean [--dry-run] [--json]
+                                       Free only what K2 made and can make
+                                       again (unused Seeds and images, old
+                                       logs, build temps), item by item.
+                                       Never App data, databases, mail,
+                                       uploads or workspaces.
+  k2 app resources trends [--app A] [--window 24h] [--json]
+                                       CPU and memory over time: the box,
+                                       each App (beside its RAM budget),
+                                       each --cmd service.
   k2 app history <app-id>              Deploys: who, from, to, why, result.
   k2 app history --widget <name>       A Garden widget's version history.
   k2 app logs <app-id> [--deployment D] [--tail N] [--follow]
@@ -10635,6 +10645,19 @@ k2 app resources — box usage (not k2 workspace resources, not k2 app usage)
                             [--refuse 95] [--reserve 10G] [--critical 98]
                             [--critical-free 2G] [--json]
       No flags: print the lines. With flags: change them (the owner only).
+  k2 app resources clean [--dry-run] [--json]
+      Free only what K2 made and can make again, and print each item:
+      unused Seeds (not live, preview or a rollback target, unused 30
+      days), unused container images, the engine's old leftovers, rotated
+      logs, old deployment logs, build temps, old base image archives.
+      Never App data, databases, mail, uploads, workspaces or the Trash.
+      The owner and Admins clean the box; an agent only its own Apps and
+      --cmd services (a real clean needs "Build and run Apps").
+      --dry-run lists what it would free and removes nothing.
+  k2 app resources trends [--app A] [--window 1h|6h|24h|7d|30d] [--json]
+      CPU (cores busy) and memory over time for the box, each App (with its
+      RAM budget beside it) and each --cmd service. One sample a minute,
+      kept 24 h; hourly averages and peaks kept 30 days. Unknown is —.
 
 The disk guard: before new disk work starts (k2 app build, install, deploy,
 data put, a new k2 publish run --cmd service, uploads) K2 checks the disk.
@@ -10650,6 +10673,7 @@ rollback, and never deletes App data, databases, mail or folders.
 environment wins over the setting.
 
 Exit codes: 0 ok, 2 usage error or held for the owner, 3 refused.
+More: k2 study app-resources.
 EOF
 }
 
@@ -33873,7 +33897,7 @@ EOF
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-heartbeats app-tickets app-identity app-surfaces skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute compute-shared vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes design db-upgrade jobs"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-heartbeats app-tickets app-identity app-surfaces app-resources skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute compute-shared vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes design db-upgrade jobs"
 
 _study_usage() {
     cat <<'EOF'
@@ -33890,9 +33914,10 @@ Bounded teaching pages. Not a reprint of --help. Not a crawl of wiki or PRDs.
 Topics:
   what  source  map  identity  send  human  people  auth  errors
   context  db  mail  connect-boundary  apps  app-deploys  app-move  app-api  app-heartbeats  app-tickets
-  app-identity  app-surfaces  skins  feedback-loop  ticket-brief  zen  sidecars  llm-tokens
-  llm-accounts  publish-framing  compute  compute-shared  vault  notifications  data-sources
-  projects  hooks  agent-hire  garden-data  garden-access  garden-changes  changes  db-upgrade  jobs
+  app-identity  app-surfaces  app-resources  skins  feedback-loop  ticket-brief  zen  sidecars
+  llm-tokens  llm-accounts  publish-framing  compute  compute-shared  vault  notifications
+  data-sources  projects  hooks  agent-hire  garden-data  garden-access  garden-changes  changes
+  db-upgrade  jobs
 EOF
 }
 
@@ -33920,6 +33945,7 @@ _study_title() {
         app-tickets) echo "Tickets in an app" ;;
         app-identity) echo "An agent's name, color, picture and handle in an app" ;;
         app-surfaces) echo "Room members, and an App's own self and usage" ;;
+        app-resources) echo "Box usage, the disk guard, clean and trends" ;;
         skins) echo "Apps" ;;
         feedback-loop) echo "Changing this box" ;;
         ticket-brief) echo "Ticket HTML brief" ;;
@@ -34015,6 +34041,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   app-tickets         App tickets: routes, live ticket_changed frames, contract
   app-identity        App agent identity: name, color, picture, handle; caps
   app-surfaces        Room members (who holds a grant), an App's own self and usage
+  app-resources       Box usage: the disk guard's lines, clean, CPU and memory trends
   skins               leftover alias of apps
   feedback-loop       Ask to change this box; talk in this chat
   ticket-brief        The HTML brief every agent ticket carries
@@ -34066,6 +34093,7 @@ _study_page() {
         app-tickets) _study_page_app_tickets ;;
         app-identity) _study_page_app_identity ;;
         app-surfaces) _study_page_app_surfaces ;;
+        app-resources) _study_page_app_resources ;;
         skins)
             echo "k2 study skins is now k2 study apps — this page still works."
             echo
@@ -35869,6 +35897,56 @@ SUPPORT CHECK
   and the caps are refused at grant time.
 
 K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+EOF
+}
+
+_study_page_app_resources() {
+    cat <<'EOF'
+k2 study app-resources — Box usage, the disk guard, clean and trends
+
+ONE DISK, MANY USERS. Apps, --cmd services, agent folders, Postgres, mail
+and K2 share this box's disk. When it fills, Postgres stops, mail bounces
+and Apps crash. k2 app resources shows who uses what, each row with its
+owner and the address k2 msg takes. Agents see names, never folder paths.
+
+THE LINES (the owner sets them: k2 app resources settings):
+  warn      85% used or under 20 GiB free: new work goes through, warned.
+  refuse    95%, or an action would leave under 10 GiB: new installs,
+            deploys, builds, data put and new --cmd services are refused
+            (exit 3, disk_low). Uploads keep the 10 GiB too.
+  critical  98% or under 2 GiB free.
+  Never refused: restart, start, stop, rollback, uninstall. K2 never
+  stops a running App for disk.
+  --disk-override "<reason>": the owner's goes through once; yours waits
+  for the owner (exit 2, a request). At critical every override waits.
+
+WHEN YOU ARE TOLD THE DISK IS FULL. Read the numbers first:
+  k2 app resources --json
+Free what is yours: old builds, caches, node_modules you can rebuild.
+K2 never deletes your files. Ask the biggest owners with the k2 msg line
+the refusal prints; agents sort space out among themselves.
+
+CLEAN (only what K2 made and can make again):
+  k2 app resources clean --dry-run   lists each item and its size
+  k2 app resources clean             frees them
+  Unused Seeds (not live, not preview, not in an App's last 10 deploys,
+  unused 30 days; both copies), unused container images, the engine's
+  old leftovers, rotated logs (*.log.1), logs of old deployments, build
+  temps, base image archives K2 no longer pins. NEVER App data,
+  databases, mail, uploads, workspace folders, transcripts, backups or
+  the Trash. An agent cleans only its own Apps' and services' items and
+  needs "Build and run Apps" for a real clean; the owner cleans the box.
+  K2 also clears old Seeds by itself once a day.
+
+TRENDS:
+  k2 app resources trends [--app A] [--window 1h|6h|24h|7d|30d]
+  CPU in cores busy (0.5 = half of one core) and memory, for the box, each
+  App and each --cmd service. A sample a minute, kept a day; hourly
+  averages and peaks kept 30 days. Each App's RAM budget shows beside its
+  memory; trends never stop or slow an App. — means not measured here.
+
+ELSEWHERE: Settings → Apps → This server → Box usage shows the same, with
+bars. A Garden can show it with the built-in card k2:box-disk@1.
 EOF
 }
 

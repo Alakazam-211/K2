@@ -696,6 +696,17 @@ python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["id"]=="app-sur
 echo "  PASS: app-surfaces --json id+body"
 pass=$((pass + 1))
 
+echo "== k2 study app-resources (disk guard Slice B, 0.46.4) =="
+ar_out="$("$K2" study app-resources)"
+assert_contains "title" "$ar_out" "k2 study app-resources"
+for needle in "k2 app resources clean --dry-run" "NEVER App data" "Build and run Apps" "k2 app resources trends" \
+    "kept a day" "k2:box-disk@1" "--disk-override" "restart, start, stop, rollback"; do
+    assert_contains "app-resources: $needle" "$ar_out" "$needle"
+done
+ar_lines="$(printf '%s\n' "$ar_out" | wc -l | tr -d ' ')"
+if [ "$ar_lines" -le 80 ]; then echo "  PASS: app-resources is bounded ($ar_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: app-resources is $ar_lines lines (max 80)" >&2; fail=$((fail + 1)); fi
+assert_contains "catalog: app-resources row" "$("$K2" study)" "  app-resources       Box usage: the disk guard's lines, clean, CPU and memory trends"
+
 echo "== --help exit 0; bad flag exit 2 =="
 set +e
 help_out="$("$K2" study --help 2>&1)"

@@ -27,6 +27,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   app-tickets         App tickets: routes, live ticket_changed frames, contract
   app-identity        App agent identity: name, color, picture, handle; caps
   app-surfaces        Room members (who holds a grant), an App's own self and usage
+  app-resources       Box usage: the disk guard's lines, clean, CPU and memory trends
   skins               leftover alias of apps
   feedback-loop       Ask to change this box; talk in this chat
   ticket-brief        The HTML brief every agent ticket carries

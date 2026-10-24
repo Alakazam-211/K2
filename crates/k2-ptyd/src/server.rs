@@ -1066,7 +1066,14 @@ impl Server {
             Request::Ping => {
                 let n = self.sessions.len();
                 let since = self.owner_since;
-                self.reply(id, rid, Reply::Pong { sessions: n, owner_since: since });
+                #[cfg(target_os = "linux")]
+                // SAFETY: prctl query with constant args.
+                let dumpable = Some(unsafe { libc::prctl(libc::PR_GET_DUMPABLE, 0, 0, 0, 0) } != 0);
+                #[cfg(not(target_os = "linux"))]
+                let dumpable = None;
+                let mut env_keys: Vec<String> = std::env::vars_os().map(|(k, _)| k.to_string_lossy().into_owned()).collect();
+                env_keys.sort();
+                self.reply(id, rid, Reply::Pong { sessions: n, owner_since: since, dumpable, env_keys });
             }
             Request::Hello { .. } | Request::Attach { .. } => unreachable!("filtered by handle_frame"),
         }

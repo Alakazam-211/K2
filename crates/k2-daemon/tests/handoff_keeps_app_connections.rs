@@ -173,23 +173,32 @@ fn free_port() -> u16 {
 /// daemon's `disk-scan` thread runs at nice 19, so on a busy box it can
 /// finish tens of ms after the leader. A thread that has reached `X` (or
 /// left `/proc/<pid>/task`) has closed its files.
+///
+/// Observed through a pidfd, never `/proc/<pid>`: the daemons are
+/// non-dumpable (the vault), so under K2 compute's job wall
+/// (`ProtectProc=invisible`) their `/proc` entries are hidden. A pidfd
+/// polls readable only once the whole thread group has exited (the kernel
+/// delays the leader's exit notification until its last thread is gone),
+/// which is exactly "every thread finished, its files closed".
 fn pid_alive(pid: i32) -> bool {
     if unsafe { libc::kill(pid, 0) } != 0 {
         return false;
     }
     #[cfg(target_os = "linux")]
     {
-        let Ok(tasks) = std::fs::read_dir(format!("/proc/{pid}/task")) else {
+        // SAFETY: pidfd_open(pid, 0) returns a new fd or -1.
+        let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) } as i32;
+        if fd < 0 {
+            let e = std::io::Error::last_os_error();
+            assert_eq!(e.raw_os_error(), Some(libc::ESRCH), "pidfd_open({pid}): {e}");
             return false; // reaped since the kill(0)
-        };
-        tasks.filter_map(|e| e.ok()).any(|e| {
-            // A task that vanished mid-scan has exited.
-            let Ok(stat) = std::fs::read_to_string(e.path().join("stat")) else {
-                return false;
-            };
-            let state = stat.rfind(')').and_then(|i| stat[i + 1..].split_whitespace().next());
-            matches!(state, Some(s) if s != "Z" && s != "X")
-        })
+        }
+        let mut p = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
+        // SAFETY: one valid pollfd, zero timeout; then close our fd.
+        let n = unsafe { libc::poll(&mut p, 1, 0) };
+        unsafe { libc::close(fd) };
+        assert!(n >= 0, "poll(pidfd {pid}): {}", std::io::Error::last_os_error());
+        n == 0 // readable = the thread group has exited
     }
     #[cfg(not(target_os = "linux"))]
     {

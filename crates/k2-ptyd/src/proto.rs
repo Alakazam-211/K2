@@ -211,6 +211,15 @@ pub enum Reply {
     Pong {
         sessions: usize,
         owner_since: Option<u64>,
+        /// ptyd's own `PR_GET_DUMPABLE` (Linux; `None` elsewhere). S-3/P71,
+        /// reported by ptyd itself so a check never needs another process's
+        /// `/proc` (hidden under `ProtectProc=invisible`). Additive.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dumpable: Option<bool>,
+        /// The NAMES of ptyd's environment variables (never values; P5/S-4).
+        /// Additive.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        env_keys: Vec<String>,
     },
     Attached {
         start: u64,

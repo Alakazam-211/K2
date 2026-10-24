@@ -457,19 +457,25 @@ fn launcher_detaches_reaps_and_idle_exit_leaves_no_zombie() {
     let paths = home.paths();
     wait_listening(&paths);
     let ptyd_pid: i32 = std::fs::read_to_string(&paths.lock).unwrap().trim().parse().unwrap();
-    let ppid = parent_of(ptyd_pid);
-    assert_ne!(ppid, std::process::id() as i32, "ptyd is never the caller's child (P6)");
+    assert!(alive(ptyd_pid), "ptyd runs");
+    // P6: ptyd is never the caller's child. Observed through our OWN
+    // process table: waitpid on a pid that is not our child is ECHILD.
+    // (No `ps`/`/proc` of a foreign process: K2 compute's job wall runs
+    // with ProtectProc=invisible, and ptyd is non-dumpable.)
+    let mut status = 0;
+    // SAFETY: WNOHANG probe on a pid; never reaps anything we didn't start.
+    let r = unsafe { libc::waitpid(ptyd_pid, &mut status, libc::WNOHANG) };
+    assert_eq!(
+        (r, std::io::Error::last_os_error().raw_os_error()),
+        (-1, Some(libc::ECHILD)),
+        "ptyd is never the caller's child (P6)"
+    );
     // A second launch while one runs exits 3.
     let st = base_cmd(&home).arg("--launch").status().unwrap();
     assert_eq!(st.code(), Some(3));
     // Idle: no sessions, no owner → exits; socket and key removed.
     wait_gone(ptyd_pid, Duration::from_secs(10));
     assert!(!paths.sock.exists() && !paths.key.exists());
-}
-
-fn parent_of(pid: i32) -> i32 {
-    let out = Command::new("ps").args(["-o", "ppid=", "-p", &pid.to_string()]).output().unwrap();
-    String::from_utf8_lossy(&out.stdout).trim().parse().unwrap()
 }
 
 #[test]
@@ -648,8 +654,8 @@ fn launch_env_is_the_allowlist_only() {
     let paths = home.paths();
     wait_listening(&paths);
     let pid: i32 = std::fs::read_to_string(&paths.lock).unwrap().trim().parse().unwrap();
-    check_live_env(pid, &home.home);
     let mut c = owner(&home);
+    check_live_env(&mut c, pid, &home.home);
     assert_eq!(c.request(Request::Shutdown { end_sessions: true }).unwrap(), Reply::Ok);
     wait_gone(pid, Duration::from_secs(5));
 }
@@ -682,30 +688,20 @@ fn launch_env_is_exactly_the_allowlisted_subset() {
     }
 }
 
-/// Live check of a launched ptyd's environment. Linux: ptyd is non-dumpable
-/// (S-3/P71), so `/proc/<pid>/environ` is readable only by root — as
-/// non-root that refusal IS the assertion; as root every key must be on the
-/// allowlist. macOS (debug builds have no PT_DENY_ATTACH): `ps eww`.
-fn check_live_env(pid: i32, home: &Path) {
+/// Live check of a launched ptyd's environment and dumpability, asked of
+/// ptyd itself over its control socket (`ping` → `env_keys`, `dumpable`):
+/// it works under K2 compute's `ProtectProc=invisible`, where another
+/// process's `/proc` is hidden. Plus, on macOS (debug builds have no
+/// PT_DENY_ATTACH), the values through `ps eww`.
+fn check_live_env(c: &mut Client, pid: i32, home: &Path) {
+    let Reply::Pong { env_keys, dumpable, .. } = c.request(Request::Ping).unwrap() else { panic!("ping") };
+    assert!(!env_keys.is_empty(), "ptyd reports its env names");
+    for k in &env_keys {
+        assert!(k2_ptyd::env_allowed(k), "{k} leaked into ptyd's env (P5)");
+    }
+    assert!(env_keys.iter().any(|k| k == "K2_HOME"), "K2_HOME present: {env_keys:?}");
     if cfg!(target_os = "linux") {
-        let r = std::fs::read(format!("/proc/{pid}/environ"));
-        // SAFETY: geteuid has no preconditions.
-        if unsafe { libc::geteuid() } != 0 {
-            assert_eq!(r.unwrap_err().kind(), std::io::ErrorKind::PermissionDenied, "ptyd must be non-dumpable (environ unreadable to non-root)");
-            return;
-        }
-        let raw = r.unwrap();
-        let mut saw_home = false;
-        for kv in raw.split(|b| *b == 0).filter(|s| !s.is_empty()) {
-            let kv = String::from_utf8_lossy(kv);
-            let (k, v) = kv.split_once('=').expect("KEY=VALUE");
-            assert!(k2_ptyd::env_allowed(k), "{k} leaked into ptyd's env");
-            if k == "K2_HOME" {
-                assert_eq!(Path::new(v), home);
-                saw_home = true;
-            }
-        }
-        assert!(saw_home, "K2_HOME present");
+        assert_eq!(dumpable, Some(false), "ptyd must be non-dumpable (S-3/P71)");
     } else {
         let out = Command::new("ps").args(["eww", "-o", "command=", "-p", &pid.to_string()]).output().unwrap();
         let env = String::from_utf8_lossy(&out.stdout).into_owned();

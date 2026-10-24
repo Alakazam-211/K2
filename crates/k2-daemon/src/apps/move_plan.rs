@@ -129,12 +129,16 @@ fn users_hash(users: &[String]) -> String {
     Sha256::digest(v.join("\n").as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// May this caller see box-login usernames? A human (owner, a login, a
-/// shell tab), or an agent that already manages its Apps' users (switch 1).
+/// May this caller see box-login usernames and run the box checks (the
+/// doctor's probes)? The owner, a shell tab, an Owner or Admin login, or an
+/// agent that already manages its Apps' users (switch 1); never a Member
+/// login (security review, 0.46.4: the plan's GET is open to Members).
 fn may_see_users(who: &Who) -> bool {
-    match super::routes::agent_ws(who) {
-        Some(ws) => super::access::level(ws) >= super::access::Level::Build,
-        None => true,
+    match who {
+        Who::Owner | Who::Shell { .. } => true,
+        Who::Login { role, .. } => matches!(role, k2_core::connect_users::Role::Owner | k2_core::connect_users::Role::Admin),
+        Who::Agent { project_id, .. } => super::access::level(project_id) >= super::access::Level::Build,
+        _ => false,
     }
 }
 
@@ -261,6 +265,11 @@ fn plan(who: &Who, service: Option<&str>, app: Option<&str>) -> R<Plan> {
         let why = if process { "this App runs on the process engine: no wall to prepare" } else { "not a Linux box: Apps run walled on Linux only" };
         steps.push(step("box_prep", OWNER, NA, "Prepare the box for Apps", why, None));
         steps.push(step("engine", OWNER, NA, "Install the App engine", why, None));
+    } else if !may_see_users(who) {
+        // A Member's look never runs the box probes.
+        let why = "an Owner or Admin sees the box checks (k2 app doctor)";
+        steps.push(step("box_prep", OWNER, BLOCKED, "Prepare the box for Apps", why, None));
+        steps.push(step("engine", OWNER, BLOCKED, "Install the App engine", why, None));
     } else {
         let doc = super::box_prep::doctor(&super::box_prep::gather());
         let failing: Vec<String> = doc["checks"]

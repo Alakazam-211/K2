@@ -597,6 +597,24 @@ async fn move_plan_lists_every_step_and_one_approval_runs_the_owner_steps() {
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(step(&r.json(), "copy_host")["users"], json!(["ada", "bo"]));
     assert_eq!(r.json()["app"]["id"], "mpapp", "the workspace's only App by default");
+    // A Member login sees the count, never the names; an Admin login sees them.
+    let session = |user: &str, role: k2_core::connect_users::Role| {
+        k2_core::connect_users::add_user(user, "password-for-mp-int-9").expect("add_user");
+        if role != k2_core::connect_users::Role::Member {
+            k2_core::connect_users::set_role(user, role).expect("set_role");
+        }
+        k2_core::connect_users::create_session(user)
+    };
+    let member = session("mpmember", k2_core::connect_users::Role::Member);
+    let r = get(d.port, "/cli/app/move-plan", &member, "service=mpnsi%2Fagents").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let ch = step(&r.json(), "copy_host").clone();
+    assert_eq!(ch["userCount"], json!(2), "{ch}");
+    assert!(ch.get("users").is_none(), "a Member never sees the names: {ch}");
+    let admin = session("mpadmin", k2_core::connect_users::Role::Admin);
+    let r = get(d.port, "/cli/app/move-plan", &admin, "service=mpnsi%2Fagents").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(step(&r.json(), "copy_host")["users"], json!(["ada", "bo"]), "{}", r.body);
     // Another workspace's agent: no such service.
     let r = get(d.port, "/cli/app/move-plan", &passport(&stranger), "service=agents").await;
     assert_eq!((r.status, r.code()), (404, "app_not_found".to_string()), "{}", r.body);

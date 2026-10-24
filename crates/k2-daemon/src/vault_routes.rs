@@ -627,13 +627,17 @@ pub fn downgrade_finding(b: &k2_vault::vault::DowngradeBlockers) -> Option<Value
     if b.signed > 0 {
         parts.push(format!("{} signed secret(s)", b.signed));
     }
+    let mut why = String::new();
+    if b.agent + b.job_grants > 0 {
+        why.push_str(" 0.46.3 can't read agent delivery or job grants: every list and every session's secrets fail there.");
+    }
+    if b.signed > 0 {
+        why.push_str(" 0.46.3 would send a signed secret's value as a Bearer token.");
+    }
     Some(json!({
         "level": "warning",
         "code": "downgrade_breaks_0463",
-        "message": format!(
-            "Don't go back to K2 0.46.3: this vault has {}. 0.46.3 can't read agent delivery or job grants, so every list and every session's secrets fail there, and it would send a signed secret's value as a Bearer token. Stay on 0.46.4 or later.",
-            parts.join(", ")
-        ),
+        "message": format!("Don't go back to K2 0.46.3: this vault has {}.{why} Stay on 0.46.4 or later.", parts.join(", ")),
         "counts": b,
     }))
 }

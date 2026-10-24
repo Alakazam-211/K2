@@ -1077,4 +1077,7 @@ fn the_doctor_warns_against_a_downgrade_once_newer_rows_exist() {
     let m = f["message"].as_str().expect("message");
     assert!(m.contains("0.46.3") && m.contains("2 with agent delivery") && m.contains("1 job grant(s)"), "{m}");
     assert!(!m.contains("signed secret"), "{m}");
+    let s = downgrade_finding(&DowngradeBlockers { agent: 0, job_grants: 0, signed: 3 }).expect("signed");
+    let m = s["message"].as_str().expect("message");
+    assert!(m.contains("3 signed secret(s)") && m.contains("Bearer") && !m.contains("job grants"), "{m}");
 }

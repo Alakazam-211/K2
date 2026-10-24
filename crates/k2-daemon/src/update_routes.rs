@@ -12,8 +12,9 @@
 //!   - `POST /cli/daemon/update/check`  → compare running version to the
 //!     published `daemon-latest.json`. Read-only.
 //!   - `POST /cli/daemon/update/start`  → async job (blocking pool):
-//!     download this platform's artifact + `.sig`, **verify minisign
-//!     against the EMBEDDED pubkey (MANDATORY)**, verify sha256, stage.
+//!     download this platform's artifact + `.sig2`, **verify it with the
+//!     embedded update keys (`k2_release_keys::UPDATER_KEYS`, MANDATORY;
+//!     prd-security-sweep-0464-v1 SS4)**, verify sha256, stage.
 //!   - `GET  /cli/daemon/update/status?job_id=` → job phase/progress.
 //!   - `POST /cli/daemon/update/apply`  → back up the running binary,
 //!     spawn a DETACHED swap/rollback helper, then trigger the P0
@@ -30,8 +31,8 @@
 //! `shutdown_tx == None` test seam as #659/#660 (`apply` returns its ack
 //! and SKIPS the live shutdown trigger + helper spawn when `shutdown_tx`
 //! is `None`). Everything that IS verifiable here is unit-tested:
-//! manifest parse, version-compare / `available` decision, minisign
-//! verify (good vs tampered, via the upstream test vector), sha256 check,
+//! manifest parse, version-compare / `available` decision, the `sig2`
+//! verify (throwaway keys: dual-signed, U1-only, tampered), sha256 check,
 //! and the job state machine.
 
 use std::path::{Path, PathBuf};
@@ -44,18 +45,10 @@ use sha2::{Digest, Sha256};
 
 use crate::cli_response::CliResponse;
 
-/// The minisign public key the daemon verifies update artifacts against.
-///
-/// This is the EXACT value of `plugins.updater.pubkey` in
-/// `src-tauri/tauri.conf.json` — a base64 wrapper around the standard
-/// 2-line minisign `.pub` file (`untrusted comment: …\n<key-b64>`). The
-/// signing key NEVER lives in the daemon; this is verify-only. Embedding
-/// it as a compile-time constant means an attacker can't point the daemon
-/// at a manifest signed by some other key.
-///
-/// If `tauri.conf.json` rotates this key, update this constant in lockstep
-/// (a follow-up could codegen it from the manifest at build time).
-pub const UPDATER_PUBKEY_B64: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU5MTExNDQ2RjY1RUJCMDUKUldRRnUxNzJSaFFSNlFCcXptaWoyRTlidERHaERXbXBkSCthaDEvTTRQbXVIUElOVVd2S0xmNm8K";
+// The update keys live in `k2_release_keys::UPDATER_KEYS` (SS4): U2 and
+// the offline backup U3. The daemon never trusts the retired key U1, and
+// never reads the manifest's old `sig` field (that is for installs older
+// than 0.46.4).
 
 /// The marketing version this build reports + compares against the
 /// manifest. Mirrors what `/boot-status` returns.
@@ -72,11 +65,17 @@ pub fn current_version() -> &'static str {
 pub struct Artifact {
     /// Direct download URL for the `k2-daemon-<os>-<arch>` binary.
     pub url: String,
-    /// Direct download URL for the detached minisign `.sig`.
+    /// Direct download URL for the detached minisign `.sig` made with the
+    /// retired key U1. Kept in the manifest for installs older than 0.46.4;
+    /// this daemon never reads it.
     pub sig: String,
     /// Lowercase hex SHA-256 of the binary (independent integrity check
     /// layered on top of the signature).
     pub sha256: String,
+    /// Direct download URL for the `.sig2` (U2/U3, SS4): the only signature
+    /// this daemon accepts. Absent on releases before 0.46.4.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sig2: Option<String>,
 }
 
 /// `daemon-latest.json` — the release manifest the daemon fetches to
@@ -282,76 +281,28 @@ pub fn decide_check(current: &str, manifest: &DaemonManifest, install_kind: &str
 // Verification — minisign + sha256
 // ─────────────────────────────────────────────────────────────────────
 
-/// Verify `data` against a detached minisign signature `sig_str` using
-/// the public key `pubkey_wrapped_b64` (the base64-wrapped `.pub` file,
-/// e.g. [`UPDATER_PUBKEY_B64`]).
-///
-/// MANDATORY on the update path: a mismatch is a HARD abort — the caller
-/// must take NO further action (no sha256 check, no staging, no swap).
-///
-/// Real minisign signatures are prehashed (BLAKE2b), so we verify with
-/// `allow_legacy = false`. Returns `Ok(())` on a valid signature, or a
-/// stable error string otherwise.
-pub fn verify_minisign(pubkey_wrapped_b64: &str, sig_str: &str, data: &[u8]) -> Result<(), String> {
-    use base64::Engine as _;
-    // The embedded pubkey is base64 OF the 2-line `.pub` file. Decode that
-    // outer wrapper first, then hand the `.pub` text to PublicKey::decode.
-    let pub_file = base64::engine::general_purpose::STANDARD
-        .decode(pubkey_wrapped_b64.trim())
-        .map_err(|e| format!("updater pubkey is not valid base64: {e}"))?;
-    let pub_file = String::from_utf8(pub_file)
-        .map_err(|e| format!("updater pubkey is not valid utf8: {e}"))?;
-    let public_key = minisign_verify::PublicKey::decode(pub_file.trim())
-        .map_err(|e| format!("updater pubkey decode failed: {e}"))?;
-    // tauri's signer emits `.sig` files whose CONTENT is base64 of the
-    // 2-line minisig text. Release assets are published RAW (decoded at
-    // source since 2026-07-06), but accept BOTH forms so an old wrapped
-    // asset or a future pipeline regression can't brick self-update again.
-    let mut sig_text = sig_str.trim().to_string();
-    if !sig_text.starts_with("untrusted comment") {
-        if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(&sig_text) {
-            if let Ok(inner) = String::from_utf8(decoded) {
-                if inner.trim_start().starts_with("untrusted comment") {
-                    sig_text = inner;
-                }
-            }
-        }
-        // Otherwise fall through with the original string so garbage still
-        // produces the stable "signature decode failed: ..." error below.
-    }
-    let signature = minisign_verify::Signature::decode(sig_text.trim())
-        .map_err(|e| format!("signature decode failed: {e}"))?;
-    public_key
-        .verify(data, &signature, false)
-        .map_err(|e| format!("minisign verification failed: {e}"))
+/// The release asset a platform's daemon signature must name
+/// (`file:k2-daemon-<os>-<arch>` in the signed trusted comment).
+pub fn daemon_asset_name(platform: &str) -> String {
+    format!("k2-daemon-{platform}")
 }
 
-/// RH24: the (already verified) signature's trusted comment carries
-/// `file:<name>`, and `<name>` is a daemon asset (`k2-daemon-…`). The Tauri
-/// signer writes `timestamp:<n>\tfile:<name>`; the global signature over
-/// it was checked by [`verify_minisign`].
-pub fn signed_file_is_daemon(sig_str: &str) -> Result<(), String> {
-    use base64::Engine as _;
-    let mut sig_text = sig_str.trim().to_string();
-    if !sig_text.starts_with("untrusted comment") {
-        if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(&sig_text) {
-            if let Ok(inner) = String::from_utf8(decoded) {
-                sig_text = inner;
-            }
-        }
-    }
-    let sig = minisign_verify::Signature::decode(sig_text.trim())
-        .map_err(|e| format!("signature decode failed: {e}"))?;
-    let file = sig
-        .trusted_comment()
-        .split(['\t', ' '])
-        .find_map(|f| f.strip_prefix("file:"))
-        .ok_or("trusted comment has no file:")?;
-    if file.starts_with("k2-daemon-") {
-        Ok(())
-    } else {
-        Err(format!("trusted comment file is {file}"))
-    }
+/// SS4: verify a daemon update's `.sig2` with `keys` (production:
+/// `k2_release_keys::UPDATER_KEYS`). MANDATORY on the update path: an
+/// error is a HARD abort — the caller takes NO further action (no sha256
+/// check, no staging, no swap). The signature must be prehashed, from a
+/// trusted key, and its signed trusted comment must name exactly this
+/// platform's daemon asset and exactly `version` (an older signed build
+/// can't be served as a newer one; another release file can't be swapped
+/// in as the daemon).
+pub fn verify_daemon_update(
+    keys: &[k2_release_keys::TrustedKey],
+    bin: &[u8],
+    sig2: &str,
+    platform: &str,
+    version: &str,
+) -> Result<k2_release_keys::Verified, String> {
+    k2_release_keys::verify_updater_sig_with(keys, bin, sig2, &daemon_asset_name(platform), version)
 }
 
 /// True iff the lowercase-hex SHA-256 of `data` equals `expected_hex`
@@ -854,9 +805,10 @@ pub fn handle_check_body(body: &[u8]) -> CliResponse {
 /// The pipeline:
 ///   1. fetch the manifest, resolve THIS platform's artifact (404 if the
 ///      requested/latest version has no artifact for us),
-///   2. download the binary + `.sig`,
-///   3. **verify minisign against [`UPDATER_PUBKEY_B64`] — MANDATORY**;
-///      on mismatch the job goes `failed` and NOTHING else happens,
+///   2. download the binary + `.sig2`,
+///   3. **verify `.sig2` with `k2_release_keys::UPDATER_KEYS` —
+///      MANDATORY** ([`verify_daemon_update`]); on any failure the job goes
+///      `failed` and NOTHING else happens,
 ///   4. verify sha256,
 ///   5. write the binary into `~/.k2so/update/<job_id>/k2-daemon` (mode
 ///      0755) and mark the job `staged`.
@@ -942,8 +894,9 @@ pub fn handle_start(
     // pool so it NEVER ties up an accept-loop thread. The HTTP thread has
     // already returned `{job_id}` by the time this runs.
     let job_id_for_worker = job_id.clone();
+    let version_for_worker = target.clone();
     std::thread::spawn(move || {
-        run_download_stage(&job_id_for_worker, &artifact);
+        run_download_stage(&job_id_for_worker, &artifact, &version_for_worker);
     });
     // R1: stage the target's App engine beside it (its own thread: the
     // signature may not be published yet, A17; the daemon never waits).
@@ -1123,7 +1076,20 @@ pub fn handle_app_update_progress(body: &[u8]) -> CliResponse {
 /// phase as it goes; on ANY failure the job goes `failed` and the
 /// pipeline aborts (no staging, no further action). Runs on a detached
 /// worker thread spawned by [`handle_start`].
-fn run_download_stage(job_id: &str, artifact: &Artifact) {
+fn run_download_stage(job_id: &str, artifact: &Artifact, version: &str) {
+    // SS4: only the U2/U3 signature counts. A manifest without `sig2` is a
+    // release before 0.46.4 (or a broken publish): refuse before
+    // downloading anything.
+    let Some(sig2_url) = artifact.sig2.clone() else {
+        return fail_job(
+            job_id,
+            format!(
+                "this release has no sig2 for {}: releases before {} are signed only with the retired update key, which this daemon doesn't trust",
+                platform_key(),
+                k2_release_keys::FIRST_U2_SIGNED_VERSION
+            ),
+        );
+    };
     set_phase(job_id, Phase::Downloading);
     k2_core::log_debug!(
         "[daemon] P3 update/download — job {job_id} downloading binary {}",
@@ -1137,31 +1103,23 @@ fn run_download_stage(job_id: &str, artifact: &Artifact) {
         j.bytes = Some(bin.len() as u64);
         j.progress = Some(1.0);
     });
-    k2_core::log_debug!(
-        "[daemon] P3 update/download — job {job_id} downloading sig {}",
-        artifact.sig
-    );
-    let sig = match fetch_bytes(&artifact.sig) {
+    k2_core::log_debug!("[daemon] P3 update/download — job {job_id} downloading sig2 {sig2_url}");
+    let sig = match fetch_bytes(&sig2_url) {
         Ok(b) => b,
-        Err(e) => return fail_job(job_id, format!("download sig: {e}")),
+        Err(e) => return fail_job(job_id, format!("download sig2: {e}")),
     };
     let sig_str = match String::from_utf8(sig) {
         Ok(s) => s,
-        Err(e) => return fail_job(job_id, format!("sig not utf8: {e}")),
+        Err(e) => return fail_job(job_id, format!("sig2 not utf8: {e}")),
     };
 
-    // ── MANDATORY minisign verify against the EMBEDDED pubkey ──
-    // A mismatch is a HARD abort: no sha256, no staging, no swap.
+    // ── MANDATORY verify with the EMBEDDED update keys ──
+    // Any failure is a HARD abort: no sha256, no staging, no swap.
     set_phase(job_id, Phase::Verifying);
-    k2_core::log_debug!("[daemon] P3 update/download — job {job_id} verifying minisign");
-    if let Err(e) = verify_minisign(UPDATER_PUBKEY_B64, &sig_str, &bin) {
-        return fail_job(job_id, format!("signature verify FAILED — aborting: {e}"));
-    }
-    // RH24: the signed trusted comment must name a daemon asset — the same
-    // key signs other release files, and one of those swapped in as the
-    // daemon would brick it.
-    if let Err(e) = signed_file_is_daemon(&sig_str) {
-        return fail_job(job_id, format!("signature names another file — aborting: {e}"));
+    k2_core::log_debug!("[daemon] P3 update/download — job {job_id} verifying sig2");
+    match verify_daemon_update(k2_release_keys::UPDATER_KEYS, &bin, &sig_str, &platform_key(), version) {
+        Ok(v) => k2_core::log_debug!("[daemon] P3 update/download — job {job_id} signed by {} ({})", v.key_id, v.role),
+        Err(e) => return fail_job(job_id, format!("signature verify FAILED — aborting: {e}")),
     }
     // sha256 is the second integrity layer; only reached AFTER the
     // signature already validated.
@@ -2294,6 +2252,7 @@ mod tests {
                 url: "https://x/bin".into(),
                 sig: "https://x/bin.sig".into(),
                 sha256: "00".into(),
+                sig2: None,
             },
         );
         let m = DaemonManifest {
@@ -2341,6 +2300,7 @@ mod tests {
                 url: "https://x/bin".into(),
                 sig: "https://x/bin.sig".into(),
                 sha256: "00".into(),
+                sig2: None,
             },
         );
         let m = DaemonManifest {
@@ -2364,6 +2324,7 @@ mod tests {
                 url: "https://x/bin".into(),
                 sig: "https://x/bin.sig".into(),
                 sha256: "00".into(),
+                sig2: None,
             },
         );
         let m = DaemonManifest {
@@ -2413,6 +2374,7 @@ mod tests {
                 url: "https://x/bin".into(),
                 sig: "https://x/bin.sig".into(),
                 sha256: "00".into(),
+                sig2: None,
             },
         );
         let m = DaemonManifest {
@@ -2447,148 +2409,170 @@ mod tests {
         assert!(!verify_sha256(b"abc", "deadbeef"), "wrong hash must fail");
     }
 
-    // ── minisign verify (good vs tampered) ──────────────────────────
+    // ── SS4: the daemon update needs sig2 (prd-security-sweep-0464-v1 T3) ──
     //
-    // Uses the upstream `minisign-verify` PREHASHED test vector: pubkey +
-    // a real prehashed signature over b"test". We base64-WRAP the pubkey
-    // the same way tauri.conf.json wraps the production key so the test
-    // exercises the exact decode path `verify_minisign` uses in prod.
+    // Throwaway keys made in the test: U1 (the retired key, as old daemons
+    // trust it), U2 + U3 (the new list). The 0.46.3 verifier is frozen
+    // below as it shipped, so "an old install accepts a dual-signed
+    // release" is proved against the real old logic, not a guess.
 
-    /// The upstream prehashed test pubkey (bare base64 key line).
-    const TEST_PUBKEY_BARE: &str = "RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3";
-    /// A real prehashed minisign signature over the bytes b"test".
-    const TEST_SIG_PREHASHED: &str = "untrusted comment: signature from minisign secret key\nRUQf6LRCGA9i559r3g7V1qNyJDApGip8MfqcadIgT9CuhV3EMhHoN1mGTkUidF/z7SrlQgXdy8ofjb7bNJJylDOocrCo8KLzZwo=\ntrusted comment: timestamp:1556193335\tfile:test\ny/rUw2y8/hOUYjZU71eHp/Wo1KZ40fGy2VJEDl34XMJM+TX48Ss/17u3IvIfbVR1FkZZSNCisQbuQY+bHwhEBg==";
+    struct TestKey {
+        seed: [u8; 32],
+        id: [u8; 8],
+        line: String,
+    }
 
-    /// RH24: a validly signed helper (the real v0.45.0 mail-helper `.sig`)
-    /// is refused as a daemon; the real v0.45.3 macOS daemon `.sig` passes;
-    /// both raw and base64-wrapped forms are read.
-    #[test]
-    fn daemon_update_requires_a_daemon_file_in_the_trusted_comment() {
+    fn test_key(tag: &str) -> TestKey {
+        use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+        static N: AtomicU64 = AtomicU64::new(0);
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).expect("clock").as_nanos();
+        let salt = format!("{tag}:{nanos}:{}:{}", std::process::id(), N.fetch_add(1, AtomicOrdering::SeqCst));
+        let seed: [u8; 32] = Sha256::digest(format!("seed:{salt}").as_bytes()).into();
+        let mut id = [0u8; 8];
+        id.copy_from_slice(&Sha256::digest(format!("id:{salt}").as_bytes())[..8]);
+        let line = k2_root_proto::testsign::public_key_b64(&seed, id);
+        TestKey { seed, id, line }
+    }
+
+    impl TestKey {
+        fn trusted(&self, role: &'static str) -> k2_release_keys::TrustedKey {
+            k2_release_keys::TrustedKey {
+                role,
+                key_id: Box::leak(k2_release_keys::key_id_of(&self.line).expect("id").into_boxed_str()),
+                public_key_b64: Box::leak(self.line.clone().into_boxed_str()),
+            }
+        }
+        fn sign(&self, data: &[u8], tc: &str) -> String {
+            k2_root_proto::testsign::sign(&self.seed, self.id, data, tc)
+        }
+    }
+
+    /// 0.46.3's daemon check, frozen: `verify_minisign` against the one
+    /// embedded (wrapped) U1 key, then RH24 `signed_file_is_daemon`.
+    fn old_0463_accepts(u1_wrapped: &str, sig_str: &str, data: &[u8]) -> bool {
         use base64::Engine as _;
-        let helper_sig = include_str!("../../k2-root-proto/tests/fixtures/k2-mail-helper-linux-x86_64-v0.45.0.sig");
-        let err = signed_file_is_daemon(helper_sig).unwrap_err();
-        assert!(err.contains("k2-mail-helper-linux-x86_64"), "{err}");
-        let daemon_sig = "untrusted comment: signature from tauri secret key\nRUQFu172RhQR6TT88xg2EoRK2LnRlmAHVbEtFVuL/V3BfMf8YqG3bcBCSnor3UD/MlVkh5mU/hnvUaluWSo3kl6KcCyMVsi1Pg4=\ntrusted comment: timestamp:1791585472\tfile:k2-daemon-macos-aarch64\nMUDfNvtyAAzZQC6DfZwY5l/gSY7+cgql2odDt5X/jPjVmiA6vNJGNt7qe579/2WrzUkyDiJU37njeFkpwtABCg==\n";
-        signed_file_is_daemon(daemon_sig).expect("real daemon sig");
-        let wrapped = base64::engine::general_purpose::STANDARD.encode(daemon_sig);
-        signed_file_is_daemon(&wrapped).expect("wrapped daemon sig");
-        assert!(signed_file_is_daemon(TEST_SIG_PREHASHED).is_err(), "file:test is not a daemon");
+        let b = base64::engine::general_purpose::STANDARD;
+        let pub_file = String::from_utf8(b.decode(u1_wrapped.trim()).expect("pk b64")).expect("pk utf8");
+        let pk = minisign_verify::PublicKey::decode(pub_file.trim()).expect("pk");
+        let mut sig_text = sig_str.trim().to_string();
+        if !sig_text.starts_with("untrusted comment") {
+            if let Ok(d) = b.decode(&sig_text) {
+                if let Ok(inner) = String::from_utf8(d) {
+                    if inner.trim_start().starts_with("untrusted comment") {
+                        sig_text = inner;
+                    }
+                }
+            }
+        }
+        let Ok(sig) = minisign_verify::Signature::decode(sig_text.trim()) else { return false };
+        if pk.verify(data, &sig, false).is_err() {
+            return false;
+        }
+        sig.trusted_comment().split(['\t', ' ']).find_map(|f| f.strip_prefix("file:")).is_some_and(|f| f.starts_with("k2-daemon-"))
     }
 
-    /// Wrap a bare minisign key the way tauri.conf.json does: build the
-    /// 2-line `.pub` file then base64 the whole thing.
-    fn wrap_pubkey(bare_key: &str) -> String {
-        use base64::Engine as _;
-        let pub_file = format!("untrusted comment: minisign public key\n{bare_key}\n");
-        base64::engine::general_purpose::STANDARD.encode(pub_file)
+    /// A 0.46.3 daemon's `Artifact` (no `sig2`, no `deny_unknown_fields`).
+    #[derive(Deserialize)]
+    struct OldArtifact {
+        url: String,
+        sig: String,
+        sha256: String,
     }
 
-    #[test]
-    fn minisign_good_signature_passes() {
-        let wrapped = wrap_pubkey(TEST_PUBKEY_BARE);
-        verify_minisign(&wrapped, TEST_SIG_PREHASHED, b"test")
-            .expect("valid prehashed signature over b\"test\" must verify");
-    }
-
-    #[test]
-    fn minisign_tampered_data_fails() {
-        let wrapped = wrap_pubkey(TEST_PUBKEY_BARE);
-        // Same signature, but the data was tampered (b"Test" != b"test").
-        let err = verify_minisign(&wrapped, TEST_SIG_PREHASHED, b"Test")
-            .expect_err("tampered data must FAIL verification");
-        assert!(
-            err.contains("verification failed") || err.contains("verify"),
-            "err should be a verify failure: {err}"
-        );
-    }
-
-    #[test]
-    fn minisign_wrong_key_fails() {
-        // The PRODUCTION embedded key (different key id than the test
-        // signature) must reject the test signature.
-        let err = verify_minisign(UPDATER_PUBKEY_B64, TEST_SIG_PREHASHED, b"test")
-            .expect_err("signature from a different key must FAIL");
-        assert!(!err.is_empty(), "expected a non-empty error");
+    fn dual_manifest(version: &str, platform: &str, sig2: bool) -> String {
+        let base = format!("https://github.com/Alakazam-211/K2/releases/download/v{version}");
+        let asset = daemon_asset_name(platform);
+        let mut entry = serde_json::json!({
+            "url": format!("{base}/{asset}"),
+            "sig": format!("{base}/{asset}.sig"),
+            "sha256": "ab".repeat(32),
+        });
+        if sig2 {
+            entry["sig2"] = serde_json::json!(format!("{base}/{asset}.sig2"));
+        }
+        serde_json::json!({ "version": version, "pub_date": "", "artifacts": { platform: entry } }).to_string()
     }
 
     #[test]
-    fn minisign_garbage_signature_is_error_not_panic() {
-        let wrapped = wrap_pubkey(TEST_PUBKEY_BARE);
-        let err = verify_minisign(&wrapped, "not a signature", b"test")
-            .expect_err("garbage sig must be a clean Err");
-        assert!(err.contains("signature decode failed"), "err={err}");
-    }
+    fn daemon_update_a_dual_signed_release_is_accepted_by_old_and_new_daemons() {
+        let (u1, u2, u3) = (test_key("u1"), test_key("u2"), test_key("u3"));
+        let keys = [u2.trusted("primary"), u3.trusted("backup")];
+        let platform = platform_key();
+        let asset = daemon_asset_name(&platform);
+        let bin = b"the new daemon".to_vec();
+        // Exactly what release.sh / sign-daemon.sh publish: U1 in `sig`
+        // (no version), U2 in `sig2` (with version).
+        let sig_u1 = u1.sign(&bin, &format!("timestamp:1792800000\tfile:{asset}"));
+        let sig_u2 = u2.sign(&bin, &format!("timestamp:1792800000\tfile:{asset}\tversion:0.46.4"));
+        let raw = dual_manifest("0.46.4", &platform, true);
 
-    // ── base64-wrapped .sig acceptance (tauri signer emits wrapped) ──
+        // Old daemon: parses the new manifest and verifies `sig` with U1.
+        let old: std::collections::HashMap<String, serde_json::Value> = serde_json::from_str(&raw).expect("json");
+        let old_art: OldArtifact = serde_json::from_value(old["artifacts"][&platform].clone()).expect("a 0.46.3 daemon parses the new entry");
+        assert!(old_art.sig.ends_with(".sig") && old_art.url.ends_with(&asset) && old_art.sha256.len() == 64);
+        let u1_wrapped = k2_release_keys::tauri_pubkey(&u1.line).expect("wrapped U1");
+        assert!(old_0463_accepts(&u1_wrapped, &sig_u1, &bin), "an install that trusts only U1 accepts the dual-signed release");
 
-    /// Wrap a raw 2-line minisig text the way tauri's signer writes `.sig`
-    /// files: standard base64 of the whole text.
-    fn wrap_sig(raw_sig: &str) -> String {
-        use base64::Engine as _;
-        base64::engine::general_purpose::STANDARD.encode(raw_sig)
-    }
-
-    #[test]
-    fn minisign_wrapped_signature_verifies_like_raw() {
-        let wrapped_key = wrap_pubkey(TEST_PUBKEY_BARE);
-        let wrapped_sig = wrap_sig(TEST_SIG_PREHASHED);
-        verify_minisign(&wrapped_key, &wrapped_sig, b"test")
-            .expect("base64-wrapped valid signature must verify like the raw form");
-        // And the raw form still verifies (path unchanged).
-        verify_minisign(&wrapped_key, TEST_SIG_PREHASHED, b"test")
-            .expect("raw valid signature must still verify");
-    }
-
-    #[test]
-    fn minisign_wrapped_tampered_data_fails_like_raw() {
-        let wrapped_key = wrap_pubkey(TEST_PUBKEY_BARE);
-        let wrapped_sig = wrap_sig(TEST_SIG_PREHASHED);
-        let err_wrapped = verify_minisign(&wrapped_key, &wrapped_sig, b"Test")
-            .expect_err("tampered data must fail via the wrapped path too");
-        let err_raw = verify_minisign(&wrapped_key, TEST_SIG_PREHASHED, b"Test")
-            .expect_err("tampered data must fail via the raw path");
-        assert_eq!(
-            err_wrapped, err_raw,
-            "wrapped and raw forms must produce the SAME error"
-        );
+        // New daemon: reads `sig2`, verifies with the U2/U3 list.
+        let m = DaemonManifest::parse(raw.as_bytes()).expect("parse");
+        let art = m.artifact_for_current_platform().expect("artifact");
+        assert!(art.sig2.as_deref().is_some_and(|s| s.ends_with(".sig2")));
+        let v = verify_daemon_update(&keys, &bin, &sig_u2, &platform, &m.version).expect("an install that trusts only U2 accepts it");
+        assert_eq!(v.role, "primary");
+        // The backup key alone also works (U2 lost).
+        let sig_u3 = u3.sign(&bin, &format!("timestamp:1\tfile:{asset}\tversion:0.46.4"));
+        assert_eq!(verify_daemon_update(&keys, &bin, &sig_u3, &platform, "0.46.4").expect("U3").role, "backup");
+        // sig2 round-trips through the manifest type; absent stays absent.
+        let back = serde_json::to_value(art).expect("ser");
+        assert!(back.get("sig2").is_some());
+        let none = Artifact { url: "u".into(), sig: "s".into(), sha256: "x".into(), sig2: None };
+        assert!(serde_json::to_value(&none).expect("ser").get("sig2").is_none(), "no sig2 key when absent");
     }
 
     #[test]
-    fn minisign_wrapped_wrong_key_fails_same_as_raw() {
-        // Wrapped form of a valid-looking minisig against the WRONG key
-        // must produce the same error as its raw form — proves the unwrap
-        // layer is transparent.
-        let err_wrapped =
-            verify_minisign(UPDATER_PUBKEY_B64, &wrap_sig(TEST_SIG_PREHASHED), b"test")
-                .expect_err("wrong key must fail (wrapped)");
-        let err_raw = verify_minisign(UPDATER_PUBKEY_B64, TEST_SIG_PREHASHED, b"test")
-            .expect_err("wrong key must fail (raw)");
-        assert_eq!(err_wrapped, err_raw);
+    fn daemon_update_a_u1_only_release_is_refused_before_any_download() {
+        let _g = clear_jobs_for_test();
+        let platform = platform_key();
+        let raw = dual_manifest("0.46.3", &platform, false);
+        let m = DaemonManifest::parse(raw.as_bytes()).expect("parse");
+        let art = m.artifact_for_current_platform().expect("artifact").clone();
+        assert!(art.sig2.is_none());
+        let id = create_job("0.46.3");
+        // The URLs point at github.com; the stage must fail BEFORE fetching.
+        run_download_stage(&id, &art, "0.46.3");
+        let j = get_job(&id).expect("job");
+        assert_eq!(j.phase, Phase::Failed);
+        let e = j.error.unwrap_or_default();
+        assert!(e.contains("no sig2") && e.contains(k2_release_keys::FIRST_U2_SIGNED_VERSION), "{e}");
+        assert_eq!(j.bytes, None, "nothing was downloaded");
     }
 
     #[test]
-    fn minisign_base64_of_garbage_still_decode_error() {
-        // base64("not a signature") decodes to utf8 that does NOT start
-        // with "untrusted comment" → must fall through to the original
-        // string and yield the stable decode error.
-        let wrapped_key = wrap_pubkey(TEST_PUBKEY_BARE);
-        let b64_garbage = wrap_sig("not a signature");
-        let err = verify_minisign(&wrapped_key, &b64_garbage, b"test")
-            .expect_err("base64 of garbage must be a clean Err");
-        assert!(err.contains("signature decode failed"), "err={err}");
-    }
+    fn daemon_update_refuses_u1_as_sig2_other_platform_other_version_tampering_and_no_keys() {
+        let (u1, u2) = (test_key("u1"), test_key("u2"));
+        let keys = [u2.trusted("primary")];
+        let platform = platform_key();
+        let asset = daemon_asset_name(&platform);
+        let bin = b"the new daemon".to_vec();
+        let tc = format!("timestamp:1\tfile:{asset}\tversion:0.46.4");
+        let good = u2.sign(&bin, &tc);
+        verify_daemon_update(&keys, &bin, &good, &platform, "0.46.4").expect("control");
 
-    #[test]
-    fn minisign_embedded_prod_pubkey_decodes() {
-        // The embedded production pubkey must at least DECODE (wrong key id
-        // for the test sig, but the base64-wrap + .pub decode path works).
-        use base64::Engine as _;
-        let raw = base64::engine::general_purpose::STANDARD
-            .decode(UPDATER_PUBKEY_B64)
-            .expect("embedded pubkey is valid base64");
-        let s = String::from_utf8(raw).expect("utf8");
-        minisign_verify::PublicKey::decode(s.trim())
-            .expect("embedded pubkey decodes as a minisign .pub");
+        let e = verify_daemon_update(&keys, &bin, &u1.sign(&bin, &tc), &platform, "0.46.4").unwrap_err();
+        assert!(e.contains("doesn't trust"), "a U1 signature in sig2: {e}");
+        let other = if platform.ends_with("x86_64") { platform.replace("x86_64", "aarch64") } else { platform.replace("aarch64", "x86_64") };
+        assert!(verify_daemon_update(&keys, &bin, &good, &other, "0.46.4").unwrap_err().contains("names file"));
+        let helper = u2.sign(&bin, "timestamp:1\tfile:k2-root-helper-linux-x86_64\tversion:0.46.4");
+        assert!(verify_daemon_update(&keys, &bin, &helper, &platform, "0.46.4").is_err(), "another release file");
+        assert!(verify_daemon_update(&keys, &bin, &good, &platform, "0.46.5").unwrap_err().contains("for version"), "an old build served as new");
+        assert!(verify_daemon_update(&keys, b"evil daemon", &good, &platform, "0.46.4").is_err());
+        let forged = good.replace("version:0.46.4", "version:0.46.5");
+        assert!(verify_daemon_update(&keys, &bin, &forged, &platform, "0.46.5").is_err(), "an edited trusted comment");
+        assert!(verify_daemon_update(&[], &bin, &good, &platform, "0.46.4").is_err());
+        if k2_release_keys::UPDATER_KEYS.is_empty() {
+            // Before the ceremony lands, the shipped list trusts nothing.
+            assert!(verify_daemon_update(k2_release_keys::UPDATER_KEYS, &bin, &good, &platform, "0.46.4").is_err());
+        }
     }
 
     // ── Job state machine ───────────────────────────────────────────
@@ -3299,7 +3283,7 @@ mod tests {
         let mut artifacts = std::collections::HashMap::new();
         artifacts.insert(
             platform_key(),
-            Artifact { url: "https://x/bin".into(), sig: "https://x/bin.sig".into(), sha256: "00".into() },
+            Artifact { url: "https://x/bin".into(), sig: "https://x/bin.sig".into(), sha256: "00".into(), sig2: None },
         );
         DaemonManifest { version: version.into(), pub_date: String::new(), artifacts, notes: None }
     }

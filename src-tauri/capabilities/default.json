@@ -63,7 +63,6 @@
     "clipboard-manager:allow-read-text",
     "deep-link:default",
     "drag:default",
-    "updater:default",
     "process:default",
     "notification:default"
   ]

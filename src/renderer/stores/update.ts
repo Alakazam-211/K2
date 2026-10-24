@@ -1,23 +1,21 @@
 import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
-import { check, type Update } from '@tauri-apps/plugin-updater'
+import { listen } from '@tauri-apps/api/event'
 import { isAirgap } from '@/lib/airgap'
 // relaunch handled by Rust-side relaunch_via_open (helper script)
 
 type UpdateStatus = 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'error'
 
-type UpdateProgressEvent = {
-  event: 'Started' | 'Progress' | 'Finished'
-  data?: unknown
+/** `app_update_check` result (Rust, src-tauri/src/commands/updater.rs). */
+interface AppUpdateAvailable {
+  version: string
+  notes: string | null
 }
 
-/** Tauri 2 updater: `download()` then `install()` — do not use
- *  `downloadAndInstall` for the Settings "Download" button (that runs
- *  NSIS immediately, skips Install & Relaunch, and on Windows fails to
- *  overwrite a live `k2-daemon.exe`). */
-type SplitUpdate = Update & {
-  download?: (onEvent?: (event: UpdateProgressEvent) => void) => Promise<void>
-  install?: () => Promise<void>
+/** `app-update-progress` event payload while `app_update_download` runs. */
+interface AppUpdateProgress {
+  downloaded: number
+  total: number | null
 }
 
 interface InstallUpdateProbe {
@@ -74,24 +72,13 @@ function updateErrorText(err: unknown): string {
   return String(err)
 }
 
-let pendingUpdate: SplitUpdate | null = null
-
-function applyDownloadProgress(
-  event: UpdateProgressEvent,
-  acc: { contentLength: number; downloaded: number },
-  set: (p: Partial<UpdateState>) => void,
-): void {
-  if (event.event === 'Started') {
-    acc.contentLength = (event.data as { contentLength?: number } | undefined)?.contentLength ?? 0
-  } else if (event.event === 'Progress') {
-    acc.downloaded += (event.data as { chunkLength?: number } | undefined)?.chunkLength ?? 0
-    const pct =
-      acc.contentLength > 0 ? Math.round((acc.downloaded / acc.contentLength) * 100) : 0
-    set({ progress: pct })
-  } else if (event.event === 'Finished') {
-    set({ status: 'ready', progress: 100 })
-  }
-}
+/** True after `app_update_check` found an update (the Rust side holds it).
+ *  App updates are found, downloaded, verified with K2's own update keys
+ *  and installed in Rust (prd-security-sweep-0464-v1 SS4); the webview
+ *  never calls the Tauri updater plugin. Download, then Install & Relaunch:
+ *  never one step (on Windows that would run NSIS over a live
+ *  `k2-daemon.exe`). */
+let pendingUpdate = false
 
 export const useUpdateStore = create<UpdateState>((set, get) => ({
   status: 'idle',
@@ -121,7 +108,7 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
       // Linux packages (Arch, deb, rpm) update from their package, not the
       // Tauri updater: latest.json has no linux-x86_64 entry.
       if (probe.kind === 'arch' || probe.kind === 'linux-package') {
-        pendingUpdate = null
+        pendingUpdate = false
         if (probe.has_update && probe.version && probe.download_url) {
           set({
             status: 'available',
@@ -145,7 +132,7 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
     } catch (err) {
       // Fetch failed. Do not throw: the hook's catch only looks for a .dmg.
       console.error('[updater] Linux package manifest check failed:', err)
-      pendingUpdate = null
+      pendingUpdate = false
       set({
         status: 'error',
         error: updateErrorText(err),
@@ -154,18 +141,19 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
       return false
     }
     try {
-      const update = await check()
+      const update = await invoke<AppUpdateAvailable | null>('app_update_check')
       if (update) {
-        pendingUpdate = update
+        pendingUpdate = true
         set({
           status: 'available',
           version: update.version,
-          notes: update.body ?? null,
+          notes: update.notes ?? null,
           error: null,
           archDownloadUrl: null,
         })
         return true
       }
+      pendingUpdate = false
       set({ status: 'idle', archDownloadUrl: null })
       return false
     } catch (err) {
@@ -231,19 +219,20 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
   startDownload: async () => {
     if (!pendingUpdate) return
     set({ status: 'downloading', progress: 0 })
-    const acc = { contentLength: 0, downloaded: 0 }
-    const onEvent = (event: UpdateProgressEvent) => applyDownloadProgress(event, acc, set)
+    let unlisten: (() => void) | null = null
     try {
-      if (typeof pendingUpdate.download === 'function') {
-        await pendingUpdate.download(onEvent)
-      } else {
-        // Older plugin: no split API — last resort, still installs immediately.
-        await pendingUpdate.downloadAndInstall(onEvent)
-      }
+      unlisten = await listen<AppUpdateProgress>('app-update-progress', (e) => {
+        const { downloaded, total } = e.payload
+        if (total && total > 0) set({ progress: Math.min(99, Math.round((downloaded / total) * 100)) })
+      })
+      // Rust downloads AND verifies (k2_signatures); a refusal is an error.
+      await invoke<string>('app_update_download')
       set({ status: 'ready', progress: 100 })
     } catch (err) {
       console.error('[updater] Download failed:', err)
-      set({ status: 'error', error: String(err) })
+      set({ status: 'error', error: updateErrorText(err) })
+    } finally {
+      unlisten?.()
     }
   },
 
@@ -256,9 +245,15 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
       await invoke('stop_bundled_daemon_for_update').catch((e) => {
         console.warn('[updater] stop daemon before install:', e)
       })
-      if (pendingUpdate && typeof pendingUpdate.install === 'function') {
-        await pendingUpdate.install()
+      try {
+        await invoke('app_update_install')
+      } catch (err) {
+        // Not installed (nothing verified to install, or the install failed).
+        console.error('[updater] Install failed:', err)
+        set({ status: 'error', error: updateErrorText(err) })
+        return
       }
+      pendingUpdate = false
       // macOS: open -a helper. Windows: start after this PID dies.
       // (On Windows, relaunch_via_open used to only process::exit — no relaunch.)
       await invoke('relaunch_via_open')

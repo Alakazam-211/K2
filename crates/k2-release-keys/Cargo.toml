@@ -1,0 +1,23 @@
+[package]
+name = "k2-release-keys"
+# Not the product version: release.sh does not bump this crate. The keys
+# change only through scripts/updater-key-ceremony.sh.
+version = "0.1.0"
+edition = "2021"
+license = "FSL-1.1-Apache-2.0"
+description = "The one list of update-signing keys every K2 updater verifier trusts (prd-security-sweep-0464-v1 SS4), and the shared verify: minisign, prehashed only, strict file:/version: trusted-comment checks. Verify-only; linked by k2-daemon and the desktop app (not k2-core)."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+# Verify-only, pure Rust (the daemon's and root helper's verifier too).
+minisign-verify = "0.2"
+base64 = "0.22"
+serde_json = "1"
+
+[dev-dependencies]
+# Throwaway signing keys inside the tests (ring Ed25519 + the root-proto
+# test signer, which writes minisign's exact format).
+k2-root-proto = { path = "../k2-root-proto", features = ["test-signer"] }
+ring = "0.17"

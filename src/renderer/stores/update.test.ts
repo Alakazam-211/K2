@@ -1,10 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }))
-vi.mock('@tauri-apps/plugin-updater', () => ({ check: vi.fn() }))
+vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(async () => () => {}) }))
 
 import { invoke } from '@tauri-apps/api/core'
-import { check } from '@tauri-apps/plugin-updater'
 import { checkForUpdate } from '@/hooks/useUpdateChecker'
 import { setConnectedAirgap } from '@/lib/airgap'
 import { useToastStore } from '@/stores/toast'
@@ -22,6 +21,10 @@ interface Probe {
   download_url: string | null
   can_install?: boolean
 }
+
+/** Stands in for the Rust `app_update_check` (SS4: the webview no longer
+ *  calls the Tauri updater plugin's `check()`). */
+const check = vi.fn()
 
 function resetStores(): void {
   setConnectedAirgap(false)
@@ -47,6 +50,7 @@ function mockProbe(result: Probe | string): void {
       if (typeof result === 'string') throw result
       return result
     }
+    if (cmd === 'app_update_check') return check()
     if (cmd === 'plugin:opener|open_url') return null
     throw new Error(`unexpected invoke ${cmd}`)
   })
@@ -111,7 +115,6 @@ describe('checkForUpdate install kind', () => {
       has_update: true,
       download_url: page,
     })
-    vi.mocked(check).mockRejectedValue(MISSING_PLATFORM)
     const hasUpdate = await useUpdateStore.getState().checkForUpdate()
     expect(hasUpdate).toBe(true)
     expect(check).not.toHaveBeenCalled()
@@ -135,7 +138,6 @@ describe('checkForUpdate install kind', () => {
       has_update: false,
       download_url: null,
     })
-    vi.mocked(check).mockRejectedValue(MISSING_PLATFORM)
     await checkForUpdate(true)
     expect(check).not.toHaveBeenCalled()
     expect(useUpdateStore.getState().status).toBe('idle')
@@ -146,7 +148,7 @@ describe('checkForUpdate install kind', () => {
   })
 
   it.each(['macos', 'appimage', 'other'])(
-    'kind %s still calls plugin check()',
+    'kind %s still asks Rust app_update_check',
     async (kind) => {
       mockProbe({
         kind,
@@ -311,5 +313,70 @@ describe('Linux package in-app install (pkexec)', () => {
     expect(state.status).toBe('error')
     expect(state.error).toContain('K2 v9.9.9 is installed. Please reopen K2')
     expect(state.error).toContain('/usr/bin/k2-gui is missing after the install')
+  })
+})
+
+describe('desktop app update through Rust (SS4: K2 update keys, not the plugin key)', () => {
+  beforeEach(() => {
+    resetStores()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+  })
+
+  function mockApp(download: string | Error, install: unknown | Error = null): void {
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'probe_install_update') return { kind: 'macos', version: null, has_update: false, download_url: null }
+      if (cmd === 'app_update_check') return { version: '9.9.9', notes: 'shiny' }
+      if (cmd === 'app_update_download') {
+        if (download instanceof Error) throw download.message
+        return download
+      }
+      if (cmd === 'app_update_install') {
+        if (install instanceof Error) throw install.message
+        return install
+      }
+      if (cmd === 'stop_bundled_daemon_for_update' || cmd === 'relaunch_via_open') return null
+      throw new Error(`unexpected invoke ${cmd}`)
+    })
+  }
+
+  it('check, download (verified in Rust), then install and relaunch', async () => {
+    mockApp('ABCDEF0123456789')
+    expect(await useUpdateStore.getState().checkForUpdate()).toBe(true)
+    expect(useUpdateStore.getState().version).toBe('9.9.9')
+    expect(useUpdateStore.getState().notes).toBe('shiny')
+    await useUpdateStore.getState().startDownload()
+    expect(useUpdateStore.getState().status).toBe('ready')
+    await useUpdateStore.getState().installAndRelaunch()
+    const cmds = vi.mocked(invoke).mock.calls.map((call) => call[0])
+    expect(cmds).toEqual([
+      'probe_install_update',
+      'app_update_check',
+      'app_update_download',
+      'stop_bundled_daemon_for_update',
+      'app_update_install',
+      'relaunch_via_open',
+    ])
+  })
+
+  it('a refused signature (e.g. a release signed with the retired key only) is an error, never installed', async () => {
+    mockApp(new Error('K2 refused this update: this update has no K2 signature (k2_signatures)'))
+    await useUpdateStore.getState().checkForUpdate()
+    await useUpdateStore.getState().startDownload()
+    const state = useUpdateStore.getState()
+    expect(state.status).toBe('error')
+    expect(state.error).toContain('K2 refused this update')
+    const cmds = vi.mocked(invoke).mock.calls.map((call) => call[0])
+    expect(cmds).not.toContain('app_update_install')
+  })
+
+  it('an install refusal shows its own reason, not "Update installed"', async () => {
+    mockApp('ABCDEF0123456789', new Error("the update isn't downloaded and verified yet"))
+    await useUpdateStore.getState().checkForUpdate()
+    await useUpdateStore.getState().installAndRelaunch()
+    const state = useUpdateStore.getState()
+    expect(state.status).toBe('error')
+    expect(state.error).toBe("the update isn't downloaded and verified yet")
+    const cmds = vi.mocked(invoke).mock.calls.map((call) => call[0])
+    expect(cmds).not.toContain('relaunch_via_open')
   })
 })

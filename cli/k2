@@ -4235,8 +4235,8 @@ cmd_daemon_uninstall() {
 # ── P2: headless standalone-daemon installer ─────────────────────────
 #
 # `k2 daemon install` fetches the per-OS standalone daemon binary
-# published by the release pipeline (P1), minisign-verifies it against
-# the SAME pubkey the Tauri updater uses (embedded literal below), and
+# published by the release pipeline (P1), minisign-verifies its .sig2 with
+# the K2 update keys (embedded below; SS4), and
 # drops it into a bin dir + writes a supervisor unit so a crash/restart
 # respawns the process.
 #
@@ -4244,10 +4244,15 @@ cmd_daemon_uninstall() {
 # top-level router intercepts it BEFORE the connection gate (search for
 # DAEMON_INSTALL_EARLY_BYPASS). It uses no cli_request()/HTTP-to-daemon.
 #
-# Minisign verify pubkey — literal string from
-# plugins.updater.pubkey in src-tauri/tauri.conf.json. If you rotate
-# the updater key, rotate this too (and scripts/install-daemon.sh).
-_DAEMON_MINISIGN_PUBKEY="dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU5MTExNDQ2RjY1RUJCMDUKUldRRnUxNzJSaFFSNlFCcXptaWoyRTlidERHaERXbXBkSCthaDEvTTRQbXVIUElOVVd2S0xmNm8K"
+# The K2 update keys (prd-security-sweep-0464-v1 SS4): minisign key lines,
+# U2 (primary) then U3 (offline backup), space-separated. A copy of
+# k2_release_keys::UPDATER_KEYS (crates/k2-release-keys); a test fails when
+# the copies drift (also scripts/install-daemon.sh). Written only by
+# scripts/updater-key-ceremony.sh pubkeys. Empty until the key ceremony
+# lands: then `k2 daemon install` refuses every binary.
+_DAEMON_UPDATE_PUBKEYS=""
+# Releases before this carry no .sig2 (signed with the retired key only).
+_DAEMON_FIRST_U2_VERSION="0.46.4"
 
 _DAEMON_DEFAULT_LATEST_URL="https://github.com/Alakazam-211/K2/releases/latest/download/daemon-latest.json"
 _DAEMON_VERSION_URL_TMPL="https://github.com/Alakazam-211/K2/releases/download/v%s/daemon-latest.json"
@@ -4290,6 +4295,50 @@ _daemon_manifest_field() {
 _daemon_manifest_version() {
     printf '%s' "$1" | tr '\n' ' ' \
         | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+}
+
+# _daemon_version_lt <a> <b>: a is an older x.y.z than b (unparsable = older).
+_daemon_version_lt() {
+    awk -v a="$1" -v b="$2" 'BEGIN {
+        if (a !~ /^v?[0-9]+\.[0-9]+\.[0-9]+$/ || b !~ /^v?[0-9]+\.[0-9]+\.[0-9]+$/) exit 0
+        sub(/^v/, "", a); sub(/^v/, "", b)
+        split(a, x, "."); split(b, y, ".")
+        for (i = 1; i <= 3; i++) { if (x[i] + 0 < y[i] + 0) exit 0; if (x[i] + 0 > y[i] + 0) exit 1 }
+        exit 1
+    }'
+}
+
+_daemon_retired_key_msg() {
+    echo "Versions before $_DAEMON_FIRST_U2_VERSION are signed with the retired update key, which this k2 doesn't trust." >&2
+    echo "Install $_DAEMON_FIRST_U2_VERSION or newer." >&2
+}
+
+# _daemon_verify_update_sig <bin> <minisig> <asset> <version>: one of the K2
+# update keys signed it, and the signed trusted comment names exactly this
+# asset (file:) and version (version:). 0 = verified.
+_daemon_verify_update_sig() {
+    local bin="$1" sigf="$2" asset="$3" ver="$4" k tc files vers
+    if [ -z "$_DAEMON_UPDATE_PUBKEYS" ]; then
+        echo "This k2 trusts no update key yet (the update-key ceremony has not landed). Refusing." >&2
+        return 1
+    fi
+    for k in $_DAEMON_UPDATE_PUBKEYS; do
+        if tc=$(minisign -V -P "$k" -m "$bin" -x "$sigf" -Q 2>/dev/null); then
+            files=$(printf '%s\n' "$tc" | tr '\t' '\n' | grep '^file:' || true)
+            vers=$(printf '%s\n' "$tc" | tr '\t' '\n' | grep '^version:' || true)
+            if [ "$files" != "file:$asset" ]; then
+                echo "The signature is for '${files#file:}', not $asset. Refusing." >&2
+                return 1
+            fi
+            if [ "$vers" != "version:$ver" ]; then
+                echo "The signature is for version '${vers#version:}', not $ver. Refusing." >&2
+                return 1
+            fi
+            return 0
+        fi
+    done
+    echo "Not signed by a K2 update key." >&2
+    return 1
 }
 
 # Compute sha256 hex of a file using whichever tool is present.
@@ -4368,8 +4417,8 @@ cmd_daemon_install() {
                 echo "                           [--manifest-url <url>] [--no-service] [--dry-run]"
                 echo ""
                 echo "  Install the STANDALONE (headless, no-GUI) K2 daemon binary"
-                echo "  from a signed GitHub release. Minisign-verifies the binary"
-                echo "  against the embedded updater pubkey before installing."
+                echo "  from a signed GitHub release (0.46.4 or newer). Minisign-verifies"
+                echo "  the binary with the embedded K2 update keys before installing."
                 echo ""
                 echo "  --version       install a specific release tag (default: latest)."
                 echo "  --bin-dir       install dir (default: ~/.local/bin)."
@@ -4396,6 +4445,10 @@ cmd_daemon_install() {
     if [ -n "$manifest_url" ]; then
         resolved_manifest_url="$manifest_url"
     elif [ -n "$version" ]; then
+        if _daemon_version_lt "$version" "$_DAEMON_FIRST_U2_VERSION"; then
+            _daemon_retired_key_msg
+            return 1
+        fi
         resolved_manifest_url=$(printf "$_DAEMON_VERSION_URL_TMPL" "$version")
     else
         resolved_manifest_url="$_DAEMON_DEFAULT_LATEST_URL"
@@ -4431,15 +4484,26 @@ cmd_daemon_install() {
     local mver url sig sha256
     mver=$(_daemon_manifest_version "$manifest")
     url=$(_daemon_manifest_field "$manifest" "$platform" "url") || true
-    sig=$(_daemon_manifest_field "$manifest" "$platform" "sig") || true
+    # Only the K2 update keys' signature (.sig2) counts; `sig` is for
+    # installs older than 0.46.4.
+    sig=$(_daemon_manifest_field "$manifest" "$platform" "sig2") || true
     sha256=$(_daemon_manifest_field "$manifest" "$platform" "sha256") || true
 
-    if [ -z "$url" ] || [ -z "$sig" ] || [ -z "$sha256" ]; then
+    if [ -z "$url" ] || [ -z "$sha256" ] || [ -z "$mver" ]; then
         echo "Manifest has no complete artifact for platform '$platform'." >&2
-        echo "  url=${url:-<missing>} sig=${sig:+<present>}${sig:-<missing>} sha256=${sha256:-<missing>}" >&2
+        echo "  url=${url:-<missing>} sha256=${sha256:-<missing>}" >&2
         echo "  (manifest version: ${mver:-<unknown>})" >&2
         return 1
     fi
+    if [ -z "$sig" ] || _daemon_version_lt "$mver" "$_DAEMON_FIRST_U2_VERSION"; then
+        _daemon_retired_key_msg
+        return 1
+    fi
+    if [ -n "$version" ] && [ "$mver" != "${version#v}" ]; then
+        echo "The manifest is for $mver, not the requested $version. Refusing." >&2
+        return 1
+    fi
+    local asset="k2-daemon-$platform"
 
     local bin_path="$bin_dir/k2-daemon"
 
@@ -4487,9 +4551,9 @@ cmd_daemon_install() {
         echo "  requested ver:  ${version:-<latest>}"
         echo "  binary url:     $url"
         echo "  sha256:         $sha256"
-        echo "  sig (minisign): ${sig%% *}..."
+        echo "  sig2 (minisign): ${sig%% *}..."
         echo "  install path:   $bin_path"
-        echo "  minisign verify: minisign -Vm <downloaded-bin> -P <embedded-pubkey>"
+        echo "  minisign verify: minisign -V -P <K2 update key> (file:$asset version:$mver)"
         if [ "$no_service" = "1" ]; then
             echo "  service:        (skipped — --no-service)"
         elif [ -n "$existing_unit" ]; then
@@ -4533,20 +4597,14 @@ cmd_daemon_install() {
         *) curl -fsSL "$url" -o "$dl_bin" ;;
     esac || { echo "Failed to download binary: $url" >&2; return 1; }
 
-    # The manifest's `sig` field is a URL to the .sig asset (the daemon
-    # self-updater's contract since 0.39.35); older/local manifests may
-    # inline the signature. Support both. (We trust the manifest only
-    # insofar as minisign then cryptographically verifies the binary
-    # against the embedded pubkey.)
+    # `sig2` is a URL to the .sig2 asset (raw minisig text); a local
+    # manifest may inline it. Base64-wrapped text is accepted too.
     case "$sig" in
         http://*|https://*) curl -fsSL "$sig" -o "$dl_sig" \
             || { echo "Failed to download signature: $sig" >&2; return 1; } ;;
         file://*) cp "${sig#file://}" "$dl_sig" ;;
         *) printf '%s\n' "$sig" > "$dl_sig" ;;
     esac
-
-    # Tauri's signer emits .sig content as BASE64 of the minisig text;
-    # minisign -x needs the raw text. Decode when it isn't already bare.
     if ! head -c 17 "$dl_sig" | grep -q "untrusted comment"; then
         if base64 -d "$dl_sig" > "$dl_sig.dec" 2>/dev/null \
             || base64 -D "$dl_sig" > "$dl_sig.dec" 2>/dev/null \
@@ -4559,20 +4617,8 @@ cmd_daemon_install() {
         fi
     fi
 
-    # The embedded pubkey is tauri-format: base64 of the full two-line
-    # minisign public-key file. `minisign -P` wants the bare key line,
-    # so decode to a file and verify with `-p`.
-    local pub_file="$tmp/minisign.pub"
-    if { printf '%s' "$_DAEMON_MINISIGN_PUBKEY" | base64 -d > "$pub_file" 2>/dev/null \
-         || printf '%s' "$_DAEMON_MINISIGN_PUBKEY" | base64 -D > "$pub_file" 2>/dev/null; } \
-        && head -c 17 "$pub_file" | grep -q "untrusted comment"; then
-        :
-    else
-        printf 'untrusted comment: minisign public key\n%s\n' "$_DAEMON_MINISIGN_PUBKEY" > "$pub_file"
-    fi
-
-    echo "Verifying minisign signature..."
-    if ! minisign -Vm "$dl_bin" -p "$pub_file" -x "$dl_sig" >/dev/null 2>&1; then
+    echo "Verifying minisign signature (K2 update keys)..."
+    if ! _daemon_verify_update_sig "$dl_bin" "$dl_sig" "$asset" "$mver"; then
         echo "MINISIGN VERIFICATION FAILED for $url" >&2
         echo "Refusing to install. The binary may be corrupt or tampered with." >&2
         return 1

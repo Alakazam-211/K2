@@ -4037,6 +4037,7 @@ dependencies = [
  "image",
  "k2-client",
  "k2-core",
+ "k2-release-keys",
  "keyring",
  "libc",
  "log",
@@ -4225,6 +4226,7 @@ dependencies = [
  "k2-node",
  "k2-node-proto",
  "k2-ptyd",
+ "k2-release-keys",
  "k2-root-proto",
  "k2-vault",
  "lettre",
@@ -4332,6 +4334,17 @@ version = "0.1.0"
 dependencies = [
  "aho-corasick",
  "base64 0.22.1",
+ "serde_json",
+]
+
+[[package]]
+name = "k2-release-keys"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "k2-root-proto",
+ "minisign-verify",
+ "ring",
  "serde_json",
 ]
 

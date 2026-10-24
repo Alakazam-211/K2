@@ -5,17 +5,20 @@
     "macos-aarch64": {
       "url": "https://example.invalid/v9.9.9/k2-daemon-macos-aarch64",
       "sig": "https://example.invalid/v9.9.9/k2-daemon-macos-aarch64.sig",
-      "sha256": "d000000000000000000000000000000000000000000000000000000000000001"
+      "sha256": "d000000000000000000000000000000000000000000000000000000000000001",
+      "sig2": "https://example.invalid/v9.9.9/k2-daemon-macos-aarch64.sig2"
     },
     "linux-x86_64": {
       "url": "https://example.invalid/v9.9.9/k2-daemon-linux-x86_64",
       "sig": "https://example.invalid/v9.9.9/k2-daemon-linux-x86_64.sig",
-      "sha256": "d000000000000000000000000000000000000000000000000000000000000002"
+      "sha256": "d000000000000000000000000000000000000000000000000000000000000002",
+      "sig2": "https://example.invalid/v9.9.9/k2-daemon-linux-x86_64.sig2"
     },
     "linux-aarch64": {
       "url": "https://example.invalid/v9.9.9/k2-daemon-linux-aarch64",
       "sig": "https://example.invalid/v9.9.9/k2-daemon-linux-aarch64.sig",
-      "sha256": "d000000000000000000000000000000000000000000000000000000000000003"
+      "sha256": "d000000000000000000000000000000000000000000000000000000000000003",
+      "sig2": "https://example.invalid/v9.9.9/k2-daemon-linux-aarch64.sig2"
     },
     "k2-app-engine-linux-x86_64": {
       "url": "https://example.invalid/v9.9.9/k2-app-engine-linux-x86_64",

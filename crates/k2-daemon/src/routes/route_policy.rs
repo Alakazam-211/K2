@@ -345,6 +345,11 @@ pub const ROUTES: &[Route] = &[
     post("/cli/app/stop", Admin),
     // S19: suspend narrows: any Member (a passport: its own workspace's Apps).
     post("/cli/app/suspend", Admin),
+    // 0.46.4: test guests scoped to one App (handler: the App's own
+    // workspace agent with switch 1, or a human; never a Member).
+    post("/cli/app/test-guest/add", Admin),
+    post("/cli/app/test-guest/rm", Admin),
+    get("/cli/app/test-guests", Member),
     // purge (deletes the App's data) is owner-only in the handler.
     post("/cli/app/uninstall", Admin),
     // Q8: the owner gives a parked App to a workspace.

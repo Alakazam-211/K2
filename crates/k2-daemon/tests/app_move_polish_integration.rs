@@ -651,3 +651,119 @@ async fn refused_gateway_calls_carry_their_code_and_reach_the_apps_log() {
     gateway::close("logapp", None, true);
     k2_daemon::apps::alerts::set_sink(None);
 }
+
+/// B: the App's own agent makes test guests of that App only: its own
+/// roles, a short life, at most 5, shown as test, audited; they sign in
+/// only through that App's link.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_guests_are_one_apps_short_lived_and_sign_in_only_on_its_link() {
+    let env = setup(&[]);
+    let _seen = quiet_alerts();
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let ws = seed_ws(&env, "tgws");
+    let other = seed_ws(&env, "tgother");
+    let svc = app_row(&ws, "tgapp");
+    let other_svc = app_row(&other, "otherapp");
+    let mut policy = k2_core::skin::RoomPolicy::new();
+    policy.insert(ws.id.clone(), vec!["thread:read".to_string()]);
+    k2_core::skin::create_role_for_app("tester", &policy, Some(&svc)).unwrap();
+    k2_core::skin::create_role_for_app("boxwide", &policy, None).unwrap();
+    k2_core::skin::create_role_for_app("theirs", &policy, Some(&other_svc)).unwrap();
+    let agent = passport(&ws);
+    allow_manage(&ws, true);
+    let add = |who: String, body: Value| {
+        let port = d.port;
+        async move { post(port, "/cli/app/test-guest/add", &who, body).await }
+    };
+
+    let before = k2_core::deploy::now();
+    let r = add(agent.clone(), json!({"app": "tgapp", "username": "qa1", "role": "tester", "expires": "2h"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let v = r.json();
+    let pw = v["password"].as_str().expect("K2 makes the password and shows it once").to_string();
+    assert_eq!((v["app"].clone(), v["role"].clone(), v["createdBy"].clone()), (json!("tgapp"), json!("tester"), json!("agent:tgws")), "{v}");
+    let ends = v["expiresAt"].as_i64().unwrap();
+    assert!((before + 7200..=before + 7210).contains(&ends), "{v}");
+    assert!(v.get("ownerNote").is_some(), "{v}");
+    // Roles: only the App's own.
+    for (role, why) in [("boxwide", "a box-wide role"), ("theirs", "another App's role"), ("admin", "a role nobody defined")] {
+        let r = add(agent.clone(), json!({"app": "tgapp", "username": "qa-x", "role": role})).await;
+        assert_eq!((r.status, r.code()), (400, "role_not_this_apps".to_string()), "{why}: {}", r.body);
+    }
+    // At most 7 days.
+    let r = add(agent.clone(), json!({"app": "tgapp", "username": "qa-x", "expires": "8d"})).await;
+    assert_eq!(r.status, 400, "{}", r.body);
+    // At most 5 live per App.
+    for n in 2..=5 {
+        let r = add(agent.clone(), json!({"app": "tgapp", "username": format!("qa{n}")})).await;
+        assert_eq!(r.status, 200, "qa{n}: {}", r.body);
+    }
+    let r = add(agent.clone(), json!({"app": "tgapp", "username": "qa6"})).await;
+    assert_eq!((r.status, r.code()), (409, "too_many_test_guests".to_string()), "{}", r.body);
+    // Another workspace's agent never sees the App; no switch, no guests.
+    allow_manage(&other, true);
+    let r = add(passport(&other), json!({"app": "tgapp", "username": "qa-z"})).await;
+    assert_eq!((r.status, r.code()), (404, "app_not_found".to_string()), "{}", r.body);
+    allow_manage(&ws, false);
+    let r = add(agent.clone(), json!({"app": "tgapp", "username": "qa-z"})).await;
+    assert_eq!((r.status, r.code()), (403, "apps_manage_off".to_string()), "{}", r.body);
+    allow_manage(&ws, true);
+
+    // The roster says test.
+    let r = get(d.port, "/cli/skin/users", OWNER, "").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let users = r.json()["users"].as_array().unwrap().clone();
+    let qa1 = users.iter().find(|u| u["username"] == "qa1").unwrap_or_else(|| panic!("{users:?}"));
+    assert_eq!((qa1["test"]["app"].clone(), qa1["test"]["expiresAt"].clone()), (json!("tgapp"), json!(ends)), "{qa1}");
+    let r = get(d.port, "/cli/app/test-guests", &agent, "app=tgapp").await;
+    assert_eq!(r.json()["testGuests"].as_array().unwrap().len(), 5, "{}", r.body);
+
+    // Sign-in: only through tgapp's link.
+    let (pass, port) = open_link("tgapp", &svc, &ws);
+    let (other_pass, other_port) = open_link("otherapp", &other_svc, &other);
+    let (p1, p2, pw1, pw2) = (pass.clone(), other_pass.clone(), pw.clone(), pw.clone());
+    let (own_link, other_link) = blocking(move || {
+        let a = on_link(port, &link_post("/cli/skin/login", Some(&p1), &json!({"username": "qa1", "password": pw1})));
+        let b = on_link(other_port, &link_post("/cli/skin/login", Some(&p2), &json!({"username": "qa1", "password": pw2})));
+        (a, b)
+    })
+    .await;
+    assert_eq!(own_link.0, 200, "its own App link: {own_link:?}");
+    let session: Value = serde_json::from_str(&own_link.1).unwrap();
+    assert!(session["token"].as_str().unwrap().starts_with("k2skn_"), "{session}");
+    assert_eq!(other_link.0, 401, "another App link: {other_link:?}");
+    let main_port = |body: Value| {
+        let port = d.port;
+        async move { tokio::task::spawn_blocking(move || req_blocking(port, "POST", "/cli/skin/login", Some(body.to_string()))).await.unwrap() }
+    };
+    let r = main_port(json!({"username": "qa1", "password": pw, "app": svc})).await;
+    assert_eq!(r.status, 401, "the main port (the App named): {}", r.body);
+    let r = main_port(json!({"username": "qa1", "password": pw})).await;
+    assert_eq!(r.status, 401, "never the box login: {}", r.body);
+
+    // Remove: another workspace's agent can't; its own agent can.
+    let r = post(d.port, "/cli/app/test-guest/rm", &passport(&other), json!({"username": "qa5"})).await;
+    assert_eq!((r.status, r.code()), (404, "not_a_test_guest".to_string()), "{}", r.body);
+    let r = post(d.port, "/cli/app/test-guest/rm", &agent, json!({"username": "qa5"})).await;
+    assert_eq!((r.status, r.json()["removed"].clone()), (200, json!(true)), "{}", r.body);
+    let r = get(d.port, "/cli/app/test-guests", &agent, "app=tgapp").await;
+    assert_eq!(r.json()["testGuests"].as_array().unwrap().len(), 4, "{}", r.body);
+    // A real guest is never "removed" as a test guest.
+    k2_core::skin::add_principal_for_app("realguest", None, &svc, None, "owner").unwrap();
+    let r = post(d.port, "/cli/app/test-guest/rm", OWNER, json!({"username": "realguest"})).await;
+    assert_eq!((r.status, r.code()), (404, "not_a_test_guest".to_string()), "{}", r.body);
+    // Audited on the App.
+    let adds = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::deploy::audit::list_for(&conn, k2_core::deploy::audit::SUBJECT_APP, "tgapp", 200)
+            .unwrap()
+            .into_iter()
+            .filter(|a| a.event == "test_guest_add")
+            .count()
+    };
+    assert_eq!(adds, 5);
+    gateway::close("tgapp", None, true);
+    gateway::close("otherapp", None, true);
+    k2_daemon::apps::alerts::set_sink(None);
+}

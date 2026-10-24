@@ -9,7 +9,7 @@
 //! verbs. Mutations are POST-only (GET twins 405). Raw `k2skn_…` secret
 //! is returned once on create.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::cli_response::CliResponse;
 use k2_core::skin::{
@@ -213,7 +213,33 @@ fn status_json() -> CliResponse {
 
 pub fn handle_users_get() -> CliResponse {
     match skin::list_principals() {
-        Ok(users) => CliResponse::ok_json(serde_json::json!({ "users": users }).to_string()),
+        Ok(users) => {
+            // 0.46.4: a test guest says so (`test`: its App, its end).
+            let tests: HashMap<String, skin::test_guests::TestGuest> =
+                skin::test_guests::list(None).unwrap_or_default().into_iter().map(|t| (t.principal_id.clone(), t)).collect();
+            let users: Vec<serde_json::Value> = users
+                .iter()
+                .map(|u| {
+                    let mut v = serde_json::to_value(u).unwrap_or(serde_json::Value::Null);
+                    if let Some(t) = tests.get(&u.id) {
+                        let app_id = {
+                            let db = k2_core::db::shared();
+                            let conn = db.lock();
+                            k2_core::deploy::store::get_app_by_service(&conn, &t.app).ok().flatten().map(|a| a.app_id)
+                        };
+                        v["test"] = serde_json::json!({
+                            "app": app_id,
+                            "appServiceId": t.app,
+                            "expiresAt": t.expires_at,
+                            "expired": t.expired_at(k2_core::deploy::now()),
+                            "createdBy": t.created_by,
+                        });
+                    }
+                    v
+                })
+                .collect();
+            CliResponse::ok_json(serde_json::json!({ "users": users }).to_string())
+        }
         Err(e) => CliResponse::internal_error(e),
     }
 }
@@ -2161,6 +2187,17 @@ pub fn safe_next(raw: Option<&str>) -> String {
 /// Public `POST /cli/skin/login`. Generic 401. Dummy argon2 + lockout live
 /// in core (`check_and_record_login`); caller adds the 500 ms 401 delay.
 pub fn handle_login(body: &[u8], content_type: &str) -> SkinLoginReply {
+    handle_login_on(body, content_type, None)
+}
+
+/// [`handle_login`] for a login that came through an App's gateway link
+/// (`link_app` = that App's service id): only there may a test guest of
+/// that App sign in (`skin::test_guests`, 0.46.4).
+pub fn handle_login_on(body: &[u8], content_type: &str, link_app: Option<&str>) -> SkinLoginReply {
+    skin::test_guests::with_link_login(link_app, || login_inner(body, content_type))
+}
+
+fn login_inner(body: &[u8], content_type: &str) -> SkinLoginReply {
     let form = is_form_body(content_type);
     let parsed = if form {
         let pairs = parse_form_pairs(body);

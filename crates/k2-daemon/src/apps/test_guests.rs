@@ -1,0 +1,248 @@
+//! Test guests for an App (0.46.4, NSI B: "test guests need the owner
+//! each time"). The App's own workspace agent makes guests scoped to that
+//! App only, to test it with.
+//!
+//! ```text
+//! POST /cli/app/test-guest/add  {app, username, role?, expires?, password?}
+//! POST /cli/app/test-guest/rm   {username}
+//! GET  /cli/app/test-guests     ?app=
+//! ```
+//!
+//! **Who:** the agent of the App's own workspace with "Build and run Apps"
+//! (switch 1), or a human (the owner, an Admin, a K2 shell tab). Another
+//! workspace's agent never sees the App (`app_not_found`); a Member changes
+//! nothing.
+//!
+//! **What K2 holds it to** (with `k2_core::skin::test_guests`):
+//! - an App-only guest of THIS App (one `kind=app` grant, no box login);
+//!   it signs in only through this App's gateway link, never the box login,
+//!   another App, the browser helper or a device sign-in;
+//! - a role only when the App already defines it (`roles.app_id` = this
+//!   App), never a box-wide role and never a new one; a role holding
+//!   `files:agentconfig` stays the owner's (as for every agent);
+//! - 24 h by default, at most 7 days; its sessions end with it; expired
+//!   ones are removed at the next add or list;
+//! - at most 5 live per App;
+//! - shown as `test` in `k2 app user list`; every add and remove is in the
+//!   App's audit and the Access Audit, and an add leaves the owner a note
+//!   on the workspace's Thread.
+
+use std::collections::HashMap;
+
+use k2_core::deploy::{self, codes, store::AppRow};
+use k2_core::skin::{self, test_guests as tg};
+use serde_json::{json, Value as J};
+
+use super::routes::{actor, agent_ws, app_for, json_body, need_build, need_credential, no, s, ws_by_id, Who, R};
+
+pub const ROUTES: &[&str] = &["/cli/app/test-guest/add", "/cli/app/test-guest/rm", "/cli/app/test-guests"];
+pub const POST_ROUTES: &[&str] = &["/cli/app/test-guest/add", "/cli/app/test-guest/rm"];
+
+pub const TOO_MANY: &str = "too_many_test_guests";
+pub const ROLE_NOT_THIS_APPS: &str = "role_not_this_apps";
+pub const NOT_A_TEST_GUEST: &str = "not_a_test_guest";
+
+pub(crate) fn handle(path: &str, who: &Who, body: &[u8], params: &HashMap<String, String>) -> R<J> {
+    match path {
+        "/cli/app/test-guest/add" => add(who, body),
+        "/cli/app/test-guest/rm" => rm(who, body),
+        "/cli/app/test-guests" => list(who, params),
+        _ => Err(no("not_found", 404, "no such App route")),
+    }
+}
+
+fn store_err(e: String) -> super::routes::Refusal {
+    no("db_error", 500, e)
+}
+
+fn app_audit(app: &AppRow, event: &str, by: &str, payload: J) {
+    let h = k2_core::db::shared();
+    let conn = h.lock();
+    if let Err(e) = deploy::audit::append(&conn, deploy::audit::SUBJECT_APP, &app.app_id, event, by, None, &payload) {
+        k2_core::log_debug!("[apps] audit {} {event}: {e}", app.app_id);
+    }
+}
+
+fn access_audit(event: &str, by: &str, detail: String) {
+    k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(event, by, detail, "cli", "-", "apps"));
+}
+
+/// Remove this App's expired test guests (their sessions go with them).
+fn sweep(app: &AppRow, by: &str) {
+    match tg::expired_usernames(Some(&app.service_id)) {
+        Ok(names) => {
+            for u in names {
+                if skin::remove_principal_as(&u, by).unwrap_or(false) {
+                    app_audit(app, "test_guest_expired", by, json!({ "username": u }));
+                }
+            }
+        }
+        Err(e) => k2_core::log_debug!("[apps] {} test guest sweep: {e}", app.app_id),
+    }
+}
+
+fn principal(username: &str) -> R<Option<skin::SkinPrincipal>> {
+    let u = username.trim().to_ascii_lowercase();
+    Ok(skin::list_principals().map_err(store_err)?.into_iter().find(|p| p.username == u))
+}
+
+/// `24 h`, `90 min`, `7 days`.
+fn human_ttl(secs: i64) -> String {
+    match secs {
+        s if s % 86_400 == 0 && s >= 2 * 86_400 => format!("{} days", s / 86_400),
+        s if s % 3600 == 0 => format!("{} h", s / 3600),
+        s => format!("{} min", s / 60),
+    }
+}
+
+/// One test guest for the answers and the list.
+fn guest_json(app: &AppRow, username: &str, t: &tg::TestGuest) -> J {
+    json!({
+        "username": username,
+        "app": app.app_id,
+        "appServiceId": t.app,
+        "expiresAt": t.expires_at,
+        "expired": t.expired_at(deploy::now()),
+        "createdBy": t.created_by,
+        "createdAt": t.created_at,
+    })
+}
+
+/// POST `/cli/app/test-guest/add`.
+fn add(who: &Who, body: &[u8]) -> R<J> {
+    need_build(who)?;
+    let v = json_body(body)?;
+    let app = app_for(who, s(&v, "app"))?;
+    let by = actor(who);
+    let username = s(&v, "username").ok_or_else(|| no(codes::BAD_REQUEST, 400, "username is required"))?.to_string();
+    let ttl = tg::parse_ttl(s(&v, "expires")).map_err(|e| no(codes::BAD_REQUEST, 400, e))?;
+    sweep(&app, &by);
+    let live = tg::live_count(&app.service_id).map_err(store_err)?;
+    if live >= tg::MAX_PER_APP {
+        return Err(no(
+            TOO_MANY,
+            409,
+            format!("{} already has {live} test guests (at most {}): remove one first (k2 app test-guests {})", app.app_id, tg::MAX_PER_APP, app.app_id),
+        ));
+    }
+    // Only a role this App already defines; never box-wide, never new.
+    let role = match s(&v, "role") {
+        None => None,
+        Some(token) => {
+            let roles = skin::list_roles().map_err(store_err)?;
+            let mine: Vec<&skin::SkinRole> = roles.iter().filter(|r| r.app_id.as_deref() == Some(app.service_id.as_str())).collect();
+            let Some(r) = mine.iter().find(|r| r.id == token || r.name.eq_ignore_ascii_case(token)) else {
+                let names: Vec<&str> = mine.iter().map(|r| r.name.as_str()).collect();
+                return Err(no(
+                    ROLE_NOT_THIS_APPS,
+                    400,
+                    if names.is_empty() {
+                        format!("{} defines no roles: a test guest gets one of the App's own roles or none (k2 app role create … --app {})", app.app_id, app.app_id)
+                    } else {
+                        format!("'{token}' isn't one of {}'s own roles ({}): a test guest gets only a role the App already defines", app.app_id, names.join(", "))
+                    },
+                ));
+            };
+            if agent_ws(who).is_some() && r.caps.iter().any(|c| c == skin::CAP_FILES_AGENT_CONFIG) {
+                return Err(no(
+                    codes::OWNER_ONLY,
+                    403,
+                    format!("role '{}' lets guests write the agent's .k2 folder (files:agentconfig): handing it out stays the owner's", r.name),
+                ));
+            }
+            Some(r.id.clone())
+        }
+    };
+    let password = s(&v, "password").map(str::to_string).unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
+    let p = skin::add_principal_for_app(&username, None, &app.service_id, role.as_deref(), &by).map_err(|e| no(codes::BAD_REQUEST, 409, e))?;
+    let undo = |e: String| {
+        let _ = skin::remove_principal_as(&p.username, &by);
+        no("db_error", 500, e)
+    };
+    skin::set_principal_password(&p.username, Some(&password)).map_err(|e| {
+        let _ = skin::remove_principal_as(&p.username, &by);
+        no(codes::BAD_REQUEST, 400, e)
+    })?;
+    let expires_at = deploy::now() + ttl;
+    let t = tg::record(&p.id, &app.service_id, &app.owner_workspace, &by, expires_at).map_err(undo)?;
+    let role_name = role.as_deref().and_then(|id| skin::list_roles().ok()?.into_iter().find(|r| r.id == id).map(|r| r.name));
+    app_audit(&app, "test_guest_add", &by, json!({ "username": p.username, "role": role_name, "expiresAt": expires_at }));
+    access_audit("app-test-guest", &by, format!("added {} to {} (role {}, until {expires_at})", p.username, app.app_id, role_name.as_deref().unwrap_or("none")));
+    // The owner hears it on the workspace's Thread (no wake).
+    let owner_note = ws_by_id(&app.owner_workspace)
+        .map(|w| {
+            let text = format!(
+                "K2: {by} added the test guest **{}** to App **{}** (role {}, for {}). It signs in only through the App's gateway link \
+                 and ends on its own. `k2 app user remove {} --test` removes it now.",
+                p.username,
+                app.app_id,
+                role_name.as_deref().unwrap_or("none"),
+                human_ttl(ttl),
+                p.username
+            );
+            match crate::overlay_routes::post_workspace_note(&w.path, &text, "k2-apps") {
+                Ok(()) => true,
+                Err(e) => {
+                    k2_core::log_debug!("[apps] test guest note for {}: {e}", app.app_id);
+                    false
+                }
+            }
+        })
+        .unwrap_or(false);
+    let mut out = guest_json(&app, &p.username, &t);
+    out["ok"] = json!(true);
+    out["role"] = json!(role_name);
+    out["ownerNote"] = json!(owner_note);
+    if s(&v, "password").is_none() {
+        // Shown once: K2 keeps only its hash.
+        out["password"] = json!(password);
+    }
+    out["note"] = json!(format!(
+        "{} is a test guest of {} until {expires_at} (unix): it signs in only through the App's link (POST /cli/skin/login with the App pass), \
+         never the box login. Remove it with k2 app user remove {} --test.",
+        p.username, app.app_id, p.username
+    ));
+    Ok(out)
+}
+
+/// POST `/cli/app/test-guest/rm {username}`: a human removes any test
+/// guest; an agent only its own workspace's Apps'.
+fn rm(who: &Who, body: &[u8]) -> R<J> {
+    need_build(who)?;
+    let v = json_body(body)?;
+    let username = s(&v, "username").ok_or_else(|| no(codes::BAD_REQUEST, 400, "username is required"))?;
+    let missing = || no(NOT_A_TEST_GUEST, 404, format!("'{username}' isn't a test guest you can remove (k2 app test-guests <app>)"));
+    let p = principal(username)?.ok_or_else(missing)?;
+    let t = tg::get(&p.id).map_err(store_err)?.ok_or_else(missing)?;
+    if agent_ws(who).is_some_and(|ws| ws != t.workspace_id) {
+        return Err(missing());
+    }
+    let app = {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        deploy::store::get_app_by_service(&conn, &t.app).ok().flatten()
+    };
+    let by = actor(who);
+    let removed = skin::remove_principal_as(&p.username, &by).map_err(store_err)?;
+    if let Some(a) = &app {
+        app_audit(a, "test_guest_rm", &by, json!({ "username": p.username }));
+    }
+    access_audit("app-test-guest", &by, format!("removed {}", p.username));
+    Ok(json!({ "ok": true, "username": p.username, "removed": removed }))
+}
+
+/// GET `/cli/app/test-guests?app=`.
+fn list(who: &Who, params: &HashMap<String, String>) -> R<J> {
+    need_credential(who)?;
+    let app = app_for(who, params.get("app").map(String::as_str))?;
+    if need_build(who).is_ok() {
+        sweep(&app, &actor(who));
+    }
+    let by_id: HashMap<String, String> = skin::list_principals().map_err(store_err)?.into_iter().map(|p| (p.id, p.username)).collect();
+    let guests: Vec<J> = tg::list(Some(&app.service_id))
+        .map_err(store_err)?
+        .iter()
+        .filter_map(|t| by_id.get(&t.principal_id).map(|u| guest_json(&app, u, t)))
+        .collect();
+    Ok(json!({ "ok": true, "app": app.app_id, "max": tg::MAX_PER_APP, "testGuests": guests }))
+}

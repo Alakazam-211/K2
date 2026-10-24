@@ -27,6 +27,8 @@ pub mod labels;
 pub mod domains;
 /// `k2 app move-plan`: every step of a move, one owner approval (0.46.4).
 pub mod move_plan;
+/// Test guests an App's own agent makes, scoped to that App (0.46.4).
+pub mod test_guests;
 /// Legacy `--cmd` services, labelled (0.46.3).
 pub mod legacy;
 /// Admission-lite: the box's App memory pool (`check_memory`, §4.3).

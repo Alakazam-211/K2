@@ -7533,6 +7533,10 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         Add an app principal (not a Connect user) with the box login
   k2 app user add <username> --app <app> [--role R] [--email e] [--password-stdin]
                                         Owner only. A guest of ONE App: that App's grant, no box login
+  k2 app user add <app-id> <name> --test [--role R] [--expires 24h]
+                                        A test guest of ONE App (its own agent may): signs in only
+                                        through that App's link, a role the App defines, ends on its
+                                        own (24 h, at most 7 d), at most 5 per App (k2 app test-guests)
   k2 app user email <username> [--email e]
                                         Set/clear guest email (omit/empty clears)
   k2 app user full-name <username> [--name <text>]
@@ -9781,6 +9785,12 @@ SIGN-INS. Your users sign in once after the move: sessions from the old
 service's box login don't carry over to the App, so each web and phone
 session asks for the password again (once).
 
+TESTING. Make your own test guests for the App (no owner needed):
+  k2 app user add <app-id> <name> --test [--role R] [--expires 24h]
+They sign in only through the App's link, take only a role the App
+defines, end on their own (at most 7 days), at most 5 per App; your owner
+gets a note. k2 app test-guests <app-id> lists them.
+
 Exit codes: 0 done, 2 held for your owner, 3 refused (JSON on stderr: the
 hint says why, e.g. app_not_healthy, label_owned_by_other_workspace).
 EOF
@@ -11148,6 +11158,85 @@ else:
         print(v["note"])'
 }
 
+# Test guests (0.46.4): k2 app user add <app> <name> --test [--role R]
+# [--expires 24h] [--json]; k2 app user remove <name> --test; k2 app
+# test-guests <app>. The App's own workspace agent (switch 1) or a human.
+_app_test_guest() {
+    local action="$1"
+    shift
+    local app="" name="" role="" expires="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --test) shift ;;
+            --role) role="${2:-}"; shift 2 ;;
+            --role=*) role="${1#--role=}"; shift ;;
+            --expires) expires="${2:-}"; shift 2 ;;
+            --expires=*) expires="${1#--expires=}"; shift ;;
+            --app) app="${2:-}"; shift 2 ;;
+            --json) json_out=1; shift ;;
+            -h|--help)
+                cat <<'EOF'
+k2 app user add <app-id> <name> --test [--role R] [--expires 24h] [--json]
+k2 app user remove <name> --test
+k2 app test-guests <app-id> [--json]
+
+  A test guest of ONE App, for testing it: it signs in only through that
+  App's gateway link (POST /cli/skin/login with the App pass), never the
+  box login or another App. A role only when the App already defines it.
+  It ends on its own: 24 h by default, at most 7 days. At most 5 per App.
+  The App's own agent (with "Build and run Apps") or a person makes them;
+  each is audited and your owner gets a note on your Thread. K2 makes the
+  password and shows it once.
+EOF
+                return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) if [ "$action" = add ] && [ -z "$app" ]; then app="$1"; else name="$1"; fi; shift ;;
+        esac
+    done
+    if [ "$action" = add ]; then
+        { [ -z "$app" ] || [ -z "$name" ]; } && { echo "usage: k2 app user add <app-id> <name> --test [--role R] [--expires 24h]" >&2; exit 2; }
+        _app_rt_post /cli/app/test-guest/add "$(_compute_json K2_CJ_app="$app" K2_CJ_username="$name" K2_CJ_role="$role" K2_CJ_expires="$expires")"
+    else
+        [ -z "$name" ] && { echo "usage: k2 app user remove <name> --test" >&2; exit 2; }
+        _app_rt_post /cli/app/test-guest/rm "$(_compute_json K2_CJ_username="$name")"
+    fi
+    [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys, time
+v = json.load(sys.stdin)
+if "removed" in v:
+    print("Test guest %s %s." % (v.get("username"), "removed" if v.get("removed") else "was already gone"))
+    sys.exit(0)
+print("Test guest %s of App %s (role %s), ends %s" % (v["username"], v["app"], v.get("role") or "none",
+      time.strftime("%Y-%m-%d %H:%M", time.localtime(v["expiresAt"]))))
+if v.get("password"):
+    print("password (shown once): %s" % v["password"])
+print(v.get("note", ""))'
+}
+
+cmd_app_test_guests() {
+    local app="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            -h|--help) _app_test_guest add --help; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    [ -n "$app" ] || { echo "usage: k2 app test-guests <app-id> [--json]" >&2; exit 2; }
+    _compute_call GET /cli/app/test-guests "app=$(urlencode "$app")"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys, time
+v = json.load(sys.stdin)
+g = v.get("testGuests") or []
+print("%s: %d test guest%s (at most %s)" % (v["app"], len(g), "" if len(g) == 1 else "s", v.get("max")))
+for t in g:
+    print("  %s  %s  by %s" % (t["username"], "expired" if t.get("expired") else "ends " + time.strftime("%Y-%m-%d %H:%M", time.localtime(t["expiresAt"])), t.get("createdBy")))'
+}
+
 # k2 app move-plan <service> [--app <app-id>] [--request [--reason TEXT]] [--json]
 # (0.46.4): every step of moving a --cmd service onto the App runtime, what's
 # done, and with --request ONE held request for all the owner's steps.
@@ -12492,6 +12581,7 @@ cmd_app() {
         label) shift; cmd_app_label "$@" ;;
         domain) shift; cmd_app_domain "$@" ;;
         move-plan) shift; cmd_app_move_plan "$@" ;;
+        test-guests|test-guest) shift; cmd_app_test_guests "$@" ;;
         domains) shift; cmd_app_domains "$@" ;;
         warnings) shift; cmd_app_warnings "$@" ;;
         clean-mode) shift; cmd_app_clean_mode "$@" ;;
@@ -12558,6 +12648,16 @@ cmd_skin() {
             done
             local action="${1:-list}"
             shift || true
+            # 0.46.4: test guests (--test) go through the App runtime.
+            case "$action" in
+                add|remove|rm)
+                    for _a in "$@"; do
+                        if [[ "$_a" == "--test" ]]; then
+                            _app_test_guest "$action" "$@"
+                            return $?
+                        fi
+                    done ;;
+            esac
             case "$action" in
                 add)
                     local username="" password_stdin=0 email="" app="" role=""
@@ -12751,7 +12851,7 @@ else:
                     roles_raw=$(cli_request "/cli/skin/roles")
                     printf '%s' "$roles_raw" | _skin_die_if_err
                     { printf '%s\n' "$raw"; printf '%s\n' "$roles_raw"; } | python3 -c '
-import json,sys
+import json,sys,time
 users=json.loads(sys.stdin.readline() or "{}").get("users",[])
 roles={ (r.get("name") or ""): r for r in json.loads(sys.stdin.readline() or "{}").get("roles",[]) }
 if not users:
@@ -12769,6 +12869,9 @@ for u in users:
     full=u.get("fullName") or u.get("full_name") or "—"
     agent=u.get("agentHandle") or u.get("agentWorkspace") or ""
     tail=("  agent:%s" % agent) if agent else ""
+    t=u.get("test")
+    if t:
+        tail += "  [test: App %s, %s]" % (t.get("app") or t.get("appServiceId"), "expired" if t.get("expired") else "ends %s" % time.strftime("%Y-%m-%d %H:%M", time.localtime(t.get("expiresAt") or 0)))
     print("%s  %s  %s  %s  %s%s" % (name, full, role, rooms, email, tail))'
                     ;;
                 remove|rm)

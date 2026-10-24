@@ -4258,8 +4258,11 @@ async fn handle_one_request(
                 super::http::send_login_rate_limited(&mut *stream).await;
                 return DispatchOutcome::Done;
             }
+            // 0.46.4: the App whose link this login came through (a test
+            // guest signs in only there; `skin::test_guests`).
+            let link_app = if ingress == Ingress::App { crate::apps::gateway::current().map(|l| l.service_id.clone()) } else { None };
             let r = tokio::task::spawn_blocking(move || {
-                crate::skin_routes::handle_login(&body_bytes, &content_type)
+                crate::skin_routes::handle_login_on(&body_bytes, &content_type, link_app.as_deref())
             })
             .await
             .unwrap_or_else(|e| crate::skin_routes::SkinLoginReply {

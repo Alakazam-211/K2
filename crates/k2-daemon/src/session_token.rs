@@ -851,6 +851,10 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         // 0.46.4: the move's steps; one owner request for the owner's.
         "/cli/app/move-plan",
         "/cli/app/move-plan/request",
+        // 0.46.4: test guests of its own App (switch 1; the handler).
+        "/cli/app/test-guest/add",
+        "/cli/app/test-guest/rm",
+        "/cli/app/test-guests",
         "/cli/app/config",
         "/cli/app/deploy",
         "/cli/app/deployment",

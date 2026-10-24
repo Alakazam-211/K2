@@ -88,6 +88,9 @@ pub mod paths;
 /// (app-mobile-access-v1, 0.46.3).
 #[path = "skin_app_login.rs"]
 pub mod app_login;
+/// Test guests an App's own workspace agent makes (0.46.4).
+#[path = "skin_test_guests.rs"]
+pub mod test_guests;
 /// The agent access list, the owner's person × agent grid and the
 /// suggested role templates (app-mobile-access-v1, 0.46.3).
 #[path = "skin_access.rs"]
@@ -1432,6 +1435,8 @@ fn open_db(path: &Path) -> Result<Connection, String> {
     // app-mobile-access-v1 (0.46.3): device sign-ins, per-App sign-in
     // settings. Additive, no numbered step.
     app_login::ensure_schema(&conn)?;
+    // 0.46.4: test guests an App's own agent makes. Additive, no step.
+    test_guests::ensure_schema(&conn)?;
     // Copy existing guests once. A deleted host row stays deleted.
     ensure_host_grant_backfill(&mut conn)?;
     rebuild_tokens_table_if_needed(&mut conn)?;
@@ -2451,11 +2456,23 @@ pub(crate) fn mint_app_session_conn(conn: &Connection, username: &str, app: &str
     let prefix = display_prefix(&raw);
     let created_at = now_secs();
     let ttl_secs = crate::connect_users::session_ttl_days().saturating_mul(86_400);
-    let expires_at = created_at.saturating_add(ttl_secs);
+    let mut expires_at = created_at.saturating_add(ttl_secs);
     {
         let Some(principal) = principal_by_username(conn, &username)? else {
             return Err(format!("unknown skin user '{username}'"));
         };
+        // 0.46.4: a test guest gets a session only for its App, only
+        // through that App's link, never past its own end (every door:
+        // login, device sign-in, refresh, the browser helper).
+        if let Some(t) = test_guests::get_conn(conn, &principal.id)? {
+            match test_guests::session_allowed(&t, &app, created_at) {
+                Ok(until) => expires_at = expires_at.min(until),
+                Err(why) => {
+                    crate::log_debug!("[skin] test guest {username}: {why}");
+                    return Err(HOST_LOGIN_DENIED.to_string());
+                }
+            }
+        }
         let (policy, role_name) = match enabled_app_grant(conn, &principal.id, &app)? {
             Some(grant) => grant_login_policy(conn, &grant)?,
             // Sew S28 §13 (G7): chat-only login. A box login (`host`) with

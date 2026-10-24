@@ -106,6 +106,7 @@ pub fn is_route(p: &str) -> bool {
         || super::rehost::ROUTES.contains(&p)
         || super::domains::ROUTES.contains(&p)
         || super::move_plan::ROUTES.contains(&p)
+        || super::test_guests::ROUTES.contains(&p)
 }
 
 pub fn is_post_route(p: &str) -> bool {
@@ -124,6 +125,7 @@ pub fn is_post_route(p: &str) -> bool {
         // 0.46.4: extra hostnames for an App (domains.rs).
         || super::domains::POST_ROUTES.contains(&p)
         || super::move_plan::POST_ROUTES.contains(&p)
+        || super::test_guests::POST_ROUTES.contains(&p)
 }
 
 /// The 0.46.1 door's routes (lane 2): audit, quotas, suspend/resume and
@@ -425,6 +427,8 @@ pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String
         p if super::domains::ROUTES.contains(&p) => super::domains::handle(p, &who, body, params),
         // 0.46.4: every step of a move, one owner approval (move_plan.rs).
         p if super::move_plan::ROUTES.contains(&p) => super::move_plan::handle(p, &who, body, params),
+        // 0.46.4: test guests the App's own agent makes (test_guests.rs).
+        p if super::test_guests::ROUTES.contains(&p) => super::test_guests::handle(p, &who, body, params),
         p if super::labels::ROUTES.contains(&p) => super::labels::handle(p, &who, body),
         "/cli/app/validate" => validate(&who, body),
         "/cli/app/install" => install(&who, body),

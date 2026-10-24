@@ -317,7 +317,7 @@ set +e
 k2 app deploy walled "$WS/v1" --engine guarded --json > "$SANDBOX/out" 2>&1; rc=$?
 set -e
 case "$(cat "$SANDBOX/out")" in
-    *engine_unavailable*) ok "a guarded deploy without an engine is refused, not run unwalled (rc $rc)" ;;
+    *engine_not_answering*) ok "a guarded deploy without an engine is refused, not run unwalled (rc $rc)" ;;
     *) bad "guarded deploy without an engine: rc $rc $(cat "$SANDBOX/out")" ;;
 esac
 [ "$rc" != 0 ] && ok "and it does not exit 0" || bad "guarded deploy without an engine exited 0"

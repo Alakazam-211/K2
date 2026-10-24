@@ -135,6 +135,91 @@ describe('ticket status menu', () => {
   })
 })
 
+// Rosson 2026-10-24: on a ticket at the very bottom of the list, the status
+// menu opened downward past the window, so no status could be picked. It is
+// the app's anchored menu now: it flips upward when there isn't room below.
+describe('ticket status menu placement in the list', () => {
+  /** Give `el` a fixed rect (jsdom has no layout). */
+  function setRect(el: Element, r: { top: number; left: number; width: number; height: number }): void {
+    const rect = { ...r, right: r.left + r.width, bottom: r.top + r.height, x: r.left, y: r.top }
+    ;(el as HTMLElement).getBoundingClientRect = () => ({ ...rect, toJSON: () => rect }) as DOMRect
+  }
+
+  function renderList(): HTMLElement[] {
+    const rows: FeedbackListRow[] = [
+      { ...row, id: 'fb-top', title: 'First' },
+      { ...row, id: 'fb-mid', title: 'Middle' },
+      { ...row, id: 'fb-last', title: 'Last' },
+    ]
+    render(
+      <div style={{ overflowY: 'auto', height: window.innerHeight }}>
+        {rows.map((r) => (
+          <FeedbackCard
+            key={r.id}
+            row={r}
+            workspace={undefined}
+            nowSec={1_700_000_100}
+            selected={false}
+            onSelect={vi.fn()}
+            onMutated={vi.fn()}
+          />
+        ))}
+      </div>,
+    )
+    const triggers = screen.getAllByTestId('card-status')
+    expect(triggers).toHaveLength(3)
+    return triggers
+  }
+
+  it('opens upward from the last row at the bottom of the window, and stays in view', () => {
+    const triggers = renderList()
+    const last = triggers[2]
+    const vh = window.innerHeight
+    // The chip's box sits 12px above the window's bottom edge.
+    setRect(last.parentElement as HTMLElement, { top: vh - 28, left: 40, width: 70, height: 16 })
+    fireEvent.click(last)
+    const menu = screen.getByTestId('ticket-status-menu')
+    expect(menu.getAttribute('data-placement')).toBe('up')
+    expect(menu.style.position).toBe('fixed')
+    expect(menu.style.top).toBe('')
+    // Its bottom edge sits just above the chip (2px gap).
+    expect(menu.style.bottom).toBe(`${vh - (vh - 28) + 2}px`)
+    // Still a working menu.
+    expect(Array.from(menu.querySelectorAll('button')).map((b) => b.textContent?.trim())).toEqual([
+      'Waiting',
+      'Needs discussion',
+      'Planned',
+      'Resolved',
+      'Dismissed',
+    ])
+  })
+
+  it('opens downward from a row with room below', () => {
+    const triggers = renderList()
+    setRect(triggers[0].parentElement as HTMLElement, { top: 100, left: 40, width: 70, height: 16 })
+    fireEvent.click(triggers[0])
+    const menu = screen.getByTestId('ticket-status-menu')
+    expect(menu.getAttribute('data-placement')).toBe('down')
+    expect(menu.style.top).toBe('118px')
+    expect(menu.style.bottom).toBe('')
+  })
+
+  it('Esc closes the menu without reaching the board', () => {
+    const triggers = renderList()
+    const board = vi.fn()
+    window.addEventListener('keydown', board)
+    try {
+      fireEvent.click(triggers[2])
+      expect(screen.getByTestId('ticket-status-menu')).toBeTruthy()
+      fireEvent.keyDown(document.body, { key: 'Escape' })
+      expect(screen.queryByTestId('ticket-status-menu')).toBeNull()
+      expect(board).not.toHaveBeenCalled()
+    } finally {
+      window.removeEventListener('keydown', board)
+    }
+  })
+})
+
 describe('unlinked ticket card (prd-tickets-badge-orphans TB18 + Appa A1)', () => {
   it('shows identifying details and offers only Resolve and Dismiss', async () => {
     const onMutated = vi.fn()

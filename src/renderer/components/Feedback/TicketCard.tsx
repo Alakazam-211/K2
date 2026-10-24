@@ -8,9 +8,8 @@
 // keeps its identifying line (Appa A1) — agent, filing date, short id —
 // because it has nothing else to tell it apart.
 
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
-import { menuLayerForTrigger } from '@/components/Settings/controls/SettingControls'
+import React, { useEffect, useState } from 'react'
+import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
 import { useToastStore } from '@/stores/toast'
 import { formatRelativeTime } from '@/lib/format-relative-time'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
@@ -79,39 +78,20 @@ export function CardStatusDropdown({
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
-  const rootRef = useRef<HTMLDivElement>(null)
-  const buttonRef = useRef<HTMLButtonElement>(null)
-  const menuRef = useRef<HTMLDivElement>(null)
-  const [menuBox, setMenuBox] = useState<{ top: number; left: number; zIndex: number } | null>(null)
-
-  useLayoutEffect(() => {
-    if (!open) {
-      setMenuBox(null)
-      return
-    }
-    const place = (): void => {
-      const trigger = buttonRef.current
-      if (!trigger) return
-      const rect = trigger.getBoundingClientRect()
-      setMenuBox({ top: rect.bottom + 2, left: rect.left, zIndex: menuLayerForTrigger(trigger) })
-    }
-    place()
-    window.addEventListener('resize', place)
-    window.addEventListener('scroll', place, true)
-    return () => {
-      window.removeEventListener('resize', place)
-      window.removeEventListener('scroll', place, true)
-    }
-  }, [open])
+  // The app's anchored menu: portalled and fixed to the chip, it opens
+  // below and flips upward when there isn't room below (a ticket at the
+  // bottom of the list; Rosson 2026-10-24), kept inside the window.
+  // Outside clicks close it.
+  const menu = useAnchoredMenu<HTMLDivElement>({
+    open,
+    onClose: () => setOpen(false),
+    width: 'min',
+    minWidth: 140,
+    estimatedHeight: 160,
+  })
 
   useEffect(() => {
     if (!open) return
-    const onDown = (e: MouseEvent): void => {
-      const node = e.target as Node
-      if (rootRef.current?.contains(node)) return
-      if (menuRef.current?.contains(node)) return
-      setOpen(false)
-    }
     // Capture-phase so the first Esc closes THIS popover instead of
     // reaching the board's Esc (clear selection / close page).
     const onKey = (e: KeyboardEvent): void => {
@@ -120,12 +100,8 @@ export function CardStatusDropdown({
         setOpen(false)
       }
     }
-    document.addEventListener('mousedown', onDown)
     window.addEventListener('keydown', onKey, true)
-    return () => {
-      document.removeEventListener('mousedown', onDown)
-      window.removeEventListener('keydown', onKey, true)
-    }
+    return () => window.removeEventListener('keydown', onKey, true)
   }, [open])
 
   // Manually selectable statuses (Answered is display-only, via a reply).
@@ -152,9 +128,8 @@ export function CardStatusDropdown({
 
   return (
     // stopPropagation everywhere — the status control must not select the card.
-    <div ref={rootRef} className="relative flex-shrink-0" onClick={(e) => e.stopPropagation()}>
+    <div ref={menu.anchorRef} className="relative flex-shrink-0" onClick={(e) => e.stopPropagation()}>
       <button
-        ref={buttonRef}
         type="button"
         disabled={busy}
         data-testid="card-status"
@@ -174,11 +149,12 @@ export function CardStatusDropdown({
         </svg>
       </button>
 
-      {open && menuBox && createPortal(
+      {open && menu.portal(
         <div
-          ref={menuRef}
+          ref={menu.menuRef}
           data-testid="ticket-status-menu"
-          style={{ position: 'fixed', top: menuBox.top, left: menuBox.left, zIndex: menuBox.zIndex }}
+          data-placement={menu.placement}
+          style={menu.style}
           className="min-w-[140px] bg-[var(--color-bg)] border border-[var(--color-border)] shadow-lg py-0.5"
         >
           {/* Answered shows as the current state but is not offered. */}
@@ -212,7 +188,6 @@ export function CardStatusDropdown({
             )
           })}
         </div>,
-        document.body,
       )}
     </div>
   )

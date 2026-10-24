@@ -290,13 +290,13 @@ pub const ROUTES: &[Route] = &[
     // owner's, anyone else's is a held `quota` request (handler).
     get("/cli/app/quota", Member),
     post("/cli/app/quota/set", Admin),
-    // Q8: one way out for every App of a workspace before its removal
-    // (uninstall / park: Admin; handover: the handler holds it to the owner).
-    post("/cli/app/release", Admin),
     // 0.46.4 (update continuity R8/R16): the re-host wave's status, a Member
     // read. `/boot-status` and the update job point here from S1; the
     // handler is S2's (`apps::rehost`).
     get("/cli/app/rehost", Member),
+    // Q8: one way out for every App of a workspace before its removal
+    // (uninstall / park: Admin; handover: the handler holds it to the owner).
+    post("/cli/app/release", Admin),
     // AR10: remote App passes. Listing and revoking (narrows) are Member;
     // minting is a credential mint, the owner's (handler refuses passports).
     get("/cli/app/remote-pass", Member),

@@ -173,6 +173,16 @@ capture zen news seen --all
 assert_eq "news seen --all exit" "$rc" "0"
 [ -f "$ZEN/sync.json" ] && ok "the daemon wrote sync.json" || bad "no sync.json"
 
+echo "== links has its own help page (0.46.4) =="
+capture zen links --help
+assert_eq "links --help exit" "$rc" "0"
+assert_contains "links --help is its own page" "$out" "k2 zen links — the sites a Garden opens"
+assert_contains "links --help says agents only read" "$out" "Agents can read the list, never add to it or forget a site"
+case "$out" in *"USAGE"*"k2 zen garden list"*) bad "links --help printed the general zen help" ;; *) ok "links --help is not the general zen help" ;; esac
+capture zen links forget --help
+assert_eq "links forget --help exit" "$rc" "0"
+assert_contains "links forget --help is the links page" "$out" "k2 zen links forget <garden> <site> [--json]"
+
 echo "== agents order and pins, per Garden on this computer (0.46.4) =="
 capture zen agents-order --help
 assert_eq "agents-order --help exit" "$rc" "0"

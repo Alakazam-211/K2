@@ -334,11 +334,19 @@ jobs:
   # how cfed.k2.dev sat on 0.40.29 while 0.40.31 was out.) This job runs
   # after both matrix legs, merges the linux-* entries into the released
   # manifest, and re-uploads it. Idempotent: re-runs overwrite the same keys.
+  # 0.46.4 (prd-app-runtime-update-continuity-v1 A1/R2): it also lists the
+  # App engine builds under their OWN keys (`k2-app-engine-linux-<arch>`),
+  # never under a `linux-<arch>` key; the rules live in
+  # scripts/merge-daemon-manifest.py (tests/packaging/daemon-manifest.sh).
   merge-daemon-manifest:
     name: Merge linux artifacts into daemon-latest.json
     needs: build-linux-daemon
     runs-on: [self-hosted, linux, k2-linux]
     steps:
+      - name: Checkout (at the release tag)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
       - name: Merge + re-upload manifest
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -358,23 +366,10 @@ jobs:
             -p k2-daemon-linux-x86_64.sig \
             -p k2-daemon-linux-aarch64 \
             -p k2-daemon-linux-aarch64.sig \
+            -p k2-app-engine-linux-x86_64 \
+            -p k2-app-engine-linux-aarch64 \
             --skip-existing
-          python3 - "$BASE" <<'PY'
-          import hashlib, json, sys
-          base = sys.argv[1]
-          m = json.load(open("daemon-latest.json"))
-          for target in ("linux-x86_64", "linux-aarch64"):
-              name = f"k2-daemon-{target}"
-              digest = hashlib.sha256(open(name, "rb").read()).hexdigest()
-              m["artifacts"][target] = {
-                  "url": f"{base}/{name}",
-                  "sig": f"{base}/{name}.sig",
-                  "sha256": digest,
-              }
-          leaked = [k for k in m["artifacts"] if "airgap" in k]
-          if leaked:
-              raise SystemExit(f"daemon-latest.json must not list airgap assets: {leaked}")
-          json.dump(m, open("daemon-latest.json", "w"), indent=2)
-          print("merged platforms:", sorted(m["artifacts"]))
-          PY
+          # The engine .sig comes later (release.sh Step 10.5): its URL is
+          # listed now and may 404 for up to ~60 min (A17).
+          python3 scripts/merge-daemon-manifest.py daemon-latest.json "$BASE" .
           gh release upload "$TAG" daemon-latest.json --repo "$REPO" --clobber

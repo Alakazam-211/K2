@@ -34,6 +34,10 @@ K2_MANIFEST_URL="${K2_MANIFEST_URL:-${K2SO_MANIFEST_URL:-}}"
 K2_NO_SERVICE="${K2_NO_SERVICE:-${K2SO_NO_SERVICE:-0}}"
 K2_DRY_RUN="${K2_DRY_RUN:-${K2SO_DRY_RUN:-0}}"
 K2_DAEMON_LABEL="dev.k2.daemon"
+# The App engine the root helper installed (0.46.4, update continuity R3):
+# when it exists, the matching engine is staged beside the daemon for the
+# boot heal. Overridable for tests only.
+K2_APP_ENGINE_PATH="${K2_APP_ENGINE_PATH:-/usr/local/libexec/k2-app-engine}"
 
 DEFAULT_LATEST_URL="https://github.com/Alakazam-211/K2/releases/latest/download/daemon-latest.json"
 
@@ -157,6 +161,20 @@ if [ -z "$URL" ] || [ -z "$SIG" ] || [ -z "$SHA256" ]; then
     exit 1
 fi
 
+# The App engine (Linux, only when one is installed): its OWN manifest key
+# `k2-app-engine-<platform>` (never under the platform key, A1). Staged in
+# ~/.k2/update/engine/<version>/ with the asset names the daemon reads; the
+# signature may not be published yet (A17): the daemon and the root helper
+# verify it, and the boot heal fetches a missing one.
+ENGINE_KEY="k2-app-engine-$PLATFORM"
+ENGINE_URL=""; ENGINE_SIG=""; ENGINE_SHA=""
+ENGINE_STAGE_DIR="$HOME/.k2/update/engine/${MVER:-unknown}"
+if [ "${PLATFORM%%-*}" = "linux" ] && [ -f "$K2_APP_ENGINE_PATH" ]; then
+    ENGINE_URL=$(manifest_field "$MANIFEST" "$ENGINE_KEY" "url" || true)
+    ENGINE_SIG=$(manifest_field "$MANIFEST" "$ENGINE_KEY" "sig" || true)
+    ENGINE_SHA=$(manifest_field "$MANIFEST" "$ENGINE_KEY" "sha256" || true)
+fi
+
 BIN_PATH="$K2_BIN_DIR/k2-daemon"
 
 if [ "$(uname -s)" = "Darwin" ]; then
@@ -179,6 +197,15 @@ if [ "$K2_DRY_RUN" = "1" ]; then
     echo "  sig (minisign): $(printf '%s' "$SIG" | cut -c1-24)..."
     echo "  install path:   $BIN_PATH"
     echo "  minisign verify: minisign -Vm <downloaded-bin> -P <embedded-pubkey>"
+    if [ -n "$ENGINE_URL" ] && [ -n "$ENGINE_SHA" ]; then
+        echo "  app engine:     $ENGINE_URL"
+        echo "  engine sha256:  $ENGINE_SHA"
+        echo "  engine stage:   $ENGINE_STAGE_DIR/$ENGINE_KEY (+ .sig when published)"
+    elif [ -f "$K2_APP_ENGINE_PATH" ] && [ "${PLATFORM%%-*}" = "linux" ]; then
+        echo "  app engine:     (not in this manifest; the daemon's boot heal downloads it)"
+    else
+        echo "  app engine:     (none installed; nothing to stage)"
+    fi
     if [ "$K2_NO_SERVICE" = "1" ]; then
         echo "  service:        (skipped — --no-service)"
     else
@@ -268,6 +295,26 @@ mkdir -p "$K2_BIN_DIR"
 cp "$DL_BIN" "$BIN_PATH.new"
 chmod +x "$BIN_PATH.new"
 mv -f "$BIN_PATH.new" "$BIN_PATH"
+
+# Stage the matching App engine (R3): sha256-checked; never fatal (the
+# daemon's boot heal downloads it when this didn't work).
+if [ -n "$ENGINE_URL" ] && [ -n "$ENGINE_SHA" ]; then
+    echo "Staging the App engine for v${MVER:-?}..."
+    DL_ENG="$TMP/$ENGINE_KEY"
+    if ( fetch "$ENGINE_URL" "$DL_ENG" ) 2>/dev/null && [ "$(sha256_of "$DL_ENG")" = "$ENGINE_SHA" ]; then
+        mkdir -p "$ENGINE_STAGE_DIR"
+        rm -f "$ENGINE_STAGE_DIR/$ENGINE_KEY.sig"
+        cp "$DL_ENG" "$ENGINE_STAGE_DIR/$ENGINE_KEY.part" && mv -f "$ENGINE_STAGE_DIR/$ENGINE_KEY.part" "$ENGINE_STAGE_DIR/$ENGINE_KEY"
+        if [ -n "$ENGINE_SIG" ] && ( fetch "$ENGINE_SIG" "$TMP/$ENGINE_KEY.sig" ) 2>/dev/null; then
+            cp "$TMP/$ENGINE_KEY.sig" "$ENGINE_STAGE_DIR/$ENGINE_KEY.sig"
+            echo "Staged the App engine and its signature in $ENGINE_STAGE_DIR"
+        else
+            echo "Staged the App engine in $ENGINE_STAGE_DIR (signature not published yet; the daemon fetches it)"
+        fi
+    else
+        echo "WARNING: the App engine could not be staged (download or sha256); the daemon's boot heal downloads it." >&2
+    fi
+fi
 
 if [ "$K2_NO_SERVICE" != "1" ]; then
     if [ "$SVC_KIND" = "systemd" ]; then

@@ -98,6 +98,90 @@ else
     fail "release.sh wiring" "k2_daemon_manifest not called"
 fi
 
+echo "== T29 (update continuity A1): engine entries never fool an installer's parser =="
+# The CI merge job's script writes the Linux daemons and the App engines.
+assets="$tmp/assets"; mkdir -p "$assets"
+for arch in x86_64 aarch64; do
+    printf 'daemon-%s' "$arch" > "$assets/k2-daemon-linux-$arch"
+    printf 'engine-%s' "$arch" > "$assets/k2-app-engine-linux-$arch"
+done
+bash -c "source '$LIB'; k2_daemon_manifest 9.9.9 d '$ARTS' '$tmp/WHATS_NEW.md'" > "$tmp/merged.json"
+python3 -I "$ROOT/scripts/merge-daemon-manifest.py" "$tmp/merged.json" "https://rel/v9.9.9" "$assets" >/dev/null
+keys="$(python3 -I -c 'import json,sys; print(",".join(sorted(json.load(open(sys.argv[1]))["artifacts"])))' "$tmp/merged.json")"
+if [ "$keys" = "k2-app-engine-linux-aarch64,k2-app-engine-linux-x86_64,linux-aarch64,linux-x86_64,macos-aarch64" ]; then
+    pass "merge writes engines under their own keys"
+else
+    fail "merge keys" "$keys"
+fi
+sha_of() { python3 -I -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1"; }
+
+# The parsers in the field: this tree's install-daemon.sh, the 0.46.3 copy
+# (frozen), and the k2 CLI's twin.
+sed -n '/^manifest_field() {/,/^}/p' "$ROOT/scripts/install-daemon.sh" > "$tmp/parser-current.sh"
+cp "$SCRIPT_DIR/fixtures/install-daemon-0.46.3-manifest_field.sh" "$tmp/parser-0463.sh"
+sed -n '/^_daemon_manifest_field() {/,/^}/p' "$ROOT/cli/k2" | sed 's/^_daemon_manifest_field()/manifest_field()/' > "$tmp/parser-cli.sh"
+for p in current 0463 cli; do
+    if ! grep -q '^manifest_field()' "$tmp/parser-$p.sh"; then
+        fail "parser $p" "could not extract the function"
+        continue
+    fi
+    for arch in x86_64 aarch64; do
+        for m in "$tmp/merged.json" "$SCRIPT_DIR/fixtures/daemon-latest-with-engine.json"; do
+            got_url="$(bash -c "source '$tmp/parser-$p.sh'; manifest_field \"\$(cat '$m')\" linux-$arch url")"
+            got_sha="$(bash -c "source '$tmp/parser-$p.sh'; manifest_field \"\$(cat '$m')\" linux-$arch sha256")"
+            if [ "$m" = "$tmp/merged.json" ]; then
+                want_url="https://rel/v9.9.9/k2-daemon-linux-$arch"; want_sha="$(sha_of "$assets/k2-daemon-linux-$arch")"
+            else
+                want_url="https://example.invalid/v9.9.9/k2-daemon-linux-$arch"
+                want_sha="$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["artifacts"][sys.argv[2]]["sha256"])' "$m" "linux-$arch")"
+            fi
+            if [ "$got_url" = "$want_url" ] && [ "$got_sha" = "$want_sha" ]; then
+                pass "parser $p, linux-$arch, $(basename "$m"): the daemon's url + sha256"
+            else
+                fail "parser $p linux-$arch $(basename "$m")" "url=$got_url sha=$got_sha (want $want_url $want_sha)"
+            fi
+        done
+    done
+done
+# The control: the layout A1 forbids (a second "linux-x86_64" object after
+# the daemon's) does fool the 0.46.3 parser, so the checks above can bite.
+cat > "$tmp/bad.json" <<'JSON'
+{"version":"9.9.9","artifacts":{"linux-x86_64":{"url":"https://rel/k2-daemon-linux-x86_64","sig":"s","sha256":"d1"}},
+ "engine":{"linux-x86_64":{"url":"https://rel/k2-app-engine-linux-x86_64","sig":"s","sha256":"e1"}}}
+JSON
+bad="$(bash -c "source '$tmp/parser-0463.sh'; manifest_field \"\$(cat '$tmp/bad.json')\" linux-x86_64 url")"
+if [ "$bad" = "https://rel/k2-app-engine-linux-x86_64" ]; then pass "control: a platform-keyed engine fools the old parser"; else fail "control" "$bad"; fi
+eng="$(bash -c "source '$tmp/parser-current.sh'; manifest_field \"\$(cat '$tmp/merged.json')\" k2-app-engine-linux-x86_64 url")"
+if [ "$eng" = "https://rel/v9.9.9/k2-app-engine-linux-x86_64" ]; then pass "the engine resolves by its own key"; else fail "engine key" "$eng"; fi
+
+echo "== the merge refuses an airgap asset and keeps working without engines =="
+python3 -I -c 'import json,sys; m=json.load(open(sys.argv[1])); m["artifacts"]["linux-x86_64-airgap"]={"url":"u","sig":"s","sha256":"x"}; json.dump(m,open(sys.argv[1],"w"))' "$tmp/merged.json"
+if python3 -I "$ROOT/scripts/merge-daemon-manifest.py" "$tmp/merged.json" "https://rel/v9.9.9" "$assets" >/dev/null 2>&1; then
+    fail "airgap" "must refuse"
+else
+    pass "airgap asset refused"
+fi
+rm -f "$assets"/k2-app-engine-linux-*
+bash -c "source '$LIB'; k2_daemon_manifest 9.9.9 d '$ARTS' '$tmp/WHATS_NEW.md'" > "$tmp/noeng.json"
+python3 -I "$ROOT/scripts/merge-daemon-manifest.py" "$tmp/noeng.json" "https://rel/v9.9.9" "$assets" >/dev/null 2>&1
+if python3 -I -c 'import json,sys; a=json.load(open(sys.argv[1]))["artifacts"]; sys.exit(0 if "linux-x86_64" in a and not any("engine" in k for k in a) else 1)' "$tmp/noeng.json"; then
+    pass "no engine builds → no engine keys"
+else
+    fail "no engines" "$(cat "$tmp/noeng.json")"
+fi
+
+echo "== the installer's dry run names the engine it would stage (R3) =="
+touch "$tmp/fake-engine"
+out="$(K2_APP_ENGINE_PATH="$tmp/fake-engine" K2_DRY_RUN=1 sh "$ROOT/scripts/install-daemon.sh" --manifest-url "file://$SCRIPT_DIR/fixtures/daemon-latest-with-engine.json" 2>&1)"
+case "$(uname -s)-$(uname -m)" in
+    Linux-x86_64|Linux-amd64) want_line="app engine:     https://example.invalid/v9.9.9/k2-app-engine-linux-x86_64" ;;
+    Linux-aarch64|Linux-arm64) want_line="app engine:     https://example.invalid/v9.9.9/k2-app-engine-linux-aarch64" ;;
+    *) want_line="app engine:     (none installed; nothing to stage)" ;;
+esac
+if printf '%s' "$out" | grep -qF "$want_line"; then pass "dry run: $want_line"; else fail "dry run engine line" "$out"; fi
+out="$(K2_APP_ENGINE_PATH="$tmp/no-such-engine" K2_DRY_RUN=1 sh "$ROOT/scripts/install-daemon.sh" --manifest-url "file://$SCRIPT_DIR/fixtures/daemon-latest-with-engine.json" 2>&1)"
+if printf '%s' "$out" | grep -qF "app engine:     (none installed; nothing to stage)"; then pass "no engine installed: nothing staged"; else fail "dry run without engine" "$out"; fi
+
 echo
 echo "daemon-manifest: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

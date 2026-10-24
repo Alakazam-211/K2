@@ -13,6 +13,7 @@ import { useServerSupports } from '@/lib/server-capabilities'
 import { K2_CAPS } from '@/lib/k2-caps.generated'
 import { AppsServerSection } from './AppsServerSection'
 import { AppsBoxSection } from './AppsBoxSection'
+import { AppsResourcesSection } from './AppsResourcesSection'
 import { AppPeopleAccess } from './AppPeopleAccess'
 
 export const SKIN_ACCESS_MANIFEST: SettingEntry[] = [
@@ -1074,6 +1075,7 @@ export function SkinAccessSection(): React.JSX.Element {
           <>
             <AppsServerSection />
             <AppsBoxSection />
+            <AppsResourcesSection />
           </>
         ) : selectedApp == null ? (
           <p className="text-[10px] text-[var(--color-text-muted)]">Select This server, Host or an app.</p>

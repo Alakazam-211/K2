@@ -25,6 +25,8 @@ pub mod trends;
 pub mod labels;
 /// `k2 app domain add|rm`: any subdomain of the App's workspace (0.46.4).
 pub mod domains;
+/// `k2 app move-plan`: every step of a move, one owner approval (0.46.4).
+pub mod move_plan;
 /// Legacy `--cmd` services, labelled (0.46.3).
 pub mod legacy;
 /// Admission-lite: the box's App memory pool (`check_memory`, §4.3).

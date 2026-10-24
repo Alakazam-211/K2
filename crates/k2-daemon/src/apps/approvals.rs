@@ -453,6 +453,11 @@ fn apply_door(r: &reqs::AppRequest, by: &str) -> R<J> {
         }
         reqs::KIND_MANAGE => {
             let route = r.body.get("route").and_then(J::as_str).ok_or_else(|| no(dcodes::BAD_REQUEST, 400, "unreadable held request"))?;
+            // 0.46.4: a move plan's owner steps, run as the owner who
+            // approved them (never replayed as the requesting agent).
+            if route == super::move_plan::APPLY_ROUTE {
+                return super::move_plan::apply(r, by);
+            }
             let route = MANAGE_HELD
                 .iter()
                 .find(|p| **p == route)

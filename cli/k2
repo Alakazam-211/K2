@@ -9709,6 +9709,16 @@ deploying and taking its label never stop it. Its URL serves it until step
 is one-way. Done = the URL serves the App AND the old service is stopped
 (steps 6 and 7).
 
+START WITH THE PLAN:
+  k2 app move-plan <old-name> [--app <app-id>]
+lists every step below for your service with what's already done (box
+prep, engine, "Build and run Apps", install, deploy, copy-host users, the
+guests-rooms grant, data, each hostname, the old service), and
+  k2 app move-plan <old-name> --app <app-id> --request
+asks your owner ONCE for all the owner's steps (one approval; K2 then runs
+them in order, each audited). Ask again after install if copy-host or the
+grant waited on it.
+
   1. Write a manifest from your start command: manifest.json at the root
      of the folder you deploy (your code, not your data):
        {"schema":1,"kind":"app","id":"jobs","name":"Jobs","version":"1.0.0",
@@ -11138,6 +11148,85 @@ else:
         print(v["note"])'
 }
 
+# k2 app move-plan <service> [--app <app-id>] [--request [--reason TEXT]] [--json]
+# (0.46.4): every step of moving a --cmd service onto the App runtime, what's
+# done, and with --request ONE held request for all the owner's steps.
+cmd_app_move_plan() {
+    local svc="" app="" request=0 reason="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --app) app="${2:-}"; shift 2 ;;
+            --request) request=1; shift ;;
+            --reason) reason="${2:-}"; shift 2 ;;
+            --json) json_out=1; shift ;;
+            -h|--help)
+                cat <<'EOF'
+k2 app move-plan <service> [--app <app-id>] [--request [--reason TEXT]] [--json]
+
+  Every step that moves your --cmd service onto the App runtime, in order,
+  marked done / todo / blocked (waits on an earlier step) / n/a, with who
+  does it (owner or agent) and the command:
+    box prep, the App engine, "Build and run Apps", install, deploy,
+    copy-host (the box-login users who'd be copied), the guests-rooms grant
+    (with the rooms the old service hands out, when K2 can tell), data put,
+    label take, every other subdomain pointing at the service's port
+    (k2 app domain add), stopping the old service.
+  --app names the App (default: the App that took the label, else your
+  workspace's only App, else a suggested id).
+  --request files ONE held request for every owner step still to do: your
+  owner approves it once, in person (k2 app approve <id> outside K2, or
+  Settings → App Approvals), then K2 runs them in order as the owner, each
+  audited. An agent never approves it. Exit 2 = held; 0 = nothing for the
+  owner to do yet.
+EOF
+                return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) svc="$1"; shift ;;
+        esac
+    done
+    [ -n "$svc" ] || { echo "usage: k2 app move-plan <service> [--app <app-id>] [--request] [--json]" >&2; exit 2; }
+    if [ "$request" = 1 ]; then
+        _app_rt_post /cli/app/move-plan/request "$(_compute_json K2_CJ_service="$svc" K2_CJ_app="$app" K2_CJ_reason="$reason")"
+        case "$_CP_STATUS" in 200|202) ;; *) _compute_fail "$_CP_STATUS" "$_CP_BODY" ;; esac
+    else
+        local q="service=$(urlencode "$svc")"
+        [ -n "$app" ] && q="${q}&app=$(urlencode "$app")"
+        _compute_call GET /cli/app/move-plan "$q"
+    fi
+    if [ "$json_out" = 1 ]; then
+        printf '%s\n' "$_CP_BODY"
+    else
+        printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+p = v.get("plan") or v
+s, a = p["service"], p["app"]
+print("Move %s/%s (port %s) into App %s%s" % (s["workspaceHandle"], s["name"], s["port"], a["id"],
+      "" if a["installed"] else " (not installed; a suggested id: --app to pick)"))
+mark = {"done": "[x]", "todo": "[ ]", "blocked": "[.]", "n/a": "[-]"}
+for st in p["steps"]:
+    print("%s %-6s %s: %s" % (mark.get(st["state"], "[?]"), st["who"], st["title"], st["detail"]))
+    if st.get("users"):
+        print("             users: %s" % ", ".join(st["users"]))
+    if st.get("roomHandles"):
+        print("             rooms: %s" % ", ".join(st["roomHandles"]))
+    if st["state"] in ("todo", "blocked") and st.get("command"):
+        print("             %s" % st["command"])
+print("[x] done  [ ] to do  [.] waits on an earlier step  [-] n/a")
+if v.get("status") == "held":
+    print("Held for the owner: request %s (one approval for %d step(s)). %s" % (v["request"]["id"], len(p.get("ownerStepsTodo") or []), v.get("hint", "")))
+elif v.get("status") == "nothing_to_request":
+    print(v.get("note"))
+elif p.get("request"):
+    print("Owner steps to do: %s. One approval for all of them: %s" % (", ".join(p["ownerStepsTodo"]), p["request"]))
+elif p.get("done"):
+    print("The move is done.")'
+    fi
+    if [ "$request" = 1 ]; then
+        printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; sys.exit(2 if json.load(sys.stdin).get("status") == "held" else 0)' || exit $?
+    fi
+}
+
 # k2 app domain add|rm <app-id> <subdomain> [--json], k2 app domains <app-id>
 # (0.46.4): any nested label of the App's workspace serves the App, routed
 # by its id (its front port), and joins K2_APP_ORIGINS at the next start.
@@ -12402,6 +12491,7 @@ cmd_app() {
         resources) shift; cmd_app_resources "$@" ;;
         label) shift; cmd_app_label "$@" ;;
         domain) shift; cmd_app_domain "$@" ;;
+        move-plan) shift; cmd_app_move_plan "$@" ;;
         domains) shift; cmd_app_domains "$@" ;;
         warnings) shift; cmd_app_warnings "$@" ;;
         clean-mode) shift; cmd_app_clean_mode "$@" ;;

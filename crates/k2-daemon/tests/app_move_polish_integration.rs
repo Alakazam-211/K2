@@ -452,3 +452,140 @@ async fn domain_add_takes_only_the_workspaces_own_labels_and_lists_them() {
     drop(seen);
     k2_daemon::apps::alerts::set_sink(None);
 }
+
+fn confirm(action: &str, bound: &str) -> String {
+    k2_daemon::vault::get().expect("vault open").confirm.mint(action, Some(bound), "owner", "local-auth")
+}
+
+/// A box-login guest (the host grant), as `k2 app user add <u>` makes.
+fn box_login_user(name: &str) {
+    k2_core::skin::add_principal(name).expect("add principal");
+    k2_core::skin::set_host_login(name, true).expect("host login");
+}
+
+fn step<'a>(plan: &'a Value, id: &str) -> &'a Value {
+    plan["steps"].as_array().unwrap().iter().find(|s| s["id"] == id).unwrap_or_else(|| panic!("no step {id}: {plan}"))
+}
+
+/// #2: `k2 app move-plan` lists every step with what's done, and ONE held
+/// request carries every owner step; the owner approves once, the steps run
+/// in order as the owner, audited; an agent never approves; the approval
+/// copies exactly the users the request saw.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn move_plan_lists_every_step_and_one_approval_runs_the_owner_steps() {
+    let env = setup(&[]);
+    let seen = quiet_alerts();
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let nsi = seed_ws(&env, "nsi");
+    let rooms = seed_ws(&env, "sales");
+    let stranger = seed_ws(&env, "stranger");
+    let old = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::published_services::insert(&conn, &nsi.id, "agents", "node server.js", &nsi.path.to_string_lossy(), 47_301, "tunnel", "running", "cmd", "")
+            .unwrap()
+            .id
+    };
+    let app_svc = app_row(&nsi, "agentnsi");
+    // The old BFF hands its guests the `sales` room (its guests-rooms grant).
+    k2_core::skin::guest_rooms::grant(&old, &[rooms.id.clone()], "owner").unwrap();
+    box_login_user("ada");
+    box_login_user("bo");
+    let agent = passport(&nsi);
+    allow_manage(&nsi, false);
+
+    // The plan, as the service's own agent (no switch yet).
+    let r = get(d.port, "/cli/app/move-plan", &agent, "service=agents&app=agentnsi").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let p = r.json();
+    let ids: Vec<&str> = p["steps"].as_array().unwrap().iter().map(|s| s["id"].as_str().unwrap()).collect();
+    assert_eq!(
+        ids,
+        ["box_prep", "engine", "build_switch", "install", "deploy", "copy_host", "guest_rooms", "data_put", "label_take", "stop_old"],
+        "{p}"
+    );
+    assert_eq!(step(&p, "box_prep")["state"], "n/a", "a process-engine App has no wall to prepare");
+    assert_eq!(step(&p, "build_switch")["state"], "todo");
+    assert_eq!(step(&p, "build_switch")["who"], "owner");
+    assert_eq!(step(&p, "install")["state"], "done");
+    assert_eq!(step(&p, "deploy")["state"], "todo");
+    let ch = step(&p, "copy_host");
+    assert_eq!((ch["state"].clone(), ch["userCount"].clone()), (json!("todo"), json!(2)), "{ch}");
+    assert!(ch.get("users").is_none(), "an agent without the switch sees the count, not the names: {ch}");
+    let gr = step(&p, "guest_rooms");
+    assert_eq!((gr["state"].clone(), gr["rooms"].clone(), gr["roomHandles"].clone()), (json!("todo"), json!([rooms.id]), json!(["sales"])), "{gr}");
+    assert_eq!(step(&p, "label_take")["state"], "blocked", "waits for a live App");
+    assert_eq!(step(&p, "stop_old")["command"], "k2 publish stop agents");
+    assert_eq!(p["ownerStepsTodo"], json!(["build_switch", "copy_host", "guest_rooms"]));
+    // The owner sees the names.
+    let r = get(d.port, "/cli/app/move-plan", OWNER, "service=nsi%2Fagents").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(step(&r.json(), "copy_host")["users"], json!(["ada", "bo"]));
+    assert_eq!(r.json()["app"]["id"], "agentnsi", "the workspace's only App by default");
+    // Another workspace's agent: no such service.
+    let r = get(d.port, "/cli/app/move-plan", &passport(&stranger), "service=agents").await;
+    assert_eq!((r.status, r.code()), (404, "app_not_found".to_string()), "{}", r.body);
+    // An App is not a --cmd service.
+    let r = get(d.port, "/cli/app/move-plan", OWNER, "service=agentnsi").await;
+    assert_eq!((r.status, r.code()), (409, "not_a_cmd_service".to_string()), "{}", r.body);
+
+    // ONE request for the three owner steps.
+    let r = post(d.port, "/cli/app/move-plan/request", &agent, json!({"service": "agents", "app": "agentnsi", "reason": "moving the BFF"})).await;
+    assert_eq!((r.status, r.json()["status"].clone()), (202, json!("held")), "{}", r.body);
+    let req = r.json()["request"]["id"].as_str().unwrap().to_string();
+    let lines = r.json()["request"]["diff"]["lines"].as_array().unwrap().len();
+    assert_eq!(lines, 3, "{}", r.body);
+    let r = get(d.port, "/cli/app/approvals", &agent, "").await;
+    assert_eq!(r.json()["requests"].as_array().unwrap().iter().filter(|q| q["id"] == req.as_str()).count(), 1, "one card: {}", r.body);
+    // The agent can't approve its own plan (with or without a confirm).
+    let r = post(d.port, "/cli/app/approve", &agent, json!({"request": req, "confirmToken": confirm("app-approve", &req)})).await;
+    assert_eq!(r.status, 403, "{}", r.body);
+    // GET is refused on the request route.
+    let r = get(d.port, "/cli/app/move-plan/request", OWNER, "service=agents").await;
+    assert_eq!(r.status, 405, "{}", r.body);
+
+    // The owner approves once: every step runs, in order, as the owner.
+    let r = post(d.port, "/cli/app/approve", OWNER, json!({"request": req, "confirmToken": confirm("app-approve", &req)})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let v = r.json();
+    assert_eq!(v["status"], "approved", "{v}");
+    let ran: Vec<&str> = v["result"]["steps"].as_array().unwrap().iter().map(|s| s["step"].as_str().unwrap()).collect();
+    assert_eq!(ran, ["build_switch", "copy_host", "guest_rooms"], "{v}");
+    assert!(v["result"]["steps"].as_array().unwrap().iter().all(|s| s["result"] == "ran"), "{v}");
+    assert_eq!(k2_daemon::apps::access::level(&nsi.id), k2_daemon::apps::access::Level::Build);
+    let grant = k2_core::skin::guest_rooms::get_grant(&app_svc).unwrap().expect("the App's guests-rooms grant");
+    assert_eq!(grant.rooms, vec![rooms.id.clone()]);
+    let after = k2_core::skin::copy_host_grants_to_app(&app_svc, "test", true).unwrap();
+    assert!(after.added.is_empty(), "ada and bo hold the App now: {after:?}");
+    // Each step is in the App's audit.
+    let audited = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::deploy::audit::list_for(&conn, k2_core::deploy::audit::SUBJECT_APP, "agentnsi", 200)
+            .unwrap()
+            .into_iter()
+            .filter(|a| a.event == "move_plan_step")
+            .count()
+    };
+    assert_eq!(audited, 3);
+    assert!(seen.lock().unwrap().iter().any(|(w, t)| w == &nsi.id && t.contains(&req) && t.contains("approved")), "the agent hears");
+    // Nothing left for the owner.
+    let r = post(d.port, "/cli/app/move-plan/request", &agent, json!({"service": "agents", "app": "agentnsi"})).await;
+    assert_eq!((r.status, r.json()["status"].clone()), (200, json!("nothing_to_request")), "{}", r.body);
+
+    // The approval copies exactly what the request saw: a user added in
+    // between stops the step, nothing is copied.
+    box_login_user("cy");
+    let r = post(d.port, "/cli/app/move-plan/request", &agent, json!({"service": "agents", "app": "agentnsi"})).await;
+    assert_eq!(r.status, 202, "{}", r.body);
+    let req2 = r.json()["request"]["id"].as_str().unwrap().to_string();
+    assert!(r.body.contains("cy"), "an agent with the switch sees the names: {}", r.body);
+    box_login_user("dan");
+    let r = post(d.port, "/cli/app/approve", OWNER, json!({"request": req2, "confirmToken": confirm("app-approve", &req2)})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.json()["status"], "failed", "{}", r.body);
+    assert!(r.body.contains("plan_changed"), "{}", r.body);
+    let still = k2_core::skin::copy_host_grants_to_app(&app_svc, "test", true).unwrap();
+    assert_eq!(still.added, vec!["cy".to_string(), "dan".to_string()], "nothing copied");
+    k2_daemon::apps::alerts::set_sink(None);
+}

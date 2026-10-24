@@ -289,6 +289,10 @@ pub const ROUTES: &[Route] = &[
     // Room-scope R9 (0.46.1): who holds a grant on a room (owner/admin any
     // room; a passport its own room; a member login is refused).
     get("/cli/app/members", Member),
+    // 0.46.4: the steps of a --cmd service's move; one held request for
+    // the owner's steps (handler: passports their own workspace's).
+    get("/cli/app/move-plan", Member),
+    post("/cli/app/move-plan/request", Admin),
     // Q8: park stops an App and holds it for the owner (lowering: Admin).
     post("/cli/app/park", Admin),
     // S19: per-App quotas. Lowering applies now (manage); a raise is the

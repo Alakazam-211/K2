@@ -113,8 +113,18 @@ describe('theme keys', () => {
     const linux = zenShortcutGroups('linux').flatMap((g) => g.rows.map((r) => r.keys))
     for (const k of ['Ctrl+Alt+Z', 'Ctrl+Alt+.', 'Ctrl+Alt+Shift+.', '⌘1–9', '⌥⌘1–9', 'Ctrl+Alt+1–4']) expect(linux).toContain(k)
     expect(rows.find((r) => r.keys === '⌃⌘1–4')?.what).toBe('My Home / Agents / Projects / Tickets view')
+    // 0.46.4: ⌃⌘5 the Wiki (leaves Zen), ⌃⌘6 Settings beside ⌘, (Zen stays on).
+    expect(rows.find((r) => r.keys === '⌃⌘5')?.what).toBe('Wiki (leaves Zen)')
+    expect(rows.find((r) => r.keys === '⌘,  or  ⌃⌘6')?.what).toBe('Settings (Zen stays on)')
+    const linuxRows = zenShortcutGroups('linux').flatMap((g) => g.rows)
+    expect(linuxRows.find((r) => r.keys === 'Ctrl+Alt+5')?.what).toBe('Wiki (leaves Zen)')
+    expect(linuxRows.find((r) => r.keys === '⌘,  or  Ctrl+Alt+6')?.what).toBe('Settings (Zen stays on)')
     // A rebound set is painted as given.
-    const rebound = zenShortcutGroups('mac', '⌃⌘H / ⌃⌘2 / ⌃⌘3 / ⌃⌘4').flatMap((g) => g.rows.map((r) => r.keys))
+    const rebound = zenShortcutGroups('mac', { views: '⌃⌘H / ⌃⌘2 / ⌃⌘3 / ⌃⌘4', wiki: '⌃⌘W', settings: '⌃⌘S' }).flatMap(
+      (g) => g.rows.map((r) => r.keys),
+    )
     expect(rebound).toContain('⌃⌘H / ⌃⌘2 / ⌃⌘3 / ⌃⌘4')
+    expect(rebound).toContain('⌃⌘W')
+    expect(rebound).toContain('⌘,  or  ⌃⌘S')
   })
 })

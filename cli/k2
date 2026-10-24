@@ -59225,7 +59225,7 @@ IDS AND NAMES
 
 SWITCHING
   The Garden switcher shows this Garden's name and opens the Garden list
-  and + New Garden. Cmd+Option+1-9 (Ctrl+Alt+1-9 on Linux) switch Gardens
+  and + New Garden. Cmd+Option+1-9 (Super+Alt+1-9 on Linux) switch Gardens
   even when no switcher is on screen.
 
 SYNC
@@ -59751,7 +59751,7 @@ THE WAYS OUT (they never depend on the page)
   buttons on Linux.
   Exit Zen in the safe-mode banner.
   Hold Shift while turning Zen on: safe mode, whatever the file says.
-  Cmd+Option+1-9 (Ctrl+Alt+1-9 on Linux) switch Gardens with no switcher.
+  Cmd+Option+1-9 (Super+Alt+1-9 on Linux) switch Gardens with no switcher.
   From a terminal: k2 zen reset --garden <id> restores the Garden's stub.
 
 Safe mode lasts until Try again, a change to the files, or leaving Zen.

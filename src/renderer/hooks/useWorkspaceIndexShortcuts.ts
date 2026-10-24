@@ -36,8 +36,9 @@ import { isMacPlatform } from '@/lib/desktop-chrome'
  *   open row N of the Garden's first Agents widget (nothing without one).
  * - Page switch (0.46.0, `lib/page-shortcuts.ts`): checked before all of
  *   the above. ⌃⌘1–4 (Ctrl+Alt+1–4 off macOS; rebindable) show My Home,
- *   Agents, Projects, Tickets, or in Zen that rail view. The ⌘ row chords
- *   below ignore any keydown with Control held.
+ *   Agents, Projects, Tickets, or in Zen that rail view; ⌃⌘5 opens the
+ *   Wiki (leaving Zen) and ⌃⌘6 Settings (over Zen, as ⌘, does). The ⌘ row
+ *   chords below ignore any keydown with Control held.
  */
 export function useWorkspaceIndexShortcuts(): void {
   useEffect(() => {

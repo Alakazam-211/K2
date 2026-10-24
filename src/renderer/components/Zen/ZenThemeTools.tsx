@@ -22,7 +22,7 @@ import { ZEN_GLASS_PROPS } from '@/lib/zen/zen-glass'
 import { ZEN_GLASS_PILL_PROPS, ZEN_TILE_RAISED_PROPS } from '@/lib/zen/zen-materials'
 import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
 import { useSettingsStore } from '@/stores/settings'
-import { pageShortcutsSummary } from '@/lib/page-shortcuts'
+import { pageShortcutKeys } from '@/lib/page-shortcuts'
 import type { ZenChromePlace } from './ZenTemplateControls'
 
 /** The theme control's default place: the top band's end group. */
@@ -224,7 +224,7 @@ export function ZenShortcutSheet({ os }: { os: DesktopOs }): React.JSX.Element |
   const overlayRef = useK2Overlay()
   useEscCloses(open)
   const [groups] = useState(() =>
-    zenShortcutGroups(os, pageShortcutsSummary(useSettingsStore.getState().keybindings, os === 'mac')),
+    zenShortcutGroups(os, pageShortcutKeys(useSettingsStore.getState().keybindings, os === 'mac')),
   )
   if (!open) return null
   return (

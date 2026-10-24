@@ -1003,7 +1003,7 @@ describe('the nav rail (Garden 1)', () => {
     expect(document.querySelector('[data-zen-page]')?.getAttribute('data-zen-view')).toBe('home')
   })
 
-  // 0.46.0 page chords (this file runs as macOS: ⌃⌘1–4).
+  // 0.46.0 page chords (this file runs as macOS: ⌃⌘1–4; ⌃⌘5–6 since 0.46.4).
   function pageChord(n: number): void {
     fireEvent.keyDown(window, { key: String(n), code: `Digit${n}`, ctrlKey: true, metaKey: true })
   }
@@ -1026,6 +1026,40 @@ describe('the nav rail (Garden 1)', () => {
     await act(async () => pageChord(4))
     expect(useZenWindowStore.getState().view).toBe('home')
     expect(usePageViewStore.getState().page).toBe('home')
+    expect(useZenWindowStore.getState().on).toBe(true)
+  })
+
+  // 0.46.4: the rail has no Wiki or Settings view.
+  it('⌃⌘5 leaves Zen and opens the wiki (G34), with or without a rail', async () => {
+    await mountZen()
+    await act(async () => pageChord(5))
+    await waitFor(() => expect(document.querySelector('[data-zen-page]')).toBeNull())
+    expect(useZenWindowStore.getState().on).toBe(false)
+    expect(usePageViewStore.getState().page).toBe('wiki')
+    expect(usePageViewStore.getState().wikiReturnPage).toBe('home')
+    expect(useSettingsStore.getState().settingsOpen).toBe(false)
+  })
+
+  it('⌃⌘5 on a Garden without a rail also leaves Zen for the wiki', async () => {
+    useZenWindowStore.setState({ garden: 'g-notes', view: 'home' })
+    await mountGarden('k2.blank@1')
+    await act(async () => pageChord(5))
+    await waitFor(() => expect(document.querySelector('[data-zen-page]')).toBeNull())
+    expect(useZenWindowStore.getState().on).toBe(false)
+    expect(usePageViewStore.getState().page).toBe('wiki')
+  })
+
+  it('⌃⌘6 opens Settings over Zen as ⌘, does: Zen stays on and shows again when Settings closes', async () => {
+    await mountZen()
+    await act(async () => useZenWindowStore.getState().setView('projects'))
+    await act(async () => pageChord(6))
+    expect(useSettingsStore.getState().settingsOpen).toBe(true)
+    await waitFor(() => expect(document.querySelector('[data-zen-page]')).toBeNull())
+    expect(useZenWindowStore.getState().on).toBe(true)
+    expect(useZenWindowStore.getState().view).toBe('projects')
+    expect(usePageViewStore.getState().page).toBe('home')
+    await act(async () => useSettingsStore.getState().closeSettings())
+    await waitFor(() => expect(document.querySelector('[data-zen-page]')?.getAttribute('data-zen-view')).toBe('projects'))
     expect(useZenWindowStore.getState().on).toBe(true)
   })
 

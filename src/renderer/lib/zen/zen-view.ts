@@ -183,7 +183,9 @@ export function zenSelectRow(index: number): void {
 // (Ctrl+Alt+1–4) switch the nav rail's view (My Home, Agents, Projects,
 // Tickets), the same as clicking the rail. The mounted Zen page registers
 // the switcher; it does nothing on a Garden without a rail and never
-// touches the page under Zen.
+// touches the page under Zen. ⌃⌘5 (Wiki) and ⌃⌘6 (Settings) have no rail
+// view: ⌃⌘5 leaves Zen and opens the wiki, ⌃⌘6 opens Settings over Zen as
+// ⌘, does (0.46.4).
 let zenViewSwitch: ((view: ZenRailView) => void) | null = null
 
 /** Plug-in point: what a page chord does in Zen. Returns the unregister. */

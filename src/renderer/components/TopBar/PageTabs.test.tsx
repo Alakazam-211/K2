@@ -59,8 +59,8 @@ vi.mock('@/stores/projects', () => ({
   useProjectsStore: hookOf({ projects: [] as { id: string }[] }),
 }))
 
-import PageTabs, { PAGE_TAB_ICON_PX, PAGE_TAB_ITEMS } from './PageTabs'
-import { withChord } from '@/lib/shortcut-label'
+import PageTabs, { PAGE_TAB_ICON_PX, PAGE_TAB_ITEMS, settingsTabTitle } from './PageTabs'
+import { currentShortcutOs } from '@/lib/shortcut-label'
 import { usePageViewStore, isRoomPage, type AppPage } from '@/stores/page-view'
 
 afterEach(() => {
@@ -111,8 +111,9 @@ describe('PageTabs — Home tab', () => {
     expect(cog.querySelector('svg')?.getAttribute('data-k2-icon')).toBe('settings')
     // Focus order follows the DOM: no tab reorders itself with tabindex.
     for (const b of list) expect(b.hasAttribute('tabindex')).toBe(false)
-    // Tooltip and shortcut unchanged by the move.
-    expect(cog.getAttribute('title')).toBe(withChord('Settings', 'Meta+,'))
+    // Tooltip: ⌃⌘6 (0.46.4) and ⌘, as painted on this platform.
+    expect(cog.getAttribute('title')).toBe(settingsTabTitle({}, currentShortcutOs()))
+    expect(cog.getAttribute('title')).toMatch(/^Settings \((⌃⌘6, ⌘,|Ctrl\+Alt\+6, Super\+,|Ctrl\+Alt\+6)\)$/)
   })
 
   it('the page tabs are icons only: one 16px svg each, no words, word in title + aria-label', () => {
@@ -261,7 +262,8 @@ describe('PageTabs — Wiki tab (0.46.0)', () => {
     const { container } = render(<PageTabs />)
     const wiki = screen.getByRole('button', { name: 'Wiki' })
     expect(tabs(container).at(-2)).toBe(wiki)
-    expect(wiki.getAttribute('title')).toBe('Wiki')
+    // 0.46.4: the tooltip carries ⌃⌘5 (Ctrl+Alt+5 off macOS).
+    expect(wiki.getAttribute('title')).toMatch(/^Wiki \((⌃⌘5|Ctrl\+Alt\+5)\)$/)
     expect(wiki.querySelector('svg')?.getAttribute('data-k2-icon')).toBe('wiki')
     expect(wiki.getAttribute('aria-pressed')).toBe('false')
   })

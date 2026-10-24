@@ -16,7 +16,7 @@ import { selectProjectBadgeCount, useUnreadStore } from '@/stores/unread'
 import { initProjectGroupEvents } from '@/stores/project-groups'
 import { useProjectsStore } from '@/stores/projects'
 import { useSettingsStore } from '@/stores/settings'
-import { withChord } from '@/lib/shortcut-label'
+import { currentShortcutOs, metaChordLabel } from '@/lib/shortcut-label'
 import {
   AgentsIcon,
   HomeIcon,
@@ -26,9 +26,9 @@ import {
   TicketsIcon,
   WikiIcon,
 } from '@/components/icons/K2Icons'
-import { openWikiForView } from '@/lib/wiki-open'
+import { openWikiTab } from '@/lib/wiki-open'
 import { pageShortcutLabel } from '@/lib/page-shortcuts'
-import { isMacPlatform } from '@/lib/desktop-chrome'
+import { isMacPlatform, type DesktopOs } from '@/lib/desktop-chrome'
 import { HomesSyncBadge } from '@/components/Home/HomesSyncBadge'
 
 /** The Tickets tab's badge from the feedback store (prd-tickets-badge-
@@ -76,14 +76,23 @@ export const PAGE_TAB_ITEMS = [
   { page: 'wiki', Icon: WikiIcon },
 ] as const satisfies readonly { page: keyof typeof PAGE_TAB_LABELS; Icon: typeof HomeIcon }[]
 
-/** A page tab's tooltip with its chords: the page shortcut (⌃⌘1–4,
- *  Ctrl+Alt+1–4 off macOS, or the rebound one) and ⌘P for Projects. */
+/** A page tab's tooltip with its chords: the page shortcut (⌃⌘1–5,
+ *  Ctrl+Alt+1–5 off macOS, or the rebound one) and ⌘P for Projects. */
 export function pageTabTitle(page: keyof typeof PAGE_TAB_LABELS, keybindings: Record<string, string>, isMac: boolean): string {
   const chords = [pageShortcutLabel(page, keybindings, isMac), page === 'projects' ? '⌘P' : null].filter(
     (c): c is string => !!c,
   )
   const title = PAGE_TAB_LABELS[page].title
   return chords.length > 0 ? `${title} (${chords.join(', ')})` : title
+}
+
+/** The cog's tooltip: ⌃⌘6 (Ctrl+Alt+6 off macOS, or the rebound one) and
+ *  ⌘, (none on Windows, which keeps Win+, for itself). */
+export function settingsTabTitle(keybindings: Record<string, string>, os: DesktopOs): string {
+  const chords = [pageShortcutLabel('settings', keybindings, os === 'mac'), metaChordLabel('Meta+,', os)].filter(
+    (c): c is string => !!c,
+  )
+  return chords.length > 0 ? `Settings (${chords.join(', ')})` : 'Settings'
 }
 
 /** What a tab badge shows: nothing, a number, or `?` (unknown). */
@@ -190,13 +199,14 @@ export default function PageTabs(): React.JSX.Element {
   }, [])
 
   const select = (p: AppPage): void => {
+    if (p === 'wiki') {
+      // Closes Settings; already on the wiki, keeps it shown (the picker
+      // switches it). ⌃⌘5 makes the same call.
+      openWikiTab()
+      return
+    }
     if (useSettingsStore.getState().settingsOpen) {
       useSettingsStore.getState().closeSettings()
-    }
-    if (p === 'wiki') {
-      // Already on the wiki: keep the wiki shown (the picker switches it).
-      if (usePageViewStore.getState().page !== 'wiki') openWikiForView()
-      return
     }
     setPage(p)
   }
@@ -240,7 +250,7 @@ export default function PageTabs(): React.JSX.Element {
             useSettingsStore.getState().openSettings()
           }
         }}
-        title={withChord('Settings', 'Meta+,')}
+        title={settingsTabTitle(keybindings, currentShortcutOs())}
         ariaLabel="Settings"
       >
         <SettingsIcon size={PAGE_TAB_ICON_PX} />

@@ -69,14 +69,17 @@ export const HOTKEYS: HotkeyDefinition[] = [
     defaultKey: 'Meta+Shift+.',
     category: 'Navigation'
   },
-  // Page switch (0.46.0, Rosson 2026-10-16): the top bar's page tabs in
-  // order. ⌃⌘1–4 on macOS, Ctrl+Alt+1–4 on Linux / Windows. Handled by
-  // `useWorkspaceIndexShortcuts` (lib/page-shortcuts.ts); no native menu
-  // accelerator, so a rebind here is the only owner of the chord.
+  // Page switch (0.46.0, Rosson 2026-10-16): the top bar's tabs in order.
+  // ⌃⌘1–6 on macOS, Ctrl+Alt+1–6 on Linux / Windows; 5 Wiki and 6 Settings
+  // since 0.46.4 (Rosson 2026-10-24). Handled by `useWorkspaceIndexShortcuts`
+  // (lib/page-shortcuts.ts); no native menu accelerator, so a rebind here is
+  // the only owner of the chord.
   { id: 'goToHome', label: 'Go to My Home', defaultKey: 'Ctrl+Meta+1', defaultKeyOther: 'Ctrl+Alt+1', category: 'Navigation' },
   { id: 'goToAgents', label: 'Go to Agents', defaultKey: 'Ctrl+Meta+2', defaultKeyOther: 'Ctrl+Alt+2', category: 'Navigation' },
   { id: 'goToProjects', label: 'Go to Projects', defaultKey: 'Ctrl+Meta+3', defaultKeyOther: 'Ctrl+Alt+3', category: 'Navigation' },
   { id: 'goToTickets', label: 'Go to Tickets', defaultKey: 'Ctrl+Meta+4', defaultKeyOther: 'Ctrl+Alt+4', category: 'Navigation' },
+  { id: 'goToWiki', label: 'Go to Wiki', defaultKey: 'Ctrl+Meta+5', defaultKeyOther: 'Ctrl+Alt+5', category: 'Navigation' },
+  { id: 'goToSettings', label: 'Go to Settings', defaultKey: 'Ctrl+Meta+6', defaultKeyOther: 'Ctrl+Alt+6', category: 'Navigation' },
 
   // ── App ──────────────────────────────────────────────────────────────
   { id: 'openSettings', label: 'Open Settings', defaultKey: 'Meta+,', category: 'App' },

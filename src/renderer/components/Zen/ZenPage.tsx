@@ -235,6 +235,7 @@ export function ZenPage({
   )
   // 0.46.0: ⌃⌘1–4 (Ctrl+Alt+1–4) switch the rail's view, as a rail click
   // does. A Garden without a rail has no views: the chord does nothing.
+  // (⌃⌘5 Wiki and ⌃⌘6 Settings never reach here: lib/page-shortcuts.ts.)
   const gardenRef = useRef(garden)
   gardenRef.current = garden
   useEffect(

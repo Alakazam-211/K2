@@ -150,10 +150,18 @@ export interface ZenShortcutGroup {
   rows: ZenShortcutRow[]
 }
 
+/** The page chords as painted for the cheat sheet (`pageShortcutKeys`,
+ *  lib/page-shortcuts.ts): the four rail views (`⌃⌘1–4`), Wiki and
+ *  Settings (0.46.4). */
+export interface ZenPageKeys {
+  views: string
+  wiki: string
+  settings: string
+}
+
 /** Every Zen shortcut, for the cheat sheet (Omarchy 4). `pageKeys`: the
- *  page chords as painted (`pageShortcutsSummary`, lib/page-shortcuts.ts;
- *  the defaults when omitted). */
-export function zenShortcutGroups(os: DesktopOs, pageKeys?: string): ZenShortcutGroup[] {
+ *  page chords as painted (the defaults for any omitted). */
+export function zenShortcutGroups(os: DesktopOs, pageKeys: Partial<ZenPageKeys> = {}): ZenShortcutGroup[] {
   const mac = os === 'mac'
   // The window's own chords are `metaKey` on every platform and paint as ⌘
   // glyphs everywhere (lib/home-shortcuts.ts); only the Zen chords differ.
@@ -178,7 +186,7 @@ export function zenShortcutGroups(os: DesktopOs, pageKeys?: string): ZenShortcut
         { keys: `${cmd}1–9`, what: 'Open conversation 1–9' },
         { keys: `${alt}1–9`, what: 'Switch to Garden 1–9' },
         // 0.46.0: the page chords switch the nav rail's view (a Garden with a rail).
-        { keys: pageKeys ?? `${chord}1–4`, what: 'My Home / Agents / Projects / Tickets view' },
+        { keys: pageKeys.views ?? `${chord}1–4`, what: 'My Home / Agents / Projects / Tickets view' },
         { keys: `${cmd}↑ / ${cmd}↓`, what: 'Previous / next conversation' },
       ],
     },
@@ -193,7 +201,9 @@ export function zenShortcutGroups(os: DesktopOs, pageKeys?: string): ZenShortcut
     {
       title: 'The rest of K2',
       rows: [
-        { keys: `${cmd},`, what: 'Settings (Zen stays on)' },
+        // 0.46.4: ⌃⌘6 is ⌘, and ⌃⌘5 the Wiki tab (no rail view for either).
+        { keys: `${cmd},  or  ${pageKeys.settings ?? `${chord}6`}`, what: 'Settings (Zen stays on)' },
+        { keys: pageKeys.wiki ?? `${chord}5`, what: 'Wiki (leaves Zen)' },
         { keys: `${cmd}P`, what: 'Projects (leaves Zen)' },
         { keys: `${cmd}J`, what: 'Running Agents' },
         { keys: `${cmd}K`, what: 'Command Palette' },

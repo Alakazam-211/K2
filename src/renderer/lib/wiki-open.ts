@@ -17,9 +17,14 @@
 // show the wikis for the agents on that server").
 //
 // Per-window view state only: reads this window's stores, writes the page
-// store. No daemon calls.
+// store (and closes this window's Settings, as every tab click does). No
+// daemon calls.
+//
+// ⌃⌘5 / Ctrl+Alt+5 (0.46.4, `lib/page-shortcuts.ts`) is a click on the tab:
+// both call `openWikiTab`.
 
 import { usePageViewStore, type AppPage } from '@/stores/page-view'
+import { useSettingsStore } from '@/stores/settings'
 import { useProjectsStore } from '@/stores/projects'
 import { useFocusGroupsStore } from '@/stores/focus-groups'
 import { useHomesStore, selectedHome } from '@/stores/homes'
@@ -122,4 +127,12 @@ export function currentWikiDefaultInput(): WikiDefaultInput {
 /** The Wiki tab: open All of K2, with the workspace on screen recorded (see above). */
 export function openWikiForView(): void {
   usePageViewStore.getState().openWiki(defaultWikiPath(currentWikiDefaultInput()), { allOfK2: true })
+}
+
+/** A click on the Wiki tab (and ⌃⌘5): Settings closes; already on the
+ *  wiki, it stays as it is (the picker switches it); else `openWikiForView`. */
+export function openWikiTab(): void {
+  const settings = useSettingsStore.getState()
+  if (settings.settingsOpen) settings.closeSettings()
+  if (usePageViewStore.getState().page !== 'wiki') openWikiForView()
 }

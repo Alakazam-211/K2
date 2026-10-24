@@ -508,6 +508,9 @@ pub const ROUTES: &[Route] = &[
     get("/cli/compute/nodes/servers", Admin),
     post("/cli/compute/nodes/servers/add", Admin),
     post("/cli/compute/nodes/servers/limits", Admin),
+    // Changing a node's owner server is the owner's alone (Q9), and held
+    // for the owner's approval (prd-macos-tenant-compute-v1 §6).
+    post("/cli/compute/nodes/servers/owner", Owner),
     post("/cli/compute/nodes/servers/pause", Admin),
     post("/cli/compute/nodes/servers/revoke", Owner),
     post("/cli/compute/nodes/update", Admin),

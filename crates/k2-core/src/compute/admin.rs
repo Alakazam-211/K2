@@ -807,6 +807,13 @@ pub fn summarize(node: &str, verb: &str, args: &Value) -> String {
             if a.get("now").and_then(Value::as_bool) == Some(true) { ", stop its running jobs" } else { ", let running jobs finish" },
             if a.get("wipe").and_then(Value::as_bool) == Some(true) { ", wipe its files now" } else { ", wipe its files in 24 h" }
         ),
+        "servers.owner" => format!(
+            "make {} the owner of {node} (as root): it gets this node's admin and approvals, after a drain{}; {}; caches {}",
+            s("server"),
+            if a.get("now").and_then(Value::as_bool) == Some(true) { " that stops running jobs" } else { " (running jobs finish first, up to 30 min)" },
+            if s("old") == "revoke" { "this server leaves the node (its files are wiped)" } else { "this server stays on it as one of your servers" },
+            if s("caches") == "wipe" { "are wiped (cold builds once)" } else { "move with their server" }
+        ),
         "node.update" => format!("update k2-node on {node} to {}", s("version")),
         "node.rollback" => format!("roll k2-node on {node} back to its previous build"),
         other => format!("{other} on {node}: {}", arg_list(a)),
@@ -910,6 +917,12 @@ pub fn store_health(conn: &Connection, node_id: &str, at: i64, facts: &Health) -
     )
     .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Drop a node's cached health (a role flip: facts from the other era,
+/// such as the approval keys root pinned then, never count).
+pub fn forget_health(conn: &Connection, node_id: &str) {
+    let _ = conn.execute("DELETE FROM compute_node_health WHERE node_id = ?1", params![node_id]);
 }
 
 pub fn health(conn: &Connection, node_id: &str) -> Option<(i64, Health)> {
@@ -1305,6 +1318,15 @@ mod tests {
         assert_eq!(step_class("servers.limits"), Some(Class::Privileged), "a held limits change carries the owner signature");
         assert_eq!(step_class("servers.pause"), Some(Class::Operate));
         assert_eq!(step_class("servers.add"), Some(Class::Privileged));
+        // servers.owner (prd-macos-tenant-compute-v1 §6.4): always the owner's.
+        assert_eq!(step_class("servers.owner"), Some(Class::Privileged));
+        let fp = "ab".repeat(32);
+        assert_eq!(validate_step("servers.owner", &json!({"server": "z3thon.k2.dev", "fp": fp})).unwrap(), Class::Privileged);
+        assert_eq!(validate_step("servers.owner", &json!({"server": "slot:0", "fp": fp})).unwrap_err().0, codes::BAD_ARGS);
+        let s = summarize("k2n2-m1", "servers.owner", &json!({"server": "z3thon.k2.dev", "fp": fp, "old": "revoke", "caches": "wipe", "now": true}));
+        assert!(s.contains("make z3thon.k2.dev the owner of k2n2-m1") && s.contains("leaves") && s.contains("wiped") && s.contains("stops running jobs"), "{s}");
+        let s = summarize("k2n2-m1", "servers.owner", &json!({"server": "z3thon.k2.dev", "fp": fp}));
+        assert!(s.contains("stays on it") && s.contains("move with their server"), "{s}");
         assert_eq!(validate_step("servers.add", &json!({"url": "https://b.k2.dev", "code_binding": "ab", "fp_prefix": "0123456789abcdef", "trust": "team"})).unwrap(), Class::Privileged);
         assert_eq!(validate_step("servers.add", &json!({"url": "https://b.k2.dev"})).unwrap_err().0, codes::BAD_ARGS);
     }

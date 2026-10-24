@@ -17297,6 +17297,16 @@ Sharing a node with other K2 servers (the node's owner server; 0.46.3):
                    slot:0 (this server) for its weight
   k2 compute node servers <node> pause|resume <server>
   k2 compute node servers <node> revoke <server> [--now] [--wipe]   (owner)
+  k2 compute node servers <node> owner <server> [--old keep|revoke]
+                   [--caches move|wipe] [--now] [--reason TEXT]   (owner, 0.46.4)
+                   make another of your own servers on the node its owner
+                   (active, confirmed, online). Held for your approval; the
+                   node drains (--now stops running jobs), the two swap
+                   slots and root re-pins to the new owner. This server
+                   stays as one of your servers (--old revoke: it leaves);
+                   caches move with their server (or --caches wipe). Needs
+                   remote admin `full`; else at the machine:
+                   sudo k2-node servers owner <server>
   k2 compute grant <node> --workspace WS [--max-time 2h] [--max-disk 60G]
                    [--max-parallel 1] [--max-queued 10]
   k2 compute revoke <node> --workspace WS
@@ -18817,11 +18827,12 @@ if "node" in v:
     esac
 }
 
-# `k2 compute node servers <node> [add|approve|deny|limits|pause|resume|revoke …]`
-# (node sharing, 0.46.3: prd-compute-shared-queue-v1 §9).
+# `k2 compute node servers <node> [add|approve|deny|limits|pause|resume|revoke|owner …]`
+# (node sharing, 0.46.3: prd-compute-shared-queue-v1 §9; owner, 0.46.4:
+# prd-macos-tenant-compute-v1 §6).
 cmd_compute_node_servers() {
     local node="${1:-}"
-    [ -n "$node" ] && [ "${node#-}" = "$node" ] || { echo "usage: k2 compute node servers <node> [add|approve|deny|limits|pause|resume|revoke …] (k2 compute --help)" >&2; exit 2; }
+    [ -n "$node" ] && [ "${node#-}" = "$node" ] || { echo "usage: k2 compute node servers <node> [add|approve|deny|limits|pause|resume|revoke|owner …] (k2 compute --help)" >&2; exit 2; }
     shift
     local act="${1:-list}"
     [ "$act" = "--json" ] && act=list
@@ -18937,8 +18948,32 @@ if v.get("warning"): print("note: " + v["warning"], file=sys.stderr)'
             [ "$as_json" = "1" ] && { printf '%s\n' "$_CP_BODY"; exit 0; }
             printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("revoked %s on %s: %s" % (v["server"], v["node"], v["note"]))'
             ;;
+        owner)
+            local server="" old="keep" caches="move" now=0 reason=""
+            local usage="usage: k2 compute node servers <node> owner <server> [--old keep|revoke] [--caches move|wipe] [--now] [--reason TEXT]"
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --old) old="${2:-}"; shift 2 ;;
+                    --caches) caches="${2:-}"; shift 2 ;;
+                    --now) now=1; shift ;;
+                    --reason) reason="${2:-}"; shift 2 ;;
+                    --json) shift ;;
+                    -*) echo "$usage" >&2; exit 2 ;;
+                    *) server="$1"; shift ;;
+                esac
+            done
+            [ -n "$server" ] || { echo "$usage" >&2; exit 2; }
+            case "$old" in keep|revoke) ;; *) echo "$usage (--old is keep or revoke)" >&2; exit 2 ;; esac
+            case "$caches" in move|wipe) ;; *) echo "$usage (--caches is move or wipe)" >&2; exit 2 ;; esac
+            _compute_call POST /cli/compute/nodes/servers/owner "$(_compute_json K2_CJ_node="$node" K2_CJ_server="$server" K2_CJ_old="$old" \
+                K2_CJ_caches="$caches" K2_CJ_now_b="$now" K2_CJ_reason="$reason")" tcp
+            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
+v=json.load(sys.stdin)
+if v.get("note"): print("note: " + v["note"], file=sys.stderr)'
+            _compute_admin_held_or_approve
+            ;;
         *)
-            echo "usage: k2 compute node servers <node> [add|approve|deny|limits|pause|resume|revoke …]" >&2
+            echo "usage: k2 compute node servers <node> [add|approve|deny|limits|pause|resume|revoke|owner …]" >&2
             exit 2
             ;;
     esac
@@ -38251,7 +38286,8 @@ SHARED NODES
   k2 study compute-shared. Adding a server from K2 (k2 compute node
   servers <node> add) needs the node's remote-admin level `full`; on a
   node set to `policy`, servers are added at the machine
-  (sudo k2-node servers add).
+  (sudo k2-node servers add). Moving the node to another of your own
+  servers: k2 compute node servers <node> owner <server> (0.46.4).
 
 K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
@@ -38337,6 +38373,25 @@ FOR THE NODE'S OWNER
   apply at once. Updates on a shared node wait for running jobs (≤ 30 min).
   An add from K2 needs the node's remote-admin level `full`; on a node set
   to `policy`, add servers at the machine: sudo k2-node servers add …
+
+CHANGING THE NODE'S OWNER (0.46.4)
+  k2 compute node servers <node> owner <server> [--old keep|revoke]
+                                 [--caches move|wipe] [--now]
+  Another of YOUR OWN servers already on the node (trust own, active,
+  confirmed, online) becomes its owner: it gets the node's admin, updates
+  and approvals. Only you, the owner, ask for it (never an agent), and it
+  waits for your approval (Touch ID / vault password). The node drains
+  first (--now stops running jobs as node_update, no strike), the two
+  servers swap slots, root re-pins to the new owner's key, k2-node
+  restarts once. Queued jobs stay with their server; other servers on the
+  node are untouched. This server stays on the node as one of your
+  servers (--old revoke: it leaves and its files are wiped). Caches move
+  with their server (--caches wipe: cold builds once). The new owner
+  pins its own approval key on its first attach. At `policy`, or from the
+  machine: sudo k2-node servers owner <server>.
+  Codes: owner_needs_own_server (a team server would get root admin),
+  owner_target_not_ready (not active, confirmed or online),
+  owner_change_pending (one at a time).
 
 K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF

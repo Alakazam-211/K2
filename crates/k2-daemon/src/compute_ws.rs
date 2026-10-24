@@ -822,7 +822,7 @@ fn flush_tally(job: &str, t: &LogTally) {
 }
 
 fn on_offer(node_id: &str, o: Offer) {
-    let (before, tenant) = {
+    let (before, tenant, after) = {
         let db = k2_core::db::shared();
         let conn = db.lock();
         let before = store::node_by_id(&conn, node_id);
@@ -833,8 +833,15 @@ fn on_offer(node_id: &str, o: Offer) {
         // The node is the truth for its share, but never for its role
         // upward: `store_share` keeps a tenant a tenant.
         store::store_share(&conn, node_id, o.share.as_ref(), compute::now());
-        (before, tenant)
+        (before, tenant, store::node_by_id(&conn, node_id))
     };
+    // MT35: owned -> tenant (an owner change on the node gave it to another
+    // server, or a re-enrol). The only flip an offer can make.
+    if let (Some(b), Some(a)) = (&before, &after) {
+        if b.role != a.role {
+            crate::compute_admin::on_role_change(node_id, &b.role, a);
+        }
+    }
     // V52: a node another server owns never gets node admin from here
     // (no approval-key pin, no queued admin commands).
     let admin = !tenant && o.features.iter().any(|f| f == k2_core::compute::proto::admin::FEATURE_ADMIN);

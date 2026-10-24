@@ -913,3 +913,99 @@ fn servers_add_limits_pause_and_revoke() {
     let e = call(SERVERS_PAUSE, &agent(&f), json!({"node": f.node_name, "server": "z3thon.k2.dev"})).unwrap_err();
     assert_eq!(e, (409, pshare::codes::NODE_TOO_OLD.to_string()));
 }
+
+/// A `servers.list` answer with the target (slot 1) enrolled (its full
+/// key) and online or not, and another person's server (slot 2).
+fn servers_listed_for_owner(target_fp: &str, online: bool) -> Value {
+    let mut v = servers_listed();
+    let s = v["servers"].as_array_mut().unwrap();
+    s[1]["fp"] = target_fp.into();
+    s[1]["online"] = online.into();
+    let mut team = s[1].clone();
+    team["slot"] = 2.into();
+    team["label"] = "baden.k2.dev".into();
+    team["trust"] = "team".into();
+    team["fp_prefix"] = "1123456789abcdef".into();
+    team["fp"] = format!("1123456789abcdef{}", "0".repeat(48)).into();
+    s.push(team);
+    v
+}
+
+/// prd-macos-tenant-compute-v1 §6.4 (MT27, MT28, Q9): only the owner
+/// files an owner change, never an agent; it's always held, and once
+/// approved the node gets one owner-signed `servers.owner` naming the
+/// target's full key. A team or offline target, a node without the
+/// feature, or remote admin below `full` are refused up front.
+#[test]
+fn an_owner_change_is_the_owners_held_and_names_the_key() {
+    let f = fx("owner-change", true);
+    let target_fp = format!("0123456789abcdef{}", "a".repeat(48));
+    let feats = [wire::FEATURE_ADMIN, wire::FEATURE_HEALTH, frames::FEATURE_JOB_WALL, pshare::FEATURE_SERVERS, pshare::FEATURE_SERVERS_OWNER];
+    test_seams::register(&f.node, true, &feats);
+    let body = json!({"node": f.node_name, "server": "z3thon.k2.dev", "caches": "move", "old": "keep"});
+
+    // Never an agent (even with the operate switch on).
+    let e = call(SERVERS_OWNER, &agent(&f), body.clone()).unwrap_err();
+    assert_eq!(e, (403, codes::OWNER_ONLY.to_string()));
+
+    // A team target, then an offline one: refused before anything is filed.
+    let responder = answer_servers(f.node.clone(), servers_listed_for_owner(&target_fp, true), "servers.list");
+    let e = call(SERVERS_OWNER, &Who::Owner, json!({"node": f.node_name, "server": "baden.k2.dev"})).unwrap_err();
+    responder.join().unwrap();
+    assert_eq!(e, (409, pshare::codes::OWNER_NEEDS_OWN_SERVER.to_string()));
+    {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        let rows: Vec<k2_core::compute::share::ServerRow> = store::node_servers(&conn, &f.node)
+            .into_iter()
+            .map(|mut r| {
+                if r.slot == 1 {
+                    r.usage = Some(json!({"online": false}));
+                }
+                r
+            })
+            .collect();
+        store::replace_node_servers(&conn, &f.node, &rows, compute::now()).unwrap();
+    }
+    let e = call(SERVERS_OWNER, &Who::Owner, body.clone()).unwrap_err();
+    assert_eq!(e, (409, pshare::codes::OWNER_TARGET_NOT_READY.to_string()), "offline");
+    let responder = answer_servers(f.node.clone(), servers_listed_for_owner(&target_fp, true), "servers.list");
+    get(SERVERS, &Who::Owner, &[("node", &f.node_name), ("refresh", "1")]).unwrap();
+    responder.join().unwrap();
+
+    // Held for the owner; one at a time.
+    let r = call(SERVERS_OWNER, &Who::Owner, json!({"node": f.node_name, "server": "z3thon.k2.dev", "old": "revoke", "caches": "wipe", "now": true, "reason": "drill"})).unwrap();
+    assert_eq!((r["held"].as_bool(), r["request"]["class"].as_str()), (Some(true), Some("privileged")), "{r}");
+    let summary = r["request"]["summary"].as_str().unwrap();
+    assert!(summary.contains("make z3thon.k2.dev the owner of") && summary.contains("leaves"), "{summary}");
+    assert!(test_seams::take_sent(&f.node).is_empty(), "nothing goes out while held");
+    let e = call(SERVERS_OWNER, &Who::Owner, body.clone()).unwrap_err();
+    assert_eq!(e, (409, "owner_change_pending".to_string()));
+    let id = r["request"]["id"].as_str().unwrap().to_string();
+    let r = call(APPROVE, &Who::Owner, json!({"request": id, "confirmToken": token_for(&id)})).unwrap();
+    assert_eq!(r["sent"], true, "{r}");
+    let cmds = admin_cmds(test_seams::take_sent(&f.node));
+    assert_eq!(cmds.len(), 1);
+    let o = node_open(&f, &cmds[0]).expect("the node accepts the owner-signed change");
+    assert_eq!((o.cmd.verb.as_str(), o.cmd.class), ("servers.owner", wire::Class::Privileged));
+    let a: pshare::OwnerArgs = serde_json::from_value(o.cmd.args.clone()).unwrap();
+    assert_eq!((a.server.as_str(), a.fp.as_deref(), a.old, a.caches, a.now), ("z3thon.k2.dev", Some(target_fp.as_str()), pshare::OldOwner::Revoke, pshare::Caches::Wipe, true));
+    let kinds: Vec<String> = {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        store::events(&conn, 200).into_iter().filter(|e| e.node_id.as_deref() == Some(&f.node)).map(|e| e.kind).collect()
+    };
+    assert!(kinds.iter().any(|k| k == "server_owner"), "audited: {kinds:?}");
+
+    // A node without the feature, then remote admin at `policy`.
+    test_seams::register(&f.node, true, &feats[..4]);
+    let e = call(SERVERS_OWNER, &Who::Owner, body.clone()).unwrap_err();
+    assert_eq!(e, (409, pshare::codes::NODE_TOO_OLD.to_string()));
+    test_seams::register(&f.node, true, &feats);
+    {
+        let h = k2_core::db::shared();
+        cadmin::set_reported_admin(&h.lock(), &f.node, Some("policy"), None);
+    }
+    let e = call(SERVERS_OWNER, &Who::Owner, body).unwrap_err();
+    assert_eq!(e, (409, cadmin::codes::REMOTE_ADMIN_OFF.to_string()));
+}

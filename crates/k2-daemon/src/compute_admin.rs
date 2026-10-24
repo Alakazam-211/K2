@@ -74,6 +74,9 @@ pub const SERVERS_ADD: &str = "/cli/compute/nodes/servers/add";
 pub const SERVERS_LIMITS: &str = "/cli/compute/nodes/servers/limits";
 pub const SERVERS_PAUSE: &str = "/cli/compute/nodes/servers/pause";
 pub const SERVERS_REVOKE: &str = "/cli/compute/nodes/servers/revoke";
+/// Make another of this owner's own servers on a node its owner
+/// (prd-macos-tenant-compute-v1 §6): owner only, held for approval.
+pub const SERVERS_OWNER: &str = "/cli/compute/nodes/servers/owner";
 
 /// Every node admin route (also listed in `compute_routes::ROUTES`).
 pub const ROUTES: &[&str] = &[
@@ -95,11 +98,26 @@ pub const ROUTES: &[&str] = &[
     SERVERS_LIMITS,
     SERVERS_PAUSE,
     SERVERS_REVOKE,
+    SERVERS_OWNER,
 ];
 
 /// POST-only (also in `compute_routes::POST_ROUTES`).
-pub const POST_ROUTES: &[&str] =
-    &[APPROVE, DENY, PROPOSE, WITHDRAW, NODE_ALERTS, NODE_POLICY_SET, NODE_ROLLBACK, NODE_UPDATE, NODE_WALL, SERVERS_ADD, SERVERS_LIMITS, SERVERS_PAUSE, SERVERS_REVOKE];
+pub const POST_ROUTES: &[&str] = &[
+    APPROVE,
+    DENY,
+    PROPOSE,
+    WITHDRAW,
+    NODE_ALERTS,
+    NODE_POLICY_SET,
+    NODE_ROLLBACK,
+    NODE_UPDATE,
+    NODE_WALL,
+    SERVERS_ADD,
+    SERVERS_LIMITS,
+    SERVERS_PAUSE,
+    SERVERS_REVOKE,
+    SERVERS_OWNER,
+];
 
 /// Passport-reachable (also in `session_token::is_agent_verb`). approve,
 /// deny, alerts and approval-key are NOT here.
@@ -131,6 +149,7 @@ pub(crate) fn handle(path: &str, who: &Who, body: &[u8], params: &HashMap<String
         SERVERS_LIMITS => servers_limits(who, body, mgr),
         SERVERS_PAUSE => servers_pause(who, body, mgr),
         SERVERS_REVOKE => servers_revoke(who, body),
+        SERVERS_OWNER => servers_owner(who, body),
         _ => Err(no("not_found", 404, "no such compute admin route")),
     }
 }
@@ -1749,6 +1768,58 @@ fn not_tenant(node: &store::NodeRow) -> R<()> {
     Ok(())
 }
 
+/// This server's role on a node flipped (prd-macos-tenant-compute-v1
+/// §6.3, MT35): an owner change on the node, or a re-enrol.
+///
+/// - To `tenant`: the mirrored server list goes, every open admin request
+///   for the node fails `not_node_owner` (its proposer is told), and the
+///   person gets one note.
+/// - To `owner`: the cached health from before goes (so the approval key
+///   is pinned again at once: the new owner's `admin.toml` has none), the
+///   server list is mirrored, and the person gets one note.
+pub fn on_role_change(node_id: &str, from: &str, node: &store::NodeRow) {
+    let now = compute::now();
+    if node.is_tenant() {
+        let failed = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let _ = store::replace_node_servers(&conn, node_id, &[], now);
+            admin::forget_health(&conn, node_id);
+            let open = admin::list_requests(&conn, &admin::ReqFilter { node_id: Some(node_id), state: Some("open"), limit: 500, ..Default::default() });
+            for r in &open {
+                let _ = admin::set_result(&conn, &r.id, "failed", &json!({"code": pshare::codes::NOT_NODE_OWNER, "message": "the node now belongs to another server"}));
+            }
+            store::record_event(
+                &conn,
+                "node",
+                "role_change",
+                Some(node_id),
+                None,
+                None,
+                json!({"from": from, "to": "tenant", "owner": node.owner_label, "failed": open.iter().map(|r| r.id.clone()).collect::<Vec<_>>()}),
+            );
+            open
+        };
+        let owner = node.owner_label.clone().unwrap_or_else(|| "another server".into());
+        for r in failed {
+            notify_proposer(&r, &format!("[k2 compute] {} failed: {} now belongs to {owner} (not_node_owner): {}", r.id, node.name, r.summary));
+        }
+        SERVERS_META.lock().unwrap_or_else(|p| p.into_inner()).as_mut().map(|m| m.remove(node_id));
+        share_note(node_id, &format!("role:tenant:{now}"), &format!("{} now belongs to {owner}; this server is a tenant there (its own share only).", node.name));
+    } else {
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            admin::forget_health(&conn, node_id);
+            store::record_event(&conn, "node", "role_change", Some(node_id), None, None, json!({"from": from, "to": "owner"}));
+        }
+        KEYS_SENT.lock().unwrap_or_else(|p| p.into_inner()).as_mut().map(|m| m.remove(node_id));
+        refresh_servers_soon(node_id);
+        share_note(node_id, &format!("role:owner:{now}"), &format!("{} is now this server's: its admin, updates, servers and approvals are here.", node.name));
+    }
+    k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SyncSettings, json!({"compute": "role_change", "node": node.name}));
+}
+
 /// An operator ([`operator`]) or a local agent under "Allow managing
 /// compute nodes": may propose an add or a widening, pause, resume and
 /// narrow (§3).
@@ -2252,6 +2323,112 @@ fn servers_revoke(who: &Who, body: &[u8]) -> R<Value> {
         "cmdId": cmd_id,
         "note": format!("queued jobs cancelled; running jobs {}; its files are wiped {}", if now { "stopped" } else { "finish" }, if wipe { "now" } else { "in 24 h" }),
     }))
+}
+
+/// `POST /cli/compute/nodes/servers/owner {node, server, old: keep|revoke,
+/// caches: move|wipe, now, reason}` (prd-macos-tenant-compute-v1 §6): make
+/// another of this owner's own servers on the node its owner. The owner
+/// only (Q9: never an agent, not even a proposal), always held for the
+/// owner's approval (Settings confirm: Touch ID or the vault password),
+/// then sent as `servers.owner`, naming the target's full key so the node
+/// can't slip another in. The node drains first, swaps the two servers'
+/// slots and re-pins root's `admin.toml`; this server stays on the node as
+/// one of the owner's servers (`old = keep`) or leaves (`revoke`).
+fn servers_owner(who: &Who, body: &[u8]) -> R<Value> {
+    if who.passport().is_some() || !who.is_owner() {
+        crate::compute_routes::need_credential(who)?;
+        return Err(no(codes::OWNER_ONLY, 403, "only the server's owner changes a node's owner server (Settings → Compute, or k2 compute node servers <node> owner <server> from a terminal outside K2)"));
+    }
+    let op = operator(who)?;
+    let v = json_body(body)?;
+    let node = node_or_404(s(&v, "node"))?;
+    servers_ready(&node)?;
+    if !features(&node.id).iter().any(|f| f == pshare::FEATURE_SERVERS_OWNER) {
+        return Err(no(
+            pshare::codes::NODE_TOO_OLD,
+            409,
+            format!("{} runs a k2-node older than 0.46.4, which can't change its owner remotely: update it (k2 compute node update {}), or at the machine run sudo k2-node servers owner <server>", node.name, node.name),
+        ));
+    }
+    let cols = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        admin::admin_cols(&conn, &node.id)
+    };
+    if cols.remote_admin.as_deref().is_some_and(|l| l != "full") {
+        return Err(no(
+            acodes::REMOTE_ADMIN_OFF,
+            409,
+            format!(
+                "changing the owner needs remote admin `full` on {} (it's {}): at the machine run sudo k2-node servers owner <server>, or raise the level there",
+                node.name,
+                cols.remote_admin.as_deref().unwrap_or("?")
+            ),
+        ));
+    }
+    let server = server_arg(&v, false)?;
+    let old = match s(&v, "old") {
+        None => pshare::OldOwner::Keep,
+        Some(x) => pshare::OldOwner::parse(x).ok_or_else(|| no(acodes::BAD_ARGS, 400, "old is keep (this server stays on the node) or revoke (it leaves)"))?,
+    };
+    let caches = match s(&v, "caches") {
+        None => pshare::Caches::Move,
+        Some(x) => pshare::Caches::parse(x).ok_or_else(|| no(acodes::BAD_ARGS, 400, "caches is move (each server keeps its warm caches) or wipe"))?,
+    };
+    let now = crate::compute_routes::b(&v, "now") == Some(true);
+    let row = server_row(&node, &server)?;
+    if row.slot == pshare::OWNER_SLOT {
+        return Err(no(acodes::BAD_ARGS, 400, "slot 0 is this server, the node's owner already"));
+    }
+    if row.trust != pshare::Trust::Own.as_str() {
+        return Err(no(
+            pshare::codes::OWNER_NEEDS_OWN_SERVER,
+            409,
+            format!("{} is another person's server (trust team): only one of your own servers can own {}, since the owner gets root admin there", row.label, node.name),
+        ));
+    }
+    if row.state != "active" {
+        return Err(no(pshare::codes::OWNER_TARGET_NOT_READY, 409, format!("{} is {} on {}; only an active server can take over", row.label, row.state, node.name)));
+    }
+    if row.usage.as_ref().and_then(|u| u.get("online")).and_then(Value::as_bool) != Some(true) {
+        return Err(no(pshare::codes::OWNER_TARGET_NOT_READY, 409, format!("{} isn't connected to {} now; it must be online to take over", row.label, node.name)));
+    }
+    let fp = row.fp.clone().filter(|f| pshare::valid_fp(f)).ok_or_else(|| {
+        no(pshare::codes::OWNER_TARGET_NOT_READY, 409, format!("{} hasn't finished enrolling on {} (no full key yet)", row.label, node.name))
+    })?;
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let open = admin::list_requests(&conn, &admin::ReqFilter { node_id: Some(&node.id), state: Some("open"), limit: 100, ..Default::default() })
+            .into_iter()
+            .any(|r| r.steps().is_ok_and(|s| s.iter().any(|st| st.verb == pshare::VERB_OWNER)));
+        if open {
+            return Err(no("owner_change_pending", 409, format!("an owner change for {} is already waiting: approve or deny it in Settings → Compute → Approvals", node.name)));
+        }
+    }
+    let args = serde_json::to_value(pshare::OwnerArgs { server: row.label.clone(), fp: Some(fp.clone()), old, caches, now }).map_err(|e| no("internal", 500, e.to_string()))?;
+    pshare::check_verb_args(pshare::VERB_OWNER, &args).map_err(|e| no(acodes::BAD_ARGS, 400, e))?;
+    let summary = admin::summarize(&node.name, pshare::VERB_OWNER, &args);
+    let body_v = json!({"verb": pshare::VERB_OWNER, "args": args});
+    let out = file_request(&op, &node, "command", Class::Privileged, &body_v, &summary, s(&v, "reason"))?;
+    crate::compute_routes::audit(
+        who,
+        "server_owner",
+        Some(&node.id),
+        None,
+        None,
+        json!({"server": row.label, "fp": fp, "old": old.as_str(), "caches": caches.as_str(), "now": now, "request": out["request"]["id"]}),
+    );
+    let mut out = out;
+    out["note"] = format!(
+        "after you approve, {} drains, then {} becomes its owner{}; {} k2-node restarts once.",
+        node.name,
+        row.label,
+        if old == pshare::OldOwner::Revoke { " and this server leaves it" } else { " and this server stays on it as one of your servers" },
+        if caches == pshare::Caches::Wipe { "both servers' caches are wiped;" } else { "each server keeps its caches;" }
+    )
+    .into();
+    Ok(out)
 }
 
 // ── test seams ───────────────────────────────────────────────────────

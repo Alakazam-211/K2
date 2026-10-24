@@ -850,6 +850,7 @@ mod wall_tests {
             needs: vec![],
             artifacts: vec![],
             stall_secs: None,
+            secret_env: Vec::new(),
         };
         let fence = k2_node_proto::frames::Fence { job_id: job.into(), attempt: 1, generation: 1, plan_digest: plan.digest().unwrap() };
         k2_node_proto::frames::Assign { fence, plan }

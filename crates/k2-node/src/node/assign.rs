@@ -429,6 +429,7 @@ impl Node {
             exit: None,
             log: ReceiptLog { sha256: crypto::sha256_hex(b""), bytes: 0, truncated: false },
             artifacts: Vec::new(),
+            secret_env: Vec::new(),
         };
         SignedReceipt::sign(&self.key, &receipt)
     }

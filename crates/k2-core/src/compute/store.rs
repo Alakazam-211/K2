@@ -1346,6 +1346,7 @@ mod tests {
             needs: Vec::new(),
             artifacts: Vec::new(),
             stall_secs: None,
+            secret_env: Vec::new(),
         }
     }
 

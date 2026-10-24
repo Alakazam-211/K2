@@ -21,6 +21,8 @@
 //! - [`share`]: one node, many servers (protocol 3): slots, classes,
 //!   shares, `servers.toml`, quotes and queue views, the `servers.*` verb
 //!   arguments and the sharing reason codes.
+//! - [`secret`]: compute secret-env (protocol 4): the seal to the node's
+//!   one-time key, caps, codes, the stdin pipe payload.
 
 pub mod admin;
 pub mod canonical;
@@ -33,6 +35,7 @@ pub mod pairing;
 pub mod queue;
 pub mod refusal;
 pub mod results;
+pub mod secret;
 pub mod share;
 pub mod ticket;
 

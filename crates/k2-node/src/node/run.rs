@@ -902,6 +902,7 @@ impl Node {
             exit: exit.clone(),
             log: ReceiptLog { sha256: log_sha, bytes: log_bytes, truncated },
             artifacts: outputs.as_ref().map(|o| o.artifacts.clone()).unwrap_or_default(),
+            secret_env: Vec::new(),
         };
         let signed = SignedReceipt::sign(&self.key, &receipt);
         if let Err(e) = &signed {

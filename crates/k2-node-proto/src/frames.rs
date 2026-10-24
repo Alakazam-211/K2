@@ -35,8 +35,16 @@ use crate::crypto::{self, SigningKey};
 /// `withdraw`/`if_queued` cancel reasons. Additive: a node sends none of
 /// them to a server that said protocol < [`PROTOCOL_SHARED`] in
 /// `Challenge.protocol`, so its frames stay 0.46.2's apart from the
-/// version fields (V66).
-pub const PROTOCOL: u32 = 3;
+/// version fields (V66). 4 = compute secret-env (0.46.4,
+/// prd-compute-secret-env-v1 §6; [`crate::secret`]): `Plan.secret_env`,
+/// `Receipt.secret_env`, `secret_need` / `secret_env` / `secret_refused`.
+/// Additive: a node sends no secret frame to a server below 4, and a server
+/// sends a secret plan only to a node whose offer lists `secret-env`, so a
+/// protocol-3 peer never sees one.
+pub const PROTOCOL: u32 = 4;
+
+/// The first server protocol that may get secret-env plans and frames.
+pub const PROTOCOL_SECRETS: u32 = 4;
 
 /// The first server protocol that gets sharing fields, features and frames.
 pub const PROTOCOL_SHARED: u32 = 3;
@@ -300,6 +308,10 @@ pub enum Frame {
     /// Protocol 3: the node's queue as this server may see it (only to
     /// nodes offering `queue`; older parsers reject unknown variants).
     QueueGet(crate::share::QueueGet),
+    /// Protocol 4: a job's secret env, sealed to the node's one-time key
+    /// (only in answer to `secret_need`).
+    SecretEnv(SecretEnv),
+    SecretRefused(SecretRefused),
     // node → controller
     Offer(Offer),
     JobsSnapshot(JobsSnapshot),
@@ -317,6 +329,9 @@ pub enum Frame {
     ArtifactFailed(ArtifactFailed),
     /// Protocol 3: the answer to `queue_get`.
     QueueView(crate::share::QueueView),
+    /// Protocol 4: right before spawn, a job's secret env, for one fresh
+    /// public key (only to a server that said protocol ≥ 4).
+    SecretNeed(SecretNeed),
 }
 
 impl Frame {
@@ -334,7 +349,9 @@ impl Frame {
             | Frame::UpdateChunk(_)
             | Frame::AdminKeys(_)
             | Frame::ArtifactGet(_)
-            | Frame::QueueGet(_) => Direction::ControllerToNode,
+            | Frame::QueueGet(_)
+            | Frame::SecretEnv(_)
+            | Frame::SecretRefused(_) => Direction::ControllerToNode,
             Frame::Offer(_)
             | Frame::JobsSnapshot(_)
             | Frame::Need(_)
@@ -347,7 +364,8 @@ impl Frame {
             | Frame::Health(_)
             | Frame::ArtifactChunk(_)
             | Frame::ArtifactFailed(_)
-            | Frame::QueueView(_) => Direction::NodeToController,
+            | Frame::QueueView(_)
+            | Frame::SecretNeed(_) => Direction::NodeToController,
         }
     }
 
@@ -379,6 +397,9 @@ impl Frame {
             Frame::ArtifactFailed(_) => "artifact_failed",
             Frame::QueueGet(_) => "queue_get",
             Frame::QueueView(_) => "queue_view",
+            Frame::SecretNeed(_) => "secret_need",
+            Frame::SecretEnv(_) => "secret_env",
+            Frame::SecretRefused(_) => "secret_refused",
         }
     }
 }
@@ -514,6 +535,46 @@ pub struct Plan {
     /// inside the tenant.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ws_max_running: Option<u32>,
+    /// Protocol 4: the env names of the vault secrets this job gets at
+    /// spawn, sorted and unique (SE5). Names only: the values come sealed
+    /// in `secret_env`, never in a plan. Absent when empty, so every other
+    /// plan and digest is unchanged; sent only to nodes offering
+    /// [`crate::secret::FEATURE_SECRET_ENV`] (an older node would compute
+    /// another digest and fail the job `plan_mismatch`, SV14).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub secret_env: Vec<String>,
+}
+
+/// `secret_need` (node → controller, protocol 4): the node is about to
+/// spawn this attempt and asks for its secret env, sealed to `epk` (base64
+/// X25519, fresh for this ask).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SecretNeed {
+    pub job_id: String,
+    pub generation: u32,
+    pub attempt: u32,
+    pub plan_digest: String,
+    pub epk: String,
+}
+
+/// `secret_env` (controller → node): `ct` = AES-256-GCM of the payload
+/// under the key both one-time halves give ([`crate::secret`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SecretEnv {
+    pub job_id: String,
+    pub generation: u32,
+    pub epk: String,
+    pub ct: String,
+}
+
+/// `secret_refused` (controller → node): no release; `code` is one of
+/// [`crate::secret::codes`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SecretRefused {
+    pub job_id: String,
+    pub generation: u32,
+    pub code: String,
+    pub message: String,
 }
 
 /// Offer feature: this node ends a job that prints nothing for
@@ -1042,6 +1103,10 @@ pub struct Receipt {
     /// receipts are byte-identical.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub artifacts: Vec<crate::results::ArtifactInfo>,
+    /// Protocol 4: the env names the job got from the vault (SE29). Names
+    /// only; absent when none, so other receipts are byte-identical.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub secret_env: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1148,6 +1213,7 @@ mod tests {
             needs: Vec::new(),
             artifacts: Vec::new(),
             stall_secs: None,
+            secret_env: Vec::new(),
         }
     }
 
@@ -1283,7 +1349,10 @@ mod tests {
             exit: Some(ExitInfo { code: Some(1), signal: None }),
             log: ReceiptLog { sha256: "s".into(), bytes: 3, truncated: false },
             artifacts: Vec::new(),
+            secret_env: Vec::new(),
         };
+        // Without secrets: byte-identical to a 0.46.3 receipt (SE29).
+        assert!(!crate::canonical::to_string(&r).unwrap().contains("secret_env"));
         let s = SignedReceipt::sign(&k, &r).unwrap();
         assert_eq!(s.verify(k.spki_der()).unwrap(), r);
         let tampered = SignedReceipt { body: s.body.replace("\"code\":1", "\"code\":0"), sig: s.sig.clone() };
@@ -1376,7 +1445,34 @@ mod tests {
         for r in ["cancelled", "timeout", "node_removed", "superseded", ""] {
             assert!(!cancel_only_if_not_started(r), "{r}");
         }
-        const { assert!(PROTOCOL >= PROTOCOL_SHARED && PROTOCOL_SHARED > 2 && MIN_PROTOCOL == 1) };
+        const { assert!(PROTOCOL >= PROTOCOL_SECRETS && PROTOCOL_SECRETS > PROTOCOL_SHARED && PROTOCOL_SHARED > 2 && MIN_PROTOCOL == 1) };
+    }
+
+    /// Protocol 4 (SE5): a plan without secrets has the 0.46.2/0.46.3
+    /// digest; names change it; the secret frames travel their own way and
+    /// never carry anything but names, keys and ciphertext.
+    #[test]
+    fn secret_env_is_absent_when_unset_and_frames_travel_their_way() {
+        let p = plan();
+        assert!(!crate::canonical::to_string(&p).unwrap().contains("secret_env"));
+        assert_eq!(p.digest().unwrap(), "sha256:31d079662290d8b6e10bc3595162f277743d060a50046b1be2f020e99d948e14");
+        let mut q = p.clone();
+        q.secret_env = vec!["BUILD_TOKEN".into()];
+        assert_ne!(q.digest().unwrap(), p.digest().unwrap());
+        assert!(crate::canonical::to_string(&q).unwrap().contains(r#""secret_env":["BUILD_TOKEN"]"#));
+        let k = SigningKey::generate().unwrap();
+        let need = Frame::SecretNeed(SecretNeed { job_id: "j".into(), generation: 1, attempt: 1, plan_digest: "sha256:x".into(), epk: "e".into() });
+        assert_eq!((need.direction(), need.kind()), (Direction::NodeToController, "secret_need"));
+        assert!(seal(&k, Direction::ControllerToNode, "s", 0, &need).is_err());
+        let t = seal(&k, Direction::NodeToController, "s", 0, &need).unwrap();
+        assert_eq!(open(k.spki_der(), Direction::NodeToController, "s", 0, &t).unwrap(), need);
+        for f in [
+            Frame::SecretEnv(SecretEnv { job_id: "j".into(), generation: 1, epk: "e".into(), ct: "c".into() }),
+            Frame::SecretRefused(SecretRefused { job_id: "j".into(), generation: 1, code: crate::secret::codes::NOT_GRANTED.into(), message: "m".into() }),
+        ] {
+            assert_eq!(f.direction(), Direction::ControllerToNode);
+            assert!(seal(&k, Direction::NodeToController, "s", 0, &f).is_err());
+        }
     }
 
     #[test]

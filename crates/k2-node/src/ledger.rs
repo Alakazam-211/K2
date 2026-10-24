@@ -572,6 +572,7 @@ pub mod tests {
             needs: Vec::new(),
             artifacts: Vec::new(),
             stall_secs: None,
+            secret_env: Vec::new(),
         };
         Assign { fence: Fence { job_id: job.into(), attempt: generation, generation, plan_digest: plan.digest().unwrap() }, plan }
     }

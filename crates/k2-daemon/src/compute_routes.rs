@@ -1765,6 +1765,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         needs: needs.clone(),
         artifacts,
         stall_secs,
+        secret_env: Vec::new(),
     };
     let job = {
         let db = k2_core::db::shared();
@@ -2565,6 +2566,7 @@ fn run_sharded(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reque
         needs: Vec::new(),
         artifacts: Vec::new(),
         stall_secs: None,
+        secret_env: Vec::new(),
     };
     let session = who.passport().map(|(_, sid)| sid.to_string());
     let parent = {

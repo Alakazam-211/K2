@@ -16,7 +16,8 @@ Bounded teaching pages. Not a reprint of --help. Not a crawl of wiki or PRDs.
 Topics:
   what  source  map  identity  send  human  people  auth  errors
   context  db  mail  connect-boundary  apps  app-deploys  app-move  app-api  app-heartbeats  app-tickets
-  app-identity  app-surfaces  skins  feedback-loop  ticket-brief  zen  sidecars  llm-tokens
-  llm-accounts  publish-framing  compute  compute-shared  vault  notifications  data-sources
-  projects  hooks  agent-hire  garden-data  garden-access  garden-changes  changes  db-upgrade  jobs
+  app-identity  app-surfaces  app-resources  skins  feedback-loop  ticket-brief  zen  sidecars
+  llm-tokens  llm-accounts  publish-framing  compute  compute-shared  vault  notifications
+  data-sources  projects  hooks  agent-hire  garden-data  garden-access  garden-changes  changes
+  db-upgrade  jobs
 --- requests

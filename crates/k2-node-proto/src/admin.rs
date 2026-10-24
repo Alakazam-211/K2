@@ -226,14 +226,19 @@ pub const VERBS: &[VerbSpec] = &[
     VerbSpec { name: "servers.pause", base: Class::Operate, min_level: Level::Policy, runs: Runs::Executor },
     VerbSpec { name: "servers.resume", base: Class::Operate, min_level: Level::Policy, runs: Runs::Executor },
     VerbSpec { name: "servers.revoke", base: Class::Operate, min_level: Level::Policy, runs: Runs::Executor },
+    // Move the owner server to another of the owner's own servers on the
+    // node (prd-macos-tenant-compute-v1 §6): root admin changes hands, so
+    // always the owner's approval and `full` (at `policy`: at the machine).
+    VerbSpec { name: "servers.owner", base: Class::Privileged, min_level: Level::Full, runs: Runs::Executor },
 ];
 
 /// Verbs that restart `k2-node`. On a node with two or more active
 /// servers they drain first: no new starts, running jobs finish (up to
 /// 30 min), then the swap (prd-compute-shared-queue-v1 §8.2, V55). The
 /// optional argument [`ARG_NOW`] (`true`) skips the wait. Solo nodes never
-/// drain, as today.
-pub const DRAIN_VERBS: &[&str] = &["node.update", "node.rollback", "unit.restart"];
+/// drain, as today, except for `servers.owner`, which always drains first
+/// (it moves the job folders; `now` stops running jobs instead).
+pub const DRAIN_VERBS: &[&str] = &["node.update", "node.rollback", "unit.restart", "servers.owner"];
 /// `"now": true` on a [`DRAIN_VERBS`] command: don't wait for the drain.
 pub const ARG_NOW: &str = "now";
 /// The longest a drain waits before the swap goes ahead anyway.

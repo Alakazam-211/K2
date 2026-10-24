@@ -46,6 +46,7 @@ use crate::wall::Wall;
 mod assign;
 mod disk;
 mod offer;
+pub mod owner_swap;
 mod run;
 mod sync_src;
 pub mod tenant;
@@ -321,6 +322,9 @@ impl Node {
         let layout = opts.layout.clone();
         layout.ensure()?;
         let key = crate::identity::load_or_create_key(&layout.key())?;
+        // `servers.owner`: swap the owner's and a slot's files before any
+        // is opened (prd-macos-tenant-compute-v1 §6.2).
+        owner_swap::apply(&layout, crate::util::now())?;
         let owner = Tenant::open(&layout, OWNER_SLOT)?;
         let wall = match &opts.wall {
             Some(w) => w.clone(),

@@ -84,6 +84,28 @@ impl QueueStore {
         Ok(Self { conn })
     }
 
+    /// `servers.owner` (prd-macos-tenant-compute-v1 §6.2 step 4): slots `a`
+    /// and `b` trade their usage, daily totals, run times and asks; the
+    /// rotation marks start over. Exactly once per `id` (recorded in the
+    /// same transaction): `Ok(false)` when it already ran.
+    pub fn swap_slots(&mut self, a: Slot, b: Slot, id: &str) -> Result<bool, String> {
+        const PARK: i64 = 100;
+        let tx = self.conn.transaction().map_err(sqlerr)?;
+        let done: Option<String> = tx.query_row("SELECT v FROM meta WHERE k = 'owner_change'", [], |r| r.get(0)).optional().map_err(sqlerr)?;
+        if done.as_deref() == Some(id) {
+            return Ok(false);
+        }
+        for t in ["usage", "usage_day", "durations", "asks"] {
+            tx.execute(&format!("UPDATE {t} SET slot = ?1 WHERE slot = ?2"), params![PARK, a]).map_err(sqlerr)?;
+            tx.execute(&format!("UPDATE {t} SET slot = ?1 WHERE slot = ?2"), params![a, b]).map_err(sqlerr)?;
+            tx.execute(&format!("UPDATE {t} SET slot = ?1 WHERE slot = ?2"), params![b, PARK]).map_err(sqlerr)?;
+        }
+        tx.execute("DELETE FROM meta WHERE k LIKE 'last_served%'", []).map_err(sqlerr)?;
+        tx.execute("INSERT INTO meta (k, v) VALUES ('owner_change', ?1) ON CONFLICT(k) DO UPDATE SET v = ?1", params![id]).map_err(sqlerr)?;
+        tx.commit().map_err(sqlerr)?;
+        Ok(true)
+    }
+
     /// Every server's decayed usage `(value, updated_at)`.
     pub fn usage(&self) -> Result<BTreeMap<Slot, (u64, i64)>, String> {
         let mut st = self.conn.prepare("SELECT slot, decayed_cpu_ms, updated_at FROM usage").map_err(sqlerr)?;
@@ -235,6 +257,28 @@ impl QueueStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `servers.owner`: slots 0 and 2 trade every row, other slots stay,
+    /// and a second run with the same id changes nothing.
+    #[test]
+    fn swap_slots_trades_rows_once() {
+        let mut s = QueueStore::open_in_memory().unwrap();
+        s.set_usage(0, 1000, 10).unwrap();
+        s.set_usage(2, 2000, 20).unwrap();
+        s.set_usage(1, 3000, 30).unwrap();
+        s.add_day(0, "2026-10-24", 60, 70, 1).unwrap();
+        s.add_duration(2, "h", 42).unwrap();
+        assert!(s.swap_slots(0, 2, "c1").unwrap());
+        let u = s.usage().unwrap();
+        assert_eq!((u[&0], u[&2], u[&1]), ((2000, 20), (1000, 10), (3000, 30)));
+        assert_eq!((s.day_cpu_secs(2, "2026-10-24").unwrap(), s.day_cpu_secs(0, "2026-10-24").unwrap()), (60, 0));
+        assert_eq!(s.duration(0, "h").unwrap(), Some((42, 42)));
+        assert_eq!(s.duration(2, "h").unwrap(), None);
+        assert!(!s.swap_slots(0, 2, "c1").unwrap(), "exactly once per id");
+        assert_eq!(s.usage().unwrap()[&0], (2000, 20), "the repeat swapped nothing back");
+        assert!(s.swap_slots(0, 2, "c2").unwrap(), "a later change runs");
+        assert_eq!(s.usage().unwrap()[&0], (1000, 10));
+    }
 
     #[test]
     fn days_are_utc_dates() {

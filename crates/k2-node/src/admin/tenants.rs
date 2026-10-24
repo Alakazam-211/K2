@@ -332,47 +332,7 @@ impl Executor {
         let layout = self.paths.layout();
         let mut removed: Vec<String> = Vec::new();
         let mut errors: Vec<String> = Vec::new();
-        if cfg!(target_os = "linux") {
-            // Units first: the slot is in their names.
-            if let Ok(list) = jobs::systemctl(&["list-units", "--all", "--plain", "--no-legend", &format!("{}t{}-*", jobs::UNIT_PREFIX, w.slot)]) {
-                for line in list.lines() {
-                    let Some(u) = line.split_whitespace().next() else { continue };
-                    if jobs::unit_slot(u) == Some(w.slot) {
-                        let _ = jobs::systemctl(&["kill", "--signal=SIGKILL", u]);
-                        let _ = jobs::systemctl(&["stop", u]);
-                        let _ = jobs::systemctl(&["reset-failed", u]);
-                        removed.push(u.to_string());
-                    }
-                }
-            }
-            // Everything left in the slot's slice, by cgroup (review A L4).
-            let _ = jobs::systemctl(&["kill", "--signal=SIGKILL", &jobs::slice_name(w.slot)]);
-            let f = jobs::read_jobs_file(&self.paths.config_dir).map_err(|e| refuse(code::NOT_CONFIGURED, e))?;
-            let name = jobs::tenant_user_name(w.slot);
-            let uid = f.as_ref().and_then(|f| f.tenant(w.slot)).map(|t| t.uid).or_else(|| super::server::user_ids(&name).map(|(u, _)| u));
-            if let Some(uid) = uid.filter(|u| *u >= TENANT_ID_FIRST && *u <= TENANT_ID_LAST) {
-                // Anything of its uid outside the slice: signalled through a
-                // pidfd taken first and checked after, so a reused pid is
-                // never hit.
-                for _ in 0..20 {
-                    let pids = pids_of(uid);
-                    if pids.is_empty() {
-                        break;
-                    }
-                    for p in pids {
-                        kill_if_still(p, uid);
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-                }
-                // Leftovers outside the tenant root (V64).
-                for dir in ["/dev/shm", "/tmp", "/var/tmp"] {
-                    match crate::wall::remove_owned_by(Path::new(dir), uid) {
-                        Ok(n) => removed.extend(n),
-                        Err(e) => errors.push(e),
-                    }
-                }
-            }
-        }
+        self.stop_slot_processes(w.slot, &mut removed, &mut errors);
         // Files: root removes only the slot's root (job dirs, mirrors,
         // caches) under its own `<home>-t`, through fds (review A M1). The
         // node-only state (journals, artifacts, ledger, pin) is the node's
@@ -390,41 +350,130 @@ impl Executor {
             Err(_) if !troot.exists() => {}
             Err(e) => errors.push(e),
         }
-        if cfg!(target_os = "linux") {
-            let name = jobs::tenant_user_name(w.slot);
-            let group = jobs::tenant_group_name(w.slot);
-            if let Ok(setfacl) = tool("setfacl") {
-                if jobs::group_id(&group).is_some() {
-                    let _ = super::exec::run_fixed(&setfacl, &["-P", "-x", &format!("g:{group}"), &self.paths.home.display().to_string()]);
-                }
-            }
-            if super::server::user_ids(&name).is_some() {
-                match super::exec::run_fixed(&tool("userdel")?, &[&name]) {
-                    Ok(()) => removed.push(format!("user {name}")),
-                    Err(e) => errors.push(e),
-                }
-            }
-            if jobs::group_id(&group).is_some() {
-                match super::exec::run_fixed(&tool("groupdel")?, &[&group]) {
-                    Ok(()) => removed.push(format!("group {group}")),
-                    Err(e) => errors.push(e),
-                }
-            }
-            if let Ok(Some(mut f)) = jobs::read_jobs_file(&self.paths.config_dir) {
-                if f.tenants.remove(&w.slot.to_string()).is_some() {
-                    jobs::write_jobs(&self.paths.config_dir, &f).map_err(failed)?;
-                }
-            }
-            let _ = jobs::systemctl(&["revert", &jobs::slice_name(w.slot)]);
-            let mut ids = read_ids(self).map_err(failed)?;
-            if ids.slots.remove(&w.slot.to_string()).is_some() {
-                write_ids(self, &ids).map_err(failed)?;
-            }
-        }
+        self.remove_slot_user(w.slot, &mut removed, &mut errors)?;
         if !errors.is_empty() {
             return Err(failed(format!("slot {} only partly wiped: {}", w.slot, errors.join("; "))));
         }
         Ok(json!({"slot": w.slot, "removed": removed}))
+    }
+
+    /// `servers.owner`'s user step (prd-macos-tenant-compute-v1 §6.2 step
+    /// 6): slot `slot`'s user goes (its units and processes, its leftovers
+    /// in the shared temp dirs, the user, its group, its `jobs.toml` line)
+    /// but its files stay: they belong to the server that moves into the
+    /// slot. Only `servers.owner` calls this, after its drain, for the
+    /// target's old slot; never reachable from the node's socket. The uid
+    /// stays burned (V64). Linux only (macOS tenants have no user in
+    /// 0.46.4). Audited.
+    pub fn tenant_unuser(&self, slot: Slot) -> Result<Value, AdminRefusal> {
+        if slot == OWNER_SLOT || !share::valid_slot(slot) {
+            return Err(refuse(code::BAD_ARGS, format!("slot {slot} isn't a tenant slot (1–7)")));
+        }
+        let _g = ops_lock(self)?;
+        let r = (|| {
+            let mut removed: Vec<String> = Vec::new();
+            let mut errors: Vec<String> = Vec::new();
+            self.stop_slot_processes(slot, &mut removed, &mut errors);
+            self.remove_slot_user(slot, &mut removed, &mut errors)?;
+            if !errors.is_empty() {
+                return Err(failed(format!("slot {slot}'s user only partly removed: {}", errors.join("; "))));
+            }
+            Ok(json!({"slot": slot, "removed": removed}))
+        })();
+        self.audit_tenant_op("tenant.unuser", slot, &r);
+        r
+    }
+
+    /// Linux: every unit and process of the slot's user, and its leftovers
+    /// in `/dev/shm`, `/tmp` and `/var/tmp`. Nothing on macOS (no user).
+    fn stop_slot_processes(&self, slot: Slot, removed: &mut Vec<String>, errors: &mut Vec<String>) {
+        if !cfg!(target_os = "linux") {
+            return;
+        }
+        // Units first: the slot is in their names.
+        if let Ok(list) = jobs::systemctl(&["list-units", "--all", "--plain", "--no-legend", &format!("{}t{}-*", jobs::UNIT_PREFIX, slot)]) {
+            for line in list.lines() {
+                let Some(u) = line.split_whitespace().next() else { continue };
+                if jobs::unit_slot(u) == Some(slot) {
+                    let _ = jobs::systemctl(&["kill", "--signal=SIGKILL", u]);
+                    let _ = jobs::systemctl(&["stop", u]);
+                    let _ = jobs::systemctl(&["reset-failed", u]);
+                    removed.push(u.to_string());
+                }
+            }
+        }
+        // Everything left in the slot's slice, by cgroup (review A L4).
+        let _ = jobs::systemctl(&["kill", "--signal=SIGKILL", &jobs::slice_name(slot)]);
+        let f = match jobs::read_jobs_file(&self.paths.config_dir) {
+            Ok(f) => f,
+            Err(e) => {
+                errors.push(e);
+                None
+            }
+        };
+        let name = jobs::tenant_user_name(slot);
+        let uid = f.as_ref().and_then(|f| f.tenant(slot)).map(|t| t.uid).or_else(|| super::server::user_ids(&name).map(|(u, _)| u));
+        if let Some(uid) = uid.filter(|u| *u >= TENANT_ID_FIRST && *u <= TENANT_ID_LAST) {
+            // Anything of its uid outside the slice: signalled through a
+            // pidfd taken first and checked after, so a reused pid is
+            // never hit.
+            for _ in 0..20 {
+                let pids = pids_of(uid);
+                if pids.is_empty() {
+                    break;
+                }
+                for p in pids {
+                    kill_if_still(p, uid);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            // Leftovers outside the tenant root (V64).
+            for dir in ["/dev/shm", "/tmp", "/var/tmp"] {
+                match crate::wall::remove_owned_by(Path::new(dir), uid) {
+                    Ok(n) => removed.extend(n),
+                    Err(e) => errors.push(e),
+                }
+            }
+        }
+    }
+
+    /// Linux: the slot's user and group, its ACL entry on the node home,
+    /// its `jobs.toml` line, its slice drop-in and its `tenant-ids.json`
+    /// entry (the uid is never handed out again). Nothing on macOS.
+    fn remove_slot_user(&self, slot: Slot, removed: &mut Vec<String>, errors: &mut Vec<String>) -> Result<(), AdminRefusal> {
+        if !cfg!(target_os = "linux") {
+            return Ok(());
+        }
+        let name = jobs::tenant_user_name(slot);
+        let group = jobs::tenant_group_name(slot);
+        if let Ok(setfacl) = tool("setfacl") {
+            if jobs::group_id(&group).is_some() {
+                let _ = super::exec::run_fixed(&setfacl, &["-P", "-x", &format!("g:{group}"), &self.paths.home.display().to_string()]);
+            }
+        }
+        if super::server::user_ids(&name).is_some() {
+            match super::exec::run_fixed(&tool("userdel")?, &[&name]) {
+                Ok(()) => removed.push(format!("user {name}")),
+                Err(e) => errors.push(e),
+            }
+        }
+        if jobs::group_id(&group).is_some() {
+            match super::exec::run_fixed(&tool("groupdel")?, &[&group]) {
+                Ok(()) => removed.push(format!("group {group}")),
+                Err(e) => errors.push(e),
+            }
+        }
+        if let Ok(Some(mut f)) = jobs::read_jobs_file(&self.paths.config_dir) {
+            if f.tenants.remove(&slot.to_string()).is_some() {
+                jobs::write_jobs(&self.paths.config_dir, &f).map_err(failed)?;
+            }
+        }
+        let _ = jobs::systemctl(&["revert", &jobs::slice_name(slot)]);
+        let mut ids = read_ids(self).map_err(failed)?;
+        if ids.slots.remove(&slot.to_string()).is_some() {
+            write_ids(self, &ids).map_err(failed)?;
+        }
+        Ok(())
     }
 }
 

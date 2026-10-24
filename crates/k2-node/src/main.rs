@@ -57,6 +57,12 @@ More than one K2 server (0.46.3; the machine owner, at this machine):
                  (the add flags; key=value works too: cpus=8 mem=32G cpu-hours=48)
   k2-node servers pause|resume <server>
   sudo k2-node servers revoke <server> [--now] [--wipe]
+  sudo k2-node servers owner <server> [--old keep|revoke] [--caches move|wipe] [--now] [--fp FP]
+                 make another of your own servers on this node its owner (it must be active,
+                 confirmed and online): after a drain (--now stops running jobs), the two swap
+                 slots, caches move with their server (or --caches wipe), root re-pins admin.toml.
+                 The old owner stays as one of your servers (--old revoke: it leaves)
+  sudo k2-node servers owner --resume                    finish an owner change that stopped
   sudo k2-node servers prune                             promote confirmed adds, drop stale ones, wipe due slots now
   (<server> is a label, e.g. baden.k2.dev, or slot:<n>; the new server mints CODE.FP
    with `k2 compute node add <this node>`; then read it the SAS that `servers` shows)
@@ -112,6 +118,7 @@ const SWITCHES: &[&str] = &[
     "--allow-fake-clock",
     "--toolchains",
     "--no-wait",
+    "--resume",
 ];
 
 fn parse(args: &[String]) -> Result<Args, String> {
@@ -596,6 +603,55 @@ fn cmd_servers(a: &Args) -> Result<(), String> {
         Some(v @ ("pause" | "resume")) => {
             let verb = if v == "pause" { share::VERB_PAUSE } else { share::VERB_RESUME };
             servers::run(&ctx, verb, &serde_json::json!({ "server": server()? }))
+        }
+        // Make another of your own servers on this node its owner
+        // (prd-macos-tenant-compute-v1 §6): root's executor does it, after a
+        // drain, so it goes over the executor's socket (root only).
+        Some("owner") => {
+            if !is_root() {
+                return Err("servers owner changes who has root admin here: run it with sudo".into());
+            }
+            let resume = a.has("--resume");
+            let args = if resume {
+                None
+            } else {
+                let old = match a.get("old") {
+                    Some(v) => share::OldOwner::parse(v).ok_or("--old keep|revoke")?,
+                    None => share::OldOwner::Keep,
+                };
+                let caches = match a.get("caches") {
+                    Some(v) => share::Caches::parse(v).ok_or("--caches move|wipe")?,
+                    None => share::Caches::Move,
+                };
+                let o = share::OwnerArgs { server: server()?, fp: a.get("fp").map(str::to_string), old, caches, now: a.has("--now") };
+                share::check_verb_args(share::VERB_OWNER, &serde_json::to_value(&o).map_err(|e| e.to_string())?)?;
+                Some(o)
+            };
+            let socket = a.get("socket").map(PathBuf::from).unwrap_or_else(acfg::default_socket);
+            let req = k2_node::admin::exec::LocalRequest::OwnerChange { args, resume, by: who(a) };
+            let r = match k2_node::admin::server::request(&socket, &req, None, std::time::Duration::from_secs(60)) {
+                Ok(k2_node::admin::exec::LocalResponse::Result(r)) => r,
+                Ok(other) => return Err(format!("unexpected answer from the executor: {other:?}")),
+                Err(e) => return Err(format!("the executor didn't answer ({}): {}", e.code, e.message)),
+            };
+            if r.state != "done" {
+                return Err(format!("{}: {}", r.code.as_deref().unwrap_or("refused"), r.message.as_deref().unwrap_or("")));
+            }
+            if !resume {
+                let v = &r.result;
+                println!(
+                    "{} (key {}) becomes this node's owner after the drain ({} job(s) running; up to 30 min{}). The old owner {}: {}. Caches: {}.",
+                    v["server"].as_str().unwrap_or("?"),
+                    v["fp"].as_str().map(|f| &f[..16.min(f.len())]).unwrap_or("?"),
+                    v["running"].as_u64().unwrap_or(0),
+                    if a.has("--now") { "; --now stops them" } else { "" },
+                    v["from"].as_str().unwrap_or("?"),
+                    if v["old"] == "revoke" { "leaves (revoked, wiped)" } else { "stays as one of your servers" },
+                    v["caches"].as_str().unwrap_or("move"),
+                );
+                println!("Follow it: sudo k2-node admin audit (owner_change), then k2-node servers list.");
+            }
+            return show(r.result);
         }
         Some("revoke") => {
             need_root("revoke")?;

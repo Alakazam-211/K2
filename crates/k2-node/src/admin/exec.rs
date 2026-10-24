@@ -326,6 +326,16 @@ pub enum LocalRequest {
     /// user only; it does only what `servers.toml` and time already
     /// decided: [`super::servers::prune`]).
     Servers { servers: ServersOp },
+    /// `sudo k2-node servers owner …` at the machine (unsigned; the socket
+    /// accepts it from root only, never the node user): start an owner
+    /// change ([`super::owner`]), or `resume` one that stopped.
+    OwnerChange {
+        #[serde(default)]
+        args: Option<k2_node_proto::share::OwnerArgs>,
+        #[serde(default)]
+        resume: bool,
+        by: String,
+    },
 }
 
 /// Internal `servers.*` ops (prd-compute-shared-queue-v1 §10.2).
@@ -508,9 +518,10 @@ impl Executor {
             None
         };
         if cfg.level < spec.min_level {
+            let hint = if spec.name == k2_node_proto::share::VERB_OWNER { "; or at the machine: sudo k2-node servers owner <server>" } else { "" };
             return Err(refused(
                 Some(&o),
-                AdminRefusal::new(code::REMOTE_ADMIN_OFF, format!("remote admin here is {}; {} needs {}", cfg.level.as_str(), spec.name, spec.min_level.as_str())),
+                AdminRefusal::new(code::REMOTE_ADMIN_OFF, format!("remote admin here is {}; {} needs {}{hint}", cfg.level.as_str(), spec.name, spec.min_level.as_str())),
             ));
         }
         Ok(Checked { opened: o, class, approval_key, cfg, node_fp })
@@ -701,6 +712,12 @@ impl Executor {
                 let now = super::update::now_arg(args)?;
                 super::update::drain_then(self, now, "node.rollback", &c.opened.cmd.cmd_id, |e| super::update::rollback(e, "manual"))
             }
+            k2_node_proto::share::VERB_OWNER => {
+                k2_node_proto::share::check_verb_args(k2_node_proto::share::VERB_OWNER, args).map_err(|m| AdminRefusal::new(code::BAD_ARGS, m))?;
+                let a: k2_node_proto::share::OwnerArgs = serde_json::from_value(args.clone()).map_err(|e| AdminRefusal::new(code::BAD_ARGS, e.to_string()))?;
+                let id = &c.opened.cmd.cmd_id;
+                super::owner::start(self, &a, id, &format!("owner-approval:{id}"), true)
+            }
             v if k2_node_proto::share::VERBS.contains(&v) => {
                 let ctx = super::servers::Ctx::for_executor(self, &format!("owner-approval:{}", c.opened.cmd.cmd_id));
                 super::servers::run(&ctx, v, args)
@@ -812,6 +829,40 @@ impl Executor {
             // fds (a job's pipes) come only through `serve_conn`.
             LocalRequest::Job { job } => LocalResponse::Job(self.handle_job(job, Vec::new())),
             LocalRequest::Servers { servers } => LocalResponse::Result(self.handle_servers_op(*servers)),
+            // Root only: `serve_conn` checks the peer before it gets here.
+            LocalRequest::OwnerChange { args, resume, by } => LocalResponse::Result(self.handle_owner_local(args.as_ref(), *resume, by)),
+        }
+    }
+
+    /// `sudo k2-node servers owner …` (root at the machine; audited
+    /// `local`, then `owner_change` when it's done).
+    pub fn handle_owner_local(&self, args: Option<&k2_node_proto::share::OwnerArgs>, resume: bool, by: &str) -> AdminResult {
+        let name = k2_node_proto::share::VERB_OWNER;
+        if resume {
+            return match super::owner::resume(self, true) {
+                None => AdminResult::done(name, "", json!({"resumed": false, "note": "no owner change is waiting"})),
+                Some(Ok(v)) => AdminResult::done(name, "", json!({"resumed": true, "result": v})),
+                Some(Err(r)) => self.refuse_result((name.to_string(), String::new(), r)),
+            };
+        }
+        let Some(a) = args else {
+            return self.refuse_result((name.to_string(), String::new(), AdminRefusal::new(code::BAD_ARGS, "name the server that becomes the owner")));
+        };
+        let Some(_g) = self.lock_briefly() else {
+            return AdminResult::refused(name, "", &AdminRefusal::new(code::BUSY, "another root action is running; try again in a minute"));
+        };
+        let id = match crypto::random_id() {
+            Ok(r) => format!("local-{}", &r[..12.min(r.len())]),
+            Err(e) => return AdminResult::refused(name, "", &AdminRefusal::new(code::FAILED, e)),
+        };
+        let by = format!("local:{}", by.chars().filter(|c| c.is_ascii_alphanumeric() || "-_.".contains(*c)).take(64).collect::<String>());
+        let _ = self.audit().append(
+            AuditEntry { event: "local".into(), cmd_id: Some(id.clone()), verb: Some(name.into()), proposed_by: Some(by.clone()), detail: json!({"args": a}), ..Default::default() },
+            self.now(),
+        );
+        match super::owner::start(self, a, &id, &by, false) {
+            Ok(v) => AdminResult::done(&id, "", v),
+            Err(r) => self.refuse_result((id, String::new(), r)),
         }
     }
 

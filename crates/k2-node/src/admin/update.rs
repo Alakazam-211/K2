@@ -624,7 +624,7 @@ pub fn update_mark_path(config_dir: &Path) -> PathBuf {
 /// opened `O_NOFOLLOW`, never `chmod` on the path: on macOS `/var/run` is
 /// writable by the `daemon` group, which could swap the new directory for
 /// a symlink between the `mkdir` and a path `chmod` (round-5 review, L1).
-fn ensure_mark_dir(config_dir: &Path) -> Result<(), String> {
+pub(crate) fn ensure_mark_dir(config_dir: &Path) -> Result<(), String> {
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
     let d = mark_dir(config_dir);
     if std::fs::symlink_metadata(&d).is_err() {
@@ -652,7 +652,7 @@ fn ensure_mark_dir(config_dir: &Path) -> Result<(), String> {
 /// `renameat` it over `name` in the same directory fd, fsync the
 /// directory. Nothing can swap the directory between the check and the
 /// write (round 5, item 2).
-fn write_owned_in(dir: &Path, name: &str, bytes: &[u8], mode: u32, owner: u32) -> Result<(), String> {
+pub(crate) fn write_owned_in(dir: &Path, name: &str, bytes: &[u8], mode: u32, owner: u32) -> Result<(), String> {
     use std::io::Write;
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
     use std::os::unix::fs::PermissionsExt;
@@ -727,7 +727,7 @@ pub fn mark_owner(config_dir: &Path) -> u32 {
 /// by `owner`, writable by nobody else, at most 64 KiB. Nothing between the
 /// check and the read can swap the directory (macOS `/var/run` is group
 /// `daemon`-writable; review round 4, item 9).
-fn read_owned_in(dir: &Path, name: &str, owner: u32, check_dir: bool) -> Option<Vec<u8>> {
+pub(crate) fn read_owned_in(dir: &Path, name: &str, owner: u32, check_dir: bool) -> Option<Vec<u8>> {
     use std::io::Read;
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
     let dc = std::ffi::CString::new(dir.as_os_str().as_encoded_bytes()).ok()?;
@@ -897,6 +897,12 @@ pub struct DrainOpts {
     /// Once the count reaches 0, keep control at `draining` for
     /// `drain_settle` and count again before acting (round 4, item 1).
     pub settle: bool,
+    /// Don't wait for running jobs: once control says `draining`, restart
+    /// k2-node the marked way, so its running jobs stop as
+    /// `interrupted/node_update` (infra, no strike), and the restarted node
+    /// starts nothing; then count and settle as usual (`servers.owner
+    /// --now`, which must act with nothing running).
+    pub stop_running: bool,
 }
 
 /// `<state>/drain.json`: a drain waiting to act, so an executor that exits
@@ -1013,8 +1019,16 @@ where
     );
     let ex = e.bg_handle();
     let resp = json!({"phase": "draining", "what": what, "running": running, "max_secs": e.drain_max.as_secs(), "gives_up_at_limit": opts.give_up_at_limit});
+    let stop_cmd = cmd_id.to_string();
     std::thread::spawn(move || {
         let deadline = std::time::Instant::now() + ex.drain_max;
+        if opts.stop_running && running_jobs(&ex) > 0 {
+            // Control says `draining` already: the restarted node takes
+            // nothing new, and the jobs it stops end `node_update`.
+            if let Err(x) = restart_marked(&ex, &rec.what, &stop_cmd, |e| e.platform.restart_unit("k2-node")) {
+                crate::nlog!("admin: {}: stopping the running jobs: {x}", rec.what);
+            }
+        }
         loop {
             while running_jobs(&ex) > 0 && std::time::Instant::now() < deadline {
                 std::thread::sleep(Duration::from_millis(if cfg!(test) { 20 } else { 2000 }));
@@ -1774,7 +1788,7 @@ mod drain_tests {
         running(&r, &["stuck"]);
         let d = decide(&r.exec, false, true);
         assert_eq!(d, (Decision::Drain, 1));
-        let res = run_decided(&r.exec, d, DrainOpts { give_up_at_limit: true, settle: false }, "wall.enable", "c1", |e| {
+        let res = run_decided(&r.exec, d, DrainOpts { give_up_at_limit: true, settle: false, stop_running: false }, "wall.enable", "c1", |e| {
             restart_marked(e, "wall.enable", "c1", |e| e.platform.restart_unit("k2-node")).map_err(fail)?;
             Ok(json!({"restarted": "k2-node"}))
         })

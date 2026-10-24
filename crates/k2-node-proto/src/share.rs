@@ -36,6 +36,11 @@ pub const FEATURE_QUEUE: &str = "queue";
 /// Offer feature: this node walls tenants from each other (Linux: a user
 /// per tenant; macOS 0.46.3: a per-tenant Seatbelt profile, `own` only).
 pub const FEATURE_TENANT_WALL: &str = "tenant-wall";
+/// Offer feature (owner session only): this node's executor knows
+/// `servers.owner`, moving the owner server to another of the owner's
+/// own servers already on the node (prd-macos-tenant-compute-v1 §6.4).
+/// The server sends the verb only to nodes offering it.
+pub const FEATURE_SERVERS_OWNER: &str = "servers-owner";
 
 /// A tenant's number on one node (0–7). Every node-side name a tenant can
 /// touch carries its slot (V48).
@@ -105,6 +110,12 @@ pub mod codes {
     pub const NODE_TOO_OLD: &str = "node_too_old";
     /// A no-force cancel / withdraw found the job already started (V57).
     pub const JOB_STARTED: &str = "job_started";
+    /// `servers.owner` to a server that isn't one of the owner's own
+    /// (`trust = team`): it would get root admin over the machine (MT28).
+    pub const OWNER_NEEDS_OWN_SERVER: &str = "owner_needs_own_server";
+    /// `servers.owner` to a server that can't take over now: not active,
+    /// not confirmed, revoked or not connected (MT28).
+    pub const OWNER_TARGET_NOT_READY: &str = "owner_target_not_ready";
 
     /// Every code above, for docs and tests.
     pub const ALL: &[&str] = &[
@@ -133,6 +144,8 @@ pub mod codes {
         NODE_UPDATE,
         NODE_TOO_OLD,
         JOB_STARTED,
+        OWNER_NEEDS_OWN_SERVER,
+        OWNER_TARGET_NOT_READY,
     ];
 }
 
@@ -997,7 +1010,10 @@ pub const VERB_LIMITS: &str = "servers.limits";
 pub const VERB_PAUSE: &str = "servers.pause";
 pub const VERB_RESUME: &str = "servers.resume";
 pub const VERB_REVOKE: &str = "servers.revoke";
-pub const VERBS: &[&str] = &[VERB_LIST, VERB_ADD, VERB_LIMITS, VERB_PAUSE, VERB_RESUME, VERB_REVOKE];
+/// Make another server on the node its owner (slot 0;
+/// prd-macos-tenant-compute-v1 §6). Privileged, `full`, a drain verb.
+pub const VERB_OWNER: &str = "servers.owner";
+pub const VERBS: &[&str] = &[VERB_LIST, VERB_ADD, VERB_LIMITS, VERB_PAUSE, VERB_RESUME, VERB_REVOKE, VERB_OWNER];
 
 /// `servers.add`: approve a new server. Privileged (owner approval); runs
 /// `tenant.prepare`. The enrol code never travels: only its binding
@@ -1053,6 +1069,88 @@ pub struct RevokeArgs {
     pub wipe: bool,
 }
 
+/// What happens to the old owner server after `servers.owner` (Q5).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OldOwner {
+    /// It stays on the node as one of your own servers (a tenant slot).
+    #[default]
+    Keep,
+    /// It leaves: its line is revoked and its slot wiped at once.
+    Revoke,
+}
+
+impl OldOwner {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            OldOwner::Keep => "keep",
+            OldOwner::Revoke => "revoke",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "keep" => Some(OldOwner::Keep),
+            "revoke" => Some(OldOwner::Revoke),
+            _ => None,
+        }
+    }
+}
+
+/// The two servers' job folders and build caches on `servers.owner` (Q6).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Caches {
+    /// Each server keeps its own warm caches: they move with it.
+    #[default]
+    Move,
+    /// Both servers' job folders and caches are removed (cold builds once).
+    Wipe,
+}
+
+impl Caches {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Caches::Move => "move",
+            Caches::Wipe => "wipe",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "move" => Some(Caches::Move),
+            "wipe" => Some(Caches::Wipe),
+            _ => None,
+        }
+    }
+}
+
+/// `servers.owner` (prd-macos-tenant-compute-v1 §6.1): make `server` (a
+/// tenant slot 1–7: an `own`, active, confirmed, connected server) the
+/// node's owner. Privileged (the owner's approval), `full` only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OwnerArgs {
+    /// A label, or `slot:<n>` (never `slot:0`).
+    pub server: String,
+    /// The target's full key fingerprint as the owner server saw it. The
+    /// executor checks the node's pin against it, so the node can't put
+    /// another key in. Required on a signed command; at the machine root
+    /// reads it from the pin and shows it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fp: Option<String>,
+    #[serde(default)]
+    pub old: OldOwner,
+    #[serde(default)]
+    pub caches: Caches,
+    /// Don't wait for running jobs: they stop as `interrupted/node_update`.
+    #[serde(default)]
+    pub now: bool,
+}
+
+/// A full key fingerprint: exactly 64 lowercase hex.
+pub fn valid_fp(s: &str) -> bool {
+    s.len() == 64 && lower_hex(s)
+}
+
 /// Parse and check a `servers.*` verb's arguments (both ends; the node
 /// checks again). `Err` is a `bad_args` message.
 pub fn check_verb_args(verb: &str, args: &Value) -> Result<(), String> {
@@ -1105,6 +1203,17 @@ pub fn check_verb_args(verb: &str, args: &Value) -> Result<(), String> {
         }
         VERB_PAUSE | VERB_RESUME => server_ok(&parse::<ServerArgs>(verb, args)?.server),
         VERB_REVOKE => server_ok(&parse::<RevokeArgs>(verb, args)?.server),
+        VERB_OWNER => {
+            let a: OwnerArgs = parse(verb, args)?;
+            server_ok(&a.server)?;
+            if a.server.strip_prefix("slot:").is_some_and(|n| n.parse::<Slot>() == Ok(OWNER_SLOT)) {
+                return Err(format!("{verb}: slot 0 is the owner already"));
+            }
+            if a.fp.as_deref().is_some_and(|f| !valid_fp(f)) {
+                return Err(format!("{verb}: fp is the server's full 64-hex key fingerprint"));
+            }
+            Ok(())
+        }
         _ => Err(format!("{verb} is not a servers verb")),
     }
 }
@@ -1287,6 +1396,34 @@ mod tests {
         assert_eq!(round_eta(599), 600);
         assert_eq!(round_eta(601), 900);
         assert_eq!(round_eta(3600), 3600);
+    }
+
+    /// `servers.owner` (MT27): a tenant slot or label, a full fingerprint
+    /// when given, `keep|revoke` and `move|wipe`; strict otherwise.
+    #[test]
+    fn owner_args_are_checked() {
+        let fp = "ab".repeat(32);
+        let ok = serde_json::json!({"server": "z3thon.k2.dev", "fp": fp, "old": "revoke", "caches": "wipe", "now": true});
+        check_verb_args(VERB_OWNER, &ok).unwrap();
+        let a: OwnerArgs = serde_json::from_value(ok).unwrap();
+        assert_eq!((a.old, a.caches, a.now), (OldOwner::Revoke, Caches::Wipe, true));
+        let d: OwnerArgs = serde_json::from_value(serde_json::json!({"server": "slot:2"})).unwrap();
+        assert_eq!((d.fp, d.old, d.caches, d.now), (None, OldOwner::Keep, Caches::Move, false), "keep and move are the defaults (Q5, Q6)");
+        for bad in [
+            serde_json::json!({"server": "slot:0"}),
+            serde_json::json!({"server": "slot:9"}),
+            serde_json::json!({"server": "a b"}),
+            serde_json::json!({"server": "z3thon.k2.dev", "fp": "abc"}),
+            serde_json::json!({"server": "z3thon.k2.dev", "fp": "AB".repeat(32)}),
+            serde_json::json!({"server": "z3thon.k2.dev", "old": "drop"}),
+            serde_json::json!({"server": "z3thon.k2.dev", "caches": "keep"}),
+            serde_json::json!({"server": "z3thon.k2.dev", "surprise": 1}),
+            serde_json::json!({}),
+        ] {
+            assert!(check_verb_args(VERB_OWNER, &bad).is_err(), "{bad}");
+        }
+        assert!(VERBS.contains(&VERB_OWNER));
+        assert_eq!((OldOwner::parse("keep"), Caches::parse("wipe"), OldOwner::parse("x")), (Some(OldOwner::Keep), Some(Caches::Wipe), None));
     }
 
     #[test]

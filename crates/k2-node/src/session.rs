@@ -1014,9 +1014,9 @@ pub async fn run_servers(node: Arc<Node>) {
 const QUEUE_VIEW_EVERY: Duration = Duration::from_secs(1);
 
 /// Which line a slot's node-only state belongs to (`state/tenants/<slot>/`).
-const LINE_MARK_FILE: &str = "line";
+pub(crate) const LINE_MARK_FILE: &str = "line";
 
-fn line_mark(e: &ServerEntry) -> String {
+pub(crate) fn line_mark(e: &ServerEntry) -> String {
     format!("{}:{}", e.fp_prefix, e.added_at)
 }
 

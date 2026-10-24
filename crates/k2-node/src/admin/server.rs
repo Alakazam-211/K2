@@ -107,8 +107,8 @@ pub fn serve_conn(exec: &Executor, rule: &PeerRule, mut s: UnixStream) {
         }
     };
     let refusal = |code_s: &str, msg: &str| LocalResponse::Result(AdminResult::refused("", "", &AdminRefusal::new(code_s, msg)));
-    match peer_uid(&s) {
-        Ok(uid) if rule.allowed_uids.contains(&uid) => {}
+    let peer = match peer_uid(&s) {
+        Ok(uid) if rule.allowed_uids.contains(&uid) => uid,
         Ok(_) | Err(_) => {
             let r = refusal(code::PEER_NOT_ALLOWED, "only root or the node user may talk to the executor");
             let _ = exec.audit().append(
@@ -117,7 +117,7 @@ pub fn serve_conn(exec: &Executor, rule: &PeerRule, mut s: UnixStream) {
             );
             return reply(&mut s, r);
         }
-    }
+    };
     let header = match read_frame(&mut s, MAX_HEADER_BYTES) {
         Ok(h) => h,
         Err(_) => return reply(&mut s, refusal(code::TOO_LARGE, "request unreadable or over 1 MiB")),
@@ -126,6 +126,15 @@ pub fn serve_conn(exec: &Executor, rule: &PeerRule, mut s: UnixStream) {
         Ok(r) => r,
         Err(_) => return reply(&mut s, refusal(code::MALFORMED, "request does not parse")),
     };
+    if matches!(req, LocalRequest::OwnerChange { .. }) && !owner_change_peer_ok(peer) {
+        // The machine's own owner change: root at the machine only, never
+        // the node user (whose jobs could otherwise hand root admin away).
+        let _ = exec.audit().append(
+            super::store::AuditEntry { event: "refused".into(), verb: Some(k2_node_proto::share::VERB_OWNER.into()), code: Some(code::PEER_NOT_ALLOWED.into()), ..Default::default() },
+            exec.now(),
+        );
+        return reply(&mut s, refusal(code::PEER_NOT_ALLOWED, "only root at this machine may change the owner here (sudo k2-node servers owner …)"));
+    }
     if let LocalRequest::Job { job } = &req {
         // A start brings the job's stdout/stderr as SCM_RIGHTS.
         let fds = if matches!(job, super::jobs::JobOp::Start(_)) {
@@ -153,6 +162,12 @@ pub fn serve_conn(exec: &Executor, rule: &PeerRule, mut s: UnixStream) {
     };
     let resp = exec.handle(&req, payload.as_deref());
     reply(&mut s, resp);
+}
+
+/// May this peer send `owner_change`? Root only (tests, which run as one
+/// user, also let their own uid through).
+pub(crate) fn owner_change_peer_ok(uid: u32) -> bool {
+    uid == 0 || (cfg!(test) && uid == unsafe { libc::geteuid() })
 }
 
 /// The listener: systemd socket activation (`LISTEN_FDS=1` for this pid),

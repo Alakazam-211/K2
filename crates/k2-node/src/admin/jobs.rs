@@ -1363,7 +1363,7 @@ impl Executor {
         // Always the settling drain, even with nothing running now.
         let (_, running) = super::update::decide(self, false, true);
         let cmd_id = cmd_id.to_string();
-        let opts = super::update::DrainOpts { give_up_at_limit: true, settle: true };
+        let opts = super::update::DrainOpts { give_up_at_limit: true, settle: true, stop_running: false };
         let r = super::update::run_decided(self, (super::update::Decision::Drain, running), opts, "wall.enable", &cmd_id.clone(), move |e| {
             // Control has said `draining` since before the last count, so
             // the node took nothing new; one more look all the same.

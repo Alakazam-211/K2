@@ -15,6 +15,7 @@
 //! - [`update`]: signed self-update, health gate, rollback (S5).
 //! - [`courier`]: the node relaying admin frames to the executor.
 //! - [`servers`]: `servers.toml` (node sharing): the `servers.*` verbs.
+//! - [`owner`]: `servers.owner`, moving the owner server (step file, drain).
 //! - [`units`]: systemd/launchd files for the executor.
 
 pub mod cli;
@@ -27,6 +28,7 @@ pub mod housekeeping;
 pub mod jobs;
 #[cfg(target_os = "macos")]
 pub mod launchd;
+pub mod owner;
 pub mod policy;
 pub mod server;
 pub mod servers;

@@ -1,0 +1,716 @@
+//! Changing a node's owner server (prd-macos-tenant-compute-v1 §6,
+//! MT27–MT33): `servers.owner`.
+//!
+//! Another server already on the node, in a tenant slot N (1–7), becomes
+//! the owner (slot 0). It must be one of the owner's own servers (`own`),
+//! active, with a confirmed pin, and connected now, so it can take over
+//! and first-pin its approval key at once. A `team` server never becomes
+//! owner: it would get root admin over the machine.
+//!
+//! Who: the current owner server, with the owner's approval signature at
+//! `full` (the signed verb, which names the target's full fingerprint so
+//! the node can't slip another key in), or root at the machine (`sudo
+//! k2-node servers owner …`, an unsigned local op only root may send).
+//!
+//! What root does, never during work: a settling drain first (no new
+//! starts; running jobs finish, or stop with `now` as
+//! `interrupted/node_update`), then, under the servers lock, one step at a
+//! time, each recorded in the root-only step file [`STEP_FILE`] before it
+//! starts, so a crash resumes it on the executor's next start (never a
+//! half-swapped node):
+//!
+//! 1. **trees**: the two slots' job folders, mirrors and caches (`jobs/`,
+//!    `repos/`, `cache/` under the node home and `<home>-t/N`) trade
+//!    places, entry by entry, through a root-only staging folder in
+//!    `<home>-t` (renames on directory fds, no copies, no link followed;
+//!    `caches = wipe` removes them instead);
+//! 2. **users**: slot N's old tenant user goes (Linux), files kept;
+//! 3. **restart**: root writes the node's instruction [`NODE_FILE`] in its
+//!    mark directory (root-owned, the node reads it) and restarts k2-node
+//!    the marked way; the node swaps its own files (pins, ledgers,
+//!    artifacts, the queue's slot rows) at start, before it opens any
+//!    (`node::owner_swap`), while `servers.toml` still names the old owner,
+//!    so it opens no tenant in between;
+//! 4. **files**: `servers.toml` (the target at slot 0, the old owner at
+//!    slot N, kept or revoked and wiped), the old owner's new tenant user
+//!    (`tenant.prepare`, a new uid, V64), the moved trees re-owned for
+//!    their new slot by the fd walker, and `admin.toml` re-pinned to the
+//!    target's key with its approval keys cleared (written atomically and
+//!    read back). The level, `auto_update` and `narrow.toml` stay.
+//!
+//! Control stays `draining` throughout and goes back once it's done.
+//! Audited: `owner_change` (and `tenant.unuser`, `tenant.prepare`).
+
+use std::ffi::CString;
+use std::os::fd::OwnedFd;
+use std::path::{Path, PathBuf};
+
+use k2_node_proto::admin::{code, AdminRefusal};
+use k2_node_proto::crypto;
+use k2_node_proto::share::{self, codes, Caches, OldOwner, OwnerArgs, ServerEntry, ServersFile, ShareState, Slot, Trust, OWNER_SLOT};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+
+use super::exec::Executor;
+use super::servers::{self, Ctx};
+
+/// Root-only, in the executor's state dir: the owner change under way.
+pub const STEP_FILE: &str = "owner-change.json";
+/// In the update mark's directory (root-owned, node-readable): what the
+/// node swaps at its next start.
+pub const NODE_FILE: &str = "owner-change.json";
+/// Root-only staging in `<home>-t` (root's own 0711 folder).
+pub const STAGE_DIR: &str = ".owner-change";
+/// The node acts on an instruction at most this old; root removes older
+/// ones when it starts.
+pub const NODE_FILE_MAX_AGE_SECS: i64 = 7 * 86_400;
+/// The job-facing trees that trade places.
+pub const TREES: &[&str] = &["jobs", "cache", "repos"];
+/// A resume that failed this many times waits for a person
+/// (`sudo k2-node servers owner --resume`).
+pub const MAX_ATTEMPTS: u32 = 3;
+const STEP_V: u32 = 1;
+
+/// Where an owner change is (each step is recorded before it starts).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Phase {
+    Trees,
+    Users,
+    Restart,
+    Files,
+}
+
+/// [`STEP_FILE`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Step {
+    pub v: u32,
+    /// The signed command's id, or `local-<random>` at the machine.
+    pub id: String,
+    pub by: String,
+    /// The target's old slot (the old owner's new one).
+    pub slot: Slot,
+    pub from_fp: String,
+    pub to_fp: String,
+    /// The target's SPKI DER (base64), checked against `to_fp`.
+    pub to_key: String,
+    pub to_label: String,
+    pub old: OldOwner,
+    pub caches: Caches,
+    pub phase: Phase,
+    /// When the change started (the old owner's new line's `added_at`).
+    pub at: i64,
+    /// Resumes that failed (see [`MAX_ATTEMPTS`]).
+    #[serde(default)]
+    pub attempts: u32,
+}
+
+/// [`NODE_FILE`]: what the node swaps at start (`node::owner_swap`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NodeChange {
+    pub v: u32,
+    pub id: String,
+    pub slot: Slot,
+    pub from_fp: String,
+    pub to_fp: String,
+    /// The old owner's new line mark in slot N (`<fp_prefix>:<added_at>`),
+    /// so the node keeps the state it moved there.
+    pub line_mark: String,
+    pub at: i64,
+}
+
+fn refuse(c: &str, m: impl Into<String>) -> AdminRefusal {
+    AdminRefusal::new(c, m)
+}
+
+fn failed(m: impl Into<String>) -> AdminRefusal {
+    AdminRefusal::new(code::FAILED, m)
+}
+
+fn step_path(e: &Executor) -> PathBuf {
+    e.paths.state_dir.join(STEP_FILE)
+}
+
+/// Open a directory. Root walks the path one component at a time and
+/// never through a link (`wall::open_dir_path`). An executor that isn't
+/// root (unit tests, maybe inside a job wall where a parent is
+/// traverse-only, so the walk can't open it) opens it in one go, still
+/// `O_NOFOLLOW` at the last component.
+fn open_dir(p: &Path) -> Result<OwnedFd, String> {
+    // SAFETY: plain getter.
+    if unsafe { libc::geteuid() } == 0 {
+        return crate::wall::open_dir_path(p);
+    }
+    let c = CString::new(p.as_os_str().as_encoded_bytes()).map_err(|_| format!("{}: a NUL in the path", p.display()))?;
+    // SAFETY: a valid C string; the fd is owned right below.
+    let fd = unsafe { libc::open(c.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC) };
+    if fd < 0 {
+        return Err(format!("open {}: {}", p.display(), std::io::Error::last_os_error()));
+    }
+    use std::os::fd::FromRawFd;
+    // SAFETY: a fresh fd nothing else owns.
+    Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+}
+
+pub fn read_step(e: &Executor) -> Result<Option<Step>, String> {
+    match std::fs::read(step_path(e)) {
+        Ok(b) => serde_json::from_slice(&b).map(Some).map_err(|x| format!("{STEP_FILE}: {x}")),
+        Err(x) if x.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(x) => Err(format!("read {STEP_FILE}: {x}")),
+    }
+}
+
+fn write_step(e: &Executor, s: &Step) -> Result<(), AdminRefusal> {
+    crate::util::mkdir_mode(&e.paths.state_dir, 0o700).map_err(failed)?;
+    let b = serde_json::to_vec_pretty(s).map_err(|x| failed(x.to_string()))?;
+    crate::util::atomic_write(&step_path(e), &b, 0o600).map_err(failed)
+}
+
+/// The old owner's new line mark in slot N.
+pub fn old_line_mark(from_fp: &str, at: i64) -> String {
+    format!("{}:{at}", &from_fp[..16])
+}
+
+/// What a valid owner change would do, checked against root's files.
+#[derive(Debug, Clone)]
+pub struct Plan {
+    pub from: ServerEntry,
+    pub to: ServerEntry,
+    pub to_fp: String,
+    pub to_key: Vec<u8>,
+}
+
+/// Check every rule (MT28) against `servers.toml`, root's `admin.toml`,
+/// the target's pin and the node's own word that it's connected. Changes
+/// nothing. `need_fp`: a signed command must name the target's key.
+pub fn plan(e: &Executor, a: &OwnerArgs, need_fp: bool, check_online: bool) -> Result<Plan, AdminRefusal> {
+    let args = serde_json::to_value(a).map_err(|x| refuse(code::BAD_ARGS, x.to_string()))?;
+    share::check_verb_args(share::VERB_OWNER, &args).map_err(|m| refuse(code::BAD_ARGS, m))?;
+    let layout = e.paths.layout();
+    let now = e.now();
+    let f = servers::read_file(&e.paths.config_dir)
+        .map_err(|x| refuse(code::NOT_CONFIGURED, x))?
+        .ok_or_else(|| refuse(code::BAD_ARGS, "this node serves only its owner server: add the new owner first (servers add), then make it the owner"))?;
+    let cfg = super::config::read(&e.paths.admin())
+        .map_err(|x| refuse(code::NOT_CONFIGURED, format!("admin.toml: {x}")))?
+        .ok_or_else(|| refuse(code::NOT_CONFIGURED, "no admin.toml here (sudo k2-node admin init)"))?;
+    let pinned = cfg.controller.as_ref().map(|c| c.fp.clone()).ok_or_else(|| refuse(code::NOT_CONFIGURED, "root has no owner server pinned (sudo k2-node admin pin)"))?;
+    if pinned != f.owner {
+        return Err(refuse(code::NOT_CONFIGURED, "servers.toml names another owner than the one root pinned in admin.toml; fix that at the machine first"));
+    }
+    let owner_pin = crate::identity::read_pin_safely(&layout.pin()).map_err(failed)?;
+    if owner_pin.as_ref().map(|p| p.controller_fp.as_str()) != Some(f.owner.as_str()) {
+        return Err(refuse(code::NOT_CONFIGURED, "the node's own owner pin doesn't match servers.toml; fix that at the machine first"));
+    }
+    let from = f.entry(OWNER_SLOT).cloned().ok_or_else(|| refuse(code::NOT_CONFIGURED, "servers.toml has no owner line"))?;
+    let to = f.find(&a.server).cloned().ok_or_else(|| refuse(code::BAD_ARGS, format!("no server {:?} on this node", a.server)))?;
+    if to.slot == OWNER_SLOT {
+        return Err(refuse(code::BAD_ARGS, format!("{} is the owner already", to.label)));
+    }
+    if to.trust != Trust::Own {
+        return Err(refuse(
+            codes::OWNER_NEEDS_OWN_SERVER,
+            format!("{} is another person's server (trust team): only one of your own servers can own this node, since the owner gets root admin here", to.label),
+        ));
+    }
+    let st = to.status(now);
+    if st != share::ServerStatus::Active {
+        return Err(refuse(codes::OWNER_TARGET_NOT_READY, format!("{} is {}; only an active server can take over (resume or confirm it first)", to.label, st.as_str())));
+    }
+    let (pin, flags) = crate::identity::read_tenant_pin_safely(&layout.tenant(to.slot).pin())
+        .map_err(failed)?
+        .ok_or_else(|| refuse(codes::OWNER_TARGET_NOT_READY, format!("this node has no pin for {} yet", to.label)))?;
+    if !pin.confirmed || pin.revoked || flags.revoked_by_server || !crate::node::tenant::pin_serves(&to, &pin) {
+        return Err(refuse(codes::OWNER_TARGET_NOT_READY, format!("{}'s pin here isn't confirmed (or {} removed this node)", to.label, to.label)));
+    }
+    let der = pin.controller_spki().map_err(|x| refuse(codes::OWNER_TARGET_NOT_READY, format!("{}'s pin: {x}", to.label)))?;
+    let to_fp = crypto::fingerprint_of_spki_der(&der);
+    match a.fp.as_deref() {
+        Some(want) if want != to_fp => {
+            return Err(refuse(
+                code::BAD_ARGS,
+                format!("the node's pin for {} has another key ({}) than the one named ({}); nothing changed", to.label, &to_fp[..16], &want[..16.min(want.len())]),
+            ))
+        }
+        None if need_fp => return Err(refuse(code::BAD_ARGS, "servers.owner names the new owner's full key fingerprint (fp)")),
+        _ => {}
+    }
+    if to_fp == from.fp_prefix {
+        return Err(refuse(code::BAD_ARGS, format!("{} has the owner's own key", to.label)));
+    }
+    let online = crate::status::read(&layout.status()).ok().and_then(|s| s.servers.iter().find(|l| l.slot == to.slot).map(|l| l.link == "online"));
+    if check_online && online != Some(true) {
+        return Err(refuse(codes::OWNER_TARGET_NOT_READY, format!("{} isn't connected to this node now; it must be online to take over", to.label)));
+    }
+    if a.caches == Caches::Move {
+        let troot = layout.tenants_root();
+        let (h, t) = (open_dir(&e.paths.home).map_err(failed)?, open_dir(&troot).map_err(failed)?);
+        if crate::wall::device_of(&h).map_err(|x| failed(x.to_string()))? != crate::wall::device_of(&t).map_err(|x| failed(x.to_string()))? {
+            return Err(refuse(code::BAD_ARGS, format!("{} and {} are on different volumes, so the caches can't move by rename; use caches wipe", e.paths.home.display(), troot.display())));
+        }
+    }
+    Ok(Plan { from, to, to_fp, to_key: der })
+}
+
+/// Start an owner change (the signed verb after its checks, or the
+/// machine's local op): check, then the settling drain, then [`run_steps`]
+/// in the drain's thread. Answers at once (`phase: draining`).
+pub fn start(e: &Executor, a: &OwnerArgs, id: &str, by: &str, need_fp: bool) -> Result<Value, AdminRefusal> {
+    if let Some(s) = read_step(e).map_err(failed)? {
+        return Err(refuse(
+            code::BUSY,
+            format!("an owner change ({}, to {}) is still finishing; it resumes when the executor starts (sudo k2-node servers owner --resume)", s.id, s.to_label),
+        ));
+    }
+    let p = plan(e, a, need_fp, true)?;
+    let args = a.clone();
+    let (id_s, by_s) = (id.to_string(), by.to_string());
+    let opts = super::update::DrainOpts { give_up_at_limit: true, settle: true, stop_running: a.now };
+    let (_, running) = super::update::decide(e, false, true);
+    let resp = super::update::run_decided(e, (super::update::Decision::Drain, running), opts, share::VERB_OWNER, id, move |ex| {
+        // Nothing runs now; check again: the drain took a while.
+        let p = plan(ex, &args, need_fp, false)?;
+        let step = Step {
+            v: STEP_V,
+            id: id_s.clone(),
+            by: by_s.clone(),
+            slot: p.to.slot,
+            from_fp: p.from.fp_prefix.clone(),
+            to_fp: p.to_fp.clone(),
+            to_key: crypto::b64(&p.to_key),
+            to_label: p.to.label.clone(),
+            old: args.old,
+            caches: args.caches,
+            phase: Phase::Trees,
+            at: ex.now(),
+            attempts: 0,
+        };
+        // A staging folder with no step file is a finished change's leftover.
+        remove_stage(ex);
+        write_step(ex, &step)?;
+        finish(ex, step)
+    })?;
+    let mut out = resp;
+    out["server"] = p.to.label.clone().into();
+    out["slot"] = p.to.slot.into();
+    out["fp"] = p.to_fp.clone().into();
+    out["from"] = p.from.label.clone().into();
+    out["old"] = a.old.as_str().into();
+    out["caches"] = a.caches.as_str().into();
+    Ok(out)
+}
+
+/// Run the remaining steps and record the outcome (audit `owner_change`).
+fn finish(e: &Executor, step: Step) -> Result<Value, AdminRefusal> {
+    let (id, slot) = (step.id.clone(), step.slot);
+    let detail = json!({"from": step.from_fp, "to": step.to_fp, "to_label": step.to_label, "slot": slot, "old": step.old.as_str(), "caches": step.caches.as_str(), "by": step.by});
+    let r = run_steps(e, step);
+    let mut d = detail;
+    match &r {
+        Ok(v) => d["result"] = v.clone(),
+        Err(x) => d["error"] = x.message.clone().into(),
+    }
+    let _ = e.audit().append(
+        super::store::AuditEntry { event: "owner_change".into(), cmd_id: Some(id), code: r.as_ref().err().map(|x| x.code.clone()), detail: d, ..Default::default() },
+        e.now(),
+    );
+    r
+}
+
+/// The steps from wherever `step` stands (each recorded before it runs).
+pub fn run_steps(e: &Executor, mut step: Step) -> Result<Value, AdminRefusal> {
+    let ctx = Ctx::for_executor(e, &format!("owner-change:{}", step.id));
+    let _g = servers::servers_lock(&ctx)?;
+    if step.phase == Phase::Trees {
+        move_trees(e, &ctx, &step)?;
+        step.phase = Phase::Users;
+        write_step(e, &step)?;
+        remove_stage(e);
+    }
+    if step.phase == Phase::Users {
+        if ctx.root && cfg!(target_os = "linux") {
+            e.tenant_unuser(step.slot)?;
+        }
+        step.phase = Phase::Restart;
+        write_step(e, &step)?;
+    }
+    if step.phase == Phase::Restart {
+        write_node_change(e, &step)?;
+        // The node swaps its files at start, while servers.toml still names
+        // the old owner (it opens no tenant in between).
+        super::update::restart_marked(e, share::VERB_OWNER, &step.id, |e| e.platform.restart_unit("k2-node")).map_err(failed)?;
+        step.phase = Phase::Files;
+        write_step(e, &step)?;
+    }
+    rewrite_servers(&ctx, &step)?;
+    let old_uid = match step.old {
+        OldOwner::Keep => prepare_old_owner(&ctx, &step)?,
+        OldOwner::Revoke => {
+            revoke_old_owner(&ctx, &step)?;
+            None
+        }
+    };
+    let rehomed = rehome(e, &ctx, &step)?;
+    repin_admin(e, &step)?;
+    std::fs::remove_file(step_path(e)).map_err(|x| failed(format!("remove {STEP_FILE}: {x}")))?;
+    Ok(json!({"owner": step.to_label, "slot": step.slot, "old": step.old.as_str(), "caches": step.caches.as_str(), "old_uid": old_uid, "rehomed": rehomed}))
+}
+
+/// On executor start (before the drain record is recovered, so control
+/// still says `draining`): finish an owner change the last executor
+/// didn't, and drop a node instruction past its age.
+pub fn resume(e: &Executor, force: bool) -> Option<Result<Value, AdminRefusal>> {
+    retire_node_change(e);
+    let mut step = match read_step(e) {
+        Ok(Some(s)) => s,
+        Ok(None) => return None,
+        Err(x) => {
+            crate::nlog!("admin: owner change: {x} (needs a person at the machine)");
+            return Some(Err(failed(x)));
+        }
+    };
+    if step.attempts >= MAX_ATTEMPTS && !force {
+        crate::nlog!("admin: owner change {} failed {} times; it waits for sudo k2-node servers owner --resume", step.id, step.attempts);
+        return Some(Err(failed(format!("owner change {} failed {} times; run sudo k2-node servers owner --resume", step.id, step.attempts))));
+    }
+    crate::nlog!("admin: resuming owner change {} (to {}) at {:?}", step.id, step.to_label, step.phase);
+    step.attempts += 1;
+    if let Err(x) = write_step(e, &step) {
+        return Some(Err(x));
+    }
+    let _g = e.busy.lock().unwrap_or_else(|p| p.into_inner());
+    Some(finish(e, step))
+}
+
+// ── 1. trees ─────────────────────────────────────────────────────────
+
+fn cname(s: &str) -> CString {
+    CString::new(s).expect("no NUL in a fixed name")
+}
+
+/// `<home>-t`: root's own (0711) when root; a test or `--dev` node's own.
+fn open_troot(ctx: &Ctx) -> Result<OwnedFd, AdminRefusal> {
+    let p = ctx.layout().tenants_root();
+    if ctx.root {
+        crate::wall::open_root_owned_dir(&p).map_err(failed)
+    } else {
+        std::fs::create_dir_all(&p).map_err(|x| failed(format!("create {}: {x}", p.display())))?;
+        open_dir(&p).map_err(failed)
+    }
+}
+
+fn io(what: &str) -> impl Fn(std::io::Error) -> AdminRefusal + '_ {
+    move |x| failed(format!("{what}: {x}"))
+}
+
+/// A tree folder in `parent`, made (and given to `owner`) when missing.
+fn tree_dir(parent: &OwnedFd, name: &str, owner: Option<(u32, u32)>, mode: u32) -> Result<OwnedFd, AdminRefusal> {
+    let n = cname(name);
+    let made = !crate::wall::exists_at(parent, &n);
+    let fd = crate::wall::ensure_child_dir(parent, &n, mode).map_err(io(name))?;
+    if made {
+        if let Some((u, g)) = owner {
+            use std::os::fd::AsRawFd;
+            // SAFETY: our own fresh directory fd.
+            if unsafe { libc::fchown(fd.as_raw_fd(), u, g) } != 0 {
+                return Err(failed(format!("chown {name}: {}", std::io::Error::last_os_error())));
+            }
+        }
+    }
+    Ok(fd)
+}
+
+/// Move every entry of `src` into `dst` (a name already in `dst` stays
+/// behind; the staging folder's removal takes it).
+fn move_entries(src: &OwnedFd, dst: &OwnedFd, what: &str) -> Result<u64, AdminRefusal> {
+    let mut n = 0;
+    for name in crate::wall::entry_names(src).map_err(io(what))? {
+        if crate::wall::exists_at(dst, &name) {
+            crate::nlog!("admin: owner change: {what}/{} is in both places; the old copy goes", name.to_string_lossy());
+            continue;
+        }
+        crate::wall::rename_between(src, &name, dst, &name).map_err(io(what))?;
+        n += 1;
+    }
+    crate::wall::sync_dir(src);
+    crate::wall::sync_dir(dst);
+    Ok(n)
+}
+
+fn node_ids(ctx: &Ctx) -> Option<(u32, u32)> {
+    if ctx.root {
+        super::server::user_ids(&ctx.node_user)
+    } else {
+        None
+    }
+}
+
+/// Step 1 (see the module doc). Idempotent per entry: phase A empties
+/// both slots' trees into the staging folder (`from/` = the old owner's,
+/// `to/` = the target's), the marker `b` says it's done, phase B fills
+/// each slot from the other's staging.
+fn move_trees(e: &Executor, ctx: &Ctx, step: &Step) -> Result<(), AdminRefusal> {
+    let home = open_dir(&e.paths.home).map_err(failed)?;
+    let troot = open_troot(ctx)?;
+    let nu = node_ids(ctx);
+    let slot = tree_dir(&troot, &step.slot.to_string(), nu, 0o700)?;
+    if step.caches == Caches::Wipe {
+        for t in TREES {
+            for parent in [&home, &slot] {
+                let Ok(d) = crate::wall::open_child_dir(parent, &cname(t)) else { continue };
+                for name in crate::wall::entry_names(&d).map_err(io(t))? {
+                    crate::wall::remove_tree_at(&d, &name).map_err(failed)?;
+                }
+            }
+        }
+        return Ok(());
+    }
+    if crate::wall::device_of(&home).map_err(io("home"))? != crate::wall::device_of(&troot).map_err(io("tenants root"))? {
+        return Err(failed("the node home and the tenants root are on different volumes; nothing moved (use caches wipe)"));
+    }
+    let stage = crate::wall::ensure_child_dir(&troot, &cname(STAGE_DIR), 0o700).map_err(io(STAGE_DIR))?;
+    let from = crate::wall::ensure_child_dir(&stage, &cname("from"), 0o700).map_err(io("from"))?;
+    let to = crate::wall::ensure_child_dir(&stage, &cname("to"), 0o700).map_err(io("to"))?;
+    let marker = cname("b");
+    if !crate::wall::exists_at(&stage, &marker) {
+        for t in TREES {
+            if let Ok(src) = crate::wall::open_child_dir(&home, &cname(t)) {
+                let dst = crate::wall::ensure_child_dir(&from, &cname(t), 0o700).map_err(io(t))?;
+                move_entries(&src, &dst, t)?;
+            }
+            if let Ok(src) = crate::wall::open_child_dir(&slot, &cname(t)) {
+                let dst = crate::wall::ensure_child_dir(&to, &cname(t), 0o700).map_err(io(t))?;
+                move_entries(&src, &dst, t)?;
+            }
+        }
+        crate::wall::ensure_child_dir(&stage, &marker, 0o700).map_err(io("marker"))?;
+        crate::wall::sync_dir(&stage);
+    }
+    for t in TREES {
+        if let Ok(src) = crate::wall::open_child_dir(&to, &cname(t)) {
+            let dst = tree_dir(&home, t, nu, 0o770)?;
+            move_entries(&src, &dst, t)?;
+        }
+        if let Ok(src) = crate::wall::open_child_dir(&from, &cname(t)) {
+            let dst = tree_dir(&slot, t, nu, 0o700)?;
+            move_entries(&src, &dst, t)?;
+        }
+    }
+    Ok(())
+}
+
+/// Remove the staging folder (after the trees step, or a leftover).
+fn remove_stage(e: &Executor) {
+    let p = e.paths.layout().tenants_root();
+    let Ok(fd) = open_dir(&p) else { return };
+    if crate::wall::exists_at(&fd, &cname(STAGE_DIR)) {
+        if let Err(x) = crate::wall::remove_tree_at(&fd, &cname(STAGE_DIR)) {
+            crate::nlog!("admin: owner change: removing the staging folder: {x}");
+        }
+    }
+}
+
+// ── 3. the node's instruction ────────────────────────────────────────
+
+fn write_node_change(e: &Executor, step: &Step) -> Result<(), AdminRefusal> {
+    let n = NodeChange {
+        v: STEP_V,
+        id: step.id.clone(),
+        slot: step.slot,
+        from_fp: step.from_fp.clone(),
+        to_fp: step.to_fp.clone(),
+        line_mark: old_line_mark(&step.from_fp, step.at),
+        at: step.at,
+    };
+    let cfg = &e.paths.config_dir;
+    super::update::ensure_mark_dir(cfg).map_err(failed)?;
+    let b = serde_json::to_vec(&n).map_err(|x| failed(x.to_string()))?;
+    super::update::write_owned_in(&super::update::mark_dir(cfg), NODE_FILE, &b, 0o644, super::update::mark_owner(cfg)).map_err(failed)
+}
+
+/// The node's instruction, as the node reads it: only when root (the
+/// mark's owner) wrote it, in a directory only root writes.
+pub fn read_node_change(config_dir: &std::path::Path) -> Option<NodeChange> {
+    let b = super::update::read_owned_in(&super::update::mark_dir(config_dir), NODE_FILE, super::update::mark_owner(config_dir), true)?;
+    let n: NodeChange = serde_json::from_slice(&b).ok()?;
+    let ok = share::valid_slot(n.slot)
+        && n.slot != OWNER_SLOT
+        && share::valid_fp(&n.from_fp)
+        && share::valid_fp(&n.to_fp)
+        && n.from_fp != n.to_fp
+        && (1..=80).contains(&n.id.len())
+        && n.id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    ok.then_some(n)
+}
+
+/// Remove an instruction past its age (root, at start; `unlinkat` on the
+/// directory fd, never following a link).
+fn retire_node_change(e: &Executor) {
+    let cfg = &e.paths.config_dir;
+    let Some(n) = read_node_change(cfg) else { return };
+    if e.now() - n.at <= NODE_FILE_MAX_AGE_SECS {
+        return;
+    }
+    if let Ok(dir) = open_dir(&super::update::mark_dir(cfg)) {
+        use std::os::fd::AsRawFd;
+        // SAFETY: unlinkat a fixed name in our directory fd.
+        unsafe { libc::unlinkat(dir.as_raw_fd(), cname(NODE_FILE).as_ptr(), 0) };
+    }
+}
+
+// ── 4. files ─────────────────────────────────────────────────────────
+
+/// `servers.toml` (MT31): the target at slot 0 (its limits, no end date),
+/// the old owner at slot N (`own`, active or revoked), every other line
+/// untouched. A file that names the target as owner already is done.
+fn rewrite_servers(ctx: &Ctx, step: &Step) -> Result<(), AdminRefusal> {
+    let mut f = servers::read_file(&ctx.config_dir).map_err(failed)?.ok_or_else(|| failed("servers.toml is gone"))?;
+    if f.owner == step.to_fp {
+        return Ok(());
+    }
+    if f.owner != step.from_fp {
+        return Err(failed("servers.toml names neither the old nor the new owner; fix it at the machine"));
+    }
+    let f2 = swap_lines(&f, step)?;
+    f = f2;
+    servers::write_file(&ctx.config_dir, &f).map_err(failed)
+}
+
+/// The rewritten file (pure; see [`rewrite_servers`]).
+pub fn swap_lines(f: &ServersFile, step: &Step) -> Result<ServersFile, AdminRefusal> {
+    let to = f.entry(step.slot).filter(|e| e.matches_fp(&step.to_fp)).cloned().ok_or_else(|| failed(format!("slot {} no longer holds {}", step.slot, step.to_label)))?;
+    let from = f.entry(OWNER_SLOT).cloned().ok_or_else(|| failed("no owner line"))?;
+    let by = format!("owner-change:{}", step.id);
+    let mut owner = to;
+    owner.slot = OWNER_SLOT;
+    owner.fp_prefix = step.to_fp.clone();
+    owner.trust = Trust::Own;
+    owner.state = ShareState::Active;
+    owner.uid = None;
+    owner.expires_at = None;
+    owner.pending_until = 0;
+    owner.added_by = by.clone();
+    let mut old = from;
+    old.slot = step.slot;
+    old.fp_prefix = step.from_fp[..16].to_string();
+    old.trust = Trust::Own;
+    old.state = if step.old == OldOwner::Revoke { ShareState::Revoked } else { ShareState::Active };
+    old.uid = None;
+    old.expires_at = None;
+    old.pending_until = 0;
+    old.added_at = step.at;
+    old.added_by = by;
+    let mut out = f.clone();
+    out.owner = step.to_fp.clone();
+    out.servers = f.servers.iter().filter(|e| e.slot != OWNER_SLOT && e.slot != step.slot).cloned().collect();
+    out.servers.push(owner);
+    out.servers.push(old);
+    out.servers.sort_by_key(|e| e.slot);
+    out.validate().map_err(failed)?;
+    Ok(out)
+}
+
+/// `old = keep`: the old owner's new user in slot N (`tenant.prepare`, a
+/// new uid), recorded in its line.
+fn prepare_old_owner(ctx: &Ctx, step: &Step) -> Result<Option<u32>, AdminRefusal> {
+    let mut f = servers::read_file(&ctx.config_dir).map_err(failed)?.ok_or_else(|| failed("servers.toml is gone"))?;
+    let line = f.entry(step.slot).cloned().ok_or_else(|| failed(format!("slot {} has no line", step.slot)))?;
+    let uid = servers::prepare_tenant(ctx, &line)?;
+    if uid.is_some() && line.uid != uid {
+        if let Some(x) = f.servers.iter_mut().find(|x| x.slot == step.slot) {
+            x.uid = uid;
+        }
+        servers::write_file(&ctx.config_dir, &f).map_err(failed)?;
+    }
+    Ok(uid)
+}
+
+/// `old = revoke`: slot N (now the old owner's) is revoked and wiped at
+/// once. Gone already = done.
+fn revoke_old_owner(ctx: &Ctx, step: &Step) -> Result<(), AdminRefusal> {
+    let f = servers::read_file(&ctx.config_dir).map_err(failed)?.ok_or_else(|| failed("servers.toml is gone"))?;
+    if f.entry(step.slot).is_none() {
+        return Ok(());
+    }
+    let mut b = servers::read_book(&ctx.state_dir).map_err(failed)?;
+    b.revoked.insert(step.slot.to_string(), (ctx.now, true));
+    servers::write_book(&ctx.state_dir, &b).map_err(failed)?;
+    let r = servers::prune_locked(ctx)?;
+    if let Some(x) = r["wipe_failed"].as_array().and_then(|v| v.iter().find(|x| x["slot"] == step.slot)) {
+        return Err(failed(format!("the old owner's slot {} is revoked, but its wipe failed: {} (retried on every prune)", step.slot, x["error"].as_str().unwrap_or("?"))));
+    }
+    Ok(())
+}
+
+/// The moved trees, re-owned for their new slot (Linux, root): the new
+/// owner's to the node user and its group, ACLs stripped (the old slot's
+/// group entries go); the old owner's to the node user and slot N's new
+/// group. macOS: every tree is the node user's already (one uid behind
+/// Seatbelt in 0.46.4), so nothing to do.
+fn rehome(e: &Executor, ctx: &Ctx, step: &Step) -> Result<Value, AdminRefusal> {
+    if !ctx.root || !cfg!(target_os = "linux") || step.caches == Caches::Wipe {
+        return Ok(Value::Null);
+    }
+    let (nuid, ngid) = super::server::user_ids(&ctx.node_user).ok_or_else(|| failed("the node user is missing"))?;
+    let home = open_dir(&e.paths.home).map_err(failed)?;
+    let mut sides = vec![(home, nuid, ngid, true, "owner")];
+    if step.old == OldOwner::Keep {
+        let tgid = super::jobs::group_id(&super::jobs::tenant_group_name(step.slot)).ok_or_else(|| failed(format!("group {} is missing", super::jobs::tenant_group_name(step.slot))))?;
+        let slot = open_dir(&ctx.layout().tenant(step.slot).root()).map_err(failed)?;
+        sides.push((slot, nuid, tgid, false, "slot"));
+    }
+    let mut out = serde_json::Map::new();
+    for (dir, uid, gid, strip, what) in sides {
+        let mut st = crate::wall::WalkStats::default();
+        for t in TREES {
+            let Ok(d) = crate::wall::open_child_dir(&dir, &cname(t)) else { continue };
+            for name in crate::wall::entry_names(&d).map_err(io(t))? {
+                let s = crate::wall::rehome_at(&d, &name, uid, gid, strip).map_err(failed)?;
+                st.changed += s.changed;
+                st.skipped += s.skipped;
+            }
+        }
+        out.insert(what.into(), json!({"changed": st.changed, "skipped": st.skipped}));
+    }
+    Ok(Value::Object(out))
+}
+
+/// `admin.toml` (MT32): the target's key, approval keys cleared (the rule
+/// of `admin pin`); the level, `auto_update`, alerts and node user stay.
+/// Written atomically (temp file, rename) and read back: anything but the
+/// file just written fails the step (it's retried on resume).
+fn repin_admin(e: &Executor, step: &Step) -> Result<(), AdminRefusal> {
+    let path = e.paths.admin();
+    let cfg = super::config::read(&path).map_err(failed)?.ok_or_else(|| failed("admin.toml is gone"))?;
+    let cur = cfg.controller.as_ref().map(|c| c.fp.clone());
+    if cur.as_deref() == Some(step.to_fp.as_str()) {
+        return Ok(());
+    }
+    if cur.as_deref() != Some(step.from_fp.as_str()) {
+        return Err(failed("admin.toml pins neither the old nor the new owner; fix it at the machine"));
+    }
+    let der = crypto::unb64(&step.to_key).map_err(|x| failed(format!("the new owner's key: {x}")))?;
+    if crypto::fingerprint_of_spki_der(&der) != step.to_fp {
+        return Err(failed("the recorded key doesn't match the new owner's fingerprint"));
+    }
+    let mut f = cfg.file.clone();
+    f.controller_fp = Some(step.to_fp.clone());
+    f.controller_key = Some(step.to_key.clone());
+    f.approval_keys.clear();
+    super::config::write(&path, &f).map_err(failed)?;
+    let back = super::config::read(&path).map_err(failed)?.ok_or_else(|| failed("admin.toml vanished after the write"))?;
+    let same = back.controller.as_ref().is_some_and(|c| c.fp == step.to_fp && c.spki_der == der)
+        && back.approval_keys.is_empty()
+        && back.level == cfg.level
+        && back.auto_update == cfg.auto_update
+        && back.node_user == cfg.node_user;
+    if !same {
+        return Err(failed("admin.toml didn't read back as written"));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests;

@@ -117,6 +117,26 @@ struct TenantPinFile {
     flags: TenantFlags,
 }
 
+/// A non-owner server's pin file as root reads it for `servers.owner`:
+/// never through a link, never a FIFO, at most 64 KiB
+/// (`util::read_regular`); errors name the path, never the content.
+pub fn read_tenant_pin_safely(path: &Path) -> Result<Option<(Pin, TenantFlags)>, String> {
+    match crate::util::read_regular(path) {
+        Ok(s) => serde_json::from_str::<TenantPinFile>(&s).map(|f| Some((f.pin, f.flags))).map_err(|_| format!("{} doesn't parse", path.display())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("read {}: {e}", path.display())),
+    }
+}
+
+/// The owner's pin file as root reads it (see [`read_tenant_pin_safely`]).
+pub fn read_pin_safely(path: &Path) -> Result<Option<Pin>, String> {
+    match crate::util::read_regular(path) {
+        Ok(s) => serde_json::from_str::<Pin>(&s).map(Some).map_err(|_| format!("{} doesn't parse", path.display())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("read {}: {e}", path.display())),
+    }
+}
+
 /// A non-owner server's pin and the node's runtime flags for it.
 pub fn read_tenant_pin(path: &Path) -> Result<Option<(Pin, TenantFlags)>, String> {
     match std::fs::read_to_string(path) {

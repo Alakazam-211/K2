@@ -89,10 +89,10 @@ pub struct StopFile {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-struct Book {
+pub(crate) struct Book {
     /// slot → (revoked at, wipe at once).
     #[serde(default)]
-    revoked: BTreeMap<String, (i64, bool)>,
+    pub(crate) revoked: BTreeMap<String, (i64, bool)>,
 }
 
 /// Where and as whom a `servers.*` change runs.
@@ -336,7 +336,7 @@ fn book_path(state_dir: &Path) -> PathBuf {
     state_dir.join(BOOK_FILE)
 }
 
-fn read_book(state_dir: &Path) -> Result<Book, String> {
+pub(crate) fn read_book(state_dir: &Path) -> Result<Book, String> {
     let p = book_path(state_dir);
     match std::fs::read(&p) {
         Ok(b) => serde_json::from_slice(&b).map_err(|e| format!("{}: {e}", p.display())),
@@ -345,7 +345,7 @@ fn read_book(state_dir: &Path) -> Result<Book, String> {
     }
 }
 
-fn write_book(state_dir: &Path, b: &Book) -> Result<(), String> {
+pub(crate) fn write_book(state_dir: &Path, b: &Book) -> Result<(), String> {
     crate::util::mkdir_mode(state_dir, 0o700)?;
     let body = serde_json::to_vec_pretty(b).map_err(|e| e.to_string())?;
     crate::util::atomic_write(&book_path(state_dir), &body, 0o600)
@@ -713,14 +713,14 @@ pub fn prune(ctx: &Ctx) -> Result<Value, AdminRefusal> {
 /// ops lock, then the audit log's.
 pub const SERVERS_LOCK_FILE: &str = ".servers.lock";
 
-fn servers_lock(ctx: &Ctx) -> Result<crate::util::FileLock, AdminRefusal> {
+pub(crate) fn servers_lock(ctx: &Ctx) -> Result<crate::util::FileLock, AdminRefusal> {
     // Beside servers.toml: the machine owner's group (pause, resume,
     // limits without sudo) and root both reach it.
     std::fs::create_dir_all(&ctx.config_dir).map_err(|x| failed(format!("create {}: {x}", ctx.config_dir.display())))?;
     crate::util::FileLock::exclusive(&ctx.config_dir.join(SERVERS_LOCK_FILE)).map_err(failed)
 }
 
-fn prune_locked(ctx: &Ctx) -> Result<Value, AdminRefusal> {
+pub(crate) fn prune_locked(ctx: &Ctx) -> Result<Value, AdminRefusal> {
     let Some(mut f) = read_file(&ctx.config_dir).map_err(|e| refuse(code::NOT_CONFIGURED, e))? else {
         return Ok(json!({"changed": [], "wiped": []}));
     };

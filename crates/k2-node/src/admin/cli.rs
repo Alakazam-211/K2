@@ -44,6 +44,11 @@ pub fn serve(paths: ExecPaths, socket: &Path) -> Result<(), String> {
     exec.exit_after_update = true;
     // A health gate that was running when the executor died resumes.
     super::update::resume_pending(&exec);
+    // An owner change the last executor didn't finish goes on first, while
+    // control still says `draining` (prd-macos-tenant-compute-v1 MT33).
+    if let Some(Err(e)) = super::owner::resume(&exec, false) {
+        crate::nlog!("admin: owner change not finished: {} ({})", e.message, e.code);
+    }
     // A drain the last executor left behind never keeps the owner's
     // control at `draining` (B-M2).
     super::update::recover_drain(&exec);

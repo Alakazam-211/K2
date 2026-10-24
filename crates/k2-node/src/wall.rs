@@ -606,6 +606,174 @@ fn reclaim_in(dir: &OwnedFd, uid: u32, gid: u32, depth: u32, s: &mut WalkStats) 
     }
 }
 
+// ── moving a slot's trees (root, `servers.owner`) ───────────────────
+
+/// Open the directory `name` in `parent`, never through a link.
+pub fn open_child_dir(parent: &OwnedFd, name: &CStr) -> std::io::Result<OwnedFd> {
+    open_dir_at(parent.as_raw_fd(), name)
+}
+
+/// The entry names in an open directory (not `.`/`..`), sorted.
+pub fn entry_names(dir: &OwnedFd) -> std::io::Result<Vec<CString>> {
+    let mut v = names(dir)?;
+    v.sort();
+    Ok(v)
+}
+
+/// Is there anything (a link counts, never followed) at `name` in `dir`?
+pub fn exists_at(dir: &OwnedFd, name: &CStr) -> bool {
+    lstat_at(dir, name).is_ok()
+}
+
+/// Is `name` in `dir` a real directory (not a link)? `None` when missing.
+pub fn is_dir_at(dir: &OwnedFd, name: &CStr) -> std::io::Result<Option<bool>> {
+    match lstat_at(dir, name) {
+        Ok(st) => Ok(Some(mode_of(&st) & S_IFMT == S_IFDIR)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// `renameat` between two open directories (a link moves as a link).
+pub fn rename_between(from: &OwnedFd, from_name: &CStr, to: &OwnedFd, to_name: &CStr) -> std::io::Result<()> {
+    // SAFETY: valid dir fds and C strings.
+    if unsafe { libc::renameat(from.as_raw_fd(), from_name.as_ptr(), to.as_raw_fd(), to_name.as_ptr()) } != 0 {
+        return Err(errno());
+    }
+    Ok(())
+}
+
+/// Make the directory `name` in `parent` (mode `mode`) when it's missing,
+/// and open it: never through a link, and only a real directory.
+pub fn ensure_child_dir(parent: &OwnedFd, name: &CStr, mode: u32) -> std::io::Result<OwnedFd> {
+    // SAFETY: valid dir fd and C string.
+    if unsafe { libc::mkdirat(parent.as_raw_fd(), name.as_ptr(), mode as libc::mode_t) } != 0 {
+        let e = errno();
+        if e.kind() != std::io::ErrorKind::AlreadyExists {
+            return Err(e);
+        }
+    }
+    open_dir_at(parent.as_raw_fd(), name)
+}
+
+/// The device an open directory lives on (renames never cross one).
+pub fn device_of(dir: &OwnedFd) -> std::io::Result<u64> {
+    fstat(dir).map(|st| st.st_dev as u64)
+}
+
+/// fsync an open directory (a rename in it is durable after this).
+pub fn sync_dir(dir: &OwnedFd) {
+    // SAFETY: fsync on our own fd.
+    unsafe { libc::fsync(dir.as_raw_fd()) };
+}
+
+/// Root (`servers.owner`): give the tree `name` in the open directory
+/// `parent` to the slot it moved to. Every entry, never following a link,
+/// is chowned to `uid:gid`; directories get `u+rwx,g+rwx`, regular files
+/// `g+rw` (and `g+x` where the owner has `x`) and lose setuid/setgid; a
+/// regular file with more than one link is skipped, as in [`reclaim`]
+/// (it may be a file from outside the tree). With `strip_acl` (Linux) the
+/// POSIX ACLs go too, so the old slot's group entries never decide who
+/// reads the tree: what's left is the owner and group bits just set.
+pub fn rehome_at(parent: &OwnedFd, name: &CStr, uid: u32, gid: u32, strip_acl: bool) -> Result<WalkStats, String> {
+    let mut s = WalkStats::default();
+    rehome_entry(parent, name, uid, gid, strip_acl, 0, &mut s);
+    Ok(s)
+}
+
+fn rehome_entry(dir: &OwnedFd, n: &CStr, uid: u32, gid: u32, strip_acl: bool, depth: u32, s: &mut WalkStats) {
+    if depth >= MAX_DEPTH {
+        s.skipped += 1;
+        return;
+    }
+    let Ok(st) = lstat_at(dir, n) else {
+        s.skipped += 1;
+        return;
+    };
+    let kind = mode_of(&st) & S_IFMT;
+    if kind == S_IFDIR {
+        let Ok(child) = open_dir_at(dir.as_raw_fd(), n) else {
+            s.skipped += 1;
+            return;
+        };
+        rehome_fd(&child, true, uid, gid, strip_acl, s);
+        let Ok(list) = names(&child) else {
+            s.skipped += 1;
+            return;
+        };
+        for c in list {
+            rehome_entry(&child, &c, uid, gid, strip_acl, depth + 1, s);
+        }
+    } else if kind == S_IFREG {
+        if st.st_nlink > 1 {
+            s.skipped += 1;
+            return;
+        }
+        // SAFETY: valid fd + name; O_NOFOLLOW refuses a swapped-in link.
+        let fd = unsafe { libc::openat(dir.as_raw_fd(), n.as_ptr(), libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC) };
+        if fd < 0 {
+            s.skipped += 1;
+            return;
+        }
+        let f = unsafe { OwnedFd::from_raw_fd(fd) };
+        match fstat(&f) {
+            Ok(st2) if mode_of(&st2) & S_IFMT == S_IFREG && st2.st_nlink == 1 => rehome_fd(&f, false, uid, gid, strip_acl, s),
+            _ => s.skipped += 1,
+        }
+    } else {
+        // A link, a socket, a FIFO: its own owner only, never followed.
+        // SAFETY: valid fd + name; NOFOLLOW changes a link itself.
+        let rc = unsafe { libc::fchownat(dir.as_raw_fd(), n.as_ptr(), uid, gid, libc::AT_SYMLINK_NOFOLLOW) };
+        if rc == 0 {
+            s.changed += 1;
+        } else {
+            s.skipped += 1;
+        }
+    }
+}
+
+fn rehome_fd(fd: &OwnedFd, is_dir: bool, uid: u32, gid: u32, strip_acl: bool, s: &mut WalkStats) {
+    // SAFETY: valid fd.
+    let owned = unsafe { libc::fchown(fd.as_raw_fd(), uid, gid) } == 0;
+    let mode = fstat(fd).map(|st| mode_of(&st) & 0o7777).unwrap_or(0o700);
+    let want = if is_dir {
+        (mode | 0o770) & !0o4000
+    } else {
+        let x = if mode & 0o100 != 0 { 0o010 } else { 0 };
+        ((mode | 0o060 | x) & !0o6000) | 0o600
+    };
+    // SAFETY: valid fd.
+    let moded = unsafe { libc::fchmod(fd.as_raw_fd(), want as libc::mode_t) } == 0;
+    let stripped = !strip_acl || strip_acls(fd, is_dir);
+    if owned && moded && stripped {
+        s.changed += 1;
+    } else {
+        s.skipped += 1;
+    }
+}
+
+/// Remove an entry's POSIX ACLs (Linux; "none there" is fine).
+#[cfg(target_os = "linux")]
+fn strip_acls(fd: &OwnedFd, is_dir: bool) -> bool {
+    let mut ok = true;
+    let names: &[&CStr] = if is_dir { &[c"system.posix_acl_access", c"system.posix_acl_default"] } else { &[c"system.posix_acl_access"] };
+    for n in names {
+        // SAFETY: valid fd and C string.
+        if unsafe { libc::fremovexattr(fd.as_raw_fd(), n.as_ptr()) } != 0 {
+            let e = errno();
+            if e.raw_os_error() != Some(libc::ENODATA) && e.raw_os_error() != Some(libc::EOPNOTSUPP) {
+                ok = false;
+            }
+        }
+    }
+    ok
+}
+
+#[cfg(not(target_os = "linux"))]
+fn strip_acls(_fd: &OwnedFd, _is_dir: bool) -> bool {
+    true
+}
+
 /// Node side (Linux job wall): make a tree the node built usable by the
 /// job (its group is the node's group): `g+rw` on files, `g+rwx` on
 /// directories, `g+x` where the owner has `x`, for entries the node owns.

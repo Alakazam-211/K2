@@ -1287,6 +1287,8 @@ pub fn handle_apply(
     };
 
     // ── LIVE PATH (e2e-smoke-test-pending) ─────────────────────────────
+    // k2-ptyd P58: decided before anything stops (the session map is live).
+    let agents_restart = crate::daemon_stop::agents_restart_on_update();
     // 1. Back up the running binary so we can roll back.
     if let Err(e) = std::fs::create_dir_all(plan.backup_path.parent().unwrap_or(Path::new("/"))) {
         return CliResponse::internal_error(format!("create backup dir: {e}"));
@@ -1349,15 +1351,16 @@ pub fn handle_apply(
                 Ok(()) => {
                     set_phase(&plan.job_id, Phase::Restarting);
                     k2_core::log_debug!("[daemon] P3 update/apply — handing off to the new binary");
-                    return CliResponse::ok_json(
-                        serde_json::json!({
-                            "ok": true,
-                            "applying": true,
-                            "job_id": plan.job_id,
-                            "handoff": true,
-                        })
-                        .to_string(),
-                    );
+                    let mut body = serde_json::json!({
+                        "ok": true,
+                        "applying": true,
+                        "job_id": plan.job_id,
+                        "handoff": true,
+                    });
+                    if let Some(restart) = agents_restart {
+                        body["agents_restart"] = restart.into();
+                    }
+                    return CliResponse::ok_json(body.to_string());
                 }
                 Err(e) => k2_core::log_debug!(
                     "[daemon] P3 update/apply — hand-off refused ({e}); plain restart"
@@ -1410,9 +1413,12 @@ pub fn handle_apply(
         let _ = tx.send(());
     });
 
-    CliResponse::ok_json(
-        serde_json::json!({ "ok": true, "applying": true, "job_id": plan.job_id }).to_string(),
-    )
+    let mut body = serde_json::json!({ "ok": true, "applying": true, "job_id": plan.job_id });
+    // k2-ptyd P58: whether agents restart (only when ptyd is in play).
+    if let Some(restart) = agents_restart {
+        body["agents_restart"] = restart.into();
+    }
+    CliResponse::ok_json(body.to_string())
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1445,6 +1451,10 @@ struct PendingUpdate {
     /// before it does anything risky, so a binary that crash-loops still
     /// counts its attempts and gets rolled back.
     boots: u32,
+    /// k2-ptyd P62: the version that armed the marker — the binary a
+    /// rollback restores. `None`: armed by a daemon before 0.46.4.
+    #[serde(default)]
+    from_version: Option<String>,
 }
 
 #[cfg(target_os = "linux")]
@@ -1459,6 +1469,7 @@ fn write_pending_update(plan: &ApplyPlan) -> std::io::Result<()> {
         running_path: plan.running_path.clone(),
         backup_path: plan.backup_path.clone(),
         boots: 0,
+        from_version: Some(env!("CARGO_PKG_VERSION").to_string()),
     };
     let json = serde_json::to_vec_pretty(&pending)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
@@ -1561,6 +1572,15 @@ pub fn verify_pending_update(running_version: &str) -> bool {
         pending.boots,
         pending.backup_path.display()
     );
+    // k2-ptyd P62: a binary before the first adopting release can't take
+    // the surviving agent sessions back, and would resume their
+    // conversations a second time. End them before putting it back.
+    if pending.backup_path.exists() && crate::daemon_stop::is_pre_adoption(pending.from_version.as_deref()) {
+        let n = crate::daemon_stop::end_ptyd_sessions_for_downgrade();
+        if n > 0 {
+            k2_core::log_debug!("[daemon] rollback to a pre-adoption daemon: ended {n} k2-ptyd agent session(s) first");
+        }
+    }
     let restored = pending.backup_path.exists()
         && std::fs::copy(&pending.backup_path, &pending.running_path).is_ok();
     let _ = clear_pending_update();

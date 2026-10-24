@@ -18,16 +18,24 @@ pub fn register_embedded() {
     }
 }
 
-/// P27: add `ptyd: "on" | "off (<reason>)"` to `/boot-status` — only when
-/// the dev-only switch is on in 0.46.2, so the default body is unchanged.
+/// P27: add `ptyd: "on" | "off (<reason>)"` and `adopted: <n>` (sessions
+/// this boot adopted from k2-ptyd) to `/boot-status` — only when the switch
+/// is on or this boot adopted something, so the default body is unchanged.
 pub fn decorate_boot_status(body: serde_json::Value) -> serde_json::Value {
-    decorate_with(body, Switch::resolve(), status_line)
+    let adopted = crate::ptyd_adopt::report().map(|r| r.adopted);
+    decorate_with(body, Switch::resolve(), status_line, adopted)
 }
 
-fn decorate_with(mut body: serde_json::Value, switch: Switch, line: impl FnOnce() -> String) -> serde_json::Value {
-    if switch == Switch::On {
+fn decorate_with(
+    mut body: serde_json::Value,
+    switch: Switch,
+    line: impl FnOnce() -> String,
+    adopted: Option<usize>,
+) -> serde_json::Value {
+    if switch == Switch::On || adopted.is_some_and(|n| n > 0) {
         if let Some(obj) = body.as_object_mut() {
             obj.insert("ptyd".into(), serde_json::Value::String(line()));
+            obj.insert("adopted".into(), serde_json::Value::from(adopted.unwrap_or(0)));
         }
     }
     body
@@ -40,13 +48,25 @@ mod tests {
     #[test]
     fn boot_status_is_untouched_with_the_switch_off() {
         let body = serde_json::json!({"version": "x", "phase": "ready"});
-        let out = decorate_with(body.clone(), Switch::Off, || panic!("status must not even be computed when off"));
+        let out = decorate_with(body.clone(), Switch::Off, || panic!("status must not even be computed when off"), None);
         assert_eq!(out.to_string(), body.to_string(), "byte-identical when off");
+        let out = decorate_with(body.clone(), Switch::Off, || panic!("not computed"), Some(0));
+        assert_eq!(out.to_string(), body.to_string(), "nothing adopted: still byte-identical");
     }
 
     #[test]
     fn boot_status_reports_ptyd_with_the_switch_on() {
-        let out = decorate_with(serde_json::json!({"version": "x"}), Switch::On, || "off (killmode_control-group)".into());
+        let out = decorate_with(serde_json::json!({"version": "x"}), Switch::On, || "off (killmode_control-group)".into(), None);
         assert_eq!(out["ptyd"], "off (killmode_control-group)");
+        assert_eq!(out["adopted"], 0);
+    }
+
+    /// Switch off, but this boot adopted sessions (P68: they keep running):
+    /// the line shows, with the count.
+    #[test]
+    fn boot_status_reports_adoption_even_with_the_switch_off() {
+        let out = decorate_with(serde_json::json!({"version": "x"}), Switch::Off, || "on".into(), Some(3));
+        assert_eq!(out["ptyd"], "on");
+        assert_eq!(out["adopted"], 3);
     }
 }

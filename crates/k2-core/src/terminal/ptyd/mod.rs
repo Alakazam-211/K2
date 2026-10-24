@@ -148,6 +148,11 @@ pub fn status_line() -> String {
     match LAST_REASON.lock().map(|g| g.clone()) {
         Ok(Some(r)) if r == "on" => "on".into(),
         Ok(Some(r)) => format!("off ({r})"),
+        // No survive spawn yet this boot: "on" when this daemon is already
+        // connected to a ptyd (it adopted sessions, or holds the main
+        // listener there).
+        #[cfg(unix)]
+        _ if client::global().current_owner().is_some() => "on".into(),
         _ => match Switch::resolve() {
             Switch::Off => "off (switch_off)".into(),
             Switch::On => "off (no survive spawn yet)".into(),

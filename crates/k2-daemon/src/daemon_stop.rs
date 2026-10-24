@@ -191,6 +191,71 @@ pub fn end_all_ptyd_sessions(owner: &k2_core::terminal::ptyd::client::Owner) -> 
     n
 }
 
+/// P58: the update-apply response's `agents_restart`. An update is a
+/// restart, so ptyd-hosted agents keep running (the new daemon adopts
+/// them; ptyd itself is never replaced by an update before S7's exec
+/// upgrade). In-process sessions die with the daemon and are resumed, so
+/// any of them means "agents will restart". `None` when this daemon never
+/// used ptyd: the response stays as before.
+pub fn agents_restart_on_update() -> Option<bool> {
+    #[cfg(unix)]
+    {
+        k2_core::terminal::ptyd::client::global().current_owner()?;
+        Some(crate::v2_session_map::snapshot().iter().any(|(_, s)| s.backend_name() != "ptyd"))
+    }
+    #[cfg(not(unix))]
+    {
+        None
+    }
+}
+
+/// The first release whose daemon adopts k2-ptyd sessions (S3).
+pub const FIRST_ADOPTING_VERSION: (u64, u64, u64) = (0, 46, 4);
+
+/// P62: is `version` (the binary a rollback would restore) older than the
+/// first adopting release? `None` = armed by a daemon too old to record
+/// its version = pre-adoption. An unparseable version counts as
+/// pre-adoption too (ending agents is the safe side).
+pub fn is_pre_adoption(version: Option<&str>) -> bool {
+    let Some(v) = version else { return true };
+    let mut parts = v.trim().trim_start_matches('v').split(|c: char| c == '.' || c == '-').map(|p| p.parse::<u64>());
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some(Ok(a)), Some(Ok(b)), Some(Ok(c))) => (a, b, c) < FIRST_ADOPTING_VERSION,
+        _ => true,
+    }
+}
+
+/// P62 (§7.11 downgrade guard): end every session a running k2-ptyd holds
+/// and let it exit, before a crash-loop rollback restores a daemon that
+/// can't adopt them. Runs early in boot (nothing is registered yet):
+/// connects to an EXISTING ptyd only, revokes each session's hook token,
+/// then `shutdown{end_sessions:true}`. Returns how many sessions ptyd
+/// listed (0 with no ptyd).
+pub fn end_ptyd_sessions_for_downgrade() -> usize {
+    #[cfg(unix)]
+    {
+        let ptyd = k2_core::terminal::ptyd::client::global();
+        let Ok(owner) = ptyd.connect_existing() else { return 0 };
+        let scan = k2_core::terminal::ptyd::adopt::list(&owner);
+        let n = scan.running.len() + scan.exited.len();
+        for s in scan.running.iter().chain(scan.exited.iter()) {
+            if let Some(id) = k2_core::session::SessionId::parse(&s.sid) {
+                crate::session_token::revoke_session(&id);
+                let _ = std::fs::remove_file(crate::cell_uds::cell_socket_path(&id));
+            }
+        }
+        match owner.request(k2_ptyd::proto::Request::Shutdown { end_sessions: true }) {
+            Ok(k2_ptyd::proto::Reply::Ok) => {}
+            other => log_debug!("[daemon] downgrade guard: ptyd shutdown: {other:?}"),
+        }
+        n
+    }
+    #[cfg(not(unix))]
+    {
+        0
+    }
+}
+
 /// After `POST /cli/daemon/stop` answered: stop the supervisor's job so it
 /// doesn't respawn us (launchd `unload -w` from a detached helper, systemd
 /// `stop --no-block`), or shut down directly with no supervisor.
@@ -256,6 +321,18 @@ mod tests {
         assert_eq!(intent_fresh(raw, 900), None, "from the future");
         assert_eq!(intent_fresh("not json", 1000), None);
         assert_eq!(intent_fresh(r#"{"by":"cli"}"#, 1000), None, "no time");
+    }
+
+    #[test]
+    fn rollback_targets_before_0_46_4_are_pre_adoption() {
+        assert!(is_pre_adoption(None), "a marker from a daemon that didn't record its version");
+        assert!(is_pre_adoption(Some("0.46.3")));
+        assert!(is_pre_adoption(Some("0.45.9")));
+        assert!(is_pre_adoption(Some("garbage")), "unparseable: the safe side");
+        assert!(!is_pre_adoption(Some("0.46.4")));
+        assert!(!is_pre_adoption(Some("v0.46.5")));
+        assert!(!is_pre_adoption(Some("0.47.0-rc1")));
+        assert!(!is_pre_adoption(Some("1.0.0")));
     }
 
     #[test]

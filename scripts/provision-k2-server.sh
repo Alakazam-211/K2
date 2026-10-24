@@ -276,14 +276,14 @@ ExecStart=${K2_HOME}/.local/bin/k2-daemon
 Restart=always
 RestartSec=2
 # Linux update swaps the binary in-process before exit (0.40.43+).
-# KillMode=control-group ensures orphan frpc dies with the unit so a
-# restarted daemon cannot leave stale localPort dialers registered at frps.
-# Runtime stage H overrides this at boot: the daemon installs the drop-in
-# <unit>.d/k2-handoff.conf (root helper \`daemon handoff-dropin\`, or itself
-# for a user unit) = KillMode=process + NotifyAccess=main + ExecReload=
-# SIGUSR2. frpc keeps a stable localPort and is re-adopted, Apps survive a
-# restart, and \`systemctl reload\` is a no-downtime hand-off.
-KillMode=control-group
+# KillMode=process (k2-ptyd, prd-k2-ptyd-v1 P87): a stop, restart or crash
+# signals only the daemon. k2-ptyd, the agents it hosts, frpc and Apps live
+# on in the unit's cgroup and the next daemon adopts them; an explicit stop
+# ends the agents itself (the daemon reads the systemd stop job). With
+# control-group a restart would kill every agent. Runtime stage H's drop-in
+# (<unit>.d/k2-handoff.conf) carries the same line, plus NotifyAccess=main
+# and ExecReload=SIGUSR2 for the no-downtime systemctl reload.
+KillMode=process
 # Agents run in this unit's cgroup. The default OOMPolicy=stop turns one
 # OOM-killed agent into a stop + restart of the whole daemon; continue lets
 # only that process die. (The stage H drop-in carries the same line.)

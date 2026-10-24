@@ -15,7 +15,7 @@
 //! Never query by scanning `docs/`. Walk a collection prefix, then point-get.
 
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, OnceLock, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use redb::{Database, ReadableTable, TableDefinition};
@@ -101,7 +101,7 @@ fn store_path() -> PathBuf {
 
 #[cfg(any(test, feature = "test-util"))]
 fn test_store_path() -> PathBuf {
-    static PATH: OnceLock<PathBuf> = OnceLock::new();
+    static PATH: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     PATH.get_or_init(|| {
         let dir = std::env::temp_dir().join(format!(
             "k2-threads-test-{}-{}",

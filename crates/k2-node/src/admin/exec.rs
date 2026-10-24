@@ -870,3 +870,32 @@ pub fn str_arg(args: &Value, k: &str) -> Result<String, AdminRefusal> {
 pub fn ensure_state_dir(p: &Path) -> Result<(), String> {
     crate::util::mkdir_mode(p, 0o700)
 }
+
+#[cfg(test)]
+mod preflight_tests {
+    use super::*;
+
+    /// A-L1 / B-L3: the preflight child inherits no fd of root's above 2
+    /// (here: one opened without close-on-exec, as systemd's listener is).
+    #[test]
+    fn the_preflight_child_inherits_no_fds_above_2() {
+        let dir = crate::util::temp_dir("preflight-fds");
+        let script = dir.join("k2-node");
+        std::fs::write(&script, "#!/bin/sh\nprintf 'k2-node fds:'; ls /dev/fd | tr '\\n' ' '\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = std::ffi::CString::new(dir.join("held").display().to_string()).unwrap();
+        // SAFETY: plain open(2) with a valid path; no O_CLOEXEC on purpose.
+        let low = unsafe { libc::open(path.as_ptr(), libc::O_CREAT | libc::O_RDWR, 0o600) };
+        assert!(low > 2, "open: {}", std::io::Error::last_os_error());
+        // Well above anything `ls` opens itself (F_DUPFD leaves it inheritable).
+        let fd = unsafe { libc::fcntl(low, libc::F_DUPFD, 200) };
+        unsafe { libc::close(low) };
+        assert!(fd >= 200, "dup: {}", std::io::Error::last_os_error());
+        let out = preflight_exec(&script, None, std::time::Duration::from_secs(10)).unwrap();
+        unsafe { libc::close(fd) };
+        let fds: Vec<i32> = out.trim_start_matches("k2-node fds:").split_whitespace().filter_map(|s| s.parse().ok()).collect();
+        assert!(!fds.contains(&fd), "fd {fd} leaked into the child: {out}");
+        assert!(fds.contains(&0) && fds.contains(&1), "the listing worked: {out}");
+    }
+}

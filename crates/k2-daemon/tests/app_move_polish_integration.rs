@@ -767,3 +767,58 @@ async fn test_guests_are_one_apps_short_lived_and_sign_in_only_on_its_link() {
     gateway::close("otherapp", None, true);
     k2_daemon::apps::alerts::set_sink(None);
 }
+
+/// C: first write verbs are one digest per App per window, and nothing at
+/// all for what the App's own agent did as its test guest.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn first_write_verbs_fold_into_one_digest_and_skip_the_agents_own_tests() {
+    let env = setup(&[("K2_APPS_FIRST_USE_DIGEST_SECS", "1")]);
+    let seen = quiet_alerts();
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let ws = seed_ws(&env, "digws");
+    let svc = app_row(&ws, "digapp");
+    let svc2 = app_row(&ws, "digapp2");
+    k2_core::skin::add_principal_for_app("realu", None, &svc, None, "owner").unwrap();
+    k2_core::skin::set_principal_password("realu", Some("real-guest-pw-1")).unwrap();
+    let (pass, port) = open_link("digapp", &svc, &ws);
+    let p = pass.clone();
+    let (login, catchup) = blocking(move || {
+        let a = on_link(port, &link_post("/cli/skin/login", Some(&p), &json!({"username": "realu", "password": "real-guest-pw-1"})));
+        let b = on_link(port, &link_post("/cli/thread/catchup", Some(&p), &json!({"threads": []})));
+        (a, b)
+    })
+    .await;
+    assert_eq!(login.0, 200, "{login:?}");
+    assert_eq!(catchup.0, 200, "{catchup:?}");
+    let digests = |app: &'static str| {
+        let s = seen.clone();
+        move || -> Vec<String> {
+            s.lock().unwrap().iter().filter(|(_, t)| t.starts_with(&format!("[k2 apps] {app} used"))).map(|(_, t)| t.clone()).collect()
+        }
+    };
+    let mine = digests("digapp");
+    wait_until("the digest for digapp", 20, || !mine().is_empty()).await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let got = mine();
+    assert_eq!(got.len(), 1, "one wake for both first verbs: {got:?}");
+    for want in ["2 write verbs", "POST /cli/skin/login", "POST /cli/thread/catchup", "k2 app audit digapp"] {
+        assert!(got[0].contains(want), "{want} missing: {}", got[0]);
+    }
+
+    // The App's own agent, testing as its test guest: no wake.
+    allow_manage(&ws, true);
+    let r = post(d.port, "/cli/app/test-guest/add", &passport(&ws), json!({"app": "digapp2", "username": "qa-dig"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let pw = r.json()["password"].as_str().unwrap().to_string();
+    let (pass2, port2) = open_link("digapp2", &svc2, &ws);
+    let login = blocking(move || on_link(port2, &link_post("/cli/skin/login", Some(&pass2), &json!({"username": "qa-dig", "password": pw})))).await;
+    assert_eq!(login.0, 200, "{login:?}");
+    let a = audit_rows(d.port, "digapp2", "", 1).await;
+    assert!(a["calls"][0]["onBehalfOf"].as_str().unwrap_or("").starts_with("guest:"), "the login names who signed in: {a}");
+    tokio::time::sleep(Duration::from_millis(3500)).await;
+    let theirs = digests("digapp2")();
+    assert!(theirs.is_empty(), "no wake for the agent's own test: {theirs:?}");
+    gateway::close("digapp", None, true);
+    gateway::close("digapp2", None, true);
+    k2_daemon::apps::alerts::set_sink(None);
+}

@@ -12,7 +12,10 @@
 //!
 //! **Alerts** (to the App's owning workspace agent, a `k2 msg` wake):
 //! - a denial spike: more than 20 refused calls in 5 minutes;
-//! - the first successful use of each write verb;
+//! - the first successful use of each write verb, gathered into one wake
+//!   per App per [`DIGEST_WINDOW`] (0.46.4, NSI C: a test run's login,
+//!   logout and upload were three wakes), and none at all for what the
+//!   App's own agent did as one of its test guests;
 //! - any `pass_wrong_link`;
 //! - a quota hit (`rate_limited`, `too_many_sockets`, `too_large`,
 //!   `too_many_subscriptions`).
@@ -137,6 +140,13 @@ pub fn note_response(status: &str, body: &str) {
             if o.ended.is_none() {
                 if o.call.result == 0 || o.call.code.is_none() {
                     o.call.result = code;
+                }
+                // A guest login names who signed in (on behalf of): the
+                // digest knows the App's own test guests by it (NSI C).
+                if code == 200 && o.call.verb == "POST /cli/skin/login" && o.call.on_behalf_of.is_none() {
+                    if let Some(p) = serde_json::from_str::<J>(body).ok().and_then(|v| v["principalId"].as_str().map(str::to_string)) {
+                        o.call.on_behalf_of = Some(format!("guest:{p}"));
+                    }
                 }
                 if code >= 400 {
                     let (k2_code, hint) = refusal_of(body);
@@ -331,7 +341,17 @@ fn writer(rx: Receiver<Msg>) {
     let mut conn: Option<(std::path::PathBuf, rusqlite::Connection)> = None;
     let mut last_prune = Instant::now() - Duration::from_secs(86_400);
     let mut budget: RefusedBudget = HashMap::new();
-    while let Ok(first) = rx.recv() {
+    loop {
+        // A tick even when no call arrives, so a digest goes out on time.
+        let tick = digest_window().min(Duration::from_secs(15)).max(Duration::from_millis(200));
+        let first = match rx.recv_timeout(tick) {
+            Ok(m) => m,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                flush_digests(false);
+                continue;
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        };
         let mut batch = Vec::new();
         let mut flushes = Vec::new();
         let mut next = Some(first);
@@ -358,6 +378,7 @@ fn writer(rx: Receiver<Msg>) {
         }
         if let Some((_, c)) = conn.as_ref() {
             first_uses(c, &batch);
+            flush_digests(false);
             if let Err(e) = store::append(c, &batch) {
                 k2_core::log_debug!("[apps/audit] append {} rows: {e}", batch.len());
             }
@@ -472,15 +493,85 @@ fn first_uses(conn: &rusqlite::Connection, batch: &[Call]) {
             )
             .unwrap_or(true);
         alerts().lock().unwrap_or_else(|e| e.into_inner()).used.insert(key);
-        if !seen {
-            if let Some(ws) = ws {
-                super::alerts::notify(
-                    &ws,
-                    &format!("[k2 apps] {} used a write verb for the first time: {}. k2 app audit {} --verb '{}'", c.app_id, c.verb, c.app_id, c.verb),
-                );
+        if seen {
+            continue;
+        }
+        // NSI C: the App's own agent testing it (as one of its test
+        // guests) needs no wake about what it just did.
+        if agents_own(c) {
+            continue;
+        }
+        if let Some(ws) = ws {
+            let mut d = digest().lock().unwrap_or_else(|e| e.into_inner());
+            let e = d.entry(c.app_id.clone()).or_insert_with(|| Digest { ws, since: Instant::now(), verbs: Vec::new() });
+            if !e.verbs.contains(&c.verb) {
+                e.verbs.push(c.verb.clone());
             }
         }
     }
+}
+
+// ── first write verbs: one digest per App (NSI C) ────────────────────
+
+/// First write verbs are told in one wake per App per this window
+/// (`K2_APPS_FIRST_USE_DIGEST_SECS` overrides, for tests).
+pub const DIGEST_WINDOW: Duration = Duration::from_secs(180);
+
+fn digest_window() -> Duration {
+    std::env::var("K2_APPS_FIRST_USE_DIGEST_SECS").ok().and_then(|v| v.parse::<u64>().ok()).map(Duration::from_secs).unwrap_or(DIGEST_WINDOW)
+}
+
+struct Digest {
+    ws: String,
+    since: Instant,
+    verbs: Vec<String>,
+}
+
+fn digest() -> &'static Mutex<HashMap<String, Digest>> {
+    static D: OnceLock<Mutex<HashMap<String, Digest>>> = OnceLock::new();
+    D.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// The digest's one line for an App (pure).
+pub fn digest_text(app: &str, verbs: &[String]) -> String {
+    let shown: Vec<&str> = verbs.iter().take(8).map(String::as_str).collect();
+    let more = if verbs.len() > shown.len() { format!(" and {} more", verbs.len() - shown.len()) } else { String::new() };
+    format!(
+        "[k2 apps] {app} used {} write verb{} for the first time: {}{more}. k2 app audit {app}",
+        verbs.len(),
+        if verbs.len() == 1 { "" } else { "s" },
+        shown.join(", ")
+    )
+}
+
+/// Wake each App's agent once with the first write verbs its window
+/// gathered (called by the writer on every batch and tick).
+fn flush_digests(force: bool) {
+    let window = digest_window();
+    let due: Vec<(String, Digest)> = {
+        let mut d = digest().lock().unwrap_or_else(|e| e.into_inner());
+        let ready: Vec<String> = d.iter().filter(|(_, g)| force || g.since.elapsed() >= window).map(|(k, _)| k.clone()).collect();
+        ready.into_iter().filter_map(|k| d.remove(&k).map(|g| (k, g))).collect()
+    };
+    for (app, g) in due {
+        if !g.verbs.is_empty() {
+            super::alerts::notify(&g.ws, &digest_text(&app, &g.verbs));
+        }
+    }
+}
+
+/// A call the App's own workspace agent made: as one of the App's test
+/// guests (the actor, or the guest a login signed in).
+fn agents_own(c: &Call) -> bool {
+    let principal = [c.actor.as_str(), c.on_behalf_of.as_deref().unwrap_or("")].into_iter().find_map(|a| a.strip_prefix("guest:")).map(str::to_string);
+    let Some(p) = principal else { return false };
+    let Ok(Some(t)) = k2_core::skin::test_guests::get(&p) else { return false };
+    let svc = {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        k2_core::deploy::store::get_app(&conn, &c.app_id).ok().flatten().map(|a| a.service_id)
+    };
+    svc.as_deref() == Some(t.app.as_str())
 }
 
 // ── route ────────────────────────────────────────────────────────────

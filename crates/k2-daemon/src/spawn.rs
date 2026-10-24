@@ -119,6 +119,12 @@ pub struct SpawnWorkspaceSessionRequest {
     /// set, and UNDER any K2-internal injections. Values must never be
     /// logged. Empty = no overrides (byte-identical legacy spawn).
     pub env: HashMap<String, String>,
+    /// R8 (prd-env-to-vault-v1): `env` was set by an Owner or Admin (an
+    /// agent preset's env, migration 0070), so a `k2v://` reference in it
+    /// resolves as the owner's choice. `false` (the default) for env an
+    /// agent can write (an AGENT.md `launch:` block): its references
+    /// resolve only for secrets this session may have (its own, or granted).
+    pub env_owner_set: bool,
     /// Fire-once trailing interactive user message (k2 msg wake / same
     /// grammar as host-session launch-param). Applied AFTER identity splice
     /// onto ephemeral exec argv only. Never logged. None = today's spawn.
@@ -353,8 +359,10 @@ pub(crate) fn spawn_agent_session_v2_blocking_inner(
             None, // bare-PTY — never stage workspace API keys
             owner,
         );
-        // K2 vault (KV19): this session's file/env secrets.
-        let delivered = crate::vault::spawn::materialize(&mut env, &workspace_uuid, &session_id.to_string(), false);
+        // K2 vault (KV19): this session's file/env secrets. References in
+        // owner-set env resolve as the owner's; others need a grant (R8).
+        let owner_env = if req.env_owner_set { req.env.clone() } else { HashMap::new() };
+        let delivered = crate::vault::spawn::materialize(&mut env, &workspace_uuid, &session_id.to_string(), false, &owner_env);
         ptyd_meta.insert("workspace_uuid".into(), workspace_uuid.clone().into());
         if let Some(dir) = delivered.dir {
             ptyd_meta.insert("secrets_dir".into(), dir.to_string_lossy().into_owned().into());

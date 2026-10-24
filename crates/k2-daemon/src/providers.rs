@@ -295,6 +295,8 @@ fn launch_request_for(
             .clone()
             .map(|m| m.into_iter().collect())
             .unwrap_or_default(),
+        // an AGENT.md launch block isn't owner-set; a preset's env is (R8)
+        env_owner_set: profile.env_owner_set,
         launch_prompt: None,
         label: None,
     }

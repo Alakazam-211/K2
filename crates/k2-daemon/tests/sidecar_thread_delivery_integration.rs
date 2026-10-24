@@ -114,6 +114,7 @@ fn spawn(ws: &Ws, key: &str, args: &[&str]) -> SessionId {
         rows: 30,
         canonical_key: Some(key.to_string()),
         env: HashMap::new(),
+        env_owner_set: false,
         launch_prompt: None,
         label: None,
     })

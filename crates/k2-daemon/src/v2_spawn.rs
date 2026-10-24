@@ -191,6 +191,15 @@ pub struct SpawnRequest {
     /// the find-or-spawn path, byte-identical.
     #[serde(default)]
     pub attach_only: bool,
+    /// R8 (prd-env-to-vault-v1): the part of `env` an Owner or Admin set
+    /// (the owner-token `/cli/sessions/v2/spawn` body, an agent preset's
+    /// env). A `k2v://` reference resolves as the owner's choice only when
+    /// the same key holds the same reference here; any other reference (a
+    /// `/v1` caller's prompt, say) needs the secret to be the session's own
+    /// or granted to it. `#[serde(skip)]`: never off the wire. Empty for
+    /// every host-curated door (`/v1/sandboxes`).
+    #[serde(skip)]
+    pub owner_env: HashMap<String, String>,
 }
 
 /// Default session cwd when the client omits one.
@@ -595,8 +604,20 @@ fn put_conversation_id(out: &mut serde_json::Value, conversation_id: Option<Stri
 /// [`spawn_session`]. Thin wrapper: ALL spawn plumbing lives in `spawn_session`
 /// so `/v1/sandboxes` reuses it verbatim with a host-trusted request, and the v2
 /// path stays behavior-identical (parse error → the same 400 as before).
+///
+/// The body's env is NOT treated as owner-set here (R8): a `k2v://`
+/// reference in it resolves only for a secret the session may have. The
+/// route calls [`handle_v2_spawn_as`] with the caller's role.
 pub fn handle_v2_spawn(body: &[u8]) -> HandlerResult {
-    let req: SpawnRequest = match serde_json::from_slice(body) {
+    handle_v2_spawn_as(body, false)
+}
+
+/// [`handle_v2_spawn`] for a caller whose role is known: `owner_set_env` is
+/// true only for the owner token or an Owner/Admin login (R8,
+/// prd-env-to-vault-v1). A Member login may spawn, but a reference in its
+/// env never resolves as the owner's choice.
+pub fn handle_v2_spawn_as(body: &[u8], owner_set_env: bool) -> HandlerResult {
+    let mut req: SpawnRequest = match serde_json::from_slice(body) {
         Ok(r) => r,
         Err(e) => {
             return HandlerResult {
@@ -608,6 +629,9 @@ pub fn handle_v2_spawn(body: &[u8]) -> HandlerResult {
             }
         }
     };
+    if owner_set_env {
+        req.owner_env = req.env.clone().unwrap_or_default();
+    }
     spawn_session(req)
 }
 
@@ -1271,11 +1295,20 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
         );
         // K2 vault (KV19): this session's file/env secrets (env only in a
         // sandboxed cell).
+        // R8: owner-set env = the request's owner part plus the canonical
+        // preset's env (an Owner/Admin row); other references need a grant.
+        let mut owner_env = req.owner_env.clone();
+        if let Some(resolved_env) = canonical_resolved.as_ref().and_then(|r| r.env.as_ref()) {
+            for (k, v) in resolved_env {
+                owner_env.insert(k.clone(), v.clone());
+            }
+        }
         let delivered = crate::vault::spawn::materialize(
             &mut cfg.env,
             &workspace_uuid,
             &session_id_for_response.to_string(),
             matches!(cfg.sandbox, k2_core::terminal::SandboxSpec::Microvm),
+            &owner_env,
         );
         ptyd_meta.insert("workspace_uuid".into(), workspace_uuid.clone().into());
         if let Some(dir) = delivered.dir {
@@ -2078,6 +2111,7 @@ pub fn handle_v2_refresh(body: &[u8]) -> HandlerResult {
         overlay: None,
         forced_session_id: None,
         attach_only: false,
+        owner_env: HashMap::new(),
     })
 }
 

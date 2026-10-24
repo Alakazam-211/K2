@@ -205,6 +205,8 @@ pub(crate) fn resolve_spawn(
         overlay: None,
         forced_session_id: None,
         attach_only: false,
+        // Host-curated cell env: nothing in it is owner-set (R8).
+        owner_env: HashMap::new(),
     })
 }
 
@@ -867,6 +869,8 @@ pub(crate) fn resolve_workspace_mirror_with_argv(
         // equals the persistent-layer + `.jsonl` key.
         forced_session_id: Some(*session_id),
         attach_only: false,
+        // Host-curated cell env: nothing in it is owner-set (R8).
+        owner_env: HashMap::new(),
     })
 }
 

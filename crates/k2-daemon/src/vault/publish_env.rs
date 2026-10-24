@@ -390,7 +390,7 @@ pub fn granted(service_id: &str, workspace_id: &str, cwd: &Path) -> Granted {
                     continue;
                 }
                 if k2_vault::refs::VaultRef::is_ref(&v) {
-                    match resolve_ref(&vault, &v, workspace_id) {
+                    match resolve_ref(&vault, &v, service_id, workspace_id) {
                         Ok(val) => out.env.push((k, val)),
                         Err(e) => k2_core::log_debug!("[vault] publish {service_id}: {k}: {}", e.code),
                     }
@@ -492,23 +492,28 @@ pub fn apply_granted(cmd: &mut Command, service_id: &str, workspace_id: &str, cw
     dir
 }
 
-fn resolve_ref(vault: &k2_vault::LocalVault, r: &str, workspace_id: &str) -> Result<String, k2_vault::VaultError> {
+/// One `k2v://` reference in a service's `.env.k2` → its value (R8,
+/// prd-env-to-vault-v1). The service is the requester, never the daemon:
+/// its own workspace's secrets resolve as before; a server secret needs a
+/// grant to this service (`k2 publish secret add`, `service:<label>`) or
+/// to its workspace (`ws:<name>`, `ws:*`) at env delivery. Another
+/// workspace's or a chat's secret is refused as before. Refusals are
+/// audited under `published_service:<id>`.
+fn resolve_ref(vault: &k2_vault::LocalVault, r: &str, service_id: &str, workspace_id: &str) -> Result<String, k2_vault::VaultError> {
     let sel = super::selector_for_ref(r)?;
-    let m = vault.meta(&sel, &k2_vault::Actor::System("publish".into()))?;
-    // A service runs the owner's code for its own workspace: its own
-    // workspace's secrets and server secrets, at most env.
-    let ok_scope = match m.scope.kind {
-        k2_vault::ScopeKind::Server => true,
-        k2_vault::ScopeKind::Workspace => m.scope.id == workspace_id,
+    let scope_ok = match &sel {
+        Selector::Name { scope, .. } => match scope.kind {
+            k2_vault::ScopeKind::Server => true,
+            k2_vault::ScopeKind::Workspace => scope.id == workspace_id,
+            _ => false,
+        },
         _ => false,
     };
-    if !ok_scope {
-        return Err(k2_vault::VaultError::forbidden("not_this_workspace", "a service can use its own workspace's secrets and server secrets"));
+    if !scope_ok {
+        return Err(k2_vault::VaultError::forbidden("not_this_workspace", "a service can use its own workspace's secrets and server secrets granted to it"));
     }
-    if m.delivery_ceiling.level() < Delivery::Env.level() {
-        return Err(k2_vault::VaultError::forbidden("delivery_above_ceiling", "this secret can't be delivered as env"));
-    }
-    let v = vault.resolve(&Selector::Id(m.id), Use::System, &Requester::System("publish".into()))?;
+    let who = Requester::PublishedService { id: service_id.to_string(), workspace_id: workspace_id.to_string() };
+    let v = vault.resolve_ref_env(&sel, &who)?;
     String::from_utf8(v.value.expose().to_vec()).map_err(|_| k2_vault::VaultError::bad_request("not_text", "env values must be text"))
 }
 

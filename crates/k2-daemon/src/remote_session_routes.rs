@@ -339,6 +339,7 @@ fn spawn_remote_shell(grant_id: &str, principal_label: &str, body: &[u8]) -> Cli
         rows: 24,
         canonical_key: Some(canonical_key),
         env: Default::default(),
+        env_owner_set: false,
         launch_prompt: None,
         label: None,
     }) {

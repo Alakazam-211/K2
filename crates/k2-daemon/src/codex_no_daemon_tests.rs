@@ -206,6 +206,7 @@ fn ws_req(
         rows: 38,
         canonical_key,
         env: Default::default(),
+        env_owner_set: false,
         launch_prompt: launch_prompt.map(str::to_string),
         label: None,
     }
@@ -392,6 +393,7 @@ async fn host_session_codex_execs_with_no_daemon() {
         overlay: None,
         forced_session_id: Some(sid),
         attach_only: false,
+        owner_env: Default::default(),
     });
     assert_eq!(r.status, "200 OK", "{}", r.body);
     let call = wait_call(&stub, 1);

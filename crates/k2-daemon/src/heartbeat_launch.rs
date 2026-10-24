@@ -917,6 +917,8 @@ fn run_resume_and_fire(
             canonical_key: canonical_key_override,
             // W2: the resolved preset's migration-0070 env.
             env: resolved.env_map(),
+            // the preset's env is owner-set (R8)
+            env_owner_set: true,
             launch_prompt: None,
             label: None,
         },

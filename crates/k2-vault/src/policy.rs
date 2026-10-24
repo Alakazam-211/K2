@@ -283,9 +283,14 @@ pub fn can_grant(actor: &Actor, f: &Facts<'_>, consumer: &Consumer, delivery: De
             let own_session = consumer.kind == ConsumerKind::Session && a.session_id.as_deref() == Some(consumer.id.as_str());
             // `k2 job` (item 5, Q14): a job in the agent's own workspace.
             let own_job = consumer.job_workspace() == Some(a.workspace_id.as_str());
+            // A published service an agent can name is always one of its
+            // own workspace's (the daemon resolves `service:<label>` in the
+            // caller's workspace only), and the agent runs its code: a
+            // grant to it is a grant to the agent (prd-env-to-vault-v1 R8).
+            let own_service = consumer.kind == ConsumerKind::PublishedService;
             // IT agents: server secrets to OTHER workspaces only.
             if a.vault_manage && f.scope.kind == ScopeKind::Server {
-                if own_ws || all_ws || own_session || own_job {
+                if own_ws || all_ws || own_session || own_job || own_service {
                     return Err(denied(
                         "vault_self_grant",
                         "an agent can't grant a server secret to its own workspace; ask the owner",
@@ -390,6 +395,11 @@ mod tests {
         can_grant(&it, &f, &Consumer::workspace("sales"), Delivery::Fetch, Delivery::Fetch).expect("other ws");
         assert_eq!(can_grant(&it, &f, &Consumer::workspace("it"), Delivery::Fetch, Delivery::Fetch).expect_err("self").code, "vault_self_grant");
         assert_eq!(can_grant(&it, &f, &Consumer::all_workspaces(), Delivery::Fetch, Delivery::Fetch).expect_err("all").code, "vault_self_grant");
+        // R8: its own published service runs its code: a self-grant too.
+        assert_eq!(
+            can_grant(&it, &f, &Consumer::published_service("svc-1"), Delivery::Env, Delivery::Fetch).expect_err("own service").code,
+            "vault_self_grant"
+        );
         assert!(can_grant(&it, &f, &Consumer::workspace("sales"), Delivery::Env, Delivery::Fetch).is_err(), "human-given: no raise");
         f.own_ws_has_grant = true;
         f.human_given = false;

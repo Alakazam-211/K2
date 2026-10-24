@@ -1783,6 +1783,144 @@ impl LocalVault {
         })
     }
 
+    /// May `who` have `m` through a `k2v://` reference in its own config
+    /// (prd-env-to-vault-v1 R8)? Implicit: its own workspace's secret (a
+    /// session, a published service) or its own chat's secret (a session).
+    /// Otherwise an explicit, unexpired grant at env delivery or above: to
+    /// the session or its workspace (`ws:<id>`, `ws:*`); to the service, or
+    /// to the service's workspace (`ws:<id>`, `ws:*`); to the job. Explicit
+    /// grants stop while the vault is rolled back (VS8).
+    ///
+    /// A workspace grant counts for a service only here, when the service
+    /// names the secret itself: [`Self::spawn_items`] still delivers a
+    /// service only the grants made to that service.
+    fn ref_entitled(&self, conn: &Connection, keys: &Keys, m: &SecretMeta, who: &Requester) -> Result<bool> {
+        let implicit = match who {
+            Requester::Session { workspace_id, session_id } => match m.scope.kind {
+                ScopeKind::Workspace => &m.scope.id == workspace_id,
+                ScopeKind::Session => session_id.as_deref() == Some(m.scope.id.as_str()),
+                _ => false,
+            },
+            Requester::PublishedService { workspace_id, .. } => m.scope.kind == ScopeKind::Workspace && &m.scope.id == workspace_id,
+            // A job gets nothing by default (Q13); the rest never name refs.
+            _ => false,
+        };
+        if implicit {
+            return Ok(true);
+        }
+        if *self.rollback.lock() {
+            return Ok(false);
+        }
+        let t = now();
+        for g in self.grants_for(conn, keys, &m.id)? {
+            if g.expires_at.as_deref().and_then(parse_ts).is_some_and(|x| x < t) {
+                continue;
+            }
+            if g.delivery.level() < Delivery::Env.level() {
+                continue;
+            }
+            let ws_match = |ws: &str| g.consumer.kind == ConsumerKind::Workspace && (g.consumer.id == ws || g.consumer.id == "*");
+            let ok = match who {
+                Requester::Session { workspace_id, session_id } => {
+                    ws_match(workspace_id)
+                        || (g.consumer.kind == ConsumerKind::Session && session_id.as_deref() == Some(g.consumer.id.as_str()))
+                }
+                Requester::PublishedService { id, workspace_id } => {
+                    (g.consumer.kind == ConsumerKind::PublishedService && &g.consumer.id == id) || ws_match(workspace_id)
+                }
+                Requester::Job { workspace_id, job_id, .. } => {
+                    g.consumer.kind == ConsumerKind::Job && g.consumer.id == format!("{workspace_id}/{job_id}")
+                }
+                _ => false,
+            };
+            if ok {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Would [`Self::resolve_ref_env`] give `who` this secret? Names only,
+    /// no value read, no audit row (the upgrade pass and the owner notice).
+    pub fn ref_would_resolve(&self, sel: &Selector, who: &Requester) -> Result<bool> {
+        let keys = self.keys.read();
+        let conn = self.conn.lock();
+        let row = self.find_row(&conn, &keys, sel)?;
+        let m = &row.meta;
+        if m.namespace != Namespace::User || m.status != SecretStatus::Active {
+            return Ok(false);
+        }
+        if m.expires_at.as_deref().and_then(parse_ts).is_some_and(|x| x < now()) {
+            return Ok(false);
+        }
+        if m.delivery_ceiling.level() < Delivery::Env.level() {
+            return Ok(false);
+        }
+        self.ref_entitled(&conn, &keys, m, who)
+    }
+
+    /// Resolve a `k2v://` reference that a consumer's own config names (a
+    /// published service's `.env.k2`, an agent's launch env) into env for
+    /// `who`, only when `who` may have it ([`Self::ref_entitled`]) and the
+    /// secret's ceiling allows env (prd-env-to-vault-v1 R8). A server
+    /// secret needs a grant like any other shared secret. Audited under
+    /// `who`'s own label, allowed or refused.
+    pub fn resolve_ref_env(&self, sel: &Selector, who: &Requester) -> Result<Resolved> {
+        self.flush_rollups_if_due();
+        let actor_label = who.label();
+        let keys = self.keys.read();
+        let conn = self.conn.lock();
+        let row = match self.find_row(&conn, &keys, sel) {
+            Ok(r) => r,
+            Err(e) => {
+                drop(conn);
+                drop(keys);
+                return Err(self.deny(Entry::new("resolve_ref", &actor_label, "deny"), e));
+            }
+        };
+        let m = row.meta.clone();
+        let deny_entry = Entry::new("resolve_ref", &actor_label, "deny").secret(&m.id, None).consumer(actor_label.clone());
+        let refusal = if m.namespace != Namespace::User {
+            Some(VaultError::forbidden("vault_system_namespace", "K2's own secrets are used only by K2"))
+        } else if m.status != SecretStatus::Active {
+            Some(VaultError::forbidden("secret_not_active", "that secret is disabled"))
+        } else if m.expires_at.as_deref().and_then(parse_ts).is_some_and(|x| x < now()) {
+            Some(VaultError::forbidden("secret_expired", "that secret has expired"))
+        } else if m.delivery_ceiling.level() < Delivery::Env.level() {
+            Some(VaultError::forbidden("delivery_above_ceiling", "this secret can't be delivered as env"))
+        } else if !self.ref_entitled(&conn, &keys, &m, who)? {
+            Some(VaultError::forbidden(
+                "not_granted",
+                format!(
+                    "{} isn't shared with {actor_label}; the owner can share it: k2 vault grant {} --to <service:NAME | ws:NAME> --as env",
+                    m.name, m.name
+                ),
+            ))
+        } else {
+            None
+        };
+        if let Some(e) = refusal {
+            drop(conn);
+            drop(keys);
+            return Err(self.deny(deny_entry, e));
+        }
+        let v = self.decrypt_version(&conn, &keys, &m, m.latest_version)?;
+        drop(conn);
+        drop(keys);
+        self.rollups
+            .lock()
+            .add(&Entry::new("resolve_ref", &actor_label, "ok").secret(&m.id, Some(m.latest_version)).consumer(actor_label.clone()));
+        Ok(Resolved {
+            value: v,
+            version: m.latest_version,
+            delivery: Delivery::Env,
+            env_name: None,
+            file_name: None,
+            inject: m.inject.clone().unwrap_or_default(),
+            meta: m,
+        })
+    }
+
     /// Every env/file/agent delivery a session (or service) gets at spawn.
     /// `agent` items (ssh keys, item 3) are served on the session's
     /// ssh-agent socket; a published service skips them.

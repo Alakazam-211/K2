@@ -367,7 +367,7 @@ fn the_socket_goes_at_session_end_and_is_re_served_after_a_restart() {
     put_key(&v, &w, "LIFE_KEY", &testkeys::ed25519(), Delivery::Agent);
     let sid = uuid::Uuid::new_v4().to_string();
     let mut env = HashMap::new();
-    let out = super::super::spawn::materialize(&mut env, &w, &sid, false);
+    let out = super::super::spawn::materialize(&mut env, &w, &sid, false, &std::collections::HashMap::new());
     let Some(dir) = out.dir.clone() else {
         assert!(out.skipped.iter().any(|s| s.contains("no_memory_fs")), "{out:?}");
         return;
@@ -416,7 +416,7 @@ fn the_socket_goes_at_session_end_and_is_re_served_after_a_restart() {
 
     // A sandboxed cell gets no socket.
     let mut env3 = HashMap::new();
-    let out3 = super::super::spawn::materialize(&mut env3, &w, &uuid::Uuid::new_v4().to_string(), true);
+    let out3 = super::super::spawn::materialize(&mut env3, &w, &uuid::Uuid::new_v4().to_string(), true, &std::collections::HashMap::new());
     assert!(out3.agent_sock.is_none() && !env3.contains_key("SSH_AUTH_SOCK"), "{out3:?}");
     assert!(out3.skipped.iter().any(|s| s.contains("sandboxed")), "{out3:?}");
 }

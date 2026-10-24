@@ -934,6 +934,8 @@ fn handle_new(
             rows: 38,
             canonical_key: Some(agent_name.clone()),
             env: preset.env.clone(),
+            // the preset's env is owner-set (R8)
+            env_owner_set: true,
             launch_prompt: launch_prompt.clone(),
             label: Some(display_name.clone()),
         })

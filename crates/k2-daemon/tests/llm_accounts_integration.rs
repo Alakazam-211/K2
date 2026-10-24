@@ -778,6 +778,7 @@ fn spawn_b(project_id: &str, cwd: &Path, key: &str, command: &str, args: &[&str]
         rows: 24,
         canonical_key: Some(key.to_string()),
         env: std::collections::HashMap::new(),
+        env_owner_set: false,
         launch_prompt: None,
         label: None,
     })

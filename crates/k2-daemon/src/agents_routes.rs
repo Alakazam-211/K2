@@ -134,6 +134,8 @@ pub fn spawn_wake_via_session_stream(
         canonical_key: None,
         // W2: the resolved preset's migration-0070 env.
         env: resolved.env_map(),
+        // the preset's env is owner-set (R8)
+        env_owner_set: true,
         launch_prompt: None,
         label: None,
     })?;
@@ -335,6 +337,8 @@ pub fn handle_agents_launch(
         rows: 38,
         canonical_key: None,
         env: spawn_env,
+        // a preset's env either way: owner-set (R8)
+        env_owner_set: true,
         launch_prompt: None,
         label: None,
     }) {
@@ -461,6 +465,8 @@ pub fn handle_agents_delegate(
         rows: 38,
         canonical_key: None,
         env: spawn_env,
+        // the preset's env is owner-set (R8)
+        env_owner_set: true,
         launch_prompt: None,
         label: None,
     }) {

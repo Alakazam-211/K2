@@ -425,6 +425,8 @@ pub(crate) fn resolve_host_spawn(
     // Owner-token principal stages nothing (own-use: the host's ambient
     // login applies). Env VALUES are never logged — only var NAMES.
     let mut env: HashMap<String, String> = resolved.env_map();
+    // R8: only the preset's own env is owner-set (Owner/Admin rows).
+    let owner_env = env.clone();
     if let V1Principal::Api(p) = principal {
         let staged = p.staged_env_pairs();
         if staged.is_empty() {
@@ -541,6 +543,7 @@ pub(crate) fn resolve_host_spawn(
         // equals the conversation id spliced into the agent argv above.
         forced_session_id: Some(*session_id),
         attach_only: false,
+        owner_env,
     };
     (spawn, plan, model_decision)
 }

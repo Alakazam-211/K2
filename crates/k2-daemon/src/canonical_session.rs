@@ -241,6 +241,7 @@ pub fn ensure_canonical_session(project_path: &str) -> Result<EnsureOutcome, Str
                     // carry ITS env (resume_chat resolved it from the
                     // same preset row), never the outrun profile's.
                     profile.env = resolved.env;
+                    profile.env_owner_set = true;
                 }
                 // Self-minting provider on a fresh spawn: adopt the id
                 // it creates on disk (stamps session_id + harness).
@@ -332,6 +333,8 @@ pub fn launch_request_for(
             .clone()
             .map(|m| m.into_iter().collect())
             .unwrap_or_default(),
+        // an AGENT.md launch block isn't owner-set; a preset's env is (R8)
+        env_owner_set: profile.env_owner_set,
         launch_prompt: None,
         label: None,
     }

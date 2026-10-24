@@ -21,6 +21,7 @@ pub mod local_auth;
 pub mod mainrefs;
 pub mod publish_env;
 pub mod refstore;
+pub mod server_refs;
 pub mod spawn;
 pub mod ssh_agent;
 pub mod systemd_creds;
@@ -155,6 +156,8 @@ pub fn boot(home: &Path) {
             #[cfg(unix)]
             k2_core::terminal::ptyd::set_spawned_hook(ssh_agent::on_ptyd_spawned);
             publish_env::seed_existing();
+            // R8 (prd-env-to-vault-v1): once, before any service starts.
+            server_refs::upgrade_once(v);
             start_ticker(v.clone());
             let nd = k2_vault::secret::set_non_dumpable();
             let _ = NON_DUMPABLE.set(nd);

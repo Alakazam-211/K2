@@ -320,6 +320,8 @@ fn ensure_pinned_chat_inner(
             .clone()
             .map(|m| m.into_iter().collect())
             .unwrap_or_default(),
+        // the preset's env is owner-set (R8)
+        env_owner_set: true,
         launch_prompt: None,
         label: None,
     };

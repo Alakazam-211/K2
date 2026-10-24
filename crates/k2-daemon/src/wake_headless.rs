@@ -259,6 +259,8 @@ fn spawn_wake_headless_with(
         // W2: the resolved preset's migration-0070 env (empty for the
         // test override / metadata-less presets). Values never logged.
         env: resolved.env_map(),
+        // the preset's env is owner-set (R8)
+        env_owner_set: true,
         launch_prompt: None,
         label: None,
     })

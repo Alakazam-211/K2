@@ -2096,6 +2096,7 @@ fn wake_sidecar_and_fire(
         // Register under the tab/API map key — never the canonical slot.
         canonical_key: Some(tab.agent_name.clone()),
         env: HashMap::new(),
+        env_owner_set: false,
         launch_prompt,
         label: wake_label,
     }) {
@@ -2532,6 +2533,8 @@ fn wake_and_fire(
             .clone()
             .map(|m| m.into_iter().collect())
             .unwrap_or_default(),
+        // the preset's env is owner-set (R8)
+        env_owner_set: true,
         launch_prompt,
         label: None,
     }) {

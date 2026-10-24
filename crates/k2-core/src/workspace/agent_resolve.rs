@@ -121,6 +121,8 @@ impl ResolvedAgentCommand {
             cols: None,
             rows: None,
             env: self.env.clone(),
+            // The preset row's env: Owner/Admin-set (R8).
+            env_owner_set: true,
         }
     }
 

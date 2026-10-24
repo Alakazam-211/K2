@@ -814,6 +814,7 @@ fn spawn_terminal_impl(
         // Ad-hoc terminal (caller-supplied command, no preset
         // resolution) — no preset env to merge.
         env: Default::default(),
+        env_owner_set: false,
         launch_prompt: None,
         label: None,
     }) {

@@ -2677,7 +2677,10 @@ async fn handle_one_request(
                 return DispatchOutcome::Done;
             }
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
-            let result = crate::v2_spawn::handle_v2_spawn(&body_bytes);
+            // R8: the body's env is owner-set only for the owner token or an
+            // Owner/Admin login (a Member may spawn, not resolve the owner's refs).
+            let owner_set_env = super::http::token_is_owner_or_admin(&query, state.token.as_str());
+            let result = crate::v2_spawn::handle_v2_spawn_as(&body_bytes, owner_set_env);
             super::http::send_response(&mut *stream, result.status, "application/json", &result.body)
                 .await;
         }

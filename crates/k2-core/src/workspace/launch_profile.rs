@@ -124,6 +124,13 @@ pub struct LaunchProfile {
     /// serialization order in tests + human-readable diffs.
     #[serde(default)]
     pub env: Option<BTreeMap<String, String>>,
+    /// R8 (prd-env-to-vault-v1): `env` came from an agent preset, which only
+    /// an Owner or Admin can set, so a `k2v://` reference in it resolves as
+    /// the owner's choice. Never read from a file: an AGENT.md `launch:`
+    /// block (which the workspace's agent can edit) always parses `false`,
+    /// and its references need a grant like any agent's.
+    #[serde(skip)]
+    pub env_owner_set: bool,
 }
 
 /// The full shape of fields this module cares about from the

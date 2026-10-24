@@ -498,6 +498,7 @@ fn live_session_passport_and_id(
         rows: 24,
         canonical_key: Some(key.to_string()),
         env: HashMap::new(),
+        env_owner_set: false,
         launch_prompt: None,
         label: None,
     })

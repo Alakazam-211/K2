@@ -586,8 +586,15 @@ fn unhealthy_update_rolls_back_and_the_version_is_refused_after() {
     let rec = wait_phase(&r, "rolled_back");
     wait_calls(&r, 4);
     assert!(rec.refused.contains(&"99.0.1".to_string()));
-    let lines = r.exec.audit().verify().unwrap();
-    assert!(lines.iter().filter(|l| l.event == "update").count() >= 2);
+    // The rollback's audit line follows its restart (and the mark's retirement).
+    let updates = || r.exec.audit().verify().unwrap().iter().filter(|l| l.event == "update").count();
+    for _ in 0..250 {
+        if updates() >= 2 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(updates() >= 2, "both rollbacks are audited");
 }
 
 /// Bug 1 / T2 (no root): a staged build the node user can't run never

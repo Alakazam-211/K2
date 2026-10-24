@@ -109,6 +109,11 @@ str_enum!(
         /// `<workspace id>/<job id>`, so the rules can tell an agent's own
         /// jobs from another workspace's without asking k2.db.
         Job = "job",
+        /// A compute job on a node (prd-compute-secret-env-v1 SE13).
+        /// Appended last (R3). The id is `<workspace id>/<node id>` or
+        /// `<workspace id>/*` (every node this server owns, never one
+        /// where it is a tenant). Only `env` delivery, people-only grants.
+        Compute = "compute",
     }
 );
 
@@ -245,6 +250,19 @@ impl Consumer {
         }
         self.id.split_once('/').map(|(ws, _)| ws).filter(|ws| !ws.is_empty())
     }
+    /// A compute job of `workspace_id` on `node` (a node id, or `*`).
+    pub fn compute(workspace_id: &str, node: &str) -> Consumer {
+        Consumer { kind: ConsumerKind::Compute, id: format!("{workspace_id}/{node}") }
+    }
+    /// `(workspace id, node id or *)` of a well-formed compute consumer.
+    pub fn compute_parts(&self) -> Option<(&str, &str)> {
+        if self.kind != ConsumerKind::Compute {
+            return None;
+        }
+        let (ws, node) = self.id.split_once('/')?;
+        let plain = |x: &str| !x.is_empty() && x.len() <= 64 && x.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'));
+        (plain(ws) && (node == "*" || plain(node))).then_some((ws, node))
+    }
     pub fn all_workspaces() -> Consumer {
         Consumer { kind: ConsumerKind::Workspace, id: "*".into() }
     }
@@ -281,7 +299,8 @@ mod tests {
         assert_eq!(Namespace::User.code(), 1);
         assert!(Kind::parse("nope").is_err());
         // R3: new enum values go last, so every older code stays put.
-        assert_eq!(ConsumerKind::Job.code() as usize, ConsumerKind::ALL.len() - 1);
+        assert_eq!(ConsumerKind::Compute.code() as usize, ConsumerKind::ALL.len() - 1);
+        assert_eq!(ConsumerKind::Job.code() as usize, ConsumerKind::ALL.len() - 2);
         assert_eq!(ConsumerKind::Widget.code(), 6);
         // Item 3: agent is the last delivery; every older code stays put.
         assert_eq!(Delivery::Agent.code() as usize, Delivery::ALL.len() - 1);
@@ -297,6 +316,18 @@ mod tests {
         assert_eq!(c.job_workspace(), Some("ws-1"));
         assert_eq!(Consumer::workspace("ws-1").job_workspace(), None);
         assert_eq!(Consumer { kind: ConsumerKind::Job, id: "/x".into() }.job_workspace(), None);
+    }
+
+    #[test]
+    fn compute_consumers_carry_workspace_and_node() {
+        let c = Consumer::compute("ws-1", "node-9");
+        assert_eq!(c.label(), "compute:ws-1/node-9");
+        assert_eq!(c.compute_parts(), Some(("ws-1", "node-9")));
+        assert_eq!(Consumer::compute("ws-1", "*").compute_parts(), Some(("ws-1", "*")));
+        for bad in ["", "/n", "ws/", "ws", "ws/a/b", "*/n", "ws/a b"] {
+            assert_eq!(Consumer { kind: ConsumerKind::Compute, id: bad.into() }.compute_parts(), None, "{bad:?}");
+        }
+        assert_eq!(Consumer::workspace("ws-1").compute_parts(), None);
     }
 
     #[test]

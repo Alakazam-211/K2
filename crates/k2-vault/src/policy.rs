@@ -267,6 +267,17 @@ pub fn can_grant(actor: &Actor, f: &Facts<'_>, consumer: &Consumer, delivery: De
         Actor::Login { .. } => Err(denied("vault_admin_required", "sharing a secret needs an Owner or Admin")),
         Actor::Guest { .. } => Err(denied("vault_not_yours", "not allowed")),
         Actor::Agent(a) => {
+            // Compute secret-env (SE15, SV7): the value leaves this machine
+            // for a node, so only a person grants it. This is the first
+            // check, before the IT-agent branch below, which would
+            // otherwise let "Allow managing server-wide secrets" send a
+            // server secret to any other workspace's compute jobs.
+            if consumer.kind == ConsumerKind::Compute {
+                return Err(VaultError::owner_confirm_required(format!(
+                    "only a person can let a secret leave this machine for a compute node; ask your owner to run: k2 vault grant <NAME> --to {} --as env",
+                    consumer.label()
+                )));
+            }
             let own_ws = consumer.kind == ConsumerKind::Workspace && consumer.id == a.workspace_id;
             let all_ws = consumer.kind == ConsumerKind::Workspace && consumer.id == "*";
             let own_session = consumer.kind == ConsumerKind::Session && a.session_id.as_deref() == Some(consumer.id.as_str());
@@ -385,6 +396,34 @@ mod tests {
         assert!(can_grant(&it, &f, &Consumer::workspace("sales"), Delivery::Env, Delivery::Fetch).is_err());
         let plain = agent("sales", false);
         assert!(can_grant(&plain, &facts(&srv, "owner", true), &Consumer::workspace("x"), Delivery::Fetch, Delivery::Fetch).is_err());
+    }
+
+    /// SE15 / SV7: no agent grants to `compute:`, not even an IT agent
+    /// granting a server secret to another workspace's compute jobs, nor an
+    /// agent its own workspace's secret to its own compute jobs. People do.
+    #[test]
+    fn only_people_grant_to_compute() {
+        let srv = Scope::server();
+        let ws = Scope::workspace("w1");
+        let it = agent("it", true);
+        let other = Consumer::compute("sales", "*");
+        let e = can_grant(&it, &facts(&srv, "agent:it/s1", false), &other, Delivery::Env, Delivery::Env).expect_err("IT agent");
+        assert_eq!(e.code, "vault_owner_confirm_required");
+        assert!(e.hint.contains("k2 vault grant") && e.hint.contains("compute:sales/*"), "{}", e.hint);
+        // The same IT agent may still grant that server secret to the other workspace itself.
+        can_grant(&it, &facts(&srv, "agent:it/s1", false), &Consumer::workspace("sales"), Delivery::Fetch, Delivery::Fetch).expect("IT grant to a workspace");
+        let own = agent("w1", false);
+        let e = can_grant(&own, &facts(&ws, "agent:w1/s1", false), &Consumer::compute("w1", "node-1"), Delivery::Env, Delivery::Env).expect_err("own");
+        assert_eq!(e.code, "vault_owner_confirm_required");
+        let shell = Actor::Agent(AgentActor { workspace_id: "w1".into(), session_id: None, shell: true, vault_manage: true });
+        assert!(can_grant(&shell, &facts(&ws, "owner", true), &Consumer::compute("w1", "*"), Delivery::Env, Delivery::Env).is_err());
+        let member = Actor::Login { username: "m".into(), role: Role::Member };
+        assert_eq!(can_grant(&member, &facts(&ws, "owner", true), &Consumer::compute("w1", "*"), Delivery::Env, Delivery::Env).expect_err("member").code, "vault_admin_required");
+        let guest = Actor::Guest { username: "g".into(), workspace_id: "w1".into() };
+        assert!(can_grant(&guest, &facts(&ws, "owner", true), &Consumer::compute("w1", "*"), Delivery::Env, Delivery::Env).is_err());
+        can_grant(&Actor::Owner, &facts(&ws, "owner", true), &Consumer::compute("w1", "node-1"), Delivery::Env, Delivery::Fetch).expect("owner");
+        let admin = Actor::Login { username: "a".into(), role: Role::Admin };
+        can_grant(&admin, &facts(&srv, "owner", true), &Consumer::compute("w1", "*"), Delivery::Env, Delivery::Fetch).expect("admin");
     }
 
     #[test]

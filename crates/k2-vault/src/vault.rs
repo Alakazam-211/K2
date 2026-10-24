@@ -1383,6 +1383,13 @@ impl LocalVault {
             ConsumerKind::Workspace | ConsumerKind::Session | ConsumerKind::PublishedService => {}
             // `k2 job` runs (item 5): user secrets only, id `<ws>/<job>`.
             ConsumerKind::Job if m.namespace == Namespace::User && g.consumer.job_workspace().is_some() => {}
+            // Compute jobs on nodes (secret-env SE13/SE14): user secrets
+            // only, `<ws>/<node or *>`, env delivery only in v1.
+            ConsumerKind::Compute if m.namespace == Namespace::User && g.consumer.compute_parts().is_some() => {
+                if g.delivery != Delivery::Env {
+                    return Err(VaultError::bad_request("bad_delivery", "a compute job gets a secret as env only (--as env)"));
+                }
+            }
             ConsumerKind::Engine | ConsumerKind::Daemon if m.namespace == Namespace::System => {}
             // Garden v3 data sources [GV42]: a daemon consumer `source:<id>`
             // may hold a User secret (fetch only, narrowed to one origin by
@@ -1571,6 +1578,12 @@ impl LocalVault {
                 Requester::Job { workspace_id, job_id, .. } => {
                     g.consumer.kind == ConsumerKind::Job && g.consumer.id == format!("{workspace_id}/{job_id}")
                 }
+                // SE10/Q2: the named node, or `*` only on a node this
+                // server owns. Never an implicit workspace grant.
+                Requester::Compute { workspace_id, node_id, owned_node, .. } => match g.consumer.compute_parts() {
+                    Some((ws, node)) => ws == workspace_id && (node == node_id || (node == "*" && *owned_node)),
+                    None => false,
+                },
             };
             if matches {
                 out.push((g.delivery, g.env_name.clone(), g.file_name.clone(), g.hosts_narrowed.clone(), true));
@@ -1731,11 +1744,19 @@ impl LocalVault {
             (Use::Fetch(_), Some(s)) => format!("ok:sign={}", s.scheme()),
             _ => "ok".to_string(),
         };
-        let mut e = Entry::new(use_.action(), &actor_label, &outcome).secret(&m.id, Some(m.latest_version)).consumer(actor_label.clone());
+        // A compute release names the job and attempt (SE10).
+        let consumer_label = match who {
+            Requester::Compute { job_id, generation, .. } => format!("{actor_label} job {job_id} gen {generation}"),
+            _ => actor_label.clone(),
+        };
+        let mut e = Entry::new(use_.action(), &actor_label, &outcome).secret(&m.id, Some(m.latest_version)).consumer(consumer_label);
         if let Use::Fetch(o) | Use::Proxy(o) = use_ {
             e = e.host(o.render());
         }
         match use_ {
+            // A value leaving this machine for a node: one row per release,
+            // written now, never rolled up (SE10). No row, no release.
+            _ if matches!(who, Requester::Compute { .. }) => self.mutate(false, |_, _| Ok(((), vec![e])))?,
             Use::Fetch(_) | Use::Proxy(_) | Use::File | Use::Env => self.rollups.lock().add(&e),
             // Item 3: `agent_sign` audits once the signature exists.
             Use::Agent(_) => {}

@@ -1325,7 +1325,9 @@ pub fn consumer_for(c: &VaultCaller, to: &str) -> Result<Consumer, VaultError> {
             let (ws, job) = crate::jobs::routes::job_for_grant(c, id)?;
             Ok(Consumer::job(&ws, &job))
         }
-        _ => Err(err("bad_consumer", 400, "use ws:<name>, ws:*, session:<id>, service:<label> or job:<name>")),
+        // Compute secret-env (SE13): `compute:[<ws>/]<node|*>`.
+        "compute" => crate::compute_secrets::consumer(id, c.workspace_id()),
+        _ => Err(err("bad_consumer", 400, "use ws:<name>, ws:*, session:<id>, service:<label>, job:<name> or compute:<ws>/<node>")),
     }
 }
 
@@ -1334,6 +1336,7 @@ fn consumer_label(c: &VaultCaller, consumer: &Consumer) -> String {
     match consumer.kind {
         ConsumerKind::Workspace if consumer.id != "*" => format!("ws:{}", crate::vault::workspace_label(&consumer.id)),
         ConsumerKind::Job => crate::jobs::routes::grant_label(c, consumer),
+        ConsumerKind::Compute => crate::compute_secrets::label(consumer),
         _ => consumer.label(),
     }
 }

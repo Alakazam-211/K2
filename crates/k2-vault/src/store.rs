@@ -201,6 +201,12 @@ pub enum Requester {
     /// `job:<workspace id>/<job id>` reach it: no implicit workspace
     /// grants (Q13, least privilege for unattended runs).
     Job { workspace_id: String, job_id: String, name: String },
+    /// One attempt of a compute job, released to a node
+    /// (prd-compute-secret-env-v1 SE10). Only explicit `compute:` grants
+    /// reach it: `<ws>/<node_id>`, or `<ws>/*` when `owned_node` (this
+    /// server owns the node; never for a node where it is a tenant, Q2).
+    /// No implicit workspace grant ever matches.
+    Compute { workspace_id: String, node_id: String, job_id: String, generation: u32, owned_node: bool },
 }
 
 impl Requester {
@@ -213,6 +219,7 @@ impl Requester {
             Requester::System(s) => format!("daemon:{s}"),
             Requester::Source { id } => format!("source:{id}"),
             Requester::Job { workspace_id, name, .. } => format!("job:{workspace_id}/{name}"),
+            Requester::Compute { workspace_id, node_id, .. } => format!("compute:{workspace_id}/{node_id}"),
         }
     }
 }

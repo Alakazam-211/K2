@@ -178,7 +178,7 @@ capture zen links --help
 assert_eq "links --help exit" "$rc" "0"
 assert_contains "links --help is its own page" "$out" "k2 zen links — the sites a Garden opens"
 assert_contains "links --help says agents only read" "$out" "Agents can read the list, never add to it or forget a site"
-case "$out" in *"USAGE"*"k2 zen garden list"*) bad "links --help printed the general zen help" ;; *) ok "links --help is not the general zen help" ;; esac
+case "$out" in *"k2 zen — build Zen Gardens"*) bad "links --help printed the general zen help" ;; *) ok "links --help is not the general zen help" ;; esac
 capture zen links forget --help
 assert_eq "links forget --help exit" "$rc" "0"
 assert_contains "links forget --help is the links page" "$out" "k2 zen links forget <garden> <site> [--json]"

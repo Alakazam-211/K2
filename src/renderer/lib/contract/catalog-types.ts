@@ -147,6 +147,8 @@ export const CATALOG_ERROR_CODES = [
   'duplicate_label',
   // Garden access lists (prd-garden-access-v1 G22): the signer gate.
   'needs_editor',
+  // 0.46.4: a retired verb (k2.sources.ask until 0.47.0).
+  'retired',
 ] as const
 
 export type CatalogErrorCode = (typeof CATALOG_ERROR_CODES)[number]

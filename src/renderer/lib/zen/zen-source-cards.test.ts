@@ -6,7 +6,8 @@
 // unknown in its own colour, retrying n/of, recovered, muted and TEST
 // badges, the sleep / restart gap, unreachable (last value greyed), not
 // saved, removed, waiting for the first check, a down box as a red tile,
-// and Ask an agent on red, stale and unknown.
+// and (@1 and @2) Ask an agent on red, stale and unknown; @3 (0.46.4) draws
+// every state with no Ask an agent.
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -17,6 +18,7 @@ import type { SourceResult } from '@/lib/sources/sources-types'
 const ROOT = resolve(__dirname, '../../../../crates/k2-core/src/zen/builtin_widgets')
 const KIT = readFileSync(resolve(ROOT, 'sources-kit/kit.js'), 'utf8')
 const KIT2 = readFileSync(resolve(ROOT, 'sources-kit-2/kit.js'), 'utf8')
+const KIT3 = readFileSync(resolve(ROOT, 'sources-kit-3/kit.js'), 'utf8')
 const CARDS = [
   'fleet-grid-1',
   'version-spread-1',
@@ -28,9 +30,16 @@ const CARDS = [
   'relays-dns-2',
   'deploys-2',
   'money-alerts-2',
+  'fleet-grid-3',
+  'version-spread-3',
+  'relays-dns-3',
+  'deploys-3',
+  'money-alerts-3',
 ] as const
 type Card = (typeof CARDS)[number]
-const kitFor = (card: Card): string => (card.endsWith('-2') ? KIT2 : KIT)
+const kitFor = (card: Card): string => (card.endsWith('-3') ? KIT3 : card.endsWith('-2') ? KIT2 : KIT)
+/** @3 keeps @2's page (`index.html`): only card.js and the kit changed. */
+const pageDir = (card: Card): string => (card.endsWith('-3') ? card.replace(/-3$/, '-2') : card)
 
 interface Sub {
   address: string
@@ -52,7 +61,7 @@ async function flush(): Promise<void> {
 }
 
 async function mount(card: Card, config: Record<string, string | number | boolean>): Promise<Mounted> {
-  const html = readFileSync(resolve(ROOT, card, 'index.html'), 'utf8')
+  const html = readFileSync(resolve(ROOT, pageDir(card), 'index.html'), 'utf8')
   document.body.innerHTML = /<body>([\s\S]*)<\/body>/.exec(html)?.[1].replace(/<script[\s\S]*?<\/script>/g, '') ?? ''
   const subs: Sub[] = []
   const asks: Array<[string, string | null]> = []
@@ -102,6 +111,7 @@ function healthy(card: Card): ZenSourceView {
   switch (card) {
     case 'relays-dns-1':
     case 'relays-dns-2':
+    case 'relays-dns-3':
       return view({
         items: [
           fixtureItem('ohana', { fields: { version: '0.45.6', phase: 'ready', relay: 'k2e-01', up: true } }),
@@ -110,6 +120,7 @@ function healthy(card: Card): ZenSourceView {
       })
     case 'deploys-1':
     case 'deploys-2':
+    case 'deploys-3':
       return view({
         items: [
           fixtureItem('dpl_a', { fields: { state: 'READY', url: 'app-a.vercel.app', created: (NOW - 120) * 1000, target: 'production' } }),
@@ -118,6 +129,7 @@ function healthy(card: Card): ZenSourceView {
       })
     case 'money-alerts-1':
     case 'money-alerts-2':
+    case 'money-alerts-3':
       return view({ keep: 'states', fields: {}, items: [], counts: { ok: 0, warn: 0, crit: 0, unknown: 0 } })
     default:
       return view()
@@ -208,6 +220,49 @@ describe.each(CARDS)('%s: every PRD §12 state', (card) => {
     expect(m.card.textContent).toContain('config.source')
     expect(m.subs).toHaveLength(0)
   })
+})
+
+describe('@3 (0.46.4): no Ask an agent', () => {
+  const red = (card: Card): ZenSourceView => {
+    const h = healthy(card)
+    if (card.startsWith('money-alerts')) return { ...h, health: 'crit', display: 'crit' }
+    if (card.startsWith('deploys')) {
+      return view({
+        health: 'crit',
+        display: 'crit',
+        items: [fixtureItem('dpl_x', { health: 'crit', fields: { state: 'ERROR', url: 'x.vercel.app', created: (NOW - 60) * 1000, target: 'production' } })],
+        counts: { ok: 0, warn: 0, crit: 1, unknown: 0 },
+      })
+    }
+    return view({
+      health: 'crit',
+      display: 'crit',
+      items: [
+        fixtureItem('ohana', { health: 'crit', reason: 'timeout', fields: { version: null, phase: null, relay: 'k2e-01', up: false } }),
+        fixtureItem('luzz', { health: 'unknown', fields: { relay: 'k2e-02' } }),
+      ],
+      counts: { ok: 0, warn: 0, crit: 1, unknown: 1 },
+    })
+  }
+
+  it.each(['fleet-grid', 'version-spread', 'relays-dns', 'deploys', 'money-alerts'] as const)(
+    '%s: @2 offers Ask on red; @3 draws the same red with no Ask button',
+    async (name) => {
+      const two = await mount(`${name}-2` as Card, { source: 'fleet' })
+      two.push(red(`${name}-2` as Card))
+      const twoAsk = two.card.querySelectorAll('[data-k2c-ask]').length
+      const twoText = two.card.textContent ?? ''
+      vi.unstubAllGlobals()
+      const three = await mount(`${name}-3` as Card, { source: 'fleet' })
+      three.push(red(`${name}-3` as Card))
+      expect(three.card.querySelectorAll('[data-k2c-ask]').length, `${name}@3`).toBe(0)
+      expect(three.card.textContent ?? '').not.toContain('Ask')
+      expect(three.asks).toEqual([])
+      // The card still says what's wrong: the same words as @2, without Ask.
+      expect((three.card.textContent ?? '').length, `${name}@3 isn't blank`).toBeGreaterThan(10)
+      if (twoAsk > 0) expect(twoText.replace(/Ask an agent|Ask/g, '')).toBe(three.card.textContent)
+    },
+  )
 })
 
 describe('card specifics', () => {

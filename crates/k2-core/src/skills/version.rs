@@ -192,7 +192,10 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// for 0.46.4).
 /// v38 = widgets stacked in a column are separate tiles; `joined = true` on
 /// a `[[layout.column]]` keeps one panel (Rosson 2026-10-23, for 0.46.4).
-pub const SKILL_VERSION_ZEN: u32 = 38;
+/// v39 = the data-source cards are `@3` (no "Ask an agent") and
+/// `k2.sources.ask` answers `retired` until 0.47.0 (Rosson 2026-10-23, for
+/// 0.46.4).
+pub const SKILL_VERSION_ZEN: u32 = 39;
 /// Bumped to 5 in 0.39.0: same Phase 2.1 A25 verb refresh applied to
 /// the workspace-root template body (Cli tools section, workflow
 /// docs). Was 4 since 0.32.7 (SOURCE sub-regions adoption).

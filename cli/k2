@@ -21158,14 +21158,15 @@ GOTCHAS
   never fire for it.
 
 CARDS
-  Built-in: k2:fleet-grid@2, k2:version-spread@2, k2:relays-dns@2,
-  k2:deploys@2, k2:money-alerts@2 (config.source = "name" or
+  Built-in: k2:fleet-grid@3, k2:version-spread@3, k2:relays-dns@3,
+  k2:deploys@3, k2:money-alerts@3 (config.source = "name" or
   "name::host"; config.sources = "a, b" for several, merged by item key).
+  @3 (0.46.4) is @2 without "Ask an agent" (k2.sources.ask is retired).
   @2 (0.46.1) says "soft crit 2/3", reads K2 Web's ops shapes (boxes with
   customer / needs_go, edge relays, billing), shows a named list with
-  config.list, and subscribes again by itself after a refusal. @1 still
-  runs as shipped. A custom widget asks for cap sources:read. Its errors:
-  k2 zen widget errors <name>.
+  config.list, and subscribes again by itself after a refusal. @1 and @2
+  still run as shipped. A custom widget asks for cap sources:read. Its
+  errors: k2 zen widget errors <name>.
 EOF
 }
 # END_SOURCES_B2
@@ -60853,7 +60854,7 @@ sources:read (Read data sources)
   k2.sources.history(address, field, {fromAt, toAt})                                                  portable sources-v1             const h = await k2.sources.history(k2.config.source, 'count')  [not_bound server_not_saved unreachable removed no_history]
   k2.sources.subscribe(address, cb)                                                                   portable sources-v1             const off = k2.sources.subscribe(k2.config.source, (v) => draw(v))  [not_bound server_not_saved unreachable removed rate_limited]
   k2.sources.refresh(address)                                                                         portable sources-v1             await k2.sources.refresh(k2.config.source)  [not_bound server_not_saved unreachable removed rate_limited]
-  k2.sources.ask(address, itemKey?)                                                                   local    sources-v1             await k2.sources.ask(k2.config.source, tile.key)  [not_bound]
+  k2.sources.ask(address, itemKey?)                                                                   local    sources-v1             await k2.sources.ask(k2.config.source, tile.key)  [not_bound retired]
 links:open (Open links in your browser)
   k2.links.open(url)                                                                                  local    zen-widgets-v1         const {ok} = await k2.open('https://example.com/report')  [bad_args rate_limited]
 files:read (Read files (also shows heartbeat instructions))

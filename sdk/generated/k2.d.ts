@@ -1026,7 +1026,7 @@ export interface StoreTxHandle {
 }
 
 /** The shared error codes (UWA10). */
-export type K2ErrorCode = 'cap_not_granted' | 'not_bound' | 'rate_limited' | 'too_large' | 'unknown_verb' | 'verb_unavailable' | 'verb_local' | 'not_exposed' | 'sending_off' | 'server_not_saved' | 'unreachable' | 'removed' | 'no_history' | 'failed' | 'conflict' | 'space_full' | 'value_too_large' | 'bad_key' | 'not_granted' | 'resync' | 'author_unknown' | 'stale_widget' | 'store_full' | 'bad_tx' | 'tx_expired' | 'busy' | 'paused' | 'bad_args' | 'bad_shape' | 'pass_required' | 'pass_invalid' | 'pass_wrong_link' | 'not_on_link' | 'json_required' | 'skin_room' | 'usage' | 'not_found' | 'bad_login' | 'locked' | 'card_not_pending' | 'guest_required' | 'no_app_pass' | 'no_app_key' | 'no_chat_grant' | 'chat_unavailable' | 'app_pass_required' | 'grant_required' | 'outside_app_rooms' | 'above_role' | 'has_role' | 'confirm_required' | 'declined' | 'refresh_invalid' | 'refresh_reused' | 'person_pass_required' | 'wallet_off' | 'duplicate_label' | 'needs_editor'
+export type K2ErrorCode = 'cap_not_granted' | 'not_bound' | 'rate_limited' | 'too_large' | 'unknown_verb' | 'verb_unavailable' | 'verb_local' | 'not_exposed' | 'sending_off' | 'server_not_saved' | 'unreachable' | 'removed' | 'no_history' | 'failed' | 'conflict' | 'space_full' | 'value_too_large' | 'bad_key' | 'not_granted' | 'resync' | 'author_unknown' | 'stale_widget' | 'store_full' | 'bad_tx' | 'tx_expired' | 'busy' | 'paused' | 'bad_args' | 'bad_shape' | 'pass_required' | 'pass_invalid' | 'pass_wrong_link' | 'not_on_link' | 'json_required' | 'skin_room' | 'usage' | 'not_found' | 'bad_login' | 'locked' | 'card_not_pending' | 'guest_required' | 'no_app_pass' | 'no_app_key' | 'no_chat_grant' | 'chat_unavailable' | 'app_pass_required' | 'grant_required' | 'outside_app_rooms' | 'above_role' | 'has_role' | 'confirm_required' | 'declined' | 'refresh_invalid' | 'refresh_reused' | 'person_pass_required' | 'wallet_off' | 'duplicate_label' | 'needs_editor' | 'retired'
 
 /** Codes worth retrying unchanged (catalog `retryable`); handler-object subscriptions retry these on their own. */
 export type K2_RETRYABLE = 'not_bound' | 'rate_limited' | 'unreachable' | 'busy'
@@ -1318,7 +1318,7 @@ export interface K2 {
     subscribe(address: string, handlers: K2Handlers<SourceView>): () => void
     /** Ask the source's server to check now (at most once every 15 seconds). cap sources:read · portable · sources-v1. e.g. `await k2.sources.refresh(k2.config.source)` */
     refresh(address: string): Promise<SourceRefresh>
-    /** Open K2's Ask an agent box about this source (K2 writes the draft; nothing is sent). cap sources:read · local · sources-v1. e.g. `await k2.sources.ask(k2.config.source, tile.key)` */
+    /** Retired in 0.46.4 (Ask an agent is gone): answers retired; removed in 0.47.0. cap sources:read · local · sources-v1. e.g. `await k2.sources.ask(k2.config.source, tile.key)` */
     ask(address: string, itemKey?: string | null): Promise<SourceAsk>
   }
   readonly links: {

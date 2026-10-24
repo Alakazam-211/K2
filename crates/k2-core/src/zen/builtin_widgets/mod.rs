@@ -307,18 +307,78 @@ pub const BUILTIN_WIDGETS: &[BuiltinWidget] = &[
             ("card.js", include_str!("money-alerts-2/card.js")),
         ],
     },
+    // The data-source cards' third version (0.46.4, Rosson 2026-10-23: "not
+    // useful"): @2 without "Ask an agent" on a tile, a row or the money
+    // banner (`sources-kit-3/`, and money-alerts' own button). Manifest,
+    // page and style are @2's bytes; @1 and @2 stay as shipped (their button
+    // now gets k2.sources.ask's `retired` answer).
+    BuiltinWidget {
+        name: "fleet-grid",
+        version: 3,
+        files: &[
+            ("manifest.json", include_str!("fleet-grid-2/manifest.json")),
+            ("index.html", include_str!("fleet-grid-2/index.html")),
+            ("kit.css", include_str!("sources-kit-2/kit.css")),
+            ("kit.js", include_str!("sources-kit-3/kit.js")),
+            ("card.js", include_str!("fleet-grid-3/card.js")),
+        ],
+    },
+    BuiltinWidget {
+        name: "version-spread",
+        version: 3,
+        files: &[
+            ("manifest.json", include_str!("version-spread-2/manifest.json")),
+            ("index.html", include_str!("version-spread-2/index.html")),
+            ("kit.css", include_str!("sources-kit-2/kit.css")),
+            ("kit.js", include_str!("sources-kit-3/kit.js")),
+            ("card.js", include_str!("version-spread-3/card.js")),
+        ],
+    },
+    BuiltinWidget {
+        name: "relays-dns",
+        version: 3,
+        files: &[
+            ("manifest.json", include_str!("relays-dns-2/manifest.json")),
+            ("index.html", include_str!("relays-dns-2/index.html")),
+            ("kit.css", include_str!("sources-kit-2/kit.css")),
+            ("kit.js", include_str!("sources-kit-3/kit.js")),
+            ("card.js", include_str!("relays-dns-3/card.js")),
+        ],
+    },
+    BuiltinWidget {
+        name: "deploys",
+        version: 3,
+        files: &[
+            ("manifest.json", include_str!("deploys-2/manifest.json")),
+            ("index.html", include_str!("deploys-2/index.html")),
+            ("kit.css", include_str!("sources-kit-2/kit.css")),
+            ("kit.js", include_str!("sources-kit-3/kit.js")),
+            ("card.js", include_str!("deploys-3/card.js")),
+        ],
+    },
+    BuiltinWidget {
+        name: "money-alerts",
+        version: 3,
+        files: &[
+            ("manifest.json", include_str!("money-alerts-2/manifest.json")),
+            ("index.html", include_str!("money-alerts-2/index.html")),
+            ("kit.css", include_str!("sources-kit-2/kit.css")),
+            ("kit.js", include_str!("sources-kit-3/kit.js")),
+            ("card.js", include_str!("money-alerts-3/card.js")),
+        ],
+    },
 ];
 
 /// The data-source cards and the presets each pairs with (contract
 /// §11.4): `k2 sources propose --preset <preset>` makes the source.
-/// The newest version of each (0.46.1: `@2`); `@1` still runs in Gardens
-/// that name it.
+/// The newest version of each (0.46.4: `@3`, no "Ask an agent"); `@1` and
+/// `@2` still run in Gardens that name them.
 pub const SOURCE_CARDS: &[(&str, &[&str])] = &[
-    ("k2:fleet-grid@2", &["k2-fleet", "k2-fleet-summary"]),
-    ("k2:version-spread@2", &["k2-fleet", "k2-fleet-summary", "github-latest-release"]),
-    ("k2:relays-dns@2", &["k2-fleet-summary", "gatus"]),
-    ("k2:deploys@2", &["vercel-deployments"]),
-    ("k2:money-alerts@2", &["stripe-past-due"]),
+    ("k2:fleet-grid@3", &["k2-fleet", "k2-fleet-summary"]),
+    ("k2:version-spread@3", &["k2-fleet", "k2-fleet-summary", "github-latest-release"]),
+    ("k2:relays-dns@3", &["k2-fleet-summary", "gatus"]),
+    ("k2:deploys@3", &["vercel-deployments"]),
+    ("k2:money-alerts@3", &["stripe-past-due"]),
 ];
 
 /// The sha256 of each released built-in's files, `name\0bytes\0` in list
@@ -342,6 +402,11 @@ pub const BUILTIN_WIDGET_HASHES: &[(&str, &str)] = &[
     ("k2:kanban@3", "e9aae003a07e3d4e17e39738b376aab6ab7556250cd3a6e662211521e8425682"),
     ("k2:kanban@4", "81cff0f7ee199170f8531b0dcfcbdf4f39387810bcfc91ac0492f5d7fba2a3bf"),
     ("k2:kanban@5", "d591d4b1a8872fc9b67e1a303f5bc873a990cc3fcf292127558833a9f38896ca"),
+    ("k2:fleet-grid@3", "2d5e128bfd793463df4bfb7c17252c8468bfc6fa89e019e5bf4ef715b374a5cc"),
+    ("k2:version-spread@3", "ed09b33978cddee93ba2d7b0297c2e71471504aacda0fda014d0814011d3c53b"),
+    ("k2:relays-dns@3", "4cfc13971951b12442d9d40f05a2e7e4417af5094c4a016c7c182a332c584a0d"),
+    ("k2:deploys@3", "6a9e85ef5a3ac11635533ef862ef426ff82d077ef70985a8650162c980481686"),
+    ("k2:money-alerts@3", "07a5203fced5553be85ef51222ce86ab4646f9001cfdf5c029981470289a5bf5"),
 ];
 
 /// The hash [`BUILTIN_WIDGET_HASHES`] pins.
@@ -1030,16 +1095,18 @@ mod tests {
     #[test]
     fn source_cards_are_clean_and_pair_with_presets() {
         let ids: Vec<String> = SOURCE_CARDS.iter().map(|(id, _)| id.to_string()).collect();
-        assert_eq!(ids, ["k2:fleet-grid@2", "k2:version-spread@2", "k2:relays-dns@2", "k2:deploys@2", "k2:money-alerts@2"]);
-        // Both released versions of each card stay clean; @1 still resolves,
-        // and the bare `k2:<card>` is @2 (the newest).
+        assert_eq!(ids, ["k2:fleet-grid@3", "k2:version-spread@3", "k2:relays-dns@3", "k2:deploys@3", "k2:money-alerts@3"]);
+        // Every released version of each card stays clean; @1 and @2 still
+        // resolve, and the bare `k2:<card>` is @3 (the newest, 0.46.4).
         let both: Vec<(String, &[&str])> = SOURCE_CARDS
             .iter()
-            .flat_map(|(id, presets)| [(id.replace("@2", "@1"), *presets), (id.to_string(), *presets)])
+            .flat_map(|(id, presets)| {
+                [(id.replace("@3", "@1"), *presets), (id.replace("@3", "@2"), *presets), (id.to_string(), *presets)]
+            })
             .collect();
         for (id, _) in SOURCE_CARDS {
-            let bare = id.trim_end_matches("@2");
-            assert_eq!(builtin_widget(&parse_widget_ref(bare).expect("parses")).map(|w| w.id()).as_deref(), Some(*id), "{bare} is @2");
+            let bare = id.trim_end_matches("@3");
+            assert_eq!(builtin_widget(&parse_widget_ref(bare).expect("parses")).map(|w| w.id()).as_deref(), Some(*id), "{bare} is @3");
         }
         for (id, presets) in &both {
             let id = id.as_str();
@@ -1064,9 +1131,48 @@ mod tests {
                 );
             }
         }
-        for kit in [include_str!("sources-kit/kit.js"), include_str!("sources-kit-2/kit.js")] {
+        for kit in [include_str!("sources-kit/kit.js"), include_str!("sources-kit-2/kit.js"), include_str!("sources-kit-3/kit.js")] {
             assert!(!kit.contains("innerHTML") && !kit.contains("fetch(") && !kit.contains("localStorage"), "the kit is sealed-frame clean");
         }
+    }
+
+    /// 0.46.4 (Rosson 2026-10-23: "not useful"): the @3 cards draw no "Ask an
+    /// agent" button and never call k2.sources.ask (it answers `retired`).
+    /// Apart from that, @3 is @2: the same manifest, page, style and kit.
+    #[test]
+    fn source_cards_at_3_have_no_ask_an_agent() {
+        let kit3 = include_str!("sources-kit-3/kit.js");
+        let kit2 = include_str!("sources-kit-2/kit.js");
+        // Code lines only: the comments may still name what was removed.
+        let code = |k: &str| -> Vec<String> {
+            k.lines()
+                .filter(|l| {
+                    let t = l.trim_start();
+                    !t.starts_with("//") && !t.starts_with('*') && !t.starts_with("/*")
+                })
+                .map(str::to_string)
+                .collect()
+        };
+        for (id, _) in SOURCE_CARDS {
+            let w = builtin_widget(&parse_widget_ref(id).expect("parses")).unwrap_or_else(|| panic!("{id} ships"));
+            assert_eq!(w.version, 3, "{id}");
+            let two = builtin_widget(&parse_widget_ref(&id.replace("@3", "@2")).expect("parses")).expect("@2 ships");
+            for f in ["manifest.json", "index.html", "kit.css"] {
+                assert_eq!(file(w, f), file(two, f), "{id}: {f} is @2's");
+            }
+            assert_eq!(file(w, "kit.js"), kit3, "{id}: kit.js is sources-kit-3");
+            for js in [code(file(w, "card.js")).join("\n"), code(kit3).join("\n")] {
+                assert!(!js.contains("sources.ask") && !js.contains("ctx.ask") && !js.contains("k2c-ask"), "{id}: no Ask an agent");
+                assert!(!js.contains("'Ask an agent'") && !js.contains("'Ask'"), "{id}: no Ask button text");
+            }
+        }
+        // Everything else in the kit is @2's: kit-3 adds no code line, and
+        // keeps all of @2's but the ask button and ctx.ask (about 20 lines).
+        let three = code(kit3);
+        let two = code(kit2);
+        assert!(three.iter().all(|l| two.contains(l)), "kit-3 adds no code");
+        let dropped = two.iter().filter(|l| !three.contains(l)).count();
+        assert!(dropped <= 25, "kit-3 keeps @2's code but the ask lines: {dropped} dropped");
     }
 
     /// Integration (Zen v2, B1 × B3): every library a built-in widget asks

@@ -568,6 +568,9 @@ mod tests {
                 // Garden access lists (prd-garden-access-v1 G22): the
                 // signer gate's refusal (switch on only).
                 "needs_editor",
+                // 0.46.4: a verb K2 retired answers this until its removal
+                // (k2.sources.ask until 0.47.0).
+                "retired",
             ]
         );
         let retry: Vec<&str> = catalog().errors.iter().filter(|e| e.retryable).map(|e| e.code.as_str()).collect();

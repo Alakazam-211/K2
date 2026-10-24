@@ -532,8 +532,9 @@ change, `k2 zen validate --widget <w> --sign`.**\n\n\
         "- `k2 zen widget put board --dir ./board [--prune]` writes the whole folder in one\nchecked call (a folder with errors writes nothing) and signs it as you. It needs you\non the list of every Garden that places the widget (a draft placed nowhere is open);\notherwise it answers `garden_access_needed` (exit 3) and K2 asks the person.\n",
     ),
     (
-        "`duplicate_label`).\n\n### Rules\n\n",
-        "`duplicate_label`, `needs_editor`).\n\n### Rules\n\n",
+        // 0.46.4: `retired` (k2.sources.ask until 0.47.0) is the last code.
+        "`duplicate_label`, `retired`).\n\n### Rules\n\n",
+        "`duplicate_label`, `needs_editor`, `retired`).\n\n### Rules\n\n",
     ),
 ];
 
@@ -941,9 +942,8 @@ the source's **card view** from the server that runs it. Make and inspect source
   and/or `store:write` in its caps too, it keeps them. Validate notes the reach\n\
   (`sources_reach_thread`, `sources_reach_store`) and `k2 zen widget show` says it:\n\
   source values it shows can reach the agents it posts to, or agents granted its data.\n\
-  Post only what the person asked for. Without `thread:post`,\n\
-  `k2.sources.ask(address, itemKey?)` opens K2's Ask an agent box: K2 writes the\n\
-  question, the human sends it.\n\
+  Post only what the person asked for. `k2.sources.ask` is retired (0.46.4: it answers\n\
+  `retired`, and goes in 0.47.0); never draw an \"Ask an agent\" button.\n\
 - Its runtime errors reach you as class, code and line only, never message text\n\
   (`k2 zen widget errors <name>`), so don't put values in thrown errors.\n\
 - Draw from the view: `display` (pending / paused / stale / ok / warn / crit /\n\
@@ -977,7 +977,7 @@ k2.connected.then(() => {\n\
 ```\n\n\
 Charts: name a pinned library in `requires.libs` (`uplot@1.6.32` for sparklines and\n\
 history lines; `chart.js`, `echarts`, `d3` too). They run offline; no CDN, no eval.\n\n\
-**Built-in cards** (place them with `widget = \"k2:<card>@2\"`, `config.source` and, for\n\
+**Built-in cards** (place them with `widget = \"k2:<card>@3\"`, `config.source` and, for\n\
 several sources, `config.sources = \"a, b\"`):\n\n",
     );
     for (id, presets) in super::builtin_widgets::SOURCE_CARDS {
@@ -987,13 +987,14 @@ several sources, `config.sources = \"a, b\"`):\n\n",
         "\n`k2 sources propose --preset k2-fleet --preset-arg boxes=ohana,luzz --name fleet --label Fleet`\n\
 makes the fleet source; `config.source = \"fleet::<that server>\"` shows it on a Mac's Garden.\n\
 `k2-fleet-summary` (K2 Web's one route) gives the same item keys and fields, so a card\n\
-keeps working when the source switches. `k2:version-spread@2` measures boxes against\n\
+keeps working when the source switches. `k2:version-spread@3` measures boxes against\n\
 `config.latest` (a `github-latest-release` source), else a source's `target_version`, else\n\
-`config.target`; `k2:money-alerts@2` shows states only by default and K2 Web's ops billing.\n\
-`@2` (0.46.1) merges `config.source` + `config.sources` by item key (a box in two sources is\n\
+`config.target`; `k2:money-alerts@3` shows states only by default and K2 Web's ops billing.\n\
+`@3` (0.46.4) is `@2` without \"Ask an agent\". `@2` (0.46.1) merges `config.source` + `config.sources` by item key (a box in two sources is\n\
 one tile, the worst health wins), says \"soft crit 2/3\", keeps `extract.lists` items out of\n\
 the main grid (`config.list = \"certs\"` shows one), and subscribes again by itself after a\n\
-refusal (5 s, doubling to 60 s). `k2:<card>@1` still runs as shipped.\n\n",
+refusal (5 s, doubling to 60 s). `k2:<card>@1` and `@2` still run as shipped; move a\n\
+Garden's cards to `@3` when you next edit it.\n\n",
     );
     s
 }
@@ -1419,7 +1420,7 @@ mod tests {
             assert!(s.contains(needle), "the k2-zen skill lost {needle}");
         }
         for needle in ["### Cards that read data sources", "`sources:read`", "sources_needs_cap", "sources_reach_thread",
-            "server_not_saved", "err.last", "serverNow - updatedAt", "k2:fleet-grid@2", "k2:money-alerts@2", "--preset k2-fleet",
+            "server_not_saved", "err.last", "serverNow - updatedAt", "k2:fleet-grid@3", "k2:money-alerts@3", "--preset k2-fleet",
             "config.sources", "soft crit 2/3", "subscribes again by itself"]
         {
             assert!(s.contains(needle), "the k2-zen skill lost {needle}");

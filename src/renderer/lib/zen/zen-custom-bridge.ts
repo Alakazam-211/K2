@@ -241,6 +241,10 @@ export interface ZenCustomLayer {
   dispose(): void
 }
 
+/** What a retired `k2.sources.ask` answers (code `retired`, 0.46.4). */
+export const ZEN_SOURCES_ASK_RETIRED =
+  'k2.sources.ask is retired: K2 no longer opens an Ask an agent box from a card (0.46.4), and the verb goes in 0.47.0.'
+
 /** How long a `not_bound` `sources.subscribe` waits for the placement to
  *  bind its address before the refusal reaches the widget (0.46.1 S3). A
  *  refused subscription ends in the frame (its onError), so K2 holds it
@@ -845,12 +849,12 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
       })
     },
     // K2's own Ask box: the widget supplies no text (works with or without thread:post).
-    'sources.ask': async (args) => {
-      const { address, src } = needSource('sources.ask', args[0])
-      const key = args[1]
-      if (key !== undefined && key !== null && typeof key !== 'string') refuse('failed', 'sources.ask takes an item key (text) or nothing')
-      const opened = await src.ask(address, typeof key === 'string' && key ? key.slice(0, 200) : null)
-      return { opened }
+    // Retired in 0.46.4 (Rosson 2026-10-23: Ask an agent wasn't useful): the
+    // cap and the address are still checked, then it answers `retired` and
+    // opens nothing; the row goes in 0.47.0 (retirement ledger).
+    'sources.ask': (args) => {
+      needSource('sources.ask', args[0])
+      return refuse('retired', ZEN_SOURCES_ASK_RETIRED)
     },
   }
 

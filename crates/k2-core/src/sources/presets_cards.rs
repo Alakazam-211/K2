@@ -4,11 +4,11 @@
 //!
 //! | Preset | Args | Card |
 //! |---|---|---|
-//! | `k2-fleet` | `boxes=ohana,luzz,…` (a bare label is `<label>.k2.dev`) | `k2:fleet-grid@2`, `k2:version-spread@2` |
+//! | `k2-fleet` | `boxes=ohana,luzz,…` (a bare label is `<label>.k2.dev`) | `k2:fleet-grid@3`, `k2:version-spread@3` |
 //! | `k2-fleet-summary` | `url`, `secret` | the same cards, from K2 Web's one route |
-//! | `github-latest-release` | `repo=Owner/Name` | `k2:version-spread@2` (`latest`) |
-//! | `vercel-deployments` | `team`, `secret`, `limit?` (≤ 20) | `k2:deploys@2` |
-//! | `stripe-past-due` | `secret` | `k2:money-alerts@2` |
+//! | `github-latest-release` | `repo=Owner/Name` | `k2:version-spread@3` (`latest`) |
+//! | `vercel-deployments` | `team`, `secret`, `limit?` (≤ 20) | `k2:deploys@3` |
+//! | `stripe-past-due` | `secret` | `k2:money-alerts@3` |
 //!
 //! **With or without `fleet-summary`** (Q6, pending): `k2-fleet` fans out
 //! over each box's public `/boot-status`; `k2-fleet-summary` reads one JSON

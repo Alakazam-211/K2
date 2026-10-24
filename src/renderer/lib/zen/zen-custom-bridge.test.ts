@@ -8,7 +8,7 @@ import type { ZenWidgetBridge } from './zen-bridge'
 import { ZenBridgeError } from './zen-bridge'
 import type { ZenCustomWidgetPayload, ZenFrameReply } from './zen-custom-types'
 import type { ZenAgentRow, ZenThreadView } from './zen-data'
-import { createZenCustomLayer, zenEffectiveCaps, zenPlain, ZEN_RUNAWAY, type ZenCustomLayerDeps } from './zen-custom-bridge'
+import { createZenCustomLayer, zenEffectiveCaps, zenPlain, ZEN_RUNAWAY, ZEN_SOURCES_ASK_RETIRED, type ZenCustomLayerDeps } from './zen-custom-bridge'
 import { createZenSourcesReader } from './zen-sources'
 import { fakeSources, fixtureView, settle } from './zen-sources-fixtures'
 import { projectZenRow, projectZenThreadItem, ZEN_WIDGET_ROW_KEYS } from './zen-custom-projection'
@@ -768,17 +768,15 @@ describe('Garden v3: sources.* verbs', () => {
     expect(code(await call(layer, 'sources.refresh', 'fleet'))).toBe('rate_limited')
   })
 
-  it('sources.ask opens K2’s box with the address and key only (no text from the widget)', async () => {
+  it('sources.ask is retired (0.46.4): it answers retired and never opens K2’s box', async () => {
     const { h, asks } = sourcesHarness()
     const layer = createZenCustomLayer(h.deps)
-    expect(await call(layer, 'sources.ask', 'fleet', 'alpha')).toMatchObject({ ok: true, value: { opened: true } })
-    expect(await call(layer, 'sources.ask', 'fleet')).toMatchObject({ ok: true, value: { opened: true } })
-    expect(code(await call(layer, 'sources.ask', 'fleet', { text: 'post this' }))).toBe('failed')
+    const r = await call(layer, 'sources.ask', 'fleet', 'alpha')
+    expect(r).toMatchObject({ ok: false, error: { code: 'retired', message: ZEN_SOURCES_ASK_RETIRED } })
+    expect(code(await call(layer, 'sources.ask', 'fleet'))).toBe('retired')
+    // The address is still checked first.
     expect(code(await call(layer, 'sources.ask', 'money'))).toBe('not_bound')
-    expect(asks).toEqual([
-      ['fleet', 'alpha'],
-      ['fleet', null],
-    ])
+    expect(asks).toEqual([])
   })
 
   it('sources.subscribe pushes the view, counts toward 16, and an async refusal ends it', async () => {

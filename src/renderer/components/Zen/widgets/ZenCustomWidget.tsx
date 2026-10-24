@@ -18,10 +18,10 @@
 //      frame; K2's own built-ins (the Diary) draw edge to edge with none.
 //      When the widget fills a full-canvas Garden that has a menu, Reload
 //      is "Reload <name>" in that menu instead (`zen-fill-reload`).
-//      Garden v3: a widget that reads data sources also gets "Ask an agent
-//      about this" there (one row per source it reads; K2's own Ask box,
-//      `ZenSourceAsk`) and "Open <host>" for a source's link; K2's built-in
-//      data-source cards get the menu too.
+//      Garden v3: a widget that reads data sources also gets "Open <host>"
+//      there for a source's link; K2's built-in data-source cards get the
+//      menu too. (Its "Ask an agent about this" rows went in 0.46.4, Rosson
+//      2026-10-23: not useful; `ZenSourceAsk` goes in 0.47.0.)
 //      prd-garden-access-v1 G26a: with Garden access on, an agent-written
 //      widget's menu also has History… (the widget history modal), read
 //      "History · not signed" when its live version fails the signer gate
@@ -49,7 +49,7 @@ import type { ZenWidgetProps } from '../zen-registry'
 import { zenButtonStyle } from './ZenOverlay'
 import { ZenCustomFrame, type ZenCustomLoadProblem } from './ZenCustomFrame'
 import { openUrl } from '@tauri-apps/plugin-opener'
-import { zenBoundSourceAddresses, zenCustomSourcesFor } from '@/lib/zen/zen-custom-sources'
+import { zenBoundSourceAddresses } from '@/lib/zen/zen-custom-sources'
 import { zenSourcesReader } from '@/lib/zen/zen-sources-live'
 import { loadGardenAccessSwitch, useGardenAccessSwitchStore } from '@/lib/zen/garden-access-api'
 import { ZenGardenHistoryModal } from './ZenGardenHistoryModal'
@@ -149,19 +149,18 @@ export function zenWidgetHistoryLabel(opts: {
 }
 
 /** K2's ⋯ menu at the box's top right, outside the frame (UW25): Reload,
- *  and for a card reading data sources, Ask an agent about each source.
+ *  and for a card reading data sources, Open <host> for each source's link.
  *  With Garden access on, History… for an agent-written widget (G26a). */
 function CornerMenu({
   name,
   onReload,
   askAbout = [],
-  onAsk,
   history,
 }: {
   name: string
   onReload(): void
+  /** The sources the card reads (their links become Open <host>). */
   askAbout?: readonly string[]
-  onAsk?(address: string): void
   /** The widget folder and Garden for History…; absent for a built-in. */
   history?: { widget: string; garden: string; builtin: boolean; signed: boolean | undefined }
 }): React.JSX.Element {
@@ -242,24 +241,6 @@ function CornerMenu({
             >
               Reload
             </button>
-            {onAsk &&
-              askAbout.map((address) => (
-                <button
-                  key={address}
-                  type="button"
-                  role="menuitem"
-                  data-zen-custom-menu-item="ask"
-                  data-zen-ask-source={address}
-                  onClick={() => {
-                    setOpen(false)
-                    onAsk(address)
-                  }}
-                  className="flex w-full items-center text-left cursor-pointer"
-                  style={{ padding: '6px 10px', borderRadius: 'calc(var(--zen-radius) - 4px)', color: 'var(--zen-text)' }}
-                >
-                  {askAbout.length > 1 ? `Ask an agent about ${address}` : 'Ask an agent about this'}
-                </button>
-              ))}
             {links.map((l) => (
               <button
                 key={`link:${l.address}`}
@@ -431,7 +412,6 @@ export function ZenCustomWidget({ decl, bridge }: ZenWidgetProps): React.JSX.Ele
             name={widget.name}
             onReload={() => reloadZenWidget(key)}
             askAbout={zenBoundSourceAddresses(widget)}
-            onAsk={(address) => void zenCustomSourcesFor(gid, () => widget).ask(address, null)}
             history={{ widget: widget.widget, garden: gid, builtin, signed: widget.signed }}
           />
         )}

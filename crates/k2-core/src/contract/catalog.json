@@ -194,7 +194,8 @@
     {"code": "person_pass_required", "doc": "Wallet verbs need an App user's own login session pass. Connect logins, the owner token, agent passports and an App's own pass have no wallet."},
     {"code": "wallet_off", "doc": "This App doesn't use personal wallets; its owner turns them on."},
     {"code": "duplicate_label", "doc": "The person already has an item with that label for that provider."},
-    {"code": "needs_editor", "doc": "Garden access lists on: this widget version isn't signed by the person, K2 or an agent on this Garden's list, so only its own store and save keyspace and widget.self answer. Someone who edits this Garden has to sign this version."}
+    {"code": "needs_editor", "doc": "Garden access lists on: this widget version isn't signed by the person, K2 or an agent on this Garden's list, so only its own store and save keyspace and widget.self answer. Someone who edits this Garden has to sign this version."},
+    {"code": "retired", "doc": "K2 retired this verb: it answers this until a later release removes it (the message says which)."}
   ],
   "bannedFields": [
     "projectPath",
@@ -3480,9 +3481,10 @@
       "errors": [
         "cap_not_granted",
         "not_bound",
-        "failed"
+        "failed",
+        "retired"
       ],
-      "doc": "Open K2's Ask an agent box about this source (K2 writes the draft; nothing is sent).",
+      "doc": "Retired in 0.46.4 (Ask an agent is gone): answers retired; removed in 0.47.0.",
       "example": "await k2.sources.ask(k2.config.source, tile.key)"
     },
     {
